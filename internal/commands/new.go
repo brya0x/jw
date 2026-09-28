@@ -117,6 +117,7 @@ func (a *App) newStream(p *project, o newOptions) error {
 		Branch:  branch,
 		Path:    path,
 		Slot:    slot,
+		Adopted: existing,
 		Created: time.Now().UTC(),
 	}
 

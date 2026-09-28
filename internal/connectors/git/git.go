@@ -106,6 +106,12 @@ func (r *Repo) RemoveWorktree(path string) error {
 	return err
 }
 
+// PruneWorktrees forgets worktrees whose directory is gone.
+func (r *Repo) PruneWorktrees() error {
+	_, err := run(r.Root, "worktree", "prune")
+	return err
+}
+
 // DeleteBranch force-deletes a local branch.
 func (r *Repo) DeleteBranch(branch string) error {
 	_, err := run(r.Root, "branch", "-D", branch)
@@ -133,6 +139,25 @@ func (r *Repo) IgnoredFiles() ([]string, error) {
 func Dirty(dir string) (bool, error) {
 	out, err := run(dir, "status", "--porcelain")
 	return out != "", err
+}
+
+// DirtyFiles lists uncommitted and untracked paths in the worktree at dir.
+func DirtyFiles(dir string) ([]string, error) {
+	out, err := run(dir, "status", "--porcelain")
+	if err != nil || out == "" {
+		return nil, err
+	}
+	return strings.Split(out, "\n"), nil
+}
+
+// Unpushed lists the commits in dir's HEAD that no remote branch has: the
+// work that only exists on this machine.
+func Unpushed(dir string) ([]string, error) {
+	out, err := run(dir, "log", "--oneline", "HEAD", "--not", "--remotes")
+	if err != nil || out == "" {
+		return nil, err
+	}
+	return strings.Split(out, "\n"), nil
 }
 
 // Head returns the commit checked out in dir.

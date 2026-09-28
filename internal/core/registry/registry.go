@@ -22,7 +22,8 @@ type Entry struct {
 	Slot    int       `json:"slot"`
 	Tab     string    `json:"tab,omitempty"` // empty when the tab is closed
 	PR      int       `json:"pr,omitempty"`
-	Opened  bool      `json:"opened,omitempty"` // an agent ran here before: resume, don't start fresh
+	Opened  bool      `json:"opened,omitempty"`  // an agent ran here before: resume, don't start fresh
+	Adopted bool      `json:"adopted,omitempty"` // the branch existed before jw: never jw's to delete
 	Created time.Time `json:"created"`
 }
 

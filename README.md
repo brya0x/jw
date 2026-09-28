@@ -283,12 +283,26 @@ api-webhooks   c21e8b40  feat/api-webhooks   3     closed  #401 merged ready for
 | `enter`, `o` | `jw open` the selected worktree |
 | `c` | `jw close` it |
 | `d` | `jw done` it — the confirmation is asked on the normal terminal |
+| `x` | `jw rm` it — same guards and confirmation as the command |
 | `a` | toggle this project / all projects |
 | `r` | refresh |
 | `q`, `esc` | quit |
 
 Under the table: path, port range, PR link and state of the selected worktree. After `close` or
 `done` it comes back with the result; after `open` it exits, since focus moved to the tab.
+
+### `jw rm [name] [--keep-branch] [--force]`
+
+Removes a stream whatever its PR says — abandoned work, a PR closed unmerged, a worktree you
+deleted by hand. It's `jw done` without the merged requirement, so it guards local work instead:
+
+- It lists uncommitted files and commits that exist on no remote, and **refuses** if any of
+  that would be lost. `--force` lets it go ahead — and it still asks.
+- It deletes the worktree and the **local** branch, never the remote one. `--keep-branch` keeps
+  the local branch too; a branch `jw new --branch` adopted is always kept.
+- A worktree already gone from disk is pruned from git and dropped from the registry.
+
+Nothing is removed without a yes on a terminal.
 
 ### `jw dev [service] [-w name]`
 
