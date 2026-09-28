@@ -1,5 +1,7 @@
 # jw
 
+[![CI](https://github.com/brya0x/jw/actions/workflows/ci.yml/badge.svg)](https://github.com/brya0x/jw/actions/workflows/ci.yml)
+
 **Parallel workstreams for coding agents.** One command gives each piece of work its own git
 worktree, its own [herdr](#herdr) tab with an agent (Claude Code or Codex), an nvim diff view,
 a dev-server pane, and its own block of ports — so three streams can run side by side without
