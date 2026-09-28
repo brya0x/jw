@@ -232,7 +232,7 @@ Idempotent: a live tab is focused, not rebuilt; a tab closed by hand is recreate
 A new worktree is a new folder, so Claude Code asks once whether you trust it. `jw` never
 answers that dialog for you: it tells you the agent is waiting and leaves the answer to you.
 
-### `jw ls [-a]`
+### `jw ls [-a] [-i]`
 
 Worktrees for the current project (`-a`, or outside any repo: all projects).
 
@@ -247,6 +247,21 @@ api-webhooks   c21e8b40  feat/api-webhooks   3     closed  #401 merged ready for
 - **PR** comes from one `gh pr list` per project (`-` no PR, `?` gh unavailable).
 - **STATE** is `missing` (worktree gone from disk), `dirty` (uncommitted or untracked files) or
   `ready for done` (PR merged, tree clean).
+
+`jw ls -i` is the same list as a picker:
+
+| Key | Does |
+|---|---|
+| `↑`/`↓`, `j`/`k` | move |
+| `enter`, `o` | `jw open` the selected worktree |
+| `c` | `jw close` it |
+| `d` | `jw done` it — the confirmation is asked on the normal terminal |
+| `a` | toggle this project / all projects |
+| `r` | refresh |
+| `q`, `esc` | quit |
+
+Under the table: path, port range, PR link and state of the selected worktree. After `close` or
+`done` it comes back with the result; after `open` it exits, since focus moved to the tab.
 
 ### `jw dev [service] [-w name]`
 
@@ -391,7 +406,7 @@ projects use `project/name`.
 - [x] `jw done` + PR checks
 - [x] `jw dev`
 - [ ] `jw done` across every layer of a stack
-- [ ] `jw ls` interactive (bubbletea)
+- [x] `jw ls -i` interactive (bubbletea)
 
 ## License
 
