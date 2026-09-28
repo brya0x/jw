@@ -397,6 +397,28 @@ projects use `project/name`.
 
 ---
 
+## Architecture
+
+```
+main.go                  wires the real connectors into commands.App
+internal/
+├─ commands/             every jw command, one file each; talks to the world only through App
+├─ connectors/           the contract: Multiplexer, PullRequests, Shell
+│  ├─ herdr/             Multiplexer, via the herdr CLI
+│  ├─ github/            PullRequests, via the gh CLI
+│  ├─ system/            Shell, per OS (shell_unix.go / shell_windows.go)
+│  └─ git/               worktrees and branches, via the git CLI
+└─ core/                 jw's own logic, no outside dependencies
+   ├─ config/            per-project TOML, placeholders, ports
+   ├─ registry/          the worktree list on disk
+   └─ envfile/           rewriting keys in .env files
+```
+
+Dependencies point one way: `commands` → `connectors` + `core`. `core` imports nothing from
+the project, and `commands` imports no concrete connector — only `main.go` does. Supporting
+another tool (tmux instead of herdr, another forge instead of GitHub) is a new package under
+`connectors/` that satisfies the interface, plus one line in `main.go`.
+
 ## Roadmap
 
 - [x] `jw new` / `jw ls` + registry

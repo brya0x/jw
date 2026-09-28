@@ -1,61 +1,31 @@
 // Command jw manages parallel workstreams: one git worktree, one herdr tab,
 // one port slot and one PR per stream.
+//
+// This is the only place that knows which tools jw uses: it plugs the real
+// connectors into commands.App. Swapping one (herdr for tmux, say) is a change
+// here plus a new package under internal/connectors.
 package main
 
 import (
-	"fmt"
 	"os"
+
+	"github.com/brya0x/jw/internal/commands"
+	"github.com/brya0x/jw/internal/connectors"
+	"github.com/brya0x/jw/internal/connectors/github"
+	"github.com/brya0x/jw/internal/connectors/herdr"
+	"github.com/brya0x/jw/internal/connectors/system"
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		usage()
-		os.Exit(2)
+	app := &commands.App{
+		In:    os.Stdin,
+		Out:   os.Stdout,
+		Err:   os.Stderr,
+		Shell: system.Shell{},
+		PRs:   github.Client{},
+		NewMux: func() (connectors.Multiplexer, error) {
+			return herdr.New()
+		},
 	}
-
-	cmd, args := os.Args[1], os.Args[2:]
-
-	var err error
-	switch cmd {
-	case "new":
-		err = runNew(args)
-	case "open":
-		err = runOpen(args)
-	case "close":
-		err = runClose(args)
-	case "done":
-		err = runDone(args)
-	case "dev":
-		err = runDev(args)
-	case "setup":
-		err = runSetupCmd(args)
-	case "ls":
-		err = runLs(args)
-	case "help", "-h", "--help":
-		usage()
-		return
-	default:
-		fmt.Fprintf(os.Stderr, "jw: unknown command %q\n\n", cmd)
-		usage()
-		os.Exit(2)
-	}
-
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "jw:", err)
-		os.Exit(1)
-	}
-}
-
-func usage() {
-	fmt.Fprint(os.Stderr, `usage: jw <command> [args]
-
-commands:
-  new     create a worktree and register it
-  open    open the worktree in a herdr tab: editor | agent | dev
-  close   close the tab, keep the worktree
-  done    after the PR is merged: confirm, then delete worktree and branch
-  dev     start a service on this worktree's ports (no service: list them)
-  setup   re-run the setup commands of a worktree
-  ls      list worktrees of this project (-a: all projects)
-`)
+	os.Exit(app.Run(os.Args[1:]))
 }

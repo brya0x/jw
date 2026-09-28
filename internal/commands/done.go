@@ -1,29 +1,26 @@
-package main
+package commands
 
 import (
 	"errors"
 	"fmt"
 	"os"
 
-	"github.com/brya0x/jw/internal/gh"
-	"github.com/brya0x/jw/internal/git"
-	"github.com/brya0x/jw/internal/herdr"
+	"github.com/brya0x/jw/internal/connectors/git"
+	"github.com/brya0x/jw/internal/core/registry"
 )
 
-// runDone is `jw done [name]`: once the PR is merged and nothing local would
-// be lost, ask, then remove tab, worktree, branch and registry entry.
-func runDone(args []string) error {
+func (a *App) runDone(args []string) error {
 	name, _ := splitName(args)
-
-	p, err := openProject()
+	p, e, err := open(name)
 	if err != nil {
 		return err
 	}
-	e, err := p.entry(nameArgs(name))
-	if err != nil {
-		return err
-	}
+	return a.done(p, e)
+}
 
+// done removes a finished stream: once its PR is merged and nothing local
+// would be lost, it asks, then deletes tab, worktree, branch and entry.
+func (a *App) done(p *project, e *registry.Entry) error {
 	_, statErr := os.Stat(e.Path)
 	onDisk := statErr == nil
 
@@ -39,7 +36,7 @@ func runDone(args []string) error {
 	}
 
 	// 2. The PR is merged.
-	pr, err := gh.ForBranch(p.repo.Root, e.Branch)
+	pr, err := a.PRs.ForBranch(p.repo.Root, e.Branch)
 	if err != nil {
 		return err
 	}
@@ -50,42 +47,42 @@ func runDone(args []string) error {
 		return fmt.Errorf("PR #%d is %s, not merged yet (%s)", pr.Number, pr.Status(), pr.URL)
 	}
 
-	// 3. Nothing unpushed: the local HEAD must be part of what GitHub
-	// merged. Comparing against the PR's head (not an upstream branch) keeps
-	// this working after GitHub deletes the remote branch on merge.
+	// 3. Nothing unpushed: the local HEAD must be part of what was merged.
+	// Comparing against the PR's head (not an upstream branch) keeps this
+	// working after the forge deletes the remote branch on merge.
 	if onDisk {
 		head, err := git.Head(e.Path)
 		if err != nil {
 			return err
 		}
-		if head != pr.HeadRefOid {
-			if !p.repo.HasCommit(pr.HeadRefOid) {
-				_ = p.repo.FetchCommit(pr.HeadRefOid)
+		if head != pr.HeadSHA {
+			if !p.repo.HasCommit(pr.HeadSHA) {
+				_ = p.repo.FetchCommit(pr.HeadSHA)
 			}
-			if !p.repo.IsAncestor(head, pr.HeadRefOid) {
+			if !p.repo.IsAncestor(head, pr.HeadSHA) {
 				return fmt.Errorf("%s has commits that are not in PR #%d — push them or open another PR", e.Name, pr.Number)
 			}
 		}
 	}
 
 	// 4. Ask. Nothing is deleted without a yes.
-	fmt.Printf("%s: PR #%d merged — %s\n", e.Name, pr.Number, pr.URL)
+	a.printf("%s: PR #%d merged — %s\n", e.Name, pr.Number, pr.URL)
 	if !onDisk {
-		fmt.Printf("  (worktree %s is already gone)\n", e.Path)
+		a.printf("  (worktree %s is already gone)\n", e.Path)
 	}
-	ok, err := confirm(fmt.Sprintf("delete worktree %s and branch %s?", e.Path, e.Branch))
+	ok, err := a.confirm(fmt.Sprintf("delete worktree %s and branch %s?", e.Path, e.Branch))
 	if err != nil {
 		return err
 	}
 	if !ok {
-		fmt.Println("kept")
+		a.printf("kept\n")
 		return nil
 	}
 
 	// 5. Delete, tab first so no process holds the directory.
 	if e.Tab != "" {
-		if h, err := herdr.New(); err == nil {
-			if _, err := closeTab(h, e, true); err != nil {
+		if mux, err := a.NewMux(); err == nil {
+			if _, err := a.closeTab(mux, e, true); err != nil {
 				return err
 			}
 		}
@@ -100,13 +97,14 @@ func runDone(args []string) error {
 			return err
 		}
 	}
+
 	// e points into reg.Entries, and Remove shifts that slice: after it, e
 	// would point at whatever entry moved into its place. Copy first.
 	removed := *e
 	p.reg.Remove(removed.ID)
-	if err := p.reg.Save(p.regPath); err != nil {
+	if err := p.save(); err != nil {
 		return errors.Join(fmt.Errorf("deleted %s but could not update the registry", removed.Name), err)
 	}
-	fmt.Printf("done: %s removed, slot %d free\n", removed.Name, removed.Slot)
+	a.printf("done: %s removed, slot %d free\n", removed.Name, removed.Slot)
 	return nil
 }

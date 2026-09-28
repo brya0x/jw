@@ -1,11 +1,14 @@
 package herdr
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/brya0x/jw/internal/connectors"
 )
 
 // fakeHerdr points JW_HERDR at a script that logs its args and prints reply.
@@ -54,8 +57,16 @@ func TestErrorReply(t *testing.T) {
 	c, _ := fakeHerdr(t, `{"error":{"code":"tab_not_found","message":"tab w9:t1 not found"},"id":"x"}`, 1)
 
 	_, err := c.GetTab("w9:t1")
-	if !IsNotFound(err) {
+	if !errors.Is(err, connectors.ErrNotFound) {
 		t.Fatalf("want not-found, got %v", err)
+	}
+}
+
+func TestAgentNotReadyMapsToContract(t *testing.T) {
+	c, _ := fakeHerdr(t, `{"error":{"code":"agent_not_ready","message":"blocked"},"id":"x"}`, 1)
+	err := c.StartAgent("web", "claude", "w1:p2", nil)
+	if !errors.Is(err, connectors.ErrAgentNotReady) || errors.Is(err, connectors.ErrNotFound) {
+		t.Fatalf("got %v", err)
 	}
 }
 

@@ -1,28 +1,24 @@
-package main
+package commands
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/brya0x/jw/internal/config"
+	"github.com/brya0x/jw/internal/core/config"
+	"github.com/brya0x/jw/internal/core/registry"
 )
 
 // The TUI is a picker: it chooses a worktree and an action, then exits so the
-// action runs with the real terminal (jw done asks for confirmation, jw open
+// action runs on the real terminal (jw done asks for confirmation, jw open
 // moves focus). Afterwards it comes back, unless the action was open.
-//
-// The project is fixed here, once: actions run from inside the chosen
-// worktree, and jw done deletes it, so the cwd can't be trusted afterwards.
-func runLsInteractive(project string, all bool) error {
-	start, _ := os.Getwd()
+func (a *App) lsInteractive(project string, all bool) error {
 	status := ""
 	for {
-		final, err := tea.NewProgram(newLsModel(project, all, status), tea.WithAltScreen()).Run()
+		final, err := tea.NewProgram(newLsModel(a, project, all, status), tea.WithAltScreen()).Run()
 		if err != nil {
 			return err
 		}
@@ -32,8 +28,7 @@ func runLsInteractive(project string, all bool) error {
 		}
 		all = m.all
 
-		err = runAction(m.action, m.chosen.Entry.Path)
-		_ = os.Chdir(start)
+		err = a.act(m.action, m.chosen.Entry)
 		if m.action == "open" && err == nil {
 			return nil // focus is on the new tab now
 		}
@@ -45,19 +40,25 @@ func runLsInteractive(project string, all bool) error {
 	}
 }
 
-// runAction runs a command against a worktree from inside it, so it works
-// for worktrees of any project, not only the one jw ls was started in.
-func runAction(action, dir string) error {
-	if err := os.Chdir(dir); err != nil {
+// act runs an action on the chosen worktree. The row may belong to any
+// project, so its own project is loaded from its path; nothing depends on
+// the cwd.
+func (a *App) act(action string, chosen registry.Entry) error {
+	p, err := loadProject(chosen.Path)
+	if err != nil {
 		return fmt.Errorf("worktree is missing: %w", err)
+	}
+	e, err := p.reg.Find(p.name, chosen.ID)
+	if err != nil {
+		return err
 	}
 	switch action {
 	case "open":
-		return runOpen(nil)
+		return a.open(p, e, openOptions{})
 	case "close":
-		return runClose(nil)
+		return a.close(p, e, false)
 	case "done":
-		return runDone(nil)
+		return a.done(p, e)
 	}
 	return fmt.Errorf("unknown action %q", action)
 }
@@ -69,6 +70,7 @@ type rowsMsg struct {
 }
 
 type lsModel struct {
+	app         *App
 	table       table.Model
 	rows        []lsRow
 	project     string // the project jw ls -i started in; "" outside a repo
@@ -83,13 +85,13 @@ type lsModel struct {
 	chosen *lsRow
 }
 
-func newLsModel(project string, all bool, status string) lsModel {
+func newLsModel(app *App, project string, all bool, status string) lsModel {
 	t := table.New(table.WithFocused(true))
 	styles := table.DefaultStyles()
 	styles.Header = styles.Header.Bold(true).BorderStyle(lipgloss.NormalBorder()).BorderBottom(true)
 	styles.Selected = styles.Selected.Foreground(lipgloss.Color("0")).Background(lipgloss.Color("6"))
 	t.SetStyles(styles)
-	m := lsModel{table: t, project: project, all: all, loading: true, status: status}
+	m := lsModel{app: app, table: t, project: project, all: all, loading: true, status: status}
 	m.showProject = m.scope() == ""
 	return m
 }
@@ -104,15 +106,16 @@ func (m lsModel) scope() string {
 
 // loadRowsCmd runs loadRows off the UI loop: gh and herdr calls take a moment,
 // and the screen should not freeze while they do.
-func loadRowsCmd(project string) tea.Cmd {
+func (m lsModel) loadRowsCmd() tea.Cmd {
+	app, project := m.app, m.scope()
 	return func() tea.Msg {
-		rows, err := loadRows(project)
+		rows, err := app.loadRows(project)
 		return rowsMsg{rows: rows, err: err}
 	}
 }
 
 func (m lsModel) Init() tea.Cmd {
-	return loadRowsCmd(m.scope())
+	return m.loadRowsCmd()
 }
 
 func (m lsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -135,10 +138,10 @@ func (m lsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "a":
 			m.all, m.loading, m.status = !m.all, true, ""
-			return m, loadRowsCmd(m.scope())
+			return m, m.loadRowsCmd()
 		case "r":
 			m.loading, m.status = true, ""
-			return m, loadRowsCmd(m.scope())
+			return m, m.loadRowsCmd()
 		case "enter", "o":
 			return m.pick("open")
 		case "c":
