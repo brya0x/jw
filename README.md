@@ -217,9 +217,20 @@ Opens nothing.
 Re-runs the config's `setup` commands in a worktree — the one you're standing in if no name
 is given.
 
-### `jw open <name> [--agent claude|codex|both]`
+### `jw open [name] [--agent claude|codex|both] [--no-focus]`
 
-Creates or focuses the herdr tab. Idempotent.
+Creates or focuses the herdr tab — the one you're standing in if no name is given.
+Idempotent: a live tab is focused, not rebuilt; a tab closed by hand is recreated.
+
+- The tab goes in the project's herdr workspace (`workspace` in config), created on first use.
+- Every pane gets the `JW_*` variables — herdr doesn't pass env from a pane to its splits, so
+  `jw` sets them on each one.
+- The first open **starts** the agent; later opens **resume** it.
+- With `--agent both`, Codex is named `<name>-codex`.
+- `--no-focus` builds the tab without switching to it — for scripts and other agents.
+
+A new worktree is a new folder, so Claude Code asks once whether you trust it. `jw` never
+answers that dialog for you: it tells you the agent is waiting and leaves the answer to you.
 
 ### `jw ls [-a]`
 

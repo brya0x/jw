@@ -69,6 +69,24 @@ func (p *project) entry(args []string) (*registry.Entry, error) {
 	return nil, fmt.Errorf("not inside a jw worktree; pass a name")
 }
 
+// splitName takes a leading positional name off args. Go's flag package stops
+// at the first non-flag argument, so `jw new web --from x` would otherwise
+// leave --from unparsed.
+func splitName(args []string) (string, []string) {
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		return args[0], args[1:]
+	}
+	return "", args
+}
+
+// nameArgs turns an optional name back into the args form entry() takes.
+func nameArgs(name string) []string {
+	if name == "" {
+		return nil
+	}
+	return []string{name}
+}
+
 // realpath resolves symlinks (macOS /var → /private/var) so paths compare equal.
 func realpath(p string) string {
 	if r, err := filepath.EvalSymlinks(p); err == nil {
