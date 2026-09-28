@@ -20,14 +20,7 @@ import (
 var validName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
 func runNew(args []string) error {
-	// Go's flag package stops at the first non-flag argument, so
-	// `jw new web --from x` would leave --from unparsed. Take the name off
-	// the front first, then parse whatever flags follow it.
-	var name string
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		name, args = args[0], args[1:]
-	}
-
+	name, args := splitName(args)
 	fs := flag.NewFlagSet("new", flag.ExitOnError)
 	from := fs.String("from", "", "ref to start from (default origin/<default branch>)")
 	branch := fs.String("branch", "", "branch name (default from config, feat/<name>)")
