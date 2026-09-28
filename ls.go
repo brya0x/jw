@@ -1,10 +1,13 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"text/tabwriter"
+
+	"golang.org/x/term"
 
 	"github.com/brya0x/jw/internal/gh"
 	"github.com/brya0x/jw/internal/git"
@@ -12,28 +15,77 @@ import (
 	"github.com/brya0x/jw/internal/registry"
 )
 
+// lsRow is one worktree as jw ls shows it, reconciled with herdr, git and gh.
+type lsRow struct {
+	Entry registry.Entry
+	Tab   string // "open" or "closed"
+	PR    string // "#12 merged", "-" (none) or "?" (gh unavailable)
+	PRURL string
+	State string // "missing", "dirty", "ready for done" or ""
+}
+
 func runLs(args []string) error {
 	fs := flag.NewFlagSet("ls", flag.ExitOnError)
 	all := fs.Bool("a", false, "show worktrees of every project")
+	interactive := fs.Bool("i", false, "interactive: pick a worktree and open, close or finish it")
 	fs.Parse(args)
 
-	path, err := registry.DefaultPath()
+	if *interactive {
+		if !term.IsTerminal(int(os.Stdout.Fd())) || !term.IsTerminal(int(os.Stdin.Fd())) {
+			return errors.New("jw ls -i needs a terminal")
+		}
+		return runLsInteractive(currentProject(), *all)
+	}
+
+	project := ""
+	if !*all {
+		project = currentProject()
+	}
+	rows, err := loadRows(project)
 	if err != nil {
 		return err
+	}
+	if len(rows) == 0 {
+		fmt.Println("no worktrees yet — create one with `jw new <name>`")
+		return nil
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	showProject := project == ""
+	if showProject {
+		fmt.Fprint(w, "PROJECT\t")
+	}
+	fmt.Fprintln(w, "NAME\tID\tBRANCH\tSLOT\tTAB\tPR\tSTATE")
+	for _, r := range rows {
+		if showProject {
+			fmt.Fprintf(w, "%s\t", r.Entry.Project)
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\t%s\n",
+			r.Entry.Name, r.Entry.ID[:8], r.Entry.Branch, r.Entry.Slot, r.Tab, r.PR, r.State)
+	}
+	return w.Flush()
+}
+
+// currentProject is the project of the repo the cwd is in, or "" outside one.
+func currentProject() string {
+	if cwd, err := os.Getwd(); err == nil {
+		if repo, err := git.Open(cwd); err == nil {
+			return git.ProjectName(repo.Remote)
+		}
+	}
+	return ""
+}
+
+// loadRows reads the registry entries of project ("" for every project) and
+// reconciles each one with herdr, git and gh.
+func loadRows(project string) ([]lsRow, error) {
+	path, err := registry.DefaultPath()
+	if err != nil {
+		return nil, err
 	}
 	reg, err := registry.Load(path)
 	if err != nil {
-		return err
-	}
-
-	// Outside a git repo there is no current project, so show everything.
-	project := ""
-	if !*all {
-		if cwd, err := os.Getwd(); err == nil {
-			if repo, err := git.Open(cwd); err == nil {
-				project = git.ProjectName(repo.Remote)
-			}
-		}
+		return nil, err
 	}
 
 	var entries []*registry.Entry
@@ -42,13 +94,9 @@ func runLs(args []string) error {
 			entries = append(entries, &reg.Entries[i])
 		}
 	}
-	if len(entries) == 0 {
-		fmt.Println("no worktrees yet — create one with `jw new <name>`")
-		return nil
-	}
 
-	// Reconcile with reality: a tab closed by hand is forgotten here, so the
-	// registry never keeps pointing at a dead tab.
+	// A tab closed by hand is forgotten here, so the registry never keeps
+	// pointing at a dead tab.
 	if h, err := herdr.New(); err == nil {
 		changed := false
 		for _, e := range entries {
@@ -62,47 +110,37 @@ func runLs(args []string) error {
 		}
 		if changed {
 			if err := reg.Save(path); err != nil {
-				return err
+				return nil, err
 			}
 		}
 	}
 
 	prs := prsByProject(entries)
-
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	if project == "" {
-		fmt.Fprint(w, "PROJECT\t")
-	}
-	fmt.Fprintln(w, "NAME\tID\tBRANCH\tSLOT\tTAB\tPR\tSTATE")
+	rows := make([]lsRow, 0, len(entries))
 	for _, e := range entries {
-		tab := "closed"
+		r := lsRow{Entry: *e, Tab: "closed", PR: "-"}
 		if e.Tab != "" {
-			tab = "open"
+			r.Tab = "open"
 		}
 
-		prLabel := "-"
 		pr, hasPR := prs[e.Project][e.Branch]
-		if hasPR {
-			prLabel = pr.Label()
-		} else if prs[e.Project] == nil {
-			prLabel = "?" // gh unavailable for this project
+		switch {
+		case hasPR:
+			r.PR, r.PRURL = pr.Label(), pr.URL
+		case prs[e.Project] == nil:
+			r.PR = "?"
 		}
 
-		state := ""
 		if _, err := os.Stat(e.Path); err != nil {
-			state = "missing"
+			r.State = "missing"
 		} else if dirty, err := git.Dirty(e.Path); err == nil && dirty {
-			state = "dirty"
+			r.State = "dirty"
 		} else if hasPR && pr.State == "MERGED" {
-			state = "ready for done"
+			r.State = "ready for done"
 		}
-
-		if project == "" {
-			fmt.Fprintf(w, "%s\t", e.Project)
-		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\t%s\n", e.Name, e.ID[:8], e.Branch, e.Slot, tab, prLabel, state)
+		rows = append(rows, r)
 	}
-	return w.Flush()
+	return rows, nil
 }
 
 // prsByProject asks gh once per project, from any of its worktrees that still
