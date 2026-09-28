@@ -149,6 +149,66 @@ func TestDoneGuardsThenDeletes(t *testing.T) {
 	}
 }
 
+func TestInitDetectsAndWritesALoadableConfig(t *testing.T) {
+	env := newTestEnv(t)
+	write := func(rel, content string) {
+		t.Helper()
+		path := env.repo + "/" + rel
+		os.MkdirAll(path[:strings.LastIndex(path, "/")], 0o755)
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(".gitignore", ".env*\nnode_modules/\n")
+	write("pnpm-lock.yaml", "lockfileVersion: 9\n")
+	write("apps/web/.env.local", "# web\nexport API_URL=\"http://localhost:8787/graphql\"\nTOKEN=x\n")
+	write("apps/web/.env.example", "API_URL=http://localhost:8787\n") // template: skipped
+	write("node_modules/pkg/.env", "X=1\n")                           // ignored dir: skipped
+
+	repo, err := git.Open(env.repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := env.app.init(repo, initOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Every other command now picks it up.
+	p, err := loadProject(env.repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(p.cfg.Source, "/jw/myapp.toml") {
+		t.Fatalf("config not picked up, source %q", p.cfg.Source)
+	}
+	if !slices.Equal(p.cfg.Setup, []string{"pnpm install --frozen-lockfile"}) {
+		t.Errorf("setup %v", p.cfg.Setup)
+	}
+	if len(p.cfg.Env) != 1 || p.cfg.Env[0].File != "apps/web/.env.local" {
+		t.Errorf("env %+v", p.cfg.Env)
+	}
+	if !strings.Contains(env.out.String(), "API_URL → localhost:8787") {
+		t.Errorf("output: %s", env.out)
+	}
+
+	// Never clobbers without --force.
+	if err := env.app.init(repo, initOptions{}); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("want already-exists refusal, got %v", err)
+	}
+	if err := env.app.init(repo, initOptions{force: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	// --repo writes a committable file without the personal match line.
+	if err := env.app.init(repo, initOptions{repo: true}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(env.repo + "/.jw.toml")
+	if err != nil || strings.Contains(string(data), "\nmatch ") {
+		t.Fatalf(".jw.toml: %v\n%s", err, data)
+	}
+}
+
 func TestSetupRunsThroughShell(t *testing.T) {
 	env := newTestEnv(t)
 	p, err := loadProject(env.repo)

@@ -8,6 +8,7 @@ a dev-server pane, and its own block of ports — so three streams can run side 
 stepping on each other.
 
 ```
+jw init                    # once per repo: draft a config from what it finds
 jw new mobile-login        # worktree + branch + ports + setup
 jw open mobile-login       # herdr tab: nvim diff | agent | dev servers
 jw ls                      # what's open, what's pending, which PRs merged
@@ -200,6 +201,24 @@ Offsets come from config. With `web = 0`, `api = 2`, `metro = 81`:
 ---
 
 ## Commands
+
+### `jw init [--repo] [--print] [--force]`
+
+Drafts a config for the repo you're in, from what it can see:
+
+- **setup** from the lockfiles (`pnpm-lock.yaml` → `pnpm install --frozen-lockfile`, and the
+  same for bun, yarn, npm, go, bundler, composer, cargo);
+- **env files**: every `.env*` git ignores, except templates (`.example`, `.sample`…) and
+  anything inside an ignored directory (`node_modules/`, nested worktrees);
+- **localhost ports** in those files, written as a commented `set = …` for you to point at a
+  service.
+
+What needs your judgement — service names in `[ports]`, commands in `[dev]` — is left as
+commented examples. The file is loaded back before `jw init` reports success.
+
+By default it writes your personal `~/.config/jw/<project>.toml`, matched by the origin URL.
+`--repo` writes `.jw.toml` in the repo instead, to commit; `--print` only shows the draft. An
+existing config is never overwritten without `--force`.
 
 ### `jw new <name> [--from <ref>] [--branch <branch>] [--no-setup]`
 

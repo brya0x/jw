@@ -99,6 +99,23 @@ func (r *Repo) DeleteBranch(branch string) error {
 	return err
 }
 
+// IgnoredFiles lists the files git ignores in the main checkout, as paths
+// relative to it. An ignored directory (node_modules/, a nested worktree)
+// counts as one entry and is left out, so the list stays short.
+func (r *Repo) IgnoredFiles() ([]string, error) {
+	out, err := run(r.Root, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory")
+	if err != nil || out == "" {
+		return nil, err
+	}
+	var files []string
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.HasSuffix(line, "/") {
+			files = append(files, line)
+		}
+	}
+	return files, nil
+}
+
 // Dirty reports whether the worktree at dir has uncommitted or untracked files.
 func Dirty(dir string) (bool, error) {
 	out, err := run(dir, "status", "--porcelain")

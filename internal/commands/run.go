@@ -13,6 +13,8 @@ func (a *App) Run(args []string) int {
 
 	var err error
 	switch cmd {
+	case "init":
+		err = a.runInit(rest)
 	case "new":
 		err = a.runNew(rest)
 	case "open":
@@ -47,6 +49,7 @@ func (a *App) usage() {
 	fmt.Fprint(a.Err, `usage: jw <command> [args]
 
 commands:
+  init    write a starting config for this repo (detects setup and .env files)
   new     create a worktree and register it
   open    open the worktree in a herdr tab: editor | agent | dev
   close   close the tab, keep the worktree
