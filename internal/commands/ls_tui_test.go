@@ -1,4 +1,4 @@
-package main
+package commands
 
 import (
 	"strings"
@@ -6,7 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/brya0x/jw/internal/registry"
+	"github.com/brya0x/jw/internal/core/registry"
 )
 
 func key(s string) tea.KeyMsg {
@@ -35,7 +35,7 @@ func sampleRows() rowsMsg {
 }
 
 func TestPickSecondRowForDone(t *testing.T) {
-	m, cmd := send(newLsModel("myapp", false, ""), tea.WindowSizeMsg{Width: 120, Height: 30}, sampleRows(), key("j"), key("d"))
+	m, cmd := send(newLsModel(nil, "myapp", false, ""), tea.WindowSizeMsg{Width: 120, Height: 30}, sampleRows(), key("j"), key("d"))
 
 	if m.action != "done" || m.chosen == nil || m.chosen.Entry.Name != "api" {
 		t.Fatalf("want done on api, got %q %+v", m.action, m.chosen)
@@ -46,21 +46,21 @@ func TestPickSecondRowForDone(t *testing.T) {
 }
 
 func TestEnterOpens(t *testing.T) {
-	m, _ := send(newLsModel("myapp", false, ""), tea.WindowSizeMsg{Width: 120, Height: 30}, sampleRows(), key("enter"))
+	m, _ := send(newLsModel(nil, "myapp", false, ""), tea.WindowSizeMsg{Width: 120, Height: 30}, sampleRows(), key("enter"))
 	if m.action != "open" || m.chosen.Entry.Name != "web" {
 		t.Fatalf("want open on web, got %q", m.action)
 	}
 }
 
 func TestNoPickWhileLoading(t *testing.T) {
-	m, _ := send(newLsModel("myapp", false, ""), key("d"))
+	m, _ := send(newLsModel(nil, "myapp", false, ""), key("d"))
 	if m.action != "" {
 		t.Fatalf("nothing is loaded yet, got action %q", m.action)
 	}
 }
 
 func TestViewShowsRowsDetailAndStatus(t *testing.T) {
-	m, _ := send(newLsModel("myapp", false, "close web: ok"), tea.WindowSizeMsg{Width: 120, Height: 30}, sampleRows(), key("j"))
+	m, _ := send(newLsModel(nil, "myapp", false, "close web: ok"), tea.WindowSizeMsg{Width: 120, Height: 30}, sampleRows(), key("j"))
 	v := m.View()
 	for _, want := range []string{"web", "api", "#5 merged", "path   /wt/api", "close web: ok", "q quit"} {
 		if !strings.Contains(v, want) {
@@ -72,14 +72,14 @@ func TestViewShowsRowsDetailAndStatus(t *testing.T) {
 func TestProjectIsFixedAtStart(t *testing.T) {
 	// After jw done deletes the worktree the cwd is gone; the scope must not
 	// silently widen to every project.
-	m, _ := send(newLsModel("myapp", false, "done web: ok"), tea.WindowSizeMsg{Width: 120, Height: 30}, sampleRows())
+	m, _ := send(newLsModel(nil, "myapp", false, "done web: ok"), tea.WindowSizeMsg{Width: 120, Height: 30}, sampleRows())
 	if m.scope() != "myapp" || strings.Contains(m.View(), "PROJECT") {
 		t.Fatalf("scope %q, view:\n%s", m.scope(), m.View())
 	}
 }
 
 func TestToggleAllReloadsWithProjectColumn(t *testing.T) {
-	m, cmd := send(newLsModel("myapp", false, ""), tea.WindowSizeMsg{Width: 120, Height: 30}, sampleRows(), key("a"))
+	m, cmd := send(newLsModel(nil, "myapp", false, ""), tea.WindowSizeMsg{Width: 120, Height: 30}, sampleRows(), key("a"))
 	if !m.all || !m.loading || cmd == nil {
 		t.Fatalf("a should toggle all and reload: all=%v loading=%v", m.all, m.loading)
 	}

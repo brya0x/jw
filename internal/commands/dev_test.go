@@ -1,4 +1,4 @@
-package main
+package commands
 
 import (
 	"bytes"
@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/brya0x/jw/internal/config"
+	"github.com/brya0x/jw/internal/core/config"
 )
 
 func TestPrefixWriterWholeLines(t *testing.T) {

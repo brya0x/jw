@@ -1,4 +1,4 @@
-package main
+package commands
 
 import (
 	"errors"
@@ -7,50 +7,53 @@ import (
 	"os"
 	"text/tabwriter"
 
-	"golang.org/x/term"
-
-	"github.com/brya0x/jw/internal/gh"
-	"github.com/brya0x/jw/internal/git"
-	"github.com/brya0x/jw/internal/herdr"
-	"github.com/brya0x/jw/internal/registry"
+	"github.com/brya0x/jw/internal/connectors"
+	"github.com/brya0x/jw/internal/connectors/git"
+	"github.com/brya0x/jw/internal/core/registry"
 )
 
-// lsRow is one worktree as jw ls shows it, reconciled with herdr, git and gh.
+// lsRow is one worktree as jw ls shows it, reconciled with the multiplexer,
+// git and the forge.
 type lsRow struct {
 	Entry registry.Entry
 	Tab   string // "open" or "closed"
-	PR    string // "#12 merged", "-" (none) or "?" (gh unavailable)
+	PR    string // "#12 merged", "-" (none) or "?" (PR state unavailable)
 	PRURL string
 	State string // "missing", "dirty", "ready for done" or ""
 }
 
-func runLs(args []string) error {
+func (a *App) runLs(args []string) error {
 	fs := flag.NewFlagSet("ls", flag.ExitOnError)
 	all := fs.Bool("a", false, "show worktrees of every project")
 	interactive := fs.Bool("i", false, "interactive: pick a worktree and open, close or finish it")
 	fs.Parse(args)
 
+	dir, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	project := currentProject(dir)
+
 	if *interactive {
-		if !term.IsTerminal(int(os.Stdout.Fd())) || !term.IsTerminal(int(os.Stdin.Fd())) {
+		if !a.Shell.IsTerminal(os.Stdout) || !a.Shell.IsTerminal(a.In) {
 			return errors.New("jw ls -i needs a terminal")
 		}
-		return runLsInteractive(currentProject(), *all)
+		return a.lsInteractive(project, *all)
 	}
 
-	project := ""
-	if !*all {
-		project = currentProject()
+	if *all {
+		project = ""
 	}
-	rows, err := loadRows(project)
+	rows, err := a.loadRows(project)
 	if err != nil {
 		return err
 	}
 	if len(rows) == 0 {
-		fmt.Println("no worktrees yet — create one with `jw new <name>`")
+		a.printf("no worktrees yet — create one with `jw new <name>`\n")
 		return nil
 	}
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	w := tabwriter.NewWriter(a.Out, 0, 0, 2, ' ', 0)
 	showProject := project == ""
 	if showProject {
 		fmt.Fprint(w, "PROJECT\t")
@@ -66,19 +69,17 @@ func runLs(args []string) error {
 	return w.Flush()
 }
 
-// currentProject is the project of the repo the cwd is in, or "" outside one.
-func currentProject() string {
-	if cwd, err := os.Getwd(); err == nil {
-		if repo, err := git.Open(cwd); err == nil {
-			return git.ProjectName(repo.Remote)
-		}
+// currentProject is the project of the repo dir is in, or "" outside one.
+func currentProject(dir string) string {
+	if repo, err := git.Open(dir); err == nil {
+		return git.ProjectName(repo.Remote)
 	}
 	return ""
 }
 
 // loadRows reads the registry entries of project ("" for every project) and
-// reconciles each one with herdr, git and gh.
-func loadRows(project string) ([]lsRow, error) {
+// reconciles each one with the multiplexer, git and the forge.
+func (a *App) loadRows(project string) ([]lsRow, error) {
 	path, err := registry.DefaultPath()
 	if err != nil {
 		return nil, err
@@ -97,13 +98,13 @@ func loadRows(project string) ([]lsRow, error) {
 
 	// A tab closed by hand is forgotten here, so the registry never keeps
 	// pointing at a dead tab.
-	if h, err := herdr.New(); err == nil {
+	if mux, err := a.NewMux(); err == nil {
 		changed := false
 		for _, e := range entries {
 			if e.Tab == "" {
 				continue
 			}
-			if _, err := h.GetTab(e.Tab); herdr.IsNotFound(err) {
+			if _, err := mux.GetTab(e.Tab); errors.Is(err, connectors.ErrNotFound) {
 				e.Tab = ""
 				changed = true
 			}
@@ -115,7 +116,7 @@ func loadRows(project string) ([]lsRow, error) {
 		}
 	}
 
-	prs := prsByProject(entries)
+	prs := a.prsByProject(entries)
 	rows := make([]lsRow, 0, len(entries))
 	for _, e := range entries {
 		r := lsRow{Entry: *e, Tab: "closed", PR: "-"}
@@ -143,9 +144,9 @@ func loadRows(project string) ([]lsRow, error) {
 	return rows, nil
 }
 
-// prsByProject asks gh once per project, from any of its worktrees that still
-// exists. A project gh can't answer for is left out (shown as "?").
-func prsByProject(entries []*registry.Entry) map[string]map[string]gh.PR {
+// prsByProject asks once per project, from any of its worktrees that still
+// exists. A project the forge can't answer for is left out (shown as "?").
+func (a *App) prsByProject(entries []*registry.Entry) map[string]map[string]connectors.PR {
 	dirs := map[string]string{}
 	for _, e := range entries {
 		if _, seen := dirs[e.Project]; seen {
@@ -156,9 +157,9 @@ func prsByProject(entries []*registry.Entry) map[string]map[string]gh.PR {
 		}
 	}
 
-	out := map[string]map[string]gh.PR{}
+	out := map[string]map[string]connectors.PR{}
 	for project, dir := range dirs {
-		if prs, err := gh.ByBranch(dir); err == nil {
+		if prs, err := a.PRs.ByBranch(dir); err == nil {
 			out[project] = prs
 		}
 	}

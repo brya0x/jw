@@ -1,11 +1,11 @@
-package main
+package commands
 
 import (
 	"reflect"
 	"testing"
 
-	"github.com/brya0x/jw/internal/config"
-	"github.com/brya0x/jw/internal/registry"
+	"github.com/brya0x/jw/internal/core/config"
+	"github.com/brya0x/jw/internal/core/registry"
 )
 
 func TestAgentsForStartThenResume(t *testing.T) {

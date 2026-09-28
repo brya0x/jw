@@ -1,39 +1,46 @@
-package main
+package commands
 
 import (
+	"errors"
 	"flag"
 	"fmt"
-	"os"
 	"strings"
 
-	"github.com/brya0x/jw/internal/config"
-	"github.com/brya0x/jw/internal/herdr"
-	"github.com/brya0x/jw/internal/registry"
+	"github.com/brya0x/jw/internal/connectors"
+	"github.com/brya0x/jw/internal/core/config"
+	"github.com/brya0x/jw/internal/core/registry"
 )
 
-// agentSpec is one agent to start: its herdr name, kind and arguments.
+type openOptions struct {
+	agent   string // claude, codex or both; default from config
+	noFocus bool
+}
+
+// agentSpec is one agent to start: its multiplexer name, kind and arguments.
 type agentSpec struct {
 	name string
 	kind string
 	args []string
 }
 
-func runOpen(args []string) error {
+func (a *App) runOpen(args []string) error {
 	name, args := splitName(args)
+	var o openOptions
 	fs := flag.NewFlagSet("open", flag.ExitOnError)
-	agent := fs.String("agent", "", "claude, codex or both (default from config)")
-	noFocus := fs.Bool("no-focus", false, "don't switch to the tab (for scripts and other agents)")
+	fs.StringVar(&o.agent, "agent", "", "claude, codex or both (default from config)")
+	fs.BoolVar(&o.noFocus, "no-focus", false, "don't switch to the tab (for scripts and other agents)")
 	fs.Parse(args)
 
-	p, err := openProject()
+	p, e, err := open(name)
 	if err != nil {
 		return err
 	}
-	e, err := p.entry(nameArgs(name))
-	if err != nil {
-		return err
-	}
-	h, err := herdr.New()
+	return a.open(p, e, o)
+}
+
+// open builds the worktree's tab, or focuses it if it's already there.
+func (a *App) open(p *project, e *registry.Entry, o openOptions) error {
+	mux, err := a.NewMux()
 	if err != nil {
 		return err
 	}
@@ -41,42 +48,41 @@ func runOpen(args []string) error {
 	// Idempotent: a live tab is focused, not rebuilt. A tab that was closed
 	// by hand is forgotten and recreated.
 	if e.Tab != "" {
-		_, err := h.GetTab(e.Tab)
+		_, err := mux.GetTab(e.Tab)
 		switch {
 		case err == nil:
-			if !*noFocus {
-				if err := h.FocusTab(e.Tab); err != nil {
+			if !o.noFocus {
+				if err := mux.FocusTab(e.Tab); err != nil {
 					return err
 				}
 			}
-			fmt.Printf("%s is already open in %s\n", e.Name, e.Tab)
+			a.printf("%s is already open in %s\n", e.Name, e.Tab)
 			return nil
-		case herdr.IsNotFound(err):
+		case errors.Is(err, connectors.ErrNotFound):
 			e.Tab = ""
 		default:
 			return err
 		}
 	}
 
-	if *agent == "" {
-		*agent = p.cfg.Agent.Default
+	if o.agent == "" {
+		o.agent = p.cfg.Agent.Default
 	}
-	agents, err := agentsFor(p.cfg, *agent, e)
+	agents, err := agentsFor(p.cfg, o.agent, e)
 	if err != nil {
 		return err
 	}
-	base, err := p.repo.DefaultBranch()
+	vars, err := p.vars(e)
 	if err != nil {
 		return err
 	}
-	vars := p.cfg.Vars(e.Name, base, e.Slot)
 	editor, err := config.Expand(p.cfg.Layout.Editor, vars)
 	if err != nil {
 		return err
 	}
 	env := jwEnv(*e, vars)
 
-	tab, editorPane, err := createTab(h, p.cfg.Workspace, e, env)
+	tab, editorPane, err := createTab(mux, p.cfg.Workspace, e, env)
 	if err != nil {
 		return err
 	}
@@ -84,7 +90,7 @@ func runOpen(args []string) error {
 	// Record the tab before anything else can fail, so `jw close` can
 	// always find what `jw open` created.
 	e.Tab = tab.ID
-	if err := p.reg.Save(p.regPath); err != nil {
+	if err := p.save(); err != nil {
 		return err
 	}
 
@@ -93,24 +99,24 @@ func runOpen(args []string) error {
 	//  ├────────┴────────┤   cut the top in two
 	//  │ dev             │
 	//  └─────────────────┘
-	devPane, err := h.Split(editorPane.ID, "down", 0.7, e.Path, env)
+	devPane, err := mux.Split(editorPane.ID, "down", 0.7, e.Path, env)
 	if err != nil {
 		return err
 	}
-	agentPane, err := h.Split(editorPane.ID, "right", 0.5, e.Path, env)
+	agentPane, err := mux.Split(editorPane.ID, "right", 0.5, e.Path, env)
 	if err != nil {
 		return err
 	}
-	_ = h.RenamePane(editorPane.ID, "editor")
-	_ = h.RenamePane(devPane.ID, "dev")
+	_ = mux.RenamePane(editorPane.ID, "editor")
+	_ = mux.RenamePane(devPane.ID, "dev")
 
-	if err := h.Run(editorPane.ID, editor); err != nil {
+	if err := mux.Run(editorPane.ID, editor); err != nil {
 		return err
 	}
 
-	panes := []herdr.Pane{agentPane}
+	panes := []connectors.Pane{agentPane}
 	for range agents[1:] {
-		extra, err := h.Split(agentPane.ID, "down", 0.5, e.Path, env)
+		extra, err := mux.Split(agentPane.ID, "down", 0.5, e.Path, env)
 		if err != nil {
 			return err
 		}
@@ -119,51 +125,50 @@ func runOpen(args []string) error {
 
 	// An agent that fails to start doesn't undo the tab: the editor and dev
 	// panes are still useful, and the agent can be started by hand.
-	for i, a := range agents {
-		fmt.Printf("starting %s (%s %s)…\n", a.name, a.kind, strings.Join(a.args, " "))
-		err := h.StartAgent(a.name, a.kind, panes[i].ID, a.args)
+	for i, ag := range agents {
+		a.printf("starting %s (%s %s)…\n", ag.name, ag.kind, strings.Join(ag.args, " "))
+		err := mux.StartAgent(ag.name, ag.kind, panes[i].ID, ag.args)
 		switch {
 		case err == nil:
-		case herdr.IsNotReady(err):
+		case errors.Is(err, connectors.ErrAgentNotReady):
 			// jw never answers these: a trust or approval dialog is the user's call.
-			fmt.Fprintf(os.Stderr, "note: %s is waiting at a dialog in its pane (a new folder asks whether you trust it) — answer it there\n", a.name)
+			a.warnf("note: %s is waiting at a dialog in its pane (a new folder asks whether you trust it) — answer it there\n", ag.name)
 		default:
-			fmt.Fprintf(os.Stderr, "warning: %s did not start: %v\n", a.name, err)
+			a.warnf("warning: %s did not start: %v\n", ag.name, err)
 		}
 	}
 
 	e.Opened = true
-	if err := p.reg.Save(p.regPath); err != nil {
+	if err := p.save(); err != nil {
 		return err
 	}
-
-	if !*noFocus {
-		if err := h.FocusTab(tab.ID); err != nil {
+	if !o.noFocus {
+		if err := mux.FocusTab(tab.ID); err != nil {
 			return err
 		}
 	}
-	fmt.Printf("opened %s in %s\n", e.Name, tab.ID)
+	a.printf("opened %s in %s\n", e.Name, tab.ID)
 	return nil
 }
 
 // createTab puts the worktree's tab in the project's workspace, creating the
-// workspace on first use (and reusing the tab herdr makes along with it).
-func createTab(h *herdr.Client, workspace string, e *registry.Entry, env []string) (herdr.Tab, herdr.Pane, error) {
-	all, err := h.Workspaces()
+// workspace on first use (and reusing the tab it comes with).
+func createTab(mux connectors.Multiplexer, workspace string, e *registry.Entry, env []string) (connectors.Tab, connectors.Pane, error) {
+	all, err := mux.Workspaces()
 	if err != nil {
-		return herdr.Tab{}, herdr.Pane{}, err
+		return connectors.Tab{}, connectors.Pane{}, err
 	}
 	for _, ws := range all {
 		if ws.Label == workspace {
-			return h.CreateTab(ws.ID, e.Path, e.Name, env)
+			return mux.CreateTab(ws.ID, e.Path, e.Name, env)
 		}
 	}
 
-	_, tab, root, err := h.CreateWorkspace(e.Path, workspace, env)
+	_, tab, root, err := mux.CreateWorkspace(e.Path, workspace, env)
 	if err != nil {
 		return tab, root, err
 	}
-	return tab, root, h.RenameTab(tab.ID, e.Name)
+	return tab, root, mux.RenameTab(tab.ID, e.Name)
 }
 
 // agentsFor picks the agent command(s). A worktree that was opened before
@@ -187,8 +192,8 @@ func agentsFor(cfg *config.Config, which string, e *registry.Entry) ([]agentSpec
 		if which == "codex" {
 			c = cfg.Agent.Codex
 		}
-		a, err := pick(c, e.Name)
-		return []agentSpec{a}, err
+		ag, err := pick(c, e.Name)
+		return []agentSpec{ag}, err
 	case "both":
 		claude, err := pick(cfg.Agent.Claude, e.Name)
 		if err != nil {
