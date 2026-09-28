@@ -6,6 +6,7 @@ import (
 	"os"
 	"text/tabwriter"
 
+	"github.com/brya0x/jw/internal/git"
 	"github.com/brya0x/jw/internal/registry"
 )
 
@@ -23,18 +24,31 @@ func runLs(args []string) error {
 		return err
 	}
 
-	// TODO: derive the current project from the cwd's git remote; until
-	// then `ls` behaves as `ls -a`.
-	_ = all
+	// Outside a git repo there is no current project, so show everything.
+	project := ""
+	if !*all {
+		if cwd, err := os.Getwd(); err == nil {
+			if repo, err := git.Open(cwd); err == nil {
+				project = git.ProjectName(repo.Remote)
+			}
+		}
+	}
 
-	if len(reg.Entries) == 0 {
+	var entries []registry.Entry
+	for _, e := range reg.Entries {
+		if project == "" || e.Project == project {
+			entries = append(entries, e)
+		}
+	}
+
+	if len(entries) == 0 {
 		fmt.Println("no worktrees yet — create one with `jw new <name>`")
 		return nil
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "PROJECT\tNAME\tID\tBRANCH\tSLOT\tTAB")
-	for _, e := range reg.Entries {
+	for _, e := range entries {
 		tab := "closed"
 		if e.Tab != "" {
 			tab = "open"

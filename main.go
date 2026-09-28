@@ -17,6 +17,8 @@ func main() {
 
 	var err error
 	switch cmd {
+	case "new":
+		err = runNew(args)
 	case "ls":
 		err = runLs(args)
 	case "help", "-h", "--help":
@@ -38,6 +40,7 @@ func usage() {
 	fmt.Fprint(os.Stderr, `usage: jw <command> [args]
 
 commands:
-  ls      list registered worktrees
+  new     create a worktree and register it
+  ls      list worktrees of this project (-a: all projects)
 `)
 }
