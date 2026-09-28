@@ -25,6 +25,8 @@ func main() {
 		err = runClose(args)
 	case "done":
 		err = runDone(args)
+	case "dev":
+		err = runDev(args)
 	case "setup":
 		err = runSetupCmd(args)
 	case "ls":
@@ -52,6 +54,7 @@ commands:
   open    open the worktree in a herdr tab: editor | agent | dev
   close   close the tab, keep the worktree
   done    after the PR is merged: confirm, then delete worktree and branch
+  dev     start a service on this worktree's ports (no service: list them)
   setup   re-run the setup commands of a worktree
   ls      list worktrees of this project (-a: all projects)
 `)

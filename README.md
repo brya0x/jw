@@ -13,7 +13,7 @@ jw close mobile-login      # free the tab, keep the work
 jw done mobile-login       # PR merged? confirm → remove worktree + branch
 ```
 
-> **Status: early.** Everything here works except `jw dev` and stack-aware `jw done` — see
+> **Status: early.** Everything here works except stack-aware `jw done` — see
 > [Roadmap](#roadmap).
 
 ---
@@ -248,11 +248,17 @@ api-webhooks   c21e8b40  feat/api-webhooks   3     closed  #401 merged ready for
 - **STATE** is `missing` (worktree gone from disk), `dirty` (uncommitted or untracked files) or
   `ready for done` (PR merged, tree clean).
 
-### `jw dev <service>`
+### `jw dev [service] [-w name]`
 
-Runs inside the bottom pane. Starts the service's configured command(s) with this slot's ports
-substituted. A service can be several commands (e.g. a package watcher + the app); each gets
-its own split.
+Starts a service from `[dev]` on this worktree's ports. Without a service it lists them, with
+their commands already expanded. `-w` picks a worktree other than the one you're in.
+
+- **One command:** `jw` execs it — the service owns the terminal, so colours, `ctrl+c` and
+  interactive keys (Expo's "press i") work as if you had typed it.
+- **Several commands, inside herdr:** each one after the first gets its own split of the dev
+  pane; the first runs in the pane you're in.
+- **Several commands, outside herdr:** they run side by side with `[1]`, `[2]` prefixes on
+  every line. `ctrl+c` stops all of them, including the servers their shells started.
 
 ### `jw close [name] [-y]`
 
@@ -383,7 +389,7 @@ projects use `project/name`.
 - [x] `jw open` + herdr layout
 - [x] `jw close`
 - [x] `jw done` + PR checks
-- [ ] `jw dev`
+- [x] `jw dev`
 - [ ] `jw done` across every layer of a stack
 - [ ] `jw ls` interactive (bubbletea)
 
