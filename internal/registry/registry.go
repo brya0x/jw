@@ -115,6 +115,17 @@ func (r *Registry) Add(e Entry) {
 	r.Entries = append(r.Entries, e)
 }
 
+// Remove deletes the entry with that id, freeing its slot. It shifts
+// Entries, so a *Entry obtained from Find is invalid afterwards.
+func (r *Registry) Remove(id string) {
+	for i, e := range r.Entries {
+		if e.ID == id {
+			r.Entries = append(r.Entries[:i], r.Entries[i+1:]...)
+			return
+		}
+	}
+}
+
 // NextSlot returns the lowest slot not used by any project.
 func (r *Registry) NextSlot() int {
 	used := map[int]bool{}

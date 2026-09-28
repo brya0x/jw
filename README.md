@@ -13,8 +13,8 @@ jw close mobile-login      # free the tab, keep the work
 jw done mobile-login       # PR merged? confirm → remove worktree + branch
 ```
 
-> **Status: design stage.** This README is the spec. Commands described here are not
-> implemented yet. See [Roadmap](#roadmap).
+> **Status: early.** Everything here works except `jw dev` and stack-aware `jw done` — see
+> [Roadmap](#roadmap).
 
 ---
 
@@ -234,17 +234,19 @@ answers that dialog for you: it tells you the agent is waiting and leaves the an
 
 ### `jw ls [-a]`
 
-Worktrees for the current project (`-a`: all projects).
+Worktrees for the current project (`-a`, or outside any repo: all projects).
 
 ```
 NAME           ID        BRANCH              SLOT  TAB     PR          STATE
-mobile-login   0b1c9e2a  feat/mobile-login   1     open    #412 open   2 unpushed
+mobile-login   0b1c9e2a  feat/mobile-login   1     open    #412 open
 web-billing    7f3ad011  feat/web-billing    2     closed  #409 draft  dirty
 api-webhooks   c21e8b40  feat/api-webhooks   3     closed  #401 merged ready for done
 ```
 
-Reconciles against `herdr tab list` and `git worktree list`, so a tab or tree you killed by
-hand doesn't leave a ghost.
+- **TAB** is checked against herdr: a tab you closed by hand is forgotten, not left as a ghost.
+- **PR** comes from one `gh pr list` per project (`-` no PR, `?` gh unavailable).
+- **STATE** is `missing` (worktree gone from disk), `dirty` (uncommitted or untracked files) or
+  `ready for done` (PR merged, tree clean).
 
 ### `jw dev <service>`
 
@@ -252,19 +254,27 @@ Runs inside the bottom pane. Starts the service's configured command(s) with thi
 substituted. A service can be several commands (e.g. a package watcher + the app); each gets
 its own split.
 
-### `jw close <name>`
+### `jw close [name] [-y]`
 
-Kills the tab — agent and dev servers included. Keeps worktree, branch and slot. Warns first if
-a dev server is running.
+Kills the tab — agent and dev servers included. Keeps worktree, branch and slot; `jw open`
+brings it back.
 
-### `jw done <name>`
+If the dev pane is running something besides its shell, it asks first. Without a terminal to
+ask on it refuses; `-y` closes without asking.
 
-1. Checks the PR with `gh pr view <branch> --json state,mergedAt` — every layer, if it's a stack.
-2. **Refuses** if anything is unmerged, uncommitted or unpushed.
-3. Asks: `delete mobile-login? [y/N]`.
-4. Closes the tab, `git worktree remove`, deletes the local branch, frees the slot.
+### `jw done [name]`
 
-Nothing is deleted without that confirmation.
+1. **Refuses** if the worktree has uncommitted or untracked files.
+2. Finds the PR for the branch with `gh pr list --head <branch>` and **refuses** unless it is
+   merged.
+3. **Refuses** if the local HEAD has commits that aren't in what GitHub merged. This compares
+   against the PR's head commit, not the upstream branch, so it still works after GitHub deletes
+   the remote branch on merge.
+4. Asks: `delete worktree … and branch …? [y/N]`. Without a terminal it refuses.
+5. Closes the tab, `git worktree remove`, deletes the local branch, frees the slot.
+
+Nothing is deleted without that confirmation. Stacks: each layer is its own branch, so today
+`jw done` checks the one branch the worktree was created with.
 
 Every command accepts the name or a prefix of the id.
 
@@ -323,7 +333,7 @@ Placeholders: `{name}`, `{base}`, `{slot}`, `{port.<service>}`.
 
 - **Single branch:** `gh pr create --base <default>` from the agent pane.
 - **Stack:** with `gh-stack` installed, all layers of a stack live in **one** worktree; you move
-  between layers by checkout. `jw done` only proceeds when every layer is merged.
+  between layers by checkout. Checking every layer in `jw done` is on the roadmap.
 
 The main checkout stays on the default branch forever. It's where you `pull`, and where new
 worktrees fork from — nobody works in it.
@@ -368,11 +378,13 @@ projects use `project/name`.
 
 ## Roadmap
 
-- [ ] `jw new` / `jw ls` + registry
-- [ ] `jw open` + herdr layout
-- [ ] ports + `jw dev`
-- [ ] `jw close`
-- [ ] `jw done` + PR / stack checks
+- [x] `jw new` / `jw ls` + registry
+- [x] config, ports, env files, `jw setup`
+- [x] `jw open` + herdr layout
+- [x] `jw close`
+- [x] `jw done` + PR checks
+- [ ] `jw dev`
+- [ ] `jw done` across every layer of a stack
 - [ ] `jw ls` interactive (bubbletea)
 
 ## License

@@ -38,6 +38,17 @@ func TestNextSlotFillsGaps(t *testing.T) {
 	}
 }
 
+func TestRemoveFreesSlot(t *testing.T) {
+	r := &Registry{Entries: []Entry{{ID: "a", Slot: 1}, {ID: "b", Slot: 2}}}
+	r.Remove("a")
+	if len(r.Entries) != 1 || r.Entries[0].ID != "b" {
+		t.Fatalf("got %+v", r.Entries)
+	}
+	if got := r.NextSlot(); got != 1 {
+		t.Fatalf("slot 1 should be free again, got %d", got)
+	}
+}
+
 func TestFindByNameAndPrefix(t *testing.T) {
 	r := &Registry{Entries: []Entry{
 		{ID: "0b1c9e2a-0000-4000-8000-000000000000", Name: "web", Project: "myapp"},
