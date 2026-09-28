@@ -99,6 +99,35 @@ func (r *Repo) DeleteBranch(branch string) error {
 	return err
 }
 
+// Dirty reports whether the worktree at dir has uncommitted or untracked files.
+func Dirty(dir string) (bool, error) {
+	out, err := run(dir, "status", "--porcelain")
+	return out != "", err
+}
+
+// Head returns the commit checked out in dir.
+func Head(dir string) (string, error) {
+	return run(dir, "rev-parse", "HEAD")
+}
+
+// HasCommit reports whether the object database has commit oid.
+func (r *Repo) HasCommit(oid string) bool {
+	_, err := run(r.Root, "cat-file", "-e", oid+"^{commit}")
+	return err == nil
+}
+
+// FetchCommit downloads one commit by sha (GitHub allows this).
+func (r *Repo) FetchCommit(oid string) error {
+	_, err := run(r.Root, "fetch", "--quiet", "origin", oid)
+	return err
+}
+
+// IsAncestor reports whether commit a is contained in commit b's history.
+func (r *Repo) IsAncestor(a, b string) bool {
+	_, err := run(r.Root, "merge-base", "--is-ancestor", a, b)
+	return err == nil
+}
+
 // Exclude adds pattern to .git/info/exclude unless it is already there. That
 // file is shared by every worktree and never committed.
 func (r *Repo) Exclude(pattern string) error {

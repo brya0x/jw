@@ -41,7 +41,9 @@ type Tab struct {
 }
 
 type Pane struct {
-	ID string `json:"pane_id"`
+	ID    string `json:"pane_id"`
+	TabID string `json:"tab_id"`
+	Label string `json:"label"`
 }
 
 // Error is herdr's own error reply, e.g. {"code":"tab_not_found", ...}.
@@ -152,6 +154,45 @@ func (c *Client) GetTab(id string) (Tab, error) {
 	}
 	err := c.call(&r, "tab", "get", id)
 	return r.Tab, err
+}
+
+// CloseTab closes a tab and every process in its panes.
+func (c *Client) CloseTab(id string) error {
+	return c.call(nil, "tab", "close", id)
+}
+
+// PanesInTab lists the panes of one tab.
+func (c *Client) PanesInTab(tab Tab) ([]Pane, error) {
+	var r struct {
+		Panes []Pane `json:"panes"`
+	}
+	if err := c.call(&r, "pane", "list", "--workspace", tab.WorkspaceID); err != nil {
+		return nil, err
+	}
+	var in []Pane
+	for _, p := range r.Panes {
+		if p.TabID == tab.ID {
+			in = append(in, p)
+		}
+	}
+	return in, nil
+}
+
+// Process is one process in the foreground of a pane.
+type Process struct {
+	Name    string `json:"name"`
+	Cmdline string `json:"cmdline"`
+}
+
+// Foreground lists what the pane is running right now — just the shell when idle.
+func (c *Client) Foreground(pane string) ([]Process, error) {
+	var r struct {
+		Info struct {
+			Processes []Process `json:"foreground_processes"`
+		} `json:"process_info"`
+	}
+	err := c.call(&r, "pane", "process-info", "--pane", pane)
+	return r.Info.Processes, err
 }
 
 func (c *Client) RenameTab(id, label string) error {

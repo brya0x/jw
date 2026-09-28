@@ -21,6 +21,10 @@ func main() {
 		err = runNew(args)
 	case "open":
 		err = runOpen(args)
+	case "close":
+		err = runClose(args)
+	case "done":
+		err = runDone(args)
 	case "setup":
 		err = runSetupCmd(args)
 	case "ls":
@@ -46,6 +50,8 @@ func usage() {
 commands:
   new     create a worktree and register it
   open    open the worktree in a herdr tab: editor | agent | dev
+  close   close the tab, keep the worktree
+  done    after the PR is merged: confirm, then delete worktree and branch
   setup   re-run the setup commands of a worktree
   ls      list worktrees of this project (-a: all projects)
 `)
