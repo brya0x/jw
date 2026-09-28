@@ -2,12 +2,14 @@ package commands
 
 import (
 	"os"
+	"os/exec"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/brya0x/jw/internal/connectors"
 	"github.com/brya0x/jw/internal/connectors/git"
+	"github.com/brya0x/jw/internal/core/config"
 )
 
 func TestOpenLayoutAndEnvOnEveryPane(t *testing.T) {
@@ -209,6 +211,102 @@ func TestInitDetectsAndWritesALoadableConfig(t *testing.T) {
 	}
 }
 
+func TestNewOnExistingBranch(t *testing.T) {
+	env := newTestEnv(t)
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = env.repo
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	commit := func(msg string) {
+		git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", msg)
+	}
+
+	// A local branch with its own history, and one that only lives on origin.
+	git("checkout", "-q", "-b", "feat/local")
+	commit("local work")
+	localHead := git("rev-parse", "HEAD")
+	git("checkout", "-q", "-b", "feat/remote")
+	commit("remote work")
+	remoteHead := git("rev-parse", "HEAD")
+	git("push", "-q", "origin", "feat/remote")
+	git("checkout", "-q", "main")
+	git("branch", "-q", "-D", "feat/remote")
+
+	p, err := loadProject(env.repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Colliding without --branch stays an error, with the way out in it.
+	// The template feat/{name} gives feat/local, which exists: refuse.
+	err = env.app.newStream(p, newOptions{name: "local"})
+	if err == nil {
+		t.Fatal("an existing branch must not be reused without --branch")
+	}
+	if !strings.Contains(err.Error(), "pass --branch feat/local") {
+		t.Fatalf("got %v", err)
+	}
+
+	// --branch with an existing local branch: checked out as is.
+	if err := env.app.newStream(p, newOptions{name: "local", branch: "feat/local"}); err != nil {
+		t.Fatal(err)
+	}
+	e, _ := p.reg.Find(p.name, "local")
+	if head, _ := gitHead(e.Path); head != localHead {
+		t.Fatalf("worktree at %s, want the branch's own %s", head, localHead)
+	}
+
+	// --branch with a branch only on origin: a tracking branch is made.
+	if err := env.app.newStream(p, newOptions{name: "remote", branch: "feat/remote"}); err != nil {
+		t.Fatal(err)
+	}
+	e, _ = p.reg.Find(p.name, "remote")
+	if head, _ := gitHead(e.Path); head != remoteHead {
+		t.Fatalf("worktree at %s, want origin's %s", head, remoteHead)
+	}
+
+	// --from makes no sense on a branch that already has history.
+	err = env.app.newStream(p, newOptions{name: "other", branch: "feat/local", from: "origin/main"})
+	if err == nil || !strings.Contains(err.Error(), "--from") {
+		t.Fatalf("want --from refusal, got %v", err)
+	}
+}
+
+func TestRollbackKeepsAnExistingBranch(t *testing.T) {
+	env := newTestEnv(t)
+	cmd := exec.Command("git", "branch", "feat/keep")
+	cmd.Dir = env.repo
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+
+	p, err := loadProject(env.repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An env "file" that is a directory in the main checkout can't be read,
+	// so provision fails after the worktree already exists.
+	p.cfg.Env = append(p.cfg.Env, config.EnvFile{File: "sub"})
+	os.MkdirAll(env.repo+"/sub", 0o755)
+
+	err = env.app.newStream(p, newOptions{name: "keep", branch: "feat/keep"})
+	if err == nil || !strings.Contains(err.Error(), "rolled back") {
+		t.Fatalf("want a rollback, got %v", err)
+	}
+	if _, err := os.Stat(p.cfg.Root + "/keep"); !os.IsNotExist(err) {
+		t.Fatal("rollback should remove the worktree")
+	}
+	if !p.repo.BranchExists("feat/keep") {
+		t.Fatal("rollback deleted a branch jw did not create")
+	}
+}
+
 func TestSetupRunsThroughShell(t *testing.T) {
 	env := newTestEnv(t)
 	p, err := loadProject(env.repo)
@@ -224,3 +322,5 @@ func TestSetupRunsThroughShell(t *testing.T) {
 		t.Fatalf("shell ran %v, want %v", env.shell.ran, want)
 	}
 }
+
+func gitHead(dir string) (string, error) { return git.Head(dir) }

@@ -87,6 +87,19 @@ func (r *Repo) AddWorktree(path, branch, ref string) error {
 	return err
 }
 
+// RemoteBranchExists reports whether origin has the branch (as last fetched).
+func (r *Repo) RemoteBranchExists(branch string) bool {
+	_, err := run(r.Root, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+branch)
+	return err == nil
+}
+
+// AddWorktreeExisting checks out an existing branch at path. A branch that
+// only exists on origin gets a local branch tracking it (git's own DWIM).
+func (r *Repo) AddWorktreeExisting(path, branch string) error {
+	_, err := run(r.Root, "worktree", "add", "--quiet", path, branch)
+	return err
+}
+
 // RemoveWorktree deletes the worktree at path, discarding local changes.
 func (r *Repo) RemoveWorktree(path string) error {
 	_, err := run(r.Root, "worktree", "remove", "--force", path)
