@@ -99,6 +99,21 @@ func (r *Registry) Find(project, key string) (*Entry, error) {
 	return match, nil
 }
 
+// Has reports whether project already has a worktree with exactly this name.
+func (r *Registry) Has(project, name string) bool {
+	for _, e := range r.Entries {
+		if e.Project == project && e.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// Add appends an entry.
+func (r *Registry) Add(e Entry) {
+	r.Entries = append(r.Entries, e)
+}
+
 // NextSlot returns the lowest slot not used by any project.
 func (r *Registry) NextSlot() int {
 	used := map[int]bool{}
