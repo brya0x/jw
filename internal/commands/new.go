@@ -29,7 +29,7 @@ func (a *App) runNew(args []string) error {
 	o.name, args = splitName(args)
 	fs := flag.NewFlagSet("new", flag.ExitOnError)
 	fs.StringVar(&o.from, "from", "", "ref to start from (default origin/<default branch>)")
-	fs.StringVar(&o.branch, "branch", "", "branch name (default from config, feat/<name>)")
+	fs.StringVar(&o.branch, "branch", "", "branch name (default from config, feat/<name>); an existing branch is checked out as is")
 	fs.BoolVar(&o.noSetup, "no-setup", false, "skip the config's setup commands")
 	fs.Parse(args)
 	if o.name == "" {
@@ -73,26 +73,40 @@ func (a *App) newStream(p *project, o newOptions) error {
 			return err
 		}
 	}
-	if p.repo.BranchExists(branch) {
-		return fmt.Errorf("branch %s already exists", branch)
-	}
 	path := filepath.Join(p.cfg.Root, o.name)
 	if _, err := os.Stat(path); err == nil {
 		return fmt.Errorf("%s already exists", path)
-	}
-	ref := o.from
-	if ref == "" {
-		ref = "origin/" + base
 	}
 
 	if p.cfg.Source != "" {
 		a.printf("config  %s\n", p.cfg.Source)
 	}
+	// Fetch before looking at branches, so one that only exists on origin
+	// is seen.
 	a.printf("fetching origin…\n")
 	if err := p.repo.Fetch(); err != nil {
 		return err
 	}
-	if err := p.repo.AddWorktree(path, branch, ref); err != nil {
+
+	// An existing branch is used as is, but only when named on purpose with
+	// --branch: a name template that happens to collide stays an error.
+	existing := p.repo.BranchExists(branch) || p.repo.RemoteBranchExists(branch)
+	if existing && o.branch == "" {
+		return fmt.Errorf("branch %s already exists; pass --branch %s to work on it", branch, branch)
+	}
+	if existing && o.from != "" {
+		return fmt.Errorf("--from doesn't apply to an existing branch (%s already has its history)", branch)
+	}
+
+	ref := o.from
+	if ref == "" {
+		ref = "origin/" + base
+	}
+	if existing {
+		if err := p.repo.AddWorktreeExisting(path, branch); err != nil {
+			return err
+		}
+	} else if err := p.repo.AddWorktree(path, branch, ref); err != nil {
 		return err
 	}
 
@@ -110,14 +124,24 @@ func (a *App) newStream(p *project, o newOptions) error {
 	// a half-created stream never lingers outside the registry.
 	if err := a.provision(p, e, vars); err != nil {
 		_ = p.repo.RemoveWorktree(path)
-		_ = p.repo.DeleteBranch(branch)
+		if !existing { // a branch jw didn't create is never jw's to delete
+			_ = p.repo.DeleteBranch(branch)
+		}
 		return fmt.Errorf("rolled back %s: %w", o.name, err)
 	}
 
-	a.printf("created %s/%s\n  branch  %s (from %s)\n  path    %s\n  slot    %d\n",
-		p.name, o.name, branch, ref, path, slot)
+	origin := "from " + ref
+	if existing {
+		origin = "existing"
+	}
+	a.printf("created %s/%s\n  branch  %s (%s)\n  path    %s\n  slot    %d\n",
+		p.name, o.name, branch, origin, path, slot)
+	width := 0
+	for svc := range vars.Ports {
+		width = max(width, len(svc))
+	}
 	for _, svc := range sortedKeys(vars.Ports) {
-		a.printf("  %-14s %d\n", svc, vars.Ports[svc])
+		a.printf("  %-*s  %d\n", width, svc, vars.Ports[svc])
 	}
 
 	if o.noSetup || len(p.cfg.Setup) == 0 {

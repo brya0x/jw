@@ -233,6 +233,12 @@ existing config is never overwritten without `--force`.
 
 Opens nothing.
 
+**Working on a branch that already exists** — yours from before, or one a teammate pushed:
+`jw new sync-center --branch feat/sync-center` checks it out as is instead of creating one.
+A branch that only exists on origin gets a local branch tracking it. Without `--branch`, a name
+that collides with an existing branch is an error, so nothing is reused by accident; `--from`
+doesn't combine with it; and a rollback never deletes a branch `jw` didn't create.
+
 ### `jw setup [name]`
 
 Re-runs the config's `setup` commands in a worktree — the one you're standing in if no name
