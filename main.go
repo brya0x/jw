@@ -19,6 +19,8 @@ func main() {
 	switch cmd {
 	case "new":
 		err = runNew(args)
+	case "setup":
+		err = runSetupCmd(args)
 	case "ls":
 		err = runLs(args)
 	case "help", "-h", "--help":
@@ -41,6 +43,7 @@ func usage() {
 
 commands:
   new     create a worktree and register it
+  setup   re-run the setup commands of a worktree
   ls      list worktrees of this project (-a: all projects)
 `)
 }

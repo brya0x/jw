@@ -199,14 +199,23 @@ Offsets come from config. With `web = 0`, `api = 2`, `metro = 81`:
 
 ## Commands
 
-### `jw new <name> [--from <ref>] [--branch <branch>]`
+### `jw new <name> [--from <ref>] [--branch <branch>] [--no-setup]`
 
 1. `git fetch`, then `git worktree add <root>/<name> -b <branch> <ref>`
    (`<ref>` defaults to `origin/<default branch>`).
 2. Assigns a free slot, writes `.jw.env`.
 3. Copies the configured env files from the main checkout and rewrites their ports.
-4. Runs `setup` (install, build workspace packages…).
-5. Registers it. Opens nothing.
+   A file missing in the main checkout is skipped with a warning.
+4. Registers it. If any step up to here fails, the worktree and branch are removed.
+5. Runs `setup` (install, build workspace packages…) with the `JW_*` variables exported.
+   If setup fails, the worktree is **kept** — fix the cause and run `jw setup`.
+
+Opens nothing.
+
+### `jw setup [name]`
+
+Re-runs the config's `setup` commands in a worktree — the one you're standing in if no name
+is given.
 
 ### `jw open <name> [--agent claude|codex|both]`
 
