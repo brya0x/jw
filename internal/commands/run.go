@@ -1,6 +1,10 @@
 package commands
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/brya0x/jw/internal/core/version"
+)
 
 // Run executes jw with args (without the program name) and returns the
 // process exit code.
@@ -33,6 +37,9 @@ func (a *App) Run(args []string) int {
 		err = a.runSetup(rest)
 	case "ls":
 		err = a.runLs(rest)
+	case "version", "--version", "-v":
+		a.printf("%s\n", version.Current())
+		return 0
 	case "help", "-h", "--help":
 		a.usage()
 		return 0
@@ -62,6 +69,7 @@ commands:
   rm      remove a stream whatever its PR says (guards unpushed work)
   dev     start a service on this worktree's ports (no service: list them)
   setup   re-run the setup commands of a worktree
+  version show which build of jw this is
   ls      list worktrees of this project (-a: all projects, -i: interactive)
 `)
 }
