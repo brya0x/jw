@@ -472,6 +472,56 @@ projects use `project/name`.
 
 ---
 
+## For coding agents
+
+`jw` is built to be driven by agents as much as by people.
+
+**Teach your agent to use it.** The guide is compiled into the binary, so it always matches your
+`jw`:
+
+```sh
+jw agents install                          # Claude Code skill: ~/.claude/skills/jw/SKILL.md
+jw agents install --into ~/.codex/AGENTS.md  # Codex, or any repo's AGENTS.md (a marked block)
+jw agents                                  # just print it
+```
+
+Re-running updates the copy in place. The guide is
+[internal/core/guide/guide.md](internal/core/guide/guide.md).
+
+**Inside a stream,** every pane has `JW_NAME`, `JW_SLOT` and `JW_PORT_<SERVICE>` in its
+environment, and `jw info` shows the rest: branch, path, each port and whether something
+listens on it, tab, PR, state.
+
+**Machine-readable output.** `jw ls --json`, `jw info --json` and `jw new --json` print the same
+stream object. `new --json` keeps stdout for the JSON alone and sends progress to stderr.
+
+```json
+{
+  "name": "web", "branch": "feat/web", "slot": 1, "port_base": 20100,
+  "ports": { "web": { "port": 20100, "listening": true } },
+  "open": true, "tab": "w4:t1",
+  "pr": { "number": 412, "state": "open", "url": "https://github.com/acme/myapp/pull/412" },
+  "state": ""
+}
+```
+
+**Orchestrating.** `jw new <name> --task "…"` creates the stream, opens it without stealing
+focus and hands the task to its agent; `jw prompt <name> "…"` does the same for an open one.
+Neither waits for the work. Neither ever types into a dialog: if the agent sits at one (folder
+trust, an approval), they stop instead.
+
+**Exit codes** are part of the interface:
+
+| Code | Meaning |
+|---|---|
+| 0 | done |
+| 1 | failed — the message says why |
+| 2 | wrong command or arguments |
+| 3 | **a person has to decide**: a confirmation, a dialog. Don't retry — ask. |
+
+Confirmations (`done`, `rm`, `close` with a dev server up) never accept an answer without a
+terminal: an agent can't delete a worktree by accident.
+
 ## Architecture
 
 ```

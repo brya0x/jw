@@ -28,6 +28,8 @@ func (a *App) Run(args []string) int {
 		err = a.runClose(rest)
 	case "done":
 		err = a.runDone(rest)
+	case "agents":
+		err = a.runAgents(rest)
 	case "prompt":
 		err = a.runPrompt(rest)
 	case "info":
@@ -82,6 +84,7 @@ commands:
   rm      remove a stream whatever its PR says (guards unpushed work)
   dev     start a service on this worktree's ports (no service: list them)
   setup   re-run the setup commands of a worktree
+  agents  the guide for coding agents; "jw agents install" teaches Claude Code or Codex to use jw
   version show which build of jw this is
   ls      list worktrees of this project (-a: all projects, -i: interactive, --json)
 `)
