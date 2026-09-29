@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/brya0x/jw/internal/core/version"
@@ -11,7 +12,7 @@ import (
 func (a *App) Run(args []string) int {
 	if len(args) == 0 {
 		a.usage()
-		return 2
+		return ExitUsage
 	}
 	cmd, rest := args[0], args[1:]
 
@@ -39,21 +40,27 @@ func (a *App) Run(args []string) int {
 		err = a.runLs(rest)
 	case "version", "--version", "-v":
 		a.printf("%s\n", version.Current())
-		return 0
+		return ExitOK
 	case "help", "-h", "--help":
 		a.usage()
-		return 0
+		return ExitOK
 	default:
 		fmt.Fprintf(a.Err, "jw: unknown command %q\n\n", cmd)
 		a.usage()
-		return 2
+		return ExitUsage
 	}
 
-	if err != nil {
+	switch {
+	case err == nil:
+		return ExitOK
+	case errors.Is(err, ErrNeedsHuman):
 		fmt.Fprintln(a.Err, "jw:", err)
-		return 1
+		fmt.Fprintln(a.Err, "jw: this needs a person — ask them, don't retry")
+		return ExitNeedsHuman
+	default:
+		fmt.Fprintln(a.Err, "jw:", err)
+		return ExitError
 	}
-	return 0
 }
 
 func (a *App) usage() {

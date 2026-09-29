@@ -36,7 +36,7 @@ func (a *App) runLs(args []string) error {
 
 	if *interactive {
 		if !a.Shell.IsTerminal(os.Stdout) || !a.Shell.IsTerminal(a.In) {
-			return errors.New("jw ls -i needs a terminal")
+			return fmt.Errorf("jw ls -i needs a terminal: %w", ErrNeedsHuman)
 		}
 		return a.lsInteractive(project, *all)
 	}
