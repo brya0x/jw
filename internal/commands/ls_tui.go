@@ -61,6 +61,8 @@ func (a *App) act(action string, chosen registry.Entry) error {
 		return a.done(p, e)
 	case "rm":
 		return a.rm(p, e, rmOptions{})
+	case "sync":
+		return a.sync(p, e, syncOptions{})
 	}
 	return fmt.Errorf("unknown action %q", action)
 }
@@ -152,6 +154,8 @@ func (m lsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.pick("done")
 		case "x":
 			return m.pick("rm")
+		case "s":
+			return m.pick("sync")
 		}
 	}
 
@@ -233,7 +237,7 @@ func (m lsModel) View() string {
 	if m.status != "" {
 		b.WriteString("\n" + statusStyle.Render(m.status) + "\n")
 	}
-	help := "↑/↓ move · enter open · c close · d done · x rm · a all projects · r refresh · q quit"
+	help := "↑/↓ move · enter open · c close · s sync · d done · x rm · a all projects · r refresh · q quit"
 	if m.loading && len(m.rows) > 0 {
 		help = "refreshing… · " + help
 	}

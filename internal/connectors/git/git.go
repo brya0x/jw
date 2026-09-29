@@ -160,6 +160,59 @@ func Unpushed(dir string) ([]string, error) {
 	return strings.Split(out, "\n"), nil
 }
 
+// Operation reports a rebase or merge left half-done in the worktree at dir,
+// or "" when there is none.
+func Operation(dir string) string {
+	for _, op := range []struct{ path, name string }{
+		{"rebase-merge", "rebase"}, {"rebase-apply", "rebase"}, {"MERGE_HEAD", "merge"},
+	} {
+		p, err := run(dir, "rev-parse", "--git-path", op.path)
+		if err != nil {
+			continue
+		}
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(dir, p)
+		}
+		if _, err := os.Stat(p); err == nil {
+			return op.name
+		}
+	}
+	return ""
+}
+
+// Divergence counts the commits HEAD lacks from ref (behind) and has on top
+// of it (ahead).
+func Divergence(dir, ref string) (behind, ahead int, err error) {
+	out, err := run(dir, "rev-list", "--left-right", "--count", ref+"...HEAD")
+	if err != nil {
+		return 0, 0, err
+	}
+	_, err = fmt.Sscanf(out, "%d %d", &behind, &ahead)
+	return behind, ahead, err
+}
+
+// Rebase replays HEAD's own commits onto ref. On conflict git stops half-way
+// and the error is returned; Conflicts says which files.
+func Rebase(dir, ref string) error {
+	_, err := run(dir, "rebase", ref)
+	return err
+}
+
+// Merge merges ref into HEAD with git's default message.
+func Merge(dir, ref string) error {
+	_, err := run(dir, "merge", "--no-edit", ref)
+	return err
+}
+
+// Conflicts lists the files left unmerged in the worktree at dir.
+func Conflicts(dir string) ([]string, error) {
+	out, err := run(dir, "diff", "--name-only", "--diff-filter=U")
+	if err != nil || out == "" {
+		return nil, err
+	}
+	return strings.Split(out, "\n"), nil
+}
+
 // Head returns the commit checked out in dir.
 func Head(dir string) (string, error) {
 	return run(dir, "rev-parse", "HEAD")

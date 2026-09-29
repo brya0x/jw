@@ -129,3 +129,15 @@ func TestEnvName(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestSyncMode(t *testing.T) {
+	repo, _ := setup(t)
+	c, err := Load(repo, "x", "myapp")
+	if err != nil || c.Sync != "rebase" {
+		t.Fatalf("default sync should be rebase, got %q (%v)", c.Sync, err)
+	}
+	writeFile(t, filepath.Join(repo, ".jw.toml"), `sync = "squash"`)
+	if _, err := Load(repo, "x", "myapp"); err == nil || !strings.Contains(err.Error(), "rebase") {
+		t.Fatalf("want an invalid-mode error, got %v", err)
+	}
+}
