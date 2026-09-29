@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/brya0x/jw/internal/core/version"
@@ -11,7 +12,7 @@ import (
 func (a *App) Run(args []string) int {
 	if len(args) == 0 {
 		a.usage()
-		return 2
+		return ExitUsage
 	}
 	cmd, rest := args[0], args[1:]
 
@@ -27,6 +28,12 @@ func (a *App) Run(args []string) int {
 		err = a.runClose(rest)
 	case "done":
 		err = a.runDone(rest)
+	case "agents":
+		err = a.runAgents(rest)
+	case "prompt":
+		err = a.runPrompt(rest)
+	case "info":
+		err = a.runInfo(rest)
 	case "sync":
 		err = a.runSync(rest)
 	case "rm":
@@ -39,21 +46,27 @@ func (a *App) Run(args []string) int {
 		err = a.runLs(rest)
 	case "version", "--version", "-v":
 		a.printf("%s\n", version.Current())
-		return 0
+		return ExitOK
 	case "help", "-h", "--help":
 		a.usage()
-		return 0
+		return ExitOK
 	default:
 		fmt.Fprintf(a.Err, "jw: unknown command %q\n\n", cmd)
 		a.usage()
-		return 2
+		return ExitUsage
 	}
 
-	if err != nil {
+	switch {
+	case err == nil:
+		return ExitOK
+	case errors.Is(err, ErrNeedsHuman):
 		fmt.Fprintln(a.Err, "jw:", err)
-		return 1
+		fmt.Fprintln(a.Err, "jw: this needs a person — ask them, don't retry")
+		return ExitNeedsHuman
+	default:
+		fmt.Fprintln(a.Err, "jw:", err)
+		return ExitError
 	}
-	return 0
 }
 
 func (a *App) usage() {
@@ -65,11 +78,14 @@ commands:
   open    open the worktree in a herdr tab: editor | agent | dev
   close   close the tab, keep the worktree
   done    after the PR is merged: confirm, then delete worktree and branch
+  prompt  hand a task to a stream's agent, without waiting for it
+  info    everything about a stream: branch, ports (and which are up), tab, PR
   sync    bring the branch up to date with the base (rebase, or --merge)
   rm      remove a stream whatever its PR says (guards unpushed work)
   dev     start a service on this worktree's ports (no service: list them)
   setup   re-run the setup commands of a worktree
+  agents  the guide for coding agents; "jw agents install" teaches Claude Code or Codex to use jw
   version show which build of jw this is
-  ls      list worktrees of this project (-a: all projects, -i: interactive)
+  ls      list worktrees of this project (-a: all projects, -i: interactive, --json)
 `)
 }

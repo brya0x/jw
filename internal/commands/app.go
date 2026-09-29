@@ -15,6 +15,18 @@ import (
 	"github.com/brya0x/jw/internal/connectors"
 )
 
+// Exit codes. They are part of jw's interface: scripts and agents branch on them.
+const (
+	ExitOK         = 0
+	ExitError      = 1 // something failed; the message says what
+	ExitUsage      = 2 // unknown command or bad arguments
+	ExitNeedsHuman = 3 // a person has to decide: a confirmation, a dialog. Don't retry — ask.
+)
+
+// ErrNeedsHuman marks a stop that only a person can resolve. Commands wrap
+// it; Run turns it into ExitNeedsHuman.
+var ErrNeedsHuman = errors.New("needs a person to decide")
+
 type App struct {
 	In       *os.File
 	Out, Err io.Writer
@@ -43,7 +55,7 @@ func (a *App) confirm(question string) (bool, error) {
 		return a.Confirm(question)
 	}
 	if !a.Shell.IsTerminal(a.In) {
-		return false, errors.New("no terminal to confirm on")
+		return false, fmt.Errorf("no terminal to confirm on: %w", ErrNeedsHuman)
 	}
 	a.printf("%s [y/N] ", question)
 	line, _ := bufio.NewReader(a.In).ReadString('\n')

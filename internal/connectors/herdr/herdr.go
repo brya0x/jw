@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/brya0x/jw/internal/connectors"
 )
@@ -76,6 +77,8 @@ func (e *Error) Is(target error) bool {
 		return strings.HasSuffix(e.Code, "_not_found")
 	case connectors.ErrAgentNotReady:
 		return e.Code == "agent_not_ready"
+	case connectors.ErrAgentBlocked:
+		return e.Code == "agent_blocked"
 	}
 	return false
 }
@@ -245,6 +248,22 @@ func (c *Client) StartAgent(name, kind, pane string, args []string) error {
 		cmd = append(append(cmd, "--"), args...)
 	}
 	return c.call(nil, cmd...)
+}
+
+// Prompt submits text to the agent and returns once it's sent; herdr refuses
+// an agent sitting at a dialog (agent_blocked) before typing anything.
+func (c *Client) Prompt(agent, text string) error {
+	return c.call(nil, "agent", "prompt", agent, text)
+}
+
+func (c *Client) WaitAgent(agent string, timeout time.Duration) (string, error) {
+	var r struct {
+		Agent struct {
+			Status string `json:"agent_status"`
+		} `json:"agent"`
+	}
+	err := c.call(&r, "agent", "wait", agent, "--timeout", strconv.FormatInt(timeout.Milliseconds(), 10))
+	return r.Agent.Status, err
 }
 
 // CurrentPane is set by herdr in every pane it starts.
