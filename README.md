@@ -61,6 +61,14 @@ while the agent edits.
 go install github.com/brya0x/jw@latest
 ```
 
+`jw version` says which build you have — the commit and its date, read from what Go embeds in
+the binary, so there's nothing to bump by hand:
+
+```
+$ jw version
+jw v0.0.0-20260929155208-6f6d4986f92d (commit 6f6d498, 2026-09-29)
+```
+
 Or from source:
 
 ```sh
