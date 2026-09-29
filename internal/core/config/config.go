@@ -30,6 +30,7 @@ type Config struct {
 	Env       []EnvFile           `toml:"env"`
 	Agent     Agent               `toml:"agent"`
 	Layout    Layout              `toml:"layout"`
+	Sync      string              `toml:"sync"` // how jw sync updates a branch: "rebase" (default) or "merge"
 
 	// Source is the file this config came from, empty for defaults.
 	Source string `toml:"-"`
@@ -170,6 +171,9 @@ func (c *Config) withDefaults(repoRoot, project string) (*Config, error) {
 	if c.Agent.Codex == (AgentCmd{}) {
 		c.Agent.Codex = AgentCmd{Start: "codex", Resume: "codex resume --last"}
 	}
+	if c.Sync == "" {
+		c.Sync = "rebase"
+	}
 	if c.Layout.Editor == "" {
 		c.Layout.Editor = "nvim -c 'DiffviewOpen origin/{base}...HEAD'"
 	}
@@ -183,6 +187,10 @@ func (c *Config) validate() error {
 		if off < 0 || off >= PortBlockSize {
 			return fmt.Errorf("%s: port offset %s = %d, must be 0–%d", c.Source, svc, off, PortBlockSize-1)
 		}
+	}
+
+	if c.Sync != "rebase" && c.Sync != "merge" {
+		return fmt.Errorf("%s: sync = %q, must be \"rebase\" or \"merge\"", c.Source, c.Sync)
 	}
 
 	probe := c.Vars("name", "main", 1)

@@ -283,6 +283,7 @@ api-webhooks   c21e8b40  feat/api-webhooks   3     closed  #401 merged ready for
 | `enter`, `o` | `jw open` the selected worktree |
 | `c` | `jw close` it |
 | `d` | `jw done` it — the confirmation is asked on the normal terminal |
+| `s` | `jw sync` it |
 | `x` | `jw rm` it — same guards and confirmation as the command |
 | `a` | toggle this project / all projects |
 | `r` | refresh |
@@ -290,6 +291,19 @@ api-webhooks   c21e8b40  feat/api-webhooks   3     closed  #401 merged ready for
 
 Under the table: path, port range, PR link and state of the selected worktree. After `close` or
 `done` it comes back with the result; after `open` it exits, since focus moved to the tab.
+
+### `jw sync [name] [--merge]`
+
+Brings the stream's branch up to date with the base branch (`origin/<default>`).
+
+- It refuses a dirty tree and a rebase or merge already in progress, and says how to finish or
+  abort it. A branch already up to date is left alone.
+- It **rebases** by default; `--merge` merges the base in instead, and `sync = "merge"` in the
+  config makes that the project's default.
+- On conflicts it stops, lists the files and the commands to continue or abort, and exits
+  non-zero. The stream's agent can pick it up from there.
+- It never pushes. When a rebase rewrote commits that were already on origin, it tells you to
+  publish with `git push --force-with-lease`.
 
 ### `jw rm [name] [--keep-branch] [--force]`
 
@@ -360,6 +374,8 @@ setup     = [
   "pnpm install --frozen-lockfile",
   "pnpm turbo run build --filter='./packages/*'",
 ]
+
+sync      = "rebase"                         # jw sync: "rebase" or "merge"
 
 [agent]
 default = "claude"
