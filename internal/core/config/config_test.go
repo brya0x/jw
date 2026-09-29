@@ -141,3 +141,10 @@ func TestSyncMode(t *testing.T) {
 		t.Fatalf("want an invalid-mode error, got %v", err)
 	}
 }
+
+func TestPortsIn(t *testing.T) {
+	got := PortsIn("PORT={port.api} vite --port {port.web} --api {port.api} {name}")
+	if len(got) != 2 || got[0] != "api" || got[1] != "web" {
+		t.Fatalf("got %v", got)
+	}
+}

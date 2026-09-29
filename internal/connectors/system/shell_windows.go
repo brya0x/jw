@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"strconv"
 	"syscall"
+
+	"github.com/brya0x/jw/internal/connectors"
 )
 
 func (Shell) Run(dir string, env []string, cmdline string, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -44,4 +46,10 @@ func (Shell) Group(ctx context.Context, dir string, env []string, cmdline string
 		return exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(cmd.Process.Pid)).Run()
 	}
 	return cmd
+}
+
+// PortOwner reports a busy port. Naming its process (netstat -ano, then
+// tasklist) isn't implemented on Windows yet.
+func (Shell) PortOwner(port int) (connectors.PortOwner, bool) {
+	return connectors.PortOwner{}, listening(port)
 }

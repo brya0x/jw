@@ -136,8 +136,17 @@ func (f fakePRs) ByBranch(dir string) (map[string]connectors.PR, error) {
 	return map[string]connectors.PR{f.pr.Branch: *f.pr}, nil
 }
 
-// fakeShell records commands instead of running them.
-type fakeShell struct{ ran []string }
+// fakeShell records commands instead of running them. busy marks ports as
+// taken, by the given owner.
+type fakeShell struct {
+	ran  []string
+	busy map[int]connectors.PortOwner
+}
+
+func (s *fakeShell) PortOwner(port int) (connectors.PortOwner, bool) {
+	o, ok := s.busy[port]
+	return o, ok
+}
 
 func (s *fakeShell) Run(dir string, env []string, cmdline string, _ io.Reader, _, _ io.Writer) error {
 	s.ran = append(s.ran, cmdline)
