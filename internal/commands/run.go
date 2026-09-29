@@ -28,6 +28,8 @@ func (a *App) Run(args []string) int {
 		err = a.runClose(rest)
 	case "done":
 		err = a.runDone(rest)
+	case "prompt":
+		err = a.runPrompt(rest)
 	case "info":
 		err = a.runInfo(rest)
 	case "sync":
@@ -74,6 +76,7 @@ commands:
   open    open the worktree in a herdr tab: editor | agent | dev
   close   close the tab, keep the worktree
   done    after the PR is merged: confirm, then delete worktree and branch
+  prompt  hand a task to a stream's agent, without waiting for it
   info    everything about a stream: branch, ports (and which are up), tab, PR
   sync    bring the branch up to date with the base (rebase, or --merge)
   rm      remove a stream whatever its PR says (guards unpushed work)

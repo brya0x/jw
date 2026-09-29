@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brya0x/jw/internal/connectors"
 )
@@ -26,6 +27,8 @@ type fakeMux struct {
 	splits     []string          // "pane direction ratio"
 	closed     []string
 	focused    []string
+	prompts    []string // "agent: text"
+	blocked    bool     // agents sit at a dialog
 	next       int
 }
 
@@ -119,6 +122,21 @@ func (f *fakeMux) StartAgent(name, kind, pane string, args []string) error {
 
 func (f *fakeMux) CurrentPane() (string, bool) { return "", false }
 
+func (f *fakeMux) WaitAgent(agent string, timeout time.Duration) (string, error) {
+	if f.blocked {
+		return "blocked", nil
+	}
+	return "idle", nil
+}
+
+func (f *fakeMux) Prompt(agent, text string) error {
+	if f.blocked {
+		return fmt.Errorf("agent %s: %w", agent, connectors.ErrAgentBlocked)
+	}
+	f.prompts = append(f.prompts, agent+": "+text)
+	return nil
+}
+
 // fakePRs answers with a fixed PR for one branch.
 type fakePRs struct{ pr *connectors.PR }
 
@@ -175,6 +193,7 @@ type testEnv struct {
 
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
+	agentSettle = 0
 	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	dir := t.TempDir()

@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // Implementations wrap their own errors so that errors.Is(err, ErrNotFound)
@@ -29,6 +30,9 @@ var (
 	// ErrAgentNotReady: the agent started but stopped at a dialog (folder
 	// trust, login, approval) instead of reaching its prompt.
 	ErrAgentNotReady = errors.New("agent not ready")
+	// ErrAgentBlocked: the agent sits at an approval or question dialog and
+	// won't take a prompt until someone answers it.
+	ErrAgentBlocked = errors.New("agent blocked at a dialog")
 )
 
 type Workspace struct {
@@ -76,6 +80,12 @@ type Multiplexer interface {
 
 	// StartAgent launches an agent (claude, codex) in pane under name.
 	StartAgent(name, kind, pane string, args []string) error
+	// Prompt sends text to a running agent as if typed, without waiting for
+	// it to finish.
+	Prompt(agent, text string) error
+	// WaitAgent waits until the agent settles — idle, done or blocked at a
+	// dialog — and returns that status.
+	WaitAgent(agent string, timeout time.Duration) (string, error)
 	// CurrentPane is the pane jw itself runs in, when it runs inside.
 	CurrentPane() (string, bool)
 }

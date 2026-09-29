@@ -14,6 +14,7 @@ import (
 type openOptions struct {
 	agent   string // claude, codex or both; default from config
 	noFocus bool
+	task    string // prompt for the agent once it's up
 }
 
 // agentSpec is one agent to start: its multiplexer name, kind and arguments.
@@ -29,6 +30,7 @@ func (a *App) runOpen(args []string) error {
 	fs := flag.NewFlagSet("open", flag.ExitOnError)
 	fs.StringVar(&o.agent, "agent", "", "claude, codex or both (default from config)")
 	fs.BoolVar(&o.noFocus, "no-focus", false, "don't switch to the tab (for scripts and other agents)")
+	fs.StringVar(&o.task, "task", "", "hand this task to the stream's agent once it's up")
 	fs.Parse(args)
 
 	p, e, err := open(name)
@@ -57,7 +59,7 @@ func (a *App) open(p *project, e *registry.Entry, o openOptions) error {
 				}
 			}
 			a.printf("%s is already open in %s\n", e.Name, e.Tab)
-			return nil
+			return a.handTask(p, e, o.task, false)
 		case errors.Is(err, connectors.ErrNotFound):
 			e.Tab = ""
 		default:
@@ -148,7 +150,16 @@ func (a *App) open(p *project, e *registry.Entry, o openOptions) error {
 		}
 	}
 	a.printf("opened %s in %s\n", e.Name, tab.ID)
-	return nil
+	return a.handTask(p, e, o.task, true)
+}
+
+// handTask prompts the stream's agent with task, if there is one. fresh:
+// the agent was just started.
+func (a *App) handTask(p *project, e *registry.Entry, task string, fresh bool) error {
+	if task == "" {
+		return nil
+	}
+	return a.prompt(p, e, false, task, fresh)
 }
 
 // createTab puts the worktree's tab in the project's workspace, creating the
