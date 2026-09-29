@@ -28,6 +28,8 @@ func (a *App) Run(args []string) int {
 		err = a.runClose(rest)
 	case "done":
 		err = a.runDone(rest)
+	case "info":
+		err = a.runInfo(rest)
 	case "sync":
 		err = a.runSync(rest)
 	case "rm":
@@ -72,11 +74,12 @@ commands:
   open    open the worktree in a herdr tab: editor | agent | dev
   close   close the tab, keep the worktree
   done    after the PR is merged: confirm, then delete worktree and branch
+  info    everything about a stream: branch, ports (and which are up), tab, PR
   sync    bring the branch up to date with the base (rebase, or --merge)
   rm      remove a stream whatever its PR says (guards unpushed work)
   dev     start a service on this worktree's ports (no service: list them)
   setup   re-run the setup commands of a worktree
   version show which build of jw this is
-  ls      list worktrees of this project (-a: all projects, -i: interactive)
+  ls      list worktrees of this project (-a: all projects, -i: interactive, --json)
 `)
 }

@@ -20,12 +20,16 @@ type lsRow struct {
 	PR    string // "#12 merged", "-" (none) or "?" (PR state unavailable)
 	PRURL string
 	State string // "missing", "dirty", "ready for done" or ""
+
+	pr      *connectors.PR // nil: no PR, or PR state unavailable (see PR)
+	unknown bool           // PR state couldn't be read
 }
 
 func (a *App) runLs(args []string) error {
 	fs := flag.NewFlagSet("ls", flag.ExitOnError)
 	all := fs.Bool("a", false, "show worktrees of every project")
 	interactive := fs.Bool("i", false, "interactive: pick a worktree and open, close or finish it")
+	asJSON := fs.Bool("json", false, "print the streams as JSON (for scripts and agents)")
 	fs.Parse(args)
 
 	dir, err := os.Getwd()
@@ -47,6 +51,9 @@ func (a *App) runLs(args []string) error {
 	rows, err := a.loadRows(project)
 	if err != nil {
 		return err
+	}
+	if *asJSON {
+		return a.writeJSON(a.streamsJSON(rows))
 	}
 	if len(rows) == 0 {
 		a.printf("no worktrees yet — create one with `jw new <name>`\n")
@@ -128,8 +135,9 @@ func (a *App) loadRows(project string) ([]lsRow, error) {
 		switch {
 		case hasPR:
 			r.PR, r.PRURL = pr.Label(), pr.URL
+			r.pr = &pr
 		case prs[e.Project] == nil:
-			r.PR = "?"
+			r.PR, r.unknown = "?", true
 		}
 
 		if _, err := os.Stat(e.Path); err != nil {

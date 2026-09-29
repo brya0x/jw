@@ -31,6 +31,7 @@ func (a *App) runNew(args []string) error {
 	fs.StringVar(&o.from, "from", "", "ref to start from (default origin/<default branch>)")
 	fs.StringVar(&o.branch, "branch", "", "branch name (default from config, feat/<name>); an existing branch is checked out as is")
 	fs.BoolVar(&o.noSetup, "no-setup", false, "skip the config's setup commands")
+	asJSON := fs.Bool("json", false, "print the new stream as JSON on stdout; progress goes to stderr")
 	fs.Parse(args)
 	if o.name == "" {
 		o.name = fs.Arg(0)
@@ -47,7 +48,24 @@ func (a *App) runNew(args []string) error {
 	if err != nil {
 		return err
 	}
-	return a.newStream(p, o)
+	if !*asJSON {
+		return a.newStream(p, o)
+	}
+
+	// Keep stdout for the JSON alone, so a caller can parse it; progress and
+	// setup output go to stderr.
+	out := a.Out
+	a.Out = a.Err
+	err = a.newStream(p, o)
+	a.Out = out
+	if err != nil {
+		return err
+	}
+	e, err := p.reg.Find(p.name, o.name)
+	if err != nil {
+		return err
+	}
+	return a.writeJSON(a.streamJSON(a.row(p, *e), p.cfg))
 }
 
 // newStream creates the worktree, registers it and runs setup.

@@ -222,3 +222,7 @@ func (env *testEnv) stream(name string) *project {
 	}
 	return p
 }
+
+func writeFile(path, content string) error {
+	return os.WriteFile(path, []byte(content), 0o644)
+}
