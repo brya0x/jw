@@ -44,6 +44,20 @@ func Expand(s string, v Vars) (string, error) {
 	return out, nil
 }
 
+// PortsIn lists the services whose port s refers to, as {port.<service>},
+// in order of first use.
+func PortsIn(s string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, m := range placeholder.FindAllStringSubmatch(s, -1) {
+		if svc, ok := strings.CutPrefix(m[1], "port."); ok && !seen[svc] {
+			seen[svc] = true
+			out = append(out, svc)
+		}
+	}
+	return out
+}
+
 // EnvName turns a service name into its variable: console-web → JW_PORT_CONSOLE_WEB.
 func EnvName(service string) string {
 	return "JW_PORT_" + strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(service))

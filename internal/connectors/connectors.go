@@ -124,4 +124,14 @@ type Shell interface {
 	Group(ctx context.Context, dir string, env []string, cmdline string) *exec.Cmd
 	// IsTerminal reports whether f is an interactive terminal.
 	IsTerminal(f *os.File) bool
+	// PortOwner reports whether something listens on a local port and,
+	// when the OS can tell, which process. owner is zero when unknown.
+	PortOwner(port int) (owner PortOwner, busy bool)
+}
+
+// PortOwner is the process listening on a port.
+type PortOwner struct {
+	PID     int
+	Cmdline string
+	Cwd     string // where it runs: tells which worktree started it
 }

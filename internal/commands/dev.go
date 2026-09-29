@@ -44,6 +44,11 @@ func (a *App) dev(p *project, e *registry.Entry, service string) error {
 	if err != nil {
 		return err
 	}
+	// Check the ports before starting anything: a server that finds its port
+	// taken fails late, from inside the app, often half-way up.
+	if err := a.checkPorts(p, e, service, vars); err != nil {
+		return err
+	}
 	env := append(os.Environ(), jwEnv(*e, vars)...)
 
 	if len(cmds) == 1 {
@@ -56,6 +61,58 @@ func (a *App) dev(p *project, e *registry.Entry, service string) error {
 		}
 	}
 	return a.devConcurrently(cmds, e.Path, env)
+}
+
+// checkPorts fails if any port the service's commands use is already taken,
+// naming the process, and the stream when it's one of jw's.
+func (a *App) checkPorts(p *project, e *registry.Entry, service string, vars config.Vars) error {
+	var taken []string
+	for _, raw := range p.cfg.Dev[service] {
+		for _, svc := range config.PortsIn(raw) {
+			port, ok := vars.Ports[svc]
+			if !ok {
+				continue
+			}
+			owner, busy := a.Shell.PortOwner(port)
+			if !busy {
+				continue
+			}
+			taken = append(taken, fmt.Sprintf("  %d (%s): %s", port, svc, a.describeOwner(p, e, owner)))
+		}
+	}
+	if len(taken) == 0 {
+		return nil
+	}
+	return fmt.Errorf("port(s) already in use, not starting %s:\n%s", service, strings.Join(taken, "\n"))
+}
+
+// describeOwner says who holds a port, in terms of streams when it can.
+func (a *App) describeOwner(p *project, e *registry.Entry, o connectors.PortOwner) string {
+	if o.PID == 0 {
+		return "taken by a process jw can't see (another user, or no lsof)"
+	}
+	who := fmt.Sprintf("pid %d", o.PID)
+	if o.Cmdline != "" {
+		who += " — " + o.Cmdline
+	}
+	if o.Cwd == "" {
+		return who
+	}
+	if inside(o.Cwd, e.Path) {
+		return who + "\n      already running in this worktree: stop it, or use the pane it runs in"
+	}
+	for _, other := range p.reg.Entries {
+		if inside(o.Cwd, other.Path) {
+			return fmt.Sprintf("%s\n      started from stream %s — its slot should never overlap this one's; `jw ls` to check", who, other.Name)
+		}
+	}
+	return who + "\n      in " + o.Cwd
+}
+
+// inside reports whether dir is root or below it.
+func inside(dir, root string) bool {
+	dir, root = realpath(dir), realpath(root)
+	return dir == root || strings.HasPrefix(dir, root+string(os.PathSeparator))
 }
 
 // devCommands expands a service's commands for this worktree.

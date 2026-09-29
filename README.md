@@ -331,6 +331,16 @@ Nothing is removed without a yes on a terminal.
 Starts a service from `[dev]` on this worktree's ports. Without a service it lists them, with
 their commands already expanded. `-w` picks a worktree other than the one you're in.
 
+Before starting anything it checks the ports the service's commands use. If one is taken it
+starts nothing and says who holds it — process, pid, and whether it's already running in this
+worktree:
+
+```
+jw: port(s) already in use, not starting web:
+  20100 (web): pid 68080 — node vite --port 20100
+      already running in this worktree: stop it, or use the pane it runs in
+```
+
 - **One command:** `jw` execs it — the service owns the terminal, so colours, `ctrl+c` and
   interactive keys (Expo's "press i") work as if you had typed it.
 - **Several commands, inside herdr:** each one after the first gets its own split of the dev
