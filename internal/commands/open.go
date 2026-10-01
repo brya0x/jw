@@ -33,7 +33,7 @@ func (a *App) runOpen(args []string) error {
 	fs.StringVar(&o.task, "task", "", "hand this task to the stream's agent once it's up")
 	fs.Parse(args)
 
-	p, e, err := open(name)
+	p, e, err := a.target(name)
 	if err != nil {
 		return err
 	}

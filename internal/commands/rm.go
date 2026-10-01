@@ -24,7 +24,7 @@ func (a *App) runRm(args []string) error {
 	fs.BoolVar(&o.keepBranch, "keep-branch", false, "keep the local branch")
 	fs.Parse(args)
 
-	p, e, err := open(name)
+	p, e, err := a.target(name)
 	if err != nil {
 		return err
 	}
@@ -117,6 +117,13 @@ func (a *App) rm(p *project, e *registry.Entry, o rmOptions) error {
 	if !keepBranch && p.repo.BranchExists(e.Branch) {
 		if err := p.repo.DeleteBranch(e.Branch); err != nil {
 			return err
+		}
+	}
+	// The branch jw first created, if the worktree moved off it: only if
+	// git sees it merged.
+	if !o.keepBranch && e.Original != "" && e.Original != e.Branch && p.repo.BranchExists(e.Original) {
+		if err := p.repo.DeleteMergedBranch(e.Original); err != nil {
+			a.warnf("note: kept branch %s (git says it isn't merged)\n", e.Original)
 		}
 	}
 

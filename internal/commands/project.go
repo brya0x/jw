@@ -75,9 +75,10 @@ func (p *project) vars(e *registry.Entry) (config.Vars, error) {
 	return p.cfg.Vars(e.Name, base, e.Slot), nil
 }
 
-// open is loadProject + resolve for the run* functions: the project and
-// worktree of the cwd, or the named worktree of the cwd's project.
-func open(name string) (*project, *registry.Entry, error) {
+// target is loadProject + resolve for the run* functions: the project and
+// worktree of the cwd, or the named worktree of the cwd's project. The entry
+// follows the branch the worktree is on now.
+func (a *App) target(name string) (*project, *registry.Entry, error) {
 	dir, err := os.Getwd()
 	if err != nil {
 		return nil, nil, err
@@ -87,7 +88,30 @@ func open(name string) (*project, *registry.Entry, error) {
 		return nil, nil, err
 	}
 	e, err := p.resolve(name, dir)
-	return p, e, err
+	if err != nil {
+		return p, e, err
+	}
+	return p, e, a.follow(p, e)
+}
+
+// follow updates the entry when the branch checked out in its worktree is
+// no longer the one registered — someone (or an agent) switched branches
+// inside it. Every later check (PR, unpushed work, sync) must be about the
+// branch actually there. A detached HEAD keeps the registered branch.
+func (a *App) follow(p *project, e *registry.Entry) error {
+	if _, err := os.Stat(e.Path); err != nil {
+		return nil
+	}
+	current, err := git.CurrentBranch(e.Path)
+	if err != nil || current == "" || current == e.Branch {
+		return nil
+	}
+	a.warnf("%s: branch is now %s (was %s)\n", e.Name, current, e.Branch)
+	if e.Original == "" && !e.Adopted {
+		e.Original = e.Branch // the branch jw made: done cleans it up later
+	}
+	e.Branch = current
+	return p.save()
 }
 
 // jwEnv is the list of JW_* variables of a worktree, as KEY=VALUE pairs.

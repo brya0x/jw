@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/brya0x/jw/internal/connectors"
 )
@@ -21,20 +22,21 @@ var _ connectors.PullRequests = Client{}
 
 // prJSON is gh's shape; callers get connectors.PR.
 type prJSON struct {
-	Number      int    `json:"number"`
-	State       string `json:"state"`
-	IsDraft     bool   `json:"isDraft"`
-	URL         string `json:"url"`
-	HeadRefName string `json:"headRefName"`
-	HeadRefOid  string `json:"headRefOid"`
+	Number      int       `json:"number"`
+	State       string    `json:"state"`
+	IsDraft     bool      `json:"isDraft"`
+	URL         string    `json:"url"`
+	HeadRefName string    `json:"headRefName"`
+	HeadRefOid  string    `json:"headRefOid"`
+	MergedAt    time.Time `json:"mergedAt"`
 }
 
-const fields = "number,state,isDraft,url,headRefName,headRefOid"
+const fields = "number,state,isDraft,url,headRefName,headRefOid,mergedAt"
 
 func (p prJSON) conv() connectors.PR {
 	return connectors.PR{
 		Number: p.Number, State: p.State, IsDraft: p.IsDraft, URL: p.URL,
-		Branch: p.HeadRefName, HeadSHA: p.HeadRefOid,
+		Branch: p.HeadRefName, HeadSHA: p.HeadRefOid, Merged: p.MergedAt,
 	}
 }
 

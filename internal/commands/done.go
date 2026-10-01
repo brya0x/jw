@@ -11,7 +11,7 @@ import (
 
 func (a *App) runDone(args []string) error {
 	name, _ := splitName(args)
-	p, e, err := open(name)
+	p, e, err := a.target(name)
 	if err != nil {
 		return err
 	}
@@ -68,6 +68,12 @@ func (a *App) done(p *project, e *registry.Entry) error {
 				_ = p.repo.FetchCommit(pr.HeadSHA)
 			}
 			if !p.repo.IsAncestor(head, pr.HeadSHA) {
+				// A PR merged before this stream existed isn't this stream's
+				// PR: the branch name was used before.
+				if !pr.Merged.IsZero() && pr.Merged.Before(e.Created) {
+					return fmt.Errorf("the only PR for %s is #%d, merged %s — before this stream existed: the branch name was used before. Open a PR for this work, or `jw rm %s` if it isn't needed",
+						e.Branch, pr.Number, pr.Merged.Format("2006-01-02"), e.Name)
+				}
 				return fmt.Errorf("%s has commits that are not in PR #%d — push them or open another PR", e.Name, pr.Number)
 			}
 		}
@@ -103,6 +109,13 @@ func (a *App) done(p *project, e *registry.Entry) error {
 	if p.repo.BranchExists(e.Branch) {
 		if err := p.repo.DeleteBranch(e.Branch); err != nil {
 			return err
+		}
+	}
+	// The branch jw first created, if the worktree moved off it: delete it
+	// only if git sees it merged — anything else on it stays.
+	if e.Original != "" && e.Original != e.Branch && p.repo.BranchExists(e.Original) {
+		if err := p.repo.DeleteMergedBranch(e.Original); err != nil {
+			a.warnf("note: kept branch %s (git says it isn't merged)\n", e.Original)
 		}
 	}
 

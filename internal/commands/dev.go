@@ -24,7 +24,7 @@ func (a *App) runDev(args []string) error {
 	worktree := fs.String("w", "", "worktree name (default: the one you're in)")
 	fs.Parse(args)
 
-	p, e, err := open(*worktree)
+	p, e, err := a.target(*worktree)
 	if err != nil {
 		return err
 	}

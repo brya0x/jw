@@ -14,17 +14,20 @@ import (
 
 // Entry is one worktree managed by jw.
 type Entry struct {
-	ID      string    `json:"id"`
-	Name    string    `json:"name"`
-	Project string    `json:"project"`
-	Branch  string    `json:"branch"`
-	Path    string    `json:"path"`
-	Slot    int       `json:"slot"`
-	Tab     string    `json:"tab,omitempty"` // empty when the tab is closed
-	PR      int       `json:"pr,omitempty"`
-	Opened  bool      `json:"opened,omitempty"`  // an agent ran here before: resume, don't start fresh
-	Adopted bool      `json:"adopted,omitempty"` // the branch existed before jw: never jw's to delete
-	Created time.Time `json:"created"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Project string `json:"project"`
+	Branch  string `json:"branch"`
+	Path    string `json:"path"`
+	Slot    int    `json:"slot"`
+	Tab     string `json:"tab,omitempty"` // empty when the tab is closed
+	PR      int    `json:"pr,omitempty"`
+	Opened  bool   `json:"opened,omitempty"`  // an agent ran here before: resume, don't start fresh
+	Adopted bool   `json:"adopted,omitempty"` // the branch existed before jw: never jw's to delete
+	// Original is the branch jw created, kept once the worktree switched to
+	// another one: jw done deletes it too, if it's merged.
+	Original string    `json:"original_branch,omitempty"`
+	Created  time.Time `json:"created"`
 }
 
 // Registry is the whole file on disk.

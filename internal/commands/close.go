@@ -17,7 +17,7 @@ func (a *App) runClose(args []string) error {
 	yes := fs.Bool("y", false, "close even if a dev server is running, without asking")
 	fs.Parse(args)
 
-	p, e, err := open(name)
+	p, e, err := a.target(name)
 	if err != nil {
 		return err
 	}
