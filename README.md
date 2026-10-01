@@ -368,6 +368,11 @@ ask on it refuses; `-y` closes without asking.
 4. Asks: `delete worktree … and branch …? [y/N]`. Without a terminal it refuses.
 5. Closes the tab, `git worktree remove`, deletes the local branch, frees the slot.
 
+The checks are about the branch the worktree is on **now**: if you (or an agent) switched to
+another branch inside it, `jw` follows, says so, and also deletes the branch it first created —
+only if git sees that one merged. A PR merged before the stream existed is recognised as an old
+branch name being reused, not as this stream's PR.
+
 Nothing is deleted without that confirmation. Run it from anywhere but the stream's own tab:
 closing that tab would kill the shell `jw` runs in half-way, so `jw done` (and `jw rm`) refuse
 there and say so. Stacks: each layer is its own branch, so today

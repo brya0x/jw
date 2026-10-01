@@ -96,7 +96,8 @@ type PR struct {
 	IsDraft bool
 	URL     string
 	Branch  string
-	HeadSHA string // the commit the forge has for the branch
+	HeadSHA string    // the commit the forge has for the branch
+	Merged  time.Time // zero unless merged
 }
 
 // Status is the state in lower case, with "draft" for open drafts.

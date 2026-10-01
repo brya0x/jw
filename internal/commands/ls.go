@@ -103,6 +103,26 @@ func (a *App) loadRows(project string) ([]lsRow, error) {
 		}
 	}
 
+	// Entries follow the branch their worktree is on now (see follow).
+	followed := false
+	for _, e := range entries {
+		if _, err := os.Stat(e.Path); err != nil {
+			continue
+		}
+		if cur, err := git.CurrentBranch(e.Path); err == nil && cur != "" && cur != e.Branch {
+			if e.Original == "" && !e.Adopted {
+				e.Original = e.Branch
+			}
+			e.Branch = cur
+			followed = true
+		}
+	}
+	if followed {
+		if err := reg.Save(path); err != nil {
+			return nil, err
+		}
+	}
+
 	// A tab closed by hand is forgotten here, so the registry never keeps
 	// pointing at a dead tab.
 	if mux, err := a.NewMux(); err == nil {

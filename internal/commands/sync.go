@@ -20,7 +20,7 @@ func (a *App) runSync(args []string) error {
 	fs.BoolVar(&o.merge, "merge", false, "merge the base branch in instead of rebasing onto it")
 	fs.Parse(args)
 
-	p, e, err := open(name)
+	p, e, err := a.target(name)
 	if err != nil {
 		return err
 	}

@@ -21,7 +21,7 @@ func (a *App) runPrompt(args []string) error {
 		return errors.New(`usage: jw prompt <name> [--codex] "<task>"`)
 	}
 
-	p, e, err := open(name)
+	p, e, err := a.target(name)
 	if err != nil {
 		return err
 	}

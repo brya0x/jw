@@ -11,7 +11,7 @@ func (a *App) runInfo(args []string) error {
 	asJSON := fs.Bool("json", false, "print as JSON (for scripts and agents)")
 	fs.Parse(args)
 
-	p, e, err := open(name)
+	p, e, err := a.target(name)
 	if err != nil {
 		return err
 	}

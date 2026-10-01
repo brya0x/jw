@@ -182,7 +182,7 @@ func (a *App) newStream(p *project, o newOptions) error {
 // runSetup is `jw setup [name]`: re-run the setup commands of a worktree.
 func (a *App) runSetup(args []string) error {
 	name, _ := splitName(args)
-	p, e, err := open(name)
+	p, e, err := a.target(name)
 	if err != nil {
 		return err
 	}

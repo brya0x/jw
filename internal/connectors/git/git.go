@@ -112,6 +112,12 @@ func (r *Repo) PruneWorktrees() error {
 	return err
 }
 
+// DeleteMergedBranch deletes a local branch only if git sees it merged.
+func (r *Repo) DeleteMergedBranch(branch string) error {
+	_, err := run(r.Root, "branch", "-d", branch)
+	return err
+}
+
 // DeleteBranch force-deletes a local branch.
 func (r *Repo) DeleteBranch(branch string) error {
 	_, err := run(r.Root, "branch", "-D", branch)
@@ -211,6 +217,11 @@ func Conflicts(dir string) ([]string, error) {
 		return nil, err
 	}
 	return strings.Split(out, "\n"), nil
+}
+
+// CurrentBranch is the branch checked out in dir, "" on a detached HEAD.
+func CurrentBranch(dir string) (string, error) {
+	return run(dir, "branch", "--show-current")
 }
 
 // Head returns the commit checked out in dir.

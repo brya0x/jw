@@ -52,6 +52,9 @@ func (a *App) act(action string, chosen registry.Entry) error {
 	if err != nil {
 		return err
 	}
+	if err := a.follow(p, e); err != nil {
+		return err
+	}
 	switch action {
 	case "open":
 		return a.open(p, e, openOptions{})
