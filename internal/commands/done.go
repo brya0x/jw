@@ -21,6 +21,14 @@ func (a *App) runDone(args []string) error {
 // done removes a finished stream: once its PR is merged and nothing local
 // would be lost, it asks, then deletes tab, worktree, branch and entry.
 func (a *App) done(p *project, e *registry.Entry) error {
+	// 0. Not from inside the stream's own tab: closing it would kill jw
+	// before the worktree is gone.
+	if e.Tab != "" {
+		if mux, err := a.NewMux(); err == nil && insideOwnTab(mux, e) {
+			return refuseFromOwnTab(e, "done")
+		}
+	}
+
 	_, statErr := os.Stat(e.Path)
 	onDisk := statErr == nil
 
@@ -82,7 +90,7 @@ func (a *App) done(p *project, e *registry.Entry) error {
 	// 5. Delete, tab first so no process holds the directory.
 	if e.Tab != "" {
 		if mux, err := a.NewMux(); err == nil {
-			if _, err := a.closeTab(mux, e, true); err != nil {
+			if _, err := a.closeTab(mux, e, true, nil); err != nil {
 				return err
 			}
 		}

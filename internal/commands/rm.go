@@ -35,6 +35,14 @@ func (a *App) runRm(args []string) error {
 // unmerged, a worktree deleted by hand. It is jw done without the merged
 // requirement, so it guards what done's checks would have: local work.
 func (a *App) rm(p *project, e *registry.Entry, o rmOptions) error {
+	// 0. Not from inside the stream's own tab: closing it would kill jw
+	// before the worktree is gone.
+	if e.Tab != "" {
+		if mux, err := a.NewMux(); err == nil && insideOwnTab(mux, e) {
+			return refuseFromOwnTab(e, "rm")
+		}
+	}
+
 	_, statErr := os.Stat(e.Path)
 	onDisk := statErr == nil
 
@@ -94,7 +102,7 @@ func (a *App) rm(p *project, e *registry.Entry, o rmOptions) error {
 	// 3. Remove, tab first so no process holds the directory.
 	if e.Tab != "" {
 		if mux, err := a.NewMux(); err == nil {
-			if _, err := a.closeTab(mux, e, true); err != nil {
+			if _, err := a.closeTab(mux, e, true, nil); err != nil {
 				return err
 			}
 		}

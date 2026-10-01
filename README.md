@@ -351,7 +351,8 @@ jw: port(s) already in use, not starting web:
 ### `jw close [name] [-y]`
 
 Kills the tab — agent and dev servers included. Keeps worktree, branch and slot; `jw open`
-brings it back.
+brings it back. Closing a stream from inside its own tab works: the registry is updated before
+the tab (and the shell running `jw`) goes.
 
 If the dev pane is running something besides its shell, it asks first. Without a terminal to
 ask on it refuses; `-y` closes without asking.
@@ -367,7 +368,9 @@ ask on it refuses; `-y` closes without asking.
 4. Asks: `delete worktree … and branch …? [y/N]`. Without a terminal it refuses.
 5. Closes the tab, `git worktree remove`, deletes the local branch, frees the slot.
 
-Nothing is deleted without that confirmation. Stacks: each layer is its own branch, so today
+Nothing is deleted without that confirmation. Run it from anywhere but the stream's own tab:
+closing that tab would kill the shell `jw` runs in half-way, so `jw done` (and `jw rm`) refuse
+there and say so. Stacks: each layer is its own branch, so today
 `jw done` checks the one branch the worktree was created with.
 
 Every command accepts the name or a prefix of the id.
