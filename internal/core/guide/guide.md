@@ -46,6 +46,9 @@ Your pane already has the stream's variables:
   `[y/N]` because they delete things. Without a terminal they refuse — that is on purpose.
 - **Exit code 3 means a person has to decide** (a confirmation, a dialog in an agent's pane).
   Don't retry it and don't look for a workaround: stop and ask the person.
+- **Don't finish your own stream from inside it.** `jw done` and `jw rm` close the stream's tab
+  first — the one you run in — so they refuse there. Tell the person the stream is ready; they
+  run it from elsewhere.
 - Don't delete worktrees, branches or registry entries by hand. `jw done` (merged PR) and `jw rm`
   (anything else) check for unpushed work first.
 

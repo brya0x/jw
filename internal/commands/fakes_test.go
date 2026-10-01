@@ -29,6 +29,8 @@ type fakeMux struct {
 	focused    []string
 	prompts    []string // "agent: text"
 	blocked    bool     // agents sit at a dialog
+	current    string   // the pane jw "runs in"; "" = outside the multiplexer
+	onClose    func()   // called as a tab closes, before it's gone
 	next       int
 }
 
@@ -79,6 +81,9 @@ func (f *fakeMux) RenameTab(id, label string) error { return nil }
 func (f *fakeMux) FocusTab(id string) error         { f.focused = append(f.focused, id); return nil }
 
 func (f *fakeMux) CloseTab(id string) error {
+	if f.onClose != nil {
+		f.onClose()
+	}
 	delete(f.tabs, id)
 	f.closed = append(f.closed, id)
 	return nil
@@ -120,7 +125,7 @@ func (f *fakeMux) StartAgent(name, kind, pane string, args []string) error {
 	return nil
 }
 
-func (f *fakeMux) CurrentPane() (string, bool) { return "", false }
+func (f *fakeMux) CurrentPane() (string, bool) { return f.current, f.current != "" }
 
 func (f *fakeMux) WaitAgent(agent string, timeout time.Duration) (string, error) {
 	if f.blocked {
