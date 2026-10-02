@@ -75,6 +75,29 @@ func (p *project) vars(e *registry.Entry) (config.Vars, error) {
 	return p.cfg.Vars(e.Name, base, e.Slot), nil
 }
 
+// agentName is the herdr name of a worktree's agent. With a workspace per
+// worktree ({name} in the label) it's the workspace's label, so the agent and
+// its workspace read the same in herdr; with a shared workspace it's the
+// worktree's name. Codex, next to it, adds "-codex".
+func (p *project) agentName(e *registry.Entry) (string, error) {
+	if !strings.Contains(p.cfg.Workspace, "{name}") {
+		return e.Name, nil
+	}
+	vars, err := p.vars(e)
+	if err != nil {
+		return "", err
+	}
+	return config.Expand(p.cfg.Workspace, vars)
+}
+
+// shellArg quotes s for a command line the user copies, when it needs it.
+func shellArg(s string) string {
+	if strings.ContainsAny(s, " \t'\"$`\\") {
+		return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+	}
+	return s
+}
+
 // target is loadProject + resolve for the run* functions: the project and
 // worktree of the cwd, or the named worktree of the cwd's project. The entry
 // follows the branch the worktree is on now.

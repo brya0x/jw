@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -182,6 +183,10 @@ func (c *Config) withDefaults(repoRoot, project string) (*Config, error) {
 
 // validate catches bad offsets and unknown placeholders at load time, not
 // halfway through creating a worktree.
+// agentLabel is the shape herdr accepts for an agent name (length aside,
+// which depends on the stream's name).
+var agentLabel = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
+
 func (c *Config) validate() error {
 	for svc, off := range c.Ports {
 		if off < 0 || off >= PortBlockSize {
@@ -201,6 +206,15 @@ func (c *Config) validate() error {
 		return nil
 	}
 
+	if err := check("workspace", c.Workspace); err != nil {
+		return err
+	}
+	if strings.Contains(c.Workspace, "{name}") {
+		// The label also names the stream's agent, and herdr is strict about those.
+		if label, _ := Expand(c.Workspace, probe); !agentLabel.MatchString(label) {
+			return fmt.Errorf("%s: workspace = %q: with {name} it also names the agent, so use only a-z, 0-9, - and _, starting with a letter", c.Source, c.Workspace)
+		}
+	}
 	if err := check("branch", c.Branch); err != nil {
 		return err
 	}

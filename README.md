@@ -117,10 +117,10 @@ How `jw` maps onto herdr:
 
 | herdr | jw |
 |---|---|
-| **workspace** | one per project (`myapp`, `api`) — label comes from config |
+| **workspace** | one per project (`myapp`, `api`) — label comes from config; `{name}` in it makes one per worktree |
 | **tab** | one per worktree |
 | **panes** | nvim, agent, dev — layout from config |
-| **agent name** | the worktree name |
+| **agent name** | the worktree name — or the workspace label, when each worktree has its own |
 
 Because the agent is named after the worktree, you can drive it from anywhere — another pane,
 another agent, a script:
@@ -258,6 +258,9 @@ Creates or focuses the herdr tab — the one you're standing in if no name is gi
 Idempotent: a live tab is focused, not rebuilt; a tab closed by hand is recreated.
 
 - The tab goes in the project's herdr workspace (`workspace` in config), created on first use.
+  `workspace = "{name}"` (or `"myapp {name}"`) gives every worktree a workspace of its own;
+  closing its only tab closes it. The agent then takes the workspace's label as its name, so
+  keep it to what herdr accepts: a lowercase letter, then a-z, 0-9, `-`, `_`, 32 at most.
 - Every pane gets the `JW_*` variables — herdr doesn't pass env from a pane to its splits, so
   `jw` sets them on each one.
 - The first open **starts** the agent; later opens **resume** it.
@@ -394,7 +397,7 @@ Lookup order:
 # ~/.config/jw/myapp.toml
 match     = "github.com/acme/myapp"          # which repo this applies to
 root      = "~/code/myapp-wt"                # where worktrees go
-workspace = "myapp"                          # herdr workspace label
+workspace = "myapp"                          # herdr workspace label; "{name}" = one per worktree
 branch    = "feat/{name}"                    # branch name template
 setup     = [
   "pnpm install --frozen-lockfile",

@@ -38,7 +38,7 @@ var draftTmpl = template.Must(template.New("config").Funcs(template.FuncMap{
 match     = {{quote .Match}}   # this file applies to that repository only
 {{- end}}
 root      = {{quote .Root}}
-workspace = {{quote .Project}}
+workspace = {{quote .Project}}   # herdr workspace; "{name}" gives each stream its own
 branch    = "feat/{name}"
 
 # Run in every new worktree, with the JW_* variables exported.

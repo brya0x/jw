@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/brya0x/jw/internal/connectors"
@@ -70,9 +71,18 @@ func (a *App) open(p *project, e *registry.Entry, o openOptions) error {
 	if o.agent == "" {
 		o.agent = p.cfg.Agent.Default
 	}
-	agents, err := agentsFor(p.cfg, o.agent, e)
+	name, err := p.agentName(e)
 	if err != nil {
 		return err
+	}
+	agents, err := agentsFor(p.cfg, o.agent, e, name)
+	if err != nil {
+		return err
+	}
+	for _, ag := range agents {
+		if !agentName.MatchString(ag.name) {
+			return fmt.Errorf("herdr won't name an agent %q: it takes a lowercase letter, then up to 31 of a-z, 0-9, - and _ — shorten the stream name or the workspace label", ag.name)
+		}
 	}
 	vars, err := p.vars(e)
 	if err != nil {
@@ -82,9 +92,13 @@ func (a *App) open(p *project, e *registry.Entry, o openOptions) error {
 	if err != nil {
 		return err
 	}
+	workspace, err := config.Expand(p.cfg.Workspace, vars)
+	if err != nil {
+		return err
+	}
 	env := jwEnv(*e, vars)
 
-	tab, editorPane, err := createTab(mux, p.cfg.Workspace, e, env)
+	tab, editorPane, err := createTab(mux, workspace, e, env)
 	if err != nil {
 		return err
 	}
@@ -162,8 +176,9 @@ func (a *App) handTask(p *project, e *registry.Entry, task string, fresh bool) e
 	return a.prompt(p, e, false, task, fresh)
 }
 
-// createTab puts the worktree's tab in the project's workspace, creating the
-// workspace on first use (and reusing the tab it comes with).
+// createTab puts the worktree's tab in the workspace labelled workspace,
+// creating it on first use (and reusing the tab it comes with). A label with
+// {name} in it gives every stream a workspace of its own.
 func createTab(mux connectors.Multiplexer, workspace string, e *registry.Entry, env []string) (connectors.Tab, connectors.Pane, error) {
 	all, err := mux.Workspaces()
 	if err != nil {
@@ -182,9 +197,13 @@ func createTab(mux connectors.Multiplexer, workspace string, e *registry.Entry, 
 	return tab, root, mux.RenameTab(tab.ID, e.Name)
 }
 
+// agentName is what herdr accepts as an agent's name.
+var agentName = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+
 // agentsFor picks the agent command(s). A worktree that was opened before
-// resumes its conversation instead of starting a new one.
-func agentsFor(cfg *config.Config, which string, e *registry.Entry) ([]agentSpec, error) {
+// resumes its conversation instead of starting a new one. name is the agent's
+// herdr name (see project.agentName).
+func agentsFor(cfg *config.Config, which string, e *registry.Entry, name string) ([]agentSpec, error) {
 	pick := func(c config.AgentCmd, name string) (agentSpec, error) {
 		line := c.Start
 		if e.Opened {
@@ -203,14 +222,14 @@ func agentsFor(cfg *config.Config, which string, e *registry.Entry) ([]agentSpec
 		if which == "codex" {
 			c = cfg.Agent.Codex
 		}
-		ag, err := pick(c, e.Name)
+		ag, err := pick(c, name)
 		return []agentSpec{ag}, err
 	case "both":
-		claude, err := pick(cfg.Agent.Claude, e.Name)
+		claude, err := pick(cfg.Agent.Claude, name)
 		if err != nil {
 			return nil, err
 		}
-		codex, err := pick(cfg.Agent.Codex, e.Name+"-codex")
+		codex, err := pick(cfg.Agent.Codex, name+"-codex")
 		return []agentSpec{claude, codex}, err
 	default:
 		return nil, fmt.Errorf("unknown agent %q: use claude, codex or both", which)

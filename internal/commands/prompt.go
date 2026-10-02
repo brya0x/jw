@@ -47,7 +47,10 @@ func (a *App) prompt(p *project, e *registry.Entry, codex bool, text string, fre
 	if err != nil {
 		return err
 	}
-	target := e.Name
+	target, err := p.agentName(e)
+	if err != nil {
+		return err
+	}
 	if codex {
 		target += "-codex"
 	}
