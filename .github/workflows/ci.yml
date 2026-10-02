@@ -9,9 +9,11 @@ permissions:
   contents: read
 
 # A new push to the same PR cancels the run still going for the old one.
+# On main nothing is cancelled: every merge gets its own complete run, even
+# when two land back to back.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
