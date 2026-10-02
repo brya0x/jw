@@ -84,7 +84,7 @@ func (a *App) sync(p *project, e *registry.Entry, o syncOptions) error {
 		err = git.Rebase(e.Path, base)
 	}
 	if err != nil {
-		return a.syncStopped(e, mode, err)
+		return a.syncStopped(p, e, mode, err)
 	}
 
 	switch {
@@ -101,7 +101,7 @@ func (a *App) sync(p *project, e *registry.Entry, o syncOptions) error {
 
 // syncStopped explains a rebase or merge that stopped on conflicts, and
 // leaves it in place for the stream's agent (or you) to resolve.
-func (a *App) syncStopped(e *registry.Entry, mode string, cause error) error {
+func (a *App) syncStopped(p *project, e *registry.Entry, mode string, cause error) error {
 	files, err := git.Conflicts(e.Path)
 	if err != nil || len(files) == 0 {
 		return fmt.Errorf("%s failed: %w", mode, cause)
@@ -111,8 +111,8 @@ func (a *App) syncStopped(e *registry.Entry, mode string, cause error) error {
 		a.printf("  %s\n", f)
 	}
 	a.printf("resolve them, `git add` each one, then `git %s --continue` — or `git %s --abort` to undo.\n", mode, mode)
-	if e.Tab != "" {
-		a.printf("the stream's agent can do it: herdr agent prompt %s \"resolve the %s conflicts\"\n", e.Name, mode)
+	if name, err := p.agentName(e); err == nil && e.Tab != "" {
+		a.printf("the stream's agent can do it: herdr agent prompt %s \"resolve the %s conflicts\"\n", shellArg(name), mode)
 	}
 	return fmt.Errorf("%s stopped at conflicts", mode)
 }

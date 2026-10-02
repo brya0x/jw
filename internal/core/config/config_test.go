@@ -148,3 +148,21 @@ func TestPortsIn(t *testing.T) {
 		t.Fatalf("got %v", got)
 	}
 }
+
+func TestWorkspacePerStreamMustBeAnAgentName(t *testing.T) {
+	repo, _ := setup(t)
+	path := filepath.Join(repo, ".jw.toml")
+	for label, ok := range map[string]bool{
+		"myapp-{name}": true,
+		"{name}":       true,
+		"My App":       true, // no {name}: only labels the workspace
+		"myapp {name}": false,
+		"MyApp-{name}": false,
+	} {
+		writeFile(t, path, "workspace = \""+label+"\"\n")
+		_, err := Load(repo, "x", "myapp")
+		if (err == nil) != ok {
+			t.Errorf("workspace %q: err %v", label, err)
+		}
+	}
+}
