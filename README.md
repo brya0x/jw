@@ -9,8 +9,8 @@ stepping on each other.
 
 ```
 jw init                    # once per repo: draft a config from what it finds
-jw new mobile-login        # worktree + branch + ports + setup
-jw open mobile-login       # herdr tab: nvim diff | agent | dev servers
+jw new mobile-login        # worktree + branch + ports + setup (opens nothing)
+jw open mobile-login       # herdr tab: nvim | agent | dev servers
 jw ls                      # what's open, what's pending, which PRs merged
 jw close mobile-login      # free the tab, keep the work
 jw done mobile-login       # PR merged? confirm → remove worktree + branch
@@ -48,7 +48,7 @@ Coding agents made it cheap to work on several things at once. The checkout didn
 | `git` ≥ 2.40 | worktrees |
 | [`herdr`](#herdr) | terminal workspace manager for AI coding agents — hosts the tabs and panes |
 | `claude` (Claude Code) **or** `codex` | the agent in each tab |
-| `nvim` + [diffview.nvim](https://github.com/sindrets/diffview.nvim) | the review pane |
+| `nvim` + [diffview.nvim](https://github.com/sindrets/diffview.nvim) | the review pane (diffview only for the default editor command) |
 | `gh` | PR status for `jw ls` / `jw done` |
 | `gh-stack` *(optional)* | stacked PRs — `gh extension install github/gh-stack` |
 
@@ -59,6 +59,13 @@ while the agent edits.
 
 ```sh
 go install github.com/brya0x/jw@latest
+```
+
+There are no releases: `@latest` is the newest commit on `main` the Go proxy has seen, which can
+lag a few minutes behind a merge. To get a merge right away, skip the proxy:
+
+```sh
+GOPROXY=direct go install github.com/brya0x/jw@main
 ```
 
 `jw version` says which build you have — the commit and its date, read from what Go embeds in
@@ -93,8 +100,9 @@ git clone https://github.com/brya0x/jw && cd jw && go build -o ~/.local/bin/jw .
 └─────────────────────────────────────────────────────┘
 ```
 
-- **Left — nvim.** Opens `DiffviewOpen origin/<base>...HEAD`: the full diff of the branch
-  against where it forked. As the agent writes, you review. `:DiffviewRefresh` to catch up.
+- **Left — nvim.** By default opens `DiffviewOpen origin/<base>...HEAD`: the full diff of the
+  branch against where it forked. As the agent writes, you review. `:DiffviewRefresh` to catch
+  up. Prefer a plain editor? `[layout] editor = "nvim"` (see [nvim](#nvim)).
 - **Right — the agent.** Starts in the worktree, so it only sees this stream's files. On
   re-open it **resumes** instead of starting fresh (`claude --continue` resumes the latest
   conversation in that directory). `jw open --agent codex` uses Codex; `--agent both` puts
@@ -117,10 +125,10 @@ How `jw` maps onto herdr:
 
 | herdr | jw |
 |---|---|
-| **workspace** | one per project (`myapp`, `api`) — label comes from config; `{name}` in it makes one per worktree |
+| **workspace** | one per project (`myapp`, `api`) — or one per worktree with `{name}` in the label (`myapp-{name}`) |
 | **tab** | one per worktree |
 | **panes** | nvim, agent, dev — layout from config |
-| **agent name** | the worktree name — or the workspace label, when each worktree has its own |
+| **agent name** | the worktree name — or the workspace's label, when each worktree has its own |
 
 Because the agent is named after the worktree, you can drive it from anywhere — another pane,
 another agent, a script:
@@ -180,7 +188,8 @@ The base is never assumed to be `main` — `jw` reads it from `origin/HEAD` (so 
 repos just work).
 
 The nvim command is configurable (`[layout] editor`) if you prefer fugitive, neogit or plain
-`git difftool`.
+`git difftool` — or just `editor = "nvim"` to open the editor normally and run
+`:DiffviewOpen origin/main...HEAD` when you want the diff.
 
 ---
 
@@ -228,7 +237,7 @@ By default it writes your personal `~/.config/jw/<project>.toml`, matched by the
 `--repo` writes `.jw.toml` in the repo instead, to commit; `--print` only shows the draft. An
 existing config is never overwritten without `--force`.
 
-### `jw new <name> [--from <ref>] [--branch <branch>] [--no-setup]`
+### `jw new <name> [--from <ref>] [--branch <branch>] [--no-setup] [--task "…"] [--json]`
 
 1. `git fetch`, then `git worktree add <root>/<name> -b <branch> <ref>`
    (`<ref>` defaults to `origin/<default branch>`).
@@ -239,7 +248,12 @@ existing config is never overwritten without `--force`.
 5. Runs `setup` (install, build workspace packages…) with the `JW_*` variables exported.
    If setup fails, the worktree is **kept** — fix the cause and run `jw setup`.
 
-Opens nothing.
+Opens nothing — run `jw open <name>` next, or pass `--task "…"` to open it without focus and
+hand the task to its agent. `--json` prints the new stream as JSON (see
+[For coding agents](#for-coding-agents)).
+
+A stream is always a worktree: there is no `jw new` for the main checkout. Its branch, its slot
+of ports and its `.jw.env` all hang off the worktree.
 
 **Working on a branch that already exists** — yours from before, or one a teammate pushed:
 `jw new sync-center --branch feat/sync-center` checks it out as is instead of creating one.
@@ -258,19 +272,33 @@ Creates or focuses the herdr tab — the one you're standing in if no name is gi
 Idempotent: a live tab is focused, not rebuilt; a tab closed by hand is recreated.
 
 - The tab goes in the project's herdr workspace (`workspace` in config), created on first use.
-  `workspace = "{name}"` (or `"myapp {name}"`) gives every worktree a workspace of its own;
-  closing its only tab closes it. The agent then takes the workspace's label as its name, so
-  keep it to what herdr accepts: a lowercase letter, then a-z, 0-9, `-`, `_`, 32 at most.
+- `workspace = "myapp-{name}"` (or just `"{name}"`) gives every worktree a workspace of its
+  own instead; closing its only tab closes it. The agent then takes the workspace's label as
+  its name, so the label must be what herdr accepts for one: a lowercase letter, then a-z,
+  0-9, `-` and `_`, **32 characters at most** — `myapp-` leaves 26 characters for the stream name
+  with Claude alone, 20 with `--agent both`. A label with a space or a capital is
+  rejected when the config loads; a name that's too long, before anything is created.
 - Every pane gets the `JW_*` variables — herdr doesn't pass env from a pane to its splits, so
   `jw` sets them on each one.
 - The first open **starts** the agent; later opens **resume** it.
-- With `--agent both`, Codex is named `<name>-codex`.
+- With `--agent both`, Codex gets the same name plus `-codex`.
 - `--no-focus` builds the tab without switching to it — for scripts and other agents.
 
 A new worktree is a new folder, so Claude Code asks once whether you trust it. `jw` never
 answers that dialog for you: it tells you the agent is waiting and leaves the answer to you.
 
-### `jw ls [-a] [-i]`
+### `jw info [name] [--json]`
+
+The stream you're standing in (or `name`): branch, path, slot, each port and whether something
+listens on it, tab, PR and state.
+
+### `jw prompt <name> [--codex] "<task>"`
+
+Hands a task to the agent of an open stream and returns at once — the work shows up in its tab.
+`--codex` targets the Codex agent of a stream opened with `--agent both`. An agent sitting at
+a dialog is never typed into: `jw prompt` stops with exit code 3.
+
+### `jw ls [-a] [-i] [--json]`
 
 Worktrees for the current project (`-a`, or outside any repo: all projects).
 
@@ -397,7 +425,7 @@ Lookup order:
 # ~/.config/jw/myapp.toml
 match     = "github.com/acme/myapp"          # which repo this applies to
 root      = "~/code/myapp-wt"                # where worktrees go
-workspace = "myapp"                          # herdr workspace label; "{name}" = one per worktree
+workspace = "myapp"                          # herdr workspace label; "myapp-{name}" = one per worktree
 branch    = "feat/{name}"                    # branch name template
 setup     = [
   "pnpm install --frozen-lockfile",
@@ -412,7 +440,7 @@ claude  = { start = "claude", resume = "claude --continue" }
 codex   = { start = "codex",  resume = "codex resume --last" }
 
 [layout]
-editor = "nvim -c 'DiffviewOpen origin/{base}...HEAD'"
+editor = "nvim -c 'DiffviewOpen origin/{base}...HEAD'"   # the default; "nvim" for plain nvim
 
 [ports]                                      # offset inside the slot's block
 web   = 0
@@ -480,6 +508,8 @@ projects use `project/name`.
 - **Name streams by intent**, not ticket number: `mobile-login` reads better in `herdr agent
   list` than `ABC-1234`.
 - **One stream, one PR.** If a stream grows a second concern, `jw new` a second stream.
+- **Keep names short** when each stream has its own workspace: herdr caps agent names at 32
+  characters, and the workspace prefix counts.
 
 ---
 
@@ -547,13 +577,26 @@ internal/
 └─ core/                 jw's own logic, no outside dependencies
    ├─ config/            per-project TOML, placeholders, ports
    ├─ registry/          the worktree list on disk
-   └─ envfile/           rewriting keys in .env files
+   ├─ envfile/           rewriting keys in .env files
+   ├─ guide/             the agent guide, compiled in (jw agents)
+   └─ version/           what jw version prints
 ```
 
 Dependencies point one way: `commands` → `connectors` + `core`. `core` imports nothing from
 the project, and `commands` imports no concrete connector — only `main.go` does. Supporting
 another tool (tmux instead of herdr, another forge instead of GitHub) is a new package under
 `connectors/` that satisfies the interface, plus one line in `main.go`.
+
+## Development
+
+```sh
+gofmt -l . && go vet ./... && go test -race ./...
+GOOS=windows go build ./...
+```
+
+CI runs exactly that on every pull request — Ubuntu and macOS, plus a Windows build — and
+`main` is protected: a PR can't be merged until all three checks pass. Nothing runs again
+after the merge.
 
 ## Roadmap
 
@@ -565,6 +608,8 @@ another tool (tmux instead of herdr, another forge instead of GitHub) is a new p
 - [x] `jw dev`
 - [ ] `jw done` across every layer of a stack
 - [x] `jw ls -i` interactive (bubbletea)
+- [x] `jw sync`, `jw info`, `jw prompt`, `--json`, `jw agents`
+- [x] a herdr workspace per stream
 
 ## License
 
