@@ -543,6 +543,7 @@ stream object. `new --json` keeps stdout for the JSON alone and sends progress t
 {
   "name": "web", "branch": "feat/web", "slot": 1, "port_base": 20100,
   "ports": { "web": { "port": 20100, "listening": true } },
+  "dev": ["web"],
   "open": true, "tab": "w4:t1",
   "pr": { "number": 412, "state": "open", "url": "https://github.com/acme/myapp/pull/412" },
   "state": ""

@@ -21,6 +21,7 @@ type streamJSON struct {
 	Slot      int                 `json:"slot"`
 	PortBase  int                 `json:"port_base"`
 	Ports     map[string]portJSON `json:"ports"`
+	Dev       []string            `json:"dev"` // services jw dev can start
 	Tab       string              `json:"tab,omitempty"`
 	Open      bool                `json:"open"`
 	PR        *prJSON             `json:"pr"` // null: no PR (or unknown, see pr_unknown)
@@ -53,7 +54,9 @@ func (a *App) streamJSON(r lsRow, cfg *config.Config) streamJSON {
 	if r.pr != nil {
 		s.PR = &prJSON{Number: r.pr.Number, State: r.pr.Status(), URL: r.pr.URL}
 	}
+	s.Dev = []string{}
 	if cfg != nil {
+		s.Dev = sortedKeys(cfg.Dev)
 		for svc, port := range cfg.PortsFor(e.Slot) {
 			_, busy := a.Shell.PortOwner(port)
 			s.Ports[svc] = portJSON{Port: port, Listening: busy}
