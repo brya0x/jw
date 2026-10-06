@@ -9,8 +9,8 @@ stepping on each other.
 
 ```
 jw init                    # once per repo: draft a config from what it finds
-jw new mobile-login        # worktree + branch + ports + setup (opens nothing)
-jw open mobile-login       # herdr tab: nvim | agent | dev servers
+jw new mobile-login        # worktree + branch + ports + setup, then opens it
+jw open mobile-login       # bring it forward (or back, after jw close)
 jw ls                      # what's open, what's pending, which PRs merged
 jw close mobile-login      # free the tab, keep the work
 jw done mobile-login       # PR merged? confirm → remove worktree + branch
@@ -237,7 +237,7 @@ By default it writes your personal `~/.config/jw/<project>.toml`, matched by the
 `--repo` writes `.jw.toml` in the repo instead, to commit; `--print` only shows the draft. An
 existing config is never overwritten without `--force`.
 
-### `jw new <name> [--from <ref>] [--branch <branch>] [--no-setup] [--task "…"] [--json]`
+### `jw new <name> [--from <ref>] [--branch <branch>] [--no-setup] [--no-open] [--task "…"] [--json]`
 
 1. `git fetch`, then `git worktree add <root>/<name> -b <branch> <ref>`
    (`<ref>` defaults to `origin/<default branch>`).
@@ -248,9 +248,11 @@ existing config is never overwritten without `--force`.
 5. Runs `setup` (install, build workspace packages…) with the `JW_*` variables exported.
    If setup fails, the worktree is **kept** — fix the cause and run `jw setup`.
 
-Opens nothing — run `jw open <name>` next, or pass `--task "…"` to open it without focus and
-hand the task to its agent. `--json` prints the new stream as JSON (see
-[For coding agents](#for-coding-agents)).
+6. Opens it, without taking focus — you stay where you ran `jw new`. `--task "…"` hands the
+   agent a task once it's up. If opening fails (no herdr here, say), the stream is still created
+   and `jw open <name>` retries; with `--task` that's an error. `--no-open` skips this step.
+
+`--json` prints the new stream as JSON (see [For coding agents](#for-coding-agents)).
 
 A stream is always a worktree: there is no `jw new` for the main checkout. Its branch, its slot
 of ports and its `.jw.env` all hang off the worktree.

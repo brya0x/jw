@@ -74,7 +74,7 @@ func (a *App) usage() {
 
 commands:
   init    write a starting config for this repo (detects setup and .env files)
-  new     create a worktree and register it
+  new     create a worktree, register it and open it
   open    open the worktree in a herdr tab: editor | agent | dev
   close   close the tab, keep the worktree
   done    after the PR is merged: confirm, then delete worktree and branch

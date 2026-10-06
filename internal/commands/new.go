@@ -32,13 +32,17 @@ func (a *App) runNew(args []string) error {
 	fs.StringVar(&o.branch, "branch", "", "branch name (default from config, feat/<name>); an existing branch is checked out as is")
 	fs.BoolVar(&o.noSetup, "no-setup", false, "skip the config's setup commands")
 	asJSON := fs.Bool("json", false, "print the new stream as JSON on stdout; progress goes to stderr")
-	task := fs.String("task", "", "open the stream (without focus) and hand this task to its agent")
+	task := fs.String("task", "", "hand this task to the stream's agent once it's open")
+	noOpen := fs.Bool("no-open", false, "only create the stream; `jw open` it later")
 	fs.Parse(args)
 	if o.name == "" {
 		o.name = fs.Arg(0)
 	}
 	if o.name == "" {
-		return errors.New("usage: jw new <name> [--from <ref>] [--branch <branch>] [--no-setup]")
+		return errors.New("usage: jw new <name> [--from <ref>] [--branch <branch>] [--no-setup] [--no-open] [--task \"…\"]")
+	}
+	if *noOpen && *task != "" {
+		return errors.New("--task needs the stream open: drop --no-open")
 	}
 
 	dir, err := os.Getwd()
@@ -56,10 +60,18 @@ func (a *App) runNew(args []string) error {
 		a.Out = a.Err
 	}
 	err = a.newStream(p, o)
-	if err == nil && *task != "" {
+	// Open without focus: the stream is ready to look at, and whoever ran
+	// jw new stays where they are.
+	if err == nil && !*noOpen {
 		var e *registry.Entry
 		if e, err = p.reg.Find(p.name, o.name); err == nil {
 			err = a.open(p, e, openOptions{noFocus: true, task: *task})
+		}
+		// Without a task the stream exists and works: a failed open (no
+		// herdr here, say) is a warning, and jw open can retry it.
+		if err != nil && *task == "" {
+			a.warnf("warning: %s was created but not opened: %v — `jw open %s` opens it\n", o.name, err, o.name)
+			err = nil
 		}
 	}
 	a.Out = out

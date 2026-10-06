@@ -32,7 +32,7 @@ Your pane already has the stream's variables:
 
 ## If you orchestrate streams
 
-- `jw new <name> --task "<what to do>"` creates the worktree, runs setup, opens its tab without
+- `jw new <name> --task "<what to do>"` creates the worktree, runs setup, opens it without
   stealing focus, and hands the task to the stream's agent. Add `--branch <existing>` to work on
   a branch that already exists, `--json` to get the stream back as JSON on stdout.
 - `jw prompt <name> "<task>"` hands a task to a stream that is already open. It returns at once;
