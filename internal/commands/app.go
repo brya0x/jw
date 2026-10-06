@@ -6,13 +6,15 @@ package commands
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 
+	"github.com/brya0x/jw/internal/backends"
+	"github.com/brya0x/jw/internal/backends/terminal"
 	"github.com/brya0x/jw/internal/connectors"
+	"github.com/brya0x/jw/internal/core/registry"
 )
 
 // Exit codes. They are part of jw's interface: scripts and agents branch on them.
@@ -25,7 +27,7 @@ const (
 
 // ErrNeedsHuman marks a stop that only a person can resolve. Commands wrap
 // it; Run turns it into ExitNeedsHuman.
-var ErrNeedsHuman = errors.New("needs a person to decide")
+var ErrNeedsHuman = backends.ErrNeedsHuman
 
 type App struct {
 	In       *os.File
@@ -61,4 +63,20 @@ func (a *App) confirm(question string) (bool, error) {
 	line, _ := bufio.NewReader(a.In).ReadString('\n')
 	answer := strings.ToLower(strings.TrimSpace(line))
 	return answer == "y" || answer == "yes", nil
+}
+
+// backendFor is the backend e lives in once it's open.
+func (a *App) backendFor(e *registry.Entry) (backends.Backend, error) {
+	mux, err := a.NewMux()
+	if err != nil {
+		return nil, err
+	}
+	t := terminal.New(mux, a.ui())
+	t.Settle = agentSettle
+	return t, nil
+}
+
+// ui is how backends report to the person and ask them.
+func (a *App) ui() backends.UI {
+	return backends.UI{Out: a.Out, Err: a.Err, Confirm: a.confirm}
 }

@@ -1,7 +1,6 @@
 package commands
 
 import (
-	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -123,23 +122,20 @@ func (a *App) loadRows(project string) ([]lsRow, error) {
 		}
 	}
 
-	// A tab closed by hand is forgotten here, so the registry never keeps
-	// pointing at a dead tab.
-	if mux, err := a.NewMux(); err == nil {
-		changed := false
-		for _, e := range entries {
-			if e.Tab == "" {
-				continue
-			}
-			if _, err := mux.GetTab(e.Tab); errors.Is(err, connectors.ErrNotFound) {
-				e.Tab = ""
-				changed = true
-			}
+	// What was closed outside jw is forgotten here, so the registry never
+	// keeps pointing at a dead tab.
+	changed := false
+	for _, e := range entries {
+		if e.Tab == "" {
+			continue
 		}
-		if changed {
-			if err := reg.Save(path); err != nil {
-				return nil, err
-			}
+		if b, err := a.backendFor(e); err == nil && b.Prune(e) {
+			changed = true
+		}
+	}
+	if changed {
+		if err := reg.Save(path); err != nil {
+			return nil, err
 		}
 	}
 
