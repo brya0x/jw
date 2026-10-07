@@ -142,6 +142,7 @@ func jwEnv(e registry.Entry, vars config.Vars) []string {
 	env := []string{
 		"JW_ID=" + e.ID,
 		"JW_NAME=" + e.Name,
+		"JW_PROJECT=" + e.Project,
 		fmt.Sprintf("JW_SLOT=%d", e.Slot),
 		fmt.Sprintf("JW_PORT_BASE=%d", config.PortBase(e.Slot)),
 	}

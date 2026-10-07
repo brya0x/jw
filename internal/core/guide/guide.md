@@ -11,6 +11,7 @@ Your pane already has the stream's variables:
 | Variable | What |
 |---|---|
 | `JW_NAME` | the stream's name |
+| `JW_PROJECT` | its project |
 | `JW_SLOT` | its slot |
 | `JW_PORT_<SERVICE>` | the port of each service, e.g. `JW_PORT_WEB` |
 | `JW_PORT_BASE` | the first port of the slot's block |

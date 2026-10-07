@@ -29,7 +29,7 @@ func TestOpenLayoutAndEnvOnEveryPane(t *testing.T) {
 	}
 	// herdr doesn't pass env to splits, so every pane must get it.
 	for id, penv := range env.mux.paneEnv {
-		if !slices.Contains(penv, "JW_NAME=web") {
+		if !slices.Contains(penv, "JW_NAME=web") || !slices.Contains(penv, "JW_PROJECT=myapp") {
 			t.Errorf("pane %s created without JW_* env: %v", id, penv)
 		}
 	}

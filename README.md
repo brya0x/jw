@@ -210,7 +210,8 @@ Offsets come from config. With `web = 0`, `api = 2`, `metro = 81`:
 | slot 2 | 20200 | 20202 | 20281 |
 
 - Slots are allocated **globally across all projects**, so two repos never collide.
-- `jw new` writes `<worktree>/.jw.env` with `JW_SLOT` and `JW_PORT_<SERVICE>`, and adds it to
+- `jw new` writes `<worktree>/.jw.env` with every `JW_*` variable (`JW_NAME`, `JW_PROJECT`,
+  `JW_SLOT`, `JW_PORT_<SERVICE>`…), and adds it to
   `.git/info/exclude` — never committed, shared by every worktree of the repo.
 - Env files that point at `localhost:<port>` get rewritten per worktree (see `[[env]]` below),
   so the web app in slot 2 talks to the API in slot 2.
@@ -531,7 +532,7 @@ jw agents                                  # just print it
 Re-running updates the copy in place. The guide is
 [internal/core/guide/guide.md](internal/core/guide/guide.md).
 
-**Inside a stream,** every pane has `JW_NAME`, `JW_SLOT` and `JW_PORT_<SERVICE>` in its
+**Inside a stream,** every pane has `JW_NAME`, `JW_PROJECT`, `JW_SLOT` and `JW_PORT_<SERVICE>` in its
 environment, and `jw info` shows the rest: branch, path, each port and whether something
 listens on it, tab, PR, state.
 
