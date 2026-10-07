@@ -11,6 +11,7 @@ Your pane already has the stream's variables:
 | Variable | What |
 |---|---|
 | `JW_NAME` | the stream's name |
+| `JW_PROJECT` | its project |
 | `JW_SLOT` | its slot |
 | `JW_PORT_<SERVICE>` | the port of each service, e.g. `JW_PORT_WEB` |
 | `JW_PORT_BASE` | the first port of the slot's block |
@@ -32,7 +33,7 @@ Your pane already has the stream's variables:
 
 ## If you orchestrate streams
 
-- `jw new <name> --task "<what to do>"` creates the worktree, runs setup, opens its tab without
+- `jw new <name> --task "<what to do>"` creates the worktree, runs setup, opens it without
   stealing focus, and hands the task to the stream's agent. Add `--branch <existing>` to work on
   a branch that already exists, `--json` to get the stream back as JSON on stdout.
 - `jw prompt <name> "<task>"` hands a task to a stream that is already open. It returns at once;

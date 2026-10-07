@@ -3,6 +3,7 @@ package commands
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -14,7 +15,7 @@ func TestLsAndInfoJSON(t *testing.T) {
 	p := env.stream("web")
 	p.cfg.Ports = map[string]int{"web": 0, "api": 2}
 	// streamsJSON reloads the config from disk, so the ports must live there.
-	writeConfig(t, env, "[ports]\nweb = 0\napi = 2\n")
+	writeConfig(t, env, "[ports]\nweb = 0\napi = 2\n[dev]\nweb = [\"vite\"]\napi = [\"node api\"]\n")
 	e, _ := p.reg.Find(p.name, "web")
 	env.app.PRs = fakePRs{&connectors.PR{Number: 7, State: "OPEN", IsDraft: true, URL: "https://x/7", Branch: e.Branch}}
 	env.shell.busy = map[int]connectors.PortOwner{20100: {PID: 1}} // web is up, api isn't
@@ -37,6 +38,9 @@ func TestLsAndInfoJSON(t *testing.T) {
 	}
 	if !s.Ports["web"].Listening || s.Ports["api"].Listening || s.Ports["api"].Port != 20102 {
 		t.Errorf("ports %+v", s.Ports)
+	}
+	if !slices.Equal(s.Dev, []string{"api", "web"}) {
+		t.Errorf("dev %v", s.Dev)
 	}
 	if s.PR == nil || s.PR.Number != 7 || s.PR.State != "draft" {
 		t.Errorf("pr %+v", s.PR)

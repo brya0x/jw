@@ -38,7 +38,7 @@ func (a *App) rm(p *project, e *registry.Entry, o rmOptions) error {
 	// 0. Not from inside the stream's own tab: closing it would kill jw
 	// before the worktree is gone.
 	if e.Tab != "" {
-		if mux, err := a.NewMux(); err == nil && insideOwnTab(mux, e) {
+		if b, err := a.backendFor(e); err == nil && b.InsideOwn(e) {
 			return refuseFromOwnTab(e, "rm")
 		}
 	}
@@ -101,8 +101,8 @@ func (a *App) rm(p *project, e *registry.Entry, o rmOptions) error {
 
 	// 3. Remove, tab first so no process holds the directory.
 	if e.Tab != "" {
-		if mux, err := a.NewMux(); err == nil {
-			if _, err := a.closeTab(mux, e, true, nil); err != nil {
+		if b, err := a.backendFor(e); err == nil {
+			if _, err := b.Close(e, true, nil); err != nil {
 				return err
 			}
 		}

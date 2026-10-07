@@ -9,8 +9,8 @@ stepping on each other.
 
 ```
 jw init                    # once per repo: draft a config from what it finds
-jw new mobile-login        # worktree + branch + ports + setup (opens nothing)
-jw open mobile-login       # herdr tab: nvim | agent | dev servers
+jw new mobile-login        # worktree + branch + ports + setup, then opens it
+jw open mobile-login       # bring it forward (or back, after jw close)
 jw ls                      # what's open, what's pending, which PRs merged
 jw close mobile-login      # free the tab, keep the work
 jw done mobile-login       # PR merged? confirm → remove worktree + branch
@@ -210,7 +210,8 @@ Offsets come from config. With `web = 0`, `api = 2`, `metro = 81`:
 | slot 2 | 20200 | 20202 | 20281 |
 
 - Slots are allocated **globally across all projects**, so two repos never collide.
-- `jw new` writes `<worktree>/.jw.env` with `JW_SLOT` and `JW_PORT_<SERVICE>`, and adds it to
+- `jw new` writes `<worktree>/.jw.env` with every `JW_*` variable (`JW_NAME`, `JW_PROJECT`,
+  `JW_SLOT`, `JW_PORT_<SERVICE>`…), and adds it to
   `.git/info/exclude` — never committed, shared by every worktree of the repo.
 - Env files that point at `localhost:<port>` get rewritten per worktree (see `[[env]]` below),
   so the web app in slot 2 talks to the API in slot 2.
@@ -237,7 +238,7 @@ By default it writes your personal `~/.config/jw/<project>.toml`, matched by the
 `--repo` writes `.jw.toml` in the repo instead, to commit; `--print` only shows the draft. An
 existing config is never overwritten without `--force`.
 
-### `jw new <name> [--from <ref>] [--branch <branch>] [--no-setup] [--task "…"] [--json]`
+### `jw new <name> [--from <ref>] [--branch <branch>] [--no-setup] [--no-open] [--task "…"] [--json]`
 
 1. `git fetch`, then `git worktree add <root>/<name> -b <branch> <ref>`
    (`<ref>` defaults to `origin/<default branch>`).
@@ -248,9 +249,11 @@ existing config is never overwritten without `--force`.
 5. Runs `setup` (install, build workspace packages…) with the `JW_*` variables exported.
    If setup fails, the worktree is **kept** — fix the cause and run `jw setup`.
 
-Opens nothing — run `jw open <name>` next, or pass `--task "…"` to open it without focus and
-hand the task to its agent. `--json` prints the new stream as JSON (see
-[For coding agents](#for-coding-agents)).
+6. Opens it, without taking focus — you stay where you ran `jw new`. `--task "…"` hands the
+   agent a task once it's up. If opening fails (no herdr here, say), the stream is still created
+   and `jw open <name>` retries; with `--task` that's an error. `--no-open` skips this step.
+
+`--json` prints the new stream as JSON (see [For coding agents](#for-coding-agents)).
 
 A stream is always a worktree: there is no `jw new` for the main checkout. Its branch, its slot
 of ports and its `.jw.env` all hang off the worktree.
@@ -529,7 +532,7 @@ jw agents                                  # just print it
 Re-running updates the copy in place. The guide is
 [internal/core/guide/guide.md](internal/core/guide/guide.md).
 
-**Inside a stream,** every pane has `JW_NAME`, `JW_SLOT` and `JW_PORT_<SERVICE>` in its
+**Inside a stream,** every pane has `JW_NAME`, `JW_PROJECT`, `JW_SLOT` and `JW_PORT_<SERVICE>` in its
 environment, and `jw info` shows the rest: branch, path, each port and whether something
 listens on it, tab, PR, state.
 
@@ -540,6 +543,7 @@ stream object. `new --json` keeps stdout for the JSON alone and sends progress t
 {
   "name": "web", "branch": "feat/web", "slot": 1, "port_base": 20100,
   "ports": { "web": { "port": 20100, "listening": true } },
+  "dev": ["web"],
   "open": true, "tab": "w4:t1",
   "pr": { "number": 412, "state": "open", "url": "https://github.com/acme/myapp/pull/412" },
   "state": ""

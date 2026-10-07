@@ -1,9 +1,12 @@
 package commands
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/brya0x/jw/internal/connectors"
 )
 
 func TestPromptReachesTheStreamsAgent(t *testing.T) {
@@ -69,5 +72,49 @@ func TestNewWithTaskOpensAndHandsItOver(t *testing.T) {
 	}
 	if !slices.Equal(env.mux.prompts, []string{"api: add the /health route"}) {
 		t.Fatalf("prompts %v", env.mux.prompts)
+	}
+}
+
+func TestNewOpensWithoutFocusUnlessToldNotTo(t *testing.T) {
+	env := newTestEnv(t)
+	t.Chdir(env.repo)
+
+	if code := env.app.Run([]string{"new", "web", "--no-setup"}); code != ExitOK {
+		t.Fatalf("exit %d\n%s", code, env.out)
+	}
+	p, _ := loadProject(env.repo)
+	if e, _ := p.reg.Find(p.name, "web"); e.Tab == "" {
+		t.Fatal("jw new must open the stream")
+	}
+	if len(env.mux.focused) != 0 {
+		t.Error("jw new opens without stealing focus")
+	}
+
+	if code := env.app.Run([]string{"new", "api", "--no-setup", "--no-open"}); code != ExitOK {
+		t.Fatalf("exit %d\n%s", code, env.out)
+	}
+	p, _ = loadProject(env.repo)
+	if e, _ := p.reg.Find(p.name, "api"); e.Tab != "" {
+		t.Fatal("--no-open must not open")
+	}
+
+	if code := env.app.Run([]string{"new", "x", "--no-open", "--task", "go"}); code != ExitError {
+		t.Fatalf("--no-open with --task: exit %d", code)
+	}
+}
+
+func TestNewStillCreatesWhenItCantOpen(t *testing.T) {
+	env := newTestEnv(t)
+	env.app.NewMux = func() (connectors.Multiplexer, error) { return nil, errors.New("herdr not found") }
+	t.Chdir(env.repo)
+
+	if code := env.app.Run([]string{"new", "web", "--no-setup"}); code != ExitOK {
+		t.Fatalf("a failed open must not fail jw new: exit %d\n%s", code, env.out)
+	}
+	if !strings.Contains(env.out.String(), "jw open web") {
+		t.Errorf("should say how to open it:\n%s", env.out)
+	}
+	if code := env.app.Run([]string{"new", "api", "--no-setup", "--task", "go"}); code != ExitError {
+		t.Fatalf("with a task, a failed open is an error: exit %d", code)
 	}
 }
