@@ -2,5 +2,6 @@
 //! the Go binary until the cutover.
 
 pub mod config;
+pub mod envfile;
 pub mod expand;
 pub mod registry;

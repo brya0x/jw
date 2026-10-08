@@ -10,7 +10,7 @@ use anyhow::{Result, bail};
 
 use crate::connectors::git::Repo;
 use crate::core::config::{self, Config};
-use crate::core::expand::{Vars, env_name, expand};
+use crate::core::expand::{Vars, expand};
 use crate::core::registry::Entry;
 use crate::layout::Node;
 
@@ -54,21 +54,7 @@ impl Stream {
 
     /// The JW_* variables every pane of the stream gets.
     pub fn env(&self) -> BTreeMap<String, String> {
-        let e = &self.entry;
-        let mut env = BTreeMap::from([
-            ("JW_ID".to_string(), e.id.clone()),
-            ("JW_NAME".to_string(), e.name.clone()),
-            ("JW_PROJECT".to_string(), e.project.clone()),
-            ("JW_SLOT".to_string(), e.slot.to_string()),
-            (
-                "JW_PORT_BASE".to_string(),
-                config::port_base(e.slot).to_string(),
-            ),
-        ]);
-        for (svc, port) in self.vars().ports {
-            env.insert(env_name(&svc), port.to_string());
-        }
-        env
+        crate::actions::jw_env(&self.entry, &self.vars())
     }
 
     /// One spec per leaf of the layout, in tree order.

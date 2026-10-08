@@ -156,6 +156,40 @@ pub fn new_id() -> Result<String> {
     ))
 }
 
+/// Now in UTC as Go's `time.Now().UTC()` marshals it:
+/// `2026-10-08T22:01:02.123456789Z`, trailing zeros of the fraction dropped.
+pub fn now_rfc3339() -> String {
+    let d = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    rfc3339(d.as_secs() as i64, d.subsec_nanos())
+}
+
+fn rfc3339(secs: i64, nanos: u32) -> String {
+    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    let frac = if nanos == 0 {
+        String::new()
+    } else {
+        format!(".{nanos:09}").trim_end_matches('0').to_string()
+    };
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}{frac}Z",
+        rem / 3600,
+        rem % 3600 / 60,
+        rem % 60
+    )
+}
+
 /// Go's zero `time.Time`, which it writes for an entry without a date.
 fn zero_time() -> String {
     "0001-01-01T00:00:00Z".into()
@@ -261,6 +295,20 @@ mod tests {
         assert!(r.find("myapp", "0b1").is_err(), "prefix shorter than 4");
         assert!(r.find("other", "web").is_err(), "names are per project");
         assert!(r.has("myapp", "web") && !r.has("myapp", "we"));
+    }
+
+    #[test]
+    fn timestamps_look_like_go() {
+        assert_eq!(rfc3339(0, 0), "1970-01-01T00:00:00Z");
+        assert_eq!(
+            rfc3339(1_787_270_399, 500_000_000),
+            "2026-08-20T23:59:59.5Z"
+        );
+        assert_eq!(
+            rfc3339(951_782_400, 123_456_789),
+            "2000-02-29T00:00:00.123456789Z"
+        );
+        assert!(now_rfc3339().ends_with('Z'));
     }
 
     #[test]
