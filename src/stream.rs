@@ -50,7 +50,18 @@ impl PaneSpec {
 
 impl Stream {
     /// Finds the project of `entry` from its worktree and loads its config.
+    /// A free session has no repository: jw's defaults and its own layout.
     pub fn resolve(entry: &Entry) -> Result<Self> {
+        if crate::free::is_free(entry) {
+            let all = crate::free::Sessions::load(&crate::free::default_path()?)?;
+            let layout = all.get(&entry.id).map(|s| s.layout).unwrap_or_default();
+            return Ok(Self {
+                entry: entry.clone(),
+                cfg: crate::free::config(),
+                base: String::new(),
+                tree: layout.tree(),
+            });
+        }
         let repo = Repo::open(Path::new(&entry.path))?;
         let cfg = config::load(&repo.root, &repo.remote, &entry.project)?;
         let base = repo.default_branch()?;
@@ -69,6 +80,14 @@ impl Stream {
 
     /// The JW_* variables every pane of the stream gets.
     pub fn env(&self) -> BTreeMap<String, String> {
+        if crate::free::is_free(&self.entry) {
+            // No slot and no ports: only who the pane belongs to.
+            return BTreeMap::from([
+                ("JW_ID".to_string(), self.entry.id.clone()),
+                ("JW_NAME".to_string(), self.entry.name.clone()),
+                ("JW_PROJECT".to_string(), crate::free::LABEL.to_string()),
+            ]);
+        }
         crate::actions::jw_env(&self.entry, &self.vars())
     }
 
@@ -115,6 +134,9 @@ impl Stream {
     pub fn mark_opened(&self) -> Result<()> {
         if self.entry.opened {
             return Ok(());
+        }
+        if crate::free::is_free(&self.entry) {
+            return crate::free::mark_opened(&crate::free::default_path()?, &self.entry.id);
         }
         let path = registry::default_path()?;
         let mut reg = Registry::load(&path)?;

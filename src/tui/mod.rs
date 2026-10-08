@@ -282,6 +282,12 @@ impl App {
         }
         let selected = self.selected().map(|e| e.id.clone());
         self.rows.clear();
+        // The free space is always there and always first (REQ-23).
+        let mut free = crate::free::Sessions::load(&crate::free::default_path()?)?.sessions;
+        free.sort_by(|a, b| a.name.cmp(&b.name));
+        self.rows.push(Row::Space(crate::free::PROJECT.into()));
+        self.rows
+            .extend(free.iter().map(|s| Row::Stream(s.entry())));
         for (project, mut entries) in by_project {
             entries.sort_by(|a, b| a.name.cmp(&b.name));
             self.rows.push(Row::Space(project));
@@ -466,18 +472,11 @@ impl App {
     }
 
     fn move_cursor(&mut self, by: isize) {
-        let mut i = self.cursor as isize;
-        loop {
-            i += by;
-            match self.rows.get(i as usize) {
-                _ if i < 0 => return,
-                None => return,
-                Some(Row::Stream(_)) => {
-                    self.cursor = i as usize;
-                    return;
-                }
-                Some(Row::Space(_)) => {}
-            }
+        // Space rows can be selected too: `n` on one creates a stream there,
+        // even when it has none yet.
+        let i = self.cursor as isize + by;
+        if i >= 0 && (i as usize) < self.rows.len() {
+            self.cursor = i as usize;
         }
     }
 
@@ -692,15 +691,33 @@ impl App {
 
 impl App {
     /// The project of the space under the cursor, from any of its worktrees.
-    fn cursor_project(&self) -> Result<Project> {
-        let space = self.rows[..=self.cursor.min(self.rows.len().saturating_sub(1))]
+    /// The selected stream for an action that needs a repository: a free
+    /// session gets a word instead (REQ-24).
+    fn selected_repo_stream(&mut self, action: &str) -> Option<Entry> {
+        let entry = self.selected().cloned()?;
+        if crate::free::is_free(&entry) {
+            self.status = Some(format!(
+                "{} is a free session: {action} needs a repository",
+                entry.name
+            ));
+            return None;
+        }
+        Some(entry)
+    }
+
+    /// The space the cursor is in: its own row or the one above its stream.
+    fn cursor_space(&self) -> Option<String> {
+        self.rows[..=self.cursor.min(self.rows.len().saturating_sub(1))]
             .iter()
             .rev()
             .find_map(|r| match r {
                 Row::Space(s) => Some(s.clone()),
                 _ => None,
             })
-            .context("no space selected")?;
+    }
+
+    fn cursor_project(&self) -> Result<Project> {
+        let space = self.cursor_space().context("no space selected")?;
         let entry = self
             .rows
             .iter()
@@ -713,6 +730,15 @@ impl App {
     }
 
     fn ask_new(&mut self) {
+        if self.cursor_space().as_deref() == Some(crate::free::PROJECT) {
+            self.modal = Some(Modal::NewFree {
+                fields: [String::new(), "~".into()],
+                field: 0,
+                layout: 0,
+                error: None,
+            });
+            return;
+        }
         match self.cursor_project() {
             Ok(p) => self.modal = Some(Modal::New(NewForm::new(p))),
             Err(e) => self.status = Some(format!("new: {e:#}")),
@@ -748,6 +774,10 @@ impl App {
         let Some(entry) = self.selected().cloned() else {
             return;
         };
+        if crate::free::is_free(&entry) {
+            self.modal = Some(Modal::RmFree { entry });
+            return;
+        }
         let plan = Project::open(std::path::Path::new(&entry.path))
             .or_else(|_| self.cursor_project())
             .and_then(|p| Ok((actions::rm_plan(&p, &entry)?, p)));
@@ -768,7 +798,7 @@ impl App {
     /// `r`: start a dev service in the stream's shell pane; with several
     /// services, pick one first.
     fn ask_dev(&mut self) {
-        let Some(entry) = self.selected().cloned() else {
+        let Some(entry) = self.selected_repo_stream("dev") else {
             return;
         };
         let project = match Project::open(std::path::Path::new(&entry.path)) {
@@ -821,7 +851,7 @@ impl App {
 
     /// `S`: re-run the config's setup in the stream's shell pane.
     fn run_setup(&mut self) {
-        let Some(entry) = self.selected().cloned() else {
+        let Some(entry) = self.selected_repo_stream("setup") else {
             return;
         };
         let line = Stream::resolve(&entry).and_then(|s| actions::setup_line(&s.cfg, &s.vars()));
@@ -837,6 +867,27 @@ impl App {
             return;
         };
         let open = self.is_open(&entry.id);
+        if crate::free::is_free(&entry) {
+            let layout =
+                crate::free::Sessions::load(&crate::free::default_path().unwrap_or_default())
+                    .ok()
+                    .and_then(|all| all.get(&entry.id).map(|s| s.layout.label()))
+                    .unwrap_or("?");
+            let rows = vec![
+                ("id".to_string(), entry.id.clone()),
+                ("dir".to_string(), entry.path.clone()),
+                ("layout".to_string(), layout.to_string()),
+                (
+                    "session".to_string(),
+                    if open { "open" } else { "closed" }.to_string(),
+                ),
+            ];
+            self.modal = Some(Modal::Info {
+                title: format!("free/{}", entry.name),
+                rows,
+            });
+            return;
+        }
         self.background(format!("reading {}", entry.name), move || {
             let p = Project::open(std::path::Path::new(&entry.path))?;
             let prs = crate::connectors::github::Client::default();
@@ -892,7 +943,7 @@ impl App {
     }
 
     fn run_sync(&mut self) {
-        let Some(entry) = self.selected().cloned() else {
+        let Some(entry) = self.selected_repo_stream("sync") else {
             return;
         };
         self.background(format!("syncing {}", entry.name), move || {
@@ -903,7 +954,7 @@ impl App {
     }
 
     fn ask_done(&mut self) {
-        let Some(entry) = self.selected().cloned() else {
+        let Some(entry) = self.selected_repo_stream("done") else {
             return;
         };
         self.background(format!("checking {}'s PR", entry.name), move || {
@@ -968,6 +1019,53 @@ impl App {
                 }
             }
             Modal::Info { .. } => {}
+            Modal::NewFree {
+                fields,
+                field,
+                layout,
+                ..
+            } => {
+                let path = match crate::free::default_path() {
+                    Ok(p) => p,
+                    Err(e) => {
+                        self.status = Some(format!("{e:#}"));
+                        return;
+                    }
+                };
+                let chosen = crate::free::Layout::ALL[layout];
+                match crate::free::create(&path, fields[0].trim(), &fields[1], chosen) {
+                    Ok(session) => {
+                        let _ = self.reload();
+                        let entry = session.entry();
+                        if let Some(i) = self
+                            .rows
+                            .iter()
+                            .position(|r| matches!(r, Row::Stream(e) if e.id == entry.id))
+                        {
+                            self.cursor = i;
+                        }
+                        self.open_entry(entry, false);
+                    }
+                    Err(e) => {
+                        self.modal = Some(Modal::NewFree {
+                            error: Some(format!("{e:#}")),
+                            fields,
+                            field,
+                            layout,
+                        })
+                    }
+                }
+            }
+            Modal::RmFree { entry } => {
+                self.close(&entry);
+                let removed =
+                    crate::free::default_path().and_then(|p| crate::free::remove(&p, &entry.id));
+                self.status = Some(match removed {
+                    Ok(()) => format!("removed free/{}; {} is untouched", entry.name, entry.path),
+                    Err(e) => format!("{e:#}"),
+                });
+                let _ = self.reload();
+            }
             Modal::AddProject { path, in_repo, .. } => {
                 self.background("adding the project".into(), move || {
                     let dir = std::path::PathBuf::from(path.trim());

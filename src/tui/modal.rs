@@ -47,6 +47,17 @@ pub enum Modal {
         in_repo: bool,
         error: Option<String>,
     },
+    /// `n` in the free space: name, directory, layout.
+    NewFree {
+        fields: [String; 2],
+        field: usize,
+        layout: usize,
+        error: Option<String>,
+    },
+    /// Forgetting a free session: its panes go, its directory stays.
+    RmFree {
+        entry: Entry,
+    },
     /// Text for the stream's agent.
     Prompt {
         entry: Entry,
@@ -172,6 +183,38 @@ impl Modal {
                 }
                 Outcome::Stay
             }
+            Modal::NewFree {
+                fields,
+                field,
+                layout,
+                error,
+            } => {
+                *error = None;
+                match k.code {
+                    KeyCode::Enter => return Outcome::Submit,
+                    KeyCode::Tab | KeyCode::Down => *field = (*field + 1) % 3,
+                    KeyCode::BackTab | KeyCode::Up => *field = (*field + 2) % 3,
+                    KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if *field == 2 => {
+                        let n = crate::free::Layout::ALL.len();
+                        *layout = if k.code == KeyCode::Left {
+                            (*layout + n - 1) % n
+                        } else {
+                            (*layout + 1) % n
+                        };
+                    }
+                    KeyCode::Backspace if *field < 2 => {
+                        fields[*field].pop();
+                    }
+                    KeyCode::Char(c) if *field < 2 => fields[*field].push(c),
+                    _ => {}
+                }
+                Outcome::Stay
+            }
+            Modal::RmFree { .. } => match k.code {
+                KeyCode::Char('y') | KeyCode::Enter => Outcome::Submit,
+                KeyCode::Char('n') => Outcome::Cancel,
+                _ => Outcome::Stay,
+            },
             Modal::Done { .. } => match k.code {
                 KeyCode::Char('y') | KeyCode::Enter => Outcome::Submit,
                 KeyCode::Char('n') => Outcome::Cancel,
@@ -321,6 +364,77 @@ impl Modal {
                 }
                 l.push(keys(&[("tab", "where"), ("↵", "add"), ("esc", "cancel")]));
                 (" Add a project ".to_string(), l)
+            }
+            Modal::NewFree {
+                fields,
+                field,
+                layout,
+                error,
+            } => {
+                let mut l = vec![Line::from(Span::styled(
+                    " No repository, branch or ports: a shell where you say.",
+                    Style::default().fg(DIM),
+                ))];
+                l.push(Line::default());
+                for (i, (label, hint)) in [("Name", "lowercase, digits, dashes"), ("Dir", "~")]
+                    .iter()
+                    .enumerate()
+                {
+                    let on = *field == i;
+                    let c = if on { FOCUS } else { DIM };
+                    let value = &fields[i];
+                    l.push(Line::from(vec![
+                        Span::styled(format!(" {label:<7}"), Style::default().fg(c)),
+                        Span::styled("[ ", Style::default().fg(if on { FOCUS } else { LINE })),
+                        if value.is_empty() {
+                            Span::styled(hint.to_string(), Style::default().fg(DIM))
+                        } else {
+                            Span::raw(tail(value, 44))
+                        },
+                        Span::styled(
+                            if on { "▏ ]" } else { " ]" },
+                            Style::default().fg(if on { FOCUS } else { LINE }),
+                        ),
+                    ]));
+                }
+                let on = *field == 2;
+                l.push(Line::from(vec![
+                    Span::styled(
+                        " Layout ",
+                        Style::default().fg(if on { FOCUS } else { DIM }),
+                    ),
+                    Span::styled(
+                        format!("‹ {} ›", crate::free::Layout::ALL[*layout].label()),
+                        Style::default().fg(if on { FOCUS } else { FG }),
+                    ),
+                ]));
+                l.push(Line::default());
+                if let Some(e) = error {
+                    l.push(Line::from(Span::styled(
+                        format!(" {e}"),
+                        Style::default().fg(WAIT),
+                    )));
+                    l.push(Line::default());
+                }
+                l.push(keys(&[
+                    ("tab", "field"),
+                    ("←→", "layout"),
+                    ("↵", "create"),
+                    ("esc", "cancel"),
+                ]));
+                (" New free session ".to_string(), l)
+            }
+            Modal::RmFree { entry } => {
+                let l = vec![
+                    Line::from(" Closes its panes and forgets it."),
+                    Line::from(Span::styled(
+                        format!(" {} is untouched.", short_path(&entry.path, 50)),
+                        Style::default().fg(DIM),
+                    )),
+                    Line::default(),
+                    keys(&[("y", "remove"), ("esc", "cancel")]),
+                ];
+                (format!(" Remove free/{}? ", entry.name), l)
             }
             Modal::Prompt { entry, text } => {
                 let l = vec![

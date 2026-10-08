@@ -75,10 +75,30 @@ fn sidebar(f: &mut Frame, app: &App) {
                 if i > 0 {
                     lines.push(Line::default());
                 }
-                lines.push(Line::from(Span::styled(
-                    format!(" ▾ {name}"),
-                    Style::default().fg(DIM).add_modifier(Modifier::BOLD),
-                )));
+                let label = if name == crate::free::PROJECT {
+                    crate::free::LABEL
+                } else {
+                    name.as_str()
+                };
+                let selected = i == app.cursor && app.mode == Mode::Nav;
+                let mut line = Line::from(vec![
+                    Span::raw(if selected { "▶" } else { " " }),
+                    Span::styled(
+                        format!("▾ {label}"),
+                        Style::default().fg(DIM).add_modifier(Modifier::BOLD),
+                    ),
+                ]);
+                if selected {
+                    line = line.style(Style::default().bg(LINE));
+                }
+                lines.push(line);
+                let empty = !matches!(app.rows.get(i + 1), Some(Row::Stream(_)));
+                if empty && name == crate::free::PROJECT {
+                    lines.push(Line::from(Span::styled(
+                        "   n: a shell anywhere",
+                        Style::default().fg(DIM),
+                    )));
+                }
             }
             Row::Stream(e) => {
                 let open = app.is_open(&e.id);
@@ -127,6 +147,21 @@ fn header(f: &mut Frame, app: &App) {
                 .iter()
                 .map(|(svc, p)| format!("{svc} :{p}"))
                 .collect();
+            if crate::free::is_free(e) {
+                let line = Line::from(vec![
+                    Span::styled(
+                        format!(" {}/", crate::free::LABEL),
+                        Style::default().fg(DIM),
+                    ),
+                    Span::styled(
+                        e.name.clone(),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(format!("  {}", e.path), Style::default().fg(DIM)),
+                ]);
+                f.render_widget(Paragraph::new(line), r);
+                return;
+            }
             let mut spans = vec![
                 Span::styled(format!(" {}", e.project), Style::default().fg(DIM)),
                 Span::styled("/", Style::default().fg(DIM)),
