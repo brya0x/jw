@@ -47,8 +47,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 - REQ-6 THE TUI SHALL show spaces → streams with: branch, open/closed, PR, dev running.
 - REQ-7 WHEN a stream is opened, the daemon SHALL create its panes from the layout tree, with cwd = worktree and the JW_* env vars.
 - REQ-8 WHERE the project has no `[layout]`, the daemon SHALL use the default layout.
-- REQ-9 WHILE in terminal mode, the client SHALL forward every key except the leader and Alt+h/j/k/l/arrows to the focused pane.
-- REQ-28 WHEN the user presses Alt+h/j/k/l (or Alt+arrows) in any mode, the TUI SHALL move focus to the nearest pane in that direction.
+- REQ-9 WHILE in terminal mode, the client SHALL forward every key except the leader to the focused pane.
 - REQ-10 WHEN a pane changes size, the daemon SHALL resize its PTY.
 - REQ-11 WHEN an action (new/sync/done/rm/setup/dev/info/init) runs, the TUI SHALL apply the same checks as its Go file and ask for confirmation in a modal where Go used `confirm`.
 - REQ-12 IF close or rm targets a stream with a non-shell foreground process in any pane, THEN the TUI SHALL require confirmation, listing each pane and its process. IF rm would lose work (uncommitted files, or unpushed commits on a branch it deletes), THEN the TUI SHALL require the stream's name typed (Go's `--force`).
