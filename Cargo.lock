@@ -80,6 +80,7 @@ name = "jw"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "libc",
  "serde",
  "serde_json",
  "tempfile",
