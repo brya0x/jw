@@ -197,3 +197,15 @@ func TestWorkspacePerStreamMustBeAnAgentName(t *testing.T) {
 		}
 	}
 }
+
+// testdata/config.go.toml is shared with the Rust tests: both binaries must
+// accept it while they read the same config files.
+func TestSharedFixtureLoads(t *testing.T) {
+	c, err := decodeFile("../../../testdata/config.go.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.withDefaults("/repo", "myapp"); err != nil {
+		t.Fatal(err)
+	}
+}

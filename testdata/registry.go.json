@@ -1,0 +1,36 @@
+{
+  "entries": [
+    {
+      "id": "0b1c9e2a-5d1f-4c3e-9a2b-7e6f5d4c3b2a",
+      "name": "web",
+      "project": "myapp",
+      "branch": "feat/web",
+      "path": "/home/me/code/myapp-wt/web",
+      "slot": 1,
+      "tab": "w1:t2",
+      "pr": 31,
+      "created": "2026-10-01T09:30:15.123456789-05:00"
+    },
+    {
+      "id": "7f3ad011-2c4b-4d5e-8f6a-1b2c3d4e5f60",
+      "name": "renamed",
+      "project": "myapp",
+      "branch": "feat/new-name",
+      "path": "/home/me/code/myapp-wt/renamed",
+      "slot": 2,
+      "original_branch": "feat/old-name",
+      "created": "2026-09-02T14:00:00Z"
+    },
+    {
+      "id": "c3d4e5f6-0718-4293-a4b5-c6d7e8f90a1b",
+      "name": "fix",
+      "project": "api",
+      "branch": "fix/login",
+      "path": "/home/me/code/api-wt/fix",
+      "slot": 4,
+      "opened": true,
+      "adopted": true,
+      "created": "2026-08-20T23:59:59.5Z"
+    }
+  ]
+}

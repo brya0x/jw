@@ -4,6 +4,9 @@
 #[cfg(not(unix))]
 compile_error!("jw is unix only (macOS and Linux): it needs PTYs and a unix socket");
 
+#[allow(dead_code)] // used by the parts that come next (P2…)
+mod core;
+
 use std::process::ExitCode;
 
 fn main() -> ExitCode {

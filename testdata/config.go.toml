@@ -1,0 +1,33 @@
+# A config both binaries must accept: the Go tests and the Rust tests load it.
+root      = "~/code/myapp-wt"
+workspace = "myapp"
+branch    = "feat/{name}"
+sync      = "merge"
+setup     = ["pnpm install --frozen-lockfile", "pnpm turbo build --filter=./packages/*"]
+
+[ports]
+web = 0
+api = 1
+
+[dev]
+web = ["pnpm --filter web dev --port {port.web} --strictPort"]
+api = ["pnpm --filter api dev", "pnpm --filter api worker"]
+
+[[env]]
+file = "apps/web/.env.local"
+set  = { API_URL = "http://localhost:{port.api}" }
+
+[agent]
+default = "codex"
+
+[agent.claude]
+start  = "claude"
+resume = "claude --continue"
+
+[layout]
+editor = "nvim"
+
+# Read by the Rust TUI only.
+[tui]
+leader     = "C-Space"
+animations = true
