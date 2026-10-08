@@ -165,6 +165,39 @@ pub fn now_rfc3339() -> String {
     rfc3339(d.as_secs() as i64, d.subsec_nanos())
 }
 
+/// Seconds since the epoch of an RFC 3339 time (`Z` or `±hh:mm`); the
+/// fraction is ignored. Enough to compare a PR's merge time with an entry's.
+pub fn parse_rfc3339(s: &str) -> Option<i64> {
+    let num = |r: std::ops::Range<usize>| s.get(r)?.parse::<i64>().ok();
+    let (y, mo, d) = (num(0..4)?, num(5..7)?, num(8..10)?);
+    let (h, mi, sec) = (num(11..13)?, num(14..16)?, num(17..19)?);
+    let tz = s
+        .get(19..)?
+        .trim_start_matches(|c: char| c == '.' || c.is_ascii_digit());
+    let offset = match tz {
+        "Z" | "z" => 0,
+        _ => {
+            let sign = match tz.get(..1)? {
+                "+" => 1,
+                "-" => -1,
+                _ => return None,
+            };
+            let oh = tz.get(1..3)?.parse::<i64>().ok()?;
+            let om = tz.get(4..6)?.parse::<i64>().ok()?;
+            sign * (oh * 3600 + om * 60)
+        }
+    };
+    // Days from civil (Howard Hinnant).
+    let y = if mo <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (mo + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    Some(days * 86_400 + h * 3600 + mi * 60 + sec - offset)
+}
+
 fn rfc3339(secs: i64, nanos: u32) -> String {
     let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
     // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
@@ -309,6 +342,16 @@ mod tests {
             "2000-02-29T00:00:00.123456789Z"
         );
         assert!(now_rfc3339().ends_with('Z'));
+        assert_eq!(parse_rfc3339("2026-08-20T23:59:59.5Z"), Some(1_787_270_399));
+        assert_eq!(
+            parse_rfc3339("2026-10-01T09:30:15.123456789-05:00"),
+            parse_rfc3339("2026-10-01T14:30:15Z")
+        );
+        assert_eq!(
+            parse_rfc3339("0001-01-01T00:00:00Z").map(|s| s < 0),
+            Some(true)
+        );
+        assert_eq!(parse_rfc3339("nope"), None);
     }
 
     #[test]

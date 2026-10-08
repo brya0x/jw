@@ -13,6 +13,8 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Some("prompt") => report("prompt", jw::cli::prompt(&args[1..])),
+        Some("new") => report("new", jw::cli::new(&args[1..])),
         Some("--version" | "-V") => {
             println!("jw {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
@@ -28,6 +30,16 @@ fn main() -> ExitCode {
         Some(cmd) => {
             eprintln!("jw: unknown command {cmd:?}");
             ExitCode::from(2)
+        }
+    }
+}
+
+fn report(cmd: &str, result: anyhow::Result<()>) -> ExitCode {
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("jw {cmd}: {e:#}");
+            ExitCode::FAILURE
         }
     }
 }

@@ -288,6 +288,170 @@ pub fn rm(p: &Project, e: &Entry, plan: &RmPlan, reg_path: &Path) -> Result<Opti
     Ok(note)
 }
 
+/// How a sync ended, in words for the status line.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Synced {
+    UpToDate {
+        base: String,
+    },
+    Merged {
+        behind: u32,
+        base: String,
+    },
+    Rebased {
+        ahead: u32,
+        base: String,
+        needs_force: bool,
+    },
+}
+
+impl Synced {
+    pub fn message(&self) -> String {
+        match self {
+            Synced::UpToDate { base } => format!("already up to date with {base}"),
+            Synced::Merged { behind, base } => {
+                format!("merged {behind} commit(s) from {base}; publish with git push")
+            }
+            Synced::Rebased {
+                ahead,
+                base,
+                needs_force: true,
+            } => format!(
+                "{ahead} commit(s) replayed onto {base}; it was already pushed: git push --force-with-lease"
+            ),
+            Synced::Rebased { ahead, base, .. } => {
+                format!("{ahead} commit(s) replayed onto {base}")
+            }
+        }
+    }
+}
+
+/// Brings the stream's branch up to date with origin's default branch, by
+/// the config's `sync` mode (internal/commands/sync.go). It never pushes.
+/// A rebase or merge that stops on conflicts is left in place for the agent
+/// (or you) to resolve, and the error lists the files.
+pub fn sync(p: &Project, e: &Entry) -> Result<Synced> {
+    let path = Path::new(&e.path);
+    if !path.exists() {
+        bail!("{}: worktree {} is missing", e.name, e.path);
+    }
+    if let Some(op) = git::operation(path) {
+        bail!(
+            "{} has a {op} in progress: finish it (resolve, git add, git {op} --continue) or abort it (git {op} --abort)",
+            e.name
+        );
+    }
+    if git::dirty(path)? {
+        bail!("{} has uncommitted changes — commit them first", e.name);
+    }
+    let base = format!("origin/{}", p.repo.default_branch()?);
+    p.repo.fetch()?;
+    let (behind, ahead) = git::divergence(path, &base)?;
+    if behind == 0 {
+        return Ok(Synced::UpToDate { base });
+    }
+    // A rebase rewrites commits that may already be on origin; know that
+    // before starting.
+    let published = p.repo.remote_branch_exists(&e.branch);
+    let merge = p.cfg.sync == "merge";
+    let result = if merge {
+        git::merge(path, &base)
+    } else {
+        git::rebase(path, &base)
+    };
+    if let Err(cause) = result {
+        let mode = if merge { "merge" } else { "rebase" };
+        let files = git::conflicts(path).unwrap_or_default();
+        if files.is_empty() {
+            return Err(cause.context(format!("{mode} failed")));
+        }
+        bail!(
+            "{mode} stopped at conflicts in {}: resolve, git add, git {mode} --continue (or --abort); the agent can do it",
+            files.join(", ")
+        );
+    }
+    Ok(if merge {
+        Synced::Merged { behind, base }
+    } else {
+        Synced::Rebased {
+            ahead,
+            base,
+            needs_force: published && ahead > 0,
+        }
+    })
+}
+
+/// Checks that a stream is finished (internal/commands/done.go): nothing
+/// uncommitted, its PR merged, and its HEAD part of what was merged. On
+/// success it returns the plan for [`rm`] and the PR, for the question.
+pub fn done_plan(
+    p: &Project,
+    e: &Entry,
+    prs: &dyn crate::connectors::PullRequests,
+) -> Result<(RmPlan, crate::connectors::Pr)> {
+    let path = Path::new(&e.path);
+    let on_disk = path.exists();
+    if on_disk && git::dirty(path)? {
+        bail!(
+            "{} has uncommitted changes — commit or discard them first",
+            e.name
+        );
+    }
+    let Some(pr) = prs.for_branch(&p.repo.root, &e.branch)? else {
+        bail!("no pull request for {}", e.branch);
+    };
+    if pr.state != "MERGED" {
+        bail!(
+            "PR #{} is {}, not merged yet ({})",
+            pr.number,
+            pr.status(),
+            pr.url
+        );
+    }
+    // The local HEAD must be in what was merged. Comparing with the PR's head,
+    // not an upstream branch, keeps working once the forge deletes the branch.
+    if on_disk {
+        let head = git::head(path)?;
+        if head != pr.head_sha {
+            if !p.repo.has_commit(&pr.head_sha) {
+                let _ = p.repo.fetch_commit(&pr.head_sha);
+            }
+            if !p.repo.is_ancestor(&head, &pr.head_sha) {
+                let merged = pr.merged_at.as_deref().and_then(registry::parse_rfc3339);
+                if let (Some(m), Some(c)) = (merged, registry::parse_rfc3339(&e.created))
+                    && m < c
+                {
+                    bail!(
+                        "the only PR for {} is #{}, merged before this stream existed: the branch name was used before. Open a PR for this work, or remove the stream",
+                        e.branch,
+                        pr.number
+                    );
+                }
+                bail!(
+                    "{} has commits that are not in PR #{} — push them or open another PR",
+                    e.name,
+                    pr.number
+                );
+            }
+        }
+    }
+    let mut deletes = Vec::new();
+    if on_disk {
+        deletes.push(format!("worktree {}", e.path));
+    }
+    if p.repo.branch_exists(&e.branch) {
+        deletes.push(format!("local branch {}", e.branch));
+    }
+    // done deletes the branch even when it was adopted: its work is merged.
+    let plan = RmPlan {
+        on_disk,
+        keep_branch: false,
+        deletes,
+        ..RmPlan::default()
+    };
+    Ok((plan, pr))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -405,5 +569,114 @@ mod tests {
         );
         rm(&p, &e, &plan, &reg_path).unwrap();
         assert!(p.repo.branch_exists("feat/api"));
+    }
+
+    struct FakePrs(Option<crate::connectors::Pr>);
+
+    impl crate::connectors::PullRequests for FakePrs {
+        fn for_branch(&self, _: &Path, _: &str) -> Result<Option<crate::connectors::Pr>> {
+            Ok(self.0.clone())
+        }
+        fn by_branch(&self, _: &Path) -> Result<BTreeMap<String, crate::connectors::Pr>> {
+            Ok(BTreeMap::new())
+        }
+    }
+
+    fn commit(dir: &Path, msg: &str) {
+        must_git(
+            dir,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                msg,
+            ],
+        );
+    }
+
+    #[test]
+    fn sync_rebases_onto_the_new_base() {
+        let (dir, work) = new_test_repo();
+        let reg_path = dir.path().join("registry.json");
+        let p = project(&work, &dir.path().join("wt"));
+        let e = new_stream(
+            &p,
+            &NewOptions {
+                name: "web".into(),
+                ..NewOptions::default()
+            },
+            &reg_path,
+        )
+        .unwrap();
+        let wt = Path::new(&e.path);
+
+        assert_eq!(
+            sync(&p, &e).unwrap(),
+            Synced::UpToDate {
+                base: "origin/trunk".into()
+            }
+        );
+
+        commit(wt, "mine");
+        commit(&work, "theirs");
+        must_git(&work, &["push", "-q"]);
+        let got = sync(&p, &e).unwrap();
+        assert_eq!(
+            got,
+            Synced::Rebased {
+                ahead: 1,
+                base: "origin/trunk".into(),
+                needs_force: false
+            }
+        );
+        assert_eq!(git::divergence(wt, "origin/trunk").unwrap(), (0, 1));
+
+        std::fs::write(wt.join("wip.txt"), "x").unwrap();
+        let err = sync(&p, &e).unwrap_err();
+        assert!(err.to_string().contains("uncommitted"), "{err}");
+    }
+
+    #[test]
+    fn done_needs_a_merged_pr_containing_head() {
+        let (dir, work) = new_test_repo();
+        let reg_path = dir.path().join("registry.json");
+        let p = project(&work, &dir.path().join("wt"));
+        let e = new_stream(
+            &p,
+            &NewOptions {
+                name: "web".into(),
+                ..NewOptions::default()
+            },
+            &reg_path,
+        )
+        .unwrap();
+        let head = git::head(Path::new(&e.path)).unwrap();
+
+        let err = done_plan(&p, &e, &FakePrs(None)).unwrap_err();
+        assert!(err.to_string().contains("no pull request"), "{err}");
+
+        let mut pr = crate::connectors::Pr {
+            number: 7,
+            state: "OPEN".into(),
+            head_sha: head.clone(),
+            ..Default::default()
+        };
+        let err = done_plan(&p, &e, &FakePrs(Some(pr.clone()))).unwrap_err();
+        assert!(err.to_string().contains("not merged"), "{err}");
+
+        pr.state = "MERGED".into();
+        let (plan, got) = done_plan(&p, &e, &FakePrs(Some(pr.clone()))).unwrap();
+        assert_eq!(got.number, 7);
+        assert_eq!(plan.deletes.len(), 2);
+
+        // A local commit that isn't in the PR.
+        commit(Path::new(&e.path), "later");
+        let err = done_plan(&p, &e, &FakePrs(Some(pr))).unwrap_err();
+        assert!(err.to_string().contains("not in PR #7"), "{err}");
     }
 }

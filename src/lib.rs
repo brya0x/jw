@@ -6,6 +6,7 @@
 compile_error!("jw is unix only (macOS and Linux): it needs PTYs and a unix socket");
 
 pub mod actions;
+pub mod cli;
 pub mod client;
 pub mod connectors;
 pub mod core;

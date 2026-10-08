@@ -11,7 +11,7 @@ use anyhow::{Result, bail};
 use crate::connectors::git::Repo;
 use crate::core::config::{self, Config};
 use crate::core::expand::{Vars, expand};
-use crate::core::registry::Entry;
+use crate::core::registry::{self, Entry, Registry};
 use crate::layout::Node;
 
 /// A stream resolved against its project's config, ready to open.
@@ -31,6 +31,21 @@ pub struct PaneSpec {
     pub cmd: Option<String>,
     pub cwd: PathBuf,
     pub env: BTreeMap<String, String>,
+}
+
+impl PaneSpec {
+    /// The daemon message that starts this pane at `(cols, rows)`.
+    pub fn spawn(self, stream: &str, (cols, rows): (u16, u16)) -> crate::proto::ClientMsg {
+        crate::proto::ClientMsg::Spawn {
+            stream: stream.to_string(),
+            role: self.role,
+            cmd: self.cmd,
+            cwd: self.cwd,
+            env: self.env,
+            cols,
+            rows,
+        }
+    }
 }
 
 impl Stream {
@@ -75,6 +90,41 @@ impl Stream {
             .collect()
     }
 
+    /// The panes to start when the stream opens; with `setup`, the shell
+    /// pane runs the config's setup first, showing it, then stays a shell.
+    /// The note says when setup had nowhere to run.
+    pub fn open_specs(&self, setup: bool) -> Result<(Vec<PaneSpec>, Option<String>)> {
+        let mut specs = self.panes()?;
+        let mut note = None;
+        if setup && let Some(line) = crate::actions::setup_line(&self.cfg, &self.vars())? {
+            match specs.iter_mut().find(|s| s.cmd.is_none()) {
+                Some(shell) => {
+                    shell.cmd = Some(format!(
+                        "printf '%s\\n' {}; {line}; exec \"${{SHELL:-sh}}\"",
+                        shell_quote(&format!("$ {line}"))
+                    ))
+                }
+                None => note = Some("setup skipped: the layout has no shell pane".into()),
+            }
+        }
+        Ok((specs, note))
+    }
+
+    /// Records that an agent ran here, so the next open resumes its
+    /// conversation (as `jw open` did).
+    pub fn mark_opened(&self) -> Result<()> {
+        if self.entry.opened {
+            return Ok(());
+        }
+        let path = registry::default_path()?;
+        let mut reg = Registry::load(&path)?;
+        if let Some(e) = reg.entries.iter_mut().find(|e| e.id == self.entry.id) {
+            e.opened = true;
+            reg.save(&path)?;
+        }
+        Ok(())
+    }
+
     /// What a leaf's `run` starts: `editor`, `agent`, `shell`, `dev:<svc>`,
     /// or any other command line, with placeholders expanded.
     fn command(&self, run: &str, vars: &Vars) -> Result<Option<String>> {
@@ -114,6 +164,11 @@ impl Stream {
         }
         Ok(line.clone())
     }
+}
+
+/// Single-quotes a string for sh.
+pub fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 #[cfg(test)]

@@ -38,13 +38,31 @@ enum Msg {
     Daemon(DaemonMsg),
     DaemonGone,
     Term(Event),
-    /// A slow action finished on its worker thread.
-    Job(Job),
+    /// A slow action finished on its worker thread. Boxed: output messages
+    /// go through the same channel by the thousand and stay small.
+    Job(Box<Job>),
 }
 
+// One job at a time crosses the channel, boxed; its size doesn't matter.
+#[allow(clippy::large_enum_variant)]
 enum Job {
-    Created { entry: Entry, setup: bool },
-    Removed { name: String, note: Option<String> },
+    Created {
+        entry: Entry,
+        setup: bool,
+    },
+    /// done's checks passed: ask before deleting.
+    DoneReady {
+        entry: Entry,
+        project: Project,
+        plan: actions::RmPlan,
+        pr: crate::connectors::Pr,
+    },
+    /// A finished action with nothing else to do but say so.
+    Said(String),
+    Removed {
+        name: String,
+        note: Option<String>,
+    },
     Failed(String),
 }
 
@@ -292,7 +310,7 @@ impl App {
                 self.fit();
             }
             Msg::Term(_) => {}
-            Msg::Job(j) => self.on_job(j),
+            Msg::Job(j) => self.on_job(*j),
         }
     }
 
@@ -412,6 +430,9 @@ impl App {
             KeyCode::Char('n') => self.ask_new(),
             KeyCode::Char('c') => self.ask_close(),
             KeyCode::Char('x') => self.ask_rm(),
+            KeyCode::Char('s') => self.run_sync(),
+            KeyCode::Char('d') => self.ask_done(),
+            KeyCode::Char('p') => self.ask_prompt(),
             _ => {}
         }
     }
@@ -479,18 +500,9 @@ impl App {
 
     fn spawn_panes(&mut self, setup: bool) -> Result<()> {
         let stream = self.active.clone().context("no stream")?;
-        let mut specs = stream.panes()?;
-        if setup && let Some(line) = actions::setup_line(&stream.cfg, &stream.vars())? {
-            // The setup's output stays visible, and the shell is there after.
-            match specs.iter_mut().find(|s| s.cmd.is_none()) {
-                Some(shell) => {
-                    shell.cmd = Some(format!(
-                        "printf '%s\\n' {}; {line}; exec \"${{SHELL:-sh}}\"",
-                        shell_quote(&format!("$ {line}"))
-                    ))
-                }
-                None => self.status = Some("setup skipped: the layout has no shell pane".into()),
-            }
+        let (specs, note) = stream.open_specs(setup)?;
+        if note.is_some() {
+            self.status = note;
         }
         let rects = self.pane_rects();
         for spec in specs {
@@ -504,31 +516,9 @@ impl App {
                 cols: inner.0,
                 rows: inner.1,
             });
-            self.send(ClientMsg::Spawn {
-                stream: stream.entry.id.clone(),
-                role: spec.role,
-                cmd: spec.cmd,
-                cwd: spec.cwd,
-                env: spec.env,
-                cols: inner.0,
-                rows: inner.1,
-            });
+            self.send(spec.spawn(&stream.entry.id, inner));
         }
-        if !stream.entry.opened {
-            // Like `jw open`: the next open resumes the agent's conversation.
-            self.mark_opened(&stream.entry.id)?;
-        }
-        Ok(())
-    }
-
-    fn mark_opened(&mut self, id: &str) -> Result<()> {
-        let path = registry::default_path()?;
-        let mut reg = Registry::load(&path)?;
-        if let Some(e) = reg.entries.iter_mut().find(|e| e.id == id) {
-            e.opened = true;
-            reg.save(&path)?;
-        }
-        Ok(())
+        stream.mark_opened()
     }
 
     /// The roles of the active stream, in layout order.
@@ -747,6 +737,48 @@ impl App {
         }
     }
 
+    fn run_sync(&mut self) {
+        let Some(entry) = self.selected().cloned() else {
+            return;
+        };
+        self.background(format!("syncing {}", entry.name), move || {
+            let p = Project::open(std::path::Path::new(&entry.path))?;
+            let done = actions::sync(&p, &entry)?;
+            Ok(Job::Said(format!("{}: {}", entry.name, done.message())))
+        });
+    }
+
+    fn ask_done(&mut self) {
+        let Some(entry) = self.selected().cloned() else {
+            return;
+        };
+        self.background(format!("checking {}'s PR", entry.name), move || {
+            let project = Project::open(std::path::Path::new(&entry.path))?;
+            let prs = crate::connectors::github::Client::default();
+            let (plan, pr) = actions::done_plan(&project, &entry, &prs)?;
+            Ok(Job::DoneReady {
+                entry,
+                project,
+                plan,
+                pr,
+            })
+        });
+    }
+
+    fn ask_prompt(&mut self) {
+        let Some(entry) = self.selected().cloned() else {
+            return;
+        };
+        if !self.is_open(&entry.id) {
+            self.status = Some(format!("{} is not open: ↵ opens it", entry.name));
+            return;
+        }
+        self.modal = Some(Modal::Prompt {
+            entry,
+            text: String::new(),
+        });
+    }
+
     fn submit_modal(&mut self) {
         let Some(m) = self.modal.take() else {
             return;
@@ -771,6 +803,29 @@ impl App {
                 });
             }
             Modal::Close { entry, .. } => self.close(&entry),
+            Modal::Prompt { entry, text } => {
+                self.status = Some(format!("waiting for {}'s agent to settle…", entry.name));
+                self.send(ClientMsg::Prompt {
+                    stream: entry.id,
+                    text: text.trim().to_string(),
+                });
+            }
+            Modal::Done {
+                entry,
+                project,
+                plan,
+                ..
+            } => {
+                self.close(&entry);
+                self.background(format!("removing {}", entry.name), move || {
+                    let reg = registry::default_path()?;
+                    let note = actions::rm(&project, &entry, &plan, &reg)?;
+                    Ok(Job::Removed {
+                        name: entry.name,
+                        note,
+                    })
+                });
+            }
             Modal::Rm {
                 entry,
                 project,
@@ -830,7 +885,7 @@ impl App {
         let tx = self.events.clone();
         thread::spawn(move || {
             let job = work().unwrap_or_else(|e| Job::Failed(format!("{e:#}")));
-            let _ = tx.send(Msg::Job(job));
+            let _ = tx.send(Msg::Job(Box::new(job)));
         });
     }
 
@@ -855,6 +910,20 @@ impl App {
                 });
             }
             Job::Failed(e) => self.status = Some(e),
+            Job::Said(msg) => self.status = Some(msg),
+            Job::DoneReady {
+                entry,
+                project,
+                plan,
+                pr,
+            } => {
+                self.modal = Some(Modal::Done {
+                    entry,
+                    project,
+                    plan,
+                    pr,
+                })
+            }
         }
         if let Err(e) = reload {
             self.status = Some(format!("{e:#}"));
@@ -864,11 +933,6 @@ impl App {
 
 /// Shells don't count as "running something" when closing.
 const SHELLS: &[&str] = &["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "nu"];
-
-/// Single-quotes a string for sh.
-fn shell_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
 
 /// The terminal size inside a pane's border.
 fn inner(r: Rect) -> (u16, u16) {
