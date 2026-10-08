@@ -85,6 +85,8 @@ pub struct App {
     /// The terminal's size, for the layout.
     pub size: (u16, u16),
     quit: bool,
+    /// Why the client left, when it wasn't the user's `q`.
+    exit_reason: Option<String>,
 }
 
 /// Runs the TUI until the user leaves it. The daemon keeps every pane.
@@ -118,6 +120,7 @@ pub fn run() -> Result<()> {
         .and_then(|l| Leader::parse(&l))
         .unwrap_or(Leader::DEFAULT);
 
+    log_panics();
     let mut terminal = ratatui::init();
     execute!(std::io::stdout(), EnableBracketedPaste)?;
     let size = terminal.size()?;
@@ -125,7 +128,33 @@ pub fn run() -> Result<()> {
     let result = app.event_loop(&mut terminal, rx);
     let _ = execute!(std::io::stdout(), DisableBracketedPaste);
     ratatui::restore();
-    result
+    match (result, app.exit_reason) {
+        (Err(e), _) => Err(e),
+        (Ok(()), Some(why)) => anyhow::bail!(why),
+        (Ok(()), None) => Ok(()),
+    }
+}
+
+/// Appends panics to client.log in the state dir: the terminal that shows
+/// them is often gone by the time anyone looks (a window that closes on exit).
+fn log_panics() {
+    let Ok(dir) = registry::state_dir() else {
+        return;
+    };
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let bt = std::backtrace::Backtrace::force_capture();
+        let _ = std::fs::create_dir_all(&dir);
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("client.log"))
+        {
+            use std::io::Write;
+            let _ = writeln!(f, "panic: {info}\n{bt}");
+        }
+        prev(info);
+    }));
 }
 
 fn spawn_term_reader(tx: Sender<Msg>) {
@@ -155,6 +184,7 @@ impl App {
             status: None,
             size,
             quit: false,
+            exit_reason: None,
         };
         app.reload()?;
         app.send(ClientMsg::List);
@@ -231,6 +261,7 @@ impl App {
             Msg::Daemon(d) => self.on_daemon(d),
             Msg::DaemonGone => {
                 self.status = Some("the daemon closed the connection".into());
+                self.exit_reason = Some("the daemon closed the connection".into());
                 self.quit = true;
             }
             Msg::Term(Event::Key(k)) if k.kind != KeyEventKind::Release => self.on_key(k),
