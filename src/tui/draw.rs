@@ -177,7 +177,12 @@ fn status(f: &mut Frame, app: &App) {
     } else {
         match app.mode {
             Mode::Term => {
-                spans.extend([key(&app.leader.label()), txt("nav")]);
+                spans.extend([
+                    key(&app.leader.label()),
+                    txt("nav"),
+                    key("⌥hjkl"),
+                    txt("pane"),
+                ]);
             }
             Mode::Nav => spans.extend([
                 key("j/k"),

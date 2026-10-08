@@ -374,6 +374,10 @@ impl App {
             };
             return;
         }
+        if let Some((dx, dy)) = keys::pane_jump(&k) {
+            self.focus_towards(dx, dy);
+            return;
+        }
         match self.mode {
             Mode::Term => self.send_key(&k),
             Mode::Nav => self.nav_key(k),

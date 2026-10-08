@@ -40,6 +40,21 @@ impl Leader {
     }
 }
 
+/// Alt+h/j/k/l or Alt+arrows: move focus to the pane in that direction,
+/// from any mode. Those keys never reach the panes.
+pub fn pane_jump(k: &KeyEvent) -> Option<(i32, i32)> {
+    if !k.modifiers.contains(KeyModifiers::ALT) {
+        return None;
+    }
+    match k.code {
+        KeyCode::Char('h') | KeyCode::Left => Some((-1, 0)),
+        KeyCode::Char('j') | KeyCode::Down => Some((0, 1)),
+        KeyCode::Char('k') | KeyCode::Up => Some((0, -1)),
+        KeyCode::Char('l') | KeyCode::Right => Some((1, 0)),
+        _ => None,
+    }
+}
+
 /// The bytes for `k`. `app_cursor` is DECCKM: arrows send `ESC O x` instead
 /// of `ESC [ x` when the app asked for it (vim, less).
 pub fn encode(k: &KeyEvent, app_cursor: bool) -> Vec<u8> {
@@ -167,6 +182,19 @@ mod tests {
         );
         assert_eq!(encode(&key(KeyCode::F(1), none), false), b"\x1bOP");
         assert_eq!(encode(&key(KeyCode::F(12), none), false), b"\x1b[24~");
+    }
+
+    #[test]
+    fn alt_hjkl_jumps_between_panes() {
+        let alt = KeyModifiers::ALT;
+        assert_eq!(pane_jump(&key(KeyCode::Char('h'), alt)), Some((-1, 0)));
+        assert_eq!(pane_jump(&key(KeyCode::Char('j'), alt)), Some((0, 1)));
+        assert_eq!(pane_jump(&key(KeyCode::Up, alt)), Some((0, -1)));
+        assert_eq!(
+            pane_jump(&key(KeyCode::Char('l'), KeyModifiers::NONE)),
+            None
+        );
+        assert_eq!(pane_jump(&key(KeyCode::Char('x'), alt)), None);
     }
 
     #[test]
