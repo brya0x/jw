@@ -24,11 +24,11 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 
 | Piece | Where / shape |
 |---|---|
-| Crate | `Cargo.toml` at the root next to `go.mod`; `src/{core,connectors,daemon,proto,tui}` |
+| Crate | `Cargo.toml` at the root next to `go.mod`; a library `src/lib.rs` with `src/{core,connectors,daemon,proto,tui}` (the integration tests in `tests/` drive it) and a thin `src/main.rs` |
 | core | port of `internal/core/config` (config.go:23-60, expand.go:18-45, ports config.go:263) and `registry` (registry.go:16-81) with serde, `deny_unknown_fields` |
 | connectors | git (port 1:1 of the calls in git.go:25-252), gh (`gh pr list`, github.go:43-89), shell/setup/ports (`internal/connectors/system`) |
 | Socket | `$XDG_RUNTIME_DIR/jw/jw.sock`, else `~/.local/state/jw/jw.sock` |
-| Protocol | length-prefixed frames, serde. C→D: `Attach{stream}`, `Detach`, `Input{pane,bytes}`, `Resize{pane,cols,rows}`, `Open{stream}`, `Close{stream,force}`, `Prompt{stream,text}`, `Spawn{stream,role,cmd}`. D→C: `Snapshot{pane,bytes}` (vt100 `state_formatted`), `Output{pane,bytes}`, `Exited{pane,status}`, `State{streams}` |
+| Protocol | `src/proto`: u32 length + serde_json frames. C→D: `Attach{stream}`, `Detach`, `Input{pane,bytes}`, `Resize{pane,cols,rows}`, `Spawn{stream,role,cmd?,cwd,env,cols,rows}` (`cmd` via `sh -c`, none = `$SHELL`), `Kill{pane}`; later `Open{stream}`, `Close{stream,force}`, `Prompt{stream,text}`. D→C: `Snapshot{pane,role,cols,rows,bytes}` (vt100 `state_formatted`), `Output{pane,bytes}`, `Exited{pane,status}`, `Spawned{pane}`, `Error{msg}`; later `State{streams}`. Pane ids are `u64` |
 | Session | `~/.local/state/jw/session.json`: open streams + layout + per-pane role/cmd, so they can be restored |
 | Layout | `[layout]` in the project TOML: tree of `split = "down"\|"right"`, `ratio`, children `a`/`b`, leaves `run = "editor"\|"agent"\|"shell"\|"dev:<svc>"\|"<cmd>"`. The existing `editor` key stays. The default reproduces terminal.go:46-138. Go ignores the tree and `[tui]` (`rustOnly`, config.go) |
 | Pane env | the same JW_* that are passed today via `herdr --env` (herdr.go:156) + `JW_PANE_ID` (replaces `HERDR_PANE_ID`, herdr.go:271) |
@@ -157,6 +157,9 @@ Action output (sync, setup, done) — temporary pane at the bottom of the stream
 - RISK-5 **Concurrent writes to `registry.json`** between Go and Rust during the parallel phase, with no lock. Last writer wins. Accepted until the cutover.
 - RISK-7 **`✻ working` / `? waiting` (REQ-18) are a heuristic:** without herdr there's no agent API. Infer them from recent output activity, the bell (BEL) and the window title (OSC 0/2, which Claude Code updates). They can be wrong; worst case they show `●` and nothing else.
 - RISK-6 **Scope creep toward tmux:** copy mode, text selection, search in scrollback. v1 scope: scroll with the wheel and plain mouse selection; nothing else.
+
+- RISK-9 **Bytes go as JSON number arrays** (3–4× the raw output) and a slow client's queue has no bound. Fine for P3; switch to a binary codec and add backpressure if dev logs make it show.
+- RISK-10 **macOS leaks sockets into children** forked by other threads (close-on-exec is set after `socket()`). Tests that check a port or socket is gone must wait for that child to exit, not assert at once.
 
 - RISK-8 **Animations vs. PTY output:** a 60fps render loop competing with lots of output (logs from dev) can raise CPU usage. Animate only during transitions, and when idle, render on demand.
 

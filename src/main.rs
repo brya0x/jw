@@ -1,13 +1,5 @@
 //! jw: worktree streams in a TUI that is its own terminal multiplexer.
-//! Spec: docs/specs/rust-tui.md. Built in parts (P0…P12); this is P0.
-
-#[cfg(not(unix))]
-compile_error!("jw is unix only (macOS and Linux): it needs PTYs and a unix socket");
-
-#[allow(dead_code)] // used by the parts that come next
-mod connectors;
-#[allow(dead_code)] // used by the parts that come next
-mod core;
+//! Spec: docs/specs/rust-tui.md. Built in parts (P0…P12).
 
 use std::process::ExitCode;
 
@@ -22,6 +14,14 @@ fn main() -> ExitCode {
             println!("jw {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
+        // Hidden: the client starts it (REQ-3); nobody types it.
+        Some("daemon") => match jw::daemon::run(&jw::proto::socket_path()) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("jw daemon: {e:#}");
+                ExitCode::FAILURE
+            }
+        },
         Some(cmd) => {
             eprintln!("jw: unknown command {cmd:?}");
             ExitCode::from(2)

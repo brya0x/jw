@@ -131,6 +131,16 @@ mod tests {
             "{owner:?}"
         );
         drop(l);
-        assert_eq!(System.port_owner(port), None, "a closed port is free");
+        // On macOS a child forked by another test at the wrong moment can
+        // inherit the listener (close-on-exec is set after socket()), and
+        // keeps it open until it exits: wait for that instead of failing.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while System.port_owner(port).is_some() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "a closed port is free"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 }
