@@ -21,7 +21,7 @@ pub(super) const WORK: Color = Color::Rgb(0x7f, 0xc4, 0xff);
 pub(super) const WAIT: Color = Color::Rgb(0xff, 0x8f, 0x7e);
 pub(super) const DEV: Color = Color::Rgb(0x95, 0xde, 0x86);
 
-pub fn draw(f: &mut Frame, app: &App) {
+pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
     f.buffer_mut()
         .set_style(area, Style::default().bg(BG).fg(FG));
@@ -32,6 +32,16 @@ pub fn draw(f: &mut Frame, app: &App) {
         status(f, app);
     }
 
+    let view_area = trect(app.view_area());
+    if let Some(view) = &mut app.view {
+        match view {
+            super::View::Diff(d) => d.draw(f, view_area),
+        }
+        if let Some(m) = &app.modal {
+            m.draw(f);
+        }
+        return;
+    }
     let rects = app.pane_rects();
     if rects.is_empty() {
         empty(f, app);
@@ -235,6 +245,8 @@ fn status(f: &mut Frame, app: &App) {
                 txt("sync"),
                 key("d"),
                 txt("done"),
+                key("D"),
+                txt("diff"),
                 key("p"),
                 txt("prompt"),
                 key("r"),

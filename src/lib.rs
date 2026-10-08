@@ -11,6 +11,7 @@ pub mod client;
 pub mod connectors;
 pub mod core;
 pub mod daemon;
+pub mod diff;
 pub mod free;
 pub mod init;
 pub mod layout;

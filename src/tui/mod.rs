@@ -4,6 +4,7 @@
 //! Two threads feed one channel: the daemon's messages and the terminal's
 //! events. The main thread applies them and redraws.
 
+mod diffview;
 mod draw;
 mod keys;
 mod modal;
@@ -68,6 +69,11 @@ enum Job {
         title: String,
         rows: Vec<(String, String)>,
     },
+    Diff {
+        title: String,
+        dir: String,
+        files: Vec<crate::diff::File>,
+    },
     /// A project was added (and maybe given a drafted config): create its
     /// first stream.
     Added {
@@ -87,6 +93,11 @@ pub enum Mode {
     Term,
     /// Keys move around and run actions.
     Nav,
+}
+
+/// What the stage shows instead of the panes.
+pub enum View {
+    Diff(diffview::DiffView),
 }
 
 /// One row of the sidebar.
@@ -131,6 +142,8 @@ pub struct App {
     pub size: (u16, u16),
     quit: bool,
     pub modal: Option<Modal>,
+    /// A viewer drawn in place of the stream's panes (diff, Markdown).
+    pub view: Option<View>,
     /// The action running in the background, for the status bar.
     pub busy: Option<String>,
     /// For worker threads to report back.
@@ -236,6 +249,7 @@ impl App {
             size,
             quit: false,
             modal: None,
+            view: None,
             busy: None,
             events,
             exit_reason: None,
@@ -406,6 +420,16 @@ impl App {
             }
             return;
         }
+        if let Some(View::Diff(d)) = &mut self.view {
+            match d.key(k) {
+                diffview::Action::None => {}
+                diffview::Action::Close => self.view = None,
+                diffview::Action::Read(path) => {
+                    self.status = Some(format!("the reader for {path} comes with M"));
+                }
+            }
+            return;
+        }
         if self.leader.matches(&k) {
             self.mode = match self.mode {
                 Mode::Term => Mode::Nav,
@@ -465,6 +489,7 @@ impl App {
             KeyCode::Char('c') => self.ask_close(),
             KeyCode::Char('x') => self.ask_rm(),
             KeyCode::Char('s') => self.run_sync(),
+            KeyCode::Char('D') => self.open_diff(),
             KeyCode::Char('d') => self.ask_done(),
             KeyCode::Char('p') => self.ask_prompt(),
             _ => {}
@@ -558,6 +583,17 @@ impl App {
 
     /// Where the panes go on screen: the area right of the sidebar and below
     /// the header, or the whole terminal in full mode.
+    /// Where a viewer goes: right of the sidebar, whatever the panes do.
+    pub fn view_area(&self) -> Rect {
+        let (w, h) = self.size;
+        Rect {
+            x: SIDEBAR,
+            y: 1,
+            w: w.saturating_sub(SIDEBAR),
+            h: h.saturating_sub(2),
+        }
+    }
+
     pub fn stage(&self) -> Rect {
         let (w, h) = self.size;
         if self.full {
@@ -942,6 +978,22 @@ impl App {
         self.send(ClientMsg::List);
     }
 
+    /// `D`: the stream's changes against its base, in the diff viewer.
+    fn open_diff(&mut self) {
+        let Some(entry) = self.selected_repo_stream("diff") else {
+            return;
+        };
+        self.background(format!("diffing {}", entry.name), move || {
+            let stream = Stream::resolve(&entry)?;
+            let files = crate::diff::load(std::path::Path::new(&entry.path), &stream.base)?;
+            Ok(Job::Diff {
+                title: entry.name.clone(),
+                dir: entry.path,
+                files,
+            })
+        });
+    }
+
     fn run_sync(&mut self) {
         let Some(entry) = self.selected_repo_stream("sync") else {
             return;
@@ -1197,6 +1249,10 @@ impl App {
             Job::Said(msg) => self.status = Some(msg),
             Job::RunInShell { entry, line } => self.run_in_shell(&entry, &line),
             Job::Info { title, rows } => self.modal = Some(Modal::Info { title, rows }),
+            Job::Diff { title, dir, files } => {
+                self.view = Some(View::Diff(diffview::DiffView::new(title, dir, files)));
+                self.mode = Mode::Nav;
+            }
             Job::Added { project, wrote } => {
                 self.status = Some(match wrote {
                     Some(path) => format!("wrote {path}: fill in [ports] and [dev] there"),
