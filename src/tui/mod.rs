@@ -6,6 +6,7 @@
 
 mod draw;
 mod keys;
+mod modal;
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -19,11 +20,14 @@ use ratatui::crossterm::event::{
 };
 use ratatui::crossterm::execute;
 
+use crate::actions::{self, NewOptions, Project};
 use crate::client::Client;
 use crate::core::registry::{self, Entry, Registry};
 use crate::layout::{Node, Rect};
 use crate::proto::{ClientMsg, DaemonMsg, PaneId, PaneInfo};
 use crate::stream::Stream;
+
+use modal::{Modal, NewForm, Outcome};
 
 use keys::Leader;
 
@@ -34,6 +38,14 @@ enum Msg {
     Daemon(DaemonMsg),
     DaemonGone,
     Term(Event),
+    /// A slow action finished on its worker thread.
+    Job(Job),
+}
+
+enum Job {
+    Created { entry: Entry, setup: bool },
+    Removed { name: String, note: Option<String> },
+    Failed(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,6 +97,11 @@ pub struct App {
     /// The terminal's size, for the layout.
     pub size: (u16, u16),
     quit: bool,
+    pub modal: Option<Modal>,
+    /// The action running in the background, for the status bar.
+    pub busy: Option<String>,
+    /// For worker threads to report back.
+    events: Sender<Msg>,
     /// Why the client left, when it wasn't the user's `q`.
     exit_reason: Option<String>,
 }
@@ -113,6 +130,7 @@ pub fn run() -> Result<()> {
             }
         }
     });
+    let events = tx.clone();
     spawn_term_reader(tx);
 
     let leader = std::env::var("JW_LEADER")
@@ -124,7 +142,7 @@ pub fn run() -> Result<()> {
     let mut terminal = ratatui::init();
     execute!(std::io::stdout(), EnableBracketedPaste)?;
     let size = terminal.size()?;
-    let mut app = App::new(client, leader, (size.width, size.height))?;
+    let mut app = App::new(client, events, leader, (size.width, size.height))?;
     let result = app.event_loop(&mut terminal, rx);
     let _ = execute!(std::io::stdout(), DisableBracketedPaste);
     ratatui::restore();
@@ -168,7 +186,7 @@ fn spawn_term_reader(tx: Sender<Msg>) {
 }
 
 impl App {
-    fn new(tx: Client, leader: Leader, size: (u16, u16)) -> Result<Self> {
+    fn new(tx: Client, events: Sender<Msg>, leader: Leader, size: (u16, u16)) -> Result<Self> {
         let mut app = Self {
             tx,
             leader,
@@ -184,6 +202,9 @@ impl App {
             status: None,
             size,
             quit: false,
+            modal: None,
+            busy: None,
+            events,
             exit_reason: None,
         };
         app.reload()?;
@@ -271,6 +292,7 @@ impl App {
                 self.fit();
             }
             Msg::Term(_) => {}
+            Msg::Job(j) => self.on_job(j),
         }
     }
 
@@ -336,6 +358,14 @@ impl App {
     }
 
     fn on_key(&mut self, k: KeyEvent) {
+        if let Some(m) = &mut self.modal {
+            match m.key(k) {
+                Outcome::Stay => {}
+                Outcome::Cancel => self.modal = None,
+                Outcome::Submit => self.submit_modal(),
+            }
+            return;
+        }
         if self.leader.matches(&k) {
             self.mode = match self.mode {
                 Mode::Term => Mode::Nav,
@@ -378,6 +408,9 @@ impl App {
                 self.send(ClientMsg::List);
             }
             KeyCode::Char('q') => self.quit = true,
+            KeyCode::Char('n') => self.ask_new(),
+            KeyCode::Char('c') => self.ask_close(),
+            KeyCode::Char('x') => self.ask_rm(),
             _ => {}
         }
     }
@@ -401,9 +434,13 @@ impl App {
     /// Shows the selected stream: attaches to its panes when the daemon has
     /// them, otherwise starts them from the layout.
     fn open_selected(&mut self) {
-        let Some(entry) = self.selected().cloned() else {
-            return;
-        };
+        if let Some(entry) = self.selected().cloned() {
+            self.open_entry(entry, false);
+        }
+    }
+
+    /// `setup`: run the config's setup in the shell pane first (new streams).
+    fn open_entry(&mut self, entry: Entry, setup: bool) {
         if self.active.as_ref().is_some_and(|s| s.entry.id == entry.id) {
             self.mode = Mode::Term;
             return;
@@ -426,7 +463,7 @@ impl App {
             self.send(ClientMsg::Attach {
                 stream: entry.id.clone(),
             });
-        } else if let Err(e) = self.spawn_panes() {
+        } else if let Err(e) = self.spawn_panes(setup) {
             self.status = Some(format!("{}: {e:#}", entry.name));
             return;
         }
@@ -439,9 +476,21 @@ impl App {
         self.mode = Mode::Term;
     }
 
-    fn spawn_panes(&mut self) -> Result<()> {
+    fn spawn_panes(&mut self, setup: bool) -> Result<()> {
         let stream = self.active.clone().context("no stream")?;
-        let specs = stream.panes()?;
+        let mut specs = stream.panes()?;
+        if setup && let Some(line) = actions::setup_line(&stream.cfg, &stream.vars())? {
+            // The setup's output stays visible, and the shell is there after.
+            match specs.iter_mut().find(|s| s.cmd.is_none()) {
+                Some(shell) => {
+                    shell.cmd = Some(format!(
+                        "printf '%s\\n' {}; {line}; exec \"${{SHELL:-sh}}\"",
+                        shell_quote(&format!("$ {line}"))
+                    ))
+                }
+                None => self.status = Some("setup skipped: the layout has no shell pane".into()),
+            }
+        }
         let rects = self.pane_rects();
         for spec in specs {
             let inner = rects
@@ -620,6 +669,204 @@ impl App {
             self.focus = Some(role.clone());
         }
     }
+}
+
+impl App {
+    /// The project of the space under the cursor, from any of its worktrees.
+    fn cursor_project(&self) -> Result<Project> {
+        let space = self.rows[..=self.cursor.min(self.rows.len().saturating_sub(1))]
+            .iter()
+            .rev()
+            .find_map(|r| match r {
+                Row::Space(s) => Some(s.clone()),
+                _ => None,
+            })
+            .context("no space selected")?;
+        let entry = self
+            .rows
+            .iter()
+            .find_map(|r| match r {
+                Row::Stream(e) if e.project == space => Some(e),
+                _ => None,
+            })
+            .context("no stream to find the repository from")?;
+        Project::open(std::path::Path::new(&entry.path))
+    }
+
+    fn ask_new(&mut self) {
+        match self.cursor_project() {
+            Ok(p) => self.modal = Some(Modal::New(NewForm::new(p))),
+            Err(e) => self.status = Some(format!("new: {e:#}")),
+        }
+    }
+
+    fn ask_close(&mut self) {
+        let Some(entry) = self.selected().cloned() else {
+            return;
+        };
+        if !self.is_open(&entry.id) {
+            self.status = Some(format!("{} is already closed", entry.name));
+            return;
+        }
+        // REQ-12: anything but a shell in the foreground would be killed.
+        let running: Vec<String> = self
+            .daemon_panes
+            .iter()
+            .filter(|p| p.stream == entry.id)
+            .filter_map(|p| {
+                let fg = p.fg.as_deref()?;
+                (!SHELLS.contains(&fg)).then(|| format!("{:<10} {fg}", p.role))
+            })
+            .collect();
+        if running.is_empty() {
+            self.close(&entry);
+        } else {
+            self.modal = Some(Modal::Close { entry, running });
+        }
+    }
+
+    fn ask_rm(&mut self) {
+        let Some(entry) = self.selected().cloned() else {
+            return;
+        };
+        let plan = Project::open(std::path::Path::new(&entry.path))
+            .or_else(|_| self.cursor_project())
+            .and_then(|p| Ok((actions::rm_plan(&p, &entry)?, p)));
+        match plan {
+            Ok((plan, project)) => {
+                self.modal = Some(Modal::Rm {
+                    entry,
+                    project,
+                    plan,
+                    typed: String::new(),
+                    error: None,
+                })
+            }
+            Err(e) => self.status = Some(format!("rm {}: {e:#}", entry.name)),
+        }
+    }
+
+    fn submit_modal(&mut self) {
+        let Some(m) = self.modal.take() else {
+            return;
+        };
+        match m {
+            Modal::New(mut form) => {
+                let o = NewOptions {
+                    name: form.fields[0].trim().to_string(),
+                    branch: form.fields[1].trim().to_string(),
+                    from: form.fields[2].trim().to_string(),
+                };
+                if !actions::valid_name(&o.name) {
+                    form.error = Some("name: lowercase letters, digits and dashes".into());
+                    self.modal = Some(Modal::New(form));
+                    return;
+                }
+                let (project, setup) = (form.project, form.setup);
+                self.background(format!("creating {}", o.name), move || {
+                    let reg = registry::default_path()?;
+                    let entry = actions::new_stream(&project, &o, &reg)?;
+                    Ok(Job::Created { entry, setup })
+                });
+            }
+            Modal::Close { entry, .. } => self.close(&entry),
+            Modal::Rm {
+                entry,
+                project,
+                plan,
+                typed,
+                ..
+            } => {
+                if plan.loses_work() && typed != entry.name {
+                    self.modal = Some(Modal::Rm {
+                        error: Some(format!("type {} to confirm", entry.name)),
+                        entry,
+                        project,
+                        plan,
+                        typed,
+                    });
+                    return;
+                }
+                // Panes first, so no process holds the directory.
+                self.close(&entry);
+                self.background(format!("removing {}", entry.name), move || {
+                    let reg = registry::default_path()?;
+                    let note = actions::rm(&project, &entry, &plan, &reg)?;
+                    Ok(Job::Removed {
+                        name: entry.name,
+                        note,
+                    })
+                });
+            }
+        }
+    }
+
+    /// Kills every pane of the stream; the worktree stays.
+    fn close(&mut self, entry: &Entry) {
+        let ids: Vec<PaneId> = self
+            .daemon_panes
+            .iter()
+            .filter(|p| p.stream == entry.id)
+            .map(|p| p.pane)
+            .collect();
+        for pane in ids {
+            self.send(ClientMsg::Kill { pane });
+        }
+        self.daemon_panes.retain(|p| p.stream != entry.id);
+        if self.active.as_ref().is_some_and(|s| s.entry.id == entry.id) {
+            self.active = None;
+            self.panes.clear();
+            self.focus = None;
+            self.mode = Mode::Nav;
+        }
+        self.status = Some(format!("closed {}, worktree kept", entry.name));
+        self.send(ClientMsg::List);
+    }
+
+    /// Runs a slow action off the main thread; its result comes back as a Job.
+    fn background(&mut self, what: String, work: impl FnOnce() -> Result<Job> + Send + 'static) {
+        self.busy = Some(what);
+        let tx = self.events.clone();
+        thread::spawn(move || {
+            let job = work().unwrap_or_else(|e| Job::Failed(format!("{e:#}")));
+            let _ = tx.send(Msg::Job(job));
+        });
+    }
+
+    fn on_job(&mut self, job: Job) {
+        self.busy = None;
+        let reload = self.reload();
+        match job {
+            Job::Created { entry, setup } => {
+                if let Some(i) = self
+                    .rows
+                    .iter()
+                    .position(|r| matches!(r, Row::Stream(e) if e.id == entry.id))
+                {
+                    self.cursor = i;
+                }
+                self.open_entry(entry, setup);
+            }
+            Job::Removed { name, note } => {
+                self.status = Some(match note {
+                    Some(n) => format!("removed {name}; {n}"),
+                    None => format!("removed {name}"),
+                });
+            }
+            Job::Failed(e) => self.status = Some(e),
+        }
+        if let Err(e) = reload {
+            self.status = Some(format!("{e:#}"));
+        }
+    }
+}
+
+/// Shells don't count as "running something" when closing.
+const SHELLS: &[&str] = &["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "nu"];
+
+/// Single-quotes a string for sh.
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 /// The terminal size inside a pane's border.

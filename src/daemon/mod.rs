@@ -194,11 +194,22 @@ impl Daemon {
             ClientMsg::List => {
                 let panes = lock(&self.panes)
                     .iter()
-                    .map(|(id, p)| PaneInfo {
-                        pane: *id,
-                        stream: p.stream.clone(),
-                        role: p.role.clone(),
-                        exited: lock(&p.state).exited,
+                    .map(|(id, p)| {
+                        let exited = lock(&p.state).exited;
+                        let fg = match exited {
+                            None => lock(&p.io)
+                                .master
+                                .process_group_leader()
+                                .and_then(process_name),
+                            Some(_) => None,
+                        };
+                        PaneInfo {
+                            pane: *id,
+                            stream: p.stream.clone(),
+                            role: p.role.clone(),
+                            exited,
+                            fg,
+                        }
                     })
                     .collect();
                 let _ = tx.send(DaemonMsg::Panes { panes });
@@ -352,4 +363,19 @@ fn size(cols: u16, rows: u16) -> PtySize {
         pixel_width: 0,
         pixel_height: 0,
     }
+}
+
+/// The command name of a process (`ps -o comm=`), without its directory.
+fn process_name(pid: libc::pid_t) -> Option<String> {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "comm=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let name = name
+        .rsplit('/')
+        .next()
+        .unwrap_or(&name)
+        .trim_start_matches('-');
+    (!name.is_empty()).then(|| name.to_string())
 }

@@ -59,6 +59,10 @@ pub struct PaneInfo {
     pub role: String,
     /// The exit status once its process ended.
     pub exited: Option<i32>,
+    /// The process in the foreground of its terminal, by name (`nvim`,
+    /// `zsh`), when it still runs: what closing the pane would kill.
+    #[serde(default)]
+    pub fg: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

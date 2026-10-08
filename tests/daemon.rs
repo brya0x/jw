@@ -186,6 +186,7 @@ fn list_reports_every_pane() {
         stream: stream.into(),
         role: "shell".into(),
         exited: None,
+        fg: Some("cat".into()),
     };
     assert_eq!(panes, [info(a, "a"), info(b, "b")]);
 }

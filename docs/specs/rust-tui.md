@@ -50,7 +50,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 - REQ-9 WHILE in terminal mode, the client SHALL forward every key except the leader to the focused pane.
 - REQ-10 WHEN a pane changes size, the daemon SHALL resize its PTY.
 - REQ-11 WHEN an action (new/sync/done/rm/setup/dev/info/init) runs, the TUI SHALL apply the same checks as its Go file and ask for confirmation in a modal where Go used `confirm`.
-- REQ-12 IF close or rm targets a stream with a non-shell foreground process in any pane, THEN the TUI SHALL require confirmation.
+- REQ-12 IF close or rm targets a stream with a non-shell foreground process in any pane, THEN the TUI SHALL require confirmation, listing each pane and its process. IF rm would lose work (uncommitted files, or unpushed commits on a branch it deletes), THEN the TUI SHALL require the stream's name typed (Go's `--force`).
 - REQ-13 WHEN `prompt` runs, the daemon SHALL write the text to the agent pane (bracketed paste if the app enabled it) followed by Enter.
 - REQ-14 IF a pane's process exits, THEN the daemon SHALL keep its last screen and exit status visible until the pane is closed or relaunched.
 - REQ-15 WHEN the daemon starts and finds a `session.json` from a previous daemon, it SHALL recreate the open streams, launching agents with their `resume` command (config.go:42-60).
@@ -156,6 +156,7 @@ Action output (sync, setup, done) — temporary pane at the bottom of the stream
 - RISK-4 **Daemon crash = all terminals die.** REQ-15 limits the damage (resume), but the in-flight state is lost.
 - RISK-5 **Concurrent writes to `registry.json`** between Go and Rust during the parallel phase, with no lock. Last writer wins. Accepted until the cutover.
 - RISK-7 **`✻ working` / `? waiting` (REQ-18) are a heuristic:** without herdr there's no agent API. Infer them from recent output activity, the bell (BEL) and the window title (OSC 0/2, which Claude Code updates). They can be wrong; worst case they show `●` and nothing else.
+- RISK-11 **Setup runs in the shell pane** of a new stream (`printf` of the line, the commands, then `exec $SHELL`) instead of before opening, as Go did. Its output stays visible, but a failed setup doesn't stop the stream from opening; the shell is right there to retry.
 - RISK-6 **Scope creep toward tmux:** copy mode, text selection, search in scrollback. v1 scope: scroll with the wheel and plain mouse selection; nothing else.
 
 - RISK-9 **Bytes go as JSON number arrays** (3–4× the raw output) and a slow client's queue has no bound. Fine for P3; switch to a binary codec and add backpressure if dev logs make it show.

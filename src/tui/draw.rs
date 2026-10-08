@@ -11,15 +11,15 @@ use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use super::{App, Mode, PaneView, Row, SIDEBAR};
 use crate::layout::Rect;
 
-const BG: Color = Color::Rgb(0x10, 0x23, 0x2a);
-const PANEL: Color = Color::Rgb(0x15, 0x2e, 0x37);
-const FG: Color = Color::Rgb(0xd5, 0xe3, 0xe6);
-const DIM: Color = Color::Rgb(0x5d, 0x7a, 0x82);
-const LINE: Color = Color::Rgb(0x2a, 0x47, 0x51);
-const FOCUS: Color = Color::Rgb(0xf0, 0xb4, 0x4c);
-const WORK: Color = Color::Rgb(0x7f, 0xc4, 0xff);
-const WAIT: Color = Color::Rgb(0xff, 0x8f, 0x7e);
-const DEV: Color = Color::Rgb(0x95, 0xde, 0x86);
+pub(super) const BG: Color = Color::Rgb(0x10, 0x23, 0x2a);
+pub(super) const PANEL: Color = Color::Rgb(0x15, 0x2e, 0x37);
+pub(super) const FG: Color = Color::Rgb(0xd5, 0xe3, 0xe6);
+pub(super) const DIM: Color = Color::Rgb(0x5d, 0x7a, 0x82);
+pub(super) const LINE: Color = Color::Rgb(0x2a, 0x47, 0x51);
+pub(super) const FOCUS: Color = Color::Rgb(0xf0, 0xb4, 0x4c);
+pub(super) const WORK: Color = Color::Rgb(0x7f, 0xc4, 0xff);
+pub(super) const WAIT: Color = Color::Rgb(0xff, 0x8f, 0x7e);
+pub(super) const DEV: Color = Color::Rgb(0x95, 0xde, 0x86);
 
 pub fn draw(f: &mut Frame, app: &App) {
     let area = f.area();
@@ -41,6 +41,9 @@ pub fn draw(f: &mut Frame, app: &App) {
         let focused = app.focus.as_deref() == Some(role.as_str());
         let view = app.panes.values().find(|v| v.role == role);
         pane(f, app, r, &role, view, focused);
+    }
+    if let Some(m) = &app.modal {
+        m.draw(f);
     }
 }
 
@@ -163,6 +166,12 @@ fn status(f: &mut Frame, app: &App) {
             .fg(BG)
             .add_modifier(Modifier::BOLD),
     )];
+    if let Some(job) = &app.busy {
+        spans.push(Span::styled(
+            format!("  ⟳ {job}"),
+            Style::default().fg(WORK),
+        ));
+    }
     if let Some(msg) = &app.status {
         spans.push(Span::styled(format!("  {msg}"), Style::default().fg(WAIT)));
     } else {
@@ -181,6 +190,12 @@ fn status(f: &mut Frame, app: &App) {
                 txt("next"),
                 key("f"),
                 txt("full"),
+                key("n"),
+                txt("new"),
+                key("c"),
+                txt("close"),
+                key("x"),
+                txt("rm"),
                 key("r"),
                 txt("reload"),
                 key("q"),
