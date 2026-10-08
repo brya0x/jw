@@ -452,6 +452,150 @@ pub fn done_plan(
     Ok((plan, pr))
 }
 
+/// A service's commands from `[dev]`, expanded for this worktree.
+pub fn dev_commands(cfg: &Config, service: &str, vars: &Vars) -> Result<Vec<String>> {
+    let Some(raw) = cfg.dev.get(service).filter(|r| !r.is_empty()) else {
+        if cfg.dev.is_empty() {
+            bail!("no [dev] services in the config");
+        }
+        let names: Vec<&str> = cfg.dev.keys().map(String::as_str).collect();
+        bail!("unknown service {service:?}; have: {}", names.join(", "));
+    };
+    raw.iter().map(|c| expand(c, vars)).collect()
+}
+
+/// One line for a shell pane that runs all of a service's commands and
+/// stops them all with ctrl+c: `kill 0` takes the subshell's whole group,
+/// where plain `a & b & wait` would leave the background ones running.
+pub fn dev_line(cmds: &[String]) -> String {
+    match cmds {
+        [one] => one.clone(),
+        many => format!("(trap 'kill 0' INT TERM; {} & wait)", many.join(" & ")),
+    }
+}
+
+/// Fails if a port the service uses is taken, naming who holds it: a server
+/// that finds its port taken fails late, from inside the app.
+pub fn check_ports(
+    p: &Project,
+    e: &Entry,
+    service: &str,
+    vars: &Vars,
+    shell: &dyn crate::connectors::Shell,
+    reg: &Registry,
+) -> Result<()> {
+    let mut taken = Vec::new();
+    let raw = p.cfg.dev.get(service).cloned().unwrap_or_default();
+    let mut seen = Vec::new();
+    for svc in raw.iter().flat_map(|c| crate::core::expand::ports_in(c)) {
+        if seen.contains(&svc) {
+            continue;
+        }
+        seen.push(svc.clone());
+        let Some(&port) = vars.ports.get(&svc) else {
+            continue;
+        };
+        let Some(owner) = shell.port_owner(port as u16) else {
+            continue;
+        };
+        taken.push(format!(
+            "{port} ({svc}): {}",
+            describe_owner(e, &owner, reg)
+        ));
+    }
+    if taken.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "port(s) in use, not starting {service}: {}",
+        taken.join("; ")
+    )
+}
+
+/// Who holds a port, in terms of streams when it can.
+fn describe_owner(e: &Entry, o: &crate::connectors::PortOwner, reg: &Registry) -> String {
+    if o.pid == 0 {
+        return "taken by a process jw can't see".into();
+    }
+    let mut who = format!("pid {}", o.pid);
+    if !o.cmdline.is_empty() {
+        who += &format!(" {}", o.cmdline);
+    }
+    if o.cwd.is_empty() {
+        return who;
+    }
+    let inside = |root: &str| {
+        let (dir, root) = (real(&o.cwd), real(root));
+        dir == root || dir.starts_with(&root)
+    };
+    if inside(&e.path) {
+        return format!("{who}, already running in this worktree");
+    }
+    if let Some(other) = reg.entries.iter().find(|x| inside(&x.path)) {
+        return format!("{who}, started from stream {}", other.name);
+    }
+    format!("{who}, in {}", o.cwd)
+}
+
+fn real(p: &str) -> PathBuf {
+    Path::new(p)
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(p))
+}
+
+/// What `info` showed, as label/value rows (internal/commands/info.go).
+pub fn info(
+    p: &Project,
+    e: &Entry,
+    prs: &dyn crate::connectors::PullRequests,
+    shell: &dyn crate::connectors::Shell,
+) -> Vec<(String, String)> {
+    let mut rows = vec![("id".to_string(), e.id.clone())];
+    let source = p
+        .cfg
+        .source
+        .as_ref()
+        .map_or("none, defaults".to_string(), |s| s.display().to_string());
+    rows.push((
+        "project".into(),
+        format!("{}  (config {source})", e.project),
+    ));
+    let mut branch = e.branch.clone();
+    if e.adopted {
+        branch += "  (adopted: existed before jw)";
+    }
+    rows.push(("branch".into(), branch));
+    let mut path = e.path.clone();
+    if !Path::new(&e.path).exists() {
+        path += "  (missing)";
+    }
+    rows.push(("path".into(), path));
+    let base = config::port_base(e.slot);
+    rows.push((
+        "slot".into(),
+        format!("{}  (ports {base}–{})", e.slot, base + 99),
+    ));
+    for (svc, port) in p.cfg.ports_for(e.slot) {
+        let up = if shell.port_owner(port as u16).is_some() {
+            "  listening"
+        } else {
+            ""
+        };
+        rows.push(("port".into(), format!("{svc} {port}{up}")));
+    }
+    let pr = match prs.for_branch(&p.repo.root, &e.branch) {
+        Ok(Some(pr)) => format!("#{} {}  {}", pr.number, pr.status(), pr.url),
+        Ok(None) => "none".into(),
+        Err(_) => "? (gh unavailable)".into(),
+    };
+    rows.push(("pr".into(), pr));
+    if !p.cfg.dev.is_empty() {
+        let svcs: Vec<&str> = p.cfg.dev.keys().map(String::as_str).collect();
+        rows.push(("dev".into(), svcs.join(", ")));
+    }
+    rows
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -678,5 +822,59 @@ mod tests {
         commit(Path::new(&e.path), "later");
         let err = done_plan(&p, &e, &FakePrs(Some(pr))).unwrap_err();
         assert!(err.to_string().contains("not in PR #7"), "{err}");
+    }
+
+    #[test]
+    fn dev_lines() {
+        let cfg: Config = toml::from_str(
+            "[ports]\nweb = 0\n[dev]\nweb = [\"vite --port {port.web}\"]\nboth = [\"a\", \"b\"]\n",
+        )
+        .unwrap();
+        let vars = cfg.vars("x", "main", 2);
+        let web = dev_commands(&cfg, "web", &vars).unwrap();
+        assert_eq!(dev_line(&web), "vite --port 20200");
+        let both = dev_commands(&cfg, "both", &vars).unwrap();
+        assert_eq!(dev_line(&both), "(trap 'kill 0' INT TERM; a & b & wait)");
+        let err = dev_commands(&cfg, "api", &vars).unwrap_err();
+        assert!(err.to_string().contains("have: both, web"), "{err}");
+    }
+
+    struct BusyPorts(Vec<u16>);
+
+    impl crate::connectors::Shell for BusyPorts {
+        fn run(&self, _: &Path, _: &[(String, String)], _: &str) -> Result<String> {
+            Ok(String::new())
+        }
+        fn port_owner(&self, port: u16) -> Option<crate::connectors::PortOwner> {
+            self.0
+                .contains(&port)
+                .then(|| crate::connectors::PortOwner {
+                    pid: 42,
+                    cmdline: "node vite".into(),
+                    cwd: String::new(),
+                })
+        }
+    }
+
+    #[test]
+    fn check_ports_names_the_owner() {
+        let (dir, work) = new_test_repo();
+        let mut p = project(&work, &dir.path().join("wt"));
+        p.cfg
+            .dev
+            .insert("web".into(), vec!["vite --port {port.web}".into()]);
+        let e = Entry {
+            name: "x".into(),
+            slot: 2,
+            ..Entry::default()
+        };
+        let vars = p.cfg.vars("x", "main", 2);
+        let reg = Registry::default();
+        check_ports(&p, &e, "web", &vars, &BusyPorts(vec![]), &reg).unwrap();
+        let err = check_ports(&p, &e, "web", &vars, &BusyPorts(vec![20200]), &reg).unwrap_err();
+        assert!(
+            err.to_string().contains("20200 (web): pid 42 node vite"),
+            "{err}"
+        );
     }
 }

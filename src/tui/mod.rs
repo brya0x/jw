@@ -59,6 +59,15 @@ enum Job {
     },
     /// A finished action with nothing else to do but say so.
     Said(String),
+    /// Type this line into the stream's shell pane.
+    RunInShell {
+        entry: Entry,
+        line: String,
+    },
+    Info {
+        title: String,
+        rows: Vec<(String, String)>,
+    },
     Removed {
         name: String,
         note: Option<String>,
@@ -420,7 +429,10 @@ impl App {
                 self.full = !self.full;
                 self.fit();
             }
-            KeyCode::Char('r') => {
+            KeyCode::Char('r') => self.ask_dev(),
+            KeyCode::Char('S') => self.run_setup(),
+            KeyCode::Char('i') => self.show_info(),
+            KeyCode::Char('R') => {
                 if let Err(e) = self.reload() {
                     self.status = Some(format!("{e:#}"));
                 }
@@ -737,6 +749,132 @@ impl App {
         }
     }
 
+    /// `r`: start a dev service in the stream's shell pane; with several
+    /// services, pick one first.
+    fn ask_dev(&mut self) {
+        let Some(entry) = self.selected().cloned() else {
+            return;
+        };
+        let project = match Project::open(std::path::Path::new(&entry.path)) {
+            Ok(p) => p,
+            Err(e) => {
+                self.status = Some(format!("{e:#}"));
+                return;
+            }
+        };
+        let services: Vec<String> = project.cfg.dev.keys().cloned().collect();
+        match services.as_slice() {
+            [] => self.status = Some("no [dev] services in the config".into()),
+            [one] => self.start_dev(entry, one.clone()),
+            _ => {
+                self.modal = Some(Modal::Pick {
+                    title: format!("Dev · {}", entry.name),
+                    items: services,
+                    cursor: 0,
+                    entry,
+                })
+            }
+        }
+    }
+
+    fn start_dev(&mut self, entry: Entry, service: String) {
+        if let Err(e) = self.shell_pane(&entry) {
+            self.status = Some(e);
+            return;
+        }
+        self.background(format!("checking ports for {service}"), move || {
+            let p = Project::open(std::path::Path::new(&entry.path))?;
+            let stream = Stream::resolve(&entry)?;
+            let vars = stream.vars();
+            let reg = Registry::load(&registry::default_path()?)?;
+            actions::check_ports(
+                &p,
+                &entry,
+                &service,
+                &vars,
+                &crate::connectors::system::System,
+                &reg,
+            )?;
+            let cmds = actions::dev_commands(&p.cfg, &service, &vars)?;
+            Ok(Job::RunInShell {
+                entry,
+                line: actions::dev_line(&cmds),
+            })
+        });
+    }
+
+    /// `S`: re-run the config's setup in the stream's shell pane.
+    fn run_setup(&mut self) {
+        let Some(entry) = self.selected().cloned() else {
+            return;
+        };
+        let line = Stream::resolve(&entry).and_then(|s| actions::setup_line(&s.cfg, &s.vars()));
+        match line {
+            Ok(Some(line)) => self.run_in_shell(&entry, &line),
+            Ok(None) => self.status = Some("no setup in the config".into()),
+            Err(e) => self.status = Some(format!("{e:#}")),
+        }
+    }
+
+    fn show_info(&mut self) {
+        let Some(entry) = self.selected().cloned() else {
+            return;
+        };
+        let open = self.is_open(&entry.id);
+        self.background(format!("reading {}", entry.name), move || {
+            let p = Project::open(std::path::Path::new(&entry.path))?;
+            let prs = crate::connectors::github::Client::default();
+            let mut rows = actions::info(&p, &entry, &prs, &crate::connectors::system::System);
+            let state = if open { "open" } else { "closed" };
+            rows.insert(5, ("stream".into(), state.into()));
+            Ok(Job::Info {
+                title: entry.name,
+                rows,
+            })
+        });
+    }
+
+    /// The stream's shell pane, when it is open and idle at its prompt.
+    fn shell_pane(&self, entry: &Entry) -> Result<PaneId, String> {
+        let pane = self
+            .daemon_panes
+            .iter()
+            .find(|p| p.stream == entry.id && p.role == "shell")
+            .ok_or_else(|| format!("{} has no shell pane open: ↵ opens it", entry.name))?;
+        if let Some(fg) = pane.fg.as_deref()
+            && !SHELLS.contains(&fg)
+        {
+            return Err(format!(
+                "the shell pane of {} is busy running {fg}",
+                entry.name
+            ));
+        }
+        Ok(pane.pane)
+    }
+
+    /// Types a command line into the stream's shell pane and shows it.
+    fn run_in_shell(&mut self, entry: &Entry, line: &str) {
+        let pane = match self.shell_pane(entry) {
+            Ok(p) => p,
+            Err(e) => {
+                self.status = Some(e);
+                return;
+            }
+        };
+        self.send(ClientMsg::Input {
+            pane,
+            bytes: format!("{line}\r").into_bytes(),
+        });
+        if self.active.as_ref().is_some_and(|s| s.entry.id == entry.id) {
+            self.focus = Some("shell".into());
+        } else {
+            self.open_entry(entry.clone(), false);
+            self.focus = Some("shell".into());
+        }
+        self.status = Some(format!("$ {line}"));
+        self.send(ClientMsg::List);
+    }
+
     fn run_sync(&mut self) {
         let Some(entry) = self.selected().cloned() else {
             return;
@@ -803,6 +941,17 @@ impl App {
                 });
             }
             Modal::Close { entry, .. } => self.close(&entry),
+            Modal::Pick {
+                items,
+                cursor,
+                entry,
+                ..
+            } => {
+                if let Some(service) = items.get(cursor).cloned() {
+                    self.start_dev(entry, service);
+                }
+            }
+            Modal::Info { .. } => {}
             Modal::Prompt { entry, text } => {
                 self.status = Some(format!("waiting for {}'s agent to settle…", entry.name));
                 self.send(ClientMsg::Prompt {
@@ -911,6 +1060,8 @@ impl App {
             }
             Job::Failed(e) => self.status = Some(e),
             Job::Said(msg) => self.status = Some(msg),
+            Job::RunInShell { entry, line } => self.run_in_shell(&entry, &line),
+            Job::Info { title, rows } => self.modal = Some(Modal::Info { title, rows }),
             Job::DoneReady {
                 entry,
                 project,

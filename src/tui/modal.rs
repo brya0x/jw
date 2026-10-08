@@ -29,6 +29,18 @@ pub enum Modal {
         plan: RmPlan,
         pr: Pr,
     },
+    /// Pick one of several (dev services).
+    Pick {
+        title: String,
+        items: Vec<String>,
+        cursor: usize,
+        entry: Entry,
+    },
+    /// Read-only rows: info.
+    Info {
+        title: String,
+        rows: Vec<(String, String)>,
+    },
     /// Text for the stream's agent.
     Prompt {
         entry: Entry,
@@ -118,6 +130,22 @@ impl Modal {
                 }
                 Outcome::Stay
             }
+            Modal::Pick { items, cursor, .. } => match k.code {
+                KeyCode::Char('j') | KeyCode::Down => {
+                    *cursor = (*cursor + 1).min(items.len().saturating_sub(1));
+                    Outcome::Stay
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    *cursor = cursor.saturating_sub(1);
+                    Outcome::Stay
+                }
+                KeyCode::Enter => Outcome::Submit,
+                _ => Outcome::Stay,
+            },
+            Modal::Info { .. } => match k.code {
+                KeyCode::Char('q') | KeyCode::Enter => Outcome::Cancel,
+                _ => Outcome::Stay,
+            },
             Modal::Done { .. } => match k.code {
                 KeyCode::Char('y') | KeyCode::Enter => Outcome::Submit,
                 KeyCode::Char('n') => Outcome::Cancel,
@@ -191,6 +219,43 @@ impl Modal {
                 l.push(Line::default());
                 l.push(keys(&[("y", "delete"), ("esc", "keep")]));
                 (format!(" Done with {}? ", entry.name), l)
+            }
+            Modal::Pick {
+                title,
+                items,
+                cursor,
+                ..
+            } => {
+                let mut l = vec![Line::default()];
+                for (i, it) in items.iter().enumerate() {
+                    let on = i == *cursor;
+                    l.push(Line::from(Span::styled(
+                        format!(" {} {it}", if on { "▶" } else { " " }),
+                        if on {
+                            Style::default().fg(FOCUS).add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::default()
+                        },
+                    )));
+                }
+                l.push(Line::default());
+                l.push(keys(&[("j/k", "move"), ("↵", "run"), ("esc", "cancel")]));
+                (format!(" {title} "), l)
+            }
+            Modal::Info { title, rows } => {
+                let mut l = vec![Line::default()];
+                let mut last = "";
+                for (label, value) in rows {
+                    let shown = if label == last { "" } else { label.as_str() };
+                    last = label;
+                    l.push(Line::from(vec![
+                        Span::styled(format!(" {shown:<9}"), Style::default().fg(DIM)),
+                        Span::raw(short_path(value, 52)),
+                    ]));
+                }
+                l.push(Line::default());
+                l.push(keys(&[("esc", "close")]));
+                (format!(" {title} "), l)
             }
             Modal::Prompt { entry, text } => {
                 let l = vec![
@@ -433,13 +498,16 @@ fn short_path(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s;
     }
-    let (head, path) = s.split_once(' ').unwrap_or(("", &s));
-    let keep = max.saturating_sub(head.chars().count() + 2);
+    let (head, path) = match s.split_once(' ') {
+        Some((h, p)) => (format!("{h} "), p),
+        None => (String::new(), s.as_str()),
+    };
+    let keep = max.saturating_sub(head.chars().count() + 1);
     let skip = path.chars().count().saturating_sub(keep);
     let tail: String = path.chars().skip(skip).collect();
     // Cut at a directory boundary rather than inside a name.
     let tail = tail.find('/').map_or(tail.as_str(), |i| &tail[i..]);
-    format!("{head} …{tail}")
+    format!("{head}…{tail}")
 }
 
 #[cfg(test)]
@@ -452,5 +520,9 @@ mod tests {
         let got = short_path("worktree /very/long/path/to/myapp-wt/docs", 30);
         assert_eq!(got, "worktree …/to/myapp-wt/docs");
         assert!(got.chars().count() <= 30);
+        assert_eq!(
+            short_path("/very/long/path/to/myapp-wt/docs", 20),
+            "…/to/myapp-wt/docs"
+        );
     }
 }
