@@ -1,0 +1,15 @@
+[package]
+name = "jw"
+version = "0.0.0"
+edition = "2024"
+license-file = "LICENSE"
+description = "Worktree streams in a TUI that is its own terminal multiplexer"
+publish = false
+
+# The Rust rewrite lives next to the Go code until it reaches parity;
+# see docs/specs/rust-tui.md.
+[[bin]]
+name = "jw"
+path = "src/main.rs"
+
+[dependencies]

@@ -44,6 +44,32 @@ jobs:
       - name: go test
         run: go test -race ./...
 
+  # The Rust rewrite (docs/specs/rust-tui.md) is unix only, like its runtime:
+  # PTYs and a unix socket.
+  rust:
+    name: rust (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt
+        if: runner.os == 'Linux'
+        run: cargo fmt --check
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: cargo test
+        run: cargo test --locked
+
   # The Windows side of the system connector must keep compiling. The test
   # suite itself uses sh scripts as fake tools, so it only runs on Unix.
   windows:
