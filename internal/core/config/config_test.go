@@ -75,6 +75,37 @@ func TestUnknownKeyFails(t *testing.T) {
 	}
 }
 
+func TestRustOnlyKeysAreIgnored(t *testing.T) {
+	repo, _ := setup(t)
+	writeFile(t, filepath.Join(repo, ".jw.toml"), `
+[tui]
+leader = "C-Space"
+
+[layout]
+editor = "nvim"
+split  = "down"
+ratio  = 0.6
+
+[layout.a]
+run = "editor"
+`)
+	c, err := Load(repo, "x", "myapp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Layout.Editor != "nvim" {
+		t.Fatalf("editor should still be read, got %q", c.Layout.Editor)
+	}
+}
+
+func TestUnknownLayoutKeyStillFailsAtTopLevel(t *testing.T) {
+	repo, _ := setup(t)
+	writeFile(t, filepath.Join(repo, ".jw.toml"), `layuot = "x"`)
+	if _, err := Load(repo, "x", "myapp"); err == nil {
+		t.Fatal("a misspelled top-level key must still fail")
+	}
+}
+
 func TestUnknownPlaceholderFails(t *testing.T) {
 	repo, _ := setup(t)
 	writeFile(t, filepath.Join(repo, ".jw.toml"), `

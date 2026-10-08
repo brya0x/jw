@@ -138,15 +138,24 @@ func decodeFile(path string) (*Config, error) {
 		}
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
-	if extra := md.Undecoded(); len(extra) > 0 {
-		keys := make([]string, len(extra))
-		for i, k := range extra {
-			keys[i] = k.String()
+	var keys []string
+	for _, k := range md.Undecoded() {
+		if !rustOnly(k) {
+			keys = append(keys, k.String())
 		}
+	}
+	if len(keys) > 0 {
 		return nil, fmt.Errorf("%s: unknown keys: %s", path, strings.Join(keys, ", "))
 	}
 	c.Source = path
 	return &c, nil
+}
+
+// rustOnly reports keys that only the Rust TUI reads (docs/specs/rust-tui.md):
+// the split tree under [layout] and the [tui] table. Go skips them while both
+// binaries share the same config files.
+func rustOnly(k toml.Key) bool {
+	return k[0] == "tui" || (k[0] == "layout" && len(k) > 1)
 }
 
 func (c *Config) withDefaults(repoRoot, project string) (*Config, error) {
