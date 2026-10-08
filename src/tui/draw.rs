@@ -36,6 +36,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if let Some(view) = &mut app.view {
         match view {
             super::View::Diff(d) => d.draw(f, view_area),
+            super::View::Md(m) => m.draw(f, view_area),
         }
         if let Some(m) = &app.modal {
             m.draw(f);
@@ -247,6 +248,8 @@ fn status(f: &mut Frame, app: &App) {
                 txt("done"),
                 key("D"),
                 txt("diff"),
+                key("M"),
+                txt("read"),
                 key("p"),
                 txt("prompt"),
                 key("r"),

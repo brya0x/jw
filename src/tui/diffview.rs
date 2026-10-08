@@ -350,9 +350,9 @@ impl DiffView {
             Item::Row(f, h, r) => {
                 let hunk = &self.files[f].hunks[h];
                 if self.split {
-                    split_line(&diff::split_rows(hunk)[r], width)
+                    split_line(&diff::split_rows(hunk)[r], width, &self.files[f].path)
                 } else {
-                    uni_line(&hunk.lines[r], width)
+                    uni_line(&hunk.lines[r], width, &self.files[f].path)
                 }
             }
         }
@@ -361,7 +361,7 @@ impl DiffView {
 
 /// One side-by-side row: old on the left, new on the right, changed words
 /// of a paired change painted brighter.
-fn split_line(row: &diff::Row, width: u16) -> Line<'static> {
+fn split_line(row: &diff::Row, width: u16, path: &str) -> Line<'static> {
     let half = (width.saturating_sub(1) / 2) as usize;
     let (mut lw, mut rw) = (Vec::new(), Vec::new());
     if let (Some(l), Some(r)) = (row.left, row.right)
@@ -370,9 +370,9 @@ fn split_line(row: &diff::Row, width: u16) -> Line<'static> {
     {
         (lw, rw) = diff::word_changes(&expand_tabs(&l.text), &expand_tabs(&r.text));
     }
-    let mut spans = side(row.left, half, &lw, true);
+    let mut spans = side(row.left, half, &lw, true, path);
     spans.push(Span::styled("│", Style::default().fg(LINE)));
-    spans.extend(side(row.right, half, &rw, false));
+    spans.extend(side(row.right, half, &rw, false, path));
     Line::from(spans)
 }
 
@@ -381,9 +381,10 @@ fn side(
     width: usize,
     words: &[diff::Span],
     old: bool,
+    path: &str,
 ) -> Vec<Span<'static>> {
     let Some(l) = line else {
-        // Nothing on this side: a hatched gap, as GitHub greys it out.
+        // Nothing on this side: left blank, as GitHub greys it out.
         return vec![Span::styled(" ".repeat(width), Style::default().bg(BG))];
     };
     let no = if old { l.old_no } else { l.new_no };
@@ -401,11 +402,11 @@ fn side(
         Span::styled(gutter, Style::default().fg(DIM).bg(bg)),
         Span::styled(" ", Style::default().bg(bg)),
     ];
-    spans.extend(marked(&l.text, text_w, words, bg, word_bg));
+    spans.extend(marked(&l.text, text_w, words, bg, word_bg, path));
     spans
 }
 
-fn uni_line(l: &diff::Line, width: u16) -> Line<'static> {
+fn uni_line(l: &diff::Line, width: u16, path: &str) -> Line<'static> {
     let (bg, sign) = match l.kind {
         Kind::Del => (DEL_BG, "-"),
         Kind::Add => (ADD_BG, "+"),
@@ -415,7 +416,7 @@ fn uni_line(l: &diff::Line, width: u16) -> Line<'static> {
     let gutter = format!("{:>4} {:>4} {sign} ", num(l.old_no), num(l.new_no));
     let text_w = (width as usize).saturating_sub(gutter.chars().count());
     let mut spans = vec![Span::styled(gutter, Style::default().fg(DIM).bg(bg))];
-    spans.extend(marked(&l.text, text_w, &[], bg, bg));
+    spans.extend(marked(&l.text, text_w, &[], bg, bg, path));
     Line::from(spans)
 }
 
@@ -427,39 +428,50 @@ fn marked(
     words: &[diff::Span],
     bg: Color,
     word_bg: Color,
+    path: &str,
 ) -> Vec<Span<'static>> {
     // Offsets in `words` are into the tab-expanded text, like this one.
     let text = expand_tabs(text);
-    let mut spans = Vec::new();
+    let in_words = |at: usize| words.iter().any(|&(s, e)| s <= at && at < e);
+    // Syntax colours give the foreground, the diff gives the background:
+    // walk the highlighted pieces and cut them again where a changed word
+    // starts or ends.
+    let mut spans: Vec<Span<'static>> = Vec::new();
     let mut used = 0;
     let mut at = 0;
-    let mut cuts: Vec<(usize, usize, bool)> = Vec::new();
-    for &(s, e) in words {
-        let (s, e) = (s.min(text.len()), e.min(text.len()));
-        if s > at {
-            cuts.push((at, s, false));
+    'outer: for piece in crate::view::highlight::highlight_line(&text, path) {
+        let fg = piece.style.fg.unwrap_or(FG);
+        let mut run = String::new();
+        let mut run_changed = None;
+        for c in piece.content.chars() {
+            if used >= width {
+                break 'outer;
+            }
+            let changed = in_words(at);
+            if run_changed.is_some_and(|r| r != changed) {
+                let bg = if run_changed == Some(true) {
+                    word_bg
+                } else {
+                    bg
+                };
+                spans.push(Span::styled(
+                    std::mem::take(&mut run),
+                    Style::default().fg(fg).bg(bg),
+                ));
+            }
+            run_changed = Some(changed);
+            run.push(c);
+            at += c.len_utf8();
+            used += 1;
         }
-        if e > s {
-            cuts.push((s, e, true));
+        if !run.is_empty() {
+            let bg = if run_changed == Some(true) {
+                word_bg
+            } else {
+                bg
+            };
+            spans.push(Span::styled(run, Style::default().fg(fg).bg(bg)));
         }
-        at = e;
-    }
-    if at < text.len() {
-        cuts.push((at, text.len(), false));
-    }
-    for (s, e, changed) in cuts {
-        if used >= width {
-            break;
-        }
-        let Some(piece) = text.get(s..e) else {
-            continue;
-        };
-        let piece: String = piece.chars().take(width - used).collect();
-        used += piece.chars().count();
-        let style = Style::default()
-            .fg(FG)
-            .bg(if changed { word_bg } else { bg });
-        spans.push(Span::styled(piece, style));
     }
     if used < width {
         spans.push(Span::styled(

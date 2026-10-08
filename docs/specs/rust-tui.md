@@ -35,8 +35,8 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 | Pane env | the same JW_* that are passed today via `herdr --env` (herdr.go:156) + `JW_PANE_ID` (replaces `HERDR_PANE_ID`, herdr.go:271) |
 | Stack | ratatui (its crossterm re-export), portable-pty, vt100, serde/toml/serde_json, anyhow. vt100 screens are drawn by our own widget (`src/tui/draw.rs`) instead of tui-term, to keep one vt100 version |
 | Animations | tachyonfx (fade, slide, sweep, dissolve over ratatui buffers); `[tui] animations = true\|false` |
-| Diff viewer | `git diff <base>...HEAD` + working tree, parsed into hunks; highlighting with syntect |
-| MD reader | pulldown-cmark → styled ratatui `Text`; code blocks with syntect |
+| Diff viewer | `src/diff.rs` (model: `git diff -M --merge-base origin/<base>` + untracked files, split rows, word ranges) and `src/tui/diffview.rs` (drawing, keys); highlighting with syntect (`src/view/highlight.rs`) |
+| MD reader | `src/view/md.rs` (pulldown-cmark → wrapped ratatui `Line`s + heading index) and `src/tui/mdview.rs` (contents list, keys). `M` picks a `.md` of the stream; `↵` on one in the diff opens it and `q` goes back to the diff |
 
 ## Acceptance
 
@@ -157,6 +157,7 @@ Action output (sync, setup, done) — temporary pane at the bottom of the stream
 - RISK-4 **Daemon crash = all terminals die.** REQ-15 limits the damage (resume), but the in-flight state is lost.
 - RISK-5 **Concurrent writes to `registry.json`** between Go and Rust during the parallel phase, with no lock. Last writer wins. Accepted until the cutover.
 - RISK-7 **`✻ working` / `? waiting` (REQ-18) are a heuristic:** without herdr there's no agent API. Infer them from recent output activity, the bell (BEL) and the window title (OSC 0/2, which Claude Code updates). They can be wrong; worst case they show `●` and nothing else.
+- RISK-13 **syntect's bundled grammars have no TypeScript or TOML**: ts/tsx use the JavaScript grammar, TOML shows plain. Adding grammars (a sublime-syntax set) is possible later, at some binary size.
 - RISK-12 **dev and setup type into the shell pane** (refused while it runs something else) instead of a pane of their own. Several commands of one service run as `(trap 'kill 0' INT TERM; a & b & wait)`, so ctrl+c stops them together. A `[layout]` leaf `run = "dev:<svc>"` gives a service its own pane instead.
 - RISK-11 **Setup runs in the shell pane** of a new stream (`printf` of the line, the commands, then `exec $SHELL`) instead of before opening, as Go did. Its output stays visible, but a failed setup doesn't stop the stream from opening; the shell is right there to retry.
 - RISK-6 **Scope creep toward tmux:** copy mode, text selection, search in scrollback. v1 scope: scroll with the wheel and plain mouse selection; nothing else.

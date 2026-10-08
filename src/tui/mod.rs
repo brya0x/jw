@@ -7,6 +7,7 @@
 mod diffview;
 mod draw;
 mod keys;
+mod mdview;
 mod modal;
 
 use std::collections::{BTreeMap, VecDeque};
@@ -28,7 +29,7 @@ use crate::layout::{Node, Rect};
 use crate::proto::{ClientMsg, DaemonMsg, PaneId, PaneInfo};
 use crate::stream::Stream;
 
-use modal::{Modal, NewForm, Outcome};
+use modal::{Modal, NewForm, Outcome, PickFor};
 
 use keys::Leader;
 
@@ -74,6 +75,11 @@ enum Job {
         dir: String,
         files: Vec<crate::diff::File>,
     },
+    /// The Markdown files of a stream, to pick one to read.
+    MdFiles {
+        entry: Entry,
+        files: Vec<String>,
+    },
     /// A project was added (and maybe given a drafted config): create its
     /// first stream.
     Added {
@@ -98,6 +104,7 @@ pub enum Mode {
 /// What the stage shows instead of the panes.
 pub enum View {
     Diff(diffview::DiffView),
+    Md(mdview::MdView),
 }
 
 /// One row of the sidebar.
@@ -420,15 +427,30 @@ impl App {
             }
             return;
         }
-        if let Some(View::Diff(d)) = &mut self.view {
-            match d.key(k) {
-                diffview::Action::None => {}
-                diffview::Action::Close => self.view = None,
-                diffview::Action::Read(path) => {
-                    self.status = Some(format!("the reader for {path} comes with M"));
+        match &mut self.view {
+            Some(View::Diff(d)) => {
+                match d.key(k) {
+                    diffview::Action::None => {}
+                    diffview::Action::Close => self.view = None,
+                    diffview::Action::Read(path) => {
+                        if let Some(View::Diff(d)) = self.view.take() {
+                            let dir = d.dir.clone();
+                            self.read_file(&dir, &path, Some(Box::new(d)));
+                        }
+                    }
                 }
+                return;
             }
-            return;
+            Some(View::Md(m)) => {
+                if m.key(k)
+                    && let Some(View::Md(m)) = self.view.take()
+                {
+                    // Back to the diff it was opened from, if any.
+                    self.view = m.back.map(|d| View::Diff(*d));
+                }
+                return;
+            }
+            None => {}
         }
         if self.leader.matches(&k) {
             self.mode = match self.mode {
@@ -490,6 +512,7 @@ impl App {
             KeyCode::Char('x') => self.ask_rm(),
             KeyCode::Char('s') => self.run_sync(),
             KeyCode::Char('D') => self.open_diff(),
+            KeyCode::Char('M') => self.ask_read(),
             KeyCode::Char('d') => self.ask_done(),
             KeyCode::Char('p') => self.ask_prompt(),
             _ => {}
@@ -854,6 +877,7 @@ impl App {
                     items: services,
                     cursor: 0,
                     entry,
+                    purpose: PickFor::Dev,
                 })
             }
         }
@@ -978,6 +1002,49 @@ impl App {
         self.send(ClientMsg::List);
     }
 
+    /// `M`: pick a Markdown file of the stream (or free session) to read.
+    fn ask_read(&mut self) {
+        let Some(entry) = self.selected().cloned() else {
+            return;
+        };
+        self.background(format!("listing {}'s Markdown", entry.name), move || {
+            let dir = std::path::Path::new(&entry.path);
+            let out = std::process::Command::new("git")
+                .args(["ls-files", "-co", "--exclude-standard", "--", "*.md"])
+                .current_dir(dir)
+                .output()?;
+            let mut files: Vec<String> = if out.status.success() {
+                String::from_utf8_lossy(&out.stdout)
+                    .lines()
+                    .map(str::to_string)
+                    .collect()
+            } else {
+                // Not a repository (a free session): the directory's own .md files.
+                std::fs::read_dir(dir)?
+                    .filter_map(|e| e.ok()?.file_name().into_string().ok())
+                    .filter(|n| n.ends_with(".md"))
+                    .collect()
+            };
+            files.sort();
+            Ok(Job::MdFiles { entry, files })
+        });
+    }
+
+    /// Opens `file` (relative to `dir`) in the reader; `back` is the diff
+    /// to return to.
+    fn read_file(&mut self, dir: &str, file: &str, back: Option<Box<diffview::DiffView>>) {
+        match std::fs::read_to_string(std::path::Path::new(dir).join(file)) {
+            Ok(src) => {
+                self.view = Some(View::Md(mdview::MdView::new(file.to_string(), src, back)));
+                self.mode = Mode::Nav;
+            }
+            Err(e) => {
+                self.status = Some(format!("{file}: {e}"));
+                self.view = back.map(|d| View::Diff(*d));
+            }
+        }
+    }
+
     /// `D`: the stream's changes against its base, in the diff viewer.
     fn open_diff(&mut self) {
         let Some(entry) = self.selected_repo_stream("diff") else {
@@ -1064,12 +1131,13 @@ impl App {
                 items,
                 cursor,
                 entry,
+                purpose,
                 ..
-            } => {
-                if let Some(service) = items.get(cursor).cloned() {
-                    self.start_dev(entry, service);
-                }
-            }
+            } => match (purpose, items.get(cursor).cloned()) {
+                (PickFor::Dev, Some(service)) => self.start_dev(entry, service),
+                (PickFor::Read, Some(file)) => self.read_file(&entry.path, &file, None),
+                _ => {}
+            },
             Modal::Info { .. } => {}
             Modal::NewFree {
                 fields,
@@ -1249,6 +1317,19 @@ impl App {
             Job::Said(msg) => self.status = Some(msg),
             Job::RunInShell { entry, line } => self.run_in_shell(&entry, &line),
             Job::Info { title, rows } => self.modal = Some(Modal::Info { title, rows }),
+            Job::MdFiles { entry, files } => match files.as_slice() {
+                [] => self.status = Some(format!("{} has no Markdown files", entry.name)),
+                [one] => self.read_file(&entry.path, &one.clone(), None),
+                _ => {
+                    self.modal = Some(Modal::Pick {
+                        title: format!("Read · {}", entry.name),
+                        items: files,
+                        cursor: 0,
+                        entry,
+                        purpose: PickFor::Read,
+                    })
+                }
+            },
             Job::Diff { title, dir, files } => {
                 self.view = Some(View::Diff(diffview::DiffView::new(title, dir, files)));
                 self.mode = Mode::Nav;

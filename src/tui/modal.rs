@@ -29,12 +29,13 @@ pub enum Modal {
         plan: RmPlan,
         pr: Pr,
     },
-    /// Pick one of several (dev services).
+    /// Pick one of several: a dev service, a Markdown file.
     Pick {
         title: String,
         items: Vec<String>,
         cursor: usize,
         entry: Entry,
+        purpose: PickFor,
     },
     /// Read-only rows: info.
     Info {
@@ -71,6 +72,12 @@ pub enum Modal {
         typed: String,
         error: Option<String>,
     },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PickFor {
+    Dev,
+    Read,
 }
 
 pub struct NewForm {
@@ -308,7 +315,7 @@ impl Modal {
                     )));
                 }
                 l.push(Line::default());
-                l.push(keys(&[("j/k", "move"), ("↵", "run"), ("esc", "cancel")]));
+                l.push(keys(&[("j/k", "move"), ("↵", "open"), ("esc", "cancel")]));
                 (format!(" {title} "), l)
             }
             Modal::Info { title, rows } => {
