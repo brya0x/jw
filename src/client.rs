@@ -84,6 +84,14 @@ impl Client {
         read_frame(&mut self.stream)
     }
 
+    /// A second handle on the same connection, so one thread can read while
+    /// another writes.
+    pub fn try_clone(&self) -> io::Result<Self> {
+        Ok(Self {
+            stream: self.stream.try_clone()?,
+        })
+    }
+
     pub fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
         self.stream.set_read_timeout(timeout)
     }

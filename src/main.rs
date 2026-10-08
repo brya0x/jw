@@ -6,10 +6,13 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
-        None => {
-            eprintln!("jw: the TUI is not built yet; see docs/specs/rust-tui.md");
-            ExitCode::FAILURE
-        }
+        None => match jw::tui::run() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("jw: {e:#}");
+                ExitCode::FAILURE
+            }
+        },
         Some("--version" | "-V") => {
             println!("jw {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS

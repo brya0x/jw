@@ -32,7 +32,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 | Session | `~/.local/state/jw/session.json`: open streams + layout + per-pane role/cmd, so they can be restored |
 | Layout | `[layout]` in the project TOML: tree of `split = "down"\|"right"`, `ratio`, children `a`/`b`, leaves `run = "editor"\|"agent"\|"shell"\|"dev:<svc>"\|"<cmd>"`. The existing `editor` key stays. The default reproduces terminal.go:46-138. Go ignores the tree and `[tui]` (`rustOnly`, config.go) |
 | Pane env | the same JW_* that are passed today via `herdr --env` (herdr.go:156) + `JW_PANE_ID` (replaces `HERDR_PANE_ID`, herdr.go:271) |
-| Stack | ratatui + crossterm, portable-pty, vt100, tui-term, serde/toml/serde_json, anyhow |
+| Stack | ratatui (its crossterm re-export), portable-pty, vt100, serde/toml/serde_json, anyhow. vt100 screens are drawn by our own widget (`src/tui/draw.rs`) instead of tui-term, to keep one vt100 version |
 | Animations | tachyonfx (fade, slide, sweep, dissolve over ratatui buffers); `[tui] animations = true\|false` |
 | Diff viewer | `git diff <base>...HEAD` + working tree, parsed into hunks; highlighting with syntect |
 | MD reader | pulldown-cmark → styled ratatui `Text`; code blocks with syntect |
@@ -192,10 +192,15 @@ P0 is the PR that adds this file.
 - OPEN-3 → keep `jw prompt` and `jw new --task` as socket clients.
 - OPEN-4 → unix only; `shell_windows.go` is not ported.
 
+## Open questions
+
+- OPEN-5 `[tui]` lives in the project TOML, but the leader and animations are global to the client. Until there is a global file, the leader comes from `JW_LEADER` (`C-Space` by default). A global `~/.config/jw/tui.toml` would be read by Go's personal-config glob, so it needs a name or place Go skips.
+
 ## Corrections
 
 - The first proposal kept the CLI underneath the TUI; the user chose TUI only.
 - The first proposal assumed the TUI would be a client of herdr; the user asked for it to replace herdr.
+- The spec put tui-term in the stack; P5 draws vt100 screens itself (see Interfaces, Stack).
 - RISK-2 assumed `[layout]` was a new table. It already exists with `editor`, so Go keeps decoding `layout.editor` and ignores only the nested keys and `[tui]`.
 
 ## Tests
