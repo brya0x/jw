@@ -9,6 +9,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 
 use super::expand::{Vars, expand};
+use crate::layout::{Dir, Node};
 
 /// Every slot owns a block of ports: PORT_BLOCK_START + slot*PORT_BLOCK_SIZE + offset.
 pub const PORT_BLOCK_START: u32 = 20000;
@@ -63,11 +64,33 @@ pub struct AgentCmd {
     pub resume: String,
 }
 
-/// The split tree joins this table in P4 (docs/specs/rust-tui.md).
+/// `editor` is shared with Go; the rest is the split tree only Rust reads
+/// (crate::layout), written inline in the table.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Layout {
     pub editor: String,
+    pub split: Option<Dir>,
+    pub ratio: Option<f32>,
+    pub a: Option<Box<Node>>,
+    pub b: Option<Box<Node>>,
+    pub run: Option<String>,
+}
+
+impl Layout {
+    /// The configured tree, or the default one when `[layout]` has none (REQ-8).
+    pub fn tree(&self) -> Node {
+        if self.split.is_none() && self.run.is_none() {
+            return Node::default_tree();
+        }
+        Node {
+            split: self.split,
+            ratio: self.ratio,
+            a: self.a.clone(),
+            b: self.b.clone(),
+            run: self.run.clone(),
+        }
+    }
 }
 
 /// Rust-only settings; the Go binary skips this table.
@@ -219,6 +242,10 @@ impl Config {
         }
         check("branch", &self.branch)?;
         check("layout.editor", &self.layout.editor)?;
+        self.layout
+            .tree()
+            .validate()
+            .map_err(|e| anyhow!("{src}: {e}"))?;
         for (i, s) in self.setup.iter().enumerate() {
             check(&format!("setup[{i}]"), s)?;
         }
@@ -494,6 +521,20 @@ mod tests {
         let c = repo_file(&env, "[ports]\nweb = 0\napi = 3\n").unwrap();
         let p = c.ports_for(4);
         assert_eq!((p["web"], p["api"]), (20400, 20403));
+    }
+
+    #[test]
+    fn layout_tree_or_default() {
+        let env = setup();
+        let c = repo_file(&env, "").unwrap();
+        assert_eq!(c.layout.tree(), Node::default_tree());
+        let c = repo_file(
+            &env,
+            "[layout]\neditor = \"nvim\"\nsplit = \"right\"\na = { run = \"agent\" }\nb = { run = \"shell\" }\n",
+        )
+        .unwrap();
+        assert_eq!(c.layout.tree().leaves().len(), 2);
+        assert!(repo_file(&env, "[layout]\nsplit = \"right\"\n").is_err());
     }
 
     /// A config the Go binary accepts, including the keys only Rust reads.

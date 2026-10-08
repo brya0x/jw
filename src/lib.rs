@@ -9,4 +9,6 @@ pub mod client;
 pub mod connectors;
 pub mod core;
 pub mod daemon;
+pub mod layout;
 pub mod proto;
+pub mod stream;

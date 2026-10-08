@@ -20,7 +20,7 @@ use std::thread;
 use anyhow::{Context, Result, bail};
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
-use crate::proto::{ClientMsg, DaemonMsg, PaneId, read_frame, write_frame};
+use crate::proto::{ClientMsg, DaemonMsg, PaneId, PaneInfo, read_frame, write_frame};
 
 /// Lines of scrollback each pane keeps.
 const SCROLLBACK: usize = 10_000;
@@ -191,6 +191,18 @@ impl Daemon {
                 }
             }
             ClientMsg::Detach => self.unsubscribe(client),
+            ClientMsg::List => {
+                let panes = lock(&self.panes)
+                    .iter()
+                    .map(|(id, p)| PaneInfo {
+                        pane: *id,
+                        stream: p.stream.clone(),
+                        role: p.role.clone(),
+                        exited: lock(&p.state).exited,
+                    })
+                    .collect();
+                let _ = tx.send(DaemonMsg::Panes { panes });
+            }
             ClientMsg::Input { pane, bytes } => {
                 let pane = self.pane(pane)?;
                 let mut io = lock(&pane.io);

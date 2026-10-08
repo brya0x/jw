@@ -1,6 +1,6 @@
 //! Wire format between the TUI client and the daemon (docs/specs/rust-tui.md,
 //! "Protocol"): each frame is a big-endian u32 length followed by that many
-//! bytes of JSON. Open/Close/Prompt/State arrive in later parts.
+//! bytes of JSON. Open/Close/Prompt arrive in later parts.
 
 use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
@@ -47,6 +47,18 @@ pub enum ClientMsg {
     Kill {
         pane: PaneId,
     },
+    /// Which panes exist, for every stream: answered with `Panes`.
+    List,
+}
+
+/// One pane as `List` reports it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PaneInfo {
+    pub pane: PaneId,
+    pub stream: String,
+    pub role: String,
+    /// The exit status once its process ended.
+    pub exited: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -72,6 +84,9 @@ pub enum DaemonMsg {
     },
     Spawned {
         pane: PaneId,
+    },
+    Panes {
+        panes: Vec<PaneInfo>,
     },
     Error {
         msg: String,

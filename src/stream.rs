@@ -1,0 +1,213 @@
+//! What opening a stream means: which panes to start, with which command,
+//! directory and environment (REQ-7, REQ-8). Port of the stream half of
+//! internal/commands/open.go and project.go (jwEnv); the daemon then starts
+//! what this returns.
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Result, bail};
+
+use crate::connectors::git::Repo;
+use crate::core::config::{self, Config};
+use crate::core::expand::{Vars, env_name, expand};
+use crate::core::registry::Entry;
+use crate::layout::Node;
+
+/// A stream resolved against its project's config, ready to open.
+#[derive(Debug, Clone)]
+pub struct Stream {
+    pub entry: Entry,
+    pub cfg: Config,
+    /// The default branch of origin, for `{base}`.
+    pub base: String,
+    pub tree: Node,
+}
+
+/// One pane to start: `cmd` runs through `sh -c`, `None` is a plain shell.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PaneSpec {
+    pub role: String,
+    pub cmd: Option<String>,
+    pub cwd: PathBuf,
+    pub env: BTreeMap<String, String>,
+}
+
+impl Stream {
+    /// Finds the project of `entry` from its worktree and loads its config.
+    pub fn resolve(entry: &Entry) -> Result<Self> {
+        let repo = Repo::open(Path::new(&entry.path))?;
+        let cfg = config::load(&repo.root, &repo.remote, &entry.project)?;
+        let base = repo.default_branch()?;
+        let tree = cfg.layout.tree();
+        Ok(Self {
+            entry: entry.clone(),
+            cfg,
+            base,
+            tree,
+        })
+    }
+
+    pub fn vars(&self) -> Vars {
+        self.cfg.vars(&self.entry.name, &self.base, self.entry.slot)
+    }
+
+    /// The JW_* variables every pane of the stream gets.
+    pub fn env(&self) -> BTreeMap<String, String> {
+        let e = &self.entry;
+        let mut env = BTreeMap::from([
+            ("JW_ID".to_string(), e.id.clone()),
+            ("JW_NAME".to_string(), e.name.clone()),
+            ("JW_PROJECT".to_string(), e.project.clone()),
+            ("JW_SLOT".to_string(), e.slot.to_string()),
+            (
+                "JW_PORT_BASE".to_string(),
+                config::port_base(e.slot).to_string(),
+            ),
+        ]);
+        for (svc, port) in self.vars().ports {
+            env.insert(env_name(&svc), port.to_string());
+        }
+        env
+    }
+
+    /// One spec per leaf of the layout, in tree order.
+    pub fn panes(&self) -> Result<Vec<PaneSpec>> {
+        let vars = self.vars();
+        let env = self.env();
+        self.tree
+            .leaves()
+            .into_iter()
+            .map(|leaf| {
+                Ok(PaneSpec {
+                    cmd: self.command(&leaf.run, &vars)?,
+                    role: leaf.role,
+                    cwd: PathBuf::from(&self.entry.path),
+                    env: env.clone(),
+                })
+            })
+            .collect()
+    }
+
+    /// What a leaf's `run` starts: `editor`, `agent`, `shell`, `dev:<svc>`,
+    /// or any other command line, with placeholders expanded.
+    fn command(&self, run: &str, vars: &Vars) -> Result<Option<String>> {
+        let line = match run {
+            "shell" => return Ok(None),
+            "editor" => self.cfg.layout.editor.clone(),
+            "agent" => self.agent_command()?,
+            _ => match run.strip_prefix("dev:") {
+                Some(svc) => {
+                    let Some(cmds) = self.cfg.dev.get(svc) else {
+                        bail!("layout runs dev:{svc}, but [dev] has no {svc}");
+                    };
+                    // Several commands for one service run side by side,
+                    // like `jw dev` did with splits.
+                    cmds.join(" & ") + if cmds.len() > 1 { " & wait" } else { "" }
+                }
+                None => run.to_string(),
+            },
+        };
+        Ok(Some(expand(&line, vars)?))
+    }
+
+    /// The agent resumes its conversation in a worktree that had one before.
+    fn agent_command(&self) -> Result<String> {
+        let agents = &self.cfg.agent;
+        let cmd = match agents.default.as_str() {
+            "codex" => &agents.codex,
+            _ => &agents.claude,
+        };
+        let line = if self.entry.opened {
+            &cmd.resume
+        } else {
+            &cmd.start
+        };
+        if line.trim().is_empty() {
+            bail!("empty agent command for {}", agents.default);
+        }
+        Ok(line.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::layout::Dir;
+
+    fn stream(opened: bool) -> Stream {
+        let mut cfg: Config = toml::from_str(
+            "[ports]\nweb = 0\napi = 1\n[dev]\nweb = [\"vite --port {port.web}\"]\n",
+        )
+        .unwrap();
+        cfg.layout.editor = "nvim -c 'DiffviewOpen origin/{base}...HEAD'".into();
+        cfg.agent.default = "claude".into();
+        cfg.agent.claude.start = "claude".into();
+        cfg.agent.claude.resume = "claude --continue".into();
+        Stream {
+            entry: Entry {
+                id: "id-1".into(),
+                name: "web".into(),
+                project: "myapp".into(),
+                path: "/wt/web".into(),
+                slot: 3,
+                opened,
+                ..Entry::default()
+            },
+            cfg,
+            base: "trunk".into(),
+            tree: Node::default_tree(),
+        }
+    }
+
+    #[test]
+    fn default_panes() {
+        let panes = stream(false).panes().unwrap();
+        let got: Vec<(&str, Option<&str>)> = panes
+            .iter()
+            .map(|p| (p.role.as_str(), p.cmd.as_deref()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("editor", Some("nvim -c 'DiffviewOpen origin/trunk...HEAD'")),
+                ("agent", Some("claude")),
+                ("shell", None),
+            ]
+        );
+        assert_eq!(panes[0].cwd, PathBuf::from("/wt/web"));
+    }
+
+    #[test]
+    fn env_has_the_jw_variables() {
+        let env = stream(false).env();
+        assert_eq!(env["JW_NAME"], "web");
+        assert_eq!(env["JW_PROJECT"], "myapp");
+        assert_eq!(env["JW_SLOT"], "3");
+        assert_eq!(env["JW_PORT_BASE"], "20300");
+        assert_eq!(env["JW_PORT_API"], "20301");
+    }
+
+    #[test]
+    fn opened_stream_resumes_the_agent() {
+        let panes = stream(true).panes().unwrap();
+        assert_eq!(panes[1].cmd.as_deref(), Some("claude --continue"));
+    }
+
+    #[test]
+    fn dev_leaf_runs_the_service() {
+        let mut s = stream(false);
+        s.tree = Node::split(
+            Dir::Right,
+            0.5,
+            Node::leaf("dev:web"),
+            Node::leaf("dev:api"),
+        );
+        assert!(s.panes().is_err(), "api has no dev command");
+        s.tree = Node::leaf("dev:web");
+        assert_eq!(
+            s.panes().unwrap()[0].cmd.as_deref(),
+            Some("vite --port 20300")
+        );
+    }
+}

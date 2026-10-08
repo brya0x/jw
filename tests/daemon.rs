@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use jw::client::Client;
 use jw::daemon::pidfile;
-use jw::proto::{ClientMsg, DaemonMsg, PaneId};
+use jw::proto::{ClientMsg, DaemonMsg, PaneId, PaneInfo};
 
 const EXE: &str = env!("CARGO_BIN_EXE_jw");
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -165,6 +165,29 @@ fn attach_only_sends_the_streams_panes_and_detach_stops_output() {
         watcher.recv().is_err(),
         "a detached client must get nothing"
     );
+}
+
+#[test]
+fn list_reports_every_pane() {
+    let d = Daemon::start();
+    let mut c = d.client();
+    let a = spawn(&mut c, "a", "cat", 80, 24);
+    let b = spawn(&mut c, "b", "cat", 80, 24);
+
+    let mut other = d.client();
+    other.send(&ClientMsg::List).unwrap();
+    let panes = loop {
+        if let DaemonMsg::Panes { panes } = recv(&mut other) {
+            break panes;
+        }
+    };
+    let info = |pane, stream: &str| PaneInfo {
+        pane,
+        stream: stream.into(),
+        role: "shell".into(),
+        exited: None,
+    };
+    assert_eq!(panes, [info(a, "a"), info(b, "b")]);
 }
 
 #[test]
