@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
@@ -99,6 +100,9 @@ struct PaneState {
     parser: vt100::Parser,
     subs: Vec<Sub>,
     exited: Option<i32>,
+    /// When the pane last printed: an agent that just started is still
+    /// drawing, and a prompt typed then is lost (RISK-3).
+    last_output: Instant,
 }
 
 /// One client's interest in one pane.
@@ -191,6 +195,25 @@ impl Daemon {
                 }
             }
             ClientMsg::Detach => self.unsubscribe(client),
+            ClientMsg::Prompt { stream, text } => {
+                let (id, pane) = self
+                    .panes_of(&stream)
+                    .into_iter()
+                    .find(|(_, p)| p.role == "agent")
+                    .with_context(|| format!("{stream} has no agent pane open"))?;
+                let tx = tx.clone();
+                // Waiting can take seconds; other messages from this client
+                // must not queue behind it.
+                thread::spawn(move || {
+                    let msg = match prompt(&pane, &text) {
+                        Ok(()) => DaemonMsg::Prompted { pane: id },
+                        Err(e) => DaemonMsg::Error {
+                            msg: format!("{e:#}"),
+                        },
+                    };
+                    let _ = tx.send(msg);
+                });
+            }
             ClientMsg::List => {
                 let panes = lock(&self.panes)
                     .iter()
@@ -322,6 +345,7 @@ impl Daemon {
                 parser: vt100::Parser::new(rows, cols, SCROLLBACK),
                 subs: Vec::new(),
                 exited: None,
+                last_output: Instant::now(),
             }),
         });
         // Subscribe before the reader starts so the spawner misses nothing.
@@ -336,6 +360,7 @@ impl Daemon {
                     Ok(n) => {
                         let mut st = lock(&pane.state);
                         st.parser.process(&buf[..n]);
+                        st.last_output = Instant::now();
                         st.broadcast(&DaemonMsg::Output {
                             pane: id,
                             bytes: buf[..n].to_vec(),
@@ -378,4 +403,52 @@ fn process_name(pid: libc::pid_t) -> Option<String> {
         .unwrap_or(&name)
         .trim_start_matches('-');
     (!name.is_empty()).then(|| name.to_string())
+}
+
+/// How long a pane must be silent before a prompt is typed into it, and how
+/// long to wait for that at most.
+const QUIET: Duration = Duration::from_millis(1200);
+const READY_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Types `text` into an agent's pane once it has gone quiet (REQ-13): as a
+/// bracketed paste when the app asked for it, so newlines in the text don't
+/// submit early, then Enter on its own.
+fn prompt(pane: &Pane, text: &str) -> Result<()> {
+    let start = Instant::now();
+    loop {
+        let st = lock(&pane.state);
+        if st.exited.is_some() {
+            bail!("the agent has exited");
+        }
+        let quiet = st.last_output.elapsed();
+        drop(st);
+        if quiet >= QUIET {
+            break;
+        }
+        if start.elapsed() > READY_TIMEOUT {
+            bail!(
+                "the agent kept printing for {}s; try again when it settles",
+                READY_TIMEOUT.as_secs()
+            );
+        }
+        thread::sleep(QUIET - quiet);
+    }
+    let paste = lock(&pane.state).parser.screen().bracketed_paste();
+    let body = if paste {
+        format!("\x1b[200~{text}\x1b[201~")
+    } else {
+        text.to_string()
+    };
+    {
+        let mut io = lock(&pane.io);
+        io.writer.write_all(body.as_bytes())?;
+        io.writer.flush()?;
+    }
+    // Apps that take pastes often debounce them: Enter right behind the
+    // paste can land inside it.
+    thread::sleep(Duration::from_millis(150));
+    let mut io = lock(&pane.io);
+    io.writer.write_all(b"\r")?;
+    io.writer.flush()?;
+    Ok(())
 }

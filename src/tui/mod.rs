@@ -353,6 +353,7 @@ impl App {
                 self.send(ClientMsg::List);
             }
             DaemonMsg::Panes { panes } => self.daemon_panes = panes,
+            DaemonMsg::Prompted { .. } => self.status = Some("sent to the agent".into()),
             DaemonMsg::Error { msg } => self.status = Some(msg),
         }
     }

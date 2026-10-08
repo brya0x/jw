@@ -342,3 +342,70 @@ fn a_stale_socket_file_does_not_block_the_start() {
     let (mut c, _guard) = autostart(&socket);
     spawn(&mut c, "s", "cat", 80, 24);
 }
+
+#[test]
+fn prompt_waits_for_quiet_then_pastes_and_presses_enter() {
+    let d = Daemon::start();
+    let mut c = d.client();
+    // An "agent" that asks for bracketed paste and shows its raw input.
+    c.send(&ClientMsg::Spawn {
+        stream: "s".into(),
+        role: "agent".into(),
+        cmd: Some("printf '\\033[?2004h'; stty raw -echo; cat -v".into()),
+        cwd: std::env::temp_dir(),
+        env: BTreeMap::new(),
+        cols: 80,
+        rows: 24,
+    })
+    .unwrap();
+    let pane = match recv(&mut c) {
+        DaemonMsg::Spawned { pane } => pane,
+        other => panic!("want Spawned, got {other:?}"),
+    };
+
+    c.send(&ClientMsg::Prompt {
+        stream: "s".into(),
+        text: "fix the\nbug".into(),
+    })
+    .unwrap();
+    let mut screen = vt100::Parser::new(24, 80, 0);
+    let deadline = Instant::now() + TIMEOUT;
+    let mut prompted = false;
+    while !(prompted && screen.screen().contents().contains("^M")) {
+        assert!(Instant::now() < deadline, "prompt never arrived");
+        match recv(&mut c) {
+            DaemonMsg::Output { pane: p, bytes } if p == pane => screen.process(&bytes),
+            DaemonMsg::Prompted { pane: p } => {
+                assert_eq!(p, pane);
+                prompted = true;
+            }
+            DaemonMsg::Error { msg } => panic!("daemon error: {msg}"),
+            _ => {}
+        }
+    }
+    let text = screen.screen().contents();
+    assert!(text.contains("^[[200~fix the"), "{text}");
+    assert!(text.contains("bug^[[201~^M"), "{text}");
+}
+
+#[test]
+fn prompt_without_an_agent_pane_is_an_error() {
+    let d = Daemon::start();
+    let mut c = d.client();
+    spawn(&mut c, "s", "cat", 80, 24);
+    c.send(&ClientMsg::Prompt {
+        stream: "s".into(),
+        text: "hi".into(),
+    })
+    .unwrap();
+    loop {
+        match recv(&mut c) {
+            DaemonMsg::Error { msg } => {
+                assert!(msg.contains("no agent"), "{msg}");
+                break;
+            }
+            DaemonMsg::Prompted { .. } => panic!("there is no agent"),
+            _ => {}
+        }
+    }
+}
