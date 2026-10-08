@@ -55,7 +55,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 - REQ-14 IF a pane's process exits, THEN the daemon SHALL keep its last screen and exit status visible until the pane is closed or relaunched.
 - REQ-15 WHEN the daemon starts and finds a `session.json` from a previous daemon, it SHALL recreate the open streams, launching agents with their `resume` command (config.go:42-60).
 - REQ-16 THE jw binary SHALL NOT invoke `herdr`.
-- REQ-17 WHILE in navigation mode, the TUI SHALL accept `j/k` (move in the sidebar), `↵` (open/attach), `h/j/k/l` with Shift (focus between panes), `n s d x c p` (new, sync, done, rm, close, prompt), and `Esc` (back to terminal mode).
+- REQ-17 WHILE in navigation mode, the TUI SHALL accept `j/k` (move in the sidebar), `↵` (open/attach), `h/j/k/l` with Shift (focus between panes), `n s d x c p` (new, sync, done, rm, close, prompt), `r` (dev), `S` (setup), `i` (info), `I` (add a project, drafting its config like `jw init`), `R` (reload) and `Esc` (back to terminal mode).
 - REQ-19 WHEN the active stream, a modal, the pane focus or a stream's state changes, the TUI SHALL animate the transition without delaying input to the panes.
 - REQ-20 WHERE `[tui] animations = false`, the TUI SHALL apply every change without animation.
 - REQ-21 WHEN the user presses `D` in navigation mode, the TUI SHALL open the stream's diff side by side, with every file in one scroll, `j/k` per file, `]`/`[` per hunk, `v` viewed, `t` ⇄ unified, and changed words highlighted.
@@ -156,6 +156,7 @@ Action output (sync, setup, done) — temporary pane at the bottom of the stream
 - RISK-4 **Daemon crash = all terminals die.** REQ-15 limits the damage (resume), but the in-flight state is lost.
 - RISK-5 **Concurrent writes to `registry.json`** between Go and Rust during the parallel phase, with no lock. Last writer wins. Accepted until the cutover.
 - RISK-7 **`✻ working` / `? waiting` (REQ-18) are a heuristic:** without herdr there's no agent API. Infer them from recent output activity, the bell (BEL) and the window title (OSC 0/2, which Claude Code updates). They can be wrong; worst case they show `●` and nothing else.
+- RISK-12 **dev and setup type into the shell pane** (refused while it runs something else) instead of a pane of their own. Several commands of one service run as `(trap 'kill 0' INT TERM; a & b & wait)`, so ctrl+c stops them together. A `[layout]` leaf `run = "dev:<svc>"` gives a service its own pane instead.
 - RISK-11 **Setup runs in the shell pane** of a new stream (`printf` of the line, the commands, then `exec $SHELL`) instead of before opening, as Go did. Its output stays visible, but a failed setup doesn't stop the stream from opening; the shell is right there to retry.
 - RISK-6 **Scope creep toward tmux:** copy mode, text selection, search in scrollback. v1 scope: scroll with the wheel and plain mouse selection; nothing else.
 

@@ -208,6 +208,8 @@ fn status(f: &mut Frame, app: &App) {
                 txt("setup"),
                 key("i"),
                 txt("info"),
+                key("I"),
+                txt("add project"),
                 key("q"),
                 txt("leave"),
                 key("esc"),

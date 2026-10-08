@@ -41,6 +41,12 @@ pub enum Modal {
         title: String,
         rows: Vec<(String, String)>,
     },
+    /// `I`: a repository to add; without a config, one is drafted for it.
+    AddProject {
+        path: String,
+        in_repo: bool,
+        error: Option<String>,
+    },
     /// Text for the stream's agent.
     Prompt {
         entry: Entry,
@@ -146,6 +152,26 @@ impl Modal {
                 KeyCode::Char('q') | KeyCode::Enter => Outcome::Cancel,
                 _ => Outcome::Stay,
             },
+            Modal::AddProject {
+                path,
+                in_repo,
+                error,
+            } => {
+                *error = None;
+                match k.code {
+                    KeyCode::Enter if !path.trim().is_empty() => return Outcome::Submit,
+                    KeyCode::Tab => *in_repo = !*in_repo,
+                    KeyCode::Backspace => {
+                        path.pop();
+                    }
+                    KeyCode::Char('u') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        path.clear()
+                    }
+                    KeyCode::Char(c) => path.push(c),
+                    _ => {}
+                }
+                Outcome::Stay
+            }
             Modal::Done { .. } => match k.code {
                 KeyCode::Char('y') | KeyCode::Enter => Outcome::Submit,
                 KeyCode::Char('n') => Outcome::Cancel,
@@ -256,6 +282,45 @@ impl Modal {
                 l.push(Line::default());
                 l.push(keys(&[("esc", "close")]));
                 (format!(" {title} "), l)
+            }
+            Modal::AddProject {
+                path,
+                in_repo,
+                error,
+            } => {
+                let mut l = vec![
+                    Line::from(Span::styled(
+                        " A git checkout. Without a jw config, one is drafted from it.",
+                        Style::default().fg(DIM),
+                    )),
+                    Line::default(),
+                    Line::from(vec![
+                        Span::styled(" Repo  ", Style::default().fg(FOCUS)),
+                        Span::styled("[ ", Style::default().fg(FOCUS)),
+                        // The end of a long path is the part being typed.
+                        Span::raw(tail(path, 46)),
+                        Span::styled("▏ ]", Style::default().fg(FOCUS)),
+                    ]),
+                    Line::default(),
+                    Line::from(format!(
+                        " Draft goes to: {}",
+                        if *in_repo {
+                            "<repo>/.jw.toml (to commit)"
+                        } else {
+                            "~/.config/jw/<project>.toml (yours)"
+                        }
+                    )),
+                    Line::default(),
+                ];
+                if let Some(e) = error {
+                    l.push(Line::from(Span::styled(
+                        format!(" {e}"),
+                        Style::default().fg(WAIT),
+                    )));
+                    l.push(Line::default());
+                }
+                l.push(keys(&[("tab", "where"), ("↵", "add"), ("esc", "cancel")]));
+                (" Add a project ".to_string(), l)
             }
             Modal::Prompt { entry, text } => {
                 let l = vec![
@@ -484,6 +549,15 @@ fn keys(pairs: &[(&str, &str)]) -> Line<'static> {
         ));
     }
     Line::from(spans)
+}
+
+/// The last `max` characters of `s`, with `…` when cut.
+fn tail(s: &str, max: usize) -> String {
+    let n = s.chars().count();
+    if n <= max {
+        return s.to_string();
+    }
+    format!("…{}", s.chars().skip(n - max + 1).collect::<String>())
 }
 
 /// Fits a line in `max` columns: `~` for the home directory, then the start

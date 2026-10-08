@@ -68,6 +68,12 @@ enum Job {
         title: String,
         rows: Vec<(String, String)>,
     },
+    /// A project was added (and maybe given a drafted config): create its
+    /// first stream.
+    Added {
+        project: Project,
+        wrote: Option<String>,
+    },
     Removed {
         name: String,
         note: Option<String>,
@@ -432,6 +438,16 @@ impl App {
             KeyCode::Char('r') => self.ask_dev(),
             KeyCode::Char('S') => self.run_setup(),
             KeyCode::Char('i') => self.show_info(),
+            KeyCode::Char('I') => {
+                let here = std::env::current_dir()
+                    .map(|d| d.display().to_string())
+                    .unwrap_or_default();
+                self.modal = Some(Modal::AddProject {
+                    path: here,
+                    in_repo: false,
+                    error: None,
+                });
+            }
             KeyCode::Char('R') => {
                 if let Err(e) = self.reload() {
                     self.status = Some(format!("{e:#}"));
@@ -952,6 +968,27 @@ impl App {
                 }
             }
             Modal::Info { .. } => {}
+            Modal::AddProject { path, in_repo, .. } => {
+                self.background("adding the project".into(), move || {
+                    let dir = std::path::PathBuf::from(path.trim());
+                    let repo = crate::connectors::git::Repo::open(&dir)?;
+                    let name = crate::connectors::git::project_name(&repo.remote);
+                    // A config already there (repo or personal) is kept as is.
+                    let has_config = crate::core::config::load(&repo.root, &repo.remote, &name)?
+                        .source
+                        .is_some();
+                    let wrote = if has_config {
+                        None
+                    } else {
+                        let done = crate::init::init(&repo, in_repo, false)?;
+                        Some(done.path.display().to_string())
+                    };
+                    Ok(Job::Added {
+                        project: Project::open(&repo.root)?,
+                        wrote,
+                    })
+                });
+            }
             Modal::Prompt { entry, text } => {
                 self.status = Some(format!("waiting for {}'s agent to settle…", entry.name));
                 self.send(ClientMsg::Prompt {
@@ -1062,6 +1099,13 @@ impl App {
             Job::Said(msg) => self.status = Some(msg),
             Job::RunInShell { entry, line } => self.run_in_shell(&entry, &line),
             Job::Info { title, rows } => self.modal = Some(Modal::Info { title, rows }),
+            Job::Added { project, wrote } => {
+                self.status = Some(match wrote {
+                    Some(path) => format!("wrote {path}: fill in [ports] and [dev] there"),
+                    None => format!("{} already has a config", project.name),
+                });
+                self.modal = Some(Modal::New(NewForm::new(project)));
+            }
             Job::DoneReady {
                 entry,
                 project,
