@@ -18,3 +18,4 @@ pub mod layout;
 pub mod proto;
 pub mod stream;
 pub mod tui;
+pub mod view;
