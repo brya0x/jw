@@ -1,5 +1,5 @@
 ---
-status:      agreed (v2, 2026-10-09: the simple-flow redesign; P0–P9 built against v1)
+status:      agreed (v2 + the screen addendum, 2026-10-09; P0–P9 built against v1)
 scope:       [Cargo.toml, src/**, .github/workflows/ci.yml, internal/core/config/config.go (one relaxation), README.md]
 depends_on:  [git, gh on PATH]
 supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/herdr]
@@ -30,6 +30,32 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 | `/` open a file (`.md` → reader pane, else nvim) | `X` remove: done checks if the PR is merged, rm checks otherwise | `f` full · `HJKL` swap with the neighbour |
 | `?` keys · `q` detach | | |
 
+### Screen (what each area shows; replaces "UI (reference, v2)")
+
+```
+┌ WORKSPACES  ^␣ o open ┬ jitsubai/auth-flow  feat/auth-flow  from main  PR #42 open      ~/ws/jitsubai-wt/auth-flow ┐
+│ 1 ● jitsubai          │╭ editor  nvim app/login/actions.ts ─╮╭ agent  claude ──────────╮                        │
+│ 2   ↳● auth-flow ✻ ⚡ ││ …                                  ││ ✻ Reading …             │                        │
+│ 3   ↳● billing   ⚑    ││                                    ││ > _                     │                        │
+│ 4 ● kanvas            │├ logs  zsh ─────────────────────────┴┴─────────────────────────┤                        │
+│ 5   ↳● export-pdf ?   ││ ~/ws/jitsubai-wt/auth-flow feat/auth-flow ❯ _                 │                        │
+│ 6 ○ notes             │╰──────────────────────────────────────────────────────────────╯                        │
+│ ● open ○ closed ✻ agent ? waiting ⚡ dev ⚑ merged                                                               │
+├ TERM  ^␣ then a key · ␣ switch · o open · w worktree · t pane · ? all keys                   created ws-1 on … ┤
+```
+
+| Area | Rule |
+|---|---|
+| Sidebar title | `WORKSPACES` (dim, bold), with `^␣ o open` right-aligned |
+| Sidebar rows | One row per workspace, numbered in order (1–9 shown). A project row: `N ● name`. Its worktrees follow it, indented: `N   ↳● name`. `●` green when open, `○` dim when closed (and the name dim). The current row has a `sel` background and a blue bold name. Marks are right-aligned in the row. No blank lines, no project headings, no "free" section |
+| Sidebar legend | Last line: `● open ○ closed ✻ agent ? waiting ⚡ dev ⚑ merged`, dim, the symbols in their colours |
+| Marks | `✻` magenta: the agent pane printed in the last 2 s. `?` yellow: the agent pane rang the bell (BEL or OSC 9) since its last input. `⚡` green: a `dev:*` pane is running. `⚑` cyan: the branch's PR is merged |
+| Header | `project/` dim + name blue bold (a project root shows just its name), branch magenta, `from <base>` dim (worktrees only), `PR #N <state>` dim when there is one, path dim right-aligned with `~`. A plain folder says `not a git repo` in place of the branch |
+| Pane title | `name` if set, else `role` bold + what runs dim (`nvim app/x.ts`, the OSC title, or the foreground process). Focused: blue border and title. Exited: `exited N` red. Viewers: `changes  auth-flow vs main · 4 files`, `md  docs/x.md` |
+| Status bar | Mode chip: `TERM` green, `^␣` yellow (leader pending), `DIFF`/`MD` blue (a viewer is focused), `CONFIRM` red (a yes/no modal). Then the hint for that mode. A message goes right-aligned: green for done, red for an error, cleared after 4 s |
+| Which-key | Three columns as now, adding `␣ switch`, `o open`, `/ file` (go) and `r rename` (worktree) |
+| Empty stage | `^␣ o opens a folder · ^␣ ␣ switches workspace`, centred, dim |
+
 ## Interfaces
 
 | Piece | Where / shape |
@@ -42,13 +68,21 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 | Tree | `src/layout.rs`: leaves carry `{id, run, name?}`; `run = "shell"\|"agent"\|"editor"\|"dev:<svc>"\|"view:diff"\|"view:md:<path>"\|"<cmd>"`; `view:*` leaves have no PTY. Ops: `insert(beside, dir, leaf)`, `remove(id)` (the sibling takes the space), `swap(a,b)`, `neighbour(id,dx,dy)` (nearest rect that overlaps on the other axis), `rects` |
 | Layout config | `[layout]` in the project TOML as in v1 (tree of `split`, `ratio`, `a`/`b`, leaves `run`). It is the starting tree when a workspace opens; without it, one shell for a plain folder and the default tree for a project. Go ignores the tree and `[tui]` (`rustOnly`, config.go) |
 | Session | `session.json` in the state dir (next to the socket for any socket but the default one, so tests never touch it), written by the daemon with temp + rename after every tree change: `{workspaces: [{id, tree}]}`, each leaf with role, name, cmd, cwd and env. Recency and recent folders arrive with Q3/Q4 |
-| Folders | `src/folders.rs` (replaces `src/free.rs`): open project folders `{id, dir, opened}` in `~/.local/state/jw/folders.json`; the first run migrates `free.json`. A git folder's worktrees come from the registry by project name |
+| Folders | `src/folders.rs` replaces `src/free.rs`. `folders.json` in the state dir holds `[{id, dir, opened, created}]`: the project roots and plain folders the user opened. The first load migrates `free.json` (each session becomes a folder; the file is renamed `.migrated`). A folder's `Entry` uses `project` = the git project name, or the folder name for a plain folder |
 | Pane env | the JW_* vars of `actions::jw_env` (a plain folder gets JW_ID, JW_NAME, JW_PROJECT) + `JW_PANE_ID` |
 | Theme | `src/theme.rs`: One Dark / One Light `Palette`s that every draw module (and the syntect theme) asks for through `theme::p()`. Pick: `JW_THEME=dark\|light` pins one (OPEN-5); otherwise macOS's `AppleInterfaceStyle`, re-read every 3 s so a switch repaints; dark elsewhere. Querying the terminal (OSC 11, mode 2031) is left for later |
+| Workspaces list | `App::reload` builds the rows. Each opened folder becomes a project row, and each registry worktree goes under its project's row, the project matched by `Repo::open(worktree).root` (`connectors/git.rs:56`). A project that has worktrees but no folder entry still gets a row, closed (`○`); opening it adds it to `folders.json` |
+| Project root opening | `Stream::resolve` (`stream.rs:51`) for a folder: git with a jw config → `cfg.layout.tree()`; git without a config, or a plain folder → one shell. Env `JW_ID`, `JW_NAME`, `JW_PROJECT`; no slot and no ports |
+| Marks | `PaneInfo` (`proto/mod.rs`) gains `busy: bool` (output in the last 2 s) and `bell: bool`. In the daemon, a `vt100::Callbacks::audible_bell` (and OSC 9) sets `bell`, and an `Input` to that pane clears it. While a workspace is open the client sends `List` every 2 s. PR state: `gh pr list` per worktree branch in the background every 60 s, cached in `App::prs` |
+| Viewer panes | A leaf whose role starts with `view:` (`view:diff`, `view:md:<path>`) has no PTY. The daemon gives it an id and keeps it in the tree and `session.json`, nothing more (`Split` with such a role skips `spawn`; `Kill` finds its workspace by tree). The client holds the content in `App::views: BTreeMap<PaneId, View>`, rebuilt from the role when it attaches (a diff is reloaded, a `.md` is re-read) |
+| Diff pane | Opens on the right at 0.36 of the stage's width (`Split{dir: Right}` beside the root's right edge: the rightmost top leaf). Unified below 110 columns, side by side at 110 or more; `t` overrides this. The file list shows at 100 columns or more. `↵` on a file: `.md` goes to the reader pane, anything else to nvim |
+| Open in nvim | If the workspace has an `editor` pane: send `\x1b:e <path>\r` (RISK-16). If not: `Split{Right}` with `role: "editor"`, `cmd: "nvim <path>"`. `.md` files go to a `view:md:<path>` pane (one per workspace, reused) |
+| Rename | `git worktree move <old> <new>` + `git branch -m <old> <new>` (the new branch from the `branch` template) + the registry `name`, `path` and `branch` (same `id`). Then `Close` and `Open` of the workspace, after asking if an agent or editor runs |
+| Status | `App::status: Option<(String, Tone)>`, `Tone::{Info, Done, Error}`; `Job::Failed` and refusals are `Error` |
 | Stack | ratatui (its crossterm re-export), portable-pty, vt100 0.16 (drawn by `src/tui/draw.rs`), serde/toml/serde_json, syntect, pulldown-cmark, anyhow |
 | Diff | `src/diff.rs` (model: `git diff -M --merge-base origin/<base>` + untracked) and `src/tui/diffview.rs` (drawing, keys `j k ] [ v t ␣ b ↵ q`) |
 | MD reader | `src/view/md.rs` (pulldown-cmark → wrapped lines + headings) and `src/tui/mdview.rs` |
-| Pickers | `src/tui/finder.rs`: one fuzzy scorer for the switcher (`␣`) and files (`/`); the folder browser (`o`) lists one directory at a time |
+| Pickers | `src/tui/finder.rs`: a `Finder` modal (query, results, selection, preview) with one fuzzy scorer (consecutive matches score more), three sources. `o`: folder browser, one directory at a time, `→`/`tab` in, `←`/backspace on empty up, `~` home, `↵` opens; a name that doesn't exist offers `+ create`. It starts in the parent of the current project. `␣`: every workspace, by last use (`recent.json` in the state dir), with a preview of path, branch, PR, agent state and panes. `/`: `git ls-files -co --exclude-standard`, or a walk capped at 5000 files without dot dirs |
 
 ## Acceptance
 
@@ -69,7 +103,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 - REQ-30 WHEN the user presses the leader and then one key, the TUI SHALL run that key's action and return to the terminal.
 - REQ-31 WHILE the leader has been pending for 600 ms, the TUI SHALL show every key, grouped go / worktree / panes.
 - REQ-32 THE TUI SHALL forward every key except the leader to the focused pane, or to the viewer when the focused pane is a viewer.
-- REQ-33 THE sidebar SHALL list projects with their worktrees indented, numbered 1–9, marked `●` open / `○` closed, `✻` agent working, `?` agent waiting, `⚡` dev running, `⚑` PR merged, and scroll when longer than the screen.
+- REQ-33 *(Replaced by REQ-50.)* THE sidebar SHALL list projects with their worktrees indented, numbered 1–9, marked `●` open / `○` closed, `✻` agent working, `?` agent waiting, `⚡` dev running, `⚑` PR merged, and scroll when longer than the screen.
 - REQ-34 WHEN `t`, `x`, `HJKL` or `n` changes the panes, the daemon SHALL update the workspace's tree, send `Tree` to every attached client, and write `session.json`.
 - REQ-35 WHEN the last pane of a workspace is closed, the TUI SHALL ask first, then close the workspace; a worktree stays listed as `○`, a project leaves the sidebar.
 - REQ-36 WHERE a pane has a name, the TUI SHALL show it as the pane's title; otherwise the title SHALL be the program's OSC title, else its foreground process.
@@ -80,6 +114,15 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 - REQ-41 THE switcher SHALL rank workspaces by last use, filter them fuzzily, and preview path, branch, PR, agent state and panes.
 - REQ-42 WHEN a file is picked with `/` or `↵` in the diff, the TUI SHALL open a `.md` in the workspace's reader pane and any other file in its nvim pane, creating either on the right when missing.
 - REQ-43 THE TUI SHALL draw with One Dark or One Light, chosen as Interfaces → Theme says.
+- REQ-50 THE sidebar SHALL show one numbered row per workspace, with project rows unindented and their worktrees indented under them with `↳`, no headings, and the legend on its last line.
+- REQ-51 THE sidebar SHALL mark a workspace `✻` WHILE its agent pane has printed in the last 2 s, `?` WHEN its agent pane rang the bell since its last input, `⚡` WHILE a `dev:*` pane runs, and `⚑` WHERE its PR is merged.
+- REQ-52 THE header SHALL show name, branch, base, PR and path as in Screen.
+- REQ-53 THE pane title SHALL show the name, or the role and what runs.
+- REQ-54 THE status bar SHALL show the mode chip of Screen and the last message, coloured by its tone, for 4 s.
+- REQ-55 WHEN a project root or plain folder is opened, the TUI SHALL start its panes as Interfaces → Project root opening says.
+- REQ-56 WHEN jw starts and finds `free.json`, it SHALL move its sessions into `folders.json`.
+- REQ-57 WHEN `d` runs, the TUI SHALL open the diff as a pane on the right. WHEN `↵` is pressed on a file in it, the TUI SHALL open that file as REQ-42 says.
+- REQ-58 IF the pane closed with `x` is a viewer, THEN the TUI SHALL close it without asking.
 - REQ-19 WHEN the workspace, a modal or the pane focus changes, the TUI MAY animate the transition, never delaying input to the panes. *(Later; optional.)*
 - REQ-20 WHERE `[tui] animations = false`, the TUI SHALL apply every change without animation.
 
@@ -97,20 +140,6 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 - RAT-9 **The tree moves into the daemon** because panes are now dynamic: if the client kept it, a detach would lose every `t`/`x`/`HJKL`, and two clients could disagree. Focus and the full view stay in the client because they are per-viewer.
 - RAT-10 **Rejected: a GUI (Tauri + xterm.js).** Better terminal fidelity and diff rendering, but it leaves the terminal (no SSH, another window under AeroSpace), discards the TUI code, and needs signing and updates. The daemon keeps that door open: a GUI would be another client. Revisit only if RISK-1 fails the checkpoint.
 - RAT-11 **Rejected: a built-in editor and file tree** (prototyped). Typing is easy; large files, wide characters and edits racing the agent are not, and it never reaches nvim.
-
-### UI (reference, v2)
-
-```
-┌ WORKSPACES   ^␣ o ┬─ jitsubai/auth-flow · feat/auth-flow · PR #42 open ─────┐
-│1 ● jitsubai       │ editor ── nvim app/login/actions.ts ┬ agent ── claude ──┤
-│2 ↳● auth-flow ✻ ⚡│  1 import { signIn } from "@/lib/auth"│ ✻ Reading …       │
-│3 ↳● billing ⚑     │  2                                  │ > _               │
-│4 ● kanvas         ├ logs ── zsh ────────────────────────┴───────────────────┤
-│5 ↳● export-pdf ?  │ ~/ws/jitsubai-wt/auth-flow feat/auth-flow ❯ _           │
-├───────────────────┴─────────────────────────────────────────────────────────┤
-│ TERM  ^␣ then a key · ␣ switch · o open · w worktree · t pane · ? all keys  │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
 
 ## Risks
 
@@ -130,6 +159,9 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 - RISK-14 **Protocol change (RAT-9):** an old daemon and a new client disagree. The version check on attach says "restart the daemon" instead of misbehaving.
 - RISK-15 **Rename under running processes** leaves shells with a stale `$PWD`; REQ-40 restarts the panes.
 - RISK-16 **`↵` in the diff sends `<Esc>:e path<CR>` to nvim**, assuming normal mode after Esc. Fine for v2; `nvim --server` later if it bites.
+- RISK-17 **Mapping worktrees to their project** with `Repo::open` runs one `git` per worktree on every reload. Cache it by path; it changes only when worktrees are created or removed.
+- RISK-18 **The `?` mark depends on the agent ringing the bell.** Claude Code does so only when its notifications use the terminal bell. Without that, `?` never shows (the same worst case as RISK-7).
+- RISK-19 **`gh` polling** costs a network call per worktree a minute. Only open worktrees are polled, and only while jw runs.
 
 ## Parts (each one ends with `cargo test` + `clippy` green and a local commit on `feat/rust-tui`; nothing is pushed)
 
@@ -139,13 +171,15 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 |---|---|---|---|
 | Q1 | One-shot leader + which-key; actions on the current workspace; drop NAV and the sidebar cursor; `X` merges done/rm; status bar | 30–32, 39 | `tui/mod.rs`, `tui/keys.rs`, `tui/draw.rs`, `tui/modal.rs` |
 | Q2 | The daemon owns the tree: layout ops, the new messages, version check, `session.json`; `t x HJKL f n`; last pane closes the workspace; OSC titles | 5, 34–36 | `layout.rs`, `proto/mod.rs`, `daemon/mod.rs`, `stream.rs`, `tui/mod.rs` |
-| — | **Checkpoint:** a week of daily use with Claude Code and nvim (RISK-1) | | |
-| Q3 | Folders: `free.rs` → `folders.rs` + migration; `o` folder browser; a project root is a workspace; sidebar grouping; `w` = `ws-N` | 33, 37, 38 | `folders.rs`, `tui/modal.rs`, `actions.rs`, `tui/mod.rs` |
-| Q4 | Switcher `␣`, `tab`, recency; `/` file picker | 41, 42 | `tui/finder.rs` |
-| Q5 | Viewers as panes (`view:diff`, `view:md`); `↵` in the diff opens the file | 21, 22, 42 | `tui/diffview.rs`, `tui/mdview.rs`, `tui/draw.rs` |
-| Q6 | Rename `r` | 40 | `connectors/git.rs`, `actions.rs`, `core/registry.rs` |
-| Q7 | Themes | 43 | `tui/theme.rs` |
-| Q8 | Restore from `session.json` on daemon start | 15 | `daemon/mod.rs` |
+| Q7 (done) | Themes: One Dark / One Light and the prototype's look (`33c46f5`) | 43 | `theme.rs`, `tui/draw.rs` |
+| Q9 | This addendum: Screen, Interfaces rows, REQ-50…58 | — | docs |
+| Q3 | Folders + migration; project rows; the new sidebar (rows, indent, legend, title); header; pane titles; status tones and the mode chip; `o` folder browser; the empty stage | 37, 50, 52–56 | `folders.rs`, `stream.rs`, `tui/mod.rs`, `tui/draw.rs`, `tui/finder.rs` |
+| Q4 | `␣` switcher with recency and preview, `tab` from the same recency, `/` file picker; the which-key additions | 41, 42 | `tui/finder.rs`, `tui/mod.rs` |
+| Q5 | Viewer panes: `view:diff` / `view:md`, the daemon's PTY-less leaves, the diff's width rules, `↵` to nvim/md, `x` on a viewer | 21, 22, 42, 57, 58 | `daemon/mod.rs`, `tui/diffview.rs`, `tui/mdview.rs`, `tui/mod.rs` |
+| Q6 | Marks: `busy`/`bell` in the daemon, the 2 s `List`, PR polling, `⚑` and the header's PR | 51, 52 | `daemon/mod.rs`, `proto/mod.rs`, `tui/mod.rs` |
+| Q10 | Rename `r` | 40 | `connectors/git.rs`, `actions.rs`, `core/registry.rs` |
+| Q8 | Restore from `session.json` when the daemon starts | 15 | `daemon/mod.rs` |
+| — | **Checkpoint:** a week of daily use with Claude Code and nvim (RISK-1), once Q3–Q5 make it look and act like the prototype | | |
 | Later | Animations (optional); cutover: delete Go + herdr, README, trim the `jw` skill | 16, 19, 20 | |
 
 Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{new_stream, rm_plan, rm, sync, done_plan}`, `src/diff.rs`, `src/view/md.rs` and `Modal::Rm` (type the name) stay as they are.
@@ -169,6 +203,7 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - v1 put tui-term in the stack; P5 draws vt100 screens itself.
 - RISK-2 assumed `[layout]` was a new table. It already existed with `editor`.
 - v1's "spaces → streams" with a free space first, a sticky NAV mode (REQ-17), `F` focus-all (REQ-25) and a Telescope finder with `> @ / :` prefixes (REQ-26/27) were replaced by v2's workspaces, one-shot leader and three plain pickers.
+- `33c46f5` kept project headings and a "free" section in the sidebar; the prototype has neither. REQ-50 replaces REQ-33.
 - The 2026-10-09 prototype's `.worktrees/<name>` on `jw/<name>` was wrong for this repo: worktrees live at `<repo>-wt/<name>` on the `branch` template (`feat/{name}`).
 
 ## Tests
