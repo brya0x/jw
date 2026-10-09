@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use super::diffview::DiffView;
-use super::draw::{DIM, FG, FOCUS, LINE, PANEL};
+use crate::theme::p;
 use crate::view::md::{self, Doc};
 
 /// Below this width the heading list would squeeze the text: no list.
@@ -39,6 +39,11 @@ impl MdView {
             height: 20,
             back,
         }
+    }
+
+    /// Renders again on the next draw, in the palette now in use.
+    pub fn restyle(&mut self) {
+        self.width = 0;
     }
 
     /// The heading the top of the view is under.
@@ -98,15 +103,15 @@ impl MdView {
         };
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(FOCUS))
+            .border_style(Style::default().fg(p().blue))
             .title(Span::styled(
                 format!(" md · {} ", self.title),
-                Style::default().fg(FOCUS).add_modifier(Modifier::BOLD),
+                Style::default().fg(p().blue).add_modifier(Modifier::BOLD),
             ))
             .title(
                 Line::from(Span::styled(
                     format!(" {}% ", pct.min(100)),
-                    Style::default().fg(DIM),
+                    Style::default().fg(p().dim),
                 ))
                 .right_aligned(),
             );
@@ -146,7 +151,7 @@ impl MdView {
             self.draw_toc(f, toc);
             for y in inner.y..inner.y + inner.height {
                 if let Some(c) = f.buffer_mut().cell_mut((inner.x + toc_w, y)) {
-                    c.set_symbol("│").set_style(Style::default().fg(LINE));
+                    c.set_symbol("│").set_style(Style::default().fg(p().line));
                 }
             }
         }
@@ -165,7 +170,7 @@ impl MdView {
         let current = self.current_heading();
         let mut lines = vec![Line::from(Span::styled(
             " Contents",
-            Style::default().fg(DIM).add_modifier(Modifier::BOLD),
+            Style::default().fg(p().dim).add_modifier(Modifier::BOLD),
         ))];
         let room = area.height.saturating_sub(1) as usize;
         let first = current.unwrap_or(0).saturating_sub(room.saturating_sub(1));
@@ -185,13 +190,13 @@ impl MdView {
             let mut line = Line::from(Span::styled(
                 format!(" {indent}{text}"),
                 if on {
-                    Style::default().fg(FOCUS).add_modifier(Modifier::BOLD)
+                    Style::default().fg(p().blue).add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(if h.level <= 2 { FG } else { DIM })
+                    Style::default().fg(if h.level <= 2 { p().fg } else { p().dim })
                 },
             ));
             if on {
-                line = line.style(Style::default().bg(PANEL));
+                line = line.style(Style::default().bg(p().panel));
             }
             lines.push(line);
         }

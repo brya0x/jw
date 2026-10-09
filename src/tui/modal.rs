@@ -7,10 +7,10 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 
-use super::draw::{DIM, FG, FOCUS, LINE, PANEL, WAIT};
 use crate::actions::{Project, RmPlan};
 use crate::connectors::Pr;
 use crate::core::registry::Entry;
+use crate::theme::p;
 
 // There is at most one modal at a time, so its size doesn't matter.
 #[allow(clippy::large_enum_variant)]
@@ -124,11 +124,11 @@ impl Modal {
                 let mut l = vec![
                     Line::from(Span::styled(
                         format!(" PR #{} merged", pr.number),
-                        Style::default().fg(super::draw::DEV),
+                        Style::default().fg(p().green),
                     )),
                     Line::from(Span::styled(
                         format!(" {}", pr.url),
-                        Style::default().fg(DIM),
+                        Style::default().fg(p().dim),
                     )),
                     Line::default(),
                     Line::from(" Deletes:"),
@@ -145,7 +145,7 @@ impl Modal {
                     Line::from(" Closes its panes and forgets it."),
                     Line::from(Span::styled(
                         format!(" {} is untouched.", short_path(&entry.path, 50)),
-                        Style::default().fg(DIM),
+                        Style::default().fg(p().dim),
                     )),
                     Line::default(),
                     keys(&[("y", "remove"), ("esc", "cancel")]),
@@ -167,17 +167,20 @@ impl Modal {
                 if !running.is_empty() {
                     l.push(Line::from(" Still running:"));
                     l.extend(running.iter().map(|r| {
-                        Line::from(Span::styled(format!("   {r}"), Style::default().fg(WAIT)))
+                        Line::from(Span::styled(
+                            format!("   {r}"),
+                            Style::default().fg(p().yellow),
+                        ))
                     }));
                     l.push(Line::default());
                     l.push(Line::from(Span::styled(
                         " Closing stops them.",
-                        Style::default().fg(DIM),
+                        Style::default().fg(p().dim),
                     )));
                 }
                 l.push(Line::from(Span::styled(
                     " The folder stays on disk.",
-                    Style::default().fg(DIM),
+                    Style::default().fg(p().dim),
                 )));
                 l.push(Line::default());
                 l.push(keys(&[("y", "close"), ("esc", "cancel")]));
@@ -187,7 +190,7 @@ impl Modal {
                 let l = vec![
                     Line::from(vec![
                         Span::raw(" "),
-                        Span::styled(running.clone(), Style::default().fg(WAIT)),
+                        Span::styled(running.clone(), Style::default().fg(p().yellow)),
                         Span::raw(" is still running in it. Closing stops it."),
                     ]),
                     Line::default(),
@@ -203,12 +206,12 @@ impl Modal {
                 };
                 let l = vec![
                     Line::from(vec![
-                        Span::styled(" › ", Style::default().fg(FOCUS)),
+                        Span::styled(" › ", Style::default().fg(p().blue)),
                         Span::raw(text.clone()),
-                        Span::styled("▏", Style::default().fg(FOCUS)),
+                        Span::styled("▏", Style::default().fg(p().blue)),
                     ]),
                     Line::default(),
-                    Line::from(Span::styled(hint, Style::default().fg(DIM))),
+                    Line::from(Span::styled(hint, Style::default().fg(p().dim))),
                     Line::default(),
                     keys(&[("↵", "save"), ("esc", "cancel")]),
                 ];
@@ -238,12 +241,12 @@ impl Modal {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(FOCUS))
+            .border_style(Style::default().fg(p().blue))
             .title(Span::styled(
                 title,
-                Style::default().fg(FOCUS).add_modifier(Modifier::BOLD),
+                Style::default().fg(p().blue).add_modifier(Modifier::BOLD),
             ))
-            .style(Style::default().bg(PANEL).fg(FG));
+            .style(Style::default().bg(p().panel).fg(p().fg));
         let inner = block.inner(r);
         f.render_widget(block, r);
         f.render_widget(Paragraph::new(lines), inner);
@@ -258,7 +261,7 @@ fn rm_lines(
 ) -> Vec<Line<'static>> {
     let mut l = vec![Line::from(Span::styled(
         format!(" {}  ·  slot {}", entry.branch, entry.slot),
-        Style::default().fg(DIM),
+        Style::default().fg(p().dim),
     ))];
     l.push(Line::default());
     if !plan.on_disk {
@@ -275,14 +278,14 @@ fn rm_lines(
             }
             l.push(Line::from(Span::styled(
                 format!("     {}", s.trim()),
-                Style::default().fg(DIM),
+                Style::default().fg(p().dim),
             )));
         }
     };
     if !plan.dirty.is_empty() {
         l.push(Line::from(Span::styled(
             format!(" {} uncommitted file(s) will be lost:", plan.dirty.len()),
-            Style::default().fg(WAIT),
+            Style::default().fg(p().yellow),
         )));
         some(&mut l, &plan.dirty);
     }
@@ -292,7 +295,7 @@ fn rm_lines(
                 " {} commit(s) exist only on this machine:",
                 plan.unpushed.len()
             ),
-            Style::default().fg(WAIT),
+            Style::default().fg(p().yellow),
         )));
         some(&mut l, &plan.unpushed);
     }
@@ -308,12 +311,12 @@ fn rm_lines(
     if plan.keep_branch {
         l.push(Line::from(Span::styled(
             format!(" Keeps branch {} (it existed before jw).", entry.branch),
-            Style::default().fg(DIM),
+            Style::default().fg(p().dim),
         )));
     }
     l.push(Line::from(Span::styled(
         " The remote branch is untouched.",
-        Style::default().fg(DIM),
+        Style::default().fg(p().dim),
     )));
     l.push(Line::default());
     if plan.loses_work() {
@@ -324,14 +327,14 @@ fn rm_lines(
                 Style::default().add_modifier(Modifier::BOLD),
             ),
             Span::raw(" to remove it anyway: "),
-            Span::styled(format!("{typed}▏"), Style::default().fg(FOCUS)),
+            Span::styled(format!("{typed}▏"), Style::default().fg(p().blue)),
         ]));
         l.push(Line::default());
     }
     if let Some(e) = error {
         l.push(Line::from(Span::styled(
             format!(" {e}"),
-            Style::default().fg(WAIT),
+            Style::default().fg(p().yellow),
         )));
         l.push(Line::default());
     }
@@ -348,11 +351,11 @@ fn keys(pairs: &[(&str, &str)]) -> Line<'static> {
     for (k, what) in pairs {
         spans.push(Span::styled(
             format!(" {k} "),
-            Style::default().bg(LINE).fg(FOCUS),
+            Style::default().bg(p().line).fg(p().blue),
         ));
         spans.push(Span::styled(
             format!(" {what}   "),
-            Style::default().fg(DIM),
+            Style::default().fg(p().dim),
         ));
     }
     Line::from(spans)

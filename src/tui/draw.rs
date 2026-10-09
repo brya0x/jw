@@ -10,21 +10,12 @@ use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
 use super::{App, PaneView, Row, SIDEBAR};
 use crate::layout::Rect;
-
-pub(super) const BG: Color = Color::Rgb(0x10, 0x23, 0x2a);
-pub(super) const PANEL: Color = Color::Rgb(0x15, 0x2e, 0x37);
-pub(super) const FG: Color = Color::Rgb(0xd5, 0xe3, 0xe6);
-pub(super) const DIM: Color = Color::Rgb(0x5d, 0x7a, 0x82);
-pub(super) const LINE: Color = Color::Rgb(0x2a, 0x47, 0x51);
-pub(super) const FOCUS: Color = Color::Rgb(0xf0, 0xb4, 0x4c);
-pub(super) const WORK: Color = Color::Rgb(0x7f, 0xc4, 0xff);
-pub(super) const WAIT: Color = Color::Rgb(0xff, 0x8f, 0x7e);
-pub(super) const DEV: Color = Color::Rgb(0x95, 0xde, 0x86);
+use crate::theme::p;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
     f.buffer_mut()
-        .set_style(area, Style::default().bg(BG).fg(FG));
+        .set_style(area, Style::default().bg(p().bg).fg(p().fg));
 
     if !app.full {
         sidebar(f, app);
@@ -72,18 +63,23 @@ fn sidebar(f: &mut Frame, app: &App) {
     let r = TRect::new(0, 0, SIDEBAR.min(area.width), area.height.saturating_sub(1));
     let block = Block::default()
         .borders(Borders::RIGHT)
-        .border_style(Style::default().fg(LINE))
-        .style(Style::default().bg(PANEL));
+        .border_style(Style::default().fg(p().line))
+        .style(Style::default().bg(p().panel));
     let inner = block.inner(r);
     f.render_widget(block, r);
 
-    let mut lines = vec![Line::from(vec![
-        Span::styled(
-            " jw",
-            Style::default().fg(FOCUS).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled("  workspaces", Style::default().fg(DIM)),
-    ])];
+    let dim = Style::default().fg(p().dim);
+    let keys = format!("{} ? keys ", app.leader.label());
+    let title = " WORKSPACES";
+    let pad = (inner.width as usize).saturating_sub(title.len() + keys.chars().count());
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(title, dim.add_modifier(Modifier::BOLD)),
+            Span::raw(" ".repeat(pad)),
+            Span::styled(keys, dim),
+        ]),
+        Line::default(),
+    ];
     let mut n = 0;
     for (i, row) in app.rows.iter().enumerate() {
         match row {
@@ -98,7 +94,7 @@ fn sidebar(f: &mut Frame, app: &App) {
                 };
                 lines.push(Line::from(Span::styled(
                     format!(" {label}"),
-                    Style::default().fg(DIM).add_modifier(Modifier::BOLD),
+                    Style::default().fg(p().fg).add_modifier(Modifier::BOLD),
                 )));
             }
             Row::Stream(e) => {
@@ -106,85 +102,92 @@ fn sidebar(f: &mut Frame, app: &App) {
                 let open = app.is_open(&e.id);
                 let active = app.current().is_some_and(|c| c.id == e.id);
                 let number = if n <= 9 { n.to_string() } else { " ".into() };
-                let dot = if open {
-                    Span::styled("●", Style::default().fg(DEV))
-                } else {
-                    Span::styled("○", Style::default().fg(DIM))
-                };
-                let mut name_style = Style::default().fg(if open { FG } else { DIM });
+                let mut name = Style::default().fg(if open { p().fg } else { p().dim });
                 if active {
-                    name_style = name_style.fg(FOCUS).add_modifier(Modifier::BOLD);
+                    name = name.fg(p().blue).add_modifier(Modifier::BOLD);
                 }
                 let mut line = Line::from(vec![
-                    Span::styled(format!(" {number} "), Style::default().fg(DIM)),
-                    dot,
-                    Span::raw(" "),
-                    Span::styled(e.name.clone(), name_style),
+                    Span::styled(format!(" {number} "), dim),
+                    Span::styled("↳", dim),
+                    Span::styled(
+                        if open { "● " } else { "○ " },
+                        Style::default().fg(if open { p().green } else { p().dim }),
+                    ),
+                    Span::styled(e.name.clone(), name),
                 ]);
                 if active {
-                    line = line.style(Style::default().bg(LINE));
+                    line = line.style(Style::default().bg(p().sel));
                 }
                 lines.push(line);
             }
         }
     }
     if app.rows.is_empty() {
-        lines.push(Line::from(Span::styled(
-            " No workspaces yet",
-            Style::default().fg(DIM),
-        )));
+        lines.push(Line::from(Span::styled(" No workspaces yet", dim)));
     }
-    f.render_widget(Paragraph::new(lines), inner);
+    let legend = TRect::new(inner.x, inner.bottom().saturating_sub(1), inner.width, 1);
+    let list = TRect {
+        height: inner.height.saturating_sub(1),
+        ..inner
+    };
+    f.render_widget(Paragraph::new(lines), list);
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(" ● ", Style::default().fg(p().green)),
+            Span::styled("open  ", dim),
+            Span::styled("○ ", dim),
+            Span::styled("closed", dim),
+        ])),
+        legend,
+    );
 }
 
 fn header(f: &mut Frame, app: &App) {
     let area = f.area();
     let r = TRect::new(SIDEBAR, 0, area.width.saturating_sub(SIDEBAR), 1);
-    let line = match &app.active {
-        Some(s) => {
-            let e = &s.entry;
-            let ports: Vec<String> = s
-                .vars()
-                .ports
-                .iter()
-                .map(|(svc, p)| format!("{svc} :{p}"))
-                .collect();
-            if crate::free::is_free(e) {
-                let line = Line::from(vec![
-                    Span::styled(
-                        format!(" {}/", crate::free::LABEL),
-                        Style::default().fg(DIM),
-                    ),
-                    Span::styled(
-                        e.name.clone(),
-                        Style::default().add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(format!("  {}", e.path), Style::default().fg(DIM)),
-                ]);
-                f.render_widget(Paragraph::new(line), r);
-                return;
-            }
-            let mut spans = vec![
-                Span::styled(format!(" {}", e.project), Style::default().fg(DIM)),
-                Span::styled("/", Style::default().fg(DIM)),
-                Span::styled(
-                    e.name.clone(),
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(format!("  {}", e.branch), Style::default().fg(WORK)),
-                Span::styled(format!("  slot {}", e.slot), Style::default().fg(DIM)),
-            ];
-            if !ports.is_empty() {
-                spans.push(Span::styled(
-                    format!("  {}", ports.join("  ")),
-                    Style::default().fg(DIM),
-                ));
-            }
-            Line::from(spans)
-        }
-        None => Line::from(Span::styled(" no stream open", Style::default().fg(DIM))),
+    let dim = Style::default().fg(p().dim);
+    let Some(s) = &app.active else {
+        f.render_widget(Paragraph::new(Span::styled(" no workspace open", dim)), r);
+        return;
     };
-    f.render_widget(Paragraph::new(line), r);
+    let e = &s.entry;
+    let mut spans = Vec::new();
+    if crate::free::is_free(e) {
+        spans.push(Span::styled(
+            format!(" {}", e.name),
+            Style::default().fg(p().blue).add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled("  not a git repository", dim));
+    } else {
+        spans.push(Span::styled(format!(" {}/", e.project), dim));
+        spans.push(Span::styled(
+            e.name.clone(),
+            Style::default().fg(p().blue).add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(
+            format!("  {}", e.branch),
+            Style::default().fg(p().magenta),
+        ));
+        if !s.base.is_empty() {
+            spans.push(Span::styled(format!("  from {}", s.base), dim));
+        }
+        for (svc, port) in s.vars().ports {
+            spans.push(Span::styled(format!("  {svc} :{port}"), dim));
+        }
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    let path = if home.len() > 1 {
+        e.path.replacen(&home, "~", 1)
+    } else {
+        e.path.clone()
+    };
+    let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+    let room = (r.width as usize).saturating_sub(used + 1);
+    if path.chars().count() + 2 <= room {
+        spans.push(Span::raw(" ".repeat(room - path.chars().count())));
+        spans.push(Span::styled(path, dim));
+    }
+    f.render_widget(Paragraph::new(Line::from(spans)), r);
 }
 
 fn status(f: &mut Frame, app: &App) {
@@ -192,45 +195,56 @@ fn status(f: &mut Frame, app: &App) {
     let r = TRect::new(0, area.height.saturating_sub(1), area.width, 1);
     let leader = app.leader.label();
     let (chip, color) = if app.leading() {
-        (format!(" {leader} "), FOCUS)
+        (format!(" {leader} "), p().yellow)
     } else {
-        (" TERM ".to_string(), WORK)
+        (" TERM ".to_string(), p().green)
     };
-    let key = |k: &str| Span::styled(format!(" {k}"), Style::default().fg(FOCUS));
-    let txt = |t: &str| Span::styled(format!(" {t} "), Style::default().fg(DIM));
-    let mut spans = vec![Span::styled(
-        chip,
-        Style::default()
-            .bg(color)
-            .fg(BG)
-            .add_modifier(Modifier::BOLD),
-    )];
+    let key = |k: &str| {
+        Span::styled(
+            format!(" {k}"),
+            Style::default().fg(p().fg).add_modifier(Modifier::BOLD),
+        )
+    };
+    let txt = |t: &str| Span::styled(format!(" {t} "), Style::default().fg(p().dim));
+    let mut spans = vec![
+        Span::styled(
+            chip,
+            Style::default()
+                .bg(color)
+                .fg(p().bg)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+    ];
     if let Some(job) = &app.busy {
         spans.push(Span::styled(
-            format!("  ⟳ {job}"),
-            Style::default().fg(WORK),
+            format!(" ⟳ {job} "),
+            Style::default().fg(p().cyan),
         ));
     }
     if let Some(msg) = &app.status {
-        spans.push(Span::styled(format!("  {msg}"), Style::default().fg(WAIT)));
+        spans.push(Span::styled(
+            format!(" {msg}"),
+            Style::default().fg(p().yellow),
+        ));
     } else if app.leading() {
-        spans.extend([txt("one key"), key("esc"), txt("cancels")]);
+        spans.extend([txt("one key ·"), key("esc"), txt("cancels")]);
     } else {
         spans.extend([
             key(&leader),
             txt("then a key ·"),
             key("1-9"),
-            txt("workspace"),
+            txt("workspace ·"),
             key("w"),
-            txt("worktree"),
-            key("d"),
-            txt("changes"),
+            txt("worktree ·"),
+            key("t"),
+            txt("pane ·"),
             key("?"),
             txt("all keys"),
         ]);
     }
     f.render_widget(
-        Paragraph::new(Line::from(spans)).style(Style::default().bg(PANEL)),
+        Paragraph::new(Line::from(spans)).style(Style::default().bg(p().panel)),
         r,
     );
 }
@@ -245,46 +259,39 @@ fn empty(f: &mut Frame, app: &App) {
     };
     let y = stage.y + stage.height / 2;
     f.render_widget(
-        Paragraph::new(Span::styled(msg, Style::default().fg(DIM))).alignment(Alignment::Center),
+        Paragraph::new(Span::styled(msg, Style::default().fg(p().dim)))
+            .alignment(Alignment::Center),
         TRect::new(stage.x, y, stage.width, 1),
     );
 }
 
 fn pane(f: &mut Frame, app: &App, r: TRect, title: &str, view: Option<&PaneView>, focused: bool) {
-    let border = if focused {
-        Style::default().fg(FOCUS).add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(LINE)
-    };
-    let mut title = vec![Span::styled(
+    let accent = if focused { p().blue } else { p().line };
+    let mut spans = vec![Span::styled(
         format!(" {title} "),
         if focused {
-            Style::default().fg(FOCUS).add_modifier(Modifier::BOLD)
+            Style::default().fg(p().blue).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(DIM)
+            Style::default().fg(p().dim)
         },
     )];
     if let Some(status) = view.and_then(|v| v.exited) {
-        title.push(Span::styled(
+        spans.push(Span::styled(
             format!(" exited {status} "),
-            Style::default().fg(WAIT),
+            Style::default().fg(p().red),
         ));
     }
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_type(if focused {
-            BorderType::Thick
-        } else {
-            BorderType::Rounded
-        })
-        .border_style(border)
-        .title(Line::from(title));
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(accent))
+        .title(Line::from(spans));
     let inner = block.inner(r);
     f.render_widget(block, r);
 
     let Some(view) = view else {
         f.render_widget(
-            Paragraph::new(Span::styled("starting…", Style::default().fg(DIM))),
+            Paragraph::new(Span::styled("starting…", Style::default().fg(p().dim))),
             inner,
         );
         return;
@@ -311,8 +318,8 @@ fn screen_to(buf: &mut Buffer, screen: &vt100::Screen, area: TRect, dim: bool) {
                 continue;
             }
             let mut style = Style::default()
-                .fg(color(cell.fgcolor(), FG))
-                .bg(color(cell.bgcolor(), BG));
+                .fg(color(cell.fgcolor(), p().fg))
+                .bg(color(cell.bgcolor(), p().bg));
             if cell.bold() {
                 style = style.add_modifier(Modifier::BOLD);
             }
@@ -361,16 +368,26 @@ fn which(f: &mut Frame, app: &App) {
                 ("X", "remove"),
             ],
         ),
-        ("panes", &[("hjkl", "go"), ("f", "full"), ("x", "close")]),
+        (
+            "panes",
+            &[
+                ("hjkl", "go"),
+                ("t", "new"),
+                ("x", "close"),
+                ("n", "name"),
+                ("f", "full"),
+                ("HJKL", "move"),
+            ],
+        ),
     ];
     let rows = GROUPS.iter().map(|(_, k)| k.len()).max().unwrap_or(0) as u16;
-    let col = 18u16;
+    let col = 17u16;
     let area = f.area();
-    let w = (col * GROUPS.len() as u16 + 2).min(area.width);
+    let w = (col * GROUPS.len() as u16 + 3).min(area.width);
     let h = (rows + 3).min(area.height);
     let r = TRect::new(
         area.width.saturating_sub(w + 1),
-        area.height.saturating_sub(h + 1),
+        area.height.saturating_sub(h + 2),
         w,
         h,
     );
@@ -378,22 +395,22 @@ fn which(f: &mut Frame, app: &App) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(FOCUS))
+        .border_style(Style::default().fg(p().yellow))
         .title(Span::styled(
             format!(" {} then ", app.leader.label()),
-            Style::default().fg(FOCUS).add_modifier(Modifier::BOLD),
+            Style::default().fg(p().yellow).add_modifier(Modifier::BOLD),
         ))
-        .style(Style::default().bg(PANEL).fg(FG));
+        .style(Style::default().bg(p().panel).fg(p().fg));
     let inner = block.inner(r);
     f.render_widget(block, r);
     for (i, (title, keys)) in GROUPS.iter().enumerate() {
         let mut lines = vec![Line::from(Span::styled(
             *title,
-            Style::default().fg(FOCUS).add_modifier(Modifier::BOLD),
+            Style::default().fg(p().yellow).add_modifier(Modifier::BOLD),
         ))];
         for (k, what) in *keys {
             lines.push(Line::from(vec![
-                Span::styled(format!("{k:<5}"), Style::default().fg(WORK)),
+                Span::styled(format!("{k:<5}"), Style::default().fg(p().blue)),
                 Span::raw(*what),
             ]));
         }

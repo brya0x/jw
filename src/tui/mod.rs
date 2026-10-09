@@ -46,6 +46,8 @@ enum Msg {
     /// A slow action finished on its worker thread. Boxed: output messages
     /// go through the same channel by the thousand and stay small.
     Job(Box<Job>),
+    /// The system switched between light and dark.
+    Theme,
 }
 
 // One job at a time crosses the channel, boxed; its size doesn't matter.
@@ -170,6 +172,8 @@ pub fn run() -> Result<()> {
     let events = tx.clone();
     spawn_term_reader(tx);
 
+    follow_theme(events.clone());
+
     let leader = std::env::var("JW_LEADER")
         .ok()
         .and_then(|l| Leader::parse(&l))
@@ -188,6 +192,24 @@ pub fn run() -> Result<()> {
         (Ok(()), Some(why)) => anyhow::bail!(why),
         (Ok(()), None) => Ok(()),
     }
+}
+
+/// Picks One Dark or One Light (REQ-43): `$JW_THEME` pins one; otherwise
+/// the system's appearance, checked again every few seconds.
+fn follow_theme(tx: Sender<Msg>) {
+    if let Some(dark) = crate::theme::pinned() {
+        crate::theme::set_dark(dark);
+        return;
+    }
+    crate::theme::set_dark(crate::theme::system_dark());
+    thread::spawn(move || {
+        loop {
+            thread::sleep(Duration::from_secs(3));
+            if crate::theme::set_dark(crate::theme::system_dark()) && tx.send(Msg::Theme).is_err() {
+                return;
+            }
+        }
+    });
 }
 
 /// Checks that the daemon speaks this build's protocol (RISK-14). An older
@@ -374,6 +396,11 @@ impl App {
                 self.fit();
             }
             Msg::Term(_) => {}
+            Msg::Theme => {
+                if let Some(View::Md(m)) = &mut self.view {
+                    m.restyle();
+                }
+            }
             Msg::Job(j) => self.on_job(*j),
         }
     }

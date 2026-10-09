@@ -11,13 +11,9 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use super::draw::{BG, DEV, DIM, FG, FOCUS, LINE, PANEL, WAIT, WORK};
 use crate::diff::{self, File, Kind, Status};
+use crate::theme::p;
 
-const DEL_BG: Color = Color::Rgb(0x3b, 0x22, 0x29);
-const DEL_WORD: Color = Color::Rgb(0x7a, 0x2e, 0x3a);
-const ADD_BG: Color = Color::Rgb(0x17, 0x37, 0x2b);
-const ADD_WORD: Color = Color::Rgb(0x1e, 0x6b, 0x47);
 const TREE: u16 = 30;
 
 pub struct DiffView {
@@ -179,22 +175,25 @@ impl DiffView {
         let mode = if self.split { "split" } else { "unified" };
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(FOCUS))
+            .border_style(Style::default().fg(p().blue))
             .title(Line::from(vec![
                 Span::styled(
                     format!(" diff · {} ", self.title),
-                    Style::default().fg(FOCUS).add_modifier(Modifier::BOLD),
+                    Style::default().fg(p().blue).add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     format!("{} files ", self.files.len()),
-                    Style::default().fg(DIM),
+                    Style::default().fg(p().dim),
                 ),
-                Span::styled(format!("+{adds} "), Style::default().fg(DEV)),
-                Span::styled(format!("−{dels} "), Style::default().fg(WAIT)),
+                Span::styled(format!("+{adds} "), Style::default().fg(p().green)),
+                Span::styled(format!("−{dels} "), Style::default().fg(p().yellow)),
             ]))
             .title(
-                Line::from(Span::styled(format!(" {mode} "), Style::default().fg(DIM)))
-                    .right_aligned(),
+                Line::from(Span::styled(
+                    format!(" {mode} "),
+                    Style::default().fg(p().dim),
+                ))
+                .right_aligned(),
             );
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -202,7 +201,7 @@ impl DiffView {
             frame.render_widget(
                 Paragraph::new(Span::styled(
                     " No changes against the base branch.",
-                    Style::default().fg(DIM),
+                    Style::default().fg(p().dim),
                 )),
                 inner,
             );
@@ -225,7 +224,7 @@ impl DiffView {
         self.draw_tree(frame, tree, current);
         for y in inner.y..inner.y + inner.height {
             if let Some(c) = frame.buffer_mut().cell_mut((inner.x + tree_w, y)) {
-                c.set_symbol("│").set_style(Style::default().fg(LINE));
+                c.set_symbol("│").set_style(Style::default().fg(p().line));
             }
         }
 
@@ -248,7 +247,7 @@ impl DiffView {
     fn draw_tree(&self, frame: &mut Frame, area: Rect, current: usize) {
         let mut lines = vec![Line::from(Span::styled(
             " Files",
-            Style::default().fg(DIM).add_modifier(Modifier::BOLD),
+            Style::default().fg(p().dim).add_modifier(Modifier::BOLD),
         ))];
         // Keep the current file in sight in a long list.
         let room = area.height.saturating_sub(1) as usize;
@@ -267,23 +266,23 @@ impl DiffView {
             let w = area.width as usize;
             let room_for_name = w.saturating_sub(counts.chars().count() + 4);
             let style = if on {
-                Style::default().fg(FOCUS).add_modifier(Modifier::BOLD)
+                Style::default().fg(p().blue).add_modifier(Modifier::BOLD)
             } else if self.viewed.contains(&i) {
-                Style::default().fg(DIM)
+                Style::default().fg(p().dim)
             } else {
-                Style::default().fg(FG)
+                Style::default().fg(p().fg)
             };
             let mut line = Line::from(vec![
                 Span::styled(
                     format!(" {mark} "),
-                    Style::default().fg(if on { FOCUS } else { DEV }),
+                    Style::default().fg(if on { p().blue } else { p().green }),
                 ),
                 Span::styled(fit(name, room_for_name), style),
                 Span::raw(" "),
-                Span::styled(counts, Style::default().fg(DIM)),
+                Span::styled(counts, Style::default().fg(p().dim)),
             ]);
             if on {
-                line = line.style(Style::default().bg(PANEL));
+                line = line.style(Style::default().bg(p().panel));
             }
             lines.push(line);
         }
@@ -305,23 +304,29 @@ impl DiffView {
         let mut spans = vec![
             Span::styled(
                 format!(" {name} "),
-                Style::default().fg(FG).add_modifier(Modifier::BOLD),
+                Style::default().fg(p().fg).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(format!("+{} ", file.added()), Style::default().fg(DEV)),
-            Span::styled(format!("−{} ", file.deleted()), Style::default().fg(WAIT)),
+            Span::styled(
+                format!("+{} ", file.added()),
+                Style::default().fg(p().green),
+            ),
+            Span::styled(
+                format!("−{} ", file.deleted()),
+                Style::default().fg(p().yellow),
+            ),
         ];
         if !status.is_empty() {
             spans.push(Span::styled(
                 format!(" {status} "),
-                Style::default().fg(WORK),
+                Style::default().fg(p().cyan),
             ));
         }
         if self.viewed.contains(&f) {
-            spans.push(Span::styled(" ✓ viewed ", Style::default().fg(DEV)));
+            spans.push(Span::styled(" ✓ viewed ", Style::default().fg(p().green)));
         }
         let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
         spans.push(Span::raw(" ".repeat((width as usize).saturating_sub(used))));
-        Line::from(spans).style(Style::default().bg(PANEL))
+        Line::from(spans).style(Style::default().bg(p().panel))
     }
 
     fn item_line(&self, item: Item, width: u16) -> Line<'static> {
@@ -335,16 +340,16 @@ impl DiffView {
                 } else {
                     " no text changes"
                 };
-                Line::from(Span::styled(note, Style::default().fg(DIM)))
+                Line::from(Span::styled(note, Style::default().fg(p().dim)))
             }
             Item::Hunk(f, h) => {
                 let hunk = &self.files[f].hunks[h];
                 Line::from(vec![
                     Span::styled(
                         format!(" @@ -{} +{} @@ ", hunk.old_start, hunk.new_start),
-                        Style::default().fg(WORK),
+                        Style::default().fg(p().cyan),
                     ),
-                    Span::styled(hunk.context.clone(), Style::default().fg(DIM)),
+                    Span::styled(hunk.context.clone(), Style::default().fg(p().dim)),
                 ])
             }
             Item::Row(f, h, r) => {
@@ -371,7 +376,7 @@ fn split_line(row: &diff::Row, width: u16, path: &str) -> Line<'static> {
         (lw, rw) = diff::word_changes(&expand_tabs(&l.text), &expand_tabs(&r.text));
     }
     let mut spans = side(row.left, half, &lw, true, path);
-    spans.push(Span::styled("│", Style::default().fg(LINE)));
+    spans.push(Span::styled("│", Style::default().fg(p().line)));
     spans.extend(side(row.right, half, &rw, false, path));
     Line::from(spans)
 }
@@ -385,13 +390,13 @@ fn side(
 ) -> Vec<Span<'static>> {
     let Some(l) = line else {
         // Nothing on this side: left blank, as GitHub greys it out.
-        return vec![Span::styled(" ".repeat(width), Style::default().bg(BG))];
+        return vec![Span::styled(" ".repeat(width), Style::default().bg(p().bg))];
     };
     let no = if old { l.old_no } else { l.new_no };
     let (bg, word_bg, sign) = match l.kind {
-        Kind::Del => (DEL_BG, DEL_WORD, "-"),
-        Kind::Add => (ADD_BG, ADD_WORD, "+"),
-        Kind::Ctx => (BG, BG, " "),
+        Kind::Del => (p().del_bg, p().del_word, "-"),
+        Kind::Add => (p().add_bg, p().add_word, "+"),
+        Kind::Ctx => (p().bg, p().bg, " "),
     };
     let gutter = format!(
         "{:>4} {sign}",
@@ -399,7 +404,7 @@ fn side(
     );
     let text_w = width.saturating_sub(gutter.chars().count() + 1);
     let mut spans = vec![
-        Span::styled(gutter, Style::default().fg(DIM).bg(bg)),
+        Span::styled(gutter, Style::default().fg(p().dim).bg(bg)),
         Span::styled(" ", Style::default().bg(bg)),
     ];
     spans.extend(marked(&l.text, text_w, words, bg, word_bg, path));
@@ -408,14 +413,14 @@ fn side(
 
 fn uni_line(l: &diff::Line, width: u16, path: &str) -> Line<'static> {
     let (bg, sign) = match l.kind {
-        Kind::Del => (DEL_BG, "-"),
-        Kind::Add => (ADD_BG, "+"),
-        Kind::Ctx => (BG, " "),
+        Kind::Del => (p().del_bg, "-"),
+        Kind::Add => (p().add_bg, "+"),
+        Kind::Ctx => (p().bg, " "),
     };
     let num = |n: Option<u32>| n.map(|n| n.to_string()).unwrap_or_default();
     let gutter = format!("{:>4} {:>4} {sign} ", num(l.old_no), num(l.new_no));
     let text_w = (width as usize).saturating_sub(gutter.chars().count());
-    let mut spans = vec![Span::styled(gutter, Style::default().fg(DIM).bg(bg))];
+    let mut spans = vec![Span::styled(gutter, Style::default().fg(p().dim).bg(bg))];
     spans.extend(marked(&l.text, text_w, &[], bg, bg, path));
     Line::from(spans)
 }
@@ -440,7 +445,7 @@ fn marked(
     let mut used = 0;
     let mut at = 0;
     'outer: for piece in crate::view::highlight::highlight_line(&text, path) {
-        let fg = piece.style.fg.unwrap_or(FG);
+        let fg = piece.style.fg.unwrap_or(p().fg);
         let mut run = String::new();
         let mut run_changed = None;
         for c in piece.content.chars() {

@@ -3,19 +3,13 @@
 //! numbered, tasks), quotes, highlighted code blocks, tables, rules.
 //! Pure: Markdown in, ratatui lines out, laid out for one width.
 
+use crate::theme::p;
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::highlight::Highlighter;
-
-const FOCUS: Color = Color::Rgb(0xf0, 0xb4, 0x4c);
-const WORK: Color = Color::Rgb(0x7f, 0xc4, 0xff);
-const DIM: Color = Color::Rgb(0x5d, 0x7a, 0x82);
-const FG: Color = Color::Rgb(0xd5, 0xe3, 0xe6);
-const PANEL: Color = Color::Rgb(0x15, 0x2e, 0x37);
-const LINE: Color = Color::Rgb(0x2a, 0x47, 0x51);
 
 /// Narrower than this, nothing reads well anyway.
 const MIN_WIDTH: usize = 12;
@@ -104,7 +98,7 @@ impl Renderer {
                 }
             }
             Event::Code(t) => {
-                let style = Style::default().fg(FOCUS).bg(PANEL);
+                let style = Style::default().fg(p().blue).bg(p().panel);
                 self.text(&t, style);
             }
             Event::SoftBreak => self.text(" ", self.style()),
@@ -112,19 +106,19 @@ impl Renderer {
             Event::Rule => {
                 self.block_gap();
                 let w = self.width - self.prefix_width();
-                let rule = Span::styled("─".repeat(w), Style::default().fg(LINE));
+                let rule = Span::styled("─".repeat(w), Style::default().fg(p().line));
                 self.out.push(Line::from(vec![self.quote_prefix(), rule]));
             }
             Event::TaskListMarker(done) => {
                 let glyph = if done { "☑ " } else { "☐ " };
-                let color = if done { DIM } else { FOCUS };
+                let color = if done { p().dim } else { p().blue };
                 self.marker = Some(Span::styled(glyph, Style::default().fg(color)));
                 if let Some(w) = self.items.last_mut() {
                     *w = 2;
                 }
             }
             Event::Html(t) | Event::InlineHtml(t) => {
-                self.text(&t, Style::default().fg(DIM));
+                self.text(&t, Style::default().fg(p().dim));
             }
             _ => {}
         }
@@ -171,11 +165,11 @@ impl Renderer {
                     Some(Some(n)) => {
                         let m = format!("{n}. ");
                         *n += 1;
-                        Span::styled(m, Style::default().fg(WORK))
+                        Span::styled(m, Style::default().fg(p().cyan))
                     }
                     _ => {
                         let bullet = ["• ", "◦ ", "▪ "][(self.lists.len() + 2) % 3];
-                        Span::styled(bullet, Style::default().fg(WORK))
+                        Span::styled(bullet, Style::default().fg(p().cyan))
                     }
                 };
                 self.items.push(marker.width());
@@ -187,7 +181,7 @@ impl Renderer {
             Tag::Strikethrough => self.strike += 1,
             Tag::Link { dest_url, .. } => self.link = Some(dest_url.to_string()),
             Tag::Image { .. } => {
-                self.text("▣ ", Style::default().fg(DIM));
+                self.text("▣ ", Style::default().fg(p().dim));
                 self.link = Some(String::new());
             }
             Tag::Table(align) => {
@@ -215,10 +209,10 @@ impl Renderer {
                 let text: String = self.runs.iter().map(|(t, _)| t.as_str()).collect();
                 let line = self.out.len();
                 let style = match level {
-                    1 => Style::default().fg(FOCUS).add_modifier(Modifier::BOLD),
-                    2 => Style::default().fg(FG).add_modifier(Modifier::BOLD),
-                    3 => Style::default().fg(WORK).add_modifier(Modifier::BOLD),
-                    _ => Style::default().fg(DIM).add_modifier(Modifier::BOLD),
+                    1 => Style::default().fg(p().blue).add_modifier(Modifier::BOLD),
+                    2 => Style::default().fg(p().fg).add_modifier(Modifier::BOLD),
+                    3 => Style::default().fg(p().cyan).add_modifier(Modifier::BOLD),
+                    _ => Style::default().fg(p().dim).add_modifier(Modifier::BOLD),
                 };
                 for run in &mut self.runs {
                     run.1 = run.1.patch(style);
@@ -232,9 +226,9 @@ impl Renderer {
                 if level <= 2 {
                     let w = self.width - self.prefix_width();
                     let (ch, color) = if level == 1 {
-                        ("━", FOCUS)
+                        ("━", p().blue)
                     } else {
-                        ("─", LINE)
+                        ("─", p().line)
                     };
                     let rule = Span::styled(ch.repeat(w), Style::default().fg(color));
                     self.out.push(Line::from(vec![self.quote_prefix(), rule]));
@@ -265,7 +259,7 @@ impl Renderer {
                 if let Some(url) = self.link.take() {
                     let text: String = self.runs.iter().map(|(t, _)| t.as_str()).collect();
                     if !url.is_empty() && !text.ends_with(&url) && !url.starts_with('#') {
-                        self.push_run(format!(" ({url})"), Style::default().fg(DIM));
+                        self.push_run(format!(" ({url})"), Style::default().fg(p().dim));
                     }
                 }
             }
@@ -300,7 +294,7 @@ impl Renderer {
     }
 
     fn style(&self) -> Style {
-        let mut s = Style::default().fg(FG);
+        let mut s = Style::default().fg(p().fg);
         if self.bold > 0 {
             s = s.add_modifier(Modifier::BOLD);
         }
@@ -311,7 +305,7 @@ impl Renderer {
             s = s.add_modifier(Modifier::CROSSED_OUT);
         }
         if self.link.is_some() {
-            s = s.fg(WORK).add_modifier(Modifier::UNDERLINED);
+            s = s.fg(p().cyan).add_modifier(Modifier::UNDERLINED);
         }
         s
     }
@@ -336,7 +330,7 @@ impl Renderer {
     }
 
     fn quote_prefix(&self) -> Span<'static> {
-        Span::styled("│ ".repeat(self.quote), Style::default().fg(LINE))
+        Span::styled("│ ".repeat(self.quote), Style::default().fg(p().line))
     }
 
     fn prefix_width(&self) -> usize {
@@ -371,12 +365,12 @@ impl Renderer {
     fn code_block(&mut self, lang: &str, lines: &[String]) {
         let inner = self.width - self.prefix_width();
         let indent = Span::raw(" ".repeat(self.items.iter().sum::<usize>()));
-        let bg = Style::default().bg(PANEL);
+        let bg = Style::default().bg(p().panel);
         let label = if lang.is_empty() { "code" } else { lang };
         let head = fit(
             vec![Span::styled(
                 format!(" {label} "),
-                Style::default().fg(DIM).bg(PANEL),
+                Style::default().fg(p().dim).bg(p().panel),
             )],
             inner,
             bg,
@@ -387,7 +381,7 @@ impl Renderer {
         for l in lines {
             let mut spans = vec![Span::styled(" ", bg)];
             spans.extend(hl.line(&l.replace('\t', "    ")).into_iter().map(|s| {
-                let style = s.style.bg(PANEL);
+                let style = s.style.bg(p().panel);
                 Span::styled(s.content, style)
             }));
             self.out.push(prefixed(
@@ -428,7 +422,7 @@ impl Renderer {
             }
             widths[i] -= 1;
         }
-        let border = Style::default().fg(LINE);
+        let border = Style::default().fg(p().line);
         let rule = |l: &str, m: &str, r: &str| -> Line<'static> {
             let parts: Vec<String> = widths.iter().map(|w| "─".repeat(w + 2)).collect();
             Line::from(Span::styled(format!("{l}{}{r}", parts.join(m)), border))
@@ -447,9 +441,9 @@ impl Renderer {
                 let style = row
                     .get(i)
                     .and_then(|c| c.first())
-                    .map_or(Style::default().fg(FG), |(_, s)| *s);
+                    .map_or(Style::default().fg(p().fg), |(_, s)| *s);
                 let style = if head {
-                    Style::default().fg(FOCUS).add_modifier(Modifier::BOLD)
+                    Style::default().fg(p().blue).add_modifier(Modifier::BOLD)
                 } else {
                     style
                 };
@@ -771,7 +765,7 @@ Last paragraph.
             .iter()
             .flat_map(|l| &l.spans)
             .find(|s| s.content == "inline");
-        assert_eq!(code.and_then(|s| s.style.bg), Some(PANEL));
+        assert_eq!(code.and_then(|s| s.style.bg), Some(p().panel));
         // The nested item's second line hangs under its text, not its bullet.
         let i = all.iter().position(|l| l.contains("◦ nested")).unwrap();
         let col = all[i].find("nested").unwrap();
@@ -795,7 +789,12 @@ Last paragraph.
         let mut fgs: Vec<_> = body.spans.iter().filter_map(|s| s.style.fg).collect();
         fgs.dedup();
         assert!(fgs.len() > 1, "{body:?}");
-        assert!(body.spans.iter().skip(2).all(|s| s.style.bg == Some(PANEL)));
+        assert!(
+            body.spans
+                .iter()
+                .skip(2)
+                .all(|s| s.style.bg == Some(p().panel))
+        );
         assert_eq!(body.width(), 60, "the panel spans the width");
     }
 

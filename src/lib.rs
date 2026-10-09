@@ -17,5 +17,6 @@ pub mod init;
 pub mod layout;
 pub mod proto;
 pub mod stream;
+pub mod theme;
 pub mod tui;
 pub mod view;

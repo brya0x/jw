@@ -1,5 +1,6 @@
 //! Syntax highlighting for the viewers (diff, Markdown code blocks), with
-//! syntect's bundled grammars and one dark theme. Foreground colours only:
+//! syntect's bundled grammars and a dark or light theme to match the
+//! palette in use (`crate::theme`). Foreground colours only:
 //! the caller paints backgrounds (added/removed lines, code blocks).
 
 use std::sync::OnceLock;
@@ -10,8 +11,9 @@ use syntect::easy::HighlightLines;
 use syntect::highlighting::{FontStyle, Theme, ThemeSet};
 use syntect::parsing::{SyntaxReference, SyntaxSet};
 
-/// Sits well on the petrol background (#10232A).
-const THEME: &str = "base16-ocean.dark";
+/// syntect's bundled themes that sit well on One Dark and One Light.
+const DARK: &str = "base16-ocean.dark";
+const LIGHT: &str = "InspiredGitHub";
 
 /// Loading the bundled grammars takes tens of milliseconds: do it once.
 fn syntaxes() -> &'static SyntaxSet {
@@ -20,10 +22,16 @@ fn syntaxes() -> &'static SyntaxSet {
 }
 
 fn theme() -> &'static Theme {
-    static THEME_: OnceLock<Theme> = OnceLock::new();
-    THEME_.get_or_init(|| {
+    static DARK_: OnceLock<Theme> = OnceLock::new();
+    static LIGHT_: OnceLock<Theme> = OnceLock::new();
+    let (cell, name) = if crate::theme::p().dark {
+        (&DARK_, DARK)
+    } else {
+        (&LIGHT_, LIGHT)
+    };
+    cell.get_or_init(|| {
         let mut set = ThemeSet::load_defaults();
-        set.themes.remove(THEME).expect("bundled theme")
+        set.themes.remove(name).expect("bundled theme")
     })
 }
 

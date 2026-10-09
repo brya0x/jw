@@ -44,7 +44,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 | Session | `session.json` in the state dir (next to the socket for any socket but the default one, so tests never touch it), written by the daemon with temp + rename after every tree change: `{workspaces: [{id, tree}]}`, each leaf with role, name, cmd, cwd and env. Recency and recent folders arrive with Q3/Q4 |
 | Folders | `src/folders.rs` (replaces `src/free.rs`): open project folders `{id, dir, opened}` in `~/.local/state/jw/folders.json`; the first run migrates `free.json`. A git folder's worktrees come from the registry by project name |
 | Pane env | the JW_* vars of `actions::jw_env` (a plain folder gets JW_ID, JW_NAME, JW_PROJECT) + `JW_PANE_ID` |
-| Theme | `src/tui/theme.rs`: a `Palette` of One Dark / One Light values used by every draw module. Pick: `JW_THEME=dark\|light\|auto` (OPEN-5), else the terminal's background (OSC 11 at start; mode 2031 updates on Ghostty/kitty), else `defaults read -g AppleInterfaceStyle` |
+| Theme | `src/theme.rs`: One Dark / One Light `Palette`s that every draw module (and the syntect theme) asks for through `theme::p()`. Pick: `JW_THEME=dark\|light` pins one (OPEN-5); otherwise macOS's `AppleInterfaceStyle`, re-read every 3 s so a switch repaints; dark elsewhere. Querying the terminal (OSC 11, mode 2031) is left for later |
 | Stack | ratatui (its crossterm re-export), portable-pty, vt100 0.16 (drawn by `src/tui/draw.rs`), serde/toml/serde_json, syntect, pulldown-cmark, anyhow |
 | Diff | `src/diff.rs` (model: `git diff -M --merge-base origin/<base>` + untracked) and `src/tui/diffview.rs` (drawing, keys `j k ] [ v t ␣ b ↵ q`) |
 | MD reader | `src/view/md.rs` (pulldown-cmark → wrapped lines + headings) and `src/tui/mdview.rs` |
