@@ -1500,7 +1500,6 @@ impl App {
         }
     }
 
-    /// `^␣ o`: the folder browser, starting beside the current project.
     /// `^␣ ,`: the settings screen (REQ-67).
     fn ask_settings(&mut self) {
         self.settings = Some(settings_view::SettingsView::new());
@@ -1515,6 +1514,7 @@ impl App {
         self.leader = leader();
     }
 
+    /// `^␣ o`: the folder browser, starting beside the current project.
     fn ask_folder(&mut self) {
         let start = self
             .current()
