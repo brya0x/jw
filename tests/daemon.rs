@@ -788,3 +788,60 @@ fn a_dragged_border_keeps_its_place() {
         "b is a leaf"
     );
 }
+
+/// REQ-76: a client that stops reading loses that pane's output instead of
+/// growing the daemon, the other client gets everything, and the slow one
+/// gets a fresh Snapshot once it reads again.
+#[test]
+fn a_slow_client_is_resynced_and_holds_nobody_up() {
+    let d = Daemon::start();
+    let mut fast = d.client();
+    let flood = "read x; head -c 12000000 /dev/zero | tr '\\0' x; printf '\\nthe-end\\n'; cat";
+    let pane = spawn(&mut fast, "slow", flood, 80, 24);
+    let mut slow = d.client();
+    attach(&mut slow, "slow", pane);
+
+    fast.send(&ClientMsg::Input {
+        pane,
+        bytes: b"go\n".to_vec(),
+    })
+    .unwrap();
+    let mut tail = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        assert!(
+            Instant::now() < deadline,
+            "the fast client never saw the end"
+        );
+        if let DaemonMsg::Output { pane: p, bytes } = recv(&mut fast)
+            && p == pane
+        {
+            tail.extend_from_slice(&bytes);
+            let keep = tail.len().saturating_sub(16);
+            if String::from_utf8_lossy(&tail).contains("the-end") {
+                break;
+            }
+            tail.drain(..keep);
+        }
+    }
+
+    let mut got = 0usize;
+    loop {
+        assert!(
+            Instant::now() < deadline,
+            "the slow client was never resynced"
+        );
+        match recv(&mut slow) {
+            DaemonMsg::Output { pane: p, bytes } if p == pane => got += bytes.len(),
+            DaemonMsg::Snapshot { pane: p, bytes, .. } if p == pane => {
+                let mut screen = vt100::Parser::new(24, 80, 0);
+                screen.process(&bytes);
+                if screen.screen().contents().contains("the-end") {
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    assert!(got < 12_000_000, "the slow client got all {got} bytes");
+}

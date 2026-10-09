@@ -16,7 +16,6 @@ use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -24,6 +23,10 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use serde::{Deserialize, Serialize};
+
+mod outbox;
+
+use outbox::Tx;
 
 use crate::layout::{Dir, Tree};
 use crate::proto::{
@@ -190,7 +193,7 @@ const BUSY: Duration = Duration::from_secs(2);
 /// One client's interest in one pane or workspace.
 struct Sub {
     client: u64,
-    tx: Sender<DaemonMsg>,
+    tx: Tx,
 }
 
 impl PaneState {
@@ -199,13 +202,26 @@ impl PaneState {
         self.subs.retain(|s| s.tx.send(msg.clone()).is_ok());
     }
 
-    fn subscribe(&mut self, client: u64, tx: &Sender<DaemonMsg>) {
+    fn subscribe(&mut self, client: u64, tx: &Tx) {
         if !self.subs.iter().any(|s| s.client == client) {
             self.subs.push(Sub {
                 client,
                 tx: tx.clone(),
             });
         }
+    }
+}
+
+/// The pane's whole screen, for a client that starts watching it.
+fn snapshot(id: PaneId, pane: &Pane, st: &PaneState) -> DaemonMsg {
+    let screen = st.parser.screen();
+    let (rows, cols) = screen.size();
+    DaemonMsg::Snapshot {
+        pane: id,
+        role: pane.role.clone(),
+        cols,
+        rows,
+        bytes: screen.state_formatted(),
     }
 }
 
@@ -254,18 +270,23 @@ impl Daemon {
 
     fn serve(self: Arc<Self>, stream: UnixStream) {
         let client = self.next_client.fetch_add(1, Ordering::Relaxed);
-        let (tx, rx) = mpsc::channel::<DaemonMsg>();
+        let tx = Tx::new();
 
         let mut out = match stream.try_clone() {
             Ok(s) => s,
             Err(e) => return eprintln!("jw daemon: client {client}: {e}"),
         };
+        let (me, rx) = (Arc::clone(&self), tx.clone());
         thread::spawn(move || {
-            for msg in rx {
+            while let Some(msg) = rx.recv() {
                 if write_frame(&mut out, &msg).is_err() {
                     break;
                 }
+                for pane in rx.stale() {
+                    me.resync(&rx, pane);
+                }
             }
+            rx.close();
             let _ = out.shutdown(std::net::Shutdown::Both);
         });
 
@@ -286,10 +307,11 @@ impl Daemon {
             }
         }
         // REQ-4: a client leaving only drops its subscriptions.
+        tx.close();
         self.unsubscribe(client);
     }
 
-    fn handle(&self, client: u64, tx: &Sender<DaemonMsg>, msg: ClientMsg) -> Result<()> {
+    fn handle(&self, client: u64, tx: &Tx, msg: ClientMsg) -> Result<()> {
         match msg {
             ClientMsg::Hello { .. } => {
                 let _ = tx.send(DaemonMsg::Hello { protocol: PROTOCOL });
@@ -439,7 +461,7 @@ impl Daemon {
     }
 
     /// Subscribes `client` to a workspace: its tree, then each pane's screen.
-    fn attach(&self, client: u64, tx: &Sender<DaemonMsg>, stream: &str) {
+    fn attach(&self, client: u64, tx: &Tx, stream: &str) {
         let ids: Vec<PaneId> = {
             let mut all = lock(&self.workspaces);
             match all.get_mut(stream) {
@@ -466,18 +488,10 @@ impl Daemon {
 
     /// The pane's screen (and status and title) for `client`, then its live
     /// output: under the pane's lock, so nothing falls between.
-    fn watch(&self, client: u64, tx: &Sender<DaemonMsg>, id: PaneId) {
+    fn watch(&self, client: u64, tx: &Tx, id: PaneId) {
         let Ok(pane) = self.pane(id) else { return };
         let mut st = lock(&pane.state);
-        let screen = st.parser.screen();
-        let (rows, cols) = screen.size();
-        let _ = tx.send(DaemonMsg::Snapshot {
-            pane: id,
-            role: pane.role.clone(),
-            cols,
-            rows,
-            bytes: screen.state_formatted(),
-        });
+        let _ = tx.send(snapshot(id, &pane, &st));
         if let Some(status) = st.exited {
             let _ = tx.send(DaemonMsg::Exited { pane: id, status });
         }
@@ -485,6 +499,18 @@ impl Daemon {
             let _ = tx.send(DaemonMsg::Title { pane: id, title });
         }
         st.subscribe(client, tx);
+    }
+
+    /// Catches a client up on a pane whose output it fell behind on.
+    fn resync(&self, tx: &Tx, id: PaneId) {
+        match self.pane(id) {
+            Ok(pane) => {
+                let st = lock(&pane.state);
+                tx.resync(id, snapshot(id, &pane, &st));
+            }
+            // Gone meanwhile: nothing to catch up on.
+            Err(_) => tx.forget(id),
+        }
     }
 
     /// Starts every pane of a new workspace; none is left behind on failure.
@@ -576,7 +602,7 @@ impl Daemon {
             let (tree, missing) = tree.insert(beside, dir, leaf);
             let mut ws = Ws { tree, subs };
             ws.tell(&stream);
-            let watchers: Vec<(u64, Sender<DaemonMsg>)> =
+            let watchers: Vec<(u64, Tx)> =
                 ws.subs.iter().map(|s| (s.client, s.tx.clone())).collect();
             all.insert(stream.clone(), ws);
             if missing.is_some() {
@@ -617,7 +643,7 @@ impl Daemon {
                 subs,
             };
             ws.tell(stream);
-            let watchers: Vec<(u64, Sender<DaemonMsg>)> =
+            let watchers: Vec<(u64, Tx)> =
                 ws.subs.iter().map(|s| (s.client, s.tx.clone())).collect();
             all.insert(stream.to_string(), ws);
             for (client, tx) in watchers {
@@ -819,12 +845,7 @@ impl Daemon {
 
     /// Starts a pane's process. `sub` is subscribed before its first byte
     /// can arrive; without one, watchers get a Snapshot later.
-    fn spawn(
-        &self,
-        stream: &str,
-        new: NewPane,
-        sub: Option<(u64, &Sender<DaemonMsg>)>,
-    ) -> Result<PaneId> {
+    fn spawn(&self, stream: &str, new: NewPane, sub: Option<(u64, &Tx)>) -> Result<PaneId> {
         let id = self.next_pane.fetch_add(1, Ordering::Relaxed) + 1;
         let NewPane {
             role,

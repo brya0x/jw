@@ -15,7 +15,7 @@ pub type PaneId = u64;
 
 /// Bumped whenever a message changes shape: a client and a daemon from
 /// different builds refuse each other instead of misreading (RISK-14).
-pub const PROTOCOL: u32 = 4;
+pub const PROTOCOL: u32 = 5;
 
 /// A pane to start. `cmd` runs through `sh -c`; `None` starts `$SHELL`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -213,8 +213,98 @@ pub enum DaemonMsg {
     },
 }
 
-pub fn write_frame<T: Serialize>(w: &mut impl Write, msg: &T) -> io::Result<()> {
-    let body = serde_json::to_vec(msg)?;
+/// A message that carries terminal bytes sends them raw after a JSON head,
+/// not as a JSON array of numbers (RISK-9, REQ-76).
+pub trait Raw: Sized {
+    /// The message with its bytes left out, and the bytes; `None` for a
+    /// message without any.
+    fn split_raw(&self) -> Option<(Self, &[u8])>;
+    /// Puts the bytes back into a head `split_raw` made.
+    fn join_raw(&mut self, raw: Vec<u8>);
+}
+
+impl Raw for ClientMsg {
+    fn split_raw(&self) -> Option<(Self, &[u8])> {
+        match self {
+            ClientMsg::Input { pane, bytes } => Some((
+                ClientMsg::Input {
+                    pane: *pane,
+                    bytes: Vec::new(),
+                },
+                bytes,
+            )),
+            _ => None,
+        }
+    }
+
+    fn join_raw(&mut self, raw: Vec<u8>) {
+        if let ClientMsg::Input { bytes, .. } = self {
+            *bytes = raw;
+        }
+    }
+}
+
+impl Raw for DaemonMsg {
+    fn split_raw(&self) -> Option<(Self, &[u8])> {
+        match self {
+            DaemonMsg::Output { pane, bytes } => Some((
+                DaemonMsg::Output {
+                    pane: *pane,
+                    bytes: Vec::new(),
+                },
+                bytes,
+            )),
+            DaemonMsg::Snapshot {
+                pane,
+                role,
+                cols,
+                rows,
+                bytes,
+            } => Some((
+                DaemonMsg::Snapshot {
+                    pane: *pane,
+                    role: role.clone(),
+                    cols: *cols,
+                    rows: *rows,
+                    bytes: Vec::new(),
+                },
+                bytes,
+            )),
+            _ => None,
+        }
+    }
+
+    fn join_raw(&mut self, raw: Vec<u8>) {
+        if let DaemonMsg::Output { bytes, .. } | DaemonMsg::Snapshot { bytes, .. } = self {
+            *bytes = raw;
+        }
+    }
+}
+
+/// The bytes a message carries, which is what fills a client's queue.
+pub fn raw_len<T: Raw>(msg: &T) -> usize {
+    msg.split_raw().map_or(0, |(_, b)| b.len())
+}
+
+/// A frame is a u32 length, then a kind: 0 and a JSON message, or 1, a u32
+/// length, a JSON head, and the message's bytes as they are.
+pub fn write_frame<T: Serialize + Raw>(w: &mut impl Write, msg: &T) -> io::Result<()> {
+    let body = match msg.split_raw() {
+        None => {
+            let mut b = vec![0u8];
+            serde_json::to_writer(&mut b, msg)?;
+            b
+        }
+        Some((head, raw)) => {
+            let head = serde_json::to_vec(&head)?;
+            let mut b = Vec::with_capacity(5 + head.len() + raw.len());
+            b.push(1u8);
+            b.extend_from_slice(&(head.len() as u32).to_be_bytes());
+            b.extend_from_slice(&head);
+            b.extend_from_slice(raw);
+            b
+        }
+    };
     let len = u32::try_from(body.len())
         .ok()
         .filter(|&n| n <= MAX_FRAME)
@@ -225,7 +315,7 @@ pub fn write_frame<T: Serialize>(w: &mut impl Write, msg: &T) -> io::Result<()> 
 }
 
 /// Reads one frame. `Ok(None)` is a clean end of stream between frames.
-pub fn read_frame<T: DeserializeOwned>(r: &mut impl Read) -> io::Result<Option<T>> {
+pub fn read_frame<T: DeserializeOwned + Raw>(r: &mut impl Read) -> io::Result<Option<T>> {
     let mut len = [0u8; 4];
     match r.read_exact(&mut len) {
         Ok(()) => {}
@@ -241,7 +331,21 @@ pub fn read_frame<T: DeserializeOwned>(r: &mut impl Read) -> io::Result<Option<T
     }
     let mut body = vec![0u8; len as usize];
     r.read_exact(&mut body)?;
-    Ok(Some(serde_json::from_slice(&body)?))
+    let bad = |what: &str| io::Error::new(io::ErrorKind::InvalidData, what.to_string());
+    match body.first() {
+        Some(0) => Ok(Some(serde_json::from_slice(&body[1..])?)),
+        Some(1) => {
+            let n = body
+                .get(1..5)
+                .map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize)
+                .filter(|n| 5 + n <= body.len())
+                .ok_or_else(|| bad("bad frame head"))?;
+            let mut msg: T = serde_json::from_slice(&body[5..5 + n])?;
+            msg.join_raw(body.split_off(5 + n));
+            Ok(Some(msg))
+        }
+        _ => Err(bad("unknown frame kind")),
+    }
 }
 
 /// `$JW_SOCKET`, else `$XDG_RUNTIME_DIR/jw/jw.sock`, else
@@ -285,6 +389,34 @@ mod tests {
             assert_eq!(read_frame::<ClientMsg>(&mut r).unwrap().as_ref(), Some(m));
         }
         assert_eq!(read_frame::<ClientMsg>(&mut r).unwrap(), None);
+    }
+
+    #[test]
+    fn bytes_travel_raw() {
+        let out = DaemonMsg::Output {
+            pane: 3,
+            bytes: (0..=255).collect(),
+        };
+        let snap = DaemonMsg::Snapshot {
+            pane: 3,
+            role: "shell".into(),
+            cols: 80,
+            rows: 24,
+            bytes: b"\x1b[2Jhi".to_vec(),
+        };
+        let mut buf = Vec::new();
+        write_frame(&mut buf, &out).unwrap();
+        // 4 length + 1 kind + 4 head length + the head + 256 raw bytes.
+        assert!(buf.len() < 4 + 1 + 4 + 60 + 256, "{} bytes", buf.len());
+        write_frame(&mut buf, &snap).unwrap();
+        write_frame(&mut buf, &DaemonMsg::Prompted { pane: 1 }).unwrap();
+        let mut r = buf.as_slice();
+        assert_eq!(read_frame::<DaemonMsg>(&mut r).unwrap(), Some(out));
+        assert_eq!(read_frame::<DaemonMsg>(&mut r).unwrap(), Some(snap));
+        assert_eq!(
+            read_frame::<DaemonMsg>(&mut r).unwrap(),
+            Some(DaemonMsg::Prompted { pane: 1 })
+        );
     }
 
     #[test]
