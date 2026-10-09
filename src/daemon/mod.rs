@@ -394,6 +394,18 @@ impl Daemon {
                 }
                 self.save();
             }
+            ClientMsg::Ratio {
+                stream,
+                path,
+                ratio,
+            } => {
+                self.edit(&stream, |t| {
+                    if !t.set_ratio(&path, ratio) {
+                        bail!("no split there in {stream}");
+                    }
+                    Ok(())
+                })?;
+            }
             ClientMsg::Swap { a, b } => {
                 let stream = self.stream_of(a)?;
                 self.edit(&stream, |t| {

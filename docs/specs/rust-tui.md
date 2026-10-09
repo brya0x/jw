@@ -123,6 +123,8 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 - REQ-56 WHEN jw starts and finds `free.json`, it SHALL move its sessions into `folders.json`.
 - REQ-57 WHEN `d` runs, the TUI SHALL open the diff as a pane on the right. WHEN `↵` is pressed on a file in it, the TUI SHALL open that file as REQ-42 says.
 - REQ-58 IF the pane closed with `x` is a viewer, THEN the TUI SHALL close it without asking.
+- REQ-59 WHEN the user clicks a sidebar row or a pane, the TUI SHALL open that workspace or focus that pane; WHERE the pane's program turned the mouse on, the TUI SHALL pass it every click, drag and wheel in its encoding; otherwise the wheel SHALL scroll (arrows in a full-screen program, the history in a shell). Shift + drag stays the terminal's own selection.
+- REQ-60 WHEN the user drags the line between two panes, the TUI SHALL resize them as it moves, and the daemon SHALL keep the new share in the tree and `session.json`.
 - REQ-19 WHEN the workspace, a modal or the pane focus changes, the TUI MAY animate the transition, never delaying input to the panes. *(Later; optional.)*
 - REQ-20 WHERE `[tui] animations = false`, the TUI SHALL apply every change without animation.
 

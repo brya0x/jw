@@ -15,7 +15,7 @@ pub type PaneId = u64;
 
 /// Bumped whenever a message changes shape: a client and a daemon from
 /// different builds refuse each other instead of misreading (RISK-14).
-pub const PROTOCOL: u32 = 3;
+pub const PROTOCOL: u32 = 4;
 
 /// A pane to start. `cmd` runs through `sh -c`; `None` starts `$SHELL`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -111,6 +111,12 @@ pub enum ClientMsg {
     /// Kill every pane of the workspace.
     Close {
         stream: String,
+    },
+    /// Move the line between the two sides of a split: `a` keeps `ratio`.
+    Ratio {
+        stream: String,
+        path: crate::layout::SplitPath,
+        ratio: f32,
     },
     /// Trade the places of two panes of one workspace.
     Swap {

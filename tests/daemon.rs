@@ -737,3 +737,37 @@ fn a_restarted_daemon_brings_the_workspaces_back() {
     }
     read_until(&mut c, agent, &mut screen, "resumed");
 }
+
+#[test]
+fn a_dragged_border_keeps_its_place() {
+    let d = Daemon::start();
+    let mut c = d.client();
+    c.send(&ClientMsg::Open {
+        stream: "g".into(),
+        tree: Tree::Split {
+            dir: Dir::Right,
+            ratio: 0.5,
+            a: Box::new(Tree::Leaf(cat())),
+            b: Box::new(Tree::Leaf(cat())),
+        },
+    })
+    .unwrap();
+    next_tree(&mut c);
+    c.send(&ClientMsg::Ratio {
+        stream: "g".into(),
+        path: vec![],
+        ratio: 0.3,
+    })
+    .unwrap();
+    assert_eq!(next_tree(&mut c).ratio_at(&[]), Some(0.3));
+    c.send(&ClientMsg::Ratio {
+        stream: "g".into(),
+        path: vec![true],
+        ratio: 0.3,
+    })
+    .unwrap();
+    assert!(
+        matches!(recv(&mut c), DaemonMsg::Error { .. }),
+        "b is a leaf"
+    );
+}

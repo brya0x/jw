@@ -233,6 +233,97 @@ impl<L> Tree<L> {
     }
 }
 
+/// Where a split sits: from the root, `false` for `a` and `true` for `b`.
+pub type SplitPath = Vec<bool>;
+
+/// A split between two parts of a tree, as drawn: the line where they meet
+/// can be dragged.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Border {
+    pub path: SplitPath,
+    pub dir: Dir,
+    /// The whole split's area.
+    pub area: Rect,
+}
+
+impl<L> Tree<L> {
+    /// Every split with its area, outermost first.
+    pub fn borders(&self, area: Rect) -> Vec<Border> {
+        let mut out = Vec::new();
+        self.collect_borders(area, &mut Vec::new(), &mut out);
+        out
+    }
+
+    fn collect_borders(&self, area: Rect, path: &mut SplitPath, out: &mut Vec<Border>) {
+        if let Self::Split { dir, ratio, a, b } = self {
+            out.push(Border {
+                path: path.clone(),
+                dir: *dir,
+                area,
+            });
+            let (ra, rb) = halves(area, *dir, *ratio);
+            path.push(false);
+            a.collect_borders(ra, path, out);
+            path.pop();
+            path.push(true);
+            b.collect_borders(rb, path, out);
+            path.pop();
+        }
+    }
+
+    /// The split whose dividing line is at `(x, y)`: the border columns (or
+    /// rows) of the two panes that meet there. The innermost one wins.
+    pub fn border_at(&self, area: Rect, x: u16, y: u16) -> Option<Border> {
+        self.borders(area).into_iter().rev().find(|b| {
+            let (ra, _) = match self.split_at(&b.path) {
+                Some((dir, ratio)) => halves(b.area, dir, ratio),
+                None => return false,
+            };
+            let a = b.area;
+            match b.dir {
+                Dir::Right => {
+                    let edge = ra.x + ra.w;
+                    (x + 1 == edge || x == edge) && y >= a.y && y < a.y + a.h
+                }
+                Dir::Down => {
+                    let edge = ra.y + ra.h;
+                    (y + 1 == edge || y == edge) && x >= a.x && x < a.x + a.w
+                }
+            }
+        })
+    }
+
+    /// The share `a` keeps in the split at `path`.
+    pub fn ratio_at(&self, path: &[bool]) -> Option<f32> {
+        self.split_at(path).map(|(_, r)| r)
+    }
+
+    fn split_at(&self, path: &[bool]) -> Option<(Dir, f32)> {
+        match (self, path.split_first()) {
+            (Self::Split { dir, ratio, .. }, None) => Some((*dir, *ratio)),
+            (Self::Split { a, b, .. }, Some((side, rest))) => {
+                if *side { b } else { a }.split_at(rest)
+            }
+            _ => None,
+        }
+    }
+
+    /// Sets the share `a` keeps in the split at `path`, kept between 10% and
+    /// 90%. False when there is no split there.
+    pub fn set_ratio(&mut self, path: &[bool], to: f32) -> bool {
+        match (self, path.split_first()) {
+            (Self::Split { ratio, .. }, None) => {
+                *ratio = to.clamp(0.1, 0.9);
+                true
+            }
+            (Self::Split { a, b, .. }, Some((side, rest))) => {
+                if *side { b } else { a }.set_ratio(rest, to)
+            }
+            _ => false,
+        }
+    }
+}
+
 impl<L: Keyed> Tree<L> {
     pub fn find(&self, id: u64) -> Option<&L> {
         self.leaves().into_iter().find(|l| l.key() == id)
@@ -578,5 +669,29 @@ b = { run = "pnpm test --watch" }
         let t = three();
         let back: Tree<u64> = serde_json::from_str(&serde_json::to_string(&t).unwrap()).unwrap();
         assert_eq!(back, t);
+    }
+
+    #[test]
+    fn borders_are_found_and_dragged() {
+        let mut t = three();
+        let a = area(100, 40);
+        // editor | agent over the shell: the vertical line at x 49/50 in
+        // the top 28 rows, the horizontal one at y 27/28 across.
+        let v = t.border_at(a, 49, 5).unwrap();
+        assert_eq!((v.path.clone(), v.dir), (vec![false], Dir::Right));
+        assert_eq!(t.border_at(a, 50, 5).unwrap().path, vec![false]);
+        let h = t.border_at(a, 10, 28).unwrap();
+        assert_eq!((h.path.clone(), h.dir), (vec![], Dir::Down));
+        assert!(t.border_at(a, 20, 10).is_none());
+        assert!(
+            t.border_at(a, 49, 35).is_none(),
+            "the shell has no vertical line"
+        );
+
+        assert!(t.set_ratio(&[false], 0.25));
+        assert_eq!(t.rects(a)[0].w, 25);
+        assert!(t.set_ratio(&[], 2.0));
+        assert_eq!(t.rects(a)[2].y, 36, "kept at 90%");
+        assert!(!t.set_ratio(&[true], 0.5), "the shell is a leaf");
     }
 }

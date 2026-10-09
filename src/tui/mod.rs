@@ -165,6 +165,8 @@ pub struct App {
     pub focus: Option<PaneId>,
     /// `t` was pressed: focus the pane the next tree brings.
     focus_new: bool,
+    /// A border being dragged with the mouse.
+    dragging: Option<crate::layout::Border>,
     /// `f`: only the focused pane, across the whole terminal.
     pub full: bool,
     pub status: Option<Status>,
@@ -337,6 +339,7 @@ impl App {
             tree: None,
             focus: None,
             focus_new: false,
+            dragging: None,
             full: false,
             status: None,
             size,
@@ -1099,6 +1102,9 @@ impl App {
             }
             return;
         }
+        if self.drag(&m) {
+            return;
+        }
         let Some((id, r)) = self
             .pane_rects()
             .into_iter()
@@ -1150,6 +1156,52 @@ impl App {
         } else {
             let back = screen.scrollback().saturating_add_signed(-wheel);
             view.parser.screen_mut().set_scrollback(back);
+        }
+    }
+
+    /// Dragging the line between two panes resizes them; the daemon keeps
+    /// the new share when the button goes up. True when the event was that.
+    fn drag(&mut self, m: &MouseEvent) -> bool {
+        let stage = self.stage();
+        match m.kind {
+            MouseEventKind::Down(MouseButton::Left) if !self.full => {
+                self.dragging = self
+                    .tree
+                    .as_ref()
+                    .and_then(|t| t.border_at(stage, m.column, m.row));
+                self.dragging.is_some()
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                let Some(b) = &self.dragging else {
+                    return false;
+                };
+                let (pos, start, len) = match b.dir {
+                    Dir::Right => (m.column, b.area.x, b.area.w),
+                    Dir::Down => (m.row, b.area.y, b.area.h),
+                };
+                let ratio = f32::from(pos.saturating_sub(start) + 1) / f32::from(len.max(1));
+                let path = b.path.clone();
+                if let Some(t) = &mut self.tree {
+                    t.set_ratio(&path, ratio);
+                }
+                self.fit();
+                true
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                let Some(b) = self.dragging.take() else {
+                    return false;
+                };
+                let ratio = self.tree.as_ref().and_then(|t| t.ratio_at(&b.path));
+                if let (Some(stream), Some(ratio)) = (self.current().map(|e| e.id.clone()), ratio) {
+                    self.send(ClientMsg::Ratio {
+                        stream,
+                        path: b.path,
+                        ratio,
+                    });
+                }
+                true
+            }
+            _ => false,
         }
     }
 
