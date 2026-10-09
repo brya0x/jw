@@ -41,7 +41,9 @@ use keys::Leader;
 const SIDEBAR: u16 = 28;
 
 /// How long the leader waits before showing every key (REQ-31).
-const WHICH_AFTER: Duration = Duration::from_millis(600);
+fn which_after() -> Duration {
+    crate::settings::get().which_delay()
+}
 
 enum Msg {
     Daemon(DaemonMsg),
@@ -192,6 +194,8 @@ pub struct App {
     events: Sender<Msg>,
     /// Why the client left, when it wasn't the user's `q`.
     exit_reason: Option<String>,
+    /// The settings and theme files, to apply their changes.
+    watch: crate::settings::Watch,
     /// Just started, or just switched session: with nothing running, the
     /// next List opens the session's last workspace.
     fresh: bool,
@@ -233,16 +237,17 @@ pub fn run() -> Result<()> {
         }
     });
 
-    let leader = std::env::var("JW_LEADER")
-        .ok()
-        .and_then(|l| Leader::parse(&l))
-        .unwrap_or(Leader::DEFAULT);
+    let leader = leader();
+    let theme_error = crate::theme::load(&crate::settings::get()).err();
 
     log_panics();
     let mut terminal = ratatui::init();
     execute!(std::io::stdout(), EnableBracketedPaste, EnableMouseCapture)?;
     let size = terminal.size()?;
     let mut app = App::new(client, events, leader, (size.width, size.height))?;
+    if let Some(e) = theme_error {
+        app.fail(format!("{e:#}"));
+    }
     let result = app.event_loop(&mut terminal, rx);
     let _ = execute!(
         std::io::stdout(),
@@ -257,18 +262,27 @@ pub fn run() -> Result<()> {
     }
 }
 
-/// Picks One Dark or One Light (REQ-43): `$JW_THEME` pins one; otherwise
+/// The leader: `$JW_LEADER`, else the settings', else Ctrl-Space.
+fn leader() -> Leader {
+    std::env::var("JW_LEADER")
+        .ok()
+        .or_else(|| crate::settings::get().leader.clone())
+        .and_then(|l| Leader::parse(&l))
+        .unwrap_or(Leader::DEFAULT)
+}
+
+/// Dark or light (REQ-43): `$JW_THEME` or the settings pin one; otherwise
 /// the system's appearance, checked again every few seconds.
+fn dark_now() -> bool {
+    crate::theme::pinned().unwrap_or_else(crate::theme::system_dark)
+}
+
 fn follow_theme(tx: Sender<Msg>) {
-    if let Some(dark) = crate::theme::pinned() {
-        crate::theme::set_dark(dark);
-        return;
-    }
-    crate::theme::set_dark(crate::theme::system_dark());
+    crate::theme::set_dark(dark_now());
     thread::spawn(move || {
         loop {
             thread::sleep(Duration::from_secs(3));
-            if crate::theme::set_dark(crate::theme::system_dark()) && tx.send(Msg::Theme).is_err() {
+            if crate::theme::set_dark(dark_now()) && tx.send(Msg::Theme).is_err() {
                 return;
             }
         }
@@ -355,6 +369,7 @@ impl App {
             busy: None,
             events,
             exit_reason: None,
+            watch: crate::settings::Watch::new(),
             fresh: true,
         };
         app.reload()?;
@@ -371,7 +386,7 @@ impl App {
         while !self.quit {
             let first = match self.leader_at {
                 Some(at) if !self.which => {
-                    match rx.recv_timeout(WHICH_AFTER.saturating_sub(at.elapsed())) {
+                    match rx.recv_timeout(which_after().saturating_sub(at.elapsed())) {
                         Ok(m) => m,
                         Err(RecvTimeoutError::Timeout) => {
                             self.which = true;
@@ -607,6 +622,15 @@ impl App {
                 // Every 2 s the panes' state (✻ ? ⚡), every minute the PRs.
                 if self.ticks.is_multiple_of(4) {
                     self.send(ClientMsg::List);
+                    // REQ-69: settings and themes edited anywhere apply.
+                    match self.watch.check() {
+                        Ok(true) => {
+                            self.leader = leader();
+                            crate::theme::set_dark(dark_now());
+                        }
+                        Ok(false) => {}
+                        Err(e) => self.fail(format!("settings: {e:#}")),
+                    }
                 }
                 if self.ticks.is_multiple_of(120) {
                     self.poll_prs();
@@ -764,15 +788,12 @@ impl App {
         match k.code {
             KeyCode::Esc => {}
             _ if self.leader.matches(&k) => self.ask_switch(),
-            KeyCode::Char(' ') => self.ask_switch(),
-            KeyCode::Char('/') => self.ask_file(),
             KeyCode::Char('?') => {
                 // The popup stays and the next key still counts as an action.
                 self.which = true;
                 self.leader_at = Some(Instant::now());
             }
             KeyCode::Char(c @ '1'..='9') => self.jump(c as usize - '1' as usize),
-            KeyCode::Tab => self.go_back(),
             KeyCode::Char('h') => self.focus_towards(-1, 0),
             KeyCode::Char('l') => self.focus_towards(1, 0),
             KeyCode::Char('k') => self.focus_towards(0, -1),
@@ -781,21 +802,28 @@ impl App {
             KeyCode::Char('L') => self.move_pane(1, 0),
             KeyCode::Char('K') => self.move_pane(0, -1),
             KeyCode::Char('J') => self.move_pane(0, 1),
-            KeyCode::Char('t') => self.new_pane(),
-            KeyCode::Char('x') => self.close_pane(),
-            KeyCode::Char('n') => self.ask_name(),
-            KeyCode::Char('f') => {
-                self.full = !self.full;
-                self.fit();
-            }
-            KeyCode::Char('o') => self.ask_folder(),
-            KeyCode::Char('a') => self.ask_session(),
-            KeyCode::Char('r') => self.ask_rename(),
-            KeyCode::Char('w') => self.new_worktree(),
-            KeyCode::Char('s') => self.run_sync(),
-            KeyCode::Char('d') => self.open_diff(),
-            KeyCode::Char('X') => self.ask_remove(),
             KeyCode::Char('q') => self.quit = true,
+            code if self.action(code).is_some() => match self.action(code).unwrap_or("") {
+                "switch" => self.ask_switch(),
+                "previous" => self.go_back(),
+                "open" => self.ask_folder(),
+                "file" => self.ask_file(),
+                "sessions" => self.ask_session(),
+                "settings" => self.ask_settings(),
+                "new" => self.new_worktree(),
+                "rename" => self.ask_rename(),
+                "sync" => self.run_sync(),
+                "diff" => self.open_diff(),
+                "remove" => self.ask_remove(),
+                "pane" => self.new_pane(),
+                "close" => self.close_pane(),
+                "name" => self.ask_name(),
+                "full" => {
+                    self.full = !self.full;
+                    self.fit();
+                }
+                _ => {}
+            },
             code => {
                 let key = match code {
                     KeyCode::Char(' ') => "␣".to_string(),
@@ -806,6 +834,17 @@ impl App {
                 self.fail(format!("{l} {key} does nothing · {l} ? shows the keys"));
             }
         }
+    }
+
+    /// The action a key after the leader runs, from the settings.
+    fn action(&self, code: KeyCode) -> Option<&'static str> {
+        let key = match code {
+            KeyCode::Char(' ') => "space".to_string(),
+            KeyCode::Tab => "tab".to_string(),
+            KeyCode::Char(c) => c.to_string(),
+            _ => return None,
+        };
+        crate::settings::get().action(&key)
     }
 
     /// `^␣ 1–9`: the workspace with that number in the sidebar.
@@ -1439,6 +1478,14 @@ impl App {
     }
 
     /// `^␣ o`: the folder browser, starting beside the current project.
+    /// `^␣ ,`: the settings screen (REQ-67).
+    fn ask_settings(&mut self) {
+        match crate::settings::path() {
+            Ok(p) => self.say(format!("settings: {}", finder::tilde(&p))),
+            Err(e) => self.fail(format!("{e:#}")),
+        }
+    }
+
     fn ask_folder(&mut self) {
         let start = self
             .current()

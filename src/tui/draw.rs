@@ -67,7 +67,7 @@ fn sidebar(f: &mut Frame, app: &App) {
 
     let dim = Style::default().fg(p().dim);
     let w = inner.width as usize;
-    let hint = format!("{} a sessions ", app.leader.label());
+    let hint = format!("{} {} sessions ", app.leader.label(), key("sessions"));
     let title = format!(" {}", crate::session::current());
     let pad = w.saturating_sub(title.chars().count() + hint.chars().count());
     let mut lines = vec![
@@ -144,7 +144,7 @@ fn sidebar(f: &mut Frame, app: &App) {
     }
     if app.rows.is_empty() {
         lines.push(Line::from(Span::styled(
-            format!(" {} o opens a folder", app.leader.label()),
+            format!(" {} {} opens a folder", app.leader.label(), key("open")),
             dim,
         )));
     }
@@ -318,14 +318,16 @@ fn status(f: &mut Frame, app: &App) {
             None => spans.extend([
                 key(&leader),
                 txt("then a key ·"),
-                key("␣"),
+                key(&self::key("switch")),
                 txt("switch ·"),
-                key("o"),
+                key(&self::key("open")),
                 txt("open ·"),
-                key("w"),
+                key(&self::key("new")),
                 txt("worktree ·"),
-                key("t"),
+                key(&self::key("pane")),
                 txt("pane ·"),
+                key(&self::key("sessions")),
+                txt("sessions ·"),
                 key("?"),
                 txt("all keys"),
             ]),
@@ -362,7 +364,10 @@ fn status(f: &mut Frame, app: &App) {
 fn empty(f: &mut Frame, app: &App) {
     let stage = trect(app.stage());
     let leader = app.leader.label();
-    let msg = format!("{leader} o opens a folder · {leader} 1–9 a workspace from the sidebar");
+    let msg = format!(
+        "{leader} {} opens a folder · {leader} 1–9 a workspace from the sidebar",
+        key("open")
+    );
     let y = stage.y + stage.height / 2;
     f.render_widget(
         Paragraph::new(Span::styled(msg, Style::default().fg(p().dim)))
@@ -489,47 +494,35 @@ fn color(c: vt100::Color, default: Color) -> Color {
     }
 }
 
-/// The leader's popup: every key, grouped go / worktree / panes (REQ-31).
+/// The key an action has now, as shown (`␣`, `tab`, `o`).
+fn key(action: &str) -> String {
+    crate::settings::label(&crate::settings::get().key(action))
+}
+
+/// The leader's popup: every key, grouped go / worktree / panes (REQ-31),
+/// with the keys the settings give them.
 fn which(f: &mut Frame, app: &App) {
-    const GROUPS: [(&str, &[(&str, &str)]); 3] = [
-        (
-            "go",
-            &[
-                ("␣", "switch"),
-                ("tab", "previous"),
-                ("1-9", "workspace"),
-                ("o", "open folder"),
-                ("/", "open file"),
-                ("a", "sessions"),
-                ("q", "detach"),
-            ],
-        ),
-        (
-            "worktree",
-            &[
-                ("w", "new"),
-                ("r", "rename"),
-                ("s", "sync"),
-                ("d", "changes"),
-                ("X", "remove"),
-            ],
-        ),
-        (
-            "panes",
-            &[
-                ("hjkl", "go"),
-                ("t", "new"),
-                ("x", "close"),
-                ("n", "name"),
-                ("f", "full"),
-                ("HJKL", "move"),
-            ],
-        ),
+    let fixed: [(&str, &[(&str, &str)]); 3] = [
+        ("go", &[("1-9", "workspace"), ("q", "detach")]),
+        ("worktree", &[]),
+        ("panes", &[("hjkl", "go"), ("HJKL", "move")]),
     ];
-    let rows = GROUPS.iter().map(|(_, k)| k.len()).max().unwrap_or(0) as u16;
+    let groups: Vec<(&str, Vec<(String, &str)>)> = fixed
+        .iter()
+        .map(|(g, extra)| {
+            let mut keys: Vec<(String, &str)> = crate::settings::ACTIONS
+                .iter()
+                .filter(|a| a.0 == *g)
+                .map(|a| (key(a.1), a.2))
+                .collect();
+            keys.extend(extra.iter().map(|(k, w)| (k.to_string(), *w)));
+            (*g, keys)
+        })
+        .collect();
+    let rows = groups.iter().map(|(_, k)| k.len()).max().unwrap_or(0) as u16;
     let col = 17u16;
     let area = f.area();
-    let w = (col * GROUPS.len() as u16 + 3).min(area.width);
+    let w = (col * groups.len() as u16 + 3).min(area.width);
     let h = (rows + 3).min(area.height);
     let r = TRect::new(
         area.width.saturating_sub(w + 1),
@@ -549,12 +542,12 @@ fn which(f: &mut Frame, app: &App) {
         .style(Style::default().bg(p().panel).fg(p().fg));
     let inner = block.inner(r);
     f.render_widget(block, r);
-    for (i, (title, keys)) in GROUPS.iter().enumerate() {
+    for (i, (title, keys)) in groups.iter().enumerate() {
         let mut lines = vec![Line::from(Span::styled(
             *title,
             Style::default().fg(p().yellow).add_modifier(Modifier::BOLD),
         ))];
-        for (k, what) in *keys {
+        for (k, what) in keys {
             lines.push(Line::from(vec![
                 Span::styled(format!("{k:<5}"), Style::default().fg(p().blue)),
                 Span::raw(*what),
