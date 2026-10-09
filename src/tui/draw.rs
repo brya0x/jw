@@ -1,5 +1,5 @@
-//! Drawing: layout A (fixed sidebar, header, the stream's splits, status
-//! bar), in the petrol palette of the prototype.
+//! Drawing: the sidebar of workspaces, a header, the current workspace's
+//! splits, the status bar and the leader's key popup.
 
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
@@ -8,7 +8,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
-use super::{App, Mode, PaneView, Row, SIDEBAR};
+use super::{App, PaneView, Row, SIDEBAR};
 use crate::layout::Rect;
 
 pub(super) const BG: Color = Color::Rgb(0x10, 0x23, 0x2a);
@@ -41,6 +41,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         if let Some(m) = &app.modal {
             m.draw(f);
         }
+        if app.which {
+            which(f, app);
+        }
         return;
     }
     let rects = app.pane_rects();
@@ -55,6 +58,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
     if let Some(m) = &app.modal {
         m.draw(f);
+    }
+    if app.which {
+        which(f, app);
     }
 }
 
@@ -77,9 +83,9 @@ fn sidebar(f: &mut Frame, app: &App) {
             " jw",
             Style::default().fg(FOCUS).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("  streams", Style::default().fg(DIM)),
+        Span::styled("  workspaces", Style::default().fg(DIM)),
     ])];
-    lines.push(Line::default());
+    let mut n = 0;
     for (i, row) in app.rows.iter().enumerate() {
         match row {
             Row::Space(name) => {
@@ -91,30 +97,16 @@ fn sidebar(f: &mut Frame, app: &App) {
                 } else {
                     name.as_str()
                 };
-                let selected = i == app.cursor && app.mode == Mode::Nav;
-                let mut line = Line::from(vec![
-                    Span::raw(if selected { "▶" } else { " " }),
-                    Span::styled(
-                        format!("▾ {label}"),
-                        Style::default().fg(DIM).add_modifier(Modifier::BOLD),
-                    ),
-                ]);
-                if selected {
-                    line = line.style(Style::default().bg(LINE));
-                }
-                lines.push(line);
-                let empty = !matches!(app.rows.get(i + 1), Some(Row::Stream(_)));
-                if empty && name == crate::free::PROJECT {
-                    lines.push(Line::from(Span::styled(
-                        "   n: a shell anywhere",
-                        Style::default().fg(DIM),
-                    )));
-                }
+                lines.push(Line::from(Span::styled(
+                    format!(" {label}"),
+                    Style::default().fg(DIM).add_modifier(Modifier::BOLD),
+                )));
             }
             Row::Stream(e) => {
+                n += 1;
                 let open = app.is_open(&e.id);
-                let active = app.active.as_ref().is_some_and(|s| s.entry.id == e.id);
-                let selected = i == app.cursor && app.mode == Mode::Nav;
+                let active = app.current().is_some_and(|c| c.id == e.id);
+                let number = if n <= 9 { n.to_string() } else { " ".into() };
                 let dot = if open {
                     Span::styled("●", Style::default().fg(DEV))
                 } else {
@@ -122,15 +114,15 @@ fn sidebar(f: &mut Frame, app: &App) {
                 };
                 let mut name_style = Style::default().fg(if open { FG } else { DIM });
                 if active {
-                    name_style = name_style.add_modifier(Modifier::BOLD);
+                    name_style = name_style.fg(FOCUS).add_modifier(Modifier::BOLD);
                 }
                 let mut line = Line::from(vec![
-                    Span::raw(if selected { " ▶ " } else { "   " }),
+                    Span::styled(format!(" {number} "), Style::default().fg(DIM)),
                     dot,
                     Span::raw(" "),
                     Span::styled(e.name.clone(), name_style),
                 ]);
-                if selected {
+                if active {
                     line = line.style(Style::default().bg(LINE));
                 }
                 lines.push(line);
@@ -139,7 +131,7 @@ fn sidebar(f: &mut Frame, app: &App) {
     }
     if app.rows.is_empty() {
         lines.push(Line::from(Span::styled(
-            " No streams yet",
+            " No workspaces yet",
             Style::default().fg(DIM),
         )));
     }
@@ -199,9 +191,11 @@ fn header(f: &mut Frame, app: &App) {
 fn status(f: &mut Frame, app: &App) {
     let area = f.area();
     let r = TRect::new(0, area.height.saturating_sub(1), area.width, 1);
-    let (chip, color) = match app.mode {
-        Mode::Term => (" TERM ", WORK),
-        Mode::Nav => (" NAV ", FOCUS),
+    let leader = app.leader.label();
+    let (chip, color) = if app.leading() {
+        (format!(" {leader} "), FOCUS)
+    } else {
+        (" TERM ".to_string(), WORK)
     };
     let key = |k: &str| Span::styled(format!(" {k}"), Style::default().fg(FOCUS));
     let txt = |t: &str| Span::styled(format!(" {t} "), Style::default().fg(DIM));
@@ -220,52 +214,21 @@ fn status(f: &mut Frame, app: &App) {
     }
     if let Some(msg) = &app.status {
         spans.push(Span::styled(format!("  {msg}"), Style::default().fg(WAIT)));
+    } else if app.leading() {
+        spans.extend([txt("one key"), key("esc"), txt("cancels")]);
     } else {
-        match app.mode {
-            Mode::Term => {
-                spans.extend([key(&app.leader.label()), txt("nav")]);
-            }
-            Mode::Nav => spans.extend([
-                key("j/k"),
-                txt("move"),
-                key("↵"),
-                txt("open"),
-                key("⇧hjkl"),
-                txt("pane"),
-                key("tab"),
-                txt("next"),
-                key("f"),
-                txt("full"),
-                key("n"),
-                txt("new"),
-                key("c"),
-                txt("close"),
-                key("x"),
-                txt("rm"),
-                key("s"),
-                txt("sync"),
-                key("d"),
-                txt("done"),
-                key("D"),
-                txt("diff"),
-                key("M"),
-                txt("read"),
-                key("p"),
-                txt("prompt"),
-                key("r"),
-                txt("dev"),
-                key("S"),
-                txt("setup"),
-                key("i"),
-                txt("info"),
-                key("I"),
-                txt("add project"),
-                key("q"),
-                txt("leave"),
-                key("esc"),
-                txt("term"),
-            ]),
-        }
+        spans.extend([
+            key(&leader),
+            txt("then a key ·"),
+            key("1-9"),
+            txt("workspace"),
+            key("w"),
+            txt("worktree"),
+            key("d"),
+            txt("changes"),
+            key("?"),
+            txt("all keys"),
+        ]);
     }
     f.render_widget(
         Paragraph::new(Line::from(spans)).style(Style::default().bg(PANEL)),
@@ -275,10 +238,11 @@ fn status(f: &mut Frame, app: &App) {
 
 fn empty(f: &mut Frame, app: &App) {
     let stage = trect(app.stage());
+    let leader = app.leader.label();
     let msg = if app.rows.is_empty() {
-        "No streams in the registry yet."
+        "No workspaces yet.".to_string()
     } else {
-        "Pick a stream with j/k and press ↵ to open it."
+        format!("{leader} then 1–9 opens a workspace from the sidebar.")
     };
     let y = stage.y + stage.height / 2;
     f.render_widget(
@@ -327,13 +291,8 @@ fn pane(f: &mut Frame, app: &App, r: TRect, role: &str, view: Option<&PaneView>,
         return;
     };
     let screen = view.parser.screen();
-    screen_to(
-        f.buffer_mut(),
-        screen,
-        inner,
-        app.mode == Mode::Nav && !focused,
-    );
-    if focused && app.mode == Mode::Term && !screen.hide_cursor() {
+    screen_to(f.buffer_mut(), screen, inner, app.leading() && !focused);
+    if focused && !app.leading() && !screen.hide_cursor() {
         let (row, col) = screen.cursor_position();
         if row < inner.height && col < inner.width {
             f.set_cursor_position((inner.x + col, inner.y + row));
@@ -384,5 +343,68 @@ fn color(c: vt100::Color, default: Color) -> Color {
         vt100::Color::Default => default,
         vt100::Color::Idx(i) => Color::Indexed(i),
         vt100::Color::Rgb(r, g, b) => Color::Rgb(r, g, b),
+    }
+}
+
+/// The leader's popup: every key, grouped go / worktree / panes (REQ-31).
+fn which(f: &mut Frame, app: &App) {
+    const GROUPS: [(&str, &[(&str, &str)]); 3] = [
+        (
+            "go",
+            &[("1-9", "workspace"), ("tab", "previous"), ("q", "detach")],
+        ),
+        (
+            "worktree",
+            &[
+                ("w", "new"),
+                ("s", "sync"),
+                ("d", "changes"),
+                ("X", "remove"),
+            ],
+        ),
+        ("panes", &[("hjkl", "go"), ("f", "full"), ("x", "close")]),
+    ];
+    let rows = GROUPS.iter().map(|(_, k)| k.len()).max().unwrap_or(0) as u16;
+    let col = 18u16;
+    let area = f.area();
+    let w = (col * GROUPS.len() as u16 + 2).min(area.width);
+    let h = (rows + 3).min(area.height);
+    let r = TRect::new(
+        area.width.saturating_sub(w + 1),
+        area.height.saturating_sub(h + 1),
+        w,
+        h,
+    );
+    f.render_widget(ratatui::widgets::Clear, r);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(FOCUS))
+        .title(Span::styled(
+            format!(" {} then ", app.leader.label()),
+            Style::default().fg(FOCUS).add_modifier(Modifier::BOLD),
+        ))
+        .style(Style::default().bg(PANEL).fg(FG));
+    let inner = block.inner(r);
+    f.render_widget(block, r);
+    for (i, (title, keys)) in GROUPS.iter().enumerate() {
+        let mut lines = vec![Line::from(Span::styled(
+            *title,
+            Style::default().fg(FOCUS).add_modifier(Modifier::BOLD),
+        ))];
+        for (k, what) in *keys {
+            lines.push(Line::from(vec![
+                Span::styled(format!("{k:<5}"), Style::default().fg(WORK)),
+                Span::raw(*what),
+            ]));
+        }
+        let x = inner.x + 1 + col * i as u16;
+        let c = TRect::new(
+            x,
+            inner.y,
+            col.min(inner.right().saturating_sub(x)),
+            inner.height,
+        );
+        f.render_widget(Paragraph::new(lines), c);
     }
 }
