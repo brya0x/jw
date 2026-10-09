@@ -194,18 +194,40 @@ fn header(f: &mut Frame, app: &App) {
         e.name.clone(),
         Style::default().fg(p().blue).add_modifier(Modifier::BOLD),
     ));
-    if e.branch.is_empty() {
+    // The git of where the focused pane is, like a shell prompt; the
+    // workspace's own until the daemon says.
+    let here = app.focus.and_then(|f| app.here.get(&f));
+    let (branch, home) = match here {
+        Some(h) => match &h.git {
+            Some((root, branch)) => {
+                if !h.home {
+                    let repo = root
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    spans.push(Span::styled(
+                        format!("  {repo}"),
+                        Style::default().fg(p().fg),
+                    ));
+                }
+                (branch.clone(), h.home)
+            }
+            None => (String::new(), false),
+        },
+        None => (e.branch.clone(), true),
+    };
+    if branch.is_empty() {
         spans.push(Span::styled("  not a git repo", dim));
     } else {
         spans.push(Span::styled(
-            format!("  {}", e.branch),
+            format!("  {branch}"),
             Style::default().fg(p().magenta),
         ));
     }
-    if !folder && !s.base.is_empty() {
+    if home && !folder && !s.base.is_empty() {
         spans.push(Span::styled(format!("  from {}", s.base), dim));
     }
-    if let Some(pr) = app.prs.get(&e.id) {
+    if let Some(pr) = app.prs.get(&e.id).filter(|_| home) {
         let color = if pr.state == "MERGED" {
             p().cyan
         } else {
@@ -221,7 +243,8 @@ fn header(f: &mut Frame, app: &App) {
             spans.push(Span::styled(format!("  {svc} :{port}"), dim));
         }
     }
-    let path = super::finder::tilde(std::path::Path::new(&e.path));
+    let path =
+        super::finder::tilde(here.map_or(std::path::Path::new(&e.path), |h| h.cwd.as_path()));
     let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
     let room = (r.width as usize).saturating_sub(used + 1);
     if path.chars().count() + 2 <= room {

@@ -177,6 +177,9 @@ pub struct PaneInfo {
     /// What its agent reported last, when it runs one with jw's hooks.
     #[serde(default)]
     pub agent: Option<AgentState>,
+    /// The directory its foreground process is in.
+    #[serde(default)]
+    pub cwd: Option<String>,
 }
 
 /// An agent's state as its hooks report it (REQ-73).

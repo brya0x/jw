@@ -181,6 +181,9 @@ pub struct App {
     pub modal: Option<Modal>,
     /// A picker over everything else (`^␣ o`).
     pub finder: Option<finder::Finder>,
+    /// Where each pane of the workspace is: its directory and that
+    /// directory's git checkout, for the header.
+    pub here: BTreeMap<PaneId, Here>,
     /// The settings screen, while it is open (REQ-67).
     pub settings: Option<settings_view::SettingsView>,
     /// Each worktree's pull request, from the last look (REQ-51).
@@ -366,6 +369,7 @@ impl App {
             modal: None,
             finder: None,
             settings: None,
+            here: BTreeMap::new(),
             prs: BTreeMap::new(),
             ticks: 0,
             views: BTreeMap::new(),
@@ -712,6 +716,7 @@ impl App {
             }
             DaemonMsg::Panes { panes } => {
                 self.daemon_panes = panes;
+                self.find_here();
                 // Nothing on screen (just started, or the current one was
                 // closed): show the last used workspace that is running,
                 // else any running one; on a fresh start with none, the
@@ -855,6 +860,28 @@ impl App {
                 self.fail(format!("{l} {key} does nothing · {l} ? shows the keys"));
             }
         }
+    }
+
+    /// Reads where the workspace's panes are, from the daemon's last list.
+    fn find_here(&mut self) {
+        let Some(stream) = self.active.as_ref().map(|s| s.entry.clone()) else {
+            self.here.clear();
+            return;
+        };
+        let own = std::path::Path::new(&stream.path).canonicalize().ok();
+        self.here = self
+            .daemon_panes
+            .iter()
+            .filter(|p| p.stream == stream.id)
+            .filter_map(|p| {
+                let cwd = std::path::PathBuf::from(p.cwd.as_ref()?);
+                let git = crate::connectors::git::head_of(&cwd);
+                let home = git
+                    .as_ref()
+                    .is_some_and(|(root, _)| root.canonicalize().ok() == own);
+                Some((p.pane, Here { cwd, git, home }))
+            })
+            .collect();
     }
 
     /// The action a key after the leader runs, from the settings.
@@ -2255,6 +2282,15 @@ impl App {
 fn session_dir() -> Option<std::path::PathBuf> {
     let state = registry::state_dir().ok()?;
     crate::session::dir(&state, &crate::session::current()).ok()
+}
+
+/// Where a pane is (the header follows the focused one).
+pub struct Here {
+    pub cwd: std::path::PathBuf,
+    /// The checkout it is in and its branch.
+    pub git: Option<(std::path::PathBuf, String)>,
+    /// That checkout is the workspace's own.
+    pub home: bool,
 }
 
 /// The workspace ids in the session's `recent.json`, most recent first.

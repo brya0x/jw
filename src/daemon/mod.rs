@@ -387,13 +387,12 @@ impl Daemon {
                             let agent = st.agent.filter(|_| st.exited.is_none());
                             (st.exited, st.last_output.elapsed() < BUSY, st.bell, agent)
                         };
-                        let fg = match exited {
-                            None => lock(&p.io)
-                                .master
-                                .process_group_leader()
-                                .and_then(process_name),
+                        let leader = match exited {
+                            None => lock(&p.io).master.process_group_leader(),
                             Some(_) => None,
                         };
+                        let fg = leader.and_then(process_name);
+                        let cwd = leader.and_then(process_cwd);
                         PaneInfo {
                             pane: *id,
                             stream: lock(&p.stream).clone(),
@@ -403,6 +402,7 @@ impl Daemon {
                             busy: busy && exited.is_none(),
                             bell,
                             agent,
+                            cwd,
                         }
                     })
                     .collect();
@@ -1127,6 +1127,36 @@ fn process_name(pid: libc::pid_t) -> Option<String> {
         .unwrap_or(&name)
         .trim_start_matches('-');
     (!name.is_empty()).then(|| name.to_string())
+}
+
+/// The directory a process is in: where the pane's shell has `cd`'d to.
+#[cfg(target_os = "macos")]
+fn process_cwd(pid: libc::pid_t) -> Option<String> {
+    let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_vnodepathinfo>() as libc::c_int;
+    // SAFETY: proc_pidinfo writes at most `size` bytes into `info`.
+    let n = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDVNODEPATHINFO,
+            0,
+            (&raw mut info).cast(),
+            size,
+        )
+    };
+    if n != size {
+        return None;
+    }
+    // SAFETY: vip_path is MAXPATHLEN chars, NUL-terminated by the kernel.
+    let path = unsafe { std::ffi::CStr::from_ptr(info.pvi_cdir.vip_path.as_ptr().cast()) };
+    Some(path.to_string_lossy().into_owned()).filter(|p| !p.is_empty())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn process_cwd(pid: libc::pid_t) -> Option<String> {
+    std::fs::read_link(format!("/proc/{pid}/cwd"))
+        .ok()
+        .map(|p| p.display().to_string())
 }
 
 /// How long a pane must be silent before a prompt is typed into it, and how

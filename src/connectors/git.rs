@@ -292,6 +292,29 @@ pub fn current_branch(dir: &Path) -> Result<String> {
     run(dir, &["branch", "--show-current"])
 }
 
+/// The repository `dir` is in and what it has checked out, read from
+/// `.git` without running git, so it is cheap enough for every refresh:
+/// the checkout's root and its branch (or a short commit when detached).
+pub fn head_of(dir: &Path) -> Option<(PathBuf, String)> {
+    let root = dir.ancestors().find(|d| d.join(".git").exists())?;
+    let dot = root.join(".git");
+    // A worktree's .git is a file pointing at its git dir.
+    let git_dir = if dot.is_file() {
+        let text = std::fs::read_to_string(&dot).ok()?;
+        let p = PathBuf::from(text.trim().strip_prefix("gitdir:")?.trim());
+        if p.is_absolute() { p } else { root.join(p) }
+    } else {
+        dot
+    };
+    let head = std::fs::read_to_string(git_dir.join("HEAD")).ok()?;
+    let head = head.trim();
+    let branch = match head.strip_prefix("ref: refs/heads/") {
+        Some(b) => b.to_string(),
+        None => head.chars().take(7).collect(),
+    };
+    Some((root.to_path_buf(), branch))
+}
+
 /// Brings the branch checked out in `dir` up to its upstream, refusing
 /// anything but a fast-forward.
 pub fn pull_ff(dir: &Path) -> Result<()> {
@@ -347,6 +370,30 @@ pub(crate) mod tests {
     }
 
     /// Ignores the developer's global git config (signing, hooks, templates).
+    #[test]
+    fn head_of_reads_the_checkout_and_its_worktrees() {
+        let (dir, work) = new_test_repo();
+        std::fs::create_dir_all(work.join("src/deep")).unwrap();
+        let (root, branch) = head_of(&work.join("src/deep")).unwrap();
+        assert_eq!((root, branch.as_str()), (work.clone(), "trunk"));
+
+        let wt = dir.path().join("wt");
+        must_git(
+            &work,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "feat/x",
+                wt.to_str().unwrap(),
+            ],
+        );
+        assert_eq!(head_of(&wt).unwrap().1, "feat/x");
+        must_git(&work, &["checkout", "-q", "--detach"]);
+        assert_eq!(head_of(&work).unwrap().1.len(), 7);
+    }
+
     pub(crate) fn must_git(dir: &Path, args: &[&str]) {
         let out = Command::new("git")
             .args(args)
