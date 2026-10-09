@@ -17,11 +17,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     f.buffer_mut()
         .set_style(area, Style::default().bg(p().bg).fg(p().fg));
 
-    if !app.full {
-        sidebar(f, app);
-        header(f, app);
-        status(f, app);
-    }
+    sidebar(f, app);
+    header(f, app);
+    status(f, app);
 
     let rects = app.pane_rects();
     if rects.is_empty() {

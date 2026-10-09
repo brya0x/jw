@@ -957,13 +957,10 @@ impl App {
         });
     }
 
-    /// Where the panes go: right of the sidebar and below the header, or
-    /// the whole terminal in full mode.
+    /// Where the panes go: right of the sidebar and below the header. Full
+    /// mode gives all of it to the focused pane; the sidebar stays.
     pub fn stage(&self) -> Rect {
         let (w, h) = self.size;
-        if self.full {
-            return Rect { x: 0, y: 0, w, h };
-        }
         Rect {
             x: SIDEBAR,
             y: 1,

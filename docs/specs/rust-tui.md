@@ -27,7 +27,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 | `tab` previous workspace | `r` rename: name, branch and folder | `t` new shell beside the focused pane |
 | `1–9` the sidebar's number | `s` sync (on a project root: `pull --ff-only`) | `x` close the pane; on the last one, close the workspace |
 | `o` open a folder (browser: arrows, type to filter, `~`, a new name creates it) | `d` diff pane against the base | `n` name the pane (empty = automatic title) |
-| `/` open a file (`.md` → reader pane, else nvim) | `X` remove: done checks if the PR is merged, rm checks otherwise | `f` full · `HJKL` swap with the neighbour |
+| `/` open a file (`.md` → reader pane, else nvim) | `X` remove: done checks if the PR is merged, rm checks otherwise | `f` full: the focused pane fills the panes area, the sidebar and bars stay · `HJKL` swap with the neighbour |
 | `?` keys · `q` detach | | |
 
 ### Screen (what each area shows; replaces "UI (reference, v2)")
