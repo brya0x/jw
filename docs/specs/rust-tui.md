@@ -1,5 +1,5 @@
 ---
-status:      agreed (v2 + the screen addendum, 2026-10-09; P0–P9 built against v1)
+status:      agreed (v2 + the screen addendum + addendum 3 "sessions", 2026-10-09; P0–P9 built against v1)
 scope:       [Cargo.toml, src/**, .github/workflows/ci.yml, internal/core/config/config.go (one relaxation), README.md]
 depends_on:  [git, gh on PATH]
 supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/herdr]
@@ -8,7 +8,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 
 ## Contract
 
-- One binary `jw`, unix only (macOS + Linux). With no arguments it opens the TUI client; a hidden `jw daemon` runs the server. The only other CLI is `jw prompt <stream> <text>` and `jw new <name> [--task <text>]`, for agents (no `--json`).
+- One binary `jw`, unix only (macOS + Linux). With no arguments it opens the TUI client; a hidden `jw daemon` runs the server. The other commands are socket clients for sessions and for agents (addendum 3): `jw new <session>`, `jw [session]`, `jw sessions`, `jw ls`, `jw read`, `jw worktree`, `jw prompt`, `jw hook`.
 - **Two concepts.** A *workspace* is an open folder: a project (any folder, git or not) or one of its worktrees. A workspace holds *panes*.
 - **One-shot leader.** `Ctrl-Space`, then one key, then back to the terminal (tmux-style). A pause of 600 ms after the leader shows every key; `?` shows them at once. There is no navigation mode.
 - **Every action applies to the current workspace or the focused pane.** The sidebar is a list to read and click, numbered for `1–9`.
@@ -17,7 +17,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 - **Viewers are panes the client draws:** a GitHub-style diff (unified when narrow, side by side when wide, sticky file headers, viewed, changed words) and a Markdown reader. Code files open in nvim; there is no built-in editor or file tree.
 - **Theme:** Atom One Dark / One Light, following the terminal or the OS.
 - The checks of today's commands (`new rm done sync setup dev info init`) stay; confirmations are modals. Exit code 3 and `--json` go away.
-- On-disk compatibility: same config TOML and `registry.json` as Go until the cutover. Alt is never bound (AeroSpace owns it).
+- On-disk compatibility: same config TOML as Go; Rust keeps its own `workspaces.json` (addendum 3). Alt is never bound (AeroSpace owns it).
 
 ### Keymap (after `^␣`)
 
@@ -128,6 +128,45 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 - REQ-19 WHEN the workspace, a modal or the pane focus changes, the TUI MAY animate the transition, never delaying input to the panes. *(Later; optional.)*
 - REQ-20 WHERE `[tui] animations = false`, the TUI SHALL apply every change without animation.
 
+### Addendum 3: sessions, settings, and the risks closed
+
+| Area | What it does |
+|---|---|
+| Session | A name (`[a-z0-9-]`, ≤ 24) with its own workspaces (folders and worktrees), `session.json` and `recent.json`, under `~/.local/state/jw/sessions/<name>/`. One daemon serves every session; workspace ids are `<session>/<id>` |
+| `jw new <name> [--dir D]` | Creates the session and attaches. It starts with one workspace (D or the cwd) holding one shell, never a layout. If the name exists, exit 1 |
+| `jw [name]` | Attaches to `name` or the last session used; with none, creates `main` |
+| `jw sessions` | Name, workspaces open, agents working/waiting |
+| In a session | The sidebar title is the session name; only its workspaces show. `o` and `w` add to it. Later projects use their `[layout]` |
+| `^␣ a` | Session picker: fuzzy, `↵` switches, a new name offers `+ create` in the current folder |
+| Agent CLI | `jw ls [--json]`, `jw read <ws> [--pane role] [--lines N]`, `jw worktree <name> [--in project] [--task …]` (was `jw new --task`), `jw prompt <ws> …`, on `$JW_SESSION` |
+| Migration | The first session-aware run moves `folders.json`, `session.json` and every registry worktree into `main` |
+| Registry | `workspaces.json`, seeded once from a copy of `registry.json`; entries gain `session` and `root`. Go's file is never written |
+| Settings | `~/.config/jw/settings.json`: `leader`, `theme` (`system\|dark\|light`), `dark`, `light`, `which_delay_ms`, `keys{action: key}`; all optional; env `JW_LEADER`/`JW_THEME` win; re-read on mtime change. JSON, so Go's `*.toml` glob skips it |
+| `^␣ ,` | Settings screen: general, keys, themes. Rebind swaps a key in use; `1-9 hjkl HJKL ? q` fixed; no Ctrl/Alt after the leader; the leader is Ctrl + a key. Themes: `↵` use, `e` edit in nvim, `c` copy. Writes at once |
+| Themes | `one-dark`, `one-light` built in; `~/.config/jw/themes/<name>.json` = `{name, dark, colors{bg panel line fg dim sel blue green yellow red magenta cyan, add_bg? del_bg? add_word? del_word?}}`; missing diff colours are mixed; a bad file keeps the last good palette |
+| `.md` reuse | `ClientMsg::Role{pane, role}` retargets the workspace's `view:md:*` pane |
+| Scrollback | 2 MiB raw ring per pane in the daemon, sent in `Snapshot`, saved to `sessions/<name>/scrollback/<pane>.bin`, replayed on restore under `── restored <time> ──` |
+| Agent state | `JW_PANE`, `JW_SESSION` in panes; claude starts with `--session-id <uuid>` and `--settings` hooks running `jw hook <event>` (`UserPromptSubmit` working, `Notification` waiting, `Stop` idle) → `ClientMsg::Agent` → `PaneInfo.agent`; restore runs `claude --resume <uuid>` |
+| nvim | `--listen <state>/nvim/<pane>.sock`; files open with `nvim --server <sock> --remote <path>`, keys as fallback |
+| Frames | u32 length + u8 kind (0 JSON, 1 Output = u64 pane + bytes); per-client queue bounded at 8 MiB, then dropped and resynced by `Snapshot` under 1 MiB. `PROTOCOL = 5` |
+
+- REQ-61 WHEN `jw new <name>` runs, jw SHALL create the session and open it with one workspace in the cwd, holding one shell.
+- REQ-62 THE sidebar SHALL show only the current session's workspaces, under the session's name.
+- REQ-63 WHEN `^␣ a` picks another session, the TUI SHALL show that session without stopping anything in the one it left.
+- REQ-64 WHEN `jw` runs with no name, it SHALL attach to the last session used. WHERE no session exists, it SHALL create `main`.
+- REQ-65 WHEN the first session-aware jw starts, it SHALL move today's folders, trees and worktrees into `main`.
+- REQ-66 `jw ls --json` SHALL list `$JW_SESSION`'s workspaces with state, marks, branch and PR. `jw read` SHALL print a pane's last N lines.
+- REQ-67 WHEN `^␣ ,` is pressed, the TUI SHALL open the settings screen, and each change SHALL be written to `settings.json` at once.
+- REQ-68 WHEN a rebind uses a key bound to another action, the TUI SHALL swap them. IF the key is fixed, or has Ctrl or Alt, THEN the TUI SHALL refuse it.
+- REQ-69 WHEN `settings.json` or a theme file changes, the TUI SHALL apply it within 2 s. IF it does not parse, THEN the TUI SHALL keep the last good values and show the error.
+- REQ-70 THE Rust jw SHALL use `workspaces.json` only, seeded from `registry.json` when it is missing.
+- REQ-71 WHEN a `.md` opens and a reader pane exists, the TUI SHALL show it in that pane.
+- REQ-72 WHEN a client attaches, a pane's scrollback SHALL include up to 2 MiB from before the attach. WHEN the daemon restarts, it SHALL replay the saved scrollback.
+- REQ-73 WHILE a claude pane's hooks report a state, the sidebar SHALL show it (`✻` working, `?` waiting).
+- REQ-74 WHEN the daemon restores an agent pane, it SHALL resume that pane's own session id.
+- REQ-75 WHEN a file opens in an nvim pane with a socket, the TUI SHALL use `nvim --server`.
+- REQ-76 IF a client's pending output passes 8 MiB, THEN the daemon SHALL drop it and resync that client, without blocking other clients or the PTY.
+
 ---
 
 ## Rationale
@@ -164,6 +203,12 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 - RISK-17 **Mapping worktrees to their project** with `Repo::open` runs one `git` per worktree on every reload. Cache it by path; it changes only when worktrees are created or removed.
 - RISK-18 **The `?` mark depends on the agent ringing the bell.** Claude Code does so only when its notifications use the terminal bell. Without that, `?` never shows (the same worst case as RISK-7).
 - RISK-19 **`gh` polling** costs a network call per worktree a minute. Only open worktrees are polled, and only while jw runs.
+- RISK-20 **`claude --settings` hooks** may replace the user's hooks instead of merging. Then they go to `~/.claude/settings.json`, guarded by `[ -n "$JW_PANE" ]`. S5 checks first.
+- RISK-21 **A replayed ring at a new width** wraps differently; fine for scrollback.
+- RISK-22 **A folder open in two sessions** is two workspaces sharing nothing. A worktree belongs to the session that made it.
+- RISK-23 **`workspaces.json` drifts from Go's registry** after the seed; `jw import` if it is ever needed.
+- RISK-24 **`jw new` changes meaning** (worktree → session). `jw new --task` errors with a pointer to `jw worktree`.
+- Closed by addendum 3: RISK-5 (own registry), RISK-7 (hooks), RISK-9 (frames), RISK-16 (`nvim --server`), RISK-17 (`root` in the registry).
 
 ## Parts (each one ends with `cargo test` + `clippy` green and a local commit on `feat/rust-tui`; nothing is pushed)
 
@@ -182,6 +227,17 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | Q10 ✓ `afaf4a2` | Rename `r` | 40 | `connectors/git.rs`, `actions.rs`, `core/registry.rs` |
 | Q8 ✓ `765a7af` | Restore from `session.json` when the daemon starts | 15 | `daemon/mod.rs` |
 | — | **Checkpoint:** a week of daily use with Claude Code and nvim (RISK-1), once Q3–Q5 make it look and act like the prototype | | |
+| S0 | Addendum 3 in this spec; prototype v7 (sessions) before the UI parts | — | docs |
+| S1 | `workspaces.json` with `session` and `root` | 70 | `core/registry.rs`, `tui/mod.rs` |
+| S2 | `.md` reuse, `ClientMsg::Role` | 71 | `proto`, `daemon`, `tui/mod.rs` |
+| S3 | Binary Output frames, bounded queue, `PROTOCOL 5` | 76 | `proto`, `daemon`, `client.rs` |
+| S4 | Scrollback ring: `Snapshot`, saved, replayed | 72 | `daemon`, `tui/mod.rs` |
+| S5 | Claude session ids, hooks, `jw hook`, `ClientMsg::Agent` | 73, 74 | `stream.rs`, `daemon`, `cli.rs`, `tui/mod.rs` |
+| S6 | nvim `--listen` / `--server --remote` | 75 | `stream.rs`, `tui/mod.rs` |
+| S7 | Sessions: storage, daemon, `jw new/[name]/sessions`, migration, title, `^␣ a` | 61–65 | `daemon`, `proto`, `folders.rs`, `cli.rs`, `tui/**` |
+| S8 | `settings.rs`, JSON themes, reload, keymap by action | 68, 69 | `settings.rs`, `theme.rs`, `tui/**` |
+| S9 | Settings screen `^␣ ,` | 67, 68 | `tui/settings_view.rs`, `tui/draw.rs` |
+| S10 | `jw ls`, `jw read`, `jw worktree`; the jw skill rewritten | 66 | `cli.rs`, `main.rs`, skill |
 | Later | Animations (optional); cutover: delete Go + herdr, README, trim the `jw` skill | 16, 19, 20 | |
 
 Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{new_stream, rm_plan, rm, sync, done_plan}`, `src/diff.rs`, `src/view/md.rs` and `Modal::Rm` (type the name) stay as they are.
@@ -193,10 +249,7 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - OPEN-3 → keep `jw prompt` and `jw new --task` as socket clients.
 - OPEN-4 → unix only; `shell_windows.go` is not ported.
 - OPEN-6 → TUI, not a GUI (RAT-10).
-
-## Open questions
-
-- OPEN-5 `[tui]` lives in the project TOML, but leader, theme and animations are global to the client. Until there is a global file, they come from `JW_LEADER` (`C-Space`) and `JW_THEME` (`auto`). A global `~/.config/jw/tui.toml` would be read by Go's personal-config glob, so it needs a name or place Go skips.
+- OPEN-5 → `~/.config/jw/settings.json` (JSON, outside Go's `*.toml` glob) and the `^␣ ,` screen (addendum 3).
 
 ## Corrections
 
@@ -206,6 +259,9 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - RISK-2 assumed `[layout]` was a new table. It already existed with `editor`.
 - v1's "spaces → streams" with a free space first, a sticky NAV mode (REQ-17), `F` focus-all (REQ-25) and a Telescope finder with `> @ / :` prefixes (REQ-26/27) were replaced by v2's workspaces, one-shot leader and three plain pickers.
 - `33c46f5` kept project headings and a "free" section in the sidebar; the prototype has neither. REQ-50 replaces REQ-33.
+- v1 said "TUI only, no CLI; the jw skill becomes obsolete". An agent overseeing a session needs the CLI, so it stays as socket clients.
+- RISK-17 said one `git` ran per worktree per reload; `root_of` already cached it per project in memory. S1 makes it persistent.
+- An addendum-3 draft read `.jw/` as a per-project config folder (like `.vscode/`), then as a pinned "home" brain workspace. The user meant a scope for which projects show: named sessions. The brain is a usage pattern, not a jw concept.
 - The 2026-10-09 prototype's `.worktrees/<name>` on `jw/<name>` was wrong for this repo: worktrees live at `<repo>-wt/<name>` on the `branch` template (`feat/{name}`).
 
 ## Tests
