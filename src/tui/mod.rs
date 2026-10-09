@@ -10,6 +10,7 @@ mod finder;
 mod keys;
 mod mdview;
 mod modal;
+mod settings_view;
 
 use std::collections::BTreeMap;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -180,6 +181,8 @@ pub struct App {
     pub modal: Option<Modal>,
     /// A picker over everything else (`^␣ o`).
     pub finder: Option<finder::Finder>,
+    /// The settings screen, while it is open (REQ-67).
+    pub settings: Option<settings_view::SettingsView>,
     /// Each worktree's pull request, from the last look (REQ-51).
     pub prs: BTreeMap<String, crate::connectors::Pr>,
     ticks: u64,
@@ -362,6 +365,7 @@ impl App {
             quit: false,
             modal: None,
             finder: None,
+            settings: None,
             prs: BTreeMap::new(),
             ticks: 0,
             views: BTreeMap::new(),
@@ -735,6 +739,22 @@ impl App {
     }
 
     fn on_key(&mut self, k: KeyEvent) {
+        if let Some(v) = &mut self.settings {
+            match v.key(k) {
+                settings_view::Outcome::Stay => {}
+                settings_view::Outcome::Close => self.settings = None,
+                settings_view::Outcome::Changed => self.apply_settings(),
+                settings_view::Outcome::Edit(path) => {
+                    self.settings = None;
+                    if self.active.is_none() {
+                        self.fail("open a workspace first: the theme opens in its nvim".into());
+                    } else {
+                        self.open_file(&path.display().to_string());
+                    }
+                }
+            }
+            return;
+        }
         if let Some(f) = &mut self.finder {
             match f.key(k) {
                 finder::Outcome::Stay => {}
@@ -1141,6 +1161,9 @@ impl App {
             _ => 0,
         };
         let click = matches!(m.kind, MouseEventKind::Down(MouseButton::Left));
+        if self.settings.is_some() {
+            return;
+        }
         if let Some(f) = &mut self.finder {
             if wheel != 0 {
                 f.move_by(wheel.signum());
@@ -1480,10 +1503,16 @@ impl App {
     /// `^␣ o`: the folder browser, starting beside the current project.
     /// `^␣ ,`: the settings screen (REQ-67).
     fn ask_settings(&mut self) {
-        match crate::settings::path() {
-            Ok(p) => self.say(format!("settings: {}", finder::tilde(&p))),
-            Err(e) => self.fail(format!("{e:#}")),
+        self.settings = Some(settings_view::SettingsView::new());
+    }
+
+    /// What the settings screen changed, on screen now.
+    fn apply_settings(&mut self) {
+        if let Err(e) = crate::theme::load(&crate::settings::get()) {
+            self.fail(format!("{e:#}"));
         }
+        crate::theme::set_dark(dark_now());
+        self.leader = leader();
     }
 
     fn ask_folder(&mut self) {

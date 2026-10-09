@@ -46,6 +46,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if let Some(finder) = &app.finder {
         finder.draw(f);
     }
+    if let Some(s) = &app.settings {
+        s.draw(f, &app.leader.label());
+    }
     if app.which {
         which(f, app);
     }
@@ -253,7 +256,9 @@ fn status(f: &mut Frame, app: &App) {
                 | super::Modal::Rm { .. }
         )
     );
-    let (chip, color) = if confirm {
+    let (chip, color) = if app.settings.is_some() {
+        (" SET ".to_string(), p().magenta)
+    } else if confirm {
         (" CONFIRM ".to_string(), p().red)
     } else if app.leading() {
         (format!(" {leader} "), p().yellow)
@@ -287,7 +292,24 @@ fn status(f: &mut Frame, app: &App) {
             Style::default().fg(p().cyan),
         ));
     }
-    if confirm {
+    if let Some(v) = &app.settings {
+        if v.listening() {
+            spans.extend([txt("press the new key ·"), key("esc"), txt("cancels")]);
+        } else {
+            spans.extend([
+                key("tab"),
+                txt("page ·"),
+                key("↑↓"),
+                txt("move ·"),
+                key("↵"),
+                txt("change ·"),
+                key("←→"),
+                txt("value ·"),
+                key("esc"),
+                txt("close"),
+            ]);
+        }
+    } else if confirm {
         spans.extend([key("y"), txt("yes ·"), key("esc"), txt("no")]);
     } else if app.leading() {
         spans.extend([txt("one key ·"), key("esc"), txt("cancels")]);
