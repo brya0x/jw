@@ -202,7 +202,7 @@ impl Stream {
     fn command(&self, run: &str, vars: &Vars) -> Result<Option<String>> {
         let line = match run {
             "shell" => return Ok(None),
-            "editor" => self.cfg.layout.editor.clone(),
+            "editor" => return Ok(Some(listen(&expand(&self.cfg.layout.editor, vars)?))),
             "agent" => return self.agent_command(vars).map(Some),
             _ => match run.strip_prefix("dev:") {
                 Some(svc) => {
@@ -282,6 +282,38 @@ impl Stream {
     }
 }
 
+/// Where the nvim of pane `id` listens, so jw can open files in it with
+/// `nvim --server` (REQ-75).
+pub fn nvim_socket(id: crate::proto::PaneId) -> Option<PathBuf> {
+    Some(nvim_dir()?.join(format!("{id}.sock")))
+}
+
+fn nvim_dir() -> Option<PathBuf> {
+    Some(registry::state_dir().ok()?.join("nvim"))
+}
+
+/// An editor line that starts nvim gets `--listen` on its pane's socket;
+/// any other editor runs as it is. The pane's id is only known when it
+/// starts, so the shell expands `$JW_PANE_ID`.
+pub fn listen(line: &str) -> String {
+    let (prog, rest) = line.split_once(' ').unwrap_or((line, ""));
+    let is_nvim = Path::new(prog).file_name().is_some_and(|n| n == "nvim");
+    let Some(dir) = nvim_dir().filter(|_| is_nvim) else {
+        return line.to_string();
+    };
+    let _ = std::fs::create_dir_all(&dir);
+    let sock = format!(
+        "{}/\"$JW_PANE_ID\".sock",
+        shell_quote(&dir.display().to_string())
+    );
+    let rest = if rest.is_empty() {
+        String::new()
+    } else {
+        format!(" {rest}")
+    };
+    format!("rm -f {sock}; exec {prog} --listen {sock}{rest}")
+}
+
 /// The conversation an entry's agent had, or a fresh id for a new one.
 fn session_of(entry: &Entry) -> String {
     if entry.agent.is_empty() {
@@ -354,6 +386,10 @@ mod tests {
     fn default_panes() {
         let s = stream(false);
         let agent = s.claude("claude", "--session-id 0000-s");
+        let editor = listen("nvim -c 'DiffviewOpen origin/trunk...HEAD'");
+        assert!(editor.contains("exec nvim --listen '"), "{editor}");
+        assert!(editor.ends_with(".sock -c 'DiffviewOpen origin/trunk...HEAD'"));
+        assert_eq!(listen("hx ."), "hx .");
         let panes = s.panes().unwrap();
         let got: Vec<(&str, Option<&str>)> = panes
             .iter()
@@ -362,7 +398,7 @@ mod tests {
         assert_eq!(
             got,
             [
-                ("editor", Some("nvim -c 'DiffviewOpen origin/trunk...HEAD'")),
+                ("editor", Some(editor.as_str())),
                 ("agent", Some(agent.as_str())),
                 ("shell", None),
             ]

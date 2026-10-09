@@ -147,7 +147,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 | `.md` reuse | `ClientMsg::Role{pane, role}` retargets the workspace's `view:md:*` pane |
 | Scrollback | 2 MiB raw ring per pane in the daemon, sent in `Snapshot`, saved to `sessions/<name>/scrollback/<pane>.bin`, replayed on restore under `── restored <time> ──` |
 | Agent state | `JW_PANE`, `JW_SESSION` in panes; claude starts with `--session-id <uuid>` and `--settings` hooks running `jw hook <event>` (`UserPromptSubmit` and `PreToolUse` working, `Notification` waiting, `Stop` idle) → `ClientMsg::Agent` → `PaneInfo.agent`; restore runs `claude --resume <uuid>` |
-| nvim | `--listen <state>/nvim/<pane>.sock`; files open with `nvim --server <sock> --remote <path>`, keys as fallback |
+| nvim | `--listen <state>/nvim/$JW_PANE_ID.sock` (expanded by the pane's shell); files open with `nvim --server <sock> --remote <path>`, keys as fallback |
 | Frames | u32 length + u8 kind: 0 JSON, or 1 = u32 head length + JSON head + the message's bytes raw (Output, Snapshot, Input); per-client queue bounded at 8 MiB, then dropped and resynced by `Snapshot` under 1 MiB. `PROTOCOL = 5` |
 
 - REQ-61 WHEN `jw new <name>` runs, jw SHALL create the session and open it with one workspace in the cwd, holding one shell.

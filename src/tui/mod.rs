@@ -1568,12 +1568,30 @@ impl App {
         });
         match editor {
             Some(pane) => {
-                // RISK-16: nvim takes `:e` once Esc left any other mode.
-                let line = format!("\x1b:e {}\r", file.replace(' ', "\\ "));
-                self.send(ClientMsg::Input {
-                    pane,
-                    bytes: line.into_bytes(),
-                });
+                // REQ-75: through the nvim's own socket when it listens on
+                // one; else typed as keys, which needs normal mode (RISK-16).
+                let path = std::path::Path::new(&stream.entry.path).join(file);
+                let remote = crate::stream::nvim_socket(pane)
+                    .filter(|s| s.exists())
+                    .is_some_and(|s| {
+                        std::process::Command::new("nvim")
+                            .arg("--server")
+                            .arg(&s)
+                            .arg("--remote")
+                            .arg(&path)
+                            .stdin(std::process::Stdio::null())
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null())
+                            .status()
+                            .is_ok_and(|st| st.success())
+                    });
+                if !remote {
+                    let line = format!("\x1b:e {}\r", file.replace(' ', "\\ "));
+                    self.send(ClientMsg::Input {
+                        pane,
+                        bytes: line.into_bytes(),
+                    });
+                }
                 self.focus = Some(pane);
                 self.full = false;
                 self.fit();
@@ -1583,7 +1601,10 @@ impl App {
                 let stage = self.stage();
                 let new = NewPane {
                     role: "editor".into(),
-                    cmd: Some(format!("nvim {}", crate::stream::shell_quote(file))),
+                    cmd: Some(crate::stream::listen(&format!(
+                        "nvim {}",
+                        crate::stream::shell_quote(file)
+                    ))),
                     resume: None,
                     cwd: std::path::PathBuf::from(&stream.entry.path),
                     env: stream.env(),
