@@ -247,11 +247,22 @@ fn list_reports_every_pane() {
         busy: false,
         bell: false,
         agent: None,
+        cwd: None,
     };
-    // Whether they printed in the last 2 s depends on timing.
+    // Every pane says where it is; whether they printed in the last 2 s
+    // depends on timing.
+    assert!(
+        panes
+            .iter()
+            .all(|p| p.cwd.as_deref().is_some_and(|d| !d.is_empty()))
+    );
     let panes: Vec<PaneInfo> = panes
         .into_iter()
-        .map(|p| PaneInfo { busy: false, ..p })
+        .map(|p| PaneInfo {
+            busy: false,
+            cwd: None,
+            ..p
+        })
         .collect();
     assert_eq!(panes, [info(a, "a"), info(b, "b")]);
 }
