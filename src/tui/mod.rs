@@ -936,6 +936,9 @@ impl App {
                 .map(|l| l.id)
         });
         if let Some(id) = existing {
+            if self.tree.as_ref().and_then(|t| t.find(id)).map(|l| &l.role) != Some(&role) {
+                self.send(ClientMsg::Role { pane: id, role });
+            }
             self.views.insert(id, view);
             self.focus = Some(id);
             self.full = false;

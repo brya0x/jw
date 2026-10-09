@@ -128,6 +128,12 @@ pub enum ClientMsg {
         pane: PaneId,
         name: Option<String>,
     },
+    /// Point a viewer at other content (`view:md:<file>`), so a client
+    /// that attaches later, or a restart, shows what is on screen now.
+    Role {
+        pane: PaneId,
+        role: String,
+    },
     /// Which panes exist, for every stream: answered with `Panes`.
     List,
     /// Type `text` into the stream's agent pane once it is quiet, then

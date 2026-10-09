@@ -636,6 +636,23 @@ fn a_viewer_is_a_leaf_without_a_process() {
         next_tree(&mut c).find(diff).unwrap().name.as_deref(),
         Some("review")
     );
+    // REQ-71: a reused reader keeps the file it shows now.
+    c.send(&ClientMsg::Role {
+        pane: diff,
+        role: "view:md:docs/x.md".into(),
+    })
+    .unwrap();
+    assert_eq!(
+        next_tree(&mut c).find(diff).unwrap().role,
+        "view:md:docs/x.md"
+    );
+    c.send(&ClientMsg::Role {
+        pane: shell,
+        role: "view:diff".into(),
+    })
+    .unwrap();
+    assert!(matches!(next(&mut c), DaemonMsg::Error { .. }));
+
     c.send(&ClientMsg::Kill { pane: diff }).unwrap();
     assert_eq!(ids(&next_tree(&mut c)), [shell]);
 }

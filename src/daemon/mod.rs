@@ -423,6 +423,17 @@ impl Daemon {
                     Ok(())
                 })?;
             }
+            ClientMsg::Role { pane, role } => {
+                let stream = self.stream_of(pane)?;
+                self.edit(&stream, |t| {
+                    let leaf = t.find_mut(pane).context("no such pane")?;
+                    if !is_view(&leaf.role) || !is_view(&role) {
+                        bail!("only a viewer changes what it shows");
+                    }
+                    leaf.role = role;
+                    Ok(())
+                })?;
+            }
         }
         Ok(())
     }
