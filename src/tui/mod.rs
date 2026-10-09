@@ -80,6 +80,8 @@ enum Job {
         /// client attaching to a workspace that shows one).
         into: Option<PaneId>,
     },
+    /// A worktree has its new name; open it again.
+    Renamed(Entry),
     /// `X` on a worktree whose PR isn't merged: the rm checks, and why.
     RmReady {
         entry: Entry,
@@ -750,6 +752,7 @@ impl App {
                 self.fit();
             }
             KeyCode::Char('o') => self.ask_folder(),
+            KeyCode::Char('r') => self.ask_rename(),
             KeyCode::Char('w') => self.new_worktree(),
             KeyCode::Char('s') => self.run_sync(),
             KeyCode::Char('d') => self.open_diff(),
@@ -1214,6 +1217,27 @@ impl App {
         Some(entry)
     }
 
+    /// `^␣ r`: rename the current worktree (REQ-40).
+    fn ask_rename(&mut self) {
+        let Some(entry) = self.current_worktree("rename") else {
+            return;
+        };
+        match Project::open(std::path::Path::new(&entry.path)) {
+            Ok(project) => {
+                let plan = registry::default_path()
+                    .and_then(|reg| actions::rename_plan(&project, &entry, &entry.name, &reg))
+                    .map_err(|e| format!("{e:#}"));
+                self.modal = Some(Modal::Rename {
+                    text: entry.name.clone(),
+                    plan,
+                    entry,
+                    project,
+                })
+            }
+            Err(e) => self.fail(format!("{e:#}")),
+        }
+    }
+
     /// `^␣ o`: the folder browser, starting beside the current project.
     fn ask_folder(&mut self) {
         let start = self
@@ -1576,6 +1600,20 @@ impl App {
         match m {
             Modal::Close { entry, .. } => self.close(&entry),
             Modal::ClosePane { pane, .. } => self.send(ClientMsg::Kill { pane }),
+            Modal::Rename {
+                entry,
+                project,
+                text,
+                ..
+            } => {
+                // The panes go first, so nothing runs in the folder it moves.
+                self.close(&entry);
+                self.background(format!("renaming {}", entry.name), move || {
+                    let reg = registry::default_path()?;
+                    let renamed = actions::rename(&project, &entry, &text, &reg)?;
+                    Ok(Job::Renamed(renamed))
+                });
+            }
             Modal::Name { pane, text } => {
                 let name = Some(text.trim().to_string()).filter(|n| !n.is_empty());
                 self.send(ClientMsg::Name { pane, name });
@@ -1677,6 +1715,10 @@ impl App {
                 });
             }
             Job::Failed(e) => self.fail(e),
+            Job::Renamed(entry) => {
+                self.done(format!("renamed to {} on {}", entry.name, entry.branch));
+                self.open_entry(entry, false);
+            }
             Job::Said(msg) => self.done(msg),
             Job::Diff {
                 title,

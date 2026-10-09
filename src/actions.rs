@@ -126,6 +126,82 @@ pub fn new_stream(p: &Project, o: &NewOptions, reg_path: &Path) -> Result<Entry>
     Ok(entry)
 }
 
+/// What a rename changes, shown before it happens.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Renamed {
+    pub path: PathBuf,
+    /// The new branch; the same one when jw didn't name it.
+    pub branch: String,
+}
+
+/// Where `e` goes when it's called `name` (REQ-40): the folder beside the
+/// old one, and the branch from the template, but only when jw made the
+/// branch from it.
+pub fn rename_plan(p: &Project, e: &Entry, name: &str, reg_path: &Path) -> Result<Renamed> {
+    if !valid_name(name) {
+        bail!("invalid name {name:?}: use lowercase letters, digits and dashes");
+    }
+    if name != e.name && Registry::load(reg_path)?.has(&p.name, name) {
+        bail!("{}/{name} already exists", p.name);
+    }
+    let old = Path::new(&e.path);
+    let path = old.with_file_name(name);
+    if path != old && path.exists() {
+        bail!("{} already exists", path.display());
+    }
+    let base = p.repo.default_branch().unwrap_or_default();
+    let ours = !e.adopted
+        && expand(&p.cfg.branch, &p.cfg.vars(&e.name, &base, e.slot))
+            .ok()
+            .as_deref()
+            == Some(e.branch.as_str());
+    let branch = if ours {
+        expand(&p.cfg.branch, &p.cfg.vars(name, &base, e.slot))?
+    } else {
+        e.branch.clone()
+    };
+    if branch != e.branch && p.repo.branch_exists(&branch) {
+        bail!("branch {branch} already exists");
+    }
+    Ok(Renamed { path, branch })
+}
+
+/// Renames a worktree: its folder, its branch (when jw named it), its
+/// registry entry (same id and slot) and its .jw.env.
+pub fn rename(p: &Project, e: &Entry, name: &str, reg_path: &Path) -> Result<Entry> {
+    let plan = rename_plan(p, e, name, reg_path)?;
+    let old = PathBuf::from(&e.path);
+    if plan.path != old {
+        p.repo.move_worktree(&old, &plan.path)?;
+    }
+    if plan.branch != e.branch
+        && let Err(err) = p.repo.rename_branch(&e.branch, &plan.branch)
+    {
+        let _ = p.repo.move_worktree(&plan.path, &old);
+        return Err(err.context("rolled back the folder"));
+    }
+    let mut renamed = e.clone();
+    renamed.name = name.to_string();
+    renamed.path = plan.path.display().to_string();
+    if renamed.original == e.branch {
+        renamed.original = plan.branch.clone();
+    }
+    renamed.branch = plan.branch;
+    let base = p.repo.default_branch().unwrap_or_default();
+    let vars = p.cfg.vars(name, &base, e.slot);
+    let env: String = jw_env(&renamed, &vars)
+        .iter()
+        .map(|(k, v)| format!("{k}={v}\n"))
+        .collect();
+    std::fs::write(plan.path.join(".jw.env"), env)?;
+    let mut reg = Registry::load(reg_path)?;
+    if let Some(x) = reg.entries.iter_mut().find(|x| x.id == e.id) {
+        *x = renamed.clone();
+    }
+    reg.save(reg_path)?;
+    Ok(renamed)
+}
+
 fn provision(p: &Project, e: &Entry, vars: &Vars, reg_path: &Path) -> Result<()> {
     let env: String = jw_env(e, vars)
         .iter()
@@ -619,6 +695,45 @@ mod tests {
     fn names() {
         assert!(valid_name("web-2") && valid_name("2fa"));
         assert!(!valid_name("") && !valid_name("-x") && !valid_name("Web") && !valid_name("a_b"));
+    }
+
+    #[test]
+    fn rename_moves_the_folder_branch_and_entry() {
+        let (dir, work) = new_test_repo();
+        let reg_path = dir.path().join("state/registry.json");
+        let p = project(&work, &dir.path().join("wt"));
+        let o = NewOptions {
+            name: "ws-1".into(),
+            ..NewOptions::default()
+        };
+        let e = new_stream(&p, &o, &reg_path).unwrap();
+
+        assert!(rename_plan(&p, &e, "Bad", &reg_path).is_err());
+        let plan = rename_plan(&p, &e, "login", &reg_path).unwrap();
+        assert_eq!(plan.branch, "feat/login");
+
+        let r = rename(&p, &e, "login", &reg_path).unwrap();
+        assert_eq!((r.id.as_str(), r.slot), (e.id.as_str(), e.slot));
+        assert_eq!(r.name, "login");
+        let wt = Path::new(&r.path);
+        assert!(wt.ends_with("wt/login") && wt.is_dir());
+        assert!(!Path::new(&e.path).exists());
+        assert_eq!(git::current_branch(wt).unwrap(), "feat/login");
+        assert!(!p.repo.branch_exists("feat/ws-1"));
+        let env = std::fs::read_to_string(wt.join(".jw.env")).unwrap();
+        assert!(env.contains("JW_NAME=login\n"), "{env}");
+        assert_eq!(
+            Registry::load(&reg_path).unwrap().entries,
+            std::slice::from_ref(&r)
+        );
+
+        // A second worktree can't take the name.
+        let o2 = NewOptions {
+            name: "other".into(),
+            ..NewOptions::default()
+        };
+        let e2 = new_stream(&p, &o2, &reg_path).unwrap();
+        assert!(rename_plan(&p, &e2, "login", &reg_path).is_err());
     }
 
     #[test]

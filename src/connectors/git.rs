@@ -128,6 +128,16 @@ impl Repo {
         run(&self.root, &["worktree", "remove", "--force", &p]).map(drop)
     }
 
+    /// Moves a worktree's folder; git keeps track of it.
+    pub fn move_worktree(&self, from: &Path, to: &Path) -> Result<()> {
+        let (f, t) = (from.to_string_lossy(), to.to_string_lossy());
+        run(&self.root, &["worktree", "move", &f, &t]).map(drop)
+    }
+
+    pub fn rename_branch(&self, from: &str, to: &str) -> Result<()> {
+        run(&self.root, &["branch", "-m", from, to]).map(drop)
+    }
+
     /// Forgets worktrees whose directory is gone.
     pub fn prune_worktrees(&self) -> Result<()> {
         run(&self.root, &["worktree", "prune"]).map(drop)

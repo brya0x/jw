@@ -495,6 +495,7 @@ fn which(f: &mut Frame, app: &App) {
             "worktree",
             &[
                 ("w", "new"),
+                ("r", "rename"),
                 ("s", "sync"),
                 ("d", "changes"),
                 ("X", "remove"),

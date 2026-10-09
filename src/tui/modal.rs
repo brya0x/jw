@@ -28,6 +28,14 @@ pub enum Modal {
         title: String,
         running: String,
     },
+    /// `^␣ r`: a new name for a worktree, with what changes (REQ-40).
+    Rename {
+        entry: Entry,
+        project: Project,
+        text: String,
+        /// The plan for `text`, or why it can't be.
+        plan: Result<crate::actions::Renamed, String>,
+    },
     /// `^␣ n`: a name for the pane; empty goes back to its automatic title.
     Name {
         pane: crate::proto::PaneId,
@@ -76,6 +84,27 @@ impl Modal {
                 KeyCode::Char('n') => Outcome::Cancel,
                 _ => Outcome::Stay,
             },
+            Modal::Rename {
+                entry,
+                project,
+                text,
+                plan,
+            } => {
+                match k.code {
+                    KeyCode::Enter if plan.is_ok() && *text != entry.name => {
+                        return Outcome::Submit;
+                    }
+                    KeyCode::Backspace => {
+                        text.pop();
+                    }
+                    KeyCode::Char(c) if text.chars().count() < 40 => text.push(c),
+                    _ => return Outcome::Stay,
+                }
+                *plan = crate::core::registry::default_path()
+                    .and_then(|reg| crate::actions::rename_plan(project, entry, text, &reg))
+                    .map_err(|e| format!("{e:#}"));
+                Outcome::Stay
+            }
             Modal::Name { text, .. } => {
                 match k.code {
                     KeyCode::Enter => return Outcome::Submit,
@@ -178,6 +207,48 @@ impl Modal {
                     keys(&[("y", "close"), ("esc", "cancel")]),
                 ];
                 (format!(" Close {title}? "), l)
+            }
+            Modal::Rename {
+                entry, text, plan, ..
+            } => {
+                let row = |label: &str, old: String, new: String| {
+                    Line::from(vec![
+                        Span::styled(format!(" {label:<8}"), Style::default().fg(p().dim)),
+                        Span::styled(old, Style::default().fg(p().dim)),
+                        Span::raw(" → "),
+                        Span::styled(new, Style::default().fg(p().green)),
+                    ])
+                };
+                let mut l = vec![
+                    Line::from(vec![
+                        Span::styled(" name    ", Style::default().fg(p().dim)),
+                        Span::raw(text.clone()),
+                        Span::styled("▏", Style::default().fg(p().blue)),
+                    ]),
+                    Line::default(),
+                ];
+                match plan {
+                    Ok(r) => {
+                        l.push(row("branch", entry.branch.clone(), r.branch.clone()));
+                        l.push(row(
+                            "folder",
+                            short_path(&entry.path, 26),
+                            short_path(&r.path.display().to_string(), 26),
+                        ));
+                        l.push(Line::default());
+                        l.push(Line::from(Span::styled(
+                            " Its panes start again in the new folder.",
+                            Style::default().fg(p().dim),
+                        )));
+                    }
+                    Err(e) => l.push(Line::from(Span::styled(
+                        format!(" {e}"),
+                        Style::default().fg(p().red),
+                    ))),
+                }
+                l.push(Line::default());
+                l.push(keys(&[("↵", "rename"), ("esc", "cancel")]));
+                (format!(" Rename {} ", entry.name), l)
             }
             Modal::Name { text, .. } => {
                 let hint = if text.is_empty() {
