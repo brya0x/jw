@@ -36,6 +36,31 @@ impl Project {
 }
 
 /// Lowercase letters, digits and dashes, starting with a letter or digit.
+/// Gives every entry its project's main checkout (RISK-17): one `git` per
+/// project, once, for entries seeded from Go. Whether anything changed.
+pub fn fill_roots(reg: &mut Registry) -> bool {
+    let mut known: BTreeMap<String, String> = reg
+        .entries
+        .iter()
+        .filter(|e| !e.root.is_empty())
+        .map(|e| (e.project.clone(), e.root.clone()))
+        .collect();
+    let mut changed = false;
+    for e in reg.entries.iter_mut().filter(|e| e.root.is_empty()) {
+        let root = match known.get(&e.project) {
+            Some(r) => r.clone(),
+            None => match Repo::open(Path::new(&e.path)) {
+                Ok(r) => r.root.display().to_string(),
+                Err(_) => continue,
+            },
+        };
+        known.insert(e.project.clone(), root.clone());
+        e.root = root;
+        changed = true;
+    }
+    changed
+}
+
 pub fn valid_name(name: &str) -> bool {
     let mut cs = name.chars();
     cs.next()
@@ -111,6 +136,7 @@ pub fn new_stream(p: &Project, o: &NewOptions, reg_path: &Path) -> Result<Entry>
         slot,
         adopted: existing,
         created: registry::now_rfc3339(),
+        root: p.repo.root.display().to_string(),
         ..Entry::default()
     };
     // From here a worktree exists: undo it if anything fails, so a
@@ -689,6 +715,27 @@ mod tests {
             repo: Repo::open(work).unwrap(),
             cfg,
         }
+    }
+
+    #[test]
+    fn fills_roots_from_the_worktree() {
+        let (dir, work) = new_test_repo();
+        let reg_path = dir.path().join("state/workspaces.json");
+        let p = project(&work, &dir.path().join("wt"));
+        let o = NewOptions {
+            name: "ws-1".into(),
+            ..NewOptions::default()
+        };
+        let e = new_stream(&p, &o, &reg_path).unwrap();
+        let root = p.repo.root.display().to_string();
+        assert_eq!(e.root, root);
+
+        // An entry seeded from Go has no root yet.
+        let mut reg = Registry::load(&reg_path).unwrap();
+        reg.entries[0].root.clear();
+        assert!(fill_roots(&mut reg));
+        assert_eq!(reg.entries[0].root, root);
+        assert!(!fill_roots(&mut reg));
     }
 
     #[test]

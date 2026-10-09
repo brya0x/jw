@@ -176,9 +176,6 @@ pub struct App {
     pub modal: Option<Modal>,
     /// A picker over everything else (`^␣ o`).
     pub finder: Option<finder::Finder>,
-    /// Each project's main checkout, found from one of its worktrees
-    /// (RISK-17: one `git` per project, once).
-    roots: BTreeMap<String, String>,
     /// Each worktree's pull request, from the last look (REQ-51).
     pub prs: BTreeMap<String, crate::connectors::Pr>,
     ticks: u64,
@@ -346,7 +343,6 @@ impl App {
             quit: false,
             modal: None,
             finder: None,
-            roots: BTreeMap::new(),
             prs: BTreeMap::new(),
             ticks: 0,
             views: BTreeMap::new(),
@@ -407,7 +403,11 @@ impl App {
     fn reload(&mut self) -> Result<()> {
         let state = registry::state_dir()?;
         let folders = crate::folders::load(&state)?;
-        let reg = Registry::load(&registry::default_path()?)?;
+        let reg_path = registry::default_path()?;
+        let mut reg = Registry::load(&reg_path)?;
+        if actions::fill_roots(&mut reg) {
+            reg.save(&reg_path)?;
+        }
         let mut groups: Vec<(Entry, Vec<Entry>)> = folders
             .folders
             .iter()
@@ -419,7 +419,10 @@ impl App {
         }
         for (project, mut worktrees) in by_project {
             worktrees.sort_by(|a, b| a.name.cmp(&b.name));
-            let root = self.root_of(&project, &worktrees);
+            let root = worktrees
+                .iter()
+                .find(|w| !w.root.is_empty())
+                .map(|w| w.root.clone());
             let at = groups.iter().position(|(r, _)| {
                 !r.branch.is_empty() && (r.project == project || Some(&r.path) == root.as_ref())
             });
@@ -511,20 +514,6 @@ impl App {
             out.push('⚑');
         }
         out
-    }
-
-    /// The main checkout of `project`, found through its worktrees.
-    fn root_of(&mut self, project: &str, worktrees: &[Entry]) -> Option<String> {
-        if let Some(r) = self.roots.get(project) {
-            return Some(r.clone());
-        }
-        let root = worktrees.iter().find_map(|w| {
-            crate::connectors::git::Repo::open(std::path::Path::new(&w.path))
-                .ok()
-                .map(|r| r.root.display().to_string())
-        })?;
-        self.roots.insert(project.to_string(), root.clone());
-        Some(root)
     }
 
     fn say(&mut self, text: String) {

@@ -1,6 +1,7 @@
-//! The list of jw worktrees in ~/.local/state/jw/registry.json.
-//! Port of internal/core/registry/registry.go: both binaries read and write
-//! the same file until the cutover (REQ-1, REQ-2).
+//! The list of jw worktrees in ~/.local/state/jw/workspaces.json.
+//! Port of internal/core/registry/registry.go. The Rust binary keeps its own
+//! file, seeded once from Go's `registry.json` and never writing that one
+//! (REQ-70), so the two can't overwrite each other while both are in use.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -46,6 +47,12 @@ pub struct Entry {
     /// change its precision or offset.
     #[serde(default = "zero_time")]
     pub created: String,
+    /// The project's main checkout, so grouping the sidebar runs no `git`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub root: String,
+    /// The jw session the worktree belongs to; empty is `main`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub session: String,
 }
 
 /// The whole file on disk.
@@ -56,9 +63,23 @@ pub struct Registry {
     pub entries: Vec<Entry>,
 }
 
-/// Honours XDG_STATE_HOME, falling back to ~/.local/state.
+/// Honours XDG_STATE_HOME, falling back to ~/.local/state. The first call
+/// with no `workspaces.json` copies Go's `registry.json` into it.
 pub fn default_path() -> Result<PathBuf> {
-    Ok(state_dir()?.join("registry.json"))
+    let state = state_dir()?;
+    seed(&state)?;
+    Ok(state.join("workspaces.json"))
+}
+
+/// Copies `registry.json` to `workspaces.json` unless the latter exists.
+/// Go's file is left as it is.
+pub fn seed(state: &Path) -> Result<()> {
+    let ours = state.join("workspaces.json");
+    let go = state.join("registry.json");
+    if ours.exists() || !go.exists() {
+        return Ok(());
+    }
+    Registry::load(&go)?.save(&ours)
 }
 
 /// jw's state directory: registry, session, socket fallback.
@@ -289,6 +310,27 @@ mod tests {
             std::fs::read_to_string(out).unwrap(),
             std::fs::read_to_string(fixture).unwrap()
         );
+    }
+
+    #[test]
+    fn seeds_from_go_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut go = Registry::default();
+        go.add(entry("a", "web", 1));
+        go.save(&dir.path().join("registry.json")).unwrap();
+
+        seed(dir.path()).unwrap();
+        let ours = dir.path().join("workspaces.json");
+        assert_eq!(Registry::load(&ours).unwrap(), go);
+
+        // Later changes on either side stay on that side.
+        let mut r = Registry::load(&ours).unwrap();
+        r.entries[0].root = "/ws/myapp".into();
+        r.save(&ours).unwrap();
+        seed(dir.path()).unwrap();
+        assert_eq!(Registry::load(&ours).unwrap().entries[0].root, "/ws/myapp");
+        let go_text = std::fs::read_to_string(dir.path().join("registry.json")).unwrap();
+        assert!(!go_text.contains("root"));
     }
 
     #[test]
