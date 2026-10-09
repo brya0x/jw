@@ -227,17 +227,17 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | Q10 ✓ `afaf4a2` | Rename `r` | 40 | `connectors/git.rs`, `actions.rs`, `core/registry.rs` |
 | Q8 ✓ `765a7af` | Restore from `session.json` when the daemon starts | 15 | `daemon/mod.rs` |
 | — | **Checkpoint:** a week of daily use with Claude Code and nvim (RISK-1), once Q3–Q5 make it look and act like the prototype | | |
-| S0 | Addendum 3 in this spec; prototype v7 (sessions) before the UI parts | — | docs |
-| S1 | `workspaces.json` with `session` and `root` | 70 | `core/registry.rs`, `tui/mod.rs` |
-| S2 | `.md` reuse, `ClientMsg::Role` | 71 | `proto`, `daemon`, `tui/mod.rs` |
-| S3 | Binary Output frames, bounded queue, `PROTOCOL 5` | 76 | `proto`, `daemon`, `client.rs` |
-| S4 | Scrollback ring: `Snapshot`, saved, replayed | 72 | `daemon`, `tui/mod.rs` |
-| S5 | Claude session ids, hooks, `jw hook`, `ClientMsg::Agent` | 73, 74 | `stream.rs`, `daemon`, `cli.rs`, `tui/mod.rs` |
-| S6 | nvim `--listen` / `--server --remote` | 75 | `stream.rs`, `tui/mod.rs` |
-| S7 | Sessions: storage, daemon, `jw new/[name]/sessions`, migration, title, `^␣ a` | 61–65 | `daemon`, `proto`, `folders.rs`, `cli.rs`, `tui/**` |
-| S8 | `settings.rs`, JSON themes, reload, keymap by action | 68, 69 | `settings.rs`, `theme.rs`, `tui/**` |
-| S9 | Settings screen `^␣ ,` | 67, 68 | `tui/settings_view.rs`, `tui/draw.rs` |
-| S10 | `jw ls`, `jw read`, `jw worktree`; the jw skill rewritten | 66 | `cli.rs`, `main.rs`, skill |
+| S0 ✓ `d1b0d80` | Addendum 3 in this spec; prototype v7 (sessions) before the UI parts | — | docs |
+| S1 ✓ `dadd1d5` | `workspaces.json` with `session` and `root` | 70 | `core/registry.rs`, `tui/mod.rs` |
+| S2 ✓ `77b288e` | `.md` reuse, `ClientMsg::Role` | 71 | `proto`, `daemon`, `tui/mod.rs` |
+| S3 ✓ `26ab93c` | Binary Output frames, bounded queue, `PROTOCOL 5` | 76 | `proto`, `daemon`, `client.rs` |
+| S4 ✓ `3583a15` | Scrollback ring: `Snapshot`, saved, replayed | 72 | `daemon`, `tui/mod.rs` |
+| S5 ✓ `e51c3be` | Claude session ids, hooks, `jw hook`, `ClientMsg::Agent` | 73, 74 | `stream.rs`, `daemon`, `cli.rs`, `tui/mod.rs` |
+| S6 ✓ `00adf1b` | nvim `--listen` / `--server --remote` | 75 | `stream.rs`, `tui/mod.rs` |
+| S7 ✓ `4be4d25` | Sessions: storage, daemon, `jw new/[name]/sessions`, migration, title, `^␣ a` | 61–65 | `daemon`, `proto`, `folders.rs`, `cli.rs`, `tui/**` |
+| S8 ✓ `bbf27ca` | `settings.rs`, JSON themes, reload, keymap by action | 68, 69 | `settings.rs`, `theme.rs`, `tui/**` |
+| S9 ✓ `c054635` | Settings screen `^␣ ,` | 67, 68 | `tui/settings_view.rs`, `tui/draw.rs` |
+| S10 ✓ `e902627` | `jw ls`, `jw read`, `jw worktree`; the jw skill rewritten | 66 | `cli.rs`, `main.rs`, skill |
 | Later | Animations (optional); cutover: delete Go + herdr, README, trim the `jw` skill | 16, 19, 20 | |
 
 Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{new_stream, rm_plan, rm, sync, done_plan}`, `src/diff.rs`, `src/view/md.rs` and `Modal::Rm` (type the name) stay as they are.
