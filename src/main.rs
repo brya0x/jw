@@ -17,6 +17,8 @@ fn main() -> ExitCode {
         Some("sessions") => report("sessions", jw::cli::sessions()),
         Some("prompt") => report("prompt", jw::cli::prompt(&args[1..])),
         Some("worktree") => report("worktree", jw::cli::worktree(&args[1..])),
+        Some("ls") => report("ls", jw::cli::ls(&args[1..])),
+        Some("read") => report("read", jw::cli::read(&args[1..])),
         Some("hook") => report("hook", jw::cli::hook(&args[1..])),
         Some("--version" | "-V") => {
             println!("jw {}", env!("CARGO_PKG_VERSION"));

@@ -35,7 +35,6 @@ impl Project {
     }
 }
 
-/// Lowercase letters, digits and dashes, starting with a letter or digit.
 /// Gives every entry its project's main checkout (RISK-17): one `git` per
 /// project, once, for entries seeded from Go. Whether anything changed.
 pub fn fill_roots(reg: &mut Registry) -> bool {
@@ -61,6 +60,7 @@ pub fn fill_roots(reg: &mut Registry) -> bool {
     changed
 }
 
+/// Lowercase letters, digits and dashes, starting with a letter or digit.
 pub fn valid_name(name: &str) -> bool {
     let mut cs = name.chars();
     cs.next()
