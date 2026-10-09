@@ -293,8 +293,7 @@ fn session_workspaces() -> Result<Vec<Ws>> {
         .folders
         .iter()
         .map(|f| {
-            let mut entry = crate::folders::entry(&f.dir, f.opened);
-            entry.id = crate::folders::id_in(&session, &f.dir);
+            let entry = crate::folders::entry_for(f, &session);
             Ws {
                 label: entry.name.clone(),
                 entry,

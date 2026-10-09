@@ -134,6 +134,12 @@ pub enum ClientMsg {
         pane: PaneId,
         role: String,
     },
+    /// A workspace's id changed (its session was renamed): `from`'s panes
+    /// and tree go on as `to`.
+    Rekey {
+        from: String,
+        to: String,
+    },
     /// What an agent in a pane is doing, from its hooks (`jw hook`).
     Agent {
         pane: PaneId,

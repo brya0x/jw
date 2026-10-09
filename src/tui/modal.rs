@@ -41,6 +41,16 @@ pub enum Modal {
         pane: crate::proto::PaneId,
         text: String,
     },
+    /// `^␣ r` on a folder: the name jw shows for it; the folder on disk
+    /// stays. Empty goes back to the folder's own name.
+    Alias {
+        dir: String,
+        /// The folder's own name.
+        own: String,
+        text: String,
+    },
+    /// `ctrl-r` in the session picker: a new name for a session.
+    RenameSession { old: String, text: String },
     /// `done`: its PR is merged and nothing would be lost; one yes deletes it.
     Done {
         entry: Entry,
@@ -105,9 +115,22 @@ impl Modal {
                     .map_err(|e| format!("{e:#}"));
                 Outcome::Stay
             }
-            Modal::Name { text, .. } => {
+            Modal::Name { text, .. } | Modal::Alias { text, .. } => {
                 match k.code {
                     KeyCode::Enter => return Outcome::Submit,
+                    KeyCode::Backspace => {
+                        text.pop();
+                    }
+                    KeyCode::Char(c) if text.chars().count() < NAME_MAX => text.push(c),
+                    _ => {}
+                }
+                Outcome::Stay
+            }
+            Modal::RenameSession { old, text } => {
+                match k.code {
+                    KeyCode::Enter if text != old && crate::session::valid(text) => {
+                        return Outcome::Submit;
+                    }
                     KeyCode::Backspace => {
                         text.pop();
                     }
@@ -268,6 +291,61 @@ impl Modal {
                     keys(&[("↵", "save"), ("esc", "cancel")]),
                 ];
                 (" Name this pane ".to_string(), l)
+            }
+            Modal::Alias { dir, own, text } => {
+                let dim = Style::default().fg(p().dim);
+                let hint = if text.trim().is_empty() {
+                    format!(" Empty: back to {own}.")
+                } else {
+                    " Only the name jw shows.".to_string()
+                };
+                let l = vec![
+                    Line::from(vec![
+                        Span::styled(" › ", Style::default().fg(p().blue)),
+                        Span::raw(text.clone()),
+                        Span::styled("▏", Style::default().fg(p().blue)),
+                    ]),
+                    Line::default(),
+                    Line::from(Span::styled(hint, dim)),
+                    Line::from(Span::styled(
+                        format!(" The folder stays {}.", short_path(dir, 48)),
+                        dim,
+                    )),
+                    Line::default(),
+                    keys(&[("↵", "save"), ("esc", "cancel")]),
+                ];
+                (format!(" Rename {own} "), l)
+            }
+            Modal::RenameSession { old, text } => {
+                let ok = text != old && crate::session::valid(text);
+                let hint = if text.is_empty() || *text == *old {
+                    Span::styled(
+                        " Its workspaces keep running.",
+                        Style::default().fg(p().dim),
+                    )
+                } else if ok {
+                    Span::styled(
+                        format!(" jw {text} opens it; its workspaces keep running."),
+                        Style::default().fg(p().dim),
+                    )
+                } else {
+                    Span::styled(
+                        " Lowercase letters, digits and dashes; not a jw command.",
+                        Style::default().fg(p().red),
+                    )
+                };
+                let l = vec![
+                    Line::from(vec![
+                        Span::styled(" › ", Style::default().fg(p().blue)),
+                        Span::raw(text.clone()),
+                        Span::styled("▏", Style::default().fg(p().blue)),
+                    ]),
+                    Line::default(),
+                    Line::from(hint),
+                    Line::default(),
+                    keys(&[("↵", "rename"), ("esc", "cancel")]),
+                ];
+                (format!(" Rename session {old} "), l)
             }
             Modal::Rm {
                 entry,

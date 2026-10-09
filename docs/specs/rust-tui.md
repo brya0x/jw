@@ -138,6 +138,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 | `jw sessions` | Name, workspaces open, agents working/waiting |
 | In a session | The sidebar title is the session name; only its workspaces show. `o` and `w` add to it. Later projects use their `[layout]` |
 | `^␣ a` | Session picker: fuzzy, `↵` switches, a new name offers `+ create` in the current folder |
+| Renames | Pane: `^␣ n`. Worktree: `^␣ r` (name, branch, folder). Folder: `^␣ r` sets the name jw shows (`name` in `folders.json`); the folder on disk stays. Session: `ctrl-r` in `^␣ a` moves `sessions/<old>/`, the registry entries and the recent list, `Rekey`s the running folder workspaces in the daemon, and records `old → new` in `sessions/renamed.json` so panes started with the old `$JW_SESSION` still find it |
 | Agent CLI | `jw ls [--json]`, `jw read <ws> [--pane role] [--lines N]`, `jw worktree <name> [--in project] [--task …]` (was `jw new --task`), `jw prompt <ws> …`, on `$JW_SESSION` |
 | Migration | The first session-aware run moves `folders.json`, `session.json` and every registry worktree into `main` |
 | Registry | `workspaces.json`, seeded once from a copy of `registry.json`; entries gain `session` and `root`. Go's file is never written |

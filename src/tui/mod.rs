@@ -437,9 +437,10 @@ impl App {
             .folders
             .iter()
             .map(|f| {
-                let mut e = crate::folders::entry(&f.dir, f.opened);
-                e.agent = f.agent.clone().unwrap_or_default();
-                (e, Vec::new())
+                (
+                    crate::folders::entry_for(f, &crate::session::current()),
+                    Vec::new(),
+                )
             })
             .collect();
         let mut by_project: BTreeMap<String, Vec<Entry>> = BTreeMap::new();
@@ -1479,8 +1480,25 @@ impl App {
         Some(entry)
     }
 
-    /// `^␣ r`: rename the current worktree (REQ-40).
+    /// `^␣ r`: rename the current worktree (REQ-40): name, branch and
+    /// folder. A folder only changes the name jw shows.
     fn ask_rename(&mut self) {
+        if let Some(e) = self
+            .current()
+            .filter(|e| crate::folders::is_folder(e))
+            .cloned()
+        {
+            let own = std::path::Path::new(&e.path)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| e.path.clone());
+            self.modal = Some(Modal::Alias {
+                text: e.name.clone(),
+                dir: e.path,
+                own,
+            });
+            return;
+        }
         let Some(entry) = self.current_worktree("rename") else {
             return;
         };
@@ -1649,6 +1667,37 @@ impl App {
             })
             .collect();
         self.finder = Some(finder::Finder::sessions(items));
+    }
+
+    /// Renames a session; its running workspaces follow their new ids.
+    fn rename_session(&mut self, old: &str, new: &str) {
+        let state = match registry::state_dir() {
+            Ok(s) => s,
+            Err(e) => return self.fail(format!("{e:#}")),
+        };
+        let ids = match crate::session::rename(&state, old, new) {
+            Ok(ids) => ids,
+            Err(e) => return self.fail(format!("{e:#}")),
+        };
+        for (from, to) in ids {
+            self.send(ClientMsg::Rekey { from, to });
+        }
+        if crate::session::current() == old {
+            crate::session::set(new);
+            self.send(ClientMsg::Detach);
+            self.active = None;
+            self.panes.clear();
+            self.views.clear();
+            self.tree = None;
+            self.focus = None;
+            self.recent = load_recent();
+            self.fresh = true;
+            if let Err(e) = self.reload() {
+                self.fail(format!("{e:#}"));
+            }
+            self.send(ClientMsg::List);
+        }
+        self.done(format!("session {old} is {new} now"));
     }
 
     /// Shows another session: the workspaces on screen keep running.
@@ -1843,6 +1892,13 @@ impl App {
             finder::Pick::File(f) => return self.open_file(&f),
             finder::Pick::Session(s) => return self.switch_session(&s),
             finder::Pick::NewSession(s) => return self.new_session(&s),
+            finder::Pick::RenameSession(s) => {
+                self.modal = Some(Modal::RenameSession {
+                    text: s.clone(),
+                    old: s,
+                });
+                return;
+            }
             finder::Pick::Dir(d) => d,
             finder::Pick::Create(d) => {
                 if let Err(e) = std::fs::create_dir(&d) {
@@ -2024,6 +2080,24 @@ impl App {
                 let name = Some(text.trim().to_string()).filter(|n| !n.is_empty());
                 self.send(ClientMsg::Name { pane, name });
             }
+            Modal::Alias { dir, own, text } => {
+                let name = Some(text.trim().to_string()).filter(|n| !n.is_empty() && *n != own);
+                let shown = name.clone().unwrap_or_else(|| own.clone());
+                match crate::folders::edit(|all| {
+                    if let Some(f) = all.folders.iter_mut().find(|f| f.dir == dir) {
+                        f.name = name;
+                    }
+                }) {
+                    Ok(()) => {
+                        if let Err(e) = self.reload() {
+                            self.fail(format!("{e:#}"));
+                        }
+                        self.done(format!("{own} shows as {shown}"));
+                    }
+                    Err(e) => self.fail(format!("{e:#}")),
+                }
+            }
+            Modal::RenameSession { old, text } => self.rename_session(&old, &text),
             Modal::Done {
                 entry,
                 project,

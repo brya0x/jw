@@ -32,6 +32,9 @@ pub struct Folder {
     /// started in (REQ-61).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub plain: bool,
+    /// The name jw shows for it; the folder on disk keeps its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -100,6 +103,7 @@ impl Folders {
             created: registry::now_rfc3339(),
             agent: None,
             plain: false,
+            name: None,
         });
         true
     }
@@ -163,6 +167,18 @@ pub fn repo(dir: &Path) -> Option<Repo> {
 /// A folder as the sidebar and the actions see it. A repository's folder
 /// carries its project name and the branch checked out; a plain folder has
 /// no branch.
+/// The workspace of a folder of session `session`, with its name and its
+/// agent's conversation.
+pub fn entry_for(f: &Folder, session: &str) -> Entry {
+    let mut e = entry(&f.dir, f.opened);
+    e.id = id_in(session, &f.dir);
+    e.agent = f.agent.clone().unwrap_or_default();
+    if let Some(n) = &f.name {
+        e.name = n.clone();
+    }
+    e
+}
+
 pub fn entry(dir: &str, opened: bool) -> Entry {
     let path = Path::new(dir);
     let name = path

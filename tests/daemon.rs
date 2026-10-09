@@ -923,3 +923,32 @@ fn an_agent_hook_reports_its_state() {
     let p = panes.iter().find(|p| p.pane == pane).unwrap();
     assert_eq!(p.agent, Some(jw::proto::AgentState::Waiting));
 }
+
+/// A renamed session's workspace keeps its panes under its new id.
+#[test]
+fn a_workspace_follows_its_new_id() {
+    let d = Daemon::start();
+    let mut c = d.client();
+    let pane = spawn(&mut c, "dir:/x#old", "cat", 80, 24);
+    c.send(&ClientMsg::Rekey {
+        from: "dir:/x#old".into(),
+        to: "dir:/x#new".into(),
+    })
+    .unwrap();
+    c.send(&ClientMsg::List).unwrap();
+    let panes = loop {
+        if let DaemonMsg::Panes { panes } = recv(&mut c) {
+            break panes;
+        }
+    };
+    assert_eq!(panes.len(), 1);
+    assert_eq!(
+        (panes[0].pane, panes[0].stream.as_str()),
+        (pane, "dir:/x#new")
+    );
+    let saved = std::fs::read_to_string(d.socket.with_file_name("session.json")).unwrap();
+    assert!(
+        saved.contains(r#""id": "dir:/x#new""#) && !saved.contains(r#""id": "dir:/x#old""#),
+        "{saved}"
+    );
+}

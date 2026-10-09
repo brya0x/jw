@@ -61,6 +61,8 @@ pub enum Pick {
     Session(String),
     /// Start a session with this name in the current workspace's folder.
     NewSession(String),
+    /// Ask for a new name for this session.
+    RenameSession(String),
 }
 
 /// One workspace for the switcher, in the order to list it (most recent
@@ -317,6 +319,11 @@ impl Finder {
             KeyCode::Char('n') if ctrl => {
                 self.sel = (self.sel + 1).min(self.shown.len().saturating_sub(1))
             }
+            KeyCode::Char('r') if ctrl && matches!(self.kind, Kind::Sessions) => {
+                if let Some(Pick::Session(name)) = self.current().map(|it| it.pick.clone()) {
+                    return Outcome::Pick(Pick::RenameSession(name));
+                }
+            }
             KeyCode::Up => self.sel = self.sel.saturating_sub(1),
             KeyCode::Char('p') if ctrl => self.sel = self.sel.saturating_sub(1),
             KeyCode::Right | KeyCode::Tab => {
@@ -550,6 +557,12 @@ impl Finder {
                 ("↵", "open as a workspace"),
                 ("esc", "close"),
             ],
+            Kind::Sessions => &[
+                ("↑↓", "move"),
+                ("↵", "open"),
+                ("ctrl-r", "rename"),
+                ("esc", "close"),
+            ],
             _ => &[("↑↓", "move"), ("↵", "open"), ("esc", "close")],
         };
         let mut foot = Vec::new();
@@ -585,7 +598,9 @@ impl Finder {
                 };
                 return file_head(&root.join(f));
             }
-            Pick::Ws(_) | Pick::Session(_) | Pick::NewSession(_) => return Vec::new(),
+            Pick::Ws(_) | Pick::Session(_) | Pick::NewSession(_) | Pick::RenameSession(_) => {
+                return Vec::new();
+            }
         };
         let mut l = vec![Line::from(Span::styled(
             tilde(&dir),

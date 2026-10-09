@@ -139,7 +139,8 @@ impl Ws {
 }
 
 struct Pane {
-    stream: String,
+    /// Its workspace; it changes when the workspace's session is renamed.
+    stream: Mutex<String>,
     role: String,
     /// How it was started, for `session.json`.
     started: Started,
@@ -395,7 +396,7 @@ impl Daemon {
                         };
                         PaneInfo {
                             pane: *id,
-                            stream: p.stream.clone(),
+                            stream: lock(&p.stream).clone(),
                             role: p.role.clone(),
                             exited,
                             fg,
@@ -407,6 +408,7 @@ impl Daemon {
                     .collect();
                 let _ = tx.send(DaemonMsg::Panes { panes });
             }
+            ClientMsg::Rekey { from, to } => self.rekey(&from, &to)?,
             ClientMsg::Agent { pane, state } => {
                 lock(&self.pane(pane)?.state).agent = Some(state);
             }
@@ -544,6 +546,27 @@ impl Daemon {
             let _ = tx.send(DaemonMsg::Title { pane: id, title });
         }
         st.subscribe(client, tx);
+    }
+
+    /// A workspace's new id, when its session was renamed: its panes and
+    /// tree stay, under the new id.
+    fn rekey(&self, from: &str, to: &str) -> Result<()> {
+        {
+            let mut all = lock(&self.workspaces);
+            if all.contains_key(to) {
+                bail!("{to} is already open");
+            }
+            let Some(mut ws) = all.remove(from) else {
+                return Ok(());
+            };
+            for (_, pane) in self.panes_of(from) {
+                *lock(&pane.stream) = to.to_string();
+            }
+            ws.tell(to);
+            all.insert(to.to_string(), ws);
+        }
+        self.save();
+        Ok(())
     }
 
     /// Catches a client up on a pane whose output it fell behind on.
@@ -917,7 +940,7 @@ impl Daemon {
     /// The workspace a pane or a viewer belongs to.
     fn stream_of(&self, id: PaneId) -> Result<String> {
         if let Ok(p) = self.pane(id) {
-            return Ok(p.stream.clone());
+            return Ok(lock(&p.stream).clone());
         }
         lock(&self.workspaces)
             .iter()
@@ -936,7 +959,7 @@ impl Daemon {
     fn panes_of(&self, stream: &str) -> Vec<(PaneId, Arc<Pane>)> {
         lock(&self.panes)
             .iter()
-            .filter(|(_, p)| p.stream == stream)
+            .filter(|(_, p)| *lock(&p.stream) == stream)
             .map(|(id, p)| (*id, Arc::clone(p)))
             .collect()
     }
@@ -996,7 +1019,7 @@ impl Daemon {
 
         let mut reader = pair.master.try_clone_reader()?;
         let pane = Arc::new(Pane {
-            stream: stream.to_string(),
+            stream: Mutex::new(stream.to_string()),
             role,
             started: Started {
                 cmd,
