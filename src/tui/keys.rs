@@ -1,7 +1,9 @@
 //! Turning crossterm key events back into the bytes a terminal would send,
 //! for the pane that has focus (REQ-9), and parsing the leader key.
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::crossterm::event::{
+    KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 
 /// The key that leaves terminal mode, from `[tui] leader` ("C-Space", "C-g").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,6 +126,64 @@ fn ctrl_byte(c: char) -> Option<u8> {
     }
 }
 
+/// The bytes a terminal sends for a mouse event at `(col, row)` (1-based,
+/// inside the pane), for an app that asked for the mouse; `None` when its
+/// mode doesn't report this kind of event or the place can't be encoded.
+pub fn encode_mouse(
+    m: &MouseEvent,
+    (col, row): (u16, u16),
+    mode: vt100::MouseProtocolMode,
+    encoding: vt100::MouseProtocolEncoding,
+) -> Option<Vec<u8>> {
+    use vt100::MouseProtocolMode as Mode;
+    let button = |b: MouseButton| match b {
+        MouseButton::Left => 0,
+        MouseButton::Middle => 1,
+        MouseButton::Right => 2,
+    };
+    let (code, release) = match m.kind {
+        MouseEventKind::Down(b) => (button(b), false),
+        MouseEventKind::Up(b) if mode != Mode::Press => (button(b), true),
+        MouseEventKind::Drag(b) if matches!(mode, Mode::ButtonMotion | Mode::AnyMotion) => {
+            (button(b) + 32, false)
+        }
+        MouseEventKind::Moved if mode == Mode::AnyMotion => (3 + 32, false),
+        MouseEventKind::ScrollUp => (64, false),
+        MouseEventKind::ScrollDown => (65, false),
+        _ => return None,
+    };
+    let mods = m.modifiers;
+    let code = code
+        + 4 * u16::from(mods.contains(KeyModifiers::SHIFT))
+        + 8 * u16::from(mods.contains(KeyModifiers::ALT))
+        + 16 * u16::from(mods.contains(KeyModifiers::CONTROL));
+    match encoding {
+        vt100::MouseProtocolEncoding::Sgr => Some(
+            format!(
+                "\x1b[<{code};{col};{row}{}",
+                if release { 'm' } else { 'M' }
+            )
+            .into_bytes(),
+        ),
+        other => {
+            // The X10 forms can't say which button went up.
+            let code = if release { 3 } else { code };
+            let mut out = b"\x1b[M".to_vec();
+            out.push(u8::try_from(32 + code).ok()?);
+            for v in [col, row] {
+                let v = u32::from(v) + 32;
+                if other == vt100::MouseProtocolEncoding::Utf8 {
+                    let mut b = [0; 4];
+                    out.extend_from_slice(char::from_u32(v)?.encode_utf8(&mut b).as_bytes());
+                } else {
+                    out.push(u8::try_from(v).ok()?);
+                }
+            }
+            Some(out)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,5 +239,44 @@ mod tests {
         assert!(g.matches(&key(KeyCode::Char('g'), KeyModifiers::CONTROL)));
         assert_eq!(Leader::parse("C-Space"), Some(Leader::DEFAULT));
         assert_eq!(Leader::parse("space"), None);
+    }
+
+    #[test]
+    fn mouse_encodings() {
+        use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        use vt100::{MouseProtocolEncoding as E, MouseProtocolMode as M};
+        let ev = |kind| MouseEvent {
+            kind,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        };
+        let down = ev(MouseEventKind::Down(MouseButton::Left));
+        assert_eq!(
+            encode_mouse(&down, (3, 4), M::PressRelease, E::Sgr).unwrap(),
+            b"\x1b[<0;3;4M"
+        );
+        let up = ev(MouseEventKind::Up(MouseButton::Left));
+        assert_eq!(
+            encode_mouse(&up, (3, 4), M::PressRelease, E::Sgr).unwrap(),
+            b"\x1b[<0;3;4m"
+        );
+        assert_eq!(
+            encode_mouse(&up, (3, 4), M::PressRelease, E::Default).unwrap(),
+            b"\x1b[M##$"
+        );
+        assert!(encode_mouse(&up, (3, 4), M::Press, E::Sgr).is_none());
+        let drag = ev(MouseEventKind::Drag(MouseButton::Left));
+        assert!(encode_mouse(&drag, (1, 1), M::PressRelease, E::Sgr).is_none());
+        assert_eq!(
+            encode_mouse(&drag, (1, 1), M::ButtonMotion, E::Sgr).unwrap(),
+            b"\x1b[<32;1;1M"
+        );
+        let wheel = ev(MouseEventKind::ScrollDown);
+        assert_eq!(
+            encode_mouse(&wheel, (2, 2), M::Press, E::Sgr).unwrap(),
+            b"\x1b[<65;2;2M"
+        );
+        assert!(encode_mouse(&down, (300, 1), M::Press, E::Default).is_none());
     }
 }

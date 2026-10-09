@@ -30,6 +30,9 @@ pub struct DiffView {
     forced: Option<bool>,
     /// Whether its pane has the focus, for the border.
     pub focused: bool,
+    /// Where the file list was drawn, and which file its first row showed,
+    /// for clicks.
+    tree_at: Option<(Rect, usize)>,
     /// Rows the content showed last frame, for paging.
     height: usize,
 }
@@ -64,6 +67,7 @@ impl DiffView {
             split: true,
             forced: None,
             focused: true,
+            tree_at: None,
             height: 20,
         }
     }
@@ -169,6 +173,25 @@ impl DiffView {
         Action::None
     }
 
+    /// The wheel: `by` rows down (up when negative).
+    pub fn scroll_by(&mut self, by: isize) {
+        let last = self.items().len().saturating_sub(1);
+        self.scroll = self.scroll.saturating_add_signed(by).min(last);
+    }
+
+    /// A click: on a file of the list, go to that file.
+    pub fn click(&mut self, x: u16, y: u16) {
+        let Some((r, first)) = self.tree_at else {
+            return;
+        };
+        if x >= r.x && x < r.x + r.width && y > r.y && y < r.y + r.height {
+            let f = first + usize::from(y - r.y - 1);
+            if f < self.files.len() {
+                self.goto_file(f);
+            }
+        }
+    }
+
     fn goto_file(&mut self, f: usize) {
         if let Some(i) = self.items().iter().position(|i| *i == Item::File(f)) {
             self.scroll = i;
@@ -248,7 +271,10 @@ impl DiffView {
             width: inner.width.saturating_sub(tree_w + gap),
             ..inner
         };
+        self.tree_at = None;
         if tree_w > 0 {
+            let room = tree.height.saturating_sub(1) as usize;
+            self.tree_at = Some((tree, current.saturating_sub(room.saturating_sub(1))));
             self.draw_tree(frame, tree, current);
             for y in inner.y..inner.y + inner.height {
                 if let Some(c) = frame.buffer_mut().cell_mut((inner.x + tree_w, y)) {

@@ -405,6 +405,13 @@ fn pane(
             ));
         }
     }
+    let back = view.map_or(0, |v| v.parser.screen().scrollback());
+    if back > 0 {
+        spans.push(Span::styled(
+            format!(" ↑ {back} lines · type to go back "),
+            Style::default().fg(p().yellow),
+        ));
+    }
     if let Some(status) = view.and_then(|v| v.exited) {
         spans.push(Span::styled(
             format!(" exited {status} "),

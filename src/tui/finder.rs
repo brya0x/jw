@@ -316,8 +316,8 @@ impl Finder {
         }
     }
 
-    pub fn draw(&self, f: &mut Frame) {
-        let area = f.area();
+    /// The box, its list and its preview, for a terminal of `area`.
+    fn areas(area: Rect) -> (Rect, Rect, Rect) {
         let w = 100.min(area.width.saturating_sub(4));
         let h = 24.min(area.height.saturating_sub(2));
         let r = Rect::new(
@@ -326,6 +326,58 @@ impl Finder {
             w,
             h,
         );
+        let inner = Rect {
+            x: r.x + 1,
+            y: r.y + 1,
+            width: r.width.saturating_sub(2),
+            height: r.height.saturating_sub(2),
+        };
+        let body = Rect {
+            y: inner.y + 3,
+            height: inner.height.saturating_sub(4),
+            ..inner
+        };
+        let list_w = body.width * 45 / 100;
+        let list = Rect {
+            width: list_w,
+            ..body
+        };
+        let prev = Rect {
+            x: body.x + list_w + 1,
+            width: body.width.saturating_sub(list_w + 1),
+            ..body
+        };
+        (r, list, prev)
+    }
+
+    /// The first row the list shows, keeping the selection in sight.
+    fn first(&self, rows: usize) -> usize {
+        self.sel.saturating_sub(rows.saturating_sub(1))
+    }
+
+    /// The wheel moves the selection.
+    pub fn move_by(&mut self, by: isize) {
+        self.sel = self
+            .sel
+            .saturating_add_signed(by)
+            .min(self.shown.len().saturating_sub(1));
+    }
+
+    /// A click on a row picks it; anywhere else does nothing.
+    pub fn click(&mut self, x: u16, y: u16, area: Rect) -> Option<Pick> {
+        let (_, list, _) = Self::areas(area);
+        if x < list.x || x >= list.x + list.width || y < list.y || y >= list.y + list.height {
+            return None;
+        }
+        let i = self.first(list.height as usize) + usize::from(y - list.y);
+        let (item, _) = self.shown.get(i)?;
+        self.sel = i;
+        Some(self.items[*item].pick.clone())
+    }
+
+    pub fn draw(&self, f: &mut Frame) {
+        let area = f.area();
+        let (r, list, prev) = Self::areas(area);
         f.render_widget(Clear, r);
         let block = Block::default()
             .borders(Borders::ALL)
@@ -400,18 +452,8 @@ impl Finder {
             height: inner.height.saturating_sub(4),
             ..inner
         };
-        let list_w = body.width * 45 / 100;
-        let list = Rect {
-            width: list_w,
-            ..body
-        };
-        let prev = Rect {
-            x: body.x + list_w + 1,
-            width: body.width.saturating_sub(list_w + 1),
-            ..body
-        };
         let rows = list.height as usize;
-        let first = self.sel.saturating_sub(rows.saturating_sub(1));
+        let first = self.first(rows);
         let mut lines = Vec::new();
         for (n, (i, at)) in self.shown.iter().enumerate().skip(first).take(rows) {
             let it = &self.items[*i];

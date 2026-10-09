@@ -18,7 +18,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use ratatui::crossterm::event::{
-    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind,
+    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    Event, KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind,
 };
 use ratatui::crossterm::execute;
 
@@ -125,6 +126,13 @@ pub struct Status {
     at: Instant,
 }
 
+/// Lines of history a pane keeps here, for the wheel: what arrived since
+/// this client attached.
+const SCROLLBACK: usize = 5_000;
+
+/// Rows the wheel moves at a time.
+const WHEEL: usize = 3;
+
 /// How long a status message stays.
 const STATUS_FOR: Duration = Duration::from_secs(4);
 
@@ -228,11 +236,15 @@ pub fn run() -> Result<()> {
 
     log_panics();
     let mut terminal = ratatui::init();
-    execute!(std::io::stdout(), EnableBracketedPaste)?;
+    execute!(std::io::stdout(), EnableBracketedPaste, EnableMouseCapture)?;
     let size = terminal.size()?;
     let mut app = App::new(client, events, leader, (size.width, size.height))?;
     let result = app.event_loop(&mut terminal, rx);
-    let _ = execute!(std::io::stdout(), DisableBracketedPaste);
+    let _ = execute!(
+        std::io::stdout(),
+        DisableBracketedPaste,
+        DisableMouseCapture
+    );
     ratatui::restore();
     match (result, app.exit_reason) {
         (Err(e), _) => Err(e),
@@ -567,6 +579,7 @@ impl App {
             }
             Msg::Term(Event::Key(k)) if k.kind != KeyEventKind::Release => self.on_key(k),
             Msg::Term(Event::Paste(text)) => self.paste(&text),
+            Msg::Term(Event::Mouse(m)) => self.on_mouse(m),
             Msg::Term(Event::Resize(w, h)) => {
                 self.size = (w, h);
                 self.fit();
@@ -621,7 +634,7 @@ impl App {
                 rows,
                 bytes,
             } => {
-                let mut parser = vt100::Parser::new(rows, cols, 0);
+                let mut parser = vt100::Parser::new(rows, cols, SCROLLBACK);
                 parser.process(&bytes);
                 self.panes.insert(
                     pane,
@@ -1034,10 +1047,120 @@ impl App {
         self.focus.filter(|f| self.panes.contains_key(f))
     }
 
+    /// The sidebar row under `y`, as the sidebar draws them (REQ-50).
+    fn sidebar_row_at(&self, y: u16) -> Option<usize> {
+        let rows = self.size.1.saturating_sub(1).saturating_sub(4) as usize;
+        let y = usize::from(y.checked_sub(2)?);
+        if y >= rows {
+            return None;
+        }
+        let current = self
+            .rows
+            .iter()
+            .position(|r| self.current().is_some_and(|c| c.id == r.entry.id))
+            .unwrap_or(0);
+        let i = current.saturating_sub(rows.saturating_sub(1)) + y;
+        (i < self.rows.len()).then_some(i)
+    }
+
+    /// The mouse (Shift + drag still selects text in the terminal): click a
+    /// workspace or a pane, roll the wheel over a pane or a picker, and pass
+    /// everything to a program that asked for the mouse.
+    fn on_mouse(&mut self, m: MouseEvent) {
+        let (x, y) = (m.column, m.row);
+        let wheel = match m.kind {
+            MouseEventKind::ScrollUp => -(WHEEL as isize),
+            MouseEventKind::ScrollDown => WHEEL as isize,
+            _ => 0,
+        };
+        let click = matches!(m.kind, MouseEventKind::Down(MouseButton::Left));
+        if let Some(f) = &mut self.finder {
+            if wheel != 0 {
+                f.move_by(wheel.signum());
+            } else if click {
+                let area = ratatui::layout::Rect::new(0, 0, self.size.0, self.size.1);
+                if let Some(pick) = f.click(x, y, area) {
+                    self.finder = None;
+                    self.picked(pick);
+                }
+            }
+            return;
+        }
+        if self.modal.is_some() {
+            return;
+        }
+        if click && self.leader_at.take().is_some() {
+            self.which = false;
+        }
+        if x < SIDEBAR {
+            if click && let Some(i) = self.sidebar_row_at(y) {
+                let e = self.rows[i].entry.clone();
+                self.open_entry(e, false);
+            }
+            return;
+        }
+        let Some((id, r)) = self
+            .pane_rects()
+            .into_iter()
+            .find(|(_, r)| x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h)
+        else {
+            return;
+        };
+        if matches!(m.kind, MouseEventKind::Down(_)) && self.focus != Some(id) {
+            self.focus = Some(id);
+            self.fit();
+        }
+        if let Some(v) = self.views.get_mut(&id) {
+            match v {
+                View::Diff(d) if wheel != 0 => d.scroll_by(wheel),
+                View::Diff(d) if click => d.click(x, y),
+                View::Md(md) if wheel != 0 => md.scroll_by(wheel),
+                _ => {}
+            }
+            return;
+        }
+        let inside = x > r.x && x + 1 < r.x + r.w && y > r.y && y + 1 < r.y + r.h;
+        let Some(view) = self.panes.get_mut(&id) else {
+            return;
+        };
+        let screen = view.parser.screen();
+        let mode = screen.mouse_protocol_mode();
+        if inside && mode != vt100::MouseProtocolMode::None {
+            let at = (x - r.x, y - r.y);
+            if let Some(bytes) = keys::encode_mouse(&m, at, mode, screen.mouse_protocol_encoding())
+            {
+                self.send(ClientMsg::Input { pane: id, bytes });
+            }
+            return;
+        }
+        if wheel == 0 {
+            return;
+        }
+        if screen.alternate_screen() {
+            // A full-screen program without the mouse: arrows, like the
+            // terminals that scroll it.
+            let key = if wheel < 0 { 'A' } else { 'B' };
+            let one = if screen.application_cursor() {
+                format!("\x1bO{key}")
+            } else {
+                format!("\x1b[{key}")
+            };
+            let bytes = one.repeat(WHEEL).into_bytes();
+            self.send(ClientMsg::Input { pane: id, bytes });
+        } else {
+            let back = screen.scrollback().saturating_add_signed(-wheel);
+            view.parser.screen_mut().set_scrollback(back);
+        }
+    }
+
     fn send_key(&mut self, k: &KeyEvent) {
         let Some(id) = self.focused_pane() else {
             return;
         };
+        // Typing goes back to the bottom of the history, as terminals do.
+        if let Some(v) = self.panes.get_mut(&id) {
+            v.parser.screen_mut().set_scrollback(0);
+        }
         let app_cursor = self.panes[&id].parser.screen().application_cursor();
         let bytes = keys::encode(k, app_cursor);
         if !bytes.is_empty() {

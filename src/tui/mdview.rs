@@ -40,6 +40,16 @@ impl MdView {
         }
     }
 
+    /// The wheel: `by` lines down (up when negative).
+    pub fn scroll_by(&mut self, by: isize) {
+        let last = self
+            .doc
+            .lines
+            .len()
+            .saturating_sub(self.height.min(self.doc.lines.len()));
+        self.scroll = self.scroll.saturating_add_signed(by).min(last);
+    }
+
     /// Renders again on the next draw, in the palette now in use.
     pub fn restyle(&mut self) {
         self.width = 0;
