@@ -192,6 +192,9 @@ pub struct App {
     events: Sender<Msg>,
     /// Why the client left, when it wasn't the user's `q`.
     exit_reason: Option<String>,
+    /// Just started, or just switched session: with nothing running, the
+    /// next List opens the session's last workspace.
+    fresh: bool,
 }
 
 /// Runs the TUI until the user leaves it. The daemon keeps every pane.
@@ -352,6 +355,7 @@ impl App {
             busy: None,
             events,
             exit_reason: None,
+            fresh: true,
         };
         app.reload()?;
         app.send(ClientMsg::List);
@@ -420,7 +424,12 @@ impl App {
             })
             .collect();
         let mut by_project: BTreeMap<String, Vec<Entry>> = BTreeMap::new();
-        for e in reg.entries {
+        let session = crate::session::current();
+        for e in reg
+            .entries
+            .into_iter()
+            .filter(|e| crate::session::owns(&session, &e.session))
+        {
             by_project.entry(e.project.clone()).or_default().push(e);
         }
         for (project, mut worktrees) in by_project {
@@ -675,10 +684,23 @@ impl App {
             DaemonMsg::Panes { panes } => {
                 self.daemon_panes = panes;
                 // Nothing on screen (just started, or the current one was
-                // closed): show the first workspace that is running.
+                // closed): show the last used workspace that is running,
+                // else any running one; on a fresh start with none, the
+                // last used one (a new session's folder).
+                let fresh = std::mem::take(&mut self.fresh);
                 if self.active.is_none() && self.modal.is_none() {
-                    let running = self.workspaces().find(|e| self.is_open(&e.id)).cloned();
-                    if let Some(e) = running {
+                    let recent: Vec<Entry> = self
+                        .recent
+                        .iter()
+                        .filter_map(|id| self.workspaces().find(|e| e.id == *id).cloned())
+                        .collect();
+                    let pick = recent
+                        .iter()
+                        .find(|e| self.is_open(&e.id))
+                        .cloned()
+                        .or_else(|| self.workspaces().find(|e| self.is_open(&e.id)).cloned())
+                        .or_else(|| recent.first().cloned().filter(|_| fresh));
+                    if let Some(e) = pick {
                         self.open_entry(e, false);
                     }
                 }
@@ -767,6 +789,7 @@ impl App {
                 self.fit();
             }
             KeyCode::Char('o') => self.ask_folder(),
+            KeyCode::Char('a') => self.ask_session(),
             KeyCode::Char('r') => self.ask_rename(),
             KeyCode::Char('w') => self.new_worktree(),
             KeyCode::Char('s') => self.run_sync(),
@@ -1488,6 +1511,112 @@ impl App {
         self.finder = Some(finder::Finder::workspaces(items));
     }
 
+    /// `^␣ a`: every session, the others by name (REQ-63).
+    fn ask_session(&mut self) {
+        use ratatui::style::Style;
+        use ratatui::text::{Line, Span};
+        let here = crate::session::current();
+        let state = match registry::state_dir() {
+            Ok(s) => s,
+            Err(e) => return self.fail(format!("{e:#}")),
+        };
+        let mut names = crate::session::list(&state).unwrap_or_default();
+        names.sort_by_key(|n| *n == here);
+        let reg = registry::default_path()
+            .and_then(|p| Registry::load(&p))
+            .unwrap_or_default();
+        let dim = Style::default().fg(crate::theme::p().dim);
+        let items = names
+            .into_iter()
+            .map(|name| {
+                let folders = crate::folders::Folders::load(
+                    &state.join("sessions").join(&name).join("folders.json"),
+                )
+                .unwrap_or_default();
+                let worktrees: Vec<&Entry> = reg
+                    .entries
+                    .iter()
+                    .filter(|e| crate::session::owns(&name, &e.session))
+                    .collect();
+                let ids: Vec<String> = folders
+                    .folders
+                    .iter()
+                    .map(|f| crate::folders::id_in(&name, &f.dir))
+                    .chain(worktrees.iter().map(|e| e.id.clone()))
+                    .collect();
+                let open = ids.iter().filter(|id| self.is_open(id)).count();
+                let mut preview = vec![
+                    Line::from(Span::styled(
+                        name.clone(),
+                        Style::default().add_modifier(ratatui::style::Modifier::BOLD),
+                    )),
+                    Line::from(Span::styled(format!("{open} open of {}", ids.len()), dim)),
+                    Line::from(""),
+                ];
+                for f in &folders.folders {
+                    preview.push(Line::from(finder::tilde(std::path::Path::new(&f.dir))));
+                }
+                for e in &worktrees {
+                    preview.push(Line::from(format!("  ↳ {}/{}", e.project, e.name)));
+                }
+                finder::WsItem {
+                    hint: if name == here {
+                        "here".into()
+                    } else {
+                        crate::cli::workspaces(ids.len())
+                    },
+                    open: open > 0,
+                    id: name.clone(),
+                    label: name,
+                    preview,
+                }
+            })
+            .collect();
+        self.finder = Some(finder::Finder::sessions(items));
+    }
+
+    /// Shows another session: the workspaces on screen keep running.
+    fn switch_session(&mut self, name: &str) {
+        if name == crate::session::current() {
+            return;
+        }
+        crate::session::set(name);
+        if let Ok(state) = registry::state_dir() {
+            let _ = crate::session::set_last(&state, name);
+        }
+        self.send(ClientMsg::Detach);
+        self.active = None;
+        self.panes.clear();
+        self.views.clear();
+        self.pending_view = None;
+        self.tree = None;
+        self.focus = None;
+        self.full = false;
+        self.recent = load_recent();
+        self.fresh = true;
+        if let Err(e) = self.reload() {
+            self.fail(format!("{e:#}"));
+        }
+        self.send(ClientMsg::List);
+        self.done(format!("session {name}"));
+    }
+
+    /// `+ create` in the session picker: a session that starts in the
+    /// current workspace's folder.
+    fn new_session(&mut self, name: &str) {
+        let dir = self
+            .current()
+            .map(|e| std::path::PathBuf::from(&e.path))
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_default();
+        let made =
+            registry::state_dir().and_then(|state| crate::session::create(&state, name, &dir));
+        match made {
+            Ok(()) => self.switch_session(name),
+            Err(e) => self.fail(format!("{e:#}")),
+        }
+    }
+
     /// The switcher's right side for one workspace.
     fn ws_preview(&self, e: &Entry) -> Vec<ratatui::text::Line<'static>> {
         use ratatui::style::Style;
@@ -1636,6 +1765,8 @@ impl App {
                 return;
             }
             finder::Pick::File(f) => return self.open_file(&f),
+            finder::Pick::Session(s) => return self.switch_session(&s),
+            finder::Pick::NewSession(s) => return self.new_session(&s),
             finder::Pick::Dir(d) => d,
             finder::Pick::Create(d) => {
                 if let Err(e) = std::fs::create_dir(&d) {
@@ -1970,10 +2101,15 @@ impl App {
     }
 }
 
-/// The workspace ids in `recent.json`, most recent first.
+/// The current session's directory, where `recent.json` lives.
+fn session_dir() -> Option<std::path::PathBuf> {
+    let state = registry::state_dir().ok()?;
+    crate::session::dir(&state, &crate::session::current()).ok()
+}
+
+/// The workspace ids in the session's `recent.json`, most recent first.
 fn load_recent() -> Vec<String> {
-    registry::state_dir()
-        .ok()
+    session_dir()
         .and_then(|d| std::fs::read(d.join("recent.json")).ok())
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or_default()
@@ -1981,7 +2117,7 @@ fn load_recent() -> Vec<String> {
 
 /// Best effort: a lost recency list only reorders the switcher.
 fn save_recent(ids: &[String]) {
-    if let Ok(d) = registry::state_dir()
+    if let Some(d) = session_dir()
         && std::fs::create_dir_all(&d).is_ok()
         && let Ok(json) = serde_json::to_vec(ids)
     {

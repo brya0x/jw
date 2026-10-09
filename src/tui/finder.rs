@@ -57,6 +57,10 @@ pub enum Pick {
     Ws(String),
     /// Open this file of the current workspace, by its path in it.
     File(String),
+    /// Go to this session (REQ-63).
+    Session(String),
+    /// Start a session with this name in the current workspace's folder.
+    NewSession(String),
 }
 
 /// One workspace for the switcher, in the order to list it (most recent
@@ -79,6 +83,7 @@ enum Kind {
     Files {
         root: PathBuf,
     },
+    Sessions,
 }
 
 #[derive(Debug, Clone)]
@@ -130,6 +135,22 @@ impl Finder {
             })
             .collect();
         Self::new("Switch workspace", Kind::Workspaces, items)
+    }
+
+    /// Every session, the one on screen last; `id` is the session's name.
+    pub fn sessions(list: Vec<WsItem>) -> Self {
+        let items = list
+            .into_iter()
+            .map(|s| Item {
+                mark: if s.open { "●" } else { "○" },
+                label: s.label,
+                hint: s.hint,
+                pick: Pick::Session(s.id),
+                into: None,
+                preview: s.preview,
+            })
+            .collect();
+        Self::new("Sessions", Kind::Sessions, items)
     }
 
     /// The files of the workspace at `root` (REQ-42).
@@ -200,7 +221,8 @@ impl Finder {
     fn filter(&mut self) {
         let q = self.query.trim();
         let folders = matches!(self.kind, Kind::Folders { .. });
-        self.items.retain(|it| !matches!(it.pick, Pick::Create(_)));
+        self.items
+            .retain(|it| !matches!(it.pick, Pick::Create(_) | Pick::NewSession(_)));
         let mut shown: Vec<(i32, usize, Vec<usize>)> = self
             .items
             .iter()
@@ -229,6 +251,31 @@ impl Finder {
                 pick: Pick::Create(cwd.join(q)),
                 into: None,
                 preview: Vec::new(),
+            });
+            self.shown.push((self.items.len() - 1, Vec::new()));
+        }
+        if matches!(self.kind, Kind::Sessions) && !exists && crate::session::valid(q) {
+            self.items.push(Item {
+                mark: "+",
+                label: format!("create {q}"),
+                hint: "new".into(),
+                pick: Pick::NewSession(q.to_string()),
+                into: None,
+                preview: vec![
+                    Line::from(Span::styled(
+                        format!("new session {q}"),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    )),
+                    Line::from(""),
+                    Line::from(Span::styled(
+                        "Starts with one workspace in this folder,",
+                        Style::default().fg(p().dim),
+                    )),
+                    Line::from(Span::styled(
+                        "holding one shell, no layout.",
+                        Style::default().fg(p().dim),
+                    )),
+                ],
             });
             self.shown.push((self.items.len() - 1, Vec::new()));
         }
@@ -398,7 +445,7 @@ impl Finder {
         let path = match &self.kind {
             Kind::Folders { cwd, .. } => tilde(cwd),
             Kind::Files { root } => tilde(root),
-            Kind::Workspaces => String::new(),
+            Kind::Workspaces | Kind::Sessions => String::new(),
         };
         let mut crumbs = Vec::new();
         let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
@@ -431,6 +478,7 @@ impl Finder {
                         Kind::Folders { .. } => "type to filter this folder…",
                         Kind::Workspaces => "project or worktree…",
                         Kind::Files { .. } => "file name…",
+                        Kind::Sessions => "session name, or a new one…",
                     },
                     dim,
                 )
@@ -537,7 +585,7 @@ impl Finder {
                 };
                 return file_head(&root.join(f));
             }
-            Pick::Ws(_) => return Vec::new(),
+            Pick::Ws(_) | Pick::Session(_) | Pick::NewSession(_) => return Vec::new(),
         };
         let mut l = vec![Line::from(Span::styled(
             tilde(&dir),

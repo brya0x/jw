@@ -1,6 +1,6 @@
 //! The folders the user opened as workspaces (docs/specs/rust-tui.md,
 //! Interfaces → Folders): project roots and plain folders, kept in
-//! `folders.json` in the state dir. A worktree is not a folder here: those
+//! `sessions/<session>/folders.json` in the state dir. A worktree is not a folder here: those
 //! live in the registry and show under their project's folder.
 
 use std::path::{Path, PathBuf};
@@ -14,7 +14,8 @@ use crate::core::registry::{self, Entry};
 
 /// A folder's workspace id is its path behind this prefix: the same folder
 /// is the same workspace, whether it came from `folders.json` or from the
-/// worktrees of its project.
+/// worktrees of its project. Outside `main` the session follows, so one
+/// folder open in two sessions is two workspaces (RISK-22).
 pub const ID_PREFIX: &str = "dir:";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -27,6 +28,10 @@ pub struct Folder {
     /// The id of the claude conversation in its agent pane.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
+    /// Opens with one shell, whatever its layout: the folder a session
+    /// started in (REQ-61).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub plain: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -35,12 +40,26 @@ pub struct Folders {
     pub folders: Vec<Folder>,
 }
 
+/// `folders.json` of the current session.
 pub fn default_path() -> Result<PathBuf> {
-    Ok(registry::state_dir()?.join("folders.json"))
+    path(&registry::state_dir()?)
 }
 
+fn path(state: &Path) -> Result<PathBuf> {
+    Ok(crate::session::dir(state, &crate::session::current())?.join("folders.json"))
+}
+
+/// The workspace id of `dir` in the current session.
 pub fn id(dir: &str) -> String {
-    format!("{ID_PREFIX}{dir}")
+    id_in(&crate::session::current(), dir)
+}
+
+pub fn id_in(session: &str, dir: &str) -> String {
+    if session == crate::session::MAIN {
+        format!("{ID_PREFIX}{dir}")
+    } else {
+        format!("{ID_PREFIX}{dir}#{session}")
+    }
 }
 
 pub fn is_folder(e: &Entry) -> bool {
@@ -80,6 +99,7 @@ impl Folders {
             opened: false,
             created: registry::now_rfc3339(),
             agent: None,
+            plain: false,
         });
         true
     }
@@ -89,7 +109,7 @@ impl Folders {
 /// (REQ-56): each one's directory becomes a folder and `free.json` is
 /// renamed `free.json.migrated`.
 pub fn load(state: &Path) -> Result<Folders> {
-    let path = state.join("folders.json");
+    let path = path(state)?;
     let mut all = Folders::load(&path)?;
     let free = state.join("free.json");
     if let Ok(data) = std::fs::read(&free) {
@@ -121,12 +141,12 @@ pub fn load(state: &Path) -> Result<Folders> {
     Ok(all)
 }
 
-/// Changes `folders.json` in the state dir.
+/// Changes the current session's `folders.json`.
 pub fn edit(f: impl FnOnce(&mut Folders)) -> Result<()> {
     let state = registry::state_dir()?;
     let mut all = load(&state)?;
     f(&mut all);
-    all.save(&state.join("folders.json"))
+    all.save(&path(&state)?)
 }
 
 /// The repository whose main checkout is exactly `dir`, if any: a folder

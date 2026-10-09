@@ -132,7 +132,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 
 | Area | What it does |
 |---|---|
-| Session | A name (`[a-z0-9-]`, ≤ 24) with its own workspaces (folders and worktrees), `session.json` and `recent.json`, under `~/.local/state/jw/sessions/<name>/`. One daemon serves every session; workspace ids are `<session>/<id>` |
+| Session | A name (`[a-z0-9-]`, ≤ 24, not a command) with its own workspaces: `folders.json` and `recent.json` under `~/.local/state/jw/sessions/<name>/`, and the registry entries whose `session` is its name (`main` is empty). One daemon serves every session without knowing them: outside `main` a folder's id carries its session (`dir:<path>#<session>`), and worktree ids are unique (`src/session.rs`) |
 | `jw new <name> [--dir D]` | Creates the session and attaches. It starts with one workspace (D or the cwd) holding one shell, never a layout. If the name exists, exit 1 |
 | `jw [name]` | Attaches to `name` or the last session used; with none, creates `main` |
 | `jw sessions` | Name, workspaces open, agents working/waiting |
@@ -261,6 +261,7 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - `33c46f5` kept project headings and a "free" section in the sidebar; the prototype has neither. REQ-50 replaces REQ-33.
 - v1 said "TUI only, no CLI; the jw skill becomes obsolete". An agent overseeing a session needs the CLI, so it stays as socket clients.
 - RISK-17 said one `git` ran per worktree per reload; `root_of` already cached it per project in memory. S1 makes it persistent.
+- The addendum-3 plan keyed the daemon by session. Ids unique across sessions made that unnecessary: `session.json` and the daemon stay as they were.
 - An addendum-3 draft read `.jw/` as a per-project config folder (like `.vscode/`), then as a pinned "home" brain workspace. The user meant a scope for which projects show: named sessions. The brain is a usage pattern, not a jw concept.
 - The 2026-10-09 prototype's `.worktrees/<name>` on `jw/<name>` was wrong for this repo: worktrees live at `<repo>-wt/<name>` on the `branch` template (`feat/{name}`).
 

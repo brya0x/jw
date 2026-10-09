@@ -67,9 +67,9 @@ fn sidebar(f: &mut Frame, app: &App) {
 
     let dim = Style::default().fg(p().dim);
     let w = inner.width as usize;
-    let hint = format!("{} o open ", app.leader.label());
-    let title = " WORKSPACES";
-    let pad = w.saturating_sub(title.len() + hint.chars().count());
+    let hint = format!("{} a sessions ", app.leader.label());
+    let title = format!(" {}", crate::session::current());
+    let pad = w.saturating_sub(title.chars().count() + hint.chars().count());
     let mut lines = vec![
         Line::from(vec![
             Span::styled(title, dim.add_modifier(Modifier::BOLD)),
@@ -494,7 +494,15 @@ fn which(f: &mut Frame, app: &App) {
     const GROUPS: [(&str, &[(&str, &str)]); 3] = [
         (
             "go",
-            &[("1-9", "workspace"), ("tab", "previous"), ("q", "detach")],
+            &[
+                ("␣", "switch"),
+                ("tab", "previous"),
+                ("1-9", "workspace"),
+                ("o", "open folder"),
+                ("/", "open file"),
+                ("a", "sessions"),
+                ("q", "detach"),
+            ],
         ),
         (
             "worktree",

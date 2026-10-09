@@ -1,7 +1,8 @@
-//! The subcommands for agents running inside a stream (OPEN-3): `jw prompt
-//! <stream> <text>`, `jw new <name> [--task <text>]`, and `jw hook <state>`
-//! for claude's hooks. They talk to the daemon like the TUI does; no
-//! `--json`, no exit code 3.
+//! The subcommands besides the TUI: sessions (`jw new <session>`, `jw
+//! sessions`), and the ones for agents running inside a workspace (OPEN-3):
+//! `jw worktree <name> [--task <text>]`, `jw prompt <stream> <text>`, and
+//! `jw hook <state>` for claude's hooks. They talk to the daemon like the
+//! TUI does; no exit code 3.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -65,7 +66,110 @@ pub fn hook(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-pub fn new(args: &[String]) -> Result<()> {
+/// `jw new <session> [--dir <folder>]`: makes the session, starting in the
+/// folder (the current one by default), and returns its name for the TUI
+/// to open (REQ-61).
+pub fn new_session(args: &[String]) -> Result<String> {
+    let mut name = None;
+    let mut dir = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--dir" => dir = Some(it.next().context("--dir needs a folder")?.clone()),
+            // RISK-24: `jw new` used to make a worktree.
+            "--task" | "--branch" | "--from" => bail!(
+                "jw new now starts a session; a worktree is \
+                 jw worktree <name> [--branch …] [--from …] [--task …]"
+            ),
+            s if s.starts_with('-') => bail!("unknown flag {s}"),
+            s if name.is_none() => name = Some(s.to_string()),
+            s => bail!("unexpected argument {s:?}"),
+        }
+    }
+    let name = name.context("usage: jw new <session> [--dir <folder>]")?;
+    let dir = match dir {
+        Some(d) => PathBuf::from(d),
+        None => std::env::current_dir()?,
+    };
+    let dir = dir
+        .canonicalize()
+        .with_context(|| format!("{} is not a folder", dir.display()))?;
+    if !dir.is_dir() {
+        bail!("{} is not a folder", dir.display());
+    }
+    crate::session::create(&registry::state_dir()?, &name, &dir)?;
+    Ok(name)
+}
+
+/// `jw sessions`: each session, how many workspaces it has and how many run,
+/// and what its agents do.
+pub fn sessions() -> Result<()> {
+    let state = registry::state_dir()?;
+    let last = crate::session::last(&state);
+    let reg = Registry::load(&registry::default_path()?)?;
+    let panes = Client::connect(&socket_path())
+        .ok()
+        .and_then(|mut c| {
+            c.set_read_timeout(Some(Duration::from_secs(3))).ok()?;
+            c.send(&ClientMsg::List).ok()?;
+            loop {
+                match c.recv().ok()?? {
+                    DaemonMsg::Panes { panes } => return Some(panes),
+                    DaemonMsg::Error { .. } => return None,
+                    _ => {}
+                }
+            }
+        })
+        .unwrap_or_default();
+    for name in crate::session::list(&state)? {
+        let folders = crate::folders::Folders::load(
+            &crate::session::dir(&state, &name)?.join("folders.json"),
+        )?;
+        let ids: Vec<String> = folders
+            .folders
+            .iter()
+            .map(|f| crate::folders::id_in(&name, &f.dir))
+            .chain(
+                reg.entries
+                    .iter()
+                    .filter(|e| crate::session::owns(&name, &e.session))
+                    .map(|e| e.id.clone()),
+            )
+            .collect();
+        let mine = || panes.iter().filter(|p| ids.contains(&p.stream));
+        let open: std::collections::BTreeSet<&str> = mine().map(|p| p.stream.as_str()).collect();
+        let count = |s: AgentState| mine().filter(|p| p.agent == Some(s)).count();
+        let mut line = format!(
+            "{} {name:<24} {}, {} open",
+            if name == last { "*" } else { " " },
+            workspaces(ids.len()),
+            open.len()
+        );
+        for (n, what) in [
+            (count(AgentState::Working), "working"),
+            (count(AgentState::Waiting), "waiting"),
+        ] {
+            if n > 0 {
+                line.push_str(&format!(", {n} {what}"));
+            }
+        }
+        println!("{line}");
+    }
+    Ok(())
+}
+
+/// "1 workspace", "3 workspaces".
+pub fn workspaces(n: usize) -> String {
+    if n == 1 {
+        "1 workspace".into()
+    } else {
+        format!("{n} workspaces")
+    }
+}
+
+/// `jw worktree <name>`: a worktree of the project in the current folder,
+/// in the current session, opened, with a task for its agent.
+pub fn worktree(args: &[String]) -> Result<()> {
     let mut o = NewOptions::default();
     let mut task = None;
     let mut it = args.iter();
@@ -85,7 +189,7 @@ pub fn new(args: &[String]) -> Result<()> {
         }
     }
     if o.name.is_empty() {
-        bail!("usage: jw new <name> [--branch <branch>] [--from <ref>] [--task <text>]");
+        bail!("usage: jw worktree <name> [--branch <branch>] [--from <ref>] [--task <text>]");
     }
 
     let project = Project::open(&std::env::current_dir()?)?;

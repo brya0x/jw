@@ -63,10 +63,15 @@ impl Stream {
             if !dir.is_dir() {
                 bail!("{} is not a folder", entry.path);
             }
+            // The folder a session started in opens with one shell (REQ-61).
+            let plain = crate::folders::load(&registry::state_dir()?)?
+                .folders
+                .iter()
+                .any(|f| f.dir == entry.path && f.plain);
             let (cfg, base, tree) = match crate::folders::repo(dir) {
                 Some(repo) => {
                     let cfg = config::load(&repo.root, &repo.remote, &entry.project)?;
-                    let tree = if cfg.source.is_some() {
+                    let tree = if cfg.source.is_some() && !plain {
                         cfg.layout.tree()
                     } else {
                         Node::leaf("shell")
@@ -102,15 +107,19 @@ impl Stream {
 
     /// The JW_* variables every pane of the stream gets.
     pub fn env(&self) -> BTreeMap<String, String> {
-        if crate::folders::is_folder(&self.entry) {
+        let mut env = if crate::folders::is_folder(&self.entry) {
             // No slot and no ports: only who the pane belongs to.
-            return BTreeMap::from([
+            BTreeMap::from([
                 ("JW_ID".to_string(), self.entry.id.clone()),
                 ("JW_NAME".to_string(), self.entry.name.clone()),
                 ("JW_PROJECT".to_string(), self.entry.project.clone()),
-            ]);
-        }
-        crate::actions::jw_env(&self.entry, &self.vars())
+            ])
+        } else {
+            crate::actions::jw_env(&self.entry, &self.vars())
+        };
+        // `jw ls` and friends in a pane act on its session.
+        env.insert("JW_SESSION".into(), crate::session::current());
+        env
     }
 
     /// One spec per leaf of the layout, in tree order.

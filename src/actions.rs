@@ -137,6 +137,7 @@ pub fn new_stream(p: &Project, o: &NewOptions, reg_path: &Path) -> Result<Entry>
         adopted: existing,
         created: registry::now_rfc3339(),
         root: p.repo.root.display().to_string(),
+        session: crate::session::stored(&crate::session::current()),
         ..Entry::default()
     };
     // From here a worktree exists: undo it if anything fails, so a
