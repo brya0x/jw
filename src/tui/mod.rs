@@ -10,7 +10,7 @@ mod keys;
 mod mdview;
 mod modal;
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -25,8 +25,8 @@ use crate::actions::{self, NewOptions, Project};
 use crate::client::Client;
 use crate::connectors::PullRequests;
 use crate::core::registry::{self, Entry, Registry};
-use crate::layout::{Node, Rect};
-use crate::proto::{ClientMsg, DaemonMsg, PaneId, PaneInfo};
+use crate::layout::{Dir, Rect, Tree};
+use crate::proto::{ClientMsg, DaemonMsg, NewPane, PROTOCOL, PaneId, PaneInfo, PaneLeaf};
 use crate::stream::Stream;
 
 use modal::{Modal, Outcome};
@@ -96,19 +96,13 @@ pub enum Row {
     Stream(Entry),
 }
 
-/// A pane of the active stream as this client sees it.
+/// A pane of the current workspace as this client sees it.
 pub struct PaneView {
     pub role: String,
     pub parser: vt100::Parser,
     pub exited: Option<i32>,
-}
-
-/// A spawn sent and not yet confirmed. The daemon handles one client's
-/// messages in order, so confirmations come back in the same order.
-struct Pending {
-    role: String,
-    cols: u16,
-    rows: u16,
+    /// The window title its program set (OSC 0/2).
+    pub title: Option<String>,
 }
 
 pub struct App {
@@ -126,8 +120,11 @@ pub struct App {
     /// The stream on screen, by registry id.
     pub active: Option<Stream>,
     pub panes: BTreeMap<PaneId, PaneView>,
-    pending: VecDeque<Pending>,
-    pub focus: Option<String>,
+    /// How the current workspace's panes are laid out, as the daemon keeps it.
+    pub tree: Option<Tree<PaneLeaf>>,
+    pub focus: Option<PaneId>,
+    /// `t` was pressed: focus the pane the next tree brings.
+    focus_new: bool,
     /// `f`: only the focused pane, across the whole terminal.
     pub full: bool,
     pub status: Option<String>,
@@ -150,6 +147,7 @@ pub fn run() -> Result<()> {
     let socket = crate::proto::socket_path();
     let exe = std::env::current_exe()?;
     let client = Client::connect_or_start(&socket, &exe)?;
+    hello(&client, &socket)?;
     let mut reader = client.try_clone()?;
 
     let (tx, rx) = mpsc::channel();
@@ -189,6 +187,25 @@ pub fn run() -> Result<()> {
         (Err(e), _) => Err(e),
         (Ok(()), Some(why)) => anyhow::bail!(why),
         (Ok(()), None) => Ok(()),
+    }
+}
+
+/// Checks that the daemon speaks this build's protocol (RISK-14). An older
+/// daemon can't read `Hello` at all and answers with an error.
+fn hello(client: &Client, socket: &std::path::Path) -> Result<()> {
+    let mut c = client.try_clone()?;
+    c.set_read_timeout(Some(Duration::from_secs(3)))?;
+    c.send(&ClientMsg::Hello { protocol: PROTOCOL })?;
+    let answer = c.recv();
+    c.set_read_timeout(None)?;
+    match answer {
+        Ok(Some(DaemonMsg::Hello { protocol })) if protocol == PROTOCOL => Ok(()),
+        _ => anyhow::bail!(
+            "the jw daemon running on {} is from another build of jw. \
+             Stop it (kill $(cat {})) and start jw again; its panes close with it.",
+            socket.display(),
+            crate::daemon::pidfile(socket).display()
+        ),
     }
 }
 
@@ -236,8 +253,9 @@ impl App {
             daemon_panes: Vec::new(),
             active: None,
             panes: BTreeMap::new(),
-            pending: VecDeque::new(),
+            tree: None,
             focus: None,
+            focus_new: false,
             full: false,
             status: None,
             size,
@@ -377,39 +395,28 @@ impl App {
                         role,
                         parser,
                         exited: None,
+                        title: None,
                     },
                 );
                 self.fit();
             }
             DaemonMsg::Output { pane, bytes } => {
-                if !self.panes.contains_key(&pane) {
-                    // Output of a pane we're spawning can beat its Spawned.
-                    let Some(p) = self.pending.front() else {
-                        return;
-                    };
-                    let view = PaneView {
-                        role: p.role.clone(),
-                        parser: vt100::Parser::new(p.rows, p.cols, 0),
-                        exited: None,
-                    };
-                    self.panes.insert(pane, view);
-                }
                 if let Some(v) = self.panes.get_mut(&pane) {
                     v.parser.process(&bytes);
                 }
             }
-            DaemonMsg::Spawned { pane } => {
-                if let Some(p) = self.pending.pop_front() {
-                    self.panes.entry(pane).or_insert_with(|| PaneView {
-                        role: p.role,
-                        parser: vt100::Parser::new(p.rows, p.cols, 0),
-                        exited: None,
-                    });
+            DaemonMsg::Tree { stream, tree } => {
+                if self.current().is_some_and(|e| e.id == stream) {
+                    self.set_tree(tree);
                 }
-                if self.pending.is_empty() {
-                    self.send(ClientMsg::List);
+                self.send(ClientMsg::List);
+            }
+            DaemonMsg::Title { pane, title } => {
+                if let Some(v) = self.panes.get_mut(&pane) {
+                    v.title = Some(title);
                 }
             }
+            DaemonMsg::Hello { .. } | DaemonMsg::Spawned { .. } => {}
             DaemonMsg::Exited { pane, status } => {
                 if let Some(v) = self.panes.get_mut(&pane) {
                     v.exited = Some(status);
@@ -489,6 +496,13 @@ impl App {
             KeyCode::Char('l') => self.focus_towards(1, 0),
             KeyCode::Char('k') => self.focus_towards(0, -1),
             KeyCode::Char('j') => self.focus_towards(0, 1),
+            KeyCode::Char('H') => self.move_pane(-1, 0),
+            KeyCode::Char('L') => self.move_pane(1, 0),
+            KeyCode::Char('K') => self.move_pane(0, -1),
+            KeyCode::Char('J') => self.move_pane(0, 1),
+            KeyCode::Char('t') => self.new_pane(),
+            KeyCode::Char('x') => self.close_pane(),
+            KeyCode::Char('n') => self.ask_name(),
             KeyCode::Char('f') => {
                 self.full = !self.full;
                 self.fit();
@@ -496,7 +510,6 @@ impl App {
             KeyCode::Char('w') => self.new_worktree(),
             KeyCode::Char('s') => self.run_sync(),
             KeyCode::Char('d') => self.open_diff(),
-            KeyCode::Char('x') => self.ask_close(),
             KeyCode::Char('X') => self.ask_remove(),
             KeyCode::Char('q') => self.quit = true,
             code => {
@@ -549,7 +562,8 @@ impl App {
         };
         self.send(ClientMsg::Detach);
         self.panes.clear();
-        self.pending.clear();
+        self.tree = None;
+        self.focus = None;
         let already = self.is_open(&entry.id);
         self.active = Some(stream);
         self.full = false;
@@ -558,47 +572,68 @@ impl App {
             self.send(ClientMsg::Attach {
                 stream: entry.id.clone(),
             });
-        } else if let Err(e) = self.spawn_panes(setup) {
+        } else if let Err(e) = self.start_panes(setup) {
             self.status = Some(format!("{}: {e:#}", entry.name));
-            return;
         }
-        let roles = self.roles();
-        self.focus = ["agent", "editor"]
-            .into_iter()
-            .find(|r| roles.iter().any(|x| x == r))
-            .map(str::to_string)
-            .or_else(|| roles.first().cloned());
     }
 
-    fn spawn_panes(&mut self, setup: bool) -> Result<()> {
-        let stream = self.active.clone().context("no stream")?;
+    /// Asks the daemon to start the workspace's panes in its layout's shape.
+    fn start_panes(&mut self, setup: bool) -> Result<()> {
+        let stream = self.active.clone().context("no workspace")?;
         let (specs, note) = stream.open_specs(setup)?;
         if note.is_some() {
             self.status = note;
         }
-        let rects = self.pane_rects();
-        for spec in specs {
-            let inner = rects
-                .iter()
-                .find(|(r, _)| *r == spec.role)
-                .map(|(_, rect)| inner(*rect))
-                .unwrap_or((80, 24));
-            self.pending.push_back(Pending {
-                role: spec.role.clone(),
-                cols: inner.0,
-                rows: inner.1,
-            });
-            self.send(spec.spawn(&stream.entry.id, inner));
-        }
+        let sizes = stream.tree.rects(self.stage());
+        let mut panes = specs.into_iter().zip(sizes).map(|(spec, rect)| {
+            let (cols, rows) = inner(rect);
+            NewPane {
+                role: spec.role,
+                cmd: spec.cmd,
+                cwd: spec.cwd,
+                env: spec.env,
+                cols,
+                rows,
+            }
+        });
+        let tree = Tree::from_node(&stream.tree, &mut panes).context("the layout has no panes")?;
+        self.send(ClientMsg::Open {
+            stream: stream.entry.id.clone(),
+            tree,
+        });
         stream.mark_opened()
     }
 
-    /// The roles of the active stream, in layout order.
-    pub fn roles(&self) -> Vec<String> {
-        match &self.active {
-            Some(s) => s.tree.leaves().into_iter().map(|l| l.role).collect(),
-            None => Vec::new(),
+    /// The daemon's tree for the current workspace: forget panes that left,
+    /// keep the focus on a pane that is still there.
+    fn set_tree(&mut self, tree: Tree<PaneLeaf>) {
+        let old: Vec<PaneId> = self
+            .tree
+            .as_ref()
+            .map(|t| t.leaves().into_iter().map(|l| l.id).collect())
+            .unwrap_or_default();
+        let ids: Vec<PaneId> = tree.leaves().into_iter().map(|l| l.id).collect();
+        if std::mem::take(&mut self.focus_new)
+            && let Some(new) = ids.iter().find(|id| !old.contains(id))
+        {
+            self.focus = Some(*new);
         }
+        if self.focus.is_none_or(|f| !ids.contains(&f)) {
+            // The agent or the editor first; else the first pane.
+            let pick = |role: &str| {
+                tree.leaves()
+                    .into_iter()
+                    .find(|l| l.role == role)
+                    .map(|l| l.id)
+            };
+            self.focus = pick("agent")
+                .or_else(|| pick("editor"))
+                .or_else(|| ids.first().copied());
+        }
+        self.panes.retain(|id, _| ids.contains(id));
+        self.full &= ids.len() > 1;
+        self.tree = Some(tree);
+        self.fit();
     }
 
     /// Where the panes go on screen: the area right of the sidebar and below
@@ -627,37 +662,60 @@ impl App {
         }
     }
 
-    /// Each role of the active stream with its rectangle, borders included.
-    pub fn pane_rects(&self) -> Vec<(String, Rect)> {
-        let Some(stream) = &self.active else {
+    /// Each pane of the current workspace with its rectangle, borders
+    /// included; in full mode, only the focused one.
+    pub fn pane_rects(&self) -> Vec<(PaneId, Rect)> {
+        let Some(tree) = &self.tree else {
             return Vec::new();
         };
         if self.full
-            && let Some(f) = &self.focus
+            && let Some(f) = self.focus
         {
-            return vec![(f.clone(), self.stage())];
+            return vec![(f, self.stage())];
         }
-        let tree: &Node = &stream.tree;
-        tree.leaves()
-            .into_iter()
-            .map(|l| l.role)
-            .zip(tree.rects(self.stage()))
-            .collect()
+        tree.placed(self.stage())
+    }
+
+    /// What a pane's title says: its name, else the title its program set,
+    /// else the process in its foreground, else its role (REQ-36).
+    pub fn pane_title(&self, id: PaneId) -> String {
+        let leaf = self.tree.as_ref().and_then(|t| t.find(id));
+        if let Some(name) = leaf.and_then(|l| l.name.clone()) {
+            return name;
+        }
+        let view = self.panes.get(&id);
+        if let Some(title) = view
+            .and_then(|v| v.title.clone())
+            .filter(|t| !t.trim().is_empty())
+        {
+            return title;
+        }
+        let fg = self
+            .daemon_panes
+            .iter()
+            .find(|p| p.pane == id)
+            .and_then(|p| p.fg.clone());
+        let role = leaf.map(|l| l.role.clone()).unwrap_or_default();
+        match fg {
+            Some(fg) if fg != role && !role.is_empty() => format!("{role} · {fg}"),
+            Some(fg) => fg,
+            None => role,
+        }
     }
 
     /// Resizes every visible pane to its rectangle, here and in the daemon.
     fn fit(&mut self) {
         let rects = self.pane_rects();
         let mut resizes = Vec::new();
-        for (id, view) in self.panes.iter_mut() {
-            let Some((_, rect)) = rects.iter().find(|(r, _)| *r == view.role) else {
+        for (id, rect) in rects {
+            let Some(view) = self.panes.get_mut(&id) else {
                 continue;
             };
-            let (cols, rows) = inner(*rect);
+            let (cols, rows) = inner(rect);
             if view.parser.screen().size() != (rows, cols) {
                 view.parser.screen_mut().set_size(rows, cols);
                 resizes.push(ClientMsg::Resize {
-                    pane: *id,
+                    pane: id,
                     cols,
                     rows,
                 });
@@ -669,11 +727,7 @@ impl App {
     }
 
     fn focused_pane(&self) -> Option<PaneId> {
-        let f = self.focus.as_ref()?;
-        self.panes
-            .iter()
-            .find(|(_, v)| &v.role == f)
-            .map(|(id, _)| *id)
+        self.focus.filter(|f| self.panes.contains_key(f))
     }
 
     fn send_key(&mut self, k: &KeyEvent) {
@@ -699,32 +753,120 @@ impl App {
         self.send(ClientMsg::Input { pane: id, bytes });
     }
 
-    /// Moves focus to the nearest pane in a direction, by rectangle centres.
+    /// `^␣ hjkl`: focus the pane on that side.
     fn focus_towards(&mut self, dx: i32, dy: i32) {
-        let rects = self.pane_rects();
-        let Some((_, from)) = rects.iter().find(|(r, _)| Some(r) == self.focus.as_ref()) else {
+        let (Some(tree), Some(f)) = (&self.tree, self.focus) else {
             return;
         };
-        let centre = |r: &Rect| {
-            (
-                i32::from(r.x) * 2 + i32::from(r.w),
-                i32::from(r.y) * 2 + i32::from(r.h),
-            )
-        };
-        let (fx, fy) = centre(from);
-        let best = rects
-            .iter()
-            .filter(|(r, _)| Some(r) != self.focus.as_ref())
-            .filter_map(|(role, r)| {
-                let (x, y) = centre(r);
-                let (ex, ey) = (x - fx, y - fy);
-                let along = ex * dx + ey * dy;
-                (along > 0).then(|| (along + (ex * dy - ey * dx).abs() * 2, role))
-            })
-            .min_by_key(|(d, _)| *d);
-        if let Some((_, role)) = best {
-            self.focus = Some(role.clone());
+        match tree.neighbour(f, dx, dy, self.stage()) {
+            Some(n) => {
+                self.focus = Some(n);
+                self.full = false;
+                self.fit();
+            }
+            None => self.status = Some("no pane that way".into()),
         }
+    }
+
+    /// `^␣ HJKL`: trade places with the pane on that side.
+    fn move_pane(&mut self, dx: i32, dy: i32) {
+        let (Some(tree), Some(f)) = (&self.tree, self.focus) else {
+            return;
+        };
+        match tree.neighbour(f, dx, dy, self.stage()) {
+            Some(n) => self.send(ClientMsg::Swap { a: f, b: n }),
+            None => self.status = Some("no pane that way".into()),
+        }
+    }
+
+    /// `^␣ t`: a shell beside the focused pane, in the workspace's folder;
+    /// side by side when the pane is wide, one over the other when not.
+    fn new_pane(&mut self) {
+        let (Some(stream), Some(f)) = (&self.active, self.focus) else {
+            return;
+        };
+        let Some((_, r)) = self.pane_rects().into_iter().find(|(id, _)| *id == f) else {
+            return;
+        };
+        // Cells are about twice as tall as wide.
+        let dir = if r.w >= r.h * 2 {
+            Dir::Right
+        } else {
+            Dir::Down
+        };
+        let (cols, rows) = match dir {
+            Dir::Right => inner(Rect { w: r.w / 2, ..r }),
+            Dir::Down => inner(Rect { h: r.h / 2, ..r }),
+        };
+        let new = NewPane {
+            role: "shell".into(),
+            cmd: None,
+            cwd: std::path::PathBuf::from(&stream.entry.path),
+            env: stream.env(),
+            cols,
+            rows,
+        };
+        self.focus_new = true;
+        self.full = false;
+        self.send(ClientMsg::Split { pane: f, dir, new });
+    }
+
+    /// `^␣ x`: close the focused pane, asking when a program other than a
+    /// shell runs in it; the last pane closes the workspace (REQ-35).
+    fn close_pane(&mut self) {
+        let (Some(entry), Some(f)) = (self.current().cloned(), self.focus) else {
+            return;
+        };
+        let count = self.tree.as_ref().map_or(0, |t| t.leaves().len());
+        if count <= 1 {
+            let running = self.running(&entry.id);
+            self.modal = Some(Modal::Close {
+                entry,
+                running,
+                last: true,
+            });
+            return;
+        }
+        let fg = self
+            .daemon_panes
+            .iter()
+            .find(|p| p.pane == f)
+            .and_then(|p| p.fg.clone())
+            .filter(|fg| !SHELLS.contains(&fg.as_str()));
+        match fg {
+            Some(fg) => {
+                self.modal = Some(Modal::ClosePane {
+                    pane: f,
+                    title: self.pane_title(f),
+                    running: fg,
+                })
+            }
+            None => self.send(ClientMsg::Kill { pane: f }),
+        }
+    }
+
+    /// `^␣ n`: name the focused pane; an empty name goes back to automatic.
+    fn ask_name(&mut self) {
+        let Some(f) = self.focus else { return };
+        let text = self
+            .tree
+            .as_ref()
+            .and_then(|t| t.find(f))
+            .and_then(|l| l.name.clone())
+            .unwrap_or_default();
+        self.modal = Some(Modal::Name { pane: f, text });
+    }
+
+    /// The programs other than shells that run in a workspace's panes.
+    fn running(&self, id: &str) -> Vec<String> {
+        self.daemon_panes
+            .iter()
+            .filter(|p| p.stream == id)
+            .filter_map(|p| {
+                let fg = p.fg.as_deref()?;
+                (!SHELLS.contains(&fg)).then(|| format!("{:<10} {fg}", p.role))
+            })
+            .collect()
     }
 }
 
@@ -775,31 +917,6 @@ impl App {
                 setup: !project.cfg.setup.is_empty(),
             })
         });
-    }
-
-    fn ask_close(&mut self) {
-        let Some(entry) = self.current().cloned() else {
-            return;
-        };
-        if !self.is_open(&entry.id) {
-            self.status = Some(format!("{} is already closed", entry.name));
-            return;
-        }
-        // REQ-12: anything but a shell in the foreground would be killed.
-        let running: Vec<String> = self
-            .daemon_panes
-            .iter()
-            .filter(|p| p.stream == entry.id)
-            .filter_map(|p| {
-                let fg = p.fg.as_deref()?;
-                (!SHELLS.contains(&fg)).then(|| format!("{:<10} {fg}", p.role))
-            })
-            .collect();
-        if running.is_empty() {
-            self.close(&entry);
-        } else {
-            self.modal = Some(Modal::Close { entry, running });
-        }
     }
 
     /// `X`: the done checks when the PR is merged, the rm checks otherwise
@@ -896,6 +1013,11 @@ impl App {
         };
         match m {
             Modal::Close { entry, .. } => self.close(&entry),
+            Modal::ClosePane { pane, .. } => self.send(ClientMsg::Kill { pane }),
+            Modal::Name { pane, text } => {
+                let name = Some(text.trim().to_string()).filter(|n| !n.is_empty());
+                self.send(ClientMsg::Name { pane, name });
+            }
             Modal::RmFree { entry } => {
                 self.close(&entry);
                 let removed =
@@ -955,22 +1077,18 @@ impl App {
 
     /// Kills every pane of the stream; the worktree stays.
     fn close(&mut self, entry: &Entry) {
-        let ids: Vec<PaneId> = self
-            .daemon_panes
-            .iter()
-            .filter(|p| p.stream == entry.id)
-            .map(|p| p.pane)
-            .collect();
-        for pane in ids {
-            self.send(ClientMsg::Kill { pane });
-        }
+        self.send(ClientMsg::Close {
+            stream: entry.id.clone(),
+        });
         self.daemon_panes.retain(|p| p.stream != entry.id);
-        if self.active.as_ref().is_some_and(|s| s.entry.id == entry.id) {
+        if self.current().is_some_and(|c| c.id == entry.id) {
             self.active = None;
             self.panes.clear();
+            self.tree = None;
             self.focus = None;
+            self.full = false;
         }
-        self.status = Some(format!("closed {}, worktree kept", entry.name));
+        self.status = Some(format!("closed {}; its folder stays", entry.name));
         self.send(ClientMsg::List);
     }
 

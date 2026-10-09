@@ -15,8 +15,24 @@ use crate::core::registry::Entry;
 // There is at most one modal at a time, so its size doesn't matter.
 #[allow(clippy::large_enum_variant)]
 pub enum Modal {
-    /// Closing a stream that still runs something other than a shell.
-    Close { entry: Entry, running: Vec<String> },
+    /// Closing a workspace that still runs something other than a shell,
+    /// or by closing its last pane.
+    Close {
+        entry: Entry,
+        running: Vec<String>,
+        last: bool,
+    },
+    /// Closing a pane whose program isn't a shell.
+    ClosePane {
+        pane: crate::proto::PaneId,
+        title: String,
+        running: String,
+    },
+    /// `^␣ n`: a name for the pane; empty goes back to its automatic title.
+    Name {
+        pane: crate::proto::PaneId,
+        text: String,
+    },
     /// `done`: its PR is merged and nothing would be lost; one yes deletes it.
     Done {
         entry: Entry,
@@ -35,6 +51,9 @@ pub enum Modal {
         error: Option<String>,
     },
 }
+
+/// The longest pane name, so it fits a pane's title.
+const NAME_MAX: usize = 24;
 
 /// What a key did to the modal.
 pub enum Outcome {
@@ -59,11 +78,22 @@ impl Modal {
                 KeyCode::Char('n') => Outcome::Cancel,
                 _ => Outcome::Stay,
             },
-            Modal::Close { .. } => match k.code {
+            Modal::Close { .. } | Modal::ClosePane { .. } => match k.code {
                 KeyCode::Char('y') | KeyCode::Enter => Outcome::Submit,
                 KeyCode::Char('n') => Outcome::Cancel,
                 _ => Outcome::Stay,
             },
+            Modal::Name { text, .. } => {
+                match k.code {
+                    KeyCode::Enter => return Outcome::Submit,
+                    KeyCode::Backspace => {
+                        text.pop();
+                    }
+                    KeyCode::Char(c) if text.chars().count() < NAME_MAX => text.push(c),
+                    _ => {}
+                }
+                Outcome::Stay
+            }
             Modal::Rm {
                 plan, typed, error, ..
             } => {
@@ -122,19 +152,67 @@ impl Modal {
                 ];
                 (format!(" Remove free/{}? ", entry.name), l)
             }
-            Modal::Close { entry, running } => {
-                let mut l = vec![Line::from("Still running:"), Line::default()];
-                l.extend(running.iter().map(|r| {
-                    Line::from(Span::styled(format!("  {r}"), Style::default().fg(WAIT)))
-                }));
-                l.push(Line::default());
+            Modal::Close {
+                entry,
+                running,
+                last,
+            } => {
+                let mut l = Vec::new();
+                if *last {
+                    l.push(Line::from(
+                        " This is its last pane, so the workspace closes too.",
+                    ));
+                    l.push(Line::default());
+                }
+                if !running.is_empty() {
+                    l.push(Line::from(" Still running:"));
+                    l.extend(running.iter().map(|r| {
+                        Line::from(Span::styled(format!("   {r}"), Style::default().fg(WAIT)))
+                    }));
+                    l.push(Line::default());
+                    l.push(Line::from(Span::styled(
+                        " Closing stops them.",
+                        Style::default().fg(DIM),
+                    )));
+                }
                 l.push(Line::from(Span::styled(
-                    "Closing kills them. The worktree is kept.",
+                    " The folder stays on disk.",
                     Style::default().fg(DIM),
                 )));
                 l.push(Line::default());
                 l.push(keys(&[("y", "close"), ("esc", "cancel")]));
                 (format!(" Close {}? ", entry.name), l)
+            }
+            Modal::ClosePane { title, running, .. } => {
+                let l = vec![
+                    Line::from(vec![
+                        Span::raw(" "),
+                        Span::styled(running.clone(), Style::default().fg(WAIT)),
+                        Span::raw(" is still running in it. Closing stops it."),
+                    ]),
+                    Line::default(),
+                    keys(&[("y", "close"), ("esc", "cancel")]),
+                ];
+                (format!(" Close {title}? "), l)
+            }
+            Modal::Name { text, .. } => {
+                let hint = if text.is_empty() {
+                    " Empty: the title follows what runs in it."
+                } else {
+                    " Stays until you change it."
+                };
+                let l = vec![
+                    Line::from(vec![
+                        Span::styled(" › ", Style::default().fg(FOCUS)),
+                        Span::raw(text.clone()),
+                        Span::styled("▏", Style::default().fg(FOCUS)),
+                    ]),
+                    Line::default(),
+                    Line::from(Span::styled(hint, Style::default().fg(DIM))),
+                    Line::default(),
+                    keys(&[("↵", "save"), ("esc", "cancel")]),
+                ];
+                (" Name this pane ".to_string(), l)
             }
             Modal::Rm {
                 entry,

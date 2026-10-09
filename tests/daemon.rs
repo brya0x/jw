@@ -8,7 +8,8 @@ use std::time::{Duration, Instant};
 
 use jw::client::Client;
 use jw::daemon::pidfile;
-use jw::proto::{ClientMsg, DaemonMsg, PaneId, PaneInfo};
+use jw::layout::{Dir, Tree};
+use jw::proto::{ClientMsg, DaemonMsg, NewPane, PROTOCOL, PaneId, PaneInfo, PaneLeaf};
 
 const EXE: &str = env!("CARGO_BIN_EXE_jw");
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -72,8 +73,43 @@ fn spawn(c: &mut Client, stream: &str, cmd: &str, cols: u16, rows: u16) -> PaneI
     }
 }
 
+/// The next message that isn't a workspace's Tree (tests of single panes
+/// don't care how they are laid out).
 fn recv(c: &mut Client) -> DaemonMsg {
+    loop {
+        match next(c) {
+            DaemonMsg::Tree { .. } => {}
+            m => return m,
+        }
+    }
+}
+
+fn next(c: &mut Client) -> DaemonMsg {
     c.recv().unwrap().expect("daemon hung up")
+}
+
+/// Skips messages until the next Tree, and returns its panes in order.
+fn next_tree(c: &mut Client) -> Tree<PaneLeaf> {
+    loop {
+        if let DaemonMsg::Tree { tree, .. } = next(c) {
+            return tree;
+        }
+    }
+}
+
+fn ids(t: &Tree<PaneLeaf>) -> Vec<PaneId> {
+    t.leaves().into_iter().map(|l| l.id).collect()
+}
+
+fn cat() -> NewPane {
+    NewPane {
+        role: "shell".into(),
+        cmd: Some("cat".into()),
+        cwd: std::env::temp_dir(),
+        env: BTreeMap::new(),
+        cols: 80,
+        rows: 24,
+    }
 }
 
 /// Feeds Output for `pane` into `screen` until its text contains `want`.
@@ -406,6 +442,128 @@ fn prompt_without_an_agent_pane_is_an_error() {
             }
             DaemonMsg::Prompted { .. } => panic!("there is no agent"),
             _ => {}
+        }
+    }
+}
+
+#[test]
+fn hello_answers_with_the_protocol() {
+    let d = Daemon::start();
+    let mut c = d.client();
+    c.send(&ClientMsg::Hello { protocol: PROTOCOL }).unwrap();
+    assert_eq!(next(&mut c), DaemonMsg::Hello { protocol: PROTOCOL });
+}
+
+/// REQ-34: every change to a workspace's panes reaches its tree, the
+/// clients watching it, and session.json.
+#[test]
+fn the_daemon_keeps_each_workspaces_tree() {
+    let d = Daemon::start();
+    let mut c = d.client();
+    let tree = Tree::Split {
+        dir: Dir::Right,
+        ratio: 0.5,
+        a: Box::new(Tree::Leaf(cat())),
+        b: Box::new(Tree::Leaf(cat())),
+    };
+    c.send(&ClientMsg::Open {
+        stream: "w".into(),
+        tree,
+    })
+    .unwrap();
+    let t = next_tree(&mut c);
+    let [a, b] = ids(&t)[..] else {
+        panic!("want two panes, got {t:?}")
+    };
+    for _ in 0..2 {
+        assert!(matches!(next(&mut c), DaemonMsg::Snapshot { .. }));
+    }
+
+    // A second client sees the same tree, then every later change.
+    let mut watcher = d.client();
+    watcher
+        .send(&ClientMsg::Attach { stream: "w".into() })
+        .unwrap();
+    assert_eq!(ids(&next_tree(&mut watcher)), [a, b]);
+
+    c.send(&ClientMsg::Split {
+        pane: a,
+        dir: Dir::Down,
+        new: cat(),
+    })
+    .unwrap();
+    let t = next_tree(&mut c);
+    let new = ids(&t)[1];
+    assert_eq!(ids(&t), [a, new, b]);
+    assert_eq!(ids(&next_tree(&mut watcher)), [a, new, b]);
+    // The watcher gets the new pane's screen, then its output.
+    loop {
+        match next(&mut watcher) {
+            DaemonMsg::Snapshot { pane, .. } if pane == new => break,
+            DaemonMsg::Snapshot { .. } | DaemonMsg::Output { .. } => {}
+            m => panic!("want the new pane's Snapshot, got {m:?}"),
+        }
+    }
+
+    c.send(&ClientMsg::Swap { a, b }).unwrap();
+    assert_eq!(ids(&next_tree(&mut c)), [b, new, a]);
+
+    c.send(&ClientMsg::Name {
+        pane: a,
+        name: Some(" logs ".into()),
+    })
+    .unwrap();
+    let t = next_tree(&mut c);
+    let named: Vec<Option<String>> = t.leaves().into_iter().map(|l| l.name.clone()).collect();
+    assert_eq!(named, [None, None, Some("logs".to_string())]);
+
+    c.send(&ClientMsg::Kill { pane: new }).unwrap();
+    assert_eq!(ids(&next_tree(&mut c)), [b, a]);
+
+    let session = d.socket.with_file_name("session.json");
+    let saved = std::fs::read_to_string(&session).unwrap();
+    assert!(saved.contains("\"logs\""), "{saved}");
+    assert!(saved.contains("\"id\": \"w\""), "{saved}");
+
+    c.send(&ClientMsg::Close { stream: "w".into() }).unwrap();
+    c.send(&ClientMsg::List).unwrap();
+    loop {
+        if let DaemonMsg::Panes { panes } = next(&mut c) {
+            assert!(panes.is_empty(), "{panes:?}");
+            break;
+        }
+    }
+    let saved = std::fs::read_to_string(&session).unwrap();
+    assert!(!saved.contains("\"w\""), "{saved}");
+}
+
+#[test]
+fn the_window_title_a_program_sets_arrives() {
+    let d = Daemon::start();
+    let mut c = d.client();
+    let mut pane = cat();
+    pane.cmd = Some("printf '\\033]2;hello there\\007'; cat".into());
+    c.send(&ClientMsg::Open {
+        stream: "t".into(),
+        tree: Tree::Leaf(pane),
+    })
+    .unwrap();
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        assert!(Instant::now() < deadline, "no Title");
+        if let DaemonMsg::Title { title, .. } = next(&mut c) {
+            assert_eq!(title, "hello there");
+            break;
+        }
+    }
+    // A client attaching later gets it with the screen.
+    let mut late = d.client();
+    late.send(&ClientMsg::Attach { stream: "t".into() })
+        .unwrap();
+    loop {
+        if let DaemonMsg::Title { title, .. } = next(&mut late) {
+            assert_eq!(title, "hello there");
+            break;
         }
     }
 }

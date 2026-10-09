@@ -1,10 +1,13 @@
-//! The daemon owns every terminal (docs/specs/rust-tui.md, REQ-3…5, 10, 14):
-//! one PTY per pane plus a vt100 parser that keeps its screen, so clients can
-//! come and go while the processes keep running.
+//! The daemon owns every terminal (docs/specs/rust-tui.md, REQ-3…5, 10, 14)
+//! and each workspace's tree of panes (REQ-34): one PTY per pane plus a
+//! vt100 parser that keeps its screen, so clients can come and go while the
+//! processes keep running. Every change to a tree goes to the clients
+//! watching that workspace and to `session.json`.
 //!
 //! Threads: one accept loop, a reader and a writer per client, and a reader
 //! per pane. A pane's `state` lock covers both its parser and its
-//! subscribers, which is what makes "snapshot, then output" race free.
+//! subscribers, which is what makes "snapshot, then output" race free. Locks
+//! are taken in the order workspaces → panes → a pane's state.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -20,8 +23,12 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
+use serde::Serialize;
 
-use crate::proto::{ClientMsg, DaemonMsg, PaneId, PaneInfo, read_frame, write_frame};
+use crate::layout::{Dir, Tree};
+use crate::proto::{
+    ClientMsg, DaemonMsg, NewPane, PROTOCOL, PaneId, PaneInfo, PaneLeaf, read_frame, write_frame,
+};
 
 /// Lines of scrollback each pane keeps.
 const SCROLLBACK: usize = 10_000;
@@ -33,7 +40,7 @@ pub fn run(socket: &Path) -> Result<()> {
     fs::write(&pidfile, format!("{}\n", std::process::id()))
         .with_context(|| format!("writing {}", pidfile.display()))?;
 
-    let daemon = Arc::new(Daemon::default());
+    let daemon = Arc::new(Daemon::new(session_path(socket)));
     for conn in listener.incoming() {
         match conn {
             Ok(stream) => {
@@ -44,6 +51,18 @@ pub fn run(socket: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// `session.json` in the state dir for the usual socket; next to the socket
+/// for any other (tests, a second daemon), so they never touch the real one.
+fn session_path(socket: &Path) -> Option<PathBuf> {
+    if socket == crate::proto::default_socket_path() {
+        crate::core::registry::state_dir()
+            .ok()
+            .map(|d| d.join("session.json"))
+    } else {
+        socket.parent().map(|d| d.join("session.json"))
+    }
 }
 
 /// Where the daemon writes its pid, next to the socket.
@@ -76,18 +95,46 @@ fn bind(socket: &Path) -> Result<UnixListener> {
     Ok(listener)
 }
 
-#[derive(Default)]
 struct Daemon {
     panes: Mutex<BTreeMap<PaneId, Arc<Pane>>>,
+    workspaces: Mutex<BTreeMap<String, Ws>>,
+    /// Where the trees are saved after every change; `None` keeps no file.
+    session: Option<PathBuf>,
     next_pane: AtomicU64,
     next_client: AtomicU64,
+}
+
+/// An open workspace: how its panes are laid out, and who watches it.
+struct Ws {
+    tree: Tree<PaneLeaf>,
+    subs: Vec<Sub>,
+}
+
+impl Ws {
+    /// Sends the tree to every watcher, dropping the ones that went away.
+    fn tell(&mut self, stream: &str) {
+        let msg = DaemonMsg::Tree {
+            stream: stream.to_string(),
+            tree: self.tree.clone(),
+        };
+        self.subs.retain(|s| s.tx.send(msg.clone()).is_ok());
+    }
 }
 
 struct Pane {
     stream: String,
     role: String,
+    /// How it was started, for `session.json`.
+    started: Started,
     io: Mutex<PaneIo>,
     state: Mutex<PaneState>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct Started {
+    cmd: Option<String>,
+    cwd: PathBuf,
+    env: BTreeMap<String, String>,
 }
 
 struct PaneIo {
@@ -97,15 +144,29 @@ struct PaneIo {
 }
 
 struct PaneState {
-    parser: vt100::Parser,
+    parser: vt100::Parser<Titles>,
     subs: Vec<Sub>,
     exited: Option<i32>,
     /// When the pane last printed: an agent that just started is still
     /// drawing, and a prompt typed then is lost (RISK-3).
     last_output: Instant,
+    /// The last window title its program set (OSC 0/2).
+    title: Option<String>,
 }
 
-/// One client's interest in one pane.
+/// Catches the window titles a pane's program sets.
+#[derive(Default)]
+struct Titles {
+    new: Option<String>,
+}
+
+impl vt100::Callbacks for Titles {
+    fn set_window_title(&mut self, _: &mut vt100::Screen, title: &[u8]) {
+        self.new = Some(String::from_utf8_lossy(title).into_owned());
+    }
+}
+
+/// One client's interest in one pane or workspace.
 struct Sub {
     client: u64,
     tx: Sender<DaemonMsg>,
@@ -132,7 +193,37 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// What `session.json` holds: every open workspace, enough to start it again.
+#[derive(Serialize)]
+struct Session {
+    workspaces: Vec<SavedWs>,
+}
+
+#[derive(Serialize)]
+struct SavedWs {
+    id: String,
+    tree: Tree<SavedPane>,
+}
+
+#[derive(Serialize)]
+struct SavedPane {
+    role: String,
+    name: Option<String>,
+    #[serde(flatten)]
+    started: Started,
+}
+
 impl Daemon {
+    fn new(session: Option<PathBuf>) -> Self {
+        Self {
+            panes: Mutex::default(),
+            workspaces: Mutex::default(),
+            session,
+            next_pane: AtomicU64::new(0),
+            next_client: AtomicU64::new(0),
+        }
+    }
+
     fn serve(self: Arc<Self>, stream: UnixStream) {
         let client = self.next_client.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = mpsc::channel::<DaemonMsg>();
@@ -172,28 +263,10 @@ impl Daemon {
 
     fn handle(&self, client: u64, tx: &Sender<DaemonMsg>, msg: ClientMsg) -> Result<()> {
         match msg {
-            ClientMsg::Attach { stream } => {
-                for pane in self.panes_of(&stream) {
-                    let mut st = lock(&pane.1.state);
-                    let screen = st.parser.screen();
-                    let (rows, cols) = screen.size();
-                    let snapshot = DaemonMsg::Snapshot {
-                        pane: pane.0,
-                        role: pane.1.role.clone(),
-                        cols,
-                        rows,
-                        bytes: screen.state_formatted(),
-                    };
-                    let _ = tx.send(snapshot);
-                    if let Some(status) = st.exited {
-                        let _ = tx.send(DaemonMsg::Exited {
-                            pane: pane.0,
-                            status,
-                        });
-                    }
-                    st.subscribe(client, tx);
-                }
+            ClientMsg::Hello { .. } => {
+                let _ = tx.send(DaemonMsg::Hello { protocol: PROTOCOL });
             }
+            ClientMsg::Attach { stream } => self.attach(client, tx, &stream),
             ClientMsg::Detach => self.unsubscribe(client),
             ClientMsg::Prompt { stream, text } => {
                 let (id, pane) = self
@@ -257,19 +330,293 @@ impl Daemon {
                 cols,
                 rows,
             } => {
-                let id = self.spawn(client, tx, stream, role, cmd, &cwd, env, cols, rows)?;
+                let new = NewPane {
+                    role,
+                    cmd,
+                    cwd,
+                    env,
+                    cols,
+                    rows,
+                };
+                let id = self.spawn(&stream, new, Some((client, tx)))?;
+                self.place(&stream, id);
                 let _ = tx.send(DaemonMsg::Spawned { pane: id });
             }
-            ClientMsg::Kill { pane } => {
-                let pane = lock(&self.panes)
-                    .remove(&pane)
-                    .with_context(|| format!("no pane {pane}"))?;
-                if lock(&pane.state).exited.is_none() {
-                    let _ = lock(&pane.io).killer.kill();
+            ClientMsg::Open { stream, tree } => {
+                if !lock(&self.workspaces).contains_key(&stream) {
+                    self.open(&stream, tree)?;
                 }
+                self.attach(client, tx, &stream);
+            }
+            ClientMsg::Split { pane, dir, new } => self.split(pane, dir, new)?,
+            ClientMsg::Kill { pane } => self.kill(pane)?,
+            ClientMsg::Close { stream } => {
+                let ids: Vec<PaneId> = self.panes_of(&stream).into_iter().map(|p| p.0).collect();
+                lock(&self.workspaces).remove(&stream);
+                for id in ids {
+                    self.stop(id);
+                }
+                self.save();
+            }
+            ClientMsg::Swap { a, b } => {
+                let stream = self.pane(a)?.stream.clone();
+                self.edit(&stream, |t| {
+                    if !t.swap(a, b) {
+                        bail!("panes {a} and {b} are not both in {stream}");
+                    }
+                    Ok(())
+                })?;
+            }
+            ClientMsg::Name { pane, name } => {
+                let stream = self.pane(pane)?.stream.clone();
+                let name = name.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
+                self.edit(&stream, |t| {
+                    t.find_mut(pane).context("no such pane")?.name = name;
+                    Ok(())
+                })?;
             }
         }
         Ok(())
+    }
+
+    /// Subscribes `client` to a workspace: its tree, then each pane's screen.
+    fn attach(&self, client: u64, tx: &Sender<DaemonMsg>, stream: &str) {
+        let ids: Vec<PaneId> = {
+            let mut all = lock(&self.workspaces);
+            match all.get_mut(stream) {
+                Some(ws) => {
+                    let _ = tx.send(DaemonMsg::Tree {
+                        stream: stream.to_string(),
+                        tree: ws.tree.clone(),
+                    });
+                    if !ws.subs.iter().any(|s| s.client == client) {
+                        ws.subs.push(Sub {
+                            client,
+                            tx: tx.clone(),
+                        });
+                    }
+                    ws.tree.leaves().into_iter().map(|l| l.id).collect()
+                }
+                None => Vec::new(),
+            }
+        };
+        for id in ids {
+            self.watch(client, tx, id);
+        }
+    }
+
+    /// The pane's screen (and status and title) for `client`, then its live
+    /// output: under the pane's lock, so nothing falls between.
+    fn watch(&self, client: u64, tx: &Sender<DaemonMsg>, id: PaneId) {
+        let Ok(pane) = self.pane(id) else { return };
+        let mut st = lock(&pane.state);
+        let screen = st.parser.screen();
+        let (rows, cols) = screen.size();
+        let _ = tx.send(DaemonMsg::Snapshot {
+            pane: id,
+            role: pane.role.clone(),
+            cols,
+            rows,
+            bytes: screen.state_formatted(),
+        });
+        if let Some(status) = st.exited {
+            let _ = tx.send(DaemonMsg::Exited { pane: id, status });
+        }
+        if let Some(title) = st.title.clone() {
+            let _ = tx.send(DaemonMsg::Title { pane: id, title });
+        }
+        st.subscribe(client, tx);
+    }
+
+    /// Starts every pane of a new workspace; none is left behind on failure.
+    fn open(&self, stream: &str, tree: Tree<NewPane>) -> Result<()> {
+        let mut started = Vec::new();
+        let tree = tree.try_map(&mut |new: NewPane| {
+            let role = new.role.clone();
+            let id = self.spawn(stream, new, None)?;
+            started.push(id);
+            Ok::<_, anyhow::Error>(PaneLeaf {
+                id,
+                role,
+                name: None,
+            })
+        });
+        let tree = match tree {
+            Ok(t) => t,
+            Err(e) => {
+                for id in started {
+                    self.stop(id);
+                }
+                return Err(e);
+            }
+        };
+        lock(&self.workspaces).insert(
+            stream.to_string(),
+            Ws {
+                tree,
+                subs: Vec::new(),
+            },
+        );
+        self.save();
+        Ok(())
+    }
+
+    /// A pane from the old `Spawn`: the first of its workspace, or one more
+    /// on the right of the last.
+    fn place(&self, stream: &str, id: PaneId) {
+        let Ok(pane) = self.pane(id) else { return };
+        let leaf = PaneLeaf {
+            id,
+            role: pane.role.clone(),
+            name: None,
+        };
+        {
+            let mut all = lock(&self.workspaces);
+            match all.remove(stream) {
+                None => {
+                    all.insert(
+                        stream.to_string(),
+                        Ws {
+                            tree: Tree::Leaf(leaf),
+                            subs: Vec::new(),
+                        },
+                    );
+                }
+                Some(Ws { tree, subs }) => {
+                    let last = tree.leaves().last().map_or(0, |l| l.id);
+                    let (tree, _) = tree.insert(last, Dir::Right, leaf);
+                    let mut ws = Ws { tree, subs };
+                    ws.tell(stream);
+                    all.insert(stream.to_string(), ws);
+                }
+            }
+        }
+        self.save();
+    }
+
+    fn split(&self, beside: PaneId, dir: Dir, new: NewPane) -> Result<()> {
+        let stream = self.pane(beside)?.stream.clone();
+        let role = new.role.clone();
+        let id = self.spawn(&stream, new, None)?;
+        {
+            let mut all = lock(&self.workspaces);
+            let Some(Ws { tree, subs }) = all.remove(&stream) else {
+                drop(all);
+                self.stop(id);
+                bail!("{stream} is not open");
+            };
+            let leaf = PaneLeaf {
+                id,
+                role,
+                name: None,
+            };
+            let (tree, missing) = tree.insert(beside, dir, leaf);
+            let mut ws = Ws { tree, subs };
+            ws.tell(&stream);
+            let watchers: Vec<(u64, Sender<DaemonMsg>)> =
+                ws.subs.iter().map(|s| (s.client, s.tx.clone())).collect();
+            all.insert(stream.clone(), ws);
+            if missing.is_some() {
+                drop(all);
+                self.stop(id);
+                bail!("pane {beside} is not in {stream}");
+            }
+            for (client, tx) in watchers {
+                self.watch(client, &tx, id);
+            }
+        }
+        self.save();
+        Ok(())
+    }
+
+    /// Stops a pane and takes it out of its tree; the last one closes the
+    /// workspace.
+    fn kill(&self, id: PaneId) -> Result<()> {
+        let stream = self.pane(id)?.stream.clone();
+        self.stop(id);
+        {
+            let mut all = lock(&self.workspaces);
+            if let Some(Ws { tree, subs }) = all.remove(&stream) {
+                let (tree, _) = tree.remove(id);
+                if let Some(tree) = tree {
+                    let mut ws = Ws { tree, subs };
+                    ws.tell(&stream);
+                    all.insert(stream, ws);
+                }
+            }
+        }
+        self.save();
+        Ok(())
+    }
+
+    /// Changes a workspace's tree in place, then tells its watchers and
+    /// saves.
+    fn edit(&self, stream: &str, f: impl FnOnce(&mut Tree<PaneLeaf>) -> Result<()>) -> Result<()> {
+        {
+            let mut all = lock(&self.workspaces);
+            let ws = all
+                .get_mut(stream)
+                .with_context(|| format!("{stream} is not open"))?;
+            f(&mut ws.tree)?;
+            ws.tell(stream);
+        }
+        self.save();
+        Ok(())
+    }
+
+    /// Kills the pane's process (if still running) and forgets the pane.
+    fn stop(&self, id: PaneId) {
+        let Some(pane) = lock(&self.panes).remove(&id) else {
+            return;
+        };
+        if lock(&pane.state).exited.is_none() {
+            let _ = lock(&pane.io).killer.kill();
+        }
+    }
+
+    /// Writes `session.json` (temp file + rename). A failure is logged, not
+    /// fatal: the panes matter more than the file.
+    fn save(&self) {
+        let Some(path) = &self.session else { return };
+        let session = {
+            let all = lock(&self.workspaces);
+            let panes = lock(&self.panes);
+            Session {
+                workspaces: all
+                    .iter()
+                    .filter_map(|(id, ws)| {
+                        let tree = ws
+                            .tree
+                            .clone()
+                            .try_map(&mut |l: PaneLeaf| {
+                                let p = panes.get(&l.id).ok_or(())?;
+                                Ok::<_, ()>(SavedPane {
+                                    role: l.role,
+                                    name: l.name,
+                                    started: p.started.clone(),
+                                })
+                            })
+                            .ok()?;
+                        Some(SavedWs {
+                            id: id.clone(),
+                            tree,
+                        })
+                    })
+                    .collect(),
+            }
+        };
+        let write = || -> Result<()> {
+            if let Some(dir) = path.parent() {
+                fs::create_dir_all(dir)?;
+            }
+            let tmp = path.with_extension("json.tmp");
+            fs::write(&tmp, serde_json::to_vec_pretty(&session)?)?;
+            fs::rename(&tmp, path)?;
+            Ok(())
+        };
+        if let Err(e) = write() {
+            eprintln!("jw daemon: saving {}: {e:#}", path.display());
+        }
     }
 
     fn pane(&self, id: PaneId) -> Result<Arc<Pane>> {
@@ -288,39 +635,45 @@ impl Daemon {
     }
 
     fn unsubscribe(&self, client: u64) {
+        for ws in lock(&self.workspaces).values_mut() {
+            ws.subs.retain(|s| s.client != client);
+        }
         let panes: Vec<_> = lock(&self.panes).values().cloned().collect();
         for pane in panes {
             lock(&pane.state).subs.retain(|s| s.client != client);
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// Starts a pane's process. `sub` is subscribed before its first byte
+    /// can arrive; without one, watchers get a Snapshot later.
     fn spawn(
         &self,
-        client: u64,
-        tx: &Sender<DaemonMsg>,
-        stream: String,
-        role: String,
-        cmd: Option<String>,
-        cwd: &Path,
-        env: BTreeMap<String, String>,
-        cols: u16,
-        rows: u16,
+        stream: &str,
+        new: NewPane,
+        sub: Option<(u64, &Sender<DaemonMsg>)>,
     ) -> Result<PaneId> {
         let id = self.next_pane.fetch_add(1, Ordering::Relaxed) + 1;
+        let NewPane {
+            role,
+            cmd,
+            cwd,
+            env,
+            cols,
+            rows,
+        } = new;
         let pair = native_pty_system().openpty(size(cols, rows))?;
 
-        let mut builder = match cmd {
+        let mut builder = match &cmd {
             Some(cmd) => {
                 let mut b = CommandBuilder::new("sh");
-                b.args(["-c", &cmd]);
+                b.args(["-c", cmd]);
                 b
             }
             None => CommandBuilder::new_default_prog(),
         };
-        builder.cwd(cwd);
+        builder.cwd(&cwd);
         builder.env("TERM", "xterm-256color");
-        for (k, v) in env {
+        for (k, v) in &env {
             builder.env(k, v);
         }
         builder.env("JW_PANE_ID", id.to_string());
@@ -334,22 +687,30 @@ impl Daemon {
 
         let mut reader = pair.master.try_clone_reader()?;
         let pane = Arc::new(Pane {
-            stream,
+            stream: stream.to_string(),
             role,
+            started: Started { cmd, cwd, env },
             io: Mutex::new(PaneIo {
                 writer: pair.master.take_writer()?,
                 killer: child.clone_killer(),
                 master: pair.master,
             }),
             state: Mutex::new(PaneState {
-                parser: vt100::Parser::new(rows, cols, SCROLLBACK),
+                parser: vt100::Parser::new_with_callbacks(
+                    rows,
+                    cols,
+                    SCROLLBACK,
+                    Titles::default(),
+                ),
                 subs: Vec::new(),
                 exited: None,
                 last_output: Instant::now(),
+                title: None,
             }),
         });
-        // Subscribe before the reader starts so the spawner misses nothing.
-        lock(&pane.state).subscribe(client, tx);
+        if let Some((client, tx)) = sub {
+            lock(&pane.state).subscribe(client, tx);
+        }
         lock(&self.panes).insert(id, Arc::clone(&pane));
 
         thread::spawn(move || {
@@ -365,6 +726,10 @@ impl Daemon {
                             pane: id,
                             bytes: buf[..n].to_vec(),
                         });
+                        if let Some(title) = st.parser.callbacks_mut().new.take() {
+                            st.title = Some(title.clone());
+                            st.broadcast(&DaemonMsg::Title { pane: id, title });
+                        }
                     }
                     Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
                     // Linux reports the child closing the slave as EIO.

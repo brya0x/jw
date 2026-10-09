@@ -50,11 +50,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if rects.is_empty() {
         empty(f, app);
     }
-    for (role, rect) in rects {
+    for (id, rect) in rects {
         let r = trect(rect);
-        let focused = app.focus.as_deref() == Some(role.as_str());
-        let view = app.panes.values().find(|v| v.role == role);
-        pane(f, app, r, &role, view, focused);
+        let focused = app.focus == Some(id);
+        pane(f, app, r, &app.pane_title(id), app.panes.get(&id), focused);
     }
     if let Some(m) = &app.modal {
         m.draw(f);
@@ -251,14 +250,14 @@ fn empty(f: &mut Frame, app: &App) {
     );
 }
 
-fn pane(f: &mut Frame, app: &App, r: TRect, role: &str, view: Option<&PaneView>, focused: bool) {
+fn pane(f: &mut Frame, app: &App, r: TRect, title: &str, view: Option<&PaneView>, focused: bool) {
     let border = if focused {
         Style::default().fg(FOCUS).add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(LINE)
     };
     let mut title = vec![Span::styled(
-        format!(" {role} "),
+        format!(" {title} "),
         if focused {
             Style::default().fg(FOCUS).add_modifier(Modifier::BOLD)
         } else {

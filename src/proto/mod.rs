@@ -1,6 +1,6 @@
 //! Wire format between the TUI client and the daemon (docs/specs/rust-tui.md,
 //! "Protocol"): each frame is a big-endian u32 length followed by that many
-//! bytes of JSON. Open/Close arrive in later parts.
+//! bytes of JSON.
 
 use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
@@ -9,7 +9,39 @@ use std::path::{Path, PathBuf};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
+use crate::layout::{Dir, Keyed, Tree};
+
 pub type PaneId = u64;
+
+/// Bumped whenever a message changes shape: a client and a daemon from
+/// different builds refuse each other instead of misreading (RISK-14).
+pub const PROTOCOL: u32 = 2;
+
+/// A pane to start. `cmd` runs through `sh -c`; `None` starts `$SHELL`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NewPane {
+    pub role: String,
+    pub cmd: Option<String>,
+    pub cwd: PathBuf,
+    pub env: BTreeMap<String, String>,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+/// A running pane as a leaf of its workspace's tree.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PaneLeaf {
+    pub id: PaneId,
+    pub role: String,
+    /// What the user called it (`^␣ n`); shown instead of its title.
+    pub name: Option<String>,
+}
+
+impl Keyed for PaneLeaf {
+    fn key(&self) -> u64 {
+        self.id
+    }
+}
 
 /// Frames bigger than this are a bug or garbage on the socket, not output.
 const MAX_FRAME: u32 = 16 << 20;
@@ -17,7 +49,12 @@ const MAX_FRAME: u32 = 16 << 20;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "t")]
 pub enum ClientMsg {
-    /// Subscribe to every pane of `stream`: a Snapshot each, then live Output.
+    /// The first message: answered with the daemon's own `Hello`.
+    Hello {
+        protocol: u32,
+    },
+    /// Subscribe to the workspace `stream`: its Tree, a Snapshot of each
+    /// pane, then live Output and every later Tree.
     Attach {
         stream: String,
     },
@@ -43,9 +80,36 @@ pub enum ClientMsg {
         cols: u16,
         rows: u16,
     },
-    /// Kill the pane's process (if still running) and forget the pane.
+    /// Start a workspace's panes in this shape and attach to it. A
+    /// workspace already open is attached to as it is.
+    Open {
+        stream: String,
+        tree: Tree<NewPane>,
+    },
+    /// Start a pane beside `pane`, sharing its space along `dir`.
+    Split {
+        pane: PaneId,
+        dir: Dir,
+        new: NewPane,
+    },
+    /// Kill the pane's process (if still running) and forget the pane; its
+    /// sibling in the tree takes the space.
     Kill {
         pane: PaneId,
+    },
+    /// Kill every pane of the workspace.
+    Close {
+        stream: String,
+    },
+    /// Trade the places of two panes of one workspace.
+    Swap {
+        a: PaneId,
+        b: PaneId,
+    },
+    /// Name a pane; `None` goes back to its automatic title.
+    Name {
+        pane: PaneId,
+        name: Option<String>,
     },
     /// Which panes exist, for every stream: answered with `Panes`.
     List,
@@ -74,6 +138,19 @@ pub struct PaneInfo {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "t")]
 pub enum DaemonMsg {
+    Hello {
+        protocol: u32,
+    },
+    /// A workspace's panes as they are laid out, after every change.
+    Tree {
+        stream: String,
+        tree: Tree<PaneLeaf>,
+    },
+    /// The window title a pane's program set (OSC 0/2).
+    Title {
+        pane: PaneId,
+        title: String,
+    },
     /// The pane's whole screen as escape sequences (vt100 `state_formatted`):
     /// feeding it to an empty parser of the same size reproduces it.
     Snapshot {
@@ -143,6 +220,11 @@ pub fn socket_path() -> PathBuf {
     if let Some(p) = std::env::var_os("JW_SOCKET").filter(|p| !p.is_empty()) {
         return PathBuf::from(p);
     }
+    default_socket_path()
+}
+
+/// Where the socket is when `$JW_SOCKET` doesn't say otherwise.
+pub fn default_socket_path() -> PathBuf {
     if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR").filter(|p| !p.is_empty()) {
         return Path::new(&dir).join("jw").join("jw.sock");
     }
