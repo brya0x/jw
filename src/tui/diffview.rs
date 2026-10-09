@@ -24,7 +24,12 @@ pub struct DiffView {
     /// Index into the flattened items of the top visible row.
     scroll: usize,
     viewed: BTreeSet<usize>,
+    /// Side by side, as last drawn: wide panes are, narrow ones aren't,
+    /// unless `t` said otherwise.
     split: bool,
+    forced: Option<bool>,
+    /// Whether its pane has the focus, for the border.
+    pub focused: bool,
     /// Rows the content showed last frame, for paging.
     height: usize,
 }
@@ -44,8 +49,8 @@ enum Item {
 pub enum Action {
     None,
     Close,
-    /// Open this file of the worktree in the Markdown reader.
-    Read(String),
+    /// Open this file of the worktree (REQ-42).
+    Open(String),
 }
 
 impl DiffView {
@@ -57,6 +62,8 @@ impl DiffView {
             scroll: 0,
             viewed: BTreeSet::new(),
             split: true,
+            forced: None,
+            focused: true,
             height: 20,
         }
     }
@@ -137,6 +144,7 @@ impl DiffView {
                 // Keep the same file on top across the switch.
                 let f = self.current(&items);
                 self.split = !self.split;
+                self.forced = Some(self.split);
                 self.goto_file(f);
             }
             KeyCode::Char('v') => {
@@ -152,8 +160,8 @@ impl DiffView {
             KeyCode::Enter => {
                 let f = self.current(&items);
                 let path = &self.files[f].path;
-                if path.ends_with(".md") && self.files[f].status != Status::Deleted {
-                    return Action::Read(path.clone());
+                if self.files[f].status != Status::Deleted {
+                    return Action::Open(path.clone());
                 }
             }
             _ => {}
@@ -168,6 +176,15 @@ impl DiffView {
     }
 
     pub fn draw(&mut self, frame: &mut Frame, area: Rect) {
+        // Side by side needs room for two columns of code (REQ-57).
+        let split = self.forced.unwrap_or(area.width >= 110);
+        if split != self.split {
+            let items = self.items();
+            let f = self.current(&items);
+            self.split = split;
+            self.goto_file(f);
+        }
+        let accent = if self.focused { p().blue } else { p().line };
         let (adds, dels): (usize, usize) = self
             .files
             .iter()
@@ -175,12 +192,16 @@ impl DiffView {
         let mode = if self.split { "split" } else { "unified" };
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(p().blue))
+            .border_type(ratatui::widgets::BorderType::Rounded)
+            .border_style(Style::default().fg(accent))
             .title(Line::from(vec![
                 Span::styled(
-                    format!(" diff · {} ", self.title),
-                    Style::default().fg(p().blue).add_modifier(Modifier::BOLD),
+                    " changes ",
+                    Style::default()
+                        .fg(if self.focused { p().blue } else { p().fg })
+                        .add_modifier(Modifier::BOLD),
                 ),
+                Span::styled(format!("{} · ", self.title), Style::default().fg(p().dim)),
                 Span::styled(
                     format!("{} files ", self.files.len()),
                     Style::default().fg(p().dim),
@@ -211,20 +232,28 @@ impl DiffView {
         let items = self.items();
         self.scroll = self.scroll.min(items.len().saturating_sub(1));
         let current = self.current(&items);
-        let tree_w = TREE.min(inner.width / 3);
+        // The file list only where there is room for it beside the code.
+        let tree_w = if inner.width >= 100 {
+            TREE.min(inner.width / 3)
+        } else {
+            0
+        };
         let tree = Rect {
             width: tree_w,
             ..inner
         };
+        let gap = u16::from(tree_w > 0);
         let body = Rect {
-            x: inner.x + tree_w + 1,
-            width: inner.width.saturating_sub(tree_w + 1),
+            x: inner.x + tree_w + gap,
+            width: inner.width.saturating_sub(tree_w + gap),
             ..inner
         };
-        self.draw_tree(frame, tree, current);
-        for y in inner.y..inner.y + inner.height {
-            if let Some(c) = frame.buffer_mut().cell_mut((inner.x + tree_w, y)) {
-                c.set_symbol("│").set_style(Style::default().fg(p().line));
+        if tree_w > 0 {
+            self.draw_tree(frame, tree, current);
+            for y in inner.y..inner.y + inner.height {
+                if let Some(c) = frame.buffer_mut().cell_mut((inner.x + tree_w, y)) {
+                    c.set_symbol("│").set_style(Style::default().fg(p().line));
+                }
             }
         }
 

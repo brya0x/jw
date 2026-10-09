@@ -567,3 +567,50 @@ fn the_window_title_a_program_sets_arrives() {
         }
     }
 }
+
+/// Viewers (REQ-57): a leaf with no process, kept in the tree and the
+/// session, removed like any pane.
+#[test]
+fn a_viewer_is_a_leaf_without_a_process() {
+    let d = Daemon::start();
+    let mut c = d.client();
+    c.send(&ClientMsg::Open {
+        stream: "v".into(),
+        tree: Tree::Leaf(cat()),
+    })
+    .unwrap();
+    let shell = ids(&next_tree(&mut c))[0];
+    let mut view = cat();
+    view.role = "view:diff".into();
+    c.send(&ClientMsg::Split {
+        pane: shell,
+        dir: Dir::Right,
+        new: view,
+    })
+    .unwrap();
+    let t = next_tree(&mut c);
+    let diff = ids(&t)[1];
+    assert_eq!(t.find(diff).unwrap().role, "view:diff");
+
+    c.send(&ClientMsg::List).unwrap();
+    loop {
+        if let DaemonMsg::Panes { panes } = next(&mut c) {
+            assert_eq!(panes.len(), 1, "only the shell runs: {panes:?}");
+            break;
+        }
+    }
+    let saved = std::fs::read_to_string(d.socket.with_file_name("session.json")).unwrap();
+    assert!(saved.contains("view:diff"), "{saved}");
+
+    c.send(&ClientMsg::Name {
+        pane: diff,
+        name: Some("review".into()),
+    })
+    .unwrap();
+    assert_eq!(
+        next_tree(&mut c).find(diff).unwrap().name.as_deref(),
+        Some("review")
+    );
+    c.send(&ClientMsg::Kill { pane: diff }).unwrap();
+    assert_eq!(ids(&next_tree(&mut c)), [shell]);
+}

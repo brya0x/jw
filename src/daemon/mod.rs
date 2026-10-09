@@ -209,8 +209,15 @@ struct SavedWs {
 struct SavedPane {
     role: String,
     name: Option<String>,
+    /// How its process started; none for a viewer (`view:…`).
     #[serde(flatten)]
-    started: Started,
+    started: Option<Started>,
+}
+
+/// A leaf the client draws itself (a diff, a Markdown file): it has an id
+/// and a place in the tree, but no process.
+pub fn is_view(role: &str) -> bool {
+    role.starts_with("view:")
 }
 
 impl Daemon {
@@ -349,6 +356,7 @@ impl Daemon {
                 self.attach(client, tx, &stream);
             }
             ClientMsg::Split { pane, dir, new } => self.split(pane, dir, new)?,
+            ClientMsg::Dock { stream, share, new } => self.dock(&stream, share, new)?,
             ClientMsg::Kill { pane } => self.kill(pane)?,
             ClientMsg::Close { stream } => {
                 let ids: Vec<PaneId> = self.panes_of(&stream).into_iter().map(|p| p.0).collect();
@@ -359,7 +367,7 @@ impl Daemon {
                 self.save();
             }
             ClientMsg::Swap { a, b } => {
-                let stream = self.pane(a)?.stream.clone();
+                let stream = self.stream_of(a)?;
                 self.edit(&stream, |t| {
                     if !t.swap(a, b) {
                         bail!("panes {a} and {b} are not both in {stream}");
@@ -368,7 +376,7 @@ impl Daemon {
                 })?;
             }
             ClientMsg::Name { pane, name } => {
-                let stream = self.pane(pane)?.stream.clone();
+                let stream = self.stream_of(pane)?;
                 let name = name.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
                 self.edit(&stream, |t| {
                     t.find_mut(pane).context("no such pane")?.name = name;
@@ -495,9 +503,13 @@ impl Daemon {
     }
 
     fn split(&self, beside: PaneId, dir: Dir, new: NewPane) -> Result<()> {
-        let stream = self.pane(beside)?.stream.clone();
+        let stream = self.stream_of(beside)?;
         let role = new.role.clone();
-        let id = self.spawn(&stream, new, None)?;
+        let id = if is_view(&role) {
+            self.next_pane.fetch_add(1, Ordering::Relaxed) + 1
+        } else {
+            self.spawn(&stream, new, None)?
+        };
         {
             let mut all = lock(&self.workspaces);
             let Some(Ws { tree, subs }) = all.remove(&stream) else {
@@ -529,10 +541,46 @@ impl Daemon {
         Ok(())
     }
 
+    /// A pane along the right edge of the whole workspace.
+    fn dock(&self, stream: &str, share: f32, new: NewPane) -> Result<()> {
+        let role = new.role.clone();
+        let id = if is_view(&role) {
+            self.next_pane.fetch_add(1, Ordering::Relaxed) + 1
+        } else {
+            self.spawn(stream, new, None)?
+        };
+        {
+            let mut all = lock(&self.workspaces);
+            let Some(Ws { tree, subs }) = all.remove(stream) else {
+                drop(all);
+                self.stop(id);
+                bail!("{stream} is not open");
+            };
+            let leaf = PaneLeaf {
+                id,
+                role,
+                name: None,
+            };
+            let mut ws = Ws {
+                tree: tree.dock(leaf, share),
+                subs,
+            };
+            ws.tell(stream);
+            let watchers: Vec<(u64, Sender<DaemonMsg>)> =
+                ws.subs.iter().map(|s| (s.client, s.tx.clone())).collect();
+            all.insert(stream.to_string(), ws);
+            for (client, tx) in watchers {
+                self.watch(client, &tx, id);
+            }
+        }
+        self.save();
+        Ok(())
+    }
+
     /// Stops a pane and takes it out of its tree; the last one closes the
     /// workspace.
     fn kill(&self, id: PaneId) -> Result<()> {
-        let stream = self.pane(id)?.stream.clone();
+        let stream = self.stream_of(id)?;
         self.stop(id);
         {
             let mut all = lock(&self.workspaces);
@@ -589,11 +637,15 @@ impl Daemon {
                             .tree
                             .clone()
                             .try_map(&mut |l: PaneLeaf| {
-                                let p = panes.get(&l.id).ok_or(())?;
+                                let started = match panes.get(&l.id) {
+                                    Some(p) => Some(p.started.clone()),
+                                    None if is_view(&l.role) => None,
+                                    None => return Err(()),
+                                };
                                 Ok::<_, ()>(SavedPane {
                                     role: l.role,
                                     name: l.name,
-                                    started: p.started.clone(),
+                                    started,
                                 })
                             })
                             .ok()?;
@@ -617,6 +669,18 @@ impl Daemon {
         if let Err(e) = write() {
             eprintln!("jw daemon: saving {}: {e:#}", path.display());
         }
+    }
+
+    /// The workspace a pane or a viewer belongs to.
+    fn stream_of(&self, id: PaneId) -> Result<String> {
+        if let Ok(p) = self.pane(id) {
+            return Ok(p.stream.clone());
+        }
+        lock(&self.workspaces)
+            .iter()
+            .find(|(_, ws)| ws.tree.find(id).is_some())
+            .map(|(s, _)| s.clone())
+            .with_context(|| format!("no pane {id}"))
     }
 
     fn pane(&self, id: PaneId) -> Result<Arc<Pane>> {

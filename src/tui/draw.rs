@@ -23,23 +23,6 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         status(f, app);
     }
 
-    let view_area = trect(app.view_area());
-    if let Some(view) = &mut app.view {
-        match view {
-            super::View::Diff(d) => d.draw(f, view_area),
-            super::View::Md(m) => m.draw(f, view_area),
-        }
-        if let Some(m) = &app.modal {
-            m.draw(f);
-        }
-        if let Some(finder) = &app.finder {
-            finder.draw(f);
-        }
-        if app.which {
-            which(f, app);
-        }
-        return;
-    }
     let rects = app.pane_rects();
     if rects.is_empty() {
         empty(f, app);
@@ -47,7 +30,17 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     for (id, rect) in rects {
         let r = trect(rect);
         let focused = app.focus == Some(id);
-        pane(f, app, r, app.pane_title(id), app.panes.get(&id), focused);
+        match app.views.get_mut(&id) {
+            Some(super::View::Diff(d)) => {
+                d.focused = focused;
+                d.draw(f, r);
+            }
+            Some(super::View::Md(m)) => {
+                m.focused = focused;
+                m.draw(f, r);
+            }
+            None => pane(f, app, r, app.pane_title(id), app.panes.get(&id), focused),
+        }
     }
     if let Some(m) = &app.modal {
         m.draw(f);
@@ -220,7 +213,7 @@ fn status(f: &mut Frame, app: &App) {
     } else if app.leading() {
         (format!(" {leader} "), p().yellow)
     } else {
-        match &app.view {
+        match app.focused_view() {
             Some(super::View::Diff(_)) => (" DIFF ".to_string(), p().blue),
             Some(super::View::Md(_)) => (" MD ".to_string(), p().blue),
             None => (" TERM ".to_string(), p().green),
@@ -254,7 +247,7 @@ fn status(f: &mut Frame, app: &App) {
     } else if app.leading() {
         spans.extend([txt("one key ·"), key("esc"), txt("cancels")]);
     } else {
-        match &app.view {
+        match app.focused_view() {
             Some(super::View::Diff(_)) => spans.extend([
                 key("j k"),
                 txt("file ·"),

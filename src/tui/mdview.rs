@@ -8,7 +8,6 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use super::diffview::DiffView;
 use crate::theme::p;
 use crate::view::md::{self, Doc};
 
@@ -24,12 +23,12 @@ pub struct MdView {
     width: u16,
     scroll: usize,
     height: usize,
-    /// The diff this was opened from, to go back to.
-    pub back: Option<Box<DiffView>>,
+    /// Whether its pane has the focus, for the border.
+    pub focused: bool,
 }
 
 impl MdView {
-    pub fn new(title: String, src: String, back: Option<Box<DiffView>>) -> Self {
+    pub fn new(title: String, src: String) -> Self {
         Self {
             title,
             doc: md::render(&src, 80),
@@ -37,7 +36,7 @@ impl MdView {
             width: 80,
             scroll: 0,
             height: 20,
-            back,
+            focused: true,
         }
     }
 
@@ -101,12 +100,16 @@ impl MdView {
         } else {
             (self.scroll + self.height) * 100 / self.doc.lines.len()
         };
+        let accent = if self.focused { p().blue } else { p().line };
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(p().blue))
+            .border_type(ratatui::widgets::BorderType::Rounded)
+            .border_style(Style::default().fg(accent))
             .title(Span::styled(
                 format!(" md · {} ", self.title),
-                Style::default().fg(p().blue).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(if self.focused { p().blue } else { p().fg })
+                    .add_modifier(Modifier::BOLD),
             ))
             .title(
                 Line::from(Span::styled(

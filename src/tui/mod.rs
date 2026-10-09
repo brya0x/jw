@@ -73,6 +73,9 @@ enum Job {
         title: String,
         dir: String,
         files: Vec<crate::diff::File>,
+        /// The viewer pane to fill, when it is already in the tree (a
+        /// client attaching to a workspace that shows one).
+        into: Option<PaneId>,
     },
     /// `X` on a worktree whose PR isn't merged: the rm checks, and why.
     RmReady {
@@ -88,7 +91,7 @@ enum Job {
     Failed(String),
 }
 
-/// What the stage shows instead of the panes.
+/// What a viewer pane shows (REQ-57).
 pub enum View {
     Diff(diffview::DiffView),
     Md(mdview::MdView),
@@ -161,8 +164,11 @@ pub struct App {
     /// Each project's main checkout, found from one of its worktrees
     /// (RISK-17: one `git` per project, once).
     roots: BTreeMap<String, String>,
-    /// A viewer drawn in place of the stream's panes (diff, Markdown).
-    pub view: Option<View>,
+    /// The viewer panes' contents, by pane id.
+    pub views: BTreeMap<PaneId, View>,
+    /// A viewer waiting for its pane: it fills the next viewer leaf the
+    /// tree brings.
+    pending_view: Option<View>,
     /// The action running in the background, for the status bar.
     pub busy: Option<String>,
     /// For worker threads to report back.
@@ -318,7 +324,8 @@ impl App {
             modal: None,
             finder: None,
             roots: BTreeMap::new(),
-            view: None,
+            views: BTreeMap::new(),
+            pending_view: None,
             busy: None,
             events,
             exit_reason: None,
@@ -462,6 +469,11 @@ impl App {
         });
     }
 
+    /// The viewer in the focused pane, if it is one.
+    pub fn focused_view(&self) -> Option<&View> {
+        self.focus.and_then(|f| self.views.get(&f))
+    }
+
     /// Whether the leader was pressed and the next key is an action.
     pub fn leading(&self) -> bool {
         self.leader_at.is_some()
@@ -507,8 +519,10 @@ impl App {
                 }
             }
             Msg::Theme => {
-                if let Some(View::Md(m)) = &mut self.view {
-                    m.restyle();
+                for v in self.views.values_mut() {
+                    if let View::Md(m) = v {
+                        m.restyle();
+                    }
                 }
             }
             Msg::Job(j) => self.on_job(*j),
@@ -605,26 +619,22 @@ impl App {
             self.leader_at = Some(Instant::now());
             return;
         }
-        match &mut self.view {
-            Some(View::Diff(d)) => match d.key(k) {
-                diffview::Action::None => {}
-                diffview::Action::Close => self.view = None,
-                diffview::Action::Read(path) => {
-                    if let Some(View::Diff(d)) = self.view.take() {
-                        let dir = d.dir.clone();
-                        self.read_file(&dir, &path, Some(Box::new(d)));
-                    }
-                }
-            },
+        let Some(f) = self.focus else { return };
+        let action = match self.views.get_mut(&f) {
+            Some(View::Diff(d)) => d.key(k),
             Some(View::Md(m)) => {
-                if m.key(k)
-                    && let Some(View::Md(m)) = self.view.take()
-                {
-                    // Back to the diff it was opened from, if any.
-                    self.view = m.back.map(|d| View::Diff(*d));
+                if m.key(k) {
+                    diffview::Action::Close
+                } else {
+                    diffview::Action::None
                 }
             }
-            None => self.send_key(&k),
+            None => return self.send_key(&k),
+        };
+        match action {
+            diffview::Action::None => {}
+            diffview::Action::Close => self.send(ClientMsg::Kill { pane: f }),
+            diffview::Action::Open(path) => self.open_file(&path),
         }
     }
 
@@ -725,6 +735,8 @@ impl App {
         };
         self.send(ClientMsg::Detach);
         self.panes.clear();
+        self.views.clear();
+        self.pending_view = None;
         self.tree = None;
         self.focus = None;
         let already = self.is_open(&entry.id);
@@ -794,24 +806,73 @@ impl App {
                 .or_else(|| ids.first().copied());
         }
         self.panes.retain(|id, _| ids.contains(id));
+        self.views.retain(|id, _| ids.contains(id));
+        // Viewer leaves: the one just asked for gets its content; any other
+        // without content (a client attaching) is filled from its role.
+        let empty: Vec<(PaneId, String)> = tree
+            .leaves()
+            .into_iter()
+            .filter(|l| crate::daemon::is_view(&l.role) && !self.views.contains_key(&l.id))
+            .map(|l| (l.id, l.role.clone()))
+            .collect();
+        for (id, role) in empty {
+            if let Some(v) = self.pending_view.take() {
+                self.views.insert(id, v);
+                self.focus = Some(id);
+            } else if role == "view:diff" {
+                self.load_diff(Some(id));
+            } else if let Some(file) = role.strip_prefix("view:md:")
+                && let Some(s) = &self.active
+                && let Ok(src) =
+                    std::fs::read_to_string(std::path::Path::new(&s.entry.path).join(file))
+            {
+                self.views
+                    .insert(id, View::Md(mdview::MdView::new(file.to_string(), src)));
+            }
+        }
         self.full &= ids.len() > 1;
         self.tree = Some(tree);
         self.fit();
     }
 
-    /// Where the panes go on screen: the area right of the sidebar and below
-    /// the header, or the whole terminal in full mode.
-    /// Where a viewer goes: right of the sidebar, whatever the panes do.
-    pub fn view_area(&self) -> Rect {
-        let (w, h) = self.size;
-        Rect {
-            x: SIDEBAR,
-            y: 1,
-            w: w.saturating_sub(SIDEBAR),
-            h: h.saturating_sub(2),
+    /// Shows a viewer: in the workspace's viewer pane of that kind when it
+    /// has one, else in a new pane along the right edge (REQ-57).
+    fn show_view(&mut self, role: String, view: View) {
+        let kind = |r: &str| r.split(':').take(2).collect::<Vec<_>>().join(":");
+        let existing = self.tree.as_ref().and_then(|t| {
+            t.leaves()
+                .into_iter()
+                .find(|l| kind(&l.role) == kind(&role))
+                .map(|l| l.id)
+        });
+        if let Some(id) = existing {
+            self.views.insert(id, view);
+            self.focus = Some(id);
+            self.full = false;
+            self.fit();
+            return;
         }
+        let Some(stream) = self.current().map(|e| e.id.clone()) else {
+            return;
+        };
+        self.pending_view = Some(view);
+        self.full = false;
+        self.send(ClientMsg::Dock {
+            stream,
+            share: 0.36,
+            new: NewPane {
+                role,
+                cmd: None,
+                cwd: std::path::PathBuf::new(),
+                env: BTreeMap::new(),
+                cols: 1,
+                rows: 1,
+            },
+        });
     }
 
+    /// Where the panes go: right of the sidebar and below the header, or
+    /// the whole terminal in full mode.
     pub fn stage(&self) -> Rect {
         let (w, h) = self.size;
         if self.full {
@@ -977,7 +1038,16 @@ impl App {
         let (Some(entry), Some(f)) = (self.current().cloned(), self.focus) else {
             return;
         };
-        let count = self.tree.as_ref().map_or(0, |t| t.leaves().len());
+        if self.views.contains_key(&f) {
+            self.send(ClientMsg::Kill { pane: f });
+            return;
+        }
+        let count = self.tree.as_ref().map_or(0, |t| {
+            t.leaves()
+                .into_iter()
+                .filter(|l| !crate::daemon::is_view(&l.role))
+                .count()
+        });
         if count <= 1 {
             let running = self.running(&entry.id);
             self.modal = Some(Modal::Close {
@@ -1205,7 +1275,7 @@ impl App {
             return;
         };
         if file.ends_with(".md") {
-            self.read_file(&stream.entry.path, file, None);
+            self.read_file(&stream.entry.path, file);
             return;
         }
         let editor = self.tree.as_ref().and_then(|t| {
@@ -1365,32 +1435,36 @@ impl App {
         });
     }
 
-    /// Opens `file` (relative to `dir`) in the reader; `back` is the diff
-    /// to return to.
-    fn read_file(&mut self, dir: &str, file: &str, back: Option<Box<diffview::DiffView>>) {
+    /// Opens `file` (relative to `dir`) in the workspace's reader pane.
+    fn read_file(&mut self, dir: &str, file: &str) {
         match std::fs::read_to_string(std::path::Path::new(dir).join(file)) {
-            Ok(src) => {
-                self.view = Some(View::Md(mdview::MdView::new(file.to_string(), src, back)));
-            }
-            Err(e) => {
-                self.fail(format!("{file}: {e}"));
-                self.view = back.map(|d| View::Diff(*d));
-            }
+            Ok(src) => self.show_view(
+                format!("view:md:{file}"),
+                View::Md(mdview::MdView::new(file.to_string(), src)),
+            ),
+            Err(e) => self.fail(format!("{file}: {e}")),
         }
     }
 
-    /// `d`: the workspace's changes against its base, in the diff viewer.
+    /// `d`: the workspace's changes against its base, in a pane on the right.
     fn open_diff(&mut self) {
-        let Some(entry) = self.current_worktree("diff") else {
+        if self.current_worktree("diff").is_some() {
+            self.load_diff(None);
+        }
+    }
+
+    fn load_diff(&mut self, into: Option<PaneId>) {
+        let Some(entry) = self.current().cloned() else {
             return;
         };
         self.background(format!("diffing {}", entry.name), move || {
             let stream = Stream::resolve(&entry)?;
             let files = crate::diff::load(std::path::Path::new(&entry.path), &stream.base)?;
             Ok(Job::Diff {
-                title: entry.name.clone(),
+                title: format!("{} vs {}", entry.name, stream.base),
                 dir: entry.path,
                 files,
+                into,
             })
         });
     }
@@ -1523,8 +1597,19 @@ impl App {
             }
             Job::Failed(e) => self.fail(e),
             Job::Said(msg) => self.done(msg),
-            Job::Diff { title, dir, files } => {
-                self.view = Some(View::Diff(diffview::DiffView::new(title, dir, files)));
+            Job::Diff {
+                title,
+                dir,
+                files,
+                into,
+            } => {
+                let view = View::Diff(diffview::DiffView::new(title, dir, files));
+                match into {
+                    Some(id) => {
+                        self.views.insert(id, view);
+                    }
+                    None => self.show_view("view:diff".into(), view),
+                }
             }
             Job::DoneReady {
                 entry,

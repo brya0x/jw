@@ -15,7 +15,7 @@ pub type PaneId = u64;
 
 /// Bumped whenever a message changes shape: a client and a daemon from
 /// different builds refuse each other instead of misreading (RISK-14).
-pub const PROTOCOL: u32 = 2;
+pub const PROTOCOL: u32 = 3;
 
 /// A pane to start. `cmd` runs through `sh -c`; `None` starts `$SHELL`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -90,6 +90,13 @@ pub enum ClientMsg {
     Split {
         pane: PaneId,
         dir: Dir,
+        new: NewPane,
+    },
+    /// Put a pane along the right edge of the whole workspace, taking
+    /// `share` of its width (a viewer, REQ-57).
+    Dock {
+        stream: String,
+        share: f32,
         new: NewPane,
     },
     /// Kill the pane's process (if still running) and forget the pane; its

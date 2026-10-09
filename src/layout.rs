@@ -290,6 +290,17 @@ impl<L: Keyed> Tree<L> {
         }
     }
 
+    /// The whole tree on the left and `leaf` on the right, with `share` of
+    /// the width.
+    pub fn dock(self, leaf: L, share: f32) -> Self {
+        Self::Split {
+            dir: Dir::Right,
+            ratio: (1.0 - share).clamp(0.1, 0.9),
+            a: Box::new(self),
+            b: Box::new(Self::Leaf(leaf)),
+        }
+    }
+
     /// Takes the leaf `id` out; its sibling gets the space. `None` for the
     /// tree when that was the last leaf.
     pub fn remove(self, id: u64) -> (Option<Self>, Option<L>) {
