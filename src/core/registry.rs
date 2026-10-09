@@ -50,6 +50,9 @@ pub struct Entry {
     /// The project's main checkout, so grouping the sidebar runs no `git`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub root: String,
+    /// The id of the claude conversation in its agent pane, resumed by id.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub agent: String,
     /// The jw session the worktree belongs to; empty is `main`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub session: String,

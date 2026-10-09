@@ -134,6 +134,11 @@ pub enum ClientMsg {
         pane: PaneId,
         role: String,
     },
+    /// What an agent in a pane is doing, from its hooks (`jw hook`).
+    Agent {
+        pane: PaneId,
+        state: AgentState,
+    },
     /// Which panes exist, for every stream: answered with `Panes`.
     List,
     /// Type `text` into the stream's agent pane once it is quiet, then
@@ -163,6 +168,36 @@ pub struct PaneInfo {
     /// agent waiting for an answer.
     #[serde(default)]
     pub bell: bool,
+    /// What its agent reported last, when it runs one with jw's hooks.
+    #[serde(default)]
+    pub agent: Option<AgentState>,
+}
+
+/// An agent's state as its hooks report it (REQ-73).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentState {
+    /// It got a prompt or runs a tool.
+    Working,
+    /// It asks for something: a permission, an answer.
+    Waiting,
+    /// Its turn ended.
+    Idle,
+}
+
+impl std::str::FromStr for AgentState {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s {
+            "working" => Ok(Self::Working),
+            "waiting" => Ok(Self::Waiting),
+            "idle" => Ok(Self::Idle),
+            _ => Err(format!(
+                "unknown agent state {s:?}: working, waiting or idle"
+            )),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -15,6 +15,7 @@ fn main() -> ExitCode {
         },
         Some("prompt") => report("prompt", jw::cli::prompt(&args[1..])),
         Some("new") => report("new", jw::cli::new(&args[1..])),
+        Some("hook") => report("hook", jw::cli::hook(&args[1..])),
         Some("--version" | "-V") => {
             println!("jw {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS

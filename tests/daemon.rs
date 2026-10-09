@@ -246,6 +246,7 @@ fn list_reports_every_pane() {
         fg: Some("cat".into()),
         busy: false,
         bell: false,
+        agent: None,
     };
     // Whether they printed in the last 2 s depends on timing.
     let panes: Vec<PaneInfo> = panes
@@ -902,4 +903,23 @@ fn a_slow_client_is_resynced_and_holds_nobody_up() {
         }
     }
     assert!(got < 12_000_000, "the slow client got all {got} bytes");
+}
+
+/// REQ-73: `jw hook` in a pane tells the daemon what its agent does.
+#[test]
+fn an_agent_hook_reports_its_state() {
+    let d = Daemon::start();
+    let mut c = d.client();
+    let cmd = format!("{EXE} hook waiting </dev/null; echo hooked; cat");
+    let pane = spawn(&mut c, "h", &cmd, 80, 24);
+    let mut screen = vt100::Parser::new(24, 80, 0);
+    read_until(&mut c, pane, &mut screen, "hooked");
+    c.send(&ClientMsg::List).unwrap();
+    let panes = loop {
+        if let DaemonMsg::Panes { panes } = recv(&mut c) {
+            break panes;
+        }
+    };
+    let p = panes.iter().find(|p| p.pane == pane).unwrap();
+    assert_eq!(p.agent, Some(jw::proto::AgentState::Waiting));
 }

@@ -1,6 +1,7 @@
-//! The two subcommands kept for agents running inside a stream (OPEN-3):
-//! `jw prompt <stream> <text>` and `jw new <name> [--task <text>]`. They
-//! talk to the daemon like the TUI does; no `--json`, no exit code 3.
+//! The subcommands for agents running inside a stream (OPEN-3): `jw prompt
+//! <stream> <text>`, `jw new <name> [--task <text>]`, and `jw hook <state>`
+//! for claude's hooks. They talk to the daemon like the TUI does; no
+//! `--json`, no exit code 3.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -11,7 +12,7 @@ use crate::actions::{self, NewOptions, Project};
 use crate::client::Client;
 use crate::core::registry::{self, Entry, Registry};
 use crate::layout::Rect;
-use crate::proto::{ClientMsg, DaemonMsg, socket_path};
+use crate::proto::{AgentState, ClientMsg, DaemonMsg, socket_path};
 use crate::stream::Stream;
 
 /// Panes started without a TUI get this size; the TUI resizes them when it
@@ -35,6 +36,32 @@ pub fn prompt(args: &[String]) -> Result<()> {
         .with_context(|| format!("{} is not open: no jw daemon is running", entry.name))?;
     send_prompt(&mut c, &entry, text.trim())?;
     println!("sent to {}'s agent", entry.name);
+    Ok(())
+}
+
+/// `jw hook <state>`: what claude's hooks run in a jw pane (REQ-73). It
+/// tells the daemon the agent's state and stays quiet: outside jw, or with
+/// no daemon, it does nothing, so it never gets in the agent's way.
+pub fn hook(args: &[String]) -> Result<()> {
+    let state: AgentState = args
+        .first()
+        .context("usage: jw hook working|waiting|idle")?
+        .parse()
+        .map_err(anyhow::Error::msg)?;
+    // claude writes the event as JSON on stdin; take it so it never blocks.
+    // SAFETY: isatty only looks at the descriptor.
+    if unsafe { libc::isatty(0) } == 0 {
+        let _ = std::io::copy(&mut std::io::stdin(), &mut std::io::sink());
+    }
+    let Some(pane) = std::env::var("JW_PANE_ID")
+        .ok()
+        .and_then(|p| p.parse().ok())
+    else {
+        return Ok(());
+    };
+    if let Ok(mut c) = Client::connect(&socket_path()) {
+        let _ = c.send(&ClientMsg::Agent { pane, state });
+    }
     Ok(())
 }
 

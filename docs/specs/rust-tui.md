@@ -146,7 +146,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 | Themes | `one-dark`, `one-light` built in; `~/.config/jw/themes/<name>.json` = `{name, dark, colors{bg panel line fg dim sel blue green yellow red magenta cyan, add_bg? del_bg? add_word? del_word?}}`; missing diff colours are mixed; a bad file keeps the last good palette |
 | `.md` reuse | `ClientMsg::Role{pane, role}` retargets the workspace's `view:md:*` pane |
 | Scrollback | 2 MiB raw ring per pane in the daemon, sent in `Snapshot`, saved to `sessions/<name>/scrollback/<pane>.bin`, replayed on restore under `── restored <time> ──` |
-| Agent state | `JW_PANE`, `JW_SESSION` in panes; claude starts with `--session-id <uuid>` and `--settings` hooks running `jw hook <event>` (`UserPromptSubmit` working, `Notification` waiting, `Stop` idle) → `ClientMsg::Agent` → `PaneInfo.agent`; restore runs `claude --resume <uuid>` |
+| Agent state | `JW_PANE`, `JW_SESSION` in panes; claude starts with `--session-id <uuid>` and `--settings` hooks running `jw hook <event>` (`UserPromptSubmit` and `PreToolUse` working, `Notification` waiting, `Stop` idle) → `ClientMsg::Agent` → `PaneInfo.agent`; restore runs `claude --resume <uuid>` |
 | nvim | `--listen <state>/nvim/<pane>.sock`; files open with `nvim --server <sock> --remote <path>`, keys as fallback |
 | Frames | u32 length + u8 kind: 0 JSON, or 1 = u32 head length + JSON head + the message's bytes raw (Output, Snapshot, Input); per-client queue bounded at 8 MiB, then dropped and resynced by `Snapshot` under 1 MiB. `PROTOCOL = 5` |
 
@@ -203,7 +203,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 - RISK-17 **Mapping worktrees to their project** with `Repo::open` runs one `git` per worktree on every reload. Cache it by path; it changes only when worktrees are created or removed.
 - RISK-18 **The `?` mark depends on the agent ringing the bell.** Claude Code does so only when its notifications use the terminal bell. Without that, `?` never shows (the same worst case as RISK-7).
 - RISK-19 **`gh` polling** costs a network call per worktree a minute. Only open worktrees are polled, and only while jw runs.
-- RISK-20 **`claude --settings` hooks** may replace the user's hooks instead of merging. Then they go to `~/.claude/settings.json`, guarded by `[ -n "$JW_PANE" ]`. S5 checks first.
+- RISK-20 Resolved: `claude --settings` hooks merge with the user's and project's hooks (checked with claude 2.1.296). A claude started by hand in a shell pane has no jw hooks and falls back to REQ-51's guess.
 - RISK-21 **A replayed ring at a new width** wraps differently; fine for scrollback.
 - RISK-22 **A folder open in two sessions** is two workspaces sharing nothing. A worktree belongs to the session that made it.
 - RISK-23 **`workspaces.json` drifts from Go's registry** after the seed; `jw import` if it is ever needed.

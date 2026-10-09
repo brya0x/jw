@@ -24,6 +24,9 @@ pub struct Folder {
     #[serde(default)]
     pub opened: bool,
     pub created: String,
+    /// The id of the claude conversation in its agent pane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -76,6 +79,7 @@ impl Folders {
             dir: dir.to_string(),
             opened: false,
             created: registry::now_rfc3339(),
+            agent: None,
         });
         true
     }

@@ -28,7 +28,9 @@ use crate::client::Client;
 use crate::connectors::PullRequests;
 use crate::core::registry::{self, Entry, Registry};
 use crate::layout::{Dir, Rect, Tree};
-use crate::proto::{ClientMsg, DaemonMsg, NewPane, PROTOCOL, PaneId, PaneInfo, PaneLeaf};
+use crate::proto::{
+    AgentState, ClientMsg, DaemonMsg, NewPane, PROTOCOL, PaneId, PaneInfo, PaneLeaf,
+};
 use crate::stream::Stream;
 
 use modal::{Modal, Outcome};
@@ -411,7 +413,11 @@ impl App {
         let mut groups: Vec<(Entry, Vec<Entry>)> = folders
             .folders
             .iter()
-            .map(|f| (crate::folders::entry(&f.dir, f.opened), Vec::new()))
+            .map(|f| {
+                let mut e = crate::folders::entry(&f.dir, f.opened);
+                e.agent = f.agent.clone().unwrap_or_default();
+                (e, Vec::new())
+            })
             .collect();
         let mut by_project: BTreeMap<String, Vec<Entry>> = BTreeMap::new();
         for e in reg.entries {
@@ -500,11 +506,15 @@ impl App {
     /// agent rang, `⚡` a dev server runs, `⚑` its PR is merged (REQ-51).
     pub fn marks(&self, id: &str) -> Vec<char> {
         let panes = || self.daemon_panes.iter().filter(|p| p.stream == id);
+        // The agent's hooks say what it does (REQ-73); without them, output
+        // and the bell are the guess (REQ-51).
+        let guess = |p: &PaneInfo| p.agent.is_none() && p.role == "agent";
         let mut out = Vec::new();
-        if panes().any(|p| p.role == "agent" && p.busy) {
+        if panes().any(|p| p.agent == Some(AgentState::Working) || (guess(p) && p.busy)) {
             out.push('✻');
         }
-        if panes().any(|p| p.role == "agent" && p.bell && !p.busy) {
+        if panes().any(|p| p.agent == Some(AgentState::Waiting) || (guess(p) && p.bell && !p.busy))
+        {
             out.push('?');
         }
         if panes().any(|p| p.role.starts_with("dev:") && p.exited.is_none()) {

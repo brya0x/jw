@@ -32,7 +32,8 @@ use ring::Ring;
 
 use crate::layout::{Dir, Tree};
 use crate::proto::{
-    ClientMsg, DaemonMsg, NewPane, PROTOCOL, PaneId, PaneInfo, PaneLeaf, read_frame, write_frame,
+    AgentState, ClientMsg, DaemonMsg, NewPane, PROTOCOL, PaneId, PaneInfo, PaneLeaf, read_frame,
+    write_frame,
 };
 
 /// How often the panes' output is written out, between tree changes.
@@ -174,6 +175,8 @@ struct PaneState {
     bell: bool,
     /// Its last output, for the scrollback of clients and restarts.
     ring: Ring,
+    /// What its agent's hooks reported last.
+    agent: Option<AgentState>,
 }
 
 /// Catches what a pane's program says beyond its screen: the window title,
@@ -378,9 +381,10 @@ impl Daemon {
                 let panes = lock(&self.panes)
                     .iter()
                     .map(|(id, p)| {
-                        let (exited, busy, bell) = {
+                        let (exited, busy, bell, agent) = {
                             let st = lock(&p.state);
-                            (st.exited, st.last_output.elapsed() < BUSY, st.bell)
+                            let agent = st.agent.filter(|_| st.exited.is_none());
+                            (st.exited, st.last_output.elapsed() < BUSY, st.bell, agent)
                         };
                         let fg = match exited {
                             None => lock(&p.io)
@@ -397,10 +401,14 @@ impl Daemon {
                             fg,
                             busy: busy && exited.is_none(),
                             bell,
+                            agent,
                         }
                     })
                     .collect();
                 let _ = tx.send(DaemonMsg::Panes { panes });
+            }
+            ClientMsg::Agent { pane, state } => {
+                lock(&self.pane(pane)?.state).agent = Some(state);
             }
             ClientMsg::Input { pane, bytes } => {
                 let pane = self.pane(pane)?;
@@ -1014,6 +1022,7 @@ impl Daemon {
                 title: None,
                 bell: false,
                 ring: Ring::default(),
+                agent: None,
             }),
         });
         if let Some(mut bytes) = history {
