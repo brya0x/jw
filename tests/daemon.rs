@@ -223,7 +223,14 @@ fn list_reports_every_pane() {
         role: "shell".into(),
         exited: None,
         fg: Some("cat".into()),
+        busy: false,
+        bell: false,
     };
+    // Whether they printed in the last 2 s depends on timing.
+    let panes: Vec<PaneInfo> = panes
+        .into_iter()
+        .map(|p| PaneInfo { busy: false, ..p })
+        .collect();
     assert_eq!(panes, [info(a, "a"), info(b, "b")]);
 }
 
@@ -613,4 +620,43 @@ fn a_viewer_is_a_leaf_without_a_process() {
     );
     c.send(&ClientMsg::Kill { pane: diff }).unwrap();
     assert_eq!(ids(&next_tree(&mut c)), [shell]);
+}
+
+/// REQ-51: List says which panes printed lately and which rang the bell;
+/// typing into a pane clears its bell.
+#[test]
+fn list_reports_busy_and_the_bell() {
+    let d = Daemon::start();
+    let mut c = d.client();
+    let pane = spawn(&mut c, "b", "printf 'ready\\a'; cat", 80, 24);
+    let mut screen = vt100::Parser::new(24, 80, 0);
+    read_until(&mut c, pane, &mut screen, "ready");
+    let list = |c: &mut Client| {
+        c.send(&ClientMsg::List).unwrap();
+        let panes = loop {
+            if let DaemonMsg::Panes { panes } = recv(c) {
+                break panes;
+            }
+        };
+        panes
+            .into_iter()
+            .find(|p| p.pane == pane)
+            .map(|p| (p.busy, p.bell))
+            .unwrap()
+    };
+    let deadline = Instant::now() + TIMEOUT;
+    let mut quiet = list(&mut c);
+    assert!(quiet.1, "the bell rang");
+    while quiet.0 {
+        assert!(Instant::now() < deadline, "never went quiet");
+        thread::sleep(Duration::from_millis(300));
+        quiet = list(&mut c);
+    }
+    assert_eq!(quiet, (false, true));
+    c.send(&ClientMsg::Input {
+        pane,
+        bytes: b"x".to_vec(),
+    })
+    .unwrap();
+    assert!(!list(&mut c).1, "input clears the bell");
 }

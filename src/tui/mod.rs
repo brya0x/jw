@@ -49,8 +49,11 @@ enum Msg {
     Job(Box<Job>),
     /// The system switched between light and dark.
     Theme,
-    /// Twice a second: old status messages go.
+    /// Twice a second: old status messages go, the panes' state and the
+    /// PRs are asked for again.
     Tick,
+    /// The pull requests of the worktrees, by workspace id.
+    Prs(Vec<(String, Option<crate::connectors::Pr>)>),
 }
 
 // One job at a time crosses the channel, boxed; its size doesn't matter.
@@ -164,6 +167,9 @@ pub struct App {
     /// Each project's main checkout, found from one of its worktrees
     /// (RISK-17: one `git` per project, once).
     roots: BTreeMap<String, String>,
+    /// Each worktree's pull request, from the last look (REQ-51).
+    pub prs: BTreeMap<String, crate::connectors::Pr>,
+    ticks: u64,
     /// The viewer panes' contents, by pane id.
     pub views: BTreeMap<PaneId, View>,
     /// A viewer waiting for its pane: it fills the next viewer leaf the
@@ -324,6 +330,8 @@ impl App {
             modal: None,
             finder: None,
             roots: BTreeMap::new(),
+            prs: BTreeMap::new(),
+            ticks: 0,
             views: BTreeMap::new(),
             pending_view: None,
             busy: None,
@@ -435,6 +443,59 @@ impl App {
         Ok(())
     }
 
+    /// Looks up the PR of every worktree that is open, off the main thread
+    /// and without a word in the status bar (RISK-19).
+    fn poll_prs(&mut self) {
+        let worktrees: Vec<(String, String, String)> = self
+            .rows
+            .iter()
+            .filter(|r| r.child && self.is_open(&r.entry.id))
+            .map(|r| {
+                (
+                    r.entry.id.clone(),
+                    r.entry.path.clone(),
+                    r.entry.branch.clone(),
+                )
+            })
+            .collect();
+        if worktrees.is_empty() {
+            return;
+        }
+        let tx = self.events.clone();
+        thread::spawn(move || {
+            use crate::connectors::PullRequests;
+            let gh = crate::connectors::github::Client::default();
+            let prs = worktrees
+                .into_iter()
+                .filter_map(|(id, path, branch)| {
+                    let pr = gh.for_branch(std::path::Path::new(&path), &branch).ok()?;
+                    Some((id, pr))
+                })
+                .collect();
+            let _ = tx.send(Msg::Prs(prs));
+        });
+    }
+
+    /// The marks a workspace's row carries: `✻` its agent prints, `?` its
+    /// agent rang, `⚡` a dev server runs, `⚑` its PR is merged (REQ-51).
+    pub fn marks(&self, id: &str) -> Vec<char> {
+        let panes = || self.daemon_panes.iter().filter(|p| p.stream == id);
+        let mut out = Vec::new();
+        if panes().any(|p| p.role == "agent" && p.busy) {
+            out.push('✻');
+        }
+        if panes().any(|p| p.role == "agent" && p.bell && !p.busy) {
+            out.push('?');
+        }
+        if panes().any(|p| p.role.starts_with("dev:") && p.exited.is_none()) {
+            out.push('⚡');
+        }
+        if self.prs.get(id).is_some_and(|pr| pr.state == "MERGED") {
+            out.push('⚑');
+        }
+        out
+    }
+
     /// The main checkout of `project`, found through its worktrees.
     fn root_of(&mut self, project: &str, worktrees: &[Entry]) -> Option<String> {
         if let Some(r) = self.roots.get(project) {
@@ -516,6 +577,26 @@ impl App {
                     .is_some_and(|s| s.at.elapsed() > STATUS_FOR)
                 {
                     self.status = None;
+                }
+                // Every 2 s the panes' state (✻ ? ⚡), every minute the PRs.
+                if self.ticks.is_multiple_of(4) {
+                    self.send(ClientMsg::List);
+                }
+                if self.ticks.is_multiple_of(120) {
+                    self.poll_prs();
+                }
+                self.ticks += 1;
+            }
+            Msg::Prs(prs) => {
+                for (id, pr) in prs {
+                    match pr {
+                        Some(pr) => {
+                            self.prs.insert(id, pr);
+                        }
+                        None => {
+                            self.prs.remove(&id);
+                        }
+                    }
                 }
             }
             Msg::Theme => {

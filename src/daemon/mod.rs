@@ -152,19 +152,37 @@ struct PaneState {
     last_output: Instant,
     /// The last window title its program set (OSC 0/2).
     title: Option<String>,
+    /// It rang since its last input.
+    bell: bool,
 }
 
-/// Catches the window titles a pane's program sets.
+/// Catches what a pane's program says beyond its screen: the window title,
+/// and the bell or a desktop notification (OSC 9 / 777), which agents use
+/// when they wait for an answer.
 #[derive(Default)]
 struct Titles {
     new: Option<String>,
+    rang: bool,
 }
 
 impl vt100::Callbacks for Titles {
     fn set_window_title(&mut self, _: &mut vt100::Screen, title: &[u8]) {
         self.new = Some(String::from_utf8_lossy(title).into_owned());
     }
+
+    fn audible_bell(&mut self, _: &mut vt100::Screen) {
+        self.rang = true;
+    }
+
+    fn unhandled_osc(&mut self, _: &mut vt100::Screen, params: &[&[u8]]) {
+        if matches!(params.first(), Some(&b"9") | Some(&b"777")) {
+            self.rang = true;
+        }
+    }
 }
+
+/// How recent output must be for a pane to count as busy.
+const BUSY: Duration = Duration::from_secs(2);
 
 /// One client's interest in one pane or workspace.
 struct Sub {
@@ -298,7 +316,10 @@ impl Daemon {
                 let panes = lock(&self.panes)
                     .iter()
                     .map(|(id, p)| {
-                        let exited = lock(&p.state).exited;
+                        let (exited, busy, bell) = {
+                            let st = lock(&p.state);
+                            (st.exited, st.last_output.elapsed() < BUSY, st.bell)
+                        };
                         let fg = match exited {
                             None => lock(&p.io)
                                 .master
@@ -312,6 +333,8 @@ impl Daemon {
                             role: p.role.clone(),
                             exited,
                             fg,
+                            busy: busy && exited.is_none(),
+                            bell,
                         }
                     })
                     .collect();
@@ -319,6 +342,7 @@ impl Daemon {
             }
             ClientMsg::Input { pane, bytes } => {
                 let pane = self.pane(pane)?;
+                lock(&pane.state).bell = false;
                 let mut io = lock(&pane.io);
                 io.writer.write_all(&bytes)?;
                 io.writer.flush()?;
@@ -770,6 +794,7 @@ impl Daemon {
                 exited: None,
                 last_output: Instant::now(),
                 title: None,
+                bell: false,
             }),
         });
         if let Some((client, tx)) = sub {
@@ -790,6 +815,9 @@ impl Daemon {
                             pane: id,
                             bytes: buf[..n].to_vec(),
                         });
+                        if std::mem::take(&mut st.parser.callbacks_mut().rang) {
+                            st.bell = true;
+                        }
                         if let Some(title) = st.parser.callbacks_mut().new.take() {
                             st.title = Some(title.clone());
                             st.broadcast(&DaemonMsg::Title { pane: id, title });

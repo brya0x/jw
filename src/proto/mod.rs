@@ -140,6 +140,13 @@ pub struct PaneInfo {
     /// `zsh`), when it still runs: what closing the pane would kill.
     #[serde(default)]
     pub fg: Option<String>,
+    /// It printed in the last 2 s: an agent at work (REQ-51).
+    #[serde(default)]
+    pub busy: bool,
+    /// It rang the bell (or sent a notification) since its last input: an
+    /// agent waiting for an answer.
+    #[serde(default)]
+    pub bell: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

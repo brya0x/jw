@@ -80,7 +80,7 @@ fn sidebar(f: &mut Frame, app: &App) {
         ]),
         Line::default(),
     ];
-    let rows = inner.height.saturating_sub(3) as usize;
+    let rows = inner.height.saturating_sub(4) as usize;
     let current = app
         .rows
         .iter()
@@ -109,7 +109,7 @@ fn sidebar(f: &mut Frame, app: &App) {
             Style::default().fg(if open { p().green } else { p().dim }),
         ));
         let used = 3 + if row.child { 3 } else { 0 } + 2;
-        let room = w.saturating_sub(used + 1);
+        let room = w.saturating_sub(used + 1 + app.marks(&e.id).len() * 2);
         let label: String = if e.name.chars().count() > room {
             e.name
                 .chars()
@@ -119,7 +119,25 @@ fn sidebar(f: &mut Frame, app: &App) {
         } else {
             e.name.clone()
         };
-        spans.push(Span::styled(label, name));
+        spans.push(Span::styled(label.clone(), name));
+        let marks = app.marks(&e.id);
+        if !marks.is_empty() {
+            let used = used + label.chars().count();
+            let text: Vec<Span> = marks
+                .iter()
+                .map(|m| Span::styled(format!("{m}"), Style::default().fg(mark_color(*m))))
+                .collect();
+            let width = marks.len() * 2 - 1;
+            spans.push(Span::raw(
+                " ".repeat(w.saturating_sub(used + width + 1).max(1)),
+            ));
+            for (i, t) in text.into_iter().enumerate() {
+                if i > 0 {
+                    spans.push(Span::raw(" "));
+                }
+                spans.push(t);
+            }
+        }
         let mut line = Line::from(spans);
         if active {
             line = line.style(Style::default().bg(p().sel));
@@ -133,20 +151,26 @@ fn sidebar(f: &mut Frame, app: &App) {
         )));
     }
     let list = TRect {
-        height: inner.height.saturating_sub(1),
+        height: inner.height.saturating_sub(2),
         ..inner
     };
     f.render_widget(Paragraph::new(lines), list);
-    let legend = TRect::new(inner.x, inner.bottom().saturating_sub(1), inner.width, 1);
-    f.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(" ● ", Style::default().fg(p().green)),
-            Span::styled("open ", dim),
-            Span::styled("○ ", dim),
-            Span::styled("closed", dim),
-        ])),
-        legend,
-    );
+    let legend = TRect::new(inner.x, inner.bottom().saturating_sub(2), inner.width, 2);
+    let sym = |m: char, what: &str| {
+        [
+            Span::styled(format!(" {m} "), Style::default().fg(mark_color(m))),
+            Span::styled(what.to_string(), dim),
+        ]
+    };
+    let mut a = Vec::new();
+    for (m, what) in [('●', "open"), ('○', "closed"), ('✻', "agent")] {
+        a.extend(sym(m, what));
+    }
+    let mut b = Vec::new();
+    for (m, what) in [('?', "waiting"), ('⚡', "dev"), ('⚑', "merged")] {
+        b.extend(sym(m, what));
+    }
+    f.render_widget(Paragraph::new(vec![Line::from(a), Line::from(b)]), legend);
 }
 
 fn header(f: &mut Frame, app: &App) {
@@ -180,6 +204,17 @@ fn header(f: &mut Frame, app: &App) {
     if !folder && !s.base.is_empty() {
         spans.push(Span::styled(format!("  from {}", s.base), dim));
     }
+    if let Some(pr) = app.prs.get(&e.id) {
+        let color = if pr.state == "MERGED" {
+            p().cyan
+        } else {
+            p().dim
+        };
+        spans.push(Span::styled(
+            format!("  PR {}", pr.label()),
+            Style::default().fg(color),
+        ));
+    }
     if !folder {
         for (svc, port) in s.vars().ports {
             spans.push(Span::styled(format!("  {svc} :{port}"), dim));
@@ -193,6 +228,18 @@ fn header(f: &mut Frame, app: &App) {
         spans.push(Span::styled(path, dim));
     }
     f.render_widget(Paragraph::new(Line::from(spans)), r);
+}
+
+/// Each sidebar mark in its colour (REQ-51).
+fn mark_color(m: char) -> ratatui::style::Color {
+    match m {
+        '●' => p().green,
+        '✻' => p().magenta,
+        '?' => p().yellow,
+        '⚡' => p().green,
+        '⚑' => p().cyan,
+        _ => p().dim,
+    }
 }
 
 fn status(f: &mut Frame, app: &App) {
