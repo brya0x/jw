@@ -204,6 +204,9 @@ fn attach_only_sends_the_streams_panes_and_detach_stops_output() {
     let mut watcher = d.client();
     attach(&mut watcher, "a", a);
     watcher.send(&ClientMsg::Detach).unwrap();
+    // A round trip, so the Detach is done before the output below.
+    watcher.send(&ClientMsg::List).unwrap();
+    while !matches!(next(&mut watcher), DaemonMsg::Panes { .. }) {}
     c.send(&ClientMsg::Input {
         pane: a,
         bytes: b"quiet\n".to_vec(),
@@ -717,13 +720,33 @@ fn a_restarted_daemon_brings_the_workspaces_back() {
     })
     .unwrap();
     let ids_before = ids(&next_tree(&mut c));
+    // Open doesn't subscribe: attach to watch the agent start.
+    c.send(&ClientMsg::Attach { stream: "r".into() }).unwrap();
+    let mut before = vt100::Parser::new(24, 80, 0);
+    loop {
+        if let DaemonMsg::Snapshot { pane, bytes, .. } = recv(&mut c)
+            && pane == ids_before[0]
+        {
+            before.process(&bytes);
+            break;
+        }
+    }
+    read_until(&mut c, ids_before[0], &mut before, "started");
     c.send(&ClientMsg::Name {
         pane: ids_before[1],
         name: Some("kept".into()),
     })
     .unwrap();
-    next_tree(&mut c);
+    while next_tree(&mut c)
+        .find(ids_before[1])
+        .unwrap()
+        .name
+        .is_none()
+    {}
     drop(c);
+    // A change a client has seen is already saved.
+    let saved = std::fs::read_to_string(d.socket.with_file_name("session.json")).unwrap();
+    assert!(saved.contains("kept"), "{saved}");
 
     d.restart();
     let mut c = d.client();
@@ -753,6 +776,41 @@ fn a_restarted_daemon_brings_the_workspaces_back() {
         }
     }
     read_until(&mut c, agent, &mut screen, "resumed");
+    // REQ-72: what it printed before the restart is still there.
+    let text = screen.screen().contents();
+    assert!(
+        text.contains("started") && text.contains("restored"),
+        "{text}"
+    );
+}
+
+/// REQ-72: a client that attaches late gets the scrollback from before.
+#[test]
+fn a_late_client_gets_the_scrollback() {
+    let d = Daemon::start();
+    let mut c = d.client();
+    let pane = spawn(&mut c, "sb", "seq 1 3000; cat", 80, 24);
+    let mut screen = vt100::Parser::new(24, 80, 0);
+    read_until(&mut c, pane, &mut screen, "3000");
+
+    let mut late = d.client();
+    late.send(&ClientMsg::Attach {
+        stream: "sb".into(),
+    })
+    .unwrap();
+    let bytes = loop {
+        if let DaemonMsg::Snapshot { pane: p, bytes, .. } = recv(&mut late)
+            && p == pane
+        {
+            break bytes;
+        }
+    };
+    let mut screen = vt100::Parser::new(24, 80, 5000);
+    screen.process(&bytes);
+    assert!(screen.screen().contents().contains("3000"));
+    screen.screen_mut().set_scrollback(usize::MAX);
+    let top = screen.screen().contents();
+    assert!(top.starts_with("1\n2\n3\n"), "{top}");
 }
 
 #[test]

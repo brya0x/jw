@@ -25,13 +25,18 @@ use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_s
 use serde::{Deserialize, Serialize};
 
 mod outbox;
+mod ring;
 
 use outbox::Tx;
+use ring::Ring;
 
 use crate::layout::{Dir, Tree};
 use crate::proto::{
     ClientMsg, DaemonMsg, NewPane, PROTOCOL, PaneId, PaneInfo, PaneLeaf, read_frame, write_frame,
 };
+
+/// How often the panes' output is written out, between tree changes.
+const SAVE_EVERY: Duration = Duration::from_secs(30);
 
 /// Lines of scrollback each pane keeps.
 const SCROLLBACK: usize = 10_000;
@@ -45,6 +50,13 @@ pub fn run(socket: &Path) -> Result<()> {
 
     let daemon = Arc::new(Daemon::new(session_path(socket)));
     daemon.restore();
+    let saver = Arc::clone(&daemon);
+    thread::spawn(move || {
+        loop {
+            thread::sleep(SAVE_EVERY);
+            saver.save_scrollback();
+        }
+    });
     for conn in listener.incoming() {
         match conn {
             Ok(stream) => {
@@ -160,6 +172,8 @@ struct PaneState {
     title: Option<String>,
     /// It rang since its last input.
     bell: bool,
+    /// Its last output, for the scrollback of clients and restarts.
+    ring: Ring,
 }
 
 /// Catches what a pane's program says beyond its screen: the window title,
@@ -212,16 +226,36 @@ impl PaneState {
     }
 }
 
-/// The pane's whole screen, for a client that starts watching it.
+/// The pane for a client that starts watching it: its last output, which
+/// rebuilds the scrollback (REQ-72), then the exact screen on top.
 fn snapshot(id: PaneId, pane: &Pane, st: &PaneState) -> DaemonMsg {
     let screen = st.parser.screen();
     let (rows, cols) = screen.size();
+    let mut bytes = st.ring.bytes();
+    bytes.extend_from_slice(b"\x1b[0m");
+    bytes.extend_from_slice(if screen.alternate_screen() {
+        b"\x1b[?1049h"
+    } else {
+        b"\x1b[?1049l"
+    });
+    bytes.extend_from_slice(&screen.state_formatted());
     DaemonMsg::Snapshot {
         pane: id,
         role: pane.role.clone(),
         cols,
         rows,
-        bytes: screen.state_formatted(),
+        bytes,
+    }
+}
+
+/// The local time as `HH:MM`.
+fn clock() -> String {
+    // SAFETY: time and localtime_r only write into the values given.
+    unsafe {
+        let now = libc::time(std::ptr::null_mut());
+        let mut tm: libc::tm = std::mem::zeroed();
+        libc::localtime_r(&now, &mut tm);
+        format!("{:02}:{:02}", tm.tm_hour, tm.tm_min)
     }
 }
 
@@ -244,6 +278,9 @@ struct SavedWs {
 
 #[derive(Serialize, Deserialize)]
 struct SavedPane {
+    /// The pane's id when it was saved: its scrollback file.
+    #[serde(default)]
+    id: Option<PaneId>,
     role: String,
     name: Option<String>,
     /// How its process started; none for a viewer (`view:…`).
@@ -395,7 +432,7 @@ impl Daemon {
                     cols,
                     rows,
                 };
-                let id = self.spawn(&stream, new, Some((client, tx)))?;
+                let id = self.spawn(&stream, new, Some((client, tx)), None)?;
                 self.place(&stream, id);
                 let _ = tx.send(DaemonMsg::Spawned { pane: id });
             }
@@ -518,7 +555,7 @@ impl Daemon {
         let mut started = Vec::new();
         let tree = tree.try_map(&mut |new: NewPane| {
             let role = new.role.clone();
-            let id = self.spawn(stream, new, None)?;
+            let id = self.spawn(stream, new, None, None)?;
             started.push(id);
             Ok::<_, anyhow::Error>(PaneLeaf {
                 id,
@@ -585,7 +622,7 @@ impl Daemon {
         let id = if is_view(&role) {
             self.next_pane.fetch_add(1, Ordering::Relaxed) + 1
         } else {
-            self.spawn(&stream, new, None)?
+            self.spawn(&stream, new, None, None)?
         };
         {
             let mut all = lock(&self.workspaces);
@@ -624,7 +661,7 @@ impl Daemon {
         let id = if is_view(&role) {
             self.next_pane.fetch_add(1, Ordering::Relaxed) + 1
         } else {
-            self.spawn(stream, new, None)?
+            self.spawn(stream, new, None, None)?
         };
         {
             let mut all = lock(&self.workspaces);
@@ -674,8 +711,8 @@ impl Daemon {
         Ok(())
     }
 
-    /// Changes a workspace's tree in place, then tells its watchers and
-    /// saves.
+    /// Changes a workspace's tree in place, saves, then tells its watchers:
+    /// a change a client has seen is already on disk.
     fn edit(&self, stream: &str, f: impl FnOnce(&mut Tree<PaneLeaf>) -> Result<()>) -> Result<()> {
         {
             let mut all = lock(&self.workspaces);
@@ -683,9 +720,11 @@ impl Daemon {
                 .get_mut(stream)
                 .with_context(|| format!("{stream} is not open"))?;
             f(&mut ws.tree)?;
-            ws.tell(stream);
         }
         self.save();
+        if let Some(ws) = lock(&self.workspaces).get_mut(stream) {
+            ws.tell(stream);
+        }
         Ok(())
     }
 
@@ -727,7 +766,8 @@ impl Daemon {
                             cols: 80,
                             rows: 24,
                         };
-                        self.spawn(&ws.id, new, None)?
+                        let history = p.id.and_then(|old| fs::read(self.scrollback(old)?).ok());
+                        self.spawn(&ws.id, new, None, history)?
                     }
                 };
                 Ok(PaneLeaf {
@@ -778,6 +818,7 @@ impl Daemon {
                                     None => return Err(()),
                                 };
                                 Ok::<_, ()>(SavedPane {
+                                    id: Some(l.id),
                                     role: l.role,
                                     name: l.name,
                                     started,
@@ -803,6 +844,65 @@ impl Daemon {
         };
         if let Err(e) = write() {
             eprintln!("jw daemon: saving {}: {e:#}", path.display());
+        }
+        self.save_scrollback();
+    }
+
+    /// Where a pane's output is saved: `scrollback/<id>.bin` next to
+    /// `session.json`.
+    fn scrollback(&self, id: PaneId) -> Option<PathBuf> {
+        Some(
+            self.session
+                .as_ref()?
+                .with_file_name("scrollback")
+                .join(format!("{id}.bin")),
+        )
+    }
+
+    /// Writes the output of every pane that printed since the last time, and
+    /// drops the files of panes that are gone.
+    fn save_scrollback(&self) {
+        let Some(dir) = self
+            .scrollback(0)
+            .and_then(|p| p.parent().map(Path::to_path_buf))
+        else {
+            return;
+        };
+        let panes: Vec<(PaneId, Arc<Pane>)> = lock(&self.panes)
+            .iter()
+            .map(|(id, p)| (*id, Arc::clone(p)))
+            .collect();
+        let mut keep = std::collections::BTreeSet::new();
+        for (id, pane) in panes {
+            let Some(path) = self.scrollback(id) else {
+                continue;
+            };
+            keep.insert(path.clone());
+            let bytes = {
+                let mut st = lock(&pane.state);
+                if !st.ring.dirty {
+                    continue;
+                }
+                st.ring.dirty = false;
+                st.ring.bytes()
+            };
+            let write = || -> Result<()> {
+                fs::create_dir_all(&dir)?;
+                let tmp = path.with_extension("bin.tmp");
+                fs::write(&tmp, &bytes)?;
+                fs::rename(&tmp, &path)?;
+                Ok(())
+            };
+            if let Err(e) = write() {
+                eprintln!("jw daemon: saving {}: {e:#}", path.display());
+            }
+        }
+        if let Ok(rd) = fs::read_dir(&dir) {
+            for f in rd.flatten() {
+                if !keep.contains(&f.path()) {
+                    let _ = fs::remove_file(f.path());
+                }
+            }
         }
     }
 
@@ -845,7 +945,13 @@ impl Daemon {
 
     /// Starts a pane's process. `sub` is subscribed before its first byte
     /// can arrive; without one, watchers get a Snapshot later.
-    fn spawn(&self, stream: &str, new: NewPane, sub: Option<(u64, &Tx)>) -> Result<PaneId> {
+    fn spawn(
+        &self,
+        stream: &str,
+        new: NewPane,
+        sub: Option<(u64, &Tx)>,
+        history: Option<Vec<u8>>,
+    ) -> Result<PaneId> {
         let id = self.next_pane.fetch_add(1, Ordering::Relaxed) + 1;
         let NewPane {
             role,
@@ -907,8 +1013,24 @@ impl Daemon {
                 last_output: Instant::now(),
                 title: None,
                 bell: false,
+                ring: Ring::default(),
             }),
         });
+        if let Some(mut bytes) = history {
+            // REQ-72: what the pane showed before the restart, then a line.
+            bytes.extend_from_slice(
+                format!(
+                    "\x1b[?1049l\x1b[0m\r\n\x1b[2m── restored {} ──\x1b[0m\r\n",
+                    clock()
+                )
+                .as_bytes(),
+            );
+            let mut st = lock(&pane.state);
+            st.parser.process(&bytes);
+            st.ring.push(&bytes);
+            st.parser.callbacks_mut().new = None;
+            st.parser.callbacks_mut().rang = false;
+        }
         if let Some((client, tx)) = sub {
             lock(&pane.state).subscribe(client, tx);
         }
@@ -922,6 +1044,7 @@ impl Daemon {
                     Ok(n) => {
                         let mut st = lock(&pane.state);
                         st.parser.process(&buf[..n]);
+                        st.ring.push(&buf[..n]);
                         st.last_output = Instant::now();
                         st.broadcast(&DaemonMsg::Output {
                             pane: id,
