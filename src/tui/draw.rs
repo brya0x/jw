@@ -280,6 +280,8 @@ fn status(f: &mut Frame, app: &App) {
             None => spans.extend([
                 key(&leader),
                 txt("then a key ·"),
+                key("␣"),
+                txt("switch ·"),
                 key("o"),
                 txt("open ·"),
                 key("w"),

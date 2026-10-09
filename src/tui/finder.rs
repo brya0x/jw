@@ -1,6 +1,7 @@
 //! The pickers (docs/specs/rust-tui.md, Interfaces → Pickers): one modal
 //! with a query, a list and a preview, and one fuzzy scorer. `^␣ o` browses
-//! folders one directory at a time.
+//! folders one directory at a time; `^␣ ␣` lists the workspaces and `^␣ /`
+//! the files of the current one.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -52,6 +53,32 @@ pub enum Pick {
     Dir(PathBuf),
     /// Make this folder, then open it.
     Create(PathBuf),
+    /// Go to this workspace, by id.
+    Ws(String),
+    /// Open this file of the current workspace, by its path in it.
+    File(String),
+}
+
+/// One workspace for the switcher, in the order to list it (most recent
+/// first).
+pub struct WsItem {
+    pub id: String,
+    pub label: String,
+    pub open: bool,
+    pub hint: String,
+    pub preview: Vec<Line<'static>>,
+}
+
+enum Kind {
+    Folders {
+        cwd: PathBuf,
+        /// Folders already open as workspaces, marked `●`.
+        open: HashSet<PathBuf>,
+    },
+    Workspaces,
+    Files {
+        root: PathBuf,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -62,6 +89,8 @@ struct Item {
     pick: Pick,
     /// A folder the browser can go into.
     into: Option<PathBuf>,
+    /// What the right side shows, when the item brings it.
+    preview: Vec<Line<'static>>,
 }
 
 /// What a key did.
@@ -73,9 +102,7 @@ pub enum Outcome {
 
 pub struct Finder {
     title: String,
-    cwd: PathBuf,
-    /// Folders already open as workspaces, marked `●`.
-    open: HashSet<PathBuf>,
+    kind: Kind,
     query: String,
     sel: usize,
     items: Vec<Item>,
@@ -86,42 +113,85 @@ pub struct Finder {
 impl Finder {
     /// The folder browser, starting in `cwd`.
     pub fn folders(cwd: PathBuf, open: HashSet<PathBuf>) -> Self {
+        Self::new("Open a folder", Kind::Folders { cwd, open }, Vec::new())
+    }
+
+    /// The switcher (REQ-41): every workspace, most recent first.
+    pub fn workspaces(list: Vec<WsItem>) -> Self {
+        let items = list
+            .into_iter()
+            .map(|w| Item {
+                mark: if w.open { "●" } else { "○" },
+                label: w.label,
+                hint: w.hint,
+                pick: Pick::Ws(w.id),
+                into: None,
+                preview: w.preview,
+            })
+            .collect();
+        Self::new("Switch workspace", Kind::Workspaces, items)
+    }
+
+    /// The files of the workspace at `root` (REQ-42).
+    pub fn files(title: String, root: PathBuf, files: Vec<String>) -> Self {
+        let items = files
+            .into_iter()
+            .map(|f| Item {
+                mark: if f.ends_with(".md") { "¶" } else { " " },
+                hint: if f.ends_with(".md") {
+                    "rendered".into()
+                } else {
+                    "nvim".into()
+                },
+                pick: Pick::File(f.clone()),
+                label: f,
+                into: None,
+                preview: Vec::new(),
+            })
+            .collect();
+        Self::new(&title, Kind::Files { root }, items)
+    }
+
+    fn new(title: &str, kind: Kind, items: Vec<Item>) -> Self {
         let mut f = Self {
-            title: "Open a folder".into(),
-            cwd,
-            open,
+            title: title.into(),
+            kind,
             query: String::new(),
             sel: 0,
-            items: Vec::new(),
+            items,
             shown: Vec::new(),
         };
         f.list();
         f
     }
 
+    /// The folder browser lists its directory again; the other pickers keep
+    /// their items and only filter.
     fn list(&mut self) {
+        let Kind::Folders { cwd, open } = &self.kind else {
+            self.filter();
+            return;
+        };
         self.items.clear();
-        let here = self.cwd.clone();
+        let here = cwd.clone();
         self.items.push(Item {
             mark: ".",
             label: "open this folder".into(),
             hint: String::new(),
             pick: Pick::Dir(here.clone()),
             into: None,
+            preview: Vec::new(),
         });
         for name in subdirs(&here) {
             let path = here.join(&name);
             let git = path.join(".git").exists();
             self.items.push(Item {
-                mark: if self.open.contains(&path) {
-                    "●"
-                } else {
-                    "▸"
-                },
+                mark: if open.contains(&path) { "●" } else { "▸" },
                 label: format!("{name}/"),
                 hint: if git { "git".into() } else { String::new() },
                 pick: Pick::Dir(path.clone()),
                 into: Some(path),
+                preview: Vec::new(),
             });
         }
         self.filter();
@@ -129,11 +199,13 @@ impl Finder {
 
     fn filter(&mut self) {
         let q = self.query.trim();
+        let folders = matches!(self.kind, Kind::Folders { .. });
+        self.items.retain(|it| !matches!(it.pick, Pick::Create(_)));
         let mut shown: Vec<(i32, usize, Vec<usize>)> = self
             .items
             .iter()
             .enumerate()
-            .filter(|(_, it)| q.is_empty() || it.into.is_some())
+            .filter(|(_, it)| q.is_empty() || !folders || it.into.is_some())
             .filter_map(|(i, it)| {
                 let (score, at) = fuzzy(q, &it.label)?;
                 Some((if q.is_empty() { -(i as i32) } else { score }, i, at))
@@ -145,13 +217,18 @@ impl Finder {
             .items
             .iter()
             .any(|it| it.label.trim_end_matches('/') == q);
-        if !q.is_empty() && !exists && crate::actions::valid_name(q) {
+        if let Kind::Folders { cwd, .. } = &self.kind
+            && !q.is_empty()
+            && !exists
+            && crate::actions::valid_name(q)
+        {
             self.items.push(Item {
                 mark: "+",
                 label: format!("create {q}/"),
                 hint: "new".into(),
-                pick: Pick::Create(self.cwd.join(q)),
+                pick: Pick::Create(cwd.join(q)),
                 into: None,
+                preview: Vec::new(),
             });
             self.shown.push((self.items.len() - 1, Vec::new()));
         }
@@ -163,7 +240,10 @@ impl Finder {
     }
 
     fn go(&mut self, dir: PathBuf, select: Option<PathBuf>) {
-        self.cwd = dir;
+        let Kind::Folders { cwd, .. } = &mut self.kind else {
+            return;
+        };
+        *cwd = dir;
         self.query.clear();
         self.sel = 0;
         self.list();
@@ -197,13 +277,13 @@ impl Finder {
                     self.go(dir, None);
                 }
             }
-            KeyCode::Left => self.up(),
-            KeyCode::Backspace if self.query.is_empty() => self.up(),
+            KeyCode::Left if self.browsing() => self.up(),
+            KeyCode::Backspace if self.query.is_empty() && self.browsing() => self.up(),
             KeyCode::Backspace => {
                 self.query.pop();
                 self.list();
             }
-            KeyCode::Char('~') if self.query.is_empty() => {
+            KeyCode::Char('~') if self.query.is_empty() && self.browsing() => {
                 if let Some(home) = std::env::var_os("HOME") {
                     self.go(PathBuf::from(home), None);
                 }
@@ -222,8 +302,15 @@ impl Finder {
         Outcome::Stay
     }
 
+    fn browsing(&self) -> bool {
+        matches!(self.kind, Kind::Folders { .. })
+    }
+
     fn up(&mut self) {
-        let from = self.cwd.clone();
+        let Kind::Folders { cwd, .. } = &self.kind else {
+            return;
+        };
+        let from = cwd.clone();
         if let Some(parent) = from.parent() {
             self.go(parent.to_path_buf(), Some(from));
         }
@@ -256,7 +343,11 @@ impl Finder {
         }
 
         let dim = Style::default().fg(p().dim);
-        let path = tilde(&self.cwd);
+        let path = match &self.kind {
+            Kind::Folders { cwd, .. } => tilde(cwd),
+            Kind::Files { root } => tilde(root),
+            Kind::Workspaces => String::new(),
+        };
         let mut crumbs = Vec::new();
         let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
         for (i, part) in parts.iter().enumerate() {
@@ -283,7 +374,14 @@ impl Finder {
         let input = Line::from(vec![
             Span::styled(" › ", Style::default().fg(p().blue)),
             if self.query.is_empty() {
-                Span::styled("type to filter this folder…", dim)
+                Span::styled(
+                    match self.kind {
+                        Kind::Folders { .. } => "type to filter this folder…",
+                        Kind::Workspaces => "project or worktree…",
+                        Kind::Files { .. } => "file name…",
+                    },
+                    dim,
+                )
             } else {
                 Span::raw(self.query.clone())
             },
@@ -352,38 +450,24 @@ impl Finder {
         }
         f.render_widget(Paragraph::new(self.preview()), prev);
 
-        let foot = Line::from(vec![
-            Span::styled(
-                " ↑↓",
-                Style::default().fg(p().fg).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" move  ", dim),
-            Span::styled(
-                "→",
-                Style::default().fg(p().fg).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" go in  ", dim),
-            Span::styled(
-                "←",
-                Style::default().fg(p().fg).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" go up  ", dim),
-            Span::styled(
-                "~",
-                Style::default().fg(p().fg).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" home  ", dim),
-            Span::styled(
-                "↵",
-                Style::default().fg(p().fg).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" open as a workspace  ", dim),
-            Span::styled(
-                "esc",
-                Style::default().fg(p().fg).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" close", dim),
-        ]);
+        let bold = Style::default().fg(p().fg).add_modifier(Modifier::BOLD);
+        let pairs: &[(&str, &str)] = match self.kind {
+            Kind::Folders { .. } => &[
+                ("↑↓", "move"),
+                ("→", "go in"),
+                ("←", "go up"),
+                ("~", "home"),
+                ("↵", "open as a workspace"),
+                ("esc", "close"),
+            ],
+            _ => &[("↑↓", "move"), ("↵", "open"), ("esc", "close")],
+        };
+        let mut foot = Vec::new();
+        for (k, what) in pairs {
+            foot.push(Span::styled(format!(" {k}"), bold));
+            foot.push(Span::styled(format!(" {what} "), dim));
+        }
+        let foot = Line::from(foot);
         f.render_widget(
             Paragraph::new(foot),
             Rect {
@@ -399,9 +483,19 @@ impl Finder {
         let Some(it) = self.current() else {
             return Vec::new();
         };
+        if !it.preview.is_empty() {
+            return it.preview.clone();
+        }
         let (dir, new) = match &it.pick {
             Pick::Dir(d) => (d.clone(), false),
             Pick::Create(d) => (d.clone(), true),
+            Pick::File(f) => {
+                let Kind::Files { root } = &self.kind else {
+                    return Vec::new();
+                };
+                return file_head(&root.join(f));
+            }
+            Pick::Ws(_) => return Vec::new(),
         };
         let mut l = vec![Line::from(Span::styled(
             tilde(&dir),
@@ -421,7 +515,7 @@ impl Finder {
         } else {
             Span::styled("not a git repository", dim)
         }));
-        if self.open.contains(&dir) {
+        if matches!(&self.kind, Kind::Folders { open, .. } if open.contains(&dir)) {
             l.push(Line::from(Span::styled(
                 "● open: ↵ goes there",
                 Style::default().fg(p().blue),
@@ -438,6 +532,66 @@ impl Finder {
         }
         l
     }
+}
+
+/// The first lines of a text file, for the preview.
+fn file_head(path: &Path) -> Vec<Line<'static>> {
+    let dim = Style::default().fg(p().dim);
+    match std::fs::read(path) {
+        Ok(bytes) if bytes.iter().take(4096).any(|b| *b == 0) => {
+            vec![Line::from(Span::styled("binary file", dim))]
+        }
+        Ok(bytes) => String::from_utf8_lossy(&bytes)
+            .lines()
+            .take(30)
+            .map(|l| Line::from(l.replace('\t', "    ")))
+            .collect(),
+        Err(e) => vec![Line::from(Span::styled(e.to_string(), dim))],
+    }
+}
+
+/// A workspace's files for `^␣ /`: what git tracks or would (untracked,
+/// not ignored), else a walk that skips hidden folders, capped at `cap`.
+pub fn list_files(root: &Path, cap: usize) -> Vec<String> {
+    let git = std::process::Command::new("git")
+        .args(["ls-files", "-co", "--exclude-standard"])
+        .current_dir(root)
+        .output();
+    if let Ok(out) = git
+        && out.status.success()
+    {
+        return String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .take(cap)
+            .map(str::to_string)
+            .collect();
+    }
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut entries: Vec<_> = rd.flatten().collect();
+        entries.sort_by_key(|e| e.file_name());
+        for e in entries {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') {
+                continue;
+            }
+            let path = e.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if let Ok(rel) = path.strip_prefix(root) {
+                out.push(rel.display().to_string());
+                if out.len() >= cap {
+                    return out;
+                }
+            }
+        }
+    }
+    out.sort();
+    out
 }
 
 /// The folders in `dir`, without hidden ones, sorted by name.
@@ -521,9 +675,9 @@ mod tests {
 
         f.key(key(KeyCode::Down));
         f.key(key(KeyCode::Right));
-        assert_eq!(f.cwd, root.join("alpha"));
+        assert!(matches!(&f.kind, Kind::Folders { cwd, .. } if *cwd == root.join("alpha")));
         f.key(key(KeyCode::Left));
-        assert_eq!(f.cwd, root);
+        assert!(matches!(&f.kind, Kind::Folders { cwd, .. } if *cwd == root));
         assert_eq!(
             f.current().unwrap().label,
             "alpha/",
@@ -547,6 +701,29 @@ mod tests {
         match f.key(key(KeyCode::Enter)) {
             Outcome::Pick(Pick::Dir(p)) => assert_eq!(p, root.join("beta")),
             _ => panic!("want beta"),
+        }
+    }
+
+    #[test]
+    fn the_file_list_walks_when_there_is_no_git() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join("docs")).unwrap();
+        std::fs::create_dir_all(d.path().join(".hidden")).unwrap();
+        std::fs::write(d.path().join("docs/a.md"), "# a").unwrap();
+        std::fs::write(d.path().join("b.rs"), "").unwrap();
+        std::fs::write(d.path().join(".hidden/c"), "").unwrap();
+        let mut got = list_files(d.path(), 100);
+        got.sort();
+        assert_eq!(got, ["b.rs", "docs/a.md"]);
+        assert_eq!(list_files(d.path(), 1).len(), 1);
+
+        let mut f = Finder::files("t".into(), d.path().to_path_buf(), got);
+        for c in "amd".chars() {
+            f.key(key(KeyCode::Char(c)));
+        }
+        match f.key(key(KeyCode::Enter)) {
+            Outcome::Pick(Pick::File(p)) => assert_eq!(p, "docs/a.md"),
+            _ => panic!("want the md"),
         }
     }
 }

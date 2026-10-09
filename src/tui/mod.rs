@@ -137,8 +137,8 @@ pub struct App {
     /// The popup with every key (REQ-31).
     pub which: bool,
     pub rows: Vec<Row>,
-    /// The workspace before the current one, for `^␣ tab`.
-    prev: Option<Entry>,
+    /// Workspace ids by last use, most recent first (`recent.json`).
+    recent: Vec<String>,
     /// Every pane the daemon has, from the last `List`.
     pub daemon_panes: Vec<PaneInfo>,
     /// The stream on screen, by registry id.
@@ -304,7 +304,7 @@ impl App {
             leader_at: None,
             which: false,
             rows: Vec::new(),
-            prev: None,
+            recent: load_recent(),
             daemon_panes: Vec::new(),
             active: None,
             panes: BTreeMap::new(),
@@ -633,6 +633,9 @@ impl App {
         self.status = None;
         match k.code {
             KeyCode::Esc => {}
+            _ if self.leader.matches(&k) => self.ask_switch(),
+            KeyCode::Char(' ') => self.ask_switch(),
+            KeyCode::Char('/') => self.ask_file(),
             KeyCode::Char('?') => {
                 // The popup stays and the next key still counts as an action.
                 self.which = true;
@@ -682,12 +685,14 @@ impl App {
         }
     }
 
-    /// `^␣ tab`: the workspace before this one.
+    /// `^␣ tab`: the workspace used before this one.
     fn go_back(&mut self) {
+        let here = self.current().map(|e| e.id.clone());
         let prev = self
-            .prev
-            .clone()
-            .and_then(|p| self.workspaces().find(|e| e.id == p.id).cloned());
+            .recent
+            .iter()
+            .filter(|id| Some(*id) != here.as_ref())
+            .find_map(|id| self.workspaces().find(|e| e.id == *id).cloned());
         match prev {
             Some(e) => self.open_entry(e, false),
             None => self.fail("no previous workspace yet".into()),
@@ -696,12 +701,13 @@ impl App {
 
     /// `setup`: run the config's setup in the shell pane first (new streams).
     fn open_entry(&mut self, entry: Entry, setup: bool) {
-        if let Some(cur) = self.current() {
-            if cur.id == entry.id {
-                return;
-            }
-            self.prev = Some(cur.clone());
+        if self.current().is_some_and(|c| c.id == entry.id) {
+            return;
         }
+        self.recent.retain(|id| *id != entry.id);
+        self.recent.insert(0, entry.id.clone());
+        self.recent.truncate(50);
+        save_recent(&self.recent);
         if crate::folders::is_folder(&entry) && !entry.path.is_empty() {
             let dir = entry.path.clone();
             if let Err(e) = crate::folders::edit(|all| {
@@ -1085,10 +1091,177 @@ impl App {
         self.finder = Some(finder::Finder::folders(start, open));
     }
 
+    /// `^␣ ␣`: every workspace by last use, with what each holds (REQ-41).
+    fn ask_switch(&mut self) {
+        let here = self.current().map(|e| e.id.clone());
+        let rank = |id: &str| {
+            if Some(id) == here.as_deref() {
+                usize::MAX
+            } else {
+                self.recent
+                    .iter()
+                    .position(|r| r == id)
+                    .unwrap_or(usize::MAX - 1)
+            }
+        };
+        let mut order: Vec<usize> = (0..self.rows.len()).collect();
+        order.sort_by_key(|i| rank(&self.rows[*i].entry.id));
+        let items = order
+            .into_iter()
+            .map(|i| {
+                let e = &self.rows[i].entry;
+                let parent = self.rows[..i]
+                    .iter()
+                    .rev()
+                    .find(|r| !r.child)
+                    .filter(|_| self.rows[i].child)
+                    .map(|r| r.entry.name.clone());
+                let label = match parent {
+                    Some(p) => format!("{p}/{}", e.name),
+                    None => e.name.clone(),
+                };
+                finder::WsItem {
+                    id: e.id.clone(),
+                    open: self.is_open(&e.id),
+                    hint: if Some(&e.id) == here.as_ref() {
+                        "here".into()
+                    } else {
+                        e.branch.clone()
+                    },
+                    preview: self.ws_preview(e),
+                    label,
+                }
+            })
+            .collect();
+        self.finder = Some(finder::Finder::workspaces(items));
+    }
+
+    /// The switcher's right side for one workspace.
+    fn ws_preview(&self, e: &Entry) -> Vec<ratatui::text::Line<'static>> {
+        use ratatui::style::Style;
+        use ratatui::text::{Line, Span};
+        let p = crate::theme::p();
+        let dim = Style::default().fg(p.dim);
+        let mut l = vec![Line::from(Span::styled(
+            finder::tilde(std::path::Path::new(&e.path)),
+            Style::default().add_modifier(ratatui::style::Modifier::BOLD),
+        ))];
+        l.push(if e.branch.is_empty() {
+            Line::from(Span::styled("not a git repository", dim))
+        } else {
+            Line::from(Span::styled(
+                e.branch.clone(),
+                Style::default().fg(p.magenta),
+            ))
+        });
+        l.push(Line::default());
+        let panes: Vec<&PaneInfo> = self
+            .daemon_panes
+            .iter()
+            .filter(|x| x.stream == e.id)
+            .collect();
+        if panes.is_empty() {
+            l.push(Line::from(Span::styled("closed: ↵ opens it", dim)));
+        } else {
+            l.push(Line::from(match panes.len() {
+                1 => "1 pane running".to_string(),
+                n => format!("{n} panes running"),
+            }));
+            for x in panes {
+                let runs = x.fg.clone().unwrap_or_default();
+                l.push(Line::from(vec![
+                    Span::raw(format!("  {:<10}", x.role)),
+                    Span::styled(runs, dim),
+                ]));
+            }
+        }
+        l
+    }
+
+    /// `^␣ /`: the files of the current workspace (REQ-42).
+    fn ask_file(&mut self) {
+        let Some(e) = self.current().cloned() else {
+            let l = self.leader.label();
+            self.fail(format!("no workspace open: {l} o opens a folder"));
+            return;
+        };
+        let root = std::path::PathBuf::from(&e.path);
+        let files = finder::list_files(&root, 20_000);
+        if files.is_empty() {
+            self.fail(format!("{} has no files", e.name));
+            return;
+        }
+        self.finder = Some(finder::Finder::files(
+            format!("Open a file in {}", e.name),
+            root,
+            files,
+        ));
+    }
+
+    /// A file of the current workspace: Markdown in the reader, anything
+    /// else in its nvim pane, started on the right when there is none.
+    fn open_file(&mut self, file: &str) {
+        let Some(stream) = self.active.clone() else {
+            return;
+        };
+        if file.ends_with(".md") {
+            self.read_file(&stream.entry.path, file, None);
+            return;
+        }
+        let editor = self.tree.as_ref().and_then(|t| {
+            t.leaves()
+                .into_iter()
+                .find(|l| l.role == "editor")
+                .map(|l| l.id)
+        });
+        match editor {
+            Some(pane) => {
+                // RISK-16: nvim takes `:e` once Esc left any other mode.
+                let line = format!("\x1b:e {}\r", file.replace(' ', "\\ "));
+                self.send(ClientMsg::Input {
+                    pane,
+                    bytes: line.into_bytes(),
+                });
+                self.focus = Some(pane);
+                self.full = false;
+                self.fit();
+            }
+            None => {
+                let Some(beside) = self.focus else { return };
+                let stage = self.stage();
+                let new = NewPane {
+                    role: "editor".into(),
+                    cmd: Some(format!("nvim {}", crate::stream::shell_quote(file))),
+                    cwd: std::path::PathBuf::from(&stream.entry.path),
+                    env: stream.env(),
+                    cols: (stage.w / 2).saturating_sub(2).max(1),
+                    rows: stage.h.saturating_sub(2).max(1),
+                };
+                self.focus_new = true;
+                self.full = false;
+                self.send(ClientMsg::Split {
+                    pane: beside,
+                    dir: Dir::Right,
+                    new,
+                });
+            }
+        }
+        self.say(format!("nvim {file}"));
+    }
+
     /// A folder picked in the browser: made first when new, then opened, or
-    /// shown when it already is (REQ-37).
+    /// shown when it already is (REQ-37). A workspace or a file from the
+    /// other pickers.
     fn picked(&mut self, pick: finder::Pick) {
         let dir = match pick {
+            finder::Pick::Ws(id) => {
+                let target = self.workspaces().find(|e| e.id == id).cloned();
+                if let Some(e) = target {
+                    self.open_entry(e, false);
+                }
+                return;
+            }
+            finder::Pick::File(f) => return self.open_file(&f),
             finder::Pick::Dir(d) => d,
             finder::Pick::Create(d) => {
                 if let Err(e) = std::fs::create_dir(&d) {
@@ -1386,6 +1559,28 @@ impl App {
         }
         if let Err(e) = reload {
             self.fail(format!("{e:#}"));
+        }
+    }
+}
+
+/// The workspace ids in `recent.json`, most recent first.
+fn load_recent() -> Vec<String> {
+    registry::state_dir()
+        .ok()
+        .and_then(|d| std::fs::read(d.join("recent.json")).ok())
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+/// Best effort: a lost recency list only reorders the switcher.
+fn save_recent(ids: &[String]) {
+    if let Ok(d) = registry::state_dir()
+        && std::fs::create_dir_all(&d).is_ok()
+        && let Ok(json) = serde_json::to_vec(ids)
+    {
+        let tmp = d.join("recent.json.tmp");
+        if std::fs::write(&tmp, json).is_ok() {
+            let _ = std::fs::rename(tmp, d.join("recent.json"));
         }
     }
 }
