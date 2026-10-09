@@ -40,8 +40,6 @@ pub enum Modal {
         plan: RmPlan,
         pr: Pr,
     },
-    /// Forgetting a free session: its panes go, its directory stays.
-    RmFree { entry: Entry },
     /// `rm`: when it would lose work, the stream's name must be typed.
     Rm {
         entry: Entry,
@@ -68,11 +66,6 @@ impl Modal {
             return Outcome::Cancel;
         }
         match self {
-            Modal::RmFree { .. } => match k.code {
-                KeyCode::Char('y') | KeyCode::Enter => Outcome::Submit,
-                KeyCode::Char('n') => Outcome::Cancel,
-                _ => Outcome::Stay,
-            },
             Modal::Done { .. } => match k.code {
                 KeyCode::Char('y') | KeyCode::Enter => Outcome::Submit,
                 KeyCode::Char('n') => Outcome::Cancel,
@@ -139,18 +132,6 @@ impl Modal {
                 l.push(Line::default());
                 l.push(keys(&[("y", "delete"), ("esc", "keep")]));
                 (format!(" Done with {}? ", entry.name), l)
-            }
-            Modal::RmFree { entry } => {
-                let l = vec![
-                    Line::from(" Closes its panes and forgets it."),
-                    Line::from(Span::styled(
-                        format!(" {} is untouched.", short_path(&entry.path, 50)),
-                        Style::default().fg(p().dim),
-                    )),
-                    Line::default(),
-                    keys(&[("y", "remove"), ("esc", "cancel")]),
-                ];
-                (format!(" Remove free/{}? ", entry.name), l)
             }
             Modal::Close {
                 entry,

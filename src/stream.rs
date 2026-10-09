@@ -50,16 +50,31 @@ impl PaneSpec {
 
 impl Stream {
     /// Finds the project of `entry` from its worktree and loads its config.
-    /// A free session has no repository: jw's defaults and its own layout.
+    /// An opened folder (REQ-55): a repository with a jw config starts with
+    /// its layout; anything else with one shell.
     pub fn resolve(entry: &Entry) -> Result<Self> {
-        if crate::free::is_free(entry) {
-            let all = crate::free::Sessions::load(&crate::free::default_path()?)?;
-            let layout = all.get(&entry.id).map(|s| s.layout).unwrap_or_default();
+        if crate::folders::is_folder(entry) {
+            let dir = Path::new(&entry.path);
+            if !dir.is_dir() {
+                bail!("{} is not a folder", entry.path);
+            }
+            let (cfg, base, tree) = match crate::folders::repo(dir) {
+                Some(repo) => {
+                    let cfg = config::load(&repo.root, &repo.remote, &entry.project)?;
+                    let tree = if cfg.source.is_some() {
+                        cfg.layout.tree()
+                    } else {
+                        Node::leaf("shell")
+                    };
+                    (cfg, repo.default_branch().unwrap_or_default(), tree)
+                }
+                None => (crate::folders::config(), String::new(), Node::leaf("shell")),
+            };
             return Ok(Self {
                 entry: entry.clone(),
-                cfg: crate::free::config(),
-                base: String::new(),
-                tree: layout.tree(),
+                cfg,
+                base,
+                tree,
             });
         }
         let repo = Repo::open(Path::new(&entry.path))?;
@@ -80,12 +95,12 @@ impl Stream {
 
     /// The JW_* variables every pane of the stream gets.
     pub fn env(&self) -> BTreeMap<String, String> {
-        if crate::free::is_free(&self.entry) {
+        if crate::folders::is_folder(&self.entry) {
             // No slot and no ports: only who the pane belongs to.
             return BTreeMap::from([
                 ("JW_ID".to_string(), self.entry.id.clone()),
                 ("JW_NAME".to_string(), self.entry.name.clone()),
-                ("JW_PROJECT".to_string(), crate::free::LABEL.to_string()),
+                ("JW_PROJECT".to_string(), self.entry.project.clone()),
             ]);
         }
         crate::actions::jw_env(&self.entry, &self.vars())
@@ -135,8 +150,13 @@ impl Stream {
         if self.entry.opened {
             return Ok(());
         }
-        if crate::free::is_free(&self.entry) {
-            return crate::free::mark_opened(&crate::free::default_path()?, &self.entry.id);
+        if crate::folders::is_folder(&self.entry) {
+            let dir = self.entry.path.clone();
+            return crate::folders::edit(|all| {
+                if let Some(f) = all.folders.iter_mut().find(|f| f.dir == dir) {
+                    f.opened = true;
+                }
+            });
         }
         let path = registry::default_path()?;
         let mut reg = Registry::load(&path)?;

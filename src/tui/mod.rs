@@ -6,6 +6,7 @@
 
 mod diffview;
 mod draw;
+mod finder;
 mod keys;
 mod mdview;
 mod modal;
@@ -48,6 +49,8 @@ enum Msg {
     Job(Box<Job>),
     /// The system switched between light and dark.
     Theme,
+    /// Twice a second: old status messages go.
+    Tick,
 }
 
 // One job at a time crosses the channel, boxed; its size doesn't matter.
@@ -91,12 +94,31 @@ pub enum View {
     Md(mdview::MdView),
 }
 
-/// One row of the sidebar.
+/// One row of the sidebar: a workspace, and whether it is a worktree
+/// listed under its project (REQ-50).
 #[derive(Debug, Clone, PartialEq)]
-pub enum Row {
-    Space(String),
-    Stream(Entry),
+pub struct Row {
+    pub entry: Entry,
+    pub child: bool,
 }
+
+/// How a status message reads: green when something was done, red when it
+/// failed or was refused (REQ-54).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tone {
+    Info,
+    Done,
+    Error,
+}
+
+pub struct Status {
+    pub text: String,
+    pub tone: Tone,
+    at: Instant,
+}
+
+/// How long a status message stays.
+const STATUS_FOR: Duration = Duration::from_secs(4);
 
 /// A pane of the current workspace as this client sees it.
 pub struct PaneView {
@@ -129,11 +151,16 @@ pub struct App {
     focus_new: bool,
     /// `f`: only the focused pane, across the whole terminal.
     pub full: bool,
-    pub status: Option<String>,
+    pub status: Option<Status>,
     /// The terminal's size, for the layout.
     pub size: (u16, u16),
     quit: bool,
     pub modal: Option<Modal>,
+    /// A picker over everything else (`^␣ o`).
+    pub finder: Option<finder::Finder>,
+    /// Each project's main checkout, found from one of its worktrees
+    /// (RISK-17: one `git` per project, once).
+    roots: BTreeMap<String, String>,
     /// A viewer drawn in place of the stream's panes (diff, Markdown).
     pub view: Option<View>,
     /// The action running in the background, for the status bar.
@@ -173,6 +200,12 @@ pub fn run() -> Result<()> {
     spawn_term_reader(tx);
 
     follow_theme(events.clone());
+    let ticks = events.clone();
+    thread::spawn(move || {
+        while ticks.send(Msg::Tick).is_ok() {
+            thread::sleep(Duration::from_millis(500));
+        }
+    });
 
     let leader = std::env::var("JW_LEADER")
         .ok()
@@ -283,6 +316,8 @@ impl App {
             size,
             quit: false,
             modal: None,
+            finder: None,
+            roots: BTreeMap::new(),
             view: None,
             busy: None,
             events,
@@ -332,30 +367,99 @@ impl App {
 
     fn send(&mut self, msg: ClientMsg) {
         if let Err(e) = self.tx.send(&msg) {
-            self.status = Some(format!("daemon: {e}"));
+            self.fail(format!("daemon: {e}"));
         }
     }
 
     /// Rebuilds the sidebar from the registry: one space per project.
     fn reload(&mut self) -> Result<()> {
+        let state = registry::state_dir()?;
+        let folders = crate::folders::load(&state)?;
         let reg = Registry::load(&registry::default_path()?)?;
+        let mut groups: Vec<(Entry, Vec<Entry>)> = folders
+            .folders
+            .iter()
+            .map(|f| (crate::folders::entry(&f.dir, f.opened), Vec::new()))
+            .collect();
         let mut by_project: BTreeMap<String, Vec<Entry>> = BTreeMap::new();
         for e in reg.entries {
             by_project.entry(e.project.clone()).or_default().push(e);
         }
-        self.rows.clear();
-        // The free space is always there and always first (REQ-23).
-        let mut free = crate::free::Sessions::load(&crate::free::default_path()?)?.sessions;
-        free.sort_by(|a, b| a.name.cmp(&b.name));
-        self.rows.push(Row::Space(crate::free::PROJECT.into()));
-        self.rows
-            .extend(free.iter().map(|s| Row::Stream(s.entry())));
-        for (project, mut entries) in by_project {
-            entries.sort_by(|a, b| a.name.cmp(&b.name));
-            self.rows.push(Row::Space(project));
-            self.rows.extend(entries.into_iter().map(Row::Stream));
+        for (project, mut worktrees) in by_project {
+            worktrees.sort_by(|a, b| a.name.cmp(&b.name));
+            let root = self.root_of(&project, &worktrees);
+            let at = groups.iter().position(|(r, _)| {
+                !r.branch.is_empty() && (r.project == project || Some(&r.path) == root.as_ref())
+            });
+            match at {
+                Some(i) => groups[i].1 = worktrees,
+                None => {
+                    // Worktrees whose project folder isn't open: the folder
+                    // shows closed, above them.
+                    let mut e = match &root {
+                        Some(dir) => crate::folders::entry(dir, false),
+                        None => Entry {
+                            id: crate::folders::id(&project),
+                            name: project.clone(),
+                            ..Entry::default()
+                        },
+                    };
+                    e.project = project;
+                    groups.push((e, worktrees));
+                }
+            }
+        }
+        self.rows = groups
+            .into_iter()
+            .flat_map(|(root, kids)| {
+                std::iter::once(Row {
+                    entry: root,
+                    child: false,
+                })
+                .chain(kids.into_iter().map(|entry| Row { entry, child: true }))
+            })
+            .collect();
+        // The workspace on screen keeps its latest name and branch.
+        if let Some(s) = &mut self.active
+            && let Some(row) = self.rows.iter().find(|r| r.entry.id == s.entry.id)
+        {
+            s.entry = row.entry.clone();
         }
         Ok(())
+    }
+
+    /// The main checkout of `project`, found through its worktrees.
+    fn root_of(&mut self, project: &str, worktrees: &[Entry]) -> Option<String> {
+        if let Some(r) = self.roots.get(project) {
+            return Some(r.clone());
+        }
+        let root = worktrees.iter().find_map(|w| {
+            crate::connectors::git::Repo::open(std::path::Path::new(&w.path))
+                .ok()
+                .map(|r| r.root.display().to_string())
+        })?;
+        self.roots.insert(project.to_string(), root.clone());
+        Some(root)
+    }
+
+    fn say(&mut self, text: String) {
+        self.tell(text, Tone::Info);
+    }
+
+    fn done(&mut self, text: String) {
+        self.tell(text, Tone::Done);
+    }
+
+    fn fail(&mut self, text: String) {
+        self.tell(text, Tone::Error);
+    }
+
+    fn tell(&mut self, text: String, tone: Tone) {
+        self.status = Some(Status {
+            text,
+            tone,
+            at: Instant::now(),
+        });
     }
 
     /// Whether the leader was pressed and the next key is an action.
@@ -370,10 +474,7 @@ impl App {
 
     /// The sidebar's workspaces in order; `^␣ 1–9` picks from these.
     pub fn workspaces(&self) -> impl Iterator<Item = &Entry> {
-        self.rows.iter().filter_map(|r| match r {
-            Row::Stream(e) => Some(e),
-            Row::Space(_) => None,
-        })
+        self.rows.iter().map(|r| &r.entry)
     }
 
     /// Whether the daemon runs panes for this stream.
@@ -385,7 +486,7 @@ impl App {
         match m {
             Msg::Daemon(d) => self.on_daemon(d),
             Msg::DaemonGone => {
-                self.status = Some("the daemon closed the connection".into());
+                self.fail("the daemon closed the connection".into());
                 self.exit_reason = Some("the daemon closed the connection".into());
                 self.quit = true;
             }
@@ -396,6 +497,15 @@ impl App {
                 self.fit();
             }
             Msg::Term(_) => {}
+            Msg::Tick => {
+                if self
+                    .status
+                    .as_ref()
+                    .is_some_and(|s| s.at.elapsed() > STATUS_FOR)
+                {
+                    self.status = None;
+                }
+            }
             Msg::Theme => {
                 if let Some(View::Md(m)) = &mut self.view {
                     m.restyle();
@@ -461,12 +571,23 @@ impl App {
                     }
                 }
             }
-            DaemonMsg::Prompted { .. } => self.status = Some("sent to the agent".into()),
-            DaemonMsg::Error { msg } => self.status = Some(msg),
+            DaemonMsg::Prompted { .. } => self.done("sent to the agent".into()),
+            DaemonMsg::Error { msg } => self.fail(msg),
         }
     }
 
     fn on_key(&mut self, k: KeyEvent) {
+        if let Some(f) = &mut self.finder {
+            match f.key(k) {
+                finder::Outcome::Stay => {}
+                finder::Outcome::Cancel => self.finder = None,
+                finder::Outcome::Pick(pick) => {
+                    self.finder = None;
+                    self.picked(pick);
+                }
+            }
+            return;
+        }
         if let Some(m) = &mut self.modal {
             match m.key(k) {
                 Outcome::Stay => {}
@@ -534,6 +655,7 @@ impl App {
                 self.full = !self.full;
                 self.fit();
             }
+            KeyCode::Char('o') => self.ask_folder(),
             KeyCode::Char('w') => self.new_worktree(),
             KeyCode::Char('s') => self.run_sync(),
             KeyCode::Char('d') => self.open_diff(),
@@ -546,7 +668,7 @@ impl App {
                     other => format!("{other:?}").to_lowercase(),
                 };
                 let l = self.leader.label();
-                self.status = Some(format!("{l} {key} does nothing · {l} ? shows the keys"));
+                self.fail(format!("{l} {key} does nothing · {l} ? shows the keys"));
             }
         }
     }
@@ -556,7 +678,7 @@ impl App {
         let target = self.workspaces().nth(i).cloned();
         match target {
             Some(e) => self.open_entry(e, false),
-            None => self.status = Some(format!("no workspace {}", i + 1)),
+            None => self.fail(format!("no workspace {}", i + 1)),
         }
     }
 
@@ -568,7 +690,7 @@ impl App {
             .and_then(|p| self.workspaces().find(|e| e.id == p.id).cloned());
         match prev {
             Some(e) => self.open_entry(e, false),
-            None => self.status = Some("no previous workspace yet".into()),
+            None => self.fail("no previous workspace yet".into()),
         }
     }
 
@@ -580,10 +702,18 @@ impl App {
             }
             self.prev = Some(cur.clone());
         }
+        if crate::folders::is_folder(&entry) && !entry.path.is_empty() {
+            let dir = entry.path.clone();
+            if let Err(e) = crate::folders::edit(|all| {
+                all.add(&dir);
+            }) {
+                self.fail(format!("{e:#}"));
+            }
+        }
         let stream = match Stream::resolve(&entry) {
             Ok(s) => s,
             Err(e) => {
-                self.status = Some(format!("{}: {e:#}", entry.name));
+                self.fail(format!("{}: {e:#}", entry.name));
                 return;
             }
         };
@@ -600,7 +730,7 @@ impl App {
                 stream: entry.id.clone(),
             });
         } else if let Err(e) = self.start_panes(setup) {
-            self.status = Some(format!("{}: {e:#}", entry.name));
+            self.fail(format!("{}: {e:#}", entry.name));
         }
     }
 
@@ -608,8 +738,8 @@ impl App {
     fn start_panes(&mut self, setup: bool) -> Result<()> {
         let stream = self.active.clone().context("no workspace")?;
         let (specs, note) = stream.open_specs(setup)?;
-        if note.is_some() {
-            self.status = note;
+        if let Some(n) = note {
+            self.say(n);
         }
         let sizes = stream.tree.rects(self.stage());
         let mut panes = specs.into_iter().zip(sizes).map(|(spec, rect)| {
@@ -703,31 +833,28 @@ impl App {
         tree.placed(self.stage())
     }
 
-    /// What a pane's title says: its name, else the title its program set,
-    /// else the process in its foreground, else its role (REQ-36).
-    pub fn pane_title(&self, id: PaneId) -> String {
+    /// What a pane's title says: its name; else its role, then what runs
+    /// in it, dimmer: the title its program set, else its foreground
+    /// process (REQ-53).
+    pub fn pane_title(&self, id: PaneId) -> (String, Option<String>) {
         let leaf = self.tree.as_ref().and_then(|t| t.find(id));
         if let Some(name) = leaf.and_then(|l| l.name.clone()) {
-            return name;
+            return (name, None);
         }
-        let view = self.panes.get(&id);
-        if let Some(title) = view
-            .and_then(|v| v.title.clone())
-            .filter(|t| !t.trim().is_empty())
-        {
-            return title;
-        }
-        let fg = self
-            .daemon_panes
-            .iter()
-            .find(|p| p.pane == id)
-            .and_then(|p| p.fg.clone());
         let role = leaf.map(|l| l.role.clone()).unwrap_or_default();
-        match fg {
-            Some(fg) if fg != role && !role.is_empty() => format!("{role} · {fg}"),
-            Some(fg) => fg,
-            None => role,
-        }
+        let title = self
+            .panes
+            .get(&id)
+            .and_then(|v| v.title.clone())
+            .filter(|t| !t.trim().is_empty());
+        let fg = || {
+            self.daemon_panes
+                .iter()
+                .find(|p| p.pane == id)
+                .and_then(|p| p.fg.clone())
+        };
+        let runs = title.or_else(fg).filter(|r| *r != role);
+        (role, runs)
     }
 
     /// Resizes every visible pane to its rectangle, here and in the daemon.
@@ -791,7 +918,7 @@ impl App {
                 self.full = false;
                 self.fit();
             }
-            None => self.status = Some("no pane that way".into()),
+            None => self.fail("no pane that way".into()),
         }
     }
 
@@ -802,7 +929,7 @@ impl App {
         };
         match tree.neighbour(f, dx, dy, self.stage()) {
             Some(n) => self.send(ClientMsg::Swap { a: f, b: n }),
-            None => self.status = Some("no pane that way".into()),
+            None => self.fail("no pane that way".into()),
         }
     }
 
@@ -864,7 +991,7 @@ impl App {
             Some(fg) => {
                 self.modal = Some(Modal::ClosePane {
                     pane: f,
-                    title: self.pane_title(f),
+                    title: self.pane_title(f).0,
                     running: fg,
                 })
             }
@@ -898,22 +1025,90 @@ impl App {
 }
 
 impl App {
-    /// The current workspace, for an action that needs a repository: a free
-    /// session gets a word instead.
+    /// The current workspace, for an action that needs a repository: a
+    /// plain folder gets a word instead.
     fn current_repo_stream(&mut self, action: &str) -> Option<Entry> {
         let Some(entry) = self.current().cloned() else {
             let l = self.leader.label();
-            self.status = Some(format!("no workspace open: {l} 1–9 opens one"));
+            self.fail(format!("no workspace open: {l} o opens a folder"));
             return None;
         };
-        if crate::free::is_free(&entry) {
-            self.status = Some(format!(
+        if crate::folders::is_folder(&entry) && entry.branch.is_empty() {
+            self.fail(format!(
                 "{} is not a git repository: {action} needs one",
                 entry.name
             ));
             return None;
         }
         Some(entry)
+    }
+
+    /// The current workspace when it is a worktree; a project's own folder
+    /// gets a word instead.
+    fn current_worktree(&mut self, action: &str) -> Option<Entry> {
+        let entry = self.current_repo_stream(action)?;
+        if crate::folders::is_folder(&entry) {
+            self.fail(format!(
+                "{} is the project itself: {action} is for its worktrees",
+                entry.name
+            ));
+            return None;
+        }
+        Some(entry)
+    }
+
+    /// `^␣ o`: the folder browser, starting beside the current project.
+    fn ask_folder(&mut self) {
+        let start = self
+            .current()
+            .map(|e| {
+                let dir = if crate::folders::is_folder(e) {
+                    std::path::PathBuf::from(&e.path)
+                } else {
+                    self.rows
+                        .iter()
+                        .find(|r| !r.child && r.entry.project == e.project)
+                        .map(|r| std::path::PathBuf::from(&r.entry.path))
+                        .unwrap_or_else(|| std::path::PathBuf::from(&e.path))
+                };
+                dir.parent().map(|d| d.to_path_buf()).unwrap_or(dir)
+            })
+            .filter(|d| d.is_dir())
+            .or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from))
+            .unwrap_or_else(|| "/".into());
+        let open = self
+            .rows
+            .iter()
+            .filter(|r| !r.child && self.is_open(&r.entry.id))
+            .map(|r| std::path::PathBuf::from(&r.entry.path))
+            .collect();
+        self.finder = Some(finder::Finder::folders(start, open));
+    }
+
+    /// A folder picked in the browser: made first when new, then opened, or
+    /// shown when it already is (REQ-37).
+    fn picked(&mut self, pick: finder::Pick) {
+        let dir = match pick {
+            finder::Pick::Dir(d) => d,
+            finder::Pick::Create(d) => {
+                if let Err(e) = std::fs::create_dir(&d) {
+                    self.fail(format!("{}: {e}", finder::tilde(&d)));
+                    return;
+                }
+                d
+            }
+        };
+        let dir = dir.display().to_string();
+        let id = crate::folders::id(&dir);
+        let entry = self
+            .workspaces()
+            .find(|e| e.id == id)
+            .cloned()
+            .unwrap_or_else(|| crate::folders::entry(&dir, false));
+        self.open_entry(entry, false);
+        if let Err(e) = self.reload() {
+            self.fail(format!("{e:#}"));
+        }
     }
 
     /// `w`: a worktree `ws-N` from the current workspace's branch, set up and
@@ -952,8 +1147,12 @@ impl App {
         let Some(entry) = self.current().cloned() else {
             return;
         };
-        if crate::free::is_free(&entry) {
-            self.modal = Some(Modal::RmFree { entry });
+        if crate::folders::is_folder(&entry) {
+            let l = self.leader.label();
+            self.fail(format!(
+                "{} is a project folder: jw never deletes it. {l} x on its last pane closes it",
+                entry.name
+            ));
             return;
         }
         // A worktree already gone from disk finds its repository through a
@@ -1001,7 +1200,7 @@ impl App {
                 self.view = Some(View::Md(mdview::MdView::new(file.to_string(), src, back)));
             }
             Err(e) => {
-                self.status = Some(format!("{file}: {e}"));
+                self.fail(format!("{file}: {e}"));
                 self.view = back.map(|d| View::Diff(*d));
             }
         }
@@ -1009,7 +1208,7 @@ impl App {
 
     /// `d`: the workspace's changes against its base, in the diff viewer.
     fn open_diff(&mut self) {
-        let Some(entry) = self.current_repo_stream("diff") else {
+        let Some(entry) = self.current_worktree("diff") else {
             return;
         };
         self.background(format!("diffing {}", entry.name), move || {
@@ -1028,6 +1227,14 @@ impl App {
             return;
         };
         self.background(format!("syncing {}", entry.name), move || {
+            if crate::folders::is_folder(&entry) {
+                let dir = std::path::Path::new(&entry.path);
+                crate::connectors::git::pull_ff(dir)?;
+                return Ok(Job::Said(format!(
+                    "{}: {} is up to date with origin",
+                    entry.name, entry.branch
+                )));
+            }
             let p = Project::open(std::path::Path::new(&entry.path))?;
             let done = actions::sync(&p, &entry)?;
             Ok(Job::Said(format!("{}: {}", entry.name, done.message())))
@@ -1044,16 +1251,6 @@ impl App {
             Modal::Name { pane, text } => {
                 let name = Some(text.trim().to_string()).filter(|n| !n.is_empty());
                 self.send(ClientMsg::Name { pane, name });
-            }
-            Modal::RmFree { entry } => {
-                self.close(&entry);
-                let removed =
-                    crate::free::default_path().and_then(|p| crate::free::remove(&p, &entry.id));
-                self.status = Some(match removed {
-                    Ok(()) => format!("removed free/{}; {} is untouched", entry.name, entry.path),
-                    Err(e) => format!("{e:#}"),
-                });
-                let _ = self.reload();
             }
             Modal::Done {
                 entry,
@@ -1115,7 +1312,15 @@ impl App {
             self.focus = None;
             self.full = false;
         }
-        self.status = Some(format!("closed {}; its folder stays", entry.name));
+        if crate::folders::is_folder(entry) {
+            let dir = entry.path.clone();
+            if let Err(e) = crate::folders::edit(|all| all.folders.retain(|f| f.dir != dir)) {
+                self.fail(format!("{e:#}"));
+                return;
+            }
+            let _ = self.reload();
+        }
+        self.done(format!("closed {}; its folder stays", entry.name));
         self.send(ClientMsg::List);
     }
 
@@ -1134,17 +1339,17 @@ impl App {
         let reload = self.reload();
         match job {
             Job::Created { entry, setup } => {
-                self.status = Some(format!("created {} on {}", entry.name, entry.branch));
+                self.done(format!("created {} on {}", entry.name, entry.branch));
                 self.open_entry(entry, setup);
             }
             Job::Removed { name, note } => {
-                self.status = Some(match note {
+                self.done(match note {
                     Some(n) => format!("removed {name}; {n}"),
                     None => format!("removed {name}"),
                 });
             }
-            Job::Failed(e) => self.status = Some(e),
-            Job::Said(msg) => self.status = Some(msg),
+            Job::Failed(e) => self.fail(e),
+            Job::Said(msg) => self.done(msg),
             Job::Diff { title, dir, files } => {
                 self.view = Some(View::Diff(diffview::DiffView::new(title, dir, files)));
             }
@@ -1167,7 +1372,9 @@ impl App {
                 plan,
                 note,
             } => {
-                self.status = note;
+                if let Some(n) = note {
+                    self.say(n);
+                }
                 self.modal = Some(Modal::Rm {
                     entry,
                     project,
@@ -1178,7 +1385,7 @@ impl App {
             }
         }
         if let Err(e) = reload {
-            self.status = Some(format!("{e:#}"));
+            self.fail(format!("{e:#}"));
         }
     }
 }

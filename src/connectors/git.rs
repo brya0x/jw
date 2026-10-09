@@ -282,6 +282,12 @@ pub fn current_branch(dir: &Path) -> Result<String> {
     run(dir, &["branch", "--show-current"])
 }
 
+/// Brings the branch checked out in `dir` up to its upstream, refusing
+/// anything but a fast-forward.
+pub fn pull_ff(dir: &Path) -> Result<()> {
+    run(dir, &["pull", "--ff-only"]).map(|_| ())
+}
+
 /// The commit checked out in `dir`.
 pub fn head(dir: &Path) -> Result<String> {
     run(dir, &["rev-parse", "HEAD"])

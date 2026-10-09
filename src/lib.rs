@@ -12,7 +12,7 @@ pub mod connectors;
 pub mod core;
 pub mod daemon;
 pub mod diff;
-pub mod free;
+pub mod folders;
 pub mod init;
 pub mod layout;
 pub mod proto;

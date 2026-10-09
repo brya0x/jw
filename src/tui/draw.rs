@@ -8,7 +8,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
-use super::{App, PaneView, Row, SIDEBAR};
+use super::{App, PaneView, SIDEBAR};
 use crate::layout::Rect;
 use crate::theme::p;
 
@@ -32,6 +32,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         if let Some(m) = &app.modal {
             m.draw(f);
         }
+        if let Some(finder) = &app.finder {
+            finder.draw(f);
+        }
         if app.which {
             which(f, app);
         }
@@ -44,10 +47,13 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     for (id, rect) in rects {
         let r = trect(rect);
         let focused = app.focus == Some(id);
-        pane(f, app, r, &app.pane_title(id), app.panes.get(&id), focused);
+        pane(f, app, r, app.pane_title(id), app.panes.get(&id), focused);
     }
     if let Some(m) = &app.modal {
         m.draw(f);
+    }
+    if let Some(finder) = &app.finder {
+        finder.draw(f);
     }
     if app.which {
         which(f, app);
@@ -69,72 +75,80 @@ fn sidebar(f: &mut Frame, app: &App) {
     f.render_widget(block, r);
 
     let dim = Style::default().fg(p().dim);
-    let keys = format!("{} ? keys ", app.leader.label());
+    let w = inner.width as usize;
+    let hint = format!("{} o open ", app.leader.label());
     let title = " WORKSPACES";
-    let pad = (inner.width as usize).saturating_sub(title.len() + keys.chars().count());
+    let pad = w.saturating_sub(title.len() + hint.chars().count());
     let mut lines = vec![
         Line::from(vec![
             Span::styled(title, dim.add_modifier(Modifier::BOLD)),
             Span::raw(" ".repeat(pad)),
-            Span::styled(keys, dim),
+            Span::styled(hint, dim),
         ]),
         Line::default(),
     ];
-    let mut n = 0;
-    for (i, row) in app.rows.iter().enumerate() {
-        match row {
-            Row::Space(name) => {
-                if i > 0 {
-                    lines.push(Line::default());
-                }
-                let label = if name == crate::free::PROJECT {
-                    crate::free::LABEL
-                } else {
-                    name.as_str()
-                };
-                lines.push(Line::from(Span::styled(
-                    format!(" {label}"),
-                    Style::default().fg(p().fg).add_modifier(Modifier::BOLD),
-                )));
-            }
-            Row::Stream(e) => {
-                n += 1;
-                let open = app.is_open(&e.id);
-                let active = app.current().is_some_and(|c| c.id == e.id);
-                let number = if n <= 9 { n.to_string() } else { " ".into() };
-                let mut name = Style::default().fg(if open { p().fg } else { p().dim });
-                if active {
-                    name = name.fg(p().blue).add_modifier(Modifier::BOLD);
-                }
-                let mut line = Line::from(vec![
-                    Span::styled(format!(" {number} "), dim),
-                    Span::styled("↳", dim),
-                    Span::styled(
-                        if open { "● " } else { "○ " },
-                        Style::default().fg(if open { p().green } else { p().dim }),
-                    ),
-                    Span::styled(e.name.clone(), name),
-                ]);
-                if active {
-                    line = line.style(Style::default().bg(p().sel));
-                }
-                lines.push(line);
-            }
+    let rows = inner.height.saturating_sub(3) as usize;
+    let current = app
+        .rows
+        .iter()
+        .position(|r| app.current().is_some_and(|c| c.id == r.entry.id))
+        .unwrap_or(0);
+    let first = current.saturating_sub(rows.saturating_sub(1));
+    for (i, row) in app.rows.iter().enumerate().skip(first).take(rows) {
+        let e = &row.entry;
+        let open = app.is_open(&e.id);
+        let active = app.current().is_some_and(|c| c.id == e.id);
+        let number = if i < 9 {
+            (i + 1).to_string()
+        } else {
+            " ".into()
+        };
+        let mut name = Style::default().fg(if open { p().fg } else { p().dim });
+        if active {
+            name = name.fg(p().blue).add_modifier(Modifier::BOLD);
         }
+        let mut spans = vec![Span::styled(format!(" {number} "), dim)];
+        if row.child {
+            spans.push(Span::styled("  ↳", dim));
+        }
+        spans.push(Span::styled(
+            if open { "● " } else { "○ " },
+            Style::default().fg(if open { p().green } else { p().dim }),
+        ));
+        let used = 3 + if row.child { 3 } else { 0 } + 2;
+        let room = w.saturating_sub(used + 1);
+        let label: String = if e.name.chars().count() > room {
+            e.name
+                .chars()
+                .take(room.saturating_sub(1))
+                .chain(['…'])
+                .collect()
+        } else {
+            e.name.clone()
+        };
+        spans.push(Span::styled(label, name));
+        let mut line = Line::from(spans);
+        if active {
+            line = line.style(Style::default().bg(p().sel));
+        }
+        lines.push(line);
     }
     if app.rows.is_empty() {
-        lines.push(Line::from(Span::styled(" No workspaces yet", dim)));
+        lines.push(Line::from(Span::styled(
+            format!(" {} o opens a folder", app.leader.label()),
+            dim,
+        )));
     }
-    let legend = TRect::new(inner.x, inner.bottom().saturating_sub(1), inner.width, 1);
     let list = TRect {
         height: inner.height.saturating_sub(1),
         ..inner
     };
     f.render_widget(Paragraph::new(lines), list);
+    let legend = TRect::new(inner.x, inner.bottom().saturating_sub(1), inner.width, 1);
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(" ● ", Style::default().fg(p().green)),
-            Span::styled("open  ", dim),
+            Span::styled("open ", dim),
             Span::styled("○ ", dim),
             Span::styled("closed", dim),
         ])),
@@ -151,36 +165,34 @@ fn header(f: &mut Frame, app: &App) {
         return;
     };
     let e = &s.entry;
+    let folder = crate::folders::is_folder(e);
     let mut spans = Vec::new();
-    if crate::free::is_free(e) {
-        spans.push(Span::styled(
-            format!(" {}", e.name),
-            Style::default().fg(p().blue).add_modifier(Modifier::BOLD),
-        ));
-        spans.push(Span::styled("  not a git repository", dim));
-    } else {
+    if !folder {
         spans.push(Span::styled(format!(" {}/", e.project), dim));
-        spans.push(Span::styled(
-            e.name.clone(),
-            Style::default().fg(p().blue).add_modifier(Modifier::BOLD),
-        ));
+    } else {
+        spans.push(Span::raw(" "));
+    }
+    spans.push(Span::styled(
+        e.name.clone(),
+        Style::default().fg(p().blue).add_modifier(Modifier::BOLD),
+    ));
+    if e.branch.is_empty() {
+        spans.push(Span::styled("  not a git repo", dim));
+    } else {
         spans.push(Span::styled(
             format!("  {}", e.branch),
             Style::default().fg(p().magenta),
         ));
-        if !s.base.is_empty() {
-            spans.push(Span::styled(format!("  from {}", s.base), dim));
-        }
+    }
+    if !folder && !s.base.is_empty() {
+        spans.push(Span::styled(format!("  from {}", s.base), dim));
+    }
+    if !folder {
         for (svc, port) in s.vars().ports {
             spans.push(Span::styled(format!("  {svc} :{port}"), dim));
         }
     }
-    let home = std::env::var("HOME").unwrap_or_default();
-    let path = if home.len() > 1 {
-        e.path.replacen(&home, "~", 1)
-    } else {
-        e.path.clone()
-    };
+    let path = super::finder::tilde(std::path::Path::new(&e.path));
     let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
     let room = (r.width as usize).saturating_sub(used + 1);
     if path.chars().count() + 2 <= room {
@@ -194,10 +206,25 @@ fn status(f: &mut Frame, app: &App) {
     let area = f.area();
     let r = TRect::new(0, area.height.saturating_sub(1), area.width, 1);
     let leader = app.leader.label();
-    let (chip, color) = if app.leading() {
+    let confirm = matches!(
+        app.modal,
+        Some(
+            super::Modal::Close { .. }
+                | super::Modal::ClosePane { .. }
+                | super::Modal::Done { .. }
+                | super::Modal::Rm { .. }
+        )
+    );
+    let (chip, color) = if confirm {
+        (" CONFIRM ".to_string(), p().red)
+    } else if app.leading() {
         (format!(" {leader} "), p().yellow)
     } else {
-        (" TERM ".to_string(), p().green)
+        match &app.view {
+            Some(super::View::Diff(_)) => (" DIFF ".to_string(), p().blue),
+            Some(super::View::Md(_)) => (" MD ".to_string(), p().blue),
+            None => (" TERM ".to_string(), p().green),
+        }
     };
     let key = |k: &str| {
         Span::styled(
@@ -222,26 +249,69 @@ fn status(f: &mut Frame, app: &App) {
             Style::default().fg(p().cyan),
         ));
     }
-    if let Some(msg) = &app.status {
-        spans.push(Span::styled(
-            format!(" {msg}"),
-            Style::default().fg(p().yellow),
-        ));
+    if confirm {
+        spans.extend([key("y"), txt("yes ·"), key("esc"), txt("no")]);
     } else if app.leading() {
         spans.extend([txt("one key ·"), key("esc"), txt("cancels")]);
     } else {
-        spans.extend([
-            key(&leader),
-            txt("then a key ·"),
-            key("1-9"),
-            txt("workspace ·"),
-            key("w"),
-            txt("worktree ·"),
-            key("t"),
-            txt("pane ·"),
-            key("?"),
-            txt("all keys"),
-        ]);
+        match &app.view {
+            Some(super::View::Diff(_)) => spans.extend([
+                key("j k"),
+                txt("file ·"),
+                key("] ["),
+                txt("change ·"),
+                key("v"),
+                txt("viewed ·"),
+                key("t"),
+                txt("layout ·"),
+                key("↵"),
+                txt("open ·"),
+                key("q"),
+                txt("close"),
+            ]),
+            Some(super::View::Md(_)) => spans.extend([
+                key("j k ␣ b"),
+                txt("scroll ·"),
+                key("n N"),
+                txt("heading ·"),
+                key("q"),
+                txt("close"),
+            ]),
+            None => spans.extend([
+                key(&leader),
+                txt("then a key ·"),
+                key("o"),
+                txt("open ·"),
+                key("w"),
+                txt("worktree ·"),
+                key("t"),
+                txt("pane ·"),
+                key("?"),
+                txt("all keys"),
+            ]),
+        }
+    }
+    if let Some(msg) = &app.status {
+        let color = match msg.tone {
+            super::Tone::Done => p().green,
+            super::Tone::Error => p().red,
+            super::Tone::Info => p().yellow,
+        };
+        let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+        let text = format!("{} ", msg.text);
+        let room = (r.width as usize).saturating_sub(used);
+        let n = text.chars().count();
+        if n <= room {
+            spans.push(Span::raw(" ".repeat(room - n)));
+            spans.push(Span::styled(text, Style::default().fg(color)));
+        } else {
+            // No room beside the hint: the message takes the bar.
+            spans.truncate(2);
+            spans.push(Span::styled(
+                format!(" {}", msg.text),
+                Style::default().fg(color),
+            ));
+        }
     }
     f.render_widget(
         Paragraph::new(Line::from(spans)).style(Style::default().bg(p().panel)),
@@ -252,11 +322,7 @@ fn status(f: &mut Frame, app: &App) {
 fn empty(f: &mut Frame, app: &App) {
     let stage = trect(app.stage());
     let leader = app.leader.label();
-    let msg = if app.rows.is_empty() {
-        "No workspaces yet.".to_string()
-    } else {
-        format!("{leader} then 1–9 opens a workspace from the sidebar.")
-    };
+    let msg = format!("{leader} o opens a folder · {leader} 1–9 a workspace from the sidebar");
     let y = stage.y + stage.height / 2;
     f.render_widget(
         Paragraph::new(Span::styled(msg, Style::default().fg(p().dim)))
@@ -265,16 +331,40 @@ fn empty(f: &mut Frame, app: &App) {
     );
 }
 
-fn pane(f: &mut Frame, app: &App, r: TRect, title: &str, view: Option<&PaneView>, focused: bool) {
+fn pane(
+    f: &mut Frame,
+    app: &App,
+    r: TRect,
+    (title, runs): (String, Option<String>),
+    view: Option<&PaneView>,
+    focused: bool,
+) {
     let accent = if focused { p().blue } else { p().line };
     let mut spans = vec![Span::styled(
         format!(" {title} "),
         if focused {
             Style::default().fg(p().blue).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(p().dim)
+            Style::default().fg(p().fg).add_modifier(Modifier::BOLD)
         },
     )];
+    if let Some(runs) = runs {
+        let room = (r.width as usize).saturating_sub(title.chars().count() + 8);
+        let runs: String = if runs.chars().count() > room {
+            runs.chars()
+                .take(room.saturating_sub(1))
+                .chain(['…'])
+                .collect()
+        } else {
+            runs
+        };
+        if !runs.is_empty() {
+            spans.push(Span::styled(
+                format!("{runs} "),
+                Style::default().fg(p().dim),
+            ));
+        }
+    }
     if let Some(status) = view.and_then(|v| v.exited) {
         spans.push(Span::styled(
             format!(" exited {status} "),
