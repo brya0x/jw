@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::layout::{Dir, Tree};
 use crate::proto::{
@@ -41,6 +41,7 @@ pub fn run(socket: &Path) -> Result<()> {
         .with_context(|| format!("writing {}", pidfile.display()))?;
 
     let daemon = Arc::new(Daemon::new(session_path(socket)));
+    daemon.restore();
     for conn in listener.incoming() {
         match conn {
             Ok(stream) => {
@@ -130,9 +131,11 @@ struct Pane {
     state: Mutex<PaneState>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct Started {
     cmd: Option<String>,
+    #[serde(default)]
+    resume: Option<String>,
     cwd: PathBuf,
     env: BTreeMap<String, String>,
 }
@@ -212,18 +215,18 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 /// What `session.json` holds: every open workspace, enough to start it again.
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct Session {
     workspaces: Vec<SavedWs>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct SavedWs {
     id: String,
     tree: Tree<SavedPane>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct SavedPane {
     role: String,
     name: Option<String>,
@@ -364,6 +367,7 @@ impl Daemon {
                 let new = NewPane {
                     role,
                     cmd,
+                    resume: None,
                     cwd,
                     env,
                     cols,
@@ -646,6 +650,64 @@ impl Daemon {
         }
     }
 
+    /// Starts again the workspaces a previous daemon left in
+    /// `session.json` (REQ-15): same trees and names, agents with their
+    /// resume command. A workspace that can't start (its folder is gone) is
+    /// dropped with a line in the log.
+    fn restore(&self) {
+        let Some(path) = &self.session else { return };
+        let Ok(data) = fs::read(path) else { return };
+        let session: Session = match serde_json::from_slice(&data) {
+            Ok(s) => s,
+            Err(e) => return eprintln!("jw daemon: {}: {e}", path.display()),
+        };
+        for ws in session.workspaces {
+            let tree = ws.tree.try_map(&mut |p: SavedPane| {
+                let id = match p.started {
+                    None => self.next_pane.fetch_add(1, Ordering::Relaxed) + 1,
+                    Some(s) => {
+                        if !s.cwd.is_dir() {
+                            bail!("{} is gone", s.cwd.display());
+                        }
+                        let new = NewPane {
+                            role: p.role.clone(),
+                            cmd: s.resume.clone().or(s.cmd),
+                            resume: s.resume,
+                            cwd: s.cwd,
+                            env: s.env,
+                            cols: 80,
+                            rows: 24,
+                        };
+                        self.spawn(&ws.id, new, None)?
+                    }
+                };
+                Ok(PaneLeaf {
+                    id,
+                    role: p.role,
+                    name: p.name,
+                })
+            });
+            match tree {
+                Ok(tree) => {
+                    lock(&self.workspaces).insert(
+                        ws.id,
+                        Ws {
+                            tree,
+                            subs: Vec::new(),
+                        },
+                    );
+                }
+                Err(e) => {
+                    for (id, _) in self.panes_of(&ws.id) {
+                        self.stop(id);
+                    }
+                    eprintln!("jw daemon: not restoring {}: {e:#}", ws.id);
+                }
+            }
+        }
+        self.save();
+    }
+
     /// Writes `session.json` (temp file + rename). A failure is logged, not
     /// fatal: the panes matter more than the file.
     fn save(&self) {
@@ -744,6 +806,7 @@ impl Daemon {
         let NewPane {
             role,
             cmd,
+            resume,
             cwd,
             env,
             cols,
@@ -777,7 +840,12 @@ impl Daemon {
         let pane = Arc::new(Pane {
             stream: stream.to_string(),
             role,
-            started: Started { cmd, cwd, env },
+            started: Started {
+                cmd,
+                resume,
+                cwd,
+                env,
+            },
             io: Mutex::new(PaneIo {
                 writer: pair.master.take_writer()?,
                 killer: child.clone_killer(),

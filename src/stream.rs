@@ -29,6 +29,8 @@ pub struct Stream {
 pub struct PaneSpec {
     pub role: String,
     pub cmd: Option<String>,
+    /// The agent's resume command, for when the daemon restarts it.
+    pub resume: Option<String>,
     pub cwd: PathBuf,
     pub env: BTreeMap<String, String>,
 }
@@ -116,6 +118,11 @@ impl Stream {
             .map(|leaf| {
                 Ok(PaneSpec {
                     cmd: self.command(&leaf.run, &vars)?,
+                    resume: if leaf.run == "agent" {
+                        self.agent_resume(&vars)
+                    } else {
+                        None
+                    },
                     role: leaf.role,
                     cwd: PathBuf::from(&self.entry.path),
                     env: env.clone(),
@@ -187,6 +194,18 @@ impl Stream {
             },
         };
         Ok(Some(expand(&line, vars)?))
+    }
+
+    /// The agent's resume command, expanded; none when the config has none.
+    fn agent_resume(&self, vars: &Vars) -> Option<String> {
+        let agents = &self.cfg.agent;
+        let cmd = match agents.default.as_str() {
+            "codex" => &agents.codex,
+            _ => &agents.claude,
+        };
+        (!cmd.resume.trim().is_empty())
+            .then(|| expand(&cmd.resume, vars).ok())
+            .flatten()
     }
 
     /// The agent resumes its conversation in a worktree that had one before.

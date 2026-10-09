@@ -42,6 +42,23 @@ impl Daemon {
         }
     }
 
+    /// Kills the daemon and starts another on the same socket, as after a
+    /// crash or a reboot.
+    fn restart(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        self.child = Command::new(EXE)
+            .arg("daemon")
+            .env("JW_SOCKET", &self.socket)
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + TIMEOUT;
+        while Client::connect(&self.socket).is_err() {
+            assert!(Instant::now() < deadline, "daemon never listened");
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     fn client(&self) -> Client {
         let c = Client::connect(&self.socket).unwrap();
         c.set_read_timeout(Some(TIMEOUT)).unwrap();
@@ -105,6 +122,7 @@ fn cat() -> NewPane {
     NewPane {
         role: "shell".into(),
         cmd: Some("cat".into()),
+        resume: None,
         cwd: std::env::temp_dir(),
         env: BTreeMap::new(),
         cols: 80,
@@ -659,4 +677,63 @@ fn list_reports_busy_and_the_bell() {
     })
     .unwrap();
     assert!(!list(&mut c).1, "input clears the bell");
+}
+
+/// REQ-15: a new daemon starts the workspaces session.json describes, with
+/// their names, and runs an agent's resume command instead of its start.
+#[test]
+fn a_restarted_daemon_brings_the_workspaces_back() {
+    let mut d = Daemon::start();
+    let mut c = d.client();
+    let mut agent = cat();
+    agent.role = "agent".into();
+    agent.cmd = Some("echo started; cat".into());
+    agent.resume = Some("echo resumed; cat".into());
+    c.send(&ClientMsg::Open {
+        stream: "r".into(),
+        tree: Tree::Split {
+            dir: Dir::Down,
+            ratio: 0.5,
+            a: Box::new(Tree::Leaf(agent)),
+            b: Box::new(Tree::Leaf(cat())),
+        },
+    })
+    .unwrap();
+    let ids_before = ids(&next_tree(&mut c));
+    c.send(&ClientMsg::Name {
+        pane: ids_before[1],
+        name: Some("kept".into()),
+    })
+    .unwrap();
+    next_tree(&mut c);
+    drop(c);
+
+    d.restart();
+    let mut c = d.client();
+    c.send(&ClientMsg::Attach { stream: "r".into() }).unwrap();
+    let t = next_tree(&mut c);
+    let leaves: Vec<(String, Option<String>)> = t
+        .leaves()
+        .into_iter()
+        .map(|l| (l.role.clone(), l.name.clone()))
+        .collect();
+    assert_eq!(
+        leaves,
+        [
+            ("agent".to_string(), None),
+            ("shell".to_string(), Some("kept".to_string()))
+        ]
+    );
+    let agent = ids(&t)[0];
+    let mut screen = vt100::Parser::new(24, 80, 0);
+    loop {
+        match next(&mut c) {
+            DaemonMsg::Snapshot { pane, bytes, .. } if pane == agent => {
+                screen.process(&bytes);
+                break;
+            }
+            _ => {}
+        }
+    }
+    read_until(&mut c, agent, &mut screen, "resumed");
 }

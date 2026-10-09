@@ -849,6 +849,7 @@ impl App {
             NewPane {
                 role: spec.role,
                 cmd: spec.cmd,
+                resume: spec.resume,
                 cwd: spec.cwd,
                 env: spec.env,
                 cols,
@@ -947,6 +948,7 @@ impl App {
             new: NewPane {
                 role,
                 cmd: None,
+                resume: None,
                 cwd: std::path::PathBuf::new(),
                 env: BTreeMap::new(),
                 cols: 1,
@@ -1106,6 +1108,7 @@ impl App {
         let new = NewPane {
             role: "shell".into(),
             cmd: None,
+            resume: None,
             cwd: std::path::PathBuf::from(&stream.entry.path),
             env: stream.env(),
             cols,
@@ -1407,6 +1410,7 @@ impl App {
                 let new = NewPane {
                     role: "editor".into(),
                     cmd: Some(format!("nvim {}", crate::stream::shell_quote(file))),
+                    resume: None,
                     cwd: std::path::PathBuf::from(&stream.entry.path),
                     env: stream.env(),
                     cols: (stage.w / 2).saturating_sub(2).max(1),

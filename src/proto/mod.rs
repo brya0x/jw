@@ -22,6 +22,10 @@ pub const PROTOCOL: u32 = 3;
 pub struct NewPane {
     pub role: String,
     pub cmd: Option<String>,
+    /// What to run instead when the daemon starts it again after a restart
+    /// (an agent's resume command, REQ-15).
+    #[serde(default)]
+    pub resume: Option<String>,
     pub cwd: PathBuf,
     pub env: BTreeMap<String, String>,
     pub cols: u16,
