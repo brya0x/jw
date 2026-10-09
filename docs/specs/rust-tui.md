@@ -169,16 +169,16 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 
 | Part | What | REQs | Main files |
 |---|---|---|---|
-| Q1 | One-shot leader + which-key; actions on the current workspace; drop NAV and the sidebar cursor; `X` merges done/rm; status bar | 30–32, 39 | `tui/mod.rs`, `tui/keys.rs`, `tui/draw.rs`, `tui/modal.rs` |
-| Q2 | The daemon owns the tree: layout ops, the new messages, version check, `session.json`; `t x HJKL f n`; last pane closes the workspace; OSC titles | 5, 34–36 | `layout.rs`, `proto/mod.rs`, `daemon/mod.rs`, `stream.rs`, `tui/mod.rs` |
+| Q1 ✓ `4fdcd14` | One-shot leader + which-key; actions on the current workspace; drop NAV and the sidebar cursor; `X` merges done/rm; status bar | 30–32, 39 | `tui/mod.rs`, `tui/keys.rs`, `tui/draw.rs`, `tui/modal.rs` |
+| Q2 ✓ `cdbc651` | The daemon owns the tree: layout ops, the new messages, version check, `session.json`; `t x HJKL f n`; last pane closes the workspace; OSC titles | 5, 34–36 | `layout.rs`, `proto/mod.rs`, `daemon/mod.rs`, `stream.rs`, `tui/mod.rs` |
 | Q7 (done) | Themes: One Dark / One Light and the prototype's look (`33c46f5`) | 43 | `theme.rs`, `tui/draw.rs` |
-| Q9 | This addendum: Screen, Interfaces rows, REQ-50…58 | — | docs |
-| Q3 | Folders + migration; project rows; the new sidebar (rows, indent, legend, title); header; pane titles; status tones and the mode chip; `o` folder browser; the empty stage | 37, 50, 52–56 | `folders.rs`, `stream.rs`, `tui/mod.rs`, `tui/draw.rs`, `tui/finder.rs` |
-| Q4 | `␣` switcher with recency and preview, `tab` from the same recency, `/` file picker; the which-key additions | 41, 42 | `tui/finder.rs`, `tui/mod.rs` |
-| Q5 | Viewer panes: `view:diff` / `view:md`, the daemon's PTY-less leaves, the diff's width rules, `↵` to nvim/md, `x` on a viewer | 21, 22, 42, 57, 58 | `daemon/mod.rs`, `tui/diffview.rs`, `tui/mdview.rs`, `tui/mod.rs` |
-| Q6 | Marks: `busy`/`bell` in the daemon, the 2 s `List`, PR polling, `⚑` and the header's PR | 51, 52 | `daemon/mod.rs`, `proto/mod.rs`, `tui/mod.rs` |
-| Q10 | Rename `r` | 40 | `connectors/git.rs`, `actions.rs`, `core/registry.rs` |
-| Q8 | Restore from `session.json` when the daemon starts | 15 | `daemon/mod.rs` |
+| Q9 ✓ `0e869ca` | This addendum: Screen, Interfaces rows, REQ-50…58 | — | docs |
+| Q3 ✓ `58c2301` | Folders + migration; project rows; the new sidebar (rows, indent, legend, title); header; pane titles; status tones and the mode chip; `o` folder browser; the empty stage | 37, 50, 52–56 | `folders.rs`, `stream.rs`, `tui/mod.rs`, `tui/draw.rs`, `tui/finder.rs` |
+| Q4 ✓ `db90220` | `␣` switcher with recency and preview, `tab` from the same recency, `/` file picker; the which-key additions | 41, 42 | `tui/finder.rs`, `tui/mod.rs` |
+| Q5 ✓ `6ad1d6a` | Viewer panes: `view:diff` / `view:md`, the daemon's PTY-less leaves, the diff's width rules, `↵` to nvim/md, `x` on a viewer | 21, 22, 42, 57, 58 | `daemon/mod.rs`, `tui/diffview.rs`, `tui/mdview.rs`, `tui/mod.rs` |
+| Q6 ✓ `ea09023` | Marks: `busy`/`bell` in the daemon, the 2 s `List`, PR polling, `⚑` and the header's PR | 51, 52 | `daemon/mod.rs`, `proto/mod.rs`, `tui/mod.rs` |
+| Q10 ✓ `afaf4a2` | Rename `r` | 40 | `connectors/git.rs`, `actions.rs`, `core/registry.rs` |
+| Q8 ✓ `765a7af` | Restore from `session.json` when the daemon starts | 15 | `daemon/mod.rs` |
 | — | **Checkpoint:** a week of daily use with Claude Code and nvim (RISK-1), once Q3–Q5 make it look and act like the prototype | | |
 | Later | Animations (optional); cutover: delete Go + herdr, README, trim the `jw` skill | 16, 19, 20 | |
 
