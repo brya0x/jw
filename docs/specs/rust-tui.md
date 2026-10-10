@@ -381,11 +381,11 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | W3 ✓ `f575bca` | `^␣` + arrows walk the sidebar; the `MOVE` chip | 112 | `tui/mod.rs`, `tui/draw.rs` |
 | D1 ✓ `21b4e27` | Addendum 8: `X` accepts a HEAD already in the default branch | 113 | `actions.rs` |
 | R1 ✓ `00dfd2f` | Addendum 9: a restored pane's modes start off | 114 | `daemon/src/lib.rs` |
-| L0 | Addendum 10 in this spec; the prototype | — | docs |
-| L1 | One shell by default; setup runs before the program when there is no shell pane | 118, 119 | `layout.rs`, `stream.rs` |
-| L2 | `init::render_project`, `config::save_layout`, `Node` ↔ TOML | 117, 120 | `init.rs`, `config.rs`, `layout.rs` |
-| L3 | `Modal::Setup`: the builder, agent and setup step of `^␣ w` | 115–117, 122 | `tui/modal.rs`, `tui/setup.rs`, `tui/mod.rs` |
-| L4 | `^␣ p` saves the layout; `layout changed` in the header | 120, 121 | `tui/mod.rs`, `tui/draw.rs`, `settings.rs` |
+| L0 ✓ `27c36d5` | Addendum 10 in this spec; the prototype | — | docs |
+| L1 ✓ `cad289f` | One shell by default; setup runs before the program when there is no shell pane | 118, 119 | `layout.rs`, `stream.rs` |
+| L2 ✓ `98e0473` | `init::render_project`, `config::save_layout`, `Node` ↔ TOML | 117, 120 | `init.rs`, `config.rs`, `layout.rs` |
+| L3 ✓ `2f1a0b9` | `Modal::Setup`: the builder, agent and setup step of `^␣ w` | 115–117, 122 | `tui/modal.rs`, `tui/setup.rs`, `tui/mod.rs` |
+| L4 ✓ `20dc5da` | `^␣ p` saves the layout; `layout changed` in the header | 120, 121 | `tui/mod.rs`, `tui/draw.rs`, `settings.rs` |
 | Later | Animations (optional) | 19, 20 | |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 
