@@ -549,7 +549,15 @@ pub fn done_plan(
             if !p.repo.has_commit(&pr.head_sha) {
                 let _ = p.repo.fetch_commit(&pr.head_sha);
             }
-            if !p.repo.is_ancestor(&head, &pr.head_sha) {
+            // REQ-113: work that reached the default branch through another
+            // PR (the agent moved to a new branch) is done too.
+            let in_base = || {
+                let _ = p.repo.fetch();
+                p.repo
+                    .default_branch()
+                    .is_ok_and(|b| p.repo.is_ancestor(&head, &format!("origin/{b}")))
+            };
+            if !p.repo.is_ancestor(&head, &pr.head_sha) && !in_base() {
                 let merged = pr.merged_at.as_deref().and_then(registry::parse_rfc3339);
                 if let (Some(m), Some(c)) = (merged, registry::parse_rfc3339(&e.created))
                     && m < c
@@ -1034,8 +1042,13 @@ mod tests {
 
         // A local commit that isn't in the PR.
         commit(Path::new(&e.path), "later");
-        let err = done_plan(&p, &e, &FakePrs(Some(pr))).unwrap_err();
+        let err = done_plan(&p, &e, &FakePrs(Some(pr.clone()))).unwrap_err();
         assert!(err.to_string().contains("not in PR #7"), "{err}");
+
+        // REQ-113: that commit reached the default branch another way.
+        must_git(Path::new(&e.path), &["push", "-q", "origin", "HEAD:trunk"]);
+        let (plan, _) = done_plan(&p, &e, &FakePrs(Some(pr))).unwrap();
+        assert_eq!(plan.deletes.len(), 2);
     }
 
     #[test]
