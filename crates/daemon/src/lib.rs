@@ -12,6 +12,7 @@
 // The code says `crate::proto` and `crate::layout`, as it did when this
 // was one crate.
 use jw_core::{core, layout};
+use jw_proto::kitty::{self, Kitty};
 use jw_proto::proto;
 
 use std::collections::BTreeMap;
@@ -238,6 +239,8 @@ struct Titles {
     queries: Vec<Query>,
     /// It set mode 2031: tell it when the theme turns dark or light.
     scheme: bool,
+    /// Its program's kitty keyboard flags (REQ-92).
+    kitty: Kitty,
 }
 
 /// A question a pane's program asks its terminal, answered on its PTY
@@ -256,6 +259,8 @@ enum Query {
     Cursor,
     /// CSI c
     Attrs,
+    /// CSI ? u, with the flags in use when it was asked (REQ-93)
+    Kitty(u8),
 }
 
 impl Query {
@@ -273,6 +278,7 @@ impl Query {
                 format!("\x1b[{};{}R", row + 1, col + 1)
             }
             Self::Attrs => "\x1b[?1;2c".to_string(),
+            Self::Kitty(f) => format!("\x1b[?{f}u"),
         }
         .into_bytes()
     }
@@ -315,12 +321,16 @@ impl vt100::Callbacks for Titles {
 
     fn unhandled_csi(
         &mut self,
-        _: &mut vt100::Screen,
+        screen: &mut vt100::Screen,
         i1: Option<u8>,
         i2: Option<u8>,
         params: &[&[u16]],
         c: char,
     ) {
+        let alt = screen.alternate_screen();
+        if self.kitty.csi(alt, i1, params, c).is_some() {
+            self.queries.push(Query::Kitty(self.kitty.flags(alt)));
+        }
         let has = |n: u16| params.iter().any(|p| *p == [n]);
         match (i1, i2, c) {
             (Some(b'?'), None, 'n') if has(996) => self.queries.push(Query::Scheme),
@@ -372,6 +382,12 @@ fn snapshot(id: PaneId, pane: &Pane, st: &PaneState) -> DaemonMsg {
         b"\x1b[?1049l"
     });
     bytes.extend_from_slice(&screen.state_formatted());
+    bytes.extend_from_slice(
+        &st.parser
+            .callbacks()
+            .kitty
+            .replay(screen.alternate_screen()),
+    );
     DaemonMsg::Snapshot {
         pane: id,
         role: pane.role.clone(),
@@ -1220,6 +1236,8 @@ impl Daemon {
                 )
                 .as_bytes(),
             );
+            // REQ-98: the new process asked for no keyboard flags yet.
+            bytes.extend_from_slice(kitty::CLEAR);
             let mut st = lock(&pane.state);
             st.parser.process(&bytes);
             st.ring.push(&bytes);

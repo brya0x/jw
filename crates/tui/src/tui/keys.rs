@@ -1,6 +1,7 @@
 //! Turning crossterm key events back into the bytes a terminal would send,
 //! for the pane that has focus (REQ-9), and parsing the leader key.
 
+use crate::kitty::Kitty;
 use ratatui::crossterm::event::{
     KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -42,15 +43,53 @@ impl Leader {
     }
 }
 
+/// What a pane's parser tracks beyond its screen: its program's kitty
+/// keyboard flags (REQ-92). Only the daemon answers queries.
+#[derive(Default)]
+pub struct Flags(pub Kitty);
+
+impl vt100::Callbacks for Flags {
+    fn unhandled_csi(
+        &mut self,
+        screen: &mut vt100::Screen,
+        i1: Option<u8>,
+        _: Option<u8>,
+        params: &[&[u16]],
+        c: char,
+    ) {
+        self.0.csi(screen.alternate_screen(), i1, params, c);
+    }
+}
+
 /// The bytes for `k`. `app_cursor` is DECCKM: arrows send `ESC O x` instead
-/// of `ESC [ x` when the app asked for it (vim, less).
-pub fn encode(k: &KeyEvent, app_cursor: bool) -> Vec<u8> {
+/// of `ESC [ x` when the app asked for it (vim, less). `kitty` is the pane's
+/// keyboard flags: with disambiguate (1), modified Enter, Tab and Backspace,
+/// and Esc, go as `CSI code;mods u` (REQ-95).
+pub fn encode(k: &KeyEvent, app_cursor: bool, kitty: u8) -> Vec<u8> {
     let m = k.modifiers;
     let ctrl = m.contains(KeyModifiers::CONTROL);
     let alt = m.contains(KeyModifiers::ALT);
     // xterm's modifier parameter: 1 + shift(1) + alt(2) + ctrl(4).
     let param =
         1 + u8::from(m.contains(KeyModifiers::SHIFT)) + 2 * u8::from(alt) + 4 * u8::from(ctrl);
+
+    if kitty & 1 != 0 {
+        let code = match k.code {
+            KeyCode::Esc => Some(27),
+            KeyCode::Enter if param > 1 => Some(13),
+            KeyCode::Tab if param > 1 => Some(9),
+            KeyCode::Backspace if param > 1 => Some(127),
+            _ => None,
+        };
+        if let Some(code) = code {
+            return if param > 1 {
+                format!("\x1b[{code};{param}u")
+            } else {
+                format!("\x1b[{code}u")
+            }
+            .into_bytes();
+        }
+    }
 
     let csi = |final_: char| -> Vec<u8> {
         if param > 1 {
@@ -195,38 +234,78 @@ mod tests {
     #[test]
     fn plain_and_control_keys() {
         let none = KeyModifiers::NONE;
-        assert_eq!(encode(&key(KeyCode::Char('a'), none), false), b"a");
+        assert_eq!(encode(&key(KeyCode::Char('a'), none), false, 0), b"a");
         assert_eq!(
-            encode(&key(KeyCode::Char('ñ'), none), false),
+            encode(&key(KeyCode::Char('ñ'), none), false, 0),
             "ñ".as_bytes()
         );
         assert_eq!(
-            encode(&key(KeyCode::Char('c'), KeyModifiers::CONTROL), false),
+            encode(&key(KeyCode::Char('c'), KeyModifiers::CONTROL), false, 0),
             [3]
         );
         assert_eq!(
-            encode(&key(KeyCode::Char('x'), KeyModifiers::ALT), false),
+            encode(&key(KeyCode::Char('x'), KeyModifiers::ALT), false, 0),
             b"\x1bx"
         );
-        assert_eq!(encode(&key(KeyCode::Enter, none), false), b"\r");
-        assert_eq!(encode(&key(KeyCode::Backspace, none), false), [0x7f]);
+        assert_eq!(encode(&key(KeyCode::Enter, none), false, 0), b"\r");
+        assert_eq!(encode(&key(KeyCode::Backspace, none), false, 0), [0x7f]);
     }
 
     #[test]
     fn arrows_follow_the_cursor_mode_and_modifiers() {
         let none = KeyModifiers::NONE;
-        assert_eq!(encode(&key(KeyCode::Up, none), false), b"\x1b[A");
-        assert_eq!(encode(&key(KeyCode::Up, none), true), b"\x1bOA");
+        assert_eq!(encode(&key(KeyCode::Up, none), false, 0), b"\x1b[A");
+        assert_eq!(encode(&key(KeyCode::Up, none), true, 0), b"\x1bOA");
         assert_eq!(
-            encode(&key(KeyCode::Left, KeyModifiers::CONTROL), true),
+            encode(&key(KeyCode::Left, KeyModifiers::CONTROL), true, 0),
             b"\x1b[1;5D"
         );
         assert_eq!(
-            encode(&key(KeyCode::Delete, KeyModifiers::SHIFT), false),
+            encode(&key(KeyCode::Delete, KeyModifiers::SHIFT), false, 0),
             b"\x1b[3;2~"
         );
-        assert_eq!(encode(&key(KeyCode::F(1), none), false), b"\x1bOP");
-        assert_eq!(encode(&key(KeyCode::F(12), none), false), b"\x1b[24~");
+        assert_eq!(encode(&key(KeyCode::F(1), none), false, 0), b"\x1bOP");
+        assert_eq!(encode(&key(KeyCode::F(12), none), false, 0), b"\x1b[24~");
+    }
+
+    #[test]
+    fn modified_enter_needs_the_kitty_flags() {
+        let shift = KeyModifiers::SHIFT;
+        let none = KeyModifiers::NONE;
+        // REQ-96: without them, what a terminal sends.
+        assert_eq!(encode(&key(KeyCode::Enter, shift), false, 0), b"\r");
+        assert_eq!(encode(&key(KeyCode::Esc, none), false, 0), [0x1b]);
+        // REQ-95: with disambiguate.
+        assert_eq!(encode(&key(KeyCode::Enter, shift), false, 1), b"\x1b[13;2u");
+        assert_eq!(
+            encode(&key(KeyCode::Enter, KeyModifiers::CONTROL), false, 5),
+            b"\x1b[13;5u"
+        );
+        assert_eq!(encode(&key(KeyCode::Enter, none), false, 1), b"\r");
+        assert_eq!(
+            encode(&key(KeyCode::Tab, KeyModifiers::CONTROL), false, 1),
+            b"\x1b[9;5u"
+        );
+        assert_eq!(encode(&key(KeyCode::BackTab, shift), false, 1), b"\x1b[Z");
+        assert_eq!(
+            encode(&key(KeyCode::Backspace, KeyModifiers::ALT), false, 1),
+            b"\x1b[127;3u"
+        );
+        assert_eq!(encode(&key(KeyCode::Esc, none), false, 1), b"\x1b[27u");
+        assert_eq!(encode(&key(KeyCode::Char('a'), none), false, 1), b"a");
+        // Flags without disambiguate change nothing.
+        assert_eq!(encode(&key(KeyCode::Enter, shift), false, 8), b"\r");
+    }
+
+    #[test]
+    fn pane_parser_tracks_the_flags() {
+        let mut p = vt100::Parser::new_with_callbacks(4, 10, 0, Flags::default());
+        p.process(b"\x1b[>1u");
+        assert_eq!(p.callbacks().0.flags(false), 1);
+        p.process(b"\x1b[?1049h\x1b[>5u");
+        assert_eq!(p.callbacks().0.flags(true), 5);
+        p.process(b"\x1b[?1049l\x1b[<u");
+        assert_eq!(p.callbacks().0.flags(false), 0);
     }
 
     #[test]

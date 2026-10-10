@@ -835,6 +835,43 @@ fn a_late_client_gets_the_scrollback() {
     assert!(top.starts_with("1\n2\n3\n"), "{top}");
 }
 
+/// REQ-93, 97, 100: the daemon answers a program's kitty keyboard query
+/// before its device attributes query, and a
+/// late client's Snapshot ends with the program's whole stack.
+#[test]
+fn the_kitty_keyboard_flags_are_answered_and_replayed() {
+    let d = Daemon::start();
+    let mut c = d.client();
+    let pane = spawn(
+        &mut c,
+        "kk",
+        r"printf '\033[>1u\033[>5u\033[?u\033[c'; cat",
+        80,
+        24,
+    );
+    // The reply comes in as typed input, and the tty echoes it.
+    let mut screen = vt100::Parser::new(24, 80, 0);
+    read_until(&mut c, pane, &mut screen, "[?5u^[[?1;2c");
+
+    let mut late = d.client();
+    late.send(&ClientMsg::Attach {
+        stream: "kk".into(),
+    })
+    .unwrap();
+    let bytes = loop {
+        if let DaemonMsg::Snapshot { pane: p, bytes, .. } = recv(&mut late)
+            && p == pane
+        {
+            break bytes;
+        }
+    };
+    assert!(
+        bytes.ends_with(b"\x1b[<17u\x1b[=0u\x1b[>1u\x1b[>5u"),
+        "{:?}",
+        String::from_utf8_lossy(&bytes[bytes.len().saturating_sub(40)..])
+    );
+}
+
 /// REQ-79: SIGTERM saves what the panes printed since the last save.
 #[test]
 fn sigterm_saves_the_scrollback_before_exiting() {

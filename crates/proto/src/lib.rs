@@ -3,6 +3,7 @@
 //! the client end of the socket.
 
 pub mod client;
+pub mod kitty;
 pub mod proto;
 
 // The code says `crate::layout`, as it did when this was one crate.

@@ -14,6 +14,9 @@ It depends only on jw-core, for `layout::Tree`.
   - `socket_path` (`:431`), `pidfile` and `is_view` (a `view:` role has no process).
 - `src/client.rs`: `Client` (`:19`), which connects and starts the daemon when nobody
   listens.
+- `src/kitty.rs`: `Kitty`, a pane's kitty keyboard flag stacks. The daemon and the TUI
+  each keep one per pane, fed by their vt100 parser. It travels in-band, so it is not a
+  message (spec, addendum 5).
 
 ## Keep in mind
 

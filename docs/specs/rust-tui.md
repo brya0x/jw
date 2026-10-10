@@ -82,6 +82,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 | Stack | ratatui (its crossterm re-export), portable-pty, vt100 0.16 (drawn by `src/tui/draw.rs`), serde/toml/serde_json, syntect, pulldown-cmark, anyhow |
 | Diff | `src/diff.rs` (model: `git diff -M --merge-base origin/<base>` + untracked) and `src/tui/diffview.rs` (drawing, keys `j k ] [ v t ␣ b ↵ q`) |
 | MD reader | `src/view/md.rs` (pulldown-cmark → wrapped lines + headings) and `src/tui/mdview.rs` |
+| Keyboard protocol | Addendum 5. `jw_proto::kitty::Kitty` holds a pane's kitty keyboard flag stacks (main and alternate, 16 deep). The daemon's `Titles` and the TUI's `keys::Flags` feed it from `vt100::Callbacks::unhandled_csi`. In the daemon a `CSI ? u` becomes `Query::Kitty(flags)` in the same queue as S14's queries, so answers go in the order asked; `snapshot` appends `Kitty::replay` (`CSI < 17 u`, `CSI = base u`, then one `CSI > f u` per entry); a restored pane's history ends with `kitty::CLEAR`. The TUI probes the outer terminal (`supports_keyboard_enhancement`, before its event reader starts), pushes `DISAMBIGUATE_ESCAPE_CODES` after `ratatui::init()` and pops it before `ratatui::restore()`. `keys::encode(k, app_cursor, kitty)`: with flag 1, a modified Enter / Tab / Backspace goes as `CSI 13\|9\|127;mods u` and Esc as `CSI 27[;mods] u`; anything else, or flags 0, as before. No message changes, so `PROTOCOL` stays (RAT-15) |
 | Pickers | `src/tui/finder.rs`: a `Finder` modal (query, results, selection, preview) with one fuzzy scorer (consecutive matches score more), three sources. `o`: folder browser, one directory at a time, `→`/`tab` in, `←`/backspace on empty up, `~` home, `↵` opens; a name that doesn't exist offers `+ create`. It starts in the parent of the current project. `␣`: every workspace, by last use (`recent.json` in the state dir), with a preview of path, branch, PR, agent state and panes. `/`: `git ls-files -co --exclude-standard`, or a walk capped at 5000 files without dot dirs |
 
 ## Acceptance
@@ -186,6 +187,22 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 - REQ-88 THE daemon SHALL start each pane with `COLORFGBG` set to `15;0` when dark and `0;15` when light.
 - REQ-89 WHEN a pane's program writes `CSI 6 n`, the daemon SHALL answer with the vt100 cursor position. WHEN it writes `CSI c` or `CSI 0 c`, the daemon SHALL answer `CSI ? 1 ; 2 c`.
 
+### Addendum 5 (S15): modified keys reach the panes (kitty keyboard protocol)
+
+Shift+Enter inserts a new line in claude, codex and nvim inside jw, as it does outside. Three links were missing: the TUI never asked the outer terminal for the kitty protocol, so Ghostty sent `\r` for both keys; nothing tracked or answered a pane program's `CSI > f u` / `CSI ? u`; and `encode` dropped Enter's modifiers. The flags reach clients in-band, as DECCKM does (RAT-15).
+
+- REQ-90 WHERE the outer terminal supports the kitty keyboard protocol, the TUI SHALL push flag 1 at start and pop it before it restores the terminal.
+- REQ-91 IF the outer terminal does not support the protocol, THEN the TUI SHALL send it nothing new, and keys SHALL behave as before.
+- REQ-92 WHEN a pane's program sends `CSI > f u`, `CSI < n u` or `CSI = f ; m u`, the daemon and the TUI SHALL update that pane's stack for the screen in use (main or alternate).
+- REQ-93 WHEN a pane's program sends `CSI ? u`, the daemon SHALL write `CSI ? f u` to its PTY, where f is the top of the active stack (0 if the stack is empty).
+- REQ-94 WHEN a pane enters the alternate screen, its alternate stack SHALL start empty.
+- REQ-95 WHILE the focused pane's active stack has flag 1, the TUI SHALL encode keys per the Keyboard protocol row in Interfaces.
+- REQ-96 WHILE the focused pane's active flags are 0, the TUI SHALL send exactly the bytes it sent before (Shift+Enter is `\r`).
+- REQ-97 WHEN a client attaches, the Snapshot SHALL leave its parser with the pane's whole active stack, so that a later pop gives the same flags as in the daemon, even after the ring dropped the original pushes.
+- REQ-98 WHEN the daemon restores a pane from scrollback, the new process SHALL start with empty stacks in the daemon and in every client.
+- REQ-99 THE daemon SHALL never write a reply while it holds a pane's state lock.
+- REQ-100 WHEN a pane's program sends several queries, the daemon SHALL answer them in the order asked (nvim sends `CSI ? u` then `CSI c`, and takes the kitty answer only if it comes before REQ-89's).
+
 ---
 
 ## Rationale
@@ -203,6 +220,11 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 - RAT-12 **The daemon answers queries, not the TUI** (S14). It owns the PTYs, agents run with no client attached, and programs wait briefly for an answer (nvim about 100 ms); a round trip through a client is late or missing.
 - RAT-13 **The TUI's palette is the source, not the outer terminal.** Panes are drawn on `p().bg`, so that is the colour a program sits on. Custom themes (S8) change fg/bg, so the message carries the colours, not only `dark`.
 - RAT-14 **The theme persists in `session.json`** because restored agents (REQ-74) ask before any TUI reconnects.
+- RAT-15 **Keyboard flags in-band, no `PROTOCOL` bump.** DECCKM already reaches the TUI this way: its own parser reads the raw output and the Snapshot replays the mode. An old TUI on a new daemon ignores the flags and sends legacy bytes, as before. A new TUI on an old daemon only sees flags a program pushed without asking first, and CSI u is then what that program wants. Neither side misreads the other.
+- RAT-16 **The daemon answers `CSI ? u`.** nvim and crossterm programs (codex) query before they push and stay legacy without an answer. The TUI may be detached, and two TUIs would answer twice. It rides S14's query queue, which already answers `CSI c`.
+- RAT-17 **Flag 1 only, and a short encode table.** Shift+Enter needs only disambiguate. Full kitty encoding (release events, every key as an escape, associated text) is a large surface for no visible gain; programs that push more flags (nvim pushes 3) still parse legacy bytes.
+- RAT-18 **Push after `ratatui::init()`.** The kitty spec keeps separate stacks per screen, so the push lands on the alternate screen's: a panic that skips the pop leaves the user's shell without the flag once the alternate screen is left.
+- RAT-19 **How herdr does it** (v0.8.2, read from source). The same three pieces, with bigger parts. The outer terminal gets 1+2+4 (31 when a pane asks for report-all, switched with pop+push because old iTerm2 clears the stack on set; `src/terminal_modes.rs`). Panes run on libghostty-vt, which tracks the flags, answers every query through a `write_pty` callback and encodes keys with Ghostty's encoder (`src/pane/terminal.rs`). Legacy Shift+Enter is `\r` there too (`legacy_shift_enter_is_just_cr`, `src/input/encode.rs`), and `KittyKeyboardTracker::replay_ansi` (`src/pane/kitty_keyboard.rs`) is the replay shape REQ-97 copies. Rejected: swapping vt100 for libghostty-vt, which would vendor a Zig/C library and rewrite both parsers for one key. Rejected: always sending `ESC \r`, which claude takes as a new line but nvim and codex read as Alt+Enter, and bash gets a stray ESC.
 
 ## Risks
 
@@ -234,6 +256,9 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 - RISK-26 **Replies always end with ST:** vt100 doesn't pass `bel_terminated` to its callback. Every parser we know of accepts either.
 - RISK-27 **Lock order:** the reader drops `state` before taking `io` to reply, as `set_theme` does per pane. Holding both could deadlock against `Input`.
 - RISK-28 **Several TUIs in terminals of different appearance:** the last to connect or switch wins (OPEN-8). DECRQM is answered for 2031 only.
+- RISK-29 **A program that dies without popping its keyboard flags** (killed by a signal) leaves them set, and the next program in that shell gets CSI u for modified Enter, Tab and Esc. A real terminal behaves the same. If it bites: clear the stacks when the shell prints its prompt (OSC 133).
+- RISK-30 **The Snapshot replays only the active screen's stack.** A client that attaches during a full-screen program relies on the ring for the main screen's stack, which matters only after 2 MiB of output dropped those pushes.
+- RISK-31 **With flag 1 on the outer terminal**, crossterm reports Ctrl+letters as `Char+CONTROL` instead of the legacy aliases (Ctrl+H is no longer Backspace). `encode` sends the same bytes either way, and no TUI binding matches an alias (checked in S15).
 - Closed by addendum 3: RISK-5 (own registry), RISK-7 (hooks), RISK-9 (frames), RISK-16 (`nvim --server`), RISK-17 (`root` in the registry).
 
 ## Parts (each one ends with `cargo test` + `clippy` green and a local commit on `feat/rust-tui`; nothing is pushed)
@@ -268,6 +293,7 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | S12 ✓ `7495afb` | The daemon saves everything on SIGTERM, SIGINT and SIGHUP | 79 | `daemon` |
 | S13 ✓ `4f7e4a4` | `jw server status`, `jw server stop` | 80 | `server.rs`, `help.rs`, `session.rs` |
 | S14 ✓ `b98d8a9` | The daemon answers colour, scheme, cursor and attribute queries; mode 2031; `ClientMsg::Theme`, `PROTOCOL 7` | 81–89 | `proto`, `daemon`, `theme.rs`, `tui/mod.rs` |
+| S15 ✓ `8d2f2f0` | Addendum 5: Shift+Enter, the kitty keyboard protocol | 90–100 | `proto/kitty.rs`, `tui/keys.rs`, `tui/mod.rs`, `daemon` |
 | Later | Animations (optional) | 19, 20 | |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 
@@ -283,9 +309,13 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - OPEN-7 → DSR and DA (REQ-89) go in S14: same reply path, and without them crossterm programs wait for a timeout.
 - OPEN-8 → last-wins between several TUIs.
 - OPEN-9 → following the outer terminal's own mode 2031 is later; S14 keeps `AppleInterfaceStyle` and the settings.
+- OPEN-10 (open) Plain Esc goes as `CSI 27 u` to a pane with flag 1, as the kitty spec says (it also removes nvim's Esc delay). The alternative is to keep `\x1b`, for less change.
 - OPEN-5 → `~/.config/jw/settings.json` (JSON, outside Go's `*.toml` glob) and the `^␣ ,` screen (addendum 3).
 
 ## Corrections
+
+- Addendum 5's first draft answered only `CSI ? u`. nvim sends `CSI ? u` then `CSI c` and pushes its flags only once both answers arrive (nvim 0.12.5), which the end-to-end test caught. S14 answers `CSI c`; REQ-100 keeps the two in order.
+- The first diagnosis of Shift+Enter said it needed a `PaneInfo` field and a `PROTOCOL` bump. It didn't: the TUI's parser already sees the raw output (RAT-15).
 
 - Paths in this spec say `src/…` from when jw was one crate. Since `6be5ac4` the code is a workspace: `src/{layout,core,connectors,actions,folders,session,stream,init,diff}` are in `crates/core/src/`, `src/proto` and `src/client.rs` in `crates/proto/src/`, `src/daemon` in `crates/daemon/src/`, `src/{tui,view,theme,settings}` in `crates/tui/src/`, `src/{main,cli}.rs` and `tests/` in `crates/jw/`.
 
@@ -310,4 +340,5 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - actions: fakes behind traits; `X` takes the done or rm path by PR state; rename against a temp repo; `free.json` → `folders.json` migration.
 - finder: fuzzy ranking tables; folder browser over a temp dir.
 - TUI: ratatui `TestBackend` for the which-key popup, sidebar and modals.
+- keyboard protocol: `kitty.rs` units (push, pop past empty, set modes, query, depth, alternate stack, replay round trip); `keys.rs` units (Shift+Enter is `\r` with flags 0 and `CSI 13;2u` with flag 1); the daemon answers `CSI ? u` before `CSI c`, and a late Snapshot ends with the stack. End to end, with a script that plays Ghostty (answers the probe, sends keys as Ghostty does with flag 1) against an isolated jw: Shift+Enter is a new line in claude 2.1.296 and codex 0.162.1, fires `imap <S-CR>` in nvim 0.12.5; a program that never pushes still gets `\r`; the TUI pops on exit, and pushes nothing when the terminal doesn't answer.
 - manual (after Q2 and Q5): claude and nvim in panes; `w`, `t`, `x`, `HJKL`, `n`, `d`, `↵` in the diff, `q`, then `jw` again shows the same layout.
