@@ -181,6 +181,12 @@ A project's config is looked up in this order:
 3. Defaults: worktrees in `<repo>-wt/`, branch `feat/{name}`, no setup, no ports, and one
    shell pane.
 
+The first `^␣ w` in a project with neither file asks for its setup after the name: you build
+the layout box by box (split, move, resize, and pick what runs in each: nvim, the agent, a
+shell or a command), choose claude or codex, and check the setup commands and `.env` files
+jw found. `↵` writes them to `<repo>/.jw.toml` and creates the worktree. Later, `^␣ p` saves
+the panes you have on screen as the project's layout.
+
 ```toml
 match  = "github.com/acme/myapp"          # which repo this applies to
 root   = "~/code/myapp-wt"                # where worktrees go

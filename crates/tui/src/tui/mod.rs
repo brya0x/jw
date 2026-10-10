@@ -11,6 +11,7 @@ mod keys;
 mod mdview;
 mod modal;
 mod settings_view;
+mod setup;
 
 use std::collections::BTreeMap;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -69,7 +70,11 @@ enum Job {
     Created {
         entry: Entry,
         setup: bool,
+        /// The `.jw.toml` the setup step wrote.
+        wrote: Option<String>,
     },
+    /// What the setup step starts from, found off the UI thread.
+    SetupReady(Box<setup::Setup>),
     /// done's checks passed: ask before deleting.
     DoneReady {
         entry: Entry,
@@ -818,6 +823,18 @@ impl App {
                 Outcome::Stay => {}
                 Outcome::Cancel => self.modal = None,
                 Outcome::Submit => self.submit_modal(),
+                Outcome::Back => {
+                    if let Some(Modal::Setup(s)) = self.modal.take() {
+                        let s = *s;
+                        self.modal = Some(Modal::New {
+                            plan: modal::new_plan(&s.project, &s.name),
+                            text: s.name,
+                            picked: false,
+                            from: s.from,
+                            project: s.project,
+                        });
+                    }
+                }
             }
             return;
         }
@@ -2101,6 +2118,7 @@ impl App {
             Ok(Job::Created {
                 entry,
                 setup: !project.cfg.setup.is_empty(),
+                wrote: None,
             })
         });
     }
@@ -2221,7 +2239,43 @@ impl App {
                 project,
                 text,
                 ..
+            } if project.cfg.source.is_none() => {
+                // REQ-115: a project with no config is set up first.
+                self.background(format!("looking at {}", project.name), move || {
+                    let draft = crate::init::detect(&project.repo, &project.name, false)?;
+                    Ok(Job::SetupReady(Box::new(setup::Setup::new(
+                        from, project, text, &draft,
+                    ))))
+                });
+            }
+            Modal::New {
+                from,
+                project,
+                text,
+                ..
             } => self.create_worktree(from, project, text),
+            Modal::Setup(s) => {
+                // REQ-117: write .jw.toml, then create with it.
+                let s = *s;
+                let choice = s.choice();
+                let (from, name) = (s.from, s.name);
+                let repo = s.project.repo;
+                self.background(format!("creating {name}"), move || {
+                    let path = crate::init::write_project(&repo, &choice)?;
+                    let project = Project::open(&repo.root)?;
+                    let o = NewOptions {
+                        name,
+                        from: from.branch,
+                        branch: String::new(),
+                    };
+                    let entry = actions::new_stream(&project, &o, &registry::default_path()?)?;
+                    Ok(Job::Created {
+                        entry,
+                        setup: !project.cfg.setup.is_empty(),
+                        wrote: Some(path.display().to_string()),
+                    })
+                });
+            }
             Modal::Rename {
                 entry,
                 project,
@@ -2366,10 +2420,19 @@ impl App {
         self.busy = None;
         let reload = self.reload();
         match job {
-            Job::Created { entry, setup } => {
-                self.done(format!("created {} on {}", entry.name, entry.branch));
+            Job::Created {
+                entry,
+                setup,
+                wrote,
+            } => {
+                let mut msg = format!("created {} on {}", entry.name, entry.branch);
+                if let Some(w) = wrote {
+                    msg += &format!("; wrote {w}");
+                }
+                self.done(msg);
                 self.open_entry(entry, setup);
             }
+            Job::SetupReady(s) => self.modal = Some(Modal::Setup(s)),
             Job::Removed { name, note } => {
                 self.done(match note {
                     Some(n) => format!("removed {name}; {n}"),

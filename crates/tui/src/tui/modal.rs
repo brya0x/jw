@@ -38,6 +38,9 @@ pub enum Modal {
         picked: bool,
         plan: Result<crate::actions::Planned, String>,
     },
+    /// `^␣ w` on a project with no config: the step after the name that
+    /// builds its layout and writes `.jw.toml` (REQ-115).
+    Setup(Box<super::setup::Setup>),
     /// `^␣ r`: a new name for a worktree, with what changes (REQ-111).
     Rename {
         entry: Entry,
@@ -86,10 +89,19 @@ pub enum Outcome {
     Stay,
     Cancel,
     Submit,
+    /// The setup step's `esc`: back to the name it came from.
+    Back,
 }
 
 impl Modal {
     pub fn key(&mut self, k: KeyEvent) -> Outcome {
+        if let Modal::Setup(s) = self {
+            return match s.key(k) {
+                super::setup::Done::Stay => Outcome::Stay,
+                super::setup::Done::Back => Outcome::Back,
+                super::setup::Done::Submit => Outcome::Submit,
+            };
+        }
         if k.code == KeyCode::Esc {
             return Outcome::Cancel;
         }
@@ -99,6 +111,7 @@ impl Modal {
                 KeyCode::Char('n') => Outcome::Cancel,
                 _ => Outcome::Stay,
             },
+            Modal::Setup(_) => Outcome::Stay,
             Modal::Close { .. } | Modal::ClosePane { .. } => match k.code {
                 KeyCode::Char('y') | KeyCode::Enter => Outcome::Submit,
                 KeyCode::Char('n') => Outcome::Cancel,
@@ -201,6 +214,7 @@ impl Modal {
 
     pub fn draw(&self, f: &mut Frame) {
         let (title, lines) = match self {
+            Modal::Setup(s) => return s.draw(f),
             Modal::Done {
                 entry, plan, pr, ..
             } => {
@@ -310,8 +324,19 @@ impl Modal {
                         Style::default().fg(p().red),
                     ))),
                 }
+                let first = project.cfg.source.is_none();
+                if first {
+                    l.push(Line::default());
+                    l.push(Line::from(Span::styled(
+                        format!(" {} has no config yet: ↵ sets it up first.", project.name),
+                        Style::default().fg(p().yellow),
+                    )));
+                }
                 l.push(Line::default());
-                l.push(keys(&[("↵", "create"), ("esc", "cancel")]));
+                l.push(keys(&[
+                    ("↵", if first { "next" } else { "create" }),
+                    ("esc", "cancel"),
+                ]));
                 (format!(" New worktree in {} ", project.name), l)
             }
             Modal::Rename {
