@@ -130,24 +130,32 @@ impl Stream {
             .collect()
     }
 
-    /// The panes to start when the stream opens; with `setup`, the shell
-    /// pane runs the config's setup first, showing it, then stays a shell.
-    /// The note says when setup had nowhere to run.
-    pub fn open_specs(&self, setup: bool) -> Result<(Vec<PaneSpec>, Option<String>)> {
+    /// The panes to start when the stream opens. With `setup`, a shell pane
+    /// runs the config's setup first, showing it, then stays a shell; with no
+    /// shell pane, the editor, else the agent, else the first pane runs it
+    /// before its program (REQ-119).
+    pub fn open_specs(&self, setup: bool) -> Result<Vec<PaneSpec>> {
         let mut specs = self.panes()?;
-        let mut note = None;
         if setup && let Some(line) = crate::actions::setup_line(&self.cfg, &self.vars())? {
-            match specs.iter_mut().find(|s| s.cmd.is_none()) {
-                Some(shell) => {
-                    shell.cmd = Some(format!(
-                        "printf '%s\\n' {}; {line}; exec \"${{SHELL:-sh}}\"",
-                        shell_quote(&format!("$ {line}"))
-                    ))
-                }
-                None => note = Some("setup skipped: the layout has no shell pane".into()),
+            let shown = format!(
+                "printf '%s\\n' {}; {line}",
+                shell_quote(&format!("$ {line}"))
+            );
+            let at = specs
+                .iter()
+                .position(|s| s.cmd.is_none())
+                .or_else(|| specs.iter().position(|s| s.role == "editor"))
+                .or_else(|| specs.iter().position(|s| s.role == "agent"))
+                .unwrap_or(0);
+            if let Some(pane) = specs.get_mut(at) {
+                let then = pane
+                    .cmd
+                    .take()
+                    .unwrap_or_else(|| "exec \"${SHELL:-sh}\"".into());
+                pane.cmd = Some(format!("{shown}; {then}"));
             }
         }
-        Ok((specs, note))
+        Ok(specs)
     }
 
     /// Records that an agent ran here, and which conversation, so the next
@@ -371,9 +379,51 @@ mod tests {
             },
             cfg,
             base: "trunk".into(),
-            tree: Node::default_tree(),
+            tree: Node::three_panes(),
             session: "0000-s".into(),
         }
+    }
+
+    /// REQ-119: setup goes to the shell pane, else before the editor, else
+    /// before the agent.
+    #[test]
+    fn setup_runs_in_the_shell_or_before_the_program() {
+        let mut s = stream(false);
+        s.cfg.setup = vec!["pnpm install".into()];
+        let line = |s: &Stream| {
+            s.open_specs(true)
+                .unwrap()
+                .into_iter()
+                .filter_map(|p| {
+                    p.cmd
+                        .filter(|c| c.contains("pnpm install"))
+                        .map(|c| (p.role, c))
+                })
+                .collect::<Vec<_>>()
+        };
+        let got = line(&s);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].0, "shell");
+        assert!(
+            got[0].1.ends_with("pnpm install; exec \"${SHELL:-sh}\""),
+            "{}",
+            got[0].1
+        );
+
+        s.tree = Node::split(Dir::Right, 0.5, Node::leaf("editor"), Node::leaf("agent"));
+        let got = line(&s);
+        assert_eq!(got[0].0, "editor");
+        assert!(got[0].1.contains("pnpm install; rm -f "), "{}", got[0].1);
+        assert!(got[0].1.contains("exec nvim --listen"), "{}", got[0].1);
+
+        s.tree = Node::leaf("agent");
+        assert_eq!(line(&s)[0].0, "agent");
+        assert!(
+            s.open_specs(false).unwrap()[0]
+                .cmd
+                .as_deref()
+                .is_some_and(|c| !c.contains("pnpm"))
+        );
     }
 
     #[test]

@@ -1077,10 +1077,7 @@ impl App {
     /// Asks the daemon to start the workspace's panes in its layout's shape.
     fn start_panes(&mut self, setup: bool) -> Result<()> {
         let stream = self.active.clone().context("no workspace")?;
-        let (specs, note) = stream.open_specs(setup)?;
-        if let Some(n) = note {
-            self.say(n);
-        }
+        let specs = stream.open_specs(setup)?;
         let sizes = stream.tree.rects(self.stage());
         let mut panes = specs.into_iter().zip(sizes).map(|(spec, rect)| {
             let (cols, rows) = inner(rect);

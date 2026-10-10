@@ -190,7 +190,7 @@ pub fn worktree(args: &[String]) -> Result<()> {
     let stream = Stream::resolve(&entry)?;
     let mut c = Client::connect_or_start(&socket_path(), &std::env::current_exe()?)?;
     open(&mut c, &stream)?;
-    eprintln!("opened {}: setup runs in its shell pane", entry.name);
+    eprintln!("opened {}", entry.name);
     if let Some(task) = task {
         send_prompt(&mut c, &entry, &task)?;
         eprintln!("task sent to {}'s agent", entry.name);
@@ -230,10 +230,7 @@ fn spawn(spec: PaneSpec, stream: &str, (cols, rows): (u16, u16)) -> ClientMsg {
 
 /// Starts the stream's panes in the daemon, sized for the default layout.
 fn open(c: &mut Client, stream: &Stream) -> Result<()> {
-    let (specs, note) = stream.open_specs(true)?;
-    if let Some(n) = note {
-        eprintln!("{n}");
-    }
+    let specs = stream.open_specs(true)?;
     let rects = stream.tree.rects(Rect {
         x: 0,
         y: 0,

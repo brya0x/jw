@@ -64,9 +64,16 @@ impl Node {
         }
     }
 
-    /// What `jw open` builds with herdr today (internal/backends/terminal):
-    /// editor and agent side by side on top, a full-width shell below.
+    /// A project's layout when its config has none: one shell, and the user
+    /// builds the rest (REQ-118).
     pub fn default_tree() -> Self {
+        Self::leaf("shell")
+    }
+
+    /// Editor and agent side by side over a full-width shell: the old
+    /// default, kept as a three-pane fixture for tests.
+    #[cfg(test)]
+    pub(crate) fn three_panes() -> Self {
         Self::split(
             Dir::Down,
             0.7,
@@ -510,8 +517,10 @@ mod tests {
     }
 
     #[test]
-    fn default_tree_matches_the_herdr_layout() {
-        let t = Node::default_tree();
+    fn the_default_is_one_shell_and_three_panes_tile() {
+        assert_eq!(Node::default_tree().leaves()[0].role, "shell");
+        assert_eq!(Node::default_tree().leaves().len(), 1);
+        let t = Node::three_panes();
         let roles: Vec<String> = t.leaves().into_iter().map(|l| l.role).collect();
         assert_eq!(roles, ["editor", "agent", "shell"]);
         let r = t.rects(area(100, 40));
@@ -546,7 +555,7 @@ mod tests {
 
     #[test]
     fn rects_tile_the_area_at_any_size() {
-        let t = Node::default_tree();
+        let t = Node::three_panes();
         for (w, h) in [(1, 1), (2, 2), (3, 7), (79, 23), (237, 61)] {
             let total: u32 = t
                 .rects(area(w, h))
@@ -599,7 +608,7 @@ b = { run = "pnpm test --watch" }
     /// editor | agent over a full-width shell, as ids 1 | 2 over 3.
     fn three() -> Tree<u64> {
         let mut ids = [1u64, 2, 3].into_iter();
-        Tree::from_node(&Node::default_tree(), &mut ids).unwrap()
+        Tree::from_node(&Node::three_panes(), &mut ids).unwrap()
     }
 
     fn keys(t: &Tree<u64>) -> Vec<u64> {
@@ -612,10 +621,10 @@ b = { run = "pnpm test --watch" }
         assert_eq!(keys(&t), [1, 2, 3]);
         assert_eq!(
             t.rects(area(100, 40)),
-            Node::default_tree().rects(area(100, 40))
+            Node::three_panes().rects(area(100, 40))
         );
         let mut short = [1u64].into_iter();
-        assert!(Tree::from_node(&Node::default_tree(), &mut short).is_none());
+        assert!(Tree::from_node(&Node::three_panes(), &mut short).is_none());
     }
 
     #[test]
