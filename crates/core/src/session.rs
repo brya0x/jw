@@ -79,7 +79,8 @@ pub fn rename(state: &Path, old: &str, new: &str) -> Result<Vec<(String, String)
         bail!("no session {old}");
     }
     let to = dir(state, new)?;
-    std::fs::rename(&from, &to)?;
+    std::fs::rename(&from, &to)
+        .with_context(|| format!("{} → {}", from.display(), to.display()))?;
 
     let folders = crate::folders::Folders::load(&to.join("folders.json"))?;
     let ids: Vec<(String, String)> = folders
@@ -104,7 +105,7 @@ pub fn rename(state: &Path, old: &str, new: &str) -> Result<Vec<(String, String)
                 .map_or(id, |(_, b)| b.clone())
         })
         .collect();
-    std::fs::write(to.join("recent.json"), serde_json::to_vec(&recent)?)?;
+    registry::write_atomic(&to.join("recent.json"), &serde_json::to_vec(&recent)?)?;
 
     let reg_path = state.join("workspaces.json");
     let mut reg = registry::Registry::load(&reg_path)?;
@@ -131,9 +132,9 @@ pub fn rename(state: &Path, old: &str, new: &str) -> Result<Vec<(String, String)
     }
     map.insert(old.to_string(), new.to_string());
     map.remove(new);
-    std::fs::write(
-        root(state)?.join("renamed.json"),
-        serde_json::to_vec_pretty(&map)?,
+    registry::write_atomic(
+        &root(state)?.join("renamed.json"),
+        &serde_json::to_vec_pretty(&map)?,
     )?;
     Ok(ids)
 }
@@ -174,7 +175,7 @@ pub fn root(state: &Path) -> Result<PathBuf> {
         for f in ["folders.json", "recent.json"] {
             let old = state.join(f);
             if old.exists() {
-                std::fs::rename(&old, main.join(f))?;
+                std::fs::rename(&old, main.join(f)).with_context(|| old.display().to_string())?;
             }
         }
     }
@@ -188,7 +189,9 @@ pub fn dir(state: &Path, name: &str) -> Result<PathBuf> {
 
 /// Every session, by name.
 pub fn list(state: &Path) -> Result<Vec<String>> {
-    let mut out: Vec<String> = std::fs::read_dir(root(state)?)?
+    let root = root(state)?;
+    let mut out: Vec<String> = std::fs::read_dir(&root)
+        .with_context(|| root.display().to_string())?
         .flatten()
         .filter(|e| e.path().is_dir())
         .map(|e| e.file_name().to_string_lossy().into_owned())
@@ -212,7 +215,7 @@ pub fn create(state: &Path, name: &str, folder: &Path) -> Result<()> {
         bail!("session {name} already exists: jw {name} opens it");
     }
     let d = dir(state, name)?;
-    std::fs::create_dir_all(&d)?;
+    std::fs::create_dir_all(&d).with_context(|| d.display().to_string())?;
     let path = folder.display().to_string();
     let mut all = crate::folders::Folders::default();
     all.add(&path);
@@ -221,7 +224,7 @@ pub fn create(state: &Path, name: &str, folder: &Path) -> Result<()> {
     }
     all.save(&d.join("folders.json"))?;
     let id = crate::folders::id_in(name, &path);
-    std::fs::write(d.join("recent.json"), serde_json::to_vec(&[id])?)?;
+    registry::write_atomic(&d.join("recent.json"), &serde_json::to_vec(&[id])?)?;
     set_last(state, name)
 }
 
@@ -235,8 +238,7 @@ pub fn last(state: &Path) -> String {
 }
 
 pub fn set_last(state: &Path, name: &str) -> Result<()> {
-    std::fs::write(root(state)?.join("last"), format!("{name}\n"))?;
-    Ok(())
+    registry::write_atomic(&root(state)?.join("last"), format!("{name}\n").as_bytes())
 }
 
 /// "1 workspace", "3 workspaces".
@@ -246,11 +248,6 @@ pub fn workspaces(n: usize) -> String {
     } else {
         format!("{n} workspaces")
     }
-}
-
-/// The state dir of this jw.
-pub fn state() -> Result<PathBuf> {
-    registry::state_dir()
 }
 
 #[cfg(test)]

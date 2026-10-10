@@ -140,17 +140,20 @@ impl Node {
         let mut runs = Vec::new();
         self.walk(&mut |n| runs.push(n.run.clone().unwrap_or_default()));
         let mut out: Vec<Leaf> = Vec::with_capacity(runs.len());
+        let mut bases: Vec<String> = Vec::with_capacity(runs.len());
         for run in runs {
             let base = run.split_whitespace().next().unwrap_or("pane").to_string();
-            let seen = out
-                .iter()
-                .filter(|l| l.role == base || l.role.starts_with(&format!("{base}-")))
-                .count();
-            let role = if seen == 0 {
-                base
-            } else {
-                format!("{base}-{}", seen + 1)
-            };
+            let same = bases.iter().filter(|b| **b == base).count();
+            // A run that already looks numbered (`shell-2`) can hold the
+            // name the count gives: take the next free one.
+            let role = (same + 1..)
+                .map(|n| match n {
+                    1 => base.clone(),
+                    n => format!("{base}-{n}"),
+                })
+                .find(|r| !out.iter().any(|l| l.role == *r))
+                .expect("roles are unbounded");
+            bases.push(base);
             out.push(Leaf { role, run });
         }
         out
@@ -661,6 +664,16 @@ b = { run = "pnpm test --watch" }
         let twice = Node::split(Dir::Right, 0.5, Node::leaf("shell"), Node::leaf("shell"));
         let roles: Vec<String> = twice.leaves().into_iter().map(|l| l.role).collect();
         assert_eq!(roles, ["shell", "shell-2"]);
+
+        // A run named like a numbered role never gives two leaves one role.
+        let numbered = Node::split(
+            Dir::Right,
+            0.5,
+            Node::leaf("shell-2"),
+            Node::split(Dir::Down, 0.5, Node::leaf("shell"), Node::leaf("shell")),
+        );
+        let roles: Vec<String> = numbered.leaves().into_iter().map(|l| l.role).collect();
+        assert_eq!(roles, ["shell-2", "shell", "shell-3"]);
     }
 
     #[test]

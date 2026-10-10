@@ -4,9 +4,10 @@
 //! word-level marks a side-by-side view needs. No drawing here.
 
 use std::path::Path;
-use std::process::Command;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
+
+use crate::connectors::git;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
@@ -73,7 +74,7 @@ pub struct Line {
 /// staged, unstaged and untracked.
 pub fn load(dir: &Path, base: &str) -> Result<Vec<File>> {
     let base_ref = format!("origin/{base}");
-    let out = git(
+    let out = git::output(
         dir,
         &[
             "diff",
@@ -86,24 +87,12 @@ pub fn load(dir: &Path, base: &str) -> Result<Vec<File>> {
     )?;
     let mut files = parse(&out);
     // git diff leaves out untracked files; they are new files all the same.
-    let untracked = git(dir, &["ls-files", "--others", "--exclude-standard", "-z"])?;
+    let untracked = git::output(dir, &["ls-files", "--others", "--exclude-standard", "-z"])?;
     for path in untracked.split('\0').filter(|p| !p.is_empty()) {
         files.push(untracked_file(dir, path));
     }
     files.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(files)
-}
-
-fn git(dir: &Path, args: &[&str]) -> Result<String> {
-    let out = Command::new("git").args(args).current_dir(dir).output()?;
-    if !out.status.success() {
-        bail!(
-            "git {}: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 fn untracked_file(dir: &Path, path: &str) -> File {

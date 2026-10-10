@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::connectors::git::{Repo, project_name};
 use crate::core::config;
-use crate::layout::Node;
+use crate::layout::{Node, quote};
 
 /// What init found in a repository, to be written as a config the user then
 /// finishes by hand.
@@ -104,11 +104,6 @@ impl Draft {
         }
         s
     }
-}
-
-/// A TOML basic string.
-fn quote(s: &str) -> String {
-    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 /// What the setup step of a project's first worktree chose (REQ-117).
@@ -288,21 +283,8 @@ const HOSTS: [&str; 2] = ["localhost:", "127.0.0.1:"];
 /// by hand: the port is the one of the last host:port in the value, as the
 /// greedy `.*` makes it in Go.
 fn localhost_ref(line: &str) -> Option<LocalhostRef> {
-    let mut rest = line.trim_start();
-    if let Some(r) = rest.strip_prefix("export")
-        && r.starts_with(char::is_whitespace)
-    {
-        rest = r.trim_start();
-    }
-    let first = rest.chars().next()?;
-    if !(first.is_ascii_alphabetic() || first == '_') {
-        return None;
-    }
-    let key_len = rest
-        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-        .unwrap_or(rest.len());
-    let key = &rest[..key_len];
-    let value = rest[key_len..].trim_start().strip_prefix('=')?.trim_start();
+    let (key, value_at) = crate::core::envfile::assignment(line)?;
+    let value = line[value_at..].trim_start();
 
     let port = HOSTS
         .iter()

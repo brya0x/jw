@@ -176,9 +176,7 @@ pub fn save_layout(path: &Path, node: &Node) -> Result<()> {
     };
     let out = with_layout(&text, node);
     toml::from_str::<Config>(&out).map_err(|e| anyhow!("{}: {}", path.display(), e.message()))?;
-    let tmp = path.with_extension("toml.tmp");
-    std::fs::write(&tmp, &out).with_context(|| tmp.display().to_string())?;
-    std::fs::rename(&tmp, path).with_context(|| path.display().to_string())
+    super::registry::write_atomic(path, out.as_bytes())
 }
 
 /// `text` with `[layout]`'s tree keys swapped for `node`'s.

@@ -6,7 +6,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail};
 
 /// The main checkout of a repository, even when opened from inside one of
 /// its worktrees.
@@ -23,6 +23,12 @@ pub struct Repo {
 /// Runs git in `dir` and returns trimmed stdout. On failure the error carries
 /// git's own stderr, which is usually the most useful message.
 fn run(dir: &Path, args: &[&str]) -> Result<String> {
+    output(dir, args).map(|o| o.trim().to_string())
+}
+
+/// [`run`] with stdout as git wrote it, for output whose leading or trailing
+/// whitespace means something (porcelain status, a diff).
+pub(crate) fn output(dir: &Path, args: &[&str]) -> Result<String> {
     let out = Command::new("git")
         .args(args)
         .current_dir(dir)
@@ -37,7 +43,7 @@ fn run(dir: &Path, args: &[&str]) -> Result<String> {
         };
         bail!("git {}: {msg}", args.join(" "));
     }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 fn ok(dir: &Path, args: &[&str]) -> bool {
@@ -198,18 +204,19 @@ impl Repo {
         let data = match std::fs::read_to_string(&path) {
             Ok(d) => d,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-            Err(e) => return Err(e.into()),
+            Err(e) => return Err(e).with_context(|| path.display().to_string()),
         };
         if data.lines().any(|l| l.trim() == pattern) {
             return Ok(());
         }
         if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
+            std::fs::create_dir_all(dir).with_context(|| dir.display().to_string())?;
         }
         let mut f = std::fs::OpenOptions::new()
             .append(true)
             .create(true)
-            .open(&path)?;
+            .open(&path)
+            .with_context(|| path.display().to_string())?;
         let sep = if !data.is_empty() && !data.ends_with('\n') {
             "\n"
         } else {
@@ -225,9 +232,10 @@ pub fn dirty(dir: &Path) -> Result<bool> {
     Ok(!run(dir, &["status", "--porcelain"])?.is_empty())
 }
 
-/// Uncommitted and untracked paths in the worktree at `dir`.
+/// Uncommitted and untracked paths in the worktree at `dir`, as porcelain
+/// status lines (` M src/a.rs`, `?? new.txt`).
 pub fn dirty_files(dir: &Path) -> Result<Vec<String>> {
-    run(dir, &["status", "--porcelain"]).map(lines)
+    output(dir, &["status", "--porcelain"]).map(lines)
 }
 
 /// The commits in `dir`'s HEAD that no remote branch has: the work that only
@@ -318,7 +326,7 @@ pub fn head_of(dir: &Path) -> Option<(PathBuf, String)> {
 /// Brings the branch checked out in `dir` up to its upstream, refusing
 /// anything but a fast-forward.
 pub fn pull_ff(dir: &Path) -> Result<()> {
-    run(dir, &["pull", "--ff-only"]).map(|_| ())
+    run(dir, &["pull", "--ff-only"]).map(drop)
 }
 
 /// The commit checked out in `dir`.
@@ -446,6 +454,19 @@ pub(crate) mod tests {
         assert!(!dirty(&wt).unwrap());
         std::fs::write(wt.join("new.txt"), "x").unwrap();
         assert_eq!(dirty_files(&wt).unwrap(), ["?? new.txt"]);
+        for f in ["a.txt", "b.txt"] {
+            std::fs::write(wt.join(f), "1").unwrap();
+        }
+        must_git(&wt, &["add", "a.txt", "b.txt"]);
+        must_git(&wt, &["commit", "-q", "-m", "ab"]);
+        for f in ["a.txt", "b.txt"] {
+            std::fs::write(wt.join(f), "2").unwrap();
+        }
+        // Every line keeps its status columns, the first one too.
+        assert_eq!(
+            dirty_files(&wt).unwrap(),
+            [" M a.txt", " M b.txt", "?? new.txt"]
+        );
         assert_eq!(operation(&wt), None);
 
         repo.remove_worktree(&wt).unwrap();

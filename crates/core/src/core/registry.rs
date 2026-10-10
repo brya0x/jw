@@ -5,6 +5,7 @@
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
@@ -109,32 +110,22 @@ impl Registry {
 
     /// Writes to a temp file and renames it, so a crash never leaves half a file.
     pub fn save(&self, path: &Path) -> Result<()> {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        let data = serde_json::to_vec_pretty(self)?;
-        let mut tmp = path.as_os_str().to_owned();
-        tmp.push(".tmp");
-        std::fs::write(&tmp, data)?;
-        std::fs::rename(&tmp, path)?;
-        Ok(())
+        write_atomic(path, &serde_json::to_vec_pretty(self)?)
     }
 
-    /// Looks up an entry of a project by name or by id prefix (4+ chars).
+    /// Looks up an entry of a project by name, else by id prefix (4+ chars).
+    /// A name wins over an id prefix, however many ids the prefix matches.
     pub fn find(&self, project: &str, key: &str) -> Result<&Entry> {
-        let mut found = None;
-        for e in self.entries.iter().filter(|e| e.project == project) {
-            if e.name == key {
-                return Ok(e);
-            }
-            if key.len() >= 4 && e.id.starts_with(key) {
-                if found.is_some() {
-                    bail!("id prefix {key:?} is ambiguous");
-                }
-                found = Some(e);
-            }
+        let of = || self.entries.iter().filter(|e| e.project == project);
+        if let Some(e) = of().find(|e| e.name == key) {
+            return Ok(e);
         }
-        found.ok_or_else(|| anyhow!("no worktree {key:?} in {project}"))
+        let mut hits = of().filter(|e| key.len() >= 4 && e.id.starts_with(key));
+        match (hits.next(), hits.next()) {
+            (Some(e), None) => Ok(e),
+            (Some(_), Some(_)) => bail!("id prefix {key:?} is ambiguous"),
+            _ => Err(anyhow!("no worktree {key:?} in {project}")),
+        }
     }
 
     /// Whether `project` already has a worktree with exactly this name.
@@ -161,6 +152,26 @@ impl Registry {
             .find(|s| !self.entries.iter().any(|e| e.slot == *s))
             .expect("slots are unbounded")
     }
+}
+
+/// Writes `data` to `path` through a temp file and a rename, so a reader
+/// never sees half a file: the state dir is shared by the TUI, the CLI and
+/// the daemon. The temp name is unique per process and call, so two writers
+/// never write into the same temp file.
+pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
+    static N: AtomicU64 = AtomicU64::new(0);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).with_context(|| dir.display().to_string())?;
+    }
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(format!(
+        ".{}.{}.tmp",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    ));
+    let tmp = PathBuf::from(tmp);
+    std::fs::write(&tmp, data).with_context(|| tmp.display().to_string())?;
+    std::fs::rename(&tmp, path).with_context(|| path.display().to_string())
 }
 
 /// A random RFC 4122 version 4 UUID.
@@ -293,7 +304,8 @@ mod tests {
         r.add(entry(&new_id().unwrap(), "web", 1));
         r.save(&path).unwrap();
         assert_eq!(Registry::load(&path).unwrap(), r);
-        assert!(!dir.path().join("jw/registry.json.tmp").exists());
+        let left: Vec<_> = std::fs::read_dir(dir.path().join("jw")).unwrap().collect();
+        assert_eq!(left.len(), 1, "no temp file left behind");
     }
 
     /// The fixture was written by the Go binary (testdata/README.md): Rust
@@ -373,6 +385,25 @@ mod tests {
         assert!(r.find("myapp", "0b1").is_err(), "prefix shorter than 4");
         assert!(r.find("other", "web").is_err(), "names are per project");
         assert!(r.has("myapp", "web") && !r.has("myapp", "we"));
+    }
+
+    #[test]
+    fn find_prefers_a_name_over_an_ambiguous_prefix() {
+        let r = Registry {
+            entries: vec![
+                entry("abcd1111-0000-4000-8000-000000000000", "web", 1),
+                entry("abcd2222-0000-4000-8000-000000000000", "api", 2),
+                entry("7f3ad011-0000-4000-8000-000000000000", "abcd", 3),
+            ],
+        };
+        assert_eq!(r.find("myapp", "abcd").unwrap().slot, 3);
+        assert_eq!(r.find("myapp", "abcd1").unwrap().name, "web");
+        assert!(r.find("myapp", "abc").is_err());
+        let ambiguous = Registry {
+            entries: r.entries[..2].to_vec(),
+        };
+        let err = ambiguous.find("myapp", "abcd").unwrap_err();
+        assert!(err.to_string().contains("ambiguous"), "{err}");
     }
 
     #[test]

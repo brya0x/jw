@@ -39,7 +39,7 @@ pub fn set(data: &str, set: &BTreeMap<String, String>) -> String {
 
 /// `^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=`: the key and the index
 /// right after `=`.
-fn assignment(line: &str) -> Option<(&str, usize)> {
+pub(crate) fn assignment(line: &str) -> Option<(&str, usize)> {
     let start = line.len() - line.trim_start().len();
     let mut rest = &line[start..];
     let mut at = start;

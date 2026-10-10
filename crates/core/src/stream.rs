@@ -6,10 +6,10 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
 use crate::connectors::git::Repo;
-use crate::core::config::{self, Config};
+use crate::core::config::{self, AgentCmd, Config};
 use crate::core::expand::{Vars, expand};
 use crate::core::registry::{self, Entry, Registry};
 use crate::layout::Node;
@@ -208,12 +208,11 @@ impl Stream {
             "agent" => return self.agent_command(vars).map(Some),
             _ => match run.strip_prefix("dev:") {
                 Some(svc) => {
-                    let Some(cmds) = self.cfg.dev.get(svc) else {
-                        bail!("layout runs dev:{svc}, but [dev] has no {svc}");
-                    };
-                    // Several commands for one service run side by side,
-                    // like `jw dev` did with splits.
-                    cmds.join(" & ") + if cmds.len() > 1 { " & wait" } else { "" }
+                    // Several commands for one service run side by side, and
+                    // ctrl+c stops them all.
+                    let cmds = crate::actions::dev_commands(&self.cfg, svc, vars)
+                        .with_context(|| format!("layout runs dev:{svc}"))?;
+                    return Ok(Some(crate::actions::dev_line(&cmds)));
                 }
                 None => run.to_string(),
             },
@@ -224,16 +223,11 @@ impl Stream {
     /// What restarts the agent after the daemon restarts: claude by its
     /// conversation's id, else the config's resume command.
     fn agent_resume(&self, vars: &Vars) -> Option<String> {
-        let agents = &self.cfg.agent;
         if self.is_claude() && !self.legacy() {
-            let start = expand(&agents.claude.start, vars).ok()?;
+            let start = expand(&self.cfg.agent.claude.start, vars).ok()?;
             return Some(self.claude(&start, &format!("--resume {}", self.session)));
         }
-        let cmd = match agents.default.as_str() {
-            "codex" => &agents.codex,
-            _ => &agents.claude,
-        };
-        let line = expand(&cmd.resume, vars).ok()?;
+        let line = expand(&self.agent_cmd().resume, vars).ok()?;
         if line.trim().is_empty() {
             return None;
         }
@@ -247,18 +241,14 @@ impl Stream {
     /// The agent resumes its conversation in a worktree that had one before.
     /// claude gets its conversation's id and the hooks that report its state.
     fn agent_command(&self, vars: &Vars) -> Result<String> {
-        let agents = &self.cfg.agent;
-        let cmd = match agents.default.as_str() {
-            "codex" => &agents.codex,
-            _ => &agents.claude,
-        };
+        let cmd = self.agent_cmd();
         let line = if self.entry.opened && (!self.is_claude() || self.legacy()) {
             &cmd.resume
         } else {
             &cmd.start
         };
         if line.trim().is_empty() {
-            bail!("empty agent command for {}", agents.default);
+            bail!("empty agent command for {}", self.cfg.agent.default);
         }
         let line = expand(line, vars)?;
         if !self.is_claude() {
@@ -271,6 +261,14 @@ impl Stream {
         } else {
             self.claude(&line, &format!("--session-id {}", self.session))
         })
+    }
+
+    /// The configured agent's commands: codex's, else claude's.
+    fn agent_cmd(&self) -> &AgentCmd {
+        match self.cfg.agent.default.as_str() {
+            "codex" => &self.cfg.agent.codex,
+            _ => &self.cfg.agent.claude,
+        }
     }
 
     /// A claude command line with `extra` flags and jw's hooks (REQ-73).
@@ -509,5 +507,19 @@ mod tests {
             s.panes().unwrap()[0].cmd.as_deref(),
             Some("vite --port 20300")
         );
+
+        // Two commands: ctrl+c must stop the background one too, as `jw dev` does.
+        s.cfg.dev.insert(
+            "api".into(),
+            vec!["api --port {port.api}".into(), "worker".into()],
+        );
+        s.tree = Node::leaf("dev:api");
+        assert_eq!(
+            s.panes().unwrap()[0].cmd.as_deref(),
+            Some("(trap 'kill 0' INT TERM; api --port 20301 & worker & wait)")
+        );
+        s.cfg.dev.insert("empty".into(), Vec::new());
+        s.tree = Node::leaf("dev:empty");
+        assert!(s.panes().is_err(), "a service with no commands");
     }
 }
