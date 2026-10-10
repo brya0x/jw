@@ -20,9 +20,10 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use ratatui::crossterm::event::{
     self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-    Event, KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind,
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyboardEnhancementFlags, MouseButton, MouseEvent,
+    MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
-use ratatui::crossterm::execute;
+use ratatui::crossterm::{execute, terminal};
 
 use crate::actions::{self, NewOptions, Project};
 use crate::client::Client;
@@ -144,7 +145,7 @@ const STATUS_FOR: Duration = Duration::from_secs(4);
 /// A pane of the current workspace as this client sees it.
 pub struct PaneView {
     pub role: String,
-    pub parser: vt100::Parser,
+    pub parser: vt100::Parser<keys::Flags>,
     pub exited: Option<i32>,
     /// The window title its program set (OSC 0/2).
     pub title: Option<String>,
@@ -235,6 +236,9 @@ pub fn run() -> Result<()> {
         }
     });
     let events = tx.clone();
+    // Asked before the reader starts: crossterm's probe blocks while
+    // another thread is in `event::read`.
+    let kitty = terminal::supports_keyboard_enhancement().unwrap_or(false);
     spawn_term_reader(tx);
 
     follow_theme(events.clone());
@@ -251,12 +255,23 @@ pub fn run() -> Result<()> {
     log_panics();
     let mut terminal = ratatui::init();
     execute!(std::io::stdout(), EnableBracketedPaste, EnableMouseCapture)?;
+    // REQ-90: Shift+Enter and the like, where the terminal can tell them
+    // apart. After init, so it lands on the alternate screen's stack (RAT-18).
+    if kitty {
+        execute!(
+            std::io::stdout(),
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        )?;
+    }
     let size = terminal.size()?;
     let mut app = App::new(client, events, leader, (size.width, size.height))?;
     if let Some(e) = theme_error {
         app.fail(format!("{e:#}"));
     }
     let result = app.event_loop(&mut terminal, rx);
+    if kitty {
+        let _ = execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
+    }
     let _ = execute!(
         std::io::stdout(),
         DisableBracketedPaste,
@@ -692,7 +707,12 @@ impl App {
                 rows,
                 bytes,
             } => {
-                let mut parser = vt100::Parser::new(rows, cols, SCROLLBACK);
+                let mut parser = vt100::Parser::new_with_callbacks(
+                    rows,
+                    cols,
+                    SCROLLBACK,
+                    keys::Flags::default(),
+                );
                 parser.process(&bytes);
                 self.panes.insert(
                     pane,
@@ -1342,8 +1362,10 @@ impl App {
         if let Some(v) = self.panes.get_mut(&id) {
             v.parser.screen_mut().set_scrollback(0);
         }
-        let app_cursor = self.panes[&id].parser.screen().application_cursor();
-        let bytes = keys::encode(k, app_cursor);
+        let parser = &self.panes[&id].parser;
+        let screen = parser.screen();
+        let kitty = parser.callbacks().0.flags(screen.alternate_screen());
+        let bytes = keys::encode(k, screen.application_cursor(), kitty);
         if !bytes.is_empty() {
             self.send(ClientMsg::Input { pane: id, bytes });
         }

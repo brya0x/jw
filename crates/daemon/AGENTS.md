@@ -13,7 +13,7 @@ workspace ids are already unique across them.
   - `handle` (`:482`) takes every `ClientMsg`.
   - `attach`/`watch` (`:639`/`:666`) send a tree, then each pane's Snapshot.
   - `spawn` (`:1139`) starts a pane's process; its reader thread answers what the program asks
-    its terminal (`Titles`, `:234`: OSC 10/11, `?996n`, `?2031`, `6n`, `c`).
+    its terminal (`Titles`, `:234`: OSC 10/11, `?996n`, `?2031`, `6n`, `c`, `?u`).
   - `set_theme` (`:1086`) keeps the client's theme and sends `?997` to panes with mode 2031.
   - `edit` (`:875`) changes a tree; `save` (`:964`) writes `session.json` and the scrollback.
   - `rekey` (`:681`) moves a workspace to a new id.
