@@ -32,10 +32,10 @@ jobs:
 
       - name: cargo fmt
         if: runner.os == 'Linux'
-        run: cargo fmt --check
+        run: cargo fmt --all --check
 
       - name: cargo clippy
-        run: cargo clippy --all-targets --locked -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: cargo test
-        run: cargo test --locked
+        run: cargo test --workspace --locked

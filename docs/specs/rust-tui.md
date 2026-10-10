@@ -256,6 +256,8 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 
 ## Corrections
 
+- Paths in this spec say `src/…` from when jw was one crate. Since `6be5ac4` the code is a workspace: `src/{layout,core,connectors,actions,folders,session,stream,init,diff}` are in `crates/core/src/`, `src/proto` and `src/client.rs` in `crates/proto/src/`, `src/daemon` in `crates/daemon/src/`, `src/{tui,view,theme,settings}` in `crates/tui/src/`, `src/{main,cli}.rs` and `tests/` in `crates/jw/`.
+
 - The first proposal kept the CLI underneath the TUI; the user chose TUI only.
 - The first proposal assumed the TUI would be a client of herdr; the user asked for it to replace herdr.
 - v1 put tui-term in the stack; P5 draws vt100 screens itself.

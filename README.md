@@ -46,7 +46,7 @@ jw treats a workstream as one unit: **1 worktree = 1 branch = 1 workspace = 1 po
 ## Install
 
 ```sh
-git clone https://github.com/brya0x/jw && cd jw && cargo install --path .
+git clone https://github.com/brya0x/jw && cd jw && cargo install --path crates/jw --locked
 ```
 
 ---
@@ -210,11 +210,13 @@ of the rest.
 ## Development
 
 ```sh
-cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
+cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
 ```
 
-CI runs exactly that on every pull request, on Ubuntu and macOS. The design and its history
-are in [docs/specs/rust-tui.md](docs/specs/rust-tui.md).
+CI runs exactly that on every pull request, on Ubuntu and macOS. The code is a workspace of
+five crates (`crates/core`, `proto`, `daemon`, `tui`, `jw`). [AGENTS.md](AGENTS.md) has the
+map and the rules, and each crate has its own. The design and its history are in
+[docs/specs/rust-tui.md](docs/specs/rust-tui.md).
 
 ## License
 
