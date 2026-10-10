@@ -10,8 +10,8 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 
 - One binary `jw`, unix only (macOS + Linux). With no arguments it opens the TUI client; a hidden `jw daemon` runs the server. The other commands are socket clients for sessions and for agents (addendum 3): `jw new <session>`, `jw [session]`, `jw sessions`, `jw ls`, `jw read`, `jw worktree`, `jw prompt`, `jw hook`, plus `jw help` and `jw skill [install]`.
 - **Two concepts.** A *workspace* is an open folder: a project (any folder, git or not) or one of its worktrees. A workspace holds *panes*.
-- **One-shot leader.** `Ctrl-Space`, then one key, then back to the terminal (tmux-style). A pause of 600 ms after the leader shows every key; `?` shows them at once. There is no navigation mode.
-- **Every action applies to the current workspace or the focused pane.** The sidebar is a list to read and click, numbered for `1–9`.
+- **One-shot leader.** `Ctrl-Space`, then one key, then back to the terminal (tmux-style). A pause of 600 ms after the leader shows every key; `?` shows them at once. The one exception is an arrow after the leader: arrows keep moving through the workspaces until another key gives the keyboard back (addendum 4).
+- **Every action applies to the current workspace or the focused pane.** The sidebar is a list to read and click, numbered for `1–9`, and walked with `^␣` + arrows.
 - **The daemon** owns every terminal (one PTY per pane, a VT parser with screen and scrollback) and each workspace's pane tree (splits, ratios, names). It survives the client and writes `session.json` on every change.
 - **The client** draws the sidebar (projects with their worktrees indented), the current workspace's panes, a header (workspace · branch · PR) and a status bar. It owns only focus and the full view.
 - **Viewers are panes the client draws:** a GitHub-style diff (unified when narrow, side by side when wide, sticky file headers, viewed, changed words) and a Markdown reader. Code files open in nvim; there is no built-in editor or file tree.
@@ -23,11 +23,12 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 
 | Go | Worktree | Panes |
 |---|---|---|
-| `␣` switch workspace (fuzzy, most recent first, preview) | `w` new worktree from the current branch: `ws-N`, branch from the `branch` template, setup runs | `hjkl` focus |
-| `tab` previous workspace | `r` rename: name, branch and folder | `t` new shell beside the focused pane |
+| `␣` switch workspace (fuzzy, most recent first, preview) | `w` new worktree from the current branch: asks its name (the next free `ws-N` filled in), branch from the `branch` template, setup runs | `hjkl` focus |
+| `tab` previous workspace | `r` rename: name, branch and folder; its panes keep running | `t` new shell beside the focused pane |
 | `1–9` the sidebar's number | `s` sync (on a project root: `pull --ff-only`) | `x` close the pane; on the last one, close the workspace |
 | `o` open a folder (browser: arrows, type to filter, `~`, a new name creates it) | `d` diff pane against the base | `n` name the pane (empty = automatic title) |
 | `/` open a file (`.md` → reader pane, else nvim) | `X` remove: done checks if the PR is merged, rm checks otherwise | `f` full: the focused pane fills the panes area, the sidebar and bars stay · `HJKL` swap with the neighbour |
+| `↑↓` next/previous workspace, `←→` next/previous project; more arrows keep moving | | |
 | `?` keys · `q` detach | | |
 
 ### Screen (what each area shows; replaces "UI (reference, v2)")
@@ -52,7 +53,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 | Marks | `✻` magenta: the agent pane printed in the last 2 s. `?` yellow: the agent pane rang the bell (BEL or OSC 9) since its last input. `⚡` green: a `dev:*` pane is running. `⚑` cyan: the branch's PR is merged |
 | Header | `project/` dim + name blue bold (a project root shows just its name), branch magenta, `from <base>` dim (worktrees only), `PR #N <state>` dim when there is one, path dim right-aligned with `~`. A plain folder says `not a git repo` in place of the branch |
 | Pane title | `name` if set, else `role` bold + what runs dim (`nvim app/x.ts`, the OSC title, or the foreground process). Focused: blue border and title. Exited: `exited N` red. Viewers: `changes  auth-flow vs main · 4 files`, `md  docs/x.md` |
-| Status bar | Mode chip: `TERM` green, `^␣` yellow (leader pending), `DIFF`/`MD` blue (a viewer is focused), `CONFIRM` red (a yes/no modal). Then the hint for that mode. A message goes right-aligned: green for done, red for an error, cleared after 4 s |
+| Status bar | Mode chip: `TERM` green, `^␣` yellow (leader pending), `DIFF`/`MD` blue (a viewer is focused), `CONFIRM` red (a yes/no modal), `MOVE` blue (arrows walk the sidebar). Then the hint for that mode. A message goes right-aligned: green for done, red for an error, cleared after 4 s |
 | Which-key | Three columns as now, adding `␣ switch`, `o open`, `/ file` (go) and `r rename` (worktree) |
 | Empty stage | `^␣ o opens a folder · ^␣ ␣ switches workspace`, centred, dim |
 
@@ -108,9 +109,9 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 - REQ-35 WHEN the last pane of a workspace is closed, the TUI SHALL ask first, then close the workspace; a worktree stays listed as `○`, a project leaves the sidebar.
 - REQ-36 WHERE a pane has a name, the TUI SHALL show it as the pane's title; otherwise the title SHALL be the program's OSC title, else its foreground process.
 - REQ-37 WHEN the user picks a folder with `o`, the TUI SHALL open it as a workspace with its `[layout]` (or one shell for a plain folder); IF it is already open, THEN the TUI SHALL switch to it.
-- REQ-38 WHEN `w` runs, the TUI SHALL create the worktree `ws-N` (lowest free N) from the current workspace's branch, run setup, and switch to it.
+- REQ-38 *(Replaced by REQ-81.)* WHEN `w` runs, the TUI SHALL create the worktree `ws-N` (lowest free N) from the current workspace's branch, run setup, and switch to it.
 - REQ-39 WHEN `X` runs on a worktree, the TUI SHALL apply the done checks if its PR is merged and the rm checks otherwise; IF the workspace is a project root, THEN the TUI SHALL refuse and say that jw never deletes a project folder.
-- REQ-40 WHEN `r` runs on a worktree, the TUI SHALL validate the name, then move the folder, rename the branch, update the registry, and restart the workspace's panes in the new folder (asking first if an agent or editor runs).
+- REQ-40 *(Replaced by REQ-82.)* WHEN `r` runs on a worktree, the TUI SHALL validate the name, then move the folder, rename the branch, update the registry, and restart the workspace's panes in the new folder (asking first if an agent or editor runs).
 - REQ-41 THE switcher SHALL rank workspaces by last use, filter them fuzzily, and preview path, branch, PR, agent state and panes.
 - REQ-42 WHEN a file is picked with `/` or `↵` in the diff, the TUI SHALL open a `.md` in the workspace's reader pane and any other file in its nvim pane, creating either on the right when missing.
 - REQ-43 THE TUI SHALL draw with One Dark or One Light, chosen as Interfaces → Theme says.
@@ -174,6 +175,21 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 - REQ-79 WHEN the daemon gets SIGTERM, SIGINT or SIGHUP, it SHALL write `session.json` and every pane's scrollback, then exit.
 - REQ-80 WHEN `jw server status` runs, jw SHALL say whether the daemon runs, with its pid and running panes. WHEN `jw server stop` runs, jw SHALL send the daemon SIGTERM and wait until it stops answering.
 
+### Addendum 4: worktree names and moving with arrows
+
+Prototype: https://claude.ai/artifact/QdLzKo3onBQFzeRvDrnh6g (approved 2026-10-10).
+
+| Area | What it does |
+|---|---|
+| `^␣ w` | A `New worktree in <project>` modal: a name input holding the next free `ws-N`, selected, so `↵` takes it and the first key typed replaces it. Under it the branch, `from` and the folder, or in red why the name can't be (`actions::new_plan`: a valid name, free in the project, a folder that doesn't exist). `esc` creates nothing |
+| `^␣ r` | The rename runs with the panes alive: `git worktree move`, the branch, the registry and `.jw.env` as before, then `ClientMsg::Moved{stream, from, to, env}` so the daemon's `session.json` starts them in the new folder after a restart. The TUI swaps its `Stream` for the renamed entry without touching the panes. The modal says the panes keep running and that a program that kept the old path may need a restart |
+| `^␣` + arrow | Moves to the next (`↓`) or previous (`↑`) open workspace in the sidebar's order, or to the first open row of the next (`→`) or previous (`←`) project, and opens it. The status bar shows `MOVE`. More arrows keep moving with no leader. `↵` or `esc` ends it; any other key ends it and goes on as if typed outside it. Closed rows are skipped: walking past them would start their panes |
+| Protocol | `PROTOCOL = 7` adds `Moved` |
+
+- REQ-81 WHEN `w` runs, the TUI SHALL ask the worktree's name with the next free `ws-N` filled in, show the branch, base and folder it will create, refuse a name `new_plan` rejects, and on `↵` create it from the current workspace's branch, run setup and switch to it.
+- REQ-82 WHEN `r` runs on a worktree, the TUI SHALL validate the name, then move the folder, rename the branch (when jw named it) and update the registry, keeping the workspace's panes, layout and scrollback running; the daemon SHALL then start them in the new folder after a restart.
+- REQ-83 WHEN an arrow follows the leader, the TUI SHALL open the next or previous open workspace (`↓`/`↑`) or the next or previous project (`→`/`←`), and SHALL treat further arrows the same WITHOUT the leader UNTIL another key, which ends it and is handled as usual (`↵` and `esc` are swallowed).
+
 ---
 
 ## Rationale
@@ -205,7 +221,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 - RISK-12 **dev types into the shell pane** unless `[layout]` has a `dev:<svc>` leaf. With no dev key in v2, a project's dev servers should be `dev:<svc>` leaves.
 - RISK-13 **syntect's bundled grammars have no TypeScript or TOML** (ts uses JavaScript; TOML is plain).
 - RISK-14 **Protocol change (RAT-9):** an old daemon and a new client disagree. The version check on attach says "restart the daemon" instead of misbehaving.
-- RISK-15 **Rename under running processes** leaves shells with a stale `$PWD`; REQ-40 restarts the panes.
+- RISK-15 **Rename under running processes** leaves shells with a stale `$PWD`. REQ-82 keeps them running anyway (the user's choice): their cwd follows the folder, but a program that kept the old path as text (claude's project dir, an editor's buffers) can break, and the modal says so.
 - RISK-16 **`↵` in the diff sends `<Esc>:e path<CR>` to nvim**, assuming normal mode after Esc. Fine for v2; `nvim --server` later if it bites.
 - RISK-17 **Mapping worktrees to their project** with `Repo::open` runs one `git` per worktree on every reload. Cache it by path; it changes only when worktrees are created or removed.
 - RISK-18 **The `?` mark depends on the agent ringing the bell.** Claude Code does so only when its notifications use the terminal bell. Without that, `?` never shows (the same worst case as RISK-7).
@@ -215,6 +231,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 - RISK-22 **A folder open in two sessions** is two workspaces sharing nothing. A worktree belongs to the session that made it.
 - RISK-23 **`workspaces.json` drifts from Go's registry** after the seed; `jw import` if it is ever needed.
 - RISK-24 **`jw new` changes meaning** (worktree → session). `jw new --task` errors with a pointer to `jw worktree`.
+- RISK-25 **A renamed worktree's claude resumes in the new folder** after a daemon restart, while its transcript sits under the old path's project in `~/.claude/projects/`. `claude --resume <id>` may not find it there; the pane then shows claude's error and a new `claude` starts clean.
 - Closed by addendum 3: RISK-5 (own registry), RISK-7 (hooks), RISK-9 (frames), RISK-16 (`nvim --server`), RISK-17 (`root` in the registry).
 
 ## Parts (each one ends with `cargo test` + `clippy` green and a local commit on `feat/rust-tui`; nothing is pushed)
@@ -248,6 +265,10 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | S11 ✓ `27c3c2a` | `jw help`, `--help`; the jw skill moves into the repo, `jw skill [install]` | 77, 78 | `main.rs`, `help.rs`, `skill.rs`, `skill/SKILL.md`, `session.rs` |
 | S12 ✓ `7495afb` | The daemon saves everything on SIGTERM, SIGINT and SIGHUP | 79 | `daemon` |
 | S13 ✓ `4f7e4a4` | `jw server status`, `jw server stop` | 80 | `server.rs`, `help.rs`, `session.rs` |
+| W0 | Addendum 4 in this spec; the prototype | — | docs |
+| W1 | `^␣ w` asks the name: `actions::new_plan`, `Modal::New` | 81 | `actions.rs`, `tui/modal.rs`, `tui/mod.rs` |
+| W2 | Rename keeps the panes: `ClientMsg::Moved`, `PROTOCOL 7` | 82 | `proto`, `daemon`, `tui/mod.rs`, `tui/modal.rs` |
+| W3 | `^␣` + arrows walk the sidebar; the `MOVE` chip | 83 | `tui/mod.rs`, `tui/draw.rs` |
 | Later | Animations (optional) | 19, 20 | |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 
@@ -277,6 +298,8 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - The addendum-3 plan keyed the daemon by session. Ids unique across sessions made that unnecessary: `session.json` and the daemon stay as they were.
 - An addendum-3 draft read `.jw/` as a per-project config folder (like `.vscode/`), then as a pinned "home" brain workspace. The user meant a scope for which projects show: named sessions. The brain is a usage pattern, not a jw concept.
 - The 2026-10-09 prototype's `.worktrees/<name>` on `jw/<name>` was wrong for this repo: worktrees live at `<repo>-wt/<name>` on the `branch` template (`feat/{name}`).
+- "There is no navigation mode" (Contract) held until addendum 4: the user asked to move between workspaces and projects with the arrows, so an arrow after the leader starts a short move that any other key ends.
+- REQ-40 restarted a renamed worktree's panes so nothing ran in a moving folder. Losing the tab on every rename cost more than the stale paths it avoided; REQ-82 keeps the panes.
 
 ## Tests
 
