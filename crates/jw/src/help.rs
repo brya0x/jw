@@ -53,6 +53,11 @@ pub const COMMANDS: &[Command] = &[
         what: "prints the Claude Code skill for jw, or installs it in ~/.claude/skills/jw",
     },
     Command {
+        name: "server",
+        usage: "jw server status|stop",
+        what: "says whether the daemon runs, or stops it: its panes close, and jw brings the workspaces back when it opens",
+    },
+    Command {
         name: "hook",
         usage: "jw hook working|waiting|idle",
         what: "what claude's hooks run in a jw pane to report the agent's state",

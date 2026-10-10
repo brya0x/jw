@@ -863,6 +863,32 @@ fn sigterm_saves_the_scrollback_before_exiting() {
     assert!(!d.socket.exists(), "the socket is removed");
 }
 
+/// REQ-80: `jw server status` and `jw server stop`.
+#[test]
+fn server_status_and_stop() {
+    let mut d = Daemon::start();
+    let jw = |arg: &str| {
+        let out = Command::new(EXE)
+            .args(["server", arg])
+            .env("JW_SOCKET", &d.socket)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        String::from_utf8(out.stdout).unwrap()
+    };
+    let mut c = d.client();
+    spawn(&mut c, "srv", "cat", 80, 24);
+    let status = jw("status");
+    assert!(
+        status.starts_with("running") && status.contains("1 pane running"),
+        "{status}"
+    );
+    assert!(jw("stop").starts_with("stopped"));
+    assert!(d.child.wait().unwrap().success());
+    assert!(jw("status").starts_with("not running"));
+    assert!(jw("stop").starts_with("not running"));
+}
+
 #[test]
 fn a_dragged_border_keeps_its_place() {
     let d = Daemon::start();

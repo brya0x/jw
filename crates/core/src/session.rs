@@ -15,9 +15,9 @@ use crate::core::registry;
 pub const MAIN: &str = "main";
 
 /// Words `jw <name>` can't take, since they are commands.
-const RESERVED: [&str; 11] = [
+const RESERVED: [&str; 12] = [
     "new", "sessions", "ls", "read", "worktree", "prompt", "hook", "daemon", "help", "version",
-    "skill",
+    "skill", "server",
 ];
 
 static CURRENT: Mutex<String> = Mutex::new(String::new());

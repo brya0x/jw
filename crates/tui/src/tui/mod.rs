@@ -307,9 +307,8 @@ fn hello(client: &Client, socket: &std::path::Path) -> Result<()> {
         Ok(Some(DaemonMsg::Hello { protocol })) if protocol == PROTOCOL => Ok(()),
         _ => anyhow::bail!(
             "the jw daemon running on {} is from another build of jw. \
-             Stop it (kill $(cat {})) and start jw again; its panes close with it.",
-            socket.display(),
-            crate::proto::pidfile(socket).display()
+             Stop it (jw server stop) and start jw again; its panes close with it.",
+            socket.display()
         ),
     }
 }

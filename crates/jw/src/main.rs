@@ -5,6 +5,7 @@ use std::process::ExitCode;
 
 mod cli;
 mod help;
+mod server;
 mod skill;
 
 // cli.rs says `crate::stream`, `crate::proto`…, as it did when this was one
@@ -54,6 +55,7 @@ fn main() -> ExitCode {
         Some("read") => report("read", cli::read(&args[1..])),
         Some("hook") => report("hook", cli::hook(&args[1..])),
         Some("skill") => report("skill", skill::run(&args[1..])),
+        Some("server") => report("server", server::run(&args[1..])),
         Some("--version" | "-V") => {
             println!("jw {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
