@@ -347,7 +347,7 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | W2 ✓ `1a5d5ad` | Rename keeps the panes: `ClientMsg::Moved`, `PROTOCOL 8` | 111 | `proto`, `daemon`, `tui/mod.rs`, `tui/modal.rs` |
 | W3 ✓ `f575bca` | `^␣` + arrows walk the sidebar; the `MOVE` chip | 112 | `tui/mod.rs`, `tui/draw.rs` |
 | D1 ✓ `21b4e27` | Addendum 8: `X` accepts a HEAD already in the default branch | 113 | `actions.rs` |
-| R1 | Addendum 9: a restored pane's modes start off | 114 | `daemon/src/lib.rs` |
+| R1 ✓ `00dfd2f` | Addendum 9: a restored pane's modes start off | 114 | `daemon/src/lib.rs` |
 | Later | Animations (optional) | 19, 20 | |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 
