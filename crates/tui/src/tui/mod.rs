@@ -1947,8 +1947,8 @@ impl App {
         }
     }
 
-    /// `w`: a worktree `ws-N` from the current workspace's branch, set up and
-    /// shown at once (REQ-38).
+    /// `w`: asks the new worktree's name, offering the lowest free `ws-N`
+    /// (REQ-81); it starts from the current workspace's branch.
     fn new_worktree(&mut self) {
         let Some(from) = self.current_repo_stream("a worktree") else {
             return;
@@ -1962,8 +1962,23 @@ impl App {
             .map(|n| format!("ws-{n}"))
             .find(|n| !taken.contains(&n.as_str()))
             .expect("some ws-N is free");
+        match Project::open(std::path::Path::new(&from.path)) {
+            Ok(project) => {
+                self.modal = Some(Modal::New {
+                    plan: modal::new_plan(&project, &name),
+                    text: name,
+                    picked: true,
+                    from,
+                    project,
+                });
+            }
+            Err(e) => self.fail(format!("{e:#}")),
+        }
+    }
+
+    /// Creates the worktree the `w` modal named, set up and shown at once.
+    fn create_worktree(&mut self, from: Entry, project: Project, name: String) {
         self.background(format!("creating {name}"), move || {
-            let project = Project::open(std::path::Path::new(&from.path))?;
             let o = NewOptions {
                 name,
                 from: from.branch,
@@ -2088,6 +2103,12 @@ impl App {
         match m {
             Modal::Close { entry, .. } => self.close(&entry),
             Modal::ClosePane { pane, .. } => self.send(ClientMsg::Kill { pane }),
+            Modal::New {
+                from,
+                project,
+                text,
+                ..
+            } => self.create_worktree(from, project, text),
             Modal::Rename {
                 entry,
                 project,
