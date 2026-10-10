@@ -8,7 +8,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 
 ## Contract
 
-- One binary `jw`, unix only (macOS + Linux). With no arguments it opens the TUI client; a hidden `jw daemon` runs the server. The other commands are socket clients for sessions and for agents (addendum 3): `jw new <session>`, `jw [session]`, `jw sessions`, `jw ls`, `jw read`, `jw worktree`, `jw prompt`, `jw hook`.
+- One binary `jw`, unix only (macOS + Linux). With no arguments it opens the TUI client; a hidden `jw daemon` runs the server. The other commands are socket clients for sessions and for agents (addendum 3): `jw new <session>`, `jw [session]`, `jw sessions`, `jw ls`, `jw read`, `jw worktree`, `jw prompt`, `jw hook`, plus `jw help` and `jw skill [install]`.
 - **Two concepts.** A *workspace* is an open folder: a project (any folder, git or not) or one of its worktrees. A workspace holds *panes*.
 - **One-shot leader.** `Ctrl-Space`, then one key, then back to the terminal (tmux-style). A pause of 600 ms after the leader shows every key; `?` shows them at once. There is no navigation mode.
 - **Every action applies to the current workspace or the focused pane.** The sidebar is a list to read and click, numbered for `1–9`.
@@ -141,6 +141,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 | Header git | The repo and branch of where the focused pane is (its foreground process's cwd, `PaneInfo.cwd`), read from `.git` every 2 s like a shell prompt: the repo's name shows when it isn't the workspace's own, and `from <base>` and the PR only for the workspace's own checkout. The path on the right is that cwd |
 | Renames | Pane: `^␣ n`. Worktree: `^␣ r` (name, branch, folder). Folder: `^␣ r` sets the name jw shows (`name` in `folders.json`); the folder on disk stays. Session: `ctrl-r` in `^␣ a` moves `sessions/<old>/`, the registry entries and the recent list, `Rekey`s the running folder workspaces in the daemon, and records `old → new` in `sessions/renamed.json` so panes started with the old `$JW_SESSION` still find it |
 | Agent CLI | `jw ls [--json]`, `jw read <ws> [--pane role] [--lines N]`, `jw worktree <name> [--in project] [--task …]` (was `jw new --task`), `jw prompt <ws> …`, on `$JW_SESSION` |
+| Help and skill | `jw help [cmd]`, `-h`/`--help`, `jw <cmd> --help`: the table in `crates/jw/src/help.rs`. `jw skill` prints the skill built in from `crates/jw/skill/SKILL.md`; `jw skill install` writes it to `$CLAUDE_CONFIG_DIR` (else `~/.claude`)`/skills/jw/SKILL.md` |
 | Migration | The first session-aware run moves `folders.json`, `session.json` and every registry worktree into `main` |
 | Registry | `workspaces.json`, seeded once from a copy of `registry.json`; entries gain `session` and `root`. Go's file is never written |
 | Settings | `~/.config/jw/settings.json`: `leader`, `theme` (`system\|dark\|light`), `dark`, `light`, `which_delay_ms`, `keys{action: key}`; all optional; env `JW_LEADER`/`JW_THEME` win; re-read on mtime change. JSON, so Go's `*.toml` glob skips it |
@@ -168,6 +169,8 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 - REQ-74 WHEN the daemon restores an agent pane, it SHALL resume that pane's own session id.
 - REQ-75 WHEN a file opens in an nvim pane with a socket, the TUI SHALL use `nvim --server`.
 - REQ-76 IF a client's pending output passes 8 MiB, THEN the daemon SHALL drop it and resync that client, without blocking other clients or the PTY.
+- REQ-77 WHEN `jw help`, `jw -h` or `jw --help` runs, jw SHALL print every command with its usage. WHEN `jw help <cmd>` or `jw <cmd> --help` runs, it SHALL print that command's usage.
+- REQ-78 WHEN `jw skill install` runs, jw SHALL write the skill built into the binary to Claude's `skills/jw/SKILL.md`, replacing the copy there.
 
 ---
 
@@ -240,6 +243,7 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | S8 ✓ `bbf27ca` | `settings.rs`, JSON themes, reload, keymap by action | 68, 69 | `settings.rs`, `theme.rs`, `tui/**` |
 | S9 ✓ `c054635` | Settings screen `^␣ ,` | 67, 68 | `tui/settings_view.rs`, `tui/draw.rs` |
 | S10 ✓ `e902627` | `jw ls`, `jw read`, `jw worktree`; the jw skill rewritten | 66 | `cli.rs`, `main.rs`, skill |
+| S11 | `jw help`, `--help`; the jw skill moves into the repo, `jw skill [install]` | 77, 78 | `main.rs`, `help.rs`, `skill.rs`, `skill/SKILL.md`, `session.rs` |
 | Later | Animations (optional) | 19, 20 | |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 
