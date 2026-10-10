@@ -267,7 +267,11 @@ mod tests {
         let dir = d.path().to_str().unwrap();
         let e = entry(dir, false);
         assert!(is_folder(&e));
-        assert_eq!(e.id, format!("dir:{dir}"));
+        // The id is in the current session, which `$JW_SESSION` sets when
+        // the tests run inside a jw pane.
+        assert_eq!(e.id, id(dir));
+        assert_eq!(id_in(crate::session::MAIN, dir), format!("dir:{dir}"));
+        assert_eq!(id_in("other", dir), format!("dir:{dir}#other"));
         assert_eq!(e.project, e.name);
         assert!(e.branch.is_empty());
     }

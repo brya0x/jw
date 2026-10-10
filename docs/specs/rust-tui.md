@@ -171,6 +171,8 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 - REQ-76 IF a client's pending output passes 8 MiB, THEN the daemon SHALL drop it and resync that client, without blocking other clients or the PTY.
 - REQ-77 WHEN `jw help`, `jw -h` or `jw --help` runs, jw SHALL print every command with its usage. WHEN `jw help <cmd>` or `jw <cmd> --help` runs, it SHALL print that command's usage.
 - REQ-78 WHEN `jw skill install` runs, jw SHALL write the skill built into the binary to Claude's `skills/jw/SKILL.md`, replacing the copy there.
+- REQ-79 WHEN the daemon gets SIGTERM, SIGINT or SIGHUP, it SHALL write `session.json` and every pane's scrollback, then exit.
+- REQ-80 WHEN `jw server status` runs, jw SHALL say whether the daemon runs, with its pid and running panes. WHEN `jw server stop` runs, jw SHALL send the daemon SIGTERM and wait until it stops answering.
 
 ---
 
@@ -244,6 +246,8 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | S9 ✓ `c054635` | Settings screen `^␣ ,` | 67, 68 | `tui/settings_view.rs`, `tui/draw.rs` |
 | S10 ✓ `e902627` | `jw ls`, `jw read`, `jw worktree`; the jw skill rewritten | 66 | `cli.rs`, `main.rs`, skill |
 | S11 ✓ `27c3c2a` | `jw help`, `--help`; the jw skill moves into the repo, `jw skill [install]` | 77, 78 | `main.rs`, `help.rs`, `skill.rs`, `skill/SKILL.md`, `session.rs` |
+| S12 ✓ `7495afb` | The daemon saves everything on SIGTERM, SIGINT and SIGHUP | 79 | `daemon` |
+| S13 ✓ `4f7e4a4` | `jw server status`, `jw server stop` | 80 | `server.rs`, `help.rs`, `session.rs` |
 | Later | Animations (optional) | 19, 20 | |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 

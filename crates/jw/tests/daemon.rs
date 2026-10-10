@@ -835,6 +835,60 @@ fn a_late_client_gets_the_scrollback() {
     assert!(top.starts_with("1\n2\n3\n"), "{top}");
 }
 
+/// REQ-79: SIGTERM saves what the panes printed since the last save.
+#[test]
+fn sigterm_saves_the_scrollback_before_exiting() {
+    let mut d = Daemon::start();
+    let mut c = d.client();
+    let pane = spawn(&mut c, "term", "echo printed-before-sigterm; cat", 80, 24);
+    let mut screen = vt100::Parser::new(24, 80, 0);
+    read_until(&mut c, pane, &mut screen, "printed-before-sigterm");
+
+    let status = Command::new("kill")
+        .args(["-TERM", &d.child.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    assert!(
+        d.child.wait().unwrap().success(),
+        "the daemon exits cleanly"
+    );
+    let saved = std::fs::read(
+        d.socket
+            .with_file_name("scrollback")
+            .join(format!("{pane}.bin")),
+    )
+    .expect("the pane's scrollback is saved");
+    assert!(String::from_utf8_lossy(&saved).contains("printed-before-sigterm"));
+    assert!(!d.socket.exists(), "the socket is removed");
+}
+
+/// REQ-80: `jw server status` and `jw server stop`.
+#[test]
+fn server_status_and_stop() {
+    let mut d = Daemon::start();
+    let jw = |arg: &str| {
+        let out = Command::new(EXE)
+            .args(["server", arg])
+            .env("JW_SOCKET", &d.socket)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        String::from_utf8(out.stdout).unwrap()
+    };
+    let mut c = d.client();
+    spawn(&mut c, "srv", "cat", 80, 24);
+    let status = jw("status");
+    assert!(
+        status.starts_with("running") && status.contains("1 pane running"),
+        "{status}"
+    );
+    assert!(jw("stop").starts_with("stopped"));
+    assert!(d.child.wait().unwrap().success());
+    assert!(jw("status").starts_with("not running"));
+    assert!(jw("stop").starts_with("not running"));
+}
+
 #[test]
 fn a_dragged_border_keeps_its_place() {
     let d = Daemon::start();

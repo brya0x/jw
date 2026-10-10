@@ -7,14 +7,14 @@ workspace ids are already unique across them.
 ## What lives where
 
 - `src/lib.rs`:
-  - `run` (`:51`) is the accept loop. `restore` (`:770`) brings back `session.json` at
-    start.
-  - `serve` (`:306`) runs one client: a reader, and a writer fed by its `Tx`.
-  - `handle` (`:349`) takes every `ClientMsg`.
-  - `attach`/`watch` (`:505`/`:532`) send a tree, then each pane's Snapshot.
-  - `spawn` (`:973`) starts a pane's process.
-  - `edit` (`:741`) changes a tree; `save` (`:827`) writes `session.json` and the scrollback.
-  - `rekey` (`:547`) moves a workspace to a new id.
+  - `run` (`:53`) is the accept loop. `restore` (`:815`) brings back `session.json` at
+    start. `save_on_signal` (`:95`) saves everything on SIGTERM, SIGINT or SIGHUP.
+  - `serve` (`:351`) runs one client: a reader, and a writer fed by its `Tx`.
+  - `handle` (`:394`) takes every `ClientMsg`.
+  - `attach`/`watch` (`:550`/`:577`) send a tree, then each pane's Snapshot.
+  - `spawn` (`:1018`) starts a pane's process.
+  - `edit` (`:786`) changes a tree; `save` (`:872`) writes `session.json` and the scrollback.
+  - `rekey` (`:592`) moves a workspace to a new id.
 - `src/outbox.rs`: `Tx`, a client's bounded queue. Past 8 MiB it drops that client's output
   for a pane, then resyncs it with a Snapshot (REQ-76).
 - `src/ring.rs`: the last 2 MiB of each pane's raw output. A Snapshot replays it, and the

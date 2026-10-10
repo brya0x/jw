@@ -11,6 +11,7 @@ jw                       # open the last session
 jw new testing           # a new session, starting in this folder with one shell
 jw sessions              # every session, and what runs in it
 jw help                  # every command
+jw server status|stop    # is the daemon running; stop it
 ```
 
 Inside, press `Ctrl-Space` and then one key. Wait a moment after `Ctrl-Space` and every key
@@ -62,6 +63,7 @@ git clone https://github.com/brya0x/jw && cd jw && cargo install --path crates/j
 - **Daemon.** It owns every terminal, so closing the TUI (`^␣ q`) or the window keeps
   everything running. `jw` attaches again. A restarted daemon brings the workspaces back, with
   their scrollback, and each agent resumes its own conversation.
+  `jw server status` says whether it runs; `jw server stop` stops it, closing every pane.
 
 ## Screen
 
