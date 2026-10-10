@@ -1,6 +1,6 @@
-//! Wire format between the TUI client and the daemon (docs/specs/rust-tui.md,
-//! "Protocol"): each frame is a big-endian u32 length followed by that many
-//! bytes of JSON.
+//! Wire format between the daemon and its clients (docs/specs/rust-tui.md,
+//! "Protocol"): each frame is a big-endian u32 length, then a JSON message,
+//! or a JSON head and the message's terminal bytes raw (see `write_frame`).
 
 use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
