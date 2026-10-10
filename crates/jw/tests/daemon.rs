@@ -723,13 +723,15 @@ fn list_reports_busy_and_the_bell() {
 
 /// REQ-15: a new daemon starts the workspaces session.json describes, with
 /// their names, and runs an agent's resume command instead of its start.
+/// REQ-114: the modes the old process turned on are off in the new one.
 #[test]
 fn a_restarted_daemon_brings_the_workspaces_back() {
     let mut d = Daemon::start();
     let mut c = d.client();
     let mut agent = cat();
     agent.role = "agent".into();
-    agent.cmd = Some("echo started; cat".into());
+    agent.cmd =
+        Some(r"printf '\033[?1003h\033[?1006h\033[?2004h\033[?1h'; echo started; cat".into());
     agent.resume = Some("echo resumed; cat".into());
     c.send(&ClientMsg::Open {
         stream: "r".into(),
@@ -754,6 +756,24 @@ fn a_restarted_daemon_brings_the_workspaces_back() {
         }
     }
     read_until(&mut c, ids_before[0], &mut before, "started");
+    let modes = |p: &vt100::Parser| {
+        let s = p.screen();
+        (
+            s.mouse_protocol_mode(),
+            s.mouse_protocol_encoding(),
+            s.bracketed_paste(),
+            s.application_cursor(),
+        )
+    };
+    assert_eq!(
+        modes(&before),
+        (
+            vt100::MouseProtocolMode::AnyMotion,
+            vt100::MouseProtocolEncoding::Sgr,
+            true,
+            true
+        )
+    );
     c.send(&ClientMsg::Name {
         pane: ids_before[1],
         name: Some("kept".into()),
@@ -803,6 +823,15 @@ fn a_restarted_daemon_brings_the_workspaces_back() {
     assert!(
         text.contains("started") && text.contains("restored"),
         "{text}"
+    );
+    assert_eq!(
+        modes(&screen),
+        (
+            vt100::MouseProtocolMode::None,
+            vt100::MouseProtocolEncoding::Default,
+            false,
+            false
+        )
     );
 }
 
