@@ -298,10 +298,10 @@ Viewer panes (diff, Markdown) keep their own clicks and are out of scope. No key
 - REQ-125 WHERE the pane's program turned the mouse on, the TUI SHALL keep passing a plain drag to the program (REQ-59), and WHERE the outer terminal delivers a drag with Shift held, SHALL select as REQ-124 says.
 - REQ-126 WHEN a double-click or triple-click lands in a pane that is not passing the mouse, the TUI SHALL select that word or line and copy it.
 - REQ-127 WHILE a drag is held above or below the pane, the TUI SHALL scroll the history one line every 60 ms and extend the selection over it.
-- REQ-128 WHEN the TUI copies, it SHALL send the selected text to the outer terminal as OSC 52, with trailing spaces removed from each row, rows joined by `\n`, and a soft-wrapped row joined to the next without one.
+- REQ-128 WHEN the TUI copies, it SHALL send the selected text to the outer terminal as OSC 52, with trailing spaces removed from each row that does not wrap, rows joined by `\n`, and a soft-wrapped row joined to the next without one.
 - REQ-129 WHEN `v` runs after the leader, the TUI SHALL enter select mode on the focused pane, put the cursor at the program's text cursor, show `SEL`, and send no key to the program UNTIL `esc`, `y` or `↵`.
 - REQ-130 WHILE in select mode, the TUI SHALL move the cursor by the keys of the table above, set or clear the anchor on `v` or `␣`, and on `y` or `↵` copy the anchor-to-cursor range, leave the mode and clear the selection. IF no anchor is set, THEN `y` and `↵` SHALL copy nothing and say so.
-- REQ-131 IF the pane's output moves the rows under a selection, THEN the TUI SHALL clear it, except while a drag is held; select mode stays, with the cursor where it was and no anchor.
+- REQ-131 IF the pane's history can no longer keep a selection on its text (the screen switched, the history shrank, or it is full), THEN the TUI SHALL clear it, except while a drag is held; select mode stays, with the cursor where it was and no anchor.
 - REQ-132 WHEN the user clicks in a pane that is not passing the mouse, or the focus changes, the TUI SHALL clear the selection and leave select mode.
 - REQ-133 THE selection SHALL add no `ClientMsg` and no `PaneInfo` field, and `PROTOCOL` SHALL stay at 8.
 - REQ-134 WHEN the wheel scrolls the history of a pane that has a selection, the selection SHALL stay on the same text.
@@ -378,8 +378,8 @@ Viewer panes (diff, Markdown) keep their own clicks and are out of scope. No key
 - RISK-36 **Setup before nvim or the agent:** a failing step's error scrolls away when the program takes the screen. The program still starts, and quitting it shows the error.
 - RISK-37 **`save_layout` drops comments inside `[layout]`** and any `[layout.*]` subtable (jw writes none). Comments elsewhere stay.
 - RISK-38 **The default layout changes** for projects with no `[layout]`: they open with one shell instead of nvim | agent over a shell. jitsubai and jw have their own layout; others get the setup step on their next first worktree only if they have no config at all.
-- RISK-39 **OSC 52 depends on the outer terminal.** iTerm2 asks to allow clipboard access; Terminal.app does not support it. The copy may do nothing, with no error. To decide in X1: say "copied N chars" in the status bar (it only reports what jw sent) and cap the payload (some terminals drop more than about 100 KB).
-- RISK-40 **A busy pane moves rows under the selection.** REQ-127 and REQ-134 already keep the selection on its text while the user scrolls, so it is anchored to the history; new output shifts that history too, and REQ-131 clears it. If that bites in daily use, anchor to a row counter from vt100 instead.
+- RISK-39 **OSC 52 depends on the outer terminal.** iTerm2 asks to allow clipboard access; Terminal.app does not support it. The copy may do nothing, with no error. X1 says "copied N characters" in the status bar (it only reports what jw sent) and refuses more than 75 KB (`select::MAX_COPY`), since some terminals drop an OSC 52 over about 100 KB once encoded.
+- RISK-40 **A selection holds lines, not text.** Rows are counted from the oldest line of the history, so output that scrolls the pane leaves the selection on its text (REQ-127, REQ-134). A full history drops its oldest line and shifts every index, so REQ-131 clears it then; a program that redraws in place (a progress bar) changes the text under it, and the copy takes what is on screen.
 - RISK-41 **Shift + drag may never reach jw.** Terminals of the xterm family (iTerm2, Terminal.app) keep Shift + mouse for their own selection while an app has mouse reporting on, which is how it worked before this addendum. Then REQ-125 never fires and the host selects, as today. X1 checks it in iTerm2 and Terminal.app and records the answer here.
 - Closed by addendum 3: RISK-5 (own registry), RISK-7 (hooks), RISK-9 (frames), RISK-16 (`nvim --server`), RISK-17 (`root` in the registry).
 
@@ -482,6 +482,7 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - The Contract and Interfaces gave a project with no `[layout]` the default tree (nvim | agent over a shell). Addendum 10 makes it one shell, and the user builds the rest.
 - The worktree-names addendum was drafted as addendum 4 with REQ-81–83, RISK-25 and `PROTOCOL 7` on a branch cut before S14–S16, which took those ids. It merged as addendum 7, REQ-110–112, RISK-35 and `PROTOCOL 8`.
 - REQ-72's restore reset only the screen (`?1049l`), and later REQ-87 and REQ-98 the theme and kitty state. The old process's mouse, paste and cursor modes survived into the new one until REQ-114.
+- REQ-131 first said output that moves the rows under a selection clears it. Rows are counted from the oldest history line, so scrolling output leaves the selection on its text; only a full history, a screen switch or a shrunk history clears it.
 - REQ-59 left selection to the host terminal's Shift + drag and RISK-6 put plain mouse selection in scope, but with mouse capture on and a shell that never asks for the mouse, a plain drag did nothing and no REQ covered it (addendum 12).
 
 ## Tests

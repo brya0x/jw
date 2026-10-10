@@ -10,6 +10,7 @@ mod finder;
 mod keys;
 mod mdview;
 mod modal;
+mod select;
 mod settings_view;
 mod setup;
 
@@ -21,8 +22,8 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use ratatui::crossterm::event::{
     self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-    Event, KeyCode, KeyEvent, KeyEventKind, KeyboardEnhancementFlags, MouseButton, MouseEvent,
-    MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags, MouseButton,
+    MouseEvent, MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use ratatui::crossterm::{execute, terminal};
 
@@ -37,6 +38,7 @@ use crate::proto::{
 use crate::stream::Stream;
 
 use modal::{Modal, Outcome};
+use select::{Pos, Sel};
 
 use keys::Leader;
 
@@ -147,6 +149,12 @@ const SCROLLBACK: usize = 5_000;
 /// Rows the wheel moves at a time.
 const WHEEL: usize = 3;
 
+/// How often a drag held above or below a pane scrolls it one line (REQ-127).
+const EDGE_EVERY: Duration = Duration::from_millis(60);
+
+/// Two clicks this close, on the same cell, are a double click (REQ-126).
+const CLICK_WITHIN: Duration = Duration::from_millis(400);
+
 /// The longest a burst of messages holds back the next frame.
 const FRAME: Duration = Duration::from_millis(16);
 
@@ -202,6 +210,14 @@ pub struct App {
     focus_new: bool,
     /// A border being dragged with the mouse.
     dragging: Option<crate::layout::Border>,
+    /// The text selected in a pane (addendum 12).
+    sel: Option<Sel>,
+    /// The button is down and the selection follows the pointer.
+    selecting: bool,
+    /// The drag is held above (-1) or below (1) the pane: it scrolls (REQ-127).
+    edge: Option<isize>,
+    /// The last left click: when, where and how many in a row.
+    clicks: Option<(Instant, u16, u16, u8)>,
     /// `f`: only the focused pane, across the whole terminal.
     pub full: bool,
     pub status: Option<Status>,
@@ -408,6 +424,10 @@ impl App {
             focus: None,
             focus_new: false,
             dragging: None,
+            sel: None,
+            selecting: false,
+            edge: None,
+            clicks: None,
             full: false,
             status: None,
             size,
@@ -439,27 +459,48 @@ impl App {
     ) -> Result<()> {
         terminal.draw(|f| draw::draw(f, self))?;
         while !self.quit {
-            let first = match self.leader_at {
-                Some(at) if !self.which => {
-                    match rx.recv_timeout(which_after().saturating_sub(at.elapsed())) {
-                        Ok(m) => m,
-                        Err(RecvTimeoutError::Timeout) => {
-                            self.which = true;
-                            terminal.draw(|f| draw::draw(f, self))?;
-                            continue;
-                        }
-                        Err(RecvTimeoutError::Disconnected) => {
-                            anyhow::bail!("event channels closed")
-                        }
+            let first = if self.edge.is_some() {
+                match rx.recv_timeout(EDGE_EVERY) {
+                    Ok(m) => m,
+                    Err(RecvTimeoutError::Timeout) => {
+                        self.edge_step();
+                        terminal.draw(|f| draw::draw(f, self))?;
+                        continue;
+                    }
+                    Err(RecvTimeoutError::Disconnected) => {
+                        anyhow::bail!("event channels closed")
                     }
                 }
-                _ => rx.recv().context("event channels closed")?,
+            } else {
+                match self.leader_at {
+                    Some(at) if !self.which => {
+                        match rx.recv_timeout(which_after().saturating_sub(at.elapsed())) {
+                            Ok(m) => m,
+                            Err(RecvTimeoutError::Timeout) => {
+                                self.which = true;
+                                terminal.draw(|f| draw::draw(f, self))?;
+                                continue;
+                            }
+                            Err(RecvTimeoutError::Disconnected) => {
+                                anyhow::bail!("event channels closed")
+                            }
+                        }
+                    }
+                    _ => rx.recv().context("event channels closed")?,
+                }
             };
             self.handle(first);
             drain(&rx, FRAME, |m| {
                 self.handle(m);
                 !self.quit
             });
+            if self
+                .sel
+                .as_ref()
+                .is_some_and(|s| self.focus != Some(s.pane))
+            {
+                self.clear_sel();
+            }
             terminal.draw(|f| draw::draw(f, self))?;
         }
         Ok(())
@@ -734,6 +775,7 @@ impl App {
                     keys::Flags::default(),
                 );
                 parser.process(&bytes);
+                self.clear_sel_of(pane);
                 self.panes.insert(
                     pane,
                     PaneView {
@@ -748,6 +790,13 @@ impl App {
             DaemonMsg::Output { pane, bytes } => {
                 if let Some(v) = self.panes.get_mut(&pane) {
                     v.parser.process(&bytes);
+                    if let Some(sel) = &mut self.sel
+                        && sel.pane == pane
+                        && !sel.follow(&mut v.parser)
+                        && !self.selecting
+                    {
+                        self.sel = None;
+                    }
                 }
             }
             DaemonMsg::Tree { stream, tree } => {
@@ -1278,6 +1327,11 @@ impl App {
             let (cols, rows) = inner(rect);
             if view.parser.screen().size() != (rows, cols) {
                 view.parser.screen_mut().set_size(rows, cols);
+                if self.sel.as_ref().is_some_and(|s| s.pane == id) {
+                    self.sel = None;
+                    self.selecting = false;
+                    self.edge = None;
+                }
                 resizes.push(ClientMsg::Resize {
                     pane: id,
                     cols,
@@ -1316,9 +1370,9 @@ impl App {
         (i < self.rows.len()).then_some(i)
     }
 
-    /// The mouse (Shift + drag still selects text in the terminal): click a
-    /// workspace or a pane, roll the wheel over a pane or a picker, and pass
-    /// everything to a program that asked for the mouse.
+    /// The mouse: click a workspace or a pane, roll the wheel over a pane or
+    /// a picker, drag to select text, and pass everything to a program that
+    /// asked for the mouse (a Shift + drag still selects, REQ-125).
     fn on_mouse(&mut self, m: MouseEvent) {
         let (x, y) = (m.column, m.row);
         let wheel = match m.kind {
@@ -1347,6 +1401,12 @@ impl App {
         }
         if click && self.leader_at.take().is_some() {
             self.which = false;
+        }
+        if click {
+            self.clear_sel();
+        }
+        if self.sel_drag(&m) {
+            return;
         }
         if x < SIDEBAR {
             if click && let Some(i) = self.sidebar_row_at(y) {
@@ -1379,6 +1439,14 @@ impl App {
             return;
         }
         let inside = x > r.x && x + 1 < r.x + r.w && y > r.y && y + 1 < r.y + r.h;
+        let takes_mouse = |v: &PaneView| {
+            v.parser.screen().mouse_protocol_mode() != vt100::MouseProtocolMode::None
+                && !m.modifiers.contains(KeyModifiers::SHIFT)
+        };
+        if click && inside && self.panes.get(&id).is_some_and(|v| !takes_mouse(v)) {
+            self.select_down(id, r, x, y);
+            return;
+        }
         let Some(view) = self.panes.get_mut(&id) else {
             return;
         };
@@ -1409,6 +1477,157 @@ impl App {
         } else {
             let back = screen.scrollback().saturating_add_signed(-wheel);
             view.parser.screen_mut().set_scrollback(back);
+        }
+    }
+
+    /// The selection, when it is in this pane.
+    fn selection(&self, pane: PaneId) -> Option<&Sel> {
+        self.sel.as_ref().filter(|s| s.pane == pane)
+    }
+
+    /// Forgets the selection (REQ-132).
+    fn clear_sel(&mut self) {
+        self.sel = None;
+        self.selecting = false;
+        self.edge = None;
+    }
+
+    fn clear_sel_of(&mut self, pane: PaneId) {
+        if self.sel.as_ref().is_some_and(|s| s.pane == pane) {
+            self.clear_sel();
+        }
+    }
+
+    /// A left press in a pane that is not taking the mouse starts a
+    /// selection; a double or triple click selects the word or the line and
+    /// copies it (REQ-124, REQ-126).
+    fn select_down(&mut self, id: PaneId, r: Rect, x: u16, y: u16) {
+        let (col, row) = (x - r.x - 1, y - r.y - 1);
+        let clicks = match self.clicks {
+            Some((at, cx, cy, n)) if at.elapsed() < CLICK_WITHIN && (cx, cy) == (x, y) => {
+                n.saturating_add(1)
+            }
+            _ => 1,
+        };
+        self.clicks = Some((Instant::now(), x, y, clicks));
+        let Some(view) = self.panes.get_mut(&id) else {
+            return;
+        };
+        let line = select::line_at(&mut view.parser, row);
+        let at = Pos { line, col };
+        if clicks == 1 {
+            self.sel = Some(Sel::new(id, &mut view.parser, at, at));
+            self.selecting = true;
+            return;
+        }
+        let Some((cells, _)) = select::row_cells(&mut view.parser, line) else {
+            return;
+        };
+        let (from, to) = if clicks == 2 {
+            select::word_at(&cells, col)
+        } else {
+            select::line_span(&cells)
+        };
+        let (a, b) = (Pos { line, col: from }, Pos { line, col: to });
+        self.sel = Some(Sel::new(id, &mut view.parser, a, b));
+        self.copy_selection();
+    }
+
+    /// The drag and the release of a selection, wherever the pointer goes
+    /// (REQ-124); above or below the pane it keeps scrolling (REQ-127).
+    fn sel_drag(&mut self, m: &MouseEvent) -> bool {
+        if !self.selecting {
+            return false;
+        }
+        match m.kind {
+            MouseEventKind::Drag(MouseButton::Left) => {
+                let pane = self.sel.as_ref().map(|s| s.pane);
+                let rect = self
+                    .pane_rects()
+                    .into_iter()
+                    .find(|(id, _)| Some(*id) == pane);
+                let Some((_, r)) = rect else {
+                    self.clear_sel();
+                    return false;
+                };
+                let (w, h) = (r.w.saturating_sub(2), r.h.saturating_sub(2));
+                if w == 0 || h == 0 {
+                    return true;
+                }
+                self.edge = if m.row <= r.y {
+                    Some(-1)
+                } else if m.row + 1 >= r.y + r.h {
+                    Some(1)
+                } else {
+                    None
+                };
+                let col = m.column.saturating_sub(r.x + 1).min(w - 1);
+                let row = m.row.saturating_sub(r.y + 1).min(h - 1);
+                self.extend(col, row);
+                true
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                self.selecting = false;
+                self.edge = None;
+                if self.sel.as_ref().is_some_and(Sel::is_empty) {
+                    self.sel = None;
+                } else {
+                    self.copy_selection();
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Moves the selection's far end to a visible cell.
+    fn extend(&mut self, col: u16, row: u16) {
+        let Some(sel) = &mut self.sel else {
+            return;
+        };
+        let Some(view) = self.panes.get_mut(&sel.pane) else {
+            return;
+        };
+        sel.head = Pos {
+            line: select::line_at(&mut view.parser, row),
+            col,
+        };
+    }
+
+    /// One line of scroll while the drag is held above or below the pane.
+    fn edge_step(&mut self) {
+        let pane = self.sel.as_ref().map(|s| s.pane);
+        let (Some(dir), Some(view)) = (self.edge, pane.and_then(|p| self.panes.get_mut(&p))) else {
+            self.edge = None;
+            return;
+        };
+        let screen = view.parser.screen_mut();
+        let back = screen.scrollback().saturating_add_signed(-dir);
+        screen.set_scrollback(back);
+        let (rows, cols) = screen.size();
+        let (row, col) = if dir < 0 {
+            (0, 0)
+        } else {
+            (rows - 1, cols - 1)
+        };
+        self.extend(col, row);
+    }
+
+    /// Copies the selection through the outer terminal (REQ-128).
+    fn copy_selection(&mut self) {
+        let Some(sel) = &self.sel else {
+            return;
+        };
+        let Some(view) = self.panes.get_mut(&sel.pane) else {
+            return;
+        };
+        let text = select::text(&mut view.parser, sel);
+        if text.is_empty() {
+            return;
+        }
+        match select::copy(&text) {
+            Ok(n) => self.done(format!("copied {n} characters")),
+            Err(e) => self.fail(format!("{e:#}")),
         }
     }
 
@@ -1462,6 +1681,7 @@ impl App {
         let Some(id) = self.focused_pane() else {
             return;
         };
+        self.clear_sel_of(id);
         // Typing goes back to the bottom of the history, as terminals do.
         if let Some(v) = self.panes.get_mut(&id) {
             v.parser.screen_mut().set_scrollback(0);

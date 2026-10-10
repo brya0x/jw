@@ -15,6 +15,7 @@ daemon; it only talks to it through jw-proto.
 | `src/tui/setup.rs` | the setup step of a project's first worktree: the layout builder, agent and setup, written to `.jw.toml` (addendum 10) |
 | `src/tui/settings_view.rs` | `^␣ ,` |
 | `src/tui/diffview.rs`, `mdview.rs` | the viewers, drawn as panes with no process (`view:` roles) |
+| `src/tui/select.rs` | selecting text in a pane (addendum 12): the selection as lines of the history, the text it covers, words and lines, the OSC 52 copy |
 | `src/tui/keys.rs` | the leader, and encoding keys and mouse events for the panes' programs |
 | `src/settings.rs` | `settings.json`: `get` (`:164`), `save` (`:149`), `ACTIONS` (`:39`, the rebindable keys) |
 | `src/theme.rs` | palettes: `p()` for every colour, `load` (`:175`) for the themes the settings name. Every theme is JSON: the built-ins are `themes/*.json` (`BUILTIN`), checked against `themes/schema.json` by a test |
