@@ -93,11 +93,18 @@ git clone https://github.com/brya0x/jw && cd jw && cargo install --path crates/j
 | `/` | open a file | `X` | remove | `n` | name |
 | `a` | sessions | | | `f` | full screen |
 | `,` | settings | | | | |
+| `↑↓←→` | move through the sidebar | | | | |
 | `q` | detach | | | | |
 
-- **Renaming:** `^␣ r` on a worktree renames its branch and its folder. On a plain folder it
+- **New worktree:** `^␣ w` asks for its name, with the next free `ws-N` filled in, and shows
+  the branch and folder it will create.
+- **Renaming:** `^␣ r` on a worktree renames its branch and its folder, and its panes keep
+  running. A program that kept the old path as text may need a restart. On a plain folder it
   only changes the name jw shows. `ctrl-r` in `^␣ a` renames a session, and `^␣ n` names a
   pane.
+- **Arrows:** `^␣ ↓` opens the next open workspace in the sidebar and `^␣ ↑` the previous
+  one; `←` and `→` jump between projects. More arrows keep moving without the leader; `↵`,
+  `esc` or any other key gives the keyboard back to the pane.
 - **`^␣ X`:** after the PR is merged it asks once. When work would be lost (changes not
   committed, commits not pushed), you type the worktree's name to confirm.
 - **`^␣ d`:** opens the diff against the base on the right. It shows one column when the

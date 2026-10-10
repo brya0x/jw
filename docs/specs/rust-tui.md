@@ -265,10 +265,10 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | S11 ✓ `27c3c2a` | `jw help`, `--help`; the jw skill moves into the repo, `jw skill [install]` | 77, 78 | `main.rs`, `help.rs`, `skill.rs`, `skill/SKILL.md`, `session.rs` |
 | S12 ✓ `7495afb` | The daemon saves everything on SIGTERM, SIGINT and SIGHUP | 79 | `daemon` |
 | S13 ✓ `4f7e4a4` | `jw server status`, `jw server stop` | 80 | `server.rs`, `help.rs`, `session.rs` |
-| W0 | Addendum 4 in this spec; the prototype | — | docs |
-| W1 | `^␣ w` asks the name: `actions::new_plan`, `Modal::New` | 81 | `actions.rs`, `tui/modal.rs`, `tui/mod.rs` |
-| W2 | Rename keeps the panes: `ClientMsg::Moved`, `PROTOCOL 7` | 82 | `proto`, `daemon`, `tui/mod.rs`, `tui/modal.rs` |
-| W3 | `^␣` + arrows walk the sidebar; the `MOVE` chip | 83 | `tui/mod.rs`, `tui/draw.rs` |
+| W0 ✓ `9e944c6` | Addendum 4 in this spec; the prototype | — | docs |
+| W1 ✓ `d6c2728` | `^␣ w` asks the name: `actions::new_plan`, `Modal::New` | 81 | `actions.rs`, `tui/modal.rs`, `tui/mod.rs` |
+| W2 ✓ `1a5d5ad` | Rename keeps the panes: `ClientMsg::Moved`, `PROTOCOL 7` | 82 | `proto`, `daemon`, `tui/mod.rs`, `tui/modal.rs` |
+| W3 ✓ `f575bca` | `^␣` + arrows walk the sidebar; the `MOVE` chip | 83 | `tui/mod.rs`, `tui/draw.rs` |
 | Later | Animations (optional) | 19, 20 | |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 
