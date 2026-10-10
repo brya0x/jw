@@ -429,8 +429,8 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | L3 ✓ `2f1a0b9` | `Modal::Setup`: the builder, agent and setup step of `^␣ w` | 115–117, 122 | `tui/modal.rs`, `tui/setup.rs`, `tui/mod.rs` |
 | L4 ✓ `20dc5da` | `^␣ p` saves the layout; `layout changed` in the header | 120, 121 | `tui/mod.rs`, `tui/draw.rs`, `settings.rs` |
 | D2 ✓ `5a4f02a` | Addendum 11: `d` on the project root | 123 | `diff.rs`, `tui/mod.rs` |
-| X0 | Addendum 12 in this spec; the prototype | — | docs |
-| X1 | Selection state in the TUI: drag, Shift + drag, word and line, edge scroll, OSC 52 copy, clear rules | 124–128, 131–134 | `tui/mod.rs`, `tui/draw.rs`, new `tui/select.rs` |
+| X0 ✓ `9adb9e7` | Addendum 12 in this spec; the prototype | — | docs |
+| X1 ✓ `5dd7118` | Selection state in the TUI: drag, Shift + drag, word and line, edge scroll, OSC 52 copy, clear rules | 124–128, 131–134 | `tui/mod.rs`, `tui/draw.rs`, new `tui/select.rs` |
 | X2 | `^␣ v` select mode, the `SEL` chip, the `select` keymap action, which-key | 129, 130 | `tui/mod.rs`, `tui/draw.rs`, `settings.rs` |
 | Later | Animations (optional) | 19, 20 | |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
