@@ -7,7 +7,7 @@ depends on nothing of jw's.
 
 | Module | What |
 |---|---|
-| `src/core/config.rs` | the project TOML: `load` (`:118`) looks in `.jw.toml`, then `~/.config/jw/<project>.toml`, then defaults |
+| `src/core/config.rs` | the project TOML: `load` looks in `.jw.toml`, then `~/.config/jw/<project>.toml`, then defaults; `save_layout` rewrites only `[layout]`'s tree |
 | `src/core/registry.rs` | `workspaces.json`, every worktree: `Entry` (`:15`), `Registry` (`:63`), `default_path` (`:71`, seeds from Go's `registry.json` once), `state_dir` (`:89`) |
 | `src/layout.rs` | `Node`, the layout as written in TOML (`:14`), and `Tree<L>`, the live split tree with every operation the daemon applies (`:155`) |
 | `src/session.rs` | named sessions: `current` (`:26`), `create` (`:206`), `rename` (`:66`), `list` (`:189`); their files live in `sessions/<name>/` |
@@ -16,7 +16,7 @@ depends on nothing of jw's.
 | `src/actions.rs` | worktrees: `new_stream` (`:85`), `rename` (`:198`), `rm_plan`/`rm` (`:333`/`:361`), `sync` (`:436`), `done_plan` (`:490`) |
 | `src/connectors/git.rs`, `github.rs` | git through the `git` binary, plus `head_of` (`:298`), which reads `.git` without running anything; PRs through `gh` |
 | `src/diff.rs` | a worktree's changes against its base, for the diff viewer |
-| `src/init.rs` | drafting a project config |
+| `src/init.rs` | drafting a project config (`detect`), and `write_project`, the `.jw.toml` of the setup step |
 
 ## Keep in mind
 

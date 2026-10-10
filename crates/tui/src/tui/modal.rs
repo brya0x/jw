@@ -41,6 +41,13 @@ pub enum Modal {
     /// `^␣ w` on a project with no config: the step after the name that
     /// builds its layout and writes `.jw.toml` (REQ-115).
     Setup(Box<super::setup::Setup>),
+    /// `^␣ p`: the panes on screen as the project's layout (REQ-120).
+    SaveLayout {
+        path: std::path::PathBuf,
+        /// The layout the config has now; `None` with no config file.
+        old: Option<crate::layout::Node>,
+        new: crate::layout::Node,
+    },
     /// `^␣ r`: a new name for a worktree, with what changes (REQ-111).
     Rename {
         entry: Entry,
@@ -112,11 +119,13 @@ impl Modal {
                 _ => Outcome::Stay,
             },
             Modal::Setup(_) => Outcome::Stay,
-            Modal::Close { .. } | Modal::ClosePane { .. } => match k.code {
-                KeyCode::Char('y') | KeyCode::Enter => Outcome::Submit,
-                KeyCode::Char('n') => Outcome::Cancel,
-                _ => Outcome::Stay,
-            },
+            Modal::Close { .. } | Modal::ClosePane { .. } | Modal::SaveLayout { .. } => {
+                match k.code {
+                    KeyCode::Char('y') | KeyCode::Enter => Outcome::Submit,
+                    KeyCode::Char('n') => Outcome::Cancel,
+                    _ => Outcome::Stay,
+                }
+            }
             Modal::New {
                 project,
                 text,
@@ -270,6 +279,39 @@ impl Modal {
                 l.push(Line::default());
                 l.push(keys(&[("y", "close"), ("esc", "cancel")]));
                 (format!(" Close {}? ", entry.name), l)
+            }
+            Modal::SaveLayout { path, old, new } => {
+                let dim = Style::default().fg(p().dim);
+                let mut l = vec![
+                    Line::from(Span::styled(
+                        " The panes on screen become the layout of new worktrees.",
+                        dim,
+                    )),
+                    Line::default(),
+                    Line::from(vec![
+                        Span::styled(" file    ", dim),
+                        Span::raw(short_path(&path.display().to_string(), 54)),
+                    ]),
+                    Line::default(),
+                ];
+                if let Some(old) = old {
+                    l.push(Line::from(vec![
+                        Span::styled(" now     ", dim),
+                        Span::styled(describe(old), Style::default().fg(p().red)),
+                    ]));
+                }
+                l.push(Line::from(vec![
+                    Span::styled(" new     ", dim),
+                    Span::styled(describe(new), Style::default().fg(p().green)),
+                ]));
+                l.push(Line::default());
+                l.push(Line::from(Span::styled(
+                    " Open worktrees keep their panes. Commit the file to share it.",
+                    dim,
+                )));
+                l.push(Line::default());
+                l.push(keys(&[("↵", "save"), ("esc", "cancel")]));
+                (" Save this layout? ".to_string(), l)
             }
             Modal::ClosePane { title, running, .. } => {
                 let l = vec![
@@ -603,6 +645,21 @@ fn keys(pairs: &[(&str, &str)]) -> Line<'static> {
     Line::from(spans)
 }
 
+/// A layout in one line: `|` side by side, `/` one above the other, with
+/// parentheses where a split holds a split the other way.
+pub fn describe(n: &crate::layout::Node) -> String {
+    use crate::layout::Dir;
+    let (Some(dir), Some(a), Some(b)) = (n.split, &n.a, &n.b) else {
+        return n.run.clone().unwrap_or_default();
+    };
+    let side = |c: &crate::layout::Node| match c.split {
+        Some(d) if d != dir => format!("({})", describe(c)),
+        _ => describe(c),
+    };
+    let sep = if dir == Dir::Right { "|" } else { "/" };
+    format!("{} {sep} {}", side(a), side(b))
+}
+
 /// What `^␣ w` would create as `name`, or why it can't, for the modal.
 pub fn new_plan(project: &Project, name: &str) -> Result<crate::actions::Planned, String> {
     crate::core::registry::default_path()
@@ -636,7 +693,17 @@ fn short_path(s: &str, max: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::short_path;
+    use super::{describe, short_path};
+    use crate::layout::{Dir, Node};
+
+    #[test]
+    fn layouts_read_in_one_line() {
+        let top = Node::split(Dir::Right, 0.5, Node::leaf("editor"), Node::leaf("agent"));
+        assert_eq!(describe(&top), "editor | agent");
+        let t = Node::split(Dir::Down, 0.7, top, Node::leaf("shell"));
+        assert_eq!(describe(&t), "(editor | agent) / shell");
+        assert_eq!(describe(&Node::leaf("pnpm dev")), "pnpm dev");
+    }
 
     #[test]
     fn short_paths_keep_their_end() {

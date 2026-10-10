@@ -78,6 +78,15 @@ pub struct Layout {
 }
 
 impl Layout {
+    /// Makes `node` the configured tree, as [`save_layout`] wrote it.
+    pub fn set_tree(&mut self, node: &Node) {
+        self.split = node.split;
+        self.ratio = node.ratio;
+        self.a = node.a.clone();
+        self.b = node.b.clone();
+        self.run = node.run.clone();
+    }
+
     /// The configured tree, or the default one when `[layout]` has none (REQ-8).
     pub fn tree(&self) -> Node {
         if self.split.is_none() && self.run.is_none() {

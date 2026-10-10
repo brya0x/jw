@@ -30,7 +30,7 @@ use crate::actions::{self, NewOptions, Project};
 use crate::client::Client;
 use crate::connectors::PullRequests;
 use crate::core::registry::{self, Entry, Registry};
-use crate::layout::{Dir, Rect, Tree};
+use crate::layout::{Dir, Node, Rect, Tree};
 use crate::proto::{
     AgentState, ClientMsg, DaemonMsg, NewPane, PROTOCOL, PaneId, PaneInfo, PaneLeaf,
 };
@@ -912,6 +912,7 @@ impl App {
                 "pane" => self.new_pane(),
                 "close" => self.close_pane(),
                 "name" => self.ask_name(),
+                "layout" => self.ask_save_layout(),
                 "full" => {
                     self.full = !self.full;
                     self.fit();
@@ -2077,6 +2078,77 @@ impl App {
         }
     }
 
+    /// The current workspace's panes as a layout: each pane's role back to
+    /// the run it came from in the opening tree (RAT-24), a pane added later
+    /// as a shell, viewers left out.
+    fn live_layout(&self) -> Option<Node> {
+        let s = self.active.as_ref()?;
+        let runs: BTreeMap<String, String> = s
+            .tree
+            .leaves()
+            .into_iter()
+            .map(|l| (l.role, l.run))
+            .collect();
+        let run = |l: &PaneLeaf| -> String {
+            if l.role.starts_with("view:") {
+                return String::new();
+            }
+            let base = match l.role.rsplit_once('-') {
+                Some((b, n)) if n.chars().all(|c| c.is_ascii_digit()) => b,
+                _ => &l.role,
+            };
+            runs.get(&l.role)
+                .or_else(|| runs.get(base))
+                .cloned()
+                .unwrap_or_else(|| match base {
+                    "editor" | "agent" => base.to_string(),
+                    b if b.starts_with("dev:") => b.to_string(),
+                    _ => "shell".into(),
+                })
+        };
+        prune(self.tree.as_ref()?.to_node(&run)).map(|n| even(&n))
+    }
+
+    /// REQ-121: a worktree whose panes aren't its project's layout.
+    pub fn layout_changed(&self) -> bool {
+        let Some(s) = &self.active else {
+            return false;
+        };
+        !crate::folders::is_folder(&s.entry)
+            && self
+                .live_layout()
+                .is_some_and(|live| live != even(&s.cfg.layout.tree()))
+    }
+
+    /// `p`: saves the panes on screen as the project's layout (REQ-120).
+    fn ask_save_layout(&mut self) {
+        let Some(s) = self.active.clone() else {
+            return;
+        };
+        let Some(new) = self.live_layout() else {
+            return;
+        };
+        let path = match &s.cfg.source {
+            Some(p) => p.clone(),
+            None => match crate::connectors::git::Repo::open(std::path::Path::new(&s.entry.path)) {
+                Ok(repo) => repo.root.join(".jw.toml"),
+                Err(_) => {
+                    self.fail(format!(
+                        "{} is not a git project: no layout to save",
+                        s.entry.name
+                    ));
+                    return;
+                }
+            },
+        };
+        let old = s.cfg.source.as_ref().map(|_| even(&s.cfg.layout.tree()));
+        if old.as_ref() == Some(&new) {
+            self.say("the panes already match the project's layout".into());
+            return;
+        }
+        self.modal = Some(Modal::SaveLayout { path, old, new });
+    }
+
     /// `w`: asks the new worktree's name, offering the lowest free `ws-N`
     /// (REQ-110); it starts from the current workspace's branch.
     fn new_worktree(&mut self) {
@@ -2234,6 +2306,18 @@ impl App {
         match m {
             Modal::Close { entry, .. } => self.close(&entry),
             Modal::ClosePane { pane, .. } => self.send(ClientMsg::Kill { pane }),
+            Modal::SaveLayout { path, new, .. } => {
+                match crate::core::config::save_layout(&path, &new) {
+                    Ok(()) => {
+                        if let Some(s) = &mut self.active {
+                            s.cfg.layout.set_tree(&new);
+                            s.cfg.source.get_or_insert(path.clone());
+                        }
+                        self.done(format!("saved the layout to {}", finder::tilde(&path)));
+                    }
+                    Err(e) => self.fail(format!("{e:#}")),
+                }
+            }
             Modal::New {
                 from,
                 project,
@@ -2538,4 +2622,58 @@ const SHELLS: &[&str] = &["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "n
 /// The terminal size inside a pane's border.
 fn inner(r: Rect) -> (u16, u16) {
     (r.w.saturating_sub(2).max(1), r.h.saturating_sub(2).max(1))
+}
+
+/// `n` without the leaves whose run is empty; their siblings take the space.
+fn prune(n: Node) -> Option<Node> {
+    if n.run.is_some() {
+        return n.run.as_deref().is_some_and(|r| !r.is_empty()).then_some(n);
+    }
+    let (Some(dir), Some(a), Some(b)) = (n.split, n.a, n.b) else {
+        return None;
+    };
+    match (prune(*a), prune(*b)) {
+        (Some(a), Some(b)) => Some(Node::split(dir, n.ratio.unwrap_or(0.5), a, b)),
+        (one, other) => one.or(other),
+    }
+}
+
+/// `n` with every ratio given and rounded to hundredths, so a layout and
+/// the live tree it opened compare equal.
+fn even(n: &Node) -> Node {
+    match (n.split, &n.a, &n.b) {
+        (Some(dir), Some(a), Some(b)) => Node::split(
+            dir,
+            (n.ratio.unwrap_or(0.5) * 100.0).round() / 100.0,
+            even(a),
+            even(b),
+        ),
+        _ => n.clone(),
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::{even, prune};
+    use crate::layout::{Dir, Node};
+
+    /// REQ-120, 121: viewers drop out, and a missing ratio equals 0.5.
+    #[test]
+    fn live_layouts_compare_with_their_config() {
+        let t = Node::split(
+            Dir::Down,
+            0.7,
+            Node::split(Dir::Right, 0.5, Node::leaf("editor"), Node::leaf("")),
+            Node::leaf("shell"),
+        );
+        let want = Node::split(Dir::Down, 0.7, Node::leaf("editor"), Node::leaf("shell"));
+        assert_eq!(prune(t), Some(want));
+        assert_eq!(prune(Node::leaf("")), None);
+        let mut bare = Node::split(Dir::Right, 0.5, Node::leaf("a"), Node::leaf("b"));
+        bare.ratio = None;
+        assert_eq!(
+            even(&bare),
+            Node::split(Dir::Right, 0.5, Node::leaf("a"), Node::leaf("b"))
+        );
+    }
 }

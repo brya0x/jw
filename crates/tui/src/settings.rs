@@ -36,7 +36,7 @@ pub struct Settings {
 /// The actions a key after the leader can be given, by group: `(group,
 /// action, what the popup says, default key)`. A key is one character, or
 /// `tab`/`space`.
-pub const ACTIONS: [(&str, &str, &str, &str); 15] = [
+pub const ACTIONS: [(&str, &str, &str, &str); 16] = [
     ("go", "switch", "switch", "space"),
     ("go", "previous", "previous", "tab"),
     ("go", "open", "open folder", "o"),
@@ -52,6 +52,7 @@ pub const ACTIONS: [(&str, &str, &str, &str); 15] = [
     ("panes", "close", "close", "x"),
     ("panes", "name", "name", "n"),
     ("panes", "full", "full", "f"),
+    ("panes", "layout", "save layout", "p"),
 ];
 
 /// Keys that always mean the same: workspaces, focus, moving panes, help,

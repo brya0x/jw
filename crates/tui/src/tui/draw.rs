@@ -239,6 +239,16 @@ fn header(f: &mut Frame, app: &App) {
             Style::default().fg(color),
         ));
     }
+    if app.layout_changed() {
+        spans.push(Span::styled(
+            format!(
+                "  layout changed · {} {} saves it",
+                app.leader.label(),
+                crate::settings::get().key("layout")
+            ),
+            Style::default().fg(p().yellow),
+        ));
+    }
     if !folder {
         for (svc, port) in s.vars().ports {
             spans.push(Span::styled(format!("  {svc} :{port}"), dim));
