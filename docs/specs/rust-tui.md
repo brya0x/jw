@@ -1,5 +1,5 @@
 ---
-status:      agreed (v2 + the screen addendum + addendum 3 "sessions", 2026-10-09; P0–P9 built against v1)
+status:      agreed (v2 + the screen addendum + addendum 3 "sessions", 2026-10-09; P0–P9 built against v1); addendum 12 (X0) drafted
 scope:       [Cargo.toml, src/**, .github/workflows/ci.yml, internal/core/config/config.go (one relaxation), README.md]
 depends_on:  [git, gh on PATH]
 supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/herdr]
@@ -27,7 +27,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 | `tab` previous workspace | `r` rename: name, branch and folder; its panes keep running | `t` new shell beside the focused pane |
 | `1–9` the sidebar's number | `s` sync (on a project root: `pull --ff-only`) | `x` close the pane; on the last one, close the workspace |
 | `o` open a folder (browser: arrows, type to filter, `~`, a new name creates it) | `d` diff pane against the base, on a worktree or the project root (addendum 11) | `n` name the pane (empty = automatic title) |
-| `/` open a file (`.md` → reader pane, else nvim) | `X` remove: done checks if the PR is merged, rm checks otherwise | `f` full: the focused pane fills the panes area, the sidebar and bars stay · `HJKL` swap with the neighbour · `p` save the panes as the project's layout (addendum 10) |
+| `/` open a file (`.md` → reader pane, else nvim) | `X` remove: done checks if the PR is merged, rm checks otherwise | `f` full: the focused pane fills the panes area, the sidebar and bars stay · `HJKL` swap with the neighbour · `p` save the panes as the project's layout (addendum 10) · `v` select text (addendum 12) |
 | `↑↓` next/previous workspace, `←→` next/previous project; more arrows keep moving | | |
 | `?` keys · `q` detach | | |
 
@@ -125,7 +125,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 - REQ-56 WHEN jw starts and finds `free.json`, it SHALL move its sessions into `folders.json`.
 - REQ-57 WHEN `d` runs, the TUI SHALL open the diff as a pane on the right. WHEN `↵` is pressed on a file in it, the TUI SHALL open that file as REQ-42 says.
 - REQ-58 IF the pane closed with `x` is a viewer, THEN the TUI SHALL close it without asking.
-- REQ-59 WHEN the user clicks a sidebar row or a pane, the TUI SHALL open that workspace or focus that pane; WHERE the pane's program turned the mouse on, the TUI SHALL pass it every click, drag and wheel in its encoding; otherwise the wheel SHALL scroll (arrows in a full-screen program, the history in a shell). Shift + drag stays the terminal's own selection.
+- REQ-59 WHEN the user clicks a sidebar row or a pane, the TUI SHALL open that workspace or focus that pane; WHERE the pane's program turned the mouse on, the TUI SHALL pass it every click, drag and wheel in its encoding; otherwise the wheel SHALL scroll (arrows in a full-screen program, the history in a shell). Selecting is REQ-124–125.
 - REQ-60 WHEN the user drags the line between two panes, the TUI SHALL resize them as it moves, and the daemon SHALL keep the new share in the tree and `session.json`.
 - REQ-19 WHEN the workspace, a modal or the pane focus changes, the TUI MAY animate the transition, never delaying input to the panes. *(Later; optional.)*
 - REQ-20 WHERE `[tui] animations = false`, the TUI SHALL apply every change without animation.
@@ -276,6 +276,36 @@ jw no longer picks a layout for a project. The first worktree of a project with 
 
 - REQ-123 WHEN `d` runs on a project root that is a git repository, the TUI SHALL open its diff against `origin/<default>`, or against `HEAD` WHERE origin has no default branch.
 
+### Addendum 12 (X0): selecting text in a pane
+
+Prototype: https://claude.ai/artifact/1rqnVPFC6xxy3nG1Rv1vkw (approved 2026-10-10).
+
+jw owns the mouse (capture is on), so a plain drag in a shell did nothing and only Shift + drag, the host terminal's own selection, worked. jw now selects and copies itself, with the mouse and with the keyboard.
+
+| Area | What it does |
+|---|---|
+| Drag | In a pane whose program has no mouse mode, a left drag highlights from the press to the pointer, row by row, over the visible screen and the history. On release the text is copied |
+| Shift + drag | In a pane whose program turned the mouse on (nvim, claude), plain drag still goes to the program; WHERE the outer terminal hands jw a Shift + drag (many keep it for their own selection, RISK-41), it selects as above |
+| Words and lines | Double-click selects a word (letters, digits and `_ . / ~ : -`), triple-click a line |
+| Edges | Dragging above or below the pane scrolls the history one line every 60 ms and keeps extending the selection |
+| `^␣ v` | Select mode, chip `SEL`. A cursor starts at the program's text cursor. Arrows or `h j k l` move it, `w` `b` by word, `0` `$` to the line's ends, `g` `G` to the top and bottom of the history, `PgUp` `PgDn` by a screen. `v` or `␣` sets the anchor (again clears it), `y` or `↵` copies and leaves, `esc` leaves. Every other key is swallowed, never sent to the program |
+| Copy | OSC 52 written to the outer terminal. Rows lose their trailing spaces and join with `\n`, except a soft-wrapped row, which joins to the next with nothing |
+| Settings | `select` is a keymap action (`settings.rs`), default `v`, rebindable like the others |
+
+Viewer panes (diff, Markdown) keep their own clicks and are out of scope. No key is bound with Alt.
+
+- REQ-124 WHERE the pane's program has not turned the mouse on, WHEN the left button is dragged inside the pane, the TUI SHALL highlight the cells between the press and the pointer, and on release SHALL copy them.
+- REQ-125 WHERE the pane's program turned the mouse on, the TUI SHALL keep passing a plain drag to the program (REQ-59), and WHERE the outer terminal delivers a drag with Shift held, SHALL select as REQ-124 says.
+- REQ-126 WHEN a double-click or triple-click lands in a pane that is not passing the mouse, the TUI SHALL select that word or line and copy it.
+- REQ-127 WHILE a drag is held above or below the pane, the TUI SHALL scroll the history one line every 60 ms and extend the selection over it.
+- REQ-128 WHEN the TUI copies, it SHALL send the selected text to the outer terminal as OSC 52, with trailing spaces removed from each row, rows joined by `\n`, and a soft-wrapped row joined to the next without one.
+- REQ-129 WHEN `v` runs after the leader, the TUI SHALL enter select mode on the focused pane, put the cursor at the program's text cursor, show `SEL`, and send no key to the program UNTIL `esc`, `y` or `↵`.
+- REQ-130 WHILE in select mode, the TUI SHALL move the cursor by the keys of the table above, set or clear the anchor on `v` or `␣`, and on `y` or `↵` copy the anchor-to-cursor range, leave the mode and clear the selection. IF no anchor is set, THEN `y` and `↵` SHALL copy nothing and say so.
+- REQ-131 IF the pane's output moves the rows under a selection, THEN the TUI SHALL clear it, except while a drag is held; select mode stays, with the cursor where it was and no anchor.
+- REQ-132 WHEN the user clicks in a pane that is not passing the mouse, or the focus changes, the TUI SHALL clear the selection and leave select mode.
+- REQ-133 THE selection SHALL add no `ClientMsg` and no `PaneInfo` field, and `PROTOCOL` SHALL stay at 8.
+- REQ-134 WHEN the wheel scrolls the history of a pane that has a selection, the selection SHALL stay on the same text.
+
 ---
 
 ## Rationale
@@ -303,6 +333,9 @@ jw no longer picks a layout for a project. The first worktree of a project with 
 - RAT-23 **The user builds the layout; jw ships no presets.** The user rejected a choice of three fixed shapes: the layout is theirs to decide, panes, places and contents. The builder starts from one shell, which is also the default, so jw never assumes an editor or an agent.
 - RAT-24 **`^␣ p` maps roles back to runs instead of keeping `run` in the live tree.** `PaneLeaf` holds `{id, role, name}`; the opening tree already says which run gave each role. Adding `run` to `PaneLeaf` would bump `PROTOCOL` for one action.
 - RAT-25 **`[layout]` is rewritten as text, not with `toml_edit`.** jw writes that table itself, and only five keys of it change. A new dependency (and a second TOML model) for one write is not worth it.
+- RAT-26 **Selection in the TUI, not the daemon.** It is per viewer (two clients can select different things), changes nothing on the wire, and needs no `PROTOCOL` bump. The TUI already holds each pane's vt100 screen and scrollback.
+- RAT-27 **Rejected: turn host mouse capture off while the focused pane has no mouse mode.** It would give the host terminal's selection back, but jw needs the mouse for sidebar clicks, pane focus, border resize and the wheel, and capture is one switch for the whole screen.
+- RAT-28 **Rejected: a tmux-style copy mode** (search, named buffers, a pager). `^␣ v` is only a cursor and an anchor, so the mouse's job can be done without it (RISK-6). Entry needs the leader so no key meant for a program is taken; Shift + arrows from the shell's cursor was prototyped and rejected for taking those keys from programs.
 - RAT-22 **`curl`, not a crate,** for `install <url>`: rare, and jw already shells out to `git` and `gh`; `ureq` would add TLS and about 40 crates for one command.
 
 ## Risks
@@ -312,7 +345,7 @@ jw no longer picks a layout for a project. The first worktree of a project with 
 - RISK-3 **"Agent ready" without `herdr agent wait`:** the daemon waits for 1.2 s of quiet (at most 20 s). An agent stopped at a dialog is quiet too, so the prompt lands in the dialog.
 - RISK-4 **Daemon crash = all terminals die.** REQ-15 limits the damage; in-flight state is lost.
 - RISK-5 **Concurrent writes to `registry.json`** between Go and Rust, with no lock. Last writer wins until the cutover.
-- RISK-6 **Scope creep toward tmux** (copy mode, scrollback search). Scope: wheel scroll and plain mouse selection.
+- RISK-6 **Scope creep toward tmux** (copy mode, scrollback search). Scope: wheel scroll, mouse selection and `^␣ v` (addendum 12). No search, no buffers.
 - RISK-7 **`✻` / `?` are a heuristic** from output activity, BEL and the OSC title. Worst case they show `●` only.
 - RISK-8 **Animations vs. PTY output** can raise CPU. Animate only during transitions.
 - RISK-9 **Bytes go as JSON number arrays** and a slow client's queue has no bound. Switch to a binary codec and backpressure if dev logs make it show.
@@ -345,6 +378,9 @@ jw no longer picks a layout for a project. The first worktree of a project with 
 - RISK-36 **Setup before nvim or the agent:** a failing step's error scrolls away when the program takes the screen. The program still starts, and quitting it shows the error.
 - RISK-37 **`save_layout` drops comments inside `[layout]`** and any `[layout.*]` subtable (jw writes none). Comments elsewhere stay.
 - RISK-38 **The default layout changes** for projects with no `[layout]`: they open with one shell instead of nvim | agent over a shell. jitsubai and jw have their own layout; others get the setup step on their next first worktree only if they have no config at all.
+- RISK-39 **OSC 52 depends on the outer terminal.** iTerm2 asks to allow clipboard access; Terminal.app does not support it. The copy may do nothing, with no error. To decide in X1: say "copied N chars" in the status bar (it only reports what jw sent) and cap the payload (some terminals drop more than about 100 KB).
+- RISK-40 **A busy pane moves rows under the selection.** REQ-127 and REQ-134 already keep the selection on its text while the user scrolls, so it is anchored to the history; new output shifts that history too, and REQ-131 clears it. If that bites in daily use, anchor to a row counter from vt100 instead.
+- RISK-41 **Shift + drag may never reach jw.** Terminals of the xterm family (iTerm2, Terminal.app) keep Shift + mouse for their own selection while an app has mouse reporting on, which is how it worked before this addendum. Then REQ-125 never fires and the host selects, as today. X1 checks it in iTerm2 and Terminal.app and records the answer here.
 - Closed by addendum 3: RISK-5 (own registry), RISK-7 (hooks), RISK-9 (frames), RISK-16 (`nvim --server`), RISK-17 (`root` in the registry).
 
 ## Parts (each one ends with `cargo test` + `clippy` green and a local commit on `feat/rust-tui`; nothing is pushed)
@@ -393,6 +429,9 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | L3 ✓ `2f1a0b9` | `Modal::Setup`: the builder, agent and setup step of `^␣ w` | 115–117, 122 | `tui/modal.rs`, `tui/setup.rs`, `tui/mod.rs` |
 | L4 ✓ `20dc5da` | `^␣ p` saves the layout; `layout changed` in the header | 120, 121 | `tui/mod.rs`, `tui/draw.rs`, `settings.rs` |
 | D2 ✓ `5a4f02a` | Addendum 11: `d` on the project root | 123 | `diff.rs`, `tui/mod.rs` |
+| X0 | Addendum 12 in this spec; the prototype | — | docs |
+| X1 | Selection state in the TUI: drag, Shift + drag, word and line, edge scroll, OSC 52 copy, clear rules | 124–128, 131–134 | `tui/mod.rs`, `tui/draw.rs`, new `tui/select.rs` |
+| X2 | `^␣ v` select mode, the `SEL` chip, the `select` keymap action, which-key | 129, 130 | `tui/mod.rs`, `tui/draw.rs`, `settings.rs` |
 | Later | Animations (optional) | 19, 20 | |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 
@@ -411,6 +450,7 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - OPEN-10 → plain Esc goes as `CSI 27 u` to a pane with flag 1, as the kitty spec says (it also removes nvim's Esc delay).
 - OPEN-11 → the built-in themes are not written to disk on first run; `jw theme export` gives each one (S16).
 - OPEN-12 → per-theme syntax colours (a `syntax` block for syntect) are later; highlighting still picks syntect's theme by `dark` (`view/highlight.rs:27`).
+- OPEN-13 → copy on release, drag past the edge scrolls, keyboard entry only after the leader (the prototype's defaults, approved 2026-10-10).
 - OPEN-5 → `~/.config/jw/settings.json` (JSON, outside Go's `*.toml` glob) and the `^␣ ,` screen (addendum 3).
 
 ## Corrections
@@ -442,6 +482,7 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - The Contract and Interfaces gave a project with no `[layout]` the default tree (nvim | agent over a shell). Addendum 10 makes it one shell, and the user builds the rest.
 - The worktree-names addendum was drafted as addendum 4 with REQ-81–83, RISK-25 and `PROTOCOL 7` on a branch cut before S14–S16, which took those ids. It merged as addendum 7, REQ-110–112, RISK-35 and `PROTOCOL 8`.
 - REQ-72's restore reset only the screen (`?1049l`), and later REQ-87 and REQ-98 the theme and kitty state. The old process's mouse, paste and cursor modes survived into the new one until REQ-114.
+- REQ-59 left selection to the host terminal's Shift + drag and RISK-6 put plain mouse selection in scope, but with mouse capture on and a shell that never asks for the mouse, a plain drag did nothing and no REQ covered it (addendum 12).
 
 ## Tests
 
@@ -452,4 +493,5 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - finder: fuzzy ranking tables; folder browser over a temp dir.
 - TUI: ratatui `TestBackend` for the which-key popup, sidebar and modals.
 - keyboard protocol: `kitty.rs` units (push, pop past empty, set modes, query, depth, alternate stack, replay round trip); `keys.rs` units (Shift+Enter is `\r` with flags 0 and `CSI 13;2u` with flag 1); the daemon answers `CSI ? u` before `CSI c`, and a late Snapshot ends with the stack. End to end, with a script that plays Ghostty (answers the probe, sends keys as Ghostty does with flag 1) against an isolated jw: Shift+Enter is a new line in claude 2.1.296 and codex 0.162.1, fires `imap <S-CR>` in nvim 0.12.5; a program that never pushes still gets `\r`; the TUI pops on exit, and pushes nothing when the terminal doesn't answer.
+- selection (X1, X2): unit tests over a vt100 screen for the extracted text (trailing spaces, soft-wrapped rows, wide characters, history rows) and for word and line bounds; a motion table for select mode; the OSC 52 bytes; `TestBackend` for the highlight and the `SEL` chip; `mouse_encodings` still passes. Manual: zsh drag, double and triple click, drag past the edge, `^␣ v` copy; nvim plain drag reaches nvim, Shift + drag selects.
 - manual (after Q2 and Q5): claude and nvim in panes; `w`, `t`, `x`, `HJKL`, `n`, `d`, `↵` in the diff, `q`, then `jw` again shows the same layout.
