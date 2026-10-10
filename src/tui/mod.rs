@@ -309,7 +309,7 @@ fn hello(client: &Client, socket: &std::path::Path) -> Result<()> {
             "the jw daemon running on {} is from another build of jw. \
              Stop it (kill $(cat {})) and start jw again; its panes close with it.",
             socket.display(),
-            crate::daemon::pidfile(socket).display()
+            crate::proto::pidfile(socket).display()
         ),
     }
 }
@@ -1022,7 +1022,7 @@ impl App {
         let empty: Vec<(PaneId, String)> = tree
             .leaves()
             .into_iter()
-            .filter(|l| crate::daemon::is_view(&l.role) && !self.views.contains_key(&l.id))
+            .filter(|l| crate::proto::is_view(&l.role) && !self.views.contains_key(&l.id))
             .map(|l| (l.id, l.role.clone()))
             .collect();
         for (id, role) in empty {
@@ -1419,7 +1419,7 @@ impl App {
         let count = self.tree.as_ref().map_or(0, |t| {
             t.leaves()
                 .into_iter()
-                .filter(|l| !crate::daemon::is_view(&l.role))
+                .filter(|l| !crate::proto::is_view(&l.role))
                 .count()
         });
         if count <= 1 {
@@ -1684,7 +1684,7 @@ impl App {
                     hint: if name == here {
                         "here".into()
                     } else {
-                        crate::cli::workspaces(ids.len())
+                        crate::session::workspaces(ids.len())
                     },
                     open: open > 0,
                     id: name.clone(),

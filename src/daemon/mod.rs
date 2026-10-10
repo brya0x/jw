@@ -32,8 +32,8 @@ use ring::Ring;
 
 use crate::layout::{Dir, Tree};
 use crate::proto::{
-    AgentState, ClientMsg, DaemonMsg, NewPane, PROTOCOL, PaneId, PaneInfo, PaneLeaf, read_frame,
-    write_frame,
+    AgentState, ClientMsg, DaemonMsg, NewPane, PROTOCOL, PaneId, PaneInfo, PaneLeaf, is_view,
+    pidfile, read_frame, write_frame,
 };
 
 /// How often the panes' output is written out, between tree changes.
@@ -80,11 +80,6 @@ fn session_path(socket: &Path) -> Option<PathBuf> {
     } else {
         socket.parent().map(|d| d.join("session.json"))
     }
-}
-
-/// Where the daemon writes its pid, next to the socket.
-pub fn pidfile(socket: &Path) -> PathBuf {
-    socket.with_extension("pid")
 }
 
 /// Binds the socket, refusing if another daemon answers on it and removing
@@ -290,12 +285,6 @@ struct SavedPane {
     /// How its process started; none for a viewer (`view:…`).
     #[serde(flatten)]
     started: Option<Started>,
-}
-
-/// A leaf the client draws itself (a diff, a Markdown file): it has an id
-/// and a place in the tree, but no process.
-pub fn is_view(role: &str) -> bool {
-    role.starts_with("view:")
 }
 
 impl Daemon {

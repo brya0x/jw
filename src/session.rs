@@ -238,6 +238,15 @@ pub fn set_last(state: &Path, name: &str) -> Result<()> {
     Ok(())
 }
 
+/// "1 workspace", "3 workspaces".
+pub fn workspaces(n: usize) -> String {
+    if n == 1 {
+        "1 workspace".into()
+    } else {
+        format!("{n} workspaces")
+    }
+}
+
 /// The state dir of this jw.
 pub fn state() -> Result<PathBuf> {
     registry::state_dir()

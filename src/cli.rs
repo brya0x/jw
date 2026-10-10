@@ -15,7 +15,7 @@ use crate::client::Client;
 use crate::core::registry::{self, Entry, Registry};
 use crate::layout::Rect;
 use crate::proto::{AgentState, ClientMsg, DaemonMsg, PaneInfo, socket_path};
-use crate::stream::Stream;
+use crate::stream::{PaneSpec, Stream};
 
 /// Panes started without a TUI get this size; the TUI resizes them when it
 /// attaches.
@@ -130,7 +130,7 @@ pub fn sessions() -> Result<()> {
         let mut line = format!(
             "{} {name:<24} {}, {} open",
             if name == last { "*" } else { " " },
-            workspaces(ids.len()),
+            crate::session::workspaces(ids.len()),
             open.len()
         );
         for (n, what) in [
@@ -144,15 +144,6 @@ pub fn sessions() -> Result<()> {
         println!("{line}");
     }
     Ok(())
-}
-
-/// "1 workspace", "3 workspaces".
-pub fn workspaces(n: usize) -> String {
-    if n == 1 {
-        "1 workspace".into()
-    } else {
-        format!("{n} workspaces")
-    }
 }
 
 /// `jw worktree <name>`: a worktree of the project in the current folder,
@@ -224,6 +215,19 @@ fn project_named(name: &str) -> Result<Project> {
     Project::open(Path::new(&dir))
 }
 
+/// The daemon message that starts `spec`'s pane at `(cols, rows)`.
+fn spawn(spec: PaneSpec, stream: &str, (cols, rows): (u16, u16)) -> ClientMsg {
+    ClientMsg::Spawn {
+        stream: stream.to_string(),
+        role: spec.role,
+        cmd: spec.cmd,
+        cwd: spec.cwd,
+        env: spec.env,
+        cols,
+        rows,
+    }
+}
+
 /// Starts the stream's panes in the daemon, sized for the default layout.
 fn open(c: &mut Client, stream: &Stream) -> Result<()> {
     let (specs, note) = stream.open_specs(true)?;
@@ -244,7 +248,7 @@ fn open(c: &mut Client, stream: &Stream) -> Result<()> {
             .position(|r| *r == spec.role)
             .map(|i| (rects[i].w.saturating_sub(2), rects[i].h.saturating_sub(2)))
             .unwrap_or((80, 24));
-        c.send(&spec.spawn(&stream.entry.id, size))?;
+        c.send(&spawn(spec, &stream.entry.id, size))?;
     }
     c.set_read_timeout(Some(Duration::from_secs(10)))?;
     while want > 0 {

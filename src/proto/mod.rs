@@ -392,6 +392,17 @@ pub fn read_frame<T: DeserializeOwned + Raw>(r: &mut impl Read) -> io::Result<Op
     }
 }
 
+/// Where the daemon writes its pid, next to the socket.
+pub fn pidfile(socket: &Path) -> PathBuf {
+    socket.with_extension("pid")
+}
+
+/// A leaf the client draws itself (a diff, a Markdown file): it has an id
+/// and a place in the tree, but no process.
+pub fn is_view(role: &str) -> bool {
+    role.starts_with("view:")
+}
+
 /// `$JW_SOCKET`, else `$XDG_RUNTIME_DIR/jw/jw.sock`, else
 /// `~/.local/state/jw/jw.sock`.
 pub fn socket_path() -> PathBuf {

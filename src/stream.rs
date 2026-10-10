@@ -38,21 +38,6 @@ pub struct PaneSpec {
     pub env: BTreeMap<String, String>,
 }
 
-impl PaneSpec {
-    /// The daemon message that starts this pane at `(cols, rows)`.
-    pub fn spawn(self, stream: &str, (cols, rows): (u16, u16)) -> crate::proto::ClientMsg {
-        crate::proto::ClientMsg::Spawn {
-            stream: stream.to_string(),
-            role: self.role,
-            cmd: self.cmd,
-            cwd: self.cwd,
-            env: self.env,
-            cols,
-            rows,
-        }
-    }
-}
-
 impl Stream {
     /// Finds the project of `entry` from its worktree and loads its config.
     /// An opened folder (REQ-55): a repository with a jw config starts with
@@ -293,7 +278,7 @@ impl Stream {
 
 /// Where the nvim of pane `id` listens, so jw can open files in it with
 /// `nvim --server` (REQ-75).
-pub fn nvim_socket(id: crate::proto::PaneId) -> Option<PathBuf> {
+pub fn nvim_socket(id: u64) -> Option<PathBuf> {
     Some(nvim_dir()?.join(format!("{id}.sock")))
 }
 

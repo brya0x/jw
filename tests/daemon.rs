@@ -7,8 +7,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use jw::client::Client;
-use jw::daemon::pidfile;
 use jw::layout::{Dir, Tree};
+use jw::proto::pidfile;
 use jw::proto::{ClientMsg, DaemonMsg, NewPane, PROTOCOL, PaneId, PaneInfo, PaneLeaf};
 
 const EXE: &str = env!("CARGO_BIN_EXE_jw");
