@@ -392,7 +392,7 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | L2 ✓ `98e0473` | `init::render_project`, `config::save_layout`, `Node` ↔ TOML | 117, 120 | `init.rs`, `config.rs`, `layout.rs` |
 | L3 ✓ `2f1a0b9` | `Modal::Setup`: the builder, agent and setup step of `^␣ w` | 115–117, 122 | `tui/modal.rs`, `tui/setup.rs`, `tui/mod.rs` |
 | L4 ✓ `20dc5da` | `^␣ p` saves the layout; `layout changed` in the header | 120, 121 | `tui/mod.rs`, `tui/draw.rs`, `settings.rs` |
-| D2 | Addendum 11: `d` on the project root | 123 | `diff.rs`, `tui/mod.rs` |
+| D2 ✓ `5a4f02a` | Addendum 11: `d` on the project root | 123 | `diff.rs`, `tui/mod.rs` |
 | Later | Animations (optional) | 19, 20 | |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 
