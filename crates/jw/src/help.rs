@@ -58,6 +58,11 @@ pub const COMMANDS: &[Command] = &[
         what: "says whether the daemon runs, or stops it: its panes close, and jw brings the workspaces back when it opens",
     },
     Command {
+        name: "theme",
+        usage: "jw theme [ls | install <file|url|-> [--name <name>] [--force] | export <name> | use <name>]",
+        what: "lists the themes, installs one (JSON, see themes/schema.json), prints one as a template, or picks one for dark or light mode",
+    },
+    Command {
         name: "hook",
         usage: "jw hook working|waiting|idle",
         what: "what claude's hooks run in a jw pane to report the agent's state",

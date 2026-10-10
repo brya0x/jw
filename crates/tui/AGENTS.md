@@ -16,7 +16,7 @@ daemon; it only talks to it through jw-proto.
 | `src/tui/diffview.rs`, `mdview.rs` | the viewers, drawn as panes with no process (`view:` roles) |
 | `src/tui/keys.rs` | the leader, and encoding keys and mouse events for the panes' programs |
 | `src/settings.rs` | `settings.json`: `get` (`:164`), `save` (`:149`), `ACTIONS` (`:39`, the rebindable keys) |
-| `src/theme.rs` | palettes: `p()` for every colour, `load` (`:155`) for JSON themes |
+| `src/theme.rs` | palettes: `p()` for every colour, `load` (`:175`) for the themes the settings name. Every theme is JSON: the built-ins are `themes/*.json` (`BUILTIN`), checked against `themes/schema.json` by a test |
 | `src/view/` | syntax highlighting and Markdown rendering |
 
 ## Keep in mind

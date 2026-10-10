@@ -12,6 +12,7 @@ jw new testing           # a new session, starting in this folder with one shell
 jw sessions              # every session, and what runs in it
 jw help                  # every command
 jw server status|stop    # is the daemon running; stop it
+jw theme                 # every theme; jw theme install|export|use
 ```
 
 Inside, press `Ctrl-Space` and then one key. Wait a moment after `Ctrl-Space` and every key
@@ -122,19 +123,45 @@ optional:
 }
 ```
 
-`one-dark` and `one-light` are built in. Other themes are JSON files in
-`~/.config/jw/themes/<name>.json`. In the themes page, `c` copies a built-in theme there and
-`e` opens a theme file in nvim. jw applies changes to these files within 2 s.
+Every theme is a JSON file. Ten are built in, a dark and a light one of each:
+`one-dark`/`one-light`, `catppuccin-mocha`/`catppuccin-latte`, `tokyo-night`/`tokyo-night-day`,
+`gruvbox-dark`/`gruvbox-light` and `solarized-dark`/`solarized-light`. Their files are in
+[`crates/tui/themes/`](crates/tui/themes/). Your own go in `~/.config/jw/themes/<name>.json`;
+a file named like a built-in replaces it. jw applies changes to these files within 2 s, and
+programs in panes (nvim, codex, claude) are told the new background.
+
+A theme names its dark or light mode and its colours as `#rrggbb`. The schema,
+[`themes/schema.json`](crates/tui/themes/schema.json), describes each colour, and naming it
+in `$schema` gives your editor validation and completion:
 
 ```json
-{ "name": "tokyo", "dark": true, "colors": {
-  "bg": "#1a1b26", "panel": "#16161e", "line": "#292e42", "fg": "#c0caf5", "dim": "#565f89",
-  "sel": "#283457", "blue": "#7aa2f7", "green": "#9ece6a", "yellow": "#e0af68",
-  "red": "#f7768e", "magenta": "#bb9af7", "cyan": "#7dcfff" } }
+{
+  "$schema": "https://raw.githubusercontent.com/brya0x/jw/main/crates/tui/themes/schema.json",
+  "name": "my-night",
+  "dark": true,
+  "colors": {
+    "bg": "#1a1b26", "panel": "#16161e", "line": "#292e42", "fg": "#c0caf5", "dim": "#565f89",
+    "sel": "#283457", "blue": "#7aa2f7", "green": "#9ece6a", "yellow": "#e0af68",
+    "red": "#f7768e", "magenta": "#bb9af7", "cyan": "#7dcfff"
+  }
+}
 ```
 
 The diff colours (`add_bg`, `del_bg`, `add_word`, `del_word`) may be left out. When missing,
 they are mixed from green and red.
+
+From the terminal, `jw theme` does the same without opening the settings:
+
+```sh
+jw theme                                   # every theme: dark or light, built-in or file, in use
+jw theme export gruvbox-dark > mine.json   # a theme to start from
+jw theme install mine.json                 # checks it and copies it to ~/.config/jw/themes/
+jw theme install https://example.com/t.json --name t   # or from a URL (curl), or - for stdin
+jw theme use mine                          # the dark or light theme, by its "dark"
+```
+
+In the settings' themes page, `c` copies a theme to your themes folder and `e` opens a theme
+file in nvim.
 
 ---
 

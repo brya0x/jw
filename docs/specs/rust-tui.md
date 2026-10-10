@@ -147,7 +147,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 | Registry | `workspaces.json`, seeded once from a copy of `registry.json`; entries gain `session` and `root`. Go's file is never written |
 | Settings | `~/.config/jw/settings.json`: `leader`, `theme` (`system\|dark\|light`), `dark`, `light`, `which_delay_ms`, `keys{action: key}`; all optional; env `JW_LEADER`/`JW_THEME` win; re-read on mtime change. JSON, so Go's `*.toml` glob skips it |
 | `^␣ ,` | Settings screen: general, keys, themes. Rebind swaps a key in use; `1-9 hjkl HJKL ? q` fixed; no Ctrl/Alt after the leader; the leader is Ctrl + a key. Themes: `↵` use, `e` edit in nvim, `c` copy. Writes at once |
-| Themes | `one-dark`, `one-light` built in; `~/.config/jw/themes/<name>.json` = `{name, dark, colors{bg panel line fg dim sel blue green yellow red magenta cyan, add_bg? del_bg? add_word? del_word?}}`; missing diff colours are mixed; a bad file keeps the last good palette |
+| Themes | Every theme is JSON in one format, `crates/tui/themes/schema.json` (S16). Ten built in, compiled in from `crates/tui/themes/*.json` (`theme::BUILTIN`); the user's in `~/.config/jw/themes/<name>.json` = `{$schema?, name, dark, colors{bg panel line fg dim sel blue green yellow red magenta cyan, add_bg? del_bg? add_word? del_word?}}`, and one named like a built-in replaces it; missing diff colours are mixed from green/red over bg; a file that doesn't parse keeps the last good palette. `jw theme ls\|install <file\|url\|-> [--name] [--force]\|export <name>\|use <name>` (`crates/jw/src/theme.rs`); a URL goes through `curl` |
 | `.md` reuse | `ClientMsg::Role{pane, role}` retargets the workspace's `view:md:*` pane |
 | Scrollback | 2 MiB raw ring per pane in the daemon, sent in `Snapshot`, saved to `sessions/<name>/scrollback/<pane>.bin`, replayed on restore under `── restored <time> ──` |
 | Agent state | `JW_PANE`, `JW_SESSION` in panes; claude starts with `--session-id <uuid>` and `--settings` hooks running `jw hook <event>` (`UserPromptSubmit` and `PreToolUse` working, `Notification` waiting, `Stop` idle) → `ClientMsg::Agent` → `PaneInfo.agent`; restore runs `claude --resume <uuid>` |
@@ -203,6 +203,18 @@ Shift+Enter inserts a new line in claude, codex and nvim inside jw, as it does o
 - REQ-99 THE daemon SHALL never write a reply while it holds a pane's state lock.
 - REQ-100 WHEN a pane's program sends several queries, the daemon SHALL answer them in the order asked (nvim sends `CSI ? u` then `CSI c`, and takes the kitty answer only if it comes before REQ-89's).
 
+### Addendum 6 (S16): themes are JSON, built in or installed
+
+- REQ-101 THE TUI SHALL take every built-in palette from the JSON files compiled in from `crates/tui/themes/`, and SHALL have no palette constants in Rust.
+- REQ-102 WHEN `cargo test` runs, every built-in SHALL parse, and its `name` SHALL equal its file stem.
+- REQ-103 WHEN `~/.config/jw/themes/<name>.json` exists, the TUI SHALL use it instead of a built-in of the same name, and `names()` SHALL list that name once.
+- REQ-104 THE schema SHALL list exactly the fields `ThemeFile`/`Colors` accept, with the same required set. A test SHALL compare the two.
+- REQ-105 WHEN `jw theme install <file|url|->` runs on a valid theme, jw SHALL write it to `themes/<name>.json`. IF it does not parse, has an invalid name, or exists without `--force`, THEN jw SHALL write nothing and exit non-zero with the reason.
+- REQ-106 WHEN `jw theme export <name>` runs, jw SHALL print the theme as JSON that `install` accepts back unchanged.
+- REQ-107 WHEN `jw theme use <name>` runs, jw SHALL set the dark or the light setting by the theme's `dark` flag.
+- REQ-108 WHEN `jw theme ls` runs, jw SHALL print each name with `built-in`/`file`/`file, replaces built-in`, `dark`/`light`, and which slot it is in.
+- REQ-109 The settings screen SHALL list the ten built-ins, and its `c` SHALL write `export`'s JSON.
+
 ---
 
 ## Rationale
@@ -225,6 +237,9 @@ Shift+Enter inserts a new line in claude, codex and nvim inside jw, as it does o
 - RAT-17 **Flag 1 only, and a short encode table.** Shift+Enter needs only disambiguate. Full kitty encoding (release events, every key as an escape, associated text) is a large surface for no visible gain; programs that push more flags (nvim pushes 3) still parse legacy bytes.
 - RAT-18 **Push after `ratatui::init()`.** The kitty spec keeps separate stacks per screen, so the push lands on the alternate screen's: a panic that skips the pop leaves the user's shell without the flag once the alternate screen is left.
 - RAT-19 **How herdr does it** (v0.8.2, read from source). The same three pieces, with bigger parts. The outer terminal gets 1+2+4 (31 when a pane asks for report-all, switched with pop+push because old iTerm2 clears the stack on set; `src/terminal_modes.rs`). Panes run on libghostty-vt, which tracks the flags, answers every query through a `write_pty` callback and encodes keys with Ghostty's encoder (`src/pane/terminal.rs`). Legacy Shift+Enter is `\r` there too (`legacy_shift_enter_is_just_cr`, `src/input/encode.rs`), and `KittyKeyboardTracker::replay_ansi` (`src/pane/kitty_keyboard.rs`) is the replay shape REQ-97 copies. Rejected: swapping vt100 for libghostty-vt, which would vendor a Zig/C library and rewrite both parsers for one key. Rejected: always sending `ESC \r`, which claude takes as a new line but nvim and codex read as Alt+Enter, and bash gets a stray ESC.
+- RAT-20 **Built-ins are embedded JSON, not runtime files** (S16). They must work with no config dir and no install step; `include_str!` keeps one binary while making them the same kind of file a user writes, and worked examples of the format.
+- RAT-21 **A user's file wins over a built-in.** It is the simplest way to tweak one (`jw theme export one-dark > ~/.config/jw/themes/one-dark.json`); reserving the names would need an error path and a rename for nothing.
+- RAT-22 **`curl`, not a crate,** for `install <url>`: rare, and jw already shells out to `git` and `gh`; `ureq` would add TLS and about 40 crates for one command.
 
 ## Risks
 
@@ -259,6 +274,9 @@ Shift+Enter inserts a new line in claude, codex and nvim inside jw, as it does o
 - RISK-29 **A program that dies without popping its keyboard flags** (killed by a signal) leaves them set, and the next program in that shell gets CSI u for modified Enter, Tab and Esc. A real terminal behaves the same. If it bites: clear the stacks when the shell prints its prompt (OSC 133).
 - RISK-30 **The Snapshot replays only the active screen's stack.** A client that attaches during a full-screen program relies on the ring for the main screen's stack, which matters only after 2 MiB of output dropped those pushes.
 - RISK-31 **With flag 1 on the outer terminal**, crossterm reports Ctrl+letters as `Char+CONTROL` instead of the legacy aliases (Ctrl+H is no longer Backspace). `encode` sends the same bytes either way, and no TUI binding matches an alias (checked in S15).
+- RISK-32 **The built-ins' hex values are transcribed by hand** from each project's published palette. A wrong value is cosmetic and a JSON edit; the test only checks that they parse.
+- RISK-33 **`install` from a URL runs `curl` on what the user typed.** The body is only parsed and written under `themes/`, never run, and the name must match `[a-z0-9-]+`, so it can't leave the directory.
+- RISK-34 **Shadowing hides a built-in.** `jw theme ls` says `file, replaces built-in`, and `install` says so too.
 - Closed by addendum 3: RISK-5 (own registry), RISK-7 (hooks), RISK-9 (frames), RISK-16 (`nvim --server`), RISK-17 (`root` in the registry).
 
 ## Parts (each one ends with `cargo test` + `clippy` green and a local commit on `feat/rust-tui`; nothing is pushed)
@@ -294,6 +312,7 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | S13 ✓ `4f7e4a4` | `jw server status`, `jw server stop` | 80 | `server.rs`, `help.rs`, `session.rs` |
 | S14 ✓ `b98d8a9` | The daemon answers colour, scheme, cursor and attribute queries; mode 2031; `ClientMsg::Theme`, `PROTOCOL 7` | 81–89 | `proto`, `daemon`, `theme.rs`, `tui/mod.rs` |
 | S15 ✓ `8d2f2f0` | Addendum 5: Shift+Enter, the kitty keyboard protocol | 90–100 | `proto/kitty.rs`, `tui/keys.rs`, `tui/mod.rs`, `daemon` |
+| S16 ✓ `b184b46` | Addendum 6: themes as JSON, ten built-ins in `crates/tui/themes/`, `schema.json`, user files replace built-ins, `jw theme ls/install/export/use` | 101–109 | `theme.rs`, `crates/tui/themes/`, `crates/jw/src/theme.rs`, `session.rs`, README |
 | Later | Animations (optional) | 19, 20 | |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 
@@ -310,6 +329,8 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - OPEN-8 → last-wins between several TUIs.
 - OPEN-9 → following the outer terminal's own mode 2031 is later; S14 keeps `AppleInterfaceStyle` and the settings.
 - OPEN-10 (open) Plain Esc goes as `CSI 27 u` to a pane with flag 1, as the kitty spec says (it also removes nvim's Esc delay). The alternative is to keep `\x1b`, for less change.
+- OPEN-11 → the built-in themes are not written to disk on first run; `jw theme export` gives each one (S16).
+- OPEN-12 → per-theme syntax colours (a `syntax` block for syntect) are later; highlighting still picks syntect's theme by `dark` (`view/highlight.rs:27`).
 - OPEN-5 → `~/.config/jw/settings.json` (JSON, outside Go's `*.toml` glob) and the `^␣ ,` screen (addendum 3).
 
 ## Corrections
@@ -336,7 +357,7 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 
 - core: parse config/registry from Go fixtures; registry.json round-trip read back by Go.
 - layout: tree → rects for several sizes; `insert`/`remove`/`swap`/`neighbour` as tables.
-- daemon (tempdir, `tests/`): `cat` pane, detach, kill the client, reattach, same screen; `Split`/`Kill`/`Swap`/`Name` produce `Tree` and update `session.json`; `printf '\e]2;hi\a'` arrives as `Title`; a version mismatch is an error; S14: OSC 10/11, `?996n`, `6n`, `c` answered from the theme, `?997` only to panes with `?2031h`, the theme in `session.json`, replayed queries unanswered.
+- daemon (tempdir, `tests/`): `cat` pane, detach, kill the client, reattach, same screen; `Split`/`Kill`/`Swap`/`Name` produce `Tree` and update `session.json`; `printf '\e]2;hi\a'` arrives as `Title`; a version mismatch is an error; S14: OSC 10/11, `?996n`, `6n`, `c` answered from the theme, `?997` only to panes with `?2031h`, the theme in `session.json`, replayed queries unanswered. S16: every built-in parses under its own name; schema and `Colors` agree; a user file shadows a built-in once; export → install round-trips; `jw theme` against a temp `XDG_CONFIG_HOME` (`crates/jw/tests/theme.rs`).
 - actions: fakes behind traits; `X` takes the done or rm path by PR state; rename against a temp repo; `free.json` → `folders.json` migration.
 - finder: fuzzy ranking tables; folder browser over a temp dir.
 - TUI: ratatui `TestBackend` for the which-key popup, sidebar and modals.
