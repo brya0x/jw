@@ -231,6 +231,12 @@ Prototype: https://claude.ai/artifact/QdLzKo3onBQFzeRvDrnh6g (approved 2026-10-1
 - REQ-111 WHEN `r` runs on a worktree, the TUI SHALL validate the name, then move the folder, rename the branch (when jw named it) and update the registry, keeping the workspace's panes, layout and scrollback running; the daemon SHALL then start them in the new folder after a restart.
 - REQ-112 WHEN an arrow follows the leader, the TUI SHALL open the next or previous open workspace (`↓`/`↑`) or the next or previous project (`→`/`←`), and SHALL treat further arrows the same WITHOUT the leader UNTIL another key, which ends it and is handled as usual (`↵` and `esc` are swallowed).
 
+### Addendum 8 (D1): `X` accepts work merged through another PR
+
+An agent can leave the branch jw registered and open its PR from a new one (`theme-handler` registered `feat/theme-handler`, PR #27, then shipped `feat/theme-json` as #31). `done_plan` compared HEAD only with the registered branch's PR, so `X` refused with "commits that are not in PR #27" although every commit was in `main`. It now fetches and also accepts a HEAD that `origin/<default>` contains (`actions::done_plan`).
+
+- REQ-113 WHEN `X` runs the done checks and the worktree's HEAD is not in its PR, the TUI SHALL still take the done path IF `origin/<default>` contains that HEAD.
+
 ---
 
 ## Rationale
@@ -334,6 +340,7 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | W1 ✓ `d6c2728` | `^␣ w` asks the name: `actions::new_plan`, `Modal::New` | 110 | `actions.rs`, `tui/modal.rs`, `tui/mod.rs` |
 | W2 ✓ `1a5d5ad` | Rename keeps the panes: `ClientMsg::Moved`, `PROTOCOL 8` | 111 | `proto`, `daemon`, `tui/mod.rs`, `tui/modal.rs` |
 | W3 ✓ `f575bca` | `^␣` + arrows walk the sidebar; the `MOVE` chip | 112 | `tui/mod.rs`, `tui/draw.rs` |
+| D1 | Addendum 8: `X` accepts a HEAD already in the default branch | 113 | `actions.rs` |
 | Later | Animations (optional) | 19, 20 | |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 
@@ -355,6 +362,8 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - OPEN-5 → `~/.config/jw/settings.json` (JSON, outside Go's `*.toml` glob) and the `^␣ ,` screen (addendum 3).
 
 ## Corrections
+
+- REQ-39's done checks, ported from Go, assumed a worktree stays on the branch jw made for it. Agents switch branches, so a worktree whose work merged through another PR looked unfinished (addendum 8).
 
 - Addendum 5's first draft answered only `CSI ? u`. nvim sends `CSI ? u` then `CSI c` and pushes its flags only once both answers arrive (nvim 0.12.5), which the end-to-end test caught. S14 answers `CSI c`; REQ-100 keeps the two in order.
 - The first diagnosis of Shift+Enter said it needed a `PaneInfo` field and a `PROTOCOL` bump. It didn't: the TUI's parser already sees the raw output (RAT-15).
