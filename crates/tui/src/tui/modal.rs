@@ -343,7 +343,11 @@ impl Modal {
                         ));
                         l.push(Line::default());
                         l.push(Line::from(Span::styled(
-                            " Its panes start again in the new folder.",
+                            " Its panes keep running and follow the folder.",
+                            Style::default().fg(p().dim),
+                        )));
+                        l.push(Line::from(Span::styled(
+                            " A program that saved the old path may need a restart.",
                             Style::default().fg(p().dim),
                         )));
                     }

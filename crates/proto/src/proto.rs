@@ -15,7 +15,7 @@ pub type PaneId = u64;
 
 /// Bumped whenever a message changes shape: a client and a daemon from
 /// different builds refuse each other instead of misreading (RISK-14).
-pub const PROTOCOL: u32 = 6;
+pub const PROTOCOL: u32 = 7;
 
 /// A pane to start. `cmd` runs through `sh -c`; `None` starts `$SHELL`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -139,6 +139,14 @@ pub enum ClientMsg {
     Rekey {
         from: String,
         to: String,
+    },
+    /// A workspace's folder moved (its worktree was renamed): its panes
+    /// keep running, and a restart starts them under `to` with `env`.
+    Moved {
+        stream: String,
+        from: PathBuf,
+        to: PathBuf,
+        env: BTreeMap<String, String>,
     },
     /// What an agent in a pane is doing, from its hooks (`jw hook`).
     Agent {

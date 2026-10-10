@@ -86,8 +86,11 @@ enum Job {
         /// client attaching to a workspace that shows one).
         into: Option<PaneId>,
     },
-    /// A worktree has its new name; open it again.
-    Renamed(Entry),
+    /// A worktree has its new name and folder; `from` is the old folder.
+    Renamed {
+        entry: Entry,
+        from: String,
+    },
     /// `X` on a worktree whose PR isn't merged: the rm checks, and why.
     RmReady {
         entry: Entry,
@@ -2115,12 +2118,15 @@ impl App {
                 text,
                 ..
             } => {
-                // The panes go first, so nothing runs in the folder it moves.
-                self.close(&entry);
+                // The panes keep running: their cwd is the same directory
+                // at its new path (REQ-82).
                 self.background(format!("renaming {}", entry.name), move || {
                     let reg = registry::default_path()?;
                     let renamed = actions::rename(&project, &entry, &text, &reg)?;
-                    Ok(Job::Renamed(renamed))
+                    Ok(Job::Renamed {
+                        entry: renamed,
+                        from: entry.path,
+                    })
                 });
             }
             Modal::Name { pane, text } => {
@@ -2192,6 +2198,25 @@ impl App {
         }
     }
 
+    /// A renamed worktree's panes stay as they are: the daemon learns the
+    /// new folder for its next restart, and the workspace on screen takes
+    /// the new entry, so new panes open there.
+    fn moved(&mut self, entry: Entry, from: String) {
+        let stream = Stream::resolve(&entry);
+        self.send(ClientMsg::Moved {
+            stream: entry.id.clone(),
+            from: from.into(),
+            to: entry.path.clone().into(),
+            env: stream.as_ref().map(|s| s.env()).unwrap_or_default(),
+        });
+        if self.current().is_some_and(|c| c.id == entry.id) {
+            match stream {
+                Ok(s) => self.active = Some(s),
+                Err(e) => self.fail(format!("{}: {e:#}", entry.name)),
+            }
+        }
+    }
+
     /// Kills every pane of the stream; the worktree stays.
     fn close(&mut self, entry: &Entry) {
         self.send(ClientMsg::Close {
@@ -2242,9 +2267,9 @@ impl App {
                 });
             }
             Job::Failed(e) => self.fail(e),
-            Job::Renamed(entry) => {
+            Job::Renamed { entry, from } => {
                 self.done(format!("renamed to {} on {}", entry.name, entry.branch));
-                self.open_entry(entry, false);
+                self.moved(entry, from);
             }
             Job::Said(msg) => self.done(msg),
             Job::Diff {
