@@ -267,7 +267,7 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | S11 ✓ `27c3c2a` | `jw help`, `--help`; the jw skill moves into the repo, `jw skill [install]` | 77, 78 | `main.rs`, `help.rs`, `skill.rs`, `skill/SKILL.md`, `session.rs` |
 | S12 ✓ `7495afb` | The daemon saves everything on SIGTERM, SIGINT and SIGHUP | 79 | `daemon` |
 | S13 ✓ `4f7e4a4` | `jw server status`, `jw server stop` | 80 | `server.rs`, `help.rs`, `session.rs` |
-| S14 | The daemon answers colour, scheme, cursor and attribute queries; mode 2031; `ClientMsg::Theme`, `PROTOCOL 7` | 81–89 | `proto`, `daemon`, `theme.rs`, `tui/mod.rs` |
+| S14 ✓ `b98d8a9` | The daemon answers colour, scheme, cursor and attribute queries; mode 2031; `ClientMsg::Theme`, `PROTOCOL 7` | 81–89 | `proto`, `daemon`, `theme.rs`, `tui/mod.rs` |
 | Later | Animations (optional) | 19, 20 | |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 
