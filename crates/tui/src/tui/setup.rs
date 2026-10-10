@@ -114,9 +114,13 @@ impl Setup {
         ProjectSetup {
             setup: on(false),
             env: on(true),
-            agent: if self.codex { "codex" } else { "claude" }.into(),
+            agent: self.agent().into(),
             layout: self.tree.clone(),
         }
+    }
+
+    fn agent(&self) -> &'static str {
+        if self.codex { "codex" } else { "claude" }
     }
 
     pub fn key(&mut self, k: KeyEvent) -> Done {
@@ -244,7 +248,7 @@ impl Setup {
                 if self.tree.run.is_some() {
                     self.note = Some("A layout needs one pane at least.".into());
                 } else {
-                    remove_leaf(&mut self.tree, &mut self.sel.clone());
+                    remove_leaf(&mut self.tree, self.sel);
                     self.sel = self.sel.min(self.tree.leaves().len() - 1);
                 }
             }
@@ -322,10 +326,9 @@ impl Setup {
 
         let mut bottom = Vec::new();
         if let Some(pick) = &self.pick {
-            let agent = if self.codex { "codex" } else { "claude" };
             let rows = [
                 ("editor ", "plain nvim".to_string()),
-                ("agent  ", agent.to_string()),
+                ("agent  ", self.agent().to_string()),
                 ("shell  ", "your shell".to_string()),
                 (
                     "command",
@@ -464,7 +467,7 @@ impl Setup {
             w: inner.width,
             h: inner.height,
         });
-        let agent = if self.codex { "codex" } else { "claude" };
+        let agent = self.agent();
         for (i, (leaf, r)) in self.tree.leaves().iter().zip(rects).enumerate() {
             let sel = on && i == self.sel;
             let (kind, what) = label(&leaf.run, agent);
@@ -548,19 +551,9 @@ fn label(run: &str, agent: &str) -> (String, Option<String>) {
     }
 }
 
+/// Six hints share a line here: a narrower gap than the modals'.
 fn keys(pairs: &[(&str, &str)]) -> Line<'static> {
-    let mut spans = vec![Span::raw(" ")];
-    for (k, what) in pairs {
-        spans.push(Span::styled(
-            format!(" {k} "),
-            Style::default().bg(p().line).fg(p().blue),
-        ));
-        spans.push(Span::styled(
-            format!(" {what}  "),
-            Style::default().fg(p().dim),
-        ));
-    }
-    Line::from(spans)
+    super::modal::key_line(pairs, 2)
 }
 
 /// The builder's inner area, for fitting and moving.
@@ -625,26 +618,25 @@ fn nth_leaf(t: &mut Node, i: usize) -> Option<&mut Node> {
     go(t, &mut { i })
 }
 
-/// Removes leaf number `*i`; its sibling takes the split's place.
-fn remove_leaf(t: &mut Node, i: &mut usize) -> bool {
-    let count = |n: &Node| n.leaves().len();
+/// Removes leaf number `i`; its sibling takes the split's place. A tree
+/// that is one leaf stays as it is.
+fn remove_leaf(t: &mut Node, i: usize) {
     let (Some(a), Some(b)) = (t.a.as_deref_mut(), t.b.as_deref_mut()) else {
-        return false;
+        return;
     };
-    let na = count(a);
-    let (target, other, idx) = if *i < na {
-        (a, false, *i)
+    let na = a.leaves().len();
+    let (target, in_b, idx) = if i < na {
+        (a, false, i)
     } else {
-        (b, true, *i - na)
+        (b, true, i - na)
     };
     if target.run.is_some() {
-        let keep = if other { t.a.take() } else { t.b.take() };
-        if let Some(keep) = keep {
+        if let Some(keep) = if in_b { t.a.take() } else { t.b.take() } {
             *t = *keep;
         }
-        return true;
+        return;
     }
-    remove_leaf(target, &mut { idx })
+    remove_leaf(target, idx)
 }
 
 /// Moves the split that holds leaf `i` by 0.1, within 0.2–0.8, so that box
@@ -706,10 +698,10 @@ mod tests {
         assert_eq!(neighbour(&t, 2, -1, 0), 0);
         assert!(fits(&t));
 
-        remove_leaf(&mut t, &mut 0);
+        remove_leaf(&mut t, 0);
         assert_eq!(runs(&t), ["agent", "shell"]);
         assert_eq!(t.split, Some(Dir::Down));
-        remove_leaf(&mut t, &mut 1);
+        remove_leaf(&mut t, 1);
         assert_eq!(t, Node::leaf("agent"));
     }
 

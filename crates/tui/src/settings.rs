@@ -78,12 +78,10 @@ impl Settings {
 
     /// The key of `action`: the user's, else the default.
     pub fn key(&self, action: &str) -> String {
-        self.keys.get(action).cloned().unwrap_or_else(|| {
-            ACTIONS
-                .iter()
-                .find(|a| a.1 == action)
-                .map_or(String::new(), |a| a.3.to_string())
-        })
+        self.keys
+            .get(action)
+            .cloned()
+            .unwrap_or_else(|| default_key(action).unwrap_or_default().to_string())
     }
 
     /// The action `key` runs, if any.
@@ -95,7 +93,7 @@ impl Settings {
     /// key of `action` (REQ-68). Refuses fixed keys and anything that isn't
     /// one plain key. The action that was swapped, if any.
     pub fn bind(&mut self, action: &str, key: &str) -> Result<Option<&'static str>, String> {
-        if !ACTIONS.iter().any(|a| a.1 == action) {
+        if default_key(action).is_none() {
             return Err(format!("no action {action}"));
         }
         let plain = key == "tab" || key == "space" || key.chars().count() == 1;
@@ -116,13 +114,18 @@ impl Settings {
 
     /// Stores a key, leaving defaults out of the file.
     fn set_key(&mut self, action: &str, key: &str) {
-        let default = ACTIONS.iter().find(|a| a.1 == action).map(|a| a.3);
-        if default == Some(key) {
+        if default_key(action) == Some(key) {
             self.keys.remove(action);
         } else {
             self.keys.insert(action.to_string(), key.to_string());
         }
     }
+}
+
+/// The key `action` has when the settings don't move it; `None` for no
+/// such action.
+pub fn default_key(action: &str) -> Option<&'static str> {
+    ACTIONS.iter().find(|a| a.1 == action).map(|a| a.3)
 }
 
 /// How a key is shown: `␣`, `tab`, or itself.
@@ -150,11 +153,12 @@ pub fn read(path: &std::path::Path) -> Result<Settings> {
 pub fn save(s: Settings) -> Result<()> {
     let path = path()?;
     if let Some(d) = path.parent() {
-        std::fs::create_dir_all(d)?;
+        std::fs::create_dir_all(d).with_context(|| format!("creating {}", d.display()))?;
     }
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec_pretty(&s)?)?;
-    std::fs::rename(&tmp, &path)?;
+    std::fs::write(&tmp, serde_json::to_vec_pretty(&s)?)
+        .with_context(|| format!("writing {}", tmp.display()))?;
+    std::fs::rename(&tmp, &path).with_context(|| format!("writing {}", path.display()))?;
     set(s);
     Ok(())
 }

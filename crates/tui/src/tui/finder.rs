@@ -188,8 +188,8 @@ impl Finder {
         f
     }
 
-    /// The folder browser lists its directory again; the other pickers keep
-    /// their items and only filter.
+    /// The folder browser lists its directory; the other pickers keep their
+    /// items and only filter. Typing only filters.
     fn list(&mut self) {
         let Kind::Folders { cwd, open } = &self.kind else {
             self.filter();
@@ -335,7 +335,7 @@ impl Finder {
             KeyCode::Backspace if self.query.is_empty() && self.browsing() => self.up(),
             KeyCode::Backspace => {
                 self.query.pop();
-                self.list();
+                self.filter();
             }
             KeyCode::Char('~') if self.query.is_empty() && self.browsing() => {
                 if let Some(home) = std::env::var_os("HOME") {
@@ -344,12 +344,12 @@ impl Finder {
             }
             KeyCode::Char('u') if ctrl => {
                 self.query.clear();
-                self.list();
+                self.filter();
             }
             KeyCode::Char(c) if !ctrl => {
                 self.query.push(c);
                 self.sel = 0;
-                self.list();
+                self.filter();
             }
             _ => {}
         }
@@ -614,7 +614,8 @@ impl Finder {
             )));
             return l;
         }
-        let git = crate::folders::repo(&dir).is_some();
+        // What the list's `git` says: drawn every frame, so no git here.
+        let git = dir.join(".git").exists();
         l.push(Line::from(if git {
             Span::styled("git repository", Style::default().fg(p().green))
         } else {
@@ -639,10 +640,17 @@ impl Finder {
     }
 }
 
-/// The first lines of a text file, for the preview.
+/// The first lines of a text file, for the preview. Only its start is read:
+/// the preview is drawn every frame.
 fn file_head(path: &Path) -> Vec<Line<'static>> {
+    use std::io::Read;
     let dim = Style::default().fg(p().dim);
-    match std::fs::read(path) {
+    let read = std::fs::File::open(path).and_then(|f| {
+        let mut bytes = Vec::new();
+        f.take(64 * 1024).read_to_end(&mut bytes)?;
+        Ok(bytes)
+    });
+    match read {
         Ok(bytes) if bytes.iter().take(4096).any(|b| *b == 0) => {
             vec![Line::from(Span::styled("binary file", dim))]
         }
@@ -685,7 +693,8 @@ pub fn list_files(root: &Path, cap: usize) -> Vec<String> {
                 continue;
             }
             let path = e.path();
-            if path.is_dir() {
+            // Not through symlinks, as git doesn't: a link to a parent loops.
+            if e.file_type().is_ok_and(|t| t.is_dir()) {
                 stack.push(path);
             } else if let Ok(rel) = path.strip_prefix(root) {
                 out.push(rel.display().to_string());
@@ -732,7 +741,19 @@ fn files(dir: &Path) -> Vec<String> {
 pub fn tilde(p: &Path) -> String {
     let s = p.display().to_string();
     match std::env::var("HOME") {
-        Ok(home) if home.len() > 1 && s.starts_with(&home) => format!("~{}", &s[home.len()..]),
+        Ok(home) => tilde_in(s, &home),
+        Err(_) => s,
+    }
+}
+
+/// `s` with `home` as `~` when it is `home` or under it: `/home/bob` is not
+/// under `/home/bo`.
+fn tilde_in(s: String, home: &str) -> String {
+    let home = home.trim_end_matches('/');
+    match s.strip_prefix(home) {
+        Some(rest) if !home.is_empty() && (rest.is_empty() || rest.starts_with('/')) => {
+            format!("~{rest}")
+        }
         _ => s,
     }
 }
@@ -807,6 +828,39 @@ mod tests {
             Outcome::Pick(Pick::Dir(p)) => assert_eq!(p, root.join("beta")),
             _ => panic!("want beta"),
         }
+    }
+
+    #[test]
+    fn tilde_takes_home_only_as_a_whole_folder() {
+        let t = |s: &str, home: &str| tilde_in(s.to_string(), home);
+        assert_eq!(t("/home/bo/x", "/home/bo"), "~/x");
+        assert_eq!(t("/home/bo", "/home/bo/"), "~");
+        assert_eq!(t("/home/bob/x", "/home/bo"), "/home/bob/x");
+        assert_eq!(t("/x", "/"), "/x");
+        assert_eq!(t("/x", ""), "/x");
+    }
+
+    #[test]
+    fn the_preview_reads_a_repo_without_git() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir(d.path().join("repo")).unwrap();
+        std::fs::write(d.path().join("repo/.git"), "gitdir: /elsewhere").unwrap();
+        let mut f = Finder::folders(d.path().to_path_buf(), HashSet::new());
+        f.key(key(KeyCode::Down));
+        let text: Vec<String> = f.preview().iter().map(|l| l.to_string()).collect();
+        assert_eq!(text[1], "git repository", "{text:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_file_walk_does_not_follow_a_link_back_up() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir(d.path().join("a")).unwrap();
+        std::os::unix::fs::symlink(d.path(), d.path().join("a/up")).unwrap();
+        std::fs::write(d.path().join("a/f"), "").unwrap();
+        let mut got = list_files(d.path(), 100);
+        got.sort();
+        assert_eq!(got, ["a/f", "a/up"]);
     }
 
     #[test]

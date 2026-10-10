@@ -631,6 +631,11 @@ fn rm_lines(
 }
 
 fn keys(pairs: &[(&str, &str)]) -> Line<'static> {
+    key_line(pairs, 3)
+}
+
+/// Key hints as keycaps, each with what it does and `gap` spaces after.
+pub(super) fn key_line(pairs: &[(&str, &str)], gap: usize) -> Line<'static> {
     let mut spans = vec![Span::raw(" ")];
     for (k, what) in pairs {
         spans.push(Span::styled(
@@ -638,7 +643,7 @@ fn keys(pairs: &[(&str, &str)]) -> Line<'static> {
             Style::default().bg(p().line).fg(p().blue),
         ));
         spans.push(Span::styled(
-            format!(" {what}   "),
+            format!(" {what}{}", " ".repeat(gap)),
             Style::default().fg(p().dim),
         ));
     }
@@ -669,20 +674,17 @@ pub fn new_plan(project: &Project, name: &str) -> Result<crate::actions::Planned
 
 /// Fits a line in `max` columns: `~` for the home directory, then the start
 /// of the path cut down to `…`, so its end, the part that names it, shows.
+/// A label may lead the path (`worktree /a/b`); a path on its own may hold
+/// spaces.
 fn short_path(s: &str, max: usize) -> String {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let s = if home.len() > 1 {
-        s.replace(&home, "~")
-    } else {
-        s.to_string()
-    };
-    if s.chars().count() <= max {
-        return s;
-    }
     let (head, path) = match s.split_once(' ') {
-        Some((h, p)) => (format!("{h} "), p),
-        None => (String::new(), s.as_str()),
+        Some((h, p)) if !s.starts_with('/') => (format!("{h} "), p),
+        _ => (String::new(), s),
     };
+    let path = super::finder::tilde(std::path::Path::new(path));
+    if head.chars().count() + path.chars().count() <= max {
+        return format!("{head}{path}");
+    }
     let keep = max.saturating_sub(head.chars().count() + 1);
     let skip = path.chars().count().saturating_sub(keep);
     let tail: String = path.chars().skip(skip).collect();
@@ -714,6 +716,11 @@ mod tests {
         assert_eq!(
             short_path("/very/long/path/to/myapp-wt/docs", 20),
             "…/to/myapp-wt/docs"
+        );
+        // A space inside a path is not a label.
+        assert_eq!(
+            short_path("/very/long/My Projects/myapp-wt/docs", 20),
+            "…/myapp-wt/docs"
         );
     }
 }
