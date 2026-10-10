@@ -366,10 +366,13 @@ pub(crate) mod tests {
         );
         must_git(&work, &["remote", "add", "origin", o]);
         must_git(&work, &["push", "-q", "-u", "origin", "trunk"]);
+        // What jw itself runs (a rebase in sync) commits too, and a CI
+        // runner has no identity of its own. Worktrees share this config.
+        must_git(&work, &["config", "user.name", "t"]);
+        must_git(&work, &["config", "user.email", "t@t"]);
         (dir, work)
     }
 
-    /// Ignores the developer's global git config (signing, hooks, templates).
     #[test]
     fn head_of_reads_the_checkout_and_its_worktrees() {
         let (dir, work) = new_test_repo();
@@ -394,6 +397,7 @@ pub(crate) mod tests {
         assert_eq!(head_of(&work).unwrap().1.len(), 7);
     }
 
+    /// Ignores the developer's global git config (signing, hooks, templates).
     pub(crate) fn must_git(dir: &Path, args: &[&str]) {
         let out = Command::new("git")
             .args(args)
