@@ -228,11 +228,12 @@ fn attach_only_sends_the_streams_panes_and_detach_stops_output() {
 fn list_reports_every_pane() {
     let d = Daemon::start();
     let mut c = d.client();
-    let a = spawn(&mut c, "a", "cat", 80, 24);
-    let b = spawn(&mut c, "b", "cat", 80, 24);
+    let a = spawn(&mut c, "a", "exec cat", 80, 24);
+    let b = spawn(&mut c, "b", "exec cat", 80, 24);
 
-    // `sh -c cat` becomes cat a moment after the pane starts (sooner on
-    // macOS than with Linux's dash): ask until it has.
+    // Linux's dash keeps running `sh -c cat` as sh, with cat its child; with
+    // exec the pane's process is cat everywhere, once sh has exec'd: ask
+    // until it has.
     let mut other = d.client();
     let deadline = Instant::now() + TIMEOUT;
     let panes = loop {

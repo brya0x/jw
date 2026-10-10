@@ -436,9 +436,9 @@ impl Daemon {
                     cols,
                     rows,
                 };
+                // spawn says Spawned itself, before the pane's first byte.
                 let id = self.spawn(&stream, new, Some((client, tx)), None)?;
                 self.place(&stream, id);
-                let _ = tx.send(DaemonMsg::Spawned { pane: id });
             }
             ClientMsg::Open { stream, tree } => {
                 if !lock(&self.workspaces).contains_key(&stream) {
@@ -1058,6 +1058,8 @@ impl Daemon {
             st.parser.callbacks_mut().rang = false;
         }
         if let Some((client, tx)) = sub {
+            // Its reader hasn't started: Spawned goes before any output.
+            let _ = tx.send(DaemonMsg::Spawned { pane: id });
             lock(&pane.state).subscribe(client, tx);
         }
         lock(&self.panes).insert(id, Arc::clone(&pane));
