@@ -70,21 +70,24 @@ pub struct Line {
     pub new_no: Option<u32>,
 }
 
+/// git's empty tree, the base of a repository with no commit yet.
+const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
 /// Everything the stream changed against `origin/<base>`: committed,
-/// staged, unstaged and untracked.
+/// staged, unstaged and untracked. With no `base` (a repository whose
+/// origin has no default branch, or no origin), against `HEAD`: what is
+/// not committed yet (REQ-123).
 pub fn load(dir: &Path, base: &str) -> Result<Vec<File>> {
     let base_ref = format!("origin/{base}");
-    let out = git::output(
-        dir,
-        &[
-            "diff",
-            "-M",
-            "--no-color",
-            "--no-ext-diff",
-            "--merge-base",
-            &base_ref,
-        ],
-    )?;
+    let mut args = vec!["diff", "-M", "--no-color", "--no-ext-diff"];
+    if base.is_empty() {
+        // Before the first commit there is no HEAD: everything staged is new.
+        let born = git::output(dir, &["rev-parse", "--verify", "--quiet", "HEAD"]).is_ok();
+        args.push(if born { "HEAD" } else { EMPTY_TREE });
+    } else {
+        args.extend(["--merge-base", &base_ref]);
+    }
+    let out = git::output(dir, &args)?;
     let mut files = parse(&out);
     // git diff leaves out untracked files; they are new files all the same.
     let untracked = git::output(dir, &["ls-files", "--others", "--exclude-standard", "-z"])?;
@@ -464,5 +467,31 @@ Binary files /dev/null and b/img.png differ
             "committed and edited, against the base"
         );
         assert_eq!(files[1].hunks[0].lines[0].text, "# hi");
+
+        // REQ-123: with no base, only what isn't committed.
+        let files = load(&work, "").unwrap();
+        let names: Vec<(&str, Status)> =
+            files.iter().map(|f| (f.path.as_str(), f.status)).collect();
+        assert_eq!(
+            names,
+            [("a.txt", Status::Modified), ("new.md", Status::Added)]
+        );
+        assert_eq!(files[0].added(), 1);
+    }
+
+    /// REQ-123: a repository with no commit yet shows what is staged and
+    /// what is untracked, instead of git's "unknown revision HEAD".
+    #[test]
+    fn load_works_before_the_first_commit() {
+        use crate::connectors::git::tests::must_git;
+        let d = tempfile::tempdir().unwrap();
+        must_git(d.path(), &["init", "-q"]);
+        std::fs::write(d.path().join("a.txt"), "a\n").unwrap();
+        must_git(d.path(), &["add", "a.txt"]);
+        std::fs::write(d.path().join("b.txt"), "b\n").unwrap();
+        let files = load(d.path(), "").unwrap();
+        let names: Vec<(&str, Status)> =
+            files.iter().map(|f| (f.path.as_str(), f.status)).collect();
+        assert_eq!(names, [("a.txt", Status::Added), ("b.txt", Status::Added)]);
     }
 }

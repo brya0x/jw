@@ -2265,9 +2265,21 @@ impl App {
 
     /// `d`: the workspace's changes against its base, in a pane on the right.
     fn open_diff(&mut self) {
-        if self.current_worktree("diff").is_some() {
-            self.load_diff(None);
+        // REQ-123: a project root diffs too, against its default branch. A
+        // repository with no origin has no branch in the sidebar, so look
+        // for `.git` itself.
+        let Some(entry) = self.current().cloned() else {
+            self.no_workspace();
+            return;
+        };
+        if !std::path::Path::new(&entry.path).join(".git").exists() {
+            self.fail(format!(
+                "{} is not a git repository: diff needs one",
+                entry.name
+            ));
+            return;
         }
+        self.load_diff(None);
     }
 
     fn load_diff(&mut self, into: Option<PaneId>) {
@@ -2278,7 +2290,11 @@ impl App {
             let stream = Stream::resolve(&entry)?;
             let files = crate::diff::load(std::path::Path::new(&entry.path), &stream.base)?;
             Ok(Job::Diff {
-                title: format!("{} vs {}", entry.name, stream.base),
+                title: if stream.base.is_empty() {
+                    format!("{} vs HEAD", entry.name)
+                } else {
+                    format!("{} vs {}", entry.name, stream.base)
+                },
                 dir: entry.path,
                 files,
                 into,
