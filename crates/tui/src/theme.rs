@@ -1,10 +1,13 @@
-//! The palettes jw draws with (REQ-43): Atom One Dark and One Light built
-//! in, and any theme the user keeps as JSON in `themes/` of jw's config dir
-//! (addendum 3). Settings name one theme for dark mode and one for light
-//! mode; everything that draws asks [`p`] for colours, so a switch of the
-//! system's appearance or of a theme file repaints the next frame.
+//! The palettes jw draws with (REQ-43). Every theme is JSON in one format
+//! (`themes/schema.json`): the built-ins are the files in `crates/tui/themes/`,
+//! compiled in, and a user's are in `themes/` of jw's config dir, where a
+//! file named like a built-in replaces it (S16). Settings name one theme for
+//! dark mode and one for light mode; everything that draws asks [`p`] for
+//! colours, so a switch of the system's appearance or of a theme file
+//! repaints the next frame.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
 use anyhow::{Context, Result, bail};
@@ -39,46 +42,66 @@ const fn rgb(hex: u32) -> Color {
     Color::Rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8)
 }
 
-pub static ONE_DARK: Palette = Palette {
-    dark: true,
-    bg: rgb(0x282c34),
-    panel: rgb(0x21252b),
-    fg: rgb(0xabb2bf),
-    dim: rgb(0x5c6370),
-    line: rgb(0x3b4048),
-    sel: rgb(0x2c313a),
-    blue: rgb(0x61afef),
-    green: rgb(0x98c379),
-    yellow: rgb(0xe5c07b),
-    red: rgb(0xe06c75),
-    magenta: rgb(0xc678dd),
-    cyan: rgb(0x56b6c2),
-    // green and red at 13% (lines) and 34% (words) over bg.
-    add_bg: rgb(0x37403d),
-    del_bg: rgb(0x40343c),
-    add_word: rgb(0x4e5f4b),
-    del_word: rgb(0x67424a),
-};
+/// The built-in themes, in the order settings list them (REQ-101).
+const BUILTIN: &[(&str, &str)] = &[
+    ("one-dark", include_str!("../themes/one-dark.json")),
+    ("one-light", include_str!("../themes/one-light.json")),
+    (
+        "catppuccin-mocha",
+        include_str!("../themes/catppuccin-mocha.json"),
+    ),
+    (
+        "catppuccin-latte",
+        include_str!("../themes/catppuccin-latte.json"),
+    ),
+    ("tokyo-night", include_str!("../themes/tokyo-night.json")),
+    (
+        "tokyo-night-day",
+        include_str!("../themes/tokyo-night-day.json"),
+    ),
+    ("gruvbox-dark", include_str!("../themes/gruvbox-dark.json")),
+    (
+        "gruvbox-light",
+        include_str!("../themes/gruvbox-light.json"),
+    ),
+    (
+        "solarized-dark",
+        include_str!("../themes/solarized-dark.json"),
+    ),
+    (
+        "solarized-light",
+        include_str!("../themes/solarized-light.json"),
+    ),
+];
 
-pub static ONE_LIGHT: Palette = Palette {
-    dark: false,
-    bg: rgb(0xfafafa),
-    panel: rgb(0xf0f0f1),
-    fg: rgb(0x383a42),
-    dim: rgb(0xa0a1a7),
-    line: rgb(0xd4d4d6),
-    sel: rgb(0xe5e5e6),
-    blue: rgb(0x4078f2),
-    green: rgb(0x50a14f),
-    yellow: rgb(0xc18401),
-    red: rgb(0xe45649),
-    magenta: rgb(0xa626a4),
-    cyan: rgb(0x0184bc),
-    add_bg: rgb(0xe4eee4),
-    del_bg: rgb(0xf7e5e3),
-    add_word: rgb(0xc0dcc0),
-    del_word: rgb(0xf3c2be),
-};
+/// The JSON Schema of a theme file, and where it is published.
+pub const SCHEMA: &str = include_str!("../themes/schema.json");
+pub const SCHEMA_URL: &str =
+    "https://raw.githubusercontent.com/brya0x/jw/main/crates/tui/themes/schema.json";
+
+/// The built-in theme `name`. The files are checked by a test, so a broken
+/// one never ships.
+fn builtin(name: &str) -> Option<&'static Palette> {
+    static PARSED: OnceLock<Vec<Palette>> = OnceLock::new();
+    let all = PARSED.get_or_init(|| {
+        BUILTIN
+            .iter()
+            .map(|(n, json)| {
+                parse(json.as_bytes()).unwrap_or_else(|e| panic!("built-in theme {n}: {e:#}"))
+            })
+            .collect()
+    });
+    BUILTIN
+        .iter()
+        .position(|(n, _)| *n == name)
+        .map(|i| &all[i])
+}
+
+/// One Dark or One Light: what draws before the settings load.
+fn fallback(dark: bool) -> &'static Palette {
+    builtin(if dark { "one-dark" } else { "one-light" })
+        .expect("one-dark and one-light are built in")
+}
 
 static DARK: AtomicBool = AtomicBool::new(true);
 /// The themes for dark and light mode; null is the built-in one.
@@ -87,14 +110,11 @@ static LIGHT_P: AtomicPtr<Palette> = AtomicPtr::new(std::ptr::null_mut());
 
 /// The palette in use.
 pub fn p() -> &'static Palette {
-    let (slot, builtin) = if DARK.load(Ordering::Relaxed) {
-        (&DARK_P, &ONE_DARK)
-    } else {
-        (&LIGHT_P, &ONE_LIGHT)
-    };
+    let dark = DARK.load(Ordering::Relaxed);
+    let slot = if dark { &DARK_P } else { &LIGHT_P };
     let ptr = slot.load(Ordering::Acquire);
     if ptr.is_null() {
-        builtin
+        fallback(dark)
     } else {
         // SAFETY: only `install` stores here, a leaked Box that is never
         // freed: a reload leaks the old palette (a few dozen bytes).
@@ -102,37 +122,49 @@ pub fn p() -> &'static Palette {
     }
 }
 
-fn install(slot: &AtomicPtr<Palette>, pal: Palette) {
+fn put(slot: &AtomicPtr<Palette>, pal: Palette) {
     slot.store(Box::into_raw(Box::new(pal)), Ordering::Release);
+}
+
+/// Where the user's themes live: `themes/` in jw's config dir.
+fn user_dir() -> Result<PathBuf> {
+    Ok(crate::core::config::dir()?.join("themes"))
 }
 
 /// Where a user theme lives.
 pub fn file(name: &str) -> Result<PathBuf> {
-    Ok(crate::core::config::dir()?
-        .join("themes")
-        .join(format!("{name}.json")))
+    Ok(user_dir()?.join(format!("{name}.json")))
 }
 
-/// The palette of theme `name`: a built-in one or a JSON file.
+/// The palette of theme `name`: the user's file, else the built-in one
+/// (REQ-103).
 pub fn named(name: &str) -> Result<Palette> {
-    match name {
-        "one-dark" => Ok(ONE_DARK),
-        "one-light" => Ok(ONE_LIGHT),
-        _ => {
-            let path = file(name)?;
+    named_in(user_dir().ok().as_deref(), name)
+}
+
+fn named_in(dir: Option<&Path>, name: &str) -> Result<Palette> {
+    let path = dir
+        .map(|d| d.join(format!("{name}.json")))
+        .filter(|p| p.exists());
+    match (path, builtin(name)) {
+        (Some(path), _) => {
             let data = std::fs::read(&path)
                 .with_context(|| format!("theme {name}: {}", path.display()))?;
             parse(&data).with_context(|| format!("theme {name}: {}", path.display()))
         }
+        (None, Some(b)) => Ok(*b),
+        (None, None) => bail!("no theme {name}"),
     }
 }
 
-/// Every theme: the built-in ones, then the files, by name.
+/// Every theme, each once: the built-ins, then the user's files by name.
 pub fn names() -> Vec<String> {
-    let mut out = vec!["one-dark".to_string(), "one-light".to_string()];
-    if let Ok(dir) = file("x").map(|p| p.with_file_name(""))
-        && let Ok(rd) = std::fs::read_dir(dir)
-    {
+    names_in(user_dir().ok().as_deref())
+}
+
+fn names_in(dir: Option<&Path>) -> Vec<String> {
+    let mut out: Vec<String> = BUILTIN.iter().map(|(n, _)| n.to_string()).collect();
+    if let Some(rd) = dir.and_then(|d| std::fs::read_dir(d).ok()) {
         let mut files: Vec<String> = rd
             .flatten()
             .filter_map(|e| {
@@ -142,12 +174,22 @@ pub fn names() -> Vec<String> {
                 }
                 Some(p.file_stem()?.to_string_lossy().into_owned())
             })
-            .filter(|n| n != "one-dark" && n != "one-light")
+            .filter(|n| builtin(n).is_none())
             .collect();
         files.sort();
         out.extend(files);
     }
     out
+}
+
+/// Where theme `name` comes from, as `jw theme ls` says it (REQ-108).
+pub fn source(name: &str) -> &'static str {
+    let file = file(name).is_ok_and(|p| p.exists());
+    match (file, builtin(name).is_some()) {
+        (true, true) => "file, replaces built-in",
+        (true, false) => "file",
+        _ => "built-in",
+    }
 }
 
 /// Uses the themes the settings name (REQ-69). A theme that doesn't load
@@ -156,7 +198,7 @@ pub fn load(s: &crate::settings::Settings) -> Result<()> {
     let mut errors = Vec::new();
     for (slot, name) in [(&DARK_P, s.dark_theme()), (&LIGHT_P, s.light_theme())] {
         match named(name) {
-            Ok(pal) => install(slot, pal),
+            Ok(pal) => put(slot, pal),
             Err(e) => errors.push(format!("{e:#}")),
         }
     }
@@ -171,6 +213,9 @@ pub fn load(s: &crate::settings::Settings) -> Result<()> {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ThemeFile {
+    /// The schema's URL, for editors; jw doesn't read it.
+    #[serde(rename = "$schema", default, skip_serializing_if = "Option::is_none")]
+    schema: Option<String>,
     #[serde(default)]
     name: String,
     dark: bool,
@@ -253,15 +298,11 @@ fn parse(data: &[u8]) -> Result<Palette> {
     })
 }
 
-/// Theme `from` written as `themes/<to>.json`, to edit (`c` in settings).
-pub fn copy(from: &str, to: &str) -> Result<PathBuf> {
-    let p = named(from)?;
-    let path = file(to)?;
-    if path.exists() {
-        bail!("{} already exists", path.display());
-    }
-    let t = ThemeFile {
-        name: to.to_string(),
+/// Palette `p` as a theme file named `name`, every colour written out.
+fn to_file(name: &str, p: &Palette) -> ThemeFile {
+    ThemeFile {
+        schema: Some(SCHEMA_URL.to_string()),
+        name: name.to_string(),
         dark: p.dark,
         colors: Colors {
             bg: to_hex(p.bg),
@@ -281,19 +322,73 @@ pub fn copy(from: &str, to: &str) -> Result<PathBuf> {
             add_word: Some(to_hex(p.add_word)),
             del_word: Some(to_hex(p.del_word)),
         },
-    };
-    if let Some(d) = path.parent() {
-        std::fs::create_dir_all(d)?;
     }
-    std::fs::write(&path, serde_json::to_vec_pretty(&t)?)?;
+}
+
+/// Theme `name` as JSON that `install` takes back (REQ-106).
+pub fn export(name: &str) -> Result<String> {
+    let mut json = serde_json::to_string_pretty(&to_file(name, &named(name)?))?;
+    json.push('\n');
+    Ok(json)
+}
+
+/// Theme `from` written as `themes/<to>.json`, to edit (`c` in settings).
+pub fn copy(from: &str, to: &str) -> Result<PathBuf> {
+    let json = serde_json::to_string_pretty(&to_file(to, &named(from)?))? + "\n";
+    install_in(&user_dir()?, json.as_bytes(), Some(to), None, false)
+}
+
+/// Adds a theme to the user's themes (REQ-105). Its name is `name`, else the
+/// one in the JSON, else `stem` (the file it came from). Nothing is written
+/// unless it parses, and an existing theme is kept unless `force`.
+pub fn install(
+    data: &[u8],
+    name: Option<&str>,
+    stem: Option<&str>,
+    force: bool,
+) -> Result<PathBuf> {
+    install_in(&user_dir()?, data, name, stem, force)
+}
+
+fn install_in(
+    dir: &Path,
+    data: &[u8],
+    name: Option<&str>,
+    stem: Option<&str>,
+    force: bool,
+) -> Result<PathBuf> {
+    parse(data).context("not a jw theme")?;
+    let inner: ThemeFile = serde_json::from_slice(data)?;
+    let name = name
+        .or((!inner.name.is_empty()).then_some(inner.name.as_str()))
+        .or(stem)
+        .context("the theme has no name: give it one with --name")?;
+    if name.is_empty()
+        || !name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    {
+        bail!("{name:?} is not a theme name: lowercase letters, digits and -");
+    }
+    let path = dir.join(format!("{name}.json"));
+    if path.exists() && !force {
+        bail!("{} already exists (--force replaces it)", path.display());
+    }
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    let tmp = dir.join(format!(".{name}.json.tmp"));
+    std::fs::write(&tmp, data).with_context(|| format!("writing {}", tmp.display()))?;
+    std::fs::rename(&tmp, &path).with_context(|| format!("writing {}", path.display()))?;
     Ok(path)
 }
 
 /// What panes sit on, for the daemon to answer the programs in them that
 /// ask (S14).
 pub fn wire() -> crate::proto::Theme {
-    let pal = p();
-    let builtin = if pal.dark { &ONE_DARK } else { &ONE_LIGHT };
+    wire_of(p())
+}
+
+fn wire_of(pal: &Palette) -> crate::proto::Theme {
+    let builtin = fallback(pal.dark);
     let rgb = |c: Color, or: Color| match (c, or) {
         (Color::Rgb(r, g, b), _) | (_, Color::Rgb(r, g, b)) => [r, g, b],
         _ => [0, 0, 0],
@@ -360,8 +455,8 @@ mod tests {
 
     #[test]
     fn the_built_in_mix_matches_one_dark() {
-        // ONE_DARK's diff colours are the same mix, written out.
-        let p = ONE_DARK;
+        // one-dark's diff colours are the same mix, written out.
+        let p = *builtin("one-dark").unwrap();
         let near = |a: Color, b: Color| match (a, b) {
             (Color::Rgb(a, b, c), Color::Rgb(x, y, z)) => {
                 a.abs_diff(x) <= 2 && b.abs_diff(y) <= 2 && c.abs_diff(z) <= 2
@@ -370,5 +465,112 @@ mod tests {
         };
         assert!(near(mix(p.green, p.bg, 0.13), p.add_bg));
         assert!(near(mix(p.red, p.bg, 0.34), p.del_word));
+    }
+
+    #[test]
+    fn every_built_in_parses_under_its_own_name() {
+        for (name, json) in BUILTIN {
+            let t: ThemeFile = serde_json::from_str(json).unwrap();
+            assert_eq!(t.name, *name);
+            assert_eq!(t.schema.as_deref(), Some(SCHEMA_URL));
+            assert!(builtin(name).is_some(), "{name}");
+        }
+        let darks = BUILTIN
+            .iter()
+            .filter(|(n, _)| builtin(n).unwrap().dark)
+            .count();
+        assert_eq!(darks * 2, BUILTIN.len(), "a light theme for every dark one");
+    }
+
+    #[test]
+    fn the_schema_and_the_format_agree() {
+        let schema: serde_json::Value = serde_json::from_str(SCHEMA).unwrap();
+        let keys = |v: &serde_json::Value| -> Vec<String> {
+            let mut k: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
+            k.sort();
+            k
+        };
+        // Every field a full export writes, and nothing else, is in the schema.
+        let full = serde_json::to_value(to_file("x", builtin("one-dark").unwrap())).unwrap();
+        assert_eq!(keys(&schema["properties"]), keys(&full));
+        let colors = &schema["properties"]["colors"];
+        assert_eq!(keys(&colors["properties"]), keys(&full["colors"]));
+        // The required colours are exactly the ones jw can't do without.
+        let required: Vec<&str> = colors["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        let only = |names: &[&str]| {
+            let c: serde_json::Map<_, _> = names
+                .iter()
+                .map(|n| (n.to_string(), full["colors"][*n].clone()))
+                .collect();
+            serde_json::json!({"dark": true, "colors": c}).to_string()
+        };
+        assert!(parse(only(&required).as_bytes()).is_ok());
+        for n in &required {
+            let fewer: Vec<&str> = required.iter().copied().filter(|r| r != n).collect();
+            assert!(parse(only(&fewer).as_bytes()).is_err(), "{n} is required");
+        }
+    }
+
+    #[test]
+    fn a_users_file_replaces_the_built_in_and_is_listed_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let mine = TOKYO.replace("\"tokyo\"", "\"one-dark\"");
+        std::fs::write(dir.path().join("one-dark.json"), &mine).unwrap();
+        std::fs::write(dir.path().join("zzz.json"), TOKYO).unwrap();
+        assert_eq!(
+            named_in(Some(dir.path()), "one-dark").unwrap().bg,
+            rgb(0x1a1b26)
+        );
+        assert_eq!(
+            named_in(Some(dir.path()), "one-light").unwrap(),
+            *builtin("one-light").unwrap()
+        );
+        let names = names_in(Some(dir.path()));
+        assert_eq!(names.iter().filter(|n| *n == "one-dark").count(), 1);
+        assert_eq!(names.last().map(String::as_str), Some("zzz"));
+        assert!(named_in(Some(dir.path()), "nope").is_err());
+    }
+
+    #[test]
+    fn install_takes_an_export_back_and_refuses_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let json = serde_json::to_string_pretty(&to_file(
+            "gruvbox-dark",
+            builtin("gruvbox-dark").unwrap(),
+        ))
+        .unwrap();
+        let path = install_in(dir.path(), json.as_bytes(), None, None, false).unwrap();
+        assert_eq!(path, dir.path().join("gruvbox-dark.json"));
+        assert_eq!(
+            named_in(Some(dir.path()), "gruvbox-dark").unwrap(),
+            *builtin("gruvbox-dark").unwrap()
+        );
+        // It exists: only --force replaces it.
+        assert!(install_in(dir.path(), json.as_bytes(), None, None, false).is_err());
+        assert!(install_in(dir.path(), json.as_bytes(), None, None, true).is_ok());
+        // --name wins over the JSON's name.
+        assert!(install_in(dir.path(), json.as_bytes(), Some("mine"), None, false).is_ok());
+        assert!(dir.path().join("mine.json").exists());
+        // Not a theme, or a name that would leave the directory.
+        assert!(install_in(dir.path(), b"{}", Some("x"), None, false).is_err());
+        assert!(install_in(dir.path(), json.as_bytes(), Some("../x"), None, false).is_err());
+        assert!(!dir.path().join("x.json").exists());
+        // No name anywhere but the file it came from.
+        let nameless = TOKYO.replace("\"name\": \"tokyo\", ", "");
+        let p = install_in(dir.path(), nameless.as_bytes(), None, Some("night"), false).unwrap();
+        assert!(p.ends_with("night.json"));
+    }
+
+    #[test]
+    fn the_daemons_default_is_one_dark() {
+        assert_eq!(
+            crate::proto::Theme::default(),
+            wire_of(builtin("one-dark").unwrap())
+        );
     }
 }

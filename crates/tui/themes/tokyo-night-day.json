@@ -1,0 +1,19 @@
+{
+  "$schema": "https://raw.githubusercontent.com/brya0x/jw/main/crates/tui/themes/schema.json",
+  "name": "tokyo-night-day",
+  "dark": false,
+  "colors": {
+    "bg": "#e1e2e7",
+    "panel": "#d0d5e3",
+    "line": "#c4c8da",
+    "fg": "#3760bf",
+    "dim": "#848cb5",
+    "sel": "#b7c1e3",
+    "blue": "#2e7de9",
+    "green": "#587539",
+    "yellow": "#8c6c3e",
+    "red": "#f52a65",
+    "magenta": "#9854f1",
+    "cyan": "#007197"
+  }
+}

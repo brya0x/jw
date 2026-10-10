@@ -1,0 +1,19 @@
+{
+  "$schema": "https://raw.githubusercontent.com/brya0x/jw/main/crates/tui/themes/schema.json",
+  "name": "solarized-dark",
+  "dark": true,
+  "colors": {
+    "bg": "#002b36",
+    "panel": "#073642",
+    "line": "#0a4555",
+    "fg": "#839496",
+    "dim": "#586e75",
+    "sel": "#0d4a59",
+    "blue": "#268bd2",
+    "green": "#859900",
+    "yellow": "#b58900",
+    "red": "#dc322f",
+    "magenta": "#d33682",
+    "cyan": "#2aa198"
+  }
+}

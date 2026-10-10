@@ -1,0 +1,23 @@
+{
+  "$schema": "https://raw.githubusercontent.com/brya0x/jw/main/crates/tui/themes/schema.json",
+  "name": "one-dark",
+  "dark": true,
+  "colors": {
+    "bg": "#282c34",
+    "panel": "#21252b",
+    "line": "#3b4048",
+    "fg": "#abb2bf",
+    "dim": "#5c6370",
+    "sel": "#2c313a",
+    "blue": "#61afef",
+    "green": "#98c379",
+    "yellow": "#e5c07b",
+    "red": "#e06c75",
+    "magenta": "#c678dd",
+    "cyan": "#56b6c2",
+    "add_bg": "#37403d",
+    "del_bg": "#40343c",
+    "add_word": "#4e5f4b",
+    "del_word": "#67424a"
+  }
+}

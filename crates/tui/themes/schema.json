@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/brya0x/jw/main/crates/tui/themes/schema.json",
+  "title": "jw theme",
+  "description": "A jw colour theme. Install with `jw theme install <file>`; built-ins live next to this file.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "dark",
+    "colors"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string",
+      "description": "Its name; defaults to the file name.",
+      "pattern": "^[a-z0-9-]+$"
+    },
+    "dark": {
+      "type": "boolean",
+      "description": "A dark theme: it fills the dark slot (`jw theme use`) and tells programs in panes the background is dark."
+    },
+    "colors": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bg",
+        "panel",
+        "line",
+        "fg",
+        "dim",
+        "sel",
+        "blue",
+        "green",
+        "yellow",
+        "red",
+        "magenta",
+        "cyan"
+      ],
+      "properties": {
+        "bg": {
+          "type": "string",
+          "pattern": "^#?[0-9a-fA-F]{6}$",
+          "description": "Behind panes and views."
+        },
+        "panel": {
+          "type": "string",
+          "pattern": "^#?[0-9a-fA-F]{6}$",
+          "description": "The sidebar, the status bar, modals."
+        },
+        "line": {
+          "type": "string",
+          "pattern": "^#?[0-9a-fA-F]{6}$",
+          "description": "Borders and rules."
+        },
+        "fg": {
+          "type": "string",
+          "pattern": "^#?[0-9a-fA-F]{6}$",
+          "description": "Text."
+        },
+        "dim": {
+          "type": "string",
+          "pattern": "^#?[0-9a-fA-F]{6}$",
+          "description": "Hints, comments, inactive text."
+        },
+        "sel": {
+          "type": "string",
+          "pattern": "^#?[0-9a-fA-F]{6}$",
+          "description": "A selected row."
+        },
+        "blue": {
+          "type": "string",
+          "pattern": "^#?[0-9a-fA-F]{6}$",
+          "description": "Accent: focus, links, headings."
+        },
+        "green": {
+          "type": "string",
+          "pattern": "^#?[0-9a-fA-F]{6}$",
+          "description": "Added lines, success."
+        },
+        "yellow": {
+          "type": "string",
+          "pattern": "^#?[0-9a-fA-F]{6}$",
+          "description": "Warnings, the waiting mark."
+        },
+        "red": {
+          "type": "string",
+          "pattern": "^#?[0-9a-fA-F]{6}$",
+          "description": "Removed lines, errors."
+        },
+        "magenta": {
+          "type": "string",
+          "pattern": "^#?[0-9a-fA-F]{6}$",
+          "description": "Accent."
+        },
+        "cyan": {
+          "type": "string",
+          "pattern": "^#?[0-9a-fA-F]{6}$",
+          "description": "Accent: code, paths."
+        },
+        "add_bg": {
+          "type": "string",
+          "pattern": "^#?[0-9a-fA-F]{6}$",
+          "description": "An added diff line. Default: green at 13% over bg."
+        },
+        "del_bg": {
+          "type": "string",
+          "pattern": "^#?[0-9a-fA-F]{6}$",
+          "description": "A removed diff line. Default: red at 13% over bg."
+        },
+        "add_word": {
+          "type": "string",
+          "pattern": "^#?[0-9a-fA-F]{6}$",
+          "description": "A word that changed in an added line. Default: green at 34% over bg."
+        },
+        "del_word": {
+          "type": "string",
+          "pattern": "^#?[0-9a-fA-F]{6}$",
+          "description": "A word that changed in a removed line. Default: red at 34% over bg."
+        }
+      }
+    }
+  }
+}
