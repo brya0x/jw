@@ -618,7 +618,7 @@ dependencies = [
 
 [[package]]
 name = "jw"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "anyhow",
  "jw-core",
@@ -633,7 +633,7 @@ dependencies = [
 
 [[package]]
 name = "jw-core"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "anyhow",
  "serde",
@@ -644,7 +644,7 @@ dependencies = [
 
 [[package]]
 name = "jw-daemon"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "anyhow",
  "jw-core",
@@ -658,7 +658,7 @@ dependencies = [
 
 [[package]]
 name = "jw-proto"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "anyhow",
  "jw-core",
@@ -669,7 +669,7 @@ dependencies = [
 
 [[package]]
 name = "jw-tui"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "anyhow",
  "jw-core",

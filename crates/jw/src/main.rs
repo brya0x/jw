@@ -7,6 +7,7 @@ mod cli;
 mod help;
 mod server;
 mod skill;
+mod theme;
 
 // cli.rs says `crate::stream`, `crate::proto`…, as it did when this was one
 // crate.
@@ -56,6 +57,7 @@ fn main() -> ExitCode {
         Some("hook") => report("hook", cli::hook(&args[1..])),
         Some("skill") => report("skill", skill::run(&args[1..])),
         Some("server") => report("server", server::run(&args[1..])),
+        Some("theme") => report("theme", theme::run(&args[1..])),
         Some("--version" | "-V") => {
             println!("jw {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
