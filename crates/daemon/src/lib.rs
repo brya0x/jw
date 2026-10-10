@@ -17,10 +17,11 @@ use jw_proto::proto;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Read, Write};
+use std::os::fd::FromRawFd;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -47,7 +48,8 @@ const SAVE_EVERY: Duration = Duration::from_secs(30);
 /// Lines of scrollback each pane keeps.
 const SCROLLBACK: usize = 10_000;
 
-/// Runs the daemon on `socket` until the process is killed.
+/// Runs the daemon on `socket` until the process is killed, or stopped by a
+/// signal (see `save_on_signal`).
 pub fn run(socket: &Path) -> Result<()> {
     let listener = bind(socket)?;
     let pidfile = pidfile(socket);
@@ -56,6 +58,7 @@ pub fn run(socket: &Path) -> Result<()> {
 
     let daemon = Arc::new(Daemon::new(session_path(socket)));
     daemon.restore();
+    save_on_signal(Arc::clone(&daemon), socket.to_path_buf(), pidfile)?;
     let saver = Arc::clone(&daemon);
     thread::spawn(move || {
         loop {
@@ -72,6 +75,48 @@ pub fn run(socket: &Path) -> Result<()> {
             Err(e) => eprintln!("jw daemon: accept: {e}"),
         }
     }
+    Ok(())
+}
+
+/// The write end of the pipe `on_signal` wakes `save_on_signal`'s thread
+/// through.
+static SIGNAL_PIPE: AtomicI32 = AtomicI32::new(-1);
+
+extern "C" fn on_signal(_: libc::c_int) {
+    let fd = SIGNAL_PIPE.load(Ordering::Relaxed);
+    // SAFETY: write(2) is async-signal-safe; the fd stays open for good.
+    unsafe { libc::write(fd, [0u8].as_ptr().cast(), 1) };
+}
+
+/// On SIGTERM, SIGINT or SIGHUP, saves `session.json` and every pane's
+/// scrollback, then exits. Without it a stop loses what the panes printed
+/// since the last save, up to `SAVE_EVERY` of it. A handler may only do
+/// async-signal-safe work, so it writes a byte to a pipe and a thread saves.
+fn save_on_signal(daemon: Arc<Daemon>, socket: PathBuf, pidfile: PathBuf) -> Result<()> {
+    let mut fds = [0; 2];
+    // SAFETY: plain libc calls on fds we own. The panes' processes don't
+    // inherit the pipe (CLOEXEC), and exec resets the handler for them.
+    unsafe {
+        if libc::pipe(fds.as_mut_ptr()) != 0 {
+            return Err(io::Error::last_os_error()).context("creating the signal pipe");
+        }
+        for fd in fds {
+            libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+        }
+        SIGNAL_PIPE.store(fds[1], Ordering::Relaxed);
+        for sig in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
+            libc::signal(sig, on_signal as *const () as libc::sighandler_t);
+        }
+    }
+    // SAFETY: the read end is ours alone from here on.
+    let mut wake = unsafe { fs::File::from_raw_fd(fds[0]) };
+    thread::spawn(move || {
+        let _ = wake.read(&mut [0u8]);
+        daemon.save();
+        let _ = fs::remove_file(&socket);
+        let _ = fs::remove_file(&pidfile);
+        std::process::exit(0);
+    });
     Ok(())
 }
 
