@@ -82,6 +82,42 @@ impl Node {
         )
     }
 
+    /// The node as a TOML inline table: `{ run = "shell" }` or
+    /// `{ split = "right", ratio = 0.5, a = …, b = … }`.
+    pub fn inline(&self) -> String {
+        let keys = self.keys();
+        format!("{{ {} }}", keys.join(", "))
+    }
+
+    /// The `[layout]` lines that hold this tree, one key per line.
+    pub fn table(&self) -> String {
+        self.keys().into_iter().map(|k| k + "\n").collect()
+    }
+
+    fn keys(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if let Some(run) = &self.run {
+            out.push(format!("run = {}", quote(run)));
+        }
+        if let Some(dir) = self.split {
+            let dir = match dir {
+                Dir::Down => "down",
+                Dir::Right => "right",
+            };
+            out.push(format!("split = \"{dir}\""));
+        }
+        if let Some(r) = self.ratio {
+            out.push(format!("ratio = {}", (r * 100.0).round() / 100.0));
+        }
+        if let Some(a) = &self.a {
+            out.push(format!("a = {}", a.inline()));
+        }
+        if let Some(b) = &self.b {
+            out.push(format!("b = {}", b.inline()));
+        }
+        out
+    }
+
     /// Rejects a node that is both or neither a leaf and a split.
     pub fn validate(&self) -> Result<()> {
         match (&self.run, self.split, &self.a, &self.b) {
@@ -150,6 +186,11 @@ impl Node {
     }
 }
 
+/// A TOML basic string.
+pub(crate) fn quote(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
 /// What a leaf of a [`Tree`] is known by.
 pub trait Keyed {
     fn key(&self) -> u64;
@@ -181,6 +222,16 @@ impl<L> Tree<L> {
                 b: Box::new(Self::from_node(b, leaves)?),
             }),
             _ => leaves.next().map(Self::Leaf),
+        }
+    }
+
+    /// The tree as a layout, each leaf's `run` given by `run` (REQ-120).
+    pub fn to_node(&self, run: &impl Fn(&L) -> String) -> Node {
+        match self {
+            Self::Leaf(l) => Node::leaf(&run(l)),
+            Self::Split { dir, ratio, a, b } => {
+                Node::split(*dir, *ratio, a.to_node(run), b.to_node(run))
+            }
         }
     }
 
@@ -514,6 +565,29 @@ mod tests {
 
     fn area(w: u16, h: u16) -> Rect {
         Rect { x: 0, y: 0, w, h }
+    }
+
+    /// REQ-117, 120: a tree written as TOML reads back the same, and a live
+    /// tree turns back into its layout.
+    #[test]
+    fn a_node_round_trips_through_toml() {
+        #[derive(Deserialize)]
+        struct Wrap {
+            layout: Node,
+        }
+        let mut t = Node::three_panes();
+        t.a.as_mut().unwrap().b = Some(Box::new(Node::leaf("pnpm dev \"x\"")));
+        let back: Wrap = toml::from_str(&format!("[layout]\n{}", t.table())).unwrap();
+        assert_eq!(back.layout, t);
+        assert_eq!(Node::leaf("shell").inline(), r#"{ run = "shell" }"#);
+
+        let mut ids = [1u64, 2, 3].into_iter();
+        let live = Tree::from_node(&Node::three_panes(), &mut ids).unwrap();
+        let runs = ["", "editor", "agent", "shell"];
+        assert_eq!(
+            live.to_node(&|id| runs[*id as usize].to_string()),
+            Node::three_panes()
+        );
     }
 
     #[test]

@@ -9,6 +9,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::connectors::git::{Repo, project_name};
 use crate::core::config;
+use crate::layout::Node;
 
 /// What init found in a repository, to be written as a config the user then
 /// finishes by hand.
@@ -108,6 +109,61 @@ impl Draft {
 /// A TOML basic string.
 fn quote(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// What the setup step of a project's first worktree chose (REQ-117).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProjectSetup {
+    pub setup: Vec<String>,
+    pub env: Vec<String>,
+    pub agent: String,
+    pub layout: Node,
+}
+
+/// The `.jw.toml` the setup step writes: its setup, env files, agent and
+/// layout, with plain nvim as the editor.
+pub fn render_project(project: &str, p: &ProjectSetup) -> String {
+    let mut s = format!(
+        "# jw config for {project}, written by jw on its first worktree.\n\
+         # Reference: https://github.com/brya0x/jw#config\n"
+    );
+    if !p.setup.is_empty() {
+        s += "\n# Run in every new worktree, with the JW_* variables exported.\nsetup = [";
+        for cmd in &p.setup {
+            s += &format!("\n  {},", quote(cmd));
+        }
+        s += "\n]\n";
+    }
+    for f in &p.env {
+        s += &format!(
+            "\n# Copied from the main checkout into every new worktree.\n[[env]]\nfile = {}\n",
+            quote(f)
+        );
+    }
+    s += &format!(
+        "\n[agent]\ndefault = {}\n\n[layout]\neditor = \"nvim\"\n{}",
+        quote(&p.agent),
+        p.layout.table()
+    );
+    s
+}
+
+/// Writes `<repo>/.jw.toml` for the setup step and loads it back, the way
+/// every action will; a file that doesn't load is removed. An existing file
+/// is never overwritten.
+pub fn write_project(repo: &Repo, p: &ProjectSetup) -> Result<PathBuf> {
+    let project = project_name(&repo.remote);
+    let path = repo.root.join(".jw.toml");
+    if path.exists() {
+        bail!("{} already exists", path.display());
+    }
+    std::fs::write(&path, render_project(&project, p))
+        .with_context(|| path.display().to_string())?;
+    if let Err(e) = config::load(&repo.root, &repo.remote, &project) {
+        let _ = std::fs::remove_file(&path);
+        bail!("the new config does not load (please report this): {e:#}");
+    }
+    Ok(path)
 }
 
 /// What init wrote.
@@ -311,6 +367,49 @@ fn tildify(p: &str) -> String {
 mod tests {
     use super::*;
     use crate::connectors::git::tests::{must_git, new_test_repo};
+    use crate::layout::Dir;
+
+    /// REQ-117: the setup step's file loads with what was chosen, and is
+    /// never written over an existing one.
+    #[test]
+    fn write_project_writes_a_config_that_loads() {
+        let (_tmp, root) = new_test_repo();
+        let repo = Repo::open(&root).unwrap();
+        let p = ProjectSetup {
+            setup: vec!["pnpm install --frozen-lockfile".into()],
+            env: vec![".env.local".into()],
+            agent: "codex".into(),
+            layout: Node::split(
+                Dir::Right,
+                0.5,
+                Node::leaf("editor"),
+                Node::leaf("pnpm dev"),
+            ),
+        };
+        let path = write_project(&repo, &p).unwrap();
+        assert_eq!(path, repo.root.join(".jw.toml"));
+        let c = config::load(&repo.root, &repo.remote, "x").unwrap();
+        assert_eq!(c.setup, p.setup);
+        assert_eq!(c.env[0].file, ".env.local");
+        assert_eq!(c.agent.default, "codex");
+        assert_eq!(c.layout.editor, "nvim");
+        assert_eq!(c.layout.tree(), p.layout);
+        assert!(write_project(&repo, &p).is_err());
+
+        let bare = ProjectSetup {
+            setup: vec![],
+            env: vec![],
+            agent: "claude".into(),
+            layout: Node::leaf("shell"),
+        };
+        let text = render_project("x", &bare);
+        assert!(
+            !text.contains("setup") && !text.contains("[[env]]"),
+            "{text}"
+        );
+        let c: config::Config = toml::from_str(&text).unwrap();
+        assert_eq!(c.layout.tree(), Node::leaf("shell"));
+    }
 
     fn fixture(name: &str) -> String {
         std::fs::read_to_string(
