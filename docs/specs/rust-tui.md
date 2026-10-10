@@ -243,7 +243,7 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | S8 ✓ `bbf27ca` | `settings.rs`, JSON themes, reload, keymap by action | 68, 69 | `settings.rs`, `theme.rs`, `tui/**` |
 | S9 ✓ `c054635` | Settings screen `^␣ ,` | 67, 68 | `tui/settings_view.rs`, `tui/draw.rs` |
 | S10 ✓ `e902627` | `jw ls`, `jw read`, `jw worktree`; the jw skill rewritten | 66 | `cli.rs`, `main.rs`, skill |
-| S11 | `jw help`, `--help`; the jw skill moves into the repo, `jw skill [install]` | 77, 78 | `main.rs`, `help.rs`, `skill.rs`, `skill/SKILL.md`, `session.rs` |
+| S11 ✓ `27c3c2a` | `jw help`, `--help`; the jw skill moves into the repo, `jw skill [install]` | 77, 78 | `main.rs`, `help.rs`, `skill.rs`, `skill/SKILL.md`, `session.rs` |
 | Later | Animations (optional) | 19, 20 | |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 
