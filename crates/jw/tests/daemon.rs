@@ -1026,14 +1026,23 @@ fn an_agent_hook_reports_its_state() {
     let pane = spawn(&mut c, "h", &cmd, 80, 24);
     let mut screen = vt100::Parser::new(24, 80, 0);
     read_until(&mut c, pane, &mut screen, "hooked");
-    c.send(&ClientMsg::List).unwrap();
-    let panes = loop {
-        if let DaemonMsg::Panes { panes } = recv(&mut c) {
-            break panes;
+    // The hook's connection is not this one: its Agent may be handled after
+    // our List, so ask until it is.
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        c.send(&ClientMsg::List).unwrap();
+        let panes = loop {
+            if let DaemonMsg::Panes { panes } = recv(&mut c) {
+                break panes;
+            }
+        };
+        let p = panes.iter().find(|p| p.pane == pane).unwrap();
+        if p.agent == Some(jw_proto::proto::AgentState::Waiting) {
+            break;
         }
-    };
-    let p = panes.iter().find(|p| p.pane == pane).unwrap();
-    assert_eq!(p.agent, Some(jw_proto::proto::AgentState::Waiting));
+        assert!(Instant::now() < deadline, "agent state is {:?}", p.agent);
+        thread::sleep(Duration::from_millis(20));
+    }
 }
 
 /// A renamed session's workspace keeps its panes under its new id.
