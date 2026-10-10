@@ -153,6 +153,36 @@ pub fn new_stream(p: &Project, o: &NewOptions, reg_path: &Path) -> Result<Entry>
     Ok(entry)
 }
 
+/// What `^␣ w` would create, shown while its name is typed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Planned {
+    pub branch: String,
+    pub path: PathBuf,
+}
+
+/// The cheap checks of [`new_stream`] for `name` on the config's branch
+/// template (REQ-110): no fetch, so a branch only on origin is still
+/// refused by `new_stream` itself.
+pub fn new_plan(p: &Project, name: &str, reg_path: &Path) -> Result<Planned> {
+    if !valid_name(name) {
+        bail!("invalid name {name:?}: use lowercase letters, digits and dashes");
+    }
+    let reg = Registry::load(reg_path)?;
+    if reg.has(&p.name, name) {
+        bail!("{}/{name} already exists", p.name);
+    }
+    let base = p.repo.default_branch()?;
+    let branch = expand(&p.cfg.branch, &p.cfg.vars(name, &base, reg.next_slot()))?;
+    let path = PathBuf::from(&p.cfg.root).join(name);
+    if path.exists() {
+        bail!("{} already exists", path.display());
+    }
+    if p.repo.branch_exists(&branch) {
+        bail!("branch {branch} already exists");
+    }
+    Ok(Planned { branch, path })
+}
+
 /// What a rename changes, shown before it happens.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Renamed {
@@ -743,6 +773,27 @@ mod tests {
     fn names() {
         assert!(valid_name("web-2") && valid_name("2fa"));
         assert!(!valid_name("") && !valid_name("-x") && !valid_name("Web") && !valid_name("a_b"));
+    }
+
+    #[test]
+    fn new_plan_checks_what_new_stream_would_refuse() {
+        let (dir, work) = new_test_repo();
+        let reg_path = dir.path().join("state/workspaces.json");
+        let p = project(&work, &dir.path().join("wt"));
+        let plan = new_plan(&p, "ws-1", &reg_path).unwrap();
+        assert_eq!(plan.branch, "feat/ws-1");
+        assert!(plan.path.ends_with("wt/ws-1"));
+        assert!(new_plan(&p, "Bad", &reg_path).is_err());
+
+        let o = NewOptions {
+            name: "ws-1".into(),
+            ..NewOptions::default()
+        };
+        new_stream(&p, &o, &reg_path).unwrap();
+        let err = new_plan(&p, "ws-1", &reg_path).unwrap_err();
+        assert!(format!("{err}").contains("already exists"), "{err}");
+        must_git(&work, &["branch", "feat/taken"]);
+        assert!(new_plan(&p, "taken", &reg_path).is_err());
     }
 
     #[test]

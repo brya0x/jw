@@ -28,7 +28,17 @@ pub enum Modal {
         title: String,
         running: String,
     },
-    /// `^␣ r`: a new name for a worktree, with what changes (REQ-40).
+    /// `^␣ w`: the new worktree's name, with what it creates (REQ-110).
+    New {
+        /// The workspace it starts from: its project and its branch.
+        from: Entry,
+        project: Project,
+        text: String,
+        /// `text` is the suggested name, selected: the first key replaces it.
+        picked: bool,
+        plan: Result<crate::actions::Planned, String>,
+    },
+    /// `^␣ r`: a new name for a worktree, with what changes (REQ-111).
     Rename {
         entry: Entry,
         project: Project,
@@ -94,6 +104,34 @@ impl Modal {
                 KeyCode::Char('n') => Outcome::Cancel,
                 _ => Outcome::Stay,
             },
+            Modal::New {
+                project,
+                text,
+                picked,
+                plan,
+                ..
+            } => {
+                match k.code {
+                    KeyCode::Enter if plan.is_ok() => return Outcome::Submit,
+                    KeyCode::Backspace if *picked => text.clear(),
+                    KeyCode::Backspace => {
+                        text.pop();
+                    }
+                    KeyCode::Char(c) => {
+                        if *picked {
+                            text.clear();
+                        }
+                        if text.chars().count() < 40 {
+                            text.push(c);
+                        }
+                    }
+                    KeyCode::Right | KeyCode::End => {}
+                    _ => return Outcome::Stay,
+                }
+                *picked = false;
+                *plan = new_plan(project, text);
+                Outcome::Stay
+            }
             Modal::Rename {
                 entry,
                 project,
@@ -231,6 +269,51 @@ impl Modal {
                 ];
                 (format!(" Close {title}? "), l)
             }
+            Modal::New {
+                from,
+                project,
+                text,
+                picked,
+                plan,
+            } => {
+                let dim = Style::default().fg(p().dim);
+                let name = if *picked {
+                    Span::styled(text.clone(), Style::default().bg(p().sel).fg(p().fg))
+                } else {
+                    Span::raw(text.clone())
+                };
+                let mut l = vec![
+                    Line::from(vec![
+                        Span::styled(" name    ", dim),
+                        name,
+                        Span::styled("▏", Style::default().fg(p().blue)),
+                    ]),
+                    Line::default(),
+                ];
+                match plan {
+                    Ok(plan) => {
+                        l.push(Line::from(vec![
+                            Span::styled(" branch  ", dim),
+                            Span::styled(plan.branch.clone(), Style::default().fg(p().green)),
+                        ]));
+                        l.push(Line::from(vec![
+                            Span::styled(" from    ", dim),
+                            Span::raw(from.branch.clone()),
+                        ]));
+                        l.push(Line::from(vec![
+                            Span::styled(" folder  ", dim),
+                            Span::raw(short_path(&plan.path.display().to_string(), 50)),
+                        ]));
+                    }
+                    Err(e) => l.push(Line::from(Span::styled(
+                        format!(" {e}"),
+                        Style::default().fg(p().red),
+                    ))),
+                }
+                l.push(Line::default());
+                l.push(keys(&[("↵", "create"), ("esc", "cancel")]));
+                (format!(" New worktree in {} ", project.name), l)
+            }
             Modal::Rename {
                 entry, text, plan, ..
             } => {
@@ -260,7 +343,11 @@ impl Modal {
                         ));
                         l.push(Line::default());
                         l.push(Line::from(Span::styled(
-                            " Its panes start again in the new folder.",
+                            " Its panes keep running and follow the folder.",
+                            Style::default().fg(p().dim),
+                        )));
+                        l.push(Line::from(Span::styled(
+                            " A program that saved the old path may need a restart.",
                             Style::default().fg(p().dim),
                         )));
                     }
@@ -489,6 +576,13 @@ fn keys(pairs: &[(&str, &str)]) -> Line<'static> {
         ));
     }
     Line::from(spans)
+}
+
+/// What `^␣ w` would create as `name`, or why it can't, for the modal.
+pub fn new_plan(project: &Project, name: &str) -> Result<crate::actions::Planned, String> {
+    crate::core::registry::default_path()
+        .and_then(|reg| crate::actions::new_plan(project, name, &reg))
+        .map_err(|e| format!("{e:#}"))
 }
 
 /// Fits a line in `max` columns: `~` for the home directory, then the start

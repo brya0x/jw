@@ -87,8 +87,11 @@ enum Job {
         /// client attaching to a workspace that shows one).
         into: Option<PaneId>,
     },
-    /// A worktree has its new name; open it again.
-    Renamed(Entry),
+    /// A worktree has its new name and folder; `from` is the old folder.
+    Renamed {
+        entry: Entry,
+        from: String,
+    },
     /// `X` on a worktree whose PR isn't merged: the rm checks, and why.
     RmReady {
         entry: Entry,
@@ -158,6 +161,9 @@ pub struct App {
     leader_at: Option<Instant>,
     /// The popup with every key (REQ-31).
     pub which: bool,
+    /// An arrow followed the leader: more arrows keep moving through the
+    /// sidebar until another key (REQ-112).
+    pub walking: bool,
     pub rows: Vec<Row>,
     /// Workspace ids by last use, most recent first (`recent.json`).
     recent: Vec<String>,
@@ -369,6 +375,7 @@ impl App {
             leader,
             leader_at: None,
             which: false,
+            walking: false,
             rows: Vec::new(),
             recent: load_recent(),
             daemon_panes: Vec::new(),
@@ -814,6 +821,15 @@ impl App {
             }
             return;
         }
+        if self.walking {
+            if self.walk_key(k.code) {
+                return;
+            }
+            self.walking = false;
+            if matches!(k.code, KeyCode::Enter | KeyCode::Esc) {
+                return;
+            }
+        }
         if self.leader_at.take().is_some() {
             self.which = false;
             self.leader_key(k);
@@ -854,6 +870,7 @@ impl App {
                 self.leader_at = Some(Instant::now());
             }
             KeyCode::Char(c @ '1'..='9') => self.jump(c as usize - '1' as usize),
+            code if self.walk_key(code) => self.walking = true,
             KeyCode::Char('h') => self.focus_towards(-1, 0),
             KeyCode::Char('l') => self.focus_towards(1, 0),
             KeyCode::Char('k') => self.focus_towards(0, -1),
@@ -936,6 +953,68 @@ impl App {
             Some(e) => self.open_entry(e, false),
             None => self.fail(format!("no workspace {}", i + 1)),
         }
+    }
+
+    /// An arrow while walking the sidebar: `↑↓` the previous or next open
+    /// workspace, `←→` the previous or next project. False for any other key.
+    fn walk_key(&mut self, code: KeyCode) -> bool {
+        let target = match code {
+            KeyCode::Up => self.walk(-1, false),
+            KeyCode::Down => self.walk(1, false),
+            KeyCode::Left => self.walk(-1, true),
+            KeyCode::Right => self.walk(1, true),
+            _ => return false,
+        };
+        match target {
+            Some(e) => self.open_entry(e, false),
+            None => self.fail("no other open workspace".into()),
+        }
+        true
+    }
+
+    /// The open workspace `dir` steps from the current one in the sidebar,
+    /// wrapping around; by `project`, the first open row of each project.
+    /// Closed rows are skipped: opening them would start their panes.
+    fn walk(&self, dir: isize, project: bool) -> Option<Entry> {
+        // Each project's rows: the unindented one and the worktrees under it.
+        let mut groups: Vec<Vec<usize>> = Vec::new();
+        for (i, r) in self.rows.iter().enumerate() {
+            match groups.last_mut() {
+                Some(g) if r.child => g.push(i),
+                _ => groups.push(vec![i]),
+            }
+        }
+        let open = |i: &usize| self.is_open(&self.rows[*i].entry.id);
+        let stops: Vec<usize> = if project {
+            groups
+                .iter()
+                .filter_map(|g| g.iter().copied().find(|i| open(i)))
+                .collect()
+        } else {
+            (0..self.rows.len()).filter(open).collect()
+        };
+        let here = self
+            .rows
+            .iter()
+            .position(|r| self.current().is_some_and(|c| c.id == r.entry.id));
+        // Where the current row sits among the stops: its own group's stop
+        // when moving by project.
+        let at = here.and_then(|h| {
+            if project {
+                let g = groups.iter().find(|g| g.contains(&h))?;
+                stops.iter().position(|s| g.contains(s))
+            } else {
+                stops.iter().position(|s| *s == h)
+            }
+        });
+        let n = stops.len() as isize;
+        let next = match at {
+            Some(a) => (a as isize + dir).rem_euclid(n.max(1)) as usize,
+            None if dir > 0 => 0,
+            None => stops.len().checked_sub(1)?,
+        };
+        let row = *stops.get(next)?;
+        (Some(row) != here).then(|| self.rows[row].entry.clone())
     }
 
     /// `^␣ tab`: the workspace used before this one.
@@ -1984,8 +2063,8 @@ impl App {
         }
     }
 
-    /// `w`: a worktree `ws-N` from the current workspace's branch, set up and
-    /// shown at once (REQ-38).
+    /// `w`: asks the new worktree's name, offering the lowest free `ws-N`
+    /// (REQ-110); it starts from the current workspace's branch.
     fn new_worktree(&mut self) {
         let Some(from) = self.current_repo_stream("a worktree") else {
             return;
@@ -1999,8 +2078,23 @@ impl App {
             .map(|n| format!("ws-{n}"))
             .find(|n| !taken.contains(&n.as_str()))
             .expect("some ws-N is free");
+        match Project::open(std::path::Path::new(&from.path)) {
+            Ok(project) => {
+                self.modal = Some(Modal::New {
+                    plan: modal::new_plan(&project, &name),
+                    text: name,
+                    picked: true,
+                    from,
+                    project,
+                });
+            }
+            Err(e) => self.fail(format!("{e:#}")),
+        }
+    }
+
+    /// Creates the worktree the `w` modal named, set up and shown at once.
+    fn create_worktree(&mut self, from: Entry, project: Project, name: String) {
         self.background(format!("creating {name}"), move || {
-            let project = Project::open(std::path::Path::new(&from.path))?;
             let o = NewOptions {
                 name,
                 from: from.branch,
@@ -2125,18 +2219,27 @@ impl App {
         match m {
             Modal::Close { entry, .. } => self.close(&entry),
             Modal::ClosePane { pane, .. } => self.send(ClientMsg::Kill { pane }),
+            Modal::New {
+                from,
+                project,
+                text,
+                ..
+            } => self.create_worktree(from, project, text),
             Modal::Rename {
                 entry,
                 project,
                 text,
                 ..
             } => {
-                // The panes go first, so nothing runs in the folder it moves.
-                self.close(&entry);
+                // The panes keep running: their cwd is the same directory
+                // at its new path (REQ-111).
                 self.background(format!("renaming {}", entry.name), move || {
                     let reg = registry::default_path()?;
                     let renamed = actions::rename(&project, &entry, &text, &reg)?;
-                    Ok(Job::Renamed(renamed))
+                    Ok(Job::Renamed {
+                        entry: renamed,
+                        from: entry.path,
+                    })
                 });
             }
             Modal::Name { pane, text } => {
@@ -2208,6 +2311,25 @@ impl App {
         }
     }
 
+    /// A renamed worktree's panes stay as they are: the daemon learns the
+    /// new folder for its next restart, and the workspace on screen takes
+    /// the new entry, so new panes open there.
+    fn moved(&mut self, entry: Entry, from: String) {
+        let stream = Stream::resolve(&entry);
+        self.send(ClientMsg::Moved {
+            stream: entry.id.clone(),
+            from: from.into(),
+            to: entry.path.clone().into(),
+            env: stream.as_ref().map(|s| s.env()).unwrap_or_default(),
+        });
+        if self.current().is_some_and(|c| c.id == entry.id) {
+            match stream {
+                Ok(s) => self.active = Some(s),
+                Err(e) => self.fail(format!("{}: {e:#}", entry.name)),
+            }
+        }
+    }
+
     /// Kills every pane of the stream; the worktree stays.
     fn close(&mut self, entry: &Entry) {
         self.send(ClientMsg::Close {
@@ -2258,9 +2380,9 @@ impl App {
                 });
             }
             Job::Failed(e) => self.fail(e),
-            Job::Renamed(entry) => {
+            Job::Renamed { entry, from } => {
                 self.done(format!("renamed to {} on {}", entry.name, entry.branch));
-                self.open_entry(entry, false);
+                self.moved(entry, from);
             }
             Job::Said(msg) => self.done(msg),
             Job::Diff {

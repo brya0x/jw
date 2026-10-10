@@ -1199,3 +1199,64 @@ fn the_theme_survives_a_restart_and_old_queries_stay_unanswered() {
     let mut screen = vt100::Parser::new(24, 80, 0);
     read_until(&mut c, fresh, &mut screen, "rgb:fafa/fafa/fafa");
 }
+
+/// REQ-111: a renamed worktree's panes keep running, and a restart starts
+/// them in the folder's new place.
+#[test]
+fn a_moved_workspace_restarts_in_its_new_folder() {
+    let mut d = Daemon::start();
+    let dir = d.socket.parent().unwrap().to_path_buf();
+    let (old, new) = (dir.join("ws-1"), dir.join("login"));
+    std::fs::create_dir(&old).unwrap();
+    let mut c = d.client();
+    c.send(&ClientMsg::Spawn {
+        stream: "m".into(),
+        role: "shell".into(),
+        cmd: Some("cat".into()),
+        cwd: old.clone(),
+        env: BTreeMap::from([("JW_NAME".into(), "ws-1".into())]),
+        cols: 80,
+        rows: 24,
+    })
+    .unwrap();
+    let pane = match recv(&mut c) {
+        DaemonMsg::Spawned { pane } => pane,
+        other => panic!("want Spawned, got {other:?}"),
+    };
+    std::fs::rename(&old, &new).unwrap();
+    c.send(&ClientMsg::Moved {
+        stream: "m".into(),
+        from: old.clone(),
+        to: new.clone(),
+        env: BTreeMap::from([("JW_NAME".into(), "login".into())]),
+    })
+    .unwrap();
+    c.send(&ClientMsg::List).unwrap();
+    let panes = loop {
+        if let DaemonMsg::Panes { panes } = recv(&mut c) {
+            break panes;
+        }
+    };
+    // The same pane, still running.
+    assert_eq!(panes.len(), 1);
+    assert_eq!((panes[0].pane, panes[0].exited), (pane, None));
+    let saved = std::fs::read_to_string(d.socket.with_file_name("session.json")).unwrap();
+    let new_s = new.display().to_string();
+    assert!(
+        saved.contains(&new_s) && !saved.contains(&old.display().to_string()),
+        "{saved}"
+    );
+    assert!(saved.contains(r#""JW_NAME": "login""#), "{saved}");
+    drop(c);
+
+    d.restart();
+    let mut c = d.client();
+    c.send(&ClientMsg::List).unwrap();
+    let panes = loop {
+        if let DaemonMsg::Panes { panes } = recv(&mut c) {
+            break panes;
+        }
+    };
+    assert_eq!(panes.len(), 1, "the workspace came back");
+    assert_eq!(panes[0].stream, "m");
+}

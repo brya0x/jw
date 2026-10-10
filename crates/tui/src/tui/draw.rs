@@ -61,9 +61,10 @@ fn trect(r: Rect) -> TRect {
 fn sidebar(f: &mut Frame, app: &App) {
     let area = f.area();
     let r = TRect::new(0, 0, SIDEBAR.min(area.width), area.height.saturating_sub(1));
+    let edge = if app.walking { p().blue } else { p().line };
     let block = Block::default()
         .borders(Borders::RIGHT)
-        .border_style(Style::default().fg(p().line))
+        .border_style(Style::default().fg(edge))
         .style(Style::default().bg(p().panel));
     let inner = block.inner(r);
     f.render_widget(block, r);
@@ -285,6 +286,8 @@ fn status(f: &mut Frame, app: &App) {
         (" CONFIRM ".to_string(), p().red)
     } else if app.leading() {
         (format!(" {leader} "), p().yellow)
+    } else if app.walking {
+        (" MOVE ".to_string(), p().blue)
     } else {
         match app.focused_view() {
             Some(super::View::Diff(_)) => (" DIFF ".to_string(), p().blue),
@@ -336,6 +339,15 @@ fn status(f: &mut Frame, app: &App) {
         spans.extend([key("y"), txt("yes ·"), key("esc"), txt("no")]);
     } else if app.leading() {
         spans.extend([txt("one key ·"), key("esc"), txt("cancels")]);
+    } else if app.walking {
+        spans.extend([
+            key("↑↓"),
+            txt("workspace ·"),
+            key("←→"),
+            txt("project ·"),
+            key("↵"),
+            txt("back to the pane"),
+        ]);
     } else {
         match app.focused_view() {
             Some(super::View::Diff(_)) => spans.extend([
@@ -548,7 +560,10 @@ fn key(action: &str) -> String {
 /// with the keys the settings give them.
 fn which(f: &mut Frame, app: &App) {
     let fixed: [(&str, &[(&str, &str)]); 3] = [
-        ("go", &[("1-9", "workspace"), ("q", "detach")]),
+        (
+            "go",
+            &[("1-9", "workspace"), ("↑↓←→", "move"), ("q", "detach")],
+        ),
         ("worktree", &[]),
         ("panes", &[("hjkl", "go"), ("HJKL", "move")]),
     ];

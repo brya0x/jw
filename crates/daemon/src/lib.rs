@@ -190,8 +190,9 @@ struct Pane {
     /// Its workspace; it changes when the workspace's session is renamed.
     stream: Mutex<String>,
     role: String,
-    /// How it was started, for `session.json`.
-    started: Started,
+    /// How it was started, for `session.json`; its folder changes when
+    /// its worktree is renamed.
+    started: Mutex<Started>,
     io: Mutex<PaneIo>,
     state: Mutex<PaneState>,
 }
@@ -552,6 +553,12 @@ impl Daemon {
                 let _ = tx.send(DaemonMsg::Panes { panes });
             }
             ClientMsg::Rekey { from, to } => self.rekey(&from, &to)?,
+            ClientMsg::Moved {
+                stream,
+                from,
+                to,
+                env,
+            } => self.moved(&stream, &from, &to, &env),
             ClientMsg::Agent { pane, state } => {
                 lock(&self.pane(pane)?.state).agent = Some(state);
             }
@@ -991,7 +998,7 @@ impl Daemon {
                             .clone()
                             .try_map(&mut |l: PaneLeaf| {
                                 let started = match panes.get(&l.id) {
-                                    Some(p) => Some(p.started.clone()),
+                                    Some(p) => Some(lock(&p.started).clone()),
                                     None if is_view(&l.role) => None,
                                     None => return Err(()),
                                 };
@@ -1150,6 +1157,25 @@ impl Daemon {
         }
     }
 
+    /// A workspace's folder moved under its running panes: a restart
+    /// starts them where it is now, with its new variables.
+    fn moved(&self, stream: &str, from: &Path, to: &Path, env: &BTreeMap<String, String>) {
+        for (_, pane) in self.panes_of(stream) {
+            let mut started = lock(&pane.started);
+            if let Ok(rest) = started.cwd.strip_prefix(from) {
+                started.cwd = if rest.as_os_str().is_empty() {
+                    to.to_path_buf()
+                } else {
+                    to.join(rest)
+                };
+            }
+            started
+                .env
+                .extend(env.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
+        self.save();
+    }
+
     /// Starts a pane's process. `sub` is subscribed before its first byte
     /// can arrive; without one, watchers get a Snapshot later.
     fn spawn(
@@ -1200,12 +1226,12 @@ impl Daemon {
         let pane = Arc::new(Pane {
             stream: Mutex::new(stream.to_string()),
             role,
-            started: Started {
+            started: Mutex::new(Started {
                 cmd,
                 resume,
                 cwd,
                 env,
-            },
+            }),
             io: Mutex::new(PaneIo {
                 writer: pair.master.take_writer()?,
                 killer: child.clone_killer(),
