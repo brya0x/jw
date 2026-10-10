@@ -28,7 +28,7 @@ pub enum Modal {
         title: String,
         running: String,
     },
-    /// `^␣ w`: the new worktree's name, with what it creates (REQ-81).
+    /// `^␣ w`: the new worktree's name, with what it creates (REQ-110).
     New {
         /// The workspace it starts from: its project and its branch.
         from: Entry,
@@ -38,7 +38,7 @@ pub enum Modal {
         picked: bool,
         plan: Result<crate::actions::Planned, String>,
     },
-    /// `^␣ r`: a new name for a worktree, with what changes (REQ-82).
+    /// `^␣ r`: a new name for a worktree, with what changes (REQ-111).
     Rename {
         entry: Entry,
         project: Project,

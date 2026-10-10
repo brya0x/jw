@@ -10,12 +10,12 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 
 - One binary `jw`, unix only (macOS + Linux). With no arguments it opens the TUI client; a hidden `jw daemon` runs the server. The other commands are socket clients for sessions and for agents (addendum 3): `jw new <session>`, `jw [session]`, `jw sessions`, `jw ls`, `jw read`, `jw worktree`, `jw prompt`, `jw hook`, plus `jw help` and `jw skill [install]`.
 - **Two concepts.** A *workspace* is an open folder: a project (any folder, git or not) or one of its worktrees. A workspace holds *panes*.
-- **One-shot leader.** `Ctrl-Space`, then one key, then back to the terminal (tmux-style). A pause of 600 ms after the leader shows every key; `?` shows them at once. The one exception is an arrow after the leader: arrows keep moving through the workspaces until another key gives the keyboard back (addendum 4).
+- **One-shot leader.** `Ctrl-Space`, then one key, then back to the terminal (tmux-style). A pause of 600 ms after the leader shows every key; `?` shows them at once. The one exception is an arrow after the leader: arrows keep moving through the workspaces until another key gives the keyboard back (addendum 7).
 - **Every action applies to the current workspace or the focused pane.** The sidebar is a list to read and click, numbered for `1–9`, and walked with `^␣` + arrows.
 - **The daemon** owns every terminal (one PTY per pane, a VT parser with screen and scrollback) and each workspace's pane tree (splits, ratios, names). It survives the client and writes `session.json` on every change.
 - **The client** draws the sidebar (projects with their worktrees indented), the current workspace's panes, a header (workspace · branch · PR) and a status bar. It owns only focus and the full view.
 - **Viewers are panes the client draws:** a GitHub-style diff (unified when narrow, side by side when wide, sticky file headers, viewed, changed words) and a Markdown reader. Code files open in nvim; there is no built-in editor or file tree.
-- **Theme:** Atom One Dark / One Light, following the terminal or the OS.
+- **Theme:** Atom One Dark / One Light, following the OS or the settings. Programs in panes are told it: the daemon answers their colour queries and tells the ones that subscribed (mode 2031) when it switches (S14).
 - The checks of today's commands (`new rm done sync setup dev info init`) stay; confirmations are modals. Exit code 3 and `--json` go away.
 - On-disk compatibility: same config TOML as Go; Rust keeps its own `workspaces.json` (addendum 3). Alt is never bound (AeroSpace owns it).
 
@@ -65,13 +65,13 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 | core | port of `internal/core/config` and `registry` with serde, `deny_unknown_fields`. Worktrees at `root/<name>` (default `<repo>-wt`), branch template default `feat/{name}` (`src/core/config.rs`) |
 | connectors | git (1:1 with git.go, plus `worktree_move` and `branch_rename`), gh (`gh pr list`), shell/setup/ports |
 | Socket | `$XDG_RUNTIME_DIR/jw/jw.sock`, else `~/.local/state/jw/jw.sock` |
-| Protocol | `src/proto`: u32 length + serde_json frames; a workspace is named by its registry id in `stream`. The client opens with `Hello{protocol}` and refuses a daemon that answers anything but the same `PROTOCOL` (RISK-14). C→D: `Hello`, `Attach{stream}`, `Detach`, `Input{pane,bytes}`, `Resize{pane,cols,rows}`, `Open{stream,tree}` (a `Tree<NewPane>`), `Split{pane,dir,new}`, `Kill{pane}` (removes the leaf), `Close{stream}`, `Swap{a,b}`, `Name{pane,name?}`, `List`, `Prompt{stream,text}`, and the older `Spawn` (one pane, placed on the right). D→C: `Hello`, `Tree{stream,tree}` (on attach and after every change), `Snapshot{pane,…}`, `Output{pane,bytes}`, `Title{pane,title}` (OSC 0/2 via `vt100::Callbacks`), `Exited{pane,status}`, `Panes{…}` (with foreground process), `Spawned{pane}`, `Prompted{pane}`, `Error{msg}`. Pane ids are `u64` |
+| Protocol | `src/proto`: u32 length + serde_json frames; a workspace is named by its registry id in `stream`. The client opens with `Hello{protocol}` and refuses a daemon that answers anything but the same `PROTOCOL` (RISK-14). C→D: `Hello`, `Attach{stream}`, `Detach`, `Input{pane,bytes}`, `Resize{pane,cols,rows}`, `Open{stream,tree}` (a `Tree<NewPane>`), `Split{pane,dir,new}`, `Kill{pane}` (removes the leaf), `Close{stream}`, `Swap{a,b}`, `Name{pane,name?}`, `Theme{dark,fg,bg}` (S14), `List`, `Prompt{stream,text}`, and the older `Spawn` (one pane, placed on the right). D→C: `Hello`, `Tree{stream,tree}` (on attach and after every change), `Snapshot{pane,…}`, `Output{pane,bytes}`, `Title{pane,title}` (OSC 0/2 via `vt100::Callbacks`), `Exited{pane,status}`, `Panes{…}` (with foreground process), `Spawned{pane}`, `Prompted{pane}`, `Error{msg}`. Pane ids are `u64` |
 | Tree | `src/layout.rs`: leaves carry `{id, run, name?}`; `run = "shell"\|"agent"\|"editor"\|"dev:<svc>"\|"view:diff"\|"view:md:<path>"\|"<cmd>"`; `view:*` leaves have no PTY. Ops: `insert(beside, dir, leaf)`, `remove(id)` (the sibling takes the space), `swap(a,b)`, `neighbour(id,dx,dy)` (nearest rect that overlaps on the other axis), `rects` |
 | Layout config | `[layout]` in the project TOML as in v1 (tree of `split`, `ratio`, `a`/`b`, leaves `run`). It is the starting tree when a workspace opens; without it, one shell for a plain folder and the default tree for a project. Go ignores the tree and `[tui]` (`rustOnly`, config.go) |
 | Session | `session.json` in the state dir (next to the socket for any socket but the default one, so tests never touch it), written by the daemon with temp + rename after every tree change: `{workspaces: [{id, tree}]}`, each leaf with role, name, cmd, cwd and env. Recency and recent folders arrive with Q3/Q4 |
 | Folders | `src/folders.rs` replaces `src/free.rs`. `folders.json` in the state dir holds `[{id, dir, opened, created}]`: the project roots and plain folders the user opened. The first load migrates `free.json` (each session becomes a folder; the file is renamed `.migrated`). A folder's `Entry` uses `project` = the git project name, or the folder name for a plain folder |
 | Pane env | the JW_* vars of `actions::jw_env` (a plain folder gets JW_ID, JW_NAME, JW_PROJECT) + `JW_PANE_ID` |
-| Theme | `src/theme.rs`: One Dark / One Light `Palette`s that every draw module (and the syntect theme) asks for through `theme::p()`. Pick: `JW_THEME=dark\|light` pins one (OPEN-5); otherwise macOS's `AppleInterfaceStyle`, re-read every 3 s so a switch repaints; dark elsewhere. Querying the terminal (OSC 11, mode 2031) is left for later |
+| Theme | `src/theme.rs`: One Dark / One Light `Palette`s that every draw module (and the syntect theme) asks for through `theme::p()`. Pick: `JW_THEME=dark\|light` pins one (OPEN-5); otherwise macOS's `AppleInterfaceStyle`, re-read every 3 s so a switch repaints; dark elsewhere. Panes (S14): on every tick the TUI sends `ClientMsg::Theme` (`theme::wire()`) when `{dark, fg, bg}` changed. The daemon keeps it in `session.json` and answers from `Titles` (`daemon/src/lib.rs`): OSC 10/11 `?` → `rgb:RRRR/GGGG/BBBB` + ST, `?996n` → `?997;1\|2n`, `?2031$p` → `?2031;1\|2$y`, `6n` → cursor, `c` → `?1;2c`. A pane that set `?2031h` gets `?997;1\|2n` on a dark↔light switch. `COLORFGBG` is `15;0` / `0;15` at spawn. Querying the outer terminal is left for later (OPEN-9) |
 | Workspaces list | `App::reload` builds the rows. Each opened folder becomes a project row, and each registry worktree goes under its project's row, the project matched by `Repo::open(worktree).root` (`connectors/git.rs:56`). A project that has worktrees but no folder entry still gets a row, closed (`○`); opening it adds it to `folders.json` |
 | Project root opening | `Stream::resolve` (`stream.rs:51`) for a folder: git with a jw config → `cfg.layout.tree()`; git without a config, or a plain folder → one shell. Env `JW_ID`, `JW_NAME`, `JW_PROJECT`; no slot and no ports |
 | Marks | `PaneInfo` (`proto/mod.rs`) gains `busy: bool` (output in the last 2 s) and `bell: bool`. In the daemon, a `vt100::Callbacks::audible_bell` (and OSC 9) sets `bell`, and an `Input` to that pane clears it. While a workspace is open the client sends `List` every 2 s. PR state: `gh pr list` per worktree branch in the background every 60 s, cached in `App::prs` |
@@ -83,6 +83,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 | Stack | ratatui (its crossterm re-export), portable-pty, vt100 0.16 (drawn by `src/tui/draw.rs`), serde/toml/serde_json, syntect, pulldown-cmark, anyhow |
 | Diff | `src/diff.rs` (model: `git diff -M --merge-base origin/<base>` + untracked) and `src/tui/diffview.rs` (drawing, keys `j k ] [ v t ␣ b ↵ q`) |
 | MD reader | `src/view/md.rs` (pulldown-cmark → wrapped lines + headings) and `src/tui/mdview.rs` |
+| Keyboard protocol | Addendum 5. `jw_proto::kitty::Kitty` holds a pane's kitty keyboard flag stacks (main and alternate, 16 deep). The daemon's `Titles` and the TUI's `keys::Flags` feed it from `vt100::Callbacks::unhandled_csi`. In the daemon a `CSI ? u` becomes `Query::Kitty(flags)` in the same queue as S14's queries, so answers go in the order asked; `snapshot` appends `Kitty::replay` (`CSI < 17 u`, `CSI = base u`, then one `CSI > f u` per entry); a restored pane's history ends with `kitty::CLEAR`. The TUI probes the outer terminal (`supports_keyboard_enhancement`, before its event reader starts), pushes `DISAMBIGUATE_ESCAPE_CODES` after `ratatui::init()` and pops it before `ratatui::restore()`. `keys::encode(k, app_cursor, kitty)`: with flag 1, a modified Enter / Tab / Backspace goes as `CSI 13\|9\|127;mods u` and Esc as `CSI 27[;mods] u`; anything else, or flags 0, as before. No message changes, so `PROTOCOL` stays (RAT-15) |
 | Pickers | `src/tui/finder.rs`: a `Finder` modal (query, results, selection, preview) with one fuzzy scorer (consecutive matches score more), three sources. `o`: folder browser, one directory at a time, `→`/`tab` in, `←`/backspace on empty up, `~` home, `↵` opens; a name that doesn't exist offers `+ create`. It starts in the parent of the current project. `␣`: every workspace, by last use (`recent.json` in the state dir), with a preview of path, branch, PR, agent state and panes. `/`: `git ls-files -co --exclude-standard`, or a walk capped at 5000 files without dot dirs |
 
 ## Acceptance
@@ -109,9 +110,9 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 - REQ-35 WHEN the last pane of a workspace is closed, the TUI SHALL ask first, then close the workspace; a worktree stays listed as `○`, a project leaves the sidebar.
 - REQ-36 WHERE a pane has a name, the TUI SHALL show it as the pane's title; otherwise the title SHALL be the program's OSC title, else its foreground process.
 - REQ-37 WHEN the user picks a folder with `o`, the TUI SHALL open it as a workspace with its `[layout]` (or one shell for a plain folder); IF it is already open, THEN the TUI SHALL switch to it.
-- REQ-38 *(Replaced by REQ-81.)* WHEN `w` runs, the TUI SHALL create the worktree `ws-N` (lowest free N) from the current workspace's branch, run setup, and switch to it.
+- REQ-38 *(Replaced by REQ-110.)* WHEN `w` runs, the TUI SHALL create the worktree `ws-N` (lowest free N) from the current workspace's branch, run setup, and switch to it.
 - REQ-39 WHEN `X` runs on a worktree, the TUI SHALL apply the done checks if its PR is merged and the rm checks otherwise; IF the workspace is a project root, THEN the TUI SHALL refuse and say that jw never deletes a project folder.
-- REQ-40 *(Replaced by REQ-82.)* WHEN `r` runs on a worktree, the TUI SHALL validate the name, then move the folder, rename the branch, update the registry, and restart the workspace's panes in the new folder (asking first if an agent or editor runs).
+- REQ-40 *(Replaced by REQ-111.)* WHEN `r` runs on a worktree, the TUI SHALL validate the name, then move the folder, rename the branch, update the registry, and restart the workspace's panes in the new folder (asking first if an agent or editor runs).
 - REQ-41 THE switcher SHALL rank workspaces by last use, filter them fuzzily, and preview path, branch, PR, agent state and panes.
 - REQ-42 WHEN a file is picked with `/` or `↵` in the diff, the TUI SHALL open a `.md` in the workspace's reader pane and any other file in its nvim pane, creating either on the right when missing.
 - REQ-43 THE TUI SHALL draw with One Dark or One Light, chosen as Interfaces → Theme says.
@@ -147,7 +148,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 | Registry | `workspaces.json`, seeded once from a copy of `registry.json`; entries gain `session` and `root`. Go's file is never written |
 | Settings | `~/.config/jw/settings.json`: `leader`, `theme` (`system\|dark\|light`), `dark`, `light`, `which_delay_ms`, `keys{action: key}`; all optional; env `JW_LEADER`/`JW_THEME` win; re-read on mtime change. JSON, so Go's `*.toml` glob skips it |
 | `^␣ ,` | Settings screen: general, keys, themes. Rebind swaps a key in use; `1-9 hjkl HJKL ? q` fixed; no Ctrl/Alt after the leader; the leader is Ctrl + a key. Themes: `↵` use, `e` edit in nvim, `c` copy. Writes at once |
-| Themes | `one-dark`, `one-light` built in; `~/.config/jw/themes/<name>.json` = `{name, dark, colors{bg panel line fg dim sel blue green yellow red magenta cyan, add_bg? del_bg? add_word? del_word?}}`; missing diff colours are mixed; a bad file keeps the last good palette |
+| Themes | Every theme is JSON in one format, `crates/tui/themes/schema.json` (S16). Ten built in, compiled in from `crates/tui/themes/*.json` (`theme::BUILTIN`); the user's in `~/.config/jw/themes/<name>.json` = `{$schema?, name, dark, colors{bg panel line fg dim sel blue green yellow red magenta cyan, add_bg? del_bg? add_word? del_word?}}`, and one named like a built-in replaces it; missing diff colours are mixed from green/red over bg; a file that doesn't parse keeps the last good palette. `jw theme ls\|install <file\|url\|-> [--name] [--force]\|export <name>\|use <name>` (`crates/jw/src/theme.rs`); a URL goes through `curl` |
 | `.md` reuse | `ClientMsg::Role{pane, role}` retargets the workspace's `view:md:*` pane |
 | Scrollback | 2 MiB raw ring per pane in the daemon, sent in `Snapshot`, saved to `sessions/<name>/scrollback/<pane>.bin`, replayed on restore under `── restored <time> ──` |
 | Agent state | `JW_PANE`, `JW_SESSION` in panes; claude starts with `--session-id <uuid>` and `--settings` hooks running `jw hook <event>` (`UserPromptSubmit` and `PreToolUse` working, `Notification` waiting, `Stop` idle) → `ClientMsg::Agent` → `PaneInfo.agent`; restore runs `claude --resume <uuid>` |
@@ -175,7 +176,47 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 - REQ-79 WHEN the daemon gets SIGTERM, SIGINT or SIGHUP, it SHALL write `session.json` and every pane's scrollback, then exit.
 - REQ-80 WHEN `jw server status` runs, jw SHALL say whether the daemon runs, with its pid and running panes. WHEN `jw server stop` runs, jw SHALL send the daemon SIGTERM and wait until it stops answering.
 
-### Addendum 4: worktree names and moving with arrows
+### Addendum 4 (S14): programs in panes follow the theme
+
+- REQ-81 WHEN a pane's program writes `OSC 10 ?` or `OSC 11 ?`, the daemon SHALL answer on that PTY with the current theme's fg or bg, whether or not a client is attached.
+- REQ-82 WHEN a pane's program writes `CSI ? 996 n`, the daemon SHALL answer `CSI ? 997 ; 1 n` while dark and `CSI ? 997 ; 2 n` while light.
+- REQ-83 WHEN the theme switches between dark and light, the daemon SHALL write the REQ-82 report to every pane whose program set mode 2031 and has not reset it.
+- REQ-84 WHEN a pane's program writes `CSI ? 2031 $ p`, the daemon SHALL answer `CSI ? 2031 ; 1 $ y` if the pane has set the mode, and `; 2 $ y` if not.
+- REQ-85 WHEN the TUI connects, and WHEN its dark mode or its palette's fg or bg changes, the TUI SHALL send `ClientMsg::Theme` (within a tick, 500 ms).
+- REQ-86 THE daemon SHALL save the last theme in `session.json` and use it after a restart. IF it has never received one, THEN it SHALL use One Dark.
+- REQ-87 WHEN the daemon replays a restored pane's history, it SHALL answer none of the queries in it, and SHALL start the pane with mode 2031 reset.
+- REQ-88 THE daemon SHALL start each pane with `COLORFGBG` set to `15;0` when dark and `0;15` when light.
+- REQ-89 WHEN a pane's program writes `CSI 6 n`, the daemon SHALL answer with the vt100 cursor position. WHEN it writes `CSI c` or `CSI 0 c`, the daemon SHALL answer `CSI ? 1 ; 2 c`.
+
+### Addendum 5 (S15): modified keys reach the panes (kitty keyboard protocol)
+
+Shift+Enter inserts a new line in claude, codex and nvim inside jw, as it does outside. Three links were missing: the TUI never asked the outer terminal for the kitty protocol, so Ghostty sent `\r` for both keys; nothing tracked or answered a pane program's `CSI > f u` / `CSI ? u`; and `encode` dropped Enter's modifiers. The flags reach clients in-band, as DECCKM does (RAT-15).
+
+- REQ-90 WHERE the outer terminal supports the kitty keyboard protocol, the TUI SHALL push flag 1 at start and pop it before it restores the terminal.
+- REQ-91 IF the outer terminal does not support the protocol, THEN the TUI SHALL send it nothing new, and keys SHALL behave as before.
+- REQ-92 WHEN a pane's program sends `CSI > f u`, `CSI < n u` or `CSI = f ; m u`, the daemon and the TUI SHALL update that pane's stack for the screen in use (main or alternate).
+- REQ-93 WHEN a pane's program sends `CSI ? u`, the daemon SHALL write `CSI ? f u` to its PTY, where f is the top of the active stack (0 if the stack is empty).
+- REQ-94 WHEN a pane enters the alternate screen, its alternate stack SHALL start empty.
+- REQ-95 WHILE the focused pane's active stack has flag 1, the TUI SHALL encode keys per the Keyboard protocol row in Interfaces.
+- REQ-96 WHILE the focused pane's active flags are 0, the TUI SHALL send exactly the bytes it sent before (Shift+Enter is `\r`).
+- REQ-97 WHEN a client attaches, the Snapshot SHALL leave its parser with the pane's whole active stack, so that a later pop gives the same flags as in the daemon, even after the ring dropped the original pushes.
+- REQ-98 WHEN the daemon restores a pane from scrollback, the new process SHALL start with empty stacks in the daemon and in every client.
+- REQ-99 THE daemon SHALL never write a reply while it holds a pane's state lock.
+- REQ-100 WHEN a pane's program sends several queries, the daemon SHALL answer them in the order asked (nvim sends `CSI ? u` then `CSI c`, and takes the kitty answer only if it comes before REQ-89's).
+
+### Addendum 6 (S16): themes are JSON, built in or installed
+
+- REQ-101 THE TUI SHALL take every built-in palette from the JSON files compiled in from `crates/tui/themes/`, and SHALL have no palette constants in Rust.
+- REQ-102 WHEN `cargo test` runs, every built-in SHALL parse, and its `name` SHALL equal its file stem.
+- REQ-103 WHEN `~/.config/jw/themes/<name>.json` exists, the TUI SHALL use it instead of a built-in of the same name, and `names()` SHALL list that name once.
+- REQ-104 THE schema SHALL list exactly the fields `ThemeFile`/`Colors` accept, with the same required set. A test SHALL compare the two.
+- REQ-105 WHEN `jw theme install <file|url|->` runs on a valid theme, jw SHALL write it to `themes/<name>.json`. IF it does not parse, has an invalid name, or exists without `--force`, THEN jw SHALL write nothing and exit non-zero with the reason.
+- REQ-106 WHEN `jw theme export <name>` runs, jw SHALL print the theme as JSON that `install` accepts back unchanged.
+- REQ-107 WHEN `jw theme use <name>` runs, jw SHALL set the dark or the light setting by the theme's `dark` flag.
+- REQ-108 WHEN `jw theme ls` runs, jw SHALL print each name with `built-in`/`file`/`file, replaces built-in`, `dark`/`light`, and which slot it is in.
+- REQ-109 The settings screen SHALL list the ten built-ins, and its `c` SHALL write `export`'s JSON.
+
+### Addendum 7: worktree names and moving with arrows
 
 Prototype: https://claude.ai/artifact/QdLzKo3onBQFzeRvDrnh6g (approved 2026-10-10).
 
@@ -184,11 +225,11 @@ Prototype: https://claude.ai/artifact/QdLzKo3onBQFzeRvDrnh6g (approved 2026-10-1
 | `^␣ w` | A `New worktree in <project>` modal: a name input holding the next free `ws-N`, selected, so `↵` takes it and the first key typed replaces it. Under it the branch, `from` and the folder, or in red why the name can't be (`actions::new_plan`: a valid name, free in the project, a folder that doesn't exist). `esc` creates nothing |
 | `^␣ r` | The rename runs with the panes alive: `git worktree move`, the branch, the registry and `.jw.env` as before, then `ClientMsg::Moved{stream, from, to, env}` so the daemon's `session.json` starts them in the new folder after a restart. The TUI swaps its `Stream` for the renamed entry without touching the panes. The modal says the panes keep running and that a program that kept the old path may need a restart |
 | `^␣` + arrow | Moves to the next (`↓`) or previous (`↑`) open workspace in the sidebar's order, or to the first open row of the next (`→`) or previous (`←`) project, and opens it. The status bar shows `MOVE`. More arrows keep moving with no leader. `↵` or `esc` ends it; any other key ends it and goes on as if typed outside it. Closed rows are skipped: walking past them would start their panes |
-| Protocol | `PROTOCOL = 7` adds `Moved` |
+| Protocol | `PROTOCOL = 8` adds `Moved` |
 
-- REQ-81 WHEN `w` runs, the TUI SHALL ask the worktree's name with the next free `ws-N` filled in, show the branch, base and folder it will create, refuse a name `new_plan` rejects, and on `↵` create it from the current workspace's branch, run setup and switch to it.
-- REQ-82 WHEN `r` runs on a worktree, the TUI SHALL validate the name, then move the folder, rename the branch (when jw named it) and update the registry, keeping the workspace's panes, layout and scrollback running; the daemon SHALL then start them in the new folder after a restart.
-- REQ-83 WHEN an arrow follows the leader, the TUI SHALL open the next or previous open workspace (`↓`/`↑`) or the next or previous project (`→`/`←`), and SHALL treat further arrows the same WITHOUT the leader UNTIL another key, which ends it and is handled as usual (`↵` and `esc` are swallowed).
+- REQ-110 WHEN `w` runs, the TUI SHALL ask the worktree's name with the next free `ws-N` filled in, show the branch, base and folder it will create, refuse a name `new_plan` rejects, and on `↵` create it from the current workspace's branch, run setup and switch to it.
+- REQ-111 WHEN `r` runs on a worktree, the TUI SHALL validate the name, then move the folder, rename the branch (when jw named it) and update the registry, keeping the workspace's panes, layout and scrollback running; the daemon SHALL then start them in the new folder after a restart.
+- REQ-112 WHEN an arrow follows the leader, the TUI SHALL open the next or previous open workspace (`↓`/`↑`) or the next or previous project (`→`/`←`), and SHALL treat further arrows the same WITHOUT the leader UNTIL another key, which ends it and is handled as usual (`↵` and `esc` are swallowed).
 
 ---
 
@@ -204,6 +245,17 @@ Prototype: https://claude.ai/artifact/QdLzKo3onBQFzeRvDrnh6g (approved 2026-10-1
 - RAT-9 **The tree moves into the daemon** because panes are now dynamic: if the client kept it, a detach would lose every `t`/`x`/`HJKL`, and two clients could disagree. Focus and the full view stay in the client because they are per-viewer.
 - RAT-10 **Rejected: a GUI (Tauri + xterm.js).** Better terminal fidelity and diff rendering, but it leaves the terminal (no SSH, another window under AeroSpace), discards the TUI code, and needs signing and updates. The daemon keeps that door open: a GUI would be another client. Revisit only if RISK-1 fails the checkpoint.
 - RAT-11 **Rejected: a built-in editor and file tree** (prototyped). Typing is easy; large files, wide characters and edits racing the agent are not, and it never reaches nvim.
+- RAT-12 **The daemon answers queries, not the TUI** (S14). It owns the PTYs, agents run with no client attached, and programs wait briefly for an answer (nvim about 100 ms); a round trip through a client is late or missing.
+- RAT-13 **The TUI's palette is the source, not the outer terminal.** Panes are drawn on `p().bg`, so that is the colour a program sits on. Custom themes (S8) change fg/bg, so the message carries the colours, not only `dark`.
+- RAT-14 **The theme persists in `session.json`** because restored agents (REQ-74) ask before any TUI reconnects.
+- RAT-15 **Keyboard flags in-band, no `PROTOCOL` bump.** DECCKM already reaches the TUI this way: its own parser reads the raw output and the Snapshot replays the mode. An old TUI on a new daemon ignores the flags and sends legacy bytes, as before. A new TUI on an old daemon only sees flags a program pushed without asking first, and CSI u is then what that program wants. Neither side misreads the other.
+- RAT-16 **The daemon answers `CSI ? u`.** nvim and crossterm programs (codex) query before they push and stay legacy without an answer. The TUI may be detached, and two TUIs would answer twice. It rides S14's query queue, which already answers `CSI c`.
+- RAT-17 **Flag 1 only, and a short encode table.** Shift+Enter needs only disambiguate. Full kitty encoding (release events, every key as an escape, associated text) is a large surface for no visible gain; programs that push more flags (nvim pushes 3) still parse legacy bytes.
+- RAT-18 **Push after `ratatui::init()`.** The kitty spec keeps separate stacks per screen, so the push lands on the alternate screen's: a panic that skips the pop leaves the user's shell without the flag once the alternate screen is left.
+- RAT-19 **How herdr does it** (v0.8.2, read from source). The same three pieces, with bigger parts. The outer terminal gets 1+2+4 (31 when a pane asks for report-all, switched with pop+push because old iTerm2 clears the stack on set; `src/terminal_modes.rs`). Panes run on libghostty-vt, which tracks the flags, answers every query through a `write_pty` callback and encodes keys with Ghostty's encoder (`src/pane/terminal.rs`). Legacy Shift+Enter is `\r` there too (`legacy_shift_enter_is_just_cr`, `src/input/encode.rs`), and `KittyKeyboardTracker::replay_ansi` (`src/pane/kitty_keyboard.rs`) is the replay shape REQ-97 copies. Rejected: swapping vt100 for libghostty-vt, which would vendor a Zig/C library and rewrite both parsers for one key. Rejected: always sending `ESC \r`, which claude takes as a new line but nvim and codex read as Alt+Enter, and bash gets a stray ESC.
+- RAT-20 **Built-ins are embedded JSON, not runtime files** (S16). They must work with no config dir and no install step; `include_str!` keeps one binary while making them the same kind of file a user writes, and worked examples of the format.
+- RAT-21 **A user's file wins over a built-in.** It is the simplest way to tweak one (`jw theme export one-dark > ~/.config/jw/themes/one-dark.json`); reserving the names would need an error path and a rename for nothing.
+- RAT-22 **`curl`, not a crate,** for `install <url>`: rare, and jw already shells out to `git` and `gh`; `ureq` would add TLS and about 40 crates for one command.
 
 ## Risks
 
@@ -221,7 +273,7 @@ Prototype: https://claude.ai/artifact/QdLzKo3onBQFzeRvDrnh6g (approved 2026-10-1
 - RISK-12 **dev types into the shell pane** unless `[layout]` has a `dev:<svc>` leaf. With no dev key in v2, a project's dev servers should be `dev:<svc>` leaves.
 - RISK-13 **syntect's bundled grammars have no TypeScript or TOML** (ts uses JavaScript; TOML is plain).
 - RISK-14 **Protocol change (RAT-9):** an old daemon and a new client disagree. The version check on attach says "restart the daemon" instead of misbehaving.
-- RISK-15 **Rename under running processes** leaves shells with a stale `$PWD`. REQ-82 keeps them running anyway (the user's choice): their cwd follows the folder, but a program that kept the old path as text (claude's project dir, an editor's buffers) can break, and the modal says so.
+- RISK-15 **Rename under running processes** leaves shells with a stale `$PWD`. REQ-111 keeps them running anyway (the user's choice): their cwd follows the folder, but a program that kept the old path as text (claude's project dir, an editor's buffers) can break, and the modal says so.
 - RISK-16 **`↵` in the diff sends `<Esc>:e path<CR>` to nvim**, assuming normal mode after Esc. Fine for v2; `nvim --server` later if it bites.
 - RISK-17 **Mapping worktrees to their project** with `Repo::open` runs one `git` per worktree on every reload. Cache it by path; it changes only when worktrees are created or removed.
 - RISK-18 **The `?` mark depends on the agent ringing the bell.** Claude Code does so only when its notifications use the terminal bell. Without that, `?` never shows (the same worst case as RISK-7).
@@ -231,7 +283,17 @@ Prototype: https://claude.ai/artifact/QdLzKo3onBQFzeRvDrnh6g (approved 2026-10-1
 - RISK-22 **A folder open in two sessions** is two workspaces sharing nothing. A worktree belongs to the session that made it.
 - RISK-23 **`workspaces.json` drifts from Go's registry** after the seed; `jw import` if it is ever needed.
 - RISK-24 **`jw new` changes meaning** (worktree → session). `jw new --task` errors with a pointer to `jw worktree`.
-- RISK-25 **A renamed worktree's claude resumes in the new folder** after a daemon restart, while its transcript sits under the old path's project in `~/.claude/projects/`. `claude --resume <id>` may not find it there; the pane then shows claude's error and a new `claude` starts clean.
+- RISK-25 **Claude Code and Codex may read the background only at startup.** If they don't subscribe to mode 2031, a switch reaches them only after a restart. To check by hand.
+- RISK-26 **Replies always end with ST:** vt100 doesn't pass `bel_terminated` to its callback. Every parser we know of accepts either.
+- RISK-27 **Lock order:** the reader drops `state` before taking `io` to reply, as `set_theme` does per pane. Holding both could deadlock against `Input`.
+- RISK-28 **Several TUIs in terminals of different appearance:** the last to connect or switch wins (OPEN-8). DECRQM is answered for 2031 only.
+- RISK-29 **A program that dies without popping its keyboard flags** (killed by a signal) leaves them set, and the next program in that shell gets CSI u for modified Enter, Tab and Esc. A real terminal behaves the same. If it bites: clear the stacks when the shell prints its prompt (OSC 133).
+- RISK-30 **The Snapshot replays only the active screen's stack.** A client that attaches during a full-screen program relies on the ring for the main screen's stack, which matters only after 2 MiB of output dropped those pushes.
+- RISK-31 **With flag 1 on the outer terminal**, crossterm reports Ctrl+letters as `Char+CONTROL` instead of the legacy aliases (Ctrl+H is no longer Backspace). `encode` sends the same bytes either way, and no TUI binding matches an alias (checked in S15).
+- RISK-32 **The built-ins' hex values are transcribed by hand** from each project's published palette. A wrong value is cosmetic and a JSON edit; the test only checks that they parse.
+- RISK-33 **`install` from a URL runs `curl` on what the user typed.** The body is only parsed and written under `themes/`, never run, and the name must match `[a-z0-9-]+`, so it can't leave the directory.
+- RISK-34 **Shadowing hides a built-in.** `jw theme ls` says `file, replaces built-in`, and `install` says so too.
+- RISK-35 **A renamed worktree's claude resumes in the new folder** after a daemon restart, while its transcript sits under the old path's project in `~/.claude/projects/`. `claude --resume <id>` may not find it there; the pane then shows claude's error and a new `claude` starts clean.
 - Closed by addendum 3: RISK-5 (own registry), RISK-7 (hooks), RISK-9 (frames), RISK-16 (`nvim --server`), RISK-17 (`root` in the registry).
 
 ## Parts (each one ends with `cargo test` + `clippy` green and a local commit on `feat/rust-tui`; nothing is pushed)
@@ -265,10 +327,13 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | S11 ✓ `27c3c2a` | `jw help`, `--help`; the jw skill moves into the repo, `jw skill [install]` | 77, 78 | `main.rs`, `help.rs`, `skill.rs`, `skill/SKILL.md`, `session.rs` |
 | S12 ✓ `7495afb` | The daemon saves everything on SIGTERM, SIGINT and SIGHUP | 79 | `daemon` |
 | S13 ✓ `4f7e4a4` | `jw server status`, `jw server stop` | 80 | `server.rs`, `help.rs`, `session.rs` |
-| W0 ✓ `9e944c6` | Addendum 4 in this spec; the prototype | — | docs |
-| W1 ✓ `d6c2728` | `^␣ w` asks the name: `actions::new_plan`, `Modal::New` | 81 | `actions.rs`, `tui/modal.rs`, `tui/mod.rs` |
-| W2 ✓ `1a5d5ad` | Rename keeps the panes: `ClientMsg::Moved`, `PROTOCOL 7` | 82 | `proto`, `daemon`, `tui/mod.rs`, `tui/modal.rs` |
-| W3 ✓ `f575bca` | `^␣` + arrows walk the sidebar; the `MOVE` chip | 83 | `tui/mod.rs`, `tui/draw.rs` |
+| S14 ✓ `b98d8a9` | The daemon answers colour, scheme, cursor and attribute queries; mode 2031; `ClientMsg::Theme`, `PROTOCOL 7` | 81–89 | `proto`, `daemon`, `theme.rs`, `tui/mod.rs` |
+| S15 ✓ `8d2f2f0` | Addendum 5: Shift+Enter, the kitty keyboard protocol | 90–100 | `proto/kitty.rs`, `tui/keys.rs`, `tui/mod.rs`, `daemon` |
+| S16 ✓ `b184b46` | Addendum 6: themes as JSON, ten built-ins in `crates/tui/themes/`, `schema.json`, user files replace built-ins, `jw theme ls/install/export/use` | 101–109 | `theme.rs`, `crates/tui/themes/`, `crates/jw/src/theme.rs`, `session.rs`, README |
+| W0 ✓ `9e944c6` | Addendum 7 in this spec; the prototype | — | docs |
+| W1 ✓ `d6c2728` | `^␣ w` asks the name: `actions::new_plan`, `Modal::New` | 110 | `actions.rs`, `tui/modal.rs`, `tui/mod.rs` |
+| W2 ✓ `1a5d5ad` | Rename keeps the panes: `ClientMsg::Moved`, `PROTOCOL 8` | 111 | `proto`, `daemon`, `tui/mod.rs`, `tui/modal.rs` |
+| W3 ✓ `f575bca` | `^␣` + arrows walk the sidebar; the `MOVE` chip | 112 | `tui/mod.rs`, `tui/draw.rs` |
 | Later | Animations (optional) | 19, 20 | |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 
@@ -281,9 +346,18 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - OPEN-3 → keep `jw prompt` and `jw new --task` as socket clients.
 - OPEN-4 → unix only; `shell_windows.go` is not ported.
 - OPEN-6 → TUI, not a GUI (RAT-10).
+- OPEN-7 → DSR and DA (REQ-89) go in S14: same reply path, and without them crossterm programs wait for a timeout.
+- OPEN-8 → last-wins between several TUIs.
+- OPEN-9 → following the outer terminal's own mode 2031 is later; S14 keeps `AppleInterfaceStyle` and the settings.
+- OPEN-10 (open) Plain Esc goes as `CSI 27 u` to a pane with flag 1, as the kitty spec says (it also removes nvim's Esc delay). The alternative is to keep `\x1b`, for less change.
+- OPEN-11 → the built-in themes are not written to disk on first run; `jw theme export` gives each one (S16).
+- OPEN-12 → per-theme syntax colours (a `syntax` block for syntect) are later; highlighting still picks syntect's theme by `dark` (`view/highlight.rs:27`).
 - OPEN-5 → `~/.config/jw/settings.json` (JSON, outside Go's `*.toml` glob) and the `^␣ ,` screen (addendum 3).
 
 ## Corrections
+
+- Addendum 5's first draft answered only `CSI ? u`. nvim sends `CSI ? u` then `CSI c` and pushes its flags only once both answers arrive (nvim 0.12.5), which the end-to-end test caught. S14 answers `CSI c`; REQ-100 keeps the two in order.
+- The first diagnosis of Shift+Enter said it needed a `PaneInfo` field and a `PROTOCOL` bump. It didn't: the TUI's parser already sees the raw output (RAT-15).
 
 - Paths in this spec say `src/…` from when jw was one crate. Since `6be5ac4` the code is a workspace: `src/{layout,core,connectors,actions,folders,session,stream,init,diff}` are in `crates/core/src/`, `src/proto` and `src/client.rs` in `crates/proto/src/`, `src/daemon` in `crates/daemon/src/`, `src/{tui,view,theme,settings}` in `crates/tui/src/`, `src/{main,cli}.rs` and `tests/` in `crates/jw/`.
 
@@ -298,15 +372,18 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - The addendum-3 plan keyed the daemon by session. Ids unique across sessions made that unnecessary: `session.json` and the daemon stay as they were.
 - An addendum-3 draft read `.jw/` as a per-project config folder (like `.vscode/`), then as a pinned "home" brain workspace. The user meant a scope for which projects show: named sessions. The brain is a usage pattern, not a jw concept.
 - The 2026-10-09 prototype's `.worktrees/<name>` on `jw/<name>` was wrong for this repo: worktrees live at `<repo>-wt/<name>` on the `branch` template (`feat/{name}`).
-- "There is no navigation mode" (Contract) held until addendum 4: the user asked to move between workspaces and projects with the arrows, so an arrow after the leader starts a short move that any other key ends.
-- REQ-40 restarted a renamed worktree's panes so nothing ran in a moving folder. Losing the tab on every rename cost more than the stale paths it avoided; REQ-82 keeps the panes.
+- The Contract said the theme follows "the terminal or the OS". It followed the OS only (`theme::system_dark`), and programs in panes were never told it: vt100 dropped their OSC 11 and mode 2031 and nobody answered (S14).
+- "There is no navigation mode" (Contract) held until addendum 7: the user asked to move between workspaces and projects with the arrows, so an arrow after the leader starts a short move that any other key ends.
+- REQ-40 restarted a renamed worktree's panes so nothing ran in a moving folder. Losing the tab on every rename cost more than the stale paths it avoided; REQ-111 keeps the panes.
+- The worktree-names addendum was drafted as addendum 4 with REQ-81–83, RISK-25 and `PROTOCOL 7` on a branch cut before S14–S16, which took those ids. It merged as addendum 7, REQ-110–112, RISK-35 and `PROTOCOL 8`.
 
 ## Tests
 
 - core: parse config/registry from Go fixtures; registry.json round-trip read back by Go.
 - layout: tree → rects for several sizes; `insert`/`remove`/`swap`/`neighbour` as tables.
-- daemon (tempdir, `tests/`): `cat` pane, detach, kill the client, reattach, same screen; `Split`/`Kill`/`Swap`/`Name` produce `Tree` and update `session.json`; `printf '\e]2;hi\a'` arrives as `Title`; a version mismatch is an error.
+- daemon (tempdir, `tests/`): `cat` pane, detach, kill the client, reattach, same screen; `Split`/`Kill`/`Swap`/`Name` produce `Tree` and update `session.json`; `printf '\e]2;hi\a'` arrives as `Title`; a version mismatch is an error; S14: OSC 10/11, `?996n`, `6n`, `c` answered from the theme, `?997` only to panes with `?2031h`, the theme in `session.json`, replayed queries unanswered. S16: every built-in parses under its own name; schema and `Colors` agree; a user file shadows a built-in once; export → install round-trips; `jw theme` against a temp `XDG_CONFIG_HOME` (`crates/jw/tests/theme.rs`).
 - actions: fakes behind traits; `X` takes the done or rm path by PR state; rename against a temp repo; `free.json` → `folders.json` migration.
 - finder: fuzzy ranking tables; folder browser over a temp dir.
 - TUI: ratatui `TestBackend` for the which-key popup, sidebar and modals.
+- keyboard protocol: `kitty.rs` units (push, pop past empty, set modes, query, depth, alternate stack, replay round trip); `keys.rs` units (Shift+Enter is `\r` with flags 0 and `CSI 13;2u` with flag 1); the daemon answers `CSI ? u` before `CSI c`, and a late Snapshot ends with the stack. End to end, with a script that plays Ghostty (answers the probe, sends keys as Ghostty does with flag 1) against an isolated jw: Shift+Enter is a new line in claude 2.1.296 and codex 0.162.1, fires `imap <S-CR>` in nvim 0.12.5; a program that never pushes still gets `\r`; the TUI pops on exit, and pushes nothing when the terminal doesn't answer.
 - manual (after Q2 and Q5): claude and nvim in panes; `w`, `t`, `x`, `HJKL`, `n`, `d`, `↵` in the diff, `q`, then `jw` again shows the same layout.

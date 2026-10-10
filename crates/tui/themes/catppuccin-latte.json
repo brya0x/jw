@@ -1,0 +1,19 @@
+{
+  "$schema": "https://raw.githubusercontent.com/brya0x/jw/main/crates/tui/themes/schema.json",
+  "name": "catppuccin-latte",
+  "dark": false,
+  "colors": {
+    "bg": "#eff1f5",
+    "panel": "#e6e9ef",
+    "line": "#ccd0da",
+    "fg": "#4c4f69",
+    "dim": "#9ca0b0",
+    "sel": "#bcc0cc",
+    "blue": "#1e66f5",
+    "green": "#40a02b",
+    "yellow": "#df8e1d",
+    "red": "#d20f39",
+    "magenta": "#8839ef",
+    "cyan": "#179299"
+  }
+}

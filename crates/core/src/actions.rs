@@ -161,7 +161,7 @@ pub struct Planned {
 }
 
 /// The cheap checks of [`new_stream`] for `name` on the config's branch
-/// template (REQ-81): no fetch, so a branch only on origin is still
+/// template (REQ-110): no fetch, so a branch only on origin is still
 /// refused by `new_stream` itself.
 pub fn new_plan(p: &Project, name: &str, reg_path: &Path) -> Result<Planned> {
     if !valid_name(name) {

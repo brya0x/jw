@@ -20,9 +20,10 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use ratatui::crossterm::event::{
     self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-    Event, KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind,
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyboardEnhancementFlags, MouseButton, MouseEvent,
+    MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
-use ratatui::crossterm::execute;
+use ratatui::crossterm::{execute, terminal};
 
 use crate::actions::{self, NewOptions, Project};
 use crate::client::Client;
@@ -147,7 +148,7 @@ const STATUS_FOR: Duration = Duration::from_secs(4);
 /// A pane of the current workspace as this client sees it.
 pub struct PaneView {
     pub role: String,
-    pub parser: vt100::Parser,
+    pub parser: vt100::Parser<keys::Flags>,
     pub exited: Option<i32>,
     /// The window title its program set (OSC 0/2).
     pub title: Option<String>,
@@ -161,7 +162,7 @@ pub struct App {
     /// The popup with every key (REQ-31).
     pub which: bool,
     /// An arrow followed the leader: more arrows keep moving through the
-    /// sidebar until another key (REQ-83).
+    /// sidebar until another key (REQ-112).
     pub walking: bool,
     pub rows: Vec<Row>,
     /// Workspace ids by last use, most recent first (`recent.json`).
@@ -195,6 +196,8 @@ pub struct App {
     /// Each worktree's pull request, from the last look (REQ-51).
     pub prs: BTreeMap<String, crate::connectors::Pr>,
     ticks: u64,
+    /// The theme the daemon was last told (REQ-85).
+    told: Option<crate::proto::Theme>,
     /// The viewer panes' contents, by pane id.
     pub views: BTreeMap<PaneId, View>,
     /// A viewer waiting for its pane: it fills the next viewer leaf the
@@ -239,6 +242,9 @@ pub fn run() -> Result<()> {
         }
     });
     let events = tx.clone();
+    // Asked before the reader starts: crossterm's probe blocks while
+    // another thread is in `event::read`.
+    let kitty = terminal::supports_keyboard_enhancement().unwrap_or(false);
     spawn_term_reader(tx);
 
     follow_theme(events.clone());
@@ -255,12 +261,23 @@ pub fn run() -> Result<()> {
     log_panics();
     let mut terminal = ratatui::init();
     execute!(std::io::stdout(), EnableBracketedPaste, EnableMouseCapture)?;
+    // REQ-90: Shift+Enter and the like, where the terminal can tell them
+    // apart. After init, so it lands on the alternate screen's stack (RAT-18).
+    if kitty {
+        execute!(
+            std::io::stdout(),
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        )?;
+    }
     let size = terminal.size()?;
     let mut app = App::new(client, events, leader, (size.width, size.height))?;
     if let Some(e) = theme_error {
         app.fail(format!("{e:#}"));
     }
     let result = app.event_loop(&mut terminal, rx);
+    if kitty {
+        let _ = execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
+    }
     let _ = execute!(
         std::io::stdout(),
         DisableBracketedPaste,
@@ -378,6 +395,7 @@ impl App {
             here: BTreeMap::new(),
             prs: BTreeMap::new(),
             ticks: 0,
+            told: None,
             views: BTreeMap::new(),
             pending_view: None,
             busy: None,
@@ -426,6 +444,17 @@ impl App {
             terminal.draw(|f| draw::draw(f, self))?;
         }
         Ok(())
+    }
+
+    /// REQ-85: the daemon answers the programs in panes with the colours
+    /// they sit on, so it hears of every switch (by the system, the
+    /// settings or a theme file).
+    fn tell_theme(&mut self) {
+        let theme = crate::theme::wire();
+        if self.told != Some(theme) {
+            self.told = Some(theme);
+            self.send(ClientMsg::Theme(theme));
+        }
     }
 
     fn send(&mut self, msg: ClientMsg) {
@@ -627,6 +656,7 @@ impl App {
             }
             Msg::Term(_) => {}
             Msg::Tick => {
+                self.tell_theme();
                 if self
                     .status
                     .as_ref()
@@ -684,7 +714,12 @@ impl App {
                 rows,
                 bytes,
             } => {
-                let mut parser = vt100::Parser::new(rows, cols, SCROLLBACK);
+                let mut parser = vt100::Parser::new_with_callbacks(
+                    rows,
+                    cols,
+                    SCROLLBACK,
+                    keys::Flags::default(),
+                );
                 parser.process(&bytes);
                 self.panes.insert(
                     pane,
@@ -1406,8 +1441,10 @@ impl App {
         if let Some(v) = self.panes.get_mut(&id) {
             v.parser.screen_mut().set_scrollback(0);
         }
-        let app_cursor = self.panes[&id].parser.screen().application_cursor();
-        let bytes = keys::encode(k, app_cursor);
+        let parser = &self.panes[&id].parser;
+        let screen = parser.screen();
+        let kitty = parser.callbacks().0.flags(screen.alternate_screen());
+        let bytes = keys::encode(k, screen.application_cursor(), kitty);
         if !bytes.is_empty() {
             self.send(ClientMsg::Input { pane: id, bytes });
         }
@@ -2027,7 +2064,7 @@ impl App {
     }
 
     /// `w`: asks the new worktree's name, offering the lowest free `ws-N`
-    /// (REQ-81); it starts from the current workspace's branch.
+    /// (REQ-110); it starts from the current workspace's branch.
     fn new_worktree(&mut self) {
         let Some(from) = self.current_repo_stream("a worktree") else {
             return;
@@ -2195,7 +2232,7 @@ impl App {
                 ..
             } => {
                 // The panes keep running: their cwd is the same directory
-                // at its new path (REQ-82).
+                // at its new path (REQ-111).
                 self.background(format!("renaming {}", entry.name), move || {
                     let reg = registry::default_path()?;
                     let renamed = actions::rename(&project, &entry, &text, &reg)?;

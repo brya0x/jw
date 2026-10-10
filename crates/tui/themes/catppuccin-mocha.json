@@ -1,0 +1,19 @@
+{
+  "$schema": "https://raw.githubusercontent.com/brya0x/jw/main/crates/tui/themes/schema.json",
+  "name": "catppuccin-mocha",
+  "dark": true,
+  "colors": {
+    "bg": "#1e1e2e",
+    "panel": "#181825",
+    "line": "#313244",
+    "fg": "#cdd6f4",
+    "dim": "#6c7086",
+    "sel": "#45475a",
+    "blue": "#89b4fa",
+    "green": "#a6e3a1",
+    "yellow": "#f9e2af",
+    "red": "#f38ba8",
+    "magenta": "#cba6f7",
+    "cyan": "#94e2d5"
+  }
+}

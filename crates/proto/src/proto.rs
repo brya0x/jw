@@ -15,7 +15,7 @@ pub type PaneId = u64;
 
 /// Bumped whenever a message changes shape: a client and a daemon from
 /// different builds refuse each other instead of misreading (RISK-14).
-pub const PROTOCOL: u32 = 7;
+pub const PROTOCOL: u32 = 8;
 
 /// A pane to start. `cmd` runs through `sh -c`; `None` starts `$SHELL`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -153,6 +153,9 @@ pub enum ClientMsg {
         pane: PaneId,
         state: AgentState,
     },
+    /// The colours the client draws panes on, so the daemon can answer a
+    /// program that asks for them (S14).
+    Theme(Theme),
     /// Which panes exist, for every stream: answered with `Panes`.
     List,
     /// Type `text` into the stream's agent pane once it is quiet, then
@@ -161,6 +164,26 @@ pub enum ClientMsg {
         stream: String,
         text: String,
     },
+}
+
+/// What panes sit on: whether the theme is dark, and its default
+/// foreground and background (REQ-81–83).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Theme {
+    pub dark: bool,
+    pub fg: [u8; 3],
+    pub bg: [u8; 3],
+}
+
+impl Default for Theme {
+    /// One Dark, until a client says otherwise (REQ-86).
+    fn default() -> Self {
+        Self {
+            dark: true,
+            fg: [0xab, 0xb2, 0xbf],
+            bg: [0x28, 0x2c, 0x34],
+        }
+    }
 }
 
 /// One pane as `List` reports it.
