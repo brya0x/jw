@@ -1,5 +1,5 @@
 //! jw: worktree streams in a TUI that is its own terminal multiplexer.
-//! Spec: docs/specs/rust-tui.md. Built in parts (P0…P12).
+//! Spec: docs/specs/rust-tui.md.
 
 use std::process::ExitCode;
 
@@ -9,8 +9,8 @@ mod server;
 mod skill;
 mod theme;
 
-// cli.rs says `crate::stream`, `crate::proto`…, as it did when this was one
-// crate.
+// So the modules can say `crate::stream`, `crate::proto`… across crate
+// lines.
 use jw_core::{actions, core, folders, layout, session, stream};
 use jw_proto::{client, proto};
 
@@ -63,14 +63,14 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         // Hidden: the client starts it (REQ-3); nobody types it.
-        Some("daemon") => match jw_daemon::run(&jw_proto::proto::socket_path()) {
+        Some("daemon") => match jw_daemon::run(&proto::socket_path()) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("jw daemon: {e:#}");
                 ExitCode::FAILURE
             }
         },
-        Some(name) if jw_core::session::valid(name) && args.len() == 1 => tui(Some(name)),
+        Some(name) if session::valid(name) && args.len() == 1 => tui(Some(name)),
         Some(cmd) => {
             eprintln!("jw: unknown command {cmd:?}; jw help lists them");
             ExitCode::from(2)
@@ -81,17 +81,17 @@ fn main() -> ExitCode {
 /// The TUI on session `name`, or on the last one used (REQ-64).
 fn tui(name: Option<&str>) -> ExitCode {
     let run = || -> anyhow::Result<()> {
-        let state = jw_core::core::registry::state_dir()?;
+        let state = core::registry::state_dir()?;
         let name = match name {
-            Some(n) if !jw_core::session::exists(&state, n)? => {
+            Some(n) if !session::exists(&state, n)? => {
                 anyhow::bail!("no session {n}: jw new {n} starts one here")
             }
             Some(n) => n.to_string(),
-            None => jw_core::session::last(&state),
+            None => session::last(&state),
         };
-        std::fs::create_dir_all(jw_core::session::dir(&state, &name)?)?;
-        jw_core::session::set(&name);
-        jw_core::session::set_last(&state, &name)?;
+        std::fs::create_dir_all(session::dir(&state, &name)?)?;
+        session::set(&name);
+        session::set_last(&state, &name)?;
         jw_tui::tui::run()
     };
     match run() {

@@ -127,7 +127,7 @@ fn put(slot: &AtomicPtr<Palette>, pal: Palette) {
 }
 
 /// Where the user's themes live: `themes/` in jw's config dir.
-fn user_dir() -> Result<PathBuf> {
+pub fn user_dir() -> Result<PathBuf> {
     Ok(crate::core::config::dir()?.join("themes"))
 }
 
@@ -249,7 +249,8 @@ struct Colors {
 
 fn hex(s: &str) -> Result<Color> {
     let h = s.strip_prefix('#').unwrap_or(s);
-    if h.len() != 6 {
+    // Hex digits only: `from_str_radix` alone takes a leading `+`.
+    if h.len() != 6 || !h.bytes().all(|b| b.is_ascii_hexdigit()) {
         bail!("{s:?} is not #rrggbb");
     }
     let n = u32::from_str_radix(h, 16).with_context(|| format!("{s:?} is not #rrggbb"))?;
@@ -450,6 +451,7 @@ mod tests {
         assert_ne!(p.add_bg, p.bg);
         let bad = TOKYO.replace("#1a1b26", "blue");
         assert!(parse(bad.as_bytes()).is_err());
+        assert!(parse(TOKYO.replace("#1a1b26", "#+1a1b2").as_bytes()).is_err());
         assert!(parse(TOKYO.replace("\"bg\"", "\"bgg\"").as_bytes()).is_err());
     }
 

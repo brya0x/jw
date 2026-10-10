@@ -78,6 +78,15 @@ pub struct Layout {
 }
 
 impl Layout {
+    /// Makes `node` the configured tree, as [`save_layout`] wrote it.
+    pub fn set_tree(&mut self, node: &Node) {
+        self.split = node.split;
+        self.ratio = node.ratio;
+        self.a = node.a.clone();
+        self.b = node.b.clone();
+        self.run = node.run.clone();
+    }
+
     /// The configured tree, or the default one when `[layout]` has none (REQ-8).
     pub fn tree(&self) -> Node {
         if self.split.is_none() && self.run.is_none() {
@@ -151,6 +160,87 @@ fn find_personal(dir: &Path, remote: &str, project: &str) -> Result<Option<Confi
         }
     }
     Ok(by_match.or(by_name))
+}
+
+/// The keys of `[layout]` that hold its tree; [`save_layout`] replaces them.
+const TREE_KEYS: [&str; 5] = ["split", "ratio", "a", "b", "run"];
+
+/// Writes `node` as the tree of `[layout]` in the config file at `path`,
+/// leaving every other key and table as it was (REQ-120, RAT-25). A file
+/// that doesn't exist yet gets just `[layout]`, with plain nvim.
+pub fn save_layout(path: &Path, node: &Node) -> Result<()> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e).with_context(|| path.display().to_string()),
+    };
+    let out = with_layout(&text, node);
+    toml::from_str::<Config>(&out).map_err(|e| anyhow!("{}: {}", path.display(), e.message()))?;
+    super::registry::write_atomic(path, out.as_bytes())
+}
+
+/// `text` with `[layout]`'s tree keys swapped for `node`'s.
+fn with_layout(text: &str, node: &Node) -> String {
+    let header = |l: &str| l.trim_start().starts_with('[');
+    let is_layout = |l: &str| {
+        let t = l.trim();
+        t == "[layout]" || t.starts_with("[layout]") && t[8..].trim_start().starts_with('#')
+    };
+    let lines: Vec<&str> = text.lines().collect();
+    let Some(start) = lines.iter().position(|l| is_layout(l)) else {
+        let mut out = text.trim_end().to_string();
+        if !out.is_empty() {
+            out += "\n\n";
+        }
+        return out + "[layout]\neditor = \"nvim\"\n" + &node.table();
+    };
+    let end = lines[start + 1..]
+        .iter()
+        .position(|l| header(l))
+        .map_or(lines.len(), |i| start + 1 + i);
+    // Keep the section's other lines; drop the tree keys, values that span
+    // lines included (TOML 1.1 inline tables may).
+    let mut kept = Vec::new();
+    let mut depth = 0i32;
+    for l in &lines[start + 1..end] {
+        if depth > 0 {
+            depth += nesting(l);
+            continue;
+        }
+        let key = l.split('=').next().unwrap_or("").trim();
+        if l.contains('=') && TREE_KEYS.contains(&key) {
+            depth = nesting(l);
+            continue;
+        }
+        kept.push(*l);
+    }
+    while kept.last().is_some_and(|l| l.trim().is_empty()) {
+        kept.pop();
+    }
+    let mut out: Vec<String> = lines[..=start].iter().map(|l| l.to_string()).collect();
+    out.extend(kept.iter().map(|l| l.to_string()));
+    out.extend(node.table().lines().map(str::to_string));
+    if end < lines.len() {
+        out.push(String::new());
+        out.extend(lines[end..].iter().map(|l| l.to_string()));
+    }
+    out.join("\n") + "\n"
+}
+
+/// How many brackets `line` opens minus how many it closes, outside strings.
+fn nesting(line: &str) -> i32 {
+    let (mut depth, mut quote) = (0, None);
+    for c in line.chars() {
+        match (quote, c) {
+            (None, '"' | '\'') => quote = Some(c),
+            (Some(q), c) if c == q => quote = None,
+            (None, '{' | '[') => depth += 1,
+            (None, '}' | ']') => depth -= 1,
+            (None, '#') => break,
+            _ => {}
+        }
+    }
+    depth
 }
 
 /// Parses one config file; `None` when it doesn't exist.
@@ -521,6 +611,42 @@ mod tests {
         let c = repo_file(&env, "[ports]\nweb = 0\napi = 3\n").unwrap();
         let p = c.ports_for(4);
         assert_eq!((p["web"], p["api"]), (20400, 20403));
+    }
+
+    /// REQ-120: only `[layout]`'s tree changes; comments, `editor` and the
+    /// other tables stay.
+    #[test]
+    fn save_layout_swaps_only_the_tree() {
+        let two = Node::split(Dir::Right, 0.5, Node::leaf("editor"), Node::leaf("agent"));
+        let text = "# mine\nsetup = [\n  \"pnpm i\",\n]\n\n[layout]\neditor = \"nvim\"   # plain\nsplit = \"down\"\nratio = 0.7\na = {\n  run = \"shell\",\n}\nb = { run = \"agent\" }\n\n[[env]]\nfile = \".env\"\n";
+        let out = with_layout(text, &two);
+        assert_eq!(
+            out,
+            "# mine\nsetup = [\n  \"pnpm i\",\n]\n\n[layout]\neditor = \"nvim\"   # plain\nsplit = \"right\"\nratio = 0.5\na = { run = \"editor\" }\nb = { run = \"agent\" }\n\n[[env]]\nfile = \".env\"\n"
+        );
+        let c: Config = toml::from_str(&out).unwrap();
+        assert_eq!(c.layout.tree(), two);
+        assert_eq!((c.layout.editor.as_str(), c.env.len()), ("nvim", 1));
+
+        let one = Node::leaf("shell");
+        assert_eq!(
+            with_layout("", &one),
+            "[layout]\neditor = \"nvim\"\nrun = \"shell\"\n"
+        );
+        let appended = with_layout("[agent]\ndefault = \"codex\"\n", &one);
+        assert!(
+            appended.ends_with("codex\"\n\n[layout]\neditor = \"nvim\"\nrun = \"shell\"\n"),
+            "{appended}"
+        );
+        let c: Config = toml::from_str(&with_layout(&out, &one)).unwrap();
+        assert_eq!(c.layout.tree(), one);
+
+        let env = setup();
+        let path = env.repo.join("saved.toml");
+        save_layout(&path, &two).unwrap();
+        save_layout(&path, &one).unwrap();
+        let c: Config = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(c.layout.tree(), one);
     }
 
     #[test]

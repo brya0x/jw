@@ -11,6 +11,7 @@ mod keys;
 mod mdview;
 mod modal;
 mod settings_view;
+mod setup;
 
 use std::collections::BTreeMap;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -29,7 +30,7 @@ use crate::actions::{self, NewOptions, Project};
 use crate::client::Client;
 use crate::connectors::PullRequests;
 use crate::core::registry::{self, Entry, Registry};
-use crate::layout::{Dir, Rect, Tree};
+use crate::layout::{Dir, Node, Rect, Tree};
 use crate::proto::{
     AgentState, ClientMsg, DaemonMsg, NewPane, PROTOCOL, PaneId, PaneInfo, PaneLeaf,
 };
@@ -69,7 +70,11 @@ enum Job {
     Created {
         entry: Entry,
         setup: bool,
+        /// The `.jw.toml` the setup step wrote.
+        wrote: Option<String>,
     },
+    /// What the setup step starts from, found off the UI thread.
+    SetupReady(Box<setup::Setup>),
     /// done's checks passed: ask before deleting.
     DoneReady {
         entry: Entry,
@@ -141,6 +146,24 @@ const SCROLLBACK: usize = 5_000;
 
 /// Rows the wheel moves at a time.
 const WHEEL: usize = 3;
+
+/// The longest a burst of messages holds back the next frame.
+const FRAME: Duration = Duration::from_millis(16);
+
+/// Applies what is queued, waiting up to 2 ms for each next message, so a
+/// burst of output costs one frame, not one per chunk; but for `budget` at
+/// most, so output that never pauses still redraws. `apply` returns false
+/// to stop.
+fn drain<T>(rx: &Receiver<T>, budget: Duration, mut apply: impl FnMut(T) -> bool) {
+    let until = Instant::now() + budget;
+    while let Some(left) = until.checked_duration_since(Instant::now())
+        && let Ok(m) = rx.recv_timeout(left.min(Duration::from_millis(2)))
+    {
+        if !apply(m) {
+            return;
+        }
+    }
+}
 
 /// How long a status message stays.
 const STATUS_FOR: Duration = Duration::from_secs(4);
@@ -433,14 +456,10 @@ impl App {
                 _ => rx.recv().context("event channels closed")?,
             };
             self.handle(first);
-            // Apply everything already queued before drawing once: a burst
-            // of output costs one frame, not one per chunk.
-            while let Ok(m) = rx.recv_timeout(Duration::from_millis(2)) {
+            drain(&rx, FRAME, |m| {
                 self.handle(m);
-                if self.quit {
-                    break;
-                }
-            }
+                !self.quit
+            });
             terminal.draw(|f| draw::draw(f, self))?;
         }
         Ok(())
@@ -472,18 +491,13 @@ impl App {
         if actions::fill_roots(&mut reg) {
             reg.save(&reg_path)?;
         }
+        let session = crate::session::current();
         let mut groups: Vec<(Entry, Vec<Entry>)> = folders
             .folders
             .iter()
-            .map(|f| {
-                (
-                    crate::folders::entry_for(f, &crate::session::current()),
-                    Vec::new(),
-                )
-            })
+            .map(|f| (crate::folders::entry_for(f, &session), Vec::new()))
             .collect();
         let mut by_project: BTreeMap<String, Vec<Entry>> = BTreeMap::new();
-        let session = crate::session::current();
         for e in reg
             .entries
             .into_iter()
@@ -557,7 +571,6 @@ impl App {
         }
         let tx = self.events.clone();
         thread::spawn(move || {
-            use crate::connectors::PullRequests;
             let gh = crate::connectors::github::Client::default();
             let prs = worktrees
                 .into_iter()
@@ -818,6 +831,18 @@ impl App {
                 Outcome::Stay => {}
                 Outcome::Cancel => self.modal = None,
                 Outcome::Submit => self.submit_modal(),
+                Outcome::Back => {
+                    if let Some(Modal::Setup(s)) = self.modal.take() {
+                        let s = *s;
+                        self.modal = Some(Modal::New {
+                            plan: modal::new_plan(&s.project, &s.name),
+                            text: s.name,
+                            picked: false,
+                            from: s.from,
+                            project: s.project,
+                        });
+                    }
+                }
             }
             return;
         }
@@ -880,36 +905,37 @@ impl App {
             KeyCode::Char('K') => self.move_pane(0, -1),
             KeyCode::Char('J') => self.move_pane(0, 1),
             KeyCode::Char('q') => self.quit = true,
-            code if self.action(code).is_some() => match self.action(code).unwrap_or("") {
-                "switch" => self.ask_switch(),
-                "previous" => self.go_back(),
-                "open" => self.ask_folder(),
-                "file" => self.ask_file(),
-                "sessions" => self.ask_session(),
-                "settings" => self.ask_settings(),
-                "new" => self.new_worktree(),
-                "rename" => self.ask_rename(),
-                "sync" => self.run_sync(),
-                "diff" => self.open_diff(),
-                "remove" => self.ask_remove(),
-                "pane" => self.new_pane(),
-                "close" => self.close_pane(),
-                "name" => self.ask_name(),
-                "full" => {
+            code => match self.action(code) {
+                Some("switch") => self.ask_switch(),
+                Some("previous") => self.go_back(),
+                Some("open") => self.ask_folder(),
+                Some("file") => self.ask_file(),
+                Some("sessions") => self.ask_session(),
+                Some("settings") => self.ask_settings(),
+                Some("new") => self.new_worktree(),
+                Some("rename") => self.ask_rename(),
+                Some("sync") => self.run_sync(),
+                Some("diff") => self.open_diff(),
+                Some("remove") => self.ask_remove(),
+                Some("pane") => self.new_pane(),
+                Some("close") => self.close_pane(),
+                Some("name") => self.ask_name(),
+                Some("layout") => self.ask_save_layout(),
+                Some("full") => {
                     self.full = !self.full;
                     self.fit();
                 }
-                _ => {}
+                Some(_) => {}
+                None => {
+                    let key = match code {
+                        KeyCode::Char(' ') => "␣".to_string(),
+                        KeyCode::Char(c) => c.to_string(),
+                        other => format!("{other:?}").to_lowercase(),
+                    };
+                    let l = self.leader.label();
+                    self.fail(format!("{l} {key} does nothing · {l} ? shows the keys"));
+                }
             },
-            code => {
-                let key = match code {
-                    KeyCode::Char(' ') => "␣".to_string(),
-                    KeyCode::Char(c) => c.to_string(),
-                    other => format!("{other:?}").to_lowercase(),
-                };
-                let l = self.leader.label();
-                self.fail(format!("{l} {key} does nothing · {l} ? shows the keys"));
-            }
         }
     }
 
@@ -1031,7 +1057,8 @@ impl App {
         }
     }
 
-    /// `setup`: run the config's setup in the shell pane first (new streams).
+    /// `setup`: run the config's setup before the panes' programs (new
+    /// streams, REQ-119).
     fn open_entry(&mut self, entry: Entry, setup: bool) {
         if self.current().is_some_and(|c| c.id == entry.id) {
             return;
@@ -1056,14 +1083,9 @@ impl App {
             }
         };
         self.send(ClientMsg::Detach);
-        self.panes.clear();
-        self.views.clear();
-        self.pending_view = None;
-        self.tree = None;
-        self.focus = None;
+        self.forget_workspace();
         let already = self.is_open(&entry.id);
         self.active = Some(stream);
-        self.full = false;
 
         if already {
             self.send(ClientMsg::Attach {
@@ -1077,10 +1099,7 @@ impl App {
     /// Asks the daemon to start the workspace's panes in its layout's shape.
     fn start_panes(&mut self, setup: bool) -> Result<()> {
         let stream = self.active.clone().context("no workspace")?;
-        let (specs, note) = stream.open_specs(setup)?;
-        if let Some(n) = note {
-            self.say(n);
-        }
+        let specs = stream.open_specs(setup)?;
         let sizes = stream.tree.rects(self.stage());
         let mut panes = specs.into_iter().zip(sizes).map(|(spec, rect)| {
             let (cols, rows) = inner(rect);
@@ -1275,6 +1294,17 @@ impl App {
         self.focus.filter(|f| self.panes.contains_key(f))
     }
 
+    /// The first sidebar row shown when `shown` rows fit: the current one
+    /// stays on screen.
+    pub fn sidebar_first(&self, shown: usize) -> usize {
+        let current = self
+            .rows
+            .iter()
+            .position(|r| self.current().is_some_and(|c| c.id == r.entry.id))
+            .unwrap_or(0);
+        current.saturating_sub(shown.saturating_sub(1))
+    }
+
     /// The sidebar row under `y`, as the sidebar draws them (REQ-50).
     fn sidebar_row_at(&self, y: u16) -> Option<usize> {
         let rows = self.size.1.saturating_sub(1).saturating_sub(4) as usize;
@@ -1282,12 +1312,7 @@ impl App {
         if y >= rows {
             return None;
         }
-        let current = self
-            .rows
-            .iter()
-            .position(|r| self.current().is_some_and(|c| c.id == r.entry.id))
-            .unwrap_or(0);
-        let i = current.saturating_sub(rows.saturating_sub(1)) + y;
+        let i = self.sidebar_first(rows) + y;
         (i < self.rows.len()).then_some(i)
     }
 
@@ -1594,8 +1619,7 @@ impl App {
     /// plain folder gets a word instead.
     fn current_repo_stream(&mut self, action: &str) -> Option<Entry> {
         let Some(entry) = self.current().cloned() else {
-            let l = self.leader.label();
-            self.fail(format!("no workspace open: {l} o opens a folder"));
+            self.no_workspace();
             return None;
         };
         if crate::folders::is_folder(&entry) && entry.branch.is_empty() {
@@ -1606,6 +1630,14 @@ impl App {
             return None;
         }
         Some(entry)
+    }
+
+    fn no_workspace(&mut self) {
+        let l = self.leader.label();
+        self.fail(format!(
+            "no workspace open: {l} {} opens a folder",
+            key("open")
+        ));
     }
 
     /// The current workspace when it is a worktree; a project's own folder
@@ -1826,18 +1858,7 @@ impl App {
         }
         if crate::session::current() == old {
             crate::session::set(new);
-            self.send(ClientMsg::Detach);
-            self.active = None;
-            self.panes.clear();
-            self.views.clear();
-            self.tree = None;
-            self.focus = None;
-            self.recent = load_recent();
-            self.fresh = true;
-            if let Err(e) = self.reload() {
-                self.fail(format!("{e:#}"));
-            }
-            self.send(ClientMsg::List);
+            self.show_session();
         }
         self.done(format!("session {old} is {new} now"));
     }
@@ -1851,7 +1872,25 @@ impl App {
         if let Ok(state) = registry::state_dir() {
             let _ = crate::session::set_last(&state, name);
         }
+        self.show_session();
+        self.done(format!("session {name}"));
+    }
+
+    /// The session just set, from nothing on screen: the next List opens
+    /// its last workspace.
+    fn show_session(&mut self) {
         self.send(ClientMsg::Detach);
+        self.forget_workspace();
+        self.recent = load_recent();
+        self.fresh = true;
+        if let Err(e) = self.reload() {
+            self.fail(format!("{e:#}"));
+        }
+        self.send(ClientMsg::List);
+    }
+
+    /// Nothing on screen: no workspace, panes, viewers or focus.
+    fn forget_workspace(&mut self) {
         self.active = None;
         self.panes.clear();
         self.views.clear();
@@ -1859,13 +1898,6 @@ impl App {
         self.tree = None;
         self.focus = None;
         self.full = false;
-        self.recent = load_recent();
-        self.fresh = true;
-        if let Err(e) = self.reload() {
-            self.fail(format!("{e:#}"));
-        }
-        self.send(ClientMsg::List);
-        self.done(format!("session {name}"));
     }
 
     /// `+ create` in the session picker: a session that starts in the
@@ -1929,9 +1961,7 @@ impl App {
     /// `^␣ /`: the files of the current workspace (REQ-42).
     fn ask_file(&mut self) {
         let Some(e) = self.current().cloned() else {
-            let l = self.leader.label();
-            self.fail(format!("no workspace open: {l} o opens a folder"));
-            return;
+            return self.no_workspace();
         };
         let root = std::path::PathBuf::from(&e.path);
         let files = finder::list_files(&root, 20_000);
@@ -2063,6 +2093,77 @@ impl App {
         }
     }
 
+    /// The current workspace's panes as a layout: each pane's role back to
+    /// the run it came from in the opening tree (RAT-24), a pane added later
+    /// as a shell, viewers left out.
+    fn live_layout(&self) -> Option<Node> {
+        let s = self.active.as_ref()?;
+        let runs: BTreeMap<String, String> = s
+            .tree
+            .leaves()
+            .into_iter()
+            .map(|l| (l.role, l.run))
+            .collect();
+        let run = |l: &PaneLeaf| -> String {
+            if l.role.starts_with("view:") {
+                return String::new();
+            }
+            let base = match l.role.rsplit_once('-') {
+                Some((b, n)) if n.chars().all(|c| c.is_ascii_digit()) => b,
+                _ => &l.role,
+            };
+            runs.get(&l.role)
+                .or_else(|| runs.get(base))
+                .cloned()
+                .unwrap_or_else(|| match base {
+                    "editor" | "agent" => base.to_string(),
+                    b if b.starts_with("dev:") => b.to_string(),
+                    _ => "shell".into(),
+                })
+        };
+        prune(self.tree.as_ref()?.to_node(&run)).map(|n| even(&n))
+    }
+
+    /// REQ-121: a worktree whose panes aren't its project's layout.
+    pub fn layout_changed(&self) -> bool {
+        let Some(s) = &self.active else {
+            return false;
+        };
+        !crate::folders::is_folder(&s.entry)
+            && self
+                .live_layout()
+                .is_some_and(|live| live != even(&s.cfg.layout.tree()))
+    }
+
+    /// `p`: saves the panes on screen as the project's layout (REQ-120).
+    fn ask_save_layout(&mut self) {
+        let Some(s) = self.active.clone() else {
+            return;
+        };
+        let Some(new) = self.live_layout() else {
+            return;
+        };
+        let path = match &s.cfg.source {
+            Some(p) => p.clone(),
+            None => match crate::connectors::git::Repo::open(std::path::Path::new(&s.entry.path)) {
+                Ok(repo) => repo.root.join(".jw.toml"),
+                Err(_) => {
+                    self.fail(format!(
+                        "{} is not a git project: no layout to save",
+                        s.entry.name
+                    ));
+                    return;
+                }
+            },
+        };
+        let old = s.cfg.source.as_ref().map(|_| even(&s.cfg.layout.tree()));
+        if old.as_ref() == Some(&new) {
+            self.say("the panes already match the project's layout".into());
+            return;
+        }
+        self.modal = Some(Modal::SaveLayout { path, old, new });
+    }
+
     /// `w`: asks the new worktree's name, offering the lowest free `ws-N`
     /// (REQ-110); it starts from the current workspace's branch.
     fn new_worktree(&mut self) {
@@ -2095,16 +2196,7 @@ impl App {
     /// Creates the worktree the `w` modal named, set up and shown at once.
     fn create_worktree(&mut self, from: Entry, project: Project, name: String) {
         self.background(format!("creating {name}"), move || {
-            let o = NewOptions {
-                name,
-                from: from.branch,
-                branch: String::new(),
-            };
-            let entry = actions::new_stream(&project, &o, &registry::default_path()?)?;
-            Ok(Job::Created {
-                entry,
-                setup: !project.cfg.setup.is_empty(),
-            })
+            created(&project, from, name, None)
         });
     }
 
@@ -2117,8 +2209,9 @@ impl App {
         if crate::folders::is_folder(&entry) {
             let l = self.leader.label();
             self.fail(format!(
-                "{} is a project folder: jw never deletes it. {l} x on its last pane closes it",
-                entry.name
+                "{} is a project folder: jw never deletes it. {l} {} on its last pane closes it",
+                entry.name,
+                key("close")
             ));
             return;
         }
@@ -2219,12 +2312,50 @@ impl App {
         match m {
             Modal::Close { entry, .. } => self.close(&entry),
             Modal::ClosePane { pane, .. } => self.send(ClientMsg::Kill { pane }),
+            Modal::SaveLayout { path, new, .. } => {
+                match crate::core::config::save_layout(&path, &new) {
+                    Ok(()) => {
+                        if let Some(s) = &mut self.active {
+                            s.cfg.layout.set_tree(&new);
+                            s.cfg.source.get_or_insert(path.clone());
+                        }
+                        self.done(format!("saved the layout to {}", finder::tilde(&path)));
+                    }
+                    Err(e) => self.fail(format!("{e:#}")),
+                }
+            }
+            Modal::New {
+                from,
+                project,
+                text,
+                ..
+            } if project.cfg.source.is_none() => {
+                // REQ-115: a project with no config is set up first.
+                self.background(format!("looking at {}", project.name), move || {
+                    let draft = crate::init::detect(&project.repo, &project.name, false)?;
+                    Ok(Job::SetupReady(Box::new(setup::Setup::new(
+                        from, project, text, &draft,
+                    ))))
+                });
+            }
             Modal::New {
                 from,
                 project,
                 text,
                 ..
             } => self.create_worktree(from, project, text),
+            Modal::Setup(s) => {
+                // REQ-117: write .jw.toml, then create with it.
+                let s = *s;
+                let choice = s.choice();
+                let (from, name) = (s.from, s.name);
+                let repo = s.project.repo;
+                self.background(format!("creating {name}"), move || {
+                    let path = crate::init::write_project(&repo, &choice)?;
+                    let project = Project::open(&repo.root)?;
+                    created(&project, from, name, Some(path.display().to_string()))
+                });
+            }
             Modal::Rename {
                 entry,
                 project,
@@ -2269,17 +2400,7 @@ impl App {
                 project,
                 plan,
                 ..
-            } => {
-                self.close(&entry);
-                self.background(format!("removing {}", entry.name), move || {
-                    let reg = registry::default_path()?;
-                    let note = actions::rm(&project, &entry, &plan, &reg)?;
-                    Ok(Job::Removed {
-                        name: entry.name,
-                        note,
-                    })
-                });
-            }
+            } => self.remove(entry, project, plan),
             Modal::Rm {
                 entry,
                 project,
@@ -2297,18 +2418,23 @@ impl App {
                     });
                     return;
                 }
-                // Panes first, so no process holds the directory.
-                self.close(&entry);
-                self.background(format!("removing {}", entry.name), move || {
-                    let reg = registry::default_path()?;
-                    let note = actions::rm(&project, &entry, &plan, &reg)?;
-                    Ok(Job::Removed {
-                        name: entry.name,
-                        note,
-                    })
-                });
+                self.remove(entry, project, plan);
             }
         }
+    }
+
+    /// Deletes a worktree that done's or rm's checks passed: its panes
+    /// first, so no process holds the directory.
+    fn remove(&mut self, entry: Entry, project: Project, plan: actions::RmPlan) {
+        self.close(&entry);
+        self.background(format!("removing {}", entry.name), move || {
+            let reg = registry::default_path()?;
+            let note = actions::rm(&project, &entry, &plan, &reg)?;
+            Ok(Job::Removed {
+                name: entry.name,
+                note,
+            })
+        });
     }
 
     /// A renamed worktree's panes stay as they are: the daemon learns the
@@ -2337,11 +2463,7 @@ impl App {
         });
         self.daemon_panes.retain(|p| p.stream != entry.id);
         if self.current().is_some_and(|c| c.id == entry.id) {
-            self.active = None;
-            self.panes.clear();
-            self.tree = None;
-            self.focus = None;
-            self.full = false;
+            self.forget_workspace();
         }
         if crate::folders::is_folder(entry) {
             let dir = entry.path.clone();
@@ -2369,10 +2491,19 @@ impl App {
         self.busy = None;
         let reload = self.reload();
         match job {
-            Job::Created { entry, setup } => {
-                self.done(format!("created {} on {}", entry.name, entry.branch));
+            Job::Created {
+                entry,
+                setup,
+                wrote,
+            } => {
+                let mut msg = format!("created {} on {}", entry.name, entry.branch);
+                if let Some(w) = wrote {
+                    msg += &format!("; wrote {w}");
+                }
+                self.done(msg);
                 self.open_entry(entry, setup);
             }
+            Job::SetupReady(s) => self.modal = Some(Modal::Setup(s)),
             Job::Removed { name, note } => {
                 self.done(match note {
                     Some(n) => format!("removed {name}; {n}"),
@@ -2436,6 +2567,21 @@ impl App {
     }
 }
 
+/// Makes worktree `name` of `project` from `from`'s branch (worker thread).
+fn created(project: &Project, from: Entry, name: String, wrote: Option<String>) -> Result<Job> {
+    let o = NewOptions {
+        name,
+        from: from.branch,
+        branch: String::new(),
+    };
+    let entry = actions::new_stream(project, &o, &registry::default_path()?)?;
+    Ok(Job::Created {
+        entry,
+        setup: !project.cfg.setup.is_empty(),
+        wrote,
+    })
+}
+
 /// The current session's directory, where `recent.json` lives.
 fn session_dir() -> Option<std::path::PathBuf> {
     let state = registry::state_dir().ok()?;
@@ -2472,10 +2618,119 @@ fn save_recent(ids: &[String]) {
     }
 }
 
+/// The key an action has now, as shown (`␣`, `tab`, `o`).
+fn key(action: &str) -> String {
+    crate::settings::label(&crate::settings::get().key(action))
+}
+
 /// Shells don't count as "running something" when closing.
 const SHELLS: &[&str] = &["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "nu"];
 
 /// The terminal size inside a pane's border.
 fn inner(r: Rect) -> (u16, u16) {
     (r.w.saturating_sub(2).max(1), r.h.saturating_sub(2).max(1))
+}
+
+/// `n` without the leaves whose run is empty; their siblings take the space.
+fn prune(n: Node) -> Option<Node> {
+    if n.run.is_some() {
+        return n.run.as_deref().is_some_and(|r| !r.is_empty()).then_some(n);
+    }
+    let (Some(dir), Some(a), Some(b)) = (n.split, n.a, n.b) else {
+        return None;
+    };
+    match (prune(*a), prune(*b)) {
+        (Some(a), Some(b)) => Some(Node::split(dir, n.ratio.unwrap_or(0.5), a, b)),
+        (one, other) => one.or(other),
+    }
+}
+
+/// `n` with every ratio given and rounded to hundredths, so a layout and
+/// the live tree it opened compare equal.
+fn even(n: &Node) -> Node {
+    match (n.split, &n.a, &n.b) {
+        (Some(dir), Some(a), Some(b)) => Node::split(
+            dir,
+            (n.ratio.unwrap_or(0.5) * 100.0).round() / 100.0,
+            even(a),
+            even(b),
+        ),
+        _ => n.clone(),
+    }
+}
+
+#[cfg(test)]
+mod drain_tests {
+    use super::drain;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    /// A burst is applied whole, then drawn.
+    #[test]
+    fn applies_what_is_queued() {
+        let (tx, rx) = mpsc::channel();
+        for i in 0..100 {
+            tx.send(i).unwrap();
+        }
+        let mut got = 0;
+        drain(&rx, Duration::from_secs(5), |_| {
+            got += 1;
+            true
+        });
+        assert_eq!(got, 100);
+    }
+
+    /// Output that never pauses for 2 ms still gets a frame.
+    #[test]
+    fn a_stream_that_never_pauses_still_redraws() {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            while tx.send(()).is_ok() {
+                std::thread::sleep(Duration::from_micros(200));
+            }
+        });
+        let start = Instant::now();
+        drain(&rx, Duration::from_millis(20), |()| true);
+        assert!(start.elapsed() < Duration::from_millis(500));
+    }
+
+    #[test]
+    fn stops_when_asked() {
+        let (tx, rx) = mpsc::channel();
+        for i in 0..10 {
+            tx.send(i).unwrap();
+        }
+        let mut got = Vec::new();
+        drain(&rx, Duration::from_secs(5), |i| {
+            got.push(i);
+            i < 3
+        });
+        assert_eq!(got, [0, 1, 2, 3]);
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::{even, prune};
+    use crate::layout::{Dir, Node};
+
+    /// REQ-120, 121: viewers drop out, and a missing ratio equals 0.5.
+    #[test]
+    fn live_layouts_compare_with_their_config() {
+        let t = Node::split(
+            Dir::Down,
+            0.7,
+            Node::split(Dir::Right, 0.5, Node::leaf("editor"), Node::leaf("")),
+            Node::leaf("shell"),
+        );
+        let want = Node::split(Dir::Down, 0.7, Node::leaf("editor"), Node::leaf("shell"));
+        assert_eq!(prune(t), Some(want));
+        assert_eq!(prune(Node::leaf("")), None);
+        let mut bare = Node::split(Dir::Right, 0.5, Node::leaf("a"), Node::leaf("b"));
+        bare.ratio = None;
+        assert_eq!(
+            even(&bare),
+            Node::split(Dir::Right, 0.5, Node::leaf("a"), Node::leaf("b"))
+        );
+    }
 }

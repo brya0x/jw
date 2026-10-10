@@ -11,8 +11,11 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
+use unicode_width::UnicodeWidthChar;
+
 use crate::diff::{self, File, Kind, Status};
 use crate::theme::p;
+use crate::view::md::truncate;
 
 const TREE: u16 = 30;
 
@@ -100,10 +103,11 @@ impl DiffView {
         out
     }
 
-    /// The file the top of the view is in.
+    /// The file the top of the view is in; 0 with no files.
     fn current(&self, items: &[Item]) -> usize {
-        items[..=self.scroll.min(items.len().saturating_sub(1))]
+        items
             .iter()
+            .take(self.scroll + 1)
             .rev()
             .find_map(|i| match i {
                 Item::File(f) => Some(*f),
@@ -162,10 +166,10 @@ impl DiffView {
                 self.goto_file(f);
             }
             KeyCode::Enter => {
-                let f = self.current(&items);
-                let path = &self.files[f].path;
-                if self.files[f].status != Status::Deleted {
-                    return Action::Open(path.clone());
+                if let Some(file) = self.files.get(self.current(&items))
+                    && file.status != Status::Deleted
+                {
+                    return Action::Open(file.path.clone());
                 }
             }
             _ => {}
@@ -286,13 +290,9 @@ impl DiffView {
         self.height = body.height as usize;
         let mut lines = Vec::with_capacity(self.height);
         // The current file's header stays on top while scrolling through it.
-        let mut start = self.scroll;
-        if !matches!(items.get(start), Some(Item::File(_))) {
-            lines.push(self.file_header(current, body.width));
-        } else {
-            lines.push(self.file_header(current, body.width));
-            start += 1;
-        }
+        lines.push(self.file_header(current, body.width));
+        let start =
+            self.scroll + usize::from(matches!(items.get(self.scroll), Some(Item::File(_))));
         for item in items.iter().skip(start).take(self.height.saturating_sub(1)) {
             lines.push(self.item_line(*item, body.width));
         }
@@ -332,7 +332,7 @@ impl DiffView {
                     format!(" {mark} "),
                     Style::default().fg(if on { p().blue } else { p().green }),
                 ),
-                Span::styled(fit(name, room_for_name), style),
+                Span::styled(truncate(name, room_for_name), style),
                 Span::raw(" "),
                 Span::styled(counts, Style::default().fg(p().dim)),
             ]);
@@ -379,7 +379,7 @@ impl DiffView {
         if self.viewed.contains(&f) {
             spans.push(Span::styled(" ✓ viewed ", Style::default().fg(p().green)));
         }
-        let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+        let used: usize = spans.iter().map(Span::width).sum();
         spans.push(Span::raw(" ".repeat((width as usize).saturating_sub(used))));
         Line::from(spans).style(Style::default().bg(p().panel))
     }
@@ -499,38 +499,39 @@ fn marked(
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut used = 0;
     let mut at = 0;
-    'outer: for piece in crate::view::highlight::highlight_line(&text, path) {
+    let paint = |changed: Option<bool>, fg: Color| {
+        let bg = if changed == Some(true) { word_bg } else { bg };
+        Style::default().fg(fg).bg(bg)
+    };
+    let mut full = false;
+    for piece in crate::view::highlight::highlight_line(&text, path) {
         let fg = piece.style.fg.unwrap_or(p().fg);
         let mut run = String::new();
         let mut run_changed = None;
         for c in piece.content.chars() {
-            if used >= width {
-                break 'outer;
+            let cw = c.width().unwrap_or(0);
+            if used + cw > width {
+                full = true;
+                break;
             }
             let changed = in_words(at);
             if run_changed.is_some_and(|r| r != changed) {
-                let bg = if run_changed == Some(true) {
-                    word_bg
-                } else {
-                    bg
-                };
                 spans.push(Span::styled(
                     std::mem::take(&mut run),
-                    Style::default().fg(fg).bg(bg),
+                    paint(run_changed, fg),
                 ));
             }
             run_changed = Some(changed);
             run.push(c);
             at += c.len_utf8();
-            used += 1;
+            used += cw;
         }
+        // The run the cut fell in still shows, up to the cut.
         if !run.is_empty() {
-            let bg = if run_changed == Some(true) {
-                word_bg
-            } else {
-                bg
-            };
-            spans.push(Span::styled(run, Style::default().fg(fg).bg(bg)));
+            spans.push(Span::styled(run, paint(run_changed, fg)));
+        }
+        if full {
+            break;
         }
     }
     if used < width {
@@ -546,11 +547,42 @@ fn expand_tabs(s: &str) -> String {
     s.replace('\t', "    ")
 }
 
-fn fit(s: &str, width: usize) -> String {
-    let n = s.chars().count();
-    if n <= width {
-        return s.to_string();
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_changes_take_any_key_and_any_width() {
+        let mut v = DiffView::new("t".into(), "/r".into(), Vec::new());
+        for c in ['t', 'v', 'j', 'G'] {
+            v.key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        assert!(matches!(
+            v.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            Action::None
+        ));
+        let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, 10)).unwrap();
+        t.draw(|f| v.draw(f, f.area())).unwrap();
     }
-    let keep: String = s.chars().take(width.saturating_sub(1)).collect();
-    format!("{keep}…")
+
+    fn text(spans: &[Span]) -> String {
+        spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn a_long_line_shows_up_to_the_cut() {
+        let spans = marked("let x = 1; // a comment", 12, &[], p().bg, p().bg, "a.rs");
+        assert_eq!(text(&spans), "let x = 1; /");
+        assert_eq!(
+            text(&marked("abcdefgh", 5, &[], p().bg, p().bg, "a.txt")),
+            "abcde"
+        );
+    }
+
+    #[test]
+    fn wide_characters_keep_to_their_column() {
+        let spans = marked("中文中文", 5, &[], p().bg, p().bg, "a.txt");
+        assert_eq!(text(&spans), "中文 ");
+        assert_eq!(spans.iter().map(Span::width).sum::<usize>(), 5);
+    }
 }

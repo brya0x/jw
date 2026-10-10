@@ -82,14 +82,7 @@ impl Folders {
 
     /// Temp file and rename, like the registry.
     pub fn save(&self, path: &Path) -> Result<()> {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        let mut tmp = path.as_os_str().to_owned();
-        tmp.push(".tmp");
-        std::fs::write(&tmp, serde_json::to_vec_pretty(self)?)?;
-        std::fs::rename(&tmp, path)?;
-        Ok(())
+        registry::write_atomic(path, &serde_json::to_vec_pretty(self)?)
     }
 
     /// Adds `dir` at the end unless it is there; true when it was added.
@@ -140,7 +133,8 @@ pub fn load(state: &Path) -> Result<Folders> {
             }
         }
         all.save(&path)?;
-        std::fs::rename(&free, state.join("free.json.migrated"))?;
+        std::fs::rename(&free, state.join("free.json.migrated"))
+            .with_context(|| free.display().to_string())?;
     }
     Ok(all)
 }
@@ -164,9 +158,6 @@ pub fn repo(dir: &Path) -> Option<Repo> {
     same(&repo.root, dir).then_some(repo)
 }
 
-/// A folder as the sidebar and the actions see it. A repository's folder
-/// carries its project name and the branch checked out; a plain folder has
-/// no branch.
 /// The workspace of a folder of session `session`, with its name and its
 /// agent's conversation.
 pub fn entry_for(f: &Folder, session: &str) -> Entry {
@@ -179,6 +170,9 @@ pub fn entry_for(f: &Folder, session: &str) -> Entry {
     e
 }
 
+/// A folder as the sidebar and the actions see it. A repository's folder
+/// carries its project name and the branch checked out; a plain folder has
+/// no branch.
 pub fn entry(dir: &str, opened: bool) -> Entry {
     let path = Path::new(dir);
     let name = path
@@ -211,16 +205,6 @@ pub fn config() -> Config {
     cfg.agent.claude.resume = "claude --continue".into();
     cfg.sync = "rebase".into();
     cfg
-}
-
-/// `~` and `~/…` to the home directory.
-pub fn expand_home(p: &str) -> PathBuf {
-    match (p.strip_prefix('~'), std::env::var_os("HOME")) {
-        (Some(rest), Some(home)) if rest.is_empty() || rest.starts_with('/') => {
-            PathBuf::from(home).join(rest.trim_start_matches('/'))
-        }
-        _ => PathBuf::from(p),
-    }
 }
 
 #[cfg(test)]

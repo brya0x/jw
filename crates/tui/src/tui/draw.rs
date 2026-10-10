@@ -8,7 +8,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
-use super::{App, PaneView, SIDEBAR};
+use super::{App, PaneView, SIDEBAR, key};
 use crate::layout::Rect;
 use crate::theme::p;
 
@@ -83,12 +83,7 @@ fn sidebar(f: &mut Frame, app: &App) {
         Line::default(),
     ];
     let rows = inner.height.saturating_sub(4) as usize;
-    let current = app
-        .rows
-        .iter()
-        .position(|r| app.current().is_some_and(|c| c.id == r.entry.id))
-        .unwrap_or(0);
-    let first = current.saturating_sub(rows.saturating_sub(1));
+    let first = app.sidebar_first(rows);
     for (i, row) in app.rows.iter().enumerate().skip(first).take(rows) {
         let e = &row.entry;
         let open = app.is_open(&e.id);
@@ -110,8 +105,9 @@ fn sidebar(f: &mut Frame, app: &App) {
             if open { "● " } else { "○ " },
             Style::default().fg(if open { p().green } else { p().dim }),
         ));
+        let marks = app.marks(&e.id);
         let used = 3 + if row.child { 3 } else { 0 } + 2;
-        let room = w.saturating_sub(used + 1 + app.marks(&e.id).len() * 2);
+        let room = w.saturating_sub(used + 1 + marks.len() * 2);
         let label: String = if e.name.chars().count() > room {
             e.name
                 .chars()
@@ -121,23 +117,21 @@ fn sidebar(f: &mut Frame, app: &App) {
         } else {
             e.name.clone()
         };
-        spans.push(Span::styled(label.clone(), name));
-        let marks = app.marks(&e.id);
+        let used = used + label.chars().count();
+        spans.push(Span::styled(label, name));
         if !marks.is_empty() {
-            let used = used + label.chars().count();
-            let text: Vec<Span> = marks
-                .iter()
-                .map(|m| Span::styled(format!("{m}"), Style::default().fg(mark_color(*m))))
-                .collect();
             let width = marks.len() * 2 - 1;
             spans.push(Span::raw(
                 " ".repeat(w.saturating_sub(used + width + 1).max(1)),
             ));
-            for (i, t) in text.into_iter().enumerate() {
+            for (i, m) in marks.into_iter().enumerate() {
                 if i > 0 {
                     spans.push(Span::raw(" "));
                 }
-                spans.push(t);
+                spans.push(Span::styled(
+                    m.to_string(),
+                    Style::default().fg(mark_color(m)),
+                ));
             }
         }
         let mut line = Line::from(spans);
@@ -237,6 +231,16 @@ fn header(f: &mut Frame, app: &App) {
         spans.push(Span::styled(
             format!("  PR {}", pr.label()),
             Style::default().fg(color),
+        ));
+    }
+    if app.layout_changed() {
+        spans.push(Span::styled(
+            format!(
+                "  layout changed · {} {} saves it",
+                app.leader.label(),
+                key("layout")
+            ),
+            Style::default().fg(p().yellow),
         ));
     }
     if !folder {
@@ -549,11 +553,6 @@ fn color(c: vt100::Color, default: Color) -> Color {
         vt100::Color::Idx(i) => Color::Indexed(i),
         vt100::Color::Rgb(r, g, b) => Color::Rgb(r, g, b),
     }
-}
-
-/// The key an action has now, as shown (`␣`, `tab`, `o`).
-fn key(action: &str) -> String {
-    crate::settings::label(&crate::settings::get().key(action))
 }
 
 /// The leader's popup: every key, grouped go / worktree / panes (REQ-31),

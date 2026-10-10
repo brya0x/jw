@@ -42,12 +42,12 @@ impl MdView {
 
     /// The wheel: `by` lines down (up when negative).
     pub fn scroll_by(&mut self, by: isize) {
-        let last = self
-            .doc
-            .lines
-            .len()
-            .saturating_sub(self.height.min(self.doc.lines.len()));
-        self.scroll = self.scroll.saturating_add_signed(by).min(last);
+        self.scroll = self.scroll.saturating_add_signed(by).min(self.last());
+    }
+
+    /// The top line that still fills the view to its end.
+    fn last(&self) -> usize {
+        self.doc.lines.len().saturating_sub(self.height)
     }
 
     /// Renders again on the next draw, in the palette now in use.
@@ -65,11 +65,7 @@ impl MdView {
 
     /// Whether the reader should close.
     pub fn key(&mut self, k: KeyEvent) -> bool {
-        let last = self
-            .doc
-            .lines
-            .len()
-            .saturating_sub(self.height.min(self.doc.lines.len()));
+        let last = self.last();
         let page = self.height.max(2) - 1;
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         match k.code {
@@ -149,12 +145,7 @@ impl MdView {
             self.doc = md::render(&self.src, text.width);
         }
         self.height = text.height as usize;
-        let last = self
-            .doc
-            .lines
-            .len()
-            .saturating_sub(self.height.min(self.doc.lines.len()));
-        self.scroll = self.scroll.min(last);
+        self.scroll = self.scroll.min(self.last());
 
         if toc_w > 0 {
             let toc = Rect {
@@ -191,15 +182,7 @@ impl MdView {
             let on = Some(i) == current;
             let indent = "  ".repeat(usize::from(h.level.saturating_sub(1)).min(3));
             let w = (area.width as usize).saturating_sub(indent.len() + 2);
-            let text: String = if h.text.chars().count() > w {
-                h.text
-                    .chars()
-                    .take(w.saturating_sub(1))
-                    .chain(['…'])
-                    .collect()
-            } else {
-                h.text.clone()
-            };
+            let text = md::truncate(&h.text, w);
             let mut line = Line::from(Span::styled(
                 format!(" {indent}{text}"),
                 if on {

@@ -80,8 +80,6 @@ struct Table {
     align: Vec<Alignment>,
     head: Vec<Vec<Run>>,
     rows: Vec<Vec<Vec<Run>>>,
-    in_head: bool,
-    cell: Vec<Run>,
     row: Vec<Vec<Run>>,
 }
 
@@ -105,7 +103,7 @@ impl Renderer {
             Event::HardBreak => self.push_run("\n".into(), Style::default()),
             Event::Rule => {
                 self.block_gap();
-                let w = self.width - self.prefix_width();
+                let w = self.room();
                 let rule = Span::styled("─".repeat(w), Style::default().fg(p().line));
                 self.out.push(Line::from(vec![self.quote_prefix(), rule]));
             }
@@ -192,11 +190,6 @@ impl Renderer {
                     ..Table::default()
                 });
             }
-            Tag::TableHead => {
-                if let Some(t) = &mut self.table {
-                    t.in_head = true;
-                }
-            }
             _ => {}
         }
     }
@@ -224,7 +217,7 @@ impl Renderer {
                     text: text.trim().to_string(),
                 });
                 if level <= 2 {
-                    let w = self.width - self.prefix_width();
+                    let w = self.room();
                     let (ch, color) = if level == 1 {
                         ("━", p().blue)
                     } else {
@@ -266,16 +259,12 @@ impl Renderer {
             TagEnd::Image => self.link = None,
             TagEnd::TableCell => {
                 if let Some(t) = &mut self.table {
-                    let cell = std::mem::take(&mut self.runs);
-                    t.cell = cell;
-                    let cell = std::mem::take(&mut t.cell);
-                    t.row.push(cell);
+                    t.row.push(std::mem::take(&mut self.runs));
                 }
             }
             TagEnd::TableHead => {
                 if let Some(t) = &mut self.table {
                     t.head = std::mem::take(&mut t.row);
-                    t.in_head = false;
                 }
             }
             TagEnd::TableRow => {
@@ -337,6 +326,12 @@ impl Renderer {
         self.quote * 2 + self.items.iter().sum::<usize>()
     }
 
+    /// The columns left after the prefixes; none when quotes and lists
+    /// nest deeper than the width.
+    fn room(&self) -> usize {
+        self.width.saturating_sub(self.prefix_width())
+    }
+
     /// Writes the pending inline text as wrapped lines under the current
     /// quote and list prefixes.
     fn flush(&mut self) {
@@ -363,7 +358,7 @@ impl Renderer {
     }
 
     fn code_block(&mut self, lang: &str, lines: &[String]) {
-        let inner = self.width - self.prefix_width();
+        let inner = self.room();
         let indent = Span::raw(" ".repeat(self.items.iter().sum::<usize>()));
         let bg = Style::default().bg(p().panel);
         let label = if lang.is_empty() { "code" } else { lang };
@@ -408,7 +403,7 @@ impl Renderer {
             }
         }
         // Borders take cols+1 cells and each cell has a space either side.
-        let avail = self.width - self.prefix_width();
+        let avail = self.room();
         let frame = cols + 1 + 2 * cols;
         while widths.iter().sum::<usize>() + frame > avail {
             let (i, w) = widths
@@ -432,7 +427,7 @@ impl Renderer {
             for (i, w) in widths.iter().enumerate() {
                 let raw = row.get(i).map(text).unwrap_or_default();
                 let cut = truncate(&raw, *w);
-                let pad = w - cut.width();
+                let pad = w.saturating_sub(cut.width());
                 let (left, right) = match t.align.get(i) {
                     Some(Alignment::Right) => (pad, 0),
                     Some(Alignment::Center) => (pad / 2, pad - pad / 2),
@@ -525,7 +520,7 @@ fn fit(spans: Vec<Span<'static>>, width: usize, fill: Style) -> Vec<Span<'static
 }
 
 /// `s` in at most `width` columns, ending in `…` when cut.
-fn truncate(s: &str, width: usize) -> String {
+pub(crate) fn truncate(s: &str, width: usize) -> String {
     if s.width() <= width {
         return s.to_string();
     }
@@ -628,8 +623,10 @@ fn wrap(
                         head.push(c);
                         hw += cw;
                     }
-                    // `head` took one char too many when it overflowed.
-                    let overflow = head.width() > room;
+                    // `head` took one char too many when it overflowed, unless
+                    // that char is all it has: a wide char in a one-column
+                    // room still has to go somewhere, or this never ends.
+                    let overflow = head.width() > room && head.chars().count() > 1;
                     let tail: String = if overflow {
                         let last = head.pop().map(String::from).unwrap_or_default();
                         last + chars.as_str()
@@ -810,6 +807,14 @@ Last paragraph.
         // Right-aligned column: the number touches the border.
         let row = all.iter().find(|l| l.contains("20100")).unwrap();
         assert!(row.contains("20100 │"), "{row}");
+    }
+
+    #[test]
+    fn deeper_nesting_than_the_width_still_renders() {
+        let deep = "> > > > > > > x\n>\n> > > > > > > ---\n>\n> > > > > > > ```\n> > > > > > > code\n> > > > > > > ```\n>\n> > > > > > > | a |\n> > > > > > > |---|\n> > > > > > > | b |\n>\n> > > > > > 中文中文\n";
+        let doc = render(deep, 12);
+        assert!(!doc.lines.is_empty());
+        assert!(doc.lines.len() < 100, "{} lines", doc.lines.len());
     }
 
     #[test]

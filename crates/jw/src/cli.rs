@@ -3,10 +3,11 @@
 //! workspaces of its session (OPEN-3, REQ-66): `jw ls`, `jw read`, `jw
 //! worktree`, `jw prompt`, plus `jw hook <state>` for claude's hooks. They
 //! act on `$JW_SESSION` (every pane has it) and talk to the daemon like the
-//! TUI does; no exit code 3.
+//! TUI does.
 
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
@@ -14,7 +15,7 @@ use crate::actions::{self, NewOptions, Project};
 use crate::client::Client;
 use crate::core::registry::{self, Entry, Registry};
 use crate::layout::Rect;
-use crate::proto::{AgentState, ClientMsg, DaemonMsg, PaneInfo, socket_path};
+use crate::proto::{AgentState, ClientMsg, DaemonMsg, PROTOCOL, PaneInfo, socket_path};
 use crate::stream::{PaneSpec, Stream};
 
 /// Panes started without a TUI get this size; the TUI resizes them when it
@@ -36,6 +37,7 @@ pub fn prompt(args: &[String]) -> Result<()> {
     let entry = find(name)?.entry;
     let mut c = Client::connect(&socket_path())
         .with_context(|| format!("{} is not open: no jw daemon is running", entry.name))?;
+    hello(&mut c)?;
     send_prompt(&mut c, &entry, text.trim())?;
     println!("sent to {}'s agent", entry.name);
     Ok(())
@@ -108,7 +110,7 @@ pub fn sessions() -> Result<()> {
     let state = registry::state_dir()?;
     let last = crate::session::last(&state);
     let reg = Registry::load(&registry::default_path()?)?;
-    let panes = daemon_panes();
+    let panes = daemon_panes()?;
     for name in crate::session::list(&state)? {
         let folders = crate::folders::Folders::load(
             &crate::session::dir(&state, &name)?.join("folders.json"),
@@ -189,8 +191,9 @@ pub fn worktree(args: &[String]) -> Result<()> {
 
     let stream = Stream::resolve(&entry)?;
     let mut c = Client::connect_or_start(&socket_path(), &std::env::current_exe()?)?;
+    hello(&mut c)?;
     open(&mut c, &stream)?;
-    eprintln!("opened {}: setup runs in its shell pane", entry.name);
+    eprintln!("opened {}", entry.name);
     if let Some(task) = task {
         send_prompt(&mut c, &entry, &task)?;
         eprintln!("task sent to {}'s agent", entry.name);
@@ -230,10 +233,7 @@ fn spawn(spec: PaneSpec, stream: &str, (cols, rows): (u16, u16)) -> ClientMsg {
 
 /// Starts the stream's panes in the daemon, sized for the default layout.
 fn open(c: &mut Client, stream: &Stream) -> Result<()> {
-    let (specs, note) = stream.open_specs(true)?;
-    if let Some(n) = note {
-        eprintln!("{n}");
-    }
+    let specs = stream.open_specs(true)?;
     let rects = stream.tree.rects(Rect {
         x: 0,
         y: 0,
@@ -252,7 +252,7 @@ fn open(c: &mut Client, stream: &Stream) -> Result<()> {
     }
     c.set_read_timeout(Some(Duration::from_secs(10)))?;
     while want > 0 {
-        match c.recv()?.context("the daemon hung up")? {
+        match next(c)? {
             DaemonMsg::Spawned { .. } => want -= 1,
             DaemonMsg::Error { msg } => bail!("{msg}"),
             _ => {}
@@ -266,13 +266,9 @@ fn send_prompt(c: &mut Client, entry: &Entry, text: &str) -> Result<()> {
         stream: entry.id.clone(),
         text: text.to_string(),
     })?;
-    let deadline = Instant::now() + PROMPT_TIMEOUT;
     c.set_read_timeout(Some(PROMPT_TIMEOUT))?;
     loop {
-        if Instant::now() > deadline {
-            bail!("{}'s agent never took the prompt", entry.name);
-        }
-        match c.recv()?.context("the daemon hung up")? {
+        match next(c).with_context(|| format!("{}'s agent never took the prompt", entry.name))? {
             DaemonMsg::Prompted { .. } => return Ok(()),
             DaemonMsg::Error { msg } => bail!("{}: {msg}", entry.name),
             _ => {}
@@ -330,8 +326,9 @@ fn find(name: &str) -> Result<Ws> {
         .collect();
     if matches.len() > 1 {
         let here = std::env::var("JW_PROJECT").ok().or_else(|| {
-            let dir: PathBuf = std::env::current_dir().ok()?;
-            Project::open(Path::new(&dir)).ok().map(|p| p.name)
+            Project::open(&std::env::current_dir().ok()?)
+                .ok()
+                .map(|p| p.name)
         });
         if let Some(i) = matches
             .iter()
@@ -351,21 +348,47 @@ fn find(name: &str) -> Result<Ws> {
 }
 
 /// Every pane the daemon runs; none when no daemon is running.
-fn daemon_panes() -> Vec<PaneInfo> {
-    Client::connect(&socket_path())
-        .ok()
-        .and_then(|mut c| {
-            c.set_read_timeout(Some(Duration::from_secs(3))).ok()?;
-            c.send(&ClientMsg::List).ok()?;
-            loop {
-                match c.recv().ok()?? {
-                    DaemonMsg::Panes { panes } => return Some(panes),
-                    DaemonMsg::Error { .. } => return None,
-                    _ => {}
-                }
-            }
-        })
-        .unwrap_or_default()
+fn daemon_panes() -> Result<Vec<PaneInfo>> {
+    let Ok(mut c) = Client::connect(&socket_path()) else {
+        return Ok(Vec::new());
+    };
+    hello(&mut c)?;
+    c.send(&ClientMsg::List)?;
+    loop {
+        match next(&mut c)? {
+            DaemonMsg::Panes { panes } => return Ok(panes),
+            DaemonMsg::Error { msg } => bail!("{msg}"),
+            _ => {}
+        }
+    }
+}
+
+/// Checks that the daemon speaks this build's protocol, as the TUI does
+/// (RISK-14): an older one would misread what we send, and we its panes.
+/// Leaves a 3 s read timeout on `c`.
+fn hello(c: &mut Client) -> Result<()> {
+    c.set_read_timeout(Some(Duration::from_secs(3)))?;
+    c.send(&ClientMsg::Hello { protocol: PROTOCOL })?;
+    match c.recv() {
+        Ok(Some(DaemonMsg::Hello { protocol })) if protocol == PROTOCOL => Ok(()),
+        _ => bail!(
+            "the jw daemon running is from another build of jw: \
+             jw server stop, then open jw again"
+        ),
+    }
+}
+
+/// The daemon's next message; it hanging up or not answering within the
+/// read timeout is an error that says so, not a bare OS error.
+fn next(c: &mut Client) -> Result<DaemonMsg> {
+    match c.recv() {
+        Ok(Some(m)) => Ok(m),
+        Ok(None) => bail!("the daemon hung up"),
+        Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+            bail!("the daemon didn't answer in time")
+        }
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// What a workspace's panes say: its agent's state and the sidebar marks.
@@ -410,7 +433,7 @@ pub fn ls(args: &[String]) -> Result<()> {
         [f] if f == "--json" => true,
         _ => bail!("usage: jw ls [--json]"),
     };
-    let panes = daemon_panes();
+    let panes = daemon_panes()?;
     let rows: Vec<serde_json::Value> = session_workspaces()?
         .into_iter()
         .map(|w| {
@@ -473,7 +496,7 @@ pub fn read(args: &[String]) -> Result<()> {
     }
     let name = name.context("usage: jw read <workspace> [--pane <role>] [--lines N]")?;
     let ws = find(&name)?;
-    let panes = daemon_panes();
+    let panes = daemon_panes()?;
     let mine: Vec<&PaneInfo> = panes.iter().filter(|p| p.stream == ws.entry.id).collect();
     if mine.is_empty() {
         bail!("{} is not open", ws.label);
@@ -487,17 +510,23 @@ pub fn read(args: &[String]) -> Result<()> {
     }
     .with_context(|| {
         let roles: Vec<&str> = mine.iter().map(|p| p.role.as_str()).collect();
-        format!("{} has no pane {:?}: {}", ws.label, role, roles.join(", "))
+        format!(
+            "{} has no pane {}: {}",
+            ws.label,
+            role.as_deref().unwrap_or_default(),
+            roles.join(", ")
+        )
     })?
     .pane;
 
     let mut c = Client::connect(&socket_path())?;
+    hello(&mut c)?;
     c.set_read_timeout(Some(Duration::from_secs(5)))?;
     c.send(&ClientMsg::Attach {
         stream: ws.entry.id.clone(),
     })?;
     let (rows, cols, bytes) = loop {
-        match c.recv()?.context("the daemon hung up")? {
+        match next(&mut c)? {
             DaemonMsg::Snapshot {
                 pane: p,
                 rows,
@@ -519,7 +548,9 @@ pub fn read(args: &[String]) -> Result<()> {
 /// The last `n` lines a Snapshot shows, scrollback first, without the
 /// empty lines at the end.
 fn text_of(rows: u16, cols: u16, bytes: &[u8], n: usize) -> Vec<String> {
-    let mut p = vt100::Parser::new(rows.max(1), cols.max(1), 10_000);
+    // A zero-row screen would still render one row, past the end of `all`.
+    let (rows, cols) = (rows.max(1), cols.max(1));
+    let mut p = vt100::Parser::new(rows, cols, 10_000);
     p.process(bytes);
     p.screen_mut().set_scrollback(usize::MAX);
     let back = p.screen().scrollback();
@@ -554,5 +585,39 @@ mod tests {
         assert_eq!(all.len(), 200);
         assert_eq!(all[0], "1");
         assert_eq!(all[99], "100");
+        assert_eq!(text_of(0, 80, b"hi", 5), ["hi"]);
+    }
+
+    /// A socket that answers each connection with `reply`, or with nothing.
+    fn fake_daemon(reply: Option<DaemonMsg>) -> (tempfile::TempDir, Client) {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("jw.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            if let Some(m) = reply {
+                crate::proto::write_frame(&mut s, &m).unwrap();
+            }
+            // Keep the connection open until the client goes.
+            let _ = std::io::copy(&mut s, &mut std::io::sink());
+        });
+        (dir, Client::connect(&socket).unwrap())
+    }
+
+    #[test]
+    fn a_daemon_of_another_build_is_refused() {
+        let (_dir, mut c) = fake_daemon(Some(DaemonMsg::Hello {
+            protocol: PROTOCOL + 1,
+        }));
+        let e = hello(&mut c).unwrap_err().to_string();
+        assert!(e.contains("another build"), "{e}");
+    }
+
+    #[test]
+    fn a_daemon_that_never_answers_says_so() {
+        let (_dir, mut c) = fake_daemon(None);
+        c.set_read_timeout(Some(Duration::from_millis(50))).unwrap();
+        let e = next(&mut c).unwrap_err().to_string();
+        assert_eq!(e, "the daemon didn't answer in time");
     }
 }

@@ -27,7 +27,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 | `tab` previous workspace | `r` rename: name, branch and folder; its panes keep running | `t` new shell beside the focused pane |
 | `1–9` the sidebar's number | `s` sync (on a project root: `pull --ff-only`) | `x` close the pane; on the last one, close the workspace |
 | `o` open a folder (browser: arrows, type to filter, `~`, a new name creates it) | `d` diff pane against the base | `n` name the pane (empty = automatic title) |
-| `/` open a file (`.md` → reader pane, else nvim) | `X` remove: done checks if the PR is merged, rm checks otherwise | `f` full: the focused pane fills the panes area, the sidebar and bars stay · `HJKL` swap with the neighbour |
+| `/` open a file (`.md` → reader pane, else nvim) | `X` remove: done checks if the PR is merged, rm checks otherwise | `f` full: the focused pane fills the panes area, the sidebar and bars stay · `HJKL` swap with the neighbour · `p` save the panes as the project's layout (addendum 10) |
 | `↑↓` next/previous workspace, `←→` next/previous project; more arrows keep moving | | |
 | `?` keys · `q` detach | | |
 
@@ -67,7 +67,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 | Socket | `$XDG_RUNTIME_DIR/jw/jw.sock`, else `~/.local/state/jw/jw.sock` |
 | Protocol | `src/proto`: u32 length + serde_json frames; a workspace is named by its registry id in `stream`. The client opens with `Hello{protocol}` and refuses a daemon that answers anything but the same `PROTOCOL` (RISK-14). C→D: `Hello`, `Attach{stream}`, `Detach`, `Input{pane,bytes}`, `Resize{pane,cols,rows}`, `Open{stream,tree}` (a `Tree<NewPane>`), `Split{pane,dir,new}`, `Kill{pane}` (removes the leaf), `Close{stream}`, `Swap{a,b}`, `Name{pane,name?}`, `Theme{dark,fg,bg}` (S14), `List`, `Prompt{stream,text}`, and the older `Spawn` (one pane, placed on the right). D→C: `Hello`, `Tree{stream,tree}` (on attach and after every change), `Snapshot{pane,…}`, `Output{pane,bytes}`, `Title{pane,title}` (OSC 0/2 via `vt100::Callbacks`), `Exited{pane,status}`, `Panes{…}` (with foreground process), `Spawned{pane}`, `Prompted{pane}`, `Error{msg}`. Pane ids are `u64` |
 | Tree | `src/layout.rs`: leaves carry `{id, run, name?}`; `run = "shell"\|"agent"\|"editor"\|"dev:<svc>"\|"view:diff"\|"view:md:<path>"\|"<cmd>"`; `view:*` leaves have no PTY. Ops: `insert(beside, dir, leaf)`, `remove(id)` (the sibling takes the space), `swap(a,b)`, `neighbour(id,dx,dy)` (nearest rect that overlaps on the other axis), `rects` |
-| Layout config | `[layout]` in the project TOML as in v1 (tree of `split`, `ratio`, `a`/`b`, leaves `run`). It is the starting tree when a workspace opens; without it, one shell for a plain folder and the default tree for a project. Go ignores the tree and `[tui]` (`rustOnly`, config.go) |
+| Layout config | `[layout]` in the project TOML as in v1 (tree of `split`, `ratio`, `a`/`b`, leaves `run`). It is the starting tree when a workspace opens; without it, one shell (addendum 10). Go ignores the tree and `[tui]` (`rustOnly`, config.go) |
 | Session | `session.json` in the state dir (next to the socket for any socket but the default one, so tests never touch it), written by the daemon with temp + rename after every tree change: `{workspaces: [{id, tree}]}`, each leaf with role, name, cmd, cwd and env. Recency and recent folders arrive with Q3/Q4 |
 | Folders | `src/folders.rs` replaces `src/free.rs`. `folders.json` in the state dir holds `[{id, dir, opened, created}]`: the project roots and plain folders the user opened. The first load migrates `free.json` (each session becomes a folder; the file is renamed `.migrated`). A folder's `Entry` uses `project` = the git project name, or the folder name for a plain folder |
 | Pane env | the JW_* vars of `actions::jw_env` (a plain folder gets JW_ID, JW_NAME, JW_PROJECT) + `JW_PANE_ID` |
@@ -243,6 +243,33 @@ After `jw server stop`, the agent's pane came back from its scrollback with the 
 
 - REQ-114 WHEN the daemon restores a pane from scrollback, the new process SHALL start with application cursor and keypad, bracketed paste, mouse tracking and mouse encodings off and the cursor shown, in the daemon and in every client.
 
+### Addendum 10 (L0–L4): the user builds the project's layout
+
+Prototype: https://claude.ai/artifact/WRawxSdY2Edbp1CeD9ZdMQ (approved 2026-10-10).
+
+jw no longer picks a layout for a project. The first worktree of a project with no config asks for one, built by hand, with the agent and the setup, and writes them to `.jw.toml`. Afterwards `^␣ p` saves the panes on screen as the new layout.
+
+| Area | What it does |
+|---|---|
+| When it asks | `^␣ w` on a project whose `Config.source` is `None` (no `.jw.toml`, no personal file). After the name, `↵` turns `Modal::New` into `Modal::Setup` with the same name; `esc` goes back to the name. `jw worktree` never asks |
+| Layout builder | A `layout::Node` drawn as boxes, starting with one `shell`. Arrows (`hjkl`) select a box by position; `⇧`+arrow (`HJKL`) swaps its content with the box on that side; `\|` splits it side by side and `-` one above the other (the new half is a `shell`); `x` closes it (never the last one); `<` `>` move its split by 0.1 within 0.2–0.8; `␣` picks what runs in it: `editor`, `agent`, `shell`, or a typed command |
+| Agent | `claude` or `codex`, with `←` `→` |
+| Setup | The `setup` commands and `[[env]]` files `init::detect` finds; `␣` turns one off, `e` edits it, `a` adds a command. `tab` / `⇧tab` move between the three sections |
+| Writing | `↵` writes `<project root>/.jw.toml` (`init::render_project`): setup, env, `[agent] default`, and `[layout]` with `editor = "nvim"` and the tree. Then it reloads the project and creates the worktree with it. The file is new in the repo; jw doesn't commit it |
+| Default layout | Without a `[layout]` tree a workspace opens with one `shell` (`Node::default_tree`) |
+| Setup with no shell | When the tree has no `shell` leaf, setup runs in the `editor` pane, else the `agent` pane, else the first one, before its program: `printf '$ <line>'; <line>; exec <program>` |
+| `^␣ p` | Saves the current workspace's panes as `[layout]` in the project's config file (`Config.source`, else a new `.jw.toml`). Each live leaf's role maps back to the `run` it came from in the workspace's opening tree (`shell-2` is `shell`; a pane added later is a `shell`). Only `split`, `ratio`, `a`, `b` and `run` of `[layout]` are rewritten (`config::save_layout`); `editor` and every other table stay. A modal shows the old and new `[layout]` first |
+| Header | `layout changed` while the workspace's panes (shape and runs) differ from the project's layout |
+
+- REQ-115 WHEN `w` runs on a project with no config file AND the name is accepted, the TUI SHALL show the setup step with the layout builder (one `shell` box), the agent, and the setup `init::detect` found.
+- REQ-116 WHILE the setup step's layout section is focused, the TUI SHALL select boxes with the arrows, swap a box's content with `⇧`+arrow, split with `|` and `-`, close with `x` unless it is the last box, resize with `<` `>` within 0.2–0.8, and set what runs with `␣`.
+- REQ-117 WHEN `↵` is pressed in the setup step, the TUI SHALL write `.jw.toml` at the project root with the chosen setup, env files, agent and layout, THEN create the worktree with that config.
+- REQ-118 WHERE a project's config has no `[layout]` tree, THE workspace SHALL open with one `shell` pane.
+- REQ-119 IF a new worktree has setup AND its layout has no `shell` pane, THEN the `editor` pane (else the `agent` pane, else the first) SHALL run the setup before its program.
+- REQ-120 WHEN `p` runs, the TUI SHALL show the current and new `[layout]`, and on `↵` write the workspace's pane tree to the project's config file, creating `.jw.toml` if there is none, and leave the rest of the file as it was.
+- REQ-121 WHILE a worktree's panes differ from its project's layout, the header SHALL show `layout changed`.
+- REQ-122 `jw worktree` SHALL never ask for a layout.
+
 ---
 
 ## Rationale
@@ -267,6 +294,9 @@ After `jw server stop`, the agent's pane came back from its scrollback with the 
 - RAT-19 **How herdr does it** (v0.8.2, read from source). The same three pieces, with bigger parts. The outer terminal gets 1+2+4 (31 when a pane asks for report-all, switched with pop+push because old iTerm2 clears the stack on set; `src/terminal_modes.rs`). Panes run on libghostty-vt, which tracks the flags, answers every query through a `write_pty` callback and encodes keys with Ghostty's encoder (`src/pane/terminal.rs`). Legacy Shift+Enter is `\r` there too (`legacy_shift_enter_is_just_cr`, `src/input/encode.rs`), and `KittyKeyboardTracker::replay_ansi` (`src/pane/kitty_keyboard.rs`) is the replay shape REQ-97 copies. Rejected: swapping vt100 for libghostty-vt, which would vendor a Zig/C library and rewrite both parsers for one key. Rejected: always sending `ESC \r`, which claude takes as a new line but nvim and codex read as Alt+Enter, and bash gets a stray ESC.
 - RAT-20 **Built-ins are embedded JSON, not runtime files** (S16). They must work with no config dir and no install step; `include_str!` keeps one binary while making them the same kind of file a user writes, and worked examples of the format.
 - RAT-21 **A user's file wins over a built-in.** It is the simplest way to tweak one (`jw theme export one-dark > ~/.config/jw/themes/one-dark.json`); reserving the names would need an error path and a rename for nothing.
+- RAT-23 **The user builds the layout; jw ships no presets.** The user rejected a choice of three fixed shapes: the layout is theirs to decide, panes, places and contents. The builder starts from one shell, which is also the default, so jw never assumes an editor or an agent.
+- RAT-24 **`^␣ p` maps roles back to runs instead of keeping `run` in the live tree.** `PaneLeaf` holds `{id, role, name}`; the opening tree already says which run gave each role. Adding `run` to `PaneLeaf` would bump `PROTOCOL` for one action.
+- RAT-25 **`[layout]` is rewritten as text, not with `toml_edit`.** jw writes that table itself, and only five keys of it change. A new dependency (and a second TOML model) for one write is not worth it.
 - RAT-22 **`curl`, not a crate,** for `install <url>`: rare, and jw already shells out to `git` and `gh`; `ureq` would add TLS and about 40 crates for one command.
 
 ## Risks
@@ -306,6 +336,9 @@ After `jw server stop`, the agent's pane came back from its scrollback with the 
 - RISK-33 **`install` from a URL runs `curl` on what the user typed.** The body is only parsed and written under `themes/`, never run, and the name must match `[a-z0-9-]+`, so it can't leave the directory.
 - RISK-34 **Shadowing hides a built-in.** `jw theme ls` says `file, replaces built-in`, and `install` says so too.
 - RISK-35 **A renamed worktree's claude resumes in the new folder** after a daemon restart, while its transcript sits under the old path's project in `~/.claude/projects/`. `claude --resume <id>` may not find it there; the pane then shows claude's error and a new `claude` starts clean.
+- RISK-36 **Setup before nvim or the agent:** a failing step's error scrolls away when the program takes the screen. The program still starts, and quitting it shows the error.
+- RISK-37 **`save_layout` drops comments inside `[layout]`** and any `[layout.*]` subtable (jw writes none). Comments elsewhere stay.
+- RISK-38 **The default layout changes** for projects with no `[layout]`: they open with one shell instead of nvim | agent over a shell. jitsubai and jw have their own layout; others get the setup step on their next first worktree only if they have no config at all.
 - Closed by addendum 3: RISK-5 (own registry), RISK-7 (hooks), RISK-9 (frames), RISK-16 (`nvim --server`), RISK-17 (`root` in the registry).
 
 ## Parts (each one ends with `cargo test` + `clippy` green and a local commit on `feat/rust-tui`; nothing is pushed)
@@ -348,6 +381,11 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | W3 ✓ `f575bca` | `^␣` + arrows walk the sidebar; the `MOVE` chip | 112 | `tui/mod.rs`, `tui/draw.rs` |
 | D1 ✓ `21b4e27` | Addendum 8: `X` accepts a HEAD already in the default branch | 113 | `actions.rs` |
 | R1 ✓ `00dfd2f` | Addendum 9: a restored pane's modes start off | 114 | `daemon/src/lib.rs` |
+| L0 ✓ `27c36d5` | Addendum 10 in this spec; the prototype | — | docs |
+| L1 ✓ `cad289f` | One shell by default; setup runs before the program when there is no shell pane | 118, 119 | `layout.rs`, `stream.rs` |
+| L2 ✓ `98e0473` | `init::render_project`, `config::save_layout`, `Node` ↔ TOML | 117, 120 | `init.rs`, `config.rs`, `layout.rs` |
+| L3 ✓ `2f1a0b9` | `Modal::Setup`: the builder, agent and setup step of `^␣ w` | 115–117, 122 | `tui/modal.rs`, `tui/setup.rs`, `tui/mod.rs` |
+| L4 ✓ `20dc5da` | `^␣ p` saves the layout; `layout changed` in the header | 120, 121 | `tui/mod.rs`, `tui/draw.rs`, `settings.rs` |
 | Later | Animations (optional) | 19, 20 | |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 
@@ -391,6 +429,9 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - The Contract said the theme follows "the terminal or the OS". It followed the OS only (`theme::system_dark`), and programs in panes were never told it: vt100 dropped their OSC 11 and mode 2031 and nobody answered (S14).
 - "There is no navigation mode" (Contract) held until addendum 7: the user asked to move between workspaces and projects with the arrows, so an arrow after the leader starts a short move that any other key ends.
 - REQ-40 restarted a renamed worktree's panes so nothing ran in a moving folder. Losing the tab on every rename cost more than the stale paths it avoided; REQ-111 keeps the panes.
+- Interfaces → Protocol said every client opens with `Hello` and refuses another `PROTOCOL`. Only the TUI did: `jw ls`, `sessions`, `read`, `prompt` and `worktree` misread an old daemon (everything showed closed) until the review pass of addendum 10's PR.
+- The daemon's lock order was "workspaces → panes → a pane's state", and saves ran unserialized from every client thread, the timer and the signal thread, so two could clobber `session.json`. A `saving` lock now comes first: saving → workspaces → panes → state. `split`, `dock`, `kill`, `place` and `rekey` also told watchers before saving, against "save before telling"; they save first now.
+- The Contract and Interfaces gave a project with no `[layout]` the default tree (nvim | agent over a shell). Addendum 10 makes it one shell, and the user builds the rest.
 - The worktree-names addendum was drafted as addendum 4 with REQ-81–83, RISK-25 and `PROTOCOL 7` on a branch cut before S14–S16, which took those ids. It merged as addendum 7, REQ-110–112, RISK-35 and `PROTOCOL 8`.
 - REQ-72's restore reset only the screen (`?1049l`), and later REQ-87 and REQ-98 the theme and kitty state. The old process's mouse, paste and cursor modes survived into the new one until REQ-114.
 

@@ -237,34 +237,36 @@ pub fn rename(p: &Project, e: &Entry, name: &str, reg_path: &Path) -> Result<Ent
         let _ = p.repo.move_worktree(&plan.path, &old);
         return Err(err.context("rolled back the folder"));
     }
-    let mut renamed = e.clone();
-    renamed.name = name.to_string();
-    renamed.path = plan.path.display().to_string();
-    if renamed.original == e.branch {
-        renamed.original = plan.branch.clone();
-    }
-    renamed.branch = plan.branch;
-    let base = p.repo.default_branch().unwrap_or_default();
-    let vars = p.cfg.vars(name, &base, e.slot);
-    let env: String = jw_env(&renamed, &vars)
-        .iter()
-        .map(|(k, v)| format!("{k}={v}\n"))
-        .collect();
-    std::fs::write(plan.path.join(".jw.env"), env)?;
+    // Only what the rename changes: the registry's copy may be newer than
+    // `e` (an agent opened since, its conversation recorded).
+    let apply = |x: &mut Entry| {
+        x.name = name.to_string();
+        x.path = plan.path.display().to_string();
+        if x.original == e.branch {
+            x.original = plan.branch.clone();
+        }
+        x.branch = plan.branch.clone();
+    };
     let mut reg = Registry::load(reg_path)?;
-    if let Some(x) = reg.entries.iter_mut().find(|x| x.id == e.id) {
-        *x = renamed.clone();
-    }
+    let renamed = match reg.entries.iter_mut().find(|x| x.id == e.id) {
+        Some(x) => {
+            apply(x);
+            x.clone()
+        }
+        None => {
+            let mut x = e.clone();
+            apply(&mut x);
+            x
+        }
+    };
+    let base = p.repo.default_branch().unwrap_or_default();
+    write_jw_env(&renamed, &p.cfg.vars(name, &base, e.slot))?;
     reg.save(reg_path)?;
     Ok(renamed)
 }
 
 fn provision(p: &Project, e: &Entry, vars: &Vars, reg_path: &Path) -> Result<()> {
-    let env: String = jw_env(e, vars)
-        .iter()
-        .map(|(k, v)| format!("{k}={v}\n"))
-        .collect();
-    std::fs::write(Path::new(&e.path).join(".jw.env"), env)?;
+    write_jw_env(e, vars)?;
     p.repo.exclude(".jw.env")?;
     copy_env_files(p, e, vars)?;
     let mut reg = Registry::load(reg_path)?;
@@ -277,6 +279,16 @@ fn provision(p: &Project, e: &Entry, vars: &Vars, reg_path: &Path) -> Result<()>
     }
     reg.add(e.clone());
     reg.save(reg_path)
+}
+
+/// Writes the worktree's `.jw.env`: its [`jw_env`], one `KEY=value` a line.
+fn write_jw_env(e: &Entry, vars: &Vars) -> Result<()> {
+    let env: String = jw_env(e, vars)
+        .iter()
+        .map(|(k, v)| format!("{k}={v}\n"))
+        .collect();
+    let path = Path::new(&e.path).join(".jw.env");
+    std::fs::write(&path, env).with_context(|| path.display().to_string())
 }
 
 /// The JW_* variables of a worktree, as in .jw.env and every pane.
@@ -626,9 +638,14 @@ pub fn check_ports(
     reg: &Registry,
 ) -> Result<()> {
     let mut taken = Vec::new();
-    let raw = p.cfg.dev.get(service).cloned().unwrap_or_default();
+    let cmds = p
+        .cfg
+        .dev
+        .get(service)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
     let mut seen = Vec::new();
-    for svc in raw.iter().flat_map(|c| crate::core::expand::ports_in(c)) {
+    for svc in cmds.iter().flat_map(|c| crate::core::expand::ports_in(c)) {
         if seen.contains(&svc) {
             continue;
         }
@@ -714,7 +731,11 @@ pub fn info(
     let base = config::port_base(e.slot);
     rows.push((
         "slot".into(),
-        format!("{}  (ports {base}–{})", e.slot, base + 99),
+        format!(
+            "{}  (ports {base}–{})",
+            e.slot,
+            base + config::PORT_BLOCK_SIZE - 1
+        ),
     ));
     for (svc, port) in p.cfg.ports_for(e.slot) {
         let up = if shell.port_owner(port as u16).is_some() {
@@ -841,6 +862,31 @@ mod tests {
         };
         let e2 = new_stream(&p, &o2, &reg_path).unwrap();
         assert!(rename_plan(&p, &e2, "login", &reg_path).is_err());
+    }
+
+    /// The caller's entry can be older than the registry's: what an open
+    /// recorded since stays.
+    #[test]
+    fn rename_keeps_what_the_registry_learned_since() {
+        let (dir, work) = new_test_repo();
+        let reg_path = dir.path().join("state/registry.json");
+        let p = project(&work, &dir.path().join("wt"));
+        let o = NewOptions {
+            name: "ws-1".into(),
+            ..NewOptions::default()
+        };
+        let stale = new_stream(&p, &o, &reg_path).unwrap();
+        let mut reg = Registry::load(&reg_path).unwrap();
+        reg.entries[0].opened = true;
+        reg.entries[0].agent = "conv-1".into();
+        reg.save(&reg_path).unwrap();
+
+        let r = rename(&p, &stale, "login", &reg_path).unwrap();
+        assert_eq!(
+            (r.name.as_str(), r.agent.as_str(), r.opened),
+            ("login", "conv-1", true)
+        );
+        assert_eq!(Registry::load(&reg_path).unwrap().entries, [r]);
     }
 
     #[test]

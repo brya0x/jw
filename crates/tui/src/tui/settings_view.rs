@@ -217,15 +217,14 @@ impl SettingsView {
             }
             KeyCode::Char('r') if id.starts_with("key:") => {
                 let action = id.trim_start_matches("key:").to_string();
-                let default = ACTIONS.iter().find(|a| a.1 == action).map_or("", |a| a.3);
+                let default = settings::default_key(&action).unwrap_or_default();
                 return self.bind_key(&action, default);
             }
             KeyCode::Char('e') if id.starts_with("theme:") => {
                 let name = id.trim_start_matches("theme:");
-                if name == "one-dark" || name == "one-light" {
-                    self.say(format!("{name} is built in: c copies it to a file"), true);
-                } else if let Ok(path) = theme::file(name) {
-                    return Outcome::Edit(path);
+                match own_file(theme::file(name).ok()) {
+                    Some(path) => return Outcome::Edit(path),
+                    None => self.say(format!("{name} is built in: c copies it to a file"), true),
                 }
             }
             KeyCode::Char('c') if id.starts_with("theme:") => {
@@ -325,8 +324,7 @@ impl SettingsView {
     fn step(&mut self, id: &str, d: isize) -> Outcome {
         let cycle = |list: &[String], cur: &str| {
             let i = list.iter().position(|x| x == cur).unwrap_or(0) as isize;
-            let n = list.len() as isize;
-            list[((i + d) % n + n) as usize % list.len()].clone()
+            list[(i + d).rem_euclid(list.len() as isize) as usize].clone()
         };
         let s = settings::get();
         match id {
@@ -521,8 +519,8 @@ impl SettingsView {
         let foot_y = inner.bottom().saturating_sub(1);
         let (msg, err) = self.msg.clone().unwrap_or_else(|| {
             let path = match PAGES[self.page] {
-                "themes" => theme::file("x")
-                    .map(|p| super::finder::tilde(&p.with_file_name("")))
+                "themes" => theme::user_dir()
+                    .map(|d| format!("{}/", super::finder::tilde(&d)))
                     .unwrap_or_default(),
                 _ => settings::path()
                     .map(|p| super::finder::tilde(&p))
@@ -554,6 +552,11 @@ impl SettingsView {
             Rect::new(page.x, foot_y, page.width, 1),
         );
     }
+}
+
+/// The user's file of a theme, to edit; a built-in has none until copied.
+fn own_file(path: Option<PathBuf>) -> Option<PathBuf> {
+    path.filter(|p| p.exists())
 }
 
 /// A theme's main colours, side by side.
@@ -595,6 +598,16 @@ mod tests {
         v.key(key(KeyCode::BackTab));
         assert_eq!(v.page, 0);
         assert!(matches!(v.key(key(KeyCode::Esc)), Outcome::Close));
+    }
+
+    #[test]
+    fn only_a_themes_own_file_is_edited() {
+        let d = tempfile::tempdir().unwrap();
+        let mine = d.path().join("mine.json");
+        std::fs::write(&mine, "{}").unwrap();
+        assert_eq!(own_file(Some(mine.clone())), Some(mine));
+        assert_eq!(own_file(Some(d.path().join("tokyo-night.json"))), None);
+        assert_eq!(own_file(None), None);
     }
 
     #[test]

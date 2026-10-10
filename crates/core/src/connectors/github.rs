@@ -55,11 +55,13 @@ impl Client {
 
     /// Runs `gh pr list` in `dir`.
     fn list(&self, dir: &Path, args: &[&str]) -> Result<Vec<Pr>> {
-        let out = Command::new(self.bin()?)
+        let bin = self.bin()?;
+        let out = Command::new(&bin)
             .args(["pr", "list", "--state", "all", "--json", FIELDS])
             .args(args)
             .current_dir(dir)
-            .output()?;
+            .output()
+            .map_err(|e| anyhow!("{}: {e}", bin.display()))?;
         if !out.status.success() {
             bail!(
                 "gh pr list: {}",

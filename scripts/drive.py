@@ -14,7 +14,7 @@ Steps:
   type:<text>   types text
   key:<name>    enter esc tab up down left right bs
   wait:<s>      reads output for <s> seconds
-  sh:<cmd>      runs a shell command (edit a settings file, …)
+  sh:<cmd>      runs a shell command in the isolated env (edit a settings file, …)
   clear         forgets the output so far
   dump          prints the screen
   colors        prints the first background colours seen (themes)
@@ -94,7 +94,7 @@ for step in sys.argv[2:]:
     elif k == "wait":
         pump(float(v))
     elif k == "sh":
-        subprocess.run(v, shell=True)
+        subprocess.run(v, shell=True, env=env)
     elif k == "clear":
         buf = b""
     elif k == "dump":

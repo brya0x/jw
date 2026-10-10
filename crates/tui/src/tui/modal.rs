@@ -38,6 +38,16 @@ pub enum Modal {
         picked: bool,
         plan: Result<crate::actions::Planned, String>,
     },
+    /// `^␣ w` on a project with no config: the step after the name that
+    /// builds its layout and writes `.jw.toml` (REQ-115).
+    Setup(Box<super::setup::Setup>),
+    /// `^␣ p`: the panes on screen as the project's layout (REQ-120).
+    SaveLayout {
+        path: std::path::PathBuf,
+        /// The layout the config has now; `None` with no config file.
+        old: Option<crate::layout::Node>,
+        new: crate::layout::Node,
+    },
     /// `^␣ r`: a new name for a worktree, with what changes (REQ-111).
     Rename {
         entry: Entry,
@@ -86,10 +96,19 @@ pub enum Outcome {
     Stay,
     Cancel,
     Submit,
+    /// The setup step's `esc`: back to the name it came from.
+    Back,
 }
 
 impl Modal {
     pub fn key(&mut self, k: KeyEvent) -> Outcome {
+        if let Modal::Setup(s) = self {
+            return match s.key(k) {
+                super::setup::Done::Stay => Outcome::Stay,
+                super::setup::Done::Back => Outcome::Back,
+                super::setup::Done::Submit => Outcome::Submit,
+            };
+        }
         if k.code == KeyCode::Esc {
             return Outcome::Cancel;
         }
@@ -99,11 +118,14 @@ impl Modal {
                 KeyCode::Char('n') => Outcome::Cancel,
                 _ => Outcome::Stay,
             },
-            Modal::Close { .. } | Modal::ClosePane { .. } => match k.code {
-                KeyCode::Char('y') | KeyCode::Enter => Outcome::Submit,
-                KeyCode::Char('n') => Outcome::Cancel,
-                _ => Outcome::Stay,
-            },
+            Modal::Setup(_) => Outcome::Stay,
+            Modal::Close { .. } | Modal::ClosePane { .. } | Modal::SaveLayout { .. } => {
+                match k.code {
+                    KeyCode::Char('y') | KeyCode::Enter => Outcome::Submit,
+                    KeyCode::Char('n') => Outcome::Cancel,
+                    _ => Outcome::Stay,
+                }
+            }
             Modal::New {
                 project,
                 text,
@@ -201,6 +223,7 @@ impl Modal {
 
     pub fn draw(&self, f: &mut Frame) {
         let (title, lines) = match self {
+            Modal::Setup(s) => return s.draw(f),
             Modal::Done {
                 entry, plan, pr, ..
             } => {
@@ -257,6 +280,39 @@ impl Modal {
                 l.push(keys(&[("y", "close"), ("esc", "cancel")]));
                 (format!(" Close {}? ", entry.name), l)
             }
+            Modal::SaveLayout { path, old, new } => {
+                let dim = Style::default().fg(p().dim);
+                let mut l = vec![
+                    Line::from(Span::styled(
+                        " The panes on screen become the layout of new worktrees.",
+                        dim,
+                    )),
+                    Line::default(),
+                    Line::from(vec![
+                        Span::styled(" file    ", dim),
+                        Span::raw(short_path(&path.display().to_string(), 54)),
+                    ]),
+                    Line::default(),
+                ];
+                if let Some(old) = old {
+                    l.push(Line::from(vec![
+                        Span::styled(" now     ", dim),
+                        Span::styled(describe(old), Style::default().fg(p().red)),
+                    ]));
+                }
+                l.push(Line::from(vec![
+                    Span::styled(" new     ", dim),
+                    Span::styled(describe(new), Style::default().fg(p().green)),
+                ]));
+                l.push(Line::default());
+                l.push(Line::from(Span::styled(
+                    " Open worktrees keep their panes. Commit the file to share it.",
+                    dim,
+                )));
+                l.push(Line::default());
+                l.push(keys(&[("↵", "save"), ("esc", "cancel")]));
+                (" Save this layout? ".to_string(), l)
+            }
             Modal::ClosePane { title, running, .. } => {
                 let l = vec![
                     Line::from(vec![
@@ -310,8 +366,19 @@ impl Modal {
                         Style::default().fg(p().red),
                     ))),
                 }
+                let first = project.cfg.source.is_none();
+                if first {
+                    l.push(Line::default());
+                    l.push(Line::from(Span::styled(
+                        format!(" {} has no config yet: ↵ sets it up first.", project.name),
+                        Style::default().fg(p().yellow),
+                    )));
+                }
                 l.push(Line::default());
-                l.push(keys(&[("↵", "create"), ("esc", "cancel")]));
+                l.push(keys(&[
+                    ("↵", if first { "next" } else { "create" }),
+                    ("esc", "cancel"),
+                ]));
                 (format!(" New worktree in {} ", project.name), l)
             }
             Modal::Rename {
@@ -564,6 +631,11 @@ fn rm_lines(
 }
 
 fn keys(pairs: &[(&str, &str)]) -> Line<'static> {
+    key_line(pairs, 3)
+}
+
+/// Key hints as keycaps, each with what it does and `gap` spaces after.
+pub(super) fn key_line(pairs: &[(&str, &str)], gap: usize) -> Line<'static> {
     let mut spans = vec![Span::raw(" ")];
     for (k, what) in pairs {
         spans.push(Span::styled(
@@ -571,11 +643,26 @@ fn keys(pairs: &[(&str, &str)]) -> Line<'static> {
             Style::default().bg(p().line).fg(p().blue),
         ));
         spans.push(Span::styled(
-            format!(" {what}   "),
+            format!(" {what}{}", " ".repeat(gap)),
             Style::default().fg(p().dim),
         ));
     }
     Line::from(spans)
+}
+
+/// A layout in one line: `|` side by side, `/` one above the other, with
+/// parentheses where a split holds a split the other way.
+pub fn describe(n: &crate::layout::Node) -> String {
+    use crate::layout::Dir;
+    let (Some(dir), Some(a), Some(b)) = (n.split, &n.a, &n.b) else {
+        return n.run.clone().unwrap_or_default();
+    };
+    let side = |c: &crate::layout::Node| match c.split {
+        Some(d) if d != dir => format!("({})", describe(c)),
+        _ => describe(c),
+    };
+    let sep = if dir == Dir::Right { "|" } else { "/" };
+    format!("{} {sep} {}", side(a), side(b))
 }
 
 /// What `^␣ w` would create as `name`, or why it can't, for the modal.
@@ -587,20 +674,17 @@ pub fn new_plan(project: &Project, name: &str) -> Result<crate::actions::Planned
 
 /// Fits a line in `max` columns: `~` for the home directory, then the start
 /// of the path cut down to `…`, so its end, the part that names it, shows.
+/// A label may lead the path (`worktree /a/b`); a path on its own may hold
+/// spaces.
 fn short_path(s: &str, max: usize) -> String {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let s = if home.len() > 1 {
-        s.replace(&home, "~")
-    } else {
-        s.to_string()
-    };
-    if s.chars().count() <= max {
-        return s;
-    }
     let (head, path) = match s.split_once(' ') {
-        Some((h, p)) => (format!("{h} "), p),
-        None => (String::new(), s.as_str()),
+        Some((h, p)) if !s.starts_with('/') => (format!("{h} "), p),
+        _ => (String::new(), s),
     };
+    let path = super::finder::tilde(std::path::Path::new(path));
+    if head.chars().count() + path.chars().count() <= max {
+        return format!("{head}{path}");
+    }
     let keep = max.saturating_sub(head.chars().count() + 1);
     let skip = path.chars().count().saturating_sub(keep);
     let tail: String = path.chars().skip(skip).collect();
@@ -611,7 +695,17 @@ fn short_path(s: &str, max: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::short_path;
+    use super::{describe, short_path};
+    use crate::layout::{Dir, Node};
+
+    #[test]
+    fn layouts_read_in_one_line() {
+        let top = Node::split(Dir::Right, 0.5, Node::leaf("editor"), Node::leaf("agent"));
+        assert_eq!(describe(&top), "editor | agent");
+        let t = Node::split(Dir::Down, 0.7, top, Node::leaf("shell"));
+        assert_eq!(describe(&t), "(editor | agent) / shell");
+        assert_eq!(describe(&Node::leaf("pnpm dev")), "pnpm dev");
+    }
 
     #[test]
     fn short_paths_keep_their_end() {
@@ -622,6 +716,11 @@ mod tests {
         assert_eq!(
             short_path("/very/long/path/to/myapp-wt/docs", 20),
             "…/to/myapp-wt/docs"
+        );
+        // A space inside a path is not a label.
+        assert_eq!(
+            short_path("/very/long/My Projects/myapp-wt/docs", 20),
+            "…/myapp-wt/docs"
         );
     }
 }

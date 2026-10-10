@@ -64,15 +64,58 @@ impl Node {
         }
     }
 
-    /// What `jw open` builds with herdr today (internal/backends/terminal):
-    /// editor and agent side by side on top, a full-width shell below.
+    /// A project's layout when its config has none: one shell, and the user
+    /// builds the rest (REQ-118).
     pub fn default_tree() -> Self {
+        Self::leaf("shell")
+    }
+
+    /// Editor and agent side by side over a full-width shell: the old
+    /// default, kept as a three-pane fixture for tests.
+    #[cfg(test)]
+    pub(crate) fn three_panes() -> Self {
         Self::split(
             Dir::Down,
             0.7,
             Self::split(Dir::Right, 0.5, Self::leaf("editor"), Self::leaf("agent")),
             Self::leaf("shell"),
         )
+    }
+
+    /// The node as a TOML inline table: `{ run = "shell" }` or
+    /// `{ split = "right", ratio = 0.5, a = …, b = … }`.
+    pub fn inline(&self) -> String {
+        let keys = self.keys();
+        format!("{{ {} }}", keys.join(", "))
+    }
+
+    /// The `[layout]` lines that hold this tree, one key per line.
+    pub fn table(&self) -> String {
+        self.keys().into_iter().map(|k| k + "\n").collect()
+    }
+
+    fn keys(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if let Some(run) = &self.run {
+            out.push(format!("run = {}", quote(run)));
+        }
+        if let Some(dir) = self.split {
+            let dir = match dir {
+                Dir::Down => "down",
+                Dir::Right => "right",
+            };
+            out.push(format!("split = \"{dir}\""));
+        }
+        if let Some(r) = self.ratio {
+            out.push(format!("ratio = {}", (r * 100.0).round() / 100.0));
+        }
+        if let Some(a) = &self.a {
+            out.push(format!("a = {}", a.inline()));
+        }
+        if let Some(b) = &self.b {
+            out.push(format!("b = {}", b.inline()));
+        }
+        out
     }
 
     /// Rejects a node that is both or neither a leaf and a split.
@@ -97,17 +140,20 @@ impl Node {
         let mut runs = Vec::new();
         self.walk(&mut |n| runs.push(n.run.clone().unwrap_or_default()));
         let mut out: Vec<Leaf> = Vec::with_capacity(runs.len());
+        let mut bases: Vec<String> = Vec::with_capacity(runs.len());
         for run in runs {
             let base = run.split_whitespace().next().unwrap_or("pane").to_string();
-            let seen = out
-                .iter()
-                .filter(|l| l.role == base || l.role.starts_with(&format!("{base}-")))
-                .count();
-            let role = if seen == 0 {
-                base
-            } else {
-                format!("{base}-{}", seen + 1)
-            };
+            let same = bases.iter().filter(|b| **b == base).count();
+            // A run that already looks numbered (`shell-2`) can hold the
+            // name the count gives: take the next free one.
+            let role = (same + 1..)
+                .map(|n| match n {
+                    1 => base.clone(),
+                    n => format!("{base}-{n}"),
+                })
+                .find(|r| !out.iter().any(|l| l.role == *r))
+                .expect("roles are unbounded");
+            bases.push(base);
             out.push(Leaf { role, run });
         }
         out
@@ -143,6 +189,11 @@ impl Node {
     }
 }
 
+/// A TOML basic string.
+pub(crate) fn quote(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
 /// What a leaf of a [`Tree`] is known by.
 pub trait Keyed {
     fn key(&self) -> u64;
@@ -174,6 +225,16 @@ impl<L> Tree<L> {
                 b: Box::new(Self::from_node(b, leaves)?),
             }),
             _ => leaves.next().map(Self::Leaf),
+        }
+    }
+
+    /// The tree as a layout, each leaf's `run` given by `run` (REQ-120).
+    pub fn to_node(&self, run: &impl Fn(&L) -> String) -> Node {
+        match self {
+            Self::Leaf(l) => Node::leaf(&run(l)),
+            Self::Split { dir, ratio, a, b } => {
+                Node::split(*dir, *ratio, a.to_node(run), b.to_node(run))
+            }
         }
     }
 
@@ -509,9 +570,34 @@ mod tests {
         Rect { x: 0, y: 0, w, h }
     }
 
+    /// REQ-117, 120: a tree written as TOML reads back the same, and a live
+    /// tree turns back into its layout.
     #[test]
-    fn default_tree_matches_the_herdr_layout() {
-        let t = Node::default_tree();
+    fn a_node_round_trips_through_toml() {
+        #[derive(Deserialize)]
+        struct Wrap {
+            layout: Node,
+        }
+        let mut t = Node::three_panes();
+        t.a.as_mut().unwrap().b = Some(Box::new(Node::leaf("pnpm dev \"x\"")));
+        let back: Wrap = toml::from_str(&format!("[layout]\n{}", t.table())).unwrap();
+        assert_eq!(back.layout, t);
+        assert_eq!(Node::leaf("shell").inline(), r#"{ run = "shell" }"#);
+
+        let mut ids = [1u64, 2, 3].into_iter();
+        let live = Tree::from_node(&Node::three_panes(), &mut ids).unwrap();
+        let runs = ["", "editor", "agent", "shell"];
+        assert_eq!(
+            live.to_node(&|id| runs[*id as usize].to_string()),
+            Node::three_panes()
+        );
+    }
+
+    #[test]
+    fn the_default_is_one_shell_and_three_panes_tile() {
+        assert_eq!(Node::default_tree().leaves()[0].role, "shell");
+        assert_eq!(Node::default_tree().leaves().len(), 1);
+        let t = Node::three_panes();
         let roles: Vec<String> = t.leaves().into_iter().map(|l| l.role).collect();
         assert_eq!(roles, ["editor", "agent", "shell"]);
         let r = t.rects(area(100, 40));
@@ -546,7 +632,7 @@ mod tests {
 
     #[test]
     fn rects_tile_the_area_at_any_size() {
-        let t = Node::default_tree();
+        let t = Node::three_panes();
         for (w, h) in [(1, 1), (2, 2), (3, 7), (79, 23), (237, 61)] {
             let total: u32 = t
                 .rects(area(w, h))
@@ -578,6 +664,16 @@ b = { run = "pnpm test --watch" }
         let twice = Node::split(Dir::Right, 0.5, Node::leaf("shell"), Node::leaf("shell"));
         let roles: Vec<String> = twice.leaves().into_iter().map(|l| l.role).collect();
         assert_eq!(roles, ["shell", "shell-2"]);
+
+        // A run named like a numbered role never gives two leaves one role.
+        let numbered = Node::split(
+            Dir::Right,
+            0.5,
+            Node::leaf("shell-2"),
+            Node::split(Dir::Down, 0.5, Node::leaf("shell"), Node::leaf("shell")),
+        );
+        let roles: Vec<String> = numbered.leaves().into_iter().map(|l| l.role).collect();
+        assert_eq!(roles, ["shell-2", "shell", "shell-3"]);
     }
 
     #[test]
@@ -599,7 +695,7 @@ b = { run = "pnpm test --watch" }
     /// editor | agent over a full-width shell, as ids 1 | 2 over 3.
     fn three() -> Tree<u64> {
         let mut ids = [1u64, 2, 3].into_iter();
-        Tree::from_node(&Node::default_tree(), &mut ids).unwrap()
+        Tree::from_node(&Node::three_panes(), &mut ids).unwrap()
     }
 
     fn keys(t: &Tree<u64>) -> Vec<u64> {
@@ -612,10 +708,10 @@ b = { run = "pnpm test --watch" }
         assert_eq!(keys(&t), [1, 2, 3]);
         assert_eq!(
             t.rects(area(100, 40)),
-            Node::default_tree().rects(area(100, 40))
+            Node::three_panes().rects(area(100, 40))
         );
         let mut short = [1u64].into_iter();
-        assert!(Tree::from_node(&Node::default_tree(), &mut short).is_none());
+        assert!(Tree::from_node(&Node::three_panes(), &mut short).is_none());
     }
 
     #[test]
