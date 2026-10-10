@@ -1298,3 +1298,27 @@ fn a_moved_workspace_restarts_in_its_new_folder() {
     assert_eq!(panes.len(), 1, "the workspace came back");
     assert_eq!(panes[0].stream, "m");
 }
+
+/// REQ-66: `jw ls` and `jw sessions` read a daemon of this build, and work
+/// without one.
+#[test]
+fn the_cli_reads_the_daemon_or_none() {
+    let d = Daemon::start();
+    let state = tempfile::tempdir().unwrap();
+    let jw = |args: &[&str], socket: &Path| {
+        let out = Command::new(EXE)
+            .args(args)
+            .env("JW_SOCKET", socket)
+            .env("XDG_STATE_HOME", state.path())
+            .env_remove("JW_SESSION")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "jw {args:?}: {out:?}");
+        String::from_utf8(out.stdout).unwrap()
+    };
+    let none = d.socket.with_file_name("none.sock");
+    for socket in [d.socket.as_path(), none.as_path()] {
+        assert_eq!(jw(&["ls", "--json"], socket).trim(), "[]");
+        assert!(jw(&["sessions"], socket).contains("main"));
+    }
+}
