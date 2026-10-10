@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use jw_core::layout::{Dir, Tree};
 use jw_proto::client::Client;
 use jw_proto::proto::pidfile;
-use jw_proto::proto::{ClientMsg, DaemonMsg, NewPane, PROTOCOL, PaneId, PaneInfo, PaneLeaf};
+use jw_proto::proto::{ClientMsg, DaemonMsg, NewPane, PROTOCOL, PaneId, PaneInfo, PaneLeaf, Theme};
 
 const EXE: &str = env!("CARGO_BIN_EXE_jw");
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -1026,4 +1026,139 @@ fn a_workspace_follows_its_new_id() {
         saved.contains(r#""id": "dir:/x#new""#) && !saved.contains(r#""id": "dir:/x#old""#),
         "{saved}"
     );
+}
+
+/// One Light, as the TUI would report it.
+const LIGHT: Theme = Theme {
+    dark: false,
+    fg: [0x38, 0x3a, 0x42],
+    bg: [0xfa, 0xfa, 0xfa],
+};
+
+/// A shell command that asks its terminal `query`, then shows what comes
+/// back on its input (`cat -v` prints ESC as `^[`).
+fn ask(query: &str) -> String {
+    format!("stty -echo -icanon; printf '{query}'; cat -v")
+}
+
+/// REQ-81, 82, 88, 89: colours, the scheme, the cursor and the attributes
+/// are answered from the theme, which a client changes.
+#[test]
+fn a_program_that_asks_gets_the_theme() {
+    let d = Daemon::start();
+    let mut c = d.client();
+    let pane = spawn(
+        &mut c,
+        "q",
+        &ask(r"\033]10;?\033\\\033]11;?\007\033[?996n\033[6n\033[c"),
+        80,
+        24,
+    );
+    let mut screen = vt100::Parser::new(24, 80, 0);
+    read_until(&mut c, pane, &mut screen, "^[[?1;2c");
+    let text = screen.screen().contents();
+    for want in [
+        r"^[]10;rgb:abab/b2b2/bfbf^[\",
+        r"^[]11;rgb:2828/2c2c/3434^[\",
+        "^[[?997;1n",
+        "^[[1;1R",
+    ] {
+        assert!(text.contains(want), "no {want:?} in {text}");
+    }
+
+    c.send(&ClientMsg::Theme(LIGHT)).unwrap();
+    let pane = spawn(
+        &mut c,
+        "q",
+        &format!("echo \"[$COLORFGBG]\"; {}", ask(r"\033]11;?\007")),
+        80,
+        24,
+    );
+    let mut screen = vt100::Parser::new(24, 80, 0);
+    read_until(&mut c, pane, &mut screen, "rgb:fafa/fafa/fafa");
+    assert!(screen.screen().contents().contains("[0;15]"));
+}
+
+/// REQ-83, 84: a switch reaches the programs that set mode 2031, and only
+/// them.
+#[test]
+fn a_switch_reaches_the_programs_that_asked_for_it() {
+    let d = Daemon::start();
+    let mut c = d.client();
+    let on = spawn(&mut c, "s", &ask(r"\033[?2031h\033[?2031$p"), 80, 24);
+    let mut screen = vt100::Parser::new(24, 80, 0);
+    read_until(&mut c, on, &mut screen, "^[[?2031;1$y");
+    let mut c2 = d.client();
+    let off = spawn(&mut c2, "s", &ask(r"\033[?2031$p"), 80, 24);
+    let mut quiet = vt100::Parser::new(24, 80, 0);
+    read_until(&mut c2, off, &mut quiet, "^[[?2031;2$y");
+
+    c.send(&ClientMsg::Theme(LIGHT)).unwrap();
+    read_until(&mut c, on, &mut screen, "^[[?997;2n");
+    c2.send(&ClientMsg::Input {
+        pane: off,
+        bytes: b"x".to_vec(),
+    })
+    .unwrap();
+    read_until(&mut c2, off, &mut quiet, "$yx");
+    assert!(!quiet.screen().contents().contains("997"));
+}
+
+/// REQ-86, 87: the theme outlives the daemon, and a restored pane's old
+/// questions are not answered again.
+#[test]
+fn the_theme_survives_a_restart_and_old_queries_stay_unanswered() {
+    let mut d = Daemon::start();
+    let mut c = d.client();
+    c.send(&ClientMsg::Theme(LIGHT)).unwrap();
+    let mut agent = cat();
+    agent.role = "agent".into();
+    agent.cmd = Some(ask(r"\033]11;?\007"));
+    agent.resume = Some("stty -echo -icanon; echo resumed; cat -v".into());
+    c.send(&ClientMsg::Open {
+        stream: "t".into(),
+        tree: Tree::Leaf(agent),
+    })
+    .unwrap();
+    let pane = ids(&next_tree(&mut c))[0];
+    let mut screen = attach(&mut c, "t", pane);
+    read_until(&mut c, pane, &mut screen, "rgb:fafa");
+    // A tree change saves the scrollback, query and answer included.
+    c.send(&ClientMsg::Name {
+        pane,
+        name: Some("saved".into()),
+    })
+    .unwrap();
+    while next_tree(&mut c).find(pane).unwrap().name.is_none() {}
+    drop(c);
+    let saved = std::fs::read_to_string(d.socket.with_file_name("session.json")).unwrap();
+    assert!(saved.contains(r#""dark": false"#), "{saved}");
+
+    d.restart();
+    let mut c = d.client();
+    c.send(&ClientMsg::Attach { stream: "t".into() }).unwrap();
+    let pane = ids(&next_tree(&mut c))[0];
+    let mut screen = vt100::Parser::new(24, 80, 0);
+    loop {
+        if let DaemonMsg::Snapshot { pane: p, bytes, .. } = next(&mut c)
+            && p == pane
+        {
+            screen.process(&bytes);
+            break;
+        }
+    }
+    read_until(&mut c, pane, &mut screen, "resumed");
+    c.send(&ClientMsg::Input {
+        pane,
+        bytes: b"x".to_vec(),
+    })
+    .unwrap();
+    read_until(&mut c, pane, &mut screen, "x");
+    let text = screen.screen().contents();
+    assert!(text.contains("restored"), "{text}");
+    assert_eq!(text.matches("rgb:").count(), 1, "{text}");
+
+    let fresh = spawn(&mut c, "t", &ask(r"\033]11;?\007"), 80, 24);
+    let mut screen = vt100::Parser::new(24, 80, 0);
+    read_until(&mut c, fresh, &mut screen, "rgb:fafa/fafa/fafa");
 }
