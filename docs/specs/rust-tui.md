@@ -237,6 +237,12 @@ An agent can leave the branch jw registered and open its PR from a new one (`the
 
 - REQ-113 WHEN `X` runs the done checks and the worktree's HEAD is not in its PR, the TUI SHALL still take the done path IF `origin/<default>` contains that HEAD.
 
+### Addendum 9 (R1): a restored pane starts with its modes off
+
+After `jw server stop`, the agent's pane came back from its scrollback with the modes claude had turned on: any-motion mouse tracking in SGR, bracketed paste, application cursor. The restore only left the alternate screen (`?1049l`) and cleared the kitty flags, so the TUI kept sending mouse moves to the new shell, which printed them (`35;120;40M…`). The daemon now turns every mode vt100 tracks off after the history (`MODES_OFF` in `crates/daemon/src/lib.rs`).
+
+- REQ-114 WHEN the daemon restores a pane from scrollback, the new process SHALL start with application cursor and keypad, bracketed paste, mouse tracking and mouse encodings off and the cursor shown, in the daemon and in every client.
+
 ---
 
 ## Rationale
@@ -341,6 +347,7 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | W2 ✓ `1a5d5ad` | Rename keeps the panes: `ClientMsg::Moved`, `PROTOCOL 8` | 111 | `proto`, `daemon`, `tui/mod.rs`, `tui/modal.rs` |
 | W3 ✓ `f575bca` | `^␣` + arrows walk the sidebar; the `MOVE` chip | 112 | `tui/mod.rs`, `tui/draw.rs` |
 | D1 ✓ `21b4e27` | Addendum 8: `X` accepts a HEAD already in the default branch | 113 | `actions.rs` |
+| R1 | Addendum 9: a restored pane's modes start off | 114 | `daemon/src/lib.rs` |
 | Later | Animations (optional) | 19, 20 | |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 
@@ -385,6 +392,7 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - "There is no navigation mode" (Contract) held until addendum 7: the user asked to move between workspaces and projects with the arrows, so an arrow after the leader starts a short move that any other key ends.
 - REQ-40 restarted a renamed worktree's panes so nothing ran in a moving folder. Losing the tab on every rename cost more than the stale paths it avoided; REQ-111 keeps the panes.
 - The worktree-names addendum was drafted as addendum 4 with REQ-81–83, RISK-25 and `PROTOCOL 7` on a branch cut before S14–S16, which took those ids. It merged as addendum 7, REQ-110–112, RISK-35 and `PROTOCOL 8`.
+- REQ-72's restore reset only the screen (`?1049l`), and later REQ-87 and REQ-98 the theme and kitty state. The old process's mouse, paste and cursor modes survived into the new one until REQ-114.
 
 ## Tests
 

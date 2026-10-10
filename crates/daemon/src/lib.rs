@@ -370,6 +370,11 @@ impl PaneState {
     }
 }
 
+/// Every mode vt100 tracks, back to its default: application cursor and
+/// keypad, the cursor shown, bracketed paste, mouse tracking and encodings.
+const MODES_OFF: &[u8] =
+    b"\x1b[?1l\x1b>\x1b[?25h\x1b[?2004l\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l";
+
 /// The pane for a client that starts watching it: its last output, which
 /// rebuilds the scrollback (REQ-72), then the exact screen on top.
 fn snapshot(id: PaneId, pane: &Pane, st: &PaneState) -> DaemonMsg {
@@ -1264,6 +1269,8 @@ impl Daemon {
             );
             // REQ-98: the new process asked for no keyboard flags yet.
             bytes.extend_from_slice(kitty::CLEAR);
+            // REQ-114: nor for the old one's mouse, paste and key modes.
+            bytes.extend_from_slice(MODES_OFF);
             let mut st = lock(&pane.state);
             st.parser.process(&bytes);
             st.ring.push(&bytes);
