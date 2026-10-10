@@ -231,12 +231,21 @@ fn list_reports_every_pane() {
     let a = spawn(&mut c, "a", "cat", 80, 24);
     let b = spawn(&mut c, "b", "cat", 80, 24);
 
+    // `sh -c cat` becomes cat a moment after the pane starts (sooner on
+    // macOS than with Linux's dash): ask until it has.
     let mut other = d.client();
-    other.send(&ClientMsg::List).unwrap();
+    let deadline = Instant::now() + TIMEOUT;
     let panes = loop {
-        if let DaemonMsg::Panes { panes } = recv(&mut other) {
+        other.send(&ClientMsg::List).unwrap();
+        let panes = loop {
+            if let DaemonMsg::Panes { panes } = recv(&mut other) {
+                break panes;
+            }
+        };
+        if panes.iter().all(|p| p.fg.as_deref() == Some("cat")) || Instant::now() > deadline {
             break panes;
         }
+        thread::sleep(Duration::from_millis(50));
     };
     let info = |pane, stream: &str| PaneInfo {
         pane,
