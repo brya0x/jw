@@ -1,0 +1,20 @@
+[package]
+name = "jw"
+description = "Worktree streams in a TUI that is its own terminal multiplexer"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+publish.workspace = true
+
+[dependencies]
+jw-core.workspace = true
+jw-proto.workspace = true
+jw-daemon.workspace = true
+jw-tui.workspace = true
+anyhow.workspace = true
+libc.workspace = true
+serde_json.workspace = true
+vt100.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

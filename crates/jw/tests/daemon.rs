@@ -6,10 +6,10 @@ use std::process::{Child, Command};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use jw::client::Client;
-use jw::layout::{Dir, Tree};
-use jw::proto::pidfile;
-use jw::proto::{ClientMsg, DaemonMsg, NewPane, PROTOCOL, PaneId, PaneInfo, PaneLeaf};
+use jw_core::layout::{Dir, Tree};
+use jw_proto::client::Client;
+use jw_proto::proto::pidfile;
+use jw_proto::proto::{ClientMsg, DaemonMsg, NewPane, PROTOCOL, PaneId, PaneInfo, PaneLeaf};
 
 const EXE: &str = env!("CARGO_BIN_EXE_jw");
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -932,7 +932,7 @@ fn an_agent_hook_reports_its_state() {
         }
     };
     let p = panes.iter().find(|p| p.pane == pane).unwrap();
-    assert_eq!(p.agent, Some(jw::proto::AgentState::Waiting));
+    assert_eq!(p.agent, Some(jw_proto::proto::AgentState::Waiting));
 }
 
 /// A renamed session's workspace keeps its panes under its new id.

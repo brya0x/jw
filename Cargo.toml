@@ -1,18 +1,18 @@
-[package]
-name = "jw"
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
 version = "0.0.0"
 edition = "2024"
 license-file = "LICENSE"
-description = "Worktree streams in a TUI that is its own terminal multiplexer"
 publish = false
 
-# The Rust rewrite lives next to the Go code until it reaches parity;
-# see docs/specs/rust-tui.md.
-[[bin]]
-name = "jw"
-path = "src/main.rs"
-
-[dependencies]
+[workspace.dependencies]
+jw-core = { path = "crates/core" }
+jw-proto = { path = "crates/proto" }
+jw-daemon = { path = "crates/daemon" }
+jw-tui = { path = "crates/tui" }
 anyhow = "1.0.104"
 libc = "0.2.190"
 portable-pty = "0.9.0"
@@ -21,9 +21,7 @@ ratatui = "0.30"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 syntect = { version = "5", default-features = false, features = ["default-syntaxes", "default-themes", "parsing", "regex-fancy"] }
+tempfile = "3.27.0"
 toml = "1.1.7"
 unicode-width = "0.2"
 vt100 = "0.16.2"
-
-[dev-dependencies]
-tempfile = "3.27.0"

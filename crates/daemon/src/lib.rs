@@ -9,6 +9,11 @@
 //! subscribers, which is what makes "snapshot, then output" race free. Locks
 //! are taken in the order workspaces → panes → a pane's state.
 
+// The code says `crate::proto` and `crate::layout`, as it did when this
+// was one crate.
+use jw_core::{core, layout};
+use jw_proto::proto;
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Read, Write};

@@ -621,15 +621,65 @@ name = "jw"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "jw-core",
+ "jw-daemon",
+ "jw-proto",
+ "jw-tui",
+ "libc",
+ "serde_json",
+ "tempfile",
+ "vt100",
+]
+
+[[package]]
+name = "jw-core"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
+name = "jw-daemon"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "jw-core",
+ "jw-proto",
  "libc",
  "portable-pty",
+ "serde",
+ "serde_json",
+ "vt100",
+]
+
+[[package]]
+name = "jw-proto"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "jw-core",
+ "libc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "jw-tui"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "jw-core",
+ "jw-proto",
  "pulldown-cmark",
  "ratatui",
  "serde",
  "serde_json",
  "syntect",
  "tempfile",
- "toml",
  "unicode-width",
  "vt100",
 ]
