@@ -160,6 +160,9 @@ pub struct App {
     leader_at: Option<Instant>,
     /// The popup with every key (REQ-31).
     pub which: bool,
+    /// An arrow followed the leader: more arrows keep moving through the
+    /// sidebar until another key (REQ-83).
+    pub walking: bool,
     pub rows: Vec<Row>,
     /// Workspace ids by last use, most recent first (`recent.json`).
     recent: Vec<String>,
@@ -355,6 +358,7 @@ impl App {
             leader,
             leader_at: None,
             which: false,
+            walking: false,
             rows: Vec::new(),
             recent: load_recent(),
             daemon_panes: Vec::new(),
@@ -782,6 +786,15 @@ impl App {
             }
             return;
         }
+        if self.walking {
+            if self.walk_key(k.code) {
+                return;
+            }
+            self.walking = false;
+            if matches!(k.code, KeyCode::Enter | KeyCode::Esc) {
+                return;
+            }
+        }
         if self.leader_at.take().is_some() {
             self.which = false;
             self.leader_key(k);
@@ -822,6 +835,7 @@ impl App {
                 self.leader_at = Some(Instant::now());
             }
             KeyCode::Char(c @ '1'..='9') => self.jump(c as usize - '1' as usize),
+            code if self.walk_key(code) => self.walking = true,
             KeyCode::Char('h') => self.focus_towards(-1, 0),
             KeyCode::Char('l') => self.focus_towards(1, 0),
             KeyCode::Char('k') => self.focus_towards(0, -1),
@@ -904,6 +918,68 @@ impl App {
             Some(e) => self.open_entry(e, false),
             None => self.fail(format!("no workspace {}", i + 1)),
         }
+    }
+
+    /// An arrow while walking the sidebar: `↑↓` the previous or next open
+    /// workspace, `←→` the previous or next project. False for any other key.
+    fn walk_key(&mut self, code: KeyCode) -> bool {
+        let target = match code {
+            KeyCode::Up => self.walk(-1, false),
+            KeyCode::Down => self.walk(1, false),
+            KeyCode::Left => self.walk(-1, true),
+            KeyCode::Right => self.walk(1, true),
+            _ => return false,
+        };
+        match target {
+            Some(e) => self.open_entry(e, false),
+            None => self.fail("no other open workspace".into()),
+        }
+        true
+    }
+
+    /// The open workspace `dir` steps from the current one in the sidebar,
+    /// wrapping around; by `project`, the first open row of each project.
+    /// Closed rows are skipped: opening them would start their panes.
+    fn walk(&self, dir: isize, project: bool) -> Option<Entry> {
+        // Each project's rows: the unindented one and the worktrees under it.
+        let mut groups: Vec<Vec<usize>> = Vec::new();
+        for (i, r) in self.rows.iter().enumerate() {
+            match groups.last_mut() {
+                Some(g) if r.child => g.push(i),
+                _ => groups.push(vec![i]),
+            }
+        }
+        let open = |i: &usize| self.is_open(&self.rows[*i].entry.id);
+        let stops: Vec<usize> = if project {
+            groups
+                .iter()
+                .filter_map(|g| g.iter().copied().find(|i| open(i)))
+                .collect()
+        } else {
+            (0..self.rows.len()).filter(open).collect()
+        };
+        let here = self
+            .rows
+            .iter()
+            .position(|r| self.current().is_some_and(|c| c.id == r.entry.id));
+        // Where the current row sits among the stops: its own group's stop
+        // when moving by project.
+        let at = here.and_then(|h| {
+            if project {
+                let g = groups.iter().find(|g| g.contains(&h))?;
+                stops.iter().position(|s| g.contains(s))
+            } else {
+                stops.iter().position(|s| *s == h)
+            }
+        });
+        let n = stops.len() as isize;
+        let next = match at {
+            Some(a) => (a as isize + dir).rem_euclid(n.max(1)) as usize,
+            None if dir > 0 => 0,
+            None => stops.len().checked_sub(1)?,
+        };
+        let row = *stops.get(next)?;
+        (Some(row) != here).then(|| self.rows[row].entry.clone())
     }
 
     /// `^␣ tab`: the workspace used before this one.

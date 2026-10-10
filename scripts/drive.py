@@ -10,7 +10,7 @@ socket path has ~100 characters). The daemon it starts keeps running:
 kill it with `kill $(cat <dir>/run/jw/jw.pid)`, never `pkill jw`.
 
 Steps:
-  lead:<k>      Ctrl-Space, then <k> (`space` for ␣)
+  lead:<k>      Ctrl-Space, then <k> (`space` for ␣, or a key: name)
   type:<text>   types text
   key:<name>    enter esc tab up down left right bs
   wait:<s>      reads output for <s> seconds
@@ -83,7 +83,7 @@ for step in sys.argv[2:]:
     if k == "lead":
         os.write(fd, b"\x00")
         time.sleep(0.05)
-        os.write(fd, b" " if v == "space" else v.encode())
+        os.write(fd, b" " if v == "space" else KEYS.get(v, v.encode()))
         pump(0.6)
     elif k == "type":
         os.write(fd, v.encode())
