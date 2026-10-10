@@ -26,7 +26,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 | `␣` switch workspace (fuzzy, most recent first, preview) | `w` new worktree from the current branch: asks its name (the next free `ws-N` filled in), branch from the `branch` template, setup runs | `hjkl` focus |
 | `tab` previous workspace | `r` rename: name, branch and folder; its panes keep running | `t` new shell beside the focused pane |
 | `1–9` the sidebar's number | `s` sync (on a project root: `pull --ff-only`) | `x` close the pane; on the last one, close the workspace |
-| `o` open a folder (browser: arrows, type to filter, `~`, a new name creates it) | `d` diff pane against the base | `n` name the pane (empty = automatic title) |
+| `o` open a folder (browser: arrows, type to filter, `~`, a new name creates it) | `d` diff pane against the base, on a worktree or the project root (addendum 11) | `n` name the pane (empty = automatic title) |
 | `/` open a file (`.md` → reader pane, else nvim) | `X` remove: done checks if the PR is merged, rm checks otherwise | `f` full: the focused pane fills the panes area, the sidebar and bars stay · `HJKL` swap with the neighbour · `p` save the panes as the project's layout (addendum 10) |
 | `↑↓` next/previous workspace, `←→` next/previous project; more arrows keep moving | | |
 | `?` keys · `q` detach | | |
@@ -270,6 +270,12 @@ jw no longer picks a layout for a project. The first worktree of a project with 
 - REQ-121 WHILE a worktree's panes differ from its project's layout, the header SHALL show `layout changed`.
 - REQ-122 `jw worktree` SHALL never ask for a layout.
 
+### Addendum 11 (D2): `d` on the project root
+
+`d` refused the project root ("is the project itself: diff is for its worktrees"), so the root's own work had no diff. It now runs on any git workspace: against `origin/<default>` like a worktree, or against `HEAD` when origin has no default branch (`diff::load` with an empty base).
+
+- REQ-123 WHEN `d` runs on a project root that is a git repository, the TUI SHALL open its diff against `origin/<default>`, or against `HEAD` WHERE origin has no default branch.
+
 ---
 
 ## Rationale
@@ -386,6 +392,7 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | L2 ✓ `98e0473` | `init::render_project`, `config::save_layout`, `Node` ↔ TOML | 117, 120 | `init.rs`, `config.rs`, `layout.rs` |
 | L3 ✓ `2f1a0b9` | `Modal::Setup`: the builder, agent and setup step of `^␣ w` | 115–117, 122 | `tui/modal.rs`, `tui/setup.rs`, `tui/mod.rs` |
 | L4 ✓ `20dc5da` | `^␣ p` saves the layout; `layout changed` in the header | 120, 121 | `tui/mod.rs`, `tui/draw.rs`, `settings.rs` |
+| D2 | Addendum 11: `d` on the project root | 123 | `diff.rs`, `tui/mod.rs` |
 | Later | Animations (optional) | 19, 20 | |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 
@@ -429,6 +436,7 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - The Contract said the theme follows "the terminal or the OS". It followed the OS only (`theme::system_dark`), and programs in panes were never told it: vt100 dropped their OSC 11 and mode 2031 and nobody answered (S14).
 - "There is no navigation mode" (Contract) held until addendum 7: the user asked to move between workspaces and projects with the arrows, so an arrow after the leader starts a short move that any other key ends.
 - REQ-40 restarted a renamed worktree's panes so nothing ran in a moving folder. Losing the tab on every rename cost more than the stale paths it avoided; REQ-111 keeps the panes.
+- REQ-57 put no limit on `d`, but the TUI refused it on a project root (`current_worktree`). Addendum 11 lets it run there.
 - Interfaces → Protocol said every client opens with `Hello` and refuses another `PROTOCOL`. Only the TUI did: `jw ls`, `sessions`, `read`, `prompt` and `worktree` misread an old daemon (everything showed closed) until the review pass of addendum 10's PR.
 - The daemon's lock order was "workspaces → panes → a pane's state", and saves ran unserialized from every client thread, the timer and the signal thread, so two could clobber `session.json`. A `saving` lock now comes first: saving → workspaces → panes → state. `split`, `dock`, `kill`, `place` and `rekey` also told watchers before saving, against "save before telling"; they save first now.
 - The Contract and Interfaces gave a project with no `[layout]` the default tree (nvim | agent over a shell). Addendum 10 makes it one shell, and the user builds the rest.

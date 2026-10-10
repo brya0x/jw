@@ -71,20 +71,18 @@ pub struct Line {
 }
 
 /// Everything the stream changed against `origin/<base>`: committed,
-/// staged, unstaged and untracked.
+/// staged, unstaged and untracked. With no `base` (a repository whose
+/// origin has no default branch, or no origin), against `HEAD`: what is
+/// not committed yet (REQ-123).
 pub fn load(dir: &Path, base: &str) -> Result<Vec<File>> {
     let base_ref = format!("origin/{base}");
-    let out = git::output(
-        dir,
-        &[
-            "diff",
-            "-M",
-            "--no-color",
-            "--no-ext-diff",
-            "--merge-base",
-            &base_ref,
-        ],
-    )?;
+    let mut args = vec!["diff", "-M", "--no-color", "--no-ext-diff"];
+    if base.is_empty() {
+        args.push("HEAD");
+    } else {
+        args.extend(["--merge-base", &base_ref]);
+    }
+    let out = git::output(dir, &args)?;
     let mut files = parse(&out);
     // git diff leaves out untracked files; they are new files all the same.
     let untracked = git::output(dir, &["ls-files", "--others", "--exclude-standard", "-z"])?;
@@ -464,5 +462,15 @@ Binary files /dev/null and b/img.png differ
             "committed and edited, against the base"
         );
         assert_eq!(files[1].hunks[0].lines[0].text, "# hi");
+
+        // REQ-123: with no base, only what isn't committed.
+        let files = load(&work, "").unwrap();
+        let names: Vec<(&str, Status)> =
+            files.iter().map(|f| (f.path.as_str(), f.status)).collect();
+        assert_eq!(
+            names,
+            [("a.txt", Status::Modified), ("new.md", Status::Added)]
+        );
+        assert_eq!(files[0].added(), 1);
     }
 }
