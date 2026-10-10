@@ -38,8 +38,8 @@ use ring::Ring;
 
 use crate::layout::{Dir, Tree};
 use crate::proto::{
-    AgentState, ClientMsg, DaemonMsg, NewPane, PROTOCOL, PaneId, PaneInfo, PaneLeaf, is_view,
-    pidfile, read_frame, write_frame,
+    AgentState, ClientMsg, DaemonMsg, NewPane, PROTOCOL, PaneId, PaneInfo, PaneLeaf, Theme,
+    is_view, pidfile, read_frame, write_frame,
 };
 
 /// How often the panes' output is written out, between tree changes.
@@ -162,6 +162,8 @@ struct Daemon {
     workspaces: Mutex<BTreeMap<String, Ws>>,
     /// Where the trees are saved after every change; `None` keeps no file.
     session: Option<PathBuf>,
+    /// What the client draws panes on, for the programs that ask (S14).
+    theme: Arc<Mutex<Theme>>,
     next_pane: AtomicU64,
     next_client: AtomicU64,
 }
@@ -226,12 +228,60 @@ struct PaneState {
 }
 
 /// Catches what a pane's program says beyond its screen: the window title,
-/// and the bell or a desktop notification (OSC 9 / 777), which agents use
-/// when they wait for an answer.
+/// the bell or a desktop notification (OSC 9 / 777), which agents use when
+/// they wait for an answer, and the questions it asks its terminal.
 #[derive(Default)]
 struct Titles {
     new: Option<String>,
     rang: bool,
+    /// Asked since the reader last answered.
+    queries: Vec<Query>,
+    /// It set mode 2031: tell it when the theme turns dark or light.
+    scheme: bool,
+}
+
+/// A question a pane's program asks its terminal, answered on its PTY
+/// (REQ-81–84, REQ-89).
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Query {
+    /// OSC 10 ?
+    Fg,
+    /// OSC 11 ?
+    Bg,
+    /// CSI ? 996 n
+    Scheme,
+    /// CSI ? 2031 $ p
+    SchemeMode,
+    /// CSI 6 n
+    Cursor,
+    /// CSI c
+    Attrs,
+}
+
+impl Query {
+    fn answer(self, theme: &Theme, scheme: bool, screen: &vt100::Screen) -> Vec<u8> {
+        let rgb = |code: u8, [r, g, b]: [u8; 3]| {
+            format!("\x1b]{code};rgb:{r:02x}{r:02x}/{g:02x}{g:02x}/{b:02x}{b:02x}\x1b\\")
+        };
+        match self {
+            Self::Fg => rgb(10, theme.fg),
+            Self::Bg => rgb(11, theme.bg),
+            Self::Scheme => return scheme_report(theme.dark),
+            Self::SchemeMode => format!("\x1b[?2031;{}$y", if scheme { 1 } else { 2 }),
+            Self::Cursor => {
+                let (row, col) = screen.cursor_position();
+                format!("\x1b[{};{}R", row + 1, col + 1)
+            }
+            Self::Attrs => "\x1b[?1;2c".to_string(),
+        }
+        .into_bytes()
+    }
+}
+
+/// What a terminal says when its colour scheme is or turns dark or light
+/// (CSI ? 997 ; 1|2 n).
+fn scheme_report(dark: bool) -> Vec<u8> {
+    format!("\x1b[?997;{}n", if dark { 1 } else { 2 }).into_bytes()
 }
 
 impl vt100::Callbacks for Titles {
@@ -244,8 +294,42 @@ impl vt100::Callbacks for Titles {
     }
 
     fn unhandled_osc(&mut self, _: &mut vt100::Screen, params: &[&[u8]]) {
-        if matches!(params.first(), Some(&b"9") | Some(&b"777")) {
-            self.rang = true;
+        match params {
+            [b"9" | b"777", ..] => self.rang = true,
+            // OSC 10 ; ? ; ? asks for the foreground, then the background.
+            [code @ (b"10" | b"11"), asks @ ..] => {
+                let colours = if *code == b"10" {
+                    &[Query::Fg, Query::Bg][..]
+                } else {
+                    &[Query::Bg][..]
+                };
+                for (ask, q) in asks.iter().zip(colours) {
+                    if *ask == b"?" {
+                        self.queries.push(*q);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn unhandled_csi(
+        &mut self,
+        _: &mut vt100::Screen,
+        i1: Option<u8>,
+        i2: Option<u8>,
+        params: &[&[u16]],
+        c: char,
+    ) {
+        let has = |n: u16| params.iter().any(|p| *p == [n]);
+        match (i1, i2, c) {
+            (Some(b'?'), None, 'n') if has(996) => self.queries.push(Query::Scheme),
+            // vt100 passes every parameter of a `?h` it doesn't know.
+            (Some(b'?'), None, 'h' | 'l') if has(2031) => self.scheme = c == 'h',
+            (Some(b'?'), Some(b'$'), 'p') if has(2031) => self.queries.push(Query::SchemeMode),
+            (None, None, 'n') if has(6) => self.queries.push(Query::Cursor),
+            (None, None, 'c') if params.is_empty() || has(0) => self.queries.push(Query::Attrs),
+            _ => {}
         }
     }
 }
@@ -317,6 +401,9 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 #[derive(Serialize, Deserialize)]
 struct Session {
     workspaces: Vec<SavedWs>,
+    /// The last theme a client reported (REQ-86).
+    #[serde(default)]
+    theme: Option<Theme>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -343,6 +430,7 @@ impl Daemon {
             panes: Mutex::default(),
             workspaces: Mutex::default(),
             session,
+            theme: Arc::default(),
             next_pane: AtomicU64::new(0),
             next_client: AtomicU64::new(0),
         }
@@ -451,6 +539,7 @@ impl Daemon {
             ClientMsg::Agent { pane, state } => {
                 lock(&self.pane(pane)?.state).agent = Some(state);
             }
+            ClientMsg::Theme(theme) => self.set_theme(theme),
             ClientMsg::Input { pane, bytes } => {
                 let pane = self.pane(pane)?;
                 lock(&pane.state).bell = false;
@@ -819,6 +908,9 @@ impl Daemon {
             Ok(s) => s,
             Err(e) => return eprintln!("jw daemon: {}: {e}", path.display()),
         };
+        if let Some(theme) = session.theme {
+            *lock(&self.theme) = theme;
+        }
         for ws in session.workspaces {
             let tree = ws.tree.try_map(&mut |p: SavedPane| {
                 let id = match p.started {
@@ -901,6 +993,7 @@ impl Daemon {
                         })
                     })
                     .collect(),
+                theme: Some(*lock(&self.theme)),
             }
         };
         let write = || -> Result<()> {
@@ -988,6 +1081,34 @@ impl Daemon {
             .with_context(|| format!("no pane {id}"))
     }
 
+    /// Keeps what the client draws on, and tells each program that asked
+    /// for it (mode 2031) when it turns dark or light (REQ-83).
+    fn set_theme(&self, theme: Theme) {
+        let old = std::mem::replace(&mut *lock(&self.theme), theme);
+        if old == theme {
+            return;
+        }
+        self.save();
+        if old.dark == theme.dark {
+            return;
+        }
+        let report = scheme_report(theme.dark);
+        let panes: Vec<_> = lock(&self.panes).values().cloned().collect();
+        for pane in panes {
+            let wants = {
+                let st = lock(&pane.state);
+                st.exited.is_none() && st.parser.callbacks().scheme
+            };
+            if wants {
+                let mut io = lock(&pane.io);
+                let _ = io
+                    .writer
+                    .write_all(&report)
+                    .and_then(|()| io.writer.flush());
+            }
+        }
+    }
+
     fn pane(&self, id: PaneId) -> Result<Arc<Pane>> {
         lock(&self.panes)
             .get(&id)
@@ -1044,6 +1165,9 @@ impl Daemon {
         };
         builder.cwd(&cwd);
         builder.env("TERM", "xterm-256color");
+        // REQ-88: what programs that only read the environment go by.
+        let dark = lock(&self.theme).dark;
+        builder.env("COLORFGBG", if dark { "15;0" } else { "0;15" });
         for (k, v) in &env {
             builder.env(k, v);
         }
@@ -1099,8 +1223,8 @@ impl Daemon {
             let mut st = lock(&pane.state);
             st.parser.process(&bytes);
             st.ring.push(&bytes);
-            st.parser.callbacks_mut().new = None;
-            st.parser.callbacks_mut().rang = false;
+            // REQ-87: the old process asked those, not this one.
+            *st.parser.callbacks_mut() = Titles::default();
         }
         if let Some((client, tx)) = sub {
             // Its reader hasn't started: Spawned goes before any output.
@@ -1109,6 +1233,7 @@ impl Daemon {
         }
         lock(&self.panes).insert(id, Arc::clone(&pane));
 
+        let theme = Arc::clone(&self.theme);
         thread::spawn(move || {
             let mut buf = [0u8; 8192];
             loop {
@@ -1130,6 +1255,20 @@ impl Daemon {
                             st.title = Some(title.clone());
                             st.broadcast(&DaemonMsg::Title { pane: id, title });
                         }
+                        let queries = std::mem::take(&mut st.parser.callbacks_mut().queries);
+                        if queries.is_empty() {
+                            continue;
+                        }
+                        let theme = *lock(&theme);
+                        let scheme = st.parser.callbacks().scheme;
+                        let reply: Vec<u8> = queries
+                            .iter()
+                            .flat_map(|q| q.answer(&theme, scheme, st.parser.screen()))
+                            .collect();
+                        // RISK-27: never hold the state while writing.
+                        drop(st);
+                        let mut io = lock(&pane.io);
+                        let _ = io.writer.write_all(&reply).and_then(|()| io.writer.flush());
                     }
                     Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
                     // Linux reports the child closing the slave as EIO.
@@ -1246,4 +1385,40 @@ fn prompt(pane: &Pane, text: &str) -> Result<()> {
     io.writer.write_all(b"\r")?;
     io.writer.flush()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(chunks: &[&[u8]]) -> Titles {
+        let mut p = vt100::Parser::new_with_callbacks(24, 80, 0, Titles::default());
+        for c in chunks {
+            p.process(c);
+        }
+        std::mem::take(p.callbacks_mut())
+    }
+
+    #[test]
+    fn queries_are_caught_across_reads_and_among_other_modes() {
+        let t = parse(&[
+            b"\x1b]10;?;?\x07\x1b]1",
+            b"1;?\x1b\\\x1b[?1049;2031h\x1b[?996n",
+        ]);
+        assert_eq!(t.queries, [Query::Fg, Query::Bg, Query::Bg, Query::Scheme]);
+        assert!(t.scheme);
+        assert!(!parse(&[b"\x1b[?2031h\x1b[?2031l"]).scheme);
+        // A colour being set is not a question.
+        assert!(parse(&[b"\x1b]11;#000000\x07"]).queries.is_empty());
+    }
+
+    #[test]
+    fn colours_are_answered_in_sixteen_bits() {
+        let screen = vt100::Parser::default();
+        let theme = Theme::default();
+        assert_eq!(
+            Query::Bg.answer(&theme, false, screen.screen()),
+            b"\x1b]11;rgb:2828/2c2c/3434\x1b\\"
+        );
+    }
 }

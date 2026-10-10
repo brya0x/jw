@@ -289,6 +289,22 @@ pub fn copy(from: &str, to: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
+/// What panes sit on, for the daemon to answer the programs in them that
+/// ask (S14).
+pub fn wire() -> crate::proto::Theme {
+    let pal = p();
+    let builtin = if pal.dark { &ONE_DARK } else { &ONE_LIGHT };
+    let rgb = |c: Color, or: Color| match (c, or) {
+        (Color::Rgb(r, g, b), _) | (_, Color::Rgb(r, g, b)) => [r, g, b],
+        _ => [0, 0, 0],
+    };
+    crate::proto::Theme {
+        dark: pal.dark,
+        fg: rgb(pal.fg, builtin.fg),
+        bg: rgb(pal.bg, builtin.bg),
+    }
+}
+
 /// Switches palettes; true when that changed anything.
 pub fn set_dark(dark: bool) -> bool {
     DARK.swap(dark, Ordering::Relaxed) != dark

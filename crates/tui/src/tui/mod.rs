@@ -189,6 +189,8 @@ pub struct App {
     /// Each worktree's pull request, from the last look (REQ-51).
     pub prs: BTreeMap<String, crate::connectors::Pr>,
     ticks: u64,
+    /// The theme the daemon was last told (REQ-85).
+    told: Option<crate::proto::Theme>,
     /// The viewer panes' contents, by pane id.
     pub views: BTreeMap<PaneId, View>,
     /// A viewer waiting for its pane: it fills the next viewer leaf the
@@ -371,6 +373,7 @@ impl App {
             here: BTreeMap::new(),
             prs: BTreeMap::new(),
             ticks: 0,
+            told: None,
             views: BTreeMap::new(),
             pending_view: None,
             busy: None,
@@ -419,6 +422,17 @@ impl App {
             terminal.draw(|f| draw::draw(f, self))?;
         }
         Ok(())
+    }
+
+    /// REQ-85: the daemon answers the programs in panes with the colours
+    /// they sit on, so it hears of every switch (by the system, the
+    /// settings or a theme file).
+    fn tell_theme(&mut self) {
+        let theme = crate::theme::wire();
+        if self.told != Some(theme) {
+            self.told = Some(theme);
+            self.send(ClientMsg::Theme(theme));
+        }
     }
 
     fn send(&mut self, msg: ClientMsg) {
@@ -620,6 +634,7 @@ impl App {
             }
             Msg::Term(_) => {}
             Msg::Tick => {
+                self.tell_theme();
                 if self
                     .status
                     .as_ref()
