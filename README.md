@@ -10,6 +10,7 @@ servers and a block of ports. Everything stays in one TUI that keeps running whe
 jw                       # open the last session
 jw new testing           # a new session, starting in this folder with one shell
 jw sessions              # every session, and what runs in it
+jw help                  # every command
 ```
 
 Inside, press `Ctrl-Space` and then one key. Wait a moment after `Ctrl-Space` and every key
@@ -194,6 +195,9 @@ jw read <workspace> [--pane role] [--lines N]    # a pane's last lines, scrollba
 jw worktree <name> [--in <project>] [--task "…"] # a new worktree, with a task for its agent
 jw prompt <workspace> "<task>"                   # type a task into an open workspace's agent
 ```
+
+`jw skill install` puts the Claude Code skill that teaches an agent these commands in
+`~/.claude/skills/jw/`. Run it again after updating jw.
 
 A workspace in one session can oversee the others. That is how a "brain" agent keeps track
 of the rest.

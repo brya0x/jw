@@ -4,6 +4,8 @@
 use std::process::ExitCode;
 
 mod cli;
+mod help;
+mod skill;
 
 // cli.rs says `crate::stream`, `crate::proto`…, as it did when this was one
 // crate.
@@ -12,8 +14,32 @@ use jw_proto::{client, proto};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // `jw <command> --help`, before the command reads its arguments.
+    if let [cmd, flag] = args.as_slice()
+        && help::asks(flag)
+        && let Some(c) = help::find(cmd)
+    {
+        print!("{}", help::one(c));
+        return ExitCode::SUCCESS;
+    }
     match args.first().map(String::as_str) {
         None => tui(None),
+        Some("help" | "-h" | "--help") => match args.get(1) {
+            None => {
+                print!("{}", help::all());
+                ExitCode::SUCCESS
+            }
+            Some(cmd) => match help::find(cmd) {
+                Some(c) => {
+                    print!("{}", help::one(c));
+                    ExitCode::SUCCESS
+                }
+                None => {
+                    eprintln!("jw help: no command {cmd:?}; jw help lists them");
+                    ExitCode::from(2)
+                }
+            },
+        },
         Some("new") => match cli::new_session(&args[1..]) {
             Ok(name) => tui(Some(&name)),
             Err(e) => {
@@ -27,6 +53,7 @@ fn main() -> ExitCode {
         Some("ls") => report("ls", cli::ls(&args[1..])),
         Some("read") => report("read", cli::read(&args[1..])),
         Some("hook") => report("hook", cli::hook(&args[1..])),
+        Some("skill") => report("skill", skill::run(&args[1..])),
         Some("--version" | "-V") => {
             println!("jw {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
@@ -41,7 +68,7 @@ fn main() -> ExitCode {
         },
         Some(name) if jw_core::session::valid(name) && args.len() == 1 => tui(Some(name)),
         Some(cmd) => {
-            eprintln!("jw: unknown command {cmd:?}");
+            eprintln!("jw: unknown command {cmd:?}; jw help lists them");
             ExitCode::from(2)
         }
     }
