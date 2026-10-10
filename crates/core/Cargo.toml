@@ -1,0 +1,16 @@
+[package]
+name = "jw-core"
+description = "jw's model: config, layouts, the registry, sessions, folders, git and GitHub, and the actions on worktrees"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

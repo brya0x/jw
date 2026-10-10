@@ -1,0 +1,29 @@
+# jw (the binary)
+
+`jw` with no arguments, or with a session name, opens the TUI (jw-tui). `jw daemon` runs
+jw-daemon, and is started by the client, never by hand. Everything else is the CLI in
+`src/cli.rs`.
+
+## What lives where
+
+- `src/main.rs`: dispatches the subcommands. `tui()` picks the session (the one named, else
+  the last used one).
+- `src/cli.rs`: `new_session` (`:73`), `sessions` (`:107`), and the commands agents use:
+  `ls` (`:407`), `read` (`:454`), `worktree` (`:151`), `prompt` (`:28`), plus `hook`
+  (`:47`), which claude's hooks run. They act on `$JW_SESSION`.
+- `examples/screen.rs`: prints the screen a byte stream leaves, for `scripts/drive.py`.
+- `tests/daemon.rs`: the daemon's integration tests. They start this binary on a socket of
+  their own.
+
+## Keep in mind
+
+- **`jw hook` must stay silent and exit 0.** It runs inside claude on every prompt and tool
+  call.
+- **The CLI's output is read by agents.** Keep `jw ls --json` stable, and document changes
+  to it in `~/.claude/skills/jw/SKILL.md`.
+- **A session name can't be a subcommand** (`session::RESERVED`). Add new subcommands there
+  too.
+
+## Tests
+
+`cargo test -p jw`. The daemon tests use `CARGO_BIN_EXE_jw` and kill only their own daemon.

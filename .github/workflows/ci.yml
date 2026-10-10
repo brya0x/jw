@@ -13,50 +13,29 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # jw is unix only, like its runtime: PTYs and a unix socket. Both
+  # flavours: the git tests behave slightly differently on macOS
+  # (/var → /private/var, BSD tools).
   test:
     name: test (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        # Both Unix flavours: the system connector and the git tests behave
-        # slightly differently on macOS (/var → /private/var, BSD tools).
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          go-version-file: go.mod
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
 
-      - name: gofmt
+      - name: cargo fmt
         if: runner.os == 'Linux'
-        run: |
-          unformatted=$(gofmt -l .)
-          if [ -n "$unformatted" ]; then
-            echo "run gofmt -w on:"
-            echo "$unformatted"
-            exit 1
-          fi
+        run: cargo fmt --all --check
 
-      - name: go vet
-        run: go vet ./...
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
-      - name: go test
-        run: go test -race ./...
-
-  # The Windows side of the system connector must keep compiling. The test
-  # suite itself uses sh scripts as fake tools, so it only runs on Unix.
-  windows:
-    name: build (windows)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-
-      - name: go vet (GOOS=windows)
-        run: GOOS=windows go vet ./...
-
-      - name: go build (GOOS=windows)
-        run: GOOS=windows go build -o /dev/null .
+      - name: cargo test
+        run: cargo test --workspace --locked

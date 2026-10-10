@@ -1,0 +1,17 @@
+[package]
+name = "jw-daemon"
+description = "jw's daemon: every terminal (PTY + vt100), each workspace's pane tree, session.json and scrollback"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+publish.workspace = true
+
+[dependencies]
+jw-core.workspace = true
+jw-proto.workspace = true
+anyhow.workspace = true
+libc.workspace = true
+portable-pty.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+vt100.workspace = true
