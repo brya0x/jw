@@ -42,6 +42,8 @@ cat > "$D/env.sh" <<ENV
 export HOME="$D/home" XDG_RUNTIME_DIR="$D/run" XDG_STATE_HOME="$D/state" XDG_CONFIG_HOME="$D/cfg"
 export JW_GH=${JW_GH:-} JW_WELCOME=${JW_WELCOME:-1} COLORTERM=truecolor SHELL=\${SHELL:-/bin/zsh}
 unset JW_SOCKET JW_SESSION
+# So \`jw\` in a pane of this window is this checkout's, not the installed one.
+export PATH="$REPO/target/$PROFILE:\$PATH"
 cd "$D/home/demo"
 ENV
 
