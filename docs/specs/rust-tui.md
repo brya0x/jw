@@ -344,6 +344,67 @@ Terminal cells cannot blend, so a fade is a colour interpolated toward the backg
 
 ---
 
+### Addendum 14 (F0–F4): switching workspace stays inside a 16.6 ms frame budget
+
+Switching worktree is slow and its animation stutters. Fix the time, measure first, keep every frame ≤ 16.6 ms (60 fps).
+
+#### Contract
+
+On a switch the TUI sends `Detach`, **clears every pane** (`forget_workspace`), then `Attach`; the daemon replies `Tree` and one `Snapshot` per pane (2 MiB ring replay + screen); the TUI replays each into a new 5,000-row `vt100::Parser` on the UI thread. Until then the pane area is empty, and the slide (REQ-136) animates over nothing.
+
+After this addendum: the UI thread never waits on disk, process or socket work during a switch; no frame exceeds the budget; the panes' first content appears within the switch budget; nothing is lost (scrollback, kitty/mode state).
+
+#### Frame budget (unmeasured targets, F0 fixes the real numbers)
+
+| Phase | Budget | Where |
+|---|---|---|
+| handle a message / key | ≤ 1 ms | `handle` `mod.rs:1029` |
+| build buffer (`draw`, `screen_to`) | ≤ 6 ms at 240×60 | `draw.rs:15`, `draw.rs:879` |
+| ratatui diff + write to the terminal | ≤ 3 ms, ≤ 64 KiB per frame | `mod.rs:549` |
+| slack (parse of a burst, `drain`) | ≥ 6 ms | `mod.rs:173` |
+| key → first frame with the new panes' content | ≤ 100 ms (OPEN-1) | whole path |
+
+#### Suspects (from reading; none measured yet)
+
+| # | Where | Why it is slow |
+|---|---|---|
+| S1 | `open_entry` `mod.rs:1453` | `save_recent` (write+rename), `folders::edit`, `Stream::resolve` (`core/src/stream.rs:45`: config load, `default_branch` spawns `git`, `core/src/connectors/git.rs:84`), `open_specs`, `mark_opened`: disk and a **git process** on the UI thread |
+| S7 | `on_daemon` `mod.rs:1103`, `fit` `mod.rs:1662` | every `Snapshot` and `Tree` runs `fit()`: N full re-layouts, a `Resize` to the daemon per changed pane; `Tree` also triggers `List` and `find_here` (canonicalize) |
+| S8 | `daemon/src/lib.rs:774` | a *new* workspace's `Open` spawns PTYs and writes `session.json` + scrollback under a lock before `Attach` |
+| S2 | `on_daemon(Snapshot)` `mod.rs:1101` | `Parser::new(…, SCROLLBACK)` + replay of up to 2 MiB per pane, on the UI thread, ahead of the next draw |
+| S3 | `snapshot()` `daemon/src/lib.rs:383` | copies the whole ring per pane per attach, then `state_formatted` |
+| S4 | `forget_workspace` `mod.rs:2457` | blank panes until S2 ends; the slide shows nothing |
+| S5 | `screen_to` `draw.rs:879` | per-cell `Style` build every frame, no cache, O(area) |
+| S6 | `synced` `anim.rs:187` + `Client::send` `client.rs:78` | extra flushes per frame; a blocking socket write on the UI thread |
+
+#### Interfaces
+
+| Item | Change | Home |
+|---|---|---|
+| `JW_TRACE=<file>` | F0: appends `phase,µs` lines (key, Detach sent, Tree rx, each Snapshot rx / parsed, draw build, diff, write, bytes). Off by default, zero cost off | `mod.rs`, `draw.rs` |
+| `scripts/bench-switch.py` | F0: drives N switches with `scripts/drive.py`, prints p50/p95/max per phase | `scripts/` |
+| `Msg::Snapshot(PaneId, Parser)` | F2: the reader thread builds the `Parser`; the UI thread only inserts it | `mod.rs:327` |
+| `App::background` jobs | F1: persist recent/folders/stream setup off-thread | `mod.rs` (existing) |
+| `PROTOCOL` | stays 8 | `proto.rs:18` |
+
+#### Acceptance
+
+- REQ-150 THE TUI SHALL, with `JW_TRACE` set, write the per-phase timings of every switch; WHEN unset it SHALL add no work to a frame.
+- REQ-151 WHEN a workspace is switched, the UI thread SHALL do no file, process or blocking socket work before the next draw (S1, S6).
+- REQ-152 WHEN a `Snapshot` arrives, the TUI SHALL build its `Parser` off the UI thread and the UI thread SHALL spend ≤ 1 ms to install it.
+- REQ-153 WHILE a switch animates, no frame SHALL take longer than 16 ms to build, diff and write at 240×60.
+- REQ-154 WHEN the switch is requested, the TUI SHALL reach the new panes' first content within the key→content budget of the table above, p95 over 50 switches.
+- REQ-155 IF a pane's `Snapshot` has not arrived when the slide ends, THEN the TUI SHALL keep drawing the pane's frame (title, border) and fill it when the snapshot lands, without a full-screen flicker.
+- REQ-156 THE switch SHALL keep each pane's scrollback, modes and kitty flags exactly as before.
+- REQ-157 WHERE `animations` is false, a switch SHALL still obey REQ-151 and REQ-152.
+
+Open (human decisions, still unanswered):
+
+- OPEN-1 Is 100 ms key→content the right switch budget? (The slide itself is 240 ms, REQ-136.)
+- OPEN-2 REQ-155 shows a pane's frame while it fills, instead of blank. That is a visible change, and AGENTS.md asks for an HTML prototype first. Prototype it, or accept it as a fix, not a UI change?
+- OPEN-3 Measurement needs code (F0) and a build, which plan mode forbids. Approve F0 first and bring the numbers before F1–F4, or approve the whole plan now?
+- OPEN-4 Brain workspace: this spec's open questions should be reported there; I could not reach it from here.
+
 ## Rationale
 
 - RAT-1 **Daemon + client instead of a single process:** user decision ("copy herdr, they should survive"). The cost is the protocol and reconnection; it pays for itself because agents run for hours.
@@ -378,6 +439,10 @@ Terminal cells cannot blend, so a fade is a colour interpolated toward the backg
 - RAT-32 **The which-key delay drops to 150 ms.** A new user needs the keys on screen; an expert who types the chord never sees the popup either way, and `which_delay_ms` still sets it.
 - RAT-33 **Rejected: easing in the daemon or on the wire.** Animation is per viewer and cosmetic; putting it in `PaneInfo` would bump `PROTOCOL` for nothing (RAT-26's reasoning).
 - RAT-22 **`curl`, not a crate,** for `install <url>`: rare, and jw already shells out to `git` and `gh`; `ureq` would add TLS and about 40 crates for one command.
+- RAT-34 **Measure before fixing.** S1–S6 are from reading the code; the cost of each is a guess. F0 exists so F1–F4 each cite a number. Parts F3/F4 are conditional for that reason.
+- RAT-35 **Parse in the reader thread** keeps `PROTOCOL` at 8 and needs no daemon change; the fix moves work, it does not remove it, so F0 must show that the parse really is what blocks a frame.
+- RAT-36 **`Parser` is `Send`** (plain data), so building it in the existing daemon-reader thread (`mod.rs:327`) is sound. Output chunks that arrive for a pane still being built must queue behind its Snapshot (order matters).
+- RAT-37 Not warming every workspace in the TUI (subscribing to all): it would multiply `Output` parsing on the UI thread by the number of workspaces. Rejected unless F0 says Attach is the only cost.
 
 ## Risks
 
@@ -427,6 +492,9 @@ Terminal cells cannot blend, so a fade is a colour interpolated toward the backg
 - RISK-44 **Synchronized output can freeze the screen.** A terminal holds the frame until `CSI ? 2026 l` (Ghostty gives up after a second). REQ-139 closes it on every exit path; terminals that do not know the mode ignore it.
 - RISK-45 **The shorter which-key delay shows the popup to people who type fast.** A chord typed within 150 ms still never shows it; one typed slower flashes it for an instant, softened by the fade. `which_delay_ms` restores the old 600 ms.
 - Closed by addendum 3: RISK-5 (own registry), RISK-7 (hooks), RISK-9 (frames), RISK-16 (`nvim --server`), RISK-17 (`root` in the registry).
+- RISK-46 Moving parse to another thread can reorder `Snapshot` and `Output`. Keep one reader thread, parse inline there, preserve order.
+- RISK-47 Keeping the old frame during loading (REQ-155) changes what the user sees; see OPEN-2.
+- RISK-48 F0 numbers on this Mac may not predict slower terminals or SSH; the budget table is a target, not a guarantee.
 
 ## Parts (each one ends with `cargo test` + `clippy` green and a local commit on `feat/rust-tui`; nothing is pushed)
 
@@ -485,6 +553,11 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | M5 ✓ | Focus border ease; eased wheel scroll | 145 | `tui/draw.rs`, `tui/mod.rs` |
 | M6 ✓ | First-run welcome, `welcomed` and `JW_WELCOME=0` (set by `scripts/drive.py`) | 146, 149 | `tui/draw.rs`, `settings.rs`, `scripts/drive.py` |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
+| F0 | `JW_TRACE`, `scripts/bench-switch.py`, record numbers in the spec's Measurements table; confirm or kill S1–S6 | 150 | `tui/mod.rs`, `tui/draw.rs`, `scripts/` |
+| F1 | S1, S6, S7: disk/git work through `App::background`; sends never block the UI; one `fit()` per batch, not per `Snapshot` | 151, 157 | `tui/mod.rs`, `core` (callers) |
+| F2 | S2: parse in the reader thread (`Msg::Snapshot` carries a `Parser`); S4: keep pane frames while content loads | 152, 155, 156 | `tui/mod.rs`, `tui/draw.rs` |
+| F3 | S3, S8 (daemon: cap/skip ring copy; save off the open path) only if F0 shows them over budget | 154, 156 | `daemon/src/lib.rs` |
+| F4 | S5: skip unchanged rows in `screen_to`, one flush per frame, only if F0 shows draw over budget | 153 | `tui/draw.rs`, `tui/anim.rs` |
 
 Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{new_stream, rm_plan, rm, sync, done_plan}`, `src/diff.rs`, `src/view/md.rs` and `Modal::Rm` (type the name) stay as they are.
 
@@ -541,6 +614,8 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - REQ-138 first said that without truecolor every change applies at once. The selection band, the spinner and the welcome steps need no colour blending, so only the fades and the panes' slide wait for truecolor.
 - REQ-146 first said the welcome starts "with no workspace open" and does not pass on the key that closes it. At startup nothing is open yet even for a returning user, so it starts from an empty sidebar; and step 1 itself tells the user to press the leader, so that key is handled as usual.
 
+- Addendum 13 said that on a switch the panes "only enter; nothing leaves". True, but it also means the slide animates over blank panes until the Snapshots arrive (S4, addendum 14).
+
 ## Tests
 
 - core: parse config/registry from Go fixtures; registry.json round-trip read back by Go.
@@ -553,3 +628,4 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - selection (X1, X2): unit tests over a vt100 screen for the extracted text (trailing spaces, soft-wrapped rows, wide characters, history rows) and for word and line bounds; the OSC 52 bytes; the highlight and the banner text; `mouse_encodings` still passes. Manual: zsh drag, double and triple click, drag past the edge; the banner appears top right and goes after about 2 s; nvim plain drag reaches nvim, Shift + drag selects.
 - motion (M1–M6): units for the tween (starts at 0, reaches 1 at its duration, monotonic, an interrupt starts from the displayed value) and for the colour lerp; `next_wake` blocks when idle, wakes a frame after the last draw while a transition runs, for the drag edge and the which-key, takes the soonest, and wakes when a message starts to leave; `TestBackend` for the spinner glyph by elapsed time, the welcome (shows; any key closes it, writes `welcomed` and is still handled), the slide's last frame equal to the static draw, and `animations = false` giving the final frame at once; `tick_motion` on an `App` without a daemon (`App::bare`): the band starts on the current row without motion, a switch glides it and keeps the loop awake until `SWITCH`, `animations = false` jumps it, no workspace means no band, the spinner steps only for visible rows; the bytes of a draw start with `CSI ? 2026 h` and end with `CSI ? 2026 l`, also after a failed draw. Manual in Ghostty with `scripts/drive.py`: switching workspaces with the arrows, the which-key at 150 ms, no tearing in a fast `cat`, idle CPU near zero.
 - manual (after Q2 and Q5): claude and nvim in panes; `w`, `t`, `x`, `HJKL`, `n`, `d`, `↵` in the diff, `q`, then `jw` again shows the same layout.
+- switch speed (F0–F4): `JW_TRACE` lines per phase; `scripts/bench-switch.py` p50/p95/max against an isolated `scripts/jw-test` dir with 3 worktrees and a 2 MiB ring (kill only that dir's pid); a `Msg::Snapshot` parser equals the inline one and Output after it applies in order; `tick_motion` and a 240×60 draw on `App::bare`/`TestBackend` under the budget. Measurements table: not yet filled (F0).
