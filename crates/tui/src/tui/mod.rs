@@ -3695,8 +3695,6 @@ fn load_rows() -> Result<Vec<Row>> {
     ))
 }
 
-/// One project row per opened folder, each registry worktree under its
-/// project's row (REQ-50).
 #[cfg(test)]
 mod drain_tests {
     use super::drain;

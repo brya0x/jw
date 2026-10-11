@@ -23,7 +23,7 @@ use std::time::Duration;
 use anyhow::{Result, bail};
 use jw_core::core::config;
 use jw_core::core::registry;
-use jw_core::{session, sidebar};
+use jw_core::sidebar;
 use jw_web::auth::Store;
 use jw_web::bridge::{Bridge, Config, Lister, Look, Query, Timings};
 use jw_web::tunnel::{self, Step, Tunnel};
@@ -74,31 +74,38 @@ impl Tuning {
 /// and the folders of the sessions on disk, as the TUI's sidebar groups them
 /// (REQ-12). Read at each ask, so what the TUI changed is what the phone sees.
 fn lister() -> Lister {
+    // What the error says is for a phone, not for a log: no path of the PC's
+    // in it. The cause is the PC's to find.
     Arc::new(|query| {
-        let state = registry::state_dir().map_err(|e| e.to_string())?;
-        let reg = registry::default_path().map_err(|e| e.to_string())?;
+        let state = registry::state_dir().map_err(|_| "jw has no state folder here")?;
+        let reg = registry::default_path().map_err(|_| "jw has no state folder here")?;
         let value = match query {
             Query::Workspaces(name) => {
-                let exists = name == session::MAIN
-                    || session::list(&state).is_ok_and(|all| all.contains(name));
-                if !sidebar::known(name) || !exists {
+                if !sidebar::known(name) || !sidebar::names(&state).contains(name) {
                     return Err(format!("no session named {name}"));
                 }
-                let rows = sidebar::load(&state, &reg, name).map_err(|e| e.to_string())?;
-                serde_json::to_value(sidebar::items(&rows, name))
+                let rows = sidebar::load(&state, &reg, name)
+                    .map_err(|_| format!("the workspaces of {name} could not be read"))?;
+                let mut items = sidebar::items(&rows, name);
+                let truncated = items.len() > sidebar::MAX_ITEMS;
+                items.truncate(sidebar::MAX_ITEMS);
+                serde_json::json!({ "items": items, "truncated": truncated })
             }
             Query::Sessions => {
-                serde_json::to_value(sidebar::sessions(&state, &reg).map_err(|e| e.to_string())?)
+                let items = sidebar::sessions(&state, &reg)
+                    .map_err(|_| "the sessions could not be read".to_string())?;
+                serde_json::json!({ "items": items })
             }
             Query::Diff(id) => {
                 let entry = sidebar::find(&state, &reg, id)
-                    .map_err(|e| e.to_string())?
+                    .map_err(|_| "the workspaces could not be read".to_string())?
                     .ok_or_else(|| format!("no workspace {id}"))?;
                 let report = jw_core::diff::report(&entry).map_err(|e| format!("{e:#}"))?;
                 serde_json::to_value(report)
+                    .map_err(|_| "the diff could not be made".to_string())?
             }
         };
-        value.map_err(|e| e.to_string())
+        Ok(value)
     })
 }
 

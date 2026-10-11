@@ -373,14 +373,20 @@ enum Event {
     Closed,
 }
 
-/// Answers computed on another thread, for the relay to write: a diff runs git
-/// and must not stop the pings or the frames meanwhile.
+/// Answers computed on another thread, for the relay to write: a list reads
+/// files and runs git, a diff more, and neither may stop the pings or the
+/// frames meanwhile (REQ-40).
 struct Later {
     tx: mpsc::Sender<Message>,
     rx: mpsc::Receiver<Message>,
-    /// A diff is being computed for this phone.
-    busy: Arc<AtomicBool>,
+    /// A diff is being computed for this phone: one at a time.
+    diff: Arc<AtomicBool>,
+    /// Lists being computed for this phone, at most `MAX_LISTS`.
+    lists: Arc<AtomicUsize>,
 }
+
+/// How many `workspaces` and `sessions` a phone can have in flight.
+const MAX_LISTS: usize = 4;
 
 fn serve(stream: TcpStream, shared: &Shared, socket: &Path) -> Result<(), WsError> {
     let t = &shared.t;
@@ -459,11 +465,11 @@ fn serve(stream: TcpStream, shared: &Shared, socket: &Path) -> Result<(), WsErro
     });
 
     let (reply_tx, replies) = mpsc::channel();
-    let diffing = Arc::new(AtomicBool::new(false));
     let later = Later {
         tx: reply_tx,
         rx: replies,
-        busy: diffing,
+        diff: Arc::new(AtomicBool::new(false)),
+        lists: Arc::new(AtomicUsize::new(0)),
     };
     let result = relay(&mut ws, &mut daemon, &rx, &later, shared, &device);
 
@@ -624,14 +630,17 @@ fn relay(
                         ws.send(error("read_only", "this bridge is read-only"))?;
                     }
                     Message::Binary(body) => write_raw(daemon, &body)?,
-                    Message::Text(text) => match serde_json::from_str::<Ask>(&text) {
-                        Ok(Ask::Diff { ws: id }) => {
-                            if let Some(refusal) = start_diff(shared, later, id) {
-                                ws.send(refusal)?;
+                    Message::Text(text) => {
+                        let refusal = match serde_json::from_str::<Ask>(&text) {
+                            Ok(ask) => start_ask(shared, later, ask),
+                            Err(_) => {
+                                Some(error("unsupported", "ask workspaces, sessions or diff"))
                             }
+                        };
+                        if let Some(refusal) = refusal {
+                            ws.send(refusal)?;
                         }
-                        _ => ws.send(answer(shared, &text))?,
-                    },
+                    }
                     Message::Close(_) => return Ok(()),
                     _ => {}
                 }
@@ -652,55 +661,88 @@ enum Ask {
     Diff { ws: String },
 }
 
-/// Starts the diff of workspace `id` on a thread; its answer comes back
-/// through `later`. `Some` is the refusal to send now: one at a time.
-fn start_diff(shared: &Shared, later: &Later, id: String) -> Option<Message> {
-    if later.busy.swap(true, Ordering::SeqCst) {
-        return Some(error("unsupported", "busy: a diff is already being made"));
-    }
-    let (lister, tx, busy) = (shared.lister.clone(), later.tx.clone(), later.busy.clone());
-    thread::spawn(move || {
-        let reply = match lister(&Query::Diff(id.clone())) {
-            Ok(serde_json::Value::Object(mut obj)) => {
-                obj.insert("t".into(), "diff".into());
-                obj.insert("ws".into(), id.into());
-                Message::text(serde_json::Value::Object(obj).to_string())
-            }
-            Ok(_) => error("unsupported", "the diff is not an object"),
-            Err(why) => error("unsupported", &why),
-        };
-        let _ = tx.send(reply);
-        busy.store(false, Ordering::SeqCst);
-    });
-    None
+/// Which of a phone's seats an answer takes.
+enum Seat {
+    Diff(Arc<AtomicBool>),
+    List(Arc<AtomicUsize>),
 }
 
-/// The answer to one control message of a phone: the list asked for, or an
-/// error saying why not.
-fn answer(shared: &Shared, text: &str) -> Message {
-    let Ok(ask) = serde_json::from_str::<Ask>(text) else {
-        return error("unsupported", "ask workspaces or sessions");
-    };
-    match ask {
-        Ask::Workspaces { session } => {
-            let session = session.unwrap_or_else(|| "main".into());
-            match (shared.lister)(&Query::Workspaces(session.clone())) {
-                Ok(items) => Message::text(
-                    serde_json::json!({ "t": "workspaces", "session": session, "items": items })
-                        .to_string(),
-                ),
-                Err(why) => error("unsupported", &why),
+impl Seat {
+    /// Takes the seat, or says it is full.
+    fn take(&self) -> bool {
+        match self {
+            Seat::Diff(busy) => !busy.swap(true, Ordering::SeqCst),
+            Seat::List(n) => {
+                if n.fetch_add(1, Ordering::SeqCst) >= MAX_LISTS {
+                    n.fetch_sub(1, Ordering::SeqCst);
+                    return false;
+                }
+                true
             }
         }
-        // Handled by `start_diff`, which needs the connection's own state.
-        Ask::Diff { .. } => error("unsupported", "diff is answered on its own"),
-        Ask::Sessions => match (shared.lister)(&Query::Sessions) {
-            Ok(items) => {
-                Message::text(serde_json::json!({ "t": "sessions", "items": items }).to_string())
-            }
-            Err(why) => error("unsupported", &why),
-        },
     }
+}
+
+/// Gives the seat back when the thread ends, however it ends: a lister that
+/// panics must not leave every later ask refused.
+struct Release(Seat);
+
+impl Drop for Release {
+    fn drop(&mut self) {
+        match &self.0 {
+            Seat::Diff(busy) => busy.store(false, Ordering::SeqCst),
+            Seat::List(n) => {
+                n.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
+    }
+}
+
+/// Starts what a phone asked on a thread of its own; the answer comes back
+/// through `later`, with `t` and the ask's own fields in it. `Some` is the
+/// refusal to send now, because that kind has its seats full.
+fn start_ask(shared: &Shared, later: &Later, ask: Ask) -> Option<Message> {
+    let (query, tag, field): (Query, &'static str, (&'static str, String)) = match ask {
+        Ask::Workspaces { session } => {
+            let session = session.unwrap_or_else(|| "main".into());
+            (
+                Query::Workspaces(session.clone()),
+                "workspaces",
+                ("session", session),
+            )
+        }
+        Ask::Sessions => (Query::Sessions, "sessions", ("", String::new())),
+        Ask::Diff { ws } => (Query::Diff(ws.clone()), "diff", ("ws", ws)),
+    };
+    let seat = match query {
+        Query::Diff(_) => Seat::Diff(later.diff.clone()),
+        _ => Seat::List(later.lists.clone()),
+    };
+    if !seat.take() {
+        return Some(error(
+            "unsupported",
+            "busy: wait for the answer before asking again",
+        ));
+    }
+    let (lister, tx) = (shared.lister.clone(), later.tx.clone());
+    thread::spawn(move || {
+        let _release = Release(seat);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| lister(&query)));
+        let reply = match result {
+            Ok(Ok(serde_json::Value::Object(mut obj))) => {
+                obj.insert("t".into(), tag.into());
+                if !field.0.is_empty() {
+                    obj.insert(field.0.into(), field.1.into());
+                }
+                Message::text(serde_json::Value::Object(obj).to_string())
+            }
+            Ok(Ok(_)) => error("unsupported", "the answer is not an object"),
+            Ok(Err(why)) => error("unsupported", &why),
+            Err(_) => error("unsupported", "that could not be answered"),
+        };
+        let _ = tx.send(reply);
+    });
+    None
 }
 
 /// The tag of a frame: the `t` of its JSON head, for both kinds of frame.
@@ -834,8 +876,20 @@ mod tests {
                 look: Arc::new(|| serde_json::json!({"palettes": [], "settings": {}})),
                 lister: Arc::new(|q| match q {
                     Query::Workspaces(s) if s == "nope" => Err("no session named nope".into()),
-                    Query::Workspaces(s) => Ok(serde_json::json!([{ "id": "w1", "session": s }])),
-                    Query::Sessions => Ok(serde_json::json!([{ "name": "main", "workspaces": 1 }])),
+                    Query::Workspaces(s) if s == "boom" => panic!("a bug in the lister"),
+                    Query::Workspaces(s) => {
+                        if s == "slow" {
+                            thread::sleep(Duration::from_millis(700));
+                        }
+                        Ok(serde_json::json!({
+                            "items": [{ "id": "w1", "session": s }],
+                            "truncated": false,
+                        }))
+                    }
+                    Query::Sessions => {
+                        Ok(serde_json::json!({ "items": [{ "name": "main", "workspaces": 1 }] }))
+                    }
+                    Query::Diff(id) if id == "boom" => panic!("a bug in the diff"),
                     Query::Diff(id) if id == "nope" => Err("no workspace nope".into()),
                     Query::Diff(id) => {
                         if id == "slow" {
@@ -1395,6 +1449,84 @@ mod tests {
     }
 
     #[test]
+    fn a_slow_list_does_not_stop_the_relay_and_a_few_may_run_at_once() {
+        let r = rig(Opts::default());
+        let mut p = phone(&r.bridge);
+        login(&mut p, &enrol(&r, "a"));
+        say(
+            &mut p,
+            serde_json::json!({ "t": "workspaces", "session": "slow" }),
+        );
+        let t = Instant::now();
+        p.send(body(&input(1, b"ls"))).unwrap();
+        assert_eq!(
+            msg(&mut p),
+            DaemonMsg::Output {
+                pane: 1,
+                bytes: b"ls".to_vec()
+            }
+        );
+        assert!(
+            t.elapsed() < Duration::from_millis(500),
+            "{:?}",
+            t.elapsed()
+        );
+        let v = json(&mut p);
+        assert_eq!(
+            (v["t"].as_str(), v["session"].as_str()),
+            (Some("workspaces"), Some("slow")),
+            "{v}"
+        );
+        assert_eq!(v["truncated"], false);
+
+        // Four at once are fine; a fifth is refused at once, not queued.
+        for _ in 0..5 {
+            say(
+                &mut p,
+                serde_json::json!({ "t": "workspaces", "session": "slow" }),
+            );
+        }
+        let v = json(&mut p);
+        assert_eq!(v["code"], "unsupported", "{v}");
+        assert!(v["msg"].as_str().unwrap().contains("busy"), "{v}");
+        for _ in 0..4 {
+            assert_eq!(json(&mut p)["t"], "workspaces");
+        }
+        // And the seats are free again afterwards.
+        say(&mut p, serde_json::json!({ "t": "sessions" }));
+        assert_eq!(json(&mut p)["t"], "sessions");
+    }
+
+    #[test]
+    fn a_lister_that_panics_gets_an_error_and_does_not_keep_the_seat() {
+        let r = rig(Opts::default());
+        let mut p = phone(&r.bridge);
+        login(&mut p, &enrol(&r, "a"));
+        for _ in 0..6 {
+            say(
+                &mut p,
+                serde_json::json!({ "t": "workspaces", "session": "boom" }),
+            );
+            let v = json(&mut p);
+            assert_eq!(v["code"], "unsupported", "{v}");
+            assert!(
+                !v["msg"].as_str().unwrap().contains("busy"),
+                "the seat was kept: {v}"
+            );
+        }
+        // The diff has one seat, and a panic must not take it for good.
+        for _ in 0..2 {
+            say(&mut p, serde_json::json!({ "t": "diff", "ws": "boom" }));
+            let v = json(&mut p);
+            assert!(!v["msg"].as_str().unwrap().contains("busy"), "{v}");
+        }
+        say(&mut p, serde_json::json!({ "t": "diff", "ws": "w1" }));
+        assert_eq!(json(&mut p)["t"], "diff");
+        say(&mut p, serde_json::json!({ "t": "workspaces" }));
+        assert_eq!(json(&mut p)["t"], "workspaces");
+    }
+
+    #[test]
     fn a_slow_diff_does_not_stop_the_relay_and_only_one_runs_at_a_time() {
         let r = rig(Opts::default());
         let mut p = phone(&r.bridge);
@@ -1735,7 +1867,7 @@ mod tests {
             read_only: false,
             confirm: Arc::new(|_| true),
             look: Arc::new(|| serde_json::json!({})),
-            lister: Arc::new(|_| Ok(serde_json::json!([]))),
+            lister: Arc::new(|_| Ok(serde_json::json!({}))),
             timings: Timings::default(),
         };
         let err = Bridge::start(any, PathBuf::from("/nowhere"), config)

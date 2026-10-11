@@ -47,7 +47,12 @@ pub fn rows(folders: &folders::Folders, reg: Registry, session: &str) -> Vec<Row
             !r.branch.is_empty() && (r.project == project || Some(&r.path) == root.as_ref())
         });
         match at {
-            Some(i) => groups[i].1 = worktrees,
+            // Two projects can resolve to one folder (the same checkout under
+            // two names): both lists are kept, not the last.
+            Some(i) => {
+                groups[i].1.extend(worktrees);
+                groups[i].1.sort_by(|a, b| a.name.cmp(&b.name));
+            }
             None => {
                 // Worktrees whose project folder isn't open: the folder
                 // shows closed, above them.
@@ -79,10 +84,38 @@ pub fn rows(folders: &folders::Folders, reg: Registry, session: &str) -> Vec<Row
         .collect()
 }
 
+/// Where `session`'s `folders.json` is, looked up without making or moving
+/// anything: `session::dir` migrates the old files into `sessions/main/`,
+/// which a read for a phone must not do. Before that migration has happened,
+/// `main`'s folders are still where the old jw kept them.
+fn folders_path(state: &Path, session: &str) -> std::path::PathBuf {
+    let root = state.join("sessions");
+    if session == session::MAIN && !root.exists() {
+        return state.join("folders.json");
+    }
+    root.join(session).join("folders.json")
+}
+
+/// Every session's name, by name with `main` first, read without side
+/// effects. `main` is there even before its directory is.
+pub fn names(state: &Path) -> Vec<String> {
+    let mut out: Vec<String> = std::fs::read_dir(state.join("sessions"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n != session::MAIN && session::valid(n))
+        .collect();
+    out.sort();
+    out.insert(0, session::MAIN.to_string());
+    out
+}
+
 /// The rows of `session` from the files under `state` and the registry at
 /// `reg_path`.
 pub fn load(state: &Path, reg_path: &Path, session: &str) -> Result<Vec<Row>> {
-    let folders = folders::Folders::load(&session::dir(state, session)?.join("folders.json"))?;
+    let folders = folders::Folders::load(&folders_path(state, session))?;
     Ok(rows(&folders, Registry::load(reg_path)?, session))
 }
 
@@ -105,6 +138,10 @@ pub struct Item {
     /// A worktree's root.
     pub parent: Option<String>,
 }
+
+/// The most workspaces, and sessions, a phone is told of in one answer.
+pub const MAX_ITEMS: usize = 1000;
+pub const MAX_SESSIONS: usize = 200;
 
 /// The items of `rows`, in their order.
 pub fn items(rows: &[Row], session: &str) -> Vec<Item> {
@@ -142,42 +179,46 @@ pub fn items(rows: &[Row], session: &str) -> Vec<Item> {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SessionItem {
     pub name: String,
+    /// The rows `workspaces` lists for it: its folders, its worktrees and the
+    /// closed roots shown above worktrees whose folder is not open.
     pub workspaces: usize,
 }
 
-/// Every session, `main` first and the rest by name, with the count of its
-/// folders and worktrees. `main` is there even before its directory is.
+/// Every session, `main` first and the rest by name, with the count of the
+/// workspaces it lists. A session whose files cannot be read is left out, so
+/// one corrupt `folders.json` does not fail the rest.
 pub fn sessions(state: &Path, reg_path: &Path) -> Result<Vec<SessionItem>> {
     let reg = Registry::load(reg_path)?;
-    let mut names = session::list(state).unwrap_or_default();
-    names.retain(|n| n != session::MAIN);
-    names.insert(0, session::MAIN.to_string());
-    names
+    Ok(names(state)
         .into_iter()
-        .map(|name| {
-            let dir = session::dir(state, &name)?.join("folders.json");
-            let folders = folders::Folders::load(&dir)?.folders.len();
-            let worktrees = reg
-                .entries
-                .iter()
-                .filter(|e| session::owns(&name, &e.session))
-                .count();
-            Ok(SessionItem {
-                name,
-                workspaces: folders + worktrees,
-            })
+        .filter_map(|name| {
+            let folders = folders::Folders::load(&folders_path(state, &name)).ok()?;
+            let workspaces = rows(
+                &folders,
+                Registry {
+                    entries: reg.entries.clone(),
+                },
+                &name,
+            )
+            .len();
+            Some(SessionItem { name, workspaces })
         })
-        .collect()
+        .take(MAX_SESSIONS)
+        .collect())
 }
 
 /// The workspace with id `id`, in any session: the ids carry their session
 /// (`folders::id_in`), so one is the same workspace wherever it is asked.
 pub fn find(state: &Path, reg_path: &Path, id: &str) -> Result<Option<Entry>> {
-    let mut names = session::list(state).unwrap_or_default();
-    names.retain(|n| n != session::MAIN);
-    names.insert(0, session::MAIN.to_string());
-    for name in names {
-        if let Some(row) = load(state, reg_path, &name)?
+    let reg = Registry::load(reg_path)?;
+    for name in names(state) {
+        let Ok(folders) = folders::Folders::load(&folders_path(state, &name)) else {
+            continue;
+        };
+        let reg = Registry {
+            entries: reg.entries.clone(),
+        };
+        if let Some(row) = rows(&folders, reg, &name)
             .into_iter()
             .find(|r| r.entry.id == id)
         {
@@ -373,11 +414,11 @@ mod tests {
             [
                 SessionItem {
                     name: "main".into(),
-                    workspaces: 3
+                    workspaces: 4
                 },
                 SessionItem {
                     name: "work".into(),
-                    workspaces: 3
+                    workspaces: 4
                 },
             ]
         );
@@ -399,6 +440,133 @@ mod tests {
         assert_eq!(find(&dir, &reg_path, "a").unwrap().unwrap().name, "a");
         assert_eq!(find(&dir, &reg_path, "b").unwrap().unwrap().name, "b");
         assert!(find(&dir, &reg_path, "nope").unwrap().is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn two_projects_that_resolve_to_one_folder_keep_all_their_worktrees() {
+        // A real checkout with an origin, so the folder is a root.
+        let dir = std::env::temp_dir().join(format!("jw-two-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let repo = dir.join("jw");
+        std::fs::create_dir_all(&repo).unwrap();
+        for args in [
+            vec!["init", "-q", "-b", "main"],
+            vec!["remote", "add", "origin", "https://example.com/x/jw.git"],
+        ] {
+            let ok = std::process::Command::new("git")
+                .args(&args)
+                .current_dir(&repo)
+                .env_clear()
+                .env("PATH", "/usr/bin:/bin")
+                .env("HOME", &dir)
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "git {args:?}");
+        }
+        let path = repo.display().to_string();
+        let fs = folders::Folders {
+            folders: vec![folder(&path, None)],
+        };
+        // One worktree by its project's name, one by the checkout's path under
+        // another project name: both land in the one group.
+        let mut by_name = wt("a1", "one", "jw", "", 0);
+        by_name.root = String::new();
+        let mut by_path = wt("b1", "two", "alias", "", 0);
+        by_path.root = path.clone();
+        let reg = Registry {
+            entries: vec![by_name, by_path],
+        };
+        let all = rows(&fs, reg, "main");
+        let _ = std::fs::remove_dir_all(&dir);
+        let shape: Vec<(&str, bool)> = all
+            .iter()
+            .map(|r| (r.entry.name.as_str(), r.child))
+            .collect();
+        assert_eq!(
+            shape,
+            [("jw", false), ("one", true), ("two", true)],
+            "{shape:?}"
+        );
+    }
+
+    #[test]
+    fn reading_never_makes_or_moves_anything_and_main_is_found_before_the_migration() {
+        let dir = std::env::temp_dir().join(format!("jw-ro-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // The old layout: folders.json at the top of the state dir.
+        folders::Folders {
+            folders: vec![folder("/a", None)],
+        }
+        .save(&dir.join("folders.json"))
+        .unwrap();
+        let reg_path = dir.join("workspaces.json");
+        Registry::default().save(&reg_path).unwrap();
+        let got = sessions(&dir, &reg_path).unwrap();
+        assert_eq!(
+            got,
+            [SessionItem {
+                name: "main".into(),
+                workspaces: 1
+            }]
+        );
+        assert_eq!(load(&dir, &reg_path, "main").unwrap().len(), 1);
+        assert!(find(&dir, &reg_path, "dir:/a").unwrap().is_some());
+        // Nothing was made, and the old file was not moved.
+        assert!(!dir.join("sessions").exists(), "a read made sessions/");
+        assert!(
+            dir.join("folders.json").exists(),
+            "a read moved folders.json"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn one_corrupt_session_is_skipped_not_fatal() {
+        let dir = std::env::temp_dir().join(format!("jw-bad-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let main = dir.join("sessions").join("main");
+        let bad = dir.join("sessions").join("bad");
+        std::fs::create_dir_all(&main).unwrap();
+        std::fs::create_dir_all(&bad).unwrap();
+        folders::Folders {
+            folders: vec![folder("/a", None)],
+        }
+        .save(&main.join("folders.json"))
+        .unwrap();
+        std::fs::write(bad.join("folders.json"), "{ not json").unwrap();
+        let reg_path = dir.join("workspaces.json");
+        Registry::default().save(&reg_path).unwrap();
+        let got = sessions(&dir, &reg_path).unwrap();
+        assert_eq!(
+            got,
+            [SessionItem {
+                name: "main".into(),
+                workspaces: 1
+            }]
+        );
+        // Asking about it is an error for that session only; `find` goes on.
+        assert!(load(&dir, &reg_path, "bad").is_err());
+        assert!(find(&dir, &reg_path, "dir:/a").unwrap().is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_session_of_only_closed_roots_counts_what_it_lists() {
+        let dir = std::env::temp_dir().join(format!("jw-closed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sessions").join("main")).unwrap();
+        let reg_path = dir.join("workspaces.json");
+        Registry {
+            entries: vec![wt("w", "only", "jw", "", 0)],
+        }
+        .save(&reg_path)
+        .unwrap();
+        let listed = load(&dir, &reg_path, "main").unwrap().len();
+        assert_eq!(listed, 2, "a closed root and its worktree");
+        assert_eq!(sessions(&dir, &reg_path).unwrap()[0].workspaces, listed);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

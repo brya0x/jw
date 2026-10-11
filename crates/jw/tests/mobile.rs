@@ -671,6 +671,7 @@ fn a_paired_phone_is_told_the_workspaces_and_sessions_of_the_pcs_jw() {
     let v = phone.json();
     assert_eq!(v["t"], "workspaces", "{v}");
     assert_eq!(v["session"], "main");
+    assert_eq!(v["truncated"], false);
     let items = v["items"].as_array().unwrap();
     let names: Vec<(&str, &str)> = items
         .iter()
@@ -696,7 +697,8 @@ fn a_paired_phone_is_told_the_workspaces_and_sessions_of_the_pcs_jw() {
     let v = phone.json();
     assert_eq!(
         v["items"],
-        serde_json::json!([{ "name": "main", "workspaces": 3 }]),
+        // What `workspaces` listed: the folder, the closed root, two worktrees.
+        serde_json::json!([{ "name": "main", "workspaces": 4 }]),
         "{v}"
     );
 
@@ -957,4 +959,47 @@ fn every_panes_stream_is_the_id_of_its_item_in_workspaces_for_each_kind() {
             "{ws}"
         );
     }
+}
+
+#[test]
+fn a_list_reads_without_writing_and_an_unreadable_file_leaks_no_path() {
+    let rig = Rig::start(Stub::Registers);
+    let state = rig.dir.join("state").join("jw");
+    let mut w = rig.watcher();
+    let code = up(&mut w);
+    let (mut phone, _) = pair(&rig, &code, &mut w, "Pixel");
+    // The old layout: folders.json at the top, no `sessions/` yet.
+    std::fs::create_dir_all(&state).unwrap();
+    std::fs::write(
+        state.join("folders.json"),
+        r#"{"folders":[{"dir":"/nowhere/old","created":"2026-10-11T00:00:00Z"}]}"#,
+    )
+    .unwrap();
+    phone.say(serde_json::json!({ "t": "workspaces" }));
+    let v = phone.json();
+    assert_eq!(v["items"][0]["name"], "old", "{v}");
+    phone.say(serde_json::json!({ "t": "sessions" }));
+    assert_eq!(phone.json()["items"][0]["name"], "main");
+    // A phone's read did not migrate anything: the TUI does that, not a list.
+    assert!(!state.join("sessions").exists(), "a list made sessions/");
+    assert!(
+        state.join("folders.json").exists(),
+        "a list moved folders.json"
+    );
+
+    // A corrupt file is an error that says so, and not where it is.
+    std::fs::write(state.join("folders.json"), "{ not json").unwrap();
+    phone.say(serde_json::json!({ "t": "workspaces" }));
+    let v = phone.json();
+    assert_eq!(v["code"], "unsupported", "{v}");
+    let msg = v["msg"].as_str().unwrap();
+    assert!(msg.contains("could not be read"), "{v}");
+    assert!(
+        !msg.contains(rig.dir.to_str().unwrap()) && !msg.contains("folders.json"),
+        "{v}"
+    );
+    // And the sessions answer goes on without it.
+    phone.say(serde_json::json!({ "t": "sessions" }));
+    let v = phone.json();
+    assert_eq!(v["t"], "sessions", "{v}");
 }
