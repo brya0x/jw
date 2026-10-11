@@ -552,13 +552,10 @@ impl Daemon {
                 // runs `ps`: other messages from this client must not queue
                 // behind either.
                 thread::spawn(move || {
-                    let msg = match agent_pane(&stream, panes) {
-                        Ok((id, pane)) => match prompt(&pane, &text) {
-                            Ok(()) => DaemonMsg::Prompted { pane: id },
-                            Err(e) => DaemonMsg::Error {
-                                msg: format!("{e:#}"),
-                            },
-                        },
+                    let sent = agent_pane(&stream, panes)
+                        .and_then(|(id, pane)| prompt(&pane, &text).map(|()| id));
+                    let msg = match sent {
+                        Ok(id) => DaemonMsg::Prompted { pane: id },
                         Err(e) => DaemonMsg::Error {
                             msg: format!("{e:#}"),
                         },
@@ -1421,10 +1418,11 @@ fn agent_pane(stream: &str, mut panes: Vec<(PaneId, Arc<Pane>)>) -> Result<(Pane
     panes
         .into_iter()
         .find(|(_, p)| {
-            lock(&p.state).exited.is_none()
-                && leader_of(p)
-                    .and_then(process_name)
-                    .is_some_and(|name| program::is_agent_program(&name))
+            // The state guard is gone before `io` and `ps` (daemon AGENTS.md).
+            let live = lock(&p.state).exited.is_none();
+            live && leader_of(p)
+                .and_then(process_name)
+                .is_some_and(|name| program::is_agent_program(&name))
         })
         .with_context(|| format!("{stream} has no agent pane open"))
 }
