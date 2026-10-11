@@ -474,6 +474,70 @@ fn prompt_waits_for_quiet_then_pastes_and_presses_enter() {
     assert!(text.contains("bug^[[201~^M"), "{text}");
 }
 
+/// REQ-158, REQ-161, REQ-167: a review opens as the diff beside the agent
+/// (the tree `Stream` gives it), the diff has no process, and the prompt the
+/// TUI sends after `Open` reaches the agent. `PROTOCOL` did not move.
+#[test]
+fn a_review_opens_as_a_diff_and_an_agent_and_the_agent_is_briefed() {
+    assert_eq!(PROTOCOL, 8);
+    let d = Daemon::start();
+    let mut c = d.client();
+    let pane = |role: &str, cmd: Option<&str>| NewPane {
+        role: role.into(),
+        cmd: cmd.map(Into::into),
+        ..cat()
+    };
+    let mut leaves = [
+        pane("view:diff", None),
+        pane(
+            "agent",
+            Some("printf '\\033[?2004h'; stty raw -echo; cat -v"),
+        ),
+    ]
+    .into_iter();
+    let tree = Tree::from_node(&jw_core::stream::review_tree(), &mut leaves).unwrap();
+    c.send(&ClientMsg::Open {
+        stream: "r".into(),
+        tree,
+    })
+    .unwrap();
+    let t = next_tree(&mut c);
+    let roles: Vec<_> = t.leaves().iter().map(|l| l.role.clone()).collect();
+    assert_eq!(roles, ["view:diff", "agent"]);
+    let agent = ids(&t)[1];
+
+    c.send(&ClientMsg::Prompt {
+        stream: "r".into(),
+        text: "Review pull request #7.".into(),
+    })
+    .unwrap();
+    c.send(&ClientMsg::List).unwrap();
+    let mut screen = vt100::Parser::new(24, 80, 0);
+    let deadline = Instant::now() + TIMEOUT;
+    let (mut prompted, mut listed) = (false, false);
+    while !(prompted && listed && screen.screen().contents().contains("^M")) {
+        assert!(Instant::now() < deadline, "the agent was never briefed");
+        match recv(&mut c) {
+            DaemonMsg::Output { pane: p, bytes } if p == agent => screen.process(&bytes),
+            DaemonMsg::Prompted { pane: p } => {
+                assert_eq!(p, agent);
+                prompted = true;
+            }
+            DaemonMsg::Panes { panes } => {
+                assert_eq!(panes.len(), 1, "only the agent runs: {panes:?}");
+                listed = true;
+            }
+            DaemonMsg::Error { msg } => panic!("daemon error: {msg}"),
+            _ => {}
+        }
+    }
+    let text = screen.screen().contents();
+    assert!(
+        text.contains("^[[200~Review pull request #7.^[[201~^M"),
+        "{text}"
+    );
+}
+
 #[test]
 fn prompt_without_an_agent_pane_is_an_error() {
     let d = Daemon::start();

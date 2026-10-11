@@ -94,6 +94,14 @@ enum Job {
     },
     /// A finished action with nothing else to do but say so.
     Said(String),
+    /// The open PRs gh listed for the picker (REQ-150); `requested` is the
+    /// list asked for.
+    Prs {
+        prs: Vec<crate::connectors::github::PrSummary>,
+        requested: bool,
+    },
+    /// The review workspace is ready to open (REQ-156).
+    Reviewed(Box<crate::review::Reviewed>),
     Diff {
         title: String,
         dir: String,
@@ -255,6 +263,9 @@ pub struct App {
     /// A viewer waiting for its pane: it fills the next viewer leaf the
     /// tree brings.
     pending_view: Option<View>,
+    /// What to tell the agent of a review once its workspace's panes are
+    /// open: the workspace id and the text (REQ-161).
+    pending_prompt: Option<(String, String)>,
     /// The action running in the background, for the status bar.
     pub busy: Option<String>,
     /// For worker threads to report back.
@@ -519,6 +530,7 @@ impl App {
             told: None,
             views: BTreeMap::new(),
             pending_view: None,
+            pending_prompt: None,
             busy: None,
             events,
             exit_reason: None,
@@ -1214,6 +1226,8 @@ impl App {
                     self.finder = None;
                     self.picked(pick);
                 }
+                finder::Outcome::Reload(requested) => self.load_reviews(requested),
+                finder::Outcome::Browse(url) => self.browse(&url),
             }
             return;
         }
@@ -1307,6 +1321,7 @@ impl App {
                 Some("rename") => self.ask_rename(),
                 Some("sync") => self.run_sync(),
                 Some("diff") => self.open_diff(),
+                Some("review") => self.ask_review(),
                 Some("remove") => self.ask_remove(),
                 Some("pane") => self.new_pane(),
                 Some("close") => self.close_pane(),
@@ -1509,6 +1524,7 @@ impl App {
             stream: stream.entry.id.clone(),
             tree,
         });
+        self.send_pending_prompt(&stream.entry.id);
         stream.mark_opened()
     }
 
@@ -2540,6 +2556,75 @@ impl App {
         ));
     }
 
+    /// `^␣ R`: the open pull requests of the current project (REQ-150). The
+    /// picker opens at once and gh runs off this thread.
+    fn ask_review(&mut self) {
+        if self.current_repo_stream("review").is_none() {
+            return;
+        }
+        self.finder = Some(finder::Finder::reviews(false));
+        self.load_reviews(false);
+    }
+
+    /// Asks gh for the list the picker waits for.
+    fn load_reviews(&mut self, requested: bool) {
+        let Some(entry) = self.current().cloned() else {
+            return;
+        };
+        self.background("loading pull requests".into(), move || {
+            let gh = crate::connectors::github::Client::default();
+            let prs = gh.open_prs(std::path::Path::new(&entry.path), requested)?;
+            Ok(Job::Prs { prs, requested })
+        });
+    }
+
+    /// `↵` on a PR: its head, the worktree and the context, off this thread
+    /// (REQ-155, REQ-156).
+    fn start_review(&mut self, pr: crate::connectors::github::PrSummary) {
+        let Some(entry) = self.current().cloned() else {
+            return;
+        };
+        self.background(format!("fetching #{}", pr.number), move || {
+            let project = Project::open(std::path::Path::new(&entry.path))?;
+            let gh = crate::connectors::github::Client::default();
+            let r = crate::review::review_stream(
+                &project,
+                &gh,
+                &pr,
+                &registry::default_path()?,
+                &registry::state_dir()?,
+            )?;
+            Ok(Job::Reviewed(Box::new(r)))
+        });
+    }
+
+    /// The agent of a review is briefed as soon as its panes are asked for;
+    /// the daemon waits for it to be quiet (REQ-161).
+    fn send_pending_prompt(&mut self, id: &str) {
+        if let Some((stream, text)) = self.pending_prompt.take_if(|(s, _)| s == id) {
+            self.send(ClientMsg::Prompt { stream, text });
+        }
+    }
+
+    /// Opens a url in the browser (REQ-170).
+    fn browse(&mut self, url: &str) {
+        let opener = if cfg!(target_os = "macos") {
+            "open"
+        } else {
+            "xdg-open"
+        };
+        match std::process::Command::new(opener)
+            .arg(url)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(_) => self.say(format!("opened {url}")),
+            Err(e) => self.fail(format!("{opener}: {e}")),
+        }
+    }
+
     /// A file of the current workspace: Markdown in the reader, anything
     /// else in its nvim pane, started on the right when there is none.
     fn open_file(&mut self, file: &str) {
@@ -2626,6 +2711,7 @@ impl App {
                 return;
             }
             finder::Pick::File(f) => return self.open_file(&f),
+            finder::Pick::Review(pr) => return self.start_review(*pr),
             finder::Pick::Session(s) => return self.switch_session(&s),
             finder::Pick::NewSession(s) => return self.new_session(&s),
             finder::Pick::RenameSession(s) => {
@@ -2892,6 +2978,12 @@ impl App {
         match m {
             Modal::Close { entry, .. } => self.close(&entry),
             Modal::ClosePane { pane, .. } => self.send(ClientMsg::Kill { pane }),
+            Modal::Resend { stream, prompt, .. } => {
+                self.send(ClientMsg::Prompt {
+                    stream,
+                    text: prompt,
+                });
+            }
             Modal::SaveLayout { path, new, .. } => {
                 match crate::core::config::save_layout(&path, &new) {
                     Ok(()) => {
@@ -3090,7 +3182,36 @@ impl App {
                     None => format!("removed {name}"),
                 });
             }
-            Job::Failed(e) => self.fail(e),
+            Job::Failed(e) => {
+                // A list that could not load leaves no empty picker (REQ-152).
+                if self.finder.as_ref().is_some_and(|f| f.loading_reviews()) {
+                    self.finder = None;
+                }
+                self.pending_prompt = None;
+                self.fail(e);
+            }
+            Job::Prs { prs, requested } => {
+                if let Some(f) = &mut self.finder {
+                    f.set_reviews(prs, requested);
+                }
+            }
+            Job::Reviewed(r) => {
+                let r = *r;
+                let (id, name, n) = (r.entry.id.clone(), r.entry.name.clone(), r.entry.pr);
+                if r.existed {
+                    self.done(format!("{name} is at the head of #{n} now"));
+                    self.open_entry(r.entry, false);
+                    self.modal = Some(Modal::Resend {
+                        stream: id,
+                        name,
+                        prompt: r.prompt,
+                    });
+                } else {
+                    self.done(format!("reviewing #{n} in {name}"));
+                    self.pending_prompt = Some((id, r.prompt));
+                    self.open_entry(r.entry, r.setup);
+                }
+            }
             Job::Renamed { entry, from } => {
                 self.done(format!("renamed to {} on {}", entry.name, entry.branch));
                 self.moved(entry, from);
@@ -3540,5 +3661,89 @@ mod motion_tests {
         let (at, _) = app.next_wake(t0 + MS(500)).unwrap();
         assert_eq!(at, t0 + STATUS_FOR - anim::MESSAGE_EDGE);
         assert!(app.next_wake(t0 + STATUS_FOR).is_none());
+    }
+}
+
+#[cfg(test)]
+mod review_tests {
+    use super::*;
+    use std::os::unix::net::UnixListener;
+
+    /// An app whose daemon is a thread that hands back what it is sent.
+    fn listening(name: &str) -> (App, mpsc::Receiver<ClientMsg>) {
+        let dir = std::env::temp_dir().join(format!("jwr{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock = dir.join("s");
+        let _ = std::fs::remove_file(&sock);
+        let listener = UnixListener::bind(&sock).unwrap();
+        let (got_tx, got_rx) = mpsc::channel();
+        thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            while let Ok(Some(m)) = crate::proto::read_frame::<ClientMsg>(&mut s) {
+                if got_tx.send(m).is_err() {
+                    break;
+                }
+            }
+        });
+        let client = Client::connect(&sock).unwrap();
+        let (tx, _rx) = mpsc::channel();
+        (App::bare(client, tx, Leader::DEFAULT, (120, 35)), got_rx)
+    }
+
+    fn prompt_of(m: ClientMsg) -> (String, String) {
+        match m {
+            ClientMsg::Prompt { stream, text } => (stream, text),
+            _ => panic!("expected a Prompt"),
+        }
+    }
+
+    /// REQ-161: the prompt goes to the review's own workspace once, and
+    /// another workspace opening does not take it.
+    #[test]
+    fn the_review_prompt_goes_out_only_for_its_workspace() {
+        let (mut app, got) = listening("own");
+        app.pending_prompt = Some(("r1".into(), "Review #7".into()));
+        app.send_pending_prompt("other");
+        assert!(got.recv_timeout(Duration::from_millis(150)).is_err());
+        assert!(app.pending_prompt.is_some());
+
+        app.send_pending_prompt("r1");
+        let sent = prompt_of(got.recv_timeout(Duration::from_secs(2)).unwrap());
+        assert_eq!(sent, ("r1".to_string(), "Review #7".to_string()));
+        assert!(app.pending_prompt.is_none());
+        app.send_pending_prompt("r1");
+        assert!(got.recv_timeout(Duration::from_millis(150)).is_err());
+    }
+
+    /// REQ-163: only a yes sends the prompt to a review that existed.
+    #[test]
+    fn a_yes_sends_the_prompt_again_and_a_no_does_not() {
+        let (mut app, got) = listening("resend");
+        let ask = || Modal::Resend {
+            stream: "r1".into(),
+            name: "review-7".into(),
+            prompt: "Review #7".into(),
+        };
+        app.modal = Some(ask());
+        assert!(matches!(
+            app.modal
+                .as_mut()
+                .unwrap()
+                .key(KeyEvent::from(KeyCode::Esc)),
+            Outcome::Cancel
+        ));
+        assert!(got.recv_timeout(Duration::from_millis(150)).is_err());
+
+        app.modal = Some(ask());
+        assert!(matches!(
+            app.modal
+                .as_mut()
+                .unwrap()
+                .key(KeyEvent::from(KeyCode::Char('y'))),
+            Outcome::Submit
+        ));
+        app.submit_modal();
+        let sent = prompt_of(got.recv_timeout(Duration::from_secs(2)).unwrap());
+        assert_eq!(sent.0, "r1");
     }
 }

@@ -15,6 +15,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 
 use super::anim;
+use crate::connectors::github::PrSummary;
 use crate::theme::p;
 
 /// How well `query` matches `text`, and where: every query character must
@@ -65,6 +66,8 @@ pub enum Pick {
     NewSession(String),
     /// Ask for a new name for this session.
     RenameSession(String),
+    /// Review this pull request (REQ-155).
+    Review(Box<PrSummary>),
 }
 
 /// One workspace for the switcher, in the order to list it (most recent
@@ -88,6 +91,12 @@ enum Kind {
         root: PathBuf,
     },
     Sessions,
+    /// The open pull requests; `loading` until gh answers (REQ-151).
+    Reviews {
+        loading: bool,
+        /// Only the PRs whose review is asked of the user (REQ-169).
+        requested: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -107,6 +116,11 @@ pub enum Outcome {
     Stay,
     Cancel,
     Pick(Pick),
+    /// `m` in the PR picker: load the list again, `true` for the PRs
+    /// requested of the user (REQ-169).
+    Reload(bool),
+    /// `o` in the PR picker: open this url in the browser (REQ-170).
+    Browse(String),
 }
 
 pub struct Finder {
@@ -180,6 +194,63 @@ impl Finder {
         Self::new(&title, Kind::Files { root }, items)
     }
 
+    /// The PR picker, loading until `set_reviews` brings the list (REQ-150).
+    pub fn reviews(requested: bool) -> Self {
+        let mut f = Self::new(
+            "Review a pull request",
+            Kind::Reviews {
+                loading: true,
+                requested,
+            },
+            Vec::new(),
+        );
+        f.retitle();
+        f
+    }
+
+    /// Whether this is the PR picker, and which list it waits for or shows.
+    pub fn reviews_list(&self) -> Option<bool> {
+        match self.kind {
+            Kind::Reviews { requested, .. } => Some(requested),
+            _ => None,
+        }
+    }
+
+    /// Whether this is the PR picker and gh has not answered yet.
+    pub fn loading_reviews(&self) -> bool {
+        matches!(self.kind, Kind::Reviews { loading: true, .. })
+    }
+
+    /// Fills the PR picker. `false` when the list is not the one it asked
+    /// for (the picker closed and another opened, or `m` was pressed since).
+    pub fn set_reviews(&mut self, prs: Vec<PrSummary>, requested: bool) -> bool {
+        let Kind::Reviews {
+            loading,
+            requested: asked,
+        } = &mut self.kind
+        else {
+            return false;
+        };
+        if *asked != requested {
+            return false;
+        }
+        *loading = false;
+        self.items = prs.into_iter().map(review_item).collect();
+        self.sel = 0;
+        self.filter();
+        true
+    }
+
+    fn retitle(&mut self) {
+        if let Kind::Reviews { requested, .. } = self.kind {
+            self.title = if requested {
+                "Review a pull request · requested of me".into()
+            } else {
+                "Review a pull request".into()
+            };
+        }
+    }
+
     fn new(title: &str, kind: Kind, items: Vec<Item>) -> Self {
         let mut f = Self {
             title: title.into(),
@@ -230,6 +301,7 @@ impl Finder {
     fn filter(&mut self) {
         let q = self.query.trim();
         let folders = matches!(self.kind, Kind::Folders { .. });
+        let reviews = matches!(self.kind, Kind::Reviews { .. });
         self.items
             .retain(|it| !matches!(it.pick, Pick::Create(_) | Pick::NewSession(_)));
         let mut shown: Vec<(i32, usize, Vec<usize>)> = self
@@ -238,7 +310,14 @@ impl Finder {
             .enumerate()
             .filter(|(_, it)| q.is_empty() || !folders || it.into.is_some())
             .filter_map(|(i, it)| {
-                let (score, at) = fuzzy(q, &it.label)?;
+                // A PR is found by number, title, author or branch (REQ-153);
+                // only the label is highlighted.
+                let text = if reviews {
+                    format!("{} {}", it.label, it.hint)
+                } else {
+                    it.label.clone()
+                };
+                let (score, at) = fuzzy(q, &text)?;
                 Some((if q.is_empty() { -(i as i32) } else { score }, i, at))
             })
             .collect();
@@ -347,6 +426,27 @@ impl Finder {
             KeyCode::Char('~') if self.query.is_empty() && self.browsing() => {
                 if let Some(home) = std::env::var_os("HOME") {
                     self.go(PathBuf::from(home), None);
+                }
+            }
+            KeyCode::Char('m')
+                if !ctrl && self.query.is_empty() && matches!(self.kind, Kind::Reviews { .. }) =>
+            {
+                if let Kind::Reviews { loading, requested } = &mut self.kind {
+                    *requested = !*requested;
+                    *loading = true;
+                    let now = *requested;
+                    self.items.clear();
+                    self.sel = 0;
+                    self.retitle();
+                    self.filter();
+                    return Outcome::Reload(now);
+                }
+            }
+            KeyCode::Char('o')
+                if !ctrl && self.query.is_empty() && matches!(self.kind, Kind::Reviews { .. }) =>
+            {
+                if let Some(Pick::Review(pr)) = self.current().map(|it| it.pick.clone()) {
+                    return Outcome::Browse(pr.url);
                 }
             }
             KeyCode::Char('u') if ctrl => {
@@ -479,7 +579,7 @@ impl Finder {
         let path = match &self.kind {
             Kind::Folders { cwd, .. } => tilde(cwd),
             Kind::Files { root } => tilde(root),
-            Kind::Workspaces | Kind::Sessions => String::new(),
+            Kind::Workspaces | Kind::Sessions | Kind::Reviews { .. } => String::new(),
         };
         let mut crumbs = Vec::new();
         let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
@@ -513,6 +613,7 @@ impl Finder {
                         Kind::Workspaces => "project or worktree…",
                         Kind::Files { .. } => "file name…",
                         Kind::Sessions => "session name, or a new one…",
+                        Kind::Reviews { .. } => "number, title, author or branch…",
                     },
                     dim,
                 )
@@ -565,7 +666,20 @@ impl Finder {
             lines.push(line);
         }
         if self.shown.is_empty() {
-            lines.push(Line::from(Span::styled(" Nothing matches.", dim)));
+            lines.push(Line::from(Span::styled(
+                match self.kind {
+                    Kind::Reviews { loading: true, .. } => " Loading open pull requests…",
+                    Kind::Reviews { requested, .. } if self.query.is_empty() => {
+                        if requested {
+                            " No review is requested of you."
+                        } else {
+                            " No open pull requests."
+                        }
+                    }
+                    _ => " Nothing matches.",
+                },
+                dim,
+            )));
         }
         f.render_widget(Paragraph::new(lines), list);
         for y in body.y..body.y + body.height {
@@ -589,6 +703,20 @@ impl Finder {
                 ("↑↓", "move"),
                 ("↵", "open"),
                 ("ctrl-r", "rename"),
+                ("esc", "close"),
+            ],
+            Kind::Reviews { requested, .. } => &[
+                ("↑↓", "move"),
+                ("↵", "review"),
+                (
+                    "m",
+                    if requested {
+                        "all open"
+                    } else {
+                        "requested of me"
+                    },
+                ),
+                ("o", "browser"),
                 ("esc", "close"),
             ],
             _ => &[("↑↓", "move"), ("↵", "open"), ("esc", "close")],
@@ -626,7 +754,11 @@ impl Finder {
                 };
                 return file_head(&root.join(f));
             }
-            Pick::Ws(_) | Pick::Session(_) | Pick::NewSession(_) | Pick::RenameSession(_) => {
+            Pick::Ws(_)
+            | Pick::Session(_)
+            | Pick::NewSession(_)
+            | Pick::RenameSession(_)
+            | Pick::Review(_) => {
                 return Vec::new();
             }
         };
@@ -665,6 +797,82 @@ impl Finder {
             l.push(Line::from(Span::raw(n)));
         }
         l
+    }
+}
+
+/// One open PR as a row, with its preview: the branches, the size, the
+/// description and the files (REQ-154). Built once, not every frame.
+fn review_item(pr: PrSummary) -> Item {
+    let dim = Style::default().fg(p().dim);
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+    let mark = if pr.is_draft {
+        "◌"
+    } else {
+        match pr.review.as_str() {
+            "APPROVED" => "✓",
+            "CHANGES_REQUESTED" => "±",
+            _ => " ",
+        }
+    };
+    let mut size = vec![
+        Span::styled(format!("+{}", pr.additions), Style::default().fg(p().green)),
+        Span::raw(" "),
+        Span::styled(format!("−{}", pr.deletions), Style::default().fg(p().red)),
+        Span::styled(format!(" in {} files", pr.files), dim),
+    ];
+    if pr.is_draft {
+        size.push(Span::styled("  draft", Style::default().fg(p().yellow)));
+    }
+    let when = pr.updated_at.get(..10).unwrap_or_default();
+    let mut preview = vec![
+        Line::from(Span::styled(format!("#{} {}", pr.number, pr.title), bold)),
+        Line::from(vec![
+            Span::styled(pr.branch.clone(), Style::default().fg(p().magenta)),
+            Span::styled(format!(" → {} · {when}", pr.base), dim),
+        ]),
+        Line::from(size),
+    ];
+    let verdict = match pr.review.as_str() {
+        "APPROVED" => Some(("approved", p().green)),
+        "CHANGES_REQUESTED" => Some(("changes requested", p().red)),
+        _ => None,
+    };
+    if let Some((text, colour)) = verdict {
+        preview.push(Line::from(Span::styled(text, Style::default().fg(colour))));
+    }
+    preview.push(Line::default());
+    if pr.body.trim().is_empty() {
+        preview.push(Line::from(Span::styled("no description", dim)));
+    }
+    preview.extend(
+        pr.body
+            .lines()
+            .take(12)
+            .map(|l| Line::from(l.replace('\t', "    "))),
+    );
+    if !pr.paths.is_empty() {
+        preview.push(Line::default());
+        preview.push(Line::from(Span::styled("files", dim)));
+        preview.extend(
+            pr.paths
+                .iter()
+                .take(10)
+                .map(|f| Line::from(format!("  {f}"))),
+        );
+        if pr.paths.len() > 10 {
+            preview.push(Line::from(Span::styled(
+                format!("  +{} more", pr.paths.len() - 10),
+                dim,
+            )));
+        }
+    }
+    Item {
+        mark,
+        label: format!("#{} {}", pr.number, pr.title),
+        hint: format!("@{}  {}", pr.author, pr.branch),
+        pick: Pick::Review(Box::new(pr)),
+        into: None,
+        preview,
     }
 }
 
@@ -912,5 +1120,205 @@ mod tests {
             Outcome::Pick(Pick::File(p)) => assert_eq!(p, "docs/a.md"),
             _ => panic!("want the md"),
         }
+    }
+
+    fn pr(n: u64, title: &str, author: &str, branch: &str) -> PrSummary {
+        PrSummary {
+            number: n,
+            title: title.into(),
+            author: author.into(),
+            branch: branch.into(),
+            base: "main".into(),
+            updated_at: "2026-10-09T10:00:00Z".into(),
+            body: "Does a thing.\n\nSecond paragraph.".into(),
+            paths: vec!["a.rs".into(), "b.rs".into()],
+            files: 2,
+            additions: 3,
+            deletions: 1,
+            ..PrSummary::default()
+        }
+    }
+
+    fn picker() -> Finder {
+        let mut f = Finder::reviews(false);
+        let list = vec![
+            pr(42, "Add magic-link sign-in", "ana", "feat/auth-flow"),
+            pr(41, "Cache the sidebar", "luis", "perf/cache"),
+            PrSummary {
+                is_draft: true,
+                ..pr(39, "WIP layout ratio", "bryan", "feat/ratio")
+            },
+        ];
+        assert!(f.set_reviews(list, false));
+        f
+    }
+
+    fn typed(f: &mut Finder, s: &str) {
+        for c in s.chars() {
+            f.key(key(KeyCode::Char(c)));
+        }
+    }
+
+    fn labels(f: &Finder) -> Vec<String> {
+        f.shown
+            .iter()
+            .map(|(i, _)| f.items[*i].label.clone())
+            .collect()
+    }
+
+    fn screen(f: &Finder) -> String {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let mut term = Terminal::new(TestBackend::new(110, 30)).unwrap();
+        term.draw(|fr| f.draw(fr)).unwrap();
+        term.backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect()
+    }
+
+    /// REQ-151: loading shows a row, takes `esc`, and picks nothing; then the
+    /// PRs come in the order gh gave them.
+    #[test]
+    fn the_pr_picker_loads_then_lists_what_it_got() {
+        let mut f = Finder::reviews(false);
+        assert!(f.loading_reviews() && f.shown.is_empty());
+        assert!(screen(&f).contains("Loading open pull requests"));
+        assert!(matches!(f.key(key(KeyCode::Enter)), Outcome::Stay));
+        assert!(matches!(f.key(key(KeyCode::Esc)), Outcome::Cancel));
+
+        let f = picker();
+        assert!(!f.loading_reviews());
+        assert_eq!(
+            labels(&f),
+            [
+                "#42 Add magic-link sign-in",
+                "#41 Cache the sidebar",
+                "#39 WIP layout ratio"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_list_for_the_other_scope_is_ignored() {
+        let mut f = Finder::reviews(false);
+        assert!(!f.set_reviews(vec![pr(1, "x", "a", "b")], true));
+        assert!(f.loading_reviews() && f.shown.is_empty());
+        assert!(!Finder::workspaces(Vec::new()).set_reviews(Vec::new(), false));
+    }
+
+    /// REQ-153: a PR is found by number, title, author or branch.
+    #[test]
+    fn the_pr_picker_filters_by_number_title_author_and_branch() {
+        for (query, want) in [
+            ("link", "#42"),
+            ("41", "#41"),
+            ("luis", "#41"),
+            ("ratio", "#39"),
+            ("auth-flow", "#42"),
+        ] {
+            let mut f = picker();
+            typed(&mut f, query);
+            let first = labels(&f).into_iter().next();
+            assert!(
+                first.is_some_and(|l| l.starts_with(want)),
+                "{query} should find {want}"
+            );
+        }
+        let mut f = picker();
+        typed(&mut f, "zzz");
+        assert!(labels(&f).is_empty());
+        assert!(screen(&f).contains("Nothing matches"));
+    }
+
+    /// REQ-169: `m` with an empty query flips the scope and asks again;
+    /// with a query it is just a letter.
+    #[test]
+    fn m_flips_the_scope_and_asks_for_the_list_again() {
+        let mut f = picker();
+        assert!(matches!(
+            f.key(key(KeyCode::Char('m'))),
+            Outcome::Reload(true)
+        ));
+        assert!(f.loading_reviews() && f.shown.is_empty());
+        assert_eq!(f.reviews_list(), Some(true));
+        assert!(f.title.contains("requested of me"));
+        assert!(matches!(
+            f.key(key(KeyCode::Char('m'))),
+            Outcome::Reload(false)
+        ));
+        assert!(!f.title.contains("requested"));
+
+        let mut f = picker();
+        typed(&mut f, "a");
+        assert!(matches!(f.key(key(KeyCode::Char('m'))), Outcome::Stay));
+        assert_eq!(f.query, "am");
+    }
+
+    /// REQ-170: `o` with an empty query browses to the selected PR.
+    #[test]
+    fn o_opens_the_selected_prs_url() {
+        let mut f = Finder::reviews(false);
+        f.set_reviews(
+            vec![PrSummary {
+                url: "https://github.com/o/r/pull/42".into(),
+                ..pr(42, "Add", "ana", "b")
+            }],
+            false,
+        );
+        match f.key(key(KeyCode::Char('o'))) {
+            Outcome::Browse(url) => assert_eq!(url, "https://github.com/o/r/pull/42"),
+            _ => panic!("expected Browse"),
+        }
+        typed(&mut f, "a");
+        assert!(matches!(f.key(key(KeyCode::Char('o'))), Outcome::Stay));
+    }
+
+    /// REQ-155: `↵` picks the selected PR whole.
+    #[test]
+    fn enter_picks_the_selected_pr() {
+        let mut f = picker();
+        f.key(key(KeyCode::Down));
+        match f.key(key(KeyCode::Enter)) {
+            Outcome::Pick(Pick::Review(pr)) => {
+                assert_eq!((pr.number, pr.base.as_str()), (41, "main"))
+            }
+            _ => panic!("expected a review pick"),
+        }
+    }
+
+    /// REQ-154: the preview has the description and the files; a draft says so.
+    #[test]
+    fn the_pr_preview_shows_the_description_and_the_files() {
+        let f = picker();
+        let text: String = f
+            .preview()
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect::<Vec<_>>()
+            .join("|");
+        for want in [
+            "#42 Add magic-link sign-in",
+            "feat/auth-flow",
+            "Does a thing.",
+            "a.rs",
+            "b.rs",
+            "+3",
+            "−1",
+        ] {
+            assert!(text.contains(want), "{want} missing from {text}");
+        }
+        let shown = screen(&f);
+        assert!(shown.contains("@ana") && shown.contains("requested of me"));
+        let mut d = picker();
+        d.sel = 2;
+        let draft: String = d
+            .preview()
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(draft.contains("draft"));
     }
 }

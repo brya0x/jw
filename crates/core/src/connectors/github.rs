@@ -102,6 +102,8 @@ pub struct PrSummary {
     /// APPROVED, CHANGES_REQUESTED, REVIEW_REQUIRED or empty.
     pub review: String,
     pub files: u64,
+    /// The paths of the changed files, for the preview.
+    pub paths: Vec<String>,
     pub additions: u64,
     pub deletions: u64,
     pub url: String,
@@ -182,6 +184,8 @@ struct SummaryJson {
     #[serde(default)]
     changed_files: u64,
     #[serde(default)]
+    files: Vec<ChangedJson>,
+    #[serde(default)]
     additions: u64,
     #[serde(default)]
     deletions: u64,
@@ -247,7 +251,7 @@ struct InlineJson {
     body: String,
 }
 
-const SUMMARY_FIELDS: &str = "number,title,body,author,headRefName,baseRefName,isDraft,updatedAt,reviewDecision,changedFiles,additions,deletions,url";
+const SUMMARY_FIELDS: &str = "number,title,body,author,headRefName,baseRefName,isDraft,updatedAt,reviewDecision,changedFiles,files,additions,deletions,url";
 const DETAIL_FIELDS: &str = "title,body,author,headRefName,baseRefName,url,comments,reviews,files";
 
 impl Client {
@@ -302,6 +306,7 @@ impl Client {
                 updated_at: p.updated_at,
                 review: p.review_decision,
                 files: p.changed_files,
+                paths: p.files.into_iter().map(|f| f.path).collect(),
                 additions: p.additions,
                 deletions: p.deletions,
                 url: p.url,

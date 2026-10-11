@@ -350,11 +350,11 @@ Prototype: https://claude.ai/artifact/7dJfvauPHjSBZ3jF5e8SJ7 (approved 2026-10-1
 
 | Piece | Shape |
 |---|---|
-| gh list | `Client::open_prs(dir, requested)` in `crates/core/src/connectors/github.rs` (beside `list`): `gh pr list --state open --limit 100 --json number,title,body,author,headRefName,baseRefName,isDraft,updatedAt,reviewDecision,changedFiles,additions,deletions,url`, plus `--search "review-requested:@me"` when `requested` |
+| gh list | `Client::open_prs(dir, requested)` in `crates/core/src/connectors/github.rs` (beside `list`): `gh pr list --state open --limit 100 --json number,title,body,author,headRefName,baseRefName,isDraft,updatedAt,reviewDecision,changedFiles,files,additions,deletions,url`, plus `--search "review-requested:@me"` when `requested` |
 | gh detail | `Client::detail(dir, n)`: `gh pr view n --json title,body,author,baseRefName,headRefName,comments,reviews,files,url` and `gh api repos/{owner}/{repo}/pulls/n/comments` (inline). gh resolves the repo from the cwd |
 | Registry | `Entry.review_base: String` (`core/registry.rs`, `serde(default, skip_serializing_if = "String::is_empty")`); `Entry.pr` holds `<n>`. `Entry` ignores unknown keys |
 | Stream | `Stream::resolve` (`stream.rs`): WHEN `entry.review_base` is set, `base` is it and `tree` is `review_tree()`: `split right 0.5 { a: view:diff, b: agent }`. `command()` returns no command for a `view:*` run |
-| Core action | `review::review_stream(project, pr)` (`crates/core/src/review.rs`): `git fetch origin pull/<n>/head:+review/pr-<n>` and `git fetch origin <base>`, `add_worktree_existing` at `root/review-<n>`, the registry entry with `branch`, `pr`, `review_base`. Not `new_stream`: its `from` is a start ref and it errors on an existing branch |
+| Core action | `review::review_stream(project, pr)` (`crates/core/src/review.rs`): `git fetch origin +pull/<n>/head:refs/jw/pr-<n>` (a ref of its own, so a checked-out review branch can be refreshed) and `git fetch origin <base>`, then `git worktree add -B review/pr-<n> root/review-<n> refs/jw/pr-<n>` and the registry entry with `branch`, `pr`, `review_base`. An existing review is moved to the new head with `reset --hard` unless it has changes. Not `new_stream`: its `from` is a start ref and it errors on an existing branch |
 | Context file | `<state>/reviews/<session>/pr-<n>.md`: header, description, conversation, reviews, inline comments by file:line, files and stat; capped at 200 KB, the cut noted. The diff stays in git |
 | TUI | `Kind::Reviews` and `Pick::Review` in `finder.rs`; action `review` (group worktree, key `R`) in `settings.rs`; `ask_review`; jobs through `App::background`; creation ends in `Job::Created` → `open_entry`, like `w` |
 | Prompt | After `start_panes` sends `Open`, a pending `(stream, text)` on `App` goes out as `ClientMsg::Prompt`. The TUI never sent `Prompt` before; the daemon waits for the agent's output to be quiet and writes it (REQ-13) |
@@ -380,6 +380,8 @@ Prototype: https://claude.ai/artifact/7dJfvauPHjSBZ3jF5e8SJ7 (approved 2026-10-1
 - REQ-168 WHEN `Entry.review_base` is empty, `workspaces.json` SHALL serialise exactly as before.
 - REQ-169 WHEN `m` is pressed in the picker with an empty query, the TUI SHALL reload the list filtered to PRs whose review is requested from the user, and `m` again SHALL reload all open PRs.
 - REQ-170 WHEN `o` is pressed in the picker with an empty query, the TUI SHALL open the selected PR's url in the browser.
+- REQ-171 WHEN `Open` carries a leaf whose role starts with `view:`, the daemon SHALL give it an id and start no process, as `Split` does.
+- REQ-172 IF a review worktree has changes when its PR is picked again, THEN jw SHALL leave it as it is and say so.
 
 ---
 
@@ -474,7 +476,7 @@ Prototype: https://claude.ai/artifact/7dJfvauPHjSBZ3jF5e8SJ7 (approved 2026-10-1
 - RISK-43 **A late frame.** Drawing the panes' content shifted by a few cells (REQ-136) re-renders every pane each frame. REQ-148 covers a frame that overruns `FRAME`: the animation jumps to its end state instead of lagging behind input. The cost is measured by hand in Ghostty.
 - RISK-44 **Synchronized output can freeze the screen.** A terminal holds the frame until `CSI ? 2026 l` (Ghostty gives up after a second). REQ-139 closes it on every exit path; terminals that do not know the mode ignore it.
 - RISK-45 **The shorter which-key delay shows the popup to people who type fast.** A chord typed within 150 ms still never shows it; one typed slower flashes it for an instant, softened by the fade. `which_delay_ms` restores the old 600 ms.
-- RISK-46 **A `view:diff` leaf in `Open` has only been sent by tests.** The TUI builds diffs locally (`load_diff`). `start_panes` must turn a `view:` leaf into a `NewPane` with no command, and the daemon must skip the PTY (`is_view`). Covered by a test in `crates/jw/tests/daemon.rs` and one on `Stream::panes`.
+- RISK-46 **A `view:diff` leaf in `Open` had never been sent by the TUI.** The daemon's `open` started a shell for it (`start` skipped the PTY for views but `open` called `spawn`): fixed, REQ-171, tested in `crates/jw/tests/daemon.rs`. `Stream::panes` gives the leaf no command (`command()`), and `open_specs` keeps the setup out of it.
 - RISK-47 **The prompt can land in claude's trust-folder dialog** on a fresh worktree: `prompt()` never inspects the screen and writes text and Enter. The same exposure as `jw worktree --task`; what claude does with it is unverified. Accepted for now.
 - RISK-48 **`gh pr list` takes seconds** on a big repo or a slow network. REQ-151 keeps the keys live; a cached list is a later refinement.
 - RISK-49 **Context size.** A PR with hundreds of comments is capped at 200 KB and the cut is noted in the file; claude can run `gh pr view` itself.
@@ -540,7 +542,7 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | M6 ✓ | First-run welcome, `welcomed` and `JW_WELCOME=0` (set by `scripts/drive.py`) | 146, 149 | `tui/draw.rs`, `settings.rs`, `scripts/drive.py` |
 | R0 | Addendum 14 in this spec; the prototype (approved 2026-10-11) | — | docs |
 | R1 | Core: `open_prs`, `detail`, `Entry.review_base`, `Stream::resolve` and `command()` for reviews, `review.rs` (fetch, worktree, context file) | 155–160, 162, 164, 165, 168 | `connectors/github.rs`, `core/registry.rs`, `stream.rs`, `review.rs` |
-| R2 | TUI: `Kind::Reviews` with a loading state, `R`, jobs, the pending `Prompt`, `m` and `o`; the daemon test | 150–154, 161, 163, 166, 167, 169, 170 | `tui/finder.rs`, `tui/mod.rs`, `settings.rs`, `crates/jw/tests/daemon.rs` |
+| R2 | TUI: `Kind::Reviews` with a loading state, `R`, jobs, the pending `Prompt`, `m` and `o`; `Open` starts no process for a viewer leaf; the daemon test | 150–154, 161, 163, 166, 167, 169–171 | `tui/finder.rs`, `tui/mod.rs`, `tui/modal.rs`, `settings.rs`, `daemon/src/lib.rs`, `crates/jw/tests/daemon.rs` |
 | R3 | README and the `jw` skill; version bump; a hand test with `scripts/jw-test` | — | docs |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 
@@ -567,6 +569,7 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 ## Corrections
 
 - REQ-129 and REQ-130 specified a keyboard select mode (`^␣ v`, `SEL`). The user dropped it: terminals today select with the mouse and the shell edits the prompt, so jw keeps the mouse and adds the copied banner (REQ-135).
+- Addendum 14's first draft sent the PR head to `+review/pr-<n>` and said `Open` already handled `view:` leaves. A fetch cannot update a branch that is checked out in a worktree, so the head goes to `refs/jw/pr-<n>`; and the daemon's `open` started a shell for a viewer leaf until REQ-171.
 - REQ-39's done checks, ported from Go, assumed a worktree stays on the branch jw made for it. Agents switch branches, so a worktree whose work merged through another PR looked unfinished (addendum 8).
 
 - Addendum 5's first draft answered only `CSI ? u`. nvim sends `CSI ? u` then `CSI c` and pushes its flags only once both answers arrive (nvim 0.12.5), which the end-to-end test caught. S14 answers `CSI c`; REQ-100 keeps the two in order.
