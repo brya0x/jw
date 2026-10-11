@@ -11,6 +11,7 @@ mod finder;
 mod keys;
 mod mdview;
 mod modal;
+mod registry_watch;
 mod select;
 mod settings_view;
 mod setup;
@@ -70,6 +71,9 @@ enum Msg {
     /// Twice a second: old status messages go, the panes' state and the
     /// PRs are asked for again.
     Tick,
+    /// The sidebar's rows, read again off the UI thread because another
+    /// process rewrote the registry (addendum 14).
+    Rows(Result<Vec<Row>>),
     /// The pull requests of the worktrees, by workspace id.
     Prs(Vec<(String, Option<crate::connectors::Pr>)>),
 }
@@ -263,6 +267,11 @@ pub struct App {
     exit_reason: Option<String>,
     /// The settings and theme files, to apply their changes.
     watch: crate::settings::Watch,
+    /// `workspaces.json` and `folders.json`, to follow what others write.
+    regwatch: registry_watch::RegistryWatch,
+    /// Rows read after an outside change, held while a modal, picker or
+    /// the settings screen is open (REQ-154).
+    pending_rows: Option<Vec<Row>>,
     /// Just started, or just switched session: with nothing running, the
     /// next List opens the session's last workspace.
     fresh: bool,
@@ -523,6 +532,8 @@ impl App {
             events,
             exit_reason: None,
             watch: crate::settings::Watch::new(),
+            regwatch: registry_watch::RegistryWatch::new(),
+            pending_rows: None,
             fresh: true,
             motion: anim::Motion::default(),
             last_draw: Instant::now(),
@@ -858,6 +869,10 @@ impl App {
 
     /// Rebuilds the sidebar from the registry: one space per project.
     fn reload(&mut self) -> Result<()> {
+        // Stamped before reading: a write that lands meanwhile shows on the
+        // next look (RISK-48), and this one is not taken for someone else's.
+        self.regwatch.sync();
+        self.pending_rows = None;
         let state = registry::state_dir()?;
         let folders = crate::folders::load(&state)?;
         let reg_path = registry::default_path()?;
@@ -865,64 +880,50 @@ impl App {
         if actions::fill_roots(&mut reg) {
             reg.save(&reg_path)?;
         }
-        let session = crate::session::current();
-        let mut groups: Vec<(Entry, Vec<Entry>)> = folders
-            .folders
-            .iter()
-            .map(|f| (crate::folders::entry_for(f, &session), Vec::new()))
-            .collect();
-        let mut by_project: BTreeMap<String, Vec<Entry>> = BTreeMap::new();
-        for e in reg
-            .entries
-            .into_iter()
-            .filter(|e| crate::session::owns(&session, &e.session))
-        {
-            by_project.entry(e.project.clone()).or_default().push(e);
-        }
-        for (project, mut worktrees) in by_project {
-            worktrees.sort_by(|a, b| a.name.cmp(&b.name));
-            let root = worktrees
-                .iter()
-                .find(|w| !w.root.is_empty())
-                .map(|w| w.root.clone());
-            let at = groups.iter().position(|(r, _)| {
-                !r.branch.is_empty() && (r.project == project || Some(&r.path) == root.as_ref())
-            });
-            match at {
-                Some(i) => groups[i].1 = worktrees,
-                None => {
-                    // Worktrees whose project folder isn't open: the folder
-                    // shows closed, above them.
-                    let mut e = match &root {
-                        Some(dir) => crate::folders::entry(dir, false),
-                        None => Entry {
-                            id: crate::folders::id(&project),
-                            name: project.clone(),
-                            ..Entry::default()
-                        },
-                    };
-                    e.project = project;
-                    groups.push((e, worktrees));
-                }
-            }
-        }
-        self.rows = groups
-            .into_iter()
-            .flat_map(|(root, kids)| {
-                std::iter::once(Row {
-                    entry: root,
-                    child: false,
-                })
-                .chain(kids.into_iter().map(|entry| Row { entry, child: true }))
-            })
-            .collect();
-        // The workspace on screen keeps its latest name and branch.
+        let rows = build_rows(&folders, reg, &crate::session::current());
+        self.apply_rows(rows);
+        Ok(())
+    }
+
+    /// The workspace on screen keeps its latest name and branch.
+    fn apply_rows(&mut self, rows: Vec<Row>) {
+        self.rows = rows;
         if let Some(s) = &mut self.active
             && let Some(row) = self.rows.iter().find(|r| r.entry.id == s.entry.id)
         {
             s.entry = row.entry.clone();
         }
-        Ok(())
+    }
+
+    fn overlay_open(&self) -> bool {
+        self.modal.is_some() || self.finder.is_some() || self.settings.is_some()
+    }
+
+    /// Rows read again off the UI thread, with no write and no busy mark
+    /// (REQ-155, REQ-156).
+    fn reload_rows_in_background(&self) {
+        let tx = self.events.clone();
+        thread::spawn(move || {
+            let _ = tx.send(Msg::Rows(load_rows()));
+        });
+    }
+
+    /// Rows another process wrote: shown now, or once the overlay closes.
+    fn on_rows(&mut self, rows: Result<Vec<Row>>) {
+        // Unreadable (half-written by a tool that doesn't rename): the rows
+        // stay and the next change tries again, silently (REQ-157).
+        if let Ok(rows) = rows {
+            self.pending_rows = Some(rows);
+            self.apply_pending_rows();
+        }
+    }
+
+    fn apply_pending_rows(&mut self) {
+        if !self.overlay_open()
+            && let Some(rows) = self.pending_rows.take()
+        {
+            self.apply_rows(rows);
+        }
     }
 
     /// Looks up the PR of every worktree that is open, off the main thread
@@ -1044,6 +1045,7 @@ impl App {
             Msg::Term(_) => {}
             Msg::Tick => {
                 self.tell_theme();
+                self.apply_pending_rows();
                 if self
                     .status
                     .as_ref()
@@ -1060,6 +1062,9 @@ impl App {
                 // Every 2 s the panes' state (✻ ? ⚡), every minute the PRs.
                 if self.ticks.is_multiple_of(4) {
                     self.send(ClientMsg::List);
+                    if self.regwatch.changed() {
+                        self.reload_rows_in_background();
+                    }
                     // REQ-69: settings and themes edited anywhere apply.
                     match self.watch.check() {
                         Ok(true) => {
@@ -1095,6 +1100,7 @@ impl App {
                 }
             }
             Msg::Job(j) => self.on_job(*j),
+            Msg::Rows(rows) => self.on_rows(rows),
         }
     }
 
@@ -3239,6 +3245,69 @@ fn even(n: &Node) -> Node {
     }
 }
 
+/// The registry and the session's folders, read and nothing else: no
+/// `fill_roots`, no save, no migration.
+fn load_rows() -> Result<Vec<Row>> {
+    let folders = crate::folders::Folders::load(&crate::folders::default_path()?)?;
+    let reg = Registry::load(&registry::default_path()?)?;
+    Ok(build_rows(&folders, reg, &crate::session::current()))
+}
+
+/// One project row per opened folder, each registry worktree under its
+/// project's row (REQ-50).
+fn build_rows(folders: &crate::folders::Folders, reg: Registry, session: &str) -> Vec<Row> {
+    let mut groups: Vec<(Entry, Vec<Entry>)> = folders
+        .folders
+        .iter()
+        .map(|f| (crate::folders::entry_for(f, session), Vec::new()))
+        .collect();
+    let mut by_project: BTreeMap<String, Vec<Entry>> = BTreeMap::new();
+    for e in reg
+        .entries
+        .into_iter()
+        .filter(|e| crate::session::owns(session, &e.session))
+    {
+        by_project.entry(e.project.clone()).or_default().push(e);
+    }
+    for (project, mut worktrees) in by_project {
+        worktrees.sort_by(|a, b| a.name.cmp(&b.name));
+        let root = worktrees
+            .iter()
+            .find(|w| !w.root.is_empty())
+            .map(|w| w.root.clone());
+        let at = groups.iter().position(|(r, _)| {
+            !r.branch.is_empty() && (r.project == project || Some(&r.path) == root.as_ref())
+        });
+        match at {
+            Some(i) => groups[i].1 = worktrees,
+            None => {
+                // Worktrees whose project folder isn't open: the folder
+                // shows closed, above them.
+                let mut e = match &root {
+                    Some(dir) => crate::folders::entry(dir, false),
+                    None => Entry {
+                        id: crate::folders::id(&project),
+                        name: project.clone(),
+                        ..Entry::default()
+                    },
+                };
+                e.project = project;
+                groups.push((e, worktrees));
+            }
+        }
+    }
+    groups
+        .into_iter()
+        .flat_map(|(root, kids)| {
+            std::iter::once(Row {
+                entry: root,
+                child: false,
+            })
+            .chain(kids.into_iter().map(|entry| Row { entry, child: true }))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod drain_tests {
     use super::drain;
@@ -3540,5 +3609,58 @@ mod motion_tests {
         let (at, _) = app.next_wake(t0 + MS(500)).unwrap();
         assert_eq!(at, t0 + STATUS_FOR - anim::MESSAGE_EDGE);
         assert!(app.next_wake(t0 + STATUS_FOR).is_none());
+    }
+
+    fn rows(ids: &[&str]) -> Vec<Row> {
+        ids.iter()
+            .map(|id| Row {
+                entry: entry(id),
+                child: false,
+            })
+            .collect()
+    }
+
+    fn ids(app: &App) -> Vec<&str> {
+        app.rows.iter().map(|r| r.entry.id.as_str()).collect()
+    }
+
+    #[test]
+    fn rows_from_outside_replace_the_sidebar_and_keep_the_open_workspace() {
+        let (mut app, _g) = app(false);
+        app.on_rows(Ok(rows(&["a", "b", "c", "d"])));
+        assert_eq!(ids(&app), ["a", "b", "c", "d"]);
+        assert_eq!(app.active.as_ref().unwrap().entry.id, "a");
+        assert!(app.pending_rows.is_none());
+    }
+
+    #[test]
+    fn rows_wait_while_a_modal_is_open_and_land_when_it_closes() {
+        let (mut app, _g) = app(false);
+        app.modal = Some(Modal::Name {
+            pane: 1,
+            text: String::new(),
+        });
+        app.on_rows(Ok(rows(&["a", "z"])));
+        assert_eq!(ids(&app), ["a", "b", "c"], "the modal's rows stay put");
+        app.apply_pending_rows();
+        assert_eq!(ids(&app), ["a", "b", "c"]);
+        app.modal = None;
+        app.apply_pending_rows();
+        assert_eq!(ids(&app), ["a", "z"]);
+        assert!(app.pending_rows.is_none());
+    }
+
+    #[test]
+    fn rows_that_could_not_be_read_change_nothing() {
+        let (mut app, _g) = app(false);
+        app.on_rows(Err(anyhow::anyhow!("truncated")));
+        assert_eq!(ids(&app), ["a", "b", "c"]);
+        assert!(app.status.is_none(), "and say nothing");
+    }
+
+    #[test]
+    fn the_idle_loop_still_blocks_with_the_registry_watch() {
+        let (mut app, _g) = app(false);
+        assert!(app.next_wake(Instant::now()).is_none());
     }
 }
