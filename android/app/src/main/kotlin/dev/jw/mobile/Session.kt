@@ -1,10 +1,18 @@
 package dev.jw.mobile
 
+import dev.jw.proto.AnswerChoices
+import dev.jw.proto.AnswerRule
+import dev.jw.proto.Control
 import dev.jw.proto.Decision
 import dev.jw.proto.ErrorCode
 import dev.jw.proto.Failure
 import dev.jw.proto.Hello
 import dev.jw.proto.PROTOCOL
+import dev.jw.proto.PaneInfo
+import dev.jw.proto.RefreshRule
+import dev.jw.proto.SessionInfo
+import dev.jw.proto.Workspace
+import dev.jw.proto.Workspaces
 import dev.jw.proto.Palettes
 import dev.jw.proto.QrPayload
 import dev.jw.proto.ReconnectPolicy
@@ -12,7 +20,12 @@ import dev.jw.proto.ServerMessage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
@@ -52,6 +65,18 @@ sealed interface UiState {
     ) : UiState
 }
 
+/** What the PC last told us (M4): sessions, the current session's workspaces and the panes of `List`. */
+data class Model(
+    val sessions: List<SessionInfo> = emptyList(),
+    val session: String? = null,
+    val items: List<Workspace> = emptyList(),
+    val panes: List<PaneInfo> = emptyList(),
+    /** When `panes` arrived, by the session's clock; null before the first answer. */
+    val panesAt: Long? = null,
+    /** Panes already answered with y or n since the latest `Panes`. */
+    val answered: Set<Long> = emptySet(),
+)
+
 /** Where wss URLs come from; tests point it at MockWebServer. */
 fun interface Endpoint {
     fun url(host: String): String
@@ -70,10 +95,67 @@ class Session(
     private val policy: () -> ReconnectPolicy = { ReconnectPolicy() },
     private val clock: () -> Long = System::currentTimeMillis,
     private val random: SecureRandom = SecureRandom(),
+    /** Ids of the configured answer bytes (Settings); the defaults are Enter and Esc. */
+    private val answerIds: () -> Pair<String?, String?> = { null to null },
+    private val pollMs: Long = 2_000,
+    private val tickMs: Long = 250,
 ) {
     private val _state = MutableStateFlow<UiState>(UiState.Scan())
     val state: StateFlow<UiState> = _state.asStateFlow()
     private var job: Job? = null
+
+    private val _model = MutableStateFlow(Model())
+    val model: StateFlow<Model> = _model.asStateFlow()
+    private val _toasts = MutableSharedFlow<String>(extraBufferCapacity = 8)
+    val toasts: SharedFlow<String> = _toasts.asSharedFlow()
+
+    @Volatile private var outbox: Channel<Outgoing>? = null
+    @Volatile private var visible = false
+    @Volatile private var foreground = true
+    private val refresh = RefreshRule(pollMs)
+    private var poller: Job? = null
+
+    /** The workspaces, avisos or workspace screen is on screen (the list is what is being watched). */
+    fun setVisible(v: Boolean) { visible = v }
+
+    /** The activity is resumed. */
+    fun setForeground(f: Boolean) { foreground = f }
+
+    private fun send(o: Outgoing) { outbox?.trySend(o) }
+
+    /** Ask for the workspaces of `session` (null: the PC's default, `main`). */
+    fun requestWorkspaces(session: String? = null) = send(Outgoing.Text(Control.workspaces(session)))
+
+    fun requestSessions() = send(Outgoing.Text(Control.sessions()))
+
+    /**
+     * y or n for `pane`. Sends once, and only while the latest `Panes` (at most 2 s old) says Waiting
+     * for that pane (REQ-20); otherwise tells the person it is no longer waiting.
+     */
+    fun answer(pane: Long, approve: Boolean) {
+        val c = state.value as? UiState.Connected ?: return
+        val m = _model.value
+        val p = m.panes.firstOrNull { it.pane == pane }
+        if (!AnswerRule.enabled(p, m.panesAt, clock(), c.readOnly, pane in m.answered)) {
+            _toasts.tryEmit(if (c.readOnly) "solo lectura" else "ya no espera")
+            return
+        }
+        val (a, r) = answerIds()
+        val bytes = (if (approve) AnswerChoices.approve(a) else AnswerChoices.reject(r)).bytes
+        _model.update { it.copy(answered = it.answered + pane) }
+        send(Outgoing.Binary(Workspaces.inputFrame(pane, bytes)))
+        _toasts.tryEmit(if (approve) "aprobado" else "rechazado")
+    }
+
+    private fun startPoller() {
+        if (poller?.isActive == true) return
+        poller = scope.launch {
+            while (true) {
+                delay(tickMs)
+                if (refresh.due(clock(), visible && foreground && outbox != null)) send(Outgoing.Binary(Workspaces.listFrame()))
+            }
+        }
+    }
 
     /** App start: connect with the stored device, or ask for a scan. */
     fun start() {
@@ -100,6 +182,8 @@ class Session(
     /** Forget this PC and go back to scanning. */
     fun forget() {
         job?.cancel()
+        outbox = null
+        _model.value = Model()
         store.clear()
         _state.value = UiState.Scan()
     }
@@ -116,10 +200,12 @@ class Session(
     /** The app is leaving the foreground for good. */
     fun stop() {
         job?.cancel()
+        poller?.cancel()
     }
 
     private fun run(host: String, first: Hello) {
         job?.cancel()
+        startPoller()
         job = scope.launch { loop(host, first) }
     }
 
@@ -132,9 +218,12 @@ class Session(
             var bridgeFailed = false
             var pairing = hello is Hello.Pair
             var mismatch = false
-            bridge.connect(endpoint.url(host), hello).takeWhile { ev ->
+            val out = Channel<Outgoing>(Channel.UNLIMITED)
+            bridge.connect(endpoint.url(host), hello, out).takeWhile { ev ->
                 when (ev) {
-                    is BridgeEvent.Binary -> Unit
+                    is BridgeEvent.Binary -> Workspaces.parsePanes(ev.frame)?.let { ps ->
+                        _model.update { it.copy(panes = ps, panesAt = clock(), answered = emptySet()) }
+                    }
                     is BridgeEvent.Ended -> if (!bridgeFailed) failure = ev.failure
                     is BridgeEvent.Message -> when (val m = ev.msg) {
                         is ServerMessage.Paired -> {
@@ -152,20 +241,30 @@ class Session(
                             } else {
                                 p.onConnected()
                                 _state.value = UiState.Connected(host, m.protocol, m.readOnly, m.palettes, saved)
+                                // A new connection: whatever the PC says now is the truth (REQ-15).
+                                outbox = out
+                                out.trySend(Outgoing.Text(Control.sessions()))
+                                out.trySend(Outgoing.Text(Control.workspaces(_model.value.session)))
+                                out.trySend(Outgoing.Binary(Workspaces.listFrame()))
                             }
                         }
                         is ServerMessage.Error -> {
                             // These two leave the connection open; anything else is followed by a close.
+                            if (m.code == ErrorCode.READ_ONLY) _toasts.tryEmit("solo lectura")
                             if (m.code != ErrorCode.READ_ONLY && m.code != ErrorCode.UNSUPPORTED) {
                                 failure = Failure.Bridge(m.code)
                                 bridgeFailed = true
                             }
                         }
+                        is ServerMessage.Workspaces -> _model.update { it.copy(session = m.session, items = m.items) }
+                        is ServerMessage.Sessions -> _model.update { it.copy(sessions = m.items) }
                         is ServerMessage.Other -> Unit
                     }
                 }
                 !mismatch
             }.collect()
+            outbox = null
+            out.close()
             if (mismatch) return
             if (pairing) {
                 // A failed pairing is never retried with the same token: each try counts against REQ-5.

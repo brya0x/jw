@@ -27,7 +27,7 @@ class ControlTest {
     }
 
     @Test fun unknownTagAndGarbage() {
-        assertTrue(Control.parse("""{"t":"workspaces"}""") is ServerMessage.Other)
+        assertTrue(Control.parse("""{"t":"diff"}""") is ServerMessage.Other)
         assertNull(Control.parse("nope"))
         assertNull(Control.parse("""{"t":"paired"}"""))
     }

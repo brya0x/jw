@@ -118,6 +118,10 @@ sealed interface ServerMessage {
 
     class Error(val code: String, val msg: String) : ServerMessage
 
+    class Workspaces(val session: String, val items: List<Workspace>) : ServerMessage
+
+    class Sessions(val items: List<SessionInfo>) : ServerMessage
+
     /** A message this app does not know yet; ignored. */
     class Other(val tag: String) : ServerMessage
 }
@@ -137,6 +141,14 @@ object Control {
             put("device", hello.device)
         }
     }.toString()
+
+    /** `{"t":"workspaces"}` or, with a session, `{"t":"workspaces","session":".."}`. */
+    fun workspaces(session: String? = null): String = buildJsonObject {
+        put("t", "workspaces")
+        if (session != null) put("session", session)
+    }.toString()
+
+    fun sessions(): String = """{"t":"sessions"}"""
 
     /** Null when the text is not a control message at all. */
     fun parse(text: String): ServerMessage? {
@@ -162,6 +174,13 @@ object Control {
                 "error" -> ServerMessage.Error(
                     obj["code"]?.jsonPrimitive?.contentOrNull ?: ErrorCode.UNEXPECTED,
                     obj["msg"]?.jsonPrimitive?.contentOrNull ?: "",
+                )
+                "workspaces" -> ServerMessage.Workspaces(
+                    obj["session"]?.jsonPrimitive?.contentOrNull ?: "",
+                    dev.jw.proto.Workspaces.parseItems(obj["items"] as? kotlinx.serialization.json.JsonArray),
+                )
+                "sessions" -> ServerMessage.Sessions(
+                    dev.jw.proto.Workspaces.parseSessions(obj["items"] as? kotlinx.serialization.json.JsonArray),
                 )
                 else -> ServerMessage.Other(tag)
             }

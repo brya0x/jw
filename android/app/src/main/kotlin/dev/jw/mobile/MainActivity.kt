@@ -44,11 +44,14 @@ import dev.jw.proto.PROTOCOL
 import dev.jw.proto.Palettes
 
 class SessionViewModel(app: Application) : AndroidViewModel(app) {
+    val answers = AnswerPrefs(app)
+    val nav = Nav()
     val session = Session(
         scope = viewModelScope,
         store = KeystoreTokenStore(app),
         bridge = Bridge(),
         deviceName = Build.MODEL ?: "phone",
+        answerIds = { answers.approve to answers.reject },
     ).also { it.start() }
 
     /** The last palettes the PC sent, so the theme survives a reconnect. */
@@ -60,19 +63,29 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 class MainActivity : ComponentActivity() {
     private val vm: SessionViewModel by viewModels()
 
+    override fun onResume() {
+        super.onResume()
+        vm.session.setForeground(true)
+    }
+
+    override fun onPause() {
+        vm.session.setForeground(false)
+        super.onPause()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
             val state by vm.session.state.collectAsState()
             (state as? UiState.Connected)?.let { vm.palettes = it.palettes }
-            JwTheme(vm.palettes) { App(state, vm.session) }
+            JwTheme(vm.palettes) { App(state, vm.session, vm.nav, vm.answers) }
         }
     }
 }
 
 @Composable
-private fun App(state: UiState, session: Session) {
+private fun App(state: UiState, session: Session, nav: Nav, answers: AnswerPrefs) {
     val j = LocalJw.current
     // Material's Text takes its style from here, so everything is mono like the prototype.
     androidx.compose.material3.Surface(color = j.bg, contentColor = j.fg, modifier = Modifier.fillMaxSize()) {
@@ -82,7 +95,7 @@ private fun App(state: UiState, session: Session) {
                 is UiState.Scan -> ScanScreen(state, session)
                 is UiState.Pairing -> Pairing(state, session)
                 is UiState.Connecting -> Waiting("conectando", state.host, "…", session)
-                is UiState.Connected -> Connected(state, session)
+                is UiState.Connected -> ConnectedApp(state, session, nav, answers)
                 is UiState.Mismatch -> Mismatch(state, session)
                 is UiState.Reconnecting -> Reconnecting(state, session)
             }
@@ -130,20 +143,6 @@ private fun Pairing(state: UiState.Pairing, session: Session) {
 private fun Waiting(title: String, host: String, hint: String, session: Session) {
     val j = LocalJw.current
     Screen(title, host, "WAIT", j.yellow, hint) {
-        Box(Modifier.padding(horizontal = 14.dp)) { JwButton("olvidar este PC") { session.forget() } }
-    }
-}
-
-@Composable
-private fun Connected(state: UiState.Connected, session: Session) {
-    val j = LocalJw.current
-    Screen("conectado", state.host, "CONN", j.green, if (state.readOnly) "solo lectura" else "listo") {
-        Section("conexión")
-        KvRow("host", state.host)
-        KvRow("protocolo", "jw-proto v${state.protocol}", j.green)
-        KvRow("acceso", if (state.readOnly) "solo lectura" else "lectura y escritura", if (state.readOnly) j.yellow else j.green)
-        if (!state.saved) Body("No se pudo guardar el emparejamiento: al cerrar la app tendrás que escanear de nuevo.", j.yellow, 12.0)
-        Body("Los espacios de trabajo llegan con la siguiente parte.", j.dim, 12.0)
         Box(Modifier.padding(horizontal = 14.dp)) { JwButton("olvidar este PC") { session.forget() } }
     }
 }

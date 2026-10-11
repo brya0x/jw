@@ -25,14 +25,21 @@ class FakeBridge {
 
     fun endpoint() = Endpoint { server.url("/").toString() }
 
+    /** Binary jw-proto bodies (kind byte onward) the phone sent. */
+    val frames = java.util.concurrent.LinkedBlockingQueue<ByteArray>()
+
+    /** Answers to messages after the first one. */
+    @Volatile var onLater: (text: String, ws: WebSocket) -> Unit = { _, _ -> }
+
     fun enqueue(script: (hello: String, ws: WebSocket) -> Unit) {
+        var first = true
         server.enqueue(
             MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
                 override fun onMessage(webSocket: WebSocket, text: String) {
                     received.add(text)
-                    script(text, webSocket)
+                    if (first) { first = false; script(text, webSocket) } else onLater(text, webSocket)
                 }
-                override fun onMessage(webSocket: WebSocket, bytes: ByteString) {}
+                override fun onMessage(webSocket: WebSocket, bytes: ByteString) { frames.add(bytes.toByteArray()) }
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {}
             }),
         )
@@ -45,6 +52,11 @@ class FakeBridge {
         fun ready(protocol: Int = 10, ro: Boolean = false) =
             """{"t":"ready","bridge":1,"protocol":$protocol,"read_only":$ro}"""
         fun error(code: String) = """{"t":"error","code":"$code","msg":"m"}"""
+        /** A kind-0 frame, as the relay carries `Panes`. */
+        fun frame(json: String): ByteString = ByteString.of(0, *json.toByteArray())
+        const val WORKSPACES = """{"t":"workspaces","session":"main","items":[{"id":"r1","kind":"root","name":"jw","path":"/p","project":"jw","branch":"main","pr":null,"session":"main","parent":null}]}"""
+        const val SESSIONS = """{"t":"sessions","items":[{"name":"main","workspaces":1}]}"""
+        fun panes(agent: String) = """{"t":"Panes","panes":[{"pane":7,"stream":"r1","role":"agent","exited":null,"fg":null,"busy":false,"bell":false,"agent":"$agent","cwd":null}]}"""
         val PAIRED = """{"t":"paired","device":"$DEVICE","id":"abcd1234"}"""
     }
 }

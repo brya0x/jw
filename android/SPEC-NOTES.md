@@ -41,3 +41,23 @@ Not checked: the camera permission dialog (the ROM granted it on the first tap, 
 "don't ask again" were not driven), and the pairing, mismatch, reconnecting and connected screens (they need a bridge; the brain runs the e2e).
 Look: header, mode chip and status bar, 48 dp rows and buttons, JetBrains Mono bundled (`FONTS.md`), the prototype's palette roles.
 The scan screen in landscape gives the camera the whole width; the title shrinks behind it. Fine for now, worth a second look in M4.
+
+## M4 (workspaces, sessions, panes, y and n)
+
+- **The brief's "W2 SHAPE" label does not exist in `docs/specs/mobile.md`**; the shape is in the Interfaces rows for the `workspaces` and
+  `sessions` answers. The app follows those rows and the assertions of `a_paired_phone_is_told_the_workspaces_and_sessions_of_the_pcs_jw`.
+- **The join `PaneInfo.stream == item.id` is UNCONFIRMED for kind `root` and `folder`** (confirmed by the server agent for worktrees only).
+  `WorkspacesTest.joinIsByStreamId` pins it by id for all three kinds and says so; if the server answers otherwise, that test and
+  `Workspaces.panesOf` are the only places to change.
+- **Marks**: `✻ ? ⚡` as `App::marks` in `tui/src/tui/mod.rs:1130` (the spec cites `:960-979`, stale; `crates/tui/AGENTS.md` cites `:540`, also stale).
+  The merged-PR mark `⚑` is left out: the bridge sends no PR state (`pr` is only the number jw recorded). The legend lists the other four.
+- **Refresh**: `List` every 2 s only while the workspaces, avisos or workspace screen is on screen and the activity is resumed (`RefreshRule`).
+  `sessions` and `workspaces` are asked at every `ready` (REQ-15) and when another session is picked; they are not polled.
+- **y and n** (REQ-20, OPEN-5, RISK-4): default approve = Enter (`\r`), reject = Esc (`\x1b`); Settings offers Enter, `y`, `y`+Enter and Esc, `n`, `n`+Enter.
+  Buttons are enabled only while the latest `Panes` (at most 2 s old) says Waiting for that pane, once per snapshot (`AnswerRule`); a toast confirms.
+  **Not verified against a real agent prompt**: it needs the user to try it by hand.
+- **Needs the user's OK (not in the prototype):** the `Escanear otro código` button and unreachable text on the reconnecting screen; the
+  workspace screen's "La terminal llega en M5" placeholder and its VIEW chip; the answer-bytes section of Settings; no "Cambios" tab
+  (that is M6) and no "nueva sesión", "abrir carpeta" or "nuevo worktree" actions (the bridge has no such requests yet); the search button and the
+  `^␣` leader sheet are left out for the same reason.
+- `read_only` answers to `Input` show the toast "solo lectura"; with a read-only phone the y and n buttons stay disabled.
