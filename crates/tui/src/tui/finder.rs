@@ -293,7 +293,7 @@ impl Finder {
     fn filter(&mut self) {
         let q = self.query.trim();
         let folders = matches!(self.kind, Kind::Folders { .. });
-        let reviews = matches!(self.kind, Kind::Reviews { .. });
+        let reviews = self.reviewing();
         self.items
             .retain(|it| !matches!(it.pick, Pick::Create(_) | Pick::NewSession(_)));
         let mut shown: Vec<(i32, usize, Vec<usize>)> = self
@@ -420,9 +420,7 @@ impl Finder {
                     self.go(PathBuf::from(home), None);
                 }
             }
-            KeyCode::Char('m')
-                if !ctrl && self.query.is_empty() && matches!(self.kind, Kind::Reviews { .. }) =>
-            {
+            KeyCode::Char('m') if !ctrl && self.query.is_empty() && self.reviewing() => {
                 if let Kind::Reviews { loading, requested } = &mut self.kind {
                     *requested = !*requested;
                     *loading = true;
@@ -434,9 +432,7 @@ impl Finder {
                     return Outcome::Reload(now);
                 }
             }
-            KeyCode::Char('o')
-                if !ctrl && self.query.is_empty() && matches!(self.kind, Kind::Reviews { .. }) =>
-            {
+            KeyCode::Char('o') if !ctrl && self.query.is_empty() && self.reviewing() => {
                 if let Some(Pick::Review(pr)) = self.current().map(|it| it.pick.clone()) {
                     return Outcome::Browse(pr.url);
                 }
@@ -453,6 +449,10 @@ impl Finder {
             _ => {}
         }
         Outcome::Stay
+    }
+
+    fn reviewing(&self) -> bool {
+        matches!(self.kind, Kind::Reviews { .. })
     }
 
     fn browsing(&self) -> bool {

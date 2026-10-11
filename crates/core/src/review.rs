@@ -58,11 +58,11 @@ pub fn review_stream(
     let name = name_of(pr.number);
     let branch = branch_of(pr.number);
     let reg = Registry::load(reg_path)?;
-    let existing = if reg.has(&p.name, &name) {
-        Some(reg.find(&p.name, &name)?.clone())
-    } else {
-        None
-    };
+    let existing = reg
+        .entries
+        .iter()
+        .find(|e| e.project == p.name && e.name == name)
+        .cloned();
     if let Some(e) = &existing
         && !Path::new(&e.path).is_dir()
     {
@@ -161,10 +161,8 @@ pub fn context_path(state: &Path, n: u64) -> PathBuf {
 
 fn write_context(state: &Path, pr: &PrSummary, d: &PrDetail) -> Result<PathBuf> {
     let path = context_path(state, pr.number);
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).with_context(|| dir.display().to_string())?;
-    }
-    std::fs::write(&path, context(pr, d)).with_context(|| path.display().to_string())?;
+    // Picking the PR again rewrites it while an agent may be reading it.
+    registry::write_atomic(&path, context(pr, d).as_bytes())?;
     Ok(path)
 }
 
