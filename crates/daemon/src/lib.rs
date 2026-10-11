@@ -650,7 +650,10 @@ impl Daemon {
                 }
                 self.attach(client, tx, &stream);
             }
-            ClientMsg::Split { pane, dir, new } => self.split(pane, dir, new)?,
+            ClientMsg::Split { pane, dir, new } => {
+                let pane = self.split(pane, dir, new)?;
+                let _ = tx.send(DaemonMsg::Opened { pane });
+            }
             ClientMsg::Dock { stream, share, new } => self.dock(&stream, share, new)?,
             ClientMsg::Kill { pane } => self.kill(pane)?,
             ClientMsg::Close { stream } => {
@@ -841,7 +844,7 @@ impl Daemon {
         self.tell(stream);
     }
 
-    fn split(&self, beside: PaneId, dir: Dir, new: NewPane) -> Result<()> {
+    fn split(&self, beside: PaneId, dir: Dir, new: NewPane) -> Result<PaneId> {
         let stream = self.stream_of(beside)?;
         let leaf = self.start(&stream, new)?;
         self.add(&stream, leaf, |tree, leaf| {
@@ -858,6 +861,7 @@ impl Daemon {
     fn dock(&self, stream: &str, share: f32, new: NewPane) -> Result<()> {
         let leaf = self.start(stream, new)?;
         self.add(stream, leaf, |tree, leaf| (tree.dock(leaf, share), Ok(())))
+            .map(|_| ())
     }
 
     /// A new leaf for `stream`: a process, or just an id for a viewer.
@@ -882,7 +886,7 @@ impl Daemon {
         stream: &str,
         leaf: PaneLeaf,
         place: impl FnOnce(Tree<PaneLeaf>, PaneLeaf) -> (Tree<PaneLeaf>, Result<()>),
-    ) -> Result<()> {
+    ) -> Result<PaneId> {
         let id = leaf.id;
         let placed = {
             let mut all = lock(&self.workspaces);
@@ -902,14 +906,14 @@ impl Daemon {
         self.save();
         let mut all = lock(&self.workspaces);
         let Some(ws) = all.get_mut(stream) else {
-            return Ok(());
+            return Ok(id);
         };
         ws.tell(stream);
         let watchers: Vec<(u64, Tx)> = ws.subs.iter().map(|s| (s.client, s.tx.clone())).collect();
         for (client, tx) in watchers {
             self.watch(client, &tx, id);
         }
-        Ok(())
+        Ok(id)
     }
 
     /// Stops a pane and takes it out of its tree; the last one closes the

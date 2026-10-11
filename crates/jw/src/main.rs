@@ -54,6 +54,7 @@ fn main() -> ExitCode {
         Some("worktree") => report("worktree", cli::worktree(&args[1..])),
         Some("ls") => report("ls", cli::ls(&args[1..])),
         Some("read") => report("read", cli::read(&args[1..])),
+        Some("pane") => report("pane", cli::pane(&args[1..])),
         Some("hook") => report("hook", cli::hook(&args[1..])),
         Some("skill") => report("skill", skill::run(&args[1..])),
         Some("server") => report("server", server::run(&args[1..])),
