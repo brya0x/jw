@@ -81,7 +81,9 @@ class Session(
     /** A QR was read. `raw` is never echoed anywhere. */
     fun onQr(raw: String): Boolean {
         val qr = QrPayload.parse(raw) ?: return false
-        val code = "%06d".format(random.nextInt(1_000_000))
+        // The camera keeps decoding the same QR: a pairing in flight must not be restarted (the token is single-use).
+        if (_state.value !is UiState.Scan) return true
+        val code = random.nextInt(1_000_000).toString().padStart(6, '0')
         _state.value = UiState.Pairing(qr.host, code)
         run(qr.host, Hello.Pair(qr.token, deviceName, code))
         return true

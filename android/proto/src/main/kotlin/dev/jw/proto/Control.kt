@@ -1,6 +1,7 @@
 package dev.jw.proto
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -75,21 +76,26 @@ class Palettes(val dark: Palette, val light: Palette) {
         )
 
         /**
-         * W1 has not landed, so the shape is assumed: `{"dark":{role:"#rrggbb"},"light":{..}}`.
-         * Anything missing or malformed falls back role by role.
+         * `ready.palettes` is an array of `{name, dark, colors:{role:"#rrggbb"}}`. The dark side is the
+         * first dark theme (One Dark when present), the light side likewise. Missing or malformed
+         * roles fall back role by role, so an empty array gives the built-in pair.
          */
         fun parse(el: JsonElement?): Palettes {
-            val obj = el as? JsonObject ?: return FALLBACK
-            fun side(key: String, fb: Palette): Palette {
-                val o = obj[key] as? JsonObject ?: return fb
+            val themes = (el as? JsonArray)?.mapNotNull { it as? JsonObject } ?: return FALLBACK
+            fun side(dark: Boolean, fb: Palette): Palette {
+                val ofSide = themes.filter { (it["dark"] as? JsonPrimitive)?.booleanOrNull == dark }
+                val t = ofSide.firstOrNull {
+                    (it["name"] as? JsonPrimitive)?.contentOrNull.equals(if (dark) "One Dark" else "One Light", true)
+                } ?: ofSide.firstOrNull() ?: return fb
+                val colors = t["colors"] as? JsonObject ?: return fb
                 val roles = fb.roles.toMutableMap()
                 for (r in ROLES) {
-                    val v = (o[r] as? JsonPrimitive)?.contentOrNull
+                    val v = (colors[r] as? JsonPrimitive)?.contentOrNull
                     if (v != null && HEX.matches(v)) roles[r] = v
                 }
                 return Palette(roles)
             }
-            return Palettes(side("dark", FALLBACK.dark), side("light", FALLBACK.light))
+            return Palettes(side(true, FALLBACK.dark), side(false, FALLBACK.light))
         }
 
         private val HEX = Regex("#[0-9a-fA-F]{6}")

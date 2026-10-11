@@ -159,7 +159,7 @@ private fun Mismatch(state: UiState.Mismatch, session: Session) {
         Title("versión incompatible")
         Text("Esta app habla jw-proto v${state.app}; el PC habla v${state.pc}.", color = j.fg)
         Text(
-            if (newer) "Actualiza la app jw en este teléfono." else "Actualiza jw en el PC (cargo install jw) y reinicia su daemon.",
+            if (newer) "Actualiza la app jw en este teléfono." else "Actualiza jw en el PC y reinicia su daemon.",
             color = j.yellow,
         )
         Dim("No me conecto hasta que coincidan.")

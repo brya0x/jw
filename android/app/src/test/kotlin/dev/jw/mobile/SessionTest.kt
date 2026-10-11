@@ -42,7 +42,7 @@ class SessionTest {
         assertEquals(6, pairing.code.length)
         val c = s.await<UiState.Connected>()
         assertTrue(c.readOnly)
-        assertEquals(9, c.protocol)
+        assertEquals(10, c.protocol)
         assertEquals(FakeBridge.DEVICE, store.device!!.device)
         val hello = fake.received.take()
         assertTrue(hello.contains(""""t":"pair"""") && hello.contains(token) && hello.contains(pairing.code))
@@ -106,11 +106,11 @@ class SessionTest {
 
     @Test fun protocolMismatchDoesNotAttachOrRetry() = runBlocking<Unit> {
         store.device = StoredDevice("example.trycloudflare.com", FakeBridge.DEVICE)
-        fake.enqueue { _, ws -> ws.send(FakeBridge.ready(protocol = 10)) }
+        fake.enqueue { _, ws -> ws.send(FakeBridge.ready(protocol = 11)) }
         val s = session()
         s.start()
         val m = s.await<UiState.Mismatch>()
-        assertEquals(10, m.pc)
+        assertEquals(11, m.pc)
         kotlinx.coroutines.delay(300)
         assertEquals(1, fake.server.requestCount)
         assertTrue(s.state.value is UiState.Mismatch)
@@ -145,5 +145,31 @@ class SessionTest {
         val events = Bridge().connect(fake.endpoint().url("x"), Hello.Auth(FakeBridge.DEVICE)).toList()
         assertTrue((events.first() as BridgeEvent.Message).msg is ServerMessage.Error)
         assertTrue((events.last() as BridgeEvent.Ended).failure is Failure.Network)
+    }
+
+    @Test fun secondQrWhilePairingIsIgnored() = runBlocking<Unit> {
+        fake.enqueue { _, ws -> ws.send(FakeBridge.PAIRED); ws.send(FakeBridge.ready()) }
+        val s = session()
+        assertTrue(s.onQr(qr))
+        assertTrue(s.onQr(qr))
+        s.await<UiState.Connected>()
+        assertTrue(s.onQr(qr))
+        assertEquals(1, fake.server.requestCount)
+    }
+
+    @Test fun pairingCodeIsAsciiDigitsInAnyLocale() {
+        val old = java.util.Locale.getDefault()
+        try {
+            java.util.Locale.setDefault(java.util.Locale.forLanguageTag("ar-EG-u-nu-arab"))
+            repeat(50) {
+                val s = session()
+                s.onQr(qr)
+                val code = (s.state.value as UiState.Pairing).code
+                assertTrue(code, code.length == 6 && code.all { it in '0'..'9' })
+                s.stop()
+            }
+        } finally {
+            java.util.Locale.setDefault(old)
+        }
     }
 }

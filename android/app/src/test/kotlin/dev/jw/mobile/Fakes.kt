@@ -41,7 +41,7 @@ class FakeBridge {
 
     companion object {
         const val DEVICE = "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0"
-        fun ready(protocol: Int = 9, ro: Boolean = false) =
+        fun ready(protocol: Int = 10, ro: Boolean = false) =
             """{"t":"ready","bridge":1,"protocol":$protocol,"read_only":$ro}"""
         fun error(code: String) = """{"t":"error","code":"$code","msg":"m"}"""
         val PAIRED = """{"t":"paired","device":"$DEVICE","id":"abcd1234"}"""

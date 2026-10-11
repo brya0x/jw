@@ -9,6 +9,7 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -59,8 +60,15 @@ fun QrScanner(modifier: Modifier = Modifier, onText: (String) -> Unit) {
     val context = LocalContext.current
     val owner = LocalLifecycleOwner.current
     val latest = rememberUpdatedState(onText)
-    val executor = Executors.newSingleThreadExecutor()
-    DisposableEffect(Unit) { onDispose { executor.shutdown() } }
+    val executor = remember { Executors.newSingleThreadExecutor() }
+    val main = remember { ContextCompat.getMainExecutor(context) }
+    DisposableEffect(Unit) {
+        onDispose {
+            executor.shutdown()
+            // The camera is bound to the activity: release it when the scan screen leaves.
+            ProcessCameraProvider.getInstance(context).let { f -> f.addListener({ f.get().unbindAll() }, main) }
+        }
+    }
     AndroidView(
         modifier = modifier,
         factory = { ctx ->
@@ -74,10 +82,10 @@ fun QrScanner(modifier: Modifier = Modifier, onText: (String) -> Unit) {
                 val analysis = ImageAnalysis.Builder()
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build()
-                    .also { it.setAnalyzer(executor, QrAnalyzer { t -> latest.value(t) }) }
+                    .also { it.setAnalyzer(executor, QrAnalyzer { t -> main.execute { latest.value(t) } }) }
                 provider.unbindAll()
                 provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
-            }, ContextCompat.getMainExecutor(context))
+            }, main)
             view
         },
     )
