@@ -2,7 +2,7 @@
 
 The web server in front of the daemon (spec: [docs/specs/mobile.md](../../docs/specs/mobile.md)).
 It depends on jw-proto only. The daemon hosts it (`crates/daemon/src/mobile.rs`) behind a
-Cloudflare tunnel; `jw mobile` still runs its own copy until D2 makes it a client. Nothing in it is specific to phones, so the name is not either.
+Cloudflare tunnel; `jw mobile` and the TUI are clients of that service. Nothing in it is specific to phones, so the name is not either.
 
 ## What lives where
 

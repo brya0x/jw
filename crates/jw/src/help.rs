@@ -64,8 +64,8 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         name: "mobile",
-        usage: "jw mobile [--read-only] [--port <n>] | devices | revoke <device>",
-        what: "opens a Cloudflare tunnel to this PC and prints a QR for the phone app; devices lists the paired phones, revoke cuts one off",
+        usage: "jw mobile [--read-only] | stop | devices | revoke <device>",
+        what: "starts mobile in the daemon (a Cloudflare tunnel to this PC) and prints a QR for the phone app, and answers pair requests; it stays on after Ctrl-C and after jw closes; stop ends it, devices lists the paired phones, revoke cuts one off",
     },
     Command {
         name: "hook",

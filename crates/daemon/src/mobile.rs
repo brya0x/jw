@@ -136,7 +136,16 @@ impl Mobile {
 
     /// A client left.
     pub fn forget(&self, client: u64) {
-        lock(&self.0.watchers).retain(|(c, _)| *c != client);
+        let nobody = {
+            let mut w = lock(&self.0.watchers);
+            w.retain(|(c, _)| *c != client);
+            w.is_empty()
+        };
+        // A question with nobody left to answer it is a no (REQ-36), not a
+        // phone waiting out the minute.
+        if nobody {
+            self.0.cancel_pending();
+        }
     }
 
     /// Starts mobile unless it is starting or ready, and then changes
@@ -350,12 +359,17 @@ impl Inner {
         if let Some(tunnel) = tunnel {
             tunnel.kill();
         }
+        self.cancel_pending();
+        if let Some(bridge) = bridge {
+            bridge.close();
+        }
+    }
+
+    /// Says no to every question waiting.
+    fn cancel_pending(&self) {
         let pending: Vec<_> = lock(&self.pending).drain().collect();
         for (_, answer) in pending {
             let _ = answer.send(CANCELLED);
-        }
-        if let Some(bridge) = bridge {
-            bridge.close();
         }
     }
 
@@ -608,6 +622,26 @@ mod tests {
         ready(&m);
         assert!(!m.0.ask("Pixel", "482913"));
         assert!(lock(&m.0.pending).is_empty());
+    }
+
+    #[test]
+    fn the_last_watcher_leaving_ends_a_question_that_is_waiting() {
+        let m = service(Tuning {
+            ask_within: Duration::from_secs(60),
+            ..fast()
+        });
+        ready(&m);
+        let (_a, a) = watcher(&m, 1);
+        let _ = next(&a);
+        let asker = {
+            let m = m.clone();
+            thread::spawn(move || m.0.ask("Pixel", "482913"))
+        };
+        let _ = pair_request(&a);
+        let t = std::time::Instant::now();
+        m.forget(1);
+        assert!(!asker.join().unwrap());
+        assert!(t.elapsed() < Duration::from_secs(2));
     }
 
     #[test]

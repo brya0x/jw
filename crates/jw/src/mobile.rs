@@ -1,77 +1,69 @@
-//! `jw mobile`: the phone's way in (docs/specs/mobile.md, REQ-1, 3, 6, 9, 29, 30).
+//! `jw mobile`: a client of the daemon's mobile service (docs/specs/mobile.md,
+//! REQ-30, 41). The daemon hosts the bridge and the tunnel and keeps them up
+//! after this exits; this shows each step, the QR and the link, and answers
+//! "pair this phone?" at the keyboard.
 //!
-//! It runs the web server on a loopback port, puts a Cloudflare quick tunnel
-//! in front of it, and prints a QR the phone app scans. Nothing here talks
-//! to the daemon: that is `jw-web`'s job, and only after a phone is let in.
+//! Only `jw mobile` itself starts a daemon. `stop` talks to one that is
+//! there or says mobile is not running, and `devices` and `revoke` read and
+//! write the store, so they work with mobile off and with no daemon at all.
+//!
+//! A failed mobile prints why and exits 1. Mobile stopped from elsewhere (the
+//! TUI, `jw mobile stop`) exits 0, and the daemon hanging up exits 1. Ctrl-C
+//! has no handler: the default ends only this process, and mobile stays up
+//! because the daemon is in a session of its own.
 
-use std::io::{self, BufRead, Write};
-use std::net::TcpListener;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::BTreeMap;
+use std::io::{self, BufRead};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
-use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
+use jw_core::qr::Qr;
 use jw_web::auth::Store;
-use jw_web::bridge::{Bridge, Config, Confirm, Timings};
-use jw_web::tunnel::{self, Step, Waits};
-use qrcode::{Color, QrCode};
 
 use crate::client::Client;
 use crate::core;
-use crate::proto::{self, ClientMsg, DaemonMsg, PROTOCOL};
+use crate::proto::{self, ClientMsg, DaemonMsg, MobileState, PROTOCOL};
 
-const USAGE: &str =
-    "usage: jw mobile [--read-only] [--port <n>] | jw mobile devices | jw mobile revoke <device>";
+const USAGE: &str = "usage: jw mobile [--read-only] | stop | devices | revoke <device>";
 
-/// How long the person at the PC has to answer "pair this phone?".
-const ASK_WITHIN: Duration = Duration::from_secs(60);
+/// How long `stop` waits to see mobile go off.
+const STOP_WITHIN: Duration = Duration::from_secs(5);
 
 pub fn run(args: &[String]) -> Result<()> {
     match args {
         [a] if a == "devices" => devices(),
         [a, who] if a == "revoke" => revoke(who),
-        _ => serve(parse(args)?),
+        [a] if a == "stop" => stop(),
+        _ => show(parse(args)?),
     }
 }
 
 struct Opts {
     read_only: bool,
-    /// 0 is any free port, so a tunnel left over from an earlier run points
-    /// at nothing.
-    port: u16,
 }
 
 fn parse(args: &[String]) -> Result<Opts> {
-    let mut opts = Opts {
-        read_only: false,
-        port: 0,
-    };
-    let mut args = args.iter();
-    while let Some(arg) = args.next() {
+    let mut opts = Opts { read_only: false };
+    for arg in args {
         match arg.as_str() {
             "--read-only" => opts.read_only = true,
-            "--port" => {
-                opts.port = args.next().and_then(|p| p.parse().ok()).context(USAGE)?;
-            }
             _ => bail!(USAGE),
         }
     }
     Ok(opts)
 }
 
-/// Without a daemon every phone would only be told there is none (REQ-30),
-/// and a daemon of another build would be found out after the wait for the
-/// tunnel and a pairing, so both are checked first.
-fn check_daemon() -> Result<()> {
-    let mut c = Client::connect(&proto::socket_path())
-        .context("no jw daemon is running; open jw first, then run jw mobile")?;
+/// Asks the daemon its protocol before anything of mobile is sent to it: a
+/// daemon of another build does not understand `Mobile*`, and would hang up
+/// on them (REQ-30).
+fn hello(c: &mut Client) -> Result<()> {
     c.set_read_timeout(Some(Duration::from_secs(5)))?;
     c.send(&ClientMsg::Hello { protocol: PROTOCOL })?;
     loop {
         match c.recv().context("the daemon did not answer")? {
-            Some(DaemonMsg::Hello { protocol }) if protocol == PROTOCOL => return Ok(()),
+            Some(DaemonMsg::Hello { protocol }) if protocol == PROTOCOL => break,
             Some(DaemonMsg::Hello { protocol }) => bail!(
                 "the daemon runs protocol {protocol} and this jw {PROTOCOL}: jw server stop, then open jw again"
             ),
@@ -79,6 +71,8 @@ fn check_daemon() -> Result<()> {
             None => bail!("the daemon hung up"),
         }
     }
+    c.set_read_timeout(None)?;
+    Ok(())
 }
 
 fn store() -> Result<Store> {
@@ -142,74 +136,66 @@ fn ago(now: u64, then: u64) -> String {
     }
 }
 
-/// Set by SIGINT and SIGTERM; the loop below notices and shuts down.
-static STOP: AtomicBool = AtomicBool::new(false);
-
-extern "C" fn on_signal(_: libc::c_int) {
-    STOP.store(true, Ordering::SeqCst);
-}
-
-fn serve(opts: Opts) -> Result<()> {
-    check_daemon()?;
-    let store = Arc::new(store()?);
-
-    let listener = TcpListener::bind(("127.0.0.1", opts.port)).context("binding a local port")?;
-    let port = listener.local_addr()?.port();
-
-    let input = lines();
-    let bridge = Bridge::start(
-        listener,
-        proto::socket_path(),
-        Config {
-            store,
-            read_only: opts.read_only,
-            confirm: ask(input.clone()),
-            look: Arc::new(jw_tui::theme::look),
-            timings: Timings::default(),
-        },
-    )?;
-
-    // SAFETY: the handler only stores into an atomic.
-    unsafe {
-        libc::signal(libc::SIGINT, on_signal as *const () as libc::sighandler_t);
-        libc::signal(libc::SIGTERM, on_signal as *const () as libc::sighandler_t);
-    }
-
-    let mut say = |step: Step| match step {
-        Step::Started(_) => eprintln!("cloudflared started"),
-        Step::Registered(host) => eprintln!("tunnel up at {host}"),
-        Step::Resolving(host) => eprintln!("waiting for {host} to be reachable"),
+/// `jw mobile stop`: asks a daemon that is there, and never starts one.
+fn stop() -> Result<()> {
+    let Ok(mut c) = Client::connect(&proto::socket_path()) else {
+        println!("mobile is not running");
+        return Ok(());
     };
-    let (tunnel, host) = tunnel::up(
-        port,
-        Waits::default(),
-        &|| STOP.load(Ordering::SeqCst),
-        &mut say,
-    )?;
-
-    show_code(&bridge, &host, opts.read_only)?;
-    while !STOP.load(Ordering::SeqCst) {
-        if tunnel.exited() {
-            bail!("cloudflared stopped; run jw mobile again");
-        }
-        // Enter asks for a new code; while a phone is being asked, the
-        // prompt holds the lines and this waits its turn.
-        if let Ok(rx) = input.try_lock()
-            && rx.try_recv().is_ok()
-        {
-            drop(rx);
-            show_code(&bridge, &host, opts.read_only)?;
-        }
-        thread::sleep(Duration::from_millis(100));
+    hello(&mut c)?;
+    c.send(&ClientMsg::MobileWatch)?;
+    if state(&mut c)?.phase == "off" {
+        println!("mobile is not running");
+        return Ok(());
     }
-    eprintln!("\nstopping");
-    drop(bridge);
-    Ok(())
+    c.send(&ClientMsg::MobileStop)?;
+    c.set_read_timeout(Some(STOP_WITHIN))?;
+    loop {
+        if state(&mut c)?.phase == "off" {
+            println!("mobile stopped; phones were cut off");
+            return Ok(());
+        }
+    }
 }
 
-/// One thread owns stdin for the whole run and passes its lines on, so a
-/// question never waits on a read that nobody can cancel.
-fn lines() -> Arc<Mutex<Receiver<String>>> {
+/// The next `MobileState`.
+fn state(c: &mut Client) -> Result<MobileState> {
+    loop {
+        match c.recv().context("the daemon did not answer")? {
+            Some(DaemonMsg::MobileState(s)) => return Ok(s),
+            Some(DaemonMsg::Error { msg }) => bail!("{msg}"),
+            Some(_) => {}
+            None => bail!("the daemon hung up"),
+        }
+    }
+}
+
+enum Event {
+    Msg(DaemonMsg),
+    Closed,
+}
+
+/// What the daemon says, on a channel, so the loop can also watch the keyboard.
+fn events(mut c: Client) -> Receiver<Event> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        loop {
+            let event = match c.recv() {
+                Ok(Some(m)) => Event::Msg(m),
+                _ => Event::Closed,
+            };
+            let closed = matches!(event, Event::Closed);
+            if tx.send(event).is_err() || closed {
+                return;
+            }
+        }
+    });
+    rx
+}
+
+/// One thread owns stdin for the whole run and passes its lines on. At the
+/// end of input it just stops: no line, no exit.
+fn lines() -> Receiver<String> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         for line in io::stdin().lock().lines() {
@@ -218,32 +204,187 @@ fn lines() -> Arc<Mutex<Receiver<String>>> {
             }
         }
     });
-    Arc::new(Mutex::new(rx))
+    rx
 }
 
-/// Asks at the PC whether to pair, showing the code the phone shows, so
-/// whoever copied the QR cannot pair as someone else (REQ-3).
-fn ask(input: Arc<Mutex<Receiver<String>>>) -> Confirm {
-    Arc::new(move |p| {
-        let rx = input.lock().unwrap();
-        while rx.try_recv().is_ok() {}
-        eprint!(
-            "\n  Pair {:?}? The phone shows {}. [y/N] ",
-            p.name,
-            group(p.code)
-        );
-        let _ = io::stderr().flush();
-        // In slices, so Ctrl-C does not wait out the whole minute.
-        let until = Instant::now() + ASK_WITHIN;
-        loop {
-            match rx.recv_timeout(Duration::from_millis(200)) {
-                Ok(line) => return matches!(line.trim().to_lowercase().as_str(), "y" | "yes"),
-                Err(RecvTimeoutError::Timeout)
-                    if Instant::now() < until && !STOP.load(Ordering::SeqCst) => {}
-                Err(_) => return false,
+/// `jw mobile`: start mobile if it is off, show it, and answer pair
+/// questions until it stops, fails, or Ctrl-C ends this.
+fn show(opts: Opts) -> Result<()> {
+    let exe = std::env::current_exe()?;
+    let mut c =
+        Client::connect_or_start(&proto::socket_path(), &exe).context("starting the jw daemon")?;
+    hello(&mut c)?;
+    c.send(&ClientMsg::MobileWatch)?;
+    let mut out = c.try_clone()?;
+    let events = events(c);
+    let input = lines();
+    let mut view = View::default();
+    let mut first = true;
+    loop {
+        match events.recv_timeout(Duration::from_millis(100)) {
+            Ok(Event::Msg(DaemonMsg::MobileState(s))) => {
+                if first {
+                    first = false;
+                    if matches!(s.phase.as_str(), "off" | "failed") {
+                        // What it said was before this start: not news.
+                        out.send(&ClientMsg::MobileStart {
+                            read_only: opts.read_only,
+                        })?;
+                        continue;
+                    }
+                    if opts.read_only && !s.read_only {
+                        eprintln!("  mobile was already running: read-only is now on");
+                        out.send(&ClientMsg::MobileReadOnly { on: true })?;
+                    }
+                }
+                if view.state(&s)? == Flow::Done {
+                    return Ok(());
+                }
+            }
+            Ok(Event::Msg(DaemonMsg::MobilePair {
+                request,
+                name,
+                code,
+            })) => {
+                // A key pressed before the question must not answer it.
+                while input.try_recv().is_ok() {}
+                view.ask(request, &name, &code);
+            }
+            Ok(Event::Msg(DaemonMsg::MobilePairDone { request })) => view.done(request),
+            Ok(Event::Msg(DaemonMsg::Error { msg })) => eprintln!("  the daemon says: {msg}"),
+            Ok(Event::Msg(_)) => {}
+            Ok(Event::Closed) | Err(RecvTimeoutError::Disconnected) => {
+                bail!("the daemon hung up")
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+        }
+        while let Ok(line) = input.try_recv() {
+            out.send(&view.line(&line))?;
+        }
+    }
+}
+
+#[derive(PartialEq, Eq, Debug)]
+enum Flow {
+    Go,
+    Done,
+}
+
+/// What `jw mobile` has put on the screen, so each thing is said once.
+#[derive(Default)]
+struct View {
+    /// The step last printed.
+    step: String,
+    /// Mobile has been seen running, so an `off` now means it was stopped.
+    began: bool,
+    /// The code on show.
+    code: String,
+    /// The question waiting for a y or an n.
+    pending: Option<u64>,
+    /// The phones connected, by id.
+    online: BTreeMap<String, String>,
+}
+
+impl View {
+    fn state(&mut self, s: &MobileState) -> Result<Flow> {
+        match s.phase.as_str() {
+            "starting" => {
+                self.began = true;
+                if s.step != self.step {
+                    eprintln!("  {}", step_text(&s.step));
+                    self.step = s.step.clone();
+                }
+            }
+            "ready" => {
+                self.began = true;
+                self.phones(s);
+                if s.payload.is_empty() {
+                    if !self.code.is_empty() {
+                        eprintln!("\n  The code was used or ran out. Enter makes a new one.");
+                        self.code.clear();
+                    }
+                } else if s.payload != self.code {
+                    self.code = s.payload.clone();
+                    show_code(s)?;
+                }
+            }
+            "failed" => bail!("{}", clean(&s.error)),
+            _ if self.began => {
+                eprintln!("\n  mobile was stopped; phones were cut off");
+                return Ok(Flow::Done);
+            }
+            _ => {}
+        }
+        Ok(Flow::Go)
+    }
+
+    /// Says which phones came and went.
+    fn phones(&mut self, s: &MobileState) {
+        let now: BTreeMap<String, String> = s
+            .devices
+            .iter()
+            .filter(|d| d.connected)
+            .map(|d| (d.id.clone(), clean(&d.name)))
+            .collect();
+        for (id, name) in &now {
+            if !self.online.contains_key(id) {
+                eprintln!("  {name} connected");
             }
         }
-    })
+        for (id, name) in &self.online {
+            if !now.contains_key(id) {
+                eprintln!("  {name} disconnected");
+            }
+        }
+        self.online = now;
+    }
+
+    /// Puts the question; the next line answers it.
+    fn ask(&mut self, request: u64, name: &str, code: &str) {
+        self.pending = Some(request);
+        eprint!(
+            "\n  Pair {:?}? The phone shows {}. [y/N] ",
+            clean(name),
+            group(&clean(code))
+        );
+    }
+
+    /// The question is over: someone else answered, or time ran out.
+    fn done(&mut self, request: u64) {
+        if self.pending == Some(request) {
+            self.pending = None;
+            eprintln!("\n  (answered somewhere else, or it ran out of time)");
+        }
+    }
+
+    /// What a line typed means: the answer to a question waiting, else a new
+    /// code.
+    fn line(&mut self, line: &str) -> ClientMsg {
+        match self.pending.take() {
+            Some(request) => ClientMsg::MobileAnswer {
+                request,
+                yes: matches!(line.trim().to_lowercase().as_str(), "y" | "yes"),
+            },
+            None => ClientMsg::MobileCode,
+        }
+    }
+}
+
+/// What the daemon's step keys say, in words.
+fn step_text(step: &str) -> &'static str {
+    match step {
+        "launching" => "starting cloudflared",
+        "started" => "cloudflared started",
+        "registered" => "tunnel registered",
+        "resolving" => "waiting for the name to resolve (about a minute)",
+        _ => "starting",
+    }
+}
+
+/// Strips what could move a terminal: a name or a code that came from a phone
+/// is printed here (REQ-27).
+fn clean(s: &str) -> String {
+    s.chars().filter(|c| !c.is_control()).collect()
 }
 
 /// `482913` as `482 913`, which is how the phone shows it.
@@ -255,42 +396,31 @@ fn group(code: &str) -> String {
         .join(" ")
 }
 
-fn show_code(bridge: &Bridge, host: &str, read_only: bool) -> Result<()> {
-    let token = bridge.new_pairing()?;
-    let payload = format!("jw://{host}/{token}");
-    eprintln!("\n{}", qr(&payload)?);
+fn show_code(s: &MobileState) -> Result<()> {
+    eprintln!("\n{}", ansi(&Qr::new(&s.payload)?));
     eprintln!("  Scan it with the jw app. It works once, for two minutes.");
-    eprintln!("  {payload}");
-    if read_only {
+    eprintln!("  {}", s.payload);
+    if s.read_only {
         eprintln!("  Read-only: phones can look, not type.");
     }
-    eprintln!("  Enter makes a new code. jw mobile devices, jw mobile revoke <id>. Ctrl-C stops.");
+    eprintln!("  Enter makes a new code. jw mobile devices | revoke <id> | stop.");
+    eprintln!("  Ctrl-C leaves mobile running.");
     Ok(())
 }
 
 /// A QR drawn black on white with half blocks, two modules to a character
 /// cell. The colours are true colour, not palette entries, which a terminal's
 /// theme would remap (One Dark's white is grey).
-fn qr(payload: &str) -> Result<String> {
-    let code = QrCode::new(payload.as_bytes()).context("making the QR")?;
-    let (w, quiet) = (code.width() as i64, 2);
-    let modules = code.to_colors();
-    let dark = |x: i64, y: i64| {
-        (quiet..w + quiet).contains(&x)
-            && (quiet..w + quiet).contains(&y)
-            && modules[((y - quiet) * w + (x - quiet)) as usize] == Color::Dark
-    };
-    let size = w + 2 * quiet;
+fn ansi(qr: &Qr) -> String {
+    let rgb = |dark: bool| if dark { "0;0;0" } else { "255;255;255" };
     let mut out = String::new();
-    for y in (0..size).step_by(2) {
-        for x in 0..size {
-            let (top, bottom) = (dark(x, y), dark(x, y + 1));
-            let rgb = |dark: bool| if dark { "0;0;0" } else { "255;255;255" };
+    for row in qr.cells() {
+        for (top, bottom) in row {
             out.push_str(&format!("\x1b[38;2;{};48;2;{}m▀", rgb(top), rgb(bottom)));
         }
         out.push_str("\x1b[0m\n");
     }
-    Ok(out)
+    out
 }
 
 #[cfg(test)]
@@ -303,14 +433,10 @@ mod tests {
 
     #[test]
     fn flags() {
-        let o = parse(&args(&[])).unwrap();
-        assert!(!o.read_only);
-        assert_eq!(o.port, 0);
-        let o = parse(&args(&["--read-only", "--port", "8123"])).unwrap();
-        assert!(o.read_only);
-        assert_eq!(o.port, 8123);
-        assert!(parse(&args(&["--port"])).is_err());
-        assert!(parse(&args(&["--port", "x"])).is_err());
+        assert!(!parse(&args(&[])).unwrap().read_only);
+        assert!(parse(&args(&["--read-only"])).unwrap().read_only);
+        // The daemon picks the port now.
+        assert!(parse(&args(&["--port", "8123"])).is_err());
         assert!(parse(&args(&["--nope"])).is_err());
     }
 
@@ -329,20 +455,52 @@ mod tests {
     }
 
     #[test]
-    fn the_qr_is_a_square_of_half_blocks_with_a_quiet_zone() {
-        let text =
-            qr("jw://guys-slowly-dietary-flags.trycloudflare.com/00112233445566778899aabbccddeeff")
-                .unwrap();
-        let rows: Vec<&str> = text.lines().collect();
-        assert!(rows.len() >= 20, "{} rows", rows.len());
-        let cols = rows[0].matches('▀').count();
-        assert!(rows.iter().all(|r| r.matches('▀').count() == cols));
-        assert!(
-            rows.len() * 2 >= cols && rows.len() * 2 <= cols + 2,
-            "square"
+    fn what_a_phone_sent_is_printed_without_control_characters() {
+        assert_eq!(clean("Pixel\x1b[31m 8\x07\n"), "Pixel[31m 8");
+    }
+
+    #[test]
+    fn a_line_answers_the_question_waiting_else_asks_for_a_new_code() {
+        let mut v = View::default();
+        assert_eq!(v.line(""), ClientMsg::MobileCode);
+        v.ask(7, "Pixel", "482913");
+        assert_eq!(
+            v.line("Y"),
+            ClientMsg::MobileAnswer {
+                request: 7,
+                yes: true
+            }
         );
-        // The top rows are the quiet zone: white on white.
+        // Answered: the next Enter is a new code again.
+        assert_eq!(v.line(""), ClientMsg::MobileCode);
+        v.ask(8, "Pixel", "482913");
+        assert_eq!(
+            v.line(""),
+            ClientMsg::MobileAnswer {
+                request: 8,
+                yes: false
+            }
+        );
+        v.ask(9, "Pixel", "482913");
+        v.done(9);
+        assert_eq!(v.line("y"), ClientMsg::MobileCode);
+    }
+
+    #[test]
+    fn the_qr_is_drawn_two_modules_to_a_cell_in_true_colour() {
+        let qr = Qr::new("jw://a.trycloudflare.com/00112233445566778899aabbccddeeff").unwrap();
+        let text = ansi(&qr);
+        let rows: Vec<&str> = text.lines().collect();
+        assert_eq!(rows.len(), qr.size().div_ceil(2));
+        assert!(rows.iter().all(|r| r.matches('▀').count() == qr.size()));
         assert!(rows[0].contains("\x1b[38;2;255;255;255;48;2;255;255;255m"));
         assert!(!rows[0].contains("38;2;0;0;0"));
+    }
+
+    #[test]
+    fn the_steps_have_words() {
+        for step in ["launching", "started", "registered", "resolving"] {
+            assert_ne!(step_text(step), "starting", "{step}");
+        }
     }
 }

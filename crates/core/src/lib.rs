@@ -13,6 +13,7 @@ pub mod diff;
 pub mod folders;
 pub mod init;
 pub mod layout;
+pub mod qr;
 pub mod review;
 pub mod session;
 pub mod stream;

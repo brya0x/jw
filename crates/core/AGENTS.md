@@ -15,6 +15,7 @@ depends on nothing of jw's.
 | `src/stream.rs` | what opening a workspace starts: `Stream` (`:19`), its panes, env, `Stamp` (whether a resolved one is still fresh), the agent's command with `--session-id` and hooks (`hooks`, `:323`), nvim's `--listen` (`listen`, `:292`) |
 | `src/actions.rs` | worktrees: `new_stream` (`:85`), `rename` (`:198`), `rm_plan`/`rm` (`:333`/`:361`), `sync` (`:436`), `done_plan` (`:490`) |
 | `src/connectors/git.rs`, `github.rs` | git through the `git` binary, plus `head_of` (`:298`), which reads `.git` without running anything; PRs through `gh` |
+| `src/qr.rs` | a QR code as a grid of modules with a quiet zone, and its half-block cells (`cells`); the CLI and the TUI each draw them |
 | `src/diff.rs` | a worktree's changes against its base, for the diff viewer |
 | `src/init.rs` | drafting a project config (`detect`), and `write_project`, the `.jw.toml` of the setup step |
 

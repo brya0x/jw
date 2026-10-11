@@ -16,11 +16,13 @@ jw-daemon, and is started by the client, never by hand. Everything else is the C
   runs `curl`.
 - `src/skill.rs` and `skill/SKILL.md`: the Claude Code skill, built into the binary;
   `jw skill install` copies it to `~/.claude/skills/jw/`.
-- `src/mobile.rs`: `jw mobile`, `jw mobile devices|revoke`: the web server (jw-web) behind a
-  Cloudflare quick tunnel, and the QR the phone app scans. Spec: `docs/specs/mobile.md`.
+- `src/mobile.rs`: `jw mobile`, a client of the daemon's mobile service: it starts mobile if it
+  is off, prints each step, the QR and the link, and answers pair questions at the keyboard.
+  `stop` never starts a daemon; `devices` and `revoke` use the store and need none. Spec:
+  `docs/specs/mobile.md`.
 - `examples/screen.rs`: prints the screen a byte stream leaves, for `scripts/drive.py`.
 - `tests/daemon.rs`: the daemon's integration tests. They start this binary on a socket of
-  their own. `tests/web.rs` puts jw-web in front of that daemon. `tests/mobile.rs` drives the
+  their own. `tests/web.rs` puts jw-web in front of that daemon. `tests/mobile.rs` and `tests/mobile_cli.rs` drive the
   daemon's mobile service with a stub for `cloudflared` (`JW_CLOUDFLARED`), a `PATH` without
   one, and config and state dirs of its own: a test here must never be able to start a real
   tunnel or read the user's paired devices.
