@@ -90,6 +90,13 @@ fn lister() -> Lister {
             Query::Sessions => {
                 serde_json::to_value(sidebar::sessions(&state, &reg).map_err(|e| e.to_string())?)
             }
+            Query::Diff(id) => {
+                let entry = sidebar::find(&state, &reg, id)
+                    .map_err(|e| e.to_string())?
+                    .ok_or_else(|| format!("no workspace {id}"))?;
+                let report = jw_core::diff::report(&entry).map_err(|e| format!("{e:#}"))?;
+                serde_json::to_value(report)
+            }
         };
         value.map_err(|e| e.to_string())
     })

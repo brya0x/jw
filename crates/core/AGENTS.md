@@ -18,7 +18,7 @@ depends on nothing of jw's.
 | `src/ago.rs` | an age in words ("2 min ago") for lists of devices |
 | `src/sidebar.rs` | a session's workspaces grouped as the sidebar shows them (`rows`), and the items and session counts the phone is told (`items`, `sessions`) |
 | `src/qr.rs` | a QR code as a grid of modules with a quiet zone, and its half-block cells (`cells`); the CLI and the TUI each draw them |
-| `src/diff.rs` | a worktree's changes against its base, for the diff viewer |
+| `src/diff.rs` | a worktree's changes against its base, for the diff viewer and (`report`, within the phone's limits) for the bridge's `diff` answer |
 | `src/init.rs` | drafting a project config (`detect`), and `write_project`, the `.jw.toml` of the setup step |
 
 ## Keep in mind

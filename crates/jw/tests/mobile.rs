@@ -684,3 +684,127 @@ fn a_paired_phone_is_told_the_workspaces_and_sessions_of_the_pcs_jw() {
     phone.say(serde_json::json!({ "t": "workspaces", "session": "nope" }));
     assert_eq!(phone.json()["code"], "unsupported");
 }
+
+/// `git <args>` in `dir`, with an identity and no config of the user's.
+fn git(dir: &Path, args: &[&str]) {
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOME", dir)
+        .env("GIT_AUTHOR_NAME", "t")
+        .env("GIT_AUTHOR_EMAIL", "t@t")
+        .env("GIT_COMMITTER_NAME", "t")
+        .env("GIT_COMMITTER_EMAIL", "t@t")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn a_paired_phone_gets_a_workspaces_diff_against_its_base() {
+    use jw_core::core::registry::{Entry, Registry};
+    let rig = Rig::start(Stub::Registers);
+    let repo = rig.dir.join("demo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join("a.txt"), "one\ntwo\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-q", "-m", "init"]);
+    // An origin, so the base is `origin/main` as for a real worktree.
+    let origin = rig.dir.join("origin.git");
+    git(
+        &rig.dir,
+        &[
+            "init",
+            "-q",
+            "--bare",
+            "-b",
+            "main",
+            origin.to_str().unwrap(),
+        ],
+    );
+    git(
+        &repo,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    git(&repo, &["push", "-q", "origin", "main"]);
+    git(&repo, &["fetch", "-q", "origin"]);
+    git(&repo, &["remote", "set-head", "origin", "main"]);
+    // An edit, and a file git does not know yet.
+    std::fs::write(repo.join("a.txt"), "one\ntwo\nthree\n").unwrap();
+    std::fs::write(repo.join("b.txt"), "new\n").unwrap();
+    let plain = rig.dir.join("plain");
+    std::fs::create_dir_all(&plain).unwrap();
+
+    let state = rig.dir.join("state").join("jw");
+    std::fs::create_dir_all(&state).unwrap();
+    let wt = |id: &str, name: &str, path: &Path| Entry {
+        id: id.into(),
+        name: name.into(),
+        project: "demo".into(),
+        branch: "main".into(),
+        path: path.display().to_string(),
+        ..Entry::default()
+    };
+    Registry {
+        entries: vec![
+            wt("demo-git", "demo", &repo),
+            wt("demo-plain", "plain", &plain),
+        ],
+    }
+    .save(&state.join("workspaces.json"))
+    .unwrap();
+
+    let mut w = rig.watcher();
+    let code = up(&mut w);
+    let (mut phone, _) = pair(&rig, &code, &mut w, "Pixel");
+
+    phone.say(serde_json::json!({ "t": "diff", "ws": "demo-git" }));
+    let v = phone.json();
+    assert_eq!(
+        (v["t"].as_str(), v["ws"].as_str()),
+        (Some("diff"), Some("demo-git")),
+        "{v}"
+    );
+    assert_eq!(v["title"], "demo vs main", "{v}");
+    assert_eq!(v["truncated"], false);
+    let files = v["files"].as_array().unwrap();
+    let names: Vec<(&str, &str)> = files
+        .iter()
+        .map(|f| (f["path"].as_str().unwrap(), f["status"].as_str().unwrap()))
+        .collect();
+    assert_eq!(names, [("a.txt", "modified"), ("b.txt", "added")], "{v}");
+    assert_eq!(
+        (files[0]["added"].as_u64(), files[0]["deleted"].as_u64()),
+        (Some(1), Some(0))
+    );
+    let lines = files[0]["hunks"][0]["lines"].as_array().unwrap();
+    let added: Vec<&serde_json::Value> = lines.iter().filter(|l| l["k"] == "add").collect();
+    assert_eq!(added.len(), 1);
+    assert_eq!(
+        (added[0]["text"].as_str(), added[0]["new"].as_u64()),
+        (Some("three"), Some(3))
+    );
+    assert_eq!(files[1]["hunks"][0]["lines"][0]["text"], "new");
+
+    phone.say(serde_json::json!({ "t": "diff", "ws": "demo-plain" }));
+    let v = phone.json();
+    assert_eq!(v["code"], "unsupported", "{v}");
+    assert!(
+        v["msg"].as_str().unwrap().contains("not a git repository"),
+        "{v}"
+    );
+
+    phone.say(serde_json::json!({ "t": "diff", "ws": "nothing" }));
+    let v = phone.json();
+    assert!(
+        v["msg"].as_str().unwrap().contains("no workspace nothing"),
+        "{v}"
+    );
+}

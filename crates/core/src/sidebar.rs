@@ -170,6 +170,23 @@ pub fn sessions(state: &Path, reg_path: &Path) -> Result<Vec<SessionItem>> {
         .collect()
 }
 
+/// The workspace with id `id`, in any session: the ids carry their session
+/// (`folders::id_in`), so one is the same workspace wherever it is asked.
+pub fn find(state: &Path, reg_path: &Path, id: &str) -> Result<Option<Entry>> {
+    let mut names = session::list(state).unwrap_or_default();
+    names.retain(|n| n != session::MAIN);
+    names.insert(0, session::MAIN.to_string());
+    for name in names {
+        if let Some(row) = load(state, reg_path, &name)?
+            .into_iter()
+            .find(|r| r.entry.id == id)
+        {
+            return Ok(Some(row.entry));
+        }
+    }
+    Ok(None)
+}
+
 /// Whether `name` is a session that can be asked about.
 pub fn known(name: &str) -> bool {
     name == session::MAIN || session::valid(name)
@@ -364,6 +381,25 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn a_workspace_is_found_by_its_id_in_any_session() {
+        let dir = std::env::temp_dir().join(format!("jw-find-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let work = dir.join("sessions").join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::create_dir_all(dir.join("sessions").join("main")).unwrap();
+        let reg_path = dir.join("workspaces.json");
+        Registry {
+            entries: vec![wt("a", "a", "p", "", 0), wt("b", "b", "p", "work", 0)],
+        }
+        .save(&reg_path)
+        .unwrap();
+        assert_eq!(find(&dir, &reg_path, "a").unwrap().unwrap().name, "a");
+        assert_eq!(find(&dir, &reg_path, "b").unwrap().unwrap().name, "b");
+        assert!(find(&dir, &reg_path, "nope").unwrap().is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

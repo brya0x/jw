@@ -5,7 +5,8 @@
 
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
+use serde::Serialize;
 
 use crate::connectors::git;
 
@@ -68,6 +69,142 @@ pub struct Line {
     pub text: String,
     pub old_no: Option<u32>,
     pub new_no: Option<u32>,
+}
+
+/// The most a phone is sent of a diff (REQ-13): files, lines a file, and
+/// characters a line. A limit hit is said, not hidden.
+pub const MAX_FILES: usize = 500;
+pub const MAX_LINES: usize = 2000;
+pub const MAX_TEXT: usize = 500;
+
+/// A workspace's diff as the phone gets it.
+#[derive(Debug, Serialize)]
+pub struct Report {
+    /// As the TUI titles it: `<name> vs <base>`, or `vs HEAD` with no base.
+    pub title: String,
+    pub truncated: bool,
+    pub files: Vec<FileOut>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FileOut {
+    pub path: String,
+    pub old_path: Option<String>,
+    pub status: &'static str,
+    pub binary: bool,
+    /// Counted before any cut.
+    pub added: usize,
+    pub deleted: usize,
+    pub truncated: bool,
+    pub hunks: Vec<HunkOut>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct HunkOut {
+    pub context: String,
+    pub old_start: u32,
+    pub new_start: u32,
+    pub lines: Vec<LineOut>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LineOut {
+    pub k: &'static str,
+    pub text: String,
+    pub old: Option<u32>,
+    pub new: Option<u32>,
+}
+
+/// The diff of `entry`, against the base its stream resolves to, within the
+/// phone's limits.
+pub fn report(entry: &crate::core::registry::Entry) -> Result<Report> {
+    let dir = Path::new(&entry.path);
+    if !dir.join(".git").exists() {
+        bail!("{} is not a git repository", entry.name);
+    }
+    let stream = crate::stream::Stream::resolve(entry)?;
+    let files = load(dir, &stream.base)?;
+    let title = if stream.base.is_empty() {
+        format!("{} vs HEAD", entry.name)
+    } else {
+        format!("{} vs {}", entry.name, stream.base)
+    };
+    Ok(limited(title, files))
+}
+
+/// `files` cut to the limits.
+pub fn limited(title: String, files: Vec<File>) -> Report {
+    let mut truncated = files.len() > MAX_FILES;
+    let files = files
+        .into_iter()
+        .take(MAX_FILES)
+        .map(|f| {
+            let (added, deleted) = (f.added(), f.deleted());
+            let mut left = MAX_LINES;
+            let mut cut = false;
+            let mut hunks = Vec::new();
+            for h in &f.hunks {
+                if left == 0 {
+                    cut = true;
+                    break;
+                }
+                let lines: Vec<LineOut> = h
+                    .lines
+                    .iter()
+                    .take(left)
+                    .map(|l| LineOut {
+                        k: match l.kind {
+                            Kind::Ctx => "ctx",
+                            Kind::Add => "add",
+                            Kind::Del => "del",
+                        },
+                        text: clip(&l.text),
+                        old: l.old_no,
+                        new: l.new_no,
+                    })
+                    .collect();
+                cut |= lines.len() < h.lines.len();
+                left -= lines.len();
+                hunks.push(HunkOut {
+                    context: clip(&h.context),
+                    old_start: h.old_start,
+                    new_start: h.new_start,
+                    lines,
+                });
+            }
+            truncated |= cut;
+            FileOut {
+                path: f.path,
+                old_path: f.old_path,
+                status: match f.status {
+                    Status::Added => "added",
+                    Status::Deleted => "deleted",
+                    Status::Modified => "modified",
+                    Status::Renamed => "renamed",
+                },
+                binary: f.binary,
+                added,
+                deleted,
+                truncated: cut,
+                hunks,
+            }
+        })
+        .collect();
+    Report {
+        title,
+        truncated,
+        files,
+    }
+}
+
+/// A line of at most `MAX_TEXT` characters, cut with `…`.
+fn clip(s: &str) -> String {
+    if s.chars().count() <= MAX_TEXT {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(MAX_TEXT - 1).collect();
+    out.push('…');
+    out
 }
 
 /// git's empty tree, the base of a repository with no commit yet.
@@ -342,6 +479,88 @@ fn tokens(s: &str) -> Vec<(usize, &str)> {
 
 #[cfg(test)]
 mod tests {
+    fn file(path: &str, lines: usize, text: &str) -> File {
+        File {
+            path: path.into(),
+            old_path: None,
+            status: Status::Modified,
+            binary: false,
+            hunks: vec![Hunk {
+                context: "fn main".into(),
+                old_start: 1,
+                new_start: 1,
+                lines: (0..lines)
+                    .map(|i| Line {
+                        kind: if i % 2 == 0 { Kind::Add } else { Kind::Ctx },
+                        text: text.into(),
+                        old_no: (i % 2 == 1).then_some(i as u32),
+                        new_no: Some(i as u32 + 1),
+                    })
+                    .collect(),
+            }],
+        }
+    }
+
+    #[test]
+    fn a_report_says_what_it_cut_and_counts_what_it_did_not_send() {
+        let r = limited(
+            "w vs main".into(),
+            vec![file("big.rs", 2500, "x"), file("a.rs", 4, "y")],
+        );
+        assert!(r.truncated);
+        let big = r.files.iter().find(|f| f.path == "big.rs").unwrap();
+        assert!(big.truncated);
+        assert_eq!(big.hunks[0].lines.len(), MAX_LINES);
+        // Counted before the cut.
+        assert_eq!(big.added, 1250);
+        let small = r.files.iter().find(|f| f.path == "a.rs").unwrap();
+        assert!(!small.truncated && small.hunks[0].lines.len() == 4);
+        // Files too: more than the limit, and the answer says so.
+        let many: Vec<File> = (0..MAX_FILES + 5)
+            .map(|i| file(&format!("f{i}"), 1, "z"))
+            .collect();
+        let r = limited("t".into(), many);
+        assert!(r.truncated && r.files.len() == MAX_FILES);
+        // No cut, no flag.
+        let r = limited("t".into(), vec![file("a", 3, "x")]);
+        assert!(!r.truncated && !r.files[0].truncated);
+    }
+
+    #[test]
+    fn a_long_line_is_cut_with_an_ellipsis_and_the_json_has_the_fixed_keys() {
+        let long = "é".repeat(900);
+        let r = limited("t".into(), vec![file("a", 2, &long)]);
+        let text = &r.files[0].hunks[0].lines[0].text;
+        assert_eq!(text.chars().count(), MAX_TEXT);
+        assert!(text.ends_with('…'));
+        let v = serde_json::to_value(&r).unwrap();
+        let f = &v["files"][0];
+        assert_eq!(f["status"], "modified");
+        assert_eq!(f["old_path"], serde_json::Value::Null);
+        assert_eq!(f["hunks"][0]["context"], "fn main");
+        let l = &f["hunks"][0]["lines"][0];
+        assert_eq!(
+            (l["k"].as_str(), l["old"].is_null(), l["new"].as_u64()),
+            (Some("add"), true, Some(1))
+        );
+        assert_eq!(f["hunks"][0]["lines"][1]["k"], "ctx");
+    }
+
+    #[test]
+    fn a_binary_file_has_no_hunks_and_the_statuses_have_their_words() {
+        let mut b = file("img.png", 0, "");
+        b.binary = true;
+        b.hunks.clear();
+        b.status = Status::Renamed;
+        b.old_path = Some("old.png".into());
+        let r = limited("t".into(), vec![b]);
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["files"][0]["status"], "renamed");
+        assert_eq!(v["files"][0]["old_path"], "old.png");
+        assert_eq!(v["files"][0]["binary"], true);
+        assert_eq!(v["files"][0]["hunks"], serde_json::json!([]));
+    }
+
     use super::*;
 
     const SAMPLE: &str = "diff --git a/src/a.ts b/src/a.ts

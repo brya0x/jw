@@ -13,7 +13,9 @@
 //!
 //! Once in, a phone may ask `workspaces{session?}` and `sessions`, and is
 //! answered `workspaces{session,items}` and `sessions{items}` from what the
-//! PC's jw has on disk (REQ-12). Both only read, so they pass in read-only.
+//! PC's jw has on disk (REQ-12), and `diff{ws}` with that workspace's changes
+//! (REQ-13). They only read, so they pass in read-only. A diff runs git, so it
+//! is computed on a thread of its own and one at a time per phone.
 //!
 //! A phone is let in by `pair` or `auth` and nothing else; until then the
 //! daemon is not even connected to.
@@ -113,6 +115,8 @@ pub enum Query {
     Workspaces(String),
     /// Every session.
     Sessions,
+    /// A workspace's changes against its base, by workspace id (REQ-13).
+    Diff(String),
 }
 
 /// Answers a `Query` with its items, or why not. Like `Look`, the daemon hands
@@ -369,6 +373,15 @@ enum Event {
     Closed,
 }
 
+/// Answers computed on another thread, for the relay to write: a diff runs git
+/// and must not stop the pings or the frames meanwhile.
+struct Later {
+    tx: mpsc::Sender<Message>,
+    rx: mpsc::Receiver<Message>,
+    /// A diff is being computed for this phone.
+    busy: Arc<AtomicBool>,
+}
+
 fn serve(stream: TcpStream, shared: &Shared, socket: &Path) -> Result<(), WsError> {
     let t = &shared.t;
     let Some(slot) = Slot::take(shared) else {
@@ -445,7 +458,14 @@ fn serve(stream: TcpStream, shared: &Shared, socket: &Path) -> Result<(), WsErro
         let _ = tx.send(Event::Closed);
     });
 
-    let result = relay(&mut ws, &mut daemon, &rx, shared, &device);
+    let (reply_tx, replies) = mpsc::channel();
+    let diffing = Arc::new(AtomicBool::new(false));
+    let later = Later {
+        tx: reply_tx,
+        rx: replies,
+        busy: diffing,
+    };
+    let result = relay(&mut ws, &mut daemon, &rx, &later, shared, &device);
 
     let _ = daemon.shutdown(Shutdown::Both);
     let _ = ws.get_ref().shutdown(Shutdown::Both);
@@ -553,6 +573,7 @@ fn relay(
     ws: &mut WebSocket<TcpStream>,
     daemon: &mut UnixStream,
     rx: &mpsc::Receiver<Event>,
+    later: &Later,
     shared: &Shared,
     device: &Device,
 ) -> Result<(), WsError> {
@@ -569,6 +590,9 @@ fn relay(
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => return Ok(()),
             }
+        }
+        while let Ok(reply) = later.rx.try_recv() {
+            ws.write(reply)?;
         }
         let now = Instant::now();
         if now.duration_since(looked) >= t.revoke_check {
@@ -600,7 +624,14 @@ fn relay(
                         ws.send(error("read_only", "this bridge is read-only"))?;
                     }
                     Message::Binary(body) => write_raw(daemon, &body)?,
-                    Message::Text(text) => ws.send(answer(shared, &text))?,
+                    Message::Text(text) => match serde_json::from_str::<Ask>(&text) {
+                        Ok(Ask::Diff { ws: id }) => {
+                            if let Some(refusal) = start_diff(shared, later, id) {
+                                ws.send(refusal)?;
+                            }
+                        }
+                        _ => ws.send(answer(shared, &text))?,
+                    },
                     Message::Close(_) => return Ok(()),
                     _ => {}
                 }
@@ -618,6 +649,30 @@ fn relay(
 enum Ask {
     Workspaces { session: Option<String> },
     Sessions,
+    Diff { ws: String },
+}
+
+/// Starts the diff of workspace `id` on a thread; its answer comes back
+/// through `later`. `Some` is the refusal to send now: one at a time.
+fn start_diff(shared: &Shared, later: &Later, id: String) -> Option<Message> {
+    if later.busy.swap(true, Ordering::SeqCst) {
+        return Some(error("unsupported", "busy: a diff is already being made"));
+    }
+    let (lister, tx, busy) = (shared.lister.clone(), later.tx.clone(), later.busy.clone());
+    thread::spawn(move || {
+        let reply = match lister(&Query::Diff(id.clone())) {
+            Ok(serde_json::Value::Object(mut obj)) => {
+                obj.insert("t".into(), "diff".into());
+                obj.insert("ws".into(), id.into());
+                Message::text(serde_json::Value::Object(obj).to_string())
+            }
+            Ok(_) => error("unsupported", "the diff is not an object"),
+            Err(why) => error("unsupported", &why),
+        };
+        let _ = tx.send(reply);
+        busy.store(false, Ordering::SeqCst);
+    });
+    None
 }
 
 /// The answer to one control message of a phone: the list asked for, or an
@@ -637,6 +692,8 @@ fn answer(shared: &Shared, text: &str) -> Message {
                 Err(why) => error("unsupported", &why),
             }
         }
+        // Handled by `start_diff`, which needs the connection's own state.
+        Ask::Diff { .. } => error("unsupported", "diff is answered on its own"),
         Ask::Sessions => match (shared.lister)(&Query::Sessions) {
             Ok(items) => {
                 Message::text(serde_json::json!({ "t": "sessions", "items": items }).to_string())
@@ -779,6 +836,15 @@ mod tests {
                     Query::Workspaces(s) if s == "nope" => Err("no session named nope".into()),
                     Query::Workspaces(s) => Ok(serde_json::json!([{ "id": "w1", "session": s }])),
                     Query::Sessions => Ok(serde_json::json!([{ "name": "main", "workspaces": 1 }])),
+                    Query::Diff(id) if id == "nope" => Err("no workspace nope".into()),
+                    Query::Diff(id) => {
+                        if id == "slow" {
+                            thread::sleep(Duration::from_millis(700));
+                        }
+                        Ok(
+                            serde_json::json!({ "title": format!("{id} vs main"), "truncated": false, "files": [] }),
+                        )
+                    }
                 }),
             }
         }
@@ -1289,7 +1355,7 @@ mod tests {
             serde_json::json!({ "t": "workspaces", "session": "nope" }),
         );
         assert_eq!(code(&mut p), "unsupported");
-        say(&mut p, serde_json::json!({ "t": "diff", "ws": "w1" }));
+        say(&mut p, serde_json::json!({ "t": "open", "path": "x" }));
         assert_eq!(code(&mut p), "unsupported");
         // The connection is still good for frames.
         p.send(body(&input(1, b"ls"))).unwrap();
@@ -1300,6 +1366,70 @@ mod tests {
                 bytes: b"ls".to_vec()
             }
         );
+    }
+
+    #[test]
+    fn a_diff_is_answered_with_its_workspace_and_errors_say_why() {
+        let r = rig(Opts::default());
+        let mut p = phone(&r.bridge);
+        login(&mut p, &enrol(&r, "a"));
+        say(&mut p, serde_json::json!({ "t": "diff", "ws": "w1" }));
+        let v = json(&mut p);
+        assert_eq!(
+            (v["t"].as_str(), v["ws"].as_str()),
+            (Some("diff"), Some("w1")),
+            "{v}"
+        );
+        assert_eq!(v["title"], "w1 vs main");
+        assert_eq!(v["files"], serde_json::json!([]));
+        say(&mut p, serde_json::json!({ "t": "diff", "ws": "nope" }));
+        let v = json(&mut p);
+        assert_eq!(
+            (v["t"].as_str(), v["code"].as_str()),
+            (Some("error"), Some("unsupported"))
+        );
+        assert!(
+            v["msg"].as_str().unwrap().contains("no workspace nope"),
+            "{v}"
+        );
+    }
+
+    #[test]
+    fn a_slow_diff_does_not_stop_the_relay_and_only_one_runs_at_a_time() {
+        let r = rig(Opts::default());
+        let mut p = phone(&r.bridge);
+        login(&mut p, &enrol(&r, "a"));
+        say(&mut p, serde_json::json!({ "t": "diff", "ws": "slow" }));
+        // A second one while the first runs is refused at once.
+        say(&mut p, serde_json::json!({ "t": "diff", "ws": "other" }));
+        let v = json(&mut p);
+        assert_eq!(v["code"], "unsupported", "{v}");
+        assert!(v["msg"].as_str().unwrap().contains("busy"), "{v}");
+        // And what a terminal does meanwhile still gets through, before the
+        // diff, which is not done for another 600 ms.
+        let t = Instant::now();
+        p.send(body(&input(1, b"ls"))).unwrap();
+        assert_eq!(
+            msg(&mut p),
+            DaemonMsg::Output {
+                pane: 1,
+                bytes: b"ls".to_vec()
+            }
+        );
+        assert!(
+            t.elapsed() < Duration::from_millis(500),
+            "{:?}",
+            t.elapsed()
+        );
+        let v = json(&mut p);
+        assert_eq!(
+            (v["t"].as_str(), v["ws"].as_str()),
+            (Some("diff"), Some("slow")),
+            "{v}"
+        );
+        // Free again after it.
+        say(&mut p, serde_json::json!({ "t": "diff", "ws": "w2" }));
+        assert_eq!(json(&mut p)["ws"], "w2");
     }
 
     #[test]
@@ -1314,6 +1444,8 @@ mod tests {
         assert_eq!(json(&mut p)["t"], "sessions");
         say(&mut p, serde_json::json!({ "t": "workspaces" }));
         assert_eq!(json(&mut p)["t"], "workspaces");
+        say(&mut p, serde_json::json!({ "t": "diff", "ws": "w1" }));
+        assert_eq!(json(&mut p)["t"], "diff");
     }
 
     #[test]
@@ -1557,8 +1689,8 @@ mod tests {
         let r = rig(Opts::default());
         let mut p = phone(&r.bridge);
         login(&mut p, &enrol(&r, "a"));
-        // `diff` is not built yet (W3): an error, and the relay goes on.
-        say(&mut p, serde_json::json!({ "t": "diff", "ws": "w1" }));
+        // `open` is not built yet: an error, and the relay goes on.
+        say(&mut p, serde_json::json!({ "t": "open", "path": "x" }));
         assert_eq!(code(&mut p), "unsupported");
         p.send(body(&input(1, b"x"))).unwrap();
         assert_eq!(
