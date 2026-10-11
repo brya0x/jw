@@ -13,5 +13,6 @@ pub mod diff;
 pub mod folders;
 pub mod init;
 pub mod layout;
+pub mod program;
 pub mod session;
 pub mod stream;

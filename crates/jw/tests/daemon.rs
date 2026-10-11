@@ -1322,3 +1322,42 @@ fn the_cli_reads_the_daemon_or_none() {
         assert!(jw(&["sessions"], socket).contains("main"));
     }
 }
+
+/// REQ-160: a `shell` pane with an agent in the foreground takes `jw prompt`.
+#[test]
+fn prompt_reaches_an_agent_program_in_a_shell_pane() {
+    let d = Daemon::start();
+    let mut c = d.client();
+    // A link to `cat` named `claude`: the foreground process is called that
+    // (a script would show as its interpreter, a copy of `cat` is killed by
+    // macOS's code signing).
+    let bin = tempfile::tempdir().unwrap();
+    let claude = bin.path().join("claude");
+    std::os::unix::fs::symlink("/bin/cat", &claude).unwrap();
+    let pane = spawn(&mut c, "s", &format!("exec {}", claude.display()), 80, 24);
+
+    let mut screen = vt100::Parser::new(24, 80, 0);
+    let deadline = Instant::now() + TIMEOUT;
+    let reply = loop {
+        c.send(&ClientMsg::Prompt {
+            stream: "s".into(),
+            text: "hi there".into(),
+        })
+        .unwrap();
+        let msg = loop {
+            if let m @ (DaemonMsg::Prompted { .. } | DaemonMsg::Error { .. }) = recv(&mut c) {
+                break m;
+            }
+        };
+        // `exec` may not have run yet: ask again until the name says claude.
+        if matches!(msg, DaemonMsg::Prompted { .. }) || Instant::now() > deadline {
+            break msg;
+        }
+        thread::sleep(Duration::from_millis(50));
+    };
+    assert!(
+        matches!(reply, DaemonMsg::Prompted { pane: p } if p == pane),
+        "{reply:?}"
+    );
+    read_until(&mut c, pane, &mut screen, "hi there");
+}

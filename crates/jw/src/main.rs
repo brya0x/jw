@@ -11,7 +11,7 @@ mod theme;
 
 // So the modules can say `crate::stream`, `crate::proto`… across crate
 // lines.
-use jw_core::{actions, core, folders, layout, session, stream};
+use jw_core::{actions, core, folders, layout, program, session, stream};
 use jw_proto::{client, proto};
 
 fn main() -> ExitCode {
