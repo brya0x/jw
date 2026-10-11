@@ -276,6 +276,11 @@ fn start_walks_the_steps_to_ready_and_the_stub_runs() {
         s.expires_in
     );
     assert!(alive(rig.stub_pid()));
+    // A stand-in program is never active unseen: the state says it.
+    assert!(
+        s.custom_tunnel,
+        "JW_CLOUDFLARED is set and the state does not say so"
+    );
 }
 
 #[test]
@@ -393,6 +398,8 @@ fn without_cloudflared_it_fails_with_a_reason_and_try_again_starts_again() {
             .unwrap();
         let failed = until(&mut w, |s| s.phase == "failed").pop().unwrap();
         assert!(failed.error.contains("not installed"), "{}", failed.error);
+        // No stand-in here: nothing to warn about.
+        assert!(!failed.custom_tunnel);
         assert!(failed.payload.is_empty());
     }
 }

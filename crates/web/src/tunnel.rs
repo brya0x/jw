@@ -123,6 +123,12 @@ fn program_from(var: Option<std::ffi::OsString>) -> Option<std::ffi::OsString> {
     var.filter(|v| !v.to_string_lossy().trim().is_empty())
 }
 
+/// Whether a stand-in program is set as the tunnel (`JW_CLOUDFLARED`), which
+/// the daemon reports in `MobileState` so it is never active unseen.
+pub fn custom_in_use() -> bool {
+    program_from(std::env::var_os("JW_CLOUDFLARED")).is_some()
+}
+
 /// Starts `cloudflared` for `http://127.0.0.1:<port>` and waits until the
 /// tunnel can be reached. `on_step` hears each stage; `cancel` is asked
 /// during every wait and ends it with an error when it says yes.
@@ -255,11 +261,28 @@ fn wait_for_tunnel(
 /// Whether a name resolves; the system's resolver, or a stand-in in tests.
 type Resolver = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 
+/// Lookups of the system's resolver that have not returned. One stuck lookup
+/// is left behind on purpose (it cannot be cancelled), so a start, a stop and
+/// a start again while the resolver hangs would each leave one: past this
+/// many, a start is refused until they return.
+static STUCK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+const MAX_STUCK: usize = 4;
+
+/// Counts a lookup thread while it lives, and gives its place back when it
+/// ends, whatever the resolver did.
+struct Lookup<'a>(&'a std::sync::atomic::AtomicUsize);
+
+impl Drop for Lookup<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// A tunnel that says it is registered still has no name in DNS for a while
 /// (REQ-1), and a phone that scans too soon finds nothing.
 fn wait_to_resolve(host: &str, waits: Waits, cancel: &dyn Fn() -> bool) -> Result<(), Error> {
     let system: Resolver = Arc::new(|h| (h, 443).to_socket_addrs().is_ok());
-    wait_to_resolve_with(host, waits, cancel, system)
+    wait_to_resolve_with(host, waits, cancel, system, &STUCK)
 }
 
 /// `getaddrinfo` has no timeout, so each lookup runs on a thread of its own
@@ -271,6 +294,7 @@ fn wait_to_resolve_with(
     waits: Waits,
     cancel: &dyn Fn() -> bool,
     resolver: Resolver,
+    alive: &'static std::sync::atomic::AtomicUsize,
 ) -> Result<(), Error> {
     let until = Instant::now() + waits.resolve;
     let gave_up = || {
@@ -280,9 +304,16 @@ fn wait_to_resolve_with(
         ))
     };
     loop {
+        // Only one lookup of this start is ever waited on, so a start leaves
+        // at most one behind; the count keeps starts from piling them up.
+        if alive.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= MAX_STUCK {
+            alive.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            return fail("name lookups are stuck on this PC; try again in a while");
+        }
         let (tx, answer) = mpsc::channel();
         let (resolver, name) = (resolver.clone(), host.to_string());
         thread::spawn(move || {
+            let _count = Lookup(alive);
             let _ = tx.send(resolver(&name));
         });
         loop {
@@ -321,6 +352,12 @@ mod tests {
     const BOX: &str = "2026-10-11T15:44:22Z INF |  https://guys-slowly-dietary-flags.trycloudflare.com                                       |\n";
     const REGISTERED: &str =
         "2026-10-11T15:44:25Z INF Registered tunnel connection connIndex=0 location=mia01\n";
+
+    // Each test counts its own lookups.
+    static FREE_A: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    static FREE_B: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    static FREE_C: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    static FREE_D: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
     fn quick() -> Waits {
         Waits {
@@ -417,6 +454,7 @@ mod tests {
                 },
                 &|| flag.load(Ordering::SeqCst),
                 hang.clone(),
+                &FREE_A,
             )
         })
         .unwrap_err();
@@ -424,9 +462,31 @@ mod tests {
         assert!(t.elapsed() < Duration::from_secs(3), "{:?}", t.elapsed());
         // And the deadline holds with nobody cancelling.
         let t = Instant::now();
-        let err = wait_to_resolve_with("jw-test.invalid", quick(), &|| false, hang).unwrap_err();
+        let err =
+            wait_to_resolve_with("jw-test.invalid", quick(), &|| false, hang, &FREE_B).unwrap_err();
         assert!(err.0.contains("did not resolve"), "{err}");
         assert!(t.elapsed() < Duration::from_secs(3), "{:?}", t.elapsed());
+    }
+
+    #[test]
+    fn starts_that_leave_a_hung_lookup_behind_cannot_pile_them_up() {
+        let hang: Resolver = Arc::new(|_| {
+            thread::sleep(Duration::from_secs(20));
+            true
+        });
+        let stop = || true;
+        // Four starts each leave one lookup stuck (a stop is heard at once).
+        for i in 0..MAX_STUCK {
+            let err = wait_to_resolve_with("h.invalid", quick(), &stop, hang.clone(), &FREE_D)
+                .unwrap_err();
+            assert_eq!(err.0, "stopped", "start {i}: {err}");
+        }
+        // The fifth is refused, and says why, without another thread.
+        let t = Instant::now();
+        let err = wait_to_resolve_with("h.invalid", quick(), &stop, hang, &FREE_D).unwrap_err();
+        assert!(err.0.contains("stuck"), "{err}");
+        assert!(t.elapsed() < Duration::from_millis(200));
+        assert_eq!(FREE_D.load(Ordering::SeqCst), MAX_STUCK);
     }
 
     #[test]
@@ -434,7 +494,7 @@ mod tests {
         let tries = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let n = tries.clone();
         let third: Resolver = Arc::new(move |_| n.fetch_add(1, Ordering::SeqCst) >= 2);
-        wait_to_resolve_with("a.trycloudflare.com", quick(), &|| false, third).unwrap();
+        wait_to_resolve_with("a.trycloudflare.com", quick(), &|| false, third, &FREE_C).unwrap();
         assert_eq!(tries.load(Ordering::SeqCst), 3);
     }
 

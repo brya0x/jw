@@ -109,6 +109,64 @@ pub type Confirm = Arc<dyn Fn(&Pair) -> bool + Send + Sync>;
 /// the themes are in the TUI crate and this one does not depend on it.
 pub type Look = Arc<dyn Fn() -> serde_json::Value + Send + Sync>;
 
+/// The colour roles of a palette (`tui/themes/schema.json`).
+const ROLES: [&str; 16] = [
+    "bg", "panel", "line", "fg", "dim", "sel", "blue", "green", "yellow", "red", "magenta", "cyan",
+    "add_bg", "del_bg", "add_word", "del_word",
+];
+
+fn hex(v: &serde_json::Value) -> bool {
+    v.as_str().is_some_and(|s| {
+        s.len() == 7 && s.starts_with('#') && s[1..].bytes().all(|b| b.is_ascii_hexdigit())
+    })
+}
+
+/// A palette the app can draw with: a short name, `dark`, and every role as
+/// `#rrggbb`. Anything else in it is left out.
+fn sane_palette(p: &serde_json::Value) -> Option<serde_json::Value> {
+    let name = p
+        .get("name")?
+        .as_str()
+        .filter(|n| !n.is_empty() && n.len() <= 64)?;
+    let dark = p.get("dark")?.as_bool()?;
+    let colors = p.get("colors")?.as_object()?;
+    let mut kept = serde_json::Map::new();
+    for role in ROLES {
+        let c = colors.get(role).filter(|c| hex(c))?;
+        kept.insert(role.into(), c.clone());
+    }
+    Some(serde_json::json!({ "name": name, "dark": dark, "colors": kept }))
+}
+
+/// What `ready` sends of the look: the palettes that fit and the two theme
+/// slots as short names, or `[]` and `{}`. The callback is the jw binary's, but
+/// what a phone is sent is decided here, whatever the callback returned, so a
+/// theme file that parsed but is not a palette cannot reach the app (REQ-17).
+fn sane_look(look: &serde_json::Value) -> (serde_json::Value, serde_json::Value) {
+    let palettes: Vec<serde_json::Value> = look
+        .get("palettes")
+        .and_then(|p| p.as_array())
+        .map(|all| all.iter().filter_map(sane_palette).take(200).collect())
+        .unwrap_or_default();
+    let slot = |k: &str| {
+        look.get("settings")
+            .and_then(|s| s.get(k))
+            .and_then(|v| v.as_str())
+            .filter(|n| !n.is_empty() && n.len() <= 64)
+            .map(|n| serde_json::Value::String(n.to_string()))
+    };
+    let mut settings = serde_json::Map::new();
+    for k in ["dark", "light"] {
+        if let Some(v) = slot(k) {
+            settings.insert(k.into(), v);
+        }
+    }
+    (
+        serde_json::Value::Array(palettes),
+        serde_json::Value::Object(settings),
+    )
+}
+
 /// What a phone can ask the PC to list (REQ-12).
 pub enum Query {
     /// The workspaces of a session, by name.
@@ -162,7 +220,7 @@ impl Shared {
     /// Keeps a handle on a connection so `stop` can close it. `None` once
     /// the bridge is stopping.
     fn register(&self, s: &TcpStream) -> Option<u64> {
-        let mut conns = self.conns.lock().unwrap();
+        let mut conns = lock(&self.conns);
         if self.stopping.load(Ordering::SeqCst) {
             return None;
         }
@@ -172,11 +230,11 @@ impl Shared {
     }
 
     fn forget(&self, id: u64) {
-        self.conns.lock().unwrap().retain(|(i, _)| *i != id);
+        lock(&self.conns).retain(|(i, _)| *i != id);
     }
 
     fn close_all(&self) {
-        for (_, s) in self.conns.lock().unwrap().iter() {
+        for (_, s) in lock(&self.conns).iter() {
             let _ = s.shutdown(Shutdown::Both);
         }
     }
@@ -193,6 +251,13 @@ impl<'a> Slot<'a> {
         }
         Some(Self(&shared.preauth))
     }
+}
+
+/// A lock whose holder panicked is still good: what these guard (the list of
+/// sockets, the pairing token, the limiter) stays valid, and a poisoned lock
+/// must not panic the relay thread of every phone after it.
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// A device counted as connected for as long as this lives.
@@ -273,14 +338,14 @@ impl Bridge {
     pub fn new_pairing(&self) -> io::Result<String> {
         let pairing = Pairing::new(Instant::now())?;
         let token = pairing.token().to_string();
-        *self.shared.pairing.lock().unwrap() = Some(pairing);
+        *lock(&self.shared.pairing) = Some(pairing);
         Ok(token)
     }
 
     /// How long the current pairing token has left; `None` when there is
     /// none, it was used, or it ended.
     pub fn pairing_left(&self) -> Option<Duration> {
-        let pairing = self.shared.pairing.lock().unwrap();
+        let pairing = lock(&self.shared.pairing);
         pairing
             .as_ref()?
             .left(self.shared.t.pairing_ttl, Instant::now())
@@ -436,7 +501,7 @@ fn serve(stream: TcpStream, shared: &Shared, socket: &Path) -> Result<(), WsErro
     };
     ws.get_ref().set_read_timeout(Some(TICK))?;
     let _online = Online::enter(shared, &device.id);
-    let look = (shared.look)();
+    let (palettes, settings) = sane_look(&(shared.look)());
     ws.send(Message::text(
         serde_json::json!({
             "t": "ready",
@@ -445,8 +510,8 @@ fn serve(stream: TcpStream, shared: &Shared, socket: &Path) -> Result<(), WsErro
             "read_only": shared.read_only.load(Ordering::SeqCst),
             // A callback that left a key out gives the app an empty one, not
             // a `null` it would have to guard against.
-            "palettes": look.get("palettes").cloned().unwrap_or_else(|| serde_json::json!([])),
-            "settings": look.get("settings").cloned().unwrap_or_else(|| serde_json::json!({})),
+            "palettes": palettes,
+            "settings": settings,
         })
         .to_string(),
     ))?;
@@ -488,7 +553,7 @@ fn authenticate(
     key: &str,
 ) -> Result<Option<Device>, WsError> {
     let deadline = Instant::now() + shared.t.preauth;
-    if shared.limiter.lock().unwrap().locked(key, Instant::now()) {
+    if lock(&shared.limiter).locked(key, Instant::now()) {
         refuse(ws, "limited", "too many failed attempts, try again later")?;
         return Ok(None);
     }
@@ -511,7 +576,7 @@ fn authenticate(
     };
 
     let failed = |why: &str, msg: &str, ws: &mut WebSocket<TcpStream>| {
-        shared.limiter.lock().unwrap().failed(key, Instant::now());
+        lock(&shared.limiter).failed(key, Instant::now());
         refuse(ws, why, msg)
     };
     let Ok(control) = serde_json::from_str::<Control>(&text) else {
@@ -521,7 +586,7 @@ fn authenticate(
     match control {
         Control::Auth { device } => match shared.store.find(&auth::hash(&device))? {
             Some(d) => {
-                shared.limiter.lock().unwrap().succeeded(key);
+                lock(&shared.limiter).succeeded(key);
                 shared.store.touch(&d.id)?;
                 Ok(Some(d))
             }
@@ -541,7 +606,7 @@ fn authenticate(
                 failed("unexpected", "the code is 4 to 12 digits", ws)?;
                 return Ok(None);
             }
-            let taken = match shared.pairing.lock().unwrap().as_mut() {
+            let taken = match lock(&shared.pairing).as_mut() {
                 Some(p) => p.take(&token, shared.t.pairing_ttl, Instant::now()),
                 None => Err(Refused::Unknown),
             };
@@ -565,7 +630,7 @@ fn authenticate(
             }
             let secret = auth::random_hex(32)?;
             let device = shared.store.add(&name, &auth::hash(&secret))?;
-            shared.limiter.lock().unwrap().succeeded(key);
+            lock(&shared.limiter).succeeded(key);
             ws.send(Message::text(
                 serde_json::json!({ "t": "paired", "device": secret, "id": device.id }).to_string(),
             ))?;
@@ -1157,7 +1222,7 @@ mod tests {
             look: Arc::new(move || {
                 let n = count.fetch_add(1, Ordering::SeqCst);
                 serde_json::json!({
-                    "palettes": [{"name": format!("t{n}"), "dark": true, "colors": {}}],
+                    "palettes": [palette(&format!("t{n}"))],
                     "settings": {"dark": format!("t{n}"), "light": "one-light"},
                 })
             }),
@@ -1173,6 +1238,73 @@ mod tests {
             assert_eq!(v["settings"]["dark"], format!("t{n}"));
             assert_eq!(v["settings"]["light"], "one-light");
         }
+    }
+
+    fn palette(name: &str) -> serde_json::Value {
+        let colors: serde_json::Map<String, serde_json::Value> = ROLES
+            .iter()
+            .map(|r| (r.to_string(), "#1a2b3c".into()))
+            .collect();
+        serde_json::json!({ "name": name, "dark": true, "colors": colors })
+    }
+
+    #[test]
+    fn only_a_palette_the_app_can_draw_with_is_sent() {
+        let mut no_role = palette("no-role");
+        no_role["colors"].as_object_mut().unwrap().remove("cyan");
+        let mut bad_hex = palette("bad-hex");
+        bad_hex["colors"]["bg"] = "red".into();
+        let mut extra = palette("extra");
+        extra["note"] = "ignored".into();
+        extra["colors"]["unknown"] = "#ffffff".into();
+        let look = serde_json::json!({
+            "palettes": [
+                palette("good"), no_role, bad_hex, extra,
+                { "name": "", "dark": true, "colors": {} },
+                { "name": "x".repeat(65), "dark": false, "colors": palette("a")["colors"] },
+                { "name": "no-dark", "colors": palette("a")["colors"] },
+                "not an object", 7, null,
+            ],
+            "settings": { "dark": "good", "light": 7, "mode": "ignored" },
+        });
+        let (palettes, settings) = sane_look(&look);
+        let names: Vec<&str> = palettes
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["good", "extra"], "{palettes}");
+        // What is left of `extra` is the palette and nothing else.
+        let extra = &palettes[1];
+        assert!(
+            extra.get("note").is_none() && extra["colors"].get("unknown").is_none(),
+            "{extra}"
+        );
+        assert_eq!(settings, serde_json::json!({ "dark": "good" }));
+        // Not even the right types: empty, never null.
+        let (p, s) = sane_look(&serde_json::json!({ "palettes": "x", "settings": [1] }));
+        assert_eq!((p, s), (serde_json::json!([]), serde_json::json!({})));
+    }
+
+    #[test]
+    fn a_poisoned_lock_does_not_panic_the_phones_after_it() {
+        let r = rig(Opts::default());
+        // A thread that panics holding the limiter's and the pairing's locks.
+        let shared = r.bridge.shared.clone();
+        let _ = thread::spawn(move || {
+            let _limiter = shared.limiter.lock().unwrap();
+            let _pairing = shared.pairing.lock().unwrap();
+            let _conns = shared.conns.lock().unwrap();
+            panic!("a bug while holding the locks");
+        })
+        .join();
+        assert!(r.bridge.shared.limiter.is_poisoned());
+        // A device still gets in, and a new code still works.
+        let mut p = phone(&r.bridge);
+        login(&mut p, &enrol(&r, "a"));
+        assert!(r.bridge.new_pairing().is_ok());
+        assert!(r.bridge.pairing_left().is_some());
     }
 
     #[test]

@@ -14,7 +14,6 @@
 use std::collections::HashMap;
 use std::net::TcpListener;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
@@ -48,6 +47,9 @@ pub struct Tuning {
     /// Called with `start` as the start thread begins and with `stop` as a
     /// stop's slow part begins (tests: to stall or to panic there).
     pub hook: Option<Hook>,
+    /// Where request ids come from, as hex (tests: one that fails). `None` is
+    /// the system's random bytes.
+    pub random: Option<fn() -> std::io::Result<String>>,
 }
 
 impl Default for Tuning {
@@ -58,6 +60,7 @@ impl Default for Tuning {
             waits: tunnel::Waits::default(),
             store: None,
             hook: None,
+            random: None,
         }
     }
 }
@@ -144,8 +147,6 @@ struct Inner {
     /// Clients that sent `MobileWatch`, until they leave.
     watchers: Mutex<Vec<(u64, Tx)>>,
     pending: Mutex<HashMap<u64, mpsc::Sender<Answer>>>,
-    /// Only if the system has no random bytes to give.
-    next_request: AtomicU64,
     /// The paired phones as the store last said, so a state does not read the
     /// file while a lock is held.
     devices: Mutex<Devices>,
@@ -187,7 +188,6 @@ impl Mobile {
             }),
             watchers: Mutex::default(),
             pending: Mutex::default(),
-            next_request: AtomicU64::new(1),
             devices: Mutex::default(),
             last: Mutex::default(),
         }))
@@ -455,6 +455,7 @@ impl Inner {
             read_only,
             devices,
             error,
+            custom_tunnel: tunnel::custom_in_use(),
         }
     }
 
@@ -644,17 +645,17 @@ impl Inner {
     }
 
     /// An id nobody can guess: a client that is not shown the question cannot
-    /// answer it by counting.
-    fn new_request(&self, taken: &HashMap<u64, mpsc::Sender<Answer>>) -> u64 {
-        loop {
-            let id = jw_web::auth::random_hex(8)
-                .ok()
-                .and_then(|h| u64::from_str_radix(&h, 16).ok())
-                .unwrap_or_else(|| self.next_request.fetch_add(1, Ordering::Relaxed));
+    /// answer it by counting. `None` when the system has no random bytes to
+    /// give; there is no weaker fallback.
+    fn new_request(&self, taken: &HashMap<u64, mpsc::Sender<Answer>>) -> Option<u64> {
+        let random = self.tuning.random.unwrap_or(|| jw_web::auth::random_hex(8));
+        for _ in 0..8 {
+            let id = u64::from_str_radix(&random().ok()?, 16).ok()?;
             if id != 0 && id != CANCELLED.0 && !taken.contains_key(&id) {
-                return id;
+                return Some(id);
             }
         }
+        None
     }
 
     /// Puts "pair this phone?" to every watcher and waits for the first
@@ -672,7 +673,12 @@ impl Inner {
             if !pending.is_empty() {
                 return false;
             }
-            let request = self.new_request(&pending);
+            // No random bytes, no question: an id that could be guessed would
+            // let a client that is not shown it answer it, so the phone is
+            // refused instead.
+            let Some(request) = self.new_request(&pending) else {
+                return false;
+            };
             pending.insert(request, answer);
             request
         };
@@ -704,6 +710,7 @@ impl Inner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     fn fast() -> Tuning {
         Tuning {
@@ -714,6 +721,7 @@ mod tests {
                 std::env::temp_dir().join(format!("jw-mobile-unit-{}.json", std::process::id())),
             ),
             hook: None,
+            random: None,
         }
     }
 
@@ -849,6 +857,27 @@ mod tests {
         assert!(lock(&m.0.pending).contains_key(&request), "it was answered");
         m.answer(1, request, false);
         assert!(!asker.join().unwrap());
+    }
+
+    #[test]
+    fn without_random_bytes_the_question_is_refused_not_asked_with_a_guessable_id() {
+        let m = service(Tuning {
+            random: Some(|| Err(std::io::Error::other("no entropy"))),
+            ..fast()
+        });
+        ready(&m);
+        let (_a, a) = watcher(&m, 1);
+        let _ = next(&a);
+        assert!(!m.0.ask("Pixel", "482913"));
+        quiet(&a);
+        assert!(lock(&m.0.pending).is_empty());
+        // An id that is not a number is as unusable.
+        let m = service(Tuning {
+            random: Some(|| Ok("zz".into())),
+            ..fast()
+        });
+        ready(&m);
+        assert!(!m.0.ask("Pixel", "482913"));
     }
 
     #[test]

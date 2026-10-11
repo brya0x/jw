@@ -156,7 +156,15 @@ fn stop() -> Result<()> {
         }
         c.set_read_timeout(Some(left))?;
         let phase = state(&mut c).map_err(|e| {
-            if until <= Instant::now() {
+            // Only a read that ran out of time is "did not stop": a hung-up
+            // daemon or a real I/O error says what it was.
+            let timed_out = e.downcast_ref::<io::Error>().is_some_and(|io| {
+                matches!(
+                    io.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                )
+            });
+            if timed_out {
                 anyhow::anyhow!(
                     "mobile did not stop within {STOP_WITHIN:?}; the daemon may be stuck"
                 )
@@ -296,10 +304,19 @@ struct View {
     pending: Option<u64>,
     /// The phones connected, by id.
     online: BTreeMap<String, String>,
+    /// The stand-in tunnel warning was printed.
+    warned: bool,
 }
 
 impl View {
     fn state(&mut self, s: &MobileState) -> Result<Flow> {
+        if s.custom_tunnel && !self.warned {
+            // A stand-in program is never active unseen.
+            self.warned = true;
+            eprintln!(
+                "  warning: JW_CLOUDFLARED is set in the daemon: the tunnel is that program, not Cloudflare"
+            );
+        }
         match s.phase.as_str() {
             "starting" => {
                 self.began = true;

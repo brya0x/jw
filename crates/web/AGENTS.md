@@ -38,6 +38,8 @@ Cloudflare tunnel; `jw mobile` and the TUI are clients of that service. Nothing 
 - **Anything printed on the PC from a phone is cleaned first** (`jw_proto::proto::clean`): no
   escape codes and no bidi controls in someone's terminal.
 - **A phone's `Mobile*` frames are refused** (`mobile_control`): mobile is driven at the PC.
+- **What `ready` sends of the look is checked here** (`sane_look`), not trusted from the callback.
+- **Locks use `lock()`**, which survives a poisoned mutex: the data they guard stays valid.
 - **Behind `cloudflared` every peer is 127.0.0.1.** The limiter keys on `Cf-Connecting-Ip`.
 - **A slow phone must not grow memory, and a stalled one is dropped.** The queue from the
   daemon is bounded on purpose, so the daemon's own queue limit takes over.

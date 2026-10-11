@@ -375,6 +375,11 @@ pub struct MobileState {
     /// While `failed`: what went wrong, for the person to read.
     #[serde(default)]
     pub error: String,
+    /// `JW_CLOUDFLARED` is set in the daemon's environment: what runs as the
+    /// tunnel is a stand-in program, not Cloudflare's. Whoever shows mobile
+    /// says so, so nobody has one active without seeing it.
+    #[serde(default)]
+    pub custom_tunnel: bool,
 }
 
 /// A paired phone.
@@ -689,6 +694,7 @@ mod tests {
                 connected: true,
             }],
             error: String::new(),
+            custom_tunnel: true,
         };
         let down = vec![
             DaemonMsg::MobileState(state),

@@ -320,7 +320,26 @@ fn view(f: &mut Frame, app: &App, v: &View) {
             )
         }
     };
+    let mut lines = lines;
+    // Before the blank line and the keys at the end.
+    let at = lines.len().saturating_sub(2);
+    lines.splice(at..at, custom_notice(m));
     boxed(f, title.into(), lines, width, 4);
+}
+
+/// A stand-in tunnel program is never active unseen: whenever the daemon says
+/// `JW_CLOUDFLARED` is set, the modal says it is not Cloudflare that runs.
+fn custom_notice(m: &Mobile) -> Vec<Line<'static>> {
+    if !m.state().is_some_and(|s| s.custom_tunnel) {
+        return Vec::new();
+    }
+    vec![
+        Line::default(),
+        Line::from(tone(
+            " ⚠ JW_CLOUDFLARED is set: not a Cloudflare tunnel",
+            p().yellow,
+        )),
+    ]
 }
 
 /// The steps as a checklist: done, in progress, not yet.
@@ -417,7 +436,7 @@ fn ready(f: &mut Frame, app: &App) {
         return too_small(f, s, need, (area.width, area.height));
     }
 
-    let words = info(left, expired, phones, s.read_only);
+    let words = info(left, expired, phones, s.read_only, s.custom_tunnel);
     let mut lines: Vec<Line<'static>> = Vec::new();
     match &qr {
         Some(q) => {
@@ -470,7 +489,13 @@ fn ready(f: &mut Frame, app: &App) {
 }
 
 /// The column beside the QR.
-fn info(left: u64, expired: bool, phones: usize, read_only: bool) -> Vec<Line<'static>> {
+fn info(
+    left: u64,
+    expired: bool,
+    phones: usize,
+    read_only: bool,
+    custom: bool,
+) -> Vec<Line<'static>> {
     let mut l = vec![
         Line::from("Scan it with"),
         Line::from("the jw app."),
@@ -509,6 +534,12 @@ fn info(left: u64, expired: bool, phones: usize, read_only: bool) -> Vec<Line<'s
         ),
         dim(" (r)"),
     ]));
+    if custom {
+        // Not Cloudflare that runs (see `custom_notice`).
+        l.push(Line::default());
+        l.push(Line::from(tone("⚠ stand-in tunnel", p().yellow)));
+        l.push(Line::from(dim("(JW_CLOUDFLARED)")));
+    }
     l
 }
 
@@ -696,6 +727,7 @@ mod tests {
             read_only: false,
             devices: vec![],
             error: String::new(),
+            custom_tunnel: false,
         }
     }
 
@@ -1138,6 +1170,38 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("[31mERR no network") && !text.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn a_stand_in_tunnel_program_is_said_in_every_view() {
+        let (mut app, _got) = rig("custom");
+        for (phase, extra) in [("off", ""), ("starting", ""), ("failed", "")] {
+            let _ = extra;
+            let mut s = state(phase);
+            s.error = "cloudflared stopped".into();
+            s.custom_tunnel = true;
+            feed(&mut app, s);
+            open(&mut app);
+            let text = screen(&app, 100, 40);
+            assert!(text.contains("JW_CLOUDFLARED is set"), "{phase}: {text}");
+            press(&mut app, KeyCode::Esc);
+        }
+        let mut s = ready_state();
+        s.custom_tunnel = true;
+        feed(&mut app, s);
+        open(&mut app);
+        let text = screen(&app, 100, 40);
+        assert!(
+            text.contains("stand-in tunnel") && text.contains("(JW_CLOUDFLARED)"),
+            "{text}"
+        );
+        // And nothing of it when it is not set.
+        feed(&mut app, ready_state());
+        let text = screen(&app, 100, 40);
+        assert!(
+            !text.contains("stand-in") && !text.contains("JW_CLOUDFLARED"),
+            "{text}"
+        );
     }
 
     #[test]

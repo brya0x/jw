@@ -491,3 +491,88 @@ fn devices_and_revoke_work_with_no_daemon_and_start_none() {
     assert_eq!(store.devices().unwrap().len(), 1);
     assert!(!env.socket.exists(), "a daemon was started");
 }
+
+/// What a fake daemon does after it is asked to stop mobile.
+#[derive(Clone, Copy)]
+enum AfterStop {
+    /// Keep saying `ready`, never `off`.
+    KeepReady,
+    /// Close the connection.
+    HangUp,
+}
+
+/// A daemon that speaks the protocol, says mobile is ready, and then does
+/// `after` when asked to stop it.
+fn fake_daemon(env: &Env, after: AfterStop) {
+    use std::os::unix::net::UnixListener;
+    let listener = UnixListener::bind(&env.socket).unwrap();
+    thread::spawn(move || {
+        for conn in listener.incoming() {
+            let Ok(mut c) = conn else { return };
+            thread::spawn(move || {
+                let ready = || MobileState {
+                    phase: "ready".into(),
+                    step: String::new(),
+                    host: HOST.into(),
+                    payload: String::new(),
+                    expires_in: 0,
+                    read_only: false,
+                    devices: vec![],
+                    error: String::new(),
+                    custom_tunnel: false,
+                };
+                while let Ok(Some(msg)) = read_frame::<ClientMsg>(&mut c) {
+                    match msg {
+                        ClientMsg::Hello { .. } => {
+                            let _ = write_frame(&mut c, &DaemonMsg::Hello { protocol: PROTOCOL });
+                        }
+                        ClientMsg::MobileWatch => {
+                            let _ = write_frame(&mut c, &DaemonMsg::MobileState(ready()));
+                        }
+                        ClientMsg::MobileStop => match after {
+                            AfterStop::HangUp => return,
+                            AfterStop::KeepReady => loop {
+                                if write_frame(&mut c, &DaemonMsg::MobileState(ready())).is_err() {
+                                    return;
+                                }
+                                thread::sleep(Duration::from_millis(100));
+                            },
+                        },
+                        _ => {}
+                    }
+                }
+            });
+        }
+    });
+}
+
+#[test]
+fn stop_has_one_deadline_for_a_daemon_that_never_says_off() {
+    let env = Env::new(Stub::Registers);
+    fake_daemon(&env, AfterStop::KeepReady);
+    let t = Instant::now();
+    let (ok, out, err) = env.run(&["stop"]);
+    assert!(!ok, "{out}");
+    assert!(err.contains("did not stop"), "{err}");
+    // 5 s in all, not 5 s a message (which a chatty daemon would stretch for good).
+    assert!(t.elapsed() < Duration::from_secs(9), "{:?}", t.elapsed());
+}
+
+#[test]
+fn a_daemon_that_hangs_up_is_not_reported_as_slow_to_stop() {
+    let env = Env::new(Stub::Registers);
+    fake_daemon(&env, AfterStop::HangUp);
+    let (ok, _out, err) = env.run(&["stop"]);
+    assert!(!ok);
+    assert!(err.contains("hung up"), "{err}");
+    assert!(!err.contains("did not stop"), "{err}");
+}
+
+#[test]
+fn a_stand_in_tunnel_program_is_warned_about_where_mobile_is_shown() {
+    let env = Env::new(Stub::Registers);
+    let cli = env.cli(&[]);
+    let text = cli.wait_for("Ctrl-C leaves mobile running");
+    assert!(text.contains("warning: JW_CLOUDFLARED is set"), "{text}");
+    assert!(env.state().custom_tunnel);
+}
