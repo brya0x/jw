@@ -15,13 +15,17 @@ Steps:
   key:<name>    enter esc tab up down left right bs
   wait:<s>      reads output for <s> seconds
   sh:<cmd>      runs a shell command in the isolated env (edit a settings file, …)
+  mouse:<kind>,<col>,<row>  down, drag, up or wheelup, wheeldown at a 1-based cell
+                (mouse:shift:down,30,4 holds Shift)
   clear         forgets the output so far
   dump          prints the screen
+  osc52         prints what jw asked the terminal to copy
   colors        prints the first background colours seen (themes)
 
 Env: JWARGS (arguments to jw), CWD (where it starts), JWT (JW_THEME; empty
 leaves it unset).
 """
+import base64
 import fcntl
 import os
 import pty
@@ -95,6 +99,16 @@ for step in sys.argv[2:]:
         pump(float(v))
     elif k == "sh":
         subprocess.run(v, shell=True, env=env)
+    elif k == "mouse":
+        kind, col, row = v.split(",")
+        shift = kind.startswith("shift:")
+        code, end = {"down": (0, "M"), "drag": (32, "M"), "up": (0, "m"),
+                     "wheelup": (64, "M"), "wheeldown": (65, "M")}[kind.removeprefix("shift:")]
+        os.write(fd, f"\x1b[<{code + 4 * shift};{col};{row}{end}".encode())
+        pump(0.15)
+    elif k == "osc52":
+        for m in re.findall(rb"\x1b\]52;c;([A-Za-z0-9+/=]*)\x07", buf):
+            print(repr(base64.b64decode(m).decode()))
     elif k == "clear":
         buf = b""
     elif k == "dump":

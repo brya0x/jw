@@ -8,6 +8,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
+use super::select::Sel;
 use super::{App, PaneView, SIDEBAR, key};
 use crate::layout::Rect;
 use crate::theme::p;
@@ -37,9 +38,18 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 m.focused = focused;
                 m.draw(f, r);
             }
-            None => pane(f, app, r, app.pane_title(id), app.panes.get(&id), focused),
+            None => pane(
+                f,
+                app,
+                r,
+                app.pane_title(id),
+                app.panes.get(&id),
+                app.selection(id),
+                focused,
+            ),
         }
     }
+    banner(f, app);
     if let Some(m) = &app.modal {
         m.draw(f);
     }
@@ -52,6 +62,44 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.which {
         which(f, app);
     }
+}
+
+/// `✓ Copied to clipboard`, on the top edge of the pane the copy came from
+/// (REQ-135).
+fn banner(f: &mut Frame, app: &App) {
+    let Some((id, n, _)) = app.copied else {
+        return;
+    };
+    let Some(rect) = app
+        .pane_rects()
+        .into_iter()
+        .find(|(p, _)| *p == id)
+        .map(|(_, r)| trect(r))
+    else {
+        return;
+    };
+    let text = banner_text(n);
+    let w = (text.chars().count() as u16).min(rect.width.saturating_sub(2));
+    if w == 0 {
+        return;
+    }
+    let r = TRect::new(rect.x + rect.width - 1 - w, rect.y, w, 1);
+    f.render_widget(
+        Paragraph::new(text).style(
+            Style::default()
+                .bg(p().green)
+                .fg(p().bg)
+                .add_modifier(Modifier::BOLD),
+        ),
+        r,
+    );
+}
+
+fn banner_text(n: usize) -> String {
+    format!(
+        " ✓ Copied to clipboard · {n} character{} ",
+        if n == 1 { "" } else { "s" }
+    )
 }
 
 fn trect(r: Rect) -> TRect {
@@ -443,6 +491,7 @@ fn pane(
     r: TRect,
     (title, runs): (String, Option<String>),
     view: Option<&PaneView>,
+    sel: Option<&Sel>,
     focused: bool,
 ) {
     let accent = if focused { p().blue } else { p().line };
@@ -500,7 +549,14 @@ fn pane(
         return;
     };
     let screen = view.parser.screen();
-    screen_to(f.buffer_mut(), screen, inner, app.leading() && !focused);
+    let sel = sel.map(|s| (s, s.base(screen.scrollback())));
+    screen_to(
+        f.buffer_mut(),
+        screen,
+        inner,
+        app.leading() && !focused,
+        sel,
+    );
     if focused && !app.leading() && !screen.hide_cursor() {
         let (row, col) = screen.cursor_position();
         if row < inner.height && col < inner.width {
@@ -510,9 +566,17 @@ fn pane(
 }
 
 /// Copies a vt100 screen into the buffer. `dim` fades it, for panes that
-/// aren't taking keys while navigating.
-fn screen_to(buf: &mut Buffer, screen: &vt100::Screen, area: TRect, dim: bool) {
+/// aren't taking keys while navigating; `sel` is the selection and the line
+/// on the first row, which it paints.
+fn screen_to(
+    buf: &mut Buffer,
+    screen: &vt100::Screen,
+    area: TRect,
+    dim: bool,
+    sel: Option<(&Sel, usize)>,
+) {
     for row in 0..area.height {
+        let picked = sel.and_then(|(s, base)| s.cols_on(base + usize::from(row), area.width));
         for col in 0..area.width {
             let Some(cell) = screen.cell(row, col) else {
                 continue;
@@ -537,6 +601,12 @@ fn screen_to(buf: &mut Buffer, screen: &vt100::Screen, area: TRect, dim: bool) {
             }
             if dim {
                 style = style.add_modifier(Modifier::DIM);
+            }
+            if picked.is_some_and(|(from, to)| (from..to).contains(&col)) {
+                style = style
+                    .remove_modifier(Modifier::REVERSED)
+                    .fg(p().bg)
+                    .bg(p().blue);
             }
             let contents = cell.contents();
             let symbol = if contents.is_empty() { " " } else { contents };
@@ -620,5 +690,39 @@ fn which(f: &mut Frame, app: &App) {
             inner.height,
         );
         f.render_widget(Paragraph::new(lines), c);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::select::Pos;
+
+    #[test]
+    fn the_selection_is_painted_on_its_cells_only() {
+        let mut parser = vt100::Parser::new(2, 8, 10);
+        parser.process(b"one\r\ntwo");
+        let at = |line, col| Pos { line, col };
+        let sel = Sel::new(1, &mut parser, at(0, 1), at(1, 0));
+        let area = TRect::new(0, 0, 8, 2);
+        let mut buf = Buffer::empty(area);
+        screen_to(
+            &mut buf,
+            parser.screen(),
+            area,
+            false,
+            Some((&sel, sel.base(0))),
+        );
+        let painted = |x, y| buf[(x, y)].bg == p().blue;
+        assert!(!painted(0, 0), "before the start");
+        assert!(painted(1, 0) && painted(7, 0), "the rest of the first row");
+        assert!(painted(0, 1), "up to the head, inclusive");
+        assert!(!painted(1, 1), "after the head");
+    }
+
+    #[test]
+    fn the_banner_counts_characters() {
+        assert!(banner_text(1).contains("1 character "));
+        assert!(banner_text(12).contains("12 characters "));
     }
 }

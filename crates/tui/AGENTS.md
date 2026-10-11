@@ -9,12 +9,13 @@ daemon; it only talks to it through jw-proto.
 | File | What |
 |---|---|
 | `src/tui/mod.rs` | `run` (`:211`) and `App`: `on_key` (`:747`), `leader_key` (`:812`), `on_daemon` (`:672`), `reload` (`:432`, the sidebar's rows), `open_entry` (`:922`), `start_panes` (`:965`), `set_tree` (`:994`), `marks` (`:540`), sessions (`ask_session` `:1636`, `switch_session` `:1731`), the header's git (`find_here` `:866`) |
-| `src/tui/draw.rs` | `draw` (`:15`): `sidebar`, `header`, `status`, `which` (the key popup) |
+| `src/tui/draw.rs` | `draw` (`:15`): `sidebar`, `header`, `status`, `banner` (copied), `which` (the key popup) |
 | `src/tui/finder.rs` | the pickers: folders, workspaces, files, sessions |
 | `src/tui/modal.rs` | confirmations and the name inputs; `^␣ p`'s save-layout modal |
 | `src/tui/setup.rs` | the setup step of a project's first worktree: the layout builder, agent and setup, written to `.jw.toml` (addendum 10) |
 | `src/tui/settings_view.rs` | `^␣ ,` |
 | `src/tui/diffview.rs`, `mdview.rs` | the viewers, drawn as panes with no process (`view:` roles) |
+| `src/tui/select.rs` | selecting text in a pane (addendum 12): the selection as lines of the history, the text it covers, words and lines, the OSC 52 copy |
 | `src/tui/keys.rs` | the leader, and encoding keys and mouse events for the panes' programs |
 | `src/settings.rs` | `settings.json`: `get` (`:164`), `save` (`:149`), `ACTIONS` (`:39`, the rebindable keys) |
 | `src/theme.rs` | palettes: `p()` for every colour, `load` (`:175`) for the themes the settings name. Every theme is JSON: the built-ins are `themes/*.json` (`BUILTIN`), checked against `themes/schema.json` by a test |

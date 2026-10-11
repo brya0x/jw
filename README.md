@@ -81,7 +81,8 @@ git clone https://github.com/brya0x/jw && cd jw && cargo install --path crates/j
   you, `⚡` a dev server runs, `⚑` the PR is merged.
 - **Header:** follows the focused pane, like a shell prompt. It shows the repo and branch of
   the pane's current directory.
-- **Mouse:** click, scroll and drag the line between panes to resize. Shift+drag selects text.
+- **Mouse:** click, scroll and drag the line between panes to resize. Drag over text to select
+  and copy it ([below](#selecting-and-copying)).
 
 ## Keys (after `Ctrl-Space`)
 
@@ -113,6 +114,26 @@ git clone https://github.com/brya0x/jw && cd jw && cargo install --path crates/j
   the Markdown reader for a `.md`.
 
 All of these except `1-9 hjkl HJKL ? q` can be rebound in `^␣ ,`.
+
+## Selecting and copying
+
+Select text in any pane with the mouse. When you let go, jw copies it to the clipboard and
+shows `✓ Copied to clipboard · N characters` on the pane's top edge for a moment.
+
+- **Drag:** highlights from where you pressed to the pointer, over the screen and the scrollback.
+- **Double-click** selects a word, **triple-click** a line.
+- **Drag past the top or bottom** of the pane scrolls the history while you keep selecting.
+- **Programs that use the mouse** (nvim, lazygit) keep getting your drags, so jw selects
+  nothing in them. `Shift`+drag would select there, but Ghostty does not pass it to jw (iTerm2
+  and Terminal.app are untested). Use the program's own selection.
+- **Clearing:** a click, switching panes or typing in the pane clears the selection. Output
+  that scrolls the pane leaves it on its text.
+- **Wrapped lines** copy as one line, and trailing spaces are cut. A selection over 75 KB is
+  refused.
+
+jw copies with OSC 52, so your terminal has to allow it. Ghostty does (tested); iTerm2 needs "Applications
+in terminal may access clipboard" turned on; Terminal.app does not support it. The banner says
+what jw sent, and jw cannot see whether the terminal accepted it.
 
 ## Settings and themes
 
