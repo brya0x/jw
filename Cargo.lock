@@ -731,6 +731,7 @@ name = "jw-core"
 version = "0.0.16"
 dependencies = [
  "anyhow",
+ "libc",
  "qrcode",
  "serde",
  "serde_json",

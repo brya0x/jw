@@ -1003,3 +1003,68 @@ fn a_list_reads_without_writing_and_an_unreadable_file_leaks_no_path() {
     let v = phone.json();
     assert_eq!(v["t"], "sessions", "{v}");
 }
+
+#[test]
+fn a_diff_never_sends_what_a_symlink_points_at_and_names_no_path_of_the_pc() {
+    use jw_core::core::registry::{Entry, Registry};
+    let rig = Rig::start(Stub::Registers);
+    let repo = repo_with_origin(&rig, "demo");
+    // A secret outside the repository, and a link to it inside.
+    let secret = rig.dir.join("id_secret");
+    std::fs::write(&secret, "TOP-SECRET-KEY\n").unwrap();
+    std::os::unix::fs::symlink(&secret, repo.join("leak")).unwrap();
+    std::fs::write(repo.join("real.txt"), "visible\n").unwrap();
+    // A checkout with no origin: resolving it fails with a message that has
+    // its directory in it.
+    let lone = rig.dir.join("lone");
+    std::fs::create_dir_all(&lone).unwrap();
+    git(&lone, &["init", "-q", "-b", "main"]);
+
+    let state = rig.dir.join("state").join("jw");
+    std::fs::create_dir_all(&state).unwrap();
+    let wt = |id: &str, name: &str, path: &Path| Entry {
+        id: id.into(),
+        name: name.into(),
+        project: "demo".into(),
+        branch: "main".into(),
+        path: path.display().to_string(),
+        ..Entry::default()
+    };
+    Registry {
+        entries: vec![
+            wt("demo-git", "demo", &repo),
+            wt("demo-lone", "lone", &lone),
+        ],
+    }
+    .save(&state.join("workspaces.json"))
+    .unwrap();
+    let mut w = rig.watcher();
+    let code = up(&mut w);
+    let (mut phone, _) = pair(&rig, &code, &mut w, "Pixel");
+
+    phone.say(serde_json::json!({ "t": "diff", "ws": "demo-git" }));
+    let reply = phone.json();
+    let text = reply.to_string();
+    assert!(!text.contains("TOP-SECRET"), "the secret was sent: {text}");
+    let files = reply["files"].as_array().unwrap();
+    let leak = files
+        .iter()
+        .find(|f| f["path"] == "leak")
+        .expect("the link is listed");
+    assert_eq!(leak["unreadable"], "symlink", "{leak}");
+    assert_eq!(leak["hunks"], serde_json::json!([]));
+    let real = files.iter().find(|f| f["path"] == "real.txt").unwrap();
+    assert_eq!(real["unreadable"], serde_json::Value::Null);
+    assert_eq!(real["hunks"][0]["lines"][0]["text"], "visible");
+
+    phone.say(serde_json::json!({ "t": "diff", "ws": "demo-lone" }));
+    let v = phone.json();
+    assert_eq!(v["code"], "unsupported", "{v}");
+    assert!(
+        !v["msg"]
+            .as_str()
+            .unwrap()
+            .contains(rig.dir.to_str().unwrap()),
+        "{v}"
+    );
+}

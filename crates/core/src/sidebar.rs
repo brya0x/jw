@@ -211,6 +211,20 @@ pub fn sessions(state: &Path, reg_path: &Path) -> Result<Vec<SessionItem>> {
 /// (`folders::id_in`), so one is the same workspace wherever it is asked.
 pub fn find(state: &Path, reg_path: &Path, id: &str) -> Result<Option<Entry>> {
     let reg = Registry::load(reg_path)?;
+    // A worktree is in the registry as it is: no git, no folders to read.
+    if let Some(e) = reg.entries.iter().find(|e| e.id == id) {
+        return Ok(Some(e.clone()));
+    }
+    // A folder's id says its directory and its session, so only that one
+    // folder is looked at (one git probe), not every row of every session.
+    if let Some(rest) = id.strip_prefix("dir:") {
+        let (dir, session) = rest.rsplit_once('#').unwrap_or((rest, session::MAIN));
+        if let Ok(folders) = folders::Folders::load(&folders_path(state, session))
+            && let Some(f) = folders.folders.iter().find(|f| f.dir == dir)
+        {
+            return Ok(Some(folders::entry_for(f, session)));
+        }
+    }
     for name in names(state) {
         let Ok(folders) = folders::Folders::load(&folders_path(state, &name)) else {
             continue;
@@ -567,6 +581,47 @@ mod tests {
         let listed = load(&dir, &reg_path, "main").unwrap().len();
         assert_eq!(listed, 2, "a closed root and its worktree");
         assert_eq!(sessions(&dir, &reg_path).unwrap()[0].workspaces, listed);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_workspace_is_found_by_its_id_without_reading_every_row() {
+        let dir = std::env::temp_dir().join(format!("jw-fast-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let work = dir.join("sessions").join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::create_dir_all(dir.join("sessions").join("main")).unwrap();
+        folders::Folders {
+            folders: vec![folder("/nowhere/a", Some("A"))],
+        }
+        .save(&work.join("folders.json"))
+        .unwrap();
+        // The folder of session `work` by its id, though `main` has none; the
+        // other sessions' files are never needed (a corrupt one is no matter).
+        std::fs::write(
+            dir.join("sessions").join("main").join("folders.json"),
+            "{ bad",
+        )
+        .unwrap();
+        let reg_path = dir.join("workspaces.json");
+        Registry {
+            entries: vec![wt("w1", "w", "p", "work", 0)],
+        }
+        .save(&reg_path)
+        .unwrap();
+        let got = find(&dir, &reg_path, "dir:/nowhere/a#work")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (got.name.as_str(), got.id.as_str()),
+            ("A", "dir:/nowhere/a#work")
+        );
+        assert_eq!(find(&dir, &reg_path, "w1").unwrap().unwrap().name, "w");
+        assert!(
+            find(&dir, &reg_path, "dir:/nowhere/zzz#work")
+                .unwrap()
+                .is_none()
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -3,12 +3,18 @@
 //! files included, parsed into files, hunks and lines, plus the pairing and
 //! word-level marks a side-by-side view needs. No drawing here.
 
+use std::ffi::OsStr;
+use std::io::Read;
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
 use serde::Serialize;
-
-use crate::connectors::git;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
@@ -27,6 +33,11 @@ pub struct File {
     pub status: Status,
     pub binary: bool,
     pub hunks: Vec<Hunk>,
+    /// Why its content is not here, for a file that could not be read: a
+    /// symlink (never followed), something that is not a regular file, one
+    /// over the size limit, one the user may not read, a name that is not
+    /// UTF-8. Not an empty file: the diff says it could not look.
+    pub unreadable: Option<String>,
 }
 
 impl File {
@@ -76,6 +87,16 @@ pub struct Line {
 pub const MAX_FILES: usize = 500;
 pub const MAX_LINES: usize = 2000;
 pub const MAX_TEXT: usize = 500;
+/// The most JSON a reply may carry, well under a frame (16 MiB), so the phone
+/// always gets an answer it can take: what does not fit is left out and
+/// `truncated` says so.
+pub const MAX_REPLY: usize = 8 << 20;
+/// Room kept for what is not a file's: the title, `t`, `ws`, `truncated`.
+const ENVELOPE: usize = 4096;
+/// What a hunk costs besides its lines and its context.
+const HUNK_KEYS: usize = 96;
+/// A path longer than this is cut, like a line.
+const MAX_PATH: usize = 1024;
 
 /// A workspace's diff as the phone gets it.
 #[derive(Debug, Serialize)]
@@ -96,6 +117,8 @@ pub struct FileOut {
     pub added: usize,
     pub deleted: usize,
     pub truncated: bool,
+    /// Why its content is not here (see `File::unreadable`), else `null`.
+    pub unreadable: Option<String>,
     pub hunks: Vec<HunkOut>,
 }
 
@@ -123,86 +146,134 @@ pub fn report(entry: &crate::core::registry::Entry) -> Result<Report> {
         bail!("{} is not a git repository", entry.name);
     }
     let stream = crate::stream::Stream::resolve(entry)?;
-    let files = load(dir, &stream.base)?;
+    let loaded = load_with(dir, &stream.base, Bounds::PHONE)?;
     let title = if stream.base.is_empty() {
         format!("{} vs HEAD", entry.name)
     } else {
         format!("{} vs {}", entry.name, stream.base)
     };
-    Ok(limited(title, files))
+    let mut report = limited(title, loaded.files);
+    report.truncated |= loaded.truncated;
+    Ok(report)
 }
 
-/// `files` cut to the limits.
+/// `files` cut to the limits: files, lines a file, characters a line, and the
+/// reply's own size, counted as the JSON it will be.
 pub fn limited(title: String, files: Vec<File>) -> Report {
     let mut truncated = files.len() > MAX_FILES;
-    let files = files
-        .into_iter()
-        .take(MAX_FILES)
-        .map(|f| {
-            let (added, deleted) = (f.added(), f.deleted());
-            let mut left = MAX_LINES;
-            let mut cut = false;
-            let mut hunks = Vec::new();
-            for h in &f.hunks {
+    // The envelope (title, keys, what the bridge adds) is not in the files.
+    let mut budget = MAX_REPLY - ENVELOPE - 2 * title.len();
+    let mut out: Vec<FileOut> = Vec::new();
+    for f in files.into_iter().take(MAX_FILES) {
+        let (added, deleted) = (f.added(), f.deleted());
+        let path = clip_to(&f.path, MAX_PATH);
+        // What a file costs before its lines: its path, twice for a rename,
+        // and its keys.
+        let overhead = 160 + 2 * path.len() + f.old_path.as_ref().map_or(0, |p| p.len());
+        if budget < overhead {
+            truncated = true;
+            break;
+        }
+        budget -= overhead;
+        let mut left = MAX_LINES;
+        let mut cut = false;
+        let mut hunks = Vec::new();
+        'hunks: for h in &f.hunks {
+            if left == 0 {
+                cut = true;
+                break;
+            }
+            let hunk_cost = HUNK_KEYS + 2 * clip(&h.context).len();
+            if hunk_cost > budget {
+                cut = true;
+                truncated = true;
+                break;
+            }
+            budget -= hunk_cost;
+            let mut lines: Vec<LineOut> = Vec::new();
+            for l in &h.lines {
                 if left == 0 {
                     cut = true;
                     break;
                 }
-                let lines: Vec<LineOut> = h
-                    .lines
-                    .iter()
-                    .take(left)
-                    .map(|l| LineOut {
-                        k: match l.kind {
-                            Kind::Ctx => "ctx",
-                            Kind::Add => "add",
-                            Kind::Del => "del",
-                        },
-                        text: clip(&l.text),
-                        old: l.old_no,
-                        new: l.new_no,
-                    })
-                    .collect();
-                cut |= lines.len() < h.lines.len();
-                left -= lines.len();
-                hunks.push(HunkOut {
-                    context: clip(&h.context),
-                    old_start: h.old_start,
-                    new_start: h.new_start,
-                    lines,
-                });
+                let line = LineOut {
+                    k: match l.kind {
+                        Kind::Ctx => "ctx",
+                        Kind::Add => "add",
+                        Kind::Del => "del",
+                    },
+                    text: clip(&l.text),
+                    old: l.old_no,
+                    new: l.new_no,
+                };
+                // Counted as it will be sent: escapes make text longer.
+                let cost = serde_json::to_string(&line).map_or(MAX_TEXT * 6, |j| j.len()) + 1;
+                if cost > budget {
+                    cut = true;
+                    truncated = true;
+                    if !lines.is_empty() {
+                        hunks.push(HunkOut {
+                            context: clip(&h.context),
+                            old_start: h.old_start,
+                            new_start: h.new_start,
+                            lines,
+                        });
+                    }
+                    break 'hunks;
+                }
+                budget -= cost;
+                left -= 1;
+                lines.push(line);
             }
-            truncated |= cut;
-            FileOut {
-                path: f.path,
-                old_path: f.old_path,
-                status: match f.status {
-                    Status::Added => "added",
-                    Status::Deleted => "deleted",
-                    Status::Modified => "modified",
-                    Status::Renamed => "renamed",
-                },
-                binary: f.binary,
-                added,
-                deleted,
-                truncated: cut,
-                hunks,
+            if lines.len() < h.lines.len() {
+                cut = true;
             }
-        })
-        .collect();
+            hunks.push(HunkOut {
+                context: clip(&h.context),
+                old_start: h.old_start,
+                new_start: h.new_start,
+                lines,
+            });
+        }
+        truncated |= cut;
+        out.push(FileOut {
+            path,
+            old_path: f.old_path,
+            status: match f.status {
+                Status::Added => "added",
+                Status::Deleted => "deleted",
+                Status::Modified => "modified",
+                Status::Renamed => "renamed",
+            },
+            binary: f.binary,
+            added,
+            deleted,
+            truncated: cut,
+            unreadable: f.unreadable,
+            hunks,
+        });
+        if budget == 0 {
+            truncated = true;
+            break;
+        }
+    }
     Report {
         title,
         truncated,
-        files,
+        files: out,
     }
 }
 
 /// A line of at most `MAX_TEXT` characters, cut with `…`.
 fn clip(s: &str) -> String {
-    if s.chars().count() <= MAX_TEXT {
+    clip_to(s, MAX_TEXT)
+}
+
+fn clip_to(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
         return s.to_string();
     }
-    let mut out: String = s.chars().take(MAX_TEXT - 1).collect();
+    let mut out: String = s.chars().take(max - 1).collect();
     out.push('…');
     out
 }
@@ -210,37 +281,217 @@ fn clip(s: &str) -> String {
 /// git's empty tree, the base of a repository with no commit yet.
 const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
+/// What a diff may cost, so a huge or hostile repository cannot hold a thread
+/// or the memory of the daemon: git's output, how long git may run, and the
+/// size of an untracked file that is read.
+#[derive(Debug, Clone, Copy)]
+pub struct Bounds {
+    pub max_output: usize,
+    pub timeout: Duration,
+    pub max_file: u64,
+}
+
+impl Bounds {
+    /// For the TUI's own viewer.
+    pub const LOCAL: Bounds = Bounds {
+        max_output: 64 << 20,
+        timeout: Duration::from_secs(60),
+        max_file: 10 << 20,
+    };
+    /// For a phone, over a tunnel.
+    pub const PHONE: Bounds = Bounds {
+        max_output: 16 << 20,
+        timeout: Duration::from_secs(20),
+        max_file: 1 << 20,
+    };
+}
+
+/// A diff, and whether a bound cut it short.
+pub struct Loaded {
+    pub files: Vec<File>,
+    pub truncated: bool,
+}
+
 /// Everything the stream changed against `origin/<base>`: committed,
 /// staged, unstaged and untracked. With no `base` (a repository whose
 /// origin has no default branch, or no origin), against `HEAD`: what is
 /// not committed yet (REQ-123).
 pub fn load(dir: &Path, base: &str) -> Result<Vec<File>> {
+    Ok(load_with(dir, base, Bounds::LOCAL)?.files)
+}
+
+/// [`load`] within `bounds`.
+pub fn load_with(dir: &Path, base: &str, bounds: Bounds) -> Result<Loaded> {
     let base_ref = format!("origin/{base}");
-    let mut args = vec!["diff", "-M", "--no-color", "--no-ext-diff"];
+    let mut args = vec!["diff", "-M", "--no-color", "--no-ext-diff", "--no-textconv"];
     if base.is_empty() {
         // Before the first commit there is no HEAD: everything staged is new.
-        let born = git::output(dir, &["rev-parse", "--verify", "--quiet", "HEAD"]).is_ok();
+        let born = git_bounded(
+            "git",
+            dir,
+            &["rev-parse", "--verify", "--quiet", "HEAD"],
+            &bounds,
+        )
+        .is_ok();
         args.push(if born { "HEAD" } else { EMPTY_TREE });
     } else {
         args.extend(["--merge-base", &base_ref]);
     }
-    let out = git::output(dir, &args)?;
-    let mut files = parse(&out);
+    let (out, mut truncated) = git_bounded("git", dir, &args, &bounds)?;
+    let mut files = parse(&String::from_utf8_lossy(&out));
     // git diff leaves out untracked files; they are new files all the same.
-    let untracked = git::output(dir, &["ls-files", "--others", "--exclude-standard", "-z"])?;
-    for path in untracked.split('\0').filter(|p| !p.is_empty()) {
-        files.push(untracked_file(dir, path));
+    let (names, cut) = git_bounded(
+        "git",
+        dir,
+        &["ls-files", "--others", "--exclude-standard", "-z"],
+        &bounds,
+    )?;
+    truncated |= cut;
+    // Names are bytes, not text: one that is not UTF-8 is said to be
+    // unreadable, not changed into another name and read as an empty file.
+    for raw in names.split(|b| *b == 0).filter(|p| !p.is_empty()) {
+        files.push(untracked_file(dir, raw, &bounds));
     }
     files.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(files)
+    Ok(Loaded { files, truncated })
 }
 
-fn untracked_file(dir: &Path, path: &str) -> File {
-    let data = std::fs::read(dir.join(path)).unwrap_or_default();
-    let binary = data.contains(&0);
-    let hunks = if binary || data.is_empty() {
-        Vec::new()
-    } else {
+/// Runs git (or another `program`, in tests) in `dir` for at most
+/// `bounds.timeout`, reading at most `bounds.max_output` bytes of stdout; the
+/// child is killed and reaped when either bound is hit, so nothing outlives
+/// the call. `true` says the output was cut.
+///
+/// git runs with a clean environment and without what a repository can set to
+/// run a command of its own on a read: `core.fsmonitor`, and (in `load_with`'s
+/// arguments) textconv. It never asks a question.
+fn git_bounded(
+    program: &str,
+    dir: &Path,
+    args: &[&str],
+    bounds: &Bounds,
+) -> Result<(Vec<u8>, bool)> {
+    let mut cmd = Command::new(program);
+    if program == "git" {
+        cmd.args(["-c", "core.fsmonitor=false"]);
+    }
+    cmd.args(args)
+        .current_dir(dir)
+        .env_clear()
+        .env(
+            "PATH",
+            std::env::var_os("PATH").unwrap_or_else(|| "/usr/bin:/bin".into()),
+        )
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(home) = std::env::var_os("HOME") {
+        cmd.env("HOME", home);
+    }
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("{program} {}: {e}", args.join(" ")))?;
+    let (Some(mut stdout), Some(mut stderr)) = (child.stdout.take(), child.stderr.take()) else {
+        let _ = child.kill();
+        let _ = child.wait();
+        bail!("{program} has no output");
+    };
+    let cap = bounds.max_output;
+    let (tx, done) = mpsc::channel();
+    thread::spawn(move || {
+        let mut out = Vec::new();
+        let mut buf = [0u8; 32 << 10];
+        let mut cut = false;
+        while let Ok(n) = stdout.read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+            if out.len() + n > cap {
+                out.extend_from_slice(&buf[..cap - out.len()]);
+                cut = true;
+                break;
+            }
+            out.extend_from_slice(&buf[..n]);
+        }
+        let _ = tx.send((out, cut));
+    });
+    let err = thread::spawn(move || {
+        let mut msg = Vec::new();
+        let _ = (&mut stderr).take(8 << 10).read_to_end(&mut msg);
+        String::from_utf8_lossy(&msg).trim().to_string()
+    });
+    let until = Instant::now() + bounds.timeout;
+    let (out, cut) = loop {
+        match done.recv_timeout(Duration::from_millis(25)) {
+            Ok(got) => break got,
+            Err(mpsc::RecvTimeoutError::Timeout) if Instant::now() < until => {}
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                bail!(
+                    "{program} {} took longer than {:?}",
+                    args.join(" "),
+                    bounds.timeout
+                );
+            }
+        }
+    };
+    if cut {
+        // More than is wanted: stop it, and say so.
+        let _ = child.kill();
+        let _ = child.wait();
+        return Ok((out, true));
+    }
+    let status = child.wait()?;
+    if !status.success() {
+        let msg = err.join().unwrap_or_default();
+        let msg = if msg.is_empty() {
+            status.to_string()
+        } else {
+            msg
+        };
+        bail!("{program} {}: {msg}", args.join(" "));
+    }
+    Ok((out, false))
+}
+
+/// An untracked file as an added one, read only if it is a regular file within
+/// the bounds: never through a symlink (it could point at anything the daemon
+/// can read), never a FIFO or a device (it could block or never end).
+fn untracked_file(dir: &Path, raw: &[u8], bounds: &Bounds) -> File {
+    let mut file = File {
+        path: String::from_utf8_lossy(raw).into_owned(),
+        old_path: None,
+        status: Status::Added,
+        binary: false,
+        hunks: Vec::new(),
+        unreadable: None,
+    };
+    if std::str::from_utf8(raw).is_err() {
+        file.unreadable = Some("the name is not UTF-8".into());
+        return file;
+    }
+    let data = match read_regular(&dir.join(OsStr::from_bytes(raw)), bounds.max_file) {
+        Ok(Ok(data)) => data,
+        Ok(Err(why)) => {
+            file.unreadable = Some(why.into());
+            return file;
+        }
+        Err(e) => {
+            file.unreadable = Some(
+                match e.kind() {
+                    std::io::ErrorKind::PermissionDenied => "permission denied",
+                    std::io::ErrorKind::NotFound => "it went away",
+                    _ => "it could not be read",
+                }
+                .into(),
+            );
+            return file;
+        }
+    };
+    file.binary = data.contains(&0);
+    if !file.binary && !data.is_empty() {
         let text = String::from_utf8_lossy(&data);
         let lines: Vec<Line> = text
             .lines()
@@ -252,20 +503,51 @@ fn untracked_file(dir: &Path, path: &str) -> File {
                 new_no: Some(i as u32 + 1),
             })
             .collect();
-        vec![Hunk {
+        file.hunks = vec![Hunk {
             context: String::new(),
             old_start: 0,
             new_start: 1,
             lines,
-        }]
-    };
-    File {
-        path: path.to_string(),
-        old_path: None,
-        status: Status::Added,
-        binary,
-        hunks,
+        }];
     }
+    file
+}
+
+/// The bytes of `path` if it is a regular file of at most `max` bytes; else
+/// why not. Opened without following a symlink and without blocking, and its
+/// type checked on what was opened, so swapping the file for a link or a FIFO
+/// between a look and the open gains nothing.
+fn read_regular(path: &Path, max: u64) -> std::io::Result<Result<Vec<u8>, &'static str>> {
+    let meta = std::fs::symlink_metadata(path)?;
+    if meta.file_type().is_symlink() {
+        return Ok(Err("symlink"));
+    }
+    if !meta.is_file() {
+        return Ok(Err("not a regular file"));
+    }
+    let file = match std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+    {
+        Ok(f) => f,
+        // A link put there after the look: ELOOP.
+        Err(e) if e.raw_os_error() == Some(libc::ELOOP) => return Ok(Err("symlink")),
+        Err(e) => return Err(e),
+    };
+    let opened = file.metadata()?;
+    if !opened.is_file() {
+        return Ok(Err("not a regular file"));
+    }
+    if opened.len() > max {
+        return Ok(Err("too large"));
+    }
+    let mut data = Vec::new();
+    file.take(max + 1).read_to_end(&mut data)?;
+    if data.len() as u64 > max {
+        return Ok(Err("too large"));
+    }
+    Ok(Ok(data))
 }
 
 /// Parses `git diff` output (unified, with git's extended headers).
@@ -276,6 +558,7 @@ pub fn parse(text: &str) -> Vec<File> {
         if let Some(rest) = raw.strip_prefix("diff --git ") {
             let path = rest.split_once(" b/").map_or(rest, |(_, b)| b).to_string();
             files.push(File {
+                unreadable: None,
                 path,
                 old_path: None,
                 status: Status::Modified,
@@ -485,6 +768,7 @@ mod tests {
             old_path: None,
             status: Status::Modified,
             binary: false,
+            unreadable: None,
             hunks: vec![Hunk {
                 context: "fn main".into(),
                 old_start: 1,
@@ -652,6 +936,274 @@ Binary files /dev/null and b/img.png differ
         );
         let (ra, rb) = word_changes("same", "same");
         assert!(ra.is_empty() && rb.is_empty());
+    }
+
+    // --- bounds, symlinks and hostile repositories (the W3 review) ---
+
+    /// A repository with a committed `a.txt`, the way the other tests make one.
+    fn repo() -> (tempfile::TempDir, std::path::PathBuf) {
+        use crate::connectors::git::tests::{must_git, new_test_repo};
+        let (d, work) = new_test_repo();
+        std::fs::write(work.join("a.txt"), "one\ntwo\n").unwrap();
+        must_git(&work, &["add", "a.txt"]);
+        must_git(
+            &work,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-q",
+                "-m",
+                "a",
+            ],
+        );
+        (d, work)
+    }
+
+    fn by_name<'a>(files: &'a [File], name: &str) -> &'a File {
+        files
+            .iter()
+            .find(|f| f.path == name)
+            .unwrap_or_else(|| panic!("no {name}"))
+    }
+
+    #[test]
+    fn a_symlink_is_never_followed_so_what_it_points_at_never_leaves() {
+        let (_d, work) = repo();
+        let outside = tempfile::tempdir().unwrap();
+        let secret = outside.path().join("id_secret");
+        std::fs::write(&secret, "TOP-SECRET-KEY\n").unwrap();
+        std::os::unix::fs::symlink(&secret, work.join("leak")).unwrap();
+        std::os::unix::fs::symlink("/dev/zero", work.join("zero")).unwrap();
+        let loaded = load_with(&work, "trunk", Bounds::PHONE).unwrap();
+        for name in ["leak", "zero"] {
+            let f = by_name(&loaded.files, name);
+            assert_eq!(f.unreadable.as_deref(), Some("symlink"), "{name}");
+            assert!(f.hunks.is_empty());
+        }
+        let json = serde_json::to_string(&limited("t".into(), loaded.files)).unwrap();
+        assert!(!json.contains("TOP-SECRET"), "the secret was sent");
+        assert!(json.contains("\"unreadable\":\"symlink\""), "{json}");
+    }
+
+    #[test]
+    fn a_fifo_does_not_hang_the_diff_or_the_read() {
+        let (_d, work) = repo();
+        let pipe = work.join("pipe");
+        let path = std::ffi::CString::new(pipe.as_os_str().as_bytes()).unwrap();
+        // SAFETY: a path we made, and a mode.
+        assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+        // git itself does not list a FIFO as untracked, so the diff goes by.
+        let (tx, rx) = mpsc::channel();
+        let w = work.clone();
+        thread::spawn(move || {
+            let _ = tx.send(load_with(&w, "trunk", Bounds::PHONE));
+        });
+        rx.recv_timeout(Duration::from_secs(10))
+            .expect("the diff hung on a FIFO")
+            .unwrap();
+        // And the read refuses one on its own, should git ever name it or the
+        // file be swapped for one after the listing; without blocking.
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let _ = tx.send(read_regular(&pipe, 1000));
+        });
+        let got = rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the read hung on a FIFO");
+        assert_eq!(got.unwrap().unwrap_err(), "not a regular file");
+    }
+
+    #[test]
+    fn a_file_over_the_size_limit_is_not_read_and_one_at_it_is() {
+        let (_d, work) = repo();
+        std::fs::write(work.join("big.txt"), "x".repeat(101)).unwrap();
+        std::fs::write(work.join("fits.txt"), "y".repeat(100)).unwrap();
+        let b = Bounds {
+            max_file: 100,
+            ..Bounds::PHONE
+        };
+        let files = load_with(&work, "trunk", b).unwrap().files;
+        assert_eq!(
+            by_name(&files, "big.txt").unreadable.as_deref(),
+            Some("too large")
+        );
+        assert!(by_name(&files, "big.txt").hunks.is_empty());
+        let fits = by_name(&files, "fits.txt");
+        assert!(fits.unreadable.is_none() && fits.hunks[0].lines.len() == 1);
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_read_says_why_not_that_it_is_empty() {
+        // SAFETY: only asks who we are.
+        if unsafe { libc::geteuid() } == 0 {
+            return; // root reads anything
+        }
+        let (_d, work) = repo();
+        let path = work.join("locked.txt");
+        std::fs::write(&path, "secret\n").unwrap();
+        std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o000))
+            .unwrap();
+        let files = load_with(&work, "trunk", Bounds::PHONE).unwrap().files;
+        let f = by_name(&files, "locked.txt");
+        assert_eq!(f.unreadable.as_deref(), Some("permission denied"));
+        assert!(f.hunks.is_empty());
+    }
+
+    #[test]
+    fn a_name_that_is_not_utf8_is_unreadable_not_another_name() {
+        let (_d, work) = repo();
+        let name = OsStr::from_bytes(b"bad\xffname.txt");
+        if std::fs::write(work.join(name), "x\n").is_err() {
+            return; // this file system keeps only valid names
+        }
+        let files = load_with(&work, "trunk", Bounds::PHONE).unwrap().files;
+        let f = files
+            .iter()
+            .find(|f| f.path.starts_with("bad"))
+            .expect("listed");
+        assert_eq!(f.unreadable.as_deref(), Some("the name is not UTF-8"));
+        assert!(f.hunks.is_empty());
+    }
+
+    #[test]
+    fn git_gets_a_deadline_and_a_cap_and_nothing_outlives_it() {
+        let dir = std::env::temp_dir();
+        // A command that never ends: killed at the deadline, and reaped.
+        let pidfile = dir.join(format!("jw-bounded-{}.pid", std::process::id()));
+        let _ = std::fs::remove_file(&pidfile);
+        let script = format!("echo $$ > {}; exec sleep 30", pidfile.display());
+        let b = Bounds {
+            timeout: Duration::from_millis(300),
+            ..Bounds::PHONE
+        };
+        let t = Instant::now();
+        let err = git_bounded("sh", &dir, &["-c", &script], &b).unwrap_err();
+        assert!(err.to_string().contains("took longer"), "{err}");
+        assert!(t.elapsed() < Duration::from_secs(3), "{:?}", t.elapsed());
+        let pid: i32 = std::fs::read_to_string(&pidfile)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let _ = std::fs::remove_file(&pidfile);
+        // SAFETY: signal 0 only checks the process exists.
+        assert_ne!(unsafe { libc::kill(pid, 0) }, 0, "the child is still there");
+
+        // Output without end: cut at the cap, and said so.
+        let b = Bounds {
+            max_output: 1000,
+            ..Bounds::PHONE
+        };
+        let t = Instant::now();
+        let (out, cut) = git_bounded("yes", &dir, &[], &b).unwrap();
+        assert!(cut && out.len() == 1000, "{} bytes, cut {cut}", out.len());
+        assert!(t.elapsed() < Duration::from_secs(3));
+    }
+
+    /// Runs `script` and tells a marker file it ran; false if it never did.
+    fn marker_script(
+        dir: &std::path::Path,
+        name: &str,
+    ) -> (std::path::PathBuf, std::path::PathBuf) {
+        let marker = dir.join(format!("{name}.ran"));
+        let script = dir.join(format!("{name}.sh"));
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\ntouch {}\ncat \"$1\" 2>/dev/null\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        (script, marker)
+    }
+
+    #[test]
+    fn a_repository_cannot_run_a_command_of_its_own_by_being_diffed() {
+        use crate::connectors::git::tests::must_git;
+        let (d, work) = repo();
+        // `.gitattributes` names a driver, `.git/config` gives it a textconv.
+        let (script, marker) = marker_script(d.path(), "textconv");
+        std::fs::write(work.join(".gitattributes"), "*.txt diff=evil\n").unwrap();
+        must_git(
+            &work,
+            &["config", "diff.evil.textconv", script.to_str().unwrap()],
+        );
+        std::fs::write(work.join("a.txt"), "one\n2\n").unwrap();
+        // The control: without our flags the repository does run it.
+        must_git(&work, &["diff", "--no-ext-diff"]);
+        assert!(
+            marker.exists(),
+            "the control did not run the textconv: the test proves nothing"
+        );
+        std::fs::remove_file(&marker).unwrap();
+        load_with(&work, "trunk", Bounds::PHONE).unwrap();
+        assert!(!marker.exists(), "diffing ran the repository's textconv");
+
+        // And core.fsmonitor, which runs on a read of the index.
+        let (script, fs_marker) = marker_script(d.path(), "fsmonitor");
+        must_git(
+            &work,
+            &["config", "core.fsmonitor", script.to_str().unwrap()],
+        );
+        let _ = std::process::Command::new("git")
+            .args(["status", "--short"])
+            .current_dir(&work)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output();
+        if fs_marker.exists() {
+            std::fs::remove_file(&fs_marker).unwrap();
+            load_with(&work, "trunk", Bounds::PHONE).unwrap();
+            assert!(
+                !fs_marker.exists(),
+                "diffing ran the repository's fsmonitor"
+            );
+        }
+    }
+
+    #[test]
+    fn a_reply_stays_under_its_budget_and_says_it_was_cut() {
+        // About 20 MB of lines: 100 files of 2000 lines of 100 characters.
+        let files: Vec<File> = (0..100)
+            .map(|i| file(&format!("f{i}.rs"), 2000, &"x".repeat(100)))
+            .collect();
+        let report = limited("t".into(), files);
+        let json = serde_json::to_string(&report).unwrap();
+        assert!(report.truncated);
+        assert!(json.len() <= MAX_REPLY, "{} bytes", json.len());
+        assert!(
+            json.len() > MAX_REPLY / 2,
+            "the budget cut far too early: {}",
+            json.len()
+        );
+        // Escapes cost more than they look: control characters become \u00XX.
+        let files: Vec<File> = (0..20)
+            .map(|i| file(&format!("g{i}.rs"), 2000, &"\u{1}".repeat(400)))
+            .collect();
+        let json = serde_json::to_string(&limited("t".into(), files)).unwrap();
+        assert!(json.len() <= MAX_REPLY, "{} bytes", json.len());
+    }
+
+    #[test]
+    fn the_cuts_land_on_the_character_boundary_and_paths_are_cut_too() {
+        let exact = "a".repeat(MAX_TEXT);
+        assert_eq!(clip(&exact), exact);
+        let over = "a".repeat(MAX_TEXT + 1);
+        let cut = clip(&over);
+        assert_eq!(cut.chars().count(), MAX_TEXT);
+        assert!(cut.ends_with('…'));
+        // Multi-byte: 501 two-byte characters cut without splitting one.
+        let wide = "é".repeat(MAX_TEXT + 1);
+        let cut = clip(&wide);
+        assert_eq!(cut.chars().count(), MAX_TEXT);
+        assert!(cut.starts_with("éé") && cut.ends_with('…'));
+        let report = limited("t".into(), vec![file(&"p".repeat(5000), 1, "x")]);
+        assert_eq!(report.files[0].path.chars().count(), 1024);
     }
 
     #[test]

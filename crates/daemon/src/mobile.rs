@@ -100,7 +100,10 @@ fn lister() -> Lister {
                 let entry = sidebar::find(&state, &reg, id)
                     .map_err(|_| "the workspaces could not be read".to_string())?
                     .ok_or_else(|| format!("no workspace {id}"))?;
-                let report = jw_core::diff::report(&entry).map_err(|e| format!("{e:#}"))?;
+                // git's and jw's own messages name directories of the PC; the
+                // phone is told the workspace's name instead.
+                let report = jw_core::diff::report(&entry)
+                    .map_err(|e| format!("{e:#}").replace(&entry.path, &entry.name))?;
                 serde_json::to_value(report)
                     .map_err(|_| "the diff could not be made".to_string())?
             }
