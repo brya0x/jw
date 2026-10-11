@@ -72,7 +72,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 | Folders | `src/folders.rs` replaces `src/free.rs`. `folders.json` in the state dir holds `[{id, dir, opened, created}]`: the project roots and plain folders the user opened. The first load migrates `free.json` (each session becomes a folder; the file is renamed `.migrated`). A folder's `Entry` uses `project` = the git project name, or the folder name for a plain folder |
 | Pane env | the JW_* vars of `actions::jw_env` (a plain folder gets JW_ID, JW_NAME, JW_PROJECT) + `JW_PANE_ID` |
 | Theme | `src/theme.rs`: One Dark / One Light `Palette`s that every draw module (and the syntect theme) asks for through `theme::p()`. Pick: `JW_THEME=dark\|light` pins one (OPEN-5); otherwise macOS's `AppleInterfaceStyle`, re-read every 3 s so a switch repaints; dark elsewhere. Panes (S14): on every tick the TUI sends `ClientMsg::Theme` (`theme::wire()`) when `{dark, fg, bg}` changed. The daemon keeps it in `session.json` and answers from `Titles` (`daemon/src/lib.rs`): OSC 10/11 `?` → `rgb:RRRR/GGGG/BBBB` + ST, `?996n` → `?997;1\|2n`, `?2031$p` → `?2031;1\|2$y`, `6n` → cursor, `c` → `?1;2c`. A pane that set `?2031h` gets `?997;1\|2n` on a dark↔light switch. `COLORFGBG` is `15;0` / `0;15` at spawn. Querying the outer terminal is left for later (OPEN-9) |
-| Workspaces list | `App::reload` builds the rows. Each opened folder becomes a project row, and each registry worktree goes under its project's row, the project matched by `Repo::open(worktree).root` (`connectors/git.rs:56`). A project that has worktrees but no folder entry still gets a row, closed (`○`); opening it adds it to `folders.json` |
+| Workspaces list | `App::reload` builds the rows. Each opened folder becomes a project row, and each registry worktree goes under its project's row, the project matched by `Repo::open(worktree).root` (`connectors/git.rs:56`). A project that has worktrees but no folder entry still gets a row, closed (`○`); opening it adds it to `folders.json`. Rows also rebuild when another process rewrites `workspaces.json` or `folders.json` (addendum 14) |
 | Project root opening | `Stream::resolve` (`stream.rs:51`) for a folder: git with a jw config → `cfg.layout.tree()`; git without a config, or a plain folder → one shell. Env `JW_ID`, `JW_NAME`, `JW_PROJECT`; no slot and no ports |
 | Marks | `PaneInfo` (`proto/mod.rs`) gains `busy: bool` (output in the last 2 s) and `bell: bool`. In the daemon, a `vt100::Callbacks::audible_bell` (and OSC 9) sets `bell`, and an `Input` to that pane clears it. While a workspace is open the client sends `List` every 2 s. PR state: `gh pr list` per worktree branch in the background every 60 s, cached in `App::prs` |
 | Viewer panes | A leaf whose role starts with `view:` (`view:diff`, `view:md:<path>`) has no PTY. The daemon gives it an id and keeps it in the tree and `session.json`, nothing more (`Split` with such a role skips `spawn`; `Kill` finds its workspace by tree). The client holds the content in `App::views: BTreeMap<PaneId, View>`, rebuilt from the role when it attaches (a diff is reloaded, a `.md` is re-read) |
@@ -342,6 +342,29 @@ Terminal cells cannot blend, so a fade is a colour interpolated toward the backg
 - REQ-147 THE motion SHALL add no `ClientMsg` and no `PaneInfo` field, and `PROTOCOL` SHALL stay at 8.
 - REQ-148 WHEN a key or a click arrives during an animation, the TUI SHALL handle it before the next frame; WHEN a change interrupts an animation, the new one SHALL start from what is on screen; IF a frame takes longer than `FRAME`, THEN the animation SHALL jump to its end state.
 
+### Addendum 14 (W1): the sidebar follows the registry
+
+A TUI notices changes to `workspaces.json` and the session's `folders.json` made by anyone else (`jw worktree`, `jw open`, another TUI) and rebuilds its rows without a restart. Until now only its own jobs called `App::reload`.
+
+| Piece | Shape |
+|---|---|
+| Watched | `workspaces.json` (`registry::default_path`) and the session's `folders.json` (`folders::path`). Both are replaced by temp + rename, so the mtime moves on every write |
+| `RegistryWatch` | Like `settings::Watch`: `seen: [(PathBuf, Option<SystemTime>)]`, `stat` only; re-targets when `session::current` changes. Checked in `Msg::Tick` inside the `ticks % 4 == 0` block (every 2 s) |
+| Rebuild | `reload` splits into `load_rows` (read-only: no `fill_roots`, no save) and applying the rows. A change runs `load_rows` through `App::background` and comes back as `Job::Rows` |
+| Overlay | While `modal`, `finder` or `settings` is `Some`, the rows wait in `App::pending_rows` and apply when the last one closes |
+| Own writes | `on_job` and the inline writers keep calling `reload`, then re-stamp the watch |
+
+- REQ-150 WHEN `workspaces.json` or the session's `folders.json` changes on disk, the TUI SHALL rebuild the sidebar rows within 3 s without a keypress.
+- REQ-151 THE TUI SHALL detect the change with `stat` only, on the existing `Msg::Tick`, and SHALL add no thread, timer or `next_wake` entry.
+- REQ-152 WHILE the TUI is idle with no animation, THE event loop SHALL block on its channel as before; the watch SHALL cost no extra wake.
+- REQ-153 WHEN rows are rebuilt, THE TUI SHALL keep the open workspace (`App::active`) by id, with its panes, focus and layout.
+- REQ-154 WHILE a modal, picker or settings screen is open, THE TUI SHALL hold the rebuilt rows and SHALL apply them when it closes.
+- REQ-155 THE live rebuild SHALL NOT write `workspaces.json` or `folders.json`.
+- REQ-156 THE live rebuild SHALL run off the UI thread, through `App::background`.
+- REQ-157 IF the file is half-written or does not parse, THEN the TUI SHALL keep the current rows and try again on the next change, without repeating an error in the status bar.
+- REQ-158 WHEN the TUI writes the registry itself, it SHALL NOT rebuild a second time for that write.
+- REQ-159 THE change SHALL add no `ClientMsg` and no `PaneInfo` field, and `PROTOCOL` SHALL stay at 8.
+
 ---
 
 ## Rationale
@@ -377,6 +400,11 @@ Terminal cells cannot blend, so a fade is a colour interpolated toward the backg
 - RAT-31 **Welcome state in `settings.json`.** It already holds the user's choices and is re-read on change (REQ-69); a second file for one boolean is not worth it.
 - RAT-32 **The which-key delay drops to 150 ms.** A new user needs the keys on screen; an expert who types the chord never sees the popup either way, and `which_delay_ms` still sets it.
 - RAT-33 **Rejected: easing in the daemon or on the wire.** Animation is per viewer and cosmetic; putting it in `PaneInfo` would bump `PROTOCOL` for nothing (RAT-26's reasoning).
+- RAT-34 **W1: poll the mtime on the `Tick`.** The writers are the CLI (`cli.rs:186,261`) and other TUIs; the daemon writes none of these files and `jw worktree` works with no daemon. A push needs the daemon to watch files it never opens, or every writer to call it first. The TUI already polls `settings.json` this way on the same tick (REQ-69), so this is a second `Watch`, not a new mechanism.
+- RAT-35 **W1, rejected: a daemon message.** `PROTOCOL` 9, a new `DaemonMsg`, a daemon-side watcher or a CLI that connects to notify, and the sessions problem (one daemon serves every session). All of it for the same latency.
+- RAT-36 **W1, rejected: reload on focus.** The case that hurts is an agent in a pane of this same TUI running `jw worktree`; the terminal never changes focus. Focus events are not requested today (`Msg::Term(_) => {}`) and need `EnableFocusChange`.
+- RAT-37 **W1, rejected: a notify/fsevent crate.** A dependency and a thread for two files, when `Tick` already wakes every 500 ms and two `stat`s per 2 s cost nothing measurable.
+- RAT-38 **W1: the live rebuild is read-only.** `reload` runs `fill_roots` and saves (`tui/mod.rs:864`); on every external change that read-modify-write would race the writer that triggered it (no lock) and could drop its entry. Startup and the TUI's own jobs keep it.
 - RAT-22 **`curl`, not a crate,** for `install <url>`: rare, and jw already shells out to `git` and `gh`; `ureq` would add TLS and about 40 crates for one command.
 
 ## Risks
@@ -426,6 +454,11 @@ Terminal cells cannot blend, so a fade is a colour interpolated toward the backg
 - RISK-43 **A late frame.** Drawing the panes' content shifted by a few cells (REQ-136) re-renders every pane each frame. REQ-148 covers a frame that overruns `FRAME`: the animation jumps to its end state instead of lagging behind input. The cost is measured by hand in Ghostty.
 - RISK-44 **Synchronized output can freeze the screen.** A terminal holds the frame until `CSI ? 2026 l` (Ghostty gives up after a second). REQ-139 closes it on every exit path; terminals that do not know the mode ignore it.
 - RISK-45 **The shorter which-key delay shows the popup to people who type fast.** A chord typed within 150 ms still never shows it; one typed slower flashes it for an instant, softened by the fade. `which_delay_ms` restores the old 600 ms.
+- RISK-46 **`reload` blocks the UI today**: file reads on the main thread, plus a `git` per entry without `root` (`actions.rs:51`). REQ-156 moves the live path off it; the legacy calls (`on_job`, `close`, `submit_modal`) stay inline.
+- RISK-47 **Rows replaced under an open overlay.** A modal or `Finder` may hold a row index rather than an entry; verify in `modal.rs` and `finder.rs`. REQ-154 defers instead of proving it.
+- RISK-48 **Stamp drift.** A write between our read and our re-stamp is missed until the next write. Stamp before reading, not after.
+- RISK-49 **mtime granularity.** Two writes inside one filesystem timestamp tick look like one; a read after the second still sees both. Accepted.
+- RISK-50 **Lost updates between writers stay** (no lock, `registry.rs:161`; `session::rename` and `actions::rename` read-modify-write). Out of scope: W1 makes them visible, not likelier.
 - Closed by addendum 3: RISK-5 (own registry), RISK-7 (hooks), RISK-9 (frames), RISK-16 (`nvim --server`), RISK-17 (`root` in the registry).
 
 ## Parts (each one ends with `cargo test` + `clippy` green and a local commit on `feat/rust-tui`; nothing is pushed)
@@ -484,6 +517,7 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | M4 ✓ | Popups fade in, picker row slides, which-key at 150 ms and `which_sticky` (a row in `^␣ ,`) | 141, 144 | `tui/draw.rs`, `tui/finder.rs`, `tui/modal.rs`, `settings.rs` |
 | M5 ✓ | Focus border ease; eased wheel scroll | 145 | `tui/draw.rs`, `tui/mod.rs` |
 | M6 ✓ | First-run welcome, `welcomed` and `JW_WELCOME=0` (set by `scripts/drive.py`) | 146, 149 | `tui/draw.rs`, `settings.rs`, `scripts/drive.py` |
+| W1 | The sidebar follows the registry: `RegistryWatch` on the `Tick`, read-only `load_rows` in the background, rows held while an overlay is open | 150–159 | `tui/registry_watch.rs`, `tui/mod.rs` |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 
 Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{new_stream, rm_plan, rm, sync, done_plan}`, `src/diff.rs`, `src/view/md.rs` and `Modal::Rm` (type the name) stay as they are.
@@ -502,6 +536,8 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - OPEN-11 → the built-in themes are not written to disk on first run; `jw theme export` gives each one (S16).
 - OPEN-12 → per-theme syntax colours (a `syntax` block for syntect) are later; highlighting still picks syntect's theme by `dark` (`view/highlight.rs:27`).
 - OPEN-13 → copy on release, drag past the edge scrolls, a banner at the pane's top right (prototype 2, approved 2026-10-10); no keyboard mode.
+- OPEN-14 (open) Should an external change show a status note ("sidebar updated")? Default: silent. A visible element would need the HTML prototype first.
+- OPEN-15 (open) Poll the registry every 2 s (the `List` cadence) or every 0.5 s tick? Default 2 s.
 - OPEN-5 → `~/.config/jw/settings.json` (JSON, outside Go's `*.toml` glob) and the `^␣ ,` screen (addendum 3).
 
 ## Corrections
@@ -540,6 +576,8 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - REQ-31 and the Contract said 600 ms before the which-key popup. A new user needs the keys sooner (RAT-32), so the default is 150 ms; `which_delay_ms` still sets it.
 - REQ-138 first said that without truecolor every change applies at once. The selection band, the spinner and the welcome steps need no colour blending, so only the fades and the panes' slide wait for truecolor.
 - REQ-146 first said the welcome starts "with no workspace open" and does not pass on the key that closes it. At startup nothing is open yet even for a returning user, so it starts from an empty sidebar; and step 1 itself tells the user to press the leader, so that key is handled as usual.
+- The brief for W1 said the sidebar stayed stale until the TUI was reopened. True for writes by the CLI and by other TUIs; the TUI's own jobs already reload (`on_job`).
+- The same brief said the loop wakes only when something animates. `Msg::Tick` wakes it every 500 ms regardless (`tui/mod.rs:353`); only the animation timers in `next_wake` are conditional. The registry watch rides that tick (REQ-151, REQ-152).
 
 ## Tests
 
@@ -553,3 +591,4 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - selection (X1, X2): unit tests over a vt100 screen for the extracted text (trailing spaces, soft-wrapped rows, wide characters, history rows) and for word and line bounds; the OSC 52 bytes; the highlight and the banner text; `mouse_encodings` still passes. Manual: zsh drag, double and triple click, drag past the edge; the banner appears top right and goes after about 2 s; nvim plain drag reaches nvim, Shift + drag selects.
 - motion (M1–M6): units for the tween (starts at 0, reaches 1 at its duration, monotonic, an interrupt starts from the displayed value) and for the colour lerp; `next_wake` blocks when idle, wakes a frame after the last draw while a transition runs, for the drag edge and the which-key, takes the soonest, and wakes when a message starts to leave; `TestBackend` for the spinner glyph by elapsed time, the welcome (shows; any key closes it, writes `welcomed` and is still handled), the slide's last frame equal to the static draw, and `animations = false` giving the final frame at once; `tick_motion` on an `App` without a daemon (`App::bare`): the band starts on the current row without motion, a switch glides it and keeps the loop awake until `SWITCH`, `animations = false` jumps it, no workspace means no band, the spinner steps only for visible rows; the bytes of a draw start with `CSI ? 2026 h` and end with `CSI ? 2026 l`, also after a failed draw. Manual in Ghostty with `scripts/drive.py`: switching workspaces with the arrows, the which-key at 150 ms, no tearing in a fast `cat`, idle CPU near zero.
 - manual (after Q2 and Q5): claude and nvim in panes; `w`, `t`, `x`, `HJKL`, `n`, `d`, `↵` in the diff, `q`, then `jw` again shows the same layout.
+- live registry (W1): `RegistryWatch` units over a tempdir (unchanged, touched, deleted, session switch); `load_rows` builds the rows `reload` builds for the same files and writes nothing; an `App` without a daemon: an external write yields `Job::Rows`, with a modal open it lands in `pending_rows` and closing the modal applies it, `active` keeps its id; a truncated JSON leaves the rows alone; `next_wake` is still `None` when idle. Manual: with a TUI open, `jw worktree <name>` from a second terminal shows the row within about 2 s; repeat with `^␣ r` open and the row appears after `esc`.
