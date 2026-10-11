@@ -94,13 +94,13 @@ enum Job {
     },
     /// A finished action with nothing else to do but say so.
     Said(String),
-    /// The open PRs gh listed for the picker (REQ-150); `requested` is the
+    /// The open PRs gh listed for the picker (REQ-160); `requested` is the
     /// list asked for.
     Prs {
         prs: Vec<crate::connectors::github::PrSummary>,
         requested: bool,
     },
-    /// The review workspace is ready to open (REQ-156).
+    /// The review workspace is ready to open (REQ-166).
     Reviewed(Box<crate::review::Reviewed>),
     Diff {
         title: String,
@@ -264,7 +264,7 @@ pub struct App {
     /// tree brings.
     pending_view: Option<View>,
     /// What to tell the agent of a review once its workspace's panes are
-    /// open: the workspace id and the text (REQ-161).
+    /// open: the workspace id and the text (REQ-171).
     pending_prompt: Option<(String, String)>,
     /// The action running in the background, for the status bar.
     pub busy: Option<String>,
@@ -2556,7 +2556,7 @@ impl App {
         ));
     }
 
-    /// `^␣ R`: the open pull requests of the current project (REQ-150). The
+    /// `^␣ R`: the open pull requests of the current project (REQ-160). The
     /// picker opens at once and gh runs off this thread.
     fn ask_review(&mut self) {
         if self.current_repo_stream("review").is_none() {
@@ -2579,7 +2579,7 @@ impl App {
     }
 
     /// `↵` on a PR: its head, the worktree and the context, off this thread
-    /// (REQ-155, REQ-156).
+    /// (REQ-165, REQ-166).
     fn start_review(&mut self, pr: crate::connectors::github::PrSummary) {
         let Some(entry) = self.current().cloned() else {
             return;
@@ -2599,14 +2599,14 @@ impl App {
     }
 
     /// The agent of a review is briefed as soon as its panes are asked for;
-    /// the daemon waits for it to be quiet (REQ-161).
+    /// the daemon waits for it to be quiet (REQ-171).
     fn send_pending_prompt(&mut self, id: &str) {
         if let Some((stream, text)) = self.pending_prompt.take_if(|(s, _)| s == id) {
             self.send(ClientMsg::Prompt { stream, text });
         }
     }
 
-    /// Opens a url in the browser (REQ-170).
+    /// Opens a url in the browser (REQ-180).
     fn browse(&mut self, url: &str) {
         let opener = if cfg!(target_os = "macos") {
             "open"
@@ -3189,7 +3189,7 @@ impl App {
                 });
             }
             Job::Failed(e) => {
-                // A list that could not load leaves no empty picker (REQ-152).
+                // A list that could not load leaves no empty picker (REQ-162).
                 if self.finder.as_ref().is_some_and(|f| f.loading_reviews()) {
                     self.finder = None;
                 }
@@ -3704,7 +3704,7 @@ mod review_tests {
         }
     }
 
-    /// REQ-161: the prompt goes to the review's own workspace once, and
+    /// REQ-171: the prompt goes to the review's own workspace once, and
     /// another workspace opening does not take it.
     #[test]
     fn the_review_prompt_goes_out_only_for_its_workspace() {
@@ -3722,7 +3722,7 @@ mod review_tests {
         assert!(got.recv_timeout(Duration::from_millis(150)).is_err());
     }
 
-    /// REQ-163: only a yes sends the prompt to a review that existed.
+    /// REQ-173: only a yes sends the prompt to a review that existed.
     #[test]
     fn a_yes_sends_the_prompt_again_and_a_no_does_not() {
         let (mut app, got) = listening("resend");

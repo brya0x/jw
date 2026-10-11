@@ -377,7 +377,7 @@ pub fn rm_plan(p: &Project, e: &Entry) -> Result<RmPlan> {
     let on_disk = path.exists();
     let (dirty, unpushed) = if on_disk {
         // A review's own commits only: the PR's head is not work to lose
-        // (REQ-165).
+        // (REQ-175).
         let unpushed = if e.review_base.is_empty() {
             git::unpushed(path)?
         } else {

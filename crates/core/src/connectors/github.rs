@@ -76,7 +76,7 @@ impl Client {
     }
 }
 
-/// An open PR as the review picker lists it (REQ-153, REQ-154).
+/// An open PR as the review picker lists it (REQ-163, REQ-164).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PrSummary {
     pub number: u64,
@@ -246,7 +246,7 @@ const DETAIL_FIELDS: &str = "title,body,author,headRefName,baseRefName,url,comme
 
 impl Client {
     /// Runs gh in `dir` and returns its stdout; a failure carries gh's own
-    /// message (REQ-152).
+    /// message (REQ-162).
     fn gh(&self, dir: &Path, args: &[&str]) -> Result<Vec<u8>> {
         let bin = self.bin()?;
         let out = Command::new(&bin)
@@ -265,7 +265,7 @@ impl Client {
     }
 
     /// The open PRs of the repository, the latest update first. With
-    /// `requested`, only those whose review is asked of the user (REQ-169).
+    /// `requested`, only those whose review is asked of the user (REQ-179).
     pub fn open_prs(&self, dir: &Path, requested: bool) -> Result<Vec<PrSummary>> {
         let mut args = vec![
             "pr",
@@ -307,7 +307,7 @@ impl Client {
     }
 
     /// The conversation of PR `n`, its reviews, files and inline comments
-    /// (REQ-160). Inline comments are best effort: a failure there is kept
+    /// (REQ-170). Inline comments are best effort: a failure there is kept
     /// in `inline_error` and the rest still comes back.
     pub fn detail(&self, dir: &Path, n: u64) -> Result<PrDetail> {
         let num = n.to_string();
@@ -432,7 +432,7 @@ mod tests {
         assert_eq!(pr.merged_at, None);
     }
 
-    /// A gh that logs its arguments to `args` and answers `reply` (REQ-169).
+    /// A gh that logs its arguments to `args` and answers `reply` (REQ-179).
     fn logging_gh(dir: &Path, reply: &str) -> (Client, PathBuf) {
         let bin = dir.join("gh");
         let log = dir.join("args");

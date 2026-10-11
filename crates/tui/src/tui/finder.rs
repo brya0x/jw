@@ -66,7 +66,7 @@ pub enum Pick {
     NewSession(String),
     /// Ask for a new name for this session.
     RenameSession(String),
-    /// Review this pull request (REQ-155).
+    /// Review this pull request (REQ-165).
     Review(Box<PrSummary>),
 }
 
@@ -91,10 +91,10 @@ enum Kind {
         root: PathBuf,
     },
     Sessions,
-    /// The open pull requests; `loading` until gh answers (REQ-151).
+    /// The open pull requests; `loading` until gh answers (REQ-161).
     Reviews {
         loading: bool,
-        /// Only the PRs whose review is asked of the user (REQ-169).
+        /// Only the PRs whose review is asked of the user (REQ-179).
         requested: bool,
     },
 }
@@ -117,9 +117,9 @@ pub enum Outcome {
     Cancel,
     Pick(Pick),
     /// `m` in the PR picker: load the list again, `true` for the PRs
-    /// requested of the user (REQ-169).
+    /// requested of the user (REQ-179).
     Reload(bool),
-    /// `o` in the PR picker: open this url in the browser (REQ-170).
+    /// `o` in the PR picker: open this url in the browser (REQ-180).
     Browse(String),
 }
 
@@ -194,7 +194,7 @@ impl Finder {
         Self::new(&title, Kind::Files { root }, items)
     }
 
-    /// The PR picker, loading until `set_reviews` brings the list (REQ-150).
+    /// The PR picker, loading until `set_reviews` brings the list (REQ-160).
     pub fn reviews(requested: bool) -> Self {
         let mut f = Self::new(
             "Review a pull request",
@@ -302,7 +302,7 @@ impl Finder {
             .enumerate()
             .filter(|(_, it)| q.is_empty() || !folders || it.into.is_some())
             .filter_map(|(i, it)| {
-                // A PR is found by number, title, author or branch (REQ-153);
+                // A PR is found by number, title, author or branch (REQ-163);
                 // only the label is highlighted.
                 let text = if reviews {
                     format!("{} {}", it.label, it.hint)
@@ -793,7 +793,7 @@ impl Finder {
 }
 
 /// One open PR as a row, with its preview: the branches, the size, the
-/// description and the files (REQ-154). Built once, not every frame.
+/// description and the files (REQ-164). Built once, not every frame.
 fn review_item(pr: PrSummary) -> Item {
     let dim = Style::default().fg(p().dim);
     let bold = Style::default().add_modifier(Modifier::BOLD);
@@ -1171,7 +1171,7 @@ mod tests {
             .collect()
     }
 
-    /// REQ-151: loading shows a row, takes `esc`, and picks nothing; then the
+    /// REQ-161: loading shows a row, takes `esc`, and picks nothing; then the
     /// PRs come in the order gh gave them.
     #[test]
     fn the_pr_picker_loads_then_lists_what_it_got() {
@@ -1201,7 +1201,7 @@ mod tests {
         assert!(!Finder::workspaces(Vec::new()).set_reviews(Vec::new(), false));
     }
 
-    /// REQ-153: a PR is found by number, title, author or branch.
+    /// REQ-163: a PR is found by number, title, author or branch.
     #[test]
     fn the_pr_picker_filters_by_number_title_author_and_branch() {
         for (query, want) in [
@@ -1225,7 +1225,7 @@ mod tests {
         assert!(screen(&f).contains("Nothing matches"));
     }
 
-    /// REQ-169: `m` with an empty query flips the scope and asks again;
+    /// REQ-179: `m` with an empty query flips the scope and asks again;
     /// with a query it is just a letter.
     #[test]
     fn m_flips_the_scope_and_asks_for_the_list_again() {
@@ -1248,7 +1248,7 @@ mod tests {
         assert_eq!(f.query, "am");
     }
 
-    /// REQ-170: `o` with an empty query browses to the selected PR.
+    /// REQ-180: `o` with an empty query browses to the selected PR.
     #[test]
     fn o_opens_the_selected_prs_url() {
         let mut f = Finder::reviews(false);
@@ -1267,7 +1267,7 @@ mod tests {
         assert!(matches!(f.key(key(KeyCode::Char('o'))), Outcome::Stay));
     }
 
-    /// REQ-155: `↵` picks the selected PR whole.
+    /// REQ-165: `↵` picks the selected PR whole.
     #[test]
     fn enter_picks_the_selected_pr() {
         let mut f = picker();
@@ -1288,7 +1288,7 @@ mod tests {
             .join("|")
     }
 
-    /// REQ-154: the preview has the description and the files; a draft says so.
+    /// REQ-164: the preview has the description and the files; a draft says so.
     #[test]
     fn the_pr_preview_shows_the_description_and_the_files() {
         let f = picker();

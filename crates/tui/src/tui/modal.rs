@@ -72,7 +72,7 @@ pub enum Modal {
     /// `ctrl-r` in the session picker: a new name for a session.
     RenameSession { old: String, text: String },
     /// Picking a PR whose review workspace exists: its agent may hold a
-    /// conversation, so the prompt is sent again only on a yes (REQ-163).
+    /// conversation, so the prompt is sent again only on a yes (REQ-173).
     Resend {
         stream: String,
         name: String,

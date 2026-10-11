@@ -1,4 +1,4 @@
-//! Reviewing a pull request (docs/specs/rust-tui.md, addendum 14): a
+//! Reviewing a pull request (docs/specs/rust-tui.md, addendum 15): a
 //! worktree at the PR's head, the PR's conversation written to a file, and
 //! the prompt that points the agent at it. No terminal here: the TUI runs
 //! [`review_stream`] off its main thread and opens the workspace.
@@ -12,7 +12,7 @@ use crate::connectors::git;
 use crate::connectors::github::{Client, PrDetail, PrSummary, Remark};
 use crate::core::registry::{self, Entry, Registry};
 
-/// The context file's size limit (RISK-49).
+/// The context file's size limit (RISK-54).
 pub const CONTEXT_CAP: usize = 200_000;
 
 /// A review ready to open.
@@ -20,9 +20,9 @@ pub const CONTEXT_CAP: usize = 200_000;
 pub struct Reviewed {
     pub entry: Entry,
     /// The worktree was there already: refreshed, and its agent may hold a
-    /// conversation (REQ-162, REQ-163).
+    /// conversation (REQ-172, REQ-173).
     pub existed: bool,
-    /// What the agent is told (REQ-161).
+    /// What the agent is told (REQ-171).
     pub prompt: String,
     pub context: PathBuf,
     /// Run the project's setup: only for a worktree just created.
@@ -46,7 +46,7 @@ pub fn branch_of(n: u64) -> String {
 
 /// Fetches the PR's head and base, writes its context file, and creates (or
 /// refreshes) the worktree `review-<n>` registered with the PR's base.
-/// Nothing is created when a fetch or gh fails (REQ-157); `state` is where
+/// Nothing is created when a fetch or gh fails (REQ-167); `state` is where
 /// the context file goes.
 pub fn review_stream(
     p: &Project,
@@ -168,7 +168,7 @@ fn write_context(state: &Path, pr: &PrSummary, d: &PrDetail) -> Result<PathBuf> 
     Ok(path)
 }
 
-/// The Markdown the agent reads (REQ-160). The diff is left to git.
+/// The Markdown the agent reads (REQ-170). The diff is left to git.
 pub fn context(pr: &PrSummary, d: &PrDetail) -> String {
     let mut s = format!(
         "# PR #{} {}\n\n{} wants to merge `{}` into `{}`{}\n{}\n\n## Description\n\n{}\n",
@@ -249,7 +249,7 @@ fn cap(mut s: String) -> String {
     s
 }
 
-/// What the agent is told (REQ-161): one line, so a program that did not
+/// What the agent is told (REQ-171): one line, so a program that did not
 /// turn bracketed paste on does not read it as several messages.
 pub fn prompt(pr: &PrSummary, context: &Path) -> String {
     format!(
@@ -422,7 +422,7 @@ esac
         }
     }
 
-    /// REQ-155, REQ-156, REQ-159, REQ-160: the worktree is at the PR's head,
+    /// REQ-165, REQ-166, REQ-169, REQ-170: the worktree is at the PR's head,
     /// registered with its base, and the context file is there.
     #[test]
     fn review_stream_creates_the_worktree_at_the_prs_head() {
@@ -460,7 +460,7 @@ esac
         assert_eq!(reg.entries[0].review_base, "trunk");
     }
 
-    /// REQ-158, REQ-159: a review resolves to the diff beside the agent,
+    /// REQ-168, REQ-169: a review resolves to the diff beside the agent,
     /// against the PR's base, and the diff leaf has no process.
     #[test]
     fn a_review_entry_resolves_to_the_diff_and_the_agent() {
@@ -480,7 +480,7 @@ esac
         assert!(specs[0].cmd.is_none() && specs[1].cmd.is_some());
     }
 
-    /// REQ-162: picking the PR again reuses the worktree and moves it to the
+    /// REQ-172: picking the PR again reuses the worktree and moves it to the
     /// new head.
     #[test]
     fn a_second_review_refreshes_the_same_worktree() {
@@ -514,7 +514,7 @@ esac
         assert!(format!("{err}").contains("has changes"), "{err}");
     }
 
-    /// REQ-157: a head that cannot be fetched creates nothing.
+    /// REQ-167: a head that cannot be fetched creates nothing.
     #[test]
     fn a_failed_fetch_creates_nothing() {
         let (dir, work) = new_test_repo();
@@ -532,7 +532,7 @@ esac
         assert!(!context_path(&state, 8).exists());
     }
 
-    /// REQ-165: removing a review asks nothing about the PR's own commits,
+    /// REQ-175: removing a review asks nothing about the PR's own commits,
     /// but does about one the reviewer added.
     #[test]
     fn removing_a_review_counts_only_the_reviewers_own_commits() {

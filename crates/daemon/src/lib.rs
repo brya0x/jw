@@ -743,7 +743,7 @@ impl Daemon {
     }
 
     /// Starts every pane of a new workspace; none is left behind on failure.
-    /// A viewer leaf (`view:*`) only gets an id (REQ-171).
+    /// A viewer leaf (`view:*`) only gets an id (REQ-181).
     fn open(&self, stream: &str, tree: Tree<NewPane>) -> Result<()> {
         let mut started = Vec::new();
         let tree = tree.try_map(&mut |new: NewPane| {

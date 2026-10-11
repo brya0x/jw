@@ -474,7 +474,7 @@ fn prompt_waits_for_quiet_then_pastes_and_presses_enter() {
     assert!(text.contains("bug^[[201~^M"), "{text}");
 }
 
-/// REQ-158, REQ-161, REQ-167: a review opens as the diff beside the agent
+/// REQ-168, REQ-171, REQ-177: a review opens as the diff beside the agent
 /// (the tree `Stream` gives it), the diff has no process, and the prompt the
 /// TUI sends after `Open` reaches the agent. `PROTOCOL` did not move.
 #[test]

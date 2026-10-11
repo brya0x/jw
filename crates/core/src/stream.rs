@@ -86,7 +86,7 @@ impl Stream {
         let repo = Repo::open(Path::new(&entry.path))?;
         let cfg = config::load(&repo.root, &repo.remote, &entry.project)?;
         // A review compares against its PR's base and always opens as the
-        // diff beside the agent (REQ-158, REQ-159).
+        // diff beside the agent (REQ-168, REQ-169).
         let (base, tree) = if entry.review_base.is_empty() {
             (repo.default_branch()?, cfg.layout.tree())
         } else {
@@ -540,7 +540,7 @@ mod tests {
         assert!(s.panes().is_err(), "a service with no commands");
     }
 
-    /// REQ-158: in a review the setup goes before the agent, never into the
+    /// REQ-168: in a review the setup goes before the agent, never into the
     /// diff viewer, which has no process.
     #[test]
     fn a_review_has_no_process_for_its_diff_and_setup_goes_to_the_agent() {

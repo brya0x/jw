@@ -57,7 +57,7 @@ pub struct Entry {
     /// The jw session the worktree belongs to; empty is `main`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub session: String,
-    /// The base branch of the pull request this worktree reviews (REQ-158):
+    /// The base branch of the pull request this worktree reviews (REQ-168):
     /// its diff compares against it and it opens as a review. `pr` holds
     /// the number. Empty for every other worktree.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -444,7 +444,7 @@ mod tests {
         assert!(matches!(b[19], b'8' | b'9' | b'a' | b'b'), "{id}");
     }
 
-    /// REQ-168: only a review writes `review_base`, so every other entry
+    /// REQ-178: only a review writes `review_base`, so every other entry
     /// is saved as before.
     #[test]
     fn review_base_is_written_only_for_a_review() {
