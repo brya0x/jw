@@ -14,6 +14,8 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -110,6 +112,15 @@ class ConnectedScreensTest {
         waitFor("alpha")
         waitFor("y · aprobar")
         shot("m4-1-home")
+        // Search filters what the PC already sent, by name, branch or path.
+        rule.onNodeWithContentDescription("Buscar").performClick()
+        rule.onNodeWithText("buscar workspace", substring = true).performTextInput("beta")
+        rule.waitForIdle()
+        assertTrue(rule.onAllNodesWithText("alpha").fetchSemanticsNodes().isEmpty())
+        assertTrue(rule.onAllNodesWithText("beta").fetchSemanticsNodes().isNotEmpty())
+        shot("m4-1b-search")
+        rule.onNodeWithContentDescription("Cerrar búsqueda").performClick()
+        waitFor("alpha")
         rule.onNodeWithText("main ▾", substring = true).performClick()
         waitFor("sesiones")
         shot("m4-2-sessions")
@@ -126,7 +137,7 @@ class ConnectedScreensTest {
         waitFor("abrir")
         shot("m4-5-avisos")
         rule.onNodeWithText("ajustes").performClick()
-        waitFor("y · aprobar envía")
+        waitFor("respuestas rápidas")
         shot("m4-6-settings")
     }
 }

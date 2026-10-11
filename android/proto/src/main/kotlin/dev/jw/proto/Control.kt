@@ -48,7 +48,10 @@ class Palette(val roles: Map<String, String>) {
     operator fun get(role: String): String? = roles[role]
 }
 
-class Palettes(val dark: Palette, val light: Palette) {
+/** One theme of `ready.palettes`, for showing them: its name, side and the colours that were valid. */
+class ThemeInfo(val name: String, val dark: Boolean, val colors: Map<String, String>)
+
+class Palettes(val dark: Palette, val light: Palette, val themes: List<ThemeInfo> = emptyList()) {
     companion object {
         val ROLES = listOf(
             "bg", "panel", "fg", "dim", "line", "sel",
@@ -95,7 +98,15 @@ class Palettes(val dark: Palette, val light: Palette) {
                 }
                 return Palette(roles)
             }
-            return Palettes(side(true, FALLBACK.dark), side(false, FALLBACK.light))
+            val all = themes.mapNotNull { t ->
+                val name = (t["name"] as? JsonPrimitive)?.contentOrNull ?: return@mapNotNull null
+                val dark = (t["dark"] as? JsonPrimitive)?.booleanOrNull ?: return@mapNotNull null
+                val colors = (t["colors"] as? JsonObject)?.let { c ->
+                    ROLES.mapNotNull { r -> (c[r] as? JsonPrimitive)?.contentOrNull?.takeIf { HEX.matches(it) }?.let { r to it } }.toMap()
+                } ?: return@mapNotNull null
+                ThemeInfo(name, dark, colors)
+            }
+            return Palettes(side(true, FALLBACK.dark), side(false, FALLBACK.light), all)
         }
 
         private val HEX = Regex("#[0-9a-fA-F]{6}")

@@ -1,5 +1,14 @@
 package dev.jw.mobile
 
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import dev.jw.proto.Palettes
+import dev.jw.proto.ThemeInfo
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.size
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -225,16 +234,45 @@ private fun WorkspaceRow(w: Workspace, index: Int, model: Model, state: UiState.
 @Composable
 private fun HomeScreen(model: Model, state: UiState.Connected, session: Session, nav: Nav, now: Long, waiting: Int) {
     val j = LocalJw.current
-    val projects = model.items.filter { it.kind != Kind.Folder }
-    val folders = model.items.filter { it.kind == Kind.Folder }
+    var searching by remember { mutableStateOf(false) }
+    var query by remember { mutableStateOf("") }
+    // Search is on what the PC already sent: name, branch and path.
+    val shown = if (!searching || query.isBlank()) model.items else model.items.filter {
+        listOf(it.name, it.branch, it.path).any { f -> f.contains(query.trim(), ignoreCase = true) }
+    }
+    val projects = shown.filter { it.kind != Kind.Folder }
+    val folders = shown.filter { it.kind == Kind.Folder }
     Column(Modifier.fillMaxSize().background(j.bg)) {
         Row(
             Modifier.fillMaxWidth().background(j.panel).drawBehind { drawLine(j.line, Offset(0f, size.height), Offset(size.width, size.height), 1.dp.toPx()) }
                 .padding(horizontal = 12.dp, vertical = 8.dp).heightIn(min = 52.dp),
             verticalAlignment = Alignment.CenterVertically,
-        ) { SessionChip(model, nav) }
+        ) {
+            if (searching) {
+                androidx.compose.foundation.text.BasicTextField(
+                    value = query, onValueChange = { query = it }, singleLine = true,
+                    textStyle = androidx.compose.ui.text.TextStyle(color = j.fg, fontSize = 13.5.sp, fontFamily = JwMono),
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(j.fg),
+                    modifier = Modifier.weight(1f).heightIn(min = 40.dp).background(j.bg, Corner).border(BorderStroke(1.dp, j.blue), Corner),
+                    decorationBox = { inner ->
+                        Box(Modifier.padding(horizontal = 10.dp, vertical = 10.dp)) {
+                            if (query.isEmpty()) Text("buscar workspace, rama o ruta", color = j.dim, fontSize = 13.sp)
+                            inner()
+                        }
+                    },
+                )
+            } else {
+                SessionChip(model, nav)
+                Spacer(Modifier.weight(1f))
+            }
+            Box(
+                Modifier.size(44.dp).semantics { contentDescription = if (searching) "Cerrar búsqueda" else "Buscar" }
+                    .clickable(role = Role.Button) { searching = !searching; query = "" },
+                contentAlignment = Alignment.Center,
+            ) { if (searching) Icon(Ic.X, j.fg, 20.dp) else Icon(Ic.Search, j.fg, 20.dp) }
+        }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
-            Section("workspaces · ${model.items.size}")
+            Section((if (shown.size == 1) "workspace" else "workspaces") + " · ${shown.size}")
             var i = 0
             for (w in projects) WorkspaceRow(w, i++, model, state, session, nav, now)
             if (folders.isNotEmpty()) {
@@ -242,11 +280,15 @@ private fun HomeScreen(model: Model, state: UiState.Connected, session: Session,
                 for (w in folders) WorkspaceRow(w, i++, model, state, session, nav, now)
             }
             if (model.items.isEmpty()) Body("Esperando la lista del PC…", j.dim, 12.0)
+            else if (shown.isEmpty()) Body("Nada coincide con la búsqueda.", j.dim, 12.0)
+            // The legend: each glyph in the colour the row uses it in.
             Row(Modifier.padding(14.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("● abierto", color = j.dim, fontSize = 11.5.sp)
-                Text("✻ agente", color = j.dim, fontSize = 11.5.sp)
-                Text("? espera", color = j.dim, fontSize = 11.5.sp)
-                Text("⚡ dev", color = j.dim, fontSize = 11.5.sp)
+                for ((g, label, c) in listOf(Triple("●", "abierto", j.green), Triple("✻", "agente", j.magenta), Triple("?", "espera", j.yellow), Triple("⚡", "dev", j.green))) {
+                    Text(buildAnnotatedString {
+                        withStyle(androidx.compose.ui.text.SpanStyle(color = c)) { append(g) }
+                        append(" $label")
+                    }, color = j.dim, fontSize = 11.5.sp)
+                }
             }
         }
         StatusBar("NORMAL", j.blue, "toca una fila para entrar", if (state.saved) null else "sin guardar")
@@ -408,42 +450,130 @@ private fun SessionSheet(model: Model, session: Session, nav: Nav) {
     }
 }
 
+/** The quick-answer sets of the prototype (`PRESETS`): what `y · aprobar` and `n · rechazar` send. */
+private class Preset(val label: String, val detail: String, val approve: String, val reject: String, val keys: List<String>)
+
+private val PRESETS = listOf(
+    Preset("Claude Code · por verificar", "Enter · Esc", "enter", "esc", listOf("⏎", "esc")),
+    Preset("Pregunta s/n", "y · n", "y", "n", listOf("y", "n")),
+    Preset("Pregunta s/n con Enter", "y y Enter · n y Enter", "y-enter", "n-enter", listOf("y⏎", "n⏎")),
+)
+
 @Composable
 private fun SettingsScreen(state: UiState.Connected, session: Session, answers: AnswerPrefs, nav: Nav, waiting: Int) {
     val j = LocalJw.current
-    var approve by remember { mutableStateOf(answers.approve) }
-    var reject by remember { mutableStateOf(answers.reject) }
+    var approve by remember { mutableStateOf(answers.approve ?: "enter") }
+    var reject by remember { mutableStateOf(answers.reject ?: "esc") }
+    val current = PRESETS.firstOrNull { it.approve == approve && it.reject == reject } ?: PRESETS[0]
     Column(Modifier.fillMaxSize().background(j.bg)) {
-        Header("ajustes", "respuestas y conexión")
+        Header("ajustes", "ajustes de la app")
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
             Section("conexión")
-            KvRow("host", state.host)
-            KvRow("protocolo", "jw-proto v${state.protocol}", j.green)
-            KvRow("acceso", if (state.readOnly) "solo lectura" else "lectura y escritura", if (state.readOnly) j.yellow else j.green)
+            SettingRow(state.host, "túnel de Cloudflare · TLS")
+            SettingRow("protocolo", "jw-proto v${state.protocol} · compatible")
+            SettingRow("acceso", if (state.readOnly) "solo lectura" else "lectura y escritura")
             if (!state.saved) Body("No se pudo guardar el emparejamiento: al cerrar la app tendrás que escanear de nuevo.", j.yellow, 12.0)
-            Section("y · aprobar envía")
-            for (c in AnswerChoices.APPROVE) ChoiceRow(c.label, c.id == approve) { approve = c.id; answers.approve = c.id }
-            Section("n · rechazar envía")
-            for (c in AnswerChoices.REJECT) ChoiceRow(c.label, c.id == reject) { reject = c.id; answers.reject = c.id }
-            Body("Enter y Esc son lo habitual; si tu agente pregunta distinto, cámbialo aquí.", j.dim, 11.5)
-            Row(
-                Modifier.fillMaxWidth().heightIn(min = 54.dp).clickable(role = Role.Button) { session.forget() }.padding(horizontal = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) { Text("desconectar y olvidar este PC", color = j.red, fontWeight = FontWeight.Medium) }
+            SettingRow("desconectar", null, j.red) { session.forget() }
+            Section("respuestas rápidas")
+            for (p in PRESETS) {
+                val on = p === current
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = 60.dp).clickable(role = Role.RadioButton) {
+                        approve = p.approve; reject = p.reject
+                        answers.approve = p.approve; answers.reject = p.reject
+                    }.drawBehind { drawLine(j.line, Offset(0f, size.height), Offset(size.width, size.height), 1.dp.toPx()) }
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Box(
+                        Modifier.size(18.dp).border(2.dp, if (on) j.blue else j.dim, CircleShape).padding(3.dp)
+                            .background(if (on) j.blue else Color.Transparent, CircleShape),
+                    )
+                    Column(Modifier.weight(1f)) {
+                        Text(p.label, color = j.fg, fontWeight = FontWeight.Medium)
+                        Text(p.detail, color = j.dim, fontSize = 11.sp)
+                    }
+                    for (k in p.keys) {
+                        Text(
+                            k, color = j.yellow, fontSize = 12.sp,
+                            modifier = Modifier.background(j.bg, RoundedCornerShape(4.dp)).border(1.dp, j.line, RoundedCornerShape(4.dp)).padding(horizontal = 7.dp, vertical = 3.dp),
+                        )
+                    }
+                }
+            }
+            val sendY = current.keys[0]; val sendN = current.keys[1]
+            Text(
+                buildAnnotatedString {
+                    append("Al tocar "); bold("y · aprobar"); append(" la app envía "); bold(sendY)
+                    append("; con "); bold("n · rechazar"); append(", "); bold(sendN); append(". Solo mientras el agente espera.")
+                },
+                color = j.dim, fontSize = 12.sp, modifier = Modifier.padding(14.dp),
+            )
+            Section("tema")
+            ThemeGrid(state.palettes)
+            Section("general")
+            SettingRow("líder", "^␣ abre el menú de teclas")
         }
         StatusBar("SET", j.blue, "ajustes de la app")
         NavBar(nav, waiting)
     }
 }
 
+private fun androidx.compose.ui.text.AnnotatedString.Builder.bold(t: String) {
+    pushStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.Medium, color = Color.Unspecified)); append(t); pop()
+}
+
+/** `.srow`: a title, an optional dim line under it, a line below the row. */
 @Composable
-private fun ChoiceRow(label: String, on: Boolean, onClick: () -> Unit) {
+private fun SettingRow(title: String, sub: String?, color: Color = LocalJw.current.fg, onClick: (() -> Unit)? = null) {
     val j = LocalJw.current
-    Row(
-        Modifier.fillMaxWidth().heightIn(min = 54.dp).clickable(role = Role.RadioButton, onClick = onClick).padding(horizontal = 14.dp),
-        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
+    Column(
+        Modifier.fillMaxWidth().heightIn(min = 54.dp)
+            .let { if (onClick != null) it.clickable(role = Role.Button, onClick = onClick) else it }
+            .drawBehind { drawLine(j.line, Offset(0f, size.height), Offset(size.width, size.height), 1.dp.toPx()) }
+            .padding(horizontal = 14.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.Center,
     ) {
-        Text(if (on) "●" else "○", color = if (on) j.green else j.dim)
-        Text(label, color = j.fg)
+        Text(title, color = color, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (sub != null) Text(sub, color = j.dim, fontSize = 11.sp)
+    }
+}
+
+/**
+ * The PC's themes as the prototype's grid, read-only: the app follows the system's dark or light (the
+ * user's choice), and nothing in the bridge writes `settings.json`. The theme in use is marked.
+ */
+@Composable
+private fun ThemeGrid(palettes: Palettes) {
+    val j = LocalJw.current
+    val dark = androidx.compose.foundation.isSystemInDarkTheme()
+    val inUse = if (dark) palettes.dark else palettes.light
+    val themes = palettes.themes.ifEmpty {
+        listOf(
+            ThemeInfo("One Dark", true, Palettes.FALLBACK.dark.roles),
+            ThemeInfo("One Light", false, Palettes.FALLBACK.light.roles),
+        )
+    }
+    fun colorOf(t: ThemeInfo, r: String) = Color(android.graphics.Color.parseColor(t.colors[r] ?: "#888888"))
+    Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        for (row in themes.chunked(2)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                for (t in row) {
+                    val used = t.colors["bg"] == inUse["bg"] && t.dark == dark
+                    Column(
+                        Modifier.weight(1f).background(colorOf(t, "bg"), RoundedCornerShape(8.dp))
+                            .border(if (used) 2.dp else 1.dp, if (used) j.blue else colorOf(t, "line"), RoundedCornerShape(8.dp)).padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            for (r in listOf("blue", "green", "red", "yellow")) Box(Modifier.size(14.dp).background(colorOf(t, r), RoundedCornerShape(3.dp)))
+                        }
+                        Text(t.name, color = colorOf(t, "fg"), fontWeight = FontWeight.Bold, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(if (t.dark) "oscuro" else "claro", color = colorOf(t, "dim"), fontSize = 10.5.sp)
+                    }
+                }
+                if (row.size == 1) Spacer(Modifier.weight(1f))
+            }
+        }
     }
 }

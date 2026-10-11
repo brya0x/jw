@@ -11,4 +11,6 @@ Phone shots come from `ConnectScreensTest` (CPH2417, Android 15, dark and light,
 | denied, expired, limited | checked | none seen |
 | no encuentro tu PC | checked | rows drawn only when measured (see `SPEC-NOTES.md`); "reintentar" is not drawn |
 | protocol | checked, both sides | the numbers are the real ones |
-| workspaces, workspace, avisos, settings | **not compared yet** | search, "1 workspace", legend, current row, quick answers still to do |
+| workspaces (home) | checked, dark | search built (name, branch, path); singular "workspace · 1"; legend glyphs in their colours. **Not done:** `+` (needs server messages `open{path}` and `worktree{...}`, "W4"), the row's second line is the branch and PR, not the agent's last message (the bridge does not send it), the current-row highlight (no notion of "current" on the wire), ⚑ merged (needs GitHub data), the diff tab (M6) |
+| settings | checked, dark | quick answers as three presets with the preview line; themes as a **read-only** grid (the user chose: the app follows the system theme and nothing writes `settings.json`); connection rows show the host, the real protocol number and access, no latency (not measured), no PC name (`ready` does not send one); the prototype's animation and vibration toggles are not built (no feature behind them) |
+| workspace, avisos | not compared yet | M5 builds the terminal in the workspace screen |
