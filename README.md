@@ -278,7 +278,7 @@ An agent in any pane can see and drive the other workspaces of its session:
 jw ls [--json]                                   # workspaces, state, marks, branch, PR
 jw read <workspace> [--pane role] [--lines N]    # a pane's last lines, scrollback included
 jw worktree <name> [--in <project>] [--task "…"] # a new worktree, with a task for its agent
-jw prompt <workspace> "<task>"                   # type a task into an open workspace's agent
+jw prompt <workspace> [--pane <id>] "<task>"      # type a task into an open workspace's agent (or the one in pane <id>)
 jw pane open <workspace> --run <program|shell|view:diff|view:md:file> [--split right|down]
 jw pane close <workspace> <pane>                 # close a pane; jw pane ls lists them
 ```

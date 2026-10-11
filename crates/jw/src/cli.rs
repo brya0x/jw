@@ -86,6 +86,11 @@ fn tagged(text: &str, name: Option<&str>, pane: Option<&str>) -> String {
     }
 }
 
+/// REQ-253: the prompt waits for its pane to be quiet, and ours is running this.
+fn is_own_pane(pane: Option<PaneId>, me: Option<&str>) -> bool {
+    pane.is_some_and(|p| me == Some(p.to_string().as_str()))
+}
+
 pub fn prompt(args: &[String]) -> Result<()> {
     let PromptArgs {
         name,
@@ -94,7 +99,7 @@ pub fn prompt(args: &[String]) -> Result<()> {
         mut text,
     } = parse_prompt(args)?;
     let me = std::env::var("JW_PANE_ID").ok();
-    if pane.is_some_and(|p| me.as_deref() == Some(&p.to_string())) {
+    if is_own_pane(pane, me.as_deref()) {
         bail!("that is the pane you run in: it would wait for itself");
     }
     if tag {
@@ -946,6 +951,15 @@ mod tests {
                 "{bad:?}"
             );
         }
+    }
+
+    /// REQ-253.
+    #[test]
+    fn the_pane_you_run_in_is_not_a_target() {
+        assert!(is_own_pane(Some(4), Some("4")));
+        assert!(!is_own_pane(Some(4), Some("5")));
+        assert!(!is_own_pane(Some(4), None));
+        assert!(!is_own_pane(None, Some("4")));
     }
 
     /// REQ-255.
