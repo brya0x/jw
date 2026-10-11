@@ -323,7 +323,7 @@ jw is a terminal people live in, but a first-time user sees a grey line on an em
 | Popups | Which-key, pickers, modals and settings fade in over 160 ms; a picker's selected row slides |
 | Which-key | Appears after `which_delay_ms` (default 150 ms, was 600), or at once with `which_sticky` |
 | Focus | The focused pane's border colour eases over 180 ms; the wheel scrolls the history over at most 120 ms |
-| First run | With no workspace open and `welcomed` unset, three steps appear one by one: `^␣` starts every shortcut, then `o` opens a folder, `?` lists the keys. Any key closes it and sets `welcomed` |
+| First run | With an empty sidebar (no workspace registered) and `welcomed` unset, three steps appear one by one: `^␣` starts every shortcut, then `o` opens a folder, `?` lists the keys. Any key closes it and sets `welcomed` |
 
 Terminal cells cannot blend, so a fade is a colour interpolated toward the background in truecolor and a slide moves content by whole cells, rounded from an eased position. Without truecolor (`COLORTERM` not `truecolor` or `24bit`) the colour fades and the panes' slide apply at once (RISK-42). On a switch the client clears the old workspace's screens and the new ones arrive from the daemon, so the panes only enter; nothing leaves. `settings.json` gains `animations` (default true), `which_sticky` (default false) and `welcomed` (default false); `^␣ ,` shows the first two. Env `JW_WELCOME=0` skips the welcome, like `JW_LEADER` and `JW_THEME` win over their keys.
 
@@ -338,7 +338,7 @@ Terminal cells cannot blend, so a fade is a colour interpolated toward the backg
 - REQ-143 WHILE a workspace's `✻` mark is on, the sidebar SHALL draw it as a braille spinner that advances every 80 ms, computed from `Instant` between `List` polls.
 - REQ-144 WHEN a modal, picker, settings screen or which-key popup opens, it SHALL fade in over 160 ms; WHEN a picker's selection moves, the highlighted row SHALL slide to it over 120 ms.
 - REQ-145 WHEN the focus moves to another pane, the old border colour SHALL ease to the new one over 180 ms; WHEN the wheel scrolls a pane's history, the scroll SHALL be spread over at most 120 ms.
-- REQ-146 WHEN the TUI starts with no workspace open and `welcomed` is false, it SHALL show three steps, one every 650 ms, and WHEN any key is pressed SHALL close them, write `welcomed: true` and SHALL NOT pass that key on. WHERE `JW_WELCOME=0` is set, the TUI SHALL NOT show it, so tests and `scripts/drive.py` (which sets it) keep their first key. The empty-stage line (Screen table) stays for later runs.
+- REQ-146 WHEN the TUI starts with an empty sidebar and `welcomed` is false (a workspace opening by itself closes it too, without a key), it SHALL show three steps, one every 650 ms, and WHEN any key is pressed SHALL close them, write `welcomed: true` and SHALL NOT pass that key on. WHERE `JW_WELCOME=0` is set, the TUI SHALL NOT show it, so tests and `scripts/drive.py` (which sets it) keep their first key. The empty-stage line (Screen table) stays for later runs.
 - REQ-147 THE motion SHALL add no `ClientMsg` and no `PaneInfo` field, and `PROTOCOL` SHALL stay at 8.
 - REQ-148 WHEN a key or a click arrives during an animation, the TUI SHALL handle it before the next frame; WHEN a change interrupts an animation, the new one SHALL start from what is on screen; IF a frame takes longer than `FRAME`, THEN the animation SHALL jump to its end state.
 
@@ -483,7 +483,7 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | M3 ✓ | Status bar: the leader's hint lists the useful keys, hints cross-fade between modes, the chip's colour eases, messages enter and fade | 140, 142 | `tui/draw.rs` |
 | M4 ✓ | Popups fade in, picker row slides, which-key at 150 ms and `which_sticky` (a row in `^␣ ,`) | 141, 144 | `tui/draw.rs`, `tui/finder.rs`, `tui/modal.rs`, `settings.rs` |
 | M5 ✓ | Focus border ease; eased wheel scroll | 145 | `tui/draw.rs`, `tui/mod.rs` |
-| M6 | First-run welcome, `welcomed` and `JW_WELCOME=0` (set by `scripts/drive.py`) | 146 | `tui/draw.rs`, `settings.rs`, `scripts/drive.py` |
+| M6 ✓ | First-run welcome, `welcomed` and `JW_WELCOME=0` (set by `scripts/drive.py`) | 146 | `tui/draw.rs`, `settings.rs`, `scripts/drive.py` |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 
 Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{new_stream, rm_plan, rm, sync, done_plan}`, `src/diff.rs`, `src/view/md.rs` and `Modal::Rm` (type the name) stay as they are.

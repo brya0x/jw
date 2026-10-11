@@ -31,6 +31,12 @@ pub const FOCUS_EASE: Duration = Duration::from_millis(180);
 /// A turn of the wheel is spread over this (REQ-145).
 pub const SCROLL: Duration = Duration::from_millis(120);
 
+/// The welcome shows a step every this long (REQ-146).
+pub const WELCOME_STEP: Duration = Duration::from_millis(650);
+
+/// Each welcome step fades in over this.
+pub const WELCOME_FADE: Duration = Duration::from_millis(250);
+
 /// Cells the panes travel while they enter (REQ-136).
 pub const SLIDE_CELLS: u16 = 4;
 

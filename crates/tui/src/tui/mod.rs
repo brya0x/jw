@@ -297,6 +297,8 @@ pub struct App {
     last_focus: Option<PaneId>,
     /// A turn of the wheel being spread over a few frames (REQ-145).
     scroll: Option<Scroll>,
+    /// The first-run welcome, since when it has been showing (REQ-146).
+    welcome: Option<Instant>,
 }
 
 /// Lines of history to move in a pane, and how many have moved.
@@ -524,8 +526,13 @@ impl App {
             focus_fade: None,
             last_focus: None,
             scroll: None,
+            welcome: None,
         };
         app.reload()?;
+        let skip = std::env::var("JW_WELCOME").is_ok_and(|v| v == "0");
+        if app.rows.is_empty() && !crate::settings::get().welcomed() && !skip {
+            app.welcome = Some(Instant::now());
+        }
         app.send(ClientMsg::List);
         Ok(app)
     }
@@ -638,6 +645,32 @@ impl App {
         }
     }
 
+    /// The welcome steps in one by one; it goes when a workspace opens.
+    fn tick_welcome(&mut self, now: Instant, on: bool) {
+        let Some(since) = self.welcome else {
+            return;
+        };
+        if self.active.is_some() {
+            self.dismiss_welcome();
+            return;
+        }
+        let shown = anim::WELCOME_STEP * 3 + anim::WELCOME_FADE;
+        let age = now.saturating_duration_since(since);
+        if on && age < shown {
+            self.motion.kick(shown - age, now);
+        }
+    }
+
+    /// Closes the welcome for good (REQ-146).
+    fn dismiss_welcome(&mut self) {
+        self.welcome = None;
+        let mut s = (*crate::settings::get()).clone();
+        s.welcomed = Some(true);
+        if let Err(e) = crate::settings::save(s) {
+            self.fail(format!("{e:#}"));
+        }
+    }
+
     /// Popups: one that opens fades in (REQ-144), and a picker's highlight
     /// slides to its selection.
     fn tick_overlays(&mut self, now: Instant, on: bool) {
@@ -732,6 +765,7 @@ impl App {
         self.tick_overlays(now, on);
         self.tick_focus(now, on);
         self.tick_scroll(now);
+        self.tick_welcome(now, on);
         self.band = self
             .bar
             .as_ref()
@@ -1142,6 +1176,10 @@ impl App {
     }
 
     fn on_key(&mut self, k: KeyEvent) {
+        if self.welcome.is_some() {
+            self.dismiss_welcome();
+            return;
+        }
         if let Some(v) = &mut self.settings {
             match v.key(k) {
                 settings_view::Outcome::Stay => {}

@@ -153,6 +153,13 @@ optional:
 }
 ```
 
+`which_delay_ms` is how long jw waits after the leader before listing every key (150 ms);
+`which_sticky` lists them at once. `animations` (on by default) eases workspace switches,
+popups, messages and scrolling; turn it off in `^␣ ,` and every change is applied at once.
+Fades need a true-colour terminal (`COLORTERM=truecolor`). The first time jw starts with no
+workspace it shows three steps for the leader key; `welcomed` remembers it, and
+`JW_WELCOME=0` skips it.
+
 Every theme is a JSON file. Ten are built in, a dark and a light one of each:
 `one-dark`/`one-light`, `catppuccin-mocha`/`catppuccin-latte`, `tokyo-night`/`tokyo-night-day`,
 `gruvbox-dark`/`gruvbox-light` and `solarized-dark`/`solarized-light`. Their files are in

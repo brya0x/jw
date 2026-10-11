@@ -31,6 +31,9 @@ pub struct Settings {
     /// How long the leader waits before showing every key.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub which_delay_ms: Option<u64>,
+    /// The welcome has been shown (REQ-146).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub welcomed: Option<bool>,
     /// Transitions on or off (REQ-138); on unless it says false.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub animations: Option<bool>,
@@ -87,6 +90,10 @@ impl Settings {
 
     pub fn which_sticky(&self) -> bool {
         self.which_sticky.unwrap_or(false)
+    }
+
+    pub fn welcomed(&self) -> bool {
+        self.welcomed.unwrap_or(false)
     }
 
     pub fn animations(&self) -> bool {
@@ -280,6 +287,7 @@ mod tests {
         );
         let s: Settings = serde_json::from_str("{}").unwrap();
         assert!(s.animations());
+        assert!(!s.welcomed());
         let s: Settings = serde_json::from_str(r#"{"animations": false}"#).unwrap();
         assert!(!s.animations());
         let s: Settings =

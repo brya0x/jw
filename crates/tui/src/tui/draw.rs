@@ -28,7 +28,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     status(f, app);
 
     let rects = app.pane_rects();
-    if rects.is_empty() {
+    if let (true, Some(since)) = (rects.is_empty(), app.welcome) {
+        welcome(f, app, now.saturating_duration_since(since));
+    } else if rects.is_empty() {
         empty(f, app);
     }
     for &(id, rect) in &rects {
@@ -685,6 +687,95 @@ fn chip_color(mode: Mode) -> Color {
     chip(mode, "").1
 }
 
+/// The first-run steps for the current time (REQ-146). A step that has not
+/// come yet is a blank line, so the block does not move as they appear.
+fn welcome_lines(
+    leader: &str,
+    open: &str,
+    since: Duration,
+    steps_fade: bool,
+) -> Vec<Line<'static>> {
+    let bold = Style::default().fg(p().fg).add_modifier(Modifier::BOLD);
+    let plain = Style::default().fg(p().fg);
+    let dim = Style::default().fg(p().dim);
+    let steps: [Vec<(String, Style)>; 3] = [
+        vec![
+            ("1  Every shortcut starts with ".into(), plain),
+            (leader.into(), bold),
+        ],
+        vec![
+            ("2  Then press one key: ".into(), plain),
+            (open.into(), bold),
+            (" opens a folder".into(), plain),
+        ],
+        vec![
+            ("3  Forgot a key? Press ".into(), plain),
+            ("?".into(), bold),
+            (" and jw lists them all".into(), plain),
+        ],
+    ];
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "Welcome to jw",
+            Style::default().fg(p().blue).add_modifier(Modifier::BOLD),
+        )),
+        Line::default(),
+    ];
+    for (i, parts) in steps.into_iter().enumerate() {
+        let start = anim::WELCOME_STEP * i as u32;
+        if since < start {
+            lines.push(Line::default());
+            continue;
+        }
+        let alpha = if steps_fade {
+            anim::ease_out(anim::progress(since - start, anim::WELCOME_FADE))
+        } else {
+            1.0
+        };
+        lines.push(Line::from(
+            parts
+                .into_iter()
+                .map(|(text, mut style)| {
+                    if let Some(fg) = style.fg {
+                        style.fg = Some(anim::lerp(p().bg, fg, alpha));
+                    }
+                    Span::styled(text, style)
+                })
+                .collect::<Vec<_>>(),
+        ));
+    }
+    lines.push(Line::default());
+    lines.push(if since >= anim::WELCOME_STEP * 3 {
+        Line::from(Span::styled("press any key to start", dim))
+    } else {
+        Line::default()
+    });
+    lines
+}
+
+/// REQ-146: what a new user sees on an empty screen, in place of the one
+/// grey line.
+fn welcome(f: &mut Frame, app: &App, since: Duration) {
+    let stage = trect(app.stage());
+    let since = if anim::enabled() {
+        since
+    } else {
+        Duration::MAX
+    };
+    let lines = welcome_lines(&app.leader.label(), &key("open"), since, anim::fades());
+    let width = lines.iter().map(Line::width).max().unwrap_or(0) as u16;
+    let height = lines.len() as u16;
+    let w = width.min(stage.width);
+    let h = height.min(stage.height);
+    let r = TRect::new(
+        stage.x + (stage.width - w) / 2,
+        stage.y + (stage.height - h) / 2,
+        w,
+        h,
+    );
+    f.render_widget(Paragraph::new(lines), r);
+}
+
 fn empty(f: &mut Frame, app: &App) {
     let stage = trect(app.stage());
     let leader = app.leader.label();
@@ -956,6 +1047,33 @@ mod tests {
             buf.set_string(0, y, "abcdefghijkl", style);
         }
         (buf, TRect::new(0, 0, 12, 1), TRect::new(0, 1, 12, 2))
+    }
+
+    fn shown(lines: &[Line]) -> String {
+        lines
+            .iter()
+            .map(|l| text(&l.spans))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn the_welcome_brings_its_steps_in_one_by_one() {
+        let at = |ms| shown(&welcome_lines("^␣", "o", Duration::from_millis(ms), false));
+        let first = at(0);
+        assert!(first.contains("1  Every shortcut starts with ^␣"));
+        assert!(!first.contains("2  Then") && !first.contains("press any key"));
+        let second = at(700);
+        assert!(second.contains("2  Then press one key: o opens a folder"));
+        assert!(!second.contains("3  Forgot"));
+        let all = shown(&welcome_lines("^␣", "o", Duration::MAX, false));
+        assert!(all.contains("3  Forgot a key? Press ? and jw lists them all"));
+        assert!(all.contains("press any key to start"));
+        assert_eq!(
+            welcome_lines("^␣", "o", Duration::ZERO, false).len(),
+            welcome_lines("^␣", "o", Duration::MAX, false).len(),
+            "the block does not move as the steps appear"
+        );
     }
 
     #[test]
