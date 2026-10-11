@@ -11,7 +11,8 @@ workspace ids are already unique across them.
     start. `save_on_signal` (`:96`) saves everything on SIGTERM, SIGINT or SIGHUP.
   - `serve` (`:465`) runs one client: a reader, and a writer fed by its `Tx`.
   - `handle` (`:508`) takes every `ClientMsg`.
-  - `attach`/`watch` (`:677`/`:699`) send a tree, then each pane's Snapshot.
+  - `attach`/`watch` (`:677`/`:699`) send a tree, then each pane's Snapshot, or its `Screen`
+    and then its `History` to a client that sent `SplitSnapshots` (`split_snapshot`).
   - `spawn` (`:1210`) starts a pane's process; its reader thread answers what the program asks
     its terminal (`Titles`, `:238`: OSC 10/11, `?996n`, `?2031`, `6n`, `c`, `?u`).
   - `set_theme` (`:1133`) keeps the client's theme and sends `?997` to panes with mode 2031.

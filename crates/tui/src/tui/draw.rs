@@ -466,6 +466,7 @@ pub(super) fn mode_of(app: &App) -> Mode {
         Some(
             super::Modal::Close { .. }
                 | super::Modal::ClosePane { .. }
+                | super::Modal::Resend { .. }
                 | super::Modal::Done { .. }
                 | super::Modal::Rm { .. }
         )

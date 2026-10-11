@@ -185,9 +185,9 @@ impl Motion {
 /// paints what it wrote whole or not at all (REQ-139). The frame closes
 /// whatever `draw` returns.
 pub fn synced<W: Write, R>(out: &mut W, draw: impl FnOnce() -> R) -> R {
-    let _ = execute!(out, BeginSynchronizedUpdate);
+    let _ = super::trace::span("sync_begin", || execute!(out, BeginSynchronizedUpdate));
     let r = draw();
-    let _ = execute!(out, EndSynchronizedUpdate);
+    let _ = super::trace::span("sync_end", || execute!(out, EndSynchronizedUpdate));
     r
 }
 

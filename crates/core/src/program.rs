@@ -1,4 +1,4 @@
-//! What runs in a pane: which foreground programs are agents (addendum 15).
+//! What runs in a pane: which foreground programs are agents (addendum 17).
 
 /// The programs jw treats as agents. A pane running one takes `jw prompt`
 /// and the agent marks, whatever its role.

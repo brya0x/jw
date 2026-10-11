@@ -99,6 +99,23 @@ impl Repo {
         run(&self.root, &["fetch", "--quiet", "origin"]).map(drop)
     }
 
+    /// Downloads the head of pull request `n` into `refs/jw/pr-<n>`, a ref of
+    /// its own so a worktree that has the review branch checked out can
+    /// still be refreshed. Returns the commit.
+    pub fn fetch_pr(&self, n: u64) -> Result<String> {
+        let r = crate::review::head_ref(n);
+        run(
+            &self.root,
+            &["fetch", "--quiet", "origin", &format!("+pull/{n}/head:{r}")],
+        )?;
+        run(&self.root, &["rev-parse", &r])
+    }
+
+    /// Updates `origin/<branch>` alone.
+    pub fn fetch_branch(&self, branch: &str) -> Result<()> {
+        run(&self.root, &["fetch", "--quiet", "origin", branch]).map(drop)
+    }
+
     /// Whether a local branch with that name exists.
     pub fn branch_exists(&self, branch: &str) -> bool {
         let r = format!("refs/heads/{branch}");
@@ -126,6 +143,17 @@ impl Repo {
     pub fn add_worktree_existing(&self, path: &Path, branch: &str) -> Result<()> {
         let p = path.to_string_lossy();
         run(&self.root, &["worktree", "add", "--quiet", &p, branch]).map(drop)
+    }
+
+    /// Creates `path` on `branch` reset to `r#ref`, whether or not the
+    /// branch exists.
+    pub fn add_worktree_reset(&self, path: &Path, branch: &str, r#ref: &str) -> Result<()> {
+        let p = path.to_string_lossy();
+        run(
+            &self.root,
+            &["worktree", "add", "--quiet", "-B", branch, &p, r#ref],
+        )
+        .map(drop)
     }
 
     /// Deletes the worktree at `path`, discarding local changes.
@@ -244,6 +272,16 @@ pub fn unpushed(dir: &Path) -> Result<Vec<String>> {
     run(dir, &["log", "--oneline", "HEAD", "--not", "--remotes"]).map(lines)
 }
 
+/// Like [`unpushed`], but a commit `r#ref` has is not work of the user's
+/// either: a review's branch starts at the PR head, which only that ref has.
+pub fn unpushed_beyond(dir: &Path, r#ref: &str) -> Result<Vec<String>> {
+    run(
+        dir,
+        &["log", "--oneline", "HEAD", "--not", "--remotes", r#ref],
+    )
+    .map(lines)
+}
+
 /// A rebase or merge left half-done in the worktree at `dir`.
 pub fn operation(dir: &Path) -> Option<&'static str> {
     [
@@ -304,6 +342,23 @@ pub fn current_branch(dir: &Path) -> Result<String> {
 /// `.git` without running git, so it is cheap enough for every refresh:
 /// the checkout's root and its branch (or a short commit when detached).
 pub fn head_of(dir: &Path) -> Option<(PathBuf, String)> {
+    let (root, head) = head_text(dir)?;
+    let branch = match head.strip_prefix("ref: refs/heads/") {
+        Some(b) => b.to_string(),
+        None => head.chars().take(7).collect(),
+    };
+    Some((root, branch))
+}
+
+/// The branch checked out in `dir`, read from `.git` like [`head_of`]:
+/// `None` when detached, where `git branch --show-current` prints nothing.
+pub fn branch_of(dir: &Path) -> Option<String> {
+    let (_, head) = head_text(dir)?;
+    head.strip_prefix("ref: refs/heads/").map(str::to_string)
+}
+
+/// The checkout's root and what its `HEAD` file says.
+fn head_text(dir: &Path) -> Option<(PathBuf, String)> {
     let root = dir.ancestors().find(|d| d.join(".git").exists())?;
     let dot = root.join(".git");
     // A worktree's .git is a file pointing at its git dir.
@@ -315,16 +370,16 @@ pub fn head_of(dir: &Path) -> Option<(PathBuf, String)> {
         dot
     };
     let head = std::fs::read_to_string(git_dir.join("HEAD")).ok()?;
-    let head = head.trim();
-    let branch = match head.strip_prefix("ref: refs/heads/") {
-        Some(b) => b.to_string(),
-        None => head.chars().take(7).collect(),
-    };
-    Some((root.to_path_buf(), branch))
+    Some((root.to_path_buf(), head.trim().to_string()))
 }
 
 /// Brings the branch checked out in `dir` up to its upstream, refusing
 /// anything but a fast-forward.
+/// Moves the checkout at `dir` to `r#ref`, branch and files.
+pub fn reset_hard(dir: &Path, r#ref: &str) -> Result<()> {
+    run(dir, &["reset", "--hard", "--quiet", r#ref]).map(drop)
+}
+
 pub fn pull_ff(dir: &Path) -> Result<()> {
     run(dir, &["pull", "--ff-only"]).map(drop)
 }
@@ -379,6 +434,14 @@ pub(crate) mod tests {
         must_git(&work, &["config", "user.name", "t"]);
         must_git(&work, &["config", "user.email", "t@t"]);
         (dir, work)
+    }
+
+    #[test]
+    fn branch_of_reads_the_branch_and_is_none_when_detached() {
+        let (_dir, work) = new_test_repo();
+        assert_eq!(branch_of(&work).as_deref(), Some("trunk"));
+        must_git(&work, &["checkout", "-q", "--detach"]);
+        assert_eq!(branch_of(&work), None);
     }
 
     #[test]

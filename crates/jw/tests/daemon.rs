@@ -474,6 +474,69 @@ fn prompt_waits_for_quiet_then_pastes_and_presses_enter() {
     assert!(text.contains("bug^[[201~^M"), "{text}");
 }
 
+/// REQ-168, REQ-171, REQ-177: a review opens as the diff beside the agent
+/// (the tree `Stream` gives it), the diff has no process, and the prompt the
+/// TUI sends after `Open` reaches the agent. The review adds no message.
+#[test]
+fn a_review_opens_as_a_diff_and_an_agent_and_the_agent_is_briefed() {
+    let d = Daemon::start();
+    let mut c = d.client();
+    let pane = |role: &str, cmd: Option<&str>| NewPane {
+        role: role.into(),
+        cmd: cmd.map(Into::into),
+        ..cat()
+    };
+    let mut leaves = [
+        pane("view:diff", None),
+        pane(
+            "agent",
+            Some("printf '\\033[?2004h'; stty raw -echo; cat -v"),
+        ),
+    ]
+    .into_iter();
+    let tree = Tree::from_node(&jw_core::stream::review_tree(), &mut leaves).unwrap();
+    c.send(&ClientMsg::Open {
+        stream: "r".into(),
+        tree,
+    })
+    .unwrap();
+    let t = next_tree(&mut c);
+    let roles: Vec<_> = t.leaves().iter().map(|l| l.role.clone()).collect();
+    assert_eq!(roles, ["view:diff", "agent"]);
+    let agent = ids(&t)[1];
+
+    c.send(&ClientMsg::Prompt {
+        stream: "r".into(),
+        text: "Review pull request #7.".into(),
+    })
+    .unwrap();
+    c.send(&ClientMsg::List).unwrap();
+    let mut screen = vt100::Parser::new(24, 80, 0);
+    let deadline = Instant::now() + TIMEOUT;
+    let (mut prompted, mut listed) = (false, false);
+    while !(prompted && listed && screen.screen().contents().contains("^M")) {
+        assert!(Instant::now() < deadline, "the agent was never briefed");
+        match recv(&mut c) {
+            DaemonMsg::Output { pane: p, bytes } if p == agent => screen.process(&bytes),
+            DaemonMsg::Prompted { pane: p } => {
+                assert_eq!(p, agent);
+                prompted = true;
+            }
+            DaemonMsg::Panes { panes } => {
+                assert_eq!(panes.len(), 1, "only the agent runs: {panes:?}");
+                listed = true;
+            }
+            DaemonMsg::Error { msg } => panic!("daemon error: {msg}"),
+            _ => {}
+        }
+    }
+    let text = screen.screen().contents();
+    assert!(
+        text.contains("^[[200~Review pull request #7.^[[201~^M"),
+        "{text}"
+    );
+}
+
 #[test]
 fn prompt_without_an_agent_pane_is_an_error() {
     let d = Daemon::start();
@@ -1323,7 +1386,7 @@ fn the_cli_reads_the_daemon_or_none() {
     }
 }
 
-/// REQ-160: a `shell` pane with an agent in the foreground takes `jw prompt`.
+/// REQ-194: a `shell` pane with an agent in the foreground takes `jw prompt`.
 #[test]
 fn prompt_reaches_an_agent_program_in_a_shell_pane() {
     let d = Daemon::start();
@@ -1360,4 +1423,67 @@ fn prompt_reaches_an_agent_program_in_a_shell_pane() {
         "{reply:?}"
     );
     read_until(&mut c, pane, &mut screen, "hi there");
+}
+
+/// REQ-192: a client that asks for `SplitSnapshots` gets the screen first and the
+/// history behind it, and the two together are what one `Snapshot` was.
+#[test]
+fn a_split_client_gets_the_screen_then_the_history() {
+    let d = Daemon::start();
+    let mut c = d.client();
+    let pane = spawn(&mut c, "s", "seq 1 60; cat", 80, 24);
+    let mut seen = vt100::Parser::new(24, 80, 0);
+    read_until(&mut c, pane, &mut seen, "60");
+
+    let mut plain = d.client();
+    plain
+        .send(&ClientMsg::Attach { stream: "s".into() })
+        .unwrap();
+    let full = match recv(&mut plain) {
+        DaemonMsg::Snapshot { bytes, .. } => bytes,
+        m => panic!("want a Snapshot, got {m:?}"),
+    };
+
+    let mut split = d.client();
+    split.send(&ClientMsg::SplitSnapshots).unwrap();
+    split
+        .send(&ClientMsg::Attach { stream: "s".into() })
+        .unwrap();
+    let screen = loop {
+        match recv(&mut split) {
+            DaemonMsg::Screen {
+                pane: p,
+                cols: 80,
+                rows: 24,
+                bytes,
+                ..
+            } if p == pane => break bytes,
+            DaemonMsg::Tree { .. } => {}
+            m => panic!("want the Screen first, got {m:?}"),
+        }
+    };
+    let history = match recv(&mut split) {
+        DaemonMsg::History {
+            pane: p,
+            cols: 80,
+            rows: 24,
+            bytes,
+        } if p == pane => bytes,
+        m => panic!("want the History next, got {m:?}"),
+    };
+    assert_eq!(history, full, "History is what a Snapshot carried");
+
+    let mut lite = vt100::Parser::new(24, 80, 100);
+    lite.process(&screen);
+    let mut whole = vt100::Parser::new(24, 80, 100);
+    whole.process(&history);
+    assert_eq!(lite.screen().contents(), whole.screen().contents());
+    lite.screen_mut().set_scrollback(usize::MAX);
+    whole.screen_mut().set_scrollback(usize::MAX);
+    assert_eq!(
+        lite.screen().scrollback(),
+        0,
+        "the Screen has no scrollback"
+    );
+    assert!(whole.screen().scrollback() > 0, "the History has it");
 }

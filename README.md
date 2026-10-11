@@ -93,7 +93,7 @@ git clone https://github.com/brya0x/jw && cd jw && cargo install --path crates/j
 | `1-9` | workspace by number | `s` | sync with base | `t` | new shell |
 | `o` | open a folder | `d` | changes (diff) | `x` | close |
 | `/` | open a file | `X` | remove | `n` | name |
-| `a` | sessions | | | `f` | full screen |
+| `a` | sessions | `R` | review a PR | `f` | full screen |
 | `,` | settings | | | | |
 | `↑↓←→` | move through the sidebar | | | | |
 | `q` | detach | | | | |
@@ -112,6 +112,13 @@ git clone https://github.com/brya0x/jw && cd jw && cargo install --path crates/j
 - **`^␣ d`:** opens the diff against the base on the right. It shows one column when the
   terminal is narrow and two side by side when it is wide. `↵` opens a file in nvim, or in
   the Markdown reader for a `.md`.
+
+- **`^␣ R`:** lists the open pull requests of the project (`m` shows only those whose review
+  is requested of you, `o` opens one in the browser). `↵` on one makes the worktree
+  `review-<n>` at the PR's head and opens it as the diff against the PR's base on the left half
+  and claude on the right. claude is told to review the PR from a file with its description,
+  comments and reviews, and not to edit, commit or push. Picking the same PR again refreshes the
+  worktree and asks before it sends the prompt a second time. Needs `gh`.
 
 All of these except `1-9 hjkl HJKL ? q` can be rebound in `^␣ ,`.
 
