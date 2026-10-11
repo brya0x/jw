@@ -17,6 +17,8 @@ Cloudflare tunnel; `jw mobile` and the TUI are clients of that service. Nothing 
 - `src/tunnel.rs`: `up` starts `cloudflared`, waits for its name and for DNS, and says each
   step; `Tunnel` is a clonable handle whose last drop kills the process. Every wait takes a
   `cancel` check. `JW_CLOUDFLARED` names another program and skips the DNS wait: a seam for tests only (they run the real binary, so it cannot be `cfg(test)`); an empty value is ignored. Each DNS lookup runs on its own thread, so a hung resolver cannot hold up a stop.
+  `Lister` is the other callback the daemon hands in: it answers a phone's `workspaces` and
+  `sessions` from jw's files (the registry is not this crate's).
 - `src/auth.rs`: `Pairing` (the one-use token), `Store` (`mobile.json`, hashes only), `Limiter`
   (failed attempts per address).
 

@@ -154,6 +154,7 @@ supersedes:  []
 | M1 ✓ `65cc24f` | Bridge relay, protocol check, stop | 8–11 | `crates/web/src/bridge.rs`, `proto.rs`, `jw/tests/web.rs` |
 | M2 ✓ `720261b` | Pairing, auth, limits, revoke, read-only, tunnel and QR as the `jw mobile` process (D1 and D2 move the hosting) | 1–7, 29, 31, 32 | `crates/web/`, `jw/src/mobile.rs` |
 | W1 ✓ `ba9d161` | `palettes` and `settings` in `ready` | 17 | `crates/web/src/bridge.rs`, the `jw` binary or the daemon start |
+| W2 ✓ | `workspaces` and `sessions` answers, from the TUI's own grouping (`core::sidebar`) | 12 | `core/src/sidebar.rs`, `web/src/bridge.rs`, `daemon/src/mobile.rs` |
 | D1 ✓ `99324dc` | The daemon hosts mobile: tunnel moves to jw-web, `daemon/src/mobile.rs`, the messages, watchers, stop on signal, `PROTOCOL` bump | 1, 3, 6, 9, 33–40, 50 | `daemon/src/mobile.rs`, `daemon/src/lib.rs`, `web/src/tunnel.rs`, `proto.rs` |
 | D2 ✓ `a6fa0f3` | `jw mobile` as a client, `jw mobile stop`, shared QR in core | 30, 41 | `jw/src/mobile.rs`, `core/src/qr.rs` |
 | T1 ✓ | The TUI: Mobile modal, `^␣ m`, indicator, pair question | 42–49 | `tui/src/tui/mobile.rs`, `modal.rs`, `mod.rs`, `draw.rs`, `settings.rs` |
@@ -163,7 +164,7 @@ supersedes:  []
 | M6 | Changes and diff | 13, 25 | `crates/web/`, `android/app` |
 | M7 | Settings, touch and mode chrome, polish | 26 | `android/app` |
 
-Order: W1, D1, D2, T1 on the server track and M3 on the app track run in parallel; then M4 to M7. The work orders for the two agents that build them are `docs/specs/mobile-work/server.md` and `docs/specs/mobile-work/android.md`.
+Order: W1, W2, D1, D2, T1 on the server track and M3 on the app track run in parallel; then M4 to M7. The work orders for the two agents that build them are `docs/specs/mobile-work/server.md` and `docs/specs/mobile-work/android.md`.
 
 ## Corrections
 
@@ -185,6 +186,7 @@ Order: W1, D1, D2, T1 on the server track and M3 on the app track run in paralle
 - A default key that another action's own binding already took leaves the new action with no key (`Settings::key`), so adding `mobile` on `m` does not move what a user bound before.
 - The review of W1, D1 and D2 (`.mobile-work/reviews/`) found, and this fixes: `getaddrinfo` has no timeout, so a hung lookup ignored a stop (each lookup is on its own thread now); `jw mobile devices` and `revoke` printed a phone's name raw, and `clean` let the Unicode bidirectional controls through (one `proto::clean` now, used by the bridge, the CLI and the TUI); `JW_CLOUDFLARED` empty skipped the DNS wait; a stop ran the closing of sockets before its bounded wait, so a stalled phone could push the signal past 2 s (the tunnel is killed first and the rest is waited for up to the limit); a panic in the start left `starting` for good (it is `failed` now); `answer` accepted any client and ids counted from 1; the 1 s tick read `mobile.json` under a lock (the devices are cached and read again when the file's stamp moves, and on a revoke); `look` was read and parsed at every `ready` (cached until a theme or `settings.json` changes, files over 64 KiB left out); and an empty look went out as `null` (it is `[]` and `{}`).
 - A phone's frames used to reach the daemon whatever they were; `Mobile*` ones are refused at the bridge now (the Interfaces row), a rule the review did not list but its second finding on `answer` implied.
+- `jw ls --json` says only `worktree` or `folder`; the phone's `kind` also tells a `root` and gives each worktree its `parent`, which the sidebar's grouping knows and `ls` never needed. That grouping moved from the TUI to `core::sidebar` so both read the same rows.
 - A question waiting when the last watcher leaves is a no at once (`Mobile::forget`), as REQ-36 says for no watcher, instead of the phone waiting out the 60 s.
 - `MobileState.step` is a key, not text: the modal draws a checklist (done, now, later) and needs to know which step it is on. D1 changed it before anything shipped, so REQ-50's single bump still holds.
 - D1 bumped `PROTOCOL` from 9 to 10, the first number free past `origin/main`'s 9.

@@ -17,4 +17,5 @@ pub mod layout;
 pub mod qr;
 pub mod review;
 pub mod session;
+pub mod sidebar;
 pub mod stream;

@@ -11,6 +11,10 @@
 //!   `timeout`, `limited`, `expired`, `unknown`, `denied`, `revoked`,
 //!   `read_only`, `unsupported`, `protocol`, `daemon`.
 //!
+//! Once in, a phone may ask `workspaces{session?}` and `sessions`, and is
+//! answered `workspaces{session,items}` and `sessions{items}` from what the
+//! PC's jw has on disk (REQ-12). Both only read, so they pass in read-only.
+//!
 //! A phone is let in by `pair` or `auth` and nothing else; until then the
 //! daemon is not even connected to.
 
@@ -103,12 +107,25 @@ pub type Confirm = Arc<dyn Fn(&Pair) -> bool + Send + Sync>;
 /// the themes are in the TUI crate and this one does not depend on it.
 pub type Look = Arc<dyn Fn() -> serde_json::Value + Send + Sync>;
 
+/// What a phone can ask the PC to list (REQ-12).
+pub enum Query {
+    /// The workspaces of a session, by name.
+    Workspaces(String),
+    /// Every session.
+    Sessions,
+}
+
+/// Answers a `Query` with its items, or why not. Like `Look`, the daemon hands
+/// it in: it reads jw's registry and folders, which this crate does not know.
+pub type Lister = Arc<dyn Fn(&Query) -> Result<serde_json::Value, String> + Send + Sync>;
+
 pub struct Config {
     pub store: Arc<Store>,
     /// Drop everything but looking (REQ-7).
     pub read_only: bool,
     pub confirm: Confirm,
     pub look: Look,
+    pub lister: Lister,
     pub timings: Timings,
 }
 
@@ -130,6 +147,7 @@ struct Shared {
     online: Mutex<Vec<String>>,
     confirm: Confirm,
     look: Look,
+    lister: Lister,
     t: Timings,
     pairing: Mutex<Option<Pairing>>,
     limiter: Mutex<Limiter>,
@@ -225,6 +243,7 @@ impl Bridge {
             read_only: AtomicBool::new(config.read_only),
             online: Mutex::new(Vec::new()),
             look: config.look,
+            lister: config.lister,
             confirm: config.confirm,
             limiter: Mutex::new(Limiter::new(t.fail_max, t.fail_window, t.lockout)),
             pairing: Mutex::new(None),
@@ -581,9 +600,7 @@ fn relay(
                         ws.send(error("read_only", "this bridge is read-only"))?;
                     }
                     Message::Binary(body) => write_raw(daemon, &body)?,
-                    Message::Text(_) => {
-                        ws.send(error("unsupported", "no control messages yet"))?;
-                    }
+                    Message::Text(text) => ws.send(answer(shared, &text))?,
                     Message::Close(_) => return Ok(()),
                     _ => {}
                 }
@@ -592,6 +609,40 @@ fn relay(
             Err(WsError::ConnectionClosed | WsError::AlreadyClosed) => return Ok(()),
             Err(e) => return Err(e),
         }
+    }
+}
+
+/// What a phone may ask in the control channel once it is in.
+#[derive(Deserialize)]
+#[serde(tag = "t", rename_all = "snake_case")]
+enum Ask {
+    Workspaces { session: Option<String> },
+    Sessions,
+}
+
+/// The answer to one control message of a phone: the list asked for, or an
+/// error saying why not.
+fn answer(shared: &Shared, text: &str) -> Message {
+    let Ok(ask) = serde_json::from_str::<Ask>(text) else {
+        return error("unsupported", "ask workspaces or sessions");
+    };
+    match ask {
+        Ask::Workspaces { session } => {
+            let session = session.unwrap_or_else(|| "main".into());
+            match (shared.lister)(&Query::Workspaces(session.clone())) {
+                Ok(items) => Message::text(
+                    serde_json::json!({ "t": "workspaces", "session": session, "items": items })
+                        .to_string(),
+                ),
+                Err(why) => error("unsupported", &why),
+            }
+        }
+        Ask::Sessions => match (shared.lister)(&Query::Sessions) {
+            Ok(items) => {
+                Message::text(serde_json::json!({ "t": "sessions", "items": items }).to_string())
+            }
+            Err(why) => error("unsupported", &why),
+        },
     }
 }
 
@@ -706,6 +757,7 @@ mod tests {
         timings: Timings,
         confirm: Confirm,
         look: Look,
+        lister: Lister,
     }
 
     impl Default for Opts {
@@ -723,6 +775,11 @@ mod tests {
                 },
                 confirm: Arc::new(|_| true),
                 look: Arc::new(|| serde_json::json!({"palettes": [], "settings": {}})),
+                lister: Arc::new(|q| match q {
+                    Query::Workspaces(s) if s == "nope" => Err("no session named nope".into()),
+                    Query::Workspaces(s) => Ok(serde_json::json!([{ "id": "w1", "session": s }])),
+                    Query::Sessions => Ok(serde_json::json!([{ "name": "main", "workspaces": 1 }])),
+                }),
             }
         }
     }
@@ -751,6 +808,7 @@ mod tests {
                 read_only: o.read_only,
                 confirm: o.confirm,
                 look: o.look,
+                lister: o.lister,
                 timings: o.timings,
             },
         )
@@ -1203,6 +1261,62 @@ mod tests {
     }
 
     #[test]
+    fn a_phone_asks_for_workspaces_and_sessions_and_gets_the_lists() {
+        let r = rig(Opts::default());
+        let mut p = phone(&r.bridge);
+        login(&mut p, &enrol(&r, "a"));
+        say(&mut p, serde_json::json!({ "t": "workspaces" }));
+        let v = json(&mut p);
+        assert_eq!(v["t"], "workspaces", "{v}");
+        assert_eq!(v["session"], "main");
+        assert_eq!(v["items"][0]["id"], "w1");
+        say(
+            &mut p,
+            serde_json::json!({ "t": "workspaces", "session": "work" }),
+        );
+        let v = json(&mut p);
+        assert_eq!(
+            (v["session"].as_str(), v["items"][0]["session"].as_str()),
+            (Some("work"), Some("work"))
+        );
+        say(&mut p, serde_json::json!({ "t": "sessions" }));
+        let v = json(&mut p);
+        assert_eq!(v["t"], "sessions");
+        assert_eq!(v["items"][0]["name"], "main");
+        // A session that is not there, and a request that is not one.
+        say(
+            &mut p,
+            serde_json::json!({ "t": "workspaces", "session": "nope" }),
+        );
+        assert_eq!(code(&mut p), "unsupported");
+        say(&mut p, serde_json::json!({ "t": "diff", "ws": "w1" }));
+        assert_eq!(code(&mut p), "unsupported");
+        // The connection is still good for frames.
+        p.send(body(&input(1, b"ls"))).unwrap();
+        assert_eq!(
+            msg(&mut p),
+            DaemonMsg::Output {
+                pane: 1,
+                bytes: b"ls".to_vec()
+            }
+        );
+    }
+
+    #[test]
+    fn the_lists_only_read_so_read_only_lets_them_through() {
+        let r = rig(Opts {
+            read_only: true,
+            ..Opts::default()
+        });
+        let mut p = phone(&r.bridge);
+        login(&mut p, &enrol(&r, "a"));
+        say(&mut p, serde_json::json!({ "t": "sessions" }));
+        assert_eq!(json(&mut p)["t"], "sessions");
+        say(&mut p, serde_json::json!({ "t": "workspaces" }));
+        assert_eq!(json(&mut p)["t"], "workspaces");
+    }
+
+    #[test]
     fn a_phone_cannot_drive_mobile_itself() {
         for sent in [
             ClientMsg::MobileWatch,
@@ -1443,7 +1557,8 @@ mod tests {
         let r = rig(Opts::default());
         let mut p = phone(&r.bridge);
         login(&mut p, &enrol(&r, "a"));
-        say(&mut p, serde_json::json!({ "t": "workspaces" }));
+        // `diff` is not built yet (W3): an error, and the relay goes on.
+        say(&mut p, serde_json::json!({ "t": "diff", "ws": "w1" }));
         assert_eq!(code(&mut p), "unsupported");
         p.send(body(&input(1, b"x"))).unwrap();
         assert_eq!(
@@ -1488,6 +1603,7 @@ mod tests {
             read_only: false,
             confirm: Arc::new(|_| true),
             look: Arc::new(|| serde_json::json!({})),
+            lister: Arc::new(|_| Ok(serde_json::json!([]))),
             timings: Timings::default(),
         };
         let err = Bridge::start(any, PathBuf::from("/nowhere"), config)

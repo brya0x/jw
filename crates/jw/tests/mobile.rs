@@ -605,3 +605,82 @@ fn cloudflared_dying_while_ready_fails_mobile_and_a_new_start_runs_a_new_stub() 
     ready(&mut w);
     assert_ne!(rig.stub_pid(), pid);
 }
+
+#[test]
+fn a_paired_phone_is_told_the_workspaces_and_sessions_of_the_pcs_jw() {
+    use jw_core::core::registry::{Entry, Registry};
+    use jw_core::folders::{Folder, Folders};
+    let rig = Rig::start(Stub::Registers);
+    // What the TUI would have on disk: a plain folder and two worktrees of a
+    // project whose folder is not open.
+    let state = rig.dir.join("state").join("jw");
+    let main = jw_core::session::dir(&state, "main").unwrap();
+    std::fs::create_dir_all(&main).unwrap();
+    Folders {
+        folders: vec![Folder {
+            dir: "/nowhere/notes".into(),
+            opened: false,
+            created: "2026-10-11T00:00:00Z".into(),
+            agent: None,
+            plain: true,
+            name: Some("Notes".into()),
+        }],
+    }
+    .save(&main.join("folders.json"))
+    .unwrap();
+    let wt = |id: &str, name: &str, pr: u64| Entry {
+        id: id.into(),
+        name: name.into(),
+        project: "jw".into(),
+        branch: format!("feat/{name}"),
+        path: format!("/nowhere/jw-wt/{name}"),
+        pr,
+        root: "/nowhere/jw".into(),
+        ..Entry::default()
+    };
+    Registry {
+        entries: vec![wt("jw-beta", "beta", 0), wt("jw-alpha", "alpha", 43)],
+    }
+    .save(&state.join("workspaces.json"))
+    .unwrap();
+
+    let mut w = rig.watcher();
+    let code = up(&mut w);
+    let (mut phone, _) = pair(&rig, &code, &mut w, "Pixel");
+
+    phone.say(serde_json::json!({ "t": "workspaces" }));
+    let v = phone.json();
+    assert_eq!(v["t"], "workspaces", "{v}");
+    assert_eq!(v["session"], "main");
+    let items = v["items"].as_array().unwrap();
+    let names: Vec<(&str, &str)> = items
+        .iter()
+        .map(|i| (i["kind"].as_str().unwrap(), i["name"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            ("folder", "Notes"),
+            ("root", "jw"),
+            ("worktree", "alpha"),
+            ("worktree", "beta")
+        ],
+        "{v}"
+    );
+    assert_eq!(items[2]["parent"], items[1]["id"]);
+    assert_eq!(items[2]["pr"], 43);
+    assert_eq!(items[3]["pr"], serde_json::Value::Null);
+    assert_eq!(items[2]["branch"], "feat/alpha");
+    assert_eq!(items[0]["parent"], serde_json::Value::Null);
+
+    phone.say(serde_json::json!({ "t": "sessions" }));
+    let v = phone.json();
+    assert_eq!(
+        v["items"],
+        serde_json::json!([{ "name": "main", "workspaces": 3 }]),
+        "{v}"
+    );
+
+    phone.say(serde_json::json!({ "t": "workspaces", "session": "nope" }));
+    assert_eq!(phone.json()["code"], "unsupported");
+}

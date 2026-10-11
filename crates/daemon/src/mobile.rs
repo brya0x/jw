@@ -22,8 +22,10 @@ use std::time::Duration;
 
 use anyhow::{Result, bail};
 use jw_core::core::config;
+use jw_core::core::registry;
+use jw_core::{session, sidebar};
 use jw_web::auth::Store;
-use jw_web::bridge::{Bridge, Config, Look, Timings};
+use jw_web::bridge::{Bridge, Config, Lister, Look, Query, Timings};
 use jw_web::tunnel::{self, Step, Tunnel};
 
 use crate::outbox::Tx;
@@ -66,6 +68,31 @@ impl Tuning {
             hook(stage);
         }
     }
+}
+
+/// What a phone's `workspaces` and `sessions` are answered from: the registry
+/// and the folders of the sessions on disk, as the TUI's sidebar groups them
+/// (REQ-12). Read at each ask, so what the TUI changed is what the phone sees.
+fn lister() -> Lister {
+    Arc::new(|query| {
+        let state = registry::state_dir().map_err(|e| e.to_string())?;
+        let reg = registry::default_path().map_err(|e| e.to_string())?;
+        let value = match query {
+            Query::Workspaces(name) => {
+                let exists = name == session::MAIN
+                    || session::list(&state).is_ok_and(|all| all.contains(name));
+                if !sidebar::known(name) || !exists {
+                    return Err(format!("no session named {name}"));
+                }
+                let rows = sidebar::load(&state, &reg, name).map_err(|e| e.to_string())?;
+                serde_json::to_value(sidebar::items(&rows, name))
+            }
+            Query::Sessions => {
+                serde_json::to_value(sidebar::sessions(&state, &reg).map_err(|e| e.to_string())?)
+            }
+        };
+        value.map_err(|e| e.to_string())
+    })
 }
 
 /// Who answered a pair question (a client id) and what; `CANCELLED` when
@@ -517,6 +544,7 @@ impl Inner {
                 read_only,
                 confirm: Arc::new(move |p| me.upgrade().is_some_and(|m| m.ask(p.name, p.code))),
                 look: self.look.clone(),
+                lister: lister(),
                 timings: Timings::default(),
             },
         )

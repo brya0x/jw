@@ -161,12 +161,9 @@ pub enum View {
 }
 
 /// One row of the sidebar: a workspace, and whether it is a worktree
-/// listed under its project (REQ-50).
-#[derive(Debug, Clone, PartialEq)]
-pub struct Row {
-    pub entry: Entry,
-    pub child: bool,
-}
+/// listed under its project (REQ-50). Grouped in `core::sidebar`, which the
+/// phone's `workspaces` answer is made from too.
+pub use crate::sidebar::Row;
 
 /// How a status message reads: green when something was done, red when it
 /// failed or was refused (REQ-54).
@@ -1049,7 +1046,7 @@ impl App {
         if trace::span("reload_fill_roots", || actions::fill_roots(&mut reg)) {
             reg.save(&reg_path)?;
         }
-        let rows = build_rows(&folders, reg, &crate::session::current());
+        let rows = crate::sidebar::rows(&folders, reg, &crate::session::current());
         self.apply_rows(rows);
         Ok(())
     }
@@ -3691,64 +3688,15 @@ fn even(n: &Node) -> Node {
 fn load_rows() -> Result<Vec<Row>> {
     let folders = crate::folders::Folders::load(&crate::folders::default_path()?)?;
     let reg = Registry::load(&registry::default_path()?)?;
-    Ok(build_rows(&folders, reg, &crate::session::current()))
+    Ok(crate::sidebar::rows(
+        &folders,
+        reg,
+        &crate::session::current(),
+    ))
 }
 
 /// One project row per opened folder, each registry worktree under its
 /// project's row (REQ-50).
-fn build_rows(folders: &crate::folders::Folders, reg: Registry, session: &str) -> Vec<Row> {
-    let mut groups: Vec<(Entry, Vec<Entry>)> = folders
-        .folders
-        .iter()
-        .map(|f| (crate::folders::entry_for(f, session), Vec::new()))
-        .collect();
-    let mut by_project: BTreeMap<String, Vec<Entry>> = BTreeMap::new();
-    for e in reg
-        .entries
-        .into_iter()
-        .filter(|e| crate::session::owns(session, &e.session))
-    {
-        by_project.entry(e.project.clone()).or_default().push(e);
-    }
-    for (project, mut worktrees) in by_project {
-        worktrees.sort_by(|a, b| a.name.cmp(&b.name));
-        let root = worktrees
-            .iter()
-            .find(|w| !w.root.is_empty())
-            .map(|w| w.root.clone());
-        let at = groups.iter().position(|(r, _)| {
-            !r.branch.is_empty() && (r.project == project || Some(&r.path) == root.as_ref())
-        });
-        match at {
-            Some(i) => groups[i].1 = worktrees,
-            None => {
-                // Worktrees whose project folder isn't open: the folder
-                // shows closed, above them.
-                let mut e = match &root {
-                    Some(dir) => crate::folders::entry(dir, false),
-                    None => Entry {
-                        id: crate::folders::id(&project),
-                        name: project.clone(),
-                        ..Entry::default()
-                    },
-                };
-                e.project = project;
-                groups.push((e, worktrees));
-            }
-        }
-    }
-    groups
-        .into_iter()
-        .flat_map(|(root, kids)| {
-            std::iter::once(Row {
-                entry: root,
-                child: false,
-            })
-            .chain(kids.into_iter().map(|entry| Row { entry, child: true }))
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod drain_tests {
     use super::drain;

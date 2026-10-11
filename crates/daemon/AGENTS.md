@@ -24,7 +24,7 @@ workspace ids are already unique across them.
   for a pane, then resyncs it with a Snapshot (REQ-76).
 - `src/mobile.rs`: `Mobile`, the service behind `MobileStart` and the rest (spec: mobile.md,
   REQ-33 to 40): phases off, starting, ready, failed; the bridge and `cloudflared` from jw-web;
-  the watchers (clients that sent `MobileWatch`) and the pair question put to them. A start
+  the `Lister` for a phone's `workspaces` and `sessions` (from `core::sidebar`); the watchers (clients that sent `MobileWatch`) and the pair question put to them. A start
   has an *epoch*: a stop or a failure bumps it, and a start or ticker thread of an older one
   does nothing more.
 - `src/ring.rs`: the last 2 MiB of each pane's raw output. A Snapshot replays it, and the
