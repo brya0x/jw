@@ -1,8 +1,10 @@
 //! The client: the sidebar of workspaces, the current one's panes in their
 //! splits, and a one-shot leader key for every action (docs/specs/rust-tui.md).
 //!
-//! Two threads feed one channel: the daemon's messages and the terminal's
-//! events. The main thread applies them and redraws.
+//! Threads feed one channel: the daemon's messages (parsed into a `Parser`
+//! when they are a pane's screen), the terminal's events, a tick, and what
+//! workers resolve or replay off the UI thread. The main thread applies them
+//! and redraws.
 
 mod anim;
 mod diffview;
@@ -73,10 +75,10 @@ enum Msg {
     Tick,
     /// The pull requests of the worktrees, by workspace id.
     Prs(Vec<(String, Option<crate::connectors::Pr>)>),
-    /// Streams of the sidebar's workspaces, resolved on a worker thread.
-    Streams(Vec<Stream>),
+    /// A sidebar workspace's stream, resolved on a worker thread.
+    Stream(Box<Stream>),
     /// A pane's `Snapshot`, already replayed into its parser by the daemon's
-    /// reader thread (F2): the replay of up to 2 MiB stays off the UI thread.
+    /// reader thread (REQ-152): the replay of up to 2 MiB stays off the UI thread.
     Snapshot {
         pane: PaneId,
         role: String,
@@ -234,7 +236,7 @@ impl Pending {
 pub struct PaneView {
     pub role: String,
     pub parser: vt100::Parser<keys::Flags>,
-    /// While its scrollback is being rebuilt (F3): `parser` holds the screen
+    /// While its scrollback is being rebuilt (REQ-159): `parser` holds the screen
     /// only, and what happens to it meanwhile is kept to redo on the full one.
     pub history: Option<Pending>,
     pub exited: Option<i32>,
@@ -314,11 +316,12 @@ pub struct App {
     fresh: bool,
     /// Whether a transition is running, for the loop's frame deadline.
     motion: anim::Motion,
-    /// When the last frame was drawn.
+    /// When the last frame began, or the deadline it kept (the next is due
+    /// `FRAME` later, REQ-137).
     last_draw: Instant,
-    /// The last frame, kept only under `JW_TRACE`, to count the cells a draw changed.
+    /// The last frame, kept only under `JW_TRACE_CELLS`, to count the cells a draw changed.
     traced: Option<ratatui::buffer::Buffer>,
-    /// Streams resolved off the UI thread, by workspace id (F1): a switch to
+    /// Streams resolved off the UI thread, by workspace id (REQ-151): a switch to
     /// an open workspace reuses one instead of running `git` on the UI thread.
     streams: BTreeMap<String, Stream>,
     /// Ids already sent to be resolved, so `reload` asks once.
@@ -382,7 +385,7 @@ pub fn run() -> Result<()> {
     let to_main = tx.clone();
     thread::spawn(move || {
         // Which `Screen` a pane's `History` belongs to.
-        let mut seq = 0u64;
+        let mut screens = 0u64;
         let mut seqs: BTreeMap<PaneId, u64> = BTreeMap::new();
         loop {
             match reader.recv() {
@@ -418,13 +421,13 @@ pub fn run() -> Result<()> {
                             rows,
                             bytes,
                         } => {
-                            seq += 1;
-                            seqs.insert(pane, seq);
+                            screens += 1;
+                            seqs.insert(pane, screens);
                             Msg::Snapshot {
                                 pane,
                                 role,
                                 parser: Box::new(replay("snap_parse", rows, cols, &bytes)),
-                                history: Some(seq),
+                                history: Some(screens),
                             }
                         }
                         // Its replay takes a while: on its own thread, so
@@ -1272,10 +1275,8 @@ impl App {
                 }
             }
             Msg::Job(j) => self.on_job(*j),
-            Msg::Streams(all) => {
-                for s in all {
-                    self.streams.insert(s.entry.id.clone(), s);
-                }
+            Msg::Stream(s) => {
+                self.streams.insert(s.entry.id.clone(), *s);
             }
         }
     }
@@ -1767,7 +1768,7 @@ impl App {
         thread::spawn(move || {
             for e in todo {
                 if let Ok(s) = Stream::resolve(&e) {
-                    let _ = tx.send(Msg::Streams(vec![s]));
+                    let _ = tx.send(Msg::Stream(Box::new(s)));
                 }
             }
         });

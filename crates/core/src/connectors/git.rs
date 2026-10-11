@@ -394,6 +394,14 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn branch_of_reads_the_branch_and_is_none_when_detached() {
+        let (_dir, work) = new_test_repo();
+        assert_eq!(branch_of(&work).as_deref(), Some("trunk"));
+        must_git(&work, &["checkout", "-q", "--detach"]);
+        assert_eq!(branch_of(&work), None);
+    }
+
+    #[test]
     fn head_of_reads_the_checkout_and_its_worktrees() {
         let (dir, work) = new_test_repo();
         std::fs::create_dir_all(work.join("src/deep")).unwrap();

@@ -21,6 +21,8 @@ struct Shared {
     q: Mutex<Queue>,
     ready: Condvar,
     /// The client asked for `Screen` and `History` instead of `Snapshot`.
+    /// Set by the connection's own thread before it reads the `Attach` that
+    /// reads it, so `Relaxed` is enough.
     split: AtomicBool,
 }
 

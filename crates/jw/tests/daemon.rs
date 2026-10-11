@@ -1323,7 +1323,7 @@ fn the_cli_reads_the_daemon_or_none() {
     }
 }
 
-/// F3: a client that asks for `SplitSnapshots` gets the screen first and the
+/// REQ-158: a client that asks for `SplitSnapshots` gets the screen first and the
 /// history behind it, and the two together are what one `Snapshot` was.
 #[test]
 fn a_split_client_gets_the_screen_then_the_history() {

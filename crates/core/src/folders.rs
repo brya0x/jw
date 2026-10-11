@@ -175,26 +175,31 @@ pub fn entry_for(f: &Folder, session: &str) -> Entry {
 
 /// The project name of the repository whose main checkout is `dir`, or
 /// `None` for a plain folder. Finding out runs `git` (about 35 ms), so the
-/// answer is kept per folder while `.git` and its config keep their
-/// modification times: the sidebar asks for every folder on each reload.
+/// answer is kept per folder while `.git/config` keeps its modification time
+/// (it appears with `git init` and changes with the remote): the sidebar asks
+/// for every folder on each reload. `.git` itself changes with every git
+/// command, so its own time would not hold.
 fn project_of(dir: &str) -> Option<String> {
-    /// What `.git` looked like, and the answer then.
-    type Known = (Vec<Option<SystemTime>>, Option<String>);
+    /// The config's modification time, and the answer then.
+    type Known = (Option<SystemTime>, Option<String>);
     static KNOWN: Mutex<BTreeMap<String, Known>> = Mutex::new(BTreeMap::new());
     let path = Path::new(dir);
-    let stamp: Vec<Option<SystemTime>> = [path.join(".git"), path.join(".git").join("config")]
-        .iter()
-        .map(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok())
-        .collect();
-    if let Some((was, project)) = KNOWN.lock().ok()?.get(dir)
+    let stamp = std::fs::metadata(path.join(".git").join("config"))
+        .and_then(|m| m.modified())
+        .ok();
+    let known = KNOWN.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((was, project)) = known.get(dir)
         && *was == stamp
     {
         return project.clone();
     }
+    // `git` runs without the lock: another folder's lookup is not held up.
+    drop(known);
     let project = repo(path).map(|r| git::project_name(&r.remote));
-    if let Ok(mut known) = KNOWN.lock() {
-        known.insert(dir.to_string(), (stamp, project.clone()));
-    }
+    KNOWN
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(dir.to_string(), (stamp, project.clone()));
     project
 }
 

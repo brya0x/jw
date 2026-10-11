@@ -418,22 +418,22 @@ fn screen_bytes(st: &PaneState) -> Vec<u8> {
 /// replay behind it (`SplitSnapshots`).
 fn split_snapshot(id: PaneId, pane: &Pane, st: &PaneState) -> [DaemonMsg; 2] {
     let (rows, cols) = st.parser.screen().size();
-    let DaemonMsg::Snapshot { bytes: full, .. } = snapshot(id, pane, st) else {
-        unreachable!("snapshot makes a Snapshot")
-    };
+    let screen = screen_bytes(st);
+    let mut history = st.ring.bytes();
+    history.extend_from_slice(&screen);
     [
         DaemonMsg::Screen {
             pane: id,
             role: pane.role.clone(),
             cols,
             rows,
-            bytes: screen_bytes(st),
+            bytes: screen,
         },
         DaemonMsg::History {
             pane: id,
             cols,
             rows,
-            bytes: full,
+            bytes: history,
         },
     ]
 }
