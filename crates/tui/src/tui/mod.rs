@@ -316,6 +316,8 @@ pub struct App {
     motion: anim::Motion,
     /// When the last frame was drawn.
     last_draw: Instant,
+    /// The last frame, kept only under `JW_TRACE`, to count the cells a draw changed.
+    traced: Option<ratatui::buffer::Buffer>,
     /// Streams resolved off the UI thread, by workspace id (F1): a switch to
     /// an open workspace reuses one instead of running `git` on the UI thread.
     streams: BTreeMap<String, Stream>,
@@ -641,6 +643,7 @@ impl App {
             fresh: true,
             motion: anim::Motion::default(),
             last_draw: Instant::now(),
+            traced: None,
             streams: BTreeMap::new(),
             warming: Default::default(),
             edge_due: None,
@@ -676,9 +679,24 @@ impl App {
         };
         let drawn = trace::span("draw_total", || {
             anim::synced(&mut out, || {
-                term.draw(|f| trace::span("draw_build", || draw::draw(f, self)))
+                trace::span("term_draw", || {
+                    term.draw(|f| trace::span("draw_build", || draw::draw(f, self)))
+                })
             })
         });
+        if trace::on()
+            && std::env::var_os("JW_TRACE_CELLS").is_some()
+            && let Ok(frame) = &drawn
+        {
+            let cells = self
+                .traced
+                .as_ref()
+                .map_or(frame.buffer.content.len(), |old| {
+                    old.diff(frame.buffer).len()
+                });
+            trace::mark("diff_cells", cells as u64);
+            self.traced = Some(frame.buffer.clone());
+        }
         drawn?;
         Ok(())
     }

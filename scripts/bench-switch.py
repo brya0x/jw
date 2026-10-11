@@ -67,9 +67,15 @@ def pump(t):
                 return
 
 
+leader_bytes = []
+
+
 def lead(k):
+    global out_bytes
+    before = out_bytes
     os.write(fd, b"\x00")
-    time.sleep(0.05)
+    pump(0.05)
+    leader_bytes.append(out_bytes - before)
     os.write(fd, k.encode())
 
 
@@ -177,5 +183,8 @@ print(f"jw: {os.path.relpath(JW, REPO)}  {ROWS}x{COLS}")
 table("open a new workspace (first time: Open)", opens)
 table("switch to an open workspace (Attach)", switches)
 b = sorted(per_switch_bytes)
+lb = sorted(leader_bytes[-N:])
+print(f"\nterminal bytes for the leader's frame (^␣ alone): p50 {statistics.median(lb) / 1024:.1f} KiB, "
+      f"max {lb[-1] / 1024:.1f} KiB")
 print(f"\nterminal bytes per switch (1.2 s window): p50 {statistics.median(b) / 1024:.1f} KiB, "
       f"max {b[-1] / 1024:.1f} KiB")

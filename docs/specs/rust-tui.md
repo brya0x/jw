@@ -399,7 +399,7 @@ After F1 (same bench, two runs): `resolve` 0 ms (the stream comes from a cache `
 
 After F3 (`Screen` first, `History` behind it; two runs): **key → content 12–14 ms p50 (p95 29–38), under the 100 ms budget**; the `History` replay still takes ≈ 100 ms but on its own thread, and the swap into the pane costs 0.004 ms; the UI's longest message 4 ms (p95 12–14), the longest gap without a frame 20 ms (p95 33–35: the first frame after the key), cadence 15.9 ms. The scrollback of a pane is complete ≈ 100 ms after the switch instead of before it appears.
 
-New finding while measuring (S10, not fixed): the frame that draws the leader (`^␣`) takes ≈ 30 ms in the release build (29 of 30 samples). It is outside the switch (it comes before the key), so F0's per-switch window missed it; a frame over 16 ms there drops two frames.
+S10 (a ≈ 30 ms frame when `^␣` is pressed) was seen in three runs and **does not reproduce**. What the trace showed when it did: the cost sat in ratatui's diff-and-flush after the build (`term_draw` 21–46 ms, `draw_build` ≈ 1 ms), the leader's frame writes only ≈ 2 KiB and changes few cells, and it was not caused by idling. Since then 7 runs of 30 switches (≈ 700 frames each) had 0 frames over 16 ms in six runs and 4 in one (16–28 ms, during the slide), with no code change that touches it. Nothing is fixed because nothing was found: it was most likely the machine or the harness (a pty nobody reads for a moment blocks a write on macOS). If `^␣` feels late in Ghostty, report it and run with `JW_TRACE`: `sync_begin`, `term_draw`, `sync_end` and (with `JW_TRACE_CELLS=1`) `diff_cells` split a frame into its parts. The slide's frames change ≈ 12,600 cells each (the whole pane moves by cells) and cost ≈ 1.3 ms.
 
 After F2's threads (`Msg::Snapshot carries a `Parser` built by the reader thread; two runs): the UI thread's longest message during a switch 6–7 ms (was 86), the longest gap without a frame 20–21 ms (was 108–120), cadence 16.0 ms, 0 to 1 gaps over 20 ms. The replay itself did not get cheaper: 118–120 ms now on its own thread (it was 86–108 on the UI thread, and now competes with it for the cores), so **key → content is 146 ms p50, worse than before F2's 119–124 ms, and the 100 ms budget (REQ-154) is not met**. The slide now plays on time, over empty panes, and the content lands at ≈ 146 ms. What is left to cut is the replay of the 2 MiB ring (S3's payload, F3): the daemon sends the whole ring and the TUI replays all of it to rebuild 5,000 rows of scrollback, though only the screen is visible.
 
@@ -411,7 +411,7 @@ Verdicts (before F3): **F1** (S1, S9) and **F2** (S2, S4) are the work; **F3** (
 
 | Item | Change | Home |
 |---|---|---|
-| `JW_TRACE=<file>` | F0: appends `phase,µs` lines (key, Detach sent, Tree rx, each Snapshot rx / parsed, draw build, diff, write, bytes). Off by default, zero cost off | `mod.rs`, `draw.rs` |
+| `JW_TRACE=<file>` | F0: appends `µs,phase,value` lines (key, Detach sent, Tree rx, each Snapshot rx / parsed, `draw_build`, `term_draw`, `sync_begin`/`sync_end`, `diff_cells` under `JW_TRACE_CELLS`). Off by default, zero cost off | `mod.rs`, `draw.rs` |
 | `scripts/bench-switch.py` | F0: drives N switches with `scripts/drive.py`, prints p50/p95/max per phase | `scripts/` |
 | `Msg::Snapshot(PaneId, Parser)` | F2: the reader thread builds the `Parser`; the UI thread only inserts it | `mod.rs:327` |
 | `App::background` jobs | F1: persist recent/folders/stream setup off-thread | `mod.rs` (existing) |
