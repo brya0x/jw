@@ -415,10 +415,10 @@ The diff pane (`^␣ d`, and the left half of a review workspace) mixed committe
 
 | Piece | Shape |
 |---|---|
-| Scope | `diff::Scope { Branch{base}, Uncommitted, Commit(sha) }` in `crates/core/src/diff.rs`; `diff::load(dir, &Scope)` replaces `load(dir, base)` (`diff.rs:80`); its caller is `load_diff` (`tui/mod.rs:2947`) |
+| Scope | `diff::Scope { Branch{base}, Uncommitted, Commit(sha) }` in `crates/core/src/diff.rs`; `diff::load(dir, &Scope)` replaces `load(dir, base)` (now `diff.rs:163`); its caller is `load_diff` (`tui/mod.rs:2966`) |
 | Loaded | `Loaded::Files(Vec<File>)` or `Loaded::TooLarge{files, total}`: the cap is `DIFF_CAP` = 2 MiB of git's stdout, then git is killed and `--name-status` lists the files |
 | General | `git diff -M --merge-base origin/<base> HEAD`; empty base: nothing, with a note |
-| Uncommitted | `git diff -M HEAD` + `ls-files --others --exclude-standard -z` (as `diff.rs:93`); no commit yet: against `EMPTY_TREE` (`diff.rs:74`) |
+| Uncommitted | `git diff -M HEAD` + `ls-files --others --exclude-standard -z` (`diff::untracked`, `diff.rs:237`); no commit yet: against `EMPTY_TREE` (`diff.rs:76`) |
 | Commits | `diff::commits(dir, base, 200)`: `git log -n201 --format=… origin/<base>..HEAD` (empty base: `HEAD`; the extra one says whether more exist) → `Commits{list: Vec<Commit{sha, short, subject, when}>, more}`; detail `git show -M --format= <sha>` (a merge: `-m --first-parent`) |
 | State | `DiffView` (`tui/diffview.rs`) holds `which`, the selected commit, the sidebar's cursor, a `Load` (idle, loading with a number, ready, failed) per slot with a commit's diffs kept by sha, and per view or commit a `Pos{scroll, viewed: BTreeSet<String>}` (before, `viewed` held indices). `diff::File` gains `untracked` |
 | Jobs | `Job::Diff` (`tui/mod.rs:109`) carries General for a pane that opens; `Job::DiffPart{pane, slot, seq, result}` answers any other piece. The view asks with `Action::Load(Request{slot, seq})` and takes the answer with `DiffView::apply`, which drops it unless `seq` is the number its slot waits for; `App::load_part` runs it through `App::background` |
@@ -503,7 +503,7 @@ The diff pane (`^␣ d`, and the left half of a review workspace) mixed committe
 - RAT-47 **The picker is a `Finder` kind.** It has query, selection, preview and clicks. Its items come from a job, which no kind did before, so `Finder` gains a loading state.
 - RAT-52 **General is committed work only.** Until now one scroll held both, which is the complaint. This way General is all of Commits together and Uncommitted is the rest, so no file appears in a view for two reasons. The cost: `^␣ d` no longer shows dirty files first; they are one key away (`2`). Decided with the prototype.
 - RAT-53 **A sidebar, not tabs.** The user's call (2026-10-11): views, commits and files are one list in one place. It spends width, so under 100 columns it becomes an overlay with a breadcrumb instead of tabs.
-- RAT-54 **Scope is client state.** Putting it in the role (`view:diff:commits`) touches saved layouts, the four hard-coded `view:diff` sites (`stream.rs:46`, `tui/mod.rs:1577`, `stream.rs:552`, `jw/tests/daemon.rs:491,506`) and the tests, and the daemon has nothing to do with it. Reopening on General (REQ-217) is the price.
+- RAT-54 **Scope is client state.** Putting it in the role (`view:diff:commits`) touches saved layouts, the four hard-coded `view:diff` sites (`stream.rs:46`, `tui/mod.rs:1588`, `stream.rs:552`, `jw/tests/daemon.rs:491,506`) and the tests, and the daemon has nothing to do with it. Reopening on General (REQ-217) is the price.
 - RAT-55 **Lazy, per view, with a generation.** Only General loads on open, so opening costs what it did minus the untracked walk. A result is applied only if no newer request exists for its slot (REQ-208), so fast `(` `)` never apply out of order. The caps (200 commits, 2 MiB) are pages, not measurements: see OPEN-27.
 - RAT-56 **Viewed by path.** `viewed` held indices and `Job::Diff` rebuilt the view (`tui/mod.rs:3239`), so a reload lost scroll and viewed. Paths survive a list that changes between reloads.
 - RAT-22 **`curl`, not a crate,** for `install <url>`: rare, and jw already shells out to `git` and `gh`; `ureq` would add TLS and about 40 crates for one command.
