@@ -392,10 +392,25 @@ mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
 
+    /// Runs `bin` until the OS lets it. Linux refuses to exec a file that a
+    /// thread's `fork` still holds open for writing (ETXTBSY), and the tests
+    /// fork in parallel, so a script written a moment ago can fail to start.
+    fn settle(bin: &Path) {
+        for _ in 0..100 {
+            match std::process::Command::new(bin).output() {
+                Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                    std::thread::sleep(std::time::Duration::from_millis(10))
+                }
+                _ => return,
+            }
+        }
+    }
+
     fn fake_gh(dir: &Path, reply: &str) -> Client {
         let bin = dir.join("gh");
         std::fs::write(&bin, format!("#!/bin/sh\ncat <<'EOF'\n{reply}\nEOF\n")).unwrap();
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        settle(&bin);
         Client { bin: Some(bin) }
     }
 
@@ -445,6 +460,9 @@ mod tests {
         )
         .unwrap();
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        settle(&bin);
+        // The run that settled it logged its own call.
+        let _ = std::fs::remove_file(&log);
         (Client { bin: Some(bin) }, log)
     }
 
