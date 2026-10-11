@@ -28,7 +28,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 | `1–9` the sidebar's number | `s` sync (on a project root: `pull --ff-only`) | `x` close the pane; on the last one, close the workspace |
 | `o` open a folder (browser: arrows, type to filter, `~`, a new name creates it) | `d` diff pane against the base, on a worktree or the project root (addendum 11) | `n` name the pane (empty = automatic title) |
 | `/` open a file (`.md` → reader pane, else nvim) | `X` remove: done checks if the PR is merged, rm checks otherwise | `f` full: the focused pane fills the panes area, the sidebar and bars stay · `HJKL` swap with the neighbour · `p` save the panes as the project's layout (addendum 10) · `v` select text (addendum 12) |
-| `↑↓` next/previous workspace, `←→` next/previous project; more arrows keep moving | | |
+| `↑↓` next/previous workspace, `←→` next/previous project; more arrows keep moving | `R` review a pull request: pick an open PR, get a worktree with its diff and a briefed agent (addendum 14) | |
 | `?` keys · `q` detach | | |
 
 ### Screen (what each area shows; replaces "UI (reference, v2)")
@@ -342,6 +342,45 @@ Terminal cells cannot blend, so a fade is a colour interpolated toward the backg
 - REQ-147 THE motion SHALL add no `ClientMsg` and no `PaneInfo` field, and `PROTOCOL` SHALL stay at 8.
 - REQ-148 WHEN a key or a click arrives during an animation, the TUI SHALL handle it before the next frame; WHEN a change interrupts an animation, the new one SHALL start from what is on screen; IF a frame takes longer than `FRAME`, THEN the animation SHALL jump to its end state.
 
+### Addendum 14 (R1–R3): review a pull request (`^␣ R`)
+
+Prototype: https://claude.ai/artifact/7dJfvauPHjSBZ3jF5e8SJ7 (approved 2026-10-11).
+
+`^␣ R` lists the project's open PRs and `↵` opens a **review workspace**: a worktree `review-<n>` on branch `review/pr-<n>` at the PR's head, with the diff viewer (the one `^␣ d` opens) on the left half and claude on the right half, whatever the project's `[layout]` says. jw writes the PR's title, description, comments, reviews and inline comments to a context file and sends claude a short prompt that points at it. The review is read-only by intent and jw never writes to GitHub.
+
+| Piece | Shape |
+|---|---|
+| gh list | `Client::open_prs(dir, requested)` in `crates/core/src/connectors/github.rs` (beside `list`): `gh pr list --state open --limit 100 --json number,title,body,author,headRefName,baseRefName,isDraft,updatedAt,reviewDecision,changedFiles,additions,deletions,url`, plus `--search "review-requested:@me"` when `requested` |
+| gh detail | `Client::detail(dir, n)`: `gh pr view n --json title,body,author,baseRefName,headRefName,comments,reviews,files,url` and `gh api repos/{owner}/{repo}/pulls/n/comments` (inline). gh resolves the repo from the cwd |
+| Registry | `Entry.review_base: String` (`core/registry.rs`, `serde(default, skip_serializing_if = "String::is_empty")`); `Entry.pr` holds `<n>`. `Entry` ignores unknown keys |
+| Stream | `Stream::resolve` (`stream.rs`): WHEN `entry.review_base` is set, `base` is it and `tree` is `review_tree()`: `split right 0.5 { a: view:diff, b: agent }`. `command()` returns no command for a `view:*` run |
+| Core action | `review::review_stream(project, pr)` (`crates/core/src/review.rs`): `git fetch origin pull/<n>/head:+review/pr-<n>` and `git fetch origin <base>`, `add_worktree_existing` at `root/review-<n>`, the registry entry with `branch`, `pr`, `review_base`. Not `new_stream`: its `from` is a start ref and it errors on an existing branch |
+| Context file | `<state>/reviews/<session>/pr-<n>.md`: header, description, conversation, reviews, inline comments by file:line, files and stat; capped at 200 KB, the cut noted. The diff stays in git |
+| TUI | `Kind::Reviews` and `Pick::Review` in `finder.rs`; action `review` (group worktree, key `R`) in `settings.rs`; `ask_review`; jobs through `App::background`; creation ends in `Job::Created` → `open_entry`, like `w` |
+| Prompt | After `start_panes` sends `Open`, a pending `(stream, text)` on `App` goes out as `ClientMsg::Prompt`. The TUI never sent `Prompt` before; the daemon waits for the agent's output to be quiet and writes it (REQ-13) |
+
+- REQ-150 WHEN `^␣ R` is pressed in a workspace of a git project, the TUI SHALL open the PR picker and load open PRs in a background job.
+- REQ-151 WHILE the list loads, the picker SHALL show a loading row and accept `esc`.
+- REQ-152 IF `gh` is missing, unauthenticated or the repo has no GitHub remote, THEN the TUI SHALL show gh's reason as an Error status and open no picker.
+- REQ-153 THE picker SHALL list open PRs by most recent update and filter fuzzily over number, title, author and branch.
+- REQ-154 WHILE a PR is selected, the picker SHALL preview its description and changed files.
+- REQ-155 WHEN `↵` picks a PR, a background job SHALL fetch `pull/<n>/head` into `review/pr-<n>` and fetch `origin/<base>`.
+- REQ-156 WHEN both fetches succeed, jw SHALL create worktree `review-<n>` at that branch, register it with `review_base` set to the PR's base, and run the project's setup as `w` does.
+- REQ-157 IF a fetch fails, THEN jw SHALL create nothing and show the error.
+- REQ-158 WHEN a workspace with `review_base` opens, first time or reopened, its panes SHALL be a diff left and an agent right, each half of the panes area, whatever `[layout]` says.
+- REQ-159 WHILE a workspace has `review_base`, its diff SHALL compare against `origin/<review_base>`.
+- REQ-160 WHEN a review workspace is created, jw SHALL write the context file before the agent starts.
+- REQ-161 WHEN the review workspace's panes are open, the TUI SHALL send `Prompt` naming the PR, the context file and `git diff origin/<base>...HEAD`, and telling the agent to report findings by file:line and not to edit, commit or push.
+- REQ-162 WHERE `review-<n>` already exists, WHEN its PR is picked, the TUI SHALL refetch the head and switch to it.
+- REQ-163 WHEN the TUI switches to an existing review workspace, it SHALL ask before it sends the prompt again.
+- REQ-164 THE jw binary SHALL call `gh` only as `pr list`, `pr view` and `api` reads during a review.
+- REQ-165 WHEN `X` removes a review worktree, the existing done/rm checks SHALL apply, and a `review/pr-<n>` with no commits beyond the fetched head SHALL count as having no unpushed work.
+- REQ-166 THE `R` key SHALL be rebindable and SHALL NOT use Alt.
+- REQ-167 THE `PROTOCOL` constant SHALL stay 8 and no `ClientMsg`, `DaemonMsg` or `PaneInfo` shape SHALL change.
+- REQ-168 WHEN `Entry.review_base` is empty, `workspaces.json` SHALL serialise exactly as before.
+- REQ-169 WHEN `m` is pressed in the picker with an empty query, the TUI SHALL reload the list filtered to PRs whose review is requested from the user, and `m` again SHALL reload all open PRs.
+- REQ-170 WHEN `o` is pressed in the picker with an empty query, the TUI SHALL open the selected PR's url in the browser.
+
 ---
 
 ## Rationale
@@ -377,6 +416,15 @@ Terminal cells cannot blend, so a fade is a colour interpolated toward the backg
 - RAT-31 **Welcome state in `settings.json`.** It already holds the user's choices and is re-read on change (REQ-69); a second file for one boolean is not worth it.
 - RAT-32 **The which-key delay drops to 150 ms.** A new user needs the keys on screen; an expert who types the chord never sees the popup either way, and `which_delay_ms` still sets it.
 - RAT-33 **Rejected: easing in the daemon or on the wire.** Animation is per viewer and cosmetic; putting it in `PaneInfo` would bump `PROTOCOL` for nothing (RAT-26's reasoning).
+- RAT-34 **Context by file.** `prompt()` waits for 1200 ms of quiet and caps at 20 s (`daemon/src/lib.rs:1426`); a thread plus a diff pasted in one go is slow and spends the agent's context before it chooses what to read. A short prompt and a file lets claude read the diff from git, always current.
+- RAT-35 **`pull/<n>/head`, not `gh pr checkout`.** gh checkout changes the current worktree and its tracking; a fetched named branch plus the existing worktree path keeps the registry, slot and setup rules, and works for forks.
+- RAT-36 **`review_base` on `Entry`.** `Stream.base` is only ever git's `origin/HEAD` (`stream.rs:64,78`) and `Config` has no `base` key. One field gives the diff its base (REQ-159) and keeps a closed, then reopened, review in its shape (REQ-158), because `resolve` takes only an `Entry`. The cost is a registry field that older readers ignore.
+- RAT-37 **A fixed layout.** `[layout]` is for writing code (editor and agent); a review wants the diff and the agent, half each so a wide diff is readable. A `[review]` table can come later.
+- RAT-38 **`origin/<base>` is fetched explicitly.** `diff::load` fails on a missing ref (`diff.rs:80-90`); only an empty base falls back to `HEAD`.
+- RAT-39 **No new message.** Everything rides on `Open{tree}`, `view:diff` leaves (daemon-tested in `crates/jw/tests/daemon.rs`) and `Prompt`. The one core change that makes it work is `command()` returning no command for `view:*`.
+- RAT-40 **The TUI sends the prompt, not the CLI.** The picker lives in the TUI; one pending slot on `App` costs less than a new path.
+- RAT-41 **Capital `R`.** Free in `ACTIONS`; `r` is rename and `hjklHJKL` are fixed.
+- RAT-42 **The picker is a `Finder` kind.** It has query, selection, preview and clicks. Its items come from a job, which no kind did before, so `Finder` gains a loading state.
 - RAT-22 **`curl`, not a crate,** for `install <url>`: rare, and jw already shells out to `git` and `gh`; `ureq` would add TLS and about 40 crates for one command.
 
 ## Risks
@@ -426,6 +474,12 @@ Terminal cells cannot blend, so a fade is a colour interpolated toward the backg
 - RISK-43 **A late frame.** Drawing the panes' content shifted by a few cells (REQ-136) re-renders every pane each frame. REQ-148 covers a frame that overruns `FRAME`: the animation jumps to its end state instead of lagging behind input. The cost is measured by hand in Ghostty.
 - RISK-44 **Synchronized output can freeze the screen.** A terminal holds the frame until `CSI ? 2026 l` (Ghostty gives up after a second). REQ-139 closes it on every exit path; terminals that do not know the mode ignore it.
 - RISK-45 **The shorter which-key delay shows the popup to people who type fast.** A chord typed within 150 ms still never shows it; one typed slower flashes it for an instant, softened by the fade. `which_delay_ms` restores the old 600 ms.
+- RISK-46 **A `view:diff` leaf in `Open` has only been sent by tests.** The TUI builds diffs locally (`load_diff`). `start_panes` must turn a `view:` leaf into a `NewPane` with no command, and the daemon must skip the PTY (`is_view`). Covered by a test in `crates/jw/tests/daemon.rs` and one on `Stream::panes`.
+- RISK-47 **The prompt can land in claude's trust-folder dialog** on a fresh worktree: `prompt()` never inspects the screen and writes text and Enter. The same exposure as `jw worktree --task`; what claude does with it is unverified. Accepted for now.
+- RISK-48 **`gh pr list` takes seconds** on a big repo or a slow network. REQ-151 keeps the keys live; a cached list is a later refinement.
+- RISK-49 **Context size.** A PR with hundreds of comments is capped at 200 KB and the cut is noted in the file; claude can run `gh pr view` itself.
+- RISK-50 **Fork PRs** fetch fine but cannot be pushed to; fine for a review.
+- RISK-51 **`gh api repos/{owner}/{repo}/…`** resolves the repo from the cwd; checked against a fake `gh` only until the manual test.
 - Closed by addendum 3: RISK-5 (own registry), RISK-7 (hooks), RISK-9 (frames), RISK-16 (`nvim --server`), RISK-17 (`root` in the registry).
 
 ## Parts (each one ends with `cargo test` + `clippy` green and a local commit on `feat/rust-tui`; nothing is pushed)
@@ -484,6 +538,10 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | M4 ✓ | Popups fade in, picker row slides, which-key at 150 ms and `which_sticky` (a row in `^␣ ,`) | 141, 144 | `tui/draw.rs`, `tui/finder.rs`, `tui/modal.rs`, `settings.rs` |
 | M5 ✓ | Focus border ease; eased wheel scroll | 145 | `tui/draw.rs`, `tui/mod.rs` |
 | M6 ✓ | First-run welcome, `welcomed` and `JW_WELCOME=0` (set by `scripts/drive.py`) | 146, 149 | `tui/draw.rs`, `settings.rs`, `scripts/drive.py` |
+| R0 | Addendum 14 in this spec; the prototype (approved 2026-10-11) | — | docs |
+| R1 | Core: `open_prs`, `detail`, `Entry.review_base`, `Stream::resolve` and `command()` for reviews, `review.rs` (fetch, worktree, context file) | 155–160, 162, 164, 165, 168 | `connectors/github.rs`, `core/registry.rs`, `stream.rs`, `review.rs` |
+| R2 | TUI: `Kind::Reviews` with a loading state, `R`, jobs, the pending `Prompt`, `m` and `o`; the daemon test | 150–154, 161, 163, 166, 167, 169, 170 | `tui/finder.rs`, `tui/mod.rs`, `settings.rs`, `crates/jw/tests/daemon.rs` |
+| R3 | README and the `jw` skill; version bump; a hand test with `scripts/jw-test` | — | docs |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 
 Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{new_stream, rm_plan, rm, sync, done_plan}`, `src/diff.rs`, `src/view/md.rs` and `Modal::Rm` (type the name) stay as they are.
@@ -502,6 +560,8 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - OPEN-11 → the built-in themes are not written to disk on first run; `jw theme export` gives each one (S16).
 - OPEN-12 → per-theme syntax colours (a `syntax` block for syntect) are later; highlighting still picks syntect's theme by `dark` (`view/highlight.rs:27`).
 - OPEN-13 → copy on release, drag past the edge scrolls, a banner at the pane's top right (prototype 2, approved 2026-10-10); no keyboard mode.
+- OPEN-14 → a `[review]` table in the project TOML (layout, agent command, a review skill) is later.
+- OPEN-15 to OPEN-19 (addendum 14) → the user did not answer; built with the proposed defaults: the picker lists all open PRs, `m` toggles "requested of me"; the project's setup runs; an existing review asks before the prompt is sent again; the review rules ride in the visible prompt, not `--append-system-prompt`; the trust-folder exposure is accepted (RISK-47). Say so to change any.
 - OPEN-5 → `~/.config/jw/settings.json` (JSON, outside Go's `*.toml` glob) and the `^␣ ,` screen (addendum 3).
 
 ## Corrections
@@ -552,4 +612,5 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - keyboard protocol: `kitty.rs` units (push, pop past empty, set modes, query, depth, alternate stack, replay round trip); `keys.rs` units (Shift+Enter is `\r` with flags 0 and `CSI 13;2u` with flag 1); the daemon answers `CSI ? u` before `CSI c`, and a late Snapshot ends with the stack. End to end, with a script that plays Ghostty (answers the probe, sends keys as Ghostty does with flag 1) against an isolated jw: Shift+Enter is a new line in claude 2.1.296 and codex 0.162.1, fires `imap <S-CR>` in nvim 0.12.5; a program that never pushes still gets `\r`; the TUI pops on exit, and pushes nothing when the terminal doesn't answer.
 - selection (X1, X2): unit tests over a vt100 screen for the extracted text (trailing spaces, soft-wrapped rows, wide characters, history rows) and for word and line bounds; the OSC 52 bytes; the highlight and the banner text; `mouse_encodings` still passes. Manual: zsh drag, double and triple click, drag past the edge; the banner appears top right and goes after about 2 s; nvim plain drag reaches nvim, Shift + drag selects.
 - motion (M1–M6): units for the tween (starts at 0, reaches 1 at its duration, monotonic, an interrupt starts from the displayed value) and for the colour lerp; `next_wake` blocks when idle, wakes a frame after the last draw while a transition runs, for the drag edge and the which-key, takes the soonest, and wakes when a message starts to leave; `TestBackend` for the spinner glyph by elapsed time, the welcome (shows; any key closes it, writes `welcomed` and is still handled), the slide's last frame equal to the static draw, and `animations = false` giving the final frame at once; `tick_motion` on an `App` without a daemon (`App::bare`): the band starts on the current row without motion, a switch glides it and keeps the loop awake until `SWITCH`, `animations = false` jumps it, no workspace means no band, the spinner steps only for visible rows; the bytes of a draw start with `CSI ? 2026 h` and end with `CSI ? 2026 l`, also after a failed draw. Manual in Ghostty with `scripts/drive.py`: switching workspaces with the arrows, the which-key at 150 ms, no tearing in a fast `cat`, idle CPU near zero.
+- review (R1–R3): core, with a fake `gh` as in `github.rs`: `open_prs` and `detail` (JSON in, structs out, non-zero exit, no gh); `review_stream` in a temp repo whose origin serves `refs/pull/7/head`: worktree at the head sha, branch `review/pr-7`, `origin/<base>` present, a second call reuses it, a failed fetch leaves nothing; `Stream::resolve` with and without `review_base` (base, tree, `command("view:diff")` is `None`); registry round-trip with and without the field; the context file's content and cap. TUI: `Finder` Reviews filter, order and loading state; the jobs and the pending prompt on an `App` without a daemon (`App::bare`). `crates/jw/tests/daemon.rs`: `Open` with the review tree, then `Prompt` reaches the agent pane; `PROTOCOL == 8`. Manual: `scripts/jw-test` in a repo with an open PR and a fork PR: `^␣ R`, filter, `↵`, the diff against the PR's base, claude's first message, close and reopen the workspace, `X`.
 - manual (after Q2 and Q5): claude and nvim in panes; `w`, `t`, `x`, `HJKL`, `n`, `d`, `↵` in the diff, `q`, then `jw` again shows the same layout.
