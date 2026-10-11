@@ -35,6 +35,8 @@ sealed interface UiState {
         val protocol: Int,
         val readOnly: Boolean,
         val palettes: Palettes,
+        /** False when the device token could not be stored: pairing will not survive a restart. */
+        val saved: Boolean = true,
     ) : UiState
 
     /** The PC's jw speaks `pc`, this app speaks `app`: say what to update, do not attach. */
@@ -109,6 +111,7 @@ class Session(
     private suspend fun loop(host: String, first: Hello) {
         val p = policy()
         var hello = first
+        var saved = true
         while (true) {
             var failure: Failure = Failure.Network
             var bridgeFailed = false
@@ -121,7 +124,8 @@ class Session(
                     is BridgeEvent.Message -> when (val m = ev.msg) {
                         is ServerMessage.Paired -> {
                             // The pairing token is single-use: keep the device before anything else.
-                            store.save(StoredDevice(host, m.device))
+                            // If saving fails the device stays in memory: keep connecting, but warn it will not survive a restart.
+                            saved = try { store.save(StoredDevice(host, m.device)); true } catch (_: Exception) { false }
                             hello = Hello.Auth(m.device)
                             pairing = false
                             _state.value = UiState.Connecting(host)
@@ -132,7 +136,7 @@ class Session(
                                 mismatch = true
                             } else {
                                 p.onConnected()
-                                _state.value = UiState.Connected(host, m.protocol, m.readOnly, m.palettes)
+                                _state.value = UiState.Connected(host, m.protocol, m.readOnly, m.palettes, saved)
                             }
                         }
                         is ServerMessage.Error -> {

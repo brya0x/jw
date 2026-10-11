@@ -57,6 +57,11 @@ class ControlTest {
         assertEquals(token, q.token)
         assertNull(QrPayload.parse("https://x.com/$token"))
         assertNull(QrPayload.parse("jw://host/short"))
+        for (h in listOf(
+            "evil.com", "a.trycloudflare.com.evil.com", "trycloudflare.com", "a.trycloudflare.com:8080",
+            "user@a.trycloudflare.com", "a..trycloudflare.com", "a.trycloudflare.com.", "-a.trycloudflare.com",
+            "a.evil.com/x.trycloudflare.com",
+        )) assertNull(h, QrPayload.parse("jw://$h/$token"))
         assertNull(QrPayload.parse("jw://host/${token.uppercase()}"))
         assertFalse(q.toString().contains(token))
     }

@@ -11,3 +11,26 @@
 - Silent closes exist (close before auth, the 16-connection cap, 60 s of silence): the app treats them as a network failure.
 - Backoff is 5, 10, 20, 30 s (cap 30 s) so that five failures never fit in the REQ-5 60 s window; `limited` waits 5 min.
 - Pairing failures are never retried with the same token, except DNS failures (the token is not consumed).
+- **Quick tunnels only.** `Qr.kt` accepts only `*.trycloudflare.com` (no port, userinfo, `..`, trailing dot), so a spoofed QR
+  cannot collect the token and code. A named tunnel (OPEN-2) will need this rule widened.
+- **Cleartext is off** (`network_security_config.xml`); minSdk 26 and 27 would allow it otherwise.
+- **Needs the user's OK (not in the approved prototype):** the protocol-mismatch screen, the reconnecting screen, the notices on the scan screen.
+
+## Dependency ages (checked 2026-10-11 from the `Last-Modified` of each artifact; rule: at least 2 weeks)
+
+| Dependency | Version | Released |
+|---|---|---|
+| Gradle distribution | 8.14.3 | 2025-07-04 |
+| Android Gradle Plugin | 8.13.0 | 2025-09-02 |
+| Kotlin (and compose, serialization plugins) | 2.2.21 | 2025-10-23 |
+| Compose BOM | 2026.06.01 | 2026-07-01 |
+| activity-compose | 1.12.4 | 2026-02-11 |
+| CameraX | 1.6.0 | 2026-03-25 |
+| OkHttp / MockWebServer | 4.12.0 | 2023-10-17 |
+| ZXing core | 3.5.4 | 2025-11-11 |
+| kotlinx-serialization-json | 1.9.0 | 2025-06-27 |
+| kotlinx-coroutines | 1.10.2 | 2025-04-08 |
+| Guava (android flavour, for `ListenableFuture`) | 33.4.8-android | 2025-04-14 |
+| JUnit | 4.13.2 | 2021-02-13 |
+
+Not done: `slowPcAnswerIsWaitedFor` still sleeps 15 s for real; a virtual clock cannot drive MockWebServer's real I/O.

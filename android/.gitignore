@@ -8,3 +8,6 @@ local.properties
 .kotlin/
 captures/
 .cxx/
+*.db
+*.log
+*.hprof

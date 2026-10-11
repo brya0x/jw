@@ -49,6 +49,14 @@ class SessionTest {
         assertNull("no Origin header", fake.server.takeRequest().getHeader("Origin"))
     }
 
+    @Test fun failedSaveKeepsConnectingAndWarns() = runBlocking<Unit> {
+        store.failSave = true
+        fake.enqueue { _, ws -> ws.send(FakeBridge.PAIRED); ws.send(FakeBridge.ready()) }
+        val s = session()
+        s.onQr(qr)
+        assertTrue(!s.await<UiState.Connected>().saved)
+    }
+
     @Test fun deviceIsStoredEvenIfReadyNeverComes() = runBlocking<Unit> {
         fake.enqueue { _, ws -> ws.send(FakeBridge.PAIRED); ws.fail("daemon") }
         fake.enqueue { _, _ -> }

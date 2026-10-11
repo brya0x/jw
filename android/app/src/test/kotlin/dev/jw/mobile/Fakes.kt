@@ -12,8 +12,9 @@ fun WebSocket.fail(code: String) { send(FakeBridge.error(code)); close(1000, nul
 
 class FakeStore(var device: StoredDevice? = null) : TokenStore {
     var saves = 0
+    var failSave = false
     override fun load() = device
-    override fun save(device: StoredDevice) { this.device = device; saves++ }
+    override fun save(device: StoredDevice) { if (failSave) throw IllegalStateException("keystore"); this.device = device; saves++ }
     override fun clear() { device = null }
 }
 

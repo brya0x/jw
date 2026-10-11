@@ -146,6 +146,7 @@ private fun Connected(state: UiState.Connected, session: Session) {
                 Text(if (state.readOnly) "solo lectura" else "lectura y escritura", color = if (state.readOnly) j.yellow else j.green)
             }
         }
+        if (!state.saved) Warn("No se pudo guardar el emparejamiento: al cerrar la app tendrás que escanear de nuevo.")
         Dim("Los espacios de trabajo llegan con la siguiente parte.")
         OutlinedButton(onClick = session::forget, modifier = Modifier.heightIn(min = 48.dp)) { Text("olvidar este PC") }
     }
