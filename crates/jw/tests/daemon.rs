@@ -625,7 +625,7 @@ fn a_split_tells_only_its_requester_the_new_pane() {
     }
 }
 
-/// REQ-204..220: `jw pane open|ls|close` against a running daemon, in a
+/// REQ-204..221: `jw pane open|ls|close` against a running daemon, in a
 /// state dir of its own with one folder workspace, which a TUI would show.
 #[test]
 fn jw_pane_opens_lists_and_closes_panes() {

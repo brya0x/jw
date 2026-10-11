@@ -63,7 +63,12 @@ fn run_target(what: &str, cwd: &Path) -> Result<(String, Option<String>)> {
                 bail!("view:md: needs a file: view:md:<file>");
             }
             // The TUI reads it against the workspace it shows, not our directory.
-            Ok((format!("view:md:{}", cwd.join(file).display()), None))
+            let path = cwd.join(file);
+            // A viewer of a missing file would show `starting…` for good.
+            if !path.is_file() {
+                bail!("{} is not a file", path.display());
+            }
+            Ok((format!("view:md:{}", path.display()), None))
         }
         w if w.starts_with("view:") => bail!("unknown viewer {w:?}: view:diff or view:md:<file>"),
         "" => bail!("--run needs a program"),
@@ -843,7 +848,10 @@ mod tests {
 
     #[test]
     fn run_maps_to_a_role_and_a_command() {
-        let cwd = Path::new("/w");
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("docs")).unwrap();
+        std::fs::write(dir.path().join("docs/a.md"), "# a").unwrap();
+        let cwd = dir.path();
         assert_eq!(run_target("shell", cwd).unwrap(), ("shell".into(), None));
         assert_eq!(
             run_target("view:diff", cwd).unwrap(),
@@ -851,8 +859,9 @@ mod tests {
         );
         assert_eq!(
             run_target("view:md:docs/a.md", cwd).unwrap(),
-            ("view:md:/w/docs/a.md".into(), None)
+            (format!("view:md:{}/docs/a.md", cwd.display()), None)
         );
+        assert!(run_target("view:md:docs/missing.md", cwd).is_err());
         assert_eq!(
             run_target("npm test", cwd).unwrap(),
             ("run".into(), Some("npm test".into()))

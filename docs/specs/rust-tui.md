@@ -565,6 +565,7 @@ An agent in a pane can split a workspace and run a program, a shell or a viewer 
 - REQ-217 THE `jw` skill SHALL name `jw pane open`, `jw pane close` and `jw pane ls`, and say that `--run` runs what it is given.
 - REQ-218 IF the daemon answers `Error` to the `Split` or the `Kill`, THEN THE CLI SHALL fail with its message on stderr and exit 1.
 - REQ-219 IF `jw pane close` names the pane it runs in (`$JW_PANE_ID`), THEN THE CLI SHALL refuse unless `--force` is given.
+- REQ-221 IF `--run view:md:<file>` names a file that does not exist, THEN THE CLI SHALL fail and send no `Split`.
 - REQ-220 WHEN `--of` is absent, THE CLI SHALL split beside the pane with role `agent`, else beside the last leaf of the tree.
 
 Open (human decisions, still unanswered):
@@ -705,7 +706,7 @@ Open (human decisions, still unanswered):
 - RISK-65 **Many panes.** An agent can open as many as it likes; the daemon has no cap. Left for later.
 - RISK-66 **An agent closes its own pane.** The CLI refuses it by `$JW_PANE_ID` (REQ-219), which `--force` overrides.
 - RISK-67 **A workspace the TUI does not show.** The TUI applies a `Tree` only for its current workspace (`tui/mod.rs:1383-1388`); another's new pane should appear when it attaches it on a switch. Not tested.
-- RISK-68 **A relative `view:md:<file>`** resolves in the TUI against the workspace it shows, so the CLI makes it absolute against its own directory.
+- RISK-68 **A relative `view:md:<file>`** resolves in the TUI against the workspace it shows, so the CLI makes it absolute against its own directory, and refuses a file that is not there (REQ-221): found by a hand test, where a missing file left a viewer on `starting…`.
 - RISK-69 **A split into a small pane.** `Split` gets 80×24 and the TUI resizes after; a pane too small for its sibling is the daemon's case, as for the TUI's own splits.
 - Closed by addendum 3: RISK-5 (own registry), RISK-7 (hooks), RISK-9 (frames), RISK-16 (`nvim --server`), RISK-17 (`root` in the registry).
 - RISK-57 Moving parse to another thread can reorder `Snapshot` and `Output`. Keep one reader thread, parse inline there, preserve order.
@@ -775,7 +776,7 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | R3 ✓ | README; version 0.0.13; a hand test with `scripts/drive.py` against a local origin and a fake `gh`; REQ-175 and REQ-183, which that test found missing | 175, 183 | `README.md`, `core/src/actions.rs`, `core/src/connectors/git.rs`, `tui/mod.rs` |
 | A1 ✓ `db0d8ce` | Agent programs: `is_agent_program` in `jw-core`, `foreground` in the daemon, `Prompt` by program, `jw ls --json programs`, `jw read --pane` by program, help and the `jw` skill | 194–200, 203 | `crates/core`, `crates/daemon/src/lib.rs`, `crates/jw/src/{cli,help}.rs` |
 | A2 ✓ `962d445` | The program on the pane title and the agent marks for such panes | 201, 202 | `tui/draw.rs`, `tui/mod.rs` |
-| P1–P3 ✓ `66a27a6`, `a9c7148` | `jw pane open\|close\|ls`: `DaemonMsg::Opened` and `PROTOCOL` 10, the CLI, the skill, README and this addendum | 204–220 | `proto/src/proto.rs`, `daemon/src/lib.rs`, `crates/jw/src/{cli,help,skill}.rs`, `crates/jw/skill/SKILL.md` |
+| P1–P3 ✓ `66a27a6`, `a9c7148` | `jw pane open\|close\|ls`: `DaemonMsg::Opened` and `PROTOCOL` 10, the CLI, the skill, README and this addendum | 204–221 | `proto/src/proto.rs`, `daemon/src/lib.rs`, `crates/jw/src/{cli,help,skill}.rs`, `crates/jw/skill/SKILL.md` |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 | F0 ✓ | `JW_TRACE`, `scripts/bench-switch.py`, the Measurements above | 184 | `tui/trace.rs`, `tui/mod.rs`, `scripts/` |
 | F1 ✓ | S1, S9: `Stream::resolve` (the `git` spawn) off the UI thread, the frame deadline counted from the frame's start; the unexplained ≈ 100 ms of a first open | 185, 191 | `tui/mod.rs`, `core` (callers) |
