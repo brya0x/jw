@@ -11,7 +11,7 @@ publish = false
 [workspace.dependencies]
 jw-core = { path = "crates/core" }
 jw-proto = { path = "crates/proto" }
-jw-mobile = { path = "crates/mobile" }
+jw-web = { path = "crates/web" }
 jw-daemon = { path = "crates/daemon" }
 jw-tui = { path = "crates/tui" }
 anyhow = "1.0.104"

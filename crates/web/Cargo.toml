@@ -1,6 +1,6 @@
 [package]
-name = "jw-mobile"
-description = "The bridge between a phone and the jw daemon"
+name = "jw-web"
+description = "The web server in front of the jw daemon: a WebSocket that relays frames"
 version.workspace = true
 edition.workspace = true
 license-file.workspace = true

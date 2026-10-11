@@ -17,6 +17,6 @@ serde_json.workspace = true
 vt100.workspace = true
 
 [dev-dependencies]
-jw-mobile.workspace = true
+jw-web.workspace = true
 tempfile.workspace = true
 tungstenite.workspace = true

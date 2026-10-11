@@ -1,7 +1,8 @@
-# jw-mobile
+# jw-web
 
-The bridge between a phone and the daemon (spec: [docs/specs/mobile.md](../../docs/specs/mobile.md)).
-It depends on jw-proto only; `jw` will start it (`jw mobile`, part M2).
+The web server in front of the daemon (spec: [docs/specs/mobile.md](../../docs/specs/mobile.md)).
+It depends on jw-proto only; `jw` will start it (`jw mobile`, part M2). Nothing in it is
+specific to phones, so the name is not either.
 
 ## What lives where
 
@@ -23,5 +24,5 @@ It depends on jw-proto only; `jw` will start it (`jw mobile`, part M2).
 
 ## Tests
 
-`cargo test -p jw-mobile` runs the bridge against a fake daemon (protocol mismatch, hang up,
-no daemon, stop). `crates/jw/tests/mobile.rs` runs it against the real daemon.
+`cargo test -p jw-web` runs the bridge against a fake daemon (protocol mismatch, hang up,
+no daemon, stop). `crates/jw/tests/web.rs` runs it against the real daemon.

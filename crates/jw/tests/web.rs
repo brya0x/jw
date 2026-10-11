@@ -6,9 +6,9 @@ use std::process::{Child, Command};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use jw_mobile::bridge::Bridge;
 use jw_proto::client::Client;
 use jw_proto::proto::{ClientMsg, DaemonMsg, PROTOCOL, read_frame, write_frame};
+use jw_web::bridge::Bridge;
 use tungstenite::{Message, WebSocket};
 
 const EXE: &str = env!("CARGO_BIN_EXE_jw");

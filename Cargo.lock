@@ -716,9 +716,9 @@ dependencies = [
  "anyhow",
  "jw-core",
  "jw-daemon",
- "jw-mobile",
  "jw-proto",
  "jw-tui",
+ "jw-web",
  "libc",
  "serde_json",
  "tempfile",
@@ -752,16 +752,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "jw-mobile"
-version = "0.0.11"
-dependencies = [
- "jw-proto",
- "serde_json",
- "tempfile",
- "tungstenite",
-]
-
-[[package]]
 name = "jw-proto"
 version = "0.0.11"
 dependencies = [
@@ -787,6 +777,16 @@ dependencies = [
  "tempfile",
  "unicode-width",
  "vt100",
+]
+
+[[package]]
+name = "jw-web"
+version = "0.0.11"
+dependencies = [
+ "jw-proto",
+ "serde_json",
+ "tempfile",
+ "tungstenite",
 ]
 
 [[package]]
