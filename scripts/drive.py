@@ -23,8 +23,7 @@ Steps:
   colors        prints the first background colours seen (themes)
 
 Env: JWARGS (arguments to jw), CWD (where it starts), JWT (JW_THEME; empty
-leaves it unset), JW_WELCOME (0 unless set: the first-run welcome swallows the
-first key).
+leaves it unset), JW_WELCOME (0 unless set: skips the first-run welcome).
 """
 import base64
 import fcntl

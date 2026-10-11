@@ -645,15 +645,11 @@ impl App {
         }
     }
 
-    /// The welcome steps in one by one; it goes when a workspace opens.
+    /// The welcome steps in one by one.
     fn tick_welcome(&mut self, now: Instant, on: bool) {
         let Some(since) = self.welcome else {
             return;
         };
-        if self.active.is_some() {
-            self.dismiss_welcome();
-            return;
-        }
         let shown = anim::WELCOME_STEP * 3 + anim::WELCOME_FADE;
         let age = now.saturating_duration_since(since);
         if on && age < shown {
@@ -667,7 +663,9 @@ impl App {
         let mut s = (*crate::settings::get()).clone();
         s.welcomed = Some(true);
         if let Err(e) = crate::settings::save(s) {
-            self.fail(format!("{e:#}"));
+            self.fail(format!(
+                "could not remember the welcome ({e:#}); check that ~/.config/jw is writable"
+            ));
         }
     }
 
@@ -773,10 +771,14 @@ impl App {
         if self.switch.is_some_and(|(t, _)| t.done(now)) {
             self.switch = None;
         }
+        let shown = usize::from(self.size.1).saturating_sub(5);
+        let first = self.sidebar_first(shown);
         let spinning = on
             && self
                 .rows
                 .iter()
+                .skip(first)
+                .take(shown)
                 .any(|r| self.marks(&r.entry.id).contains(&'✻'));
         self.spinner = spinning.then(|| anim::spinner(now.duration_since(self.born)));
         self.spin_due = spinning.then(|| now + anim::SPIN_EVERY);
@@ -822,6 +824,9 @@ impl App {
                 .is_some_and(|s| self.focus != Some(s.pane))
             {
                 self.clear_sel();
+            }
+            if self.welcome.is_some() && self.active.is_some() {
+                self.dismiss_welcome();
             }
             self.draw(terminal)?;
         }
@@ -1178,7 +1183,6 @@ impl App {
     fn on_key(&mut self, k: KeyEvent) {
         if self.welcome.is_some() {
             self.dismiss_welcome();
-            return;
         }
         if let Some(v) = &mut self.settings {
             match v.key(k) {
