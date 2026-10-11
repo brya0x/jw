@@ -9,7 +9,7 @@ It depends only on jw-core, for `layout::Tree`.
   - `PROTOCOL` (`:18`), and the messages `ClientMsg` (`:55`) and `DaemonMsg` (`:245`), with
     `PaneInfo`, `NewPane`, `PaneLeaf` and `Theme`.
   - Framing: `write_frame` and `read_frame` (`:366`, `:393`). A frame is a u32 length, then a
-    kind: 0 is JSON; 1 is a JSON head followed by the message's bytes raw (Output, Snapshot,
+    kind: 0 is JSON; 1 is a JSON head followed by the message's bytes raw (Output, Snapshot, Screen, History,
     Input) — see `Raw`.
   - `socket_path` (`:439`), `pidfile` and `is_view` (a `view:` role has no process).
 - `src/client.rs`: `Client` (`:19`), which connects and starts the daemon when nobody

@@ -5,6 +5,7 @@
 //! the writer asks for a fresh Snapshot of the pane instead.
 
 use std::collections::{BTreeSet, VecDeque};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
 use crate::proto::{DaemonMsg, PaneId, raw_len};
@@ -19,6 +20,8 @@ pub struct Tx(Arc<Shared>);
 struct Shared {
     q: Mutex<Queue>,
     ready: Condvar,
+    /// The client asked for `Screen` and `History` instead of `Snapshot`.
+    split: AtomicBool,
 }
 
 #[derive(Default)]
@@ -40,7 +43,16 @@ impl Tx {
         Tx(Arc::new(Shared {
             q: Mutex::new(Queue::default()),
             ready: Condvar::new(),
+            split: AtomicBool::new(false),
         }))
+    }
+
+    pub fn set_split(&self) {
+        self.0.split.store(true, Ordering::Relaxed);
+    }
+
+    pub fn split(&self) -> bool {
+        self.0.split.load(Ordering::Relaxed)
     }
 
     fn queue(&self) -> std::sync::MutexGuard<'_, Queue> {

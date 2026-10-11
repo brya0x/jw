@@ -81,6 +81,14 @@ enum Msg {
         pane: PaneId,
         role: String,
         parser: Box<vt100::Parser<keys::Flags>>,
+        /// Set for a `Screen`: its `History` is on the way, with this number.
+        history: Option<u64>,
+    },
+    /// The pane's output and screen replayed in full, with the scrollback.
+    History {
+        pane: PaneId,
+        seq: u64,
+        parser: Box<vt100::Parser<keys::Flags>>,
     },
 }
 
@@ -197,10 +205,38 @@ const STATUS_FOR: Duration = Duration::from_secs(4);
 /// How long the copied banner stays (it leaves on the next 500 ms tick).
 const BANNER_FOR: Duration = Duration::from_millis(1500);
 
+/// What happened to a pane's screen since its `Screen`, in order.
+pub struct Pending {
+    seq: u64,
+    ops: Vec<Op>,
+    bytes: usize,
+}
+
+enum Op {
+    Out(Vec<u8>),
+    Size(u16, u16),
+}
+
+/// Past this much output waiting for its history, the pane stays without.
+const PENDING_MAX: usize = 8 << 20;
+
+impl Pending {
+    fn out(&mut self, bytes: &[u8]) {
+        self.bytes += bytes.len();
+        match self.ops.last_mut() {
+            Some(Op::Out(last)) => last.extend_from_slice(bytes),
+            _ => self.ops.push(Op::Out(bytes.to_vec())),
+        }
+    }
+}
+
 /// A pane of the current workspace as this client sees it.
 pub struct PaneView {
     pub role: String,
     pub parser: vt100::Parser<keys::Flags>,
+    /// While its scrollback is being rebuilt (F3): `parser` holds the screen
+    /// only, and what happens to it meanwhile is kept to redo on the full one.
+    pub history: Option<Pending>,
     pub exited: Option<i32>,
     /// The window title its program set (OSC 0/2).
     pub title: Option<String>,
@@ -337,11 +373,15 @@ pub fn run() -> Result<()> {
     let exe = std::env::current_exe()?;
     let client = Client::connect_or_start(&socket, &exe)?;
     hello(&client, &socket)?;
+    client.try_clone()?.send(&ClientMsg::SplitSnapshots)?;
     let mut reader = client.try_clone()?;
 
     let (tx, rx) = mpsc::channel();
     let to_main = tx.clone();
     thread::spawn(move || {
+        // Which `Screen` a pane's `History` belongs to.
+        let mut seq = 0u64;
+        let mut seqs: BTreeMap<PaneId, u64> = BTreeMap::new();
         loop {
             match reader.recv() {
                 Ok(Some(m)) => {
@@ -366,8 +406,43 @@ pub fn run() -> Result<()> {
                         } => Msg::Snapshot {
                             pane,
                             role,
-                            parser: Box::new(replay(rows, cols, &bytes)),
+                            parser: Box::new(replay("snap_parse", rows, cols, &bytes)),
+                            history: None,
                         },
+                        DaemonMsg::Screen {
+                            pane,
+                            role,
+                            cols,
+                            rows,
+                            bytes,
+                        } => {
+                            seq += 1;
+                            seqs.insert(pane, seq);
+                            Msg::Snapshot {
+                                pane,
+                                role,
+                                parser: Box::new(replay("snap_parse", rows, cols, &bytes)),
+                                history: Some(seq),
+                            }
+                        }
+                        // Its replay takes a while: on its own thread, so
+                        // the Output behind it is not held up.
+                        DaemonMsg::History {
+                            pane,
+                            cols,
+                            rows,
+                            bytes,
+                        } => {
+                            if let Some(&seq) = seqs.get(&pane) {
+                                let to_main = to_main.clone();
+                                thread::spawn(move || {
+                                    let parser =
+                                        Box::new(replay("history_parse", rows, cols, &bytes));
+                                    let _ = to_main.send(Msg::History { pane, seq, parser });
+                                });
+                            }
+                            continue;
+                        }
                         m => Msg::Daemon(m),
                     };
                     if to_main.send(m).is_err() {
@@ -1087,6 +1162,7 @@ impl App {
         }
         let kind = match &m {
             Msg::Snapshot { .. } | Msg::Daemon(DaemonMsg::Snapshot { .. }) => "handle_snapshot",
+            Msg::History { .. } => "handle_history",
             Msg::Daemon(DaemonMsg::Tree { .. }) => "handle_tree",
             Msg::Daemon(DaemonMsg::Output { .. }) => "handle_output",
             Msg::Daemon(_) => "handle_daemon",
@@ -1099,7 +1175,13 @@ impl App {
     fn handle_msg(&mut self, m: Msg) {
         match m {
             Msg::Daemon(d) => self.on_daemon(d),
-            Msg::Snapshot { pane, role, parser } => self.install_snapshot(pane, role, *parser),
+            Msg::Snapshot {
+                pane,
+                role,
+                parser,
+                history,
+            } => self.install_snapshot(pane, role, *parser, history),
+            Msg::History { pane, seq, parser } => self.on_history(pane, seq, *parser),
             Msg::DaemonGone => {
                 self.fail("the daemon closed the connection".into());
                 self.exit_reason = Some("the daemon closed the connection".into());
@@ -1175,19 +1257,56 @@ impl App {
     }
 
     /// A pane's screen as the daemon holds it, with its parser built.
-    fn install_snapshot(&mut self, pane: PaneId, role: String, parser: vt100::Parser<keys::Flags>) {
+    fn install_snapshot(
+        &mut self,
+        pane: PaneId,
+        role: String,
+        parser: vt100::Parser<keys::Flags>,
+        history: Option<u64>,
+    ) {
         self.clear_sel_of(pane);
         self.panes.insert(
             pane,
             PaneView {
                 role,
                 parser,
+                history: history.map(|seq| Pending {
+                    seq,
+                    ops: Vec::new(),
+                    bytes: 0,
+                }),
                 exited: None,
                 title: None,
             },
         );
         trace::span("fit", || self.fit());
         trace::mark("snap_installed", 0);
+    }
+
+    /// The full replay of a pane that was drawn from its `Screen`: what
+    /// happened to the screen since is done again on it, and it takes the
+    /// screen's place with its scrollback.
+    fn on_history(&mut self, pane: PaneId, seq: u64, mut parser: vt100::Parser<keys::Flags>) {
+        let Some(view) = self.panes.get_mut(&pane) else {
+            return;
+        };
+        let Some(pending) = view.history.take_if(|h| h.seq == seq) else {
+            return;
+        };
+        trace::span("history_swap", || {
+            for op in pending.ops {
+                match op {
+                    Op::Out(bytes) => parser.process(&bytes),
+                    Op::Size(rows, cols) => parser.screen_mut().set_size(rows, cols),
+                }
+            }
+            let size = view.parser.screen().size();
+            if parser.screen().size() != size {
+                parser.screen_mut().set_size(size.0, size.1);
+            }
+            view.parser = parser;
+        });
+        self.clear_sel_of(pane);
     }
 
     fn on_daemon(&mut self, d: DaemonMsg) {
@@ -1199,11 +1318,19 @@ impl App {
                 rows,
                 bytes,
             } => {
-                let parser = replay(rows, cols, &bytes);
-                self.install_snapshot(pane, role, parser);
+                let parser = replay("snap_parse", rows, cols, &bytes);
+                self.install_snapshot(pane, role, parser, None);
             }
+            // The reader thread turns these into `Msg::Snapshot` and `Msg::History`.
+            DaemonMsg::Screen { .. } | DaemonMsg::History { .. } => {}
             DaemonMsg::Output { pane, bytes } => {
                 if let Some(v) = self.panes.get_mut(&pane) {
+                    if let Some(h) = &mut v.history {
+                        h.out(&bytes);
+                        if h.bytes > PENDING_MAX {
+                            v.history = None;
+                        }
+                    }
                     v.parser.process(&bytes);
                     if let Some(sel) = &mut self.sel
                         && sel.pane == pane
@@ -1795,6 +1922,9 @@ impl App {
             let (cols, rows) = inner(rect);
             if view.parser.screen().size() != (rows, cols) {
                 view.parser.screen_mut().set_size(rows, cols);
+                if let Some(h) = &mut view.history {
+                    h.ops.push(Op::Size(rows, cols));
+                }
                 if self.sel.as_ref().is_some_and(|s| s.pane == id) {
                     self.sel = None;
                     self.selecting = false;
@@ -3313,8 +3443,8 @@ fn load_recent() -> Vec<String> {
 
 /// Replays a `Snapshot`'s bytes into a new parser: up to 2 MiB, so it runs on
 /// the reader thread, not the UI's.
-fn replay(rows: u16, cols: u16, bytes: &[u8]) -> vt100::Parser<keys::Flags> {
-    trace::span("snap_parse", || {
+fn replay(name: &str, rows: u16, cols: u16, bytes: &[u8]) -> vt100::Parser<keys::Flags> {
+    trace::span(name, || {
         let mut parser =
             vt100::Parser::new_with_callbacks(rows, cols, SCROLLBACK, keys::Flags::default());
         parser.process(bytes);
@@ -3681,8 +3811,32 @@ mod motion_tests {
 
     #[test]
     fn a_replayed_snapshot_is_the_screen_its_bytes_draw() {
-        let p = replay(3, 10, b"hi\r\nthere");
+        let p = replay("t", 3, 10, b"hi\r\nthere");
         assert_eq!(p.screen().size(), (3, 10));
         assert_eq!(p.screen().contents(), "hi\nthere");
+    }
+
+    #[test]
+    fn a_history_takes_the_screens_place_with_what_happened_since() {
+        let (mut app, _g) = app(true);
+        let screen = replay("t", 3, 10, b"3\r\n4\r\n5");
+        app.install_snapshot(1, "shell".into(), screen, Some(7));
+        app.on_daemon(DaemonMsg::Output {
+            pane: 1,
+            bytes: b"\r\n6".to_vec(),
+        });
+
+        // An older history (a pane attached again since) is not this one's.
+        let stale = replay("t", 3, 10, b"x");
+        app.on_history(1, 6, stale);
+        assert!(app.panes[&1].history.is_some());
+
+        let full = replay("t", 3, 10, b"1\r\n2\r\n3\r\n4\r\n5");
+        app.on_history(1, 7, full);
+        let view = app.panes.get_mut(&1).unwrap();
+        assert!(view.history.is_none());
+        assert_eq!(view.parser.screen().contents(), "4\n5\n6");
+        view.parser.screen_mut().set_scrollback(usize::MAX);
+        assert_eq!(view.parser.screen().scrollback(), 3);
     }
 }

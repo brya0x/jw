@@ -384,7 +384,21 @@ fn snapshot(id: PaneId, pane: &Pane, st: &PaneState) -> DaemonMsg {
     let screen = st.parser.screen();
     let (rows, cols) = screen.size();
     let mut bytes = st.ring.bytes();
-    bytes.extend_from_slice(b"\x1b[0m");
+    bytes.extend_from_slice(&screen_bytes(st));
+    DaemonMsg::Snapshot {
+        pane: id,
+        role: pane.role.clone(),
+        cols,
+        rows,
+        bytes,
+    }
+}
+
+/// The exact screen, the end of every snapshot: the mode, the cells and the
+/// kitty keyboard stack. Alone, it draws the pane without its scrollback.
+fn screen_bytes(st: &PaneState) -> Vec<u8> {
+    let screen = st.parser.screen();
+    let mut bytes = b"\x1b[0m".to_vec();
     bytes.extend_from_slice(if screen.alternate_screen() {
         b"\x1b[?1049h"
     } else {
@@ -397,13 +411,31 @@ fn snapshot(id: PaneId, pane: &Pane, st: &PaneState) -> DaemonMsg {
             .kitty
             .replay(screen.alternate_screen()),
     );
-    DaemonMsg::Snapshot {
-        pane: id,
-        role: pane.role.clone(),
-        cols,
-        rows,
-        bytes,
-    }
+    bytes
+}
+
+/// A snapshot in two: the `Screen` to draw at once and the `History` to
+/// replay behind it (`SplitSnapshots`).
+fn split_snapshot(id: PaneId, pane: &Pane, st: &PaneState) -> [DaemonMsg; 2] {
+    let (rows, cols) = st.parser.screen().size();
+    let DaemonMsg::Snapshot { bytes: full, .. } = snapshot(id, pane, st) else {
+        unreachable!("snapshot makes a Snapshot")
+    };
+    [
+        DaemonMsg::Screen {
+            pane: id,
+            role: pane.role.clone(),
+            cols,
+            rows,
+            bytes: screen_bytes(st),
+        },
+        DaemonMsg::History {
+            pane: id,
+            cols,
+            rows,
+            bytes: full,
+        },
+    ]
 }
 
 /// The local time as `HH:MM`.
@@ -510,6 +542,7 @@ impl Daemon {
             ClientMsg::Hello { .. } => {
                 let _ = tx.send(DaemonMsg::Hello { protocol: PROTOCOL });
             }
+            ClientMsg::SplitSnapshots => tx.set_split(),
             ClientMsg::Attach { stream } => self.attach(client, tx, &stream),
             ClientMsg::Detach => self.unsubscribe(client),
             ClientMsg::Prompt { stream, text } => {
@@ -699,7 +732,13 @@ impl Daemon {
     fn watch(&self, client: u64, tx: &Tx, id: PaneId) {
         let Ok(pane) = self.pane(id) else { return };
         let mut st = lock(&pane.state);
-        let _ = tx.send(snapshot(id, &pane, &st));
+        if tx.split() {
+            for m in split_snapshot(id, &pane, &st) {
+                let _ = tx.send(m);
+            }
+        } else {
+            let _ = tx.send(snapshot(id, &pane, &st));
+        }
         if let Some(status) = st.exited {
             let _ = tx.send(DaemonMsg::Exited { pane: id, status });
         }

@@ -1322,3 +1322,66 @@ fn the_cli_reads_the_daemon_or_none() {
         assert!(jw(&["sessions"], socket).contains("main"));
     }
 }
+
+/// F3: a client that asks for `SplitSnapshots` gets the screen first and the
+/// history behind it, and the two together are what one `Snapshot` was.
+#[test]
+fn a_split_client_gets_the_screen_then_the_history() {
+    let d = Daemon::start();
+    let mut c = d.client();
+    let pane = spawn(&mut c, "s", "seq 1 60; cat", 80, 24);
+    let mut seen = vt100::Parser::new(24, 80, 0);
+    read_until(&mut c, pane, &mut seen, "60");
+
+    let mut plain = d.client();
+    plain
+        .send(&ClientMsg::Attach { stream: "s".into() })
+        .unwrap();
+    let full = match recv(&mut plain) {
+        DaemonMsg::Snapshot { bytes, .. } => bytes,
+        m => panic!("want a Snapshot, got {m:?}"),
+    };
+
+    let mut split = d.client();
+    split.send(&ClientMsg::SplitSnapshots).unwrap();
+    split
+        .send(&ClientMsg::Attach { stream: "s".into() })
+        .unwrap();
+    let screen = loop {
+        match recv(&mut split) {
+            DaemonMsg::Screen {
+                pane: p,
+                cols: 80,
+                rows: 24,
+                bytes,
+                ..
+            } if p == pane => break bytes,
+            DaemonMsg::Tree { .. } => {}
+            m => panic!("want the Screen first, got {m:?}"),
+        }
+    };
+    let history = match recv(&mut split) {
+        DaemonMsg::History {
+            pane: p,
+            cols: 80,
+            rows: 24,
+            bytes,
+        } if p == pane => bytes,
+        m => panic!("want the History next, got {m:?}"),
+    };
+    assert_eq!(history, full, "History is what a Snapshot carried");
+
+    let mut lite = vt100::Parser::new(24, 80, 100);
+    lite.process(&screen);
+    let mut whole = vt100::Parser::new(24, 80, 100);
+    whole.process(&history);
+    assert_eq!(lite.screen().contents(), whole.screen().contents());
+    lite.screen_mut().set_scrollback(usize::MAX);
+    whole.screen_mut().set_scrollback(usize::MAX);
+    assert_eq!(
+        lite.screen().scrollback(),
+        0,
+        "the Screen has no scrollback"
+    );
+    assert!(whole.screen().scrollback() > 0, "the History has it");
+}

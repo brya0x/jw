@@ -397,11 +397,15 @@ Timeline of one switch (ms from the key): `resolve` 0–42 (no frame) → `Attac
 
 After F1 (same bench, two runs): `resolve` 0 ms (the stream comes from a cache `warm_streams` fills on a worker thread), frame cadence 16.0–16.1 ms (60 fps; S9 fixed by counting the deadline from the frame's start), key → content 119–124 ms p50, longest gap without a frame 108–114 ms: all of it is the `Snapshot` parse (103–108 ms in these runs, noisier than F0's 86), which is F2. A workspace that is not open still resolves fresh on the UI thread (its agent session and layout are read as its panes start), so REQ-151 holds for switching, not yet for the first open.
 
-After F2's threads (`Msg::Snapshot` carries a `Parser` built by the reader thread; two runs): the UI thread's longest message during a switch 6–7 ms (was 86), the longest gap without a frame 20–21 ms (was 108–120), cadence 16.0 ms, 0 to 1 gaps over 20 ms. The replay itself did not get cheaper: 118–120 ms now on its own thread (it was 86–108 on the UI thread, and now competes with it for the cores), so **key → content is 146 ms p50, worse than before F2's 119–124 ms, and the 100 ms budget (REQ-154) is not met**. The slide now plays on time, over empty panes, and the content lands at ≈ 146 ms. What is left to cut is the replay of the 2 MiB ring (S3's payload, F3): the daemon sends the whole ring and the TUI replays all of it to rebuild 5,000 rows of scrollback, though only the screen is visible.
+After F3 (`Screen` first, `History` behind it; two runs): **key → content 12–14 ms p50 (p95 29–38), under the 100 ms budget**; the `History` replay still takes ≈ 100 ms but on its own thread, and the swap into the pane costs 0.004 ms; the UI's longest message 4 ms (p95 12–14), the longest gap without a frame 20 ms (p95 33–35: the first frame after the key), cadence 15.9 ms. The scrollback of a pane is complete ≈ 100 ms after the switch instead of before it appears.
+
+New finding while measuring (S10, not fixed): the frame that draws the leader (`^␣`) takes ≈ 30 ms in the release build (29 of 30 samples). It is outside the switch (it comes before the key), so F0's per-switch window missed it; a frame over 16 ms there drops two frames.
+
+After F2's threads (`Msg::Snapshot carries a `Parser` built by the reader thread; two runs): the UI thread's longest message during a switch 6–7 ms (was 86), the longest gap without a frame 20–21 ms (was 108–120), cadence 16.0 ms, 0 to 1 gaps over 20 ms. The replay itself did not get cheaper: 118–120 ms now on its own thread (it was 86–108 on the UI thread, and now competes with it for the cores), so **key → content is 146 ms p50, worse than before F2's 119–124 ms, and the 100 ms budget (REQ-154) is not met**. The slide now plays on time, over empty panes, and the content lands at ≈ 146 ms. What is left to cut is the replay of the 2 MiB ring (S3's payload, F3): the daemon sends the whole ring and the TUI replays all of it to rebuild 5,000 rows of scrollback, though only the screen is visible.
 
 Opening a *new* workspace (3 samples): `resolve` 31 ms, but `handle_term` is 130 ms: about 100 ms more before or around `open_entry` that no span covers yet (the picker's confirm). Not measured further; F1 starts there.
 
-Verdicts: **F1** (S1, S9) and **F2** (S2, S4) are the work; **F3** (S3, S8) and **F4** (S5) have no number behind them and are dropped unless more panes change that. Snapshot cost is per pane, so a workspace with three panes should cost ≈ 3 × 86 ms until F2.
+Verdicts (before F3): **F1** (S1, S9) and **F2** (S2, S4) are the work; **F3** (S3, S8) and **F4** (S5) have no number behind them and are dropped unless more panes change that. Snapshot cost is per pane, so a workspace with three panes should cost ≈ 3 × 86 ms until F2.
 
 #### Interfaces
 
@@ -411,7 +415,9 @@ Verdicts: **F1** (S1, S9) and **F2** (S2, S4) are the work; **F3** (S3, S8) and 
 | `scripts/bench-switch.py` | F0: drives N switches with `scripts/drive.py`, prints p50/p95/max per phase | `scripts/` |
 | `Msg::Snapshot(PaneId, Parser)` | F2: the reader thread builds the `Parser`; the UI thread only inserts it | `mod.rs:327` |
 | `App::background` jobs | F1: persist recent/folders/stream setup off-thread | `mod.rs` (existing) |
-| `PROTOCOL` | stays 8 | `proto.rs:18` |
+| `PROTOCOL` | 9 (F3): `ClientMsg::SplitSnapshots`, `DaemonMsg::Screen` and `History` (bytes travel raw) | `proto.rs:18` |
+| `ClientMsg::SplitSnapshots` | F3: from then on this connection gets a pane it watches as `Screen` (the exact screen, small) then `History` (what a `Snapshot` carried); a client that does not ask still gets one `Snapshot`, and a resync is always a `Snapshot` | `proto.rs`, `daemon/src/lib.rs` (`split_snapshot`), `daemon/src/outbox.rs` |
+| `Msg::Snapshot{history}` / `Msg::History` | F3: the TUI draws from the `Screen`, replays `History` on its own thread, then swaps it in with the output and resizes that came since (`Pending`) | `tui/mod.rs` (`on_history`) |
 
 #### Acceptance
 
@@ -422,6 +428,8 @@ Verdicts: **F1** (S1, S9) and **F2** (S2, S4) are the work; **F3** (S3, S8) and 
 - REQ-154 WHEN the switch is requested, the TUI SHALL reach the new panes' first content within the key→content budget of the table above, p95 over 50 switches.
 - REQ-155 IF a pane's `Snapshot` has not arrived when the slide ends, THEN the TUI SHALL keep drawing the pane's frame (title, border) and fill it when the snapshot lands, without a full-screen flicker.
 - REQ-156 THE switch SHALL keep each pane's scrollback, modes and kitty flags exactly as before.
+- REQ-158 WHEN a client that sent `SplitSnapshots` starts to watch a pane, the daemon SHALL send its `Screen` before its `History`, and the `History` bytes SHALL equal what a `Snapshot` of the same moment carries.
+- REQ-159 WHILE a pane's `History` is replayed, the TUI SHALL draw and update the pane from its `Screen`, and WHEN the replay ends SHALL swap it in with the output and resizes that came since, so the pane shows no change but its scrollback.
 - REQ-157 WHERE `animations` is false, a switch SHALL still obey REQ-151 and REQ-152.
 
 Open (human decisions, still unanswered):
@@ -582,7 +590,7 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | F0 ✓ | `JW_TRACE`, `scripts/bench-switch.py`, the Measurements above | 150 | `tui/trace.rs`, `tui/mod.rs`, `scripts/` |
 | F1 ✓ | S1, S9: `Stream::resolve` (the `git` spawn) off the UI thread, the frame deadline counted from the frame's start; the unexplained ≈ 100 ms of a first open | 151, 157 | `tui/mod.rs`, `core` (callers) |
 | F2 ✓ threads | S2: parse in the reader thread (`Msg::Snapshot` carries a `Parser`). S4 (keep pane frames while content loads, REQ-155) waits for its prototype (OPEN-15) | 152, 155, 156 | `tui/mod.rs`, `tui/draw.rs` |
-| F3 | **now justified (key → content 146 ms, 118 ms of it the replay):** send the screen first and the history after, or a capped tail of the ring; S8 (save off the open path) only if a number shows it | 154, 156 | `daemon/src/lib.rs` |
+| F3 ✓ | **now justified (key → content 146 ms, 118 ms of it the replay):** send the screen first and the history after, or a capped tail of the ring; S8 (save off the open path) only if a number shows it | 154, 156 | `daemon/src/lib.rs` |
 | F4 | S5: skip unchanged rows in `screen_to`, one flush per frame, only if F0 shows draw over budget | 153 | `tui/draw.rs`, `tui/anim.rs` |
 
 Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{new_stream, rm_plan, rm, sync, done_plan}`, `src/diff.rs`, `src/view/md.rs` and `Modal::Rm` (type the name) stay as they are.
@@ -641,6 +649,7 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - REQ-146 first said the welcome starts "with no workspace open" and does not pass on the key that closes it. At startup nothing is open yet even for a returning user, so it starts from an empty sidebar; and step 1 itself tells the user to press the leader, so that key is handled as usual.
 
 - F2's threads were expected to bring key → content to about 30 ms. They did not: moving the replay off the UI thread removes the stalls (gap 120 → 20 ms) but the content cannot appear before the replay ends, and the replay took longer on a shared core. Only F3 shortens it.
+- F3 was drafted as capping the ring; the split (`Screen` then `History`) keeps the scrollback whole (REQ-156) and needed `PROTOCOL` 9, which the addendum had said would stay 8.
 - Addendum 14 was agreed with S1–S8 as guesses. F0 confirmed S1, S2 and found S9 (the frame cadence is ≈ 20 ms, not 16); it showed S3, S5, S6 and S7 cost almost nothing at one pane. Its OPEN ids were first 1–4, which this spec already used: renumbered 14–17.
 - Addendum 13 said that on a switch the panes "only enter; nothing leaves". True, but it also means the slide animates over blank panes until the Snapshots arrive (S4, addendum 14).
 
