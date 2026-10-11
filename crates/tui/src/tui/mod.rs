@@ -3470,4 +3470,75 @@ mod motion_tests {
         app.tick_motion(Instant::now());
         assert_eq!(app.spin_due, None);
     }
+
+    #[test]
+    fn an_idle_app_blocks_until_a_message_comes() {
+        let (mut app, _g) = app(true);
+        assert!(app.next_wake(Instant::now()).is_none());
+    }
+
+    #[test]
+    fn a_transition_wakes_for_the_next_frame_after_the_last_draw() {
+        let (mut app, _g) = app(true);
+        let t0 = Instant::now();
+        app.last_draw = t0;
+        app.motion.kick(MS(100), t0);
+        let (at, wake) = app.next_wake(t0 + MS(5)).unwrap();
+        assert_eq!(at, t0 + FRAME);
+        assert!(matches!(wake, Wake::Frame));
+        assert!(app.next_wake(t0 + MS(100)).is_none(), "blocks once it ends");
+    }
+
+    #[test]
+    fn a_held_drag_wakes_for_the_edge_and_releasing_it_stops_it() {
+        let (mut app, _g) = app(true);
+        let t0 = Instant::now();
+        app.edge = Some(1);
+        let (at, wake) = app.next_wake(t0).unwrap();
+        assert_eq!(at, t0 + EDGE_EVERY);
+        assert!(matches!(wake, Wake::Edge));
+        app.edge = None;
+        assert!(app.next_wake(t0).is_none());
+        assert!(app.edge_due.is_none());
+    }
+
+    #[test]
+    fn the_leader_wakes_for_the_which_key_until_it_shows() {
+        let (mut app, _g) = app(true);
+        let t0 = Instant::now();
+        app.leader_at = Some(t0);
+        let (at, wake) = app.next_wake(t0).unwrap();
+        assert_eq!(at, t0 + which_after());
+        assert!(matches!(wake, Wake::Which));
+        app.which = true;
+        assert!(app.next_wake(t0).is_none());
+    }
+
+    #[test]
+    fn the_soonest_wake_wins() {
+        let (mut app, _g) = app(true);
+        let t0 = Instant::now();
+        app.last_draw = t0;
+        app.motion.kick(MS(100), t0);
+        app.spin_due = Some(t0 + MS(80));
+        app.edge = Some(1);
+        app.edge_due = Some(t0 + MS(60));
+        let (at, wake) = app.next_wake(t0).unwrap();
+        assert_eq!(at, t0 + FRAME);
+        assert!(matches!(wake, Wake::Frame));
+    }
+
+    #[test]
+    fn a_message_wakes_the_loop_when_it_starts_to_leave() {
+        let (mut app, _g) = app(true);
+        let t0 = Instant::now();
+        app.status = Some(Status {
+            text: "done".into(),
+            tone: Tone::Done,
+            at: t0,
+        });
+        let (at, _) = app.next_wake(t0 + MS(500)).unwrap();
+        assert_eq!(at, t0 + STATUS_FOR - anim::MESSAGE_EDGE);
+        assert!(app.next_wake(t0 + STATUS_FOR).is_none());
+    }
 }
