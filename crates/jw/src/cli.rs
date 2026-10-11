@@ -41,7 +41,7 @@ pub fn prompt(args: &[String]) -> Result<()> {
     let mut c = Client::connect(&socket_path())
         .with_context(|| format!("{} is not open: no jw daemon is running", entry.name))?;
     hello(&mut c)?;
-    send_prompt(&mut c, &entry, text.trim())?;
+    send_prompt(&mut c, &entry, None, text.trim())?;
     println!("sent to {}'s agent", entry.name);
     Ok(())
 }
@@ -447,7 +447,7 @@ pub fn worktree(args: &[String]) -> Result<()> {
     open(&mut c, &stream)?;
     eprintln!("opened {}", entry.name);
     if let Some(task) = task {
-        send_prompt(&mut c, &entry, &task)?;
+        send_prompt(&mut c, &entry, None, &task)?;
         eprintln!("task sent to {}'s agent", entry.name);
     }
     Ok(())
@@ -513,10 +513,11 @@ fn open(c: &mut Client, stream: &Stream) -> Result<()> {
     stream.mark_opened()
 }
 
-fn send_prompt(c: &mut Client, entry: &Entry, text: &str) -> Result<()> {
+fn send_prompt(c: &mut Client, entry: &Entry, pane: Option<PaneId>, text: &str) -> Result<()> {
     c.send(&ClientMsg::Prompt {
         stream: entry.id.clone(),
         text: text.to_string(),
+        pane,
     })?;
     c.set_read_timeout(Some(PROMPT_TIMEOUT))?;
     loop {
