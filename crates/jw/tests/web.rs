@@ -1,14 +1,16 @@
-//! The bridge in front of a real daemon (mobile spec, REQ-8, 10).
+//! The bridge in front of a real daemon (mobile spec, REQ-4, 8, 10).
 
 use std::collections::BTreeMap;
 use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use jw_proto::client::Client;
 use jw_proto::proto::{ClientMsg, DaemonMsg, PROTOCOL, read_frame, write_frame};
-use jw_web::bridge::Bridge;
+use jw_web::auth::{self, Store};
+use jw_web::bridge::{Bridge, Config, Timings};
 use tungstenite::{Message, WebSocket};
 
 const EXE: &str = env!("CARGO_BIN_EXE_jw");
@@ -35,6 +37,21 @@ impl Phone {
                 .unwrap()
                 .0,
         )
+    }
+
+    /// Authenticates, and waits for `ready`: the daemon is there and the
+    /// protocol matches.
+    fn login(&mut self, secret: &str) {
+        let hello = serde_json::json!({ "t": "auth", "device": secret });
+        self.0.send(Message::text(hello.to_string())).unwrap();
+        match self.0.read().unwrap() {
+            Message::Text(t) => {
+                let v: serde_json::Value = serde_json::from_str(&t).unwrap();
+                assert_eq!(v["t"], "ready", "{v}");
+                assert_eq!(v["protocol"], PROTOCOL);
+            }
+            other => panic!("want ready, got {other:?}"),
+        }
     }
 
     /// A frame without its length, as the bridge expects it.
@@ -72,8 +89,22 @@ fn a_phone_drives_a_pane_through_the_bridge() {
         assert!(Instant::now() < deadline, "daemon never listened");
         thread::sleep(Duration::from_millis(20));
     }
-    let bridge = Bridge::start(TcpListener::bind("127.0.0.1:0").unwrap(), socket).unwrap();
+    let store = Arc::new(Store::open(dir.path().join("mobile.json")));
+    let secret = auth::random_hex(32).unwrap();
+    store.add("test phone", &auth::hash(&secret)).unwrap();
+    let bridge = Bridge::start(
+        TcpListener::bind("127.0.0.1:0").unwrap(),
+        socket,
+        Config {
+            store,
+            read_only: false,
+            confirm: Arc::new(|_| false),
+            timings: Timings::default(),
+        },
+    )
+    .unwrap();
     let mut phone = Phone::connect(&bridge);
+    phone.login(&secret);
 
     phone.send(&ClientMsg::Hello { protocol: PROTOCOL });
     assert_eq!(phone.recv(), DaemonMsg::Hello { protocol: PROTOCOL });
@@ -119,4 +150,52 @@ fn a_phone_drives_a_pane_through_the_bridge() {
             _ => {}
         }
     }
+}
+
+/// `jw mobile` with this socket: it must fail before it starts a tunnel. It is
+/// given a `PATH` without `cloudflared`, so if that ever stops being true the
+/// test fails instead of putting a tunnel on the internet.
+fn mobile(socket: &std::path::Path, dir: &std::path::Path) -> std::process::Output {
+    Command::new(EXE)
+        .arg("mobile")
+        .env("JW_SOCKET", socket)
+        .env("XDG_CONFIG_HOME", dir)
+        .env("PATH", dir)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn mobile_needs_a_daemon() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = mobile(&dir.path().join("jw.sock"), dir.path());
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("no jw daemon is running"), "{err}");
+}
+
+#[test]
+fn mobile_refuses_a_daemon_on_another_protocol() {
+    use std::os::unix::net::UnixListener;
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("jw.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    thread::spawn(move || {
+        for conn in listener.incoming() {
+            let Ok(mut c) = conn else { return };
+            while let Ok(Some(ClientMsg::Hello { .. })) = read_frame::<ClientMsg>(&mut c) {
+                let _ = write_frame(
+                    &mut c,
+                    &DaemonMsg::Hello {
+                        protocol: PROTOCOL + 1,
+                    },
+                );
+            }
+        }
+    });
+    let out = mobile(&socket, dir.path());
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("jw server stop"), "{err}");
 }

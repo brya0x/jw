@@ -5,6 +5,7 @@ use std::process::ExitCode;
 
 mod cli;
 mod help;
+mod mobile;
 mod server;
 mod skill;
 mod theme;
@@ -58,6 +59,7 @@ fn main() -> ExitCode {
         Some("skill") => report("skill", skill::run(&args[1..])),
         Some("server") => report("server", server::run(&args[1..])),
         Some("theme") => report("theme", theme::run(&args[1..])),
+        Some("mobile") => report("mobile", mobile::run(&args[1..])),
         Some("--version" | "-V") => {
             println!("jw {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS

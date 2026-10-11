@@ -22,10 +22,13 @@ supersedes:  []
 | CLI | arm at `crates/jw/src/main.rs:45-60`, row at `help.rs:14`, name in `core/src/session.rs:18` | `jw mobile [--read-only] [--port N]`, `jw mobile devices`, `jw mobile revoke <device>` |
 | Bridge | `crates/web/src/bridge.rs` (jw-web; sync, threads, as `daemon/src/lib.rs:70-75`) | listens on `127.0.0.1:<port>`; WS **binary** message = one jw-proto frame, kind byte plus body, no length prefix (`proto/src/proto.rs:364-390`); WS **text** message = control JSON |
 | Raw frames | `proto/src/proto.rs` `read_raw`, `write_raw` | a frame's body (kind byte and what follows) without decoding it; both check the kind and `MAX_FRAME` |
-| Control, phone to bridge | JSON, tag `t` | `pair{token,name}`, `auth{device}`, `workspaces`, `sessions`, `diff{ws}`, `open{path}`, `worktree{project,branch}` |
+| Control, phone to bridge | JSON, tag `t` | `pair{token,name,code}`, `auth{device}`, `workspaces`, `sessions`, `diff{ws}`, `open{path}`, `worktree{project,branch}` |
 | Control, bridge to phone | JSON, tag `t` | `ready{bridge:1,protocol,palettes,settings}`, `paired{device}`, `workspaces`, `sessions`, `diff`, `error{code,msg}` |
 | Palettes | `tui/src/theme.rs:19-37` | the 10 built-in themes plus user themes, as colour roles, plus `dark`; `settings` names the dark and light slots |
-| Store | `<config dir>/mobile.json`, mode 0600 | device name, token hash, last seen |
+| Store | `<config dir>/mobile.json`, mode 0600, changed under a `flock` on `mobile.json.lock` | device id, name, SHA-256 of its token, created, last seen |
+| Pairing | `pair.code` | 4 to 12 digits the phone generates and shows; `pair.name` and `code` are stripped of control characters before they print |
+| QR | `jw://<tunnel host>/<pairing token>` | the host is the quick tunnel's name; the token is 128 bits, hex |
+| Error codes | `error.code` | `unexpected`, `timeout`, `limited`, `expired`, `unknown`, `denied`, `revoked`, `read_only`, `unsupported`, `protocol`, `daemon`. The app treats `unknown` and `revoked` as final and does not retry, or its own retries lock it out (REQ-5). |
 | Tunnel | child `cloudflared tunnel --url http://127.0.0.1:<port>` | URL read from its output |
 | App | `android/` | Gradle; modules `proto` (frame codec), `term` (VT emulator), `app` (Compose) |
 
@@ -33,12 +36,12 @@ supersedes:  []
 
 | REQ | Requirement |
 |---|---|
-| 1 | WHEN `jw mobile` starts, the bridge SHALL listen on 127.0.0.1 only, start `cloudflared`, and print the tunnel URL and a QR of it with the pairing token. |
+| 1 | WHEN `jw mobile` starts, the bridge SHALL listen on 127.0.0.1 only, start `cloudflared`, wait until the tunnel's name resolves in DNS, and then print the tunnel URL and a QR of `jw://<tunnel host>/<token>`. |
 | 2 | THE pairing token SHALL be 128 random bits, valid for one use and for 120 s. |
-| 3 | WHEN a valid pairing token arrives, the bridge SHALL ask on the PC's terminal to confirm the device name, and only then issue a 256-bit device token, storing its hash only. |
+| 3 | WHEN a valid pairing token arrives, the bridge SHALL spend it at once, print on the PC's terminal the device name and the code the phone sent, ask whether the phone shows that code, and only on yes issue a 256-bit device token, storing its hash only. |
 | 4 | IF a connection sends anything but `pair` or `auth` before authenticating, THEN the bridge SHALL close it and forward nothing to the daemon. |
 | 5 | IF five pair or auth attempts fail within 60 s from one address, THEN the bridge SHALL refuse that address for 5 min. |
-| 6 | WHEN `jw mobile revoke <device>` runs, the bridge SHALL close that device's connections and reject its token. |
+| 6 | WHEN `jw mobile revoke <device>` runs, the bridge SHALL reject that device's token and close its connections within 2 s. |
 | 7 | WHERE `--read-only` is set, the bridge SHALL drop every message except `Hello`, `Attach`, `Detach` and `List`, and every control request except the reads. |
 | 8 | WHEN the bridge connects to the daemon, it SHALL send `Hello`; IF the daemon's `PROTOCOL` differs from the bridge's, THEN it SHALL refuse every device with error `protocol`. |
 | 9 | WHEN the bridge stops, it SHALL kill `cloudflared` and close every device connection. |
@@ -61,6 +64,10 @@ supersedes:  []
 | 26 | THE app SHALL size every touch target at 48 dp or more and show the mode chip (NORMAL, TERM, DIFF, SET, ?) and status bar of the prototype. |
 | 27 | THE app and bridge SHALL NOT log terminal bytes or tokens. |
 | 28 | THE Avisos tab SHALL list every pane whose agent is `Waiting`, with y and n. |
+| 29 | IF a WebSocket handshake carries an `Origin` header, THEN the bridge SHALL refuse it with 403. |
+| 30 | IF no daemon is listening when `jw mobile` starts, or the one that is speaks another `PROTOCOL`, THEN it SHALL exit with a message saying what to do, and start nothing. |
+| 31 | WHILE a device is connected, the bridge SHALL ping it every 30 s and drop it after twice that in silence. |
+| 32 | THE bridge SHALL close a connection that has not authenticated 10 s after its handshake (the wait for the person at the PC not counted), and SHALL hold at most 16 such connections. |
 
 ---
 
@@ -80,16 +87,16 @@ supersedes:  []
 
 - **RISK-1 Token holder owns the PC.** REQ-2 to 7 limit it. Unverified: whether a quick-tunnel URL can leak through `cloudflared` logs.
 - **RISK-2 Last `Resize` wins** (`lib.rs:588-592`). A phone resize would shrink the PC's pane. REQ-24 is the guard.
-- **RISK-3 Quick tunnels.** No SLA, a new URL each run, and WebSocket over them is **unverified**. M2 starts by proving it.
+- **RISK-3 Quick tunnels.** No SLA and a new URL each run. WebSocket over one **works** (checked 2026-10-11 with `cloudflared` 2026.10.0: upgrade 101, binary frames, 256 raw bytes intact, alive after 20 s idle, about 95 ms round trip). The URL is **not reachable when `cloudflared` says it is**: its `Registered tunnel connection` line came about 60 s before the name resolved in DNS, so `jw mobile` waits for the name to resolve before it shows the QR (REQ-1). A paired phone that only watched stayed connected for 151 s through the tunnel, answering the bridge's pings every 30 s; Cloudflare's own idle limit is unmeasured, and the ping is what keeps a quiet phone open.
 - **RISK-4 Approve bytes.** y and n may not match the agent's prompt UI; Waiting detection comes from `AgentState` (`proto.rs:219`). Bytes are configurable.
 - **RISK-5 Emulator.** Candidate: Termux's `terminal-emulator` (licence and kitty replay support **unverified**).
 - **RISK-6 Android kills background sockets.** No alerts when the app is backgrounded (OPEN-3).
 - **RISK-7 Cellular cost.** A resync sends a snapshot of up to 2 MiB (`outbox.rs:55-64`). The bridge may need to throttle.
 - **RISK-8 New dependencies** in a dep-light workspace: a sync WS crate, `qrcode`, `sha2`, a random source.
-- **RISK-10 Behind `cloudflared` every connection comes from 127.0.0.1.** REQ-5's "per address" would lock out the real phone, or let anyone lock it out. M2 keys the limit on `CF-Connecting-IP`, trusted only because the listener is loopback and `cloudflared` is its one client.
-- **RISK-11 A web page can open `ws://127.0.0.1:<port>`.** Auth (REQ-4) is the guard. M2 also refuses a handshake that carries an `Origin` header (a phone app sends none) and adds that as a REQ.
-- **RISK-12 M1 reaches the daemon before the phone has said anything.** `serve` connects and sends `Hello` first, which REQ-4 forbids once there is auth. M2 authenticates first, then connects, and gives the pre-auth phase its own deadline.
-- **RISK-13 A dead phone behind `cloudflared` is only noticed when writes stall.** It keeps its daemon subscriptions meanwhile. M2 adds a WebSocket ping and drops on a missed pong.
+- **RISK-10 Behind `cloudflared` every connection comes from 127.0.0.1.** Measured: the tunnel adds `Cf-Connecting-Ip` (and `X-Forwarded-For`), so REQ-5 keys on `Cf-Connecting-Ip`, trusted only because the listener is loopback and `cloudflared` is its one client. A connection without it is keyed on its peer address.
+- **RISK-11 A web page can open `ws://127.0.0.1:<port>`.** Measured: `Origin` passes through the tunnel unchanged, and a phone app sends none, so the bridge refuses any handshake that carries one (REQ-4a). Auth is the second guard.
+- **RISK-12 Settled in M2.** The bridge handshakes, reads `pair` or `auth`, and only then connects to the daemon (REQ-4).
+- **RISK-13 Settled in M2.** REQ-31: a ping every 30 s, dropped after 60 s of silence.
 - **RISK-9 Diff source.** The TUI draws diffs client-side (`tui/src/tui/diffview.rs`). Whether git diff generation can move to `core` for the bridge is **unchecked**.
 
 ## Open questions
@@ -104,8 +111,8 @@ supersedes:  []
 
 | Part | What | REQ | Main files |
 |---|---|---|---|
-| M1 ✓ | Bridge relay, protocol check, stop (REQ-9: the connections; `cloudflared` is M2) | 8–11 | `crates/web/src/bridge.rs`, `proto.rs`, `jw/tests/web.rs` |
-| M2 | Tunnel (prove WS first), QR, pairing, auth, rate limit, revoke, read-only, `jw mobile` | 1–7 | `crates/web/`, `jw/src/main.rs`, `help.rs` |
+| M1 ✓ `65cc24f` | Bridge relay, protocol check, stop (REQ-9: the connections; `cloudflared` is M2) | 8–11 | `crates/web/src/bridge.rs`, `proto.rs`, `jw/tests/web.rs` |
+| M2 ✓ | Tunnel, QR, pairing, auth, rate limit, revoke, read-only, `jw mobile` | 1–7, 29–32 | `crates/web/`, `jw/src/main.rs`, `help.rs` |
 | M3 | Android shell: scan, pair, reconnect, version screen, theme | 14–17, 27 | `android/app`, `android/proto` |
 | M4 | Workspaces, sessions, enter, approve, Avisos | 12, 18–20, 28 | `android/app`, `crates/web/` |
 | M5 | Terminal surface, keys, leader sheet, resize | 21–24 | `android/term`, `android/app` |
@@ -114,6 +121,8 @@ supersedes:  []
 
 ## Corrections
 
+- REQ-3 first had the PC confirm the device name the phone sent. Anyone holding a copy of the QR could pair as any name and the user would press y. The phone now shows a code and sends it, the PC prints it, and the user checks they match; the token is spent before the question, so one question is ever open.
+- REQ-1 first printed the QR once `cloudflared` said the tunnel was registered. The name did not resolve for about a minute more (RISK-3), so it now waits for DNS.
 - The bridge was to live in `crates/jw/src/mobile/`. It lives in its own crate, `crates/web` (jw-web, first named jw-mobile and renamed: it relays frames and is not specific to phones): `jw` is bin-only, so its integration tests could not reach a bridge inside it, and a library has no dead code before `jw mobile` exists. `jw mobile` is wired in M2 together with auth, so no listener without auth is ever runnable.
 - The spec took for granted that `jw-proto` could relay a frame as it is. It had no byte-level API: `read_raw` and `write_raw` were added and `MAX_FRAME` made public. No message changed, so `PROTOCOL` stays 8.
 - The plan assumed the `Theme` message could carry a palette. It carries only `dark`, `fg`, `bg` (`proto.rs:172-177`), so palettes travel on the control channel.

@@ -16,9 +16,11 @@ jw-daemon, and is started by the client, never by hand. Everything else is the C
   runs `curl`.
 - `src/skill.rs` and `skill/SKILL.md`: the Claude Code skill, built into the binary;
   `jw skill install` copies it to `~/.claude/skills/jw/`.
+- `src/mobile.rs`: `jw mobile`, `jw mobile devices|revoke`: the web server (jw-web) behind a
+  Cloudflare quick tunnel, and the QR the phone app scans. Spec: `docs/specs/mobile.md`.
 - `examples/screen.rs`: prints the screen a byte stream leaves, for `scripts/drive.py`.
 - `tests/daemon.rs`: the daemon's integration tests. They start this binary on a socket of
-  their own.
+  their own. `tests/web.rs` puts jw-web in front of that daemon.
 
 ## Keep in mind
 

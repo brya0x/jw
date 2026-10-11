@@ -10,13 +10,14 @@ publish.workspace = true
 jw-core.workspace = true
 jw-proto.workspace = true
 jw-daemon.workspace = true
+jw-web.workspace = true
 jw-tui.workspace = true
 anyhow.workspace = true
 libc.workspace = true
+qrcode.workspace = true
 serde_json.workspace = true
 vt100.workspace = true
 
 [dev-dependencies]
-jw-web.workspace = true
 tempfile.workspace = true
 tungstenite.workspace = true
