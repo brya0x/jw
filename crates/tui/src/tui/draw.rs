@@ -491,15 +491,25 @@ pub(super) fn mode_of(app: &App) -> Mode {
     }
 }
 
-fn chip(mode: Mode, leader: &str) -> (String, Color) {
+fn chip(mode: Mode, leader: &str) -> String {
     match mode {
-        Mode::Set | Mode::SetKey => (" SET ".into(), p().magenta),
-        Mode::Confirm => (" CONFIRM ".into(), p().red),
-        Mode::Leader => (format!(" {leader} "), p().yellow),
-        Mode::Move => (" MOVE ".into(), p().blue),
-        Mode::Diff => (" DIFF ".into(), p().blue),
-        Mode::Md => (" MD ".into(), p().blue),
-        Mode::Term => (" TERM ".into(), p().green),
+        Mode::Set | Mode::SetKey => " SET ".into(),
+        Mode::Confirm => " CONFIRM ".into(),
+        Mode::Leader => format!(" {leader} "),
+        Mode::Move => " MOVE ".into(),
+        Mode::Diff => " DIFF ".into(),
+        Mode::Md => " MD ".into(),
+        Mode::Term => " TERM ".into(),
+    }
+}
+
+fn chip_color(mode: Mode) -> Color {
+    match mode {
+        Mode::Set | Mode::SetKey => p().magenta,
+        Mode::Confirm => p().red,
+        Mode::Leader => p().yellow,
+        Mode::Move | Mode::Diff | Mode::Md => p().blue,
+        Mode::Term => p().green,
     }
 }
 
@@ -618,8 +628,7 @@ fn status(f: &mut Frame, app: &App) {
     let (prev, since) = app.mode.as_ref().map_or((cur, Duration::MAX), |m| {
         (m.prev, now.saturating_duration_since(m.since))
     });
-    let (chip, color) = chip(cur, &leader);
-    let from = chip_color(prev);
+    let (chip, color, from) = (chip(cur, &leader), chip_color(cur), chip_color(prev));
     let color = anim::lerp(
         from,
         color,
@@ -681,10 +690,6 @@ fn status(f: &mut Frame, app: &App) {
         Paragraph::new(Line::from(spans)).style(Style::default().bg(p().panel)),
         r,
     );
-}
-
-fn chip_color(mode: Mode) -> Color {
-    chip(mode, "").1
 }
 
 /// The first-run steps for the current time (REQ-146). A step that has not
