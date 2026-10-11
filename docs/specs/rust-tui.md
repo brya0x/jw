@@ -431,7 +431,7 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | D2 ✓ `5a4f02a` | Addendum 11: `d` on the project root | 123 | `diff.rs`, `tui/mod.rs` |
 | X0 ✓ `9adb9e7` | Addendum 12 in this spec; the prototype | — | docs |
 | X1 ✓ `5dd7118` | Selection state in the TUI: drag, Shift + drag, word and line, edge scroll, OSC 52 copy, clear rules | 124–128, 131–134 | `tui/mod.rs`, `tui/draw.rs`, new `tui/select.rs` |
-| X2 | The copied banner on the pane's top edge; the keyboard select mode is withdrawn | 135 (129, 130 withdrawn) | `tui/mod.rs`, `tui/draw.rs` |
+| X2 ✓ `bb27c1a` | The copied banner on the pane's top edge; the keyboard select mode is withdrawn | 135 (129, 130 withdrawn) | `tui/mod.rs`, `tui/draw.rs` |
 | Later | Animations (optional) | 19, 20 | |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 
