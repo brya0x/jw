@@ -99,6 +99,20 @@ impl Repo {
         run(&self.root, &["fetch", "--quiet", "origin"]).map(drop)
     }
 
+    /// Downloads the head of pull request `n` into `refs/jw/pr-<n>`, a ref of
+    /// its own so a worktree that has the review branch checked out can
+    /// still be refreshed. Returns the commit.
+    pub fn fetch_pr(&self, n: u64) -> Result<String> {
+        let spec = format!("+pull/{n}/head:refs/jw/pr-{n}");
+        run(&self.root, &["fetch", "--quiet", "origin", &spec])?;
+        run(&self.root, &["rev-parse", &format!("refs/jw/pr-{n}")])
+    }
+
+    /// Updates `origin/<branch>` alone.
+    pub fn fetch_branch(&self, branch: &str) -> Result<()> {
+        run(&self.root, &["fetch", "--quiet", "origin", branch]).map(drop)
+    }
+
     /// Whether a local branch with that name exists.
     pub fn branch_exists(&self, branch: &str) -> bool {
         let r = format!("refs/heads/{branch}");
@@ -126,6 +140,17 @@ impl Repo {
     pub fn add_worktree_existing(&self, path: &Path, branch: &str) -> Result<()> {
         let p = path.to_string_lossy();
         run(&self.root, &["worktree", "add", "--quiet", &p, branch]).map(drop)
+    }
+
+    /// Creates `path` on `branch` reset to `r#ref`, whether or not the
+    /// branch exists.
+    pub fn add_worktree_reset(&self, path: &Path, branch: &str, r#ref: &str) -> Result<()> {
+        let p = path.to_string_lossy();
+        run(
+            &self.root,
+            &["worktree", "add", "--quiet", "-B", branch, &p, r#ref],
+        )
+        .map(drop)
     }
 
     /// Deletes the worktree at `path`, discarding local changes.
@@ -325,6 +350,11 @@ pub fn head_of(dir: &Path) -> Option<(PathBuf, String)> {
 
 /// Brings the branch checked out in `dir` up to its upstream, refusing
 /// anything but a fast-forward.
+/// Moves the checkout at `dir` to `r#ref`, branch and files.
+pub fn reset_hard(dir: &Path, r#ref: &str) -> Result<()> {
+    run(dir, &["reset", "--hard", "--quiet", r#ref]).map(drop)
+}
+
 pub fn pull_ff(dir: &Path) -> Result<()> {
     run(dir, &["pull", "--ff-only"]).map(drop)
 }

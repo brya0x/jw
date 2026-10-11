@@ -265,7 +265,7 @@ pub fn rename(p: &Project, e: &Entry, name: &str, reg_path: &Path) -> Result<Ent
     Ok(renamed)
 }
 
-fn provision(p: &Project, e: &Entry, vars: &Vars, reg_path: &Path) -> Result<()> {
+pub(crate) fn provision(p: &Project, e: &Entry, vars: &Vars, reg_path: &Path) -> Result<()> {
     write_jw_env(e, vars)?;
     p.repo.exclude(".jw.env")?;
     copy_env_files(p, e, vars)?;
