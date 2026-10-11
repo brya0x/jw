@@ -4,6 +4,9 @@
 #
 #   scripts/jw-test            build, then open the window (welcome on)
 #   scripts/jw-test fresh      same, but wipes the test state first
+#   scripts/jw-test mobile     opens `jw mobile` (the tunnel and its QR) in a window of
+#                              its own, on the same test state; opens the TUI first if
+#                              no test daemon is running
 #   scripts/jw-test stop       stops the test daemon (only its pid)
 #
 # Env: JWT_DIR (default /tmp/jwt), JW_WELCOME (default 1 here: you want to see it),
@@ -35,15 +38,45 @@ if [ ! -d "$D/home/demo/.git" ]; then
   git -C "$D/home/demo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
 fi
 
-cat > "$D/launch.sh" <<LAUNCH
-#!/bin/sh
+cat > "$D/env.sh" <<ENV
 export HOME="$D/home" XDG_RUNTIME_DIR="$D/run" XDG_STATE_HOME="$D/state" XDG_CONFIG_HOME="$D/cfg"
 export JW_GH=${JW_GH:-} JW_WELCOME=${JW_WELCOME:-1} COLORTERM=truecolor SHELL=\${SHELL:-/bin/zsh}
 unset JW_SOCKET JW_SESSION
 cd "$D/home/demo"
+ENV
+
+cat > "$D/launch.sh" <<LAUNCH
+#!/bin/sh
+. "$D/env.sh"
 exec "$REPO/target/$PROFILE/jw"
 LAUNCH
-chmod +x "$D/launch.sh"
 
-open -na Ghostty --args --title=jw-test --command="$D/launch.sh" --quit-after-last-window-closed=true
+# The window stays until you press Enter, so an error is not lost with it.
+cat > "$D/mobile.sh" <<MOBILE
+#!/bin/sh
+. "$D/env.sh"
+"$REPO/target/$PROFILE/jw" mobile
+echo
+echo "jw mobile ended (exit \$?). Press Enter to close this window."
+read _
+MOBILE
+chmod +x "$D/launch.sh" "$D/mobile.sh"
+
+tui() {
+  open -na Ghostty --args --title=jw-test --command="$D/launch.sh" --quit-after-last-window-closed=true
+}
+
+if [ "${1:-}" = mobile ]; then
+  # `jw mobile` needs a daemon; the TUI is what starts one.
+  if [ ! -S "$D/run/jw/jw.sock" ]; then
+    tui
+    i=0
+    while [ ! -S "$D/run/jw/jw.sock" ] && [ "$i" -lt 100 ]; do sleep 0.2; i=$((i + 1)); done
+  fi
+  open -na Ghostty --args --title=jw-mobile --command="$D/mobile.sh"
+  echo "jw mobile open (state in $D). The QR shows after about a minute; Ctrl-C there stops it."
+  exit 0
+fi
+
+tui
 echo "jw-test open (state in $D). Stop its daemon with: scripts/jw-test stop"

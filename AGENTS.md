@@ -34,8 +34,8 @@ cargo install --path crates/jw --locked                  # put the new jw on PAT
 ```
 
 To try this checkout by hand in its own Ghostty window, with state apart from your real
-jw, run `scripts/jw-test` (`fresh` wipes it, `stop` stops only its daemon;
-`JWT_PROFILE=release` to feel the real speed). To time a workspace switch, build
+jw, run `scripts/jw-test` (`fresh` wipes it, `stop` stops only its daemon, `mobile` opens
+`jw mobile` in a window of its own; `JWT_PROFILE=release` to feel the real speed). To time a workspace switch, build
 `--release -p jw` and run `scripts/bench-switch.py` (it reads `JW_TRACE`).
 
 To see the TUI as text from a script, use `scripts/drive.py` (needs
