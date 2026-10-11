@@ -284,7 +284,7 @@ jw owns the mouse (capture is on), so a plain drag in a shell did nothing and on
 
 | Area | What it does |
 |---|---|
-| Drag | In a pane whose program has no mouse mode, a left drag highlights from the press to the pointer, row by row, over the visible screen and the history. On release the text is copied |
+| Drag | In a pane whose program has no mouse mode, a left drag highlights from the press to the pointer, in the theme's blue with the background colour as text, row by row, over the visible screen and the history. On release the text is copied |
 | Shift + drag | In a pane whose program turned the mouse on (nvim, claude), plain drag still goes to the program; WHERE the outer terminal hands jw a Shift + drag (many keep it for their own selection, RISK-41), it selects as above |
 | Words and lines | Double-click selects a word (letters, digits and `_ . / ~ : -`), triple-click a line |
 | Edges | Dragging above or below the pane scrolls the history one line every 60 ms and keeps extending the selection |

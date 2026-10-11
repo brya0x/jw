@@ -605,8 +605,8 @@ fn screen_to(
             if picked.is_some_and(|(from, to)| (from..to).contains(&col)) {
                 style = style
                     .remove_modifier(Modifier::REVERSED)
-                    .fg(p().fg)
-                    .bg(p().sel);
+                    .fg(p().bg)
+                    .bg(p().blue);
             }
             let contents = cell.contents();
             let symbol = if contents.is_empty() { " " } else { contents };
@@ -713,7 +713,7 @@ mod tests {
             false,
             Some((&sel, sel.base(0))),
         );
-        let painted = |x, y| buf[(x, y)].bg == p().sel;
+        let painted = |x, y| buf[(x, y)].bg == p().blue;
         assert!(!painted(0, 0), "before the start");
         assert!(painted(1, 0) && painted(7, 0), "the rest of the first row");
         assert!(painted(0, 1), "up to the head, inclusive");
