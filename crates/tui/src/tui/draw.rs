@@ -449,9 +449,9 @@ pub(super) enum Mode {
     Leader,
     Move,
     Diff,
-    /// A diff pane on its Commits view (REQ-213).
+    /// A diff pane on its Commits view (REQ-231).
     DiffCommits,
-    /// A diff pane whose sidebar has the keys (REQ-212).
+    /// A diff pane whose sidebar has the keys (REQ-230).
     DiffSide,
     Md,
     Term,

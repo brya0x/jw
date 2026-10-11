@@ -76,7 +76,7 @@ pub struct Line {
 const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 /// Most bytes of diff text read from git for one view; past it the view lists
-/// its files and says it is too large (REQ-220).
+/// its files and says it is too large (REQ-238).
 pub const DIFF_CAP: usize = 2 * 1024 * 1024;
 
 /// Most files a too-large view lists.
@@ -662,7 +662,7 @@ Binary files /dev/null and b/img.png differ
         (d, work)
     }
 
-    /// REQ-205: General is what was committed, not what is edited since.
+    /// REQ-223: General is what was committed, not what is edited since.
     #[test]
     fn general_is_committed_work_only() {
         let (_d, work) = feature_repo();
@@ -674,7 +674,7 @@ Binary files /dev/null and b/img.png differ
         assert_eq!(f[0].added(), 2, "the committed a.txt, not the edit");
     }
 
-    /// REQ-206: staged, unstaged and untracked, against HEAD.
+    /// REQ-224: staged, unstaged and untracked, against HEAD.
     #[test]
     fn uncommitted_is_staged_unstaged_and_untracked() {
         let (_d, work) = feature_repo();
@@ -695,7 +695,7 @@ Binary files /dev/null and b/img.png differ
         );
     }
 
-    /// REQ-206: a repository with no commit yet shows what is staged and
+    /// REQ-224: a repository with no commit yet shows what is staged and
     /// what is untracked, instead of git's "unknown revision HEAD".
     #[test]
     fn uncommitted_works_before_the_first_commit() {
@@ -712,7 +712,7 @@ Binary files /dev/null and b/img.png differ
         assert!(commits(d.path(), "", 10).unwrap().list.is_empty());
     }
 
-    /// REQ-208: no base, nothing to compare General with.
+    /// REQ-226: no base, nothing to compare General with.
     #[test]
     fn general_with_no_base_lists_nothing() {
         let (_d, work) = feature_repo();
@@ -722,7 +722,7 @@ Binary files /dev/null and b/img.png differ
         assert_eq!(load(&work, &none).unwrap(), Loaded::Files(Vec::new()));
     }
 
-    /// REQ-207, REQ-208: newest first, the limit, and whether more exist.
+    /// REQ-225, REQ-226: newest first, the limit, and whether more exist.
     #[test]
     fn commits_are_newest_first_and_capped() {
         let (_d, work) = feature_repo();
@@ -790,7 +790,7 @@ Binary files /dev/null and b/img.png differ
         assert_eq!(names(&f), [("s.txt", Status::Added)]);
     }
 
-    /// REQ-220: past the cap, the file list and the total, no parsed diff.
+    /// REQ-238: past the cap, the file list and the total, no parsed diff.
     #[test]
     fn a_diff_past_the_cap_lists_its_files() {
         let (_d, work) = new_test_repo();
@@ -823,7 +823,7 @@ Binary files /dev/null and b/img.png differ
         );
     }
 
-    /// REQ-228: git's complaint comes back as an error, and an id that is not
+    /// REQ-246: git's complaint comes back as an error, and an id that is not
     /// hex never reaches git as an option.
     #[test]
     fn errors_name_what_went_wrong() {
