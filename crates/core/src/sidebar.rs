@@ -54,11 +54,14 @@ pub fn rows(folders: &folders::Folders, reg: Registry, session: &str) -> Vec<Row
                 let mut e = match &root {
                     Some(dir) => folders::entry(dir, false),
                     None => Entry {
-                        id: folders::id(&project),
                         name: project.clone(),
                         ..Entry::default()
                     },
                 };
+                // The id of the session asked about, not of the process's own
+                // (`folders::entry` and `id` use that one): a closed root of
+                // `work` must not be the id of the same folder in `main`.
+                e.id = folders::id_in(session, root.as_deref().unwrap_or(&project));
                 e.project = project;
                 groups.push((e, worktrees));
             }
@@ -249,6 +252,33 @@ mod tests {
         assert_eq!(items[3].branch, "feat/alpha");
         // The other session's worktree is not listed.
         assert!(!items.iter().any(|i| i.name == "other"));
+    }
+
+    #[test]
+    fn a_closed_root_has_the_id_of_the_session_asked_about() {
+        let reg = |session: &str| Registry {
+            entries: vec![wt("x1", "other", "jw", session, 0)],
+        };
+        let none = folders::Folders::default();
+        let work = rows(&none, reg("work"), "work");
+        let items = items(&work, "work");
+        assert_eq!(items[0].kind, "root");
+        assert!(items[0].id.ends_with("#work"), "{}", items[0].id);
+        assert_eq!(items[1].parent.as_deref(), Some(items[0].id.as_str()));
+        // The same project in main has the id main's workspace has.
+        let main = rows(&none, reg(""), "main");
+        let main = super::items(&main, "main");
+        assert!(!main[0].id.contains('#'), "{}", main[0].id);
+        assert_ne!(main[0].id, items[0].id);
+        // And without a known root folder, the project's name is the id's.
+        let mut e = wt("x2", "n", "solo", "work", 0);
+        e.root = String::new();
+        let rows = rows(&none, Registry { entries: vec![e] }, "work");
+        assert!(
+            rows[0].entry.id.ends_with("solo#work"),
+            "{}",
+            rows[0].entry.id
+        );
     }
 
     #[test]

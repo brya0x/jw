@@ -154,10 +154,10 @@ supersedes:  []
 | M1 ✓ `65cc24f` | Bridge relay, protocol check, stop | 8–11 | `crates/web/src/bridge.rs`, `proto.rs`, `jw/tests/web.rs` |
 | M2 ✓ `720261b` | Pairing, auth, limits, revoke, read-only, tunnel and QR as the `jw mobile` process (D1 and D2 move the hosting) | 1–7, 29, 31, 32 | `crates/web/`, `jw/src/mobile.rs` |
 | W1 ✓ `ba9d161` | `palettes` and `settings` in `ready` | 17 | `crates/web/src/bridge.rs`, the `jw` binary or the daemon start |
-| W2 ✓ | `workspaces` and `sessions` answers, from the TUI's own grouping (`core::sidebar`) | 12 | `core/src/sidebar.rs`, `web/src/bridge.rs`, `daemon/src/mobile.rs` |
+| W2 ✓ `9042c58` | `workspaces` and `sessions` answers, from the TUI's own grouping (`core::sidebar`) | 12 | `core/src/sidebar.rs`, `web/src/bridge.rs`, `daemon/src/mobile.rs` |
 | D1 ✓ `99324dc` | The daemon hosts mobile: tunnel moves to jw-web, `daemon/src/mobile.rs`, the messages, watchers, stop on signal, `PROTOCOL` bump | 1, 3, 6, 9, 33–40, 50 | `daemon/src/mobile.rs`, `daemon/src/lib.rs`, `web/src/tunnel.rs`, `proto.rs` |
 | D2 ✓ `a6fa0f3` | `jw mobile` as a client, `jw mobile stop`, shared QR in core | 30, 41 | `jw/src/mobile.rs`, `core/src/qr.rs` |
-| T1 ✓ | The TUI: Mobile modal, `^␣ m`, indicator, pair question | 42–49 | `tui/src/tui/mobile.rs`, `modal.rs`, `mod.rs`, `draw.rs`, `settings.rs` |
+| T1 ✓ `6c2bc28` | The TUI: Mobile modal, `^␣ m`, indicator, pair question | 42–49 | `tui/src/tui/mobile.rs`, `modal.rs`, `mod.rs`, `draw.rs`, `settings.rs` |
 | M3 | Android shell: scan, pair, reconnect, version screen, theme | 14–17, 27 | `android/app`, `android/proto` |
 | M4 | Workspaces, sessions, enter, approve, Avisos | 12, 18–20, 28 | `android/app`, `crates/web/` |
 | M5 | Terminal surface, keys, leader sheet, resize | 21–24 | `android/term`, `android/app` |
