@@ -1,5 +1,5 @@
 ---
-status:      agreed (v2 + the screen addendum + addendum 3 "sessions", 2026-10-09; P0–P9 built against v1); addendum 12 (X0) drafted
+status:      agreed (v2 + the screen addendum + addendum 3 "sessions", 2026-10-09; P0–P9 built against v1); addendum 12 (X0) drafted; addendum 17 (A1, A2) built
 scope:       [Cargo.toml, src/**, .github/workflows/ci.yml, internal/core/config/config.go (one relaxation), README.md]
 depends_on:  [git, gh on PATH]
 supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/herdr]
@@ -507,6 +507,34 @@ Open (human decisions, still unanswered):
 - OPEN-24 (answered 2026-10-11) F0 first, numbers before F1–F4: see Measurements.
 - OPEN-25 Brain workspace: this spec's open questions should be reported there; I could not reach it from here.
 
+### Addendum 17 (A1, A2): a pane's program
+
+A pane says what runs in it. The daemon already resolves the foreground process of every pane on each `List` (`PaneInfo.fg`, `daemon/src/lib.rs:549-554`), and the TUI already appends it to the title (`tui/mod.rs:1657-1663`). What is missing is knowing which programs are agents: `jw prompt` accepts only role `agent` (`lib.rs:515-520`), so a `claude` run by hand in a `shell` pane is out of reach of other workspaces. The program is `fg`; no new field, no new message. Prototype approved 2026-10-11 (variant B, programs by detection only).
+
+| Piece | Shape |
+|---|---|
+| Program | `PaneInfo.fg`, unchanged. It is the foreground process group's command name (`process_name`, `lib.rs:1373`) |
+| `is_agent_program(&str)` | One list in `jw-core`, the lowest crate all of daemon, tui and jw share: `claude`, `codex`, `gemini`, `aider`, `opencode`. Fixed in code |
+| Agent pane | Role `agent`, or a live pane whose program is in that list |
+| `foreground(&Pane)` | The `List` handler's `process_group_leader` + `process_name` pair, factored out so `Prompt` uses the same one |
+| `Prompt` | `lib.rs:515`: role `agent` first; else the lowest pane id whose `foreground` is an agent program; else the error `{stream} has no agent pane open` as today |
+| `jw ls` | `--json` keeps `panes` (role strings) and adds `programs: [{role, program}]`, one per pane with a program; the table shows the program beside the role |
+| `jw read --pane` | `cli.rs:504-510`: role, then program; the missing-pane error lists both |
+| Title | The program replaces the dim runs suffix and is drawn in `p().magenta`, bold, when it is an agent (variant B); other programs keep today's dim suffix |
+| Marks | `App::marks()` (`tui/mod.rs:963`) treats an agent pane like role `agent` for the `✻` and `?` guesses |
+
+- REQ-194 WHEN `jw prompt <workspace>` finds no pane with role `agent`, THE daemon SHALL send the text to the live pane with the lowest id whose foreground program is a known agent, and reply `Prompted` with that pane.
+- REQ-195 WHEN a pane with role `agent` exists, THE daemon SHALL choose it before any pane chosen by program.
+- REQ-196 IF no pane has role `agent` or an agent program, THEN `jw prompt` SHALL fail with `has no agent pane open`, as today.
+- REQ-197 THE daemon SHALL read a pane's foreground program when `List` or `Prompt` asks, and SHALL add no thread, timer or `ps` to any other path; leaving `claude` shows on the next `List`.
+- REQ-198 WHEN `Prompt` has a role `agent` pane, THE daemon SHALL NOT run `ps`.
+- REQ-199 THE `jw ls --json` field `panes` SHALL stay a list of role strings; `programs` SHALL be added beside it.
+- REQ-200 WHEN `jw read --pane <name>` matches no role, THE CLI SHALL match it against the panes' programs before failing.
+- REQ-201 WHERE a pane's program is a known agent, THE TUI SHALL draw it on the title in `p().magenta` and bold, with no new colour literal.
+- REQ-202 WHERE a pane's program is a known agent, THE sidebar SHALL give its workspace the same `✻` and `?` marks as role `agent`.
+- REQ-203 THE change SHALL add no `ClientMsg` and no `PaneInfo` field, and `PROTOCOL` SHALL stay at 9.
+
+
 ## Rationale
 
 - RAT-1 **Daemon + client instead of a single process:** user decision ("copy herdr, they should survive"). The cost is the protocol and reconnection; it pays for itself because agents run for hours.
@@ -559,6 +587,12 @@ Open (human decisions, still unanswered):
 - RAT-49 **Parse in the reader thread** keeps `PROTOCOL` at 8 and needs no daemon change; the fix moves work, it does not remove it, so F0 must show that the parse really is what blocks a frame.
 - RAT-50 **`Parser` is `Send`** (plain data), so building it in the existing daemon-reader thread (`mod.rs:327`) is sound. Output chunks that arrive for a pane still being built must queue behind its Snapshot (order matters).
 - RAT-51 Not warming every workspace in the TUI (subscribing to all): it would multiply `Output` parsing on the UI thread by the number of workspaces. Rejected unless F0 says Attach is the only cost.
+- RAT-52 **A1: the program is `fg`, not a new field.** The daemon already resolves it per pane on `List`, and a classified copy in `PaneInfo` would be a second place to drift and a `PROTOCOL` bump for nothing. Each crate asks `is_agent_program(fg)`.
+- RAT-53 **A1: detection only.** Detection covers the case that hurts, `claude` started by hand, which nobody would declare. A declaration (`jw pane program`) would also need a rule for when it expires, or `jw prompt` would type into a shell after claude exits. Added later if detection fails in practice.
+- RAT-54 **A1, rejected: `jw prompt --pane`.** With one agent per workspace the role-then-program order is enough. A second agent pane is the case that would need it (RISK-63).
+- RAT-55 **A1: no timer.** `fg` is read on `List`, which the TUI already sends every 2 s, and on `Prompt`. Leaving claude is seen at the next `List`; the daemon's only loop stays the 30 s scrollback save.
+- RAT-56 **A1: the list is fixed in code.** A project-config list is more surface than five names; adding one is a one-line change.
+- RAT-57 **A1, variant B of the prototype.** The existing dim suffix already says what runs; the only thing to add is which programs are agents, so the name turns magenta (the colour of `✻`) and nothing else moves. Rejected: a glyph before the name (variant C) adds width to every agent title.
 
 ## Risks
 
@@ -618,6 +652,11 @@ Open (human decisions, still unanswered):
 - RISK-54 **Context size.** A PR with hundreds of comments is capped at 200 KB and the cut is noted in the file; claude can run `gh pr view` itself.
 - RISK-55 **Fork PRs** fetch fine but cannot be pushed to; fine for a review.
 - RISK-56 **`gh api repos/{owner}/{repo}/…`** resolves the repo from the cwd; checked against a fake `gh` only until the manual test.
+- RISK-60 **`ps -o comm=` may not say the agent's name.** On this machine it prints `claude` (checked 2026-10-11), but a wrapper, `node` or a version-named binary would not match. Fallback if seen: match `ps -o args=`.
+- RISK-61 **A hand-run agent has no hooks.** No `--settings`, so no `jw hook`; its sidebar marks come from the `busy` and `bell` guess in `marks()`, wrong while it waits quietly.
+- RISK-62 **The pane can change between the lookup and the write.** `prompt()` writes to the PTY; if claude exits in between, the text lands in the shell. The window is the time between two calls; `Prompt` reads `foreground` right before writing.
+- RISK-63 **Two agent panes in one workspace.** Role `agent` wins, then the lowest pane id; there is no way to choose the other (RAT-54).
+- RISK-64 **`ps` once per candidate pane on a `Prompt` with no role `agent` pane.** A workspace with many shell panes spawns that many. Accepted: it is rare and off the UI thread (`Prompt` runs on its own thread).
 - Closed by addendum 3: RISK-5 (own registry), RISK-7 (hooks), RISK-9 (frames), RISK-16 (`nvim --server`), RISK-17 (`root` in the registry).
 - RISK-57 Moving parse to another thread can reorder `Snapshot` and `Output`. Keep one reader thread, parse inline there, preserve order.
 - RISK-58 Keeping the old frame during loading (REQ-189) changes what the user sees; see OPEN-23. Closed with REQ-189: nothing is built.
@@ -684,6 +723,8 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | R1 ✓ `7d7678d` | Core: `open_prs`, `detail`, `Entry.review_base`, `Stream::resolve` and `command()` for reviews, `review.rs` (fetch, worktree, context file) | 165–170, 172, 174, 175, 178 | `connectors/github.rs`, `core/registry.rs`, `stream.rs`, `review.rs` |
 | R2 ✓ `936b3cd` | TUI: `Kind::Reviews` with a loading state, `R`, jobs, the pending `Prompt`, `m` and `o`; `Open` starts no process for a viewer leaf; the daemon test | 160–164, 171, 173, 176, 177, 179–181 | `tui/finder.rs`, `tui/mod.rs`, `tui/modal.rs`, `settings.rs`, `daemon/src/lib.rs`, `crates/jw/tests/daemon.rs` |
 | R3 ✓ | README; version 0.0.13; a hand test with `scripts/drive.py` against a local origin and a fake `gh`; REQ-175 and REQ-183, which that test found missing | 175, 183 | `README.md`, `core/src/actions.rs`, `core/src/connectors/git.rs`, `tui/mod.rs` |
+| A1 ✓ `db0d8ce` | Agent programs: `is_agent_program` in `jw-core`, `foreground` in the daemon, `Prompt` by program, `jw ls --json programs`, `jw read --pane` by program, help and the `jw` skill | 194–200, 203 | `crates/core`, `crates/daemon/src/lib.rs`, `crates/jw/src/{cli,help}.rs` |
+| A2 ✓ `962d445` | The program on the pane title and the agent marks for such panes | 201, 202 | `tui/draw.rs`, `tui/mod.rs` |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 | F0 ✓ | `JW_TRACE`, `scripts/bench-switch.py`, the Measurements above | 184 | `tui/trace.rs`, `tui/mod.rs`, `scripts/` |
 | F1 ✓ | S1, S9: `Stream::resolve` (the `git` spawn) off the UI thread, the frame deadline counted from the frame's start; the unexplained ≈ 100 ms of a first open | 185, 191 | `tui/mod.rs`, `core` (callers) |
@@ -712,6 +753,7 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - OPEN-15 (open) Poll the registry every 2 s (the `List` cadence) or every 0.5 s tick? Default 2 s.
 - OPEN-16 → a `[review]` table in the project TOML (layout, agent command, a review skill) is later.
 - OPEN-17 to OPEN-21 (addendum 15) → the user did not answer; built with the proposed defaults: the picker lists all open PRs, `m` toggles "requested of me"; the project's setup runs; an existing review asks before the prompt is sent again; the review rules ride in the visible prompt, not `--append-system-prompt`; the trust-folder exposure is accepted (RISK-52). Say so to change any.
+- OPEN-26 → a pane's program is detected only, never declared (RAT-53); no `jw prompt --pane` (RAT-54); title variant B (RAT-57). Approved 2026-10-11.
 - OPEN-5 → `~/.config/jw/settings.json` (JSON, outside Go's `*.toml` glob) and the `^␣ ,` screen (addendum 3).
 
 ## Corrections
@@ -761,6 +803,7 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - F3 was drafted as capping the ring; the split (`Screen` then `History`) keeps the scrollback whole (REQ-190) and needed `PROTOCOL` 9, which the addendum had said would stay 8.
 - Addendum 16 was agreed with S1–S8 as guesses. F0 confirmed S1, S2 and found S9 (the frame cadence is ≈ 20 ms, not 16); it showed S3, S5, S6 and S7 cost almost nothing at one pane. Its OPEN ids were first 1–4, which this spec already used: renumbered 22–25.
 - Addendum 13 said that on a switch the panes "only enter; nothing leaves". True, but it also means the slide animates over blank panes until the Snapshots arrive (S4, addendum 16).
+- The brief for A1 assumed the daemon did not know a pane's child. It does: `fg` and `cwd` on every `List` (`lib.rs:549-554`), and the TUI already shows `fg` in the title. The first plan added `PaneInfo.program` and a `PROTOCOL` bump; with detection only, `fg` is the program and the protocol stays at 9 (RAT-52).
 
 ## Tests
 
@@ -776,4 +819,5 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - review (R1–R3): core, with a fake `gh` as in `github.rs`: `open_prs` and `detail` (JSON in, structs out, non-zero exit, no gh); `review_stream` in a temp repo whose origin serves `refs/pull/7/head`: worktree at the head sha, branch `review/pr-7`, `origin/<base>` present, a second call reuses it, a failed fetch leaves nothing; `Stream::resolve` with and without `review_base` (base, tree, `command("view:diff")` is `None`); registry round-trip with and without the field; the context file's content and cap. TUI: `Finder` Reviews filter, order and loading state; the jobs and the pending prompt on an `App` without a daemon (`App::bare`). `crates/jw/tests/daemon.rs`: `Open` with the review tree, then `Prompt` reaches the agent pane; `PROTOCOL == 8`. Manual: `scripts/jw-test` in a repo with an open PR and a fork PR: `^␣ R`, filter, `↵`, the diff against the PR's base, claude's first message, close and reopen the workspace, `X`.
 - manual (after Q2 and Q5): claude and nvim in panes; `w`, `t`, `x`, `HJKL`, `n`, `d`, `↵` in the diff, `q`, then `jw` again shows the same layout.
 - switch speed (F0–F4): `JW_TRACE` lines per phase; `scripts/bench-switch.py` p50/p95/max against an isolated `scripts/jw-test` dir with 3 worktrees and a 2 MiB ring (kill only that dir's pid); a `Msg::Snapshot` parser equals the inline one and Output after it applies in order; `tick_motion` and a 240×60 draw on `App::bare`/`TestBackend` under the budget.
+- agent programs (A1, A2): `is_agent_program` and `is_agent_pane` tables (`core/src/program.rs`; a path or a `-` prefix is not part of the name). Daemon, in `crates/jw/tests/daemon.rs`: a `shell` pane running a link to `cat` named `claude` is reached by `Prompt` (a script shows as its interpreter, and macOS kills a copy of `cat`); the no-agent error is `prompt_without_an_agent_pane_is_an_error`. `App` units: `marks()` gives `✻` for a busy shell pane running `claude` and nothing for `nvim`; `pane_title` names the agent program and flags it, and leaves other programs unflagged. Not covered by a test: role `agent` winning over a program pane, the pane that stops being an agent, the magenta title colour (`TestBackend`), `jw ls --json programs` and `jw read --pane <program>`. Manual with `scripts/jw-test`: run `claude` by hand in a shell pane, `jw prompt` it from another workspace, exit claude and see the next `jw prompt` refuse.
 - live registry (W1): `RegistryWatch` units over a tempdir (unchanged, touched, a file that appears or goes); an `App` without a daemon: rows from `Msg::Rows` replace the sidebar, with a modal open they land in `pending_rows` and the next tick after it closes applies them, `active` keeps its id; a truncated JSON leaves the rows alone; `next_wake` is still `None` when idle. Manual: with a TUI open, `jw worktree <name>` from a second terminal shows the row within about 2 s; repeat with `^␣ r` open and the row appears after `esc`.

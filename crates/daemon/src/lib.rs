@@ -11,7 +11,7 @@
 
 // The code says `crate::proto` and `crate::layout`, as it did when this
 // was one crate.
-use jw_core::{core, layout};
+use jw_core::{core, layout, program};
 use jw_proto::kitty::{self, Kitty};
 use jw_proto::proto;
 
@@ -546,17 +546,16 @@ impl Daemon {
             ClientMsg::Attach { stream } => self.attach(client, tx, &stream),
             ClientMsg::Detach => self.unsubscribe(client),
             ClientMsg::Prompt { stream, text } => {
-                let (id, pane) = self
-                    .panes_of(&stream)
-                    .into_iter()
-                    .find(|(_, p)| p.role == "agent")
-                    .with_context(|| format!("{stream} has no agent pane open"))?;
+                let panes = self.panes_of(&stream);
                 let tx = tx.clone();
-                // Waiting can take seconds; other messages from this client
-                // must not queue behind it.
+                // Waiting can take seconds, and finding an agent by program
+                // runs `ps`: other messages from this client must not queue
+                // behind either.
                 thread::spawn(move || {
-                    let msg = match prompt(&pane, &text) {
-                        Ok(()) => DaemonMsg::Prompted { pane: id },
+                    let sent = agent_pane(&stream, panes)
+                        .and_then(|(id, pane)| prompt(&pane, &text).map(|()| id));
+                    let msg = match sent {
+                        Ok(id) => DaemonMsg::Prompted { pane: id },
                         Err(e) => DaemonMsg::Error {
                             msg: format!("{e:#}"),
                         },
@@ -580,7 +579,7 @@ impl Daemon {
                             (st.exited, st.last_output.elapsed() < BUSY, st.bell, agent)
                         };
                         let leader = match exited {
-                            None => lock(&p.io).master.process_group_leader(),
+                            None => leader_of(p),
                             Some(_) => None,
                         };
                         let fg = leader.and_then(process_name);
@@ -1402,6 +1401,30 @@ fn size(cols: u16, rows: u16) -> PtySize {
         pixel_width: 0,
         pixel_height: 0,
     }
+}
+
+/// The process group in the foreground of a pane's terminal.
+fn leader_of(pane: &Pane) -> Option<libc::pid_t> {
+    lock(&pane.io).master.process_group_leader()
+}
+
+/// Where a prompt goes (REQ-194 to REQ-196): the pane with role `agent`, else
+/// the live pane with the lowest id that has a known agent in the foreground.
+fn agent_pane(stream: &str, mut panes: Vec<(PaneId, Arc<Pane>)>) -> Result<(PaneId, Arc<Pane>)> {
+    panes.sort_by_key(|(id, _)| *id);
+    if let Some(i) = panes.iter().position(|(_, p)| p.role == "agent") {
+        return Ok(panes.swap_remove(i));
+    }
+    panes
+        .into_iter()
+        .find(|(_, p)| {
+            // The state guard is gone before `io` and `ps` (daemon AGENTS.md).
+            let live = lock(&p.state).exited.is_none();
+            live && leader_of(p)
+                .and_then(process_name)
+                .is_some_and(|name| program::is_agent_program(&name))
+        })
+        .with_context(|| format!("{stream} has no agent pane open"))
 }
 
 /// The command name of a process (`ps -o comm=`), without its directory.

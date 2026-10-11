@@ -9,5 +9,7 @@ pub mod view;
 
 // The code says `crate::proto`, `crate::stream`…, as it did when this was
 // one crate.
-use jw_core::{actions, connectors, core, diff, folders, init, layout, review, session, stream};
+use jw_core::{
+    actions, connectors, core, diff, folders, init, layout, program, review, session, stream,
+};
 use jw_proto::{client, kitty, proto};

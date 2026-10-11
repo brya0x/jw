@@ -801,7 +801,7 @@ fn pane(
     f: &mut Frame,
     app: &App,
     r: TRect,
-    (title, runs): (String, Option<String>),
+    (title, runs, agent): (String, Option<String>, bool),
     view: Option<&PaneView>,
     sel: Option<&Sel>,
     focused: bool,
@@ -826,10 +826,14 @@ fn pane(
             runs
         };
         if !runs.is_empty() {
-            spans.push(Span::styled(
-                format!("{runs} "),
-                Style::default().fg(p().dim),
-            ));
+            let style = if agent {
+                Style::default()
+                    .fg(p().magenta)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(p().dim)
+            };
+            spans.push(Span::styled(format!("{runs} "), style));
         }
     }
     let back = view.map_or(0, |v| v.parser.screen().scrollback());

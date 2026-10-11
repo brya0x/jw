@@ -12,6 +12,7 @@ depends on nothing of jw's.
 | `src/layout.rs` | `Node`, the layout as written in TOML (`:14`), and `Tree<L>`, the live split tree with every operation the daemon applies (`:155`) |
 | `src/session.rs` | named sessions: `current` (`:26`), `create` (`:206`), `rename` (`:66`), `list` (`:189`); their files live in `sessions/<name>/` |
 | `src/folders.rs` | a session's folders: `load` (`:115`), `edit` (`:149`), `entry_for` (`:172`) |
+| `src/program.rs` | which foreground programs are agents: `is_agent_program`, `is_agent_pane` (addendum 17) |
 | `src/stream.rs` | what opening a workspace starts: `Stream` (`:19`), its panes, env, `Stamp` (whether a resolved one is still fresh), the agent's command with `--session-id` and hooks (`hooks`, `:323`), nvim's `--listen` (`listen`, `:292`) |
 | `src/actions.rs` | worktrees: `new_stream` (`:85`), `rename` (`:198`), `rm_plan`/`rm` (`:333`/`:361`), `sync` (`:436`), `done_plan` (`:490`) |
 | `src/connectors/git.rs`, `github.rs` | git through the `git` binary, plus `head_of` (`:298`), which reads `.git` without running anything; PRs through `gh` |

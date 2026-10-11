@@ -34,8 +34,8 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         name: "read",
-        usage: "jw read <workspace> [--pane <role>] [--lines N]",
-        what: "prints a pane's last lines, scrollback included (the agent's pane by default)",
+        usage: "jw read <workspace> [--pane <role|program>] [--lines N]",
+        what: "prints a pane's last lines, scrollback included (the agent's pane by default, a role or a program names another)",
     },
     Command {
         name: "worktree",
