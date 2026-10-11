@@ -4,6 +4,7 @@
 //! Two threads feed one channel: the daemon's messages and the terminal's
 //! events. The main thread applies them and redraws.
 
+mod anim;
 mod diffview;
 mod draw;
 mod finder;
@@ -48,6 +49,13 @@ const SIDEBAR: u16 = 28;
 /// How long the leader waits before showing every key (REQ-31).
 fn which_after() -> Duration {
     crate::settings::get().which_delay()
+}
+
+/// Why the loop wakes without a message.
+enum Wake {
+    Edge,
+    Which,
+    Frame,
 }
 
 enum Msg {
@@ -258,6 +266,54 @@ pub struct App {
     /// Just started, or just switched session: with nothing running, the
     /// next List opens the session's last workspace.
     fresh: bool,
+    /// Whether a transition is running, for the loop's frame deadline.
+    motion: anim::Motion,
+    /// When the last frame was drawn.
+    last_draw: Instant,
+    /// When a held drag next scrolls (REQ-127).
+    edge_due: Option<Instant>,
+    /// The sidebar's selection band on its way to the current row (REQ-136).
+    bar: Option<Bar>,
+    /// The row the band is drawn on this frame.
+    band: Option<usize>,
+    /// A workspace switch under way, 0 to 1, and which way it went (REQ-136).
+    switch: Option<(anim::Tween, i8)>,
+    /// The agent's spinner glyph, while one is working (REQ-143).
+    spinner: Option<char>,
+    /// When the spinner steps next.
+    spin_due: Option<Instant>,
+    /// When the TUI started, the spinner's clock.
+    born: Instant,
+    /// The status bar's mode and the one before it (REQ-140).
+    mode: Option<draw::ModeFade>,
+    /// Which overlays were open at the last frame, one bit each: modal,
+    /// picker, settings, which-key.
+    overlays: u8,
+    /// A popup fading in, 0 to 1 (REQ-144).
+    popup: Option<anim::Tween>,
+    /// The pane that was focused, and the one that is, mid-change (REQ-145).
+    focus_fade: Option<(Option<PaneId>, Option<PaneId>, anim::Tween)>,
+    /// The focus at the last frame.
+    last_focus: Option<PaneId>,
+    /// A turn of the wheel being spread over a few frames (REQ-145).
+    scroll: Option<Scroll>,
+    /// The first-run welcome, since when it has been showing (REQ-146).
+    welcome: Option<Instant>,
+}
+
+/// Lines of history to move in a pane, and how many have moved.
+struct Scroll {
+    pane: PaneId,
+    total: isize,
+    applied: isize,
+    since: Instant,
+}
+
+/// The selection band: the workspace it is on, its row, and how it moves.
+struct Bar {
+    id: String,
+    idx: usize,
+    tween: anim::Tween,
 }
 
 /// Runs the TUI until the user leaves it. The daemon keeps every pane.
@@ -319,6 +375,7 @@ pub fn run() -> Result<()> {
         app.fail(format!("{e:#}"));
     }
     let result = app.event_loop(&mut terminal, rx);
+    let _ = execute!(std::io::stdout(), terminal::EndSynchronizedUpdate);
     if kitty {
         let _ = execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
     }
@@ -398,6 +455,8 @@ fn log_panics() {
             use std::io::Write;
             let _ = writeln!(f, "panic: {info}\n{bt}");
         }
+        // REQ-139: a frame left open would freeze the screen.
+        let _ = execute!(std::io::stdout(), terminal::EndSynchronizedUpdate);
         prev(info);
     }));
 }
@@ -414,14 +473,27 @@ fn spawn_term_reader(tx: Sender<Msg>) {
 
 impl App {
     fn new(tx: Client, events: Sender<Msg>, leader: Leader, size: (u16, u16)) -> Result<Self> {
-        let mut app = Self {
+        let mut app = Self::bare(tx, events, leader, size);
+        app.recent = load_recent();
+        app.reload()?;
+        let skip = std::env::var("JW_WELCOME").is_ok_and(|v| v == "0");
+        if app.rows.is_empty() && !crate::settings::get().welcomed() && !skip {
+            app.welcome = Some(Instant::now());
+        }
+        app.send(ClientMsg::List);
+        Ok(app)
+    }
+
+    /// An app with nothing loaded: no registry read, no message sent.
+    fn bare(tx: Client, events: Sender<Msg>, leader: Leader, size: (u16, u16)) -> Self {
+        Self {
             tx,
             leader,
             leader_at: None,
             which: false,
             walking: false,
             rows: Vec::new(),
-            recent: load_recent(),
+            recent: Vec::new(),
             daemon_panes: Vec::new(),
             active: None,
             panes: BTreeMap::new(),
@@ -452,10 +524,270 @@ impl App {
             exit_reason: None,
             watch: crate::settings::Watch::new(),
             fresh: true,
+            motion: anim::Motion::default(),
+            last_draw: Instant::now(),
+            edge_due: None,
+            bar: None,
+            band: None,
+            switch: None,
+            spinner: None,
+            spin_due: None,
+            born: Instant::now(),
+            mode: None,
+            overlays: 0,
+            popup: None,
+            focus_fade: None,
+            last_focus: None,
+            scroll: None,
+            welcome: None,
+        }
+    }
+
+    /// Draws one frame, wrapped in a synchronized update so the terminal
+    /// paints it whole or not at all (REQ-139). The frame is closed on every
+    /// path, a failed draw included.
+    fn draw(&mut self, term: &mut ratatui::DefaultTerminal) -> Result<()> {
+        let mut out = std::io::stdout();
+        let drawn = anim::synced(&mut out, || term.draw(|f| draw::draw(f, self)));
+        self.last_draw = Instant::now();
+        drawn?;
+        Ok(())
+    }
+
+    /// The soonest thing the loop must wake for without a message: a held
+    /// drag scrolling, the which-key popup, or the next frame of a transition
+    /// (REQ-137). `None` blocks until a message comes, so an idle jw costs
+    /// nothing (RAT-29).
+    fn next_wake(&mut self, now: Instant) -> Option<(Instant, Wake)> {
+        match (self.edge.is_some(), self.edge_due) {
+            (false, _) => self.edge_due = None,
+            (true, None) => self.edge_due = Some(now + EDGE_EVERY),
+            (true, Some(_)) => {}
+        }
+        let mut wake: Option<(Instant, Wake)> = None;
+        let mut soonest = |at: Instant, w: Wake| {
+            if wake.as_ref().is_none_or(|(best, _)| at < *best) {
+                wake = Some((at, w));
+            }
         };
-        app.reload()?;
-        app.send(ClientMsg::List);
-        Ok(app)
+        if let Some(at) = self.edge_due {
+            soonest(at, Wake::Edge);
+        }
+        if let Some(at) = self.leader_at
+            && !self.which
+        {
+            soonest(at + which_after(), Wake::Which);
+        }
+        if self.motion.active(now) {
+            soonest(self.last_draw + FRAME, Wake::Frame);
+        }
+        if let Some(at) = self.spin_due {
+            soonest(at, Wake::Frame);
+        }
+        if let Some(st) = &self.status {
+            let fade_at = st.at + STATUS_FOR.saturating_sub(anim::MESSAGE_EDGE);
+            if fade_at > now {
+                soonest(fade_at, Wake::Frame);
+            }
+        }
+        wake
+    }
+
+    /// The focused pane's border eases to its colour (REQ-145). A switch of
+    /// workspace brings its own motion, so it does not add this one.
+    fn tick_focus(&mut self, now: Instant, on: bool) {
+        if self.focus != self.last_focus {
+            if on && anim::fades() && self.switch.is_none() {
+                let ease = anim::Tween::new(0.0, 1.0, anim::FOCUS_EASE, now);
+                self.focus_fade = Some((self.last_focus, self.focus, ease));
+                self.motion.kick(anim::FOCUS_EASE, now);
+            }
+            self.last_focus = self.focus;
+        }
+        if self.focus_fade.is_some_and(|(_, _, t)| t.done(now)) {
+            self.focus_fade = None;
+        }
+    }
+
+    /// Starts spreading a turn of the wheel over a few frames; one that
+    /// comes mid-way adds what is left to its own lines.
+    fn glide_scroll(&mut self, pane: PaneId, lines: isize, now: Instant) {
+        let left = match &self.scroll {
+            Some(s) if s.pane == pane => s.total - s.applied,
+            _ => 0,
+        };
+        self.scroll = Some(Scroll {
+            pane,
+            total: left + lines,
+            applied: 0,
+            since: now,
+        });
+        self.motion.kick(anim::SCROLL, now);
+    }
+
+    /// Moves the history the lines the wheel is due by now (REQ-145).
+    fn tick_scroll(&mut self, now: Instant) {
+        let Some(s) = &mut self.scroll else {
+            return;
+        };
+        let elapsed = now.saturating_duration_since(s.since);
+        let t = anim::ease_out(anim::progress(elapsed, anim::SCROLL));
+        let step = (t * s.total as f32).round() as isize - s.applied;
+        s.applied += step;
+        let pane = s.pane;
+        if t >= 1.0 {
+            self.scroll = None;
+        } else {
+            self.motion.kick(anim::SCROLL.saturating_sub(elapsed), now);
+        }
+        match self.panes.get_mut(&pane) {
+            Some(view) if step != 0 => {
+                let screen = view.parser.screen_mut();
+                let back = screen.scrollback().saturating_add_signed(step);
+                screen.set_scrollback(back);
+            }
+            Some(_) => {}
+            None => self.scroll = None,
+        }
+    }
+
+    /// The welcome steps in one by one.
+    fn tick_welcome(&mut self, now: Instant, on: bool) {
+        let Some(since) = self.welcome else {
+            return;
+        };
+        let shown = anim::WELCOME_STEP * 3 + anim::WELCOME_FADE;
+        let age = now.saturating_duration_since(since);
+        if on && age < shown {
+            self.motion.kick(shown - age, now);
+        }
+    }
+
+    /// Closes the welcome for good (REQ-146).
+    fn dismiss_welcome(&mut self) {
+        self.welcome = None;
+        let mut s = (*crate::settings::get()).clone();
+        s.welcomed = Some(true);
+        if let Err(e) = crate::settings::save(s) {
+            self.fail(format!(
+                "could not remember the welcome ({e:#}); check that ~/.config/jw is writable"
+            ));
+        }
+    }
+
+    /// Popups: one that opens fades in (REQ-144), and a picker's highlight
+    /// slides to its selection.
+    fn tick_overlays(&mut self, now: Instant, on: bool) {
+        let open = u8::from(self.modal.is_some())
+            | u8::from(self.finder.is_some()) << 1
+            | u8::from(self.settings.is_some()) << 2
+            | u8::from(self.which) << 3;
+        if open & !self.overlays != 0 && on && anim::fades() {
+            self.popup = Some(anim::Tween::new(0.0, 1.0, anim::POPUP_FADE, now));
+            self.motion.kick(anim::POPUP_FADE, now);
+        }
+        self.overlays = open;
+        if self.popup.is_some_and(|t| t.done(now)) {
+            self.popup = None;
+        }
+        if let Some(finder) = self.finder.as_mut()
+            && finder.glide(now, on)
+        {
+            self.motion.kick(anim::PICK_SLIDE, now);
+        }
+    }
+
+    /// The status bar's motion: a change of mode (REQ-140) and a message
+    /// entering or leaving (REQ-142).
+    fn tick_status(&mut self, now: Instant, on: bool) {
+        let cur = draw::mode_of(self);
+        match &mut self.mode {
+            Some(m) if m.mode == cur => {}
+            slot => {
+                let prev = slot.as_ref().map_or(cur, |m| m.mode);
+                let fade = on && anim::fades() && slot.is_some();
+                *slot = Some(draw::ModeFade {
+                    mode: cur,
+                    prev: if fade { prev } else { cur },
+                    since: now,
+                });
+                if fade {
+                    self.motion.kick(anim::HINT_FADE.max(anim::CHIP_EASE), now);
+                }
+            }
+        }
+        if on
+            && anim::fades()
+            && let Some(st) = &self.status
+        {
+            let age = now.saturating_duration_since(st.at);
+            if age < anim::MESSAGE_EDGE {
+                self.motion.kick(anim::MESSAGE_EDGE - age, now);
+            } else if age + anim::MESSAGE_EDGE >= STATUS_FOR {
+                self.motion.kick(STATUS_FOR.saturating_sub(age), now);
+            }
+        }
+    }
+
+    /// Moves what moves, before a frame is drawn: the selection band toward
+    /// the current row, the switch of workspaces, the agent's spinner.
+    fn tick_motion(&mut self, now: Instant) {
+        let on = anim::enabled();
+        let here = self.active.as_ref().and_then(|s| {
+            let id = &s.entry.id;
+            let idx = self.rows.iter().position(|r| &r.entry.id == id)?;
+            Some((id.clone(), idx))
+        });
+        match (here, &mut self.bar) {
+            (None, bar) => *bar = None,
+            (Some((id, idx)), bar @ None) => {
+                *bar = Some(Bar {
+                    id,
+                    idx,
+                    tween: anim::Tween::at(idx as f32, now),
+                });
+            }
+            (Some((id, idx)), Some(bar)) => {
+                if bar.idx != idx || bar.id != id {
+                    let dir = if idx >= bar.idx { 1 } else { -1 };
+                    if on {
+                        bar.tween.retarget(idx as f32, anim::SWITCH, now);
+                        self.motion.kick(anim::SWITCH, now);
+                        if bar.id != id && anim::fades() {
+                            let enter = anim::Tween::new(0.0, 1.0, anim::SWITCH, now);
+                            self.switch = Some((enter, dir));
+                        }
+                    } else {
+                        bar.tween = anim::Tween::at(idx as f32, now);
+                    }
+                    bar.id = id;
+                    bar.idx = idx;
+                }
+            }
+        }
+        self.tick_status(now, on);
+        self.tick_overlays(now, on);
+        self.tick_focus(now, on);
+        self.tick_scroll(now);
+        self.tick_welcome(now, on);
+        self.band = self
+            .bar
+            .as_ref()
+            .map(|b| b.tween.value(now).round().max(0.0) as usize);
+        if self.switch.is_some_and(|(t, _)| t.done(now)) {
+            self.switch = None;
+        }
+        let shown = usize::from(self.size.1).saturating_sub(5);
+        let first = self.sidebar_first(shown);
+        let spinning = on
+            && self
+                .rows
+                .iter()
+                .skip(first)
+                .take(shown)
+                .any(|r| self.marks(&r.entry.id).contains(&'✻'));
+        self.spinner = spinning.then(|| anim::spinner(now.duration_since(self.born)));
+        self.spin_due = spinning.then(|| now + anim::SPIN_EVERY);
     }
 
     fn event_loop(
@@ -463,37 +795,29 @@ impl App {
         terminal: &mut ratatui::DefaultTerminal,
         rx: Receiver<Msg>,
     ) -> Result<()> {
-        terminal.draw(|f| draw::draw(f, self))?;
+        self.draw(terminal)?;
         while !self.quit {
-            let first = if self.edge.is_some() {
-                match rx.recv_timeout(EDGE_EVERY) {
+            let now = Instant::now();
+            let first = match self.next_wake(now) {
+                None => rx.recv().context("event channels closed")?,
+                Some((at, wake)) => match rx.recv_timeout(at.saturating_duration_since(now)) {
                     Ok(m) => m,
                     Err(RecvTimeoutError::Timeout) => {
-                        self.edge_step();
-                        terminal.draw(|f| draw::draw(f, self))?;
+                        match wake {
+                            Wake::Edge => {
+                                self.edge_step();
+                                self.edge_due = Some(Instant::now() + EDGE_EVERY);
+                            }
+                            Wake::Which => self.which = true,
+                            Wake::Frame => {}
+                        }
+                        self.draw(terminal)?;
                         continue;
                     }
                     Err(RecvTimeoutError::Disconnected) => {
                         anyhow::bail!("event channels closed")
                     }
-                }
-            } else {
-                match self.leader_at {
-                    Some(at) if !self.which => {
-                        match rx.recv_timeout(which_after().saturating_sub(at.elapsed())) {
-                            Ok(m) => m,
-                            Err(RecvTimeoutError::Timeout) => {
-                                self.which = true;
-                                terminal.draw(|f| draw::draw(f, self))?;
-                                continue;
-                            }
-                            Err(RecvTimeoutError::Disconnected) => {
-                                anyhow::bail!("event channels closed")
-                            }
-                        }
-                    }
-                    _ => rx.recv().context("event channels closed")?,
-                }
+                },
             };
             self.handle(first);
             drain(&rx, FRAME, |m| {
@@ -507,7 +831,10 @@ impl App {
             {
                 self.clear_sel();
             }
-            terminal.draw(|f| draw::draw(f, self))?;
+            if self.welcome.is_some() && self.active.is_some() {
+                self.dismiss_welcome();
+            }
+            self.draw(terminal)?;
         }
         Ok(())
     }
@@ -860,6 +1187,9 @@ impl App {
     }
 
     fn on_key(&mut self, k: KeyEvent) {
+        if self.welcome.is_some() {
+            self.dismiss_welcome();
+        }
         if let Some(v) = &mut self.settings {
             match v.key(k) {
                 settings_view::Outcome::Stay => {}
@@ -1486,6 +1816,8 @@ impl App {
             };
             let bytes = one.repeat(WHEEL).into_bytes();
             self.send(ClientMsg::Input { pane: id, bytes });
+        } else if anim::enabled() {
+            self.glide_scroll(id, -wheel, Instant::now());
         } else {
             let back = screen.scrollback().saturating_add_signed(-wheel);
             view.parser.screen_mut().set_scrollback(back);
@@ -2980,5 +3312,233 @@ mod layout_tests {
             even(&bare),
             Node::split(Dir::Right, 0.5, Node::leaf("a"), Node::leaf("b"))
         );
+    }
+}
+
+#[cfg(test)]
+mod motion_tests {
+    use super::*;
+    use crate::proto::AgentState;
+    use std::os::unix::net::UnixListener;
+    use std::sync::Mutex;
+
+    /// `tick_motion` reads the process-wide settings: one test at a time.
+    static SETTINGS: Mutex<()> = Mutex::new(());
+
+    const MS: fn(u64) -> Duration = Duration::from_millis;
+
+    fn entry(id: &str) -> Entry {
+        Entry {
+            id: id.into(),
+            ..Entry::default()
+        }
+    }
+
+    fn stream(id: &str) -> Stream {
+        Stream {
+            entry: entry(id),
+            cfg: Default::default(),
+            base: String::new(),
+            tree: Node::leaf(""),
+            session: String::new(),
+        }
+    }
+
+    fn working(id: &str) -> PaneInfo {
+        PaneInfo {
+            pane: 1,
+            stream: id.into(),
+            role: "agent".into(),
+            exited: None,
+            fg: None,
+            busy: false,
+            bell: false,
+            agent: Some(AgentState::Working),
+            cwd: None,
+        }
+    }
+
+    /// An app on three workspaces, `a` current, with `animations` as given.
+    /// The guard keeps other tests off the settings meanwhile.
+    fn app(animations: bool) -> (App, std::sync::MutexGuard<'static, ()>) {
+        let guard = SETTINGS.lock().unwrap_or_else(|e| e.into_inner());
+        crate::settings::set(crate::settings::Settings {
+            animations: Some(animations),
+            ..Default::default()
+        });
+        let dir = std::env::temp_dir().join(format!("jwm{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock = dir.join("s");
+        let _ = std::fs::remove_file(&sock);
+        let _listener = UnixListener::bind(&sock).unwrap();
+        let client = Client::connect(&sock).unwrap();
+        let (tx, _rx) = mpsc::channel();
+        let mut app = App::bare(client, tx, Leader::DEFAULT, (120, 35));
+        app.rows = ["a", "b", "c"]
+            .map(|id| Row {
+                entry: entry(id),
+                child: false,
+            })
+            .into();
+        app.active = Some(stream("a"));
+        (app, guard)
+    }
+
+    #[test]
+    fn the_band_starts_on_the_current_row_without_motion() {
+        let (mut app, _g) = app(true);
+        let t0 = Instant::now();
+        app.tick_motion(t0);
+        assert_eq!(app.band, Some(0));
+        assert!(!app.motion.active(t0));
+    }
+
+    #[test]
+    fn a_switch_glides_the_band_and_kicks_the_loop() {
+        let (mut app, _g) = app(true);
+        let t0 = Instant::now();
+        app.tick_motion(t0);
+        app.active = Some(stream("c"));
+        app.tick_motion(t0);
+        assert_eq!(app.band, Some(0), "still on the old row at the start");
+        assert!(app.motion.active(t0 + MS(100)));
+        app.tick_motion(t0 + MS(60));
+        let mid = app.band.unwrap();
+        assert!(mid > 0 && mid <= 2, "on its way: {mid}");
+        let end = t0 + anim::SWITCH;
+        app.tick_motion(end);
+        assert_eq!(app.band, Some(2));
+        assert!(!app.motion.active(end));
+    }
+
+    #[test]
+    fn with_animations_off_the_band_jumps_and_nothing_moves() {
+        let (mut app, _g) = app(false);
+        let t0 = Instant::now();
+        app.tick_motion(t0);
+        app.active = Some(stream("b"));
+        app.tick_motion(t0);
+        assert_eq!(app.band, Some(1));
+        assert!(!app.motion.active(t0));
+        assert!(app.switch.is_none());
+    }
+
+    #[test]
+    fn with_no_workspace_there_is_no_band() {
+        let (mut app, _g) = app(true);
+        let t0 = Instant::now();
+        app.tick_motion(t0);
+        app.active = None;
+        app.tick_motion(t0);
+        assert_eq!(app.band, None);
+        assert!(app.bar.is_none());
+    }
+
+    #[test]
+    fn a_working_agent_spins_and_the_loop_knows_when_to_step() {
+        let (mut app, _g) = app(true);
+        app.daemon_panes = vec![working("a")];
+        let t0 = app.born + MS(160);
+        app.tick_motion(t0);
+        assert_eq!(app.spinner, Some(anim::spinner(MS(160))));
+        assert_eq!(app.spin_due, Some(t0 + anim::SPIN_EVERY));
+        app.daemon_panes.clear();
+        app.tick_motion(t0 + MS(80));
+        assert_eq!((app.spinner, app.spin_due), (None, None));
+    }
+
+    #[test]
+    fn with_animations_off_the_spinner_stays_still() {
+        let (mut app, _g) = app(false);
+        app.daemon_panes = vec![working("a")];
+        app.tick_motion(Instant::now());
+        assert_eq!((app.spinner, app.spin_due), (None, None));
+    }
+
+    #[test]
+    fn a_working_agent_below_the_sidebar_does_not_wake_the_loop() {
+        let (mut app, _g) = app(true);
+        app.size = (120, 6);
+        app.rows = (0..20)
+            .map(|i| Row {
+                entry: entry(&format!("w{i}")),
+                child: false,
+            })
+            .collect();
+        app.active = Some(stream("w0"));
+        app.daemon_panes = vec![working("w19")];
+        app.tick_motion(Instant::now());
+        assert_eq!(app.spin_due, None);
+    }
+
+    #[test]
+    fn an_idle_app_blocks_until_a_message_comes() {
+        let (mut app, _g) = app(true);
+        assert!(app.next_wake(Instant::now()).is_none());
+    }
+
+    #[test]
+    fn a_transition_wakes_for_the_next_frame_after_the_last_draw() {
+        let (mut app, _g) = app(true);
+        let t0 = Instant::now();
+        app.last_draw = t0;
+        app.motion.kick(MS(100), t0);
+        let (at, wake) = app.next_wake(t0 + MS(5)).unwrap();
+        assert_eq!(at, t0 + FRAME);
+        assert!(matches!(wake, Wake::Frame));
+        assert!(app.next_wake(t0 + MS(100)).is_none(), "blocks once it ends");
+    }
+
+    #[test]
+    fn a_held_drag_wakes_for_the_edge_and_releasing_it_stops_it() {
+        let (mut app, _g) = app(true);
+        let t0 = Instant::now();
+        app.edge = Some(1);
+        let (at, wake) = app.next_wake(t0).unwrap();
+        assert_eq!(at, t0 + EDGE_EVERY);
+        assert!(matches!(wake, Wake::Edge));
+        app.edge = None;
+        assert!(app.next_wake(t0).is_none());
+        assert!(app.edge_due.is_none());
+    }
+
+    #[test]
+    fn the_leader_wakes_for_the_which_key_until_it_shows() {
+        let (mut app, _g) = app(true);
+        let t0 = Instant::now();
+        app.leader_at = Some(t0);
+        let (at, wake) = app.next_wake(t0).unwrap();
+        assert_eq!(at, t0 + which_after());
+        assert!(matches!(wake, Wake::Which));
+        app.which = true;
+        assert!(app.next_wake(t0).is_none());
+    }
+
+    #[test]
+    fn the_soonest_wake_wins() {
+        let (mut app, _g) = app(true);
+        let t0 = Instant::now();
+        app.last_draw = t0;
+        app.motion.kick(MS(100), t0);
+        app.spin_due = Some(t0 + MS(80));
+        app.edge = Some(1);
+        app.edge_due = Some(t0 + MS(60));
+        let (at, wake) = app.next_wake(t0).unwrap();
+        assert_eq!(at, t0 + FRAME);
+        assert!(matches!(wake, Wake::Frame));
+    }
+
+    #[test]
+    fn a_message_wakes_the_loop_when_it_starts_to_leave() {
+        let (mut app, _g) = app(true);
+        let t0 = Instant::now();
+        app.status = Some(Status {
+            text: "done".into(),
+            tone: Tone::Done,
+            at: t0,
+        });
+        let (at, _) = app.next_wake(t0 + MS(500)).unwrap();
+        assert_eq!(at, t0 + STATUS_FOR - anim::MESSAGE_EDGE);
+        assert!(app.next_wake(t0 + STATUS_FOR).is_none());
     }
 }

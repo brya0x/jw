@@ -23,7 +23,7 @@ Steps:
   colors        prints the first background colours seen (themes)
 
 Env: JWARGS (arguments to jw), CWD (where it starts), JWT (JW_THEME; empty
-leaves it unset).
+leaves it unset), JW_WELCOME (0 unless set: skips the first-run welcome).
 """
 import base64
 import fcntl
@@ -49,7 +49,8 @@ HOME = S + "/home"
 os.makedirs(HOME, exist_ok=True)
 env = dict(os.environ, HOME=HOME, XDG_RUNTIME_DIR=S + "/run", XDG_STATE_HOME=S + "/state",
            XDG_CONFIG_HOME=S + "/cfg", TERM="xterm-256color", SHELL="/bin/sh",
-           JW_THEME=os.environ.get("JWT", "dark"))
+           JW_THEME=os.environ.get("JWT", "dark"),
+           JW_WELCOME=os.environ.get("JW_WELCOME", "0"))
 if not env["JW_THEME"]:
     env.pop("JW_THEME")
 env.pop("JW_SOCKET", None)

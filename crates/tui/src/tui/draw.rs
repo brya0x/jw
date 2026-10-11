@@ -1,19 +1,24 @@
 //! Drawing: the sidebar of workspaces, a header, the current workspace's
 //! splits, the status bar and the leader's key popup.
 
+use std::time::{Duration, Instant};
+
 use ratatui::Frame;
-use ratatui::buffer::Buffer;
+use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::{Alignment, Rect as TRect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
+use super::anim;
 use super::select::Sel;
 use super::{App, PaneView, SIDEBAR, key};
 use crate::layout::Rect;
 use crate::theme::p;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
+    let now = std::time::Instant::now();
+    app.tick_motion(now);
     let area = f.area();
     f.buffer_mut()
         .set_style(area, Style::default().bg(p().bg).fg(p().fg));
@@ -23,10 +28,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     status(f, app);
 
     let rects = app.pane_rects();
-    if rects.is_empty() {
+    if let (true, Some(since)) = (rects.is_empty(), app.welcome) {
+        welcome(f, app, now.saturating_duration_since(since));
+    } else if rects.is_empty() {
         empty(f, app);
     }
-    for (id, rect) in rects {
+    for &(id, rect) in &rects {
         let r = trect(rect);
         let focused = app.focus == Some(id);
         match app.views.get_mut(&id) {
@@ -49,7 +56,28 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             ),
         }
     }
+    if let Some((old, new, ease)) = app.focus_fade {
+        let t = ease.value(now);
+        for &(id, rect) in &rects {
+            if Some(id) == new {
+                ease_border(f.buffer_mut(), trect(rect), p().line, p().blue, t);
+            } else if Some(id) == old {
+                ease_border(f.buffer_mut(), trect(rect), p().blue, p().line, t);
+            }
+        }
+    }
     banner(f, app);
+    if let Some((enter, dir)) = app.switch {
+        let header = TRect::new(SIDEBAR, 0, area.width.saturating_sub(SIDEBAR), 1);
+        enter_transition(
+            f.buffer_mut(),
+            header,
+            trect(app.stage()),
+            enter.value(now),
+            dir,
+        );
+    }
+    let base = app.popup.map(|_| f.buffer_mut().clone());
     if let Some(m) = &app.modal {
         m.draw(f);
     }
@@ -61,6 +89,49 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
     if app.which {
         which(f, app);
+    }
+    if let (Some(base), Some(fade)) = (base, app.popup) {
+        dissolve(f.buffer_mut(), &base, fade.value(now));
+    }
+}
+
+/// REQ-145: a pane's border, already drawn in its final colour `to`, shown
+/// `t` of the way from `from`. The title's text is left as it is.
+fn ease_border(buf: &mut Buffer, r: TRect, from: Color, to: Color, t: f32) {
+    if r.width < 2 || r.height < 2 {
+        return;
+    }
+    let right = r.right() - 1;
+    let bottom = r.bottom() - 1;
+    let edge = (r.left()..=right)
+        .flat_map(|x| [(x, r.y), (x, bottom)])
+        .chain((r.top()..=bottom).flat_map(|y| [(r.x, y), (right, y)]));
+    for pos in edge {
+        let cell = &mut buf[pos];
+        if cell.fg == to && matches!(cell.symbol(), "─" | "│" | "╭" | "╮" | "╰" | "╯") {
+            cell.fg = anim::lerp(from, to, t);
+        }
+    }
+}
+
+/// REQ-144: what an overlay drew fades in over what was under it. `a` is 0
+/// at the start; the text changes over at the half.
+fn dissolve(buf: &mut Buffer, base: &Buffer, a: f32) {
+    let blend = |under: Color, over: Color| match (under, over) {
+        (Color::Rgb(..), Color::Rgb(..)) => anim::lerp(under, over, a),
+        _ if a < 0.5 => under,
+        _ => over,
+    };
+    for (cell, under) in buf.content.iter_mut().zip(&base.content) {
+        if cell == under {
+            continue;
+        }
+        let (fg, bg) = (blend(under.fg, cell.fg), blend(under.bg, cell.bg));
+        if a < 0.5 {
+            cell.set_symbol(under.symbol());
+        }
+        cell.fg = fg;
+        cell.bg = bg;
     }
 }
 
@@ -100,6 +171,52 @@ fn banner_text(n: usize) -> String {
         " ✓ Copied to clipboard · {n} character{} ",
         if n == 1 { "" } else { "s" }
     )
+}
+
+/// REQ-136: the header and the panes fade in, and the panes travel in from
+/// the side the move came from. It works on the cells already drawn, so every
+/// pane and viewer takes part without knowing. `t` is 0 at the start, 1 done.
+fn enter_transition(buf: &mut Buffer, header: TRect, stage: TRect, t: f32, dir: i8) {
+    let bg = p().bg;
+    let off = ((1.0 - t) * f32::from(anim::SLIDE_CELLS)).round() as usize;
+    let width = usize::from(stage.width);
+    let mut blank = Cell::default();
+    blank.set_style(Style::default().bg(bg).fg(p().fg));
+    for y in stage.top()..stage.bottom() {
+        if off > 0 && width > 0 {
+            let row: Vec<Cell> = (0..width)
+                .map(|i| buf[(stage.x + i as u16, y)].clone())
+                .collect();
+            for i in 0..width {
+                let src = if dir >= 0 {
+                    i.checked_sub(off)
+                } else {
+                    (i + off < width).then_some(i + off)
+                };
+                buf[(stage.x + i as u16, y)] =
+                    src.map_or_else(|| blank.clone(), |s| row[s].clone());
+            }
+        }
+        for x in stage.left()..stage.right() {
+            fade(&mut buf[(x, y)], t, bg);
+        }
+    }
+    for x in header.left()..header.right() {
+        fade(&mut buf[(x, header.y)], t, bg);
+    }
+}
+
+/// A cell's text colour blended in from its own background; colours that are
+/// not true colour are left as they are.
+fn fade(cell: &mut Cell, t: f32, bg: Color) {
+    let ground = if matches!(cell.bg, Color::Rgb(..)) {
+        cell.bg
+    } else {
+        bg
+    };
+    if matches!((ground, cell.fg), (Color::Rgb(..), Color::Rgb(..))) {
+        cell.fg = anim::lerp(ground, cell.fg, t);
+    }
 }
 
 fn trect(r: Rect) -> TRect {
@@ -176,14 +293,18 @@ fn sidebar(f: &mut Frame, app: &App) {
                 if i > 0 {
                     spans.push(Span::raw(" "));
                 }
+                let shown = match (m, app.spinner) {
+                    ('✻', Some(glyph)) => glyph,
+                    _ => m,
+                };
                 spans.push(Span::styled(
-                    m.to_string(),
+                    shown.to_string(),
                     Style::default().fg(mark_color(m)),
                 ));
             }
         }
         let mut line = Line::from(spans);
-        if active {
+        if app.band == Some(i) {
             line = line.style(Style::default().bg(p().sel));
         }
         lines.push(line);
@@ -319,10 +440,27 @@ fn mark_color(m: char) -> ratatui::style::Color {
     }
 }
 
-fn status(f: &mut Frame, app: &App) {
-    let area = f.area();
-    let r = TRect::new(0, area.height.saturating_sub(1), area.width, 1);
-    let leader = app.leader.label();
+/// What the status bar is for right now: its chip and its hint (REQ-140).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Mode {
+    Set,
+    SetKey,
+    Confirm,
+    Leader,
+    Move,
+    Diff,
+    Md,
+    Term,
+}
+
+/// The mode the bar is in, the one it left, and when (REQ-140).
+pub(super) struct ModeFade {
+    pub mode: Mode,
+    pub prev: Mode,
+    pub since: Instant,
+}
+
+pub(super) fn mode_of(app: &App) -> Mode {
     let confirm = matches!(
         app.modal,
         Some(
@@ -332,28 +470,171 @@ fn status(f: &mut Frame, app: &App) {
                 | super::Modal::Rm { .. }
         )
     );
-    let (chip, color) = if app.settings.is_some() {
-        (" SET ".to_string(), p().magenta)
+    if let Some(v) = &app.settings {
+        if v.listening() {
+            Mode::SetKey
+        } else {
+            Mode::Set
+        }
     } else if confirm {
-        (" CONFIRM ".to_string(), p().red)
+        Mode::Confirm
     } else if app.leading() {
-        (format!(" {leader} "), p().yellow)
+        Mode::Leader
     } else if app.walking {
-        (" MOVE ".to_string(), p().blue)
+        Mode::Move
     } else {
         match app.focused_view() {
-            Some(super::View::Diff(_)) => (" DIFF ".to_string(), p().blue),
-            Some(super::View::Md(_)) => (" MD ".to_string(), p().blue),
-            None => (" TERM ".to_string(), p().green),
+            Some(super::View::Diff(_)) => Mode::Diff,
+            Some(super::View::Md(_)) => Mode::Md,
+            None => Mode::Term,
         }
-    };
-    let key = |k: &str| {
+    }
+}
+
+fn chip(mode: Mode, leader: &str) -> String {
+    match mode {
+        Mode::Set | Mode::SetKey => " SET ".into(),
+        Mode::Confirm => " CONFIRM ".into(),
+        Mode::Leader => format!(" {leader} "),
+        Mode::Move => " MOVE ".into(),
+        Mode::Diff => " DIFF ".into(),
+        Mode::Md => " MD ".into(),
+        Mode::Term => " TERM ".into(),
+    }
+}
+
+fn chip_color(mode: Mode) -> Color {
+    match mode {
+        Mode::Set | Mode::SetKey => p().magenta,
+        Mode::Confirm => p().red,
+        Mode::Leader => p().yellow,
+        Mode::Move | Mode::Diff | Mode::Md => p().blue,
+        Mode::Term => p().green,
+    }
+}
+
+/// What to do next in `mode`: the keys that matter, in the user's bindings.
+fn hint(mode: Mode, leader: &str) -> Vec<Span<'static>> {
+    let k = |k: &str| {
         Span::styled(
             format!(" {k}"),
             Style::default().fg(p().fg).add_modifier(Modifier::BOLD),
         )
     };
-    let txt = |t: &str| Span::styled(format!(" {t} "), Style::default().fg(p().dim));
+    let t = |t: &str| Span::styled(format!(" {t} "), Style::default().fg(p().dim));
+    match mode {
+        Mode::SetKey => vec![t("press the new key ·"), k("esc"), t("cancels")],
+        Mode::Set => vec![
+            k("tab"),
+            t("page ·"),
+            k("↑↓"),
+            t("move ·"),
+            k("↵"),
+            t("change ·"),
+            k("←→"),
+            t("value ·"),
+            k("esc"),
+            t("close"),
+        ],
+        Mode::Confirm => vec![k("y"), t("yes ·"), k("esc"), t("no")],
+        Mode::Leader => vec![
+            k(&key("switch")),
+            t("switch ·"),
+            k(&key("open")),
+            t("open ·"),
+            k(&key("new")),
+            t("worktree ·"),
+            k(&key("pane")),
+            t("pane ·"),
+            k("hjkl"),
+            t("focus ·"),
+            k("?"),
+            t("all keys ·"),
+            k("esc"),
+            t("cancels"),
+        ],
+        Mode::Move => vec![
+            k("↑↓"),
+            t("workspace ·"),
+            k("←→"),
+            t("project ·"),
+            k("↵"),
+            t("back to the pane"),
+        ],
+        Mode::Diff => vec![
+            k("j k"),
+            t("file ·"),
+            k("] ["),
+            t("change ·"),
+            k("v"),
+            t("viewed ·"),
+            k("t"),
+            t("layout ·"),
+            k("↵"),
+            t("open ·"),
+            k("q"),
+            t("close"),
+        ],
+        Mode::Md => vec![
+            k("j k ␣ b"),
+            t("scroll ·"),
+            k("n N"),
+            t("heading ·"),
+            k("q"),
+            t("close"),
+        ],
+        Mode::Term => vec![
+            k(leader),
+            t("then a key ·"),
+            k(&key("switch")),
+            t("switch ·"),
+            k(&key("open")),
+            t("open ·"),
+            k(&key("new")),
+            t("worktree ·"),
+            k(&key("pane")),
+            t("pane ·"),
+            k(&key("sessions")),
+            t("sessions ·"),
+            k("?"),
+            t("all keys"),
+        ],
+    }
+}
+
+/// `spans` with their text colour `alpha` of the way up from the bar's own
+/// background.
+fn faded(spans: Vec<Span<'static>>, alpha: f32) -> Vec<Span<'static>> {
+    if alpha >= 1.0 {
+        return spans;
+    }
+    spans
+        .into_iter()
+        .map(|mut s| {
+            if let Some(fg) = s.style.fg {
+                s.style.fg = Some(anim::lerp(p().panel, fg, alpha));
+            }
+            s
+        })
+        .collect()
+}
+
+fn status(f: &mut Frame, app: &App) {
+    let now = Instant::now();
+    let area = f.area();
+    let r = TRect::new(0, area.height.saturating_sub(1), area.width, 1);
+    let leader = app.leader.label();
+    let cur = mode_of(app);
+    let (prev, since) = app.mode.as_ref().map_or((cur, Duration::MAX), |m| {
+        (m.prev, now.saturating_duration_since(m.since))
+    });
+    let (chip, color, from) = (chip(cur, &leader), chip_color(cur), chip_color(prev));
+    let color = anim::lerp(
+        from,
+        color,
+        anim::ease_out(anim::progress(since, anim::CHIP_EASE)),
+    );
+    let (new, alpha) = anim::crossfade(since);
     let mut spans = vec![
         Span::styled(
             chip,
@@ -370,92 +651,33 @@ fn status(f: &mut Frame, app: &App) {
             Style::default().fg(p().cyan),
         ));
     }
-    if let Some(v) = &app.settings {
-        if v.listening() {
-            spans.extend([txt("press the new key ·"), key("esc"), txt("cancels")]);
-        } else {
-            spans.extend([
-                key("tab"),
-                txt("page ·"),
-                key("↑↓"),
-                txt("move ·"),
-                key("↵"),
-                txt("change ·"),
-                key("←→"),
-                txt("value ·"),
-                key("esc"),
-                txt("close"),
-            ]);
-        }
-    } else if confirm {
-        spans.extend([key("y"), txt("yes ·"), key("esc"), txt("no")]);
-    } else if app.leading() {
-        spans.extend([txt("one key ·"), key("esc"), txt("cancels")]);
-    } else if app.walking {
-        spans.extend([
-            key("↑↓"),
-            txt("workspace ·"),
-            key("←→"),
-            txt("project ·"),
-            key("↵"),
-            txt("back to the pane"),
-        ]);
-    } else {
-        match app.focused_view() {
-            Some(super::View::Diff(_)) => spans.extend([
-                key("j k"),
-                txt("file ·"),
-                key("] ["),
-                txt("change ·"),
-                key("v"),
-                txt("viewed ·"),
-                key("t"),
-                txt("layout ·"),
-                key("↵"),
-                txt("open ·"),
-                key("q"),
-                txt("close"),
-            ]),
-            Some(super::View::Md(_)) => spans.extend([
-                key("j k ␣ b"),
-                txt("scroll ·"),
-                key("n N"),
-                txt("heading ·"),
-                key("q"),
-                txt("close"),
-            ]),
-            None => spans.extend([
-                key(&leader),
-                txt("then a key ·"),
-                key(&self::key("switch")),
-                txt("switch ·"),
-                key(&self::key("open")),
-                txt("open ·"),
-                key(&self::key("new")),
-                txt("worktree ·"),
-                key(&self::key("pane")),
-                txt("pane ·"),
-                key(&self::key("sessions")),
-                txt("sessions ·"),
-                key("?"),
-                txt("all keys"),
-            ]),
-        }
-    }
+    let shown = if new { cur } else { prev };
+    spans.extend(faded(hint(shown, &leader), alpha));
     if let Some(msg) = &app.status {
-        let color = match msg.tone {
+        let (visible, entered) = if anim::fades() {
+            anim::message(now.saturating_duration_since(msg.at), super::STATUS_FOR)
+        } else {
+            (1.0, 1.0)
+        };
+        let tone = match msg.tone {
             super::Tone::Done => p().green,
             super::Tone::Error => p().red,
             super::Tone::Info => p().yellow,
         };
+        let color = anim::lerp(p().panel, tone, visible);
+        let travel = ((1.0 - entered) * f32::from(anim::MESSAGE_CELLS)).round() as usize;
         let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
         let text = format!("{} ", msg.text);
         let room = (r.width as usize).saturating_sub(used);
         let n = text.chars().count();
-        if n <= room {
-            spans.push(Span::raw(" ".repeat(room - n)));
-            spans.push(Span::styled(text, Style::default().fg(color)));
-        } else {
+        if visible > 0.0 && n <= room {
+            let travel = travel.min(n);
+            spans.push(Span::raw(" ".repeat(room - n + travel)));
+            spans.push(Span::styled(
+                text.chars().take(n - travel).collect::<String>(),
+                Style::default().fg(color),
+            ));
+        } else if visible > 0.0 {
             // No room beside the hint: the message takes the bar.
             spans.truncate(2);
             spans.push(Span::styled(
@@ -468,6 +690,95 @@ fn status(f: &mut Frame, app: &App) {
         Paragraph::new(Line::from(spans)).style(Style::default().bg(p().panel)),
         r,
     );
+}
+
+/// The first-run steps for the current time (REQ-146). A step that has not
+/// come yet is a blank line, so the block does not move as they appear.
+fn welcome_lines(
+    leader: &str,
+    open: &str,
+    since: Duration,
+    steps_fade: bool,
+) -> Vec<Line<'static>> {
+    let bold = Style::default().fg(p().fg).add_modifier(Modifier::BOLD);
+    let plain = Style::default().fg(p().fg);
+    let dim = Style::default().fg(p().dim);
+    let steps: [Vec<(String, Style)>; 3] = [
+        vec![
+            ("1  Every shortcut starts with ".into(), plain),
+            (leader.into(), bold),
+        ],
+        vec![
+            ("2  Then press one key: ".into(), plain),
+            (open.into(), bold),
+            (" opens a folder".into(), plain),
+        ],
+        vec![
+            ("3  Forgot a key? Press ".into(), plain),
+            ("?".into(), bold),
+            (" and jw lists them all".into(), plain),
+        ],
+    ];
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "Welcome to jw",
+            Style::default().fg(p().blue).add_modifier(Modifier::BOLD),
+        )),
+        Line::default(),
+    ];
+    for (i, parts) in steps.into_iter().enumerate() {
+        let start = anim::WELCOME_STEP * i as u32;
+        if since < start {
+            lines.push(Line::default());
+            continue;
+        }
+        let alpha = if steps_fade {
+            anim::ease_out(anim::progress(since - start, anim::WELCOME_FADE))
+        } else {
+            1.0
+        };
+        lines.push(Line::from(
+            parts
+                .into_iter()
+                .map(|(text, mut style)| {
+                    if let Some(fg) = style.fg {
+                        style.fg = Some(anim::lerp(p().bg, fg, alpha));
+                    }
+                    Span::styled(text, style)
+                })
+                .collect::<Vec<_>>(),
+        ));
+    }
+    lines.push(Line::default());
+    lines.push(if since >= anim::WELCOME_STEP * 3 {
+        Line::from(Span::styled("press any key to start", dim))
+    } else {
+        Line::default()
+    });
+    lines
+}
+
+/// REQ-146: what a new user sees on an empty screen, in place of the one
+/// grey line.
+fn welcome(f: &mut Frame, app: &App, since: Duration) {
+    let stage = trect(app.stage());
+    let since = if anim::enabled() {
+        since
+    } else {
+        Duration::MAX
+    };
+    let lines = welcome_lines(&app.leader.label(), &key("open"), since, anim::fades());
+    let width = lines.iter().map(Line::width).max().unwrap_or(0) as u16;
+    let height = lines.len() as u16;
+    let w = width.min(stage.width);
+    let h = height.min(stage.height);
+    let r = TRect::new(
+        stage.x + (stage.width - w) / 2,
+        stage.y + (stage.height - h) / 2,
+        w,
+        h,
+    );
+    f.render_widget(Paragraph::new(lines), r);
 }
 
 fn empty(f: &mut Frame, app: &App) {
@@ -697,6 +1008,167 @@ fn which(f: &mut Frame, app: &App) {
 mod tests {
     use super::*;
     use crate::tui::select::Pos;
+
+    fn text(spans: &[Span]) -> String {
+        spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn every_mode_has_a_hint_and_the_leader_names_the_useful_keys() {
+        for mode in [
+            Mode::Set,
+            Mode::SetKey,
+            Mode::Confirm,
+            Mode::Leader,
+            Mode::Move,
+            Mode::Diff,
+            Mode::Md,
+            Mode::Term,
+        ] {
+            assert!(!hint(mode, "^␣").is_empty(), "{mode:?}");
+        }
+        let leader = text(&hint(Mode::Leader, "^␣"));
+        for want in ["switch", "open", "worktree", "hjkl", "all keys", "esc"] {
+            assert!(leader.contains(want), "{leader}");
+        }
+        assert!(text(&hint(Mode::Term, "^␣")).starts_with(" ^␣ then a key"));
+    }
+
+    #[test]
+    fn a_hint_fades_toward_the_bar_and_a_full_one_is_untouched() {
+        let spans = hint(Mode::Confirm, "^␣");
+        assert_eq!(faded(spans.clone(), 1.0), spans);
+        let gone = faded(spans, 0.0);
+        assert!(gone.iter().all(|s| s.style.fg == Some(p().panel)));
+    }
+
+    fn staged() -> (Buffer, TRect, TRect) {
+        let area = TRect::new(0, 0, 12, 3);
+        let mut buf = Buffer::empty(area);
+        let style = Style::default()
+            .bg(Color::Rgb(0, 0, 0))
+            .fg(Color::Rgb(200, 200, 200));
+        for y in 0..3 {
+            buf.set_string(0, y, "abcdefghijkl", style);
+        }
+        (buf, TRect::new(0, 0, 12, 1), TRect::new(0, 1, 12, 2))
+    }
+
+    fn shown(lines: &[Line]) -> String {
+        lines
+            .iter()
+            .map(|l| text(&l.spans))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn the_welcome_brings_its_steps_in_one_by_one() {
+        let at = |ms| shown(&welcome_lines("^␣", "o", Duration::from_millis(ms), false));
+        let first = at(0);
+        assert!(first.contains("1  Every shortcut starts with ^␣"));
+        assert!(!first.contains("2  Then") && !first.contains("press any key"));
+        let second = at(700);
+        assert!(second.contains("2  Then press one key: o opens a folder"));
+        assert!(!second.contains("3  Forgot"));
+        let all = shown(&welcome_lines("^␣", "o", Duration::MAX, false));
+        assert!(all.contains("3  Forgot a key? Press ? and jw lists them all"));
+        assert!(all.contains("press any key to start"));
+        assert_eq!(
+            welcome_lines("^␣", "o", Duration::ZERO, false).len(),
+            welcome_lines("^␣", "o", Duration::MAX, false).len(),
+            "the block does not move as the steps appear"
+        );
+    }
+
+    #[test]
+    fn a_border_eases_between_the_two_accents_and_leaves_the_title_alone() {
+        let area = TRect::new(0, 0, 6, 3);
+        let mut buf = Buffer::empty(area);
+        let to = Color::Rgb(100, 100, 100);
+        let from = Color::Rgb(0, 0, 0);
+        let style = Style::default().fg(to);
+        buf.set_string(0, 0, "╭ab──╮", style);
+        buf.set_string(0, 1, "│    │", style);
+        buf.set_string(0, 2, "╰────╯", style);
+        ease_border(&mut buf, area, from, to, 0.5);
+        let half = Color::Rgb(50, 50, 50);
+        assert_eq!(buf[(0, 0)].fg, half);
+        assert_eq!(buf[(5, 1)].fg, half);
+        assert_eq!(buf[(2, 2)].fg, half);
+        assert_eq!(buf[(1, 0)].fg, to, "title text keeps its own colour");
+        let mut done = Buffer::empty(area);
+        done.set_string(0, 0, "╭ab──╮", style);
+        ease_border(&mut done, area, from, to, 1.0);
+        assert_eq!(done[(0, 0)].fg, to);
+    }
+
+    #[test]
+    fn a_popup_dissolves_in_over_what_was_under_it() {
+        let (base, _, _) = staged();
+        let mut over = base.clone();
+        let style = Style::default()
+            .bg(Color::Rgb(100, 100, 100))
+            .fg(Color::Rgb(255, 255, 255));
+        over.set_string(2, 1, "XY", style);
+        let mut shown = over.clone();
+        dissolve(&mut shown, &base, 1.0);
+        assert_eq!(shown, over, "done: the overlay as drawn");
+        let mut shown = over.clone();
+        dissolve(&mut shown, &base, 0.0);
+        assert_eq!(shown, base, "start: nothing yet");
+        let mut shown = over.clone();
+        dissolve(&mut shown, &base, 0.5);
+        assert_eq!(shown[(2, 1)].symbol(), "X");
+        assert_eq!(shown[(2, 1)].bg, Color::Rgb(50, 50, 50));
+        assert_eq!(shown[(0, 1)], base[(0, 1)], "cells the overlay left alone");
+    }
+
+    #[test]
+    fn a_finished_transition_leaves_the_frame_as_drawn() {
+        let (mut buf, header, stage) = staged();
+        let before = buf.clone();
+        enter_transition(&mut buf, header, stage, 1.0, 1);
+        assert_eq!(buf, before);
+    }
+
+    #[test]
+    fn the_panes_enter_from_the_side_the_move_came_from() {
+        let (mut buf, header, stage) = staged();
+        enter_transition(&mut buf, header, stage, 0.0, 1);
+        let n = usize::from(anim::SLIDE_CELLS);
+        let row: String = (0..12).map(|x| buf[(x, 1)].symbol().to_string()).collect();
+        assert_eq!(
+            &row[..n],
+            " ".repeat(n),
+            "moving down: content comes in from the right"
+        );
+        assert_eq!(&row[n..], &"abcdefghijkl"[..12 - n]);
+        assert_eq!(
+            buf[(5, 0)].symbol(),
+            "f",
+            "the header only fades, it does not move"
+        );
+
+        let (mut buf, header, stage) = staged();
+        enter_transition(&mut buf, header, stage, 0.0, -1);
+        let row: String = (0..12).map(|x| buf[(x, 1)].symbol().to_string()).collect();
+        assert_eq!(&row[..12 - n], &"abcdefghijkl"[n..]);
+    }
+
+    #[test]
+    fn text_fades_in_from_its_own_background() {
+        let (mut buf, header, stage) = staged();
+        enter_transition(&mut buf, header, stage, 0.0, 1);
+        assert_eq!(
+            buf[(6, 0)].fg,
+            Color::Rgb(0, 0, 0),
+            "invisible at the start"
+        );
+        let (mut buf, header, stage) = staged();
+        enter_transition(&mut buf, header, stage, 0.5, 1);
+        assert_eq!(buf[(6, 0)].fg, Color::Rgb(100, 100, 100));
+    }
 
     #[test]
     fn the_selection_is_painted_on_its_cells_only() {

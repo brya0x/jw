@@ -5,6 +5,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -13,6 +14,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 
+use super::anim;
 use crate::theme::p;
 
 /// How well `query` matches `text`, and where: every query character must
@@ -115,6 +117,9 @@ pub struct Finder {
     items: Vec<Item>,
     /// The rows shown: an index into `items` and the matched characters.
     shown: Vec<(usize, Vec<usize>)>,
+    /// The highlighted row on its way to `sel` (REQ-144).
+    band: anim::Tween,
+    band_to: usize,
 }
 
 impl Finder {
@@ -183,6 +188,8 @@ impl Finder {
             sel: 0,
             items,
             shown: Vec::new(),
+            band: anim::Tween::at(0.0, Instant::now()),
+            band_to: 0,
         };
         f.list();
         f
@@ -429,7 +436,27 @@ impl Finder {
         Some(self.items[*item].pick.clone())
     }
 
+    /// Moves the highlighted row toward the selection, sliding when
+    /// animations are on (REQ-144). Whether it is still moving.
+    pub fn glide(&mut self, now: Instant, animate: bool) -> bool {
+        if self.band_to != self.sel {
+            self.band_to = self.sel;
+            if animate {
+                self.band.retarget(self.sel as f32, anim::PICK_SLIDE, now);
+            } else {
+                self.band = anim::Tween::at(self.sel as f32, now);
+            }
+        }
+        !self.band.done(now)
+    }
+
+    /// The row the highlight is on at `now`.
+    fn band_row(&self, now: Instant) -> usize {
+        self.band.value(now).round().max(0.0) as usize
+    }
+
     pub fn draw(&self, f: &mut Frame) {
+        let now = Instant::now();
         let area = f.area();
         let (r, list, prev) = Self::areas(area);
         f.render_widget(Clear, r);
@@ -513,6 +540,7 @@ impl Finder {
         for (n, (i, at)) in self.shown.iter().enumerate().skip(first).take(rows) {
             let it = &self.items[*i];
             let on = n == self.sel;
+            let band = n == self.band_row(now);
             let mut spans = vec![Span::styled(format!(" {} ", it.mark), dim)];
             for (ci, c) in it.label.chars().enumerate() {
                 let hit = at.contains(&ci);
@@ -531,7 +559,7 @@ impl Finder {
                 spans.push(Span::styled(format!("  {}", it.hint), dim));
             }
             let mut line = Line::from(spans);
-            if on {
+            if band {
                 line = line.style(Style::default().bg(p().sel));
             }
             lines.push(line);

@@ -10,7 +10,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 
 - One binary `jw`, unix only (macOS + Linux). With no arguments it opens the TUI client; a hidden `jw daemon` runs the server. The other commands are socket clients for sessions and for agents (addendum 3): `jw new <session>`, `jw [session]`, `jw sessions`, `jw ls`, `jw read`, `jw worktree`, `jw prompt`, `jw hook`, plus `jw help` and `jw skill [install]`.
 - **Two concepts.** A *workspace* is an open folder: a project (any folder, git or not) or one of its worktrees. A workspace holds *panes*.
-- **One-shot leader.** `Ctrl-Space`, then one key, then back to the terminal (tmux-style). A pause of 600 ms after the leader shows every key; `?` shows them at once. The one exception is an arrow after the leader: arrows keep moving through the workspaces until another key gives the keyboard back (addendum 7).
+- **One-shot leader.** `Ctrl-Space`, then one key, then back to the terminal (tmux-style). A pause of 150 ms after the leader shows every key (600 ms before addendum 13); `?` shows them at once. The one exception is an arrow after the leader: arrows keep moving through the workspaces until another key gives the keyboard back (addendum 7).
 - **Every action applies to the current workspace or the focused pane.** The sidebar is a list to read and click, numbered for `1–9`, and walked with `^␣` + arrows.
 - **The daemon** owns every terminal (one PTY per pane, a VT parser with screen and scrollback) and each workspace's pane tree (splits, ratios, names). It survives the client and writes `session.json` on every change.
 - **The client** draws the sidebar (projects with their worktrees indented), the current workspace's panes, a header (workspace · branch · PR) and a status bar. It owns only focus and the full view.
@@ -103,7 +103,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 - REQ-21 WHILE a diff pane is focused, the TUI SHALL show every changed file in one scroll with `j/k` per file, `]`/`[` per hunk, `v` viewed, `t` unified ⇄ side by side, and changed words highlighted; side by side by default when the pane is wide.
 - REQ-22 WHEN a `.md` file is opened, the TUI SHALL show it rendered and read-only in a reader pane: headings, lists, tables, code with highlighting, links.
 - REQ-30 WHEN the user presses the leader and then one key, the TUI SHALL run that key's action and return to the terminal.
-- REQ-31 WHILE the leader has been pending for 600 ms, the TUI SHALL show every key, grouped go / worktree / panes.
+- REQ-31 WHILE the leader has been pending for `which_delay_ms` (150 ms by default, REQ-141), the TUI SHALL show every key, grouped go / worktree / panes.
 - REQ-32 THE TUI SHALL forward every key except the leader to the focused pane, or to the viewer when the focused pane is a viewer.
 - REQ-33 *(Replaced by REQ-50.)* THE sidebar SHALL list projects with their worktrees indented, numbered 1–9, marked `●` open / `○` closed, `✻` agent working, `?` agent waiting, `⚡` dev running, `⚑` PR merged, and scroll when longer than the screen.
 - REQ-34 WHEN `t`, `x`, `HJKL` or `n` changes the panes, the daemon SHALL update the workspace's tree, send `Tree` to every attached client, and write `session.json`.
@@ -127,8 +127,8 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 - REQ-58 IF the pane closed with `x` is a viewer, THEN the TUI SHALL close it without asking.
 - REQ-59 WHEN the user clicks a sidebar row or a pane, the TUI SHALL open that workspace or focus that pane; WHERE the pane's program turned the mouse on, the TUI SHALL pass it every click, drag and wheel in its encoding; otherwise the wheel SHALL scroll (arrows in a full-screen program, the history in a shell). Selecting is REQ-124–125.
 - REQ-60 WHEN the user drags the line between two panes, the TUI SHALL resize them as it moves, and the daemon SHALL keep the new share in the tree and `session.json`.
-- REQ-19 WHEN the workspace, a modal or the pane focus changes, the TUI MAY animate the transition, never delaying input to the panes. *(Later; optional.)*
-- REQ-20 WHERE `[tui] animations = false`, the TUI SHALL apply every change without animation.
+- REQ-19 WHEN the workspace, a modal or the pane focus changes, the TUI MAY animate the transition, never delaying input to the panes. *Superseded by addendum 13 (REQ-136–148).*
+- REQ-20 WHERE `[tui] animations = false`, the TUI SHALL apply every change without animation. *Amended by REQ-138: the key is `animations` in `settings.json`.*
 
 ### Addendum 3: sessions, settings, and the risks closed
 
@@ -146,7 +146,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 | Help and skill | `jw help [cmd]`, `-h`/`--help`, `jw <cmd> --help`: the table in `crates/jw/src/help.rs`. `jw skill` prints the skill built in from `crates/jw/skill/SKILL.md`; `jw skill install` writes it to `$CLAUDE_CONFIG_DIR` (else `~/.claude`)`/skills/jw/SKILL.md` |
 | Migration | The first session-aware run moves `folders.json`, `session.json` and every registry worktree into `main` |
 | Registry | `workspaces.json`, seeded once from a copy of `registry.json`; entries gain `session` and `root`. Go's file is never written |
-| Settings | `~/.config/jw/settings.json`: `leader`, `theme` (`system\|dark\|light`), `dark`, `light`, `which_delay_ms`, `keys{action: key}`; all optional; env `JW_LEADER`/`JW_THEME` win; re-read on mtime change. JSON, so Go's `*.toml` glob skips it |
+| Settings | `~/.config/jw/settings.json`: `leader`, `theme` (`system\|dark\|light`), `dark`, `light`, `which_delay_ms`, `which_sticky`, `animations`, `welcomed`, `keys{action: key}`; all optional; env `JW_LEADER`/`JW_THEME` win; re-read on mtime change. JSON, so Go's `*.toml` glob skips it |
 | `^␣ ,` | Settings screen: general, keys, themes. Rebind swaps a key in use; `1-9 hjkl HJKL ? q` fixed; no Ctrl/Alt after the leader; the leader is Ctrl + a key. Themes: `↵` use, `e` edit in nvim, `c` copy. Writes at once |
 | Themes | Every theme is JSON in one format, `crates/tui/themes/schema.json` (S16). Ten built in, compiled in from `crates/tui/themes/*.json` (`theme::BUILTIN`); the user's in `~/.config/jw/themes/<name>.json` = `{$schema?, name, dark, colors{bg panel line fg dim sel blue green yellow red magenta cyan, add_bg? del_bg? add_word? del_word?}}`, and one named like a built-in replaces it; missing diff colours are mixed from green/red over bg; a file that doesn't parse keeps the last good palette. `jw theme ls\|install <file\|url\|-> [--name] [--force]\|export <name>\|use <name>` (`crates/jw/src/theme.rs`); a URL goes through `curl` |
 | `.md` reuse | `ClientMsg::Role{pane, role}` retargets the workspace's `view:md:*` pane |
@@ -306,6 +306,42 @@ Viewer panes (diff, Markdown) keep their own clicks and are out of scope. No key
 - REQ-135 WHEN a selection is copied, the TUI SHALL show `✓ Copied to clipboard · N characters` for about 1.5 s on the top edge of the pane's border at its right end, drawn over the border and the title, and SHALL send no key or click to it.
 - REQ-134 WHEN the wheel scrolls the history of a pane that has a selection, the selection SHALL stay on the same text.
 
+### Addendum 13 (M0–M6): motion and first steps for new users
+
+Prototype: https://claude.ai/artifact/B17WfXDXi8tRw2DrVyP7AP (nine proposals, all approved 2026-10-10).
+
+jw is a terminal people live in, but a first-time user sees a grey line on an empty screen, a key hint that never changes, and a sidebar that jumps. This addendum makes it feel smooth (every change eased, frames tear-free) and teaches the leader on the first run. It replaces REQ-19 and REQ-20, which left animation "later, optional".
+
+| Area | What it does |
+|---|---|
+| Frames | Event-driven as today, coalescing into `FRAME` (16 ms). While an animation runs the loop wakes every 16 ms; with none it blocks as it does now, so idle CPU stays at zero. Animations read `Instant`, never count frames |
+| Synchronized output | Every draw is wrapped in `CSI ? 2026 h … CSI ? 2026 l`: the terminal paints the frame whole or not at all |
+| Workspace switch | The sidebar's selection slides to the new row (240 ms, ease-out), the header fades, the panes' content enters from the side of travel. For arrows after the leader, `1–9`, a click and the picker |
+| Agent mark | `✻` spins as a braille glyph between the 2 s polls (80 ms per step), only while the mark is on |
+| Status bar | The hint changes with the mode and cross-fades; the mode chip's colour eases between modes |
+| Messages | Status messages enter from the right and fade out; their total time stays 4 s |
+| Popups | Which-key, pickers, modals and settings fade in over 160 ms; a picker's selected row slides |
+| Which-key | Appears after `which_delay_ms` (default 150 ms, was 600), or at once with `which_sticky` |
+| Focus | The focused pane's border colour eases over 180 ms; the wheel scrolls the history over at most 120 ms |
+| First run | With an empty sidebar (no workspace registered) and `welcomed` unset, three steps appear one by one: `^␣` starts every shortcut, then `o` opens a folder, `?` lists the keys. Any key closes it and sets `welcomed` |
+
+Terminal cells cannot blend, so a fade is a colour interpolated toward the background in truecolor and a slide moves content by whole cells, rounded from an eased position. Without truecolor (`COLORTERM` not `truecolor` or `24bit`) the colour fades and the panes' slide apply at once (RISK-42). On a switch the client clears the old workspace's screens and the new ones arrive from the daemon, so the panes only enter; nothing leaves. `settings.json` gains `animations` (default true), `which_sticky` (default false) and `welcomed` (default false); `^␣ ,` shows the first two. Env `JW_WELCOME=0` skips the welcome, like `JW_LEADER` and `JW_THEME` win over their keys.
+
+- REQ-136 WHERE `animations` is not false, WHEN the current workspace changes, the TUI SHALL slide the sidebar selection to the new row over 240 ms, fade the header, and bring the panes' content in from the side of travel over 240 ms.
+- REQ-137 WHILE any animation is running, the TUI SHALL redraw at most every `FRAME`, and WHEN none is running SHALL block on its channel as before. Each animation SHALL take its position from `Instant::elapsed`.
+- REQ-138 WHERE `animations` is false, the TUI SHALL apply every change at once, draw `✻` as a still glyph (REQ-143) and show all three welcome steps together (REQ-146); WHERE the terminal has no truecolor, it SHALL apply the colour fades and the panes' slide at once, and keep the selection band's slide, the spinner and the welcome steps. REQ-20 is amended: the key is `animations` in `settings.json`, not a `[tui]` table (see Corrections).
+- REQ-139 THE TUI SHALL write `CSI ? 2026 h` before each draw and `CSI ? 2026 l` after it, and SHALL write the closing sequence on exit, on a panic and on a failed draw.
+- REQ-140 WHEN the mode changes, the status bar SHALL cross-fade to the new mode's hint over 160 ms and ease the chip's colour over 180 ms. The hints are: TERM, leader, MOVE, viewer and confirm.
+- REQ-141 WHEN the leader has been pending for `which_delay_ms` (default 150 ms), or at once WHERE `which_sticky` is true, the TUI SHALL show the which-key popup, fading in over 160 ms.
+- REQ-142 WHEN a status message appears, it SHALL enter from the right over 200 ms, and SHALL fade out over the last 200 ms of its `STATUS_FOR` (4 s).
+- REQ-149 THE error messages that the changes of this addendum add or touch SHALL say what went wrong and how to fix it.
+- REQ-143 WHILE a workspace's `✻` mark is on, the sidebar SHALL draw it as a braille spinner that advances every 80 ms, computed from `Instant` between `List` polls.
+- REQ-144 WHEN a modal, picker, settings screen or which-key popup opens, it SHALL fade in over 160 ms; WHEN a picker's selection moves, the highlighted row SHALL slide to it over 120 ms.
+- REQ-145 WHEN the focus moves to another pane, the old border colour SHALL ease to the new one over 180 ms; WHEN the wheel scrolls a pane's history, the scroll SHALL be spread over at most 120 ms.
+- REQ-146 WHEN the TUI starts with an empty sidebar and `welcomed` is false (a workspace opening by itself closes it too, without a key), it SHALL show three steps, one every 650 ms, and WHEN any key is pressed SHALL close them, write `welcomed: true` and handle that key as usual. WHERE `JW_WELCOME=0` is set, the TUI SHALL NOT show it, so tests and `scripts/drive.py` (which sets it) see the plain empty stage. The empty-stage line (Screen table) stays for later runs.
+- REQ-147 THE motion SHALL add no `ClientMsg` and no `PaneInfo` field, and `PROTOCOL` SHALL stay at 8.
+- REQ-148 WHEN a key or a click arrives during an animation, the TUI SHALL handle it before the next frame; WHEN a change interrupts an animation, the new one SHALL start from what is on screen; IF a frame takes longer than `FRAME`, THEN the animation SHALL jump to its end state.
+
 ---
 
 ## Rationale
@@ -336,6 +372,11 @@ Viewer panes (diff, Markdown) keep their own clicks and are out of scope. No key
 - RAT-26 **Selection in the TUI, not the daemon.** It is per viewer (two clients can select different things), changes nothing on the wire, and needs no `PROTOCOL` bump. The TUI already holds each pane's vt100 screen and scrollback.
 - RAT-27 **Rejected: turn host mouse capture off while the focused pane has no mouse mode.** It would give the host terminal's selection back, but jw needs the mouse for sidebar clicks, pane focus, border resize and the wheel, and capture is one switch for the whole screen.
 - RAT-28 **Rejected: a keyboard select mode (`^␣ v`, chip `SEL`) and Shift + arrows from the shell's cursor.** A mode is tmux's model and terminals today do not need one; Shift + arrows would take those keys from programs. Editing the prompt's own text belongs to the shell's line editor (zsh), which jw cannot see. The mouse does the selecting (RISK-6).
+- RAT-29 **A frame deadline only while animating, not a fixed 60 Hz loop.** The loop is event-driven (`event_loop`) and coalesces into 16 ms; a 60 Hz tick would burn CPU and battery all day next to a daemon running real agent work. `EDGE_EVERY` and the which-key wait already use `recv_timeout` the same way.
+- RAT-30 **Positions come from `Instant`, not a frame counter.** When a frame is late the animation catches up instead of running slow, and REQ-148's interrupt can start from the displayed value.
+- RAT-31 **Welcome state in `settings.json`.** It already holds the user's choices and is re-read on change (REQ-69); a second file for one boolean is not worth it.
+- RAT-32 **The which-key delay drops to 150 ms.** A new user needs the keys on screen; an expert who types the chord never sees the popup either way, and `which_delay_ms` still sets it.
+- RAT-33 **Rejected: easing in the daemon or on the wire.** Animation is per viewer and cosmetic; putting it in `PaneInfo` would bump `PROTOCOL` for nothing (RAT-26's reasoning).
 - RAT-22 **`curl`, not a crate,** for `install <url>`: rare, and jw already shells out to `git` and `gh`; `ureq` would add TLS and about 40 crates for one command.
 
 ## Risks
@@ -381,6 +422,10 @@ Viewer panes (diff, Markdown) keep their own clicks and are out of scope. No key
 - RISK-39 **OSC 52 depends on the outer terminal.** iTerm2 asks to allow clipboard access; Terminal.app does not support it. The copy may do nothing, with no error. The banner (REQ-135) says "Copied to clipboard" (it only reports what jw sent) and refuses more than 75 KB (`select::MAX_COPY`), since some terminals drop an OSC 52 over about 100 KB once encoded.
 - RISK-40 **A selection holds lines, not text.** Rows are counted from the oldest line of the history, so output that scrolls the pane leaves the selection on its text (REQ-127, REQ-134). A full history drops its oldest line and shifts every index, so REQ-131 clears it then; a program that redraws in place (a progress bar) changes the text under it, and the copy takes what is on screen.
 - RISK-41 **Shift + drag may never reach jw.** Terminals of the xterm family (iTerm2, Terminal.app) keep Shift + mouse for their own selection while an app has mouse reporting on, which is how it worked before this addendum. Then REQ-125 never fires and the host selects, as today. Checked by hand 2026-10-10: in Ghostty, Shift + drag over an nvim pane does not select and nothing reaches jw, so REQ-125's Shift path does not fire there. iTerm2 and Terminal.app are not checked. In a pane whose program uses the mouse, the way to copy is to quit its mouse mode or use the program's own selection.
+- RISK-42 **Fades need truecolor.** Interpolating between theme colours on a 256-colour terminal bands or picks the wrong shade. REQ-138 applies changes at once there, so the cost is no motion, not wrong colours.
+- RISK-43 **A late frame.** Drawing the panes' content shifted by a few cells (REQ-136) re-renders every pane each frame. REQ-148 covers a frame that overruns `FRAME`: the animation jumps to its end state instead of lagging behind input. The cost is measured by hand in Ghostty.
+- RISK-44 **Synchronized output can freeze the screen.** A terminal holds the frame until `CSI ? 2026 l` (Ghostty gives up after a second). REQ-139 closes it on every exit path; terminals that do not know the mode ignore it.
+- RISK-45 **The shorter which-key delay shows the popup to people who type fast.** A chord typed within 150 ms still never shows it; one typed slower flashes it for an instant, softened by the fade. `which_delay_ms` restores the old 600 ms.
 - Closed by addendum 3: RISK-5 (own registry), RISK-7 (hooks), RISK-9 (frames), RISK-16 (`nvim --server`), RISK-17 (`root` in the registry).
 
 ## Parts (each one ends with `cargo test` + `clippy` green and a local commit on `feat/rust-tui`; nothing is pushed)
@@ -432,7 +477,13 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | X0 ✓ `9adb9e7` | Addendum 12 in this spec; the prototype | — | docs |
 | X1 ✓ `5dd7118` | Selection state in the TUI: drag, Shift + drag, word and line, edge scroll, OSC 52 copy, clear rules | 124–128, 131–134 | `tui/mod.rs`, `tui/draw.rs`, new `tui/select.rs` |
 | X2 ✓ `bb27c1a` | The copied banner on the pane's top edge; the keyboard select mode is withdrawn | 135 (129, 130 withdrawn) | `tui/mod.rs`, `tui/draw.rs` |
-| Later | Animations (optional) | 19, 20 | |
+| M0 ✓ `78f31c5` | Addendum 13 in this spec; the prototype | — | docs |
+| M1 ✓ `2d2e8c8` | Motion core: `tui/anim.rs` (tween, ease-out, colour lerp), the frame deadline in `event_loop`, synchronized output, `animations` setting and its `^␣ ,` row | 137–139, 147, 148 | `tui/anim.rs`, `tui/mod.rs`, `settings.rs`, `tui/settings_view.rs` |
+| M2 ✓ | Workspace switch: sliding selection, header fade, panes slide; the spinning `✻` | 136, 143 | `tui/anim.rs`, `tui/draw.rs`, `tui/mod.rs` |
+| M3 ✓ | Status bar: the leader's hint lists the useful keys, hints cross-fade between modes, the chip's colour eases, messages enter and fade | 140, 142 | `tui/draw.rs` |
+| M4 ✓ | Popups fade in, picker row slides, which-key at 150 ms and `which_sticky` (a row in `^␣ ,`) | 141, 144 | `tui/draw.rs`, `tui/finder.rs`, `tui/modal.rs`, `settings.rs` |
+| M5 ✓ | Focus border ease; eased wheel scroll | 145 | `tui/draw.rs`, `tui/mod.rs` |
+| M6 ✓ | First-run welcome, `welcomed` and `JW_WELCOME=0` (set by `scripts/drive.py`) | 146, 149 | `tui/draw.rs`, `settings.rs`, `scripts/drive.py` |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 
 Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{new_stream, rm_plan, rm, sync, done_plan}`, `src/diff.rs`, `src/view/md.rs` and `Modal::Rm` (type the name) stay as they are.
@@ -485,6 +536,10 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - REQ-72's restore reset only the screen (`?1049l`), and later REQ-87 and REQ-98 the theme and kitty state. The old process's mouse, paste and cursor modes survived into the new one until REQ-114.
 - REQ-131 first said output that moves the rows under a selection clears it. Rows are counted from the oldest history line, so scrolling output leaves the selection on its text; only a full history, a screen switch or a shrunk history clears it.
 - REQ-59 left selection to the host terminal's Shift + drag and RISK-6 put plain mouse selection in scope, but with mouse capture on and a shell that never asks for the mouse, a plain drag did nothing and no REQ covered it (addendum 12).
+- REQ-20 named `[tui] animations = false`, a table in the project TOML. Settings live in `settings.json` (RAT-31), so the key is `animations` there (REQ-138).
+- REQ-31 and the Contract said 600 ms before the which-key popup. A new user needs the keys sooner (RAT-32), so the default is 150 ms; `which_delay_ms` still sets it.
+- REQ-138 first said that without truecolor every change applies at once. The selection band, the spinner and the welcome steps need no colour blending, so only the fades and the panes' slide wait for truecolor.
+- REQ-146 first said the welcome starts "with no workspace open" and does not pass on the key that closes it. At startup nothing is open yet even for a returning user, so it starts from an empty sidebar; and step 1 itself tells the user to press the leader, so that key is handled as usual.
 
 ## Tests
 
@@ -496,4 +551,5 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - TUI: ratatui `TestBackend` for the which-key popup, sidebar and modals.
 - keyboard protocol: `kitty.rs` units (push, pop past empty, set modes, query, depth, alternate stack, replay round trip); `keys.rs` units (Shift+Enter is `\r` with flags 0 and `CSI 13;2u` with flag 1); the daemon answers `CSI ? u` before `CSI c`, and a late Snapshot ends with the stack. End to end, with a script that plays Ghostty (answers the probe, sends keys as Ghostty does with flag 1) against an isolated jw: Shift+Enter is a new line in claude 2.1.296 and codex 0.162.1, fires `imap <S-CR>` in nvim 0.12.5; a program that never pushes still gets `\r`; the TUI pops on exit, and pushes nothing when the terminal doesn't answer.
 - selection (X1, X2): unit tests over a vt100 screen for the extracted text (trailing spaces, soft-wrapped rows, wide characters, history rows) and for word and line bounds; the OSC 52 bytes; the highlight and the banner text; `mouse_encodings` still passes. Manual: zsh drag, double and triple click, drag past the edge; the banner appears top right and goes after about 2 s; nvim plain drag reaches nvim, Shift + drag selects.
+- motion (M1–M6): units for the tween (starts at 0, reaches 1 at its duration, monotonic, an interrupt starts from the displayed value) and for the colour lerp; `next_wake` blocks when idle, wakes a frame after the last draw while a transition runs, for the drag edge and the which-key, takes the soonest, and wakes when a message starts to leave; `TestBackend` for the spinner glyph by elapsed time, the welcome (shows; any key closes it, writes `welcomed` and is still handled), the slide's last frame equal to the static draw, and `animations = false` giving the final frame at once; `tick_motion` on an `App` without a daemon (`App::bare`): the band starts on the current row without motion, a switch glides it and keeps the loop awake until `SWITCH`, `animations = false` jumps it, no workspace means no band, the spinner steps only for visible rows; the bytes of a draw start with `CSI ? 2026 h` and end with `CSI ? 2026 l`, also after a failed draw. Manual in Ghostty with `scripts/drive.py`: switching workspaces with the arrows, the which-key at 150 ms, no tearing in a fast `cat`, idle CPU near zero.
 - manual (after Q2 and Q5): claude and nvim in panes; `w`, `t`, `x`, `HJKL`, `n`, `d`, `↵` in the diff, `q`, then `jw` again shows the same layout.
