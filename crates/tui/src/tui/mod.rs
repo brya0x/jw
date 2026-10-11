@@ -1391,7 +1391,7 @@ impl App {
                     v.title = Some(title);
                 }
             }
-            DaemonMsg::Hello { .. } | DaemonMsg::Spawned { .. } => {}
+            DaemonMsg::Hello { .. } | DaemonMsg::Spawned { .. } | DaemonMsg::Opened { .. } => {}
             DaemonMsg::Exited { pane, status } => {
                 if let Some(v) = self.panes.get_mut(&pane) {
                     v.exited = Some(status);

@@ -43,6 +43,11 @@ pub const COMMANDS: &[Command] = &[
         what: "creates a worktree of the project, opens it, and hands the task to its agent",
     },
     Command {
+        name: "pane",
+        usage: "jw pane open <workspace> --run <program|shell|view:diff|view:md:file> [--split right|down] [--of <pane>] | close <workspace> <pane> [--force] | ls <workspace> [--json]",
+        what: "splits a workspace's panes: opens one that runs a program, a shell or a viewer and prints its id, closes one, or lists them",
+    },
+    Command {
         name: "prompt",
         usage: "jw prompt <workspace> <text>",
         what: "types a task into an open workspace's agent once it is quiet",

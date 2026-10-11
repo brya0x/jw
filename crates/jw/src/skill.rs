@@ -49,6 +49,9 @@ mod tests {
         for cmd in [
             "jw ls",
             "jw read",
+            "jw pane open",
+            "jw pane close",
+            "jw pane ls",
             "jw worktree",
             "jw prompt",
             "jw sessions",

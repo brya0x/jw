@@ -273,6 +273,8 @@ jw ls [--json]                                   # workspaces, state, marks, bra
 jw read <workspace> [--pane role] [--lines N]    # a pane's last lines, scrollback included
 jw worktree <name> [--in <project>] [--task "…"] # a new worktree, with a task for its agent
 jw prompt <workspace> "<task>"                   # type a task into an open workspace's agent
+jw pane open <workspace> --run <program|shell|view:diff|view:md:file> [--split right|down]
+jw pane close <workspace> <pane>                 # close a pane; jw pane ls lists them
 ```
 
 `jw skill install` puts the Claude Code skill that teaches an agent these commands in

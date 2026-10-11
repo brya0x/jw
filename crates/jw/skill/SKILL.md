@@ -1,6 +1,6 @@
 ---
 name: jw
-description: Use when working inside a jw workspace (a pane of the jw TUI; JW_* variables in the environment, JW_SESSION set) or when overseeing, creating or handing work to other workspaces of a jw session. Covers jw ls, jw read, jw worktree, jw prompt, jw sessions, jw help, and the JW_* variables.
+description: Use when working inside a jw workspace (a pane of the jw TUI; JW_* variables in the environment, JW_SESSION set) or when overseeing, creating or handing work to other workspaces of a jw session. Covers jw ls, jw read, jw pane, jw worktree, jw prompt, jw sessions, jw help, and the JW_* variables.
 ---
 
 # Working inside jw
@@ -47,6 +47,18 @@ default ports (5173, 8081…) belong to the main checkout, not to you.
   open. It waits until the agent is quiet, so it never interrupts it. The agent is the pane
   with role `agent`, else a pane where `claude`, `codex`… runs in the foreground (a
   `claude` started by hand in a shell pane).
+- `jw pane open <workspace> --run <what> [--split right|down] [--of <pane>]` splits a
+  workspace's panes and prints the new pane's id (only that, on stdout). `<what>` is
+  `shell`, `view:diff` (the workspace's diff), `view:md:<file>` (a Markdown viewer) or any
+  other command, which runs through `sh -c` in the workspace's folder. The split goes
+  beside the agent's pane unless `--of <pane>` names another, to the right unless
+  `--split down`. An open TUI shows it at once. Use it to run a build or a test watcher
+  where the person can see it, or to open the diff for them.
+- `jw pane ls <workspace> [--json]` lists a workspace's panes: id, role, the program in
+  the foreground and whether it has exited. Viewers have no program.
+- `jw pane close <workspace> <pane> [--force]` closes one pane. It refuses the last pane
+  of a workspace (that closes the workspace) and your own pane (`$JW_PANE_ID`) unless you
+  add `--force`; don't.
 - `jw sessions` lists the sessions and how many of their workspaces run.
 
 ## Never do these
@@ -58,6 +70,9 @@ default ports (5173, 8081…) belong to the main checkout, not to you.
   `~/.local/state/jw/*.json`. Removing, syncing and finishing a worktree are done in the
   TUI (`^␣ X`, `^␣ s`), which checks for unpushed work first.
 - **Push yourself; jw never pushes.**
+- **`jw pane open --run` runs whatever you give it**, with the person's rights, like
+  `jw prompt`. Run only what the task needs, and close the panes you opened when you are
+  done with them.
 - `jw new <name>` starts a *session*, not a worktree. A worktree is `jw worktree`.
 
 ## When unsure
