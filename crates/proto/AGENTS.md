@@ -15,6 +15,8 @@ It depends only on jw-core, for `layout::Tree`.
   - `read_raw` and `write_raw`: a frame's body without decoding it, for the phone bridge, which
     relays frames it does not read.
   - `socket_path` (`:615`), `pidfile` and `is_view` (a `view:` role has no process).
+- `clean` (`proto.rs`): a phone's name or code made safe to print, shared by the bridge, the CLI
+  and the TUI.
 - `src/client.rs`: `Client` (`:19`), which connects and starts the daemon when nobody
   listens.
 - `src/kitty.rs`: `Kitty`, a pane's kitty keyboard flag stacks. The daemon and the TUI

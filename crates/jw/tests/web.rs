@@ -80,7 +80,14 @@ fn a_phone_drives_a_pane_through_the_bridge() {
     let _daemon = Daemon(
         Command::new(EXE)
             .arg("daemon")
+            // Nothing of the user's: not their config, their state, their
+            // paired phones, nor a `cloudflared` on `PATH`.
+            .env_clear()
             .env("JW_SOCKET", &socket)
+            .env("HOME", dir.path())
+            .env("XDG_CONFIG_HOME", dir.path().join("config"))
+            .env("XDG_STATE_HOME", dir.path().join("state"))
+            .env("PATH", "/usr/bin:/bin")
             .spawn()
             .unwrap(),
     );

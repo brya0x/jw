@@ -65,10 +65,8 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         // Hidden: the client starts it (REQ-3); nobody types it.
-        Some("daemon") => match jw_daemon::run(
-            &proto::socket_path(),
-            std::sync::Arc::new(jw_tui::theme::look),
-        ) {
+        Some("daemon") => match jw_daemon::run(&proto::socket_path(), jw_tui::theme::cached_look())
+        {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("jw daemon: {e:#}");

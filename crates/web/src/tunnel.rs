@@ -8,7 +8,7 @@
 //! `JW_CLOUDFLARED` names another program to run in its place, and then the
 //! DNS wait is skipped: that is how tests stand in for the real tunnel.
 
-use std::io::{self, BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, Read};
 use std::net::ToSocketAddrs;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
@@ -116,6 +116,13 @@ impl Default for Waits {
     }
 }
 
+/// `JW_CLOUDFLARED` as a program, or nothing: an empty or blank value is
+/// "not set", so a shell that exports it empty does not skip the DNS wait.
+/// It is a seam for tests, and no setting of a user's.
+fn program_from(var: Option<std::ffi::OsString>) -> Option<std::ffi::OsString> {
+    var.filter(|v| !v.to_string_lossy().trim().is_empty())
+}
+
 /// Starts `cloudflared` for `http://127.0.0.1:<port>` and waits until the
 /// tunnel can be reached. `on_step` hears each stage; `cancel` is asked
 /// during every wait and ends it with an error when it says yes.
@@ -125,7 +132,7 @@ pub fn up(
     cancel: &dyn Fn() -> bool,
     on_step: &mut dyn FnMut(Step),
 ) -> Result<(Tunnel, String), Error> {
-    let custom = std::env::var_os("JW_CLOUDFLARED");
+    let custom = program_from(std::env::var_os("JW_CLOUDFLARED"));
     let program = custom.clone().unwrap_or_else(|| "cloudflared".into());
     let mut child = Command::new(&program)
         .args([
@@ -169,7 +176,10 @@ fn watch(stderr: impl io::Read + Send + 'static) -> Receiver<Tell> {
     thread::spawn(move || {
         let mut last: Vec<String> = Vec::new();
         let (mut sent_host, mut sent_registered) = (false, false);
-        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+        let mut reader = BufReader::new(stderr);
+        let mut raw = Vec::new();
+        while read_line_capped(&mut reader, &mut raw, LINE_MAX).is_ok_and(|n| n > 0) {
+            let line = String::from_utf8_lossy(&raw).trim_end().to_string();
             if !sent_host && let Some(host) = find_host(&line) {
                 sent_host = true;
                 let _ = tx.send(Tell::Host(host));
@@ -188,14 +198,26 @@ fn watch(stderr: impl io::Read + Send + 'static) -> Receiver<Tell> {
     rx
 }
 
-/// The quick tunnel's name in a line of `cloudflared`'s output.
+/// The longest piece of output looked at as a line; a runaway line without
+/// a newline is cut into pieces of this size instead of growing in memory.
+const LINE_MAX: usize = 8192;
+
+/// One line, or `cap` bytes of a longer one, into `buf`; how many bytes.
+fn read_line_capped(r: &mut impl BufRead, buf: &mut Vec<u8>, cap: usize) -> io::Result<usize> {
+    buf.clear();
+    r.by_ref().take(cap as u64).read_until(b'\n', buf)
+}
+
+/// The quick tunnel's name in a line of `cloudflared`'s output: the first
+/// `https://` on it that is one, since a line may carry other links first.
 fn find_host(line: &str) -> Option<String> {
-    let at = line.find("https://")? + "https://".len();
-    let host: String = line[at..]
-        .chars()
-        .take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '.')
-        .collect();
-    host.ends_with(".trycloudflare.com").then_some(host)
+    line.match_indices("https://").find_map(|(at, _)| {
+        let host: String = line[at + "https://".len()..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '.')
+            .collect();
+        host.ends_with(".trycloudflare.com").then_some(host)
+    })
 }
 
 fn wait_for_tunnel(
@@ -230,16 +252,54 @@ fn wait_for_tunnel(
     host.ok_or_else(|| Error("no tunnel name".into()))
 }
 
+/// Whether a name resolves; the system's resolver, or a stand-in in tests.
+type Resolver = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
 /// A tunnel that says it is registered still has no name in DNS for a while
 /// (REQ-1), and a phone that scans too soon finds nothing.
 fn wait_to_resolve(host: &str, waits: Waits, cancel: &dyn Fn() -> bool) -> Result<(), Error> {
+    let system: Resolver = Arc::new(|h| (h, 443).to_socket_addrs().is_ok());
+    wait_to_resolve_with(host, waits, cancel, system)
+}
+
+/// `getaddrinfo` has no timeout, so each lookup runs on a thread of its own
+/// and this waits for it in slices: a hung resolver cannot keep a stop from
+/// being heard (REQ-9), and cannot keep this past its deadline. The thread
+/// of a lookup that never returns is left behind.
+fn wait_to_resolve_with(
+    host: &str,
+    waits: Waits,
+    cancel: &dyn Fn() -> bool,
+    resolver: Resolver,
+) -> Result<(), Error> {
     let until = Instant::now() + waits.resolve;
-    while (host, 443).to_socket_addrs().is_err() {
+    let gave_up = || {
+        fail(format!(
+            "{host} did not resolve in {:?}; try again",
+            waits.resolve
+        ))
+    };
+    loop {
+        let (tx, answer) = mpsc::channel();
+        let (resolver, name) = (resolver.clone(), host.to_string());
+        thread::spawn(move || {
+            let _ = tx.send(resolver(&name));
+        });
+        loop {
+            match answer.recv_timeout(SLICE) {
+                Ok(true) => return Ok(()),
+                Ok(false) | Err(RecvTimeoutError::Disconnected) => break,
+                Err(RecvTimeoutError::Timeout) => {}
+            }
+            if cancel() {
+                return fail("stopped");
+            }
+            if Instant::now() >= until {
+                return gave_up();
+            }
+        }
         if Instant::now() >= until {
-            return fail(format!(
-                "{host} did not resolve in {:?}; try again",
-                waits.resolve
-            ));
+            return gave_up();
         }
         // In slices, so a cancel does not wait out the poll.
         let next = Instant::now() + waits.poll;
@@ -250,7 +310,6 @@ fn wait_to_resolve(host: &str, waits: Waits, cancel: &dyn Fn() -> bool) -> Resul
             thread::sleep(SLICE.min(waits.poll));
         }
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -333,6 +392,83 @@ mod tests {
         let err = wait_to_resolve("jw-test.invalid", long, &|| true).unwrap_err();
         assert_eq!(err.0, "stopped");
         assert!(t.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn a_resolver_that_hangs_cannot_hold_up_a_stop_or_the_deadline() {
+        let hang: Resolver = Arc::new(|_| {
+            thread::sleep(Duration::from_secs(30));
+            true
+        });
+        // A stop is heard within a slice or two, not after the lookup.
+        let t = Instant::now();
+        let stop = AtomicBool::new(false);
+        let flag = &stop;
+        let err = thread::scope(|s| {
+            s.spawn(|| {
+                thread::sleep(Duration::from_millis(300));
+                flag.store(true, Ordering::SeqCst);
+            });
+            wait_to_resolve_with(
+                "jw-test.invalid",
+                Waits {
+                    resolve: Duration::from_secs(60),
+                    ..quick()
+                },
+                &|| flag.load(Ordering::SeqCst),
+                hang.clone(),
+            )
+        })
+        .unwrap_err();
+        assert_eq!(err.0, "stopped");
+        assert!(t.elapsed() < Duration::from_secs(3), "{:?}", t.elapsed());
+        // And the deadline holds with nobody cancelling.
+        let t = Instant::now();
+        let err = wait_to_resolve_with("jw-test.invalid", quick(), &|| false, hang).unwrap_err();
+        assert!(err.0.contains("did not resolve"), "{err}");
+        assert!(t.elapsed() < Duration::from_secs(3), "{:?}", t.elapsed());
+    }
+
+    #[test]
+    fn a_name_that_resolves_on_a_later_try_is_found() {
+        let tries = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let n = tries.clone();
+        let third: Resolver = Arc::new(move |_| n.fetch_add(1, Ordering::SeqCst) >= 2);
+        wait_to_resolve_with("a.trycloudflare.com", quick(), &|| false, third).unwrap();
+        assert_eq!(tries.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn the_test_seam_ignores_an_empty_value() {
+        use std::ffi::OsString;
+        assert_eq!(program_from(None), None);
+        assert_eq!(program_from(Some(OsString::new())), None);
+        assert_eq!(program_from(Some(OsString::from("  \t"))), None);
+        assert_eq!(
+            program_from(Some(OsString::from("/tmp/stub.sh"))),
+            Some(OsString::from("/tmp/stub.sh"))
+        );
+    }
+
+    #[test]
+    fn a_link_that_is_not_the_tunnel_does_not_hide_it() {
+        let line =
+            "INF see https://developers.cloudflare.com/x and https://a-b.trycloudflare.com |";
+        assert_eq!(find_host(line).as_deref(), Some("a-b.trycloudflare.com"));
+    }
+
+    #[test]
+    fn a_runaway_line_is_read_in_pieces_and_a_later_host_is_still_found() {
+        let mut out = "x".repeat(100_000);
+        out.push('\n');
+        out.push_str(BOX);
+        out.push_str(REGISTERED);
+        let mut r = BufReader::new(Cursor::new(out.clone()));
+        let mut buf = Vec::new();
+        assert_eq!(read_line_capped(&mut r, &mut buf, 1000).unwrap(), 1000);
+        let told = watch(Cursor::new(out));
+        let host = wait_for_tunnel(&told, Duration::from_secs(3), &|| false).unwrap();
+        assert_eq!(host, "guys-slowly-dietary-flags.trycloudflare.com");
     }
 
     #[test]

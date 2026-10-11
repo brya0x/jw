@@ -20,7 +20,7 @@ daemon; it only talks to it through jw-proto.
 | `src/tui/select.rs` | selecting text in a pane (addendum 12): the selection as lines of the history, the text it covers, words and lines, the OSC 52 copy |
 | `src/tui/keys.rs` | the leader, and encoding keys and mouse events for the panes' programs |
 | `src/settings.rs` | `settings.json`: `get` (`:203`), `save` (`:187`), `ACTIONS` (`:48`, the rebindable keys) |
-| `src/theme.rs` | palettes: `p()` for every colour, `load` (`:197`) for the themes the settings name, `look` for the phone (`ready.palettes`). Every theme is JSON: the built-ins are `themes/*.json` (`BUILTIN`), checked against `themes/schema.json` by a test |
+| `src/theme.rs` | palettes: `p()` for every colour, `load` (`:197`) for the themes the settings name, `look` and `LookCache` (cached until a theme or `settings.json` changes) for the phone (`ready.palettes`). Every theme is JSON: the built-ins are `themes/*.json` (`BUILTIN`), checked against `themes/schema.json` by a test |
 | `src/view/` | syntax highlighting and Markdown rendering |
 
 ## Keep in mind

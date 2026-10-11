@@ -148,6 +148,9 @@ fn named_in(dir: Option<&Path>, name: &str) -> Result<Palette> {
         .filter(|p| p.exists());
     match (path, builtin(name)) {
         (Some(path), _) => {
+            if std::fs::metadata(&path).is_ok_and(|m| m.len() > FILE_MAX) {
+                bail!("theme {name}: {} is over {FILE_MAX} bytes", path.display());
+            }
             let data = std::fs::read(&path)
                 .with_context(|| format!("theme {name}: {}", path.display()))?;
             parse(&data).with_context(|| format!("theme {name}: {}", path.display()))
@@ -351,12 +354,96 @@ pub fn look() -> serde_json::Value {
 
 fn look_in(themes: Option<&Path>, settings: Option<&Path>) -> serde_json::Value {
     let s = settings
+        .filter(|p| std::fs::metadata(p).is_ok_and(|m| m.len() <= FILE_MAX))
         .and_then(|p| crate::settings::read(p).ok())
         .unwrap_or_default();
     serde_json::json!({
         "palettes": palettes_in(themes),
         "settings": {"dark": s.dark_theme(), "light": s.light_theme()},
     })
+}
+
+/// The most a theme file or `settings.json` may weigh to be read for a phone;
+/// a larger one is left out, not read.
+const FILE_MAX: u64 = 64 * 1024;
+
+/// `look`, kept until a file it was made from changes (mobile spec, W1): the
+/// daemon asks at every phone's `ready`, and the answer is the same until a
+/// theme or `settings.json` is edited. What a change is, is read off the
+/// files' times and sizes, a stat each instead of a read and a parse.
+pub struct LookCache {
+    themes: Option<PathBuf>,
+    settings: Option<PathBuf>,
+    cached: std::sync::Mutex<Option<(Vec<Stamp>, serde_json::Value)>>,
+    loads: std::sync::atomic::AtomicUsize,
+}
+
+type Stamp = (PathBuf, Option<(std::time::SystemTime, u64)>);
+
+impl LookCache {
+    pub fn new(themes: Option<PathBuf>, settings: Option<PathBuf>) -> Self {
+        Self {
+            themes,
+            settings,
+            cached: std::sync::Mutex::new(None),
+            loads: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    /// The user's own themes folder and `settings.json`.
+    pub fn system() -> Self {
+        Self::new(user_dir().ok(), crate::settings::path().ok())
+    }
+
+    fn stamps(&self) -> Vec<Stamp> {
+        let stat = |p: PathBuf| {
+            let at = std::fs::metadata(&p)
+                .ok()
+                .and_then(|m| m.modified().ok().map(|t| (t, m.len())));
+            (p, at)
+        };
+        let mut out: Vec<Stamp> = self.settings.iter().cloned().map(stat).collect();
+        if let Some(dir) = &self.themes {
+            out.push(stat(dir.clone()));
+            let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|e| e == "json"))
+                .collect();
+            files.sort();
+            out.extend(files.into_iter().map(stat));
+        }
+        out
+    }
+
+    /// What `ready` carries, read again only when a file moved.
+    pub fn get(&self) -> serde_json::Value {
+        let stamps = self.stamps();
+        let mut cached = self.cached.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((seen, value)) = cached.as_ref()
+            && *seen == stamps
+        {
+            return value.clone();
+        }
+        self.loads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let value = look_in(self.themes.as_deref(), self.settings.as_deref());
+        *cached = Some((stamps, value.clone()));
+        value
+    }
+
+    /// How many times the files were read, for tests.
+    pub fn loads(&self) -> usize {
+        self.loads.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+/// `look` for the daemon: a closure over one `LookCache`.
+pub fn cached_look() -> std::sync::Arc<dyn Fn() -> serde_json::Value + Send + Sync> {
+    let cache = std::sync::Arc::new(LookCache::system());
+    std::sync::Arc::new(move || cache.get())
 }
 
 fn palettes_in(dir: Option<&Path>) -> Vec<serde_json::Value> {
@@ -503,6 +590,69 @@ mod tests {
                 assert!(c.len() == 7 && c.starts_with('#'), "{c}");
             }
         }
+    }
+
+    #[test]
+    fn the_look_is_read_once_until_a_file_changes() {
+        let dir = std::env::temp_dir().join(format!("jw-lookc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("tokyo.json"), TOKYO).unwrap();
+        let settings = dir.join("settings.json");
+        let cache = LookCache::new(Some(dir.clone()), Some(settings.clone()));
+        let first = cache.get();
+        assert_eq!(cache.get(), first);
+        assert_eq!(cache.get(), first);
+        assert_eq!(cache.loads(), 1, "it read the files every time");
+        // The settings change: a different slot, read again.
+        std::fs::write(&settings, r#"{"dark": "tokyo"}"#).unwrap();
+        assert_eq!(cache.get()["settings"]["dark"], "tokyo");
+        assert_eq!(cache.loads(), 2);
+        // A theme is added: read again, and it is in.
+        std::fs::write(dir.join("mine.json"), TOKYO.replace("tokyo", "mine")).unwrap();
+        let names: Vec<String> = cache.get()["palettes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["name"].as_str().unwrap().to_string())
+            .collect();
+        assert!(names.contains(&"mine".to_string()), "{names:?}");
+        assert_eq!(cache.loads(), 3);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_file_over_the_cap_is_left_out_not_read() {
+        let dir = std::env::temp_dir().join(format!("jw-lookbig-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // A valid theme padded past the cap, and a settings file the same.
+        let big = TOKYO.replace(
+            "\"cyan\"",
+            &format!("\"pad\": \"{}\", \"cyan\"", "x".repeat(70_000)),
+        );
+        std::fs::write(dir.join("big.json"), &big).unwrap();
+        std::fs::write(dir.join("tokyo.json"), TOKYO).unwrap();
+        let settings = dir.join("settings.json");
+        std::fs::write(
+            &settings,
+            format!(r#"{{"dark": "tokyo", "pad": "{}"}}"#, "x".repeat(70_000)),
+        )
+        .unwrap();
+        let v = look_in(Some(&dir), Some(&settings));
+        let names: Vec<&str> = v["palettes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["name"].as_str().unwrap())
+            .collect();
+        assert!(
+            names.contains(&"tokyo") && !names.contains(&"big"),
+            "{names:?}"
+        );
+        // The oversize settings are not read: the defaults.
+        assert_eq!(v["settings"]["dark"], "one-dark");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -16,7 +16,7 @@ Cloudflare tunnel; `jw mobile` and the TUI are clients of that service. Nothing 
   returns, `palettes` and `settings`, asked at every `ready`.
 - `src/tunnel.rs`: `up` starts `cloudflared`, waits for its name and for DNS, and says each
   step; `Tunnel` is a clonable handle whose last drop kills the process. Every wait takes a
-  `cancel` check. `JW_CLOUDFLARED` names another program and skips the DNS wait (tests).
+  `cancel` check. `JW_CLOUDFLARED` names another program and skips the DNS wait: a seam for tests only (they run the real binary, so it cannot be `cfg(test)`); an empty value is ignored. Each DNS lookup runs on its own thread, so a hung resolver cannot hold up a stop.
 - `src/auth.rs`: `Pairing` (the one-use token), `Store` (`mobile.json`, hashes only), `Limiter`
   (failed attempts per address).
 
@@ -30,8 +30,9 @@ Cloudflare tunnel; `jw mobile` and the TUI are clients of that service. Nothing 
 - **Check the protocol here.** The daemon does not compare versions; the bridge does, per phone.
 - **Secrets are stored hashed, the file is 0600, and every change takes the `flock`.** `jw mobile
   revoke` writes it from another process while the bridge runs.
-- **Anything printed on the PC from a phone is cleaned first** (`clean`): no escape codes in
-  someone's terminal.
+- **Anything printed on the PC from a phone is cleaned first** (`jw_proto::proto::clean`): no
+  escape codes and no bidi controls in someone's terminal.
+- **A phone's `Mobile*` frames are refused** (`mobile_control`): mobile is driven at the PC.
 - **Behind `cloudflared` every peer is 127.0.0.1.** The limiter keys on `Cf-Connecting-Ip`.
 - **A slow phone must not grow memory, and a stalled one is dropped.** The queue from the
   daemon is bounded on purpose, so the daemon's own queue limit takes over.

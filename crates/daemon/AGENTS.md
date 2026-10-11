@@ -43,7 +43,9 @@ workspace ids are already unique across them.
 - **Never block a pane's reader thread on a client.** Clients go through their `Tx`.
 - **Mobile never takes a pane, workspace or session lock** (REQ-40), and never holds its own
   `Core` lock while it waits for the network, the tunnel or a person. `Mobile::stop` kills
-  `cloudflared`, answers every question no and closes every phone before it joins anything.
+  `cloudflared` and answers every question no first; closing the phones' sockets and joining
+  happen on another thread that is waited for up to the limit. The device list is cached: a
+  state never reads `mobile.json` under a lock.
 - **Panes get `JW_PANE_ID`.** claude's hooks (`jw hook`) find their pane by it.
 
 ## Tests

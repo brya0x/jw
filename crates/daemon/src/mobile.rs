@@ -29,6 +29,9 @@ use jw_web::tunnel::{self, Step, Tunnel};
 use crate::outbox::Tx;
 use crate::proto::{DaemonMsg, MobileDevice, MobileState};
 
+/// What a test runs at a named point of the service.
+pub type Hook = Arc<dyn Fn(&str) + Send + Sync>;
+
 /// The waits, which tests shorten.
 #[derive(Clone)]
 pub struct Tuning {
@@ -40,6 +43,9 @@ pub struct Tuning {
     pub waits: tunnel::Waits,
     /// Another `mobile.json` than the one in jw's config dir (tests).
     pub store: Option<PathBuf>,
+    /// Called with `start` as the start thread begins and with `stop` as a
+    /// stop's slow part begins (tests: to stall or to panic there).
+    pub hook: Option<Hook>,
 }
 
 impl Default for Tuning {
@@ -49,6 +55,15 @@ impl Default for Tuning {
             tick: Duration::from_secs(1),
             waits: tunnel::Waits::default(),
             store: None,
+            hook: None,
+        }
+    }
+}
+
+impl Tuning {
+    fn hook(&self, stage: &str) {
+        if let Some(hook) = &self.hook {
+            hook(stage);
         }
     }
 }
@@ -70,7 +85,7 @@ struct Core {
     epoch: u64,
     phase: Phase,
     read_only: bool,
-    bridge: Option<Bridge>,
+    bridge: Option<Arc<Bridge>>,
     tunnel: Option<Tunnel>,
     host: String,
     token: String,
@@ -85,10 +100,22 @@ struct Inner {
     /// Clients that sent `MobileWatch`, until they leave.
     watchers: Mutex<Vec<(u64, Tx)>>,
     pending: Mutex<HashMap<u64, mpsc::Sender<Answer>>>,
+    /// Only if the system has no random bytes to give.
     next_request: AtomicU64,
+    /// The paired phones as the store last said, so a state does not read the
+    /// file while a lock is held.
+    devices: Mutex<Devices>,
     /// What was sent last, with the countdown left out, so nothing is sent
     /// twice.
     last: Mutex<Option<MobileState>>,
+}
+
+/// The store's devices and the stamp of the file they were read from.
+#[derive(Default)]
+struct Devices {
+    stamp: Option<(std::time::SystemTime, u64)>,
+    loaded: bool,
+    list: Vec<jw_web::auth::Device>,
 }
 
 /// The service. Clones share it.
@@ -117,12 +144,14 @@ impl Mobile {
             watchers: Mutex::default(),
             pending: Mutex::default(),
             next_request: AtomicU64::new(1),
+            devices: Mutex::default(),
             last: Mutex::default(),
         }))
     }
 
     /// Makes `client` a watcher and tells it where mobile stands (REQ-35).
     pub fn watch(&self, client: u64, tx: &Tx) {
+        self.0.refresh_devices();
         // Under `last`, so a push cannot reach this client before the state
         // it is told first, nor fall between the two.
         let _push = lock(&self.0.last);
@@ -168,16 +197,29 @@ impl Mobile {
         };
         let inner = Arc::clone(&self.0);
         thread::spawn(move || {
-            if let Err(why) = inner.bring_up(epoch, read_only) {
-                inner.fail(epoch, why);
+            // A panic must not leave `starting` for good: it is a failure
+            // with a reason, and the next start works.
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                inner.tuning.hook("start");
+                inner.bring_up(epoch, read_only)
+            }));
+            match run {
+                Ok(Ok(())) => {}
+                Ok(Err(why)) => inner.fail(epoch, why),
+                Err(_) => inner.fail(
+                    epoch,
+                    "mobile stopped working unexpectedly; start it again".into(),
+                ),
             }
         });
         self.0.push();
     }
 
-    /// Stops mobile: `cloudflared` is killed and every phone and question
-    /// closed before this returns; the threads are joined on another one, and
-    /// waited for up to `wait` (REQ-9).
+    /// Stops mobile (REQ-9). `cloudflared` is killed and every question
+    /// answered no before anything that could stall; closing the phones'
+    /// sockets and joining the threads happen on another thread, which is
+    /// waited for up to `wait` and then left behind, so a stalled phone
+    /// cannot keep a signal from ending the daemon in time.
     pub fn stop(&self, wait: Duration) {
         let (bridge, tunnel) = {
             let mut core = lock(&self.0.core);
@@ -187,13 +229,16 @@ impl Mobile {
             core.token.clear();
             (core.bridge.take(), core.tunnel.take())
         };
-        self.0.wind_down(&bridge, &tunnel);
-        self.0.push();
-        if bridge.is_none() && tunnel.is_none() {
-            return;
+        if let Some(tunnel) = &tunnel {
+            tunnel.kill();
         }
+        self.0.cancel_pending();
+        self.0.push();
         let (done, finished) = mpsc::channel();
+        let inner = Arc::clone(&self.0);
         thread::spawn(move || {
+            inner.tuning.hook("stop");
+            inner.wind_down(&bridge, &tunnel);
             drop(bridge);
             drop(tunnel);
             let _ = done.send(());
@@ -203,17 +248,20 @@ impl Mobile {
 
     /// A new pairing code, which ends the one before (REQ-38).
     pub fn code(&self) -> Result<()> {
+        let (bridge, epoch) = {
+            let core = lock(&self.0.core);
+            match (&core.bridge, &core.phase) {
+                (Some(bridge), Phase::Ready) => (Arc::clone(bridge), core.epoch),
+                _ => bail!("mobile is not ready"),
+            }
+        };
+        // Outside `core`: the bridge takes locks of its own.
+        let token = bridge.new_pairing()?;
         {
             let mut core = lock(&self.0.core);
-            let Some(bridge) = core
-                .bridge
-                .as_ref()
-                .filter(|_| matches!(core.phase, Phase::Ready))
-            else {
-                bail!("mobile is not ready");
-            };
-            let token = bridge.new_pairing()?;
-            core.token = token;
+            if core.epoch == epoch {
+                core.token = token;
+            }
         }
         self.0.push();
         Ok(())
@@ -221,12 +269,13 @@ impl Mobile {
 
     /// Applies at once to the phones connected and to new ones (REQ-37).
     pub fn read_only(&self, on: bool) {
-        {
+        let bridge = {
             let mut core = lock(&self.0.core);
             core.read_only = on;
-            if let Some(bridge) = &core.bridge {
-                bridge.set_read_only(on);
-            }
+            core.bridge.clone()
+        };
+        if let Some(bridge) = bridge {
+            bridge.set_read_only(on);
         }
         self.0.push();
     }
@@ -234,6 +283,10 @@ impl Mobile {
     /// The first answer to a pair question wins (REQ-36); later ones find
     /// nothing pending.
     pub fn answer(&self, client: u64, request: u64, yes: bool) {
+        // Only a client that watches can have been shown the question.
+        if !lock(&self.0.watchers).iter().any(|(c, _)| *c == client) {
+            return;
+        }
         if let Some(answer) = lock(&self.0.pending).remove(&request) {
             let _ = answer.send((client, yes));
         }
@@ -248,6 +301,7 @@ impl Mobile {
         if store.revoke(device)?.is_none() {
             bail!("no device {device:?}");
         }
+        self.0.refresh_devices();
         self.0.push();
         Ok(())
     }
@@ -267,13 +321,49 @@ impl Inner {
         Some(Store::open(path))
     }
 
+    fn store_path(&self) -> Option<PathBuf> {
+        match &self.tuning.store {
+            Some(path) => Some(path.clone()),
+            None => Some(config::dir().ok()?.join("mobile.json")),
+        }
+    }
+
+    /// Reads the store again when its file changed (a phone paired or came
+    /// back, a device was revoked from a terminal) or was never read. A stat
+    /// of one file, and a read only when the stamp moved; never called with
+    /// `last` or `core` held.
+    fn refresh_devices(&self) {
+        let Some(path) = self.store_path() else {
+            return;
+        };
+        let stamp = std::fs::metadata(&path)
+            .ok()
+            .and_then(|m| m.modified().ok().map(|t| (t, m.len())));
+        {
+            let cache = lock(&self.devices);
+            if cache.loaded && cache.stamp == stamp {
+                return;
+            }
+        }
+        let list = self
+            .store()
+            .and_then(|s| s.devices().ok())
+            .unwrap_or_default();
+        let mut cache = lock(&self.devices);
+        *cache = Devices {
+            stamp,
+            loaded: true,
+            list,
+        };
+    }
+
     fn current(&self) -> u64 {
         lock(&self.core).epoch
     }
 
     /// Where mobile stands now. The pairing token is in `payload` (RISK-16).
     fn snapshot(&self) -> MobileState {
-        let (phase, step, error, host, token, read_only, connected, left) = {
+        let (phase, step, error, host, token, read_only, bridge) = {
             let core = lock(&self.core);
             let (phase, step, error) = match &core.phase {
                 Phase::Off => ("off", String::new(), String::new()),
@@ -281,10 +371,6 @@ impl Inner {
                 Phase::Ready => ("ready", String::new(), String::new()),
                 Phase::Failed(e) => ("failed", String::new(), e.clone()),
             };
-            let (connected, left) = core
-                .bridge
-                .as_ref()
-                .map_or((Vec::new(), None), |b| (b.connected(), b.pairing_left()));
             (
                 phase,
                 step,
@@ -292,14 +378,16 @@ impl Inner {
                 core.host.clone(),
                 core.token.clone(),
                 core.read_only,
-                connected,
-                left,
+                core.bridge.clone(),
             )
         };
-        let devices = self
-            .store()
-            .and_then(|s| s.devices().ok())
-            .unwrap_or_default()
+        // Asked of the bridge with `core` let go.
+        let (connected, left) = bridge
+            .as_ref()
+            .map_or((Vec::new(), None), |b| (b.connected(), b.pairing_left()));
+        let devices = lock(&self.devices)
+            .list
+            .clone()
             .into_iter()
             .map(|d| MobileDevice {
                 connected: connected.contains(&d.id),
@@ -335,6 +423,8 @@ impl Inner {
     /// the stop's. Lock order: `last`, then `core` (let go again), then
     /// `watchers`; nothing takes `last` while holding either of the others.
     fn push(&self) {
+        // The file is looked at before `last` is taken, never under it.
+        self.refresh_devices();
         let mut last = lock(&self.last);
         let state = self.snapshot();
         let key = MobileState {
@@ -352,10 +442,10 @@ impl Inner {
         lock(&self.watchers).retain(|(_, tx)| tx.send(msg.clone()).is_ok());
     }
 
-    /// The part of ending mobile that has to be quick: kill the tunnel, say
-    /// no to every question, and close every phone's socket. Nothing here
-    /// waits for a thread.
-    fn wind_down(&self, bridge: &Option<Bridge>, tunnel: &Option<Tunnel>) {
+    /// Kills the tunnel, says no to every question and closes every phone's
+    /// socket. Callers that must not stall do this on a thread of their own:
+    /// closing a socket is not promised never to block.
+    fn wind_down(&self, bridge: &Option<Arc<Bridge>>, tunnel: &Option<Tunnel>) {
         if let Some(tunnel) = tunnel {
             tunnel.kill();
         }
@@ -375,7 +465,7 @@ impl Inner {
 
     /// Mobile could not come up, or lost its tunnel: `failed`, with the
     /// reason, unless a stop or a newer start got there first.
-    fn fail(&self, epoch: u64, why: String) {
+    fn fail(self: &Arc<Self>, epoch: u64, why: String) {
         let (bridge, tunnel) = {
             let mut core = lock(&self.core);
             if core.epoch != epoch {
@@ -387,9 +477,14 @@ impl Inner {
             core.token.clear();
             (core.bridge.take(), core.tunnel.take())
         };
-        self.wind_down(&bridge, &tunnel);
+        if let Some(tunnel) = &tunnel {
+            tunnel.kill();
+        }
+        self.cancel_pending();
         self.push();
+        let inner = Arc::clone(self);
         thread::spawn(move || {
+            inner.wind_down(&bridge, &tunnel);
             drop(bridge);
             drop(tunnel);
         });
@@ -432,7 +527,7 @@ impl Inner {
             if core.epoch != epoch {
                 return Ok(());
             }
-            core.bridge = Some(bridge);
+            core.bridge = Some(Arc::new(bridge));
         }
         self.ticker(epoch);
 
@@ -455,15 +550,20 @@ impl Inner {
         let (_tunnel, host) = tunnel::up(port, self.tuning.waits, &cancel, &mut on_step)
             .map_err(|e| e.to_string())?;
 
+        let bridge = {
+            let core = lock(&self.core);
+            if core.epoch != epoch {
+                return Ok(());
+            }
+            core.bridge.clone().ok_or("the bridge is gone")?
+        };
+        // Outside `core`: the bridge takes locks of its own.
+        let token = bridge.new_pairing().map_err(|e| e.to_string())?;
         {
             let mut core = lock(&self.core);
             if core.epoch != epoch {
                 return Ok(());
             }
-            let Some(bridge) = core.bridge.as_ref() else {
-                return Err("the bridge is gone".into());
-            };
-            let token = bridge.new_pairing().map_err(|e| e.to_string())?;
             core.token = token;
             core.host = host;
             core.phase = Phase::Ready;
@@ -498,15 +598,39 @@ impl Inner {
         });
     }
 
+    /// An id nobody can guess: a client that is not shown the question cannot
+    /// answer it by counting.
+    fn new_request(&self, taken: &HashMap<u64, mpsc::Sender<Answer>>) -> u64 {
+        loop {
+            let id = jw_web::auth::random_hex(8)
+                .ok()
+                .and_then(|h| u64::from_str_radix(&h, 16).ok())
+                .unwrap_or_else(|| self.next_request.fetch_add(1, Ordering::Relaxed));
+            if id != 0 && id != CANCELLED.0 && !taken.contains_key(&id) {
+                return id;
+            }
+        }
+    }
+
     /// Puts "pair this phone?" to every watcher and waits for the first
     /// answer (REQ-36). With nobody watching, or nobody answering in time, or
     /// mobile not running, it is no.
     fn ask(&self, name: &str, code: &str) -> bool {
         let (answer, answered) = mpsc::channel();
-        let request = self.next_request.fetch_add(1, Ordering::Relaxed);
         // Registered before the phase is looked at, so a stop either sees
-        // this question and cancels it, or has already left `ready`.
-        lock(&self.pending).insert(request, answer);
+        // this question and cancels it, or has already left `ready`. One
+        // question at a time (REQ-36): a second phone, or a second code used
+        // meanwhile, is refused rather than queued, so the person is never
+        // asked two things at once.
+        let request = {
+            let mut pending = lock(&self.pending);
+            if !pending.is_empty() {
+                return false;
+            }
+            let request = self.new_request(&pending);
+            pending.insert(request, answer);
+            request
+        };
         let running = matches!(lock(&self.core).phase, Phase::Ready);
         let asked = running && {
             let msg = DaemonMsg::MobilePair {
@@ -544,7 +668,22 @@ mod tests {
             store: Some(
                 std::env::temp_dir().join(format!("jw-mobile-unit-{}.json", std::process::id())),
             ),
+            hook: None,
         }
+    }
+
+    /// `fast()` with a store of its own, so a test can write one.
+    fn with_store(name: &str) -> (Tuning, PathBuf) {
+        let path =
+            std::env::temp_dir().join(format!("jw-mobile-{name}-{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        (
+            Tuning {
+                store: Some(path.clone()),
+                ..fast()
+            },
+            path,
+        )
     }
 
     fn service(tuning: Tuning) -> Mobile {
@@ -642,6 +781,129 @@ mod tests {
         m.forget(1);
         assert!(!asker.join().unwrap());
         assert!(t.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn only_a_watcher_can_answer_and_the_ids_are_not_a_count() {
+        let m = service(Tuning {
+            ask_within: Duration::from_secs(5),
+            ..fast()
+        });
+        ready(&m);
+        let (_a, a) = watcher(&m, 1);
+        let _ = next(&a);
+        let asker = {
+            let m = m.clone();
+            thread::spawn(move || m.0.ask("Pixel", "482913"))
+        };
+        let request = pair_request(&a);
+        assert!(request > 1_000_000, "{request} is a counter");
+        // Another client on the socket, that never watched, cannot answer.
+        m.answer(77, request, true);
+        quiet(&a);
+        assert!(lock(&m.0.pending).contains_key(&request), "it was answered");
+        m.answer(1, request, false);
+        assert!(!asker.join().unwrap());
+    }
+
+    #[test]
+    fn a_second_question_is_refused_while_one_is_open() {
+        let m = service(Tuning {
+            ask_within: Duration::from_secs(5),
+            ..fast()
+        });
+        ready(&m);
+        let (_a, a) = watcher(&m, 1);
+        let _ = next(&a);
+        let first = {
+            let m = m.clone();
+            thread::spawn(move || m.0.ask("Pixel", "482913"))
+        };
+        let request = pair_request(&a);
+        let t = std::time::Instant::now();
+        assert!(!m.0.ask("Galaxy", "111222"), "a second question was asked");
+        assert!(t.elapsed() < Duration::from_secs(1));
+        quiet(&a);
+        m.answer(1, request, true);
+        assert!(first.join().unwrap());
+    }
+
+    #[test]
+    fn a_stop_that_cannot_finish_is_still_over_in_time() {
+        let stalled = Arc::new(AtomicU64::new(0));
+        let seen = stalled.clone();
+        let m = service(Tuning {
+            hook: Some(Arc::new(move |stage| {
+                if stage == "stop" {
+                    seen.fetch_add(1, Ordering::SeqCst);
+                    // A phone whose socket never lets go.
+                    thread::sleep(Duration::from_secs(5));
+                }
+            })),
+            ..fast()
+        });
+        ready(&m);
+        let t = std::time::Instant::now();
+        m.stop(Duration::from_millis(300));
+        assert!(t.elapsed() < Duration::from_secs(1), "{:?}", t.elapsed());
+        assert_eq!(m.snapshot().phase, "off");
+        thread::sleep(Duration::from_millis(100));
+        assert_eq!(stalled.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_panic_while_starting_becomes_a_failure_and_the_next_start_works() {
+        let (tuning, _) = with_store("panic");
+        let m = service(Tuning {
+            hook: Some(Arc::new(|stage| {
+                if stage == "start" {
+                    panic!("a bug in the start");
+                }
+            })),
+            ..tuning
+        });
+        let (tx, got) = watcher(&m, 1);
+        let _ = next(&got);
+        m.start(false, &tx);
+        let failed = loop {
+            if let DaemonMsg::MobileState(s) = next(&got)
+                && s.phase == "failed"
+            {
+                break s;
+            }
+        };
+        assert!(failed.error.contains("unexpectedly"), "{}", failed.error);
+        // Failed is not starting: a start is accepted again.
+        m.start(false, &tx);
+        assert!(matches!(
+            lock(&m.0.core).phase,
+            Phase::Starting(_) | Phase::Failed(_)
+        ));
+    }
+
+    #[test]
+    fn the_state_does_not_read_the_store_it_has_cached() {
+        let (tuning, path) = with_store("cache");
+        let m = service(tuning);
+        let store = Store::open(path.clone());
+        store.add("Pixel 8", &jw_web::auth::hash("secret")).unwrap();
+        m.0.refresh_devices();
+        assert_eq!(m.snapshot().devices.len(), 1);
+        // The file goes; a snapshot, which is what runs under `last`, does
+        // not look.
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(m.snapshot().devices.len(), 1);
+        // The next look at the file does.
+        m.0.refresh_devices();
+        assert!(m.snapshot().devices.is_empty());
+        // A change is picked up by the stamp, and a revoke at once.
+        let store = Store::open(path.clone());
+        store.add("Tablet", &jw_web::auth::hash("other")).unwrap();
+        m.0.refresh_devices();
+        assert_eq!(m.snapshot().devices[0].name, "Tablet");
+        m.revoke("Tablet").unwrap();
+        assert!(m.snapshot().devices.is_empty());
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

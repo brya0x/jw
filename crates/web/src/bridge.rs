@@ -24,6 +24,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use jw_proto::proto::clean;
 use jw_proto::proto::{
     ClientMsg, DaemonMsg, MAX_FRAME, PROTOCOL, read_frame, read_raw, write_frame, write_raw,
 };
@@ -177,14 +178,19 @@ struct Online<'a>(&'a Shared, String);
 
 impl<'a> Online<'a> {
     fn enter(shared: &'a Shared, device: &str) -> Self {
-        shared.online.lock().unwrap().push(device.to_string());
+        shared
+            .online
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(device.to_string());
         Self(shared, device.to_string())
     }
 }
 
 impl Drop for Online<'_> {
     fn drop(&mut self) {
-        let mut online = self.0.online.lock().unwrap();
+        // A poisoned lock must not make a drop panic, which would abort.
+        let mut online = self.0.online.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(at) = online.iter().position(|d| *d == self.1) {
             online.remove(at);
         }
@@ -265,7 +271,11 @@ impl Bridge {
 
     /// The ids of the devices connected now, once per connection.
     pub fn connected(&self) -> Vec<String> {
-        self.shared.online.lock().unwrap().clone()
+        self.shared
+            .online
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Closes every phone's socket and refuses new ones, without waiting for
@@ -395,8 +405,10 @@ fn serve(stream: TcpStream, shared: &Shared, socket: &Path) -> Result<(), WsErro
             "bridge": 1,
             "protocol": PROTOCOL,
             "read_only": shared.read_only.load(Ordering::SeqCst),
-            "palettes": look["palettes"],
-            "settings": look["settings"],
+            // A callback that left a key out gives the app an empty one, not
+            // a `null` it would have to guard against.
+            "palettes": look.get("palettes").cloned().unwrap_or_else(|| serde_json::json!([])),
+            "settings": look.get("settings").cloned().unwrap_or_else(|| serde_json::json!({})),
         })
         .to_string(),
     ))?;
@@ -517,13 +529,6 @@ fn authenticate(
     }
 }
 
-/// A name or a code that is printed on the PC must not carry escape
-/// sequences into the person's terminal.
-fn clean(s: &str, max: usize) -> String {
-    let s: String = s.chars().filter(|c| !c.is_control()).take(max).collect();
-    s.trim().to_string()
-}
-
 /// Phone to daemon and daemon to phone, until either side ends.
 fn relay(
     ws: &mut WebSocket<TcpStream>,
@@ -567,6 +572,9 @@ fn relay(
             Ok(message) => {
                 heard = Instant::now();
                 match message {
+                    Message::Binary(body) if mobile_control(&body) => {
+                        ws.send(error("unsupported", "mobile is controlled at the PC"))?;
+                    }
                     Message::Binary(body)
                         if shared.read_only.load(Ordering::SeqCst) && !looking(&body) =>
                     {
@@ -587,10 +595,8 @@ fn relay(
     }
 }
 
-/// Whether a frame only looks (REQ-7). It is decided on the message's own
-/// tag, for both kinds of frame, and anything else is refused, so a message
-/// added later is refused until it is allowed here.
-fn looking(body: &[u8]) -> bool {
+/// The tag of a frame: the `t` of its JSON head, for both kinds of frame.
+fn tag_of(body: &[u8]) -> Option<String> {
     #[derive(Deserialize)]
     struct Tag {
         t: String,
@@ -598,21 +604,31 @@ fn looking(body: &[u8]) -> bool {
     let head = match body.first() {
         Some(0) => &body[1..],
         Some(1) => {
-            let Some(n) = body.get(1..5) else {
-                return false;
-            };
+            let n = body.get(1..5)?;
             let n = u32::from_be_bytes([n[0], n[1], n[2], n[3]]) as usize;
-            match body.get(5..5 + n) {
-                Some(head) => head,
-                None => return false,
-            }
+            body.get(5..5 + n)?
         }
-        _ => return false,
+        _ => return None,
     };
+    serde_json::from_slice::<Tag>(head).ok().map(|t| t.t)
+}
+
+/// Whether a frame only looks (REQ-7). It is decided on the message's own
+/// tag, for both kinds of frame, and anything else is refused, so a message
+/// added later is refused until it is allowed here.
+fn looking(body: &[u8]) -> bool {
     matches!(
-        serde_json::from_slice::<Tag>(head),
-        Ok(Tag { t }) if matches!(t.as_str(), "Hello" | "Attach" | "Detach" | "List")
+        tag_of(body).as_deref(),
+        Some("Hello" | "Attach" | "Detach" | "List")
     )
+}
+
+/// Whether a frame drives mobile itself (`MobileWatch`, `MobileAnswer`,
+/// `MobileRevoke`…): that is for whoever is at the PC. A phone that got in
+/// could otherwise watch the pairing code, answer its own questions or stop
+/// the tunnel under the others.
+fn mobile_control(body: &[u8]) -> bool {
+    tag_of(body).is_some_and(|t| t.starts_with("Mobile"))
 }
 
 fn idle(e: &io::Error) -> bool {
@@ -982,6 +998,25 @@ mod tests {
     }
 
     #[test]
+    fn a_look_without_its_keys_is_an_empty_one_not_null() {
+        let r = rig(Opts {
+            look: Arc::new(|| serde_json::json!({})),
+            ..Opts::default()
+        });
+        let mut p = phone(&r.bridge);
+        login(&mut p, &enrol(&r, "a"));
+        // `login` read the ready; ask again with a second phone to see it whole.
+        let mut q = phone(&r.bridge);
+        say(
+            &mut q,
+            serde_json::json!({ "t": "auth", "device": enrol(&r, "b") }),
+        );
+        let v = json(&mut q);
+        assert_eq!(v["palettes"], serde_json::json!([]), "{v}");
+        assert_eq!(v["settings"], serde_json::json!({}), "{v}");
+    }
+
+    #[test]
     fn pairing_asks_the_pc_and_hands_out_a_token_it_keeps_only_hashed() {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let log = seen.clone();
@@ -1165,6 +1200,34 @@ mod tests {
         assert_eq!(code(&mut p), "read_only");
         r.bridge.set_read_only(false);
         echoed(&mut p);
+    }
+
+    #[test]
+    fn a_phone_cannot_drive_mobile_itself() {
+        for sent in [
+            ClientMsg::MobileWatch,
+            ClientMsg::MobileAnswer {
+                request: 1,
+                yes: true,
+            },
+            ClientMsg::MobileStop,
+            ClientMsg::MobileRevoke { device: "x".into() },
+        ] {
+            let r = rig(Opts::default());
+            let mut p = phone(&r.bridge);
+            login(&mut p, &enrol(&r, "a"));
+            p.send(body(&sent)).unwrap();
+            assert_eq!(code(&mut p), "unsupported", "{sent:?}");
+            // Still connected, and what is not mobile control still flows.
+            p.send(body(&input(1, b"ls"))).unwrap();
+            assert_eq!(
+                msg(&mut p),
+                DaemonMsg::Output {
+                    pane: 1,
+                    bytes: b"ls".to_vec()
+                }
+            );
+        }
     }
 
     #[test]

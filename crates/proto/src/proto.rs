@@ -612,6 +612,23 @@ pub fn is_view(role: &str) -> bool {
     role.starts_with("view:")
 }
 
+/// A name or a code a phone chose, made safe to print on the PC (mobile spec,
+/// REQ-27): no control characters, which would move a terminal, and none of
+/// the Unicode bidirectional controls and marks, which would make a name read
+/// differently from what it is. At most `max` characters, trimmed.
+pub fn clean(s: &str, max: usize) -> String {
+    let bidi = |c: char| {
+        matches!(c,
+            '\u{200e}' | '\u{200f}' | '\u{061c}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+    };
+    let s: String = s
+        .chars()
+        .filter(|c| !c.is_control() && !bidi(*c))
+        .take(max)
+        .collect();
+    s.trim().to_string()
+}
+
 /// `$JW_SOCKET`, else `$XDG_RUNTIME_DIR/jw/jw.sock`, else
 /// `~/.local/state/jw/jw.sock`.
 pub fn socket_path() -> PathBuf {
@@ -710,6 +727,19 @@ mod tests {
         for m in &up {
             assert_eq!(read_frame::<ClientMsg>(&mut r).unwrap().as_ref(), Some(m));
         }
+    }
+
+    #[test]
+    fn what_a_phone_chose_is_cleaned_before_anyone_prints_it() {
+        assert_eq!(clean("Pixel\u{1b}[31m 8\u{7}\n", 40), "Pixel[31m 8");
+        // A right-to-left override would make "Pixel" read as "lexiP".
+        assert_eq!(
+            clean("\u{202e}lexiP\u{2066}!\u{2069}\u{200f}", 40),
+            "lexiP!"
+        );
+        assert_eq!(clean(&"a".repeat(100), 40).chars().count(), 40);
+        assert_eq!(clean("  Pixel  ", 40), "Pixel");
+        assert_eq!(clean("\u{1b}\u{202e}", 40), "");
     }
 
     #[test]

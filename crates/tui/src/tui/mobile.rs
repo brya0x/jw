@@ -19,7 +19,7 @@ use ratatui::text::{Line, Span};
 use super::App;
 use super::modal::{Modal, boxed, key_line};
 use crate::ago::ago;
-use crate::proto::{ClientMsg, DaemonMsg, MobileDevice, MobileState};
+use crate::proto::{ClientMsg, DaemonMsg, MobileDevice, MobileState, clean};
 use crate::qr::Qr;
 use crate::theme::p;
 
@@ -96,16 +96,6 @@ impl Mobile {
     pub fn waiting(&self) -> bool {
         !self.held.is_empty()
     }
-}
-
-/// Strips what could move a terminal; a phone chose these words (REQ-27).
-fn clean(s: &str, max: usize) -> String {
-    s.chars()
-        .filter(|c| !c.is_control())
-        .take(max)
-        .collect::<String>()
-        .trim()
-        .to_string()
 }
 
 impl App {

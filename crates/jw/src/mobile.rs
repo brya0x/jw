@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use std::io::{self, BufRead};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use jw_core::ago::ago;
@@ -25,7 +25,15 @@ use jw_web::auth::Store;
 
 use crate::client::Client;
 use crate::core;
-use crate::proto::{self, ClientMsg, DaemonMsg, MobileState, PROTOCOL};
+use crate::proto::{self, ClientMsg, DaemonMsg, MobileState, PROTOCOL, clean as clean_text};
+
+/// The longest name or code of a phone shown here.
+const NAME_MAX: usize = 40;
+
+/// What a phone chose, cleaned before it reaches this terminal (REQ-27).
+fn clean(s: &str) -> String {
+    clean_text(s, NAME_MAX)
+}
 
 const USAGE: &str = "usage: jw mobile [--read-only] | stop | devices | revoke <device>";
 
@@ -87,20 +95,17 @@ fn devices() -> Result<()> {
         return Ok(());
     }
     let now = now();
-    let width = devices
-        .iter()
-        .map(|d| d.name.chars().count())
-        .max()
-        .unwrap_or(0);
+    let names: Vec<String> = devices.iter().map(|d| clean(&d.name)).collect();
+    let width = names.iter().map(|n| n.chars().count()).max().unwrap_or(0);
     println!(
         "{:<8}  {:<width$}  {:<12}  last seen",
         "id", "name", "paired"
     );
-    for d in devices {
+    for (d, name) in devices.iter().zip(&names) {
         println!(
             "{:<8}  {:<width$}  {:<12}  {}",
-            d.id,
-            d.name,
+            clean(&d.id),
+            name,
             ago(now, d.created),
             ago(now, d.last_seen),
         );
@@ -113,7 +118,8 @@ fn revoke(who: &str) -> Result<()> {
         Some(d) => {
             println!(
                 "revoked {} ({}); it is cut off within seconds",
-                d.name, d.id
+                clean(&d.name),
+                clean(&d.id)
             );
             Ok(())
         }
@@ -140,9 +146,25 @@ fn stop() -> Result<()> {
         return Ok(());
     }
     c.send(&ClientMsg::MobileStop)?;
-    c.set_read_timeout(Some(STOP_WITHIN))?;
+    // One deadline for the whole wait, not one per read: a daemon that keeps
+    // saying something else cannot keep this going.
+    let until = Instant::now() + STOP_WITHIN;
     loop {
-        if state(&mut c)?.phase == "off" {
+        let left = until.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            bail!("mobile did not stop within {STOP_WITHIN:?}; the daemon may be stuck");
+        }
+        c.set_read_timeout(Some(left))?;
+        let phase = state(&mut c).map_err(|e| {
+            if until <= Instant::now() {
+                anyhow::anyhow!(
+                    "mobile did not stop within {STOP_WITHIN:?}; the daemon may be stuck"
+                )
+            } else {
+                e
+            }
+        })?;
+        if phase.phase == "off" {
             println!("mobile stopped; phones were cut off");
             return Ok(());
         }
@@ -372,12 +394,6 @@ fn step_text(step: &str) -> &'static str {
     }
 }
 
-/// Strips what could move a terminal: a name or a code that came from a phone
-/// is printed here (REQ-27).
-fn clean(s: &str) -> String {
-    s.chars().filter(|c| !c.is_control()).collect()
-}
-
 /// `482913` as `482 913`, which is how the phone shows it.
 fn group(code: &str) -> String {
     code.as_bytes()
@@ -388,7 +404,7 @@ fn group(code: &str) -> String {
 }
 
 fn show_code(s: &MobileState) -> Result<()> {
-    eprintln!("\n{}", ansi(&Qr::new(&s.payload)?));
+    eprintln!("\n{}", ansi(&Qr::new(&s.payload)?, true_colour()));
     eprintln!("  Scan it with the jw app. It works once, for two minutes.");
     eprintln!("  {}", s.payload);
     if s.read_only {
@@ -399,15 +415,30 @@ fn show_code(s: &MobileState) -> Result<()> {
     Ok(())
 }
 
+/// Whether the terminal says it does 24-bit colour (`COLORTERM`).
+fn true_colour() -> bool {
+    std::env::var("COLORTERM").is_ok_and(|v| matches!(v.as_str(), "truecolor" | "24bit"))
+}
+
 /// A QR drawn black on white with half blocks, two modules to a character
 /// cell. The colours are true colour, not palette entries, which a terminal's
 /// theme would remap (One Dark's white is grey).
-fn ansi(qr: &Qr) -> String {
-    let rgb = |dark: bool| if dark { "0;0;0" } else { "255;255;255" };
+fn ansi(qr: &Qr, truecolor: bool) -> String {
+    // Without 24-bit colour, the two ends of the 256-colour cube: 16 is
+    // black and 231 is white in every terminal that has the cube.
+    let paint = |top: bool, bottom: bool| {
+        if truecolor {
+            let rgb = |dark: bool| if dark { "0;0;0" } else { "255;255;255" };
+            format!("\x1b[38;2;{};48;2;{}m▀", rgb(top), rgb(bottom))
+        } else {
+            let c = |dark: bool| if dark { 16 } else { 231 };
+            format!("\x1b[38;5;{};48;5;{}m▀", c(top), c(bottom))
+        }
+    };
     let mut out = String::new();
     for row in qr.cells() {
         for (top, bottom) in row {
-            out.push_str(&format!("\x1b[38;2;{};48;2;{}m▀", rgb(top), rgb(bottom)));
+            out.push_str(&paint(top, bottom));
         }
         out.push_str("\x1b[0m\n");
     }
@@ -440,6 +471,7 @@ mod tests {
     #[test]
     fn what_a_phone_sent_is_printed_without_control_characters() {
         assert_eq!(clean("Pixel\x1b[31m 8\x07\n"), "Pixel[31m 8");
+        assert_eq!(clean("\u{202e}lexiP"), "lexiP");
     }
 
     #[test]
@@ -472,12 +504,17 @@ mod tests {
     #[test]
     fn the_qr_is_drawn_two_modules_to_a_cell_in_true_colour() {
         let qr = Qr::new("jw://a.trycloudflare.com/00112233445566778899aabbccddeeff").unwrap();
-        let text = ansi(&qr);
+        let text = ansi(&qr, true);
         let rows: Vec<&str> = text.lines().collect();
         assert_eq!(rows.len(), qr.size().div_ceil(2));
         assert!(rows.iter().all(|r| r.matches('▀').count() == qr.size()));
         assert!(rows[0].contains("\x1b[38;2;255;255;255;48;2;255;255;255m"));
         assert!(!rows[0].contains("38;2;0;0;0"));
+        // A terminal that does not say it has true colour gets the cube's
+        // black and white.
+        let plain = ansi(&qr, false);
+        assert!(!plain.contains("38;2;") && plain.contains("\x1b[38;5;231;48;5;231m"));
+        assert!(plain.contains("\x1b[38;5;16;48;5;"));
     }
 
     #[test]

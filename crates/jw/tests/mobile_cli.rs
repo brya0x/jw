@@ -469,13 +469,25 @@ fn devices_and_revoke_work_with_no_daemon_and_start_none() {
     std::fs::create_dir_all(&config).unwrap();
     let store = jw_web::auth::Store::open(config.join("mobile.json"));
     store.add("Pixel 8", &jw_web::auth::hash("secret")).unwrap();
+    store
+        .add(
+            "Evil\u{1b}]0;owned\u{7}\u{202e}lexiP",
+            &jw_web::auth::hash("other"),
+        )
+        .unwrap();
 
     let (ok, out, err) = env.run(&["devices"]);
     assert!(ok, "{err}");
     assert!(out.contains("Pixel 8"), "{out}");
+    // What a phone named itself does not reach this terminal (REQ-27).
+    assert!(out.contains("Evil]0;ownedlexiP"), "{out}");
+    assert!(
+        !out.contains('\u{1b}') && !out.contains('\u{7}') && !out.contains('\u{202e}'),
+        "{out:?}"
+    );
     let (ok, out, err) = env.run(&["revoke", "Pixel 8"]);
     assert!(ok, "{err}");
     assert!(out.contains("revoked Pixel 8"), "{out}");
-    assert!(store.devices().unwrap().is_empty());
+    assert_eq!(store.devices().unwrap().len(), 1);
     assert!(!env.socket.exists(), "a daemon was started");
 }
