@@ -98,7 +98,7 @@ supersedes:  []
 | 47 | THE ready view SHALL draw the QR through `core::qr`, with the time left before the code ends; IF the area is smaller than the QR and its words need (70×30 for the usual link; more for a longer tunnel name), THEN it SHALL not draw the QR, SHALL say the size it needs, show the link without its token, and `c` SHALL copy the whole link (OSC 52). The code is level L, so the usual 88-byte link is version 5: 37 modules and a four-module quiet zone on each side, 45 across and 23 character cells tall. |
 | 48 | WHEN the code has expired, here (the seconds counted from the state's arrival) or at the daemon (`payload` empty), the ready view SHALL say so, draw no QR, and offer `n`. |
 | 49 | WHEN `MobileState` is `failed`, the error view SHALL show the daemon's message, such as "cloudflared is not installed; brew install cloudflared". The daemon SHALL also move to `failed`, and stop the bridge, when `cloudflared` ends by itself while ready. |
-| 50 | THE mobile feature SHALL bump `PROTOCOL` once, to the first number free past main's when it merges (`proto/AGENTS.md:23-24`). It is 10 while main is 9 (checked 2026-10-11 after `git fetch`). |
+| 50 | THE mobile feature SHALL bump `PROTOCOL` once, to the first number free past main's when it merges (`proto/AGENTS.md:23-24`). It is 10 while main is 9 (checked 2026-10-11 after `git fetch`). Every wire change made while the feature is in development bumps it too (`MobileState.custom_tunnel` made it 11), so a stale daemon is refused; the number is final when the feature merges. |
 | 51 | WHEN the person opens the scan screen, the app SHALL ask for camera permission on its own screen first; IF it is denied, THEN it SHALL say so and offer `pegar enlace` and the system settings, never a dead viewfinder. |
 | 52 | THE scan screen SHALL read a `jw://` QR by itself, with no shutter, show a terminal-style log (`$ jw scan`, a line saying the QR takes about a minute to appear in jw), and offer a torch and `pegar enlace`; a pasted link that is not a `jw://` tunnel link SHALL be refused with a message. |
 | 53 | WHILE pairing waits for the PC, the app SHALL show the 6-digit code for the person to compare with jw and a cancel button; the PC's answer SHALL end in the home screen or in one failure screen. |
@@ -176,6 +176,7 @@ Order: W1, W2, W3, D1, D2, T1 on the server track and M3 on the app track run in
 
 ## Corrections
 
+- `MobileState.custom_tunnel` was added as "additive" with `#[serde(default)]` and no bump; `crates/proto/AGENTS.md` says any new field bumps `PROTOCOL`. It is 11 now.
 - REQ-51 to REQ-55 came from screens the Android agent invented (camera, permission, pairing code, failures, quick answers) because the first prototype never drew them. The user chose their designs on 2026-10-11 (variant A of each) in `docs/specs/mobile-prototype.html`, v3.
 - RAT-1 first said the bridge belongs **outside** the daemon, in `jw mobile`'s own process, so the daemon never listens on a network. The user asked for mobile inside the TUI and alive after closing it, which only a daemon-hosted server gives; RAT-1 now says that and RISK-14 keeps what the first version was protecting.
 - The first version said the daemon and `PROTOCOL` do not change. They change once (REQ-50).

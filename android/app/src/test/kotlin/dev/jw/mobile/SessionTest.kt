@@ -42,7 +42,7 @@ class SessionTest {
         assertEquals(6, pairing.code.length)
         val c = s.await<UiState.Connected>()
         assertTrue(c.readOnly)
-        assertEquals(10, c.protocol)
+        assertEquals(11, c.protocol)
         assertEquals(FakeBridge.DEVICE, store.device!!.device)
         val hello = fake.received.take()
         assertTrue(hello.contains(""""t":"pair"""") && hello.contains(token) && hello.contains(pairing.code))
