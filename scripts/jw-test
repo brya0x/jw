@@ -1,0 +1,43 @@
+#!/bin/sh
+# Opens this checkout's jw in a new Ghostty window, with its own state, so it
+# never touches your real daemon or settings.
+#
+#   scripts/jw-test            build, then open the window (welcome on)
+#   scripts/jw-test fresh      same, but wipes the test state first
+#   scripts/jw-test stop       stops the test daemon (only its pid)
+#
+# Env: JWT_DIR (default /tmp/jwt), JW_WELCOME (default 1 here: you want to see it).
+set -eu
+REPO=$(cd "$(dirname "$0")/.." && pwd)
+D=${JWT_DIR:-/tmp/jwt}
+PIDFILE=$D/run/jw/jw.pid
+
+stop() {
+  if [ -f "$PIDFILE" ]; then kill "$(cat "$PIDFILE")" 2>/dev/null || true; fi
+}
+
+case "${1:-}" in
+  stop) stop; echo "test daemon stopped"; exit 0 ;;
+  fresh) stop; sleep 0.3; rm -rf "$D" ;;
+esac
+
+(cd "$REPO" && cargo build --workspace -q)
+mkdir -p "$D/home" "$D/run" "$D/state" "$D/cfg"
+if [ ! -d "$D/home/demo/.git" ]; then
+  mkdir -p "$D/home/demo"
+  git -C "$D/home/demo" init -q
+  git -C "$D/home/demo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
+fi
+
+cat > "$D/launch.sh" <<LAUNCH
+#!/bin/sh
+export HOME="$D/home" XDG_RUNTIME_DIR="$D/run" XDG_STATE_HOME="$D/state" XDG_CONFIG_HOME="$D/cfg"
+export JW_WELCOME=${JW_WELCOME:-1} COLORTERM=truecolor SHELL=\${SHELL:-/bin/zsh}
+unset JW_SOCKET JW_SESSION
+cd "$D/home/demo"
+exec "$REPO/target/debug/jw"
+LAUNCH
+chmod +x "$D/launch.sh"
+
+open -na Ghostty --args --title=jw-test --command="$D/launch.sh" --quit-after-last-window-closed=true
+echo "jw-test open (state in $D). Stop its daemon with: scripts/jw-test stop"
