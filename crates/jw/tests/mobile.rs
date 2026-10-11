@@ -107,6 +107,25 @@ impl Rig {
         c
     }
 
+    /// `jw ls --json` in this rig's environment: success, stdout, stderr.
+    fn cli_json(&self) -> (bool, String, String) {
+        let out = Command::new(EXE)
+            .args(["ls", "--json"])
+            .env_clear()
+            .env("JW_SOCKET", &self.socket)
+            .env("XDG_CONFIG_HOME", self.dir.join("config"))
+            .env("XDG_STATE_HOME", self.dir.join("state"))
+            .env("HOME", &self.dir)
+            .env("PATH", "/usr/bin:/bin")
+            .output()
+            .unwrap();
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    }
+
     /// The pid the stub wrote, once it has.
     fn stub_pid(&self) -> i32 {
         let path = self.dir.join("pid");
@@ -706,18 +725,16 @@ fn git(dir: &Path, args: &[&str]) {
     );
 }
 
-#[test]
-fn a_paired_phone_gets_a_workspaces_diff_against_its_base() {
-    use jw_core::core::registry::{Entry, Registry};
-    let rig = Rig::start(Stub::Registers);
-    let repo = rig.dir.join("demo");
+/// A git repository with a commit and an `origin`, so its base is `origin/main`
+/// as for a real project.
+fn repo_with_origin(rig: &Rig, name: &str) -> PathBuf {
+    let repo = rig.dir.join(name);
     std::fs::create_dir_all(&repo).unwrap();
     git(&repo, &["init", "-q", "-b", "main"]);
     std::fs::write(repo.join("a.txt"), "one\ntwo\n").unwrap();
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "-q", "-m", "init"]);
-    // An origin, so the base is `origin/main` as for a real worktree.
-    let origin = rig.dir.join("origin.git");
+    let origin = rig.dir.join(format!("{name}-origin.git"));
     git(
         &rig.dir,
         &[
@@ -736,6 +753,14 @@ fn a_paired_phone_gets_a_workspaces_diff_against_its_base() {
     git(&repo, &["push", "-q", "origin", "main"]);
     git(&repo, &["fetch", "-q", "origin"]);
     git(&repo, &["remote", "set-head", "origin", "main"]);
+    repo
+}
+
+#[test]
+fn a_paired_phone_gets_a_workspaces_diff_against_its_base() {
+    use jw_core::core::registry::{Entry, Registry};
+    let rig = Rig::start(Stub::Registers);
+    let repo = repo_with_origin(&rig, "demo");
     // An edit, and a file git does not know yet.
     std::fs::write(repo.join("a.txt"), "one\ntwo\nthree\n").unwrap();
     std::fs::write(repo.join("b.txt"), "new\n").unwrap();
@@ -807,4 +832,129 @@ fn a_paired_phone_gets_a_workspaces_diff_against_its_base() {
         v["msg"].as_str().unwrap().contains("no workspace nothing"),
         "{v}"
     );
+}
+
+#[test]
+fn every_panes_stream_is_the_id_of_its_item_in_workspaces_for_each_kind() {
+    use jw_core::core::registry::{Entry, Registry};
+    use jw_core::folders::{Folder, Folders};
+    use jw_proto::proto::NewPane;
+    let rig = Rig::start(Stub::Registers);
+    let repo = repo_with_origin(&rig, "demo");
+    let plain = rig.dir.join("plain");
+    std::fs::create_dir_all(&plain).unwrap();
+    let state = rig.dir.join("state").join("jw");
+    let main = jw_core::session::dir(&state, "main").unwrap();
+    std::fs::create_dir_all(&main).unwrap();
+    let folder = |dir: &Path| Folder {
+        dir: dir.display().to_string(),
+        opened: false,
+        created: "2026-10-11T00:00:00Z".into(),
+        agent: None,
+        plain: false,
+        name: None,
+    };
+    Folders {
+        folders: vec![folder(&plain), folder(&repo)],
+    }
+    .save(&main.join("folders.json"))
+    .unwrap();
+
+    let mut w = rig.watcher();
+    let code = up(&mut w);
+    let (mut phone, _) = pair(&rig, &code, &mut w, "Pixel");
+    let ask = |phone: &mut Phone| {
+        phone.say(serde_json::json!({ "t": "workspaces" }));
+        phone.json()["items"].as_array().unwrap().clone()
+    };
+    // The repository's folder is a root; its project says where a worktree goes.
+    let items = ask(&mut phone);
+    let root = items.iter().find(|i| i["kind"] == "root").expect("a root");
+    let project = root["project"].as_str().unwrap().to_string();
+    Registry {
+        entries: vec![Entry {
+            id: "wt-join".into(),
+            name: "feature".into(),
+            project,
+            branch: "feat/feature".into(),
+            path: plain.display().to_string(),
+            root: repo.display().to_string(),
+            ..Entry::default()
+        }],
+    }
+    .save(&state.join("workspaces.json"))
+    .unwrap();
+    let items = ask(&mut phone);
+    let by_kind = |k: &str| {
+        items
+            .iter()
+            .find(|i| i["kind"] == k)
+            .unwrap_or_else(|| panic!("no {k}"))
+    };
+    let wanted = [by_kind("folder"), by_kind("root"), by_kind("worktree")];
+
+    // The TUI opens a workspace's panes under `entry.id`, which is what an
+    // item's `id` is: a pane started that way is listed under it.
+    let mut c = rig.client();
+    for item in wanted {
+        c.send(&ClientMsg::Open {
+            stream: item["id"].as_str().unwrap().into(),
+            tree: jw_core::layout::Tree::from_node(
+                &jw_core::layout::Node {
+                    run: Some("cat".into()),
+                    ..Default::default()
+                },
+                &mut std::iter::once(NewPane {
+                    role: "shell".into(),
+                    cmd: Some("cat".into()),
+                    resume: None,
+                    cwd: std::env::temp_dir(),
+                    env: BTreeMap::new(),
+                    cols: 80,
+                    rows: 24,
+                }),
+            )
+            .unwrap(),
+        })
+        .unwrap();
+    }
+    c.send(&ClientMsg::List).unwrap();
+    let panes = loop {
+        if let DaemonMsg::Panes { panes } = c.recv().unwrap().unwrap() {
+            if panes.len() >= 3 {
+                break panes;
+            }
+            c.send(&ClientMsg::List).unwrap();
+            thread::sleep(Duration::from_millis(50));
+        }
+    };
+    for item in wanted {
+        let id = item["id"].as_str().unwrap();
+        assert!(
+            panes.iter().any(|p| p.stream == id),
+            "{} {id:?} has no pane; the streams are {:?}",
+            item["kind"],
+            panes.iter().map(|p| &p.stream).collect::<Vec<_>>()
+        );
+    }
+    // And the CLI, which builds its list on its own, names the same ids.
+    let (ok, out, err) = {
+        let o = rig.cli_json();
+        (o.0, o.1, o.2)
+    };
+    assert!(ok, "{err}");
+    let listed: serde_json::Value = serde_json::from_str(&out).unwrap();
+    for item in wanted {
+        let id = item["id"].as_str().unwrap();
+        let ws = listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|w| w["id"] == id)
+            .unwrap_or_else(|| panic!("jw ls has no {id}: {out}"));
+        assert!(
+            ws["panes"].as_array().is_some_and(|p| !p.is_empty()),
+            "{ws}"
+        );
+    }
 }
