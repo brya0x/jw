@@ -1,0 +1,225 @@
+//! Motion (addendum 13): easing, colour blends and the clock that tells the
+//! event loop when to wake for a frame.
+//!
+//! Every position comes from an `Instant`, never a frame count (RAT-30), so a
+//! late frame catches up instead of running slow.
+
+// Used from M2 on (workspace switch, status bar, popups).
+#![allow(dead_code)]
+
+use std::io::Write;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
+
+use ratatui::crossterm::execute;
+use ratatui::crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
+use ratatui::style::Color;
+
+/// Fast at the start, settling at the end: the curve every transition uses.
+pub fn ease_out(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    1.0 - (1.0 - t).powi(3)
+}
+
+/// A value moving from `from` to `to` over `dur`.
+#[derive(Clone, Copy, Debug)]
+pub struct Tween {
+    from: f32,
+    to: f32,
+    start: Instant,
+    dur: Duration,
+}
+
+impl Tween {
+    pub fn new(from: f32, to: f32, dur: Duration, now: Instant) -> Self {
+        Self {
+            from,
+            to,
+            start: now,
+            dur,
+        }
+    }
+
+    /// A tween that is already where it ends.
+    pub fn at(v: f32, now: Instant) -> Self {
+        Self::new(v, v, Duration::ZERO, now)
+    }
+
+    /// How far along it is, 0 to 1.
+    fn progress(&self, now: Instant) -> f32 {
+        if self.dur.is_zero() {
+            return 1.0;
+        }
+        let t = now.saturating_duration_since(self.start).as_secs_f32() / self.dur.as_secs_f32();
+        t.clamp(0.0, 1.0)
+    }
+
+    pub fn value(&self, now: Instant) -> f32 {
+        self.from + (self.to - self.from) * ease_out(self.progress(now))
+    }
+
+    pub fn done(&self, now: Instant) -> bool {
+        self.progress(now) >= 1.0
+    }
+
+    /// Heads for `to` from what is on screen now, so an interrupted move
+    /// does not jump (REQ-148).
+    pub fn retarget(&mut self, to: f32, dur: Duration, now: Instant) {
+        *self = Self::new(self.value(now), to, dur, now);
+    }
+}
+
+/// `a` blended toward `b`, `t` of the way. Only true colours blend; any other
+/// pair has no shades in between, so it holds `a` until the end.
+pub fn lerp(a: Color, b: Color, t: f32) -> Color {
+    let t = t.clamp(0.0, 1.0);
+    match (a, b) {
+        (Color::Rgb(ar, ag, ab), Color::Rgb(br, bg, bb)) => {
+            let mix =
+                |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * t).round() as u8;
+            Color::Rgb(mix(ar, br), mix(ag, bg), mix(ab, bb))
+        }
+        _ if t >= 1.0 => b,
+        _ => a,
+    }
+}
+
+/// Whether anything is moving, for the event loop: it wakes every frame
+/// while this is true and blocks when it is not.
+#[derive(Default)]
+pub struct Motion {
+    until: Option<Instant>,
+}
+
+impl Motion {
+    /// Something that lasts `dur` starts now.
+    pub fn kick(&mut self, dur: Duration, now: Instant) {
+        let end = now + dur;
+        if self.until.is_none_or(|u| end > u) {
+            self.until = Some(end);
+        }
+    }
+
+    pub fn active(&self, now: Instant) -> bool {
+        self.until.is_some_and(|u| now < u)
+    }
+}
+
+/// Runs `draw` between `CSI ? 2026 h` and `CSI ? 2026 l`, so the terminal
+/// paints what it wrote whole or not at all (REQ-139). The frame closes
+/// whatever `draw` returns.
+pub fn synced<W: Write, R>(out: &mut W, draw: impl FnOnce() -> R) -> R {
+    let _ = execute!(out, BeginSynchronizedUpdate);
+    let r = draw();
+    let _ = execute!(out, EndSynchronizedUpdate);
+    r
+}
+
+/// REQ-138: `animations` off in the settings stops every transition.
+pub fn enabled() -> bool {
+    crate::settings::get().animations()
+}
+
+/// Colour fades and slides need true colour (RISK-42).
+pub fn truecolor() -> bool {
+    static TRUECOLOR: OnceLock<bool> = OnceLock::new();
+    *TRUECOLOR.get_or_init(|| {
+        matches!(
+            std::env::var("COLORTERM").as_deref(),
+            Ok("truecolor" | "24bit")
+        )
+    })
+}
+
+/// Fades and slides run: animations on and a terminal that can blend.
+pub fn fades() -> bool {
+    enabled() && truecolor()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MS: fn(u64) -> Duration = Duration::from_millis;
+
+    #[test]
+    fn ease_runs_from_zero_to_one_and_never_backs_up() {
+        assert_eq!(ease_out(0.0), 0.0);
+        assert_eq!(ease_out(1.0), 1.0);
+        assert_eq!(ease_out(-3.0), 0.0);
+        assert_eq!(ease_out(9.0), 1.0);
+        let mut last = 0.0;
+        for i in 0..=100 {
+            let v = ease_out(i as f32 / 100.0);
+            assert!(v >= last);
+            last = v;
+        }
+    }
+
+    #[test]
+    fn a_tween_reaches_its_end_at_its_duration() {
+        let t0 = Instant::now();
+        let t = Tween::new(2.0, 10.0, MS(200), t0);
+        assert_eq!(t.value(t0), 2.0);
+        assert!(!t.done(t0 + MS(100)));
+        assert_eq!(t.value(t0 + MS(200)), 10.0);
+        assert!(t.done(t0 + MS(200)));
+        assert_eq!(t.value(t0 + MS(900)), 10.0);
+    }
+
+    #[test]
+    fn a_zero_length_tween_is_done() {
+        let t0 = Instant::now();
+        let t = Tween::at(5.0, t0);
+        assert!(t.done(t0));
+        assert_eq!(t.value(t0), 5.0);
+    }
+
+    #[test]
+    fn an_interrupted_tween_starts_from_where_it_was() {
+        let t0 = Instant::now();
+        let mut t = Tween::new(0.0, 10.0, MS(200), t0);
+        let mid = t.value(t0 + MS(80));
+        t.retarget(0.0, MS(200), t0 + MS(80));
+        assert!((t.value(t0 + MS(80)) - mid).abs() < 1e-4);
+        assert_eq!(t.value(t0 + MS(280)), 0.0);
+    }
+
+    #[test]
+    fn colours_blend_only_in_true_colour() {
+        let a = Color::Rgb(0, 0, 0);
+        let b = Color::Rgb(100, 200, 50);
+        assert_eq!(lerp(a, b, 0.0), a);
+        assert_eq!(lerp(a, b, 1.0), b);
+        assert_eq!(lerp(a, b, 0.5), Color::Rgb(50, 100, 25));
+        assert_eq!(lerp(Color::Blue, Color::Red, 0.5), Color::Blue);
+        assert_eq!(lerp(Color::Blue, Color::Red, 1.0), Color::Red);
+    }
+
+    #[test]
+    fn a_frame_is_wrapped_in_a_synchronized_update_even_when_it_fails() {
+        let mut out = Vec::new();
+        let mut ran = false;
+        let r: Result<(), &str> = synced(&mut out, || {
+            ran = true;
+            Err("no tty")
+        });
+        assert!(ran && r.is_err());
+        assert_eq!(out, b"\x1b[?2026h\x1b[?2026l");
+    }
+
+    #[test]
+    fn motion_is_idle_until_kicked_and_idle_again_after() {
+        let t0 = Instant::now();
+        let mut m = Motion::default();
+        assert!(!m.active(t0));
+        m.kick(MS(100), t0);
+        assert!(m.active(t0 + MS(50)));
+        m.kick(MS(20), t0 + MS(10));
+        assert!(
+            m.active(t0 + MS(99)),
+            "a shorter kick does not cut it short"
+        );
+        assert!(!m.active(t0 + MS(100)));
+    }
+}

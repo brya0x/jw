@@ -28,6 +28,9 @@ pub struct Settings {
     /// How long the leader waits before showing every key.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub which_delay_ms: Option<u64>,
+    /// Transitions on or off (REQ-138); on unless it says false.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub animations: Option<bool>,
     /// Action → key, for the actions that can move (`ACTIONS`).
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub keys: BTreeMap<String, String>,
@@ -74,6 +77,10 @@ impl Settings {
 
     pub fn which_delay(&self) -> std::time::Duration {
         std::time::Duration::from_millis(self.which_delay_ms.unwrap_or(600))
+    }
+
+    pub fn animations(&self) -> bool {
+        self.animations.unwrap_or(true)
     }
 
     /// The key of `action`: the user's, else the default.
@@ -252,6 +259,9 @@ mod tests {
         assert_eq!(s.key("switch"), "space");
         assert_eq!(s.theme_mode(), "system");
         assert_eq!(s.which_delay().as_millis(), 600);
+        assert!(s.animations());
+        let s: Settings = serde_json::from_str(r#"{"animations": false}"#).unwrap();
+        assert!(!s.animations());
         let s: Settings =
             serde_json::from_str(r#"{"keys": {"sessions": "g"}, "dark": "tokyo"}"#).unwrap();
         assert_eq!(s.action("g"), Some("sessions"));

@@ -97,6 +97,13 @@ impl SettingsView {
                     hint: "←→".into(),
                     group: None,
                 },
+                Row {
+                    id: "animations".into(),
+                    label: "animations".into(),
+                    value: val(if s.animations() { "on" } else { "off" }.into()),
+                    hint: "←→ · off applies every change at once".into(),
+                    group: None,
+                },
             ],
             "keys" => ACTIONS
                 .iter()
@@ -356,6 +363,10 @@ impl SettingsView {
             "delay" => {
                 let ms = (s.which_delay().as_millis() as i64 + d as i64 * 100).clamp(0, 2000);
                 self.save(|s| s.which_delay_ms = Some(ms as u64))
+            }
+            "animations" => {
+                let on = !s.animations();
+                self.save(|s| s.animations = Some(on))
             }
             _ => Outcome::Stay,
         }

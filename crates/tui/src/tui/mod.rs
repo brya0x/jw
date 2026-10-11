@@ -4,6 +4,7 @@
 //! Two threads feed one channel: the daemon's messages and the terminal's
 //! events. The main thread applies them and redraws.
 
+mod anim;
 mod diffview;
 mod draw;
 mod finder;
@@ -48,6 +49,13 @@ const SIDEBAR: u16 = 28;
 /// How long the leader waits before showing every key (REQ-31).
 fn which_after() -> Duration {
     crate::settings::get().which_delay()
+}
+
+/// Why the loop wakes without a message.
+enum Wake {
+    Edge,
+    Which,
+    Frame,
 }
 
 enum Msg {
@@ -258,6 +266,12 @@ pub struct App {
     /// Just started, or just switched session: with nothing running, the
     /// next List opens the session's last workspace.
     fresh: bool,
+    /// Whether a transition is running, for the loop's frame deadline.
+    motion: anim::Motion,
+    /// When the last frame was drawn.
+    last_draw: Instant,
+    /// When a held drag next scrolls (REQ-127).
+    edge_due: Option<Instant>,
 }
 
 /// Runs the TUI until the user leaves it. The daemon keeps every pane.
@@ -319,6 +333,7 @@ pub fn run() -> Result<()> {
         app.fail(format!("{e:#}"));
     }
     let result = app.event_loop(&mut terminal, rx);
+    let _ = execute!(std::io::stdout(), terminal::EndSynchronizedUpdate);
     if kitty {
         let _ = execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
     }
@@ -398,6 +413,8 @@ fn log_panics() {
             use std::io::Write;
             let _ = writeln!(f, "panic: {info}\n{bt}");
         }
+        // REQ-139: a frame left open would freeze the screen.
+        let _ = execute!(std::io::stdout(), terminal::EndSynchronizedUpdate);
         prev(info);
     }));
 }
@@ -452,10 +469,54 @@ impl App {
             exit_reason: None,
             watch: crate::settings::Watch::new(),
             fresh: true,
+            motion: anim::Motion::default(),
+            last_draw: Instant::now(),
+            edge_due: None,
         };
         app.reload()?;
         app.send(ClientMsg::List);
         Ok(app)
+    }
+
+    /// Draws one frame, wrapped in a synchronized update so the terminal
+    /// paints it whole or not at all (REQ-139). The frame is closed on every
+    /// path, a failed draw included.
+    fn draw(&mut self, term: &mut ratatui::DefaultTerminal) -> Result<()> {
+        let mut out = std::io::stdout();
+        let drawn = anim::synced(&mut out, || term.draw(|f| draw::draw(f, self)));
+        self.last_draw = Instant::now();
+        drawn?;
+        Ok(())
+    }
+
+    /// The soonest thing the loop must wake for without a message: a held
+    /// drag scrolling, the which-key popup, or the next frame of a transition
+    /// (REQ-137). `None` blocks until a message comes, so an idle jw costs
+    /// nothing (RAT-29).
+    fn next_wake(&mut self, now: Instant) -> Option<(Instant, Wake)> {
+        match (self.edge.is_some(), self.edge_due) {
+            (false, _) => self.edge_due = None,
+            (true, None) => self.edge_due = Some(now + EDGE_EVERY),
+            (true, Some(_)) => {}
+        }
+        let mut wake: Option<(Instant, Wake)> = None;
+        let mut soonest = |at: Instant, w: Wake| {
+            if wake.as_ref().is_none_or(|(best, _)| at < *best) {
+                wake = Some((at, w));
+            }
+        };
+        if let Some(at) = self.edge_due {
+            soonest(at, Wake::Edge);
+        }
+        if let Some(at) = self.leader_at
+            && !self.which
+        {
+            soonest(at + which_after(), Wake::Which);
+        }
+        if self.motion.active(now) {
+            soonest(self.last_draw + FRAME, Wake::Frame);
+        }
+        wake
     }
 
     fn event_loop(
@@ -463,37 +524,29 @@ impl App {
         terminal: &mut ratatui::DefaultTerminal,
         rx: Receiver<Msg>,
     ) -> Result<()> {
-        terminal.draw(|f| draw::draw(f, self))?;
+        self.draw(terminal)?;
         while !self.quit {
-            let first = if self.edge.is_some() {
-                match rx.recv_timeout(EDGE_EVERY) {
+            let now = Instant::now();
+            let first = match self.next_wake(now) {
+                None => rx.recv().context("event channels closed")?,
+                Some((at, wake)) => match rx.recv_timeout(at.saturating_duration_since(now)) {
                     Ok(m) => m,
                     Err(RecvTimeoutError::Timeout) => {
-                        self.edge_step();
-                        terminal.draw(|f| draw::draw(f, self))?;
+                        match wake {
+                            Wake::Edge => {
+                                self.edge_step();
+                                self.edge_due = Some(Instant::now() + EDGE_EVERY);
+                            }
+                            Wake::Which => self.which = true,
+                            Wake::Frame => {}
+                        }
+                        self.draw(terminal)?;
                         continue;
                     }
                     Err(RecvTimeoutError::Disconnected) => {
                         anyhow::bail!("event channels closed")
                     }
-                }
-            } else {
-                match self.leader_at {
-                    Some(at) if !self.which => {
-                        match rx.recv_timeout(which_after().saturating_sub(at.elapsed())) {
-                            Ok(m) => m,
-                            Err(RecvTimeoutError::Timeout) => {
-                                self.which = true;
-                                terminal.draw(|f| draw::draw(f, self))?;
-                                continue;
-                            }
-                            Err(RecvTimeoutError::Disconnected) => {
-                                anyhow::bail!("event channels closed")
-                            }
-                        }
-                    }
-                    _ => rx.recv().context("event channels closed")?,
-                }
+                },
             };
             self.handle(first);
             drain(&rx, FRAME, |m| {
@@ -507,7 +560,7 @@ impl App {
             {
                 self.clear_sel();
             }
-            terminal.draw(|f| draw::draw(f, self))?;
+            self.draw(terminal)?;
         }
         Ok(())
     }
