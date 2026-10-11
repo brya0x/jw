@@ -32,6 +32,8 @@ supersedes:  []
 | Raw frames | `proto/src/proto.rs` `read_raw`, `write_raw` | a frame's body without decoding it |
 | Control, phone to bridge | JSON, tag `t` | `pair{token,name,code}`, `auth{device}`, `workspaces`, `sessions`, `diff{ws}`, `open{path}`, `worktree{project,branch}` |
 | Control, bridge to phone | JSON, tag `t` | `ready{bridge:1,protocol,read_only,palettes,settings}`, `paired{device,id}`, `workspaces`, `sessions`, `diff`, `error{code,msg}` |
+| `ready.palettes` | built by `jw_tui::theme::look()`, handed to the bridge as `Config.look` (`Look`, a callback asked at every `ready`) | array, one entry per theme (built-ins, then the user's; a user file named like a built-in replaces it; one that does not load is left out): `{name, dark, colors:{bg,panel,line,fg,dim,sel,blue,green,yellow,red,magenta,cyan,add_bg,del_bg,add_word,del_word}}`, each colour `#rrggbb`, the four diff colours always present. The same format as a theme file (`tui/themes/schema.json`) minus `$schema`. |
+| `ready.settings` | same | `{dark: <theme name>, light: <theme name>}`, the slots of `settings.json` read at that moment; defaults `one-dark` and `one-light`. The `theme` mode (system, dark, light) is not sent: the phone follows its own system setting (REQ-17). |
 | Store | `<config dir>/mobile.json`, mode 0600, changed under a `flock` on `mobile.json.lock` | device id, name, SHA-256 of its token, created, last seen |
 | Pairing | `pair.code` | 4 to 12 digits the phone generates and shows; `name` and `code` are stripped of control characters before anyone prints them |
 | QR payload | `jw://<tunnel host>/<pairing token>` | the token is 128 bits, hex |
@@ -147,7 +149,7 @@ supersedes:  []
 |---|---|---|---|
 | M1 ✓ `65cc24f` | Bridge relay, protocol check, stop | 8–11 | `crates/web/src/bridge.rs`, `proto.rs`, `jw/tests/web.rs` |
 | M2 ✓ `720261b` | Pairing, auth, limits, revoke, read-only, tunnel and QR as the `jw mobile` process (D1 and D2 move the hosting) | 1–7, 29, 31, 32 | `crates/web/`, `jw/src/mobile.rs` |
-| W1 | `palettes` and `settings` in `ready` | 17 | `crates/web/src/bridge.rs`, the `jw` binary or the daemon start |
+| W1 ✓ | `palettes` and `settings` in `ready` | 17 | `crates/web/src/bridge.rs`, the `jw` binary or the daemon start |
 | D1 | The daemon hosts mobile: tunnel moves to jw-web, `daemon/src/mobile.rs`, the messages, watchers, stop on signal, `PROTOCOL` bump | 1, 3, 6, 9, 33–40, 50 | `daemon/src/mobile.rs`, `daemon/src/lib.rs`, `web/src/tunnel.rs`, `proto.rs` |
 | D2 | `jw mobile` as a client, `jw mobile stop`, shared QR in core | 30, 41 | `jw/src/mobile.rs`, `core/src/qr.rs` |
 | T1 | The TUI: Mobile modal, `^␣ m`, indicator, pair question | 42–49 | `tui/src/tui/modal.rs`, `mod.rs`, `draw.rs`, `settings.rs` |
@@ -172,6 +174,7 @@ Order: W1, D1, D2, T1 on the server track and M3 on the app track run in paralle
 - `jw-proto` had no byte-level frame API: `read_raw` and `write_raw` were added and `MAX_FRAME` made public.
 - The `Theme` message carries only `dark`, `fg`, `bg` (`proto.rs:172-177`), so palettes travel on the control channel.
 - The daemon does not compare protocol versions (`lib.rs:540-542`); the client does, hence REQ-8.
+- RISK-19 suggested the `jw` binary hand a callback to the daemon at start. W1 hands it to the bridge as `Config.look`, asked at every `ready`, so a theme or slot changed while mobile runs reaches the next phone; D1 passes the same callback through `daemon::run` to the mobile service.
 - `crates/daemon/AGENTS.md` cites old line numbers (`serve` `:465`, now `:497`; `handle` `:508`, now `:540`; `attach` `:677`, now `:710`). D1 fixes them when it edits that file.
 
 ## Tests

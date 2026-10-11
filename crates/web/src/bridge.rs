@@ -5,7 +5,7 @@
 //! kind byte and what follows. A text message is a control message, a JSON
 //! object tagged `t`. What a phone sees besides frames:
 //!
-//! - `ready{bridge,protocol,read_only}` once it is let in and the daemon is
+//! - `ready{bridge,protocol,read_only,palettes,settings}` once it is let in and the daemon is
 //!   there, and `paired{device,id}` before it when it has just paired;
 //! - `error{code,msg}` with a `code` the app can act on: `unexpected`,
 //!   `timeout`, `limited`, `expired`, `unknown`, `denied`, `revoked`,
@@ -96,11 +96,18 @@ pub struct Pair<'a> {
 /// Answers whether the code on the phone is the one printed here.
 pub type Confirm = Arc<dyn Fn(&Pair) -> bool + Send + Sync>;
 
+/// What `ready` carries for the phone's look: an object with `palettes` and
+/// `settings` (REQ-17). Asked at every `ready`, so a theme changed while the
+/// bridge runs reaches the next phone. The jw binary hands it in, because
+/// the themes are in the TUI crate and this one does not depend on it.
+pub type Look = Arc<dyn Fn() -> serde_json::Value + Send + Sync>;
+
 pub struct Config {
     pub store: Arc<Store>,
     /// Drop everything but looking (REQ-7).
     pub read_only: bool,
     pub confirm: Confirm,
+    pub look: Look,
     pub timings: Timings,
 }
 
@@ -118,6 +125,7 @@ struct Shared {
     store: Arc<Store>,
     read_only: bool,
     confirm: Confirm,
+    look: Look,
     t: Timings,
     pairing: Mutex<Option<Pairing>>,
     limiter: Mutex<Limiter>,
@@ -187,6 +195,7 @@ impl Bridge {
             conns: Mutex::new(Vec::new()),
             store: config.store,
             read_only: config.read_only,
+            look: config.look,
             confirm: config.confirm,
             limiter: Mutex::new(Limiter::new(t.fail_max, t.fail_window, t.lockout)),
             pairing: Mutex::new(None),
@@ -328,12 +337,15 @@ fn serve(stream: TcpStream, shared: &Shared, socket: &Path) -> Result<(), WsErro
         Err(refusal) => return refuse_daemon(&mut ws, refusal),
     };
     ws.get_ref().set_read_timeout(Some(TICK))?;
+    let look = (shared.look)();
     ws.send(Message::text(
         serde_json::json!({
             "t": "ready",
             "bridge": 1,
             "protocol": PROTOCOL,
             "read_only": shared.read_only,
+            "palettes": look["palettes"],
+            "settings": look["settings"],
         })
         .to_string(),
     ))?;
@@ -624,6 +636,7 @@ mod tests {
         read_only: bool,
         timings: Timings,
         confirm: Confirm,
+        look: Look,
     }
 
     impl Default for Opts {
@@ -640,6 +653,7 @@ mod tests {
                     ..Timings::default()
                 },
                 confirm: Arc::new(|_| true),
+                look: Arc::new(|| serde_json::json!({"palettes": [], "settings": {}})),
             }
         }
     }
@@ -667,6 +681,7 @@ mod tests {
                 store: store.clone(),
                 read_only: o.read_only,
                 confirm: o.confirm,
+                look: o.look,
                 timings: o.timings,
             },
         )
@@ -885,6 +900,32 @@ mod tests {
         assert_eq!(v["t"], "ready");
         assert_eq!(v["protocol"], PROTOCOL);
         assert_eq!(v["read_only"], false);
+    }
+
+    #[test]
+    fn ready_carries_the_look_asked_at_that_moment() {
+        let n = Arc::new(AtomicUsize::new(0));
+        let count = n.clone();
+        let r = rig(Opts {
+            look: Arc::new(move || {
+                let n = count.fetch_add(1, Ordering::SeqCst);
+                serde_json::json!({
+                    "palettes": [{"name": format!("t{n}"), "dark": true, "colors": {}}],
+                    "settings": {"dark": format!("t{n}"), "light": "one-light"},
+                })
+            }),
+            ..Opts::default()
+        });
+        let device = enrol(&r, "a");
+        for n in 0..2 {
+            let mut p = phone(&r.bridge);
+            say(&mut p, serde_json::json!({ "t": "auth", "device": device }));
+            let v = json(&mut p);
+            assert_eq!(v["t"], "ready", "{v}");
+            assert_eq!(v["palettes"][0]["name"], format!("t{n}"));
+            assert_eq!(v["settings"]["dark"], format!("t{n}"));
+            assert_eq!(v["settings"]["light"], "one-light");
+        }
     }
 
     #[test]
@@ -1250,6 +1291,7 @@ mod tests {
             store: Arc::new(Store::open(dir.path().join("mobile.json"))),
             read_only: false,
             confirm: Arc::new(|_| true),
+            look: Arc::new(|| serde_json::json!({})),
             timings: Timings::default(),
         };
         let err = Bridge::start(any, PathBuf::from("/nowhere"), config)

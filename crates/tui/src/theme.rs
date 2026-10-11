@@ -333,6 +333,43 @@ pub fn export(name: &str) -> Result<String> {
     Ok(json)
 }
 
+/// Every theme as the phone gets it (REQ-17): a theme file with every
+/// colour written out, read fresh so a theme edited while the daemon runs
+/// shows up. A user file that doesn't load is left out.
+pub fn palettes() -> Vec<serde_json::Value> {
+    palettes_in(user_dir().ok().as_deref())
+}
+
+/// What `ready` adds for the phone: the palettes, and which theme is the dark
+/// slot and which the light one, from `settings.json` as it is now.
+pub fn look() -> serde_json::Value {
+    look_in(
+        user_dir().ok().as_deref(),
+        crate::settings::path().ok().as_deref(),
+    )
+}
+
+fn look_in(themes: Option<&Path>, settings: Option<&Path>) -> serde_json::Value {
+    let s = settings
+        .and_then(|p| crate::settings::read(p).ok())
+        .unwrap_or_default();
+    serde_json::json!({
+        "palettes": palettes_in(themes),
+        "settings": {"dark": s.dark_theme(), "light": s.light_theme()},
+    })
+}
+
+fn palettes_in(dir: Option<&Path>) -> Vec<serde_json::Value> {
+    names_in(dir)
+        .iter()
+        .filter_map(|name| {
+            let mut file = to_file(name, &named_in(dir, name).ok()?);
+            file.schema = None;
+            serde_json::to_value(file).ok()
+        })
+        .collect()
+}
+
 /// Theme `from` written as `themes/<to>.json`, to edit (`c` in settings).
 pub fn copy(from: &str, to: &str) -> Result<PathBuf> {
     let json = serde_json::to_string_pretty(&to_file(to, &named(from)?))? + "\n";
@@ -441,6 +478,54 @@ mod tests {
         "bg": "#1a1b26", "panel": "#16161e", "line": "#292e42", "fg": "#c0caf5",
         "dim": "#565f89", "sel": "#283457", "blue": "#7aa2f7", "green": "#9ece6a",
         "yellow": "#e0af68", "red": "#f7768e", "magenta": "#bb9af7", "cyan": "#7dcfff"}}"##;
+
+    #[test]
+    fn palettes_are_every_theme_with_every_colour() {
+        let dir = std::env::temp_dir().join(format!("jw-pal-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("tokyo.json"), TOKYO).unwrap();
+        std::fs::write(dir.join("one-dark.json"), TOKYO.replace("tokyo", "mine")).unwrap();
+        std::fs::write(dir.join("broken.json"), "{").unwrap();
+        let all = palettes_in(Some(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
+        let names: Vec<&str> = all.iter().map(|v| v["name"].as_str().unwrap()).collect();
+        assert_eq!(names.len(), BUILTIN.len() + 1, "{names:?}");
+        assert!(names.contains(&"tokyo") && !names.contains(&"broken"));
+        // A user file named like a built-in replaces it.
+        let one = all.iter().find(|v| v["name"] == "one-dark").unwrap();
+        assert_eq!(one["colors"]["bg"], "#1a1b26");
+        for v in &all {
+            let colors = v["colors"].as_object().unwrap();
+            assert_eq!(colors.len(), 16, "{v}");
+            assert!(v["dark"].is_boolean() && v.get("$schema").is_none());
+            for c in colors.values() {
+                let c = c.as_str().unwrap();
+                assert!(c.len() == 7 && c.starts_with('#'), "{c}");
+            }
+        }
+    }
+
+    #[test]
+    fn look_names_the_slots_from_settings_and_the_palettes() {
+        let dir = std::env::temp_dir().join(format!("jw-look-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("tokyo.json"), TOKYO).unwrap();
+        let settings = dir.join("settings.json");
+        std::fs::write(&settings, r#"{"dark": "tokyo"}"#).unwrap();
+        let v = look_in(Some(&dir), Some(&settings));
+        let none = look_in(Some(&dir), Some(&dir.join("missing.json")));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(v["settings"]["dark"], "tokyo");
+        assert_eq!(v["settings"]["light"], "one-light");
+        assert!(
+            v["palettes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p["name"] == "tokyo")
+        );
+        assert_eq!(none["settings"]["dark"], "one-dark");
+    }
 
     #[test]
     fn a_theme_file_without_diff_colours_mixes_them() {

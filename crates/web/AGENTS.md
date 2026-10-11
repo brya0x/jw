@@ -9,7 +9,9 @@ Cloudflare tunnel. Nothing in it is specific to phones, so the name is not eithe
 - `src/bridge.rs`: `Bridge`, a WebSocket server on loopback. A phone is let in by `pair` or
   `auth` and nothing else, then gets one daemon connection. A binary message is a jw-proto
   frame without its length, relayed with `read_raw` and `write_raw`; a text message is a
-  control message. `Timings` holds every wait, so tests make them short.
+  control message. `Timings` holds every wait, so tests make them short. `Config.look` is a callback the `jw`
+  binary fills from the TUI's themes (this crate cannot depend on it); `ready` carries what it
+  returns, `palettes` and `settings`, asked at every `ready`.
 - `src/auth.rs`: `Pairing` (the one-use token), `Store` (`mobile.json`, hashes only), `Limiter`
   (failed attempts per address).
 

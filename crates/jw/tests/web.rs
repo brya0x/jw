@@ -99,6 +99,7 @@ fn a_phone_drives_a_pane_through_the_bridge() {
             store,
             read_only: false,
             confirm: Arc::new(|_| false),
+            look: Arc::new(|| serde_json::json!({"palettes": [], "settings": {}})),
             timings: Timings::default(),
         },
     )

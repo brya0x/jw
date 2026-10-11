@@ -185,6 +185,7 @@ fn serve(opts: Opts) -> Result<()> {
             store,
             read_only: opts.read_only,
             confirm: ask(input.clone()),
+            look: Arc::new(jw_tui::theme::look),
             timings: Timings::default(),
         },
     )?;
