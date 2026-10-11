@@ -1,5 +1,5 @@
 ---
-status:      agreed (v2 + the screen addendum + addendum 3 "sessions", 2026-10-09; P0–P9 built against v1); addendum 12 (X0) drafted; addendum 17 (V0–V4) drafted
+status:      agreed (v2 + the screen addendum + addendum 3 "sessions", 2026-10-09; P0–P9 built against v1); addendum 12 (X0) drafted; addendum 18 (V0–V4) drafted
 scope:       [Cargo.toml, src/**, .github/workflows/ci.yml, internal/core/config/config.go (one relaxation), README.md]
 depends_on:  [git, gh on PATH]
 supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/herdr]
@@ -81,7 +81,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 | Rename | `git worktree move <old> <new>` + `git branch -m <old> <new>` (the new branch from the `branch` template) + the registry `name`, `path` and `branch` (same `id`). Then `Close` and `Open` of the workspace, after asking if an agent or editor runs |
 | Status | `App::status: Option<(String, Tone)>`, `Tone::{Info, Done, Error}`; `Job::Failed` and refusals are `Error` |
 | Stack | ratatui (its crossterm re-export), portable-pty, vt100 0.16 (drawn by `src/tui/draw.rs`), serde/toml/serde_json, syntect, pulldown-cmark, anyhow |
-| Diff | `src/diff.rs` (model: one `Scope` per view, addendum 17; before it, `git diff -M --merge-base origin/<base>` + untracked) and `src/tui/diffview.rs` (drawing, keys `j k ] [ v t ␣ b ↵ q`) |
+| Diff | `src/diff.rs` (model: one `Scope` per view, addendum 18; before it, `git diff -M --merge-base origin/<base>` + untracked) and `src/tui/diffview.rs` (drawing, keys `j k ] [ v t ␣ b ↵ q`) |
 | MD reader | `src/view/md.rs` (pulldown-cmark → wrapped lines + headings) and `src/tui/mdview.rs` |
 | Keyboard protocol | Addendum 5. `jw_proto::kitty::Kitty` holds a pane's kitty keyboard flag stacks (main and alternate, 16 deep). The daemon's `Titles` and the TUI's `keys::Flags` feed it from `vt100::Callbacks::unhandled_csi`. In the daemon a `CSI ? u` becomes `Query::Kitty(flags)` in the same queue as S14's queries, so answers go in the order asked; `snapshot` appends `Kitty::replay` (`CSI < 17 u`, `CSI = base u`, then one `CSI > f u` per entry); a restored pane's history ends with `kitty::CLEAR`. The TUI probes the outer terminal (`supports_keyboard_enhancement`, before its event reader starts), pushes `DISAMBIGUATE_ESCAPE_CODES` after `ratatui::init()` and pops it before `ratatui::restore()`. `keys::encode(k, app_cursor, kitty)`: with flag 1, a modified Enter / Tab / Backspace goes as `CSI 13\|9\|127;mods u` and Esc as `CSI 27[;mods] u`; anything else, or flags 0, as before. No message changes, so `PROTOCOL` stays (RAT-15) |
 | Pickers | `src/tui/finder.rs`: a `Finder` modal (query, results, selection, preview) with one fuzzy scorer (consecutive matches score more), three sources. `o`: folder browser, one directory at a time, `→`/`tab` in, `←`/backspace on empty up, `~` home, `↵` opens; a name that doesn't exist offers `+ create`. It starts in the parent of the current project. `␣`: every workspace, by last use (`recent.json` in the state dir), with a preview of path, branch, PR, agent state and panes. `/`: `git ls-files -co --exclude-standard`, or a walk capped at 5000 files without dot dirs |
@@ -100,7 +100,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 - REQ-14 IF a pane's process exits, THEN the daemon SHALL keep its last screen and exit status visible until the pane is closed.
 - REQ-15 WHEN the daemon starts and finds a `session.json` from a previous daemon, it SHALL recreate its workspaces and trees, launching agents with their `resume` command.
 - REQ-16 THE jw binary SHALL NOT invoke `herdr`.
-- REQ-21 WHILE a diff pane is focused, the TUI SHALL show every file of the active view (addendum 17) in one scroll with `j/k` per file, `]`/`[` per hunk, `v` viewed, `t` unified ⇄ side by side, and changed words highlighted; side by side by default when the pane is wide.
+- REQ-21 WHILE a diff pane is focused, the TUI SHALL show every file of the active view (addendum 18) in one scroll with `j/k` per file, `]`/`[` per hunk, `v` viewed, `t` unified ⇄ side by side, and changed words highlighted; side by side by default when the pane is wide.
 - REQ-22 WHEN a `.md` file is opened, the TUI SHALL show it rendered and read-only in a reader pane: headings, lists, tables, code with highlighting, links.
 - REQ-30 WHEN the user presses the leader and then one key, the TUI SHALL run that key's action and return to the terminal.
 - REQ-31 WHILE the leader has been pending for `which_delay_ms` (150 ms by default, REQ-141), the TUI SHALL show every key, grouped go / worktree / panes.
@@ -407,7 +407,7 @@ Prototype: https://claude.ai/artifact/7dJfvauPHjSBZ3jF5e8SJ7 (approved 2026-10-1
 - REQ-182 IF a review worktree has changes when its PR is picked again, THEN jw SHALL leave it as it is and say so.
 - REQ-183 WHILE a workspace has `review_base`, the header SHALL NOT say its layout changed or offer `^␣ p` to save it.
 
-### Addendum 17 (V0–V4): the diff pane has three views (General, Uncommitted, Commits)
+### Addendum 18 (V0–V4): the diff pane has three views (General, Uncommitted, Commits)
 
 Prototype: https://claude.ai/artifact/9mXWH52Ujf9JjYeGkbMSsY (approved 2026-10-11; all navigation in the left sidebar, no tabs).
 
@@ -426,31 +426,31 @@ The diff pane (`^␣ d`, and the left half of a review workspace) mixed committe
 | Sidebar | `DiffView::draw_sidebar` (`TREE` = 30 columns) draws the three sections; below `SIDEBAR_MIN` = 100 columns it is an overlay and `crumb` takes its place |
 | Marks | `M` yellow, `A` green, `D` red, `R` cyan, `?` untracked magenta; the selected row `sel`; all through `theme::p()` |
 
-- REQ-194 WHEN a diff pane opens, the TUI SHALL show General and load only General.
-- REQ-195 THE General view SHALL list the files changed between `origin/<base>` and `HEAD` and SHALL NOT list uncommitted work.
-- REQ-196 THE Uncommitted view SHALL list staged, unstaged and untracked changes against `HEAD`, each file with its mark `A M D R ?`; WHERE `HEAD` has no commit, against the empty tree.
-- REQ-197 THE Commits view SHALL list `origin/<base>..HEAD` newest first, up to 200, each with short sha, subject and age, and SHALL show the diff of the selected commit, the newest first. IF more than 200 exist, THEN the list SHALL end with "older commits not shown after 200".
-- REQ-198 IF origin has no default branch, THEN General SHALL say so and list nothing, and Commits SHALL list the last 200 commits of `HEAD`.
-- REQ-199 THE sidebar SHALL show the three views stacked, each with its number key and its count; the active view `▾` in blue with its files below (in Commits: the commits, and under the selected one its files), the others `▸`.
-- REQ-200 WHILE a view loads, its count SHALL be a spinner and its body a loading line, and every key SHALL stay live.
-- REQ-201 WHEN `1`, `2` or `3` is pressed in the pane, the TUI SHALL show General, Uncommitted or Commits.
-- REQ-202 WHEN `Tab` is pressed, the TUI SHALL move the cursor into the sidebar, where `↑↓` or `jk` move, `↵` chooses a view, a commit or a file, and `Tab` or `esc` return to the diff.
-- REQ-203 WHILE Commits is the active view, `(` and `)` SHALL select the previous and the next commit.
-- REQ-204 WHILE the pane is narrower than 100 columns, the sidebar SHALL be hidden, a line under the title SHALL name the view (in Commits: the sha, subject and `n/m`), and `Tab` SHALL open the sidebar over the diff.
-- REQ-205 WHEN the pane changes view or commit, it SHALL keep each one's scroll position and viewed files, and restore them on return.
-- REQ-206 WHEN a view is reloaded, the TUI SHALL keep its scroll position and viewed files by path and drop those no longer in it.
-- REQ-207 THE first visit to Uncommitted or to Commits SHALL load it in a background job, and a commit's diff SHALL load when first selected and be kept for the life of the pane.
-- REQ-208 WHEN a job's result arrives for a slot that has a newer request, the TUI SHALL discard it.
-- REQ-209 THE TUI SHALL NOT run git in `draw`, in a key handler or in a click handler.
-- REQ-210 IF a diff exceeds `DIFF_CAP`, THEN its view SHALL list the first 200 files with the total and say it is too large to draw, and `↵` on a file SHALL still open it.
-- REQ-211 THE keys `j k ] [ v t g G`, `Ctrl-d`, `Ctrl-u`, `PgUp`, `PgDn`, the wheel and `q` SHALL act in every view as REQ-21 says, and `t` SHALL apply to the whole pane.
-- REQ-212 WHEN `↵` is pressed on a file in any view, the TUI SHALL open the workspace's working-tree file as REQ-42 says, also from a commit.
-- REQ-213 WHERE a workspace has `review_base`, the three views SHALL compare against `origin/<review_base>`, and General SHALL be the range REQ-171 names.
-- REQ-214 THE pane's title SHALL read `changes  <name> vs <base> · committed`, `changes  <name> · not committed` or `changes  <name> · <n> commits`.
-- REQ-215 THE new rows and marks SHALL take every colour from `theme::p()`, and no key SHALL use Alt.
-- REQ-216 THE change SHALL add no `ClientMsg`, `DaemonMsg` or `PaneInfo` field, SHALL leave the `view:diff` role as it is, and SHALL NOT change `PROTOCOL`.
-- REQ-217 WHEN a diff pane is restored, the TUI SHALL open General, whichever view it showed before.
-- REQ-218 IF git fails for a view, THEN that view SHALL show git's first error line in place of its diff and the other views SHALL stay usable.
+- REQ-204 WHEN a diff pane opens, the TUI SHALL show General and load only General.
+- REQ-205 THE General view SHALL list the files changed between `origin/<base>` and `HEAD` and SHALL NOT list uncommitted work.
+- REQ-206 THE Uncommitted view SHALL list staged, unstaged and untracked changes against `HEAD`, each file with its mark `A M D R ?`; WHERE `HEAD` has no commit, against the empty tree.
+- REQ-207 THE Commits view SHALL list `origin/<base>..HEAD` newest first, up to 200, each with short sha, subject and age, and SHALL show the diff of the selected commit, the newest first. IF more than 200 exist, THEN the list SHALL end with "older commits not shown after 200".
+- REQ-208 IF origin has no default branch, THEN General SHALL say so and list nothing, and Commits SHALL list the last 200 commits of `HEAD`.
+- REQ-209 THE sidebar SHALL show the three views stacked, each with its number key and its count; the active view `▾` in blue with its files below (in Commits: the commits, and under the selected one its files), the others `▸`.
+- REQ-210 WHILE a view loads, its count SHALL be a spinner and its body a loading line, and every key SHALL stay live.
+- REQ-211 WHEN `1`, `2` or `3` is pressed in the pane, the TUI SHALL show General, Uncommitted or Commits.
+- REQ-212 WHEN `Tab` is pressed, the TUI SHALL move the cursor into the sidebar, where `↑↓` or `jk` move, `↵` chooses a view, a commit or a file, and `Tab` or `esc` return to the diff.
+- REQ-213 WHILE Commits is the active view, `(` and `)` SHALL select the previous and the next commit.
+- REQ-214 WHILE the pane is narrower than 100 columns, the sidebar SHALL be hidden, a line under the title SHALL name the view (in Commits: the sha, subject and `n/m`), and `Tab` SHALL open the sidebar over the diff.
+- REQ-215 WHEN the pane changes view or commit, it SHALL keep each one's scroll position and viewed files, and restore them on return.
+- REQ-216 WHEN a view is reloaded, the TUI SHALL keep its scroll position and viewed files by path and drop those no longer in it.
+- REQ-217 THE first visit to Uncommitted or to Commits SHALL load it in a background job, and a commit's diff SHALL load when first selected and be kept for the life of the pane.
+- REQ-218 WHEN a job's result arrives for a slot that has a newer request, the TUI SHALL discard it.
+- REQ-219 THE TUI SHALL NOT run git in `draw`, in a key handler or in a click handler.
+- REQ-220 IF a diff exceeds `DIFF_CAP`, THEN its view SHALL list the first 200 files with the total and say it is too large to draw, and `↵` on a file SHALL still open it.
+- REQ-221 THE keys `j k ] [ v t g G`, `Ctrl-d`, `Ctrl-u`, `PgUp`, `PgDn`, the wheel and `q` SHALL act in every view as REQ-21 says, and `t` SHALL apply to the whole pane.
+- REQ-222 WHEN `↵` is pressed on a file in any view, the TUI SHALL open the workspace's working-tree file as REQ-42 says, also from a commit.
+- REQ-223 WHERE a workspace has `review_base`, the three views SHALL compare against `origin/<review_base>`, and General SHALL be the range REQ-171 names.
+- REQ-224 THE pane's title SHALL read `changes  <name> vs <base> · committed`, `changes  <name> · not committed` or `changes  <name> · <n> commits`.
+- REQ-225 THE new rows and marks SHALL take every colour from `theme::p()`, and no key SHALL use Alt.
+- REQ-226 THE change SHALL add no `ClientMsg`, `DaemonMsg` or `PaneInfo` field, SHALL leave the `view:diff` role as it is, and SHALL NOT change `PROTOCOL`.
+- REQ-227 WHEN a diff pane is restored, the TUI SHALL open General, whichever view it showed before.
+- REQ-228 IF git fails for a view, THEN that view SHALL show git's first error line in place of its diff and the other views SHALL stay usable.
 
 ---
 
@@ -501,11 +501,11 @@ The diff pane (`^␣ d`, and the left half of a review workspace) mixed committe
 - RAT-45 **The TUI sends the prompt, not the CLI.** The picker lives in the TUI; one pending slot on `App` costs less than a new path.
 - RAT-46 **Capital `R`.** Free in `ACTIONS`; `r` is rename and `hjklHJKL` are fixed.
 - RAT-47 **The picker is a `Finder` kind.** It has query, selection, preview and clicks. Its items come from a job, which no kind did before, so `Finder` gains a loading state.
-- RAT-52 **General is committed work only.** Until now one scroll held both, which is the complaint. This way General is all of Commits together and Uncommitted is the rest, so no file appears in a view for two reasons. The cost: `^␣ d` no longer shows dirty files first; they are one key away (`2`). Decided with the prototype.
-- RAT-53 **A sidebar, not tabs.** The user's call (2026-10-11): views, commits and files are one list in one place. It spends width, so under 100 columns it becomes an overlay with a breadcrumb instead of tabs.
-- RAT-54 **Scope is client state.** Putting it in the role (`view:diff:commits`) touches saved layouts, the four hard-coded `view:diff` sites (`stream.rs:46`, `tui/mod.rs:1588`, `stream.rs:552`, `jw/tests/daemon.rs:491,506`) and the tests, and the daemon has nothing to do with it. Reopening on General (REQ-217) is the price.
-- RAT-55 **Lazy, per view, with a generation.** Only General loads on open, so opening costs what it did minus the untracked walk. A result is applied only if no newer request exists for its slot (REQ-208), so fast `(` `)` never apply out of order. The caps (200 commits, 2 MiB) are pages, not measurements: see OPEN-27. Measured on a repo with a 4,000-file, 240,000-line change: the capped diff, the file list and 201 commits each took 30–100 ms of git.
-- RAT-56 **Viewed by path.** `viewed` held indices and `Job::Diff` rebuilt the view (`tui/mod.rs:3239`), so a reload lost scroll and viewed. Paths survive a list that changes between reloads.
+- RAT-58 **General is committed work only.** Until now one scroll held both, which is the complaint. This way General is all of Commits together and Uncommitted is the rest, so no file appears in a view for two reasons. The cost: `^␣ d` no longer shows dirty files first; they are one key away (`2`). Decided with the prototype.
+- RAT-59 **A sidebar, not tabs.** The user's call (2026-10-11): views, commits and files are one list in one place. It spends width, so under 100 columns it becomes an overlay with a breadcrumb instead of tabs.
+- RAT-60 **Scope is client state.** Putting it in the role (`view:diff:commits`) touches saved layouts, the four hard-coded `view:diff` sites (`stream.rs:46`, `tui/mod.rs:1588`, `stream.rs:552`, `jw/tests/daemon.rs:491,506`) and the tests, and the daemon has nothing to do with it. Reopening on General (REQ-227) is the price.
+- RAT-61 **Lazy, per view, with a generation.** Only General loads on open, so opening costs what it did minus the untracked walk. A result is applied only if no newer request exists for its slot (REQ-218), so fast `(` `)` never apply out of order. The caps (200 commits, 2 MiB) are pages, not measurements: see OPEN-28. Measured on a repo with a 4,000-file, 240,000-line change: the capped diff, the file list and 201 commits each took 30–100 ms of git.
+- RAT-62 **Viewed by path.** `viewed` held indices and `Job::Diff` rebuilt the view (`tui/mod.rs:3239`), so a reload lost scroll and viewed. Paths survive a list that changes between reloads.
 - RAT-22 **`curl`, not a crate,** for `install <url>`: rare, and jw already shells out to `git` and `gh`; `ureq` would add TLS and about 40 crates for one command.
 
 ## Risks
@@ -566,12 +566,12 @@ The diff pane (`^␣ d`, and the left half of a review workspace) mixed committe
 - RISK-54 **Context size.** A PR with hundreds of comments is capped at 200 KB and the cut is noted in the file; claude can run `gh pr view` itself.
 - RISK-55 **Fork PRs** fetch fine but cannot be pushed to; fine for a review.
 - RISK-56 **`gh api repos/{owner}/{repo}/…`** resolves the repo from the cwd; checked against a fake `gh` only until the manual test.
-- RISK-60 **`origin/<base>` can be stale.** General and Commits use the local ref, as the diff did; a stale base shows an old range until `git fetch`.
-- RISK-61 **`git::output` has no timeout and does not stream** (`connectors/git.rs:31`). A hung git ties one worker thread and its view spins; the UI stays live. REQ-210 needs a bounded reader in core and a `wait` after the kill so no zombie stays.
-- RISK-62 **`↵` from Commits opens the working-tree file** (REQ-212), which may no longer have the lines the commit showed. Accepted.
-- RISK-63 **Uncommitted goes stale while the pane is open;** there is no watcher. See OPEN-26.
-- RISK-65 **`App::on_job` runs `reload()` first for every job** (`tui/mod.rs`): a registry read, and a write when roots are filled, on the UI thread. Fine for the rare jobs it was written for, not for one per `)`; a diff pane's answer returns before it. Any other frequent job needs the same.
-- RISK-64 **Renames are per range.** `-M` runs per call, so General can show `R` for a file that Commits shows as `D` and `A`.
+- RISK-65 **`origin/<base>` can be stale.** General and Commits use the local ref, as the diff did; a stale base shows an old range until `git fetch`.
+- RISK-66 **`git::output` has no timeout and does not stream** (`connectors/git.rs:31`). A hung git ties one worker thread and its view spins; the UI stays live. REQ-220 needs a bounded reader in core and a `wait` after the kill so no zombie stays.
+- RISK-67 **`↵` from Commits opens the working-tree file** (REQ-222), which may no longer have the lines the commit showed. Accepted.
+- RISK-68 **Uncommitted goes stale while the pane is open;** there is no watcher. See OPEN-27.
+- RISK-69 **Renames are per range.** `-M` runs per call, so General can show `R` for a file that Commits shows as `D` and `A`.
+- RISK-70 **`App::on_job` runs `reload()` first for every job** (`tui/mod.rs`): a registry read, and a write when roots are filled, on the UI thread. Fine for the rare jobs it was written for, not for one per `)`; a diff pane's answer returns before it. Any other frequent job needs the same.
 - Closed by addendum 3: RISK-5 (own registry), RISK-7 (hooks), RISK-9 (frames), RISK-16 (`nvim --server`), RISK-17 (`root` in the registry).
 
 ## Parts (each one ends with `cargo test` + `clippy` green and a local commit on `feat/rust-tui`; nothing is pushed)
@@ -635,11 +635,11 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | R1 ✓ `7d7678d` | Core: `open_prs`, `detail`, `Entry.review_base`, `Stream::resolve` and `command()` for reviews, `review.rs` (fetch, worktree, context file) | 165–170, 172, 174, 175, 178 | `connectors/github.rs`, `core/registry.rs`, `stream.rs`, `review.rs` |
 | R2 ✓ `936b3cd` | TUI: `Kind::Reviews` with a loading state, `R`, jobs, the pending `Prompt`, `m` and `o`; `Open` starts no process for a viewer leaf; the daemon test | 160–164, 171, 173, 176, 177, 179–181 | `tui/finder.rs`, `tui/mod.rs`, `tui/modal.rs`, `settings.rs`, `daemon/src/lib.rs`, `crates/jw/tests/daemon.rs` |
 | R3 ✓ | README; version 0.0.13; a hand test with `scripts/drive.py` against a local origin and a fake `gh`; REQ-175 and REQ-183, which that test found missing | 175, 183 | `README.md`, `core/src/actions.rs`, `core/src/connectors/git.rs`, `tui/mod.rs` |
-| V0 | Addendum 17 in this spec; the prototype (approved 2026-10-11) | — | docs |
-| V1 ✓ | Core: `Scope`, `load(dir, &Scope)`, `Loaded::TooLarge` with `DIFF_CAP`, `commits`; tests in a temp repo | 195–198, 210, 216 | `core/src/diff.rs` |
-| V2 ✓ | TUI: `DiffView` with per-view state keyed by path, the sidebar sections, `1 2 3`, `Tab`, `( )`, the narrow overlay and breadcrumb, the title; the jobs with a number per slot, the commit cache and the loading, failed and too-large states (V3's work came with it, the view could not be shown without it) | 194–205, 207–215, 217, 218 | `tui/diffview.rs`, `tui/draw.rs`, `tui/mod.rs`, `core/src/diff.rs` |
-| V3 ✓ | A diff pane's answer no longer reloads the registry on the UI thread (RISK-65); an `App`-level test of the job round trip; a hand test with `scripts/drive.py` on a synthetic repo (4,000 new files, 231 commits, 300 untracked) that found three faults in the too-large view, fixed. A review workspace was not run end to end, only `Stream::resolve`'s test for `review_base`; REQ-206 waits for OPEN-26 | 209, 210, 213 | `tui/mod.rs`, `tui/diffview.rs` |
-| V4 | README; version bump when a PR follows; a hand test with `scripts/drive.py` in a repo with commits and a dirty tree, and in a big one | — | `README.md`, `Cargo.toml` |
+| V0 | Addendum 18 in this spec; the prototype (approved 2026-10-11) | — | docs |
+| V1 ✓ | Core: `Scope`, `load(dir, &Scope)`, `Loaded::TooLarge` with `DIFF_CAP`, `commits`; tests in a temp repo | 205–208, 220, 226 | `core/src/diff.rs` |
+| V2 ✓ | TUI: `DiffView` with per-view state keyed by path, the sidebar sections, `1 2 3`, `Tab`, `( )`, the narrow overlay and breadcrumb, the title; the jobs with a number per slot, the commit cache and the loading, failed and too-large states (V3's work came with it, the view could not be shown without it) | 204–215, 217–225, 227, 228 | `tui/diffview.rs`, `tui/draw.rs`, `tui/mod.rs`, `core/src/diff.rs` |
+| V3 ✓ | A diff pane's answer no longer reloads the registry on the UI thread (RISK-70); an `App`-level test of the job round trip; a hand test with `scripts/drive.py` on a synthetic repo (4,000 new files, 231 commits, 300 untracked) that found three faults in the too-large view, fixed. A review workspace was not run end to end, only `Stream::resolve`'s test for `review_base`; REQ-216 waits for OPEN-27 | 219, 220, 223 | `tui/mod.rs`, `tui/diffview.rs` |
+| V4 ✓ | README; version 0.0.17 (past main's 0.0.16); a hand test with `scripts/drive.py` in a repo with commits and a dirty tree, and in a big one | — | `README.md`, `Cargo.toml` |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 
 Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{new_stream, rm_plan, rm, sync, done_plan}`, `src/diff.rs`, `src/view/md.rs` and `Modal::Rm` (type the name) stay as they are.
@@ -662,9 +662,9 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - OPEN-15 (open) Poll the registry every 2 s (the `List` cadence) or every 0.5 s tick? Default 2 s.
 - OPEN-16 → a `[review]` table in the project TOML (layout, agent command, a review skill) is later.
 - OPEN-17 to OPEN-21 (addendum 15) → the user did not answer; built with the proposed defaults: the picker lists all open PRs, `m` toggles "requested of me"; the project's setup runs; an existing review asks before the prompt is sent again; the review rules ride in the visible prompt, not `--append-system-prompt`; the trust-folder exposure is accepted (RISK-52). Say so to change any.
-- OPEN-26 (open) A key to refresh Uncommitted while the pane is open (not in the prototype, so it needs the prototype first). Default: none; a view reloads when the pane is restored.
-- OPEN-27 (open) The caps, 200 commits and 2 MiB of diff, are guesses. Default as written; adjust after a hand test in a big repo.
-- OPEN-28 → General is committed work only (RAT-52); OPEN-29 → the pane reopens on General (REQ-217); OPEN-30 → Uncommitted is one list with a mark per file, not split into staged and unstaged. The prototype shows all three and the user approved it (2026-10-11).
+- OPEN-27 (open) A key to refresh Uncommitted while the pane is open (not in the prototype, so it needs the prototype first). Default: none; a view reloads when the pane is restored.
+- OPEN-28 (open) The caps, 200 commits and 2 MiB of diff, are guesses. Default as written; adjust after a hand test in a big repo.
+- OPEN-29 → General is committed work only (RAT-58); OPEN-30 → the pane reopens on General (REQ-227); OPEN-31 → Uncommitted is one list with a mark per file, not split into staged and unstaged. The prototype shows all three and the user approved it (2026-10-11).
 - OPEN-5 → `~/.config/jw/settings.json` (JSON, outside Go's `*.toml` glob) and the `^␣ ,` screen (addendum 3).
 
 ## Corrections
@@ -707,10 +707,10 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - REQ-146 first said the welcome starts "with no workspace open" and does not pass on the key that closes it. At startup nothing is open yet even for a returning user, so it starts from an empty sidebar; and step 1 itself tells the user to press the leader, so that key is handled as usual.
 - The brief for W1 said the sidebar stayed stale until the TUI was reopened. True for writes by the CLI and by other TUIs; the TUI's own jobs already reload (`on_job`).
 - The same brief said the loop wakes only when something animates. `Msg::Tick` wakes it every 500 ms regardless (`tui/mod.rs:353`); only the animation timers in `next_wake` are conditional. The registry watch rides that tick (REQ-151, REQ-152).
-- REQ-21 and REQ-57 spoke of "every changed file" in one scroll: the working tree against the base. With addendum 17 that is General plus Uncommitted, in separate views. REQ-169 still holds for General; the uncommitted part moved to Uncommitted.
-- REQ-123 said `d` with no `origin/<default>` diffs against `HEAD`. That is now the Uncommitted view; General has nothing to compare then (REQ-198).
-- REQ-206 holds in the model (scroll and viewed live in `Pos`, by path, apart from the files), but nothing reloads a view while the pane is open, so nothing exercises it until OPEN-26 is answered.
-- Until addendum 17, a diff reload rebuilt the view and lost scroll and viewed files (`tui/mod.rs:3239`); REQ-206 fixes that.
+- REQ-21 and REQ-57 spoke of "every changed file" in one scroll: the working tree against the base. With addendum 18 that is General plus Uncommitted, in separate views. REQ-169 still holds for General; the uncommitted part moved to Uncommitted.
+- REQ-123 said `d` with no `origin/<default>` diffs against `HEAD`. That is now the Uncommitted view; General has nothing to compare then (REQ-208).
+- REQ-216 holds in the model (scroll and viewed live in `Pos`, by path, apart from the files), but nothing reloads a view while the pane is open, so nothing exercises it until OPEN-27 is answered.
+- Until addendum 18, a diff reload rebuilt the view and lost scroll and viewed files (`tui/mod.rs:3239`); REQ-216 fixes that.
 
 ## Tests
 

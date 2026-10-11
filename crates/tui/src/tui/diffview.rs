@@ -23,10 +23,10 @@ use crate::view::md::truncate;
 const TREE: u16 = 30;
 
 /// Below this many columns inside the pane the sidebar is not drawn beside
-/// the code; `Tab` opens it over the code instead (REQ-204).
+/// the code; `Tab` opens it over the code instead (REQ-214).
 const SIDEBAR_MIN: u16 = 100;
 
-/// The three views of the pane (REQ-199).
+/// The three views of the pane (REQ-209).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Which {
     General,
@@ -68,7 +68,7 @@ pub enum Part {
 }
 
 /// Git work the viewer asks of its owner, and the number to answer it with:
-/// a result whose number is not the one its slot waits for is old (REQ-208).
+/// a result whose number is not the one its slot waits for is old (REQ-218).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Request {
     pub slot: Slot,
@@ -93,7 +93,7 @@ impl<T> Load<T> {
 /// A view's files, or just their list when the diff was too large to read.
 struct Shown {
     files: Vec<File>,
-    /// How many files the diff has, when it was too large (REQ-210).
+    /// How many files the diff has, when it was too large (REQ-220).
     big: Option<usize>,
 }
 
@@ -119,8 +119,8 @@ impl From<Loaded> for Shown {
     }
 }
 
-/// Where the reader is in one view; kept apart for each (REQ-205), and
-/// `viewed` by path so a list that changes keeps it (REQ-206).
+/// Where the reader is in one view; kept apart for each (REQ-215), and
+/// `viewed` by path so a list that changes keeps it (REQ-216).
 #[derive(Default)]
 struct Pos {
     /// Index into the flattened items of the top visible row.
@@ -167,7 +167,7 @@ pub struct DiffView {
     height: usize,
 }
 
-/// One row of the sidebar (REQ-199).
+/// One row of the sidebar (REQ-209).
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Row {
     Section(Which),
@@ -203,7 +203,7 @@ fn load(r: Option<Request>) -> Action {
 }
 
 impl DiffView {
-    /// A pane that opens on General, which `general` already holds (REQ-194).
+    /// A pane that opens on General, which `general` already holds (REQ-204).
     pub fn new(name: String, base: String, dir: String, general: Result<Loaded, String>) -> Self {
         Self {
             name,
@@ -325,7 +325,7 @@ impl DiffView {
         Some(Request { slot, seq })
     }
 
-    /// What the shown view still needs from git (REQ-207).
+    /// What the shown view still needs from git (REQ-217).
     fn ensure(&mut self, retry: bool) -> Option<Request> {
         match self.which {
             Which::General => self.want(Slot::General, retry),
@@ -341,7 +341,7 @@ impl DiffView {
     }
 
     /// Takes what git work brought back. An answer whose number is not the
-    /// one its slot waits for is dropped (REQ-208). Returns more work when
+    /// one its slot waits for is dropped (REQ-218). Returns more work when
     /// the answer makes the shown view need it.
     pub fn apply(&mut self, slot: Slot, seq: u64, result: Result<Part, String>) -> Option<Request> {
         fn settle<T>(l: &mut Load<T>, seq: u64, r: Result<T, String>) -> bool {
@@ -379,12 +379,12 @@ impl DiffView {
         .flatten()
     }
 
-    /// Whether the sidebar has the keys (REQ-202).
+    /// Whether the sidebar has the keys (REQ-212).
     pub fn in_sidebar(&self) -> bool {
         self.sb.is_some()
     }
 
-    /// Whether the Commits view is the one shown (REQ-203).
+    /// Whether the Commits view is the one shown (REQ-213).
     pub fn in_commits(&self) -> bool {
         self.which == Which::Commits
     }
@@ -642,7 +642,7 @@ impl DiffView {
 
     // ---- drawing ----
 
-    /// What the title says of the view (REQ-214).
+    /// What the title says of the view (REQ-224).
     fn title(&self) -> String {
         match self.which {
             Which::General if self.base.is_empty() => format!("{} · committed", self.name),
@@ -769,7 +769,7 @@ impl DiffView {
         }
     }
 
-    /// The line a narrow pane shows in place of the sidebar (REQ-204).
+    /// The line a narrow pane shows in place of the sidebar (REQ-214).
     fn crumb(&self) -> Line<'static> {
         let dim = Style::default().fg(p().dim);
         let mut spans = vec![Span::styled(
@@ -1071,7 +1071,7 @@ impl DiffView {
     }
 }
 
-/// A file's letter in the sidebar and its colour (REQ-215).
+/// A file's letter in the sidebar and its colour (REQ-225).
 fn status_mark(f: &File) -> (&'static str, Color) {
     match f.status {
         Status::Added if f.untracked => ("?", p().magenta),
@@ -1083,7 +1083,7 @@ fn status_mark(f: &File) -> (&'static str, Color) {
 }
 
 /// A braille frame for the time it is; the pane is drawn at least twice a
-/// second, so a spinner turns while something loads (REQ-200).
+/// second, so a spinner turns while something loads (REQ-210).
 fn spinner() -> String {
     const FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
     let ms = std::time::SystemTime::now()
@@ -1315,7 +1315,7 @@ mod tests {
         }
     }
 
-    /// REQ-194, REQ-207: a pane opens on General and the other views load
+    /// REQ-204, REQ-217: a pane opens on General and the other views load
     /// when first asked for, once.
     #[test]
     fn other_views_load_on_first_visit_only() {
@@ -1329,7 +1329,7 @@ mod tests {
         assert!(matches!(chr(&mut v, '1'), Action::None), "General is held");
     }
 
-    /// REQ-205: each view keeps its own scroll and viewed files.
+    /// REQ-215: each view keeps its own scroll and viewed files.
     #[test]
     fn each_view_keeps_its_scroll_and_viewed_files() {
         let mut v = view(files(&["a.rs", "b.rs", "c.rs"], 3));
@@ -1352,7 +1352,7 @@ mod tests {
         assert!(v.pos().viewed.contains("u.rs"));
     }
 
-    /// REQ-208: an answer whose number is old is dropped.
+    /// REQ-218: an answer whose number is old is dropped.
     #[test]
     fn a_stale_answer_is_dropped() {
         let mut v = view(files(&["a.rs"], 1));
@@ -1366,7 +1366,7 @@ mod tests {
         assert_eq!(more.map(|r| r.slot), Some(Slot::Commit("aaa111".into())));
     }
 
-    /// REQ-197, REQ-203, REQ-205: the newest commit first, `(` and `)` move,
+    /// REQ-207, REQ-213, REQ-215: the newest commit first, `(` and `)` move,
     /// a commit already loaded is not asked for again and keeps its scroll.
     #[test]
     fn commits_step_and_keep_their_place() {
@@ -1399,7 +1399,7 @@ mod tests {
         );
     }
 
-    /// REQ-202: `Tab` into the sidebar, walk, choose a view, `Tab` back.
+    /// REQ-212: `Tab` into the sidebar, walk, choose a view, `Tab` back.
     #[test]
     fn the_sidebar_takes_the_keys_until_tab_or_esc() {
         let mut v = view(files(&["a.rs", "b.rs"], 1));
@@ -1428,7 +1428,7 @@ mod tests {
         assert_eq!(v.current(&v.items()), 1);
     }
 
-    /// REQ-199, REQ-204: three views stacked; below 100 columns a line and an
+    /// REQ-209, REQ-214: three views stacked; below 100 columns a line and an
     /// overlay in place of the sidebar.
     #[test]
     fn the_sidebar_is_beside_the_code_or_over_it() {
@@ -1457,7 +1457,7 @@ mod tests {
         );
     }
 
-    /// REQ-214: what the title says of each view.
+    /// REQ-224: what the title says of each view.
     #[test]
     fn the_title_names_the_view() {
         let mut v = view(files(&["a.rs"], 1));
@@ -1469,7 +1469,7 @@ mod tests {
         assert!(screen(&mut v, 120, 8).contains("auth · 3 commits"));
     }
 
-    /// REQ-210, REQ-218, REQ-198: a failed view says why, a too-large one
+    /// REQ-220, REQ-228, REQ-208: a failed view says why, a too-large one
     /// lists its files, a base-less General says there is nothing to compare.
     #[test]
     fn a_view_can_fail_be_too_large_or_have_no_base() {
@@ -1512,7 +1512,7 @@ mod tests {
         assert!(screen(&mut v, 120, 10).contains("origin has no default branch"));
     }
 
-    /// REQ-196, REQ-215: an untracked file shows `?` and the others their letter.
+    /// REQ-206, REQ-225: an untracked file shows `?` and the others their letter.
     #[test]
     fn marks_tell_untracked_from_added() {
         let mut f = diff::parse(

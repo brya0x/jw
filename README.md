@@ -109,9 +109,15 @@ git clone https://github.com/brya0x/jw && cd jw && cargo install --path crates/j
   `esc` or any other key gives the keyboard back to the pane.
 - **`^␣ X`:** after the PR is merged it asks once. When work would be lost (changes not
   committed, commits not pushed), you type the worktree's name to confirm.
-- **`^␣ d`:** opens the diff against the base on the right. It shows one column when the
-  terminal is narrow and two side by side when it is wide. `↵` opens a file in nvim, or in
-  the Markdown reader for a `.md`.
+- **`^␣ d`:** opens the changes on the right, in three views listed in the pane's left sidebar:
+  **General** (the branch's commits against its base), **Uncommitted** (staged, unstaged and
+  untracked) and **Commits** (each commit of the branch and its diff). `1` `2` `3` jump to a
+  view, `Tab` moves into the sidebar (`↑↓`, `↵`, `Tab` or `esc` to leave), and in Commits `(` and
+  `)` step through the commits. Each view and each commit keeps its scroll and its viewed
+  files. It shows one column when the terminal is narrow and two side by side when it is wide;
+  below 100 columns the sidebar is a list that `Tab` opens over the diff. A diff over 2 MiB
+  lists its files and says it is too large to draw. `↵` opens a file in nvim, or in the
+  Markdown reader for a `.md`.
 
 - **`^␣ R`:** lists the open pull requests of the project (`m` shows only those whose review
   is requested of you, `o` opens one in the browser). `↵` on one makes the worktree

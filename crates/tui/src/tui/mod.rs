@@ -110,8 +110,8 @@ enum Job {
         name: String,
         base: String,
         dir: String,
-        /// General, which a diff pane opens on (REQ-194); git's complaint
-        /// when it failed (REQ-218).
+        /// General, which a diff pane opens on (REQ-204); git's complaint
+        /// when it failed (REQ-228).
         general: Result<crate::diff::Loaded, String>,
         /// The viewer pane to fill, when it is already in the tree (a
         /// client attaching to a workspace that shows one).
@@ -2986,7 +2986,7 @@ impl App {
         });
     }
 
-    /// Runs the git work a diff pane asked for, off the UI thread (REQ-207).
+    /// Runs the git work a diff pane asked for, off the UI thread (REQ-217).
     fn load_part(&mut self, pane: PaneId, req: diffview::Request) {
         let Some(View::Diff(d)) = self.views.get(&pane) else {
             return;
@@ -3228,7 +3228,7 @@ impl App {
     fn on_job(&mut self, job: Job) {
         self.busy = None;
         // A diff pane's answer touches no registry: no reload on its account,
-        // or every `)` would read the registry on the UI thread (REQ-209).
+        // or every `)` would read the registry on the UI thread (REQ-219).
         let job = match job {
             Job::DiffPart {
                 pane,
@@ -4004,7 +4004,7 @@ mod diff_tests {
             .join("\n")
     }
 
-    /// REQ-207, REQ-209: `2` asks for Uncommitted, git runs on a worker, the
+    /// REQ-217, REQ-219: `2` asks for Uncommitted, git runs on a worker, the
     /// answer comes back as a job and fills the view; the answer is taken
     /// without reading the registry again.
     #[test]
