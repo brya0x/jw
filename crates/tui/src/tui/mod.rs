@@ -14,6 +14,7 @@ mod modal;
 mod select;
 mod settings_view;
 mod setup;
+mod trace;
 
 use std::collections::BTreeMap;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -330,6 +331,15 @@ pub fn run() -> Result<()> {
         loop {
             match reader.recv() {
                 Ok(Some(m)) => {
+                    if trace::on() {
+                        match &m {
+                            DaemonMsg::Snapshot { bytes, .. } => {
+                                trace::mark("rx_snapshot", bytes.len() as u64)
+                            }
+                            DaemonMsg::Tree { .. } => trace::mark("rx_tree", 0),
+                            _ => {}
+                        }
+                    }
                     if to_main.send(Msg::Daemon(m)).is_err() {
                         return;
                     }
@@ -548,7 +558,11 @@ impl App {
     /// path, a failed draw included.
     fn draw(&mut self, term: &mut ratatui::DefaultTerminal) -> Result<()> {
         let mut out = std::io::stdout();
-        let drawn = anim::synced(&mut out, || term.draw(|f| draw::draw(f, self)));
+        let drawn = trace::span("draw_total", || {
+            anim::synced(&mut out, || {
+                term.draw(|f| trace::span("draw_build", || draw::draw(f, self)))
+            })
+        });
         self.last_draw = Instant::now();
         drawn?;
         Ok(())
@@ -851,7 +865,7 @@ impl App {
     }
 
     fn send(&mut self, msg: ClientMsg) {
-        if let Err(e) = self.tx.send(&msg) {
+        if let Err(e) = trace::span("send", || self.tx.send(&msg)) {
             self.fail(format!("daemon: {e}"));
         }
     }
@@ -1027,6 +1041,21 @@ impl App {
     }
 
     fn handle(&mut self, m: Msg) {
+        if !trace::on() {
+            return self.handle_msg(m);
+        }
+        let kind = match &m {
+            Msg::Daemon(DaemonMsg::Snapshot { .. }) => "handle_snapshot",
+            Msg::Daemon(DaemonMsg::Tree { .. }) => "handle_tree",
+            Msg::Daemon(DaemonMsg::Output { .. }) => "handle_output",
+            Msg::Daemon(_) => "handle_daemon",
+            Msg::Term(_) => "handle_term",
+            _ => "handle_other",
+        };
+        trace::span(kind, || self.handle_msg(m));
+    }
+
+    fn handle_msg(&mut self, m: Msg) {
         match m {
             Msg::Daemon(d) => self.on_daemon(d),
             Msg::DaemonGone => {
@@ -1107,13 +1136,16 @@ impl App {
                 rows,
                 bytes,
             } => {
-                let mut parser = vt100::Parser::new_with_callbacks(
-                    rows,
-                    cols,
-                    SCROLLBACK,
-                    keys::Flags::default(),
-                );
-                parser.process(&bytes);
+                let parser = trace::span("snap_parse", || {
+                    let mut parser = vt100::Parser::new_with_callbacks(
+                        rows,
+                        cols,
+                        SCROLLBACK,
+                        keys::Flags::default(),
+                    );
+                    parser.process(&bytes);
+                    parser
+                });
                 self.clear_sel_of(pane);
                 self.panes.insert(
                     pane,
@@ -1124,7 +1156,8 @@ impl App {
                         title: None,
                     },
                 );
-                self.fit();
+                trace::span("fit", || self.fit());
+                trace::mark("snap_installed", 0);
             }
             DaemonMsg::Output { pane, bytes } => {
                 if let Some(v) = self.panes.get_mut(&pane) {
@@ -1140,7 +1173,7 @@ impl App {
             }
             DaemonMsg::Tree { stream, tree } => {
                 if self.current().is_some_and(|e| e.id == stream) {
-                    self.set_tree(tree);
+                    trace::span("set_tree", || self.set_tree(tree));
                 }
                 self.send(ClientMsg::List);
             }
@@ -1454,19 +1487,22 @@ impl App {
         if self.current().is_some_and(|c| c.id == entry.id) {
             return;
         }
+        trace::mark("switch_start", 0);
         self.recent.retain(|id| *id != entry.id);
         self.recent.insert(0, entry.id.clone());
         self.recent.truncate(50);
-        save_recent(&self.recent);
+        trace::span("save_recent", || save_recent(&self.recent));
         if crate::folders::is_folder(&entry) && !entry.path.is_empty() {
             let dir = entry.path.clone();
-            if let Err(e) = crate::folders::edit(|all| {
-                all.add(&dir);
+            if let Err(e) = trace::span("folders_edit", || {
+                crate::folders::edit(|all| {
+                    all.add(&dir);
+                })
             }) {
                 self.fail(format!("{e:#}"));
             }
         }
-        let stream = match Stream::resolve(&entry) {
+        let stream = match trace::span("resolve", || Stream::resolve(&entry)) {
             Ok(s) => s,
             Err(e) => {
                 self.fail(format!("{}: {e:#}", entry.name));
@@ -1474,7 +1510,7 @@ impl App {
             }
         };
         self.send(ClientMsg::Detach);
-        self.forget_workspace();
+        trace::span("forget", || self.forget_workspace());
         let already = self.is_open(&entry.id);
         self.active = Some(stream);
 
@@ -1482,7 +1518,8 @@ impl App {
             self.send(ClientMsg::Attach {
                 stream: entry.id.clone(),
             });
-        } else if let Err(e) = self.start_panes(setup) {
+            trace::mark("attach_sent", 0);
+        } else if let Err(e) = trace::span("start_panes", || self.start_panes(setup)) {
             self.fail(format!("{}: {e:#}", entry.name));
         }
     }

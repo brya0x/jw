@@ -362,20 +362,42 @@ After this addendum: the UI thread never waits on disk, process or socket work d
 | build buffer (`draw`, `screen_to`) | ≤ 6 ms at 240×60 | `draw.rs:15`, `draw.rs:879` |
 | ratatui diff + write to the terminal | ≤ 3 ms, ≤ 64 KiB per frame | `mod.rs:549` |
 | slack (parse of a burst, `drain`) | ≥ 6 ms | `mod.rs:173` |
-| key → first frame with the new panes' content | ≤ 100 ms (OPEN-1) | whole path |
+| key → first frame with the new panes' content | ≤ 100 ms (OPEN-14) | whole path |
 
-#### Suspects (from reading; none measured yet)
+#### Suspects (S1–S8 from reading; the verdicts are F0's measurements, below)
 
 | # | Where | Why it is slow |
 |---|---|---|
 | S1 | `open_entry` `mod.rs:1453` | `save_recent` (write+rename), `folders::edit`, `Stream::resolve` (`core/src/stream.rs:45`: config load, `default_branch` spawns `git`, `core/src/connectors/git.rs:84`), `open_specs`, `mark_opened`: disk and a **git process** on the UI thread |
 | S7 | `on_daemon` `mod.rs:1103`, `fit` `mod.rs:1662` | every `Snapshot` and `Tree` runs `fit()`: N full re-layouts, a `Resize` to the daemon per changed pane; `Tree` also triggers `List` and `find_here` (canonicalize) |
+| S9 | `event_loop` `mod.rs:793`, `next_wake` `mod.rs:561` | the next frame is due `FRAME` after the *end* of the last draw (`last_draw` is set after it), so the cadence is 16 ms + draw + wake slop |
 | S8 | `daemon/src/lib.rs:774` | a *new* workspace's `Open` spawns PTYs and writes `session.json` + scrollback under a lock before `Attach` |
 | S2 | `on_daemon(Snapshot)` `mod.rs:1101` | `Parser::new(…, SCROLLBACK)` + replay of up to 2 MiB per pane, on the UI thread, ahead of the next draw |
 | S3 | `snapshot()` `daemon/src/lib.rs:383` | copies the whole ring per pane per attach, then `state_formatted` |
 | S4 | `forget_workspace` `mod.rs:2457` | blank panes until S2 ends; the slide shows nothing |
 | S5 | `screen_to` `draw.rs:879` | per-cell `Style` build every frame, no cache, O(area) |
 | S6 | `synced` `anim.rs:187` + `Client::send` `client.rs:78` | extra flushes per frame; a blocking socket write on the UI thread |
+
+#### Measurements (F0, release build, 60×240, one shell pane with a full 2 MiB ring, 30 switches, M-series Mac; `scripts/bench-switch.py`)
+
+| Phase | p50 | p95 | Budget | Verdict |
+|---|---|---|---|---|
+| `Stream::resolve` (UI thread, before `Detach`; spawns `git`) | 39.8 ms | 62.6 ms | ≤ 1 ms | **S1 confirmed**, the first stall |
+| `save_recent`, `folders_edit`, `forget`, every `send` | ≤ 0.5 ms each (p95 ≤ 2.4) | | ≤ 1 ms | S1's file I/O and S6's sends are fine here |
+| `Attach` → `Tree` → `Snapshot` at the TUI (daemon + socket, 2 MiB) | 2.3 ms | | | **S3 not a problem** at 1 pane |
+| `Snapshot` parse (`Parser::new` + 2 MiB replay), UI thread | 86.5 ms | 109.8 ms | ≤ 1 ms | **S2 confirmed**: ≈ 5 frames lost, per pane |
+| `fit`, `set_tree` | < 0.1 ms | | | S7 not a problem at 1 pane (`Resize` count grows with panes) |
+| draw: build the buffer / whole `term.draw` + sync | 1.0 / 1.9 ms (p95 7.8 / 9.5) | | ≤ 6 / ≤ 9 ms | **S5 not a problem**: no frame over 16 ms |
+| bytes written to the terminal per switch | 142–187 KiB | max 250 KiB | ≤ 64 KiB per frame | fine per frame (≈ 15 frames) |
+| key → first frame with the new content | 133 ms | 168 ms | ≤ 100 ms | over: 40 + 86 of the 133 are S1 and S2 |
+| frame cadence while the slide runs | 20.4–20.8 ms (≈ 49 fps) | 21.3 ms | 16.7 ms | **S9 confirmed**: draw takes 1 ms, so ≈ 3 ms is the deadline |
+| longest gap without a frame after the key | 120 ms | 146 ms | 16.7 ms | S1 + S2, back to back |
+
+Timeline of one switch (ms from the key): `resolve` 0–42 (no frame) → `Attach` 42.6 → `Tree` and `Snapshot` at the TUI at 43–45 → one frame at 46 → `handle_snapshot` 46–129 (no frame) → frames every ≈ 20 ms. By the time the content is in, the 240 ms slide is already 55 % over, so it jumps in, it does not slide.
+
+Opening a *new* workspace (3 samples): `resolve` 31 ms, but `handle_term` is 130 ms: about 100 ms more before or around `open_entry` that no span covers yet (the picker's confirm). Not measured further; F1 starts there.
+
+Verdicts: **F1** (S1, S9) and **F2** (S2, S4) are the work; **F3** (S3, S8) and **F4** (S5) have no number behind them and are dropped unless more panes change that. Snapshot cost is per pane, so a workspace with three panes should cost ≈ 3 × 86 ms until F2.
 
 #### Interfaces
 
@@ -400,10 +422,10 @@ After this addendum: the UI thread never waits on disk, process or socket work d
 
 Open (human decisions, still unanswered):
 
-- OPEN-1 Is 100 ms key→content the right switch budget? (The slide itself is 240 ms, REQ-136.)
-- OPEN-2 REQ-155 shows a pane's frame while it fills, instead of blank. That is a visible change, and AGENTS.md asks for an HTML prototype first. Prototype it, or accept it as a fix, not a UI change?
-- OPEN-3 Measurement needs code (F0) and a build, which plan mode forbids. Approve F0 first and bring the numbers before F1–F4, or approve the whole plan now?
-- OPEN-4 Brain workspace: this spec's open questions should be reported there; I could not reach it from here.
+- OPEN-14 Is 100 ms key→content the right switch budget? (The slide itself is 240 ms, REQ-136.)
+- OPEN-15 REQ-155 shows a pane's frame while it fills, instead of blank. That is a visible change, and AGENTS.md asks for an HTML prototype first. Prototype it, or accept it as a fix, not a UI change?
+- OPEN-16 (answered 2026-10-11) F0 first, numbers before F1–F4: see Measurements.
+- OPEN-17 Brain workspace: this spec's open questions should be reported there; I could not reach it from here.
 
 ## Rationale
 
@@ -493,7 +515,7 @@ Open (human decisions, still unanswered):
 - RISK-45 **The shorter which-key delay shows the popup to people who type fast.** A chord typed within 150 ms still never shows it; one typed slower flashes it for an instant, softened by the fade. `which_delay_ms` restores the old 600 ms.
 - Closed by addendum 3: RISK-5 (own registry), RISK-7 (hooks), RISK-9 (frames), RISK-16 (`nvim --server`), RISK-17 (`root` in the registry).
 - RISK-46 Moving parse to another thread can reorder `Snapshot` and `Output`. Keep one reader thread, parse inline there, preserve order.
-- RISK-47 Keeping the old frame during loading (REQ-155) changes what the user sees; see OPEN-2.
+- RISK-47 Keeping the old frame during loading (REQ-155) changes what the user sees; see OPEN-15.
 - RISK-48 F0 numbers on this Mac may not predict slower terminals or SSH; the budget table is a target, not a guarantee.
 
 ## Parts (each one ends with `cargo test` + `clippy` green and a local commit on `feat/rust-tui`; nothing is pushed)
@@ -553,8 +575,8 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | M5 ✓ | Focus border ease; eased wheel scroll | 145 | `tui/draw.rs`, `tui/mod.rs` |
 | M6 ✓ | First-run welcome, `welcomed` and `JW_WELCOME=0` (set by `scripts/drive.py`) | 146, 149 | `tui/draw.rs`, `settings.rs`, `scripts/drive.py` |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
-| F0 | `JW_TRACE`, `scripts/bench-switch.py`, record numbers in the spec's Measurements table; confirm or kill S1–S6 | 150 | `tui/mod.rs`, `tui/draw.rs`, `scripts/` |
-| F1 | S1, S6, S7: disk/git work through `App::background`; sends never block the UI; one `fit()` per batch, not per `Snapshot` | 151, 157 | `tui/mod.rs`, `core` (callers) |
+| F0 ✓ | `JW_TRACE`, `scripts/bench-switch.py`, the Measurements above | 150 | `tui/trace.rs`, `tui/mod.rs`, `scripts/` |
+| F1 | S1, S9: `Stream::resolve` (the `git` spawn) off the UI thread, the frame deadline counted from the frame's start; the unexplained ≈ 100 ms of a first open | 151, 157 | `tui/mod.rs`, `core` (callers) |
 | F2 | S2: parse in the reader thread (`Msg::Snapshot` carries a `Parser`); S4: keep pane frames while content loads | 152, 155, 156 | `tui/mod.rs`, `tui/draw.rs` |
 | F3 | S3, S8 (daemon: cap/skip ring copy; save off the open path) only if F0 shows them over budget | 154, 156 | `daemon/src/lib.rs` |
 | F4 | S5: skip unchanged rows in `screen_to`, one flush per frame, only if F0 shows draw over budget | 153 | `tui/draw.rs`, `tui/anim.rs` |
@@ -614,6 +636,7 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - REQ-138 first said that without truecolor every change applies at once. The selection band, the spinner and the welcome steps need no colour blending, so only the fades and the panes' slide wait for truecolor.
 - REQ-146 first said the welcome starts "with no workspace open" and does not pass on the key that closes it. At startup nothing is open yet even for a returning user, so it starts from an empty sidebar; and step 1 itself tells the user to press the leader, so that key is handled as usual.
 
+- Addendum 14 was agreed with S1–S8 as guesses. F0 confirmed S1, S2 and found S9 (the frame cadence is ≈ 20 ms, not 16); it showed S3, S5, S6 and S7 cost almost nothing at one pane. Its OPEN ids were first 1–4, which this spec already used: renumbered 14–17.
 - Addendum 13 said that on a switch the panes "only enter; nothing leaves". True, but it also means the slide animates over blank panes until the Snapshots arrive (S4, addendum 14).
 
 ## Tests
@@ -628,4 +651,4 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - selection (X1, X2): unit tests over a vt100 screen for the extracted text (trailing spaces, soft-wrapped rows, wide characters, history rows) and for word and line bounds; the OSC 52 bytes; the highlight and the banner text; `mouse_encodings` still passes. Manual: zsh drag, double and triple click, drag past the edge; the banner appears top right and goes after about 2 s; nvim plain drag reaches nvim, Shift + drag selects.
 - motion (M1–M6): units for the tween (starts at 0, reaches 1 at its duration, monotonic, an interrupt starts from the displayed value) and for the colour lerp; `next_wake` blocks when idle, wakes a frame after the last draw while a transition runs, for the drag edge and the which-key, takes the soonest, and wakes when a message starts to leave; `TestBackend` for the spinner glyph by elapsed time, the welcome (shows; any key closes it, writes `welcomed` and is still handled), the slide's last frame equal to the static draw, and `animations = false` giving the final frame at once; `tick_motion` on an `App` without a daemon (`App::bare`): the band starts on the current row without motion, a switch glides it and keeps the loop awake until `SWITCH`, `animations = false` jumps it, no workspace means no band, the spinner steps only for visible rows; the bytes of a draw start with `CSI ? 2026 h` and end with `CSI ? 2026 l`, also after a failed draw. Manual in Ghostty with `scripts/drive.py`: switching workspaces with the arrows, the which-key at 150 ms, no tearing in a fast `cat`, idle CPU near zero.
 - manual (after Q2 and Q5): claude and nvim in panes; `w`, `t`, `x`, `HJKL`, `n`, `d`, `↵` in the diff, `q`, then `jw` again shows the same layout.
-- switch speed (F0–F4): `JW_TRACE` lines per phase; `scripts/bench-switch.py` p50/p95/max against an isolated `scripts/jw-test` dir with 3 worktrees and a 2 MiB ring (kill only that dir's pid); a `Msg::Snapshot` parser equals the inline one and Output after it applies in order; `tick_motion` and a 240×60 draw on `App::bare`/`TestBackend` under the budget. Measurements table: not yet filled (F0).
+- switch speed (F0–F4): `JW_TRACE` lines per phase; `scripts/bench-switch.py` p50/p95/max against an isolated `scripts/jw-test` dir with 3 worktrees and a 2 MiB ring (kill only that dir's pid); a `Msg::Snapshot` parser equals the inline one and Output after it applies in order; `tick_motion` and a 240×60 draw on `App::bare`/`TestBackend` under the budget.
