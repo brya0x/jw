@@ -625,6 +625,108 @@ fn a_split_tells_only_its_requester_the_new_pane() {
     }
 }
 
+/// REQ-204..218: `jw pane open|ls|close` against a running daemon, in a
+/// state dir of its own with one folder workspace, which a TUI would show.
+#[test]
+fn jw_pane_opens_lists_and_closes_panes() {
+    let d = Daemon::start();
+    let work = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let dir = work.path().canonicalize().unwrap();
+    let dir = dir.to_str().unwrap().to_string();
+    let main = state.path().join("jw").join("sessions").join("main");
+    std::fs::create_dir_all(&main).unwrap();
+    std::fs::write(
+        main.join("folders.json"),
+        format!(r#"{{"folders":[{{"dir":{dir:?},"created":"2026-01-01T00:00:00Z","name":"w"}}]}}"#),
+    )
+    .unwrap();
+    let jw = |args: &[&str]| {
+        Command::new(EXE)
+            .args(args)
+            .env("JW_SOCKET", &d.socket)
+            .env("XDG_STATE_HOME", state.path())
+            .env_remove("JW_SESSION")
+            .env_remove("JW_PANE_ID")
+            .output()
+            .unwrap()
+    };
+    let ok = |args: &[&str]| {
+        let out = jw(args);
+        assert!(out.status.success(), "{args:?}: {out:?}");
+        String::from_utf8(out.stdout).unwrap()
+    };
+
+    // A workspace the daemon does not run.
+    let out = jw(&["pane", "ls", "w"]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("is not open"));
+
+    let mut tui = d.client();
+    tui.send(&ClientMsg::Open {
+        stream: format!("dir:{dir}"),
+        tree: Tree::Leaf(cat()),
+    })
+    .unwrap();
+    let first = ids(&next_tree(&mut tui))[0];
+
+    // The TUI sees the pane with no action of its own (REQ-209).
+    let diff: PaneId = ok(&["pane", "open", "w", "--run", "view:diff"])
+        .trim()
+        .parse()
+        .unwrap();
+    let t = next_tree(&mut tui);
+    assert_eq!(ids(&t), [first, diff]);
+    assert_eq!(t.find(diff).unwrap().role, "view:diff");
+
+    let run: PaneId = ok(&[
+        "pane",
+        "open",
+        "w",
+        "--run",
+        "cat",
+        "--split",
+        "down",
+        "--of",
+        &first.to_string(),
+    ])
+    .trim()
+    .parse()
+    .unwrap();
+    let t = next_tree(&mut tui);
+    assert_eq!(ids(&t), [first, run, diff]);
+    assert_eq!(t.find(run).unwrap().role, "run");
+
+    let table = ok(&["pane", "ls", "w"]);
+    assert!(
+        table.contains("view:diff") && table.contains("viewer"),
+        "{table}"
+    );
+    assert!(
+        table.contains("run") && table.contains("running"),
+        "{table}"
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(&ok(&["pane", "ls", "w", "--json"])).unwrap();
+    assert_eq!(json.as_array().unwrap().len(), 3);
+
+    // A pane outside the workspace is refused; so is the last one, below.
+    assert!(
+        !jw(&["pane", "open", "w", "--run", "cat", "--of", "999999"])
+            .status
+            .success()
+    );
+    assert!(!jw(&["pane", "close", "w", "999999"]).status.success());
+
+    ok(&["pane", "close", "w", &run.to_string()]);
+    assert_eq!(ids(&next_tree(&mut tui)), [first, diff]);
+    ok(&["pane", "close", "w", &diff.to_string()]);
+    assert_eq!(ids(&next_tree(&mut tui)), [first]);
+    let out = jw(&["pane", "close", "w", &first.to_string()]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--force"));
+}
+
 /// REQ-34: every change to a workspace's panes reaches its tree, the
 /// clients watching it, and session.json.
 #[test]

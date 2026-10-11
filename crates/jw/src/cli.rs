@@ -14,9 +14,11 @@ use anyhow::{Context, Result, bail};
 use crate::actions::{self, NewOptions, Project};
 use crate::client::Client;
 use crate::core::registry::{self, Entry, Registry};
-use crate::layout::Rect;
+use crate::layout::{Dir, Rect};
 use crate::program;
-use crate::proto::{AgentState, ClientMsg, DaemonMsg, PROTOCOL, PaneInfo, socket_path};
+use crate::proto::{
+    AgentState, ClientMsg, DaemonMsg, NewPane, PROTOCOL, PaneId, PaneInfo, PaneLeaf, socket_path,
+};
 use crate::stream::{PaneSpec, Stream};
 
 /// Panes started without a TUI get this size; the TUI resizes them when it
@@ -41,6 +43,249 @@ pub fn prompt(args: &[String]) -> Result<()> {
     hello(&mut c)?;
     send_prompt(&mut c, &entry, text.trim())?;
     println!("sent to {}'s agent", entry.name);
+    Ok(())
+}
+
+const PANE_USAGE: &str = "usage: jw pane open <workspace> --run <program|shell|view:diff|view:md:<file>> \
+                          [--split right|down] [--of <pane>]\n       \
+                          jw pane close <workspace> <pane> [--force]\n       \
+                          jw pane ls <workspace> [--json]";
+
+/// What `--run` starts: the role and the command of the new pane (REQ-207).
+/// `view:*` has no process; anything else but `shell` runs through `sh -c`.
+fn run_target(what: &str, cwd: &Path) -> Result<(String, Option<String>)> {
+    match what {
+        "shell" => Ok(("shell".into(), None)),
+        "view:diff" => Ok((what.into(), None)),
+        w if w.starts_with("view:md:") => {
+            let file = &w["view:md:".len()..];
+            if file.is_empty() {
+                bail!("view:md: needs a file: view:md:<file>");
+            }
+            // The TUI reads it against the workspace it shows, not our directory.
+            Ok((format!("view:md:{}", cwd.join(file).display()), None))
+        }
+        w if w.starts_with("view:") => bail!("unknown viewer {w:?}: view:diff or view:md:<file>"),
+        "" => bail!("--run needs a program"),
+        w => Ok(("run".into(), Some(w.to_string()))),
+    }
+}
+
+/// The pane a split goes beside: the one asked for, else the agent's, else
+/// the last of the tree (REQ-204, REQ-210).
+fn anchor(leaves: &[&PaneLeaf], of: Option<PaneId>) -> Result<PaneId> {
+    match of {
+        Some(id) if leaves.iter().any(|l| l.id == id) => Ok(id),
+        Some(id) => bail!("no pane {id} in the workspace (jw pane ls lists them)"),
+        None => leaves
+            .iter()
+            .find(|l| l.role == "agent")
+            .or(leaves.last())
+            .map(|l| l.id)
+            .context("the workspace has no pane"),
+    }
+}
+
+/// The workspace's tree, through an Attach. A workspace the daemon doesn't
+/// run sends nothing, which is how it is told apart.
+fn attach_tree(c: &mut Client, ws: &Ws) -> Result<crate::layout::Tree<PaneLeaf>> {
+    c.send(&ClientMsg::Attach {
+        stream: ws.entry.id.clone(),
+    })?;
+    loop {
+        match next(c).with_context(|| format!("{} is not open", ws.label))? {
+            DaemonMsg::Tree { stream, tree } if stream == ws.entry.id => return Ok(tree),
+            DaemonMsg::Error { msg } => bail!("{msg}"),
+            _ => {}
+        }
+    }
+}
+
+/// A connection to the daemon that is already running, past the Hello.
+fn connect_to(ws: &Ws) -> Result<Client> {
+    let mut c = Client::connect(&socket_path())
+        .with_context(|| format!("{} is not open: no jw daemon is running", ws.label))?;
+    hello(&mut c)?;
+    Ok(c)
+}
+
+/// `jw pane open|close|ls`: what an agent does to a workspace's panes.
+pub fn pane(args: &[String]) -> Result<()> {
+    match args.split_first() {
+        Some((v, rest)) if v == "open" => pane_open(rest),
+        Some((v, rest)) if v == "close" => pane_close(rest),
+        Some((v, rest)) if v == "ls" => pane_ls(rest),
+        _ => bail!("{PANE_USAGE}"),
+    }
+}
+
+fn pane_open(args: &[String]) -> Result<()> {
+    let (mut name, mut run, mut dir, mut of) = (None, None, Dir::Right, None);
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--run" => run = Some(it.next().context("--run needs what to run")?.clone()),
+            "--split" => {
+                dir = match it.next().map(String::as_str) {
+                    Some("right") => Dir::Right,
+                    Some("down") => Dir::Down,
+                    _ => bail!("--split is right or down"),
+                }
+            }
+            "--of" => {
+                of = Some(
+                    it.next()
+                        .and_then(|n| n.parse::<PaneId>().ok())
+                        .context("--of needs a pane id")?,
+                )
+            }
+            s if s.starts_with('-') => bail!("unknown flag {s}"),
+            s if name.is_none() => name = Some(s.to_string()),
+            s => bail!("unexpected argument {s:?}"),
+        }
+    }
+    let (Some(name), Some(run)) = (name, run) else {
+        bail!("{PANE_USAGE}");
+    };
+    let ws = find(&name)?;
+    let (role, cmd) = run_target(&run, &std::env::current_dir()?)?;
+    let stream = Stream::resolve(&ws.entry)?;
+    let mut c = connect_to(&ws)?;
+    let tree = attach_tree(&mut c, &ws)?;
+    let beside = anchor(&tree.leaves(), of)?;
+    let _ = c.send(&ClientMsg::Detach);
+    c.send(&ClientMsg::Split {
+        pane: beside,
+        dir,
+        new: NewPane {
+            role,
+            cmd,
+            resume: None,
+            cwd: PathBuf::from(&ws.entry.path),
+            env: stream.env(),
+            cols: 80,
+            rows: 24,
+        },
+    })?;
+    c.set_read_timeout(Some(Duration::from_secs(10)))?;
+    loop {
+        match next(&mut c)? {
+            DaemonMsg::Opened { pane } => {
+                println!("{pane}");
+                return Ok(());
+            }
+            DaemonMsg::Error { msg } => bail!("{msg}"),
+            _ => {}
+        }
+    }
+}
+
+fn pane_close(args: &[String]) -> Result<()> {
+    let mut force = false;
+    let mut words = Vec::new();
+    for a in args {
+        match a.as_str() {
+            "--force" => force = true,
+            s if s.starts_with('-') => bail!("unknown flag {s}"),
+            s => words.push(s),
+        }
+    }
+    let [name, id] = words[..] else {
+        bail!("{PANE_USAGE}");
+    };
+    let id: PaneId = id
+        .parse()
+        .context("the pane is its id: jw pane ls lists them")?;
+    let ws = find(name)?;
+    let mut c = connect_to(&ws)?;
+    let tree = attach_tree(&mut c, &ws)?;
+    let leaves = tree.leaves();
+    if !leaves.iter().any(|l| l.id == id) {
+        bail!("no pane {id} in {} (jw pane ls lists them)", ws.label);
+    }
+    // Closing the last pane closes the workspace; closing your own ends you.
+    if leaves.len() == 1 && !force {
+        bail!(
+            "pane {id} is the last of {}: --force closes the workspace",
+            ws.label
+        );
+    }
+    if !force && std::env::var("JW_PANE_ID").is_ok_and(|me| me == id.to_string()) {
+        bail!("pane {id} is the one you run in: --force closes it");
+    }
+    c.send(&ClientMsg::Kill { pane: id })?;
+    // The last pane's workspace closes with it, and no Tree follows.
+    if leaves.len() == 1 {
+        return Ok(());
+    }
+    c.set_read_timeout(Some(Duration::from_secs(5)))?;
+    loop {
+        match next(&mut c)? {
+            DaemonMsg::Tree { stream, tree } if stream == ws.entry.id => {
+                if !tree.leaves().iter().any(|l| l.id == id) {
+                    return Ok(());
+                }
+            }
+            DaemonMsg::Error { msg } => bail!("{msg}"),
+            _ => {}
+        }
+    }
+}
+
+fn pane_ls(args: &[String]) -> Result<()> {
+    let mut json = false;
+    let mut name = None;
+    for a in args {
+        match a.as_str() {
+            "--json" => json = true,
+            s if s.starts_with('-') => bail!("unknown flag {s}"),
+            s if name.is_none() => name = Some(s),
+            s => bail!("unexpected argument {s:?}"),
+        }
+    }
+    let ws = find(name.context(PANE_USAGE)?)?;
+    let mut c = connect_to(&ws)?;
+    let tree = attach_tree(&mut c, &ws)?;
+    let _ = c.send(&ClientMsg::Detach);
+    c.send(&ClientMsg::List)?;
+    let infos = loop {
+        match next(&mut c)? {
+            DaemonMsg::Panes { panes } => break panes,
+            DaemonMsg::Error { msg } => bail!("{msg}"),
+            _ => {}
+        }
+    };
+    let rows: Vec<serde_json::Value> = tree
+        .leaves()
+        .into_iter()
+        .map(|l| {
+            let info = infos.iter().find(|p| p.pane == l.id);
+            serde_json::json!({
+                "id": l.id,
+                "role": l.role,
+                "name": l.name,
+                "program": info.and_then(|p| p.fg.as_ref()),
+                "exited": info.and_then(|p| p.exited),
+            })
+        })
+        .collect();
+    if json {
+        println!("{}", serde_json::to_string_pretty(&rows)?);
+        return Ok(());
+    }
+    for r in &rows {
+        let status = match (r["exited"].as_i64(), r["program"].is_null()) {
+            (Some(n), _) => format!("exited {n}"),
+            (None, true) => "viewer".to_string(),
+            (None, false) => "running".to_string(),
+        };
+        println!(
+            "{:<6} {:<12} {:<14} {status}",
+            r["id"],
+            r["role"].as_str().unwrap_or_default(),
+            r["program"].as_str().unwrap_or("-"),
+        );
+    }
     Ok(())
 }
 
@@ -595,6 +840,42 @@ fn text_of(rows: u16, cols: u16, bytes: &[u8], n: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn run_maps_to_a_role_and_a_command() {
+        let cwd = Path::new("/w");
+        assert_eq!(run_target("shell", cwd).unwrap(), ("shell".into(), None));
+        assert_eq!(
+            run_target("view:diff", cwd).unwrap(),
+            ("view:diff".into(), None)
+        );
+        assert_eq!(
+            run_target("view:md:docs/a.md", cwd).unwrap(),
+            ("view:md:/w/docs/a.md".into(), None)
+        );
+        assert_eq!(
+            run_target("npm test", cwd).unwrap(),
+            ("run".into(), Some("npm test".into()))
+        );
+        assert!(run_target("view:md:", cwd).is_err());
+        assert!(run_target("view:nope", cwd).is_err());
+        assert!(run_target("", cwd).is_err());
+    }
+
+    #[test]
+    fn a_split_goes_beside_the_agent_else_the_last_pane() {
+        let leaf = |id, role: &str| PaneLeaf {
+            id,
+            role: role.into(),
+            name: None,
+        };
+        let (a, b, c) = (leaf(1, "shell"), leaf(2, "agent"), leaf(3, "run"));
+        assert_eq!(anchor(&[&a, &b, &c], None).unwrap(), 2);
+        assert_eq!(anchor(&[&a, &c], None).unwrap(), 3);
+        assert_eq!(anchor(&[&a, &b, &c], Some(3)).unwrap(), 3);
+        assert!(anchor(&[&a, &b], Some(9)).is_err());
+        assert!(anchor(&[], None).is_err());
+    }
 
     #[test]
     fn read_takes_the_last_lines_with_the_scrollback() {
