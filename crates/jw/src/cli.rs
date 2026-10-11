@@ -154,10 +154,10 @@ fn pane_open(args: &[String]) -> Result<()> {
     };
     let ws = find(&name)?;
     let (role, cmd) = run_target(&run, &std::env::current_dir()?)?;
-    let stream = Stream::resolve(&ws.entry)?;
     let mut c = connect_to(&ws)?;
     let tree = attach_tree(&mut c, &ws)?;
     let beside = anchor(&tree.leaves(), of)?;
+    let stream = Stream::resolve(&ws.entry)?;
     let _ = c.send(&ClientMsg::Detach);
     c.send(&ClientMsg::Split {
         pane: beside,
@@ -279,15 +279,16 @@ fn pane_ls(args: &[String]) -> Result<()> {
         return Ok(());
     }
     for r in &rows {
-        let status = match (r["exited"].as_i64(), r["program"].is_null()) {
-            (Some(n), _) => format!("exited {n}"),
-            (None, true) => "viewer".to_string(),
-            (None, false) => "running".to_string(),
+        let role = r["role"].as_str().unwrap_or_default();
+        let status = match r["exited"].as_i64() {
+            Some(n) => format!("exited {n}"),
+            None if crate::proto::is_view(role) => "viewer".to_string(),
+            None => "running".to_string(),
         };
         println!(
             "{:<6} {:<12} {:<14} {status}",
             r["id"],
-            r["role"].as_str().unwrap_or_default(),
+            role,
             r["program"].as_str().unwrap_or("-"),
         );
     }
