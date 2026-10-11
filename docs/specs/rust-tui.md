@@ -8,7 +8,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 
 ## Contract
 
-- One binary `jw`, unix only (macOS + Linux). With no arguments it opens the TUI client; a hidden `jw daemon` runs the server. The other commands are socket clients for sessions and for agents (addendum 3): `jw new <session>`, `jw [session]`, `jw sessions`, `jw ls`, `jw read`, `jw worktree`, `jw prompt`, `jw hook`, plus `jw help` and `jw skill [install]`.
+- One binary `jw`, unix only (macOS + Linux). With no arguments it opens the TUI client; a hidden `jw daemon` runs the server. The other commands are socket clients for sessions and for agents (addendum 3): `jw new <session>`, `jw [session]`, `jw sessions`, `jw ls`, `jw read`, `jw pane`, `jw worktree`, `jw prompt`, `jw hook`, plus `jw help` and `jw skill [install]`.
 - **Two concepts.** A *workspace* is an open folder: a project (any folder, git or not) or one of its worktrees. A workspace holds *panes*.
 - **One-shot leader.** `Ctrl-Space`, then one key, then back to the terminal (tmux-style). A pause of 150 ms after the leader shows every key (600 ms before addendum 13); `?` shows them at once. The one exception is an arrow after the leader: arrows keep moving through the workspaces until another key gives the keyboard back (addendum 7).
 - **Every action applies to the current workspace or the focused pane.** The sidebar is a list to read and click, numbered for `1–9`, and walked with `^␣` + arrows.
@@ -483,7 +483,7 @@ Verdicts (before F3): **F1** (S1, S9) and **F2** (S2, S4) are the work; **F3** (
 | `scripts/bench-switch.py` | F0: drives N switches with `scripts/drive.py`, prints p50/p95/max per phase | `scripts/` |
 | `Msg::Snapshot(PaneId, Parser)` | F2: the reader thread builds the `Parser`; the UI thread only inserts it | `mod.rs:327` |
 | `App::background` jobs | F1: persist recent/folders/stream setup off-thread | `mod.rs` (existing) |
-| `PROTOCOL` | 9 (F3): `ClientMsg::SplitSnapshots`, `DaemonMsg::Screen` and `History` (bytes travel raw) | `proto.rs:18` |
+| `PROTOCOL` | 10 (addendum 18: `DaemonMsg::Opened`); 9 (F3): `ClientMsg::SplitSnapshots`, `DaemonMsg::Screen` and `History` (bytes travel raw) | `proto.rs:18` |
 | `ClientMsg::SplitSnapshots` | F3: from then on this connection gets a pane it watches as `Screen` (the exact screen, small) then `History` (what a `Snapshot` carried); a client that does not ask still gets one `Snapshot`, and a resync is always a `Snapshot` | `proto.rs`, `daemon/src/lib.rs` (`split_snapshot`), `daemon/src/outbox.rs` |
 | `Msg::Snapshot{history}` / `Msg::History` | F3: the TUI draws from the `Screen`, replays `History` on its own thread, then swaps it in with the output and resizes that came since (`Pending`) | `tui/mod.rs` (`on_history`) |
 
@@ -533,6 +533,46 @@ A pane says what runs in it. The daemon already resolves the foreground process 
 - REQ-201 WHERE a pane's program is a known agent, THE TUI SHALL draw it on the title in `p().magenta` and bold, with no new colour literal.
 - REQ-202 WHERE a pane's program is a known agent, THE sidebar SHALL give its workspace the same `✻` and `?` marks as role `agent`.
 - REQ-203 THE change SHALL add no `ClientMsg` and no `PaneInfo` field, and `PROTOCOL` SHALL stay at 9.
+
+### Addendum 18 (P1–P3): `jw pane open|close|ls`
+
+An agent in a pane can split a workspace and run a program, a shell or a viewer in it, close a pane, and list them. The daemon already had `Split` and `Kill` for the TUI; what was missing was a CLI and the id of the pane a `Split` made, which the daemon announced only through the `Tree` broadcast (`daemon/src/lib.rs`, `add`). No UI is added: the new pane is an ordinary leaf of the tree, so there is no prototype (OPEN-27).
+
+| Piece | Shape |
+|---|---|
+| `jw pane open <ws> --run <what> [--split right\|down] [--of <pane>]` | `cli.rs` `pane_open`: `find()` as `jw read`; Attach for the `Tree`; `Detach`; `Split`; waits for `Opened`; prints the id |
+| `<what>` | `shell` → role `shell`, no command; `view:diff`; `view:md:<file>` (made absolute against the CLI's directory); anything else → role `run`, `sh -c` (`run_target`) |
+| Anchor | `--of`, else the leaf with role `agent`, else the last leaf (`anchor`) |
+| `jw pane close <ws> <pane> [--force]` | Attach for the `Tree`, check the pane is in it, `Kill`, wait for the `Tree` without it |
+| `jw pane ls <ws> [--json]` | the `Tree`'s leaves joined with `List`: id, role, name, program (`PaneInfo.fg`), exit status |
+| `DaemonMsg::Opened { pane }` | `proto.rs`: the reply to a `Split`, to the requester only. `split` and `add` return the id (`daemon/src/lib.rs`) |
+| `PROTOCOL` | 10 |
+| Skill | `crates/jw/skill/SKILL.md` and the test in `skill.rs`; `pane` is in `session::RESERVED` and `help::COMMANDS` |
+
+- REQ-204 WHEN `jw pane open` succeeds, THE CLI SHALL print the new pane's id and nothing else on stdout, and exit 0.
+- REQ-205 WHEN the daemon handles a `Split`, THE daemon SHALL send `DaemonMsg::Opened{pane}` to the requesting client only, and nothing to the workspace's other watchers but the `Tree`.
+- REQ-206 THE `PROTOCOL` SHALL be 10, and THE CLI SHALL refuse a daemon that answers another number.
+- REQ-207 WHEN `--run` is `view:diff` or `view:md:<file>`, THE daemon SHALL make a leaf with that role and no process.
+- REQ-208 WHEN `--run` is `shell`, THE pane SHALL run `$SHELL` in the workspace's folder; WHEN it is another string, THE pane SHALL run it through `sh -c` with role `run`.
+- REQ-209 WHEN the TUI shows the workspace, THE new or closed pane SHALL appear without any action of the TUI, through the `Tree` the daemon sends every watcher.
+- REQ-210 WHILE no `--split` is given, THE CLI SHALL split `right`.
+- REQ-211 IF `<ws>` matches no workspace, or several, THEN THE CLI SHALL fail with the message of `jw read`.
+- REQ-212 IF no daemon runs, or the daemon does not run the workspace, THEN THE CLI SHALL fail with `<ws> is not open` and SHALL NOT start a daemon.
+- REQ-213 IF `--of` names a pane outside the workspace, THEN THE CLI SHALL fail and send no `Split`.
+- REQ-214 IF `jw pane close` names the last pane of the workspace, THEN THE CLI SHALL refuse unless `--force` is given.
+- REQ-215 IF `jw pane close` names a pane outside the workspace, THEN THE CLI SHALL fail and send no `Kill`.
+- REQ-216 THE `jw pane ls` output SHALL give, per leaf, its id, role, name, foreground program and exit status; `--json` SHALL give the same as JSON.
+- REQ-217 THE `jw` skill SHALL name `jw pane open`, `jw pane close` and `jw pane ls`, and say that `--run` runs what it is given.
+- REQ-218 IF the daemon answers `Error` to the `Split` or the `Kill`, THEN THE CLI SHALL fail with its message on stderr and exit 1.
+- REQ-219 IF `jw pane close` names the pane it runs in (`$JW_PANE_ID`), THEN THE CLI SHALL refuse unless `--force` is given.
+- REQ-220 WHEN `--of` is absent, THE CLI SHALL split beside the pane with role `agent`, else beside the last leaf of the tree.
+
+Open (human decisions, still unanswered):
+
+- OPEN-27 No HTML prototype, since no screen or key is added. Built on that default.
+- OPEN-28 The default anchor is the agent's pane, else the last leaf, because the daemon does not know which pane has the focus.
+- OPEN-29 `jw pane ls` is its own command; `jw ls` does not list panes.
+- OPEN-30 An arbitrary program has role `run`, not `shell`.
 
 
 ## Rationale
@@ -593,6 +633,11 @@ A pane says what runs in it. The daemon already resolves the foreground process 
 - RAT-55 **A1: no timer.** `fg` is read on `List`, which the TUI already sends every 2 s, and on `Prompt`. Leaving claude is seen at the next `List`; the daemon's only loop stays the 30 s scrollback save.
 - RAT-56 **A1: the list is fixed in code.** A project-config list is more surface than five names; adding one is a one-line change.
 - RAT-57 **A1, variant B of the prototype.** The existing dim suffix already says what runs; the only thing to add is which programs are agents, so the name turns magenta (the colour of `✻`) and nothing else moves. Rejected: a glyph before the name (variant C) adds width to every agent title.
+- RAT-58 **Addendum 18: the id comes in a reply.** A `Split` answered nothing; the id was in the `Tree` broadcast. A client could diff the tree before and after, but that races with the TUI or another agent splitting at the same moment. One message and a `PROTOCOL` bump (REQ-206) is the price the rules already set.
+- RAT-59 **Addendum 18: `Opened`, not `Spawned`.** `Spawned` says "you are subscribed to this pane"; reusing it would have the TUI think it watches a pane it does not.
+- RAT-60 **Addendum 18: `Split` stays as it is.** The TUI's path is tested; the CLI only supplies the `NewPane`. Rejected: a new message for the CLI.
+- RAT-61 **Addendum 18: verbs under `pane`.** Like `worktree`; it leaves room for `pane send`. Rejected: panes in `jw ls`, which stays one row per workspace.
+- RAT-62 **Addendum 18: no new boundary for `--run`.** `jw prompt` already lets any process of the same user type into an agent, which is arbitrary execution; the socket (directory 0700, file 0600, `daemon/src/lib.rs`) is the whole fence. A token would be its own feature. The skill says so (REQ-217).
 
 ## Risks
 
@@ -657,6 +702,11 @@ A pane says what runs in it. The daemon already resolves the foreground process 
 - RISK-62 **The pane can change between the lookup and the write.** `prompt()` writes to the PTY; if claude exits in between, the text lands in the shell. The window is the time between two calls; `Prompt` reads `foreground` right before writing.
 - RISK-63 **Two agent panes in one workspace.** Role `agent` wins, then the lowest pane id; there is no way to choose the other (RAT-54).
 - RISK-64 **`ps` once per candidate pane on a `Prompt` with no role `agent` pane.** A workspace with many shell panes spawns that many. Accepted: it is rare and off the UI thread (`Prompt` runs on its own thread).
+- RISK-65 **Many panes.** An agent can open as many as it likes; the daemon has no cap. Left for later.
+- RISK-66 **An agent closes its own pane.** The CLI refuses it by `$JW_PANE_ID` (REQ-219), which `--force` overrides.
+- RISK-67 **A workspace the TUI does not show.** The TUI applies a `Tree` only for its current workspace (`tui/mod.rs:1383-1388`); another's new pane should appear when it attaches it on a switch. Not tested.
+- RISK-68 **A relative `view:md:<file>`** resolves in the TUI against the workspace it shows, so the CLI makes it absolute against its own directory.
+- RISK-69 **A split into a small pane.** `Split` gets 80×24 and the TUI resizes after; a pane too small for its sibling is the daemon's case, as for the TUI's own splits.
 - Closed by addendum 3: RISK-5 (own registry), RISK-7 (hooks), RISK-9 (frames), RISK-16 (`nvim --server`), RISK-17 (`root` in the registry).
 - RISK-57 Moving parse to another thread can reorder `Snapshot` and `Output`. Keep one reader thread, parse inline there, preserve order.
 - RISK-58 Keeping the old frame during loading (REQ-189) changes what the user sees; see OPEN-23. Closed with REQ-189: nothing is built.
@@ -725,6 +775,7 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | R3 ✓ | README; version 0.0.13; a hand test with `scripts/drive.py` against a local origin and a fake `gh`; REQ-175 and REQ-183, which that test found missing | 175, 183 | `README.md`, `core/src/actions.rs`, `core/src/connectors/git.rs`, `tui/mod.rs` |
 | A1 ✓ `db0d8ce` | Agent programs: `is_agent_program` in `jw-core`, `foreground` in the daemon, `Prompt` by program, `jw ls --json programs`, `jw read --pane` by program, help and the `jw` skill | 194–200, 203 | `crates/core`, `crates/daemon/src/lib.rs`, `crates/jw/src/{cli,help}.rs` |
 | A2 ✓ `962d445` | The program on the pane title and the agent marks for such panes | 201, 202 | `tui/draw.rs`, `tui/mod.rs` |
+| P1–P3 ✓ `66a27a6`, `a9c7148` | `jw pane open\|close\|ls`: `DaemonMsg::Opened` and `PROTOCOL` 10, the CLI, the skill, README and this addendum | 204–220 | `proto/src/proto.rs`, `daemon/src/lib.rs`, `crates/jw/src/{cli,help,skill}.rs`, `crates/jw/skill/SKILL.md` |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 | F0 ✓ | `JW_TRACE`, `scripts/bench-switch.py`, the Measurements above | 184 | `tui/trace.rs`, `tui/mod.rs`, `scripts/` |
 | F1 ✓ | S1, S9: `Stream::resolve` (the `git` spawn) off the UI thread, the frame deadline counted from the frame's start; the unexplained ≈ 100 ms of a first open | 185, 191 | `tui/mod.rs`, `core` (callers) |
@@ -754,6 +805,7 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - OPEN-16 → a `[review]` table in the project TOML (layout, agent command, a review skill) is later.
 - OPEN-17 to OPEN-21 (addendum 15) → the user did not answer; built with the proposed defaults: the picker lists all open PRs, `m` toggles "requested of me"; the project's setup runs; an existing review asks before the prompt is sent again; the review rules ride in the visible prompt, not `--append-system-prompt`; the trust-folder exposure is accepted (RISK-52). Say so to change any.
 - OPEN-26 → a pane's program is detected only, never declared (RAT-53); no `jw prompt --pane` (RAT-54); title variant B (RAT-57). Approved 2026-10-11.
+- OPEN-27 to OPEN-30 (addendum 18) → built with the proposed defaults; say so to change any.
 - OPEN-5 → `~/.config/jw/settings.json` (JSON, outside Go's `*.toml` glob) and the `^␣ ,` screen (addendum 3).
 
 ## Corrections
@@ -804,6 +856,9 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - Addendum 16 was agreed with S1–S8 as guesses. F0 confirmed S1, S2 and found S9 (the frame cadence is ≈ 20 ms, not 16); it showed S3, S5, S6 and S7 cost almost nothing at one pane. Its OPEN ids were first 1–4, which this spec already used: renumbered 22–25.
 - Addendum 13 said that on a switch the panes "only enter; nothing leaves". True, but it also means the slide animates over blank panes until the Snapshots arrive (S4, addendum 16).
 - The brief for A1 assumed the daemon did not know a pane's child. It does: `fg` and `cwd` on every `List` (`lib.rs:549-554`), and the TUI already shows `fg` in the title. The first plan added `PaneInfo.program` and a `PROTOCOL` bump; with detection only, `fg` is the program and the protocol stays at 9 (RAT-52).
+- Addendum 18 was briefed as exposing `Split` and as using `PaneInfo.program`. The field is `PaneInfo.fg` (older than PR #42; commit `452a300` is only a version bump, the agent logic is `db0d8ce`), and `Split` returned nothing, so the id needed a reply and `PROTOCOL` 10: REQ-203's "stays at 9" holds for A1 only.
+- The plan for addendum 18 said a pane cannot know its own id (RISK-2 of the plan). It can: the daemon sets `JW_PANE_ID` (`daemon/src/lib.rs`), which `jw hook` already reads; REQ-219 uses it.
+- `find()` is documented as taking `project/name` but its filter compares the whole label, the name or the id (`cli.rs`); a path is not accepted.
 
 ## Tests
 
@@ -820,4 +875,5 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - manual (after Q2 and Q5): claude and nvim in panes; `w`, `t`, `x`, `HJKL`, `n`, `d`, `↵` in the diff, `q`, then `jw` again shows the same layout.
 - switch speed (F0–F4): `JW_TRACE` lines per phase; `scripts/bench-switch.py` p50/p95/max against an isolated `scripts/jw-test` dir with 3 worktrees and a 2 MiB ring (kill only that dir's pid); a `Msg::Snapshot` parser equals the inline one and Output after it applies in order; `tick_motion` and a 240×60 draw on `App::bare`/`TestBackend` under the budget.
 - agent programs (A1, A2): `is_agent_program` and `is_agent_pane` tables (`core/src/program.rs`; a path or a `-` prefix is not part of the name). Daemon, in `crates/jw/tests/daemon.rs`: a `shell` pane running a link to `cat` named `claude` is reached by `Prompt` (a script shows as its interpreter, and macOS kills a copy of `cat`); the no-agent error is `prompt_without_an_agent_pane_is_an_error`. `App` units: `marks()` gives `✻` for a busy shell pane running `claude` and nothing for `nvim`; `pane_title` names the agent program and flags it, and leaves other programs unflagged. Not covered by a test: role `agent` winning over a program pane, the pane that stops being an agent, the magenta title colour (`TestBackend`), `jw ls --json programs` and `jw read --pane <program>`. Manual with `scripts/jw-test`: run `claude` by hand in a shell pane, `jw prompt` it from another workspace, exit claude and see the next `jw prompt` refuse.
+- pane commands (addendum 18): `crates/jw/tests/daemon.rs`: `a_split_tells_only_its_requester_the_new_pane` (REQ-205, 207) and `jw_pane_opens_lists_and_closes_panes` (the binary against a daemon and a state dir of its own: not open, open a viewer and a command, the other client's `Tree` (REQ-209), `ls` as a table and JSON, `--of` and `close` outside the workspace, the last pane refused). `cli.rs` units: `run_target` and `anchor` tables. `skill.rs` names the three commands. Not covered by a test: `--force` on the last pane, REQ-219, `--split down` placement, `view:md:` against a running TUI. Manual with `scripts/jw-test`: with a TUI open, `jw pane open <ws> --run view:diff` from a second terminal.
 - live registry (W1): `RegistryWatch` units over a tempdir (unchanged, touched, a file that appears or goes); an `App` without a daemon: rows from `Msg::Rows` replace the sidebar, with a modal open they land in `pending_rows` and the next tick after it closes applies them, `active` keeps its id; a truncated JSON leaves the rows alone; `next_wake` is still `None` when idle. Manual: with a TUI open, `jw worktree <name>` from a second terminal shows the row within about 2 s; repeat with `^␣ r` open and the row appears after `esc`.

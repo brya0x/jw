@@ -51,7 +51,7 @@ const PANE_USAGE: &str = "usage: jw pane open <workspace> --run <program|shell|v
                           jw pane close <workspace> <pane> [--force]\n       \
                           jw pane ls <workspace> [--json]";
 
-/// What `--run` starts: the role and the command of the new pane (REQ-207).
+/// What `--run` starts: the role and the command of the new pane (REQ-207, REQ-208).
 /// `view:*` has no process; anything else but `shell` runs through `sh -c`.
 fn run_target(what: &str, cwd: &Path) -> Result<(String, Option<String>)> {
     match what {
@@ -72,7 +72,7 @@ fn run_target(what: &str, cwd: &Path) -> Result<(String, Option<String>)> {
 }
 
 /// The pane a split goes beside: the one asked for, else the agent's, else
-/// the last of the tree (REQ-204, REQ-210).
+/// the last of the tree (REQ-220).
 fn anchor(leaves: &[&PaneLeaf], of: Option<PaneId>) -> Result<PaneId> {
     match of {
         Some(id) if leaves.iter().any(|l| l.id == id) => Ok(id),
