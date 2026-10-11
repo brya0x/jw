@@ -272,6 +272,25 @@ pub struct App {
     last_draw: Instant,
     /// When a held drag next scrolls (REQ-127).
     edge_due: Option<Instant>,
+    /// The sidebar's selection band on its way to the current row (REQ-136).
+    bar: Option<Bar>,
+    /// The row the band is drawn on this frame.
+    band: Option<usize>,
+    /// A workspace switch under way, 0 to 1, and which way it went (REQ-136).
+    switch: Option<(anim::Tween, i8)>,
+    /// The agent's spinner glyph, while one is working (REQ-143).
+    spinner: Option<char>,
+    /// When the spinner steps next.
+    spin_due: Option<Instant>,
+    /// When the TUI started, the spinner's clock.
+    born: Instant,
+}
+
+/// The selection band: the workspace it is on, its row, and how it moves.
+struct Bar {
+    id: String,
+    idx: usize,
+    tween: anim::Tween,
 }
 
 /// Runs the TUI until the user leaves it. The daemon keeps every pane.
@@ -472,6 +491,12 @@ impl App {
             motion: anim::Motion::default(),
             last_draw: Instant::now(),
             edge_due: None,
+            bar: None,
+            band: None,
+            switch: None,
+            spinner: None,
+            spin_due: None,
+            born: Instant::now(),
         };
         app.reload()?;
         app.send(ClientMsg::List);
@@ -516,7 +541,62 @@ impl App {
         if self.motion.active(now) {
             soonest(self.last_draw + FRAME, Wake::Frame);
         }
+        if let Some(at) = self.spin_due {
+            soonest(at, Wake::Frame);
+        }
         wake
+    }
+
+    /// Moves what moves, before a frame is drawn: the selection band toward
+    /// the current row, the switch of workspaces, the agent's spinner.
+    fn tick_motion(&mut self, now: Instant) {
+        let on = anim::enabled();
+        let here = self.active.as_ref().and_then(|s| {
+            let id = &s.entry.id;
+            let idx = self.rows.iter().position(|r| &r.entry.id == id)?;
+            Some((id.clone(), idx))
+        });
+        match (here, &mut self.bar) {
+            (None, bar) => *bar = None,
+            (Some((id, idx)), bar @ None) => {
+                *bar = Some(Bar {
+                    id,
+                    idx,
+                    tween: anim::Tween::at(idx as f32, now),
+                });
+            }
+            (Some((id, idx)), Some(bar)) => {
+                if bar.idx != idx || bar.id != id {
+                    let dir = if idx >= bar.idx { 1 } else { -1 };
+                    if on {
+                        bar.tween.retarget(idx as f32, anim::SWITCH, now);
+                        self.motion.kick(anim::SWITCH, now);
+                        if bar.id != id && anim::fades() {
+                            let enter = anim::Tween::new(0.0, 1.0, anim::SWITCH, now);
+                            self.switch = Some((enter, dir));
+                        }
+                    } else {
+                        bar.tween = anim::Tween::at(idx as f32, now);
+                    }
+                    bar.id = id;
+                    bar.idx = idx;
+                }
+            }
+        }
+        self.band = self
+            .bar
+            .as_ref()
+            .map(|b| b.tween.value(now).round().max(0.0) as usize);
+        if self.switch.is_some_and(|(t, _)| t.done(now)) {
+            self.switch = None;
+        }
+        let spinning = on
+            && self
+                .rows
+                .iter()
+                .any(|r| self.marks(&r.entry.id).contains(&'✻'));
+        self.spinner = spinning.then(|| anim::spinner(now.duration_since(self.born)));
+        self.spin_due = spinning.then(|| now + anim::SPIN_EVERY);
     }
 
     fn event_loop(

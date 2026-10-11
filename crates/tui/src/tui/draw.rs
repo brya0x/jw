@@ -2,18 +2,21 @@
 //! splits, the status bar and the leader's key popup.
 
 use ratatui::Frame;
-use ratatui::buffer::Buffer;
+use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::{Alignment, Rect as TRect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
+use super::anim;
 use super::select::Sel;
 use super::{App, PaneView, SIDEBAR, key};
 use crate::layout::Rect;
 use crate::theme::p;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
+    let now = std::time::Instant::now();
+    app.tick_motion(now);
     let area = f.area();
     f.buffer_mut()
         .set_style(area, Style::default().bg(p().bg).fg(p().fg));
@@ -50,6 +53,16 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         }
     }
     banner(f, app);
+    if let Some((enter, dir)) = app.switch {
+        let header = TRect::new(SIDEBAR, 0, area.width.saturating_sub(SIDEBAR), 1);
+        enter_transition(
+            f.buffer_mut(),
+            header,
+            trect(app.stage()),
+            enter.value(now),
+            dir,
+        );
+    }
     if let Some(m) = &app.modal {
         m.draw(f);
     }
@@ -100,6 +113,52 @@ fn banner_text(n: usize) -> String {
         " ✓ Copied to clipboard · {n} character{} ",
         if n == 1 { "" } else { "s" }
     )
+}
+
+/// REQ-136: the header and the panes fade in, and the panes travel in from
+/// the side the move came from. It works on the cells already drawn, so every
+/// pane and viewer takes part without knowing. `t` is 0 at the start, 1 done.
+fn enter_transition(buf: &mut Buffer, header: TRect, stage: TRect, t: f32, dir: i8) {
+    let bg = p().bg;
+    let off = ((1.0 - t) * f32::from(anim::SLIDE_CELLS)).round() as usize;
+    let width = usize::from(stage.width);
+    let mut blank = Cell::default();
+    blank.set_style(Style::default().bg(bg).fg(p().fg));
+    for y in stage.top()..stage.bottom() {
+        if off > 0 && width > 0 {
+            let row: Vec<Cell> = (0..width)
+                .map(|i| buf[(stage.x + i as u16, y)].clone())
+                .collect();
+            for i in 0..width {
+                let src = if dir >= 0 {
+                    i.checked_sub(off)
+                } else {
+                    (i + off < width).then_some(i + off)
+                };
+                buf[(stage.x + i as u16, y)] =
+                    src.map_or_else(|| blank.clone(), |s| row[s].clone());
+            }
+        }
+        for x in stage.left()..stage.right() {
+            fade(&mut buf[(x, y)], t, bg);
+        }
+    }
+    for x in header.left()..header.right() {
+        fade(&mut buf[(x, header.y)], t, bg);
+    }
+}
+
+/// A cell's text colour blended in from its own background; colours that are
+/// not true colour are left as they are.
+fn fade(cell: &mut Cell, t: f32, bg: Color) {
+    let ground = if matches!(cell.bg, Color::Rgb(..)) {
+        cell.bg
+    } else {
+        bg
+    };
+    if matches!((ground, cell.fg), (Color::Rgb(..), Color::Rgb(..))) {
+        cell.fg = anim::lerp(ground, cell.fg, t);
+    }
 }
 
 fn trect(r: Rect) -> TRect {
@@ -176,14 +235,18 @@ fn sidebar(f: &mut Frame, app: &App) {
                 if i > 0 {
                     spans.push(Span::raw(" "));
                 }
+                let shown = match (m, app.spinner) {
+                    ('✻', Some(glyph)) => glyph,
+                    _ => m,
+                };
                 spans.push(Span::styled(
-                    m.to_string(),
+                    shown.to_string(),
                     Style::default().fg(mark_color(m)),
                 ));
             }
         }
         let mut line = Line::from(spans);
-        if active {
+        if app.band == Some(i) {
             line = line.style(Style::default().bg(p().sel));
         }
         lines.push(line);
@@ -697,6 +760,64 @@ fn which(f: &mut Frame, app: &App) {
 mod tests {
     use super::*;
     use crate::tui::select::Pos;
+
+    fn staged() -> (Buffer, TRect, TRect) {
+        let area = TRect::new(0, 0, 12, 3);
+        let mut buf = Buffer::empty(area);
+        let style = Style::default()
+            .bg(Color::Rgb(0, 0, 0))
+            .fg(Color::Rgb(200, 200, 200));
+        for y in 0..3 {
+            buf.set_string(0, y, "abcdefghijkl", style);
+        }
+        (buf, TRect::new(0, 0, 12, 1), TRect::new(0, 1, 12, 2))
+    }
+
+    #[test]
+    fn a_finished_transition_leaves_the_frame_as_drawn() {
+        let (mut buf, header, stage) = staged();
+        let before = buf.clone();
+        enter_transition(&mut buf, header, stage, 1.0, 1);
+        assert_eq!(buf, before);
+    }
+
+    #[test]
+    fn the_panes_enter_from_the_side_the_move_came_from() {
+        let (mut buf, header, stage) = staged();
+        enter_transition(&mut buf, header, stage, 0.0, 1);
+        let n = usize::from(anim::SLIDE_CELLS);
+        let row: String = (0..12).map(|x| buf[(x, 1)].symbol().to_string()).collect();
+        assert_eq!(
+            &row[..n],
+            " ".repeat(n),
+            "moving down: content comes in from the right"
+        );
+        assert_eq!(&row[n..], &"abcdefghijkl"[..12 - n]);
+        assert_eq!(
+            buf[(5, 0)].symbol(),
+            "f",
+            "the header only fades, it does not move"
+        );
+
+        let (mut buf, header, stage) = staged();
+        enter_transition(&mut buf, header, stage, 0.0, -1);
+        let row: String = (0..12).map(|x| buf[(x, 1)].symbol().to_string()).collect();
+        assert_eq!(&row[..12 - n], &"abcdefghijkl"[n..]);
+    }
+
+    #[test]
+    fn text_fades_in_from_its_own_background() {
+        let (mut buf, header, stage) = staged();
+        enter_transition(&mut buf, header, stage, 0.0, 1);
+        assert_eq!(
+            buf[(6, 0)].fg,
+            Color::Rgb(0, 0, 0),
+            "invisible at the start"
+        );
+        let (mut buf, header, stage) = staged();
+        enter_transition(&mut buf, header, stage, 0.5, 1);
+        assert_eq!(buf[(6, 0)].fg, Color::Rgb(100, 100, 100));
+    }
 
     #[test]
     fn the_selection_is_painted_on_its_cells_only() {

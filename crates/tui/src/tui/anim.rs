@@ -4,9 +4,6 @@
 //! Every position comes from an `Instant`, never a frame count (RAT-30), so a
 //! late frame catches up instead of running slow.
 
-// Used from M2 on (workspace switch, status bar, popups).
-#![allow(dead_code)]
-
 use std::io::Write;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
@@ -14,6 +11,23 @@ use std::time::{Duration, Instant};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
 use ratatui::style::Color;
+
+/// How long a workspace switch takes (REQ-136).
+pub const SWITCH: Duration = Duration::from_millis(240);
+
+/// Time between two steps of the agent's spinner (REQ-143).
+pub const SPIN_EVERY: Duration = Duration::from_millis(80);
+
+/// Cells the panes travel while they enter (REQ-136).
+pub const SLIDE_CELLS: u16 = 4;
+
+const BRAILLE: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+/// The spinner glyph `elapsed` after the TUI started.
+pub fn spinner(elapsed: Duration) -> char {
+    let step = elapsed.as_millis() / SPIN_EVERY.as_millis();
+    BRAILLE[step as usize % BRAILLE.len()]
+}
 
 /// Fast at the start, settling at the end: the curve every transition uses.
 pub fn ease_out(t: f32) -> f32 {
@@ -194,6 +208,14 @@ mod tests {
         assert_eq!(lerp(a, b, 0.5), Color::Rgb(50, 100, 25));
         assert_eq!(lerp(Color::Blue, Color::Red, 0.5), Color::Blue);
         assert_eq!(lerp(Color::Blue, Color::Red, 1.0), Color::Red);
+    }
+
+    #[test]
+    fn the_spinner_steps_every_80_ms_and_wraps() {
+        assert_eq!(spinner(Duration::ZERO), '⠋');
+        assert_eq!(spinner(MS(79)), '⠋');
+        assert_eq!(spinner(MS(80)), '⠙');
+        assert_eq!(spinner(MS(800)), '⠋');
     }
 
     #[test]
