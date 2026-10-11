@@ -494,7 +494,7 @@ Verdicts (before F3): **F1** (S1, S9) and **F2** (S2, S4) are the work; **F3** (
 - REQ-186 WHEN a `Snapshot` arrives, the TUI SHALL build its `Parser` off the UI thread and the UI thread SHALL spend ≤ 1 ms to install it.
 - REQ-187 WHILE a switch animates, no frame SHALL take longer than 16 ms to build, diff and write at 240×60.
 - REQ-188 WHEN the switch is requested, the TUI SHALL reach the new panes' first content within the key→content budget of the table above, p95 over 50 switches.
-- REQ-189 IF a pane's `Snapshot` has not arrived when the slide ends, THEN the TUI SHALL keep drawing the pane's frame (title, border) and fill it when the snapshot lands, without a full-screen flicker.
+- REQ-189 (closed 2026-10-11, not built: see Corrections) IF a pane's `Snapshot` has not arrived when the slide ends, THEN the TUI SHALL keep drawing the pane's frame (title, border) and fill it when the snapshot lands, without a full-screen flicker.
 - REQ-190 THE switch SHALL keep each pane's scrollback, modes and kitty flags exactly as before.
 - REQ-192 WHEN a client that sent `SplitSnapshots` starts to watch a pane, the daemon SHALL send its `Screen` before its `History`, and the `History` bytes SHALL equal what a `Snapshot` of the same moment carries.
 - REQ-193 WHILE a pane's `History` is replayed, the TUI SHALL draw and update the pane from its `Screen`, and WHEN the replay ends SHALL swap it in with the output and resizes that came since, so the pane shows no change but its scrollback.
@@ -503,7 +503,7 @@ Verdicts (before F3): **F1** (S1, S9) and **F2** (S2, S4) are the work; **F3** (
 Open (human decisions, still unanswered):
 
 - OPEN-22 Is 100 ms key→content the right switch budget? (The slide itself is 240 ms, REQ-136.)
-- OPEN-23 REQ-189 shows a pane's frame while it fills, instead of blank. That is a visible change, and AGENTS.md asks for an HTML prototype first. Prototype it, or accept it as a fix, not a UI change?
+- OPEN-23 REQ-189 shows a pane's frame while it fills, instead of blank. That is a visible change, and AGENTS.md asks for an HTML prototype first. Prototype it, or accept it as a fix, not a UI change? (Answered 2026-10-11: neither; it is not needed after F3.)
 - OPEN-24 (answered 2026-10-11) F0 first, numbers before F1–F4: see Measurements.
 - OPEN-25 Brain workspace: this spec's open questions should be reported there; I could not reach it from here.
 
@@ -620,7 +620,7 @@ Open (human decisions, still unanswered):
 - RISK-56 **`gh api repos/{owner}/{repo}/…`** resolves the repo from the cwd; checked against a fake `gh` only until the manual test.
 - Closed by addendum 3: RISK-5 (own registry), RISK-7 (hooks), RISK-9 (frames), RISK-16 (`nvim --server`), RISK-17 (`root` in the registry).
 - RISK-57 Moving parse to another thread can reorder `Snapshot` and `Output`. Keep one reader thread, parse inline there, preserve order.
-- RISK-58 Keeping the old frame during loading (REQ-189) changes what the user sees; see OPEN-23.
+- RISK-58 Keeping the old frame during loading (REQ-189) changes what the user sees; see OPEN-23. Closed with REQ-189: nothing is built.
 - RISK-59 F0 numbers on this Mac may not predict slower terminals or SSH; the budget table is a target, not a guarantee.
 
 ## Parts (each one ends with `cargo test` + `clippy` green and a local commit on `feat/rust-tui`; nothing is pushed)
@@ -687,7 +687,7 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 | F0 ✓ | `JW_TRACE`, `scripts/bench-switch.py`, the Measurements above | 184 | `tui/trace.rs`, `tui/mod.rs`, `scripts/` |
 | F1 ✓ | S1, S9: `Stream::resolve` (the `git` spawn) off the UI thread, the frame deadline counted from the frame's start; the unexplained ≈ 100 ms of a first open | 185, 191 | `tui/mod.rs`, `core` (callers) |
-| F2 ✓ threads | S2: parse in the reader thread (`Msg::Snapshot` carries a `Parser`). S4 (keep pane frames while content loads, REQ-155) waits for its prototype (OPEN-15) | 186, 189, 190 | `tui/mod.rs`, `tui/draw.rs` |
+| F2 ✓ threads | S2: parse in the reader thread (`Msg::Snapshot` carries a `Parser`). S4 (keep pane frames while content loads, REQ-189) is closed, not needed after F3 | 186, 190 | `tui/mod.rs`, `tui/draw.rs` |
 | F3 ✓ | **now justified (key → content 146 ms, 118 ms of it the replay):** send the screen first and the history after, or a capped tail of the ring; S8 (save off the open path) only if a number shows it | 188, 190 | `daemon/src/lib.rs` |
 | F4 ✓ opening | S1 (closed workspaces), S11: stream cache guarded by `Stamp`, `folders::entry` cached per `.git` stamp, branch from `.git/HEAD` | 185 | `core/src/stream.rs`, `core/src/folders.rs`, `core/src/connectors/git.rs`, `tui/mod.rs` |
 | F5 | S5: skip unchanged rows in `screen_to`, one flush per frame, only if F0 shows draw over budget | 187 | `tui/draw.rs`, `tui/anim.rs` |
@@ -756,6 +756,7 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - The same brief said the loop wakes only when something animates. `Msg::Tick` wakes it every 500 ms regardless (`tui/mod.rs:353`); only the animation timers in `next_wake` are conditional. The registry watch rides that tick (REQ-151, REQ-152).
 
 - F2's threads were expected to bring key → content to about 30 ms. They did not: moving the replay off the UI thread removes the stalls (gap 120 → 20 ms) but the content cannot appear before the replay ends, and the replay took longer on a shared core. Only F3 shortens it.
+- REQ-189 (a pane's frame kept while its content loads) was planned because a switch cleared every pane and the slide ran over nothing. After F1–F3 the tree reaches the TUI in ≈ 4 ms (the frame shows with `starting…`) and the content in ≈ 6 ms when the workspace is open, ≈ 10 ms when it is closed and ≈ 46 ms for a folder opened for the first time, so the empty window is shorter than three frames and the slide starts over content. Closed on 2026-10-11 without the prototype; reopen it only if a blank flash is seen when opening a workspace.
 - The speed addendum was drafted as addendum 14 with REQ-150–159, RAT-34–37, RISK-46–48 and OPEN-14–17 on a branch cut before W1 and R1–R3, which took those ids. It merged as addendum 16, REQ-184–193, RAT-48–51, RISK-57–59 and OPEN-22–25, with version 0.0.14.
 - F3 was drafted as capping the ring; the split (`Screen` then `History`) keeps the scrollback whole (REQ-190) and needed `PROTOCOL` 9, which the addendum had said would stay 8.
 - Addendum 16 was agreed with S1–S8 as guesses. F0 confirmed S1, S2 and found S9 (the frame cadence is ≈ 20 ms, not 16); it showed S3, S5, S6 and S7 cost almost nothing at one pane. Its OPEN ids were first 1–4, which this spec already used: renumbered 22–25.
