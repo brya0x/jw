@@ -34,7 +34,8 @@ HOME = S + "/home"
 
 shutil.rmtree(S, ignore_errors=True)
 os.makedirs(HOME)
-for r in "abc":
+FOLDERS = "abcdefghi"
+for r in FOLDERS:
     d = f"{HOME}/{r}"
     os.makedirs(d)
     git = ["git", "-C", d, "-c", "user.name=t", "-c", "user.email=t@t"]
@@ -47,11 +48,30 @@ env = dict(os.environ, HOME=HOME, XDG_RUNTIME_DIR=S + "/run", XDG_STATE_HOME=S +
 env.pop("JW_SOCKET", None)
 env.pop("JW_SESSION", None)
 
-pid, fd = pty.fork()
-if pid == 0:
-    os.chdir(HOME)
-    os.execve(JW, ["jw"], env)
-fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
+fd = -1
+
+
+def launch():
+    global fd
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.chdir(HOME)
+        os.execve(JW, ["jw"], env)
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
+
+
+def stop_jw():
+    os.write(fd, b"\x00")
+    os.write(fd, b"q")
+    pump(0.5)
+    try:
+        os.kill(int(open(S + "/run/jw/jw.pid").read()), 15)
+    except (OSError, ValueError):
+        pass
+    time.sleep(0.5)
+
+
+launch()
 out_bytes = 0
 
 
@@ -80,7 +100,7 @@ def lead(k):
 
 
 pump(1.5)
-for r in "abc":
+for n, r in enumerate(FOLDERS):
     lead("o")
     pump(0.6)
     os.write(fd, b"~")
@@ -89,8 +109,9 @@ for r in "abc":
     pump(0.4)
     os.write(fd, b"\r")
     pump(1.5)
-    os.write(fd, b"seq 1 400000\r")
-    pump(3.0)
+    if n < 3:
+        os.write(fd, b"seq 1 400000\r")
+        pump(3.0)
 
 per_switch_bytes = []
 for i in range(N):
@@ -99,24 +120,33 @@ for i in range(N):
     pump(1.2)
     per_switch_bytes.append(out_bytes - before)
 
-os.write(fd, b"\x00")
-os.write(fd, b"q")
-pump(0.5)
-try:
-    os.kill(int(open(S + "/run/jw/jw.pid").read()), 15)
-except (OSError, ValueError):
-    pass
+stop_jw()
+
+# Second run: every workspace is closed (no session to restore), and each
+# jump from the sidebar opens its panes for the first time.
+os.remove(S + "/state/jw/session.json")
+shutil.rmtree(S + "/state/jw/scrollback", ignore_errors=True)
+env["JW_TRACE"] = S + "/t2.csv"
+launch()
+pump(2.0)
+for i in range(1, len(FOLDERS) + 1):
+    lead(str(i))
+    pump(1.5)
+stop_jw()
 
 # --- analysis ------------------------------------------------------------
-ev = []
-for line in open(TRACE):
-    us, name, v = line.strip().split(",")
-    ev.append((int(us) / 1000.0, name, int(v)))
-starts = [i for i, e in enumerate(ev) if e[1] == "switch_start"]
-segs = []
-for a, b in zip(starts, starts[1:] + [len(ev)]):
-    segs.append(ev[a:b])
-opens, switches = segs[:3], segs[3:]
+def load(path):
+    ev = []
+    for line in open(path):
+        us, name, v = line.strip().split(",")
+        ev.append((int(us) / 1000.0, name, int(v)))
+    starts = [i for i, e in enumerate(ev) if e[1] == "switch_start"]
+    return [ev[a:b] for a, b in zip(starts, starts[1:] + [len(ev)])]
+
+
+segs = load(TRACE)
+opens, switches = segs[:len(FOLDERS)], segs[len(FOLDERS):]
+sidebar_opens = load(S + "/t2.csv")
 
 
 def first(seg, name):
@@ -143,6 +173,13 @@ def analyse(seg):
     m["key>rx_snapN"] = snaps[-1] - t0 if snaps else float("nan")
     inst = first(seg, "snap_installed")
     m["key>content"] = float("nan")
+    # The first frame that has the panes' frames (the tree is in).
+    tree = first(seg, "set_tree")
+    m["key>panes_frame"] = float("nan")
+    if tree:
+        d = next((e for e in seg if e[1] == "draw_total" and e[0] >= tree[0]), None)
+        if d:
+            m["key>panes_frame"] = d[0] - t0
     if inst:
         d = next((e for e in seg if e[1] == "draw_total" and e[0] >= inst[0]), None)
         if d:
@@ -180,7 +217,8 @@ def table(title, segs):
 
 
 print(f"jw: {os.path.relpath(JW, REPO)}  {ROWS}x{COLS}")
-table("open a new workspace (first time: Open)", opens)
+table("open a new folder from the picker (Open)", opens)
+table("open a closed workspace from the sidebar (Open)", sidebar_opens)
 table("switch to an open workspace (Attach)", switches)
 b = sorted(per_switch_bytes)
 lb = sorted(leader_bytes[-N:])

@@ -3,7 +3,10 @@
 //! `sessions/<session>/folders.json` in the state dir. A worktree is not a folder here: those
 //! live in the registry and show under their project's folder.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::SystemTime;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -170,6 +173,31 @@ pub fn entry_for(f: &Folder, session: &str) -> Entry {
     e
 }
 
+/// The project name of the repository whose main checkout is `dir`, or
+/// `None` for a plain folder. Finding out runs `git` (about 35 ms), so the
+/// answer is kept per folder while `.git` and its config keep their
+/// modification times: the sidebar asks for every folder on each reload.
+fn project_of(dir: &str) -> Option<String> {
+    /// What `.git` looked like, and the answer then.
+    type Known = (Vec<Option<SystemTime>>, Option<String>);
+    static KNOWN: Mutex<BTreeMap<String, Known>> = Mutex::new(BTreeMap::new());
+    let path = Path::new(dir);
+    let stamp: Vec<Option<SystemTime>> = [path.join(".git"), path.join(".git").join("config")]
+        .iter()
+        .map(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok())
+        .collect();
+    if let Some((was, project)) = KNOWN.lock().ok()?.get(dir)
+        && *was == stamp
+    {
+        return project.clone();
+    }
+    let project = repo(path).map(|r| git::project_name(&r.remote));
+    if let Ok(mut known) = KNOWN.lock() {
+        known.insert(dir.to_string(), (stamp, project.clone()));
+    }
+    project
+}
+
 /// A folder as the sidebar and the actions see it. A repository's folder
 /// carries its project name and the branch checked out; a plain folder has
 /// no branch.
@@ -179,11 +207,8 @@ pub fn entry(dir: &str, opened: bool) -> Entry {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| dir.to_string());
-    let (project, branch) = match repo(path) {
-        Some(r) => (
-            git::project_name(&r.remote),
-            git::current_branch(path).unwrap_or_default(),
-        ),
+    let (project, branch) = match project_of(dir) {
+        Some(project) => (project, git::branch_of(path).unwrap_or_default()),
         None => (name.clone(), String::new()),
     };
     Entry {
@@ -210,6 +235,34 @@ pub fn config() -> Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_folder_that_becomes_a_repository_is_noticed() {
+        let (_keep, work) = crate::connectors::git::tests::new_test_repo();
+        let plain = tempfile::tempdir().unwrap();
+        let dir = plain.path().display().to_string();
+        let e = entry(&dir, false);
+        assert_eq!(
+            (e.project.as_str(), e.branch.as_str()),
+            (e.name.as_str(), "")
+        );
+
+        // The cached answer holds while `.git` does not change ...
+        assert_eq!(entry(&dir, false).project, e.name);
+        // ... and goes when the folder becomes a repository with an origin.
+        let git = |args: &[&str]| crate::connectors::git::tests::must_git(plain.path(), args);
+        git(&["init", "-q"]);
+        git(&[
+            "remote",
+            "add",
+            "origin",
+            "https://example.com/org/proj.git",
+        ]);
+        assert_eq!(entry(&dir, false).project, "proj");
+        // A repository's folder has its project and branch.
+        let r = entry(&work.display().to_string(), false);
+        assert_eq!((r.project.as_str(), r.branch.as_str()), ("myapp", "trunk"));
+    }
 
     #[test]
     fn free_sessions_become_folders_once() {

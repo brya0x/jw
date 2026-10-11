@@ -1005,19 +1005,25 @@ impl App {
 
     /// Rebuilds the sidebar from the registry: one space per project.
     fn reload(&mut self) -> Result<()> {
+        trace::span("reload", || self.load_rows())
+    }
+
+    fn load_rows(&mut self) -> Result<()> {
         let state = registry::state_dir()?;
-        let folders = crate::folders::load(&state)?;
+        let folders = trace::span("reload_folders", || crate::folders::load(&state))?;
         let reg_path = registry::default_path()?;
-        let mut reg = Registry::load(&reg_path)?;
-        if actions::fill_roots(&mut reg) {
+        let mut reg = trace::span("reload_registry", || Registry::load(&reg_path))?;
+        if trace::span("reload_fill_roots", || actions::fill_roots(&mut reg)) {
             reg.save(&reg_path)?;
         }
         let session = crate::session::current();
-        let mut groups: Vec<(Entry, Vec<Entry>)> = folders
-            .folders
-            .iter()
-            .map(|f| (crate::folders::entry_for(f, &session), Vec::new()))
-            .collect();
+        let mut groups: Vec<(Entry, Vec<Entry>)> = trace::span("reload_entries", || {
+            folders
+                .folders
+                .iter()
+                .map(|f| (crate::folders::entry_for(f, &session), Vec::new()))
+                .collect()
+        });
         let mut by_project: BTreeMap<String, Vec<Entry>> = BTreeMap::new();
         for e in reg
             .entries
@@ -1690,9 +1696,11 @@ impl App {
                 self.fail(format!("{e:#}"));
             }
         }
-        let stream = match self.cached_stream(&entry) {
+        let stream = match trace::span("cached_stream", || self.cached_stream(&entry, setup)) {
             Some(s) => Ok(s),
-            None => trace::span("resolve", || Stream::resolve(&entry)),
+            None => trace::span("resolve", || Stream::resolve(&entry)).inspect(|s| {
+                self.streams.insert(entry.id.clone(), s.clone());
+            }),
         };
         let stream = match stream {
             Ok(s) => s,
@@ -1716,11 +1724,11 @@ impl App {
         }
     }
 
-    /// The stream of an open workspace, resolved earlier off the UI thread.
-    /// A workspace that is not open resolves fresh: its agent session and
-    /// layout are read when its panes start.
-    fn cached_stream(&self, entry: &Entry) -> Option<Stream> {
-        if !self.is_open(&entry.id) {
+    /// The stream resolved earlier off the UI thread, while no config it read
+    /// has changed. A new worktree (`setup`) resolves fresh: its config was
+    /// just written.
+    fn cached_stream(&self, entry: &Entry, setup: bool) -> Option<Stream> {
+        if setup {
             return None;
         }
         let mut s = self
@@ -1728,8 +1736,15 @@ impl App {
             .get(&entry.id)
             .filter(|s| s.entry.path == entry.path && s.entry.project == entry.project)?
             .clone();
+        if !s.is_fresh() {
+            return None;
+        }
+        // As a resolve would: the agent's conversation, or a new one for a
+        // workspace that starts its panes now.
         if !entry.agent.is_empty() {
             s.session = entry.agent.clone();
+        } else if !self.is_open(&entry.id) {
+            s.session = registry::new_id().ok()?;
         }
         s.entry = entry.clone();
         Some(s)
@@ -3626,6 +3641,7 @@ mod motion_tests {
             base: String::new(),
             tree: Node::leaf(""),
             session: String::new(),
+            stamp: Default::default(),
         }
     }
 
