@@ -9,7 +9,7 @@ It depends only on jw-core, for `layout::Tree`.
   - `PROTOCOL` (`:18`), and the messages `ClientMsg` (`:55`) and `DaemonMsg` (`:245`), with
     `PaneInfo`, `NewPane`, `PaneLeaf` and `Theme`.
   - Framing: `write_frame` and `read_frame` (`:366`, `:393`). A frame is a u32 length, then a
-    kind: 0 is JSON; 1 is a JSON head followed by the message's bytes raw (Output, Snapshot,
+    kind: 0 is JSON; 1 is a JSON head followed by the message's bytes raw (Output, Snapshot, Screen, History,
     Input) — see `Raw`.
   - `read_raw` and `write_raw`: a frame's body without decoding it, for the phone bridge, which
     relays frames it does not read.

@@ -9,6 +9,7 @@ daemon; it only talks to it through jw-proto.
 | File | What |
 |---|---|
 | `src/tui/mod.rs` | `run` (`:211`) and `App`: `on_key` (`:747`), `leader_key` (`:812`), `on_daemon` (`:672`), `reload` (`:432`, the sidebar's rows), `open_entry` (`:922`), `start_panes` (`:965`), `set_tree` (`:994`), `marks` (`:540`), sessions (`ask_session` `:1636`, `switch_session` `:1731`), the header's git (`find_here` `:866`) |
+| `src/tui/trace.rs` | `JW_TRACE=<file>`: timed marks and spans for measuring a switch (`scripts/bench-switch.py` reads them); one load and a branch when off |
 | `src/tui/draw.rs` | `draw` (`:15`): `sidebar`, `header`, `status`, `banner` (copied), `which` (the key popup) |
 | `src/tui/finder.rs` | the pickers: folders, workspaces, files, sessions |
 | `src/tui/modal.rs` | confirmations and the name inputs; `^␣ p`'s save-layout modal |
