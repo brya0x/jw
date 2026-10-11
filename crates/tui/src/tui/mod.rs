@@ -75,6 +75,13 @@ enum Msg {
     Prs(Vec<(String, Option<crate::connectors::Pr>)>),
     /// Streams of the sidebar's workspaces, resolved on a worker thread.
     Streams(Vec<Stream>),
+    /// A pane's `Snapshot`, already replayed into its parser by the daemon's
+    /// reader thread (F2): the replay of up to 2 MiB stays off the UI thread.
+    Snapshot {
+        pane: PaneId,
+        role: String,
+        parser: Box<vt100::Parser<keys::Flags>>,
+    },
 }
 
 // One job at a time crosses the channel, boxed; its size doesn't matter.
@@ -347,7 +354,23 @@ pub fn run() -> Result<()> {
                             _ => {}
                         }
                     }
-                    if to_main.send(Msg::Daemon(m)).is_err() {
+                    // Messages keep their order: this thread sends the
+                    // parser where the Snapshot was, and the Output behind it.
+                    let m = match m {
+                        DaemonMsg::Snapshot {
+                            pane,
+                            role,
+                            cols,
+                            rows,
+                            bytes,
+                        } => Msg::Snapshot {
+                            pane,
+                            role,
+                            parser: Box::new(replay(rows, cols, &bytes)),
+                        },
+                        m => Msg::Daemon(m),
+                    };
+                    if to_main.send(m).is_err() {
                         return;
                     }
                 }
@@ -1063,7 +1086,7 @@ impl App {
             return self.handle_msg(m);
         }
         let kind = match &m {
-            Msg::Daemon(DaemonMsg::Snapshot { .. }) => "handle_snapshot",
+            Msg::Snapshot { .. } | Msg::Daemon(DaemonMsg::Snapshot { .. }) => "handle_snapshot",
             Msg::Daemon(DaemonMsg::Tree { .. }) => "handle_tree",
             Msg::Daemon(DaemonMsg::Output { .. }) => "handle_output",
             Msg::Daemon(_) => "handle_daemon",
@@ -1076,6 +1099,7 @@ impl App {
     fn handle_msg(&mut self, m: Msg) {
         match m {
             Msg::Daemon(d) => self.on_daemon(d),
+            Msg::Snapshot { pane, role, parser } => self.install_snapshot(pane, role, *parser),
             Msg::DaemonGone => {
                 self.fail("the daemon closed the connection".into());
                 self.exit_reason = Some("the daemon closed the connection".into());
@@ -1150,6 +1174,22 @@ impl App {
         }
     }
 
+    /// A pane's screen as the daemon holds it, with its parser built.
+    fn install_snapshot(&mut self, pane: PaneId, role: String, parser: vt100::Parser<keys::Flags>) {
+        self.clear_sel_of(pane);
+        self.panes.insert(
+            pane,
+            PaneView {
+                role,
+                parser,
+                exited: None,
+                title: None,
+            },
+        );
+        trace::span("fit", || self.fit());
+        trace::mark("snap_installed", 0);
+    }
+
     fn on_daemon(&mut self, d: DaemonMsg) {
         match d {
             DaemonMsg::Snapshot {
@@ -1159,28 +1199,8 @@ impl App {
                 rows,
                 bytes,
             } => {
-                let parser = trace::span("snap_parse", || {
-                    let mut parser = vt100::Parser::new_with_callbacks(
-                        rows,
-                        cols,
-                        SCROLLBACK,
-                        keys::Flags::default(),
-                    );
-                    parser.process(&bytes);
-                    parser
-                });
-                self.clear_sel_of(pane);
-                self.panes.insert(
-                    pane,
-                    PaneView {
-                        role,
-                        parser,
-                        exited: None,
-                        title: None,
-                    },
-                );
-                trace::span("fit", || self.fit());
-                trace::mark("snap_installed", 0);
+                let parser = replay(rows, cols, &bytes);
+                self.install_snapshot(pane, role, parser);
             }
             DaemonMsg::Output { pane, bytes } => {
                 if let Some(v) = self.panes.get_mut(&pane) {
@@ -3291,6 +3311,17 @@ fn load_recent() -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Replays a `Snapshot`'s bytes into a new parser: up to 2 MiB, so it runs on
+/// the reader thread, not the UI's.
+fn replay(rows: u16, cols: u16, bytes: &[u8]) -> vt100::Parser<keys::Flags> {
+    trace::span("snap_parse", || {
+        let mut parser =
+            vt100::Parser::new_with_callbacks(rows, cols, SCROLLBACK, keys::Flags::default());
+        parser.process(bytes);
+        parser
+    })
+}
+
 /// Best effort: a lost recency list only reorders the switcher.
 fn save_recent(ids: &[String]) {
     if let Some(d) = session_dir()
@@ -3646,5 +3677,12 @@ mod motion_tests {
         let (at, _) = app.next_wake(t0 + MS(500)).unwrap();
         assert_eq!(at, t0 + STATUS_FOR - anim::MESSAGE_EDGE);
         assert!(app.next_wake(t0 + STATUS_FOR).is_none());
+    }
+
+    #[test]
+    fn a_replayed_snapshot_is_the_screen_its_bytes_draw() {
+        let p = replay(3, 10, b"hi\r\nthere");
+        assert_eq!(p.screen().size(), (3, 10));
+        assert_eq!(p.screen().contents(), "hi\nthere");
     }
 }
