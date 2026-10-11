@@ -180,8 +180,6 @@ enum Row {
 /// One row of the flattened scroll.
 #[derive(Clone, Copy, PartialEq)]
 enum Item {
-    /// Said once, on top, of a diff too large to draw.
-    Banner,
     File(usize),
     Hunk(usize, usize),
     /// File, hunk, row of that hunk (split rows or plain lines).
@@ -497,9 +495,6 @@ impl DiffView {
 
     fn items(&self) -> Vec<Item> {
         let mut out = Vec::new();
-        if self.big().is_some() {
-            out.push(Item::Banner);
-        }
         let viewed = &self.pos().viewed;
         for (f, file) in self.files().iter().enumerate() {
             out.push(Item::File(f));
@@ -795,7 +790,7 @@ impl DiffView {
                 spans.push(Span::styled(format!("({}/{n}) ", self.commit + 1), dim));
             }
             _ => spans.push(Span::styled(
-                format!("· {} files ", self.files().len()),
+                format!("· {} files ", self.big().unwrap_or(self.files().len())),
                 dim,
             )),
         }
@@ -964,6 +959,24 @@ impl DiffView {
             Content::Shown(_) => {}
         }
 
+        // A diff too large to draw says so on a line of its own, above the list.
+        let body = if let Some(total) = self.big() {
+            let line = format!(
+                " Too large to draw: {total} files, the first {} listed. ↵ opens one.",
+                self.files().len()
+            );
+            frame.render_widget(
+                Paragraph::new(Span::styled(line, Style::default().fg(p().yellow))),
+                Rect { height: 1, ..body },
+            );
+            Rect {
+                y: body.y + 1,
+                height: body.height.saturating_sub(1),
+                ..body
+            }
+        } else {
+            body
+        };
         let items = self.items();
         let top = self.pos().scroll.min(items.len().saturating_sub(1));
         self.pos_mut().scroll = top;
@@ -971,13 +984,8 @@ impl DiffView {
         self.height = body.height as usize;
         let mut lines = Vec::with_capacity(self.height);
         // The current file's header stays on top while scrolling through it.
-        let start = if items.get(top) == Some(&Item::Banner) {
-            lines.push(self.item_line(Item::Banner, body.width));
-            top + 1
-        } else {
-            lines.push(self.file_header(current, body.width));
-            top + usize::from(matches!(items.get(top), Some(Item::File(_))))
-        };
+        lines.push(self.file_header(current, body.width));
+        let start = top + usize::from(matches!(items.get(top), Some(Item::File(_))));
         for item in items.iter().skip(start).take(self.height.saturating_sub(1)) {
             lines.push(self.item_line(*item, body.width));
         }
@@ -997,20 +1005,20 @@ impl DiffView {
             Some(old) => format!("{old} → {}", file.path),
             None => file.path.clone(),
         };
-        let mut spans = vec![
-            Span::styled(
-                format!(" {name} "),
-                Style::default().fg(p().fg).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
+        let mut spans = vec![Span::styled(
+            format!(" {name} "),
+            Style::default().fg(p().fg).add_modifier(Modifier::BOLD),
+        )];
+        if self.big().is_none() {
+            spans.push(Span::styled(
                 format!("+{} ", file.added()),
                 Style::default().fg(p().green),
-            ),
-            Span::styled(
+            ));
+            spans.push(Span::styled(
                 format!("−{} ", file.deleted()),
                 Style::default().fg(p().yellow),
-            ),
-        ];
+            ));
+        }
         if !status.is_empty() {
             spans.push(Span::styled(
                 format!(" {status} "),
@@ -1027,14 +1035,6 @@ impl DiffView {
 
     fn item_line(&self, item: Item, width: u16) -> Line<'static> {
         match item {
-            Item::Banner => Line::from(Span::styled(
-                format!(
-                    " Too large to draw: {} files, the first {} listed. ↵ opens one.",
-                    self.big().unwrap_or(0),
-                    self.files().len()
-                ),
-                Style::default().fg(p().yellow),
-            )),
             Item::File(f) => self.file_header(f, width),
             Item::Gap => Line::default(),
             Item::Note(f) => {
@@ -1496,6 +1496,13 @@ mod tests {
             total: 214,
         };
         let mut v = view(big);
+        // The first draw of a narrow pane re-anchors the scroll; the banner stays.
+        let narrow = screen(&mut v, 70, 10);
+        assert!(
+            narrow.contains("Too large to draw") && narrow.contains("214 files"),
+            "{narrow}"
+        );
+        assert!(!narrow.contains("+0"), "{narrow}");
         let s = screen(&mut v, 120, 10);
         assert!(s.contains("Too large to draw: 214 files"), "{s}");
         assert!(s.contains("huge.log"));

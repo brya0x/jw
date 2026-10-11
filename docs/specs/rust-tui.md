@@ -504,7 +504,7 @@ The diff pane (`^␣ d`, and the left half of a review workspace) mixed committe
 - RAT-52 **General is committed work only.** Until now one scroll held both, which is the complaint. This way General is all of Commits together and Uncommitted is the rest, so no file appears in a view for two reasons. The cost: `^␣ d` no longer shows dirty files first; they are one key away (`2`). Decided with the prototype.
 - RAT-53 **A sidebar, not tabs.** The user's call (2026-10-11): views, commits and files are one list in one place. It spends width, so under 100 columns it becomes an overlay with a breadcrumb instead of tabs.
 - RAT-54 **Scope is client state.** Putting it in the role (`view:diff:commits`) touches saved layouts, the four hard-coded `view:diff` sites (`stream.rs:46`, `tui/mod.rs:1588`, `stream.rs:552`, `jw/tests/daemon.rs:491,506`) and the tests, and the daemon has nothing to do with it. Reopening on General (REQ-217) is the price.
-- RAT-55 **Lazy, per view, with a generation.** Only General loads on open, so opening costs what it did minus the untracked walk. A result is applied only if no newer request exists for its slot (REQ-208), so fast `(` `)` never apply out of order. The caps (200 commits, 2 MiB) are pages, not measurements: see OPEN-27.
+- RAT-55 **Lazy, per view, with a generation.** Only General loads on open, so opening costs what it did minus the untracked walk. A result is applied only if no newer request exists for its slot (REQ-208), so fast `(` `)` never apply out of order. The caps (200 commits, 2 MiB) are pages, not measurements: see OPEN-27. Measured on a repo with a 4,000-file, 240,000-line change: the capped diff, the file list and 201 commits each took 30–100 ms of git.
 - RAT-56 **Viewed by path.** `viewed` held indices and `Job::Diff` rebuilt the view (`tui/mod.rs:3239`), so a reload lost scroll and viewed. Paths survive a list that changes between reloads.
 - RAT-22 **`curl`, not a crate,** for `install <url>`: rare, and jw already shells out to `git` and `gh`; `ureq` would add TLS and about 40 crates for one command.
 
@@ -570,6 +570,7 @@ The diff pane (`^␣ d`, and the left half of a review workspace) mixed committe
 - RISK-61 **`git::output` has no timeout and does not stream** (`connectors/git.rs:31`). A hung git ties one worker thread and its view spins; the UI stays live. REQ-210 needs a bounded reader in core and a `wait` after the kill so no zombie stays.
 - RISK-62 **`↵` from Commits opens the working-tree file** (REQ-212), which may no longer have the lines the commit showed. Accepted.
 - RISK-63 **Uncommitted goes stale while the pane is open;** there is no watcher. See OPEN-26.
+- RISK-65 **`App::on_job` runs `reload()` first for every job** (`tui/mod.rs`): a registry read, and a write when roots are filled, on the UI thread. Fine for the rare jobs it was written for, not for one per `)`; a diff pane's answer returns before it. Any other frequent job needs the same.
 - RISK-64 **Renames are per range.** `-M` runs per call, so General can show `R` for a file that Commits shows as `D` and `A`.
 - Closed by addendum 3: RISK-5 (own registry), RISK-7 (hooks), RISK-9 (frames), RISK-16 (`nvim --server`), RISK-17 (`root` in the registry).
 
@@ -637,7 +638,7 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | V0 | Addendum 17 in this spec; the prototype (approved 2026-10-11) | — | docs |
 | V1 ✓ | Core: `Scope`, `load(dir, &Scope)`, `Loaded::TooLarge` with `DIFF_CAP`, `commits`; tests in a temp repo | 195–198, 210, 216 | `core/src/diff.rs` |
 | V2 ✓ | TUI: `DiffView` with per-view state keyed by path, the sidebar sections, `1 2 3`, `Tab`, `( )`, the narrow overlay and breadcrumb, the title; the jobs with a number per slot, the commit cache and the loading, failed and too-large states (V3's work came with it, the view could not be shown without it) | 194–205, 207–215, 217, 218 | `tui/diffview.rs`, `tui/draw.rs`, `tui/mod.rs`, `core/src/diff.rs` |
-| V3 | Review workspaces and a hand test of the jobs against a big repo; the trigger for REQ-206 if OPEN-26 is answered | 206, 213 | `tui/mod.rs` |
+| V3 ✓ | A diff pane's answer no longer reloads the registry on the UI thread (RISK-65); an `App`-level test of the job round trip; a hand test with `scripts/drive.py` on a synthetic repo (4,000 new files, 231 commits, 300 untracked) that found three faults in the too-large view, fixed. A review workspace was not run end to end, only `Stream::resolve`'s test for `review_base`; REQ-206 waits for OPEN-26 | 209, 210, 213 | `tui/mod.rs`, `tui/diffview.rs` |
 | V4 | README; version bump when a PR follows; a hand test with `scripts/drive.py` in a repo with commits and a dirty tree, and in a big one | — | `README.md`, `Cargo.toml` |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 
