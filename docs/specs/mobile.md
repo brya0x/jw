@@ -99,6 +99,11 @@ supersedes:  []
 | 48 | WHEN the code has expired, here (the seconds counted from the state's arrival) or at the daemon (`payload` empty), the ready view SHALL say so, draw no QR, and offer `n`. |
 | 49 | WHEN `MobileState` is `failed`, the error view SHALL show the daemon's message, such as "cloudflared is not installed; brew install cloudflared". The daemon SHALL also move to `failed`, and stop the bridge, when `cloudflared` ends by itself while ready. |
 | 50 | THE mobile feature SHALL bump `PROTOCOL` once, to the first number free past main's when it merges (`proto/AGENTS.md:23-24`). It is 10 while main is 9 (checked 2026-10-11 after `git fetch`). |
+| 51 | WHEN the person opens the scan screen, the app SHALL ask for camera permission on its own screen first; IF it is denied, THEN it SHALL say so and offer `pegar enlace` and the system settings, never a dead viewfinder. |
+| 52 | THE scan screen SHALL read a `jw://` QR by itself, with no shutter, show a terminal-style log (`$ jw scan`, a line saying the QR takes about a minute to appear in jw), and offer a torch and `pegar enlace`; a pasted link that is not a `jw://` tunnel link SHALL be refused with a message. |
+| 53 | WHILE pairing waits for the PC, the app SHALL show the 6-digit code for the person to compare with jw and a cancel button; the PC's answer SHALL end in the home screen or in one failure screen. |
+| 54 | THE failure screens SHALL be: PC denied, code expired, too many attempts, protocol mismatch, and no connection. The protocol screen SHALL say which side is behind (the app or jw) and what to update. The no-connection screen SHALL show a log of what was checked (internet, Cloudflare, the PC) and the host on its own line, and SHALL claim only what the app actually measured. |
+| 55 | THE settings screen SHALL offer quick answers as presets (`Claude Code`, `y / n`, `y / n + Enter`) with a preview of the bytes `y · aprobar` and `n · rechazar` send; the sets apply only while an agent waits. |
 
 ---
 
@@ -171,6 +176,7 @@ Order: W1, W2, W3, D1, D2, T1 on the server track and M3 on the app track run in
 
 ## Corrections
 
+- REQ-51 to REQ-55 came from screens the Android agent invented (camera, permission, pairing code, failures, quick answers) because the first prototype never drew them. The user chose their designs on 2026-10-11 (variant A of each) in `docs/specs/mobile-prototype.html`, v3.
 - RAT-1 first said the bridge belongs **outside** the daemon, in `jw mobile`'s own process, so the daemon never listens on a network. The user asked for mobile inside the TUI and alive after closing it, which only a daemon-hosted server gives; RAT-1 now says that and RISK-14 keeps what the first version was protecting.
 - The first version said the daemon and `PROTOCOL` do not change. They change once (REQ-50).
 - Ctrl-C in `jw mobile` used to stop the tunnel (M2). It now leaves mobile running (REQ-41); `jw mobile stop` stops it.

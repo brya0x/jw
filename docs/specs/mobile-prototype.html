@@ -169,14 +169,103 @@ svg.i{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stro
 .lk span{flex:1}.lk em{font-style:normal;color:var(--dim);font-size:11px}
 .toast{position:absolute;left:50%;bottom:96px;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:8px 14px;border-radius:6px;font-weight:700;font-size:12px;opacity:0;transition:opacity .2s;pointer-events:none;white-space:nowrap;z-index:20}
 .toast.on{opacity:1}
+
+/* v3: camera and connection states */
+.bigic{width:84px;height:84px;border-radius:22px;background:var(--sel);display:grid;place-items:center;color:var(--blue)}
+.bigic svg.i{width:38px;height:38px}
+.bigic.bad{color:var(--red)}
+.cam{position:relative;flex:1;min-height:0;background:#0b0c10;overflow:hidden;display:grid;place-items:center}
+.cam::before{content:'';position:absolute;inset:0;background:radial-gradient(120% 80% at 30% 20%,#1d2432 0%,#0b0c10 62%),repeating-linear-gradient(0deg,rgba(255,255,255,.02) 0 2px,transparent 2px 4px)}
+.frame{position:relative;width:min(68%,248px);aspect-ratio:1;border-radius:14px;box-shadow:0 0 0 999px rgba(0,0,0,.6)}
+.frame i{position:absolute;width:36px;height:36px;border:3px solid var(--blue)}
+.frame i:nth-child(1){top:-3px;left:-3px;border-right:0;border-bottom:0;border-top-left-radius:14px}
+.frame i:nth-child(2){top:-3px;right:-3px;border-left:0;border-bottom:0;border-top-right-radius:14px}
+.frame i:nth-child(3){bottom:-3px;left:-3px;border-right:0;border-top:0;border-bottom-left-radius:14px}
+.frame i:nth-child(4){bottom:-3px;right:-3px;border-left:0;border-top:0;border-bottom-right-radius:14px}
+.scanline{position:absolute;left:10px;right:10px;height:2px;background:linear-gradient(90deg,transparent,var(--blue),transparent);animation:sweep 2.4s ease-in-out infinite}
+@keyframes sweep{0%,100%{top:8%}50%{top:90%}}
+@media (prefers-reduced-motion:reduce){.scanline{animation:none;top:50%}}
+.camhint{position:absolute;left:0;right:0;bottom:22px;text-align:center;color:#c8ceda;font-size:12.5px;line-height:1.6}
+.camhint span{opacity:.6}
+.camtools{display:flex;gap:10px;padding:12px;background:var(--panel);border-top:1px solid var(--line)}
+.camtools .btn{height:46px}
+.btn.ghost{border:1px dashed var(--dim);color:var(--dim);font-weight:500;font-size:12px}
+.pcode{font-size:46px;font-weight:700;letter-spacing:.14em;color:var(--yellow);margin:2px 0;line-height:1.2}
+.stp{display:grid;gap:6px;width:100%;max-width:300px;text-align:left;font-size:13px}
+.stp div{display:flex;gap:10px;align-items:center}.stp .d{color:var(--green)}.stp .w{color:var(--cyan)}.stp .s{color:var(--dim)}
+.lerr{min-height:20px;padding:0 14px 6px;color:var(--red);font-size:12px}
+.sheet input#lnk{border-color:var(--blue)}
+
+/* v3b: three camera directions */
+.feed{position:absolute;inset:0;background:radial-gradient(70% 36% at 50% 47%,rgba(135,155,190,.30),transparent 72%),radial-gradient(120% 60% at 15% 0%,#1b2230,transparent 62%),linear-gradient(180deg,#10141b,#06080c)}
+.feed::after{content:'';position:absolute;inset:0;background:repeating-linear-gradient(0deg,rgba(255,255,255,.02) 0 1px,transparent 1px 3px)}
+.ret{position:relative;width:min(66%,240px);aspect-ratio:1;z-index:1}
+.ret i{position:absolute;width:30px;height:30px;border:3px solid #fff;transition:border-color .2s}
+.ret.rd i{border-color:#fff}
+.ret i:nth-of-type(1){top:-4px;left:-4px;border-right:0;border-bottom:0}
+.ret i:nth-of-type(2){top:-4px;right:-4px;border-left:0;border-bottom:0}
+.ret i:nth-of-type(3){bottom:-4px;left:-4px;border-right:0;border-top:0}
+.ret i:nth-of-type(4){bottom:-4px;right:-4px;border-left:0;border-top:0}
+.ret.rd i:nth-of-type(1){border-top-left-radius:12px}.ret.rd i:nth-of-type(2){border-top-right-radius:12px}.ret.rd i:nth-of-type(3){border-bottom-left-radius:12px}.ret.rd i:nth-of-type(4){border-bottom-right-radius:12px}
+.ret.sq i{border-color:var(--blue)}
+.ret.hit i{border-color:var(--green)}
+.pcqr{position:absolute;inset:7%;opacity:.5;transform:rotate(-2.5deg);filter:blur(.5px)}
+.pcqr .qr{width:100%;height:100%;padding:7%;border-radius:6px}
+.ret .scanline{left:0;right:0}
+.ret.hit .pcqr{opacity:.95;filter:none;transform:none;transition:all .25s}
+.cam.a,.cam.b{display:grid;place-items:center}
+.term{position:absolute;left:14px;top:12px;right:14px;font-size:11.5px;line-height:1.7;color:#9aa4b2;z-index:2;text-shadow:0 1px 2px #000}
+.term .g{color:var(--green)}.term .m{color:#7f8a99}
+.cur{display:inline-block;width:7px;height:13px;background:#c8ceda;vertical-align:-2px;margin-left:3px;animation:blink 1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+.float{position:absolute;left:12px;right:12px;z-index:2;display:flex;align-items:center;gap:10px}
+.float.top{top:12px}.float.bot{bottom:14px;flex-direction:column;align-items:stretch}
+.fab{width:44px;height:44px;border-radius:50%;background:rgba(20,24,32,.62);backdrop-filter:blur(8px);color:#e8ecf3;display:grid;place-items:center;border:1px solid rgba(255,255,255,.12)}
+.fpill{flex:1;text-align:center;padding:10px 14px;border-radius:999px;background:rgba(20,24,32,.62);backdrop-filter:blur(8px);color:#e8ecf3;font-weight:700;font-size:13px;border:1px solid rgba(255,255,255,.12)}
+.gcard{background:rgba(20,24,32,.72);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.12);border-radius:16px;padding:12px;display:grid;gap:8px;color:#c8ceda;font-size:12.5px}
+.gcard b{color:#fff;font-size:13px}
+.gcard code{background:rgba(255,255,255,.1);padding:1px 6px;border-radius:4px;color:var(--green)}
+.mon{position:relative;aspect-ratio:4/3;border-radius:16px;overflow:hidden;border:1px solid var(--line);display:grid;place-items:center;background:#06080c;margin:0 0 16px}
+.mon .ret{width:56%}
+.mon .live{position:absolute;left:12px;top:10px;z-index:2;font-size:11px;color:#c8ceda}.mon .live b{color:var(--red)}
+ol.sx{list-style:none;margin:0 0 16px;padding:0;display:grid;gap:10px}
+ol.sx li{display:grid;grid-template-columns:28px 1fr;gap:10px;font-size:13px;line-height:1.45;color:var(--dim)}
+ol.sx li b{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;border:1px solid var(--line);font-size:12px;color:var(--dim)}
+ol.sx li{color:var(--fg)}
+ol.sx code{background:var(--sel);padding:1px 6px;border-radius:4px;color:var(--green)}
+.row2{display:flex;gap:10px}
+
+/* v3c: connection errors and quick answers, two directions each */
+.log{width:100%;max-width:330px;border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:12px 14px;text-align:left;font-size:12.5px;line-height:1.9}
+.log .ok{color:var(--green)}.log .no{color:var(--red)}.log .dm{color:var(--dim)}
+.diag{width:100%;max-width:330px;display:flex;align-items:center;justify-content:space-between;gap:6px;margin:6px 0}
+.node{width:62px;height:62px;border-radius:16px;background:var(--sel);display:grid;place-items:center;color:var(--fg);flex:none}.node svg.i{width:28px;height:28px}
+.wire{flex:1;height:2px;background:var(--green);position:relative}
+.wire.cut{background:repeating-linear-gradient(90deg,var(--red) 0 6px,transparent 6px 12px)}
+.wire.cut::after{content:'✕';position:absolute;left:50%;top:-11px;transform:translateX(-50%);color:var(--red);font-size:14px;background:var(--bg);padding:0 3px}
+.dfx{width:100%;max-width:330px;border:1px solid var(--line);border-radius:12px;overflow:hidden;text-align:left;font-size:13.5px}
+.dfx div{padding:9px 14px;white-space:pre}.dfx .del{background:var(--del)}.dfx .add{background:var(--add)}
+.dfx .del::before{content:'- ';color:var(--red)}.dfx .add::before{content:'+ ';color:var(--green)}
+.ver{display:flex;gap:12px;width:100%;max-width:330px}.ver div{flex:1;border:1px solid var(--line);border-radius:14px;padding:12px;text-align:center}
+.ver b{display:block;font-size:28px}.ver .late{border-color:var(--red)}.ver .late b{color:var(--red)}.ver span{font-size:11px;color:var(--dim)}
+.hero code{white-space:normal}
+.log .hostl{font-size:11px;line-height:1.3;padding-left:18px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:-8px}
+.pre{display:grid;grid-template-columns:22px 1fr auto;gap:12px;align-items:center;min-height:60px;padding:8px 14px;border-bottom:1px solid var(--line);width:100%;text-align:left}
+.pre .radio{width:18px;height:18px;border-radius:50%;border:2px solid var(--dim)}.pre.on .radio{border-color:var(--blue);background:radial-gradient(var(--blue) 42%,transparent 46%)}
+.keys2{display:flex;gap:6px}.keys2 kbd{font:inherit;font-size:11.5px;border:1px solid var(--line);background:var(--bg);border-radius:4px;padding:2px 7px;color:var(--yellow)}
+.prev{padding:10px 14px;font-size:12px;color:var(--dim);border-bottom:1px solid var(--line)}.prev b{color:var(--fg);font-weight:500}
 </style>
 
 <div class="stage">
   <aside class="notes" aria-label="Notas del prototipo">
     <h1>jw mobile</h1>
-    <p>Prototipo v2. Todo es tocable. Datos de ejemplo.</p>
+    <p>Prototipo v3: añade la <b>cámara</b> y los estados de conexión (marcados «nuevo»). Todo es tocable. Datos de ejemplo.</p>
     <h2>Pantallas</h2>
     <div class="jump" id="jump"></div>
+    <h2>Simular (solo maqueta)</h2>
+    <div class="jump"><button data-act="sim" data-sim="accept">El PC acepta</button><button data-act="sim" data-sim="denied">El PC rechaza</button><button data-act="sim" data-sim="expired">El código venció</button><button data-act="sim" data-sim="unreach">No llego al PC</button><button data-act="sim" data-sim="proto">Protocolo: la app va atrás</button><button data-act="sim" data-sim="protojw">Protocolo: jw va atrás</button><button data-act="sim" data-sim="limited">Demasiados intentos</button></div>
+    <h2>Qué comprueba de verdad la app</h2>
+    <p style="margin:0 0 14px;color:var(--dim)">«No encuentro tu PC» solo dibuja lo que la app puede saber: hay red (el sistema lo dice), Cloudflare respondió (el túnel devuelve 530 cuando ya no existe) y el host contesta o su nombre ya no resuelve. «Versiones distintas» compara el número propio con el de <code>ready</code>, así sabe cuál va atrás.</p>
     <h2>Modelo (igual que el TUI)</h2>
 <div class="model"><b>sesión</b> main
  ├ <b>workspace</b> jw          raíz del proyecto
@@ -200,6 +289,12 @@ Teléfono: frames de jw-proto</div>
 
 <script>
 const I = {
+  phone:'<rect x="7" y="3" width="10" height="18" rx="2"/><path d="M11 18h2"/>',
+  cloud:'<path d="M7 18a4 4 0 0 1-.5-7.97A5.5 5.5 0 0 1 17 8.5a4.5 4.5 0 0 1 .5 9z"/>',
+  pc:'<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
+  zap:'<path d="M13 3L5 14h6l-1 7 8-11h-6z"/>',
+  x:'<path d="M6 6l12 12M18 6L6 18"/>',
+  cam:'<path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/>',
   back:'<path d="M15 5l-7 7 7 7"/>', send:'<path d="M5 12l14-7-5 14-3-6z"/>', plus:'<path d="M12 5v14M5 12h14"/>',
   more:'<circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/>',
   scan:'<path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M4 12h16"/>',
@@ -269,14 +364,88 @@ function nav(){
   const t=[['home','≡','workspaces'],['inbox','?','avisos'],['changes','±','diff'],['settings','⚙','ajustes']];
   return `<nav class="nav" role="tablist">${t.map(([k,g,l])=>`<button role="tab" aria-selected="${cur===k}" data-go="${k}"><b>${g}</b>${l}${k==='inbox'&&n?`<span class="ct">${n}</span>`:''}</button>`).join('')}</nav>`;
 }
-function statusBar(mode,hint){return `<div class="status"><span class="chip" style="--c:${mode==='TERM'?'var(--green)':mode==='DIFF'?'var(--cyan)':mode==='?'?'var(--yellow)':'var(--blue)'}">${mode}</span><span class="hint">${hint}</span>${state.msg?`<span class="msg">${state.msg}</span>`:''}</div>`}
+function statusBar(mode,hint){return `<div class="status"><span class="chip" style="--c:${mode==='TERM'?'var(--green)':mode==='DIFF'?'var(--cyan)':mode==='?'||mode==='PAIR'?'var(--yellow)':mode==='ERR'?'var(--red)':'var(--blue)'}">${mode}</span><span class="hint">${hint}</span>${state.msg?`<span class="msg">${state.msg}</span>`:''}</div>`}
 
 function vConnect(){
-  const c=state.conn;
   return `<div class="hero">${qrSvg()}<h2>conecta tu PC</h2>
    <p>En tu PC ejecuta <code>jw mobile</code> y escanea el código. El túnel dura mientras el puente esté abierto.</p>
-   <button class="btn fill" data-act="scan" ${c!=='idle'?'disabled':''}>${c==='idle'?ic('scan')+'escanear':'<span class="spin"></span>'+(c==='tunnel'?'abriendo túnel…':'verificando protocolo v8…')}</button>
-   <button class="btn tone" data-act="manual">${ic('link')}pegar enlace</button></div>`;
+   <button class="btn fill" data-act="scan">${ic('scan')}escanear</button>
+   <button class="btn tone" data-act="paste">${ic('link')}pegar enlace</button></div>`;
+}
+const CONN=['protojw','unreach','proto','set','cam','perm','permdenied','scan','paste','pair','denied','expired','limited'];
+function goConn(k){
+  clearTimeout(state.pairT); state.sheet=null;
+  if(k==='perm'){state.screen='perm';state.perm='ask'}
+  else if(k==='permdenied'){state.screen='perm';state.perm='denied'}
+  else if(k==='scan'){state.screen='scan';state.hit=false}
+  else if(k.startsWith('unreach')){state.screen='fail';state.fail='unreach';}
+  else if(k==='protojw'){state.screen='fail';state.fail='proto';state.behind='jw'}
+  else if(k.startsWith('proto')){state.screen='fail';state.fail='proto';state.behind='app';}
+  else if(k.startsWith('set')){state.screen='settings';}
+  else if(k.startsWith('cam')){state.screen='scan';state.hit=false}
+  else if(k==='paste'){state.screen='scan';state.sheet='paste';state.linkerr=''}
+  else if(k==='pair'){startPair();return}
+  else {state.screen='fail';state.fail=k}
+  render();
+}
+function startPair(){
+  state.screen='pair';state.sheet=null;clearTimeout(state.pairT);render();
+  state.pairT=setTimeout(()=>{if(state.screen==='pair'){state.screen='home';render();toast('conectado')}},7000);
+}
+function connHdr(title,sub,act){return `<div class="hdr"><button class="ib" data-act="${act||'back'}" aria-label="Volver">${ic('back')}</button><div class="t"><b>${title}</b><span>${sub}</span></div></div>`}
+function vPerm(){
+  const bad=state.perm==='denied';
+  return connHdr('escanear código','jw mobile')+`<div class="hero"><div class="bigic ${bad?'bad':''}">${ic(bad?'x':'cam')}</div>
+    <h2>${bad?'la cámara está bloqueada':'necesito la cámara'}</h2>
+    <p>${bad?'Actívala en los ajustes del sistema, o pega el enlace que muestra jw.':'Solo para leer el QR que muestra jw en tu PC. No guarda fotos ni vídeo.'}</p>
+    ${bad?'<button class="btn fill" data-act="os">abrir ajustes del sistema</button>':'<button class="btn fill" data-act="allow">permitir cámara</button>'}
+    <button class="btn tone" data-act="paste">${ic('link')}pegar enlace</button></div>`+statusBar('SCAN',bad?'cámara bloqueada':'la cámara pide permiso');
+}
+function reticle(kind){
+  return `<div class="ret ${kind} ${state.hit?'hit':''}"><i></i><i></i><i></i><i></i><div class="pcqr">${qrSvg()}</div>${state.hit?'':'<div class="scanline"></div>'}</div>`;
+}
+const torchBtn=`<button class="btn tone" data-act="torch" style="flex:0 0 52px" aria-label="Linterna">${ic('zap')}</button>`;
+const mock=`<button class="btn ghost" data-act="read">maqueta: leer QR</button>`;
+function vScan(){
+  const hit=state.hit;
+  {
+    return connHdr('escanear código','jw scan')+`<div class="cam a"><div class="feed"></div>
+      <div class="term"><div><span class="g">$</span> jw scan</div><div class="m">· cámara lista</div><div class="m">· el QR tarda ~1 min en aparecer en jw</div>${hit?'<div class="g">✓ QR leído · conectando…</div>':'<div class="m">· buscando un QR de jw<span class="cur"></span></div>'}</div>
+      ${reticle('sq')}</div>
+      <div class="camtools"><button class="btn tone" data-act="paste">${ic('link')}pegar enlace</button>${torchBtn}${mock}</div>`+statusBar('SCAN',hit?'QR leído':'buscando un código…');
+  }
+}
+function vPair(){
+  return connHdr('emparejando','virtual-archive-bunny-economies.trycloudflare.com','cancelpair')+`<div class="hero">
+    <p>Tu PC te pregunta si confía en este teléfono. Compara este código con el que ves en jw y responde <b>y</b>.</p>
+    <div class="pcode">482 913</div>
+    <div class="stp"><div><span class="d">●</span>QR leído</div><div><span class="d">●</span>PC alcanzado</div><div><span class="w">⠹</span>esperando tu respuesta <span class="s">(60 s)</span></div></div>
+    <button class="btn tone" data-act="cancelpair">cancelar</button></div>`+statusBar('PAIR','compara el código en jw');
+}
+function failUnreach(){
+  const host='virtual-archive-bunny-economies.trycloudflare.com';
+  const body=`<div class="log"><div><span class="ok">✓</span> internet <span class="dm">· datos móviles</span></div><div><span class="ok">✓</span> Cloudflare responde</div><div><span class="no">✗</span> tu PC <span class="dm">· sin respuesta</span></div><div class="dm hostl">${host}</div></div>
+    <p>Cada vez que se reinicia <code>jw mobile</code> la dirección de tu PC cambia. Escanea el código nuevo.</p>`;
+  return connHdr('sin conexión','jw mobile')+`<div class="hero"><h2>No encuentro tu PC</h2>${body}<button class="btn fill" data-act="rescan">escanear otro código</button><button class="btn tone" data-act="retry">reintentar</button></div>`+statusBar('ERR','no conectado');
+}
+function failProto(){
+  const jw=state.behind==='jw';
+  const lo=jw?'jw ':'app', hi=jw?'app':'jw ';
+  const body=`<div class="dfx"><div class="del">${lo} protocolo 10</div><div class="add">${hi} protocolo 11</div></div>`;
+  const fix=jw?`<p>Tu jw está atrasado. Actualízalo con <code>cargo install --path crates/jw</code> y reinicia el daemon.</p>`:`<p>Tu app está atrasada. Instala la última versión.</p>`;
+  return connHdr('versiones distintas','jw mobile')+`<div class="hero"><h2>La app y jw no hablan igual</h2>${body}${fix}<button class="btn fill" data-act="back">entendido</button></div>`+statusBar('ERR','versiones distintas');
+}
+function vFail(){
+  if(state.fail==='unreach') return failUnreach();
+  if(state.fail==='proto') return failProto();
+  const F={
+    denied:['x','Tu PC rechazó este teléfono','Si no fuiste tú quien escaneó, otra persona pudo ver el código del QR. En jw mobile pulsa Enter para generar uno nuevo.','escanear otro código','rescan','volver','back'],
+    expired:['x','Ese código ya no sirve','Cada código vale una vez y dos minutos. En jw mobile pulsa Enter para uno nuevo.','escanear otro código','rescan'],
+    limited:['x','Demasiados intentos','Tu PC bloqueó los intentos desde aquí. Espera 5 minutos y vuelve a escanear.','volver','back']
+  };
+  const f=F[state.fail]||F.expired;
+  return connHdr('sin conexión','jw mobile')+`<div class="hero"><div class="bigic bad">${ic(f[0])}</div><h2>${f[1]}</h2><p>${f[2]}</p>
+    <button class="btn fill" data-act="${f[4]}">${f[3]}</button>${f[5]?`<button class="btn tone" data-act="${f[6]}">${f[5]}</button>`:''}</div>`+statusBar('ERR','no conectado');
 }
 
 function row(w,i){
@@ -321,6 +490,13 @@ function vChanges(){
    ${statusBar('DIFF','toca un archivo')}${nav()}`;
 }
 
+const PRESETS=[['claude','Claude Code · por verificar','Enter · Esc',['⏎','esc']],['yn','Pregunta s/n','y · n',['y','n']],['ynx','Pregunta s/n con Enter','y y Enter · n y Enter',['y⏎','n⏎']]];
+function ansSection(){
+    state.preset=state.preset||'claude';
+  const sendY=(PRESETS.find(x=>x[0]===state.preset)||PRESETS[0])[3][0], sendN=(PRESETS.find(x=>x[0]===state.preset)||PRESETS[0])[3][1];
+  const prev=`<div class="prev">Al tocar <b>y · aprobar</b> la app envía <b>${sendY}</b>; con <b>n · rechazar</b>, <b>${sendN}</b>. Solo mientras el agente espera.</div>`;
+  return `<div class="sec">respuestas rápidas</div><div class="presets">${PRESETS.map(([k,n,d,ks])=>`<button class="pre ${state.preset===k?'on':''}" data-preset="${k}"><span class="radio"></span><span><b style="font-weight:500">${n}</b><br><span style="font-size:11.5px;color:var(--dim)">${d}</span></span><span class="keys2">${ks.map(x=>`<kbd>${x}</kbd>`).join('')}</span></button>`).join('')}</div>${prev}`;
+}
 function vSettings(){
   const sw=k=>`<button class="sw" role="switch" aria-checked="${state[k]}" data-sw="${k}" aria-label="${k}"></button>`;
   return `<div class="hdr"><div class="t"><b>ajustes</b><span>mismo settings.json que el TUI</span></div></div>
@@ -328,7 +504,7 @@ function vSettings(){
    <div class="srow"><div class="t"><b>PC de Bryan</b><span>jw-7f3a.trycloudflare.com · TLS</span></div><span style="color:var(--green)">● 38 ms</span></div>
    <div class="srow"><div class="t"><b>protocolo</b><span>jw-proto v8 · compatible</span></div></div>
    <button class="srow" data-act="disc" style="color:var(--red)"><div class="t"><b>desconectar</b></div></button>
-   <div class="sec">tema</div><div class="themes">${Object.entries(THEMES).map(([n,t])=>`<button class="th" aria-pressed="${state.theme===n}" data-theme="${n}" style="--tbg:${t.bg};--tfg:${t.fg};--tdim:${t.dim}"><div class="s3">${['blue','green','red','yellow'].map(k=>`<i style="--c:${t[k]}"></i>`).join('')}</div><b>${n}</b><span>${t.dark?'oscuro':'claro'}</span></button>`).join('')}</div>
+   ${ansSection()}<div class="sec">tema</div><div class="themes">${Object.entries(THEMES).map(([n,t])=>`<button class="th" aria-pressed="${state.theme===n}" data-theme="${n}" style="--tbg:${t.bg};--tfg:${t.fg};--tdim:${t.dim}"><div class="s3">${['blue','green','red','yellow'].map(k=>`<i style="--c:${t[k]}"></i>`).join('')}</div><b>${n}</b><span>${t.dark?'oscuro':'claro'}</span></button>`).join('')}</div>
    <div class="sec">general</div>
    <div class="srow"><div class="t"><b>líder</b><span>^␣ abre el menú de teclas</span></div></div>
    <div class="srow"><div class="t"><b>animaciones</b></div>${sw('anim')}</div>
@@ -373,16 +549,19 @@ function sheet(){
     const it=[['1-9','ir al workspace','go'],['␣','buscar workspace','go'],['a','sesiones','go'],['o','abrir carpeta','go'],['w','nuevo worktree','wt'],['t','dividir panel','panes'],['x','cerrar panel','panes'],['hjkl','mover foco','panes'],['q','desconectar','']];
     body=`<h3>^␣ · teclas</h3><div class="list lead3">${it.map(([k,l,g])=>`<button class="lk" data-lead="${k}"><kbd>${k}</kbd><span>${l}</span><em>${g}</em></button>`).join('')}</div>`;
   }
+  if(s==='paste'){
+    body=`<h3>pegar enlace</h3><input id="lnk" placeholder="jw://….trycloudflare.com/…" autocomplete="off" aria-label="Enlace"><div class="lerr">${state.linkerr||''}</div><div class="list"><button class="lk" data-act="link"><kbd>↵</kbd><span>conectar</span><em>solo túneles de jw</em></button></div>`;
+  }
   return `<div class="back" data-sheet="close"></div><div class="sheet" role="dialog" aria-label="${s}"><div class="grab"></div>${body}</div>`;
 }
 
 function render(){
   const s=state.screen, el=$('#screen');
-  el.innerHTML=s==='connect'?vConnect():s==='home'?vHome():s==='inbox'?vInbox():s==='changes'?vChanges():s==='settings'?vSettings():vWs();
+  el.innerHTML=s==='connect'?vConnect():s==='perm'?vPerm():s==='scan'?vScan():s==='pair'?vPair():s==='fail'?vFail():s==='home'?vHome():s==='inbox'?vInbox():s==='changes'?vChanges():s==='settings'?vSettings():vWs();
   $('#overlay').innerHTML=sheet();
   const o=$('#out'); if(o) o.scrollTop=o.scrollHeight;
   const q=$('#q'); if(q){q.focus();q.setSelectionRange(q.value.length,q.value.length)}
-  $('#jump').innerHTML=[['connect','Conectar (QR)'],['home','Workspaces (sidebar)'],['wsroot','Entrar a la raíz'],['ws','Entrar a un worktree'],['pick','Buscador ␣'],['leader','Menú ^␣'],['inbox','Avisos'],['changes','Diff'],['settings','Ajustes y temas']].map(([k,l])=>`<button data-jump="${k}">${l}</button>`).join('');
+  $('#jump').innerHTML=[['connect','Conexión (QR)'],['perm','Cámara: permiso · nuevo'],['permdenied','Cámara bloqueada · nuevo'],['cam','Cámara · visor · nuevo'],['paste','Pegar enlace · nuevo'],['pair','Código de emparejamiento · nuevo'],['denied','El PC rechaza · nuevo'],['expired','Código vencido · nuevo'],['unreach','No encuentro tu PC · nuevo'],['proto','Protocolo distinto · nuevo'],['set','Respuestas rápidas · nuevo'],['limited','Demasiados intentos · nuevo'],['home','Workspaces (sidebar)'],['wsroot','Entrar a la raíz'],['ws','Entrar a un worktree'],['pick','Buscador ␣'],['leader','Menú ^␣'],['inbox','Avisos'],['changes','Diff'],['settings','Ajustes y temas']].map(([k,l])=>`<button data-jump="${k}">${l}</button>`).join('');
 }
 function answer(v,id){
   const w=wsOf(id); if(!w) return; buzz();
@@ -393,9 +572,10 @@ function answer(v,id){
 function enter(id){state.ws=id;state.pane='claude';state.screen='ws';state.sheet=null;state.q='';const w=wsOf(id);w.t=w.t==='ahora'?'ahora':w.t;render()}
 
 document.addEventListener('click',e=>{
-  const t=e.target.closest('[data-go],[data-open],[data-ans],[data-act],[data-theme],[data-sw],[data-pane],[data-key],[data-file],[data-view],[data-jump],[data-sheet],[data-sess],[data-lead]'); if(!t) return;
+  const t=e.target.closest('[data-go],[data-open],[data-ans],[data-act],[data-theme],[data-sw],[data-pane],[data-key],[data-file],[data-view],[data-jump],[data-sheet],[data-sess],[data-lead],[data-preset],[data-opt]'); if(!t) return;
   const d=t.dataset;
   if(d.jump){state.sheet=null;state.file=null;state.conn='idle';
+    if(CONN.includes(d.jump)){goConn(d.jump);return}
     if(d.jump==='wsroot'){state.sess='main';enter('jw');return}
     if(d.jump==='ws'){state.sess='main';enter('jw/fix/daemon-sock');return}
     if(d.jump==='pick'||d.jump==='leader'){state.screen='home';state.sheet=d.jump;render();return}
@@ -409,6 +589,7 @@ document.addEventListener('click',e=>{
   if(d.go){state.screen=d.go;state.file=null;state.sheet=null;render();return}
   if(d.open){enter(d.open);return}
   if(d.ans){const [v,id]=d.ans.split('|');answer(v,id);return}
+  if(d.preset){state.preset=d.preset;render();return}
   if(d.theme){applyTheme(d.theme);render();return}
   if(d.sw){state[d.sw]=!state[d.sw];render();return}
   if(d.pane){state.pane=d.pane;render();return}
@@ -416,8 +597,18 @@ document.addEventListener('click',e=>{
   if(d.view){state.viewed[d.view]=!state.viewed[d.view];render();return}
   if(d.key){logFor(`${state.ws}|${state.pane}`).push(`<span class="d">⌨ ${d.key}</span>`);toast('enviado '+d.key);render();return}
   switch(d.act){
-    case 'scan':state.conn='tunnel';render();setTimeout(()=>{state.conn='ver';render()},900);setTimeout(()=>{state.conn='idle';state.screen='home';render();toast('conectado')},1800);break;
-    case 'manual':toast('pega el enlace jw://…');break;
+    case 'scan':goConn(state.perm==='granted'?'scan':'perm');break;
+    case 'allow':state.perm='granted';goConn('scan');break;
+    case 'read':state.hit=true;render();setTimeout(()=>{state.hit=false;startPair()},750);break;
+    case 'paste':state.sheet='paste';state.linkerr='';render();break;
+    case 'link':{const v=(($('#lnk')||{}).value||'jw://virtual-archive-bunny-economies.trycloudflare.com/3b834ed5232e5aee2553031891d4f070').trim();
+      if(/^jw:\/\/[a-z0-9-]+(\.[a-z0-9-]+)*\.trycloudflare\.com\/[0-9a-f]{32}$/.test(v)){startPair()}else{state.linkerr='ese enlace no es de un túnel de jw';render()}break}
+    case 'back':case 'cancelpair':clearTimeout(state.pairT);state.screen='connect';state.sheet=null;render();break;
+    case 'rescan':goConn('scan');break;
+    case 'retry':startPair();break;
+    case 'torch':toast('linterna');break;
+    case 'os':toast('abre los ajustes del sistema');break;
+    case 'sim':{const k=d.sim;if(k==='accept'){clearTimeout(state.pairT);state.screen='home';render();toast('conectado')}else{goConn(k)}break}
     case 'closefile':state.file=null;render();break;
     case 'disc':state.screen='connect';state.conn='idle';render();break;
     case 'folder':state.sheet=null;toast('selector de carpetas');render();break;
