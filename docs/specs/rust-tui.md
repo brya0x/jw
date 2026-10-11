@@ -420,10 +420,10 @@ The diff pane (`^␣ d`, and the left half of a review workspace) mixed committe
 | General | `git diff -M --merge-base origin/<base> HEAD`; empty base: nothing, with a note |
 | Uncommitted | `git diff -M HEAD` + `ls-files --others --exclude-standard -z` (as `diff.rs:93`); no commit yet: against `EMPTY_TREE` (`diff.rs:74`) |
 | Commits | `diff::commits(dir, base, 200)`: `git log -n201 --format=… origin/<base>..HEAD` (empty base: `HEAD`; the extra one says whether more exist) → `Commits{list: Vec<Commit{sha, short, subject, when}>, more}`; detail `git show -M --format= <sha>` (a merge: `-m --first-parent`) |
-| State | `DiffView` (`tui/diffview.rs:22`) gains `scope`, `commit`, a sidebar cursor, a cache of `Loaded` per slot, and per view `{cur, top, viewed: BTreeSet<String>}` (today `viewed` holds indices); Commits keeps one such state per sha |
-| Jobs | `Job::Diff` (`tui/mod.rs:109`) carries `{into, slot, gen, result}`; slot = General, Uncommitted, CommitList or Commit(sha); `App` holds the latest `gen` per slot |
-| Keys | In `DiffView::key` (`diffview.rs:119`), fixed like the other viewer keys, not in `settings::ACTIONS` (those are leader keys). Hints at `draw.rs:565` |
-| Sidebar | `draw_tree` (`diffview.rs:302`, `TREE` = 30 columns) draws the three sections; below 100 columns it is an overlay |
+| State | `DiffView` (`tui/diffview.rs`) holds `which`, the selected commit, the sidebar's cursor, a `Load` (idle, loading with a number, ready, failed) per slot with a commit's diffs kept by sha, and per view or commit a `Pos{scroll, viewed: BTreeSet<String>}` (before, `viewed` held indices). `diff::File` gains `untracked` |
+| Jobs | `Job::Diff` (`tui/mod.rs:109`) carries General for a pane that opens; `Job::DiffPart{pane, slot, seq, result}` answers any other piece. The view asks with `Action::Load(Request{slot, seq})` and takes the answer with `DiffView::apply`, which drops it unless `seq` is the number its slot waits for; `App::load_part` runs it through `App::background` |
+| Keys | In `DiffView::key`, fixed like the other viewer keys, not in `settings::ACTIONS` (those are leader keys). Hints: `Mode::Diff`, `DiffCommits` and `DiffSide` in `draw.rs` |
+| Sidebar | `DiffView::draw_sidebar` (`TREE` = 30 columns) draws the three sections; below `SIDEBAR_MIN` = 100 columns it is an overlay and `crumb` takes its place |
 | Marks | `M` yellow, `A` green, `D` red, `R` cyan, `?` untracked magenta; the selected row `sel`; all through `theme::p()` |
 
 - REQ-194 WHEN a diff pane opens, the TUI SHALL show General and load only General.
@@ -636,8 +636,8 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | R3 ✓ | README; version 0.0.13; a hand test with `scripts/drive.py` against a local origin and a fake `gh`; REQ-175 and REQ-183, which that test found missing | 175, 183 | `README.md`, `core/src/actions.rs`, `core/src/connectors/git.rs`, `tui/mod.rs` |
 | V0 | Addendum 17 in this spec; the prototype (approved 2026-10-11) | — | docs |
 | V1 ✓ | Core: `Scope`, `load(dir, &Scope)`, `Loaded::TooLarge` with `DIFF_CAP`, `commits`; tests in a temp repo | 195–198, 210, 216 | `core/src/diff.rs` |
-| V2 | TUI: per-view state keyed by path, the sidebar sections, `1 2 3`, `Tab`, `( )`, the narrow overlay and breadcrumb, the title | 199, 201–206, 211–215, 217 | `tui/diffview.rs`, `tui/draw.rs`, `tui/mod.rs` |
-| V3 | Lazy jobs with a generation per slot, the commit cache, loading and error states; review workspaces | 194, 200, 207–209, 213, 218 | `tui/mod.rs`, `tui/diffview.rs` |
+| V2 ✓ | TUI: `DiffView` with per-view state keyed by path, the sidebar sections, `1 2 3`, `Tab`, `( )`, the narrow overlay and breadcrumb, the title; the jobs with a number per slot, the commit cache and the loading, failed and too-large states (V3's work came with it, the view could not be shown without it) | 194–205, 207–215, 217, 218 | `tui/diffview.rs`, `tui/draw.rs`, `tui/mod.rs`, `core/src/diff.rs` |
+| V3 | Review workspaces and a hand test of the jobs against a big repo; the trigger for REQ-206 if OPEN-26 is answered | 206, 213 | `tui/mod.rs` |
 | V4 | README; version bump when a PR follows; a hand test with `scripts/drive.py` in a repo with commits and a dirty tree, and in a big one | — | `README.md`, `Cargo.toml` |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 
@@ -707,7 +707,8 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - The brief for W1 said the sidebar stayed stale until the TUI was reopened. True for writes by the CLI and by other TUIs; the TUI's own jobs already reload (`on_job`).
 - The same brief said the loop wakes only when something animates. `Msg::Tick` wakes it every 500 ms regardless (`tui/mod.rs:353`); only the animation timers in `next_wake` are conditional. The registry watch rides that tick (REQ-151, REQ-152).
 - REQ-21 and REQ-57 spoke of "every changed file" in one scroll: the working tree against the base. With addendum 17 that is General plus Uncommitted, in separate views. REQ-169 still holds for General; the uncommitted part moved to Uncommitted.
-- REQ-123 said `d` with no `origin/<default>` diffs against `HEAD`. That is now the Uncommitted view; General has nothing to compare then (REQ-198). Until V2 the pane shows one scope, Uncommitted when there is no base and General otherwise, so a worktree's dirty files are missing from `^␣ d` until the views land.
+- REQ-123 said `d` with no `origin/<default>` diffs against `HEAD`. That is now the Uncommitted view; General has nothing to compare then (REQ-198).
+- REQ-206 holds in the model (scroll and viewed live in `Pos`, by path, apart from the files), but nothing reloads a view while the pane is open, so nothing exercises it until OPEN-26 is answered.
 - Until addendum 17, a diff reload rebuilt the view and lost scroll and viewed files (`tui/mod.rs:3239`); REQ-206 fixes that.
 
 ## Tests

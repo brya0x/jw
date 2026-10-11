@@ -25,6 +25,8 @@ pub struct File {
     pub old_path: Option<String>,
     pub status: Status,
     pub binary: bool,
+    /// Not in git yet: an `?` in the Uncommitted view, not an `A`.
+    pub untracked: bool,
     pub hunks: Vec<Hunk>,
 }
 
@@ -297,6 +299,7 @@ fn untracked_file(dir: &Path, path: &str) -> File {
         old_path: None,
         status: Status::Added,
         binary,
+        untracked: true,
         hunks,
     }
 }
@@ -313,6 +316,7 @@ pub fn parse(text: &str) -> Vec<File> {
                 old_path: None,
                 status: Status::Modified,
                 binary: false,
+                untracked: false,
                 hunks: Vec::new(),
             });
             continue;
@@ -684,6 +688,11 @@ Binary files /dev/null and b/img.png differ
             ]
         );
         assert_eq!(f[1].hunks[0].lines[0].text, "c");
+        assert_eq!(
+            f.iter().map(|f| f.untracked).collect::<Vec<_>>(),
+            [false, true, false],
+            "only c.txt is untracked; the staged d.txt is a plain addition"
+        );
     }
 
     /// REQ-196: a repository with no commit yet shows what is staged and

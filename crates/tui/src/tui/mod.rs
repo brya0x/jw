@@ -107,12 +107,22 @@ enum Job {
     /// The review workspace is ready to open (REQ-166).
     Reviewed(Box<crate::review::Reviewed>),
     Diff {
-        title: String,
+        name: String,
+        base: String,
         dir: String,
-        files: Vec<crate::diff::File>,
+        /// General, which a diff pane opens on (REQ-194); git's complaint
+        /// when it failed (REQ-218).
+        general: Result<crate::diff::Loaded, String>,
         /// The viewer pane to fill, when it is already in the tree (a
         /// client attaching to a workspace that shows one).
         into: Option<PaneId>,
+    },
+    /// What git work a diff pane asked for found (addendum 17).
+    DiffPart {
+        pane: PaneId,
+        slot: diffview::Slot,
+        seq: u64,
+        result: Result<diffview::Part, String>,
     },
     /// A worktree has its new name and folder; `from` is the old folder.
     Renamed {
@@ -1291,6 +1301,7 @@ impl App {
             diffview::Action::None => {}
             diffview::Action::Close => self.send(ClientMsg::Kill { pane: f }),
             diffview::Action::Open(path) => self.open_file(&path),
+            diffview::Action::Load(r) => self.load_part(f, r),
         }
     }
 
@@ -1794,11 +1805,19 @@ impl App {
             self.fit();
         }
         if let Some(v) = self.views.get_mut(&id) {
+            let mut asked = None;
             match v {
                 View::Diff(d) if wheel != 0 => d.scroll_by(wheel),
-                View::Diff(d) if click => d.click(x, y),
+                View::Diff(d) if click => {
+                    if let diffview::Action::Load(r) = d.click(x, y) {
+                        asked = Some(r);
+                    }
+                }
                 View::Md(md) if wheel != 0 => md.scroll_by(wheel),
                 _ => {}
+            }
+            if let Some(r) = asked {
+                self.load_part(id, r);
             }
             return;
         }
@@ -2950,30 +2969,51 @@ impl App {
         };
         self.background(format!("diffing {}", entry.name), move || {
             let stream = Stream::resolve(&entry)?;
-            // Until the views of addendum 17 (V2), the pane shows one scope: the
-            // branch's commits, or what is uncommitted when there is no base.
-            let scope = if stream.base.is_empty() {
-                crate::diff::Scope::Uncommitted
-            } else {
-                crate::diff::Scope::Branch {
+            let general = crate::diff::load(
+                std::path::Path::new(&entry.path),
+                &crate::diff::Scope::Branch {
                     base: stream.base.clone(),
-                }
-            };
-            let files = match crate::diff::load(std::path::Path::new(&entry.path), &scope)? {
-                crate::diff::Loaded::Files(files) => files,
-                crate::diff::Loaded::TooLarge { total, .. } => {
-                    anyhow::bail!("{total} files: too large to draw")
-                }
-            };
-            Ok(Job::Diff {
-                title: if stream.base.is_empty() {
-                    format!("{} vs HEAD", entry.name)
-                } else {
-                    format!("{} vs {}", entry.name, stream.base)
                 },
+            )
+            .map_err(|e| format!("{e:#}"));
+            Ok(Job::Diff {
+                name: entry.name,
+                base: stream.base,
                 dir: entry.path,
-                files,
+                general,
                 into,
+            })
+        });
+    }
+
+    /// Runs the git work a diff pane asked for, off the UI thread (REQ-207).
+    fn load_part(&mut self, pane: PaneId, req: diffview::Request) {
+        let Some(View::Diff(d)) = self.views.get(&pane) else {
+            return;
+        };
+        let (dir, base) = (d.dir.clone(), d.base.clone());
+        let diffview::Request { slot, seq } = req;
+        self.background("diffing".into(), move || {
+            use crate::diff::{Scope, commits, load};
+            let path = std::path::Path::new(&dir);
+            let result = match &slot {
+                diffview::Slot::General => {
+                    load(path, &Scope::Branch { base }).map(diffview::Part::Files)
+                }
+                diffview::Slot::Uncommitted => {
+                    load(path, &Scope::Uncommitted).map(diffview::Part::Files)
+                }
+                diffview::Slot::Commits => commits(path, &base, 200).map(diffview::Part::List),
+                diffview::Slot::Commit(sha) => {
+                    load(path, &Scope::Commit(sha.clone())).map(diffview::Part::Files)
+                }
+            }
+            .map_err(|e| format!("{e:#}"));
+            Ok(Job::DiffPart {
+                pane,
+                slot,
+                seq,
+                result,
             })
         });
     }
@@ -3244,13 +3284,28 @@ impl App {
                 self.moved(entry, from);
             }
             Job::Said(msg) => self.done(msg),
+            Job::DiffPart {
+                pane,
+                slot,
+                seq,
+                result,
+            } => {
+                let more = match self.views.get_mut(&pane) {
+                    Some(View::Diff(d)) => d.apply(slot, seq, result),
+                    _ => None,
+                };
+                if let Some(r) = more {
+                    self.load_part(pane, r);
+                }
+            }
             Job::Diff {
-                title,
+                name,
+                base,
                 dir,
-                files,
+                general,
                 into,
             } => {
-                let view = View::Diff(diffview::DiffView::new(title, dir, files));
+                let view = View::Diff(diffview::DiffView::new(name, base, dir, general));
                 match into {
                     Some(id) => {
                         self.views.insert(id, view);
