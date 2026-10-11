@@ -1,6 +1,6 @@
-//! A stream's changes as data for the diff viewer (REQ-21): what git says
-//! changed since the branch left its base, uncommitted work and untracked
-//! files included, parsed into files, hunks and lines, plus the pairing and
+//! A stream's changes as data for the diff viewer (REQ-21, addendum 17): what
+//! git says changed in one scope (the branch's commits, what is uncommitted,
+//! or one commit), parsed into files, hunks and lines, plus the pairing and
 //! word-level marks a side-by-side view needs. No drawing here.
 
 use std::path::Path;
@@ -73,29 +73,199 @@ pub struct Line {
 /// git's empty tree, the base of a repository with no commit yet.
 const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
-/// Everything the stream changed against `origin/<base>`: committed,
-/// staged, unstaged and untracked. With no `base` (a repository whose
-/// origin has no default branch, or no origin), against `HEAD`: what is
-/// not committed yet (REQ-123).
-pub fn load(dir: &Path, base: &str) -> Result<Vec<File>> {
-    let base_ref = format!("origin/{base}");
-    let mut args = vec!["diff", "-M", "--no-color", "--no-ext-diff"];
-    if base.is_empty() {
-        // Before the first commit there is no HEAD: everything staged is new.
-        let born = git::output(dir, &["rev-parse", "--verify", "--quiet", "HEAD"]).is_ok();
-        args.push(if born { "HEAD" } else { EMPTY_TREE });
-    } else {
-        args.extend(["--merge-base", &base_ref]);
+/// Most bytes of diff text read from git for one view; past it the view lists
+/// its files and says it is too large (REQ-210).
+pub const DIFF_CAP: usize = 2 * 1024 * 1024;
+
+/// Most files a too-large view lists.
+pub const FILE_LIST_CAP: usize = 200;
+
+/// Which changes the diff viewer shows (addendum 17).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Scope {
+    /// Committed work: `origin/<base>` to `HEAD`. An empty base has nothing
+    /// to compare against.
+    Branch { base: String },
+    /// Staged, unstaged and untracked, against `HEAD`.
+    Uncommitted,
+    /// One commit against its first parent.
+    Commit(String),
+}
+
+/// What a scope loaded to.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Loaded {
+    Files(Vec<File>),
+    /// The diff text passed [`DIFF_CAP`]: only the first [`FILE_LIST_CAP`]
+    /// files, and how many there are.
+    TooLarge {
+        files: Vec<(Status, String)>,
+        total: usize,
+    },
+}
+
+/// A commit of the branch, for the Commits view.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Commit {
+    pub sha: String,
+    pub short: String,
+    pub subject: String,
+    /// Committer time, seconds since the epoch.
+    pub when: i64,
+}
+
+/// The commits of a branch, newest first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Commits {
+    pub list: Vec<Commit>,
+    /// Older commits exist beyond the limit.
+    pub more: bool,
+}
+
+/// The commits `origin/<base>..HEAD`, newest first, at most `limit`. With no
+/// `base`, those of `HEAD`. A repository with no commit has none.
+pub fn commits(dir: &Path, base: &str, limit: usize) -> Result<Commits> {
+    if git::output(dir, &["rev-parse", "--verify", "--quiet", "HEAD"]).is_err() {
+        return Ok(Commits {
+            list: Vec::new(),
+            more: false,
+        });
     }
-    let out = git::output(dir, &args)?;
+    let range = if base.is_empty() {
+        "HEAD".to_string()
+    } else {
+        format!("origin/{base}..HEAD")
+    };
+    let n = format!("-n{}", limit + 1);
+    let out = git::output(dir, &["log", &n, "--format=%H%x1f%h%x1f%ct%x1f%s", &range])?;
+    let mut list: Vec<Commit> = out
+        .lines()
+        .filter_map(|l| {
+            let mut f = l.splitn(4, '\x1f');
+            Some(Commit {
+                sha: f.next()?.to_string(),
+                short: f.next()?.to_string(),
+                when: f.next()?.parse().ok()?,
+                subject: f.next()?.to_string(),
+            })
+        })
+        .collect();
+    let more = list.len() > limit;
+    list.truncate(limit);
+    Ok(Commits { list, more })
+}
+
+/// The changes of one scope, parsed. Reads at most [`DIFF_CAP`] bytes of diff
+/// text, and untracked files up to the same total; past that, the file list
+/// only.
+pub fn load(dir: &Path, scope: &Scope) -> Result<Loaded> {
+    if matches!(scope, Scope::Branch { base } if base.is_empty()) {
+        return Ok(Loaded::Files(Vec::new()));
+    }
+    let (sub, rest) = command(dir, scope)?;
+    let mut args = vec![sub, "-M", "--no-color", "--no-ext-diff"];
+    args.extend(rest.iter().map(String::as_str));
+    let Some(out) = git::output_capped(dir, &args, DIFF_CAP)? else {
+        let mut listing = vec![sub, "-M", "--name-status", "-z"];
+        listing.extend(rest.iter().map(String::as_str));
+        let mut all = name_status(&git::output(dir, &listing)?);
+        if *scope == Scope::Uncommitted {
+            all.extend(untracked(dir)?.into_iter().map(|p| (Status::Added, p)));
+        }
+        return Ok(too_large(all));
+    };
     let mut files = parse(&out);
-    // git diff leaves out untracked files; they are new files all the same.
-    let untracked = git::output(dir, &["ls-files", "--others", "--exclude-standard", "-z"])?;
-    for path in untracked.split('\0').filter(|p| !p.is_empty()) {
-        files.push(untracked_file(dir, path));
+    if *scope == Scope::Uncommitted {
+        // git diff leaves out untracked files; they are new files all the same.
+        let mut budget = DIFF_CAP.saturating_sub(out.len());
+        let paths = untracked(dir)?;
+        for path in &paths {
+            let size = std::fs::metadata(dir.join(path)).map_or(0, |m| m.len() as usize);
+            if size > budget {
+                let mut all: Vec<(Status, String)> =
+                    files.iter().map(|f| (f.status, f.path.clone())).collect();
+                all.extend(paths.into_iter().map(|p| (Status::Added, p)));
+                return Ok(too_large(all));
+            }
+            budget -= size;
+        }
+        files.extend(paths.iter().map(|p| untracked_file(dir, p)));
     }
     files.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(files)
+    Ok(Loaded::Files(files))
+}
+
+/// The git subcommand and the arguments that pick a scope's revisions.
+fn command(dir: &Path, scope: &Scope) -> Result<(&'static str, Vec<String>)> {
+    Ok(match scope {
+        Scope::Branch { base } => (
+            "diff",
+            vec![
+                "--merge-base".into(),
+                format!("origin/{base}"),
+                "HEAD".into(),
+            ],
+        ),
+        Scope::Uncommitted => {
+            // Before the first commit there is no HEAD: everything staged is new.
+            let born = git::output(dir, &["rev-parse", "--verify", "--quiet", "HEAD"]).is_ok();
+            ("diff", vec![if born { "HEAD" } else { EMPTY_TREE }.into()])
+        }
+        Scope::Commit(sha) => {
+            anyhow::ensure!(
+                !sha.is_empty() && sha.bytes().all(|b| b.is_ascii_hexdigit()),
+                "not a commit id: {sha}"
+            );
+            // `-m --first-parent` shows a merge against its first parent, which
+            // `parse` can read; the combined diff it cannot.
+            (
+                "show",
+                vec![
+                    "--format=".into(),
+                    "-m".into(),
+                    "--first-parent".into(),
+                    sha.clone(),
+                ],
+            )
+        }
+    })
+}
+
+fn untracked(dir: &Path) -> Result<Vec<String>> {
+    let out = git::output(dir, &["ls-files", "--others", "--exclude-standard", "-z"])?;
+    Ok(out
+        .split('\0')
+        .filter(|p| !p.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
+/// Reads `git diff --name-status -z`: a status, then a path (two for a rename).
+fn name_status(text: &str) -> Vec<(Status, String)> {
+    let mut out = Vec::new();
+    let mut it = text.split('\0').filter(|t| !t.trim().is_empty());
+    while let Some(code) = it.next() {
+        let status = match code.as_bytes()[0] {
+            b'A' => Status::Added,
+            b'D' => Status::Deleted,
+            b'R' | b'C' => Status::Renamed,
+            _ => Status::Modified,
+        };
+        let renamed = matches!(code.as_bytes()[0], b'R' | b'C');
+        let first = it.next();
+        let path = if renamed { it.next() } else { first };
+        if let Some(p) = path {
+            out.push((status, p.to_string()));
+        }
+    }
+    out
+}
+
+fn too_large(mut all: Vec<(Status, String)>) -> Loaded {
+    all.sort_by(|a, b| a.1.cmp(&b.1));
+    let total = all.len();
+    all.truncate(FILE_LIST_CAP);
+    Loaded::TooLarge { files: all, total }
 }
 
 fn untracked_file(dir: &Path, path: &str) -> File {
@@ -435,14 +605,11 @@ Binary files /dev/null and b/img.png differ
         assert!(ra.is_empty() && rb.is_empty());
     }
 
-    #[test]
-    fn load_sees_commits_edits_and_untracked() {
-        use crate::connectors::git::tests::{must_git, new_test_repo};
-        let (_d, work) = new_test_repo();
-        std::fs::write(work.join("a.txt"), "one\ntwo\n").unwrap();
-        must_git(&work, &["add", "a.txt"]);
+    use crate::connectors::git::tests::{must_git, new_test_repo};
+
+    fn commit(work: &Path, msg: &str) {
         must_git(
-            &work,
+            work,
             &[
                 "-c",
                 "user.name=t",
@@ -451,47 +618,229 @@ Binary files /dev/null and b/img.png differ
                 "commit",
                 "-q",
                 "-m",
-                "a",
+                msg,
             ],
         );
-        std::fs::write(work.join("a.txt"), "one\n2\n").unwrap();
-        std::fs::write(work.join("new.md"), "# hi\n").unwrap();
-
-        let files = load(&work, "trunk").unwrap();
-        let names: Vec<(&str, Status)> =
-            files.iter().map(|f| (f.path.as_str(), f.status)).collect();
-        assert_eq!(names, [("a.txt", Status::Added), ("new.md", Status::Added)]);
-        assert_eq!(
-            files[0].added(),
-            2,
-            "committed and edited, against the base"
-        );
-        assert_eq!(files[1].hunks[0].lines[0].text, "# hi");
-
-        // REQ-123: with no base, only what isn't committed.
-        let files = load(&work, "").unwrap();
-        let names: Vec<(&str, Status)> =
-            files.iter().map(|f| (f.path.as_str(), f.status)).collect();
-        assert_eq!(
-            names,
-            [("a.txt", Status::Modified), ("new.md", Status::Added)]
-        );
-        assert_eq!(files[0].added(), 1);
     }
 
-    /// REQ-123: a repository with no commit yet shows what is staged and
+    fn files(l: Loaded) -> Vec<File> {
+        match l {
+            Loaded::Files(f) => f,
+            other => panic!("expected files, got {other:?}"),
+        }
+    }
+
+    fn names(files: &[File]) -> Vec<(&str, Status)> {
+        files.iter().map(|f| (f.path.as_str(), f.status)).collect()
+    }
+
+    fn branch() -> Scope {
+        Scope::Branch {
+            base: "trunk".into(),
+        }
+    }
+
+    /// A feature branch with two commits (a.txt, then b.txt) and, on top,
+    /// an edit to a.txt, a staged d.txt and an untracked c.txt.
+    fn feature_repo() -> (tempfile::TempDir, std::path::PathBuf) {
+        let (d, work) = new_test_repo();
+        must_git(&work, &["checkout", "-q", "-b", "feat"]);
+        std::fs::write(work.join("a.txt"), "one\ntwo\n").unwrap();
+        must_git(&work, &["add", "a.txt"]);
+        commit(&work, "a");
+        std::fs::write(work.join("b.txt"), "b\n").unwrap();
+        must_git(&work, &["add", "b.txt"]);
+        commit(&work, "b");
+        std::fs::write(work.join("a.txt"), "one\n2\n").unwrap();
+        std::fs::write(work.join("d.txt"), "d\n").unwrap();
+        must_git(&work, &["add", "d.txt"]);
+        std::fs::write(work.join("c.txt"), "c\n").unwrap();
+        (d, work)
+    }
+
+    /// REQ-195: General is what was committed, not what is edited since.
+    #[test]
+    fn general_is_committed_work_only() {
+        let (_d, work) = feature_repo();
+        let f = files(load(&work, &branch()).unwrap());
+        assert_eq!(
+            names(&f),
+            [("a.txt", Status::Added), ("b.txt", Status::Added)]
+        );
+        assert_eq!(f[0].added(), 2, "the committed a.txt, not the edit");
+    }
+
+    /// REQ-196: staged, unstaged and untracked, against HEAD.
+    #[test]
+    fn uncommitted_is_staged_unstaged_and_untracked() {
+        let (_d, work) = feature_repo();
+        let f = files(load(&work, &Scope::Uncommitted).unwrap());
+        assert_eq!(
+            names(&f),
+            [
+                ("a.txt", Status::Modified),
+                ("c.txt", Status::Added),
+                ("d.txt", Status::Added),
+            ]
+        );
+        assert_eq!(f[1].hunks[0].lines[0].text, "c");
+    }
+
+    /// REQ-196: a repository with no commit yet shows what is staged and
     /// what is untracked, instead of git's "unknown revision HEAD".
     #[test]
-    fn load_works_before_the_first_commit() {
-        use crate::connectors::git::tests::must_git;
+    fn uncommitted_works_before_the_first_commit() {
         let d = tempfile::tempdir().unwrap();
         must_git(d.path(), &["init", "-q"]);
         std::fs::write(d.path().join("a.txt"), "a\n").unwrap();
         must_git(d.path(), &["add", "a.txt"]);
         std::fs::write(d.path().join("b.txt"), "b\n").unwrap();
-        let files = load(d.path(), "").unwrap();
-        let names: Vec<(&str, Status)> =
-            files.iter().map(|f| (f.path.as_str(), f.status)).collect();
-        assert_eq!(names, [("a.txt", Status::Added), ("b.txt", Status::Added)]);
+        let f = files(load(d.path(), &Scope::Uncommitted).unwrap());
+        assert_eq!(
+            names(&f),
+            [("a.txt", Status::Added), ("b.txt", Status::Added)]
+        );
+        assert!(commits(d.path(), "", 10).unwrap().list.is_empty());
+    }
+
+    /// REQ-198: no base, nothing to compare General with.
+    #[test]
+    fn general_with_no_base_lists_nothing() {
+        let (_d, work) = feature_repo();
+        let none = Scope::Branch {
+            base: String::new(),
+        };
+        assert_eq!(load(&work, &none).unwrap(), Loaded::Files(Vec::new()));
+    }
+
+    /// REQ-197, REQ-198: newest first, the limit, and whether more exist.
+    #[test]
+    fn commits_are_newest_first_and_capped() {
+        let (_d, work) = feature_repo();
+        let c = commits(&work, "trunk", 10).unwrap();
+        let subjects: Vec<&str> = c.list.iter().map(|c| c.subject.as_str()).collect();
+        assert_eq!(subjects, ["b", "a"]);
+        assert!(!c.more);
+        assert_eq!(c.list[0].sha.len(), 40);
+        assert!(c.list[0].when > 0 && c.list[0].sha.starts_with(&c.list[0].short));
+
+        let c = commits(&work, "trunk", 1).unwrap();
+        assert_eq!((c.list.len(), c.more), (1, true));
+        assert_eq!(c.list[0].subject, "b");
+
+        // No base: every commit of HEAD, the initial one too.
+        let c = commits(&work, "", 10).unwrap();
+        assert_eq!(c.list.len(), 3);
+    }
+
+    /// One commit against its parent, a root commit, and a merge against its
+    /// first parent.
+    #[test]
+    fn a_commit_shows_only_its_own_changes() {
+        let (_d, work) = feature_repo();
+        let sha = |n: usize| commits(&work, "trunk", 10).unwrap().list[n].sha.clone();
+        let f = files(load(&work, &Scope::Commit(sha(0))).unwrap());
+        assert_eq!(names(&f), [("b.txt", Status::Added)]);
+
+        // The repository's first commit has files and no parent.
+        let root = tempfile::tempdir().unwrap();
+        must_git(root.path(), &["init", "-q", "-b", "trunk"]);
+        std::fs::write(root.path().join("r.txt"), "r\n").unwrap();
+        must_git(root.path(), &["add", "r.txt"]);
+        commit(root.path(), "root");
+        let first = commits(root.path(), "", 10).unwrap().list[0].sha.clone();
+        let f = files(load(root.path(), &Scope::Commit(first)).unwrap());
+        assert_eq!(names(&f), [("r.txt", Status::Added)]);
+
+        // A merge: what the side branch brought in.
+        must_git(root.path(), &["checkout", "-q", "-b", "side"]);
+        std::fs::write(root.path().join("s.txt"), "s\n").unwrap();
+        must_git(root.path(), &["add", "s.txt"]);
+        commit(root.path(), "side");
+        must_git(root.path(), &["checkout", "-q", "trunk"]);
+        std::fs::write(root.path().join("t.txt"), "t\n").unwrap();
+        must_git(root.path(), &["add", "t.txt"]);
+        commit(root.path(), "trunk");
+        must_git(
+            root.path(),
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "merge",
+                "-q",
+                "--no-ff",
+                "-m",
+                "merge",
+                "side",
+            ],
+        );
+        let merge = commits(root.path(), "", 10).unwrap().list[0].sha.clone();
+        let f = files(load(root.path(), &Scope::Commit(merge)).unwrap());
+        assert_eq!(names(&f), [("s.txt", Status::Added)]);
+    }
+
+    /// REQ-210: past the cap, the file list and the total, no parsed diff.
+    #[test]
+    fn a_diff_past_the_cap_lists_its_files() {
+        let (_d, work) = new_test_repo();
+        must_git(&work, &["checkout", "-q", "-b", "feat"]);
+        let big = "x".repeat(99) + "\n";
+        std::fs::write(work.join("big.txt"), big.repeat(DIFF_CAP / 100 + 100)).unwrap();
+        std::fs::write(work.join("small.txt"), "s\n").unwrap();
+        must_git(&work, &["add", "."]);
+        commit(&work, "big");
+        let l = load(&work, &branch()).unwrap();
+        assert_eq!(
+            l,
+            Loaded::TooLarge {
+                files: vec![
+                    (Status::Added, "big.txt".into()),
+                    (Status::Added, "small.txt".into())
+                ],
+                total: 2
+            }
+        );
+        // An untracked file that large is not read either.
+        std::fs::write(work.join("huge.log"), big.repeat(DIFF_CAP / 100 + 100)).unwrap();
+        let l = load(&work, &Scope::Uncommitted).unwrap();
+        assert_eq!(
+            l,
+            Loaded::TooLarge {
+                files: vec![(Status::Added, "huge.log".into())],
+                total: 1
+            }
+        );
+    }
+
+    /// REQ-218: git's complaint comes back as an error, and an id that is not
+    /// hex never reaches git as an option.
+    #[test]
+    fn errors_name_what_went_wrong() {
+        let (_d, work) = feature_repo();
+        let missing = Scope::Branch {
+            base: "nope".into(),
+        };
+        let e = load(&work, &missing).unwrap_err().to_string();
+        assert!(e.contains("origin/nope"), "{e}");
+        let e = load(&work, &Scope::Commit("--output=x".into()))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("not a commit id"), "{e}");
+    }
+
+    #[test]
+    fn name_status_reads_renames_and_blank_leaders() {
+        let t = "\nM\0a.txt\0R100\0old.md\0new.md\0D\0gone\0A\0n\0";
+        assert_eq!(
+            name_status(t),
+            [
+                (Status::Modified, "a.txt".to_string()),
+                (Status::Renamed, "new.md".to_string()),
+                (Status::Deleted, "gone".to_string()),
+                (Status::Added, "n".to_string()),
+            ]
+        );
     }
 }

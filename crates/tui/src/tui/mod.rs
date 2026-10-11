@@ -2950,7 +2950,21 @@ impl App {
         };
         self.background(format!("diffing {}", entry.name), move || {
             let stream = Stream::resolve(&entry)?;
-            let files = crate::diff::load(std::path::Path::new(&entry.path), &stream.base)?;
+            // Until the views of addendum 17 (V2), the pane shows one scope: the
+            // branch's commits, or what is uncommitted when there is no base.
+            let scope = if stream.base.is_empty() {
+                crate::diff::Scope::Uncommitted
+            } else {
+                crate::diff::Scope::Branch {
+                    base: stream.base.clone(),
+                }
+            };
+            let files = match crate::diff::load(std::path::Path::new(&entry.path), &scope)? {
+                crate::diff::Loaded::Files(files) => files,
+                crate::diff::Loaded::TooLarge { total, .. } => {
+                    anyhow::bail!("{total} files: too large to draw")
+                }
+            };
             Ok(Job::Diff {
                 title: if stream.base.is_empty() {
                     format!("{} vs HEAD", entry.name)
