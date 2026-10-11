@@ -107,7 +107,7 @@ fn a_phone_drives_a_pane_through_the_bridge() {
             read_only: false,
             confirm: Arc::new(|_| false),
             look: Arc::new(|| serde_json::json!({"palettes": [], "settings": {}})),
-            lister: Arc::new(|_| Ok(serde_json::json!([]))),
+            lister: Arc::new(|_, _| Ok(serde_json::json!([]))),
             timings: Timings::default(),
         },
     )

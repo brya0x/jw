@@ -179,7 +179,8 @@ pub enum Query {
 
 /// Answers a `Query` with its items, or why not. Like `Look`, the daemon hands
 /// it in: it reads jw's registry and folders, which this crate does not know.
-pub type Lister = Arc<dyn Fn(&Query) -> Result<serde_json::Value, String> + Send + Sync>;
+pub type Lister =
+    Arc<dyn Fn(&Query, &AtomicBool) -> Result<serde_json::Value, String> + Send + Sync>;
 
 pub struct Config {
     pub store: Arc<Store>,
@@ -448,6 +449,9 @@ struct Later {
     diff: Arc<AtomicBool>,
     /// Lists being computed for this phone, at most `MAX_LISTS`.
     lists: Arc<AtomicUsize>,
+    /// Set when this phone is gone: what is still being computed for it
+    /// stops (a diff runs git, which would go on for its whole deadline).
+    gone: Arc<AtomicBool>,
 }
 
 /// How many `workspaces` and `sessions` a phone can have in flight.
@@ -535,8 +539,10 @@ fn serve(stream: TcpStream, shared: &Shared, socket: &Path) -> Result<(), WsErro
         rx: replies,
         diff: Arc::new(AtomicBool::new(false)),
         lists: Arc::new(AtomicUsize::new(0)),
+        gone: Arc::new(AtomicBool::new(false)),
     };
     let result = relay(&mut ws, &mut daemon, &rx, &later, shared, &device);
+    later.gone.store(true, Ordering::SeqCst);
 
     let _ = daemon.shutdown(Shutdown::Both);
     let _ = ws.get_ref().shutdown(Shutdown::Both);
@@ -789,10 +795,11 @@ fn start_ask(shared: &Shared, later: &Later, ask: Ask) -> Option<Message> {
             "busy: wait for the answer before asking again",
         ));
     }
-    let (lister, tx) = (shared.lister.clone(), later.tx.clone());
+    let (lister, tx, gone) = (shared.lister.clone(), later.tx.clone(), later.gone.clone());
     thread::spawn(move || {
         let _release = Release(seat);
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| lister(&query)));
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| lister(&query, &gone)));
         let reply = match result {
             Ok(Ok(serde_json::Value::Object(mut obj))) => {
                 obj.insert("t".into(), tag.into());
@@ -939,7 +946,7 @@ mod tests {
                 },
                 confirm: Arc::new(|_| true),
                 look: Arc::new(|| serde_json::json!({"palettes": [], "settings": {}})),
-                lister: Arc::new(|q| match q {
+                lister: Arc::new(|q, cancel| match q {
                     Query::Workspaces(s) if s == "nope" => Err("no session named nope".into()),
                     Query::Workspaces(s) if s == "boom" => panic!("a bug in the lister"),
                     Query::Workspaces(s) => {
@@ -955,6 +962,14 @@ mod tests {
                         Ok(serde_json::json!({ "items": [{ "name": "main", "workspaces": 1 }] }))
                     }
                     Query::Diff(id) if id == "boom" => panic!("a bug in the diff"),
+                    Query::Diff(id) if id == "hang" => {
+                        // Works until its phone is gone, like git would.
+                        while !cancel.load(Ordering::SeqCst) {
+                            thread::sleep(Duration::from_millis(10));
+                        }
+                        WENT.store(true, Ordering::SeqCst);
+                        Err("cancelled".into())
+                    }
                     Query::Diff(id) if id == "nope" => Err("no workspace nope".into()),
                     Query::Diff(id) => {
                         if id == "slow" {
@@ -1658,6 +1673,30 @@ mod tests {
         assert_eq!(json(&mut p)["t"], "workspaces");
     }
 
+    /// Set by the diff that was cancelled (one test uses it).
+    static WENT: AtomicBool = AtomicBool::new(false);
+
+    #[test]
+    fn a_phone_that_goes_away_cancels_its_diff() {
+        let r = rig(Opts::default());
+        let mut p = phone(&r.bridge);
+        login(&mut p, &enrol(&r, "a"));
+        say(&mut p, serde_json::json!({ "t": "diff", "ws": "hang" }));
+        thread::sleep(Duration::from_millis(100));
+        assert!(
+            !WENT.load(Ordering::SeqCst),
+            "cancelled while the phone is here"
+        );
+        drop(p);
+        for _ in 0..100 {
+            if WENT.load(Ordering::SeqCst) {
+                return;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        panic!("the diff went on after its phone left");
+    }
+
     #[test]
     fn a_slow_diff_does_not_stop_the_relay_and_only_one_runs_at_a_time() {
         let r = rig(Opts::default());
@@ -1999,7 +2038,7 @@ mod tests {
             read_only: false,
             confirm: Arc::new(|_| true),
             look: Arc::new(|| serde_json::json!({})),
-            lister: Arc::new(|_| Ok(serde_json::json!({}))),
+            lister: Arc::new(|_, _| Ok(serde_json::json!({}))),
             timings: Timings::default(),
         };
         let err = Bridge::start(any, PathBuf::from("/nowhere"), config)

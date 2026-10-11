@@ -3,12 +3,13 @@
 //! files included, parsed into files, hunks and lines, plus the pairing and
 //! word-level marks a side-by-side view needs. No drawing here.
 
-use std::ffi::OsStr;
+use std::ffi::CString;
 use std::io::Read;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -140,13 +141,13 @@ pub struct LineOut {
 
 /// The diff of `entry`, against the base its stream resolves to, within the
 /// phone's limits.
-pub fn report(entry: &crate::core::registry::Entry) -> Result<Report> {
+pub fn report(entry: &crate::core::registry::Entry, cancel: &AtomicBool) -> Result<Report> {
     let dir = Path::new(&entry.path);
     if !dir.join(".git").exists() {
         bail!("{} is not a git repository", entry.name);
     }
     let stream = crate::stream::Stream::resolve(entry)?;
-    let loaded = load_with(dir, &stream.base, Bounds::PHONE)?;
+    let loaded = load_until(dir, &stream.base, Bounds::PHONE, cancel)?;
     let title = if stream.base.is_empty() {
         format!("{} vs HEAD", entry.name)
     } else {
@@ -307,6 +308,7 @@ impl Bounds {
 }
 
 /// A diff, and whether a bound cut it short.
+#[derive(Debug)]
 pub struct Loaded {
     pub files: Vec<File>,
     pub truncated: bool,
@@ -322,6 +324,19 @@ pub fn load(dir: &Path, base: &str) -> Result<Vec<File>> {
 
 /// [`load`] within `bounds`.
 pub fn load_with(dir: &Path, base: &str, bounds: Bounds) -> Result<Loaded> {
+    load_until(dir, base, bounds, &AtomicBool::new(false))
+}
+
+/// [`load_with`], stopping at once (and killing git) when `cancel` is set:
+/// the phone that asked went away.
+pub fn load_until(dir: &Path, base: &str, bounds: Bounds, cancel: &AtomicBool) -> Result<Loaded> {
+    // One deadline for the whole load, not for each git call.
+    let run = Run {
+        until: Instant::now() + bounds.timeout,
+        bounds,
+        cancel,
+    };
+    let overrides = filter_overrides(dir, &run)?;
     let base_ref = format!("origin/{base}");
     let mut args = vec!["diff", "-M", "--no-color", "--no-ext-diff", "--no-textconv"];
     if base.is_empty() {
@@ -329,50 +344,182 @@ pub fn load_with(dir: &Path, base: &str, bounds: Bounds) -> Result<Loaded> {
         let born = git_bounded(
             "git",
             dir,
+            &[],
             &["rev-parse", "--verify", "--quiet", "HEAD"],
-            &bounds,
+            &run,
         )
         .is_ok();
         args.push(if born { "HEAD" } else { EMPTY_TREE });
     } else {
         args.extend(["--merge-base", &base_ref]);
     }
-    let (out, mut truncated) = git_bounded("git", dir, &args, &bounds)?;
+    let (out, mut truncated) = git_bounded("git", dir, &overrides, &args, &run)?;
     let mut files = parse(&String::from_utf8_lossy(&out));
     // git diff leaves out untracked files; they are new files all the same.
     let (names, cut) = git_bounded(
         "git",
         dir,
+        &overrides,
         &["ls-files", "--others", "--exclude-standard", "-z"],
-        &bounds,
+        &run,
     )?;
     truncated |= cut;
     // Names are bytes, not text: one that is not UTF-8 is said to be
     // unreadable, not changed into another name and read as an empty file.
-    for raw in names.split(|b| *b == 0).filter(|p| !p.is_empty()) {
-        files.push(untracked_file(dir, raw, &bounds));
+    // Only so many are read, and none after the deadline: the reads are not
+    // git's, so git's own deadline does not cover them.
+    for (n, raw) in names
+        .split(|b| *b == 0)
+        .filter(|p| !p.is_empty())
+        .enumerate()
+    {
+        if cancelled(&run)? || n >= MAX_UNTRACKED || Instant::now() >= run.until {
+            truncated = true;
+            break;
+        }
+        files.push(untracked_file(dir, raw, &run.bounds));
     }
     files.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(Loaded { files, truncated })
 }
 
-/// Runs git (or another `program`, in tests) in `dir` for at most
-/// `bounds.timeout`, reading at most `bounds.max_output` bytes of stdout; the
-/// child is killed and reaped when either bound is hit, so nothing outlives
-/// the call. `true` says the output was cut.
+/// How many untracked files one load reads; past it the diff says it is cut.
+const MAX_UNTRACKED: usize = 2000;
+
+/// What one load is held to: its bounds, its single deadline and whether to
+/// stop.
+struct Run<'a> {
+    bounds: Bounds,
+    until: Instant,
+    cancel: &'a AtomicBool,
+}
+
+fn cancelled(run: &Run) -> Result<bool> {
+    if run.cancel.load(Ordering::Relaxed) {
+        bail!("the diff was cancelled");
+    }
+    Ok(false)
+}
+
+/// `-c` arguments that switch off every filter driver the configuration
+/// defines. A repository's `.gitattributes` can name a driver and its own
+/// config can give it a command, which `git diff` would run on every file it
+/// compares; textconv and the external diff are closed by flags, this is the
+/// other way in.
+fn filter_overrides(dir: &Path, run: &Run) -> Result<Vec<String>> {
+    let (out, _) = git_run(
+        "git",
+        dir,
+        &[],
+        &["config", "-z", "--get-regexp", r"^filter\."],
+        run,
+    )?
+    .ok_or_exit(&[1])?;
+    let mut names: Vec<String> = Vec::new();
+    for entry in out.split(|b| *b == 0).filter(|e| !e.is_empty()) {
+        // `key\nvalue`, or `key` alone for a key without a value.
+        let key = entry.split(|b| *b == b'\n').next().unwrap_or_default();
+        let Ok(key) = std::str::from_utf8(key) else {
+            bail!("a filter in the git configuration has a name that is not UTF-8");
+        };
+        let Some(rest) = key.strip_prefix("filter.") else {
+            continue;
+        };
+        // The driver's name can hold dots: the setting is the last part.
+        let Some((name, _)) = rest.rsplit_once('.') else {
+            continue;
+        };
+        if !names.iter().any(|n| n == name) {
+            names.push(name.to_string());
+        }
+    }
+    let mut args = Vec::new();
+    for n in names {
+        for setting in ["clean", "smudge", "process"] {
+            args.push("-c".to_string());
+            args.push(format!("filter.{n}.{setting}="));
+        }
+        args.push("-c".to_string());
+        args.push(format!("filter.{n}.required=false"));
+    }
+    Ok(args)
+}
+
+/// What a finished git run left: its output, and whether it exited 0.
+struct Ran {
+    out: Vec<u8>,
+    cut: bool,
+    ok: bool,
+    err: String,
+    status: String,
+}
+
+impl Ran {
+    /// The output if it exited 0 (or one of `fine`, which is not an error:
+    /// `git config` exits 1 for no match).
+    fn ok_or_exit(self, fine: &[i32]) -> Result<(Vec<u8>, bool)> {
+        let code = self
+            .status
+            .strip_prefix("exit status: ")
+            .and_then(|c| c.parse().ok());
+        if self.ok || code.is_some_and(|c| fine.contains(&c)) {
+            return Ok((self.out, self.cut));
+        }
+        bail!(
+            "git: {}",
+            if self.err.is_empty() {
+                self.status
+            } else {
+                self.err
+            }
+        )
+    }
+}
+
+/// Runs git (or another `program`, in tests) in `dir` until the load's
+/// deadline, reading at most `bounds.max_output` bytes of stdout; the child
+/// and everything it started (its process group) is killed and reaped when a
+/// bound is hit or the load is cancelled, so nothing outlives the call. `true`
+/// says the output was cut. `config` are `-c` pairs for git.
 ///
 /// git runs with a clean environment and without what a repository can set to
-/// run a command of its own on a read: `core.fsmonitor`, and (in `load_with`'s
-/// arguments) textconv. It never asks a question.
+/// run a command of its own on a read: `core.fsmonitor`, and (in
+/// `load_until`'s arguments) textconv. It never asks a question.
 fn git_bounded(
     program: &str,
     dir: &Path,
+    config: &[String],
     args: &[&str],
-    bounds: &Bounds,
+    run: &Run,
 ) -> Result<(Vec<u8>, bool)> {
+    let ran = git_run(program, dir, config, args, run)?;
+    if !ran.ok {
+        bail!(
+            "{program} {}: {}",
+            args.join(" "),
+            if ran.err.is_empty() {
+                ran.status
+            } else {
+                ran.err
+            }
+        );
+    }
+    Ok((ran.out, ran.cut))
+}
+
+fn kill_group(child: &mut std::process::Child) {
+    // SAFETY: a signal to the group this child leads; the group is ours.
+    unsafe {
+        libc::kill(-(child.id() as i32), libc::SIGKILL);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn git_run(program: &str, dir: &Path, config: &[String], args: &[&str], run: &Run) -> Result<Ran> {
     let mut cmd = Command::new(program);
     if program == "git" {
-        cmd.args(["-c", "core.fsmonitor=false"]);
+        cmd.args(["-c", "core.fsmonitor=false"]).args(config);
     }
     cmd.args(args)
         .current_dir(dir)
@@ -385,19 +532,21 @@ fn git_bounded(
         .env("GIT_OPTIONAL_LOCKS", "0")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        // Its own group, so a grandchild (a filter, a hook) dies with it.
+        .process_group(0);
     if let Some(home) = std::env::var_os("HOME") {
         cmd.env("HOME", home);
     }
+    cancelled(run)?;
     let mut child = cmd
         .spawn()
         .map_err(|e| anyhow::anyhow!("{program} {}: {e}", args.join(" ")))?;
     let (Some(mut stdout), Some(mut stderr)) = (child.stdout.take(), child.stderr.take()) else {
-        let _ = child.kill();
-        let _ = child.wait();
+        kill_group(&mut child);
         bail!("{program} has no output");
     };
-    let cap = bounds.max_output;
+    let cap = run.bounds.max_output;
     let (tx, done) = mpsc::channel();
     thread::spawn(move || {
         let mut out = Vec::new();
@@ -421,39 +570,47 @@ fn git_bounded(
         let _ = (&mut stderr).take(8 << 10).read_to_end(&mut msg);
         String::from_utf8_lossy(&msg).trim().to_string()
     });
-    let until = Instant::now() + bounds.timeout;
     let (out, cut) = loop {
+        if run.cancel.load(Ordering::Relaxed) {
+            kill_group(&mut child);
+            bail!("the diff was cancelled");
+        }
         match done.recv_timeout(Duration::from_millis(25)) {
             Ok(got) => break got,
-            Err(mpsc::RecvTimeoutError::Timeout) if Instant::now() < until => {}
+            Err(mpsc::RecvTimeoutError::Timeout) if Instant::now() < run.until => {}
             Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                kill_group(&mut child);
                 bail!(
                     "{program} {} took longer than {:?}",
                     args.join(" "),
-                    bounds.timeout
+                    run.bounds.timeout
                 );
             }
         }
     };
     if cut {
         // More than is wanted: stop it, and say so.
-        let _ = child.kill();
-        let _ = child.wait();
-        return Ok((out, true));
+        kill_group(&mut child);
+        return Ok(Ran {
+            out,
+            cut: true,
+            ok: true,
+            err: String::new(),
+            status: String::new(),
+        });
     }
     let status = child.wait()?;
-    if !status.success() {
-        let msg = err.join().unwrap_or_default();
-        let msg = if msg.is_empty() {
-            status.to_string()
+    Ok(Ran {
+        out,
+        cut: false,
+        ok: status.success(),
+        err: if status.success() {
+            String::new()
         } else {
-            msg
-        };
-        bail!("{program} {}: {msg}", args.join(" "));
-    }
-    Ok((out, false))
+            err.join().unwrap_or_default()
+        },
+        status: status.to_string(),
+    })
 }
 
 /// An untracked file as an added one, read only if it is a regular file within
@@ -472,7 +629,7 @@ fn untracked_file(dir: &Path, raw: &[u8], bounds: &Bounds) -> File {
         file.unreadable = Some("the name is not UTF-8".into());
         return file;
     }
-    let data = match read_regular(&dir.join(OsStr::from_bytes(raw)), bounds.max_file) {
+    let data = match read_beneath(dir, raw, bounds.max_file) {
         Ok(Ok(data)) => data,
         Ok(Err(why)) => {
             file.unreadable = Some(why.into());
@@ -513,28 +670,90 @@ fn untracked_file(dir: &Path, raw: &[u8], bounds: &Bounds) -> File {
     file
 }
 
-/// The bytes of `path` if it is a regular file of at most `max` bytes; else
-/// why not. Opened without following a symlink and without blocking, and its
-/// type checked on what was opened, so swapping the file for a link or a FIFO
-/// between a look and the open gains nothing.
-fn read_regular(path: &Path, max: u64) -> std::io::Result<Result<Vec<u8>, &'static str>> {
-    let meta = std::fs::symlink_metadata(path)?;
-    if meta.file_type().is_symlink() {
-        return Ok(Err("symlink"));
-    }
-    if !meta.is_file() {
-        return Ok(Err("not a regular file"));
-    }
-    let file = match std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
+fn c_name(part: &[u8]) -> std::io::Result<CString> {
+    CString::new(part).map_err(|_| std::io::ErrorKind::InvalidInput.into())
+}
+
+/// The bytes of `rel` (a path inside `dir`) if it is a regular file of at
+/// most `max` bytes; else why not. Every component is opened from the one
+/// before it without following a link, so no directory of the path can be
+/// swapped for a link to somewhere else between git's listing and this read;
+/// and the leaf is looked at, then opened without blocking, then its type
+/// checked on what was opened.
+fn read_beneath(
+    dir: &Path,
+    rel: &[u8],
+    max: u64,
+) -> std::io::Result<Result<Vec<u8>, &'static str>> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    let parts: Vec<&[u8]> = rel.split(|b| *b == b'/').collect();
+    if parts
+        .iter()
+        .any(|p| p.is_empty() || *p == b"." || *p == b"..")
     {
-        Ok(f) => f,
+        return Ok(Err("not a path inside the workspace"));
+    }
+    let open =
+        |from: libc::c_int, name: &CString, flags: libc::c_int| -> std::io::Result<OwnedFd> {
+            // SAFETY: `name` is a NUL-terminated string that outlives the call.
+            let fd = unsafe { libc::openat(from, name.as_ptr(), flags | libc::O_CLOEXEC) };
+            if fd < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            // SAFETY: openat returned a new descriptor that nothing else owns.
+            Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+        };
+    let mut cur = {
+        let root = c_name(dir.as_os_str().as_bytes())?;
+        open(libc::AT_FDCWD, &root, libc::O_RDONLY | libc::O_DIRECTORY)?
+    };
+    let (leaf, dirs) = parts.split_last().expect("a split has a part");
+    for part in dirs {
+        let name = c_name(part)?;
+        cur = match open(
+            cur.as_raw_fd(),
+            &name,
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+        ) {
+            Ok(fd) => fd,
+            Err(e) if e.raw_os_error() == Some(libc::ELOOP) => return Ok(Err("symlink")),
+            Err(e) if e.raw_os_error() == Some(libc::ENOTDIR) => {
+                return Ok(Err("not a regular file"));
+            }
+            Err(e) => return Err(e),
+        };
+    }
+    let name = c_name(leaf)?;
+    // SAFETY: a zeroed stat is a valid out-buffer for fstatat.
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: `name` is NUL-terminated and `st` is a stat.
+    if unsafe {
+        libc::fstatat(
+            cur.as_raw_fd(),
+            name.as_ptr(),
+            &mut st,
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    } != 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    match st.st_mode & libc::S_IFMT {
+        libc::S_IFLNK => return Ok(Err("symlink")),
+        libc::S_IFREG => {}
+        _ => return Ok(Err("not a regular file")),
+    }
+    let fd = match open(
+        cur.as_raw_fd(),
+        &name,
+        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK,
+    ) {
+        Ok(fd) => fd,
         // A link put there after the look: ELOOP.
         Err(e) if e.raw_os_error() == Some(libc::ELOOP) => return Ok(Err("symlink")),
         Err(e) => return Err(e),
     };
+    let file = std::fs::File::from(fd);
     let opened = file.metadata()?;
     if !opened.is_file() {
         return Ok(Err("not a regular file"));
@@ -992,6 +1211,7 @@ Binary files /dev/null and b/img.png differ
     fn a_fifo_does_not_hang_the_diff_or_the_read() {
         let (_d, work) = repo();
         let pipe = work.join("pipe");
+        let work2 = work.clone();
         let path = std::ffi::CString::new(pipe.as_os_str().as_bytes()).unwrap();
         // SAFETY: a path we made, and a mode.
         assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
@@ -1008,7 +1228,7 @@ Binary files /dev/null and b/img.png differ
         // file be swapped for one after the listing; without blocking.
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
-            let _ = tx.send(read_regular(&pipe, 1000));
+            let _ = tx.send(read_beneath(&work2, b"pipe", 1000));
         });
         let got = rx
             .recv_timeout(Duration::from_secs(10))
@@ -1055,7 +1275,7 @@ Binary files /dev/null and b/img.png differ
     #[test]
     fn a_name_that_is_not_utf8_is_unreadable_not_another_name() {
         let (_d, work) = repo();
-        let name = OsStr::from_bytes(b"bad\xffname.txt");
+        let name = std::ffi::OsStr::from_bytes(b"bad\xffname.txt");
         if std::fs::write(work.join(name), "x\n").is_err() {
             return; // this file system keeps only valid names
         }
@@ -1080,7 +1300,7 @@ Binary files /dev/null and b/img.png differ
             ..Bounds::PHONE
         };
         let t = Instant::now();
-        let err = git_bounded("sh", &dir, &["-c", &script], &b).unwrap_err();
+        let err = git_bounded("sh", &dir, &[], &["-c", &script], &run(b)).unwrap_err();
         assert!(err.to_string().contains("took longer"), "{err}");
         assert!(t.elapsed() < Duration::from_secs(3), "{:?}", t.elapsed());
         let pid: i32 = std::fs::read_to_string(&pidfile)
@@ -1098,12 +1318,168 @@ Binary files /dev/null and b/img.png differ
             ..Bounds::PHONE
         };
         let t = Instant::now();
-        let (out, cut) = git_bounded("yes", &dir, &[], &b).unwrap();
+        let (out, cut) = git_bounded("yes", &dir, &[], &[], &run(b)).unwrap();
         assert!(cut && out.len() == 1000, "{} bytes, cut {cut}", out.len());
         assert!(t.elapsed() < Duration::from_secs(3));
     }
 
     /// Runs `script` and tells a marker file it ran; false if it never did.
+    fn run(bounds: Bounds) -> Run<'static> {
+        static NEVER: AtomicBool = AtomicBool::new(false);
+        Run {
+            until: Instant::now() + bounds.timeout,
+            bounds,
+            cancel: &NEVER,
+        }
+    }
+
+    #[test]
+    fn a_repository_cannot_run_a_filter_of_its_own_by_being_diffed() {
+        use crate::connectors::git::tests::must_git;
+        // The setting that names the command, and the driver's own name: dots
+        // in it must not fool the parsing of the key.
+        for (driver, setting, value) in [
+            ("evil", "clean", "{} %f"),
+            ("my.evil", "clean", "{} %f"),
+            ("evil", "smudge", "{} %f"),
+            ("evil", "process", "{}"),
+        ] {
+            let (d, work) = repo();
+            let (script, marker) = marker_script(d.path(), "filter");
+            std::fs::write(
+                work.join(".gitattributes"),
+                format!("*.txt filter={driver}\n"),
+            )
+            .unwrap();
+            let cmd = value.replace("{}", script.to_str().unwrap());
+            must_git(
+                &work,
+                &["config", &format!("filter.{driver}.{setting}"), &cmd],
+            );
+            std::fs::write(work.join("a.txt"), "one\n2\n").unwrap();
+            std::fs::write(work.join("new.txt"), "x\n").unwrap();
+            if setting == "clean" {
+                // The control: git itself does run it on a diff.
+                must_git(&work, &["diff", "--no-ext-diff"]);
+                assert!(
+                    marker.exists(),
+                    "the control did not run the {driver} filter: the test proves nothing"
+                );
+                std::fs::remove_file(&marker).unwrap();
+            }
+            let loaded = load_with(&work, "trunk", Bounds::PHONE).unwrap();
+            assert!(
+                !marker.exists(),
+                "diffing ran the repository's {setting} filter of {driver}"
+            );
+            assert!(loaded.files.iter().any(|f| f.path == "a.txt"));
+            // And a filter that is required does not make the diff fail.
+            must_git(
+                &work,
+                &["config", &format!("filter.{driver}.required"), "true"],
+            );
+            load_with(&work, "trunk", Bounds::PHONE).unwrap();
+            assert!(!marker.exists(), "a required filter ran");
+        }
+    }
+
+    #[test]
+    fn what_git_started_dies_with_it() {
+        let dir = std::env::temp_dir();
+        let pidfile = dir.join(format!("jw-grand-{}.pid", std::process::id()));
+        let _ = std::fs::remove_file(&pidfile);
+        // The grandchild holds the pipe; only a group kill ends it.
+        let script = format!("sleep 30 & echo $! > {}; wait", pidfile.display());
+        let b = Bounds {
+            timeout: Duration::from_millis(400),
+            ..Bounds::PHONE
+        };
+        let err = git_bounded("sh", &dir, &[], &["-c", &script], &run(b)).unwrap_err();
+        assert!(err.to_string().contains("took longer"), "{err}");
+        let pid: i32 = std::fs::read_to_string(&pidfile)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let _ = std::fs::remove_file(&pidfile);
+        for _ in 0..40 {
+            // SAFETY: signal 0 only checks the process exists.
+            if unsafe { libc::kill(pid, 0) } != 0 {
+                return;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        panic!("the grandchild outlived the deadline");
+    }
+
+    #[test]
+    fn a_cancelled_load_kills_git_at_once() {
+        let dir = std::env::temp_dir();
+        let cancel = std::sync::Arc::new(AtomicBool::new(false));
+        let c = cancel.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(200));
+            c.store(true, Ordering::SeqCst);
+        });
+        let b = Bounds::PHONE;
+        let r = Run {
+            until: Instant::now() + b.timeout,
+            bounds: b,
+            cancel: &cancel,
+        };
+        let t = Instant::now();
+        let err = git_bounded("sleep", &dir, &[], &["30"], &r).unwrap_err();
+        assert!(err.to_string().contains("cancelled"), "{err}");
+        assert!(t.elapsed() < Duration::from_secs(3), "{:?}", t.elapsed());
+        // A load that starts cancelled does not even start git.
+        let err = load_until(&dir, "trunk", Bounds::PHONE, &cancel).unwrap_err();
+        assert!(err.to_string().contains("cancelled"), "{err}");
+    }
+
+    #[test]
+    fn a_directory_swapped_for_a_link_does_not_leak_what_is_outside() {
+        let (d, work) = repo();
+        let outside = d.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join("secret"), "top secret\n").unwrap();
+        std::os::unix::fs::symlink(&outside, work.join("sub")).unwrap();
+        // git listed `sub/secret`, then `sub` became a link (or was one).
+        let f = untracked_file(&work, b"sub/secret", &Bounds::PHONE);
+        // (ELOOP or ENOTDIR, by the system: either way it is refused.)
+        assert!(f.unreadable.is_some() && f.hunks.is_empty(), "{f:?}");
+        for bad in [
+            &b"../outside/secret"[..],
+            b"/etc/passwd",
+            b"a//b",
+            b"./a.txt",
+        ] {
+            let f = untracked_file(&work, bad, &Bounds::PHONE);
+            assert!(f.unreadable.is_some(), "{}", String::from_utf8_lossy(bad));
+        }
+        // A real nested file still reads.
+        std::fs::create_dir(work.join("real")).unwrap();
+        std::fs::write(work.join("real/in.txt"), "hi\n").unwrap();
+        let f = untracked_file(&work, b"real/in.txt", &Bounds::PHONE);
+        assert!(f.unreadable.is_none() && f.hunks.len() == 1);
+    }
+
+    #[test]
+    fn only_so_many_untracked_files_are_read() {
+        let (_d, work) = repo();
+        for i in 0..MAX_UNTRACKED + 5 {
+            std::fs::write(work.join(format!("u{i:05}.txt")), "x\n").unwrap();
+        }
+        let loaded = load_with(&work, "trunk", Bounds::PHONE).unwrap();
+        assert!(loaded.truncated);
+        // `a.txt` is tracked and changed by nothing here: only untracked count.
+        let untracked = loaded
+            .files
+            .iter()
+            .filter(|f| f.path.starts_with('u'))
+            .count();
+        assert_eq!(untracked, MAX_UNTRACKED);
+    }
+
     fn marker_script(
         dir: &std::path::Path,
         name: &str,
@@ -1156,14 +1532,16 @@ Binary files /dev/null and b/img.png differ
             .current_dir(&work)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .output();
-        if fs_marker.exists() {
-            std::fs::remove_file(&fs_marker).unwrap();
-            load_with(&work, "trunk", Bounds::PHONE).unwrap();
-            assert!(
-                !fs_marker.exists(),
-                "diffing ran the repository's fsmonitor"
-            );
-        }
+        assert!(
+            fs_marker.exists(),
+            "the control did not run the fsmonitor: the test proves nothing"
+        );
+        std::fs::remove_file(&fs_marker).unwrap();
+        load_with(&work, "trunk", Bounds::PHONE).unwrap();
+        assert!(
+            !fs_marker.exists(),
+            "diffing ran the repository's fsmonitor"
+        );
     }
 
     #[test]

@@ -79,7 +79,7 @@ impl Tuning {
 fn lister() -> Lister {
     // What the error says is for a phone, not for a log: no path of the PC's
     // in it. The cause is the PC's to find.
-    Arc::new(|query| {
+    Arc::new(|query, cancel| {
         let state = registry::state_dir().map_err(|_| "jw has no state folder here")?;
         let reg = registry::default_path().map_err(|_| "jw has no state folder here")?;
         let value = match query {
@@ -105,7 +105,7 @@ fn lister() -> Lister {
                     .ok_or_else(|| format!("no workspace {id}"))?;
                 // git's and jw's own messages name directories of the PC; the
                 // phone is told the workspace's name instead.
-                let report = jw_core::diff::report(&entry)
+                let report = jw_core::diff::report(&entry, cancel)
                     .map_err(|e| format!("{e:#}").replace(&entry.path, &entry.name))?;
                 serde_json::to_value(report)
                     .map_err(|_| "the diff could not be made".to_string())?
