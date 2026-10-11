@@ -1423,6 +1423,10 @@ impl App {
             }
             DaemonMsg::Prompted { .. } => self.done("sent to the agent".into()),
             DaemonMsg::Error { msg } => self.fail(msg),
+            // The Mobile modal (T1) listens for these.
+            DaemonMsg::MobileState(_)
+            | DaemonMsg::MobilePair { .. }
+            | DaemonMsg::MobilePairDone { .. } => {}
         }
     }
 

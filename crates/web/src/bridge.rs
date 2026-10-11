@@ -123,7 +123,10 @@ struct Shared {
     next: AtomicU64,
     conns: Mutex<Vec<(u64, TcpStream)>>,
     store: Arc<Store>,
-    read_only: bool,
+    /// Can change while phones are connected (REQ-37).
+    read_only: AtomicBool,
+    /// The devices connected now, one entry per connection.
+    online: Mutex<Vec<String>>,
     confirm: Confirm,
     look: Look,
     t: Timings,
@@ -169,6 +172,25 @@ impl<'a> Slot<'a> {
     }
 }
 
+/// A device counted as connected for as long as this lives.
+struct Online<'a>(&'a Shared, String);
+
+impl<'a> Online<'a> {
+    fn enter(shared: &'a Shared, device: &str) -> Self {
+        shared.online.lock().unwrap().push(device.to_string());
+        Self(shared, device.to_string())
+    }
+}
+
+impl Drop for Online<'_> {
+    fn drop(&mut self) {
+        let mut online = self.0.online.lock().unwrap();
+        if let Some(at) = online.iter().position(|d| *d == self.1) {
+            online.remove(at);
+        }
+    }
+}
+
 impl Drop for Slot<'_> {
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::SeqCst);
@@ -194,7 +216,8 @@ impl Bridge {
             next: AtomicU64::new(0),
             conns: Mutex::new(Vec::new()),
             store: config.store,
-            read_only: config.read_only,
+            read_only: AtomicBool::new(config.read_only),
+            online: Mutex::new(Vec::new()),
             look: config.look,
             confirm: config.confirm,
             limiter: Mutex::new(Limiter::new(t.fail_max, t.fail_window, t.lockout)),
@@ -225,15 +248,42 @@ impl Bridge {
         Ok(token)
     }
 
+    /// How long the current pairing token has left; `None` when there is
+    /// none, it was used, or it ended.
+    pub fn pairing_left(&self) -> Option<Duration> {
+        let pairing = self.shared.pairing.lock().unwrap();
+        pairing
+            .as_ref()?
+            .left(self.shared.t.pairing_ttl, Instant::now())
+    }
+
+    /// From now on a phone can only look, or can type again (REQ-37). It
+    /// applies to the phones already connected, at their next message.
+    pub fn set_read_only(&self, on: bool) {
+        self.shared.read_only.store(on, Ordering::SeqCst);
+    }
+
+    /// The ids of the devices connected now, once per connection.
+    pub fn connected(&self) -> Vec<String> {
+        self.shared.online.lock().unwrap().clone()
+    }
+
+    /// Closes every phone's socket and refuses new ones, without waiting for
+    /// the threads: what has to happen before anything slow (REQ-9).
+    pub fn close(&self) {
+        self.shared.stopping.store(true, Ordering::SeqCst);
+        // `accept` blocks; a connection to ourselves wakes it.
+        let _ = TcpStream::connect(self.addr);
+        self.shared.close_all();
+    }
+
     /// Closes every connection and returns once their threads are done
     /// (REQ-9). Stopping twice is fine.
     pub fn stop(&mut self) {
         let Some(accept) = self.accept.take() else {
             return;
         };
-        self.shared.stopping.store(true, Ordering::SeqCst);
-        // `accept` blocks; a connection to ourselves wakes it.
-        let _ = TcpStream::connect(self.addr);
+        self.close();
         let _ = accept.join();
     }
 }
@@ -337,13 +387,14 @@ fn serve(stream: TcpStream, shared: &Shared, socket: &Path) -> Result<(), WsErro
         Err(refusal) => return refuse_daemon(&mut ws, refusal),
     };
     ws.get_ref().set_read_timeout(Some(TICK))?;
+    let _online = Online::enter(shared, &device.id);
     let look = (shared.look)();
     ws.send(Message::text(
         serde_json::json!({
             "t": "ready",
             "bridge": 1,
             "protocol": PROTOCOL,
-            "read_only": shared.read_only,
+            "read_only": shared.read_only.load(Ordering::SeqCst),
             "palettes": look["palettes"],
             "settings": look["settings"],
         })
@@ -516,7 +567,9 @@ fn relay(
             Ok(message) => {
                 heard = Instant::now();
                 match message {
-                    Message::Binary(body) if shared.read_only && !looking(&body) => {
+                    Message::Binary(body)
+                        if shared.read_only.load(Ordering::SeqCst) && !looking(&body) =>
+                    {
                         ws.send(error("read_only", "this bridge is read-only"))?;
                     }
                     Message::Binary(body) => write_raw(daemon, &body)?,
@@ -1089,6 +1142,86 @@ mod tests {
         p.send(body(&ClientMsg::Hello { protocol: PROTOCOL }))
             .unwrap();
         assert_eq!(msg(&mut p), DaemonMsg::Hello { protocol: PROTOCOL });
+    }
+
+    #[test]
+    fn read_only_can_be_switched_while_a_phone_is_connected() {
+        let r = rig(Opts::default());
+        let mut p = phone(&r.bridge);
+        login(&mut p, &enrol(&r, "a"));
+        let echoed = |p: &mut Phone| {
+            p.send(body(&input(1, b"ls"))).unwrap();
+            assert_eq!(
+                msg(p),
+                DaemonMsg::Output {
+                    pane: 1,
+                    bytes: b"ls".to_vec()
+                }
+            );
+        };
+        echoed(&mut p);
+        r.bridge.set_read_only(true);
+        p.send(body(&input(1, b"ls"))).unwrap();
+        assert_eq!(code(&mut p), "read_only");
+        r.bridge.set_read_only(false);
+        echoed(&mut p);
+    }
+
+    #[test]
+    fn connected_lists_each_device_while_it_is_there() {
+        let r = rig(Opts::default());
+        assert!(r.bridge.connected().is_empty());
+        let secret = enrol(&r, "Pixel 8");
+        let id = r.store.devices().unwrap()[0].id.clone();
+        let mut p = phone(&r.bridge);
+        login(&mut p, &secret);
+        assert_eq!(r.bridge.connected(), vec![id]);
+        drop(p);
+        wait_until("the device left", || r.bridge.connected().is_empty());
+    }
+
+    #[test]
+    fn the_pairing_token_has_time_left_until_it_is_used() {
+        let r = rig(Opts::default());
+        assert_eq!(r.bridge.pairing_left(), None);
+        let token = r.bridge.new_pairing().unwrap();
+        let left = r.bridge.pairing_left().unwrap();
+        assert!(left > Duration::from_secs(100), "{left:?}");
+        let mut p = phone(&r.bridge);
+        pair(&mut p, &token, "Pixel", "482913");
+        let v = json(&mut p);
+        assert_eq!(v["t"], "paired", "{v}");
+        assert_eq!(r.bridge.pairing_left(), None);
+    }
+
+    #[test]
+    fn close_cuts_every_phone_without_waiting_for_a_question() {
+        let (asked, hold) = (
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(true)),
+        );
+        let (a, h) = (asked.clone(), hold.clone());
+        let r = rig(Opts {
+            confirm: Arc::new(move |_| {
+                a.store(true, Ordering::SeqCst);
+                while h.load(Ordering::SeqCst) {
+                    thread::sleep(Duration::from_millis(20));
+                }
+                false
+            }),
+            ..Opts::default()
+        });
+        let mut waiting = phone(&r.bridge);
+        let token = r.bridge.new_pairing().unwrap();
+        pair(&mut waiting, &token, "Pixel", "482913");
+        wait_until("the question was asked", || asked.load(Ordering::SeqCst));
+        let mut p = phone(&r.bridge);
+        login(&mut p, &enrol(&r, "a"));
+        let t = Instant::now();
+        r.bridge.close();
+        assert!(t.elapsed() < Duration::from_secs(1));
+        closed(&mut p);
+        hold.store(false, Ordering::SeqCst);
     }
 
     #[test]

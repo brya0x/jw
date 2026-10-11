@@ -13,21 +13,21 @@ supersedes:  []
 - The **Android app** (native Kotlin, Compose) scans the QR, pairs once, then shows what the TUI shows: sessions, workspaces, panes, diff, settings, in jw's own theme.
 - A *workspace* is any open folder: a project root, a worktree or a plain folder (`rust-tui.md:12`). The app enters all three.
 - The bridge relays frames unchanged and adds auth, a protocol check and a small JSON control channel (palettes, workspaces, diff).
-- Whoever holds a valid device token can type into every pane of the PC, so the bridge is the only gate (the daemon has no peer check, `crates/daemon/src/lib.rs:142,157`).
+- Whoever holds a valid device token can type into every pane of the PC, so the bridge is the only gate (the daemon has no peer check, `crates/daemon/src/lib.rs:152,171`).
 - The mobile feature bumps `PROTOCOL` once (REQ-50). UI references: `docs/specs/mobile-prototype.html` (the app) and `docs/specs/mobile-modal-prototype.html` (the TUI modal), both approved.
 
 ## Interfaces
 
 | Piece | Where | Shape |
 |---|---|---|
-| Daemon service | `crates/daemon/src/mobile.rs` (new), stopped in `save_on_signal` between `save()` and `exit(0)` (`lib.rs:116-119`) | phases `off`, `starting`, `ready`, `failed`; its own threads and locks, none shared with panes (REQ-40) |
-| Watchers | a list on `Daemon` (`lib.rs:161-172`); the daemon has no client registry or all-client broadcast today (`lib.rs:175-188`, `:361-363` fan out per workspace and per pane) | a client is a watcher from `MobileWatch` until it disconnects (`unsubscribe`, `lib.rs:1214-1220`) |
+| Daemon service | `crates/daemon/src/mobile.rs` (new), stopped in `save_on_signal` between `save()` and `exit(0)` (`lib.rs:127-133`) | phases `off`, `starting`, `ready`, `failed`; its own threads and locks, none shared with panes (REQ-40) |
+| Watchers | a list in the service (`mobile.rs`, `Inner.watchers`); the rest of the daemon has no client registry or all-client broadcast: it fans out per workspace and per pane (`Ws::tell`, `subscribe`, `lib.rs`) | a client is a watcher from `MobileWatch` until it disconnects (`serve` calls `Mobile::forget`; a closed `Tx` is dropped on the next send) |
 | Client to daemon | `proto.rs` `ClientMsg` | `MobileWatch`, `MobileStart{read_only}`, `MobileStop`, `MobileCode`, `MobileReadOnly{on}`, `MobileAnswer{request,yes}`, `MobileRevoke{device}` |
-| Daemon to client | `proto.rs` `DaemonMsg` | `MobileState{phase,step,host,payload,expires_in,read_only,devices,error}`, `MobilePair{request,name,code}`, `MobilePairDone{request}`. `devices` are `{id,name,paired,last_seen,connected}`. `payload` is the QR text. |
+| Daemon to client | `proto.rs` `DaemonMsg` | `MobileState{phase,step,host,payload,expires_in,read_only,devices,error}`, `MobilePair{request,name,code}`, `MobilePairDone{request}`. `phase` is `off`, `starting`, `ready` or `failed`. `step`, while `starting`, is a key the client words itself: `launching`, `started`, `registered`, `resolving` (the modal's checklist). `payload` is the QR text, `jw://<host>/<token>`, and is **empty when the code is not live** (used by a phone, ended, or mobile not ready); `expires_in` is the seconds the live code has left, 0 otherwise. The daemon sends a state when the code becomes live or stops being live, not every second: the client counts down from the one it received. `devices` are `{id,name,paired,last_seen,connected}`, from the store even when mobile is off. `error`, while `failed`, is the sentence to show ("cloudflared is not installed; brew install cloudflared"; a client may split it at `; `). The pair question's 60 s countdown is the client's own, from when `MobilePair` arrived. |
 | CLI | `crates/jw/src/mobile.rs`, `main.rs`, `help.rs`, `core/src/session.rs:18` | `jw mobile` (watch, start if off, show), `jw mobile stop`, `jw mobile devices`, `jw mobile revoke <device>` (these two read and write the store, so they work with mobile off) |
-| TUI | `modal.rs:17` (`Modal`), `mod.rs:1349-1426` (`on_daemon`), `mod.rs:3270` (`submit_modal`), `draw.rs:623-692` (`status`), `settings.rs:48` (`ACTIONS`) | modal `Mobile` with views off, starting, ready, error, pair, devices; action `mobile`, group `go`, default key `m` (free, unbound); indicator in the status bar |
+| TUI | `modal.rs:17` (`Modal`), `mod.rs:1350-1430` (`on_daemon`), `mod.rs:3270` (`submit_modal`), `draw.rs:623-692` (`status`), `settings.rs:48` (`ACTIONS`) | modal `Mobile` with views off, starting, ready, error, pair, devices; action `mobile`, group `go`, default key `m` (free, unbound); indicator in the status bar |
 | QR | `crates/core/src/qr.rs` (new; the TUI and the CLI both draw it) | text to black-on-white modules; drawn two modules per cell with `▀` in 24-bit colour, which a terminal theme cannot remap |
-| Bridge | `crates/web/src/bridge.rs` (jw-web; sync, threads, as `daemon/src/lib.rs:70-78`) | listens on `127.0.0.1:<port>`; WS **binary** message = one jw-proto frame, kind byte plus body, no length prefix; WS **text** message = control JSON. It connects to the daemon's own socket, one connection per phone. |
+| Bridge | `crates/web/src/bridge.rs` (jw-web; sync, threads, as `daemon/src/lib.rs:81-90`) | listens on `127.0.0.1:<port>`; WS **binary** message = one jw-proto frame, kind byte plus body, no length prefix; WS **text** message = control JSON. It connects to the daemon's own socket, one connection per phone. |
 | Tunnel | `crates/web/src/tunnel.rs` (moved from `jw/src/mobile.rs`) | child `cloudflared tunnel --url http://127.0.0.1:<port>`; name read from its output; waits for DNS. `JW_CLOUDFLARED` names another program and skips the DNS wait (tests). |
 | Raw frames | `proto/src/proto.rs` `read_raw`, `write_raw` | a frame's body without decoding it |
 | Control, phone to bridge | JSON, tag `t` | `pair{token,name,code}`, `auth{device}`, `workspaces`, `sessions`, `diff{ws}`, `open{path}`, `worktree{project,branch}` |
@@ -49,7 +49,7 @@ supersedes:  []
 | 3 | WHEN a valid pairing token arrives, the bridge SHALL spend it at once, ask the person at the PC (REQ-36) with the device name and the code the phone sent, and only on yes issue a 256-bit device token, storing its hash only. |
 | 4 | IF a connection sends anything but `pair` or `auth` before authenticating, THEN the bridge SHALL close it and forward nothing to the daemon. |
 | 5 | IF five pair or auth attempts fail within 60 s from one address, THEN the bridge SHALL refuse that address for 5 min. |
-| 6 | WHEN a device is revoked, by `MobileRevoke` or `jw mobile revoke`, the bridge SHALL reject its token and close its connections within 2 s. |
+| 6 | WHEN a device is revoked, by `MobileRevoke` or `jw mobile revoke`, the bridge SHALL reject its token and close its connections within 2 s (its check interval) plus one tick of its relay loop. |
 | 7 | WHERE read-only is on, the bridge SHALL drop every message except `Hello`, `Attach`, `Detach` and `List`, and every control request except the reads. |
 | 8 | WHEN the bridge connects to the daemon, it SHALL send `Hello`; IF the daemon's `PROTOCOL` differs from the bridge's, THEN it SHALL refuse the phone with error `protocol`. |
 | 9 | WHEN mobile stops, by `MobileStop` or because the daemon got SIGTERM, SIGINT or SIGHUP, the daemon SHALL kill `cloudflared` and close every phone, within 2 s and before it exits. |
@@ -77,10 +77,10 @@ supersedes:  []
 | 31 | WHILE a device is connected, the bridge SHALL ping it every 30 s and drop it after twice that in silence. |
 | 32 | THE bridge SHALL close a connection that has not authenticated 10 s after its handshake (the wait for the person at the PC not counted), and SHALL hold at most 16 such connections. |
 | 33 | THE daemon SHALL start mobile only on `MobileStart`, never by itself, a restart included. |
-| 34 | WHEN `MobileStart` arrives while mobile is off, the daemon SHALL start it and send `MobileState` to every watcher at each step (cloudflared started, tunnel registered, waiting for DNS) and when ready; WHILE it is not off, `MobileStart` SHALL change nothing and be answered with the current state. |
+| 34 | WHEN `MobileStart` arrives while mobile is off or failed, the daemon SHALL start it and send `MobileState` to every watcher at each step (cloudflared started, tunnel registered, waiting for DNS) and when ready; WHILE it is starting or ready, `MobileStart` SHALL change nothing and be answered, to whoever sent it, with the current state. |
 | 35 | WHEN a client sends `MobileWatch`, the daemon SHALL answer with `MobileState` and send it every later change until the client disconnects. |
-| 36 | WHEN a phone asks to pair, the daemon SHALL send `MobilePair` to every watcher, take the first `MobileAnswer`, and send `MobilePairDone` to the others; IF no watcher is attached, or none answers within 60 s, THEN it SHALL deny. |
-| 37 | WHEN `MobileReadOnly` arrives, the daemon SHALL apply it at once to connected phones and to new ones. |
+| 36 | WHEN a phone asks to pair, the daemon SHALL send `MobilePair` to every watcher, take the first `MobileAnswer`, and send `MobilePairDone` to the others; IF no watcher is attached, or none answers within 60 s, or mobile stops meanwhile, THEN it SHALL deny and send `MobilePairDone` to every watcher. |
+| 37 | WHEN `MobileReadOnly` arrives, the daemon SHALL apply it at once to connected phones and to new ones: the bridge checks the mode on every message, and a phone already connected is not told (its `ready.read_only` is what it was). |
 | 38 | WHEN `MobileCode` arrives, the daemon SHALL replace the pairing token, ending the old one, and send `MobileState`. |
 | 39 | WHEN `MobileRevoke` arrives, the daemon SHALL revoke as REQ-6 says and send `MobileState`. |
 | 40 | THE mobile service SHALL NOT hold a pane, workspace or session lock while it waits for the network, the tunnel or a person. |
@@ -92,8 +92,8 @@ supersedes:  []
 | 46 | WHILE mobile is not off, the status bar SHALL show at its right `◉ mobile` in cyan, `◉ N phone` or `phones` in green when N are connected, and a yellow `ro` when read-only. |
 | 47 | THE ready view SHALL draw the QR through `core::qr`, with the time left before the code ends; IF the area is smaller than 66×28, THEN it SHALL not draw the QR, SHALL say what size it needs, and `c` SHALL copy the link (OSC 52). |
 | 48 | WHEN the code has expired, the ready view SHALL say so and offer `n`. |
-| 49 | WHEN `MobileState` is `failed`, the error view SHALL show the daemon's message, such as "cloudflared is not installed; brew install cloudflared". |
-| 50 | THE mobile feature SHALL bump `PROTOCOL` once, to the first number free past main's when it merges (`proto/AGENTS.md:23-24`). |
+| 49 | WHEN `MobileState` is `failed`, the error view SHALL show the daemon's message, such as "cloudflared is not installed; brew install cloudflared". The daemon SHALL also move to `failed`, and stop the bridge, when `cloudflared` ends by itself while ready. |
+| 50 | THE mobile feature SHALL bump `PROTOCOL` once, to the first number free past main's when it merges (`proto/AGENTS.md:23-24`). It is 10 while main is 9 (checked 2026-10-11 after `git fetch`). |
 
 ---
 
@@ -102,7 +102,7 @@ supersedes:  []
 - **RAT-1 The daemon hosts it** (the first version of this spec had it in `jw mobile`'s own process). The user wants mobile inside the TUI and still on after closing jw to walk away from the PC; the daemon is what outlives the TUI, and a pairing question can only be answered by a watcher the daemon already talks to. The price is a network-facing component in the process that holds the user's work, a child process, and a `PROTOCOL` bump (RISK-14, REQ-40, REQ-50).
 - **RAT-2 The relay still adds no message.** A phone speaks the existing frames; only the control of mobile itself is new (`Mobile*`).
 - **RAT-3 Cloudflare quick tunnel.** User's choice, 2026-10-11. Cloudflare ends TLS, so the bridge needs no TLS crate and listens in plain text on loopback.
-- **RAT-4 Sync WebSocket, threads.** The workspace has no async runtime and the daemon is thread-per-client (`lib.rs:70-78`).
+- **RAT-4 Sync WebSocket, threads.** The workspace has no async runtime and the daemon is thread-per-client (`lib.rs:81-90`).
 - **RAT-5 Native Kotlin.** User's choice, 2026-10-11. iOS comes later, so `proto` and `term` hold no UI and can be ported.
 - **RAT-6 Own spec file.** `rust-tui.md` is long and `AGENTS.md` names it as "the spec"; `AGENTS.md` points here.
 - **RAT-7 Emulator on the phone.** The TUI also receives raw bytes; same input, same model.
@@ -149,8 +149,8 @@ supersedes:  []
 |---|---|---|---|
 | M1 ✓ `65cc24f` | Bridge relay, protocol check, stop | 8–11 | `crates/web/src/bridge.rs`, `proto.rs`, `jw/tests/web.rs` |
 | M2 ✓ `720261b` | Pairing, auth, limits, revoke, read-only, tunnel and QR as the `jw mobile` process (D1 and D2 move the hosting) | 1–7, 29, 31, 32 | `crates/web/`, `jw/src/mobile.rs` |
-| W1 ✓ | `palettes` and `settings` in `ready` | 17 | `crates/web/src/bridge.rs`, the `jw` binary or the daemon start |
-| D1 | The daemon hosts mobile: tunnel moves to jw-web, `daemon/src/mobile.rs`, the messages, watchers, stop on signal, `PROTOCOL` bump | 1, 3, 6, 9, 33–40, 50 | `daemon/src/mobile.rs`, `daemon/src/lib.rs`, `web/src/tunnel.rs`, `proto.rs` |
+| W1 ✓ `ba9d161` | `palettes` and `settings` in `ready` | 17 | `crates/web/src/bridge.rs`, the `jw` binary or the daemon start |
+| D1 ✓ | The daemon hosts mobile: tunnel moves to jw-web, `daemon/src/mobile.rs`, the messages, watchers, stop on signal, `PROTOCOL` bump | 1, 3, 6, 9, 33–40, 50 | `daemon/src/mobile.rs`, `daemon/src/lib.rs`, `web/src/tunnel.rs`, `proto.rs` |
 | D2 | `jw mobile` as a client, `jw mobile stop`, shared QR in core | 30, 41 | `jw/src/mobile.rs`, `core/src/qr.rs` |
 | T1 | The TUI: Mobile modal, `^␣ m`, indicator, pair question | 42–49 | `tui/src/tui/modal.rs`, `mod.rs`, `draw.rs`, `settings.rs` |
 | M3 | Android shell: scan, pair, reconnect, version screen, theme | 14–17, 27 | `android/app`, `android/proto` |
@@ -172,10 +172,15 @@ Order: W1, D1, D2, T1 on the server track and M3 on the app track run in paralle
 - REQ-1 first offered the QR once `cloudflared` said the tunnel was registered; the name did not resolve for about a minute more (RISK-3).
 - The bridge was to live in `crates/jw/src/mobile/`; it lives in its own crate, `crates/web` (jw-web, first named jw-mobile), because `jw` is bin-only and its integration tests could not reach a bridge inside it.
 - `jw-proto` had no byte-level frame API: `read_raw` and `write_raw` were added and `MAX_FRAME` made public.
-- The `Theme` message carries only `dark`, `fg`, `bg` (`proto.rs:172-177`), so palettes travel on the control channel.
-- The daemon does not compare protocol versions (`lib.rs:540-542`); the client does, hence REQ-8.
+- The `Theme` message carries only `dark`, `fg`, `bg` (`proto.rs:198-202`), so palettes travel on the control channel.
+- The daemon does not compare protocol versions (`lib.rs:561-562`); the client does, hence REQ-8.
+- `MobileState.step` is a key, not text: the modal draws a checklist (done, now, later) and needs to know which step it is on. D1 changed it before anything shipped, so REQ-50's single bump still holds.
+- D1 bumped `PROTOCOL` from 9 to 10, the first number free past `origin/main`'s 9.
+- REQ-34 said `MobileStart` changes nothing while mobile is "not off", which left the error view's "↵ try again" with nothing to do (`failed` is not off). A `failed` mobile now starts again; only `starting` and `ready` ignore it.
+- REQ-36 only said what happens to the other watchers when someone answers. A question that times out, or is cut by a stop, would never have closed in the TUI; `MobilePairDone` now goes to every watcher then.
+- `MobileState.expires_in` counts down, so the daemon sends a state when the code becomes live or stops being live, not every second; a client counts the seconds itself from the one it received. A code a denied phone spent is no longer live, and `payload` is then empty.
 - RISK-19 suggested the `jw` binary hand a callback to the daemon at start. W1 hands it to the bridge as `Config.look`, asked at every `ready`, so a theme or slot changed while mobile runs reaches the next phone; D1 passes the same callback through `daemon::run` to the mobile service.
-- `crates/daemon/AGENTS.md` cites old line numbers (`serve` `:465`, now `:497`; `handle` `:508`, now `:540`; `attach` `:677`, now `:710`). D1 fixes them when it edits that file.
+- `crates/daemon/AGENTS.md` cited old line numbers; D1 fixed them when it edited that file.
 
 ## Tests
 

@@ -15,7 +15,7 @@ pub type PaneId = u64;
 
 /// Bumped whenever a message changes shape: a client and a daemon from
 /// different builds refuse each other instead of misreading (RISK-14).
-pub const PROTOCOL: u32 = 9;
+pub const PROTOCOL: u32 = 10;
 
 /// A pane to start. `cmd` runs through `sh -c`; `None` starts `$SHELL`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -168,6 +168,28 @@ pub enum ClientMsg {
         stream: String,
         text: String,
     },
+    /// Become a watcher of mobile: answered with `MobileState` now and after
+    /// every change, and sent every `MobilePair`, until this client leaves
+    /// (mobile spec, REQ-35).
+    MobileWatch,
+    /// Start mobile when it is off or failed (REQ-34).
+    MobileStart {
+        read_only: bool,
+    },
+    MobileStop,
+    /// Replace the pairing token with a new one (REQ-38).
+    MobileCode,
+    MobileReadOnly {
+        on: bool,
+    },
+    /// The person at the PC answers a `MobilePair` (REQ-36).
+    MobileAnswer {
+        request: u64,
+        yes: bool,
+    },
+    MobileRevoke {
+        device: String,
+    },
 }
 
 /// What panes sit on: whether the theme is dark, and its default
@@ -309,6 +331,62 @@ pub enum DaemonMsg {
     Error {
         msg: String,
     },
+    /// Mobile as it is now, to every watcher on each change (REQ-34, 35).
+    /// It carries the pairing token in `payload` (RISK-16): never log it.
+    MobileState(MobileState),
+    /// A phone asks to pair; `name` and `code` are what it showed, cleaned
+    /// of control characters (REQ-36).
+    MobilePair {
+        request: u64,
+        name: String,
+        code: String,
+    },
+    /// The question is over: answered by someone else, timed out, or mobile
+    /// stopped.
+    MobilePairDone {
+        request: u64,
+    },
+}
+
+/// Where mobile stands.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MobileState {
+    /// `off`, `starting`, `ready` or `failed`.
+    pub phase: String,
+    /// While `starting`, how far it got, as a key the client words itself:
+    /// `launching` (cloudflared is being run), `started`, `registered` (the
+    /// tunnel has a name) or `resolving` (waiting for the name to resolve).
+    #[serde(default)]
+    pub step: String,
+    /// The tunnel's name, once registered.
+    #[serde(default)]
+    pub host: String,
+    /// While `ready` and the code is live: `jw://<host>/<token>`, the QR's
+    /// text. Empty when the code was used or ended.
+    #[serde(default)]
+    pub payload: String,
+    /// Seconds the code has left; 0 when there is none.
+    #[serde(default)]
+    pub expires_in: u64,
+    #[serde(default)]
+    pub read_only: bool,
+    #[serde(default)]
+    pub devices: Vec<MobileDevice>,
+    /// While `failed`: what went wrong, for the person to read.
+    #[serde(default)]
+    pub error: String,
+}
+
+/// A paired phone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MobileDevice {
+    pub id: String,
+    pub name: String,
+    /// Unix seconds.
+    pub paired: u64,
+    pub last_seen: u64,
+    /// A phone is connected to the bridge now.
+    pub connected: bool,
 }
 
 /// A message that carries terminal bytes sends them raw after a JSON head,
@@ -575,6 +653,63 @@ mod tests {
             assert_eq!(read_frame::<ClientMsg>(&mut r).unwrap().as_ref(), Some(m));
         }
         assert_eq!(read_frame::<ClientMsg>(&mut r).unwrap(), None);
+    }
+
+    #[test]
+    fn mobile_messages_round_trip() {
+        let state = MobileState {
+            phase: "ready".into(),
+            step: String::new(),
+            host: "a-b.trycloudflare.com".into(),
+            payload: "jw://a-b.trycloudflare.com/00ff".into(),
+            expires_in: 118,
+            read_only: true,
+            devices: vec![MobileDevice {
+                id: "d1".into(),
+                name: "Pixel".into(),
+                paired: 10,
+                last_seen: 20,
+                connected: true,
+            }],
+            error: String::new(),
+        };
+        let down = vec![
+            DaemonMsg::MobileState(state),
+            DaemonMsg::MobilePair {
+                request: 4,
+                name: "Pixel".into(),
+                code: "482913".into(),
+            },
+            DaemonMsg::MobilePairDone { request: 4 },
+        ];
+        let up = vec![
+            ClientMsg::MobileWatch,
+            ClientMsg::MobileStart { read_only: true },
+            ClientMsg::MobileStop,
+            ClientMsg::MobileCode,
+            ClientMsg::MobileReadOnly { on: false },
+            ClientMsg::MobileAnswer {
+                request: 4,
+                yes: true,
+            },
+            ClientMsg::MobileRevoke {
+                device: "d1".into(),
+            },
+        ];
+        let mut buf = Vec::new();
+        for m in &down {
+            write_frame(&mut buf, m).unwrap();
+        }
+        for m in &up {
+            write_frame(&mut buf, m).unwrap();
+        }
+        let mut r = buf.as_slice();
+        for m in &down {
+            assert_eq!(read_frame::<DaemonMsg>(&mut r).unwrap().as_ref(), Some(m));
+        }
+        for m in &up {
+            assert_eq!(read_frame::<ClientMsg>(&mut r).unwrap().as_ref(), Some(m));
+        }
     }
 
     #[test]

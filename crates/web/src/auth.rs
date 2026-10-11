@@ -71,6 +71,15 @@ impl Pairing {
         &self.token
     }
 
+    /// How long the token still has, or `None` when it was used or is too old.
+    pub fn left(&self, ttl: Duration, now: Instant) -> Option<Duration> {
+        if self.used {
+            return None;
+        }
+        ttl.checked_sub(now.duration_since(self.born))
+            .filter(|d| !d.is_zero())
+    }
+
     /// Spends the token. It is spent the moment a right one arrives, before
     /// anyone is asked anything, so only one request can ever be pending.
     pub fn take(&mut self, presented: &str, ttl: Duration, now: Instant) -> Result<(), Refused> {

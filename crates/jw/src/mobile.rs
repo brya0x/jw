@@ -4,9 +4,8 @@
 //! in front of it, and prints a QR the phone app scans. Nothing here talks
 //! to the daemon: that is `jw-web`'s job, and only after a phone is let in.
 
-use std::io::{self, BufRead, BufReader, Write};
-use std::net::{TcpListener, ToSocketAddrs};
-use std::process::{Child, Command, Stdio};
+use std::io::{self, BufRead, Write};
+use std::net::TcpListener;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
@@ -16,6 +15,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, bail};
 use jw_web::auth::Store;
 use jw_web::bridge::{Bridge, Config, Confirm, Timings};
+use jw_web::tunnel::{self, Step, Waits};
 use qrcode::{Color, QrCode};
 
 use crate::client::Client;
@@ -25,10 +25,6 @@ use crate::proto::{self, ClientMsg, DaemonMsg, PROTOCOL};
 const USAGE: &str =
     "usage: jw mobile [--read-only] [--port <n>] | jw mobile devices | jw mobile revoke <device>";
 
-/// `cloudflared` says its tunnel is registered well before the name resolves
-/// (about a minute, measured), so the QR waits for both.
-const REGISTER_WITHIN: Duration = Duration::from_secs(60);
-const RESOLVE_WITHIN: Duration = Duration::from_secs(240);
 /// How long the person at the PC has to answer "pair this phone?".
 const ASK_WITHIN: Duration = Duration::from_secs(60);
 
@@ -153,23 +149,6 @@ extern "C" fn on_signal(_: libc::c_int) {
     STOP.store(true, Ordering::SeqCst);
 }
 
-/// `cloudflared`, killed whenever this value goes (REQ-9): on a normal end,
-/// on an error, and on a panic.
-struct Tunnel(Child);
-
-impl Drop for Tunnel {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
-enum Tell {
-    Host(String),
-    Registered,
-    Ended(Vec<String>),
-}
-
 fn serve(opts: Opts) -> Result<()> {
     check_daemon()?;
     let store = Arc::new(store()?);
@@ -196,33 +175,21 @@ fn serve(opts: Opts) -> Result<()> {
         libc::signal(libc::SIGTERM, on_signal as *const () as libc::sighandler_t);
     }
 
-    let mut child = Command::new("cloudflared")
-        .args([
-            "tunnel",
-            "--url",
-            &format!("http://127.0.0.1:{port}"),
-            "--no-autoupdate",
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| match e.kind() {
-            io::ErrorKind::NotFound => {
-                anyhow::anyhow!("cloudflared is not installed; brew install cloudflared")
-            }
-            _ => anyhow::Error::new(e).context("starting cloudflared"),
-        })?;
-    let told = watch(child.stderr.take().context("cloudflared has no output")?);
-    let _tunnel = Tunnel(child);
-
-    let host = wait_for_tunnel(&told)?;
-    eprintln!("tunnel up at {host}");
-    wait_to_resolve(&host)?;
+    let mut say = |step: Step| match step {
+        Step::Started(_) => eprintln!("cloudflared started"),
+        Step::Registered(host) => eprintln!("tunnel up at {host}"),
+        Step::Resolving(host) => eprintln!("waiting for {host} to be reachable"),
+    };
+    let (tunnel, host) = tunnel::up(
+        port,
+        Waits::default(),
+        &|| STOP.load(Ordering::SeqCst),
+        &mut say,
+    )?;
 
     show_code(&bridge, &host, opts.read_only)?;
     while !STOP.load(Ordering::SeqCst) {
-        if matches!(told.try_recv(), Ok(Tell::Ended(_))) {
+        if tunnel.exited() {
             bail!("cloudflared stopped; run jw mobile again");
         }
         // Enter asks for a new code; while a phone is being asked, the
@@ -288,86 +255,6 @@ fn group(code: &str) -> String {
         .join(" ")
 }
 
-/// Reads `cloudflared`'s output to the end. The pipe must be emptied for as
-/// long as it runs, or `cloudflared` blocks on a full one.
-fn watch(stderr: impl io::Read + Send + 'static) -> Receiver<Tell> {
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        let mut last: Vec<String> = Vec::new();
-        let (mut sent_host, mut sent_registered) = (false, false);
-        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-            if !sent_host && let Some(host) = find_host(&line) {
-                sent_host = true;
-                let _ = tx.send(Tell::Host(host));
-            }
-            if !sent_registered && line.contains("Registered tunnel connection") {
-                sent_registered = true;
-                let _ = tx.send(Tell::Registered);
-            }
-            last.push(line);
-            if last.len() > 6 {
-                last.remove(0);
-            }
-        }
-        let _ = tx.send(Tell::Ended(last));
-    });
-    rx
-}
-
-/// The quick tunnel's name in a line of `cloudflared`'s output.
-fn find_host(line: &str) -> Option<String> {
-    let at = line.find("https://")? + "https://".len();
-    let host: String = line[at..]
-        .chars()
-        .take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '.')
-        .collect();
-    host.ends_with(".trycloudflare.com").then_some(host)
-}
-
-fn wait_for_tunnel(told: &Receiver<Tell>) -> Result<String> {
-    let until = Instant::now() + REGISTER_WITHIN;
-    let (mut host, mut registered) = (None, false);
-    while host.is_none() || !registered {
-        if STOP.load(Ordering::SeqCst) {
-            bail!("stopped");
-        }
-        let left = until.saturating_duration_since(Instant::now());
-        match told.recv_timeout(left.min(Duration::from_millis(200))) {
-            Ok(Tell::Host(h)) => host = Some(h),
-            Ok(Tell::Registered) => registered = true,
-            Ok(Tell::Ended(last)) => {
-                bail!(
-                    "cloudflared stopped before the tunnel was up:\n{}",
-                    last.join("\n")
-                )
-            }
-            Err(RecvTimeoutError::Timeout) if Instant::now() < until => {}
-            Err(_) => bail!("cloudflared did not bring a tunnel up in {REGISTER_WITHIN:?}"),
-        }
-    }
-    host.context("no tunnel name")
-}
-
-/// A tunnel that says it is registered still has no name in DNS for a while
-/// (REQ-1), and a phone that scans too soon finds nothing.
-fn wait_to_resolve(host: &str) -> Result<()> {
-    let until = Instant::now() + RESOLVE_WITHIN;
-    eprint!("waiting for {host} to be reachable");
-    while (host, 443).to_socket_addrs().is_err() {
-        if STOP.load(Ordering::SeqCst) {
-            bail!("stopped");
-        }
-        if Instant::now() >= until {
-            bail!("{host} did not resolve in {RESOLVE_WITHIN:?}; run jw mobile again");
-        }
-        eprint!(".");
-        let _ = io::stderr().flush();
-        thread::sleep(Duration::from_secs(2));
-    }
-    eprintln!(" ready");
-    Ok(())
-}
-
 fn show_code(bridge: &Bridge, host: &str, read_only: bool) -> Result<()> {
     let token = bridge.new_pairing()?;
     let payload = format!("jw://{host}/{token}");
@@ -425,20 +312,6 @@ mod tests {
         assert!(parse(&args(&["--port"])).is_err());
         assert!(parse(&args(&["--port", "x"])).is_err());
         assert!(parse(&args(&["--nope"])).is_err());
-    }
-
-    #[test]
-    fn the_tunnel_name_is_found_in_the_box_cloudflared_prints() {
-        let line = "2026-10-11T15:44:22Z INF |  https://guys-slowly-dietary-flags.trycloudflare.com                                       |";
-        assert_eq!(
-            find_host(line).as_deref(),
-            Some("guys-slowly-dietary-flags.trycloudflare.com")
-        );
-        assert_eq!(
-            find_host("INF Requesting new quick Tunnel on trycloudflare.com..."),
-            None
-        );
-        assert_eq!(find_host("see https://developers.cloudflare.com/x"), None);
     }
 
     #[test]

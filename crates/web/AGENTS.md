@@ -1,17 +1,22 @@
 # jw-web
 
 The web server in front of the daemon (spec: [docs/specs/mobile.md](../../docs/specs/mobile.md)).
-It depends on jw-proto only; `jw mobile` (`crates/jw/src/mobile.rs`) starts it behind a
-Cloudflare tunnel. Nothing in it is specific to phones, so the name is not either.
+It depends on jw-proto only. The daemon hosts it (`crates/daemon/src/mobile.rs`) behind a
+Cloudflare tunnel; `jw mobile` still runs its own copy until D2 makes it a client. Nothing in it is specific to phones, so the name is not either.
 
 ## What lives where
 
 - `src/bridge.rs`: `Bridge`, a WebSocket server on loopback. A phone is let in by `pair` or
   `auth` and nothing else, then gets one daemon connection. A binary message is a jw-proto
   frame without its length, relayed with `read_raw` and `write_raw`; a text message is a
-  control message. `Timings` holds every wait, so tests make them short. `Config.look` is a callback the `jw`
+  control message. `Timings` holds every wait, so tests make them short. `close` shuts every socket without
+  waiting; `stop` also joins. `set_read_only`, `connected` and `pairing_left` let the daemon's
+  service apply and show what changes while phones are connected. `Config.look` is a callback the `jw`
   binary fills from the TUI's themes (this crate cannot depend on it); `ready` carries what it
   returns, `palettes` and `settings`, asked at every `ready`.
+- `src/tunnel.rs`: `up` starts `cloudflared`, waits for its name and for DNS, and says each
+  step; `Tunnel` is a clonable handle whose last drop kills the process. Every wait takes a
+  `cancel` check. `JW_CLOUDFLARED` names another program and skips the DNS wait (tests).
 - `src/auth.rs`: `Pairing` (the one-use token), `Store` (`mobile.json`, hashes only), `Limiter`
   (failed attempts per address).
 
@@ -36,4 +41,5 @@ Cloudflare tunnel. Nothing in it is specific to phones, so the name is not eithe
 
 `cargo test -p jw-web` runs the bridge against a fake daemon (auth, pairing, limits, read-only,
 revoke, ping, protocol mismatch, stop). `crates/jw/tests/web.rs` runs it against the real
-daemon. Nothing here needs `cloudflared` or the network; the tunnel is checked by hand.
+daemon. Nothing here needs `cloudflared` or the network: the tunnel's tests read canned output
+and the daemon's use a stub; the real tunnel is checked by hand.
