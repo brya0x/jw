@@ -473,14 +473,27 @@ fn spawn_term_reader(tx: Sender<Msg>) {
 
 impl App {
     fn new(tx: Client, events: Sender<Msg>, leader: Leader, size: (u16, u16)) -> Result<Self> {
-        let mut app = Self {
+        let mut app = Self::bare(tx, events, leader, size);
+        app.recent = load_recent();
+        app.reload()?;
+        let skip = std::env::var("JW_WELCOME").is_ok_and(|v| v == "0");
+        if app.rows.is_empty() && !crate::settings::get().welcomed() && !skip {
+            app.welcome = Some(Instant::now());
+        }
+        app.send(ClientMsg::List);
+        Ok(app)
+    }
+
+    /// An app with nothing loaded: no registry read, no message sent.
+    fn bare(tx: Client, events: Sender<Msg>, leader: Leader, size: (u16, u16)) -> Self {
+        Self {
             tx,
             leader,
             leader_at: None,
             which: false,
             walking: false,
             rows: Vec::new(),
-            recent: load_recent(),
+            recent: Vec::new(),
             daemon_panes: Vec::new(),
             active: None,
             panes: BTreeMap::new(),
@@ -527,14 +540,7 @@ impl App {
             last_focus: None,
             scroll: None,
             welcome: None,
-        };
-        app.reload()?;
-        let skip = std::env::var("JW_WELCOME").is_ok_and(|v| v == "0");
-        if app.rows.is_empty() && !crate::settings::get().welcomed() && !skip {
-            app.welcome = Some(Instant::now());
         }
-        app.send(ClientMsg::List);
-        Ok(app)
     }
 
     /// Draws one frame, wrapped in a synchronized update so the terminal
@@ -3306,5 +3312,162 @@ mod layout_tests {
             even(&bare),
             Node::split(Dir::Right, 0.5, Node::leaf("a"), Node::leaf("b"))
         );
+    }
+}
+
+#[cfg(test)]
+mod motion_tests {
+    use super::*;
+    use crate::proto::AgentState;
+    use std::os::unix::net::UnixListener;
+    use std::sync::Mutex;
+
+    /// `tick_motion` reads the process-wide settings: one test at a time.
+    static SETTINGS: Mutex<()> = Mutex::new(());
+
+    const MS: fn(u64) -> Duration = Duration::from_millis;
+
+    fn entry(id: &str) -> Entry {
+        Entry {
+            id: id.into(),
+            ..Entry::default()
+        }
+    }
+
+    fn stream(id: &str) -> Stream {
+        Stream {
+            entry: entry(id),
+            cfg: Default::default(),
+            base: String::new(),
+            tree: Node::leaf(""),
+            session: String::new(),
+        }
+    }
+
+    fn working(id: &str) -> PaneInfo {
+        PaneInfo {
+            pane: 1,
+            stream: id.into(),
+            role: "agent".into(),
+            exited: None,
+            fg: None,
+            busy: false,
+            bell: false,
+            agent: Some(AgentState::Working),
+            cwd: None,
+        }
+    }
+
+    /// An app on three workspaces, `a` current, with `animations` as given.
+    /// The guard keeps other tests off the settings meanwhile.
+    fn app(animations: bool) -> (App, std::sync::MutexGuard<'static, ()>) {
+        let guard = SETTINGS.lock().unwrap_or_else(|e| e.into_inner());
+        crate::settings::set(crate::settings::Settings {
+            animations: Some(animations),
+            ..Default::default()
+        });
+        let dir = std::env::temp_dir().join(format!("jwm{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock = dir.join("s");
+        let _ = std::fs::remove_file(&sock);
+        let _listener = UnixListener::bind(&sock).unwrap();
+        let client = Client::connect(&sock).unwrap();
+        let (tx, _rx) = mpsc::channel();
+        let mut app = App::bare(client, tx, Leader::DEFAULT, (120, 35));
+        app.rows = ["a", "b", "c"]
+            .map(|id| Row {
+                entry: entry(id),
+                child: false,
+            })
+            .into();
+        app.active = Some(stream("a"));
+        (app, guard)
+    }
+
+    #[test]
+    fn the_band_starts_on_the_current_row_without_motion() {
+        let (mut app, _g) = app(true);
+        let t0 = Instant::now();
+        app.tick_motion(t0);
+        assert_eq!(app.band, Some(0));
+        assert!(!app.motion.active(t0));
+    }
+
+    #[test]
+    fn a_switch_glides_the_band_and_kicks_the_loop() {
+        let (mut app, _g) = app(true);
+        let t0 = Instant::now();
+        app.tick_motion(t0);
+        app.active = Some(stream("c"));
+        app.tick_motion(t0);
+        assert_eq!(app.band, Some(0), "still on the old row at the start");
+        assert!(app.motion.active(t0 + MS(100)));
+        app.tick_motion(t0 + MS(60));
+        let mid = app.band.unwrap();
+        assert!(mid > 0 && mid <= 2, "on its way: {mid}");
+        let end = t0 + anim::SWITCH;
+        app.tick_motion(end);
+        assert_eq!(app.band, Some(2));
+        assert!(!app.motion.active(end));
+    }
+
+    #[test]
+    fn with_animations_off_the_band_jumps_and_nothing_moves() {
+        let (mut app, _g) = app(false);
+        let t0 = Instant::now();
+        app.tick_motion(t0);
+        app.active = Some(stream("b"));
+        app.tick_motion(t0);
+        assert_eq!(app.band, Some(1));
+        assert!(!app.motion.active(t0));
+        assert!(app.switch.is_none());
+    }
+
+    #[test]
+    fn with_no_workspace_there_is_no_band() {
+        let (mut app, _g) = app(true);
+        let t0 = Instant::now();
+        app.tick_motion(t0);
+        app.active = None;
+        app.tick_motion(t0);
+        assert_eq!(app.band, None);
+        assert!(app.bar.is_none());
+    }
+
+    #[test]
+    fn a_working_agent_spins_and_the_loop_knows_when_to_step() {
+        let (mut app, _g) = app(true);
+        app.daemon_panes = vec![working("a")];
+        let t0 = app.born + MS(160);
+        app.tick_motion(t0);
+        assert_eq!(app.spinner, Some(anim::spinner(MS(160))));
+        assert_eq!(app.spin_due, Some(t0 + anim::SPIN_EVERY));
+        app.daemon_panes.clear();
+        app.tick_motion(t0 + MS(80));
+        assert_eq!((app.spinner, app.spin_due), (None, None));
+    }
+
+    #[test]
+    fn with_animations_off_the_spinner_stays_still() {
+        let (mut app, _g) = app(false);
+        app.daemon_panes = vec![working("a")];
+        app.tick_motion(Instant::now());
+        assert_eq!((app.spinner, app.spin_due), (None, None));
+    }
+
+    #[test]
+    fn a_working_agent_below_the_sidebar_does_not_wake_the_loop() {
+        let (mut app, _g) = app(true);
+        app.size = (120, 6);
+        app.rows = (0..20)
+            .map(|i| Row {
+                entry: entry(&format!("w{i}")),
+                child: false,
+            })
+            .collect();
+        app.active = Some(stream("w0"));
+        app.daemon_panes = vec![working("w19")];
+        app.tick_motion(Instant::now());
+        assert_eq!(app.spin_due, None);
     }
 }
