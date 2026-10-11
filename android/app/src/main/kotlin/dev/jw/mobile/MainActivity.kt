@@ -52,12 +52,27 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         bridge = Bridge(),
         deviceName = Build.MODEL ?: "phone",
         answerIds = { answers.approve to answers.reject },
+        network = { phoneNetwork(app) },
     ).also { it.start() }
 
     /** The last palettes the PC sent, so the theme survives a reconnect. */
     var palettes: Palettes = Palettes.FALLBACK
 
     override fun onCleared() = session.stop()
+}
+
+/** (has a network, it is mobile data) from the system, or null when it cannot be read. */
+private fun phoneNetwork(app: Application): Pair<Boolean, Boolean>? = try {
+    val cm = app.getSystemService(android.net.ConnectivityManager::class.java)
+    val caps = cm.getNetworkCapabilities(cm.activeNetwork)
+    if (caps == null) {
+        false to false
+    } else {
+        caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) to
+            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR)
+    }
+} catch (_: Exception) {
+    null
 }
 
 class MainActivity : ComponentActivity() {
@@ -92,7 +107,7 @@ private fun App(state: UiState, session: Session, nav: Nav, answers: AnswerPrefs
       androidx.compose.material3.ProvideTextStyle(androidx.compose.ui.text.TextStyle(fontFamily = JwMono)) {
         Box(Modifier.fillMaxSize().background(j.bg).systemBarsPadding()) {
             when (state) {
-                is UiState.Scan -> ScanScreen(state, session)
+                is UiState.Scan -> ScanFlow(state, session)
                 is UiState.Pairing -> Pairing(state, session)
                 is UiState.Connecting -> Waiting("conectando", state.host, "…", session)
                 is UiState.Connected -> ConnectedApp(state, session, nav, answers)
@@ -104,39 +119,93 @@ private fun App(state: UiState, session: Session, nav: Nav, answers: AnswerPrefs
     }
 }
 
+/** Where the scan flow is: the connect screen, the camera permission, or the camera. */
+private enum class Step { CONNECT, PERMISSION, CAMERA }
+
+/**
+ * Everything before a PC is paired (REQ-51 to REQ-54): the connect screen, camera permission, the scan
+ * screen with its paste sheet, and the failure screen a failed pairing ends on. The step is the screen's
+ * own: a new `state` (a failure, a forget) starts it over.
+ */
 @Composable
-private fun ScanScreen(state: UiState.Scan, session: Session) {
-    val j = LocalJw.current
+private fun ScanFlow(state: UiState.Scan, session: Session) {
     val ctx = LocalContext.current
+    var step by remember(state) { mutableStateOf(Step.CONNECT) }
+    var paste by remember(state) { mutableStateOf(false) }
+    var linkError by remember(state) { mutableStateOf<String?>(null) }
+    var failShown by remember(state) { mutableStateOf(state.why != null) }
+    var asked by remember { mutableStateOf(false) }
     var granted by remember {
         mutableStateOf(ContextCompat.checkSelfPermission(ctx, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
     }
-    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted = it }
-    var wrong by remember { mutableStateOf(false) }
-    Screen("conecta tu PC", "jw mobile", "SCAN", j.blue, if (granted) "apunta al QR" else "falta la cámara") {
-        Body("En tu PC ejecuta `jw mobile` y escanea el código.", j.dim)
-        state.notice?.let { Body(it, j.yellow) }
-        if (wrong) Body("Ese QR no es de jw mobile.", j.yellow)
-        if (granted) {
-            QrScanner(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 14.dp)) { text -> wrong = !session.onQr(text) }
-        } else {
-            Body("Hace falta la cámara para leer el QR.", j.dim)
-            Box(Modifier.padding(horizontal = 14.dp)) { JwButton("permitir cámara", fill = true) { ask.launch(Manifest.permission.CAMERA) } }
+    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        granted = it
+        asked = true
+        if (it) step = Step.CAMERA
+    }
+    val activity = ctx as? android.app.Activity
+    // Denied for good: asked once, refused, and Android will not show the dialog again.
+    val blocked = asked && !granted && activity != null &&
+        !androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(activity, Manifest.permission.CAMERA)
+    val openSettings = {
+        ctx.startActivity(
+            android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.fromParts("package", ctx.packageName, null))
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+    }
+    val tryLink = { text: String ->
+        if (session.onQr(text)) linkError = null else linkError = LINK_REFUSED
+    }
+    val why = state.why
+    if (why != null && failShown) {
+        val again = { failShown = false }
+        when (why) {
+            ScanWhy.UNREACHABLE -> UnreachableScreen(state.host ?: "", state.reach, onScanAnother = again, onRetry = null, onBack = again)
+            else -> FailScreen(why, onScanAnother = again, onBack = again)
+        }
+        return
+    }
+    Box(Modifier.fillMaxSize()) {
+        when (step) {
+            Step.CONNECT -> ConnectScreen(
+                onScan = { step = if (granted) Step.CAMERA else Step.PERMISSION },
+                onPaste = { paste = true },
+            )
+            Step.PERMISSION -> PermissionScreen(
+                blocked = blocked,
+                onAllow = { ask.launch(Manifest.permission.CAMERA) },
+                onSettings = openSettings,
+                onPaste = { paste = true },
+                onBack = { step = Step.CONNECT },
+            )
+            Step.CAMERA -> {
+                var torchAvailable by remember { mutableStateOf(false) }
+                var torchOn by remember { mutableStateOf(false) }
+                var hit by remember { mutableStateOf(false) }
+                ScanScreenUi(
+                    hit = hit, torchAvailable = torchAvailable, torchOn = torchOn,
+                    onTorch = { torchOn = !torchOn }, onPaste = { paste = true }, onBack = { step = Step.CONNECT },
+                ) {
+                    QrScanner(
+                        Modifier.matchParentSize(), torch = torchOn,
+                        onTorchAvailable = { torchAvailable = it },
+                    ) { text -> if (session.onQr(text)) hit = true }
+                }
+            }
+        }
+        if (paste) {
+            PasteSheet(
+                error = linkError,
+                onConnect = tryLink,
+                onClose = { paste = false; linkError = null },
+            )
         }
     }
 }
 
 @Composable
 private fun Pairing(state: UiState.Pairing, session: Session) {
-    val j = LocalJw.current
-    Screen("emparejando", state.host, "PAIR", j.yellow, "compara el código en el PC") {
-        Body("Compara este código con el del PC y acepta allí.", j.dim)
-        Text(
-            state.code.chunked(3).joinToString(" "), color = j.cyan, fontSize = 44.sp, fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-        )
-        Box(Modifier.padding(horizontal = 14.dp)) { JwButton("cancelar") { session.forget() } }
-    }
+    PairScreen(state.host, state.code, state.reached, onCancel = { session.scanAnother() })
 }
 
 @Composable
@@ -149,15 +218,7 @@ private fun Waiting(title: String, host: String, hint: String, session: Session)
 
 @Composable
 private fun Mismatch(state: UiState.Mismatch, session: Session) {
-    val j = LocalJw.current
-    val newer = state.pc > state.app
-    Screen("versión incompatible", state.host, "ERR", j.red, "no me conecto") {
-        Section("protocolo")
-        KvRow("esta app", "jw-proto v${state.app}")
-        KvRow("el PC", "jw-proto v${state.pc}", j.red)
-        Body(if (newer) "Actualiza la app jw en este teléfono." else "Actualiza jw en el PC y reinicia su daemon.", j.yellow)
-        Box(Modifier.padding(horizontal = 14.dp)) { JwButton("olvidar este PC") { session.forget() } }
-    }
+    ProtocolScreen(state.app, state.pc, onBack = { session.scanAnother() })
 }
 
 @Composable
@@ -169,13 +230,12 @@ private fun Reconnecting(state: UiState.Reconnecting, session: Session) {
         "limited" -> "Demasiados intentos: espero 5 minutos."
         else -> "Sin conexión con el PC."
     }
+    if (state.unreachable) {
+        UnreachableScreen(state.host, state.reach, onScanAnother = { session.scanAnother() }, onRetry = null, onBack = { session.scanAnother() })
+        return
+    }
     Screen("reconectando", state.host, "WAIT", j.yellow, "reintento en ${state.inMs / 1000} s") {
-        if (state.unreachable) {
-            Body("No encuentro tu PC. Si reiniciaste jw mobile, escanea el código nuevo.", j.yellow)
-            Box(Modifier.padding(horizontal = 14.dp)) { JwButton("Escanear otro código", fill = true) { session.scanAnother() } }
-        } else {
-            Body(why, j.yellow)
-        }
+        Body(why, j.yellow)
         Box(Modifier.padding(horizontal = 14.dp)) { JwButton("olvidar este PC") { session.forget() } }
     }
 }

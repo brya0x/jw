@@ -1,6 +1,7 @@
 package dev.jw.mobile
 
 import android.view.ViewGroup
+import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
@@ -9,6 +10,8 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
@@ -56,10 +59,19 @@ private class QrAnalyzer(private val onText: (String) -> Unit) : ImageAnalysis.A
 }
 
 @Composable
-fun QrScanner(modifier: Modifier = Modifier, onText: (String) -> Unit) {
+fun QrScanner(
+    modifier: Modifier = Modifier,
+    torch: Boolean = false,
+    onTorchAvailable: (Boolean) -> Unit = {},
+    onText: (String) -> Unit,
+) {
     val context = LocalContext.current
     val owner = LocalLifecycleOwner.current
     val latest = rememberUpdatedState(onText)
+    val availability = rememberUpdatedState(onTorchAvailable)
+    val camera = remember { mutableStateOf<Camera?>(null) }
+    // The flash is switched on only while the scan screen shows the camera; unbinding turns it off.
+    LaunchedEffect(torch, camera.value) { camera.value?.cameraControl?.enableTorch(torch) }
     val executor = remember { Executors.newSingleThreadExecutor() }
     val main = remember { ContextCompat.getMainExecutor(context) }
     DisposableEffect(Unit) {
@@ -84,7 +96,9 @@ fun QrScanner(modifier: Modifier = Modifier, onText: (String) -> Unit) {
                     .build()
                     .also { it.setAnalyzer(executor, QrAnalyzer { t -> main.execute { latest.value(t) } }) }
                 provider.unbindAll()
-                provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+                val cam = provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+                camera.value = cam
+                availability.value(cam.cameraInfo.hasFlashUnit())
             }, main)
             view
         },

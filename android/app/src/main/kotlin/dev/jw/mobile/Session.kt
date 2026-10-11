@@ -35,11 +35,20 @@ import java.security.SecureRandom
 
 /** What the screens show. None of these carries a token or a pairing code except [Pairing]'s code. */
 sealed interface UiState {
-    /** No stored device: scan the QR. `notice` says why we are back here, if we are. */
-    class Scan(val notice: String? = null) : UiState
+    /**
+     * No stored device (or a pairing that did not work): scan the QR. `notice` says why we are back
+     * here, if we are; `why` is the same as a kind the screens switch on, and `host` the one that
+     * failed, if there was one.
+     */
+    class Scan(
+        val notice: String? = null,
+        val why: ScanWhy? = null,
+        val host: String? = null,
+        val reach: Reach = Reach(),
+    ) : UiState
 
     /** Waiting for the person at the PC to compare `code`. */
-    class Pairing(val host: String, val code: String) : UiState
+    class Pairing(val host: String, val code: String, val reached: Boolean = false) : UiState
 
     class Connecting(val host: String) : UiState
 
@@ -62,8 +71,27 @@ sealed interface UiState {
         val code: String?,
         /** Several network failures in a row: the PC is probably gone, offer to scan a new code. */
         val unreachable: Boolean = false,
+        val reach: Reach = Reach(),
     ) : UiState
 }
+
+/**
+ * Why a scan screen is followed by a failure screen (REQ-54). Only five failure screens are
+ * approved, so every cause is mapped to the nearest one (`android/SPEC-NOTES.md`).
+ */
+enum class ScanWhy { DENIED, EXPIRED, LIMITED, UNREACHABLE }
+
+/**
+ * What the app measured about a host it could not reach; `null` is "not measured", and the screen
+ * draws no row for it (REQ-54).
+ */
+data class Reach(
+    /** The phone has a network (ConnectivityManager), and whether it is mobile data. */
+    val internet: Boolean? = null,
+    val mobileData: Boolean? = null,
+    /** An HTTP answer came from the host's side: Cloudflare is there, the tunnel behind it is not. */
+    val cloudflare: Boolean? = null,
+)
 
 /** What the PC last told us (M4): sessions, the current session's workspaces and the panes of `List`. */
 data class Model(
@@ -99,6 +127,8 @@ class Session(
     private val answerIds: () -> Pair<String?, String?> = { null to null },
     private val pollMs: Long = 2_000,
     private val tickMs: Long = 250,
+    /** The phone's own connectivity: (has a network, it is mobile data); null when unknown. */
+    private val network: () -> Pair<Boolean, Boolean>? = { null },
 ) {
     private val _state = MutableStateFlow<UiState>(UiState.Scan())
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -209,6 +239,11 @@ class Session(
         job = scope.launch { loop(host, first) }
     }
 
+    private fun reach(f: Failure): Reach {
+        val n = network()
+        return Reach(n?.first, n?.second, if (f is Failure.Http) true else null)
+    }
+
     private suspend fun loop(host: String, first: Hello) {
         val p = policy()
         var hello = first
@@ -221,6 +256,7 @@ class Session(
             val out = Channel<Outgoing>(Channel.UNLIMITED)
             bridge.connect(endpoint.url(host), hello, out).takeWhile { ev ->
                 when (ev) {
+                    BridgeEvent.Open -> (_state.value as? UiState.Pairing)?.let { _state.value = UiState.Pairing(it.host, it.code, true) }
                     is BridgeEvent.Binary -> Workspaces.parsePanes(ev.frame)?.let { ps ->
                         _model.update { it.copy(panes = ps, panesAt = clock(), answered = emptySet()) }
                     }
@@ -274,12 +310,12 @@ class Session(
                         else -> Unit
                     }
                 }
-                _state.value = UiState.Scan(pairNotice(failure))
+                _state.value = UiState.Scan(pairNotice(failure), pairWhy(failure), host, reach(failure))
                 return
             }
             when (val d = p.onFailure(failure, clock())) {
                 is Decision.Retry -> {
-                    _state.value = UiState.Reconnecting(host, d.afterMs, (failure as? Failure.Bridge)?.code, p.unreachable)
+                    _state.value = UiState.Reconnecting(host, d.afterMs, (failure as? Failure.Bridge)?.code, p.unreachable, reach(failure))
                     delay(d.afterMs)
                 }
                 Decision.Rescan -> {
@@ -290,15 +326,25 @@ class Session(
                         } else {
                             "El PC ya no reconoce este teléfono. Escanea de nuevo."
                         },
+                        ScanWhy.DENIED,
+                        host,
                     )
                     return
                 }
                 Decision.GiveUpDns -> {
-                    _state.value = UiState.Scan("No se pudo resolver $host. Revisa la red y escanea de nuevo.")
+                    _state.value = UiState.Scan("No se pudo resolver $host. Revisa la red y escanea de nuevo.", ScanWhy.UNREACHABLE, host, reach(failure))
                     return
                 }
             }
         }
+    }
+
+    /** Every pairing failure drawn as one of the approved failure screens. */
+    private fun pairWhy(f: Failure): ScanWhy = when {
+        f is Failure.Bridge && f.code == ErrorCode.DENIED -> ScanWhy.DENIED
+        f is Failure.Bridge && f.code == ErrorCode.LIMITED -> ScanWhy.LIMITED
+        f is Failure.Bridge -> ScanWhy.EXPIRED // expired, unknown, timeout, anything else the bridge says
+        else -> ScanWhy.UNREACHABLE // DNS, a dead tunnel, a network error
     }
 
     private fun pairNotice(f: Failure): String = when {

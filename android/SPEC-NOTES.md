@@ -61,3 +61,18 @@ The scan screen in landscape gives the camera the whole width; the title shrinks
   (that is M6) and no "nueva sesión", "abrir carpeta" or "nuevo worktree" actions (the bridge has no such requests yet); the search button and the
   `^␣` leader sheet are left out for the same reason.
 - `read_only` answers to `Input` show the toast "solo lectura"; with a read-only phone the y and n buttons stay disabled.
+
+## Connection screens (REQ-51 to REQ-54), built from the approved prototype
+
+- **Which failure screen each cause gets.** Only five are approved, so each cause is drawn as the nearest one (`Session.pairWhy`, `ScanWhy`):
+  `denied` and a stored device the PC forgot (`unknown`, `revoked`) are "Tu PC rechazó este teléfono"; `expired`, `unknown`, `timeout` and any other
+  bridge error while pairing are "Ese código ya no sirve"; `limited` is "Demasiados intentos"; a DNS give-up, a dead tunnel or a network error while
+  pairing are "No encuentro tu PC". The bridge's own `protocol` and `daemon` errors while reconnecting keep the plain reconnecting text (not in the prototype).
+- **"No encuentro tu PC" draws only what was measured.** `internet · datos móviles / wifi` is `ConnectivityManager` (`ACCESS_NETWORK_STATE`);
+  `Cloudflare responde` is drawn only when the handshake got an HTTP answer that was not an upgrade (`Failure.Http`, Cloudflare's 530 for a gone tunnel);
+  the PC's row is the one that failed. With nothing measured the screen shows just the PC row. "reintentar" appears only where a retry means something
+  (the reconnecting screen is retried by itself, and a pairing token is spent), so it is not drawn.
+- **Pairing:** "PC alcanzado" is shown once the WebSocket opened (`BridgeEvent.Open`); the prototype's "(60 s)" is not drawn (no number in the spec to take it from).
+- **Paste link** is a text field, never a clipboard read; the link is not logged or stored.
+- **Not done / not tried by hand:** the camera permission "blocked" screen is drawn from a flag in `ConnectScreensTest` (adb cannot revoke it on this ROM);
+  the torch is hidden when the phone has no flash unit.

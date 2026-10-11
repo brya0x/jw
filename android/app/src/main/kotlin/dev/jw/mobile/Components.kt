@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -32,18 +33,27 @@ import androidx.compose.ui.unit.sp
 
 private val Corner = RoundedCornerShape(6.dp)
 
-/** `.hdr`: panel background, a line under it, bold title and a dim subtitle. */
+/** `.hdr`: panel background, a line under it, bold title and a dim subtitle; `onBack` adds the 44 dp back button. */
 @Composable
-fun Header(title: String, subtitle: String? = null) {
+fun Header(title: String, subtitle: String? = null, onBack: (() -> Unit)? = null) {
     val j = LocalJw.current
-    Column(
+    Row(
         Modifier.fillMaxWidth().background(j.panel).drawBehind {
             drawLine(j.line, Offset(0f, size.height), Offset(size.width, size.height), 1.dp.toPx())
         }.padding(horizontal = 12.dp, vertical = 8.dp).heightIn(min = 52.dp),
-        verticalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text(title, color = j.fg, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        if (subtitle != null) Text(subtitle, color = j.dim, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (onBack != null) {
+            Box(
+                Modifier.size(44.dp).clickable(role = Role.Button, onClickLabel = "Volver", onClick = onBack),
+                contentAlignment = Alignment.Center,
+            ) { Icon(Ic.Back, j.fg, 22.dp) }
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
+            Text(title, color = j.fg, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (subtitle != null) Text(subtitle, color = j.dim, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
     }
 }
 
@@ -89,13 +99,16 @@ fun KvRow(key: String, value: String, color: Color = LocalJw.current.fg) {
 
 /** `.btn.fill` and `.btn.tone`: 48 dp, 6 dp corners; fill is blue, tone has a line. */
 @Composable
-fun JwButton(label: String, fill: Boolean = false, onClick: () -> Unit) {
+fun JwButton(label: String, fill: Boolean = false, icon: Ic? = null, onClick: () -> Unit) {
     val j = LocalJw.current
     val base = Modifier.fillMaxWidth().heightIn(min = 48.dp).let {
         if (fill) it.background(j.blue, Corner) else it.border(BorderStroke(1.dp, j.line), Corner)
     }
     Box(base.clickable(role = Role.Button, onClick = onClick).padding(horizontal = 16.dp), contentAlignment = Alignment.Center) {
-        Text(label, color = if (fill) j.bg else j.fg, fontWeight = FontWeight.Bold, fontSize = 13.5.sp)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (icon != null) Icon(icon, if (fill) j.bg else j.fg, 18.dp)
+            Text(label, color = if (fill) j.bg else j.fg, fontWeight = FontWeight.Bold, fontSize = 13.5.sp)
+        }
     }
 }
 

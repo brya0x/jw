@@ -8,6 +8,12 @@ sealed interface Failure {
     /** Socket error, silent close or timeout of the transport. */
     data object Network : Failure
 
+    /**
+     * The handshake got an HTTP answer that was not a WebSocket upgrade: something answered at the
+     * host (Cloudflare says 530 for a tunnel that no longer exists), so it is not a dead network.
+     */
+    class Http(val code: Int) : Failure
+
     /** The bridge said `error` with this code, while authing with a stored device. */
     class Bridge(val code: String) : Failure
 }

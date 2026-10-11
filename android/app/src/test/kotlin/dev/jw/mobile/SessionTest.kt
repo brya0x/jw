@@ -151,7 +151,8 @@ class SessionTest {
     @Test fun bridgeFlowEndsWithFailure() = runBlocking<Unit> {
         fake.enqueue { _, ws -> ws.fail("limited") }
         val events = Bridge().connect(fake.endpoint().url("x"), Hello.Auth(FakeBridge.DEVICE)).toList()
-        assertTrue((events.first() as BridgeEvent.Message).msg is ServerMessage.Error)
+        assertTrue("the socket opening comes first", events.first() is BridgeEvent.Open)
+        assertTrue((events[1] as BridgeEvent.Message).msg is ServerMessage.Error)
         assertTrue((events.last() as BridgeEvent.Ended).failure is Failure.Network)
     }
 
@@ -190,5 +191,69 @@ class SessionTest {
         s.scanAnother()
         assertTrue(s.state.value is UiState.Scan)
         assertEquals(FakeBridge.DEVICE, store.device!!.device)
+    }
+
+    @Test fun everyPairingFailureIsDrawnAsOneOfTheApprovedScreens() = runBlocking<Unit> {
+        val expected = mapOf(
+            "denied" to ScanWhy.DENIED, "limited" to ScanWhy.LIMITED,
+            "expired" to ScanWhy.EXPIRED, "unknown" to ScanWhy.EXPIRED, "timeout" to ScanWhy.EXPIRED,
+        )
+        for ((code, why) in expected) {
+            fake.enqueue { _, ws -> ws.fail(code) }
+            val s = session()
+            s.onQr(qr)
+            assertEquals(code, why, s.await<UiState.Scan>().why)
+        }
+    }
+
+    @Test fun aStoredDeviceTheBridgeForgetsIsDrawnAsDenied() = runBlocking<Unit> {
+        for (code in listOf("unknown", "revoked")) {
+            store.device = StoredDevice("example.trycloudflare.com", FakeBridge.DEVICE)
+            fake.enqueue { _, ws -> ws.fail(code) }
+            val s = session()
+            s.start()
+            val scan = s.await<UiState.Scan>()
+            assertEquals(ScanWhy.DENIED, scan.why)
+            assertEquals("example.trycloudflare.com", scan.host)
+        }
+    }
+
+    @Test fun pcReachedIsSaidOnlyOnceTheSocketOpened() = runBlocking<Unit> {
+        // The PC never answers the pairing question: the socket is open, so it was reached.
+        fake.enqueue { _, _ -> }
+        val s = session()
+        s.onQr(qr)
+        val p = withTimeout(10_000) { s.state.first { it is UiState.Pairing && it.reached } as UiState.Pairing }
+        assertTrue(p.reached)
+        s.stop()
+    }
+
+    @Test fun noRowIsClaimedThatWasNotMeasured() = runBlocking<Unit> {
+        // Nothing listens on port 1: a refused connection, not an HTTP answer.
+        store.device = StoredDevice("gone.trycloudflare.com", FakeBridge.DEVICE)
+        val s = Session(
+            scope, store, Bridge(), "Pixel", { "ws://127.0.0.1:1/" }, { ReconnectPolicy(baseMs = 20, maxMs = 20) },
+            network = { true to true },
+        )
+        s.start()
+        val r = withTimeout(20_000) { s.state.first { it is UiState.Reconnecting && it.unreachable } as UiState.Reconnecting }
+        assertEquals(true, r.reach.internet)
+        assertEquals(true, r.reach.mobileData)
+        assertNull("no HTTP answer, so Cloudflare was not measured", r.reach.cloudflare)
+        s.stop()
+    }
+
+    @Test fun anHttpAnswerThatIsNotAnUpgradeMeansSomethingAnsweredAtTheHost() = runBlocking<Unit> {
+        // What Cloudflare returns for a tunnel that no longer exists is a 530 at the handshake.
+        store.device = StoredDevice("gone.trycloudflare.com", FakeBridge.DEVICE)
+        repeat(5) { fake.server.enqueue(okhttp3.mockwebserver.MockResponse().setResponseCode(530)) }
+        val s = Session(
+            scope, store, Bridge(), "Pixel", fake.endpoint(), { ReconnectPolicy(baseMs = 20, maxMs = 20) },
+            network = { true to false },
+        )
+        s.start()
+        val r = withTimeout(20_000) { s.state.first { it is UiState.Reconnecting && it.unreachable } as UiState.Reconnecting }
+        assertEquals(true, r.reach.cloudflare)
+        s.stop()
     }
 }

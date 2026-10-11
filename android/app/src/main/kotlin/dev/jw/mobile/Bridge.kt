@@ -25,6 +25,9 @@ import java.util.concurrent.TimeUnit
 sealed interface BridgeEvent {
     class Message(val msg: ServerMessage) : BridgeEvent
 
+    /** The WebSocket opened: something answered at the host. */
+    data object Open : BridgeEvent
+
     /** A binary jw-proto frame after `ready`. M3 does not use them. */
     class Binary(val frame: Frame) : BridgeEvent
 
@@ -64,6 +67,7 @@ class Bridge(
             request,
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
+                    trySend(BridgeEvent.Open)
                     webSocket.send(Control.encode(hello))
                 }
 
@@ -91,7 +95,13 @@ class Bridge(
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    end(if (t is UnknownHostException) Failure.Dns else Failure.Network)
+                    end(
+                        when {
+                            t is UnknownHostException -> Failure.Dns
+                            response != null -> Failure.Http(response.code)
+                            else -> Failure.Network
+                        },
+                    )
                 }
             },
         )
