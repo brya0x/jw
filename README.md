@@ -123,15 +123,16 @@ shows `✓ Copied to clipboard · N characters` on the pane's top edge for a mom
 - **Drag:** highlights from where you pressed to the pointer, over the screen and the scrollback.
 - **Double-click** selects a word, **triple-click** a line.
 - **Drag past the top or bottom** of the pane scrolls the history while you keep selecting.
-- **Programs that use the mouse** (nvim, lazygit) keep getting your drags. `Shift`+drag selects
-  in them, when your terminal passes it to jw.
+- **Programs that use the mouse** (nvim, lazygit) keep getting your drags, so jw selects
+  nothing in them. `Shift`+drag would select there, but Ghostty does not pass it to jw (iTerm2
+  and Terminal.app are untested). Use the program's own selection.
 - **Clearing:** a click, switching panes or typing in the pane clears the selection. Output
   that scrolls the pane leaves it on its text.
 - **Wrapped lines** copy as one line, and trailing spaces are cut. A selection over 75 KB is
   refused.
 
-jw copies with OSC 52, so your terminal has to allow it: Ghostty, iTerm2 (turn on "Applications
-in terminal may access clipboard"), kitty and WezTerm do; Terminal.app does not. The banner says
+jw copies with OSC 52, so your terminal has to allow it. Ghostty does (tested); iTerm2 needs "Applications
+in terminal may access clipboard" turned on; Terminal.app does not support it. The banner says
 what jw sent, and jw cannot see whether the terminal accepted it.
 
 ## Settings and themes
