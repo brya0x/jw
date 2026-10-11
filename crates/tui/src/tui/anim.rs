@@ -25,6 +25,12 @@ pub const PICK_SLIDE: Duration = Duration::from_millis(120);
 /// (REQ-144).
 pub const POPUP_FADE: Duration = Duration::from_millis(160);
 
+/// The focused pane's border changes colour in this time (REQ-145).
+pub const FOCUS_EASE: Duration = Duration::from_millis(180);
+
+/// A turn of the wheel is spread over this (REQ-145).
+pub const SCROLL: Duration = Duration::from_millis(120);
+
 /// Cells the panes travel while they enter (REQ-136).
 pub const SLIDE_CELLS: u16 = 4;
 

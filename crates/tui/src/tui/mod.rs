@@ -291,6 +291,20 @@ pub struct App {
     overlays: u8,
     /// A popup fading in, 0 to 1 (REQ-144).
     popup: Option<anim::Tween>,
+    /// The pane that was focused, and the one that is, mid-change (REQ-145).
+    focus_fade: Option<(Option<PaneId>, Option<PaneId>, anim::Tween)>,
+    /// The focus at the last frame.
+    last_focus: Option<PaneId>,
+    /// A turn of the wheel being spread over a few frames (REQ-145).
+    scroll: Option<Scroll>,
+}
+
+/// Lines of history to move in a pane, and how many have moved.
+struct Scroll {
+    pane: PaneId,
+    total: isize,
+    applied: isize,
+    since: Instant,
 }
 
 /// The selection band: the workspace it is on, its row, and how it moves.
@@ -507,6 +521,9 @@ impl App {
             mode: None,
             overlays: 0,
             popup: None,
+            focus_fade: None,
+            last_focus: None,
+            scroll: None,
         };
         app.reload()?;
         app.send(ClientMsg::List);
@@ -561,6 +578,64 @@ impl App {
             }
         }
         wake
+    }
+
+    /// The focused pane's border eases to its colour (REQ-145). A switch of
+    /// workspace brings its own motion, so it does not add this one.
+    fn tick_focus(&mut self, now: Instant, on: bool) {
+        if self.focus != self.last_focus {
+            if on && anim::fades() && self.switch.is_none() {
+                let ease = anim::Tween::new(0.0, 1.0, anim::FOCUS_EASE, now);
+                self.focus_fade = Some((self.last_focus, self.focus, ease));
+                self.motion.kick(anim::FOCUS_EASE, now);
+            }
+            self.last_focus = self.focus;
+        }
+        if self.focus_fade.is_some_and(|(_, _, t)| t.done(now)) {
+            self.focus_fade = None;
+        }
+    }
+
+    /// Starts spreading a turn of the wheel over a few frames; one that
+    /// comes mid-way adds what is left to its own lines.
+    fn glide_scroll(&mut self, pane: PaneId, lines: isize, now: Instant) {
+        let left = match &self.scroll {
+            Some(s) if s.pane == pane => s.total - s.applied,
+            _ => 0,
+        };
+        self.scroll = Some(Scroll {
+            pane,
+            total: left + lines,
+            applied: 0,
+            since: now,
+        });
+        self.motion.kick(anim::SCROLL, now);
+    }
+
+    /// Moves the history the lines the wheel is due by now (REQ-145).
+    fn tick_scroll(&mut self, now: Instant) {
+        let Some(s) = &mut self.scroll else {
+            return;
+        };
+        let elapsed = now.saturating_duration_since(s.since);
+        let t = anim::ease_out(anim::progress(elapsed, anim::SCROLL));
+        let step = (t * s.total as f32).round() as isize - s.applied;
+        s.applied += step;
+        let pane = s.pane;
+        if t >= 1.0 {
+            self.scroll = None;
+        } else {
+            self.motion.kick(anim::SCROLL.saturating_sub(elapsed), now);
+        }
+        match self.panes.get_mut(&pane) {
+            Some(view) if step != 0 => {
+                let screen = view.parser.screen_mut();
+                let back = screen.scrollback().saturating_add_signed(step);
+                screen.set_scrollback(back);
+            }
+            Some(_) => {}
+            None => self.scroll = None,
+        }
     }
 
     /// Popups: one that opens fades in (REQ-144), and a picker's highlight
@@ -655,6 +730,8 @@ impl App {
         }
         self.tick_status(now, on);
         self.tick_overlays(now, on);
+        self.tick_focus(now, on);
+        self.tick_scroll(now);
         self.band = self
             .bar
             .as_ref()
@@ -1691,6 +1768,8 @@ impl App {
             };
             let bytes = one.repeat(WHEEL).into_bytes();
             self.send(ClientMsg::Input { pane: id, bytes });
+        } else if anim::enabled() {
+            self.glide_scroll(id, -wheel, Instant::now());
         } else {
             let back = screen.scrollback().saturating_add_signed(-wheel);
             view.parser.screen_mut().set_scrollback(back);

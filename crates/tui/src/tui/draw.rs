@@ -31,7 +31,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if rects.is_empty() {
         empty(f, app);
     }
-    for (id, rect) in rects {
+    for &(id, rect) in &rects {
         let r = trect(rect);
         let focused = app.focus == Some(id);
         match app.views.get_mut(&id) {
@@ -52,6 +52,16 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 app.selection(id),
                 focused,
             ),
+        }
+    }
+    if let Some((old, new, ease)) = app.focus_fade {
+        let t = ease.value(now);
+        for &(id, rect) in &rects {
+            if Some(id) == new {
+                ease_border(f.buffer_mut(), trect(rect), p().line, p().blue, t);
+            } else if Some(id) == old {
+                ease_border(f.buffer_mut(), trect(rect), p().blue, p().line, t);
+            }
         }
     }
     banner(f, app);
@@ -80,6 +90,25 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
     if let (Some(base), Some(fade)) = (base, app.popup) {
         dissolve(f.buffer_mut(), &base, fade.value(now));
+    }
+}
+
+/// REQ-145: a pane's border, already drawn in its final colour `to`, shown
+/// `t` of the way from `from`. The title's text is left as it is.
+fn ease_border(buf: &mut Buffer, r: TRect, from: Color, to: Color, t: f32) {
+    if r.width < 2 || r.height < 2 {
+        return;
+    }
+    let right = r.right() - 1;
+    let bottom = r.bottom() - 1;
+    let edge = (r.left()..=right)
+        .flat_map(|x| [(x, r.y), (x, bottom)])
+        .chain((r.top()..=bottom).flat_map(|y| [(r.x, y), (right, y)]));
+    for pos in edge {
+        let cell = &mut buf[pos];
+        if cell.fg == to && matches!(cell.symbol(), "─" | "│" | "╭" | "╮" | "╰" | "╯") {
+            cell.fg = anim::lerp(from, to, t);
+        }
     }
 }
 
@@ -927,6 +956,28 @@ mod tests {
             buf.set_string(0, y, "abcdefghijkl", style);
         }
         (buf, TRect::new(0, 0, 12, 1), TRect::new(0, 1, 12, 2))
+    }
+
+    #[test]
+    fn a_border_eases_between_the_two_accents_and_leaves_the_title_alone() {
+        let area = TRect::new(0, 0, 6, 3);
+        let mut buf = Buffer::empty(area);
+        let to = Color::Rgb(100, 100, 100);
+        let from = Color::Rgb(0, 0, 0);
+        let style = Style::default().fg(to);
+        buf.set_string(0, 0, "╭ab──╮", style);
+        buf.set_string(0, 1, "│    │", style);
+        buf.set_string(0, 2, "╰────╯", style);
+        ease_border(&mut buf, area, from, to, 0.5);
+        let half = Color::Rgb(50, 50, 50);
+        assert_eq!(buf[(0, 0)].fg, half);
+        assert_eq!(buf[(5, 1)].fg, half);
+        assert_eq!(buf[(2, 2)].fg, half);
+        assert_eq!(buf[(1, 0)].fg, to, "title text keeps its own colour");
+        let mut done = Buffer::empty(area);
+        done.set_string(0, 0, "╭ab──╮", style);
+        ease_border(&mut done, area, from, to, 1.0);
+        assert_eq!(done[(0, 0)].fg, to);
     }
 
     #[test]
