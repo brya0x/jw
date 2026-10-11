@@ -395,6 +395,8 @@ After this addendum: the UI thread never waits on disk, process or socket work d
 
 Timeline of one switch (ms from the key): `resolve` 0–42 (no frame) → `Attach` 42.6 → `Tree` and `Snapshot` at the TUI at 43–45 → one frame at 46 → `handle_snapshot` 46–129 (no frame) → frames every ≈ 20 ms. By the time the content is in, the 240 ms slide is already 55 % over, so it jumps in, it does not slide.
 
+After F1 (same bench, two runs): `resolve` 0 ms (the stream comes from a cache `warm_streams` fills on a worker thread), frame cadence 16.0–16.1 ms (60 fps; S9 fixed by counting the deadline from the frame's start), key → content 119–124 ms p50, longest gap without a frame 108–114 ms: all of it is the `Snapshot` parse (103–108 ms in these runs, noisier than F0's 86), which is F2. A workspace that is not open still resolves fresh on the UI thread (its agent session and layout are read as its panes start), so REQ-151 holds for switching, not yet for the first open.
+
 Opening a *new* workspace (3 samples): `resolve` 31 ms, but `handle_term` is 130 ms: about 100 ms more before or around `open_entry` that no span covers yet (the picker's confirm). Not measured further; F1 starts there.
 
 Verdicts: **F1** (S1, S9) and **F2** (S2, S4) are the work; **F3** (S3, S8) and **F4** (S5) have no number behind them and are dropped unless more panes change that. Snapshot cost is per pane, so a workspace with three panes should cost ≈ 3 × 86 ms until F2.
@@ -576,7 +578,7 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | M6 ✓ | First-run welcome, `welcomed` and `JW_WELCOME=0` (set by `scripts/drive.py`) | 146, 149 | `tui/draw.rs`, `settings.rs`, `scripts/drive.py` |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 | F0 ✓ | `JW_TRACE`, `scripts/bench-switch.py`, the Measurements above | 150 | `tui/trace.rs`, `tui/mod.rs`, `scripts/` |
-| F1 | S1, S9: `Stream::resolve` (the `git` spawn) off the UI thread, the frame deadline counted from the frame's start; the unexplained ≈ 100 ms of a first open | 151, 157 | `tui/mod.rs`, `core` (callers) |
+| F1 ✓ | S1, S9: `Stream::resolve` (the `git` spawn) off the UI thread, the frame deadline counted from the frame's start; the unexplained ≈ 100 ms of a first open | 151, 157 | `tui/mod.rs`, `core` (callers) |
 | F2 | S2: parse in the reader thread (`Msg::Snapshot` carries a `Parser`); S4: keep pane frames while content loads | 152, 155, 156 | `tui/mod.rs`, `tui/draw.rs` |
 | F3 | S3, S8 (daemon: cap/skip ring copy; save off the open path) only if F0 shows them over budget | 154, 156 | `daemon/src/lib.rs` |
 | F4 | S5: skip unchanged rows in `screen_to`, one flush per frame, only if F0 shows draw over budget | 153 | `tui/draw.rs`, `tui/anim.rs` |

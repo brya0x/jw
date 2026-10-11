@@ -73,6 +73,8 @@ enum Msg {
     Tick,
     /// The pull requests of the worktrees, by workspace id.
     Prs(Vec<(String, Option<crate::connectors::Pr>)>),
+    /// Streams of the sidebar's workspaces, resolved on a worker thread.
+    Streams(Vec<Stream>),
 }
 
 // One job at a time crosses the channel, boxed; its size doesn't matter.
@@ -271,6 +273,11 @@ pub struct App {
     motion: anim::Motion,
     /// When the last frame was drawn.
     last_draw: Instant,
+    /// Streams resolved off the UI thread, by workspace id (F1): a switch to
+    /// an open workspace reuses one instead of running `git` on the UI thread.
+    streams: BTreeMap<String, Stream>,
+    /// Ids already sent to be resolved, so `reload` asks once.
+    warming: std::collections::BTreeSet<String>,
     /// When a held drag next scrolls (REQ-127).
     edge_due: Option<Instant>,
     /// The sidebar's selection band on its way to the current row (REQ-136).
@@ -536,6 +543,8 @@ impl App {
             fresh: true,
             motion: anim::Motion::default(),
             last_draw: Instant::now(),
+            streams: BTreeMap::new(),
+            warming: Default::default(),
             edge_due: None,
             bar: None,
             band: None,
@@ -558,12 +567,20 @@ impl App {
     /// path, a failed draw included.
     fn draw(&mut self, term: &mut ratatui::DefaultTerminal) -> Result<()> {
         let mut out = std::io::stdout();
+        // The next frame is due FRAME after this one *began*: counted from the
+        // end of the draw, the cadence was 16 ms plus the draw plus the wake's slop.
+        let began = Instant::now();
+        let due = self.last_draw + FRAME;
+        self.last_draw = if began >= due && began < due + FRAME {
+            due
+        } else {
+            began
+        };
         let drawn = trace::span("draw_total", || {
             anim::synced(&mut out, || {
                 term.draw(|f| trace::span("draw_build", || draw::draw(f, self)))
             })
         });
-        self.last_draw = Instant::now();
         drawn?;
         Ok(())
     }
@@ -936,6 +953,7 @@ impl App {
         {
             s.entry = row.entry.clone();
         }
+        self.warm_streams();
         Ok(())
     }
 
@@ -1124,6 +1142,11 @@ impl App {
                 }
             }
             Msg::Job(j) => self.on_job(*j),
+            Msg::Streams(all) => {
+                for s in all {
+                    self.streams.insert(s.entry.id.clone(), s);
+                }
+            }
         }
     }
 
@@ -1502,7 +1525,11 @@ impl App {
                 self.fail(format!("{e:#}"));
             }
         }
-        let stream = match trace::span("resolve", || Stream::resolve(&entry)) {
+        let stream = match self.cached_stream(&entry) {
+            Some(s) => Ok(s),
+            None => trace::span("resolve", || Stream::resolve(&entry)),
+        };
+        let stream = match stream {
             Ok(s) => s,
             Err(e) => {
                 self.fail(format!("{}: {e:#}", entry.name));
@@ -1522,6 +1549,48 @@ impl App {
         } else if let Err(e) = trace::span("start_panes", || self.start_panes(setup)) {
             self.fail(format!("{}: {e:#}", entry.name));
         }
+    }
+
+    /// The stream of an open workspace, resolved earlier off the UI thread.
+    /// A workspace that is not open resolves fresh: its agent session and
+    /// layout are read when its panes start.
+    fn cached_stream(&self, entry: &Entry) -> Option<Stream> {
+        if !self.is_open(&entry.id) {
+            return None;
+        }
+        let mut s = self
+            .streams
+            .get(&entry.id)
+            .filter(|s| s.entry.path == entry.path && s.entry.project == entry.project)?
+            .clone();
+        if !entry.agent.is_empty() {
+            s.session = entry.agent.clone();
+        }
+        s.entry = entry.clone();
+        Some(s)
+    }
+
+    /// Resolves, on a worker thread, the streams the sidebar lists and nobody
+    /// asked for yet: `Stream::resolve` runs `git` (about 40 ms).
+    fn warm_streams(&mut self) {
+        let todo: Vec<Entry> = self
+            .rows
+            .iter()
+            .filter(|r| !self.warming.contains(&r.entry.id))
+            .map(|r| r.entry.clone())
+            .collect();
+        if todo.is_empty() {
+            return;
+        }
+        self.warming.extend(todo.iter().map(|e| e.id.clone()));
+        let tx = self.events.clone();
+        thread::spawn(move || {
+            for e in todo {
+                if let Ok(s) = Stream::resolve(&e) {
+                    let _ = tx.send(Msg::Streams(vec![s]));
+                }
+            }
+        });
     }
 
     /// Asks the daemon to start the workspace's panes in its layout's shape.
