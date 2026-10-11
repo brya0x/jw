@@ -265,7 +265,7 @@ pub fn rename(p: &Project, e: &Entry, name: &str, reg_path: &Path) -> Result<Ent
     Ok(renamed)
 }
 
-fn provision(p: &Project, e: &Entry, vars: &Vars, reg_path: &Path) -> Result<()> {
+pub(crate) fn provision(p: &Project, e: &Entry, vars: &Vars, reg_path: &Path) -> Result<()> {
     write_jw_env(e, vars)?;
     p.repo.exclude(".jw.env")?;
     copy_env_files(p, e, vars)?;
@@ -376,7 +376,14 @@ pub fn rm_plan(p: &Project, e: &Entry) -> Result<RmPlan> {
     let path = Path::new(&e.path);
     let on_disk = path.exists();
     let (dirty, unpushed) = if on_disk {
-        (git::dirty_files(path)?, git::unpushed(path)?)
+        // A review's own commits only: the PR's head is not work to lose
+        // (REQ-175).
+        let unpushed = if e.review_base.is_empty() {
+            git::unpushed(path)?
+        } else {
+            git::unpushed_beyond(path, &crate::review::head_ref(e.pr))?
+        };
+        (git::dirty_files(path)?, unpushed)
     } else {
         (Vec::new(), Vec::new())
     };
