@@ -10,9 +10,14 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import dev.jw.proto.Palette
 import dev.jw.proto.Palettes
+
+/** JetBrains Mono, the prototype's face (OFL, bundled): the system "monospace" is not mono on every ROM. */
+val JwMono = FontFamily(Font(R.font.jetbrains_mono_regular, FontWeight.Normal), Font(R.font.jetbrains_mono_bold, FontWeight.Bold))
 
 /** jw's palette roles, as the prototype names them. */
 class JwColors(
@@ -41,7 +46,7 @@ fun JwTheme(palettes: Palettes, content: @Composable () -> Unit) {
         primary = j.blue, onPrimary = j.bg, error = j.red, outline = j.line,
         surfaceVariant = j.sel, onSurfaceVariant = j.dim,
     )
-    val mono = TextStyle(fontFamily = FontFamily.Monospace)
+    val mono = TextStyle(fontFamily = JwMono)
     CompositionLocalProvider(LocalJw provides j) {
         MaterialTheme(
             colorScheme = scheme,

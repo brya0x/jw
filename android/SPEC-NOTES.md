@@ -34,3 +34,10 @@
 | JUnit | 4.13.2 | 2021-02-13 |
 
 Not done: `slowPcAnswerIsWaitedFor` still sleeps 15 s for real; a virtual clock cannot drive MockWebServer's real I/O.
+
+## On the phone (CPH2417, Android 15), 2026-10-11
+Checked: install, launch, scan screen with the camera granted, dark and light system theme, landscape, Back, force-stop and reopen. No crash.
+Not checked: the camera permission dialog (the ROM granted it on the first tap, and `pm revoke`/`pm clear` are refused to adb, so "deny" and
+"don't ask again" were not driven), and the pairing, mismatch, reconnecting and connected screens (they need a bridge; the brain runs the e2e).
+Look: header, mode chip and status bar, 48 dp rows and buttons, JetBrains Mono bundled (`FONTS.md`), the prototype's palette roles.
+The scan screen in landscape gives the camera the whole width; the title shrinks behind it. Fine for now, worth a second look in M4.
