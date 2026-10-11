@@ -171,7 +171,12 @@ private fun Reconnecting(state: UiState.Reconnecting, session: Session) {
         else -> "Sin conexión con el PC."
     }
     Screen("reconectando", state.host, "WAIT", j.yellow, "reintento en ${state.inMs / 1000} s") {
-        Body(why, j.yellow)
+        if (state.unreachable) {
+            Body("No encuentro tu PC. Si reiniciaste jw mobile, escanea el código nuevo.", j.yellow)
+            Box(Modifier.padding(horizontal = 14.dp)) { JwButton("Escanear otro código", fill = true) { session.scanAnother() } }
+        } else {
+            Body(why, j.yellow)
+        }
         Box(Modifier.padding(horizontal = 14.dp)) { JwButton("olvidar este PC") { session.forget() } }
     }
 }

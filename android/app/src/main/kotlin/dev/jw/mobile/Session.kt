@@ -43,7 +43,13 @@ sealed interface UiState {
     class Mismatch(val host: String, val app: Int, val pc: Int) : UiState
 
     /** Down, retrying. `code` is the bridge's error code when there was one (`daemon`, `protocol`, `limited`). */
-    class Reconnecting(val host: String, val inMs: Long, val code: String?) : UiState
+    class Reconnecting(
+        val host: String,
+        val inMs: Long,
+        val code: String?,
+        /** Several network failures in a row: the PC is probably gone, offer to scan a new code. */
+        val unreachable: Boolean = false,
+    ) : UiState
 }
 
 /** Where wss URLs come from; tests point it at MockWebServer. */
@@ -95,6 +101,15 @@ class Session(
     fun forget() {
         job?.cancel()
         store.clear()
+        _state.value = UiState.Scan()
+    }
+
+    /**
+     * Scan a different code. The stored device is kept until a new pairing succeeds, so a PC that comes back
+     * at the same address still works. The long-term token never goes to a host learned from a QR.
+     */
+    fun scanAnother() {
+        job?.cancel()
         _state.value = UiState.Scan()
     }
 
@@ -165,7 +180,7 @@ class Session(
             }
             when (val d = p.onFailure(failure, clock())) {
                 is Decision.Retry -> {
-                    _state.value = UiState.Reconnecting(host, d.afterMs, (failure as? Failure.Bridge)?.code)
+                    _state.value = UiState.Reconnecting(host, d.afterMs, (failure as? Failure.Bridge)?.code, p.unreachable)
                     delay(d.afterMs)
                 }
                 Decision.Rescan -> {

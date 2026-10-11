@@ -180,4 +180,15 @@ class SessionTest {
             java.util.Locale.setDefault(old)
         }
     }
+
+    @Test fun unreachableHostOffersAnotherScanAndKeepsTheDevice() = runBlocking<Unit> {
+        store.device = StoredDevice("gone.trycloudflare.com", FakeBridge.DEVICE)
+        val s = Session(scope, store, Bridge(), "Pixel", { "ws://127.0.0.1:1/" }, { ReconnectPolicy(baseMs = 20, maxMs = 20) })
+        s.start()
+        assertTrue(s.await<UiState.Reconnecting>().let { true })
+        withTimeout(20_000) { s.state.first { it is UiState.Reconnecting && it.unreachable } }
+        s.scanAnother()
+        assertTrue(s.state.value is UiState.Scan)
+        assertEquals(FakeBridge.DEVICE, store.device!!.device)
+    }
 }

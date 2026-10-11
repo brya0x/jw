@@ -37,19 +37,29 @@ class ReconnectPolicy(
     private val baseMs: Long = 5_000,
     private val maxMs: Long = 30_000,
     private val limitedMs: Long = 300_000,
+    private val unreachableAfter: Int = 3,
 ) {
     private var connectedOnce = false
     private var firstFailureAt: Long? = null
     private var attempts = 0
+    private var unreachableRun = 0
+
+    /**
+     * True after [unreachableAfter] network or DNS failures in a row with nothing from the bridge in between:
+     * the PC is probably gone (a restarted tunnel has a new host). The stored device is kept regardless.
+     */
+    val unreachable: Boolean get() = unreachableRun >= unreachableAfter
 
     /** A connection reached `ready`. */
     fun onConnected() {
         connectedOnce = true
         firstFailureAt = null
         attempts = 0
+        unreachableRun = 0
     }
 
     fun onFailure(failure: Failure, nowMs: Long): Decision {
+        if (failure is Failure.Bridge) unreachableRun = 0 else unreachableRun++
         if (failure is Failure.Bridge) {
             when {
                 ErrorCode.isFinal(failure.code) -> return Decision.Rescan

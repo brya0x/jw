@@ -11,6 +11,16 @@ export ANDROID_HOME=~/Library/Android/sdk   # or a git-ignored local.properties 
 ./gradlew :proto:test :app:testDebugUnitTest
 ```
 
+On the phone (only our own package; connectedDebugAndroidTest uninstalls the app after, so reinstall the debug APK):
+
+```sh
+ANDROID_SERIAL=<serial> ./gradlew :app:connectedDebugAndroidTest
+# Keystore across a process death: run `save`, force-stop, run `load`
+adb shell am instrument -w -e class dev.jw.mobile.KeystorePersistenceTest#save dev.jw.mobile.test/androidx.test.runner.AndroidJUnitRunner
+adb shell am force-stop dev.jw.mobile
+adb shell am instrument -w -e class dev.jw.mobile.KeystorePersistenceTest#load dev.jw.mobile.test/androidx.test.runner.AndroidJUnitRunner
+```
+
 JDK 17, Gradle wrapper 8.14.3, AGP 8.13.0, Kotlin 2.2.21, minSdk 26, compileSdk 36. One test waits 15 s on purpose
 (the PC can take about a minute to answer a pairing).
 

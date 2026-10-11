@@ -59,4 +59,27 @@ class ReconnectTest {
         p.onConnected()
         assertEquals(5000L, retry(p.onFailure(Failure.Network, 2)))
     }
+
+    @Test fun unreachableAfterThreeNetworkFailuresInARow() {
+        val p = ReconnectPolicy()
+        p.onFailure(Failure.Network, 0)
+        p.onFailure(Failure.Dns, 1)
+        assertTrue(!p.unreachable)
+        p.onFailure(Failure.Network, 2)
+        assertTrue(p.unreachable)
+    }
+
+    @Test fun aBridgeAnswerOrAConnectionResetsTheCount() {
+        val p = ReconnectPolicy()
+        p.onFailure(Failure.Network, 0)
+        p.onFailure(Failure.Network, 1)
+        p.onFailure(Failure.Bridge(ErrorCode.DAEMON), 2)
+        p.onFailure(Failure.Network, 3)
+        assertTrue(!p.unreachable)
+        p.onFailure(Failure.Network, 4)
+        p.onFailure(Failure.Network, 5)
+        assertTrue(p.unreachable)
+        p.onConnected()
+        assertTrue(!p.unreachable)
+    }
 }
