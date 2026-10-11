@@ -127,10 +127,13 @@ private fun NavBar(nav: Nav, waiting: Int) {
 
 /** What the connected app shows: three tabs, or one workspace when a row was tapped. */
 @Composable
-fun ConnectedApp(state: UiState.Connected, session: Session, nav: Nav, answers: AnswerPrefs) {
+fun ConnectedApp(state: UiState.Connected, session: Session, nav: Nav, answers: AnswerPrefs, ticking: Boolean = true) {
     val j = LocalJw.current
     val model by session.model.collectAsState()
-    val now by produceState(System.currentTimeMillis()) { while (true) { delay(500); value = System.currentTimeMillis() } }
+    // Re-evaluates the 2 s age of the snapshot twice a second. Compose UI tests turn this off: a looping delay
+    // never lets them go idle.
+    val ticked by produceState(System.currentTimeMillis()) { while (ticking) { delay(500); value = System.currentTimeMillis() } }
+    val now = if (ticking) ticked else System.currentTimeMillis()
     var toast by remember { mutableStateOf<String?>(null) }
 
     // The list is on screen on every tab but Settings; the session polls only then (and in the foreground).

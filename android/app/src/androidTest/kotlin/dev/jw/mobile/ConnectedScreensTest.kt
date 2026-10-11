@@ -90,7 +90,7 @@ class ConnectedScreensTest {
                 Surface(Modifier.fillMaxSize(), color = LocalJw.current.bg) {
                     Box(Modifier.fillMaxSize().background(LocalJw.current.bg)) {
                         val s by session.state.collectAsState()
-                        (s as? UiState.Connected)?.let { ConnectedApp(it, session, nav, AnswerPrefs(ctx)) }
+                        (s as? UiState.Connected)?.let { ConnectedApp(it, session, nav, AnswerPrefs(ctx), ticking = false) }
                     }
                 }
             }
