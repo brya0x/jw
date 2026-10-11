@@ -6,10 +6,12 @@
 #   scripts/jw-test fresh      same, but wipes the test state first
 #   scripts/jw-test stop       stops the test daemon (only its pid)
 #
-# Env: JWT_DIR (default /tmp/jwt), JW_WELCOME (default 1 here: you want to see it).
+# Env: JWT_DIR (default /tmp/jwt), JW_WELCOME (default 1 here: you want to see it),
+# JWT_PROFILE (debug by default; `release` to feel the real speed).
 set -eu
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 D=${JWT_DIR:-/tmp/jwt}
+PROFILE=${JWT_PROFILE:-debug}
 PIDFILE=$D/run/jw/jw.pid
 
 stop() {
@@ -21,7 +23,11 @@ case "${1:-}" in
   fresh) stop; sleep 0.3; rm -rf "$D" ;;
 esac
 
-(cd "$REPO" && cargo build --workspace -q)
+if [ "$PROFILE" = release ]; then
+  (cd "$REPO" && cargo build --release -p jw -q)
+else
+  (cd "$REPO" && cargo build --workspace -q)
+fi
 mkdir -p "$D/home" "$D/run" "$D/state" "$D/cfg"
 if [ ! -d "$D/home/demo/.git" ]; then
   mkdir -p "$D/home/demo"
@@ -35,7 +41,7 @@ export HOME="$D/home" XDG_RUNTIME_DIR="$D/run" XDG_STATE_HOME="$D/state" XDG_CON
 export JW_WELCOME=${JW_WELCOME:-1} COLORTERM=truecolor SHELL=\${SHELL:-/bin/zsh}
 unset JW_SOCKET JW_SESSION
 cd "$D/home/demo"
-exec "$REPO/target/debug/jw"
+exec "$REPO/target/$PROFILE/jw"
 LAUNCH
 chmod +x "$D/launch.sh"
 
