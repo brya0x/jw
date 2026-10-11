@@ -34,6 +34,7 @@ use crate::client::Client;
 use crate::connectors::PullRequests;
 use crate::core::registry::{self, Entry, Registry};
 use crate::layout::{Dir, Node, Rect, Tree};
+use crate::program;
 use crate::proto::{
     AgentState, ClientMsg, DaemonMsg, NewPane, PROTOCOL, PaneId, PaneInfo, PaneLeaf,
 };
@@ -964,7 +965,8 @@ impl App {
         let panes = || self.daemon_panes.iter().filter(|p| p.stream == id);
         // The agent's hooks say what it does (REQ-73); without them, output
         // and the bell are the guess (REQ-51).
-        let guess = |p: &PaneInfo| p.agent.is_none() && p.role == "agent";
+        let guess =
+            |p: &PaneInfo| p.agent.is_none() && program::is_agent_pane(&p.role, p.fg.as_deref());
         let mut out = Vec::new();
         if panes().any(|p| p.agent == Some(AgentState::Working) || (guess(p) && p.busy)) {
             out.push('✻');
@@ -1642,26 +1644,30 @@ impl App {
 
     /// What a pane's title says: its name; else its role, then what runs
     /// in it, dimmer: the title its program set, else its foreground
-    /// process (REQ-53).
-    pub fn pane_title(&self, id: PaneId) -> (String, Option<String>) {
+    /// process (REQ-53). A known agent in the foreground gives its own name
+    /// instead of the title it set, and the flag to draw it as one (REQ-167).
+    pub fn pane_title(&self, id: PaneId) -> (String, Option<String>, bool) {
         let leaf = self.tree.as_ref().and_then(|t| t.find(id));
         if let Some(name) = leaf.and_then(|l| l.name.clone()) {
-            return (name, None);
+            return (name, None, false);
         }
         let role = leaf.map(|l| l.role.clone()).unwrap_or_default();
-        let title = self
-            .panes
-            .get(&id)
-            .and_then(|v| v.title.clone())
-            .filter(|t| !t.trim().is_empty());
         let fg = || {
             self.daemon_panes
                 .iter()
                 .find(|p| p.pane == id)
                 .and_then(|p| p.fg.clone())
         };
+        if let Some(agent) = fg().filter(|n| program::is_agent_program(n)) {
+            return (role, Some(agent), true);
+        }
+        let title = self
+            .panes
+            .get(&id)
+            .and_then(|v| v.title.clone())
+            .filter(|t| !t.trim().is_empty());
         let runs = title.or_else(fg).filter(|r| *r != role);
-        (role, runs)
+        (role, runs, false)
     }
 
     /// Resizes every visible pane to its rectangle, here and in the daemon.
@@ -3451,6 +3457,46 @@ mod motion_tests {
             .into();
         app.active = Some(stream("a"));
         (app, guard)
+    }
+
+    fn running(id: &str, pane: PaneId, role: &str, fg: &str) -> PaneInfo {
+        PaneInfo {
+            pane,
+            stream: id.into(),
+            role: role.into(),
+            exited: None,
+            fg: Some(fg.into()),
+            busy: true,
+            bell: false,
+            agent: None,
+            cwd: None,
+        }
+    }
+
+    #[test]
+    fn an_agent_in_a_shell_pane_gets_the_agent_marks() {
+        let (mut app, _g) = app(false);
+        app.daemon_panes = vec![running("a", 7, "shell", "claude")];
+        assert_eq!(app.marks("a"), ['✻']);
+        app.daemon_panes = vec![running("a", 7, "shell", "nvim")];
+        assert!(app.marks("a").is_empty());
+    }
+
+    #[test]
+    fn the_title_names_an_agent_program_and_flags_it() {
+        let (mut app, _g) = app(false);
+        app.daemon_panes = vec![
+            running("a", 7, "shell", "claude"),
+            running("a", 8, "shell", "nvim"),
+        ];
+        assert_eq!(
+            app.pane_title(7),
+            (String::new(), Some("claude".into()), true)
+        );
+        assert_eq!(
+            app.pane_title(8),
+            (String::new(), Some("nvim".into()), false)
+        );
     }
 
     #[test]
