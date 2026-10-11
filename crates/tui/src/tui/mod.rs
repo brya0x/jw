@@ -2620,7 +2620,11 @@ impl App {
             .stderr(std::process::Stdio::null())
             .spawn()
         {
-            Ok(_) => self.say(format!("opened {url}")),
+            Ok(mut child) => {
+                // Reaped off this thread, so the opener leaves no zombie.
+                thread::spawn(move || child.wait());
+                self.say(format!("opened {url}"));
+            }
             Err(e) => self.fail(format!("{opener}: {e}")),
         }
     }
@@ -2779,7 +2783,9 @@ impl App {
         let Some(s) = &self.active else {
             return false;
         };
+        // A review is always the diff beside the agent: nothing to save.
         !crate::folders::is_folder(&s.entry)
+            && s.entry.review_base.is_empty()
             && self
                 .live_layout()
                 .is_some_and(|live| live != even(&s.cfg.layout.tree()))
@@ -3187,7 +3193,6 @@ impl App {
                 if self.finder.as_ref().is_some_and(|f| f.loading_reviews()) {
                     self.finder = None;
                 }
-                self.pending_prompt = None;
                 self.fail(e);
             }
             Job::Prs { prs, requested } => {
@@ -3210,6 +3215,8 @@ impl App {
                     self.done(format!("reviewing #{n} in {name}"));
                     self.pending_prompt = Some((id, r.prompt));
                     self.open_entry(r.entry, r.setup);
+                    // Whatever `open_entry` did not send is not for later.
+                    self.pending_prompt = None;
                 }
             }
             Job::Renamed { entry, from } => {

@@ -34,6 +34,11 @@ pub fn name_of(n: u64) -> String {
     format!("review-{n}")
 }
 
+/// Where the head of PR `n` is kept after a fetch.
+pub fn head_ref(n: u64) -> String {
+    format!("refs/jw/pr-{n}")
+}
+
 /// The local branch of PR `n`.
 pub fn branch_of(n: u64) -> String {
     format!("review/pr-{n}")
@@ -86,7 +91,10 @@ pub fn review_stream(
             refresh(&e, &head)?;
             (e, true)
         }
-        None => (create(p, pr, &name, &branch, &path, reg_path)?, false),
+        None => (
+            create(p, pr, &name, &branch, &path, reg.next_slot(), reg_path)?,
+            false,
+        ),
     };
     Ok(Reviewed {
         prompt: prompt(pr, &context),
@@ -115,12 +123,12 @@ fn create(
     name: &str,
     branch: &str,
     path: &Path,
+    slot: u32,
     reg_path: &Path,
 ) -> Result<Entry> {
-    let slot = Registry::load(reg_path)?.next_slot();
     let vars = p.cfg.vars(name, &pr.base, slot);
     p.repo
-        .add_worktree_reset(path, branch, &format!("refs/jw/pr-{}", pr.number))?;
+        .add_worktree_reset(path, branch, &head_ref(pr.number))?;
     let entry = Entry {
         id: registry::new_id()?,
         name: name.to_string(),
@@ -522,5 +530,30 @@ esac
         assert!(!dir.path().join("wt/review-8").exists());
         assert!(Registry::load(&reg_path).unwrap().entries.is_empty());
         assert!(!context_path(&state, 8).exists());
+    }
+
+    /// REQ-165: removing a review asks nothing about the PR's own commits,
+    /// but does about one the reviewer added.
+    #[test]
+    fn removing_a_review_counts_only_the_reviewers_own_commits() {
+        let (dir, work) = new_test_repo();
+        let reg_path = dir.path().join("state/workspaces.json");
+        publish_pr(&work, 7, "a.txt");
+        let p = project(&work, &dir.path().join("wt"));
+        let r =
+            review_stream(&p, &fake_gh(dir.path()), &summary(7), &reg_path, dir.path()).unwrap();
+
+        let plan = actions::rm_plan(&p, &r.entry).unwrap();
+        assert!(
+            plan.unpushed.is_empty() && plan.dirty.is_empty(),
+            "{plan:?}"
+        );
+        assert!(plan.deletes.iter().any(|d| d.contains("review/pr-7")));
+
+        let wt = Path::new(&r.entry.path);
+        std::fs::write(wt.join("notes.txt"), "mine").unwrap();
+        must_git(wt, &["add", "notes.txt"]);
+        must_git(wt, &["commit", "-q", "-m", "my note"]);
+        assert_eq!(actions::rm_plan(&p, &r.entry).unwrap().unpushed.len(), 1);
     }
 }

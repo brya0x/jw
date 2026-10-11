@@ -382,6 +382,7 @@ Prototype: https://claude.ai/artifact/7dJfvauPHjSBZ3jF5e8SJ7 (approved 2026-10-1
 - REQ-170 WHEN `o` is pressed in the picker with an empty query, the TUI SHALL open the selected PR's url in the browser.
 - REQ-171 WHEN `Open` carries a leaf whose role starts with `view:`, the daemon SHALL give it an id and start no process, as `Split` does.
 - REQ-172 IF a review worktree has changes when its PR is picked again, THEN jw SHALL leave it as it is and say so.
+- REQ-173 WHILE a workspace has `review_base`, the header SHALL NOT say its layout changed or offer `^␣ p` to save it.
 
 ---
 
@@ -540,10 +541,10 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | M4 ✓ | Popups fade in, picker row slides, which-key at 150 ms and `which_sticky` (a row in `^␣ ,`) | 141, 144 | `tui/draw.rs`, `tui/finder.rs`, `tui/modal.rs`, `settings.rs` |
 | M5 ✓ | Focus border ease; eased wheel scroll | 145 | `tui/draw.rs`, `tui/mod.rs` |
 | M6 ✓ | First-run welcome, `welcomed` and `JW_WELCOME=0` (set by `scripts/drive.py`) | 146, 149 | `tui/draw.rs`, `settings.rs`, `scripts/drive.py` |
-| R0 | Addendum 14 in this spec; the prototype (approved 2026-10-11) | — | docs |
-| R1 | Core: `open_prs`, `detail`, `Entry.review_base`, `Stream::resolve` and `command()` for reviews, `review.rs` (fetch, worktree, context file) | 155–160, 162, 164, 165, 168 | `connectors/github.rs`, `core/registry.rs`, `stream.rs`, `review.rs` |
-| R2 | TUI: `Kind::Reviews` with a loading state, `R`, jobs, the pending `Prompt`, `m` and `o`; `Open` starts no process for a viewer leaf; the daemon test | 150–154, 161, 163, 166, 167, 169–171 | `tui/finder.rs`, `tui/mod.rs`, `tui/modal.rs`, `settings.rs`, `daemon/src/lib.rs`, `crates/jw/tests/daemon.rs` |
-| R3 | README and the `jw` skill; version bump; a hand test with `scripts/jw-test` | — | docs |
+| R0 ✓ `c5152e8` | Addendum 14 in this spec; the prototype (approved 2026-10-11) | — | docs |
+| R1 ✓ `7d7678d` | Core: `open_prs`, `detail`, `Entry.review_base`, `Stream::resolve` and `command()` for reviews, `review.rs` (fetch, worktree, context file) | 155–160, 162, 164, 165, 168 | `connectors/github.rs`, `core/registry.rs`, `stream.rs`, `review.rs` |
+| R2 ✓ `936b3cd` | TUI: `Kind::Reviews` with a loading state, `R`, jobs, the pending `Prompt`, `m` and `o`; `Open` starts no process for a viewer leaf; the daemon test | 150–154, 161, 163, 166, 167, 169–171 | `tui/finder.rs`, `tui/mod.rs`, `tui/modal.rs`, `settings.rs`, `daemon/src/lib.rs`, `crates/jw/tests/daemon.rs` |
+| R3 ✓ | README; version 0.0.12; a hand test with `scripts/drive.py` against a local origin and a fake `gh`; REQ-165 and REQ-173, which that test found missing | 165, 173 | `README.md`, `core/src/actions.rs`, `core/src/connectors/git.rs`, `tui/mod.rs` |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 
 Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{new_stream, rm_plan, rm, sync, done_plan}`, `src/diff.rs`, `src/view/md.rs` and `Modal::Rm` (type the name) stay as they are.
@@ -569,6 +570,7 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 ## Corrections
 
 - REQ-129 and REQ-130 specified a keyboard select mode (`^␣ v`, `SEL`). The user dropped it: terminals today select with the mouse and the shell edits the prompt, so jw keeps the mouse and adds the copied banner (REQ-135).
+- Addendum 14's hand test found two things the first build lacked: `X` listed the PR's own commit as unpushed work (it lives only in `refs/jw/pr-<n>`, REQ-165 now says so and `rm_plan` honours it), and the header told a review its layout had changed (REQ-173).
 - Addendum 14's first draft sent the PR head to `+review/pr-<n>` and said `Open` already handled `view:` leaves. A fetch cannot update a branch that is checked out in a worktree, so the head goes to `refs/jw/pr-<n>`; and the daemon's `open` started a shell for a viewer leaf until REQ-171.
 - REQ-39's done checks, ported from Go, assumed a worktree stays on the branch jw made for it. Agents switch branches, so a worktree whose work merged through another PR looked unfinished (addendum 8).
 

@@ -208,14 +208,6 @@ impl Finder {
         f
     }
 
-    /// Whether this is the PR picker, and which list it waits for or shows.
-    pub fn reviews_list(&self) -> Option<bool> {
-        match self.kind {
-            Kind::Reviews { requested, .. } => Some(requested),
-            _ => None,
-        }
-    }
-
     /// Whether this is the PR picker and gh has not answered yet.
     pub fn loading_reviews(&self) -> bool {
         matches!(self.kind, Kind::Reviews { loading: true, .. })
@@ -1243,7 +1235,6 @@ mod tests {
             Outcome::Reload(true)
         ));
         assert!(f.loading_reviews() && f.shown.is_empty());
-        assert_eq!(f.reviews_list(), Some(true));
         assert!(f.title.contains("requested of me"));
         assert!(matches!(
             f.key(key(KeyCode::Char('m'))),
@@ -1289,16 +1280,19 @@ mod tests {
         }
     }
 
+    fn plain(lines: &[Line]) -> String {
+        lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect::<Vec<_>>()
+            .join("|")
+    }
+
     /// REQ-154: the preview has the description and the files; a draft says so.
     #[test]
     fn the_pr_preview_shows_the_description_and_the_files() {
         let f = picker();
-        let text: String = f
-            .preview()
-            .iter()
-            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
-            .collect::<Vec<_>>()
-            .join("|");
+        let text = plain(&f.preview());
         for want in [
             "#42 Add magic-link sign-in",
             "feat/auth-flow",
@@ -1314,11 +1308,6 @@ mod tests {
         assert!(shown.contains("@ana") && shown.contains("requested of me"));
         let mut d = picker();
         d.sel = 2;
-        let draft: String = d
-            .preview()
-            .iter()
-            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
-            .collect();
-        assert!(draft.contains("draft"));
+        assert!(plain(&d.preview()).contains("draft"));
     }
 }

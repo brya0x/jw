@@ -103,9 +103,12 @@ impl Repo {
     /// its own so a worktree that has the review branch checked out can
     /// still be refreshed. Returns the commit.
     pub fn fetch_pr(&self, n: u64) -> Result<String> {
-        let spec = format!("+pull/{n}/head:refs/jw/pr-{n}");
-        run(&self.root, &["fetch", "--quiet", "origin", &spec])?;
-        run(&self.root, &["rev-parse", &format!("refs/jw/pr-{n}")])
+        let r = crate::review::head_ref(n);
+        run(
+            &self.root,
+            &["fetch", "--quiet", "origin", &format!("+pull/{n}/head:{r}")],
+        )?;
+        run(&self.root, &["rev-parse", &r])
     }
 
     /// Updates `origin/<branch>` alone.
@@ -267,6 +270,16 @@ pub fn dirty_files(dir: &Path) -> Result<Vec<String>> {
 /// exists on this machine.
 pub fn unpushed(dir: &Path) -> Result<Vec<String>> {
     run(dir, &["log", "--oneline", "HEAD", "--not", "--remotes"]).map(lines)
+}
+
+/// Like [`unpushed`], but a commit `r#ref` has is not work of the user's
+/// either: a review's branch starts at the PR head, which only that ref has.
+pub fn unpushed_beyond(dir: &Path, r#ref: &str) -> Result<Vec<String>> {
+    run(
+        dir,
+        &["log", "--oneline", "HEAD", "--not", "--remotes", r#ref],
+    )
+    .map(lines)
 }
 
 /// A rebase or merge left half-done in the worktree at `dir`.

@@ -55,21 +55,11 @@ impl Client {
 
     /// Runs `gh pr list` in `dir`.
     fn list(&self, dir: &Path, args: &[&str]) -> Result<Vec<Pr>> {
-        let bin = self.bin()?;
-        let out = Command::new(&bin)
-            .args(["pr", "list", "--state", "all", "--json", FIELDS])
-            .args(args)
-            .current_dir(dir)
-            .output()
-            .map_err(|e| anyhow!("{}: {e}", bin.display()))?;
-        if !out.status.success() {
-            bail!(
-                "gh pr list: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            );
-        }
+        let mut all = vec!["pr", "list", "--state", "all", "--json", FIELDS];
+        all.extend(args);
+        let out = self.gh(dir, &all)?;
         let raw: Vec<PrJson> =
-            serde_json::from_slice(&out.stdout).map_err(|e| anyhow!("gh pr list: {e}"))?;
+            serde_json::from_slice(&out).map_err(|e| anyhow!("gh pr list: {e}"))?;
         Ok(raw
             .into_iter()
             .map(|p| Pr {
