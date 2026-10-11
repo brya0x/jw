@@ -1,7 +1,7 @@
 ---
 status:      agreed
 scope:       [crates/web/, crates/proto/src/proto.rs, crates/jw/src/main.rs, crates/jw/src/help.rs, crates/jw/Cargo.toml, crates/core/src/session.rs (RESERVED), android/, docs/specs/mobile.md]
-depends_on:  [cloudflared on PATH, Android SDK + Kotlin/Compose, jw daemon unchanged at PROTOCOL 8]
+depends_on:  [cloudflared on PATH, Android SDK + Kotlin/Compose, jw daemon unchanged: no message changes, so this feature does not bump PROTOCOL]
 supersedes:  []
 ---
 # jw mobile: work in your jw sessions from an Android phone, through a Cloudflare tunnel
@@ -124,7 +124,7 @@ supersedes:  []
 - REQ-3 first had the PC confirm the device name the phone sent. Anyone holding a copy of the QR could pair as any name and the user would press y. The phone now shows a code and sends it, the PC prints it, and the user checks they match; the token is spent before the question, so one question is ever open.
 - REQ-1 first printed the QR once `cloudflared` said the tunnel was registered. The name did not resolve for about a minute more (RISK-3), so it now waits for DNS.
 - The bridge was to live in `crates/jw/src/mobile/`. It lives in its own crate, `crates/web` (jw-web, first named jw-mobile and renamed: it relays frames and is not specific to phones): `jw` is bin-only, so its integration tests could not reach a bridge inside it, and a library has no dead code before `jw mobile` exists. `jw mobile` is wired in M2 together with auth, so no listener without auth is ever runnable.
-- The spec took for granted that `jw-proto` could relay a frame as it is. It had no byte-level API: `read_raw` and `write_raw` were added and `MAX_FRAME` made public. No message changed, so `PROTOCOL` stays 8.
+- The spec took for granted that `jw-proto` could relay a frame as it is. It had no byte-level API: `read_raw` and `write_raw` were added and `MAX_FRAME` made public. No message changed, so this feature does not bump `PROTOCOL` (main went from 8 to 9 meanwhile, for its own reasons).
 - The plan assumed the `Theme` message could carry a palette. It carries only `dark`, `fg`, `bg` (`proto.rs:172-177`), so palettes travel on the control channel.
 - The plan assumed the daemon refuses old clients. It does not compare versions (`lib.rs:510-512`); the client does (`jw/src/server.rs:40-46`), hence REQ-8.
 
