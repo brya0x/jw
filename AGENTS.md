@@ -12,11 +12,12 @@ says how the code is laid out and what to keep in mind when changing it.
 | `crates/proto` (jw-proto) | the messages between daemon and clients, their frames, the client end of the socket | [crates/proto/AGENTS.md](crates/proto/AGENTS.md) |
 | `crates/daemon` (jw-daemon) | every PTY and its vt100 screen, each workspace's pane tree, `session.json`, scrollback | [crates/daemon/AGENTS.md](crates/daemon/AGENTS.md) |
 | `crates/tui` (jw-tui) | the TUI: sidebar, panes, pickers, diff and Markdown viewers, settings, themes | [crates/tui/AGENTS.md](crates/tui/AGENTS.md) |
+| `crates/mobile` (jw-mobile) | the bridge between a phone and the daemon: a WebSocket on loopback that relays frames | [crates/mobile/AGENTS.md](crates/mobile/AGENTS.md) |
 | `crates/jw` (jw) | the binary, the CLI, and the daemon's integration tests | [crates/jw/AGENTS.md](crates/jw/AGENTS.md) |
 | `android/` | the native Kotlin phone app; it talks to `jw mobile`'s bridge, not to the daemon | [docs/specs/mobile.md](docs/specs/mobile.md) (UI: `docs/specs/mobile-prototype.html`) |
 
-**Dependencies run one way:** `core ← proto ← daemon`, `core, proto ← tui`, everything ←
-`jw`. The TUI never depends on the daemon, and core never on proto. The compiler enforces
+**Dependencies run one way:** `core ← proto ← daemon`, `core, proto ← tui`, `proto ← mobile`,
+everything ← `jw`. The TUI never depends on the daemon, and core never on proto. The compiler enforces
 this; don't add a dependency against it. Move the shared piece down instead.
 
 Each crate root imports the modules it uses from the others (`use jw_core::{stream, …}`), so

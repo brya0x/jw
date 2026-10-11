@@ -1,6 +1,6 @@
 ---
 status:      agreed
-scope:       [crates/jw/src/mobile/, crates/jw/src/main.rs, crates/jw/src/help.rs, crates/jw/Cargo.toml, crates/core/src/session.rs (RESERVED), android/, docs/specs/mobile.md]
+scope:       [crates/mobile/, crates/proto/src/proto.rs, crates/jw/src/main.rs, crates/jw/src/help.rs, crates/jw/Cargo.toml, crates/core/src/session.rs (RESERVED), android/, docs/specs/mobile.md]
 depends_on:  [cloudflared on PATH, Android SDK + Kotlin/Compose, jw daemon unchanged at PROTOCOL 8]
 supersedes:  []
 ---
@@ -20,7 +20,8 @@ supersedes:  []
 | Piece | Where | Shape |
 |---|---|---|
 | CLI | arm at `crates/jw/src/main.rs:45-60`, row at `help.rs:14`, name in `core/src/session.rs:18` | `jw mobile [--read-only] [--port N]`, `jw mobile devices`, `jw mobile revoke <device>` |
-| Bridge | `crates/jw/src/mobile/` (sync, threads, as `daemon/src/lib.rs:70-75`) | listens on `127.0.0.1:<port>`; WS **binary** message = one jw-proto frame, kind byte plus body, no length prefix (`proto/src/proto.rs:364-390`); WS **text** message = control JSON |
+| Bridge | `crates/mobile/src/bridge.rs` (jw-mobile; sync, threads, as `daemon/src/lib.rs:70-75`) | listens on `127.0.0.1:<port>`; WS **binary** message = one jw-proto frame, kind byte plus body, no length prefix (`proto/src/proto.rs:364-390`); WS **text** message = control JSON |
+| Raw frames | `proto/src/proto.rs` `read_raw`, `write_raw` | a frame's body (kind byte and what follows) without decoding it; both check the kind and `MAX_FRAME` |
 | Control, phone to bridge | JSON, tag `t` | `pair{token,name}`, `auth{device}`, `workspaces`, `sessions`, `diff{ws}`, `open{path}`, `worktree{project,branch}` |
 | Control, bridge to phone | JSON, tag `t` | `ready{bridge:1,protocol,palettes,settings}`, `paired{device}`, `workspaces`, `sessions`, `diff`, `error{code,msg}` |
 | Palettes | `tui/src/theme.rs:19-37` | the 10 built-in themes plus user themes, as colour roles, plus `dark`; `settings` names the dark and light slots |
@@ -85,6 +86,10 @@ supersedes:  []
 - **RISK-6 Android kills background sockets.** No alerts when the app is backgrounded (OPEN-3).
 - **RISK-7 Cellular cost.** A resync sends a snapshot of up to 2 MiB (`outbox.rs:55-64`). The bridge may need to throttle.
 - **RISK-8 New dependencies** in a dep-light workspace: a sync WS crate, `qrcode`, `sha2`, a random source.
+- **RISK-10 Behind `cloudflared` every connection comes from 127.0.0.1.** REQ-5's "per address" would lock out the real phone, or let anyone lock it out. M2 keys the limit on `CF-Connecting-IP`, trusted only because the listener is loopback and `cloudflared` is its one client.
+- **RISK-11 A web page can open `ws://127.0.0.1:<port>`.** Auth (REQ-4) is the guard. M2 also refuses a handshake that carries an `Origin` header (a phone app sends none) and adds that as a REQ.
+- **RISK-12 M1 reaches the daemon before the phone has said anything.** `serve` connects and sends `Hello` first, which REQ-4 forbids once there is auth. M2 authenticates first, then connects, and gives the pre-auth phase its own deadline.
+- **RISK-13 A dead phone behind `cloudflared` is only noticed when writes stall.** It keeps its daemon subscriptions meanwhile. M2 adds a WebSocket ping and drops on a missed pong.
 - **RISK-9 Diff source.** The TUI draws diffs client-side (`tui/src/tui/diffview.rs`). Whether git diff generation can move to `core` for the bridge is **unchecked**.
 
 ## Open questions
@@ -99,16 +104,18 @@ supersedes:  []
 
 | Part | What | REQ | Main files |
 |---|---|---|---|
-| M1 | Bridge relay, protocol check, shutdown | 8–11 | `jw/src/mobile/` |
-| M2 | Tunnel (prove WS first), QR, pairing, auth, rate limit, revoke, read-only | 1–7 | `jw/src/mobile/`, `main.rs`, `help.rs` |
+| M1 ✓ | Bridge relay, protocol check, stop (REQ-9: the connections; `cloudflared` is M2) | 8–11 | `crates/mobile/src/bridge.rs`, `proto.rs`, `jw/tests/mobile.rs` |
+| M2 | Tunnel (prove WS first), QR, pairing, auth, rate limit, revoke, read-only, `jw mobile` | 1–7 | `crates/mobile/`, `jw/src/main.rs`, `help.rs` |
 | M3 | Android shell: scan, pair, reconnect, version screen, theme | 14–17, 27 | `android/app`, `android/proto` |
-| M4 | Workspaces, sessions, enter, approve, Avisos | 12, 18–20, 28 | `android/app`, `jw/src/mobile/` |
+| M4 | Workspaces, sessions, enter, approve, Avisos | 12, 18–20, 28 | `android/app`, `crates/mobile/` |
 | M5 | Terminal surface, keys, leader sheet, resize | 21–24 | `android/term`, `android/app` |
-| M6 | Changes and diff | 13, 25 | `jw/src/mobile/`, `android/app` |
+| M6 | Changes and diff | 13, 25 | `crates/mobile/`, `android/app` |
 | M7 | Settings, touch and mode chrome, polish | 26 | `android/app` |
 
 ## Corrections
 
+- The bridge was to live in `crates/jw/src/mobile/`. It lives in its own crate, `crates/mobile` (jw-mobile): `jw` is bin-only, so its integration tests could not reach a bridge inside it, and a library has no dead code before `jw mobile` exists. `jw mobile` is wired in M2 together with auth, so no listener without auth is ever runnable.
+- The spec took for granted that `jw-proto` could relay a frame as it is. It had no byte-level API: `read_raw` and `write_raw` were added and `MAX_FRAME` made public. No message changed, so `PROTOCOL` stays 8.
 - The plan assumed the `Theme` message could carry a palette. It carries only `dark`, `fg`, `bg` (`proto.rs:172-177`), so palettes travel on the control channel.
 - The plan assumed the daemon refuses old clients. It does not compare versions (`lib.rs:510-512`); the client does (`jw/src/server.rs:40-46`), hence REQ-8.
 

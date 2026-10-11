@@ -11,6 +11,8 @@ It depends only on jw-core, for `layout::Tree`.
   - Framing: `write_frame` and `read_frame` (`:366`, `:393`). A frame is a u32 length, then a
     kind: 0 is JSON; 1 is a JSON head followed by the message's bytes raw (Output, Snapshot,
     Input) — see `Raw`.
+  - `read_raw` and `write_raw`: a frame's body without decoding it, for the phone bridge, which
+    relays frames it does not read.
   - `socket_path` (`:439`), `pidfile` and `is_view` (a `view:` role has no process).
 - `src/client.rs`: `Client` (`:19`), which connects and starts the daemon when nobody
   listens.

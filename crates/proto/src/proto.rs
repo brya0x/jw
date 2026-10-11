@@ -48,7 +48,7 @@ impl Keyed for PaneLeaf {
 }
 
 /// Frames bigger than this are a bug or garbage on the socket, not output.
-const MAX_FRAME: u32 = 16 << 20;
+pub const MAX_FRAME: u32 = 16 << 20;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "t")]
@@ -423,6 +423,49 @@ pub fn read_frame<T: DeserializeOwned + Raw>(r: &mut impl Read) -> io::Result<Op
     }
 }
 
+/// A frame's body is its kind byte and what follows; a relay forwards it
+/// without decoding, so it checks only what `read_frame` checks before it
+/// decodes.
+fn check_body(body: &[u8]) -> io::Result<()> {
+    let bad = |what: &str| io::Error::new(io::ErrorKind::InvalidData, what.to_string());
+    match body.first() {
+        None => Err(bad("empty frame")),
+        Some(0 | 1) if body.len() as u64 <= u64::from(MAX_FRAME) => Ok(()),
+        Some(0 | 1) => Err(bad("frame too large")),
+        Some(_) => Err(bad("unknown frame kind")),
+    }
+}
+
+/// Reads one frame's body (its kind byte and what follows) as it is, for a
+/// relay. `Ok(None)` is a clean end of stream between frames.
+pub fn read_raw(r: &mut impl Read) -> io::Result<Option<Vec<u8>>> {
+    let mut len = [0u8; 4];
+    match r.read_exact(&mut len) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(e) => return Err(e),
+    }
+    let len = u32::from_be_bytes(len);
+    if len > MAX_FRAME {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "frame too large",
+        ));
+    }
+    let mut body = vec![0u8; len as usize];
+    r.read_exact(&mut body)?;
+    check_body(&body)?;
+    Ok(Some(body))
+}
+
+/// Writes a body `read_raw` returned, or one a peer sent without its length.
+pub fn write_raw(w: &mut impl Write, body: &[u8]) -> io::Result<()> {
+    check_body(body)?;
+    w.write_all(&(body.len() as u32).to_be_bytes())?;
+    w.write_all(body)?;
+    w.flush()
+}
+
 /// Where the daemon writes its pid, next to the socket.
 pub fn pidfile(socket: &Path) -> PathBuf {
     socket.with_extension("pid")
@@ -507,7 +550,50 @@ mod tests {
 
     #[test]
     fn oversized_frame_is_rejected() {
-        let mut r: &[u8] = &(MAX_FRAME + 1).to_be_bytes();
-        assert!(read_frame::<ClientMsg>(&mut r).is_err());
+        let too_big = (MAX_FRAME + 1).to_be_bytes();
+        assert!(read_frame::<ClientMsg>(&mut &too_big[..]).is_err());
+        assert!(read_raw(&mut &too_big[..]).is_err());
+    }
+
+    #[test]
+    fn raw_relay_keeps_every_byte() {
+        let msgs = vec![
+            DaemonMsg::Hello { protocol: PROTOCOL },
+            DaemonMsg::Output {
+                pane: 3,
+                bytes: (0..=255).collect(),
+            },
+            DaemonMsg::Prompted { pane: 1 },
+        ];
+        let mut sent = Vec::new();
+        for m in &msgs {
+            write_frame(&mut sent, m).unwrap();
+        }
+        let mut relayed = Vec::new();
+        let mut r = sent.as_slice();
+        while let Some(body) = read_raw(&mut r).unwrap() {
+            write_raw(&mut relayed, &body).unwrap();
+        }
+        assert_eq!(relayed, sent);
+        let mut r = relayed.as_slice();
+        for m in &msgs {
+            assert_eq!(read_frame::<DaemonMsg>(&mut r).unwrap().as_ref(), Some(m));
+        }
+    }
+
+    #[test]
+    fn raw_rejects_a_body_without_a_kind() {
+        assert!(write_raw(&mut Vec::new(), &[]).is_err());
+        assert!(write_raw(&mut Vec::new(), &[7, 1, 2]).is_err());
+        let mut r: &[u8] = &[0, 0, 0, 0];
+        assert!(read_raw(&mut r).is_err());
+        let mut r: &[u8] = &[0, 0, 0, 2, 9, 9];
+        assert!(read_raw(&mut r).is_err());
+    }
+
+    #[test]
+    fn raw_stops_cleanly_at_the_end() {
+        let mut r: &[u8] = &[];
+        assert_eq!(read_raw(&mut r).unwrap(), None);
     }
 }

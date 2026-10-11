@@ -1,0 +1,15 @@
+[package]
+name = "jw-mobile"
+description = "The bridge between a phone and the jw daemon"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+publish.workspace = true
+
+[dependencies]
+jw-proto.workspace = true
+serde_json.workspace = true
+tungstenite.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
