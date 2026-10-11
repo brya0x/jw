@@ -128,12 +128,22 @@ enum Job {
     /// The review workspace is ready to open (REQ-166).
     Reviewed(Box<crate::review::Reviewed>),
     Diff {
-        title: String,
+        name: String,
+        base: String,
         dir: String,
-        files: Vec<crate::diff::File>,
+        /// General, which a diff pane opens on (REQ-222); git's complaint
+        /// when it failed (REQ-246).
+        general: Result<crate::diff::Loaded, String>,
         /// The viewer pane to fill, when it is already in the tree (a
         /// client attaching to a workspace that shows one).
         into: Option<PaneId>,
+    },
+    /// What git work a diff pane asked for found (addendum 17).
+    DiffPart {
+        pane: PaneId,
+        slot: diffview::Slot,
+        seq: u64,
+        result: Result<diffview::Part, String>,
     },
     /// A worktree has its new name and folder; `from` is the old folder.
     Renamed {
@@ -1515,6 +1525,7 @@ impl App {
             diffview::Action::None => {}
             diffview::Action::Close => self.send(ClientMsg::Kill { pane: f }),
             diffview::Action::Open(path) => self.open_file(&path),
+            diffview::Action::Load(r) => self.load_part(f, r),
         }
     }
 
@@ -2084,11 +2095,19 @@ impl App {
             self.fit();
         }
         if let Some(v) = self.views.get_mut(&id) {
+            let mut asked = None;
             match v {
                 View::Diff(d) if wheel != 0 => d.scroll_by(wheel),
-                View::Diff(d) if click => d.click(x, y),
+                View::Diff(d) if click => {
+                    if let diffview::Action::Load(r) = d.click(x, y) {
+                        asked = Some(r);
+                    }
+                }
                 View::Md(md) if wheel != 0 => md.scroll_by(wheel),
                 _ => {}
+            }
+            if let Some(r) = asked {
+                self.load_part(id, r);
             }
             return;
         }
@@ -3240,16 +3259,51 @@ impl App {
         };
         self.background(format!("diffing {}", entry.name), move || {
             let stream = Stream::resolve(&entry)?;
-            let files = crate::diff::load(std::path::Path::new(&entry.path), &stream.base)?;
-            Ok(Job::Diff {
-                title: if stream.base.is_empty() {
-                    format!("{} vs HEAD", entry.name)
-                } else {
-                    format!("{} vs {}", entry.name, stream.base)
+            let general = crate::diff::load(
+                std::path::Path::new(&entry.path),
+                &crate::diff::Scope::Branch {
+                    base: stream.base.clone(),
                 },
+            )
+            .map_err(|e| format!("{e:#}"));
+            Ok(Job::Diff {
+                name: entry.name,
+                base: stream.base,
                 dir: entry.path,
-                files,
+                general,
                 into,
+            })
+        });
+    }
+
+    /// Runs the git work a diff pane asked for, off the UI thread (REQ-235).
+    fn load_part(&mut self, pane: PaneId, req: diffview::Request) {
+        let Some(View::Diff(d)) = self.views.get(&pane) else {
+            return;
+        };
+        let (dir, base) = (d.dir.clone(), d.base.clone());
+        let diffview::Request { slot, seq } = req;
+        self.background("diffing".into(), move || {
+            use crate::diff::{Scope, commits, load};
+            let path = std::path::Path::new(&dir);
+            let result = match &slot {
+                diffview::Slot::General => {
+                    load(path, &Scope::Branch { base }).map(diffview::Part::Files)
+                }
+                diffview::Slot::Uncommitted => {
+                    load(path, &Scope::Uncommitted).map(diffview::Part::Files)
+                }
+                diffview::Slot::Commits => commits(path, &base, 200).map(diffview::Part::List),
+                diffview::Slot::Commit(sha) => {
+                    load(path, &Scope::Commit(sha.clone())).map(diffview::Part::Files)
+                }
+            }
+            .map_err(|e| format!("{e:#}"));
+            Ok(Job::DiffPart {
+                pane,
+                slot,
+                seq,
+                result,
             })
         });
     }
@@ -3463,6 +3517,26 @@ impl App {
 
     fn on_job(&mut self, job: Job) {
         self.busy = None;
+        // A diff pane's answer touches no registry: no reload on its account,
+        // or every `)` would read the registry on the UI thread (REQ-237).
+        let job = match job {
+            Job::DiffPart {
+                pane,
+                slot,
+                seq,
+                result,
+            } => {
+                let more = match self.views.get_mut(&pane) {
+                    Some(View::Diff(d)) => d.apply(slot, seq, result),
+                    _ => None,
+                };
+                if let Some(r) = more {
+                    self.load_part(pane, r);
+                }
+                return;
+            }
+            job => job,
+        };
         let reload = self.reload();
         match job {
             Job::Created {
@@ -3520,13 +3594,15 @@ impl App {
                 self.moved(entry, from);
             }
             Job::Said(msg) => self.done(msg),
+            Job::DiffPart { .. } => unreachable!("on_job answers it before the registry reload"),
             Job::Diff {
-                title,
+                name,
+                base,
                 dir,
-                files,
+                general,
                 into,
             } => {
-                let view = View::Diff(diffview::DiffView::new(title, dir, files));
+                let view = View::Diff(diffview::DiffView::new(name, base, dir, general));
                 match into {
                     Some(id) => {
                         self.views.insert(id, view);
@@ -4247,5 +4323,90 @@ mod review_tests {
         app.submit_modal();
         let sent = prompt_of(got.recv_timeout(Duration::from_secs(2)).unwrap());
         assert_eq!(sent.0, "r1");
+    }
+}
+
+#[cfg(test)]
+mod diff_tests {
+    use super::*;
+    use std::os::unix::net::UnixListener;
+
+    /// An app with a daemon that says nothing, and the channel its jobs
+    /// answer on.
+    fn quiet(name: &str) -> (App, mpsc::Receiver<Msg>) {
+        let dir = std::env::temp_dir().join(format!("jwd{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock = dir.join("s");
+        let _ = std::fs::remove_file(&sock);
+        let listener = UnixListener::bind(&sock).unwrap();
+        thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            while let Ok(Some(_)) = crate::proto::read_frame::<ClientMsg>(&mut s) {}
+        });
+        let client = Client::connect(&sock).unwrap();
+        let (tx, rx) = mpsc::channel();
+        (App::bare(client, tx, Leader::DEFAULT, (120, 35)), rx)
+    }
+
+    fn git(dir: &std::path::Path, args: &[&str]) {
+        let ok = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "git {args:?}");
+    }
+
+    fn screen(app: &mut App, id: PaneId) -> String {
+        let Some(View::Diff(d)) = app.views.get_mut(&id) else {
+            panic!("no diff pane");
+        };
+        let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(130, 14)).unwrap();
+        t.draw(|f| d.draw(f, f.area())).unwrap();
+        let buf = t.backend().buffer();
+        (0..14u16)
+            .map(|y| {
+                (0..130u16)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// REQ-235, REQ-237: `2` asks for Uncommitted, git runs on a worker, the
+    /// answer comes back as a job and fills the view; the answer is taken
+    /// without reading the registry again.
+    #[test]
+    fn a_view_is_loaded_by_a_job_and_filled_by_its_answer() {
+        let (mut app, rx) = quiet("job");
+        let repo = tempfile::tempdir().unwrap();
+        git(repo.path(), &["init", "-q"]);
+        std::fs::write(repo.path().join("a.txt"), "hello\n").unwrap();
+        let view = diffview::DiffView::new(
+            "t".into(),
+            String::new(),
+            repo.path().to_string_lossy().into_owned(),
+            Ok(crate::diff::Loaded::Files(Vec::new())),
+        );
+        app.views.insert(7, View::Diff(view));
+        app.focus = Some(7);
+
+        app.on_key(KeyEvent::from(KeyCode::Char('2')));
+        assert!(screen(&mut app, 7).contains("loading"));
+        let Msg::Job(job) = rx.recv_timeout(Duration::from_secs(10)).unwrap() else {
+            panic!("expected a job");
+        };
+        assert!(matches!(*job, Job::DiffPart { .. }));
+        app.on_job(*job);
+        let s = screen(&mut app, 7);
+        assert!(s.contains("a.txt") && s.contains("untracked"), "{s}");
+        assert!(
+            rx.recv_timeout(Duration::from_millis(200)).is_err(),
+            "nothing else asked"
+        );
     }
 }

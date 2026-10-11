@@ -46,6 +46,50 @@ pub(crate) fn output(dir: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// [`output`] that stops reading at `cap` bytes: returns `None` once git has
+/// written more than that, after killing it and waiting for it, so a huge diff
+/// never fills memory or leaves a process behind.
+pub(crate) fn output_capped(dir: &Path, args: &[&str], cap: usize) -> Result<Option<String>> {
+    use std::io::Read;
+    use std::process::Stdio;
+
+    let mut child = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| anyhow!("git {}: {e}", args.join(" ")))?;
+    let mut stderr = child.stderr.take().expect("stderr is piped");
+    // Read stderr on its own thread so a chatty git cannot block on a full pipe.
+    let err = std::thread::spawn(move || {
+        let mut s = String::new();
+        stderr.read_to_string(&mut s).ok();
+        s
+    });
+    let mut buf = Vec::new();
+    let stdout = child.stdout.take().expect("stdout is piped");
+    stdout.take(cap as u64 + 1).read_to_end(&mut buf)?;
+    if buf.len() > cap {
+        child.kill().ok();
+        child.wait().ok();
+        err.join().ok();
+        return Ok(None);
+    }
+    let status = child.wait()?;
+    let err = err.join().unwrap_or_default();
+    if !status.success() {
+        let msg = err.trim();
+        let msg = if msg.is_empty() {
+            status.to_string()
+        } else {
+            msg.to_string()
+        };
+        bail!("git {}: {msg}", args.join(" "));
+    }
+    Ok(Some(String::from_utf8_lossy(&buf).into_owned()))
+}
+
 fn ok(dir: &Path, args: &[&str]) -> bool {
     run(dir, args).is_ok()
 }
