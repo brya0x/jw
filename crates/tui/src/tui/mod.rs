@@ -284,6 +284,8 @@ pub struct App {
     spin_due: Option<Instant>,
     /// When the TUI started, the spinner's clock.
     born: Instant,
+    /// The status bar's mode and the one before it (REQ-140).
+    mode: Option<draw::ModeFade>,
 }
 
 /// The selection band: the workspace it is on, its row, and how it moves.
@@ -497,6 +499,7 @@ impl App {
             spinner: None,
             spin_due: None,
             born: Instant::now(),
+            mode: None,
         };
         app.reload()?;
         app.send(ClientMsg::List);
@@ -544,7 +547,45 @@ impl App {
         if let Some(at) = self.spin_due {
             soonest(at, Wake::Frame);
         }
+        if let Some(st) = &self.status {
+            let fade_at = st.at + STATUS_FOR.saturating_sub(anim::MESSAGE_EDGE);
+            if fade_at > now {
+                soonest(fade_at, Wake::Frame);
+            }
+        }
         wake
+    }
+
+    /// The status bar's motion: a change of mode (REQ-140) and a message
+    /// entering or leaving (REQ-142).
+    fn tick_status(&mut self, now: Instant, on: bool) {
+        let cur = draw::mode_of(self);
+        match &mut self.mode {
+            Some(m) if m.mode == cur => {}
+            slot => {
+                let prev = slot.as_ref().map_or(cur, |m| m.mode);
+                let fade = on && anim::fades() && slot.is_some();
+                *slot = Some(draw::ModeFade {
+                    mode: cur,
+                    prev: if fade { prev } else { cur },
+                    since: now,
+                });
+                if fade {
+                    self.motion.kick(anim::HINT_FADE.max(anim::CHIP_EASE), now);
+                }
+            }
+        }
+        if on
+            && anim::fades()
+            && let Some(st) = &self.status
+        {
+            let age = now.saturating_duration_since(st.at);
+            if age < anim::MESSAGE_EDGE {
+                self.motion.kick(anim::MESSAGE_EDGE - age, now);
+            } else if age + anim::MESSAGE_EDGE >= STATUS_FOR {
+                self.motion.kick(STATUS_FOR.saturating_sub(age), now);
+            }
+        }
     }
 
     /// Moves what moves, before a frame is drawn: the selection band toward
@@ -583,6 +624,7 @@ impl App {
                 }
             }
         }
+        self.tick_status(now, on);
         self.band = self
             .bar
             .as_ref()

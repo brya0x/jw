@@ -21,12 +21,55 @@ pub const SPIN_EVERY: Duration = Duration::from_millis(80);
 /// Cells the panes travel while they enter (REQ-136).
 pub const SLIDE_CELLS: u16 = 4;
 
+/// The mode chip's colour eases over this (REQ-140).
+pub const CHIP_EASE: Duration = Duration::from_millis(180);
+
+/// The old hint fades out and the new one fades in, in this time (REQ-140).
+pub const HINT_FADE: Duration = Duration::from_millis(160);
+
+/// A status message enters and leaves in this time each (REQ-142).
+pub const MESSAGE_EDGE: Duration = Duration::from_millis(200);
+
+/// Cells a status message travels while it enters (REQ-142).
+pub const MESSAGE_CELLS: u16 = 8;
+
 const BRAILLE: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 /// The spinner glyph `elapsed` after the TUI started.
 pub fn spinner(elapsed: Duration) -> char {
     let step = elapsed.as_millis() / SPIN_EVERY.as_millis();
     BRAILLE[step as usize % BRAILLE.len()]
+}
+
+/// `elapsed` of `total`, 0 to 1.
+pub fn progress(elapsed: Duration, total: Duration) -> f32 {
+    if total.is_zero() {
+        return 1.0;
+    }
+    (elapsed.as_secs_f32() / total.as_secs_f32()).clamp(0.0, 1.0)
+}
+
+/// The hint during a change of mode: whether the new one is showing, and how
+/// visible whichever shows is. The old hint fades out in the first half, the
+/// new one in during the second (REQ-140).
+pub fn crossfade(elapsed: Duration) -> (bool, f32) {
+    let t = progress(elapsed, HINT_FADE);
+    if t < 0.5 {
+        (false, 1.0 - 2.0 * t)
+    } else {
+        (true, 2.0 * t - 1.0)
+    }
+}
+
+/// A status message `elapsed` after it appeared, of `total` on screen: how
+/// visible it is, and how far along its entrance (REQ-142).
+pub fn message(elapsed: Duration, total: Duration) -> (f32, f32) {
+    let entered = ease_out(progress(elapsed, MESSAGE_EDGE));
+    let leaving = progress(
+        elapsed.saturating_sub(total.saturating_sub(MESSAGE_EDGE)),
+        MESSAGE_EDGE,
+    );
+    (entered.min(1.0 - ease_out(leaving)), entered)
 }
 
 /// Fast at the start, settling at the end: the curve every transition uses.
@@ -208,6 +251,27 @@ mod tests {
         assert_eq!(lerp(a, b, 0.5), Color::Rgb(50, 100, 25));
         assert_eq!(lerp(Color::Blue, Color::Red, 0.5), Color::Blue);
         assert_eq!(lerp(Color::Blue, Color::Red, 1.0), Color::Red);
+    }
+
+    #[test]
+    fn the_hint_fades_out_then_in() {
+        assert_eq!(crossfade(Duration::ZERO), (false, 1.0));
+        assert_eq!(crossfade(MS(80)), (true, 0.0));
+        assert_eq!(crossfade(MS(160)), (true, 1.0));
+        assert_eq!(crossfade(MS(900)), (true, 1.0));
+        let (new, a) = crossfade(MS(40));
+        assert!(!new && a > 0.0 && a < 1.0);
+    }
+
+    #[test]
+    fn a_message_enters_stays_and_fades_before_it_goes() {
+        let total = Duration::from_secs(4);
+        assert_eq!(message(Duration::ZERO, total), (0.0, 0.0));
+        assert_eq!(message(MS(200), total), (1.0, 1.0));
+        assert_eq!(message(MS(2000), total), (1.0, 1.0));
+        let (v, _) = message(MS(3900), total);
+        assert!(v > 0.0 && v < 1.0);
+        assert_eq!(message(total, total).0, 0.0);
     }
 
     #[test]

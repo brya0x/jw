@@ -1,6 +1,8 @@
 //! Drawing: the sidebar of workspaces, a header, the current workspace's
 //! splits, the status bar and the leader's key popup.
 
+use std::time::{Duration, Instant};
+
 use ratatui::Frame;
 use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::{Alignment, Rect as TRect};
@@ -382,10 +384,27 @@ fn mark_color(m: char) -> ratatui::style::Color {
     }
 }
 
-fn status(f: &mut Frame, app: &App) {
-    let area = f.area();
-    let r = TRect::new(0, area.height.saturating_sub(1), area.width, 1);
-    let leader = app.leader.label();
+/// What the status bar is for right now: its chip and its hint (REQ-140).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Mode {
+    Set,
+    SetKey,
+    Confirm,
+    Leader,
+    Move,
+    Diff,
+    Md,
+    Term,
+}
+
+/// The mode the bar is in, the one it left, and when (REQ-140).
+pub(super) struct ModeFade {
+    pub mode: Mode,
+    pub prev: Mode,
+    pub since: Instant,
+}
+
+pub(super) fn mode_of(app: &App) -> Mode {
     let confirm = matches!(
         app.modal,
         Some(
@@ -395,28 +414,162 @@ fn status(f: &mut Frame, app: &App) {
                 | super::Modal::Rm { .. }
         )
     );
-    let (chip, color) = if app.settings.is_some() {
-        (" SET ".to_string(), p().magenta)
+    if let Some(v) = &app.settings {
+        if v.listening() {
+            Mode::SetKey
+        } else {
+            Mode::Set
+        }
     } else if confirm {
-        (" CONFIRM ".to_string(), p().red)
+        Mode::Confirm
     } else if app.leading() {
-        (format!(" {leader} "), p().yellow)
+        Mode::Leader
     } else if app.walking {
-        (" MOVE ".to_string(), p().blue)
+        Mode::Move
     } else {
         match app.focused_view() {
-            Some(super::View::Diff(_)) => (" DIFF ".to_string(), p().blue),
-            Some(super::View::Md(_)) => (" MD ".to_string(), p().blue),
-            None => (" TERM ".to_string(), p().green),
+            Some(super::View::Diff(_)) => Mode::Diff,
+            Some(super::View::Md(_)) => Mode::Md,
+            None => Mode::Term,
         }
-    };
-    let key = |k: &str| {
+    }
+}
+
+fn chip(mode: Mode, leader: &str) -> (String, Color) {
+    match mode {
+        Mode::Set | Mode::SetKey => (" SET ".into(), p().magenta),
+        Mode::Confirm => (" CONFIRM ".into(), p().red),
+        Mode::Leader => (format!(" {leader} "), p().yellow),
+        Mode::Move => (" MOVE ".into(), p().blue),
+        Mode::Diff => (" DIFF ".into(), p().blue),
+        Mode::Md => (" MD ".into(), p().blue),
+        Mode::Term => (" TERM ".into(), p().green),
+    }
+}
+
+/// What to do next in `mode`: the keys that matter, in the user's bindings.
+fn hint(mode: Mode, leader: &str) -> Vec<Span<'static>> {
+    let k = |k: &str| {
         Span::styled(
             format!(" {k}"),
             Style::default().fg(p().fg).add_modifier(Modifier::BOLD),
         )
     };
-    let txt = |t: &str| Span::styled(format!(" {t} "), Style::default().fg(p().dim));
+    let t = |t: &str| Span::styled(format!(" {t} "), Style::default().fg(p().dim));
+    match mode {
+        Mode::SetKey => vec![t("press the new key ·"), k("esc"), t("cancels")],
+        Mode::Set => vec![
+            k("tab"),
+            t("page ·"),
+            k("↑↓"),
+            t("move ·"),
+            k("↵"),
+            t("change ·"),
+            k("←→"),
+            t("value ·"),
+            k("esc"),
+            t("close"),
+        ],
+        Mode::Confirm => vec![k("y"), t("yes ·"), k("esc"), t("no")],
+        Mode::Leader => vec![
+            k(&key("switch")),
+            t("switch ·"),
+            k(&key("open")),
+            t("open ·"),
+            k(&key("new")),
+            t("worktree ·"),
+            k(&key("pane")),
+            t("pane ·"),
+            k("hjkl"),
+            t("focus ·"),
+            k("?"),
+            t("all keys ·"),
+            k("esc"),
+            t("cancels"),
+        ],
+        Mode::Move => vec![
+            k("↑↓"),
+            t("workspace ·"),
+            k("←→"),
+            t("project ·"),
+            k("↵"),
+            t("back to the pane"),
+        ],
+        Mode::Diff => vec![
+            k("j k"),
+            t("file ·"),
+            k("] ["),
+            t("change ·"),
+            k("v"),
+            t("viewed ·"),
+            k("t"),
+            t("layout ·"),
+            k("↵"),
+            t("open ·"),
+            k("q"),
+            t("close"),
+        ],
+        Mode::Md => vec![
+            k("j k ␣ b"),
+            t("scroll ·"),
+            k("n N"),
+            t("heading ·"),
+            k("q"),
+            t("close"),
+        ],
+        Mode::Term => vec![
+            k(leader),
+            t("then a key ·"),
+            k(&key("switch")),
+            t("switch ·"),
+            k(&key("open")),
+            t("open ·"),
+            k(&key("new")),
+            t("worktree ·"),
+            k(&key("pane")),
+            t("pane ·"),
+            k(&key("sessions")),
+            t("sessions ·"),
+            k("?"),
+            t("all keys"),
+        ],
+    }
+}
+
+/// `spans` with their text colour `alpha` of the way up from the bar's own
+/// background.
+fn faded(spans: Vec<Span<'static>>, alpha: f32) -> Vec<Span<'static>> {
+    if alpha >= 1.0 {
+        return spans;
+    }
+    spans
+        .into_iter()
+        .map(|mut s| {
+            if let Some(fg) = s.style.fg {
+                s.style.fg = Some(anim::lerp(p().panel, fg, alpha));
+            }
+            s
+        })
+        .collect()
+}
+
+fn status(f: &mut Frame, app: &App) {
+    let now = Instant::now();
+    let area = f.area();
+    let r = TRect::new(0, area.height.saturating_sub(1), area.width, 1);
+    let leader = app.leader.label();
+    let cur = mode_of(app);
+    let (prev, since) = app.mode.as_ref().map_or((cur, Duration::MAX), |m| {
+        (m.prev, now.saturating_duration_since(m.since))
+    });
+    let (chip, color) = chip(cur, &leader);
+    let from = chip_color(prev);
+    let color = anim::lerp(
+        from,
+        color,
+        anim::ease_out(anim::progress(since, anim::CHIP_EASE)),
+    );
+    let (new, alpha) = anim::crossfade(since);
     let mut spans = vec![
         Span::styled(
             chip,
@@ -433,92 +586,33 @@ fn status(f: &mut Frame, app: &App) {
             Style::default().fg(p().cyan),
         ));
     }
-    if let Some(v) = &app.settings {
-        if v.listening() {
-            spans.extend([txt("press the new key ·"), key("esc"), txt("cancels")]);
-        } else {
-            spans.extend([
-                key("tab"),
-                txt("page ·"),
-                key("↑↓"),
-                txt("move ·"),
-                key("↵"),
-                txt("change ·"),
-                key("←→"),
-                txt("value ·"),
-                key("esc"),
-                txt("close"),
-            ]);
-        }
-    } else if confirm {
-        spans.extend([key("y"), txt("yes ·"), key("esc"), txt("no")]);
-    } else if app.leading() {
-        spans.extend([txt("one key ·"), key("esc"), txt("cancels")]);
-    } else if app.walking {
-        spans.extend([
-            key("↑↓"),
-            txt("workspace ·"),
-            key("←→"),
-            txt("project ·"),
-            key("↵"),
-            txt("back to the pane"),
-        ]);
-    } else {
-        match app.focused_view() {
-            Some(super::View::Diff(_)) => spans.extend([
-                key("j k"),
-                txt("file ·"),
-                key("] ["),
-                txt("change ·"),
-                key("v"),
-                txt("viewed ·"),
-                key("t"),
-                txt("layout ·"),
-                key("↵"),
-                txt("open ·"),
-                key("q"),
-                txt("close"),
-            ]),
-            Some(super::View::Md(_)) => spans.extend([
-                key("j k ␣ b"),
-                txt("scroll ·"),
-                key("n N"),
-                txt("heading ·"),
-                key("q"),
-                txt("close"),
-            ]),
-            None => spans.extend([
-                key(&leader),
-                txt("then a key ·"),
-                key(&self::key("switch")),
-                txt("switch ·"),
-                key(&self::key("open")),
-                txt("open ·"),
-                key(&self::key("new")),
-                txt("worktree ·"),
-                key(&self::key("pane")),
-                txt("pane ·"),
-                key(&self::key("sessions")),
-                txt("sessions ·"),
-                key("?"),
-                txt("all keys"),
-            ]),
-        }
-    }
+    let shown = if new { cur } else { prev };
+    spans.extend(faded(hint(shown, &leader), alpha));
     if let Some(msg) = &app.status {
-        let color = match msg.tone {
+        let (visible, entered) = if anim::fades() {
+            anim::message(now.saturating_duration_since(msg.at), super::STATUS_FOR)
+        } else {
+            (1.0, 1.0)
+        };
+        let tone = match msg.tone {
             super::Tone::Done => p().green,
             super::Tone::Error => p().red,
             super::Tone::Info => p().yellow,
         };
+        let color = anim::lerp(p().panel, tone, visible);
+        let travel = ((1.0 - entered) * f32::from(anim::MESSAGE_CELLS)).round() as usize;
         let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
         let text = format!("{} ", msg.text);
         let room = (r.width as usize).saturating_sub(used);
         let n = text.chars().count();
-        if n <= room {
-            spans.push(Span::raw(" ".repeat(room - n)));
-            spans.push(Span::styled(text, Style::default().fg(color)));
-        } else {
+        if visible > 0.0 && n <= room {
+            let travel = travel.min(n);
+            spans.push(Span::raw(" ".repeat(room - n + travel)));
+            spans.push(Span::styled(
+                text.chars().take(n - travel).collect::<String>(),
+                Style::default().fg(color),
+            ));
+        } else if visible > 0.0 {
             // No room beside the hint: the message takes the bar.
             spans.truncate(2);
             spans.push(Span::styled(
@@ -531,6 +625,10 @@ fn status(f: &mut Frame, app: &App) {
         Paragraph::new(Line::from(spans)).style(Style::default().bg(p().panel)),
         r,
     );
+}
+
+fn chip_color(mode: Mode) -> Color {
+    chip(mode, "").1
 }
 
 fn empty(f: &mut Frame, app: &App) {
@@ -760,6 +858,39 @@ fn which(f: &mut Frame, app: &App) {
 mod tests {
     use super::*;
     use crate::tui::select::Pos;
+
+    fn text(spans: &[Span]) -> String {
+        spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn every_mode_has_a_hint_and_the_leader_names_the_useful_keys() {
+        for mode in [
+            Mode::Set,
+            Mode::SetKey,
+            Mode::Confirm,
+            Mode::Leader,
+            Mode::Move,
+            Mode::Diff,
+            Mode::Md,
+            Mode::Term,
+        ] {
+            assert!(!hint(mode, "^␣").is_empty(), "{mode:?}");
+        }
+        let leader = text(&hint(Mode::Leader, "^␣"));
+        for want in ["switch", "open", "worktree", "hjkl", "all keys", "esc"] {
+            assert!(leader.contains(want), "{leader}");
+        }
+        assert!(text(&hint(Mode::Term, "^␣")).starts_with(" ^␣ then a key"));
+    }
+
+    #[test]
+    fn a_hint_fades_toward_the_bar_and_a_full_one_is_untouched() {
+        let spans = hint(Mode::Confirm, "^␣");
+        assert_eq!(faded(spans.clone(), 1.0), spans);
+        let gone = faded(spans, 0.0);
+        assert!(gone.iter().all(|s| s.style.fg == Some(p().panel)));
+    }
 
     fn staged() -> (Buffer, TRect, TRect) {
         let area = TRect::new(0, 0, 12, 3);

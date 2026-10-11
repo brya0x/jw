@@ -480,7 +480,7 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | M0 ✓ `78f31c5` | Addendum 13 in this spec; the prototype | — | docs |
 | M1 ✓ `2d2e8c8` | Motion core: `tui/anim.rs` (tween, ease-out, colour lerp), the frame deadline in `event_loop`, synchronized output, `animations` setting and its `^␣ ,` row | 137–139, 147, 148 | `tui/anim.rs`, `tui/mod.rs`, `settings.rs`, `tui/settings_view.rs` |
 | M2 ✓ | Workspace switch: sliding selection, header fade, panes slide; the spinning `✻` | 136, 143 | `tui/anim.rs`, `tui/draw.rs`, `tui/mod.rs` |
-| M3 | Status bar: hint per mode, chip colour, message enter and fade | 140, 142, 149 | `tui/draw.rs` |
+| M3 ✓ | Status bar: the leader's hint lists the useful keys, hints cross-fade between modes, the chip's colour eases, messages enter and fade | 140, 142 | `tui/draw.rs` |
 | M4 | Popups fade in, picker row slides, which-key at 150 ms and `which_sticky` | 141, 144 | `tui/draw.rs`, `tui/finder.rs`, `tui/modal.rs`, `settings.rs` |
 | M5 | Focus border ease; eased wheel scroll | 145 | `tui/draw.rs`, `tui/mod.rs` |
 | M6 | First-run welcome, `welcomed` and `JW_WELCOME=0` (set by `scripts/drive.py`) | 146 | `tui/draw.rs`, `settings.rs`, `scripts/drive.py` |
