@@ -1,8 +1,10 @@
 //! The client: the sidebar of workspaces, the current one's panes in their
 //! splits, and a one-shot leader key for every action (docs/specs/rust-tui.md).
 //!
-//! Two threads feed one channel: the daemon's messages and the terminal's
-//! events. The main thread applies them and redraws.
+//! Threads feed one channel: the daemon's messages (parsed into a `Parser`
+//! when they are a pane's screen), the terminal's events, a tick, and what
+//! workers resolve or replay off the UI thread. The main thread applies them
+//! and redraws.
 
 mod anim;
 mod diffview;
@@ -15,6 +17,7 @@ mod registry_watch;
 mod select;
 mod settings_view;
 mod setup;
+mod trace;
 
 use std::collections::BTreeMap;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -76,6 +79,23 @@ enum Msg {
     Rows(Result<Vec<Row>>),
     /// The pull requests of the worktrees, by workspace id.
     Prs(Vec<(String, Option<crate::connectors::Pr>)>),
+    /// A sidebar workspace's stream, resolved on a worker thread.
+    Stream(Box<Stream>),
+    /// A pane's `Snapshot`, already replayed into its parser by the daemon's
+    /// reader thread (REQ-186): the replay of up to 2 MiB stays off the UI thread.
+    Snapshot {
+        pane: PaneId,
+        role: String,
+        parser: Box<vt100::Parser<keys::Flags>>,
+        /// Set for a `Screen`: its `History` is on the way, with this number.
+        history: Option<u64>,
+    },
+    /// The pane's output and screen replayed in full, with the scrollback.
+    History {
+        pane: PaneId,
+        seq: u64,
+        parser: Box<vt100::Parser<keys::Flags>>,
+    },
 }
 
 // One job at a time crosses the channel, boxed; its size doesn't matter.
@@ -199,10 +219,38 @@ const STATUS_FOR: Duration = Duration::from_secs(4);
 /// How long the copied banner stays (it leaves on the next 500 ms tick).
 const BANNER_FOR: Duration = Duration::from_millis(1500);
 
+/// What happened to a pane's screen since its `Screen`, in order.
+pub struct Pending {
+    seq: u64,
+    ops: Vec<Op>,
+    bytes: usize,
+}
+
+enum Op {
+    Out(Vec<u8>),
+    Size(u16, u16),
+}
+
+/// Past this much output waiting for its history, the pane stays without.
+const PENDING_MAX: usize = 8 << 20;
+
+impl Pending {
+    fn out(&mut self, bytes: &[u8]) {
+        self.bytes += bytes.len();
+        match self.ops.last_mut() {
+            Some(Op::Out(last)) => last.extend_from_slice(bytes),
+            _ => self.ops.push(Op::Out(bytes.to_vec())),
+        }
+    }
+}
+
 /// A pane of the current workspace as this client sees it.
 pub struct PaneView {
     pub role: String,
     pub parser: vt100::Parser<keys::Flags>,
+    /// While its scrollback is being rebuilt (REQ-193): `parser` holds the screen
+    /// only, and what happens to it meanwhile is kept to redo on the full one.
+    pub history: Option<Pending>,
     pub exited: Option<i32>,
     /// The window title its program set (OSC 0/2).
     pub title: Option<String>,
@@ -288,8 +336,16 @@ pub struct App {
     fresh: bool,
     /// Whether a transition is running, for the loop's frame deadline.
     motion: anim::Motion,
-    /// When the last frame was drawn.
+    /// When the last frame began, or the deadline it kept (the next is due
+    /// `FRAME` later, REQ-137).
     last_draw: Instant,
+    /// The last frame, kept only under `JW_TRACE_CELLS`, to count the cells a draw changed.
+    traced: Option<ratatui::buffer::Buffer>,
+    /// Streams resolved off the UI thread, by workspace id (REQ-185): a switch to
+    /// an open workspace reuses one instead of running `git` on the UI thread.
+    streams: BTreeMap<String, Stream>,
+    /// Ids already sent to be resolved, so `reload` asks once.
+    warming: std::collections::BTreeSet<String>,
     /// When a held drag next scrolls (REQ-127).
     edge_due: Option<Instant>,
     /// The sidebar's selection band on its way to the current row (REQ-136).
@@ -342,15 +398,79 @@ pub fn run() -> Result<()> {
     let exe = std::env::current_exe()?;
     let client = Client::connect_or_start(&socket, &exe)?;
     hello(&client, &socket)?;
+    client.try_clone()?.send(&ClientMsg::SplitSnapshots)?;
     let mut reader = client.try_clone()?;
 
     let (tx, rx) = mpsc::channel();
     let to_main = tx.clone();
     thread::spawn(move || {
+        // Which `Screen` a pane's `History` belongs to.
+        let mut screens = 0u64;
+        let mut seqs: BTreeMap<PaneId, u64> = BTreeMap::new();
         loop {
             match reader.recv() {
                 Ok(Some(m)) => {
-                    if to_main.send(Msg::Daemon(m)).is_err() {
+                    if trace::on() {
+                        match &m {
+                            DaemonMsg::Snapshot { bytes, .. } => {
+                                trace::mark("rx_snapshot", bytes.len() as u64)
+                            }
+                            DaemonMsg::Tree { .. } => trace::mark("rx_tree", 0),
+                            _ => {}
+                        }
+                    }
+                    // Messages keep their order: this thread sends the
+                    // parser where the Snapshot was, and the Output behind it.
+                    let m = match m {
+                        DaemonMsg::Snapshot {
+                            pane,
+                            role,
+                            cols,
+                            rows,
+                            bytes,
+                        } => Msg::Snapshot {
+                            pane,
+                            role,
+                            parser: Box::new(replay("snap_parse", rows, cols, &bytes)),
+                            history: None,
+                        },
+                        DaemonMsg::Screen {
+                            pane,
+                            role,
+                            cols,
+                            rows,
+                            bytes,
+                        } => {
+                            screens += 1;
+                            seqs.insert(pane, screens);
+                            Msg::Snapshot {
+                                pane,
+                                role,
+                                parser: Box::new(replay("snap_parse", rows, cols, &bytes)),
+                                history: Some(screens),
+                            }
+                        }
+                        // Its replay takes a while: on its own thread, so
+                        // the Output behind it is not held up.
+                        DaemonMsg::History {
+                            pane,
+                            cols,
+                            rows,
+                            bytes,
+                        } => {
+                            if let Some(&seq) = seqs.get(&pane) {
+                                let to_main = to_main.clone();
+                                thread::spawn(move || {
+                                    let parser =
+                                        Box::new(replay("history_parse", rows, cols, &bytes));
+                                    let _ = to_main.send(Msg::History { pane, seq, parser });
+                                });
+                            }
+                            continue;
+                        }
+                        m => Msg::Daemon(m),
+                    };
+                    if to_main.send(m).is_err() {
                         return;
                     }
                 }
@@ -549,6 +669,9 @@ impl App {
             fresh: true,
             motion: anim::Motion::default(),
             last_draw: Instant::now(),
+            traced: None,
+            streams: BTreeMap::new(),
+            warming: Default::default(),
             edge_due: None,
             bar: None,
             band: None,
@@ -571,8 +694,35 @@ impl App {
     /// path, a failed draw included.
     fn draw(&mut self, term: &mut ratatui::DefaultTerminal) -> Result<()> {
         let mut out = std::io::stdout();
-        let drawn = anim::synced(&mut out, || term.draw(|f| draw::draw(f, self)));
-        self.last_draw = Instant::now();
+        // The next frame is due FRAME after this one *began*: counted from the
+        // end of the draw, the cadence was 16 ms plus the draw plus the wake's slop.
+        let began = Instant::now();
+        let due = self.last_draw + FRAME;
+        self.last_draw = if began >= due && began < due + FRAME {
+            due
+        } else {
+            began
+        };
+        let drawn = trace::span("draw_total", || {
+            anim::synced(&mut out, || {
+                trace::span("term_draw", || {
+                    term.draw(|f| trace::span("draw_build", || draw::draw(f, self)))
+                })
+            })
+        });
+        if trace::on()
+            && std::env::var_os("JW_TRACE_CELLS").is_some()
+            && let Ok(frame) = &drawn
+        {
+            let cells = self
+                .traced
+                .as_ref()
+                .map_or(frame.buffer.content.len(), |old| {
+                    old.diff(frame.buffer).len()
+                });
+            trace::mark("diff_cells", cells as u64);
+            self.traced = Some(frame.buffer.clone());
+        }
         drawn?;
         Ok(())
     }
@@ -874,7 +1024,7 @@ impl App {
     }
 
     fn send(&mut self, msg: ClientMsg) {
-        if let Err(e) = self.tx.send(&msg) {
+        if let Err(e) = trace::span("send", || self.tx.send(&msg)) {
             self.fail(format!("daemon: {e}"));
         }
     }
@@ -886,10 +1036,10 @@ impl App {
         self.regwatch.sync();
         self.pending_rows = None;
         let state = registry::state_dir()?;
-        let folders = crate::folders::load(&state)?;
+        let folders = trace::span("reload_folders", || crate::folders::load(&state))?;
         let reg_path = registry::default_path()?;
-        let mut reg = Registry::load(&reg_path)?;
-        if actions::fill_roots(&mut reg) {
+        let mut reg = trace::span("reload_registry", || Registry::load(&reg_path))?;
+        if trace::span("reload_fill_roots", || actions::fill_roots(&mut reg)) {
             reg.save(&reg_path)?;
         }
         let rows = build_rows(&folders, reg, &crate::session::current());
@@ -905,6 +1055,7 @@ impl App {
         {
             s.entry = row.entry.clone();
         }
+        self.warm_streams();
     }
 
     fn overlay_open(&self) -> bool {
@@ -1040,8 +1191,31 @@ impl App {
     }
 
     fn handle(&mut self, m: Msg) {
+        if !trace::on() {
+            return self.handle_msg(m);
+        }
+        let kind = match &m {
+            Msg::Snapshot { .. } | Msg::Daemon(DaemonMsg::Snapshot { .. }) => "handle_snapshot",
+            Msg::History { .. } => "handle_history",
+            Msg::Daemon(DaemonMsg::Tree { .. }) => "handle_tree",
+            Msg::Daemon(DaemonMsg::Output { .. }) => "handle_output",
+            Msg::Daemon(_) => "handle_daemon",
+            Msg::Term(_) => "handle_term",
+            _ => "handle_other",
+        };
+        trace::span(kind, || self.handle_msg(m));
+    }
+
+    fn handle_msg(&mut self, m: Msg) {
         match m {
             Msg::Daemon(d) => self.on_daemon(d),
+            Msg::Snapshot {
+                pane,
+                role,
+                parser,
+                history,
+            } => self.install_snapshot(pane, role, *parser, history),
+            Msg::History { pane, seq, parser } => self.on_history(pane, seq, *parser),
             Msg::DaemonGone => {
                 self.fail("the daemon closed the connection".into());
                 self.exit_reason = Some("the daemon closed the connection".into());
@@ -1112,8 +1286,64 @@ impl App {
                 }
             }
             Msg::Job(j) => self.on_job(*j),
+            Msg::Stream(s) => {
+                self.streams.insert(s.entry.id.clone(), *s);
+            }
             Msg::Rows(rows) => self.on_rows(rows),
         }
+    }
+
+    /// A pane's screen as the daemon holds it, with its parser built.
+    fn install_snapshot(
+        &mut self,
+        pane: PaneId,
+        role: String,
+        parser: vt100::Parser<keys::Flags>,
+        history: Option<u64>,
+    ) {
+        self.clear_sel_of(pane);
+        self.panes.insert(
+            pane,
+            PaneView {
+                role,
+                parser,
+                history: history.map(|seq| Pending {
+                    seq,
+                    ops: Vec::new(),
+                    bytes: 0,
+                }),
+                exited: None,
+                title: None,
+            },
+        );
+        trace::span("fit", || self.fit());
+        trace::mark("snap_installed", 0);
+    }
+
+    /// The full replay of a pane that was drawn from its `Screen`: what
+    /// happened to the screen since is done again on it, and it takes the
+    /// screen's place with its scrollback.
+    fn on_history(&mut self, pane: PaneId, seq: u64, mut parser: vt100::Parser<keys::Flags>) {
+        let Some(view) = self.panes.get_mut(&pane) else {
+            return;
+        };
+        let Some(pending) = view.history.take_if(|h| h.seq == seq) else {
+            return;
+        };
+        trace::span("history_swap", || {
+            for op in pending.ops {
+                match op {
+                    Op::Out(bytes) => parser.process(&bytes),
+                    Op::Size(rows, cols) => parser.screen_mut().set_size(rows, cols),
+                }
+            }
+            let size = view.parser.screen().size();
+            if parser.screen().size() != size {
+                parser.screen_mut().set_size(size.0, size.1);
+            }
+            view.parser = parser;
+        });
+        self.clear_sel_of(pane);
     }
 
     fn on_daemon(&mut self, d: DaemonMsg) {
@@ -1125,27 +1355,19 @@ impl App {
                 rows,
                 bytes,
             } => {
-                let mut parser = vt100::Parser::new_with_callbacks(
-                    rows,
-                    cols,
-                    SCROLLBACK,
-                    keys::Flags::default(),
-                );
-                parser.process(&bytes);
-                self.clear_sel_of(pane);
-                self.panes.insert(
-                    pane,
-                    PaneView {
-                        role,
-                        parser,
-                        exited: None,
-                        title: None,
-                    },
-                );
-                self.fit();
+                let parser = replay("snap_parse", rows, cols, &bytes);
+                self.install_snapshot(pane, role, parser, None);
             }
+            // The reader thread turns these into `Msg::Snapshot` and `Msg::History`.
+            DaemonMsg::Screen { .. } | DaemonMsg::History { .. } => {}
             DaemonMsg::Output { pane, bytes } => {
                 if let Some(v) = self.panes.get_mut(&pane) {
+                    if let Some(h) = &mut v.history {
+                        h.out(&bytes);
+                        if h.bytes > PENDING_MAX {
+                            v.history = None;
+                        }
+                    }
                     v.parser.process(&bytes);
                     if let Some(sel) = &mut self.sel
                         && sel.pane == pane
@@ -1158,7 +1380,7 @@ impl App {
             }
             DaemonMsg::Tree { stream, tree } => {
                 if self.current().is_some_and(|e| e.id == stream) {
-                    self.set_tree(tree);
+                    trace::span("set_tree", || self.set_tree(tree));
                 }
                 self.send(ClientMsg::List);
             }
@@ -1475,19 +1697,28 @@ impl App {
         if self.current().is_some_and(|c| c.id == entry.id) {
             return;
         }
+        trace::mark("switch_start", 0);
         self.recent.retain(|id| *id != entry.id);
         self.recent.insert(0, entry.id.clone());
         self.recent.truncate(50);
-        save_recent(&self.recent);
+        trace::span("save_recent", || save_recent(&self.recent));
         if crate::folders::is_folder(&entry) && !entry.path.is_empty() {
             let dir = entry.path.clone();
-            if let Err(e) = crate::folders::edit(|all| {
-                all.add(&dir);
+            if let Err(e) = trace::span("folders_edit", || {
+                crate::folders::edit(|all| {
+                    all.add(&dir);
+                })
             }) {
                 self.fail(format!("{e:#}"));
             }
         }
-        let stream = match Stream::resolve(&entry) {
+        let stream = match trace::span("cached_stream", || self.cached_stream(&entry, setup)) {
+            Some(s) => Ok(s),
+            None => trace::span("resolve", || Stream::resolve(&entry)).inspect(|s| {
+                self.streams.insert(entry.id.clone(), s.clone());
+            }),
+        };
+        let stream = match stream {
             Ok(s) => s,
             Err(e) => {
                 self.fail(format!("{}: {e:#}", entry.name));
@@ -1495,7 +1726,7 @@ impl App {
             }
         };
         self.send(ClientMsg::Detach);
-        self.forget_workspace();
+        trace::span("forget", || self.forget_workspace());
         let already = self.is_open(&entry.id);
         self.active = Some(stream);
 
@@ -1503,9 +1734,59 @@ impl App {
             self.send(ClientMsg::Attach {
                 stream: entry.id.clone(),
             });
-        } else if let Err(e) = self.start_panes(setup) {
+            trace::mark("attach_sent", 0);
+        } else if let Err(e) = trace::span("start_panes", || self.start_panes(setup)) {
             self.fail(format!("{}: {e:#}", entry.name));
         }
+    }
+
+    /// The stream resolved earlier off the UI thread, while no config it read
+    /// has changed. A new worktree (`setup`) resolves fresh: its config was
+    /// just written.
+    fn cached_stream(&self, entry: &Entry, setup: bool) -> Option<Stream> {
+        if setup {
+            return None;
+        }
+        let mut s = self
+            .streams
+            .get(&entry.id)
+            .filter(|s| s.entry.path == entry.path && s.entry.project == entry.project)?
+            .clone();
+        if !s.is_fresh() {
+            return None;
+        }
+        // As a resolve would: the agent's conversation, or a new one for a
+        // workspace that starts its panes now.
+        if !entry.agent.is_empty() {
+            s.session = entry.agent.clone();
+        } else if !self.is_open(&entry.id) {
+            s.session = registry::new_id().ok()?;
+        }
+        s.entry = entry.clone();
+        Some(s)
+    }
+
+    /// Resolves, on a worker thread, the streams the sidebar lists and nobody
+    /// asked for yet: `Stream::resolve` runs `git` (about 40 ms).
+    fn warm_streams(&mut self) {
+        let todo: Vec<Entry> = self
+            .rows
+            .iter()
+            .filter(|r| !self.warming.contains(&r.entry.id))
+            .map(|r| r.entry.clone())
+            .collect();
+        if todo.is_empty() {
+            return;
+        }
+        self.warming.extend(todo.iter().map(|e| e.id.clone()));
+        let tx = self.events.clone();
+        thread::spawn(move || {
+            for e in todo {
+                if let Ok(s) = Stream::resolve(&e) {
+                    let _ = tx.send(Msg::Stream(Box::new(s)));
+                }
+            }
+        });
     }
 
     /// Asks the daemon to start the workspace's panes in its layout's shape.
@@ -1691,6 +1972,9 @@ impl App {
             let (cols, rows) = inner(rect);
             if view.parser.screen().size() != (rows, cols) {
                 view.parser.screen_mut().set_size(rows, cols);
+                if let Some(h) = &mut view.history {
+                    h.ops.push(Op::Size(rows, cols));
+                }
                 if self.sel.as_ref().is_some_and(|s| s.pane == id) {
                     self.sel = None;
                     self.selecting = false;
@@ -3319,6 +3603,17 @@ fn load_recent() -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Replays a `Snapshot`'s bytes into a new parser: up to 2 MiB, so it runs on
+/// the reader thread, not the UI's.
+fn replay(name: &str, rows: u16, cols: u16, bytes: &[u8]) -> vt100::Parser<keys::Flags> {
+    trace::span(name, || {
+        let mut parser =
+            vt100::Parser::new_with_callbacks(rows, cols, SCROLLBACK, keys::Flags::default());
+        parser.process(bytes);
+        parser
+    })
+}
+
 /// Best effort: a lost recency list only reorders the switcher.
 fn save_recent(ids: &[String]) {
     if let Some(d) = session_dir()
@@ -3538,6 +3833,7 @@ mod motion_tests {
             base: String::new(),
             tree: Node::leaf(""),
             session: String::new(),
+            stamp: Default::default(),
         }
     }
 
@@ -3737,6 +4033,37 @@ mod motion_tests {
         let (at, _) = app.next_wake(t0 + MS(500)).unwrap();
         assert_eq!(at, t0 + STATUS_FOR - anim::MESSAGE_EDGE);
         assert!(app.next_wake(t0 + STATUS_FOR).is_none());
+    }
+
+    #[test]
+    fn a_replayed_snapshot_is_the_screen_its_bytes_draw() {
+        let p = replay("t", 3, 10, b"hi\r\nthere");
+        assert_eq!(p.screen().size(), (3, 10));
+        assert_eq!(p.screen().contents(), "hi\nthere");
+    }
+
+    #[test]
+    fn a_history_takes_the_screens_place_with_what_happened_since() {
+        let (mut app, _g) = app(true);
+        let screen = replay("t", 3, 10, b"3\r\n4\r\n5");
+        app.install_snapshot(1, "shell".into(), screen, Some(7));
+        app.on_daemon(DaemonMsg::Output {
+            pane: 1,
+            bytes: b"\r\n6".to_vec(),
+        });
+
+        // An older history (a pane attached again since) is not this one's.
+        let stale = replay("t", 3, 10, b"x");
+        app.on_history(1, 6, stale);
+        assert!(app.panes[&1].history.is_some());
+
+        let full = replay("t", 3, 10, b"1\r\n2\r\n3\r\n4\r\n5");
+        app.on_history(1, 7, full);
+        let view = app.panes.get_mut(&1).unwrap();
+        assert!(view.history.is_none());
+        assert_eq!(view.parser.screen().contents(), "4\n5\n6");
+        view.parser.screen_mut().set_scrollback(usize::MAX);
+        assert_eq!(view.parser.screen().scrollback(), 3);
     }
 
     fn rows(ids: &[&str]) -> Vec<Row> {
