@@ -18,6 +18,13 @@ pub const SWITCH: Duration = Duration::from_millis(240);
 /// Time between two steps of the agent's spinner (REQ-143).
 pub const SPIN_EVERY: Duration = Duration::from_millis(80);
 
+/// A picker's highlighted row slides to the new one in this time (REQ-144).
+pub const PICK_SLIDE: Duration = Duration::from_millis(120);
+
+/// A modal, picker, settings screen or which-key popup fades in over this
+/// (REQ-144).
+pub const POPUP_FADE: Duration = Duration::from_millis(160);
+
 /// Cells the panes travel while they enter (REQ-136).
 pub const SLIDE_CELLS: u16 = 4;
 

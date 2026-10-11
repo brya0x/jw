@@ -65,6 +65,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             dir,
         );
     }
+    let base = app.popup.map(|_| f.buffer_mut().clone());
     if let Some(m) = &app.modal {
         m.draw(f);
     }
@@ -76,6 +77,30 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
     if app.which {
         which(f, app);
+    }
+    if let (Some(base), Some(fade)) = (base, app.popup) {
+        dissolve(f.buffer_mut(), &base, fade.value(now));
+    }
+}
+
+/// REQ-144: what an overlay drew fades in over what was under it. `a` is 0
+/// at the start; the text changes over at the half.
+fn dissolve(buf: &mut Buffer, base: &Buffer, a: f32) {
+    let blend = |under: Color, over: Color| match (under, over) {
+        (Color::Rgb(..), Color::Rgb(..)) => anim::lerp(under, over, a),
+        _ if a < 0.5 => under,
+        _ => over,
+    };
+    for (cell, under) in buf.content.iter_mut().zip(&base.content) {
+        if cell == under {
+            continue;
+        }
+        let (fg, bg) = (blend(under.fg, cell.fg), blend(under.bg, cell.bg));
+        if a < 0.5 {
+            cell.set_symbol(under.symbol());
+        }
+        cell.fg = fg;
+        cell.bg = bg;
     }
 }
 
@@ -902,6 +927,27 @@ mod tests {
             buf.set_string(0, y, "abcdefghijkl", style);
         }
         (buf, TRect::new(0, 0, 12, 1), TRect::new(0, 1, 12, 2))
+    }
+
+    #[test]
+    fn a_popup_dissolves_in_over_what_was_under_it() {
+        let (base, _, _) = staged();
+        let mut over = base.clone();
+        let style = Style::default()
+            .bg(Color::Rgb(100, 100, 100))
+            .fg(Color::Rgb(255, 255, 255));
+        over.set_string(2, 1, "XY", style);
+        let mut shown = over.clone();
+        dissolve(&mut shown, &base, 1.0);
+        assert_eq!(shown, over, "done: the overlay as drawn");
+        let mut shown = over.clone();
+        dissolve(&mut shown, &base, 0.0);
+        assert_eq!(shown, base, "start: nothing yet");
+        let mut shown = over.clone();
+        dissolve(&mut shown, &base, 0.5);
+        assert_eq!(shown[(2, 1)].symbol(), "X");
+        assert_eq!(shown[(2, 1)].bg, Color::Rgb(50, 50, 50));
+        assert_eq!(shown[(0, 1)], base[(0, 1)], "cells the overlay left alone");
     }
 
     #[test]

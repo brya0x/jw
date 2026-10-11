@@ -25,6 +25,9 @@ pub struct Settings {
     pub dark: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub light: Option<String>,
+    /// Show every key the moment the leader is pressed (REQ-141).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub which_sticky: Option<bool>,
     /// How long the leader waits before showing every key.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub which_delay_ms: Option<u64>,
@@ -76,7 +79,14 @@ impl Settings {
     }
 
     pub fn which_delay(&self) -> std::time::Duration {
-        std::time::Duration::from_millis(self.which_delay_ms.unwrap_or(600))
+        if self.which_sticky.unwrap_or(false) {
+            return std::time::Duration::ZERO;
+        }
+        std::time::Duration::from_millis(self.which_delay_ms.unwrap_or(150))
+    }
+
+    pub fn which_sticky(&self) -> bool {
+        self.which_sticky.unwrap_or(false)
     }
 
     pub fn animations(&self) -> bool {
@@ -258,7 +268,17 @@ mod tests {
         let s: Settings = serde_json::from_str("{}").unwrap();
         assert_eq!(s.key("switch"), "space");
         assert_eq!(s.theme_mode(), "system");
+        assert_eq!(s.which_delay().as_millis(), 150);
+        let s: Settings = serde_json::from_str(r#"{"which_delay_ms": 600}"#).unwrap();
         assert_eq!(s.which_delay().as_millis(), 600);
+        let s: Settings =
+            serde_json::from_str(r#"{"which_delay_ms": 600, "which_sticky": true}"#).unwrap();
+        assert_eq!(
+            s.which_delay().as_millis(),
+            0,
+            "sticky shows the keys at once"
+        );
+        let s: Settings = serde_json::from_str("{}").unwrap();
         assert!(s.animations());
         let s: Settings = serde_json::from_str(r#"{"animations": false}"#).unwrap();
         assert!(!s.animations());

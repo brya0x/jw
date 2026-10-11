@@ -146,7 +146,9 @@ optional:
   "theme": "system",
   "dark": "one-dark",
   "light": "one-light",
-  "which_delay_ms": 600,
+  "which_delay_ms": 150,
+  "which_sticky": false,
+  "animations": true,
   "keys": { "sessions": "g" }
 }
 ```

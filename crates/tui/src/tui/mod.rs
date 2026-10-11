@@ -286,6 +286,11 @@ pub struct App {
     born: Instant,
     /// The status bar's mode and the one before it (REQ-140).
     mode: Option<draw::ModeFade>,
+    /// Which overlays were open at the last frame, one bit each: modal,
+    /// picker, settings, which-key.
+    overlays: u8,
+    /// A popup fading in, 0 to 1 (REQ-144).
+    popup: Option<anim::Tween>,
 }
 
 /// The selection band: the workspace it is on, its row, and how it moves.
@@ -500,6 +505,8 @@ impl App {
             spin_due: None,
             born: Instant::now(),
             mode: None,
+            overlays: 0,
+            popup: None,
         };
         app.reload()?;
         app.send(ClientMsg::List);
@@ -554,6 +561,28 @@ impl App {
             }
         }
         wake
+    }
+
+    /// Popups: one that opens fades in (REQ-144), and a picker's highlight
+    /// slides to its selection.
+    fn tick_overlays(&mut self, now: Instant, on: bool) {
+        let open = u8::from(self.modal.is_some())
+            | u8::from(self.finder.is_some()) << 1
+            | u8::from(self.settings.is_some()) << 2
+            | u8::from(self.which) << 3;
+        if open & !self.overlays != 0 && on && anim::fades() {
+            self.popup = Some(anim::Tween::new(0.0, 1.0, anim::POPUP_FADE, now));
+            self.motion.kick(anim::POPUP_FADE, now);
+        }
+        self.overlays = open;
+        if self.popup.is_some_and(|t| t.done(now)) {
+            self.popup = None;
+        }
+        if let Some(finder) = self.finder.as_mut()
+            && finder.glide(now, on)
+        {
+            self.motion.kick(anim::PICK_SLIDE, now);
+        }
     }
 
     /// The status bar's motion: a change of mode (REQ-140) and a message
@@ -625,6 +654,7 @@ impl App {
             }
         }
         self.tick_status(now, on);
+        self.tick_overlays(now, on);
         self.band = self
             .bar
             .as_ref()
