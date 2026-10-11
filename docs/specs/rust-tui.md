@@ -1,5 +1,5 @@
 ---
-status:      agreed (v2 + the screen addendum + addendum 3 "sessions", 2026-10-09; P0–P9 built against v1); addendum 12 (X0) drafted
+status:      agreed (v2 + the screen addendum + addendum 3 "sessions", 2026-10-09; P0–P9 built against v1); addendum 12 (X0) drafted; addendum 15 (A1, A2) drafted
 scope:       [Cargo.toml, src/**, .github/workflows/ci.yml, internal/core/config/config.go (one relaxation), README.md]
 depends_on:  [git, gh on PATH]
 supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/herdr]
@@ -365,6 +365,33 @@ A TUI notices changes to `workspaces.json` and the session's `folders.json` made
 - REQ-158 WHEN the TUI writes the registry itself, it SHALL NOT rebuild a second time for that write.
 - REQ-159 THE change SHALL add no `ClientMsg` and no `PaneInfo` field, and `PROTOCOL` SHALL stay at 8.
 
+### Addendum 15 (A1, A2): a pane's program
+
+A pane says what runs in it. The daemon already resolves the foreground process of every pane on each `List` (`PaneInfo.fg`, `daemon/src/lib.rs:549-554`), and the TUI already appends it to the title (`tui/mod.rs:1657-1663`). What is missing is knowing which programs are agents: `jw prompt` accepts only role `agent` (`lib.rs:515-520`), so a `claude` run by hand in a `shell` pane is out of reach of other workspaces. The program is `fg`; no new field, no new message. Prototype approved 2026-10-11 (variant B, programs by detection only).
+
+| Piece | Shape |
+|---|---|
+| Program | `PaneInfo.fg`, unchanged. It is the foreground process group's command name (`process_name`, `lib.rs:1373`) |
+| `is_agent_program(&str)` | One list in `jw-core`, the lowest crate all of daemon, tui and jw share: `claude`, `codex`, `gemini`, `aider`, `opencode`. Fixed in code |
+| Agent pane | Role `agent`, or a live pane whose program is in that list |
+| `foreground(&Pane)` | The `List` handler's `process_group_leader` + `process_name` pair, factored out so `Prompt` uses the same one |
+| `Prompt` | `lib.rs:515`: role `agent` first; else the lowest pane id whose `foreground` is an agent program; else the error `{stream} has no agent pane open` as today |
+| `jw ls` | `--json` keeps `panes` (role strings) and adds `programs: [{role, program}]`, one per pane with a program; the table shows the program beside the role |
+| `jw read --pane` | `cli.rs:504-510`: role, then program; the missing-pane error lists both |
+| Title | The program replaces the dim runs suffix and is drawn in `p().magenta`, bold, when it is an agent (variant B); other programs keep today's dim suffix |
+| Marks | `App::marks()` (`tui/mod.rs:963`) treats an agent pane like role `agent` for the `✻` and `?` guesses |
+
+- REQ-160 WHEN `jw prompt <workspace>` finds no pane with role `agent`, THE daemon SHALL send the text to the live pane with the lowest id whose foreground program is a known agent, and reply `Prompted` with that pane.
+- REQ-161 WHEN a pane with role `agent` exists, THE daemon SHALL choose it before any pane chosen by program.
+- REQ-162 IF no pane has role `agent` or an agent program, THEN `jw prompt` SHALL fail with `has no agent pane open`, as today.
+- REQ-163 THE daemon SHALL read a pane's foreground program when `List` or `Prompt` asks, and SHALL add no thread, timer or `ps` to any other path; leaving `claude` shows on the next `List`.
+- REQ-164 WHEN `Prompt` has a role `agent` pane, THE daemon SHALL NOT run `ps`.
+- REQ-165 THE `jw ls --json` field `panes` SHALL stay a list of role strings; `programs` SHALL be added beside it.
+- REQ-166 WHEN `jw read --pane <name>` matches no role, THE CLI SHALL match it against the panes' programs before failing.
+- REQ-167 WHERE a pane's program is a known agent, THE TUI SHALL draw it on the title in `p().magenta` and bold, with no new colour literal.
+- REQ-168 WHERE a pane's program is a known agent, THE sidebar SHALL give its workspace the same `✻` and `?` marks as role `agent`.
+- REQ-169 THE change SHALL add no `ClientMsg` and no `PaneInfo` field, and `PROTOCOL` SHALL stay at 8.
+
 ---
 
 ## Rationale
@@ -405,6 +432,12 @@ A TUI notices changes to `workspaces.json` and the session's `folders.json` made
 - RAT-36 **W1, rejected: reload on focus.** The case that hurts is an agent in a pane of this same TUI running `jw worktree`; the terminal never changes focus. Focus events are not requested today (`Msg::Term(_) => {}`) and need `EnableFocusChange`.
 - RAT-37 **W1, rejected: a notify/fsevent crate.** A dependency and a thread for two files, when `Tick` already wakes every 500 ms and two `stat`s per 2 s cost nothing measurable.
 - RAT-38 **W1: the live rebuild is read-only.** `reload` runs `fill_roots` and saves (`tui/mod.rs:864`); on every external change that read-modify-write would race the writer that triggered it (no lock) and could drop its entry. Startup and the TUI's own jobs keep it.
+- RAT-39 **A1: the program is `fg`, not a new field.** The daemon already resolves it per pane on `List`, and a classified copy in `PaneInfo` would be a second place to drift and a `PROTOCOL` 9 for nothing. Each crate asks `is_agent_program(fg)`.
+- RAT-40 **A1: detection only.** Detection covers the case that hurts, `claude` started by hand, which nobody would declare. A declaration (`jw pane program`) would also need a rule for when it expires, or `jw prompt` would type into a shell after claude exits. Added later if detection fails in practice.
+- RAT-41 **A1, rejected: `jw prompt --pane`.** With one agent per workspace the role-then-program order is enough. A second agent pane is the case that would need it (RISK-54).
+- RAT-42 **A1: no timer.** `fg` is read on `List`, which the TUI already sends every 2 s, and on `Prompt`. Leaving claude is seen at the next `List`; the daemon's only loop stays the 30 s scrollback save.
+- RAT-43 **A1: the list is fixed in code.** A project-config list is more surface than five names; adding one is a one-line change.
+- RAT-44 **A1, variant B of the prototype.** The existing dim suffix already says what runs; the only thing to add is which programs are agents, so the name turns magenta (the colour of `✻`) and nothing else moves. Rejected: a glyph before the name (variant C) adds width to every agent title.
 - RAT-22 **`curl`, not a crate,** for `install <url>`: rare, and jw already shells out to `git` and `gh`; `ureq` would add TLS and about 40 crates for one command.
 
 ## Risks
@@ -459,6 +492,11 @@ A TUI notices changes to `workspaces.json` and the session's `folders.json` made
 - RISK-48 **Stamp drift.** A write between our read and our re-stamp is missed until the next write. Stamp before reading, not after.
 - RISK-49 **mtime granularity.** Two writes inside one filesystem timestamp tick look like one; a read after the second still sees both. Accepted.
 - RISK-50 **Lost updates between writers stay** (no lock, `registry.rs:161`; `session::rename` and `actions::rename` read-modify-write). Out of scope: W1 makes them visible, not likelier.
+- RISK-51 **`ps -o comm=` may not say the agent's name.** On this machine it prints `claude` (checked 2026-10-11), but a wrapper, `node` or a version-named binary would not match. Fallback if seen: match `ps -o args=`.
+- RISK-52 **A hand-run agent has no hooks.** No `--settings`, so no `jw hook`; its sidebar marks come from the `busy` and `bell` guess in `marks()`, wrong while it waits quietly.
+- RISK-53 **The pane can change between the lookup and the write.** `prompt()` writes to the PTY; if claude exits in between, the text lands in the shell. The window is the time between two calls; `Prompt` reads `foreground` right before writing.
+- RISK-54 **Two agent panes in one workspace.** Role `agent` wins, then the lowest pane id; there is no way to choose the other (RAT-41).
+- RISK-55 **`ps` once per candidate pane on a `Prompt` with no role `agent` pane.** A workspace with many shell panes spawns that many. Accepted: it is rare and off the UI thread (`Prompt` runs on its own thread).
 - Closed by addendum 3: RISK-5 (own registry), RISK-7 (hooks), RISK-9 (frames), RISK-16 (`nvim --server`), RISK-17 (`root` in the registry).
 
 ## Parts (each one ends with `cargo test` + `clippy` green and a local commit on `feat/rust-tui`; nothing is pushed)
@@ -518,6 +556,8 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | M5 ✓ | Focus border ease; eased wheel scroll | 145 | `tui/draw.rs`, `tui/mod.rs` |
 | M6 ✓ | First-run welcome, `welcomed` and `JW_WELCOME=0` (set by `scripts/drive.py`) | 146, 149 | `tui/draw.rs`, `settings.rs`, `scripts/drive.py` |
 | W1 | The sidebar follows the registry: `RegistryWatch` on the `Tick`, read-only `load_rows` in the background, rows held while an overlay is open | 150–159 | `tui/registry_watch.rs`, `tui/mod.rs` |
+| A1 | Agent programs: `is_agent_program` in `jw-core`, `foreground` in the daemon, `Prompt` by program, `jw ls --json programs`, `jw read --pane` by program, help and the `jw` skill | 160–166, 169 | `crates/core`, `crates/daemon/src/lib.rs`, `crates/jw/src/{cli,help}.rs` |
+| A2 | The program on the pane title and the agent marks for such panes | 167, 168 | `tui/draw.rs`, `tui/mod.rs` |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 
 Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{new_stream, rm_plan, rm, sync, done_plan}`, `src/diff.rs`, `src/view/md.rs` and `Modal::Rm` (type the name) stay as they are.
@@ -538,6 +578,7 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - OPEN-13 → copy on release, drag past the edge scrolls, a banner at the pane's top right (prototype 2, approved 2026-10-10); no keyboard mode.
 - OPEN-14 (open) Should an external change show a status note ("sidebar updated")? Default: silent. A visible element would need the HTML prototype first.
 - OPEN-15 (open) Poll the registry every 2 s (the `List` cadence) or every 0.5 s tick? Default 2 s.
+- OPEN-16 → a pane's program is detected only, never declared (RAT-40); no `jw prompt --pane` (RAT-41); title variant B (RAT-44). Approved 2026-10-11.
 - OPEN-5 → `~/.config/jw/settings.json` (JSON, outside Go's `*.toml` glob) and the `^␣ ,` screen (addendum 3).
 
 ## Corrections
@@ -577,6 +618,7 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - REQ-138 first said that without truecolor every change applies at once. The selection band, the spinner and the welcome steps need no colour blending, so only the fades and the panes' slide wait for truecolor.
 - REQ-146 first said the welcome starts "with no workspace open" and does not pass on the key that closes it. At startup nothing is open yet even for a returning user, so it starts from an empty sidebar; and step 1 itself tells the user to press the leader, so that key is handled as usual.
 - The brief for W1 said the sidebar stayed stale until the TUI was reopened. True for writes by the CLI and by other TUIs; the TUI's own jobs already reload (`on_job`).
+- The brief for A1 assumed the daemon did not know a pane's child. It does: `fg` and `cwd` on every `List` (`lib.rs:549-554`), and the TUI already shows `fg` in the title. The first plan added `PaneInfo.program` and `PROTOCOL` 9; with detection only, `fg` is the program and the protocol stays at 8 (RAT-39).
 - The same brief said the loop wakes only when something animates. `Msg::Tick` wakes it every 500 ms regardless (`tui/mod.rs:353`); only the animation timers in `next_wake` are conditional. The registry watch rides that tick (REQ-151, REQ-152).
 
 ## Tests
@@ -591,4 +633,5 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - selection (X1, X2): unit tests over a vt100 screen for the extracted text (trailing spaces, soft-wrapped rows, wide characters, history rows) and for word and line bounds; the OSC 52 bytes; the highlight and the banner text; `mouse_encodings` still passes. Manual: zsh drag, double and triple click, drag past the edge; the banner appears top right and goes after about 2 s; nvim plain drag reaches nvim, Shift + drag selects.
 - motion (M1–M6): units for the tween (starts at 0, reaches 1 at its duration, monotonic, an interrupt starts from the displayed value) and for the colour lerp; `next_wake` blocks when idle, wakes a frame after the last draw while a transition runs, for the drag edge and the which-key, takes the soonest, and wakes when a message starts to leave; `TestBackend` for the spinner glyph by elapsed time, the welcome (shows; any key closes it, writes `welcomed` and is still handled), the slide's last frame equal to the static draw, and `animations = false` giving the final frame at once; `tick_motion` on an `App` without a daemon (`App::bare`): the band starts on the current row without motion, a switch glides it and keeps the loop awake until `SWITCH`, `animations = false` jumps it, no workspace means no band, the spinner steps only for visible rows; the bytes of a draw start with `CSI ? 2026 h` and end with `CSI ? 2026 l`, also after a failed draw. Manual in Ghostty with `scripts/drive.py`: switching workspaces with the arrows, the which-key at 150 ms, no tearing in a fast `cat`, idle CPU near zero.
 - manual (after Q2 and Q5): claude and nvim in panes; `w`, `t`, `x`, `HJKL`, `n`, `d`, `↵` in the diff, `q`, then `jw` again shows the same layout.
+- agent programs (A1, A2): `is_agent_program` table (names in and out, a path or a `-` prefix is not part of the name). Daemon, in `crates/jw/tests/daemon.rs`: a `shell` pane running a script named `claude` is reached by `Prompt` and replies `Prompted` with its pane; with a role `agent` pane also open, that one gets the text; with neither, the error text is unchanged; after the script exits, `Prompt` fails. `jw ls --json` keeps `panes` and has `programs`; `jw read --pane claude` reads the shell pane. `TestBackend`: the title of an agent program uses `p().magenta`, other programs keep the dim suffix; `marks()` returns `✻` for a busy pane whose program is an agent. Manual with `scripts/jw-test`: run `claude` by hand in a shell pane, `jw prompt` it from another workspace, exit claude and see the next `jw prompt` refuse.
 - live registry (W1): `RegistryWatch` units over a tempdir (unchanged, touched, a file that appears or goes); an `App` without a daemon: rows from `Msg::Rows` replace the sidebar, with a modal open they land in `pending_rows` and the next tick after it closes applies them, `active` keeps its id; a truncated JSON leaves the rows alone; `next_wake` is still `None` when idle. Manual: with a TUI open, `jw worktree <name>` from a second terminal shows the row within about 2 s; repeat with `^␣ r` open and the row appears after `esc`.
