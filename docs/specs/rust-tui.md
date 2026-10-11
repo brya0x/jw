@@ -876,7 +876,7 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | V3 ✓ | A diff pane's answer no longer reloads the registry on the UI thread (RISK-75); an `App`-level test of the job round trip; a hand test with `scripts/drive.py` on a synthetic repo (4,000 new files, 231 commits, 300 untracked) that found three faults in the too-large view, fixed. A review workspace was not run end to end, only `Stream::resolve`'s test for `review_base`; REQ-234 waits for OPEN-31 | 237, 238, 241 | `tui/mod.rs`, `tui/diffview.rs` |
 | V4 ✓ | README; version 0.0.18 (past main's 0.0.17); a hand test with `scripts/drive.py` in a repo with commits and a dirty tree, and in a big one | — | `README.md`, `Cargo.toml` |
 | Q1 ✓ | Core of Addendum 20: `Prompt.pane`, `PROTOCOL` 11, `agent_pane` validating a named pane, the integration tests, the version (past main's and `feat/mobile-app`'s) | 248–251, 254 | `proto.rs`, `daemon/lib.rs`, `tui/mod.rs`, `tests/daemon.rs` |
-| Q2 | `jw prompt [--pane] [--tag] [--]`, the guards, `help.rs`, the skill | 247, 252, 253, 255, 256 | `cli.rs`, `help.rs`, `SKILL.md` |
+| Q2 ✓ | `jw prompt [--pane] [--tag] [--]`, the guards, `help.rs`, the skill | 247, 252, 253, 255, 256 | `cli.rs`, `help.rs`, `SKILL.md` |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 | F0 ✓ | `JW_TRACE`, `scripts/bench-switch.py`, the Measurements above | 184 | `tui/trace.rs`, `tui/mod.rs`, `scripts/` |
 | F1 ✓ | S1, S9: `Stream::resolve` (the `git` spawn) off the UI thread, the frame deadline counted from the frame's start; the unexplained ≈ 100 ms of a first open | 185, 191 | `tui/mod.rs`, `core` (callers) |

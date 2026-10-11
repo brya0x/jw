@@ -49,8 +49,8 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         name: "prompt",
-        usage: "jw prompt <workspace> <text>",
-        what: "types a task into an open workspace's agent once it is quiet",
+        usage: "jw prompt <workspace> [--pane <id>] [--tag] [--] <text>",
+        what: "types a task into an open workspace's agent (or the agent in pane <id>) once it is quiet; --tag says who sent it",
     },
     Command {
         name: "skill",
