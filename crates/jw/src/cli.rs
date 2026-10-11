@@ -918,6 +918,7 @@ fn text_of(rows: u16, cols: u16, bytes: &[u8], n: usize) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
 
     fn words(w: &str) -> Vec<String> {
         w.split(' ').map(String::from).collect()
@@ -969,7 +970,6 @@ mod tests {
         assert_eq!(tagged("hi", Some("w"), None), "[jw: w] hi");
         assert_eq!(tagged("hi", None, Some("4")), "hi");
     }
-    use super::*;
 
     #[test]
     fn run_maps_to_a_role_and_a_command() {

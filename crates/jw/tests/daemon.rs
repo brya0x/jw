@@ -1589,22 +1589,27 @@ fn prompt_reaches_an_agent_program_in_a_shell_pane() {
     read_until(&mut c, pane, &mut screen, "hi there");
 }
 
-/// Ask for a prompt into `pane` of `stream` until the daemon answers something
-/// other than "not an agent yet" (`exec` may not have run), or the deadline.
+/// One prompt into `pane` of `stream`, and the daemon's answer.
+fn prompt_once(c: &mut Client, stream: &str, pane: PaneId, text: &str) -> DaemonMsg {
+    c.send(&ClientMsg::Prompt {
+        stream: stream.into(),
+        text: text.into(),
+        pane: Some(pane),
+    })
+    .unwrap();
+    loop {
+        if let m @ (DaemonMsg::Prompted { .. } | DaemonMsg::Error { .. }) = recv(c) {
+            return m;
+        }
+    }
+}
+
+/// Ask until the pane's program is the agent: right after a `spawn` its `exec`
+/// may not have run, and the daemon says "it runs sh".
 fn prompt_named(c: &mut Client, stream: &str, pane: PaneId, text: &str) -> DaemonMsg {
     let deadline = Instant::now() + TIMEOUT;
     loop {
-        c.send(&ClientMsg::Prompt {
-            stream: stream.into(),
-            text: text.into(),
-            pane: Some(pane),
-        })
-        .unwrap();
-        let msg = loop {
-            if let m @ (DaemonMsg::Prompted { .. } | DaemonMsg::Error { .. }) = recv(c) {
-                break m;
-            }
-        };
+        let msg = prompt_once(c, stream, pane, text);
         let retry = matches!(&msg, DaemonMsg::Error { msg } if msg.contains("it runs"));
         if !retry || Instant::now() > deadline {
             return msg;
@@ -1658,7 +1663,7 @@ fn prompt_with_a_pane_refuses_what_is_not_a_live_agent_of_the_workspace() {
     };
     assert!(msg.contains("not in this workspace"), "{msg}");
 
-    let DaemonMsg::Error { msg } = prompt_named(&mut c, "s", plain, "x") else {
+    let DaemonMsg::Error { msg } = prompt_once(&mut c, "s", plain, "x") else {
         panic!("a plain `cat` took a prompt");
     };
     assert!(msg.contains("is not an agent"), "{msg}");

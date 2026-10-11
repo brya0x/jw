@@ -1451,15 +1451,14 @@ fn named_agent(id: PaneId, panes: Vec<(PaneId, Arc<Pane>)>) -> Result<(PaneId, A
     if exited {
         bail!("pane {id} has exited");
     }
-    if pane.role == "agent" {
+    let program = leader_of(&pane).and_then(process_name);
+    if program::is_agent_pane(&pane.role, program.as_deref()) {
         return Ok((id, pane));
     }
-    let program = leader_of(&pane).and_then(process_name);
-    match program {
-        Some(name) if program::is_agent_program(&name) => Ok((id, pane)),
-        Some(name) => bail!("pane {id} is not an agent (it runs {name})"),
-        None => bail!("pane {id} is not an agent (it runs no program)"),
-    }
+    bail!(
+        "pane {id} is not an agent (it runs {})",
+        program.as_deref().unwrap_or("no program")
+    )
 }
 
 /// The command name of a process (`ps -o comm=`), without its directory.
