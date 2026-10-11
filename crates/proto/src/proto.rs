@@ -15,7 +15,7 @@ pub type PaneId = u64;
 
 /// Bumped whenever a message changes shape: a client and a daemon from
 /// different builds refuse each other instead of misreading (RISK-14).
-pub const PROTOCOL: u32 = 8;
+pub const PROTOCOL: u32 = 9;
 
 /// A pane to start. `cmd` runs through `sh -c`; `None` starts `$SHELL`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -62,6 +62,10 @@ pub enum ClientMsg {
     Attach {
         stream: String,
     },
+    /// From now on this connection gets a pane it starts to watch as a
+    /// `Screen` (small, at once) and then its `History` (the replay that
+    /// rebuilds the scrollback), instead of one `Snapshot`.
+    SplitSnapshots,
     /// Stop receiving output from every pane; the panes keep running.
     Detach,
     Input {
@@ -265,6 +269,25 @@ pub enum DaemonMsg {
         rows: u16,
         bytes: Vec<u8>,
     },
+    /// Only the exact screen, as a `Snapshot` has it at its end: what a
+    /// `SplitSnapshots` client gets first, so the pane can be drawn at once.
+    Screen {
+        pane: PaneId,
+        role: String,
+        cols: u16,
+        rows: u16,
+        bytes: Vec<u8>,
+    },
+    /// What a `Snapshot`'s bytes would have been (the last output, then the
+    /// screen), sent right after the `Screen`. Replayed into a parser of
+    /// this size it has the scrollback that `Screen` lacks; the output that
+    /// came since goes on top.
+    History {
+        pane: PaneId,
+        cols: u16,
+        rows: u16,
+        bytes: Vec<u8>,
+    },
     Output {
         pane: PaneId,
         bytes: Vec<u8>,
@@ -345,12 +368,46 @@ impl Raw for DaemonMsg {
                 },
                 bytes,
             )),
+            DaemonMsg::Screen {
+                pane,
+                role,
+                cols,
+                rows,
+                bytes,
+            } => Some((
+                DaemonMsg::Screen {
+                    pane: *pane,
+                    role: role.clone(),
+                    cols: *cols,
+                    rows: *rows,
+                    bytes: Vec::new(),
+                },
+                bytes,
+            )),
+            DaemonMsg::History {
+                pane,
+                cols,
+                rows,
+                bytes,
+            } => Some((
+                DaemonMsg::History {
+                    pane: *pane,
+                    cols: *cols,
+                    rows: *rows,
+                    bytes: Vec::new(),
+                },
+                bytes,
+            )),
             _ => None,
         }
     }
 
     fn join_raw(&mut self, raw: Vec<u8>) {
-        if let DaemonMsg::Output { bytes, .. } | DaemonMsg::Snapshot { bytes, .. } = self {
+        if let DaemonMsg::Output { bytes, .. }
+        | DaemonMsg::Snapshot { bytes, .. }
+        | DaemonMsg::Screen { bytes, .. }
+        | DaemonMsg::History { bytes, .. } = self
+        {
             *bytes = raw;
         }
     }
@@ -490,6 +547,25 @@ mod tests {
             rows: 24,
             bytes: b"\x1b[2Jhi".to_vec(),
         };
+        let screen = DaemonMsg::Screen {
+            pane: 3,
+            role: "shell".into(),
+            cols: 80,
+            rows: 24,
+            bytes: b"screen".to_vec(),
+        };
+        let history = DaemonMsg::History {
+            pane: 3,
+            cols: 80,
+            rows: 24,
+            bytes: (0..=255).collect(),
+        };
+        let mut buf = Vec::new();
+        write_frame(&mut buf, &screen).unwrap();
+        write_frame(&mut buf, &history).unwrap();
+        let mut r = buf.as_slice();
+        assert_eq!(read_frame::<DaemonMsg>(&mut r).unwrap(), Some(screen));
+        assert_eq!(read_frame::<DaemonMsg>(&mut r).unwrap(), Some(history));
         let mut buf = Vec::new();
         write_frame(&mut buf, &out).unwrap();
         // 4 length + 1 kind + 4 head length + the head + 256 raw bytes.

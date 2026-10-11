@@ -476,10 +476,9 @@ fn prompt_waits_for_quiet_then_pastes_and_presses_enter() {
 
 /// REQ-168, REQ-171, REQ-177: a review opens as the diff beside the agent
 /// (the tree `Stream` gives it), the diff has no process, and the prompt the
-/// TUI sends after `Open` reaches the agent. `PROTOCOL` did not move.
+/// TUI sends after `Open` reaches the agent. The review adds no message.
 #[test]
 fn a_review_opens_as_a_diff_and_an_agent_and_the_agent_is_briefed() {
-    assert_eq!(PROTOCOL, 8);
     let d = Daemon::start();
     let mut c = d.client();
     let pane = |role: &str, cmd: Option<&str>| NewPane {
@@ -1385,4 +1384,106 @@ fn the_cli_reads_the_daemon_or_none() {
         assert_eq!(jw(&["ls", "--json"], socket).trim(), "[]");
         assert!(jw(&["sessions"], socket).contains("main"));
     }
+}
+
+/// REQ-194: a `shell` pane with an agent in the foreground takes `jw prompt`.
+#[test]
+fn prompt_reaches_an_agent_program_in_a_shell_pane() {
+    let d = Daemon::start();
+    let mut c = d.client();
+    // A link to `cat` named `claude`: the foreground process is called that
+    // (a script would show as its interpreter, a copy of `cat` is killed by
+    // macOS's code signing).
+    let bin = tempfile::tempdir().unwrap();
+    let claude = bin.path().join("claude");
+    std::os::unix::fs::symlink("/bin/cat", &claude).unwrap();
+    let pane = spawn(&mut c, "s", &format!("exec {}", claude.display()), 80, 24);
+
+    let mut screen = vt100::Parser::new(24, 80, 0);
+    let deadline = Instant::now() + TIMEOUT;
+    let reply = loop {
+        c.send(&ClientMsg::Prompt {
+            stream: "s".into(),
+            text: "hi there".into(),
+        })
+        .unwrap();
+        let msg = loop {
+            if let m @ (DaemonMsg::Prompted { .. } | DaemonMsg::Error { .. }) = recv(&mut c) {
+                break m;
+            }
+        };
+        // `exec` may not have run yet: ask again until the name says claude.
+        if matches!(msg, DaemonMsg::Prompted { .. }) || Instant::now() > deadline {
+            break msg;
+        }
+        thread::sleep(Duration::from_millis(50));
+    };
+    assert!(
+        matches!(reply, DaemonMsg::Prompted { pane: p } if p == pane),
+        "{reply:?}"
+    );
+    read_until(&mut c, pane, &mut screen, "hi there");
+}
+
+/// REQ-192: a client that asks for `SplitSnapshots` gets the screen first and the
+/// history behind it, and the two together are what one `Snapshot` was.
+#[test]
+fn a_split_client_gets_the_screen_then_the_history() {
+    let d = Daemon::start();
+    let mut c = d.client();
+    let pane = spawn(&mut c, "s", "seq 1 60; cat", 80, 24);
+    let mut seen = vt100::Parser::new(24, 80, 0);
+    read_until(&mut c, pane, &mut seen, "60");
+
+    let mut plain = d.client();
+    plain
+        .send(&ClientMsg::Attach { stream: "s".into() })
+        .unwrap();
+    let full = match recv(&mut plain) {
+        DaemonMsg::Snapshot { bytes, .. } => bytes,
+        m => panic!("want a Snapshot, got {m:?}"),
+    };
+
+    let mut split = d.client();
+    split.send(&ClientMsg::SplitSnapshots).unwrap();
+    split
+        .send(&ClientMsg::Attach { stream: "s".into() })
+        .unwrap();
+    let screen = loop {
+        match recv(&mut split) {
+            DaemonMsg::Screen {
+                pane: p,
+                cols: 80,
+                rows: 24,
+                bytes,
+                ..
+            } if p == pane => break bytes,
+            DaemonMsg::Tree { .. } => {}
+            m => panic!("want the Screen first, got {m:?}"),
+        }
+    };
+    let history = match recv(&mut split) {
+        DaemonMsg::History {
+            pane: p,
+            cols: 80,
+            rows: 24,
+            bytes,
+        } if p == pane => bytes,
+        m => panic!("want the History next, got {m:?}"),
+    };
+    assert_eq!(history, full, "History is what a Snapshot carried");
+
+    let mut lite = vt100::Parser::new(24, 80, 100);
+    lite.process(&screen);
+    let mut whole = vt100::Parser::new(24, 80, 100);
+    whole.process(&history);
+    assert_eq!(lite.screen().contents(), whole.screen().contents());
+    lite.screen_mut().set_scrollback(usize::MAX);
+    whole.screen_mut().set_scrollback(usize::MAX);
+    assert_eq!(
+        lite.screen().scrollback(),
+        0,
+        "the Screen has no scrollback"
+    );
+    assert!(whole.screen().scrollback() > 0, "the History has it");
 }

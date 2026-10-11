@@ -386,6 +386,23 @@ pub fn current_branch(dir: &Path) -> Result<String> {
 /// `.git` without running git, so it is cheap enough for every refresh:
 /// the checkout's root and its branch (or a short commit when detached).
 pub fn head_of(dir: &Path) -> Option<(PathBuf, String)> {
+    let (root, head) = head_text(dir)?;
+    let branch = match head.strip_prefix("ref: refs/heads/") {
+        Some(b) => b.to_string(),
+        None => head.chars().take(7).collect(),
+    };
+    Some((root, branch))
+}
+
+/// The branch checked out in `dir`, read from `.git` like [`head_of`]:
+/// `None` when detached, where `git branch --show-current` prints nothing.
+pub fn branch_of(dir: &Path) -> Option<String> {
+    let (_, head) = head_text(dir)?;
+    head.strip_prefix("ref: refs/heads/").map(str::to_string)
+}
+
+/// The checkout's root and what its `HEAD` file says.
+fn head_text(dir: &Path) -> Option<(PathBuf, String)> {
     let root = dir.ancestors().find(|d| d.join(".git").exists())?;
     let dot = root.join(".git");
     // A worktree's .git is a file pointing at its git dir.
@@ -397,12 +414,7 @@ pub fn head_of(dir: &Path) -> Option<(PathBuf, String)> {
         dot
     };
     let head = std::fs::read_to_string(git_dir.join("HEAD")).ok()?;
-    let head = head.trim();
-    let branch = match head.strip_prefix("ref: refs/heads/") {
-        Some(b) => b.to_string(),
-        None => head.chars().take(7).collect(),
-    };
-    Some((root.to_path_buf(), branch))
+    Some((root.to_path_buf(), head.trim().to_string()))
 }
 
 /// Brings the branch checked out in `dir` up to its upstream, refusing
@@ -466,6 +478,14 @@ pub(crate) mod tests {
         must_git(&work, &["config", "user.name", "t"]);
         must_git(&work, &["config", "user.email", "t@t"]);
         (dir, work)
+    }
+
+    #[test]
+    fn branch_of_reads_the_branch_and_is_none_when_detached() {
+        let (_dir, work) = new_test_repo();
+        assert_eq!(branch_of(&work).as_deref(), Some("trunk"));
+        must_git(&work, &["checkout", "-q", "--detach"]);
+        assert_eq!(branch_of(&work), None);
     }
 
     #[test]

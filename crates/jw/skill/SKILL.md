@@ -28,9 +28,11 @@ default ports (5173, 8081…) belong to the main checkout, not to you.
 - `jw ls` lists the session's workspaces with their state: `working`, `waiting` (the
   agent asks for something), `idle` or `closed`. It also shows their marks (`✻` agent
   working, `?` waiting, `⚡` dev server), branch and PR. `jw ls --json` gives the same
-  thing as JSON.
-- `jw read <workspace> [--pane <role>] [--lines N]` prints the last lines of a pane,
-  scrollback included. It reads the agent's pane by default. Use it to see what an agent
+  thing as JSON. `panes` lists each pane's role; `programs` gives `{role, program}` for
+  what runs in the foreground of each (`claude`, `nvim`, `zsh`…).
+- `jw read <workspace> [--pane <role|program>] [--lines N]` prints the last lines of a pane,
+  scrollback included. It reads the agent's pane by default (a pane whose program is an agent counts, even in a
+  `shell` role); `--pane` takes a role or a program name. Use it to see what an agent
   is asking, or how a build ended. `<workspace>` is a name from `jw ls`
   (`project/name` for a worktree, or just the folder's name).
 
@@ -42,7 +44,9 @@ default ports (5173, 8081…) belong to the main checkout, not to you.
   `--branch <existing>` to work on a branch that already exists, or `--from <ref>` to
   branch from something other than the project's base.
 - `jw prompt <workspace> "<task>"` types a task into the agent of a workspace that is
-  open. It waits until the agent is quiet, so it never interrupts it.
+  open. It waits until the agent is quiet, so it never interrupts it. The agent is the pane
+  with role `agent`, else a pane where `claude`, `codex`… runs in the foreground (a
+  `claude` started by hand in a shell pane).
 - `jw sessions` lists the sessions and how many of their workspaces run.
 
 ## Never do these

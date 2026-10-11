@@ -15,6 +15,7 @@ use crate::actions::{self, NewOptions, Project};
 use crate::client::Client;
 use crate::core::registry::{self, Entry, Registry};
 use crate::layout::Rect;
+use crate::program;
 use crate::proto::{AgentState, ClientMsg, DaemonMsg, PROTOCOL, PaneInfo, socket_path};
 use crate::stream::{PaneSpec, Stream};
 
@@ -393,7 +394,8 @@ fn next(c: &mut Client) -> Result<DaemonMsg> {
 
 /// What a workspace's panes say: its agent's state and the sidebar marks.
 fn state_of(panes: &[&PaneInfo]) -> (&'static str, String) {
-    let guess = |p: &&&PaneInfo| p.agent.is_none() && p.role == "agent";
+    let guess =
+        |p: &&&PaneInfo| p.agent.is_none() && program::is_agent_pane(&p.role, p.fg.as_deref());
     let working = panes
         .iter()
         .any(|p| p.agent == Some(AgentState::Working) || (guess(&p) && p.busy));
@@ -449,6 +451,10 @@ pub fn ls(args: &[String]) -> Result<()> {
                 "state": state,
                 "marks": marks,
                 "panes": mine.iter().map(|p| p.role.clone()).collect::<Vec<_>>(),
+                "programs": mine
+                    .iter()
+                    .filter_map(|p| Some(serde_json::json!({"role": p.role, "program": p.fg.as_ref()?})))
+                    .collect::<Vec<_>>(),
             })
         })
         .collect();
@@ -472,7 +478,7 @@ pub fn ls(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// `jw read <workspace> [--pane <role>] [--lines N]`: the last lines of a
+/// `jw read <workspace> [--pane <role|program>] [--lines N]`: the last lines of a
 /// pane (the agent's by default), scrollback included, as text (REQ-66).
 pub fn read(args: &[String]) -> Result<()> {
     let mut name = None;
@@ -481,7 +487,7 @@ pub fn read(args: &[String]) -> Result<()> {
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
-            "--pane" => role = Some(it.next().context("--pane needs a role")?.clone()),
+            "--pane" => role = Some(it.next().context("--pane needs a role or program")?.clone()),
             "--lines" => {
                 lines = it
                     .next()
@@ -494,7 +500,7 @@ pub fn read(args: &[String]) -> Result<()> {
             s => bail!("unexpected argument {s:?}"),
         }
     }
-    let name = name.context("usage: jw read <workspace> [--pane <role>] [--lines N]")?;
+    let name = name.context("usage: jw read <workspace> [--pane <role|program>] [--lines N]")?;
     let ws = find(&name)?;
     let panes = daemon_panes()?;
     let mine: Vec<&PaneInfo> = panes.iter().filter(|p| p.stream == ws.entry.id).collect();
@@ -502,19 +508,32 @@ pub fn read(args: &[String]) -> Result<()> {
         bail!("{} is not open", ws.label);
     }
     let pane = match &role {
-        Some(r) => mine.iter().find(|p| p.role == *r),
+        Some(r) => mine
+            .iter()
+            .find(|p| p.role == *r)
+            .or_else(|| mine.iter().find(|p| p.fg.as_deref() == Some(r))),
         None => mine
             .iter()
             .find(|p| p.role == "agent")
+            .or_else(|| {
+                mine.iter()
+                    .find(|p| program::is_agent_pane(&p.role, p.fg.as_deref()))
+            })
             .or_else(|| mine.first()),
     }
     .with_context(|| {
-        let roles: Vec<&str> = mine.iter().map(|p| p.role.as_str()).collect();
+        let names: Vec<String> = mine
+            .iter()
+            .map(|p| match &p.fg {
+                Some(fg) if *fg != p.role => format!("{} ({fg})", p.role),
+                _ => p.role.clone(),
+            })
+            .collect();
         format!(
             "{} has no pane {}: {}",
             ws.label,
             role.as_deref().unwrap_or_default(),
-            roles.join(", ")
+            names.join(", ")
         )
     })?
     .pane;

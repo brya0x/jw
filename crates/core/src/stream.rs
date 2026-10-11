@@ -14,6 +14,45 @@ use crate::core::expand::{Vars, expand};
 use crate::core::registry::{self, Entry, Registry};
 use crate::layout::Node;
 
+/// The files a resolve read, and when each last changed. A stream resolved
+/// earlier is what a fresh resolve would make while none of them changed.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Stamp {
+    files: Vec<(PathBuf, Option<std::time::SystemTime>)>,
+    /// A folder that opens with one shell (REQ-61): read from `folders.json`,
+    /// which every open rewrites, so its value is kept and not its mtime.
+    plain: bool,
+}
+
+impl Stamp {
+    /// The project's `.jw.toml`, every personal config and the folder's `plain`.
+    fn of(entry: &Entry) -> Self {
+        let mut files = vec![Path::new(&entry.path).join(".jw.toml")];
+        if !entry.root.is_empty() {
+            files.push(Path::new(&entry.root).join(".jw.toml"));
+        }
+        if let Ok(dir) = config::dir()
+            && let Ok(rd) = std::fs::read_dir(dir)
+        {
+            files.extend(
+                rd.filter_map(|e| e.ok().map(|e| e.path()))
+                    .filter(|p| p.extension().is_some_and(|x| x == "toml")),
+            );
+        }
+        files.sort();
+        Self {
+            files: files
+                .into_iter()
+                .map(|f| {
+                    let at = std::fs::metadata(&f).and_then(|m| m.modified()).ok();
+                    (f, at)
+                })
+                .collect(),
+            plain: plain(entry).unwrap_or(false),
+        }
+    }
+}
+
 /// A stream resolved against its project's config, ready to open.
 #[derive(Debug, Clone)]
 pub struct Stream {
@@ -25,6 +64,8 @@ pub struct Stream {
     /// The id of the claude conversation its agent pane runs: the one it
     /// had, or a new one (REQ-74).
     pub session: String,
+    /// What it was resolved from; see [`Stream::is_fresh`].
+    pub stamp: Stamp,
 }
 
 /// One pane to start: `cmd` runs through `sh -c`, `None` is a plain shell.
@@ -36,6 +77,17 @@ pub struct PaneSpec {
     pub resume: Option<String>,
     pub cwd: PathBuf,
     pub env: BTreeMap<String, String>,
+}
+
+/// Whether the folder of `entry` was asked to open with one shell.
+fn plain(entry: &Entry) -> Result<bool> {
+    if !crate::folders::is_folder(entry) {
+        return Ok(false);
+    }
+    Ok(crate::folders::load(&registry::state_dir()?)?
+        .folders
+        .iter()
+        .any(|f| f.dir == entry.path && f.plain))
 }
 
 /// The panes of a review: the diff and the agent, half each.
@@ -53,16 +105,15 @@ impl Stream {
     /// An opened folder (REQ-55): a repository with a jw config starts with
     /// its layout; anything else with one shell.
     pub fn resolve(entry: &Entry) -> Result<Self> {
+        // Before reading them: a change in between shows as stale, not fresh.
+        let stamp = Stamp::of(entry);
         if crate::folders::is_folder(entry) {
             let dir = Path::new(&entry.path);
             if !dir.is_dir() {
                 bail!("{} is not a folder", entry.path);
             }
             // The folder a session started in opens with one shell (REQ-61).
-            let plain = crate::folders::load(&registry::state_dir()?)?
-                .folders
-                .iter()
-                .any(|f| f.dir == entry.path && f.plain);
+            let plain = plain(entry)?;
             let (cfg, base, tree) = match crate::folders::repo(dir) {
                 Some(repo) => {
                     let cfg = config::load(&repo.root, &repo.remote, &entry.project)?;
@@ -81,6 +132,7 @@ impl Stream {
                 base,
                 tree,
                 session: session_of(entry),
+                stamp,
             });
         }
         let repo = Repo::open(Path::new(&entry.path))?;
@@ -98,7 +150,14 @@ impl Stream {
             base,
             tree,
             session: session_of(entry),
+            stamp,
         })
+    }
+
+    /// Whether a resolve now would read what this one did: no config or
+    /// `folders.json` changed since. A few `stat`s, no `git`.
+    pub fn is_fresh(&self) -> bool {
+        Stamp::of(&self.entry) == self.stamp
     }
 
     pub fn vars(&self) -> Vars {
@@ -396,7 +455,31 @@ mod tests {
             base: "trunk".into(),
             tree: Node::three_panes(),
             session: "0000-s".into(),
+            stamp: Default::default(),
         }
+    }
+
+    #[test]
+    fn a_stamp_notices_a_config_that_appears_or_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = Entry {
+            path: dir.path().display().to_string(),
+            ..Entry::default()
+        };
+        let before = Stamp::of(&entry);
+        assert_eq!(before, Stamp::of(&entry));
+        let cfg = dir.path().join(".jw.toml");
+        std::fs::write(&cfg, "[layout]\n").unwrap();
+        let written = Stamp::of(&entry);
+        assert_ne!(before, written);
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+        std::fs::File::options()
+            .write(true)
+            .open(&cfg)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        assert_ne!(written, Stamp::of(&entry));
     }
 
     /// REQ-119: setup goes to the shell pane, else before the editor, else

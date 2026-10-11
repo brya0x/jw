@@ -11,7 +11,7 @@
 
 // The code says `crate::proto` and `crate::layout`, as it did when this
 // was one crate.
-use jw_core::{core, layout};
+use jw_core::{core, layout, program};
 use jw_proto::kitty::{self, Kitty};
 use jw_proto::proto;
 
@@ -384,7 +384,21 @@ fn snapshot(id: PaneId, pane: &Pane, st: &PaneState) -> DaemonMsg {
     let screen = st.parser.screen();
     let (rows, cols) = screen.size();
     let mut bytes = st.ring.bytes();
-    bytes.extend_from_slice(b"\x1b[0m");
+    bytes.extend_from_slice(&screen_bytes(st));
+    DaemonMsg::Snapshot {
+        pane: id,
+        role: pane.role.clone(),
+        cols,
+        rows,
+        bytes,
+    }
+}
+
+/// The exact screen, the end of every snapshot: the mode, the cells and the
+/// kitty keyboard stack. Alone, it draws the pane without its scrollback.
+fn screen_bytes(st: &PaneState) -> Vec<u8> {
+    let screen = st.parser.screen();
+    let mut bytes = b"\x1b[0m".to_vec();
     bytes.extend_from_slice(if screen.alternate_screen() {
         b"\x1b[?1049h"
     } else {
@@ -397,13 +411,31 @@ fn snapshot(id: PaneId, pane: &Pane, st: &PaneState) -> DaemonMsg {
             .kitty
             .replay(screen.alternate_screen()),
     );
-    DaemonMsg::Snapshot {
-        pane: id,
-        role: pane.role.clone(),
-        cols,
-        rows,
-        bytes,
-    }
+    bytes
+}
+
+/// A snapshot in two: the `Screen` to draw at once and the `History` to
+/// replay behind it (`SplitSnapshots`).
+fn split_snapshot(id: PaneId, pane: &Pane, st: &PaneState) -> [DaemonMsg; 2] {
+    let (rows, cols) = st.parser.screen().size();
+    let screen = screen_bytes(st);
+    let mut history = st.ring.bytes();
+    history.extend_from_slice(&screen);
+    [
+        DaemonMsg::Screen {
+            pane: id,
+            role: pane.role.clone(),
+            cols,
+            rows,
+            bytes: screen,
+        },
+        DaemonMsg::History {
+            pane: id,
+            cols,
+            rows,
+            bytes: history,
+        },
+    ]
 }
 
 /// The local time as `HH:MM`.
@@ -510,20 +542,20 @@ impl Daemon {
             ClientMsg::Hello { .. } => {
                 let _ = tx.send(DaemonMsg::Hello { protocol: PROTOCOL });
             }
+            ClientMsg::SplitSnapshots => tx.set_split(),
             ClientMsg::Attach { stream } => self.attach(client, tx, &stream),
             ClientMsg::Detach => self.unsubscribe(client),
             ClientMsg::Prompt { stream, text } => {
-                let (id, pane) = self
-                    .panes_of(&stream)
-                    .into_iter()
-                    .find(|(_, p)| p.role == "agent")
-                    .with_context(|| format!("{stream} has no agent pane open"))?;
+                let panes = self.panes_of(&stream);
                 let tx = tx.clone();
-                // Waiting can take seconds; other messages from this client
-                // must not queue behind it.
+                // Waiting can take seconds, and finding an agent by program
+                // runs `ps`: other messages from this client must not queue
+                // behind either.
                 thread::spawn(move || {
-                    let msg = match prompt(&pane, &text) {
-                        Ok(()) => DaemonMsg::Prompted { pane: id },
+                    let sent = agent_pane(&stream, panes)
+                        .and_then(|(id, pane)| prompt(&pane, &text).map(|()| id));
+                    let msg = match sent {
+                        Ok(id) => DaemonMsg::Prompted { pane: id },
                         Err(e) => DaemonMsg::Error {
                             msg: format!("{e:#}"),
                         },
@@ -547,7 +579,7 @@ impl Daemon {
                             (st.exited, st.last_output.elapsed() < BUSY, st.bell, agent)
                         };
                         let leader = match exited {
-                            None => lock(&p.io).master.process_group_leader(),
+                            None => leader_of(p),
                             Some(_) => None,
                         };
                         let fg = leader.and_then(process_name);
@@ -699,7 +731,13 @@ impl Daemon {
     fn watch(&self, client: u64, tx: &Tx, id: PaneId) {
         let Ok(pane) = self.pane(id) else { return };
         let mut st = lock(&pane.state);
-        let _ = tx.send(snapshot(id, &pane, &st));
+        if tx.split() {
+            for m in split_snapshot(id, &pane, &st) {
+                let _ = tx.send(m);
+            }
+        } else {
+            let _ = tx.send(snapshot(id, &pane, &st));
+        }
         if let Some(status) = st.exited {
             let _ = tx.send(DaemonMsg::Exited { pane: id, status });
         }
@@ -1363,6 +1401,30 @@ fn size(cols: u16, rows: u16) -> PtySize {
         pixel_width: 0,
         pixel_height: 0,
     }
+}
+
+/// The process group in the foreground of a pane's terminal.
+fn leader_of(pane: &Pane) -> Option<libc::pid_t> {
+    lock(&pane.io).master.process_group_leader()
+}
+
+/// Where a prompt goes (REQ-194 to REQ-196): the pane with role `agent`, else
+/// the live pane with the lowest id that has a known agent in the foreground.
+fn agent_pane(stream: &str, mut panes: Vec<(PaneId, Arc<Pane>)>) -> Result<(PaneId, Arc<Pane>)> {
+    panes.sort_by_key(|(id, _)| *id);
+    if let Some(i) = panes.iter().position(|(_, p)| p.role == "agent") {
+        return Ok(panes.swap_remove(i));
+    }
+    panes
+        .into_iter()
+        .find(|(_, p)| {
+            // The state guard is gone before `io` and `ps` (daemon AGENTS.md).
+            let live = lock(&p.state).exited.is_none();
+            live && leader_of(p)
+                .and_then(process_name)
+                .is_some_and(|name| program::is_agent_program(&name))
+        })
+        .with_context(|| format!("{stream} has no agent pane open"))
 }
 
 /// The command name of a process (`ps -o comm=`), without its directory.
