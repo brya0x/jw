@@ -15,7 +15,7 @@ pub type PaneId = u64;
 
 /// Bumped whenever a message changes shape: a client and a daemon from
 /// different builds refuse each other instead of misreading (RISK-14).
-pub const PROTOCOL: u32 = 9;
+pub const PROTOCOL: u32 = 10;
 
 /// A pane to start. `cmd` runs through `sh -c`; `None` starts `$SHELL`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -298,6 +298,11 @@ pub enum DaemonMsg {
         status: i32,
     },
     Spawned {
+        pane: PaneId,
+    },
+    /// The pane a `Split` made, to the client that asked (REQ-205). Unlike
+    /// `Spawned` it does not subscribe the client to the pane.
+    Opened {
         pane: PaneId,
     },
     Panes {

@@ -567,6 +567,64 @@ fn hello_answers_with_the_protocol() {
     assert_eq!(next(&mut c), DaemonMsg::Hello { protocol: PROTOCOL });
 }
 
+/// REQ-205: a Split answers its requester with the new pane's id, and only
+/// the requester; a watcher learns of it through the Tree alone. A viewer
+/// gets an id and no process (REQ-181).
+#[test]
+fn a_split_tells_only_its_requester_the_new_pane() {
+    let d = Daemon::start();
+    let mut c = d.client();
+    c.send(&ClientMsg::Open {
+        stream: "w".into(),
+        tree: Tree::Leaf(cat()),
+    })
+    .unwrap();
+    let a = ids(&next_tree(&mut c))[0];
+    let mut watcher = d.client();
+    watcher
+        .send(&ClientMsg::Attach { stream: "w".into() })
+        .unwrap();
+    next_tree(&mut watcher);
+
+    let mut view = cat();
+    view.role = "view:diff".into();
+    c.send(&ClientMsg::Split {
+        pane: a,
+        dir: Dir::Right,
+        new: view,
+    })
+    .unwrap();
+    let opened = loop {
+        if let DaemonMsg::Opened { pane } = next(&mut c) {
+            break pane;
+        }
+    };
+    assert_eq!(ids(&next_tree(&mut watcher)), [a, opened]);
+
+    // Nothing Opened reaches the watcher: the next thing it hears is the
+    // Tree of a later change.
+    c.send(&ClientMsg::Name {
+        pane: a,
+        name: Some("x".into()),
+    })
+    .unwrap();
+    loop {
+        match next(&mut watcher) {
+            DaemonMsg::Opened { .. } => panic!("the watcher got Opened"),
+            DaemonMsg::Tree { .. } => break,
+            _ => {}
+        }
+    }
+
+    c.send(&ClientMsg::List).unwrap();
+    loop {
+        if let DaemonMsg::Panes { panes } = next(&mut c) {
+            assert!(panes.iter().all(|p| p.pane != opened), "{panes:?}");
+            break;
+        }
+    }
+}
+
 /// REQ-34: every change to a workspace's panes reaches its tree, the
 /// clients watching it, and session.json.
 #[test]
