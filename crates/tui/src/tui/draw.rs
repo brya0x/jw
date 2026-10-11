@@ -65,7 +65,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 }
 
 /// `✓ Copied to clipboard`, on the top edge of the pane the copy came from
-/// (REQ-134).
+/// (REQ-135).
 fn banner(f: &mut Frame, app: &App) {
     let Some((id, n, _)) = app.copied else {
         return;

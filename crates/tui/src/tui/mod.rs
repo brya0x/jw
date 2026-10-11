@@ -221,7 +221,7 @@ pub struct App {
     edge: Option<isize>,
     /// The last left click: when, where and how many in a row.
     clicks: Option<(Instant, u16, u16, u8)>,
-    /// What the last copy sent, to show its banner on that pane (REQ-134).
+    /// What the last copy sent, to show its banner on that pane (REQ-135).
     copied: Option<(PaneId, usize, Instant)>,
     /// `f`: only the focused pane, across the whole terminal.
     pub full: bool,
@@ -1637,9 +1637,8 @@ impl App {
         if text.is_empty() {
             return;
         }
-        let pane = sel.pane;
         match select::copy(&text) {
-            Ok(n) => self.copied = Some((pane, n, Instant::now())),
+            Ok(n) => self.copied = Some((sel.pane, n, Instant::now())),
             Err(e) => self.fail(format!("{e:#}")),
         }
     }
