@@ -13,6 +13,7 @@ mod finder;
 mod keys;
 mod mdview;
 mod modal;
+mod registry_watch;
 mod select;
 mod settings_view;
 mod setup;
@@ -73,12 +74,15 @@ enum Msg {
     /// Twice a second: old status messages go, the panes' state and the
     /// PRs are asked for again.
     Tick,
+    /// The sidebar's rows, read again off the UI thread because another
+    /// process rewrote the registry (addendum 14).
+    Rows(Result<Vec<Row>>),
     /// The pull requests of the worktrees, by workspace id.
     Prs(Vec<(String, Option<crate::connectors::Pr>)>),
     /// A sidebar workspace's stream, resolved on a worker thread.
     Stream(Box<Stream>),
     /// A pane's `Snapshot`, already replayed into its parser by the daemon's
-    /// reader thread (REQ-152): the replay of up to 2 MiB stays off the UI thread.
+    /// reader thread (REQ-186): the replay of up to 2 MiB stays off the UI thread.
     Snapshot {
         pane: PaneId,
         role: String,
@@ -114,6 +118,14 @@ enum Job {
     },
     /// A finished action with nothing else to do but say so.
     Said(String),
+    /// The open PRs gh listed for the picker (REQ-160); `requested` is the
+    /// list asked for.
+    Prs {
+        prs: Vec<crate::connectors::github::PrSummary>,
+        requested: bool,
+    },
+    /// The review workspace is ready to open (REQ-166).
+    Reviewed(Box<crate::review::Reviewed>),
     Diff {
         title: String,
         dir: String,
@@ -236,7 +248,7 @@ impl Pending {
 pub struct PaneView {
     pub role: String,
     pub parser: vt100::Parser<keys::Flags>,
-    /// While its scrollback is being rebuilt (REQ-159): `parser` holds the screen
+    /// While its scrollback is being rebuilt (REQ-193): `parser` holds the screen
     /// only, and what happens to it meanwhile is kept to redo on the full one.
     pub history: Option<Pending>,
     pub exited: Option<i32>,
@@ -303,6 +315,9 @@ pub struct App {
     /// A viewer waiting for its pane: it fills the next viewer leaf the
     /// tree brings.
     pending_view: Option<View>,
+    /// What to tell the agent of a review once its workspace's panes are
+    /// open: the workspace id and the text (REQ-171).
+    pending_prompt: Option<(String, String)>,
     /// The action running in the background, for the status bar.
     pub busy: Option<String>,
     /// For worker threads to report back.
@@ -311,6 +326,11 @@ pub struct App {
     exit_reason: Option<String>,
     /// The settings and theme files, to apply their changes.
     watch: crate::settings::Watch,
+    /// `workspaces.json` and `folders.json`, to follow what others write.
+    regwatch: registry_watch::RegistryWatch,
+    /// Rows read after an outside change, held while a modal, picker or
+    /// the settings screen is open (REQ-154).
+    pending_rows: Option<Vec<Row>>,
     /// Just started, or just switched session: with nothing running, the
     /// next List opens the session's last workspace.
     fresh: bool,
@@ -321,7 +341,7 @@ pub struct App {
     last_draw: Instant,
     /// The last frame, kept only under `JW_TRACE_CELLS`, to count the cells a draw changed.
     traced: Option<ratatui::buffer::Buffer>,
-    /// Streams resolved off the UI thread, by workspace id (REQ-151): a switch to
+    /// Streams resolved off the UI thread, by workspace id (REQ-185): a switch to
     /// an open workspace reuses one instead of running `git` on the UI thread.
     streams: BTreeMap<String, Stream>,
     /// Ids already sent to be resolved, so `reload` asks once.
@@ -639,10 +659,13 @@ impl App {
             told: None,
             views: BTreeMap::new(),
             pending_view: None,
+            pending_prompt: None,
             busy: None,
             events,
             exit_reason: None,
             watch: crate::settings::Watch::new(),
+            regwatch: registry_watch::RegistryWatch::new(),
+            pending_rows: None,
             fresh: true,
             motion: anim::Motion::default(),
             last_draw: Instant::now(),
@@ -1008,10 +1031,10 @@ impl App {
 
     /// Rebuilds the sidebar from the registry: one space per project.
     fn reload(&mut self) -> Result<()> {
-        trace::span("reload", || self.load_rows())
-    }
-
-    fn load_rows(&mut self) -> Result<()> {
+        // Stamped before reading: a write that lands meanwhile shows on the
+        // next look (RISK-48), and this one is not taken for someone else's.
+        self.regwatch.sync();
+        self.pending_rows = None;
         let state = registry::state_dir()?;
         let folders = trace::span("reload_folders", || crate::folders::load(&state))?;
         let reg_path = registry::default_path()?;
@@ -1019,67 +1042,51 @@ impl App {
         if trace::span("reload_fill_roots", || actions::fill_roots(&mut reg)) {
             reg.save(&reg_path)?;
         }
-        let session = crate::session::current();
-        let mut groups: Vec<(Entry, Vec<Entry>)> = trace::span("reload_entries", || {
-            folders
-                .folders
-                .iter()
-                .map(|f| (crate::folders::entry_for(f, &session), Vec::new()))
-                .collect()
-        });
-        let mut by_project: BTreeMap<String, Vec<Entry>> = BTreeMap::new();
-        for e in reg
-            .entries
-            .into_iter()
-            .filter(|e| crate::session::owns(&session, &e.session))
-        {
-            by_project.entry(e.project.clone()).or_default().push(e);
-        }
-        for (project, mut worktrees) in by_project {
-            worktrees.sort_by(|a, b| a.name.cmp(&b.name));
-            let root = worktrees
-                .iter()
-                .find(|w| !w.root.is_empty())
-                .map(|w| w.root.clone());
-            let at = groups.iter().position(|(r, _)| {
-                !r.branch.is_empty() && (r.project == project || Some(&r.path) == root.as_ref())
-            });
-            match at {
-                Some(i) => groups[i].1 = worktrees,
-                None => {
-                    // Worktrees whose project folder isn't open: the folder
-                    // shows closed, above them.
-                    let mut e = match &root {
-                        Some(dir) => crate::folders::entry(dir, false),
-                        None => Entry {
-                            id: crate::folders::id(&project),
-                            name: project.clone(),
-                            ..Entry::default()
-                        },
-                    };
-                    e.project = project;
-                    groups.push((e, worktrees));
-                }
-            }
-        }
-        self.rows = groups
-            .into_iter()
-            .flat_map(|(root, kids)| {
-                std::iter::once(Row {
-                    entry: root,
-                    child: false,
-                })
-                .chain(kids.into_iter().map(|entry| Row { entry, child: true }))
-            })
-            .collect();
-        // The workspace on screen keeps its latest name and branch.
+        let rows = build_rows(&folders, reg, &crate::session::current());
+        self.apply_rows(rows);
+        Ok(())
+    }
+
+    /// The workspace on screen keeps its latest name and branch.
+    fn apply_rows(&mut self, rows: Vec<Row>) {
+        self.rows = rows;
         if let Some(s) = &mut self.active
             && let Some(row) = self.rows.iter().find(|r| r.entry.id == s.entry.id)
         {
             s.entry = row.entry.clone();
         }
         self.warm_streams();
-        Ok(())
+    }
+
+    fn overlay_open(&self) -> bool {
+        self.modal.is_some() || self.finder.is_some() || self.settings.is_some()
+    }
+
+    /// Rows read again off the UI thread, with no write and no busy mark
+    /// (REQ-155, REQ-156).
+    fn reload_rows_in_background(&self) {
+        let tx = self.events.clone();
+        thread::spawn(move || {
+            let _ = tx.send(Msg::Rows(load_rows()));
+        });
+    }
+
+    /// Rows another process wrote: shown now, or once the overlay closes.
+    fn on_rows(&mut self, rows: Result<Vec<Row>>) {
+        // Unreadable (half-written by a tool that doesn't rename): the rows
+        // stay and the next change tries again, silently (REQ-157).
+        if let Ok(rows) = rows {
+            self.pending_rows = Some(rows);
+            self.apply_pending_rows();
+        }
+    }
+
+    fn apply_pending_rows(&mut self) {
+        if !self.overlay_open()
+            && let Some(rows) = self.pending_rows.take()
+        {
+            self.apply_rows(rows);
+        }
     }
 
     /// Looks up the PR of every worktree that is open, off the main thread
@@ -1224,6 +1231,7 @@ impl App {
             Msg::Term(_) => {}
             Msg::Tick => {
                 self.tell_theme();
+                self.apply_pending_rows();
                 if self
                     .status
                     .as_ref()
@@ -1240,6 +1248,9 @@ impl App {
                 // Every 2 s the panes' state (✻ ? ⚡), every minute the PRs.
                 if self.ticks.is_multiple_of(4) {
                     self.send(ClientMsg::List);
+                    if self.regwatch.changed() {
+                        self.reload_rows_in_background();
+                    }
                     // REQ-69: settings and themes edited anywhere apply.
                     match self.watch.check() {
                         Ok(true) => {
@@ -1278,6 +1289,7 @@ impl App {
             Msg::Stream(s) => {
                 self.streams.insert(s.entry.id.clone(), *s);
             }
+            Msg::Rows(rows) => self.on_rows(rows),
         }
     }
 
@@ -1442,6 +1454,8 @@ impl App {
                     self.finder = None;
                     self.picked(pick);
                 }
+                finder::Outcome::Reload(requested) => self.load_reviews(requested),
+                finder::Outcome::Browse(url) => self.browse(&url),
             }
             return;
         }
@@ -1535,6 +1549,7 @@ impl App {
                 Some("rename") => self.ask_rename(),
                 Some("sync") => self.run_sync(),
                 Some("diff") => self.open_diff(),
+                Some("review") => self.ask_review(),
                 Some("remove") => self.ask_remove(),
                 Some("pane") => self.new_pane(),
                 Some("close") => self.close_pane(),
@@ -1796,6 +1811,7 @@ impl App {
             stream: stream.entry.id.clone(),
             tree,
         });
+        self.send_pending_prompt(&stream.entry.id);
         stream.mark_opened()
     }
 
@@ -2830,6 +2846,79 @@ impl App {
         ));
     }
 
+    /// `^␣ R`: the open pull requests of the current project (REQ-160). The
+    /// picker opens at once and gh runs off this thread.
+    fn ask_review(&mut self) {
+        if self.current_repo_stream("review").is_none() {
+            return;
+        }
+        self.finder = Some(finder::Finder::reviews(false));
+        self.load_reviews(false);
+    }
+
+    /// Asks gh for the list the picker waits for.
+    fn load_reviews(&mut self, requested: bool) {
+        let Some(entry) = self.current().cloned() else {
+            return;
+        };
+        self.background("loading pull requests".into(), move || {
+            let gh = crate::connectors::github::Client::default();
+            let prs = gh.open_prs(std::path::Path::new(&entry.path), requested)?;
+            Ok(Job::Prs { prs, requested })
+        });
+    }
+
+    /// `↵` on a PR: its head, the worktree and the context, off this thread
+    /// (REQ-165, REQ-166).
+    fn start_review(&mut self, pr: crate::connectors::github::PrSummary) {
+        let Some(entry) = self.current().cloned() else {
+            return;
+        };
+        self.background(format!("fetching #{}", pr.number), move || {
+            let project = Project::open(std::path::Path::new(&entry.path))?;
+            let gh = crate::connectors::github::Client::default();
+            let r = crate::review::review_stream(
+                &project,
+                &gh,
+                &pr,
+                &registry::default_path()?,
+                &registry::state_dir()?,
+            )?;
+            Ok(Job::Reviewed(Box::new(r)))
+        });
+    }
+
+    /// The agent of a review is briefed as soon as its panes are asked for;
+    /// the daemon waits for it to be quiet (REQ-171).
+    fn send_pending_prompt(&mut self, id: &str) {
+        if let Some((stream, text)) = self.pending_prompt.take_if(|(s, _)| s == id) {
+            self.send(ClientMsg::Prompt { stream, text });
+        }
+    }
+
+    /// Opens a url in the browser (REQ-180).
+    fn browse(&mut self, url: &str) {
+        let opener = if cfg!(target_os = "macos") {
+            "open"
+        } else {
+            "xdg-open"
+        };
+        match std::process::Command::new(opener)
+            .arg(url)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(mut child) => {
+                // Reaped off this thread, so the opener leaves no zombie.
+                thread::spawn(move || child.wait());
+                self.say(format!("opened {url}"));
+            }
+            Err(e) => self.fail(format!("{opener}: {e}")),
+        }
+    }
+
     /// A file of the current workspace: Markdown in the reader, anything
     /// else in its nvim pane, started on the right when there is none.
     fn open_file(&mut self, file: &str) {
@@ -2916,6 +3005,7 @@ impl App {
                 return;
             }
             finder::Pick::File(f) => return self.open_file(&f),
+            finder::Pick::Review(pr) => return self.start_review(*pr),
             finder::Pick::Session(s) => return self.switch_session(&s),
             finder::Pick::NewSession(s) => return self.new_session(&s),
             finder::Pick::RenameSession(s) => {
@@ -2983,7 +3073,9 @@ impl App {
         let Some(s) = &self.active else {
             return false;
         };
+        // A review is always the diff beside the agent: nothing to save.
         !crate::folders::is_folder(&s.entry)
+            && s.entry.review_base.is_empty()
             && self
                 .live_layout()
                 .is_some_and(|live| live != even(&s.cfg.layout.tree()))
@@ -3182,6 +3274,12 @@ impl App {
         match m {
             Modal::Close { entry, .. } => self.close(&entry),
             Modal::ClosePane { pane, .. } => self.send(ClientMsg::Kill { pane }),
+            Modal::Resend { stream, prompt, .. } => {
+                self.send(ClientMsg::Prompt {
+                    stream,
+                    text: prompt,
+                });
+            }
             Modal::SaveLayout { path, new, .. } => {
                 match crate::core::config::save_layout(&path, &new) {
                     Ok(()) => {
@@ -3380,7 +3478,37 @@ impl App {
                     None => format!("removed {name}"),
                 });
             }
-            Job::Failed(e) => self.fail(e),
+            Job::Failed(e) => {
+                // A list that could not load leaves no empty picker (REQ-162).
+                if self.finder.as_ref().is_some_and(|f| f.loading_reviews()) {
+                    self.finder = None;
+                }
+                self.fail(e);
+            }
+            Job::Prs { prs, requested } => {
+                if let Some(f) = &mut self.finder {
+                    f.set_reviews(prs, requested);
+                }
+            }
+            Job::Reviewed(r) => {
+                let r = *r;
+                let (id, name, n) = (r.entry.id.clone(), r.entry.name.clone(), r.entry.pr);
+                if r.existed {
+                    self.done(format!("{name} is at the head of #{n} now"));
+                    self.open_entry(r.entry, false);
+                    self.modal = Some(Modal::Resend {
+                        stream: id,
+                        name,
+                        prompt: r.prompt,
+                    });
+                } else {
+                    self.done(format!("reviewing #{n} in {name}"));
+                    self.pending_prompt = Some((id, r.prompt));
+                    self.open_entry(r.entry, r.setup);
+                    // Whatever `open_entry` did not send is not for later.
+                    self.pending_prompt = None;
+                }
+            }
             Job::Renamed { entry, from } => {
                 self.done(format!("renamed to {} on {}", entry.name, entry.branch));
                 self.moved(entry, from);
@@ -3538,6 +3666,69 @@ fn even(n: &Node) -> Node {
         ),
         _ => n.clone(),
     }
+}
+
+/// The registry and the session's folders, read and nothing else: no
+/// `fill_roots`, no save, no migration.
+fn load_rows() -> Result<Vec<Row>> {
+    let folders = crate::folders::Folders::load(&crate::folders::default_path()?)?;
+    let reg = Registry::load(&registry::default_path()?)?;
+    Ok(build_rows(&folders, reg, &crate::session::current()))
+}
+
+/// One project row per opened folder, each registry worktree under its
+/// project's row (REQ-50).
+fn build_rows(folders: &crate::folders::Folders, reg: Registry, session: &str) -> Vec<Row> {
+    let mut groups: Vec<(Entry, Vec<Entry>)> = folders
+        .folders
+        .iter()
+        .map(|f| (crate::folders::entry_for(f, session), Vec::new()))
+        .collect();
+    let mut by_project: BTreeMap<String, Vec<Entry>> = BTreeMap::new();
+    for e in reg
+        .entries
+        .into_iter()
+        .filter(|e| crate::session::owns(session, &e.session))
+    {
+        by_project.entry(e.project.clone()).or_default().push(e);
+    }
+    for (project, mut worktrees) in by_project {
+        worktrees.sort_by(|a, b| a.name.cmp(&b.name));
+        let root = worktrees
+            .iter()
+            .find(|w| !w.root.is_empty())
+            .map(|w| w.root.clone());
+        let at = groups.iter().position(|(r, _)| {
+            !r.branch.is_empty() && (r.project == project || Some(&r.path) == root.as_ref())
+        });
+        match at {
+            Some(i) => groups[i].1 = worktrees,
+            None => {
+                // Worktrees whose project folder isn't open: the folder
+                // shows closed, above them.
+                let mut e = match &root {
+                    Some(dir) => crate::folders::entry(dir, false),
+                    None => Entry {
+                        id: crate::folders::id(&project),
+                        name: project.clone(),
+                        ..Entry::default()
+                    },
+                };
+                e.project = project;
+                groups.push((e, worktrees));
+            }
+        }
+    }
+    groups
+        .into_iter()
+        .flat_map(|(root, kids)| {
+            std::iter::once(Row {
+                entry: root,
+                child: false,
+            })
+            .chain(kids.into_iter().map(|entry| Row { entry, child: true }))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -3873,5 +4064,142 @@ mod motion_tests {
         assert_eq!(view.parser.screen().contents(), "4\n5\n6");
         view.parser.screen_mut().set_scrollback(usize::MAX);
         assert_eq!(view.parser.screen().scrollback(), 3);
+    }
+
+    fn rows(ids: &[&str]) -> Vec<Row> {
+        ids.iter()
+            .map(|id| Row {
+                entry: entry(id),
+                child: false,
+            })
+            .collect()
+    }
+
+    fn ids(app: &App) -> Vec<&str> {
+        app.rows.iter().map(|r| r.entry.id.as_str()).collect()
+    }
+
+    #[test]
+    fn rows_from_outside_replace_the_sidebar_and_keep_the_open_workspace() {
+        let (mut app, _g) = app(false);
+        app.on_rows(Ok(rows(&["a", "b", "c", "d"])));
+        assert_eq!(ids(&app), ["a", "b", "c", "d"]);
+        assert_eq!(app.active.as_ref().unwrap().entry.id, "a");
+        assert!(app.pending_rows.is_none());
+    }
+
+    #[test]
+    fn rows_wait_while_a_modal_is_open_and_land_when_it_closes() {
+        let (mut app, _g) = app(false);
+        app.modal = Some(Modal::Name {
+            pane: 1,
+            text: String::new(),
+        });
+        app.on_rows(Ok(rows(&["a", "z"])));
+        assert_eq!(ids(&app), ["a", "b", "c"], "the modal's rows stay put");
+        app.apply_pending_rows();
+        assert_eq!(ids(&app), ["a", "b", "c"]);
+        app.modal = None;
+        app.apply_pending_rows();
+        assert_eq!(ids(&app), ["a", "z"]);
+        assert!(app.pending_rows.is_none());
+    }
+
+    #[test]
+    fn rows_that_could_not_be_read_change_nothing() {
+        let (mut app, _g) = app(false);
+        app.on_rows(Err(anyhow::anyhow!("truncated")));
+        assert_eq!(ids(&app), ["a", "b", "c"]);
+        assert!(app.status.is_none(), "and say nothing");
+    }
+
+    #[test]
+    fn the_idle_loop_still_blocks_with_the_registry_watch() {
+        let (mut app, _g) = app(false);
+        assert!(app.next_wake(Instant::now()).is_none());
+    }
+}
+
+#[cfg(test)]
+mod review_tests {
+    use super::*;
+    use std::os::unix::net::UnixListener;
+
+    /// An app whose daemon is a thread that hands back what it is sent.
+    fn listening(name: &str) -> (App, mpsc::Receiver<ClientMsg>) {
+        let dir = std::env::temp_dir().join(format!("jwr{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock = dir.join("s");
+        let _ = std::fs::remove_file(&sock);
+        let listener = UnixListener::bind(&sock).unwrap();
+        let (got_tx, got_rx) = mpsc::channel();
+        thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            while let Ok(Some(m)) = crate::proto::read_frame::<ClientMsg>(&mut s) {
+                if got_tx.send(m).is_err() {
+                    break;
+                }
+            }
+        });
+        let client = Client::connect(&sock).unwrap();
+        let (tx, _rx) = mpsc::channel();
+        (App::bare(client, tx, Leader::DEFAULT, (120, 35)), got_rx)
+    }
+
+    fn prompt_of(m: ClientMsg) -> (String, String) {
+        match m {
+            ClientMsg::Prompt { stream, text } => (stream, text),
+            _ => panic!("expected a Prompt"),
+        }
+    }
+
+    /// REQ-171: the prompt goes to the review's own workspace once, and
+    /// another workspace opening does not take it.
+    #[test]
+    fn the_review_prompt_goes_out_only_for_its_workspace() {
+        let (mut app, got) = listening("own");
+        app.pending_prompt = Some(("r1".into(), "Review #7".into()));
+        app.send_pending_prompt("other");
+        assert!(got.recv_timeout(Duration::from_millis(150)).is_err());
+        assert!(app.pending_prompt.is_some());
+
+        app.send_pending_prompt("r1");
+        let sent = prompt_of(got.recv_timeout(Duration::from_secs(2)).unwrap());
+        assert_eq!(sent, ("r1".to_string(), "Review #7".to_string()));
+        assert!(app.pending_prompt.is_none());
+        app.send_pending_prompt("r1");
+        assert!(got.recv_timeout(Duration::from_millis(150)).is_err());
+    }
+
+    /// REQ-173: only a yes sends the prompt to a review that existed.
+    #[test]
+    fn a_yes_sends_the_prompt_again_and_a_no_does_not() {
+        let (mut app, got) = listening("resend");
+        let ask = || Modal::Resend {
+            stream: "r1".into(),
+            name: "review-7".into(),
+            prompt: "Review #7".into(),
+        };
+        app.modal = Some(ask());
+        assert!(matches!(
+            app.modal
+                .as_mut()
+                .unwrap()
+                .key(KeyEvent::from(KeyCode::Esc)),
+            Outcome::Cancel
+        ));
+        assert!(got.recv_timeout(Duration::from_millis(150)).is_err());
+
+        app.modal = Some(ask());
+        assert!(matches!(
+            app.modal
+                .as_mut()
+                .unwrap()
+                .key(KeyEvent::from(KeyCode::Char('y'))),
+            Outcome::Submit
+        ));
+        app.submit_modal();
+        let sent = prompt_of(got.recv_timeout(Duration::from_secs(2)).unwrap());
+        assert_eq!(sent.0, "r1");
     }
 }

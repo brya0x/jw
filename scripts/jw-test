@@ -38,7 +38,7 @@ fi
 cat > "$D/launch.sh" <<LAUNCH
 #!/bin/sh
 export HOME="$D/home" XDG_RUNTIME_DIR="$D/run" XDG_STATE_HOME="$D/state" XDG_CONFIG_HOME="$D/cfg"
-export JW_WELCOME=${JW_WELCOME:-1} COLORTERM=truecolor SHELL=\${SHELL:-/bin/zsh}
+export JW_GH=${JW_GH:-} JW_WELCOME=${JW_WELCOME:-1} COLORTERM=truecolor SHELL=\${SHELL:-/bin/zsh}
 unset JW_SOCKET JW_SESSION
 cd "$D/home/demo"
 exec "$REPO/target/$PROFILE/jw"

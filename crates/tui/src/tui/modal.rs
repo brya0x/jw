@@ -71,6 +71,13 @@ pub enum Modal {
     },
     /// `ctrl-r` in the session picker: a new name for a session.
     RenameSession { old: String, text: String },
+    /// Picking a PR whose review workspace exists: its agent may hold a
+    /// conversation, so the prompt is sent again only on a yes (REQ-173).
+    Resend {
+        stream: String,
+        name: String,
+        prompt: String,
+    },
     /// `done`: its PR is merged and nothing would be lost; one yes deletes it.
     Done {
         entry: Entry,
@@ -119,13 +126,14 @@ impl Modal {
                 _ => Outcome::Stay,
             },
             Modal::Setup(_) => Outcome::Stay,
-            Modal::Close { .. } | Modal::ClosePane { .. } | Modal::SaveLayout { .. } => {
-                match k.code {
-                    KeyCode::Char('y') | KeyCode::Enter => Outcome::Submit,
-                    KeyCode::Char('n') => Outcome::Cancel,
-                    _ => Outcome::Stay,
-                }
-            }
+            Modal::Close { .. }
+            | Modal::ClosePane { .. }
+            | Modal::SaveLayout { .. }
+            | Modal::Resend { .. } => match k.code {
+                KeyCode::Char('y') | KeyCode::Enter => Outcome::Submit,
+                KeyCode::Char('n') => Outcome::Cancel,
+                _ => Outcome::Stay,
+            },
             Modal::New {
                 project,
                 text,
@@ -312,6 +320,19 @@ impl Modal {
                 l.push(Line::default());
                 l.push(keys(&[("↵", "save"), ("esc", "cancel")]));
                 (" Save this layout? ".to_string(), l)
+            }
+            Modal::Resend { name, .. } => {
+                let dim = Style::default().fg(p().dim);
+                let l = vec![
+                    Line::from(" Its agent may already hold a conversation."),
+                    Line::from(Span::styled(
+                        " The review prompt goes in as a new message.",
+                        dim,
+                    )),
+                    Line::default(),
+                    keys(&[("y", "send it"), ("esc", "just switch")]),
+                ];
+                (format!(" Send the review prompt to {name} again? "), l)
             }
             Modal::ClosePane { title, running, .. } => {
                 let l = vec![

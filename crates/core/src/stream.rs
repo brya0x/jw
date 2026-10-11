@@ -90,6 +90,16 @@ fn plain(entry: &Entry) -> Result<bool> {
         .any(|f| f.dir == entry.path && f.plain))
 }
 
+/// The panes of a review: the diff and the agent, half each.
+pub fn review_tree() -> Node {
+    Node::split(
+        crate::layout::Dir::Right,
+        0.5,
+        Node::leaf("view:diff"),
+        Node::leaf("agent"),
+    )
+}
+
 impl Stream {
     /// Finds the project of `entry` from its worktree and loads its config.
     /// An opened folder (REQ-55): a repository with a jw config starts with
@@ -127,8 +137,13 @@ impl Stream {
         }
         let repo = Repo::open(Path::new(&entry.path))?;
         let cfg = config::load(&repo.root, &repo.remote, &entry.project)?;
-        let base = repo.default_branch()?;
-        let tree = cfg.layout.tree();
+        // A review compares against its PR's base and always opens as the
+        // diff beside the agent (REQ-168, REQ-169).
+        let (base, tree) = if entry.review_base.is_empty() {
+            (repo.default_branch()?, cfg.layout.tree())
+        } else {
+            (entry.review_base.clone(), review_tree())
+        };
         Ok(Self {
             entry: entry.clone(),
             cfg,
@@ -202,7 +217,7 @@ impl Stream {
             );
             let at = specs
                 .iter()
-                .position(|s| s.cmd.is_none())
+                .position(|s| s.cmd.is_none() && !s.role.starts_with("view:"))
                 .or_else(|| specs.iter().position(|s| s.role == "editor"))
                 .or_else(|| specs.iter().position(|s| s.role == "agent"))
                 .unwrap_or(0);
@@ -263,6 +278,8 @@ impl Stream {
     fn command(&self, run: &str, vars: &Vars) -> Result<Option<String>> {
         let line = match run {
             "shell" => return Ok(None),
+            // A viewer the client draws: it has no process.
+            r if r.starts_with("view:") => return Ok(None),
             "editor" => return Ok(Some(listen(&expand(&self.cfg.layout.editor, vars)?))),
             "agent" => return self.agent_command(vars).map(Some),
             _ => match run.strip_prefix("dev:") {
@@ -604,5 +621,24 @@ mod tests {
         s.cfg.dev.insert("empty".into(), Vec::new());
         s.tree = Node::leaf("dev:empty");
         assert!(s.panes().is_err(), "a service with no commands");
+    }
+
+    /// REQ-168: in a review the setup goes before the agent, never into the
+    /// diff viewer, which has no process.
+    #[test]
+    fn a_review_has_no_process_for_its_diff_and_setup_goes_to_the_agent() {
+        let mut s = stream(false);
+        s.cfg.setup = vec!["pnpm install".into()];
+        s.tree = review_tree();
+        let specs = s.open_specs(true).unwrap();
+        let roles: Vec<_> = specs.iter().map(|p| p.role.as_str()).collect();
+        assert_eq!(roles, ["view:diff", "agent"]);
+        assert_eq!(specs[0].cmd, None);
+        assert!(specs[1].cmd.as_deref().unwrap().contains("pnpm install"));
+        // Half and half, the diff on the left.
+        assert_eq!(
+            (s.tree.split, s.tree.ratio),
+            (Some(crate::layout::Dir::Right), Some(0.5))
+        );
     }
 }

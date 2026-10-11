@@ -57,6 +57,11 @@ pub struct Entry {
     /// The jw session the worktree belongs to; empty is `main`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub session: String,
+    /// The base branch of the pull request this worktree reviews (REQ-168):
+    /// its diff compares against it and it opens as a review. `pr` holds
+    /// the number. Empty for every other worktree.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub review_base: String,
 }
 
 /// The whole file on disk.
@@ -437,5 +442,24 @@ mod tests {
         assert_eq!(id.len(), 36);
         assert_eq!(b[14], b'4');
         assert!(matches!(b[19], b'8' | b'9' | b'a' | b'b'), "{id}");
+    }
+
+    /// REQ-178: only a review writes `review_base`, so every other entry
+    /// is saved as before.
+    #[test]
+    fn review_base_is_written_only_for_a_review() {
+        let plain = serde_json::to_string(&entry("a", "web", 1)).unwrap();
+        assert!(!plain.contains("review_base"), "{plain}");
+        let mut r = entry("b", "review-7", 2);
+        r.pr = 7;
+        r.review_base = "main".into();
+        let json = serde_json::to_string(&r).unwrap();
+        assert!(json.contains(r#""review_base":"main""#), "{json}");
+        assert_eq!(serde_json::from_str::<Entry>(&json).unwrap(), r);
+        // A file from before the field reads with it empty.
+        assert_eq!(
+            serde_json::from_str::<Entry>(&plain).unwrap().review_base,
+            ""
+        );
     }
 }

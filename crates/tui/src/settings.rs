@@ -45,7 +45,7 @@ pub struct Settings {
 /// The actions a key after the leader can be given, by group: `(group,
 /// action, what the popup says, default key)`. A key is one character, or
 /// `tab`/`space`.
-pub const ACTIONS: [(&str, &str, &str, &str); 16] = [
+pub const ACTIONS: [(&str, &str, &str, &str); 17] = [
     ("go", "switch", "switch", "space"),
     ("go", "previous", "previous", "tab"),
     ("go", "open", "open folder", "o"),
@@ -56,6 +56,7 @@ pub const ACTIONS: [(&str, &str, &str, &str); 16] = [
     ("worktree", "rename", "rename", "r"),
     ("worktree", "sync", "sync", "s"),
     ("worktree", "diff", "changes", "d"),
+    ("worktree", "review", "review a PR", "R"),
     ("worktree", "remove", "remove", "X"),
     ("panes", "pane", "new", "t"),
     ("panes", "close", "close", "x"),
