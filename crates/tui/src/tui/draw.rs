@@ -49,6 +49,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             ),
         }
     }
+    banner(f, app);
     if let Some(m) = &app.modal {
         m.draw(f);
     }
@@ -61,6 +62,44 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.which {
         which(f, app);
     }
+}
+
+/// `✓ Copied to clipboard`, on the top edge of the pane the copy came from
+/// (REQ-134).
+fn banner(f: &mut Frame, app: &App) {
+    let Some((id, n, _)) = app.copied else {
+        return;
+    };
+    let Some(rect) = app
+        .pane_rects()
+        .into_iter()
+        .find(|(p, _)| *p == id)
+        .map(|(_, r)| trect(r))
+    else {
+        return;
+    };
+    let text = banner_text(n);
+    let w = (text.chars().count() as u16).min(rect.width.saturating_sub(2));
+    if w == 0 {
+        return;
+    }
+    let r = TRect::new(rect.x + rect.width - 1 - w, rect.y, w, 1);
+    f.render_widget(
+        Paragraph::new(text).style(
+            Style::default()
+                .bg(p().green)
+                .fg(p().bg)
+                .add_modifier(Modifier::BOLD),
+        ),
+        r,
+    );
+}
+
+fn banner_text(n: usize) -> String {
+    format!(
+        " ✓ Copied to clipboard · {n} character{} ",
+        if n == 1 { "" } else { "s" }
+    )
 }
 
 fn trect(r: Rect) -> TRect {
@@ -679,5 +718,11 @@ mod tests {
         assert!(painted(1, 0) && painted(7, 0), "the rest of the first row");
         assert!(painted(0, 1), "up to the head, inclusive");
         assert!(!painted(1, 1), "after the head");
+    }
+
+    #[test]
+    fn the_banner_counts_characters() {
+        assert!(banner_text(1).contains("1 character "));
+        assert!(banner_text(12).contains("12 characters "));
     }
 }

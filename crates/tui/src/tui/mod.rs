@@ -176,6 +176,9 @@ fn drain<T>(rx: &Receiver<T>, budget: Duration, mut apply: impl FnMut(T) -> bool
 /// How long a status message stays.
 const STATUS_FOR: Duration = Duration::from_secs(4);
 
+/// How long the copied banner stays (it leaves on the next 500 ms tick).
+const BANNER_FOR: Duration = Duration::from_millis(1500);
+
 /// A pane of the current workspace as this client sees it.
 pub struct PaneView {
     pub role: String,
@@ -218,6 +221,8 @@ pub struct App {
     edge: Option<isize>,
     /// The last left click: when, where and how many in a row.
     clicks: Option<(Instant, u16, u16, u8)>,
+    /// What the last copy sent, to show its banner on that pane (REQ-134).
+    copied: Option<(PaneId, usize, Instant)>,
     /// `f`: only the focused pane, across the whole terminal.
     pub full: bool,
     pub status: Option<Status>,
@@ -428,6 +433,7 @@ impl App {
             selecting: false,
             edge: None,
             clicks: None,
+            copied: None,
             full: false,
             status: None,
             size,
@@ -717,6 +723,12 @@ impl App {
                     .is_some_and(|s| s.at.elapsed() > STATUS_FOR)
                 {
                     self.status = None;
+                }
+                if self
+                    .copied
+                    .is_some_and(|(_, _, at)| at.elapsed() > BANNER_FOR)
+                {
+                    self.copied = None;
                 }
                 // Every 2 s the panes' state (✻ ? ⚡), every minute the PRs.
                 if self.ticks.is_multiple_of(4) {
@@ -1625,8 +1637,9 @@ impl App {
         if text.is_empty() {
             return;
         }
+        let pane = sel.pane;
         match select::copy(&text) {
-            Ok(n) => self.done(format!("copied {n} characters")),
+            Ok(n) => self.copied = Some((pane, n, Instant::now())),
             Err(e) => self.fail(format!("{e:#}")),
         }
     }
