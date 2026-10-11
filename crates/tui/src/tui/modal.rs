@@ -93,6 +93,13 @@ pub enum Modal {
         typed: String,
         error: Option<String>,
     },
+    /// `^␣ m`: mobile. What it shows is `App::mobile`, and its keys are
+    /// `mobile::key`, which can reach the daemon; this holds only what the
+    /// modal itself remembers.
+    Mobile(super::mobile::View),
+    /// A phone asks to pair (REQ-45), over the screen or over the Mobile
+    /// modal, which it hands back when it is answered.
+    Pair(Box<super::mobile::Ask>, Option<super::mobile::View>),
 }
 
 /// The longest pane name, so it fits a pane's title.
@@ -226,12 +233,16 @@ impl Modal {
                     _ => Outcome::Stay,
                 }
             }
+            // Their keys go through `mobile::key`, which has the `App`.
+            Modal::Mobile(_) | Modal::Pair(..) => Outcome::Stay,
         }
     }
 
     pub fn draw(&self, f: &mut Frame) {
         let (title, lines) = match self {
             Modal::Setup(s) => return s.draw(f),
+            // Drawn by `mobile::draw`, which has the `App`.
+            Modal::Mobile(_) | Modal::Pair(..) => return,
             Modal::Done {
                 entry, plan, pr, ..
             } => {
@@ -533,29 +544,42 @@ impl Modal {
                 rm_lines(entry, plan, typed, error),
             ),
         };
-        let area = f.area();
-        let w = 64.min(area.width.saturating_sub(4));
-        let h = (lines.len() as u16 + 2).min(area.height);
-        let r = TRect::new(
-            area.x + (area.width - w) / 2,
-            area.y + area.height.saturating_sub(h) / 3,
-            w,
-            h,
-        );
-        f.render_widget(Clear, r);
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(p().blue))
-            .title(Span::styled(
-                title,
-                Style::default().fg(p().blue).add_modifier(Modifier::BOLD),
-            ))
-            .style(Style::default().bg(p().panel).fg(p().fg));
-        let inner = block.inner(r);
-        f.render_widget(block, r);
-        f.render_widget(Paragraph::new(lines), inner);
+        boxed(f, title, lines, 64, 4);
     }
+}
+
+/// The box every modal is drawn in: cleared, rounded, `width` wide at most
+/// and `margin` columns short of the window's edges, centred and a third of
+/// the way down.
+pub(super) fn boxed(
+    f: &mut Frame,
+    title: String,
+    lines: Vec<Line<'static>>,
+    width: u16,
+    margin: u16,
+) {
+    let area = f.area();
+    let w = width.min(area.width.saturating_sub(margin));
+    let h = (lines.len() as u16 + 2).min(area.height);
+    let r = TRect::new(
+        area.x + (area.width - w) / 2,
+        area.y + area.height.saturating_sub(h) / 3,
+        w,
+        h,
+    );
+    f.render_widget(Clear, r);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(p().blue))
+        .title(Span::styled(
+            title,
+            Style::default().fg(p().blue).add_modifier(Modifier::BOLD),
+        ))
+        .style(Style::default().bg(p().panel).fg(p().fg));
+    let inner = block.inner(r);
+    f.render_widget(block, r);
+    f.render_widget(Paragraph::new(lines), inner);
 }
 
 fn rm_lines(

@@ -3,10 +3,11 @@
 //! cells; both start from here.
 
 use anyhow::{Context, Result};
-use qrcode::{Color, QrCode};
+use qrcode::{Color, EcLevel, QrCode};
 
-/// Modules of white around the code, which a scanner needs to find it.
-const QUIET: usize = 2;
+/// Modules of white around the code, which a scanner needs to find it: the
+/// QR standard asks for four.
+const QUIET: usize = 4;
 
 /// A code with its quiet zone: `size` by `size` modules.
 pub struct Qr {
@@ -16,7 +17,10 @@ pub struct Qr {
 
 impl Qr {
     pub fn new(text: &str) -> Result<Self> {
-        let code = QrCode::new(text.as_bytes()).context("making the QR")?;
+        // Level L: a screen shows it without damage, and a smaller code fits the
+        // modal (mobile spec, REQ-47).
+        let code = QrCode::with_error_correction_level(text.as_bytes(), EcLevel::L)
+            .context("making the QR")?;
         let width = code.width();
         let size = width + 2 * QUIET;
         let mut dark = vec![false; size * size];
@@ -64,16 +68,29 @@ mod tests {
     fn a_code_is_a_square_with_a_quiet_zone() {
         let qr = Qr::new(PAYLOAD).unwrap();
         let n = qr.size();
-        assert!(n >= 29 + 2 * QUIET, "{n}");
+        assert!(n >= 21 + 2 * QUIET, "{n}");
+        // Four modules of white on every side, and the code starts right after.
         for i in 0..n {
-            for edge in [0, 1, n - 2, n - 1] {
+            for edge in (0..QUIET).chain(n - QUIET..n) {
                 assert!(!qr.dark(i, edge), "row {edge} is white");
                 assert!(!qr.dark(edge, i), "column {edge} is white");
             }
         }
+        assert_eq!(QUIET, 4);
+        // The finder pattern's corner is the first black module, at (4, 4).
+        assert!(qr.dark(QUIET, QUIET) && qr.dark(n - QUIET - 1, QUIET));
+        assert!((0..n).any(|i| qr.dark(i, QUIET)) && (0..n).all(|i| !qr.dark(i, QUIET - 1)));
         assert!(!qr.dark(n, 0) && !qr.dark(0, n));
         let black = (0..n * n).filter(|i| qr.dark(i % n, i / n)).count();
         assert!(black > n * n / 5 && black < n * n * 3 / 5, "{black} black");
+    }
+
+    #[test]
+    fn a_real_link_is_version_5_so_it_fits_the_modal() {
+        // 88 bytes: a 50-character tunnel name and a 32-digit token.
+        let host = "micro-interview-purchased-unlock.trycloudflare.com";
+        let qr = Qr::new(&format!("jw://{host}/{}", "0123456789abcdef".repeat(2))).unwrap();
+        assert_eq!(qr.size(), 37 + 2 * QUIET);
     }
 
     #[test]

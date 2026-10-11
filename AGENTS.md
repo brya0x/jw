@@ -14,7 +14,7 @@ says how the code is laid out and what to keep in mind when changing it.
 | `crates/tui` (jw-tui) | the TUI: sidebar, panes, pickers, diff and Markdown viewers, settings, themes | [crates/tui/AGENTS.md](crates/tui/AGENTS.md) |
 | `crates/web` (jw-web) | the web server in front of the daemon (the daemon hosts it): a WebSocket on loopback that relays frames to a phone (or any web client), and the Cloudflare tunnel | [crates/web/AGENTS.md](crates/web/AGENTS.md) |
 | `crates/jw` (jw) | the binary, the CLI, and the daemon's integration tests | [crates/jw/AGENTS.md](crates/jw/AGENTS.md) |
-| `android/` | the native Kotlin phone app; it talks to `jw mobile`'s bridge, not to the daemon | [docs/specs/mobile.md](docs/specs/mobile.md) (UI: `docs/specs/mobile-prototype.html`) |
+| `android/` | the native Kotlin phone app; it talks to the bridge the daemon hosts (`jw mobile`, or `^␣ m` in the TUI, turns it on), not to the panes' protocol directly | [docs/specs/mobile.md](docs/specs/mobile.md) (UI: `docs/specs/mobile-prototype.html`) |
 
 **Dependencies run one way:** `core, proto, web ← daemon`, `core, proto ← tui`, `proto ← web`,
 everything ← `jw`. The TUI never depends on the daemon, and core never on proto. The compiler enforces

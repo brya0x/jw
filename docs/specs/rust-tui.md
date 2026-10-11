@@ -29,7 +29,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 | `o` open a folder (browser: arrows, type to filter, `~`, a new name creates it) | `d` diff pane against the base, on a worktree or the project root (addendum 11) | `n` name the pane (empty = automatic title) |
 | `/` open a file (`.md` → reader pane, else nvim) | `X` remove: done checks if the PR is merged, rm checks otherwise | `f` full: the focused pane fills the panes area, the sidebar and bars stay · `HJKL` swap with the neighbour · `p` save the panes as the project's layout (addendum 10) · `v` select text (addendum 12) |
 | `↑↓` next/previous workspace, `←→` next/previous project; more arrows keep moving | `R` review a pull request: pick an open PR, get a worktree with its diff and a briefed agent (addendum 15) | |
-| `?` keys · `q` detach | | |
+| `?` keys · `m` mobile: the phone app's tunnel, QR and pairing (mobile.md) · `q` detach | | |
 
 ### Screen (what each area shows; replaces "UI (reference, v2)")
 
@@ -716,6 +716,7 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 
 ## Corrections
 
+- `^␣ m` (`mobile`, group `go`) opens the Mobile modal (mobile.md, REQ-43 to 49). A default key that another action's own binding already took leaves the new action with no key, so an existing `settings.json` is never overridden.
 - REQ-129 and REQ-130 specified a keyboard select mode (`^␣ v`, `SEL`). The user dropped it: terminals today select with the mouse and the shell edits the prompt, so jw keeps the mouse and adds the copied banner (REQ-135).
 - Addendum 15's hand test found two things the first build lacked: `X` listed the PR's own commit as unpushed work (it lives only in `refs/jw/pr-<n>`, REQ-175 now says so and `rm_plan` honours it), and the header told a review its layout had changed (REQ-183).
 - Addendum 15's first draft sent the PR head to `+review/pr-<n>` and said `Open` already handled `view:` leaves. A fetch cannot update a branch that is checked out in a worktree, so the head goes to `refs/jw/pr-<n>`; and the daemon's `open` started a shell for a viewer leaf until REQ-181.

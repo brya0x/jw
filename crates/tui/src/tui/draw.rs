@@ -81,6 +81,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if let Some(m) = &app.modal {
         m.draw(f);
     }
+    super::mobile::draw(f, app);
     if let Some(finder) = &app.finder {
         finder.draw(f);
     }
@@ -469,8 +470,9 @@ pub(super) fn mode_of(app: &App) -> Mode {
                 | super::Modal::Resend { .. }
                 | super::Modal::Done { .. }
                 | super::Modal::Rm { .. }
+                | super::Modal::Pair(..)
         )
-    );
+    ) || matches!(&app.modal, Some(super::Modal::Mobile(v)) if v.asking());
     if let Some(v) = &app.settings {
         if v.listening() {
             Mode::SetKey
@@ -654,6 +656,10 @@ fn status(f: &mut Frame, app: &App) {
     }
     let shown = if new { cur } else { prev };
     spans.extend(faded(hint(shown, &leader), alpha));
+    // Mobile's indicator and a waiting pair question sit at the right edge
+    // (REQ-46); a message makes room for them.
+    let right = super::mobile::status_right(app);
+    let right_w: usize = right.iter().map(|s| s.content.chars().count()).sum();
     if let Some(msg) = &app.status {
         let (visible, entered) = if anim::fades() {
             anim::message(now.saturating_duration_since(msg.at), super::STATUS_FOR)
@@ -669,7 +675,7 @@ fn status(f: &mut Frame, app: &App) {
         let travel = ((1.0 - entered) * f32::from(anim::MESSAGE_CELLS)).round() as usize;
         let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
         let text = format!("{} ", msg.text);
-        let room = (r.width as usize).saturating_sub(used);
+        let room = (r.width as usize).saturating_sub(used + right_w);
         let n = text.chars().count();
         if visible > 0.0 && n <= room {
             let travel = travel.min(n);
@@ -686,6 +692,11 @@ fn status(f: &mut Frame, app: &App) {
                 Style::default().fg(color),
             ));
         }
+    }
+    let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+    if right_w > 0 && used + right_w <= r.width as usize {
+        spans.push(Span::raw(" ".repeat(r.width as usize - used - right_w)));
+        spans.extend(right);
     }
     f.render_widget(
         Paragraph::new(Line::from(spans)).style(Style::default().bg(p().panel)),

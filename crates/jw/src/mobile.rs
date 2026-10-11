@@ -19,6 +19,7 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
+use jw_core::ago::ago;
 use jw_core::qr::Qr;
 use jw_web::auth::Store;
 
@@ -124,16 +125,6 @@ fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
-}
-
-fn ago(now: u64, then: u64) -> String {
-    let s = now.saturating_sub(then);
-    match s {
-        0..=59 => "just now".into(),
-        60..=3599 => format!("{} min ago", s / 60),
-        3600..=86399 => format!("{} h ago", s / 3600),
-        _ => format!("{} d ago", s / 86400),
-    }
 }
 
 /// `jw mobile stop`: asks a daemon that is there, and never starts one.
@@ -444,14 +435,6 @@ mod tests {
     fn a_code_is_grouped_in_threes() {
         assert_eq!(group("482913"), "482 913");
         assert_eq!(group("1234"), "123 4");
-    }
-
-    #[test]
-    fn times_read_as_ages() {
-        assert_eq!(ago(1000, 1000), "just now");
-        assert_eq!(ago(1000, 1000 - 125), "2 min ago");
-        assert_eq!(ago(100_000, 100_000 - 7300), "2 h ago");
-        assert_eq!(ago(1_000_000, 1_000_000 - 200_000), "2 d ago");
     }
 
     #[test]

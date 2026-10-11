@@ -96,6 +96,7 @@ git clone https://github.com/brya0x/jw && cd jw && cargo install --path crates/j
 | `/` | open a file | `X` | remove | `n` | name |
 | `a` | sessions | `R` | review a PR | `f` | full screen |
 | `,` | settings | | | | |
+| `m` | mobile (phone app) | | | | |
 | `↑↓←→` | move through the sidebar | | | | |
 | `q` | detach | | | | |
 

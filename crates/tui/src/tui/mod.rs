@@ -12,6 +12,7 @@ mod draw;
 mod finder;
 mod keys;
 mod mdview;
+mod mobile;
 mod modal;
 mod registry_watch;
 mod select;
@@ -298,6 +299,8 @@ pub struct App {
     pub size: (u16, u16),
     quit: bool,
     pub modal: Option<Modal>,
+    /// Mobile as the daemon last said, and the questions waiting (REQ-42).
+    pub mobile: mobile::Mobile,
     /// A picker over everything else (`^␣ o`).
     pub finder: Option<finder::Finder>,
     /// Where each pane of the workspace is: its directory and that
@@ -621,6 +624,9 @@ impl App {
             app.welcome = Some(Instant::now());
         }
         app.send(ClientMsg::List);
+        // Right after `Hello` (in `run`): the indicator and the pair question
+        // need it (REQ-42).
+        app.send(ClientMsg::MobileWatch);
         Ok(app)
     }
 
@@ -651,6 +657,7 @@ impl App {
             size,
             quit: false,
             modal: None,
+            mobile: mobile::Mobile::default(),
             finder: None,
             settings: None,
             here: BTreeMap::new(),
@@ -1231,6 +1238,7 @@ impl App {
             Msg::Term(_) => {}
             Msg::Tick => {
                 self.tell_theme();
+                self.release_asks();
                 self.apply_pending_rows();
                 if self
                     .status
@@ -1423,10 +1431,9 @@ impl App {
             }
             DaemonMsg::Prompted { .. } => self.done("sent to the agent".into()),
             DaemonMsg::Error { msg } => self.fail(msg),
-            // The Mobile modal (T1) listens for these.
-            DaemonMsg::MobileState(_)
+            d @ (DaemonMsg::MobileState(_)
             | DaemonMsg::MobilePair { .. }
-            | DaemonMsg::MobilePairDone { .. } => {}
+            | DaemonMsg::MobilePairDone { .. }) => self.on_mobile(d),
         }
     }
 
@@ -1461,6 +1468,10 @@ impl App {
                 finder::Outcome::Reload(requested) => self.load_reviews(requested),
                 finder::Outcome::Browse(url) => self.browse(&url),
             }
+            return;
+        }
+        if matches!(self.modal, Some(Modal::Mobile(_) | Modal::Pair(..))) {
+            self.mobile_key(k);
             return;
         }
         if let Some(m) = &mut self.modal {
@@ -1548,6 +1559,7 @@ impl App {
                 Some("open") => self.ask_folder(),
                 Some("file") => self.ask_file(),
                 Some("sessions") => self.ask_session(),
+                Some("mobile") => self.open_mobile(),
                 Some("settings") => self.ask_settings(),
                 Some("new") => self.new_worktree(),
                 Some("rename") => self.ask_rename(),
@@ -3276,6 +3288,8 @@ impl App {
             return;
         };
         match m {
+            // Their keys never submit: `mobile_key` handles them.
+            Modal::Mobile(_) | Modal::Pair(..) => {}
             Modal::Close { entry, .. } => self.close(&entry),
             Modal::ClosePane { pane, .. } => self.send(ClientMsg::Kill { pane }),
             Modal::Resend { stream, prompt, .. } => {
