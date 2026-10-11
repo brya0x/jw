@@ -208,7 +208,7 @@ fun ScanScreenUi(
             feed()
             val shadow = Shadow(Color.Black, Offset(0f, 2f), 3f)
             Column(Modifier.align(Alignment.TopStart).padding(start = 14.dp, end = 14.dp, top = 12.dp)) {
-                val t = TextStyle(fontSize = 11.5.sp, lineHeight = 19.5.sp, shadow = shadow)
+                val t = TextStyle(fontFamily = JwMono, fontSize = 11.5.sp, lineHeight = 19.5.sp, shadow = shadow)
                 Text(buildAnnotatedString {
                     withStyle(SpanStyle(color = j.green)) { append("$") }
                     append(" jw scan")
@@ -366,7 +366,7 @@ fun UnreachableScreen(host: String, reach: Reach, onScanAnother: () -> Unit, onR
             Modifier.fillMaxWidth().widthIn(max = 330.dp).background(j.panel, RoundedCornerShape(12.dp))
                 .border(BorderStroke(1.dp, j.line), RoundedCornerShape(12.dp)).padding(horizontal = 14.dp, vertical = 12.dp),
         ) {
-            val t = TextStyle(fontSize = 12.5.sp, lineHeight = 23.sp)
+            val t = TextStyle(fontFamily = JwMono, fontSize = 12.5.sp, lineHeight = 23.sp)
             reach.internet?.let { net ->
                 Text(buildAnnotatedString {
                     withStyle(SpanStyle(color = if (net) j.green else j.red)) { append(if (net) "✓" else "✗") }
@@ -404,7 +404,7 @@ fun ProtocolScreen(app: Int, pc: Int, onBack: () -> Unit) {
             Modifier.fillMaxWidth().widthIn(max = 330.dp).background(j.panel, RoundedCornerShape(12.dp))
                 .border(BorderStroke(1.dp, j.line), RoundedCornerShape(12.dp)).padding(horizontal = 14.dp, vertical = 10.dp),
         ) {
-            val t = TextStyle(fontSize = 12.5.sp, lineHeight = 22.sp)
+            val t = TextStyle(fontFamily = JwMono, fontSize = 12.5.sp, lineHeight = 22.sp)
             val lo = if (jwBehind) "jw " else "app"
             val hi = if (jwBehind) "app" else "jw "
             Text("-  $lo protocolo ${minOf(app, pc)}", color = j.red, style = t)

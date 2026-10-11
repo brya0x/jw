@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Surface
@@ -92,7 +93,7 @@ class ConnectScreensTest {
                 ScanScreenUi(hit = false, torchAvailable = torch, torchOn = false, onTorch = {}, onPaste = { sheet = true }, onBack = {}) {
                     // Stands in for the camera: a dark feed with a code in it.
                     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF10141B), Color(0xFF06080C)))))
-                    DecorativeQr(Modifier.fillMaxWidth(.6f).padding(8.dp))
+                    DecorativeQr(Modifier.fillMaxWidth(.6f).aspectRatio(1f).padding(8.dp))
                 }
                 if (sheet) PasteSheet(error, { connected = it; error = LINK_REFUSED }, { sheet = false })
             }
@@ -136,7 +137,7 @@ class ConnectScreensTest {
         rule.waitForIdle()
         assertTrue("an unmeasured row is not drawn", rule.onAllNodesWithTextCount("Cloudflare responde") == 0)
         assertTrue(rule.onAllNodesWithTextCount("internet") == 0)
-        rule.onNodeWithText("tu PC", substring = true).assertExists()
+        rule.onNodeWithText("sin respuesta", substring = true).assertExists()
         shot("unreach-unmeasured")
     }
 
