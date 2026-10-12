@@ -1478,6 +1478,38 @@ fn a_phone_makes_a_worktree_in_the_chosen_session_and_read_only_refuses() {
             .contains("already exists")
     );
 
+    // A task is for the agent: with no agent pane it is dropped, and never typed into the shell.
+    phone.say(serde_json::json!({ "t": "worktree", "project": project, "name": "feat-t", "task": "echo TASKLEAK", "session": "trabajo" }));
+    let v = phone.json();
+    assert_eq!(v["t"], "worktree", "{v}");
+    let ws = v["ws"].as_str().unwrap().to_string();
+    let pane = panes_of(&mut d, &ws)[0];
+    d.send(&ClientMsg::Attach { stream: ws.clone() }).unwrap();
+    // The daemon's wait for the agent ends in an error, which is sent to the connection that asked, not here;
+    // give the task time to have been typed if it were going to be, then see what the shell holds.
+    std::thread::sleep(Duration::from_secs(5));
+    d.send(&ClientMsg::Input {
+        pane,
+        bytes: b"echo MARK_DONE\n".to_vec(),
+    })
+    .unwrap();
+    let mut seen = String::new();
+    let end = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < end && seen.matches("MARK_DONE").count() < 2 {
+        if let Ok(Some(
+            DaemonMsg::Output { pane: p, bytes } | DaemonMsg::Snapshot { pane: p, bytes, .. },
+        )) = d.recv()
+            && p == pane
+        {
+            seen.push_str(&String::from_utf8_lossy(&bytes));
+        }
+    }
+    assert!(seen.matches("MARK_DONE").count() >= 2, "{seen:?}");
+    assert!(
+        !seen.contains("TASKLEAK"),
+        "the task reached the shell: {seen:?}"
+    );
+
     // Read-only refuses it, and nothing changes.
     w.send(&ClientMsg::MobileReadOnly { on: true }).unwrap();
     assert!(until(&mut w, |s| s.read_only).last().unwrap().read_only);

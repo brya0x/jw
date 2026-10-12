@@ -129,7 +129,8 @@ class TouchTargetsTest {
         rule.waitForIdle()
     }
 
-    private fun waitFor(text: String) = rule.waitUntil(15_000) { rule.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty() }
+    private fun waitFor(text: String, substring: Boolean = false) =
+        rule.waitUntil(15_000) { rule.onAllNodesWithText(text, substring = substring).fetchSemanticsNodes().isNotEmpty() }
 
     /** Every node that can be pressed and is smaller than 48 dp either way, by what it says. */
     private fun measure(where: String) {
@@ -155,6 +156,24 @@ class TouchTargetsTest {
         rule.onNodeWithContentDescription("Buscar").performClick()
         measure("home, search")
         rule.onNodeWithContentDescription("Cerrar búsqueda").performClick()
+        rule.onNodeWithContentDescription("Abrir o crear").performClick()
+        waitFor("nuevo worktree")
+        measure("plus sheet")
+        rule.onNodeWithText("nuevo worktree").performClick()
+        waitFor("tarea para el agente", substring = true)
+        measure("new worktree sheet")
+        back()
+        rule.onNodeWithContentDescription("Abrir o crear").performClick()
+        waitFor("nueva sesión")
+        rule.onNodeWithText("nueva sesión").performClick()
+        waitFor("carpeta con la que empieza")
+        measure("new session sheet")
+        rule.onNodeWithText("~").performClick()
+        waitFor("usar esta carpeta")
+        measure("files, choosing a folder")
+        back() // the picker: the session sheet comes back
+        waitFor("carpeta con la que empieza")
+        back()
         rule.onNodeWithText("main ▾", substring = true).performClick()
         waitFor("sesiones")
         measure("sessions sheet")

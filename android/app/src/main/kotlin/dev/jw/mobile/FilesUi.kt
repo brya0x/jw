@@ -35,6 +35,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.semantics.Role
@@ -88,15 +89,22 @@ internal fun sizeWords(n: Long): String = when {
 
 /** The PC's file tree from a workspace (REQ-83): a folder at a time, with the way back up, and a file opens in the viewer. */
 @Composable
-fun FilesScreen(session: Session, nav: Nav, workspace: String, state: UiState.Connected) {
+fun FilesScreen(session: Session, nav: Nav, workspace: String, state: UiState.Connected, targetSession: String?) {
     val j = LocalJw.current
     val path = nav.filesPath ?: return
     val fs by session.fs.collectAsState()
     var hidden by rememberSaveable { mutableStateOf(false) }
 
+    val pick = nav.pick
+    val make by session.make.collectAsState()
+    fun leave() {
+        nav.filesPath = null
+        nav.pick = null
+        if (pick == PickFor.SessionDir) nav.sheet = HomeSheet.NewSession
+    }
     LaunchedEffect(path) { session.requestLs(path) }
-    DisposableEffect(Unit) { onDispose { session.clearFiles() } }
-    BackHandler { nav.filesPath = null }
+    DisposableEffect(Unit) { onDispose { session.clearFiles(); session.clearMake() } }
+    BackHandler { leave() }
 
     val listing = (fs as? FsState.Loaded)?.listing?.takeIf { it.req == path }
 
@@ -106,9 +114,9 @@ fun FilesScreen(session: Session, nav: Nav, workspace: String, state: UiState.Co
                 .padding(horizontal = 4.dp, vertical = 8.dp).heightIn(min = 52.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(Modifier.size(48.dp).clickable(role = Role.Button, onClickLabel = "Volver") { nav.filesPath = null }, contentAlignment = Alignment.Center) { Icon(Ic.Back, j.fg, 22.dp) }
+            Box(Modifier.size(48.dp).clickable(role = Role.Button, onClickLabel = "Volver") { leave() }, contentAlignment = Alignment.Center) { Icon(Ic.Back, j.fg, 22.dp) }
             Column(Modifier.weight(1f)) {
-                Text("$workspace · archivos", color = j.fg, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(when (pick) { PickFor.OpenFolder -> "abrir carpeta"; PickFor.SessionDir -> "carpeta de la sesión"; null -> "$workspace · archivos" }, color = j.fg, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(listing?.path ?: path, color = j.dim, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Box(
@@ -120,10 +128,36 @@ fun FilesScreen(session: Session, nav: Nav, workspace: String, state: UiState.Co
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when (val f = fs) {
                 is FsState.Failed -> if (f.req == path) Failure(fsReasonWords(f.why), "subir", if (listing?.parent != null || path != "/") ({ nav.filesPath = parentOf(path) ?: "/" }) else null) { session.requestLs(path) }
-                else -> if (listing == null) LoadingBox("leyendo $path") else EntryList(listing, hidden, nav, session)
+                else -> if (listing == null) LoadingBox("leyendo $path") else EntryList(listing, hidden, nav, session, pick != null)
             }
         }
-        StatusBar("NORMAL", j.blue, "toca un archivo", route = state.route)
+        if (pick != null) {
+            val here = listing?.path ?: path
+            val busy = (make as? MakeState.Busy)?.what == Make.Open
+            val failed = (make as? MakeState.Failed)?.takeIf { it.what == Make.Open }
+            Column(Modifier.fillMaxWidth().background(j.panel).drawBehind { drawLine(j.line, Offset(0f, 0f), Offset(size.width, 0f), 1.dp.toPx()) }.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                failed?.let { Text(fsReasonWords(it.why), color = j.red, fontSize = 11.5.sp, modifier = Modifier.padding(bottom = 4.dp)) }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(here, color = j.dim, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    val label = when {
+                        busy -> "abriendo…"
+                        pick == PickFor.OpenFolder -> "abrir esta carpeta"
+                        else -> "usar esta carpeta"
+                    }
+                    val ok = listing != null && !busy && !(pick == PickFor.OpenFolder && state.readOnly)
+                    Box(
+                        Modifier.heightIn(min = 48.dp).background(if (ok) j.blue else j.line, Corner)
+                            .clickable(enabled = ok, role = Role.Button) {
+                                if (pick == PickFor.OpenFolder) { session.clearMake(); session.requestOpen(here, targetSession) }
+                                else { nav.sessionDir = here; nav.pick = null; nav.filesPath = null; nav.sheet = HomeSheet.NewSession }
+                            }.padding(horizontal = 16.dp),
+                        contentAlignment = Alignment.Center,
+                    ) { Text(label, color = if (ok) j.bg else j.dim, fontWeight = FontWeight.Bold, fontSize = 13.sp) }
+                }
+                if (pick == PickFor.OpenFolder && state.readOnly) Text("solo lectura: este puente no deja abrir carpetas", color = j.yellow, fontSize = 11.5.sp, modifier = Modifier.padding(top = 4.dp))
+            }
+        }
+        StatusBar("NORMAL", j.blue, if (pick != null) "elige una carpeta" else "toca un archivo", route = state.route)
     }
 }
 
@@ -154,7 +188,7 @@ private fun Crumbs(path: String, onGo: (String) -> Unit) {
 }
 
 @Composable
-private fun EntryList(l: FsListing, hidden: Boolean, nav: Nav, session: Session) {
+private fun EntryList(l: FsListing, hidden: Boolean, nav: Nav, session: Session, choosing: Boolean) {
     val j = LocalJw.current
     val shown = remember(l, hidden) { l.entries.filter { hidden || !it.name.startsWith(".") } }
     LazyColumn(Modifier.fillMaxSize()) {
@@ -167,6 +201,7 @@ private fun EntryList(l: FsListing, hidden: Boolean, nav: Nav, session: Session)
                 sub = entrySub(e),
                 folder = e.isFolder,
                 md = e.md,
+                enabled = e.isFolder || !choosing,
             ) { if (e.isFolder) nav.filesPath = full else nav.viewerPath = full }
         }
         if (shown.isEmpty()) item(key = "empty") { Text("carpeta vacía", color = j.dim, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(30.dp)) }
@@ -181,11 +216,12 @@ private fun entrySub(e: FsEntry): String = when {
 }
 
 @Composable
-private fun EntryRow(glyph: String, name: String, sub: String, folder: Boolean, md: Boolean, onClick: () -> Unit) {
+private fun EntryRow(glyph: String, name: String, sub: String, folder: Boolean, md: Boolean, enabled: Boolean = true, onClick: () -> Unit) {
     val j = LocalJw.current
     Row(
         Modifier.fillMaxWidth().heightIn(min = 52.dp).drawBehind { drawLine(j.line, Offset(0f, size.height), Offset(size.width, size.height), 1.dp.toPx()) }
-            .clickable(role = Role.Button, onClick = onClick).padding(horizontal = 14.dp, vertical = 4.dp),
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick).padding(horizontal = 14.dp, vertical = 4.dp)
+            .alpha(if (enabled) 1f else 0.45f),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Text(glyph, color = if (folder) j.blue else if (md) j.cyan else j.dim, modifier = Modifier.width(18.dp), textAlign = TextAlign.Center)
