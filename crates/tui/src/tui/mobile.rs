@@ -107,7 +107,20 @@ impl App {
     /// What the daemon says about mobile (REQ-42, 45).
     pub(super) fn on_mobile(&mut self, d: DaemonMsg) {
         match d {
-            DaemonMsg::MobileState(s) => self.mobile.state = Some((s, Instant::now())),
+            DaemonMsg::MobileState(s) => {
+                // The tunnel came up behind a wifi that was already on: the daemon has told
+                // every phone connected where it is (REQ-61, REQ-65).
+                let was = self.mobile.state().map(|o| o.tunnel.clone());
+                if !s.lan.is_empty() && s.tunnel == "ready" && was.is_some_and(|w| w != "ready") {
+                    let n = s.devices.iter().filter(|d| d.connected).count();
+                    self.say(match n {
+                        0 => "tunnel ready · phones will be told".to_string(),
+                        1 => "tunnel ready · 1 phone told".to_string(),
+                        n => format!("tunnel ready · {n} phones told"),
+                    });
+                }
+                self.mobile.state = Some((s, Instant::now()));
+            }
             DaemonMsg::MobilePair {
                 request,
                 name,
@@ -308,9 +321,9 @@ fn view(f: &mut Frame, app: &App, v: &View) {
                 vec![
                     Line::from(" Work on your sessions from a phone."),
                     Line::from(dim(
-                        " Opens a Cloudflare tunnel to this PC and shows a QR for the app.",
+                        " Opens a link on your wifi, ready at once, and a Cloudflare",
                     )),
-                    blank(),
+                    Line::from(dim(" tunnel for when you are away.")),
                     Line::from(dim(" Stays on after you close jw (it runs in the daemon).")),
                     Line::from(vec![dim(" Paired phones: "), Span::raw(phones.to_string())]),
                     blank(),
@@ -427,9 +440,10 @@ fn ready(f: &mut Frame, app: &App) {
         .map_or((0, 0), |q| (q.size() as u16, q.size().div_ceil(2) as u16));
     // The box is the QR, a space and the words, and below them the link and
     // the keys; the window needs a margin around it.
+    let route_rows = routes(s, app.ticks);
     let need = (
         NEED.0.max(qw + 1 + INFO as u16 + 4),
-        NEED.1.max(qh + 3 + 2 + 2),
+        NEED.1.max(qh + route_rows.len() as u16 + 2 + 2 + 2),
     );
     let small = qr.is_some() && (area.width < need.0 || area.height < need.1);
     if small {
@@ -464,10 +478,7 @@ fn ready(f: &mut Frame, app: &App) {
         }
         None => lines.extend(words.iter().cloned()),
     }
-    lines.push(Line::from(tone(
-        format!(" {}", clean(&s.host, 60)),
-        p().blue,
-    )));
+    lines.extend(route_rows);
     lines.push(Line::default());
     // Two spaces between the keys, not three: it is the longest row here.
     lines.push(key_line(
@@ -486,6 +497,52 @@ fn ready(f: &mut Frame, app: &App) {
         68
     };
     boxed(f, " Mobile · running ".into(), lines, width, 2);
+}
+
+/// Where phones can reach the PC: the wifi, when there is one, and the tunnel as it comes up
+/// (REQ-65). The wifi never waits for the tunnel, and a tunnel that failed says so while the
+/// wifi still works.
+fn routes(s: &MobileState, ticks: u64) -> Vec<Line<'static>> {
+    let mut rows = Vec::new();
+    if !s.lan.is_empty() {
+        rows.push(Line::from(vec![
+            dim(" wifi  "),
+            Span::raw(" "),
+            tone("●", p().green),
+            Span::raw(" "),
+            tone(clean(&s.lan, 40), p().blue),
+            dim(" · TLS"),
+        ]));
+    }
+    let spin = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"][(ticks % 10) as usize];
+    let tunnel = if s.lan.is_empty() {
+        // Without a wifi listener the tunnel is the only route, and it is up (REQ-66).
+        vec![
+            tone("●", p().green),
+            Span::raw(" "),
+            tone(clean(&s.host, 60), p().blue),
+        ]
+    } else {
+        match s.tunnel.as_str() {
+            "ready" => vec![
+                tone("●", p().green),
+                Span::raw(" "),
+                tone(clean(&s.host, 60), p().blue),
+            ],
+            "failed" => {
+                let why = s
+                    .error
+                    .split_once("; ")
+                    .map_or(s.error.as_str(), |(w, _)| w);
+                vec![tone(clean(why, 40), p().red), dim(" (wifi still works)")]
+            }
+            _ => vec![tone(spin, p().cyan), dim(" starting, about a minute")],
+        }
+    };
+    let mut row = vec![dim(" tunnel "), Span::raw(" ")];
+    row.extend(tunnel);
+    rows.push(Line::from(row));
+    rows
 }
 
 /// The column beside the QR.
@@ -545,7 +602,7 @@ fn info(
 
 /// REQ-47: no QR below the size it needs; the link, masked, and `c`.
 fn too_small(f: &mut Frame, s: &MobileState, need: (u16, u16), have: (u16, u16)) {
-    let host: String = clean(&s.host, 14);
+    let host: String = clean(if s.lan.is_empty() { &s.host } else { &s.lan }, 22);
     let lines = vec![
         Line::from(tone(" The window is too small for the QR", p().yellow)),
         Line::from(dim(format!(
@@ -554,7 +611,7 @@ fn too_small(f: &mut Frame, s: &MobileState, need: (u16, u16), have: (u16, u16))
         ))),
         Line::default(),
         Line::from(" Make it bigger, or use the link:"),
-        Line::from(vec![tone(format!(" jw://{host}…/"), p().blue), dim("••••")]),
+        Line::from(vec![tone(format!(" jw://{host}/"), p().blue), dim("••••")]),
         Line::default(),
         keys(&[
             ("c", "copy link"),
@@ -591,6 +648,10 @@ fn devices(f: &mut Frame, list: &[MobileDevice], v: &View) {
                 ago(now, d.last_seen)
             )),
         ]);
+        if d.connected && !d.route.is_empty() {
+            line.spans
+                .push(dim(format!(" · via {}", clean(&d.route, 8))));
+        }
         if i == v.sel.min(list.len() - 1) {
             line = line.style(Style::default().bg(p().sel));
         }
@@ -613,7 +674,7 @@ fn devices(f: &mut Frame, list: &[MobileDevice], v: &View) {
         }
         None => lines.push(keys(&[("↑↓", "select"), ("x", "revoke"), ("esc", "back")])),
     }
-    boxed(f, " Paired phones ".into(), lines, 64, 4);
+    boxed(f, " Paired phones ".into(), lines, 76, 4);
 }
 
 /// REQ-45: the code goes to the person to compare with the phone's.
@@ -1220,5 +1281,125 @@ mod tests {
             super::super::draw::mode_of(&app),
             super::super::draw::Mode::Confirm
         );
+    }
+
+    /// A ready state with a wifi listener: the code names the wifi (and the tunnel once it is up).
+    fn wifi_state(tunnel: &str) -> MobileState {
+        let named = if tunnel == "ready" {
+            "&t=micro-interview-purchased-unlock.trycloudflare.com"
+        } else {
+            ""
+        };
+        MobileState {
+            lan: "192.168.1.23:48211".into(),
+            tunnel: tunnel.into(),
+            host: if tunnel == "ready" {
+                "micro-interview-purchased-unlock.trycloudflare.com".into()
+            } else {
+                String::new()
+            },
+            payload: format!(
+                "jw://192.168.1.23:48211/{}?fp={}{named}",
+                "0123456789abcdef".repeat(2),
+                "ab".repeat(32)
+            ),
+            ..ready_state()
+        }
+    }
+
+    #[test]
+    fn the_wifi_is_there_at_once_and_the_tunnel_row_follows_it() {
+        let (mut app, _got) = rig("wifi");
+        open(&mut app);
+        feed(&mut app, wifi_state("starting"));
+        let text = screen(&app, 130, 50);
+        assert!(
+            text.contains('▀'),
+            "the QR is on screen before the tunnel: {text}"
+        );
+        assert!(
+            text.contains("192.168.1.23:48211") && text.contains("TLS"),
+            "{text}"
+        );
+        assert!(text.contains("starting, about a minute"), "{text}");
+        feed(&mut app, wifi_state("ready"));
+        let text = screen(&app, 130, 50);
+        assert!(text.contains("192.168.1.23:48211"), "{text}");
+        assert!(
+            text.contains("micro-interview-purchased-unlock.trycloudflare.com"),
+            "{text}"
+        );
+        assert!(!text.contains("starting, about"), "{text}");
+    }
+
+    #[test]
+    fn a_tunnel_that_failed_says_so_and_says_the_wifi_still_works() {
+        let (mut app, _got) = rig("wifi-fail");
+        open(&mut app);
+        feed(
+            &mut app,
+            MobileState {
+                error: "cloudflared is not installed; brew install cloudflared".into(),
+                ..wifi_state("failed")
+            },
+        );
+        let text = screen(&app, 130, 50);
+        assert!(text.contains("cloudflared is not installed"), "{text}");
+        assert!(text.contains("wifi still works"), "{text}");
+        assert!(text.contains('▀'), "the wifi code is still offered");
+    }
+
+    #[test]
+    fn with_no_wifi_listener_there_is_no_wifi_row() {
+        let (mut app, _got) = rig("nowifi");
+        open(&mut app);
+        feed(&mut app, ready_state());
+        let text = screen(&app, 100, 40);
+        assert!(!text.contains("wifi  ●"), "{text}");
+        assert!(text.contains("tunnel"), "{text}");
+    }
+
+    #[test]
+    fn the_status_says_when_the_tunnel_comes_up_and_how_many_phones_were_told() {
+        let (mut app, _got) = rig("told");
+        feed(&mut app, wifi_state("starting"));
+        feed(&mut app, wifi_state("ready"));
+        let said = app
+            .status
+            .as_ref()
+            .map(|s| s.text.clone())
+            .unwrap_or_default();
+        assert_eq!(said, "tunnel ready · 1 phone told");
+        // It is said once, when it comes up, not at every state after.
+        let (mut app, _got) = rig("told-once");
+        feed(&mut app, wifi_state("ready"));
+        feed(&mut app, wifi_state("ready"));
+        assert!(
+            app.status.is_none(),
+            "said without the tunnel having come up"
+        );
+    }
+
+    #[test]
+    fn the_devices_view_says_which_route_each_phone_is_on() {
+        let (mut app, _got) = rig("route");
+        let mut s = ready_state();
+        s.devices[0].route = "wifi".into();
+        feed(&mut app, s);
+        open(&mut app);
+        press(&mut app, KeyCode::Char('d'));
+        let text = screen(&app, 100, 40);
+        assert!(text.contains("via wifi"), "{text}");
+    }
+
+    #[test]
+    fn too_small_for_the_wifi_code_it_shows_the_wifi_link_and_never_the_token() {
+        let (mut app, _got) = rig("small-wifi");
+        feed(&mut app, wifi_state("ready"));
+        open(&mut app);
+        let text = screen(&app, 62, 20);
+        assert!(text.contains("too small"), "{text}");
+        assert!(text.contains("jw://192.168.1.23:48211/"), "{text}");
+        assert!(!text.contains("0123456789abcdef"), "{text}");
     }
 }
