@@ -277,7 +277,7 @@ private fun FilesBody(diff: Diff, view: View, viewed: ViewedMarks, refreshing: B
     }
     val tooLarge = diff.tooLarge != null
     LazyColumn(Modifier.fillMaxSize()) {
-        if (tooLarge) item(key = "note-large") { Note("este diff pasó de 2 MiB: se listan ${diff.files.size} de ${diff.tooLarge} archivos, sin líneas. Míralo entero en el PC.") }
+        if (tooLarge) item(key = "note-large") { Note("este diff pasó de 2 MiB: se listan " + (if (diff.files.size == diff.tooLarge) "los ${diff.files.size} archivos" else "${diff.files.size} de ${diff.tooLarge} archivos") + ", sin líneas. Míralo entero en el PC.") }
         if (diff.truncated && !tooLarge) item(key = "note-cut") { Note("hay más de lo que cabe en el teléfono: se muestra lo primero. Míralo entero en el PC.") }
         items(diff.files, key = { it.path }) { f ->
             FileRow(f, tooLarge, viewed.isViewed(diff.ws, diff.scope, f), onOpen = { onOpen(f) }) { viewed.toggle(diff.ws, diff.scope, f) }
