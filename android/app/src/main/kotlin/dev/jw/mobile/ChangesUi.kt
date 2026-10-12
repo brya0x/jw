@@ -40,6 +40,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -57,8 +58,8 @@ import dev.jw.proto.LineKind
 
 private val Corner = RoundedCornerShape(6.dp)
 
-/** The three views of the TUI's diff pane (REQ-72). */
-private enum class View(val label: String) { General("General"), Uncommitted("Sin commitear"), Commits("Commits") }
+/** The three views of the TUI's diff pane, in the order the tabs show them; the first is the one it opens on (REQ-72). */
+private enum class View(val label: String) { Uncommitted("Sin commitear"), Commits("Commits"), General("General") }
 
 /** What one view of one workspace shows right now. */
 private sealed interface Shown {
@@ -88,6 +89,8 @@ fun ChangesScreen(model: Model, state: UiState.Connected, session: Session, nav:
     val diffState by session.diff.collectAsState()
     val commitsState by session.commits.collectAsState()
     val counts = remember(ws?.id) { mutableStateMapOf<View, String>() }
+    // Folders the reader closed, by view or commit and path (REQ-90).
+    val closed = remember(ws?.id) { mutableStateMapOf<String, Boolean>() }
 
     val scope: DiffScope? = when (view) {
         View.General -> DiffScope.General
@@ -115,7 +118,7 @@ fun ChangesScreen(model: Model, state: UiState.Connected, session: Session, nav:
     }
     LaunchedEffect(commitList) { commitList?.let { counts[View.Commits] = it.commits.size.toString() + if (it.more) "+" else "" } }
 
-    val files = diff?.files.orEmpty()
+    val files = remember(diff) { treeSorted(diff?.files.orEmpty()) }
     val openFile = openPath?.let { p -> files.firstOrNull { it.path == p } }
     BackHandler(openFile != null || commit != null) {
         if (openFile != null) openPath = null else commit = null
@@ -143,7 +146,7 @@ fun ChangesScreen(model: Model, state: UiState.Connected, session: Session, nav:
                     view == View.Commits && commit == null -> CommitsBody(commitsState, ws.id, commitList, now, session, onPick = { commit = it })
                     shown is Shown.Failed -> Failure(shown.why, "las otras vistas siguen disponibles") { scope?.let { session.requestDiff(ws.id, it) } }
                     diff == null -> Loading(if (view == View.Commits) "los commits" else "los cambios")
-                    else -> FilesBody(diff, view, viewed, refreshing = shown is Shown.Loading, onOpen = { openPath = it.path })
+                    else -> FilesBody(diff, files, view, viewed, closed, refreshing = shown is Shown.Loading, onOpen = { openPath = it.path })
                 }
             }
             val hint = when {
@@ -258,7 +261,7 @@ private fun Note(text: String) {
 
 /** The list of a view: a commit's files, General or Uncommitted (REQ-72, REQ-73). */
 @Composable
-private fun FilesBody(diff: Diff, view: View, viewed: ViewedMarks, refreshing: Boolean, onOpen: (DiffFile) -> Unit) {
+private fun FilesBody(diff: Diff, files: List<DiffFile>, view: View, viewed: ViewedMarks, closed: MutableMap<String, Boolean>, refreshing: Boolean, onOpen: (DiffFile) -> Unit) {
     val j = LocalJw.current
     if (diff.noBase) {
         Centre("origin no tiene rama por defecto", "no hay contra qué comparar.\nMira «Sin commitear» o «Commits».")
@@ -276,11 +279,17 @@ private fun FilesBody(diff: Diff, view: View, viewed: ViewedMarks, refreshing: B
         return
     }
     val tooLarge = diff.tooLarge != null
+    val prefix = diff.scope.word + "|"
+    val shut = closed.filterValues { it }.keys.filter { it.startsWith(prefix) }.mapTo(HashSet()) { it.removePrefix(prefix) }
+    val rows = treeRows(files, shut)
     LazyColumn(Modifier.fillMaxSize()) {
         if (tooLarge) item(key = "note-large") { Note("este diff pasó de 2 MiB: se listan " + (if (diff.files.size == diff.tooLarge) "los ${diff.files.size} archivos" else "${diff.files.size} de ${diff.tooLarge} archivos") + ", sin líneas. Míralo entero en el PC.") }
         if (diff.truncated && !tooLarge) item(key = "note-cut") { Note("hay más de lo que cabe en el teléfono: se muestra lo primero. Míralo entero en el PC.") }
-        items(diff.files, key = { it.path }) { f ->
-            FileRow(f, tooLarge, viewed.isViewed(diff.ws, diff.scope, f), onOpen = { onOpen(f) }) { viewed.toggle(diff.ws, diff.scope, f) }
+        items(rows, key = { if (it is TreeRow.Dir) "d:" + it.key else "f:" + (it as TreeRow.File).file.path }) { row ->
+            when (row) {
+                is TreeRow.Dir -> DirRow(row, tooLarge) { closed[prefix + row.key] = !row.closed }
+                is TreeRow.File -> FileRow(row.file, row.depth, tooLarge, viewed.isViewed(diff.ws, diff.scope, row.file), onOpen = { onOpen(row.file) }) { viewed.toggle(diff.ws, diff.scope, row.file) }
+            }
         }
         if (refreshing) item(key = "refreshing") { Text("actualizando…", color = j.dim, fontSize = 11.sp, modifier = Modifier.padding(14.dp)) }
     }
@@ -315,27 +324,25 @@ internal fun unreadableWords(why: String) = when (why) {
 }
 
 @Composable
-private fun FileRow(f: DiffFile, listOnly: Boolean, isViewed: Boolean, onOpen: () -> Unit, onMark: () -> Unit) {
+private fun FileRow(f: DiffFile, depth: Int, listOnly: Boolean, isViewed: Boolean, onOpen: () -> Unit, onMark: () -> Unit) {
     val j = LocalJw.current
     Row(
         Modifier.fillMaxWidth().heightIn(min = 52.dp).drawBehind { drawLine(j.line, Offset(0f, size.height), Offset(size.width, size.height), 1.dp.toPx()) }
-            .clickable(enabled = !listOnly, role = Role.Button, onClick = onOpen).padding(start = 14.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
+            .clickable(enabled = !listOnly, role = Role.Button, onClick = onOpen).padding(start = (14 + 16 * depth).dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         StatusBadge(f)
         Column(Modifier.weight(1f)) {
             Text(f.path.substringAfterLast('/'), color = j.fg, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            val dir = f.path.substringBeforeLast('/', "")
-            Text(
-                when {
-                    f.unreadable != null -> unreadableWords(f.unreadable.orEmpty())
-                    f.oldPath != null -> "← ${f.oldPath}"
-                    f.binary -> "binario" + if (dir.isNotEmpty()) " · $dir" else ""
-                    else -> dir
-                },
-                color = if (f.unreadable != null) j.yellow else if (f.oldPath != null || f.binary) j.cyan else j.dim,
-                fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            )
+            val note = when {
+                f.unreadable != null -> unreadableWords(f.unreadable.orEmpty())
+                f.oldPath != null -> "← ${f.oldPath}"
+                f.binary -> "binario"
+                else -> null
+            }
+            if (note != null) {
+                Text(note, color = if (f.unreadable != null) j.yellow else j.cyan, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
         if (!listOnly) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -343,6 +350,27 @@ private fun FileRow(f: DiffFile, listOnly: Boolean, isViewed: Boolean, onOpen: (
                 Text("-${f.deleted}", color = j.red, fontSize = 12.sp)
             }
             ViewedBox(isViewed, onMark)
+        }
+    }
+}
+
+/** A folder row of the tree (REQ-89): a tap opens or closes it. */
+@Composable
+private fun DirRow(d: TreeRow.Dir, listOnly: Boolean, onToggle: () -> Unit) {
+    val j = LocalJw.current
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 44.dp).background(j.panel).drawBehind { drawLine(j.line, Offset(0f, size.height), Offset(size.width, size.height), 1.dp.toPx()) }
+            .semantics { stateDescription = if (d.closed) "cerrada" else "abierta" }
+            .clickable(role = Role.Button, onClickLabel = if (d.closed) "Abrir carpeta" else "Cerrar carpeta", onClick = onToggle)
+            .padding(start = (14 + 16 * d.depth).dp, end = 12.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(if (d.closed) "▸" else "▾", color = j.dim, modifier = Modifier.widthIn(min = 18.dp), textAlign = TextAlign.Center)
+        Text(d.label + "/", color = j.fg, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        Text(d.files.toString(), color = j.dim, fontSize = 11.sp)
+        if (!listOnly) {
+            Text("+${d.added}", color = j.green, fontSize = 12.sp)
+            Text("-${d.deleted}", color = j.red, fontSize = 12.sp)
         }
     }
 }
