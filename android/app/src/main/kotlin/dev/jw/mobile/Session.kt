@@ -222,7 +222,11 @@ class Session(
         poller = scope.launch {
             while (true) {
                 delay(tickMs)
-                if (refresh.due(clock(), visible && foreground && outbox != null)) send(Outgoing.Binary(Workspaces.listFrame()))
+                if (refresh.due(clock(), visible && foreground && outbox != null)) {
+                    send(Outgoing.Binary(Workspaces.listFrame()))
+                    // The list of workspaces too: one added or closed on the PC shows up without reopening the app.
+                    send(Outgoing.Text(Control.workspaces(_model.value.session)))
+                }
                 lookForWifi()
             }
         }

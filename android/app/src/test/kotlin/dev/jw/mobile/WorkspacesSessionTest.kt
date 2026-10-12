@@ -136,4 +136,41 @@ class WorkspacesSessionTest {
         s.connected()
         assertTrue(fake.received.size >= 3)
     }
+
+    @Test fun aWorkspaceAddedOnThePcShowsUpWhileTheListIsOnScreen() = runBlocking<Unit> {
+        // The PC's answer changes between two asks: a second workspace appears.
+        var asks = 0
+        val extra = """{"id":"w9","kind":"worktree","name":"new","path":"/p2","project":"jw","branch":"feat/new","pr":null,"session":"main","parent":"r1"}"""
+        fake.enqueue { _, ws -> ws.send(FakeBridge.ready()) }
+        fake.onLater = { text, ws ->
+            when {
+                text.contains("\"workspaces\"") -> {
+                    asks++
+                    ws.send(
+                        if (asks == 1) FakeBridge.WORKSPACES
+                        else FakeBridge.WORKSPACES.replace("}]}", "},$extra]}"),
+                    )
+                }
+                text.contains("sessions") -> ws.send(FakeBridge.SESSIONS)
+            }
+        }
+        val s = session()
+        s.setVisible(true)
+        s.start()
+        s.connected()
+        val m = s.until { it.items.any { w -> w.id == "w9" } }
+        assertEquals(2, m.items.size)
+    }
+
+    @Test fun nothingIsAskedWhileTheListIsNotOnScreen() = runBlocking<Unit> {
+        serve()
+        val s = session()
+        s.setVisible(false)
+        s.start()
+        s.connected()
+        s.until { it.items.isNotEmpty() }
+        val before = fake.received.size
+        delay(600)
+        assertEquals("no refresh while hidden", before, fake.received.size)
+    }
 }
