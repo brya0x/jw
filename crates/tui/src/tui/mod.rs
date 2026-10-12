@@ -3197,18 +3197,24 @@ impl App {
             .filter(|e| e.project == entry.project && e.id != entry.id)
             .map(|e| e.path.clone())
             .collect();
+        trace::mark("rm_ask", 0);
         self.background(format!("checking {}", entry.name), move || {
-            let project = std::iter::once(&entry.path)
-                .chain(&siblings)
-                .find_map(|p| Project::open(std::path::Path::new(p)).ok())
-                .context("no checkout of this project left to find its repository")?;
+            let project = trace::span("rm_project", || {
+                std::iter::once(&entry.path)
+                    .chain(&siblings)
+                    .find_map(|p| Project::open(std::path::Path::new(p)).ok())
+                    .context("no checkout of this project left to find its repository")
+            })?;
             let prs = crate::connectors::github::Client::default();
-            let pr = prs
-                .for_branch(&project.repo.root, &entry.branch)
-                .ok()
-                .flatten();
+            let pr = trace::span("rm_gh", || {
+                prs.for_branch(&project.repo.root, &entry.branch)
+                    .ok()
+                    .flatten()
+            });
             if pr.as_ref().is_some_and(|p| p.state == "MERGED") {
-                let (plan, pr) = actions::done_plan(&project, &entry, &prs)?;
+                let (plan, pr) = trace::span("rm_done_plan", || {
+                    actions::done_plan(&project, &entry, &prs)
+                })?;
                 return Ok(Job::DoneReady {
                     entry,
                     project,
@@ -3216,7 +3222,7 @@ impl App {
                     pr,
                 });
             }
-            let plan = actions::rm_plan(&project, &entry)?;
+            let plan = trace::span("rm_local", || actions::rm_plan(&project, &entry))?;
             let note = pr.map(|p| format!("PR #{} is {}", p.number, p.status()));
             Ok(Job::RmReady {
                 entry,
@@ -3621,6 +3627,7 @@ impl App {
                 plan,
                 pr,
             } => {
+                trace::mark("rm_modal", 0);
                 self.modal = Some(Modal::Done {
                     entry,
                     project,
@@ -3634,6 +3641,7 @@ impl App {
                 plan,
                 note,
             } => {
+                trace::mark("rm_modal", 0);
                 if let Some(n) = note {
                     self.say(n);
                 }
