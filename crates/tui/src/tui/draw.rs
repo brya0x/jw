@@ -446,6 +446,10 @@ pub(super) enum Mode {
     Set,
     SetKey,
     Confirm,
+    /// A remove that would lose work: the name must be typed first (REQ-269).
+    ConfirmName,
+    /// A remove modal whose checks are still running (REQ-268).
+    ConfirmWait,
     Leader,
     Move,
     Diff,
@@ -475,6 +479,11 @@ pub(super) fn mode_of(app: &App) -> Mode {
                 | super::Modal::Rm { .. }
         )
     );
+    let confirm_mode = match &app.modal {
+        Some(super::Modal::Rm { pending: true, .. }) => Mode::ConfirmWait,
+        Some(super::Modal::Rm { plan, .. }) if plan.loses_work() => Mode::ConfirmName,
+        _ => Mode::Confirm,
+    };
     if let Some(v) = &app.settings {
         if v.listening() {
             Mode::SetKey
@@ -482,7 +491,7 @@ pub(super) fn mode_of(app: &App) -> Mode {
             Mode::Set
         }
     } else if confirm {
-        Mode::Confirm
+        confirm_mode
     } else if app.leading() {
         Mode::Leader
     } else if app.walking {
@@ -501,7 +510,7 @@ pub(super) fn mode_of(app: &App) -> Mode {
 fn chip(mode: Mode, leader: &str) -> String {
     match mode {
         Mode::Set | Mode::SetKey => " SET ".into(),
-        Mode::Confirm => " CONFIRM ".into(),
+        Mode::Confirm | Mode::ConfirmName | Mode::ConfirmWait => " CONFIRM ".into(),
         Mode::Leader => format!(" {leader} "),
         Mode::Move => " MOVE ".into(),
         Mode::Diff | Mode::DiffCommits | Mode::DiffSide => " DIFF ".into(),
@@ -513,7 +522,7 @@ fn chip(mode: Mode, leader: &str) -> String {
 fn chip_color(mode: Mode) -> Color {
     match mode {
         Mode::Set | Mode::SetKey => p().magenta,
-        Mode::Confirm => p().red,
+        Mode::Confirm | Mode::ConfirmName | Mode::ConfirmWait => p().red,
         Mode::Leader => p().yellow,
         Mode::Move | Mode::Diff | Mode::DiffCommits | Mode::DiffSide | Mode::Md => p().blue,
         Mode::Term => p().green,
@@ -544,6 +553,14 @@ fn hint(mode: Mode, leader: &str) -> Vec<Span<'static>> {
             t("close"),
         ],
         Mode::Confirm => vec![k("y"), t("yes ·"), k("esc"), t("no")],
+        Mode::ConfirmName => vec![
+            t("unsaved work: type the name, then"),
+            k("↵"),
+            t("removes ·"),
+            k("esc"),
+            t("no"),
+        ],
+        Mode::ConfirmWait => vec![t("checking for unsaved work ·"), k("esc"), t("no")],
         Mode::Leader => vec![
             k(&key("switch")),
             t("switch ·"),
@@ -1062,6 +1079,8 @@ mod tests {
             Mode::Set,
             Mode::SetKey,
             Mode::Confirm,
+            Mode::ConfirmName,
+            Mode::ConfirmWait,
             Mode::Leader,
             Mode::Move,
             Mode::Diff,

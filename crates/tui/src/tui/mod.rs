@@ -4503,6 +4503,27 @@ mod motion_tests {
         assert!(matches!(&app.modal, Some(Modal::Rm { project: None, .. })));
     }
 
+    /// REQ-269: a remove that loses work says so in the footer and the status
+    /// bar, and one that does not keeps `y`.
+    #[test]
+    fn the_footer_says_when_the_name_must_be_typed() {
+        let footer = |m: &Modal| {
+            let rows = shown(m, '⠋');
+            rows.into_iter().find(|l| l.contains("cancel")).unwrap()
+        };
+        let lossy = rm_modal("a", dirty(), "", modal::PrLine::NoPr);
+        assert!(footer(&lossy).contains("remove once the name is typed"));
+        let clean = rm_modal("a", actions::RmPlan::default(), "", modal::PrLine::NoPr);
+        assert!(footer(&clean).contains(" y  remove"));
+        let (mut app, _g) = app(true);
+        app.modal = Some(lossy);
+        assert_eq!(draw::mode_of(&app), draw::Mode::ConfirmName);
+        app.modal = Some(pending_modal("a"));
+        assert_eq!(draw::mode_of(&app), draw::Mode::ConfirmWait);
+        app.modal = Some(clean);
+        assert_eq!(draw::mode_of(&app), draw::Mode::Confirm);
+    }
+
     /// REQ-268: git's answer for a closed or another modal is dropped; its
     /// failure closes the modal it belongs to.
     #[test]

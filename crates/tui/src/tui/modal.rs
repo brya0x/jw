@@ -706,7 +706,10 @@ fn rm_lines(
         l.push(Line::default());
     }
     if plan.loses_work() {
-        l.push(keys(&[("↵", "remove"), ("esc", "cancel")]));
+        l.push(keys(&[
+            ("↵", "remove once the name is typed"),
+            ("esc", "cancel"),
+        ]));
     } else {
         l.push(keys(&[("y", "remove"), ("esc", "cancel")]));
     }

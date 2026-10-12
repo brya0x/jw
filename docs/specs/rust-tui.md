@@ -677,6 +677,7 @@ After (a debug build under `scripts/drive.py`, a temp repo with a local `origin`
 - REQ-266 THE UI thread SHALL run no git or gh call for this flow, and gh's answer SHALL NOT reload the registry nor clear the busy indicator of another job.
 - REQ-267 THE version SHALL be 0.0.20 and `PROTOCOL` SHALL stay 11.
 - REQ-268 WHEN `X` is pressed on a worktree, THE TUI SHALL open `Modal::Rm` in the same key event, from the entry alone, with a spinning `Work` row, no plan and no project, before any git or project lookup; WHILE that row waits, only `esc` SHALL act (`↵`, `y`, `n`, `d`, `⇥`, letters and Backspace do nothing, and nothing is typed); WHEN git answers, THE TUI SHALL fill the plan of the same modal, with the typed name empty, and drop the answer if the modal is closed or another's; IF git or the project lookup fails, THEN THE TUI SHALL close the modal and say why; no confirmation SHALL act without a project. The prototype (version 3, approved 2026-10-12) is the screen, except that `Deletes:` is left out of the waiting modal, since what is deleted (`on_disk`, whether the branch exists) is not known yet.
+- REQ-269 WHILE the remove modal would lose work, THE modal's footer SHALL read `↵ remove once the name is typed` and THE status bar SHALL say that the name must be typed first; WHILE its checks run, THE status bar SHALL say it is checking; otherwise THE bar SHALL keep `y yes · esc no`. The rule itself (REQ-12, REQ-261) does not change.
 
 ## Rationale
 
@@ -923,6 +924,7 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | E3 ✓ | `rm_plan` runs `status`, `log` and the branch check on scoped threads (RISK-80): `rm_local` 50 → 22 ms, modal 92 → 68 ms in release | 257 | `core/src/actions.rs` |
 | E4 ✓ | `worktree_state` / `rm_plan_from`: the worktree's git runs while `Project::open` does; median 148 → 127 ms on the large repo | 257 | `core/src/actions.rs`, `tui/mod.rs` |
 | E5 ✓ | `Modal::Rm.pending`, `Job::RmOpen` / `Job::RmWork`, the `Work` row, keys held until git answers; `rm_plan_from` takes `branch_exists`; tests; the prototype (version 3, approved 2026-10-12) | 268 | `tui/mod.rs`, `tui/modal.rs`, `core/src/actions.rs` |
+| E6 ✓ | The footer and the status bar say when the name must be typed (`Mode::ConfirmName`, `ConfirmWait`); fixes the bar saying `y yes` when `y` does nothing | 269 | `tui/draw.rs`, `tui/modal.rs` |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 | F0 ✓ | `JW_TRACE`, `scripts/bench-switch.py`, the Measurements above | 184 | `tui/trace.rs`, `tui/mod.rs`, `scripts/` |
 | F1 ✓ | S1, S9: `Stream::resolve` (the `git` spawn) off the UI thread, the frame deadline counted from the frame's start; the unexplained ≈ 100 ms of a first open | 185, 191 | `tui/mod.rs`, `core` (callers) |
