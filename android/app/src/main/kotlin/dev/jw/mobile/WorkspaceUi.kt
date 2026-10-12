@@ -183,13 +183,22 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
             } else if (kind == PaneKind.Shell && shell != null) {
                 val clipboard = LocalContext.current.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                 ShellView(
-                    shell, rev, { i -> session.blockOut(sel.pane, i) }, sel.cwd ?: w.path, sel.name ?: sel.role,
+                    shell, rev, { i -> session.blockOut(sel.pane, i) },
                     onCopy = { clipboard.setPrimaryClip(android.content.ClipData.newPlainText("jw", it)) },
                     onRerun = { cmd -> session.input(sel.pane, Keys.text(cmd)); session.input(sel.pane, Keys.key(Key.Enter)) },
-                    onStop = { session.input(sel.pane, Keys.ctrl('c') ?: ByteArray(0)) },
+                    onShare = { text ->
+                        val send = android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain").putExtra(android.content.Intent.EXTRA_TEXT, text)
+                        ctx.startActivity(android.content.Intent.createChooser(send, null).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+                    },
                     modifier = Modifier.fillMaxSize(),
                 )
             } else {
+                if (shell?.running == true && shell.blocks.lastOrNull()?.full == true) {
+                    Text(
+                        "${shell.blocks.last().cmd.substringBefore(' ')} ocupa toda la pantalla · los bloques vuelven al salir", color = j.dim, fontSize = 11.sp, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis, modifier = Modifier.align(Alignment.TopStart).fillMaxWidth().background(j.sel).padding(horizontal = 16.dp, vertical = 8.dp),
+                    )
+                }
                 TerminalView(
                     term = term, rev = rev, selection = selection, onSelection = { selection = it }, onTap = {},
                     onScrolledUp = { session.requestHistory(sel.pane) },
@@ -244,7 +253,10 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
         KeyRow(sel, term, session, onLeader = { sheet = Sheet.Leader })
         // What the terminal's input holds: a Claude's box read off its screen, a shell's line as it tells it.
         val remote = sel?.let { PaneKinds.input(it, shell) { term?.let(ClaudeInput::read) } }
-        Composer(sel, state, session, remote = remote, live = PaneKinds.live(kind, remote))
+        val running = kind == PaneKind.Shell && shell?.running == true
+        val chips = if (kind != PaneKind.Shell) emptyList() else if (running) listOf((shell?.blocks?.lastOrNull()?.cmd ?: "") to j.yellow)
+            else listOfNotNull((sel?.cwd ?: w.path) to j.dim, w.branch.takeIf { w.kind == Kind.Worktree && it.isNotEmpty() }?.let { "⎇ $it" to j.magenta })
+        Composer(sel, state, session, remote = remote, live = PaneKinds.live(kind, remote), chips = chips, running = running)
         StatusBar("TERM", j.green, sel?.let { "${it.role} · ${term?.let { t -> "${t.cols}×${t.rows}" } ?: "…"} · ^␣ menú" } ?: "sin paneles", route = state.route)
     }
 
@@ -334,7 +346,10 @@ private fun KeyRow(sel: PaneInfo?, term: PaneText?, session: Session, onLeader: 
  * Elsewhere a line typed here goes to the pane, then Enter, when it is sent.
  */
 @Composable
-private fun Composer(sel: PaneInfo?, state: UiState.Connected, session: Session, remote: String?, live: Boolean) {
+private fun Composer(
+    sel: PaneInfo?, state: UiState.Connected, session: Session, remote: String?, live: Boolean,
+    chips: List<Pair<String, Color>> = emptyList(), running: Boolean = false,
+) {
     val j = LocalJw.current
     var text by remember(sel?.pane) { mutableStateOf("") }
     var typedAt by remember(sel?.pane) { mutableLongStateOf(0L) }
@@ -364,11 +379,18 @@ private fun Composer(sel: PaneInfo?, state: UiState.Connected, session: Session,
         text = new
         typedAt = System.currentTimeMillis()
     }
+    if (chips.isNotEmpty()) {
+        Row(Modifier.fillMaxWidth().background(j.panel).horizontalScroll(rememberScrollState()).padding(start = 10.dp, end = 10.dp, top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            for ((label, color) in chips) {
+                Text(label, color = color, fontSize = 11.sp, maxLines = 1, modifier = Modifier.heightIn(min = 26.dp).background(j.sel, RoundedCornerShape(13.dp)).padding(horizontal = 10.dp, vertical = 5.dp))
+            }
+        }
+    }
     Row(
         Modifier.fillMaxWidth().background(j.panel).padding(start = 10.dp, end = 10.dp, top = 4.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Text(if (sel?.mayHaveConversation() == true) "›" else "❯", color = j.green, fontWeight = FontWeight.Bold)
+        if (chips.isEmpty()) Text(if (sel?.mayHaveConversation() == true) "›" else "❯", color = j.green, fontWeight = FontWeight.Bold)
         BasicTextField(
             value = text, onValueChange = edit, enabled = sel != null && !state.readOnly,
             textStyle = TextStyle(color = j.fg, fontSize = 13.5.sp, fontFamily = JwMono), cursorBrush = SolidColor(j.fg),
@@ -377,17 +399,20 @@ private fun Composer(sel: PaneInfo?, state: UiState.Connected, session: Session,
             decorationBox = { inner ->
                 FieldFrame(j.line) {
                     Box(Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
-                        if (text.isEmpty()) Text(if (state.readOnly) "solo lectura" else if (sel?.mayHaveConversation() == true) "escribe a ${sel.fg?.trimStart('-')?.takeIf { it != "zsh" } ?: sel.role}" else "escribe un comando", color = j.dim, fontSize = 13.5.sp)
+                        if (text.isEmpty()) Text(if (state.readOnly) "solo lectura" else if (sel?.mayHaveConversation() == true) "escribe a ${sel.fg?.trimStart('-')?.takeIf { it != "zsh" } ?: sel.role}" else if (running) "Lo que escribas va al programa" else "escribe un comando", color = j.dim, fontSize = 13.5.sp)
                         inner()
                     }
                 }
             },
         )
+        val stop = running && text.isEmpty()
         Box(
-            Modifier.clickable(enabled = !state.readOnly, role = Role.Button, onClickLabel = "Enviar", onClick = send).minimumInteractiveComponentSize()
-                .width(44.dp).heightIn(min = 44.dp).background(if (state.readOnly) j.dim else j.blue, Corner),
+            Modifier.clickable(enabled = !state.readOnly, role = Role.Button, onClickLabel = if (stop) "Parar con Control C" else "Enviar") {
+                if (stop && sel != null) session.input(sel.pane, Keys.ctrl('c') ?: ByteArray(0)) else send()
+            }.minimumInteractiveComponentSize()
+                .width(44.dp).heightIn(min = 44.dp).background(if (state.readOnly) j.dim else if (stop) j.red else j.blue, Corner),
             contentAlignment = Alignment.Center,
-        ) { Text("↵", color = j.bg, fontWeight = FontWeight.Bold, fontSize = 16.sp) }
+        ) { Text(if (stop) "■" else "↵", color = j.bg, fontWeight = FontWeight.Bold, fontSize = 16.sp) }
     }
 }
 
