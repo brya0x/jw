@@ -88,6 +88,8 @@ button:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
       <button id="b-leader">^␣ (líder)</button>
       <button id="b-phone">Un teléfono escanea el QR</button>
       <button id="b-err">Falla: falta cloudflared</button>
+      <button id="b-nolan">Sin red local</button>
+      <button id="b-retun">El túnel se reinicia</button>
       <button id="b-small">Terminal pequeña</button>
       <button id="b-reset">Reiniciar</button>
       <select id="theme" aria-label="Tema"><option>one-dark</option><option>tokyo-night</option><option>catppuccin-mocha</option><option>one-light</option></select>
@@ -104,6 +106,14 @@ button:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
       <li><span class="k">↵</span> inicia. Los pasos van acelerados; el DNS real tarda cerca de un minuto.</li>
       <li>Con el botón <i>Un teléfono escanea el QR</i>, el modal salta solo con la pregunta, aunque lo hayas cerrado.</li>
       <li><span class="k">esc</span> oculta el modal y el servidor sigue. Abajo a la derecha queda <span class="k">◉ mobile</span>.</li>
+    </ul>
+    <h2>Nuevo: wifi primero, túnel de respaldo</h2>
+    <ul>
+      <li>Con <span class="k">↵</span> el QR sale <b>al instante</b>: apunta a tu IP local (TLS con certificado propio de jw, y su huella va dentro del QR). Sin esperar a Cloudflare.</li>
+      <li>El túnel sigue arrancando debajo (<i>starting, about a minute</i>). Cuando está listo, jw se lo <b>avisa a los teléfonos ya conectados</b> (<i>tunnel ready · 1 phone told</i>): quedan con la dirección guardada de respaldo.</li>
+      <li>El teléfono usa el wifi mientras responda; si sales de casa o cambia la IP, cae solo al túnel. El QR no cambia después de mostrarse.</li>
+      <li>Si el túnel se reinicia con otra dirección, también se les avisa (botón <i>El túnel se reinicia</i>). Falta cloudflared o no hay red local: el modal lo dice y lo que sí funciona sigue (botones <i>Falla…</i> y <i>Sin red local</i>).</li>
+      <li>En los dispositivos se ve por dónde está cada teléfono (<i>via wifi</i>).</li>
     </ul>
     <h2>Teclas del modal</h2>
     <ul>
@@ -133,10 +143,10 @@ const THEMES={
 };
 function theme(n){const t=THEMES[n],r=document.documentElement.style;for(const k of ['bg','panel','fg','dim','line','sel','blue','green','yellow','red','magenta','cyan'])r.setProperty('--'+k,t[k]);r.colorScheme=t.dark?'dark':'light'}
 
-const HOST='virtual-archive-bunny-economies.trycloudflare.com';
+const HOST='virtual-archive-bunny-economies.trycloudflare.com', LAN='192.168.1.23:48211';
 const fresh=()=>({leader:false,which:false,open:false,view:'off',running:false,step:0,ttl:120,ro:false,
   devices:[{name:'Pixel 8',paired:'2 d ago',seen:'3 min ago',on:true},{name:'Tablet',paired:'6 d ago',seen:'yesterday',on:false}],
-  pair:null,sel:0,revoke:null,msg:'',small:false,returnTo:'off'});
+  pair:null,sel:0,revoke:null,msg:'',small:false,returnTo:'off',lan:true,tun:'off',noCf:false});
 let S=fresh(),timers=[];
 const $=s=>document.querySelector(s);
 const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
@@ -162,10 +172,13 @@ function view(){
   if(v==='off'){
     return [' Mobile ',[
       row(' Work on your sessions from a phone.'),
-      row(' <span class="dim">Opens a Cloudflare tunnel to this PC and shows a QR for the app.</span>'),blank,
+      row(S.lan?' <span class="dim">Opens a link on your wifi, ready at once, and a Cloudflare</span>':' <span class="dim">Opens a Cloudflare tunnel to this PC and shows a QR for the app.</span>'),S.lan?row(' <span class="dim">tunnel for when you are away.</span>'):blank,
       row(' <span class="dim">Stays on after you close jw (it runs in the daemon).</span>'),
       row(` <span class="dim">Paired phones:</span> ${S.devices.length}`),blank,
       keys([['↵','start'],['d','devices'],['esc','close']])],9];
+  }
+  if(v==='starting'&&S.lan){
+    return [' Mobile ',[row(' <span class="dim">Starting…</span>'),blank,row(` <span class="cyan">⠹</span> <span class="fg">opening the wifi listener</span>`),blank,keys([['s','stop'],['esc','hide']])],6];
   }
   if(v==='starting'){
     const steps=[['cloudflared started',1],['tunnel registered',2],['waiting for the name to resolve (about a minute)',3]];
@@ -176,12 +189,12 @@ function view(){
     return [' Mobile ',[row(' <span class="dim">Starting…</span>'),blank,...lines,blank,keys([['s','stop'],['esc','hide']])],8];
   }
   if(v==='error'){
-    return [' Mobile ',[row(' <span class="red">cloudflared is not installed.</span>'),row(' <span class="dim">Install it, then start again:</span>'),blank,row('   brew install cloudflared'),blank,keys([['↵','try again'],['esc','close']])],8];
+    return [' Mobile ',[row(' <span class="red">No wifi address, and cloudflared is not installed.</span>'),row(' <span class="dim">Install it, then start again:</span>'),blank,row('   brew install cloudflared'),blank,keys([['↵','try again'],['esc','close']])],8];
   }
   if(v==='ready'){
     if(S.small) return [' Mobile ',[
       row(' <span class="yellow">The window is too small for the QR</span>'),row(' <span class="dim">It needs 66×28; this one is 62×20.</span>'),blank,
-      row(' Make it bigger, or use the link:'),row(` <span class="blue">jw://${HOST.slice(0,14)}…/</span><span class="dim">••••</span>`),blank,
+      row(' Make it bigger, or use the link:'),row(` <span class="blue">jw://${S.lan?LAN:HOST.slice(0,14)+'…'}/</span><span class="dim">••••</span>`),blank,
       keys([['c','copy link'],['n','new code'],['s','stop'],['esc','hide']])],9];
     const left=S.ttl, exp=left<=0, pct=Math.max(0,left)/120*100;
     const info=[
@@ -194,8 +207,9 @@ function view(){
     ];
     return [' Mobile · running ',[
       `<div class="split"><div>${QR}</div><div style="padding:0 1ch">${info.map(l=>`<div class="row" style="padding:0">${l}</div>`).join('')}</div></div>`,
-      row(` <span class="blue">${HOST}</span>`),blank,
-      keys([['n','new code'],['d','devices'],['r','read-only'],['s','stop'],['esc','hide']])],19+4];
+      ...(S.lan?[row(` <span class="dim">wifi  </span> <span class="green">●</span> <span class="blue">${LAN}</span> <span class="dim">· TLS</span>`)]:[]),
+      row(` <span class="dim">tunnel</span> `+(S.tun==='ready'?`<span class="green">●</span> <span class="blue">${HOST}</span>`:S.tun==='missing'?`<span class="red">cloudflared is not installed</span> <span class="dim">(wifi still works)</span>`:`<span class="cyan">⠹</span> <span class="dim">starting, about a minute</span>`)),blank,
+      keys([['n','new code'],['d','devices'],['r','read-only'],['s','stop'],['esc','hide']])],19+4+(S.lan?1:0)];
   }
   if(v==='pair'){
     const p=S.pair;
@@ -207,7 +221,7 @@ function view(){
       keys([['y','yes, pair it'],['n','no']])],10];
   }
   if(v==='devices'){
-    const rs=S.devices.length?S.devices.map((d,i)=>row(` ${d.on?'<span class="green">●</span>':'<span class="dim">○</span>'} ${d.name.padEnd(14)}<span class="dim">paired ${d.paired.padEnd(9)} seen ${d.seen}</span>`,i===S.sel?'sel':'')):[row(' <span class="dim">No phone is paired.</span>')];
+    const rs=S.devices.length?S.devices.map((d,i)=>row(` ${d.on?'<span class="green">●</span>':'<span class="dim">○</span>'} ${d.name.padEnd(14)}<span class="dim">paired ${d.paired.padEnd(9)} seen ${d.seen}</span>${d.on?` <span class="dim">· via ${d.via||'wifi'}</span>`:''}`,i===S.sel?'sel':'')):[row(' <span class="dim">No phone is paired.</span>')];
     if(S.revoke!==null){
       const d=S.devices[S.revoke];
       return [' Paired phones ',[...rs,blank,row(` <span class="fg">Revoke “${esc(d.name)}”?</span> <span class="dim">It is cut off within seconds.</span>`),blank,keys([['y','revoke'],['n','keep']])],rs.length+5];
@@ -282,14 +296,24 @@ function draw(){
 }
 
 /* behaviour */
+function tunnelUp(){
+  if(S.noCf){S.tun='missing';draw();return}
+  S.tun='ready';const n=S.devices.filter(d=>d.on).length;
+  say(n?`tunnel ready · ${n} phone${n>1?'s':''} told`:'tunnel ready · phones will be told');draw();
+}
 function start(){
+  if(S.lan){
+    S.view='starting';S.running=false;S.ttl=120;draw();
+    later(600,()=>{S.view='ready';S.running=true;S.ttl=120;S.tun='starting';draw();later(5000,tunnelUp)});
+    return;
+  }
   S.view='starting';S.running=false;S.step=0;S.ttl=120;draw();
   later(700,()=>{S.step=1;draw()});
   later(1700,()=>{S.step=2;draw()});
   later(2600,()=>{S.step=3;draw()});
-  later(6200,()=>{if(S.view==='starting'){S.view='ready';S.running=true;S.ttl=120;draw()}});
+  later(6200,()=>{if(S.view==='starting'){S.view='ready';S.running=true;S.ttl=120;S.tun='ready';draw()}});
 }
-function stop(){timers.forEach(clearTimeout);timers=[];S.running=false;S.view='off';S.devices.forEach(d=>d.on=false);say('mobile stopped; phones were cut off');draw()}
+function stop(){timers.forEach(clearTimeout);timers=[];S.running=false;S.tun='off';S.view='off';S.devices.forEach(d=>d.on=false);say('mobile stopped; phones were cut off');draw()}
 function openMobile(){S.open=true;S.which=false;S.leader=false;S.sel=0;S.revoke=null;
   if(S.running&&S.view!=='ready')S.view='ready'; draw()}
 function incoming(){
@@ -347,7 +371,16 @@ document.addEventListener('keydown',e=>{
 function leader(){S.leader=true;S.which=false;draw();clearTimeout(leader.t);leader.t=setTimeout(()=>{if(S.leader){S.which=true;draw()}},450)}
 $('#b-leader').addEventListener('click',()=>{$('#screen').focus();leader()});
 $('#b-phone').addEventListener('click',incoming);
-$('#b-err').addEventListener('click',()=>{timers.forEach(clearTimeout);timers=[];S.running=false;S.view='error';S.open=true;S.which=false;S.leader=false;draw()});
+$('#b-err').addEventListener('click',()=>{
+  S.noCf=!S.noCf;$('#b-err').textContent=S.noCf?'Falla: falta cloudflared (activa)':'Falla: falta cloudflared';
+  if(S.running&&S.lan){S.tun=S.noCf?'missing':S.tun;draw();return}
+  if(!S.lan&&S.noCf){timers.forEach(clearTimeout);timers=[];S.running=false;S.view='error';S.open=true;S.which=false;S.leader=false}
+  draw()});
+$('#b-nolan').addEventListener('click',()=>{timers.forEach(clearTimeout);timers=[];S.lan=!S.lan;S.running=false;S.tun='off';S.view='off';S.open=true;S.which=false;S.leader=false;
+  $('#b-nolan').textContent=S.lan?'Sin red local':'Sin red local (activa)';draw()});
+$('#b-retun').addEventListener('click',()=>{
+  if(!(S.running&&S.lan)){say('start mobile first');draw();return}
+  S.tun='starting';draw();later(3000,()=>{S.tun='ready';const n=S.devices.filter(d=>d.on).length;say(n?`tunnel changed · ${n} phone${n>1?'s':''} told`:'tunnel changed');draw()})});
 $('#b-small').addEventListener('click',()=>{S.small=!S.small;draw()});
 $('#b-reset').addEventListener('click',()=>{timers.forEach(clearTimeout);timers=[];S=fresh();draw()});
 $('#theme').addEventListener('change',e=>{theme(e.target.value);draw()});

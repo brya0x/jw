@@ -82,6 +82,7 @@ svg.i{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stro
 .chip{font-weight:700;padding:1px 8px;border-radius:4px;background:var(--c,var(--green));color:var(--bg)}
 .status .hint{color:var(--dim);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .status .msg{color:var(--yellow)}
+.status .route{color:var(--cyan)}
 .nav{display:flex;background:var(--panel);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom,0px)}
 .nav button{flex:1;height:54px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;color:var(--dim);font-size:11px;position:relative}
 .nav button b{font-size:17px;font-weight:500;line-height:1}
@@ -263,7 +264,9 @@ ol.sx code{background:var(--sel);padding:1px 6px;border-radius:4px;color:var(--g
     <h2>Pantallas</h2>
     <div class="jump" id="jump"></div>
     <h2>Simular (solo maqueta)</h2>
-    <div class="jump"><button data-act="sim" data-sim="accept">El PC acepta</button><button data-act="sim" data-sim="denied">El PC rechaza</button><button data-act="sim" data-sim="expired">El código venció</button><button data-act="sim" data-sim="unreach">No llego al PC</button><button data-act="sim" data-sim="proto">Protocolo: la app va atrás</button><button data-act="sim" data-sim="protojw">Protocolo: jw va atrás</button><button data-act="sim" data-sim="limited">Demasiados intentos</button></div>
+    <div class="jump"><button data-act="sim" data-sim="accept">El PC acepta</button><button data-act="sim" data-sim="denied">El PC rechaza</button><button data-act="sim" data-sim="expired">El código venció</button><button data-act="sim" data-sim="unreach">No llego al PC</button><button data-act="sim" data-sim="proto">Protocolo: la app va atrás</button><button data-act="sim" data-sim="protojw">Protocolo: jw va atrás</button><button data-act="sim" data-sim="limited">Demasiados intentos</button><button data-act="sim" data-sim="away">Sales de casa (cae al túnel)</button><button data-act="sim" data-sim="home">Vuelves a casa</button></div>
+    <h2>Wifi primero, túnel de respaldo</h2>
+    <p style="margin:0 0 14px;color:var(--dim)">Cuando el PC y el teléfono comparten wifi, la app se conecta directo a la IP local (TLS con certificado propio de jw, fijado por la huella del QR). El túnel de Cloudflare queda guardado como respaldo: jw se lo avisa a la app cuando está listo, y otra vez si cambia de dirección. La app usa el wifi mientras responda y cae sola al túnel si no (botones «Sales de casa» y «Vuelves a casa»). La barra de estado muestra por dónde va (<code>wifi</code> o <code>túnel</code>); en ajustes se ven las dos rutas; «No encuentro tu PC» cuenta también la fila del wifi, medida con un plazo corto.</p>
     <h2>Qué comprueba de verdad la app</h2>
     <p style="margin:0 0 14px;color:var(--dim)">«No encuentro tu PC» solo dibuja lo que la app puede saber: hay red (el sistema lo dice), Cloudflare respondió (el túnel devuelve 530 cuando ya no existe) y el host contesta o su nombre ya no resuelve. «Versiones distintas» compara el número propio con el de <code>ready</code>, así sabe cuál va atrás.</p>
     <h2>Modelo (igual que el TUI)</h2>
@@ -317,6 +320,7 @@ function applyTheme(n){
 
 /* workspace = project root | worktree | plain folder (spec rust-tui.md:12) */
 const state = {
+  route:'wifi',
   screen:'connect', theme:'one-dark', conn:'idle', sess:'main', ws:'jw/feat/mobile-app', pane:'claude',
   sheet:null, q:'', file:null, viewed:{}, anim:true, haptic:true, msg:'',
   w:[
@@ -364,7 +368,7 @@ function nav(){
   const t=[['home','≡','workspaces'],['inbox','?','avisos'],['changes','±','diff'],['settings','⚙','ajustes']];
   return `<nav class="nav" role="tablist">${t.map(([k,g,l])=>`<button role="tab" aria-selected="${cur===k}" data-go="${k}"><b>${g}</b>${l}${k==='inbox'&&n?`<span class="ct">${n}</span>`:''}</button>`).join('')}</nav>`;
 }
-function statusBar(mode,hint){return `<div class="status"><span class="chip" style="--c:${mode==='TERM'?'var(--green)':mode==='DIFF'?'var(--cyan)':mode==='?'||mode==='PAIR'?'var(--yellow)':mode==='ERR'?'var(--red)':'var(--blue)'}">${mode}</span><span class="hint">${hint}</span>${state.msg?`<span class="msg">${state.msg}</span>`:''}</div>`}
+function statusBar(mode,hint){return `<div class="status"><span class="chip" style="--c:${mode==='TERM'?'var(--green)':mode==='DIFF'?'var(--cyan)':mode==='?'||mode==='PAIR'?'var(--yellow)':mode==='ERR'?'var(--red)':'var(--blue)'}">${mode}</span><span class="hint">${hint}</span>${state.msg?`<span class="msg">${state.msg}</span>`:''}${['home','inbox','changes','settings','ws'].includes(state.screen)?`<span class="route">${state.route==='tunnel'?'túnel':'wifi'}</span>`:''}</div>`}
 
 function vConnect(){
   return `<div class="hero">${qrSvg()}<h2>conecta tu PC</h2>
@@ -419,12 +423,12 @@ function vPair(){
   return connHdr('emparejando','virtual-archive-bunny-economies.trycloudflare.com','cancelpair')+`<div class="hero">
     <p>Tu PC te pregunta si confía en este teléfono. Compara este código con el que ves en jw y responde <b>y</b>.</p>
     <div class="pcode">482 913</div>
-    <div class="stp"><div><span class="d">●</span>QR leído</div><div><span class="d">●</span>PC alcanzado</div><div><span class="w">⠹</span>esperando tu respuesta <span class="s">(60 s)</span></div></div>
+    <div class="stp"><div><span class="d">●</span>QR leído</div><div><span class="d">●</span>PC alcanzado <span class="s">· por wifi</span></div><div><span class="w">⠹</span>esperando tu respuesta <span class="s">(60 s)</span></div></div>
     <button class="btn tone" data-act="cancelpair">cancelar</button></div>`+statusBar('PAIR','compara el código en jw');
 }
 function failUnreach(){
   const host='virtual-archive-bunny-economies.trycloudflare.com';
-  const body=`<div class="log"><div><span class="ok">✓</span> internet <span class="dm">· datos móviles</span></div><div><span class="ok">✓</span> Cloudflare responde</div><div><span class="no">✗</span> tu PC <span class="dm">· sin respuesta</span></div><div class="dm hostl">${host}</div></div>
+  const body=`<div class="log"><div><span class="no">✗</span> wifi <span class="dm">· sin respuesta</span></div><div><span class="ok">✓</span> internet <span class="dm">· datos móviles</span></div><div><span class="ok">✓</span> Cloudflare responde</div><div><span class="no">✗</span> tu PC <span class="dm">· sin respuesta</span></div><div class="dm hostl">${host}</div></div>
     <p>Cada vez que se reinicia <code>jw mobile</code> la dirección de tu PC cambia. Escanea el código nuevo.</p>`;
   return connHdr('sin conexión','jw mobile')+`<div class="hero"><h2>No encuentro tu PC</h2>${body}<button class="btn fill" data-act="rescan">escanear otro código</button><button class="btn tone" data-act="retry">reintentar</button></div>`+statusBar('ERR','no conectado');
 }
@@ -501,7 +505,8 @@ function vSettings(){
   const sw=k=>`<button class="sw" role="switch" aria-checked="${state[k]}" data-sw="${k}" aria-label="${k}"></button>`;
   return `<div class="hdr"><div class="t"><b>ajustes</b><span>mismo settings.json que el TUI</span></div></div>
   <div class="scroll"><div class="sec">conexión</div>
-   <div class="srow"><div class="t"><b>PC de Bryan</b><span>jw-7f3a.trycloudflare.com · TLS</span></div><span style="color:var(--green)">● 38 ms</span></div>
+   <div class="srow"><div class="t"><b>wifi</b><span>192.168.1.23:48211 · TLS fijado</span></div><span style="color:${state.route==='tunnel'?'var(--dim)':'var(--green)'}">${state.route==='tunnel'?'sin respuesta':'● en uso'}</span></div>
+   <div class="srow"><div class="t"><b>túnel</b><span>jw-7f3a.trycloudflare.com · respaldo</span></div><span style="color:${state.route==='tunnel'?'var(--green)':'var(--dim)'}">${state.route==='tunnel'?'● en uso':'listo'}</span></div>
    <div class="srow"><div class="t"><b>protocolo</b><span>jw-proto v8 · compatible</span></div></div>
    <button class="srow" data-act="disc" style="color:var(--red)"><div class="t"><b>desconectar</b></div></button>
    ${ansSection()}<div class="sec">tema</div><div class="themes">${Object.entries(THEMES).map(([n,t])=>`<button class="th" aria-pressed="${state.theme===n}" data-theme="${n}" style="--tbg:${t.bg};--tfg:${t.fg};--tdim:${t.dim}"><div class="s3">${['blue','green','red','yellow'].map(k=>`<i style="--c:${t[k]}"></i>`).join('')}</div><b>${n}</b><span>${t.dark?'oscuro':'claro'}</span></button>`).join('')}</div>
@@ -608,7 +613,7 @@ document.addEventListener('click',e=>{
     case 'retry':startPair();break;
     case 'torch':toast('linterna');break;
     case 'os':toast('abre los ajustes del sistema');break;
-    case 'sim':{const k=d.sim;if(k==='accept'){clearTimeout(state.pairT);state.screen='home';render();toast('conectado')}else{goConn(k)}break}
+    case 'sim':{const k=d.sim;if(k==='away'||k==='home'){state.route=k==='away'?'tunnel':'wifi';if(!['home','inbox','changes','settings','ws'].includes(state.screen))state.screen='home';state.sheet=null;render();toast(k==='away'?'wifi no responde · por el túnel':'de vuelta por wifi');break}if(k==='accept'){clearTimeout(state.pairT);state.screen='home';render();toast('conectado')}else{goConn(k)}break}
     case 'closefile':state.file=null;render();break;
     case 'disc':state.screen='connect';state.conn='idle';render();break;
     case 'folder':state.sheet=null;toast('selector de carpetas');render();break;
