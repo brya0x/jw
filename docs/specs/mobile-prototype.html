@@ -127,15 +127,36 @@ svg.i{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stro
 .ctitle .pn{flex:none;display:flex;align-items:center;gap:5px;max-width:46%;color:var(--dim);font-size:11px;white-space:nowrap}
 .ctitle .pn i{width:7px;height:7px;border-radius:50%;background:var(--c,var(--magenta))}
 /* shell por bloques, como Warp: de abajo hacia arriba, la salida completa y con colores */
-.blocks{flex:1;min-height:0;overflow:auto;padding:10px 12px;display:flex;flex-direction:column;justify-content:flex-end;gap:10px;background:var(--bg)}
-.blk{border:1px solid var(--line);border-radius:8px;background:var(--panel);overflow:hidden}
-.blk.bad{border-color:color-mix(in srgb,var(--red) 70%,transparent)}
-.blk .bh{display:flex;align-items:flex-start;gap:8px;padding:8px 10px 2px;font-size:12px}
-.blk .bh .pr{color:var(--green);font-weight:700}.blk .bh b{color:var(--fg);font-weight:500;flex:1;min-width:0;word-break:break-word}
-.blk .bm{padding:0 10px 6px;font-size:10.5px;color:var(--dim)}
-.blk .bo{border-top:1px solid var(--line);padding:8px 10px;font-size:11.5px;white-space:pre-wrap;word-break:break-word;background:var(--bg);color:var(--fg)}
-.blk .bf{display:flex;gap:8px;padding:6px 10px;border-top:1px solid var(--line);font-size:11px}
-.blk .bf button{min-height:32px;padding:0 10px;border:1px solid var(--line);border-radius:6px;color:var(--dim)}
+.blocks{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;justify-content:flex-end;background:var(--bg);position:relative}
+.blk{position:relative;padding:10px 16px 12px;border-top:1px solid var(--line)}
+.blk.bad{background:color-mix(in srgb,var(--red) 9%,var(--bg))}
+.blk.bad::before,.blk.run::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--red)}
+.blk.run{background:color-mix(in srgb,var(--yellow) 6%,var(--bg))}.blk.run::before{background:var(--yellow)}
+.blk.on{background:var(--sel);outline:2px solid var(--blue);outline-offset:-2px}
+.blk .bm{display:flex;align-items:center;gap:7px;font-size:10.5px;color:var(--dim)}
+.blk .bm .ms{margin-left:auto}.blk .bm .ms.ok{color:var(--green)}.blk .bm .ms.bad{color:var(--red)}.blk .bm .ms.run{color:var(--yellow)}
+.blk .bc{font-size:13.5px;font-weight:700;color:var(--bright,var(--fg));margin:5px 0 7px;word-break:break-word}
+.blk .bo{font-size:12px;line-height:1.55;white-space:pre-wrap;word-break:break-word;color:var(--fg)}
+.blk.bad .bo{color:var(--red)}
+.bar{flex:none;display:flex;justify-content:center;padding:8px 12px;background:var(--bg)}
+.bar>div{display:flex;gap:2px;padding:4px;border-radius:14px;background:var(--panel);border:1px solid var(--line);box-shadow:0 6px 20px rgba(0,0,0,.45)}
+.bar button{width:74px;height:52px;border-radius:10px;font-size:10.5px;color:var(--fg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px}
+.bar button b{font-size:16px;font-weight:400}
+.edit{background:var(--panel);border-top:1px solid var(--line);padding:10px 12px 0}
+.edit .chips{display:flex;gap:6px;margin-bottom:8px;overflow:hidden}
+.edit .chips span{height:26px;padding:0 10px;border-radius:13px;background:var(--sel);font-size:11px;display:flex;align-items:center;white-space:nowrap;color:var(--dim)}
+.edit .chips .br{color:var(--magenta)}.edit .chips .rn{color:var(--yellow)}
+.edit .row2{display:flex;gap:8px;align-items:flex-end;padding-bottom:6px}
+.edit input{flex:1;min-width:0;height:48px;border-radius:12px;border:1px solid var(--line);background:var(--bg);color:var(--fg);padding:0 14px;font:inherit;font-size:13.5px}
+.edit.prog input{border-style:dashed}
+.edit .go{width:48px;height:48px;border-radius:12px;background:var(--blue);color:var(--bg);display:grid;place-items:center;flex:none}
+.edit .go.stop{background:var(--red)}
+.sticky{position:sticky;top:0;z-index:2;display:flex;gap:8px;padding:8px 16px;background:var(--panel);border-bottom:1px solid var(--line);font-size:12px}
+.sticky b{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sticky span{color:var(--dim);font-size:10.5px}
+.full{flex:1;min-height:0;display:flex;flex-direction:column}
+.full .ban{flex:none;display:flex;gap:10px;padding:0 16px;height:36px;align-items:center;background:var(--sel);border-bottom:1px solid var(--line);font-size:11px;color:var(--dim)}
+.full .ban b{color:var(--yellow);font-weight:400}.full .ban i{font-style:normal;color:var(--blue)}
+.full pre{flex:1;margin:0;padding:6px 12px;font:12px/1.5 inherit;overflow:hidden;white-space:pre}
 .chip{font-size:10.5px;padding:2px 7px;border-radius:10px;border:1px solid currentColor;flex:none}
 .chip.ok{color:var(--green)}.chip.bad{color:var(--red)}.chip.run{color:var(--yellow)}
 .mirror{display:flex;align-items:center;gap:8px;padding:5px 12px;background:var(--panel);border-top:1px solid var(--line);font-size:11px;color:var(--dim)}
@@ -361,7 +382,7 @@ ol.sx code{background:var(--sel);padding:1px 6px;border-radius:4px;color:var(--g
     <div class="jump"><button data-act="sim" data-sim="accept">El PC acepta</button><button data-act="sim" data-sim="denied">El PC rechaza</button><button data-act="sim" data-sim="expired">El código venció</button><button data-act="sim" data-sim="unreach">No llego al PC</button><button data-act="sim" data-sim="proto">Protocolo: la app va atrás</button><button data-act="sim" data-sim="protojw">Protocolo: jw va atrás</button><button data-act="sim" data-sim="limited">Demasiados intentos</button><button data-act="sim" data-sim="away">Sales de casa (cae al túnel)</button><button data-act="sim" data-sim="home">Vuelves a casa</button></div>
     <h2>Entrada, nombre y shell (nuevo)</h2>
     <div class="jump"><button data-act="pctype">Escribir en el PC (simula)</button></div>
-    <p style="margin:6px 0 14px;color:var(--dim)">La caja de entrada del PC y el campo de la app son un solo texto. La franja de arriba lleva el nombre del pane. El <b>shell</b> se dibuja por bloques, como Warp: una tarjeta por comando, de abajo hacia arriba (la más nueva junto a la entrada), con su salida <b>completa y con colores</b>; el prompt no se dibuja. El daemon guarda lo que imprimió cada comando tal cual y el teléfono lo interpreta en una terminal propia por bloque; un programa a pantalla completa (nvim) vuelve a la vista de texto mientras corre. Un shell que jw no lanzó, o uno ya abierto, sigue como texto.</p>
+    <p style="margin:6px 0 14px;color:var(--dim)">La caja de entrada del PC y el campo de la app son un solo texto. La franja de arriba lleva el nombre del pane. El <b>shell</b> se dibuja por bloques, como Warp: bloques planos, sin bordes ni botones, de abajo hacia arriba (el más nuevo junto al editor); arriba de cada comando, en tenue, la carpeta y la duración, el comando en negrita y su salida <b>completa y con colores</b>; el prompt no se dibuja. Un comando que falla lleva barra y tinte rojos; uno que corre, barra amarilla y el editor pasa a modo programa (el botón es ^C). Tocar un bloque lo elige y abre una barra con comando, salida, repetir y enviar. En «Shell · bloque elegido» y «Shell · programa a pantalla completa» (menú de saltos) se ven los dos casos. El daemon guarda lo que imprimió cada comando tal cual y el teléfono lo interpreta en una terminal propia por bloque; un programa a pantalla completa (nvim) toma todo el pane mientras corre, con un aviso, y los bloques vuelven al salir. Un shell que jw no lanzó, o uno ya abierto, sigue como texto.</p>
     <h2>Wifi primero, túnel de respaldo</h2>
     <p style="margin:0 0 14px;color:var(--dim)">Cuando el PC y el teléfono comparten wifi, la app se conecta directo a la IP local (TLS con certificado propio de jw, fijado por la huella del QR). El túnel de Cloudflare queda guardado como respaldo: jw se lo avisa a la app cuando está listo, y otra vez si cambia de dirección. La app usa el wifi mientras responda y cae sola al túnel si no (botones «Sales de casa» y «Vuelves a casa»). La barra de estado muestra por dónde va (<code>wifi</code> o <code>túnel</code>); en ajustes se ven las dos rutas; «No encuentro tu PC» cuenta también la fila del wifi, medida con un plazo corto.</p>
     <h2>Qué comprueba de verdad la app</h2>
@@ -709,11 +730,20 @@ const SHELL={
  ]
 };
 function shellHtml(w){
-  const items=(SHELL[w.id]||SHELL['jw/feat/mobile-app']).map(b=>{
-    const chip=b.run?`<span class="chip run">corriendo ${Math.round(b.ms/1000)} s</span>`:b.code===0?`<span class="chip ok">✓ ${b.ms<1000?b.ms+' ms':(b.ms/1000).toFixed(1)+' s'}</span>`:`<span class="chip bad">✗ ${b.code}</span>`;
-    return `<div class="blk ${b.code>0?'bad':''}"><div class="bh"><span class="pr">❯</span><b>${b.cmd}</b>${chip}</div><div class="bm">${b.cwd}</div><div class="bo">${b.out}</div><div class="bf"><button data-act="copyout">copiar salida</button>${b.run?'<button data-act="stop" style="color:var(--red)">^C parar</button>':'<button data-act="rerun">repetir</button>'}</div></div>`;
+  if(state.nvim)return `<div class="full"><div class="ban"><b>nvim</b><span style="flex:1">ocupa toda la pantalla</span><i>los bloques vuelven al salir</i></div><pre>${'<span class="m">fn</span> <span class="b">main</span>() {\n    <span class="m">let</span> d = start();\n    d.run();\n}\n\n'+'<span class="d">~\n</span>'.repeat(8)}</pre></div>`;
+  const all=SHELL[w.id]||SHELL['jw/feat/mobile-app'];
+  const items=all.map((b,i)=>{
+    const t=b.run?`corriendo ${Math.round(b.ms/1000)} s`:b.code===0?(b.ms<1000?b.ms+' ms':(b.ms/1000).toFixed(1)+' s'):`salió ${b.code} · ${b.ms<1000?b.ms+' ms':(b.ms/1000).toFixed(1)+' s'}`;
+    const cl=b.run?'run':b.code>0?'bad':'ok';
+    return `<div class="blk ${b.run?'run':b.code>0?'bad':''} ${state.blk===i?'on':''}" data-blk="${i}"><div class="bm"><span>${b.cwd}</span><span class="ms ${cl}">${t}</span></div><div class="bc">${b.cmd}</div><div class="bo">${b.out}</div></div>`;
   });
-  return `<div class="ctitle"><span style="color:var(--green)">❯</span><b style="flex:1;min-width:0"><span class="nm" style="display:block">${w.path}</span></b><span class="pn" style="--c:var(--dim)"><i></i>${paneName()}</span></div><div class="blocks" id="out">${items.join('')}</div>`;
+  const bar=state.blk!=null?`<div class="bar"><div role="toolbar" aria-label="Acciones del bloque"><button data-act="copycmd"><b>›_</b>Comando</button><button data-act="copyout"><b>⧉</b>Salida</button><button data-act="rerun"><b>↻</b>Repetir</button><button data-act="share"><b>↥</b>Enviar</button></div></div>`:'';
+  return `<div class="ctitle"><span style="color:var(--green)">❯</span><b style="flex:1;min-width:0"><span class="nm" style="display:block">${w.path}</span></b><span class="pn" style="--c:var(--dim)"><i></i>${paneName()}</span></div><div class="blocks" id="out">${items.join('')}</div>${bar}`;
+}
+function editorHtml(w){
+  const run=!!(SHELL[w.id]||SHELL['jw/feat/mobile-app']).some(b=>b.run);
+  const t=(state.draft||'').replace(/"/g,'&quot;');
+  return `<div class="edit ${run?'prog':''}"><div class="chips">${run?`<span class="rn">◌ cargo watch -x test</span>`:`<span>${ic('folder')} ${w.path}</span><span class="br">⎇ ${w.name}</span>`}</div><form class="row2" id="comp"><input id="msg" autocomplete="off" value="${t}" placeholder="${run?'Lo que escribas va al programa':'Escribe un comando'}" aria-label="Entrada">${run?`<button type="button" class="go stop" data-act="stop" aria-label="Parar con Control C">■</button>`:`<button class="go" aria-label="Enviar">${ic('send')}</button>`}</form></div>`;
 }
 
 /* el texto de la caja de entrada del PC y el campo de la app son uno solo */
@@ -735,8 +765,8 @@ function vWs(){
    ${askOn?`<div class="askbar"><span><b style="color:var(--yellow)">?</b> ${state.pane} espera tu respuesta</span><button data-sheet="answer">Responder</button></div>`:''}
    ${state.sel?`<div class="selbar"><span>3 líneas seleccionadas</span><button class="key" data-act="copy">copiar</button><button class="key" data-act="unsel">cancelar</button></div>`:''}
    <div class="keys"><button class="key lead" data-sheet="leader">^␣</button>${keys.map(x=>`<button class="key" data-key="${x}">${x}</button>`).join('')}</div>
-   ${state.pane==='claude'||state.pane==='shell'?mirrorHtml():''}
-   <form class="comp" id="comp"><span class="pr">${state.pane==='claude'?'›':'❯'}</span><input id="msg" autocomplete="off" value="${(state.draft||'').replace(/"/g,'&quot;')}" placeholder="${state.pane==='claude'?'escribe a claude':'escribe un comando'}" aria-label="Entrada"><button class="send" aria-label="Enviar">${ic('send')}</button></form>
+   ${state.pane==='claude'?mirrorHtml():''}
+   ${state.pane==='shell'?editorHtml(w):`<form class="comp" id="comp"><span class="pr">${state.pane==='claude'?'›':'❯'}</span><input id="msg" autocomplete="off" value="${(state.draft||'').replace(/"/g,'&quot;')}" placeholder="${state.pane==='claude'?'escribe a claude':'escribe un comando'}" aria-label="Entrada"><button class="send" aria-label="Enviar">${ic('send')}</button></form>`}
    ${statusBar('TERM',state.pane+' · texto · se ajusta al ancho · ^␣ menú')}`;
 }
 
@@ -860,7 +890,7 @@ function render(){
   $('#overlay').innerHTML=sheet();
   const o=$('#out'); if(o) o.scrollTop=o.scrollHeight;
   const q=$('#q'); if(q){q.focus();q.setSelectionRange(q.value.length,q.value.length)}
-  $('#jump').innerHTML=[['connect','Conexión (QR)'],['perm','Cámara: permiso · nuevo'],['permdenied','Cámara bloqueada · nuevo'],['cam','Cámara · visor · nuevo'],['paste','Pegar enlace · nuevo'],['pair','Código de emparejamiento · nuevo'],['denied','El PC rechaza · nuevo'],['expired','Código vencido · nuevo'],['unreach','No encuentro tu PC · nuevo'],['proto','Protocolo distinto · nuevo'],['set','Respuestas rápidas · nuevo'],['limited','Demasiados intentos · nuevo'],['home','Workspaces (sidebar)'],['wsroot','Entrar a la raíz'],['ws','Entrar a un worktree'],['pick','Buscador ␣'],['leader','Menú ^␣ · cambiado'],['sel','Selección de texto · nuevo'],['inbox','Avisos'],['changes','Cambios · General · cambiado'],['chunc','Cambios · Sin commitear · nuevo'],['chcom','Cambios · Commits · nuevo'],['chcomf','Cambios · un commit · nuevo'],['chfile','Cambios · un archivo · cambiado'],['chren','Cambios · renombrado · nuevo'],['chbin','Cambios · binario · nuevo'],['chunr','Cambios · ilegible · nuevo'],['chbig','Cambios · cortado · nuevo'],['chtoo','Cambios · demasiado grande · nuevo'],['chnobase','Cambios · sin rama base · nuevo'],['chload','Cambios · leyendo · nuevo'],['cherr','Cambios · error de una vista · nuevo'],['chempty','Cambios · sin cambios · nuevo'],['chnone','Cambios · sin workspace · nuevo'],['f1','Archivos · un workspace · nuevo'],['f2','Archivos · ocultos · nuevo'],['f3','Archivos · abrir carpeta · nuevo'],['f4','Archivos · sin permiso · nuevo'],['f5','Archivos · vacía · nuevo'],['f6','Archivos · demasiados · nuevo'],['v1','Visor · markdown · nuevo'],['v2','Visor · markdown fuente · nuevo'],['v3','Visor · texto · nuevo'],['v4','Visor · binario · nuevo'],['v5','Visor · cortado a 1 MiB · nuevo'],['v6','Visor · sin permiso · nuevo'],['w1','Nuevo worktree · nuevo'],['w2','Nuevo worktree · creando · nuevo'],['w3','Nuevo worktree · error · nuevo'],['w4','Nuevo worktree · solo lectura · nuevo'],['n1','Nueva sesión · nuevo'],['n2','Nueva sesión · nombre repetido · nuevo'],['n3','Nueva sesión · es un comando · nuevo'],['p1','Menú + · cambiado'],['settings','Ajustes y temas']].map(([k,l])=>`<button data-jump="${k}">${l}</button>`).join('');
+  $('#jump').innerHTML=[['connect','Conexión (QR)'],['perm','Cámara: permiso · nuevo'],['permdenied','Cámara bloqueada · nuevo'],['cam','Cámara · visor · nuevo'],['paste','Pegar enlace · nuevo'],['pair','Código de emparejamiento · nuevo'],['denied','El PC rechaza · nuevo'],['expired','Código vencido · nuevo'],['unreach','No encuentro tu PC · nuevo'],['proto','Protocolo distinto · nuevo'],['set','Respuestas rápidas · nuevo'],['limited','Demasiados intentos · nuevo'],['home','Workspaces (sidebar)'],['wsroot','Entrar a la raíz'],['ws','Entrar a un worktree'],['pick','Buscador ␣'],['leader','Menú ^␣ · cambiado'],['sel','Selección de texto · nuevo'],['shblk','Shell · bloque elegido · nuevo'],['shnv','Shell · programa a pantalla completa · nuevo'],['inbox','Avisos'],['changes','Cambios · General · cambiado'],['chunc','Cambios · Sin commitear · nuevo'],['chcom','Cambios · Commits · nuevo'],['chcomf','Cambios · un commit · nuevo'],['chfile','Cambios · un archivo · cambiado'],['chren','Cambios · renombrado · nuevo'],['chbin','Cambios · binario · nuevo'],['chunr','Cambios · ilegible · nuevo'],['chbig','Cambios · cortado · nuevo'],['chtoo','Cambios · demasiado grande · nuevo'],['chnobase','Cambios · sin rama base · nuevo'],['chload','Cambios · leyendo · nuevo'],['cherr','Cambios · error de una vista · nuevo'],['chempty','Cambios · sin cambios · nuevo'],['chnone','Cambios · sin workspace · nuevo'],['f1','Archivos · un workspace · nuevo'],['f2','Archivos · ocultos · nuevo'],['f3','Archivos · abrir carpeta · nuevo'],['f4','Archivos · sin permiso · nuevo'],['f5','Archivos · vacía · nuevo'],['f6','Archivos · demasiados · nuevo'],['v1','Visor · markdown · nuevo'],['v2','Visor · markdown fuente · nuevo'],['v3','Visor · texto · nuevo'],['v4','Visor · binario · nuevo'],['v5','Visor · cortado a 1 MiB · nuevo'],['v6','Visor · sin permiso · nuevo'],['w1','Nuevo worktree · nuevo'],['w2','Nuevo worktree · creando · nuevo'],['w3','Nuevo worktree · error · nuevo'],['w4','Nuevo worktree · solo lectura · nuevo'],['n1','Nueva sesión · nuevo'],['n2','Nueva sesión · nombre repetido · nuevo'],['n3','Nueva sesión · es un comando · nuevo'],['p1','Menú + · cambiado'],['settings','Ajustes y temas']].map(([k,l])=>`<button data-jump="${k}">${l}</button>`).join('');
 }
 function answer(v,id){
   const w=wsOf(id); if(!w) return; buzz();
@@ -871,11 +901,14 @@ function answer(v,id){
 function enter(id){state.sel=false;state.ws=id;state.pane='claude';state.screen='ws';state.sheet=null;state.q='';const w=wsOf(id);w.t=w.t==='ahora'?'ahora':w.t;render()}
 
 document.addEventListener('click',e=>{
-  const t=e.target.closest('[data-go],[data-open],[data-ans],[data-act],[data-theme],[data-sw],[data-pane],[data-key],[data-file],[data-pcfile],[data-fs],[data-view],[data-vtab],[data-commit],[data-cn],[data-jump],[data-sheet],[data-sess],[data-lead],[data-preset],[data-opt]'); if(!t) return;
+  const t=e.target.closest('[data-go],[data-open],[data-ans],[data-act],[data-theme],[data-sw],[data-pane],[data-blk],[data-key],[data-file],[data-pcfile],[data-fs],[data-view],[data-vtab],[data-commit],[data-cn],[data-jump],[data-sheet],[data-sess],[data-lead],[data-preset],[data-opt]'); if(!t) return;
   const d=t.dataset;
+  if(d.blk!==undefined&&!d.act){state.blk=state.blk===+d.blk?null:+d.blk;render();return}
   if(d.jump){state.sheet=null;state.file=null;state.conn='idle';
     if(CONN.includes(d.jump)){goConn(d.jump);return}
     if(d.jump==='sel'){state.sess='main';enter('jw/feat/mobile-app');state.sel=true;render();return}
+    if(d.jump==='shblk'){state.sess='main';enter('jw/feat/mobile-app');state.pane='shell';state.blk=3;state.nvim=false;render();return}
+    if(d.jump==='shnv'){state.sess='main';enter('jw/feat/mobile-app');state.pane='shell';state.blk=null;state.nvim=true;render();return}
     if(d.jump==='wsroot'){state.sess='main';enter('jw');return}
     if(d.jump==='ws'){state.sess='main';enter('jw/fix/daemon-sock');return}
     if(d.jump==='pick'||d.jump==='leader'){state.screen='home';state.sheet=d.jump;render();return}
@@ -956,6 +989,9 @@ document.addEventListener('click',e=>{
     case 'vsrc1':state.viewer.src=true;render();break;
     case 'newwt':state.sheet='newwt';render();break;
     case 'copyout':toast('salida copiada');break;
+    case 'copycmd':toast('comando copiado');break;
+    case 'share':toast('enviado a otra app');break;
+    case 'nvim':state.nvim=!state.nvim;render();break;
     case 'rerun':toast('repetido en el shell');break;
     case 'stop':toast('^C enviado');break;
     case 'pickopt':{const i=+t.dataset.i;state.sheet=null;answer(i===2?'n':'y',state.ws);toast('enviado: opción '+(i+1));break}
