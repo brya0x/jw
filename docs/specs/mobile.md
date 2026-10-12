@@ -230,7 +230,7 @@ supersedes:  []
 | M7 ✓ `f58b042` | Touch targets (measured, then fixed), the keys as buttons for accessibility, a pane split from the phone keeps its `JW_*`, hygiene | 26, 76 | `android/app` |
 | M8a ✓ `c36fdde` | The PC's files, read only: `core::fsview` (list, read, bounds), `core::md` (blocks), `ls` and `read` in the bridge, their own seat, read-only passes | 77–82 | `core/src/fsview.rs`, `core/src/md.rs`, `web/src/bridge.rs`, `daemon/src/mobile.rs` |
 | M8b ✓ `317e722` | The app: Files screen, viewer, the header button and `^␣ /` | 83, 84 | `android/proto`, `android/app` |
-| M9a ✓ | The writes: `open`, `session_new`, `worktree` in the daemon, without `jw` or the TUI, with the chosen session's `JW_*`; refused when read-only | 82, 85–87 | `core/`, `daemon/src/`, `web/src/bridge.rs` |
+| M9a ✓ `3c0bf3b` | The writes: `open`, `session_new`, `worktree` in the daemon, without `jw` or the TUI, with the chosen session's `JW_*`; refused when read-only | 82, 85–87 | `core/`, `daemon/src/`, `web/src/bridge.rs` |
 | M9b | The app: the new worktree and new session sheets, `+`, `^␣ o` and `w`, pending state | 23, 88 | `android/app` |
 | L1 ✓ `87e38b9` | The wifi listener: `tls.rs`, the certificate, the wifi QR payload, `endpoints`, `MobileState` fields and `PROTOCOL` 12, no-wifi and no-cloudflared cases, `jw mobile` text | 56–58, 60, 61, 65 (CLI), 66–69 | `web/src/tls.rs`, `web/src/bridge.rs`, `daemon/src/mobile.rs`, `proto.rs`, `core/src/qr.rs`, `jw/src/mobile.rs` |
 | L2 ✓ `6395abf` | The Mobile modal: wifi and tunnel rows, tunnel state, route per phone | 65 | `tui/src/tui/mobile.rs`, `draw.rs` |
