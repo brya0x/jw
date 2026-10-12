@@ -128,6 +128,7 @@ supersedes:  []
 | 72 | THE phone SHALL be able to ask for the three views the TUI's diff pane has: General (committed work only), Uncommitted (staged, unstaged and untracked, each file with its mark) and Commits (the branch's commits, newest first, at most 200, and the diff of the one chosen); the app SHALL open on General and load a view only when it is first shown. |
 | 73 | IF a view's diff text passes `DIFF_CAP`, THEN the answer SHALL list its files without hunks and say how many there are, and the app SHALL say the view is too large to show and that the PC has it whole. IF General has no base (no default branch on origin), THEN the app SHALL say so and not show an empty list as if nothing had changed. |
 | 74 | THE app SHALL mark a file "viewed" against what it showed: the mark SHALL stop applying when the file's content, rename, status or reason it could not be read changes, and SHALL be dropped once the file is no longer in the view. |
+| 75 | THE app SHALL have a fourth tab, `diff`, showing the changes of the workspace last entered, or of the one picked by tapping the title (the picker is the finder's); WHERE none was entered or picked it SHALL say so. The workspace screen's `±` button and `^␣ d` SHALL open it for that workspace. |
 
 ---
 
@@ -205,7 +206,7 @@ supersedes:  []
 | M5a ✓ `b03519e` | The VT emulator on the device (`android/term`), checked against the daemon's vt100 | 21 | `android/term`, `crates/jw/examples/cells.rs` |
 | M5 ✓ `38c846a` | Terminal surface, keys, leader sheet, resize | 21–24, 70, 71 | `android/term`, `android/app` |
 | M6a ✓ | The diff on the device and the merge of main's diff views: core's `Scope`, `Loaded::TooLarge` and `commits` now run under the W3 hardening; `diff{ws, scope}`, `commits{ws}` and ask-tagged errors in the bridge; the model and parser held to the daemon's serialiser by shared fixtures; the queued requests and their state in `Session`; the four diff colours of `ready.palettes`; `PROTOCOL` 14 | 13, 72, 73 | `android/proto`, `android/app/.../Session.kt`, `crates/core/src/diff.rs` |
-| M6 ✓ `c4206a5` | Changes screen: the three views, files, hunks, add and delete colours, "viewed" | 25, 72–74 | `android/app` |
+| M6 ✓ `c4206a5` | Changes screen: the three views, files, hunks, add and delete colours, "viewed" | 25, 72–75 | `android/app` |
 | M7 | Settings, touch and mode chrome, polish | 26 | `android/app` |
 | L1 ✓ `87e38b9` | The wifi listener: `tls.rs`, the certificate, the wifi QR payload, `endpoints`, `MobileState` fields and `PROTOCOL` 12, no-wifi and no-cloudflared cases, `jw mobile` text | 56–58, 60, 61, 65 (CLI), 66–69 | `web/src/tls.rs`, `web/src/bridge.rs`, `daemon/src/mobile.rs`, `proto.rs`, `core/src/qr.rs`, `jw/src/mobile.rs` |
 | L2 ✓ | The Mobile modal: wifi and tunnel rows, tunnel state, route per phone | 65 | `tui/src/tui/mobile.rs`, `draw.rs` |

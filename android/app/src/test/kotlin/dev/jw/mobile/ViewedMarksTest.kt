@@ -45,13 +45,13 @@ class ViewedMarksTest {
         assertTrue(m.isViewed("w", DiffScope.Uncommitted, file("gone.rs")))
     }
 
-    @Test fun countsAndTheRevisionMoves() {
+    @Test fun countsFollowTheMarks() {
         val m = ViewedMarks(Mem())
         val files = listOf(file("a"), file("b"))
-        val r0 = m.revision.value
         m.toggle("w", DiffScope.General, files[0])
         assertEquals(1, m.count("w", DiffScope.General, files))
-        assertTrue(m.revision.value > r0)
+        m.toggle("w", DiffScope.General, files[1])
+        assertEquals(2, m.count("w", DiffScope.General, files))
     }
 
     @Test fun theStoreDoesNotGrowWithoutBound() {

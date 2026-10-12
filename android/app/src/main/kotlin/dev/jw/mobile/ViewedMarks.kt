@@ -3,8 +3,9 @@ package dev.jw.mobile
 import android.content.Context
 import dev.jw.proto.DiffFile
 import dev.jw.proto.DiffScope
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 
 /** Where the marks live: preferences in the app, a set in tests. */
 interface MarkStore {
@@ -25,11 +26,8 @@ class PrefsMarkStore(context: Context) : MarkStore {
  * has, so the preferences do not grow for ever.
  */
 class ViewedMarks(private val store: MarkStore) {
-    private var marks = LinkedHashSet(store.load())
-    private val _revision = MutableStateFlow(0)
-
-    /** Moves with every change, so what shows the marks redraws. */
-    val revision: StateFlow<Int> = _revision
+    /** Snapshot state, replaced whole on every change: whatever reads [isViewed] in a composition redraws when it does. */
+    private var marks by mutableStateOf<Set<String>>(LinkedHashSet(store.load()))
 
     private fun group(ws: String, scope: DiffScope) = "$ws\u0001${scope.word}\u0001"
     private fun entry(ws: String, scope: DiffScope, f: DiffFile) = group(ws, scope) + f.path + "\u0001" + f.key
@@ -38,8 +36,7 @@ class ViewedMarks(private val store: MarkStore) {
 
     fun toggle(ws: String, scope: DiffScope, f: DiffFile) {
         val e = entry(ws, scope, f)
-        if (!marks.remove(e)) marks.add(e)
-        commit()
+        commit(LinkedHashSet(marks).also { if (!it.remove(e)) it.add(e) })
     }
 
     /** How many of `files` are marked. */
@@ -49,14 +46,15 @@ class ViewedMarks(private val store: MarkStore) {
     fun prune(ws: String, scope: DiffScope, files: List<DiffFile>) {
         val g = group(ws, scope)
         val keep = files.mapTo(HashSet()) { entry(ws, scope, it) }
-        if (marks.removeAll { it.startsWith(g) && it !in keep }) commit()
+        val next = LinkedHashSet(marks)
+        if (next.removeAll { it.startsWith(g) && it !in keep }) commit(next)
     }
 
-    private fun commit() {
+    private fun commit(next: LinkedHashSet<String>) {
         // Marks of workspaces and commits long gone are never pruned by a view; the oldest go past the cap.
-        while (marks.size > CAP) marks.remove(marks.first())
-        store.save(LinkedHashSet(marks))
-        _revision.value++
+        while (next.size > CAP) next.remove(next.first())
+        store.save(LinkedHashSet(next))
+        marks = next
     }
 
     private companion object { const val CAP = 4000 }

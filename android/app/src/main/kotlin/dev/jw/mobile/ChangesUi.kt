@@ -86,7 +86,6 @@ fun ChangesScreen(model: Model, state: UiState.Connected, session: Session, nav:
     var picker by remember { mutableStateOf(false) }
     val diffState by session.diff.collectAsState()
     val commitsState by session.commits.collectAsState()
-    val marks by viewed.revision.collectAsState()
     val counts = remember(ws?.id) { mutableStateMapOf<View, String>() }
 
     val scope: DiffScope? = when (view) {
@@ -145,7 +144,7 @@ fun ChangesScreen(model: Model, state: UiState.Connected, session: Session, nav:
                     view == View.Commits && commit == null -> CommitsBody(commitsState, ws.id, commitList, now, session, onPick = { commit = it })
                     shown is Shown.Failed -> Failure(shown.why, "las otras vistas siguen disponibles") { scope?.let { session.requestDiff(ws.id, it) } }
                     diff == null -> Loading(if (view == View.Commits) "los commits" else "los cambios")
-                    else -> FilesBody(diff, view, viewed, marks, refreshing = shown is Shown.Loading, onOpen = { openPath = it.path })
+                    else -> FilesBody(diff, view, viewed, refreshing = shown is Shown.Loading, onOpen = { openPath = it.path })
                 }
             }
             val hint = when {
@@ -260,7 +259,7 @@ private fun Note(text: String) {
 
 /** The list of a view: a commit's files, General or Uncommitted (REQ-72, REQ-73). */
 @Composable
-private fun FilesBody(diff: Diff, view: View, viewed: ViewedMarks, marks: Int, refreshing: Boolean, onOpen: (DiffFile) -> Unit) {
+private fun FilesBody(diff: Diff, view: View, viewed: ViewedMarks, refreshing: Boolean, onOpen: (DiffFile) -> Unit) {
     val j = LocalJw.current
     if (diff.noBase) {
         Centre("origin no tiene rama por defecto", "no hay contra qué comparar.\nMira «Sin commitear» o «Commits».")
