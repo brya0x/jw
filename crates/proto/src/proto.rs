@@ -15,7 +15,7 @@ pub type PaneId = u64;
 
 /// Bumped whenever a message changes shape: a client and a daemon from
 /// different builds refuse each other instead of misreading (RISK-14).
-pub const PROTOCOL: u32 = 18;
+pub const PROTOCOL: u32 = 19;
 
 /// A run of cells of one row that share a style: its first column, its
 /// text (a wide character counts two columns; the cells after it are not
@@ -442,6 +442,9 @@ pub enum DaemonMsg {
         known: bool,
         reset: bool,
         blocks: Vec<ShellBlock>,
+        /// The line being typed at the prompt, when it is new: the text of the
+        /// terminal's input, which a phone's input shows as its own.
+        input: Option<String>,
     },
     /// The answer to `TextHistory`: rows of the scrollback, oldest first.
     TextHistory {

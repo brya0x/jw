@@ -103,6 +103,15 @@ svg.i{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stro
 @media (prefers-reduced-motion:reduce){.cur{animation:none}*{transition:none!important}}
 .ask{background:color-mix(in srgb,var(--yellow) 12%,var(--bg));border-top:1px solid color-mix(in srgb,var(--yellow) 40%,transparent);padding:10px 12px}
 .ask p{margin:0 0 8px;font-size:12.5px}
+/* la pregunta del agente: una barra compacta; las opciones se abren en una hoja, con el teclado escondido */
+.askbar{display:flex;align-items:center;gap:10px;padding:6px 12px;min-height:44px;background:color-mix(in srgb,var(--yellow) 12%,var(--bg));border-top:1px solid color-mix(in srgb,var(--yellow) 40%,transparent)}
+.askbar span{flex:1;min-width:0;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.askbar button{min-height:36px;padding:0 14px;border-radius:6px;background:var(--yellow);color:var(--bg);font-weight:700}
+.sheet .q{margin:0 14px 10px;font-size:12.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
+.sheet .opt{display:flex;align-items:center;gap:12px;width:calc(100% - 24px);margin:0 12px 8px;min-height:52px;padding:0 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);text-align:left;font-size:13px}
+.sheet .opt kbd{flex:none;min-width:26px;text-align:center;color:var(--yellow);border:1px solid var(--line);border-radius:4px;padding:2px 6px;font-size:12px}
+.sheet .opt.cur{border-color:var(--yellow)}
+.sheet .opt.no{color:var(--red)}
 .ask .yn{padding:0}
 .selbar{display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--sel);border-top:1px solid var(--line);font-size:12px}.selbar span{flex:1;color:var(--dim)}
 .keys{display:flex;gap:5px;overflow:auto;padding:8px 10px 4px;background:var(--panel);scrollbar-width:none;border-top:1px solid var(--line)}
@@ -722,7 +731,7 @@ function vWs(){
     <button class="ib" data-sheet="pick" aria-label="Cambiar workspace">${ic('search')}</button><button class="ib" data-act="wsfiles" aria-label="Archivos">${ic('folder')}</button><button class="ib" data-go="changes" aria-label="Cambios" style="font-size:16px">±</button></div>
    <div class="panes" role="tablist">${panes.map(([p,c])=>`<button class="pt" role="tab" aria-selected="${state.pane===p}" data-pane="${p}" style="--c:${c}"><i></i>${p}</button>`).join('')}</div>
    ${state.pane==='claude'?chatHtml(w):state.pane==='shell'?shellHtml(w):`<div class="out" id="out">${lines}</div>`}
-   ${askOn?`<div class="ask"><p><b style="color:var(--yellow)">?</b> ${w.last}</p><div class="opts" style="font-size:11.5px;color:var(--dim);margin:-2px 0 8px;white-space:pre-wrap">1. Yes   2. Yes, y no volver a preguntar   3. No   <span style="color:var(--fg)">(texto del aviso, tomado del panel)</span></div><div class="yn"><button class="y" data-ans="y|${w.id}">y · sí</button><button class="x" data-ans="n|${w.id}">n · no</button></div></div>`:''}
+   ${askOn?`<div class="askbar"><span><b style="color:var(--yellow)">?</b> ${state.pane} espera tu respuesta</span><button data-sheet="answer">Responder</button></div>`:''}
    ${state.sel?`<div class="selbar"><span>3 líneas seleccionadas</span><button class="key" data-act="copy">copiar</button><button class="key" data-act="unsel">cancelar</button></div>`:''}
    <div class="keys"><button class="key lead" data-sheet="leader">^␣</button>${keys.map(x=>`<button class="key" data-key="${x}">${x}</button>`).join('')}</div>
    ${state.pane==='claude'||state.pane==='shell'?mirrorHtml():''}
@@ -811,6 +820,10 @@ function sheet(){
   }
   if(s==='open'){
     body=`<h3>abrir</h3><div class="list"><button class="lk" data-act="folder"><kbd>o</kbd><span>abrir carpeta</span><em>del PC</em></button><button class="lk" data-act="newwt"><kbd>w</kbd><span>nuevo worktree</span><em>de un proyecto</em></button><button class="lk" data-sheet="pick"><kbd>␣</kbd><span>buscar workspace</span></button></div>`;
+  }
+  if(s==='answer'){
+    const w=wsOf(state.ws), opts=['Yes','Yes, and don\'t ask again for pnpm commands','No, and tell Claude what to do differently'];
+    body=`<h3>claude pregunta</h3><div class="q">${w.last}</div>${opts.map((o,i)=>`<button class="opt ${i===0?'cur':''} ${i===2?'no':''}" data-act="pickopt" data-i="${i}"><kbd>${i+1}</kbd><span>${o}</span></button>`).join('')}<div class="note2">Al abrirla, la app esconde el teclado. Tocar una opción mueve la selección de claude hasta ella y confirma.</div>`;
   }
   if(s==='leader'){
     const it=[['␣','buscar workspace','ir'],['o','abrir carpeta','ir'],['/','archivos','ir'],['w','nuevo worktree','worktree'],['tab','workspace anterior','ir'],['a','sesiones','ir'],['t','panel nuevo','paneles'],['x','cerrar panel','paneles'],['n','nombrar panel','paneles'],['d','cambios (diff)','worktree'],[',','ajustes','ir'],['q','desconectar','']];
@@ -941,6 +954,7 @@ document.addEventListener('click',e=>{
     case 'vsrc0':state.viewer.src=false;render();break;
     case 'vsrc1':state.viewer.src=true;render();break;
     case 'newwt':state.sheet='newwt';render();break;
+    case 'pickopt':{const i=+t.dataset.i;state.sheet=null;answer(i===2?'n':'y',state.ws);toast('enviado: opción '+(i+1));break}
     case 'blk':state.open=state.open||{};state.open[t.dataset.i]=!state.open[t.dataset.i];render();break;
     case 'copyout':toast('salida copiada');break;
     case 'rerun':toast('repetido en el shell');break;

@@ -58,6 +58,16 @@ if [[ -o interactive ]]; then
   __jw_preexec() { printf '\e]7770;start;%s;%s\a' "$(__jw_b64 "$1")" "$(__jw_b64 "$PWD")"; }
   __jw_precmd() { local s=$?; printf '\e]7770;end;%d\a' "$s"; }
   add-zsh-hook preexec __jw_preexec
+  # The line being typed, so a phone's input and the terminal's are one text.
+  __jw_last_line=$'\x01'
+  __jw_line() {
+    [[ "$BUFFER" == "$__jw_last_line" ]] && return
+    __jw_last_line="$BUFFER"
+    printf '\e]7770;line;%s\a' "$(__jw_b64 "$BUFFER")"
+  }
+  autoload -Uz add-zle-hook-widget
+  add-zle-hook-widget line-pre-redraw __jw_line
+  add-zle-hook-widget line-finish __jw_line
   # First, so the status it reads is the command's.
   precmd_functions=(__jw_precmd ${precmd_functions:#__jw_precmd})
 fi
@@ -119,6 +129,10 @@ pub enum Piece {
     },
     End {
         status: i32,
+    },
+    /// The line being typed at the prompt.
+    Line {
+        text: String,
     },
 }
 
@@ -196,6 +210,9 @@ fn parse(body: &[u8]) -> Option<Piece> {
         }),
         "end" => Some(Piece::End {
             status: parts.next()?.trim().parse().ok()?,
+        }),
+        "line" => Some(Piece::Line {
+            text: decode(parts.next().unwrap_or(""))?,
         }),
         _ => None,
     }
@@ -376,6 +393,9 @@ pub struct Blocks {
     seen: bool,
     /// What the watchers were told so far.
     told_seen: bool,
+    /// The line being typed at the prompt, and whether the watchers have it.
+    input: String,
+    input_told: bool,
     /// The numbers of the blocks changed since they were last told of.
     changed: Vec<u32>,
 }
@@ -469,6 +489,14 @@ impl Blocks {
                     self.seen = true;
                     self.finish(Some(status));
                 }
+                Piece::Line { text } => {
+                    self.seen = true;
+                    let text = cap(&text, 4000);
+                    if text != self.input {
+                        self.input = text;
+                        self.input_told = false;
+                    }
+                }
             }
         }
     }
@@ -495,18 +523,26 @@ impl Blocks {
         }
     }
 
-    /// The blocks to tell the watchers of: (`reset`, blocks). All of them when
-    /// the shell has just shown itself to be jw's, else the ones that changed;
-    /// `None` when there is nothing.
-    pub fn news(&mut self) -> Option<(bool, Vec<ShellBlock>)> {
+    /// The line being typed at the prompt.
+    pub fn input(&self) -> &str {
+        &self.input
+    }
+
+    /// What to tell the watchers: (`reset`, blocks, the line being typed when
+    /// it changed). All the blocks when the shell has just shown itself to be
+    /// jw's, else the ones that changed; `None` when there is nothing.
+    pub fn news(&mut self) -> Option<(bool, Vec<ShellBlock>, Option<String>)> {
         if self.seen && !self.told_seen {
             self.told_seen = true;
+            self.input_told = true;
             self.changed.clear();
             self.refresh();
-            return Some((true, self.all(FIRST)));
+            return Some((true, self.all(FIRST), Some(self.input.clone())));
         }
+        let input = (!self.input_told).then(|| self.input.clone());
+        self.input_told = true;
         if self.changed.is_empty() {
-            return None;
+            return input.map(|i| (false, Vec::new(), Some(i)));
         }
         self.refresh();
         let changed = std::mem::take(&mut self.changed);
@@ -516,7 +552,7 @@ impl Blocks {
             .filter(|b| changed.contains(&b.i))
             .map(Block::wire)
             .collect();
-        (!blocks.is_empty()).then_some((false, blocks))
+        (!blocks.is_empty() || input.is_some()).then_some((false, blocks, input))
     }
 
     /// The running block's output so far.
@@ -637,13 +673,13 @@ mod tests {
         b.feed(&start("cargo test", "/w"), false);
         b.feed(b"running 2 tests\r\ntest result: ok\r\n", false);
         // Running: the output so far.
-        let (reset, blocks) = b.news().unwrap();
+        let (reset, blocks, _) = b.news().unwrap();
         assert!(reset, "the first mark shows the shell is jw's");
         assert_eq!(blocks.len(), 1);
         assert!(blocks[0].running);
         assert_eq!(blocks[0].out, "running 2 tests\ntest result: ok");
         b.feed(&end(0), false);
-        let (reset, blocks) = b.news().unwrap();
+        let (reset, blocks, _) = b.news().unwrap();
         assert!(!reset);
         assert_eq!((blocks[0].code, blocks[0].running), (Some(0), false));
         assert_eq!(blocks[0].cwd, "/w");
@@ -654,6 +690,25 @@ mod tests {
         let all = b.all(10);
         assert_eq!(all.iter().map(|b| b.i).collect::<Vec<_>>(), [0, 1]);
         assert_eq!(all[1].code, Some(1));
+    }
+
+    #[test]
+    fn the_line_being_typed_is_news_when_it_changes() {
+        let mut b = Blocks::default();
+        b.feed(b"\x1b]7770;line;bHM=\x07", false);
+        let (reset, blocks, input) = b.news().unwrap();
+        assert!(reset && blocks.is_empty());
+        assert_eq!(input.as_deref(), Some("ls"));
+        assert_eq!(b.input(), "ls");
+        assert_eq!(b.news(), None);
+        // Typing more is news with no block; the same line again is not.
+        b.feed(b"\x1b]7770;line;bHMgLWw=\x07", false);
+        assert_eq!(b.news(), Some((false, Vec::new(), Some("ls -l".into()))));
+        b.feed(b"\x1b]7770;line;bHMgLWw=\x07", false);
+        assert_eq!(b.news(), None);
+        // A cleared line is news too.
+        b.feed(b"\x1b]7770;line;\x07", false);
+        assert_eq!(b.news(), Some((false, Vec::new(), Some(String::new()))));
     }
 
     #[test]

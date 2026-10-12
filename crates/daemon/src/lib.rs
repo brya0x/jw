@@ -1519,15 +1519,20 @@ impl Daemon {
     /// now, then each change (`shell_poll`).
     fn shell_watch(&self, client: u64, tx: &Tx, id: PaneId) -> Result<()> {
         let pane = self.pane(id)?;
-        let (known, blocks) = {
+        let (known, blocks, input) = {
             let mut st = lock(&pane.state);
-            (st.blocks.known(), st.blocks.all(shell::FIRST))
+            (
+                st.blocks.known(),
+                st.blocks.all(shell::FIRST),
+                st.blocks.input().to_string(),
+            )
         };
         let _ = tx.send(DaemonMsg::Shell {
             pane: id,
             known,
             reset: true,
             blocks,
+            input: Some(input),
         });
         subscribe(lock(&self.shells).entry(id).or_default(), client, tx);
         Ok(())
@@ -1544,7 +1549,7 @@ impl Daemon {
         for id in watched {
             let Ok(pane) = self.pane(id) else { continue };
             let news = lock(&pane.state).blocks.news();
-            let Some((reset, blocks)) = news else {
+            let Some((reset, blocks, input)) = news else {
                 continue;
             };
             let msg = DaemonMsg::Shell {
@@ -1552,6 +1557,7 @@ impl Daemon {
                 known: true,
                 reset,
                 blocks,
+                input,
             };
             if let Some(subs) = lock(&self.shells).get_mut(&id) {
                 subs.retain(|s| s.tx.send(msg.clone()).is_ok());

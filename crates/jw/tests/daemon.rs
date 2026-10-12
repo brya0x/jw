@@ -2237,6 +2237,36 @@ fn a_zsh_jw_started_marks_its_commands_as_blocks() {
             known = k;
         }
     }
+    // What is typed at the prompt, before Enter, is the shell's line: the text a phone's input mirrors.
+    c.send(&ClientMsg::Input {
+        pane,
+        bytes: b"echo par".to_vec(),
+    })
+    .unwrap();
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        assert!(Instant::now() < deadline, "the typed line never showed");
+        if let DaemonMsg::Shell { input, .. } = recv(&mut c)
+            && input.as_deref() == Some("echo par")
+        {
+            break;
+        }
+    }
+    // Ctrl-U clears it; the line is empty again.
+    c.send(&ClientMsg::Input {
+        pane,
+        bytes: vec![0x15],
+    })
+    .unwrap();
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        assert!(Instant::now() < deadline, "the cleared line never showed");
+        if let DaemonMsg::Shell { input, .. } = recv(&mut c)
+            && input.as_deref() == Some("")
+        {
+            break;
+        }
+    }
     c.send(&ClientMsg::Input {
         pane,
         bytes: b"echo hello $((6*7)) $JW_PROBE\n".to_vec(),
