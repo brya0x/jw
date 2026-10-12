@@ -144,7 +144,7 @@ supersedes:  []
 | 85 | WHEN the phone sends `open{path, session?}`, the daemon SHALL add that directory as a folder workspace of the session (the session of the phone's list by default; nothing changes if it already is one) and answer `opened{ws}` with its id. A path that is not a directory SHALL be refused. |
 | 86 | WHEN the phone sends `session_new{name, dir}`, the daemon SHALL create the session as the TUI does (`session::create`, starting with `dir`) and answer `session_created{name, ws}`; a name that is taken, that is a command of jw (`RESERVED`) or that is not valid SHALL be refused with the reason. |
 | 87 | WHEN the phone sends `worktree{project, name, branch?, task?, session?}`, the daemon SHALL make the worktree as `jw worktree` and `^␣ w` do (the project's setup commands run), open its panes with the `JW_*` variables of the chosen session, hand `task` to its agent when there is one, and answer `worktree{ws}`. `project` is a project of the session by name and never a path; `name` and `branch` pass core's own checks and never reach git as an option. |
-| 88 | THE app SHALL offer new worktree, new session and open folder from `+`, from the leader (`o`, `w`) and from the sessions sheet; the creation of a worktree SHALL show it is pending (it can take minutes) and survive a reconnect, and a refusal (name taken, branch exists, read-only) SHALL be said in the sheet. |
+| 88 | THE app SHALL offer new worktree and open folder from `+` and from the leader (`o`, `w`), and new session from the sessions sheet only, where its form takes the place of the list inside that same sheet (a back arrow returns to the list; choosing the folder leaves the sheet and returns to the form); the creation of a worktree SHALL show it is pending (it can take minutes) and survive a reconnect, and a refusal (name taken, branch exists, read-only) SHALL be said in the sheet. |
 
 ---
 
@@ -292,6 +292,8 @@ Order (L1 to L3, after the rest): L1 first (the app cannot be tried without it),
 - The y and n buttons flashed: they were enabled only for 2 s after a `Panes` while the poll is every 2 s, so they went dim between polls, and a tap was forgotten by the next `Panes`, which made them green again. A `Panes` is good for 6 s and `answered` keeps a pane until it is not Waiting (REQ-20).
 
 - Approve reached the pane (`crates/jw/tests/mobile.rs` sends the app's `Input` frame and reads the shell's echo) but the agent stayed `Waiting` on the PC until its next `PreToolUse`: the daemon never changed it on an `Input`, and claude's hooks had nothing after a permission was granted. `PostToolUse` now reports working, and the daemon applies the answer itself (REQ-20). Agents already running keep the hooks they started with.
+
+- The new-session button was a row that closed the sessions sheet and opened a second sheet, and `+` offered it too. It is now inside the sessions sheet (REQ-88), and `+` no longer has it.
 
 ## Tests
 

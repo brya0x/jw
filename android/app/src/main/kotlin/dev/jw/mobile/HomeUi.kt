@@ -66,6 +66,11 @@ class Nav {
     var pane by mutableStateOf<Long?>(null)
     var sessionSheet by mutableStateOf(false)
 
+    /** The new-session form is showing inside the sessions sheet (REQ-86), in place of its list. */
+    var sessionForm by mutableStateOf(false)
+
+    fun closeSessions() { sessionSheet = false; sessionForm = false }
+
     /** The workspace that was open before this one, for `^␣ tab`. */
     var previous by mutableStateOf<String?>(null)
 
@@ -180,7 +185,8 @@ fun ConnectedApp(state: UiState.Connected, session: Session, nav: Nav, answers: 
     BackHandler(nav.sheet != null || nav.sessionSheet || nav.open != null || nav.tab != Tab.Home) {
         when {
             nav.sheet != null -> nav.sheet = null
-            nav.sessionSheet -> nav.sessionSheet = false
+            nav.sessionForm -> nav.sessionForm = false
+            nav.sessionSheet -> nav.closeSessions()
             nav.open != null -> nav.open = null
             else -> nav.tab = Tab.Home
         }
@@ -198,11 +204,10 @@ fun ConnectedApp(state: UiState.Connected, session: Session, nav: Nav, answers: 
             nav.tab == Tab.Diff -> ChangesScreen(model, state, session, nav, viewed, now, waiting)
             else -> SettingsScreen(state, session, answers, nav, waiting)
         }
-        if (nav.sessionSheet) SessionSheet(model, session, nav)
+        if (nav.sessionSheet) SessionSheet(model, state, session, nav)
         when (nav.sheet) {
             HomeSheet.Plus -> PlusSheet(nav) { nav.worktreeProject = null; nav.sheet = HomeSheet.Worktree }
             HomeSheet.Worktree -> WorktreeSheet(model, state, session, nav)
-            HomeSheet.NewSession -> NewSessionSheet(state, session, nav)
             null -> {}
         }
         MakeDone(model, session, nav)
@@ -396,16 +401,17 @@ internal fun stateLabel(p: PaneInfo) = when {
 }
 
 @Composable
-private fun SessionSheet(model: Model, session: Session, nav: Nav) {
+private fun SessionSheet(model: Model, state: UiState.Connected, session: Session, nav: Nav) {
     val j = LocalJw.current
-    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.5f)).clickable { nav.sessionSheet = false })
+    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.5f)).clickable { nav.closeSessions() })
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
         Column(Modifier.fillMaxWidth().background(j.panel, RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp)).clickable(enabled = false) {}.padding(bottom = 16.dp)) {
             Box(Modifier.padding(top = 8.dp, bottom = 4.dp).align(Alignment.CenterHorizontally).width(36.dp).heightIn(min = 4.dp).background(j.line, RoundedCornerShape(2.dp)))
+            if (nav.sessionForm) { NewSessionForm(state, session, nav); return@Column }
             Text("sesiones", color = j.dim, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp))
             for (s in model.sessions) {
                 Row(
-                    Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable { session.requestWorkspaces(s.name); nav.sessionSheet = false }.padding(horizontal = 14.dp),
+                    Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable { session.requestWorkspaces(s.name); nav.closeSessions() }.padding(horizontal = 14.dp),
                     verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     Text(if (s.name == model.session) "●" else " ", color = j.yellow, modifier = Modifier.width(34.dp).border(BorderStroke(1.dp, j.line), RoundedCornerShape(4.dp)).background(j.bg).padding(3.dp), textAlign = TextAlign.Center)
@@ -415,7 +421,7 @@ private fun SessionSheet(model: Model, session: Session, nav: Nav) {
             }
             if (model.sessions.isEmpty()) Body("Sin sesiones todavía.", j.dim, 12.0)
             Row(
-                Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(role = Role.Button) { nav.sessionSheet = false; nav.sheet = HomeSheet.NewSession }.padding(horizontal = 14.dp),
+                Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(role = Role.Button) { nav.sessionForm = true }.padding(horizontal = 14.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Text("+", color = j.yellow, modifier = Modifier.width(34.dp).border(BorderStroke(1.dp, j.line), RoundedCornerShape(4.dp)).background(j.bg).padding(3.dp), textAlign = TextAlign.Center)

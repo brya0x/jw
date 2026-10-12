@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -45,7 +47,7 @@ import dev.jw.proto.Kind
 private val Corner = RoundedCornerShape(6.dp)
 
 /** What the home screen can have open over it (REQ-88). */
-enum class HomeSheet { Plus, Worktree, NewSession }
+enum class HomeSheet { Plus, Worktree }
 
 /** What the Files screen is choosing a folder for. */
 enum class PickFor { OpenFolder, SessionDir }
@@ -55,14 +57,13 @@ internal fun validName(name: String, max: Int = 64) =
     name.isNotEmpty() && name.length <= max && name[0].let { it in 'a'..'z' || it in '0'..'9' } &&
         name.all { it in 'a'..'z' || it in '0'..'9' || it == '-' }
 
-/** `+`: open a folder, a new worktree, a new session. */
+/** `+`: open a folder or make a new worktree. A new session is made from the sessions sheet. */
 @Composable
 fun PlusSheet(nav: Nav, onWorktree: () -> Unit) {
     SheetFrame(onClose = { nav.sheet = null }) {
         Text("abrir", color = LocalJw.current.dim, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp))
         SheetRow("o", "abrir carpeta", "del PC") { nav.sheet = null; nav.startPick(PickFor.OpenFolder) }
         SheetRow("w", "nuevo worktree", "de un proyecto", onClick = onWorktree)
-        SheetRow("a", "nueva sesión", "") { nav.sheet = HomeSheet.NewSession }
     }
 }
 
@@ -172,9 +173,9 @@ fun WorktreeSheet(model: Model, state: UiState.Connected, session: Session, nav:
     }
 }
 
-/** New session (REQ-86, 88): a name and the folder it starts in. */
+/** New session (REQ-86, 88): a name and the folder it starts in, inside the sessions sheet. */
 @Composable
-fun NewSessionSheet(state: UiState.Connected, session: Session, nav: Nav) {
+fun NewSessionForm(state: UiState.Connected, session: Session, nav: Nav) {
     val j = LocalJw.current
     val make by session.make.collectAsState()
     var name by remember { mutableStateOf("") }
@@ -182,16 +183,21 @@ fun NewSessionSheet(state: UiState.Connected, session: Session, nav: Nav) {
     val busy = (make as? MakeState.Busy)?.what == Make.Session
     val failed = (make as? MakeState.Failed)?.takeIf { it.what == Make.Session }
     val ok = validName(name, 24)
-    SheetFrame(onClose = { if (!busy) nav.sheet = null }) {
-        Text("nueva sesión", color = j.dim, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp))
-        Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            TextField(name, { name = it.lowercase().replace(' ', '-') }, "trabajo", !busy && !state.readOnly, "nombre")
-            if (name.isNotEmpty() && !ok) SheetNote("minúsculas, números y guiones; hasta 24", j.red)
-            PickRow("carpeta con la que empieza", nav.sessionDir, !busy && !state.readOnly) { nav.sheet = null; nav.startPick(PickFor.SessionDir) }
-            failed?.let { SheetNote(it.why, j.red) }
-            if (state.readOnly) SheetNote("solo lectura: este puente no deja crear sesiones", j.yellow)
-            GoButton(if (busy) "creando…" else "crear y abrir", busy, ok && !state.readOnly) { session.requestNewSession(name, nav.sessionDir) }
-        }
+    Row(Modifier.padding(horizontal = 6.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            "‹", color = j.fg, fontSize = 20.sp, textAlign = TextAlign.Center,
+            modifier = Modifier.clickable(enabled = !busy, role = Role.Button, onClickLabel = "volver a las sesiones") { nav.sessionForm = false }
+                .minimumInteractiveComponentSize().width(44.dp),
+        )
+        Text("nueva sesión", color = j.dim, fontSize = 12.sp)
+    }
+    Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        TextField(name, { name = it.lowercase().replace(' ', '-') }, "trabajo", !busy && !state.readOnly, "nombre")
+        if (name.isNotEmpty() && !ok) SheetNote("minúsculas, números y guiones; hasta 24", j.red)
+        PickRow("carpeta con la que empieza", nav.sessionDir, !busy && !state.readOnly) { nav.sessionSheet = false; nav.startPick(PickFor.SessionDir) }
+        failed?.let { SheetNote(it.why, j.red) }
+        if (state.readOnly) SheetNote("solo lectura: este puente no deja crear sesiones", j.yellow)
+        GoButton(if (busy) "creando…" else "crear y abrir", busy, ok && !state.readOnly) { session.requestNewSession(name, nav.sessionDir) }
     }
 }
 
@@ -204,7 +210,7 @@ fun MakeDone(model: Model, session: Session, nav: Nav) {
     LaunchedEffect(done, there) {
         if (!there) kotlinx.coroutines.delay(8_000)
         if (there) { nav.open = done.ws; nav.pane = null }
-        nav.sheet = null; nav.pick = null; nav.filesPath = null; nav.viewerPath = null
+        nav.sheet = null; nav.closeSessions(); nav.pick = null; nav.filesPath = null; nav.viewerPath = null
         session.clearMake()
     }
 }
