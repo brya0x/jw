@@ -268,6 +268,7 @@ fn list_reports_every_pane() {
         bell: false,
         agent: None,
         cwd: None,
+        name: None,
     };
     // Every pane says where it is; whether they printed in the last 2 s
     // depends on timing.
@@ -2030,6 +2031,7 @@ fn a_phone_watching_an_agent_gets_its_transcript_as_blocks_and_then_each_change(
         &file,
         concat!(
             "{\"type\":\"ai-title\",\"aiTitle\":\"Arreglar el socket\"}\n",
+            "{\"type\":\"custom-title\",\"customTitle\":\"mobile-fixes\"}\n",
             "{\"type\":\"user\",\"message\":{\"content\":\"hola\"}}\n",
             "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"listo\"}]}}\n",
         ),
@@ -2050,6 +2052,7 @@ fn a_phone_watching_an_agent_gets_its_transcript_as_blocks_and_then_each_change(
     c.send(&ClientMsg::ChatWatch { pane: agent }).unwrap();
     let DaemonMsg::Chat {
         known,
+        name,
         title,
         reset,
         blocks,
@@ -2059,6 +2062,7 @@ fn a_phone_watching_an_agent_gets_its_transcript_as_blocks_and_then_each_change(
         unreachable!()
     };
     assert!(known && reset);
+    assert_eq!(name.as_deref(), Some("mobile-fixes"));
     assert_eq!(title.as_deref(), Some("Arreglar el socket"));
     let seen: Vec<(u32, &str, &str)> = blocks
         .iter()
@@ -2151,5 +2155,32 @@ fn a_claude_started_by_hand_in_a_shell_is_followed_by_its_folders_newest_transcr
             assert_eq!(blocks[0].text, "hola");
             break;
         }
+    }
+}
+
+#[test]
+fn a_listing_carries_the_name_the_user_gave_a_pane() {
+    let d = Daemon::start();
+    let mut c = d.client();
+    let pane = spawn(&mut c, "s", "sleep 30", 40, 5);
+    let name_of = |c: &mut Client| {
+        c.send(&ClientMsg::List).unwrap();
+        loop {
+            if let DaemonMsg::Panes { panes } = recv(c) {
+                return panes.into_iter().find(|p| p.pane == pane).unwrap().name;
+            }
+        }
+    };
+    assert_eq!(name_of(&mut c), None);
+    c.send(&ClientMsg::Name {
+        pane,
+        name: Some(" logs ".into()),
+    })
+    .unwrap();
+    // The rename is a tree edit: wait for the daemon to have it.
+    let deadline = Instant::now() + TIMEOUT;
+    while name_of(&mut c).as_deref() != Some("logs") {
+        assert!(Instant::now() < deadline, "the name never showed");
+        thread::sleep(Duration::from_millis(50));
     }
 }

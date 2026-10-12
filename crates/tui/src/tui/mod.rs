@@ -4079,6 +4079,7 @@ mod motion_tests {
             bell: false,
             agent: Some(AgentState::Working),
             cwd: None,
+            name: None,
         }
     }
 
@@ -4119,6 +4120,7 @@ mod motion_tests {
             bell: false,
             agent: None,
             cwd: None,
+            name: None,
         }
     }
 

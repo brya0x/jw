@@ -15,7 +15,7 @@ pub type PaneId = u64;
 
 /// Bumped whenever a message changes shape: a client and a daemon from
 /// different builds refuse each other instead of misreading (RISK-14).
-pub const PROTOCOL: u32 = 16;
+pub const PROTOCOL: u32 = 17;
 
 /// A run of cells of one row that share a style: its first column, its
 /// text (a wide character counts two columns; the cells after it are not
@@ -288,6 +288,9 @@ pub struct PaneInfo {
     /// The directory its foreground process is in.
     #[serde(default)]
     pub cwd: Option<String>,
+    /// What the user called it (`^␣ n`), the name a phone shows for the pane.
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 impl PaneInfo {
@@ -395,6 +398,9 @@ pub enum DaemonMsg {
         /// The pane runs a Claude session whose transcript is followed; false
         /// for any other pane, which has no conversation to show.
         known: bool,
+        /// The name the person gave the conversation in Claude (`/rename`).
+        name: Option<String>,
+        /// What Claude called the conversation itself.
         title: Option<String>,
         reset: bool,
         blocks: Vec<ChatBlock>,

@@ -101,6 +101,7 @@ fn folder_name(cwd: &Path) -> String {
 /// comes).
 #[derive(Debug, Default, PartialEq)]
 pub struct Changes {
+    pub name: Option<String>,
     pub title: Option<String>,
     pub blocks: Vec<ChatBlock>,
 }
@@ -116,6 +117,10 @@ pub struct Tail {
     base: u32,
     tools: HashMap<String, u32>,
     title: Option<String>,
+    /// What the person named the conversation (`/rename`), and the name its
+    /// agent has: the first wins when both are there.
+    custom_name: Option<String>,
+    agent_name: Option<String>,
 }
 
 impl Tail {
@@ -128,6 +133,8 @@ impl Tail {
             base: 0,
             tools: HashMap::new(),
             title: None,
+            custom_name: None,
+            agent_name: None,
         }
     }
 
@@ -141,6 +148,10 @@ impl Tail {
 
     pub fn title(&self) -> Option<&str> {
         self.title.as_deref()
+    }
+
+    pub fn name(&self) -> Option<&str> {
+        self.custom_name.as_deref().or(self.agent_name.as_deref())
     }
 
     /// The last `n` blocks, for a client that starts watching.
@@ -182,6 +193,7 @@ impl Tail {
         let whole = data.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1);
         self.partial = data[whole..].to_vec();
         let before_title = self.title.clone();
+        let before_name = self.name().map(str::to_string);
         let mut touched: Vec<u32> = Vec::new();
         for line in data[..whole].split(|b| *b == b'\n') {
             if let Ok(line) = std::str::from_utf8(line) {
@@ -190,7 +202,9 @@ impl Tail {
         }
         touched.sort_unstable();
         touched.dedup();
+        let name = self.name().map(str::to_string);
         Changes {
+            name: if name != before_name { name } else { None },
             title: (self.title != before_title)
                 .then(|| self.title.clone())
                 .flatten(),
@@ -222,6 +236,16 @@ impl Tail {
             return;
         };
         match v["type"].as_str() {
+            Some("custom-title") => {
+                if let Some(t) = v["customTitle"].as_str().filter(|t| !t.trim().is_empty()) {
+                    self.custom_name = Some(cut(t.trim(), ARG_MAX));
+                }
+            }
+            Some("agent-name") => {
+                if let Some(t) = v["agentName"].as_str().filter(|t| !t.trim().is_empty()) {
+                    self.agent_name = Some(cut(t.trim(), ARG_MAX));
+                }
+            }
             Some("ai-title") => {
                 if let Some(t) = v["aiTitle"].as_str().filter(|t| !t.trim().is_empty()) {
                     self.title = Some(cut(t.trim(), ARG_MAX));
@@ -479,6 +503,47 @@ mod tests {
         assert_eq!(tool.result.as_deref(), Some("running 2 tests · 2 líneas"));
         assert!(tool.body.as_deref().unwrap().contains("test result: ok"));
         assert_eq!(blocks.iter().map(|b| b.i).collect::<Vec<_>>(), [0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn the_name_the_person_gave_the_chat_wins_over_the_agents_and_the_title_stays_apart() {
+        let (t, _b, _d) = tail_of(&[
+            r#"{"type":"ai-title","aiTitle":"Arreglar el socket"}"#,
+            r#"{"type":"agent-name","agentName":"agente"}"#,
+        ]);
+        assert_eq!(
+            (t.name(), t.title()),
+            (Some("agente"), Some("Arreglar el socket"))
+        );
+        let (t, _b, _d) = tail_of(&[
+            r#"{"type":"agent-name","agentName":"agente"}"#,
+            r#"{"type":"custom-title","customTitle":"mobile-fixes"}"#,
+            r#"{"type":"ai-title","aiTitle":"Arreglar el socket"}"#,
+        ]);
+        assert_eq!(
+            (t.name(), t.title()),
+            (Some("mobile-fixes"), Some("Arreglar el socket"))
+        );
+        // A rename that comes later is news.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        std::fs::write(
+            &path,
+            "{\"type\":\"custom-title\",\"customTitle\":\"uno\"}\n",
+        )
+        .unwrap();
+        let mut t = Tail::new(Some(path.clone()));
+        assert_eq!(t.poll().name.as_deref(), Some("uno"));
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        std::io::Write::write_all(
+            &mut f,
+            b"{\"type\":\"custom-title\",\"customTitle\":\"dos\"}\n",
+        )
+        .unwrap();
+        assert_eq!(t.poll().name.as_deref(), Some("dos"));
     }
 
     #[test]

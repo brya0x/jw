@@ -256,6 +256,7 @@ impl ChatWatch {
         (news != chat::Changes::default()).then_some(DaemonMsg::Chat {
             pane,
             known: true,
+            name: news.name,
             title: news.title,
             reset: false,
             blocks: news.blocks,
@@ -271,6 +272,7 @@ impl ChatWatch {
         DaemonMsg::Chat {
             pane,
             known: self.session.is_some(),
+            name: self.tail.name().map(str::to_string),
             title: self.tail.title().map(str::to_string),
             reset: true,
             blocks: self.tail.last(chat::FIRST),
@@ -807,6 +809,11 @@ impl Daemon {
                     .iter()
                     .map(|(id, p)| (*id, Arc::clone(p)))
                     .collect();
+                let names: std::collections::HashMap<PaneId, String> = lock(&self.workspaces)
+                    .values()
+                    .flat_map(|ws| ws.tree.leaves())
+                    .filter_map(|l| Some((l.id, l.name.clone()?)))
+                    .collect();
                 let panes = all
                     .iter()
                     .map(|(id, p)| {
@@ -831,6 +838,7 @@ impl Daemon {
                             bell,
                             agent,
                             cwd,
+                            name: names.get(id).cloned(),
                         }
                     })
                     .collect();
