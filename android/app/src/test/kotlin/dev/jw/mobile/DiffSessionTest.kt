@@ -65,13 +65,15 @@ class DiffSessionTest {
     }
 
     @Test fun aRequestLostWithTheConnectionIsAskedAgain() = runBlocking<Unit> {
-        // The first connection never answers and drops; the second one does.
+        // The first ask meets a connection that drops; the same ask, again on the next one, is answered.
+        val asks = java.util.concurrent.atomic.AtomicInteger()
         fake.enqueue { _, ws -> ws.send(FakeBridge.ready()) }
-        fake.onLater = { t, ws -> if (t.contains(""""t":"diff"""")) ws.close(1001, null) }
+        fake.enqueue { _, ws -> ws.send(FakeBridge.ready()) }
+        fake.onLater = { t, ws ->
+            if (t.contains(""""t":"diff"""")) { if (asks.getAndIncrement() == 0) ws.close(1001, null) else ws.send(answer("w1")) }
+        }
         val s = session(); s.start(); s.connected()
-        fake.enqueue { _, ws -> ws.send(FakeBridge.ready()) }
         s.requestDiff("w1")
-        fake.onLater = { t, ws -> if (t.contains(""""t":"diff"""")) ws.send(answer("w1")) }
         assertEquals("w1", (s.settled() as DiffState.Loaded).diff.ws)
         assertEquals(2, fake.received.count { it == """{"t":"diff","ws":"w1"}""" })
     }

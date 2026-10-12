@@ -1054,7 +1054,12 @@ mod tests {
     #[test]
     fn the_answer_the_phone_parses_is_what_this_serialises() {
         fn l(k: &'static str, text: &str, old: Option<u32>, new: Option<u32>) -> LineOut {
-            LineOut { k, text: text.into(), old, new }
+            LineOut {
+                k,
+                text: text.into(),
+                old,
+                new,
+            }
         }
         fn f(path: &str, status: &'static str) -> FileOut {
             FileOut {
