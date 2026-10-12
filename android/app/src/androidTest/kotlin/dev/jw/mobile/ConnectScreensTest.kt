@@ -111,9 +111,9 @@ class ConnectScreensTest {
     }
 
     @Test fun pairing() {
-        show { PairScreen(host, "482913", reached = true, onCancel = {}) }
+        show { PairScreen(host, "482913", reached = true, via = Route.Wifi, onCancel = {}) }
         rule.onNodeWithText("482 913").assertExists()
-        rule.onNodeWithText("PC alcanzado").assertExists()
+        rule.onNodeWithText("PC alcanzado · por wifi").assertExists()
         shot("pair")
     }
 

@@ -76,3 +76,14 @@ The scan screen in landscape gives the camera the whole width; the title shrinks
 - **Paste link** is a text field, never a clipboard read; the link is not logged or stored.
 - **Not done / not tried by hand:** the camera permission "blocked" screen is drawn from a flag in `ConnectScreensTest` (adb cannot revoke it on this ROM);
   the torch is hidden when the phone has no flash unit.
+
+## Wifi first, the tunnel as the fallback (L3, REQ-59 to REQ-64)
+
+- **The pin.** `PinnedTrust` trusts exactly the certificate whose SHA-256 is the `fp` of the QR or of `endpoints`; the chain, the name and the dates are not looked at, and an empty chain is refused. It is built only for a wifi address (`Bridge.pinnedClient`, a new `OkHttpClient` derived from the base one); the tunnel's connection never goes through it and keeps the system's checks. Proved on the phone's own TLS stack (`PinnedTlsDeviceTest`, Conscrypt, CPH2417 Android 15): the right pin connects, a wrong one is refused before anything is sent, an unpinned client refuses a self-signed certificate.
+- **What a host may be.** The pairing token and the device token go only to a quick-tunnel host (`*.trycloudflare.com`) or a private IPv4 (10/8, 172.16/12, 192.168/16) with a port and a 64-hex fingerprint (`Hosts`). A QR or an `endpoints` entry that fails this is dropped, and the rest of the message is kept. What is read back from the encrypted file is checked again.
+- **Route order.** Each connection tries the wifi first with a 3 s limit for the socket to open, then the tunnel. A pairing falls to the tunnel only when no connection opened on the wifi, so the single-use token was never sent. An attempt that reached `ready` is never retried on the other route.
+- **`endpoints`** is accepted only after this connection's `ready`; it updates the stored device (tunnel host and wifi address with pin), and only when something changed.
+- **Back on the wifi.** While on the tunnel with a wifi address held and the phone on wifi (`TRANSPORT_WIFI`), every 30 s the app does a TCP and TLS handshake against the pin (no token, `Bridge.probe`); when it answers, the connection moves, without a "reconnecting" screen and without a failure counted.
+- **Store.** `device.bin` is now `v2\n<device>\n<tunnel host>\n<wifi host:port>\n<fp>`; the first form (`<host>\n<device>`) is still read.
+- **Local network permission.** Not looked up: Android 16 may gate access to the local network for apps targeting it; the phone here is Android 15 and connects without it. To check before targeting 16.
+- **Not tried by hand yet:** pairing with the real camera over the wifi against the real daemon, and the fall to the tunnel with the phone off the wifi.

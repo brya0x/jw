@@ -291,7 +291,7 @@ private fun HomeScreen(model: Model, state: UiState.Connected, session: Session,
                 }
             }
         }
-        StatusBar("NORMAL", j.blue, "toca una fila para entrar", if (state.saved) null else "sin guardar")
+        StatusBar("NORMAL", j.blue, "toca una fila para entrar", if (state.saved) null else "sin guardar", state.route)
         NavBar(nav, waiting)
     }
 }
@@ -324,7 +324,7 @@ private fun AvisosScreen(model: Model, state: UiState.Connected, session: Sessio
                 }
             }
         }
-        StatusBar("?", j.yellow, "${pending.size} esperando")
+        StatusBar("?", j.yellow, "${pending.size} esperando", route = state.route)
         NavBar(nav, waiting)
     }
 }
@@ -403,7 +403,7 @@ private fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected
                 YesNo(on, "y · sí", "n · no", { session.answer(sel.pane, true) }, { session.answer(sel.pane, false) })
             }
         }
-        StatusBar("VIEW", j.cyan, sel?.let { stateLabel(it) } ?: "sin paneles")
+        StatusBar("VIEW", j.cyan, sel?.let { stateLabel(it) } ?: "sin paneles", route = state.route)
     }
 }
 
@@ -469,7 +469,9 @@ private fun SettingsScreen(state: UiState.Connected, session: Session, answers: 
         Header("ajustes", "ajustes de la app")
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
             Section("conexión")
-            SettingRow(state.host, "túnel de Cloudflare · TLS")
+            // Both routes, the one in use marked (REQ-64).
+            state.lan?.let { SettingRow("wifi", "$it · TLS fijado", right = if (state.route == Route.Wifi) "● en uso" else "sin respuesta", rightColor = if (state.route == Route.Wifi) j.green else j.dim) }
+            state.tunnel?.let { SettingRow("túnel", "$it · respaldo", right = if (state.route == Route.Tunnel) "● en uso" else "listo", rightColor = if (state.route == Route.Tunnel) j.green else j.dim) }
             SettingRow("protocolo", "jw-proto v${state.protocol} · compatible")
             SettingRow("acceso", if (state.readOnly) "solo lectura" else "lectura y escritura")
             if (!state.saved) Body("No se pudo guardar el emparejamiento: al cerrar la app tendrás que escanear de nuevo.", j.yellow, 12.0)
@@ -514,7 +516,7 @@ private fun SettingsScreen(state: UiState.Connected, session: Session, answers: 
             Section("general")
             SettingRow("líder", "^␣ abre el menú de teclas")
         }
-        StatusBar("SET", j.blue, "ajustes de la app")
+        StatusBar("SET", j.blue, "ajustes de la app", route = state.route)
         NavBar(nav, waiting)
     }
 }
@@ -525,17 +527,20 @@ private fun androidx.compose.ui.text.AnnotatedString.Builder.bold(t: String) {
 
 /** `.srow`: a title, an optional dim line under it, a line below the row. */
 @Composable
-private fun SettingRow(title: String, sub: String?, color: Color = LocalJw.current.fg, onClick: (() -> Unit)? = null) {
+private fun SettingRow(title: String, sub: String?, color: Color = LocalJw.current.fg, right: String? = null, rightColor: Color = LocalJw.current.dim, onClick: (() -> Unit)? = null) {
     val j = LocalJw.current
-    Column(
+    Row(
         Modifier.fillMaxWidth().heightIn(min = 54.dp)
             .let { if (onClick != null) it.clickable(role = Role.Button, onClick = onClick) else it }
             .drawBehind { drawLine(j.line, Offset(0f, size.height), Offset(size.width, size.height), 1.dp.toPx()) }
             .padding(horizontal = 14.dp, vertical = 6.dp),
-        verticalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(title, color = color, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        if (sub != null) Text(sub, color = j.dim, fontSize = 11.sp)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
+            Text(title, color = color, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (sub != null) Text(sub, color = j.dim, fontSize = 11.sp)
+        }
+        if (right != null) Text(right, color = rightColor, fontSize = 12.sp)
     }
 }
 

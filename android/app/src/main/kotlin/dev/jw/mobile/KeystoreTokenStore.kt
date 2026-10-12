@@ -29,8 +29,7 @@ class KeystoreTokenStore(context: Context) : TokenStore {
             val cipher = Cipher.getInstance(TRANSFORM)
             cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, blob, 0, IV_LEN))
             val text = String(cipher.doFinal(blob, IV_LEN, blob.size - IV_LEN), Charsets.UTF_8)
-            val (host, device) = text.split('\n', limit = 2)
-            StoredDevice(host, device)
+            decode(text)
         } catch (_: Exception) {
             clear()
             null
@@ -40,7 +39,7 @@ class KeystoreTokenStore(context: Context) : TokenStore {
     override fun save(device: StoredDevice) {
         val cipher = Cipher.getInstance(TRANSFORM)
         cipher.init(Cipher.ENCRYPT_MODE, key())
-        val ct = cipher.doFinal("${device.host}\n${device.device}".toByteArray(Charsets.UTF_8))
+        val ct = cipher.doFinal(encode(device).toByteArray(Charsets.UTF_8))
         file.writeBytes(cipher.iv + ct)
     }
 
@@ -69,10 +68,31 @@ class KeystoreTokenStore(context: Context) : TokenStore {
         return gen.generateKey()
     }
 
-    private companion object {
-        const val PROVIDER = "AndroidKeyStore"
-        const val ALIAS = "jw_device"
-        const val TRANSFORM = "AES/GCM/NoPadding"
-        const val IV_LEN = 12
+    internal companion object {
+        /**
+         * `v2\n<device>\n<tunnel host>\n<lan host:port>\n<lan fp>`; the first form, `<host>\n<device>`, is still read.
+         * Neither holds anything the reader does not check again (REQ-62).
+         */
+        fun encode(d: StoredDevice): String =
+            "v2\n${d.device}\n${d.host}\n${d.lan?.hostPort.orEmpty()}\n${d.lan?.fp.orEmpty()}"
+
+        fun decode(text: String): StoredDevice {
+            val lines = text.split('\n')
+            if (lines[0] != "v2") {
+                val (host, device) = text.split('\n', limit = 2)
+                return StoredDevice(host, device)
+            }
+            val lan = lines.getOrNull(3)?.takeIf { it.isNotEmpty() }?.let { hp ->
+                val i = hp.lastIndexOf(':')
+                dev.jw.proto.Hosts.lan(hp.substring(0, i), hp.substring(i + 1).toInt(), lines.getOrElse(4) { "" })
+            }
+            val host = lines.getOrElse(2) { "" }.takeIf { it.isEmpty() || dev.jw.proto.Hosts.isTunnel(it) } ?: error("bad host")
+            return StoredDevice(host, lines[1], lan)
+        }
+
+        private const val PROVIDER = "AndroidKeyStore"
+        private const val ALIAS = "jw_device"
+        private const val TRANSFORM = "AES/GCM/NoPadding"
+        private const val IV_LEN = 12
     }
 }

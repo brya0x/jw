@@ -133,6 +133,12 @@ sealed interface ServerMessage {
 
     class Sessions(val items: List<SessionInfo>) : ServerMessage
 
+    /**
+     * Where else the PC can be reached (REQ-61). Only what is valid is kept: a tunnel host must be a quick
+     * tunnel, a wifi address a private IPv4 with a port and a 64-hex fingerprint; anything else is null.
+     */
+    class Endpoints(val lan: LanAddr?, val tunnel: String?) : ServerMessage
+
     /** A message this app does not know yet; ignored. */
     class Other(val tag: String) : ServerMessage
 }
@@ -193,6 +199,16 @@ object Control {
                 "sessions" -> ServerMessage.Sessions(
                     dev.jw.proto.Workspaces.parseSessions(obj["items"] as? kotlinx.serialization.json.JsonArray),
                 )
+                "endpoints" -> {
+                    val lan = (obj["lan"] as? kotlinx.serialization.json.JsonObject)?.let { l ->
+                        val host = l["host"]?.jsonPrimitive?.contentOrNull
+                        val port = l["port"]?.jsonPrimitive?.intOrNull
+                        val fp = l["fp"]?.jsonPrimitive?.contentOrNull
+                        if (host != null && port != null && fp != null) Hosts.lan(host, port, fp) else null
+                    }
+                    val tunnel = obj["tunnel"]?.jsonPrimitive?.contentOrNull?.takeIf { Hosts.isTunnel(it) }
+                    ServerMessage.Endpoints(lan, tunnel)
+                }
                 else -> ServerMessage.Other(tag)
             }
         } catch (_: Exception) {

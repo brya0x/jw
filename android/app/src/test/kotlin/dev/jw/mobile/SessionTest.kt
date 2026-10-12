@@ -233,7 +233,7 @@ class SessionTest {
         store.device = StoredDevice("gone.trycloudflare.com", FakeBridge.DEVICE)
         val s = Session(
             scope, store, Bridge(), "Pixel", { "ws://127.0.0.1:1/" }, { ReconnectPolicy(baseMs = 20, maxMs = 20) },
-            network = { true to true },
+            network = { Net(true, true, false) },
         )
         s.start()
         val r = withTimeout(20_000) { s.state.first { it is UiState.Reconnecting && it.unreachable } as UiState.Reconnecting }
@@ -249,7 +249,7 @@ class SessionTest {
         repeat(5) { fake.server.enqueue(okhttp3.mockwebserver.MockResponse().setResponseCode(530)) }
         val s = Session(
             scope, store, Bridge(), "Pixel", fake.endpoint(), { ReconnectPolicy(baseMs = 20, maxMs = 20) },
-            network = { true to false },
+            network = { Net(true, false, false) },
         )
         s.start()
         val r = withTimeout(20_000) { s.state.first { it is UiState.Reconnecting && it.unreachable } as UiState.Reconnecting }

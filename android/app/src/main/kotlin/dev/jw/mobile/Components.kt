@@ -59,7 +59,7 @@ fun Header(title: String, subtitle: String? = null, onBack: (() -> Unit)? = null
 
 /** `.status`: the mode chip and a hint; `msg` is the yellow message on the right. */
 @Composable
-fun StatusBar(mode: String, chip: Color, hint: String, msg: String? = null) {
+fun StatusBar(mode: String, chip: Color, hint: String, msg: String? = null, route: Route? = null) {
     val j = LocalJw.current
     Row(
         Modifier.fillMaxWidth().background(j.panel).drawBehind {
@@ -74,6 +74,8 @@ fun StatusBar(mode: String, chip: Color, hint: String, msg: String? = null) {
         )
         Text(hint, color = j.dim, fontSize = 11.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         if (msg != null) Text(msg, color = j.yellow, fontSize = 11.5.sp)
+        // Which way this connection goes (REQ-64): the wifi or the tunnel.
+        if (route != null) Text(if (route == Route.Wifi) "wifi" else "túnel", color = j.cyan, fontSize = 11.5.sp)
     }
 }
 

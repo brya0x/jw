@@ -200,7 +200,7 @@ supersedes:  []
 | M7 | Settings, touch and mode chrome, polish | 26 | `android/app` |
 | L1 ✓ `87e38b9` | The wifi listener: `tls.rs`, the certificate, the wifi QR payload, `endpoints`, `MobileState` fields and `PROTOCOL` 12, no-wifi and no-cloudflared cases, `jw mobile` text | 56–58, 60, 61, 65 (CLI), 66–69 | `web/src/tls.rs`, `web/src/bridge.rs`, `daemon/src/mobile.rs`, `proto.rs`, `core/src/qr.rs`, `jw/src/mobile.rs` |
 | L2 | The Mobile modal: wifi and tunnel rows, tunnel state, route per phone | 65 | `tui/src/tui/mobile.rs`, `draw.rs` |
-| L3 | The app: pinning, endpoints store, route order and return, route in the status bar and settings, the wifi row in "no encuentro tu PC", both QR forms | 59, 62–64 | `android/proto`, `android/app` |
+| L3 ✓ | The app: pinning, endpoints store, route order and return, route in the status bar and settings, the wifi row in "no encuentro tu PC", both QR forms | 59, 62–64 | `android/proto`, `android/app` |
 
 Order (L1 to L3, after the rest): L1 first (the app cannot be tried without it), then L2 and L3 in parallel. W1, W2, W3, D1, D2, T1 on the server track and M3 on the app track run in parallel; then M4 to M7. The work orders for the two agents that build them are `docs/specs/mobile-work/server.md` and `docs/specs/mobile-work/android.md`.
 

@@ -291,7 +291,7 @@ private fun Modifier.drawLineTop(c: Color): Modifier = this.then(
 
 /** `vPair`: the code to compare, what has happened so far, and cancel. */
 @Composable
-fun PairScreen(host: String, code: String, reached: Boolean, onCancel: () -> Unit) {
+fun PairScreen(host: String, code: String, reached: Boolean, via: Route?, onCancel: () -> Unit) {
     val j = LocalJw.current
     var frame by remember { mutableIntStateOf(0) }
     LaunchedEffect(Unit) { while (true) { delay(110); frame = (frame + 1) % SPIN.length } }
@@ -303,7 +303,7 @@ fun PairScreen(host: String, code: String, reached: Boolean, onCancel: () -> Uni
         )
         Column(Modifier.widthIn(max = 300.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Step("●", j.green, "QR leído")
-            if (reached) Step("●", j.green, "PC alcanzado")
+            if (reached) Step("●", j.green, "PC alcanzado" + when (via) { Route.Wifi -> " · por wifi"; Route.Tunnel -> " · por el túnel"; null -> "" })
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(SPIN[frame].toString(), color = j.cyan, fontSize = 13.sp)
                 Text("esperando tu respuesta", color = j.fg, fontSize = 13.sp)
@@ -367,6 +367,14 @@ fun UnreachableScreen(host: String, reach: Reach, onScanAnother: () -> Unit, onR
                 .border(BorderStroke(1.dp, j.line), RoundedCornerShape(12.dp)).padding(horizontal = 14.dp, vertical = 12.dp),
         ) {
             val t = TextStyle(fontFamily = JwMono, fontSize = 12.5.sp, lineHeight = 23.sp)
+            // The wifi row is there only when the app held an address and tried it (REQ-64).
+            if (reach.wifi == false) {
+                Text(buildAnnotatedString {
+                    withStyle(SpanStyle(color = j.red)) { append("✗") }
+                    append(" wifi")
+                    withStyle(SpanStyle(color = j.dim)) { append(" · sin respuesta") }
+                }, color = j.fg, style = t)
+            }
             reach.internet?.let { net ->
                 Text(buildAnnotatedString {
                     withStyle(SpanStyle(color = if (net) j.green else j.red)) { append(if (net) "✓" else "✗") }

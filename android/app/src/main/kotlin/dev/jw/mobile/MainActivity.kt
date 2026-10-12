@@ -61,15 +61,18 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     override fun onCleared() = session.stop()
 }
 
-/** (has a network, it is mobile data) from the system, or null when it cannot be read. */
-private fun phoneNetwork(app: Application): Pair<Boolean, Boolean>? = try {
+/** The phone's connectivity from the system, or null when it cannot be read. */
+private fun phoneNetwork(app: Application): Net? = try {
     val cm = app.getSystemService(android.net.ConnectivityManager::class.java)
     val caps = cm.getNetworkCapabilities(cm.activeNetwork)
     if (caps == null) {
-        false to false
+        Net(internet = false, mobile = false, wifi = false)
     } else {
-        caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) to
-            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR)
+        Net(
+            internet = caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET),
+            mobile = caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR),
+            wifi = caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI),
+        )
     }
 } catch (_: Exception) {
     null
@@ -205,7 +208,7 @@ private fun ScanFlow(state: UiState.Scan, session: Session) {
 
 @Composable
 private fun Pairing(state: UiState.Pairing, session: Session) {
-    PairScreen(state.host, state.code, state.reached, onCancel = { session.scanAnother() })
+    PairScreen(state.host, state.code, state.reached, state.via, onCancel = { session.scanAnother() })
 }
 
 @Composable

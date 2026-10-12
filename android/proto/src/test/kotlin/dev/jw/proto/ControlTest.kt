@@ -53,7 +53,7 @@ class ControlTest {
         val token = "0123456789abcdef0123456789abcdef"
         val q = QrPayload.parse("jw://guys-slowly.trycloudflare.com/$token")
         assertNotNull(q)
-        assertEquals("guys-slowly.trycloudflare.com", q!!.host)
+        assertEquals("guys-slowly.trycloudflare.com", q!!.tunnel)
         assertEquals(token, q.token)
         assertNull(QrPayload.parse("https://x.com/$token"))
         assertNull(QrPayload.parse("jw://host/short"))
@@ -66,13 +66,24 @@ class ControlTest {
         assertFalse(q.toString().contains(token))
     }
 
-    @Test fun endpointsFollowReadyAndAreIgnoredUntilTheAppUsesThem() {
-        // Exactly what the bridge sends after every `ready` (REQ-61), empty and filled.
-        val none = Control.parse("""{"lan":null,"t":"endpoints","tunnel":null}""")
-        assertTrue(none is ServerMessage.Other)
+    @Test fun endpointsKeepOnlyWhatIsValid() {
+        val none = Control.parse("""{"lan":null,"t":"endpoints","tunnel":null}""") as ServerMessage.Endpoints
+        assertNull(none.lan); assertNull(none.tunnel)
+        val fp = "a".repeat(64)
         val some = Control.parse(
-            """{"lan":{"fp":"${"a".repeat(64)}","host":"192.168.1.23","port":48211},"t":"endpoints","tunnel":"a-b.trycloudflare.com"}""",
-        )
-        assertTrue(some is ServerMessage.Other)
+            """{"lan":{"fp":"$fp","host":"192.168.1.23","port":48211},"t":"endpoints","tunnel":"a-b.trycloudflare.com"}""",
+        ) as ServerMessage.Endpoints
+        assertEquals("192.168.1.23:48211", some.lan!!.hostPort)
+        assertEquals(fp, some.lan!!.fp)
+        assertEquals("a-b.trycloudflare.com", some.tunnel)
+        // A host the app never connects to is dropped, and does not take the rest with it.
+        val bad = Control.parse(
+            """{"lan":{"fp":"$fp","host":"8.8.8.8","port":1},"t":"endpoints","tunnel":"evil.example.com"}""",
+        ) as ServerMessage.Endpoints
+        assertNull(bad.lan); assertNull(bad.tunnel)
+        val oneBad = Control.parse(
+            """{"lan":{"fp":"short","host":"10.0.0.2","port":1},"t":"endpoints","tunnel":"ok.trycloudflare.com"}""",
+        ) as ServerMessage.Endpoints
+        assertNull(oneBad.lan); assertEquals("ok.trycloudflare.com", oneBad.tunnel)
     }
 }
