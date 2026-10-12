@@ -97,9 +97,12 @@ fn folders_path(state: &Path, session: &str) -> std::path::PathBuf {
 }
 
 /// Every session's name, by name with `main` first, read without side
-/// effects. `main` is there even before its directory is.
+/// effects. `main` is there before `sessions/` is (the old jw's files are
+/// `main`'s), and after it only if its directory is: a PC with sessions and
+/// no `main` has none.
 pub fn names(state: &Path) -> Vec<String> {
-    let mut out: Vec<String> = std::fs::read_dir(state.join("sessions"))
+    let root = state.join("sessions");
+    let mut out: Vec<String> = std::fs::read_dir(&root)
         .into_iter()
         .flatten()
         .flatten()
@@ -108,7 +111,9 @@ pub fn names(state: &Path) -> Vec<String> {
         .filter(|n| n != session::MAIN && session::valid(n))
         .collect();
     out.sort();
-    out.insert(0, session::MAIN.to_string());
+    if !root.exists() || root.join(session::MAIN).is_dir() {
+        out.insert(0, session::MAIN.to_string());
+    }
     out
 }
 
@@ -622,6 +627,20 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn main_is_listed_only_when_it_exists() {
+        let dir = std::env::temp_dir().join(format!("jw-nomain-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        // Before `sessions/` exists, the old jw's files are `main`'s.
+        assert_eq!(names(&dir), ["main"]);
+        // Sessions and no `main`: the phone is not told of one.
+        std::fs::create_dir_all(dir.join("sessions").join("work")).unwrap();
+        assert_eq!(names(&dir), ["work"]);
+        std::fs::create_dir_all(dir.join("sessions").join("main")).unwrap();
+        assert_eq!(names(&dir), ["main", "work"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
