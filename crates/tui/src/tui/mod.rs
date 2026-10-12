@@ -3567,8 +3567,8 @@ impl App {
     }
 
     fn on_job(&mut self, job: Job) {
-        // A PR line's answer touches no registry either, and ends only its own
-        // wait: a removal that began meanwhile keeps its indicator.
+        // A PR line's answer reads no registry and ends only its own wait: a
+        // removal that began meanwhile keeps its indicator.
         let job = match job {
             Job::RmPr { id, line } => {
                 if self.busy.as_deref().is_some_and(|b| b.starts_with(PR_BUSY)) {
