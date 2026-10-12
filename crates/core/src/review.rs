@@ -374,7 +374,10 @@ esac
         )
         .unwrap();
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-        Client { bin: Some(bin) }
+        Client {
+            bin: Some(bin),
+            ..Client::default()
+        }
     }
 
     fn project(work: &Path, root: &Path) -> Project {

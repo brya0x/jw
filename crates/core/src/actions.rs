@@ -372,36 +372,75 @@ impl RmPlan {
     }
 }
 
-pub fn rm_plan(p: &Project, e: &Entry) -> Result<RmPlan> {
+/// What git says about a worktree itself, which needs no [`Project`]: the
+/// caller can ask it while the project opens.
+#[derive(Debug, Default)]
+pub struct WorktreeState {
+    on_disk: bool,
+    dirty: Vec<String>,
+    unpushed: Vec<String>,
+}
+
+/// The worktree's uncommitted files and unpushed commits. The two git calls
+/// need nothing from each other, so they run side by side (REQ-257).
+pub fn worktree_state(e: &Entry) -> Result<WorktreeState> {
     let path = Path::new(&e.path);
-    let on_disk = path.exists();
-    let (dirty, unpushed) = if on_disk {
-        // A review's own commits only: the PR's head is not work to lose
-        // (REQ-175).
-        let unpushed = if e.review_base.is_empty() {
-            git::unpushed(path)?
-        } else {
-            git::unpushed_beyond(path, &crate::review::head_ref(e.pr))?
-        };
-        (git::dirty_files(path)?, unpushed)
-    } else {
-        (Vec::new(), Vec::new())
-    };
+    if !path.exists() {
+        return Ok(WorktreeState::default());
+    }
+    let (unpushed, dirty) = std::thread::scope(|s| {
+        let unpushed = s.spawn(|| {
+            // A review's own commits only: the PR's head is not work to lose
+            // (REQ-175).
+            if e.review_base.is_empty() {
+                git::unpushed(path)
+            } else {
+                git::unpushed_beyond(path, &crate::review::head_ref(e.pr))
+            }
+        });
+        let dirty = git::dirty_files(path);
+        (joined(unpushed), dirty)
+    });
+    Ok(WorktreeState {
+        on_disk: true,
+        dirty: dirty?,
+        unpushed: unpushed?,
+    })
+}
+
+pub fn rm_plan(p: &Project, e: &Entry) -> Result<RmPlan> {
+    let state = worktree_state(e)?;
+    Ok(rm_plan_from(e, state, p.repo.branch_exists(&e.branch)))
+}
+
+/// [`rm_plan`] with git already asked: the worktree's state and whether its
+/// branch exists, which a caller can ask while the state is still running.
+pub fn rm_plan_from(e: &Entry, state: WorktreeState, branch_exists: bool) -> RmPlan {
+    let WorktreeState {
+        on_disk,
+        dirty,
+        unpushed,
+    } = state;
     let keep_branch = e.adopted;
     let mut deletes = Vec::new();
     if on_disk {
         deletes.push(format!("worktree {}", e.path));
     }
-    if !keep_branch && p.repo.branch_exists(&e.branch) {
+    if !keep_branch && branch_exists {
         deletes.push(format!("local branch {}", e.branch));
     }
-    Ok(RmPlan {
+    RmPlan {
         on_disk,
         dirty,
         unpushed,
         keep_branch,
         deletes,
-    })
+    }
+}
+
+/// A scoped thread's result; its panic goes on in the caller.
+fn joined<T>(h: std::thread::ScopedJoinHandle<'_, T>) -> T {
+    h.join().unwrap_or_else(|p| std::panic::resume_unwind(p))
 }
 
 /// Removes the worktree, the branch jw made and the registry entry. The
