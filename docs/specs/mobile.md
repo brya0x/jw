@@ -198,20 +198,20 @@ supersedes:  []
 | M2 ✓ `720261b` | Pairing, auth, limits, revoke, read-only, tunnel and QR as the `jw mobile` process (D1 and D2 move the hosting) | 1–7, 29, 31, 32 | `crates/web/`, `jw/src/mobile.rs` |
 | W1 ✓ `ba9d161` | `palettes` and `settings` in `ready` | 17 | `crates/web/src/bridge.rs`, the `jw` binary or the daemon start |
 | W2 ✓ `9042c58` | `workspaces` and `sessions` answers, from the TUI's own grouping (`core::sidebar`) | 12 | `core/src/sidebar.rs`, `web/src/bridge.rs`, `daemon/src/mobile.rs` |
-| W3 ✓ | `diff{ws}` answer, against the stream's base, limited for a phone | 13 | `core/src/diff.rs`, `core/src/sidebar.rs`, `web/src/bridge.rs`, `daemon/src/mobile.rs` |
+| W3 ✓ `0db6c34` | `diff{ws}` answer, against the stream's base, limited for a phone | 13 | `core/src/diff.rs`, `core/src/sidebar.rs`, `web/src/bridge.rs`, `daemon/src/mobile.rs` |
 | D1 ✓ `99324dc` | The daemon hosts mobile: tunnel moves to jw-web, `daemon/src/mobile.rs`, the messages, watchers, stop on signal, `PROTOCOL` bump | 1, 3, 6, 9, 33–40, 50 | `daemon/src/mobile.rs`, `daemon/src/lib.rs`, `web/src/tunnel.rs`, `proto.rs` |
 | D2 ✓ `a6fa0f3` | `jw mobile` as a client, `jw mobile stop`, shared QR in core | 30, 41 | `jw/src/mobile.rs`, `core/src/qr.rs` |
 | T1 ✓ `6c2bc28` | The TUI: Mobile modal, `^␣ m`, indicator, pair question | 42–49 | `tui/src/tui/mobile.rs`, `modal.rs`, `mod.rs`, `draw.rs`, `settings.rs` |
-| M3 | Android shell: scan, pair, reconnect, version screen, theme | 14–17, 27 | `android/app`, `android/proto` |
-| M4 | Workspaces, sessions, enter, approve, Avisos | 12, 18–20, 28 | `android/app`, `crates/web/` |
+| M3 ✓ `b780318` | Android shell: scan, pair, reconnect, version screen, theme | 14–17, 27 | `android/app`, `android/proto` |
+| M4 ✓ `759cb97` | Workspaces, sessions, enter, approve, Avisos | 12, 18–20, 28 | `android/app`, `crates/web/` |
 | M5a ✓ `b03519e` | The VT emulator on the device (`android/term`), checked against the daemon's vt100 | 21 | `android/term`, `crates/jw/examples/cells.rs` |
 | M5 ✓ `38c846a` | Terminal surface, keys, leader sheet, resize | 21–24, 70, 71 | `android/term`, `android/app` |
-| M6a ✓ | The diff on the device and the merge of main's diff views: core's `Scope`, `Loaded::TooLarge` and `commits` now run under the W3 hardening; `diff{ws, scope}`, `commits{ws}` and ask-tagged errors in the bridge; the model and parser held to the daemon's serialiser by shared fixtures; the queued requests and their state in `Session`; the four diff colours of `ready.palettes`; `PROTOCOL` 14 | 13, 72, 73 | `android/proto`, `android/app/.../Session.kt`, `crates/core/src/diff.rs` |
+| M6a ✓ `0f8a4fd` | The diff on the device and the merge of main's diff views: core's `Scope`, `Loaded::TooLarge` and `commits` now run under the W3 hardening; `diff{ws, scope}`, `commits{ws}` and ask-tagged errors in the bridge; the model and parser held to the daemon's serialiser by shared fixtures; the queued requests and their state in `Session`; the four diff colours of `ready.palettes`; `PROTOCOL` 14 | 13, 72, 73 | `android/proto`, `android/app/.../Session.kt`, `crates/core/src/diff.rs` |
 | M6 ✓ `c4206a5` | Changes screen: the three views, files, hunks, add and delete colours, "viewed" | 25, 72–75 | `android/app` |
 | M7 ✓ `f58b042` | Touch targets (measured, then fixed), the keys as buttons for accessibility, a pane split from the phone keeps its `JW_*`, hygiene | 26, 76 | `android/app` |
 | L1 ✓ `87e38b9` | The wifi listener: `tls.rs`, the certificate, the wifi QR payload, `endpoints`, `MobileState` fields and `PROTOCOL` 12, no-wifi and no-cloudflared cases, `jw mobile` text | 56–58, 60, 61, 65 (CLI), 66–69 | `web/src/tls.rs`, `web/src/bridge.rs`, `daemon/src/mobile.rs`, `proto.rs`, `core/src/qr.rs`, `jw/src/mobile.rs` |
-| L2 ✓ | The Mobile modal: wifi and tunnel rows, tunnel state, route per phone | 65 | `tui/src/tui/mobile.rs`, `draw.rs` |
-| L3 ✓ | The app: pinning, endpoints store, route order and return, route in the status bar and settings, the wifi row in "no encuentro tu PC", both QR forms | 59, 62–64 | `android/proto`, `android/app` |
+| L2 ✓ `6395abf` | The Mobile modal: wifi and tunnel rows, tunnel state, route per phone | 65 | `tui/src/tui/mobile.rs`, `draw.rs` |
+| L3 ✓ `0bdd5a8` | The app: pinning, endpoints store, route order and return, route in the status bar and settings, the wifi row in "no encuentro tu PC", both QR forms | 59, 62–64 | `android/proto`, `android/app` |
 
 Order (L1 to L3, after the rest): L1 first (the app cannot be tried without it), then L2 and L3 in parallel. W1, W2, W3, D1, D2, T1 on the server track and M3 on the app track run in parallel; then M4 to M7. The work orders for the two agents that build them are `docs/specs/mobile-work/server.md` and `docs/specs/mobile-work/android.md`.
 
