@@ -882,8 +882,16 @@ impl Daemon {
         self.tell(stream);
     }
 
-    fn split(&self, beside: PaneId, dir: Dir, new: NewPane) -> Result<PaneId> {
+    fn split(&self, beside: PaneId, dir: Dir, mut new: NewPane) -> Result<PaneId> {
         let stream = self.stream_of(beside)?;
+        // A client that cannot work out the stream's `JW_*` variables (a phone) sends none: the new pane
+        // takes its neighbour's, which are the stream's, so `jw ls` and the hooks work in it.
+        if new.env.is_empty() {
+            let neighbour = lock(&self.panes).get(&beside).cloned();
+            if let Some(p) = neighbour {
+                new.env = lock(&p.started).env.clone();
+            }
+        }
         let leaf = self.start(&stream, new)?;
         self.add(&stream, leaf, |tree, leaf| {
             let (tree, missing) = tree.insert(beside, dir, leaf);

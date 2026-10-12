@@ -405,6 +405,40 @@ fn the_pane_gets_the_env_and_its_id() {
     read_until(&mut c, pane, &mut screen, &format!("[envs:{pane}]"));
 }
 
+/// Mobile REQ-76: a pane split from a phone, which sends no env, still gets its neighbour's `JW_*`.
+#[test]
+fn a_split_without_env_takes_its_neighbours() {
+    let d = Daemon::start();
+    let mut c = d.client();
+    let a = spawn(&mut c, "kin", "cat", 80, 24);
+    let mut new = cat();
+    new.cmd = Some("echo \"[$JW_NAME]\"; cat".into());
+    c.send(&ClientMsg::Split {
+        pane: a,
+        dir: Dir::Right,
+        new,
+    })
+    .unwrap();
+    let opened = loop {
+        if let DaemonMsg::Opened { pane } = next(&mut c) {
+            break pane;
+        }
+    };
+    // Attached to the stream, the pane's greeting comes as its Snapshot or as Output.
+    let _ = attach(&mut c, "kin", a);
+    let mut heard = String::new();
+    while !heard.contains("[kin]") {
+        match next(&mut c) {
+            DaemonMsg::Snapshot { pane, bytes, .. } | DaemonMsg::Output { pane, bytes }
+                if pane == opened =>
+            {
+                heard.push_str(&String::from_utf8_lossy(&bytes));
+            }
+            _ => {}
+        }
+    }
+}
+
 #[test]
 fn a_second_daemon_on_the_same_socket_refuses() {
     let d = Daemon::start();

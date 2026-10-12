@@ -129,6 +129,7 @@ supersedes:  []
 | 73 | IF a view's diff text passes `DIFF_CAP`, THEN the answer SHALL list its files without hunks and say how many there are, and the app SHALL say the view is too large to show and that the PC has it whole. IF General has no base (no default branch on origin), THEN the app SHALL say so and not show an empty list as if nothing had changed. |
 | 74 | THE app SHALL mark a file "viewed" against what it showed: the mark SHALL stop applying when the file's content, rename, status or reason it could not be read changes, and SHALL be dropped once the file is no longer in the view. |
 | 75 | THE app SHALL have a fourth tab, `diff`, showing the changes of the workspace last entered, or of the one picked by tapping the title (the picker is the finder's); WHERE none was entered or picked it SHALL say so. The workspace screen's `±` button and `^␣ d` SHALL open it for that workspace. |
+| 76 | WHEN a client's `Split` carries no `env`, the daemon SHALL start the new pane with the environment of the pane it splits, so a pane opened from a phone (which cannot work out the stream's `JW_*` variables) has `JW_NAME`, `JW_SESSION` and the rest. |
 
 ---
 
