@@ -236,20 +236,31 @@ pub struct Config {
     pub timings: Timings,
 }
 
+/// The wifi listener's own stop flag and thread. It is polled, not woken by a
+/// connection to itself: when the PC's address has gone (the network changed),
+/// a connect to it would leave through the routing table and might never come
+/// back, and the thread that waits for it would hang the stop or the rebind.
+struct Wifi {
+    addr: SocketAddr,
+    stop: Arc<AtomicBool>,
+    accept: JoinHandle<()>,
+}
+
+/// How often the wifi listener looks for a connection and for a stop.
+const WIFI_POLL: Duration = Duration::from_millis(50);
+
 /// Listening, and the connections it relays.
 pub struct Bridge {
     addr: SocketAddr,
     shared: Arc<Shared>,
     accept: Option<JoinHandle<()>>,
     /// The wifi listener, while there is one.
-    wifi: Mutex<Option<(SocketAddr, JoinHandle<()>)>>,
+    wifi: Mutex<Option<Wifi>>,
     daemon: PathBuf,
 }
 
 struct Shared {
     stopping: AtomicBool,
-    /// The wifi listener is being dropped: its accept loop ends, and not the bridge.
-    wifi_off: AtomicBool,
     next: AtomicU64,
     conns: Mutex<Vec<(u64, TcpStream)>>,
     store: Arc<Store>,
@@ -366,7 +377,6 @@ impl Bridge {
         let t = config.timings;
         let shared = Arc::new(Shared {
             stopping: AtomicBool::new(false),
-            wifi_off: AtomicBool::new(false),
             next: AtomicU64::new(0),
             conns: Mutex::new(Vec::new()),
             store: config.store,
@@ -383,7 +393,7 @@ impl Bridge {
         });
         let accept = {
             let shared = shared.clone();
-            thread::spawn(move || accept_loop(listener, daemon, shared, Route::Tunnel, None))
+            thread::spawn(move || accept_loop(listener, daemon, shared))
         };
         Ok(Self {
             addr,
@@ -408,30 +418,29 @@ impl Bridge {
         let addr = listener.local_addr()?;
         tls::check_addr(&addr)?;
         self.drop_wifi();
+        listener.set_nonblocking(true)?;
+        let stop = Arc::new(AtomicBool::new(false));
         let accept = {
-            let (shared, daemon) = (self.shared.clone(), self.daemon.clone());
-            thread::spawn(move || accept_loop(listener, daemon, shared, Route::Wifi, Some(config)))
+            let (shared, daemon, stop) = (self.shared.clone(), self.daemon.clone(), stop.clone());
+            thread::spawn(move || accept_wifi(listener, daemon, shared, config, stop))
         };
-        *lock(&self.wifi) = Some((addr, accept));
+        *lock(&self.wifi) = Some(Wifi { addr, stop, accept });
         Ok(addr)
     }
 
-    /// Stops listening on the wifi, and waits for the accept thread. The
-    /// phones already on it are left to end on their own.
+    /// Stops listening on the wifi, and waits for the accept thread, which
+    /// looks at its flag every [`WIFI_POLL`]. The phones already on it are left
+    /// to end on their own.
     pub fn drop_wifi(&self) {
-        let Some((addr, accept)) = lock(&self.wifi).take() else {
+        let Some(wifi) = lock(&self.wifi).take() else {
             return;
         };
-        // `accept` blocks; a connection to ourselves wakes it, and this one
-        // listener must stop and not the bridge, so the flag is a private one.
-        self.shared.wifi_off.store(true, Ordering::SeqCst);
-        let _ = TcpStream::connect(addr);
-        let _ = accept.join();
-        self.shared.wifi_off.store(false, Ordering::SeqCst);
+        wifi.stop.store(true, Ordering::SeqCst);
+        let _ = wifi.accept.join();
     }
 
     pub fn wifi_addr(&self) -> Option<SocketAddr> {
-        lock(&self.wifi).as_ref().map(|(a, _)| *a)
+        lock(&self.wifi).as_ref().map(|w| w.addr)
     }
 
     /// Tells every phone connected, and every one that connects, where else
@@ -491,12 +500,11 @@ impl Bridge {
     /// the threads: what has to happen before anything slow (REQ-9).
     pub fn close(&self) {
         self.shared.stopping.store(true, Ordering::SeqCst);
-        // `accept` blocks; a connection to ourselves wakes it.
-        let _ = TcpStream::connect(self.addr);
-        if let Some(addr) = self.wifi_addr() {
-            let _ = TcpStream::connect(addr);
-        }
+        // The phones go first (REQ-9): nothing below waits on the network.
         self.shared.close_all();
+        // The tunnel's `accept` blocks, and a connection to ourselves (loopback,
+        // so it always arrives) wakes it. The wifi listener polls its flag.
+        let _ = TcpStream::connect(self.addr);
     }
 
     /// Closes every connection and returns once their threads are done
@@ -507,8 +515,9 @@ impl Bridge {
         };
         self.close();
         let _ = accept.join();
-        if let Some((_, wifi)) = lock(&self.wifi).take() {
-            let _ = wifi.join();
+        if let Some(wifi) = lock(&self.wifi).take() {
+            wifi.stop.store(true, Ordering::SeqCst);
+            let _ = wifi.accept.join();
         }
     }
 }
@@ -519,17 +528,10 @@ impl Drop for Bridge {
     }
 }
 
-fn accept_loop(
-    listener: TcpListener,
-    daemon: PathBuf,
-    shared: Arc<Shared>,
-    route: Route,
-    tls: Option<Arc<ServerConfig>>,
-) {
+fn accept_loop(listener: TcpListener, daemon: PathBuf, shared: Arc<Shared>) {
     let mut conns: Vec<JoinHandle<()>> = Vec::new();
     for conn in listener.incoming() {
-        let dropped = route == Route::Wifi && shared.wifi_off.load(Ordering::SeqCst);
-        if shared.stopping.load(Ordering::SeqCst) || dropped {
+        if shared.stopping.load(Ordering::SeqCst) {
             break;
         }
         let Ok(stream) = conn else {
@@ -537,23 +539,70 @@ fn accept_loop(
             continue;
         };
         conns.retain(|h| !h.is_finished());
-        let (daemon, shared, tls) = (daemon.clone(), shared.clone(), tls.clone());
-        conns.push(thread::spawn(move || {
-            let Some(id) = shared.register(&stream) else {
-                return;
-            };
-            let _ = serve(stream, &shared, &daemon, route, tls);
-            shared.forget(id);
-        }));
+        conns.push(spawn_serve(stream, &daemon, &shared, Route::Tunnel, None));
     }
-    // Only the bridge stopping ends the phones; dropping the wifi listener
-    // leaves the ones on it, and the tunnel's, alone.
+    shared.close_all();
+    for h in conns {
+        let _ = h.join();
+    }
+}
+
+/// The wifi listener's accept loop: it polls, so a stop (the bridge's or this
+/// listener's own) is seen within [`WIFI_POLL`] whatever the network is doing.
+fn accept_wifi(
+    listener: TcpListener,
+    daemon: PathBuf,
+    shared: Arc<Shared>,
+    tls: Arc<ServerConfig>,
+    stop: Arc<AtomicBool>,
+) {
+    let mut conns: Vec<JoinHandle<()>> = Vec::new();
+    while !stop.load(Ordering::SeqCst) && !shared.stopping.load(Ordering::SeqCst) {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                // Where accepted sockets inherit it (macOS), non-blocking would
+                // make every read and its timeout mean something else.
+                if stream.set_nonblocking(false).is_err() {
+                    continue;
+                }
+                conns.retain(|h| !h.is_finished());
+                conns.push(spawn_serve(
+                    stream,
+                    &daemon,
+                    &shared,
+                    Route::Wifi,
+                    Some(tls.clone()),
+                ));
+            }
+            Err(e) if e.kind() == ErrorKind::WouldBlock => thread::sleep(WIFI_POLL),
+            Err(_) => thread::sleep(WIFI_POLL),
+        }
+    }
+    // Only the bridge stopping ends the phones on it; dropping this listener
+    // leaves them alone.
     if shared.stopping.load(Ordering::SeqCst) {
         shared.close_all();
         for h in conns {
             let _ = h.join();
         }
     }
+}
+
+fn spawn_serve(
+    stream: TcpStream,
+    daemon: &Path,
+    shared: &Arc<Shared>,
+    route: Route,
+    tls: Option<Arc<ServerConfig>>,
+) -> JoinHandle<()> {
+    let (daemon, shared) = (daemon.to_path_buf(), shared.clone());
+    thread::spawn(move || {
+        let Some(id) = shared.register(&stream) else {
+            return;
+        };
+        let _ = serve(stream, &shared, &daemon, route, tls);
+        shared.forget(id);
+    })
 }
 
 /// What a phone sends to be let in.
@@ -2506,7 +2555,10 @@ mod tests {
         w.rig.bridge.stop();
         closed(&mut p);
         assert!(t.elapsed() < Duration::from_secs(2), "{:?}", t.elapsed());
-        assert!(TcpStream::connect(w.addr).is_err() || w.rig.bridge.wifi_addr().is_none());
+        assert!(
+            TcpStream::connect(w.addr).is_err(),
+            "the wifi listener is gone"
+        );
     }
 
     #[test]
@@ -2535,21 +2587,76 @@ mod tests {
             },
             ..Opts::default()
         });
-        // A client that sends one byte of nonsense often enough that no single read times out.
-        let mut s = TcpStream::connect(w.addr).unwrap();
+        // A client that finishes the TLS handshake, then sends the HTTP upgrade
+        // one byte at a time, often enough that no single read times out.
+        let config = rustls::ClientConfig::builder_with_provider(provider())
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(Pin {
+                fp: w.fp.clone(),
+                algs: provider().signature_verification_algorithms,
+            }))
+            .with_no_client_auth();
+        let sock = TcpStream::connect(w.addr).unwrap();
+        sock.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let conn = rustls::ClientConnection::new(
+            Arc::new(config),
+            ServerName::try_from("jw-mobile.local").unwrap(),
+        )
+        .unwrap();
+        let mut wire = rustls::StreamOwned::new(conn, sock);
         let t = Instant::now();
-        let mut cut = false;
-        while t.elapsed() < Duration::from_secs(3) {
-            if io::Write::write_all(&mut s, b"\x16").is_err() {
-                cut = true;
+        let mut cut_at = None;
+        for b in b"GET / HTTP/1.1\r\nHost: x\r\nX-Slow: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            .iter()
+            .cycle()
+        {
+            if io::Write::write_all(&mut wire, &[*b])
+                .and_then(|_| io::Write::flush(&mut wire))
+                .is_err()
+            {
+                cut_at = Some(t.elapsed());
                 break;
             }
-            thread::sleep(Duration::from_millis(50));
+            if t.elapsed() > Duration::from_secs(3) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(30));
         }
-        assert!(cut || t.elapsed() < Duration::from_secs(3), "never cut off");
+        let cut_at = cut_at.expect("the trickle was never cut off");
+        assert!(
+            cut_at < Duration::from_millis(1500),
+            "cut at {cut_at:?}, preauth is 400 ms"
+        );
         wait_until("the seat was given back", || {
             w.rig.bridge.shared.preauth[Route::Wifi as usize].load(Ordering::SeqCst) == 0
         });
+    }
+
+    #[test]
+    fn dropping_and_stopping_the_wifi_do_not_wait_on_the_network() {
+        let mut w = rig_wifi(Opts::default());
+        let t = Instant::now();
+        w.rig.bridge.drop_wifi();
+        assert!(t.elapsed() < Duration::from_secs(1), "{:?}", t.elapsed());
+        assert!(TcpStream::connect(w.addr).is_err(), "the listener is gone");
+        // And again, and then a stop with a listener up.
+        let id = tls::load_or_create(w.rig.dir.path()).unwrap();
+        w.rig
+            .bridge
+            .add_wifi(TcpListener::bind("127.0.0.1:0").unwrap(), id.config)
+            .unwrap();
+        w.rig
+            .bridge
+            .add_wifi(
+                TcpListener::bind("127.0.0.1:0").unwrap(),
+                tls::load_or_create(w.rig.dir.path()).unwrap().config,
+            )
+            .unwrap();
+        let t = Instant::now();
+        w.rig.bridge.stop();
+        assert!(t.elapsed() < Duration::from_secs(1), "{:?}", t.elapsed());
     }
 
     #[test]

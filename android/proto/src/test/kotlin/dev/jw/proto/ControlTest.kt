@@ -65,4 +65,14 @@ class ControlTest {
         assertNull(QrPayload.parse("jw://host/${token.uppercase()}"))
         assertFalse(q.toString().contains(token))
     }
+
+    @Test fun endpointsFollowReadyAndAreIgnoredUntilTheAppUsesThem() {
+        // Exactly what the bridge sends after every `ready` (REQ-61), empty and filled.
+        val none = Control.parse("""{"lan":null,"t":"endpoints","tunnel":null}""")
+        assertTrue(none is ServerMessage.Other)
+        val some = Control.parse(
+            """{"lan":{"fp":"${"a".repeat(64)}","host":"192.168.1.23","port":48211},"t":"endpoints","tunnel":"a-b.trycloudflare.com"}""",
+        )
+        assertTrue(some is ServerMessage.Other)
+    }
 }
