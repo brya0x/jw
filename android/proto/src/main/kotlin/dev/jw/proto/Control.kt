@@ -43,7 +43,7 @@ sealed interface Hello {
     }
 }
 
-/** Palette roles from `ready.palettes` (or the built-in fallback), as `#rrggbb`. */
+/** Palette roles from `ready.palettes` (or the built-in fallback, the values of the TUI's One Dark and One Light), as `#rrggbb`. */
 class Palette(val roles: Map<String, String>) {
     operator fun get(role: String): String? = roles[role]
 }
@@ -56,6 +56,7 @@ class Palettes(val dark: Palette, val light: Palette, val themes: List<ThemeInfo
         val ROLES = listOf(
             "bg", "panel", "fg", "dim", "line", "sel",
             "blue", "green", "yellow", "red", "magenta", "cyan",
+            "add_bg", "del_bg", "add_word", "del_word",
         )
 
         /** One Dark and One Light, the roles of the approved prototype. */
@@ -66,6 +67,7 @@ class Palettes(val dark: Palette, val light: Palette, val themes: List<ThemeInfo
                     "dim" to "#5c6370", "line" to "#3e4451", "sel" to "#2c313a",
                     "blue" to "#61afef", "green" to "#98c379", "yellow" to "#e5c07b",
                     "red" to "#e06c75", "magenta" to "#c678dd", "cyan" to "#56b6c2",
+                    "add_bg" to "#37403d", "del_bg" to "#40343c", "add_word" to "#4e5f4b", "del_word" to "#67424a",
                 ),
             ),
             Palette(
@@ -74,6 +76,7 @@ class Palettes(val dark: Palette, val light: Palette, val themes: List<ThemeInfo
                     "dim" to "#a0a1a7", "line" to "#dbdbdc", "sel" to "#e5e5e6",
                     "blue" to "#4078f2", "green" to "#50a14f", "yellow" to "#c18401",
                     "red" to "#e45649", "magenta" to "#a626a4", "cyan" to "#0184bc",
+                    "add_bg" to "#e4eee4", "del_bg" to "#f7e5e3", "add_word" to "#c0dcc0", "del_word" to "#f3c2be",
                 ),
             ),
         )
@@ -133,6 +136,9 @@ sealed interface ServerMessage {
 
     class Sessions(val items: List<SessionInfo>) : ServerMessage
 
+    /** The answer to `diff{ws}` (REQ-13). */
+    class DiffAnswer(val diff: Diff) : ServerMessage
+
     /**
      * Where else the PC can be reached (REQ-61). Only what is valid is kept: a tunnel host must be a quick
      * tunnel, a wifi address a private IPv4 with a port and a 64-hex fingerprint; anything else is null.
@@ -167,6 +173,11 @@ object Control {
 
     fun sessions(): String = """{"t":"sessions"}"""
 
+    fun diff(ws: String): String = buildJsonObject {
+        put("t", "diff")
+        put("ws", ws)
+    }.toString()
+
     /** Null when the text is not a control message at all. */
     fun parse(text: String): ServerMessage? {
         val obj = try {
@@ -199,6 +210,7 @@ object Control {
                 "sessions" -> ServerMessage.Sessions(
                     dev.jw.proto.Workspaces.parseSessions(obj["items"] as? kotlinx.serialization.json.JsonArray),
                 )
+                "diff" -> Diff.parse(obj)?.let { ServerMessage.DiffAnswer(it) } ?: ServerMessage.Other(tag)
                 "endpoints" -> {
                     val lan = (obj["lan"] as? kotlinx.serialization.json.JsonObject)?.let { l ->
                         val host = l["host"]?.jsonPrimitive?.contentOrNull

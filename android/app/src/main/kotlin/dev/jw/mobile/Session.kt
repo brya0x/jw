@@ -16,6 +16,7 @@ import dev.jw.proto.Panes
 import dev.jw.proto.RefreshRule
 import dev.jw.proto.SessionInfo
 import dev.jw.proto.Workspace
+import dev.jw.proto.Diff
 import dev.jw.proto.Workspaces
 import dev.jw.proto.Palettes
 import dev.jw.proto.QrPayload
@@ -141,6 +142,24 @@ data class Model(
     val answered: Set<Long> = emptySet(),
 )
 
+/** The changes of one workspace on screen (M6, REQ-13). The words of a failure may name a path on the PC: shown, never logged. */
+sealed interface DiffState {
+    data object Idle : DiffState
+
+    /** Asked and waiting; `before` is the last answer for the same workspace, kept on screen while it refreshes. */
+    class Loading(val ws: String, val before: Diff? = null) : DiffState {
+        override fun toString() = "Loading"
+    }
+
+    class Loaded(val diff: Diff) : DiffState {
+        override fun toString() = "Loaded($diff)"
+    }
+
+    class Failed(val ws: String, val why: String) : DiffState {
+        override fun toString() = "Failed"
+    }
+}
+
 /** Where wss URLs come from; tests point it at MockWebServer. */
 fun interface Endpoint {
     fun url(host: String): String
@@ -178,6 +197,8 @@ class Session(
 
     private val _model = MutableStateFlow(Model())
     val model: StateFlow<Model> = _model.asStateFlow()
+    private val _diff = MutableStateFlow<DiffState>(DiffState.Idle)
+    val diff: StateFlow<DiffState> = _diff.asStateFlow()
     private val _toasts = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val toasts: SharedFlow<String> = _toasts.asSharedFlow()
 
@@ -275,6 +296,23 @@ class Session(
     fun requestSessions() = send(Outgoing.Text(Control.sessions()))
 
     /**
+     * Asks for the changes of workspace `ws` (REQ-13). The answer lands in [diff]; one that is for another
+     * workspace (an old ask) is dropped. A request the connection lost is asked again when it is back.
+     */
+    fun requestDiff(ws: String) {
+        val before = when (val d = _diff.value) {
+            is DiffState.Loaded -> d.diff.takeIf { it.ws == ws }
+            is DiffState.Loading -> d.before?.takeIf { it.ws == ws }
+            else -> null
+        }
+        _diff.value = DiffState.Loading(ws, before)
+        send(Outgoing.Text(Control.diff(ws)))
+    }
+
+    /** The changes screen is left: let go of the answer, which can be megabytes. */
+    fun clearDiff() { _diff.value = DiffState.Idle }
+
+    /**
      * y or n for `pane`. Sends once, and only while the latest `Panes` (at most 2 s old) says Waiting
      * for that pane (REQ-20); otherwise tells the person it is no longer waiting.
      */
@@ -357,6 +395,7 @@ class Session(
         job?.cancel()
         outbox = null
         _model.value = Model()
+        _diff.value = DiffState.Idle
         store.clear()
         routes = Routes(null, null)
         _state.value = UiState.Scan()
@@ -518,6 +557,7 @@ class Session(
                             out.trySend(Outgoing.Text(Control.sessions()))
                             out.trySend(Outgoing.Text(Control.workspaces(_model.value.session)))
                             out.trySend(Outgoing.Binary(Workspaces.listFrame()))
+                            (_diff.value as? DiffState.Loading)?.let { out.trySend(Outgoing.Text(Control.diff(it.ws))) }
                             // The screens come again as snapshots: the new one is the truth (REQ-15).
                             screens.clear()
                             exits.clear()
@@ -533,6 +573,11 @@ class Session(
                     is ServerMessage.Error -> {
                         // These two leave the connection open; anything else is followed by a close.
                         if (m.code == ErrorCode.READ_ONLY) _toasts.tryEmit("solo lectura")
+                        // Errors carry no request id: while a diff is asked, an `unsupported` is its answer, except `busy`
+                        // (a second ask while one runs: the first is still coming).
+                        if (m.code == ErrorCode.UNSUPPORTED && !m.msg.startsWith("busy")) {
+                            (_diff.value as? DiffState.Loading)?.let { _diff.value = DiffState.Failed(it.ws, m.msg) }
+                        }
                         if (m.code != ErrorCode.READ_ONLY && m.code != ErrorCode.UNSUPPORTED) {
                             a.failure = Failure.Bridge(m.code)
                             a.bridgeFailed = true
@@ -540,6 +585,7 @@ class Session(
                     }
                     is ServerMessage.Workspaces -> _model.update { it.copy(session = m.session, items = m.items) }
                     is ServerMessage.Sessions -> _model.update { it.copy(sessions = m.items) }
+                    is ServerMessage.DiffAnswer -> (_diff.value as? DiffState.Loading)?.takeIf { it.ws == m.diff.ws }?.let { _diff.value = DiffState.Loaded(m.diff) }
                     is ServerMessage.Other -> Unit
                 }
             }

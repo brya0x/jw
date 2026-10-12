@@ -1049,6 +1049,79 @@ mod tests {
         assert_eq!(f["hunks"][0]["lines"][1]["k"], "ctx");
     }
 
+    /// The phone app parses this very file (`android/proto/.../PhoneDiffTest`), so a field
+    /// renamed here breaks a test there and the other way round.
+    #[test]
+    fn the_answer_the_phone_parses_is_what_this_serialises() {
+        fn l(k: &'static str, text: &str, old: Option<u32>, new: Option<u32>) -> LineOut {
+            LineOut { k, text: text.into(), old, new }
+        }
+        fn f(path: &str, status: &'static str) -> FileOut {
+            FileOut {
+                path: path.into(),
+                old_path: None,
+                status,
+                binary: false,
+                added: 0,
+                deleted: 0,
+                truncated: false,
+                unreadable: None,
+                hunks: vec![],
+            }
+        }
+        let mut a = f("src/a.ts", "modified");
+        a.added = 2;
+        a.deleted = 1;
+        a.hunks = vec![HunkOut {
+            context: "export function track()".into(),
+            old_start: 1,
+            new_start: 1,
+            lines: vec![
+                l("ctx", "import x from 'y'", Some(1), Some(1)),
+                l("del", "const limit = 10", Some(2), None),
+                l("add", "const limit = 20", None, Some(2)),
+                l("add", "const extra = true", None, Some(3)),
+            ],
+        }];
+        let mut renamed = f("new.md", "renamed");
+        renamed.old_path = Some("old.md".into());
+        let mut gone = f("gone.txt", "deleted");
+        gone.deleted = 1;
+        gone.hunks = vec![HunkOut {
+            context: String::new(),
+            old_start: 1,
+            new_start: 0,
+            lines: vec![l("del", "bye", Some(1), None)],
+        }];
+        let mut img = f("img.png", "modified");
+        img.binary = true;
+        let mut link = f("link", "added");
+        link.unreadable = Some("symlink".into());
+        let mut big = f("big.rs", "added");
+        big.added = 5000;
+        big.truncated = true;
+        big.hunks = vec![HunkOut {
+            context: String::new(),
+            old_start: 0,
+            new_start: 1,
+            lines: vec![l("add", "fn main() {}…", None, Some(1))],
+        }];
+        let report = Report {
+            title: "demo vs origin/main".into(),
+            truncated: true,
+            files: vec![a, renamed, gone, img, link, big],
+        };
+        // The bridge adds `t` and `ws`.
+        let mut got = serde_json::to_value(&report).unwrap();
+        got["t"] = "diff".into();
+        got["ws"] = "w1".into();
+        let want: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../android/proto/src/test/resources/phone_diff.json"
+        ))
+        .unwrap();
+        assert_eq!(got, want);
+    }
+
     #[test]
     fn a_binary_file_has_no_hunks_and_the_statuses_have_their_words() {
         let mut b = file("img.png", 0, "");
