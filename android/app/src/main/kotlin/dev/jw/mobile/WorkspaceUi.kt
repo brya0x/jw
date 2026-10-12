@@ -143,9 +143,9 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
     val waiting = sel?.agent == AgentState.Waiting
     var shownAsk by remember(sel?.pane) { mutableStateOf<String?>(null) }
     var closedAsk by remember(sel?.pane) { mutableStateOf<String?>(null) }
-    val ask = remember(term, rev, waiting, shownAsk) { if (sel != null && (waiting || shownAsk != null)) term?.screenRows()?.let(AskText::from) else null }
+    val ask = remember(term, rev) { if (sel != null) term?.screenRows()?.let(AskText::from) else null }
     val askClosed = closedAsk?.takeIf { it == ask?.key() }
-    val fullAsk = ask?.takeIf { it.options.isNotEmpty() && it.key() != askClosed && (waiting || it.key() == shownAsk) }
+    val fullAsk = ask?.takeIf { it.options.isNotEmpty() && it.key() != askClosed && (waiting || it.key() == shownAsk || it.isPrompt) }
     LaunchedEffect(fullAsk?.key()) {
         shownAsk = fullAsk?.key()
         if (fullAsk != null) hideKeyboard()
@@ -189,9 +189,9 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
         }
         Box(Modifier.weight(1f).fillMaxWidth().onTapAnywhere(hideKeyboard)) {
             if (fullAsk != null && sel != null) {
-                val plan = chat?.blocks?.lastOrNull { it.kind == "tool" && it.name == "ExitPlanMode" && it.result == null }?.body
+                val plan = if (PLAN.containsMatchIn(fullAsk.question)) chat?.plan ?: chat?.blocks?.lastOrNull { it.kind == "tool" && it.name == "ExitPlanMode" && it.result == null }?.body else null
                 AskView(
-                    fullAsk, plan, sel.name ?: sel.role,
+                    fullAsk, plan, sel.name ?: sel.fg?.trimStart('-')?.takeIf { it != "zsh" && it != "bash" && it != "fish" } ?: sel.role,
                     onPick = { n -> session.input(sel.pane, Keys.text(n.toString())) },
                     onSend = { session.input(sel.pane, Keys.key(Key.Enter)) },
                     onOther = { text ->
@@ -281,8 +281,8 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
         val running = kind == PaneKind.Shell && shell?.running == true
         val chips = if (kind != PaneKind.Shell) emptyList() else if (running) listOf((shell?.blocks?.lastOrNull()?.cmd ?: "") to j.yellow)
             else listOfNotNull((sel?.cwd ?: w.path) to j.dim, w.branch.takeIf { w.kind == Kind.Worktree && it.isNotEmpty() }?.let { "⎇ $it" to j.magenta })
-        Composer(sel, state, session, remote = remote, live = PaneKinds.live(kind, remote), chips = chips, running = running)
-        StatusBar("TERM", j.green, sel?.let { "${it.role} · ${term?.let { t -> "${t.cols}×${t.rows}" } ?: "…"} · ^␣ menú" } ?: "sin paneles", route = state.route)
+        if (fullAsk == null) Composer(sel, state, session, remote = remote, live = PaneKinds.live(kind, remote), chips = chips, running = running)
+        if (fullAsk == null) StatusBar("TERM", j.green, sel?.let { "${it.role} · ${term?.let { t -> "${t.cols}×${t.rows}" } ?: "…"} · ^␣ menú" } ?: "sin paneles", route = state.route)
     }
 
     when (sheet) {
@@ -444,6 +444,9 @@ private fun Composer(
         ) { Text(if (stop) "■" else "↵", color = j.bg, fontWeight = FontWeight.Bold, fontSize = 16.sp) }
     }
 }
+
+/** A question about a plan: Claude asks to go ahead with the one it drafted. */
+private val PLAN = Regex("""(?i)\bplan\b""")
 
 /** How long the phone's input must have been still before a change in the terminal's replaces it. */
 private const val MIRROR_STILL_MS = 800L

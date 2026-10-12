@@ -24,6 +24,8 @@ const MAX_READ: u64 = 16 << 20;
 const TEXT_MAX: usize = 16 << 10;
 const BODY_MAX: usize = 4 << 10;
 const ARG_MAX: usize = 200;
+/// The most bytes of a plan file that are read.
+const PLAN_MAX: u64 = 64 << 10;
 
 /// The session a pane's agent runs, from the command that started it
 /// (`claude --session-id <uuid> …`, or `--resume <uuid>`).
@@ -105,6 +107,7 @@ pub struct Changes {
     pub title: Option<String>,
     pub turn: Option<ChatTurn>,
     pub bg: Option<u32>,
+    pub plan: Option<String>,
     pub blocks: Vec<ChatBlock>,
 }
 
@@ -133,6 +136,9 @@ pub struct Tail {
     bg_started: u32,
     bg_ended: u32,
     notices: HashSet<String>,
+    /// The name Claude gives the conversation's plan file (`<config>/plans/<slug>.md`), and what that file held when last read.
+    slug: Option<String>,
+    plan: Option<(std::time::SystemTime, String)>,
 }
 
 impl Tail {
@@ -153,12 +159,38 @@ impl Tail {
             bg_started: 0,
             bg_ended: 0,
             notices: HashSet::new(),
+            slug: None,
+            plan: None,
         }
     }
 
     /// The turn Claude is in, once the person has said something.
     pub fn turn(&self) -> Option<ChatTurn> {
         self.turn.clone()
+    }
+
+    /// The plan Claude drafted for this conversation, read from its plan file.
+    pub fn plan(&self) -> Option<String> {
+        self.plan.as_ref().map(|(_, t)| t.clone())
+    }
+
+    /// Reads the plan file again when it changed; the text is news when it did.
+    fn read_plan(&mut self) -> Option<String> {
+        let file = config_dir()?
+            .join("plans")
+            .join(format!("{}.md", self.slug.as_deref()?));
+        let at = std::fs::metadata(&file).and_then(|m| m.modified()).ok()?;
+        if self.plan.as_ref().is_some_and(|(seen, _)| *seen == at) {
+            return None;
+        }
+        let mut text = String::new();
+        File::open(&file)
+            .ok()?
+            .take(PLAN_MAX)
+            .read_to_string(&mut text)
+            .ok()?;
+        self.plan = Some((at, text.clone()));
+        Some(text)
     }
 
     /// Background tasks and subagents started that have not ended.
@@ -187,8 +219,14 @@ impl Tail {
         self.blocks[self.blocks.len().saturating_sub(n)..].to_vec()
     }
 
-    /// Reads what was appended since the last read.
+    /// Reads what was appended since the last read, and the plan file when it changed.
     pub fn poll(&mut self) -> Changes {
+        let mut changes = self.poll_blocks();
+        changes.plan = self.read_plan();
+        changes
+    }
+
+    fn poll_blocks(&mut self) -> Changes {
         let Some(path) = self.path.clone() else {
             return Changes::default();
         };
@@ -201,7 +239,7 @@ impl Tail {
         if len < self.offset {
             // Rewritten from the start (a `/clear`, a compaction): begin again.
             *self = Self::new(Some(path));
-            return self.poll();
+            return self.poll_blocks();
         }
         if self.offset == 0 && len > MAX_READ {
             self.offset = len - MAX_READ;
@@ -244,6 +282,7 @@ impl Tail {
                 None
             },
             bg: (self.bg() != before_bg).then(|| self.bg()),
+            plan: None,
             blocks: touched
                 .iter()
                 .filter_map(|i| i.checked_sub(self.base))
@@ -271,6 +310,13 @@ impl Tail {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             return;
         };
+        let slug = v["slug"]
+            .as_str()
+            .filter(|s| !s.is_empty() && !s.contains(['/', '\\', '.']));
+        if let Some(slug) = slug.filter(|s| self.slug.as_deref() != Some(*s)) {
+            self.slug = Some(slug.to_string());
+            self.plan = None;
+        }
         match v["type"].as_str() {
             Some("custom-title") => {
                 if let Some(t) = v["customTitle"].as_str().filter(|t| !t.trim().is_empty()) {
@@ -972,5 +1018,32 @@ mod tests {
         assert_eq!(blocks[0].name, "ExitPlanMode");
         assert_eq!(blocks[0].body.as_deref(), Some("1. Daemon\n2. App"));
         assert_eq!(blocks[0].result, None);
+    }
+
+    #[test]
+    fn the_plan_file_named_by_the_conversations_slug_is_news_when_it_changes() {
+        let _g = CONFIG.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(cfg.path().join("plans")).unwrap();
+        std::fs::write(cfg.path().join("plans/valiant-owl.md"), "# Plan\n1. Daemon").unwrap();
+        // SAFETY: the tests that set this variable take turns on CONFIG.
+        unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", cfg.path()) };
+        let (mut t, _b, _d) =
+            tail_of(&[r#"{"type":"user","slug":"valiant-owl","message":{"content":"hola"}}"#]);
+        // `tail_of` polled once: the plan is held, and it is not news again until the file changes.
+        assert_eq!(t.plan().as_deref(), Some("# Plan\n1. Daemon"));
+        assert_eq!(t.poll().plan, None);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(
+            cfg.path().join("plans/valiant-owl.md"),
+            "# Plan\n1. Daemon\n2. App",
+        )
+        .unwrap();
+        assert_eq!(t.poll().plan.as_deref(), Some("# Plan\n1. Daemon\n2. App"));
+        // A slug that is a path is not followed.
+        let (t2, _b, _d) =
+            tail_of(&[r#"{"type":"user","slug":"../x","message":{"content":"hola"}}"#]);
+        assert_eq!(t2.plan(), None);
+        unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") };
     }
 }

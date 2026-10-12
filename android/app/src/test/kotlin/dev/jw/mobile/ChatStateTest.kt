@@ -96,4 +96,12 @@ class ChatStateTest {
         assertNull(c.turn)
         assertEquals(0, c.bg)
     }
+
+    @Test fun thePlanStaysUntilANewOneComesOrTheChatStartsAgain() {
+        val a = ChatState.merge(null, PaneEvent.Chat(7, true, null, null, true, emptyList(), plan = "# Plan"))
+        assertEquals("# Plan", a.plan)
+        assertEquals("# Plan", ChatState.merge(a, event(false, block(1))).plan)
+        assertEquals("# Otro", ChatState.merge(a, PaneEvent.Chat(7, true, null, null, false, emptyList(), plan = "# Otro")).plan)
+        assertNull(ChatState.merge(a, event(true, block(2))).plan)
+    }
 }

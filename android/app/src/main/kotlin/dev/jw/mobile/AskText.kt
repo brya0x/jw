@@ -8,7 +8,10 @@ package dev.jw.mobile
 class AskOption(val number: Int, val label: String, val description: String, val selected: Boolean, val checked: Boolean? = null)
 
 /** What an agent that waits is asking: the question and its numbered choices, read off its screen. */
-class AskText(val question: String, val options: List<AskOption>) {
+class AskText(val question: String, val options: List<AskOption>, val atBottom: Boolean = false) {
+    /** An agent's own selection (not a numbered list in its output): the cursor is on a choice and the choices end the screen. */
+    val isPrompt get() = atBottom && options.any { it.selected }
+
     /** Several choices can be marked: the options have check boxes. */
     val multi get() = options.any { it.checked != null }
 
@@ -20,9 +23,10 @@ class AskText(val question: String, val options: List<AskOption>) {
         private val CONFIRM = Regex("""(\(y/n\)|\[y/n]|\[Y/n]|\[y/N]|\(Y/n\)|\(y/N\))""")
         private val BOX = Regex("""^[\s│┃|╭╮╰╯┌┐└┘─━═╌┄\-]*$""")
         private val OTHER = Regex("""(?i)(type something|other|chat about this|escribe)""")
-        private val HINT = Regex("""(?i)(enter to|esc to|↑/↓|to navigate|to select|to cancel)""")
+        private val HINT = Regex("""(?i)(enter to|esc to|↑/↓|to navigate|to select|to cancel|shift\+tab|ctrl\+[a-z])""")
         private const val MAX_QUESTION_LINES = 3
         private const val MAX_DESCRIPTION_LINES = 3
+        private const val MAX_AFTER = 6
 
         /** Without the frame an agent draws round its dialog. */
         private fun clean(row: String) = row.trim().trim('│', '┃', '|').trim()
@@ -75,7 +79,8 @@ class AskText(val question: String, val options: List<AskOption>) {
                 question.add(0, l)
                 q--
             }
-            return AskText(question.joinToString("\n"), options)
+            val after = lines.drop(at.last() + 1).count { it.isNotEmpty() && !BOX.matches(it) }
+            return AskText(question.joinToString("\n"), options, atBottom = after <= MAX_AFTER)
         }
     }
 }

@@ -9,6 +9,8 @@ class ChatState(
     val known: Boolean, val name: String?, val title: String?, val blocks: List<ChatBlock>,
     /** The turn in progress and the background tasks that have not ended (REQ-96, REQ-97). */
     val turn: ChatTurn? = null, val bg: Int = 0,
+    /** The plan Claude drafted for the conversation, when the PC sent it (REQ-95). */
+    val plan: String? = null,
 ) {
     companion object {
         /** The most blocks held; the oldest go first. */
@@ -20,10 +22,11 @@ class ChatState(
             val name = e.name ?: old?.name
             val turn = e.turn ?: old?.turn.takeIf { !e.reset }
             val bg = e.bg ?: old?.bg?.takeIf { !e.reset } ?: 0
-            if (e.reset || old == null) return ChatState(e.known, name, title, e.blocks.sortedBy { it.i }.takeLast(KEEP), turn, bg)
+            val plan = e.plan ?: old?.plan?.takeIf { !e.reset }
+            if (e.reset || old == null) return ChatState(e.known, name, title, e.blocks.sortedBy { it.i }.takeLast(KEEP), turn, bg, plan)
             val byNumber = old.blocks.associateByTo(java.util.TreeMap()) { it.i }
             for (b in e.blocks) byNumber[b.i] = b
-            return ChatState(old.known, name, title, byNumber.values.toList().takeLast(KEEP), turn, bg)
+            return ChatState(old.known, name, title, byNumber.values.toList().takeLast(KEEP), turn, bg, plan)
         }
     }
 }

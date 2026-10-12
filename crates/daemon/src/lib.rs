@@ -271,6 +271,7 @@ impl ChatWatch {
             title: news.title,
             turn: news.turn,
             bg: news.bg,
+            plan: news.plan,
             reset: false,
             blocks: news.blocks,
         })
@@ -289,6 +290,7 @@ impl ChatWatch {
             title: self.tail.title().map(str::to_string),
             turn: self.tail.turn(),
             bg: Some(self.tail.bg()),
+            plan: self.tail.plan(),
             reset: true,
             blocks: self.tail.last(chat::FIRST),
         }

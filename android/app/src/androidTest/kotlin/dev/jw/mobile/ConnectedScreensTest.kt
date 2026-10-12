@@ -64,7 +64,7 @@ class ConnectedScreensTest {
             MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
                 override fun onMessage(webSocket: WebSocket, text: String) {
                     if (text.contains("\"auth\"")) {
-                        webSocket.send("""{"t":"ready","bridge":1,"protocol":22,"read_only":false}""")
+                        webSocket.send("""{"t":"ready","bridge":1,"protocol":23,"read_only":false}""")
                         webSocket.send(workspaces)
                         webSocket.send("""{"t":"sessions","items":[{"name":"main","workspaces":4},{"name":"work","workspaces":1}]}""")
                     }

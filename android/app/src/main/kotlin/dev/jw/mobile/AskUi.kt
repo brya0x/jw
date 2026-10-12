@@ -135,7 +135,7 @@ private fun Choice(o: AskOption, multi: Boolean, onTap: () -> Unit) {
         Modifier.fillMaxWidth().heightIn(min = 64.dp).background(if (on) j.sel else j.panel, shape)
             .border(BorderStroke(if (on) 2.dp else 1.dp, if (on) j.blue else j.line), shape)
             .clickable(role = Role.Button, onClick = onTap).padding(horizontal = 14.dp, vertical = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically,
     ) {
         val mark: Color = if (on) j.blue else j.dim
         Box(

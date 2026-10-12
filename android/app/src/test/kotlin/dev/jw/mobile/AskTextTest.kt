@@ -72,4 +72,26 @@ class AskTextTest {
         assertEquals(listOf(false, true, true, false), a.options.map { it.checked })
         assertEquals(listOf("Daemon", "App", "Spec", "Tests"), a.options.map { it.label })
     }
+
+    @Test fun aPlanPromptWhileTheAgentIsIdleIsAPromptAndAListInOutputIsNot() {
+        val plan = AskText.from(
+            listOf(
+                "─────────────────────────",
+                " Claude has written up a plan and is ready to execute. Would you like to proceed?",
+                "",
+                " ❯ 1. Yes, and use auto mode",
+                "   2. Yes, manually approve edits",
+                "   3. Tell Claude what to change",
+                "      shift+tab to approve with this feedback",
+                "",
+                " ctrl+g to edit in VS Code · ~/.claude/plans/valiant-nibbling-owl.md",
+            ),
+        )!!
+        assertEquals(true, plan.isPrompt)
+        assertEquals(listOf("Yes, and use auto mode", "Yes, manually approve edits", "Tell Claude what to change"), plan.options.map { it.label })
+        assertEquals("", plan.options[2].description)
+        // A numbered list in what Claude wrote has no cursor on it.
+        val list = AskText.from(listOf("Steps:", "1. install", "2. build", "3. run", "", "done"))
+        assertEquals(false, list?.isPrompt ?: false)
+    }
 }
