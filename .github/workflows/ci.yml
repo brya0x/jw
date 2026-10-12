@@ -74,7 +74,9 @@ jobs:
           java-version: 17
       # Installs the Android SDK and licenses on the runner; Gradle fetches the
       # platform and build tools the project asks for.
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
+        with:
+          log-accepted-android-sdk-licenses: false
       - uses: gradle/actions/setup-gradle@v5
         with:
           # Only main writes the cache; PRs read it.
