@@ -37,6 +37,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.ui.draw.drawBehind
+import kotlinx.coroutines.delay
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -54,7 +57,10 @@ import dev.jw.proto.ChatBlock
  * pane's name. The view stays on the last block until the person scrolls up.
  */
 @Composable
-fun ChatView(chat: ChatState, fallbackTitle: String, paneName: String, waiting: Boolean, modifier: Modifier = Modifier) {
+fun ChatView(
+    chat: ChatState, fallbackTitle: String, paneName: String, waiting: Boolean, working: Boolean = false, onStop: () -> Unit = {},
+    modifier: Modifier = Modifier,
+) {
     val j = LocalJw.current
     val list = rememberLazyListState()
     val open = remember { mutableStateMapOf<Int, Boolean>() }
@@ -63,9 +69,11 @@ fun ChatView(chat: ChatState, fallbackTitle: String, paneName: String, waiting: 
     // the list still at its top) says nothing about the person, so it is skipped.
     LaunchedEffect(list) { snapshotFlow { list.isScrollInProgress }.drop(1).collect { if (!it) stick = !list.canScrollForward } }
     val last = chat.blocks.lastOrNull()
-    LaunchedEffect(chat.blocks.size, last?.i, last?.result) {
+    // After the blocks: the tasks still running and the live row while the agent works.
+    val extras = (if (chat.bg > 0) 1 else 0) + (if (working) 1 else 0)
+    LaunchedEffect(chat.blocks.size, last?.i, last?.result, extras) {
         if (stick && chat.blocks.isNotEmpty()) {
-            list.scrollToItem(chat.blocks.size - 1)
+            list.scrollToItem(chat.blocks.size - 1 + extras)
             // A last block taller than the view is shown by its end, not its start.
             list.scrollBy(LAST_LINE)
         }
@@ -100,11 +108,17 @@ fun ChatView(chat: ChatState, fallbackTitle: String, paneName: String, waiting: 
                 items(chat.blocks, key = { it.i }) { b ->
                     when (b.kind) {
                         "user" -> UserBubble(b.text)
-                        "text" -> Text(inlineCode(b.text, j), color = j.fg, fontSize = 12.5.sp, lineHeight = 19.sp)
+                        "text" -> Text(
+                            inlineCode(b.text + if (working && b.i == last?.i) " ▍" else "", j), color = j.fg, fontSize = 12.5.sp, lineHeight = 19.sp,
+                        )
+                        "notice" -> NoticeRow(b)
+                        "queued" -> QueuedBubble(b.text)
                         "think" -> Text("✻ pensó ${b.result ?: ""}".trim(), color = j.dim, fontSize = 11.5.sp)
-                        "tool" -> ToolCard(b, open[b.i] == true, b.i == pending) { open[b.i] = open[b.i] != true }
+                        "tool" -> ToolCard(b, open[b.i] == true, b.i == pending, running = working && b.i != pending) { open[b.i] = open[b.i] != true }
                     }
                 }
+                if (chat.bg > 0) item(key = "bg") { BackgroundRow(chat.bg) }
+                if (working) item(key = "live") { LiveRow(chat.turn, writing = last?.kind == "text", onStop) }
             }
         }
     }
@@ -122,7 +136,7 @@ private fun UserBubble(text: String) {
 }
 
 @Composable
-private fun ToolCard(b: ChatBlock, open: Boolean, pending: Boolean, onToggle: () -> Unit) {
+private fun ToolCard(b: ChatBlock, open: Boolean, pending: Boolean, running: Boolean = false, onToggle: () -> Unit) {
     val j = LocalJw.current
     Column(Modifier.fillMaxWidth().background(j.panel, RoundedCornerShape(8.dp)).border(BorderStroke(1.dp, j.line), RoundedCornerShape(8.dp))) {
         Row(
@@ -136,6 +150,7 @@ private fun ToolCard(b: ChatBlock, open: Boolean, pending: Boolean, onToggle: ()
             val result = b.result
             val (label, color) = when {
                 pending -> "espera permiso" to j.yellow
+                result == null && running -> "◌ en curso" to j.yellow
                 b.error -> (result ?: "falló") to j.red
                 result != null -> result to j.dim
                 else -> "…" to j.dim
@@ -184,3 +199,85 @@ internal fun PaneChip(name: String, color: Color) {
         Text(name, color = j.dim, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
+
+/** A subagent or a background task that ended (REQ-97): a bar and an icon of the status colour, its title and what ran it. */
+@Composable
+private fun NoticeRow(b: ChatBlock) {
+    val j = LocalJw.current
+    val (icon, color, word) = when (b.name) {
+        "done" -> Triple("✓", j.green, "listo")
+        "stopped" -> Triple("■", j.dim, "detenida")
+        else -> Triple("✕", j.red, "falló")
+    }
+    val what = if (b.arg == "agent") "subagente" else "tarea en segundo plano"
+    val shape = RoundedCornerShape(8.dp)
+    Row(
+        Modifier.fillMaxWidth().background(j.panel, shape).border(BorderStroke(1.dp, j.line), shape).drawBehind { drawRect(color, size = androidx.compose.ui.geometry.Size(3.dp.toPx(), size.height)) }
+            .padding(horizontal = 12.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(icon, color = color, fontSize = 14.sp)
+        Column(Modifier.weight(1f)) {
+            Text(b.text, color = j.fg, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(listOfNotNull(what, if (b.name == "done") "terminó" else word, b.result).joinToString(" · "), color = j.dim, fontSize = 10.5.sp)
+        }
+        Text(word, color = color, fontSize = 10.5.sp)
+    }
+}
+
+/** A message the person sent while the agent works: it is the person's when the turn takes it (REQ-97). */
+@Composable
+private fun QueuedBubble(text: String) {
+    val j = LocalJw.current
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
+        Column(
+            Modifier.fillMaxWidth(0.88f).background(j.sel, RoundedCornerShape(10.dp, 10.dp, 2.dp, 10.dp))
+                .border(BorderStroke(1.dp, j.line), RoundedCornerShape(10.dp, 10.dp, 2.dp, 10.dp)).padding(horizontal = 10.dp, vertical = 8.dp),
+        ) {
+            Text("en cola · se envía cuando Claude termine", color = j.yellow, fontSize = 10.5.sp)
+            Text(text, color = j.dim, fontSize = 12.5.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 3.dp))
+        }
+    }
+}
+
+@Composable
+private fun BackgroundRow(n: Int) {
+    val j = LocalJw.current
+    Row(
+        Modifier.fillMaxWidth().background(j.sel, RoundedCornerShape(10.dp)).border(BorderStroke(1.dp, j.line), RoundedCornerShape(10.dp)).padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text("◌", color = j.yellow, fontSize = 14.sp)
+        Text(if (n == 1) "1 tarea en segundo plano" else "$n tareas en segundo plano", color = j.fg, fontSize = 12.sp)
+    }
+}
+
+/**
+ * The live row (REQ-96): `Pensando…` or, while Claude's text is the last block, `Escribiendo…`, with the seconds since the
+ * person's message and the output tokens, and a stop that sends Esc.
+ */
+@Composable
+private fun LiveRow(turn: dev.jw.proto.ChatTurn?, writing: Boolean, onStop: () -> Unit) {
+    val j = LocalJw.current
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) { while (true) { delay(1000); now = System.currentTimeMillis() } }
+    val pulse = androidx.compose.animation.core.rememberInfiniteTransition(label = "live")
+    val alpha by pulse.animateFloat(
+        0.35f, 1f, androidx.compose.animation.core.infiniteRepeatable(androidx.compose.animation.core.tween(1200), androidx.compose.animation.core.RepeatMode.Reverse), label = "alpha",
+    )
+    Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text("✻", color = j.magenta.copy(alpha = alpha), fontSize = 16.sp)
+        Text(if (writing) "Escribiendo…" else "Pensando…", color = j.magenta, fontSize = 12.5.sp)
+        val secs = turn?.let { ((now - it.since) / 1000).coerceAtLeast(0) }
+        val detail = listOfNotNull(secs?.let { "$it s" }, turn?.tokens?.takeIf { it > 0 }?.let { "↓ ${tokens(it)} tokens" }).joinToString(" · ")
+        if (detail.isNotEmpty()) Text(detail, color = j.dim, fontSize = 11.sp, modifier = Modifier.weight(1f)) else Box(Modifier.weight(1f))
+        Text(
+            "■ parar", color = j.red, fontSize = 11.sp,
+            modifier = Modifier.heightIn(min = 36.dp).clickable(role = Role.Button, onClickLabel = "Interrumpir con Escape", onClick = onStop)
+                .background(j.panel, RoundedCornerShape(18.dp)).border(BorderStroke(1.dp, j.line), RoundedCornerShape(18.dp)).padding(horizontal = 12.dp, vertical = 10.dp),
+        )
+    }
+}
+
+/** Tokens as a short count: 1,4k. */
+internal fun tokens(n: Long): String = if (n < 1000) "$n" else "%.1fk".format(java.util.Locale.ROOT, n / 1000.0).replace('.', ',')

@@ -4,7 +4,7 @@ import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 
 /** The protocol this app was built for; `ready.protocol` must equal it. */
-const val PROTOCOL: Int = 21
+const val PROTOCOL: Int = 22
 
 /** One jw-proto frame as a WebSocket binary message: `write_frame` minus the 4-byte length. */
 sealed interface Frame {

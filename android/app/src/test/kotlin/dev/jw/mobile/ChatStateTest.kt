@@ -80,4 +80,20 @@ class ChatStateTest {
     @Test fun aPaneThatIsNoClaudeSessionIsKnownFalse() {
         assertEquals(false, ChatState.merge(null, event(true, known = false)).known)
     }
+
+    @Test fun theTurnAndTheBackgroundTasksStayUntilThePcSaysAnother() {
+        val a = ChatState.merge(null, PaneEvent.Chat(7, true, null, null, true, listOf(block(0)), dev.jw.proto.ChatTurn(1000, 42), 2))
+        assertEquals(42L, a.turn?.tokens)
+        assertEquals(2, a.bg)
+        // A message with neither is no news: both stay.
+        val b = ChatState.merge(a, event(false, block(1)))
+        assertEquals(1000L, b.turn?.since)
+        assertEquals(2, b.bg)
+        // The tasks ended: the PC says 0.
+        assertEquals(0, ChatState.merge(b, PaneEvent.Chat(7, true, null, null, false, emptyList(), null, 0)).bg)
+        // A reset that says nothing of them starts them again.
+        val c = ChatState.merge(b, event(true, block(5)))
+        assertNull(c.turn)
+        assertEquals(0, c.bg)
+    }
 }

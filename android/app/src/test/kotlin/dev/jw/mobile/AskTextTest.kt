@@ -23,7 +23,8 @@ class AskTextTest {
             ),
         )!!
         assertEquals("Bash command\nrm -rf build\nDo you want to proceed?", a.question)
-        assertEquals(listOf("1. Yes", "2. Yes, and don't ask", "3. No, and tell Claude"), a.options.map { it.label })
+        assertEquals(listOf("Yes", "Yes, and don't ask", "No, and tell Claude"), a.options.map { it.label })
+        assertEquals(listOf(1, 2, 3), a.options.map { it.number })
         assertEquals(listOf(true, false, false), a.options.map { it.selected })
     }
 
@@ -41,6 +42,34 @@ class AskTextTest {
     @Test fun theLastQuestionOnTheScreenWins() {
         val a = AskText.from(listOf("Old?", "❯ 1. A", "  2. B", "", "New?", "❯ 1. C", "  2. D"))!!
         assertEquals("New?", a.question)
-        assertEquals(listOf("1. C", "2. D"), a.options.map { it.label })
+        assertEquals(listOf("C", "D"), a.options.map { it.label })
+    }
+
+    @Test fun descriptionsUnderTheChoicesBelongToThem() {
+        val a = AskText.from(
+            listOf(
+                "How should the blocks be drawn?",
+                "",
+                "❯ 1. One terminal per block",
+                "     Each command keeps its bytes.",
+                "  2. Plain text",
+                "     Only the screen's lines.",
+                "  3. Type something.",
+                "",
+                "Enter to select · ↑/↓ to navigate · Esc to cancel",
+            ),
+        )!!
+        assertEquals("How should the blocks be drawn?", a.question)
+        assertEquals(listOf("One terminal per block", "Plain text", "Type something."), a.options.map { it.label })
+        assertEquals(listOf("Each command keeps its bytes.", "Only the screen's lines.", ""), a.options.map { it.description })
+        assertEquals(3, a.other?.number)
+        assertEquals(false, a.multi)
+    }
+
+    @Test fun checkBoxesMakeItAQuestionOfSeveralChoices() {
+        val a = AskText.from(listOf("What should it cover?", "❯ 1. [ ] Daemon", "  2. [✔] App", "  3. [x] Spec", "  4. [ ] Tests"))!!
+        assertEquals(true, a.multi)
+        assertEquals(listOf(false, true, true, false), a.options.map { it.checked })
+        assertEquals(listOf("Daemon", "App", "Spec", "Tests"), a.options.map { it.label })
     }
 }

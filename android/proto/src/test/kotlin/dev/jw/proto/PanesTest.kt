@@ -87,6 +87,22 @@ class PanesTest {
         assertNull((Panes.parse(Frame.Json("""{"t":"Chat","pane":7,"known":true,"name":null,"title":null,"reset":true,"blocks":[]}""")) as PaneEvent.Chat).name)
     }
 
+    @Test fun theChatCarriesTheTurnTheTasksAndTheNewKindsOfBlock() {
+        val c = Panes.parse(
+            Frame.Json(
+                """{"t":"Chat","pane":7,"known":true,"turn":{"since":1791828000500,"tokens":42},"bg":2,"reset":false,"blocks":[
+                {"i":3,"kind":"notice","text":"Scout","name":"done","arg":"agent","result":"19 s","body":null,"error":false},
+                {"i":4,"kind":"queued","text":"y esto","name":"","arg":"","result":null,"body":null,"error":false}]}""",
+            ),
+        ) as PaneEvent.Chat
+        assertEquals(1791828000500L, c.turn?.since); assertEquals(42L, c.turn?.tokens); assertEquals(2, c.bg)
+        assertEquals(listOf("notice", "queued"), c.blocks.map { it.kind })
+        assertEquals("done", c.blocks[0].name); assertEquals("19 s", c.blocks[0].result)
+        // Neither says nothing: they are not news.
+        val none = Panes.parse(Frame.Json("""{"t":"Chat","pane":7,"known":true,"reset":false,"blocks":[]}""")) as PaneEvent.Chat
+        assertNull(none.turn); assertNull(none.bg)
+    }
+
     @Test fun parsesWhatAShellSaysOfItselfAndItsCommands() {
         val s = Panes.parse(
             Frame.Json(

@@ -136,6 +136,20 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
     }
     val shell = remember(rev, shellPane) { shellPane?.let(session::shell) }
     val kind = sel?.let { PaneKinds.of(it, chat, shell) } ?: PaneKind.Text
+    // What an agent that waits asks, read off its screen (REQ-95): a question with choices is the whole pane. The one the person
+    // closed with Esc stays closed while it is on the screen, and one that is open stays until the screen no longer shows it
+    // (the daemon takes the agent out of Waiting at the first key, and marking several choices takes several).
+    val scope = rememberCoroutineScope()
+    val waiting = sel?.agent == AgentState.Waiting
+    var shownAsk by remember(sel?.pane) { mutableStateOf<String?>(null) }
+    var closedAsk by remember(sel?.pane) { mutableStateOf<String?>(null) }
+    val ask = remember(term, rev, waiting, shownAsk) { if (sel != null && (waiting || shownAsk != null)) term?.screenRows()?.let(AskText::from) else null }
+    val askClosed = closedAsk?.takeIf { it == ask?.key() }
+    val fullAsk = ask?.takeIf { it.options.isNotEmpty() && it.key() != askClosed && (waiting || it.key() == shownAsk) }
+    LaunchedEffect(fullAsk?.key()) {
+        shownAsk = fullAsk?.key()
+        if (fullAsk != null) hideKeyboard()
+    }
     DisposableEffect(w.id) { onDispose { nav.previous = w.id } }
     BackHandlerFor(sheet != Sheet.None) { sheet = Sheet.None }
 
@@ -174,12 +188,32 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
             }
         }
         Box(Modifier.weight(1f).fillMaxWidth().onTapAnywhere(hideKeyboard)) {
-            if (sel == null) {
+            if (fullAsk != null && sel != null) {
+                val plan = chat?.blocks?.lastOrNull { it.kind == "tool" && it.name == "ExitPlanMode" && it.result == null }?.body
+                AskView(
+                    fullAsk, plan, sel.name ?: sel.role,
+                    onPick = { n -> session.input(sel.pane, Keys.text(n.toString())) },
+                    onSend = { session.input(sel.pane, Keys.key(Key.Enter)) },
+                    onOther = { text ->
+                        val other = fullAsk.other
+                        scope.launch {
+                            if (other != null) { session.input(sel.pane, Keys.text(other.number.toString())); delay(250) }
+                            session.input(sel.pane, Keys.text(text))
+                            session.input(sel.pane, Keys.key(Key.Enter))
+                        }
+                    },
+                    onEsc = { session.input(sel.pane, Keys.key(Key.Esc)); closedAsk = fullAsk.key() },
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else if (sel == null) {
                 Text("Este workspace no tiene paneles abiertos.", color = j.dim, fontSize = 12.sp, modifier = Modifier.padding(14.dp))
             } else if (kind == PaneKind.Loading) {
                 Text("Cargando la conversación…", color = j.dim, fontSize = 12.sp, modifier = Modifier.padding(14.dp))
             } else if (kind == PaneKind.Chat && chat != null) {
-                ChatView(chat, w.name, sel.name ?: sel.role, sel.agent == AgentState.Waiting, Modifier.fillMaxSize())
+                ChatView(
+                    chat, w.name, sel.name ?: sel.role, sel.agent == AgentState.Waiting, working = sel.agent == AgentState.Working,
+                    onStop = { session.input(sel.pane, Keys.key(Key.Esc)) }, modifier = Modifier.fillMaxSize(),
+                )
             } else if (kind == PaneKind.Shell && shell != null) {
                 val clipboard = LocalContext.current.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                 ShellView(
@@ -212,24 +246,15 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
                 }
             }
         }
-        if (sel != null && sel.agent == AgentState.Waiting) {
+        if (fullAsk == null && askClosed == null && sel != null && sel.agent == AgentState.Waiting && (ask == null || ask.options.isEmpty())) {
             val on = AnswerRule.enabled(sel, model.panesAt, now, state.readOnly, sel.pane in model.answered)
             Column(
                 Modifier.fillMaxWidth().background(j.yellow.copy(alpha = 0.12f).compositeOver(j.bg)).padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text("? ${sel.role} espera tu respuesta", color = j.fg, fontSize = 12.5.sp)
-                // What it asks, read off its screen: the question and its numbered choices.
-                val ask = remember(term, rev) { term?.screenRows()?.let(AskText::from) }
-                if (ask != null) {
-                    Text(ask.question, color = j.fg, fontSize = 12.sp, maxLines = 5, overflow = TextOverflow.Ellipsis)
-                    for (o in ask.options) {
-                        Text(
-                            (if (o.selected) "❯ " else "  ") + o.label, color = if (o.selected) j.yellow else j.dim, fontSize = 11.5.sp,
-                            maxLines = 2, overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
+                // What it asks, read off its screen: a line that asks (y/n).
+                if (ask != null) Text(ask.question, color = j.fg, fontSize = 12.sp, maxLines = 5, overflow = TextOverflow.Ellipsis)
                 YesNo(on, "y · sí", "n · no", { session.answer(sel.pane, true) }, { session.answer(sel.pane, false) })
             }
         }
@@ -250,7 +275,7 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
                 KeyButton("cancelar") { selection = null }
             }
         }
-        KeyRow(sel, term, session, onLeader = { sheet = Sheet.Leader })
+        if (fullAsk == null) KeyRow(sel, term, session, onLeader = { sheet = Sheet.Leader })
         // What the terminal's input holds: a Claude's box read off its screen, a shell's line as it tells it.
         val remote = sel?.let { PaneKinds.input(it, shell) { term?.let(ClaudeInput::read) } }
         val running = kind == PaneKind.Shell && shell?.running == true

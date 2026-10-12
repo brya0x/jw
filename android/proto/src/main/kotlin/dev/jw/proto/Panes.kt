@@ -22,7 +22,9 @@ class TextRun(val col: Int, val text: String, val fg: Int, val bg: Int, val attr
 
 /**
  * One block of an agent's conversation (`ChatBlock` in `proto.rs`): `kind` is `user` or `text` (a message: [text]),
- * `think` ([result] says how long) or `tool` ([name], [arg] the one line that sums the call up, [body] the command,
+ * `think` ([result] says how long), `notice` (the PC telling that a subagent or a background task ended: [name] is `done`, `failed` or
+ * `stopped`, [text] its title, [arg] `agent` or `task`, [result] how long it took), `queued` (a message the person sent while Claude
+ * works, [text]) or `tool` ([name], [arg] the one line that sums the call up, [body] the command,
  * the diff or the output, [result] the line that sums its result up, null until it answered). [i] numbers the
  * blocks from the start of the conversation; a block with a number already held is that block, changed.
  */
@@ -30,6 +32,9 @@ class ChatBlock(
     val i: Int, val kind: String, val text: String, val name: String, val arg: String,
     val result: String?, val body: String?, val error: Boolean,
 )
+
+/** How the turn Claude is in stands (`ChatTurn` in `proto.rs`): when the person's last message was sent (ms since the epoch) and the output tokens since. */
+class ChatTurn(val since: Long, val tokens: Long)
 
 /**
  * One command of a shell (`ShellBlock` in `proto.rs`): what was typed, the folder, how it ended ([code], null while it runs or if it
@@ -70,7 +75,7 @@ sealed interface PaneEvent {
      */
     class Chat(
         override val pane: Long, val known: Boolean, val name: String?, val title: String?, val reset: Boolean,
-        val blocks: List<ChatBlock>,
+        val blocks: List<ChatBlock>, val turn: ChatTurn? = null, val bg: Int? = null,
     ) : PaneEvent {
         override fun toString() = "Chat(pane=$pane, known=$known, ${blocks.size} blocks)"
     }
@@ -151,6 +156,10 @@ object Panes {
                 PaneEvent.Chat(
                     pane, (o["known"] as? JsonPrimitive)?.booleanOrNull ?: false, (o["name"] as? JsonPrimitive)?.contentOrNull,
                     (o["title"] as? JsonPrimitive)?.contentOrNull, (o["reset"] as? JsonPrimitive)?.booleanOrNull ?: false, blocks,
+                    (o["turn"] as? JsonObject)?.let { t ->
+                        ChatTurn((t["since"] as? JsonPrimitive)?.longOrNull ?: return null, (t["tokens"] as? JsonPrimitive)?.longOrNull ?: 0)
+                    },
+                    (o["bg"] as? JsonPrimitive)?.intOrNull,
                 )
             }
             "Shell" -> {
