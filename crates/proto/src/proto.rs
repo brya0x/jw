@@ -15,7 +15,7 @@ pub type PaneId = u64;
 
 /// Bumped whenever a message changes shape: a client and a daemon from
 /// different builds refuse each other instead of misreading (RISK-14).
-pub const PROTOCOL: u32 = 17;
+pub const PROTOCOL: u32 = 18;
 
 /// A run of cells of one row that share a style: its first column, its
 /// text (a wide character counts two columns; the cells after it are not
@@ -42,6 +42,25 @@ pub struct ChatBlock {
     pub result: Option<String>,
     pub body: Option<String>,
     pub error: bool,
+}
+
+/// One command of a shell and its output (mobile REQ-92). `out` is its output
+/// as plain text, the last lines of it (`lines` counts them all); `code` is
+/// its exit status once it ended; `ms` how long it ran (so far, while
+/// `running`); `full` says a program drew the whole screen (nvim, htop), which
+/// keeps no output. `i` numbers the pane's commands from its start: a block
+/// with a number the client has is that block again, changed.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ShellBlock {
+    pub i: u32,
+    pub cmd: String,
+    pub cwd: String,
+    pub out: String,
+    pub lines: u32,
+    pub code: Option<i32>,
+    pub ms: u64,
+    pub running: bool,
+    pub full: bool,
 }
 
 /// A pane to start. `cmd` runs through `sh -c`; `None` starts `$SHELL`.
@@ -105,6 +124,15 @@ pub enum ClientMsg {
     },
     /// Stop getting `Chat` for `pane` (leaving the workspace does it too).
     ChatUnwatch {
+        pane: PaneId,
+    },
+    /// From now on this connection gets the commands of the shell in `pane`
+    /// as `Shell`: the last blocks at once, then each change.
+    ShellWatch {
+        pane: PaneId,
+    },
+    /// Stop getting `Shell` for `pane` (leaving the workspace does it too).
+    ShellUnwatch {
         pane: PaneId,
     },
     /// The last `count` rows of the pane's scrollback, as `TextHistory`,
@@ -404,6 +432,16 @@ pub enum DaemonMsg {
         title: Option<String>,
         reset: bool,
         blocks: Vec<ChatBlock>,
+    },
+    /// The commands of the shell in `pane`: `reset` says these blocks are all
+    /// the client has, else they are the ones new or changed. `known` is false
+    /// while the shell has marked no command (it is not one jw started, or
+    /// has not run one yet): the pane is then drawn as text.
+    Shell {
+        pane: PaneId,
+        known: bool,
+        reset: bool,
+        blocks: Vec<ShellBlock>,
     },
     /// The answer to `TextHistory`: rows of the scrollback, oldest first.
     TextHistory {

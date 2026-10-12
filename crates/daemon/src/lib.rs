@@ -35,6 +35,7 @@ mod chat;
 mod mobile;
 mod outbox;
 mod ring;
+mod shell;
 
 use jw_web::bridge::Look;
 use mobile::{Mobile, Tuning};
@@ -93,6 +94,13 @@ pub fn run(socket: &Path, look: Look) -> Result<()> {
         loop {
             thread::sleep(CHAT_EVERY);
             chatter.chat_poll();
+        }
+    });
+    let shell_watcher = Arc::clone(&daemon);
+    thread::spawn(move || {
+        loop {
+            thread::sleep(CHAT_EVERY);
+            shell_watcher.shell_poll();
         }
     });
     let texter = Arc::clone(&daemon);
@@ -210,6 +218,9 @@ struct Daemon {
     /// The conversations of the agents a phone watches (mobile REQ-90). Its
     /// lock is taken on its own: never with a pane's or a workspace's.
     chats: Mutex<BTreeMap<PaneId, ChatWatch>>,
+    /// Who watches the commands of which pane's shell; its lock is taken on
+    /// its own, never with a pane's.
+    shells: Mutex<BTreeMap<PaneId, Vec<Sub>>>,
     /// Mobile: its own locks and threads, none shared with the panes
     /// (REQ-40).
     mobile: Mobile,
@@ -344,6 +355,8 @@ struct PaneState {
     agent: Option<AgentState>,
     /// Its screen changed since the last `Text` went to the phones watching it.
     text_dirty: bool,
+    /// The commands of its shell, when the shell marks them (mobile REQ-92).
+    blocks: shell::Blocks,
 }
 
 /// Catches what a pane's program says beyond its screen: the window title,
@@ -704,6 +717,7 @@ impl Daemon {
             next_pane: AtomicU64::new(0),
             next_client: AtomicU64::new(0),
             chats: Mutex::default(),
+            shells: Mutex::default(),
             mobile,
         }
     }
@@ -760,6 +774,12 @@ impl Daemon {
             ClientMsg::SplitSnapshots => tx.set_split(),
             ClientMsg::TextView => tx.set_text(),
             ClientMsg::ChatWatch { pane } => self.chat_watch(client, tx, pane)?,
+            ClientMsg::ShellWatch { pane } => self.shell_watch(client, tx, pane)?,
+            ClientMsg::ShellUnwatch { pane } => {
+                if let Some(subs) = lock(&self.shells).get_mut(&pane) {
+                    subs.retain(|s| s.client != client);
+                }
+            }
             ClientMsg::ChatUnwatch { pane } => {
                 if let Some(w) = lock(&self.chats).get_mut(&pane) {
                     w.subs.retain(|s| s.client != client);
@@ -1495,6 +1515,50 @@ impl Daemon {
         Ok(())
     }
 
+    /// Starts `client` on the commands of the shell in `id`: the blocks it has
+    /// now, then each change (`shell_poll`).
+    fn shell_watch(&self, client: u64, tx: &Tx, id: PaneId) -> Result<()> {
+        let pane = self.pane(id)?;
+        let (known, blocks) = {
+            let mut st = lock(&pane.state);
+            (st.blocks.known(), st.blocks.all(shell::FIRST))
+        };
+        let _ = tx.send(DaemonMsg::Shell {
+            pane: id,
+            known,
+            reset: true,
+            blocks,
+        });
+        subscribe(lock(&self.shells).entry(id).or_default(), client, tx);
+        Ok(())
+    }
+
+    /// Tells the watchers of each shell what its commands gained; a pane with
+    /// no watcher is left alone.
+    fn shell_poll(&self) {
+        let watched: Vec<PaneId> = {
+            let mut shells = lock(&self.shells);
+            shells.retain(|_, subs| !subs.is_empty());
+            shells.keys().copied().collect()
+        };
+        for id in watched {
+            let Ok(pane) = self.pane(id) else { continue };
+            let news = lock(&pane.state).blocks.news();
+            let Some((reset, blocks)) = news else {
+                continue;
+            };
+            let msg = DaemonMsg::Shell {
+                pane: id,
+                known: true,
+                reset,
+                blocks,
+            };
+            if let Some(subs) = lock(&self.shells).get_mut(&id) {
+                subs.retain(|s| s.tx.send(msg.clone()).is_ok());
+            }
+        }
+    }
+
     /// Looks again for each followed pane's session now and then (a Claude
     /// started later, another in the same pane), reads what the transcripts
     /// gained and tells their watchers; one nobody watches any more is let go.
@@ -1544,6 +1608,32 @@ impl Daemon {
         }
     }
 
+    /// Points a zsh at jw's files, which read the user's own and then mark each
+    /// command; any other shell, or `JW_SHELL_BLOCKS=0`, is left as it is.
+    fn mark_commands(&self, builder: &mut CommandBuilder, env: &BTreeMap<String, String>) {
+        if std::env::var("JW_SHELL_BLOCKS").is_ok_and(|v| v == "0") {
+            return;
+        }
+        let get = |k: &str| env.get(k).cloned().or_else(|| std::env::var(k).ok());
+        let (Some(shell), Some(home)) = (get("SHELL"), get("HOME")) else {
+            return;
+        };
+        let dir = proto::socket_path()
+            .parent()
+            .map(|p| p.join("shell").join("zsh"));
+        let Some(dir) = dir else { return };
+        let zdotdir = get("ZDOTDIR");
+        let Some(vars) = shell::prepare(&shell, &dir, zdotdir.as_deref(), &home) else {
+            return;
+        };
+        if shell::install(&dir).is_err() {
+            return;
+        }
+        for (k, v) in vars {
+            builder.env(k, v);
+        }
+    }
+
     fn pane(&self, id: PaneId) -> Result<Arc<Pane>> {
         lock(&self.panes)
             .get(&id)
@@ -1562,6 +1652,9 @@ impl Daemon {
     fn unsubscribe(&self, client: u64) {
         for w in lock(&self.chats).values_mut() {
             w.subs.retain(|s| s.client != client);
+        }
+        for subs in lock(&self.shells).values_mut() {
+            subs.retain(|s| s.client != client);
         }
         for ws in lock(&self.workspaces).values_mut() {
             ws.subs.retain(|s| s.client != client);
@@ -1620,6 +1713,10 @@ impl Daemon {
             }
             None => CommandBuilder::new_default_prog(),
         };
+        // A shell that jw starts for a pane marks each command (mobile REQ-92).
+        if cmd.is_none() && role == "shell" {
+            self.mark_commands(&mut builder, &env);
+        }
         builder.cwd(&cwd);
         builder.env("TERM", "xterm-256color");
         // REQ-88: what programs that only read the environment go by.
@@ -1667,6 +1764,7 @@ impl Daemon {
                 ring: Ring::default(),
                 agent: None,
                 text_dirty: false,
+                blocks: shell::Blocks::default(),
             }),
         });
         if let Some(mut bytes) = history {
@@ -1707,6 +1805,8 @@ impl Daemon {
                         st.ring.push(&buf[..n]);
                         st.last_output = Instant::now();
                         st.text_dirty = true;
+                        let alt = st.parser.screen().alternate_screen();
+                        st.blocks.feed(&buf[..n], alt);
                         st.broadcast(&DaemonMsg::Output {
                             pane: id,
                             bytes: buf[..n].to_vec(),

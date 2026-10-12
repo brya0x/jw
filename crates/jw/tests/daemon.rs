@@ -28,12 +28,20 @@ impl Daemon {
 
     /// A daemon whose Claude config folder, where transcripts are, is `config`.
     fn start_with(config: Option<&Path>) -> Self {
+        Self::start_in(config, &[])
+    }
+
+    /// The same, with more of the environment its panes' shells get.
+    fn start_in(config: Option<&Path>, env: &[(&str, &Path)]) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let socket = dir.path().join("jw.sock");
         let mut cmd = Command::new(EXE);
         cmd.arg("daemon").env("JW_SOCKET", &socket);
         if let Some(config) = config {
             cmd.env("CLAUDE_CONFIG_DIR", config);
+        }
+        for (k, v) in env {
+            cmd.env(k, v);
         }
         let child = cmd.spawn().unwrap();
         let deadline = Instant::now() + TIMEOUT;
@@ -2183,4 +2191,73 @@ fn a_listing_carries_the_name_the_user_gave_a_pane() {
         assert!(Instant::now() < deadline, "the name never showed");
         thread::sleep(Duration::from_millis(50));
     }
+}
+
+#[test]
+fn a_zsh_jw_started_marks_its_commands_as_blocks() {
+    if !Path::new("/bin/zsh").exists() {
+        return;
+    }
+    let home = tempfile::tempdir().unwrap();
+    // The user's own .zshrc is still read.
+    std::fs::write(home.path().join(".zshrc"), "export JW_PROBE=ok\n").unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let d = Daemon::start_in(
+        None,
+        &[("HOME", home.path()), ("SHELL", Path::new("/bin/zsh"))],
+    );
+    let mut c = d.client();
+    c.send(&ClientMsg::Spawn {
+        stream: "s".into(),
+        role: "shell".into(),
+        cmd: None,
+        cwd: work.path().to_path_buf(),
+        env: BTreeMap::new(),
+        cols: 80,
+        rows: 10,
+    })
+    .unwrap();
+    let pane = loop {
+        match recv(&mut c) {
+            DaemonMsg::Spawned { pane } => break pane,
+            DaemonMsg::Output { .. } => {}
+            other => panic!("want Spawned, got {other:?}"),
+        }
+    };
+    c.send(&ClientMsg::ShellWatch { pane }).unwrap();
+    // The prompt is marked once it is shown: from then on the shell is known.
+    let deadline = Instant::now() + TIMEOUT;
+    let mut known = false;
+    while !known {
+        assert!(
+            Instant::now() < deadline,
+            "the shell never marked its prompt"
+        );
+        if let DaemonMsg::Shell { known: k, .. } = recv(&mut c) {
+            known = k;
+        }
+    }
+    c.send(&ClientMsg::Input {
+        pane,
+        bytes: b"echo hello $((6*7)) $JW_PROBE\n".to_vec(),
+    })
+    .unwrap();
+    let deadline = Instant::now() + TIMEOUT;
+    let block = loop {
+        assert!(Instant::now() < deadline, "no finished block");
+        if let DaemonMsg::Shell { blocks, .. } = recv(&mut c)
+            && let Some(b) = blocks
+                .into_iter()
+                .find(|b| !b.running && b.cmd.starts_with("echo"))
+        {
+            break b;
+        }
+    };
+    assert_eq!(block.cmd, "echo hello $((6*7)) $JW_PROBE");
+    assert_eq!(block.out, "hello 42 ok");
+    assert_eq!(block.code, Some(0));
+    assert_eq!(
+        std::fs::canonicalize(&block.cwd).unwrap(),
+        std::fs::canonicalize(work.path()).unwrap()
+    );
 }
