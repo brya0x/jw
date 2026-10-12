@@ -172,8 +172,8 @@ fun TerminalView(
                                 val d = c.positionChange()
                                 val t = pane
                                 if (t != null) {
-                                    val maxScroll = t.read { bottomAnchor(it, visibleRows) + it.scrollbackSize }
-                                    scrollLines = (scrollLines + d.y / ch).coerceIn(0f, maxScroll.toFloat())
+                                    val (up, down) = t.read { scrollRange(it, visibleRows) }
+                                    scrollLines = (scrollLines + d.y / ch).coerceIn(down.toFloat(), up.toFloat())
                                     val overflow = max(0f, t.cols * cw - wPx)
                                     panX = (panX - d.x).coerceIn(0f, overflow)
                                 }
@@ -253,18 +253,26 @@ fun TerminalView(
 private fun firstLine(t: Terminal, visibleRows: Int, scroll: Float): Int = bottomAnchor(t, visibleRows) - scroll.toInt()
 
 /**
- * The first row of the view at rest. A pane taller than the view (the PC's window) ends at its last used row (the
- * cursor or the lowest row with text, so an agent's footer shows), not at its empty bottom; a full-screen app ends at the bottom.
+ * The first row of the view at rest. A shell or an agent on the main screen, in a pane taller than the view (the PC's
+ * window), ends at its last used row (the cursor or the lowest row with text, so a footer shows), not at its empty
+ * bottom. A full-screen app (the alternate screen) draws from the top, so it starts at the top, unless its cursor is
+ * shown below the view: then it follows the cursor.
  */
 internal fun bottomAnchor(t: Terminal, visibleRows: Int): Int {
     if (t.rows <= visibleRows) return 0
     val maxFirst = t.rows - visibleRows
-    if (t.altScreen) return maxFirst
+    if (t.altScreen) return if (t.cursorVisible) (t.cursorRow + 1 - visibleRows).coerceIn(0, maxFirst) else 0
     var last = t.cursorRow
     for (r in t.rows - 1 downTo last + 1) {
         if (t.line(r).ch.any { it != 0 && it != ' '.code }) { last = r; break }
     }
     return (last + 1 - visibleRows).coerceIn(0, maxFirst)
+}
+
+/** How far the view may be dragged: `up` lines into the history, `down` lines further down the pane (a full-screen app only). */
+internal fun scrollRange(t: Terminal, visibleRows: Int): Pair<Int, Int> {
+    val anchor = bottomAnchor(t, visibleRows)
+    return if (t.altScreen) anchor to -(t.rows - visibleRows - anchor).coerceAtLeast(0) else (anchor + t.scrollbackSize) to 0
 }
 
 private fun inSelection(s: Selection, line: Int, col: Int): Boolean {

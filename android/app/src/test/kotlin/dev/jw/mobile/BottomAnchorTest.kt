@@ -22,7 +22,23 @@ class BottomAnchorTest {
         assertEquals(30 + 1 - 20, bottomAnchor(tall, 20))
     }
 
-    @Test fun aFullScreenAppEndsAtTheBottom() {
-        assertEquals(112 - 20, bottomAnchor(term(112, "$e[?1049hx"), 20))
+    @Test fun aFullScreenAppDrawnFromTheTopStartsAtTheTop() {
+        // An agent's dialog on the alternate screen with its cursor hidden, in a pane taller than the phone: the top shows.
+        val t = term(55, "$e[?1049h$e[?25l$e[1;1Hhead$e[20;1Hdialog line")
+        assertEquals(0, bottomAnchor(t, 38))
+        // Dragged down the pane it can reach the rest, and never above its first row.
+        assertEquals(0 to -(55 - 38), scrollRange(t, 38).let { (up, down) -> up to down })
+    }
+
+    @Test fun aFullScreenAppFollowsItsCursorWhenItIsBelowTheView() {
+        val t = term(55, "$e[?1049h$e[50;1Hinput")
+        assertEquals(49 + 1 - 38, bottomAnchor(t, 38)) // row 50 is index 49
+    }
+
+    @Test fun aMainScreenCannotBeDraggedBelowItsRestingPlace() {
+        val t = term(112, "a\r\nb\r\nprompt")
+        val (up, down) = scrollRange(t, 20)
+        assertEquals(0, down)
+        assertEquals(0, up) // nothing in the history yet
     }
 }
