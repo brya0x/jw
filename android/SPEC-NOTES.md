@@ -57,8 +57,7 @@ The scan screen in landscape gives the camera the whole width; the title shrinks
   Buttons are enabled only while the latest `Panes` (at most 2 s old) says Waiting for that pane, once per snapshot (`AnswerRule`); a toast confirms.
   **Not verified against a real agent prompt**: it needs the user to try it by hand.
 - **Needs the user's OK (not in the prototype):** the `Escanear otro código` button and unreachable text on the reconnecting screen; the
-  answer-bytes section of Settings; no "Cambios" tab
-  (that is M6) and no "nueva sesión", "abrir carpeta" or "nuevo worktree" actions (the bridge has no such requests yet); the search button and the
+  answer-bytes section of Settings; no "nueva sesión", "abrir carpeta" or "nuevo worktree" actions (the bridge has no such requests yet); the search button and the
   `^␣` leader sheet were left out until M5 (now built, REQ-23).
 - `read_only` answers to `Input` show the toast "solo lectura"; with a read-only phone the y and n buttons stay disabled.
 

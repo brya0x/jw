@@ -129,6 +129,33 @@ svg.i{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stro
 .hunk .l.a{background:var(--add)} .hunk .l.x{background:var(--del)}
 .hunk .l.a::before{content:'+ ';color:var(--green)} .hunk .l.x::before{content:'- ';color:var(--red)} .hunk .l.n::before{content:'  '}
 
+/* diff states (M6) */
+.fl .st{flex:none;width:18px;height:18px;border-radius:4px;display:grid;place-items:center;font-size:10.5px;font-weight:700;color:var(--bg)}
+.st.A{background:var(--green)} .st.D{background:var(--red)} .st.R{background:var(--cyan)} .st.M{background:var(--yellow)}
+.fl .nm span i{font-style:normal;color:var(--cyan)}
+.fl .why{color:var(--yellow)}
+.note{padding:10px 14px;font-size:11.5px;color:var(--yellow);background:var(--sel);border-bottom:1px solid var(--line)}
+.centre{padding:44px 24px;text-align:center;color:var(--dim);display:flex;flex-direction:column;align-items:center;gap:10px}
+.centre .big{color:var(--fg);font-size:14px}
+.centre .spin{border-color:var(--line);border-top-color:var(--blue);width:22px;height:22px}
+.centre button{margin-top:6px;min-height:44px;padding:0 18px;border:1px solid var(--line);border-radius:6px;color:var(--fg)}
+.hunk .l{display:flex;gap:8px}
+.hunk .l .n1,.hunk .l .n2{flex:none;width:34px;text-align:right;color:var(--dim);font-size:10.5px;padding-top:1px}
+.hunk .l .tx{flex:1;min-width:0;white-space:pre-wrap;word-break:break-word}
+.hunk .l::before{display:none}
+.hunk .l.a .tx::before{content:'+ ';color:var(--green)} .hunk .l.x .tx::before{content:'- ';color:var(--red)} .hunk .l.n .tx::before{content:'  '}
+.nodiff{padding:30px 20px;text-align:center;color:var(--dim)}
+
+/* diff views (M6, REQ-72) */
+.seg{display:flex;border-bottom:1px solid var(--line);background:var(--panel)}
+.seg button{flex:1;min-height:44px;padding:0 6px;color:var(--dim);font-size:12px;display:flex;align-items:center;justify-content:center;gap:6px;border-bottom:2px solid transparent}
+.seg button b{font-weight:500;color:var(--dim);font-size:11px}
+.seg button[aria-selected=true]{color:var(--blue);border-bottom-color:var(--blue)} .seg button[aria-selected=true] b{color:var(--blue)}
+.st.U{background:var(--magenta)}
+.cnav{display:flex;align-items:center;gap:8px;padding:0 8px;min-height:44px;border-bottom:1px solid var(--line);font-size:11.5px}
+.cnav span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dim)}
+.cnav button{min-width:44px;min-height:44px;color:var(--fg)} .cnav button:disabled{color:var(--dim);opacity:.4}
+
 /* settings */
 .srow{display:flex;align-items:center;gap:12px;min-height:54px;padding:6px 14px;width:100%;border-bottom:1px solid var(--line)}
 .srow .t{flex:1;min-width:0}.srow .t b{display:block;font-weight:500}.srow .t span{font-size:11px;color:var(--dim)}
@@ -318,7 +345,7 @@ function applyTheme(n){
 const state = {
   route:'wifi',
   screen:'connect', theme:'one-dark', conn:'idle', sess:'main', ws:'jw/feat/mobile-app', pane:'claude',
-  sheet:null, q:'', file:null, viewed:{}, anim:true, haptic:true, fit:false, msg:'',
+  sheet:null, q:'', file:null, view:'gen', commit:null, vst:{gen:'ok',unc:'ok',com:'ok'}, viewed:{}, anim:true, haptic:true, fit:false, msg:'',
   w:[
     {id:'jw', kind:'root', name:'jw', path:'~/ws/jw', sess:'main', ag:'idle', dev:0, pr:'', last:'Shell libre en la raíz del proyecto.', t:'1 h'},
     {id:'jw/feat/mobile-app', kind:'wt', proj:'jw', name:'feat/mobile-app', path:'~/ws/jw-wt/mobile-app', sess:'main', ag:'work', dev:1, pr:'#41', last:'Armando el prototipo de la app móvil.', t:'ahora'},
@@ -332,9 +359,15 @@ const state = {
   ],
   logs:{}
 };
+const WHY={'symlink':'enlace simbólico (no se sigue)','not a regular file':'no es un archivo normal','too large':'demasiado grande','permission denied':'sin permiso','it went away':'ya no está','it could not be read':'no se pudo leer','the name is not UTF-8':'nombre que no es UTF-8'};
 const FILES=[
   {n:'crates/proto/src/proto.rs',a:34,d:2,h:[['@@ -14,6 +14,8 @@ pub const PROTOCOL',[['n','use serde::{Deserialize, Serialize};'],['x','pub const PROTOCOL: u32 = 8;'],['a','pub const PROTOCOL: u32 = 9;'],['a','pub const WS_SUBPROTOCOL: &str = "jw.v9";'],['n','pub const MAX_FRAME: usize = 16 << 20;']]]]},
   {n:'crates/jw/src/mobile.rs',a:212,d:0,h:[['@@ -0,0 +1,5 @@ nuevo',[['a','//! jw mobile: puente WebSocket sobre el socket del daemon.'],['a','pub async fn serve(cfg: Bridge) -> Result<()> {'],['a','    let tunnel = Tunnel::open(cfg.provider).await?;'],['a','    qr::print(&tunnel.url, &cfg.token);'],['a','}']]]]},
+  {n:'docs/specs/mobile.md',o:'docs/specs/mobile-draft.md',st:'R',a:0,d:0,h:[]},
+  {n:'assets/logo.png',bin:1,st:'M',a:0,d:0,h:[]},
+  {n:'scripts/current',st:'A',a:0,d:0,h:[],unr:'symlink'},
+  {n:'old/gone.txt',st:'D',a:0,d:2,h:[['@@ -1,2 +0,0 @@',[['x','adiós'],['x','mundo']]]]},
+  {n:'crates/core/src/big.rs',st:'A',a:5000,d:0,tr:2000,h:[['@@ -0,0 +1,3 @@',[['a','//! generado'],['a','pub fn a() {}'],['a','pub fn b() {}']]]]},
   {n:'docs/specs/rust-tui.md',a:41,d:3,h:[['@@ -296,3 +296,9 @@ REQ-124',[['n','- REQ-124: arrastrar copia por OSC 52.'],['a','- REQ-170: el puente móvil rechaza un token usado.']]]]}
 ];
 
@@ -478,16 +511,54 @@ function vInbox(){
    ${statusBar('?',w.length+' esperando')}${nav()}`;
 }
 
+const UNC=[
+  {n:'crates/web/src/bridge.rs',st:'M',a:12,d:3,h:[['@@ -1040,6 +1040,9 @@ fn start_ask',[['n','    let seat = match query {'],['x','        Query::Diff(_) => Seat::Diff(later.diff.clone()),'],['a','        Query::Diff(..) | Query::Commits(_) => Seat::Diff(later.diff.clone()),'],['n','        _ => Seat::List(later.lists.clone()),']]]]},
+  {n:'notes/todo.md',st:'A',u:1,a:2,d:0,h:[['@@ -0,0 +1,2 @@',[['a','- probar el diff en el teléfono'],['a','- revisar el límite de 200 commits']]]]},
+  {n:'scratch/current',st:'A',u:1,a:0,d:0,h:[],unr:'symlink'},
+  {n:'old/gone.txt',st:'D',a:0,d:2,h:[['@@ -1,2 +0,0 @@',[['x','adiós'],['x','mundo']]]]}
+];
+const COMMITS=[
+  {sha:'0123456',s:'fix(web): valida el id de commit antes de git',t:'hace 2 h',files:[]},
+  {sha:'89abcde',s:'feat(core): el diff en tres vistas con el blindaje de W3',t:'hace 5 h',files:[]},
+  {sha:'4f5e6d7',s:'feat(android): M6a, el diff en el teléfono',t:'ayer',files:[]}
+];
+COMMITS[0].files=[FILES[0],FILES[1]];COMMITS[1].files=[FILES[5],FILES[7],FILES[2]];COMMITS[2].files=[FILES[7]];
+const fileList=()=>state.view==='unc'?UNC:state.view==='com'?(state.commit===null?[]:COMMITS[state.commit].files):FILES;
+const VIEWS=[['gen','General'],['unc','Sin commitear'],['com','Commits']];
+const vcount=v=>({gen:FILES.length,unc:UNC.length,com:COMMITS.length}[v]);
+const TITLE=()=>wsOf(state.ws).name+' vs '+(wsOf(state.ws).kind==='wt'?'origin/main':'HEAD');
+function lineNos(h){const m=/@@ -(\d+)(?:,\d+)? \+(\d+)/.exec(h);return m?[+m[1],+m[2]]:[1,1]}
+function hunkHtml([h,ls]){let [o,n]=lineNos(h);return `<div class="hunk"><div class="h">${h}</div>${ls.map(([k,t])=>{const a=k==='a'?'':o++, b=k==='x'?'':n++;return `<div class="l ${k}"><span class="n1">${k==='a'?'':a}</span><span class="n2">${k==='x'?'':b}</span><span class="tx">${t.replace(/</g,'&lt;')}</span></div>`}).join('')}</div>`}
+function fileKey(f){return f.n}
 function vChanges(){
-  const cw=wsOf(state.ws);
-  if(state.file!==null){
-    const f=FILES[state.file];
-    return `<div class="hdr"><button class="ib" data-act="closefile" aria-label="Volver">${ic('back')}</button><div class="t"><b>${f.n.split('/').pop()}</b><span>${f.n}</span></div><button class="vw" data-view="${f.n}" aria-pressed="${!!state.viewed[f.n]}" aria-label="Marcar visto">✓</button></div>
-    <div class="scroll">${f.h.map(([h,ls])=>`<div class="hunk"><div class="h">${h}</div>${ls.map(([k,t])=>`<div class="l ${k}">${t.replace(/</g,'&lt;')}</div>`).join('')}</div>`).join('')}</div>${statusBar('DIFF','archivo '+(state.file+1)+'/'+FILES.length)}`;
+  const cw=wsOf(state.ws), v=state.view||'gen', ds=(state.vst||{})[v]||'ok';
+  const base=cw.kind==='wt'?'origin/main':'HEAD';
+  const sub=v==='gen'?(ds==='nobase'?'sin rama base':cw.name+' vs '+base+' · commiteado'):v==='unc'?cw.name+' · sin commitear':(state.commit===null?COMMITS.length+' commits':COMMITS[state.commit].sha+' · '+(state.commit+1)+'/'+COMMITS.length);
+  const tabs=`<div class="seg" role="tablist">${VIEWS.map(([k,l])=>{const st=((state.vst||{})[k]||'ok');return `<button role="tab" aria-selected="${v===k}" data-vtab="${k}">${l}<b>${st==='load'?'…':st==='err'?'!':vcount(k)}</b></button>`}).join('')}</div>`;
+  const head=`<div class="hdr"><button class="ib" data-sheet="pick" aria-label="Elegir workspace" style="width:auto;padding:0 8px;gap:6px;display:flex;align-items:center"><span style="text-align:left"><b style="display:block;font-weight:500">cambios · ${cw.name}</b><span style="font-size:11px;color:var(--dim)">${sub}</span></span><span style="color:var(--dim)">▾</span></button></div>${tabs}`;
+  if(ds==='none') return `${head}<div class="scroll"><div class="centre"><span class="big">elige un workspace</span>entra a uno, o toca el nombre arriba,<br>para ver sus cambios.</div></div>${statusBar('DIFF','sin workspace')}${nav()}`;
+  if(ds==='load') return `${head}<div class="scroll"><div class="centre"><span class="spin"></span><span class="big">leyendo ${v==='com'?'los commits':'los cambios'}</span>git corre en el PC; puede tardar en repos grandes</div></div>${statusBar('DIFF','cargando')}${nav()}`;
+  if(ds==='err') return `${head}<div class="scroll"><div class="centre"><span class="big" style="color:var(--red)">no se pudo leer</span>${state.derr||'fatal: bad revision'}<button data-act="retry">reintentar</button><span style="font-size:11px">las otras vistas siguen disponibles</span></div></div>${statusBar('ERR','el PC respondió con un error')}${nav()}`;
+  if(ds==='nobase') return `${head}<div class="scroll"><div class="nodiff">origin no tiene rama por defecto: no hay contra qué comparar.<br>Mira «Sin commitear» o «Commits».</div></div>${statusBar('DIFF','sin base')}${nav()}`;
+  if(ds==='empty') return `${head}<div class="scroll"><div class="nodiff">${v==='gen'?'nada commiteado contra '+base:v==='unc'?'sin cambios sin commitear':'sin commits en la rama'}</div></div>${statusBar('DIFF','0 archivos')}${nav()}`;
+  // a commit's list (Commits, nothing chosen yet)
+  if(v==='com'&&state.commit===null) return `${head}<div class="scroll">${COMMITS.map((c,i)=>`<button class="fl" data-commit="${i}"><span class="nm"><b>${c.s}</b><span><i>${c.sha}</i> · ${c.t}</span></span><span class="pm"><span>${c.files.length}</span></span></button>`).join('')}<div class="note">se listan los últimos 200 commits; hay más antiguos</div></div>${statusBar('DIFF','toca un commit')}${nav()}`;
+  const L=fileList();
+  if(state.file!==null&&L[state.file]){
+    const f=L[state.file];
+    const body=f.unr?`<div class="centre"><span class="big">${WHY[f.unr]||f.unr}</span>el contenido no se muestra: el PC no lo leyó</div>`
+      :f.bin?`<div class="centre"><span class="big">archivo binario</span>no hay líneas que mostrar</div>`
+      :f.big?`<div class="centre"><span class="big">demasiado grande para mostrar</span>el diff de esta vista pasó de 2 MiB.<br>Ábrelo en el PC.</div>`
+      :f.st==='R'&&!f.h.length?`<div class="centre"><span class="big">renombrado</span>${f.o} → ${f.n}<br>sin cambios en el contenido</div>`
+      :(f.tr?`<div class="note">se muestran las primeras ${f.tr} líneas de +${f.a}</div>`:'')+f.h.map(hunkHtml).join('');
+    return `<div class="hdr"><button class="ib" data-act="closefile" aria-label="Volver">${ic('back')}</button><div class="t"><b>${f.n.split('/').pop()}</b><span>${f.o?f.o+' → ':''}${f.n}</span></div><button class="vw" data-view="${v}|${fileKey(f)}" aria-pressed="${!!state.viewed[v+'|'+fileKey(f)]}" aria-label="Marcar visto">✓</button></div>
+    <div class="scroll">${body}</div>${statusBar('DIFF','archivo '+(state.file+1)+'/'+L.length)}`;
   }
-  return `<div class="hdr"><div class="t"><b>cambios</b><span>${cw.name} · contra main</span></div></div>
-   <div class="scroll">${FILES.map((f,i)=>`<button class="fl" data-file="${i}"><span class="nm"><b>${f.n.split('/').pop()}</b><span>${f.n.split('/').slice(0,-1).join('/')}</span></span><span class="pm"><span class="a">+${f.a}</span> <span class="x">-${f.d}</span></span><span class="vw" aria-pressed="${!!state.viewed[f.n]}">✓</span></button>`).join('')}</div>
-   ${statusBar('DIFF','toca un archivo')}${nav()}`;
+  const big=ds==='big';
+  const nav2=v==='com'?`<div class="cnav"><button data-act="commits" aria-label="Volver a los commits">‹ commits</button><span>${COMMITS[state.commit].s}</span><button data-cn="-1" aria-label="Commit anterior" ${state.commit===0?'disabled':''}>◂</button><button data-cn="1" aria-label="Commit siguiente" ${state.commit===COMMITS.length-1?'disabled':''}>▸</button></div>`:'';
+  return `${head}${nav2}
+   <div class="scroll">${big?`<div class="note">este diff pasó de 2 MiB: se listan 200 de 1 234 archivos, sin líneas. Míralo entero en el PC.</div>`:''}${L.map((f,i)=>{const st=f.u?'?':(f.st||'M');return `<button class="fl" data-file="${i}"><span class="st ${f.u?'U':st}" aria-label="${{A:'nuevo',D:'borrado',R:'renombrado',M:'modificado','?':'sin seguimiento'}[st]}">${st}</span><span class="nm"><b>${f.n.split('/').pop()}</b><span>${f.unr?`<span class="why">${WHY[f.unr]||f.unr}</span>`:f.bin?'<i>binario</i> · ':''}${f.o?'<i>← '+f.o+'</i>':f.n.split('/').slice(0,-1).join('/')}</span></span>${big?'':`<span class="pm"><span class="a">+${f.a}</span> <span class="x">-${f.d}</span></span>`}<span class="vw" aria-pressed="${!!state.viewed[v+'|'+fileKey(f)]}">✓</span></button>`}).join('')}</div>
+   ${statusBar('DIFF',L.filter(f=>state.viewed[v+'|'+fileKey(f)]).length+'/'+L.length+' vistos')}${nav()}`;
 }
 
 const PRESETS=[['claude','Claude Code · por verificar','Enter · Esc',['⏎','esc']],['yn','Pregunta s/n','y · n',['y','n']],['ynx','Pregunta s/n con Enter','y y Enter · n y Enter',['y⏎','n⏎']]];
@@ -564,7 +635,7 @@ function render(){
   $('#overlay').innerHTML=sheet();
   const o=$('#out'); if(o) o.scrollTop=o.scrollHeight;
   const q=$('#q'); if(q){q.focus();q.setSelectionRange(q.value.length,q.value.length)}
-  $('#jump').innerHTML=[['connect','Conexión (QR)'],['perm','Cámara: permiso · nuevo'],['permdenied','Cámara bloqueada · nuevo'],['cam','Cámara · visor · nuevo'],['paste','Pegar enlace · nuevo'],['pair','Código de emparejamiento · nuevo'],['denied','El PC rechaza · nuevo'],['expired','Código vencido · nuevo'],['unreach','No encuentro tu PC · nuevo'],['proto','Protocolo distinto · nuevo'],['set','Respuestas rápidas · nuevo'],['limited','Demasiados intentos · nuevo'],['home','Workspaces (sidebar)'],['wsroot','Entrar a la raíz'],['ws','Entrar a un worktree'],['pick','Buscador ␣'],['leader','Menú ^␣ · cambiado'],['sel','Selección de texto · nuevo'],['inbox','Avisos'],['changes','Diff'],['settings','Ajustes y temas']].map(([k,l])=>`<button data-jump="${k}">${l}</button>`).join('');
+  $('#jump').innerHTML=[['connect','Conexión (QR)'],['perm','Cámara: permiso · nuevo'],['permdenied','Cámara bloqueada · nuevo'],['cam','Cámara · visor · nuevo'],['paste','Pegar enlace · nuevo'],['pair','Código de emparejamiento · nuevo'],['denied','El PC rechaza · nuevo'],['expired','Código vencido · nuevo'],['unreach','No encuentro tu PC · nuevo'],['proto','Protocolo distinto · nuevo'],['set','Respuestas rápidas · nuevo'],['limited','Demasiados intentos · nuevo'],['home','Workspaces (sidebar)'],['wsroot','Entrar a la raíz'],['ws','Entrar a un worktree'],['pick','Buscador ␣'],['leader','Menú ^␣ · cambiado'],['sel','Selección de texto · nuevo'],['inbox','Avisos'],['changes','Cambios · General · cambiado'],['chunc','Cambios · Sin commitear · nuevo'],['chcom','Cambios · Commits · nuevo'],['chcomf','Cambios · un commit · nuevo'],['chfile','Cambios · un archivo · cambiado'],['chren','Cambios · renombrado · nuevo'],['chbin','Cambios · binario · nuevo'],['chunr','Cambios · ilegible · nuevo'],['chbig','Cambios · cortado · nuevo'],['chtoo','Cambios · demasiado grande · nuevo'],['chnobase','Cambios · sin rama base · nuevo'],['chload','Cambios · leyendo · nuevo'],['cherr','Cambios · error de una vista · nuevo'],['chempty','Cambios · sin cambios · nuevo'],['chnone','Cambios · sin workspace · nuevo'],['settings','Ajustes y temas']].map(([k,l])=>`<button data-jump="${k}">${l}</button>`).join('');
 }
 function answer(v,id){
   const w=wsOf(id); if(!w) return; buzz();
@@ -575,7 +646,7 @@ function answer(v,id){
 function enter(id){state.sel=false;state.ws=id;state.pane='claude';state.screen='ws';state.sheet=null;state.q='';const w=wsOf(id);w.t=w.t==='ahora'?'ahora':w.t;render()}
 
 document.addEventListener('click',e=>{
-  const t=e.target.closest('[data-go],[data-open],[data-ans],[data-act],[data-theme],[data-sw],[data-pane],[data-key],[data-file],[data-view],[data-jump],[data-sheet],[data-sess],[data-lead],[data-preset],[data-opt]'); if(!t) return;
+  const t=e.target.closest('[data-go],[data-open],[data-ans],[data-act],[data-theme],[data-sw],[data-pane],[data-key],[data-file],[data-view],[data-vtab],[data-commit],[data-cn],[data-jump],[data-sheet],[data-sess],[data-lead],[data-preset],[data-opt]'); if(!t) return;
   const d=t.dataset;
   if(d.jump){state.sheet=null;state.file=null;state.conn='idle';
     if(CONN.includes(d.jump)){goConn(d.jump);return}
@@ -583,7 +654,24 @@ document.addEventListener('click',e=>{
     if(d.jump==='wsroot'){state.sess='main';enter('jw');return}
     if(d.jump==='ws'){state.sess='main';enter('jw/fix/daemon-sock');return}
     if(d.jump==='pick'||d.jump==='leader'){state.screen='home';state.sheet=d.jump;render();return}
-    state.screen=d.jump;render();return}
+    if(d.jump.startsWith('ch')||d.jump==='changes'){const j=d.jump;state.screen='changes';state.vst={gen:'ok',unc:'ok',com:'ok'};state.view='gen';state.commit=null;state.file=null;
+      const set=(v,x)=>{state.view=v;state.vst[v]=x};
+      if(j==='chunc')state.view='unc';
+      else if(j==='chcom')state.view='com';
+      else if(j==='chcomf'){state.view='com';state.commit=0}
+      else if(j==='chfile')state.file=0;
+      else if(j==='chren')state.file=2;
+      else if(j==='chbin')state.file=3;
+      else if(j==='chunr')state.file=4;
+      else if(j==='chbig')state.file=6;
+      else if(j==='chload')set('unc','load');
+      else if(j==='cherr')set('com','err');
+      else if(j==='chempty')set('gen','empty');
+      else if(j==='chnobase')set('gen','nobase');
+      else if(j==='chtoo')set('unc','big');
+      else if(j==='chnone')set('gen','none');
+      render();return}
+    state.dstate='ok';state.screen=d.jump;render();return}
   if(d.sheet){state.sheet=d.sheet==='close'?null:d.sheet;render();return}
   if(d.sess){state.sess=d.sess;state.sheet=null;toast('sesión '+d.sess);render();return}
   if(d.pc){toast('^␣ '+d.pc+' solo se hace en el PC: usa jw ahí');return}
@@ -592,12 +680,15 @@ document.addEventListener('click',e=>{
     else if(k==='1-9'){state.screen='home'}else toast('^␣ '+k);
     render();return}
   if(d.go){state.screen=d.go;state.file=null;state.sheet=null;render();return}
-  if(d.open){enter(d.open);return}
+  if(d.open){if(state.screen==='changes'){state.ws=d.open;state.sheet=null;state.file=null;render();return}enter(d.open);return}
   if(d.ans){const [v,id]=d.ans.split('|');answer(v,id);return}
   if(d.preset){state.preset=d.preset;render();return}
   if(d.theme){applyTheme(d.theme);render();return}
   if(d.sw){state[d.sw]=!state[d.sw];render();return}
   if(d.pane){state.pane=d.pane;render();return}
+  if(d.vtab){state.view=d.vtab;state.file=null;state.commit=null;render();return}
+  if(d.commit!==undefined){state.commit=+d.commit;state.file=null;render();return}
+  if(d.cn){state.commit=Math.max(0,Math.min(COMMITS.length-1,state.commit+(+d.cn)));state.file=null;render();return}
   if(d.file){state.file=+d.file;render();return}
   if(d.view){state.viewed[d.view]=!state.viewed[d.view];render();return}
   if(d.key){logFor(`${state.ws}|${state.pane}`).push(`<span class="d">⌨ ${d.key}</span>`);toast('enviado '+d.key);render();return}
@@ -617,6 +708,8 @@ document.addEventListener('click',e=>{
     case 'os':toast('abre los ajustes del sistema');break;
     case 'sim':{const k=d.sim;if(k==='away'||k==='home'){state.route=k==='away'?'tunnel':'wifi';if(!['home','inbox','changes','settings','ws'].includes(state.screen))state.screen='home';state.sheet=null;render();toast(k==='away'?'wifi no responde · por el túnel':'de vuelta por wifi');break}if(k==='accept'){clearTimeout(state.pairT);state.screen='home';render();toast('conectado')}else{goConn(k)}break}
     case 'closefile':state.file=null;render();break;
+    case 'commits':state.commit=null;state.file=null;render();break;
+    case 'retry':{const v=state.view;state.vst[v]='load';render();setTimeout(()=>{state.vst[v]='ok';render()},900);break}
     case 'disc':state.screen='connect';state.conn='idle';render();break;
     case 'folder':state.sheet=null;toast('selector de carpetas');render();break;
     case 'newwt':state.sheet=null;toast('nuevo worktree: nombre de rama');render();break;

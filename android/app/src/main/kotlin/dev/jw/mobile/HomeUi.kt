@@ -59,7 +59,7 @@ import dev.jw.proto.Workspace
 import dev.jw.proto.Workspaces
 import kotlinx.coroutines.delay
 
-enum class Tab { Home, Avisos, Settings }
+enum class Tab { Home, Avisos, Diff, Settings }
 
 /** In-app navigation. Nothing here is a token or a code. */
 class Nav {
@@ -70,6 +70,12 @@ class Nav {
 
     /** The workspace that was open before this one, for `^␣ tab`. */
     var previous by mutableStateOf<String?>(null)
+
+    /** The workspace whose changes the diff tab shows: the last one entered, or the one picked there (REQ-25). */
+    var diffWs by mutableStateOf<String?>(null)
+
+    /** Opens `id`'s changes. */
+    fun showChanges(id: String) { diffWs = id; tab = Tab.Diff; open = null }
 }
 
 private val Corner = RoundedCornerShape(6.dp)
@@ -107,14 +113,14 @@ internal fun YesNo(enabled: Boolean, yLabel: String, nLabel: String, onY: () -> 
 }
 
 @Composable
-private fun NavBar(nav: Nav, waiting: Int) {
+internal fun NavBar(nav: Nav, waiting: Int) {
     val j = LocalJw.current
     Row(
         Modifier.fillMaxWidth().background(j.panel).drawBehind {
             drawLine(j.line, Offset(0f, 0f), Offset(size.width, 0f), 1.dp.toPx())
         },
     ) {
-        for ((tab, glyph, label) in listOf(Triple(Tab.Home, "≡", "workspaces"), Triple(Tab.Avisos, "?", "avisos"), Triple(Tab.Settings, "⚙", "ajustes"))) {
+        for ((tab, glyph, label) in listOf(Triple(Tab.Home, "≡", "workspaces"), Triple(Tab.Avisos, "?", "avisos"), Triple(Tab.Diff, "±", "diff"), Triple(Tab.Settings, "⚙", "ajustes"))) {
             val sel = nav.tab == tab
             val c = if (sel) j.blue else j.dim
             Box(
@@ -139,7 +145,7 @@ private fun NavBar(nav: Nav, waiting: Int) {
 
 /** What the connected app shows: three tabs, or one workspace when a row was tapped. */
 @Composable
-fun ConnectedApp(state: UiState.Connected, session: Session, nav: Nav, answers: AnswerPrefs, ticking: Boolean = true) {
+fun ConnectedApp(state: UiState.Connected, session: Session, nav: Nav, answers: AnswerPrefs, viewed: ViewedMarks, ticking: Boolean = true) {
     val j = LocalJw.current
     val model by session.model.collectAsState()
     // Re-evaluates the 2 s age of the snapshot twice a second. Compose UI tests turn this off: a looping delay
@@ -153,6 +159,8 @@ fun ConnectedApp(state: UiState.Connected, session: Session, nav: Nav, answers: 
         session.setVisible(nav.tab != Tab.Settings)
         onDispose { session.setVisible(false) }
     }
+    // The diff tab follows the workspace last entered.
+    LaunchedEffect(nav.open) { nav.open?.let { nav.diffWs = it } }
     LaunchedEffect(Unit) { session.toasts.collect { toast = it; delay(1800); if (toast == it) toast = null } }
     BackHandler(nav.sessionSheet || nav.open != null || nav.tab != Tab.Home) {
         when {
@@ -169,6 +177,7 @@ fun ConnectedApp(state: UiState.Connected, session: Session, nav: Nav, answers: 
             open != null -> WorkspaceScreen(open, model, state, session, nav, answers, now)
             nav.tab == Tab.Home -> HomeScreen(model, state, session, nav, now, waiting)
             nav.tab == Tab.Avisos -> AvisosScreen(model, state, session, nav, now, waiting)
+            nav.tab == Tab.Diff -> ChangesScreen(model, state, session, nav, viewed, now, waiting)
             else -> SettingsScreen(state, session, answers, nav, waiting)
         }
         if (nav.sessionSheet) SessionSheet(model, session, nav)

@@ -23,6 +23,8 @@ val JwMono = FontFamily(Font(R.font.jetbrains_mono_regular, FontWeight.Normal), 
 class JwColors(
     val bg: Color, val panel: Color, val fg: Color, val dim: Color, val line: Color, val sel: Color,
     val blue: Color, val green: Color, val yellow: Color, val red: Color, val magenta: Color, val cyan: Color,
+    /** The backgrounds of an added and a deleted line (REQ-25). */
+    val addBg: Color, val delBg: Color,
 )
 
 val LocalJw = staticCompositionLocalOf { toColors(Palettes.FALLBACK.dark, true) }
@@ -33,6 +35,7 @@ private fun toColors(p: Palette, dark: Boolean): JwColors {
     return JwColors(
         c("bg"), c("panel"), c("fg"), c("dim"), c("line"), c("sel"),
         c("blue"), c("green"), c("yellow"), c("red"), c("magenta"), c("cyan"),
+        c("add_bg"), c("del_bg"),
     )
 }
 

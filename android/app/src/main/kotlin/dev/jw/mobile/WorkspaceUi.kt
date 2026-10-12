@@ -129,6 +129,7 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
                 )
             }
             Box(Modifier.width(44.dp).heightIn(min = 44.dp).clickable(role = Role.Button, onClickLabel = "Cambiar workspace") { sheet = Sheet.Pick }, contentAlignment = Alignment.Center) { Icon(Ic.Search, j.fg, 22.dp) }
+            Box(Modifier.width(44.dp).heightIn(min = 44.dp).clickable(role = Role.Button, onClickLabel = "Cambios") { nav.showChanges(w.id) }, contentAlignment = Alignment.Center) { Text("±", color = j.fg, fontSize = 18.sp) }
         }
         // The panes of this workspace.
         Row(Modifier.fillMaxWidth().background(j.bg).horizontalScroll(rememberScrollState()).drawBehind { drawLine(j.line, Offset(0f, size.height), Offset(size.width, size.height), 1.dp.toPx()) }) {
@@ -203,8 +204,9 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
             onClosePane = { sheet = Sheet.CloseAsk }, onName = { sheet = Sheet.Name },
             onSettings = { sheet = Sheet.None; nav.open = null; nav.tab = Tab.Settings },
             onQuit = { sheet = Sheet.QuitAsk }, onPrevious = { nav.previous?.let { nav.open = it; nav.pane = null }; sheet = Sheet.None },
+            onChanges = { sheet = Sheet.None; nav.showChanges(w.id) },
         )
-        Sheet.Pick -> PickSheet(model, state, w, nav, onClose = { sheet = Sheet.None })
+        Sheet.Pick -> PickSheet(model, w, { x -> nav.open = x.id; nav.pane = null }, onClose = { sheet = Sheet.None })
         Sheet.Name -> NameSheet(sel, onDone = { name -> sel?.let { session.namePane(it.pane, name) }; sheet = Sheet.None }, onClose = { sheet = Sheet.None })
         Sheet.CloseAsk -> AskSheet(
             "¿cerrar el panel ${sel?.role ?: ""}?", sel?.fg?.let { "corre $it: se termina" } ?: "se termina su proceso", "cerrar",
@@ -302,7 +304,7 @@ private fun Composer(sel: PaneInfo?, state: UiState.Connected, session: Session)
 }
 
 @Composable
-private fun SheetFrame(onClose: () -> Unit, content: @Composable () -> Unit) {
+internal fun SheetFrame(onClose: () -> Unit, content: @Composable () -> Unit) {
     val j = LocalJw.current
     Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.5f)).clickable(onClick = onClose))
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
@@ -334,7 +336,7 @@ private fun SheetRow(key: String, label: String, tag: String, enabled: Boolean =
 private fun LeaderSheet(
     sel: PaneInfo?, w: Workspace, nav: Nav, model: Model, onClose: () -> Unit,
     onPick: () -> Unit, onSessions: () -> Unit, onNew: () -> Unit, onClosePane: () -> Unit, onName: () -> Unit,
-    onSettings: () -> Unit, onQuit: () -> Unit, onPrevious: () -> Unit,
+    onSettings: () -> Unit, onQuit: () -> Unit, onPrevious: () -> Unit, onChanges: () -> Unit,
 ) {
     val j = LocalJw.current
     SheetFrame(onClose) {
@@ -346,7 +348,7 @@ private fun LeaderSheet(
             SheetRow("t", "panel nuevo", "paneles", enabled = sel != null, onClick = onNew)
             SheetRow("x", "cerrar panel", "paneles", enabled = sel != null, onClick = onClosePane)
             SheetRow("n", "nombrar panel", "paneles", enabled = sel != null, onClick = onName)
-            SheetRow("d", "cambios (diff)", "pronto", enabled = false, onClick = {})
+            SheetRow("d", "cambios (diff)", "diff", onClick = onChanges)
             SheetRow(",", "ajustes", "ir", onClick = onSettings)
             SheetRow("q", "desconectar", "", onClick = onQuit)
             for ((k, l) in listOf("o" to "abrir carpeta", "w" to "nuevo worktree", "r" to "renombrar", "s" to "sincronizar", "X" to "quitar worktree", "R" to "revisar un PR")) {
@@ -357,10 +359,10 @@ private fun LeaderSheet(
 }
 
 @Composable
-private fun PickSheet(model: Model, state: UiState.Connected, current: Workspace, nav: Nav, onClose: () -> Unit) {
+internal fun PickSheet(model: Model, current: Workspace?, onPick: (Workspace) -> Unit, onClose: () -> Unit) {
     val j = LocalJw.current
     var q by remember { mutableStateOf("") }
-    val found = model.items.filter { it.id != current.id && (q.isBlank() || (it.name + " " + it.path).contains(q, ignoreCase = true)) }
+    val found = model.items.filter { it.id != current?.id && (q.isBlank() || (it.name + " " + it.path).contains(q, ignoreCase = true)) }
     SheetFrame(onClose) {
         Text("workspaces", color = j.dim, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp))
         BasicTextField(
@@ -378,7 +380,7 @@ private fun PickSheet(model: Model, state: UiState.Connected, current: Workspace
             for (x in found) {
                 val panes = Workspaces.panesOf(model.panes, x.id)
                 Row(
-                    Modifier.fillMaxWidth().heightIn(min = 50.dp).clickable { nav.open = x.id; nav.pane = null }.padding(horizontal = 14.dp, vertical = 6.dp),
+                    Modifier.fillMaxWidth().heightIn(min = 50.dp).clickable { onPick(x) }.padding(horizontal = 14.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     Text(if (panes.isNotEmpty()) "●" else "○", color = if (panes.isNotEmpty()) j.green else j.dim)

@@ -45,6 +45,7 @@ import dev.jw.proto.Palettes
 
 class SessionViewModel(app: Application) : AndroidViewModel(app) {
     val answers = AnswerPrefs(app)
+    val viewed = ViewedMarks(PrefsMarkStore(app))
     val nav = Nav()
     val session = Session(
         scope = viewModelScope,
@@ -97,13 +98,13 @@ class MainActivity : ComponentActivity() {
         setContent {
             val state by vm.session.state.collectAsState()
             (state as? UiState.Connected)?.let { vm.palettes = it.palettes }
-            JwTheme(vm.palettes) { App(state, vm.session, vm.nav, vm.answers) }
+            JwTheme(vm.palettes) { App(state, vm.session, vm.nav, vm.answers, vm.viewed) }
         }
     }
 }
 
 @Composable
-private fun App(state: UiState, session: Session, nav: Nav, answers: AnswerPrefs) {
+private fun App(state: UiState, session: Session, nav: Nav, answers: AnswerPrefs, viewed: ViewedMarks) {
     val j = LocalJw.current
     // Material's Text takes its style from here, so everything is mono like the prototype.
     androidx.compose.material3.Surface(color = j.bg, contentColor = j.fg, modifier = Modifier.fillMaxSize()) {
@@ -113,7 +114,7 @@ private fun App(state: UiState, session: Session, nav: Nav, answers: AnswerPrefs
                 is UiState.Scan -> ScanFlow(state, session)
                 is UiState.Pairing -> Pairing(state, session)
                 is UiState.Connecting -> Waiting("conectando", state.host, "…", session)
-                is UiState.Connected -> ConnectedApp(state, session, nav, answers)
+                is UiState.Connected -> ConnectedApp(state, session, nav, answers, viewed)
                 is UiState.Mismatch -> Mismatch(state, session)
                 is UiState.Reconnecting -> Reconnecting(state, session)
             }
