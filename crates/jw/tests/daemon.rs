@@ -23,13 +23,19 @@ struct Daemon {
 
 impl Daemon {
     fn start() -> Self {
+        Self::start_with(None)
+    }
+
+    /// A daemon whose Claude config folder, where transcripts are, is `config`.
+    fn start_with(config: Option<&Path>) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let socket = dir.path().join("jw.sock");
-        let child = Command::new(EXE)
-            .arg("daemon")
-            .env("JW_SOCKET", &socket)
-            .spawn()
-            .unwrap();
+        let mut cmd = Command::new(EXE);
+        cmd.arg("daemon").env("JW_SOCKET", &socket);
+        if let Some(config) = config {
+            cmd.env("CLAUDE_CONFIG_DIR", config);
+        }
+        let child = cmd.spawn().unwrap();
         let deadline = Instant::now() + TIMEOUT;
         while Client::connect(&socket).is_err() {
             assert!(Instant::now() < deadline, "daemon never listened");
@@ -2004,6 +2010,92 @@ fn a_client_that_draws_a_terminal_still_gets_output_while_another_watches_text()
             .unwrap();
         if let Ok(Some(DaemonMsg::Text { lines, .. })) = text.recv() {
             saw_text |= lines.iter().any(|l| row_text(l).contains("ping"));
+        }
+    }
+}
+
+#[test]
+fn a_phone_watching_an_agent_gets_its_transcript_as_blocks_and_then_each_change() {
+    use std::io::Write;
+    let config = tempfile::tempdir().unwrap();
+    let id = "0f6bd1c2-1111-4222-8333-444455556666";
+    let folder = config.path().join("projects/-some-where");
+    std::fs::create_dir_all(&folder).unwrap();
+    let file = folder.join(format!("{id}.jsonl"));
+    std::fs::write(
+        &file,
+        concat!(
+            "{\"type\":\"ai-title\",\"aiTitle\":\"Arreglar el socket\"}\n",
+            "{\"type\":\"user\",\"message\":{\"content\":\"hola\"}}\n",
+            "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"listo\"}]}}\n",
+        ),
+    )
+    .unwrap();
+    let d = Daemon::start_with(Some(config.path()));
+    let mut c = d.client();
+    let agent = spawn(
+        &mut c,
+        "s",
+        &format!("echo --session-id {id}; sleep 30"),
+        40,
+        5,
+    );
+    let shell = spawn(&mut c, "s", "sleep 30", 40, 5);
+
+    // All of it at once, with the title Claude gave the conversation.
+    c.send(&ClientMsg::ChatWatch { pane: agent }).unwrap();
+    let DaemonMsg::Chat {
+        known,
+        title,
+        reset,
+        blocks,
+        ..
+    } = next_chat(&mut c, agent)
+    else {
+        unreachable!()
+    };
+    assert!(known && reset);
+    assert_eq!(title.as_deref(), Some("Arreglar el socket"));
+    let seen: Vec<(u32, &str, &str)> = blocks
+        .iter()
+        .map(|b| (b.i, b.kind.as_str(), b.text.as_str()))
+        .collect();
+    assert_eq!(seen, [(0, "user", "hola"), (1, "text", "listo")]);
+
+    // Then only what is new, as Claude appends it.
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&file)
+        .unwrap();
+    writeln!(
+        f,
+        "{{\"type\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"Bash\",\"input\":{{\"command\":\"ls\"}}}}]}}}}"
+    )
+    .unwrap();
+    let DaemonMsg::Chat { reset, blocks, .. } = next_chat(&mut c, agent) else {
+        unreachable!()
+    };
+    assert!(!reset);
+    assert_eq!(blocks.len(), 1);
+    assert_eq!((blocks[0].i, blocks[0].name.as_str()), (2, "Bash"));
+
+    // A pane that is no Claude session has no conversation.
+    c.send(&ClientMsg::ChatWatch { pane: shell }).unwrap();
+    let DaemonMsg::Chat { known, blocks, .. } = next_chat(&mut c, shell) else {
+        unreachable!()
+    };
+    assert!(!known && blocks.is_empty());
+}
+
+/// The next `Chat` of `pane`.
+fn next_chat(c: &mut Client, pane: PaneId) -> DaemonMsg {
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        assert!(Instant::now() < deadline, "no Chat for pane {pane}");
+        if let m @ DaemonMsg::Chat { pane: p, .. } = recv(c)
+            && p == pane
+        {
+            return m;
         }
     }
 }

@@ -1285,7 +1285,16 @@ fn tag_of(body: &[u8]) -> Option<String> {
 fn looking(body: &[u8]) -> bool {
     matches!(
         tag_of(body).as_deref(),
-        Some("Hello" | "Attach" | "Detach" | "List" | "TextView" | "TextHistory")
+        Some(
+            "Hello"
+                | "Attach"
+                | "Detach"
+                | "List"
+                | "TextView"
+                | "TextHistory"
+                | "ChatWatch"
+                | "ChatUnwatch"
+        )
     )
 }
 

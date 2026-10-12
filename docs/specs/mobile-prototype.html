@@ -110,6 +110,23 @@ svg.i{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stro
 .key{min-width:44px;height:38px;padding:0 10px;border-radius:5px;background:var(--bg);border:1px solid var(--line);font-size:12px;display:grid;place-items:center;flex:none;text-align:center}
 .key.lead{color:var(--yellow);border-color:color-mix(in srgb,var(--yellow) 50%,var(--line))}
 .key:active{background:var(--blue);color:var(--bg)}
+/* conversación nativa: el transcript de claude como bloques, sin la pantalla del terminal */
+.ctitle{flex:none;display:flex;align-items:center;gap:8px;padding:0 12px;min-height:34px;border-bottom:1px solid var(--line);background:var(--bg);font-size:12px;color:var(--dim)}
+.ctitle b{color:var(--fg);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
+.chat{flex:1;min-height:0;overflow:auto;padding:10px 12px;display:flex;flex-direction:column;gap:10px;background:var(--bg)}
+.msg.u{align-self:flex-end;max-width:88%;background:var(--sel);border-radius:10px 10px 2px 10px;padding:8px 10px;font-size:12.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
+.msg.a{font-size:12.5px;line-height:1.55;word-break:break-word}
+.msg.a code{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:0 4px;color:var(--cyan)}
+.msg.a ol,.msg.a ul{margin:4px 0;padding-left:20px}
+.tool{border:1px solid var(--line);border-radius:8px;background:var(--panel);overflow:hidden}
+.tool .th{display:flex;align-items:center;gap:8px;padding:0 10px;min-height:42px;width:100%;text-align:left;font-size:12px}
+.tool .th b{color:var(--blue);font-weight:700}
+.tool .th .ar{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg)}
+.tool .th em{font-style:normal;color:var(--dim);font-size:11px;flex:none}
+.tool .th .ok{color:var(--green)}.tool .th .pend{color:var(--yellow)}
+.tool .tb{border-top:1px solid var(--line);padding:8px 10px;font-size:11.5px;color:var(--dim);white-space:pre-wrap;word-break:break-word;max-height:170px;overflow:auto;background:var(--bg)}
+.tool .tb .a{color:var(--green)}.tool .tb .x{color:var(--red)}
+.think{font-size:11.5px;color:var(--dim);display:flex;align-items:center;gap:6px;min-height:28px}
 .comp{display:flex;align-items:center;gap:6px;padding:4px 10px 8px;background:var(--panel)}
 .comp .pr{color:var(--green);font-weight:700}
 .comp input{flex:1;min-width:0;height:44px;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:var(--fg);padding:0 12px;font:inherit}
@@ -613,6 +630,36 @@ function vSettings(){
    ${statusBar('SET','settings.json')}${nav()}`;
 }
 
+/* lo que claude escribió en su transcript (~/.claude/projects/…/<id>.jsonl), como bloques */
+const CHAT={
+ 'jw/fix/daemon-sock':[
+  {k:'u',t:'El socket del daemon se queda colgado cuando el directorio de runtime no existe. ¿Puedes arreglarlo?'},
+  {k:'think',s:6},
+  {k:'a',t:'Voy a mirar cómo se crea el socket y qué pasa si falta <code>XDG_RUNTIME_DIR</code>.'},
+  {k:'tool',n:'Read',a:'crates/daemon/src/lib.rs',r:'1 640 líneas',b:'fn bind(socket: &Path) -> Result<UnixListener> {\n    …'},
+  {k:'tool',n:'Grep',a:'create_dir_all',r:'3 coincidencias',b:'crates/daemon/src/lib.rs:2087\ncrates/proto/src/client.rs:44\ncrates/jw/src/main.rs:61'},
+  {k:'a',t:'<code>bind</code> no crea el directorio padre. Lo agrego con permisos <code>0700</code> y un test.'},
+  {k:'tool',n:'Edit',a:'crates/daemon/src/lib.rs',r:'+9 −1',b:'<span class="x">- let listener = UnixListener::bind(socket)?;</span>\n<span class="a">+ if let Some(dir) = socket.parent() {</span>\n<span class="a">+     DirBuilder::new().recursive(true).mode(0o700).create(dir)?;</span>\n<span class="a">+ }</span>\n<span class="a">+ let listener = UnixListener::bind(socket)?;</span>'},
+  {k:'tool',n:'Bash',a:'cargo test -p jw-daemon',r:'42 pasan',ok:1,b:'running 42 tests\ntest result: ok. 42 passed; 0 failed'},
+  {k:'a',t:'Listo: el socket se crea aunque falte el directorio.<ol><li>Cambio en <code>bind</code></li><li>Test nuevo <code>creates_missing_runtime_dir</code></li></ol>'}
+ ]
+};
+const CHAT_TITLE={'jw/fix/daemon-sock':'Arreglar el socket del daemon','jw/feat/mobile-app':'App móvil: prototipo','api/feat/auth':'Tests del refresh token','web/feat/onboarding':'Onboarding: instalar dependencias'};
+function chatTitle(w){return CHAT_TITLE[w.id]||w.name}
+function chatOf(w){return CHAT[w.id]||[{k:'u',t:'¿En qué estás?'},{k:'a',t:w.last}]}
+function chatHtml(w){
+  state.open=state.open||{};
+  const items=chatOf(w).map((x,i)=>{
+    if(x.k==='u') return `<div class="msg u">${x.t}</div>`;
+    if(x.k==='a') return `<div class="msg a">${x.t}</div>`;
+    if(x.k==='think') return `<div class="think"><span>✻</span> pensó ${x.s} s</div>`;
+    const op=state.open[w.id+i];
+    return `<div class="tool"><button class="th" data-act="tool" data-i="${w.id+i}" aria-expanded="${!!op}"><b>${x.n}</b><span class="ar">${x.a}</span><em class="${x.ok?'ok':''}">${x.r}</em><span style="color:var(--dim)">${op?'▾':'▸'}</span></button>${op?`<div class="tb">${x.b}</div>`:''}</div>`;
+  });
+  if(w.ag==='wait') items.push(`<div class="tool"><div class="th"><b>Bash</b><span class="ar">pnpm install</span><em class="pend">espera permiso</em></div></div>`);
+  if(w.ag==='work') items.push('<div class="think"><span class="w">✻</span> trabajando…</div>');
+  return `<div class="ctitle"><span style="color:var(--magenta)">✻</span><b title="el nombre que Claude le dio a esta conversación">${chatTitle(w)}</b></div><div class="chat" id="out">${items.join('')}</div>`;
+}
 function vWs(){
   const w=wsOf(state.ws), proj=w.kind==='root'?w.id:w.proj, root=wsOf(proj);
   const panes=[['claude','var(--magenta)'],['dev','var(--green)'],['shell','var(--dim)']];
@@ -623,7 +670,7 @@ function vWs(){
     <div class="t"><b>${w.kind==='wt'?root.name+' › ':''}${w.name}</b><span>${w.kind==='wt'?'⎇ '+w.name+' · base main · '+(w.pr||'sin PR')+' · ':''}${w.path}</span></div>
     <button class="ib" data-sheet="pick" aria-label="Cambiar workspace">${ic('search')}</button><button class="ib" data-act="wsfiles" aria-label="Archivos">${ic('folder')}</button><button class="ib" data-go="changes" aria-label="Cambios" style="font-size:16px">±</button></div>
    <div class="panes" role="tablist">${panes.map(([p,c])=>`<button class="pt" role="tab" aria-selected="${state.pane===p}" data-pane="${p}" style="--c:${c}"><i></i>${p}</button>`).join('')}</div>
-   <div class="out" id="out">${lines}${w.ag==='work'&&state.pane==='claude'?' <span class="cur"></span>':''}</div>
+   ${state.pane==='claude'?chatHtml(w):`<div class="out" id="out">${lines}</div>`}
    ${askOn?`<div class="ask"><p><b style="color:var(--yellow)">?</b> ${w.last}</p><div class="opts" style="font-size:11.5px;color:var(--dim);margin:-2px 0 8px;white-space:pre-wrap">1. Yes   2. Yes, y no volver a preguntar   3. No   <span style="color:var(--fg)">(texto del aviso, tomado del panel)</span></div><div class="yn"><button class="y" data-ans="y|${w.id}">y · sí</button><button class="x" data-ans="n|${w.id}">n · no</button></div></div>`:''}
    ${state.sel?`<div class="selbar"><span>3 líneas seleccionadas</span><button class="key" data-act="copy">copiar</button><button class="key" data-act="unsel">cancelar</button></div>`:''}
    <div class="keys"><button class="key lead" data-sheet="leader">^␣</button>${keys.map(x=>`<button class="key" data-key="${x}">${x}</button>`).join('')}</div>
@@ -842,6 +889,7 @@ document.addEventListener('click',e=>{
     case 'vsrc0':state.viewer.src=false;render();break;
     case 'vsrc1':state.viewer.src=true;render();break;
     case 'newwt':state.sheet='newwt';render();break;
+    case 'tool':state.open=state.open||{};state.open[t.dataset.i]=!state.open[t.dataset.i];render();break;
     case 'newsess':state.sheet='sess';state.sessNew=true;render();break;
     case 'sessback':state.sessNew=false;render();break;
     case 'setproj':state.nwProj=t.dataset.proj;state.sheet='newwt';render();break;

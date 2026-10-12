@@ -15,7 +15,7 @@ pub type PaneId = u64;
 
 /// Bumped whenever a message changes shape: a client and a daemon from
 /// different builds refuse each other instead of misreading (RISK-14).
-pub const PROTOCOL: u32 = 15;
+pub const PROTOCOL: u32 = 16;
 
 /// A run of cells of one row that share a style: its first column, its
 /// text (a wide character counts two columns; the cells after it are not
@@ -24,6 +24,25 @@ pub const PROTOCOL: u32 = 15;
 /// (bold 1, dim 2, italic 4, underline 8, inverse 16). A row's blank end is
 /// left out.
 pub type Run = (u16, String, u32, u32, u8);
+
+/// One block of an agent's conversation, as its transcript has it (mobile
+/// REQ-90). `kind` is `user` or `text` (a message: `text`), `think`
+/// (`result` says how long it took) or `tool` (`name`, `arg` the one line
+/// that sums the call up, `body` the command, the diff or the output, and
+/// `result` the line that sums its result up, `None` until it has one).
+/// `i` numbers the conversation's blocks from its start: a block with a
+/// number the client has is that block again, changed.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ChatBlock {
+    pub i: u32,
+    pub kind: String,
+    pub text: String,
+    pub name: String,
+    pub arg: String,
+    pub result: Option<String>,
+    pub body: Option<String>,
+    pub error: bool,
+}
 
 /// A pane to start. `cmd` runs through `sh -c`; `None` starts `$SHELL`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -79,6 +98,15 @@ pub enum ClientMsg {
     /// instead of `Snapshot` and `Output`: a phone draws no terminal, so it
     /// needs neither the bytes nor the replay (mobile REQ-21).
     TextView,
+    /// From now on this connection gets the conversation of the agent in
+    /// `pane` as `Chat`: the last blocks at once, then each change.
+    ChatWatch {
+        pane: PaneId,
+    },
+    /// Stop getting `Chat` for `pane` (leaving the workspace does it too).
+    ChatUnwatch {
+        pane: PaneId,
+    },
     /// The last `count` rows of the pane's scrollback, as `TextHistory`,
     /// oldest first (at most `SCROLLBACK`).
     TextHistory {
@@ -357,6 +385,19 @@ pub enum DaemonMsg {
         app_cursor: bool,
         cursor: Option<(u16, u16)>,
         lines: Vec<Vec<Run>>,
+    },
+    /// The conversation of the agent in `pane`: `reset` says these blocks are
+    /// all the client has (it starts or starts again), else they are the ones
+    /// that are new or changed. `title` is the name Claude gave the
+    /// conversation, when it is known or changed.
+    Chat {
+        pane: PaneId,
+        /// The pane runs a Claude session whose transcript is followed; false
+        /// for any other pane, which has no conversation to show.
+        known: bool,
+        title: Option<String>,
+        reset: bool,
+        blocks: Vec<ChatBlock>,
     },
     /// The answer to `TextHistory`: rows of the scrollback, oldest first.
     TextHistory {

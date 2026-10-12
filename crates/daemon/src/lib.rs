@@ -31,6 +31,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use serde::{Deserialize, Serialize};
 
+mod chat;
 mod mobile;
 mod outbox;
 mod ring;
@@ -54,6 +55,9 @@ const MOBILE_STOP_WITHIN: Duration = Duration::from_secs(2);
 
 /// Lines of scrollback each pane keeps.
 const SCROLLBACK: usize = 10_000;
+
+/// How often a followed transcript is read for what it gained.
+const CHAT_EVERY: Duration = Duration::from_millis(300);
 
 /// How often the phones watching a pane are sent its screen, when it changed.
 const TEXT_EVERY: Duration = Duration::from_millis(80);
@@ -79,6 +83,13 @@ pub fn run(socket: &Path, look: Look) -> Result<()> {
         loop {
             thread::sleep(SAVE_EVERY);
             saver.save_scrollback();
+        }
+    });
+    let chatter = Arc::clone(&daemon);
+    thread::spawn(move || {
+        loop {
+            thread::sleep(CHAT_EVERY);
+            chatter.chat_poll();
         }
     });
     let texter = Arc::clone(&daemon);
@@ -193,9 +204,20 @@ struct Daemon {
     theme: Arc<Mutex<Theme>>,
     next_pane: AtomicU64,
     next_client: AtomicU64,
+    /// The conversations of the agents a phone watches (mobile REQ-90). Its
+    /// lock is taken on its own: never with a pane's or a workspace's.
+    chats: Mutex<BTreeMap<PaneId, ChatWatch>>,
     /// Mobile: its own locks and threads, none shared with the panes
     /// (REQ-40).
     mobile: Mobile,
+}
+
+/// A transcript followed for the phones that watch it.
+struct ChatWatch {
+    tail: chat::Tail,
+    session: String,
+    cwd: PathBuf,
+    subs: Vec<Sub>,
 }
 
 /// An open workspace: how its panes are laid out, and who watches it.
@@ -617,6 +639,7 @@ impl Daemon {
             theme: Arc::default(),
             next_pane: AtomicU64::new(0),
             next_client: AtomicU64::new(0),
+            chats: Mutex::default(),
             mobile,
         }
     }
@@ -672,6 +695,12 @@ impl Daemon {
             }
             ClientMsg::SplitSnapshots => tx.set_split(),
             ClientMsg::TextView => tx.set_text(),
+            ClientMsg::ChatWatch { pane } => self.chat_watch(client, tx, pane)?,
+            ClientMsg::ChatUnwatch { pane } => {
+                if let Some(w) = lock(&self.chats).get_mut(&pane) {
+                    w.subs.retain(|s| s.client != client);
+                }
+            }
             ClientMsg::TextHistory { pane, count } => {
                 let pane_id = pane;
                 let pane = self.pane(pane)?;
@@ -1376,6 +1405,82 @@ impl Daemon {
         self.next_pane.fetch_add(1, Ordering::Relaxed) + 1
     }
 
+    /// Starts `client` on the conversation of the agent in `id`: all it has now,
+    /// then each change (`chat_poll`). A pane that runs no Claude session is
+    /// told so once.
+    fn chat_watch(&self, client: u64, tx: &Tx, id: PaneId) -> Result<()> {
+        let pane = self.pane(id)?;
+        let (session, cwd) = {
+            let started = lock(&pane.started);
+            let session = [started.cmd.as_deref(), started.resume.as_deref()]
+                .into_iter()
+                .flatten()
+                .find_map(chat::session_id);
+            (session, started.cwd.clone())
+        };
+        let Some(session) = session else {
+            let _ = tx.send(DaemonMsg::Chat {
+                pane: id,
+                known: false,
+                title: None,
+                reset: true,
+                blocks: Vec::new(),
+            });
+            return Ok(());
+        };
+        let mut chats = lock(&self.chats);
+        let w = chats.entry(id).or_insert_with(|| ChatWatch {
+            tail: chat::Tail::new(None),
+            session: session.clone(),
+            cwd,
+            subs: Vec::new(),
+        });
+        w.tail.locate(&w.session, &w.cwd);
+        // Whoever already watches gets what is new before this client is
+        // brought up to date.
+        let news = w.tail.poll();
+        if news != chat::Changes::default() {
+            let msg = DaemonMsg::Chat {
+                pane: id,
+                known: true,
+                title: news.title,
+                reset: false,
+                blocks: news.blocks,
+            };
+            w.subs.retain(|s| s.tx.send(msg.clone()).is_ok());
+        }
+        let _ = tx.send(DaemonMsg::Chat {
+            pane: id,
+            known: true,
+            title: w.tail.title().map(str::to_string),
+            reset: true,
+            blocks: w.tail.last(chat::FIRST),
+        });
+        subscribe(&mut w.subs, client, tx);
+        Ok(())
+    }
+
+    /// Reads what the followed transcripts gained and tells their watchers;
+    /// one nobody watches any more is let go.
+    fn chat_poll(&self) {
+        let mut chats = lock(&self.chats);
+        chats.retain(|id, w| {
+            w.tail.locate(&w.session, &w.cwd);
+            let news = w.tail.poll();
+            if news != chat::Changes::default() {
+                let msg = DaemonMsg::Chat {
+                    pane: *id,
+                    known: true,
+                    title: news.title,
+                    reset: false,
+                    blocks: news.blocks,
+                };
+                w.subs.retain(|s| s.tx.send(msg.clone()).is_ok());
+            }
+            !w.subs.is_empty()
+        });
+    }
+
     /// Sends each pane's screen to the clients that watch it as text, when it
     /// changed since the last time. Every pane is looked at, one lock at a time.
     fn flush_text(&self) {
@@ -1411,6 +1516,9 @@ impl Daemon {
     }
 
     fn unsubscribe(&self, client: u64) {
+        for w in lock(&self.chats).values_mut() {
+            w.subs.retain(|s| s.client != client);
+        }
         for ws in lock(&self.workspaces).values_mut() {
             ws.subs.retain(|s| s.client != client);
         }
