@@ -31,6 +31,16 @@ class ChatBlock(
     val result: String?, val body: String?, val error: Boolean,
 )
 
+/**
+ * One command of a shell (`ShellBlock` in `proto.rs`): [out] is its output as plain text (the last lines, [lines]
+ * counts them all), [code] its exit status once it ended, [ms] how long it ran (so far while [running]), and [full]
+ * says a program drew the whole screen, which keeps no output. [i] numbers the pane's commands from its start.
+ */
+class ShellBlock(
+    val i: Int, val cmd: String, val cwd: String, val out: String, val lines: Int, val code: Int?, val ms: Long,
+    val running: Boolean, val full: Boolean,
+)
+
 /** What a watched pane sends: its screen as styled rows, the rows above it on request, its size and its end. */
 sealed interface PaneEvent {
     val pane: Long
@@ -58,9 +68,21 @@ sealed interface PaneEvent {
      * conversation; `title` is the name Claude gave it.
      */
     class Chat(
-        override val pane: Long, val known: Boolean, val title: String?, val reset: Boolean, val blocks: List<ChatBlock>,
+        override val pane: Long, val known: Boolean, val name: String?, val title: String?, val reset: Boolean,
+        val blocks: List<ChatBlock>,
     ) : PaneEvent {
         override fun toString() = "Chat(pane=$pane, known=$known, ${blocks.size} blocks)"
+    }
+
+    /**
+     * The commands of the shell in the pane (`DaemonMsg::Shell`): `reset` says these are all the blocks held, else the
+     * ones new or changed. `known` is false while the shell has marked no command (the pane is drawn as text); `input`
+     * is the line being typed at the prompt, when it is new.
+     */
+    class Shell(
+        override val pane: Long, val known: Boolean, val reset: Boolean, val blocks: List<ShellBlock>, val input: String?,
+    ) : PaneEvent {
+        override fun toString() = "Shell(pane=$pane, known=$known, ${blocks.size} blocks)"
     }
 
     /** The answer to [Panes.textHistoryFrame]: rows of the scrollback, oldest first. */
@@ -121,8 +143,24 @@ object Panes {
                     )
                 } ?: return null
                 PaneEvent.Chat(
-                    pane, (o["known"] as? JsonPrimitive)?.booleanOrNull ?: false, (o["title"] as? JsonPrimitive)?.contentOrNull,
-                    (o["reset"] as? JsonPrimitive)?.booleanOrNull ?: false, blocks,
+                    pane, (o["known"] as? JsonPrimitive)?.booleanOrNull ?: false, (o["name"] as? JsonPrimitive)?.contentOrNull,
+                    (o["title"] as? JsonPrimitive)?.contentOrNull, (o["reset"] as? JsonPrimitive)?.booleanOrNull ?: false, blocks,
+                )
+            }
+            "Shell" -> {
+                val blocks = (o["blocks"] as? JsonArray)?.takeIf { it.size <= MAX_CHAT_BLOCKS }?.map { b ->
+                    val bo = b as? JsonObject ?: return null
+                    fun str(k: String) = (bo[k] as? JsonPrimitive)?.contentOrNull
+                    fun num(k: String) = (bo[k] as? JsonPrimitive)?.longOrNull
+                    ShellBlock(
+                        (num("i") ?: return null).toInt(), str("cmd") ?: "", str("cwd") ?: "", str("out") ?: "",
+                        (num("lines") ?: 0).toInt(), (bo["code"] as? JsonPrimitive)?.intOrNull, num("ms") ?: 0,
+                        (bo["running"] as? JsonPrimitive)?.booleanOrNull ?: false, (bo["full"] as? JsonPrimitive)?.booleanOrNull ?: false,
+                    )
+                } ?: return null
+                PaneEvent.Shell(
+                    pane, (o["known"] as? JsonPrimitive)?.booleanOrNull ?: false, (o["reset"] as? JsonPrimitive)?.booleanOrNull ?: false,
+                    blocks, (o["input"] as? JsonPrimitive)?.contentOrNull,
                 )
             }
             "TextHistory" -> PaneEvent.History(pane, rows(o["lines"], MAX_HISTORY_ROWS) ?: return null)
@@ -180,6 +218,12 @@ object Panes {
 
     /** `ClientMsg::ChatUnwatch`. Allowed in read-only. */
     fun chatUnwatchFrame(pane: Long): Frame = Frame.Json(buildJsonObject { put("t", "ChatUnwatch"); put("pane", pane) }.toString())
+
+    /** `ClientMsg::ShellWatch`: the commands of the shell in `pane`, answered as [PaneEvent.Shell]. Allowed in read-only. */
+    fun shellWatchFrame(pane: Long): Frame = Frame.Json(buildJsonObject { put("t", "ShellWatch"); put("pane", pane) }.toString())
+
+    /** `ClientMsg::ShellUnwatch`. Allowed in read-only. */
+    fun shellUnwatchFrame(pane: Long): Frame = Frame.Json(buildJsonObject { put("t", "ShellUnwatch"); put("pane", pane) }.toString())
 
     /** `ClientMsg::Detach`: stop every pane's output; the panes keep running. Allowed in read-only. */
     fun detachFrame(): Frame = Frame.Json("""{"t":"Detach"}""")

@@ -30,6 +30,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -120,6 +122,14 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
         onDispose { session.watchChat(null) }
     }
     val chat = remember(rev, agentPane) { agentPane?.let(session::chat) }
+    // A shell jw started marks its commands: they are drawn as cards (REQ-92).
+    val shellPane = sel?.takeIf { !it.mayHaveConversation() && it.role == "shell" }?.pane
+    DisposableEffect(shellPane) {
+        session.watchShell(shellPane)
+        onDispose { session.watchShell(null) }
+    }
+    val shell = remember(rev, shellPane) { shellPane?.let(session::shell) }
+    val shellView = shell?.takeIf { it.known && it.blocks.lastOrNull()?.let { b -> b.running && b.full } != true }
     DisposableEffect(w.id) { onDispose { nav.previous = w.id } }
     BackHandlerFor(sheet != Sheet.None) { sheet = Sheet.None }
 
@@ -163,7 +173,16 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
             } else if (agentPane != null && chat == null) {
                 Text("Cargando la conversación…", color = j.dim, fontSize = 12.sp, modifier = Modifier.padding(14.dp))
             } else if (chat?.known == true) {
-                ChatView(chat, w.name, sel.agent == AgentState.Waiting, Modifier.fillMaxSize())
+                ChatView(chat, w.name, sel.name ?: sel.role, sel.agent == AgentState.Waiting, Modifier.fillMaxSize())
+            } else if (shellView != null) {
+                val clipboard = LocalContext.current.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                ShellView(
+                    shellView, sel.cwd ?: w.path, sel.name ?: sel.role,
+                    onCopy = { clipboard.setPrimaryClip(android.content.ClipData.newPlainText("jw", it)); },
+                    onRerun = { cmd -> session.input(sel.pane, Keys.text(cmd)); session.input(sel.pane, Keys.key(Key.Enter)) },
+                    onStop = { session.input(sel.pane, Keys.ctrl('c') ?: ByteArray(0)) },
+                    modifier = Modifier.fillMaxSize(),
+                )
             } else {
                 TerminalView(
                     term = term, rev = rev, selection = selection, onSelection = { selection = it }, onTap = {},
@@ -217,7 +236,13 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
             }
         }
         KeyRow(sel, term, session, onLeader = { sheet = Sheet.Leader })
-        Composer(sel, state, session)
+        // What the terminal's input holds: a Claude's box read off its screen, a shell's line as it tells it.
+        val remote = when {
+            chat?.known == true -> term?.let(ClaudeInput::read)
+            shellView != null -> shellView.input
+            else -> null
+        }
+        Composer(sel, state, session, remote = remote, live = chat?.known == true || shellView != null)
         StatusBar("TERM", j.green, sel?.let { "${it.role} · ${term?.let { t -> "${t.cols}×${t.rows}" } ?: "…"} · ^␣ menú" } ?: "sin paneles", route = state.route)
     }
 
@@ -300,17 +325,36 @@ private fun KeyRow(sel: PaneInfo?, term: PaneText?, session: Session, onLeader: 
     }
 }
 
-/** `.comp`: a line typed here goes to the pane, then Enter. */
+/**
+ * `.comp`: the input. Where the PC shows the terminal's own input ([live]: a conversation or a marked shell) it is the same
+ * text: what is typed on the phone is typed in the terminal as it goes ([MirrorTyping]), and what changes in the
+ * terminal's input (typed at the PC) is put here once the phone's has been still for a moment; Enter only sends it.
+ * Elsewhere a line typed here goes to the pane, then Enter, when it is sent.
+ */
 @Composable
-private fun Composer(sel: PaneInfo?, state: UiState.Connected, session: Session) {
+private fun Composer(sel: PaneInfo?, state: UiState.Connected, session: Session, remote: String?, live: Boolean) {
     val j = LocalJw.current
     var text by remember(sel?.pane) { mutableStateOf("") }
+    var typedAt by remember(sel?.pane) { mutableLongStateOf(0L) }
+    // The terminal's input changed: if the phone's has been still, it follows.
+    LaunchedEffect(remote, live) {
+        if (live && remote != null && remote != text && System.currentTimeMillis() - typedAt > MIRROR_STILL_MS) text = remote
+    }
     val send = {
         if (sel != null) {
-            if (text.isNotEmpty()) session.input(sel.pane, Keys.text(text))
+            if (!live && text.isNotEmpty()) session.input(sel.pane, Keys.text(text))
             session.input(sel.pane, Keys.key(Key.Enter))
             text = ""
+            typedAt = System.currentTimeMillis()
         }
+    }
+    val edit = { new: String ->
+        if (live && sel != null && !state.readOnly) {
+            val bytes = MirrorTyping.bytes(text, new)
+            if (bytes.isNotEmpty()) session.input(sel.pane, bytes)
+        }
+        text = new
+        typedAt = System.currentTimeMillis()
     }
     Row(
         Modifier.fillMaxWidth().background(j.panel).padding(start = 10.dp, end = 10.dp, top = 4.dp, bottom = 8.dp),
@@ -318,9 +362,9 @@ private fun Composer(sel: PaneInfo?, state: UiState.Connected, session: Session)
     ) {
         Text(if (sel?.role == "agent") "›" else "❯", color = j.green, fontWeight = FontWeight.Bold)
         BasicTextField(
-            value = text, onValueChange = { text = it }, enabled = sel != null && !state.readOnly,
+            value = text, onValueChange = edit, enabled = sel != null && !state.readOnly,
             textStyle = TextStyle(color = j.fg, fontSize = 13.5.sp, fontFamily = JwMono), cursorBrush = SolidColor(j.fg),
-            singleLine = true, keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send), keyboardActions = KeyboardActions(onSend = { send() }),
+            singleLine = !live, keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send), keyboardActions = KeyboardActions(onSend = { send() }),
             modifier = Modifier.weight(1f),
             decorationBox = { inner ->
                 FieldFrame(j.line) {
@@ -338,6 +382,9 @@ private fun Composer(sel: PaneInfo?, state: UiState.Connected, session: Session)
         ) { Text("↵", color = j.bg, fontWeight = FontWeight.Bold, fontSize = 16.sp) }
     }
 }
+
+/** How long the phone's input must have been still before a change in the terminal's replaces it. */
+private const val MIRROR_STILL_MS = 800L
 
 @Composable
 internal fun SheetFrame(onClose: () -> Unit, content: @Composable () -> Unit) {

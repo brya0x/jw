@@ -314,6 +314,8 @@ class Session(
     private val exits = ConcurrentHashMap<Long, Int>()
     private val chats = ConcurrentHashMap<Long, ChatState>()
     @Volatile private var chatPane: Long? = null
+    private val shells = ConcurrentHashMap<Long, ShellState>()
+    @Volatile private var shellPane: Long? = null
     @Volatile private var watching: String? = null
     private val _termRev = MutableStateFlow(0L)
 
@@ -334,6 +336,18 @@ class Session(
         chatPane?.let { send(Outgoing.Binary(Panes.chatUnwatchFrame(it))); chats.remove(it) }
         chatPane = pane
         pane?.let { send(Outgoing.Binary(Panes.chatWatchFrame(it))) }
+        _termRev.update { it + 1 }
+    }
+
+    /** The commands of the shell in `pane` and its line being typed, once the PC has answered (REQ-92); null until then. */
+    fun shell(pane: Long): ShellState? = shells[pane]
+
+    /** Follows the commands of the shell in `pane` (null: none); only one at a time, the one on screen. */
+    fun watchShell(pane: Long?) {
+        if (pane == shellPane) return
+        shellPane?.let { send(Outgoing.Binary(Panes.shellUnwatchFrame(it))); shells.remove(it) }
+        shellPane = pane
+        pane?.let { send(Outgoing.Binary(Panes.shellWatchFrame(it))) }
         _termRev.update { it + 1 }
     }
 
@@ -374,6 +388,7 @@ class Session(
             is PaneEvent.Text -> screens.getOrPut(e.pane) { PaneText(e.cols, e.rows) }.setScreen(e)
             is PaneEvent.History -> screens[e.pane]?.setHistory(e)
             is PaneEvent.Chat -> chats.compute(e.pane) { _, old -> ChatState.merge(old, e) }
+            is PaneEvent.Shell -> shells.compute(e.pane) { _, old -> ShellState.merge(old, e) }
             // The PC sends this client text, never a terminal's bytes (`TextView`).
             is PaneEvent.Snapshot, is PaneEvent.Output, is PaneEvent.Resized -> {}
             is PaneEvent.Exited -> exits[e.pane] = e.status
@@ -771,6 +786,8 @@ class Session(
                             exits.clear()
                             chats.clear()
                             chatPane?.let { out.trySend(Outgoing.Binary(Panes.chatWatchFrame(it))) }
+                            shells.clear()
+                            shellPane?.let { out.trySend(Outgoing.Binary(Panes.shellWatchFrame(it))) }
                             watching?.let {
                                 out.trySend(Outgoing.Binary(Panes.textViewFrame()))
                                 out.trySend(Outgoing.Binary(Panes.attachFrame(it)))

@@ -156,6 +156,26 @@ class PaneStreamsTest {
         assertNull(s.chat(7))
     }
 
+    @Test fun watchShellAsksForTheCommandsAndTheLineTypedFollows() = runBlocking<Unit> {
+        fake.enqueue { _, ws -> ws.send(FakeBridge.ready()) }
+        fake.onFrame = { f, ws ->
+            if (json(f)?.contains("ShellWatch") == true) {
+                ws.send(FakeBridge.frame("""{"t":"Shell","pane":7,"known":true,"reset":true,"input":"","blocks":[{"i":0,"cmd":"ls","cwd":"/w","out":"a","lines":1,"code":0,"ms":5,"running":false,"full":false}]}"""))
+                ws.send(FakeBridge.frame("""{"t":"Shell","pane":7,"known":true,"reset":false,"input":"echo hi","blocks":[]}"""))
+            }
+        }
+        val s = session()
+        s.start()
+        s.connected()
+        s.watchShell(7)
+        assertEquals("""{"t":"ShellWatch","pane":7}""", next())
+        withTimeout(10_000) { while (s.shell(7)?.input != "echo hi") kotlinx.coroutines.delay(10) }
+        assertEquals(listOf("ls"), s.shell(7)!!.blocks.map { it.cmd })
+        s.watchShell(null)
+        assertEquals("""{"t":"ShellUnwatch","pane":7}""", next())
+        assertNull(s.shell(7))
+    }
+
     @Test fun leavingDetachesAndForgetsTheScreens() = runBlocking<Unit> {
         fake.enqueue { _, ws -> ws.send(FakeBridge.ready()) }
         fake.onFrame = { f, ws -> if (attached(f)) ws.send(text(7, 40, 5, """[[0,"x",0,0,0]]""")) }

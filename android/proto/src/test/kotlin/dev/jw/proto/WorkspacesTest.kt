@@ -151,4 +151,11 @@ class WorkspacesTest {
         assertFalse(pane("shell", "nvim").mayHaveConversation())
         assertFalse(pane("shell", null).mayHaveConversation())
     }
+
+    @Test fun aPanesNameIsRead() {
+        val frame = Frame.Json("""{"t":"Panes","panes":[{"pane":1,"stream":"s","role":"agent","name":"claude"},{"pane":2,"stream":"s","role":"shell"}]}""")
+        val panes = Workspaces.parsePanes(frame)!!
+        assertEquals("claude", panes[0].name)
+        assertNull(panes[1].name)
+    }
 }

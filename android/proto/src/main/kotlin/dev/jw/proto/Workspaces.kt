@@ -45,6 +45,8 @@ class PaneInfo(
     val bell: Boolean,
     val agent: AgentState?,
     val cwd: String?,
+    /** What the user called the pane in the TUI (`^␣ n`); null when it has no name of its own. */
+    val name: String? = null,
 )
 
 /**
@@ -116,6 +118,7 @@ object Workspaces {
                     else -> null
                 },
                 cwd = str("cwd"),
+                name = str("name"),
             )
         }
     }

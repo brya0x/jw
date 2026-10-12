@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -48,11 +49,12 @@ import dev.jw.proto.ChatBlock
 
 /**
  * An agent's conversation as blocks instead of its screen (REQ-90): what the person said and Claude answered, its
- * thoughts as one dim line, and each tool call as a card that opens to its command, diff or output. The title is the
- * name Claude gave the conversation. The view stays on the last block until the person scrolls up.
+ * thoughts as one dim line, and each tool call as a card that opens to its command, diff or output. The strip on top
+ * has the name the person gave the conversation in Claude (`/rename`), under it the title Claude gave it, and the
+ * pane's name. The view stays on the last block until the person scrolls up.
  */
 @Composable
-fun ChatView(chat: ChatState, fallbackTitle: String, waiting: Boolean, modifier: Modifier = Modifier) {
+fun ChatView(chat: ChatState, fallbackTitle: String, paneName: String, waiting: Boolean, modifier: Modifier = Modifier) {
     val j = LocalJw.current
     val list = rememberLazyListState()
     val open = remember { mutableStateMapOf<Int, Boolean>() }
@@ -73,11 +75,16 @@ fun ChatView(chat: ChatState, fallbackTitle: String, waiting: Boolean, modifier:
 
     Column(modifier.background(j.bg)) {
         Row(
-            Modifier.fillMaxWidth().heightIn(min = 34.dp).background(j.bg).padding(horizontal = 12.dp),
+            Modifier.fillMaxWidth().heightIn(min = 40.dp).background(j.bg).padding(horizontal = 12.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text("✻", color = j.magenta, fontSize = 12.sp)
-            Text(chat.title ?: fallbackTitle, color = j.fg, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            val name = chat.name
+            Column(Modifier.weight(1f)) {
+                Text(name ?: chat.title ?: fallbackTitle, color = j.fg, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (name != null) chat.title?.let { Text(it, color = j.dim, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            }
+            PaneChip(paneName, j.magenta)
         }
         Box(Modifier.fillMaxWidth().heightIn(min = 1.dp).background(j.line))
         if (chat.blocks.isEmpty()) {
@@ -167,3 +174,13 @@ internal fun diffColored(body: String, j: JwColors): AnnotatedString = buildAnno
 
 /** More than any list is long: a scroll by this much stops at the end. */
 private const val LAST_LINE = 1_000_000f
+
+/** The pane's name in the strip above its content: a dot of its colour and the name. */
+@Composable
+internal fun PaneChip(name: String, color: Color) {
+    val j = LocalJw.current
+    Row(Modifier.widthIn(max = 150.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+        Box(Modifier.width(7.dp).heightIn(min = 7.dp).background(color, RoundedCornerShape(4.dp)))
+        Text(name, color = j.dim, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}

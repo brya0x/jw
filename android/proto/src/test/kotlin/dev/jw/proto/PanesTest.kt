@@ -81,6 +81,31 @@ class PanesTest {
         assertNull(Panes.parse(Frame.Json("""{"t":"Chat","pane":8,"known":true,"reset":false,"blocks":[{"kind":"user"}]}""")))
     }
 
+    @Test fun theChatCarriesTheNameThePersonGaveIt() {
+        val c = Panes.parse(Frame.Json("""{"t":"Chat","pane":7,"known":true,"name":"mobile-fixes","title":"Arreglar","reset":true,"blocks":[]}""")) as PaneEvent.Chat
+        assertEquals("mobile-fixes", c.name); assertEquals("Arreglar", c.title)
+        assertNull((Panes.parse(Frame.Json("""{"t":"Chat","pane":7,"known":true,"name":null,"title":null,"reset":true,"blocks":[]}""")) as PaneEvent.Chat).name)
+    }
+
+    @Test fun parsesAShellsCommandsAndItsLine() {
+        val s = Panes.parse(
+            Frame.Json(
+                """{"t":"Shell","pane":9,"known":true,"reset":true,"input":"git st","blocks":[
+                {"i":0,"cmd":"cargo test","cwd":"/w","out":"ok","lines":1,"code":0,"ms":6200,"running":false,"full":false},
+                {"i":1,"cmd":"cargo watch","cwd":"/w","out":"","lines":0,"code":null,"ms":12000,"running":true,"full":false}]}""",
+            ),
+        ) as PaneEvent.Shell
+        assertEquals(9, s.pane); assertTrue(s.known); assertTrue(s.reset); assertEquals("git st", s.input)
+        assertEquals(listOf("cargo test", "cargo watch"), s.blocks.map { it.cmd })
+        assertEquals(0, s.blocks[0].code); assertNull(s.blocks[1].code); assertTrue(s.blocks[1].running)
+        assertEquals(6200L, s.blocks[0].ms)
+        // No line in the message: not news.
+        assertNull((Panes.parse(Frame.Json("""{"t":"Shell","pane":9,"known":false,"reset":false,"blocks":[]}""")) as PaneEvent.Shell).input)
+        assertNull(Panes.parse(Frame.Json("""{"t":"Shell","pane":9,"known":true,"reset":false,"blocks":[{"cmd":"x"}]}""")))
+        assertEquals("""{"t":"ShellWatch","pane":9}""", (Panes.shellWatchFrame(9) as Frame.Json).text)
+        assertEquals("""{"t":"ShellUnwatch","pane":9}""", (Panes.shellUnwatchFrame(9) as Frame.Json).text)
+    }
+
     @Test fun chatFramesNameThePane() {
         assertEquals("""{"t":"ChatWatch","pane":9}""", (Panes.chatWatchFrame(9) as Frame.Json).text)
         assertEquals("""{"t":"ChatUnwatch","pane":9}""", (Panes.chatUnwatchFrame(9) as Frame.Json).text)
