@@ -353,7 +353,7 @@ private fun Composer(sel: PaneInfo?, state: UiState.Connected, session: Session,
         Modifier.fillMaxWidth().background(j.panel).padding(start = 10.dp, end = 10.dp, top = 4.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Text(if (sel?.role == "agent") "›" else "❯", color = j.green, fontWeight = FontWeight.Bold)
+        Text(if (sel?.mayHaveConversation() == true) "›" else "❯", color = j.green, fontWeight = FontWeight.Bold)
         BasicTextField(
             value = text, onValueChange = edit, enabled = sel != null && !state.readOnly,
             textStyle = TextStyle(color = j.fg, fontSize = 13.5.sp, fontFamily = JwMono), cursorBrush = SolidColor(j.fg),
@@ -362,7 +362,7 @@ private fun Composer(sel: PaneInfo?, state: UiState.Connected, session: Session,
             decorationBox = { inner ->
                 FieldFrame(j.line) {
                     Box(Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
-                        if (text.isEmpty()) Text(if (state.readOnly) "solo lectura" else if (sel?.role == "agent") "escribe a ${sel.role}" else "escribe un comando", color = j.dim, fontSize = 13.5.sp)
+                        if (text.isEmpty()) Text(if (state.readOnly) "solo lectura" else if (sel?.mayHaveConversation() == true) "escribe a ${sel.fg?.trimStart('-')?.takeIf { it != "zsh" } ?: sel.role}" else "escribe un comando", color = j.dim, fontSize = 13.5.sp)
                         inner()
                     }
                 }

@@ -25,7 +25,10 @@ object MirrorTyping {
 /** Reads what is typed in the input box of Claude's screen (REQ-93), the one heuristic of the mirror: Claude gives no other way. */
 object ClaudeInput {
     private val PROMPT = Regex("""^[>❯›](?: (.*))?$""")
-    private val BOX = Regex("""^[\s│┃|╭╮╰╯┌┐└┘─━═╌┄\-]*$""")
+    private const val NBSP = 0xA0
+    /** A border: a run of rule characters, which may carry a label (`───── mobile-fixes ──`, the session's name). */
+    private val BORDER = Regex("""^[╭╮╰╯┌┐└┘]?[─━═╌┄]{3,}.*$""")
+    private fun isBorder(row: String) = BORDER.matches(row)
 
     /**
      * The text in the box above the footer, or null when the screen has none (a dialog, a full-screen view). The box
@@ -37,12 +40,12 @@ object ClaudeInput {
         val full = rows.map { clean(it, skipDim = false) }
         val typed = rows.map { clean(it, skipDim = true) }
         for (r in rows.indices.reversed()) {
-            if (r == 0 || !BOX.matches(full[r - 1]) || full[r - 1].isBlank()) continue
+            if (r == 0 || !isBorder(full[r - 1])) continue
             if (!PROMPT.matches(full[r])) continue
             val first = PROMPT.matchEntire(typed[r])?.groupValues?.get(1) ?: ""
             val rest = ArrayList<String>()
             var i = r + 1
-            while (i < rows.size && !(BOX.matches(full[i]) && full[i].isNotBlank()) && full[i].isNotBlank()) {
+            while (i < rows.size && !isBorder(full[i]) && full[i].isNotBlank()) {
                 rest.add(typed[i]); i++
             }
             return@read (listOf(first) + rest).joinToString("\n").trimEnd()
@@ -57,7 +60,8 @@ object ClaudeInput {
             val f = l.flags[c]
             if (f and Attr.CONT != 0) continue
             if (skipDim && f and Attr.DIM != 0) { sb.append(' '); continue }
-            if (l.ch[c] == 0) sb.append(' ') else sb.appendCodePoint(l.ch[c])
+            // Claude draws a no-break space after its prompt: it is a space here.
+            if (l.ch[c] == 0 || l.ch[c] == NBSP) sb.append(' ') else sb.appendCodePoint(l.ch[c])
             l.marksAt(c)?.let(sb::append)
         }
         return sb.toString().trim().trim('│', '┃', '|').trim().let { if (it.isEmpty()) "" else it }
