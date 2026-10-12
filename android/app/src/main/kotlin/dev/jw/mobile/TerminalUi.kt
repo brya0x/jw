@@ -136,7 +136,7 @@ fun TerminalView(
         fun cellAt(p: Offset): Pair<Int, Int>? {
             val l = layout ?: return null
             val row = l.rows.getOrNull(firstRow() + floor(p.y / ch).toInt().coerceAtLeast(0)) ?: l.rows.lastOrNull() ?: return null
-            val col = (row.from + floor(p.x / cw).toInt()).coerceIn(row.from, max(row.from, row.to - 1))
+            val col = RowWrap.colAt(pane!!.read { it.line(row.line) }, row, floor(p.x / cw).toInt().coerceAtLeast(0))
             return row.line to col
         }
 
@@ -185,15 +185,16 @@ fun TerminalView(
                         if (row.line >= tm.rows || row.line < -tm.scrollbackSize) continue
                         val line = tm.line(row.line)
                         val y = vr * ch
-                        var c = row.from
-                        while (c < row.to && c < line.cols) {
+                        var xi = 0
+                        for (c in row.cols) {
+                            if (c >= line.cols) break
                             val fl = line.flags[c]
                             val inv = fl and Attr.INVERSE != 0
                             var fgc = colors.resolve(line.fg[c], j.fg)
                             var bgc = colors.resolve(line.bg[c], Color.Unspecified)
                             if (inv) { val f = fgc; fgc = if (bgc == Color.Unspecified) j.bg else bgc; bgc = f }
                             val selected = sel != null && inSelection(sel, row.line, c)
-                            val x = (c - row.from) * cw
+                            val x = xi * cw
                             val span = if (fl and Attr.WIDE != 0) 2 else 1
                             if (bgc != Color.Unspecified) {
                                 paint.color = bgc.toArgb(); paint.style = Paint.Style.FILL
@@ -215,14 +216,14 @@ fun TerminalView(
                                 paint.color = fgc.toArgb()
                                 nc.drawRect(x, y + ch - 2f, x + span * cw, y + ch - 1f, paint)
                             }
-                            c += span
+                            xi += span
                         }
                     }
                     if (tm.cursorVisible && scrollRows == 0f) {
-                        val at = l.rows.indexOfFirst { it.line == tm.cursorRow && tm.cursorCol >= it.from && tm.cursorCol < it.to }
+                        val at = l.rows.indexOfFirst { it.line == tm.cursorRow && tm.cursorCol in it.cols }
                         val vr = at - first
                         if (at >= 0 && vr in 0 until visibleRows) {
-                            val cx = (tm.cursorCol - l.rows[at].from) * cw
+                            val cx = RowWrap.xOf(tm.line(tm.cursorRow), l.rows[at], tm.cursorCol) * cw
                             paint.color = j.fg.copy(alpha = 0.55f).toArgb()
                             nc.drawRect(cx, vr * ch, cx + cw, (vr + 1) * ch, paint)
                         }
@@ -232,9 +233,6 @@ fun TerminalView(
         }
     }
 }
-
-/** A piece of one terminal row ([line]: negative is the scrollback) that fits on one row of the view: the columns [from] until [to]. */
-internal class VRow(val line: Int, val from: Int, val to: Int)
 
 /**
  * The rows of a pane as the view draws them, and where the view rests: [end] rows in, at the bottom of the view (a
@@ -267,14 +265,8 @@ internal fun wrapView(t: PaneText, cols: Int, withHistory: Boolean = true): Wrap
         var used = usedCols(line)
         if (li >= 0 && used > 0 && li > anchor && !t.altScreen) anchor = li
         if (li == t.cursorRow && t.cursorVisible) used = max(used, minOf(t.cursorCol + 1, line.cols))
-        if (used == 0) { out.add(VRow(li, 0, 0)); continue }
-        var from = 0
-        while (from < used) {
-            var to = minOf(from + cols, used)
-            if (to < used && to - from > 1 && line.flags[to - 1] and Attr.WIDE != 0) to -= 1
-            out.add(VRow(li, from, to))
-            from = to
-        }
+        if (used == 0) { out.add(VRow(li, IntArray(0))); continue }
+        out.addAll(RowWrap.rows(li, line, used, cols, if (li == t.cursorRow && t.cursorVisible) t.cursorCol else -1))
     }
     if (t.altScreen) anchor = t.cursorRow
     return WrapView(out, out.indexOfLast { it.line <= anchor } + 1, t.altScreen, t.altScreen && !t.cursorVisible)

@@ -47,6 +47,8 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
@@ -108,6 +110,10 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
     var sheet by remember { mutableStateOf(Sheet.None) }
     var selection by remember(sel?.pane) { mutableStateOf<Selection?>(null) }
     val ctx = LocalContext.current
+    // A tap on the pane, outside the keyboard and its field, closes the keyboard.
+    val focus = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
+    val hideKeyboard: () -> Unit = { focus.clearFocus(); keyboard?.hide() }
 
     // Watch this workspace's panes while it is on screen. The app never resizes a pane (REQ-24).
     val watching = panes.isNotEmpty()
@@ -167,7 +173,7 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
                 }
             }
         }
-        Box(Modifier.weight(1f).fillMaxWidth()) {
+        Box(Modifier.weight(1f).fillMaxWidth().onTapAnywhere(hideKeyboard)) {
             if (sel == null) {
                 Text("Este workspace no tiene paneles abiertos.", color = j.dim, fontSize = 12.sp, modifier = Modifier.padding(14.dp))
             } else if (kind == PaneKind.Loading) {
