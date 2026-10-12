@@ -156,6 +156,31 @@ svg.i{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stro
 .cnav span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dim)}
 .cnav button{min-width:44px;min-height:44px;color:var(--fg)} .cnav button:disabled{color:var(--dim);opacity:.4}
 
+
+/* files, viewer, creation sheets (M8) */
+.crumbs{display:flex;gap:2px;overflow-x:auto;white-space:nowrap;padding:0 8px;border-bottom:1px solid var(--line);background:var(--panel);min-height:44px;align-items:center;scrollbar-width:none}
+.crumbs button{min-height:44px;padding:0 8px;color:var(--dim);font-size:12px}.crumbs button:last-child{color:var(--fg)}.crumbs i{font-style:normal;color:var(--dim)}
+.fe{display:flex;align-items:center;gap:10px;min-height:48px;padding:4px 14px;width:100%;border-bottom:1px solid var(--line)}
+.fe .g{width:18px;text-align:center;flex:none;color:var(--dim)}.fe.d .g{color:var(--blue)}.fe.md .g{color:var(--cyan)}
+.fe .nm{flex:1;min-width:0}.fe .nm b{font-weight:500;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.fe .nm span{font-size:11px;color:var(--dim)}
+.fe.off{opacity:.45}.fe .tg{font-size:10.5px;color:var(--cyan);border:1px solid var(--line);border-radius:4px;padding:1px 6px}
+.dock{display:flex;gap:8px;align-items:center;padding:8px 12px;background:var(--panel);border-top:1px solid var(--line)}
+.dock .p{flex:1;min-width:0;font-size:11px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dock button.go{min-height:48px;padding:0 16px;border-radius:6px;background:var(--blue);color:var(--bg);font-weight:700}
+.vsw{display:flex;border-bottom:1px solid var(--line);background:var(--panel)}.vsw button{flex:1;min-height:44px;color:var(--dim);font-size:12px;border-bottom:2px solid transparent}.vsw button[aria-selected=true]{color:var(--blue);border-bottom-color:var(--blue)}
+.src{padding:8px 0;font-size:11.5px;line-height:1.5}.src div{display:flex;gap:8px;padding:0 10px}.src i{font-style:normal;flex:none;width:30px;text-align:right;color:var(--dim);font-size:10.5px}.src span{white-space:pre-wrap;word-break:break-word;flex:1}
+.md{padding:12px 16px;font-size:13px;line-height:1.55}.md h1{font-size:17px;margin:.2em 0 .5em}.md h2{font-size:15px;margin:1em 0 .4em;color:var(--blue)}.md h3{font-size:13.5px;margin:.9em 0 .3em;color:var(--cyan)}
+.md p{margin:.5em 0}.md code{background:var(--sel);padding:1px 5px;border-radius:4px;font-size:12px}.md pre{background:var(--sel);border-radius:6px;padding:10px;overflow-x:auto;font-size:11.5px;margin:.6em 0}.md pre code{padding:0;background:none}
+.md ul{margin:.4em 0;padding-left:20px}.md blockquote{margin:.6em 0;padding-left:10px;border-left:3px solid var(--line);color:var(--dim)}.md a{color:var(--blue)}.md table{border-collapse:collapse;margin:.6em 0;font-size:12px}.md td,.md th{border:1px solid var(--line);padding:4px 8px}
+.sheet .fld{margin:0 12px 8px;display:block}.sheet .fld label{display:block;font-size:11px;color:var(--dim);padding:2px 2px 4px}
+.sheet textarea{width:calc(100% - 24px);margin:0 12px 8px;min-height:76px;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:var(--fg);padding:10px 12px;font:inherit;resize:none}
+.sheet .pick{margin:0 12px 8px;display:flex;align-items:center;gap:8px;min-height:48px;padding:0 12px;border:1px solid var(--line);border-radius:6px;background:var(--bg);width:calc(100% - 24px)}
+.sheet .pick span{flex:1;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sheet .pick em{font-style:normal;color:var(--dim);font-size:11px}
+.sheet .note2{margin:0 14px 8px;font-size:11px;color:var(--dim)}.sheet .bad{margin:0 14px 8px;font-size:12px;color:var(--red)}
+.sheet .gobtn{margin:4px 12px 12px;min-height:48px;border-radius:6px;background:var(--blue);color:var(--bg);font-weight:700;width:calc(100% - 24px);display:flex;align-items:center;justify-content:center;gap:10px}
+.sheet .gobtn[disabled]{background:var(--line);color:var(--dim)}
+.sheet .gobtn .spin{border-color:color-mix(in srgb,var(--dim) 40%,transparent);border-top-color:var(--fg)}
+
 /* settings */
 .srow{display:flex;align-items:center;gap:12px;min-height:54px;padding:6px 14px;width:100%;border-bottom:1px solid var(--line)}
 .srow .t{flex:1;min-width:0}.srow .t b{display:block;font-weight:500}.srow .t span{font-size:11px;color:var(--dim)}
@@ -327,6 +352,7 @@ const I = {
   link:'<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
   search:'<circle cx="11" cy="11" r="6"/><path d="M20 20l-4-4"/>'
 };
+I.folder='<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>';
 const ic = (n,s) => `<svg class="i" viewBox="0 0 24 24" aria-hidden="true"${s?` style="width:${s}px;height:${s}px"`:''}>${I[n]}</svg>`;
 
 const THEMES = {
@@ -345,7 +371,7 @@ function applyTheme(n){
 const state = {
   route:'wifi',
   screen:'connect', theme:'one-dark', conn:'idle', sess:'main', ws:'jw/feat/mobile-app', pane:'claude',
-  sheet:null, q:'', file:null, view:'gen', commit:null, vst:{gen:'ok',unc:'ok',com:'ok'}, viewed:{}, anim:true, haptic:true, fit:false, msg:'',
+  sheet:null, q:'', file:null, ro:false, nw:'form', nwProj:'jw', ns:'form', nsDir:'~/ws/jw', fs:{path:'~/ws/jw',mode:'browse',hidden:false}, viewer:{path:'~/ws/jw/docs/specs/mobile.md',kind:'ok',src:false}, view:'gen', commit:null, vst:{gen:'ok',unc:'ok',com:'ok'}, viewed:{}, anim:true, haptic:true, fit:false, msg:'',
   w:[
     {id:'jw', kind:'root', name:'jw', path:'~/ws/jw', sess:'main', ag:'idle', dev:0, pr:'', last:'Shell libre en la raíz del proyecto.', t:'1 h'},
     {id:'jw/feat/mobile-app', kind:'wt', proj:'jw', name:'feat/mobile-app', path:'~/ws/jw-wt/mobile-app', sess:'main', ag:'work', dev:1, pr:'#41', last:'Armando el prototipo de la app móvil.', t:'ahora'},
@@ -594,7 +620,7 @@ function vWs(){
   const keys=['esc','tab','⏎','↑','↓','←','→','^C','^D','^R','/','|','~'];
   return `<div class="hdr"><button class="ib" data-go="home" aria-label="Volver a workspaces">${ic('back')}</button>
     <div class="t"><b>${w.kind==='wt'?root.name+' › ':''}${w.name}</b><span>${w.kind==='wt'?'⎇ '+w.name+' · base main · '+(w.pr||'sin PR')+' · ':''}${w.path}</span></div>
-    <button class="ib" data-sheet="pick" aria-label="Cambiar workspace">${ic('search')}</button><button class="ib" data-go="changes" aria-label="Cambios" style="font-size:16px">±</button></div>
+    <button class="ib" data-sheet="pick" aria-label="Cambiar workspace">${ic('search')}</button><button class="ib" data-act="wsfiles" aria-label="Archivos">${ic('folder')}</button><button class="ib" data-go="changes" aria-label="Cambios" style="font-size:16px">±</button></div>
    <div class="panes" role="tablist">${panes.map(([p,c])=>`<button class="pt" role="tab" aria-selected="${state.pane===p}" data-pane="${p}" style="--c:${c}"><i></i>${p}</button>`).join('')}</div>
    <div class="out" id="out">${lines}${w.ag==='work'&&state.pane==='claude'?' <span class="cur"></span>':''}</div>
    ${askOn?`<div class="ask"><p><b style="color:var(--yellow)">?</b> ${w.last}</p><div class="yn"><button class="y" data-ans="y|${w.id}">y · sí</button><button class="x" data-ans="n|${w.id}">n · no</button></div></div>`:''}
@@ -602,6 +628,61 @@ function vWs(){
    <div class="keys"><button class="key lead" data-sheet="leader">^␣</button>${keys.map(x=>`<button class="key" data-key="${x}">${x}</button>`).join('')}</div>
    <form class="comp" id="comp"><span class="pr">${state.pane==='claude'?'›':'❯'}</span><input id="msg" autocomplete="off" placeholder="${state.pane==='claude'?'escribe a claude':'escribe un comando'}" aria-label="Entrada"><button class="send" aria-label="Enviar">${ic('send')}</button></form>
    ${statusBar('TERM',state.pane+' · 54×22 · ^␣ menú')}`;
+}
+
+
+/* ---- M8: the PC's files, the viewer and the creation sheets ---- */
+const FS={
+ '~':['Downloads/','notes/','ws/','.ssh/','.zshrc','todo.txt'],
+ '~/ws':['jw/','jw-wt/','mctekk-api/','mctekk-web/'],
+ '~/ws/jw':['.git/','android/','crates/','docs/','scripts/','AGENTS.md','Cargo.toml','README.md','logo.png','link-a-etc'],
+ '~/ws/jw/docs':['specs/','README.md'],
+ '~/ws/jw/docs/specs':['mobile.md','mobile-prototype.html','rust-tui.md'],
+ '~/ws/jw/crates':['core/','daemon/','proto/','tui/','web/'],
+ '~/notes':['ideas.md','2026-10.md'],
+ '~/Downloads':[],
+ '~/.ssh':null
+};
+const MDSRC='# jw mobile\n\nUna app para trabajar en tus sesiones de jw desde el teléfono.\n\n## Cómo se usa\n\n- Escanea el QR de `jw mobile`.\n- Entra a un workspace y escribe.\n\n```sh\njw mobile\n```\n';
+const MDHTML=`<h1>jw mobile</h1><p>Una app para trabajar en tus sesiones de <b>jw</b> desde el teléfono. Mira <a>la especificación</a>.</p><h2>Cómo se usa</h2><ul><li>Escanea el QR de <code>jw mobile</code>.</li><li>Entra a un workspace y escribe.</li></ul><pre><code>jw mobile</code></pre><h3>Vistas</h3><table><tr><th>vista</th><th>qué muestra</th></tr><tr><td>General</td><td>lo commiteado</td></tr><tr><td>Sin commitear</td><td>el árbol de trabajo</td></tr></table><blockquote>El PC tiene el archivo entero.</blockquote>`;
+const TXT=['[package]','name = "jw-core"','version = "0.0.21"','edition = "2024"','','[dependencies]','anyhow = "1"','serde = { version = "1", features = ["derive"] }'];
+const hidden=n=>n.startsWith('.');
+const isDir=n=>n.endsWith('/');
+const parentOf=p=>p==='~'?null:p.slice(0,p.lastIndexOf('/'))||'~';
+function fsErr(p){return p==='~/.ssh'?'sin permiso':null}
+
+function vFiles(){
+  const f=state.fs, p=f.path, ent=FS[p], err=fsErr(p), open=f.mode==='open', w=wsOf(state.ws);
+  const parts=p.split('/'); let acc='';
+  const crumbs=parts.map((x,i)=>{acc+=(i?'/':'')+x;return `<button data-fs="${acc}">${x==='~'?'~':x}</button>`}).join('<i>›</i>');
+  let list='';
+  if(state.fload) list=`<div class="centre"><span class="spin"></span><span class="big">leyendo ${p}</span></div>`;
+  else if(err) list=`<div class="centre"><span class="big" style="color:var(--red)">${err}</span>el PC no deja leer esta carpeta<button data-fs="${parentOf(p)||'~'}">subir</button></div>`;
+  else{
+    let rows=(ent||[]).filter(n=>f.hidden||!hidden(n)).sort((a,b)=>(isDir(b)-isDir(a))||a.localeCompare(b));
+    const up=parentOf(p);
+    list=(up?`<button class="fe d" data-fs="${up}"><span class="g">‹</span><span class="nm"><b>..</b><span>${up}</span></span></button>`:'')+
+      rows.map(n=>{const d=isDir(n), nm=n.replace(/\/$/,''), md=/\.md$/.test(n), lk=n==='link-a-etc';
+        const sub=d?(FS[p+'/'+nm]===undefined?'':FS[p+'/'+nm]===null?'sin permiso':((FS[p+'/'+nm]||[]).length+' elementos')):lk?'enlace → /etc/hosts':(md?'4 KB':'1 KB');
+        return `<button class="fe ${d?'d':md?'md':''} ${open&&!d?'off':''}" data-${d?'fs':'pcfile'}="${p}/${nm}" ${open&&!d?'aria-disabled="true"':''}><span class="g">${d?'▸':lk?'↗':'·'}</span><span class="nm"><b>${nm}</b><span>${sub}</span></span>${md?'<span class="tg">md</span>':''}</button>`}).join('')+
+      (rows.length?'':'<div class="nodiff">carpeta vacía</div>')+(f.big?'<div class="note">se listan los primeros 2 000 elementos de 14 213</div>':'');
+  }
+  const head=`<div class="hdr"><button class="ib" data-act="filesback" aria-label="Volver">${ic('back')}</button><div class="t"><b>${open?'abrir carpeta':w.name+' · archivos'}</b><span>${p}</span></div>
+     <button class="ib" data-act="hidden" aria-label="Archivos ocultos" aria-pressed="${f.hidden}" style="width:auto;padding:0 10px;font-size:12px;color:${f.hidden?'var(--blue)':'var(--dim)'}">.ocultos</button></div>`;
+  const dock=open?`<div class="dock"><span class="p">${p}</span><button class="go" data-act="openhere" ${err?'disabled':''}>abrir esta carpeta</button></div>`:'';
+  return `${head}<div class="crumbs">${crumbs}</div><div class="scroll">${list}</div>${dock}${statusBar(open?'NORMAL':'NORMAL',open?'elige una carpeta · se abre como workspace':'toca un archivo · .md se lee con formato')}`;
+}
+
+function vViewer(){
+  const v=state.viewer, name=v.path.split('/').pop(), md=/\.md$/.test(name);
+  let body='';
+  if(v.kind==='bin') body=`<div class="centre"><span class="big">no es texto</span>${name} · 18 KB<br>el teléfono solo muestra texto.</div>`;
+  else if(v.kind==='err') body=`<div class="centre"><span class="big" style="color:var(--red)">sin permiso</span>el PC no deja leer este archivo</div>`;
+  else if(md&&!v.src) body=(v.kind==='big'?'<div class="note">se muestra el primer 1 MiB: el archivo es más grande</div>':'')+`<div class="md">${MDHTML}</div>`;
+  else body=(v.kind==='big'?'<div class="note">se muestra el primer 1 MiB: el archivo es más grande</div>':'')+`<div class="src">${(md?MDSRC.split('\n'):TXT).map((l,i)=>`<div><i>${i+1}</i><span>${l.replace(/</g,'&lt;')||' '}</span></div>`).join('')}</div>`;
+  return `<div class="hdr"><button class="ib" data-act="viewback" aria-label="Volver">${ic('back')}</button><div class="t"><b>${name}</b><span>${v.path}</span></div></div>
+   ${md&&v.kind!=='bin'&&v.kind!=='err'?`<div class="vsw" role="tablist"><button role="tab" aria-selected="${!v.src}" data-act="vsrc0">vista</button><button role="tab" aria-selected="${!!v.src}" data-act="vsrc1">fuente</button></div>`:''}
+   <div class="scroll">${body}</div>${statusBar('NORMAL',v.kind==='bin'?'binario':v.kind==='big'?'1 MiB de 3,4 MiB':md?(v.src?'markdown · fuente':'markdown · vista'):'texto · '+TXT.length+' líneas')}`;
 }
 
 function sheet(){
@@ -616,12 +697,39 @@ function sheet(){
     body=`<h3>sesiones</h3><div class="list">${ss.map(n=>`<button class="lk" data-sess="${n}"><kbd>${n===state.sess?'●':' '}</kbd><span>${n}</span><em>${state.w.filter(x=>x.sess===n).length} workspaces</em></button>`).join('')}<button class="lk" data-act="newsess"><kbd>+</kbd><span>nueva sesión</span></button></div>`;
   }
   if(s==='open'){
-    body=`<h3>abrir</h3><div class="list"><button class="lk" data-act="folder"><kbd>o</kbd><span>abrir carpeta</span><em>raíz o carpeta suelta</em></button><button class="lk" data-act="newwt"><kbd>w</kbd><span>nuevo worktree</span><em>desde el proyecto actual</em></button><button class="lk" data-sheet="pick"><kbd>␣</kbd><span>buscar workspace</span></button></div>`;
+    body=`<h3>abrir</h3><div class="list"><button class="lk" data-act="folder"><kbd>o</kbd><span>abrir carpeta</span><em>del PC</em></button><button class="lk" data-act="newwt"><kbd>w</kbd><span>nuevo worktree</span><em>de un proyecto</em></button><button class="lk" data-act="newsess"><kbd>a</kbd><span>nueva sesión</span></button><button class="lk" data-sheet="pick"><kbd>␣</kbd><span>buscar workspace</span></button></div>`;
   }
   if(s==='leader'){
-    const it=[['␣','buscar workspace','ir'],['tab','workspace anterior','ir'],['a','sesiones','ir'],['t','panel nuevo','paneles'],['x','cerrar panel','paneles'],['n','nombrar panel','paneles'],['d','cambios (diff)','worktree'],[',','ajustes','ir'],['q','desconectar','']];
-    const pc=[['o','abrir carpeta'],['w','nuevo worktree'],['r','renombrar'],['s','sincronizar'],['X','quitar worktree'],['R','revisar un PR']];
+    const it=[['␣','buscar workspace','ir'],['o','abrir carpeta','ir'],['/','archivos','ir'],['w','nuevo worktree','worktree'],['tab','workspace anterior','ir'],['a','sesiones','ir'],['t','panel nuevo','paneles'],['x','cerrar panel','paneles'],['n','nombrar panel','paneles'],['d','cambios (diff)','worktree'],[',','ajustes','ir'],['q','desconectar','']];
+    const pc=[['r','renombrar'],['s','sincronizar'],['X','quitar worktree'],['R','revisar un PR']];
     body=`<h3>^␣ · teclas</h3><div class="list lead3">${it.map(([k,l,g])=>`<button class="lk" data-lead="${k}"><kbd>${k}</kbd><span>${l}</span><em>${g}</em></button>`).join('')}${pc.map(([k,l])=>`<button class="lk off" aria-disabled="true" data-pc="${k}"><kbd>${k}</kbd><span>${l}</span><em>en el PC</em></button>`).join('')}</div>`;
+  }
+
+  if(s==='newwt'){
+    const ro=state.ro, st=state.nw||'form', roots=state.w.filter(x=>x.kind==='root');
+    body=`<h3>nuevo worktree</h3>
+      <button class="pick" data-sheet="newwtproj" ${st==='busy'?'disabled':''}><em>proyecto</em><span>${state.nwProj}</span><em>▾</em></button>
+      <label class="fld"><label>nombre</label></label><input id="nwname" value="${state.nwName||'feat/ajustes-rapidos'}" ${st==='busy'||ro?'disabled':''} aria-label="Nombre">
+      <label class="fld"><label>rama · si la dejas vacía, la del nombre</label></label><input id="nwbranch" placeholder="feat/ajustes-rapidos" ${st==='busy'||ro?'disabled':''} aria-label="Rama">
+      <label class="fld"><label>tarea para el agente · opcional</label></label><textarea id="nwtask" placeholder="Qué debe hacer el agente al abrir" ${st==='busy'||ro?'disabled':''}></textarea>
+      <div class="note2">sale de origin/main y corre el setup del proyecto, como ^␣ w en el PC</div>
+      ${st==='err'?'<div class="bad">la rama feat/ajustes-rapidos ya existe en este proyecto</div>':''}
+      ${ro?'<div class="bad" style="color:var(--yellow)">solo lectura: este puente no deja crear worktrees</div>':''}
+      <button class="gobtn" data-act="createwt" ${st==='busy'||ro?'disabled':''}>${st==='busy'?'<span class="spin"></span>creando · 18 s':'crear y abrir'}</button>
+      ${st==='busy'?'<div class="note2">puede tardar: corre el setup. Puedes cerrar esto; seguirá en el PC.</div>':''}`;
+  }
+  if(s==='newwtproj'){
+    body=`<h3>proyecto</h3><div class="list">${state.w.filter(x=>x.kind==='root').map(x=>`<button class="lk" data-act="setproj" data-proj="${x.name}"><kbd>${x.name===state.nwProj?'●':' '}</kbd><span>${x.name}</span><em>${x.path}</em></button>`).join('')}</div>`;
+  }
+  if(s==='newsess'){
+    const st=state.ns||'form';
+    body=`<h3>nueva sesión</h3>
+      <label class="fld"><label>nombre</label></label><input id="nsname" value="${state.nsName||'trabajo'}" ${state.ro?'disabled':''} aria-label="Nombre de la sesión">
+      <label class="fld"><label>carpeta con la que empieza</label></label>
+      <button class="pick" data-act="pickfolder"><span>${state.nsDir}</span><em>elegir ▸</em></button>
+      ${st==='err'?'<div class="bad">ya existe una sesión con ese nombre</div>':''}${st==='cmd'?'<div class="bad">ese nombre es un comando de jw</div>':''}
+      ${state.ro?'<div class="bad" style="color:var(--yellow)">solo lectura: este puente no deja crear sesiones</div>':''}
+      <button class="gobtn" data-act="createsess" ${state.ro?'disabled':''}>crear y abrir</button>`;
   }
   if(s==='paste'){
     body=`<h3>pegar enlace</h3><input id="lnk" placeholder="jw://….trycloudflare.com/…" autocomplete="off" aria-label="Enlace"><div class="lerr">${state.linkerr||''}</div><div class="list"><button class="lk" data-act="link"><kbd>↵</kbd><span>conectar</span><em>solo túneles de jw</em></button></div>`;
@@ -631,11 +739,11 @@ function sheet(){
 
 function render(){
   const s=state.screen, el=$('#screen');
-  el.innerHTML=s==='connect'?vConnect():s==='perm'?vPerm():s==='scan'?vScan():s==='pair'?vPair():s==='fail'?vFail():s==='home'?vHome():s==='inbox'?vInbox():s==='changes'?vChanges():s==='settings'?vSettings():vWs();
+  el.innerHTML=s==='connect'?vConnect():s==='perm'?vPerm():s==='scan'?vScan():s==='pair'?vPair():s==='fail'?vFail():s==='home'?vHome():s==='inbox'?vInbox():s==='changes'?vChanges():s==='settings'?vSettings():s==='files'?vFiles():s==='viewer'?vViewer():vWs();
   $('#overlay').innerHTML=sheet();
   const o=$('#out'); if(o) o.scrollTop=o.scrollHeight;
   const q=$('#q'); if(q){q.focus();q.setSelectionRange(q.value.length,q.value.length)}
-  $('#jump').innerHTML=[['connect','Conexión (QR)'],['perm','Cámara: permiso · nuevo'],['permdenied','Cámara bloqueada · nuevo'],['cam','Cámara · visor · nuevo'],['paste','Pegar enlace · nuevo'],['pair','Código de emparejamiento · nuevo'],['denied','El PC rechaza · nuevo'],['expired','Código vencido · nuevo'],['unreach','No encuentro tu PC · nuevo'],['proto','Protocolo distinto · nuevo'],['set','Respuestas rápidas · nuevo'],['limited','Demasiados intentos · nuevo'],['home','Workspaces (sidebar)'],['wsroot','Entrar a la raíz'],['ws','Entrar a un worktree'],['pick','Buscador ␣'],['leader','Menú ^␣ · cambiado'],['sel','Selección de texto · nuevo'],['inbox','Avisos'],['changes','Cambios · General · cambiado'],['chunc','Cambios · Sin commitear · nuevo'],['chcom','Cambios · Commits · nuevo'],['chcomf','Cambios · un commit · nuevo'],['chfile','Cambios · un archivo · cambiado'],['chren','Cambios · renombrado · nuevo'],['chbin','Cambios · binario · nuevo'],['chunr','Cambios · ilegible · nuevo'],['chbig','Cambios · cortado · nuevo'],['chtoo','Cambios · demasiado grande · nuevo'],['chnobase','Cambios · sin rama base · nuevo'],['chload','Cambios · leyendo · nuevo'],['cherr','Cambios · error de una vista · nuevo'],['chempty','Cambios · sin cambios · nuevo'],['chnone','Cambios · sin workspace · nuevo'],['settings','Ajustes y temas']].map(([k,l])=>`<button data-jump="${k}">${l}</button>`).join('');
+  $('#jump').innerHTML=[['connect','Conexión (QR)'],['perm','Cámara: permiso · nuevo'],['permdenied','Cámara bloqueada · nuevo'],['cam','Cámara · visor · nuevo'],['paste','Pegar enlace · nuevo'],['pair','Código de emparejamiento · nuevo'],['denied','El PC rechaza · nuevo'],['expired','Código vencido · nuevo'],['unreach','No encuentro tu PC · nuevo'],['proto','Protocolo distinto · nuevo'],['set','Respuestas rápidas · nuevo'],['limited','Demasiados intentos · nuevo'],['home','Workspaces (sidebar)'],['wsroot','Entrar a la raíz'],['ws','Entrar a un worktree'],['pick','Buscador ␣'],['leader','Menú ^␣ · cambiado'],['sel','Selección de texto · nuevo'],['inbox','Avisos'],['changes','Cambios · General · cambiado'],['chunc','Cambios · Sin commitear · nuevo'],['chcom','Cambios · Commits · nuevo'],['chcomf','Cambios · un commit · nuevo'],['chfile','Cambios · un archivo · cambiado'],['chren','Cambios · renombrado · nuevo'],['chbin','Cambios · binario · nuevo'],['chunr','Cambios · ilegible · nuevo'],['chbig','Cambios · cortado · nuevo'],['chtoo','Cambios · demasiado grande · nuevo'],['chnobase','Cambios · sin rama base · nuevo'],['chload','Cambios · leyendo · nuevo'],['cherr','Cambios · error de una vista · nuevo'],['chempty','Cambios · sin cambios · nuevo'],['chnone','Cambios · sin workspace · nuevo'],['f1','Archivos · un workspace · nuevo'],['f2','Archivos · ocultos · nuevo'],['f3','Archivos · abrir carpeta · nuevo'],['f4','Archivos · sin permiso · nuevo'],['f5','Archivos · vacía · nuevo'],['f6','Archivos · demasiados · nuevo'],['v1','Visor · markdown · nuevo'],['v2','Visor · markdown fuente · nuevo'],['v3','Visor · texto · nuevo'],['v4','Visor · binario · nuevo'],['v5','Visor · cortado a 1 MiB · nuevo'],['v6','Visor · sin permiso · nuevo'],['w1','Nuevo worktree · nuevo'],['w2','Nuevo worktree · creando · nuevo'],['w3','Nuevo worktree · error · nuevo'],['w4','Nuevo worktree · solo lectura · nuevo'],['n1','Nueva sesión · nuevo'],['n2','Nueva sesión · nombre repetido · nuevo'],['n3','Nueva sesión · es un comando · nuevo'],['p1','Menú + · cambiado'],['settings','Ajustes y temas']].map(([k,l])=>`<button data-jump="${k}">${l}</button>`).join('');
 }
 function answer(v,id){
   const w=wsOf(id); if(!w) return; buzz();
@@ -646,7 +754,7 @@ function answer(v,id){
 function enter(id){state.sel=false;state.ws=id;state.pane='claude';state.screen='ws';state.sheet=null;state.q='';const w=wsOf(id);w.t=w.t==='ahora'?'ahora':w.t;render()}
 
 document.addEventListener('click',e=>{
-  const t=e.target.closest('[data-go],[data-open],[data-ans],[data-act],[data-theme],[data-sw],[data-pane],[data-key],[data-file],[data-view],[data-vtab],[data-commit],[data-cn],[data-jump],[data-sheet],[data-sess],[data-lead],[data-preset],[data-opt]'); if(!t) return;
+  const t=e.target.closest('[data-go],[data-open],[data-ans],[data-act],[data-theme],[data-sw],[data-pane],[data-key],[data-file],[data-pcfile],[data-fs],[data-view],[data-vtab],[data-commit],[data-cn],[data-jump],[data-sheet],[data-sess],[data-lead],[data-preset],[data-opt]'); if(!t) return;
   const d=t.dataset;
   if(d.jump){state.sheet=null;state.file=null;state.conn='idle';
     if(CONN.includes(d.jump)){goConn(d.jump);return}
@@ -654,6 +762,13 @@ document.addEventListener('click',e=>{
     if(d.jump==='wsroot'){state.sess='main';enter('jw');return}
     if(d.jump==='ws'){state.sess='main';enter('jw/fix/daemon-sock');return}
     if(d.jump==='pick'||d.jump==='leader'){state.screen='home';state.sheet=d.jump;render();return}
+    if(/^[fvwnp][0-9]$/.test(d.jump)){const j=d.jump,m={f1:['~/ws/jw'],f2:['~/ws/jw',1],f3:['~/ws','open'],f4:['~/.ssh'],f5:['~/Downloads'],f6:['~/ws/jw','big']};
+      state.ro=false;state.nw='form';state.ns='form';state.sheet=null;
+      if(j[0]==='f'){const a=m[j];state.fs={path:a[0],mode:a[1]==='open'?'open':'browse',hidden:a[1]===1,big:a[1]==='big'};state.sess='main';state.ws='jw/feat/mobile-app';state.screen='files';render();return}
+      if(j[0]==='v'){state.viewer={path:'~/ws/jw/docs/specs/mobile.md',kind:'ok',src:false};if(j==='v2')state.viewer.src=true;if(j==='v3')state.viewer={path:'~/ws/jw/crates/core/Cargo.toml',kind:'ok',src:false};if(j==='v4')state.viewer={path:'~/ws/jw/logo.png',kind:'bin',src:false};if(j==='v5')state.viewer={path:'~/ws/jw/docs/specs/rust-tui.md',kind:'big',src:false};if(j==='v6')state.viewer={path:'~/.ssh/id_ed25519',kind:'err',src:false};state.screen='viewer';render();return}
+      if(j[0]==='w'){state.sess='main';state.screen='home';state.sheet='newwt';if(j==='w2')state.nw='busy';if(j==='w3')state.nw='err';if(j==='w4')state.ro=true;render();return}
+      if(j[0]==='n'){state.sess='main';state.screen='home';state.sheet='newsess';if(j==='n2')state.ns='err';if(j==='n3'){state.ns='cmd';state.nsName='worktree'}else state.nsName='';render();return}
+      if(j==='p1'){state.sess='main';state.screen='home';state.sheet='open';render();return}}
     if(d.jump.startsWith('ch')||d.jump==='changes'){const j=d.jump;state.screen='changes';state.vst={gen:'ok',unc:'ok',com:'ok'};state.view='gen';state.commit=null;state.file=null;
       const set=(v,x)=>{state.view=v;state.vst[v]=x};
       if(j==='chunc')state.view='unc';
@@ -676,7 +791,7 @@ document.addEventListener('click',e=>{
   if(d.sess){state.sess=d.sess;state.sheet=null;toast('sesión '+d.sess);render();return}
   if(d.pc){toast('^␣ '+d.pc+' solo se hace en el PC: usa jw ahí');return}
   if(d.lead){const k=d.lead;state.sheet=null;
-    if(k==='␣'){state.sheet='pick'}else if(k==='a'){state.sheet='sess'}else if(k==='q'){state.screen='connect'}
+    if(k==='␣'){state.sheet='pick'}else if(k==='a'){state.sheet='sess'}else if(k==='o'){state.screen='files';state.fs={path:'~',mode:'open',hidden:false}}else if(k==='w'){state.sheet='newwt'}else if(k==='/'){state.fs={path:wsOf(state.ws).path,mode:'browse',hidden:false};state.screen='files'}else if(k==='q'){state.screen='connect'}
     else if(k==='1-9'){state.screen='home'}else toast('^␣ '+k);
     render();return}
   if(d.go){state.screen=d.go;state.file=null;state.sheet=null;render();return}
@@ -686,6 +801,8 @@ document.addEventListener('click',e=>{
   if(d.theme){applyTheme(d.theme);render();return}
   if(d.sw){state[d.sw]=!state[d.sw];render();return}
   if(d.pane){state.pane=d.pane;render();return}
+  if(d.fs){state.fs.path=d.fs;state.fload=true;render();setTimeout(()=>{state.fload=false;render()},350);return}
+  if(d.pcfile){state.viewer={path:d.pcfile,kind:/\.png$/.test(d.pcfile)?'bin':'ok',src:false};state.screen='viewer';render();return}
   if(d.vtab){state.view=d.vtab;state.file=null;state.commit=null;render();return}
   if(d.commit!==undefined){state.commit=+d.commit;state.file=null;render();return}
   if(d.cn){state.commit=Math.max(0,Math.min(COMMITS.length-1,state.commit+(+d.cn)));state.file=null;render();return}
@@ -711,9 +828,21 @@ document.addEventListener('click',e=>{
     case 'commits':state.commit=null;state.file=null;render();break;
     case 'retry':{const v=state.view;state.vst[v]='load';render();setTimeout(()=>{state.vst[v]='ok';render()},900);break}
     case 'disc':state.screen='connect';state.conn='idle';render();break;
-    case 'folder':state.sheet=null;toast('selector de carpetas');render();break;
-    case 'newwt':state.sheet=null;toast('nuevo worktree: nombre de rama');render();break;
-    case 'newsess':state.sheet=null;toast('nueva sesión');render();break;
+
+    case 'folder':state.sheet=null;state.screen='files';state.fs={path:'~',mode:'open',hidden:false};render();break;
+    case 'wsfiles':state.fs={path:wsOf(state.ws).path,mode:'browse',hidden:false};state.screen='files';state.sheet=null;render();break;
+    case 'filesback':state.screen=state.fs.mode==='open'&&state.fromSheet?'home':(state.fs.mode==='open'?'home':'ws');render();break;
+    case 'hidden':state.fs.hidden=!state.fs.hidden;render();break;
+    case 'openhere':toast('abierta como workspace: '+state.fs.path.split('/').pop());state.screen='home';render();break;
+    case 'viewback':state.screen='files';render();break;
+    case 'vsrc0':state.viewer.src=false;render();break;
+    case 'vsrc1':state.viewer.src=true;render();break;
+    case 'newwt':state.sheet='newwt';render();break;
+    case 'newsess':state.sheet='newsess';render();break;
+    case 'setproj':state.nwProj=t.dataset.proj;state.sheet='newwt';render();break;
+    case 'pickfolder':state.sheet=null;state.screen='files';state.fs={path:'~/ws',mode:'open',hidden:false};render();break;
+    case 'createwt':state.nw='busy';render();setTimeout(()=>{state.nw='form';state.sheet=null;enter('jw/feat/mobile-app')},1400);break;
+    case 'createsess':state.sheet=null;toast('sesión creada: '+(state.nsName||'trabajo'));render();break;
   }
 });
 document.addEventListener('input',e=>{if(e.target.id==='q'){state.q=e.target.value;const s=$('#overlay');s.innerHTML=sheet();const q=$('#q');q.focus();q.setSelectionRange(q.value.length,q.value.length)}});

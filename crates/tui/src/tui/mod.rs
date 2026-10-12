@@ -3849,6 +3849,7 @@ fn created(project: &Project, from: Entry, name: String, wrote: Option<String>) 
         name,
         from: from.branch,
         branch: String::new(),
+        session: None,
     };
     let entry = actions::new_stream(project, &o, &registry::default_path()?)?;
     Ok(Job::Created {
@@ -4061,6 +4062,7 @@ mod motion_tests {
             tree: Node::leaf(""),
             session: String::new(),
             stamp: Default::default(),
+            jw_session: "main".into(),
         }
     }
 

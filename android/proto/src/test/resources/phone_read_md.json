@@ -1,0 +1,108 @@
+{
+  "blocks": [
+    {
+      "k": "h",
+      "level": 1,
+      "spans": [
+        {
+          "t": "Title"
+        }
+      ]
+    },
+    {
+      "k": "p",
+      "spans": [
+        {
+          "t": "Some "
+        },
+        {
+          "b": true,
+          "t": "bold"
+        },
+        {
+          "t": " and "
+        },
+        {
+          "code": true,
+          "t": "code"
+        },
+        {
+          "t": ", "
+        },
+        {
+          "href": "http://x",
+          "t": "link"
+        },
+        {
+          "t": "."
+        }
+      ]
+    },
+    {
+      "items": [
+        [
+          {
+            "k": "p",
+            "spans": [
+              {
+                "t": "one"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "k": "p",
+            "spans": [
+              {
+                "t": "two"
+              }
+            ]
+          }
+        ]
+      ],
+      "k": "ul"
+    },
+    {
+      "k": "code",
+      "lang": "sh",
+      "text": "jw mobile"
+    },
+    {
+      "head": [
+        [
+          {
+            "t": "a"
+          }
+        ],
+        [
+          {
+            "t": "b"
+          }
+        ]
+      ],
+      "k": "table",
+      "rows": [
+        [
+          [
+            {
+              "t": "1"
+            }
+          ],
+          [
+            {
+              "t": "2"
+            }
+          ]
+        ]
+      ]
+    }
+  ],
+  "kind": "md",
+  "path": "/Users/me/ws/README.md",
+  "req": "~/ws/README.md",
+  "size": 118,
+  "t": "read",
+  "text": "# Title\n\nSome **bold** and `code`, [link](http://x).\n\n- one\n- two\n\n```sh\njw mobile\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n",
+  "truncated": false
+}

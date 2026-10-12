@@ -72,6 +72,23 @@ class Nav {
     /** The workspace whose changes the diff tab shows: the last one entered, or the one picked there (REQ-25). */
     var diffWs by mutableStateOf<String?>(null)
 
+    /** The PC's file tree (REQ-83): the folder on screen, whose workspace it was opened from, and the file in the viewer. */
+    var filesPath by mutableStateOf<String?>(null)
+
+    /** What a folder is being chosen for, when the Files screen is a chooser (REQ-83, 88). */
+    var pick by mutableStateOf<PickFor?>(null)
+
+    /** What is open over the home screen (REQ-88), the folder a new session starts in, and the project a new worktree is for. */
+    var sheet by mutableStateOf<HomeSheet?>(null)
+    var sessionDir by mutableStateOf("~")
+    var worktreeProject by mutableStateOf<String?>(null)
+
+    fun startPick(f: PickFor) { pick = f; filesWs = ""; filesPath = if (f == PickFor.SessionDir && sessionDir != "~") sessionDir else "~" }
+    var filesWs by mutableStateOf("")
+    var viewerPath by mutableStateOf<String?>(null)
+
+    fun showFiles(w: Workspace) { filesWs = w.name; filesPath = w.path }
+
     /** Opens `id`'s changes. */
     fun showChanges(id: String) { diffWs = id; tab = Tab.Diff; open = null }
 }
@@ -160,8 +177,9 @@ fun ConnectedApp(state: UiState.Connected, session: Session, nav: Nav, answers: 
     // The diff tab follows the workspace last entered.
     LaunchedEffect(nav.open) { nav.open?.let { nav.diffWs = it } }
     LaunchedEffect(Unit) { session.toasts.collect { toast = it; delay(1800); if (toast == it) toast = null } }
-    BackHandler(nav.sessionSheet || nav.open != null || nav.tab != Tab.Home) {
+    BackHandler(nav.sheet != null || nav.sessionSheet || nav.open != null || nav.tab != Tab.Home) {
         when {
+            nav.sheet != null -> nav.sheet = null
             nav.sessionSheet -> nav.sessionSheet = false
             nav.open != null -> nav.open = null
             else -> nav.tab = Tab.Home
@@ -172,6 +190,8 @@ fun ConnectedApp(state: UiState.Connected, session: Session, nav: Nav, answers: 
     Box(Modifier.fillMaxSize()) {
         val open = nav.open?.let { id -> model.items.firstOrNull { it.id == id } }
         when {
+            nav.viewerPath != null -> FileViewerScreen(session, nav, state)
+            nav.filesPath != null -> FilesScreen(session, nav, nav.filesWs, state, model.session)
             open != null -> WorkspaceScreen(open, model, state, session, nav, answers, now)
             nav.tab == Tab.Home -> HomeScreen(model, state, session, nav, now, waiting)
             nav.tab == Tab.Avisos -> AvisosScreen(model, state, session, nav, now, waiting)
@@ -179,6 +199,13 @@ fun ConnectedApp(state: UiState.Connected, session: Session, nav: Nav, answers: 
             else -> SettingsScreen(state, session, answers, nav, waiting)
         }
         if (nav.sessionSheet) SessionSheet(model, session, nav)
+        when (nav.sheet) {
+            HomeSheet.Plus -> PlusSheet(nav) { nav.worktreeProject = null; nav.sheet = HomeSheet.Worktree }
+            HomeSheet.Worktree -> WorktreeSheet(model, state, session, nav)
+            HomeSheet.NewSession -> NewSessionSheet(state, session, nav)
+            null -> {}
+        }
+        MakeDone(model, session, nav)
         toast?.let {
             Text(
                 it, color = j.bg, fontWeight = FontWeight.Bold, fontSize = 12.sp,
@@ -282,6 +309,12 @@ private fun HomeScreen(model: Model, state: UiState.Connected, session: Session,
                     .clickable(role = Role.Button) { searching = !searching; query = "" },
                 contentAlignment = Alignment.Center,
             ) { if (searching) Icon(Ic.X, j.fg, 20.dp) else Icon(Ic.Search, j.fg, 20.dp) }
+            if (!searching) {
+                Box(
+                    Modifier.size(48.dp).semantics { contentDescription = "Abrir o crear" }.clickable(role = Role.Button) { nav.sheet = HomeSheet.Plus },
+                    contentAlignment = Alignment.Center,
+                ) { Icon(Ic.Plus, j.fg, 20.dp) }
+            }
         }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
             Section((if (shown.size == 1) "workspace" else "workspaces") + " · ${shown.size}")
@@ -381,6 +414,13 @@ private fun SessionSheet(model: Model, session: Session, nav: Nav) {
                 }
             }
             if (model.sessions.isEmpty()) Body("Sin sesiones todavía.", j.dim, 12.0)
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(role = Role.Button) { nav.sessionSheet = false; nav.sheet = HomeSheet.NewSession }.padding(horizontal = 14.dp),
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text("+", color = j.yellow, modifier = Modifier.width(34.dp).border(BorderStroke(1.dp, j.line), RoundedCornerShape(4.dp)).background(j.bg).padding(3.dp), textAlign = TextAlign.Center)
+                Text("nueva sesión", color = j.fg, modifier = Modifier.weight(1f))
+            }
         }
     }
 }

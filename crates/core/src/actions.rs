@@ -35,6 +35,31 @@ impl Project {
     }
 }
 
+/// A project of jw session `session` by name: an open folder that is its checkout, or the main checkout its
+/// worktrees came from (`jw worktree --in`, and a phone's `worktree`).
+pub fn project_named(state: &Path, reg_path: &Path, session: &str, name: &str) -> Result<Project> {
+    let folders = crate::folders::load_in(state, session)?;
+    let from_folder = folders
+        .folders
+        .iter()
+        .map(|f| crate::folders::entry_for(f, session))
+        .find(|e| e.project == name && !e.branch.is_empty())
+        .map(|e| e.path);
+    let dir = match from_folder {
+        Some(d) => Some(d),
+        None => Registry::load(reg_path)?
+            .entries
+            .iter()
+            .filter(|e| crate::session::owns(session, &e.session))
+            .find(|e| e.project == name && !e.root.is_empty())
+            .map(|e| e.root.clone()),
+    };
+    let Some(dir) = dir else {
+        bail!("no project {name} in session {session}");
+    };
+    Project::open(Path::new(&dir))
+}
+
 /// Gives every entry its project's main checkout (RISK-17): one `git` per
 /// project, once, for entries seeded from Go. Whether anything changed.
 pub fn fill_roots(reg: &mut Registry) -> bool {
@@ -76,6 +101,26 @@ pub struct NewOptions {
     /// Empty takes the config's template; an existing branch is checked out
     /// as is, but only when named here on purpose.
     pub branch: String,
+    /// The jw session the worktree is registered in; `None` is the process's own.
+    pub session: Option<String>,
+}
+
+/// A branch name that is safe to hand to git as a value: no leading dash (it would be an option), no `..`, no
+/// whitespace or control characters, none of `~^:?*[\\`, no `//`, and not ending in `/`, `.` or `.lock` (git's own rules,
+/// kept narrower). Checked before a phone's `branch` reaches git (mobile REQ-87).
+pub fn valid_branch(b: &str) -> bool {
+    !b.is_empty()
+        && b.len() <= 200
+        && !b.starts_with(['-', '/', '.'])
+        && !b.ends_with(['/', '.'])
+        && !b.ends_with(".lock")
+        && !b.contains("..")
+        && !b.contains("//")
+        && !b.contains("@{")
+        && b != "@"
+        && !b
+            .chars()
+            .any(|c| c.is_control() || c.is_whitespace() || "~^:?*[\\".contains(c))
 }
 
 /// Creates the worktree, writes .jw.env, copies env files and registers the
@@ -137,7 +182,7 @@ pub fn new_stream(p: &Project, o: &NewOptions, reg_path: &Path) -> Result<Entry>
         adopted: existing,
         created: registry::now_rfc3339(),
         root: p.repo.root.display().to_string(),
-        session: crate::session::stored(&crate::session::current()),
+        session: crate::session::stored(o.session.as_deref().unwrap_or(&crate::session::current())),
         ..Entry::default()
     };
     // From here a worktree exists: undo it if anything fails, so a

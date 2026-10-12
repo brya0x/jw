@@ -839,6 +839,7 @@ version = "0.0.22"
 dependencies = [
  "anyhow",
  "libc",
+ "pulldown-cmark",
  "qrcode",
  "serde",
  "serde_json",

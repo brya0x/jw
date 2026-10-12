@@ -19,6 +19,8 @@ import dev.jw.proto.Workspace
 import dev.jw.proto.CommitList
 import dev.jw.proto.Diff
 import dev.jw.proto.DiffScope
+import dev.jw.proto.FsFile
+import dev.jw.proto.FsListing
 import dev.jw.proto.Workspaces
 import dev.jw.proto.Palettes
 import dev.jw.proto.QrPayload
@@ -179,6 +181,62 @@ sealed interface CommitsState {
     }
 }
 
+/** A directory of the PC on screen (REQ-77): asked, answered, or why not. A reason may name a path; shown, never logged. */
+sealed interface FsState {
+    data object Idle : FsState
+
+    class Loading(val req: String) : FsState {
+        override fun toString() = "Loading"
+    }
+
+    class Loaded(val listing: FsListing) : FsState {
+        override fun toString() = "Loaded($listing)"
+    }
+
+    class Failed(val req: String, val why: String) : FsState {
+        override fun toString() = "Failed"
+    }
+}
+
+/** A file of the PC on screen (REQ-79). */
+sealed interface FileState {
+    data object Idle : FileState
+
+    class Loading(val req: String) : FileState {
+        override fun toString() = "Loading"
+    }
+
+    class Loaded(val file: FsFile) : FileState {
+        override fun toString() = "Loaded($file)"
+    }
+
+    class Failed(val req: String, val why: String) : FileState {
+        override fun toString() = "Failed"
+    }
+}
+
+/** What the person asked the PC to make: a workspace from a folder, a session, a worktree (REQ-85 to 87). One at a time. */
+sealed interface MakeState {
+    data object Idle : MakeState
+
+    /** Asked and waiting: a worktree can take minutes. */
+    class Busy(val what: Make, val connection: Int) : MakeState {
+        override fun toString() = "Busy($what)"
+    }
+
+    /** Made: the workspace `ws` (of session `session`, which is the new one for a new session). */
+    class Done(val what: Make, val ws: String, val session: String?) : MakeState {
+        override fun toString() = "Done($what)"
+    }
+
+    /** Refused or lost, with the reason, which may name a path or a branch of the PC: shown, never logged. */
+    class Failed(val what: Make, val why: String) : MakeState {
+        override fun toString() = "Failed($what)"
+    }
+}
+
+enum class Make { Open, Session, Worktree }
+
 /** What the PC is asked that runs git. It answers one at a time per phone, so the session sends them one at a time. */
 private sealed interface GitAsk {
     data class Diff(val ws: String, val scope: DiffScope) : GitAsk
@@ -226,6 +284,14 @@ class Session(
     val diff: StateFlow<DiffState> = _diff.asStateFlow()
     private val _commits = MutableStateFlow<CommitsState>(CommitsState.Idle)
     val commits: StateFlow<CommitsState> = _commits.asStateFlow()
+    private val _fs = MutableStateFlow<FsState>(FsState.Idle)
+    val fs: StateFlow<FsState> = _fs.asStateFlow()
+    private val _file = MutableStateFlow<FileState>(FileState.Idle)
+    val file: StateFlow<FileState> = _file.asStateFlow()
+    /** Moves with every connection that gets in, so a make can tell whether its answer could still come. */
+    @Volatile private var connGen = 0
+    private val _make = MutableStateFlow<MakeState>(MakeState.Idle)
+    val make: StateFlow<MakeState> = _make.asStateFlow()
     private val asks = Any()
     private var inFlight: GitAsk? = null
     private val queued = ArrayDeque<GitAsk>()
@@ -346,6 +412,51 @@ class Session(
         enqueue(GitAsk.Commits(ws))
     }
 
+    /** Asks for the entries of the directory `path` of the PC (`~` is its home). The answer lands in [fs]. */
+    fun requestLs(path: String) {
+        _fs.value = FsState.Loading(path)
+        send(Outgoing.Text(Control.ls(path)))
+    }
+
+    /** Asks for the text of the file `path` of the PC. The answer lands in [file]. */
+    fun requestRead(path: String) {
+        _file.value = FileState.Loading(path)
+        send(Outgoing.Text(Control.read(path)))
+    }
+
+    /** Makes the folder `path` of the PC a workspace of `session` (REQ-85). */
+    fun requestOpen(path: String, session: String?) = ask(Make.Open, Control.open(path, session))
+
+    /** Makes session `name`, starting in the folder `dir` (REQ-86). */
+    fun requestNewSession(name: String, dir: String) = ask(Make.Session, Control.sessionNew(name, dir))
+
+    /** Makes worktree `name` of `project` in `session` and gives `task` to its agent (REQ-87). */
+    fun requestWorktree(project: String, name: String, branch: String?, task: String?, session: String?) =
+        ask(Make.Worktree, Control.worktree(project, name, branch, task, session))
+
+    private fun ask(what: Make, text: String) {
+        if (_make.value is MakeState.Busy) return
+        _make.value = MakeState.Busy(what, connGen)
+        send(Outgoing.Text(text))
+    }
+
+    /** The make is over (or its screen left): nothing is shown of it any more. */
+    fun clearMake() { if (_make.value !is MakeState.Busy) _make.value = MakeState.Idle }
+
+    private fun made(what: Make, ws: String, session: String?) {
+        if ((_make.value as? MakeState.Busy)?.what != what) return
+        _make.value = MakeState.Done(what, ws, session)
+        // What was made is in the PC's list now: ask for it, in the session it is in.
+        requestWorkspaces(session ?: _model.value.session)
+        if (what == Make.Session) requestSessions()
+    }
+
+    /** The files screen is left: let go of what it held. */
+    fun clearFiles() {
+        _fs.value = FsState.Idle
+        _file.value = FileState.Idle
+    }
+
     /** The changes screen is left: let go of the answers, which can be megabytes. */
     fun clearDiff() {
         synchronized(asks) { queued.clear() }
@@ -389,6 +500,14 @@ class Session(
             (_commits.value as? CommitsState.Loading)?.let { queued.addLast(GitAsk.Commits(it.ws)) }
         }
         pump()
+        // A make cannot be asked again (it would be made twice): the PC goes on with it, and the list will show it.
+        (_make.value as? MakeState.Busy)?.takeIf { it.connection != connGen }?.let {
+            _make.value = MakeState.Failed(it.what, "se perdió la conexión mientras el PC lo hacía: mira la lista de workspaces en un momento")
+            requestWorkspaces(_model.value.session)
+        }
+        // The files asks have seats of their own and no queue: what was waiting is asked again.
+        (_fs.value as? FsState.Loading)?.let { send(Outgoing.Text(Control.ls(it.req))) }
+        (_file.value as? FileState.Loading)?.let { send(Outgoing.Text(Control.read(it.req))) }
     }
 
     /**
@@ -475,6 +594,7 @@ class Session(
         outbox = null
         _model.value = Model()
         clearDiff()
+        clearFiles()
         store.clear()
         routes = Routes(null, null)
         _state.value = UiState.Scan()
@@ -630,6 +750,7 @@ class Session(
                         } else {
                             a.ready = true
                             p.onConnected()
+                            connGen++
                             _state.value = connected(m, route, r, saved)
                             // A new connection: whatever the PC says now is the truth (REQ-15).
                             outbox = out
@@ -654,7 +775,10 @@ class Session(
                         if (m.code == ErrorCode.READ_ONLY) _toasts.tryEmit("solo lectura")
                         // An ask's own failure says which ask it is (`ask`, `ws`, `scope`); `busy` is the PC saying one
                         // is still running, which the session's own queue prevents, so it fails nothing.
-                        if (m.code == ErrorCode.UNSUPPORTED && !m.msg.startsWith("busy")) askFailed(m)
+                        val files = m.ask == "ls" || m.ask == "read"
+                        if (m.code == ErrorCode.UNSUPPORTED && (files || !m.msg.startsWith("busy"))) askFailed(m)
+                        // A make that a read-only bridge refused says so in its own sheet.
+                        if (m.code == ErrorCode.READ_ONLY && m.ask != null) askFailed(m)
                         if (m.code != ErrorCode.READ_ONLY && m.code != ErrorCode.UNSUPPORTED) {
                             a.failure = Failure.Bridge(m.code)
                             a.bridgeFailed = true
@@ -667,6 +791,11 @@ class Session(
                         (_diff.value as? DiffState.Loading)?.takeIf { it.ws == d.ws && it.scope == d.scope }?.let { _diff.value = DiffState.Loaded(d) }
                         done(GitAsk.Diff(d.ws, d.scope))
                     }
+                    is ServerMessage.LsAnswer -> (_fs.value as? FsState.Loading)?.takeIf { it.req == m.listing.req }?.let { _fs.value = FsState.Loaded(m.listing) }
+                    is ServerMessage.ReadAnswer -> (_file.value as? FileState.Loading)?.takeIf { it.req == m.file.req }?.let { _file.value = FileState.Loaded(m.file) }
+                    is ServerMessage.Opened -> made(Make.Open, m.ws, null)
+                    is ServerMessage.SessionCreated -> made(Make.Session, m.ws, m.name)
+                    is ServerMessage.WorktreeMade -> made(Make.Worktree, m.ws, null)
                     is ServerMessage.CommitsAnswer -> {
                         (_commits.value as? CommitsState.Loading)?.takeIf { it.ws == m.list.ws }?.let { _commits.value = CommitsState.Loaded(m.list) }
                         done(GitAsk.Commits(m.list.ws))
@@ -681,6 +810,15 @@ class Session(
     }
 
     private fun askFailed(m: ServerMessage.Error) {
+        val make = when (m.ask) { "opened" -> Make.Open; "session_created" -> Make.Session; "worktree" -> Make.Worktree; else -> null }
+        if (make != null) {
+            if ((_make.value as? MakeState.Busy)?.what == make) _make.value = MakeState.Failed(make, if (m.code == ErrorCode.READ_ONLY) "solo lectura: el puente no deja hacer esto" else m.msg)
+            return
+        }
+        when (m.ask) {
+            "ls" -> m.req?.let { req -> (_fs.value as? FsState.Loading)?.takeIf { it.req == req }?.let { _fs.value = FsState.Failed(req, m.msg) } }
+            "read" -> m.req?.let { req -> (_file.value as? FileState.Loading)?.takeIf { it.req == req }?.let { _file.value = FileState.Failed(req, m.msg) } }
+        }
         val ws = m.ws ?: return
         when (m.ask) {
             "diff" -> {

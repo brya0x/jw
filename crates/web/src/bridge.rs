@@ -179,6 +179,35 @@ pub enum Query {
     Diff(String, DiffScope),
     /// The commits of a workspace's branch, by workspace id, for the Commits view.
     Commits(String),
+    /// The entries of a directory of the PC (REQ-77), by the path the phone sent.
+    Ls(String),
+    /// A file's text (REQ-79), by the path the phone sent.
+    Read(String),
+    /// Adds a directory of the PC to a session as a folder workspace and opens it (REQ-85).
+    Open {
+        path: String,
+        session: Option<String>,
+    },
+    /// Creates a session that starts in a directory (REQ-86).
+    SessionNew { name: String, dir: String },
+    /// Makes a worktree of a project and opens it, handing `task` to its agent (REQ-87).
+    Worktree {
+        project: String,
+        name: String,
+        branch: Option<String>,
+        task: Option<String>,
+        session: Option<String>,
+    },
+}
+
+impl Query {
+    /// What changes the PC's state, so a read-only bridge refuses it (REQ-82).
+    fn writes(&self) -> bool {
+        matches!(
+            self,
+            Query::Open { .. } | Query::SessionNew { .. } | Query::Worktree { .. }
+        )
+    }
 }
 
 /// Which changes of a workspace a phone asks for: the TUI's three views. This crate cannot depend on
@@ -674,6 +703,10 @@ struct Later {
     diff: Arc<AtomicBool>,
     /// Lists being computed for this phone, at most `MAX_LISTS`.
     lists: Arc<AtomicUsize>,
+    /// A workspace, session or worktree is being made for this phone: one at a time.
+    make: Arc<AtomicBool>,
+    /// Listings and reads of the PC's files, at most `MAX_FILES`: a hung mount must not hold the other asks.
+    files: Arc<AtomicUsize>,
     /// Set when this phone is gone: what is still being computed for it
     /// stops (a diff runs git, which would go on for its whole deadline).
     gone: Arc<AtomicBool>,
@@ -681,6 +714,9 @@ struct Later {
 
 /// How many `workspaces` and `sessions` a phone can have in flight.
 const MAX_LISTS: usize = 4;
+
+/// How many `ls` and `read` a phone can have in flight.
+const MAX_FILES: usize = 2;
 
 fn serve(
     stream: TcpStream,
@@ -791,6 +827,8 @@ fn serve(
         rx: replies,
         diff: Arc::new(AtomicBool::new(false)),
         lists: Arc::new(AtomicUsize::new(0)),
+        files: Arc::new(AtomicUsize::new(0)),
+        make: Arc::new(AtomicBool::new(false)),
         gone: Arc::new(AtomicBool::new(false)),
     };
     let result = relay(
@@ -979,7 +1017,7 @@ fn relay(
                             Ok(ask) => start_ask(shared, later, ask),
                             Err(_) => Some(error(
                                 "unsupported",
-                                "ask workspaces, sessions, diff or commits",
+                                "ask workspaces, sessions, diff, commits, ls, read, open, session_new or worktree",
                             )),
                         };
                         if let Some(refusal) = refusal {
@@ -1013,12 +1051,37 @@ enum Ask {
     Commits {
         ws: String,
     },
+    Ls {
+        path: String,
+    },
+    Read {
+        path: String,
+    },
+    Open {
+        path: String,
+        session: Option<String>,
+    },
+    SessionNew {
+        name: String,
+        dir: String,
+    },
+    Worktree {
+        project: String,
+        name: String,
+        branch: Option<String>,
+        task: Option<String>,
+        session: Option<String>,
+    },
 }
+
+/// The longest any text of a write is taken to be, so one ask cannot carry megabytes.
+const MAX_ASK_TEXT: usize = 4096;
 
 /// Which of a phone's seats an answer takes.
 enum Seat {
     Diff(Arc<AtomicBool>),
-    List(Arc<AtomicUsize>),
+    /// A counter of asks in flight and how many are allowed.
+    List(Arc<AtomicUsize>, usize),
 }
 
 impl Seat {
@@ -1026,14 +1089,37 @@ impl Seat {
     fn take(&self) -> bool {
         match self {
             Seat::Diff(busy) => !busy.swap(true, Ordering::SeqCst),
-            Seat::List(n) => {
-                if n.fetch_add(1, Ordering::SeqCst) >= MAX_LISTS {
+            Seat::List(n, cap) => {
+                if n.fetch_add(1, Ordering::SeqCst) >= *cap {
                     n.fetch_sub(1, Ordering::SeqCst);
                     return false;
                 }
                 true
             }
         }
+    }
+}
+
+/// Whether any text of a write is past [`MAX_ASK_TEXT`] characters.
+fn too_long(q: &Query) -> bool {
+    let long = |s: &str| s.chars().count() > MAX_ASK_TEXT;
+    match q {
+        Query::Open { path, session } => long(path) || session.as_deref().is_some_and(long),
+        Query::SessionNew { name, dir } => long(name) || long(dir),
+        Query::Worktree {
+            project,
+            name,
+            branch,
+            task,
+            session,
+        } => {
+            long(project)
+                || long(name)
+                || branch.as_deref().is_some_and(long)
+                || task.as_deref().is_some_and(long)
+                || session.as_deref().is_some_and(long)
+        }
+        _ => false,
     }
 }
 
@@ -1045,7 +1131,7 @@ impl Drop for Release {
     fn drop(&mut self) {
         match &self.0 {
             Seat::Diff(busy) => busy.store(false, Ordering::SeqCst),
-            Seat::List(n) => {
+            Seat::List(n, _) => {
                 n.fetch_sub(1, Ordering::SeqCst);
             }
         }
@@ -1084,10 +1170,66 @@ fn start_ask(shared: &Shared, later: &Later, ask: Ask) -> Option<Message> {
             )
         }
         Ask::Commits { ws } => (Query::Commits(ws.clone()), "commits", vec![("ws", ws)]),
+        // `req` is the path as the phone sent it: the answer's own `path` is the resolved one.
+        Ask::Ls { path } => (Query::Ls(path.clone()), "ls", vec![("req", path)]),
+        Ask::Open { path, session } => (
+            Query::Open {
+                path: path.clone(),
+                session,
+            },
+            "opened",
+            vec![("req", path)],
+        ),
+        Ask::SessionNew { name, dir } => (
+            Query::SessionNew {
+                name: name.clone(),
+                dir,
+            },
+            "session_created",
+            vec![("name", name)],
+        ),
+        Ask::Worktree {
+            project,
+            name,
+            branch,
+            task,
+            session,
+        } => (
+            Query::Worktree {
+                project: project.clone(),
+                name: name.clone(),
+                branch,
+                task,
+                session,
+            },
+            "worktree",
+            vec![("project", project), ("name", name)],
+        ),
+        Ask::Read { path } => (Query::Read(path.clone()), "read", vec![("req", path)]),
     };
+    if query.writes() && shared.read_only.load(Ordering::SeqCst) {
+        return Some(error_for(
+            tag,
+            &fields,
+            "read_only",
+            "this bridge is read-only",
+        ));
+    }
+    if too_long(&query) {
+        return Some(error_for(
+            tag,
+            &fields,
+            "unsupported",
+            "a text of the ask is too long",
+        ));
+    }
     let seat = match query {
+        Query::Open { .. } | Query::SessionNew { .. } | Query::Worktree { .. } => {
+            Seat::Diff(later.make.clone())
+        }
         Query::Diff(..) | Query::Commits(_) => Seat::Diff(later.diff.clone()),
-        _ => Seat::List(later.lists.clone()),
+        Query::Ls(_) | Query::Read(_) => Seat::List(later.files.clone(), MAX_FILES),
+        _ => Seat::List(later.lists.clone(), MAX_LISTS),
     };
     if !seat.take() {
         return Some(error_for(
@@ -1331,6 +1473,39 @@ mod tests {
                     }
                     Query::Commits(_) => {
                         Ok(serde_json::json!({ "commits": [], "more": false, "no_base": false }))
+                    }
+                    Query::Ls(path) if path == "/hang" => {
+                        while !cancel.load(Ordering::SeqCst) {
+                            thread::sleep(Duration::from_millis(10));
+                        }
+                        Err("cancelled".into())
+                    }
+                    Query::Ls(path) if path == "/nope" => Err("no such file or folder".into()),
+                    Query::Ls(path) => Ok(
+                        serde_json::json!({ "path": path, "parent": null, "entries": [], "total": 0, "truncated": false }),
+                    ),
+                    Query::Read(path) => Ok(
+                        serde_json::json!({ "path": path, "kind": "text", "size": 2, "truncated": false, "text": "hi", "blocks": null }),
+                    ),
+                    Query::Open { path, .. } if path == "/boom" => {
+                        Err("it could not be read".into())
+                    }
+                    Query::Open { .. } => Ok(serde_json::json!({ "ws": "dir:/x", "name": "x" })),
+                    Query::SessionNew { name, .. } => {
+                        Ok(serde_json::json!({ "name": name, "ws": "dir:/x#new" }))
+                    }
+                    Query::Worktree {
+                        name,
+                        task,
+                        session,
+                        ..
+                    } => {
+                        if name == "slow" {
+                            thread::sleep(Duration::from_millis(700));
+                        }
+                        Ok(
+                            serde_json::json!({ "ws": "wt1", "name": name, "branch": "feat/x", "task": task, "session": session }),
+                        )
                     }
                     Query::Diff(id, _) => {
                         if id == "slow" {
@@ -1921,7 +2096,7 @@ mod tests {
             serde_json::json!({ "t": "workspaces", "session": "nope" }),
         );
         assert_eq!(code(&mut p), "unsupported");
-        say(&mut p, serde_json::json!({ "t": "open", "path": "x" }));
+        say(&mut p, serde_json::json!({ "t": "rm_rf", "path": "x" }));
         assert_eq!(code(&mut p), "unsupported");
         // The connection is still good for frames.
         p.send(body(&input(1, b"ls"))).unwrap();
@@ -2062,6 +2237,169 @@ mod tests {
         );
         assert!(v["msg"].as_str().unwrap().starts_with("busy"), "{v}");
         assert_eq!(json(&mut p)["t"], "diff");
+    }
+
+    #[test]
+    fn ls_and_read_are_answered_with_the_path_asked_and_errors_say_which_ask() {
+        let r = rig(Opts::default());
+        let mut p = phone(&r.bridge);
+        login(&mut p, &enrol(&r, "a"));
+        say(&mut p, serde_json::json!({ "t": "ls", "path": "~/x" }));
+        let v = json(&mut p);
+        assert_eq!(
+            (v["t"].as_str(), v["req"].as_str()),
+            (Some("ls"), Some("~/x")),
+            "{v}"
+        );
+        say(
+            &mut p,
+            serde_json::json!({ "t": "read", "path": "/a/b.md" }),
+        );
+        let v = json(&mut p);
+        assert_eq!(
+            (v["t"].as_str(), v["req"].as_str(), v["text"].as_str()),
+            (Some("read"), Some("/a/b.md"), Some("hi")),
+            "{v}"
+        );
+        say(&mut p, serde_json::json!({ "t": "ls", "path": "/nope" }));
+        let v = json(&mut p);
+        assert_eq!(
+            (v["code"].as_str(), v["ask"].as_str(), v["req"].as_str()),
+            (Some("unsupported"), Some("ls"), Some("/nope")),
+            "{v}"
+        );
+    }
+
+    #[test]
+    fn only_so_many_file_asks_run_at_once_and_a_hung_one_does_not_stop_the_others() {
+        let r = rig(Opts::default());
+        let mut p = phone(&r.bridge);
+        login(&mut p, &enrol(&r, "a"));
+        // Two hung listings take both seats; a third is refused as busy, but the lists still answer.
+        say(&mut p, serde_json::json!({ "t": "ls", "path": "/hang" }));
+        say(&mut p, serde_json::json!({ "t": "ls", "path": "/hang" }));
+        say(&mut p, serde_json::json!({ "t": "ls", "path": "/x" }));
+        let v = json(&mut p);
+        assert_eq!(
+            (v["ask"].as_str(), v["code"].as_str()),
+            (Some("ls"), Some("unsupported")),
+            "{v}"
+        );
+        assert!(v["msg"].as_str().unwrap().starts_with("busy"), "{v}");
+        say(&mut p, serde_json::json!({ "t": "sessions" }));
+        assert_eq!(json(&mut p)["t"], "sessions");
+    }
+
+    #[test]
+    fn the_writes_are_answered_with_their_ask_and_one_runs_at_a_time() {
+        let r = rig(Opts::default());
+        let mut p = phone(&r.bridge);
+        login(&mut p, &enrol(&r, "a"));
+        say(
+            &mut p,
+            serde_json::json!({ "t": "open", "path": "/x", "session": "main" }),
+        );
+        let v = json(&mut p);
+        assert_eq!(
+            (v["t"].as_str(), v["req"].as_str(), v["ws"].as_str()),
+            (Some("opened"), Some("/x"), Some("dir:/x")),
+            "{v}"
+        );
+        say(
+            &mut p,
+            serde_json::json!({ "t": "session_new", "name": "work", "dir": "/x" }),
+        );
+        let v = json(&mut p);
+        assert_eq!(
+            (v["t"].as_str(), v["name"].as_str()),
+            (Some("session_created"), Some("work")),
+            "{v}"
+        );
+        say(
+            &mut p,
+            serde_json::json!({ "t": "worktree", "project": "jw", "name": "feat-a", "task": "do it", "session": "work" }),
+        );
+        let v = json(&mut p);
+        assert_eq!(
+            (
+                v["t"].as_str(),
+                v["project"].as_str(),
+                v["name"].as_str(),
+                v["task"].as_str(),
+                v["session"].as_str()
+            ),
+            (
+                Some("worktree"),
+                Some("jw"),
+                Some("feat-a"),
+                Some("do it"),
+                Some("work")
+            ),
+            "{v}"
+        );
+        // A second while one runs is busy, and says whose it is.
+        say(
+            &mut p,
+            serde_json::json!({ "t": "worktree", "project": "jw", "name": "slow" }),
+        );
+        say(&mut p, serde_json::json!({ "t": "open", "path": "/y" }));
+        let v = json(&mut p);
+        assert_eq!(
+            (v["ask"].as_str(), v["code"].as_str()),
+            (Some("opened"), Some("unsupported")),
+            "{v}"
+        );
+        assert!(v["msg"].as_str().unwrap().starts_with("busy"), "{v}");
+        assert_eq!(json(&mut p)["t"], "worktree");
+        // An error of a write says its ask too.
+        say(&mut p, serde_json::json!({ "t": "open", "path": "/boom" }));
+        let v = json(&mut p);
+        assert_eq!(
+            (v["ask"].as_str(), v["req"].as_str()),
+            (Some("opened"), Some("/boom")),
+            "{v}"
+        );
+    }
+
+    #[test]
+    fn a_read_only_bridge_refuses_every_write_and_still_reads() {
+        let r = rig(Opts {
+            read_only: true,
+            ..Opts::default()
+        });
+        let mut p = phone(&r.bridge);
+        login(&mut p, &enrol(&r, "a"));
+        for ask in [
+            serde_json::json!({ "t": "open", "path": "/x" }),
+            serde_json::json!({ "t": "session_new", "name": "w", "dir": "/x" }),
+            serde_json::json!({ "t": "worktree", "project": "jw", "name": "a" }),
+        ] {
+            say(&mut p, ask.clone());
+            let v = json(&mut p);
+            assert_eq!(v["code"], "read_only", "{ask}: {v}");
+            assert!(v["ask"].is_string(), "{v}");
+        }
+        say(&mut p, serde_json::json!({ "t": "ls", "path": "/x" }));
+        assert_eq!(json(&mut p)["t"], "ls");
+        say(&mut p, serde_json::json!({ "t": "read", "path": "/x/y" }));
+        assert_eq!(json(&mut p)["t"], "read");
+    }
+
+    #[test]
+    fn a_text_past_the_limit_is_refused_before_anything_is_made() {
+        let r = rig(Opts::default());
+        let mut p = phone(&r.bridge);
+        login(&mut p, &enrol(&r, "a"));
+        say(
+            &mut p,
+            serde_json::json!({ "t": "worktree", "project": "jw", "name": "a", "task": "x".repeat(MAX_ASK_TEXT + 1) }),
+        );
+        let v = json(&mut p);
+        assert_eq!(
+            (v["code"].as_str(), v["ask"].as_str()),
+            (Some("unsupported"), Some("worktree")),
+            "{v}"
+        );
     }
 
     #[test]
@@ -2463,7 +2801,7 @@ mod tests {
         let mut p = phone(&r.bridge);
         login(&mut p, &enrol(&r, "a"));
         // `open` is not built yet: an error, and the relay goes on.
-        say(&mut p, serde_json::json!({ "t": "open", "path": "x" }));
+        say(&mut p, serde_json::json!({ "t": "rm_rf", "path": "x" }));
         assert_eq!(code(&mut p), "unsupported");
         p.send(body(&input(1, b"x"))).unwrap();
         assert_eq!(

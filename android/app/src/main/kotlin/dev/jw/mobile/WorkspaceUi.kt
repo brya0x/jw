@@ -132,6 +132,7 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
                 )
             }
             Box(Modifier.width(48.dp).heightIn(min = 48.dp).clickable(role = Role.Button, onClickLabel = "Cambiar workspace") { sheet = Sheet.Pick }, contentAlignment = Alignment.Center) { Icon(Ic.Search, j.fg, 22.dp) }
+            Box(Modifier.width(48.dp).heightIn(min = 48.dp).clickable(role = Role.Button, onClickLabel = "Archivos") { nav.showFiles(w) }, contentAlignment = Alignment.Center) { Icon(Ic.Folder, j.fg, 22.dp) }
             Box(Modifier.width(48.dp).heightIn(min = 48.dp).clickable(role = Role.Button, onClickLabel = "Cambios") { nav.showChanges(w.id) }, contentAlignment = Alignment.Center) { Text("±", color = j.fg, fontSize = 18.sp) }
         }
         // The panes of this workspace.
@@ -209,6 +210,8 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
             onSettings = { sheet = Sheet.None; nav.open = null; nav.tab = Tab.Settings },
             onQuit = { sheet = Sheet.QuitAsk }, onPrevious = { nav.previous?.let { nav.open = it; nav.pane = null }; sheet = Sheet.None },
             onChanges = { sheet = Sheet.None; nav.showChanges(w.id) },
+            onFiles = { sheet = Sheet.None; nav.showFiles(w) },
+            sheetNone = { sheet = Sheet.None },
         )
         Sheet.Pick -> PickSheet(model, w, { x -> nav.open = x.id; nav.pane = null }, onClose = { sheet = Sheet.None })
         Sheet.Name -> NameSheet(sel, onDone = { name -> sel?.let { session.namePane(it.pane, name) }; sheet = Sheet.None }, onClose = { sheet = Sheet.None })
@@ -328,7 +331,7 @@ internal fun SheetFrame(onClose: () -> Unit, content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun SheetRow(key: String, label: String, tag: String, enabled: Boolean = true, onClick: () -> Unit) {
+internal fun SheetRow(key: String, label: String, tag: String, enabled: Boolean = true, onClick: () -> Unit) {
     val j = LocalJw.current
     Row(
         Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(enabled = enabled, role = Role.Button, onClick = onClick).padding(horizontal = 14.dp),
@@ -348,7 +351,8 @@ private fun SheetRow(key: String, label: String, tag: String, enabled: Boolean =
 private fun LeaderSheet(
     sel: PaneInfo?, w: Workspace, nav: Nav, model: Model, onClose: () -> Unit,
     onPick: () -> Unit, onSessions: () -> Unit, onNew: () -> Unit, onClosePane: () -> Unit, onName: () -> Unit,
-    onSettings: () -> Unit, onQuit: () -> Unit, onPrevious: () -> Unit, onChanges: () -> Unit,
+    onSettings: () -> Unit, onQuit: () -> Unit, onPrevious: () -> Unit, onChanges: () -> Unit, onFiles: () -> Unit,
+    sheetNone: () -> Unit,
 ) {
     val j = LocalJw.current
     SheetFrame(onClose) {
@@ -360,10 +364,13 @@ private fun LeaderSheet(
             SheetRow("t", "panel nuevo", "paneles", enabled = sel != null, onClick = onNew)
             SheetRow("x", "cerrar panel", "paneles", enabled = sel != null, onClick = onClosePane)
             SheetRow("n", "nombrar panel", "paneles", enabled = sel != null, onClick = onName)
+            SheetRow("o", "abrir carpeta", "ir") { sheetNone(); nav.startPick(PickFor.OpenFolder) }
+            SheetRow("/", "archivos", "ir", onClick = onFiles)
+            SheetRow("w", "nuevo worktree", "worktree") { sheetNone(); nav.worktreeProject = w.project; nav.sheet = HomeSheet.Worktree }
             SheetRow("d", "cambios (diff)", "diff", onClick = onChanges)
             SheetRow(",", "ajustes", "ir", onClick = onSettings)
             SheetRow("q", "desconectar", "", onClick = onQuit)
-            for ((k, l) in listOf("o" to "abrir carpeta", "w" to "nuevo worktree", "r" to "renombrar", "s" to "sincronizar", "X" to "quitar worktree", "R" to "revisar un PR")) {
+            for ((k, l) in listOf("r" to "renombrar", "s" to "sincronizar", "X" to "quitar worktree", "R" to "revisar un PR")) {
                 SheetRow(k, l, "en el PC", enabled = false, onClick = {})
             }
         }

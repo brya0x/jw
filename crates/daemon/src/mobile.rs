@@ -129,10 +129,10 @@ impl Tuning {
 /// What a phone's `workspaces` and `sessions` are answered from: the registry
 /// and the folders of the sessions on disk, as the TUI's sidebar groups them
 /// (REQ-12). Read at each ask, so what the TUI changed is what the phone sees.
-fn lister() -> Lister {
+fn lister(socket: PathBuf) -> Lister {
     // What the error says is for a phone, not for a log: no path of the PC's
     // in it. The cause is the PC's to find.
-    Arc::new(|query, cancel| {
+    Arc::new(move |query, cancel| {
         let state = registry::state_dir().map_err(|_| "jw has no state folder here")?;
         let reg = registry::default_path().map_err(|_| "jw has no state folder here")?;
         let value = match query {
@@ -166,6 +166,38 @@ fn lister() -> Lister {
                 serde_json::to_value(report)
                     .map_err(|_| "the diff could not be made".to_string())?
             }
+            // The PC's files: any path the daemon's user can read (RAT-20), bounded in `fsview`. Not a word of
+            // a file is logged (REQ-27), and the error is the reason, which holds no content.
+            Query::Ls(path) => serde_json::to_value(
+                jw_core::fsview::list(path, cancel).map_err(|e| e.to_string())?,
+            )
+            .map_err(|_| "the listing could not be made".to_string())?,
+            Query::Read(path) => serde_json::to_value(
+                jw_core::fsview::read(path, cancel).map_err(|e| e.to_string())?,
+            )
+            .map_err(|_| "the file could not be read".to_string())?,
+            // What a phone makes (REQ-85 to 87). They are not cancelled when the phone goes: a worktree half made
+            // is rolled back by core on failure, not by stopping it, so it is made to the end.
+            Query::Open { path, session } => {
+                open_folder(&state, &socket, path, session.as_deref())?
+            }
+            Query::SessionNew { name, dir } => new_session(&state, &socket, name, dir)?,
+            Query::Worktree {
+                project,
+                name,
+                branch,
+                task,
+                session,
+            } => new_worktree(
+                &state,
+                &reg,
+                &socket,
+                project,
+                name,
+                branch.as_deref(),
+                task.as_deref(),
+                session.as_deref(),
+            )?,
             Query::Commits(id) => {
                 let entry = workspace(&state, &reg, id)?;
                 let report = jw_core::diff::commit_report(&entry, cancel)
@@ -187,6 +219,176 @@ fn workspace(
     sidebar::find(state, reg, id)
         .map_err(|_| "the workspaces could not be read".to_string())?
         .ok_or_else(|| format!("no workspace {id}"))
+}
+
+/// The session a phone's write is for: the one it names, which must exist, `main` when it names none.
+fn target_session(state: &std::path::Path, session: Option<&str>) -> Result<String, String> {
+    let name = session.unwrap_or(jw_core::session::MAIN);
+    if !sidebar::known(name) || !sidebar::names(state).iter().any(|n| n == name) {
+        return Err(format!("no session named {name}"));
+    }
+    Ok(name.to_string())
+}
+
+/// A directory the phone named, as the path to keep: absolute, no `..`, and a directory.
+fn directory(path: &str) -> Result<String, String> {
+    let p = jw_core::fsview::resolve(path).map_err(|e| e.to_string())?;
+    match std::fs::metadata(&p) {
+        Ok(m) if m.is_dir() => {}
+        Ok(_) => return Err("not a folder".into()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err("no such file or folder".into());
+        }
+        Err(_) => return Err("it could not be read".into()),
+    }
+    Ok(p.to_string_lossy().trim_end_matches('/').to_string())
+}
+
+/// REQ-85: the folder becomes a workspace of the session, with its panes.
+fn open_folder(
+    state: &std::path::Path,
+    socket: &std::path::Path,
+    path: &str,
+    session: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let session = target_session(state, session)?;
+    let dir = directory(path)?;
+    let id = jw_core::folders::add_in(state, &session, &dir).map_err(|e| format!("{e:#}"))?;
+    let folders = jw_core::folders::load_in(state, &session).map_err(|e| format!("{e:#}"))?;
+    let folder = folders
+        .folders
+        .iter()
+        .find(|f| f.dir == dir)
+        .ok_or("the folder could not be added")?;
+    let entry = jw_core::folders::entry_for(folder, &session);
+    open_panes(socket, &entry, &session, None)?;
+    Ok(serde_json::json!({ "ws": id, "name": entry.name }))
+}
+
+/// REQ-86: the session, starting in `dir` with its one shell.
+fn new_session(
+    state: &std::path::Path,
+    socket: &std::path::Path,
+    name: &str,
+    dir: &str,
+) -> Result<serde_json::Value, String> {
+    let dir = directory(dir)?;
+    jw_core::session::create(state, name, std::path::Path::new(&dir))
+        .map_err(|e| format!("{e:#}"))?;
+    let folders = jw_core::folders::load_in(state, name).map_err(|e| format!("{e:#}"))?;
+    let folder = folders.folders.first().ok_or("the session has no folder")?;
+    let entry = jw_core::folders::entry_for(folder, name);
+    open_panes(socket, &entry, name, None)?;
+    Ok(serde_json::json!({ "name": name, "ws": entry.id }))
+}
+
+/// REQ-87: the worktree as `jw worktree` makes it, opened with the chosen session's `JW_*`.
+#[allow(clippy::too_many_arguments)]
+fn new_worktree(
+    state: &std::path::Path,
+    reg: &std::path::Path,
+    socket: &std::path::Path,
+    project: &str,
+    name: &str,
+    branch: Option<&str>,
+    task: Option<&str>,
+    session: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    use jw_core::actions;
+    let session = target_session(state, session)?;
+    if !actions::valid_name(name) {
+        return Err("the name takes lowercase letters, digits and dashes".into());
+    }
+    let branch = branch.map(str::trim).filter(|b| !b.is_empty());
+    if let Some(b) = branch
+        && !actions::valid_branch(b)
+    {
+        return Err("that is not a branch name git accepts".into());
+    }
+    let proj =
+        actions::project_named(state, reg, &session, project).map_err(|e| format!("{e:#}"))?;
+    let opts = actions::NewOptions {
+        name: name.to_string(),
+        from: String::new(),
+        branch: branch.unwrap_or_default().to_string(),
+        session: Some(session.clone()),
+    };
+    let entry = actions::new_stream(&proj, &opts, reg).map_err(|e| format!("{e:#}"))?;
+    let task = task.map(clean_task).filter(|t| !t.is_empty());
+    open_panes(socket, &entry, &session, task)?;
+    Ok(serde_json::json!({ "ws": entry.id, "name": entry.name, "branch": entry.branch }))
+}
+
+/// A task as text for an agent's prompt: no control characters but the line break.
+fn clean_task(t: &str) -> String {
+    t.chars()
+        .filter(|c| !c.is_control() || *c == '\n')
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+/// Starts the workspace's panes in this daemon, as `jw` and the TUI do (`Spawn` per pane over the socket), with the
+/// `JW_*` of `session`; then, off this thread, hands `task` to its agent once it is quiet.
+fn open_panes(
+    socket: &std::path::Path,
+    entry: &jw_core::core::registry::Entry,
+    session: &str,
+    task: Option<String>,
+) -> Result<(), String> {
+    use crate::proto::{ClientMsg, PROTOCOL};
+    use jw_core::stream::Stream;
+    let stream = Stream::resolve_in(entry, session).map_err(|e| format!("{e:#}"))?;
+    let plan = stream.open_plan(true).map_err(|e| format!("{e:#}"))?;
+    let mut c =
+        jw_proto::client::Client::connect(socket).map_err(|_| "the daemon did not answer")?;
+    c.set_read_timeout(Some(Duration::from_secs(10)))
+        .map_err(|e| e.to_string())?;
+    c.send(&ClientMsg::Hello { protocol: PROTOCOL })
+        .map_err(|e| e.to_string())?;
+    if !matches!(c.recv(), Ok(Some(DaemonMsg::Hello { .. }))) {
+        return Err("the daemon did not answer".into());
+    }
+    let mut want = plan.len();
+    for (spec, cols, rows) in plan {
+        c.send(&ClientMsg::Spawn {
+            stream: entry.id.clone(),
+            role: spec.role,
+            cmd: spec.cmd,
+            cwd: spec.cwd,
+            env: spec.env,
+            cols,
+            rows,
+        })
+        .map_err(|e| e.to_string())?;
+    }
+    while want > 0 {
+        match c.recv() {
+            Ok(Some(DaemonMsg::Spawned { .. })) => want -= 1,
+            Ok(Some(DaemonMsg::Error { msg })) => return Err(msg),
+            Ok(Some(_)) => {}
+            _ => return Err("the daemon stopped answering while the panes started".into()),
+        }
+    }
+    stream.mark_opened().map_err(|e| format!("{e:#}"))?;
+    if let Some(text) = task {
+        let id = entry.id.clone();
+        thread::spawn(move || {
+            // The agent takes a while to start; `Prompt` waits for it to be quiet. Not a word of the task is logged.
+            let _ = c.set_read_timeout(Some(Duration::from_secs(60)));
+            let _ = c.send(&ClientMsg::Prompt {
+                stream: id,
+                text,
+                pane: None,
+            });
+            while let Ok(Some(m)) = c.recv() {
+                if matches!(m, DaemonMsg::Prompted { .. } | DaemonMsg::Error { .. }) {
+                    break;
+                }
+            }
+        });
+    }
+    Ok(())
 }
 
 /// Who answered a pair question (a client id) and what; `CANCELLED` when
@@ -767,7 +969,7 @@ impl Inner {
                 read_only,
                 confirm: Arc::new(move |p| me.upgrade().is_some_and(|m| m.ask(p.name, p.code))),
                 look: self.look.clone(),
-                lister: lister(),
+                lister: lister(self.socket.clone()),
                 timings: Timings::default(),
             },
         )

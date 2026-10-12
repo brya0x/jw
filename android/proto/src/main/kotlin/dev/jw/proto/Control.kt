@@ -137,6 +137,11 @@ sealed interface ServerMessage {
         val ask: String? = null,
         val ws: String? = null,
         val scope: String? = null,
+        /** For `ls`, `read` and `open`: the path the phone asked. */
+        val req: String? = null,
+        /** For `session_new` and `worktree`: the name asked for, and for a worktree its project. */
+        val name: String? = null,
+        val project: String? = null,
     ) : ServerMessage
 
     class Workspaces(val session: String, val items: List<Workspace>) : ServerMessage
@@ -148,6 +153,21 @@ sealed interface ServerMessage {
 
     /** The answer to `commits{ws}`. */
     class CommitsAnswer(val list: CommitList) : ServerMessage
+
+    /** The answer to `ls{path}` (REQ-77). */
+    class LsAnswer(val listing: FsListing) : ServerMessage
+
+    /** The answer to `read{path}` (REQ-79). */
+    class ReadAnswer(val file: FsFile) : ServerMessage
+
+    /** `open{path}` was done (REQ-85): the folder is the workspace `ws`. */
+    class Opened(val req: String, val ws: String, val name: String) : ServerMessage
+
+    /** `session_new{name, dir}` was done (REQ-86): `ws` is the folder workspace the session starts with. */
+    class SessionCreated(val name: String, val ws: String) : ServerMessage
+
+    /** `worktree{...}` was done (REQ-87): the worktree is the workspace `ws`. */
+    class WorktreeMade(val project: String, val name: String, val ws: String, val branch: String) : ServerMessage
 
     /**
      * Where else the PC can be reached (REQ-61). Only what is valid is kept: a tunnel host must be a quick
@@ -189,6 +209,37 @@ object Control {
         put("scope", scope.word)
     }.toString()
 
+    fun open(path: String, session: String?): String = buildJsonObject {
+        put("t", "open")
+        put("path", path)
+        if (session != null) put("session", session)
+    }.toString()
+
+    fun sessionNew(name: String, dir: String): String = buildJsonObject {
+        put("t", "session_new")
+        put("name", name)
+        put("dir", dir)
+    }.toString()
+
+    fun worktree(project: String, name: String, branch: String?, task: String?, session: String?): String = buildJsonObject {
+        put("t", "worktree")
+        put("project", project)
+        put("name", name)
+        if (!branch.isNullOrBlank()) put("branch", branch)
+        if (!task.isNullOrBlank()) put("task", task)
+        if (session != null) put("session", session)
+    }.toString()
+
+    fun ls(path: String): String = buildJsonObject {
+        put("t", "ls")
+        put("path", path)
+    }.toString()
+
+    fun read(path: String): String = buildJsonObject {
+        put("t", "read")
+        put("path", path)
+    }.toString()
+
     fun commits(ws: String): String = buildJsonObject {
         put("t", "commits")
         put("ws", ws)
@@ -221,6 +272,9 @@ object Control {
                     obj["ask"]?.jsonPrimitive?.contentOrNull,
                     obj["ws"]?.jsonPrimitive?.contentOrNull,
                     obj["scope"]?.jsonPrimitive?.contentOrNull,
+                    obj["req"]?.jsonPrimitive?.contentOrNull,
+                    obj["name"]?.jsonPrimitive?.contentOrNull,
+                    obj["project"]?.jsonPrimitive?.contentOrNull,
                 )
                 "workspaces" -> ServerMessage.Workspaces(
                     obj["session"]?.jsonPrimitive?.contentOrNull ?: "",
@@ -230,6 +284,23 @@ object Control {
                     dev.jw.proto.Workspaces.parseSessions(obj["items"] as? kotlinx.serialization.json.JsonArray),
                 )
                 "diff" -> Diff.parse(obj)?.let { ServerMessage.DiffAnswer(it) } ?: ServerMessage.Other(tag)
+                "opened" -> ServerMessage.Opened(
+                    obj["req"]?.jsonPrimitive?.contentOrNull ?: "",
+                    obj.getValue("ws").jsonPrimitive.content,
+                    obj["name"]?.jsonPrimitive?.contentOrNull ?: "",
+                )
+                "session_created" -> ServerMessage.SessionCreated(
+                    obj.getValue("name").jsonPrimitive.content,
+                    obj.getValue("ws").jsonPrimitive.content,
+                )
+                "worktree" -> ServerMessage.WorktreeMade(
+                    obj["project"]?.jsonPrimitive?.contentOrNull ?: "",
+                    obj.getValue("name").jsonPrimitive.content,
+                    obj.getValue("ws").jsonPrimitive.content,
+                    obj["branch"]?.jsonPrimitive?.contentOrNull ?: "",
+                )
+                "ls" -> Files.parseListing(obj)?.let { ServerMessage.LsAnswer(it) } ?: ServerMessage.Other(tag)
+                "read" -> Files.parseFile(obj)?.let { ServerMessage.ReadAnswer(it) } ?: ServerMessage.Other(tag)
                 "commits" -> CommitList.parse(obj)?.let { ServerMessage.CommitsAnswer(it) } ?: ServerMessage.Other(tag)
                 "endpoints" -> {
                     val lan = (obj["lan"] as? kotlinx.serialization.json.JsonObject)?.let { l ->

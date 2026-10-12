@@ -1166,6 +1166,367 @@ fn a_diff_never_sends_what_a_symlink_points_at_and_names_no_path_of_the_pc() {
     );
 }
 
+#[test]
+fn a_paired_phone_lists_and_reads_the_pcs_files_even_when_read_only() {
+    let rig = Rig::start(Stub::Registers);
+    let dir = rig.dir.join("files");
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    std::fs::write(dir.join("README.md"), "# Title\n\n- one\n- two\n").unwrap();
+    std::fs::write(dir.join("notes.txt"), "plain\n").unwrap();
+    std::fs::write(dir.join("blob.bin"), b"a\0b").unwrap();
+    std::os::unix::fs::symlink(dir.join("notes.txt"), dir.join("link.txt")).unwrap();
+    let mut w = rig.watcher();
+    let code = up(&mut w);
+    let (mut phone, _) = pair(&rig, &code, &mut w, "Pixel");
+    // Read-only does not stop reading (REQ-82).
+    w.send(&ClientMsg::MobileReadOnly { on: true }).unwrap();
+    assert!(until(&mut w, |s| s.read_only).last().unwrap().read_only);
+
+    let d = dir.to_str().unwrap();
+    phone.say(serde_json::json!({ "t": "ls", "path": d }));
+    let v = phone.json();
+    assert_eq!(
+        (v["t"].as_str(), v["req"].as_str()),
+        (Some("ls"), Some(d)),
+        "{v}"
+    );
+    let names: Vec<&str> = v["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        ["sub", "blob.bin", "link.txt", "notes.txt", "README.md"],
+        "{v}"
+    );
+    let link = v["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["name"] == "link.txt")
+        .unwrap();
+    assert_eq!(
+        (link["kind"].as_str(), link["target"].as_str()),
+        (Some("link"), Some("file"))
+    );
+
+    phone.say(serde_json::json!({ "t": "read", "path": format!("{d}/README.md") }));
+    let v = phone.json();
+    assert_eq!(v["kind"], "md", "{v}");
+    assert_eq!(v["blocks"][0]["k"], "h");
+    assert_eq!(v["blocks"][1]["k"], "ul");
+    phone.say(serde_json::json!({ "t": "read", "path": format!("{d}/blob.bin") }));
+    let v = phone.json();
+    assert_eq!(
+        (v["kind"].as_str(), v["text"].is_null()),
+        (Some("binary"), true),
+        "{v}"
+    );
+    phone.say(serde_json::json!({ "t": "read", "path": format!("{d}/link.txt") }));
+    assert_eq!(phone.json()["text"], "plain\n");
+
+    // Not an absolute path, and a path with `..`, are refused with the reason and their ask.
+    for bad in ["relative/x", &format!("{d}/../files")] {
+        phone.say(serde_json::json!({ "t": "ls", "path": bad }));
+        let v = phone.json();
+        assert_eq!(
+            (v["code"].as_str(), v["ask"].as_str()),
+            (Some("unsupported"), Some("ls")),
+            "{bad}: {v}"
+        );
+    }
+}
+
+/// The pane ids of `stream`, asked of the daemon.
+fn panes_of(c: &mut Client, stream: &str) -> Vec<u64> {
+    c.send(&ClientMsg::List).unwrap();
+    c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    loop {
+        if let Some(DaemonMsg::Panes { panes }) = c.recv().unwrap() {
+            return panes
+                .iter()
+                .filter(|p| p.stream == stream)
+                .map(|p| p.pane)
+                .collect();
+        }
+    }
+}
+
+/// What `echo MARK=$VAR` prints in `pane` of `stream`: the value the shell's environment holds.
+fn env_of(c: &mut Client, stream: &str, pane: u64, var: &str) -> String {
+    c.send(&ClientMsg::Attach {
+        stream: stream.into(),
+    })
+    .unwrap();
+    c.send(&ClientMsg::Input {
+        pane,
+        bytes: format!("echo MARK_{var}=${var}=END\n").into_bytes(),
+    })
+    .unwrap();
+    let want = format!("MARK_{var}=");
+    let mut seen = String::new();
+    let until = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < until {
+        match c.recv() {
+            Ok(Some(DaemonMsg::Output { pane: p, bytes })) if p == pane => {
+                seen.push_str(&String::from_utf8_lossy(&bytes));
+            }
+            Ok(Some(DaemonMsg::Snapshot { pane: p, bytes, .. })) if p == pane => {
+                seen.push_str(&String::from_utf8_lossy(&bytes));
+            }
+            Ok(_) => {}
+            Err(_) => {}
+        }
+        // The command is echoed too, with `$VAR` unexpanded: the answer is the line with the value and `=END`.
+        if let Some(i) = seen.rfind(&want)
+            && let Some(rest) = seen[i + want.len()..].split("=END").next()
+            && seen[i + want.len()..].contains("=END")
+            && !rest.starts_with('$')
+        {
+            return rest.to_string();
+        }
+    }
+    panic!("no answer for {var}: {seen:?}");
+}
+
+#[test]
+fn a_phone_opens_a_folder_makes_a_session_and_its_panes_carry_that_session() {
+    let rig = Rig::start(Stub::Registers);
+    let proj = rig.dir.join("plainproj");
+    std::fs::create_dir_all(&proj).unwrap();
+    let file = rig.dir.join("afile");
+    std::fs::write(&file, "x").unwrap();
+    let mut w = rig.watcher();
+    let code = up(&mut w);
+    let (mut phone, _) = pair(&rig, &code, &mut w, "Pixel");
+    let mut d = rig.client();
+    d.send(&ClientMsg::Hello { protocol: PROTOCOL }).unwrap();
+    let _ = d.recv();
+
+    // `open`: the folder is a workspace of `main` with panes of its own.
+    let p = proj.to_str().unwrap();
+    phone.say(serde_json::json!({ "t": "open", "path": p, "session": "main" }));
+    let v = phone.json();
+    assert_eq!(
+        (v["t"].as_str(), v["req"].as_str()),
+        (Some("opened"), Some(p)),
+        "{v}"
+    );
+    let ws = v["ws"].as_str().unwrap().to_string();
+    assert_eq!(ws, format!("dir:{p}"));
+    let panes = panes_of(&mut d, &ws);
+    assert_eq!(panes.len(), 1, "a folder opens with one shell");
+    assert_eq!(env_of(&mut d, &ws, panes[0], "JW_SESSION"), "main");
+    phone.say(serde_json::json!({ "t": "workspaces", "session": "main" }));
+    let v = phone.json();
+    assert!(
+        v["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["id"] == ws.as_str()),
+        "{v}"
+    );
+
+    // A file is not a folder; nothing was added.
+    phone.say(serde_json::json!({ "t": "open", "path": file.to_str().unwrap() }));
+    let v = phone.json();
+    assert_eq!(
+        (v["code"].as_str(), v["msg"].as_str(), v["ask"].as_str()),
+        (Some("unsupported"), Some("not a folder"), Some("opened")),
+        "{v}"
+    );
+    phone.say(serde_json::json!({ "t": "open", "path": "relative" }));
+    assert_eq!(phone.json()["code"], "unsupported");
+
+    // `session_new`: a session that is not `main`, whose panes say so (not the daemon's own session).
+    phone.say(serde_json::json!({ "t": "session_new", "name": "trabajo", "dir": p }));
+    let v = phone.json();
+    assert_eq!(
+        (v["t"].as_str(), v["name"].as_str()),
+        (Some("session_created"), Some("trabajo")),
+        "{v}"
+    );
+    let ws2 = v["ws"].as_str().unwrap().to_string();
+    assert_eq!(ws2, format!("dir:{p}#trabajo"));
+    let panes2 = panes_of(&mut d, &ws2);
+    assert_eq!(panes2.len(), 1);
+    assert_eq!(env_of(&mut d, &ws2, panes2[0], "JW_SESSION"), "trabajo");
+    phone.say(serde_json::json!({ "t": "sessions" }));
+    let v = phone.json();
+    assert!(
+        v["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["name"] == "trabajo"),
+        "{v}"
+    );
+    // A name that is taken, and a command of jw, are refused with their reason.
+    for bad in ["trabajo", "worktree", "Bad Name"] {
+        phone.say(serde_json::json!({ "t": "session_new", "name": bad, "dir": p }));
+        let v = phone.json();
+        assert_eq!(
+            (v["code"].as_str(), v["ask"].as_str(), v["name"].as_str()),
+            (Some("unsupported"), Some("session_created"), Some(bad)),
+            "{v}"
+        );
+    }
+    // And one that does not exist cannot be opened into.
+    phone.say(serde_json::json!({ "t": "open", "path": p, "session": "nope" }));
+    let v = phone.json();
+    assert!(
+        v["msg"].as_str().unwrap().contains("no session named nope"),
+        "{v}"
+    );
+}
+
+#[test]
+fn a_phone_makes_a_worktree_in_the_chosen_session_and_read_only_refuses() {
+    let rig = Rig::start(Stub::Registers);
+    let repo = repo_with_origin(&rig, "proj");
+    // One shell, so no agent (the developer's own `claude`) starts in a test.
+    std::fs::write(repo.join(".jw.toml"), "[layout]\nrun = \"shell\"\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-q", "-m", "layout"]);
+    git(&repo, &["push", "-q", "origin", "main"]);
+    git(&repo, &["fetch", "-q", "origin"]);
+    let mut w = rig.watcher();
+    let code = up(&mut w);
+    let (mut phone, _) = pair(&rig, &code, &mut w, "Pixel");
+    let mut d = rig.client();
+    d.send(&ClientMsg::Hello { protocol: PROTOCOL }).unwrap();
+    let _ = d.recv();
+
+    // The project, in a session that is not `main`.
+    let r = repo.to_str().unwrap();
+    phone.say(serde_json::json!({ "t": "session_new", "name": "trabajo", "dir": r }));
+    let v = phone.json();
+    assert_eq!(v["t"], "session_created", "{v}");
+    phone.say(serde_json::json!({ "t": "workspaces", "session": "trabajo" }));
+    let v = phone.json();
+    let root = v["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["kind"] == "root")
+        .expect("a root")
+        .clone();
+    let project = root["project"].as_str().unwrap().to_string();
+
+    // Bad names never reach git.
+    for (name, branch) in [
+        ("Feat X", None),
+        ("ok-name", Some("-oops")),
+        ("ok-name", Some("a..b")),
+    ] {
+        let mut ask = serde_json::json!({ "t": "worktree", "project": project, "name": name, "session": "trabajo" });
+        if let Some(b) = branch {
+            ask["branch"] = b.into();
+        }
+        phone.say(ask);
+        let v = phone.json();
+        assert_eq!(
+            (v["code"].as_str(), v["ask"].as_str()),
+            (Some("unsupported"), Some("worktree")),
+            "{name} {branch:?}: {v}"
+        );
+    }
+    phone.say(serde_json::json!({ "t": "worktree", "project": "nope", "name": "feat-x", "session": "trabajo" }));
+    assert!(
+        phone.json()["msg"]
+            .as_str()
+            .unwrap()
+            .contains("no project nope")
+    );
+
+    phone.say(serde_json::json!({ "t": "worktree", "project": project, "name": "feat-x", "branch": "feat/x", "session": "trabajo" }));
+    let v = phone.json();
+    assert_eq!(
+        (v["t"].as_str(), v["name"].as_str(), v["branch"].as_str()),
+        (Some("worktree"), Some("feat-x"), Some("feat/x")),
+        "{v}"
+    );
+    let ws = v["ws"].as_str().unwrap().to_string();
+    // It is in that session's list, a worktree under its project, and its panes say whose session it is.
+    phone.say(serde_json::json!({ "t": "workspaces", "session": "trabajo" }));
+    let v = phone.json();
+    let wt = v["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["id"] == ws.as_str())
+        .expect("the worktree is listed")
+        .clone();
+    assert_eq!(
+        (wt["kind"].as_str(), wt["branch"].as_str()),
+        (Some("worktree"), Some("feat/x")),
+        "{wt}"
+    );
+    let panes = panes_of(&mut d, &ws);
+    assert_eq!(panes.len(), 1, "{panes:?}");
+    assert_eq!(env_of(&mut d, &ws, panes[0], "JW_SESSION"), "trabajo");
+    assert_eq!(env_of(&mut d, &ws, panes[0], "JW_NAME"), "feat-x");
+    // The same name again says it exists.
+    phone.say(serde_json::json!({ "t": "worktree", "project": project, "name": "feat-x", "session": "trabajo" }));
+    assert!(
+        phone.json()["msg"]
+            .as_str()
+            .unwrap()
+            .contains("already exists")
+    );
+
+    // A task is for the agent: with no agent pane it is dropped, and never typed into the shell.
+    phone.say(serde_json::json!({ "t": "worktree", "project": project, "name": "feat-t", "task": "echo TASKLEAK", "session": "trabajo" }));
+    let v = phone.json();
+    assert_eq!(v["t"], "worktree", "{v}");
+    let ws = v["ws"].as_str().unwrap().to_string();
+    let pane = panes_of(&mut d, &ws)[0];
+    d.send(&ClientMsg::Attach { stream: ws.clone() }).unwrap();
+    // The daemon's wait for the agent ends in an error, which is sent to the connection that asked, not here;
+    // give the task time to have been typed if it were going to be, then see what the shell holds.
+    std::thread::sleep(Duration::from_secs(5));
+    d.send(&ClientMsg::Input {
+        pane,
+        bytes: b"echo MARK_DONE\n".to_vec(),
+    })
+    .unwrap();
+    let mut seen = String::new();
+    let end = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < end && seen.matches("MARK_DONE").count() < 2 {
+        if let Ok(Some(
+            DaemonMsg::Output { pane: p, bytes } | DaemonMsg::Snapshot { pane: p, bytes, .. },
+        )) = d.recv()
+            && p == pane
+        {
+            seen.push_str(&String::from_utf8_lossy(&bytes));
+        }
+    }
+    assert!(seen.matches("MARK_DONE").count() >= 2, "{seen:?}");
+    assert!(
+        !seen.contains("TASKLEAK"),
+        "the task reached the shell: {seen:?}"
+    );
+
+    // Read-only refuses it, and nothing changes.
+    w.send(&ClientMsg::MobileReadOnly { on: true }).unwrap();
+    assert!(until(&mut w, |s| s.read_only).last().unwrap().read_only);
+    phone.say(serde_json::json!({ "t": "worktree", "project": project, "name": "feat-y", "session": "trabajo" }));
+    assert_eq!(phone.json()["code"], "read_only");
+    phone.say(serde_json::json!({ "t": "workspaces", "session": "trabajo" }));
+    let v = phone.json();
+    assert!(
+        !v["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["name"] == "feat-y"),
+        "{v}"
+    );
+}
+
 // ---- the wifi listener (REQ-56 to REQ-69) -----------------------------------
 //
 // The daemon's wifi listener sits on loopback here (`JW_LAN_ADDR`), so none of
