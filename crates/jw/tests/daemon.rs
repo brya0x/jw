@@ -452,6 +452,7 @@ fn prompt_waits_for_quiet_then_pastes_and_presses_enter() {
     c.send(&ClientMsg::Prompt {
         stream: "s".into(),
         text: "fix the\nbug".into(),
+        pane: None,
     })
     .unwrap();
     let mut screen = vt100::Parser::new(24, 80, 0);
@@ -508,6 +509,7 @@ fn a_review_opens_as_a_diff_and_an_agent_and_the_agent_is_briefed() {
     c.send(&ClientMsg::Prompt {
         stream: "r".into(),
         text: "Review pull request #7.".into(),
+        pane: None,
     })
     .unwrap();
     c.send(&ClientMsg::List).unwrap();
@@ -545,6 +547,7 @@ fn prompt_without_an_agent_pane_is_an_error() {
     c.send(&ClientMsg::Prompt {
         stream: "s".into(),
         text: "hi".into(),
+        pane: None,
     })
     .unwrap();
     loop {
@@ -1565,6 +1568,7 @@ fn prompt_reaches_an_agent_program_in_a_shell_pane() {
         c.send(&ClientMsg::Prompt {
             stream: "s".into(),
             text: "hi there".into(),
+            pane: None,
         })
         .unwrap();
         let msg = loop {
@@ -1583,6 +1587,99 @@ fn prompt_reaches_an_agent_program_in_a_shell_pane() {
         "{reply:?}"
     );
     read_until(&mut c, pane, &mut screen, "hi there");
+}
+
+/// One prompt into `pane` of `stream`, and the daemon's answer.
+fn prompt_once(c: &mut Client, stream: &str, pane: PaneId, text: &str) -> DaemonMsg {
+    c.send(&ClientMsg::Prompt {
+        stream: stream.into(),
+        text: text.into(),
+        pane: Some(pane),
+    })
+    .unwrap();
+    loop {
+        if let m @ (DaemonMsg::Prompted { .. } | DaemonMsg::Error { .. }) = recv(c) {
+            return m;
+        }
+    }
+}
+
+/// Ask until the pane's program is the agent: right after a `spawn` its `exec`
+/// may not have run, and the daemon says "it runs sh".
+fn prompt_named(c: &mut Client, stream: &str, pane: PaneId, text: &str) -> DaemonMsg {
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        let msg = prompt_once(c, stream, pane, text);
+        let retry = matches!(&msg, DaemonMsg::Error { msg } if msg.contains("it runs"));
+        if !retry || Instant::now() > deadline {
+            return msg;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// A link to `cat` named `claude` (see the REQ-194 test above), in its own dir.
+fn fake_claude() -> (tempfile::TempDir, String) {
+    let bin = tempfile::tempdir().unwrap();
+    let claude = bin.path().join("claude");
+    std::os::unix::fs::symlink("/bin/cat", &claude).unwrap();
+    let cmd = format!("exec {}", claude.display());
+    (bin, cmd)
+}
+
+/// REQ-249: `--pane` sends the text to the named agent, not the lowest one.
+#[test]
+fn prompt_with_a_pane_reaches_that_agent() {
+    let d = Daemon::start();
+    let mut c = d.client();
+    let (_bin, cmd) = fake_claude();
+    let first = spawn(&mut c, "s", &cmd, 80, 24);
+    let second = spawn(&mut c, "s", &cmd, 80, 24);
+    assert!(first < second);
+
+    let reply = prompt_named(&mut c, "s", second, "for the second");
+    assert!(
+        matches!(reply, DaemonMsg::Prompted { pane } if pane == second),
+        "{reply:?}"
+    );
+    let mut screen = vt100::Parser::new(24, 80, 0);
+    read_until(&mut c, second, &mut screen, "for the second");
+}
+
+/// REQ-250, REQ-251: a pane of another workspace, a pane that is no agent and
+/// one that has exited are refused with an `Error`.
+#[test]
+fn prompt_with_a_pane_refuses_what_is_not_a_live_agent_of_the_workspace() {
+    let d = Daemon::start();
+    let mut c = d.client();
+    let (_bin, cmd) = fake_claude();
+    let _agent = spawn(&mut c, "s", &cmd, 80, 24);
+    let elsewhere = spawn(&mut c, "t", &cmd, 80, 24);
+    let plain = spawn(&mut c, "s", "cat", 80, 24);
+    let gone = spawn(&mut c, "s", "exit 0", 80, 24);
+
+    let DaemonMsg::Error { msg } = prompt_named(&mut c, "s", elsewhere, "x") else {
+        panic!("a pane of another workspace took a prompt");
+    };
+    assert!(msg.contains("not in this workspace"), "{msg}");
+
+    let DaemonMsg::Error { msg } = prompt_once(&mut c, "s", plain, "x") else {
+        panic!("a plain `cat` took a prompt");
+    };
+    assert!(msg.contains("is not an agent"), "{msg}");
+
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        let reply = prompt_named(&mut c, "s", gone, "x");
+        let DaemonMsg::Error { msg } = reply else {
+            panic!("an exited pane took a prompt: {reply:?}");
+        };
+        if msg.contains("has exited") {
+            break;
+        }
+        assert!(Instant::now() < deadline, "{msg}");
+        thread::sleep(Duration::from_millis(50));
+    }
 }
 
 /// REQ-192: a client that asks for `SplitSnapshots` gets the screen first and the

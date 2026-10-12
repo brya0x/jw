@@ -60,4 +60,14 @@ mod tests {
             assert!(SKILL.contains(cmd), "the skill doesn't mention {cmd}");
         }
     }
+
+    /// REQ-256: `--pane` is documented, and so is the rule about permissions.
+    #[test]
+    fn the_skill_says_how_to_name_a_pane_and_not_to_answer_permissions() {
+        assert!(SKILL.contains("jw prompt <workspace> --pane <id>"));
+        assert!(SKILL.contains(
+            "with or without
+  `--pane`"
+        ));
+    }
 }

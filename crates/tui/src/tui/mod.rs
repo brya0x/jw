@@ -2917,7 +2917,11 @@ impl App {
     /// the daemon waits for it to be quiet (REQ-171).
     fn send_pending_prompt(&mut self, id: &str) {
         if let Some((stream, text)) = self.pending_prompt.take_if(|(s, _)| s == id) {
-            self.send(ClientMsg::Prompt { stream, text });
+            self.send(ClientMsg::Prompt {
+                stream,
+                text,
+                pane: None,
+            });
         }
     }
 
@@ -3338,6 +3342,7 @@ impl App {
                 self.send(ClientMsg::Prompt {
                     stream,
                     text: prompt,
+                    pane: None,
                 });
             }
             Modal::SaveLayout { path, new, .. } => {
@@ -4270,7 +4275,7 @@ mod review_tests {
 
     fn prompt_of(m: ClientMsg) -> (String, String) {
         match m {
-            ClientMsg::Prompt { stream, text } => (stream, text),
+            ClientMsg::Prompt { stream, text, .. } => (stream, text),
             _ => panic!("expected a Prompt"),
         }
     }

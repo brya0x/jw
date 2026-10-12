@@ -46,7 +46,11 @@ default ports (5173, 8081…) belong to the main checkout, not to you.
 - `jw prompt <workspace> "<task>"` types a task into the agent of a workspace that is
   open. It waits until the agent is quiet, so it never interrupts it. The agent is the pane
   with role `agent`, else a pane where `claude`, `codex`… runs in the foreground (a
-  `claude` started by hand in a shell pane).
+  `claude` started by hand in a shell pane). With two agents in a workspace, name the one
+  you mean: `jw prompt <workspace> --pane <id> "<task>"` (`jw pane ls` shows the ids); it
+  must be a live agent of that workspace, or nothing is typed. Options go before the text;
+  `--` ends them. Add `--tag` to prefix the text with `[jw: $JW_NAME, pane $JW_PANE_ID]` so
+  the other agent knows who asks. You can't prompt your own pane.
 - `jw pane open <workspace> --run <what> [--split right|down] [--of <pane>]` splits a
   workspace's panes and prints the new pane's id (only that, on stdout). `<what>` is
   `shell`, `view:diff` (the workspace's diff), `view:md:<file>` (a Markdown viewer) or any
@@ -63,8 +67,9 @@ default ports (5173, 8081…) belong to the main checkout, not to you.
 
 ## Never do these
 
-- **Don't answer an agent's permission question for it** with `jw prompt`. If `jw ls`
-  shows `waiting`, read the question with `jw read` and tell the person. They answer it in
+- **Don't answer an agent's permission question for it** with `jw prompt`, with or without
+  `--pane`, and never another agent's. If `jw ls` shows
+  `waiting`, read the question with `jw read` and tell the person. They answer it in
   that pane.
 - **Don't remove worktrees, branches or registry entries by hand**, and don't edit
   `~/.local/state/jw/*.json`. Removing, syncing and finishing a worktree are done in the

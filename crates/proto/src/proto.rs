@@ -15,7 +15,7 @@ pub type PaneId = u64;
 
 /// Bumped whenever a message changes shape: a client and a daemon from
 /// different builds refuse each other instead of misreading (RISK-14).
-pub const PROTOCOL: u32 = 10;
+pub const PROTOCOL: u32 = 11;
 
 /// A pane to start. `cmd` runs through `sh -c`; `None` starts `$SHELL`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -163,10 +163,14 @@ pub enum ClientMsg {
     /// Which panes exist, for every stream: answered with `Panes`.
     List,
     /// Type `text` into the stream's agent pane once it is quiet, then
-    /// Enter. Answered with `Prompted` or `Error`.
+    /// Enter: the pane `pane` names, which must be a live agent of the
+    /// stream, else the one the daemon picks (REQ-194). Answered with
+    /// `Prompted` or `Error`.
     Prompt {
         stream: String,
         text: String,
+        #[serde(default)]
+        pane: Option<PaneId>,
     },
 }
 
@@ -590,5 +594,21 @@ mod tests {
     fn oversized_frame_is_rejected() {
         let mut r: &[u8] = &(MAX_FRAME + 1).to_be_bytes();
         assert!(read_frame::<ClientMsg>(&mut r).is_err());
+    }
+
+    /// REQ-254: a `Prompt` without `pane` reads as `None`; the protocol is 11.
+    #[test]
+    fn a_prompt_without_a_pane_names_none() {
+        let m: ClientMsg =
+            serde_json::from_str(r#"{"t":"Prompt","stream":"s","text":"hi"}"#).unwrap();
+        assert_eq!(
+            m,
+            ClientMsg::Prompt {
+                stream: "s".into(),
+                text: "hi".into(),
+                pane: None
+            }
+        );
+        assert_eq!(PROTOCOL, 11);
     }
 }

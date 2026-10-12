@@ -9,7 +9,7 @@ jw-daemon, and is started by the client, never by hand. Everything else is the C
 - `src/main.rs`: dispatches the subcommands. `tui()` picks the session (the one named, else
   the last used one).
 - `src/cli.rs`: `new_session` (`:73`), `sessions` (`:107`), and the commands agents use:
-  `ls` (`:407`), `read` (`:454`), `worktree` (`:151`), `prompt` (`:28`), plus `hook`
+  `ls` (`:407`), `read` (`:454`), `worktree` (`:151`), `prompt` (`:94`), plus `hook`
   (`:47`), which claude's hooks run. They act on `$JW_SESSION`.
 - `src/help.rs`: `COMMANDS`, what `jw help` prints. A new command gets a row there.
 - `src/theme.rs`: `jw theme ls|install|export|use`, over `jw_tui::theme` (S16). A URL install

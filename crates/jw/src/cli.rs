@@ -29,20 +29,92 @@ const ROWS: u16 = 48;
 /// How long `prompt` waits for the agent to settle and take the text.
 const PROMPT_TIMEOUT: Duration = Duration::from_secs(40);
 
-pub fn prompt(args: &[String]) -> Result<()> {
-    let [name, words @ ..] = args else {
-        bail!("usage: jw prompt <workspace> <text>");
+const PROMPT_USAGE: &str = "usage: jw prompt <workspace> [--pane <id>] [--tag] [--] <text>";
+
+struct PromptArgs {
+    name: String,
+    pane: Option<PaneId>,
+    tag: bool,
+    text: String,
+}
+
+/// `<workspace> [--pane <id>] [--tag] [--] <text>` (REQ-247): the options are
+/// read only before the text, whose first word ends them. Any other word,
+/// even one starting with `-`, is text, as it was before `--pane`.
+fn parse_prompt(args: &[String]) -> Result<PromptArgs> {
+    let [name, rest @ ..] = args else {
+        bail!(PROMPT_USAGE);
     };
-    let text = words.join(" ");
-    if text.trim().is_empty() {
-        bail!("usage: jw prompt <workspace> <text>");
+    let (mut pane, mut tag) = (None, false);
+    let mut rest = rest;
+    loop {
+        match rest {
+            [flag, id, tail @ ..] if flag == "--pane" => {
+                pane = Some(id.parse().map_err(|_| anyhow::anyhow!(PROMPT_USAGE))?);
+                rest = tail;
+            }
+            [flag] if flag == "--pane" => bail!(PROMPT_USAGE),
+            [flag, tail @ ..] if flag == "--tag" => {
+                tag = true;
+                rest = tail;
+            }
+            [flag, tail @ ..] if flag == "--" => {
+                rest = tail;
+                break;
+            }
+            _ => break,
+        }
     }
-    let entry = find(name)?.entry;
+    let text = rest.join(" ");
+    if text.trim().is_empty() {
+        bail!(PROMPT_USAGE);
+    }
+    Ok(PromptArgs {
+        name: name.clone(),
+        pane,
+        tag,
+        text: text.trim().to_string(),
+    })
+}
+
+/// The text with who sent it (REQ-255): `[jw: <JW_NAME>, pane <JW_PANE_ID>] `.
+fn tagged(text: &str, name: Option<&str>, pane: Option<&str>) -> String {
+    match (name, pane) {
+        (Some(name), Some(pane)) => format!("[jw: {name}, pane {pane}] {text}"),
+        (Some(name), None) => format!("[jw: {name}] {text}"),
+        _ => text.to_string(),
+    }
+}
+
+/// REQ-253: the prompt waits for its pane to be quiet, and ours is running this.
+fn is_own_pane(pane: Option<PaneId>, me: Option<&str>) -> bool {
+    pane.is_some_and(|p| me == Some(p.to_string().as_str()))
+}
+
+pub fn prompt(args: &[String]) -> Result<()> {
+    let PromptArgs {
+        name,
+        pane,
+        tag,
+        mut text,
+    } = parse_prompt(args)?;
+    let me = std::env::var("JW_PANE_ID").ok();
+    if is_own_pane(pane, me.as_deref()) {
+        bail!("that is the pane you run in: it would wait for itself");
+    }
+    if tag {
+        let who = std::env::var("JW_NAME").ok();
+        text = tagged(&text, who.as_deref(), me.as_deref());
+    }
+    let entry = find(&name)?.entry;
     let mut c = Client::connect(&socket_path())
         .with_context(|| format!("{} is not open: no jw daemon is running", entry.name))?;
     hello(&mut c)?;
-    send_prompt(&mut c, &entry, text.trim())?;
-    println!("sent to {}'s agent", entry.name);
+    send_prompt(&mut c, &entry, pane, &text)?;
+    match pane {
+        Some(p) => println!("sent to pane {p} of {}", entry.name),
+        None => println!("sent to {}'s agent", entry.name),
+    }
     Ok(())
 }
 
@@ -447,7 +519,7 @@ pub fn worktree(args: &[String]) -> Result<()> {
     open(&mut c, &stream)?;
     eprintln!("opened {}", entry.name);
     if let Some(task) = task {
-        send_prompt(&mut c, &entry, &task)?;
+        send_prompt(&mut c, &entry, None, &task)?;
         eprintln!("task sent to {}'s agent", entry.name);
     }
     Ok(())
@@ -513,10 +585,11 @@ fn open(c: &mut Client, stream: &Stream) -> Result<()> {
     stream.mark_opened()
 }
 
-fn send_prompt(c: &mut Client, entry: &Entry, text: &str) -> Result<()> {
+fn send_prompt(c: &mut Client, entry: &Entry, pane: Option<PaneId>, text: &str) -> Result<()> {
     c.send(&ClientMsg::Prompt {
         stream: entry.id.clone(),
         text: text.to_string(),
+        pane,
     })?;
     c.set_read_timeout(Some(PROMPT_TIMEOUT))?;
     loop {
@@ -846,6 +919,57 @@ fn text_of(rows: u16, cols: u16, bytes: &[u8], n: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn words(w: &str) -> Vec<String> {
+        w.split(' ').map(String::from).collect()
+    }
+
+    /// REQ-247, REQ-252: the options come before the text and only there.
+    #[test]
+    fn prompt_options_end_at_the_first_word_of_the_text() {
+        let a = parse_prompt(&words("ws --pane 2 --tag fix it")).unwrap();
+        assert_eq!((a.pane, a.tag, a.text.as_str()), (Some(2), true, "fix it"));
+        let a = parse_prompt(&words("ws fix it --pane 2")).unwrap();
+        assert_eq!(
+            (a.pane, a.tag, a.text.as_str()),
+            (None, false, "fix it --pane 2")
+        );
+        let a = parse_prompt(&words("ws -- --pane x")).unwrap();
+        assert_eq!((a.pane, a.text.as_str()), (None, "--pane x"));
+        let a = parse_prompt(&words("ws --foo bar")).unwrap();
+        assert_eq!(a.text, "--foo bar");
+        for bad in [
+            "ws --pane",
+            "ws --pane x hi",
+            "ws --pane 2",
+            "ws --",
+            "ws",
+            "",
+        ] {
+            let e = parse_prompt(&words(bad)).err().map(|e| e.to_string());
+            assert!(
+                e.is_some_and(|e| e.starts_with("usage: jw prompt")),
+                "{bad:?}"
+            );
+        }
+    }
+
+    /// REQ-253.
+    #[test]
+    fn the_pane_you_run_in_is_not_a_target() {
+        assert!(is_own_pane(Some(4), Some("4")));
+        assert!(!is_own_pane(Some(4), Some("5")));
+        assert!(!is_own_pane(Some(4), None));
+        assert!(!is_own_pane(None, Some("4")));
+    }
+
+    /// REQ-255.
+    #[test]
+    fn a_tag_names_who_sent_the_text() {
+        assert_eq!(tagged("hi", Some("w"), Some("4")), "[jw: w, pane 4] hi");
+        assert_eq!(tagged("hi", Some("w"), None), "[jw: w] hi");
+        assert_eq!(tagged("hi", None, Some("4")), "hi");
+    }
 
     #[test]
     fn run_maps_to_a_role_and_a_command() {
