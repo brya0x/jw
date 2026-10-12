@@ -1,0 +1,10 @@
+{
+  "blocks": null,
+  "kind": "binary",
+  "path": "/Users/me/ws/logo.png",
+  "req": "~/ws/logo.png",
+  "size": 18000,
+  "t": "read",
+  "text": null,
+  "truncated": false
+}

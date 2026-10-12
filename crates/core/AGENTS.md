@@ -20,6 +20,7 @@ depends on nothing of jw's.
 | `src/sidebar.rs` | a session's workspaces grouped as the sidebar shows them (`rows`), and the items and session counts the phone is told (`items`, `sessions`) |
 | `src/qr.rs` | a QR code as a grid of modules with a quiet zone, and its half-block cells (`cells`); the CLI and the TUI each draw them |
 | `src/diff.rs` | a worktree's changes in one `Scope` (General, Uncommitted, a commit: addendum 19) and its `commits`, for the diff viewer and, within the phone's limits (`report`, `commit_report`, `Pick`), for the bridge's `diff` and `commits` answers. Every git call goes through `git_bounded`/`git_capped` (`Bounds`: output, deadline, file size; clean environment, no textconv or fsmonitor, filter drivers off, its own process group, cancelled with the phone); an untracked file is read only if it is a regular file, never through a symlink (`read_beneath`). Past `DIFF_CAP` a view lists its files only (`Loaded::TooLarge`) |
+| `src/fsview.rs`, `src/md.rs` | the PC's files for a phone (mobile REQ-77 to 81): `fsview::list` and `read` (any path the daemon's user can read, absolute or `~`, no `..`; at most 2000 entries, 1 MiB, 5 s on a thread of its own that is let go of, a link followed when named, a FIFO or device never read), and `md::blocks`, Markdown as blocks with the parser the TUI uses; `phone_*.json` in `android/proto/src/test/resources` are held to their serialisation by a test |
 | `src/init.rs` | drafting a project config (`detect`), and `write_project`, the `.jw.toml` of the setup step |
 
 ## Keep in mind

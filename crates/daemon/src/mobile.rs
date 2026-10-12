@@ -166,6 +166,16 @@ fn lister() -> Lister {
                 serde_json::to_value(report)
                     .map_err(|_| "the diff could not be made".to_string())?
             }
+            // The PC's files: any path the daemon's user can read (RAT-20), bounded in `fsview`. Not a word of
+            // a file is logged (REQ-27), and the error is the reason, which holds no content.
+            Query::Ls(path) => serde_json::to_value(
+                jw_core::fsview::list(path, cancel).map_err(|e| e.to_string())?,
+            )
+            .map_err(|_| "the listing could not be made".to_string())?,
+            Query::Read(path) => serde_json::to_value(
+                jw_core::fsview::read(path, cancel).map_err(|e| e.to_string())?,
+            )
+            .map_err(|_| "the file could not be read".to_string())?,
             Query::Commits(id) => {
                 let entry = workspace(&state, &reg, id)?;
                 let report = jw_core::diff::commit_report(&entry, cancel)

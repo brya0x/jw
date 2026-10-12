@@ -179,6 +179,10 @@ pub enum Query {
     Diff(String, DiffScope),
     /// The commits of a workspace's branch, by workspace id, for the Commits view.
     Commits(String),
+    /// The entries of a directory of the PC (REQ-77), by the path the phone sent.
+    Ls(String),
+    /// A file's text (REQ-79), by the path the phone sent.
+    Read(String),
 }
 
 /// Which changes of a workspace a phone asks for: the TUI's three views. This crate cannot depend on
@@ -674,6 +678,8 @@ struct Later {
     diff: Arc<AtomicBool>,
     /// Lists being computed for this phone, at most `MAX_LISTS`.
     lists: Arc<AtomicUsize>,
+    /// Listings and reads of the PC's files, at most `MAX_FILES`: a hung mount must not hold the other asks.
+    files: Arc<AtomicUsize>,
     /// Set when this phone is gone: what is still being computed for it
     /// stops (a diff runs git, which would go on for its whole deadline).
     gone: Arc<AtomicBool>,
@@ -681,6 +687,9 @@ struct Later {
 
 /// How many `workspaces` and `sessions` a phone can have in flight.
 const MAX_LISTS: usize = 4;
+
+/// How many `ls` and `read` a phone can have in flight.
+const MAX_FILES: usize = 2;
 
 fn serve(
     stream: TcpStream,
@@ -791,6 +800,7 @@ fn serve(
         rx: replies,
         diff: Arc::new(AtomicBool::new(false)),
         lists: Arc::new(AtomicUsize::new(0)),
+        files: Arc::new(AtomicUsize::new(0)),
         gone: Arc::new(AtomicBool::new(false)),
     };
     let result = relay(
@@ -979,7 +989,7 @@ fn relay(
                             Ok(ask) => start_ask(shared, later, ask),
                             Err(_) => Some(error(
                                 "unsupported",
-                                "ask workspaces, sessions, diff or commits",
+                                "ask workspaces, sessions, diff, commits, ls or read",
                             )),
                         };
                         if let Some(refusal) = refusal {
@@ -1013,12 +1023,19 @@ enum Ask {
     Commits {
         ws: String,
     },
+    Ls {
+        path: String,
+    },
+    Read {
+        path: String,
+    },
 }
 
 /// Which of a phone's seats an answer takes.
 enum Seat {
     Diff(Arc<AtomicBool>),
-    List(Arc<AtomicUsize>),
+    /// A counter of asks in flight and how many are allowed.
+    List(Arc<AtomicUsize>, usize),
 }
 
 impl Seat {
@@ -1026,8 +1043,8 @@ impl Seat {
     fn take(&self) -> bool {
         match self {
             Seat::Diff(busy) => !busy.swap(true, Ordering::SeqCst),
-            Seat::List(n) => {
-                if n.fetch_add(1, Ordering::SeqCst) >= MAX_LISTS {
+            Seat::List(n, cap) => {
+                if n.fetch_add(1, Ordering::SeqCst) >= *cap {
                     n.fetch_sub(1, Ordering::SeqCst);
                     return false;
                 }
@@ -1045,7 +1062,7 @@ impl Drop for Release {
     fn drop(&mut self) {
         match &self.0 {
             Seat::Diff(busy) => busy.store(false, Ordering::SeqCst),
-            Seat::List(n) => {
+            Seat::List(n, _) => {
                 n.fetch_sub(1, Ordering::SeqCst);
             }
         }
@@ -1084,10 +1101,14 @@ fn start_ask(shared: &Shared, later: &Later, ask: Ask) -> Option<Message> {
             )
         }
         Ask::Commits { ws } => (Query::Commits(ws.clone()), "commits", vec![("ws", ws)]),
+        // `req` is the path as the phone sent it: the answer's own `path` is the resolved one.
+        Ask::Ls { path } => (Query::Ls(path.clone()), "ls", vec![("req", path)]),
+        Ask::Read { path } => (Query::Read(path.clone()), "read", vec![("req", path)]),
     };
     let seat = match query {
         Query::Diff(..) | Query::Commits(_) => Seat::Diff(later.diff.clone()),
-        _ => Seat::List(later.lists.clone()),
+        Query::Ls(_) | Query::Read(_) => Seat::List(later.files.clone(), MAX_FILES),
+        _ => Seat::List(later.lists.clone(), MAX_LISTS),
     };
     if !seat.take() {
         return Some(error_for(
@@ -1332,6 +1353,19 @@ mod tests {
                     Query::Commits(_) => {
                         Ok(serde_json::json!({ "commits": [], "more": false, "no_base": false }))
                     }
+                    Query::Ls(path) if path == "/hang" => {
+                        while !cancel.load(Ordering::SeqCst) {
+                            thread::sleep(Duration::from_millis(10));
+                        }
+                        Err("cancelled".into())
+                    }
+                    Query::Ls(path) if path == "/nope" => Err("no such file or folder".into()),
+                    Query::Ls(path) => Ok(
+                        serde_json::json!({ "path": path, "parent": null, "entries": [], "total": 0, "truncated": false }),
+                    ),
+                    Query::Read(path) => Ok(
+                        serde_json::json!({ "path": path, "kind": "text", "size": 2, "truncated": false, "text": "hi", "blocks": null }),
+                    ),
                     Query::Diff(id, _) => {
                         if id == "slow" {
                             thread::sleep(Duration::from_millis(700));
@@ -2062,6 +2096,57 @@ mod tests {
         );
         assert!(v["msg"].as_str().unwrap().starts_with("busy"), "{v}");
         assert_eq!(json(&mut p)["t"], "diff");
+    }
+
+    #[test]
+    fn ls_and_read_are_answered_with_the_path_asked_and_errors_say_which_ask() {
+        let r = rig(Opts::default());
+        let mut p = phone(&r.bridge);
+        login(&mut p, &enrol(&r, "a"));
+        say(&mut p, serde_json::json!({ "t": "ls", "path": "~/x" }));
+        let v = json(&mut p);
+        assert_eq!(
+            (v["t"].as_str(), v["req"].as_str()),
+            (Some("ls"), Some("~/x")),
+            "{v}"
+        );
+        say(
+            &mut p,
+            serde_json::json!({ "t": "read", "path": "/a/b.md" }),
+        );
+        let v = json(&mut p);
+        assert_eq!(
+            (v["t"].as_str(), v["req"].as_str(), v["text"].as_str()),
+            (Some("read"), Some("/a/b.md"), Some("hi")),
+            "{v}"
+        );
+        say(&mut p, serde_json::json!({ "t": "ls", "path": "/nope" }));
+        let v = json(&mut p);
+        assert_eq!(
+            (v["code"].as_str(), v["ask"].as_str(), v["req"].as_str()),
+            (Some("unsupported"), Some("ls"), Some("/nope")),
+            "{v}"
+        );
+    }
+
+    #[test]
+    fn only_so_many_file_asks_run_at_once_and_a_hung_one_does_not_stop_the_others() {
+        let r = rig(Opts::default());
+        let mut p = phone(&r.bridge);
+        login(&mut p, &enrol(&r, "a"));
+        // Two hung listings take both seats; a third is refused as busy, but the lists still answer.
+        say(&mut p, serde_json::json!({ "t": "ls", "path": "/hang" }));
+        say(&mut p, serde_json::json!({ "t": "ls", "path": "/hang" }));
+        say(&mut p, serde_json::json!({ "t": "ls", "path": "/x" }));
+        let v = json(&mut p);
+        assert_eq!(
+            (v["ask"].as_str(), v["code"].as_str()),
+            (Some("ls"), Some("unsupported")),
+            "{v}"
+        );
+        assert!(v["msg"].as_str().unwrap().starts_with("busy"), "{v}");
+        say(&mut p, serde_json::json!({ "t": "sessions" }));
+        assert_eq!(json(&mut p)["t"], "sessions");
     }
 
     #[test]

@@ -1166,6 +1166,79 @@ fn a_diff_never_sends_what_a_symlink_points_at_and_names_no_path_of_the_pc() {
     );
 }
 
+#[test]
+fn a_paired_phone_lists_and_reads_the_pcs_files_even_when_read_only() {
+    let rig = Rig::start(Stub::Registers);
+    let dir = rig.dir.join("files");
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    std::fs::write(dir.join("README.md"), "# Title\n\n- one\n- two\n").unwrap();
+    std::fs::write(dir.join("notes.txt"), "plain\n").unwrap();
+    std::fs::write(dir.join("blob.bin"), b"a\0b").unwrap();
+    std::os::unix::fs::symlink(dir.join("notes.txt"), dir.join("link.txt")).unwrap();
+    let mut w = rig.watcher();
+    let code = up(&mut w);
+    let (mut phone, _) = pair(&rig, &code, &mut w, "Pixel");
+    // Read-only does not stop reading (REQ-82).
+    w.send(&ClientMsg::MobileReadOnly { on: true }).unwrap();
+    assert!(until(&mut w, |s| s.read_only).last().unwrap().read_only);
+
+    let d = dir.to_str().unwrap();
+    phone.say(serde_json::json!({ "t": "ls", "path": d }));
+    let v = phone.json();
+    assert_eq!(
+        (v["t"].as_str(), v["req"].as_str()),
+        (Some("ls"), Some(d)),
+        "{v}"
+    );
+    let names: Vec<&str> = v["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        ["sub", "blob.bin", "link.txt", "notes.txt", "README.md"],
+        "{v}"
+    );
+    let link = v["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["name"] == "link.txt")
+        .unwrap();
+    assert_eq!(
+        (link["kind"].as_str(), link["target"].as_str()),
+        (Some("link"), Some("file"))
+    );
+
+    phone.say(serde_json::json!({ "t": "read", "path": format!("{d}/README.md") }));
+    let v = phone.json();
+    assert_eq!(v["kind"], "md", "{v}");
+    assert_eq!(v["blocks"][0]["k"], "h");
+    assert_eq!(v["blocks"][1]["k"], "ul");
+    phone.say(serde_json::json!({ "t": "read", "path": format!("{d}/blob.bin") }));
+    let v = phone.json();
+    assert_eq!(
+        (v["kind"].as_str(), v["text"].is_null()),
+        (Some("binary"), true),
+        "{v}"
+    );
+    phone.say(serde_json::json!({ "t": "read", "path": format!("{d}/link.txt") }));
+    assert_eq!(phone.json()["text"], "plain\n");
+
+    // Not an absolute path, and a path with `..`, are refused with the reason and their ask.
+    for bad in ["relative/x", &format!("{d}/../files")] {
+        phone.say(serde_json::json!({ "t": "ls", "path": bad }));
+        let v = phone.json();
+        assert_eq!(
+            (v["code"].as_str(), v["ask"].as_str()),
+            (Some("unsupported"), Some("ls")),
+            "{bad}: {v}"
+        );
+    }
+}
+
 // ---- the wifi listener (REQ-56 to REQ-69) -----------------------------------
 //
 // The daemon's wifi listener sits on loopback here (`JW_LAN_ADDR`), so none of
