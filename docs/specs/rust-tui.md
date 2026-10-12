@@ -1,6 +1,6 @@
 ---
 status:      agreed (v2 + the screen addendum + addendum 3 "sessions", 2026-10-09; P0–P9 built against v1); addendum 12 (X0) drafted; addendum 17 (A1, A2) built; addendum 19 (V0–V4) built
-scope:       [Cargo.toml, src/**, .github/workflows/ci.yml, internal/core/config/config.go (one relaxation), README.md]
+scope:       [Cargo.toml, src/**, .github/workflows/ci.yml, justfile, internal/core/config/config.go (one relaxation), README.md]
 depends_on:  [git, gh on PATH]
 supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/herdr]
 ---
@@ -970,6 +970,7 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | RM1 ✓ `43a7b2e` | `session::rm` and `session::rm_plan`; `session` reserved; version 0.0.21 | 270–273, 279, 281–283 | `core/session.rs` |
 | RM2 ✓ `5d82a9b` | `jw session rm <name> [--yes]`, with `Close` for the session's workspaces | 270–275 | `jw/main.rs`, `jw/cli.rs` |
 | RM3 ✓ | `^D` in the session picker and its confirm modal (`Modal::RmSession`, `Job::SessionRm`: the plan is read off the UI thread, then the modal opens; after a delete the picker reopens) | 276–278, 280 | `tui/finder.rs`, `tui/modal.rs`, `tui/draw.rs`, `tui/mod.rs` |
+| CI1 ✓ | `justfile` (rust, mobile-rust, android, mobile, ci) and CI calling it: the Rust job runs `just fmt-check`, `clippy`, `test`; a separate Android job (JDK 17, SDK, Gradle cache) runs `just android` only when `android/**`, `crates/proto/**`, the justfile or the workflow changed | — | `justfile`, `.github/workflows/ci.yml` |
 
 Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{new_stream, rm_plan, rm, sync, done_plan}`, `src/diff.rs`, `src/view/md.rs` and `Modal::Rm` (type the name) stay as they are.
 
