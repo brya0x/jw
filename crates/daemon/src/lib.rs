@@ -269,6 +269,8 @@ impl ChatWatch {
             known: true,
             name: news.name,
             title: news.title,
+            turn: news.turn,
+            bg: news.bg,
             reset: false,
             blocks: news.blocks,
         })
@@ -285,6 +287,8 @@ impl ChatWatch {
             known: self.session.is_some(),
             name: self.tail.name().map(str::to_string),
             title: self.tail.title().map(str::to_string),
+            turn: self.tail.turn(),
+            bg: Some(self.tail.bg()),
             reset: true,
             blocks: self.tail.last(chat::FIRST),
         }

@@ -4,14 +4,14 @@
 //! (mobile REQ-90). The file is Claude's, not jw's: every shape here is read
 //! leniently and an entry that is not understood is skipped, never an error.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::proto::ChatBlock;
+use crate::proto::{ChatBlock, ChatTurn};
 
 /// The blocks kept per conversation; older ones are let go.
 const KEEP: usize = 400;
@@ -103,6 +103,8 @@ fn folder_name(cwd: &Path) -> String {
 pub struct Changes {
     pub name: Option<String>,
     pub title: Option<String>,
+    pub turn: Option<ChatTurn>,
+    pub bg: Option<u32>,
     pub blocks: Vec<ChatBlock>,
 }
 
@@ -121,6 +123,16 @@ pub struct Tail {
     /// agent has: the first wins when both are there.
     custom_name: Option<String>,
     agent_name: Option<String>,
+    /// The turn in progress (REQ-96): from the person's last message, with the output tokens of each
+    /// message of Claude's since (a message is written once per block it has, with the same count).
+    turn: Option<ChatTurn>,
+    msg_tokens: HashMap<String, u64>,
+    /// The blocks of messages the person sent while Claude worked and the transcript has not yet.
+    queued: Vec<u32>,
+    /// Background tasks and subagents started, and the ones whose end was told (REQ-97).
+    bg_started: u32,
+    bg_ended: u32,
+    notices: HashSet<String>,
 }
 
 impl Tail {
@@ -135,7 +147,23 @@ impl Tail {
             title: None,
             custom_name: None,
             agent_name: None,
+            turn: None,
+            msg_tokens: HashMap::new(),
+            queued: Vec::new(),
+            bg_started: 0,
+            bg_ended: 0,
+            notices: HashSet::new(),
         }
+    }
+
+    /// The turn Claude is in, once the person has said something.
+    pub fn turn(&self) -> Option<ChatTurn> {
+        self.turn.clone()
+    }
+
+    /// Background tasks and subagents started that have not ended.
+    pub fn bg(&self) -> u32 {
+        self.bg_started.saturating_sub(self.bg_ended)
     }
 
     /// The transcript's path, once it exists: a conversation that has not
@@ -194,6 +222,8 @@ impl Tail {
         self.partial = data[whole..].to_vec();
         let before_title = self.title.clone();
         let before_name = self.name().map(str::to_string);
+        let before_turn = self.turn.clone();
+        let before_bg = self.bg();
         let mut touched: Vec<u32> = Vec::new();
         for line in data[..whole].split(|b| *b == b'\n') {
             if let Ok(line) = std::str::from_utf8(line) {
@@ -208,6 +238,12 @@ impl Tail {
             title: (self.title != before_title)
                 .then(|| self.title.clone())
                 .flatten(),
+            turn: if self.turn != before_turn {
+                self.turn.clone()
+            } else {
+                None
+            },
+            bg: (self.bg() != before_bg).then(|| self.bg()),
             blocks: touched
                 .iter()
                 .filter_map(|i| i.checked_sub(self.base))
@@ -251,7 +287,49 @@ impl Tail {
                     self.title = Some(cut(t.trim(), ARG_MAX));
                 }
             }
+            Some("queue-operation") => {
+                // A message sent while Claude works waits in a queue until the turn takes it.
+                let text = v["content"].as_str().unwrap_or("").trim();
+                if v["operation"].as_str() == Some("enqueue")
+                    && !text.is_empty()
+                    && !text.starts_with(NOTICE)
+                {
+                    let b = ChatBlock {
+                        kind: "queued".into(),
+                        text: cut(text, TEXT_MAX),
+                        ..ChatBlock::default()
+                    };
+                    let i = self.push(b, touched);
+                    self.queued.push(i);
+                }
+            }
+            Some("attachment") => {
+                // What reached Claude in the middle of a turn: a notice, or a message of the person's.
+                let a = &v["attachment"];
+                if a["type"].as_str() != Some("queued_command") {
+                    return;
+                }
+                let prompt = a["prompt"].as_str().unwrap_or("");
+                if prompt.trim_start().starts_with(NOTICE) {
+                    self.notice(prompt, touched);
+                } else if a["origin"]["kind"].as_str().unwrap_or("human") == "human" {
+                    self.text_block("user", prompt, epoch_ms(&v), touched);
+                }
+            }
             Some(kind @ ("user" | "assistant")) => {
+                if kind == "assistant" {
+                    self.count_tokens(&v);
+                }
+                if kind == "user" {
+                    let text = v["message"]["content"].as_str().unwrap_or("");
+                    if v["origin"]["kind"].as_str() == Some("task-notification")
+                        || (v["origin"].is_null() && text.trim_start().starts_with(NOTICE))
+                    {
+                        let xml = text.to_string();
+                        self.notice(&xml, touched);
+                        return;
+                    }
+                }
                 // A subagent's own conversation, and what Claude wrote for
                 // itself (hook output, caveats), is not the person's chat.
                 if v["isSidechain"].as_bool() == Some(true)
@@ -261,7 +339,7 @@ impl Tail {
                 }
                 let content = &v["message"]["content"];
                 if let Some(text) = content.as_str() {
-                    self.text_block(kind, text, touched);
+                    self.text_block(kind, text, epoch_ms(&v), touched);
                     return;
                 }
                 let Some(parts) = content.as_array() else {
@@ -269,9 +347,12 @@ impl Tail {
                 };
                 for part in parts {
                     match part["type"].as_str() {
-                        Some("text") => {
-                            self.text_block(kind, part["text"].as_str().unwrap_or(""), touched)
-                        }
+                        Some("text") => self.text_block(
+                            kind,
+                            part["text"].as_str().unwrap_or(""),
+                            epoch_ms(&v),
+                            touched,
+                        ),
                         Some("thinking") => {
                             let secs = v["thinkingDurationMs"].as_u64().map(|ms| ms.div_ceil(1000));
                             let b = ChatBlock {
@@ -291,9 +372,32 @@ impl Tail {
         }
     }
 
-    fn text_block(&mut self, role: &str, text: &str, touched: &mut Vec<u32>) {
+    fn text_block(&mut self, role: &str, text: &str, at: Option<u64>, touched: &mut Vec<u32>) {
         if text.trim().is_empty() {
             return;
+        }
+        if role == "user" {
+            // The message the person sent while Claude worked is its queued block, taken by the turn.
+            let queued = self.queued.iter().position(|i| {
+                i.checked_sub(self.base)
+                    .and_then(|at| self.blocks.get(at as usize))
+                    .is_some_and(|b| b.text == cut(text.trim(), TEXT_MAX))
+            });
+            if let Some(n) = queued {
+                let i = self.queued.remove(n);
+                if let Some(b) = i
+                    .checked_sub(self.base)
+                    .and_then(|at| self.blocks.get_mut(at as usize))
+                {
+                    b.kind = "user".into();
+                    touched.push(i);
+                    return;
+                }
+            }
+            if let Some(since) = at {
+                self.turn = Some(ChatTurn { since, tokens: 0 });
+                self.msg_tokens.clear();
+            }
         }
         let b = ChatBlock {
             kind: if role == "user" { "user" } else { "text" }.into(),
@@ -303,7 +407,62 @@ impl Tail {
         self.push(b, touched);
     }
 
+    /// The output tokens of a message of Claude's, counted once however many lines it was written in.
+    fn count_tokens(&mut self, v: &Value) {
+        let (Some(id), Some(n)) = (
+            v["message"]["id"].as_str(),
+            v["message"]["usage"]["output_tokens"].as_u64(),
+        ) else {
+            return;
+        };
+        self.msg_tokens.insert(id.to_string(), n);
+        if let Some(t) = self.turn.as_mut() {
+            t.tokens = self.msg_tokens.values().sum();
+        }
+    }
+
+    /// The PC telling Claude that a subagent or a background task ended.
+    fn notice(&mut self, xml: &str, touched: &mut Vec<u32>) {
+        let id = tag(xml, "task-id").unwrap_or_default();
+        if !id.is_empty() && !self.notices.insert(id) {
+            return;
+        }
+        self.bg_ended += 1;
+        let summary = tag(xml, "summary").unwrap_or_default();
+        let title = match (summary.find('"'), summary.rfind('"')) {
+            (Some(a), Some(b)) if b > a => summary[a + 1..b].to_string(),
+            _ => summary.clone(),
+        };
+        let status = match tag(xml, "status").as_deref() {
+            Some("completed") => "done",
+            Some("stopped" | "killed" | "cancelled") => "stopped",
+            _ => "failed",
+        };
+        let secs = tag(xml, "duration_ms")
+            .and_then(|ms| ms.trim().parse::<u64>().ok())
+            .map(|ms| format!("{} s", ms.div_ceil(1000)));
+        self.push(
+            ChatBlock {
+                kind: "notice".into(),
+                name: status.into(),
+                text: cut(title.trim(), ARG_MAX),
+                arg: if summary.trim_start().starts_with("Agent") {
+                    "agent"
+                } else {
+                    "task"
+                }
+                .into(),
+                result: secs,
+                ..ChatBlock::default()
+            },
+            touched,
+        );
+    }
+
     fn tool_use(&mut self, part: &Value, touched: &mut Vec<u32>) {
+        if part["input"]["run_in_background"].as_bool() == Some(true) {
+            self.bg_started += 1;
+        }
         let name = part["name"].as_str().unwrap_or("").to_string();
         let (arg, body, result) = summarise(&name, &part["input"]);
         let id = part["id"].as_str().unwrap_or("").to_string();
@@ -358,6 +517,43 @@ impl Tail {
         }
         touched.push(i);
     }
+}
+
+/// How an entry that is the PC's notice of an ended task begins.
+const NOTICE: &str = "<task-notification>";
+
+/// What is between `<name>` and `</name>`, the first time.
+fn tag(xml: &str, name: &str) -> Option<String> {
+    let open = format!("<{name}>");
+    let from = xml.find(&open)? + open.len();
+    let to = xml[from..].find(&format!("</{name}>"))? + from;
+    Some(xml[from..to].trim().to_string())
+}
+
+/// When an entry was written, in ms since the epoch, from its `timestamp` (`2026-10-12T18:25:23.853Z`).
+fn epoch_ms(v: &Value) -> Option<u64> {
+    let t = v["timestamp"].as_str()?;
+    let n = |a: usize, b: usize| t.get(a..b)?.parse::<i64>().ok();
+    let (y, m, d, hh, mm, ss) = (
+        n(0, 4)?,
+        n(5, 7)?,
+        n(8, 10)?,
+        n(11, 13)?,
+        n(14, 16)?,
+        n(17, 19)?,
+    );
+    let ms = t
+        .get(20..23)
+        .and_then(|x| x.parse::<i64>().ok())
+        .unwrap_or(0);
+    // Days since 1970-01-01 of a civil date.
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    u64::try_from(((days * 24 + hh) * 60 + mm) * 60_000 + ss * 1000 + ms).ok()
 }
 
 /// What a tool call is called, shown on one line, and its body: the command or
@@ -688,6 +884,81 @@ mod tests {
         assert_eq!(
             find("00000000-0000-0000-0000-000000000000", Path::new("/a")),
             None
+        );
+    }
+
+    #[test]
+    fn a_task_notice_is_a_notice_and_not_a_message_of_the_person_and_ends_a_background_task() {
+        let note = "<task-notification>\n<task-id>abc</task-id>\n<status>completed</status>\n<summary>Agent \"Scout ask UI\" finished</summary>\n<usage><duration_ms>18488</duration_ms></usage>\n</task-notification>";
+        let note_line = serde_json::json!({"type":"user","origin":{"kind":"task-notification"},"message":{"content":note}}).to_string();
+        // The same notice also comes as a queued command: it counts once.
+        let queued_line = serde_json::json!({"type":"attachment","attachment":{"type":"queued_command","prompt":note}}).to_string();
+        let failed = "<task-notification>\n<task-id>def</task-id>\n<status>failed</status>\n<summary>Background command \"cargo test\" failed</summary>\n</task-notification>";
+        let failed_line =
+            serde_json::json!({"type":"user","message":{"content":failed}}).to_string();
+        let (t, blocks, _d) = tail_of(&[
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"a","name":"Agent","input":{"run_in_background":true}}]}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"b","name":"Bash","input":{"command":"cargo test","run_in_background":true}}]}}"#,
+            &note_line,
+            &queued_line,
+            &failed_line,
+        ]);
+        let kinds: Vec<&str> = blocks.iter().map(|b| b.kind.as_str()).collect();
+        assert_eq!(kinds, ["tool", "tool", "notice", "notice"]);
+        let n = &blocks[2];
+        assert_eq!(
+            (
+                n.name.as_str(),
+                n.text.as_str(),
+                n.arg.as_str(),
+                n.result.as_deref()
+            ),
+            ("done", "Scout ask UI", "agent", Some("19 s"))
+        );
+        let f = &blocks[3];
+        assert_eq!(
+            (f.name.as_str(), f.text.as_str(), f.arg.as_str()),
+            ("failed", "cargo test", "task")
+        );
+        assert_eq!(t.bg(), 0);
+    }
+
+    #[test]
+    fn a_message_sent_while_claude_works_is_queued_until_the_turn_takes_it() {
+        let (mut t, blocks, d) = tail_of(&[
+            r#"{"type":"user","timestamp":"2026-10-12T18:00:00.000Z","message":{"content":"hola"}}"#,
+            r#"{"type":"queue-operation","operation":"enqueue","content":"y también esto"}"#,
+            r#"{"type":"queue-operation","operation":"enqueue","content":"<task-notification><task-id>x</task-id></task-notification>"}"#,
+        ]);
+        let kinds: Vec<&str> = blocks.iter().map(|b| b.kind.as_str()).collect();
+        assert_eq!(kinds, ["user", "queued"]);
+        // The turn takes it: the same block, now the person's message, and no second one.
+        let line = r#"{"type":"attachment","attachment":{"type":"queued_command","prompt":"y también esto","origin":{"kind":"human"}}}"#;
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(d.path().join("s.jsonl"))
+            .unwrap();
+        std::io::Write::write_all(&mut f, format!("{line}\n").as_bytes()).unwrap();
+        let c = t.poll();
+        assert_eq!(c.blocks.len(), 1);
+        assert_eq!((c.blocks[0].i, c.blocks[0].kind.as_str()), (1, "user"));
+    }
+
+    #[test]
+    fn the_turn_starts_at_the_persons_message_and_counts_each_message_of_claude_once() {
+        let (t, _b, _d) = tail_of(&[
+            r#"{"type":"user","timestamp":"2026-10-12T18:00:00.500Z","message":{"content":"hola"}}"#,
+            r#"{"type":"assistant","message":{"id":"m1","usage":{"output_tokens":10},"content":[{"type":"thinking","thinking":""}]}}"#,
+            r#"{"type":"assistant","message":{"id":"m1","usage":{"output_tokens":12},"content":[{"type":"text","text":"a"}]}}"#,
+            r#"{"type":"assistant","message":{"id":"m2","usage":{"output_tokens":30},"content":[{"type":"text","text":"b"}]}}"#,
+        ]);
+        // 2026-10-12T18:00:00.500Z
+        assert_eq!(
+            t.turn(),
+            Some(ChatTurn {
+                since: 1_791_828_000_500,
+                tokens: 42
+            })
         );
     }
 }

@@ -15,7 +15,7 @@ pub type PaneId = u64;
 
 /// Bumped whenever a message changes shape: a client and a daemon from
 /// different builds refuse each other instead of misreading (RISK-14).
-pub const PROTOCOL: u32 = 21;
+pub const PROTOCOL: u32 = 22;
 
 /// A run of cells of one row that share a style: its first column, its
 /// text (a wide character counts two columns; the cells after it are not
@@ -31,7 +31,10 @@ pub type Run = (u16, String, u32, u32, u8);
 /// that sums the call up, `body` the command, the diff or the output, and
 /// `result` the line that sums its result up, `None` until it has one).
 /// `i` numbers the conversation's blocks from its start: a block with a
-/// number the client has is that block again, changed.
+/// number the client has is that block again, changed. Two more kinds (REQ-97): `notice` is the PC
+/// telling Claude that a subagent or a background task ended (`name` is its status, `done`, `failed`
+/// or `stopped`; `text` its title, `arg` what ran it, `agent` or `task`, and `result` how long it took when known), and `queued` is a message the
+/// person sent while Claude works, which the transcript does not have yet.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ChatBlock {
     pub i: u32,
@@ -42,6 +45,14 @@ pub struct ChatBlock {
     pub result: Option<String>,
     pub body: Option<String>,
     pub error: bool,
+}
+
+/// How the turn Claude is in stands (mobile REQ-96): when the person's last message was sent (ms since
+/// the epoch) and the output tokens Claude has written since.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ChatTurn {
+    pub since: u64,
+    pub tokens: u64,
 }
 
 /// One command of a shell (mobile REQ-92): what was typed, where, how it ended and how long it
@@ -428,6 +439,12 @@ pub enum DaemonMsg {
         name: Option<String>,
         /// What Claude called the conversation itself.
         title: Option<String>,
+        /// The turn in progress, when it is new or changed (REQ-96).
+        #[serde(default)]
+        turn: Option<ChatTurn>,
+        /// How many background tasks and subagents were started and have not ended, when it changed (REQ-97).
+        #[serde(default)]
+        bg: Option<u32>,
         reset: bool,
         blocks: Vec<ChatBlock>,
     },
