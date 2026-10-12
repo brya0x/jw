@@ -639,13 +639,8 @@ Open (human decisions, still unanswered):
 - REQ-252 IF `--pane` has no number or the text is empty, THEN THE CLI SHALL fail with the usage before connecting.
 - REQ-253 IF `--pane` equals `$JW_PANE_ID`, THEN THE CLI SHALL fail and send no `Prompt`.
 - REQ-254 THE protocol SHALL be 11, and `Prompt.pane` SHALL default to `None` when absent.
-- REQ-255 WHERE `--tag` is given and `$JW_NAME` is set, THE CLI SHALL prefix the text with `[jw: <JW_NAME>, pane <JW_PANE_ID>] ` (OPEN-36).
+- REQ-255 WHERE `--tag` is given and `$JW_NAME` is set, THE CLI SHALL prefix the text with `[jw: <JW_NAME>, pane <JW_PANE_ID>] `, or with `[jw: <JW_NAME>] ` when `$JW_PANE_ID` is not set (OPEN-36).
 - REQ-256 THE jw skill SHALL tell an agent never to answer another agent's permission question with `jw prompt`, with or without `--pane`.
-
-Open (human decisions, still unanswered):
-
-- OPEN-36 The sender prefix is opt-in (`--tag`, RAT-71). Alternatives: automatic when `JW_NAME` is set, or none.
-- OPEN-37 `--pane=3` is not supported, like `pane open --of 3`.
 
 ## Rationale
 
@@ -803,7 +798,7 @@ Open (human decisions, still unanswered):
 
 - RISK-76 **`PROTOCOL` 11 and the version collide with `feat/mobile-app`.** Whoever merges second goes past the other: `PROTOCOL`, the Cargo version, and these ids.
 - RISK-77 **The daemon does not know whether the target agent is waiting on a permission.** With `--pane` an agent could answer another's question; only the skill rule (REQ-256) stops it, not the code. A `waiting` check in the daemon is a separate change.
-- RISK-78 **Recycled pane ids.** Checked: ids come from `next_pane`, which only grows while a daemon lives, so `--pane 3` cannot reach a pane opened later. A restarted daemon restores its panes with their ids.
+- RISK-78 **Pane ids change when the daemon restarts.** Within one daemon ids come from `next_pane` and are never reused (`new_id`), so `--pane 3` cannot reach a pane opened later. `restore` gives every restored pane a new id, so an id kept across a restart (in a script, in an agent's notes) can name another pane or none; run `jw pane ls` again.
 - RISK-79 **`Error` no longer tells "no agent" from "bad pane" except by its text.** Clients only show it (`cli.rs` `send_prompt`, `tui/mod.rs`), so nothing depends on it.
 
 ## Parts (each one ends with `cargo test` + `clippy` green and a local commit on `feat/rust-tui`; nothing is pushed)
@@ -911,6 +906,7 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - OPEN-32 (open) The caps, 200 commits and 2 MiB of diff, are guesses. Default as written; adjust after a hand test in a big repo.
 - OPEN-33 → General is committed work only (RAT-63); OPEN-34 → the pane reopens on General (REQ-245); OPEN-35 → Uncommitted is one list with a mark per file, not split into staged and unstaged. The prototype shows all three and the user approved it (2026-10-11).
 - OPEN-5 → `~/.config/jw/settings.json` (JSON, outside Go's `*.toml` glob) and the `^␣ ,` screen (addendum 3).
+- OPEN-36, OPEN-37 (addendum 20) → built with the proposed defaults: the sender prefix is opt-in (`--tag`, RAT-71) and `--pane=3` is not supported, like `pane open --of 3`; say so to change.
 
 ## Corrections
 
@@ -968,6 +964,7 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - The plan for addendum 18 said a pane cannot know its own id (RISK-2 of the plan). It can: the daemon sets `JW_PANE_ID` (`daemon/src/lib.rs`), which `jw hook` already reads; REQ-219 uses it.
 - `find()` is documented as taking `project/name` but its filter compares the whole label, the name or the id (`cli.rs`); a path is not accepted.
 - REQ-206 and the Protocol rows of addendum 18 said `PROTOCOL` 10. Addendum 20 adds a field to `Prompt` and makes it 11 (REQ-254); `Interfaces → Protocol` now lists `Prompt{stream,text,pane?}`.
+- RISK-78 was first written saying a restarted daemon restores its panes with their ids. `restore` allocates new ones (`daemon/src/lib.rs`, `new_id`); the old id only finds the scrollback file.
 
 ## Tests
 
@@ -986,5 +983,5 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - switch speed (F0–F4): `JW_TRACE` lines per phase; `scripts/bench-switch.py` p50/p95/max against an isolated `scripts/jw-test` dir with 3 worktrees and a 2 MiB ring (kill only that dir's pid); a `Msg::Snapshot` parser equals the inline one and Output after it applies in order; `tick_motion` and a 240×60 draw on `App::bare`/`TestBackend` under the budget.
 - agent programs (A1, A2): `is_agent_program` and `is_agent_pane` tables (`core/src/program.rs`; a path or a `-` prefix is not part of the name). Daemon, in `crates/jw/tests/daemon.rs`: a `shell` pane running a link to `cat` named `claude` is reached by `Prompt` (a script shows as its interpreter, and macOS kills a copy of `cat`); the no-agent error is `prompt_without_an_agent_pane_is_an_error`. `App` units: `marks()` gives `✻` for a busy shell pane running `claude` and nothing for `nvim`; `pane_title` names the agent program and flags it, and leaves other programs unflagged. Not covered by a test: role `agent` winning over a program pane, the pane that stops being an agent, the magenta title colour (`TestBackend`), `jw ls --json programs` and `jw read --pane <program>`. Manual with `scripts/jw-test`: run `claude` by hand in a shell pane, `jw prompt` it from another workspace, exit claude and see the next `jw prompt` refuse.
 - pane commands (addendum 18): `crates/jw/tests/daemon.rs`: `a_split_tells_only_its_requester_the_new_pane` (REQ-205, 207) and `jw_pane_opens_lists_and_closes_panes` (the binary against a daemon and a state dir of its own: not open, open a viewer and a command, the other client's `Tree` (REQ-209), `ls` as a table and JSON, `--of` and `close` outside the workspace, the last pane refused). `cli.rs` units: `run_target` and `anchor` tables. `skill.rs` names the three commands. Not covered by a test: `--force` on the last pane, REQ-219, `--split down` placement, `view:md:` against a running TUI. Manual with `scripts/jw-test`: with a TUI open, `jw pane open <ws> --run view:diff` from a second terminal.
-- prompt to a named pane (addendum 20): `crates/jw/tests/daemon.rs`: `prompt_with_a_pane_reaches_that_agent` (REQ-249), `prompt_with_a_pane_refuses_what_is_not_a_live_agent_of_the_workspace` (REQ-250, REQ-251); `proto.rs`: `a_prompt_without_a_pane_names_none` (REQ-254); `cli.rs` units: `prompt_options_end_at_the_first_word_of_the_text` (REQ-247, REQ-252), `a_tag_names_who_sent_the_text` (REQ-255), `the_pane_you_run_in_is_not_a_target` (REQ-253). REQ-248 holds through the REQ-194 and REQ-196 tests above, which send no `pane`.
+- prompt to a named pane (addendum 20): `crates/jw/tests/daemon.rs`: `prompt_with_a_pane_reaches_that_agent` (REQ-249), `prompt_with_a_pane_refuses_what_is_not_a_live_agent_of_the_workspace` (REQ-250, REQ-251); `proto.rs`: `a_prompt_without_a_pane_names_none` (REQ-254); `cli.rs` units: `prompt_options_end_at_the_first_word_of_the_text` (REQ-247, REQ-252), `a_tag_names_who_sent_the_text` (REQ-255), `skill.rs`: `the_skill_says_how_to_name_a_pane_and_not_to_answer_permissions` (REQ-256), `the_pane_you_run_in_is_not_a_target` (REQ-253). REQ-248 holds through the REQ-194 and REQ-196 tests above, which send no `pane`.
 - live registry (W1): `RegistryWatch` units over a tempdir (unchanged, touched, a file that appears or goes); an `App` without a daemon: rows from `Msg::Rows` replace the sidebar, with a modal open they land in `pending_rows` and the next tick after it closes applies them, `active` keeps its id; a truncated JSON leaves the rows alone; `next_wake` is still `None` when idle. Manual: with a TUI open, `jw worktree <name>` from a second terminal shows the row within about 2 s; repeat with `^␣ r` open and the row appears after `esc`.
