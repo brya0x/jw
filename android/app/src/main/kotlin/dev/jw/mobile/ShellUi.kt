@@ -117,7 +117,7 @@ fun ShellView(
                     val cur = laid[b.i]
                     val l = if (cur != null && cur.revision == o.revision && cur.viewCols == viewCols) cur else {
                         val t = o.text()
-                        Laid(o.revision, viewCols, t, wrapView(t, viewCols, false).rows).also { laid[b.i] = it }
+                        Laid(o.revision, viewCols, t, ColumnGrid.rows(t, viewCols)).also { laid[b.i] = it }
                     }
                     // A command that printed nothing has no body.
                     if (l.rows.any { it.cols.isNotEmpty() }) {
@@ -151,7 +151,7 @@ fun ShellView(
                                             drawIntoCanvas { c ->
                                                 for (r in 0 until n) {
                                                     val row = p.laid.rows[p.from + r]
-                                                    painter.draw(c.nativeCanvas, t.line(row.line), row.cols, r * metrics.ch, metrics)
+                                                    painter.draw(c.nativeCanvas, row.own ?: t.line(row.line), row.cols, r * metrics.ch, metrics)
                                                 }
                                             }
                                         }

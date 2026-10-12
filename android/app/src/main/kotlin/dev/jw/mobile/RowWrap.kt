@@ -3,8 +3,8 @@ package dev.jw.mobile
 import dev.jw.term.Attr
 import dev.jw.term.Line
 
-/** A row of the view: the terminal columns of [line] drawn on it, left to right (the second half of a wide character is not one). */
-internal class VRow(val line: Int, val cols: IntArray)
+/** A row of the view: the terminal columns of [line] (or of [own], a row laid out for the view, [ColumnGrid]) drawn on it, left to right (the second half of a wide character is not one). */
+internal class VRow(val line: Int, val cols: IntArray, val own: Line? = null)
 
 /**
  * How a terminal row too wide for the view is drawn (REQ-21). A row that fits is drawn as it is. A wider one is not

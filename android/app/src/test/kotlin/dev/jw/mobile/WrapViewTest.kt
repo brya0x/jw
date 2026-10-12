@@ -98,4 +98,32 @@ class WrapViewTest {
         val t = term(195, 5, "a" + " ".repeat(100) + "b\u001b[?25l")
         assertFalse(wrapView(t, 10).rows.filter { it.line == 0 }.any { it.cols.isEmpty() })
     }
+
+    /** What a row laid out by [ColumnGrid] draws, as text. */
+    private fun gridRows(t: PaneText, view: Int) = ColumnGrid.rows(t, view).map { r ->
+        val l = r.own ?: t.read { it.line(r.line) }
+        r.cols.joinToString("") { c -> if (l.ch[c] == 0) " " else String(Character.toChars(l.ch[c])) }
+    }
+
+    /** `ls -a` for a terminal 195 wide fills its columns downwards: three rows of seven. */
+    @Test fun lsColumnsAreSetAgainInTheOrderLsMeantForTheViewsWidth() {
+        val names = listOf(".", "..", ".git", ".github", ".gitignore", ".jw.env", "AGENTS.md", "Cargo.lock", "Cargo.toml", "CLAUDE.md",
+            "LICENSE", "README.md", "android", "crates", "docs", "justfile", "scripts", "target")
+        val per = 6
+        val text = (0 until 3).joinToString("\r\n") { r -> (0 until per).mapNotNull { c -> names.getOrNull(c * 3 + r) }.joinToString("") { it.padEnd(20) }.trimEnd() }
+        val t = term(195, 10, text + "\u001b[?25l")
+        val rows = gridRows(t, 44)
+        assertTrue("no row wider than the view: $rows", rows.all { it.length <= 44 })
+        // Read down the columns, the names come in order.
+        val cells = rows.filter { it.isNotBlank() }.map { r -> r.trim().split(Regex("  +")) }
+        val across = cells.maxOf { it.size }
+        val down = (0 until across).flatMap { c -> cells.mapNotNull { it.getOrNull(c) } }
+        assertEquals(names, down)
+    }
+
+    @Test fun textThatIsNotAGridIsLeftToWrapView() {
+        val t = term(80, 5, "one two  three\r\nsecond line\u001b[?25l")
+        assertEquals(wrapView(t, 20).rows.size, ColumnGrid.rows(t, 20).size)
+        assertTrue(ColumnGrid.rows(t, 20).all { it.own == null })
+    }
 }
