@@ -599,6 +599,8 @@ fn summarise(name: &str, input: &Value) -> (String, Option<String>, Option<Strin
         "WebFetch" => (cut(s("url"), ARG_MAX), None, None),
         "WebSearch" => (cut(s("query"), ARG_MAX), None, None),
         "Task" | "Agent" => (cut(s("description"), ARG_MAX), None, None),
+        // The plan Claude asks to go ahead with: its text is what a phone shows full screen (REQ-95).
+        "ExitPlanMode" => ("plan".into(), Some(cut(s("plan"), TEXT_MAX)), None),
         _ => {
             let first = input
                 .as_object()
@@ -960,5 +962,15 @@ mod tests {
                 tokens: 42
             })
         );
+    }
+
+    #[test]
+    fn the_plan_of_exit_plan_mode_is_the_body_of_its_call() {
+        let (_t, blocks, _d) = tail_of(&[
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"p","name":"ExitPlanMode","input":{"plan":"1. Daemon\n2. App"}}]}}"#,
+        ]);
+        assert_eq!(blocks[0].name, "ExitPlanMode");
+        assert_eq!(blocks[0].body.as_deref(), Some("1. Daemon\n2. App"));
+        assert_eq!(blocks[0].result, None);
     }
 }
