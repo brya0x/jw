@@ -73,7 +73,7 @@ supersedes:  []
 | 14 | WHEN the app has no stored device, it SHALL open the QR scanner and pair; it SHALL keep the device token in Keystore-backed storage. |
 | 15 | WHEN the connection drops, the app SHALL reconnect with backoff, re-attach, and treat the new `Snapshot` as the truth. |
 | 16 | IF `ready.protocol` differs from the app's, THEN the app SHALL show an update screen and not attach. |
-| 17 | THE app SHALL draw with the palette from `ready`, following the system dark or light setting unless the user pins a theme in Settings. |
+| 17 | THE app SHALL draw with the palette from `ready`, following the system dark or light setting unless the user chooses a theme in Settings. The choice is the phone's (kept on the device by the name the PC lists it under, and dropped if the PC no longer offers it): it paints the app and the panes' colours, and changes nothing on the PC, whose TUI theme and agents are unaffected. |
 | 18 | THE workspaces screen SHALL list roots with their worktrees nested, folders in their own section, and the marks `✻ ? ⚡ ⚑` derived from `PaneInfo` as the TUI does (`tui/src/tui/mod.rs:960-979`). |
 | 19 | WHEN the user taps any workspace row, root, worktree or folder, the app SHALL attach and show its panes. |
 | 20 | WHILE a pane's agent is `Waiting`, the row and the pane SHALL offer y and n; WHEN tapped, the app SHALL send `Input` with the configured bytes. The buttons have two looks only, green and red while they can be tapped and dim while they cannot, and the state does not change between polls: a `Panes` is good for 6 s (three polls), and a tapped prompt stays answered until a `Panes` says the pane is no longer Waiting. The daemon ends a pane's Waiting when an `Input` answers it (Esc alone: idle; a terminal report such as focus or mouse: no change; anything else: working), because claude has no hook between an approved permission and its next tool, so the PC's panel kept showing the approved agent as waiting. |
@@ -294,6 +294,8 @@ Order (L1 to L3, after the rest): L1 first (the app cannot be tried without it),
 - Approve reached the pane (`crates/jw/tests/mobile.rs` sends the app's `Input` frame and reads the shell's echo) but the agent stayed `Waiting` on the PC until its next `PreToolUse`: the daemon never changed it on an `Input`, and claude's hooks had nothing after a permission was granted. `PostToolUse` now reports working, and the daemon applies the answer itself (REQ-20). Agents already running keep the hooks they started with.
 
 - The new-session button was a row that closed the sessions sheet and opened a second sheet, and `+` offered it too. It is now inside the sessions sheet (REQ-88), and `+` no longer has it.
+
+- The theme grid in Settings only showed the PC's themes and the app took One Dark or One Light from the system, so there was no way to choose one on the phone (REQ-17 had said the user could pin one). Tapping a theme now chooses it; `seguir al sistema` undoes it. The panes' colours follow it because `TermColors` is built from the same roles.
 
 ## Tests
 

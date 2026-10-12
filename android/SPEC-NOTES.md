@@ -5,7 +5,7 @@
   The reconnecting screen and the notices on the scan screen are in the same position.
 - **`ready.palettes`** is the array of the spec (`{name,dark,colors}`, `bridge.rs`): the app takes One Dark / One Light by name,
   else the first dark / light theme, role by role over the built-in fallback. `settings` is kept raw and unused; which theme
-  the user runs is in `ready.settings` (`{dark, light}` theme names, seen in the bridge tests); the app does not use it yet (TODO M4).
+  the user runs is in `ready.settings` (`{dark, light}` theme names, seen in the bridge tests); the app does not use it: the theme is chosen on the phone (REQ-17).
 - `PROTOCOL` moved to 10 while M3 was built; the app's constant is in `proto/Frame.kt`.
 - **`paired` can be followed by `error daemon` with no `ready`.** The app stores the device on `paired`, before `ready`.
 - Silent closes exist (close before auth, the 16-connection cap, 60 s of silence): the app treats them as a network failure.

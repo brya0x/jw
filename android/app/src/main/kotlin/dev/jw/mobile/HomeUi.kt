@@ -1,6 +1,7 @@
 package dev.jw.mobile
 
 import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
 import dev.jw.proto.Palettes
@@ -493,7 +494,13 @@ private fun SettingsScreen(state: UiState.Connected, session: Session, answers: 
                 color = j.dim, fontSize = 12.sp, modifier = Modifier.padding(14.dp),
             )
             Section("tema")
-            ThemeGrid(state.palettes)
+            Text(
+                "Lo eliges aquí, no en el PC: pinta la app, los colores del terminal y la salida del agente. " +
+                    "El PC y el agente siguen con su tema. Son los temas que tu PC ofrece (jw theme ls).",
+                color = j.dim, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+            )
+            ThemeGrid(state.palettes, answers.theme, answers::chooseTheme)
+            ThemePreview()
             Section("terminal")
             var fit by remember { mutableStateOf(answers.fitToPhone) }
             SettingRow(
@@ -532,11 +539,11 @@ private fun SettingRow(title: String, sub: String?, color: Color = LocalJw.curre
 }
 
 /**
- * The PC's themes as the prototype's grid, read-only: the app follows the system's dark or light (the
- * user's choice), and nothing in the bridge writes `settings.json`. The theme in use is marked.
+ * The PC's themes as the prototype's grid. Tapping one chooses it for this phone; `seguir al sistema` goes back
+ * to the system's dark or light. Nothing in the bridge writes the PC's `settings.json`.
  */
 @Composable
-private fun ThemeGrid(palettes: Palettes) {
+private fun ThemeGrid(palettes: Palettes, chosen: String?, onChoose: (String?) -> Unit) {
     val j = LocalJw.current
     val dark = androidx.compose.foundation.isSystemInDarkTheme()
     val inUse = if (dark) palettes.dark else palettes.light
@@ -551,9 +558,11 @@ private fun ThemeGrid(palettes: Palettes) {
         for (row in themes.chunked(2)) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 for (t in row) {
-                    val used = t.colors["bg"] == inUse["bg"] && t.dark == dark
+                    val used = if (chosen != null) t.name == chosen else t.colors["bg"] == inUse["bg"] && t.dark == dark
                     Column(
-                        Modifier.weight(1f).background(colorOf(t, "bg"), RoundedCornerShape(8.dp))
+                        Modifier.weight(1f).clickable(role = Role.RadioButton) { onChoose(t.name) }
+                            .semantics { selected = used }
+                            .background(colorOf(t, "bg"), RoundedCornerShape(8.dp))
                             .border(if (used) 2.dp else 1.dp, if (used) j.blue else colorOf(t, "line"), RoundedCornerShape(8.dp)).padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
@@ -567,5 +576,26 @@ private fun ThemeGrid(palettes: Palettes) {
                 if (row.size == 1) Spacer(Modifier.weight(1f))
             }
         }
+        if (chosen != null) {
+            Text(
+                "seguir al sistema (claro u oscuro)", color = j.blue, fontSize = 12.sp,
+                modifier = Modifier.clickable(role = Role.Button) { onChoose(null) }.minimumInteractiveComponentSize(),
+            )
+        }
     }
+}
+
+/** How the panes look with the theme in use: the roles a terminal draws with. */
+@Composable
+private fun ThemePreview() {
+    val j = LocalJw.current
+    Text(
+        buildAnnotatedString {
+            fun c(color: Color, t: String) { pushStyle(androidx.compose.ui.text.SpanStyle(color = color)); append(t); pop() }
+            c(j.dim, "~/ws/jw "); c(j.green, "✓"); append(" 42 tests "); c(j.red, "✗"); append(" 1 falló ")
+            c(j.yellow, "⚠"); append(" aviso "); c(j.blue, "info "); c(j.magenta, "claude "); c(j.cyan, "cyan")
+        },
+        color = j.fg, fontSize = 11.5.sp, fontFamily = JwMono,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp).background(j.bg, RoundedCornerShape(6.dp)).padding(10.dp),
+    )
 }

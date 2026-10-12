@@ -8,6 +8,16 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ControlTest {
+    @Test fun aThemeChosenOnThePhoneWinsOverTheSystemOnlyWhileThePcHasIt() {
+        val night = ThemeInfo("Tokyo Night", true, mapOf("bg" to "#1a1b26"))
+        val p = Palettes(Palettes.FALLBACK.dark, Palettes.FALLBACK.light, listOf(night))
+        val (c, dark) = p.resolve("Tokyo Night", false)
+        assertEquals("#1a1b26", c["bg"])
+        assertTrue(dark)
+        assertEquals(Palettes.FALLBACK.light["bg"], p.resolve("Gone", false).first["bg"])
+        assertEquals(Palettes.FALLBACK.dark["bg"], p.resolve(null, true).first["bg"])
+    }
+
     @Test fun encodesPairAndAuth() {
         val p = Control.encode(Hello.Pair("a".repeat(32), "Pixel", "482913"))
         assertEquals("""{"t":"pair","token":"${"a".repeat(32)}","name":"Pixel","code":"482913"}""", p)

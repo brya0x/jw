@@ -39,11 +39,15 @@ private fun toColors(p: Palette, dark: Boolean): JwColors {
     )
 }
 
-/** Dark or light follows the system; the colours come from `ready.palettes` or the One Dark/Light fallback. */
+/**
+ * The theme [chosen] on the phone (it paints the app and the panes' colours, and the PC and its agents keep
+ * theirs); with none, dark or light follows the system. The colours come from `ready.palettes` or the
+ * One Dark/Light fallback.
+ */
 @Composable
-fun JwTheme(palettes: Palettes, content: @Composable () -> Unit) {
-    val dark = isSystemInDarkTheme()
-    val j = toColors(if (dark) palettes.dark else palettes.light, dark)
+fun JwTheme(palettes: Palettes, chosen: String?, content: @Composable () -> Unit) {
+    val (palette, dark) = palettes.resolve(chosen, isSystemInDarkTheme())
+    val j = toColors(palette, dark)
     val scheme = (if (dark) darkColorScheme() else lightColorScheme()).copy(
         background = j.bg, surface = j.panel, onBackground = j.fg, onSurface = j.fg,
         primary = j.blue, onPrimary = j.bg, error = j.red, outline = j.line,
