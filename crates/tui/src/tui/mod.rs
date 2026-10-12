@@ -12,6 +12,7 @@ mod draw;
 mod finder;
 mod keys;
 mod mdview;
+mod mobile;
 mod modal;
 mod prcache;
 mod registry_watch;
@@ -184,12 +185,9 @@ pub enum View {
 }
 
 /// One row of the sidebar: a workspace, and whether it is a worktree
-/// listed under its project (REQ-50).
-#[derive(Debug, Clone, PartialEq)]
-pub struct Row {
-    pub entry: Entry,
-    pub child: bool,
-}
+/// listed under its project (REQ-50). Grouped in `core::sidebar`, which the
+/// phone's `workspaces` answer is made from too.
+pub use crate::sidebar::Row;
 
 /// How a status message reads: green when something was done, red when it
 /// failed or was refused (REQ-54).
@@ -322,6 +320,8 @@ pub struct App {
     pub size: (u16, u16),
     quit: bool,
     pub modal: Option<Modal>,
+    /// Mobile as the daemon last said, and the questions waiting (REQ-42).
+    pub mobile: mobile::Mobile,
     /// A picker over everything else (`^␣ o`).
     pub finder: Option<finder::Finder>,
     /// Where each pane of the workspace is: its directory and that
@@ -645,6 +645,9 @@ impl App {
             app.welcome = Some(Instant::now());
         }
         app.send(ClientMsg::List);
+        // Right after `Hello` (in `run`): the indicator and the pair question
+        // need it (REQ-42).
+        app.send(ClientMsg::MobileWatch);
         Ok(app)
     }
 
@@ -675,6 +678,7 @@ impl App {
             size,
             quit: false,
             modal: None,
+            mobile: mobile::Mobile::default(),
             finder: None,
             settings: None,
             here: BTreeMap::new(),
@@ -1075,7 +1079,7 @@ impl App {
         if trace::span("reload_fill_roots", || actions::fill_roots(&mut reg)) {
             reg.save(&reg_path)?;
         }
-        let rows = build_rows(&folders, reg, &crate::session::current());
+        let rows = crate::sidebar::rows(&folders, reg, &crate::session::current());
         self.apply_rows(rows);
         Ok(())
     }
@@ -1265,6 +1269,7 @@ impl App {
             Msg::Term(_) => {}
             Msg::Tick => {
                 self.tell_theme();
+                self.release_asks();
                 self.apply_pending_rows();
                 if self
                     .status
@@ -1393,7 +1398,7 @@ impl App {
                 self.install_snapshot(pane, role, parser, None);
             }
             // The reader thread turns these into `Msg::Snapshot` and `Msg::History`.
-            DaemonMsg::Screen { .. } | DaemonMsg::History { .. } => {}
+            DaemonMsg::Screen { .. } | DaemonMsg::History { .. } | DaemonMsg::Resized { .. } => {}
             DaemonMsg::Output { pane, bytes } => {
                 if let Some(v) = self.panes.get_mut(&pane) {
                     if let Some(h) = &mut v.history {
@@ -1457,6 +1462,9 @@ impl App {
             }
             DaemonMsg::Prompted { .. } => self.done("sent to the agent".into()),
             DaemonMsg::Error { msg } => self.fail(msg),
+            d @ (DaemonMsg::MobileState(_)
+            | DaemonMsg::MobilePair { .. }
+            | DaemonMsg::MobilePairDone { .. }) => self.on_mobile(d),
         }
     }
 
@@ -1491,6 +1499,10 @@ impl App {
                 finder::Outcome::Reload(requested) => self.load_reviews(requested),
                 finder::Outcome::Browse(url) => self.browse(&url),
             }
+            return;
+        }
+        if matches!(self.modal, Some(Modal::Mobile(_) | Modal::Pair(..))) {
+            self.mobile_key(k);
             return;
         }
         if let Some(m) = &mut self.modal {
@@ -1596,6 +1608,7 @@ impl App {
                 Some("open") => self.ask_folder(),
                 Some("file") => self.ask_file(),
                 Some("sessions") => self.ask_session(),
+                Some("mobile") => self.open_mobile(),
                 Some("settings") => self.ask_settings(),
                 Some("new") => self.new_worktree(),
                 Some("rename") => self.ask_rename(),
@@ -3461,6 +3474,8 @@ impl App {
             return;
         };
         match m {
+            // Their keys never submit: `mobile_key` handles them.
+            Modal::Mobile(_) | Modal::Pair(..) => {}
             Modal::Close { entry, .. } => self.close(&entry),
             Modal::ClosePane { pane, .. } => self.send(ClientMsg::Kill { pane }),
             Modal::Resend { stream, prompt, .. } => {
@@ -3936,62 +3951,11 @@ fn even(n: &Node) -> Node {
 fn load_rows() -> Result<Vec<Row>> {
     let folders = crate::folders::Folders::load(&crate::folders::default_path()?)?;
     let reg = Registry::load(&registry::default_path()?)?;
-    Ok(build_rows(&folders, reg, &crate::session::current()))
-}
-
-/// One project row per opened folder, each registry worktree under its
-/// project's row (REQ-50).
-fn build_rows(folders: &crate::folders::Folders, reg: Registry, session: &str) -> Vec<Row> {
-    let mut groups: Vec<(Entry, Vec<Entry>)> = folders
-        .folders
-        .iter()
-        .map(|f| (crate::folders::entry_for(f, session), Vec::new()))
-        .collect();
-    let mut by_project: BTreeMap<String, Vec<Entry>> = BTreeMap::new();
-    for e in reg
-        .entries
-        .into_iter()
-        .filter(|e| crate::session::owns(session, &e.session))
-    {
-        by_project.entry(e.project.clone()).or_default().push(e);
-    }
-    for (project, mut worktrees) in by_project {
-        worktrees.sort_by(|a, b| a.name.cmp(&b.name));
-        let root = worktrees
-            .iter()
-            .find(|w| !w.root.is_empty())
-            .map(|w| w.root.clone());
-        let at = groups.iter().position(|(r, _)| {
-            !r.branch.is_empty() && (r.project == project || Some(&r.path) == root.as_ref())
-        });
-        match at {
-            Some(i) => groups[i].1 = worktrees,
-            None => {
-                // Worktrees whose project folder isn't open: the folder
-                // shows closed, above them.
-                let mut e = match &root {
-                    Some(dir) => crate::folders::entry(dir, false),
-                    None => Entry {
-                        id: crate::folders::id(&project),
-                        name: project.clone(),
-                        ..Entry::default()
-                    },
-                };
-                e.project = project;
-                groups.push((e, worktrees));
-            }
-        }
-    }
-    groups
-        .into_iter()
-        .flat_map(|(root, kids)| {
-            std::iter::once(Row {
-                entry: root,
-                child: false,
-            })
-            .chain(kids.into_iter().map(|entry| Row { entry, child: true }))
-        })
-        .collect()
+    Ok(crate::sidebar::rows(
+        &folders,
+        reg,
+        &crate::session::current(),
+    ))
 }
 
 #[cfg(test)]

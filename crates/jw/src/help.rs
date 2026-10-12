@@ -73,6 +73,11 @@ pub const COMMANDS: &[Command] = &[
         what: "lists the themes, installs one (JSON, see themes/schema.json), prints one as a template, or picks one for dark or light mode",
     },
     Command {
+        name: "mobile",
+        usage: "jw mobile [--read-only] | stop | devices | revoke <device>",
+        what: "starts mobile in the daemon (a Cloudflare tunnel to this PC) and prints a QR for the phone app, and answers pair requests; it stays on after Ctrl-C and after jw closes; stop ends it, devices lists the paired phones, revoke cuts one off",
+    },
+    Command {
         name: "hook",
         usage: "jw hook working|waiting|idle",
         what: "what claude's hooks run in a jw pane to report the agent's state",

@@ -31,9 +31,12 @@ use anyhow::{Context, Result, anyhow, bail};
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use serde::{Deserialize, Serialize};
 
+mod mobile;
 mod outbox;
 mod ring;
 
+use jw_web::bridge::Look;
+use mobile::{Mobile, Tuning};
 use outbox::Tx;
 use ring::Ring;
 
@@ -46,18 +49,26 @@ use crate::proto::{
 /// How often the panes' output is written out, between tree changes.
 const SAVE_EVERY: Duration = Duration::from_secs(30);
 
+/// How long a signal waits for mobile to stop (REQ-9).
+const MOBILE_STOP_WITHIN: Duration = Duration::from_secs(2);
+
 /// Lines of scrollback each pane keeps.
 const SCROLLBACK: usize = 10_000;
 
 /// Runs the daemon on `socket` until the process is killed, or stopped by a
-/// signal (see `save_on_signal`).
-pub fn run(socket: &Path) -> Result<()> {
+/// signal (see `save_on_signal`). `look` is what a phone's `ready` carries
+/// besides the protocol: the themes live in the TUI crate, which this one
+/// cannot depend on, so the binary hands them in (mobile spec, RISK-19).
+pub fn run(socket: &Path, look: Look) -> Result<()> {
     let listener = bind(socket)?;
     let pidfile = pidfile(socket);
     fs::write(&pidfile, format!("{}\n", std::process::id()))
         .with_context(|| format!("writing {}", pidfile.display()))?;
 
-    let daemon = Arc::new(Daemon::new(session_path(socket)));
+    let daemon = Arc::new(Daemon::new(
+        session_path(socket),
+        Mobile::new(socket.to_path_buf(), look, Tuning::default()),
+    ));
     daemon.restore();
     save_on_signal(Arc::clone(&daemon), socket.to_path_buf(), pidfile)?;
     let saver = Arc::clone(&daemon);
@@ -114,6 +125,9 @@ fn save_on_signal(daemon: Arc<Daemon>, socket: PathBuf, pidfile: PathBuf) -> Res
     thread::spawn(move || {
         let _ = wake.read(&mut [0u8]);
         daemon.save();
+        // REQ-9: `cloudflared` and every phone go before the daemon does, and
+        // a hung stop does not keep it from exiting.
+        daemon.mobile.stop(MOBILE_STOP_WITHIN);
         let _ = fs::remove_file(&socket);
         let _ = fs::remove_file(&pidfile);
         std::process::exit(0);
@@ -169,6 +183,9 @@ struct Daemon {
     theme: Arc<Mutex<Theme>>,
     next_pane: AtomicU64,
     next_client: AtomicU64,
+    /// Mobile: its own locks and threads, none shared with the panes
+    /// (REQ-40).
+    mobile: Mobile,
 }
 
 /// An open workspace: how its panes are laid out, and who watches it.
@@ -482,7 +499,7 @@ struct SavedPane {
 }
 
 impl Daemon {
-    fn new(session: Option<PathBuf>) -> Self {
+    fn new(session: Option<PathBuf>, mobile: Mobile) -> Self {
         Self {
             panes: Mutex::default(),
             workspaces: Mutex::default(),
@@ -491,6 +508,7 @@ impl Daemon {
             theme: Arc::default(),
             next_pane: AtomicU64::new(0),
             next_client: AtomicU64::new(0),
+            mobile,
         }
     }
 
@@ -535,6 +553,7 @@ impl Daemon {
         // REQ-4: a client leaving only drops its subscriptions.
         tx.close();
         self.unsubscribe(client);
+        self.mobile.forget(client);
     }
 
     fn handle(&self, client: u64, tx: &Tx, msg: ClientMsg) -> Result<()> {
@@ -543,6 +562,13 @@ impl Daemon {
                 let _ = tx.send(DaemonMsg::Hello { protocol: PROTOCOL });
             }
             ClientMsg::SplitSnapshots => tx.set_split(),
+            ClientMsg::MobileWatch => self.mobile.watch(client, tx),
+            ClientMsg::MobileStart { read_only } => self.mobile.start(read_only, tx),
+            ClientMsg::MobileStop => self.mobile.stop(Duration::ZERO),
+            ClientMsg::MobileCode => self.mobile.code()?,
+            ClientMsg::MobileReadOnly { on } => self.mobile.read_only(on),
+            ClientMsg::MobileAnswer { request, yes } => self.mobile.answer(client, request, yes),
+            ClientMsg::MobileRevoke { device } => self.mobile.revoke(&device)?,
             ClientMsg::Attach { stream } => self.attach(client, tx, &stream),
             ClientMsg::Detach => self.unsubscribe(client),
             ClientMsg::Prompt { stream, text, pane } => {
@@ -617,10 +643,22 @@ impl Daemon {
                 io.writer.write_all(&bytes)?;
                 io.writer.flush()?;
             }
-            ClientMsg::Resize { pane, cols, rows } => {
-                let pane = self.pane(pane)?;
+            ClientMsg::Resize {
+                pane: id,
+                cols,
+                rows,
+            } => {
+                let pane = self.pane(id)?;
                 lock(&pane.io).master.resize(size(cols, rows))?;
-                lock(&pane.state).parser.screen_mut().set_size(rows, cols);
+                let mut st = lock(&pane.state);
+                if st.parser.screen().size() != (rows, cols) {
+                    st.parser.screen_mut().set_size(rows, cols);
+                    st.broadcast(&DaemonMsg::Resized {
+                        pane: id,
+                        cols,
+                        rows,
+                    });
+                }
             }
             ClientMsg::Spawn {
                 stream,
@@ -844,8 +882,16 @@ impl Daemon {
         self.tell(stream);
     }
 
-    fn split(&self, beside: PaneId, dir: Dir, new: NewPane) -> Result<PaneId> {
+    fn split(&self, beside: PaneId, dir: Dir, mut new: NewPane) -> Result<PaneId> {
         let stream = self.stream_of(beside)?;
+        // A client that cannot work out the stream's `JW_*` variables (a phone) sends none: the new pane
+        // takes its neighbour's, which are the stream's, so `jw ls` and the hooks work in it.
+        if new.env.is_empty() {
+            let neighbour = lock(&self.panes).get(&beside).cloned();
+            if let Some(p) = neighbour {
+                new.env = lock(&p.started).env.clone();
+            }
+        }
         let leaf = self.start(&stream, new)?;
         self.add(&stream, leaf, |tree, leaf| {
             let (tree, missing) = tree.insert(beside, dir, leaf);
@@ -1588,7 +1634,14 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("session.json");
-        let daemon = Arc::new(Daemon::new(Some(path.clone())));
+        let daemon = Arc::new(Daemon::new(
+            Some(path.clone()),
+            Mobile::new(
+                PathBuf::new(),
+                Arc::new(|| serde_json::json!({})),
+                Tuning::default(),
+            ),
+        ));
         let threads: Vec<_> = (0..8)
             .map(|t| {
                 let daemon = Arc::clone(&daemon);

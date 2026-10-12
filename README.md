@@ -13,6 +13,7 @@ jw sessions              # every session, and what runs in it
 jw help                  # every command
 jw server status|stop    # is the daemon running; stop it
 jw theme                 # every theme; jw theme install|export|use
+jw mobile                # a QR for the phone app, through a Cloudflare tunnel; jw mobile stop|devices|revoke
 ```
 
 Inside, press `Ctrl-Space` and then one key. Wait a moment after `Ctrl-Space` and every key
@@ -95,6 +96,7 @@ git clone https://github.com/brya0x/jw && cd jw && cargo install --path crates/j
 | `/` | open a file | `X` | remove | `n` | name |
 | `a` | sessions | `R` | review a PR | `f` | full screen |
 | `,` | settings | | | | |
+| `m` | mobile (phone app) | | | | |
 | `↑↓←→` | move through the sidebar | | | | |
 | `q` | detach | | | | |
 

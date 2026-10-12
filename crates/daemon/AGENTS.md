@@ -7,19 +7,26 @@ workspace ids are already unique across them.
 ## What lives where
 
 - `src/lib.rs`:
-  - `run` (`:54`) is the accept loop. `restore` (`:935`) brings back `session.json` at
-    start. `save_on_signal` (`:96`) saves everything on SIGTERM, SIGINT or SIGHUP.
-  - `serve` (`:465`) runs one client: a reader, and a writer fed by its `Tx`.
-  - `handle` (`:508`) takes every `ClientMsg`.
-  - `attach`/`watch` (`:677`/`:699`) send a tree, then each pane's Snapshot, or its `Screen`
+  - `run` (`:62`) is the accept loop; it takes the `Look` the `jw` binary hands in (themes
+    for a phone's `ready`). `restore` (`:996`) brings back `session.json` at start.
+    `save_on_signal` (`:107`) saves everything on SIGTERM, SIGINT or SIGHUP, then stops mobile
+    (2 s at most).
+  - `serve` (`:515`) runs one client: a reader, and a writer fed by its `Tx`.
+  - `handle` (`:559`) takes every `ClientMsg`.
+  - `attach`/`watch` (`:736`/`:758`) send a tree, then each pane's Snapshot, or its `Screen`
     and then its `History` to a client that sent `SplitSnapshots` (`split_snapshot`).
-  - `spawn` (`:1210`) starts a pane's process; its reader thread answers what the program asks
-    its terminal (`Titles`, `:238`: OSC 10/11, `?996n`, `?2031`, `6n`, `c`, `?u`).
-  - `set_theme` (`:1133`) keeps the client's theme and sends `?997` to panes with mode 2031.
-  - `edit` (`:901`) changes a tree; `save` (`:995`) writes `session.json` and the scrollback.
-  - `rekey` (`:714`) moves a workspace to a new id.
+  - `spawn` (`:1271`) starts a pane's process; its reader thread answers what the program asks
+    its terminal (`Titles`, `:255`: OSC 10/11, `?996n`, `?2031`, `6n`, `c`, `?u`).
+  - `set_theme` (`:1194`) keeps the client's theme and sends `?997` to panes with mode 2031.
+  - `edit` (`:962`) changes a tree; `save` (`:1056`) writes `session.json` and the scrollback.
+  - `rekey` (`:779`) moves a workspace to a new id.
 - `src/outbox.rs`: `Tx`, a client's bounded queue. Past 8 MiB it drops that client's output
   for a pane, then resyncs it with a Snapshot (REQ-76).
+- `src/mobile.rs`: `Mobile`, the service behind `MobileStart` and the rest (spec: mobile.md,
+  REQ-33 to 40): phases off, starting, ready, failed; the bridge and `cloudflared` from jw-web;
+  the `Lister` for a phone's `workspaces`, `sessions` and `diff` (from `core::sidebar` and `core::diff`); the watchers (clients that sent `MobileWatch`) and the pair question put to them. A start
+  has an *epoch*: a stop or a failure bumps it, and a start or ticker thread of an older one
+  does nothing more.
 - `src/ring.rs`: the last 2 MiB of each pane's raw output. A Snapshot replays it, and the
   scrollback files hold it across restarts.
 
@@ -34,10 +41,16 @@ workspace ids are already unique across them.
 - **Reply to a pane with its state lock dropped.** Take `io` only after releasing `state`
   (the reader's replies, `set_theme`), never both at once.
 - **Never block a pane's reader thread on a client.** Clients go through their `Tx`.
+- **Mobile never takes a pane, workspace or session lock** (REQ-40), and never holds its own
+  `Core` lock while it waits for the network, the tunnel or a person. `Mobile::stop` kills
+  `cloudflared` and answers every question no first; closing the phones' sockets and joining
+  happen on another thread that is waited for up to the limit. The device list is cached: a
+  state never reads `mobile.json` under a lock.
 - **Panes get `JW_PANE_ID`.** claude's hooks (`jw hook`) find their pane by it.
 
 ## Tests
 
-`cargo test -p jw-daemon` for the queue and the ring. The real daemon is tested in
-`crates/jw/tests/daemon.rs`, which starts the `jw` binary on its own socket. Run those after
-any change here.
+`cargo test -p jw-daemon` for the queue, the ring and the mobile service's pair question. The
+real daemon is tested in `crates/jw/tests/daemon.rs`, which starts the `jw` binary on its own
+socket, and mobile in `crates/jw/tests/mobile.rs`, with a stub for `cloudflared` and a `PATH`
+without one. Run those after any change here.

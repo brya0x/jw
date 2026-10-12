@@ -16,7 +16,10 @@ depends on nothing of jw's.
 | `src/stream.rs` | what opening a workspace starts: `Stream` (`:19`), its panes, env, `Stamp` (whether a resolved one is still fresh), the agent's command with `--session-id` and hooks (`hooks`, `:323`), nvim's `--listen` (`listen`, `:292`) |
 | `src/actions.rs` | worktrees: `new_stream` (`:85`), `rename` (`:198`), `rm_plan`/`rm` (`:333`/`:361`), `sync` (`:436`), `done_plan` (`:490`) |
 | `src/connectors/git.rs`, `github.rs` | git through the `git` binary, plus `head_of` (`:298`), which reads `.git` without running anything; PRs through `gh` |
-| `src/diff.rs` | a worktree's changes against its base, for the diff viewer |
+| `src/ago.rs` | an age in words ("2 min ago") for lists of devices |
+| `src/sidebar.rs` | a session's workspaces grouped as the sidebar shows them (`rows`), and the items and session counts the phone is told (`items`, `sessions`) |
+| `src/qr.rs` | a QR code as a grid of modules with a quiet zone, and its half-block cells (`cells`); the CLI and the TUI each draw them |
+| `src/diff.rs` | a worktree's changes in one `Scope` (General, Uncommitted, a commit: addendum 19) and its `commits`, for the diff viewer and, within the phone's limits (`report`, `commit_report`, `Pick`), for the bridge's `diff` and `commits` answers. Every git call goes through `git_bounded`/`git_capped` (`Bounds`: output, deadline, file size; clean environment, no textconv or fsmonitor, filter drivers off, its own process group, cancelled with the phone); an untracked file is read only if it is a regular file, never through a symlink (`read_beneath`). Past `DIFF_CAP` a view lists its files only (`Loaded::TooLarge`) |
 | `src/init.rs` | drafting a project config (`detect`), and `write_project`, the `.jw.toml` of the setup step |
 
 ## Keep in mind

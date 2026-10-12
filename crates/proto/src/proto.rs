@@ -15,7 +15,7 @@ pub type PaneId = u64;
 
 /// Bumped whenever a message changes shape: a client and a daemon from
 /// different builds refuse each other instead of misreading (RISK-14).
-pub const PROTOCOL: u32 = 11;
+pub const PROTOCOL: u32 = 14;
 
 /// A pane to start. `cmd` runs through `sh -c`; `None` starts `$SHELL`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -48,7 +48,7 @@ impl Keyed for PaneLeaf {
 }
 
 /// Frames bigger than this are a bug or garbage on the socket, not output.
-const MAX_FRAME: u32 = 16 << 20;
+pub const MAX_FRAME: u32 = 16 << 20;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "t")]
@@ -171,6 +171,28 @@ pub enum ClientMsg {
         text: String,
         #[serde(default)]
         pane: Option<PaneId>,
+    },
+    /// Become a watcher of mobile: answered with `MobileState` now and after
+    /// every change, and sent every `MobilePair`, until this client leaves
+    /// (mobile spec, REQ-35).
+    MobileWatch,
+    /// Start mobile when it is off or failed (REQ-34).
+    MobileStart {
+        read_only: bool,
+    },
+    MobileStop,
+    /// Replace the pairing token with a new one (REQ-38).
+    MobileCode,
+    MobileReadOnly {
+        on: bool,
+    },
+    /// The person at the PC answers a `MobilePair` (REQ-36).
+    MobileAnswer {
+        request: u64,
+        yes: bool,
+    },
+    MobileRevoke {
+        device: String,
     },
 }
 
@@ -304,6 +326,14 @@ pub enum DaemonMsg {
         pane: PaneId,
         bytes: Vec<u8>,
     },
+    /// The pane's screen is now `cols` by `rows`: a client's `Resize` changed it. It comes in
+    /// order with the `Output` around it, so a client drawing the pane at its own size
+    /// resizes at the right byte (mobile REQ-70).
+    Resized {
+        pane: PaneId,
+        cols: u16,
+        rows: u16,
+    },
     /// The pane's process ended. The pane and its last screen stay until Kill.
     Exited {
         pane: PaneId,
@@ -326,6 +356,81 @@ pub enum DaemonMsg {
     Error {
         msg: String,
     },
+    /// Mobile as it is now, to every watcher on each change (REQ-34, 35).
+    /// It carries the pairing token in `payload` (RISK-16): never log it.
+    MobileState(MobileState),
+    /// A phone asks to pair; `name` and `code` are what it showed, cleaned
+    /// of control characters (REQ-36).
+    MobilePair {
+        request: u64,
+        name: String,
+        code: String,
+    },
+    /// The question is over: answered by someone else, timed out, or mobile
+    /// stopped.
+    MobilePairDone {
+        request: u64,
+    },
+}
+
+/// Where mobile stands.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MobileState {
+    /// `off`, `starting`, `ready` or `failed`.
+    pub phase: String,
+    /// While `starting`, how far it got, as a key the client words itself:
+    /// `launching` (cloudflared is being run), `started`, `registered` (the
+    /// tunnel has a name) or `resolving` (waiting for the name to resolve).
+    #[serde(default)]
+    pub step: String,
+    /// The tunnel's name, once registered.
+    #[serde(default)]
+    pub host: String,
+    /// While `ready` and the code is live: `jw://<host>/<token>`, the QR's
+    /// text. Empty when the code was used or ended.
+    #[serde(default)]
+    pub payload: String,
+    /// Seconds the code has left; 0 when there is none.
+    #[serde(default)]
+    pub expires_in: u64,
+    #[serde(default)]
+    pub read_only: bool,
+    #[serde(default)]
+    pub devices: Vec<MobileDevice>,
+    /// While `failed`: what went wrong, for the person to read.
+    #[serde(default)]
+    pub error: String,
+    /// `JW_CLOUDFLARED` is set in the daemon's environment: what runs as the
+    /// tunnel is a stand-in program, not Cloudflare's. Whoever shows mobile
+    /// says so, so nobody has one active without seeing it.
+    #[serde(default)]
+    pub custom_tunnel: bool,
+    /// The wifi listener as `host:port`, or empty when there is none (no
+    /// private address, or mobile is off). With one, `phase` is `ready` as soon
+    /// as it listens, whatever the tunnel does (REQ-56, REQ-67).
+    #[serde(default)]
+    pub lan: String,
+    /// The tunnel's own phase: `off`, `starting`, `ready` or `failed`. `step`
+    /// describes it while it starts and `error` says why when it failed with the
+    /// wifi still up.
+    #[serde(default)]
+    pub tunnel: String,
+}
+
+/// A paired phone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MobileDevice {
+    pub id: String,
+    pub name: String,
+    /// Unix seconds.
+    pub paired: u64,
+    pub last_seen: u64,
+    /// A phone is connected to the bridge now.
+    pub connected: bool,
+    /// While `connected`: which listener it came in on, `wifi` or `tunnel`
+    /// (REQ-65). Empty otherwise.
+    #[serde(default)]
+    pub route: String,
 }
 
 /// A message that carries terminal bytes sends them raw after a JSON head,
@@ -497,6 +602,49 @@ pub fn read_frame<T: DeserializeOwned + Raw>(r: &mut impl Read) -> io::Result<Op
     }
 }
 
+/// A frame's body is its kind byte and what follows; a relay forwards it
+/// without decoding, so it checks only what `read_frame` checks before it
+/// decodes.
+fn check_body(body: &[u8]) -> io::Result<()> {
+    let bad = |what: &str| io::Error::new(io::ErrorKind::InvalidData, what.to_string());
+    match body.first() {
+        None => Err(bad("empty frame")),
+        Some(0 | 1) if body.len() as u64 <= u64::from(MAX_FRAME) => Ok(()),
+        Some(0 | 1) => Err(bad("frame too large")),
+        Some(_) => Err(bad("unknown frame kind")),
+    }
+}
+
+/// Reads one frame's body (its kind byte and what follows) as it is, for a
+/// relay. `Ok(None)` is a clean end of stream between frames.
+pub fn read_raw(r: &mut impl Read) -> io::Result<Option<Vec<u8>>> {
+    let mut len = [0u8; 4];
+    match r.read_exact(&mut len) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(e) => return Err(e),
+    }
+    let len = u32::from_be_bytes(len);
+    if len > MAX_FRAME {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "frame too large",
+        ));
+    }
+    let mut body = vec![0u8; len as usize];
+    r.read_exact(&mut body)?;
+    check_body(&body)?;
+    Ok(Some(body))
+}
+
+/// Writes a body `read_raw` returned, or one a peer sent without its length.
+pub fn write_raw(w: &mut impl Write, body: &[u8]) -> io::Result<()> {
+    check_body(body)?;
+    w.write_all(&(body.len() as u32).to_be_bytes())?;
+    w.write_all(body)?;
+    w.flush()
+}
+
 /// Where the daemon writes its pid, next to the socket.
 pub fn pidfile(socket: &Path) -> PathBuf {
     socket.with_extension("pid")
@@ -506,6 +654,23 @@ pub fn pidfile(socket: &Path) -> PathBuf {
 /// and a place in the tree, but no process.
 pub fn is_view(role: &str) -> bool {
     role.starts_with("view:")
+}
+
+/// A name or a code a phone chose, made safe to print on the PC (mobile spec,
+/// REQ-27): no control characters, which would move a terminal, and none of
+/// the Unicode bidirectional controls and marks, which would make a name read
+/// differently from what it is. At most `max` characters, trimmed.
+pub fn clean(s: &str, max: usize) -> String {
+    let bidi = |c: char| {
+        matches!(c,
+            '\u{200e}' | '\u{200f}' | '\u{061c}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+    };
+    let s: String = s
+        .chars()
+        .filter(|c| !c.is_control() && !bidi(*c))
+        .take(max)
+        .collect();
+    s.trim().to_string()
 }
 
 /// `$JW_SOCKET`, else `$XDG_RUNTIME_DIR/jw/jw.sock`, else
@@ -549,6 +714,80 @@ mod tests {
             assert_eq!(read_frame::<ClientMsg>(&mut r).unwrap().as_ref(), Some(m));
         }
         assert_eq!(read_frame::<ClientMsg>(&mut r).unwrap(), None);
+    }
+
+    #[test]
+    fn mobile_messages_round_trip() {
+        let state = MobileState {
+            phase: "ready".into(),
+            step: String::new(),
+            host: "a-b.trycloudflare.com".into(),
+            payload: "jw://a-b.trycloudflare.com/00ff".into(),
+            expires_in: 118,
+            read_only: true,
+            devices: vec![MobileDevice {
+                id: "d1".into(),
+                name: "Pixel".into(),
+                paired: 10,
+                last_seen: 20,
+                connected: true,
+                route: "wifi".into(),
+            }],
+            error: String::new(),
+            custom_tunnel: true,
+            lan: "192.168.1.23:48211".into(),
+            tunnel: "ready".into(),
+        };
+        let down = vec![
+            DaemonMsg::MobileState(state),
+            DaemonMsg::MobilePair {
+                request: 4,
+                name: "Pixel".into(),
+                code: "482913".into(),
+            },
+            DaemonMsg::MobilePairDone { request: 4 },
+        ];
+        let up = vec![
+            ClientMsg::MobileWatch,
+            ClientMsg::MobileStart { read_only: true },
+            ClientMsg::MobileStop,
+            ClientMsg::MobileCode,
+            ClientMsg::MobileReadOnly { on: false },
+            ClientMsg::MobileAnswer {
+                request: 4,
+                yes: true,
+            },
+            ClientMsg::MobileRevoke {
+                device: "d1".into(),
+            },
+        ];
+        let mut buf = Vec::new();
+        for m in &down {
+            write_frame(&mut buf, m).unwrap();
+        }
+        for m in &up {
+            write_frame(&mut buf, m).unwrap();
+        }
+        let mut r = buf.as_slice();
+        for m in &down {
+            assert_eq!(read_frame::<DaemonMsg>(&mut r).unwrap().as_ref(), Some(m));
+        }
+        for m in &up {
+            assert_eq!(read_frame::<ClientMsg>(&mut r).unwrap().as_ref(), Some(m));
+        }
+    }
+
+    #[test]
+    fn what_a_phone_chose_is_cleaned_before_anyone_prints_it() {
+        assert_eq!(clean("Pixel\u{1b}[31m 8\u{7}\n", 40), "Pixel[31m 8");
+        // A right-to-left override would make "Pixel" read as "lexiP".
+        assert_eq!(
+            clean("\u{202e}lexiP\u{2066}!\u{2069}\u{200f}", 40),
+            "lexiP!"
+        );
+        assert_eq!(clean(&"a".repeat(100), 40).chars().count(), 40);
+        assert_eq!(clean("  Pixel  ", 40), "Pixel");
+        assert_eq!(clean("\u{1b}\u{202e}", 40), "");
     }
 
     #[test]
@@ -600,11 +839,54 @@ mod tests {
 
     #[test]
     fn oversized_frame_is_rejected() {
-        let mut r: &[u8] = &(MAX_FRAME + 1).to_be_bytes();
-        assert!(read_frame::<ClientMsg>(&mut r).is_err());
+        let too_big = (MAX_FRAME + 1).to_be_bytes();
+        assert!(read_frame::<ClientMsg>(&mut &too_big[..]).is_err());
+        assert!(read_raw(&mut &too_big[..]).is_err());
     }
 
-    /// REQ-254: a `Prompt` without `pane` reads as `None`; the protocol is 11.
+    #[test]
+    fn raw_relay_keeps_every_byte() {
+        let msgs = vec![
+            DaemonMsg::Hello { protocol: PROTOCOL },
+            DaemonMsg::Output {
+                pane: 3,
+                bytes: (0..=255).collect(),
+            },
+            DaemonMsg::Prompted { pane: 1 },
+        ];
+        let mut sent = Vec::new();
+        for m in &msgs {
+            write_frame(&mut sent, m).unwrap();
+        }
+        let mut relayed = Vec::new();
+        let mut r = sent.as_slice();
+        while let Some(body) = read_raw(&mut r).unwrap() {
+            write_raw(&mut relayed, &body).unwrap();
+        }
+        assert_eq!(relayed, sent);
+        let mut r = relayed.as_slice();
+        for m in &msgs {
+            assert_eq!(read_frame::<DaemonMsg>(&mut r).unwrap().as_ref(), Some(m));
+        }
+    }
+
+    #[test]
+    fn raw_rejects_a_body_without_a_kind() {
+        assert!(write_raw(&mut Vec::new(), &[]).is_err());
+        assert!(write_raw(&mut Vec::new(), &[7, 1, 2]).is_err());
+        let mut r: &[u8] = &[0, 0, 0, 0];
+        assert!(read_raw(&mut r).is_err());
+        let mut r: &[u8] = &[0, 0, 0, 2, 9, 9];
+        assert!(read_raw(&mut r).is_err());
+    }
+
+    #[test]
+    fn raw_stops_cleanly_at_the_end() {
+        let mut r: &[u8] = &[];
+        assert_eq!(read_raw(&mut r).unwrap(), None);
+    }
+
+    /// REQ-254: a `Prompt` without `pane` reads as `None`; it came with protocol 11 and every later one reads it so.
     #[test]
     fn a_prompt_without_a_pane_names_none() {
         let m: ClientMsg =
@@ -617,6 +899,5 @@ mod tests {
                 pane: None
             }
         );
-        assert_eq!(PROTOCOL, 11);
     }
 }

@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.0.21"
+version = "0.0.22"
 edition = "2024"
 license-file = "LICENSE"
 publish = false
@@ -11,17 +11,23 @@ publish = false
 [workspace.dependencies]
 jw-core = { path = "crates/core" }
 jw-proto = { path = "crates/proto" }
+jw-web = { path = "crates/web" }
 jw-daemon = { path = "crates/daemon" }
 jw-tui = { path = "crates/tui" }
 anyhow = "1.0.104"
 libc = "0.2.190"
 portable-pty = "0.9.0"
 pulldown-cmark = { version = "0.13", default-features = false }
+qrcode = { version = "0.14", default-features = false }
+rcgen = { version = "=0.14.10", default-features = false, features = ["ring", "pem"] }
 ratatui = "0.30"
+rustls = { version = "=0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+sha2 = "0.11"
 syntect = { version = "5", default-features = false, features = ["default-syntaxes", "default-themes", "parsing", "regex-fancy"] }
 tempfile = "3.27.0"
 toml = "1.1.7"
+tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
 unicode-width = "0.2"
 vt100 = "0.16.2"

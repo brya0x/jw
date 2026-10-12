@@ -110,6 +110,7 @@ impl From<Loaded> for Shown {
                         status,
                         binary: false,
                         untracked: false,
+                        unreadable: None,
                         hunks: Vec::new(),
                     })
                     .collect(),

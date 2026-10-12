@@ -7,6 +7,7 @@
 compile_error!("jw is unix only (macOS and Linux): it needs PTYs and a unix socket");
 
 pub mod actions;
+pub mod ago;
 pub mod connectors;
 pub mod core;
 pub mod diff;
@@ -14,6 +15,8 @@ pub mod folders;
 pub mod init;
 pub mod layout;
 pub mod program;
+pub mod qr;
 pub mod review;
 pub mod session;
+pub mod sidebar;
 pub mod stream;

@@ -1,0 +1,7 @@
+size 4 10
+cursor 0 1 hidden=0
+modes alt=0 appcursor=0 appkeypad=0 paste=0 mouse=none/default
+row 0 |x|
+row 1 ||
+row 2 ||
+row 3 ||

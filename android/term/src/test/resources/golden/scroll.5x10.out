@@ -1,0 +1,8 @@
+size 5 10
+cursor 4 3 hidden=0
+modes alt=0 appcursor=0 appkeypad=0 paste=0 mouse=none/default
+row 0 |line 17|
+row 1 |line 18|
+row 2 |line 19|
+row 3 |line 20|
+row 4 |end|

@@ -1,0 +1,9 @@
+size 3 20
+cursor 0 5 hidden=0
+modes alt=0 appcursor=0 appkeypad=0 paste=0 mouse=none/default
+row 0 |ac  j|
+row 1 |  d|
+row 2 |   efghi|
+cell 0 4 fg=D bg=D f=i
+cell 2 6 fg=D bg=D f=i
+cell 2 7 fg=D bg=D f=i

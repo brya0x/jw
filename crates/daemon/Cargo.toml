@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 jw-core.workspace = true
 jw-proto.workspace = true
+jw-web.workspace = true
 anyhow.workspace = true
 libc.workspace = true
 portable-pty.workspace = true

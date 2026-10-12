@@ -45,12 +45,13 @@ pub struct Settings {
 /// The actions a key after the leader can be given, by group: `(group,
 /// action, what the popup says, default key)`. A key is one character, or
 /// `tab`/`space`.
-pub const ACTIONS: [(&str, &str, &str, &str); 17] = [
+pub const ACTIONS: [(&str, &str, &str, &str); 18] = [
     ("go", "switch", "switch", "space"),
     ("go", "previous", "previous", "tab"),
     ("go", "open", "open folder", "o"),
     ("go", "file", "open file", "/"),
     ("go", "sessions", "sessions", "a"),
+    ("go", "mobile", "mobile", "m"),
     ("go", "settings", "settings", ","),
     ("worktree", "new", "new", "w"),
     ("worktree", "rename", "rename", "r"),
@@ -101,12 +102,20 @@ impl Settings {
         self.animations.unwrap_or(true)
     }
 
-    /// The key of `action`: the user's, else the default.
+    /// The key of `action`: the user's, else the default. A default that
+    /// another action's own binding already took leaves `action` with no key
+    /// (empty), so an action added later never takes over what a user set.
     pub fn key(&self, action: &str) -> String {
-        self.keys
-            .get(action)
-            .cloned()
-            .unwrap_or_else(|| default_key(action).unwrap_or_default().to_string())
+        if let Some(k) = self.keys.get(action) {
+            return k.clone();
+        }
+        let default = default_key(action).unwrap_or_default();
+        let taken = self.keys.iter().any(|(a, k)| a != action && k == default);
+        if taken {
+            String::new()
+        } else {
+            default.to_string()
+        }
     }
 
     /// The action `key` runs, if any.
@@ -297,6 +306,18 @@ mod tests {
         assert_eq!(s.action("a"), None);
         assert_eq!(s.dark_theme(), "tokyo");
         assert!(serde_json::from_str::<Settings>(r#"{"lead": "C-a"}"#).is_err());
+    }
+
+    #[test]
+    fn a_new_default_does_not_take_a_key_the_user_already_gave_away() {
+        // `m` is mobile's default; this user gave it to `name` before there
+        // was a mobile.
+        let s: Settings = serde_json::from_str(r#"{"keys": {"name": "m"}}"#).unwrap();
+        assert_eq!(s.action("m"), Some("name"));
+        assert_eq!(s.key("mobile"), "");
+        let s = Settings::default();
+        assert_eq!(s.action("m"), Some("mobile"));
+        assert_eq!(s.key("mobile"), "m");
     }
 
     #[test]
