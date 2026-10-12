@@ -260,7 +260,7 @@ internal class WrapView(val rows: List<VRow>, private val end: Int, private val 
 internal fun wrapView(t: PaneText, cols: Int, withHistory: Boolean = true): WrapView {
     val out = ArrayList<VRow>()
     var anchor = t.cursorRow
-    for (li in -(if (withHistory) minOf(t.scrollbackSize, WRAP_HISTORY) else 0) until t.rows) {
+    for (li in -(if (withHistory) minOf(t.scrollbackSize, WRAP_HISTORY) else 0) until (t.promptRow ?: t.rows)) {
         val line = t.line(li)
         var used = usedCols(line)
         if (li >= 0 && used > 0 && li > anchor && !t.altScreen) anchor = li

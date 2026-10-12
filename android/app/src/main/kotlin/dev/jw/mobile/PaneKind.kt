@@ -36,7 +36,7 @@ object PaneKinds {
      */
     fun input(pane: PaneInfo, shell: ShellState?, screenBox: () -> String?): String? = when {
         pane.mayHaveConversation() -> screenBox()
-        pane.role == "shell" && shell?.known == true && shell.blocks.lastOrNull()?.running != true -> shell.input
+        pane.role == "shell" && shell?.known == true && !shell.running -> shell.input
         else -> null
     }
 

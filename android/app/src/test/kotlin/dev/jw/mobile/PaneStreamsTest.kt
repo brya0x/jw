@@ -156,12 +156,12 @@ class PaneStreamsTest {
         assertNull(s.chat(7))
     }
 
-    @Test fun watchShellAsksForTheCommandsAndTheLineTypedFollows() = runBlocking<Unit> {
+    @Test fun watchShellAsksForItsStateAndTheLineTypedFollows() = runBlocking<Unit> {
         fake.enqueue { _, ws -> ws.send(FakeBridge.ready()) }
         fake.onFrame = { f, ws ->
             if (json(f)?.contains("ShellWatch") == true) {
-                ws.send(FakeBridge.frame("""{"t":"Shell","pane":7,"known":true,"reset":true,"input":"","blocks":[{"i":0,"cmd":"ls","cwd":"/w","out":"a","lines":1,"code":0,"ms":5,"running":false,"full":false}]}"""))
-                ws.send(FakeBridge.frame("""{"t":"Shell","pane":7,"known":true,"reset":false,"input":"echo hi","blocks":[]}"""))
+                ws.send(FakeBridge.frame("""{"t":"Shell","pane":7,"known":true,"running":false,"input":""}"""))
+                ws.send(FakeBridge.frame("""{"t":"Shell","pane":7,"known":true,"running":false,"input":"echo hi"}"""))
             }
         }
         val s = session()
@@ -170,10 +170,22 @@ class PaneStreamsTest {
         s.watchShell(7)
         assertEquals("""{"t":"ShellWatch","pane":7}""", next())
         withTimeout(10_000) { while (s.shell(7)?.input != "echo hi") kotlinx.coroutines.delay(10) }
-        assertEquals(listOf("ls"), s.shell(7)!!.blocks.map { it.cmd })
+        assertEquals(true, s.shell(7)!!.known)
         s.watchShell(null)
         assertEquals("""{"t":"ShellUnwatch","pane":7}""", next())
         assertNull(s.shell(7))
+    }
+
+    @Test fun theRowWhereTheShellsPromptStartsReachesTheScreen() = runBlocking<Unit> {
+        fake.enqueue { _, ws -> ws.send(FakeBridge.ready()) }
+        fake.onFrame = { f, ws ->
+            if (attached(f)) ws.send(FakeBridge.frame("""{"t":"Text","pane":7,"cols":40,"rows":3,"alt":false,"app_cursor":false,"cursor":[2,2],"prompt":1,"lines":[[[0,"out",0,0,0]],[[0,"% ",0,0,0]],[]]}"""))
+        }
+        val s = session()
+        s.start()
+        s.connected()
+        s.watch("dir:/x")
+        assertEquals(1, s.screen(7).promptRow)
     }
 
     @Test fun leavingDetachesAndForgetsTheScreens() = runBlocking<Unit> {

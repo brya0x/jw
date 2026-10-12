@@ -1,27 +1,17 @@
-//! A shell's commands as blocks, a command and its output each (mobile REQ-92).
+//! What a shell tells the daemon about itself (mobile REQ-92): whether it is at its
+//! prompt or runs a command, the line being typed, and where its prompt starts on
+//! the screen.
 //!
-//! The shell tells the daemon where a command starts and ends: jw gives the
-//! shells it starts a few lines of its own (zsh: `install`, `prepare`) that
-//! print an OSC 7770 sequence before each command (`start`, with the command
-//! and the folder, both in base64) and after it (`end`, with its status). The
-//! daemon watches the bytes the pane prints for them (`Scanner`) and keeps the
-//! output between the two as plain text (`Plain`). A shell that was not started
-//! by jw prints none, so it has no blocks and is drawn as text.
+//! jw gives the zsh it starts for a pane a few lines of its own (`install`,
+//! `prepare`) that print an OSC 7770 sequence: `start` before each command, `end`
+//! (with the status) before each prompt, and `line` (the text being typed, in
+//! base64) on every redraw of the line. The daemon watches the bytes the pane
+//! prints for them (`Scanner`). A shell that was not started by jw prints none,
+//! so it is not `known` and is drawn as text as it is.
 
-use std::collections::VecDeque;
 use std::io;
 use std::path::Path;
-use std::time::Instant;
 
-use crate::proto::ShellBlock;
-
-/// The blocks kept per pane; older ones are let go.
-const KEEP: usize = 200;
-/// The blocks a client is told of when it starts watching.
-pub const FIRST: usize = 100;
-/// The lines of a block's output that are kept, and the characters of a line.
-const LINES: usize = 400;
-const LINE_MAX: usize = 400;
 /// The most bytes of one mark's body that are waited for.
 const MARK_MAX: usize = 8 << 10;
 
@@ -57,9 +47,11 @@ fi
 if [[ -o interactive ]]; then
   autoload -Uz add-zsh-hook
   __jw_b64() { printf %s "$1" | base64 | tr -d '\n'; }
-  __jw_preexec() { printf '\e]7770;start;%s;%s\a' "$(__jw_b64 "$1")" "$(__jw_b64 "$PWD")"; }
+  __jw_preexec() { printf '\e]7770;start\a'; }
   __jw_precmd() { local s=$?; printf '\e]7770;end;%d\a' "$s"; }
   add-zsh-hook preexec __jw_preexec
+  # First, so the status it reads is the command's, and the mark comes where the prompt starts.
+  precmd_functions=(__jw_precmd ${precmd_functions:#__jw_precmd})
   # The line being typed, so a phone's input and the terminal's are one text.
   __jw_last_line=$'\x01'
   __jw_line() {
@@ -70,8 +62,6 @@ if [[ -o interactive ]]; then
   autoload -Uz add-zle-hook-widget
   add-zle-hook-widget line-pre-redraw __jw_line
   add-zle-hook-widget line-finish __jw_line
-  # First, so the status it reads is the command's.
-  precmd_functions=(__jw_precmd ${precmd_functions:#__jw_precmd})
 fi
 "#;
 
@@ -120,22 +110,17 @@ pub fn prepare(
     Some(vars)
 }
 
-/// One thing a pane printed that a block cares about.
+/// One thing a pane printed that the shell's state cares about.
 #[derive(Debug, PartialEq)]
 pub enum Piece {
     /// Bytes of output (the marks are not in them).
     Data(Vec<u8>),
-    Start {
-        cmd: String,
-        cwd: String,
-    },
-    End {
-        status: i32,
-    },
+    /// A command starts.
+    Start,
+    /// A command ended; the prompt is drawn next.
+    End { status: i32 },
     /// The line being typed at the prompt.
-    Line {
-        text: String,
-    },
+    Line { text: String },
 }
 
 /// Finds the marks in a pane's output, across the reads it comes in.
@@ -206,10 +191,7 @@ fn parse(body: &[u8]) -> Option<Piece> {
     let body = std::str::from_utf8(body).ok()?;
     let mut parts = body.split(';');
     match parts.next()? {
-        "start" => Some(Piece::Start {
-            cmd: decode(parts.next()?)?,
-            cwd: decode(parts.next()?)?,
-        }),
+        "start" => Some(Piece::Start),
         "end" => Some(Piece::End {
             status: parts.next()?.trim().parse().ok()?,
         }),
@@ -245,353 +227,87 @@ fn decode(s: &str) -> Option<String> {
     String::from_utf8(out).ok()
 }
 
-/// A command's output as plain text: what a terminal would show of it, a line
-/// at a time, with no colours or cursor moves (`\r` goes back to the start of
-/// the line, so a progress bar ends as its last state).
-#[derive(Default)]
-struct Plain {
-    lines: VecDeque<Vec<char>>,
-    /// The line being written and where in it.
-    cur: Vec<char>,
-    col: usize,
-    /// Inside an escape sequence.
-    esc: Esc,
-    /// Lines that went by, kept or not.
-    total: u32,
-    /// Bytes of a character that did not end in the last read.
-    pending: Vec<u8>,
-}
-
-#[derive(Default, Clone, Copy, PartialEq)]
-enum Esc {
-    #[default]
-    None,
-    /// After ESC.
-    Seen,
-    /// In a CSI, to its last byte.
-    Csi,
-    /// In an OSC or another string, to BEL or ESC `\`.
-    Str,
-    /// In a string, after ESC.
-    StrEnding,
-}
-
-impl Plain {
-    fn push(&mut self, bytes: &[u8]) {
-        let mut data = std::mem::take(&mut self.pending);
-        data.extend_from_slice(bytes);
-        let valid = match std::str::from_utf8(&data) {
-            Ok(_) => data.len(),
-            Err(e) if e.error_len().is_none() => e.valid_up_to(),
-            Err(e) => e.valid_up_to() + e.error_len().unwrap_or(1),
-        };
-        let text = String::from_utf8_lossy(&data[..valid]).into_owned();
-        self.pending = data[valid..].to_vec();
-        for c in text.chars() {
-            self.char(c);
-        }
-    }
-
-    fn char(&mut self, c: char) {
-        match self.esc {
-            Esc::Seen => {
-                self.esc = match c {
-                    '[' => Esc::Csi,
-                    ']' | 'P' | '_' | '^' | 'X' => Esc::Str,
-                    // A two-byte sequence (ESC 7, ESC =…): over.
-                    _ => Esc::None,
-                };
-                return;
-            }
-            Esc::Csi => {
-                if ('\u{40}'..='\u{7e}').contains(&c) {
-                    self.esc = Esc::None;
-                }
-                return;
-            }
-            Esc::Str => {
-                match c {
-                    '\u{7}' => self.esc = Esc::None,
-                    '\u{1b}' => self.esc = Esc::StrEnding,
-                    _ => {}
-                }
-                return;
-            }
-            Esc::StrEnding => {
-                self.esc = if c == '\\' { Esc::None } else { Esc::Str };
-                return;
-            }
-            Esc::None => {}
-        }
-        match c {
-            '\u{1b}' => self.esc = Esc::Seen,
-            '\n' => self.newline(),
-            '\r' => self.col = 0,
-            '\u{8}' => self.col = self.col.saturating_sub(1),
-            '\t' => {
-                let to = (self.col / 8 + 1) * 8;
-                while self.col < to {
-                    self.put(' ');
-                }
-            }
-            c if c.is_control() => {}
-            c => self.put(c),
-        }
-    }
-
-    fn put(&mut self, c: char) {
-        if self.col >= LINE_MAX {
-            return;
-        }
-        if self.col < self.cur.len() {
-            self.cur[self.col] = c;
-        } else {
-            self.cur.push(c);
-        }
-        self.col += 1;
-    }
-
-    fn newline(&mut self) {
-        let line = std::mem::take(&mut self.cur);
-        self.lines.push_back(line);
-        if self.lines.len() > LINES {
-            self.lines.pop_front();
-        }
-        self.total += 1;
-        self.col = 0;
-    }
-
-    /// The lines so far, the one being written included, without the blank ones at the end.
-    fn text(&self) -> (String, u32) {
-        let mut all: Vec<String> = self
-            .lines
-            .iter()
-            .map(|l| l.iter().collect::<String>().trim_end().to_string())
-            .collect();
-        let cur: String = self.cur.iter().collect::<String>().trim_end().to_string();
-        let mut total = self.total;
-        if !cur.is_empty() {
-            all.push(cur);
-            total += 1;
-        }
-        while all.last().is_some_and(String::is_empty) {
-            all.pop();
-            total = total.saturating_sub(1);
-        }
-        (all.join("\n"), total)
-    }
-}
-
-/// The blocks of one pane.
-#[derive(Default)]
-pub struct Blocks {
-    scanner: Scanner,
-    list: VecDeque<Block>,
-    /// The number the next block gets.
-    next: u32,
-    /// The block whose command is running.
-    running: Option<Plain>,
-    /// A mark has been seen: the shell is one of jw's.
-    seen: bool,
-    /// What the watchers were told so far.
-    told_seen: bool,
-    /// The line being typed at the prompt, and whether the watchers have it.
-    input: String,
-    input_told: bool,
-    /// The numbers of the blocks changed since they were last told of.
-    changed: Vec<u32>,
-}
-
-struct Block {
-    i: u32,
-    cmd: String,
-    cwd: String,
-    out: String,
-    lines: u32,
-    code: Option<i32>,
-    started: Instant,
-    ms: u64,
-    running: bool,
-    /// The program drew a full screen: no output is kept for it.
-    full: bool,
-}
-
-impl Block {
-    fn wire(&self) -> ShellBlock {
-        ShellBlock {
-            i: self.i,
-            cmd: self.cmd.clone(),
-            cwd: self.cwd.clone(),
-            out: self.out.clone(),
-            lines: self.lines,
-            code: self.code,
-            ms: if self.running {
-                self.started.elapsed().as_millis() as u64
-            } else {
-                self.ms
-            },
-            running: self.running,
-            full: self.full,
-        }
-    }
-}
-
-impl Blocks {
-    /// Whether the shell has marked a command yet.
-    pub fn known(&self) -> bool {
-        self.seen
-    }
-
-    /// What the pane printed; `alt` says its screen is the alternate one now.
-    pub fn feed(&mut self, bytes: &[u8], alt: bool) {
-        for piece in self.scanner.feed(bytes) {
-            match piece {
-                Piece::Data(d) => {
-                    if let (Some(plain), Some(b)) = (&mut self.running, self.list.back_mut())
-                        && b.running
-                        && !b.full
-                    {
-                        if alt {
-                            b.full = true;
-                            b.out.clear();
-                            *plain = Plain::default();
-                        } else {
-                            plain.push(&d);
-                        }
-                        let i = b.i;
-                        if !self.changed.contains(&i) {
-                            self.changed.push(i);
-                        }
-                    }
-                }
-                Piece::Start { cmd, cwd } => {
-                    self.seen = true;
-                    self.finish(None);
-                    let i = self.next;
-                    self.next += 1;
-                    // An agent draws its own interface: no output is kept for it.
-                    let full = runs_an_agent(&cmd);
-                    self.list.push_back(Block {
-                        i,
-                        cmd: cap(&cmd, 2000),
-                        cwd,
-                        out: String::new(),
-                        lines: 0,
-                        code: None,
-                        started: Instant::now(),
-                        ms: 0,
-                        running: true,
-                        full,
-                    });
-                    if self.list.len() > KEEP {
-                        self.list.pop_front();
-                    }
-                    self.running = Some(Plain::default());
-                    self.changed.push(i);
-                }
-                Piece::End { status } => {
-                    self.seen = true;
-                    self.finish(Some(status));
-                }
-                Piece::Line { text } => {
-                    self.seen = true;
-                    let text = cap(&text, 4000);
-                    if text != self.input {
-                        self.input = text;
-                        self.input_told = false;
-                    }
-                }
-            }
-        }
-    }
-
-    /// Ends the block that runs, with its status (`None`: it never said).
-    fn finish(&mut self, status: Option<i32>) {
-        let Some(plain) = self.running.take() else {
-            return;
-        };
-        if let Some(b) = self.list.back_mut()
-            && b.running
-        {
-            if !b.full {
-                let (out, lines) = plain.text();
-                b.out = out;
-                b.lines = lines;
-            }
-            b.running = false;
-            b.code = status;
-            b.ms = b.started.elapsed().as_millis() as u64;
-            if !self.changed.contains(&b.i) {
-                self.changed.push(b.i);
-            }
-        }
-    }
-
+/// What the watchers of a shell are told, when it changes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Told {
+    /// The shell is one of jw's (it has marked something).
+    pub known: bool,
+    /// A command runs: what is typed goes to it, not to the prompt.
+    pub running: bool,
     /// The line being typed at the prompt.
-    pub fn input(&self) -> &str {
-        &self.input
-    }
-
-    /// What to tell the watchers: (`reset`, blocks, the line being typed when
-    /// it changed). All the blocks when the shell has just shown itself to be
-    /// jw's, else the ones that changed; `None` when there is nothing.
-    pub fn news(&mut self) -> Option<(bool, Vec<ShellBlock>, Option<String>)> {
-        if self.seen && !self.told_seen {
-            self.told_seen = true;
-            self.input_told = true;
-            self.changed.clear();
-            self.refresh();
-            return Some((true, self.all(FIRST), Some(self.input.clone())));
-        }
-        let input = (!self.input_told).then(|| self.input.clone());
-        self.input_told = true;
-        if self.changed.is_empty() {
-            return input.map(|i| (false, Vec::new(), Some(i)));
-        }
-        self.refresh();
-        let changed = std::mem::take(&mut self.changed);
-        let blocks: Vec<ShellBlock> = self
-            .list
-            .iter()
-            .filter(|b| changed.contains(&b.i))
-            .map(Block::wire)
-            .collect();
-        (!blocks.is_empty() || input.is_some()).then_some((false, blocks, input))
-    }
-
-    /// The running block's output so far.
-    fn refresh(&mut self) {
-        if let (Some(plain), Some(b)) = (&self.running, self.list.back_mut())
-            && b.running
-            && !b.full
-        {
-            let (out, lines) = plain.text();
-            b.out = out;
-            b.lines = lines;
-        }
-    }
-
-    /// The last `n` blocks, for a client that starts watching.
-    pub fn all(&mut self, n: usize) -> Vec<ShellBlock> {
-        self.refresh();
-        self.list
-            .iter()
-            .skip(self.list.len().saturating_sub(n))
-            .map(Block::wire)
-            .collect()
-    }
+    pub input: String,
 }
 
-/// Whether a command line starts a known agent (`claude`, `FOO=1 codex --x`): the program is the
-/// first word that is not a variable being set.
-fn runs_an_agent(cmd: &str) -> bool {
-    cmd.split_whitespace()
-        .find(|w| !w.contains('='))
-        .is_some_and(jw_core::program::is_agent_program)
+/// The state of one pane's shell.
+#[derive(Default)]
+pub struct ShellState {
+    scanner: Scanner,
+    seen: bool,
+    running: bool,
+    input: String,
+    /// Where the prompt on screen starts, counted from the first row the pane ever
+    /// printed (the rows that scrolled away plus its row on the screen), so it keeps its place as the
+    /// screen scrolls; `None` while a command runs.
+    prompt: Option<usize>,
+    told: Option<Told>,
 }
 
-fn cap(s: &str, max: usize) -> String {
-    s.chars().take(max).collect()
+impl ShellState {
+    /// The marks and the output in what the pane printed.
+    pub fn scan(&mut self, bytes: &[u8]) -> Vec<Piece> {
+        self.scanner.feed(bytes)
+    }
+
+    pub fn start(&mut self) {
+        self.seen = true;
+        self.running = true;
+        self.prompt = None;
+    }
+
+    /// A command ended and the prompt starts at the cursor: `scrolled` rows have scrolled
+    /// away and the cursor is on screen row `row`.
+    pub fn end(&mut self, scrolled: usize, row: u16) {
+        self.seen = true;
+        self.running = false;
+        self.prompt = Some(scrolled + usize::from(row));
+    }
+
+    pub fn line(&mut self, text: String) {
+        self.seen = true;
+        self.input = text.chars().take(4000).collect();
+    }
+
+    pub fn state(&self) -> Told {
+        Told {
+            known: self.seen,
+            running: self.running,
+            input: self.input.clone(),
+        }
+    }
+
+    /// The screen row the prompt starts at, while the shell is at its prompt, when `scrolled` rows
+    /// have scrolled away: what a phone leaves out of the shell's text.
+    pub fn prompt_row(&self, scrolled: usize) -> Option<u16> {
+        self.prompt
+            .filter(|_| self.seen && !self.running)
+            .map(|p| p.saturating_sub(scrolled).min(usize::from(u16::MAX)) as u16)
+    }
+
+    /// What changed since the watchers were told, or `None`.
+    pub fn news(&mut self) -> Option<Told> {
+        let now = self.state();
+        (self.told.as_ref() != Some(&now)).then(|| {
+            self.told = Some(now.clone());
+            now
+        })
+    }
+
+    /// Takes it as told: what a client that has just asked is sent in full.
+    pub fn tell(&mut self) -> Told {
+        let now = self.state();
+        self.told = Some(now.clone());
+        now
+    }
 }
 
 #[cfg(test)]
@@ -615,12 +331,8 @@ mod tests {
         out
     }
 
-    fn start(cmd: &str, cwd: &str) -> Vec<u8> {
-        format!("\x1b]7770;start;{};{}\x07", b64(cmd), b64(cwd)).into_bytes()
-    }
-
-    fn end(status: i32) -> Vec<u8> {
-        format!("\x1b]7770;end;{status}\x07").into_bytes()
+    fn line(text: &str) -> Vec<u8> {
+        format!("\x1b]7770;line;{}\x07", b64(text)).into_bytes()
     }
 
     #[test]
@@ -634,7 +346,7 @@ mod tests {
     #[test]
     fn marks_are_found_across_reads_and_output_is_left_whole() {
         let mut sc = Scanner::default();
-        let mark = start("ls", "/w");
+        let mark = line("ls");
         // The mark is cut in two reads, in the middle of its start and of its body.
         let mut got = sc.feed(&[b"before".as_slice(), &mark[..4]].concat());
         got.extend(sc.feed(&mark[4..12]));
@@ -651,118 +363,68 @@ mod tests {
             .flatten()
             .collect();
         assert_eq!(data, b"beforeout\x1b[1mbold\x1b[0m");
-        assert!(got.contains(&Piece::Start {
-            cmd: "ls".into(),
-            cwd: "/w".into()
-        }));
+        assert!(got.contains(&Piece::Line { text: "ls".into() }));
         // A mark ended by ESC `\`, and one of another program's OSC, are told apart.
         let mut sc = Scanner::default();
-        let got = sc.feed(b"\x1b]7770;end;3\x1b\\\x1b]0;title\x07x");
+        let got = sc.feed(b"\x1b]7770;end;3\x1b\\\x1b]0;title\x07x\x1b]7770;start\x07");
         assert_eq!(got[0], Piece::End { status: 3 });
         assert_eq!(got[1], Piece::Data(b"\x1b]0;title\x07x".to_vec()));
+        assert_eq!(got[2], Piece::Start);
     }
 
     #[test]
-    fn plain_text_has_no_colours_and_a_carriage_return_overwrites() {
-        let mut p = Plain::default();
-        p.push(b"\x1b[32mok\x1b[0m line\r\nprogress 10%\rprogress 100%\r\n\x1b]0;t\x07done");
-        let (text, lines) = p.text();
-        assert_eq!(text, "ok line\nprogress 100%\ndone");
-        assert_eq!(lines, 3);
-        // A character cut between two reads is whole.
-        let mut p = Plain::default();
-        let bytes = "漢".as_bytes();
-        p.push(&bytes[..1]);
-        p.push(&bytes[1..]);
-        assert_eq!(p.text().0, "漢");
+    fn a_shell_is_known_once_it_marks_something_and_runs_between_start_and_end() {
+        let mut s = ShellState::default();
+        assert!(!s.state().known);
+        s.end(0, 3);
+        assert_eq!((s.state().known, s.state().running), (true, false));
+        s.start();
+        assert!(s.state().running);
+        s.end(5, 0);
+        assert!(!s.state().running);
     }
 
     #[test]
-    fn a_command_is_a_block_with_its_output_and_status() {
-        let mut b = Blocks::default();
-        assert!(!b.known());
-        b.feed(b"prompt % ", false);
-        b.feed(&start("cargo test", "/w"), false);
-        b.feed(b"running 2 tests\r\ntest result: ok\r\n", false);
-        // Running: the output so far.
-        let (reset, blocks, _) = b.news().unwrap();
-        assert!(reset, "the first mark shows the shell is jw's");
-        assert_eq!(blocks.len(), 1);
-        assert!(blocks[0].running);
-        assert_eq!(blocks[0].out, "running 2 tests\ntest result: ok");
-        b.feed(&end(0), false);
-        let (reset, blocks, _) = b.news().unwrap();
-        assert!(!reset);
-        assert_eq!((blocks[0].code, blocks[0].running), (Some(0), false));
-        assert_eq!(blocks[0].cwd, "/w");
-        assert_eq!(b.news(), None);
-        // A failing one, then the list.
-        b.feed(&start("false", "/w"), false);
-        b.feed(&end(1), false);
-        let all = b.all(10);
-        assert_eq!(all.iter().map(|b| b.i).collect::<Vec<_>>(), [0, 1]);
-        assert_eq!(all[1].code, Some(1));
+    fn the_prompt_row_keeps_its_place_as_the_screen_scrolls() {
+        let mut s = ShellState::default();
+        // Not a shell of jw's yet: nothing to leave out.
+        assert_eq!(s.prompt_row(0), None);
+        // The prompt starts at screen row 40 with 10 rows scrolled away.
+        s.end(10, 40);
+        assert_eq!(s.prompt_row(10), Some(40));
+        // The screen scrolled 3 more rows: the same prompt is now 3 rows higher.
+        assert_eq!(s.prompt_row(13), Some(37));
+        // Scrolled past the top: the first row.
+        assert_eq!(s.prompt_row(500), Some(0));
+        // A command runs: no prompt is left out, so its prompt and what it prints show.
+        s.start();
+        assert_eq!(s.prompt_row(10), None);
     }
 
     #[test]
-    fn the_line_being_typed_is_news_when_it_changes() {
-        let mut b = Blocks::default();
-        b.feed(b"\x1b]7770;line;bHM=\x07", false);
-        let (reset, blocks, input) = b.news().unwrap();
-        assert!(reset && blocks.is_empty());
-        assert_eq!(input.as_deref(), Some("ls"));
-        assert_eq!(b.input(), "ls");
-        assert_eq!(b.news(), None);
-        // Typing more is news with no block; the same line again is not.
-        b.feed(b"\x1b]7770;line;bHMgLWw=\x07", false);
-        assert_eq!(b.news(), Some((false, Vec::new(), Some("ls -l".into()))));
-        b.feed(b"\x1b]7770;line;bHMgLWw=\x07", false);
-        assert_eq!(b.news(), None);
-        // A cleared line is news too.
-        b.feed(b"\x1b]7770;line;\x07", false);
-        assert_eq!(b.news(), Some((false, Vec::new(), Some(String::new()))));
-    }
-
-    #[test]
-    fn a_program_that_draws_the_whole_screen_keeps_no_output() {
-        let mut b = Blocks::default();
-        b.feed(&start("nvim a", "/w"), false);
-        b.feed(b"\x1b[?1049h\x1b[2J garbage", true);
-        b.feed(&end(0), true);
-        let blocks = b.all(1);
-        assert!(blocks[0].full);
-        assert_eq!(blocks[0].out, "");
-    }
-
-    #[test]
-    fn an_agent_started_from_a_shell_keeps_no_output() {
-        for cmd in [
-            "claude",
-            "claude --resume abc",
-            "FOO=1 claude",
-            "/usr/local/bin/claude -p x",
-        ] {
-            let mut b = Blocks::default();
-            b.feed(&start(cmd, "/w"), false);
-            b.feed(b"\x1b[2J lots of its own interface", false);
-            let blocks = b.all(1);
-            assert!(blocks[0].full, "{cmd}");
-            assert_eq!(blocks[0].out, "");
-        }
-        let mut b = Blocks::default();
-        b.feed(&start("echo claude", "/w"), false);
-        b.feed(b"claude\r\n", false);
-        assert!(!b.all(1)[0].full);
-    }
-
-    #[test]
-    fn a_start_with_no_end_closes_the_one_before() {
-        let mut b = Blocks::default();
-        b.feed(&start("one", "/w"), false);
-        b.feed(&start("two", "/w"), false);
-        let all = b.all(10);
-        assert_eq!((all[0].running, all[0].code), (false, None));
-        assert!(all[1].running);
+    fn the_line_being_typed_and_the_state_are_news_when_they_change() {
+        let mut s = ShellState::default();
+        assert_eq!(s.news().map(|t| t.known), Some(false));
+        assert_eq!(s.news(), None);
+        s.line("ls".into());
+        let n = s.news().unwrap();
+        assert_eq!((n.known, n.input.as_str()), (true, "ls"));
+        assert_eq!(s.news(), None);
+        // Typing more is news; the same line again is not.
+        s.line("ls -l".into());
+        assert_eq!(s.news().unwrap().input, "ls -l");
+        s.line("ls -l".into());
+        assert_eq!(s.news(), None);
+        // A command starting is news, and so is the line cleared.
+        s.start();
+        assert!(s.news().unwrap().running);
+        s.end(0, 0);
+        s.line(String::new());
+        let n = s.news().unwrap();
+        assert_eq!((n.running, n.input.as_str()), (false, ""));
+        // A client that asks is told in full and that counts as told.
+        assert_eq!(s.tell().input, "");
+        assert_eq!(s.news(), None);
     }
 
     #[test]

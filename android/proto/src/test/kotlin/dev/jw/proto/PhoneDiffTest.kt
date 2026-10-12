@@ -88,7 +88,7 @@ class PhoneDiffTest {
 
     @Test fun readyPalettesBringTheDiffColours() {
         val r = Control.parse(
-            """{"t":"ready","bridge":1,"protocol":19,"palettes":[{"name":"One Dark","dark":true,"colors":{"add_bg":"#112233","del_bg":"nope"}}]}""",
+            """{"t":"ready","bridge":1,"protocol":20,"palettes":[{"name":"One Dark","dark":true,"colors":{"add_bg":"#112233","del_bg":"nope"}}]}""",
         ) as ServerMessage.Ready
         assertEquals("#112233", r.palettes.dark["add_bg"])
         assertEquals(Palettes.FALLBACK.dark["del_bg"], r.palettes.dark["del_bg"])

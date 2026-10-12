@@ -15,7 +15,7 @@ pub type PaneId = u64;
 
 /// Bumped whenever a message changes shape: a client and a daemon from
 /// different builds refuse each other instead of misreading (RISK-14).
-pub const PROTOCOL: u32 = 19;
+pub const PROTOCOL: u32 = 20;
 
 /// A run of cells of one row that share a style: its first column, its
 /// text (a wide character counts two columns; the cells after it are not
@@ -42,25 +42,6 @@ pub struct ChatBlock {
     pub result: Option<String>,
     pub body: Option<String>,
     pub error: bool,
-}
-
-/// One command of a shell and its output (mobile REQ-92). `out` is its output
-/// as plain text, the last lines of it (`lines` counts them all); `code` is
-/// its exit status once it ended; `ms` how long it ran (so far, while
-/// `running`); `full` says a program drew the whole screen (nvim, htop), which
-/// keeps no output. `i` numbers the pane's commands from its start: a block
-/// with a number the client has is that block again, changed.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct ShellBlock {
-    pub i: u32,
-    pub cmd: String,
-    pub cwd: String,
-    pub out: String,
-    pub lines: u32,
-    pub code: Option<i32>,
-    pub ms: u64,
-    pub running: bool,
-    pub full: bool,
 }
 
 /// A pane to start. `cmd` runs through `sh -c`; `None` starts `$SHELL`.
@@ -126,8 +107,8 @@ pub enum ClientMsg {
     ChatUnwatch {
         pane: PaneId,
     },
-    /// From now on this connection gets the commands of the shell in `pane`
-    /// as `Shell`: the last blocks at once, then each change.
+    /// From now on this connection gets what the shell in `pane` says of
+    /// itself as `Shell`: at once, then each change.
     ShellWatch {
         pane: PaneId,
     },
@@ -415,6 +396,10 @@ pub enum DaemonMsg {
         /// The program asked for application cursor keys: the arrows are `ESC O A`.
         app_cursor: bool,
         cursor: Option<(u16, u16)>,
+        /// The row the shell's prompt starts at, while it waits at it: from there down is the
+        /// prompt and the line being typed, which a phone leaves out (its input is the line).
+        /// `None` for anything but a shell of jw's at its prompt.
+        prompt: Option<u16>,
         lines: Vec<Vec<Run>>,
     },
     /// The conversation of the agent in `pane`: `reset` says these blocks are
@@ -433,17 +418,15 @@ pub enum DaemonMsg {
         reset: bool,
         blocks: Vec<ChatBlock>,
     },
-    /// The commands of the shell in `pane`: `reset` says these blocks are all
-    /// the client has, else they are the ones new or changed. `known` is false
-    /// while the shell has marked no command (it is not one jw started, or
-    /// has not run one yet): the pane is then drawn as text.
+    /// What the shell in `pane` says of itself, when it changes (and in full to a client that asks):
+    /// `known` is false while it has marked nothing (it is not one jw started), and the pane is then
+    /// plain text; `running` says a command runs, so what is typed goes to it; `input` is the line
+    /// being typed at the prompt, when it is new: the terminal's input, which a phone's input shows
+    /// as its own.
     Shell {
         pane: PaneId,
         known: bool,
-        reset: bool,
-        blocks: Vec<ShellBlock>,
-        /// The line being typed at the prompt, when it is new: the text of the
-        /// terminal's input, which a phone's input shows as its own.
+        running: bool,
         input: Option<String>,
     },
     /// The answer to `TextHistory`: rows of the scrollback, oldest first.

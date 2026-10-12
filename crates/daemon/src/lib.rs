@@ -355,8 +355,8 @@ struct PaneState {
     agent: Option<AgentState>,
     /// Its screen changed since the last `Text` went to the phones watching it.
     text_dirty: bool,
-    /// The commands of its shell, when the shell marks them (mobile REQ-92).
-    blocks: shell::Blocks,
+    /// What its shell says of itself, when the shell is one of jw's (mobile REQ-92).
+    shell: shell::ShellState,
 }
 
 /// Catches what a pane's program says beyond its screen: the window title,
@@ -485,6 +485,23 @@ struct Sub {
 }
 
 impl PaneState {
+    /// Feeds what the pane printed to its screen. The marks its shell prints are taken out of
+    /// what the screen gets, and where the screen is when each comes says where the prompt starts.
+    fn process(&mut self, bytes: &[u8]) {
+        for piece in self.shell.scan(bytes) {
+            match piece {
+                shell::Piece::Data(d) => self.parser.process(&d),
+                shell::Piece::Start => self.shell.start(),
+                shell::Piece::End { .. } => {
+                    let row = self.parser.screen().cursor_position().0;
+                    let scrolled = scrolled_rows(&mut self.parser);
+                    self.shell.end(scrolled, row);
+                }
+                shell::Piece::Line { text } => self.shell.line(text),
+            }
+        }
+    }
+
     /// Sends to every subscriber, dropping the ones whose client went away.
     /// `Output` goes to the clients that draw a terminal, `Text` to the ones
     /// that asked for `TextView`.
@@ -551,8 +568,19 @@ fn screen_bytes(st: &PaneState) -> Vec<u8> {
     bytes
 }
 
+/// How many rows have scrolled off the top of the screen into its scrollback.
+fn scrolled_rows(parser: &mut vt100::Parser<Titles>) -> usize {
+    let screen = parser.screen_mut();
+    screen.set_scrollback(usize::MAX);
+    let n = screen.scrollback();
+    screen.set_scrollback(0);
+    n
+}
+
 /// The pane's screen as the styled rows a `TextView` client draws.
-fn text_screen(id: PaneId, st: &PaneState) -> DaemonMsg {
+fn text_screen(id: PaneId, st: &mut PaneState) -> DaemonMsg {
+    let scrolled = scrolled_rows(&mut st.parser);
+    let prompt = st.shell.prompt_row(scrolled);
     let screen = st.parser.screen();
     let (rows, cols) = screen.size();
     DaemonMsg::Text {
@@ -562,6 +590,7 @@ fn text_screen(id: PaneId, st: &PaneState) -> DaemonMsg {
         alt: screen.alternate_screen(),
         app_cursor: screen.application_cursor(),
         cursor: (!screen.hide_cursor()).then(|| screen.cursor_position()),
+        prompt,
         lines: (0..rows).map(|r| runs_of(screen, r, cols)).collect(),
     }
 }
@@ -1021,7 +1050,7 @@ impl Daemon {
         let Ok(pane) = self.pane(id) else { return };
         let mut st = lock(&pane.state);
         if tx.text() {
-            let _ = tx.send(text_screen(id, &st));
+            let _ = tx.send(text_screen(id, &mut st));
         } else if tx.split() {
             for m in split_snapshot(id, &pane, &st) {
                 let _ = tx.send(m);
@@ -1515,31 +1544,23 @@ impl Daemon {
         Ok(())
     }
 
-    /// Starts `client` on the commands of the shell in `id`: the blocks it has
-    /// now, then each change (`shell_poll`).
+    /// Starts `client` on what the shell in `id` says of itself: all of it now, then each
+    /// change (`shell_poll`).
     fn shell_watch(&self, client: u64, tx: &Tx, id: PaneId) -> Result<()> {
         let pane = self.pane(id)?;
-        let (known, blocks, input) = {
-            let mut st = lock(&pane.state);
-            (
-                st.blocks.known(),
-                st.blocks.all(shell::FIRST),
-                st.blocks.input().to_string(),
-            )
-        };
+        let told = lock(&pane.state).shell.tell();
         let _ = tx.send(DaemonMsg::Shell {
             pane: id,
-            known,
-            reset: true,
-            blocks,
-            input: Some(input),
+            known: told.known,
+            running: told.running,
+            input: Some(told.input),
         });
         subscribe(lock(&self.shells).entry(id).or_default(), client, tx);
         Ok(())
     }
 
-    /// Tells the watchers of each shell what its commands gained; a pane with
-    /// no watcher is left alone.
+    /// Tells the watchers of each shell what changed in it; a pane with no watcher is left
+    /// alone.
     fn shell_poll(&self) {
         let watched: Vec<PaneId> = {
             let mut shells = lock(&self.shells);
@@ -1548,16 +1569,13 @@ impl Daemon {
         };
         for id in watched {
             let Ok(pane) = self.pane(id) else { continue };
-            let news = lock(&pane.state).blocks.news();
-            let Some((reset, blocks, input)) = news else {
-                continue;
-            };
+            let news = lock(&pane.state).shell.news();
+            let Some(told) = news else { continue };
             let msg = DaemonMsg::Shell {
                 pane: id,
-                known: true,
-                reset,
-                blocks,
-                input,
+                known: told.known,
+                running: told.running,
+                input: Some(told.input),
             };
             if let Some(subs) = lock(&self.shells).get_mut(&id) {
                 subs.retain(|s| s.tx.send(msg.clone()).is_ok());
@@ -1609,7 +1627,7 @@ impl Daemon {
                 continue;
             }
             st.text_dirty = false;
-            let msg = text_screen(id, &st);
+            let msg = text_screen(id, &mut st);
             st.broadcast(&msg);
         }
     }
@@ -1770,7 +1788,7 @@ impl Daemon {
                 ring: Ring::default(),
                 agent: None,
                 text_dirty: false,
-                blocks: shell::Blocks::default(),
+                shell: shell::ShellState::default(),
             }),
         });
         if let Some(mut bytes) = history {
@@ -1807,12 +1825,10 @@ impl Daemon {
                     Ok(0) => break,
                     Ok(n) => {
                         let mut st = lock(&pane.state);
-                        st.parser.process(&buf[..n]);
+                        st.process(&buf[..n]);
                         st.ring.push(&buf[..n]);
                         st.last_output = Instant::now();
                         st.text_dirty = true;
-                        let alt = st.parser.screen().alternate_screen();
-                        st.blocks.feed(&buf[..n], alt);
                         st.broadcast(&DaemonMsg::Output {
                             pane: id,
                             bytes: buf[..n].to_vec(),

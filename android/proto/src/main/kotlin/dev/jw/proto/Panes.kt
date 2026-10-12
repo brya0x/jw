@@ -31,16 +31,6 @@ class ChatBlock(
     val result: String?, val body: String?, val error: Boolean,
 )
 
-/**
- * One command of a shell (`ShellBlock` in `proto.rs`): [out] is its output as plain text (the last lines, [lines]
- * counts them all), [code] its exit status once it ended, [ms] how long it ran (so far while [running]), and [full]
- * says a program drew the whole screen, which keeps no output. [i] numbers the pane's commands from its start.
- */
-class ShellBlock(
-    val i: Int, val cmd: String, val cwd: String, val out: String, val lines: Int, val code: Int?, val ms: Long,
-    val running: Boolean, val full: Boolean,
-)
-
 /** What a watched pane sends: its screen as styled rows, the rows above it on request, its size and its end. */
 sealed interface PaneEvent {
     val pane: Long
@@ -58,6 +48,8 @@ sealed interface PaneEvent {
     class Text(
         override val pane: Long, val cols: Int, val rows: Int, val alt: Boolean, val appCursor: Boolean,
         val cursor: Pair<Int, Int>?, val lines: List<List<TextRun>>,
+        /** The row the shell's prompt starts at, while it waits at it: from there down is left out. */
+        val prompt: Int? = null,
     ) : PaneEvent {
         override fun toString() = "Text(pane=$pane, ${cols}x$rows)"
     }
@@ -75,14 +67,12 @@ sealed interface PaneEvent {
     }
 
     /**
-     * The commands of the shell in the pane (`DaemonMsg::Shell`): `reset` says these are all the blocks held, else the
-     * ones new or changed. `known` is false while the shell has marked no command (the pane is drawn as text); `input`
-     * is the line being typed at the prompt, when it is new.
+     * What the shell in the pane says of itself (`DaemonMsg::Shell`), when it changes: `known` is false while it has marked
+     * nothing (it is not one jw started: the pane is plain text), `running` says a command runs, so what is typed goes
+     * to it, and `input` is the line being typed at the prompt, when it is new.
      */
-    class Shell(
-        override val pane: Long, val known: Boolean, val reset: Boolean, val blocks: List<ShellBlock>, val input: String?,
-    ) : PaneEvent {
-        override fun toString() = "Shell(pane=$pane, known=$known, ${blocks.size} blocks)"
+    class Shell(override val pane: Long, val known: Boolean, val running: Boolean, val input: String?) : PaneEvent {
+        override fun toString() = "Shell(pane=$pane, known=$known, running=$running)"
     }
 
     /** The answer to [Panes.textHistoryFrame]: rows of the scrollback, oldest first. */
@@ -130,6 +120,7 @@ object Panes {
                 PaneEvent.Text(
                     pane, c, r, (o["alt"] as? JsonPrimitive)?.booleanOrNull ?: false,
                     (o["app_cursor"] as? JsonPrimitive)?.booleanOrNull ?: false, cursor, lines,
+                    (o["prompt"] as? JsonPrimitive)?.intOrNull,
                 )
             }
             "Chat" -> {
@@ -147,22 +138,10 @@ object Panes {
                     (o["title"] as? JsonPrimitive)?.contentOrNull, (o["reset"] as? JsonPrimitive)?.booleanOrNull ?: false, blocks,
                 )
             }
-            "Shell" -> {
-                val blocks = (o["blocks"] as? JsonArray)?.takeIf { it.size <= MAX_CHAT_BLOCKS }?.map { b ->
-                    val bo = b as? JsonObject ?: return null
-                    fun str(k: String) = (bo[k] as? JsonPrimitive)?.contentOrNull
-                    fun num(k: String) = (bo[k] as? JsonPrimitive)?.longOrNull
-                    ShellBlock(
-                        (num("i") ?: return null).toInt(), str("cmd") ?: "", str("cwd") ?: "", str("out") ?: "",
-                        (num("lines") ?: 0).toInt(), (bo["code"] as? JsonPrimitive)?.intOrNull, num("ms") ?: 0,
-                        (bo["running"] as? JsonPrimitive)?.booleanOrNull ?: false, (bo["full"] as? JsonPrimitive)?.booleanOrNull ?: false,
-                    )
-                } ?: return null
-                PaneEvent.Shell(
-                    pane, (o["known"] as? JsonPrimitive)?.booleanOrNull ?: false, (o["reset"] as? JsonPrimitive)?.booleanOrNull ?: false,
-                    blocks, (o["input"] as? JsonPrimitive)?.contentOrNull,
-                )
-            }
+            "Shell" -> PaneEvent.Shell(
+                pane, (o["known"] as? JsonPrimitive)?.booleanOrNull ?: false, (o["running"] as? JsonPrimitive)?.booleanOrNull ?: false,
+                (o["input"] as? JsonPrimitive)?.contentOrNull,
+            )
             "TextHistory" -> PaneEvent.History(pane, rows(o["lines"], MAX_HISTORY_ROWS) ?: return null)
             "Exited" -> PaneEvent.Exited(pane, (o["status"] as? JsonPrimitive)?.intOrNull ?: return null)
             else -> null

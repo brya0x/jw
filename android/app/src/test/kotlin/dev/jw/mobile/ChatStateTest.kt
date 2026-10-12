@@ -53,22 +53,16 @@ class ChatStateTest {
         assertEquals("otro", ChatState.merge(b, event(false, name = "otro")).name)
     }
 
-    private fun cmd(i: Int, out: String = "", code: Int? = null, running: Boolean = false) =
-        dev.jw.proto.ShellBlock(i, "cmd$i", "/w", out, 0, code, 10, running, false)
-
-    @Test fun theBlocksOfAShellMergeByNumberAndTheLineBeingTypedFollows() {
-        val a = ShellState.merge(null, PaneEvent.Shell(7, true, true, listOf(cmd(0, running = true)), "ls"))
-        assertEquals(listOf(0), a.blocks.map { it.i })
-        assertEquals("ls", a.input)
-        // The running command ends: same number, replaced; the line is not news, so it stays.
-        val b = ShellState.merge(a, PaneEvent.Shell(7, true, false, listOf(cmd(0, "ok", 0), cmd(1)), null))
-        assertEquals(listOf(0, 1), b.blocks.map { it.i })
-        assertEquals(0, b.blocks[0].code)
-        assertEquals("ls", b.input)
+    @Test fun whatAShellSaysOfItselfFollowsAndTheLineStaysWhenItIsNoNews() {
+        val a = ShellState.merge(null, PaneEvent.Shell(7, true, false, "ls"))
+        assertEquals(Triple(true, false, "ls"), Triple(a.known, a.running, a.input))
+        // A command starts: the line is not news, so it stays.
+        val b = ShellState.merge(a, PaneEvent.Shell(7, true, true, null))
+        assertEquals(Triple(true, true, "ls"), Triple(b.known, b.running, b.input))
         // The line cleared is news too.
-        assertEquals("", ShellState.merge(b, PaneEvent.Shell(7, true, false, emptyList(), "")).input)
+        assertEquals("", ShellState.merge(b, PaneEvent.Shell(7, true, false, "")).input)
         // A shell that is not marked is known false.
-        assertEquals(false, ShellState.merge(null, PaneEvent.Shell(7, false, true, emptyList(), "")).known)
+        assertEquals(false, ShellState.merge(null, PaneEvent.Shell(7, false, false, "")).known)
     }
 
     @Test fun aPaneThatIsNoClaudeSessionIsKnownFalse() {

@@ -2,7 +2,6 @@ package dev.jw.mobile
 
 import dev.jw.proto.PaneEvent
 import dev.jw.proto.PaneInfo
-import dev.jw.proto.ShellBlock
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -13,9 +12,8 @@ import org.junit.Test
 class PaneKindTest {
     private fun pane(role: String, fg: String?) = PaneInfo(1, "s", role, null, fg, false, false, null, null)
     private fun chat(known: Boolean) = ChatState.merge(null, PaneEvent.Chat(1, known, null, null, true, emptyList()))
-    private fun shell(vararg blocks: ShellBlock, known: Boolean = true, input: String? = "") =
-        ShellState.merge(null, PaneEvent.Shell(1, known, true, blocks.toList(), input))
-    private fun running() = ShellBlock(0, "cargo watch", "/w", "", 0, null, 0, true, false)
+    private fun shell(known: Boolean = true, running: Boolean = false, input: String? = "") =
+        ShellState.merge(null, PaneEvent.Shell(1, known, running, input))
 
     @Test fun aShellIsText() {
         assertEquals(PaneKind.Text, PaneKinds.of(pane("shell", "zsh"), null))
@@ -48,7 +46,7 @@ class PaneKindTest {
         assertNull(PaneKinds.input(p, null) { "x" })
         assertFalse(PaneKinds.live(PaneKind.Text, null))
         // A command that runs has no line: what is typed goes to it when sent.
-        assertNull(PaneKinds.input(p, shell(running(), input = "old")) { "x" })
+        assertNull(PaneKinds.input(p, shell(running = true, input = "old")) { "x" })
     }
 
     @Test fun anAgentsInputIsTheBoxOnItsScreenAtEveryStep() {

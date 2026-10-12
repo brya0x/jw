@@ -52,7 +52,7 @@ class FakeBridge {
 
     companion object {
         const val DEVICE = "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0"
-        fun ready(protocol: Int = 19, ro: Boolean = false) =
+        fun ready(protocol: Int = 20, ro: Boolean = false) =
             """{"t":"ready","bridge":1,"protocol":$protocol,"read_only":$ro}"""
         fun error(code: String) = """{"t":"error","code":"$code","msg":"m"}"""
         /** A kind-0 frame, as the relay carries `Panes`. */

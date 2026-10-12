@@ -2196,8 +2196,62 @@ fn a_listing_carries_the_name_the_user_gave_a_pane() {
     }
 }
 
+/// The latest of what a pane's shell and screen have said, as the messages come.
+#[derive(Default)]
+struct Seen {
+    known: bool,
+    running: bool,
+    input: String,
+    prompt: Option<u16>,
+    rows: Vec<String>,
+}
+
+impl Seen {
+    /// Reads messages for `pane` until `want` is true of what has been seen so far.
+    fn until(&mut self, c: &mut Client, pane: PaneId, what: &str, want: impl Fn(&Seen) -> bool) {
+        let deadline = Instant::now() + TIMEOUT;
+        while !want(self) {
+            assert!(
+                Instant::now() < deadline,
+                "{what}: known {} running {} input {:?} prompt {:?} rows {:?}",
+                self.known,
+                self.running,
+                self.input,
+                self.prompt,
+                self.rows
+            );
+            c.set_read_timeout(Some(Duration::from_millis(500)))
+                .unwrap();
+            match c.recv() {
+                Ok(Some(DaemonMsg::Shell {
+                    pane: p,
+                    known,
+                    running,
+                    input,
+                })) if p == pane => {
+                    self.known = known;
+                    self.running = running;
+                    if let Some(i) = input {
+                        self.input = i;
+                    }
+                }
+                Ok(Some(DaemonMsg::Text {
+                    pane: p,
+                    prompt,
+                    lines,
+                    ..
+                })) if p == pane => {
+                    self.prompt = prompt;
+                    self.rows = lines.iter().map(|l| row_text(l)).collect();
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 #[test]
-fn a_zsh_jw_started_marks_its_commands_as_blocks() {
+fn a_zsh_jw_started_tells_its_state_its_line_and_where_its_prompt_starts() {
     if !Path::new("/bin/zsh").exists() {
         return;
     }
@@ -2210,6 +2264,7 @@ fn a_zsh_jw_started_marks_its_commands_as_blocks() {
         &[("HOME", home.path()), ("SHELL", Path::new("/bin/zsh"))],
     );
     let mut c = d.client();
+    c.send(&ClientMsg::TextView).unwrap();
     c.send(&ClientMsg::Spawn {
         stream: "s".into(),
         role: "shell".into(),
@@ -2217,81 +2272,71 @@ fn a_zsh_jw_started_marks_its_commands_as_blocks() {
         cwd: work.path().to_path_buf(),
         env: BTreeMap::new(),
         cols: 80,
-        rows: 10,
+        rows: 12,
     })
     .unwrap();
     let pane = loop {
         match recv(&mut c) {
             DaemonMsg::Spawned { pane } => break pane,
-            DaemonMsg::Output { .. } => {}
+            DaemonMsg::Output { .. } | DaemonMsg::Text { .. } => {}
             other => panic!("want Spawned, got {other:?}"),
         }
     };
     c.send(&ClientMsg::ShellWatch { pane }).unwrap();
-    // The prompt is marked once it is shown: from then on the shell is known.
-    let deadline = Instant::now() + TIMEOUT;
-    let mut known = false;
-    while !known {
-        assert!(
-            Instant::now() < deadline,
-            "the shell never marked its prompt"
-        );
-        if let DaemonMsg::Shell { known: k, .. } = recv(&mut c) {
-            known = k;
-        }
-    }
+    let mut seen = Seen::default();
+    let out = |s: &Seen| s.rows.iter().position(|r| r.contains("hello 42 ok none"));
+    // The prompt is marked once it is shown: from then on the shell is known and idle, and the
+    // screen says where the prompt starts, which a phone leaves out.
+    seen.until(&mut c, pane, "the shell never marked its prompt", |s| {
+        s.known && !s.running && s.prompt.is_some()
+    });
+    assert_eq!(
+        seen.prompt,
+        Some(0),
+        "an empty screen: the prompt is its first row"
+    );
+
     // What is typed at the prompt, before Enter, is the shell's line: the text a phone's input mirrors.
     c.send(&ClientMsg::Input {
         pane,
         bytes: b"echo par".to_vec(),
     })
     .unwrap();
-    let deadline = Instant::now() + TIMEOUT;
-    loop {
-        assert!(Instant::now() < deadline, "the typed line never showed");
-        if let DaemonMsg::Shell { input, .. } = recv(&mut c)
-            && input.as_deref() == Some("echo par")
-        {
-            break;
-        }
-    }
+    seen.until(&mut c, pane, "the typed line never showed", |s| {
+        s.input == "echo par"
+    });
     // Ctrl-U clears it; the line is empty again.
     c.send(&ClientMsg::Input {
         pane,
         bytes: vec![0x15],
     })
     .unwrap();
-    let deadline = Instant::now() + TIMEOUT;
-    loop {
-        assert!(Instant::now() < deadline, "the cleared line never showed");
-        if let DaemonMsg::Shell { input, .. } = recv(&mut c)
-            && input.as_deref() == Some("")
-        {
-            break;
-        }
-    }
+    seen.until(&mut c, pane, "the cleared line never showed", |s| {
+        s.input.is_empty()
+    });
+
+    // A command that runs: no prompt is left out (the prompt and the command are part of what
+    // is on screen), and it is running. It also shows the shell has no ZDOTDIR the user did not
+    // have and ran the user's .zshrc.
     c.send(&ClientMsg::Input {
         pane,
-        bytes: b"echo hello $((6*7)) $JW_PROBE ${ZDOTDIR-none}\n".to_vec(),
+        bytes: b"echo hello $((6*7)) $JW_PROBE ${ZDOTDIR-none}; sleep 2\n".to_vec(),
     })
     .unwrap();
-    let deadline = Instant::now() + TIMEOUT;
-    let block = loop {
-        assert!(Instant::now() < deadline, "no finished block");
-        if let DaemonMsg::Shell { blocks, .. } = recv(&mut c)
-            && let Some(b) = blocks
-                .into_iter()
-                .find(|b| !b.running && b.cmd.starts_with("echo"))
-        {
-            break b;
-        }
-    };
-    assert_eq!(block.cmd, "echo hello $((6*7)) $JW_PROBE ${ZDOTDIR-none}");
-    // And the shell is left without a ZDOTDIR, as the user had none.
-    assert_eq!(block.out, "hello 42 ok none");
-    assert_eq!(block.code, Some(0));
-    assert_eq!(
-        std::fs::canonicalize(&block.cwd).unwrap(),
-        std::fs::canonicalize(work.path()).unwrap()
+    seen.until(&mut c, pane, "the command never showed running", |s| {
+        s.running && s.prompt.is_none() && out(s).is_some()
+    });
+
+    // It ends: the new prompt starts right under the output, and from its row down is left out.
+    seen.until(&mut c, pane, "no prompt row after the command", |s| {
+        !s.running
+            && s.prompt
+                .is_some_and(|p| out(s).is_some_and(|o| usize::from(p) > o))
+    });
+    let (prompt, output) = (usize::from(seen.prompt.unwrap()), out(&seen).unwrap());
+    assert!(
+        prompt > output && prompt <= output + 2,
+        "output at {output}, prompt at {prompt}: {:?}",
+        seen.rows
     );
 }

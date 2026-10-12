@@ -42,7 +42,7 @@ class SessionTest {
         assertEquals(6, pairing.code.length)
         val c = s.await<UiState.Connected>()
         assertTrue(c.readOnly)
-        assertEquals(19, c.protocol)
+        assertEquals(20, c.protocol)
         assertEquals(FakeBridge.DEVICE, store.device!!.device)
         val hello = fake.received.take()
         assertTrue(hello.contains(""""t":"pair"""") && hello.contains(token) && hello.contains(pairing.code))
@@ -114,11 +114,11 @@ class SessionTest {
 
     @Test fun protocolMismatchDoesNotAttachOrRetry() = runBlocking<Unit> {
         store.device = StoredDevice("example.trycloudflare.com", FakeBridge.DEVICE)
-        fake.enqueue { _, ws -> ws.send(FakeBridge.ready(protocol = 20)) }
+        fake.enqueue { _, ws -> ws.send(FakeBridge.ready(protocol = 21)) }
         val s = session()
         s.start()
         val m = s.await<UiState.Mismatch>()
-        assertEquals(20, m.pc)
+        assertEquals(21, m.pc)
         kotlinx.coroutines.delay(300)
         assertEquals(1, fake.server.requestCount)
         assertTrue(s.state.value is UiState.Mismatch)
