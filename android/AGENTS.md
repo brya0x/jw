@@ -8,7 +8,7 @@ Spec: `docs/specs/mobile.md` (UI: `docs/specs/mobile-prototype.html`). Notes for
 ```sh
 export ANDROID_HOME=~/Library/Android/sdk   # or a git-ignored local.properties with sdk.dir=...
 ./gradlew assembleDebug
-./gradlew :proto:test :app:testDebugUnitTest
+./gradlew :proto:test :term:test :app:testDebugUnitTest
 ```
 
 On the phone (only our own package; connectedDebugAndroidTest uninstalls the app after, so reinstall the debug APK):
@@ -29,6 +29,11 @@ JDK 17, Gradle wrapper 8.14.3, AGP 8.13.0, Kotlin 2.2.21, minSdk 26, compileSdk 
 - `proto/` plain Kotlin/JVM, no Android classes (portable to iOS later): `Frame.kt` (codec, `PROTOCOL`),
   `Control.kt` (messages, `ErrorCode`, palettes with the One Dark/Light fallback), `Qr.kt`, `Reconnect.kt`
   (pure policy: no clock, no sleeping).
+- `term/` plain Kotlin/JVM, the VT emulator (`Terminal`, a grid of `Line`s, `Width`): bytes in, cells out, no Android
+  classes. Its tests feed streams to it and compare with the screen the daemon's own vt100 leaves
+  (`src/test/resources/golden`; `regen.sh` rebuilds the expected files with `crates/jw/examples/cells.rs`). What
+  vt100 lacks or does differently from xterm (insert mode, tab stops, line drawing, REP, no-wrap, erase attributes) is
+  in `XtermTest`. It never replies to a program: the daemon answers those.
 - `app/` `Bridge.kt` (OkHttp WebSocket as a `Flow`), `Session.kt` (pairing, reconnect, the `UiState` the screens show),
   `KeystoreTokenStore.kt` (AES-GCM, key in the Android Keystore), `Scanner.kt` (CameraX + ZXing), `Theme.kt`,
   `MainActivity.kt` (screens). Tests use `MockWebServer` as a fake bridge (`Fakes.kt`).

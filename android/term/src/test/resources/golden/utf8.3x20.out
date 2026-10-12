@@ -1,0 +1,6 @@
+size 3 20
+cursor 0 19 hidden=0
+modes alt=0 appcursor=0 appkeypad=0 paste=0 mouse=none/default
+row 0 |café üñ € 한글 ✓ 😀|
+row 1 ||
+row 2 ||

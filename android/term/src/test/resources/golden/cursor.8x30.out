@@ -1,0 +1,11 @@
+size 8 30
+cursor 7 5 hidden=0
+modes alt=0 appcursor=0 appkeypad=0 paste=0 mouse=none/default
+row 0 |  HVPt 2,5|
+row 1 |next@rowtab     tab2<-bt|
+row 2 |row4|
+row 3 |       dn2     back|
+row 4 ||
+row 5 |col1     saved|
+row 6 |                             c|
+row 7 |orner|

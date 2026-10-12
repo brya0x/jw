@@ -13,4 +13,4 @@ dependencyResolutionManagement {
     }
 }
 rootProject.name = "jw-mobile"
-include(":proto", ":app")
+include(":proto", ":term", ":app")
