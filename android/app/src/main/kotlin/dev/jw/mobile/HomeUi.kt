@@ -72,6 +72,13 @@ class Nav {
     /** The workspace whose changes the diff tab shows: the last one entered, or the one picked there (REQ-25). */
     var diffWs by mutableStateOf<String?>(null)
 
+    /** The PC's file tree (REQ-83): the folder on screen, whose workspace it was opened from, and the file in the viewer. */
+    var filesPath by mutableStateOf<String?>(null)
+    var filesWs by mutableStateOf("")
+    var viewerPath by mutableStateOf<String?>(null)
+
+    fun showFiles(w: Workspace) { filesWs = w.name; filesPath = w.path }
+
     /** Opens `id`'s changes. */
     fun showChanges(id: String) { diffWs = id; tab = Tab.Diff; open = null }
 }
@@ -172,6 +179,8 @@ fun ConnectedApp(state: UiState.Connected, session: Session, nav: Nav, answers: 
     Box(Modifier.fillMaxSize()) {
         val open = nav.open?.let { id -> model.items.firstOrNull { it.id == id } }
         when {
+            nav.viewerPath != null -> FileViewerScreen(session, nav, state)
+            nav.filesPath != null -> FilesScreen(session, nav, nav.filesWs, state)
             open != null -> WorkspaceScreen(open, model, state, session, nav, answers, now)
             nav.tab == Tab.Home -> HomeScreen(model, state, session, nav, now, waiting)
             nav.tab == Tab.Avisos -> AvisosScreen(model, state, session, nav, now, waiting)

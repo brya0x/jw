@@ -57,6 +57,9 @@ class TouchTargetsTest {
       {"path":"b.rs","status":"added","added":1,"deleted":0,"untracked":false,"hunks":[]}]}"""
     private val commits = """{"t":"commits","ws":"w1","commits":[{"sha":"0123456789abcdef","short":"0123456","subject":"a commit","when":1}],"more":false,"no_base":false}"""
 
+    private val ls = """{"t":"ls","req":"/home/me/jw-alpha","path":"/home/me/jw-alpha","parent":"/home/me","entries":[{"name":"docs","kind":"dir","size":null,"mtime":1,"target":null,"md":false},{"name":"README.md","kind":"file","size":10,"mtime":2,"target":null,"md":true}],"total":2,"truncated":false}"""
+    private val readMd = """{"t":"read","req":"/home/me/jw-alpha/README.md","path":"/home/me/jw-alpha/README.md","kind":"md","size":8,"truncated":false,"text":"# Hi\n","blocks":[{"k":"h","level":1,"spans":[{"t":"Hi"}]}]}"""
+
     private fun raw(head: String, bytes: ByteArray): ByteString {
         val h = head.toByteArray()
         return ByteString.of(1, (h.size ushr 24).toByte(), (h.size ushr 16).toByte(), (h.size ushr 8).toByte(), h.size.toByte(), *h, *bytes)
@@ -74,6 +77,8 @@ class TouchTargetsTest {
                         }
                         text.contains("\"diff\"") -> webSocket.send(diff)
                         text.contains("\"commits\"") -> webSocket.send(commits)
+                        text.contains("\"t\":\"ls\"") -> webSocket.send(ls)
+                        text.contains("\"t\":\"read\"") -> webSocket.send(readMd)
                     }
                 }
                 override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
@@ -170,6 +175,13 @@ class TouchTargetsTest {
         rule.onNodeWithText("buscar workspace").performClick()
         measure("workspace picker")
         back() // the picker
+        rule.onNode(androidx.compose.ui.test.SemanticsMatcher("the files button") { it.config.getOrNull(SemanticsActions.OnClick)?.label == "Archivos" }).performClick()
+        waitFor("README.md")
+        measure("files")
+        rule.onNodeWithText("README.md").performClick()
+        waitFor("fuente")
+        measure("file viewer")
+        back(); back()
         // Over to the workspace's changes.
         rule.onNodeWithText("±").performClick()
         waitFor("a.rs")

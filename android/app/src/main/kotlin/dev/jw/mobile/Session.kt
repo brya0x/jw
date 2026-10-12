@@ -19,6 +19,8 @@ import dev.jw.proto.Workspace
 import dev.jw.proto.CommitList
 import dev.jw.proto.Diff
 import dev.jw.proto.DiffScope
+import dev.jw.proto.FsFile
+import dev.jw.proto.FsListing
 import dev.jw.proto.Workspaces
 import dev.jw.proto.Palettes
 import dev.jw.proto.QrPayload
@@ -179,6 +181,40 @@ sealed interface CommitsState {
     }
 }
 
+/** A directory of the PC on screen (REQ-77): asked, answered, or why not. A reason may name a path; shown, never logged. */
+sealed interface FsState {
+    data object Idle : FsState
+
+    class Loading(val req: String) : FsState {
+        override fun toString() = "Loading"
+    }
+
+    class Loaded(val listing: FsListing) : FsState {
+        override fun toString() = "Loaded($listing)"
+    }
+
+    class Failed(val req: String, val why: String) : FsState {
+        override fun toString() = "Failed"
+    }
+}
+
+/** A file of the PC on screen (REQ-79). */
+sealed interface FileState {
+    data object Idle : FileState
+
+    class Loading(val req: String) : FileState {
+        override fun toString() = "Loading"
+    }
+
+    class Loaded(val file: FsFile) : FileState {
+        override fun toString() = "Loaded($file)"
+    }
+
+    class Failed(val req: String, val why: String) : FileState {
+        override fun toString() = "Failed"
+    }
+}
+
 /** What the PC is asked that runs git. It answers one at a time per phone, so the session sends them one at a time. */
 private sealed interface GitAsk {
     data class Diff(val ws: String, val scope: DiffScope) : GitAsk
@@ -226,6 +262,10 @@ class Session(
     val diff: StateFlow<DiffState> = _diff.asStateFlow()
     private val _commits = MutableStateFlow<CommitsState>(CommitsState.Idle)
     val commits: StateFlow<CommitsState> = _commits.asStateFlow()
+    private val _fs = MutableStateFlow<FsState>(FsState.Idle)
+    val fs: StateFlow<FsState> = _fs.asStateFlow()
+    private val _file = MutableStateFlow<FileState>(FileState.Idle)
+    val file: StateFlow<FileState> = _file.asStateFlow()
     private val asks = Any()
     private var inFlight: GitAsk? = null
     private val queued = ArrayDeque<GitAsk>()
@@ -346,6 +386,24 @@ class Session(
         enqueue(GitAsk.Commits(ws))
     }
 
+    /** Asks for the entries of the directory `path` of the PC (`~` is its home). The answer lands in [fs]. */
+    fun requestLs(path: String) {
+        _fs.value = FsState.Loading(path)
+        send(Outgoing.Text(Control.ls(path)))
+    }
+
+    /** Asks for the text of the file `path` of the PC. The answer lands in [file]. */
+    fun requestRead(path: String) {
+        _file.value = FileState.Loading(path)
+        send(Outgoing.Text(Control.read(path)))
+    }
+
+    /** The files screen is left: let go of what it held. */
+    fun clearFiles() {
+        _fs.value = FsState.Idle
+        _file.value = FileState.Idle
+    }
+
     /** The changes screen is left: let go of the answers, which can be megabytes. */
     fun clearDiff() {
         synchronized(asks) { queued.clear() }
@@ -389,6 +447,9 @@ class Session(
             (_commits.value as? CommitsState.Loading)?.let { queued.addLast(GitAsk.Commits(it.ws)) }
         }
         pump()
+        // The files asks have seats of their own and no queue: what was waiting is asked again.
+        (_fs.value as? FsState.Loading)?.let { send(Outgoing.Text(Control.ls(it.req))) }
+        (_file.value as? FileState.Loading)?.let { send(Outgoing.Text(Control.read(it.req))) }
     }
 
     /**
@@ -475,6 +536,7 @@ class Session(
         outbox = null
         _model.value = Model()
         clearDiff()
+        clearFiles()
         store.clear()
         routes = Routes(null, null)
         _state.value = UiState.Scan()
@@ -654,7 +716,8 @@ class Session(
                         if (m.code == ErrorCode.READ_ONLY) _toasts.tryEmit("solo lectura")
                         // An ask's own failure says which ask it is (`ask`, `ws`, `scope`); `busy` is the PC saying one
                         // is still running, which the session's own queue prevents, so it fails nothing.
-                        if (m.code == ErrorCode.UNSUPPORTED && !m.msg.startsWith("busy")) askFailed(m)
+                        val files = m.ask == "ls" || m.ask == "read"
+                        if (m.code == ErrorCode.UNSUPPORTED && (files || !m.msg.startsWith("busy"))) askFailed(m)
                         if (m.code != ErrorCode.READ_ONLY && m.code != ErrorCode.UNSUPPORTED) {
                             a.failure = Failure.Bridge(m.code)
                             a.bridgeFailed = true
@@ -667,6 +730,8 @@ class Session(
                         (_diff.value as? DiffState.Loading)?.takeIf { it.ws == d.ws && it.scope == d.scope }?.let { _diff.value = DiffState.Loaded(d) }
                         done(GitAsk.Diff(d.ws, d.scope))
                     }
+                    is ServerMessage.LsAnswer -> (_fs.value as? FsState.Loading)?.takeIf { it.req == m.listing.req }?.let { _fs.value = FsState.Loaded(m.listing) }
+                    is ServerMessage.ReadAnswer -> (_file.value as? FileState.Loading)?.takeIf { it.req == m.file.req }?.let { _file.value = FileState.Loaded(m.file) }
                     is ServerMessage.CommitsAnswer -> {
                         (_commits.value as? CommitsState.Loading)?.takeIf { it.ws == m.list.ws }?.let { _commits.value = CommitsState.Loaded(m.list) }
                         done(GitAsk.Commits(m.list.ws))
@@ -681,6 +746,10 @@ class Session(
     }
 
     private fun askFailed(m: ServerMessage.Error) {
+        when (m.ask) {
+            "ls" -> m.req?.let { req -> (_fs.value as? FsState.Loading)?.takeIf { it.req == req }?.let { _fs.value = FsState.Failed(req, m.msg) } }
+            "read" -> m.req?.let { req -> (_file.value as? FileState.Loading)?.takeIf { it.req == req }?.let { _file.value = FileState.Failed(req, m.msg) } }
+        }
         val ws = m.ws ?: return
         when (m.ask) {
             "diff" -> {

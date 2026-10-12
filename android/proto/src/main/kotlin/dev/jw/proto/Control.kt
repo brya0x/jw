@@ -137,6 +137,8 @@ sealed interface ServerMessage {
         val ask: String? = null,
         val ws: String? = null,
         val scope: String? = null,
+        /** For `ls` and `read`: the path the phone asked. */
+        val req: String? = null,
     ) : ServerMessage
 
     class Workspaces(val session: String, val items: List<Workspace>) : ServerMessage
@@ -148,6 +150,12 @@ sealed interface ServerMessage {
 
     /** The answer to `commits{ws}`. */
     class CommitsAnswer(val list: CommitList) : ServerMessage
+
+    /** The answer to `ls{path}` (REQ-77). */
+    class LsAnswer(val listing: FsListing) : ServerMessage
+
+    /** The answer to `read{path}` (REQ-79). */
+    class ReadAnswer(val file: FsFile) : ServerMessage
 
     /**
      * Where else the PC can be reached (REQ-61). Only what is valid is kept: a tunnel host must be a quick
@@ -189,6 +197,16 @@ object Control {
         put("scope", scope.word)
     }.toString()
 
+    fun ls(path: String): String = buildJsonObject {
+        put("t", "ls")
+        put("path", path)
+    }.toString()
+
+    fun read(path: String): String = buildJsonObject {
+        put("t", "read")
+        put("path", path)
+    }.toString()
+
     fun commits(ws: String): String = buildJsonObject {
         put("t", "commits")
         put("ws", ws)
@@ -221,6 +239,7 @@ object Control {
                     obj["ask"]?.jsonPrimitive?.contentOrNull,
                     obj["ws"]?.jsonPrimitive?.contentOrNull,
                     obj["scope"]?.jsonPrimitive?.contentOrNull,
+                    obj["req"]?.jsonPrimitive?.contentOrNull,
                 )
                 "workspaces" -> ServerMessage.Workspaces(
                     obj["session"]?.jsonPrimitive?.contentOrNull ?: "",
@@ -230,6 +249,8 @@ object Control {
                     dev.jw.proto.Workspaces.parseSessions(obj["items"] as? kotlinx.serialization.json.JsonArray),
                 )
                 "diff" -> Diff.parse(obj)?.let { ServerMessage.DiffAnswer(it) } ?: ServerMessage.Other(tag)
+                "ls" -> Files.parseListing(obj)?.let { ServerMessage.LsAnswer(it) } ?: ServerMessage.Other(tag)
+                "read" -> Files.parseFile(obj)?.let { ServerMessage.ReadAnswer(it) } ?: ServerMessage.Other(tag)
                 "commits" -> CommitList.parse(obj)?.let { ServerMessage.CommitsAnswer(it) } ?: ServerMessage.Other(tag)
                 "endpoints" -> {
                     val lan = (obj["lan"] as? kotlinx.serialization.json.JsonObject)?.let { l ->
