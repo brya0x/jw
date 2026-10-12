@@ -15,48 +15,54 @@ class PaneKindTest {
     private fun chat(known: Boolean) = ChatState.merge(null, PaneEvent.Chat(1, known, null, null, true, emptyList()))
     private fun shell(vararg blocks: ShellBlock, known: Boolean = true, input: String? = "") =
         ShellState.merge(null, PaneEvent.Shell(1, known, true, blocks.toList(), input))
-    private fun block(running: Boolean = false, full: Boolean = false) = ShellBlock(0, "x", "/w", "", 0, null, 0, running, full)
+    private fun running() = ShellBlock(0, "cargo watch", "/w", "", 0, null, 0, true, false)
 
-    @Test fun aMarkedShellIsCardsAndAnUnmarkedOneIsText() {
-        assertEquals(PaneKind.Shell, PaneKinds.of(pane("shell", "zsh"), null, shell()))
-        assertEquals(PaneKind.Text, PaneKinds.of(pane("shell", "zsh"), null, shell(known = false)))
-        assertEquals(PaneKind.Text, PaneKinds.of(pane("shell", "zsh"), null, null))
-        // A program that draws the whole screen in it is text for as long as it runs.
-        assertEquals(PaneKind.Text, PaneKinds.of(pane("shell", "nvim"), null, shell(block(running = true, full = true))))
+    @Test fun aShellIsText() {
+        assertEquals(PaneKind.Text, PaneKinds.of(pane("shell", "zsh"), null))
+        assertEquals(PaneKind.Text, PaneKinds.of(pane("shell", "nvim"), null))
     }
 
-    @Test fun aShellThatStartsClaudeGoesFromCardsToTextToTheConversation() {
-        val shellState = shell(block(running = true))
-        // At the prompt: cards.
-        assertEquals(PaneKind.Shell, PaneKinds.of(pane("shell", "zsh"), null, shellState))
-        // claude is in the foreground and the PC has not said anything of it yet.
-        assertEquals(PaneKind.Loading, PaneKinds.of(pane("shell", "claude"), null, shellState))
-        // The PC says it has no transcript yet: the screen, not the cards of the shell under it.
-        assertEquals(PaneKind.Text, PaneKinds.of(pane("shell", "claude"), chat(false), shellState))
+    @Test fun aShellThatStartsAnAgentWaitsThenIsTextUntilItHasAConversationAndGoesBack() {
+        // At the prompt.
+        assertEquals(PaneKind.Text, PaneKinds.of(pane("shell", "zsh"), null))
+        // The agent command was run: claude is in the foreground and the PC has not said anything of it yet.
+        assertEquals(PaneKind.Loading, PaneKinds.of(pane("shell", "claude"), null))
+        // The PC says it has no transcript yet: its screen.
+        assertEquals(PaneKind.Text, PaneKinds.of(pane("shell", "claude"), chat(false)))
         // Its first message makes the conversation.
-        assertEquals(PaneKind.Chat, PaneKinds.of(pane("shell", "claude"), chat(true), shellState))
-        // And when it exits, the cards are back.
-        assertEquals(PaneKind.Shell, PaneKinds.of(pane("shell", "zsh"), null, shellState))
+        assertEquals(PaneKind.Chat, PaneKinds.of(pane("shell", "claude"), chat(true)))
+        // It exits: the shell is text again, whatever the PC had said of the agent.
+        assertEquals(PaneKind.Text, PaneKinds.of(pane("shell", "zsh"), chat(true)))
+        // Any agent program counts, and an agent pane always may.
+        assertEquals(PaneKind.Loading, PaneKinds.of(pane("agent", "node"), null))
+        assertEquals(PaneKind.Loading, PaneKinds.of(pane("shell", "-claude"), null))
     }
 
-    @Test fun theInputIsTheTerminalsAtEveryStepOfIt() {
+    @Test fun aShellsInputIsTheLineItTellsWhileItIsAtItsPrompt() {
+        val p = pane("shell", "zsh")
         val s = shell(input = "git st")
-        val sh = PaneKinds.of(pane("shell", "zsh"), null, s)
-        assertEquals("git st", PaneKinds.input(sh, pane("shell", "zsh"), s) { "never read" })
-        assertTrue(PaneKinds.live(sh, "git st"))
-        // claude with no transcript yet: the box on its screen is the input, so it is live as soon as it is found.
+        assertEquals("git st", PaneKinds.input(p, s) { "never read" })
+        assertTrue(PaneKinds.live(PaneKind.Text, "git st"))
+        // A shell that is not marked, or has none yet, keeps its line until it is sent.
+        assertNull(PaneKinds.input(p, shell(known = false)) { "x" })
+        assertNull(PaneKinds.input(p, null) { "x" })
+        assertFalse(PaneKinds.live(PaneKind.Text, null))
+        // A command that runs has no line: what is typed goes to it when sent.
+        assertNull(PaneKinds.input(p, shell(running(), input = "old")) { "x" })
+    }
+
+    @Test fun anAgentsInputIsTheBoxOnItsScreenAtEveryStep() {
+        val s = shell(input = "stale")
         val p = pane("shell", "claude")
-        val text = PaneKinds.of(p, chat(false), s)
-        assertEquals("hola", PaneKinds.input(text, p, s) { "hola" })
-        assertTrue(PaneKinds.live(text, "hola"))
-        // No box on the screen (a dialog): the keys are not sent as they are typed.
-        assertNull(PaneKinds.input(text, p, s) { null })
-        assertFalse(PaneKinds.live(text, null))
+        // No transcript yet: the screen's box is the input as soon as it is found.
+        assertEquals("hola", PaneKinds.input(p, s) { "hola" })
+        assertTrue(PaneKinds.live(PaneKind.Text, "hola"))
+        // A dialog, no box: the keys are not sent as they are typed.
+        assertNull(PaneKinds.input(p, s) { null })
+        assertFalse(PaneKinds.live(PaneKind.Text, null))
         // The conversation is live even when its box cannot be read at that moment.
         assertTrue(PaneKinds.live(PaneKind.Chat, null))
         // Any other pane keeps its own line until it is sent.
-        val dev = pane("dev", "node")
-        assertNull(PaneKinds.input(PaneKind.Text, dev, null) { "x" })
-        assertFalse(PaneKinds.live(PaneKind.Text, null))
+        assertNull(PaneKinds.input(pane("dev", "node"), null) { "x" })
     }
 }
