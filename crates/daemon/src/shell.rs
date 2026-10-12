@@ -51,6 +51,8 @@ const ZSHRC: &str = r#"# jw's shell integration (mobile REQ-92): reads your own 
 if [[ -n "$JW_USER_ZDOTDIR" ]]; then
   ZDOTDIR="$JW_USER_ZDOTDIR"; unset JW_USER_ZDOTDIR
   [[ -f "$ZDOTDIR/.zshrc" ]] && . "$ZDOTDIR/.zshrc"
+  # The shell goes on as it was: with no ZDOTDIR of its own, none.
+  if [[ -n "$JW_NO_ZDOTDIR" ]]; then unset ZDOTDIR JW_NO_ZDOTDIR; fi
 fi
 if [[ -o interactive ]]; then
   autoload -Uz add-zsh-hook
@@ -106,16 +108,16 @@ pub fn prepare(
     if name != "zsh" {
         return None;
     }
-    Some(vec![
+    let own = zdotdir.filter(|z| !z.is_empty());
+    let mut vars = vec![
         ("ZDOTDIR".into(), dir.display().to_string()),
-        (
-            "JW_USER_ZDOTDIR".into(),
-            zdotdir
-                .filter(|z| !z.is_empty())
-                .unwrap_or(home)
-                .to_string(),
-        ),
-    ])
+        ("JW_USER_ZDOTDIR".into(), own.unwrap_or(home).to_string()),
+    ];
+    if own.is_none() {
+        // The user has none: the shell must not be left with one.
+        vars.push(("JW_NO_ZDOTDIR".into(), "1".into()));
+    }
+    Some(vars)
 }
 
 /// One thing a pane printed that a block cares about.
@@ -770,10 +772,12 @@ mod tests {
             env,
             [
                 ("ZDOTDIR".to_string(), "/i".to_string()),
-                ("JW_USER_ZDOTDIR".to_string(), "/home/u".to_string())
+                ("JW_USER_ZDOTDIR".to_string(), "/home/u".to_string()),
+                // The user has no ZDOTDIR: the shell is not left with one.
+                ("JW_NO_ZDOTDIR".to_string(), "1".to_string()),
             ]
         );
-        // The user's own ZDOTDIR is kept for the files to read.
+        // The user's own ZDOTDIR is kept for the files to read, and kept.
         let env = prepare(
             "-zsh",
             Path::new("/i"),
@@ -782,6 +786,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(env[1].1, "/home/u/.config/zsh");
+        assert_eq!(env.len(), 2);
         assert_eq!(prepare("/bin/bash", Path::new("/i"), None, "/h"), None);
         assert_eq!(prepare("/usr/bin/fish", Path::new("/i"), None, "/h"), None);
     }

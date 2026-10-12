@@ -36,7 +36,10 @@ impl Daemon {
         let dir = tempfile::tempdir().unwrap();
         let socket = dir.path().join("jw.sock");
         let mut cmd = Command::new(EXE);
-        cmd.arg("daemon").env("JW_SOCKET", &socket);
+        // A ZDOTDIR of the shell the tests run from is not the tests'.
+        cmd.arg("daemon")
+            .env("JW_SOCKET", &socket)
+            .env_remove("ZDOTDIR");
         if let Some(config) = config {
             cmd.env("CLAUDE_CONFIG_DIR", config);
         }
@@ -2269,7 +2272,7 @@ fn a_zsh_jw_started_marks_its_commands_as_blocks() {
     }
     c.send(&ClientMsg::Input {
         pane,
-        bytes: b"echo hello $((6*7)) $JW_PROBE\n".to_vec(),
+        bytes: b"echo hello $((6*7)) $JW_PROBE ${ZDOTDIR-none}\n".to_vec(),
     })
     .unwrap();
     let deadline = Instant::now() + TIMEOUT;
@@ -2283,8 +2286,9 @@ fn a_zsh_jw_started_marks_its_commands_as_blocks() {
             break b;
         }
     };
-    assert_eq!(block.cmd, "echo hello $((6*7)) $JW_PROBE");
-    assert_eq!(block.out, "hello 42 ok");
+    assert_eq!(block.cmd, "echo hello $((6*7)) $JW_PROBE ${ZDOTDIR-none}");
+    // And the shell is left without a ZDOTDIR, as the user had none.
+    assert_eq!(block.out, "hello 42 ok none");
     assert_eq!(block.code, Some(0));
     assert_eq!(
         std::fs::canonicalize(&block.cwd).unwrap(),
