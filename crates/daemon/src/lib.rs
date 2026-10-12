@@ -42,7 +42,7 @@ use ring::Ring;
 
 use crate::layout::{Dir, Tree};
 use crate::proto::{
-    AgentState, ClientMsg, DaemonMsg, NewPane, PROTOCOL, PaneId, PaneInfo, PaneLeaf, Theme,
+    AgentState, ClientMsg, DaemonMsg, NewPane, PROTOCOL, PaneId, PaneInfo, PaneLeaf, Run, Theme,
     is_view, pidfile, read_frame, write_frame,
 };
 
@@ -54,6 +54,9 @@ const MOBILE_STOP_WITHIN: Duration = Duration::from_secs(2);
 
 /// Lines of scrollback each pane keeps.
 const SCROLLBACK: usize = 10_000;
+
+/// How often the phones watching a pane are sent its screen, when it changed.
+const TEXT_EVERY: Duration = Duration::from_millis(80);
 
 /// Runs the daemon on `socket` until the process is killed, or stopped by a
 /// signal (see `save_on_signal`). `look` is what a phone's `ready` carries
@@ -76,6 +79,13 @@ pub fn run(socket: &Path, look: Look) -> Result<()> {
         loop {
             thread::sleep(SAVE_EVERY);
             saver.save_scrollback();
+        }
+    });
+    let texter = Arc::clone(&daemon);
+    thread::spawn(move || {
+        loop {
+            thread::sleep(TEXT_EVERY);
+            texter.flush_text();
         }
     });
     for conn in listener.incoming() {
@@ -246,6 +256,8 @@ struct PaneState {
     ring: Ring,
     /// What its agent's hooks reported last.
     agent: Option<AgentState>,
+    /// Its screen changed since the last `Text` went to the phones watching it.
+    text_dirty: bool,
 }
 
 /// Catches what a pane's program says beyond its screen: the window title,
@@ -375,8 +387,17 @@ struct Sub {
 
 impl PaneState {
     /// Sends to every subscriber, dropping the ones whose client went away.
+    /// `Output` goes to the clients that draw a terminal, `Text` to the ones
+    /// that asked for `TextView`.
     fn broadcast(&mut self, msg: &DaemonMsg) {
-        self.subs.retain(|s| s.tx.send(msg.clone()).is_ok());
+        let wants_text = match msg {
+            DaemonMsg::Output { .. } => Some(false),
+            DaemonMsg::Text { .. } => Some(true),
+            _ => None,
+        };
+        self.subs.retain(|s| {
+            wants_text.is_some_and(|w| s.tx.text() != w) || s.tx.send(msg.clone()).is_ok()
+        });
     }
 }
 
@@ -429,6 +450,94 @@ fn screen_bytes(st: &PaneState) -> Vec<u8> {
             .replay(screen.alternate_screen()),
     );
     bytes
+}
+
+/// The pane's screen as the styled rows a `TextView` client draws.
+fn text_screen(id: PaneId, st: &PaneState) -> DaemonMsg {
+    let screen = st.parser.screen();
+    let (rows, cols) = screen.size();
+    DaemonMsg::Text {
+        pane: id,
+        cols,
+        rows,
+        alt: screen.alternate_screen(),
+        app_cursor: screen.application_cursor(),
+        cursor: (!screen.hide_cursor()).then(|| screen.cursor_position()),
+        lines: (0..rows).map(|r| runs_of(screen, r, cols)).collect(),
+    }
+}
+
+/// The last `count` rows of the scrollback, oldest first. The screen is moved
+/// up through the history a page at a time and put back.
+fn history_rows(parser: &mut vt100::Parser<Titles>, count: usize) -> Vec<Vec<Run>> {
+    let screen = parser.screen_mut();
+    screen.set_scrollback(usize::MAX);
+    let total = screen.scrollback();
+    let (rows, cols) = screen.size();
+    let mut at = total.min(count);
+    let mut out = Vec::with_capacity(at);
+    while at > 0 {
+        screen.set_scrollback(at);
+        let take = at.min(rows as usize);
+        for r in 0..take {
+            out.push(runs_of(screen, r as u16, cols));
+        }
+        at -= take;
+    }
+    screen.set_scrollback(0);
+    out
+}
+
+/// One colour in the wire's encoding (see `proto::Run`).
+fn color_code(c: vt100::Color) -> u32 {
+    match c {
+        vt100::Color::Default => 0,
+        vt100::Color::Idx(i) => 1 << 24 | u32::from(i),
+        vt100::Color::Rgb(r, g, b) => {
+            2 << 24 | u32::from(r) << 16 | u32::from(g) << 8 | u32::from(b)
+        }
+    }
+}
+
+/// Row `row` of the visible screen as runs of one style, its blank end left off.
+fn runs_of(screen: &vt100::Screen, row: u16, cols: u16) -> Vec<Run> {
+    let mut runs: Vec<Run> = Vec::new();
+    for col in 0..cols {
+        let Some(cell) = screen.cell(row, col) else {
+            break;
+        };
+        if cell.is_wide_continuation() {
+            continue;
+        }
+        let attrs = u8::from(cell.bold())
+            | u8::from(cell.dim()) << 1
+            | u8::from(cell.italic()) << 2
+            | u8::from(cell.underline()) << 3
+            | u8::from(cell.inverse()) << 4;
+        let (fg, bg) = (color_code(cell.fgcolor()), color_code(cell.bgcolor()));
+        let text = if cell.has_contents() {
+            cell.contents()
+        } else {
+            " "
+        };
+        match runs.last_mut() {
+            Some(r) if (r.2, r.3, r.4) == (fg, bg, attrs) => r.1.push_str(text),
+            _ => runs.push((col, text.to_string(), fg, bg, attrs)),
+        }
+    }
+    // A blank end that draws nothing (no background, underline or inverse).
+    while let Some(last) = runs.last_mut() {
+        if last.3 != 0 || last.4 & 0b1_1000 != 0 {
+            break;
+        }
+        let kept = last.1.trim_end_matches(' ').len();
+        last.1.truncate(kept);
+        if !last.1.is_empty() {
+            break;
+        }
+        runs.pop();
+    }
+    runs
 }
 
 /// A snapshot in two: the `Screen` to draw at once and the `History` to
@@ -562,6 +671,17 @@ impl Daemon {
                 let _ = tx.send(DaemonMsg::Hello { protocol: PROTOCOL });
             }
             ClientMsg::SplitSnapshots => tx.set_split(),
+            ClientMsg::TextView => tx.set_text(),
+            ClientMsg::TextHistory { pane, count } => {
+                let pane_id = pane;
+                let pane = self.pane(pane)?;
+                let mut st = lock(&pane.state);
+                let lines = history_rows(&mut st.parser, (count as usize).min(SCROLLBACK));
+                let _ = tx.send(DaemonMsg::TextHistory {
+                    pane: pane_id,
+                    lines,
+                });
+            }
             ClientMsg::MobileWatch => self.mobile.watch(client, tx),
             ClientMsg::MobileStart { read_only } => self.mobile.start(read_only, tx),
             ClientMsg::MobileStop => self.mobile.stop(Duration::ZERO),
@@ -661,6 +781,7 @@ impl Daemon {
                 let mut st = lock(&pane.state);
                 if st.parser.screen().size() != (rows, cols) {
                     st.parser.screen_mut().set_size(rows, cols);
+                    st.text_dirty = true;
                     st.broadcast(&DaemonMsg::Resized {
                         pane: id,
                         cols,
@@ -780,7 +901,9 @@ impl Daemon {
     fn watch(&self, client: u64, tx: &Tx, id: PaneId) {
         let Ok(pane) = self.pane(id) else { return };
         let mut st = lock(&pane.state);
-        if tx.split() {
+        if tx.text() {
+            let _ = tx.send(text_screen(id, &st));
+        } else if tx.split() {
             for m in split_snapshot(id, &pane, &st) {
                 let _ = tx.send(m);
             }
@@ -1253,6 +1376,25 @@ impl Daemon {
         self.next_pane.fetch_add(1, Ordering::Relaxed) + 1
     }
 
+    /// Sends each pane's screen to the clients that watch it as text, when it
+    /// changed since the last time. Every pane is looked at, one lock at a time.
+    fn flush_text(&self) {
+        let panes: Vec<(PaneId, Arc<Pane>)> = lock(&self.panes)
+            .iter()
+            .map(|(id, p)| (*id, Arc::clone(p)))
+            .collect();
+        for (id, pane) in panes {
+            let mut st = lock(&pane.state);
+            if !st.text_dirty || !st.subs.iter().any(|s| s.tx.text()) {
+                st.text_dirty = false;
+                continue;
+            }
+            st.text_dirty = false;
+            let msg = text_screen(id, &st);
+            st.broadcast(&msg);
+        }
+    }
+
     fn pane(&self, id: PaneId) -> Result<Arc<Pane>> {
         lock(&self.panes)
             .get(&id)
@@ -1372,6 +1514,7 @@ impl Daemon {
                 bell: false,
                 ring: Ring::default(),
                 agent: None,
+                text_dirty: false,
             }),
         });
         if let Some(mut bytes) = history {
@@ -1411,6 +1554,7 @@ impl Daemon {
                         st.parser.process(&buf[..n]);
                         st.ring.push(&buf[..n]);
                         st.last_output = Instant::now();
+                        st.text_dirty = true;
                         st.broadcast(&DaemonMsg::Output {
                             pane: id,
                             bytes: buf[..n].to_vec(),

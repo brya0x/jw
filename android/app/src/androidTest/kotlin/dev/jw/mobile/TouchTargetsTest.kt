@@ -71,7 +71,7 @@ class TouchTargetsTest {
                 override fun onMessage(webSocket: WebSocket, text: String) {
                     when {
                         text.contains("\"auth\"") -> {
-                            webSocket.send("""{"t":"ready","bridge":1,"protocol":14,"read_only":false}""")
+                            webSocket.send("""{"t":"ready","bridge":1,"protocol":15,"read_only":false}""")
                             webSocket.send(workspaces)
                             webSocket.send("""{"t":"sessions","items":[{"name":"main","workspaces":1}]}""")
                         }

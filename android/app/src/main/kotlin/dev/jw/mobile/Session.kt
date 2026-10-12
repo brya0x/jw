@@ -27,7 +27,6 @@ import dev.jw.proto.Palettes
 import dev.jw.proto.QrPayload
 import dev.jw.proto.ReconnectPolicy
 import dev.jw.proto.ServerMessage
-import dev.jw.term.Terminal
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -130,6 +129,9 @@ private class Routes(var lan: LanAddr?, var tunnel: String?) {
 }
 
 /** How long an attempt on the wifi gets to open a connection before the tunnel is tried (REQ-63). */
+/** How many rows of scrollback a scroll up asks the PC for. */
+private const val HISTORY_ROWS = 2_000
+
 private const val LAN_OPEN_MS = 3_000L
 
 /** How often the app looks again for the wifi while it is on the tunnel (REQ-63). */
@@ -308,7 +310,7 @@ class Session(
     private var lastWifiLook = 0L
 
     // The panes of the workspace on screen, as terminals (M5). Fed on the connection's thread, read by the surface.
-    private val screens = ConcurrentHashMap<Long, Terminal>()
+    private val screens = ConcurrentHashMap<Long, PaneText>()
     private val exits = ConcurrentHashMap<Long, Int>()
     @Volatile private var watching: String? = null
     private val _termRev = MutableStateFlow(0L)
@@ -316,7 +318,10 @@ class Session(
     /** Moves with every byte, size change and exit of a watched pane; the surface redraws when it does. */
     val termRev: StateFlow<Long> = _termRev.asStateFlow()
 
-    fun terminal(pane: Long): Terminal? = screens[pane]
+    fun terminal(pane: Long): PaneText? = screens[pane]
+
+    /** The rows above the screen of `pane`, once the person scrolls up (answered as [PaneEvent.History]). */
+    fun requestHistory(pane: Long) = send(Outgoing.Binary(Panes.textHistoryFrame(pane, HISTORY_ROWS)))
 
     /** The exit status of a watched pane whose process ended, else null. */
     fun exitStatus(pane: Long): Int? = exits[pane]
@@ -331,7 +336,7 @@ class Session(
         screens.clear()
         exits.clear()
         watching = stream
-        stream?.let { send(Outgoing.Binary(Panes.attachFrame(it))) }
+        stream?.let { send(Outgoing.Binary(Panes.textViewFrame())); send(Outgoing.Binary(Panes.attachFrame(it))) }
         _termRev.update { it + 1 }
     }
 
@@ -352,9 +357,10 @@ class Session(
 
     private fun onPane(e: PaneEvent) {
         when (e) {
-            is PaneEvent.Snapshot -> screens[e.pane] = Terminal(e.cols, e.rows).also { it.feed(e.bytes) }
-            is PaneEvent.Output -> screens[e.pane]?.feed(e.bytes)
-            is PaneEvent.Resized -> screens[e.pane]?.resize(e.cols, e.rows)
+            is PaneEvent.Text -> screens.getOrPut(e.pane) { PaneText(e.cols, e.rows) }.setScreen(e)
+            is PaneEvent.History -> screens[e.pane]?.setHistory(e)
+            // The PC sends this client text, never a terminal's bytes (`TextView`).
+            is PaneEvent.Snapshot, is PaneEvent.Output, is PaneEvent.Resized -> {}
             is PaneEvent.Exited -> exits[e.pane] = e.status
         }
         _termRev.update { it + 1 }
@@ -748,7 +754,10 @@ class Session(
                             // The screens come again as snapshots: the new one is the truth (REQ-15).
                             screens.clear()
                             exits.clear()
-                            watching?.let { out.trySend(Outgoing.Binary(Panes.attachFrame(it))) }
+                            watching?.let {
+                                out.trySend(Outgoing.Binary(Panes.textViewFrame()))
+                                out.trySend(Outgoing.Binary(Panes.attachFrame(it)))
+                            }
                             _termRev.update { it + 1 }
                         }
                     }

@@ -15,7 +15,15 @@ pub type PaneId = u64;
 
 /// Bumped whenever a message changes shape: a client and a daemon from
 /// different builds refuse each other instead of misreading (RISK-14).
-pub const PROTOCOL: u32 = 14;
+pub const PROTOCOL: u32 = 15;
+
+/// A run of cells of one row that share a style: its first column, its
+/// text (a wide character counts two columns; the cells after it are not
+/// in the text), the foreground and the background (0 default, `1 << 24 | i`
+/// a palette index, `2 << 24 | 0xrrggbb` a colour) and the attributes
+/// (bold 1, dim 2, italic 4, underline 8, inverse 16). A row's blank end is
+/// left out.
+pub type Run = (u16, String, u32, u32, u8);
 
 /// A pane to start. `cmd` runs through `sh -c`; `None` starts `$SHELL`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -66,6 +74,17 @@ pub enum ClientMsg {
     /// `Screen` (small, at once) and then its `History` (the replay that
     /// rebuilds the scrollback), instead of one `Snapshot`.
     SplitSnapshots,
+    /// From now on this connection gets a pane it watches as `Text` (its
+    /// screen as styled rows, at most every 80 ms and only when it changed)
+    /// instead of `Snapshot` and `Output`: a phone draws no terminal, so it
+    /// needs neither the bytes nor the replay (mobile REQ-21).
+    TextView,
+    /// The last `count` rows of the pane's scrollback, as `TextHistory`,
+    /// oldest first (at most `SCROLLBACK`).
+    TextHistory {
+        pane: PaneId,
+        count: u32,
+    },
     /// Stop receiving output from every pane; the panes keep running.
     Detach,
     Input {
@@ -325,6 +344,24 @@ pub enum DaemonMsg {
     Output {
         pane: PaneId,
         bytes: Vec<u8>,
+    },
+    /// The pane's screen as styled rows, for a client that sent `TextView`.
+    /// It replaces the screen the client had. `cursor` is `None` when the
+    /// program hid it.
+    Text {
+        pane: PaneId,
+        cols: u16,
+        rows: u16,
+        alt: bool,
+        /// The program asked for application cursor keys: the arrows are `ESC O A`.
+        app_cursor: bool,
+        cursor: Option<(u16, u16)>,
+        lines: Vec<Vec<Run>>,
+    },
+    /// The answer to `TextHistory`: rows of the scrollback, oldest first.
+    TextHistory {
+        pane: PaneId,
+        lines: Vec<Vec<Run>>,
     },
     /// The pane's screen is now `cols` by `rows`: a client's `Resize` changed it. It comes in
     /// order with the `Output` around it, so a client drawing the pane at its own size

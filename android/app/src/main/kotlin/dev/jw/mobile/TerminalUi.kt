@@ -9,6 +9,7 @@ import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
@@ -31,16 +32,15 @@ import androidx.compose.ui.semantics.semantics
 import androidx.core.content.res.ResourcesCompat
 import dev.jw.term.Attr
 import dev.jw.term.Line
-import dev.jw.term.Terminal
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 import dev.jw.term.Color as Cell
 
-/** A span of the screen and its scrollback, from where the finger went down to where it is now; lines are [Terminal.line] indexes. */
+/** A span of the screen and its scrollback, from where the finger went down to where it is now; lines are [PaneText.line] indexes. */
 class Selection(val startLine: Int, val startCol: Int, val endLine: Int, val endCol: Int) {
     /** The text it covers, a line at a time, without the spaces at the end of a line. */
-    fun text(t: Terminal): String = t.read {
+    fun text(t: PaneText): String = t.read {
         val forward = startLine < endLine || (startLine == endLine && startCol <= endCol)
         val (l0, c0, l1, c1) = if (forward) listOf(startLine, startCol, endLine, endCol) else listOf(endLine, endCol, startLine, startCol)
         val lo = max(l0, -it.scrollbackSize)
@@ -94,8 +94,9 @@ class TermColors(private val j: JwColors) {
  */
 @Composable
 fun TerminalView(
-    term: Terminal?,
+    term: PaneText?,
     rev: Long,
+    onScrolledUp: () -> Unit,
     selection: Selection?,
     onSelection: (Selection?) -> Unit,
     onTap: () -> Unit,
@@ -126,7 +127,11 @@ fun TerminalView(
         val visibleRows = floor(hPx / ch).toInt().coerceAtLeast(1)
 
         val pane = term
-        val layout = remember(pane, rev, visibleCols) { pane?.read { wrapView(it, visibleCols) } }
+        // The scrollback is asked for, and drawn, only while the view is up in it.
+        val scrolled = scrollRows != 0f
+        val layout = remember(pane, rev, visibleCols, scrolled) { pane?.read { wrapView(it, visibleCols, withHistory = scrolled) } }
+        val askedUp by rememberUpdatedState(onScrolledUp)
+        LaunchedEffect(scrolled, pane) { if (scrolled) askedUp() }
         fun firstRow(): Int = layout?.firstRow(visibleRows, scrollRows.toInt()) ?: 0
         fun cellAt(p: Offset): Pair<Int, Int>? {
             val l = layout ?: return null
@@ -254,10 +259,10 @@ internal class WrapView(val rows: List<VRow>, private val end: Int, private val 
  * the view ends at the last used row: the cursor or the lowest row with text, so a footer shows, not the empty bottom;
  * a full-screen app (the alternate screen) follows its cursor, or starts at its top when the cursor is hidden.
  */
-internal fun wrapView(t: Terminal, cols: Int): WrapView {
+internal fun wrapView(t: PaneText, cols: Int, withHistory: Boolean = true): WrapView {
     val out = ArrayList<VRow>()
     var anchor = t.cursorRow
-    for (li in -minOf(t.scrollbackSize, WRAP_HISTORY) until t.rows) {
+    for (li in -(if (withHistory) minOf(t.scrollbackSize, WRAP_HISTORY) else 0) until t.rows) {
         val line = t.line(li)
         var used = usedCols(line)
         if (li >= 0 && used > 0 && li > anchor && !t.altScreen) anchor = li

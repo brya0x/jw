@@ -1,17 +1,26 @@
 package dev.jw.proto
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 
-/** What a watched pane sends: its whole screen, then output, size changes and its end. */
+/**
+ * A run of cells of one row that share a style (`Run` in `proto.rs`): the first column, the text, the colours
+ * (0 default, `1 shl 24 or i` a palette index, `2 shl 24 or 0xrrggbb` a colour) and the attributes
+ * (bold 1, dim 2, italic 4, underline 8, inverse 16).
+ */
+class TextRun(val col: Int, val text: String, val fg: Int, val bg: Int, val attrs: Int)
+
+/** What a watched pane sends: its screen as styled rows, the rows above it on request, its size and its end. */
 sealed interface PaneEvent {
     val pane: Long
 
@@ -22,6 +31,19 @@ sealed interface PaneEvent {
 
     class Output(override val pane: Long, val bytes: ByteArray) : PaneEvent {
         override fun toString() = "Output(pane=$pane, ${bytes.size} bytes)"
+    }
+
+    /** The pane's screen, replacing the one held: `cursor` is null when the program hid it. */
+    class Text(
+        override val pane: Long, val cols: Int, val rows: Int, val alt: Boolean, val appCursor: Boolean,
+        val cursor: Pair<Int, Int>?, val lines: List<List<TextRun>>,
+    ) : PaneEvent {
+        override fun toString() = "Text(pane=$pane, ${cols}x$rows)"
+    }
+
+    /** The answer to [Panes.textHistoryFrame]: rows of the scrollback, oldest first. */
+    class History(override val pane: Long, val lines: List<List<TextRun>>) : PaneEvent {
+        override fun toString() = "History(pane=$pane, ${lines.size} rows)"
     }
 
     class Resized(override val pane: Long, val cols: Int, val rows: Int) : PaneEvent
@@ -53,8 +75,42 @@ object Panes {
                 val (c, r) = size(o) ?: return null
                 PaneEvent.Resized(pane, c, r)
             }
+            "Text" -> {
+                val (c, r) = size(o) ?: return null
+                val cursor = (o["cursor"] as? JsonArray)?.let { a ->
+                    val row = (a.getOrNull(0) as? JsonPrimitive)?.intOrNull
+                    val col = (a.getOrNull(1) as? JsonPrimitive)?.intOrNull
+                    if (row != null && col != null) row to col else null
+                }
+                val lines = rows(o["lines"], MAX_SCREEN_ROWS) ?: return null
+                PaneEvent.Text(
+                    pane, c, r, (o["alt"] as? JsonPrimitive)?.booleanOrNull ?: false,
+                    (o["app_cursor"] as? JsonPrimitive)?.booleanOrNull ?: false, cursor, lines,
+                )
+            }
+            "TextHistory" -> PaneEvent.History(pane, rows(o["lines"], MAX_HISTORY_ROWS) ?: return null)
             "Exited" -> PaneEvent.Exited(pane, (o["status"] as? JsonPrimitive)?.intOrNull ?: return null)
             else -> null
+        }
+    }
+
+    private const val MAX_SCREEN_ROWS = 1000
+    private const val MAX_HISTORY_ROWS = 10_000
+    private const val MAX_RUNS = 2000
+
+    /** `lines` of `Text` and `TextHistory`: rows of runs, `[col, text, fg, bg, attrs]` each; null when malformed. */
+    private fun rows(el: kotlinx.serialization.json.JsonElement?, max: Int): List<List<TextRun>>? {
+        val a = el as? JsonArray ?: return null
+        if (a.size > max) return null
+        return a.map { row ->
+            val runs = row as? JsonArray ?: return null
+            if (runs.size > MAX_RUNS) return null
+            runs.map { r ->
+                val t = r as? JsonArray ?: return null
+                val n = IntArray(5)
+                for (i in intArrayOf(0, 2, 3, 4)) n[i] = (t.getOrNull(i) as? JsonPrimitive)?.longOrNull?.toInt() ?: return null
+                TextRun(n[0], (t.getOrNull(1) as? JsonPrimitive)?.contentOrNull ?: return null, n[2], n[3], n[4])
+            }
         }
     }
 
@@ -73,6 +129,13 @@ object Panes {
     /** `ClientMsg::Attach`: the workspace's panes, each as a `Snapshot`, then their output. Allowed in read-only. */
     fun attachFrame(stream: String): Frame =
         Frame.Json(buildJsonObject { put("t", "Attach"); put("stream", stream) }.toString())
+
+    /** `ClientMsg::TextView`: this connection gets panes as [PaneEvent.Text], not as a terminal's bytes. Send it before [attachFrame]. Allowed in read-only. */
+    fun textViewFrame(): Frame = Frame.Json("""{"t":"TextView"}""")
+
+    /** `ClientMsg::TextHistory`: the last `count` rows of the pane's scrollback, answered as [PaneEvent.History]. Allowed in read-only. */
+    fun textHistoryFrame(pane: Long, count: Int): Frame =
+        Frame.Json(buildJsonObject { put("t", "TextHistory"); put("pane", pane); put("count", count) }.toString())
 
     /** `ClientMsg::Detach`: stop every pane's output; the panes keep running. Allowed in read-only. */
     fun detachFrame(): Frame = Frame.Json("""{"t":"Detach"}""")

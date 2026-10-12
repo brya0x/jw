@@ -7,10 +7,10 @@ import org.junit.Test
 /** Where a pane taller than the phone's view rests (REQ-21): its prompt or footer must be on screen. */
 class BottomAnchorTest {
     private val e = "\u001b"
-    private fun term(rows: Int, s: String) = Terminal(40, rows).also { it.feed(s.toByteArray()) }
+    private fun term(rows: Int, s: String) = Terminal(40, rows).also { it.feed(s.toByteArray()) }.toPaneText()
 
     // The terminal is as wide as the view, so each row of it is one row of the view.
-    private fun anchor(t: Terminal, visible: Int) = wrapView(t, 40).firstRow(visible, 0)
+    private fun anchor(t: PaneText, visible: Int) = wrapView(t, 40).firstRow(visible, 0)
 
     @Test fun aShellPromptNearTheTopEndsTheView() {
         assertEquals(0, anchor(term(112, "a\r\nb\r\nprompt"), 20))

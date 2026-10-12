@@ -7,7 +7,7 @@ import org.junit.Test
 
 /** REQ-24: a pane wider than the phone is broken at the phone's width, never panned and never resized. */
 class WrapViewTest {
-    private fun term(cols: Int, rows: Int, text: String) = Terminal(cols, rows).also { it.feed(text.toByteArray()) }
+    private fun term(cols: Int, rows: Int, text: String) = Terminal(cols, rows).also { it.feed(text.toByteArray()) }.toPaneText()
 
     @Test fun aRowWiderThanTheViewBreaksIntoRowsThatFit() {
         val t = term(100, 10, "a".repeat(70) + "\r\nshort")

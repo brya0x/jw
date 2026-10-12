@@ -1902,3 +1902,108 @@ fn jw_session_rm_closes_its_panes_and_forgets_it_but_keeps_the_checkouts() {
     assert!(listed.iter().any(|p| p.stream == main_stream));
     assert!(sessions.join("main").is_dir());
 }
+
+/// The text of a row of runs.
+fn row_text(row: &[jw_proto::proto::Run]) -> String {
+    row.iter().map(|r| r.1.as_str()).collect()
+}
+
+#[test]
+fn a_text_view_client_gets_the_screen_as_styled_rows_and_no_output() {
+    let d = Daemon::start();
+    let mut c = d.client();
+    c.send(&ClientMsg::TextView).unwrap();
+    let pane = spawn(
+        &mut c,
+        "s",
+        "printf 'hello \\033[31mred\\033[0m\\n'; sleep 30",
+        40,
+        5,
+    );
+    let deadline = Instant::now() + TIMEOUT;
+    let lines = loop {
+        assert!(Instant::now() < deadline, "no screen with the text");
+        match recv(&mut c) {
+            DaemonMsg::Text {
+                pane: p,
+                cols,
+                rows,
+                lines,
+                ..
+            } if p == pane && row_text(&lines[0]).contains("hello red") => {
+                assert_eq!((cols, rows, lines.len()), (40, 5, 5));
+                break lines;
+            }
+            DaemonMsg::Output { .. } => panic!("a text client got terminal output"),
+            _ => {}
+        }
+    };
+    // `red` is in palette colour 1; the blank end of the row is not sent.
+    let red = lines[0].iter().find(|r| r.1.starts_with("red")).unwrap();
+    assert_eq!((red.0, red.2), (6, 1 << 24 | 1));
+    assert_eq!(row_text(&lines[0]), "hello red");
+    assert!(lines[4].is_empty());
+}
+
+#[test]
+fn a_text_view_client_asks_for_the_history_and_gets_the_last_rows_oldest_first() {
+    let d = Daemon::start();
+    let mut c = d.client();
+    c.send(&ClientMsg::TextView).unwrap();
+    let pane = spawn(&mut c, "s", "seq 1 60; sleep 30", 20, 5);
+    // Wait until the last number is on the screen, and note which row it starts at.
+    let deadline = Instant::now() + TIMEOUT;
+    let first_on_screen: u32 = loop {
+        assert!(Instant::now() < deadline, "seq never finished");
+        if let DaemonMsg::Text { lines, .. } = recv(&mut c)
+            && lines.iter().any(|l| row_text(l) == "60")
+        {
+            break row_text(&lines[0]).parse().unwrap();
+        }
+    };
+    c.send(&ClientMsg::TextHistory { pane, count: 10 }).unwrap();
+    let deadline = Instant::now() + TIMEOUT;
+    let lines = loop {
+        assert!(Instant::now() < deadline, "no history");
+        if let DaemonMsg::TextHistory { pane: p, lines } = recv(&mut c)
+            && p == pane
+        {
+            break lines;
+        }
+    };
+    // The rows just above the screen, oldest first.
+    let got: Vec<u32> = lines.iter().map(|l| row_text(l).parse().unwrap()).collect();
+    let want: Vec<u32> = (first_on_screen - 10..first_on_screen).collect();
+    assert_eq!(got, want);
+}
+
+#[test]
+fn a_client_that_draws_a_terminal_still_gets_output_while_another_watches_text() {
+    let d = Daemon::start();
+    let mut text = d.client();
+    text.send(&ClientMsg::TextView).unwrap();
+    let pane = spawn(&mut text, "s", "cat", 40, 5);
+    let mut tui = d.client();
+    tui.send(&ClientMsg::Attach { stream: "s".into() }).unwrap();
+    text.send(&ClientMsg::Input {
+        pane,
+        bytes: b"ping\n".to_vec(),
+    })
+    .unwrap();
+    let deadline = Instant::now() + TIMEOUT;
+    let (mut saw_output, mut saw_text) = (false, false);
+    while !(saw_output && saw_text) {
+        assert!(
+            Instant::now() < deadline,
+            "output {saw_output} text {saw_text}"
+        );
+        if let Ok(Some(DaemonMsg::Output { bytes, .. })) = tui.recv() {
+            saw_output |= String::from_utf8_lossy(&bytes).contains("ping");
+        }
+        text.set_read_timeout(Some(Duration::from_millis(200)))
+            .unwrap();
+        if let Ok(Some(DaemonMsg::Text { lines, .. })) = text.recv() {
+            saw_text |= lines.iter().any(|l| row_text(l).contains("ping"));
+        }
+    }
+}

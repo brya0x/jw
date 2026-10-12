@@ -1461,6 +1461,8 @@ impl App {
                 }
             }
             DaemonMsg::Prompted { .. } => self.done("sent to the agent".into()),
+            // For a phone: the TUI never sends `TextView`.
+            DaemonMsg::Text { .. } | DaemonMsg::TextHistory { .. } => {}
             DaemonMsg::Error { msg } => self.fail(msg),
             d @ (DaemonMsg::MobileState(_)
             | DaemonMsg::MobilePair { .. }

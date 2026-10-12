@@ -155,6 +155,7 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
             } else {
                 TerminalView(
                     term = term, rev = rev, selection = selection, onSelection = { selection = it }, onTap = {},
+                    onScrolledUp = { session.requestHistory(sel.pane) },
                     modifier = Modifier.fillMaxSize().padding(horizontal = 4.dp),
                 )
                 if (exit != null) {
@@ -239,7 +240,7 @@ private fun KeyButton(label: String, accent: Boolean = false, modifier: Modifier
 
 /** `.keys`: `^␣` first, then the keys a phone keyboard lacks; the arrows and ⌫ repeat while held. */
 @Composable
-private fun KeyRow(sel: PaneInfo?, term: dev.jw.term.Terminal?, session: Session, onLeader: () -> Unit) {
+private fun KeyRow(sel: PaneInfo?, term: PaneText?, session: Session, onLeader: () -> Unit) {
     val j = LocalJw.current
     val scope = rememberCoroutineScope()
     Row(
