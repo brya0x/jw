@@ -602,9 +602,10 @@ function vSettings(){
    <div class="srow"><div class="t"><b>túnel</b><span>jw-7f3a.trycloudflare.com · respaldo</span></div><span style="color:${state.route==='tunnel'?'var(--green)':'var(--dim)'}">${state.route==='tunnel'?'● en uso':'listo'}</span></div>
    <div class="srow"><div class="t"><b>protocolo</b><span>jw-proto v8 · compatible</span></div></div>
    <button class="srow" data-act="disc" style="color:var(--red)"><div class="t"><b>desconectar</b></div></button>
-   ${ansSection()}<div class="sec">tema</div><div class="themes">${Object.entries(THEMES).map(([n,t])=>`<button class="th" aria-pressed="${state.theme===n}" data-theme="${n}" style="--tbg:${t.bg};--tfg:${t.fg};--tdim:${t.dim}"><div class="s3">${['blue','green','red','yellow'].map(k=>`<i style="--c:${t[k]}"></i>`).join('')}</div><b>${n}</b><span>${t.dark?'oscuro':'claro'}</span></button>`).join('')}</div>
+   ${ansSection()}<div class="sec">tema</div><div class="prev">Lo eliges aquí, no en el PC: pinta la app, los colores del terminal y la salida del agente. El PC y el agente siguen con su tema. Los temas son los que tu PC ofrece (<b>jw theme ls</b>).</div><div class="themes">${Object.entries(THEMES).map(([n,t])=>`<button class="th" aria-pressed="${state.theme===n}" data-theme="${n}" style="--tbg:${t.bg};--tfg:${t.fg};--tdim:${t.dim}"><div class="s3">${['blue','green','red','yellow'].map(k=>`<i style="--c:${t[k]}"></i>`).join('')}</div><b>${n}</b><span>${t.dark?'oscuro':'claro'}</span></button>`).join('')}</div>
+   <div class="prev" style="border-top:1px solid var(--line)"><b>así se ve el panel con «${state.theme}»</b><div class="out" style="padding:8px 0 0;max-height:none;font-size:11.5px;background:transparent"><span class="d">~/ws/jw</span> <span class="g">✓</span> 42 tests <span class="r">✗</span> 1 falló <span class="y">⚠</span> aviso <span class="b">info</span> <span class="m">claude</span> <span class="c">cyan</span></div></div>
    <div class="sec">terminal</div>
-   <div class="srow"><div class="t"><b>ajustar al teléfono</b><span>el panel toma el tamaño de esta pantalla; al salir recupera el suyo</span></div>${sw('fit')}</div>
+   <div class="srow"><div class="t"><b>texto de los paneles</b><span>la app recibe el texto del panel y lo ajusta al ancho de esta pantalla; el PTY no cambia de tamaño, así que el TUI nunca queda encogido</span></div></div>
    <div class="sec">general</div>
    <div class="srow"><div class="t"><b>líder</b><span>^␣ abre el menú de teclas</span></div></div>
    <div class="srow"><div class="t"><b>animaciones</b></div>${sw('anim')}</div>
@@ -623,11 +624,11 @@ function vWs(){
     <button class="ib" data-sheet="pick" aria-label="Cambiar workspace">${ic('search')}</button><button class="ib" data-act="wsfiles" aria-label="Archivos">${ic('folder')}</button><button class="ib" data-go="changes" aria-label="Cambios" style="font-size:16px">±</button></div>
    <div class="panes" role="tablist">${panes.map(([p,c])=>`<button class="pt" role="tab" aria-selected="${state.pane===p}" data-pane="${p}" style="--c:${c}"><i></i>${p}</button>`).join('')}</div>
    <div class="out" id="out">${lines}${w.ag==='work'&&state.pane==='claude'?' <span class="cur"></span>':''}</div>
-   ${askOn?`<div class="ask"><p><b style="color:var(--yellow)">?</b> ${w.last}</p><div class="yn"><button class="y" data-ans="y|${w.id}">y · sí</button><button class="x" data-ans="n|${w.id}">n · no</button></div></div>`:''}
+   ${askOn?`<div class="ask"><p><b style="color:var(--yellow)">?</b> ${w.last}</p><div class="opts" style="font-size:11.5px;color:var(--dim);margin:-2px 0 8px;white-space:pre-wrap">1. Yes   2. Yes, y no volver a preguntar   3. No   <span style="color:var(--fg)">(texto del aviso, tomado del panel)</span></div><div class="yn"><button class="y" data-ans="y|${w.id}">y · sí</button><button class="x" data-ans="n|${w.id}">n · no</button></div></div>`:''}
    ${state.sel?`<div class="selbar"><span>3 líneas seleccionadas</span><button class="key" data-act="copy">copiar</button><button class="key" data-act="unsel">cancelar</button></div>`:''}
    <div class="keys"><button class="key lead" data-sheet="leader">^␣</button>${keys.map(x=>`<button class="key" data-key="${x}">${x}</button>`).join('')}</div>
    <form class="comp" id="comp"><span class="pr">${state.pane==='claude'?'›':'❯'}</span><input id="msg" autocomplete="off" placeholder="${state.pane==='claude'?'escribe a claude':'escribe un comando'}" aria-label="Entrada"><button class="send" aria-label="Enviar">${ic('send')}</button></form>
-   ${statusBar('TERM',state.pane+' · 54×22 · ^␣ menú')}`;
+   ${statusBar('TERM',state.pane+' · texto · se ajusta al ancho · ^␣ menú')}`;
 }
 
 
@@ -685,8 +686,20 @@ function vViewer(){
    <div class="scroll">${body}</div>${statusBar('NORMAL',v.kind==='bin'?'binario':v.kind==='big'?'1 MiB de 3,4 MiB':md?(v.src?'markdown · fuente':'markdown · vista'):'texto · '+TXT.length+' líneas')}`;
 }
 
+/* nueva sesión: el formulario vive dentro de la hoja de sesiones (no abre otra hoja) */
+function newSessForm(){
+  const st=state.ns||'form';
+  return `<h3><button class="ib" data-act="sessback" aria-label="Volver a las sesiones" style="display:inline-flex;vertical-align:middle;margin-right:4px">${ic('back')}</button>nueva sesión</h3>
+      <label class="fld"><label>nombre</label></label><input id="nsname" value="${state.nsName||'trabajo'}" ${state.ro?'disabled':''} aria-label="Nombre de la sesión">
+      <label class="fld"><label>carpeta con la que empieza</label></label>
+      <button class="pick" data-act="pickfolder"><span>${state.nsDir}</span><em>elegir ▸</em></button>
+      ${st==='err'?'<div class="bad">ya existe una sesión con ese nombre</div>':''}${st==='cmd'?'<div class="bad">ese nombre es un comando de jw</div>':''}
+      ${state.ro?'<div class="bad" style="color:var(--yellow)">solo lectura: este puente no deja crear sesiones</div>':''}
+      <button class="gobtn" data-act="createsess" ${state.ro?'disabled':''}>crear y abrir</button>`;
+}
 function sheet(){
   const s=state.sheet; if(!s) return '';
+  if(s!=='sess') state.sessNew=false;
   let body='';
   if(s==='pick'){
     const q=state.q.toLowerCase(), l=state.w.filter(x=>(x.name+x.path).toLowerCase().includes(q));
@@ -695,9 +708,10 @@ function sheet(){
   if(s==='sess'){
     const ss=[...new Set(state.w.map(x=>x.sess))];
     body=`<h3>sesiones</h3><div class="list">${ss.map(n=>`<button class="lk" data-sess="${n}"><kbd>${n===state.sess?'●':' '}</kbd><span>${n}</span><em>${state.w.filter(x=>x.sess===n).length} workspaces</em></button>`).join('')}<button class="lk" data-act="newsess"><kbd>+</kbd><span>nueva sesión</span></button></div>`;
+    if(state.sessNew) body=newSessForm();
   }
   if(s==='open'){
-    body=`<h3>abrir</h3><div class="list"><button class="lk" data-act="folder"><kbd>o</kbd><span>abrir carpeta</span><em>del PC</em></button><button class="lk" data-act="newwt"><kbd>w</kbd><span>nuevo worktree</span><em>de un proyecto</em></button><button class="lk" data-act="newsess"><kbd>a</kbd><span>nueva sesión</span></button><button class="lk" data-sheet="pick"><kbd>␣</kbd><span>buscar workspace</span></button></div>`;
+    body=`<h3>abrir</h3><div class="list"><button class="lk" data-act="folder"><kbd>o</kbd><span>abrir carpeta</span><em>del PC</em></button><button class="lk" data-act="newwt"><kbd>w</kbd><span>nuevo worktree</span><em>de un proyecto</em></button><button class="lk" data-sheet="pick"><kbd>␣</kbd><span>buscar workspace</span></button></div>`;
   }
   if(s==='leader'){
     const it=[['␣','buscar workspace','ir'],['o','abrir carpeta','ir'],['/','archivos','ir'],['w','nuevo worktree','worktree'],['tab','workspace anterior','ir'],['a','sesiones','ir'],['t','panel nuevo','paneles'],['x','cerrar panel','paneles'],['n','nombrar panel','paneles'],['d','cambios (diff)','worktree'],[',','ajustes','ir'],['q','desconectar','']];
@@ -720,16 +734,6 @@ function sheet(){
   }
   if(s==='newwtproj'){
     body=`<h3>proyecto</h3><div class="list">${state.w.filter(x=>x.kind==='root').map(x=>`<button class="lk" data-act="setproj" data-proj="${x.name}"><kbd>${x.name===state.nwProj?'●':' '}</kbd><span>${x.name}</span><em>${x.path}</em></button>`).join('')}</div>`;
-  }
-  if(s==='newsess'){
-    const st=state.ns||'form';
-    body=`<h3>nueva sesión</h3>
-      <label class="fld"><label>nombre</label></label><input id="nsname" value="${state.nsName||'trabajo'}" ${state.ro?'disabled':''} aria-label="Nombre de la sesión">
-      <label class="fld"><label>carpeta con la que empieza</label></label>
-      <button class="pick" data-act="pickfolder"><span>${state.nsDir}</span><em>elegir ▸</em></button>
-      ${st==='err'?'<div class="bad">ya existe una sesión con ese nombre</div>':''}${st==='cmd'?'<div class="bad">ese nombre es un comando de jw</div>':''}
-      ${state.ro?'<div class="bad" style="color:var(--yellow)">solo lectura: este puente no deja crear sesiones</div>':''}
-      <button class="gobtn" data-act="createsess" ${state.ro?'disabled':''}>crear y abrir</button>`;
   }
   if(s==='paste'){
     body=`<h3>pegar enlace</h3><input id="lnk" placeholder="jw://….trycloudflare.com/…" autocomplete="off" aria-label="Enlace"><div class="lerr">${state.linkerr||''}</div><div class="list"><button class="lk" data-act="link"><kbd>↵</kbd><span>conectar</span><em>solo túneles de jw</em></button></div>`;
@@ -767,7 +771,7 @@ document.addEventListener('click',e=>{
       if(j[0]==='f'){const a=m[j];state.fs={path:a[0],mode:a[1]==='open'?'open':'browse',hidden:a[1]===1,big:a[1]==='big'};state.sess='main';state.ws='jw/feat/mobile-app';state.screen='files';render();return}
       if(j[0]==='v'){state.viewer={path:'~/ws/jw/docs/specs/mobile.md',kind:'ok',src:false};if(j==='v2')state.viewer.src=true;if(j==='v3')state.viewer={path:'~/ws/jw/crates/core/Cargo.toml',kind:'ok',src:false};if(j==='v4')state.viewer={path:'~/ws/jw/logo.png',kind:'bin',src:false};if(j==='v5')state.viewer={path:'~/ws/jw/docs/specs/rust-tui.md',kind:'big',src:false};if(j==='v6')state.viewer={path:'~/.ssh/id_ed25519',kind:'err',src:false};state.screen='viewer';render();return}
       if(j[0]==='w'){state.sess='main';state.screen='home';state.sheet='newwt';if(j==='w2')state.nw='busy';if(j==='w3')state.nw='err';if(j==='w4')state.ro=true;render();return}
-      if(j[0]==='n'){state.sess='main';state.screen='home';state.sheet='newsess';if(j==='n2')state.ns='err';if(j==='n3'){state.ns='cmd';state.nsName='worktree'}else state.nsName='';render();return}
+      if(j[0]==='n'){state.sess='main';state.screen='home';state.sheet='sess';state.sessNew=true;if(j==='n2')state.ns='err';if(j==='n3'){state.ns='cmd';state.nsName='worktree'}else state.nsName='';render();return}
       if(j==='p1'){state.sess='main';state.screen='home';state.sheet='open';render();return}}
     if(d.jump.startsWith('ch')||d.jump==='changes'){const j=d.jump;state.screen='changes';state.vst={gen:'ok',unc:'ok',com:'ok'};state.view='gen';state.commit=null;state.file=null;
       const set=(v,x)=>{state.view=v;state.vst[v]=x};
@@ -838,11 +842,12 @@ document.addEventListener('click',e=>{
     case 'vsrc0':state.viewer.src=false;render();break;
     case 'vsrc1':state.viewer.src=true;render();break;
     case 'newwt':state.sheet='newwt';render();break;
-    case 'newsess':state.sheet='newsess';render();break;
+    case 'newsess':state.sheet='sess';state.sessNew=true;render();break;
+    case 'sessback':state.sessNew=false;render();break;
     case 'setproj':state.nwProj=t.dataset.proj;state.sheet='newwt';render();break;
     case 'pickfolder':state.sheet=null;state.screen='files';state.fs={path:'~/ws',mode:'open',hidden:false};render();break;
     case 'createwt':state.nw='busy';render();setTimeout(()=>{state.nw='form';state.sheet=null;enter('jw/feat/mobile-app')},1400);break;
-    case 'createsess':state.sheet=null;toast('sesión creada: '+(state.nsName||'trabajo'));render();break;
+    case 'createsess':state.sheet=null;state.sessNew=false;toast('sesión creada: '+(state.nsName||'trabajo'));render();break;
   }
 });
 document.addEventListener('input',e=>{if(e.target.id==='q'){state.q=e.target.value;const s=$('#overlay');s.innerHTML=sheet();const q=$('#q');q.focus();q.setSelectionRange(q.value.length,q.value.length)}});
