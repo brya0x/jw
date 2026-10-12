@@ -134,6 +134,7 @@ svg.i{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stro
 .st.A{background:var(--green)} .st.D{background:var(--red)} .st.R{background:var(--cyan)} .st.M{background:var(--yellow)}
 .fl .nm span i{font-style:normal;color:var(--cyan)}
 .fl .why{color:var(--yellow)}
+.fl.dr{background:var(--panel);min-height:40px}.fl.dr .chev{flex:none;width:18px;text-align:center;color:var(--dim)}.fl.dr .cnt{flex:none;font-size:11px;color:var(--dim)}.fl.dr .nm b{font-weight:600}.fl.dr + .fl{border-top:1px solid var(--line)}
 .note{padding:10px 14px;font-size:11.5px;color:var(--yellow);background:var(--sel);border-bottom:1px solid var(--line)}
 .centre{padding:44px 24px;text-align:center;color:var(--dim);display:flex;flex-direction:column;align-items:center;gap:10px}
 .centre .big{color:var(--fg);font-size:14px}
@@ -371,7 +372,7 @@ function applyTheme(n){
 const state = {
   route:'wifi',
   screen:'connect', theme:'one-dark', conn:'idle', sess:'main', ws:'jw/feat/mobile-app', pane:'claude',
-  sheet:null, q:'', file:null, ro:false, nw:'form', nwProj:'jw', ns:'form', nsDir:'~/ws/jw', fs:{path:'~/ws/jw',mode:'browse',hidden:false}, viewer:{path:'~/ws/jw/docs/specs/mobile.md',kind:'ok',src:false}, view:'gen', commit:null, vst:{gen:'ok',unc:'ok',com:'ok'}, viewed:{}, anim:true, haptic:true, fit:false, msg:'',
+  sheet:null, q:'', file:null, ro:false, nw:'form', nwProj:'jw', ns:'form', nsDir:'~/ws/jw', fs:{path:'~/ws/jw',mode:'browse',hidden:false}, viewer:{path:'~/ws/jw/docs/specs/mobile.md',kind:'ok',src:false}, view:'unc', commit:null, closed:{}, vst:{gen:'ok',unc:'ok',com:'ok'}, viewed:{}, anim:true, haptic:true, fit:false, msg:'',
   w:[
     {id:'jw', kind:'root', name:'jw', path:'~/ws/jw', sess:'main', ag:'idle', dev:0, pr:'', last:'Shell libre en la raíz del proyecto.', t:'1 h'},
     {id:'jw/feat/mobile-app', kind:'wt', proj:'jw', name:'feat/mobile-app', path:'~/ws/jw-wt/mobile-app', sess:'main', ag:'work', dev:1, pr:'#41', last:'Armando el prototipo de la app móvil.', t:'ahora'},
@@ -549,15 +550,27 @@ const COMMITS=[
   {sha:'4f5e6d7',s:'feat(android): M6a, el diff en el teléfono',t:'ayer',files:[]}
 ];
 COMMITS[0].files=[FILES[0],FILES[1]];COMMITS[1].files=[FILES[5],FILES[7],FILES[2]];COMMITS[2].files=[FILES[7]];
-const fileList=()=>state.view==='unc'?UNC:state.view==='com'?(state.commit===null?[]:COMMITS[state.commit].files):FILES;
-const VIEWS=[['gen','General'],['unc','Sin commitear'],['com','Commits']];
+function treeCmp(a,b){const x=a.split('/'),y=b.split('/');for(let i=0;;i++){if(i>=x.length||i>=y.length)return(i<x.length)-(i<y.length);const dx=i<x.length-1,dy=i<y.length-1;if(dx!==dy)return dx?-1:1;if(x[i]!==y[i])return x[i]<y[i]?-1:1}}
+const fileList=()=>(state.view==='unc'?UNC:state.view==='com'?(state.commit===null?[]:COMMITS[state.commit].files):FILES).slice().sort((p,q)=>treeCmp(p.n,q.n));
+const closedKey=k=>state.view+'|'+(state.view==='com'?state.commit+'|':'')+k;
+// rows of the tree, in order: single-child chains of folders are one row
+function treeRows(L){const out=[],P=L.map(f=>f.n.split('/'));
+  (function walk(lo,hi,base,depth,hidden){let i=lo;while(i<hi){
+    if(P[i].length===base+1){if(!hidden)out.push({file:i,depth});i++;continue}
+    let e=i;while(e<hi&&P[e].length>base+1&&P[e][base]===P[i][base])e++;
+    let k=1;while(P.slice(i,e).every(q=>q.length>base+k+1&&q[base+k]===P[i][base+k]))k++;
+    const key=P[i].slice(0,base+k).join('/')+'/',g=L.slice(i,e),shut=!!state.closed[closedKey(key)];
+    if(!hidden)out.push({dir:key,label:P[i].slice(base,base+k).join('/'),depth,n:g.length,a:g.reduce((t,f)=>t+f.a,0),d:g.reduce((t,f)=>t+f.d,0),shut});
+    walk(i,e,base+k,depth+1,hidden||shut);i=e}})(0,L.length,0,0,false);
+  return out}
+const VIEWS=[['unc','Sin commitear'],['com','Commits'],['gen','General']];
 const vcount=v=>({gen:FILES.length,unc:UNC.length,com:COMMITS.length}[v]);
 const TITLE=()=>wsOf(state.ws).name+' vs '+(wsOf(state.ws).kind==='wt'?'origin/main':'HEAD');
 function lineNos(h){const m=/@@ -(\d+)(?:,\d+)? \+(\d+)/.exec(h);return m?[+m[1],+m[2]]:[1,1]}
 function hunkHtml([h,ls]){let [o,n]=lineNos(h);return `<div class="hunk"><div class="h">${h}</div>${ls.map(([k,t])=>{const a=k==='a'?'':o++, b=k==='x'?'':n++;return `<div class="l ${k}"><span class="n1">${k==='a'?'':a}</span><span class="n2">${k==='x'?'':b}</span><span class="tx">${t.replace(/</g,'&lt;')}</span></div>`}).join('')}</div>`}
 function fileKey(f){return f.n}
 function vChanges(){
-  const cw=wsOf(state.ws), v=state.view||'gen', ds=(state.vst||{})[v]||'ok';
+  const cw=wsOf(state.ws), v=state.view||'unc', ds=(state.vst||{})[v]||'ok';
   const base=cw.kind==='wt'?'origin/main':'HEAD';
   const sub=v==='gen'?(ds==='nobase'?'sin rama base':cw.name+' vs '+base+' · commiteado'):v==='unc'?cw.name+' · sin commitear':(state.commit===null?COMMITS.length+' commits':COMMITS[state.commit].sha+' · '+(state.commit+1)+'/'+COMMITS.length);
   const tabs=`<div class="seg" role="tablist">${VIEWS.map(([k,l])=>{const st=((state.vst||{})[k]||'ok');return `<button role="tab" aria-selected="${v===k}" data-vtab="${k}">${l}<b>${st==='load'?'…':st==='err'?'!':vcount(k)}</b></button>`}).join('')}</div>`;
@@ -583,7 +596,8 @@ function vChanges(){
   const big=ds==='big';
   const nav2=v==='com'?`<div class="cnav"><button data-act="commits" aria-label="Volver a los commits">‹ commits</button><span>${COMMITS[state.commit].s}</span><button data-cn="-1" aria-label="Commit anterior" ${state.commit===0?'disabled':''}>◂</button><button data-cn="1" aria-label="Commit siguiente" ${state.commit===COMMITS.length-1?'disabled':''}>▸</button></div>`:'';
   return `${head}${nav2}
-   <div class="scroll">${big?`<div class="note">este diff pasó de 2 MiB: se listan 200 de 1 234 archivos, sin líneas. Míralo entero en el PC.</div>`:''}${L.map((f,i)=>{const st=f.u?'?':(f.st||'M');return `<button class="fl" data-file="${i}"><span class="st ${f.u?'U':st}" aria-label="${{A:'nuevo',D:'borrado',R:'renombrado',M:'modificado','?':'sin seguimiento'}[st]}">${st}</span><span class="nm"><b>${f.n.split('/').pop()}</b><span>${f.unr?`<span class="why">${WHY[f.unr]||f.unr}</span>`:f.bin?'<i>binario</i> · ':''}${f.o?'<i>← '+f.o+'</i>':f.n.split('/').slice(0,-1).join('/')}</span></span>${big?'':`<span class="pm"><span class="a">+${f.a}</span> <span class="x">-${f.d}</span></span>`}<span class="vw" aria-pressed="${!!state.viewed[v+'|'+fileKey(f)]}">✓</span></button>`}).join('')}</div>
+   <div class="scroll">${big?`<div class="note">este diff pasó de 2 MiB: se listan 200 de 1 234 archivos, sin líneas. Míralo entero en el PC.</div>`:''}${treeRows(L).map(t=>{if(t.dir!==undefined)return `<button class="fl dr" data-dir="${t.dir}" aria-expanded="${!t.shut}" style="padding-left:${14+t.depth*16}px"><span class="chev">${t.shut?'▸':'▾'}</span><span class="nm"><b>${t.label}/</b></span><span class="cnt">${t.n}</span>${big?'':`<span class="pm"><span class="a">+${t.a}</span> <span class="x">-${t.d}</span></span>`}</button>`;
+     const f=L[t.file],i=t.file,st=f.u?'?':(f.st||'M');return `<button class="fl" data-file="${i}" style="padding-left:${14+t.depth*16}px"><span class="st ${f.u?'U':st}" aria-label="${{A:'nuevo',D:'borrado',R:'renombrado',M:'modificado','?':'sin seguimiento'}[st]}">${st}</span><span class="nm"><b>${f.n.split('/').pop()}</b>${f.unr||f.bin||f.o?`<span>${f.unr?`<span class="why">${WHY[f.unr]||f.unr}</span>`:f.bin?'<i>binario</i>':''}${f.o?'<i>← '+f.o+'</i>':''}</span>`:''}</span>${big?'':`<span class="pm"><span class="a">+${f.a}</span> <span class="x">-${f.d}</span></span>`}<span class="vw" aria-pressed="${!!state.viewed[v+'|'+fileKey(f)]}">✓</span></button>`}).join('')}</div>
    ${statusBar('DIFF',L.filter(f=>state.viewed[v+'|'+fileKey(f)]).length+'/'+L.length+' vistos')}${nav()}`;
 }
 
@@ -754,7 +768,7 @@ function answer(v,id){
 function enter(id){state.sel=false;state.ws=id;state.pane='claude';state.screen='ws';state.sheet=null;state.q='';const w=wsOf(id);w.t=w.t==='ahora'?'ahora':w.t;render()}
 
 document.addEventListener('click',e=>{
-  const t=e.target.closest('[data-go],[data-open],[data-ans],[data-act],[data-theme],[data-sw],[data-pane],[data-key],[data-file],[data-pcfile],[data-fs],[data-view],[data-vtab],[data-commit],[data-cn],[data-jump],[data-sheet],[data-sess],[data-lead],[data-preset],[data-opt]'); if(!t) return;
+  const t=e.target.closest('[data-go],[data-open],[data-ans],[data-act],[data-theme],[data-sw],[data-pane],[data-key],[data-file],[data-pcfile],[data-fs],[data-view],[data-dir],[data-vtab],[data-commit],[data-cn],[data-jump],[data-sheet],[data-sess],[data-lead],[data-preset],[data-opt]'); if(!t) return;
   const d=t.dataset;
   if(d.jump){state.sheet=null;state.file=null;state.conn='idle';
     if(CONN.includes(d.jump)){goConn(d.jump);return}
@@ -769,16 +783,16 @@ document.addEventListener('click',e=>{
       if(j[0]==='w'){state.sess='main';state.screen='home';state.sheet='newwt';if(j==='w2')state.nw='busy';if(j==='w3')state.nw='err';if(j==='w4')state.ro=true;render();return}
       if(j[0]==='n'){state.sess='main';state.screen='home';state.sheet='newsess';if(j==='n2')state.ns='err';if(j==='n3'){state.ns='cmd';state.nsName='worktree'}else state.nsName='';render();return}
       if(j==='p1'){state.sess='main';state.screen='home';state.sheet='open';render();return}}
-    if(d.jump.startsWith('ch')||d.jump==='changes'){const j=d.jump;state.screen='changes';state.vst={gen:'ok',unc:'ok',com:'ok'};state.view='gen';state.commit=null;state.file=null;
+    if(d.jump.startsWith('ch')||d.jump==='changes'){const j=d.jump;state.screen='changes';state.vst={gen:'ok',unc:'ok',com:'ok'};state.view='unc';state.commit=null;state.file=null;
       const set=(v,x)=>{state.view=v;state.vst[v]=x};
       if(j==='chunc')state.view='unc';
       else if(j==='chcom')state.view='com';
       else if(j==='chcomf'){state.view='com';state.commit=0}
       else if(j==='chfile')state.file=0;
-      else if(j==='chren')state.file=2;
-      else if(j==='chbin')state.file=3;
-      else if(j==='chunr')state.file=4;
-      else if(j==='chbig')state.file=6;
+      else if(j==='chren')state.file=fileList().findIndex(f=>f.st==='R');
+      else if(j==='chbin')state.file=fileList().findIndex(f=>f.bin);
+      else if(j==='chunr')state.file=fileList().findIndex(f=>f.unr);
+      else if(j==='chbig')state.file=fileList().findIndex(f=>f.tr);
       else if(j==='chload')set('unc','load');
       else if(j==='cherr')set('com','err');
       else if(j==='chempty')set('gen','empty');
@@ -803,6 +817,7 @@ document.addEventListener('click',e=>{
   if(d.pane){state.pane=d.pane;render();return}
   if(d.fs){state.fs.path=d.fs;state.fload=true;render();setTimeout(()=>{state.fload=false;render()},350);return}
   if(d.pcfile){state.viewer={path:d.pcfile,kind:/\.png$/.test(d.pcfile)?'bin':'ok',src:false};state.screen='viewer';render();return}
+  if(d.dir){const k=closedKey(d.dir);state.closed[k]=!state.closed[k];render();return}
   if(d.vtab){state.view=d.vtab;state.file=null;state.commit=null;render();return}
   if(d.commit!==undefined){state.commit=+d.commit;state.file=null;render();return}
   if(d.cn){state.commit=Math.max(0,Math.min(COMMITS.length-1,state.commit+(+d.cn)));state.file=null;render();return}

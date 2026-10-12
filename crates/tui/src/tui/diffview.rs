@@ -35,10 +35,14 @@ pub enum Which {
 }
 
 impl Which {
-    const ALL: [Which; 3] = [Which::General, Which::Uncommitted, Which::Commits];
+    /// In the order the sidebar lists them and `1 2 3` pick them.
+    const ALL: [Which; 3] = [Which::Uncommitted, Which::Commits, Which::General];
 
     fn n(self) -> usize {
-        self as usize + 1
+        Self::ALL
+            .iter()
+            .position(|w| *w == self)
+            .map_or(0, |i| i + 1)
     }
 
     fn name(self) -> &'static str {
@@ -99,7 +103,7 @@ struct Shown {
 
 impl From<Loaded> for Shown {
     fn from(l: Loaded) -> Self {
-        match l {
+        let mut shown = match l {
             Loaded::Files(files) => Shown { files, big: None },
             Loaded::TooLarge { files, total } => Shown {
                 files: files
@@ -116,7 +120,145 @@ impl From<Loaded> for Shown {
                     .collect(),
                 big: Some(total),
             },
+        };
+        // The scroll follows the sidebar's tree, top to bottom (REQ-247).
+        shown.files.sort_by(|a, b| tree_cmp(&a.path, &b.path));
+        shown
+    }
+}
+
+/// Directories before files at every level, each by name.
+fn tree_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    let (mut a, mut b) = (a.split('/').peekable(), b.split('/').peekable());
+    loop {
+        match (a.next(), b.next()) {
+            (Some(x), Some(y)) => {
+                let (dx, dy) = (a.peek().is_some(), b.peek().is_some());
+                if dx != dy {
+                    return dy.cmp(&dx);
+                }
+                if x != y {
+                    return x.cmp(y);
+                }
+            }
+            (x, y) => return x.is_some().cmp(&y.is_some()),
         }
+    }
+}
+
+/// One directory row of the sidebar tree: a chain of directories with one
+/// child each is a single row (REQ-248).
+struct Dir {
+    /// Its path with a trailing `/`, the key of its collapsed state.
+    key: String,
+    label: String,
+    depth: usize,
+    parent: Option<usize>,
+    files: usize,
+    added: usize,
+    deleted: usize,
+}
+
+enum Node {
+    Dir(usize),
+    File(usize),
+}
+
+/// The files, sorted in tree order, as the rows they would be with every
+/// directory open.
+#[derive(Default)]
+struct Tree {
+    dirs: Vec<Dir>,
+    nodes: Vec<Node>,
+    /// By file: how deep it sits and the directory row it is under.
+    file_depth: Vec<usize>,
+    file_parent: Vec<Option<usize>>,
+}
+
+impl Tree {
+    fn new(files: &[File]) -> Self {
+        let paths: Vec<Vec<&str>> = files.iter().map(|f| f.path.split('/').collect()).collect();
+        let mut t = Tree {
+            file_depth: vec![0; files.len()],
+            file_parent: vec![None; files.len()],
+            ..Tree::default()
+        };
+        t.build(files, &paths, 0..files.len(), 0, 0, None);
+        t
+    }
+
+    /// `range` of files all share their first `base` path parts.
+    fn build(
+        &mut self,
+        files: &[File],
+        paths: &[Vec<&str>],
+        range: std::ops::Range<usize>,
+        base: usize,
+        depth: usize,
+        parent: Option<usize>,
+    ) {
+        let mut i = range.start;
+        while i < range.end {
+            if paths[i].len() == base + 1 {
+                self.nodes.push(Node::File(i));
+                self.file_depth[i] = depth;
+                self.file_parent[i] = parent;
+                i += 1;
+                continue;
+            }
+            let name = paths[i][base];
+            let mut end = i;
+            while end < range.end && paths[end].len() > base + 1 && paths[end][base] == name {
+                end += 1;
+            }
+            // Take in the directories below while it has no file of its own
+            // and only one directory in it.
+            let mut k = 1;
+            while (i..end).all(|j| paths[j].len() > base + k + 1)
+                && (i..end).all(|j| paths[j][base + k] == paths[i][base + k])
+            {
+                k += 1;
+            }
+            let at = self.dirs.len();
+            self.dirs.push(Dir {
+                key: format!("{}/", paths[i][..base + k].join("/")),
+                label: paths[i][base..base + k].join("/"),
+                depth,
+                parent,
+                files: end - i,
+                added: files[i..end].iter().map(File::added).sum(),
+                deleted: files[i..end].iter().map(File::deleted).sum(),
+            });
+            self.nodes.push(Node::Dir(at));
+            self.build(files, paths, i..end, base + k, depth + 1, Some(at));
+            i = end;
+        }
+    }
+
+    /// Whether `d` or a directory above it is closed.
+    fn hidden(&self, d: usize, closed: &BTreeSet<String>) -> bool {
+        let mut at = Some(d);
+        while let Some(i) = at {
+            if closed.contains(&self.dirs[i].key) {
+                return true;
+            }
+            at = self.dirs[i].parent;
+        }
+        false
+    }
+
+    /// The row a file is shown on: its own, or the outermost closed directory
+    /// over it.
+    fn shown_as(&self, f: usize, closed: &BTreeSet<String>) -> Row {
+        let mut hide = None;
+        let mut at = self.file_parent.get(f).copied().flatten();
+        while let Some(i) = at {
+            if closed.contains(&self.dirs[i].key) {
+                hide = Some(i);
+            }
+            at = self.dirs[i].parent;
+        }
+        hide.map_or(Row::File(f), Row::Dir)
     }
 }
 
@@ -127,6 +269,8 @@ struct Pos {
     /// Index into the flattened items of the top visible row.
     scroll: usize,
     viewed: BTreeSet<String>,
+    /// Directories closed in the sidebar, by [`Dir::key`] (REQ-249).
+    closed: BTreeSet<String>,
 }
 
 /// What the body shows.
@@ -173,6 +317,8 @@ pub struct DiffView {
 enum Row {
     Section(Which),
     Commit(usize),
+    /// A directory of the tree, an index into [`Tree::dirs`].
+    Dir(usize),
     File(usize),
     /// "older commits not shown".
     More,
@@ -204,18 +350,24 @@ fn load(r: Option<Request>) -> Action {
 }
 
 impl DiffView {
-    /// A pane that opens on General, which `general` already holds (REQ-222).
-    pub fn new(name: String, base: String, dir: String, general: Result<Loaded, String>) -> Self {
+    /// A pane that opens on Uncommitted, which `uncommitted` already holds
+    /// (REQ-222).
+    pub fn new(
+        name: String,
+        base: String,
+        dir: String,
+        uncommitted: Result<Loaded, String>,
+    ) -> Self {
         Self {
             name,
             base,
             dir,
-            which: Which::General,
-            general: match general {
+            which: Which::Uncommitted,
+            general: Load::Idle,
+            uncommitted: match uncommitted {
                 Ok(l) => Load::Ready(l.into()),
                 Err(e) => Load::Failed(e),
             },
-            uncommitted: Load::Idle,
             list: Load::Idle,
             commit: 0,
             details: BTreeMap::new(),
@@ -246,6 +398,7 @@ impl DiffView {
         static NONE: Pos = Pos {
             scroll: 0,
             viewed: BTreeSet::new(),
+            closed: BTreeSet::new(),
         };
         self.pos.get(&self.pos_key()).unwrap_or(&NONE)
     }
@@ -429,7 +582,7 @@ impl DiffView {
                     for i in 0..l.list.len() {
                         out.push(Row::Commit(i));
                         if i == self.commit {
-                            out.extend((0..self.files().len()).map(Row::File));
+                            self.file_rows(&mut out);
                         }
                     }
                     if l.more {
@@ -437,10 +590,25 @@ impl DiffView {
                     }
                 }
             } else {
-                out.extend((0..self.files().len()).map(Row::File));
+                self.file_rows(&mut out);
             }
         }
         out
+    }
+
+    /// The tree's rows without what a closed directory hides (REQ-248).
+    fn file_rows(&self, out: &mut Vec<Row>) {
+        let tree = Tree::new(self.files());
+        let closed = &self.pos().closed;
+        out.extend(tree.nodes.iter().filter_map(|n| match n {
+            Node::Dir(d) if !tree.dirs[*d].parent.is_some_and(|p| tree.hidden(p, closed)) => {
+                Some(Row::Dir(*d))
+            }
+            Node::File(f) if !tree.file_parent[*f].is_some_and(|p| tree.hidden(p, closed)) => {
+                Some(Row::File(*f))
+            }
+            _ => None,
+        }));
     }
 
     fn row_of(&self, row: Row) -> Option<usize> {
@@ -464,9 +632,48 @@ impl DiffView {
             KeyCode::Up | KeyCode::Char('k') => self.sb = Some(cur.saturating_sub(1)),
             KeyCode::Tab | KeyCode::Esc => self.sb = None,
             KeyCode::Enter => return Some(self.choose(cur)),
+            KeyCode::Right | KeyCode::Char('l') => {
+                if let Some(Row::Dir(d)) = self.rows().get(cur).copied() {
+                    if self.is_closed(d) {
+                        self.toggle(d);
+                    } else {
+                        self.sb = Some((cur + 1).min(n - 1));
+                    }
+                }
+            }
+            KeyCode::Left | KeyCode::Char('h') => {
+                let rows = self.rows();
+                let tree = Tree::new(self.files());
+                let (open, parent) = match rows.get(cur).copied() {
+                    Some(Row::Dir(d)) => (!self.is_closed(d), tree.dirs[d].parent),
+                    Some(Row::File(f)) => (false, tree.file_parent[f]),
+                    _ => (false, None),
+                };
+                if let (true, Some(Row::Dir(d))) = (open, rows.get(cur).copied()) {
+                    self.toggle(d);
+                } else if let Some(i) =
+                    parent.and_then(|p| rows.iter().position(|r| *r == Row::Dir(p)))
+                {
+                    self.sb = Some(i);
+                }
+            }
             _ => return None,
         }
         Some(Action::None)
+    }
+
+    fn is_closed(&self, d: usize) -> bool {
+        let tree = Tree::new(self.files());
+        self.pos().closed.contains(&tree.dirs[d].key)
+    }
+
+    /// Opens a closed directory and closes an open one (REQ-249).
+    fn toggle(&mut self, d: usize) {
+        let key = Tree::new(self.files()).dirs[d].key.clone();
+        let closed = &mut self.pos_mut().closed;
+        if !closed.remove(&key) {
+            closed.insert(key);
+        }
     }
 
     /// `↵` or a click on a row of the sidebar.
@@ -474,6 +681,10 @@ impl DiffView {
         match self.rows().get(at).copied() {
             Some(Row::Section(w)) => self.show(w),
             Some(Row::Commit(i)) => self.select_commit(i),
+            Some(Row::Dir(d)) => {
+                self.toggle(d);
+                Action::None
+            }
             Some(Row::File(f)) => {
                 self.sb = None;
                 self.goto_file(f);
@@ -547,9 +758,9 @@ impl DiffView {
         let is_hunk = |i: &Item| matches!(i, Item::Hunk(..));
         let to = match k.code {
             KeyCode::Char('q') | KeyCode::Esc => return Action::Close,
-            KeyCode::Char('1') => return self.show(Which::General),
-            KeyCode::Char('2') => return self.show(Which::Uncommitted),
-            KeyCode::Char('3') => return self.show(Which::Commits),
+            KeyCode::Char('1') => return self.show(Which::ALL[0]),
+            KeyCode::Char('2') => return self.show(Which::ALL[1]),
+            KeyCode::Char('3') => return self.show(Which::ALL[2]),
             KeyCode::Tab => {
                 self.enter_sidebar();
                 return Action::None;
@@ -806,7 +1017,11 @@ impl DiffView {
         // Keep the cursor, or the file being read, in sight in a long list.
         let focus = self
             .sb
-            .or_else(|| rows.iter().position(|r| *r == Row::File(here)))
+            .or_else(|| {
+                let tree = Tree::new(self.files());
+                let at = tree.shown_as(here, &self.pos().closed);
+                rows.iter().position(|r| *r == at)
+            })
             .unwrap_or(0);
         let room = area.height as usize;
         let first = focus.saturating_sub(room.saturating_sub(1));
@@ -826,6 +1041,11 @@ impl DiffView {
             })
             .collect();
         frame.render_widget(Paragraph::new(lines), area);
+    }
+
+    /// How far in the tree starts: a level more below a commit.
+    fn tree_indent(&self) -> usize {
+        if self.which == Which::Commits { 6 } else { 2 }
     }
 
     fn row_line(&self, row: Row, here: usize, w: usize) -> Line<'static> {
@@ -890,11 +1110,8 @@ impl DiffView {
                 };
                 let on = i == here;
                 let viewed = self.pos().viewed.contains(&f.path);
-                let indent = if self.which == Which::Commits {
-                    "      "
-                } else {
-                    "    "
-                };
+                let tree = Tree::new(self.files());
+                let indent = " ".repeat(self.tree_indent() + 2 * tree.file_depth[i]);
                 let (mark, color) = status_mark(f);
                 let name = f.path.rsplit('/').next().unwrap_or(&f.path);
                 let room = w.saturating_sub(indent.len() + 4);
@@ -906,7 +1123,7 @@ impl DiffView {
                     Style::default().fg(p().fg)
                 };
                 let mut line = Line::from(vec![
-                    Span::raw(indent),
+                    Span::raw(indent.clone()),
                     Span::styled(mark, Style::default().fg(color)),
                     Span::styled(format!(" {}", truncate(name, room)), style),
                     if viewed {
@@ -919,6 +1136,36 @@ impl DiffView {
                     line = line.style(Style::default().bg(p().panel));
                 }
                 line
+            }
+            Row::Dir(d) => {
+                let tree = Tree::new(self.files());
+                let Some(dir) = tree.dirs.get(d) else {
+                    return Line::default();
+                };
+                let closed = self.pos().closed.contains(&dir.key);
+                let indent = " ".repeat(self.tree_indent() + 2 * dir.depth);
+                let mut counts = vec![
+                    Span::styled(format!("{} ", dir.files), dim),
+                    Span::styled(format!("+{} ", dir.added), Style::default().fg(p().green)),
+                    Span::styled(format!("−{}", dir.deleted), Style::default().fg(p().yellow)),
+                ];
+                let wide: usize = counts.iter().map(|s| s.content.chars().count()).sum();
+                let mut room = w.saturating_sub(indent.len() + 2 + wide + 2);
+                if room < 8 {
+                    counts.truncate(1);
+                    room =
+                        w.saturating_sub(indent.len() + 2 + counts[0].content.chars().count() + 2);
+                }
+                let label = truncate(&format!("{}/", dir.label), room);
+                let pad = room.saturating_sub(label.chars().count()) + 1;
+                let mut spans = vec![
+                    Span::raw(indent),
+                    Span::styled(if closed { "▸ " } else { "▾ " }, dim),
+                    Span::styled(label, Style::default().fg(p().fg)),
+                    Span::raw(" ".repeat(pad)),
+                ];
+                spans.extend(counts);
+                Line::from(spans)
             }
             Row::More => Line::from(Span::styled("    older commits not shown after 200", dim)),
         }
@@ -1316,18 +1563,21 @@ mod tests {
         }
     }
 
-    /// REQ-222, REQ-235: a pane opens on General and the other views load
+    /// REQ-222, REQ-235: a pane opens on Uncommitted and the other views load
     /// when first asked for, once.
     #[test]
     fn other_views_load_on_first_visit_only() {
         let mut v = view(files(&["a.rs"], 1));
-        assert_eq!(asked(chr(&mut v, '2')).slot, Slot::Uncommitted);
+        assert_eq!(asked(chr(&mut v, '3')).slot, Slot::General);
         assert!(
-            matches!(chr(&mut v, '2'), Action::None),
+            matches!(chr(&mut v, '3'), Action::None),
             "already on the way"
         );
-        assert_eq!(asked(chr(&mut v, '3')).slot, Slot::Commits);
-        assert!(matches!(chr(&mut v, '1'), Action::None), "General is held");
+        assert_eq!(asked(chr(&mut v, '2')).slot, Slot::Commits);
+        assert!(
+            matches!(chr(&mut v, '1'), Action::None),
+            "Uncommitted is held"
+        );
     }
 
     /// REQ-233: each view keeps its own scroll and viewed files.
@@ -1339,7 +1589,7 @@ mod tests {
         let (scroll, viewed) = (v.pos().scroll, v.pos().viewed.clone());
         assert_eq!(viewed.len(), 1);
 
-        let r = asked(chr(&mut v, '2'));
+        let r = asked(chr(&mut v, '3'));
         assert!(
             v.apply(r.slot, r.seq, Ok(Part::Files(files(&["u.rs"], 1))))
                 .is_none()
@@ -1349,7 +1599,7 @@ mod tests {
 
         chr(&mut v, '1');
         assert_eq!((v.pos().scroll, v.pos().viewed.clone()), (scroll, viewed));
-        chr(&mut v, '2');
+        chr(&mut v, '3');
         assert!(v.pos().viewed.contains("u.rs"));
     }
 
@@ -1357,7 +1607,7 @@ mod tests {
     #[test]
     fn a_stale_answer_is_dropped() {
         let mut v = view(files(&["a.rs"], 1));
-        let r = asked(chr(&mut v, '3'));
+        let r = asked(chr(&mut v, '2'));
         assert!(
             v.apply(Slot::Commits, r.seq + 7, Ok(list(&["aaa111"])))
                 .is_none()
@@ -1372,7 +1622,7 @@ mod tests {
     #[test]
     fn commits_step_and_keep_their_place() {
         let mut v = view(files(&["a.rs"], 1));
-        let r = asked(chr(&mut v, '3'));
+        let r = asked(chr(&mut v, '2'));
         let r = v
             .apply(r.slot, r.seq, Ok(list(&["aaa111", "bbb222"])))
             .unwrap();
@@ -1407,12 +1657,12 @@ mod tests {
         assert!(!v.in_sidebar());
         key(&mut v, KeyCode::Tab);
         assert!(v.in_sidebar());
-        // General, its two files, Uncommitted, Commits.
+        // Uncommitted, its two files, Commits, General.
         key(&mut v, KeyCode::Down);
         key(&mut v, KeyCode::Down);
         key(&mut v, KeyCode::Down);
         let r = asked(key(&mut v, KeyCode::Enter));
-        assert_eq!(r.slot, Slot::Uncommitted);
+        assert_eq!(r.slot, Slot::Commits);
         assert!(
             v.in_sidebar(),
             "choosing a view keeps the cursor in the sidebar"
@@ -1436,24 +1686,24 @@ mod tests {
         let mut v = view(files(&["a.rs", "b.rs"], 2));
         let wide = screen(&mut v, 130, 16);
         for want in [
-            "1 ▾ General",
-            "2 ▸ Uncommitted",
-            "3 ▸ Commits",
+            "1 ▾ Uncommitted",
+            "2 ▸ Commits",
+            "3 ▸ General",
             "a.rs",
-            "committed",
+            "not committed",
         ] {
             assert!(wide.contains(want), "{want}\n{wide}");
         }
         let narrow = screen(&mut v, 70, 16);
         assert!(
-            narrow.contains("General") && narrow.contains("Tab sidebar"),
+            narrow.contains("Uncommitted") && narrow.contains("Tab sidebar"),
             "{narrow}"
         );
-        assert!(!narrow.contains("2 ▸ Uncommitted"), "{narrow}");
+        assert!(!narrow.contains("2 ▸ Commits"), "{narrow}");
         key(&mut v, KeyCode::Tab);
         let over = screen(&mut v, 70, 16);
         assert!(
-            over.contains("2 ▸ Uncommitted") && over.contains("3 ▸ Commits"),
+            over.contains("2 ▸ Commits") && over.contains("3 ▸ General"),
             "{over}"
         );
     }
@@ -1462,10 +1712,10 @@ mod tests {
     #[test]
     fn the_title_names_the_view() {
         let mut v = view(files(&["a.rs"], 1));
-        assert!(screen(&mut v, 120, 8).contains("auth vs main · committed"));
-        chr(&mut v, '2');
         assert!(screen(&mut v, 120, 8).contains("auth · not committed"));
-        let r = asked(chr(&mut v, '3'));
+        chr(&mut v, '3');
+        assert!(screen(&mut v, 120, 8).contains("auth vs main · committed"));
+        let r = asked(chr(&mut v, '2'));
         v.apply(r.slot, r.seq, Ok(list(&["aaa111", "bbb222", "ccc333"])));
         assert!(screen(&mut v, 120, 8).contains("auth · 3 commits"));
     }
@@ -1475,7 +1725,7 @@ mod tests {
     #[test]
     fn a_view_can_fail_be_too_large_or_have_no_base() {
         let mut v = view(files(&["a.rs"], 1));
-        let r = asked(chr(&mut v, '2'));
+        let r = asked(chr(&mut v, '3'));
         v.apply(
             r.slot,
             r.seq,
@@ -1510,7 +1760,100 @@ mod tests {
         assert!(matches!(key(&mut v, KeyCode::Enter), Action::Open(p) if p == "huge.log"));
 
         let mut v = DiffView::new("auth".into(), String::new(), "/r".into(), Ok(files(&[], 0)));
+        let r = asked(chr(&mut v, '3'));
+        v.apply(r.slot, r.seq, Ok(Part::Files(files(&[], 0))));
         assert!(screen(&mut v, 120, 10).contains("origin has no default branch"));
+    }
+
+    fn rows_text(v: &DiffView) -> Vec<String> {
+        let tree = Tree::new(v.files());
+        v.rows()
+            .into_iter()
+            .map(|r| match r {
+                Row::Section(w) => w.name().to_string(),
+                Row::Dir(d) => format!("{}{}/", " ".repeat(tree.dirs[d].depth), tree.dirs[d].label),
+                Row::File(f) => format!(
+                    "{}{}",
+                    " ".repeat(tree.file_depth[f]),
+                    v.files()[f].path.rsplit('/').next().unwrap()
+                ),
+                _ => String::new(),
+            })
+            .collect()
+    }
+
+    /// REQ-247, REQ-248: directories first, a chain of single-child
+    /// directories is one row, the scroll follows the tree.
+    #[test]
+    fn the_sidebar_is_a_tree_with_compact_folders() {
+        let v = view(files(
+            &[
+                "README.md",
+                "crates/tui/src/a.rs",
+                "crates/tui/src/b.rs",
+                "crates/core/x.rs",
+                "docs/specs/s.md",
+            ],
+            1,
+        ));
+        assert_eq!(
+            rows_text(&v),
+            [
+                "Uncommitted",
+                "crates/",
+                " core/",
+                "  x.rs",
+                " tui/src/",
+                "  a.rs",
+                "  b.rs",
+                "docs/specs/",
+                " s.md",
+                "README.md",
+                "Commits",
+                "General",
+            ]
+        );
+        let paths: Vec<_> = v.files().iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            [
+                "crates/core/x.rs",
+                "crates/tui/src/a.rs",
+                "crates/tui/src/b.rs",
+                "docs/specs/s.md",
+                "README.md"
+            ]
+        );
+        let tree = Tree::new(v.files());
+        let crates = &tree.dirs[0];
+        assert_eq!((crates.files, crates.added, crates.deleted), (3, 3, 3));
+    }
+
+    /// REQ-249: `h` and `l` close and open a directory or move to its first
+    /// child or parent, `↵` toggles it; a closed one hides its rows only.
+    #[test]
+    fn directories_close_and_open_in_the_sidebar() {
+        let mut v = view(files(&["a/x.rs", "a/b/y.rs", "a/b/z.rs", "top.rs"], 1));
+        key(&mut v, KeyCode::Tab);
+        key(&mut v, KeyCode::Down);
+        assert_eq!(v.sb, Some(1));
+        assert!(matches!(chr(&mut v, 'h'), Action::None));
+        assert!(v.is_closed(0));
+        assert_eq!(
+            rows_text(&v),
+            ["Uncommitted", "a/", "top.rs", "Commits", "General"]
+        );
+        assert_eq!(v.files().len(), 4, "the scroll keeps its files");
+        chr(&mut v, 'l');
+        assert!(!v.is_closed(0));
+        chr(&mut v, 'l');
+        assert_eq!(v.sb, Some(2), "l on an open directory steps in");
+        chr(&mut v, 'j');
+        chr(&mut v, 'h');
+        assert_eq!(v.sb, Some(2), "h on a file goes to its directory");
+        key(&mut v, KeyCode::Enter);
+        assert!(v.is_closed(1));
+        assert_eq!(v.rows().len(), 7);
     }
 
     /// REQ-224, REQ-243: an untracked file shows `?` and the others their letter.
