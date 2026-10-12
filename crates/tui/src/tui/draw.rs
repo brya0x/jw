@@ -79,7 +79,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
     let base = app.popup.map(|_| f.buffer_mut().clone());
     if let Some(m) = &app.modal {
-        m.draw(f);
+        m.draw(f, app.spinner.unwrap_or('⟳'));
     }
     if let Some(finder) = &app.finder {
         finder.draw(f);
@@ -686,7 +686,7 @@ fn status(f: &mut Frame, app: &App) {
     ];
     if let Some(job) = &app.busy {
         spans.push(Span::styled(
-            format!(" ⟳ {job} "),
+            format!(" {} {job} ", app.spinner.unwrap_or('⟳')),
             Style::default().fg(p().cyan),
         ));
     }

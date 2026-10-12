@@ -13,6 +13,7 @@ mod finder;
 mod keys;
 mod mdview;
 mod modal;
+mod prcache;
 mod registry_watch;
 mod select;
 mod settings_view;
@@ -110,12 +111,11 @@ enum Job {
     },
     /// What the setup step starts from, found off the UI thread.
     SetupReady(Box<setup::Setup>),
-    /// done's checks passed: ask before deleting.
-    DoneReady {
-        entry: Entry,
-        project: Project,
-        plan: actions::RmPlan,
-        pr: crate::connectors::Pr,
+    /// What gh said about the PR of the branch a remove modal is open on
+    /// (REQ-259). Only that modal's PR line takes it.
+    RmPr {
+        id: String,
+        line: modal::PrLine,
     },
     /// A finished action with nothing else to do but say so.
     Said(String),
@@ -150,12 +150,11 @@ enum Job {
         entry: Entry,
         from: String,
     },
-    /// `X` on a worktree whose PR isn't merged: the rm checks, and why.
+    /// `X`: the local rm checks are in, so the modal can open (REQ-257).
     RmReady {
         entry: Entry,
         project: Project,
         plan: actions::RmPlan,
-        note: Option<String>,
     },
     Removed {
         name: String,
@@ -963,13 +962,22 @@ impl App {
         }
         let shown = usize::from(self.size.1).saturating_sub(5);
         let first = self.sidebar_first(shown);
+        let waiting = self.busy.is_some()
+            || matches!(
+                self.modal,
+                Some(Modal::Rm {
+                    pr: modal::PrLine::Checking,
+                    ..
+                })
+            );
         let spinning = on
-            && self
-                .rows
-                .iter()
-                .skip(first)
-                .take(shown)
-                .any(|r| self.marks(&r.entry.id).contains(&'✻'));
+            && (waiting
+                || self
+                    .rows
+                    .iter()
+                    .skip(first)
+                    .take(shown)
+                    .any(|r| self.marks(&r.entry.id).contains(&'✻')));
         self.spinner = spinning.then(|| anim::spinner(now.duration_since(self.born)));
         self.spin_due = spinning.then(|| now + anim::SPIN_EVERY);
     }
@@ -1476,6 +1484,23 @@ impl App {
                 Outcome::Stay => {}
                 Outcome::Cancel => self.modal = None,
                 Outcome::Submit => self.submit_modal(),
+                Outcome::ToDone => {
+                    if let Some(Modal::Rm {
+                        entry,
+                        project,
+                        pr: modal::PrLine::Merged { done, .. },
+                        ..
+                    }) = self.modal.take()
+                    {
+                        let (plan, pr) = *done;
+                        self.modal = Some(Modal::Done {
+                            entry,
+                            project,
+                            plan,
+                            pr,
+                        });
+                    }
+                }
                 Outcome::Back => {
                     if let Some(Modal::Setup(s)) = self.modal.take() {
                         let s = *s;
@@ -3205,31 +3230,40 @@ impl App {
                     .find_map(|p| Project::open(std::path::Path::new(p)).ok())
                     .context("no checkout of this project left to find its repository")
             })?;
-            let prs = crate::connectors::github::Client::default();
-            let pr = trace::span("rm_gh", || {
-                prs.for_branch(&project.repo.root, &entry.branch)
-                    .ok()
-                    .flatten()
-            });
-            if pr.as_ref().is_some_and(|p| p.state == "MERGED") {
-                let (plan, pr) = trace::span("rm_done_plan", || {
-                    actions::done_plan(&project, &entry, &prs)
-                })?;
-                return Ok(Job::DoneReady {
-                    entry,
-                    project,
-                    plan,
-                    pr,
-                });
-            }
             let plan = trace::span("rm_local", || actions::rm_plan(&project, &entry))?;
-            let note = pr.map(|p| format!("PR #{} is {}", p.number, p.status()));
             Ok(Job::RmReady {
                 entry,
                 project,
                 plan,
-                note,
             })
+        });
+    }
+
+    /// What gh says about the PR of the branch the remove modal is open on.
+    /// It runs after the modal is up and only fills its PR line (REQ-259).
+    fn ask_pr(&mut self, entry: Entry, project: Project) {
+        self.background(format!("checking the PR of {}", entry.name), move || {
+            let prs = prcache::client();
+            let found = trace::span("rm_gh", || {
+                crate::connectors::PullRequests::for_branch(&prs, &project.repo.root, &entry.branch)
+            });
+            let line = match found {
+                Err(_) => modal::PrLine::Unknown,
+                Ok(None) => modal::PrLine::NoPr,
+                Ok(Some(pr)) if pr.state == "MERGED" => {
+                    match trace::span("rm_done_plan", || {
+                        actions::done_plan(&project, &entry, &prs)
+                    }) {
+                        Ok((plan, pr)) => modal::PrLine::Merged {
+                            number: pr.number,
+                            done: Box::new((plan, pr)),
+                        },
+                        Err(_) => modal::PrLine::Info(format!("#{} merged", pr.number)),
+                    }
+                }
+                Ok(Some(pr)) => modal::PrLine::Info(format!("#{} {}", pr.number, pr.status())),
+            };
+            Ok(Job::RmPr { id: entry.id, line })
         });
     }
 
@@ -3445,6 +3479,7 @@ impl App {
                 project,
                 plan,
                 typed,
+                pr,
                 ..
             } => {
                 if plan.loses_work() && typed != entry.name {
@@ -3454,6 +3489,7 @@ impl App {
                         project,
                         plan,
                         typed,
+                        pr,
                     });
                     return;
                 }
@@ -3546,6 +3582,14 @@ impl App {
                 }
                 return;
             }
+            // Nor does a PR line's: it only fills the modal that asked.
+            Job::RmPr { id, line } => {
+                match &mut self.modal {
+                    Some(Modal::Rm { entry, pr, .. }) if entry.id == id => *pr = line,
+                    _ => trace::mark("rm_pr_dropped", 0),
+                }
+                return;
+            }
             job => job,
         };
         let reload = self.reload();
@@ -3563,6 +3607,8 @@ impl App {
                 self.open_entry(entry, setup);
             }
             Job::SetupReady(s) => self.modal = Some(Modal::Setup(s)),
+            // Taken above, before the reload.
+            Job::RmPr { .. } => {}
             Job::Removed { name, note } => {
                 self.done(match note {
                     Some(n) => format!("removed {name}; {n}"),
@@ -3621,36 +3667,20 @@ impl App {
                     None => self.show_view("view:diff".into(), view),
                 }
             }
-            Job::DoneReady {
-                entry,
-                project,
-                plan,
-                pr,
-            } => {
-                trace::mark("rm_modal", 0);
-                self.modal = Some(Modal::Done {
-                    entry,
-                    project,
-                    plan,
-                    pr,
-                })
-            }
             Job::RmReady {
                 entry,
                 project,
                 plan,
-                note,
             } => {
                 trace::mark("rm_modal", 0);
-                if let Some(n) = note {
-                    self.say(n);
-                }
+                self.ask_pr(entry.clone(), project.clone());
                 self.modal = Some(Modal::Rm {
                     entry,
                     project,
                     plan,
                     typed: String::new(),
                     error: None,
+                    pr: modal::PrLine::Checking,
                 });
             }
         }
@@ -4079,6 +4109,207 @@ mod motion_tests {
     fn with_animations_off_the_spinner_stays_still() {
         let (mut app, _g) = app(false);
         app.daemon_panes = vec![working("a")];
+        app.tick_motion(Instant::now());
+        assert_eq!((app.spinner, app.spin_due), (None, None));
+    }
+
+    fn project() -> Project {
+        Project {
+            name: "p".into(),
+            repo: crate::connectors::git::Repo {
+                root: "/r".into(),
+                common_dir: "/r/.git".into(),
+                remote: String::new(),
+            },
+            cfg: Default::default(),
+        }
+    }
+
+    fn rm_modal(id: &str, plan: actions::RmPlan, typed: &str, pr: modal::PrLine) -> Modal {
+        Modal::Rm {
+            entry: Entry {
+                name: "fast-rm".into(),
+                ..entry(id)
+            },
+            project: project(),
+            plan,
+            typed: typed.into(),
+            error: None,
+            pr,
+        }
+    }
+
+    fn dirty() -> actions::RmPlan {
+        actions::RmPlan {
+            dirty: vec![" M a.rs".into()],
+            ..Default::default()
+        }
+    }
+
+    fn merged() -> modal::PrLine {
+        modal::PrLine::Merged {
+            number: 45,
+            done: Box::new((actions::RmPlan::default(), Default::default())),
+        }
+    }
+
+    /// REQ-259, REQ-261: gh's late answer changes the PR line and nothing
+    /// else: what was typed stays, and the name is still required.
+    #[test]
+    fn a_late_pr_answer_changes_only_the_pr_line() {
+        let (mut app, _g) = app(true);
+        app.modal = Some(rm_modal("a", dirty(), "fa", modal::PrLine::Checking));
+        app.on_job(Job::RmPr {
+            id: "a".into(),
+            line: merged(),
+        });
+        let Some(Modal::Rm {
+            typed, plan, pr, ..
+        }) = &app.modal
+        else {
+            panic!("the modal went away");
+        };
+        assert_eq!(typed, "fa");
+        assert!(plan.loses_work());
+        assert!(matches!(pr, modal::PrLine::Merged { number: 45, .. }));
+        app.submit_modal();
+        assert!(matches!(
+            &app.modal,
+            Some(Modal::Rm { error: Some(_), typed, .. }) if typed == "fa"
+        ));
+    }
+
+    /// REQ-260: no modal, or another one, takes the answer.
+    #[test]
+    fn a_late_pr_answer_for_another_modal_is_dropped() {
+        let (mut app, _g) = app(true);
+        app.on_job(Job::RmPr {
+            id: "a".into(),
+            line: merged(),
+        });
+        assert!(app.modal.is_none());
+        app.modal = Some(rm_modal(
+            "b",
+            actions::RmPlan::default(),
+            "",
+            modal::PrLine::Checking,
+        ));
+        app.on_job(Job::RmPr {
+            id: "a".into(),
+            line: merged(),
+        });
+        assert!(matches!(
+            app.modal,
+            Some(Modal::Rm {
+                pr: modal::PrLine::Checking,
+                ..
+            })
+        ));
+    }
+
+    /// REQ-262: a merged PR offers the done path, and only while nothing is
+    /// typed; `d` is a letter of the name when the name must be typed.
+    #[test]
+    fn done_is_offered_only_while_nothing_is_typed() {
+        let key = |m: &mut Modal, c: KeyCode| m.key(KeyEvent::from(c));
+        let mut clean = rm_modal("a", actions::RmPlan::default(), "", merged());
+        assert!(matches!(
+            key(&mut clean, KeyCode::Char('d')),
+            Outcome::ToDone
+        ));
+        let mut must_type = rm_modal("a", dirty(), "", merged());
+        assert!(matches!(
+            key(&mut must_type, KeyCode::Char('d')),
+            Outcome::Stay
+        ));
+        // That `d` went into the typed name; `⇥` works from an empty one.
+        let mut must_type = rm_modal("a", dirty(), "", merged());
+        assert!(matches!(key(&mut must_type, KeyCode::Tab), Outcome::ToDone));
+        let mut typing = rm_modal("a", dirty(), "f", merged());
+        assert!(matches!(key(&mut typing, KeyCode::Tab), Outcome::Stay));
+        let mut unknown = rm_modal("a", actions::RmPlan::default(), "", modal::PrLine::Unknown);
+        assert!(matches!(
+            key(&mut unknown, KeyCode::Char('d')),
+            Outcome::Stay
+        ));
+    }
+
+    fn shown(m: &Modal, spin: char) -> Vec<String> {
+        let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+        t.draw(|f| m.draw(f, spin)).unwrap();
+        let buf = t.backend().buffer();
+        (0..24u16)
+            .map(|y| {
+                (0..80u16)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect()
+    }
+
+    /// REQ-258, REQ-259: the PR row is there from the first frame, so its
+    /// answer moves no other line of the modal.
+    #[test]
+    fn the_pr_row_fills_in_place() {
+        let (_app, _g) = app(true);
+        let plan = actions::RmPlan {
+            deletes: vec!["/w/wt1".into()],
+            ..Default::default()
+        };
+        let waiting = shown(
+            &rm_modal("a", plan.clone(), "", modal::PrLine::Checking),
+            '⠋',
+        );
+        let row = waiting.iter().position(|l| l.contains("PR  ⠋ checking…"));
+        let row = row.expect("no PR row while waiting");
+        for (line, text) in [
+            (
+                modal::PrLine::Merged {
+                    number: 45,
+                    done: Box::new((actions::RmPlan::default(), Default::default())),
+                },
+                "#45 merged",
+            ),
+            (modal::PrLine::Info("#46 open".into()), "#46 open"),
+            (modal::PrLine::Unknown, "unknown (gh did not answer)"),
+            (modal::PrLine::NoPr, "none"),
+        ] {
+            let after = shown(&rm_modal("a", plan.clone(), "", line), '⠋');
+            assert!(after[row].contains(text), "{:?}", after[row]);
+            for (i, (a, b)) in waiting.iter().zip(&after).enumerate() {
+                if i != row {
+                    assert_eq!(a, b, "line {i} moved");
+                }
+            }
+        }
+        let merged = shown(&rm_modal("a", plan, "", merged()), '⠋');
+        assert!(
+            merged[row].contains(" d  finish as done"),
+            "{:?}",
+            merged[row]
+        );
+    }
+
+    /// REQ-258: the PR line spins while gh is asked.
+    #[test]
+    fn the_pr_line_spins_while_gh_is_asked() {
+        let (mut app, _g) = app(true);
+        app.modal = Some(rm_modal(
+            "a",
+            actions::RmPlan::default(),
+            "",
+            modal::PrLine::Checking,
+        ));
+        app.tick_motion(Instant::now());
+        assert!(app.spinner.is_some() && app.spin_due.is_some());
+        app.modal = Some(rm_modal(
+            "a",
+            actions::RmPlan::default(),
+            "",
+            modal::PrLine::Unknown,
+        ));
         app.tick_motion(Instant::now());
         assert_eq!((app.spinner, app.spin_due), (None, None));
     }
