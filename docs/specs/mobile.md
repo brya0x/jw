@@ -205,7 +205,7 @@ supersedes:  []
 | M5a ✓ `b03519e` | The VT emulator on the device (`android/term`), checked against the daemon's vt100 | 21 | `android/term`, `crates/jw/examples/cells.rs` |
 | M5 ✓ `38c846a` | Terminal surface, keys, leader sheet, resize | 21–24, 70, 71 | `android/term`, `android/app` |
 | M6a ✓ | The diff on the device and the merge of main's diff views: core's `Scope`, `Loaded::TooLarge` and `commits` now run under the W3 hardening; `diff{ws, scope}`, `commits{ws}` and ask-tagged errors in the bridge; the model and parser held to the daemon's serialiser by shared fixtures; the queued requests and their state in `Session`; the four diff colours of `ready.palettes`; `PROTOCOL` 14 | 13, 72, 73 | `android/proto`, `android/app/.../Session.kt`, `crates/core/src/diff.rs` |
-| M6 ✓ | Changes screen: the three views, files, hunks, add and delete colours, "viewed" | 25, 72–74 | `android/app` |
+| M6 ✓ `c4206a5` | Changes screen: the three views, files, hunks, add and delete colours, "viewed" | 25, 72–74 | `android/app` |
 | M7 | Settings, touch and mode chrome, polish | 26 | `android/app` |
 | L1 ✓ `87e38b9` | The wifi listener: `tls.rs`, the certificate, the wifi QR payload, `endpoints`, `MobileState` fields and `PROTOCOL` 12, no-wifi and no-cloudflared cases, `jw mobile` text | 56–58, 60, 61, 65 (CLI), 66–69 | `web/src/tls.rs`, `web/src/bridge.rs`, `daemon/src/mobile.rs`, `proto.rs`, `core/src/qr.rs`, `jw/src/mobile.rs` |
 | L2 ✓ | The Mobile modal: wifi and tunnel rows, tunnel state, route per phone | 65 | `tui/src/tui/mobile.rs`, `draw.rs` |
