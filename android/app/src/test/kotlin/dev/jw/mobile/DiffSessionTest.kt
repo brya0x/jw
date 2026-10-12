@@ -109,22 +109,24 @@ class DiffSessionTest {
         fake.enqueue { _, ws -> ws.send(FakeBridge.ready()) }
         val gate = java.util.concurrent.atomic.AtomicReference<okhttp3.WebSocket?>()
         fake.onLater = { t, ws -> if (t.contains(""""t":"diff"""") || t.contains(""""t":"commits"""")) gate.set(ws) }
+        fun asked() = fake.received.filter { it.contains(""""t":"diff"""") || it.contains(""""t":"commits"""") }
+        suspend fun waitFor(n: Int) = withTimeout(10_000) { while (asked().size < n) kotlinx.coroutines.delay(20) }
         val s = session(); s.start(); s.connected()
         s.requestDiff("w1", DiffScope.General)
         s.requestDiff("w1", DiffScope.Uncommitted)   // waits: the first is out
         s.requestDiff("w1", DiffScope.Commit("abc1234")) // replaces the one waiting
         s.requestCommits("w1")
-        kotlinx.coroutines.delay(500)
-        val asked = fake.received.filter { it.contains(""""t":"diff"""") || it.contains(""""t":"commits"""") }
-        assertEquals(listOf("""{"t":"diff","ws":"w1","scope":"general"}"""), asked)
+        waitFor(1)
+        kotlinx.coroutines.delay(400)
+        assertEquals(listOf("""{"t":"diff","ws":"w1","scope":"general"}"""), asked())
         // The first answers: the next goes, and it is the latest diff, not the one that was replaced.
+        withTimeout(10_000) { while (gate.get() == null) kotlinx.coroutines.delay(20) }
         gate.get()!!.send(answer("w1", "general"))
-        kotlinx.coroutines.delay(500)
-        val next = fake.received.filter { it.contains(""""t":"diff"""") || it.contains(""""t":"commits"""") }.last()
-        assertEquals("""{"t":"diff","ws":"w1","scope":"commit:abc1234"}""", next)
+        waitFor(2)
+        assertEquals("""{"t":"diff","ws":"w1","scope":"commit:abc1234"}""", asked()[1])
         gate.get()!!.send(answer("w1", "commit:abc1234"))
-        kotlinx.coroutines.delay(500)
-        assertEquals("""{"t":"commits","ws":"w1"}""", fake.received.filter { it.contains(""""t":"commits"""") }.single())
+        waitFor(3)
+        assertEquals("""{"t":"commits","ws":"w1"}""", asked()[2])
         gate.get()!!.send(commitsAnswer("w1"))
         withTimeout(10_000) { s.commits.first { it is CommitsState.Loaded } }
     }

@@ -131,13 +131,11 @@ fun ChangesScreen(model: Model, state: UiState.Connected, session: Session, nav:
                 view == View.General -> diff?.title ?: ws.name
                 view == View.Uncommitted -> "${ws.name} · sin commitear"
                 commit == null -> (counts[View.Commits] ?: "…") + " commits"
-                else -> commit!!.short + commitList?.let { l -> " · ${l.commits.indexOfFirst { it.sha == commit!!.sha } + 1}/${l.commits.size}" }.orEmpty()
+                else -> commit?.let { c -> c.short + commitList?.let { l -> " · ${l.commits.indexOfFirst { it.sha == c.sha } + 1}/${l.commits.size}" }.orEmpty() }
             }
             ChangesHeader(ws?.name, subtitle) { picker = true }
             ViewTabs(view, counts, if (shown is Shown.Failed) view else null) { viewIx = it.ordinal; commit = null; openPath = null }
-            if (view == View.Commits && commit != null) {
-                CommitBar(commit!!, commitList, onBack = { commit = null }, onGo = { commit = it })
-            }
+            commit?.takeIf { view == View.Commits }?.let { c -> CommitBar(c, commitList, onBack = { commit = null }, onGo = { commit = it }) }
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 when {
                     ws == null -> Centre("elige un workspace", "entra a uno, o toca el nombre arriba,\npara ver sus cambios.")
@@ -329,7 +327,7 @@ private fun FileRow(f: DiffFile, listOnly: Boolean, isViewed: Boolean, onOpen: (
             val dir = f.path.substringBeforeLast('/', "")
             Text(
                 when {
-                    f.unreadable != null -> unreadableWords(f.unreadable!!)
+                    f.unreadable != null -> unreadableWords(f.unreadable.orEmpty())
                     f.oldPath != null -> "← ${f.oldPath}"
                     f.binary -> "binario" + if (dir.isNotEmpty()) " · $dir" else ""
                     else -> dir
@@ -440,7 +438,7 @@ private fun rowsOf(hunks: List<DiffHunk>): List<Row2> = buildList {
 private fun FileBody(f: DiffFile, modifier: Modifier) {
     val j = LocalJw.current
     when {
-        f.unreadable != null -> Box(modifier) { Centre(unreadableWords(f.unreadable!!), "el contenido no se muestra: el PC no lo leyó") }
+        f.unreadable != null -> Box(modifier) { Centre(unreadableWords(f.unreadable.orEmpty()), "el contenido no se muestra: el PC no lo leyó") }
         f.binary -> Box(modifier) { Centre("archivo binario", "no hay líneas que mostrar") }
         f.hunks.isEmpty() -> Box(modifier) {
             if (f.status == FileStatus.Renamed) Centre("renombrado", "${f.oldPath} → ${f.path}\nsin cambios en el contenido")
