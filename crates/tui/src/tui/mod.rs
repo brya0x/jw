@@ -3227,13 +3227,21 @@ impl App {
             .collect();
         trace::mark("rm_ask", 0);
         self.background(format!("checking {}", entry.name), move || {
+            // git on the worktree needs no project: ask it while the project
+            // opens (REQ-257).
+            let asked = entry.clone();
+            let state =
+                thread::spawn(move || trace::span("rm_local", || actions::worktree_state(&asked)));
             let project = trace::span("rm_project", || {
                 std::iter::once(&entry.path)
                     .chain(&siblings)
                     .find_map(|p| Project::open(std::path::Path::new(p)).ok())
                     .context("no checkout of this project left to find its repository")
             })?;
-            let plan = trace::span("rm_local", || actions::rm_plan(&project, &entry))?;
+            let state = state
+                .join()
+                .unwrap_or_else(|p| std::panic::resume_unwind(p))?;
+            let plan = actions::rm_plan_from(&project, &entry, state);
             Ok(Job::RmReady {
                 entry,
                 project,

@@ -372,17 +372,23 @@ impl RmPlan {
     }
 }
 
-pub fn rm_plan(p: &Project, e: &Entry) -> Result<RmPlan> {
+/// What git says about a worktree itself, which needs no [`Project`]: the
+/// caller can ask it while the project opens.
+#[derive(Debug, Default)]
+pub struct WorktreeState {
+    on_disk: bool,
+    dirty: Vec<String>,
+    unpushed: Vec<String>,
+}
+
+/// The worktree's uncommitted files and unpushed commits. The two git calls
+/// need nothing from each other, so they run side by side (REQ-257).
+pub fn worktree_state(e: &Entry) -> Result<WorktreeState> {
     let path = Path::new(&e.path);
-    let on_disk = path.exists();
-    let keep_branch = e.adopted;
-    // Three git processes that need nothing from each other: side by side,
-    // the modal waits for the slowest, not their sum (REQ-257).
-    let (unpushed, dirty, branch) = std::thread::scope(|s| {
-        let branch = s.spawn(|| !keep_branch && p.repo.branch_exists(&e.branch));
-        if !on_disk {
-            return (Ok(Vec::new()), Ok(Vec::new()), joined(branch));
-        }
+    if !path.exists() {
+        return Ok(WorktreeState::default());
+    }
+    let (unpushed, dirty) = std::thread::scope(|s| {
         let unpushed = s.spawn(|| {
             // A review's own commits only: the PR's head is not work to lose
             // (REQ-175).
@@ -393,23 +399,41 @@ pub fn rm_plan(p: &Project, e: &Entry) -> Result<RmPlan> {
             }
         });
         let dirty = git::dirty_files(path);
-        (joined(unpushed), dirty, joined(branch))
+        (joined(unpushed), dirty)
     });
-    let (unpushed, dirty) = (unpushed?, dirty?);
+    Ok(WorktreeState {
+        on_disk: true,
+        dirty: dirty?,
+        unpushed: unpushed?,
+    })
+}
+
+pub fn rm_plan(p: &Project, e: &Entry) -> Result<RmPlan> {
+    Ok(rm_plan_from(p, e, worktree_state(e)?))
+}
+
+/// [`rm_plan`] with the worktree's state already asked.
+pub fn rm_plan_from(p: &Project, e: &Entry, state: WorktreeState) -> RmPlan {
+    let WorktreeState {
+        on_disk,
+        dirty,
+        unpushed,
+    } = state;
+    let keep_branch = e.adopted;
     let mut deletes = Vec::new();
     if on_disk {
         deletes.push(format!("worktree {}", e.path));
     }
-    if branch {
+    if !keep_branch && p.repo.branch_exists(&e.branch) {
         deletes.push(format!("local branch {}", e.branch));
     }
-    Ok(RmPlan {
+    RmPlan {
         on_disk,
         dirty,
         unpushed,
         keep_branch,
         deletes,
-    })
+    }
 }
 
 /// A scoped thread's result; its panic goes on in the caller.
