@@ -247,7 +247,7 @@ class Session(
         val here = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { probeLan(lan) }
         if (here && (_state.value as? UiState.Connected)?.route == Route.Tunnel) {
             val dev = store.load()?.device ?: return
-            run(routes, Hello.Auth(dev), fresh = false)
+            run(routes, Hello.Auth(dev))
         }
     }
 
@@ -301,10 +301,10 @@ class Session(
         poller?.cancel()
     }
 
-    private fun run(r: Routes, first: Hello, fresh: Boolean = true) {
+    private fun run(r: Routes, first: Hello) {
         job?.cancel()
         startPoller()
-        job = scope.launch { loop(r, first, fresh) }
+        job = scope.launch { loop(r, first) }
     }
 
     private fun reach(f: Failure, wifiFailed: Boolean): Reach {
@@ -323,11 +323,10 @@ class Session(
         var ready: Boolean = false,
     )
 
-    private suspend fun loop(r: Routes, first: Hello, fresh: Boolean) {
+    private suspend fun loop(r: Routes, first: Hello) {
         val p = policy()
         var hello = first
         var saved = true
-        var firstRound = fresh
         while (true) {
             val order = buildList {
                 if (r.lan != null) add(Route.Wifi)
@@ -360,7 +359,6 @@ class Session(
                 _state.value = UiState.Scan(pairNotice(failure), pairWhy(failure), r.label, reach(failure, wifiFailed))
                 return
             }
-            firstRound = false
             when (val d = p.onFailure(failure, clock())) {
                 is Decision.Retry -> {
                     _state.value = UiState.Reconnecting(r.label, d.afterMs, (failure as? Failure.Bridge)?.code, p.unreachable, reach(failure, wifiFailed))
