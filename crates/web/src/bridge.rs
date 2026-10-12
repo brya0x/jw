@@ -574,7 +574,7 @@ fn accept_wifi(
                     Some(tls.clone()),
                 ));
             }
-            Err(e) if e.kind() == ErrorKind::WouldBlock => thread::sleep(WIFI_POLL),
+            // Nothing to accept yet, or a failure that passes: look again after a poll.
             Err(_) => thread::sleep(WIFI_POLL),
         }
     }
@@ -725,11 +725,13 @@ fn serve(
         })
         .to_string(),
     ))?;
-    let mut seen = {
+    // Cloned out of the lock before the send: a phone slow to read would otherwise hold
+    // it, and every other phone's relay looks at it each turn.
+    let (mut seen, first) = {
         let e = lock(&shared.endpoints);
-        ws.send(e.1.message())?;
-        e.0
+        (e.0, e.1.message())
     };
+    ws.send(first)?;
 
     let (tx, rx) = mpsc::sync_channel(QUEUE);
     let mut from_daemon = daemon.try_clone()?;
@@ -2399,15 +2401,13 @@ mod tests {
     }
 
     /// A phone on the wifi that pins `fp` (`None`: checks as an ordinary client would).
-    fn open_wifi(
-        addr: SocketAddr,
-        fp: Option<&str>,
-        headers: &[(&str, &str)],
-    ) -> Result<Phone, String> {
+    /// What a phone on the wifi trusts: the one certificate whose fingerprint it holds, or (`None`)
+    /// nothing, as an ordinary client that cannot trust a self-signed certificate.
+    fn client_config(fp: Option<&str>) -> Arc<rustls::ClientConfig> {
         let builder = rustls::ClientConfig::builder_with_provider(provider())
             .with_safe_default_protocol_versions()
             .unwrap();
-        let config = match fp {
+        Arc::new(match fp {
             Some(fp) => builder
                 .dangerous()
                 .with_custom_certificate_verifier(Arc::new(Pin {
@@ -2418,11 +2418,18 @@ mod tests {
             None => builder
                 .with_root_certificates(rustls::RootCertStore::empty())
                 .with_no_client_auth(),
-        };
+        })
+    }
+
+    fn open_wifi(
+        addr: SocketAddr,
+        fp: Option<&str>,
+        headers: &[(&str, &str)],
+    ) -> Result<Phone, String> {
         let s = TcpStream::connect(addr).unwrap();
         s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         let conn = rustls::ClientConnection::new(
-            Arc::new(config),
+            client_config(fp),
             ServerName::try_from("jw-mobile.local").unwrap(),
         )
         .unwrap();
@@ -2589,19 +2596,10 @@ mod tests {
         });
         // A client that finishes the TLS handshake, then sends the HTTP upgrade
         // one byte at a time, often enough that no single read times out.
-        let config = rustls::ClientConfig::builder_with_provider(provider())
-            .with_safe_default_protocol_versions()
-            .unwrap()
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(Pin {
-                fp: w.fp.clone(),
-                algs: provider().signature_verification_algorithms,
-            }))
-            .with_no_client_auth();
         let sock = TcpStream::connect(w.addr).unwrap();
         sock.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         let conn = rustls::ClientConnection::new(
-            Arc::new(config),
+            client_config(Some(&w.fp)),
             ServerName::try_from("jw-mobile.local").unwrap(),
         )
         .unwrap();

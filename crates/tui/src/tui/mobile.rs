@@ -515,29 +515,22 @@ fn routes(s: &MobileState, ticks: u64) -> Vec<Line<'static>> {
         ]));
     }
     let spin = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"][(ticks % 10) as usize];
-    let tunnel = if s.lan.is_empty() {
-        // Without a wifi listener the tunnel is the only route, and it is up (REQ-66).
+    // Without a wifi listener the tunnel is the only route, and it is up (REQ-66).
+    let up = s.lan.is_empty() || s.tunnel == "ready";
+    let tunnel = if up {
         vec![
             tone("●", p().green),
             Span::raw(" "),
             tone(clean(&s.host, 60), p().blue),
         ]
+    } else if s.tunnel == "failed" {
+        let why = s
+            .error
+            .split_once("; ")
+            .map_or(s.error.as_str(), |(w, _)| w);
+        vec![tone(clean(why, 40), p().red), dim(" (wifi still works)")]
     } else {
-        match s.tunnel.as_str() {
-            "ready" => vec![
-                tone("●", p().green),
-                Span::raw(" "),
-                tone(clean(&s.host, 60), p().blue),
-            ],
-            "failed" => {
-                let why = s
-                    .error
-                    .split_once("; ")
-                    .map_or(s.error.as_str(), |(w, _)| w);
-                vec![tone(clean(why, 40), p().red), dim(" (wifi still works)")]
-            }
-            _ => vec![tone(spin, p().cyan), dim(" starting, about a minute")],
-        }
+        vec![tone(spin, p().cyan), dim(" starting, about a minute")]
     };
     let mut row = vec![dim(" tunnel "), Span::raw(" ")];
     row.extend(tunnel);

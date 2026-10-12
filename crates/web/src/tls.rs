@@ -69,8 +69,7 @@ fn make() -> io::Result<String> {
     params
         .distinguished_name
         .push(rcgen::DnType::CommonName, "jw mobile");
-    let now = rcgen::date_time_ymd(2026, 1, 1);
-    params.not_before = now;
+    params.not_before = rcgen::date_time_ymd(2026, 1, 1);
     params.not_after = rcgen::date_time_ymd(2036, 1, 1);
     let cert = params.self_signed(&key).map_err(other)?;
     Ok(format!("{}{}", cert.pem(), key.serialize_pem()))

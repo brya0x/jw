@@ -98,6 +98,7 @@ pub struct Tuning {
 
 impl Default for Tuning {
     fn default() -> Self {
+        let lan = Lan::from_env();
         Self {
             ask_within: Duration::from_secs(60),
             tick: Duration::from_secs(1),
@@ -105,14 +106,14 @@ impl Default for Tuning {
             store: None,
             hook: None,
             random: None,
-            lan: Lan::from_env(),
             // The address is read again this often (REQ-69); a test that moves
             // it by a file does not wait half a minute.
-            lan_every: if matches!(Lan::from_env(), Lan::File(_)) {
+            lan_every: if matches!(lan, Lan::File(_)) {
                 Duration::from_millis(200)
             } else {
                 Duration::from_secs(30)
             },
+            lan,
         }
     }
 }
