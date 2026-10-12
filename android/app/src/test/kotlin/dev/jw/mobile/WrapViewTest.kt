@@ -98,20 +98,4 @@ class WrapViewTest {
         val t = term(195, 5, "a" + " ".repeat(100) + "b\u001b[?25l")
         assertFalse(wrapView(t, 10).rows.filter { it.line == 0 }.any { it.cols.isEmpty() })
     }
-
-    /** A shell's prompt, which the phone leaves out until a command is sent (its input is the line, outside the text). */
-    @Test fun theRowsFromTheShellsPromptDownAreLeftOut() {
-        val t = term(40, 8, "prompt % ls\r\none  two\r\n\r\nmobile-fixes on main\r\n> ").let { screen ->
-            val lines = screen.read { p -> (0 until p.rows).map { p.line(it) } }
-            PaneText(40, 8).also { it.setScreen(40, 8, false, 4 to 2, lines, false, 3) }
-        }
-        val rows = wrapView(t, 40).rows
-        assertEquals(listOf(0, 1, 2), rows.map { it.line })
-        assertEquals("prompt % ls", drawn(t, rows[0]))
-        // The view rests on what is left: the prompt is not the last row, nor is the cursor drawn on one.
-        assertEquals(0, wrapView(t, 40).firstRow(10, 0))
-        // With no prompt row (a command runs, or it is no shell of jw's) every row is there.
-        val all = PaneText(40, 8).also { it.setScreen(40, 8, false, 4 to 2, t.read { p -> (0 until p.rows).map { p.line(it) } }) }
-        assertTrue(wrapView(all, 40).rows.any { it.line == 4 })
-    }
 }

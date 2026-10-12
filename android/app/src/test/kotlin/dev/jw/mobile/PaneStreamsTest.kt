@@ -156,36 +156,35 @@ class PaneStreamsTest {
         assertNull(s.chat(7))
     }
 
-    @Test fun watchShellAsksForItsStateAndTheLineTypedFollows() = runBlocking<Unit> {
+    @Test fun watchShellAsksForItsCommandsAndTheirOutputParsesIntoATerminalEach() = runBlocking<Unit> {
         fake.enqueue { _, ws -> ws.send(FakeBridge.ready()) }
         fake.onFrame = { f, ws ->
+            if (attached(f)) ws.send(text(7, 100, 3, """[[0,"x",0,0,0]]"""))
             if (json(f)?.contains("ShellWatch") == true) {
-                ws.send(FakeBridge.frame("""{"t":"Shell","pane":7,"known":true,"running":false,"input":""}"""))
-                ws.send(FakeBridge.frame("""{"t":"Shell","pane":7,"known":true,"running":false,"input":"echo hi"}"""))
+                ws.send(FakeBridge.frame("""{"t":"Shell","pane":7,"known":true,"running":false,"input":"","blocks":[{"i":0,"cmd":"ls","cwd":"/w","code":0,"ms":5,"running":false,"full":false,"truncated":false}]}"""))
+                ws.send(FakeBridge.raw("""{"t":"ShellOut","pane":7,"block":0,"bytes":[]}""", "\u001b[31mred\u001b[0m a\r\nb\r\n".toByteArray()))
+                ws.send(FakeBridge.frame("""{"t":"Shell","pane":7,"known":true,"running":true,"input":"echo hi","blocks":[{"i":1,"cmd":"sleep 1","cwd":"/w","code":null,"ms":0,"running":true,"full":false,"truncated":false}]}"""))
             }
         }
         val s = session()
         s.start()
         s.connected()
-        s.watchShell(7)
-        assertEquals("""{"t":"ShellWatch","pane":7}""", next())
-        withTimeout(10_000) { while (s.shell(7)?.input != "echo hi") kotlinx.coroutines.delay(10) }
-        assertEquals(true, s.shell(7)!!.known)
-        s.watchShell(null)
-        assertEquals("""{"t":"ShellUnwatch","pane":7}""", next())
-        assertNull(s.shell(7))
-    }
-
-    @Test fun theRowWhereTheShellsPromptStartsReachesTheScreen() = runBlocking<Unit> {
-        fake.enqueue { _, ws -> ws.send(FakeBridge.ready()) }
-        fake.onFrame = { f, ws ->
-            if (attached(f)) ws.send(FakeBridge.frame("""{"t":"Text","pane":7,"cols":40,"rows":3,"alt":false,"app_cursor":false,"cursor":[2,2],"prompt":1,"lines":[[[0,"out",0,0,0]],[[0,"% ",0,0,0]],[]]}"""))
-        }
-        val s = session()
-        s.start()
-        s.connected()
         s.watch("dir:/x")
-        assertEquals(1, s.screen(7).promptRow)
+        s.screen(7)
+        s.watchShell(7)
+        withTimeout(10_000) { while (s.shell(7)?.input != "echo hi") kotlinx.coroutines.delay(10) }
+        assertEquals(listOf("ls", "sleep 1"), s.shell(7)!!.blocks.map { it.cmd })
+        assertEquals(true, s.shell(7)!!.running)
+        // The output of block 0 is parsed into a terminal of its own, at the pane's width, colours kept.
+        val out = s.blockOut(7, 0)!!.text()
+        assertEquals(listOf("red a", "b"), out.read { p -> (0 until p.rows).map { p.line(it).text() } })
+        assertEquals(100, out.cols)
+        assertEquals(dev.jw.term.Color.index(1), out.read { it.line(0).fg[0] })
+        // A command that printed nothing has no terminal.
+        assertNull(s.blockOut(7, 1))
+        s.watchShell(null)
+        withTimeout(10_000) { while (s.shell(7) != null) kotlinx.coroutines.delay(10) }
+        assertNull(s.blockOut(7, 0))
     }
 
     @Test fun leavingDetachesAndForgetsTheScreens() = runBlocking<Unit> {

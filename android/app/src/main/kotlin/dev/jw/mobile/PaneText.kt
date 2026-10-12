@@ -24,13 +24,6 @@ class PaneText(cols: Int, rows: Int) {
     var altScreen = false
         private set
 
-    /**
-     * The row a shell's prompt starts at while it waits at it (REQ-92): from there down is the prompt and the line being
-     * typed, which the phone leaves out, as its input is that line. Null for any other pane, and while a command runs.
-     */
-    var promptRow: Int? = null
-        private set
-
     /** The program asked for application cursor keys, which change what the arrows send. */
     var appCursor = false
         private set
@@ -45,10 +38,9 @@ class PaneText(cols: Int, rows: Int) {
 
     fun <T> read(block: (PaneText) -> T): T = synchronized(this) { block(this) }
 
-    fun setScreen(e: PaneEvent.Text) = setScreen(e.cols, e.rows, e.alt, e.cursor, e.lines.map { lineOf(it, e.cols) }, e.appCursor, e.prompt)
+    fun setScreen(e: PaneEvent.Text) = setScreen(e.cols, e.rows, e.alt, e.cursor, e.lines.map { lineOf(it, e.cols) }, e.appCursor)
 
-    internal fun setScreen(cols: Int, rows: Int, alt: Boolean, cursor: Pair<Int, Int>?, lines: List<Line>, appCursor: Boolean = false, prompt: Int? = null) = synchronized(this) {
-        promptRow = prompt?.coerceIn(0, rows)
+    internal fun setScreen(cols: Int, rows: Int, alt: Boolean, cursor: Pair<Int, Int>?, lines: List<Line>, appCursor: Boolean = false) = synchronized(this) {
         this.appCursor = appCursor
         this.cols = cols
         this.rows = rows

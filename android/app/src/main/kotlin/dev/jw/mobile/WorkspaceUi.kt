@@ -135,7 +135,7 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
         onDispose { session.watchShell(null) }
     }
     val shell = remember(rev, shellPane) { shellPane?.let(session::shell) }
-    val kind = sel?.let { PaneKinds.of(it, chat) } ?: PaneKind.Text
+    val kind = sel?.let { PaneKinds.of(it, chat, shell) } ?: PaneKind.Text
     DisposableEffect(w.id) { onDispose { nav.previous = w.id } }
     BackHandlerFor(sheet != Sheet.None) { sheet = Sheet.None }
 
@@ -180,6 +180,15 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
                 Text("Cargando la conversación…", color = j.dim, fontSize = 12.sp, modifier = Modifier.padding(14.dp))
             } else if (kind == PaneKind.Chat && chat != null) {
                 ChatView(chat, w.name, sel.name ?: sel.role, sel.agent == AgentState.Waiting, Modifier.fillMaxSize())
+            } else if (kind == PaneKind.Shell && shell != null) {
+                val clipboard = LocalContext.current.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                ShellView(
+                    shell, rev, { i -> session.blockOut(sel.pane, i) }, sel.cwd ?: w.path, sel.name ?: sel.role,
+                    onCopy = { clipboard.setPrimaryClip(android.content.ClipData.newPlainText("jw", it)) },
+                    onRerun = { cmd -> session.input(sel.pane, Keys.text(cmd)); session.input(sel.pane, Keys.key(Key.Enter)) },
+                    onStop = { session.input(sel.pane, Keys.ctrl('c') ?: ByteArray(0)) },
+                    modifier = Modifier.fillMaxSize(),
+                )
             } else {
                 TerminalView(
                     term = term, rev = rev, selection = selection, onSelection = { selection = it }, onTap = {},

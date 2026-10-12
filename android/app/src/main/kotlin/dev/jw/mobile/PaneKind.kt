@@ -11,21 +11,27 @@ enum class PaneKind {
     /** The conversation of a Claude session, as blocks. */
     Chat,
 
-    /** The terminal's text: a shell, a Claude with no transcript yet, anything else. */
+    /** The commands of a shell jw marked, as cards. */
+    Shell,
+
+    /** The terminal's text: a shell that is not one of jw's, a program that draws the whole screen, a Claude with no transcript yet, anything else. */
     Text,
 }
 
 /**
  * What a pane is drawn as, and which text is the terminal's own input (REQ-93), from what the PC has said about it. It
- * follows the pane as it changes: a shell is text; when it starts claude (the foreground program becomes an agent) the
- * pane waits for the PC, stays text until the agent has a transcript, then is its conversation; when it exits, text
- * again. The input is the terminal's all along.
+ * follows the pane as it changes: a shell jw marked is its commands as cards; when it starts claude (the foreground program
+ * becomes an agent) the pane waits for the PC, stays text until the agent has a transcript, then is its conversation; when it
+ * exits, cards again. A program that draws the whole screen in it is text for as long as it runs. The input is the terminal's all along.
  */
 object PaneKinds {
-    fun of(pane: PaneInfo, chat: ChatState?): PaneKind = when {
-        !pane.mayHaveConversation() -> PaneKind.Text
-        chat == null -> PaneKind.Loading
-        chat.known -> PaneKind.Chat
+    fun of(pane: PaneInfo, chat: ChatState?, shell: ShellState?): PaneKind = when {
+        pane.mayHaveConversation() -> when {
+            chat == null -> PaneKind.Loading
+            chat.known -> PaneKind.Chat
+            else -> PaneKind.Text
+        }
+        pane.role == "shell" && shell?.known == true && !(shell.running && shell.blocks.lastOrNull()?.full == true) -> PaneKind.Shell
         else -> PaneKind.Text
     }
 

@@ -21,10 +21,19 @@ class ChatState(val known: Boolean, val name: String?, val title: String?, val b
     }
 }
 
-/** What a shell says of itself, as the PC sent it: whether it is one jw marked, whether a command runs, and the line typed at its prompt (REQ-92). */
-class ShellState(val known: Boolean, val running: Boolean, val input: String?) {
+/**
+ * What a shell says of itself and its commands, as the PC sent it: whether it is one jw marked, whether a command runs, the line typed at
+ * its prompt and the commands, oldest first (REQ-92). What each printed is in its [BlockOut].
+ */
+class ShellState(val known: Boolean, val running: Boolean, val input: String?, val blocks: List<dev.jw.proto.ShellBlock>) {
     companion object {
-        /** What [old] becomes with [e]: the line stays when the message has none (it is not news). */
-        fun merge(old: ShellState?, e: PaneEvent.Shell) = ShellState(e.known, e.running, e.input ?: old?.input)
+        const val KEEP = 200
+
+        /** What [old] becomes with [e]: the line stays when the message has none (it is not news), the blocks that came are put in by their number. */
+        fun merge(old: ShellState?, e: PaneEvent.Shell): ShellState {
+            val byNumber = (old?.blocks ?: emptyList()).associateByTo(java.util.TreeMap()) { it.i }
+            for (b in e.blocks) byNumber[b.i] = b
+            return ShellState(e.known, e.running, e.input ?: old?.input, byNumber.values.toList().takeLast(KEEP))
+        }
     }
 }

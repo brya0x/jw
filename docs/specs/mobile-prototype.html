@@ -126,6 +126,18 @@ svg.i{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stro
 .ctitle .ds{color:var(--dim);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ctitle .pn{flex:none;display:flex;align-items:center;gap:5px;max-width:46%;color:var(--dim);font-size:11px;white-space:nowrap}
 .ctitle .pn i{width:7px;height:7px;border-radius:50%;background:var(--c,var(--magenta))}
+/* shell por bloques, como Warp: de abajo hacia arriba, la salida completa y con colores */
+.blocks{flex:1;min-height:0;overflow:auto;padding:10px 12px;display:flex;flex-direction:column;justify-content:flex-end;gap:10px;background:var(--bg)}
+.blk{border:1px solid var(--line);border-radius:8px;background:var(--panel);overflow:hidden}
+.blk.bad{border-color:color-mix(in srgb,var(--red) 70%,transparent)}
+.blk .bh{display:flex;align-items:flex-start;gap:8px;padding:8px 10px 2px;font-size:12px}
+.blk .bh .pr{color:var(--green);font-weight:700}.blk .bh b{color:var(--fg);font-weight:500;flex:1;min-width:0;word-break:break-word}
+.blk .bm{padding:0 10px 6px;font-size:10.5px;color:var(--dim)}
+.blk .bo{border-top:1px solid var(--line);padding:8px 10px;font-size:11.5px;white-space:pre-wrap;word-break:break-word;background:var(--bg);color:var(--fg)}
+.blk .bf{display:flex;gap:8px;padding:6px 10px;border-top:1px solid var(--line);font-size:11px}
+.blk .bf button{min-height:32px;padding:0 10px;border:1px solid var(--line);border-radius:6px;color:var(--dim)}
+.chip{font-size:10.5px;padding:2px 7px;border-radius:10px;border:1px solid currentColor;flex:none}
+.chip.ok{color:var(--green)}.chip.bad{color:var(--red)}.chip.run{color:var(--yellow)}
 .mirror{display:flex;align-items:center;gap:8px;padding:5px 12px;background:var(--panel);border-top:1px solid var(--line);font-size:11px;color:var(--dim)}
 .mirror .dot{width:7px;height:7px;border-radius:50%;background:var(--green);flex:none}
 .mirror .pcbox{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg);border:1px solid var(--line);border-radius:5px;padding:3px 8px;background:var(--bg)}
@@ -349,7 +361,7 @@ ol.sx code{background:var(--sel);padding:1px 6px;border-radius:4px;color:var(--g
     <div class="jump"><button data-act="sim" data-sim="accept">El PC acepta</button><button data-act="sim" data-sim="denied">El PC rechaza</button><button data-act="sim" data-sim="expired">El código venció</button><button data-act="sim" data-sim="unreach">No llego al PC</button><button data-act="sim" data-sim="proto">Protocolo: la app va atrás</button><button data-act="sim" data-sim="protojw">Protocolo: jw va atrás</button><button data-act="sim" data-sim="limited">Demasiados intentos</button><button data-act="sim" data-sim="away">Sales de casa (cae al túnel)</button><button data-act="sim" data-sim="home">Vuelves a casa</button></div>
     <h2>Entrada, nombre y shell (nuevo)</h2>
     <div class="jump"><button data-act="pctype">Escribir en el PC (simula)</button></div>
-    <p style="margin:6px 0 14px;color:var(--dim)">La caja de entrada del PC y el campo de la app son un solo texto: lo que se escribe en la terminal aparece en el campo, y lo que escribes en el teléfono se teclea en la terminal al instante. La franja de arriba lleva el nombre del pane. El <b>shell</b> se dibuja como el texto de su terminal, partido al ancho de la pantalla; cuando en él se ejecuta un agente (claude…), la app lo detecta y pasa a la conversación en cuanto el agente tiene una, sin perder el campo de entrada.</p>
+    <p style="margin:6px 0 14px;color:var(--dim)">La caja de entrada del PC y el campo de la app son un solo texto. La franja de arriba lleva el nombre del pane. El <b>shell</b> se dibuja por bloques, como Warp: una tarjeta por comando, de abajo hacia arriba (la más nueva junto a la entrada), con su salida <b>completa y con colores</b>; el prompt no se dibuja. El daemon guarda lo que imprimió cada comando tal cual y el teléfono lo interpreta en una terminal propia por bloque; un programa a pantalla completa (nvim) vuelve a la vista de texto mientras corre. Un shell que jw no lanzó, o uno ya abierto, sigue como texto.</p>
     <h2>Wifi primero, túnel de respaldo</h2>
     <p style="margin:0 0 14px;color:var(--dim)">Cuando el PC y el teléfono comparten wifi, la app se conecta directo a la IP local (TLS con certificado propio de jw, fijado por la huella del QR). El túnel de Cloudflare queda guardado como respaldo: jw se lo avisa a la app cuando está listo, y otra vez si cambia de dirección. La app usa el wifi mientras responda y cae sola al túnel si no (botones «Sales de casa» y «Vuelves a casa»). La barra de estado muestra por dónde va (<code>wifi</code> o <code>túnel</code>); en ajustes se ven las dos rutas; «No encuentro tu PC» cuenta también la fila del wifi, medida con un plazo corto.</p>
     <h2>Qué comprueba de verdad la app</h2>
@@ -686,6 +698,24 @@ function chatHtml(w){
 /* el nombre del pane: el que se le dio en el TUI (^␣ n) o su rol */
 function paneName(){return state.pane}
 
+/* shell por bloques: cada comando es una tarjeta con su salida completa y a color; los más nuevos abajo, junto a la entrada */
+const SHELL={
+ 'jw/feat/mobile-app':[
+  {cmd:'git status -sb',cwd:'~/ws/jw-wt/mobile-app',code:0,ms:41,out:'## feat/mobile-app...origin/feat/mobile-app\n<span class="y"> M</span> docs/specs/mobile.md\n<span class="y"> M</span> android/app/src/main/kotlin/dev/jw/mobile/ChatUi.kt'},
+  {cmd:'ls -a',cwd:'~/ws/jw-wt/mobile-app',code:0,ms:12,out:'<span class="b">.</span> <span class="b">..</span> <span class="b">.git</span> .gitignore AGENTS.md Cargo.lock Cargo.toml <span class="b">crates</span> <span class="b">docs</span> justfile README.md <span class="b">target</span>'},
+  {cmd:'cargo clippy --workspace -- -D warnings',cwd:'~/ws/jw-wt/mobile-app',code:101,ms:2100,out:'<span class="r">error</span>: unused variable: `x`\n  <span class="b">--></span> crates/daemon/src/lib.rs:88:9\n<span class="r">error</span>: could not compile `jw-daemon`'},
+  {cmd:'cargo test -p jw-daemon',cwd:'~/ws/jw-wt/mobile-app',code:0,ms:6200,out:'running 45 tests\ntest shell::tests::a_command_is_a_block ... <span class="g">ok</span>\ntest chat::tests::an_edit_says_what_it_changed ... <span class="g">ok</span>\n…\ntest result: <span class="g">ok</span>. 45 passed; 0 failed'},
+  {cmd:'cargo watch -x test',cwd:'~/ws/jw-wt/mobile-app',run:1,ms:12000,out:'[Running: cargo test]\n   <span class="g">Compiling</span> jw-proto v0.0.24'}
+ ]
+};
+function shellHtml(w){
+  const items=(SHELL[w.id]||SHELL['jw/feat/mobile-app']).map(b=>{
+    const chip=b.run?`<span class="chip run">corriendo ${Math.round(b.ms/1000)} s</span>`:b.code===0?`<span class="chip ok">✓ ${b.ms<1000?b.ms+' ms':(b.ms/1000).toFixed(1)+' s'}</span>`:`<span class="chip bad">✗ ${b.code}</span>`;
+    return `<div class="blk ${b.code>0?'bad':''}"><div class="bh"><span class="pr">❯</span><b>${b.cmd}</b>${chip}</div><div class="bm">${b.cwd}</div><div class="bo">${b.out}</div><div class="bf"><button data-act="copyout">copiar salida</button>${b.run?'<button data-act="stop" style="color:var(--red)">^C parar</button>':'<button data-act="rerun">repetir</button>'}</div></div>`;
+  });
+  return `<div class="ctitle"><span style="color:var(--green)">❯</span><b style="flex:1;min-width:0"><span class="nm" style="display:block">${w.path}</span></b><span class="pn" style="--c:var(--dim)"><i></i>${paneName()}</span></div><div class="blocks" id="out">${items.join('')}</div>`;
+}
+
 /* el texto de la caja de entrada del PC y el campo de la app son uno solo */
 function mirrorHtml(){
   const t=(state.draft||'').replace(/</g,'&lt;');
@@ -701,7 +731,7 @@ function vWs(){
     <div class="t"><b>${w.kind==='wt'?root.name+' › ':''}${w.name}</b><span>${w.kind==='wt'?'⎇ '+w.name+' · base main · '+(w.pr||'sin PR')+' · ':''}${w.path}</span></div>
     <button class="ib" data-sheet="pick" aria-label="Cambiar workspace">${ic('search')}</button><button class="ib" data-act="wsfiles" aria-label="Archivos">${ic('folder')}</button><button class="ib" data-go="changes" aria-label="Cambios" style="font-size:16px">±</button></div>
    <div class="panes" role="tablist">${panes.map(([p,c])=>`<button class="pt" role="tab" aria-selected="${state.pane===p}" data-pane="${p}" style="--c:${c}"><i></i>${p}</button>`).join('')}</div>
-   ${state.pane==='claude'?chatHtml(w):`<div class="out" id="out">${lines}</div>`}
+   ${state.pane==='claude'?chatHtml(w):state.pane==='shell'?shellHtml(w):`<div class="out" id="out">${lines}</div>`}
    ${askOn?`<div class="askbar"><span><b style="color:var(--yellow)">?</b> ${state.pane} espera tu respuesta</span><button data-sheet="answer">Responder</button></div>`:''}
    ${state.sel?`<div class="selbar"><span>3 líneas seleccionadas</span><button class="key" data-act="copy">copiar</button><button class="key" data-act="unsel">cancelar</button></div>`:''}
    <div class="keys"><button class="key lead" data-sheet="leader">^␣</button>${keys.map(x=>`<button class="key" data-key="${x}">${x}</button>`).join('')}</div>
@@ -925,6 +955,9 @@ document.addEventListener('click',e=>{
     case 'vsrc0':state.viewer.src=false;render();break;
     case 'vsrc1':state.viewer.src=true;render();break;
     case 'newwt':state.sheet='newwt';render();break;
+    case 'copyout':toast('salida copiada');break;
+    case 'rerun':toast('repetido en el shell');break;
+    case 'stop':toast('^C enviado');break;
     case 'pickopt':{const i=+t.dataset.i;state.sheet=null;answer(i===2?'n':'y',state.ws);toast('enviado: opción '+(i+1));break}
     case 'pctype':state.draft=(state.draft?state.draft+' ':'')+'revisa también el test del socket';render();toast('escrito en el PC');break;
     case 'tool':state.open=state.open||{};state.open[t.dataset.i]=!state.open[t.dataset.i];render();break;

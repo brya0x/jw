@@ -87,21 +87,32 @@ class PanesTest {
         assertNull((Panes.parse(Frame.Json("""{"t":"Chat","pane":7,"known":true,"name":null,"title":null,"reset":true,"blocks":[]}""")) as PaneEvent.Chat).name)
     }
 
-    @Test fun parsesWhatAShellSaysOfItself() {
-        val s = Panes.parse(Frame.Json("""{"t":"Shell","pane":9,"known":true,"running":true,"input":"git st"}""")) as PaneEvent.Shell
+    @Test fun parsesWhatAShellSaysOfItselfAndItsCommands() {
+        val s = Panes.parse(
+            Frame.Json(
+                """{"t":"Shell","pane":9,"known":true,"running":true,"input":"git st","blocks":[
+                {"i":0,"cmd":"cargo test","cwd":"/w","code":0,"ms":6200,"running":false,"full":false,"truncated":false},
+                {"i":1,"cmd":"nvim a","cwd":"/w","code":null,"ms":12000,"running":true,"full":true,"truncated":true}]}""",
+            ),
+        ) as PaneEvent.Shell
         assertEquals(9, s.pane); assertTrue(s.known); assertTrue(s.running); assertEquals("git st", s.input)
-        // No line in the message: not news.
-        assertNull((Panes.parse(Frame.Json("""{"t":"Shell","pane":9,"known":false,"running":false}""")) as PaneEvent.Shell).input)
+        assertEquals(listOf("cargo test", "nvim a"), s.blocks.map { it.cmd })
+        assertEquals(0, s.blocks[0].code); assertNull(s.blocks[1].code)
+        assertTrue(s.blocks[1].running); assertTrue(s.blocks[1].full); assertTrue(s.blocks[1].truncated)
+        assertEquals(6200L, s.blocks[0].ms)
+        // No line in the message: not news. A block with no number refuses the message.
+        assertNull((Panes.parse(Frame.Json("""{"t":"Shell","pane":9,"known":false,"running":false,"blocks":[]}""")) as PaneEvent.Shell).input)
+        assertNull(Panes.parse(Frame.Json("""{"t":"Shell","pane":9,"known":true,"running":false,"blocks":[{"cmd":"x"}]}""")))
         assertEquals("""{"t":"ShellWatch","pane":9}""", (Panes.shellWatchFrame(9) as Frame.Json).text)
         assertEquals("""{"t":"ShellUnwatch","pane":9}""", (Panes.shellUnwatchFrame(9) as Frame.Json).text)
     }
 
-    @Test fun aTextCarriesTheRowTheShellsPromptStartsAt() {
-        val line = """[[[0,"a",0,0,0]]]"""
-        fun text(prompt: String) = Frame.Json("""{"t":"Text","pane":1,"cols":10,"rows":1,"alt":false,"app_cursor":false,"cursor":null,$prompt"lines":$line}""")
-        assertEquals(4, (Panes.parse(text(""""prompt":4,""")) as PaneEvent.Text).prompt)
-        assertNull((Panes.parse(text(""""prompt":null,""")) as PaneEvent.Text).prompt)
-        assertNull((Panes.parse(text("")) as PaneEvent.Text).prompt)
+    @Test fun parsesTheBytesACommandPrinted() {
+        val o = Panes.parse(Frame.Raw("""{"t":"ShellOut","pane":9,"block":3,"bytes":[]}""", byteArrayOf(65, 66))) as PaneEvent.ShellOut
+        assertEquals(9, o.pane); assertEquals(3, o.block); assertArrayEquals(byteArrayOf(65, 66), o.bytes)
+        // Bytes with no number of block, or no bytes, are not an event.
+        assertNull(Panes.parse(Frame.Raw("""{"t":"ShellOut","pane":9,"bytes":[]}""", byteArrayOf(1))))
+        assertNull(Panes.parse(Frame.Json("""{"t":"ShellOut","pane":9,"block":3}""")))
     }
 
     @Test fun chatFramesNameThePane() {

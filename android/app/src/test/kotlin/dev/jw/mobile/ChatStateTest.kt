@@ -53,16 +53,28 @@ class ChatStateTest {
         assertEquals("otro", ChatState.merge(b, event(false, name = "otro")).name)
     }
 
-    @Test fun whatAShellSaysOfItselfFollowsAndTheLineStaysWhenItIsNoNews() {
-        val a = ShellState.merge(null, PaneEvent.Shell(7, true, false, "ls"))
-        assertEquals(Triple(true, false, "ls"), Triple(a.known, a.running, a.input))
-        // A command starts: the line is not news, so it stays.
-        val b = ShellState.merge(a, PaneEvent.Shell(7, true, true, null))
-        assertEquals(Triple(true, true, "ls"), Triple(b.known, b.running, b.input))
+    private fun cmd(i: Int, code: Int? = null, running: Boolean = false) = dev.jw.proto.ShellBlock(i, "cmd$i", "/w", code, 10, running, false, false)
+
+    @Test fun whatAShellSaysOfItselfAndItsCommandsFollowsAndTheLineStaysWhenItIsNoNews() {
+        val a = ShellState.merge(null, PaneEvent.Shell(7, true, true, "ls", listOf(cmd(0, running = true))))
+        assertEquals(Triple(true, true, "ls"), Triple(a.known, a.running, a.input))
+        assertEquals(listOf(0), a.blocks.map { it.i })
+        // The command ends: same number, replaced; a new one is added; the line is not news, so it stays.
+        val b = ShellState.merge(a, PaneEvent.Shell(7, true, false, null, listOf(cmd(0, 0), cmd(1, running = true))))
+        assertEquals(listOf(0, 1), b.blocks.map { it.i })
+        assertEquals(0, b.blocks[0].code)
+        assertEquals("ls", b.input)
         // The line cleared is news too.
-        assertEquals("", ShellState.merge(b, PaneEvent.Shell(7, true, false, "")).input)
+        assertEquals("", ShellState.merge(b, PaneEvent.Shell(7, true, false, "", emptyList())).input)
         // A shell that is not marked is known false.
-        assertEquals(false, ShellState.merge(null, PaneEvent.Shell(7, false, false, "")).known)
+        assertEquals(false, ShellState.merge(null, PaneEvent.Shell(7, false, false, "", emptyList())).known)
+    }
+
+    @Test fun theOldestCommandsGoPastTheCap() {
+        val many = (0 until ShellState.KEEP + 3).map { cmd(it) }
+        val s = ShellState.merge(null, PaneEvent.Shell(7, true, false, "", many))
+        assertEquals(ShellState.KEEP, s.blocks.size)
+        assertEquals(3, s.blocks.first().i)
     }
 
     @Test fun aPaneThatIsNoClaudeSessionIsKnownFalse() {

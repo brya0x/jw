@@ -129,6 +129,10 @@ private class Routes(var lan: LanAddr?, var tunnel: String?) {
 }
 
 /** How long an attempt on the wifi gets to open a connection before the tunnel is tried (REQ-63). */
+/** The columns a command's output is parsed for when the pane's are not known yet, and how many commands keep their output. */
+private const val DEFAULT_COLS = 200
+private const val MAX_BLOCK_OUTS = 40
+
 /** How many rows of scrollback a scroll up asks the PC for. */
 private const val HISTORY_ROWS = 2_000
 
@@ -315,6 +319,7 @@ class Session(
     private val chats = ConcurrentHashMap<Long, ChatState>()
     @Volatile private var chatPane: Long? = null
     private val shells = ConcurrentHashMap<Long, ShellState>()
+    private val blockOuts = ConcurrentHashMap<Long, ConcurrentHashMap<Int, BlockOut>>()
     @Volatile private var shellPane: Long? = null
     @Volatile private var watching: String? = null
     private val _termRev = MutableStateFlow(0L)
@@ -342,10 +347,13 @@ class Session(
     /** The commands of the shell in `pane` and its line being typed, once the PC has answered (REQ-92); null until then. */
     fun shell(pane: Long): ShellState? = shells[pane]
 
+    /** What command `block` of the shell in `pane` printed, parsed into a terminal of its own; null until some of it came. */
+    fun blockOut(pane: Long, block: Int): BlockOut? = blockOuts[pane]?.get(block)
+
     /** Follows the commands of the shell in `pane` (null: none); only one at a time, the one on screen. */
     fun watchShell(pane: Long?) {
         if (pane == shellPane) return
-        shellPane?.let { send(Outgoing.Binary(Panes.shellUnwatchFrame(it))); shells.remove(it) }
+        shellPane?.let { send(Outgoing.Binary(Panes.shellUnwatchFrame(it))); shells.remove(it); blockOuts.remove(it) }
         shellPane = pane
         pane?.let { send(Outgoing.Binary(Panes.shellWatchFrame(it))) }
         _termRev.update { it + 1 }
@@ -389,6 +397,13 @@ class Session(
             is PaneEvent.History -> screens[e.pane]?.setHistory(e)
             is PaneEvent.Chat -> chats.compute(e.pane) { _, old -> ChatState.merge(old, e) }
             is PaneEvent.Shell -> shells.compute(e.pane) { _, old -> ShellState.merge(old, e) }
+            is PaneEvent.ShellOut -> {
+                val outs = blockOuts.getOrPut(e.pane) { ConcurrentHashMap() }
+                // The terminal the command printed for: its columns are the pane's, which the program laid its output out for.
+                outs.getOrPut(e.block) { BlockOut(screens[e.pane]?.cols ?: DEFAULT_COLS) }.feed(e.bytes)
+                // Only the newest commands keep their output; the older ones are let go.
+                if (outs.size > MAX_BLOCK_OUTS) outs.keys.sorted().take(outs.size - MAX_BLOCK_OUTS).forEach(outs::remove)
+            }
             // The PC sends this client text, never a terminal's bytes (`TextView`).
             is PaneEvent.Snapshot, is PaneEvent.Output, is PaneEvent.Resized -> {}
             is PaneEvent.Exited -> exits[e.pane] = e.status
@@ -787,6 +802,7 @@ class Session(
                             chats.clear()
                             chatPane?.let { out.trySend(Outgoing.Binary(Panes.chatWatchFrame(it))) }
                             shells.clear()
+                            blockOuts.clear()
                             shellPane?.let { out.trySend(Outgoing.Binary(Panes.shellWatchFrame(it))) }
                             watching?.let {
                                 out.trySend(Outgoing.Binary(Panes.textViewFrame()))

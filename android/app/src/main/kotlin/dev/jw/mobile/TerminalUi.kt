@@ -108,7 +108,6 @@ fun TerminalView(
     val density = LocalDensity.current
     val regular = remember { ResourcesCompat.getFont(ctx, R.font.jetbrains_mono_regular) ?: Typeface.MONOSPACE }
     val bold = remember { ResourcesCompat.getFont(ctx, R.font.jetbrains_mono_bold) ?: Typeface.DEFAULT_BOLD }
-    val paint = remember { Paint(Paint.ANTI_ALIAS_FLAG) }
     var scrollRows by remember { mutableFloatStateOf(0f) }
     val onSel by rememberUpdatedState(onSelection)
     val onTapNow by rememberUpdatedState(onTap)
@@ -116,13 +115,11 @@ fun TerminalView(
     BoxWithConstraints(modifier.clipToBounds().semantics { contentDescription = "Terminal" }) {
         val wPx = with(density) { maxWidth.toPx() }
         val hPx = with(density) { maxHeight.toPx() }
-        paint.typeface = regular
-        val advance = run { paint.textSize = 100f; paint.measureText("M") / 100f }
         val size = with(density) { TEXT_SP.sp.toPx() }
-        paint.textSize = size
-        val cw = advance * size
-        val fm = paint.fontMetrics
-        val ch = (fm.descent - fm.ascent) * 1.12f
+        val metrics = remember(regular, size) { CellMetrics.of(regular, size) }
+        val painter = remember(colors, regular, bold, size) { RowPainter(colors, j, regular, bold, size) }
+        val cw = metrics.cw
+        val ch = metrics.ch
         val visibleCols = floor(wPx / cw).toInt().coerceAtLeast(1)
         val visibleRows = floor(hPx / ch).toInt().coerceAtLeast(1)
 
@@ -178,54 +175,19 @@ fun TerminalView(
                 drawIntoCanvas { canvas ->
                     val nc = canvas.nativeCanvas
                     val first = firstRow()
-                    val base = -fm.ascent + (ch - (fm.descent - fm.ascent)) / 2
                     val sel = selection
                     for (vr in 0 until visibleRows) {
                         val row = l.rows.getOrNull(first + vr) ?: continue
                         if (row.line >= tm.rows || row.line < -tm.scrollbackSize) continue
                         val line = tm.line(row.line)
                         val y = vr * ch
-                        var xi = 0
-                        for (c in row.cols) {
-                            if (c >= line.cols) break
-                            val fl = line.flags[c]
-                            val inv = fl and Attr.INVERSE != 0
-                            var fgc = colors.resolve(line.fg[c], j.fg)
-                            var bgc = colors.resolve(line.bg[c], Color.Unspecified)
-                            if (inv) { val f = fgc; fgc = if (bgc == Color.Unspecified) j.bg else bgc; bgc = f }
-                            val selected = sel != null && inSelection(sel, row.line, c)
-                            val x = xi * cw
-                            val span = if (fl and Attr.WIDE != 0) 2 else 1
-                            if (bgc != Color.Unspecified) {
-                                paint.color = bgc.toArgb(); paint.style = Paint.Style.FILL
-                                nc.drawRect(x, y, x + span * cw + 0.5f, y + ch, paint)
-                            }
-                            if (selected) {
-                                paint.color = j.blue.copy(alpha = 0.35f).toArgb()
-                                nc.drawRect(x, y, x + span * cw, y + ch, paint)
-                            }
-                            val cp = line.ch[c]
-                            if (cp != 0 && cp != ' '.code && fl and Attr.CONT == 0) {
-                                paint.typeface = if (fl and Attr.BOLD != 0) bold else regular
-                                paint.textSkewX = if (fl and Attr.ITALIC != 0) -0.2f else 0f
-                                paint.color = (if (fl and Attr.DIM != 0) fgc.copy(alpha = 0.6f) else fgc).toArgb()
-                                val s = StringBuilder().appendCodePoint(cp).append(line.marksAt(c) ?: "").toString()
-                                nc.drawText(s, x, y + base, paint)
-                            }
-                            if (fl and Attr.UNDERLINE != 0 && fl and Attr.CONT == 0) {
-                                paint.color = fgc.toArgb()
-                                nc.drawRect(x, y + ch - 2f, x + span * cw, y + ch - 1f, paint)
-                            }
-                            xi += span
-                        }
+                        painter.draw(nc, line, row.cols, y, metrics) { c -> sel != null && inSelection(sel, row.line, c) }
                     }
                     if (tm.cursorVisible && scrollRows == 0f) {
                         val at = l.rows.indexOfFirst { it.line == tm.cursorRow && tm.cursorCol in it.cols }
                         val vr = at - first
                         if (at >= 0 && vr in 0 until visibleRows) {
-                            val cx = RowWrap.xOf(tm.line(tm.cursorRow), l.rows[at], tm.cursorCol) * cw
-                            paint.color = j.fg.copy(alpha = 0.55f).toArgb()
-                            nc.drawRect(cx, vr * ch, cx + cw, (vr + 1) * ch, paint)
+                            painter.cursor(nc, RowWrap.xOf(tm.line(tm.cursorRow), l.rows[at], tm.cursorCol) * cw, vr * ch, metrics)
                         }
                     }
                 }
@@ -260,7 +222,7 @@ internal class WrapView(val rows: List<VRow>, private val end: Int, private val 
 internal fun wrapView(t: PaneText, cols: Int, withHistory: Boolean = true): WrapView {
     val out = ArrayList<VRow>()
     var anchor = t.cursorRow
-    for (li in -(if (withHistory) minOf(t.scrollbackSize, WRAP_HISTORY) else 0) until (t.promptRow ?: t.rows)) {
+    for (li in -(if (withHistory) minOf(t.scrollbackSize, WRAP_HISTORY) else 0) until t.rows) {
         val line = t.line(li)
         var used = usedCols(line)
         if (li >= 0 && used > 0 && li > anchor && !t.altScreen) anchor = li
