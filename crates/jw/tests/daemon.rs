@@ -2099,3 +2099,53 @@ fn next_chat(c: &mut Client, pane: PaneId) -> DaemonMsg {
         }
     }
 }
+
+#[test]
+fn a_claude_started_by_hand_in_a_shell_is_followed_by_its_folders_newest_transcript() {
+    use std::os::unix::fs::symlink;
+    let config = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let proj = std::fs::canonicalize(work.path()).unwrap();
+    // A program named `claude` that only waits.
+    let bin = proj.join("claude");
+    symlink("/bin/sleep", &bin).unwrap();
+    let d = Daemon::start_with(Some(config.path()));
+    let mut c = d.client();
+    let shell = spawn(
+        &mut c,
+        "s",
+        &format!("cd {} && exec ./claude 60", proj.display()),
+        40,
+        5,
+    );
+    std::thread::sleep(Duration::from_millis(800));
+    // Claude writes its transcript after it started, in the folder named for where it runs.
+    let name: String = proj
+        .to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let folder = config.path().join("projects").join(name);
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(
+        folder.join("0f6bd1c2-1111-4222-8333-444455556666.jsonl"),
+        "{\"type\":\"user\",\"message\":{\"content\":\"hola\"}}\n",
+    )
+    .unwrap();
+
+    c.send(&ClientMsg::ChatWatch { pane: shell }).unwrap();
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        assert!(
+            Instant::now() < deadline,
+            "the shell's claude was never found"
+        );
+        if let DaemonMsg::Chat { known, blocks, .. } = next_chat(&mut c, shell)
+            && known
+        {
+            assert_eq!(blocks.len(), 1);
+            assert_eq!(blocks[0].text, "hola");
+            break;
+        }
+    }
+}

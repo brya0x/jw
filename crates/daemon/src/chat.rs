@@ -56,12 +56,7 @@ fn config_dir() -> Option<PathBuf> {
 pub fn find(id: &str, cwd: &Path) -> Option<PathBuf> {
     let projects = config_dir()?.join("projects");
     let file = format!("{id}.jsonl");
-    let named: String = cwd
-        .to_string_lossy()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect();
-    let direct = projects.join(named).join(&file);
+    let direct = projects.join(folder_name(cwd)).join(&file);
     if direct.is_file() {
         return Some(direct);
     }
@@ -70,6 +65,35 @@ pub fn find(id: &str, cwd: &Path) -> Option<PathBuf> {
         .flatten()
         .map(|e| e.path().join(&file))
         .find(|p| p.is_file())
+}
+
+/// The session a Claude started by hand in `cwd` is on, when it was not told
+/// (`--session-id`, `--resume`): the transcript of that folder written to
+/// since `since`, the newest of them. Two Claudes started in one folder at
+/// once cannot be told apart this way, and the newest wins.
+pub fn latest_since(cwd: &Path, since: std::time::SystemTime) -> Option<String> {
+    let dir = config_dir()?.join("projects").join(folder_name(cwd));
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .filter_map(|e| {
+            let path = e.path();
+            let id = path.file_stem()?.to_str()?.to_string();
+            let mtime = e.metadata().ok()?.modified().ok()?;
+            (path.extension()? == "jsonl" && id.len() == 36 && mtime >= since)
+                .then_some((mtime, id))
+        })
+        .max()
+        .map(|(_, id)| id)
+}
+
+/// The folder Claude names for work in `cwd`: every character that is not a
+/// letter or a digit becomes `-`.
+fn folder_name(cwd: &Path) -> String {
+    cwd.to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
 }
 
 /// What a read of the file changed: the conversation's title when it did, and
@@ -415,6 +439,9 @@ mod tests {
 
     const UUID: &str = "0f6bd1c2-1111-4222-8333-444455556666";
 
+    /// The tests that point `CLAUDE_CONFIG_DIR` at a folder of their own take turns.
+    static CONFIG: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn the_session_is_in_the_command_that_started_the_agent() {
         assert_eq!(
@@ -552,9 +579,34 @@ mod tests {
     }
 
     #[test]
-    fn the_transcript_is_found_by_the_folder_name_or_by_looking() {
+    fn a_claude_started_by_hand_is_on_the_newest_transcript_written_since_it_started() {
+        let _turn = CONFIG.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
-        // SAFETY: the tests of this module are the only ones that set it, and they run one after another here.
+        // SAFETY: the tests that set it hold `CONFIG`.
+        unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", dir.path()) };
+        let folder = dir.path().join("projects/-w-x");
+        std::fs::create_dir_all(&folder).unwrap();
+        let old = "11111111-1111-4111-8111-111111111111";
+        let new = "22222222-2222-4222-8222-222222222222";
+        std::fs::write(folder.join(format!("{old}.jsonl")), "").unwrap();
+        let started = std::time::SystemTime::now() + std::time::Duration::from_millis(50);
+        // Nothing has been written since it started: no session yet.
+        assert_eq!(latest_since(Path::new("/w/x"), started), None);
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        std::fs::write(folder.join(format!("{new}.jsonl")), "").unwrap();
+        std::fs::write(folder.join("notes.txt"), "").unwrap();
+        assert_eq!(
+            latest_since(Path::new("/w/x"), started).as_deref(),
+            Some(new)
+        );
+        assert_eq!(latest_since(Path::new("/other"), started), None);
+    }
+
+    #[test]
+    fn the_transcript_is_found_by_the_folder_name_or_by_looking() {
+        let _turn = CONFIG.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        // SAFETY: the tests that set it hold `CONFIG`.
         unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", dir.path()) };
         let named = dir.path().join("projects/-a-b-c.d");
         std::fs::create_dir_all(&named).unwrap();

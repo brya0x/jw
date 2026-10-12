@@ -140,4 +140,15 @@ class WorkspacesTest {
         assertArrayEquals(byteArrayOf(27), AnswerChoices.reject("nope").bytes)
         assertArrayEquals("y\r".toByteArray(), AnswerChoices.approve("y-enter").bytes)
     }
+
+    @Test fun anAgentPaneOrAClaudeInAShellMayHaveAConversation() {
+        fun pane(role: String, fg: String?) = PaneInfo(1, "s", role, null, fg, false, false, null, null)
+        assertTrue(pane("agent", null).mayHaveConversation())
+        assertTrue(pane("agent", "zsh").mayHaveConversation())
+        assertTrue(pane("shell", "claude").mayHaveConversation())
+        assertTrue(pane("shell", "-claude").mayHaveConversation())
+        assertFalse(pane("shell", "zsh").mayHaveConversation())
+        assertFalse(pane("shell", "nvim").mayHaveConversation())
+        assertFalse(pane("shell", null).mayHaveConversation())
+    }
 }

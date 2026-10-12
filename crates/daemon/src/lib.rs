@@ -59,6 +59,9 @@ const SCROLLBACK: usize = 10_000;
 /// How often a followed transcript is read for what it gained.
 const CHAT_EVERY: Duration = Duration::from_millis(300);
 
+/// How often a followed pane is asked which Claude session it runs.
+const RESOLVE_EVERY: Duration = Duration::from_secs(2);
+
 /// How often the phones watching a pane are sent its screen, when it changed.
 const TEXT_EVERY: Duration = Duration::from_millis(80);
 
@@ -214,10 +217,69 @@ struct Daemon {
 
 /// A transcript followed for the phones that watch it.
 struct ChatWatch {
+    /// The Claude session in the pane and the folder it runs in; `None`
+    /// while the pane has none (a shell that has not started claude yet).
+    session: Option<(String, PathBuf)>,
     tail: chat::Tail,
-    session: String,
-    cwd: PathBuf,
+    /// When the pane's session was last looked for.
+    resolved: Instant,
     subs: Vec<Sub>,
+}
+
+impl ChatWatch {
+    fn new() -> Self {
+        Self {
+            session: None,
+            tail: chat::Tail::new(None),
+            resolved: Instant::now(),
+            subs: Vec::new(),
+        }
+    }
+
+    /// Follows `session`: true when that is another conversation than the one
+    /// followed, which then starts from its beginning.
+    fn follow(&mut self, session: Option<(String, PathBuf)>) -> bool {
+        self.resolved = Instant::now();
+        if session == self.session {
+            return false;
+        }
+        self.session = session;
+        self.tail = chat::Tail::new(None);
+        true
+    }
+
+    /// What is new in the transcript, as a message for the watchers.
+    fn news(&mut self, pane: PaneId) -> Option<DaemonMsg> {
+        let (id, cwd) = self.session.as_ref()?;
+        self.tail.locate(id, cwd);
+        let news = self.tail.poll();
+        (news != chat::Changes::default()).then_some(DaemonMsg::Chat {
+            pane,
+            known: true,
+            title: news.title,
+            reset: false,
+            blocks: news.blocks,
+        })
+    }
+
+    /// All the conversation held, for a client that starts or starts again.
+    fn all(&mut self, pane: PaneId) -> DaemonMsg {
+        if let Some((id, cwd)) = &self.session {
+            self.tail.locate(id, cwd);
+            self.tail.poll();
+        }
+        DaemonMsg::Chat {
+            pane,
+            known: self.session.is_some(),
+            title: self.tail.title().map(str::to_string),
+            reset: true,
+            blocks: self.tail.last(chat::FIRST),
+        }
+    }
+
+    fn tell(&mut self, msg: &DaemonMsg) {
+        self.subs.retain(|s| s.tx.send(msg.clone()).is_ok());
+    }
 }
 
 /// An open workspace: how its panes are laid out, and who watches it.
@@ -1406,76 +1468,50 @@ impl Daemon {
     }
 
     /// Starts `client` on the conversation of the agent in `id`: all it has now,
-    /// then each change (`chat_poll`). A pane that runs no Claude session is
-    /// told so once.
+    /// then each change (`chat_poll`). A pane that runs no Claude session yet is
+    /// told so, and again when it does.
     fn chat_watch(&self, client: u64, tx: &Tx, id: PaneId) -> Result<()> {
         let pane = self.pane(id)?;
-        let (session, cwd) = {
-            let started = lock(&pane.started);
-            let session = [started.cmd.as_deref(), started.resume.as_deref()]
-                .into_iter()
-                .flatten()
-                .find_map(chat::session_id);
-            (session, started.cwd.clone())
-        };
-        let Some(session) = session else {
-            let _ = tx.send(DaemonMsg::Chat {
-                pane: id,
-                known: false,
-                title: None,
-                reset: true,
-                blocks: Vec::new(),
-            });
-            return Ok(());
-        };
+        // `ps` and the pane's terminal are asked with no lock held.
+        let session = claude_session(&pane);
         let mut chats = lock(&self.chats);
-        let w = chats.entry(id).or_insert_with(|| ChatWatch {
-            tail: chat::Tail::new(None),
-            session: session.clone(),
-            cwd,
-            subs: Vec::new(),
-        });
-        w.tail.locate(&w.session, &w.cwd);
-        // Whoever already watches gets what is new before this client is
-        // brought up to date.
-        let news = w.tail.poll();
-        if news != chat::Changes::default() {
-            let msg = DaemonMsg::Chat {
-                pane: id,
-                known: true,
-                title: news.title,
-                reset: false,
-                blocks: news.blocks,
-            };
-            w.subs.retain(|s| s.tx.send(msg.clone()).is_ok());
+        let w = chats.entry(id).or_insert_with(ChatWatch::new);
+        if w.follow(session) {
+            let msg = w.all(id);
+            w.tell(&msg);
+        } else if let Some(msg) = w.news(id) {
+            w.tell(&msg);
         }
-        let _ = tx.send(DaemonMsg::Chat {
-            pane: id,
-            known: true,
-            title: w.tail.title().map(str::to_string),
-            reset: true,
-            blocks: w.tail.last(chat::FIRST),
-        });
+        let _ = tx.send(w.all(id));
         subscribe(&mut w.subs, client, tx);
         Ok(())
     }
 
-    /// Reads what the followed transcripts gained and tells their watchers;
-    /// one nobody watches any more is let go.
+    /// Looks again for each followed pane's session now and then (a Claude
+    /// started later, another in the same pane), reads what the transcripts
+    /// gained and tells their watchers; one nobody watches any more is let go.
     fn chat_poll(&self) {
+        let due: Vec<PaneId> = lock(&self.chats)
+            .iter()
+            .filter(|(_, w)| w.resolved.elapsed() >= RESOLVE_EVERY)
+            .map(|(id, _)| *id)
+            .collect();
+        let found: Vec<_> = due
+            .into_iter()
+            .map(|id| (id, self.pane(id).ok().and_then(|p| claude_session(&p))))
+            .collect();
         let mut chats = lock(&self.chats);
+        for (id, session) in found {
+            if let Some(w) = chats.get_mut(&id)
+                && w.follow(session)
+            {
+                let msg = w.all(id);
+                w.tell(&msg);
+            }
+        }
         chats.retain(|id, w| {
-            w.tail.locate(&w.session, &w.cwd);
-            let news = w.tail.poll();
-            if news != chat::Changes::default() {
-                let msg = DaemonMsg::Chat {
-                    pane: *id,
-                    known: true,
-                    title: news.title,
-                    reset: false,
-                    blocks: news.blocks,
-                };
-                w.subs.retain(|s| s.tx.send(msg.clone()).is_ok());
+            if let Some(msg) = w.news(*id) {
+                w.tell(&msg);
             }
             !w.subs.is_empty()
         });
@@ -1779,6 +1815,66 @@ fn named_agent(id: PaneId, panes: Vec<(PaneId, Arc<Pane>)>) -> Result<(PaneId, A
     )
 }
 
+/// The Claude session in a pane and its folder: an agent jw started carries
+/// it in its command; a claude started by hand in a shell is found in the
+/// foreground, by its own arguments or else by the newest transcript of its
+/// folder written since it started.
+fn claude_session(pane: &Pane) -> Option<(String, PathBuf)> {
+    let (id, cwd) = {
+        let started = lock(&pane.started);
+        let id = [started.cmd.as_deref(), started.resume.as_deref()]
+            .into_iter()
+            .flatten()
+            .find_map(chat::session_id);
+        (id, started.cwd.clone())
+    };
+    if let Some(id) = id {
+        return Some((id, cwd));
+    }
+    let pid = leader_of(pane)?;
+    if process_name(pid)? != "claude" {
+        return None;
+    }
+    let cwd = PathBuf::from(process_cwd(pid)?);
+    if let Some(id) = process_args(pid).as_deref().and_then(chat::session_id) {
+        return Some((id, cwd));
+    }
+    let since =
+        std::time::SystemTime::now().checked_sub(process_age(pid)? + Duration::from_secs(2))?;
+    chat::latest_since(&cwd, since).map(|id| (id, cwd))
+}
+
+/// The command line of a process (`ps -o args=`).
+fn process_args(pid: libc::pid_t) -> Option<String> {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "args=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    let args = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!args.is_empty()).then_some(args)
+}
+
+/// How long a process has run (`ps -o etime=`: `[[dd-]hh:]mm:ss`).
+fn process_age(pid: libc::pid_t) -> Option<Duration> {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "etime=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    parse_etime(String::from_utf8_lossy(&out.stdout).trim())
+}
+
+fn parse_etime(s: &str) -> Option<Duration> {
+    let (days, rest) = match s.split_once('-') {
+        Some((d, r)) => (d.parse::<u64>().ok()?, r),
+        None => (0, s),
+    };
+    let mut secs = 0;
+    for part in rest.split(':') {
+        secs = secs * 60 + part.parse::<u64>().ok()?;
+    }
+    Some(Duration::from_secs(days * 86_400 + secs))
+}
+
 /// The command name of a process (`ps -o comm=`), without its directory.
 fn process_name(pid: libc::pid_t) -> Option<String> {
     let out = std::process::Command::new("ps")
@@ -1883,6 +1979,17 @@ mod tests {
             p.process(c);
         }
         std::mem::take(p.callbacks_mut())
+    }
+
+    #[test]
+    fn a_processs_age_is_read_from_etime() {
+        assert_eq!(parse_etime("05:07"), Some(Duration::from_secs(307)));
+        assert_eq!(parse_etime("01:05:07"), Some(Duration::from_secs(3907)));
+        assert_eq!(
+            parse_etime("2-01:05:07"),
+            Some(Duration::from_secs(2 * 86_400 + 3907))
+        );
+        assert_eq!(parse_etime("soon"), None);
     }
 
     #[test]

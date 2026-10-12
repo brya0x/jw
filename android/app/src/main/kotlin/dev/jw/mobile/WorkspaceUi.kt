@@ -57,6 +57,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.jw.proto.AgentState
+import dev.jw.proto.mayHaveConversation
 import dev.jw.proto.AnswerRule
 import dev.jw.proto.Kind
 import dev.jw.proto.PaneInfo
@@ -112,8 +113,8 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
         session.watch(if (watching) w.id else null)
         onDispose { session.watch(null) }
     }
-    // An agent's conversation is drawn from the PC's transcript of it (REQ-90), not from its screen.
-    val agentPane = sel?.takeIf { it.role == "agent" }?.pane
+    // An agent's conversation, even one started by hand in a shell, is drawn from the PC's transcript of it (REQ-90/91).
+    val agentPane = sel?.takeIf { it.mayHaveConversation() }?.pane
     DisposableEffect(agentPane) {
         session.watchChat(agentPane)
         onDispose { session.watchChat(null) }

@@ -47,6 +47,12 @@ class PaneInfo(
     val cwd: String?,
 )
 
+/**
+ * Whether the pane may be a Claude session whose conversation the PC can send (REQ-91): an agent pane, or any pane
+ * with claude in the foreground (started by hand in a shell). The PC says whether it really is (`known`).
+ */
+fun PaneInfo.mayHaveConversation(): Boolean = role == "agent" || fg?.trimStart('-')?.substringAfterLast('/') == "claude"
+
 enum class Mark(val glyph: Char) { Working('✻'), Waiting('?'), Dev('⚡') }
 
 object Workspaces {
