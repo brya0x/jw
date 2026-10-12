@@ -67,6 +67,9 @@ class Nav {
     var open by mutableStateOf<String?>(null)
     var pane by mutableStateOf<Long?>(null)
     var sessionSheet by mutableStateOf(false)
+
+    /** The workspace that was open before this one, for `^␣ tab`. */
+    var previous by mutableStateOf<String?>(null)
 }
 
 private val Corner = RoundedCornerShape(6.dp)
@@ -78,7 +81,7 @@ private fun markColor(m: Mark): Color {
 }
 
 @Composable
-private fun Marks(panes: List<PaneInfo>) {
+internal fun Marks(panes: List<PaneInfo>) {
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         for (m in Workspaces.marks(panes)) Text(m.glyph.toString(), color = markColor(m), fontSize = 14.sp, fontWeight = FontWeight.Bold)
     }
@@ -86,7 +89,7 @@ private fun Marks(panes: List<PaneInfo>) {
 
 /** `.yn`: the y and n buttons. Disabled (dim) unless [enabled]; see [AnswerRule]. */
 @Composable
-private fun YesNo(enabled: Boolean, yLabel: String, nLabel: String, onY: () -> Unit, onN: () -> Unit, modifier: Modifier = Modifier) {
+internal fun YesNo(enabled: Boolean, yLabel: String, nLabel: String, onY: () -> Unit, onN: () -> Unit, modifier: Modifier = Modifier) {
     val j = LocalJw.current
     @Composable
     fun Btn(label: String, color: Color, onClick: () -> Unit, mod: Modifier) {
@@ -163,7 +166,7 @@ fun ConnectedApp(state: UiState.Connected, session: Session, nav: Nav, answers: 
     Box(Modifier.fillMaxSize()) {
         val open = nav.open?.let { id -> model.items.firstOrNull { it.id == id } }
         when {
-            open != null -> WorkspaceScreen(open, model, state, session, nav, now)
+            open != null -> WorkspaceScreen(open, model, state, session, nav, answers, now)
             nav.tab == Tab.Home -> HomeScreen(model, state, session, nav, now, waiting)
             nav.tab == Tab.Avisos -> AvisosScreen(model, state, session, nav, now, waiting)
             else -> SettingsScreen(state, session, answers, nav, waiting)
@@ -330,85 +333,7 @@ private fun AvisosScreen(model: Model, state: UiState.Connected, session: Sessio
 }
 
 @Composable
-private fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, session: Session, nav: Nav, now: Long) {
-    val j = LocalJw.current
-    val panes = Workspaces.panesOf(model.panes, w.id)
-    val root = if (w.kind == Kind.Worktree) model.items.firstOrNull { it.id == w.parent } else null
-    val sibs = when (w.kind) {
-        Kind.Folder -> listOf(w)
-        Kind.Root -> listOf(w) + model.items.filter { it.parent == w.id }
-        Kind.Worktree -> listOfNotNull(root) + model.items.filter { it.parent == w.parent }
-    }
-    val sel = panes.firstOrNull { it.pane == nav.pane } ?: panes.firstOrNull()
-    Column(Modifier.fillMaxSize().background(j.bg)) {
-        Row(
-            Modifier.fillMaxWidth().background(j.panel).drawBehind { drawLine(j.line, Offset(0f, size.height), Offset(size.width, size.height), 1.dp.toPx()) }
-                .padding(horizontal = 4.dp, vertical = 8.dp).heightIn(min = 52.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(Modifier.width(44.dp).heightIn(min = 44.dp).clickable(role = Role.Button) { nav.open = null }, contentAlignment = Alignment.Center) { Text("‹", color = j.fg, fontSize = 22.sp) }
-            Column(Modifier.weight(1f)) {
-                Text((root?.let { "${it.name} › " } ?: "") + w.name, color = j.fg, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(w.path, color = j.dim, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-        }
-        // rail: the root and its worktrees
-        Row(Modifier.fillMaxWidth().background(j.panel).horizontalScroll(rememberScrollState())) {
-            for (x in sibs) {
-                val on = x.id == w.id
-                Row(
-                    Modifier.heightIn(min = 42.dp).background(if (on) j.bg else j.panel).clickable { nav.open = x.id; nav.pane = null }
-                        .drawBehind { if (on) drawLine(j.blue, Offset(0f, size.height), Offset(size.width, size.height), 2.dp.toPx()) }.padding(horizontal = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp),
-                ) {
-                    if (x.kind == Kind.Worktree) Text("↳", color = j.dim)
-                    Text(x.name, color = if (on) j.fg else j.dim, fontSize = 12.5.sp, maxLines = 1)
-                    Marks(Workspaces.panesOf(model.panes, x.id))
-                }
-            }
-        }
-        // panes of this workspace
-        Row(Modifier.fillMaxWidth().background(j.bg).horizontalScroll(rememberScrollState()).drawBehind { drawLine(j.line, Offset(0f, size.height), Offset(size.width, size.height), 1.dp.toPx()) }) {
-            for (p in panes) {
-                val on = p.pane == sel?.pane
-                val c = paneColor(p)
-                Row(
-                    Modifier.heightIn(min = 40.dp).background(if (on) j.sel else j.bg).clickable { nav.pane = p.pane }
-                        .drawBehind { if (on) drawLine(c, Offset(0f, size.height), Offset(size.width, size.height), 2.dp.toPx()) }.padding(horizontal = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Box(Modifier.width(7.dp).heightIn(min = 7.dp).background(c, RoundedCornerShape(4.dp)))
-                    Text(p.role, color = if (on) j.fg else j.dim, fontSize = 12.5.sp)
-                }
-            }
-        }
-        // M5 draws the terminal here.
-        Column(Modifier.weight(1f).fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            if (sel == null) {
-                Text("Este workspace no tiene paneles abiertos.", color = j.dim, fontSize = 12.sp)
-            } else {
-                Text("${sel.role}${sel.fg?.let { " · $it" } ?: ""}", color = j.fg, fontWeight = FontWeight.Bold)
-                Text(stateLabel(sel), color = paneColor(sel), fontSize = 12.sp)
-                sel.cwd?.let { Text(it, color = j.dim, fontSize = 11.sp) }
-                Text("La terminal llega en M5.", color = j.dim, fontSize = 12.sp, modifier = Modifier.padding(top = 12.dp))
-            }
-        }
-        if (sel != null && sel.agent == AgentState.Waiting) {
-            val on = AnswerRule.enabled(sel, model.panesAt, now, state.readOnly, sel.pane in model.answered)
-            Column(
-                Modifier.fillMaxWidth().background(j.yellow.copy(alpha = 0.12f).compositeOver(j.bg)).padding(horizontal = 12.dp, vertical = 10.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text("? ${sel.role} espera tu respuesta", color = j.fg, fontSize = 12.5.sp)
-                YesNo(on, "y · sí", "n · no", { session.answer(sel.pane, true) }, { session.answer(sel.pane, false) })
-            }
-        }
-        StatusBar("VIEW", j.cyan, sel?.let { stateLabel(it) } ?: "sin paneles", route = state.route)
-    }
-}
-
-@Composable
-private fun paneColor(p: PaneInfo): Color {
+internal fun paneColor(p: PaneInfo): Color {
     val j = LocalJw.current
     return when {
         p.exited != null -> j.red
@@ -419,7 +344,7 @@ private fun paneColor(p: PaneInfo): Color {
     }
 }
 
-private fun stateLabel(p: PaneInfo) = when {
+internal fun stateLabel(p: PaneInfo) = when {
     p.exited != null -> "terminó (${p.exited})"
     p.agent == AgentState.Waiting -> "espera tu respuesta"
     p.agent == AgentState.Working -> "trabajando"
@@ -513,6 +438,12 @@ private fun SettingsScreen(state: UiState.Connected, session: Session, answers: 
             )
             Section("tema")
             ThemeGrid(state.palettes)
+            Section("terminal")
+            var fit by remember { mutableStateOf(answers.fitToPhone) }
+            SettingRow(
+                "ajustar al teléfono", "el panel toma el tamaño de esta pantalla; al salir recupera el suyo",
+                right = if (fit) "● activado" else "apagado", rightColor = if (fit) j.green else j.dim,
+            ) { fit = !fit; answers.fitToPhone = fit }
             Section("general")
             SettingRow("líder", "^␣ abre el menú de teclas")
         }

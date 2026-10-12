@@ -73,9 +73,9 @@ supersedes:  []
 | 19 | WHEN the user taps any workspace row, root, worktree or folder, the app SHALL attach and show its panes. |
 | 20 | WHILE a pane's agent is `Waiting`, the row and the pane SHALL offer y and n; WHEN tapped, the app SHALL send `Input` with the configured bytes. |
 | 21 | THE terminal surface SHALL render `Snapshot` and `Output` through an on-device VT emulator. |
-| 22 | THE app SHALL offer a key row (esc, tab, enter, arrows, ^C, ^D, ^R) and text selection to the Android clipboard. |
-| 23 | WHEN the user taps `^␣`, the app SHALL show the TUI's actions (`rust-tui.md:22-32`) and run each with the same client message the TUI sends. |
-| 24 | THE app SHALL NOT send `Resize` unless "fit to phone" is on; WHEN it is turned off or the pane is left, the app SHALL send the size the pane had before. |
+| 22 | THE app SHALL offer a key row (^␣, esc, tab, enter, backspace, arrows, ^C, ^D, ^R, /, |, ~; arrows and backspace repeat while held), a line that sends its text then enter, and text selection to the Android clipboard. |
+| 23 | WHEN the user taps `^␣`, the app SHALL show the TUI's actions (`rust-tui.md:22-32`) and run each phone-capable one with the same client message the TUI sends (find workspace, previous workspace, sessions, new / close / name pane, settings, disconnect); the ones that are operations of `core` on the PC (open folder, new worktree, rename, sync, remove, review a PR) SHALL show greyed, tagged "en el PC". |
+| 24 | THE app SHALL NOT send `Resize` unless "fit to phone" (Settings, off by default, never in read-only) is on; WHEN it is turned off or the pane is left, the app SHALL send the size the pane had before. |
 | 25 | WHEN the user opens Changes, the app SHALL show files and hunks with add and delete colours, and keep "viewed" per file on the device. |
 | 26 | THE app SHALL size every touch target at 48 dp or more and show the mode chip (NORMAL, TERM, DIFF, SET, ?) and status bar of the prototype. |
 | 27 | THE app, the bridge and the daemon SHALL NOT log terminal bytes or tokens. |
@@ -122,6 +122,7 @@ supersedes:  []
 | 68 | WHEN mobile stops, the wifi listener SHALL close with the bridge and every phone on it, within the 2 s of REQ-9. |
 | 69 | THE daemon SHALL re-read the private address every 30 s while mobile is on; if it changed it SHALL rebind (on the same port when free), issue a new code so the QR on screen is the new one, send `endpoints` and move `MobileState.lan`; if it is gone it SHALL drop the wifi listener and go on through the tunnel, or fail when the tunnel is not up either. |
 | 70 | WHEN a client's `Resize` changes a pane's size, the daemon SHALL send `Resized{pane, cols, rows}` to the pane's watchers, in order with its `Output`, and nothing when the size is the same; the bridge relays it like any frame, and the app SHALL resize that pane's terminal at that byte. |
+| 71 | THE workspace screen SHALL NOT show a rail of root and worktrees; the user reaches another workspace through the finder (the magnifier or `^␣ ␣`) or `^␣ tab`. |
 
 ---
 
@@ -197,7 +198,7 @@ supersedes:  []
 | M3 | Android shell: scan, pair, reconnect, version screen, theme | 14–17, 27 | `android/app`, `android/proto` |
 | M4 | Workspaces, sessions, enter, approve, Avisos | 12, 18–20, 28 | `android/app`, `crates/web/` |
 | M5a ✓ | The VT emulator on the device (`android/term`), checked against the daemon's vt100 | 21 | `android/term`, `crates/jw/examples/cells.rs` |
-| M5 | Terminal surface, keys, leader sheet, resize | 21–24 | `android/term`, `android/app` |
+| M5 ✓ | Terminal surface, keys, leader sheet, resize | 21–24, 70, 71 | `android/term`, `android/app` |
 | M6 | Changes and diff | 13, 25 | `crates/web/`, `android/app` |
 | M7 | Settings, touch and mode chrome, polish | 26 | `android/app` |
 | L1 ✓ `87e38b9` | The wifi listener: `tls.rs`, the certificate, the wifi QR payload, `endpoints`, `MobileState` fields and `PROTOCOL` 12, no-wifi and no-cloudflared cases, `jw mobile` text | 56–58, 60, 61, 65 (CLI), 66–69 | `web/src/tls.rs`, `web/src/bridge.rs`, `daemon/src/mobile.rs`, `proto.rs`, `core/src/qr.rs`, `jw/src/mobile.rs` |
@@ -210,6 +211,7 @@ Order (L1 to L3, after the rest): L1 first (the app cannot be tried without it),
 
 - REQ-58 first said the QR never changes after it is shown. With a private address the QR was wifi-only, so on a guest network, behind a full VPN, or with the macOS firewall question declined there was no way to pair at all. The user chose (2026-10-11) that the code also names the tunnel once it is ready (`&t=`); the token is the same, and a phone pairs on the wifi first and on the tunnel only when no connection opened.
 - A pane's size reached a client only inside a `Snapshot`, which is enough for the TUI (it sets every size itself) but not for a phone that draws the pane at its own size while the PC's window is resized (REQ-24): the grid would be misread from the next byte on. REQ-70 adds `Resized`, and `PROTOCOL` is 13.
+- The prototype had a rail of root and worktrees on the panes screen; the user dropped it (REQ-71). A pane taller than the phone (the PC's window) is shown ending at the cursor row, not at its empty bottom.
 - REQ-56 first said a random port. A phone stores `host:port` with its pin, so a new port on each start would make every stored address dead and force a rescan, which is what the wifi route is for: the port is kept next to the certificate and bound again, and a new one is taken only when it is busy. REQ-69 first said the modal tells the person the QR is stale; the daemon now issues the new code itself, so the QR on screen is always right. `MobileState.phones` was dropped: `devices[].route` says what it was for. L1 moved `PROTOCOL` to 12.
 - RAT-3 first said the bridge needs no TLS because Cloudflare ends it, and the contract said loopback only. That holds for the loopback listener; a second listener on the PC's private address with its own TLS joins it (REQ-56, RAT-16). The rule "never to a host learned from a QR" stands (it is now REQ-62), with the one case RAT-17 describes.
 - W3 first said a repo cannot run a command of its own by being diffed because textconv and the external diff are off. A repo's filter drivers (`filter.<name>.clean`, `smudge`, `process`, named in `.gitattributes`) ran too; the load now overrides every configured driver, under one deadline for the whole load, in its own process group, cancelled when the phone goes, and each untracked file is opened component by component without following a link, at most 2000 of them. A tracked diff with bytes that are not UTF-8 is shown with U+FFFD in their place; that is accepted for a viewer.

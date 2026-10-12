@@ -13,4 +13,9 @@ class AnswerPrefs(context: Context) {
     var reject: String?
         get() = prefs.getString("reject", null)
         set(v) = prefs.edit().putString("reject", v).apply()
+
+    /** "Fit to phone" (REQ-24): off until the person turns it on. */
+    var fitToPhone: Boolean
+        get() = prefs.getBoolean("fit", false)
+        set(v) = prefs.edit().putBoolean("fit", v).apply()
 }
