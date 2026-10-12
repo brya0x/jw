@@ -100,6 +100,9 @@ enum Msg {
     },
 }
 
+/// What the status bar says while gh is asked about a PR, before the name.
+const PR_BUSY: &str = "checking the PR of ";
+
 // One job at a time crosses the channel, boxed; its size doesn't matter.
 #[allow(clippy::large_enum_variant)]
 enum Job {
@@ -3242,7 +3245,7 @@ impl App {
     /// What gh says about the PR of the branch the remove modal is open on.
     /// It runs after the modal is up and only fills its PR line (REQ-259).
     fn ask_pr(&mut self, entry: Entry, project: Project) {
-        self.background(format!("checking the PR of {}", entry.name), move || {
+        self.background(format!("{PR_BUSY}{}", entry.name), move || {
             use crate::connectors::PullRequests;
             let prs = prcache::client();
             let found = trace::span("rm_gh", || {
@@ -3564,6 +3567,21 @@ impl App {
     }
 
     fn on_job(&mut self, job: Job) {
+        // A PR line's answer touches no registry either, and ends only its own
+        // wait: a removal that began meanwhile keeps its indicator.
+        let job = match job {
+            Job::RmPr { id, line } => {
+                if self.busy.as_deref().is_some_and(|b| b.starts_with(PR_BUSY)) {
+                    self.busy = None;
+                }
+                match &mut self.modal {
+                    Some(Modal::Rm { entry, pr, .. }) if entry.id == id => *pr = line,
+                    _ => trace::mark("rm_pr_dropped", 0),
+                }
+                return;
+            }
+            job => job,
+        };
         self.busy = None;
         // A diff pane's answer touches no registry: no reload on its account,
         // or every `)` would read the registry on the UI thread (REQ-237).
@@ -3580,14 +3598,6 @@ impl App {
                 };
                 if let Some(r) = more {
                     self.load_part(pane, r);
-                }
-                return;
-            }
-            // Nor does a PR line's: it only fills the modal that asked.
-            Job::RmPr { id, line } => {
-                match &mut self.modal {
-                    Some(Modal::Rm { entry, pr, .. }) if entry.id == id => *pr = line,
-                    _ => trace::mark("rm_pr_dropped", 0),
                 }
                 return;
             }
@@ -3608,7 +3618,7 @@ impl App {
                 self.open_entry(entry, setup);
             }
             Job::SetupReady(s) => self.modal = Some(Modal::Setup(s)),
-            // Taken above, before the reload.
+            // Taken at the top, before `busy` is cleared.
             Job::RmPr { .. } => {}
             Job::Removed { name, note } => {
                 self.done(match note {
@@ -4180,6 +4190,23 @@ mod motion_tests {
         ));
     }
 
+    /// A PR answer ends the "checking the PR" wait, and leaves a removal that
+    /// began meanwhile showing as busy.
+    #[test]
+    fn a_pr_answer_leaves_another_jobs_busy_alone() {
+        let (mut app, _g) = app(true);
+        let pr = || Job::RmPr {
+            id: "a".into(),
+            line: modal::PrLine::NoPr,
+        };
+        app.busy = Some(format!("{PR_BUSY}wt1"));
+        app.on_job(pr());
+        assert_eq!(app.busy, None);
+        app.busy = Some("removing wt1".into());
+        app.on_job(pr());
+        assert_eq!(app.busy.as_deref(), Some("removing wt1"));
+    }
+
     /// REQ-260: no modal, or another one, takes the answer.
     #[test]
     fn a_late_pr_answer_for_another_modal_is_dropped() {
@@ -4274,7 +4301,7 @@ mod motion_tests {
                 "#45 merged",
             ),
             (modal::PrLine::Info("#46 open".into()), "#46 open"),
-            (modal::PrLine::Unknown, "unknown (gh did not answer)"),
+            (modal::PrLine::Unknown, "unknown (gh failed or timed out)"),
             (modal::PrLine::NoPr, "none"),
         ] {
             let after = shown(&rm_modal("a", plan.clone(), "", line), '⠋');

@@ -670,9 +670,9 @@ Measured on this checkout before the change (one call each, 3 runs; wall clock i
 - REQ-261 THE modal SHALL require the worktree name whenever `RmPlan::loses_work()` is true, before and after gh answers (REQ-12 unchanged).
 - REQ-262 WHEN the PR is merged and done's checks pass, THE PR line SHALL offer `d` (`⇥` when the name must be typed) and the key SHALL open `Modal::Done` only while nothing is typed; THE TUI SHALL never switch modal by itself.
 - REQ-263 IF the PR is merged but done's checks fail, THEN THE PR line SHALL read `#n merged` with no key and the modal SHALL stay the rm modal.
-- REQ-264 IF gh fails or does not answer in 3 s, THEN THE PR line SHALL read `unknown (gh did not answer)` and the modal SHALL stay the rm modal.
+- REQ-264 IF gh fails or does not answer in 3 s, THEN THE PR line SHALL read `unknown (gh failed or timed out)` and the modal SHALL stay the rm modal.
 - REQ-265 WHEN the same `(repo, branch)` is asked again within 30 s, THE TUI SHALL answer from memory with no gh call; a failure SHALL NOT be remembered.
-- REQ-266 THE UI thread SHALL run no git or gh call for this flow, and gh's answer SHALL NOT reload the registry.
+- REQ-266 THE UI thread SHALL run no git or gh call for this flow, and gh's answer SHALL NOT reload the registry nor clear the busy indicator of another job.
 - REQ-267 THE version SHALL be 0.0.20 and `PROTOCOL` SHALL stay 11.
 
 ## Rationale

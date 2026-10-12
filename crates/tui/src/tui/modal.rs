@@ -693,7 +693,7 @@ fn pr_line(pr: &PrLine, plan: &RmPlan, typed: &str, spin: char) -> Line<'static>
             format!("{spin} checking…"),
             Style::default().fg(p().cyan),
         )),
-        PrLine::Unknown => l.push(Span::styled("unknown (gh did not answer)", dim)),
+        PrLine::Unknown => l.push(Span::styled("unknown (gh failed or timed out)", dim)),
         PrLine::NoPr => l.push(Span::styled("none", dim)),
         PrLine::Info(t) => l.push(Span::styled(t.clone(), dim)),
         PrLine::Merged { number, .. } => {
