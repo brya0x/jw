@@ -375,24 +375,32 @@ impl RmPlan {
 pub fn rm_plan(p: &Project, e: &Entry) -> Result<RmPlan> {
     let path = Path::new(&e.path);
     let on_disk = path.exists();
-    let (dirty, unpushed) = if on_disk {
-        // A review's own commits only: the PR's head is not work to lose
-        // (REQ-175).
-        let unpushed = if e.review_base.is_empty() {
-            git::unpushed(path)?
-        } else {
-            git::unpushed_beyond(path, &crate::review::head_ref(e.pr))?
-        };
-        (git::dirty_files(path)?, unpushed)
-    } else {
-        (Vec::new(), Vec::new())
-    };
     let keep_branch = e.adopted;
+    // Three git processes that need nothing from each other: side by side,
+    // the modal waits for the slowest, not their sum (REQ-257).
+    let (unpushed, dirty, branch) = std::thread::scope(|s| {
+        let branch = s.spawn(|| !keep_branch && p.repo.branch_exists(&e.branch));
+        if !on_disk {
+            return (Ok(Vec::new()), Ok(Vec::new()), joined(branch));
+        }
+        let unpushed = s.spawn(|| {
+            // A review's own commits only: the PR's head is not work to lose
+            // (REQ-175).
+            if e.review_base.is_empty() {
+                git::unpushed(path)
+            } else {
+                git::unpushed_beyond(path, &crate::review::head_ref(e.pr))
+            }
+        });
+        let dirty = git::dirty_files(path);
+        (joined(unpushed), dirty, joined(branch))
+    });
+    let (unpushed, dirty) = (unpushed?, dirty?);
     let mut deletes = Vec::new();
     if on_disk {
         deletes.push(format!("worktree {}", e.path));
     }
-    if !keep_branch && p.repo.branch_exists(&e.branch) {
+    if branch {
         deletes.push(format!("local branch {}", e.branch));
     }
     Ok(RmPlan {
@@ -402,6 +410,11 @@ pub fn rm_plan(p: &Project, e: &Entry) -> Result<RmPlan> {
         keep_branch,
         deletes,
     })
+}
+
+/// A scoped thread's result; its panic goes on in the caller.
+fn joined<T>(h: std::thread::ScopedJoinHandle<'_, T>) -> T {
+    h.join().unwrap_or_else(|p| std::panic::resume_unwind(p))
 }
 
 /// Removes the worktree, the branch jw made and the registry entry. The

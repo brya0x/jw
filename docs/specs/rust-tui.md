@@ -655,7 +655,7 @@ Measured on this checkout before the change (one call each, 3 runs; wall clock i
 | `git rev-parse --verify` (`branch_exists`) | 32–36 ms |
 | `gh pr list --head <branch>` | 539–786 ms |
 
-After (a debug build under `scripts/drive.py`, a temp repo with a local `origin` and one worktree with an untracked file): `rm_project` 37 ms, `rm_local` 50–53 ms, `^␣ X` to modal (`rm_ask` to `rm_modal`) 89–92 ms. With `JW_GH` a script that sleeps, the modal is up at the same 89 ms, its PR row and the status bar spin, text typed meanwhile is kept, and the row reads `unknown (gh failed or timed out)` at 3.0 s (`rm_gh` 3009 ms). A release build, 3 runs: `rm_project` 35–47 ms, `rm_local` 46–54 ms, ask to modal 92–94 ms, so no faster than debug: the time is the `git` processes, not jw. A large repo is not measured (RISK-80).
+After (a debug build under `scripts/drive.py`, a temp repo with a local `origin` and one worktree with an untracked file): `rm_project` 37 ms, `rm_local` 50–53 ms, `^␣ X` to modal (`rm_ask` to `rm_modal`) 89–92 ms. With `JW_GH` a script that sleeps, the modal is up at the same 89 ms, its PR row and the status bar spin, text typed meanwhile is kept, and the row reads `unknown (gh failed or timed out)` at 3.0 s (`rm_gh` 3009 ms). A release build, 3 runs: `rm_project` 35–47 ms, `rm_local` 46–54 ms, ask to modal 92–94 ms, so no faster than debug: the time is the `git` processes, not jw. A large repo is not measured (RISK-80). E3 then runs the three git calls of `rm_plan` side by side: release, 3 runs, `rm_local` 21–24 ms and ask to modal 65–70 ms, with the same modal.
 
 | Piece | Shape |
 |---|---|
@@ -841,7 +841,7 @@ After (a debug build under `scripts/drive.py`, a temp repo with a local `origin`
 - RISK-78 **Pane ids change when the daemon restarts.** Within one daemon ids come from `next_pane` and are never reused (`new_id`), so `--pane 3` cannot reach a pane opened later. `restore` gives every restored pane a new id, so an id kept across a restart (in a script, in an agent's notes) can name another pane or none; run `jw pane ls` again.
 - RISK-79 **`Error` no longer tells "no agent" from "bad pane" except by its text.** Clients only show it (`cli.rs` `send_prompt`, `tui/mod.rs`), so nothing depends on it.
 
-- RISK-80 **The 100 ms target is for `Project::open`, `rm_plan` (three git calls) and a redraw, in series.** Measured 89–94 ms on a tiny repo, in debug and in release alike, so there is little room, and a repo with a huge working tree makes `git status` slower. `rm_local` and `rm_modal` in `JW_TRACE` say; the fallback is `status` and `log` on two threads.
+- RISK-80 **The 100 ms target is for `Project::open` (about 40 ms of `git`, still in series), `rm_plan` (three git calls, side by side since E3) and a redraw.** Measured 65–70 ms in release on a tiny repo. A repo with a huge working tree makes `git status` slower, and it sets `rm_local` now. `rm_local` and `rm_modal` in `JW_TRACE` say; the next step is reading what `Project::open` needs from `.git` like `head_of` does.
 - RISK-81 **`rm` still does not re-check dirty and unpushed at confirm time (`actions::rm`).** The window between the modal and `↵` is as before; this addendum neither widens nor closes it.
 - RISK-82 **A remembered answer can be 30 s old.** The PR may have been merged in the browser meanwhile. It only changes the line and the offer of `d`, and `done` re-checks the merge itself.
 
@@ -918,6 +918,7 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | K2 ✓ `cfa2f62` | The CLI of Addendum 20 (its commit message says Q2): `jw prompt [--pane] [--tag] [--]`, the guards, `help.rs`, the skill | 247, 252, 253, 255, 256 | `cli.rs`, `help.rs`, `SKILL.md` |
 | E1 ✓ `b1b6f7b` | Measure first: the `rm_*` trace spans and marks, no behaviour change; the numbers in Addendum 21 | — | `tui/mod.rs` |
 | E2 ✓ | The two-phase `X`: `RmReady` then `RmPr`, `PrLine`, `⇥`/`d` to done, `prcache.rs`, `Client.timeout`, the spinner; tests; version 0.0.20 (past main's 0.0.19); the prototype (approved 2026-10-11) | 257–267 | `tui/mod.rs`, `tui/modal.rs`, `tui/prcache.rs`, `tui/draw.rs`, `core/src/connectors/github.rs` |
+| E3 ✓ | `rm_plan` runs `status`, `log` and the branch check on scoped threads (RISK-80): `rm_local` 50 → 22 ms, modal 92 → 68 ms in release | 257 | `core/src/actions.rs` |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 | F0 ✓ | `JW_TRACE`, `scripts/bench-switch.py`, the Measurements above | 184 | `tui/trace.rs`, `tui/mod.rs`, `scripts/` |
 | F1 ✓ | S1, S9: `Stream::resolve` (the `git` spawn) off the UI thread, the frame deadline counted from the frame's start; the unexplained ≈ 100 ms of a first open | 185, 191 | `tui/mod.rs`, `core` (callers) |
