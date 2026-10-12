@@ -15,7 +15,7 @@ pub type PaneId = u64;
 
 /// Bumped whenever a message changes shape: a client and a daemon from
 /// different builds refuse each other instead of misreading (RISK-14).
-pub const PROTOCOL: u32 = 11;
+pub const PROTOCOL: u32 = 12;
 
 /// A pane to start. `cmd` runs through `sh -c`; `None` starts `$SHELL`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -380,6 +380,16 @@ pub struct MobileState {
     /// says so, so nobody has one active without seeing it.
     #[serde(default)]
     pub custom_tunnel: bool,
+    /// The wifi listener as `host:port`, or empty when there is none (no
+    /// private address, or mobile is off). With one, `phase` is `ready` as soon
+    /// as it listens, whatever the tunnel does (REQ-56, REQ-67).
+    #[serde(default)]
+    pub lan: String,
+    /// The tunnel's own phase: `off`, `starting`, `ready` or `failed`. `step`
+    /// describes it while it starts and `error` says why when it failed with the
+    /// wifi still up.
+    #[serde(default)]
+    pub tunnel: String,
 }
 
 /// A paired phone.
@@ -392,6 +402,10 @@ pub struct MobileDevice {
     pub last_seen: u64,
     /// A phone is connected to the bridge now.
     pub connected: bool,
+    /// While `connected`: which listener it came in on, `wifi` or `tunnel`
+    /// (REQ-65). Empty otherwise.
+    #[serde(default)]
+    pub route: String,
 }
 
 /// A message that carries terminal bytes sends them raw after a JSON head,
@@ -692,9 +706,12 @@ mod tests {
                 paired: 10,
                 last_seen: 20,
                 connected: true,
+                route: "wifi".into(),
             }],
             error: String::new(),
             custom_tunnel: true,
+            lan: "192.168.1.23:48211".into(),
+            tunnel: "ready".into(),
         };
         let down = vec![
             DaemonMsg::MobileState(state),

@@ -51,6 +51,28 @@ impl Rig {
 
     /// A daemon on the state of an earlier one, as after a restart.
     fn start_in(dir: &Path, stub: Stub) -> Self {
+        Self::launch(dir, stub, "off")
+    }
+
+    /// A daemon whose wifi listener sits on loopback, so the wifi can be tried
+    /// without touching the network of whoever runs the tests.
+    fn start_wifi(stub: Stub) -> Self {
+        Self::start_lan(stub, "127.0.0.1")
+    }
+
+    /// `lan` as `JW_LAN_ADDR` takes it: an address, `off`, or `file:<path>`.
+    fn start_lan(stub: Stub, lan: &str) -> Self {
+        let owned = tempfile::tempdir().unwrap();
+        let dir = owned.path().to_path_buf();
+        let lan = lan.replace("{dir}", &dir.display().to_string());
+        let mut rig = Self::launch(&dir, stub, &lan);
+        rig._owned = Some(owned);
+        rig
+    }
+
+    /// `lan` is `JW_LAN_ADDR`: `off`, or an address. Never unset, which would
+    /// make the daemon look for the real one and listen on it.
+    fn launch(dir: &Path, stub: Stub, lan: &str) -> Self {
         let socket = dir.join("jw.sock");
         let script = dir.join("stub.sh");
         let body = match stub {
@@ -74,6 +96,7 @@ impl Rig {
             .env("XDG_STATE_HOME", dir.join("state"))
             .env("HOME", dir)
             .env("STUB_DIR", dir)
+            .env("JW_LAN_ADDR", lan)
             .env("PATH", "/usr/bin:/bin");
         if stub != Stub::Missing {
             cmd.env("JW_CLOUDFLARED", &script);
@@ -212,7 +235,15 @@ fn ready(c: &mut Client) -> MobileState {
 }
 
 fn token(s: &MobileState) -> String {
-    s.payload.rsplit('/').next().unwrap().to_string()
+    // The wifi payload has `?fp=<sha256>` after the token.
+    s.payload
+        .rsplit('/')
+        .next()
+        .unwrap()
+        .split('?')
+        .next()
+        .unwrap()
+        .to_string()
 }
 
 struct Phone(WebSocket<TcpStream>);
@@ -232,10 +263,17 @@ impl Phone {
         self.0.send(Message::text(v.to_string())).unwrap();
     }
 
+    /// The next control message, leaving out `endpoints`, which follows every
+    /// `ready` and changes with the tunnel; the tests of the wifi read it raw.
     fn json(&mut self) -> serde_json::Value {
         loop {
             match self.0.read().unwrap() {
-                Message::Text(t) => return serde_json::from_str(&t).unwrap(),
+                Message::Text(t) => {
+                    let v: serde_json::Value = serde_json::from_str(&t).unwrap();
+                    if v["t"] != "endpoints" {
+                        return v;
+                    }
+                }
                 Message::Close(_) => panic!("the bridge closed the phone"),
                 _ => {}
             }
@@ -1074,4 +1112,247 @@ fn a_diff_never_sends_what_a_symlink_points_at_and_names_no_path_of_the_pc() {
             .contains(rig.dir.to_str().unwrap()),
         "{v}"
     );
+}
+
+// ---- the wifi listener (REQ-56 to REQ-69) -----------------------------------
+//
+// The daemon's wifi listener sits on loopback here (`JW_LAN_ADDR`), so none of
+// this touches the network of whoever runs the tests.
+
+/// The fingerprint and `host:port` out of a wifi payload.
+fn wifi_parts(payload: &str) -> (String, String) {
+    let rest = payload.strip_prefix("jw://").expect("a jw:// payload");
+    let (addr, tail) = rest.split_once('/').unwrap();
+    let fp = tail.split_once("?fp=").expect("the fingerprint").1;
+    (addr.to_string(), fp.to_string())
+}
+
+#[test]
+fn the_wifi_is_ready_at_once_and_the_tunnel_comes_up_behind_it() {
+    // The tunnel never registers: mobile is ready all the same (REQ-56).
+    let rig = Rig::start_wifi(Stub::Hangs);
+    let mut w = rig.watcher();
+    let s = up(&mut w);
+    assert!(s.lan.starts_with("127.0.0.1:"), "{}", s.lan);
+    assert_eq!(s.phase, "ready");
+    assert_eq!(s.tunnel, "starting", "{s:?}");
+    assert!(s.host.is_empty());
+    let (addr, fp) = wifi_parts(&s.payload);
+    assert_eq!(addr, s.lan);
+    assert_eq!(fp.len(), 64);
+    assert!(fp.bytes().all(|b| b.is_ascii_hexdigit()));
+    assert_eq!(token(&s).len(), 32);
+}
+
+#[test]
+fn the_wifi_code_does_not_change_when_the_tunnel_registers() {
+    let rig = Rig::start_wifi(Stub::Registers);
+    let mut w = rig.watcher();
+    let first = up(&mut w);
+    let last = until(&mut w, |s| s.tunnel == "ready").pop().unwrap();
+    assert_eq!(last.host, HOST);
+    assert_eq!(
+        last.payload, first.payload,
+        "the QR on screen must stay good"
+    );
+    assert_eq!(last.phase, "ready");
+}
+
+#[test]
+fn without_cloudflared_the_wifi_still_works() {
+    let rig = Rig::start_wifi(Stub::Missing);
+    let mut w = rig.watcher();
+    w.send(&ClientMsg::MobileStart { read_only: false })
+        .unwrap();
+    let s = until(&mut w, |s| s.tunnel == "failed").pop().unwrap();
+    assert_eq!(s.phase, "ready", "REQ-67: only the tunnel failed");
+    assert!(s.error.contains("cloudflared"), "{}", s.error);
+    assert!(s.lan.starts_with("127.0.0.1:"));
+    assert!(s.payload.contains("?fp="), "the wifi code is still offered");
+}
+
+#[test]
+fn the_wifi_port_is_the_same_after_a_stop_and_a_start() {
+    let rig = Rig::start_wifi(Stub::Hangs);
+    let mut w = rig.watcher();
+    let first = up(&mut w);
+    w.send(&ClientMsg::MobileStop).unwrap();
+    until(&mut w, |s| s.phase == "off");
+    let second = up(&mut w);
+    assert_eq!(first.lan, second.lan, "a stored address would be dead");
+    assert_eq!(
+        wifi_parts(&first.payload).1,
+        wifi_parts(&second.payload).1,
+        "the certificate is kept (REQ-57)"
+    );
+}
+
+#[test]
+fn the_certificate_is_in_the_config_dir_and_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let rig = Rig::start_wifi(Stub::Hangs);
+    let mut w = rig.watcher();
+    up(&mut w);
+    let pem = rig.dir.join("config/jw/mobile-cert.pem");
+    let found = if pem.exists() {
+        pem
+    } else {
+        // Wherever jw's config dir is under the test's XDG_CONFIG_HOME.
+        std::fs::read_dir(rig.dir.join("config"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.path().join("mobile-cert.pem"))
+            .find(|p| p.exists())
+            .expect("mobile-cert.pem under the test's config dir")
+    };
+    let mode = std::fs::metadata(found).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+}
+
+#[test]
+fn a_phone_pairs_over_the_wifi_and_is_told_where_the_tunnel_is() {
+    use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+    use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+    use std::sync::Arc;
+
+    #[derive(Debug)]
+    struct Pin(String, rustls::crypto::WebPkiSupportedAlgorithms);
+    impl ServerCertVerifier for Pin {
+        fn verify_server_cert(
+            &self,
+            end: &CertificateDer<'_>,
+            _: &[CertificateDer<'_>],
+            _: &ServerName<'_>,
+            _: &[u8],
+            _: UnixTime,
+        ) -> Result<ServerCertVerified, rustls::Error> {
+            let fp: String = {
+                use std::fmt::Write;
+                // SHA-256 by the daemon's own crate, so the pin is the real one.
+                jw_web::tls::fingerprint(end.as_ref())
+                    .chars()
+                    .fold(String::new(), |mut a, c| {
+                        let _ = a.write_char(c);
+                        a
+                    })
+            };
+            if fp == self.0 {
+                Ok(ServerCertVerified::assertion())
+            } else {
+                Err(rustls::Error::General("not the pinned certificate".into()))
+            }
+        }
+        fn verify_tls12_signature(
+            &self,
+            m: &[u8],
+            c: &CertificateDer<'_>,
+            d: &rustls::DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, rustls::Error> {
+            rustls::crypto::verify_tls12_signature(m, c, d, &self.1)
+        }
+        fn verify_tls13_signature(
+            &self,
+            m: &[u8],
+            c: &CertificateDer<'_>,
+            d: &rustls::DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, rustls::Error> {
+            rustls::crypto::verify_tls13_signature(m, c, d, &self.1)
+        }
+        fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+            self.1.supported_schemes()
+        }
+    }
+
+    let rig = Rig::start_wifi(Stub::Registers);
+    let mut w = rig.watcher();
+    let s = up(&mut w);
+    let (addr, fp) = wifi_parts(&s.payload);
+
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let config = rustls::ClientConfig::builder_with_provider(provider.clone())
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(Pin(
+            fp,
+            provider.signature_verification_algorithms,
+        )))
+        .with_no_client_auth();
+    let sock = TcpStream::connect(&addr).unwrap();
+    sock.set_read_timeout(Some(TIMEOUT)).unwrap();
+    let conn = rustls::ClientConnection::new(
+        Arc::new(config),
+        ServerName::try_from("jw-mobile.local").unwrap(),
+    )
+    .unwrap();
+    let stream = rustls::StreamOwned::new(conn, sock);
+    let mut ws = tungstenite::client(format!("wss://{addr}"), stream)
+        .unwrap()
+        .0;
+    let mut say = |v: serde_json::Value| ws.send(Message::text(v.to_string())).unwrap();
+    say(
+        serde_json::json!({ "t": "pair", "token": token(&s), "name": "Pixel 8", "code": "482913" }),
+    );
+    // The person at the PC answers the question (REQ-3).
+    let request = loop {
+        if let DaemonMsg::MobilePair { request, .. } =
+            w.recv().unwrap().expect("the daemon hung up")
+        {
+            break request;
+        }
+    };
+    w.send(&ClientMsg::MobileAnswer { request, yes: true })
+        .unwrap();
+    let mut texts = Vec::new();
+    let mut tunnel_told = false;
+    while !tunnel_told {
+        if let Message::Text(t) = ws.read().unwrap() {
+            let v: serde_json::Value = serde_json::from_str(&t).unwrap();
+            tunnel_told = v["t"] == "endpoints" && v["tunnel"] == HOST;
+            texts.push(v);
+        }
+    }
+    let tags: Vec<&str> = texts.iter().map(|v| v["t"].as_str().unwrap()).collect();
+    assert_eq!(&tags[..3], ["paired", "ready", "endpoints"], "{tags:?}");
+    let last = texts.last().unwrap();
+    assert_eq!(last["lan"]["host"], "127.0.0.1");
+    assert_eq!(
+        last["lan"]["port"],
+        addr.rsplit(':').next().unwrap().parse::<u64>().unwrap()
+    );
+    // And the PC's side shows the phone, on the wifi.
+    let seen = until(&mut w, |s| s.devices.iter().any(|d| d.connected))
+        .pop()
+        .unwrap();
+    assert_eq!(seen.devices[0].route, "wifi", "{seen:?}");
+}
+
+#[test]
+fn when_the_address_goes_the_wifi_is_dropped_and_when_it_comes_back_it_gets_a_new_code() {
+    // The PC's address is what is written in this file (REQ-69).
+    let rig = Rig::start_lan(Stub::Registers, "file:{dir}/lan");
+    std::fs::write(rig.dir.join("lan"), "127.0.0.1").unwrap();
+    let mut w = rig.watcher();
+    let first = up(&mut w);
+    let first_code = token(&first);
+    until(&mut w, |s| s.tunnel == "ready");
+    // The network goes away: the tunnel is still there, so mobile goes on.
+    std::fs::write(rig.dir.join("lan"), "off").unwrap();
+    let gone = until(&mut w, |s| s.lan.is_empty()).pop().unwrap();
+    assert_eq!(gone.phase, "ready", "{gone:?}");
+    assert!(
+        gone.payload.starts_with(&format!("jw://{HOST}/")),
+        "{}",
+        gone.payload
+    );
+    // It comes back: the wifi opens again, on the port it had, with a new code
+    // (the QR on screen pointed at the old address).
+    std::fs::write(rig.dir.join("lan"), "127.0.0.1").unwrap();
+    let back = until(&mut w, |s| !s.lan.is_empty()).pop().unwrap();
+    assert_eq!(
+        back.lan, first.lan,
+        "the same port, so stored addresses stay good"
+    );
+    assert_ne!(token(&back), first_code);
+    assert!(back.payload.contains("?fp="));
 }

@@ -191,6 +191,9 @@ fn state(c: &mut Client) -> Result<MobileState> {
     }
 }
 
+// One event is a whole daemon message, which can be a full `MobileState`; the few small
+// ones are not worth boxing every message for.
+#[allow(clippy::large_enum_variant)]
 enum Event {
     Msg(DaemonMsg),
     Closed,
@@ -306,6 +309,8 @@ struct View {
     online: BTreeMap<String, String>,
     /// The stand-in tunnel warning was printed.
     warned: bool,
+    /// What was last said of the tunnel while the wifi is up (REQ-65).
+    tunnel: String,
 }
 
 impl View {
@@ -328,6 +333,7 @@ impl View {
             "ready" => {
                 self.began = true;
                 self.phones(s);
+                self.tunnel(s);
                 if s.payload.is_empty() {
                     if !self.code.is_empty() {
                         eprintln!("\n  The code was used or ran out. Enter makes a new one.");
@@ -348,6 +354,24 @@ impl View {
         Ok(Flow::Go)
     }
 
+    /// With the wifi up the code is on screen at once, and the tunnel comes up
+    /// behind it: say each step of it, once (REQ-65).
+    fn tunnel(&mut self, s: &MobileState) {
+        if s.lan.is_empty() {
+            return;
+        }
+        let said = match s.tunnel.as_str() {
+            "starting" => format!("tunnel: {}", step_text(&s.step)),
+            "ready" => format!("tunnel ready: {}", s.host),
+            "failed" => format!("tunnel: {} (the wifi still works)", clean(&s.error)),
+            _ => return,
+        };
+        if said != self.tunnel {
+            eprintln!("  {said}");
+            self.tunnel = said;
+        }
+    }
+
     /// Says which phones came and went.
     fn phones(&mut self, s: &MobileState) {
         let now: BTreeMap<String, String> = s
@@ -358,7 +382,16 @@ impl View {
             .collect();
         for (id, name) in &now {
             if !self.online.contains_key(id) {
-                eprintln!("  {name} connected");
+                let route = s
+                    .devices
+                    .iter()
+                    .find(|d| d.id == *id)
+                    .map_or("", |d| d.route.as_str());
+                if route.is_empty() {
+                    eprintln!("  {name} connected");
+                } else {
+                    eprintln!("  {name} connected (via {route})");
+                }
             }
         }
         for (id, name) in &self.online {
@@ -422,7 +455,12 @@ fn group(code: &str) -> String {
 
 fn show_code(s: &MobileState) -> Result<()> {
     eprintln!("\n{}", ansi(&Qr::new(&s.payload)?, true_colour()));
-    eprintln!("  Scan it with the jw app. It works once, for two minutes.");
+    if s.lan.is_empty() {
+        eprintln!("  Scan it with the jw app. It works once, for two minutes.");
+    } else {
+        eprintln!("  Scan it with the jw app, on the same wifi. It works once, for two minutes.");
+        eprintln!("  wifi {}", s.lan);
+    }
     eprintln!("  {}", s.payload);
     if s.read_only {
         eprintln!("  Read-only: phones can look, not type.");

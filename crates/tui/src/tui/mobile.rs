@@ -728,6 +728,8 @@ mod tests {
             devices: vec![],
             error: String::new(),
             custom_tunnel: false,
+            lan: String::new(),
+            tunnel: String::new(),
         }
     }
 
@@ -745,6 +747,7 @@ mod tests {
                     paired: 0,
                     last_seen: 0,
                     connected: true,
+                    route: String::new(),
                 },
                 MobileDevice {
                     id: "d2".into(),
@@ -752,6 +755,7 @@ mod tests {
                     paired: 0,
                     last_seen: 0,
                     connected: false,
+                    route: String::new(),
                 },
             ],
             ..state("ready")

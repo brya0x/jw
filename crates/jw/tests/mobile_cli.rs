@@ -70,6 +70,8 @@ impl Env {
             .env("XDG_STATE_HOME", dir.join("state"))
             .env("HOME", dir)
             .env("STUB_DIR", dir)
+            // Never unset: the daemon would look for the real address and listen on it.
+            .env("JW_LAN_ADDR", "off")
             .env("PATH", "/usr/bin:/bin");
         // Without the stub there is no `cloudflared` anywhere.
         if dir.join("stub.sh").exists() {
@@ -520,6 +522,8 @@ fn fake_daemon(env: &Env, after: AfterStop) {
                     devices: vec![],
                     error: String::new(),
                     custom_tunnel: false,
+                    lan: String::new(),
+                    tunnel: String::new(),
                 };
                 while let Ok(Some(msg)) = read_frame::<ClientMsg>(&mut c) {
                     match msg {

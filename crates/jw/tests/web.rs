@@ -52,6 +52,14 @@ impl Phone {
             }
             other => panic!("want ready, got {other:?}"),
         }
+        // `endpoints` always follows `ready` (REQ-61).
+        match self.0.read().unwrap() {
+            Message::Text(t) => {
+                let v: serde_json::Value = serde_json::from_str(&t).unwrap();
+                assert_eq!(v["t"], "endpoints", "{v}");
+            }
+            other => panic!("want endpoints, got {other:?}"),
+        }
     }
 
     /// A frame without its length, as the bridge expects it.
@@ -87,6 +95,7 @@ fn a_phone_drives_a_pane_through_the_bridge() {
             .env("HOME", dir.path())
             .env("XDG_CONFIG_HOME", dir.path().join("config"))
             .env("XDG_STATE_HOME", dir.path().join("state"))
+            .env("JW_LAN_ADDR", "off")
             .env("PATH", "/usr/bin:/bin")
             .spawn()
             .unwrap(),

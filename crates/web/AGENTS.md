@@ -22,6 +22,7 @@ Cloudflare tunnel; `jw mobile` and the TUI are clients of that service. Nothing 
   the seat back even when the lister panics; the relay keeps relaying and pinging meanwhile.
   `Lister` is the other callback the daemon hands in: it answers a phone's `workspaces` and
   `sessions` from jw's files (the registry is not this crate's).
+- `src/tls.rs`: the wifi listener's pieces: the self-signed certificate kept in `<config dir>/mobile-cert.pem` (0600, made once; a file that cannot be read is an error, never a new certificate), its fingerprint, the remembered port, `lan_ip`, `check_addr` (private or loopback only), and `Conn`, a plain or TLS connection with a total deadline for the way in. `Bridge::add_wifi` serves a second listener with the same gate: its limiter keys on the **peer's own address** and never on `Cf-Connecting-Ip` (anyone on the wifi can send it), it has its own seats for unauthenticated connections, and `set_endpoints` makes every phone in, now or later, hear where else the PC can be reached (`endpoints` after `ready`).
 - `src/auth.rs`: `Pairing` (the one-use token), `Store` (`mobile.json`, hashes only), `Limiter`
   (failed attempts per address).
 

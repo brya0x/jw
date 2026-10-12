@@ -20,6 +20,7 @@
 //! A phone is let in by `pair` or `auth` and nothing else; until then the
 //! daemon is not even connected to.
 
+use rustls::ServerConfig;
 use std::io::{self, ErrorKind};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::os::unix::net::UnixStream;
@@ -40,6 +41,7 @@ use tungstenite::protocol::WebSocketConfig;
 use tungstenite::{Error as WsError, Message, WebSocket};
 
 use crate::auth::{self, Device, Limiter, Pairing, Refused, Store};
+use crate::tls::{self, Conn};
 
 /// How long the daemon may take to answer `Hello`.
 const SETUP: Duration = Duration::from_secs(10);
@@ -182,6 +184,48 @@ pub enum Query {
 pub type Lister =
     Arc<dyn Fn(&Query, &AtomicBool) -> Result<serde_json::Value, String> + Send + Sync>;
 
+/// Which listener a phone came in on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Route {
+    /// The loopback listener behind the tunnel.
+    Tunnel = 0,
+    /// The listener on the PC's private address, with TLS.
+    Wifi = 1,
+}
+
+impl Route {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Route::Tunnel => "tunnel",
+            Route::Wifi => "wifi",
+        }
+    }
+}
+
+/// Where a phone can reach the PC besides where it is now (REQ-61).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Endpoints {
+    /// The wifi listener: its address, port and certificate fingerprint.
+    pub lan: Option<(String, u16, String)>,
+    /// The tunnel's host, once it can be reached.
+    pub tunnel: Option<String>,
+}
+
+impl Endpoints {
+    fn message(&self) -> Message {
+        Message::text(
+            serde_json::json!({
+                "t": "endpoints",
+                "lan": self.lan.as_ref().map(|(host, port, fp)| {
+                    serde_json::json!({ "host": host, "port": port, "fp": fp })
+                }),
+                "tunnel": self.tunnel,
+            })
+            .to_string(),
+        )
+    }
+}
+
 pub struct Config {
     pub store: Arc<Store>,
     /// Drop everything but looking (REQ-7).
@@ -197,24 +241,34 @@ pub struct Bridge {
     addr: SocketAddr,
     shared: Arc<Shared>,
     accept: Option<JoinHandle<()>>,
+    /// The wifi listener, while there is one.
+    wifi: Mutex<Option<(SocketAddr, JoinHandle<()>)>>,
+    daemon: PathBuf,
 }
 
 struct Shared {
     stopping: AtomicBool,
+    /// The wifi listener is being dropped: its accept loop ends, and not the bridge.
+    wifi_off: AtomicBool,
     next: AtomicU64,
     conns: Mutex<Vec<(u64, TcpStream)>>,
     store: Arc<Store>,
     /// Can change while phones are connected (REQ-37).
     read_only: AtomicBool,
     /// The devices connected now, one entry per connection.
-    online: Mutex<Vec<String>>,
+    online: Mutex<Vec<(String, Route)>>,
     confirm: Confirm,
     look: Look,
     lister: Lister,
     t: Timings,
     pairing: Mutex<Option<Pairing>>,
     limiter: Mutex<Limiter>,
-    preauth: AtomicUsize,
+    /// Connections that have not authenticated, one count for each listener:
+    /// the wifi cannot use up the seats the tunnel needs to pair.
+    preauth: [AtomicUsize; 2],
+    /// What `ready` is followed by, and what every phone is told again when
+    /// it changes (REQ-61).
+    endpoints: Mutex<(u64, Endpoints)>,
 }
 
 impl Shared {
@@ -245,12 +299,13 @@ impl Shared {
 struct Slot<'a>(&'a AtomicUsize);
 
 impl<'a> Slot<'a> {
-    fn take(shared: &'a Shared) -> Option<Self> {
-        if shared.preauth.fetch_add(1, Ordering::SeqCst) >= shared.t.max_preauth {
-            shared.preauth.fetch_sub(1, Ordering::SeqCst);
+    fn take(shared: &'a Shared, route: Route) -> Option<Self> {
+        let count = &shared.preauth[route as usize];
+        if count.fetch_add(1, Ordering::SeqCst) >= shared.t.max_preauth {
+            count.fetch_sub(1, Ordering::SeqCst);
             return None;
         }
-        Some(Self(&shared.preauth))
+        Some(Self(count))
     }
 }
 
@@ -262,16 +317,16 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 /// A device counted as connected for as long as this lives.
-struct Online<'a>(&'a Shared, String);
+struct Online<'a>(&'a Shared, String, Route);
 
 impl<'a> Online<'a> {
-    fn enter(shared: &'a Shared, device: &str) -> Self {
+    fn enter(shared: &'a Shared, device: &str, route: Route) -> Self {
         shared
             .online
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .push(device.to_string());
-        Self(shared, device.to_string())
+            .push((device.to_string(), route));
+        Self(shared, device.to_string(), route)
     }
 }
 
@@ -279,7 +334,10 @@ impl Drop for Online<'_> {
     fn drop(&mut self) {
         // A poisoned lock must not make a drop panic, which would abort.
         let mut online = self.0.online.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(at) = online.iter().position(|d| *d == self.1) {
+        if let Some(at) = online
+            .iter()
+            .position(|(d, r)| *d == self.1 && *r == self.2)
+        {
             online.remove(at);
         }
     }
@@ -297,6 +355,7 @@ impl Bridge {
     /// the bridge reaches every pane unless it is turned away, and the daemon
     /// has no peer check of its own.
     pub fn start(listener: TcpListener, daemon: PathBuf, config: Config) -> io::Result<Self> {
+        let daemon_path = daemon.clone();
         let addr = listener.local_addr()?;
         if !addr.ip().is_loopback() {
             return Err(io::Error::new(
@@ -307,6 +366,7 @@ impl Bridge {
         let t = config.timings;
         let shared = Arc::new(Shared {
             stopping: AtomicBool::new(false),
+            wifi_off: AtomicBool::new(false),
             next: AtomicU64::new(0),
             conns: Mutex::new(Vec::new()),
             store: config.store,
@@ -317,18 +377,70 @@ impl Bridge {
             confirm: config.confirm,
             limiter: Mutex::new(Limiter::new(t.fail_max, t.fail_window, t.lockout)),
             pairing: Mutex::new(None),
-            preauth: AtomicUsize::new(0),
+            preauth: [AtomicUsize::new(0), AtomicUsize::new(0)],
+            endpoints: Mutex::new((0, Endpoints::default())),
             t,
         });
         let accept = {
             let shared = shared.clone();
-            thread::spawn(move || accept_loop(listener, daemon, shared))
+            thread::spawn(move || accept_loop(listener, daemon, shared, Route::Tunnel, None))
         };
         Ok(Self {
             addr,
             shared,
             accept: Some(accept),
+            wifi: Mutex::new(None),
+            daemon: daemon_path,
         })
+    }
+
+    /// Also serves phones on `listener`, with TLS from `config` (REQ-56): the
+    /// same gate as the tunnel's, but a peer here is who it says it is, so the
+    /// limiter keys on its own address and never on `Cf-Connecting-Ip`
+    /// (REQ-60). The listener must be on a private address (or loopback, which
+    /// is never more exposed); anything else is refused. Replaces the wifi
+    /// listener there was.
+    pub fn add_wifi(
+        &self,
+        listener: TcpListener,
+        config: Arc<ServerConfig>,
+    ) -> io::Result<SocketAddr> {
+        let addr = listener.local_addr()?;
+        tls::check_addr(&addr)?;
+        self.drop_wifi();
+        let accept = {
+            let (shared, daemon) = (self.shared.clone(), self.daemon.clone());
+            thread::spawn(move || accept_loop(listener, daemon, shared, Route::Wifi, Some(config)))
+        };
+        *lock(&self.wifi) = Some((addr, accept));
+        Ok(addr)
+    }
+
+    /// Stops listening on the wifi, and waits for the accept thread. The
+    /// phones already on it are left to end on their own.
+    pub fn drop_wifi(&self) {
+        let Some((addr, accept)) = lock(&self.wifi).take() else {
+            return;
+        };
+        // `accept` blocks; a connection to ourselves wakes it, and this one
+        // listener must stop and not the bridge, so the flag is a private one.
+        self.shared.wifi_off.store(true, Ordering::SeqCst);
+        let _ = TcpStream::connect(addr);
+        let _ = accept.join();
+        self.shared.wifi_off.store(false, Ordering::SeqCst);
+    }
+
+    pub fn wifi_addr(&self) -> Option<SocketAddr> {
+        lock(&self.wifi).as_ref().map(|(a, _)| *a)
+    }
+
+    /// Tells every phone connected, and every one that connects, where else
+    /// it can reach the PC (REQ-61). A phone is told at its next turn.
+    pub fn set_endpoints(&self, endpoints: Endpoints) {
+        let mut e = lock(&self.shared.endpoints);
+        if e.1 != endpoints {
+            *e = (e.0 + 1, endpoints);
+        }
     }
 
     pub fn addr(&self) -> SocketAddr {
@@ -360,6 +472,14 @@ impl Bridge {
 
     /// The ids of the devices connected now, once per connection.
     pub fn connected(&self) -> Vec<String> {
+        self.connected_routes()
+            .into_iter()
+            .map(|(d, _)| d)
+            .collect()
+    }
+
+    /// The same, with the listener each came in on (REQ-65).
+    pub fn connected_routes(&self) -> Vec<(String, Route)> {
         self.shared
             .online
             .lock()
@@ -373,6 +493,9 @@ impl Bridge {
         self.shared.stopping.store(true, Ordering::SeqCst);
         // `accept` blocks; a connection to ourselves wakes it.
         let _ = TcpStream::connect(self.addr);
+        if let Some(addr) = self.wifi_addr() {
+            let _ = TcpStream::connect(addr);
+        }
         self.shared.close_all();
     }
 
@@ -384,6 +507,9 @@ impl Bridge {
         };
         self.close();
         let _ = accept.join();
+        if let Some((_, wifi)) = lock(&self.wifi).take() {
+            let _ = wifi.join();
+        }
     }
 }
 
@@ -393,10 +519,17 @@ impl Drop for Bridge {
     }
 }
 
-fn accept_loop(listener: TcpListener, daemon: PathBuf, shared: Arc<Shared>) {
+fn accept_loop(
+    listener: TcpListener,
+    daemon: PathBuf,
+    shared: Arc<Shared>,
+    route: Route,
+    tls: Option<Arc<ServerConfig>>,
+) {
     let mut conns: Vec<JoinHandle<()>> = Vec::new();
     for conn in listener.incoming() {
-        if shared.stopping.load(Ordering::SeqCst) {
+        let dropped = route == Route::Wifi && shared.wifi_off.load(Ordering::SeqCst);
+        if shared.stopping.load(Ordering::SeqCst) || dropped {
             break;
         }
         let Ok(stream) = conn else {
@@ -404,18 +537,22 @@ fn accept_loop(listener: TcpListener, daemon: PathBuf, shared: Arc<Shared>) {
             continue;
         };
         conns.retain(|h| !h.is_finished());
-        let (daemon, shared) = (daemon.clone(), shared.clone());
+        let (daemon, shared, tls) = (daemon.clone(), shared.clone(), tls.clone());
         conns.push(thread::spawn(move || {
             let Some(id) = shared.register(&stream) else {
                 return;
             };
-            let _ = serve(stream, &shared, &daemon);
+            let _ = serve(stream, &shared, &daemon, route, tls);
             shared.forget(id);
         }));
     }
-    shared.close_all();
-    for h in conns {
-        let _ = h.join();
+    // Only the bridge stopping ends the phones; dropping the wifi listener
+    // leaves the ones on it, and the tunnel's, alone.
+    if shared.stopping.load(Ordering::SeqCst) {
+        shared.close_all();
+        for h in conns {
+            let _ = h.join();
+        }
     }
 }
 
@@ -457,14 +594,27 @@ struct Later {
 /// How many `workspaces` and `sessions` a phone can have in flight.
 const MAX_LISTS: usize = 4;
 
-fn serve(stream: TcpStream, shared: &Shared, socket: &Path) -> Result<(), WsError> {
+fn serve(
+    stream: TcpStream,
+    shared: &Shared,
+    socket: &Path,
+    route: Route,
+    tls: Option<Arc<ServerConfig>>,
+) -> Result<(), WsError> {
     let t = &shared.t;
-    let Some(slot) = Slot::take(shared) else {
+    let Some(slot) = Slot::take(shared, route) else {
         return Ok(());
     };
-    let peer = stream.peer_addr()?.ip().to_string();
-    stream.set_read_timeout(Some(t.preauth))?;
-    stream.set_write_timeout(Some(t.stalled))?;
+    let mut conn = match tls {
+        Some(config) => Conn::tls(stream, config)?,
+        None => Conn::plain(stream),
+    };
+    let peer = conn.peer_ip()?.to_string();
+    conn.set_read_timeout(Some(t.preauth))?;
+    conn.set_write_timeout(Some(t.stalled))?;
+    // The whole way in, TLS and HTTP included, takes at most `preauth`, however
+    // slowly the bytes come: a read's own timeout starts over with each byte.
+    conn.deadline(Instant::now() + t.preauth);
     let config = WebSocketConfig::default()
         .max_message_size(Some(MAX_FRAME as usize))
         .max_frame_size(Some(MAX_FRAME as usize));
@@ -489,9 +639,15 @@ fn serve(stream: TcpStream, shared: &Shared, socket: &Path) -> Result<(), WsErro
             .map(|v| v.chars().take(64).collect());
         Ok(resp)
     };
-    let mut ws = tungstenite::accept_hdr_with_config(stream, check, Some(config))
+    let mut ws = tungstenite::accept_hdr_with_config(conn, check, Some(config))
         .map_err(|e| WsError::Io(io::Error::other(e.to_string())))?;
-    let key = via.unwrap_or(peer);
+    // `Cf-Connecting-Ip` is the tunnel's word about who is there. On the wifi
+    // anyone can send it, so the peer's own address is the key (REQ-60), by
+    // the listener the phone came in on and not by what the address looks like.
+    let key = match route {
+        Route::Tunnel => via.unwrap_or(peer),
+        Route::Wifi => peer,
+    };
 
     let Some(device) = authenticate(&mut ws, shared, &key)? else {
         return Ok(());
@@ -503,8 +659,9 @@ fn serve(stream: TcpStream, shared: &Shared, socket: &Path) -> Result<(), WsErro
         Ok(d) => d,
         Err(refusal) => return refuse_daemon(&mut ws, refusal),
     };
-    ws.get_ref().set_read_timeout(Some(TICK))?;
-    let _online = Online::enter(shared, &device.id);
+    ws.get_mut().no_deadline();
+    ws.get_mut().set_read_timeout(Some(TICK))?;
+    let _online = Online::enter(shared, &device.id, route);
     let (palettes, settings) = sane_look(&(shared.look)());
     ws.send(Message::text(
         serde_json::json!({
@@ -519,6 +676,11 @@ fn serve(stream: TcpStream, shared: &Shared, socket: &Path) -> Result<(), WsErro
         })
         .to_string(),
     ))?;
+    let mut seen = {
+        let e = lock(&shared.endpoints);
+        ws.send(e.1.message())?;
+        e.0
+    };
 
     let (tx, rx) = mpsc::sync_channel(QUEUE);
     let mut from_daemon = daemon.try_clone()?;
@@ -541,11 +703,19 @@ fn serve(stream: TcpStream, shared: &Shared, socket: &Path) -> Result<(), WsErro
         lists: Arc::new(AtomicUsize::new(0)),
         gone: Arc::new(AtomicBool::new(false)),
     };
-    let result = relay(&mut ws, &mut daemon, &rx, &later, shared, &device);
+    let result = relay(
+        &mut ws,
+        &mut daemon,
+        &rx,
+        &later,
+        shared,
+        &device,
+        &mut seen,
+    );
     later.gone.store(true, Ordering::SeqCst);
 
     let _ = daemon.shutdown(Shutdown::Both);
-    let _ = ws.get_ref().shutdown(Shutdown::Both);
+    let _ = ws.get_ref().shutdown();
     drop(rx);
     let _ = reader.join();
     result
@@ -554,11 +724,14 @@ fn serve(stream: TcpStream, shared: &Shared, socket: &Path) -> Result<(), WsErro
 /// Reads the first message and lets the phone in or turns it away (REQ-3 to
 /// 5). `None` means it was turned away and told why.
 fn authenticate(
-    ws: &mut WebSocket<TcpStream>,
+    ws: &mut WebSocket<Conn>,
     shared: &Shared,
     key: &str,
 ) -> Result<Option<Device>, WsError> {
-    let deadline = Instant::now() + shared.t.preauth;
+    let deadline = ws
+        .get_ref()
+        .deadline_at()
+        .unwrap_or_else(|| Instant::now() + shared.t.preauth);
     if lock(&shared.limiter).locked(key, Instant::now()) {
         refuse(ws, "limited", "too many failed attempts, try again later")?;
         return Ok(None);
@@ -581,7 +754,7 @@ fn authenticate(
         }
     };
 
-    let failed = |why: &str, msg: &str, ws: &mut WebSocket<TcpStream>| {
+    let failed = |why: &str, msg: &str, ws: &mut WebSocket<Conn>| {
         lock(&shared.limiter).failed(key, Instant::now());
         refuse(ws, why, msg)
     };
@@ -647,12 +820,13 @@ fn authenticate(
 
 /// Phone to daemon and daemon to phone, until either side ends.
 fn relay(
-    ws: &mut WebSocket<TcpStream>,
+    ws: &mut WebSocket<Conn>,
     daemon: &mut UnixStream,
     rx: &mpsc::Receiver<Event>,
     later: &Later,
     shared: &Shared,
     device: &Device,
+    seen: &mut u64,
 ) -> Result<(), WsError> {
     let t = &shared.t;
     let start = Instant::now();
@@ -670,6 +844,15 @@ fn relay(
         }
         while let Ok(reply) = later.rx.try_recv() {
             ws.write(reply)?;
+        }
+        // Where else the PC can be reached changed (REQ-61).
+        let changed = {
+            let e = lock(&shared.endpoints);
+            (e.0 != *seen).then(|| (e.0, e.1.clone()))
+        };
+        if let Some((epoch, endpoints)) = changed {
+            *seen = epoch;
+            ws.write(endpoints.message())?;
         }
         let now = Instant::now();
         if now.duration_since(looked) >= t.revoke_check {
@@ -885,7 +1068,7 @@ fn connect(socket: &Path) -> Result<UnixStream, Refusal> {
     Ok(daemon)
 }
 
-fn refuse_daemon(ws: &mut WebSocket<TcpStream>, why: Refusal) -> Result<(), WsError> {
+fn refuse_daemon(ws: &mut WebSocket<Conn>, why: Refusal) -> Result<(), WsError> {
     match why {
         Refusal::Daemon(m) => refuse(ws, "daemon", &m),
         Refusal::Protocol(p) => refuse(
@@ -897,7 +1080,7 @@ fn refuse_daemon(ws: &mut WebSocket<TcpStream>, why: Refusal) -> Result<(), WsEr
 }
 
 /// Tells the phone why, and closes.
-fn refuse(ws: &mut WebSocket<TcpStream>, code: &str, msg: &str) -> Result<(), WsError> {
+fn refuse(ws: &mut WebSocket<Conn>, code: &str, msg: &str) -> Result<(), WsError> {
     let _ = ws.send(error(code, msg));
     let _ = ws.close(None);
     let _ = ws.flush();
@@ -915,7 +1098,49 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
     use tungstenite::client::IntoClientRequest;
 
-    type Phone = WebSocket<TcpStream>;
+    /// A phone's end of a connection: plain (the tunnel's listener) or in TLS (the wifi's).
+    enum Wire {
+        Plain(TcpStream),
+        Tls(Box<rustls::StreamOwned<rustls::ClientConnection, TcpStream>>),
+    }
+
+    impl Wire {
+        fn sock(&self) -> &TcpStream {
+            match self {
+                Wire::Plain(s) => s,
+                Wire::Tls(t) => &t.sock,
+            }
+        }
+        fn set_read_timeout(&self, to: Option<Duration>) -> io::Result<()> {
+            self.sock().set_read_timeout(to)
+        }
+    }
+
+    impl io::Read for Wire {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            match self {
+                Wire::Plain(s) => io::Read::read(s, buf),
+                Wire::Tls(t) => io::Read::read(t, buf),
+            }
+        }
+    }
+
+    impl io::Write for Wire {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            match self {
+                Wire::Plain(s) => io::Write::write(s, buf),
+                Wire::Tls(t) => io::Write::write(t, buf),
+            }
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            match self {
+                Wire::Plain(s) => io::Write::flush(s),
+                Wire::Tls(t) => io::Write::flush(t),
+            }
+        }
+    }
+
+    type Phone = WebSocket<Wire>;
 
     /// An `Input` for this pane is answered with far more output than a socket holds.
     const FLOOD: u64 = 99;
@@ -1074,7 +1299,7 @@ mod tests {
             let name = tungstenite::http::HeaderName::from_bytes(k.as_bytes()).unwrap();
             req.headers_mut().insert(name, v.parse().unwrap());
         }
-        tungstenite::client(req, s)
+        tungstenite::client(req, Wire::Plain(s))
             .map(|(ws, _)| ws)
             .map_err(|e| e.to_string())
     }
@@ -1122,6 +1347,9 @@ mod tests {
         say(p, serde_json::json!({ "t": "auth", "device": secret }));
         let v = json(p);
         assert_eq!(v["t"], "ready", "{v}");
+        // What follows `ready` is always `endpoints` (REQ-61).
+        let e = json(p);
+        assert_eq!(e["t"], "endpoints", "{e}");
     }
 
     fn pair(p: &mut Phone, token: &str, name: &str, code: &str) {
@@ -1494,6 +1722,7 @@ mod tests {
             json(&mut p)
         };
         assert_eq!(v["read_only"], true);
+        assert_eq!(json(&mut p)["t"], "endpoints");
         // Kind 1 (carries bytes) and kind 0 alike.
         p.send(body(&input(1, b"rm -rf"))).unwrap();
         assert_eq!(code(&mut p), "read_only");
@@ -1920,7 +2149,7 @@ mod tests {
         let _a = phone(&r.bridge);
         let _b = phone(&r.bridge);
         wait_until("two are waiting", || {
-            r.bridge.shared.preauth.load(Ordering::SeqCst) == 2
+            r.bridge.shared.preauth[Route::Tunnel as usize].load(Ordering::SeqCst) == 2
         });
         assert!(open(&r.bridge, &[]).is_err(), "a third was let wait");
     }
@@ -1970,6 +2199,7 @@ mod tests {
         // `ready` is sent once the daemon has answered, then it hangs up.
         let first = json(&mut p);
         let c = if first["t"] == "ready" {
+            assert_eq!(json(&mut p)["t"], "endpoints");
             code(&mut p)
         } else {
             first["code"].as_str().unwrap().into()
@@ -2045,5 +2275,367 @@ mod tests {
             .err()
             .unwrap();
         assert_eq!(err.kind(), ErrorKind::InvalidInput);
+    }
+
+    // ---- the wifi listener (REQ-56 to REQ-61) -------------------------------
+
+    use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+    use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+
+    /// A client that accepts one certificate, the one whose fingerprint it holds.
+    #[derive(Debug)]
+    struct Pin {
+        fp: String,
+        algs: rustls::crypto::WebPkiSupportedAlgorithms,
+    }
+
+    impl ServerCertVerifier for Pin {
+        fn verify_server_cert(
+            &self,
+            end_entity: &CertificateDer<'_>,
+            _: &[CertificateDer<'_>],
+            _: &ServerName<'_>,
+            _: &[u8],
+            _: UnixTime,
+        ) -> Result<ServerCertVerified, rustls::Error> {
+            if tls::fingerprint(end_entity.as_ref()) == self.fp {
+                Ok(ServerCertVerified::assertion())
+            } else {
+                Err(rustls::Error::General("not the pinned certificate".into()))
+            }
+        }
+        fn verify_tls12_signature(
+            &self,
+            m: &[u8],
+            c: &CertificateDer<'_>,
+            d: &rustls::DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, rustls::Error> {
+            rustls::crypto::verify_tls12_signature(m, c, d, &self.algs)
+        }
+        fn verify_tls13_signature(
+            &self,
+            m: &[u8],
+            c: &CertificateDer<'_>,
+            d: &rustls::DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, rustls::Error> {
+            rustls::crypto::verify_tls13_signature(m, c, d, &self.algs)
+        }
+        fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+            self.algs.supported_schemes()
+        }
+    }
+
+    struct Wifi {
+        rig: Rig,
+        addr: SocketAddr,
+        fp: String,
+    }
+
+    fn rig_wifi(o: Opts) -> Wifi {
+        let rig = rig(o);
+        let id = tls::load_or_create(rig.dir.path()).unwrap();
+        let addr = rig
+            .bridge
+            .add_wifi(TcpListener::bind("127.0.0.1:0").unwrap(), id.config)
+            .unwrap();
+        Wifi {
+            rig,
+            addr,
+            fp: id.fp,
+        }
+    }
+
+    fn provider() -> Arc<rustls::crypto::CryptoProvider> {
+        Arc::new(rustls::crypto::ring::default_provider())
+    }
+
+    /// A phone on the wifi that pins `fp` (`None`: checks as an ordinary client would).
+    fn open_wifi(
+        addr: SocketAddr,
+        fp: Option<&str>,
+        headers: &[(&str, &str)],
+    ) -> Result<Phone, String> {
+        let builder = rustls::ClientConfig::builder_with_provider(provider())
+            .with_safe_default_protocol_versions()
+            .unwrap();
+        let config = match fp {
+            Some(fp) => builder
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(Pin {
+                    fp: fp.into(),
+                    algs: provider().signature_verification_algorithms,
+                }))
+                .with_no_client_auth(),
+            None => builder
+                .with_root_certificates(rustls::RootCertStore::empty())
+                .with_no_client_auth(),
+        };
+        let s = TcpStream::connect(addr).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let conn = rustls::ClientConnection::new(
+            Arc::new(config),
+            ServerName::try_from("jw-mobile.local").unwrap(),
+        )
+        .unwrap();
+        let wire = Wire::Tls(Box::new(rustls::StreamOwned::new(conn, s)));
+        let mut req = format!("wss://{addr}").into_client_request().unwrap();
+        for (k, v) in headers {
+            let name = tungstenite::http::HeaderName::from_bytes(k.as_bytes()).unwrap();
+            req.headers_mut().insert(name, v.parse().unwrap());
+        }
+        tungstenite::client(req, wire)
+            .map(|(ws, _)| ws)
+            .map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn a_phone_pairs_and_comes_back_on_the_wifi() {
+        let w = rig_wifi(Opts::default());
+        let token = w.rig.bridge.new_pairing().unwrap();
+        let mut p = open_wifi(w.addr, Some(&w.fp), &[]).unwrap();
+        pair(&mut p, &token, "Pixel 8", "482913");
+        assert_eq!(json(&mut p)["t"], "paired");
+        let ready = json(&mut p);
+        assert_eq!(ready["t"], "ready", "{ready}");
+        assert_eq!(json(&mut p)["t"], "endpoints");
+        wait_until("the phone is listed on the wifi", || {
+            w.rig
+                .bridge
+                .connected_routes()
+                .iter()
+                .any(|(_, r)| *r == Route::Wifi)
+        });
+        let secret = enrol(&w.rig, "again");
+        let mut q = open_wifi(w.addr, Some(&w.fp), &[]).unwrap();
+        login(&mut q, &secret);
+        // The same bridge also serves the tunnel's listener, and says which is which.
+        let mut t = phone(&w.rig.bridge);
+        login(&mut t, &secret);
+        wait_until("both routes are listed", || {
+            let r = w.rig.bridge.connected_routes();
+            r.iter().any(|(_, r)| *r == Route::Tunnel) && r.iter().any(|(_, r)| *r == Route::Wifi)
+        });
+    }
+
+    #[test]
+    fn a_client_that_does_not_hold_the_pin_is_refused() {
+        let w = rig_wifi(Opts::default());
+        // An ordinary client has no way to trust a self-signed certificate.
+        assert!(open_wifi(w.addr, None, &[]).is_err());
+        // And one that pins another certificate is refused too.
+        assert!(open_wifi(w.addr, Some(&"0".repeat(64)), &[]).is_err());
+        // Neither got as far as the gate: nothing was spent or counted.
+        assert!(w.rig.bridge.connected().is_empty());
+    }
+
+    #[test]
+    fn the_wifi_listener_turns_a_browser_away_like_the_tunnel_does() {
+        let w = rig_wifi(Opts::default());
+        let err = open_wifi(w.addr, Some(&w.fp), &[("origin", "https://evil.example")])
+            .err()
+            .expect("a browser is refused");
+        assert!(
+            err.contains("403") || err.to_lowercase().contains("http"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn on_the_wifi_cf_connecting_ip_does_not_pick_the_address_that_is_counted() {
+        let w = rig_wifi(Opts::default());
+        // Anyone on the network can send that header. Each failure says it comes
+        // from somewhere else, and the lockout must still be reached.
+        let tries = Opts::default().timings.fail_max;
+        for n in 0..tries {
+            let ip = format!("203.0.113.{n}");
+            let mut p = open_wifi(w.addr, Some(&w.fp), &[("cf-connecting-ip", &ip)]).unwrap();
+            say(&mut p, serde_json::json!({ "t": "auth", "device": "nope" }));
+            assert_eq!(code(&mut p), "unknown");
+        }
+        let mut p =
+            open_wifi(w.addr, Some(&w.fp), &[("cf-connecting-ip", "198.51.100.7")]).unwrap();
+        assert_eq!(code(&mut p), "limited", "the header picked another address");
+        // The control: on the tunnel's listener that header is what is counted.
+        let ip_a = ("cf-connecting-ip", "192.0.2.1");
+        for _ in 0..tries {
+            let mut p = open(&w.rig.bridge, &[ip_a]).unwrap();
+            say(&mut p, serde_json::json!({ "t": "auth", "device": "nope" }));
+            assert_eq!(code(&mut p), "unknown");
+        }
+        let mut other = open(&w.rig.bridge, &[("cf-connecting-ip", "192.0.2.2")]).unwrap();
+        say(
+            &mut other,
+            serde_json::json!({ "t": "auth", "device": "nope" }),
+        );
+        assert_eq!(
+            code(&mut other),
+            "unknown",
+            "another address is not locked out"
+        );
+    }
+
+    #[test]
+    fn a_frame_bigger_than_a_tls_record_goes_through_the_wifi_whole() {
+        let w = rig_wifi(Opts::default());
+        let mut p = open_wifi(w.addr, Some(&w.fp), &[]).unwrap();
+        login(&mut p, &enrol(&w.rig, "a"));
+        let bytes: Vec<u8> = (0..100_000u32).map(|n| (n % 251) as u8).collect();
+        p.send(body(&input(4, &bytes))).unwrap();
+        assert_eq!(msg(&mut p), DaemonMsg::Output { pane: 4, bytes });
+    }
+
+    #[test]
+    fn a_device_revoked_on_the_wifi_is_cut_off_within_a_couple_of_seconds() {
+        let w = rig_wifi(Opts::default());
+        let secret = enrol(&w.rig, "Pixel 8");
+        let id = w.rig.store.devices().unwrap()[0].id.clone();
+        let mut p = open_wifi(w.addr, Some(&w.fp), &[]).unwrap();
+        login(&mut p, &secret);
+        let t = Instant::now();
+        w.rig.store.revoke(&id).unwrap();
+        assert_eq!(code(&mut p), "revoked");
+        assert!(t.elapsed() < Duration::from_secs(2), "{:?}", t.elapsed());
+    }
+
+    #[test]
+    fn stopping_the_bridge_closes_the_phones_on_the_wifi() {
+        let mut w = rig_wifi(Opts::default());
+        let mut p = open_wifi(w.addr, Some(&w.fp), &[]).unwrap();
+        login(&mut p, &enrol(&w.rig, "a"));
+        let t = Instant::now();
+        w.rig.bridge.stop();
+        closed(&mut p);
+        assert!(t.elapsed() < Duration::from_secs(2), "{:?}", t.elapsed());
+        assert!(TcpStream::connect(w.addr).is_err() || w.rig.bridge.wifi_addr().is_none());
+    }
+
+    #[test]
+    fn dropping_the_wifi_listener_leaves_the_tunnel_alone() {
+        let w = rig_wifi(Opts::default());
+        let mut t = phone(&w.rig.bridge);
+        login(&mut t, &enrol(&w.rig, "a"));
+        w.rig.bridge.drop_wifi();
+        assert!(w.rig.bridge.wifi_addr().is_none());
+        t.send(body(&input(1, b"x"))).unwrap();
+        assert_eq!(
+            msg(&mut t),
+            DaemonMsg::Output {
+                pane: 1,
+                bytes: b"x".to_vec()
+            }
+        );
+    }
+
+    #[test]
+    fn a_trickle_of_bytes_does_not_hold_a_seat_past_the_deadline() {
+        let w = rig_wifi(Opts {
+            timings: Timings {
+                preauth: Duration::from_millis(400),
+                ..Opts::default().timings
+            },
+            ..Opts::default()
+        });
+        // A client that sends one byte of nonsense often enough that no single read times out.
+        let mut s = TcpStream::connect(w.addr).unwrap();
+        let t = Instant::now();
+        let mut cut = false;
+        while t.elapsed() < Duration::from_secs(3) {
+            if io::Write::write_all(&mut s, b"\x16").is_err() {
+                cut = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        assert!(cut || t.elapsed() < Duration::from_secs(3), "never cut off");
+        wait_until("the seat was given back", || {
+            w.rig.bridge.shared.preauth[Route::Wifi as usize].load(Ordering::SeqCst) == 0
+        });
+    }
+
+    #[test]
+    fn the_wifi_cannot_use_up_the_seats_the_tunnel_needs() {
+        let w = rig_wifi(Opts {
+            timings: Timings {
+                max_preauth: 2,
+                preauth: Duration::from_secs(3),
+                ..Opts::default().timings
+            },
+            ..Opts::default()
+        });
+        // Two silent connections fill the wifi's seats.
+        let _a = TcpStream::connect(w.addr).unwrap();
+        let _b = TcpStream::connect(w.addr).unwrap();
+        wait_until("the wifi seats are taken", || {
+            w.rig.bridge.shared.preauth[Route::Wifi as usize].load(Ordering::SeqCst) == 2
+        });
+        // The tunnel still takes phones in.
+        let mut p = phone(&w.rig.bridge);
+        login(&mut p, &enrol(&w.rig, "a"));
+    }
+
+    #[test]
+    fn endpoints_follow_ready_and_every_change_reaches_the_phones_already_in() {
+        let w = rig_wifi(Opts::default());
+        let mut p = open_wifi(w.addr, Some(&w.fp), &[]).unwrap();
+        say(
+            &mut p,
+            serde_json::json!({ "t": "auth", "device": enrol(&w.rig, "a") }),
+        );
+        assert_eq!(json(&mut p)["t"], "ready");
+        let first = json(&mut p);
+        assert_eq!(first["t"], "endpoints");
+        assert!(
+            first["lan"].is_null() && first["tunnel"].is_null(),
+            "{first}"
+        );
+        w.rig.bridge.set_endpoints(Endpoints {
+            lan: Some(("192.168.1.23".into(), 48211, w.fp.clone())),
+            tunnel: Some("abc-def.trycloudflare.com".into()),
+        });
+        let v = json(&mut p);
+        assert_eq!(v["t"], "endpoints");
+        assert_eq!(v["lan"]["host"], "192.168.1.23");
+        assert_eq!(v["lan"]["port"], 48211);
+        assert_eq!(v["lan"]["fp"], w.fp.as_str());
+        assert_eq!(v["tunnel"], "abc-def.trycloudflare.com");
+        // A phone that comes in later is told at once, on either listener.
+        let mut q = phone(&w.rig.bridge);
+        say(
+            &mut q,
+            serde_json::json!({ "t": "auth", "device": enrol(&w.rig, "b") }),
+        );
+        assert_eq!(json(&mut q)["t"], "ready");
+        assert_eq!(json(&mut q)["tunnel"], "abc-def.trycloudflare.com");
+        // The tunnel stopping is `null`, and says so.
+        w.rig.bridge.set_endpoints(Endpoints::default());
+        assert!(json(&mut p)["tunnel"].is_null());
+    }
+
+    #[test]
+    fn the_wifi_listener_refuses_every_address_that_is_not_private() {
+        let r = rig(Opts::default());
+        let id = tls::load_or_create(r.dir.path()).unwrap();
+        let any = TcpListener::bind("0.0.0.0:0").unwrap();
+        assert!(
+            r.bridge.add_wifi(any, id.config.clone()).is_err(),
+            "never every interface"
+        );
+        assert!(r.bridge.wifi_addr().is_none());
+        // And the plain bridge still takes loopback only.
+        assert!(
+            Bridge::start(
+                TcpListener::bind("0.0.0.0:0").unwrap(),
+                r.socket.clone(),
+                Config {
+                    store: r.store.clone(),
+                    read_only: false,
+                    confirm: Arc::new(|_| true),
+                    look: Arc::new(|| serde_json::json!({})),
+                    lister: Arc::new(|_, _| Ok(serde_json::json!({}))),
+                    timings: Timings::default(),
+                },
+            )
+            .is_err()
+        );
     }
 }

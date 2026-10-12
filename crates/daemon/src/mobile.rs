@@ -12,7 +12,7 @@
 //! `starting` cannot be undone by the start it interrupted.
 
 use std::collections::HashMap;
-use std::net::TcpListener;
+use std::net::{Ipv4Addr, TcpListener};
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -24,7 +24,8 @@ use jw_core::core::config;
 use jw_core::core::registry;
 use jw_core::sidebar;
 use jw_web::auth::Store;
-use jw_web::bridge::{Bridge, Config, Lister, Look, Query, Timings};
+use jw_web::bridge::{Bridge, Config, Endpoints, Lister, Look, Query, Timings};
+use jw_web::tls;
 use jw_web::tunnel::{self, Step, Tunnel};
 
 use crate::outbox::Tx;
@@ -32,6 +33,44 @@ use crate::proto::{DaemonMsg, MobileDevice, MobileState};
 
 /// What a test runs at a named point of the service.
 pub type Hook = Arc<dyn Fn(&str) + Send + Sync>;
+
+/// Where the wifi listener goes (REQ-56). Tests never let it detect: it would
+/// bind the address of whatever network the developer is on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Lan {
+    /// The private address of the interface the default route uses.
+    Detect,
+    /// No wifi listener: the tunnel only.
+    Off,
+    /// This address (tests use loopback).
+    At(Ipv4Addr),
+    /// The address written in this file each time it is asked, `off` or
+    /// nothing meaning none: a test changes the PC's address by writing it.
+    File(PathBuf),
+}
+
+impl Lan {
+    /// `JW_LAN_ADDR`: unset is `Detect`, `off` is `Off`, an IPv4 address is
+    /// `At`. A seam for the integration tests, which run the real binary; no
+    /// user setting is meant to set it.
+    pub fn from_env() -> Self {
+        match std::env::var("JW_LAN_ADDR").ok().as_deref().map(str::trim) {
+            None | Some("") => Lan::Detect,
+            Some("off") => Lan::Off,
+            Some(path) if path.starts_with("file:") => Lan::File(path["file:".len()..].into()),
+            Some(addr) => addr.parse().map_or(Lan::Off, Lan::At),
+        }
+    }
+
+    fn addr(&self) -> Option<Ipv4Addr> {
+        match self {
+            Lan::Detect => tls::lan_ip(),
+            Lan::Off => None,
+            Lan::At(ip) => Some(*ip),
+            Lan::File(path) => std::fs::read_to_string(path).ok()?.trim().parse().ok(),
+        }
+    }
+}
 
 /// The waits, which tests shorten.
 #[derive(Clone)]
@@ -50,6 +89,11 @@ pub struct Tuning {
     /// Where request ids come from, as hex (tests: one that fails). `None` is
     /// the system's random bytes.
     pub random: Option<fn() -> std::io::Result<String>>,
+    /// Where the wifi listener goes.
+    pub lan: Lan,
+    /// How often the private address is read again while mobile is on
+    /// (REQ-69).
+    pub lan_every: Duration,
 }
 
 impl Default for Tuning {
@@ -61,6 +105,14 @@ impl Default for Tuning {
             store: None,
             hook: None,
             random: None,
+            lan: Lan::from_env(),
+            // The address is read again this often (REQ-69); a test that moves
+            // it by a file does not wait half a minute.
+            lan_every: if matches!(Lan::from_env(), Lan::File(_)) {
+                Duration::from_millis(200)
+            } else {
+                Duration::from_secs(30)
+            },
         }
     }
 }
@@ -120,6 +172,24 @@ fn lister() -> Lister {
 type Answer = (u64, bool);
 const CANCELLED: Answer = (u64::MAX, false);
 
+/// The wifi listener while there is one.
+#[derive(Clone)]
+struct LanInfo {
+    host: String,
+    port: u16,
+    fp: String,
+}
+
+/// The tunnel's own phase, apart from mobile's (REQ-67): with the wifi up it
+/// can fail and mobile is still ready.
+#[derive(Clone)]
+enum Tun {
+    Off,
+    Starting(String),
+    Ready,
+    Failed(String),
+}
+
 enum Phase {
     Off,
     /// How far it got: `launching`, `started`, `registered` or `resolving`.
@@ -136,6 +206,8 @@ struct Core {
     tunnel: Option<Tunnel>,
     host: String,
     token: String,
+    lan: Option<LanInfo>,
+    tun: Tun,
 }
 
 struct Inner {
@@ -185,6 +257,8 @@ impl Mobile {
                 tunnel: None,
                 host: String::new(),
                 token: String::new(),
+                lan: None,
+                tun: Tun::Off,
             }),
             watchers: Mutex::default(),
             pending: Mutex::default(),
@@ -271,6 +345,8 @@ impl Mobile {
             core.phase = Phase::Off;
             core.host.clear();
             core.token.clear();
+            core.lan = None;
+            core.tun = Tun::Off;
             (core.bridge.take(), core.tunnel.take())
         };
         if let Some(tunnel) = &tunnel {
@@ -407,13 +483,31 @@ impl Inner {
 
     /// Where mobile stands now. The pairing token is in `payload` (RISK-16).
     fn snapshot(&self) -> MobileState {
-        let (phase, step, error, host, token, read_only, bridge) = {
+        let (phase, step, error, host, token, read_only, bridge, lan, tun) = {
             let core = lock(&self.core);
-            let (phase, step, error) = match &core.phase {
+            let (phase, mut step, mut error) = match &core.phase {
                 Phase::Off => ("off", String::new(), String::new()),
                 Phase::Starting(s) => ("starting", s.clone(), String::new()),
                 Phase::Ready => ("ready", String::new(), String::new()),
                 Phase::Failed(e) => ("failed", String::new(), e.clone()),
+            };
+            // With the wifi up, the tunnel's own steps and failure are told
+            // here, while the phase stays `ready` (REQ-67).
+            let tun = match &core.tun {
+                Tun::Off => "off",
+                Tun::Starting(s) => {
+                    if phase == "ready" {
+                        step = s.clone();
+                    }
+                    "starting"
+                }
+                Tun::Ready => "ready",
+                Tun::Failed(e) => {
+                    if phase == "ready" {
+                        error = e.clone();
+                    }
+                    "failed"
+                }
             };
             (
                 phase,
@@ -423,39 +517,76 @@ impl Inner {
                 core.token.clone(),
                 core.read_only,
                 core.bridge.clone(),
+                core.lan.clone(),
+                tun,
             )
         };
         // Asked of the bridge with `core` let go.
-        let (connected, left) = bridge
-            .as_ref()
-            .map_or((Vec::new(), None), |b| (b.connected(), b.pairing_left()));
+        let (connected, left) = bridge.as_ref().map_or((Vec::new(), None), |b| {
+            (b.connected_routes(), b.pairing_left())
+        });
         let devices = lock(&self.devices)
             .list
             .clone()
             .into_iter()
-            .map(|d| MobileDevice {
-                connected: connected.contains(&d.id),
-                id: d.id,
-                name: d.name,
-                paired: d.created,
-                last_seen: d.last_seen,
+            .map(|d| {
+                let route = connected
+                    .iter()
+                    .find(|(id, _)| *id == d.id)
+                    .map(|(_, r)| r.as_str().to_string());
+                MobileDevice {
+                    connected: route.is_some(),
+                    route: route.unwrap_or_default(),
+                    id: d.id,
+                    name: d.name,
+                    paired: d.created,
+                    last_seen: d.last_seen,
+                }
             })
             .collect();
         let live = phase == "ready" && left.is_some();
+        // The wifi payload when there is a wifi listener (REQ-58): it does not
+        // wait for the tunnel and does not change when the tunnel comes up.
+        let payload = match (&lan, live) {
+            (Some(l), true) => format!("jw://{}:{}/{token}?fp={}", l.host, l.port, l.fp),
+            (None, true) => format!("jw://{host}/{token}"),
+            _ => String::new(),
+        };
         MobileState {
             phase: phase.into(),
             step,
-            payload: if live {
-                format!("jw://{host}/{token}")
-            } else {
-                String::new()
-            },
+            payload,
             host,
             expires_in: left.map_or(0, |d| d.as_secs_f64().ceil() as u64),
             read_only,
             devices,
             error,
             custom_tunnel: tunnel::custom_in_use(),
+            lan: lan.map_or_else(String::new, |l| format!("{}:{}", l.host, l.port)),
+            tunnel: tun.into(),
+        }
+    }
+
+    /// Where else a phone can reach the PC, as the bridge tells it (REQ-61).
+    fn endpoints(&self) -> Endpoints {
+        let core = lock(&self.core);
+        Endpoints {
+            lan: core
+                .lan
+                .as_ref()
+                .map(|l| (l.host.clone(), l.port, l.fp.clone())),
+            tunnel: matches!(core.tun, Tun::Ready).then(|| core.host.clone()),
+        }
+    }
+
+    /// Hands the bridge what `endpoints` says now, with `core` let go: the
+    /// bridge takes locks of its own.
+    fn sync_endpoints(&self) {
+        // Two statements: the first guard must be gone before `endpoints` locks.
+        let bridge = lock(&self.core).bridge.clone();
+        let endpoints = self.endpoints();
+        if let Some(bridge) = bridge {
+            bridge.set_endpoints(endpoints);
         }
     }
 
@@ -520,6 +651,8 @@ impl Inner {
             core.phase = Phase::Failed(why);
             core.host.clear();
             core.token.clear();
+            core.lan = None;
+            core.tun = Tun::Off;
             (core.bridge.take(), core.tunnel.take())
         };
         if let Some(tunnel) = &tunnel {
@@ -535,18 +668,63 @@ impl Inner {
         });
     }
 
+    /// A step of the tunnel coming up. With no wifi listener it is also
+    /// mobile's own step (`starting`); with one, mobile is already `ready` and
+    /// only the tunnel's row moves.
     fn step(&self, epoch: u64, text: &str) {
         {
             let mut core = lock(&self.core);
             if core.epoch != epoch {
                 return;
             }
-            core.phase = Phase::Starting(text.into());
+            core.tun = Tun::Starting(text.into());
+            if core.lan.is_none() {
+                core.phase = Phase::Starting(text.into());
+            }
         }
         self.push();
     }
 
-    /// The start thread: bridge, tunnel, then the first code.
+    /// Where jw keeps `mobile.json`, and so the certificate: the test override
+    /// of the store's path moves both, so a test never writes in the user's
+    /// own config.
+    fn config_dir(&self) -> Option<PathBuf> {
+        match &self.tuning.store {
+            Some(path) => path.parent().map(PathBuf::from),
+            None => config::dir().ok(),
+        }
+    }
+
+    /// Opens the wifi listener on `ip` (REQ-56): the port it had last time
+    /// when that is free, so an address a phone stored stays good, else any.
+    /// `None` when something is missing (no certificate, no port): mobile then
+    /// goes on through the tunnel alone.
+    fn open_wifi(&self, bridge: &Bridge, ip: Ipv4Addr) -> Option<LanInfo> {
+        let dir = self.config_dir()?;
+        let id = tls::load_or_create(&dir).ok()?;
+        // The old listener of a stop just before may take a moment to let go of
+        // its port; waiting a little keeps a stored address good (REQ-56).
+        let remembered = tls::port_hint(&dir).and_then(|p| {
+            (0..20).find_map(|n| {
+                if n > 0 {
+                    thread::sleep(Duration::from_millis(100));
+                }
+                TcpListener::bind((ip, p)).ok()
+            })
+        });
+        let listener = remembered.or_else(|| TcpListener::bind((ip, 0)).ok())?;
+        let port = listener.local_addr().ok()?.port();
+        bridge.add_wifi(listener, id.config.clone()).ok()?;
+        tls::remember_port(&dir, port);
+        Some(LanInfo {
+            host: ip.to_string(),
+            port,
+            fp: id.fp,
+        })
+    }
+
+    /// The start thread: the bridge, then the wifi listener (ready at once,
+    /// with the first code), then the tunnel behind it.
     fn bring_up(self: &Arc<Self>, epoch: u64, read_only: bool) -> Result<(), String> {
         let store = self.store().ok_or("no config directory")?;
         let listener = TcpListener::bind(("127.0.0.1", 0))
@@ -568,14 +746,39 @@ impl Inner {
         )
         .map_err(|e| format!("starting the bridge: {e}"))?;
         let port = bridge.addr().port();
+        let bridge = Arc::new(bridge);
         {
             let mut core = lock(&self.core);
             if core.epoch != epoch {
                 return Ok(());
             }
-            core.bridge = Some(Arc::new(bridge));
+            core.bridge = Some(Arc::clone(&bridge));
         }
         self.ticker(epoch);
+
+        // The wifi first: ready before the tunnel can be (REQ-56).
+        if let Some(lan) = self
+            .tuning
+            .lan
+            .addr()
+            .and_then(|ip| self.open_wifi(&bridge, ip))
+        {
+            // Outside `core`: the bridge takes locks of its own.
+            let token = bridge.new_pairing().map_err(|e| e.to_string())?;
+            {
+                let mut core = lock(&self.core);
+                if core.epoch != epoch {
+                    return Ok(());
+                }
+                core.lan = Some(lan);
+                core.token = token;
+                core.phase = Phase::Ready;
+                // The tunnel's row is there from the first state.
+                core.tun = Tun::Starting("launching".into());
+            }
+            self.sync_endpoints();
+            self.push();
+        }
 
         let cancel = || self.current() != epoch;
         let mut on_step = |step: Step| match step {
@@ -593,55 +796,153 @@ impl Inner {
             Step::Registered(_) => self.step(epoch, "registered"),
             Step::Resolving(_) => self.step(epoch, "resolving"),
         };
-        let (_tunnel, host) = tunnel::up(port, self.tuning.waits, &cancel, &mut on_step)
-            .map_err(|e| e.to_string())?;
-
-        let bridge = {
-            let core = lock(&self.core);
-            if core.epoch != epoch {
+        self.step(epoch, "launching");
+        let up = tunnel::up(port, self.tuning.waits, &cancel, &mut on_step);
+        let host = match up {
+            Ok((_tunnel, host)) => host,
+            Err(e) => {
+                // With the wifi up the tunnel failing is only its row (REQ-67).
+                let tunnel = {
+                    let mut core = lock(&self.core);
+                    if core.epoch != epoch {
+                        return Ok(());
+                    }
+                    if core.lan.is_none() {
+                        return Err(e.to_string());
+                    }
+                    core.tun = Tun::Failed(e.to_string());
+                    core.tunnel.take()
+                };
+                if let Some(tunnel) = tunnel {
+                    tunnel.kill();
+                }
+                self.sync_endpoints();
+                self.push();
                 return Ok(());
             }
-            core.bridge.clone().ok_or("the bridge is gone")?
         };
-        // Outside `core`: the bridge takes locks of its own.
-        let token = bridge.new_pairing().map_err(|e| e.to_string())?;
+
+        // With no wifi listener the first code is made now, as before.
+        let token = if lock(&self.core).lan.is_none() {
+            Some(bridge.new_pairing().map_err(|e| e.to_string())?)
+        } else {
+            None
+        };
         {
             let mut core = lock(&self.core);
             if core.epoch != epoch {
                 return Ok(());
             }
-            core.token = token;
+            if let Some(token) = token {
+                core.token = token;
+                core.phase = Phase::Ready;
+            }
             core.host = host;
-            core.phase = Phase::Ready;
+            core.tun = Tun::Ready;
         }
+        // Every phone connected is told where the tunnel is (REQ-61).
+        self.sync_endpoints();
         self.push();
         Ok(())
     }
 
     /// Looks at the state every `tick` while this start lasts: phones come
-    /// and go, the code runs out, a device is revoked from a terminal, and
-    /// `cloudflared` may die.
+    /// and go, the code runs out, a device is revoked from a terminal,
+    /// `cloudflared` may die, and the PC's address may change (REQ-69).
     fn ticker(self: &Arc<Self>, epoch: u64) {
         let me = Arc::clone(self);
         thread::spawn(move || {
+            let mut last_lan = std::time::Instant::now();
             loop {
                 thread::sleep(me.tuning.tick);
-                {
+                let lost = {
                     let core = lock(&me.core);
                     if core.epoch != epoch {
                         return;
                     }
-                    let lost = matches!(core.phase, Phase::Ready)
-                        && core.tunnel.as_ref().is_some_and(|t| t.exited());
-                    if lost {
-                        drop(core);
+                    matches!(core.tun, Tun::Ready)
+                        && core.tunnel.as_ref().is_some_and(|t| t.exited())
+                };
+                if lost {
+                    let wifi_up = {
+                        let mut core = lock(&me.core);
+                        if core.lan.is_some() {
+                            core.tun = Tun::Failed("cloudflared stopped".into());
+                            core.host.clear();
+                            core.tunnel = None;
+                            true
+                        } else {
+                            false
+                        }
+                    };
+                    if !wifi_up {
                         me.fail(epoch, "cloudflared stopped; start mobile again".into());
                         return;
                     }
+                    me.sync_endpoints();
+                }
+                if last_lan.elapsed() >= me.tuning.lan_every {
+                    last_lan = std::time::Instant::now();
+                    me.recheck_wifi(epoch);
                 }
                 me.push();
             }
         });
+    }
+
+    /// The PC's address may have changed since the wifi listener opened
+    /// (DHCP, another network): rebind on the new one, give a new code (the QR
+    /// on screen pointed at the old address) and tell the phones (REQ-69).
+    fn recheck_wifi(self: &Arc<Self>, epoch: u64) {
+        let now = self.tuning.lan.addr();
+        let (bridge, was, ready) = {
+            let core = lock(&self.core);
+            (
+                core.bridge.clone(),
+                core.lan.as_ref().map(|l| l.host.clone()),
+                matches!(core.phase, Phase::Ready),
+            )
+        };
+        let Some(bridge) = bridge else { return };
+        if !ready || was == now.map(|ip| ip.to_string()) {
+            return;
+        }
+        let lan = match now {
+            Some(ip) => self.open_wifi(&bridge, ip),
+            None => {
+                bridge.drop_wifi();
+                None
+            }
+        };
+        if now.is_some() && lan.is_none() {
+            // The address changed but the new listener did not open: the old
+            // one is of no use either.
+            bridge.drop_wifi();
+        }
+        let token = lan.as_ref().and_then(|_| bridge.new_pairing().ok());
+        {
+            let mut core = lock(&self.core);
+            if core.epoch != epoch {
+                return;
+            }
+            core.lan = lan;
+            if let Some(token) = token {
+                core.token = token;
+            }
+        }
+        self.sync_endpoints();
+        self.push();
+        // With neither route left there is nothing to offer.
+        let none = {
+            let core = lock(&self.core);
+            core.lan.is_none() && !matches!(core.tun, Tun::Ready)
+        };
+        if none {
+            self.fail(
+                epoch,
+                "the network address changed and mobile has no way left to be reached".into(),
+            );
+        }
     }
 
     /// An id nobody can guess: a client that is not shown the question cannot
@@ -722,6 +1023,8 @@ mod tests {
             ),
             hook: None,
             random: None,
+            lan: Lan::Off,
+            lan_every: Duration::from_millis(100),
         }
     }
 

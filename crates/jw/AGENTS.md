@@ -25,7 +25,8 @@ jw-daemon, and is started by the client, never by hand. Everything else is the C
   their own. `tests/web.rs` puts jw-web in front of that daemon. `tests/mobile.rs` and `tests/mobile_cli.rs` drive the
   daemon's mobile service with a stub for `cloudflared` (`JW_CLOUDFLARED`), a `PATH` without
   one, and config and state dirs of its own: a test here must never be able to start a real
-  tunnel or read the user's paired devices.
+  tunnel, read the user's paired devices or open a listener on the network of whoever runs it:
+  `JW_LAN_ADDR` is always set for the daemon (`off`, loopback, or `file:<path>`), never unset, because unset means "find the real address and listen on it".
 
 ## Keep in mind
 
