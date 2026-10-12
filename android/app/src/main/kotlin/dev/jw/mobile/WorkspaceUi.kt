@@ -353,6 +353,8 @@ private fun Composer(
     val j = LocalJw.current
     var text by remember(sel?.pane) { mutableStateOf("") }
     var typedAt by remember(sel?.pane) { mutableLongStateOf(0L) }
+    // The line just sent: the terminal still reports it until its next prompt, and it must not come back into the field.
+    var sent by remember(sel?.pane) { mutableStateOf<String?>(null) }
     // The input became the terminal's (claude has just started in a shell): what was typed here is typed there.
     LaunchedEffect(live) {
         if (live && sel != null && !state.readOnly && text.isNotEmpty() && remote == "") {
@@ -361,12 +363,14 @@ private fun Composer(
     }
     // The terminal's input changed: if the phone's has been still, it follows.
     LaunchedEffect(remote, live) {
-        if (live && remote != null && remote != text && System.currentTimeMillis() - typedAt > MIRROR_STILL_MS) text = remote
+        if (remote != sent) sent = null
+        if (live && remote != null && remote != text && remote != sent && System.currentTimeMillis() - typedAt > MIRROR_STILL_MS) text = remote
     }
     val send = {
         if (sel != null) {
             if (!live && text.isNotEmpty()) session.input(sel.pane, Keys.text(text))
             session.input(sel.pane, Keys.key(Key.Enter))
+            if (text.isNotEmpty()) sent = text
             text = ""
             typedAt = System.currentTimeMillis()
         }

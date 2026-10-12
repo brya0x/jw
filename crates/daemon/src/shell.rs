@@ -333,6 +333,8 @@ impl ShellState {
     pub fn start(&mut self, cmd: String, cwd: String) {
         self.seen = true;
         self.finish(None);
+        // The line was sent: it is the command now, and the field the terminal tells is empty again.
+        self.input.clear();
         let i = self.next;
         self.next += 1;
         self.blocks.push_back(Block {
@@ -714,7 +716,10 @@ mod tests {
         assert_eq!(s.news(), None);
         // A command starting is news, and so is the line cleared after.
         feed(&mut s, false, &start("ls -l", "/w"));
-        assert!(s.news().unwrap().told.running);
+        let n = s.news().unwrap();
+        assert!(n.told.running);
+        // The line that was sent is not the field's any more.
+        assert_eq!(n.told.input, "");
         feed(&mut s, false, &end(0));
         feed(&mut s, false, &line(""));
         let n = s.news().unwrap();
