@@ -13,8 +13,8 @@ depends on nothing of jw's.
 | `src/session.rs` | named sessions: `current` (`:26`), `create` (`:206`), `rename` (`:66`), `list` (`:189`); their files live in `sessions/<name>/` |
 | `src/folders.rs` | a session's folders: `load` (`:115`), `edit` (`:149`), `entry_for` (`:172`) |
 | `src/program.rs` | which foreground programs are agents: `is_agent_program`, `is_agent_pane` (addendum 17) |
-| `src/stream.rs` | what opening a workspace starts: `Stream` (`:19`), its panes, env, `Stamp` (whether a resolved one is still fresh), the agent's command with `--session-id` and hooks (`hooks`, `:323`), nvim's `--listen` (`listen`, `:292`) |
-| `src/actions.rs` | worktrees: `new_stream` (`:85`), `rename` (`:198`), `rm_plan`/`rm` (`:333`/`:361`), `sync` (`:436`), `done_plan` (`:490`) |
+| `src/stream.rs` | what opening a workspace starts: `Stream` (`:19`; `resolve_in` for a session that is not the process's, `open_plan` the panes with their sizes, shared by the CLI and the daemon's phone writes), its panes, env, `Stamp` (whether a resolved one is still fresh), the agent's command with `--session-id` and hooks (`hooks`, `:323`), nvim's `--listen` (`listen`, `:292`) |
+| `src/actions.rs` | worktrees: `project_named`, `valid_branch`, `new_stream` (`:85`; `NewOptions.session` registers it in a session), `rename` (`:198`), `rm_plan`/`rm` (`:333`/`:361`), `sync` (`:436`), `done_plan` (`:490`) |
 | `src/connectors/git.rs`, `github.rs` | git through the `git` binary, plus `head_of` (`:298`), which reads `.git` without running anything; PRs through `gh` |
 | `src/ago.rs` | an age in words ("2 min ago") for lists of devices |
 | `src/sidebar.rs` | a session's workspaces grouped as the sidebar shows them (`rows`), and the items and session counts the phone is told (`items`, `sessions`) |

@@ -14,17 +14,12 @@ use anyhow::{Context, Result, bail};
 use crate::actions::{self, NewOptions, Project};
 use crate::client::Client;
 use crate::core::registry::{self, Entry, Registry};
-use crate::layout::{Dir, Rect};
+use crate::layout::Dir;
 use crate::program;
 use crate::proto::{
     AgentState, ClientMsg, DaemonMsg, NewPane, PROTOCOL, PaneId, PaneInfo, PaneLeaf, socket_path,
 };
 use crate::stream::{PaneSpec, Stream};
-
-/// Panes started without a TUI get this size; the TUI resizes them when it
-/// attaches.
-const COLS: u16 = 160;
-const ROWS: u16 = 48;
 
 /// How long `prompt` waits for the agent to settle and take the text.
 const PROMPT_TIMEOUT: Duration = Duration::from_secs(40);
@@ -528,18 +523,12 @@ pub fn worktree(args: &[String]) -> Result<()> {
 /// A project of the session by name: an open folder that is its checkout,
 /// or the main checkout its worktrees came from.
 fn project_named(name: &str) -> Result<Project> {
-    let all = session_workspaces()?;
-    let dir = all
-        .iter()
-        .find(|w| !w.worktree && w.entry.project == name && !w.entry.branch.is_empty())
-        .map(|w| w.entry.path.clone())
-        .or_else(|| {
-            all.iter()
-                .find(|w| w.worktree && w.entry.project == name && !w.entry.root.is_empty())
-                .map(|w| w.entry.root.clone())
-        })
-        .with_context(|| format!("no project {name} in session {}", crate::session::current()))?;
-    Project::open(Path::new(&dir))
+    actions::project_named(
+        &registry::state_dir()?,
+        &registry::default_path()?,
+        &crate::session::current(),
+        name,
+    )
 }
 
 /// The daemon message that starts `spec`'s pane at `(cols, rows)`.
@@ -557,22 +546,10 @@ fn spawn(spec: PaneSpec, stream: &str, (cols, rows): (u16, u16)) -> ClientMsg {
 
 /// Starts the stream's panes in the daemon, sized for the default layout.
 fn open(c: &mut Client, stream: &Stream) -> Result<()> {
-    let specs = stream.open_specs(true)?;
-    let rects = stream.tree.rects(Rect {
-        x: 0,
-        y: 0,
-        w: COLS,
-        h: ROWS,
-    });
-    let roles: Vec<String> = stream.tree.leaves().into_iter().map(|l| l.role).collect();
-    let mut want = specs.len();
-    for spec in specs {
-        let size = roles
-            .iter()
-            .position(|r| *r == spec.role)
-            .map(|i| (rects[i].w.saturating_sub(2), rects[i].h.saturating_sub(2)))
-            .unwrap_or((80, 24));
-        c.send(&spawn(spec, &stream.entry.id, size))?;
+    let plan = stream.open_plan(true)?;
+    let mut want = plan.len();
+    for (spec, cols, rows) in plan {
+        c.send(&spawn(spec, &stream.entry.id, (cols, rows)))?;
     }
     c.set_read_timeout(Some(Duration::from_secs(10)))?;
     while want > 0 {

@@ -26,7 +26,7 @@ pub struct Stamp {
 
 impl Stamp {
     /// The project's `.jw.toml`, every personal config and the folder's `plain`.
-    fn of(entry: &Entry) -> Self {
+    fn of(entry: &Entry, session: &str) -> Self {
         let mut files = vec![Path::new(&entry.path).join(".jw.toml")];
         if !entry.root.is_empty() {
             files.push(Path::new(&entry.root).join(".jw.toml"));
@@ -48,10 +48,14 @@ impl Stamp {
                     (f, at)
                 })
                 .collect(),
-            plain: plain(entry).unwrap_or(false),
+            plain: plain(entry, session).unwrap_or(false),
         }
     }
 }
+
+/// The area the default layout is cut up in when a workspace is opened without a screen (the CLI, a phone).
+const OPEN_COLS: u16 = 160;
+const OPEN_ROWS: u16 = 48;
 
 /// A stream resolved against its project's config, ready to open.
 #[derive(Debug, Clone)]
@@ -66,6 +70,9 @@ pub struct Stream {
     pub session: String,
     /// What it was resolved from; see [`Stream::is_fresh`].
     pub stamp: Stamp,
+    /// The jw session its panes belong to, for their `JW_SESSION`: the process's own by default, the one a phone chose
+    /// when a daemon opens a workspace for it (mobile REQ-87).
+    pub jw_session: String,
 }
 
 /// One pane to start: `cmd` runs through `sh -c`, `None` is a plain shell.
@@ -79,12 +86,12 @@ pub struct PaneSpec {
     pub env: BTreeMap<String, String>,
 }
 
-/// Whether the folder of `entry` was asked to open with one shell.
-fn plain(entry: &Entry) -> Result<bool> {
+/// Whether the folder of `entry` was asked to open with one shell, in jw session `session`.
+fn plain(entry: &Entry, session: &str) -> Result<bool> {
     if !crate::folders::is_folder(entry) {
         return Ok(false);
     }
-    Ok(crate::folders::load(&registry::state_dir()?)?
+    Ok(crate::folders::load_in(&registry::state_dir()?, session)?
         .folders
         .iter()
         .any(|f| f.dir == entry.path && f.plain))
@@ -105,15 +112,20 @@ impl Stream {
     /// An opened folder (REQ-55): a repository with a jw config starts with
     /// its layout; anything else with one shell.
     pub fn resolve(entry: &Entry) -> Result<Self> {
+        Self::resolve_in(entry, &crate::session::current())
+    }
+
+    /// [`Stream::resolve`] for a workspace of jw session `session`, which is not necessarily this process's own.
+    pub fn resolve_in(entry: &Entry, session: &str) -> Result<Self> {
         // Before reading them: a change in between shows as stale, not fresh.
-        let stamp = Stamp::of(entry);
+        let stamp = Stamp::of(entry, session);
         if crate::folders::is_folder(entry) {
             let dir = Path::new(&entry.path);
             if !dir.is_dir() {
                 bail!("{} is not a folder", entry.path);
             }
             // The folder a session started in opens with one shell (REQ-61).
-            let plain = plain(entry)?;
+            let plain = plain(entry, session)?;
             let (cfg, base, tree) = match crate::folders::repo(dir) {
                 Some(repo) => {
                     let cfg = config::load(&repo.root, &repo.remote, &entry.project)?;
@@ -133,6 +145,7 @@ impl Stream {
                 tree,
                 session: session_of(entry),
                 stamp,
+                jw_session: session.to_string(),
             });
         }
         let repo = Repo::open(Path::new(&entry.path))?;
@@ -151,13 +164,14 @@ impl Stream {
             tree,
             session: session_of(entry),
             stamp,
+            jw_session: session.to_string(),
         })
     }
 
     /// Whether a resolve now would read what this one did: no config or
     /// `folders.json` changed since. A few `stat`s, no `git`.
     pub fn is_fresh(&self) -> bool {
-        Stamp::of(&self.entry) == self.stamp
+        Stamp::of(&self.entry, &self.jw_session) == self.stamp
     }
 
     pub fn vars(&self) -> Vars {
@@ -177,7 +191,7 @@ impl Stream {
             crate::actions::jw_env(&self.entry, &self.vars())
         };
         // `jw ls` and friends in a pane act on its session.
-        env.insert("JW_SESSION".into(), crate::session::current());
+        env.insert("JW_SESSION".into(), self.jw_session.clone());
         env
     }
 
@@ -230,6 +244,30 @@ impl Stream {
             }
         }
         Ok(specs)
+    }
+
+    /// The panes `open` starts, each with the size the default layout gives it: what the CLI and the daemon (for a
+    /// phone) send as `Spawn`, so a workspace opens the same wherever it was asked for.
+    pub fn open_plan(&self, setup: bool) -> Result<Vec<(PaneSpec, u16, u16)>> {
+        let specs = self.open_specs(setup)?;
+        let rects = self.tree.rects(crate::layout::Rect {
+            x: 0,
+            y: 0,
+            w: OPEN_COLS,
+            h: OPEN_ROWS,
+        });
+        let roles: Vec<String> = self.tree.leaves().into_iter().map(|l| l.role).collect();
+        Ok(specs
+            .into_iter()
+            .map(|spec| {
+                let (cols, rows) = roles
+                    .iter()
+                    .position(|r| *r == spec.role)
+                    .map(|i| (rects[i].w.saturating_sub(2), rects[i].h.saturating_sub(2)))
+                    .unwrap_or((80, 24));
+                (spec, cols, rows)
+            })
+            .collect())
     }
 
     /// Records that an agent ran here, and which conversation, so the next
@@ -456,6 +494,7 @@ mod tests {
             tree: Node::three_panes(),
             session: "0000-s".into(),
             stamp: Default::default(),
+            jw_session: "main".into(),
         }
     }
 
@@ -466,11 +505,11 @@ mod tests {
             path: dir.path().display().to_string(),
             ..Entry::default()
         };
-        let before = Stamp::of(&entry);
-        assert_eq!(before, Stamp::of(&entry));
+        let before = Stamp::of(&entry, "main");
+        assert_eq!(before, Stamp::of(&entry, "main"));
         let cfg = dir.path().join(".jw.toml");
         std::fs::write(&cfg, "[layout]\n").unwrap();
-        let written = Stamp::of(&entry);
+        let written = Stamp::of(&entry, "main");
         assert_ne!(before, written);
         let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
         std::fs::File::options()
@@ -479,7 +518,7 @@ mod tests {
             .unwrap()
             .set_modified(later)
             .unwrap();
-        assert_ne!(written, Stamp::of(&entry));
+        assert_ne!(written, Stamp::of(&entry, "main"));
     }
 
     /// REQ-119: setup goes to the shell pane, else before the editor, else

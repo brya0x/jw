@@ -142,6 +142,22 @@ pub fn load(state: &Path) -> Result<Folders> {
     Ok(all)
 }
 
+/// The folders of session `session`, read as they are: no migration of an older jw's files, which is the current
+/// session's business (see [`load`]).
+pub fn load_in(state: &Path, session: &str) -> Result<Folders> {
+    Folders::load(&crate::session::dir(state, session)?.join("folders.json"))
+}
+
+/// Adds `dir` to session `session`'s folders (nothing changes if it is there) and returns its workspace id.
+pub fn add_in(state: &Path, session: &str, dir: &str) -> Result<String> {
+    let path = crate::session::dir(state, session)?.join("folders.json");
+    let mut all = Folders::load(&path)?;
+    if all.add(dir) {
+        all.save(&path)?;
+    }
+    Ok(id_in(session, dir))
+}
+
 /// Changes the current session's `folders.json`.
 pub fn edit(f: impl FnOnce(&mut Folders)) -> Result<()> {
     let state = registry::state_dir()?;
