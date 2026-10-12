@@ -1124,6 +1124,8 @@ fn wifi_parts(payload: &str) -> (String, String) {
     let rest = payload.strip_prefix("jw://").expect("a jw:// payload");
     let (addr, tail) = rest.split_once('/').unwrap();
     let fp = tail.split_once("?fp=").expect("the fingerprint").1;
+    // The tunnel may be named after it (`&t=`).
+    let fp = fp.split('&').next().unwrap();
     (addr.to_string(), fp.to_string())
 }
 
@@ -1145,17 +1147,17 @@ fn the_wifi_is_ready_at_once_and_the_tunnel_comes_up_behind_it() {
 }
 
 #[test]
-fn the_wifi_code_does_not_change_when_the_tunnel_registers() {
+fn the_wifi_code_gains_the_tunnel_once_when_it_registers_and_keeps_its_token() {
     let rig = Rig::start_wifi(Stub::Registers);
     let mut w = rig.watcher();
     let first = up(&mut w);
     let last = until(&mut w, |s| s.tunnel == "ready").pop().unwrap();
     assert_eq!(last.host, HOST);
-    assert_eq!(
-        last.payload, first.payload,
-        "the QR on screen must stay good"
-    );
     assert_eq!(last.phase, "ready");
+    // The same code (token, address, fingerprint), now also naming the tunnel (REQ-58).
+    assert!(!first.payload.contains("&t="), "{}", first.payload);
+    assert_eq!(last.payload, format!("{}&t={HOST}", first.payload));
+    assert_eq!(token(&last), token(&first));
 }
 
 #[test]

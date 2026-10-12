@@ -547,7 +547,12 @@ impl Inner {
         let live = phase == "ready" && left.is_some();
         // The wifi payload when there is a wifi listener (REQ-58): it does not
         // wait for the tunnel and does not change when the tunnel comes up.
+        // Once the tunnel is up the same code also names it (`&t=`), so a phone
+        // that cannot reach the wifi can still pair (REQ-58).
         let payload = match (&lan, live) {
+            (Some(l), true) if tun == "ready" => {
+                format!("jw://{}:{}/{token}?fp={}&t={host}", l.host, l.port, l.fp)
+            }
             (Some(l), true) => format!("jw://{}:{}/{token}?fp={}", l.host, l.port, l.fp),
             (None, true) => format!("jw://{host}/{token}"),
             _ => String::new(),

@@ -9,7 +9,8 @@
 #                              no test daemon is running
 #   scripts/jw-test stop       stops the test daemon (only its pid)
 #
-# Env: JWT_DIR (default /tmp/jwt), JW_WELCOME (default 1 here: you want to see it),
+# Env: JWT_LAN (`off` for the tunnel only; unset lets the daemon find your wifi address and listen on it,
+# which may bring up the macOS firewall question), JWT_DIR (default /tmp/jwt), JW_WELCOME (default 1 here: you want to see it),
 # JWT_PROFILE (debug by default; `release` to feel the real speed).
 set -eu
 REPO=$(cd "$(dirname "$0")/.." && pwd)
@@ -18,7 +19,11 @@ PROFILE=${JWT_PROFILE:-debug}
 PIDFILE=$D/run/jw/jw.pid
 
 stop() {
-  if [ -f "$PIDFILE" ]; then kill "$(cat "$PIDFILE")" 2>/dev/null || true; fi
+  # Only a pid that is still a jw daemon: a stale pid file may name an unrelated process now.
+  if [ -f "$PIDFILE" ]; then
+    pid=$(cat "$PIDFILE")
+    if ps -p "$pid" -o command= 2>/dev/null | grep -q "jw daemon"; then kill "$pid" 2>/dev/null || true; fi
+  fi
 }
 
 case "${1:-}" in
@@ -41,6 +46,7 @@ fi
 cat > "$D/env.sh" <<ENV
 export HOME="$D/home" XDG_RUNTIME_DIR="$D/run" XDG_STATE_HOME="$D/state" XDG_CONFIG_HOME="$D/cfg"
 export JW_GH=${JW_GH:-} JW_WELCOME=${JW_WELCOME:-1} COLORTERM=truecolor SHELL=\${SHELL:-/bin/zsh}
+${JWT_LAN:+export JW_LAN_ADDR="$JWT_LAN"}
 unset JW_SOCKET JW_SESSION
 # So \`jw\` in a pane of this window is this checkout's, not the installed one.
 export PATH="$REPO/target/$PROFILE:\$PATH"

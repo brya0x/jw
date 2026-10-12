@@ -111,7 +111,7 @@ button:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
     <ul>
       <li>Con <span class="k">↵</span> el QR sale <b>al instante</b>: apunta a tu IP local (TLS con certificado propio de jw, y su huella va dentro del QR). Sin esperar a Cloudflare.</li>
       <li>El túnel sigue arrancando debajo (<i>starting, about a minute</i>). Cuando está listo, jw se lo <b>avisa a los teléfonos ya conectados</b> (<i>tunnel ready · 1 phone told</i>): quedan con la dirección guardada de respaldo.</li>
-      <li>El teléfono usa el wifi mientras responda; si sales de casa o cambia la IP, cae solo al túnel. El QR no cambia después de mostrarse.</li>
+      <li>El teléfono usa el wifi mientras responda; si sales de casa o cambia la IP, cae solo al túnel. El QR cambia una vez, cuando el túnel está listo (el mismo código, ahora con el túnel dentro, para poder emparejar aunque el wifi no sirva); el token no cambia.</li>
       <li>Si el túnel se reinicia con otra dirección, también se les avisa (botón <i>El túnel se reinicia</i>). Falta cloudflared o no hay red local: el modal lo dice y lo que sí funciona sigue (botones <i>Falla…</i> y <i>Sin red local</i>).</li>
       <li>En los dispositivos se ve por dónde está cada teléfono (<i>via wifi</i>).</li>
     </ul>
