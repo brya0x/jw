@@ -24,7 +24,7 @@ use jw_core::core::config;
 use jw_core::core::registry;
 use jw_core::sidebar;
 use jw_web::auth::Store;
-use jw_web::bridge::{Bridge, Config, Endpoints, Lister, Look, Query, Timings};
+use jw_web::bridge::{Bridge, Config, DiffScope, Endpoints, Lister, Look, Query, Timings};
 use jw_web::tls;
 use jw_web::tunnel::{self, Step, Tunnel};
 
@@ -152,20 +152,41 @@ fn lister() -> Lister {
                     .map_err(|_| "the sessions could not be read".to_string())?;
                 serde_json::json!({ "items": items })
             }
-            Query::Diff(id) => {
-                let entry = sidebar::find(&state, &reg, id)
-                    .map_err(|_| "the workspaces could not be read".to_string())?
-                    .ok_or_else(|| format!("no workspace {id}"))?;
+            Query::Diff(id, scope) => {
+                let entry = workspace(&state, &reg, id)?;
+                let pick = match scope {
+                    DiffScope::General => jw_core::diff::Pick::General,
+                    DiffScope::Uncommitted => jw_core::diff::Pick::Uncommitted,
+                    DiffScope::Commit(sha) => jw_core::diff::Pick::Commit(sha.clone()),
+                };
                 // git's and jw's own messages name directories of the PC; the
                 // phone is told the workspace's name instead.
-                let report = jw_core::diff::report(&entry, cancel)
+                let report = jw_core::diff::report(&entry, &pick, cancel)
                     .map_err(|e| format!("{e:#}").replace(&entry.path, &entry.name))?;
                 serde_json::to_value(report)
                     .map_err(|_| "the diff could not be made".to_string())?
             }
+            Query::Commits(id) => {
+                let entry = workspace(&state, &reg, id)?;
+                let report = jw_core::diff::commit_report(&entry, cancel)
+                    .map_err(|e| format!("{e:#}").replace(&entry.path, &entry.name))?;
+                serde_json::to_value(report)
+                    .map_err(|_| "the commits could not be listed".to_string())?
+            }
         };
         Ok(value)
     })
+}
+
+/// The workspace a phone named, from the registry and the folders.
+fn workspace(
+    state: &std::path::Path,
+    reg: &std::path::Path,
+    id: &str,
+) -> Result<registry::Entry, String> {
+    sidebar::find(state, reg, id)
+        .map_err(|_| "the workspaces could not be read".to_string())?
+        .ok_or_else(|| format!("no workspace {id}"))
 }
 
 /// Who answered a pair question (a client id) and what; `CANCELLED` when

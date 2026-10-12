@@ -498,6 +498,7 @@ fn prompt_waits_for_quiet_then_pastes_and_presses_enter() {
     c.send(&ClientMsg::Prompt {
         stream: "s".into(),
         text: "fix the\nbug".into(),
+        pane: None,
     })
     .unwrap();
     let mut screen = vt100::Parser::new(24, 80, 0);
@@ -554,6 +555,7 @@ fn a_review_opens_as_a_diff_and_an_agent_and_the_agent_is_briefed() {
     c.send(&ClientMsg::Prompt {
         stream: "r".into(),
         text: "Review pull request #7.".into(),
+        pane: None,
     })
     .unwrap();
     c.send(&ClientMsg::List).unwrap();
@@ -591,6 +593,7 @@ fn prompt_without_an_agent_pane_is_an_error() {
     c.send(&ClientMsg::Prompt {
         stream: "s".into(),
         text: "hi".into(),
+        pane: None,
     })
     .unwrap();
     loop {
@@ -611,6 +614,166 @@ fn hello_answers_with_the_protocol() {
     let mut c = d.client();
     c.send(&ClientMsg::Hello { protocol: PROTOCOL }).unwrap();
     assert_eq!(next(&mut c), DaemonMsg::Hello { protocol: PROTOCOL });
+}
+
+/// REQ-205: a Split answers its requester with the new pane's id, and only
+/// the requester; a watcher learns of it through the Tree alone. A viewer
+/// gets an id and no process (REQ-181).
+#[test]
+fn a_split_tells_only_its_requester_the_new_pane() {
+    let d = Daemon::start();
+    let mut c = d.client();
+    c.send(&ClientMsg::Open {
+        stream: "w".into(),
+        tree: Tree::Leaf(cat()),
+    })
+    .unwrap();
+    let a = ids(&next_tree(&mut c))[0];
+    let mut watcher = d.client();
+    watcher
+        .send(&ClientMsg::Attach { stream: "w".into() })
+        .unwrap();
+    next_tree(&mut watcher);
+
+    let mut view = cat();
+    view.role = "view:diff".into();
+    c.send(&ClientMsg::Split {
+        pane: a,
+        dir: Dir::Right,
+        new: view,
+    })
+    .unwrap();
+    let opened = loop {
+        if let DaemonMsg::Opened { pane } = next(&mut c) {
+            break pane;
+        }
+    };
+    assert_eq!(ids(&next_tree(&mut watcher)), [a, opened]);
+
+    // Nothing Opened reaches the watcher: the next thing it hears is the
+    // Tree of a later change.
+    c.send(&ClientMsg::Name {
+        pane: a,
+        name: Some("x".into()),
+    })
+    .unwrap();
+    loop {
+        match next(&mut watcher) {
+            DaemonMsg::Opened { .. } => panic!("the watcher got Opened"),
+            DaemonMsg::Tree { .. } => break,
+            _ => {}
+        }
+    }
+
+    c.send(&ClientMsg::List).unwrap();
+    loop {
+        if let DaemonMsg::Panes { panes } = next(&mut c) {
+            assert!(panes.iter().all(|p| p.pane != opened), "{panes:?}");
+            break;
+        }
+    }
+}
+
+/// REQ-204..221: `jw pane open|ls|close` against a running daemon, in a
+/// state dir of its own with one folder workspace, which a TUI would show.
+#[test]
+fn jw_pane_opens_lists_and_closes_panes() {
+    let d = Daemon::start();
+    let work = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let dir = work.path().canonicalize().unwrap();
+    let dir = dir.to_str().unwrap().to_string();
+    let main = state.path().join("jw").join("sessions").join("main");
+    std::fs::create_dir_all(&main).unwrap();
+    std::fs::write(
+        main.join("folders.json"),
+        format!(r#"{{"folders":[{{"dir":{dir:?},"created":"2026-01-01T00:00:00Z","name":"w"}}]}}"#),
+    )
+    .unwrap();
+    let jw = |args: &[&str]| {
+        Command::new(EXE)
+            .args(args)
+            .env("JW_SOCKET", &d.socket)
+            .env("XDG_STATE_HOME", state.path())
+            .env_remove("JW_SESSION")
+            .env_remove("JW_PANE_ID")
+            .output()
+            .unwrap()
+    };
+    let ok = |args: &[&str]| {
+        let out = jw(args);
+        assert!(out.status.success(), "{args:?}: {out:?}");
+        String::from_utf8(out.stdout).unwrap()
+    };
+
+    // A workspace the daemon does not run.
+    let out = jw(&["pane", "ls", "w"]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("is not open"));
+
+    let mut tui = d.client();
+    tui.send(&ClientMsg::Open {
+        stream: format!("dir:{dir}"),
+        tree: Tree::Leaf(cat()),
+    })
+    .unwrap();
+    let first = ids(&next_tree(&mut tui))[0];
+
+    // The TUI sees the pane with no action of its own (REQ-209).
+    let diff: PaneId = ok(&["pane", "open", "w", "--run", "view:diff"])
+        .trim()
+        .parse()
+        .unwrap();
+    let t = next_tree(&mut tui);
+    assert_eq!(ids(&t), [first, diff]);
+    assert_eq!(t.find(diff).unwrap().role, "view:diff");
+
+    let run: PaneId = ok(&[
+        "pane",
+        "open",
+        "w",
+        "--run",
+        "cat",
+        "--split",
+        "down",
+        "--of",
+        &first.to_string(),
+    ])
+    .trim()
+    .parse()
+    .unwrap();
+    let t = next_tree(&mut tui);
+    assert_eq!(ids(&t), [first, run, diff]);
+    assert_eq!(t.find(run).unwrap().role, "run");
+
+    let table = ok(&["pane", "ls", "w"]);
+    assert!(
+        table.contains("view:diff") && table.contains("viewer"),
+        "{table}"
+    );
+    assert!(
+        table.contains("run") && table.contains("running"),
+        "{table}"
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(&ok(&["pane", "ls", "w", "--json"])).unwrap();
+    assert_eq!(json.as_array().unwrap().len(), 3);
+
+    // A pane outside the workspace is refused; so is the last one, below.
+    assert!(
+        !jw(&["pane", "open", "w", "--run", "cat", "--of", "999999"])
+            .status
+            .success()
+    );
+    assert!(!jw(&["pane", "close", "w", "999999"]).status.success());
+
+    ok(&["pane", "close", "w", &run.to_string()]);
+    assert_eq!(ids(&next_tree(&mut tui)), [first, diff]);
+    ok(&["pane", "close", "w", &diff.to_string()]);
+    assert_eq!(ids(&next_tree(&mut tui)), [first]);
+    let out = jw(&["pane", "close", "w", &first.to_string()]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--force"));
 }
 
 /// REQ-34: every change to a workspace's panes reaches its tree, the
@@ -1429,6 +1592,139 @@ fn the_cli_reads_the_daemon_or_none() {
     for socket in [d.socket.as_path(), none.as_path()] {
         assert_eq!(jw(&["ls", "--json"], socket).trim(), "[]");
         assert!(jw(&["sessions"], socket).contains("main"));
+    }
+}
+
+/// REQ-194: a `shell` pane with an agent in the foreground takes `jw prompt`.
+#[test]
+fn prompt_reaches_an_agent_program_in_a_shell_pane() {
+    let d = Daemon::start();
+    let mut c = d.client();
+    // A link to `cat` named `claude`: the foreground process is called that
+    // (a script would show as its interpreter, a copy of `cat` is killed by
+    // macOS's code signing).
+    let bin = tempfile::tempdir().unwrap();
+    let claude = bin.path().join("claude");
+    std::os::unix::fs::symlink("/bin/cat", &claude).unwrap();
+    let pane = spawn(&mut c, "s", &format!("exec {}", claude.display()), 80, 24);
+
+    let mut screen = vt100::Parser::new(24, 80, 0);
+    let deadline = Instant::now() + TIMEOUT;
+    let reply = loop {
+        c.send(&ClientMsg::Prompt {
+            stream: "s".into(),
+            text: "hi there".into(),
+            pane: None,
+        })
+        .unwrap();
+        let msg = loop {
+            if let m @ (DaemonMsg::Prompted { .. } | DaemonMsg::Error { .. }) = recv(&mut c) {
+                break m;
+            }
+        };
+        // `exec` may not have run yet: ask again until the name says claude.
+        if matches!(msg, DaemonMsg::Prompted { .. }) || Instant::now() > deadline {
+            break msg;
+        }
+        thread::sleep(Duration::from_millis(50));
+    };
+    assert!(
+        matches!(reply, DaemonMsg::Prompted { pane: p } if p == pane),
+        "{reply:?}"
+    );
+    read_until(&mut c, pane, &mut screen, "hi there");
+}
+
+/// One prompt into `pane` of `stream`, and the daemon's answer.
+fn prompt_once(c: &mut Client, stream: &str, pane: PaneId, text: &str) -> DaemonMsg {
+    c.send(&ClientMsg::Prompt {
+        stream: stream.into(),
+        text: text.into(),
+        pane: Some(pane),
+    })
+    .unwrap();
+    loop {
+        if let m @ (DaemonMsg::Prompted { .. } | DaemonMsg::Error { .. }) = recv(c) {
+            return m;
+        }
+    }
+}
+
+/// Ask until the pane's program is the agent: right after a `spawn` its `exec`
+/// may not have run, and the daemon says "it runs sh".
+fn prompt_named(c: &mut Client, stream: &str, pane: PaneId, text: &str) -> DaemonMsg {
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        let msg = prompt_once(c, stream, pane, text);
+        let retry = matches!(&msg, DaemonMsg::Error { msg } if msg.contains("it runs"));
+        if !retry || Instant::now() > deadline {
+            return msg;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// A link to `cat` named `claude` (see the REQ-194 test above), in its own dir.
+fn fake_claude() -> (tempfile::TempDir, String) {
+    let bin = tempfile::tempdir().unwrap();
+    let claude = bin.path().join("claude");
+    std::os::unix::fs::symlink("/bin/cat", &claude).unwrap();
+    let cmd = format!("exec {}", claude.display());
+    (bin, cmd)
+}
+
+/// REQ-249: `--pane` sends the text to the named agent, not the lowest one.
+#[test]
+fn prompt_with_a_pane_reaches_that_agent() {
+    let d = Daemon::start();
+    let mut c = d.client();
+    let (_bin, cmd) = fake_claude();
+    let first = spawn(&mut c, "s", &cmd, 80, 24);
+    let second = spawn(&mut c, "s", &cmd, 80, 24);
+    assert!(first < second);
+
+    let reply = prompt_named(&mut c, "s", second, "for the second");
+    assert!(
+        matches!(reply, DaemonMsg::Prompted { pane } if pane == second),
+        "{reply:?}"
+    );
+    let mut screen = vt100::Parser::new(24, 80, 0);
+    read_until(&mut c, second, &mut screen, "for the second");
+}
+
+/// REQ-250, REQ-251: a pane of another workspace, a pane that is no agent and
+/// one that has exited are refused with an `Error`.
+#[test]
+fn prompt_with_a_pane_refuses_what_is_not_a_live_agent_of_the_workspace() {
+    let d = Daemon::start();
+    let mut c = d.client();
+    let (_bin, cmd) = fake_claude();
+    let _agent = spawn(&mut c, "s", &cmd, 80, 24);
+    let elsewhere = spawn(&mut c, "t", &cmd, 80, 24);
+    let plain = spawn(&mut c, "s", "cat", 80, 24);
+    let gone = spawn(&mut c, "s", "exit 0", 80, 24);
+
+    let DaemonMsg::Error { msg } = prompt_named(&mut c, "s", elsewhere, "x") else {
+        panic!("a pane of another workspace took a prompt");
+    };
+    assert!(msg.contains("not in this workspace"), "{msg}");
+
+    let DaemonMsg::Error { msg } = prompt_once(&mut c, "s", plain, "x") else {
+        panic!("a plain `cat` took a prompt");
+    };
+    assert!(msg.contains("is not an agent"), "{msg}");
+
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        let reply = prompt_named(&mut c, "s", gone, "x");
+        let DaemonMsg::Error { msg } = reply else {
+            panic!("an exited pane took a prompt: {reply:?}");
+        };
+        if msg.contains("has exited") {
+            break;
+        }
+        assert!(Instant::now() < deadline, "{msg}");
+        thread::sleep(Duration::from_millis(50));
     }
 }
 

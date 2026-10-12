@@ -14,6 +14,7 @@ pub mod diff;
 pub mod folders;
 pub mod init;
 pub mod layout;
+pub mod program;
 pub mod qr;
 pub mod review;
 pub mod session;

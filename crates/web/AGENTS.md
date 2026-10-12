@@ -17,8 +17,8 @@ Cloudflare tunnel; `jw mobile` and the TUI are clients of that service. Nothing 
 - `src/tunnel.rs`: `up` starts `cloudflared`, waits for its name and for DNS, and says each
   step; `Tunnel` is a clonable handle whose last drop kills the process. Every wait takes a
   `cancel` check. `JW_CLOUDFLARED` names another program and skips the DNS wait: a seam for tests only (they run the real binary, so it cannot be `cfg(test)`); an empty value is ignored. Each DNS lookup runs on its own thread, so a hung resolver cannot hold up a stop.
-  Every ask (`workspaces`, `sessions`, `diff`) is answered by `start_ask` from a thread of its
-  own through `Later`: up to 4 lists and one diff in flight per phone, a `Release` guard giving
+  Every ask (`workspaces`, `sessions`, `diff`, `commits`) is answered by `start_ask` from a thread of its
+  own through `Later`: up to 4 lists and one git ask (`diff` or `commits`) in flight per phone; an answer echoes the ask's fields (`ws`, `scope`) and an error carries them with `ask`, so two asks out never mix their failures (a `diff`'s `scope` is parsed here, and a commit id checked as 7 to 40 hex digits, before it can reach git), a `Release` guard giving
   the seat back even when the lister panics; the relay keeps relaying and pinging meanwhile.
   `Lister` is the other callback the daemon hands in: it answers a phone's `workspaces` and
   `sessions` from jw's files (the registry is not this crate's).

@@ -146,7 +146,7 @@ class ConnectScreensTest {
 
     @Test fun protocolNamesTheSideBehind() {
         var pc by mutableStateOf(14)
-        show { ProtocolScreen(app = 13, pc = pc, onBack = {}) }
+        show { ProtocolScreen(app = 14, pc = pc, onBack = {}) }
         rule.onNodeWithText("Tu app está atrasada", substring = true).assertExists()
         shot("proto")
         rule.runOnUiThread { pc = 12 }

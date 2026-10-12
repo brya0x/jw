@@ -16,7 +16,9 @@ import dev.jw.proto.Panes
 import dev.jw.proto.RefreshRule
 import dev.jw.proto.SessionInfo
 import dev.jw.proto.Workspace
+import dev.jw.proto.CommitList
 import dev.jw.proto.Diff
+import dev.jw.proto.DiffScope
 import dev.jw.proto.Workspaces
 import dev.jw.proto.Palettes
 import dev.jw.proto.QrPayload
@@ -142,12 +144,12 @@ data class Model(
     val answered: Set<Long> = emptySet(),
 )
 
-/** The changes of one workspace on screen (M6, REQ-13). The words of a failure may name a path on the PC: shown, never logged. */
+/** The changes of one workspace and view on screen (M6, REQ-13). A failure's words may name a path on the PC: shown, never logged. */
 sealed interface DiffState {
     data object Idle : DiffState
 
-    /** Asked and waiting; `before` is the last answer for the same workspace, kept on screen while it refreshes. */
-    class Loading(val ws: String, val before: Diff? = null) : DiffState {
+    /** Asked and waiting; `before` is the last answer for the same workspace and view, kept on screen while it refreshes. */
+    class Loading(val ws: String, val scope: DiffScope, val before: Diff? = null) : DiffState {
         override fun toString() = "Loading"
     }
 
@@ -155,9 +157,32 @@ sealed interface DiffState {
         override fun toString() = "Loaded($diff)"
     }
 
-    class Failed(val ws: String, val why: String) : DiffState {
+    class Failed(val ws: String, val scope: DiffScope, val why: String) : DiffState {
         override fun toString() = "Failed"
     }
+}
+
+/** The commits of the workspace on screen, for the Commits view. */
+sealed interface CommitsState {
+    data object Idle : CommitsState
+
+    class Loading(val ws: String) : CommitsState {
+        override fun toString() = "Loading"
+    }
+
+    class Loaded(val list: CommitList) : CommitsState {
+        override fun toString() = "Loaded($list)"
+    }
+
+    class Failed(val ws: String, val why: String) : CommitsState {
+        override fun toString() = "Failed"
+    }
+}
+
+/** What the PC is asked that runs git. It answers one at a time per phone, so the session sends them one at a time. */
+private sealed interface GitAsk {
+    data class Diff(val ws: String, val scope: DiffScope) : GitAsk
+    data class Commits(val ws: String) : GitAsk
 }
 
 /** Where wss URLs come from; tests point it at MockWebServer. */
@@ -199,6 +224,11 @@ class Session(
     val model: StateFlow<Model> = _model.asStateFlow()
     private val _diff = MutableStateFlow<DiffState>(DiffState.Idle)
     val diff: StateFlow<DiffState> = _diff.asStateFlow()
+    private val _commits = MutableStateFlow<CommitsState>(CommitsState.Idle)
+    val commits: StateFlow<CommitsState> = _commits.asStateFlow()
+    private val asks = Any()
+    private var inFlight: GitAsk? = null
+    private val queued = ArrayDeque<GitAsk>()
     private val _toasts = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val toasts: SharedFlow<String> = _toasts.asSharedFlow()
 
@@ -296,21 +326,70 @@ class Session(
     fun requestSessions() = send(Outgoing.Text(Control.sessions()))
 
     /**
-     * Asks for the changes of workspace `ws` (REQ-13). The answer lands in [diff]; one that is for another
-     * workspace (an old ask) is dropped. A request the connection lost is asked again when it is back.
+     * Asks for the changes of workspace `ws` in one view (REQ-13). The answer lands in [diff]; one for another
+     * workspace or view (an old ask) is dropped. Only the latest ask waits its turn; a request the connection lost is
+     * asked again when it is back.
      */
-    fun requestDiff(ws: String) {
+    fun requestDiff(ws: String, scope: DiffScope = DiffScope.General) {
         val before = when (val d = _diff.value) {
-            is DiffState.Loaded -> d.diff.takeIf { it.ws == ws }
-            is DiffState.Loading -> d.before?.takeIf { it.ws == ws }
+            is DiffState.Loaded -> d.diff.takeIf { it.ws == ws && it.scope == scope }
+            is DiffState.Loading -> d.before?.takeIf { it.ws == ws && it.scope == scope }
             else -> null
         }
-        _diff.value = DiffState.Loading(ws, before)
-        send(Outgoing.Text(Control.diff(ws)))
+        _diff.value = DiffState.Loading(ws, scope, before)
+        enqueue(GitAsk.Diff(ws, scope))
     }
 
-    /** The changes screen is left: let go of the answer, which can be megabytes. */
-    fun clearDiff() { _diff.value = DiffState.Idle }
+    /** Asks for the commits of `ws`'s branch (the Commits view). */
+    fun requestCommits(ws: String) {
+        _commits.value = CommitsState.Loading(ws)
+        enqueue(GitAsk.Commits(ws))
+    }
+
+    /** The changes screen is left: let go of the answers, which can be megabytes. */
+    fun clearDiff() {
+        synchronized(asks) { queued.clear() }
+        _diff.value = DiffState.Idle
+        _commits.value = CommitsState.Idle
+    }
+
+    private fun enqueue(ask: GitAsk) {
+        synchronized(asks) {
+            // Only the latest of each kind is still wanted.
+            queued.removeAll { it::class == ask::class }
+            if (inFlight != ask) queued.addLast(ask)
+        }
+        pump()
+    }
+
+    /** Sends the next ask if none is out. */
+    private fun pump() {
+        val next = synchronized(asks) {
+            if (inFlight != null) return
+            queued.removeFirstOrNull()?.also { inFlight = it }
+        } ?: return
+        send(Outgoing.Text(when (next) {
+            is GitAsk.Diff -> Control.diff(next.ws, next.scope)
+            is GitAsk.Commits -> Control.commits(next.ws)
+        }))
+    }
+
+    /** `ask` is answered (or refused): let the next one go. */
+    private fun done(ask: GitAsk) {
+        synchronized(asks) { if (inFlight == ask) inFlight = null }
+        pump()
+    }
+
+    /** A new connection has a free seat: whatever was waiting is asked again. */
+    private fun reask() {
+        synchronized(asks) {
+            inFlight = null
+            queued.clear()
+            (_diff.value as? DiffState.Loading)?.let { queued.addLast(GitAsk.Diff(it.ws, it.scope)) }
+            (_commits.value as? CommitsState.Loading)?.let { queued.addLast(GitAsk.Commits(it.ws)) }
+        }
+        pump()
+    }
 
     /**
      * y or n for `pane`. Sends once, and only while the latest `Panes` (at most 2 s old) says Waiting
@@ -395,7 +474,7 @@ class Session(
         job?.cancel()
         outbox = null
         _model.value = Model()
-        _diff.value = DiffState.Idle
+        clearDiff()
         store.clear()
         routes = Routes(null, null)
         _state.value = UiState.Scan()
@@ -557,7 +636,7 @@ class Session(
                             out.trySend(Outgoing.Text(Control.sessions()))
                             out.trySend(Outgoing.Text(Control.workspaces(_model.value.session)))
                             out.trySend(Outgoing.Binary(Workspaces.listFrame()))
-                            (_diff.value as? DiffState.Loading)?.let { out.trySend(Outgoing.Text(Control.diff(it.ws))) }
+                            reask()
                             // The screens come again as snapshots: the new one is the truth (REQ-15).
                             screens.clear()
                             exits.clear()
@@ -573,11 +652,9 @@ class Session(
                     is ServerMessage.Error -> {
                         // These two leave the connection open; anything else is followed by a close.
                         if (m.code == ErrorCode.READ_ONLY) _toasts.tryEmit("solo lectura")
-                        // Errors carry no request id: while a diff is asked, an `unsupported` is its answer, except `busy`
-                        // (a second ask while one runs: the first is still coming).
-                        if (m.code == ErrorCode.UNSUPPORTED && !m.msg.startsWith("busy")) {
-                            (_diff.value as? DiffState.Loading)?.let { _diff.value = DiffState.Failed(it.ws, m.msg) }
-                        }
+                        // An ask's own failure says which ask it is (`ask`, `ws`, `scope`); `busy` is the PC saying one
+                        // is still running, which the session's own queue prevents, so it fails nothing.
+                        if (m.code == ErrorCode.UNSUPPORTED && !m.msg.startsWith("busy")) askFailed(m)
                         if (m.code != ErrorCode.READ_ONLY && m.code != ErrorCode.UNSUPPORTED) {
                             a.failure = Failure.Bridge(m.code)
                             a.bridgeFailed = true
@@ -585,7 +662,15 @@ class Session(
                     }
                     is ServerMessage.Workspaces -> _model.update { it.copy(session = m.session, items = m.items) }
                     is ServerMessage.Sessions -> _model.update { it.copy(sessions = m.items) }
-                    is ServerMessage.DiffAnswer -> (_diff.value as? DiffState.Loading)?.takeIf { it.ws == m.diff.ws }?.let { _diff.value = DiffState.Loaded(m.diff) }
+                    is ServerMessage.DiffAnswer -> {
+                        val d = m.diff
+                        (_diff.value as? DiffState.Loading)?.takeIf { it.ws == d.ws && it.scope == d.scope }?.let { _diff.value = DiffState.Loaded(d) }
+                        done(GitAsk.Diff(d.ws, d.scope))
+                    }
+                    is ServerMessage.CommitsAnswer -> {
+                        (_commits.value as? CommitsState.Loading)?.takeIf { it.ws == m.list.ws }?.let { _commits.value = CommitsState.Loaded(m.list) }
+                        done(GitAsk.Commits(m.list.ws))
+                    }
                     is ServerMessage.Other -> Unit
                 }
             }
@@ -593,6 +678,21 @@ class Session(
         }.collect()
         out.close()
         return hello to saved
+    }
+
+    private fun askFailed(m: ServerMessage.Error) {
+        val ws = m.ws ?: return
+        when (m.ask) {
+            "diff" -> {
+                val scope = DiffScope.parse(m.scope) ?: DiffScope.General
+                (_diff.value as? DiffState.Loading)?.takeIf { it.ws == ws && it.scope == scope }?.let { _diff.value = DiffState.Failed(ws, scope, m.msg) }
+                done(GitAsk.Diff(ws, scope))
+            }
+            "commits" -> {
+                (_commits.value as? CommitsState.Loading)?.takeIf { it.ws == ws }?.let { _commits.value = CommitsState.Failed(ws, m.msg) }
+                done(GitAsk.Commits(ws))
+            }
+        }
     }
 
     private fun connected(m: ServerMessage.Ready, route: Route, r: Routes, saved: Boolean) =

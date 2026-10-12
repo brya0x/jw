@@ -34,8 +34,8 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         name: "read",
-        usage: "jw read <workspace> [--pane <role>] [--lines N]",
-        what: "prints a pane's last lines, scrollback included (the agent's pane by default)",
+        usage: "jw read <workspace> [--pane <role|program>] [--lines N]",
+        what: "prints a pane's last lines, scrollback included (the agent's pane by default, a role or a program names another)",
     },
     Command {
         name: "worktree",
@@ -43,9 +43,14 @@ pub const COMMANDS: &[Command] = &[
         what: "creates a worktree of the project, opens it, and hands the task to its agent",
     },
     Command {
+        name: "pane",
+        usage: "jw pane open <workspace> --run <program|shell|view:diff|view:md:file> [--split right|down] [--of <pane>] | close <workspace> <pane> [--force] | ls <workspace> [--json]",
+        what: "splits a workspace's panes: opens one that runs a program, a shell or a viewer and prints its id, closes one, or lists them",
+    },
+    Command {
         name: "prompt",
-        usage: "jw prompt <workspace> <text>",
-        what: "types a task into an open workspace's agent once it is quiet",
+        usage: "jw prompt <workspace> [--pane <id>] [--tag] [--] <text>",
+        what: "types a task into an open workspace's agent (or the agent in pane <id>) once it is quiet; --tag says who sent it",
     },
     Command {
         name: "skill",

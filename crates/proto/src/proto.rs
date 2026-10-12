@@ -15,7 +15,7 @@ pub type PaneId = u64;
 
 /// Bumped whenever a message changes shape: a client and a daemon from
 /// different builds refuse each other instead of misreading (RISK-14).
-pub const PROTOCOL: u32 = 13;
+pub const PROTOCOL: u32 = 14;
 
 /// A pane to start. `cmd` runs through `sh -c`; `None` starts `$SHELL`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -163,10 +163,14 @@ pub enum ClientMsg {
     /// Which panes exist, for every stream: answered with `Panes`.
     List,
     /// Type `text` into the stream's agent pane once it is quiet, then
-    /// Enter. Answered with `Prompted` or `Error`.
+    /// Enter: the pane `pane` names, which must be a live agent of the
+    /// stream, else the one the daemon picks (REQ-194). Answered with
+    /// `Prompted` or `Error`.
     Prompt {
         stream: String,
         text: String,
+        #[serde(default)]
+        pane: Option<PaneId>,
     },
     /// Become a watcher of mobile: answered with `MobileState` now and after
     /// every change, and sent every `MobilePair`, until this client leaves
@@ -328,6 +332,11 @@ pub enum DaemonMsg {
         status: i32,
     },
     Spawned {
+        pane: PaneId,
+    },
+    /// The pane a `Split` made, to the client that asked (REQ-205). Unlike
+    /// `Spawned` it does not subscribe the client to the pane.
+    Opened {
         pane: PaneId,
     },
     Panes {
@@ -867,5 +876,20 @@ mod tests {
     fn raw_stops_cleanly_at_the_end() {
         let mut r: &[u8] = &[];
         assert_eq!(read_raw(&mut r).unwrap(), None);
+    }
+
+    /// REQ-254: a `Prompt` without `pane` reads as `None`; it came with protocol 11 and every later one reads it so.
+    #[test]
+    fn a_prompt_without_a_pane_names_none() {
+        let m: ClientMsg =
+            serde_json::from_str(r#"{"t":"Prompt","stream":"s","text":"hi"}"#).unwrap();
+        assert_eq!(
+            m,
+            ClientMsg::Prompt {
+                stream: "s".into(),
+                text: "hi".into(),
+                pane: None
+            }
+        );
     }
 }

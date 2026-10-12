@@ -837,14 +837,25 @@ fn a_paired_phone_gets_a_workspaces_diff_against_its_base() {
     let code = up(&mut w);
     let (mut phone, _) = pair(&rig, &code, &mut w, "Pixel");
 
+    // General is committed work against the base: the edits are not committed, so nothing yet (REQ-223).
     phone.say(serde_json::json!({ "t": "diff", "ws": "demo-git" }));
     let v = phone.json();
     assert_eq!(
-        (v["t"].as_str(), v["ws"].as_str()),
-        (Some("diff"), Some("demo-git")),
+        (v["t"].as_str(), v["ws"].as_str(), v["scope"].as_str()),
+        (Some("diff"), Some("demo-git"), Some("general")),
         "{v}"
     );
     assert_eq!(v["title"], "demo vs main", "{v}");
+    assert_eq!(v["files"], serde_json::json!([]), "{v}");
+
+    phone.say(serde_json::json!({ "t": "diff", "ws": "demo-git", "scope": "uncommitted" }));
+    let v = phone.json();
+    assert_eq!(
+        (v["t"].as_str(), v["ws"].as_str(), v["scope"].as_str()),
+        (Some("diff"), Some("demo-git"), Some("uncommitted")),
+        "{v}"
+    );
+    assert_eq!(v["title"], "demo vs HEAD", "{v}");
     assert_eq!(v["truncated"], false);
     let files = v["files"].as_array().unwrap();
     let names: Vec<(&str, &str)> = files
@@ -852,6 +863,13 @@ fn a_paired_phone_gets_a_workspaces_diff_against_its_base() {
         .map(|f| (f["path"].as_str().unwrap(), f["status"].as_str().unwrap()))
         .collect();
     assert_eq!(names, [("a.txt", "modified"), ("b.txt", "added")], "{v}");
+    assert_eq!(
+        (
+            files[0]["untracked"].as_bool(),
+            files[1]["untracked"].as_bool()
+        ),
+        (Some(false), Some(true))
+    );
     assert_eq!(
         (files[0]["added"].as_u64(), files[0]["deleted"].as_u64()),
         (Some(1), Some(0))
@@ -864,6 +882,40 @@ fn a_paired_phone_gets_a_workspaces_diff_against_its_base() {
         (Some("three"), Some(3))
     );
     assert_eq!(files[1]["hunks"][0]["lines"][0]["text"], "new");
+
+    // A commit, unpushed: it is General's, and the Commits view's, and it alone is what it shows.
+    git(&repo, &["add", "a.txt"]);
+    git(&repo, &["commit", "-q", "-m", "three lines"]);
+    phone.say(serde_json::json!({ "t": "commits", "ws": "demo-git" }));
+    let v = phone.json();
+    assert_eq!(
+        (v["t"].as_str(), v["no_base"].as_bool()),
+        (Some("commits"), Some(false)),
+        "{v}"
+    );
+    let list = v["commits"].as_array().unwrap();
+    assert_eq!(list.len(), 1, "{v}");
+    assert_eq!(list[0]["subject"], "three lines");
+    let sha = list[0]["sha"].as_str().unwrap().to_string();
+    phone.say(
+        serde_json::json!({ "t": "diff", "ws": "demo-git", "scope": format!("commit:{sha}") }),
+    );
+    let v = phone.json();
+    assert_eq!(v["scope"], format!("commit:{sha}"), "{v}");
+    let names: Vec<&str> = v["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["a.txt"], "{v}");
+    phone.say(serde_json::json!({ "t": "diff", "ws": "demo-git" }));
+    let v = phone.json();
+    assert_eq!(
+        v["files"].as_array().unwrap().len(),
+        1,
+        "General has the commit now: {v}"
+    );
 
     phone.say(serde_json::json!({ "t": "diff", "ws": "demo-plain" }));
     let v = phone.json();
@@ -1087,7 +1139,7 @@ fn a_diff_never_sends_what_a_symlink_points_at_and_names_no_path_of_the_pc() {
     let code = up(&mut w);
     let (mut phone, _) = pair(&rig, &code, &mut w, "Pixel");
 
-    phone.say(serde_json::json!({ "t": "diff", "ws": "demo-git" }));
+    phone.say(serde_json::json!({ "t": "diff", "ws": "demo-git", "scope": "uncommitted" }));
     let reply = phone.json();
     let text = reply.to_string();
     assert!(!text.contains("TOP-SECRET"), "the secret was sent: {text}");

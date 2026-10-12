@@ -130,14 +130,24 @@ sealed interface ServerMessage {
         val settings: JsonElement?,
     ) : ServerMessage
 
-    class Error(val code: String, val msg: String) : ServerMessage
+    /** `ask`, `ws` and `scope` say which request an error answers (absent for errors that are not an ask's). */
+    class Error(
+        val code: String,
+        val msg: String,
+        val ask: String? = null,
+        val ws: String? = null,
+        val scope: String? = null,
+    ) : ServerMessage
 
     class Workspaces(val session: String, val items: List<Workspace>) : ServerMessage
 
     class Sessions(val items: List<SessionInfo>) : ServerMessage
 
-    /** The answer to `diff{ws}` (REQ-13). */
+    /** The answer to `diff{ws, scope}` (REQ-13). */
     class DiffAnswer(val diff: Diff) : ServerMessage
+
+    /** The answer to `commits{ws}`. */
+    class CommitsAnswer(val list: CommitList) : ServerMessage
 
     /**
      * Where else the PC can be reached (REQ-61). Only what is valid is kept: a tunnel host must be a quick
@@ -173,8 +183,14 @@ object Control {
 
     fun sessions(): String = """{"t":"sessions"}"""
 
-    fun diff(ws: String): String = buildJsonObject {
+    fun diff(ws: String, scope: DiffScope = DiffScope.General): String = buildJsonObject {
         put("t", "diff")
+        put("ws", ws)
+        put("scope", scope.word)
+    }.toString()
+
+    fun commits(ws: String): String = buildJsonObject {
+        put("t", "commits")
         put("ws", ws)
     }.toString()
 
@@ -202,6 +218,9 @@ object Control {
                 "error" -> ServerMessage.Error(
                     obj["code"]?.jsonPrimitive?.contentOrNull ?: ErrorCode.UNEXPECTED,
                     obj["msg"]?.jsonPrimitive?.contentOrNull ?: "",
+                    obj["ask"]?.jsonPrimitive?.contentOrNull,
+                    obj["ws"]?.jsonPrimitive?.contentOrNull,
+                    obj["scope"]?.jsonPrimitive?.contentOrNull,
                 )
                 "workspaces" -> ServerMessage.Workspaces(
                     obj["session"]?.jsonPrimitive?.contentOrNull ?: "",
@@ -211,6 +230,7 @@ object Control {
                     dev.jw.proto.Workspaces.parseSessions(obj["items"] as? kotlinx.serialization.json.JsonArray),
                 )
                 "diff" -> Diff.parse(obj)?.let { ServerMessage.DiffAnswer(it) } ?: ServerMessage.Other(tag)
+                "commits" -> CommitList.parse(obj)?.let { ServerMessage.CommitsAnswer(it) } ?: ServerMessage.Other(tag)
                 "endpoints" -> {
                     val lan = (obj["lan"] as? kotlinx.serialization.json.JsonObject)?.let { l ->
                         val host = l["host"]?.jsonPrimitive?.contentOrNull

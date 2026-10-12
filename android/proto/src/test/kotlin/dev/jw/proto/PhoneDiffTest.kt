@@ -16,8 +16,11 @@ class PhoneDiffTest {
     @Test fun theServersAnswerParsesInFull() {
         val d = parsed()
         assertEquals("w1", d.ws)
+        assertEquals(DiffScope.General, d.scope)
         assertEquals("demo vs origin/main", d.title)
         assertTrue(d.truncated)
+        assertNull(d.tooLarge)
+        assertFalse(d.noBase)
         assertEquals(listOf("src/a.ts", "new.md", "gone.txt", "img.png", "link", "big.rs"), d.files.map { it.path })
 
         val a = d.files[0]
@@ -33,13 +36,18 @@ class PhoneDiffTest {
         assertEquals(FileStatus.Deleted, d.files[2].status)
         assertTrue(d.files[3].binary && d.files[3].hunks.isEmpty())
         assertEquals("symlink", d.files[4].unreadable)
+        assertTrue(d.files[4].untracked)
+        assertFalse(d.files[0].untracked)
         assertTrue(d.files[5].truncated)
         assertEquals(5000, d.files[5].added)
         assertNull(d.files[0].unreadable)
     }
 
     @Test fun theRequestIsTheDocumentedOne() {
-        assertEquals("""{"t":"diff","ws":"w1"}""", Control.diff("w1"))
+        assertEquals("""{"t":"diff","ws":"w1","scope":"general"}""", Control.diff("w1"))
+        assertEquals("""{"t":"diff","ws":"w1","scope":"uncommitted"}""", Control.diff("w1", DiffScope.Uncommitted))
+        assertEquals("""{"t":"diff","ws":"w1","scope":"commit:abc1234"}""", Control.diff("w1", DiffScope.Commit("abc1234")))
+        assertEquals("""{"t":"commits","ws":"w1"}""", Control.commits("w1"))
     }
 
     @Test fun aFileKeyChangesWithItsContentNotJustItsCounts() {
@@ -80,9 +88,41 @@ class PhoneDiffTest {
 
     @Test fun readyPalettesBringTheDiffColours() {
         val r = Control.parse(
-            """{"t":"ready","bridge":1,"protocol":13,"palettes":[{"name":"One Dark","dark":true,"colors":{"add_bg":"#112233","del_bg":"nope"}}]}""",
+            """{"t":"ready","bridge":1,"protocol":14,"palettes":[{"name":"One Dark","dark":true,"colors":{"add_bg":"#112233","del_bg":"nope"}}]}""",
         ) as ServerMessage.Ready
         assertEquals("#112233", r.palettes.dark["add_bg"])
         assertEquals(Palettes.FALLBACK.dark["del_bg"], r.palettes.dark["del_bg"])
+    }
+
+    @Test fun aViewPastTheServersCapListsNamesOnly() {
+        val raw = checkNotNull(javaClass.getResource("/phone_diff_large.json")).readText()
+        val d = (Control.parse(raw) as ServerMessage.DiffAnswer).diff
+        assertEquals(DiffScope.Uncommitted, d.scope)
+        assertEquals(1234, d.tooLarge)
+        assertEquals(listOf("a/b.rs", "c.txt"), d.files.map { it.path })
+        assertTrue(d.files.all { it.hunks.isEmpty() })
+    }
+
+    @Test fun theCommitListAndItsScopeWords() {
+        val raw = checkNotNull(javaClass.getResource("/phone_commits.json")).readText()
+        val c = (Control.parse(raw) as ServerMessage.CommitsAnswer).list
+        assertEquals("w1", c.ws)
+        assertTrue(c.more)
+        assertFalse(c.noBase)
+        assertEquals(listOf("0123456", "89abcde"), c.commits.map { it.short })
+        assertEquals("fix the thing", c.commits[0].subject)
+        assertEquals(1_760_000_000L, c.commits[0].whenSecs)
+        assertEquals("0123456789abcdef0123456789abcdef01234567", c.commits[0].sha)
+        assertFalse(c.toString().contains("fix the thing"))
+        assertEquals(DiffScope.Commit("abc1234"), DiffScope.parse("commit:abc1234"))
+        assertEquals("commit:abc1234", DiffScope.Commit("abc1234").word)
+        assertNull(DiffScope.parse("branch:main"))
+    }
+
+    @Test fun anErrorSaysWhichAskItAnswers() {
+        val e = Control.parse("""{"t":"error","code":"unsupported","msg":"busy: wait","ask":"diff","ws":"w1","scope":"uncommitted"}""") as ServerMessage.Error
+        assertEquals(Triple("diff", "w1", "uncommitted"), Triple(e.ask, e.ws, e.scope))
+        val old = Control.parse("""{"t":"error","code":"read_only","msg":"m"}""") as ServerMessage.Error
+        assertNull(old.ask)
     }
 }

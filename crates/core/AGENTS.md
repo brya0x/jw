@@ -12,13 +12,14 @@ depends on nothing of jw's.
 | `src/layout.rs` | `Node`, the layout as written in TOML (`:14`), and `Tree<L>`, the live split tree with every operation the daemon applies (`:155`) |
 | `src/session.rs` | named sessions: `current` (`:26`), `create` (`:206`), `rename` (`:66`), `list` (`:189`); their files live in `sessions/<name>/` |
 | `src/folders.rs` | a session's folders: `load` (`:115`), `edit` (`:149`), `entry_for` (`:172`) |
+| `src/program.rs` | which foreground programs are agents: `is_agent_program`, `is_agent_pane` (addendum 17) |
 | `src/stream.rs` | what opening a workspace starts: `Stream` (`:19`), its panes, env, `Stamp` (whether a resolved one is still fresh), the agent's command with `--session-id` and hooks (`hooks`, `:323`), nvim's `--listen` (`listen`, `:292`) |
 | `src/actions.rs` | worktrees: `new_stream` (`:85`), `rename` (`:198`), `rm_plan`/`rm` (`:333`/`:361`), `sync` (`:436`), `done_plan` (`:490`) |
 | `src/connectors/git.rs`, `github.rs` | git through the `git` binary, plus `head_of` (`:298`), which reads `.git` without running anything; PRs through `gh` |
 | `src/ago.rs` | an age in words ("2 min ago") for lists of devices |
 | `src/sidebar.rs` | a session's workspaces grouped as the sidebar shows them (`rows`), and the items and session counts the phone is told (`items`, `sessions`) |
 | `src/qr.rs` | a QR code as a grid of modules with a quiet zone, and its half-block cells (`cells`); the CLI and the TUI each draw them |
-| `src/diff.rs` | a worktree's changes against its base, for the diff viewer and (`report`, within the phone's limits) for the bridge's `diff` answer. git runs bounded (`Bounds`: output, deadline, file size), with a clean environment and no textconv or fsmonitor; an untracked file is read only if it is a regular file, never through a symlink |
+| `src/diff.rs` | a worktree's changes in one `Scope` (General, Uncommitted, a commit: addendum 19) and its `commits`, for the diff viewer and, within the phone's limits (`report`, `commit_report`, `Pick`), for the bridge's `diff` and `commits` answers. Every git call goes through `git_bounded`/`git_capped` (`Bounds`: output, deadline, file size; clean environment, no textconv or fsmonitor, filter drivers off, its own process group, cancelled with the phone); an untracked file is read only if it is a regular file, never through a symlink (`read_beneath`). Past `DIFF_CAP` a view lists its files only (`Loaded::TooLarge`) |
 | `src/init.rs` | drafting a project config (`detect`), and `write_project`, the `.jw.toml` of the setup step |
 
 ## Keep in mind

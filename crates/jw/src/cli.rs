@@ -14,8 +14,11 @@ use anyhow::{Context, Result, bail};
 use crate::actions::{self, NewOptions, Project};
 use crate::client::Client;
 use crate::core::registry::{self, Entry, Registry};
-use crate::layout::Rect;
-use crate::proto::{AgentState, ClientMsg, DaemonMsg, PROTOCOL, PaneInfo, socket_path};
+use crate::layout::{Dir, Rect};
+use crate::program;
+use crate::proto::{
+    AgentState, ClientMsg, DaemonMsg, NewPane, PROTOCOL, PaneId, PaneInfo, PaneLeaf, socket_path,
+};
 use crate::stream::{PaneSpec, Stream};
 
 /// Panes started without a TUI get this size; the TUI resizes them when it
@@ -26,20 +29,341 @@ const ROWS: u16 = 48;
 /// How long `prompt` waits for the agent to settle and take the text.
 const PROMPT_TIMEOUT: Duration = Duration::from_secs(40);
 
-pub fn prompt(args: &[String]) -> Result<()> {
-    let [name, words @ ..] = args else {
-        bail!("usage: jw prompt <workspace> <text>");
+const PROMPT_USAGE: &str = "usage: jw prompt <workspace> [--pane <id>] [--tag] [--] <text>";
+
+struct PromptArgs {
+    name: String,
+    pane: Option<PaneId>,
+    tag: bool,
+    text: String,
+}
+
+/// `<workspace> [--pane <id>] [--tag] [--] <text>` (REQ-247): the options are
+/// read only before the text, whose first word ends them. Any other word,
+/// even one starting with `-`, is text, as it was before `--pane`.
+fn parse_prompt(args: &[String]) -> Result<PromptArgs> {
+    let [name, rest @ ..] = args else {
+        bail!(PROMPT_USAGE);
     };
-    let text = words.join(" ");
-    if text.trim().is_empty() {
-        bail!("usage: jw prompt <workspace> <text>");
+    let (mut pane, mut tag) = (None, false);
+    let mut rest = rest;
+    loop {
+        match rest {
+            [flag, id, tail @ ..] if flag == "--pane" => {
+                pane = Some(id.parse().map_err(|_| anyhow::anyhow!(PROMPT_USAGE))?);
+                rest = tail;
+            }
+            [flag] if flag == "--pane" => bail!(PROMPT_USAGE),
+            [flag, tail @ ..] if flag == "--tag" => {
+                tag = true;
+                rest = tail;
+            }
+            [flag, tail @ ..] if flag == "--" => {
+                rest = tail;
+                break;
+            }
+            _ => break,
+        }
     }
-    let entry = find(name)?.entry;
+    let text = rest.join(" ");
+    if text.trim().is_empty() {
+        bail!(PROMPT_USAGE);
+    }
+    Ok(PromptArgs {
+        name: name.clone(),
+        pane,
+        tag,
+        text: text.trim().to_string(),
+    })
+}
+
+/// The text with who sent it (REQ-255): `[jw: <JW_NAME>, pane <JW_PANE_ID>] `.
+fn tagged(text: &str, name: Option<&str>, pane: Option<&str>) -> String {
+    match (name, pane) {
+        (Some(name), Some(pane)) => format!("[jw: {name}, pane {pane}] {text}"),
+        (Some(name), None) => format!("[jw: {name}] {text}"),
+        _ => text.to_string(),
+    }
+}
+
+/// REQ-253: the prompt waits for its pane to be quiet, and ours is running this.
+fn is_own_pane(pane: Option<PaneId>, me: Option<&str>) -> bool {
+    pane.is_some_and(|p| me == Some(p.to_string().as_str()))
+}
+
+pub fn prompt(args: &[String]) -> Result<()> {
+    let PromptArgs {
+        name,
+        pane,
+        tag,
+        mut text,
+    } = parse_prompt(args)?;
+    let me = std::env::var("JW_PANE_ID").ok();
+    if is_own_pane(pane, me.as_deref()) {
+        bail!("that is the pane you run in: it would wait for itself");
+    }
+    if tag {
+        let who = std::env::var("JW_NAME").ok();
+        text = tagged(&text, who.as_deref(), me.as_deref());
+    }
+    let entry = find(&name)?.entry;
     let mut c = Client::connect(&socket_path())
         .with_context(|| format!("{} is not open: no jw daemon is running", entry.name))?;
     hello(&mut c)?;
-    send_prompt(&mut c, &entry, text.trim())?;
-    println!("sent to {}'s agent", entry.name);
+    send_prompt(&mut c, &entry, pane, &text)?;
+    match pane {
+        Some(p) => println!("sent to pane {p} of {}", entry.name),
+        None => println!("sent to {}'s agent", entry.name),
+    }
+    Ok(())
+}
+
+const PANE_USAGE: &str = "usage: jw pane open <workspace> --run <program|shell|view:diff|view:md:<file>> \
+                          [--split right|down] [--of <pane>]\n       \
+                          jw pane close <workspace> <pane> [--force]\n       \
+                          jw pane ls <workspace> [--json]";
+
+/// What `--run` starts: the role and the command of the new pane (REQ-207, REQ-208).
+/// `view:*` has no process; anything else but `shell` runs through `sh -c`.
+fn run_target(what: &str, cwd: &Path) -> Result<(String, Option<String>)> {
+    match what {
+        "shell" => Ok(("shell".into(), None)),
+        "view:diff" => Ok((what.into(), None)),
+        w if w.starts_with("view:md:") => {
+            let file = &w["view:md:".len()..];
+            if file.is_empty() {
+                bail!("view:md: needs a file: view:md:<file>");
+            }
+            // The TUI reads it against the workspace it shows, not our directory.
+            let path = cwd.join(file);
+            // A viewer of a missing file would show `starting…` for good.
+            if !path.is_file() {
+                bail!("{} is not a file", path.display());
+            }
+            Ok((format!("view:md:{}", path.display()), None))
+        }
+        w if w.starts_with("view:") => bail!("unknown viewer {w:?}: view:diff or view:md:<file>"),
+        "" => bail!("--run needs a program"),
+        w => Ok(("run".into(), Some(w.to_string()))),
+    }
+}
+
+/// The pane a split goes beside: the one asked for, else the agent's, else
+/// the last of the tree (REQ-220).
+fn anchor(leaves: &[&PaneLeaf], of: Option<PaneId>) -> Result<PaneId> {
+    match of {
+        Some(id) if leaves.iter().any(|l| l.id == id) => Ok(id),
+        Some(id) => bail!("no pane {id} in the workspace (jw pane ls lists them)"),
+        None => leaves
+            .iter()
+            .find(|l| l.role == "agent")
+            .or(leaves.last())
+            .map(|l| l.id)
+            .context("the workspace has no pane"),
+    }
+}
+
+/// The workspace's tree, through an Attach. A workspace the daemon doesn't
+/// run sends nothing, which is how it is told apart.
+fn attach_tree(c: &mut Client, ws: &Ws) -> Result<crate::layout::Tree<PaneLeaf>> {
+    c.send(&ClientMsg::Attach {
+        stream: ws.entry.id.clone(),
+    })?;
+    loop {
+        match next(c).with_context(|| format!("{} is not open", ws.label))? {
+            DaemonMsg::Tree { stream, tree } if stream == ws.entry.id => return Ok(tree),
+            DaemonMsg::Error { msg } => bail!("{msg}"),
+            _ => {}
+        }
+    }
+}
+
+/// A connection to the daemon that is already running, past the Hello.
+fn connect_to(ws: &Ws) -> Result<Client> {
+    let mut c = Client::connect(&socket_path())
+        .with_context(|| format!("{} is not open: no jw daemon is running", ws.label))?;
+    hello(&mut c)?;
+    Ok(c)
+}
+
+/// `jw pane open|close|ls`: what an agent does to a workspace's panes.
+pub fn pane(args: &[String]) -> Result<()> {
+    match args.split_first() {
+        Some((v, rest)) if v == "open" => pane_open(rest),
+        Some((v, rest)) if v == "close" => pane_close(rest),
+        Some((v, rest)) if v == "ls" => pane_ls(rest),
+        _ => bail!("{PANE_USAGE}"),
+    }
+}
+
+fn pane_open(args: &[String]) -> Result<()> {
+    let (mut name, mut run, mut dir, mut of) = (None, None, Dir::Right, None);
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--run" => run = Some(it.next().context("--run needs what to run")?.clone()),
+            "--split" => {
+                dir = match it.next().map(String::as_str) {
+                    Some("right") => Dir::Right,
+                    Some("down") => Dir::Down,
+                    _ => bail!("--split is right or down"),
+                }
+            }
+            "--of" => {
+                of = Some(
+                    it.next()
+                        .and_then(|n| n.parse::<PaneId>().ok())
+                        .context("--of needs a pane id")?,
+                )
+            }
+            s if s.starts_with('-') => bail!("unknown flag {s}"),
+            s if name.is_none() => name = Some(s.to_string()),
+            s => bail!("unexpected argument {s:?}"),
+        }
+    }
+    let (Some(name), Some(run)) = (name, run) else {
+        bail!("{PANE_USAGE}");
+    };
+    let ws = find(&name)?;
+    let (role, cmd) = run_target(&run, &std::env::current_dir()?)?;
+    let mut c = connect_to(&ws)?;
+    let tree = attach_tree(&mut c, &ws)?;
+    let beside = anchor(&tree.leaves(), of)?;
+    let stream = Stream::resolve(&ws.entry)?;
+    let _ = c.send(&ClientMsg::Detach);
+    c.send(&ClientMsg::Split {
+        pane: beside,
+        dir,
+        new: NewPane {
+            role,
+            cmd,
+            resume: None,
+            cwd: PathBuf::from(&ws.entry.path),
+            env: stream.env(),
+            cols: 80,
+            rows: 24,
+        },
+    })?;
+    c.set_read_timeout(Some(Duration::from_secs(10)))?;
+    loop {
+        match next(&mut c)? {
+            DaemonMsg::Opened { pane } => {
+                println!("{pane}");
+                return Ok(());
+            }
+            DaemonMsg::Error { msg } => bail!("{msg}"),
+            _ => {}
+        }
+    }
+}
+
+fn pane_close(args: &[String]) -> Result<()> {
+    let mut force = false;
+    let mut words = Vec::new();
+    for a in args {
+        match a.as_str() {
+            "--force" => force = true,
+            s if s.starts_with('-') => bail!("unknown flag {s}"),
+            s => words.push(s),
+        }
+    }
+    let [name, id] = words[..] else {
+        bail!("{PANE_USAGE}");
+    };
+    let id: PaneId = id
+        .parse()
+        .context("the pane is its id: jw pane ls lists them")?;
+    let ws = find(name)?;
+    let mut c = connect_to(&ws)?;
+    let tree = attach_tree(&mut c, &ws)?;
+    let leaves = tree.leaves();
+    if !leaves.iter().any(|l| l.id == id) {
+        bail!("no pane {id} in {} (jw pane ls lists them)", ws.label);
+    }
+    // Closing the last pane closes the workspace; closing your own ends you.
+    if leaves.len() == 1 && !force {
+        bail!(
+            "pane {id} is the last of {}: --force closes the workspace",
+            ws.label
+        );
+    }
+    if !force && std::env::var("JW_PANE_ID").is_ok_and(|me| me == id.to_string()) {
+        bail!("pane {id} is the one you run in: --force closes it");
+    }
+    c.send(&ClientMsg::Kill { pane: id })?;
+    // The last pane's workspace closes with it, and no Tree follows.
+    if leaves.len() == 1 {
+        return Ok(());
+    }
+    c.set_read_timeout(Some(Duration::from_secs(5)))?;
+    loop {
+        match next(&mut c)? {
+            DaemonMsg::Tree { stream, tree } if stream == ws.entry.id => {
+                if !tree.leaves().iter().any(|l| l.id == id) {
+                    return Ok(());
+                }
+            }
+            DaemonMsg::Error { msg } => bail!("{msg}"),
+            _ => {}
+        }
+    }
+}
+
+fn pane_ls(args: &[String]) -> Result<()> {
+    let mut json = false;
+    let mut name = None;
+    for a in args {
+        match a.as_str() {
+            "--json" => json = true,
+            s if s.starts_with('-') => bail!("unknown flag {s}"),
+            s if name.is_none() => name = Some(s),
+            s => bail!("unexpected argument {s:?}"),
+        }
+    }
+    let ws = find(name.context(PANE_USAGE)?)?;
+    let mut c = connect_to(&ws)?;
+    let tree = attach_tree(&mut c, &ws)?;
+    let _ = c.send(&ClientMsg::Detach);
+    c.send(&ClientMsg::List)?;
+    let infos = loop {
+        match next(&mut c)? {
+            DaemonMsg::Panes { panes } => break panes,
+            DaemonMsg::Error { msg } => bail!("{msg}"),
+            _ => {}
+        }
+    };
+    let rows: Vec<serde_json::Value> = tree
+        .leaves()
+        .into_iter()
+        .map(|l| {
+            let info = infos.iter().find(|p| p.pane == l.id);
+            serde_json::json!({
+                "id": l.id,
+                "role": l.role,
+                "name": l.name,
+                "program": info.and_then(|p| p.fg.as_ref()),
+                "exited": info.and_then(|p| p.exited),
+            })
+        })
+        .collect();
+    if json {
+        println!("{}", serde_json::to_string_pretty(&rows)?);
+        return Ok(());
+    }
+    for r in &rows {
+        let role = r["role"].as_str().unwrap_or_default();
+        let status = match r["exited"].as_i64() {
+            Some(n) => format!("exited {n}"),
+            None if crate::proto::is_view(role) => "viewer".to_string(),
+            None => "running".to_string(),
+        };
+        println!(
+            "{:<6} {:<12} {:<14} {status}",
+            r["id"],
+            role,
+            r["program"].as_str().unwrap_or("-"),
+        );
+    }
     Ok(())
 }
 
@@ -195,7 +519,7 @@ pub fn worktree(args: &[String]) -> Result<()> {
     open(&mut c, &stream)?;
     eprintln!("opened {}", entry.name);
     if let Some(task) = task {
-        send_prompt(&mut c, &entry, &task)?;
+        send_prompt(&mut c, &entry, None, &task)?;
         eprintln!("task sent to {}'s agent", entry.name);
     }
     Ok(())
@@ -261,10 +585,11 @@ fn open(c: &mut Client, stream: &Stream) -> Result<()> {
     stream.mark_opened()
 }
 
-fn send_prompt(c: &mut Client, entry: &Entry, text: &str) -> Result<()> {
+fn send_prompt(c: &mut Client, entry: &Entry, pane: Option<PaneId>, text: &str) -> Result<()> {
     c.send(&ClientMsg::Prompt {
         stream: entry.id.clone(),
         text: text.to_string(),
+        pane,
     })?;
     c.set_read_timeout(Some(PROMPT_TIMEOUT))?;
     loop {
@@ -393,7 +718,8 @@ fn next(c: &mut Client) -> Result<DaemonMsg> {
 
 /// What a workspace's panes say: its agent's state and the sidebar marks.
 fn state_of(panes: &[&PaneInfo]) -> (&'static str, String) {
-    let guess = |p: &&&PaneInfo| p.agent.is_none() && p.role == "agent";
+    let guess =
+        |p: &&&PaneInfo| p.agent.is_none() && program::is_agent_pane(&p.role, p.fg.as_deref());
     let working = panes
         .iter()
         .any(|p| p.agent == Some(AgentState::Working) || (guess(&p) && p.busy));
@@ -449,6 +775,10 @@ pub fn ls(args: &[String]) -> Result<()> {
                 "state": state,
                 "marks": marks,
                 "panes": mine.iter().map(|p| p.role.clone()).collect::<Vec<_>>(),
+                "programs": mine
+                    .iter()
+                    .filter_map(|p| Some(serde_json::json!({"role": p.role, "program": p.fg.as_ref()?})))
+                    .collect::<Vec<_>>(),
             })
         })
         .collect();
@@ -472,7 +802,7 @@ pub fn ls(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// `jw read <workspace> [--pane <role>] [--lines N]`: the last lines of a
+/// `jw read <workspace> [--pane <role|program>] [--lines N]`: the last lines of a
 /// pane (the agent's by default), scrollback included, as text (REQ-66).
 pub fn read(args: &[String]) -> Result<()> {
     let mut name = None;
@@ -481,7 +811,7 @@ pub fn read(args: &[String]) -> Result<()> {
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
-            "--pane" => role = Some(it.next().context("--pane needs a role")?.clone()),
+            "--pane" => role = Some(it.next().context("--pane needs a role or program")?.clone()),
             "--lines" => {
                 lines = it
                     .next()
@@ -494,7 +824,7 @@ pub fn read(args: &[String]) -> Result<()> {
             s => bail!("unexpected argument {s:?}"),
         }
     }
-    let name = name.context("usage: jw read <workspace> [--pane <role>] [--lines N]")?;
+    let name = name.context("usage: jw read <workspace> [--pane <role|program>] [--lines N]")?;
     let ws = find(&name)?;
     let panes = daemon_panes()?;
     let mine: Vec<&PaneInfo> = panes.iter().filter(|p| p.stream == ws.entry.id).collect();
@@ -502,19 +832,32 @@ pub fn read(args: &[String]) -> Result<()> {
         bail!("{} is not open", ws.label);
     }
     let pane = match &role {
-        Some(r) => mine.iter().find(|p| p.role == *r),
+        Some(r) => mine
+            .iter()
+            .find(|p| p.role == *r)
+            .or_else(|| mine.iter().find(|p| p.fg.as_deref() == Some(r))),
         None => mine
             .iter()
             .find(|p| p.role == "agent")
+            .or_else(|| {
+                mine.iter()
+                    .find(|p| program::is_agent_pane(&p.role, p.fg.as_deref()))
+            })
             .or_else(|| mine.first()),
     }
     .with_context(|| {
-        let roles: Vec<&str> = mine.iter().map(|p| p.role.as_str()).collect();
+        let names: Vec<String> = mine
+            .iter()
+            .map(|p| match &p.fg {
+                Some(fg) if *fg != p.role => format!("{} ({fg})", p.role),
+                _ => p.role.clone(),
+            })
+            .collect();
         format!(
             "{} has no pane {}: {}",
             ws.label,
             role.as_deref().unwrap_or_default(),
-            roles.join(", ")
+            names.join(", ")
         )
     })?
     .pane;
@@ -576,6 +919,97 @@ fn text_of(rows: u16, cols: u16, bytes: &[u8], n: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn words(w: &str) -> Vec<String> {
+        w.split(' ').map(String::from).collect()
+    }
+
+    /// REQ-247, REQ-252: the options come before the text and only there.
+    #[test]
+    fn prompt_options_end_at_the_first_word_of_the_text() {
+        let a = parse_prompt(&words("ws --pane 2 --tag fix it")).unwrap();
+        assert_eq!((a.pane, a.tag, a.text.as_str()), (Some(2), true, "fix it"));
+        let a = parse_prompt(&words("ws fix it --pane 2")).unwrap();
+        assert_eq!(
+            (a.pane, a.tag, a.text.as_str()),
+            (None, false, "fix it --pane 2")
+        );
+        let a = parse_prompt(&words("ws -- --pane x")).unwrap();
+        assert_eq!((a.pane, a.text.as_str()), (None, "--pane x"));
+        let a = parse_prompt(&words("ws --foo bar")).unwrap();
+        assert_eq!(a.text, "--foo bar");
+        for bad in [
+            "ws --pane",
+            "ws --pane x hi",
+            "ws --pane 2",
+            "ws --",
+            "ws",
+            "",
+        ] {
+            let e = parse_prompt(&words(bad)).err().map(|e| e.to_string());
+            assert!(
+                e.is_some_and(|e| e.starts_with("usage: jw prompt")),
+                "{bad:?}"
+            );
+        }
+    }
+
+    /// REQ-253.
+    #[test]
+    fn the_pane_you_run_in_is_not_a_target() {
+        assert!(is_own_pane(Some(4), Some("4")));
+        assert!(!is_own_pane(Some(4), Some("5")));
+        assert!(!is_own_pane(Some(4), None));
+        assert!(!is_own_pane(None, Some("4")));
+    }
+
+    /// REQ-255.
+    #[test]
+    fn a_tag_names_who_sent_the_text() {
+        assert_eq!(tagged("hi", Some("w"), Some("4")), "[jw: w, pane 4] hi");
+        assert_eq!(tagged("hi", Some("w"), None), "[jw: w] hi");
+        assert_eq!(tagged("hi", None, Some("4")), "hi");
+    }
+
+    #[test]
+    fn run_maps_to_a_role_and_a_command() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("docs")).unwrap();
+        std::fs::write(dir.path().join("docs/a.md"), "# a").unwrap();
+        let cwd = dir.path();
+        assert_eq!(run_target("shell", cwd).unwrap(), ("shell".into(), None));
+        assert_eq!(
+            run_target("view:diff", cwd).unwrap(),
+            ("view:diff".into(), None)
+        );
+        assert_eq!(
+            run_target("view:md:docs/a.md", cwd).unwrap(),
+            (format!("view:md:{}/docs/a.md", cwd.display()), None)
+        );
+        assert!(run_target("view:md:docs/missing.md", cwd).is_err());
+        assert_eq!(
+            run_target("npm test", cwd).unwrap(),
+            ("run".into(), Some("npm test".into()))
+        );
+        assert!(run_target("view:md:", cwd).is_err());
+        assert!(run_target("view:nope", cwd).is_err());
+        assert!(run_target("", cwd).is_err());
+    }
+
+    #[test]
+    fn a_split_goes_beside_the_agent_else_the_last_pane() {
+        let leaf = |id, role: &str| PaneLeaf {
+            id,
+            role: role.into(),
+            name: None,
+        };
+        let (a, b, c) = (leaf(1, "shell"), leaf(2, "agent"), leaf(3, "run"));
+        assert_eq!(anchor(&[&a, &b, &c], None).unwrap(), 2);
+        assert_eq!(anchor(&[&a, &c], None).unwrap(), 3);
+        assert_eq!(anchor(&[&a, &b, &c], Some(3)).unwrap(), 3);
+        assert!(anchor(&[&a, &b], Some(9)).is_err());
+        assert!(anchor(&[], None).is_err());
+    }
 
     #[test]
     fn read_takes_the_last_lines_with_the_scrollback() {

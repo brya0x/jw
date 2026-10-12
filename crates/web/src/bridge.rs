@@ -175,8 +175,47 @@ pub enum Query {
     Workspaces(String),
     /// Every session.
     Sessions,
-    /// A workspace's changes against its base, by workspace id (REQ-13).
-    Diff(String),
+    /// A workspace's changes in one view, by workspace id (REQ-13).
+    Diff(String, DiffScope),
+    /// The commits of a workspace's branch, by workspace id, for the Commits view.
+    Commits(String),
+}
+
+/// Which changes of a workspace a phone asks for: the TUI's three views. This crate cannot depend on
+/// core, so the daemon maps it to core's own.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DiffScope {
+    /// Committed work against the base.
+    General,
+    /// Staged, unstaged and untracked.
+    Uncommitted,
+    /// One commit, by its hex id (7 to 40 digits, from the `commits` answer).
+    Commit(String),
+}
+
+impl DiffScope {
+    /// `general`, `uncommitted` or `commit:<hex>`; anything else is not a scope. The id is checked here, before
+    /// it can reach git.
+    fn parse(text: &str) -> Option<DiffScope> {
+        match text {
+            "general" => Some(DiffScope::General),
+            "uncommitted" => Some(DiffScope::Uncommitted),
+            _ => {
+                let sha = text.strip_prefix("commit:")?;
+                let ok =
+                    (7..=40).contains(&sha.len()) && sha.bytes().all(|b| b.is_ascii_hexdigit());
+                ok.then(|| DiffScope::Commit(sha.to_ascii_lowercase()))
+            }
+        }
+    }
+
+    fn word(&self) -> String {
+        match self {
+            DiffScope::General => "general".into(),
+            DiffScope::Uncommitted => "uncommitted".into(),
+            DiffScope::Commit(sha) => format!("commit:{sha}"),
+        }
+    }
 }
 
 /// Answers a `Query` with its items, or why not. Like `Look`, the daemon hands
@@ -938,9 +977,10 @@ fn relay(
                     Message::Text(text) => {
                         let refusal = match serde_json::from_str::<Ask>(&text) {
                             Ok(ask) => start_ask(shared, later, ask),
-                            Err(_) => {
-                                Some(error("unsupported", "ask workspaces, sessions or diff"))
-                            }
+                            Err(_) => Some(error(
+                                "unsupported",
+                                "ask workspaces, sessions, diff or commits",
+                            )),
                         };
                         if let Some(refusal) = refusal {
                             ws.send(refusal)?;
@@ -961,9 +1001,18 @@ fn relay(
 #[derive(Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 enum Ask {
-    Workspaces { session: Option<String> },
+    Workspaces {
+        session: Option<String>,
+    },
     Sessions,
-    Diff { ws: String },
+    /// `scope`: `general` (the default), `uncommitted` or `commit:<hex>`.
+    Diff {
+        ws: String,
+        scope: Option<String>,
+    },
+    Commits {
+        ws: String,
+    },
 }
 
 /// Which of a phone's seats an answer takes.
@@ -1007,24 +1056,43 @@ impl Drop for Release {
 /// through `later`, with `t` and the ask's own fields in it. `Some` is the
 /// refusal to send now, because that kind has its seats full.
 fn start_ask(shared: &Shared, later: &Later, ask: Ask) -> Option<Message> {
-    let (query, tag, field): (Query, &'static str, (&'static str, String)) = match ask {
+    // The ask's own fields, echoed in its answer and in its error, so the phone can tell which ask an answer is for.
+    let (query, tag, fields): (Query, &'static str, Vec<(&'static str, String)>) = match ask {
         Ask::Workspaces { session } => {
             let session = session.unwrap_or_else(|| "main".into());
             (
                 Query::Workspaces(session.clone()),
                 "workspaces",
-                ("session", session),
+                vec![("session", session)],
             )
         }
-        Ask::Sessions => (Query::Sessions, "sessions", ("", String::new())),
-        Ask::Diff { ws } => (Query::Diff(ws.clone()), "diff", ("ws", ws)),
+        Ask::Sessions => (Query::Sessions, "sessions", Vec::new()),
+        Ask::Diff { ws, scope } => {
+            let word = scope.unwrap_or_else(|| "general".into());
+            let Some(parsed) = DiffScope::parse(&word) else {
+                return Some(error_for(
+                    "diff",
+                    &[("ws", ws)],
+                    "unsupported",
+                    "scope is general, uncommitted or commit:<hex id>",
+                ));
+            };
+            (
+                Query::Diff(ws.clone(), parsed.clone()),
+                "diff",
+                vec![("ws", ws), ("scope", parsed.word())],
+            )
+        }
+        Ask::Commits { ws } => (Query::Commits(ws.clone()), "commits", vec![("ws", ws)]),
     };
     let seat = match query {
-        Query::Diff(_) => Seat::Diff(later.diff.clone()),
+        Query::Diff(..) | Query::Commits(_) => Seat::Diff(later.diff.clone()),
         _ => Seat::List(later.lists.clone()),
     };
     if !seat.take() {
-        return Some(error(
+        return Some(error_for(
+            tag,
+            &fields,
             "unsupported",
             "busy: wait for the answer before asking again",
         ));
@@ -1037,14 +1105,14 @@ fn start_ask(shared: &Shared, later: &Later, ask: Ask) -> Option<Message> {
         let reply = match result {
             Ok(Ok(serde_json::Value::Object(mut obj))) => {
                 obj.insert("t".into(), tag.into());
-                if !field.0.is_empty() {
-                    obj.insert(field.0.into(), field.1.into());
+                for (k, v) in fields {
+                    obj.insert(k.into(), v.into());
                 }
                 Message::text(serde_json::Value::Object(obj).to_string())
             }
-            Ok(Ok(_)) => error("unsupported", "the answer is not an object"),
-            Ok(Err(why)) => error("unsupported", &why),
-            Err(_) => error("unsupported", "that could not be answered"),
+            Ok(Ok(_)) => error_for(tag, &fields, "unsupported", "the answer is not an object"),
+            Ok(Err(why)) => error_for(tag, &fields, "unsupported", &why),
+            Err(_) => error_for(tag, &fields, "unsupported", "that could not be answered"),
         };
         let _ = tx.send(reply);
     });
@@ -1136,6 +1204,16 @@ fn refuse(ws: &mut WebSocket<Conn>, code: &str, msg: &str) -> Result<(), WsError
     let _ = ws.close(None);
     let _ = ws.flush();
     Ok(())
+}
+
+/// An error that says which ask it answers (`ask` and the ask's own fields, additive to `error`'s): an
+/// error has no request id, and a phone with a diff and a commit list in flight needs to know whose it is.
+fn error_for(ask: &str, fields: &[(&str, String)], code: &str, msg: &str) -> Message {
+    let mut v = serde_json::json!({ "t": "error", "code": code, "msg": msg, "ask": ask });
+    for (k, val) in fields {
+        v[*k] = val.clone().into();
+    }
+    Message::text(v.to_string())
 }
 
 fn error(code: &str, msg: &str) -> Message {
@@ -1237,8 +1315,10 @@ mod tests {
                     Query::Sessions => {
                         Ok(serde_json::json!({ "items": [{ "name": "main", "workspaces": 1 }] }))
                     }
-                    Query::Diff(id) if id == "boom" => panic!("a bug in the diff"),
-                    Query::Diff(id) if id == "hang" => {
+                    Query::Diff(id, _) | Query::Commits(id) if id == "boom" => {
+                        panic!("a bug in the diff")
+                    }
+                    Query::Diff(id, _) if id == "hang" => {
                         // Works until its phone is gone, like git would.
                         while !cancel.load(Ordering::SeqCst) {
                             thread::sleep(Duration::from_millis(10));
@@ -1246,8 +1326,13 @@ mod tests {
                         WENT.store(true, Ordering::SeqCst);
                         Err("cancelled".into())
                     }
-                    Query::Diff(id) if id == "nope" => Err("no workspace nope".into()),
-                    Query::Diff(id) => {
+                    Query::Diff(id, _) | Query::Commits(id) if id == "nope" => {
+                        Err("no workspace nope".into())
+                    }
+                    Query::Commits(_) => {
+                        Ok(serde_json::json!({ "commits": [], "more": false, "no_base": false }))
+                    }
+                    Query::Diff(id, _) => {
                         if id == "slow" {
                             thread::sleep(Duration::from_millis(700));
                         }
@@ -1873,6 +1958,110 @@ mod tests {
             v["msg"].as_str().unwrap().contains("no workspace nope"),
             "{v}"
         );
+    }
+
+    #[test]
+    fn a_diff_says_which_view_it_is_and_a_bad_view_never_reaches_the_lister() {
+        let r = rig(Opts::default());
+        let mut p = phone(&r.bridge);
+        login(&mut p, &enrol(&r, "a"));
+        for (asked, echoed) in [
+            (None, "general"),
+            (Some("general"), "general"),
+            (Some("uncommitted"), "uncommitted"),
+            (Some("commit:ABCDEF1"), "commit:abcdef1"),
+        ] {
+            let mut ask = serde_json::json!({ "t": "diff", "ws": "w1" });
+            if let Some(scope) = asked {
+                ask["scope"] = scope.into();
+            }
+            say(&mut p, ask);
+            let v = json(&mut p);
+            assert_eq!(
+                (v["t"].as_str(), v["scope"].as_str()),
+                (Some("diff"), Some(echoed)),
+                "{v}"
+            );
+        }
+        // Not a hex id, too short, too long, an option, a path, another word: refused here, before git.
+        for bad in [
+            "commit:zz12345",
+            "commit:abc123",
+            &format!("commit:{}", "a".repeat(41)),
+            "commit:--output=x",
+            "commit:../../x",
+            "commit:",
+            "branch:main",
+            "",
+        ] {
+            say(
+                &mut p,
+                serde_json::json!({ "t": "diff", "ws": "w1", "scope": bad }),
+            );
+            let v = json(&mut p);
+            assert_eq!(
+                (v["t"].as_str(), v["code"].as_str(), v["ask"].as_str()),
+                (Some("error"), Some("unsupported"), Some("diff")),
+                "{bad}: {v}"
+            );
+            assert_eq!(v["ws"], "w1");
+        }
+    }
+
+    #[test]
+    fn an_error_says_which_ask_it_answers() {
+        let r = rig(Opts::default());
+        let mut p = phone(&r.bridge);
+        login(&mut p, &enrol(&r, "a"));
+        say(
+            &mut p,
+            serde_json::json!({ "t": "diff", "ws": "nope", "scope": "uncommitted" }),
+        );
+        let v = json(&mut p);
+        assert_eq!(
+            (v["ask"].as_str(), v["ws"].as_str(), v["scope"].as_str()),
+            (Some("diff"), Some("nope"), Some("uncommitted")),
+            "{v}"
+        );
+        say(&mut p, serde_json::json!({ "t": "commits", "ws": "nope" }));
+        let v = json(&mut p);
+        assert_eq!(
+            (v["ask"].as_str(), v["ws"].as_str()),
+            (Some("commits"), Some("nope")),
+            "{v}"
+        );
+        say(
+            &mut p,
+            serde_json::json!({ "t": "workspaces", "session": "nope" }),
+        );
+        let v = json(&mut p);
+        assert_eq!(v["ask"], "workspaces", "{v}");
+    }
+
+    #[test]
+    fn commits_are_answered_and_share_the_diff_seat() {
+        let r = rig(Opts::default());
+        let mut p = phone(&r.bridge);
+        login(&mut p, &enrol(&r, "a"));
+        say(&mut p, serde_json::json!({ "t": "commits", "ws": "w1" }));
+        let v = json(&mut p);
+        assert_eq!(
+            (v["t"].as_str(), v["ws"].as_str()),
+            (Some("commits"), Some("w1")),
+            "{v}"
+        );
+        assert_eq!(v["commits"], serde_json::json!([]));
+        // One thing that runs git at a time: a commit list while a diff runs is `busy`, and says it is the list's.
+        say(&mut p, serde_json::json!({ "t": "diff", "ws": "slow" }));
+        say(&mut p, serde_json::json!({ "t": "commits", "ws": "w1" }));
+        let v = json(&mut p);
+        assert_eq!(
+            (v["code"].as_str(), v["ask"].as_str()),
+            (Some("unsupported"), Some("commits")),
+            "{v}"
+        );
+        assert!(v["msg"].as_str().unwrap().starts_with("busy"), "{v}");
+        assert_eq!(json(&mut p)["t"], "diff");
     }
 
     #[test]

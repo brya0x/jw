@@ -450,6 +450,10 @@ pub(super) enum Mode {
     Leader,
     Move,
     Diff,
+    /// A diff pane on its Commits view (REQ-231).
+    DiffCommits,
+    /// A diff pane whose sidebar has the keys (REQ-230).
+    DiffSide,
     Md,
     Term,
 }
@@ -487,6 +491,8 @@ pub(super) fn mode_of(app: &App) -> Mode {
         Mode::Move
     } else {
         match app.focused_view() {
+            Some(super::View::Diff(d)) if d.in_sidebar() => Mode::DiffSide,
+            Some(super::View::Diff(d)) if d.in_commits() => Mode::DiffCommits,
             Some(super::View::Diff(_)) => Mode::Diff,
             Some(super::View::Md(_)) => Mode::Md,
             None => Mode::Term,
@@ -500,7 +506,7 @@ fn chip(mode: Mode, leader: &str) -> String {
         Mode::Confirm => " CONFIRM ".into(),
         Mode::Leader => format!(" {leader} "),
         Mode::Move => " MOVE ".into(),
-        Mode::Diff => " DIFF ".into(),
+        Mode::Diff | Mode::DiffCommits | Mode::DiffSide => " DIFF ".into(),
         Mode::Md => " MD ".into(),
         Mode::Term => " TERM ".into(),
     }
@@ -511,7 +517,7 @@ fn chip_color(mode: Mode) -> Color {
         Mode::Set | Mode::SetKey => p().magenta,
         Mode::Confirm => p().red,
         Mode::Leader => p().yellow,
-        Mode::Move | Mode::Diff | Mode::Md => p().blue,
+        Mode::Move | Mode::Diff | Mode::DiffCommits | Mode::DiffSide | Mode::Md => p().blue,
         Mode::Term => p().green,
     }
 }
@@ -565,6 +571,10 @@ fn hint(mode: Mode, leader: &str) -> Vec<Span<'static>> {
             t("back to the pane"),
         ],
         Mode::Diff => vec![
+            k("1-3"),
+            t("view ·"),
+            k("Tab"),
+            t("sidebar ·"),
             k("j k"),
             t("file ·"),
             k("] ["),
@@ -577,6 +587,34 @@ fn hint(mode: Mode, leader: &str) -> Vec<Span<'static>> {
             t("open ·"),
             k("q"),
             t("close"),
+        ],
+        Mode::DiffCommits => vec![
+            k("1-3"),
+            t("view ·"),
+            k("( )"),
+            t("commit ·"),
+            k("Tab"),
+            t("sidebar ·"),
+            k("j k"),
+            t("file ·"),
+            k("] ["),
+            t("change ·"),
+            k("v"),
+            t("viewed ·"),
+            k("↵"),
+            t("open ·"),
+            k("q"),
+            t("close"),
+        ],
+        Mode::DiffSide => vec![
+            k("↑↓"),
+            t("move ·"),
+            k("↵"),
+            t("choose ·"),
+            k("1-3"),
+            t("view ·"),
+            k("Tab"),
+            t("back to the diff"),
         ],
         Mode::Md => vec![
             k("j k ␣ b"),
@@ -812,7 +850,7 @@ fn pane(
     f: &mut Frame,
     app: &App,
     r: TRect,
-    (title, runs): (String, Option<String>),
+    (title, runs, agent): (String, Option<String>, bool),
     view: Option<&PaneView>,
     sel: Option<&Sel>,
     focused: bool,
@@ -837,10 +875,14 @@ fn pane(
             runs
         };
         if !runs.is_empty() {
-            spans.push(Span::styled(
-                format!("{runs} "),
-                Style::default().fg(p().dim),
-            ));
+            let style = if agent {
+                Style::default()
+                    .fg(p().magenta)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(p().dim)
+            };
+            spans.push(Span::styled(format!("{runs} "), style));
         }
     }
     let back = view.map_or(0, |v| v.parser.screen().scrollback());
@@ -1034,6 +1076,8 @@ mod tests {
             Mode::Leader,
             Mode::Move,
             Mode::Diff,
+            Mode::DiffCommits,
+            Mode::DiffSide,
             Mode::Md,
             Mode::Term,
         ] {

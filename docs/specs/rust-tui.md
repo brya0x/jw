@@ -1,5 +1,5 @@
 ---
-status:      agreed (v2 + the screen addendum + addendum 3 "sessions", 2026-10-09; P0–P9 built against v1); addendum 12 (X0) drafted
+status:      agreed (v2 + the screen addendum + addendum 3 "sessions", 2026-10-09; P0–P9 built against v1); addendum 12 (X0) drafted; addendum 17 (A1, A2) built; addendum 19 (V0–V4) built
 scope:       [Cargo.toml, src/**, .github/workflows/ci.yml, internal/core/config/config.go (one relaxation), README.md]
 depends_on:  [git, gh on PATH]
 supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/herdr]
@@ -8,13 +8,13 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 
 ## Contract
 
-- One binary `jw`, unix only (macOS + Linux). With no arguments it opens the TUI client; a hidden `jw daemon` runs the server. The other commands are socket clients for sessions and for agents (addendum 3): `jw new <session>`, `jw [session]`, `jw sessions`, `jw ls`, `jw read`, `jw worktree`, `jw prompt`, `jw hook`, plus `jw help` and `jw skill [install]`.
+- One binary `jw`, unix only (macOS + Linux). With no arguments it opens the TUI client; a hidden `jw daemon` runs the server. The other commands are socket clients for sessions and for agents (addendum 3): `jw new <session>`, `jw [session]`, `jw sessions`, `jw ls`, `jw read`, `jw pane`, `jw worktree`, `jw prompt`, `jw hook`, plus `jw help` and `jw skill [install]`.
 - **Two concepts.** A *workspace* is an open folder: a project (any folder, git or not) or one of its worktrees. A workspace holds *panes*.
 - **One-shot leader.** `Ctrl-Space`, then one key, then back to the terminal (tmux-style). A pause of 150 ms after the leader shows every key (600 ms before addendum 13); `?` shows them at once. The one exception is an arrow after the leader: arrows keep moving through the workspaces until another key gives the keyboard back (addendum 7).
 - **Every action applies to the current workspace or the focused pane.** The sidebar is a list to read and click, numbered for `1–9`, and walked with `^␣` + arrows.
 - **The daemon** owns every terminal (one PTY per pane, a VT parser with screen and scrollback) and each workspace's pane tree (splits, ratios, names). It survives the client and writes `session.json` on every change.
 - **The client** draws the sidebar (projects with their worktrees indented), the current workspace's panes, a header (workspace · branch · PR) and a status bar. It owns only focus and the full view.
-- **Viewers are panes the client draws:** a GitHub-style diff (unified when narrow, side by side when wide, sticky file headers, viewed, changed words) and a Markdown reader. Code files open in nvim; there is no built-in editor or file tree.
+- **Viewers are panes the client draws:** a GitHub-style diff in three views, General, Uncommitted and Commits (unified when narrow, side by side when wide, sticky file headers, viewed, changed words) and a Markdown reader. Code files open in nvim; there is no built-in editor or file tree.
 - **Theme:** Atom One Dark / One Light, following the OS or the settings. Programs in panes are told it: the daemon answers their colour queries and tells the ones that subscribed (mode 2031) when it switches (S14).
 - The checks of today's commands (`new rm done sync setup dev info init`) stay; confirmations are modals. Exit code 3 and `--json` go away.
 - On-disk compatibility: same config TOML as Go; Rust keeps its own `workspaces.json` (addendum 3). Alt is never bound (AeroSpace owns it).
@@ -65,7 +65,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 | core | port of `internal/core/config` and `registry` with serde, `deny_unknown_fields`. Worktrees at `root/<name>` (default `<repo>-wt`), branch template default `feat/{name}` (`src/core/config.rs`) |
 | connectors | git (1:1 with git.go, plus `worktree_move` and `branch_rename`), gh (`gh pr list`), shell/setup/ports |
 | Socket | `$XDG_RUNTIME_DIR/jw/jw.sock`, else `~/.local/state/jw/jw.sock` |
-| Protocol | `src/proto`: u32 length + serde_json frames; a workspace is named by its registry id in `stream`. The client opens with `Hello{protocol}` and refuses a daemon that answers anything but the same `PROTOCOL` (RISK-14). C→D: `Hello`, `Attach{stream}`, `Detach`, `Input{pane,bytes}`, `Resize{pane,cols,rows}`, `Open{stream,tree}` (a `Tree<NewPane>`), `Split{pane,dir,new}`, `Kill{pane}` (removes the leaf), `Close{stream}`, `Swap{a,b}`, `Name{pane,name?}`, `Theme{dark,fg,bg}` (S14), `List`, `Prompt{stream,text}`, and the older `Spawn` (one pane, placed on the right). D→C: `Hello`, `Tree{stream,tree}` (on attach and after every change), `Snapshot{pane,…}`, `Output{pane,bytes}`, `Title{pane,title}` (OSC 0/2 via `vt100::Callbacks`), `Exited{pane,status}`, `Panes{…}` (with foreground process), `Spawned{pane}`, `Prompted{pane}`, `Error{msg}`. Pane ids are `u64` |
+| Protocol | `src/proto`: u32 length + serde_json frames; a workspace is named by its registry id in `stream`. The client opens with `Hello{protocol}` and refuses a daemon that answers anything but the same `PROTOCOL` (RISK-14). C→D: `Hello`, `Attach{stream}`, `Detach`, `Input{pane,bytes}`, `Resize{pane,cols,rows}`, `Open{stream,tree}` (a `Tree<NewPane>`), `Split{pane,dir,new}`, `Kill{pane}` (removes the leaf), `Close{stream}`, `Swap{a,b}`, `Name{pane,name?}`, `Theme{dark,fg,bg}` (S14), `List`, `Prompt{stream,text,pane?}`, and the older `Spawn` (one pane, placed on the right). D→C: `Hello`, `Tree{stream,tree}` (on attach and after every change), `Snapshot{pane,…}`, `Output{pane,bytes}`, `Title{pane,title}` (OSC 0/2 via `vt100::Callbacks`), `Exited{pane,status}`, `Panes{…}` (with foreground process), `Spawned{pane}`, `Prompted{pane}`, `Error{msg}`. Pane ids are `u64` |
 | Tree | `src/layout.rs`: leaves carry `{id, run, name?}`; `run = "shell"\|"agent"\|"editor"\|"dev:<svc>"\|"view:diff"\|"view:md:<path>"\|"<cmd>"`; `view:*` leaves have no PTY. Ops: `insert(beside, dir, leaf)`, `remove(id)` (the sibling takes the space), `swap(a,b)`, `neighbour(id,dx,dy)` (nearest rect that overlaps on the other axis), `rects` |
 | Layout config | `[layout]` in the project TOML as in v1 (tree of `split`, `ratio`, `a`/`b`, leaves `run`). It is the starting tree when a workspace opens; without it, one shell (addendum 10). Go ignores the tree and `[tui]` (`rustOnly`, config.go) |
 | Session | `session.json` in the state dir (next to the socket for any socket but the default one, so tests never touch it), written by the daemon with temp + rename after every tree change: `{workspaces: [{id, tree}]}`, each leaf with role, name, cmd, cwd and env. Recency and recent folders arrive with Q3/Q4 |
@@ -81,7 +81,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 | Rename | `git worktree move <old> <new>` + `git branch -m <old> <new>` (the new branch from the `branch` template) + the registry `name`, `path` and `branch` (same `id`). Then `Close` and `Open` of the workspace, after asking if an agent or editor runs |
 | Status | `App::status: Option<(String, Tone)>`, `Tone::{Info, Done, Error}`; `Job::Failed` and refusals are `Error` |
 | Stack | ratatui (its crossterm re-export), portable-pty, vt100 0.16 (drawn by `src/tui/draw.rs`), serde/toml/serde_json, syntect, pulldown-cmark, anyhow |
-| Diff | `src/diff.rs` (model: `git diff -M --merge-base origin/<base>` + untracked) and `src/tui/diffview.rs` (drawing, keys `j k ] [ v t ␣ b ↵ q`) |
+| Diff | `src/diff.rs` (model: one `Scope` per view, addendum 19; before it, `git diff -M --merge-base origin/<base>` + untracked) and `src/tui/diffview.rs` (drawing, keys `j k ] [ v t ␣ b ↵ q`) |
 | MD reader | `src/view/md.rs` (pulldown-cmark → wrapped lines + headings) and `src/tui/mdview.rs` |
 | Keyboard protocol | Addendum 5. `jw_proto::kitty::Kitty` holds a pane's kitty keyboard flag stacks (main and alternate, 16 deep). The daemon's `Titles` and the TUI's `keys::Flags` feed it from `vt100::Callbacks::unhandled_csi`. In the daemon a `CSI ? u` becomes `Query::Kitty(flags)` in the same queue as S14's queries, so answers go in the order asked; `snapshot` appends `Kitty::replay` (`CSI < 17 u`, `CSI = base u`, then one `CSI > f u` per entry); a restored pane's history ends with `kitty::CLEAR`. The TUI probes the outer terminal (`supports_keyboard_enhancement`, before its event reader starts), pushes `DISAMBIGUATE_ESCAPE_CODES` after `ratatui::init()` and pops it before `ratatui::restore()`. `keys::encode(k, app_cursor, kitty)`: with flag 1, a modified Enter / Tab / Backspace goes as `CSI 13\|9\|127;mods u` and Esc as `CSI 27[;mods] u`; anything else, or flags 0, as before. No message changes, so `PROTOCOL` stays (RAT-15) |
 | Pickers | `src/tui/finder.rs`: a `Finder` modal (query, results, selection, preview) with one fuzzy scorer (consecutive matches score more), three sources. `o`: folder browser, one directory at a time, `→`/`tab` in, `←`/backspace on empty up, `~` home, `↵` opens; a name that doesn't exist offers `+ create`. It starts in the parent of the current project. `␣`: every workspace, by last use (`recent.json` in the state dir), with a preview of path, branch, PR, agent state and panes. `/`: `git ls-files -co --exclude-standard`, or a walk capped at 5000 files without dot dirs |
@@ -100,7 +100,7 @@ supersedes:  [herdr backend: internal/backends/terminal, internal/connectors/her
 - REQ-14 IF a pane's process exits, THEN the daemon SHALL keep its last screen and exit status visible until the pane is closed.
 - REQ-15 WHEN the daemon starts and finds a `session.json` from a previous daemon, it SHALL recreate its workspaces and trees, launching agents with their `resume` command.
 - REQ-16 THE jw binary SHALL NOT invoke `herdr`.
-- REQ-21 WHILE a diff pane is focused, the TUI SHALL show every changed file in one scroll with `j/k` per file, `]`/`[` per hunk, `v` viewed, `t` unified ⇄ side by side, and changed words highlighted; side by side by default when the pane is wide.
+- REQ-21 WHILE a diff pane is focused, the TUI SHALL show every file of the active view (addendum 19) in one scroll with `j/k` per file, `]`/`[` per hunk, `v` viewed, `t` unified ⇄ side by side, and changed words highlighted; side by side by default when the pane is wide.
 - REQ-22 WHEN a `.md` file is opened, the TUI SHALL show it rendered and read-only in a reader pane: headings, lists, tables, code with highlighting, links.
 - REQ-30 WHEN the user presses the leader and then one key, the TUI SHALL run that key's action and return to the terminal.
 - REQ-31 WHILE the leader has been pending for `which_delay_ms` (150 ms by default, REQ-141), the TUI SHALL show every key, grouped go / worktree / panes.
@@ -407,6 +407,51 @@ Prototype: https://claude.ai/artifact/7dJfvauPHjSBZ3jF5e8SJ7 (approved 2026-10-1
 - REQ-182 IF a review worktree has changes when its PR is picked again, THEN jw SHALL leave it as it is and say so.
 - REQ-183 WHILE a workspace has `review_base`, the header SHALL NOT say its layout changed or offer `^␣ p` to save it.
 
+### Addendum 19 (V0–V4): the diff pane has three views (General, Uncommitted, Commits)
+
+Prototype: https://claude.ai/artifact/9mXWH52Ujf9JjYeGkbMSsY (approved 2026-10-11; all navigation in the left sidebar, no tabs).
+
+The diff pane (`^␣ d`, and the left half of a review workspace) mixed committed and uncommitted work in one scroll. It now has three views of the same pane, stacked in its left sidebar: **General** (the branch against its base, committed work only), **Uncommitted** (staged, unstaged and untracked) and **Commits** (the branch's commits and the diff of the selected one). Scope is client state; the pane stays `view:diff`.
+
+| Piece | Shape |
+|---|---|
+| Scope | `diff::Scope { Branch{base}, Uncommitted, Commit(sha) }` in `crates/core/src/diff.rs`; `diff::load(dir, &Scope)` replaces `load(dir, base)` (now `diff.rs:163`); its caller is `load_diff` (`tui/mod.rs:2966`) |
+| Loaded | `Loaded::Files(Vec<File>)` or `Loaded::TooLarge{files, total}`: the cap is `DIFF_CAP` = 2 MiB of git's stdout, then git is killed and `--name-status` lists the files |
+| General | `git diff -M --merge-base origin/<base> HEAD`; empty base: nothing, with a note |
+| Uncommitted | `git diff -M HEAD` + `ls-files --others --exclude-standard -z` (`diff::untracked`, `diff.rs:237`); no commit yet: against `EMPTY_TREE` (`diff.rs:76`) |
+| Commits | `diff::commits(dir, base, 200)`: `git log -n201 --format=… origin/<base>..HEAD` (empty base: `HEAD`; the extra one says whether more exist) → `Commits{list: Vec<Commit{sha, short, subject, when}>, more}`; detail `git show -M --format= <sha>` (a merge: `-m --first-parent`) |
+| State | `DiffView` (`tui/diffview.rs`) holds `which`, the selected commit, the sidebar's cursor, a `Load` (idle, loading with a number, ready, failed) per slot with a commit's diffs kept by sha, and per view or commit a `Pos{scroll, viewed: BTreeSet<String>}` (before, `viewed` held indices). `diff::File` gains `untracked` |
+| Jobs | `Job::Diff` (`tui/mod.rs:109`) carries General for a pane that opens; `Job::DiffPart{pane, slot, seq, result}` answers any other piece. The view asks with `Action::Load(Request{slot, seq})` and takes the answer with `DiffView::apply`, which drops it unless `seq` is the number its slot waits for; `App::load_part` runs it through `App::background` |
+| Keys | In `DiffView::key`, fixed like the other viewer keys, not in `settings::ACTIONS` (those are leader keys). Hints: `Mode::Diff`, `DiffCommits` and `DiffSide` in `draw.rs` |
+| Sidebar | `DiffView::draw_sidebar` (`TREE` = 30 columns) draws the three sections; below `SIDEBAR_MIN` = 100 columns it is an overlay and `crumb` takes its place |
+| Marks | `M` yellow, `A` green, `D` red, `R` cyan, `?` untracked magenta; the selected row `sel`; all through `theme::p()` |
+
+- REQ-222 WHEN a diff pane opens, the TUI SHALL show General and load only General.
+- REQ-223 THE General view SHALL list the files changed between `origin/<base>` and `HEAD` and SHALL NOT list uncommitted work.
+- REQ-224 THE Uncommitted view SHALL list staged, unstaged and untracked changes against `HEAD`, each file with its mark `A M D R ?`; WHERE `HEAD` has no commit, against the empty tree.
+- REQ-225 THE Commits view SHALL list `origin/<base>..HEAD` newest first, up to 200, each with short sha, subject and age, and SHALL show the diff of the selected commit, the newest first. IF more than 200 exist, THEN the list SHALL end with "older commits not shown after 200".
+- REQ-226 IF origin has no default branch, THEN General SHALL say so and list nothing, and Commits SHALL list the last 200 commits of `HEAD`.
+- REQ-227 THE sidebar SHALL show the three views stacked, each with its number key and its count; the active view `▾` in blue with its files below (in Commits: the commits, and under the selected one its files), the others `▸`.
+- REQ-228 WHILE a view loads, its count SHALL be a spinner and its body a loading line, and every key SHALL stay live.
+- REQ-229 WHEN `1`, `2` or `3` is pressed in the pane, the TUI SHALL show General, Uncommitted or Commits.
+- REQ-230 WHEN `Tab` is pressed, the TUI SHALL move the cursor into the sidebar, where `↑↓` or `jk` move, `↵` chooses a view, a commit or a file, and `Tab` or `esc` return to the diff.
+- REQ-231 WHILE Commits is the active view, `(` and `)` SHALL select the previous and the next commit.
+- REQ-232 WHILE the pane is narrower than 100 columns, the sidebar SHALL be hidden, a line under the title SHALL name the view (in Commits: the sha, subject and `n/m`), and `Tab` SHALL open the sidebar over the diff.
+- REQ-233 WHEN the pane changes view or commit, it SHALL keep each one's scroll position and viewed files, and restore them on return.
+- REQ-234 WHEN a view is reloaded, the TUI SHALL keep its scroll position and viewed files by path and drop those no longer in it.
+- REQ-235 THE first visit to Uncommitted or to Commits SHALL load it in a background job, and a commit's diff SHALL load when first selected and be kept for the life of the pane.
+- REQ-236 WHEN a job's result arrives for a slot that has a newer request, the TUI SHALL discard it.
+- REQ-237 THE TUI SHALL NOT run git in `draw`, in a key handler or in a click handler.
+- REQ-238 IF a diff exceeds `DIFF_CAP`, THEN its view SHALL list the first 200 files with the total and say it is too large to draw, and `↵` on a file SHALL still open it.
+- REQ-239 THE keys `j k ] [ v t g G`, `Ctrl-d`, `Ctrl-u`, `PgUp`, `PgDn`, the wheel and `q` SHALL act in every view as REQ-21 says, and `t` SHALL apply to the whole pane.
+- REQ-240 WHEN `↵` is pressed on a file in any view, the TUI SHALL open the workspace's working-tree file as REQ-42 says, also from a commit.
+- REQ-241 WHERE a workspace has `review_base`, the three views SHALL compare against `origin/<review_base>`, and General SHALL be the range REQ-171 names.
+- REQ-242 THE pane's title SHALL read `changes  <name> vs <base> · committed`, `changes  <name> · not committed` or `changes  <name> · <n> commits`.
+- REQ-243 THE new rows and marks SHALL take every colour from `theme::p()`, and no key SHALL use Alt.
+- REQ-244 THE change SHALL add no `ClientMsg`, `DaemonMsg` or `PaneInfo` field, SHALL leave the `view:diff` role as it is, and SHALL NOT change `PROTOCOL`.
+- REQ-245 WHEN a diff pane is restored, the TUI SHALL open General, whichever view it showed before.
+- REQ-246 IF git fails for a view, THEN that view SHALL show git's first error line in place of its diff and the other views SHALL stay usable.
+
 ---
 
 ### Addendum 16 (F0–F4): switching workspace stays inside a 16.6 ms frame budget
@@ -483,7 +528,7 @@ Verdicts (before F3): **F1** (S1, S9) and **F2** (S2, S4) are the work; **F3** (
 | `scripts/bench-switch.py` | F0: drives N switches with `scripts/drive.py`, prints p50/p95/max per phase | `scripts/` |
 | `Msg::Snapshot(PaneId, Parser)` | F2: the reader thread builds the `Parser`; the UI thread only inserts it | `mod.rs:327` |
 | `App::background` jobs | F1: persist recent/folders/stream setup off-thread | `mod.rs` (existing) |
-| `PROTOCOL` | 9 (F3): `ClientMsg::SplitSnapshots`, `DaemonMsg::Screen` and `History` (bytes travel raw) | `proto.rs:18` |
+| `PROTOCOL` | 10 (addendum 18: `DaemonMsg::Opened`); 9 (F3): `ClientMsg::SplitSnapshots`, `DaemonMsg::Screen` and `History` (bytes travel raw) | `proto.rs:18` |
 | `ClientMsg::SplitSnapshots` | F3: from then on this connection gets a pane it watches as `Screen` (the exact screen, small) then `History` (what a `Snapshot` carried); a client that does not ask still gets one `Snapshot`, and a resync is always a `Snapshot` | `proto.rs`, `daemon/src/lib.rs` (`split_snapshot`), `daemon/src/outbox.rs` |
 | `Msg::Snapshot{history}` / `Msg::History` | F3: the TUI draws from the `Screen`, replays `History` on its own thread, then swaps it in with the output and resizes that came since (`Pending`) | `tui/mod.rs` (`on_history`) |
 
@@ -494,7 +539,7 @@ Verdicts (before F3): **F1** (S1, S9) and **F2** (S2, S4) are the work; **F3** (
 - REQ-186 WHEN a `Snapshot` arrives, the TUI SHALL build its `Parser` off the UI thread and the UI thread SHALL spend ≤ 1 ms to install it.
 - REQ-187 WHILE a switch animates, no frame SHALL take longer than 16 ms to build, diff and write at 240×60.
 - REQ-188 WHEN the switch is requested, the TUI SHALL reach the new panes' first content within the key→content budget of the table above, p95 over 50 switches.
-- REQ-189 IF a pane's `Snapshot` has not arrived when the slide ends, THEN the TUI SHALL keep drawing the pane's frame (title, border) and fill it when the snapshot lands, without a full-screen flicker.
+- REQ-189 (closed 2026-10-11, not built: see Corrections) IF a pane's `Snapshot` has not arrived when the slide ends, THEN the TUI SHALL keep drawing the pane's frame (title, border) and fill it when the snapshot lands, without a full-screen flicker.
 - REQ-190 THE switch SHALL keep each pane's scrollback, modes and kitty flags exactly as before.
 - REQ-192 WHEN a client that sent `SplitSnapshots` starts to watch a pane, the daemon SHALL send its `Screen` before its `History`, and the `History` bytes SHALL equal what a `Snapshot` of the same moment carries.
 - REQ-193 WHILE a pane's `History` is replayed, the TUI SHALL draw and update the pane from its `Screen`, and WHEN the replay ends SHALL swap it in with the output and resizes that came since, so the pane shows no change but its scrollback.
@@ -503,9 +548,99 @@ Verdicts (before F3): **F1** (S1, S9) and **F2** (S2, S4) are the work; **F3** (
 Open (human decisions, still unanswered):
 
 - OPEN-22 Is 100 ms key→content the right switch budget? (The slide itself is 240 ms, REQ-136.)
-- OPEN-23 REQ-189 shows a pane's frame while it fills, instead of blank. That is a visible change, and AGENTS.md asks for an HTML prototype first. Prototype it, or accept it as a fix, not a UI change?
+- OPEN-23 REQ-189 shows a pane's frame while it fills, instead of blank. That is a visible change, and AGENTS.md asks for an HTML prototype first. Prototype it, or accept it as a fix, not a UI change? (Answered 2026-10-11: neither; it is not needed after F3.)
 - OPEN-24 (answered 2026-10-11) F0 first, numbers before F1–F4: see Measurements.
 - OPEN-25 Brain workspace: this spec's open questions should be reported there; I could not reach it from here.
+
+### Addendum 17 (A1, A2): a pane's program
+
+A pane says what runs in it. The daemon already resolves the foreground process of every pane on each `List` (`PaneInfo.fg`, `daemon/src/lib.rs:549-554`), and the TUI already appends it to the title (`tui/mod.rs:1657-1663`). What is missing is knowing which programs are agents: `jw prompt` accepts only role `agent` (`lib.rs:515-520`), so a `claude` run by hand in a `shell` pane is out of reach of other workspaces. The program is `fg`; no new field, no new message. Prototype approved 2026-10-11 (variant B, programs by detection only).
+
+| Piece | Shape |
+|---|---|
+| Program | `PaneInfo.fg`, unchanged. It is the foreground process group's command name (`process_name`, `lib.rs:1373`) |
+| `is_agent_program(&str)` | One list in `jw-core`, the lowest crate all of daemon, tui and jw share: `claude`, `codex`, `gemini`, `aider`, `opencode`. Fixed in code |
+| Agent pane | Role `agent`, or a live pane whose program is in that list |
+| `foreground(&Pane)` | The `List` handler's `process_group_leader` + `process_name` pair, factored out so `Prompt` uses the same one |
+| `Prompt` | `lib.rs:515`: role `agent` first; else the lowest pane id whose `foreground` is an agent program; else the error `{stream} has no agent pane open` as today |
+| `jw ls` | `--json` keeps `panes` (role strings) and adds `programs: [{role, program}]`, one per pane with a program; the table shows the program beside the role |
+| `jw read --pane` | `cli.rs:504-510`: role, then program; the missing-pane error lists both |
+| Title | The program replaces the dim runs suffix and is drawn in `p().magenta`, bold, when it is an agent (variant B); other programs keep today's dim suffix |
+| Marks | `App::marks()` (`tui/mod.rs:963`) treats an agent pane like role `agent` for the `✻` and `?` guesses |
+
+- REQ-194 WHEN `jw prompt <workspace>` finds no pane with role `agent`, THE daemon SHALL send the text to the live pane with the lowest id whose foreground program is a known agent, and reply `Prompted` with that pane.
+- REQ-195 WHEN a pane with role `agent` exists, THE daemon SHALL choose it before any pane chosen by program.
+- REQ-196 IF no pane has role `agent` or an agent program, THEN `jw prompt` SHALL fail with `has no agent pane open`, as today.
+- REQ-197 THE daemon SHALL read a pane's foreground program when `List` or `Prompt` asks, and SHALL add no thread, timer or `ps` to any other path; leaving `claude` shows on the next `List`.
+- REQ-198 WHEN `Prompt` has a role `agent` pane, THE daemon SHALL NOT run `ps`.
+- REQ-199 THE `jw ls --json` field `panes` SHALL stay a list of role strings; `programs` SHALL be added beside it.
+- REQ-200 WHEN `jw read --pane <name>` matches no role, THE CLI SHALL match it against the panes' programs before failing.
+- REQ-201 WHERE a pane's program is a known agent, THE TUI SHALL draw it on the title in `p().magenta` and bold, with no new colour literal.
+- REQ-202 WHERE a pane's program is a known agent, THE sidebar SHALL give its workspace the same `✻` and `?` marks as role `agent`.
+- REQ-203 THE change SHALL add no `ClientMsg` and no `PaneInfo` field, and `PROTOCOL` SHALL stay at 9.
+
+### Addendum 18 (P1–P3): `jw pane open|close|ls`
+
+An agent in a pane can split a workspace and run a program, a shell or a viewer in it, close a pane, and list them. The daemon already had `Split` and `Kill` for the TUI; what was missing was a CLI and the id of the pane a `Split` made, which the daemon announced only through the `Tree` broadcast (`daemon/src/lib.rs`, `add`). No UI is added: the new pane is an ordinary leaf of the tree, so there is no prototype (OPEN-27).
+
+| Piece | Shape |
+|---|---|
+| `jw pane open <ws> --run <what> [--split right\|down] [--of <pane>]` | `cli.rs` `pane_open`: `find()` as `jw read`; Attach for the `Tree`; `Detach`; `Split`; waits for `Opened`; prints the id |
+| `<what>` | `shell` → role `shell`, no command; `view:diff`; `view:md:<file>` (made absolute against the CLI's directory); anything else → role `run`, `sh -c` (`run_target`) |
+| Anchor | `--of`, else the leaf with role `agent`, else the last leaf (`anchor`) |
+| `jw pane close <ws> <pane> [--force]` | Attach for the `Tree`, check the pane is in it, `Kill`, wait for the `Tree` without it |
+| `jw pane ls <ws> [--json]` | the `Tree`'s leaves joined with `List`: id, role, name, program (`PaneInfo.fg`), exit status |
+| `DaemonMsg::Opened { pane }` | `proto.rs`: the reply to a `Split`, to the requester only. `split` and `add` return the id (`daemon/src/lib.rs`) |
+| `PROTOCOL` | 10 |
+| Skill | `crates/jw/skill/SKILL.md` and the test in `skill.rs`; `pane` is in `session::RESERVED` and `help::COMMANDS` |
+
+- REQ-204 WHEN `jw pane open` succeeds, THE CLI SHALL print the new pane's id and nothing else on stdout, and exit 0.
+- REQ-205 WHEN the daemon handles a `Split`, THE daemon SHALL send `DaemonMsg::Opened{pane}` to the requesting client only, and nothing to the workspace's other watchers but the `Tree`.
+- REQ-206 THE `PROTOCOL` SHALL be 10, and THE CLI SHALL refuse a daemon that answers another number.
+- REQ-207 WHEN `--run` is `view:diff` or `view:md:<file>`, THE daemon SHALL make a leaf with that role and no process.
+- REQ-208 WHEN `--run` is `shell`, THE pane SHALL run `$SHELL` in the workspace's folder; WHEN it is another string, THE pane SHALL run it through `sh -c` with role `run`.
+- REQ-209 WHEN the TUI shows the workspace, THE new or closed pane SHALL appear without any action of the TUI, through the `Tree` the daemon sends every watcher.
+- REQ-210 WHILE no `--split` is given, THE CLI SHALL split `right`.
+- REQ-211 IF `<ws>` matches no workspace, or several, THEN THE CLI SHALL fail with the message of `jw read`.
+- REQ-212 IF no daemon runs, or the daemon does not run the workspace, THEN THE CLI SHALL fail with `<ws> is not open` and SHALL NOT start a daemon.
+- REQ-213 IF `--of` names a pane outside the workspace, THEN THE CLI SHALL fail and send no `Split`.
+- REQ-214 IF `jw pane close` names the last pane of the workspace, THEN THE CLI SHALL refuse unless `--force` is given.
+- REQ-215 IF `jw pane close` names a pane outside the workspace, THEN THE CLI SHALL fail and send no `Kill`.
+- REQ-216 THE `jw pane ls` output SHALL give, per leaf, its id, role, name, foreground program and exit status; `--json` SHALL give the same as JSON.
+- REQ-217 THE `jw` skill SHALL name `jw pane open`, `jw pane close` and `jw pane ls`, and say that `--run` runs what it is given.
+- REQ-218 IF the daemon answers `Error` to the `Split` or the `Kill`, THEN THE CLI SHALL fail with its message on stderr and exit 1.
+- REQ-219 IF `jw pane close` names the pane it runs in (`$JW_PANE_ID`), THEN THE CLI SHALL refuse unless `--force` is given.
+- REQ-221 IF `--run view:md:<file>` names a file that does not exist, THEN THE CLI SHALL fail and send no `Split`.
+- REQ-220 WHEN `--of` is absent, THE CLI SHALL split beside the pane with role `agent`, else beside the last leaf of the tree.
+
+Open (human decisions, still unanswered):
+
+- OPEN-27 No HTML prototype, since no screen or key is added. Built on that default.
+- OPEN-28 The default anchor is the agent's pane, else the last leaf, because the daemon does not know which pane has the focus.
+- OPEN-29 `jw pane ls` is its own command; `jw ls` does not list panes.
+- OPEN-30 An arbitrary program has role `run`, not `shell`.
+
+
+### Addendum 20 (K1, K2): `jw prompt --pane`
+
+`jw prompt` reaches the pane with role `agent`, else the lowest-id live pane running a known agent (REQ-194), so a second agent in a worktree (`jw pane open --run claude`) is out of reach. `--pane <id>` picks the target; the daemon validates it (RAT-68). No screen or key is added, so no HTML prototype (as OPEN-27).
+
+| Piece | Shape |
+|---|---|
+| Message | `ClientMsg::Prompt { stream, text, pane: Option<PaneId> }`, `#[serde(default)]`; `PROTOCOL` 10 → 11 |
+| Daemon | `agent_pane` takes the `Option<PaneId>`; with `Some` it validates (in the workspace, live, role `agent` or an agent program) instead of searching; the typing is `prompt()` as today |
+| CLI | `jw prompt <workspace> [--pane <id>] [--tag] [--] <text>`; flags are read only before the first word of the text |
+
+- REQ-247 THE CLI SHALL accept `jw prompt <workspace> [--pane <id>] [--tag] [--] <text>`, reading flags only before the first word of the text.
+- REQ-248 WHEN `--pane` is absent, THE daemon SHALL choose the target as REQ-194 and REQ-196 say.
+- REQ-249 WHEN `--pane <id>` names a live agent pane of the workspace, THE daemon SHALL type the text into that pane and reply `Prompted` with its id.
+- REQ-250 IF `--pane` names a pane that is not in the workspace, THEN THE daemon SHALL reply `Error` and type nothing.
+- REQ-251 IF `--pane` names a pane that has exited or runs no known agent, THEN THE daemon SHALL reply `Error` saying which (the texts are in `named_agent`, `daemon/src/lib.rs`), and type nothing.
+- REQ-252 IF `--pane` has no number or the text is empty, THEN THE CLI SHALL fail with the usage before connecting.
+- REQ-253 IF `--pane` equals `$JW_PANE_ID`, THEN THE CLI SHALL fail and send no `Prompt`.
+- REQ-254 THE protocol SHALL be 11, and `Prompt.pane` SHALL default to `None` when absent.
+- REQ-255 WHERE `--tag` is given and `$JW_NAME` is set, THE CLI SHALL prefix the text with `[jw: <JW_NAME>, pane <JW_PANE_ID>] `, or with `[jw: <JW_NAME>] ` when `$JW_PANE_ID` is not set (OPEN-36).
+- REQ-256 THE jw skill SHALL tell an agent never to answer another agent's permission question with `jw prompt`, with or without `--pane`.
 
 ## Rationale
 
@@ -554,11 +689,33 @@ Open (human decisions, still unanswered):
 - RAT-45 **The TUI sends the prompt, not the CLI.** The picker lives in the TUI; one pending slot on `App` costs less than a new path.
 - RAT-46 **Capital `R`.** Free in `ACTIONS`; `r` is rename and `hjklHJKL` are fixed.
 - RAT-47 **The picker is a `Finder` kind.** It has query, selection, preview and clicks. Its items come from a job, which no kind did before, so `Finder` gains a loading state.
+- RAT-63 **General is committed work only.** Until now one scroll held both, which is the complaint. This way General is all of Commits together and Uncommitted is the rest, so no file appears in a view for two reasons. The cost: `^␣ d` no longer shows dirty files first; they are one key away (`2`). Decided with the prototype.
+- RAT-64 **A sidebar, not tabs.** The user's call (2026-10-11): views, commits and files are one list in one place. It spends width, so under 100 columns it becomes an overlay with a breadcrumb instead of tabs.
+- RAT-65 **Scope is client state.** Putting it in the role (`view:diff:commits`) touches saved layouts, the four hard-coded `view:diff` sites (`stream.rs:46`, `tui/mod.rs:1588`, `stream.rs:552`, `jw/tests/daemon.rs:491,506`) and the tests, and the daemon has nothing to do with it. Reopening on General (REQ-245) is the price.
+- RAT-66 **Lazy, per view, with a generation.** Only General loads on open, so opening costs what it did minus the untracked walk. A result is applied only if no newer request exists for its slot (REQ-236), so fast `(` `)` never apply out of order. The caps (200 commits, 2 MiB) are pages, not measurements: see OPEN-32. Measured on a repo with a 4,000-file, 240,000-line change: the capped diff, the file list and 201 commits each took 30–100 ms of git.
+- RAT-67 **Viewed by path.** `viewed` held indices and `Job::Diff` rebuilt the view (`tui/mod.rs:3239`), so a reload lost scroll and viewed. Paths survive a list that changes between reloads.
 - RAT-22 **`curl`, not a crate,** for `install <url>`: rare, and jw already shells out to `git` and `gh`; `ureq` would add TLS and about 40 crates for one command.
 - RAT-48 **Measure before fixing.** S1–S6 are from reading the code; the cost of each is a guess. F0 exists so F1–F4 each cite a number. Parts F3/F4 are conditional for that reason.
 - RAT-49 **Parse in the reader thread** keeps `PROTOCOL` at 8 and needs no daemon change; the fix moves work, it does not remove it, so F0 must show that the parse really is what blocks a frame.
 - RAT-50 **`Parser` is `Send`** (plain data), so building it in the existing daemon-reader thread (`mod.rs:327`) is sound. Output chunks that arrive for a pane still being built must queue behind its Snapshot (order matters).
 - RAT-51 Not warming every workspace in the TUI (subscribing to all): it would multiply `Output` parsing on the UI thread by the number of workspaces. Rejected unless F0 says Attach is the only cost.
+- RAT-52 **A1: the program is `fg`, not a new field.** The daemon already resolves it per pane on `List`, and a classified copy in `PaneInfo` would be a second place to drift and a `PROTOCOL` bump for nothing. Each crate asks `is_agent_program(fg)`.
+- RAT-53 **A1: detection only.** Detection covers the case that hurts, `claude` started by hand, which nobody would declare. A declaration (`jw pane program`) would also need a rule for when it expires, or `jw prompt` would type into a shell after claude exits. Added later if detection fails in practice.
+- RAT-54 **A1, rejected: `jw prompt --pane`.** With one agent per workspace the role-then-program order is enough. A second agent pane is the case that would need it (RISK-63).
+- RAT-55 **A1: no timer.** `fg` is read on `List`, which the TUI already sends every 2 s, and on `Prompt`. Leaving claude is seen at the next `List`; the daemon's only loop stays the 30 s scrollback save.
+- RAT-56 **A1: the list is fixed in code.** A project-config list is more surface than five names; adding one is a one-line change.
+- RAT-57 **A1, variant B of the prototype.** The existing dim suffix already says what runs; the only thing to add is which programs are agents, so the name turns magenta (the colour of `✻`) and nothing else moves. Rejected: a glyph before the name (variant C) adds width to every agent title.
+- RAT-58 **Addendum 18: the id comes in a reply.** A `Split` answered nothing; the id was in the `Tree` broadcast. A client could diff the tree before and after, but that races with the TUI or another agent splitting at the same moment. One message and a `PROTOCOL` bump (REQ-206) is the price the rules already set.
+- RAT-59 **Addendum 18: `Opened`, not `Spawned`.** `Spawned` says "you are subscribed to this pane"; reusing it would have the TUI think it watches a pane it does not.
+- RAT-60 **Addendum 18: `Split` stays as it is.** The TUI's path is tested; the CLI only supplies the `NewPane`. Rejected: a new message for the CLI.
+- RAT-61 **Addendum 18: verbs under `pane`.** Like `worktree`; it leaves room for `pane send`. Rejected: panes in `jw ls`, which stays one row per workspace.
+- RAT-62 **Addendum 18: no new boundary for `--run`.** `jw prompt` already lets any process of the same user type into an agent, which is arbitrary execution; the socket (directory 0700, file 0600, `daemon/src/lib.rs`) is the whole fence. A token would be its own feature. The skill says so (REQ-217).
+
+- RAT-68 **Addendum 20: the daemon validates `--pane`, not the CLI.** REQ-215 checks in the CLI and the daemon trusts the id (`Kill`), so a raw client crosses workspaces. The daemon already has `panes_of(stream)` in the same call, and a pane can die between `pane ls` and the prompt: the only check that holds is the one next to the write. The cost is a changed `ClientMsg`, which needs `PROTOCOL` anyway: an old daemon would ignore `pane` and type into another one.
+- RAT-69 **Addendum 20: `--pane` only before the text.** The text is the remaining words (`cli.rs` `prompt`), and `jw prompt ws fix the --pane flag` must stay text. Reading the option only right after the workspace keeps every current use except text that starts with `--pane`, `--tag` or `--`, which `--` escapes. Rejected: `--pane` anywhere.
+- RAT-70 **Addendum 20: role `agent` or an agent program.** The same test as REQ-194, so a pane opened with `--run claude` works whatever its role. A viewer has no program and is refused.
+- RAT-71 **Addendum 20: `--tag` is opt-in and CLI-only.** Always prefixing changes the text of every prompt today and clutters what a person types from their pane. Opt-in needs no protocol. The prefix is text, not authentication.
+- RAT-72 **Addendum 20: refuse your own pane.** `prompt()` waits for quiet and the sender's pane is busy running the command: it would wait 20 s and paste into itself. Same stance as REQ-219.
 
 ## Risks
 
@@ -618,10 +775,31 @@ Open (human decisions, still unanswered):
 - RISK-54 **Context size.** A PR with hundreds of comments is capped at 200 KB and the cut is noted in the file; claude can run `gh pr view` itself.
 - RISK-55 **Fork PRs** fetch fine but cannot be pushed to; fine for a review.
 - RISK-56 **`gh api repos/{owner}/{repo}/…`** resolves the repo from the cwd; checked against a fake `gh` only until the manual test.
+- RISK-60 **`ps -o comm=` may not say the agent's name.** On this machine it prints `claude` (checked 2026-10-11), but a wrapper, `node` or a version-named binary would not match. Fallback if seen: match `ps -o args=`.
+- RISK-61 **A hand-run agent has no hooks.** No `--settings`, so no `jw hook`; its sidebar marks come from the `busy` and `bell` guess in `marks()`, wrong while it waits quietly.
+- RISK-62 **The pane can change between the lookup and the write.** `prompt()` writes to the PTY; if claude exits in between, the text lands in the shell. The window is the time between two calls; `Prompt` reads `foreground` right before writing.
+- RISK-63 **Two agent panes in one workspace.** Role `agent` wins, then the lowest pane id; there is no way to choose the other (RAT-54).
+- RISK-64 **`ps` once per candidate pane on a `Prompt` with no role `agent` pane.** A workspace with many shell panes spawns that many. Accepted: it is rare and off the UI thread (`Prompt` runs on its own thread).
+- RISK-65 **Many panes.** An agent can open as many as it likes; the daemon has no cap. Left for later.
+- RISK-66 **An agent closes its own pane.** The CLI refuses it by `$JW_PANE_ID` (REQ-219), which `--force` overrides.
+- RISK-67 **A workspace the TUI does not show.** The TUI applies a `Tree` only for its current workspace (`tui/mod.rs:1383-1388`); another's new pane should appear when it attaches it on a switch. Not tested.
+- RISK-68 **A relative `view:md:<file>`** resolves in the TUI against the workspace it shows, so the CLI makes it absolute against its own directory, and refuses a file that is not there (REQ-221): found by a hand test, where a missing file left a viewer on `starting…`.
+- RISK-69 **A split into a small pane.** `Split` gets 80×24 and the TUI resizes after; a pane too small for its sibling is the daemon's case, as for the TUI's own splits.
+- RISK-70 **`origin/<base>` can be stale.** General and Commits use the local ref, as the diff did; a stale base shows an old range until `git fetch`.
+- RISK-71 **`git::output` has no timeout and does not stream** (`connectors/git.rs:31`). A hung git ties one worker thread and its view spins; the UI stays live. REQ-238 needs a bounded reader in core and a `wait` after the kill so no zombie stays.
+- RISK-72 **`↵` from Commits opens the working-tree file** (REQ-240), which may no longer have the lines the commit showed. Accepted.
+- RISK-73 **Uncommitted goes stale while the pane is open;** there is no watcher. See OPEN-31.
+- RISK-74 **Renames are per range.** `-M` runs per call, so General can show `R` for a file that Commits shows as `D` and `A`.
+- RISK-75 **`App::on_job` runs `reload()` first for every job** (`tui/mod.rs`): a registry read, and a write when roots are filled, on the UI thread. Fine for the rare jobs it was written for, not for one per `)`; a diff pane's answer returns before it. Any other frequent job needs the same.
 - Closed by addendum 3: RISK-5 (own registry), RISK-7 (hooks), RISK-9 (frames), RISK-16 (`nvim --server`), RISK-17 (`root` in the registry).
 - RISK-57 Moving parse to another thread can reorder `Snapshot` and `Output`. Keep one reader thread, parse inline there, preserve order.
-- RISK-58 Keeping the old frame during loading (REQ-189) changes what the user sees; see OPEN-23.
+- RISK-58 Keeping the old frame during loading (REQ-189) changes what the user sees; see OPEN-23. Closed with REQ-189: nothing is built.
 - RISK-59 F0 numbers on this Mac may not predict slower terminals or SSH; the budget table is a target, not a guarantee.
+
+- RISK-76 **`PROTOCOL` 11 and the version collide with `feat/mobile-app`.** Whoever merges second goes past the other: `PROTOCOL`, the Cargo version, and these ids.
+- RISK-77 **The daemon does not know whether the target agent is waiting on a permission.** With `--pane` an agent could answer another's question; only the skill rule (REQ-256) stops it, not the code. A `waiting` check in the daemon is a separate change.
+- RISK-78 **Pane ids change when the daemon restarts.** Within one daemon ids come from `next_pane` and are never reused (`new_id`), so `--pane 3` cannot reach a pane opened later. `restore` gives every restored pane a new id, so an id kept across a restart (in a script, in an agent's notes) can name another pane or none; run `jw pane ls` again.
+- RISK-79 **`Error` no longer tells "no agent" from "bad pane" except by its text.** Clients only show it (`cli.rs` `send_prompt`, `tui/mod.rs`), so nothing depends on it.
 
 ## Parts (each one ends with `cargo test` + `clippy` green and a local commit on `feat/rust-tui`; nothing is pushed)
 
@@ -684,10 +862,20 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | R1 ✓ `7d7678d` | Core: `open_prs`, `detail`, `Entry.review_base`, `Stream::resolve` and `command()` for reviews, `review.rs` (fetch, worktree, context file) | 165–170, 172, 174, 175, 178 | `connectors/github.rs`, `core/registry.rs`, `stream.rs`, `review.rs` |
 | R2 ✓ `936b3cd` | TUI: `Kind::Reviews` with a loading state, `R`, jobs, the pending `Prompt`, `m` and `o`; `Open` starts no process for a viewer leaf; the daemon test | 160–164, 171, 173, 176, 177, 179–181 | `tui/finder.rs`, `tui/mod.rs`, `tui/modal.rs`, `settings.rs`, `daemon/src/lib.rs`, `crates/jw/tests/daemon.rs` |
 | R3 ✓ | README; version 0.0.13; a hand test with `scripts/drive.py` against a local origin and a fake `gh`; REQ-175 and REQ-183, which that test found missing | 175, 183 | `README.md`, `core/src/actions.rs`, `core/src/connectors/git.rs`, `tui/mod.rs` |
+| A1 ✓ `db0d8ce` | Agent programs: `is_agent_program` in `jw-core`, `foreground` in the daemon, `Prompt` by program, `jw ls --json programs`, `jw read --pane` by program, help and the `jw` skill | 194–200, 203 | `crates/core`, `crates/daemon/src/lib.rs`, `crates/jw/src/{cli,help}.rs` |
+| A2 ✓ `962d445` | The program on the pane title and the agent marks for such panes | 201, 202 | `tui/draw.rs`, `tui/mod.rs` |
+| P1–P3 ✓ `66a27a6`, `a9c7148` | `jw pane open\|close\|ls`: `DaemonMsg::Opened` and `PROTOCOL` 10, the CLI, the skill, README and this addendum | 204–221 | `proto/src/proto.rs`, `daemon/src/lib.rs`, `crates/jw/src/{cli,help,skill}.rs`, `crates/jw/skill/SKILL.md` |
+| V0 | Addendum 19 in this spec; the prototype (approved 2026-10-11) | — | docs |
+| V1 ✓ | Core: `Scope`, `load(dir, &Scope)`, `Loaded::TooLarge` with `DIFF_CAP`, `commits`; tests in a temp repo | 223–226, 238, 244 | `core/src/diff.rs` |
+| V2 ✓ | TUI: `DiffView` with per-view state keyed by path, the sidebar sections, `1 2 3`, `Tab`, `( )`, the narrow overlay and breadcrumb, the title; the jobs with a number per slot, the commit cache and the loading, failed and too-large states (V3's work came with it, the view could not be shown without it) | 222–233, 235–243, 245, 246 | `tui/diffview.rs`, `tui/draw.rs`, `tui/mod.rs`, `core/src/diff.rs` |
+| V3 ✓ | A diff pane's answer no longer reloads the registry on the UI thread (RISK-75); an `App`-level test of the job round trip; a hand test with `scripts/drive.py` on a synthetic repo (4,000 new files, 231 commits, 300 untracked) that found three faults in the too-large view, fixed. A review workspace was not run end to end, only `Stream::resolve`'s test for `review_base`; REQ-234 waits for OPEN-31 | 237, 238, 241 | `tui/mod.rs`, `tui/diffview.rs` |
+| V4 ✓ | README; version 0.0.18 (past main's 0.0.17); a hand test with `scripts/drive.py` in a repo with commits and a dirty tree, and in a big one | — | `README.md`, `Cargo.toml` |
+| K1 ✓ `8b6b568` | Core of Addendum 20 (its commit message says Q1): `Prompt.pane`, `PROTOCOL` 11, `agent_pane` validating a named pane, the integration tests, the version (past main's) | 248–251, 254 | `proto.rs`, `daemon/lib.rs`, `tui/mod.rs`, `tests/daemon.rs` |
+| K2 ✓ `cfa2f62` | The CLI of Addendum 20 (its commit message says Q2): `jw prompt [--pane] [--tag] [--]`, the guards, `help.rs`, the skill | 247, 252, 253, 255, 256 | `cli.rs`, `help.rs`, `SKILL.md` |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 | F0 ✓ | `JW_TRACE`, `scripts/bench-switch.py`, the Measurements above | 184 | `tui/trace.rs`, `tui/mod.rs`, `scripts/` |
 | F1 ✓ | S1, S9: `Stream::resolve` (the `git` spawn) off the UI thread, the frame deadline counted from the frame's start; the unexplained ≈ 100 ms of a first open | 185, 191 | `tui/mod.rs`, `core` (callers) |
-| F2 ✓ threads | S2: parse in the reader thread (`Msg::Snapshot` carries a `Parser`). S4 (keep pane frames while content loads, REQ-155) waits for its prototype (OPEN-15) | 186, 189, 190 | `tui/mod.rs`, `tui/draw.rs` |
+| F2 ✓ threads | S2: parse in the reader thread (`Msg::Snapshot` carries a `Parser`). S4 (keep pane frames while content loads, REQ-189) is closed, not needed after F3 | 186, 190 | `tui/mod.rs`, `tui/draw.rs` |
 | F3 ✓ | **now justified (key → content 146 ms, 118 ms of it the replay):** send the screen first and the history after, or a capped tail of the ring; S8 (save off the open path) only if a number shows it | 188, 190 | `daemon/src/lib.rs` |
 | F4 ✓ opening | S1 (closed workspaces), S11: stream cache guarded by `Stamp`, `folders::entry` cached per `.git` stamp, branch from `.git/HEAD` | 185 | `core/src/stream.rs`, `core/src/folders.rs`, `core/src/connectors/git.rs`, `tui/mod.rs` |
 | F5 | S5: skip unchanged rows in `screen_to`, one flush per frame, only if F0 shows draw over budget | 187 | `tui/draw.rs`, `tui/anim.rs` |
@@ -712,7 +900,13 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - OPEN-15 (open) Poll the registry every 2 s (the `List` cadence) or every 0.5 s tick? Default 2 s.
 - OPEN-16 → a `[review]` table in the project TOML (layout, agent command, a review skill) is later.
 - OPEN-17 to OPEN-21 (addendum 15) → the user did not answer; built with the proposed defaults: the picker lists all open PRs, `m` toggles "requested of me"; the project's setup runs; an existing review asks before the prompt is sent again; the review rules ride in the visible prompt, not `--append-system-prompt`; the trust-folder exposure is accepted (RISK-52). Say so to change any.
+- OPEN-26 → a pane's program is detected only, never declared (RAT-53); no `jw prompt --pane` (RAT-54); title variant B (RAT-57). Approved 2026-10-11.
+- OPEN-27 to OPEN-30 (addendum 18) → built with the proposed defaults; say so to change any.
+- OPEN-31 (open) A key to refresh Uncommitted while the pane is open (not in the prototype, so it needs the prototype first). Default: none; a view reloads when the pane is restored.
+- OPEN-32 (open) The caps, 200 commits and 2 MiB of diff, are guesses. Default as written; adjust after a hand test in a big repo.
+- OPEN-33 → General is committed work only (RAT-63); OPEN-34 → the pane reopens on General (REQ-245); OPEN-35 → Uncommitted is one list with a mark per file, not split into staged and unstaged. The prototype shows all three and the user approved it (2026-10-11).
 - OPEN-5 → `~/.config/jw/settings.json` (JSON, outside Go's `*.toml` glob) and the `^␣ ,` screen (addendum 3).
+- OPEN-36, OPEN-37 (addendum 20) → built with the proposed defaults: the sender prefix is opt-in (`--tag`, RAT-71) and `--pane=3` is not supported, like `pane open --of 3`; say so to change.
 
 ## Corrections
 
@@ -755,12 +949,23 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - REQ-146 first said the welcome starts "with no workspace open" and does not pass on the key that closes it. At startup nothing is open yet even for a returning user, so it starts from an empty sidebar; and step 1 itself tells the user to press the leader, so that key is handled as usual.
 - The brief for W1 said the sidebar stayed stale until the TUI was reopened. True for writes by the CLI and by other TUIs; the TUI's own jobs already reload (`on_job`).
 - The same brief said the loop wakes only when something animates. `Msg::Tick` wakes it every 500 ms regardless (`tui/mod.rs:353`); only the animation timers in `next_wake` are conditional. The registry watch rides that tick (REQ-151, REQ-152).
+- REQ-21 and REQ-57 spoke of "every changed file" in one scroll: the working tree against the base. With addendum 19 that is General plus Uncommitted, in separate views. REQ-169 still holds for General; the uncommitted part moved to Uncommitted.
+- REQ-123 said `d` with no `origin/<default>` diffs against `HEAD`. That is now the Uncommitted view; General has nothing to compare then (REQ-226).
+- REQ-234 holds in the model (scroll and viewed live in `Pos`, by path, apart from the files), but nothing reloads a view while the pane is open, so nothing exercises it until OPEN-31 is answered.
+- Until addendum 19, a diff reload rebuilt the view and lost scroll and viewed files (`tui/mod.rs:3239`); REQ-234 fixes that.
 
 - F2's threads were expected to bring key → content to about 30 ms. They did not: moving the replay off the UI thread removes the stalls (gap 120 → 20 ms) but the content cannot appear before the replay ends, and the replay took longer on a shared core. Only F3 shortens it.
+- REQ-189 (a pane's frame kept while its content loads) was planned because a switch cleared every pane and the slide ran over nothing. After F1–F3 the tree reaches the TUI in ≈ 4 ms (the frame shows with `starting…`) and the content in ≈ 6 ms when the workspace is open, ≈ 10 ms when it is closed and ≈ 46 ms for a folder opened for the first time, so the empty window is shorter than three frames and the slide starts over content. Closed on 2026-10-11 without the prototype; reopen it only if a blank flash is seen when opening a workspace.
 - The speed addendum was drafted as addendum 14 with REQ-150–159, RAT-34–37, RISK-46–48 and OPEN-14–17 on a branch cut before W1 and R1–R3, which took those ids. It merged as addendum 16, REQ-184–193, RAT-48–51, RISK-57–59 and OPEN-22–25, with version 0.0.14.
 - F3 was drafted as capping the ring; the split (`Screen` then `History`) keeps the scrollback whole (REQ-190) and needed `PROTOCOL` 9, which the addendum had said would stay 8.
 - Addendum 16 was agreed with S1–S8 as guesses. F0 confirmed S1, S2 and found S9 (the frame cadence is ≈ 20 ms, not 16); it showed S3, S5, S6 and S7 cost almost nothing at one pane. Its OPEN ids were first 1–4, which this spec already used: renumbered 22–25.
 - Addendum 13 said that on a switch the panes "only enter; nothing leaves". True, but it also means the slide animates over blank panes until the Snapshots arrive (S4, addendum 16).
+- The brief for A1 assumed the daemon did not know a pane's child. It does: `fg` and `cwd` on every `List` (`lib.rs:549-554`), and the TUI already shows `fg` in the title. The first plan added `PaneInfo.program` and a `PROTOCOL` bump; with detection only, `fg` is the program and the protocol stays at 9 (RAT-52).
+- Addendum 18 was briefed as exposing `Split` and as using `PaneInfo.program`. The field is `PaneInfo.fg` (older than PR #42; commit `452a300` is only a version bump, the agent logic is `db0d8ce`), and `Split` returned nothing, so the id needed a reply and `PROTOCOL` 10: REQ-203's "stays at 9" holds for A1 only.
+- The plan for addendum 18 said a pane cannot know its own id (RISK-2 of the plan). It can: the daemon sets `JW_PANE_ID` (`daemon/src/lib.rs`), which `jw hook` already reads; REQ-219 uses it.
+- `find()` is documented as taking `project/name` but its filter compares the whole label, the name or the id (`cli.rs`); a path is not accepted.
+- REQ-206 and the Protocol rows of addendum 18 said `PROTOCOL` 10. Addendum 20 adds a field to `Prompt` and makes it 11 (REQ-254); `Interfaces → Protocol` now lists `Prompt{stream,text,pane?}`.
+- RISK-78 was first written saying a restarted daemon restores its panes with their ids. `restore` allocates new ones (`daemon/src/lib.rs`, `new_id`); the old id only finds the scrollback file.
 
 ## Tests
 
@@ -774,6 +979,10 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - selection (X1, X2): unit tests over a vt100 screen for the extracted text (trailing spaces, soft-wrapped rows, wide characters, history rows) and for word and line bounds; the OSC 52 bytes; the highlight and the banner text; `mouse_encodings` still passes. Manual: zsh drag, double and triple click, drag past the edge; the banner appears top right and goes after about 2 s; nvim plain drag reaches nvim, Shift + drag selects.
 - motion (M1–M6): units for the tween (starts at 0, reaches 1 at its duration, monotonic, an interrupt starts from the displayed value) and for the colour lerp; `next_wake` blocks when idle, wakes a frame after the last draw while a transition runs, for the drag edge and the which-key, takes the soonest, and wakes when a message starts to leave; `TestBackend` for the spinner glyph by elapsed time, the welcome (shows; any key closes it, writes `welcomed` and is still handled), the slide's last frame equal to the static draw, and `animations = false` giving the final frame at once; `tick_motion` on an `App` without a daemon (`App::bare`): the band starts on the current row without motion, a switch glides it and keeps the loop awake until `SWITCH`, `animations = false` jumps it, no workspace means no band, the spinner steps only for visible rows; the bytes of a draw start with `CSI ? 2026 h` and end with `CSI ? 2026 l`, also after a failed draw. Manual in Ghostty with `scripts/drive.py`: switching workspaces with the arrows, the which-key at 150 ms, no tearing in a fast `cat`, idle CPU near zero.
 - review (R1–R3): core, with a fake `gh` as in `github.rs`: `open_prs` and `detail` (JSON in, structs out, non-zero exit, no gh); `review_stream` in a temp repo whose origin serves `refs/pull/7/head`: worktree at the head sha, branch `review/pr-7`, `origin/<base>` present, a second call reuses it, a failed fetch leaves nothing; `Stream::resolve` with and without `review_base` (base, tree, `command("view:diff")` is `None`); registry round-trip with and without the field; the context file's content and cap. TUI: `Finder` Reviews filter, order and loading state; the jobs and the pending prompt on an `App` without a daemon (`App::bare`). `crates/jw/tests/daemon.rs`: `Open` with the review tree, then `Prompt` reaches the agent pane; `PROTOCOL == 8`. Manual: `scripts/jw-test` in a repo with an open PR and a fork PR: `^␣ R`, filter, `↵`, the diff against the PR's base, claude's first message, close and reopen the workspace, `X`.
+- diff views (V1–V3): core, in a temp repo: General lists only committed changes; Uncommitted lists staged, unstaged and untracked, and works before the first commit; `commits` order, the 200 cap and its note, a merge and a root commit in `Commit(sha)`; `DIFF_CAP` gives `TooLarge` with the file list, for a committed diff and for untracked files, which are not read; an empty base. TUI, on an `App` without a daemon: a view switch keeps scroll and viewed (each view, and each commit); a reload keeps them by path; a result with an old `gen` is dropped; `1 2 3`, `Tab`, `( )` and the sidebar cursor; narrow shows the breadcrumb and the overlay; no key uses Alt. Manual: `scripts/jw-test` in a repo with commits and a dirty tree, in a big repo (the UI never stalls while a view loads), and in a review workspace.
 - manual (after Q2 and Q5): claude and nvim in panes; `w`, `t`, `x`, `HJKL`, `n`, `d`, `↵` in the diff, `q`, then `jw` again shows the same layout.
 - switch speed (F0–F4): `JW_TRACE` lines per phase; `scripts/bench-switch.py` p50/p95/max against an isolated `scripts/jw-test` dir with 3 worktrees and a 2 MiB ring (kill only that dir's pid); a `Msg::Snapshot` parser equals the inline one and Output after it applies in order; `tick_motion` and a 240×60 draw on `App::bare`/`TestBackend` under the budget.
+- agent programs (A1, A2): `is_agent_program` and `is_agent_pane` tables (`core/src/program.rs`; a path or a `-` prefix is not part of the name). Daemon, in `crates/jw/tests/daemon.rs`: a `shell` pane running a link to `cat` named `claude` is reached by `Prompt` (a script shows as its interpreter, and macOS kills a copy of `cat`); the no-agent error is `prompt_without_an_agent_pane_is_an_error`. `App` units: `marks()` gives `✻` for a busy shell pane running `claude` and nothing for `nvim`; `pane_title` names the agent program and flags it, and leaves other programs unflagged. Not covered by a test: role `agent` winning over a program pane, the pane that stops being an agent, the magenta title colour (`TestBackend`), `jw ls --json programs` and `jw read --pane <program>`. Manual with `scripts/jw-test`: run `claude` by hand in a shell pane, `jw prompt` it from another workspace, exit claude and see the next `jw prompt` refuse.
+- pane commands (addendum 18): `crates/jw/tests/daemon.rs`: `a_split_tells_only_its_requester_the_new_pane` (REQ-205, 207) and `jw_pane_opens_lists_and_closes_panes` (the binary against a daemon and a state dir of its own: not open, open a viewer and a command, the other client's `Tree` (REQ-209), `ls` as a table and JSON, `--of` and `close` outside the workspace, the last pane refused). `cli.rs` units: `run_target` and `anchor` tables. `skill.rs` names the three commands. Not covered by a test: `--force` on the last pane, REQ-219, `--split down` placement, `view:md:` against a running TUI. Manual with `scripts/jw-test`: with a TUI open, `jw pane open <ws> --run view:diff` from a second terminal.
+- prompt to a named pane (addendum 20): `crates/jw/tests/daemon.rs`: `prompt_with_a_pane_reaches_that_agent` (REQ-249), `prompt_with_a_pane_refuses_what_is_not_a_live_agent_of_the_workspace` (REQ-250, REQ-251); `proto.rs`: `a_prompt_without_a_pane_names_none` (REQ-254); `cli.rs` units: `prompt_options_end_at_the_first_word_of_the_text` (REQ-247, REQ-252), `a_tag_names_who_sent_the_text` (REQ-255), `skill.rs`: `the_skill_says_how_to_name_a_pane_and_not_to_answer_permissions` (REQ-256), `the_pane_you_run_in_is_not_a_target` (REQ-253). REQ-248 holds through the REQ-194 and REQ-196 tests above, which send no `pane`.
 - live registry (W1): `RegistryWatch` units over a tempdir (unchanged, touched, a file that appears or goes); an `App` without a daemon: rows from `Msg::Rows` replace the sidebar, with a modal open they land in `pending_rows` and the next tick after it closes applies them, `active` keeps its id; a truncated JSON leaves the rows alone; `next_wake` is still `None` when idle. Manual: with a TUI open, `jw worktree <name>` from a second terminal shows the row within about 2 s; repeat with `^␣ r` open and the row appears after `esc`.
