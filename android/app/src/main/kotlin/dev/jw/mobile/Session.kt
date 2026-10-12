@@ -310,7 +310,6 @@ class Session(
     // The panes of the workspace on screen, as terminals (M5). Fed on the connection's thread, read by the surface.
     private val screens = ConcurrentHashMap<Long, Terminal>()
     private val exits = ConcurrentHashMap<Long, Int>()
-    private val original = ConcurrentHashMap<Long, Pair<Int, Int>>()
     @Volatile private var watching: String? = null
     private val _termRev = MutableStateFlow(0L)
 
@@ -328,7 +327,7 @@ class Session(
      */
     fun watch(stream: String?) {
         if (stream == watching) return
-        if (watching != null) { restoreSizes(); send(Outgoing.Binary(Panes.detachFrame())) }
+        if (watching != null) { send(Outgoing.Binary(Panes.detachFrame())) }
         screens.clear()
         exits.clear()
         watching = stream
@@ -338,18 +337,6 @@ class Session(
 
     /** What a key or a paste sends to `pane`. The bridge drops it in read-only and says so. */
     fun input(pane: Long, bytes: ByteArray) = send(Outgoing.Binary(Workspaces.inputFrame(pane, bytes)))
-
-    /**
-     * "Fit to phone": the pane takes `cols` by `rows`. The size it had is kept, once, and goes back when the
-     * pane is let go (REQ-24).
-     */
-    fun fit(pane: Long, cols: Int, rows: Int) {
-        val t = screens[pane] ?: return
-        if ((state.value as? UiState.Connected)?.readOnly != false) return
-        if (t.cols == cols && t.rows == rows) return
-        original.putIfAbsent(pane, t.cols to t.rows)
-        send(Outgoing.Binary(Panes.resizeFrame(pane, cols, rows)))
-    }
 
     /** `^␣ t`: a shell beside `pane`, in `cwd`. */
     fun newPane(pane: Long, cwd: String) {
@@ -362,12 +349,6 @@ class Session(
 
     /** `^␣ n`: names the pane; blank goes back to its automatic title. */
     fun namePane(pane: Long, name: String) = send(Outgoing.Binary(Panes.nameFrame(pane, name)))
-
-    /** The sizes the panes had before [fit]. */
-    fun restoreSizes() {
-        for ((pane, size) in original) send(Outgoing.Binary(Panes.resizeFrame(pane, size.first, size.second)))
-        original.clear()
-    }
 
     private fun onPane(e: PaneEvent) {
         when (e) {
@@ -767,7 +748,6 @@ class Session(
                             // The screens come again as snapshots: the new one is the truth (REQ-15).
                             screens.clear()
                             exits.clear()
-                            original.clear()
                             watching?.let { out.trySend(Outgoing.Binary(Panes.attachFrame(it))) }
                             _termRev.update { it + 1 }
                         }

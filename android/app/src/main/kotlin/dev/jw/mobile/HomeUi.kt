@@ -502,11 +502,10 @@ private fun SettingsScreen(state: UiState.Connected, session: Session, answers: 
             ThemeGrid(state.palettes, answers.theme, answers::chooseTheme)
             ThemePreview()
             Section("terminal")
-            var fit by remember { mutableStateOf(answers.fitToPhone) }
             SettingRow(
-                "ajustar al teléfono", "el panel toma el tamaño de esta pantalla; al salir recupera el suyo",
-                right = if (fit) "● activado" else "apagado", rightColor = if (fit) j.green else j.dim,
-            ) { fit = !fit; answers.fitToPhone = fit }
+                "texto de los paneles",
+                "la app recibe el texto del panel y lo ajusta al ancho de esta pantalla; el panel no cambia de tamaño en el PC",
+            )
             Section("general")
             SettingRow("líder", "^␣ abre el menú de teclas")
         }

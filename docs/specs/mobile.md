@@ -77,10 +77,10 @@ supersedes:  []
 | 18 | THE workspaces screen SHALL list roots with their worktrees nested, folders in their own section, and the marks `✻ ? ⚡ ⚑` derived from `PaneInfo` as the TUI does (`tui/src/tui/mod.rs:960-979`). |
 | 19 | WHEN the user taps any workspace row, root, worktree or folder, the app SHALL attach and show its panes. |
 | 20 | WHILE a pane's agent is `Waiting`, the row and the pane SHALL offer y and n; WHEN tapped, the app SHALL send `Input` with the configured bytes. The buttons have two looks only, green and red while they can be tapped and dim while they cannot, and the state does not change between polls: a `Panes` is good for 6 s (three polls), and a tapped prompt stays answered until a `Panes` says the pane is no longer Waiting. The daemon ends a pane's Waiting when an `Input` answers it (Esc alone: idle; a terminal report such as focus or mouse: no change; anything else: working), because claude has no hook between an approved permission and its next tool, so the PC's panel kept showing the approved agent as waiting. |
-| 21 | THE terminal surface SHALL render `Snapshot` and `Output` through an on-device VT emulator. |
+| 21 | THE terminal surface SHALL render `Snapshot` and `Output` through an on-device VT emulator, and draw its rows as text broken at the width of the view (fixed letter size, no sideways panning), the blank end of a row left off; the view rests on the last used row, and a full-screen app on its cursor or, with the cursor hidden, on its top. |
 | 22 | THE app SHALL offer a key row (^␣, esc, tab, enter, backspace, arrows, ^C, ^D, ^R, /, |, ~; arrows and backspace repeat while held), a line that sends its text then enter, and text selection to the Android clipboard. |
 | 23 | WHEN the user taps `^␣`, the app SHALL show the TUI's actions (`rust-tui.md:22-32`) and run each phone-capable one with the same client message the TUI sends (find workspace, previous workspace, sessions, open folder, files, new worktree, new / close / name pane, settings, disconnect); the ones that are operations of `core` on the PC that the phone does not ask for (rename, sync, remove, review a PR) SHALL show greyed, tagged "en el PC". |
-| 24 | THE app SHALL NOT send `Resize` unless "fit to phone" (Settings, off by default, never in read-only) is on; WHEN it is turned off or the pane is left, the app SHALL send the size the pane had before. |
+| 24 | THE app SHALL NOT send `Resize`: a pane keeps the size the PC gave it, so nothing on the PC is shrunk for a phone and nothing has to be given back when the phone leaves. |
 | 25 | WHEN the user opens Changes, the app SHALL show files and hunks with add and delete colours (from `ready.palettes`), in the TUI's three views, and keep "viewed" per file and per view on the device. |
 | 26 | THE app SHALL size every touch target at 48 dp or more and show the mode chip (NORMAL, TERM, DIFF, SET, ?) and status bar of the prototype. |
 | 27 | THE app, the bridge and the daemon SHALL NOT log terminal bytes, tokens or the contents of a file. |
@@ -175,7 +175,7 @@ supersedes:  []
 ## Risks
 
 - **RISK-1 Token holder owns the PC.** REQ-2 to 7 limit it. What the relay lets a paired phone do, when it is not read-only, is what the TUI can do: Spawn, Kill, Close, Input, everything but the `Mobile*` frames, which the bridge refuses (that is a denylist, on purpose). The phone is a full client of the daemon, as a second TUI would be, and an allowlist of frames would have to grow with every message the TUI learns, which a phone then silently lacks; the cost of the denylist is that a message added later reaches a phone until someone refuses it. Read-only is the allowlist (REQ-7). Whether a third mode, a phone that may type but not spawn or kill, is worth having is open: see STATUS. Unverified: whether a quick-tunnel URL can leak through `cloudflared` logs.
-- **RISK-2 Last `Resize` wins** (the `Resize` arm of `handle` in `lib.rs`). A phone resize would shrink the PC's pane; REQ-24 is the guard.
+- **RISK-2 Last `Resize` wins** (the `Resize` arm of `handle` in `lib.rs`). A phone resize would shrink the PC's pane; REQ-24 is the guard, and the app has no resize left to send.
 - **RISK-3 Quick tunnels.** No SLA and a new URL each run. WebSocket over one **works** (checked 2026-10-11, `cloudflared` 2026.10.0: upgrade 101, binary frames, 256 raw bytes intact, about 95 ms round trip). The name is **not reachable when `cloudflared` says it is**: `Registered tunnel connection` came about 60 s before DNS resolved it, hence REQ-1. A phone that only watched stayed connected 151 s, answering pings every 30 s; Cloudflare's own idle limit is unmeasured.
 - **RISK-4 Approve bytes.** y and n may not match the agent's prompt UI; Waiting detection comes from `AgentState`. Bytes are configurable.
 - **RISK-5 Emulator.** Candidate: Termux's `terminal-emulator` (licence and kitty replay support **unverified**).
@@ -201,7 +201,7 @@ supersedes:  []
 
 ## Open questions
 
-- **OPEN-1** Resize default. Chosen: never resize, offer "fit to phone".
+- **OPEN-1** Resize default. Chosen: never resize. ("Fit to phone" was offered and is gone: the view wraps the text instead.)
 - **OPEN-2** Named tunnel (Cloudflare account, stable URL, no re-scan) instead of a quick one. Chosen: quick.
 - **OPEN-3** Push alerts while backgrounded (needs a relay or ntfy). Chosen: none in v1.
 - **OPEN-4** Package `android/` in this repo, minSdk 26. Chosen as written.
@@ -296,6 +296,8 @@ Order (L1 to L3, after the rest): L1 first (the app cannot be tried without it),
 - The new-session button was a row that closed the sessions sheet and opened a second sheet, and `+` offered it too. It is now inside the sessions sheet (REQ-88), and `+` no longer has it.
 
 - The theme grid in Settings only showed the PC's themes and the app took One Dark or One Light from the system, so there was no way to choose one on the phone (REQ-17 had said the user could pin one). Tapping a theme now chooses it; `seguir al sistema` undoes it. The panes' colours follow it because `TermColors` is built from the same roles.
+
+- Pane text ran off the phone's screen: the view scaled the letters down to 9 sp and then panned sideways, and "fit to phone" resized the real PTY, leaving the TUI shrunk if the phone left without giving the size back. The view now breaks each row at its own width at a fixed size (REQ-21) and the app never sends `Resize` (REQ-24), so the "fit to phone" setting and `restoreSizes` are gone. No message changed, so `PROTOCOL` stays 14.
 
 ## Tests
 

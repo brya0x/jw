@@ -104,17 +104,15 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
     val exit = sel?.let { session.exitStatus(it.pane) }
     var sheet by remember { mutableStateOf(Sheet.None) }
     var selection by remember(sel?.pane) { mutableStateOf<Selection?>(null) }
-    val fit = remember { answers.fitToPhone }
     val ctx = LocalContext.current
 
-    // Watch this workspace's panes while it is on screen; the size a pane had comes back when it is let go (REQ-24).
+    // Watch this workspace's panes while it is on screen. The app never resizes a pane (REQ-24).
     val watching = panes.isNotEmpty()
     DisposableEffect(w.id, watching) {
         session.watch(if (watching) w.id else null)
-        onDispose { session.restoreSizes(); session.watch(null) }
+        onDispose { session.watch(null) }
     }
     DisposableEffect(w.id) { onDispose { nav.previous = w.id } }
-    DisposableEffect(sel?.pane) { onDispose { session.restoreSizes() } }
     BackHandlerFor(sheet != Sheet.None) { sheet = Sheet.None }
 
     Column(Modifier.fillMaxSize().background(j.bg).imePadding()) {
@@ -156,8 +154,7 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
                 Text("Este workspace no tiene paneles abiertos.", color = j.dim, fontSize = 12.sp, modifier = Modifier.padding(14.dp))
             } else {
                 TerminalView(
-                    term = term, rev = rev, fit = fit, selection = selection, onSelection = { selection = it },
-                    onSize = { c, r -> session.fit(sel.pane, c, r) }, onTap = {},
+                    term = term, rev = rev, selection = selection, onSelection = { selection = it }, onTap = {},
                     modifier = Modifier.fillMaxSize().padding(horizontal = 4.dp),
                 )
                 if (exit != null) {

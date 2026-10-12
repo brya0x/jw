@@ -106,38 +106,6 @@ class PaneStreamsTest {
         assertEquals("""{"t":"Attach","stream":"dir:/y"}""", next())
     }
 
-    @Test fun fitAsksOnceAndRestoresTheSizeThePaneHad() = runBlocking<Unit> {
-        fake.enqueue { _, ws -> ws.send(FakeBridge.ready()) }
-        fake.onFrame = { f, ws -> if (json(f)?.contains("Attach") == true) ws.send(snapshot(7, 100, 30, "x")) }
-        val s = session()
-        s.start()
-        s.connected()
-        s.watch("dir:/x")
-        next()
-        s.screen(7)
-        s.fit(7, 50, 20)
-        assertEquals("""{"t":"Resize","pane":7,"cols":50,"rows":20}""", next())
-        s.fit(7, 48, 18)
-        assertEquals("""{"t":"Resize","pane":7,"cols":48,"rows":18}""", next())
-        s.restoreSizes()
-        assertEquals("""{"t":"Resize","pane":7,"cols":100,"rows":30}""", next())
-        s.restoreSizes()
-        assertNull("nothing left to restore", fake.frames.poll(300, TimeUnit.MILLISECONDS))
-    }
-
-    @Test fun fitDoesNothingInReadOnlyOrWhenTheSizeIsTheSame() = runBlocking<Unit> {
-        fake.enqueue { _, ws -> ws.send(FakeBridge.ready(ro = true)) }
-        fake.onFrame = { f, ws -> if (json(f)?.contains("Attach") == true) ws.send(snapshot(7, 100, 30, "x")) }
-        val s = session()
-        s.start()
-        s.connected()
-        s.watch("dir:/x")
-        next()
-        s.screen(7)
-        s.fit(7, 50, 20)
-        assertNull(fake.frames.poll(300, TimeUnit.MILLISECONDS))
-    }
-
     @Test fun terminalBytesStayOutOfToString() {
         assertTrue(!dev.jw.proto.PaneEvent.Output(1, "secret".toByteArray()).toString().contains("secret"))
     }

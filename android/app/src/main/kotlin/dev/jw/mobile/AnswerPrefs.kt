@@ -25,9 +25,4 @@ class AnswerPrefs(context: Context) {
         theme = name
         prefs.edit().putString("theme", name).apply()
     }
-
-    /** "Fit to phone" (REQ-24): off until the person turns it on. */
-    var fitToPhone: Boolean
-        get() = prefs.getBoolean("fit", false)
-        set(v) = prefs.edit().putBoolean("fit", v).apply()
 }
