@@ -312,6 +312,8 @@ class Session(
     // The panes of the workspace on screen, as terminals (M5). Fed on the connection's thread, read by the surface.
     private val screens = ConcurrentHashMap<Long, PaneText>()
     private val exits = ConcurrentHashMap<Long, Int>()
+    private val chats = ConcurrentHashMap<Long, ChatState>()
+    @Volatile private var chatPane: Long? = null
     @Volatile private var watching: String? = null
     private val _termRev = MutableStateFlow(0L)
 
@@ -322,6 +324,18 @@ class Session(
 
     /** The rows above the screen of `pane`, once the person scrolls up (answered as [PaneEvent.History]). */
     fun requestHistory(pane: Long) = send(Outgoing.Binary(Panes.textHistoryFrame(pane, HISTORY_ROWS)))
+
+    /** The conversation of the agent in `pane`, once the PC has answered (REQ-90); null until then. */
+    fun chat(pane: Long): ChatState? = chats[pane]
+
+    /** Follows the conversation of the agent in `pane` (null: none); only one at a time, the one on screen. */
+    fun watchChat(pane: Long?) {
+        if (pane == chatPane) return
+        chatPane?.let { send(Outgoing.Binary(Panes.chatUnwatchFrame(it))); chats.remove(it) }
+        chatPane = pane
+        pane?.let { send(Outgoing.Binary(Panes.chatWatchFrame(it))) }
+        _termRev.update { it + 1 }
+    }
 
     /** The exit status of a watched pane whose process ended, else null. */
     fun exitStatus(pane: Long): Int? = exits[pane]
@@ -359,6 +373,7 @@ class Session(
         when (e) {
             is PaneEvent.Text -> screens.getOrPut(e.pane) { PaneText(e.cols, e.rows) }.setScreen(e)
             is PaneEvent.History -> screens[e.pane]?.setHistory(e)
+            is PaneEvent.Chat -> chats.compute(e.pane) { _, old -> ChatState.merge(old, e) }
             // The PC sends this client text, never a terminal's bytes (`TextView`).
             is PaneEvent.Snapshot, is PaneEvent.Output, is PaneEvent.Resized -> {}
             is PaneEvent.Exited -> exits[e.pane] = e.status
@@ -754,6 +769,8 @@ class Session(
                             // The screens come again as snapshots: the new one is the truth (REQ-15).
                             screens.clear()
                             exits.clear()
+                            chats.clear()
+                            chatPane?.let { out.trySend(Outgoing.Binary(Panes.chatWatchFrame(it))) }
                             watching?.let {
                                 out.trySend(Outgoing.Binary(Panes.textViewFrame()))
                                 out.trySend(Outgoing.Binary(Panes.attachFrame(it)))

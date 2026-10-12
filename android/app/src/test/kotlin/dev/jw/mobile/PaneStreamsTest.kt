@@ -135,6 +135,27 @@ class PaneStreamsTest {
         assertEquals("older", t.read { it.line(-2).text() })
     }
 
+    @Test fun watchChatAsksForTheConversationAndTheBlocksFillIt() = runBlocking<Unit> {
+        fake.enqueue { _, ws -> ws.send(FakeBridge.ready()) }
+        fake.onFrame = { f, ws ->
+            if (json(f)?.contains("ChatWatch") == true) {
+                ws.send(FakeBridge.frame("""{"t":"Chat","pane":7,"known":true,"title":"Mi chat","reset":true,"blocks":[{"i":0,"kind":"user","text":"hola","name":"","arg":"","result":null,"body":null,"error":false}]}"""))
+                ws.send(FakeBridge.frame("""{"t":"Chat","pane":7,"known":true,"title":null,"reset":false,"blocks":[{"i":1,"kind":"text","text":"listo","name":"","arg":"","result":null,"body":null,"error":false}]}"""))
+            }
+        }
+        val s = session()
+        s.start()
+        s.connected()
+        s.watchChat(7)
+        assertEquals("""{"t":"ChatWatch","pane":7}""", next())
+        withTimeout(10_000) { while ((s.chat(7)?.blocks?.size ?: 0) < 2) kotlinx.coroutines.delay(10) }
+        assertEquals("Mi chat", s.chat(7)!!.title)
+        assertEquals(listOf("hola", "listo"), s.chat(7)!!.blocks.map { it.text })
+        s.watchChat(null)
+        assertEquals("""{"t":"ChatUnwatch","pane":7}""", next())
+        assertNull(s.chat(7))
+    }
+
     @Test fun leavingDetachesAndForgetsTheScreens() = runBlocking<Unit> {
         fake.enqueue { _, ws -> ws.send(FakeBridge.ready()) }
         fake.onFrame = { f, ws -> if (attached(f)) ws.send(text(7, 40, 5, """[[0,"x",0,0,0]]""")) }

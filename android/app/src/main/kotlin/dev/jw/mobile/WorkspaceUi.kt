@@ -112,6 +112,13 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
         session.watch(if (watching) w.id else null)
         onDispose { session.watch(null) }
     }
+    // An agent's conversation is drawn from the PC's transcript of it (REQ-90), not from its screen.
+    val agentPane = sel?.takeIf { it.role == "agent" }?.pane
+    DisposableEffect(agentPane) {
+        session.watchChat(agentPane)
+        onDispose { session.watchChat(null) }
+    }
+    val chat = remember(rev, agentPane) { agentPane?.let(session::chat) }
     DisposableEffect(w.id) { onDispose { nav.previous = w.id } }
     BackHandlerFor(sheet != Sheet.None) { sheet = Sheet.None }
 
@@ -152,6 +159,10 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
         Box(Modifier.weight(1f).fillMaxWidth()) {
             if (sel == null) {
                 Text("Este workspace no tiene paneles abiertos.", color = j.dim, fontSize = 12.sp, modifier = Modifier.padding(14.dp))
+            } else if (agentPane != null && chat == null) {
+                Text("Cargando la conversación…", color = j.dim, fontSize = 12.sp, modifier = Modifier.padding(14.dp))
+            } else if (chat?.known == true) {
+                ChatView(chat, w.name, sel.agent == AgentState.Waiting, Modifier.fillMaxSize())
             } else {
                 TerminalView(
                     term = term, rev = rev, selection = selection, onSelection = { selection = it }, onTap = {},

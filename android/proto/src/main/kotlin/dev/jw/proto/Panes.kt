@@ -20,6 +20,17 @@ import kotlinx.serialization.json.put
  */
 class TextRun(val col: Int, val text: String, val fg: Int, val bg: Int, val attrs: Int)
 
+/**
+ * One block of an agent's conversation (`ChatBlock` in `proto.rs`): `kind` is `user` or `text` (a message: [text]),
+ * `think` ([result] says how long) or `tool` ([name], [arg] the one line that sums the call up, [body] the command,
+ * the diff or the output, [result] the line that sums its result up, null until it answered). [i] numbers the
+ * blocks from the start of the conversation; a block with a number already held is that block, changed.
+ */
+class ChatBlock(
+    val i: Int, val kind: String, val text: String, val name: String, val arg: String,
+    val result: String?, val body: String?, val error: Boolean,
+)
+
 /** What a watched pane sends: its screen as styled rows, the rows above it on request, its size and its end. */
 sealed interface PaneEvent {
     val pane: Long
@@ -39,6 +50,17 @@ sealed interface PaneEvent {
         val cursor: Pair<Int, Int>?, val lines: List<List<TextRun>>,
     ) : PaneEvent {
         override fun toString() = "Text(pane=$pane, ${cols}x$rows)"
+    }
+
+    /**
+     * The conversation of the agent in the pane (`DaemonMsg::Chat`): `reset` says these are all the blocks held,
+     * else they are the ones new or changed. `known` is false for a pane that is no Claude session, which has no
+     * conversation; `title` is the name Claude gave it.
+     */
+    class Chat(
+        override val pane: Long, val known: Boolean, val title: String?, val reset: Boolean, val blocks: List<ChatBlock>,
+    ) : PaneEvent {
+        override fun toString() = "Chat(pane=$pane, known=$known, ${blocks.size} blocks)"
     }
 
     /** The answer to [Panes.textHistoryFrame]: rows of the scrollback, oldest first. */
@@ -88,6 +110,21 @@ object Panes {
                     (o["app_cursor"] as? JsonPrimitive)?.booleanOrNull ?: false, cursor, lines,
                 )
             }
+            "Chat" -> {
+                val blocks = (o["blocks"] as? JsonArray)?.takeIf { it.size <= MAX_CHAT_BLOCKS }?.map { b ->
+                    val bo = b as? JsonObject ?: return null
+                    fun str(k: String) = (bo[k] as? JsonPrimitive)?.contentOrNull
+                    ChatBlock(
+                        (bo["i"] as? JsonPrimitive)?.intOrNull ?: return null, str("kind") ?: return null, str("text") ?: "",
+                        str("name") ?: "", str("arg") ?: "", str("result"), str("body"),
+                        (bo["error"] as? JsonPrimitive)?.booleanOrNull ?: false,
+                    )
+                } ?: return null
+                PaneEvent.Chat(
+                    pane, (o["known"] as? JsonPrimitive)?.booleanOrNull ?: false, (o["title"] as? JsonPrimitive)?.contentOrNull,
+                    (o["reset"] as? JsonPrimitive)?.booleanOrNull ?: false, blocks,
+                )
+            }
             "TextHistory" -> PaneEvent.History(pane, rows(o["lines"], MAX_HISTORY_ROWS) ?: return null)
             "Exited" -> PaneEvent.Exited(pane, (o["status"] as? JsonPrimitive)?.intOrNull ?: return null)
             else -> null
@@ -97,6 +134,7 @@ object Panes {
     private const val MAX_SCREEN_ROWS = 1000
     private const val MAX_HISTORY_ROWS = 10_000
     private const val MAX_RUNS = 2000
+    private const val MAX_CHAT_BLOCKS = 1000
 
     /** `lines` of `Text` and `TextHistory`: rows of runs, `[col, text, fg, bg, attrs]` each; null when malformed. */
     private fun rows(el: kotlinx.serialization.json.JsonElement?, max: Int): List<List<TextRun>>? {
@@ -136,6 +174,12 @@ object Panes {
     /** `ClientMsg::TextHistory`: the last `count` rows of the pane's scrollback, answered as [PaneEvent.History]. Allowed in read-only. */
     fun textHistoryFrame(pane: Long, count: Int): Frame =
         Frame.Json(buildJsonObject { put("t", "TextHistory"); put("pane", pane); put("count", count) }.toString())
+
+    /** `ClientMsg::ChatWatch`: the conversation of the agent in `pane`, answered as [PaneEvent.Chat]. Allowed in read-only. */
+    fun chatWatchFrame(pane: Long): Frame = Frame.Json(buildJsonObject { put("t", "ChatWatch"); put("pane", pane) }.toString())
+
+    /** `ClientMsg::ChatUnwatch`. Allowed in read-only. */
+    fun chatUnwatchFrame(pane: Long): Frame = Frame.Json(buildJsonObject { put("t", "ChatUnwatch"); put("pane", pane) }.toString())
 
     /** `ClientMsg::Detach`: stop every pane's output; the panes keep running. Allowed in read-only. */
     fun detachFrame(): Frame = Frame.Json("""{"t":"Detach"}""")
