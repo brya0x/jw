@@ -117,6 +117,20 @@ pub fn names(state: &Path) -> Vec<String> {
     out
 }
 
+/// The session `jw` with no name opens, the one the TUI last used, read without
+/// side effects (`session::last` makes `sessions/`): what a phone is shown
+/// when it names none. A name that is no session any more is passed over for
+/// the first one there is.
+pub fn last(state: &Path) -> String {
+    let names = names(state);
+    std::fs::read_to_string(state.join("sessions").join("last"))
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| names.contains(s))
+        .or_else(|| names.into_iter().next())
+        .unwrap_or_else(|| session::MAIN.to_string())
+}
+
 /// The rows of `session` from the files under `state` and the registry at
 /// `reg_path`.
 pub fn load(state: &Path, reg_path: &Path, session: &str) -> Result<Vec<Row>> {
@@ -641,6 +655,26 @@ mod tests {
         assert_eq!(names(&dir), ["work"]);
         std::fs::create_dir_all(dir.join("sessions").join("main")).unwrap();
         assert_eq!(names(&dir), ["main", "work"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_phone_that_names_no_session_gets_the_last_one_used() {
+        let dir = std::env::temp_dir().join(format!("jw-last-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        // Nothing yet: `main`, which is there before `sessions/` is.
+        assert_eq!(last(&dir), "main");
+        for n in ["overlord", "work"] {
+            std::fs::create_dir_all(dir.join("sessions").join(n)).unwrap();
+        }
+        // No `main` and no `last` file: the first there is.
+        assert_eq!(last(&dir), "overlord");
+        std::fs::write(dir.join("sessions").join("last"), "work\n").unwrap();
+        assert_eq!(last(&dir), "work");
+        // A `last` that was removed is passed over, and nothing was made or moved.
+        std::fs::write(dir.join("sessions").join("last"), "gone\n").unwrap();
+        assert_eq!(last(&dir), "overlord");
+        assert_eq!(std::fs::read_dir(dir.join("sessions")).unwrap().count(), 3);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -90,9 +90,13 @@ fn spawn(c: &mut Client, stream: &str, cmd: &str, cols: u16, rows: u16) -> PaneI
         rows,
     })
     .unwrap();
-    match recv(c) {
-        DaemonMsg::Spawned { pane } => pane,
-        other => panic!("want Spawned, got {other:?}"),
+    // What an earlier pane of this client prints may come before `Spawned`.
+    loop {
+        match recv(c) {
+            DaemonMsg::Spawned { pane } => return pane,
+            DaemonMsg::Output { .. } | DaemonMsg::Title { .. } | DaemonMsg::Text { .. } => {}
+            other => panic!("want Spawned, got {other:?}"),
+        }
     }
 }
 

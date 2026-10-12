@@ -137,6 +137,14 @@ fn lister(socket: PathBuf) -> Lister {
         let reg = registry::default_path().map_err(|_| "jw has no state folder here")?;
         let value = match query {
             Query::Workspaces(name) => {
+                // A phone that names none is shown the session the TUI last used.
+                let last;
+                let name = if name.is_empty() {
+                    last = sidebar::last(&state);
+                    &last
+                } else {
+                    name
+                };
                 if !sidebar::known(name) || !sidebar::names(&state).contains(name) {
                     return Err(format!("no session named {name}"));
                 }
@@ -145,7 +153,7 @@ fn lister(socket: PathBuf) -> Lister {
                 let mut items = sidebar::items(&rows, name);
                 let truncated = items.len() > sidebar::MAX_ITEMS;
                 items.truncate(sidebar::MAX_ITEMS);
-                serde_json::json!({ "items": items, "truncated": truncated })
+                serde_json::json!({ "items": items, "truncated": truncated, "session": name })
             }
             Query::Sessions => {
                 let items = sidebar::sessions(&state, &reg)
@@ -221,9 +229,16 @@ fn workspace(
         .ok_or_else(|| format!("no workspace {id}"))
 }
 
-/// The session a phone's write is for: the one it names, which must exist, `main` when it names none.
+/// The session a phone's write is for: the one it names, which must exist, the one the TUI last used when it names none.
 fn target_session(state: &std::path::Path, session: Option<&str>) -> Result<String, String> {
-    let name = session.unwrap_or(jw_core::session::MAIN);
+    let last;
+    let name = match session {
+        Some(name) => name,
+        None => {
+            last = sidebar::last(state);
+            &last
+        }
+    };
     if !sidebar::known(name) || !sidebar::names(state).iter().any(|n| n == name) {
         return Err(format!("no session named {name}"));
     }
