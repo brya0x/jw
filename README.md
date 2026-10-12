@@ -303,10 +303,14 @@ of the rest.
 ## Development
 
 ```sh
-cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
+just ci      # the Rust checks, then the Android build, unit tests and lint
+just rust    # fmt, clippy and tests only
+just mobile  # everything the phone path needs
+just         # lists the rest
 ```
 
-CI runs exactly that on every pull request, on Ubuntu and macOS. The code is a workspace of
+CI runs these same recipes on every pull request: the Rust job on Ubuntu and macOS, and
+the Android job (on Ubuntu) when `android/` or `crates/proto/` changed. The code is a workspace of
 five crates (`crates/core`, `proto`, `daemon`, `tui`, `jw`). [AGENTS.md](AGENTS.md) has the
 map and the rules, and each crate has its own. The design and its history are in
 [docs/specs/rust-tui.md](docs/specs/rust-tui.md).
