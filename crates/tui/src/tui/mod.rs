@@ -153,10 +153,10 @@ enum Job {
         entry: Entry,
         from: String,
     },
-    /// `X`: the project is open, so the modal can open while git still reads
-    /// the worktree (REQ-257, REQ-268).
-    RmOpen {
-        entry: Entry,
+    /// The project of the remove modal open on `id`, which gh and the removal
+    /// need (REQ-268).
+    RmProject {
+        id: String,
         project: Project,
     },
     /// What git found in the worktree of the remove modal that is open on
@@ -1496,7 +1496,7 @@ impl App {
                 Outcome::ToDone => {
                     if let Some(Modal::Rm {
                         entry,
-                        project,
+                        project: Some(project),
                         pr: modal::PrLine::Merged { done, .. },
                         ..
                     }) = self.modal.take()
@@ -3233,6 +3233,16 @@ impl App {
             .collect();
         trace::mark("rm_ask", 0);
         self.busy = Some(format!("checking {}", entry.name));
+        self.modal = Some(Modal::Rm {
+            entry: entry.clone(),
+            project: None,
+            plan: actions::RmPlan::default(),
+            typed: String::new(),
+            error: None,
+            pr: modal::PrLine::Checking,
+            pending: true,
+        });
+        trace::mark("rm_modal", 0);
         let tx = self.events.clone();
         thread::spawn(move || {
             let send = |job| {
@@ -3252,10 +3262,15 @@ impl App {
             });
             let project = match opened {
                 Ok(p) => p,
-                Err(e) => return send(Job::Failed(format!("{e:#}"))),
+                Err(e) => {
+                    return send(Job::RmWork {
+                        id: entry.id,
+                        plan: Err(format!("{e:#}")),
+                    });
+                }
             };
-            send(Job::RmOpen {
-                entry: entry.clone(),
+            send(Job::RmProject {
+                id: entry.id.clone(),
                 project: project.clone(),
             });
             let exists = project.repo.branch_exists(&entry.branch);
@@ -3514,7 +3529,7 @@ impl App {
                 ..
             } => {
                 let unconfirmed = plan.loses_work() && typed != entry.name;
-                if pending || unconfirmed {
+                if pending || project.is_none() || unconfirmed {
                     self.modal = Some(Modal::Rm {
                         error: unconfirmed.then(|| format!("type {} to confirm", entry.name)),
                         entry,
@@ -3526,7 +3541,9 @@ impl App {
                     });
                     return;
                 }
-                self.remove(entry, project, plan);
+                if let Some(project) = project {
+                    self.remove(entry, project, plan);
+                }
             }
         }
     }
@@ -3730,19 +3747,18 @@ impl App {
                     None => self.show_view("view:diff".into(), view),
                 }
             }
-            Job::RmOpen { entry, project } => {
-                trace::mark("rm_modal", 0);
-                self.ask_pr(entry.clone(), project.clone());
-                self.modal = Some(Modal::Rm {
+            Job::RmProject { id, project } => match &mut self.modal {
+                Some(Modal::Rm {
                     entry,
-                    project,
-                    plan: actions::RmPlan::default(),
-                    typed: String::new(),
-                    error: None,
-                    pr: modal::PrLine::Checking,
-                    pending: true,
-                });
-            }
+                    project: slot,
+                    ..
+                }) if entry.id == id => {
+                    let entry = entry.clone();
+                    *slot = Some(project.clone());
+                    self.ask_pr(entry, project);
+                }
+                _ => trace::mark("rm_project_dropped", 0),
+            },
         }
         if let Err(e) = reload {
             self.fail(format!("{e:#}"));
@@ -4191,7 +4207,7 @@ mod motion_tests {
                 name: "fast-rm".into(),
                 ..entry(id)
             },
-            project: project(),
+            project: Some(project()),
             plan,
             typed: typed.into(),
             error: None,
@@ -4456,6 +4472,35 @@ mod motion_tests {
         assert!(after.iter().any(|l| l.contains("1 uncommitted file(s)")));
         assert!(after.iter().any(|l| l.contains("Type fast-rm")));
         assert!(!after.iter().any(|l| l.contains("Work ")));
+    }
+
+    /// REQ-268: the modal opens with no project, and neither `↵` nor a
+    /// project for another modal makes it act.
+    #[test]
+    fn the_modal_waits_for_its_project_too() {
+        let (mut app, _g) = app(true);
+        let Modal::Rm {
+            entry, plan, pr, ..
+        } = pending_modal("a")
+        else {
+            unreachable!()
+        };
+        app.modal = Some(Modal::Rm {
+            entry,
+            project: None,
+            plan,
+            typed: String::new(),
+            error: None,
+            pr,
+            pending: false,
+        });
+        app.submit_modal();
+        assert!(matches!(&app.modal, Some(Modal::Rm { project: None, .. })));
+        app.on_job(Job::RmProject {
+            id: "b".into(),
+            project: project(),
+        });
+        assert!(matches!(&app.modal, Some(Modal::Rm { project: None, .. })));
     }
 
     /// REQ-268: git's answer for a closed or another modal is dropped; its

@@ -88,7 +88,8 @@ pub enum Modal {
     /// `rm`: when it would lose work, the stream's name must be typed.
     Rm {
         entry: Entry,
-        project: Project,
+        /// Found off the UI thread; `None` while `pending` (REQ-268).
+        project: Option<Project>,
         plan: RmPlan,
         typed: String,
         error: Option<String>,
