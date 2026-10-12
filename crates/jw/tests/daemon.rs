@@ -2196,14 +2196,15 @@ fn a_listing_carries_the_name_the_user_gave_a_pane() {
     }
 }
 
-/// The latest of what a pane's shell and screen have said, as the messages come.
+/// The latest of what a pane's shell has said, as the messages come: its state, its commands and
+/// what each printed.
 #[derive(Default)]
 struct Seen {
     known: bool,
     running: bool,
     input: String,
-    prompt: Option<u16>,
-    rows: Vec<String>,
+    blocks: BTreeMap<u32, jw_proto::proto::ShellBlock>,
+    outs: BTreeMap<u32, Vec<u8>>,
 }
 
 impl Seen {
@@ -2213,12 +2214,15 @@ impl Seen {
         while !want(self) {
             assert!(
                 Instant::now() < deadline,
-                "{what}: known {} running {} input {:?} prompt {:?} rows {:?}",
+                "{what}: known {} running {} input {:?} blocks {:?} outs {:?}",
                 self.known,
                 self.running,
                 self.input,
-                self.prompt,
-                self.rows
+                self.blocks,
+                self.outs
+                    .iter()
+                    .map(|(i, o)| (*i, String::from_utf8_lossy(o).into_owned()))
+                    .collect::<Vec<_>>()
             );
             c.set_read_timeout(Some(Duration::from_millis(500)))
                 .unwrap();
@@ -2228,30 +2232,37 @@ impl Seen {
                     known,
                     running,
                     input,
+                    blocks,
                 })) if p == pane => {
                     self.known = known;
                     self.running = running;
                     if let Some(i) = input {
                         self.input = i;
                     }
+                    for b in blocks {
+                        self.blocks.insert(b.i, b);
+                    }
                 }
-                Ok(Some(DaemonMsg::Text {
+                Ok(Some(DaemonMsg::ShellOut {
                     pane: p,
-                    prompt,
-                    lines,
-                    ..
+                    block,
+                    bytes,
                 })) if p == pane => {
-                    self.prompt = prompt;
-                    self.rows = lines.iter().map(|l| row_text(l)).collect();
+                    self.outs.entry(block).or_default().extend(bytes);
                 }
                 _ => {}
             }
         }
     }
+
+    /// What block `i` printed, as text.
+    fn out(&self, i: u32) -> String {
+        String::from_utf8_lossy(self.outs.get(&i).map_or(&[][..], |v| v)).into_owned()
+    }
 }
 
 #[test]
-fn a_zsh_jw_started_tells_its_state_its_line_and_where_its_prompt_starts() {
+fn a_zsh_jw_started_tells_its_state_its_line_and_each_command_as_a_block() {
     if !Path::new("/bin/zsh").exists() {
         return;
     }
@@ -2264,7 +2275,6 @@ fn a_zsh_jw_started_tells_its_state_its_line_and_where_its_prompt_starts() {
         &[("HOME", home.path()), ("SHELL", Path::new("/bin/zsh"))],
     );
     let mut c = d.client();
-    c.send(&ClientMsg::TextView).unwrap();
     c.send(&ClientMsg::Spawn {
         stream: "s".into(),
         role: "shell".into(),
@@ -2278,23 +2288,16 @@ fn a_zsh_jw_started_tells_its_state_its_line_and_where_its_prompt_starts() {
     let pane = loop {
         match recv(&mut c) {
             DaemonMsg::Spawned { pane } => break pane,
-            DaemonMsg::Output { .. } | DaemonMsg::Text { .. } => {}
+            DaemonMsg::Output { .. } => {}
             other => panic!("want Spawned, got {other:?}"),
         }
     };
     c.send(&ClientMsg::ShellWatch { pane }).unwrap();
     let mut seen = Seen::default();
-    let out = |s: &Seen| s.rows.iter().position(|r| r.contains("hello 42 ok none"));
-    // The prompt is marked once it is shown: from then on the shell is known and idle, and the
-    // screen says where the prompt starts, which a phone leaves out.
+    // The prompt is marked once it is shown: from then on the shell is known and idle.
     seen.until(&mut c, pane, "the shell never marked its prompt", |s| {
-        s.known && !s.running && s.prompt.is_some()
+        s.known && !s.running
     });
-    assert_eq!(
-        seen.prompt,
-        Some(0),
-        "an empty screen: the prompt is its first row"
-    );
 
     // What is typed at the prompt, before Enter, is the shell's line: the text a phone's input mirrors.
     c.send(&ClientMsg::Input {
@@ -2305,7 +2308,6 @@ fn a_zsh_jw_started_tells_its_state_its_line_and_where_its_prompt_starts() {
     seen.until(&mut c, pane, "the typed line never showed", |s| {
         s.input == "echo par"
     });
-    // Ctrl-U clears it; the line is empty again.
     c.send(&ClientMsg::Input {
         pane,
         bytes: vec![0x15],
@@ -2315,28 +2317,58 @@ fn a_zsh_jw_started_tells_its_state_its_line_and_where_its_prompt_starts() {
         s.input.is_empty()
     });
 
-    // A command that runs: no prompt is left out (the prompt and the command are part of what
-    // is on screen), and it is running. It also shows the shell has no ZDOTDIR the user did not
-    // have and ran the user's .zshrc.
+    // A command that runs is a block, running, with what it printed so far, colours as printed.
     c.send(&ClientMsg::Input {
         pane,
-        bytes: b"echo hello $((6*7)) $JW_PROBE ${ZDOTDIR-none}; sleep 2\n".to_vec(),
+        bytes: b"printf '\\033[31mred\\033[0m\\n'; echo hello $((6*7)) $JW_PROBE ${ZDOTDIR-none}; sleep 2\n"
+            .to_vec(),
     })
     .unwrap();
     seen.until(&mut c, pane, "the command never showed running", |s| {
-        s.running && s.prompt.is_none() && out(s).is_some()
+        s.running && s.blocks.values().any(|b| b.running) && s.out(0).contains("hello 42 ok none")
     });
-
-    // It ends: the new prompt starts right under the output, and from its row down is left out.
-    seen.until(&mut c, pane, "no prompt row after the command", |s| {
-        !s.running
-            && s.prompt
-                .is_some_and(|p| out(s).is_some_and(|o| usize::from(p) > o))
-    });
-    let (prompt, output) = (usize::from(seen.prompt.unwrap()), out(&seen).unwrap());
+    let block = &seen.blocks[&0];
     assert!(
-        prompt > output && prompt <= output + 2,
-        "output at {output}, prompt at {prompt}: {:?}",
-        seen.rows
+        block.cmd.starts_with("printf '\\033[31mred"),
+        "{}",
+        block.cmd
     );
+    assert_eq!(
+        std::fs::canonicalize(&block.cwd).unwrap(),
+        std::fs::canonicalize(work.path()).unwrap()
+    );
+    // The bytes are the program's own, styles included, with no prompt and none of the marks in them.
+    let out = seen.out(0);
+    assert!(out.contains("\x1b[31mred\x1b[0m"), "{out:?}");
+    assert!(!out.contains("7770"), "{out:?}");
+
+    // It ends: the block is closed with its status and the shell is idle again.
+    seen.until(&mut c, pane, "the command never ended", |s| {
+        !s.running && s.blocks.get(&0).is_some_and(|b| !b.running)
+    });
+    assert_eq!(seen.blocks[&0].code, Some(0));
+    assert!(seen.blocks[&0].ms >= 1500, "{}", seen.blocks[&0].ms);
+    // Nor does the prompt that follows get into the block.
+    let out = seen.out(0);
+    assert!(!out.contains('%') || out.contains("hello 42"), "{out:?}");
+    assert!(out.trim_end().ends_with("ok none"), "{out:?}");
+
+    // A failing command is the next block, with its status; a client that asks is told it all.
+    c.send(&ClientMsg::Input {
+        pane,
+        bytes: b"false\n".to_vec(),
+    })
+    .unwrap();
+    seen.until(&mut c, pane, "the failing command never ended", |s| {
+        s.blocks
+            .get(&1)
+            .is_some_and(|b| !b.running && b.code == Some(1))
+    });
+    let mut late = d.client();
+    late.send(&ClientMsg::ShellWatch { pane }).unwrap();
+    let mut told = Seen::default();
+    told.until(&mut late, pane, "a client that asks was not told", |s| {
+        s.blocks.len() == 2 && s.out(0).contains("hello 42 ok none")
+    });
+    assert_eq!(told.blocks[&1].code, Some(1));
 }

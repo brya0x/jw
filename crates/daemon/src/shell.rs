@@ -1,19 +1,30 @@
-//! What a shell tells the daemon about itself (mobile REQ-92): whether it is at its
-//! prompt or runs a command, the line being typed, and where its prompt starts on
-//! the screen.
+//! A shell's commands as blocks, a command and its output each, like Warp's (mobile REQ-92).
 //!
 //! jw gives the zsh it starts for a pane a few lines of its own (`install`,
-//! `prepare`) that print an OSC 7770 sequence: `start` before each command, `end`
-//! (with the status) before each prompt, and `line` (the text being typed, in
-//! base64) on every redraw of the line. The daemon watches the bytes the pane
-//! prints for them (`Scanner`). A shell that was not started by jw prints none,
-//! so it is not `known` and is drawn as text as it is.
+//! `prepare`) that print an OSC 7770 sequence: `start` before each command (with
+//! the command and the folder, in base64), `end` (with the status) before each
+//! prompt, and `line` (the text being typed, in base64) on every redraw of the
+//! line. The daemon watches the bytes the pane prints for them (`Scanner`) and keeps
+//! what a command printed between its `start` and its `end` as raw bytes, apart from
+//! the screen: a phone parses each block's bytes into a terminal of its own, so a
+//! closed block never changes and the screen is not needed. A shell that was not
+//! started by jw prints none, so it is not `known` and is drawn as text.
 
+use std::collections::VecDeque;
 use std::io;
 use std::path::Path;
+use std::time::Instant;
+
+use crate::proto::ShellBlock;
 
 /// The most bytes of one mark's body that are waited for.
 const MARK_MAX: usize = 8 << 10;
+/// The blocks kept per pane, the bytes of output kept of one, and of all of them.
+const KEEP: usize = 200;
+const BLOCK_MAX: usize = 512 << 10;
+const TOTAL_MAX: usize = 16 << 20;
+/// The most bytes of output a client that asks is sent at once, newest blocks first.
+const REPLAY_MAX: usize = 4 << 20;
 
 const PREFIX: &[u8] = b"\x1b]7770;";
 
@@ -47,7 +58,7 @@ fi
 if [[ -o interactive ]]; then
   autoload -Uz add-zsh-hook
   __jw_b64() { printf %s "$1" | base64 | tr -d '\n'; }
-  __jw_preexec() { printf '\e]7770;start\a'; }
+  __jw_preexec() { printf '\e]7770;start;%s;%s\a' "$(__jw_b64 "$1")" "$(__jw_b64 "$PWD")"; }
   __jw_precmd() { local s=$?; printf '\e]7770;end;%d\a' "$s"; }
   add-zsh-hook preexec __jw_preexec
   # First, so the status it reads is the command's, and the mark comes where the prompt starts.
@@ -115,8 +126,8 @@ pub fn prepare(
 pub enum Piece {
     /// Bytes of output (the marks are not in them).
     Data(Vec<u8>),
-    /// A command starts.
-    Start,
+    /// A command starts: what was typed and the folder it runs in.
+    Start { cmd: String, cwd: String },
     /// A command ended; the prompt is drawn next.
     End { status: i32 },
     /// The line being typed at the prompt.
@@ -191,7 +202,10 @@ fn parse(body: &[u8]) -> Option<Piece> {
     let body = std::str::from_utf8(body).ok()?;
     let mut parts = body.split(';');
     match parts.next()? {
-        "start" => Some(Piece::Start),
+        "start" => Some(Piece::Start {
+            cmd: decode(parts.next()?)?,
+            cwd: decode(parts.next()?)?,
+        }),
         "end" => Some(Piece::End {
             status: parts.next()?.trim().parse().ok()?,
         }),
@@ -238,18 +252,65 @@ pub struct Told {
     pub input: String,
 }
 
-/// The state of one pane's shell.
+/// What is new in a shell since its watchers were told: its state, the blocks that changed or are
+/// new, and the bytes of output that came, by block.
+#[derive(Debug, Clone, PartialEq)]
+pub struct News {
+    pub told: Told,
+    pub blocks: Vec<ShellBlock>,
+    pub outs: Vec<(u32, Vec<u8>)>,
+}
+
+struct Block {
+    i: u32,
+    cmd: String,
+    cwd: String,
+    code: Option<i32>,
+    started: Instant,
+    ms: u64,
+    running: bool,
+    /// A program drew the whole screen: no output is kept for it.
+    full: bool,
+    /// The start of the output was let go: it passed [`BLOCK_MAX`].
+    truncated: bool,
+    out: Vec<u8>,
+}
+
+impl Block {
+    fn wire(&self) -> ShellBlock {
+        ShellBlock {
+            i: self.i,
+            cmd: self.cmd.clone(),
+            cwd: self.cwd.clone(),
+            code: self.code,
+            ms: if self.running {
+                self.started.elapsed().as_millis() as u64
+            } else {
+                self.ms
+            },
+            running: self.running,
+            full: self.full,
+            truncated: self.truncated,
+        }
+    }
+}
+
+/// The state of one pane's shell and the blocks of its commands.
 #[derive(Default)]
 pub struct ShellState {
     scanner: Scanner,
     seen: bool,
-    running: bool,
     input: String,
-    /// Where the prompt on screen starts, counted from the first row the pane ever
-    /// printed (the rows that scrolled away plus its row on the screen), so it keeps its place as the
-    /// screen scrolls; `None` while a command runs.
-    prompt: Option<usize>,
+    blocks: VecDeque<Block>,
+    /// The number the next block gets.
+    next: u32,
+    /// The bytes of output held, of all the blocks.
+    held: usize,
     told: Option<Told>,
+    /// The numbers of the blocks changed since the watchers were told.
+    changed: Vec<u32>,
+    /// The output that came since the watchers were told, by block, in order.
+    fresh: Vec<(u32, Vec<u8>)>,
 }
 
 impl ShellState {
@@ -258,18 +319,96 @@ impl ShellState {
         self.scanner.feed(bytes)
     }
 
-    pub fn start(&mut self) {
-        self.seen = true;
-        self.running = true;
-        self.prompt = None;
+    fn running_block(&mut self) -> Option<&mut Block> {
+        self.blocks.back_mut().filter(|b| b.running)
     }
 
-    /// A command ended and the prompt starts at the cursor: `scrolled` rows have scrolled
-    /// away and the cursor is on screen row `row`.
-    pub fn end(&mut self, scrolled: usize, row: u16) {
+    fn touch(&mut self, i: u32) {
+        if !self.changed.contains(&i) {
+            self.changed.push(i);
+        }
+    }
+
+    /// A command starts.
+    pub fn start(&mut self, cmd: String, cwd: String) {
         self.seen = true;
-        self.running = false;
-        self.prompt = Some(scrolled + usize::from(row));
+        self.finish(None);
+        let i = self.next;
+        self.next += 1;
+        self.blocks.push_back(Block {
+            i,
+            cmd: cmd.chars().take(4000).collect(),
+            cwd,
+            code: None,
+            started: Instant::now(),
+            ms: 0,
+            running: true,
+            full: false,
+            truncated: false,
+            out: Vec::new(),
+        });
+        self.touch(i);
+        while self.blocks.len() > KEEP || (self.held > TOTAL_MAX && self.blocks.len() > 1) {
+            if let Some(old) = self.blocks.pop_front() {
+                self.held -= old.out.len();
+            }
+        }
+    }
+
+    /// What a running command printed; `alt` says the screen is the alternate one now, which a
+    /// block does not hold.
+    pub fn data(&mut self, bytes: &[u8], alt: bool) {
+        let Some(b) = self.blocks.back_mut().filter(|b| b.running) else {
+            return;
+        };
+        if b.full {
+            return;
+        }
+        let i = b.i;
+        if alt {
+            // A program that draws the whole screen: its escape codes are not a block's output.
+            b.full = true;
+            let dropped = std::mem::take(&mut b.out).len();
+            self.held -= dropped;
+            self.fresh.retain(|(n, _)| *n != i);
+            self.touch(i);
+            return;
+        }
+        b.out.extend_from_slice(bytes);
+        self.held += bytes.len();
+        if b.out.len() > BLOCK_MAX {
+            let cut = b.out.len() - BLOCK_MAX;
+            b.out.drain(..cut);
+            b.truncated = true;
+            self.held -= cut.min(self.held);
+        }
+        match self.fresh.last_mut() {
+            Some((n, out)) if *n == i => out.extend_from_slice(bytes),
+            _ => self.fresh.push((i, bytes.to_vec())),
+        }
+        self.touch(i);
+    }
+
+    /// A command ended, with `status`; the prompt is drawn next.
+    pub fn end(&mut self, status: i32) {
+        self.seen = true;
+        self.finish(Some(status));
+    }
+
+    /// Ends the block that runs, with its status (`None`: it never said).
+    fn finish(&mut self, status: Option<i32>) {
+        let Some(b) = self.running_block() else {
+            return;
+        };
+        let before = b.out.len();
+        trim_eol_mark(&mut b.out);
+        let cut = before - b.out.len();
+        b.running = false;
+        b.code = status;
+        b.ms = b.started.elapsed().as_millis() as u64;
+        let i = b.i;
+        self.held -= cut.min(self.held);
+        self.touch(i);
     }
 
     pub fn line(&mut self, text: String) {
@@ -280,33 +419,65 @@ impl ShellState {
     pub fn state(&self) -> Told {
         Told {
             known: self.seen,
-            running: self.running,
+            running: self.blocks.back().is_some_and(|b| b.running),
             input: self.input.clone(),
         }
     }
 
-    /// The screen row the prompt starts at, while the shell is at its prompt, when `scrolled` rows
-    /// have scrolled away: what a phone leaves out of the shell's text.
-    pub fn prompt_row(&self, scrolled: usize) -> Option<u16> {
-        self.prompt
-            .filter(|_| self.seen && !self.running)
-            .map(|p| p.saturating_sub(scrolled).min(usize::from(u16::MAX)) as u16)
-    }
-
     /// What changed since the watchers were told, or `None`.
-    pub fn news(&mut self) -> Option<Told> {
+    pub fn news(&mut self) -> Option<News> {
         let now = self.state();
-        (self.told.as_ref() != Some(&now)).then(|| {
-            self.told = Some(now.clone());
-            now
+        let moved = self.told.as_ref() != Some(&now);
+        if !moved && self.changed.is_empty() && self.fresh.is_empty() {
+            return None;
+        }
+        self.told = Some(now.clone());
+        let changed = std::mem::take(&mut self.changed);
+        let blocks = self
+            .blocks
+            .iter()
+            .filter(|b| changed.contains(&b.i))
+            .map(Block::wire)
+            .collect();
+        Some(News {
+            told: now,
+            blocks,
+            outs: std::mem::take(&mut self.fresh),
         })
     }
 
-    /// Takes it as told: what a client that has just asked is sent in full.
-    pub fn tell(&mut self) -> Told {
+    /// Everything, for a client that has just asked (and so counts as told): every block and the output
+    /// of the newest ones that fit in [`REPLAY_MAX`], oldest first.
+    pub fn replay(&mut self) -> News {
         let now = self.state();
         self.told = Some(now.clone());
-        now
+        self.changed.clear();
+        self.fresh.clear();
+        let mut room = REPLAY_MAX;
+        let mut outs = Vec::new();
+        for b in self.blocks.iter().rev() {
+            if b.out.is_empty() || b.out.len() > room {
+                continue;
+            }
+            room -= b.out.len();
+            outs.push((b.i, b.out.clone()));
+        }
+        outs.reverse();
+        News {
+            told: now,
+            blocks: self.blocks.iter().map(Block::wire).collect(),
+            outs,
+        }
+    }
+}
+
+/// zsh prints a reverse `%` and enough spaces to reach the end of the line before the prompt
+/// when a command's output did not end with a newline; that is the prompt's, not the block's.
+fn trim_eol_mark(out: &mut Vec<u8>) {
+    const MARK: &[u8] = b"\x1b[1m\x1b[7m%\x1b[27m\x1b[1m\x1b[0m";
+    let tail = out.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1);
+    if let Some(at) = find(&out[tail..], MARK) {
+        out.truncate(tail + at);
     }
 }
 
@@ -331,8 +502,28 @@ mod tests {
         out
     }
 
+    fn start(cmd: &str, cwd: &str) -> Vec<u8> {
+        format!("\x1b]7770;start;{};{}\x07", b64(cmd), b64(cwd)).into_bytes()
+    }
+
+    fn end(status: i32) -> Vec<u8> {
+        format!("\x1b]7770;end;{status}\x07").into_bytes()
+    }
+
     fn line(text: &str) -> Vec<u8> {
         format!("\x1b]7770;line;{}\x07", b64(text)).into_bytes()
+    }
+
+    /// What a pane printed, taken through the scanner into the state as the daemon does.
+    fn feed(s: &mut ShellState, alt: bool, bytes: &[u8]) {
+        for piece in s.scan(bytes) {
+            match piece {
+                Piece::Data(d) => s.data(&d, alt),
+                Piece::Start { cmd, cwd } => s.start(cmd, cwd),
+                Piece::End { status } => s.end(status),
+                Piece::Line { text } => s.line(text),
+            }
+        }
     }
 
     #[test]
@@ -346,7 +537,7 @@ mod tests {
     #[test]
     fn marks_are_found_across_reads_and_output_is_left_whole() {
         let mut sc = Scanner::default();
-        let mark = line("ls");
+        let mark = start("ls", "/w");
         // The mark is cut in two reads, in the middle of its start and of its body.
         let mut got = sc.feed(&[b"before".as_slice(), &mark[..4]].concat());
         got.extend(sc.feed(&mark[4..12]));
@@ -363,68 +554,171 @@ mod tests {
             .flatten()
             .collect();
         assert_eq!(data, b"beforeout\x1b[1mbold\x1b[0m");
-        assert!(got.contains(&Piece::Line { text: "ls".into() }));
+        assert!(got.contains(&Piece::Start {
+            cmd: "ls".into(),
+            cwd: "/w".into()
+        }));
         // A mark ended by ESC `\`, and one of another program's OSC, are told apart.
         let mut sc = Scanner::default();
-        let got = sc.feed(b"\x1b]7770;end;3\x1b\\\x1b]0;title\x07x\x1b]7770;start\x07");
+        let got = sc.feed(b"\x1b]7770;end;3\x1b\\\x1b]0;title\x07x");
         assert_eq!(got[0], Piece::End { status: 3 });
         assert_eq!(got[1], Piece::Data(b"\x1b]0;title\x07x".to_vec()));
-        assert_eq!(got[2], Piece::Start);
     }
 
     #[test]
-    fn a_shell_is_known_once_it_marks_something_and_runs_between_start_and_end() {
+    fn a_command_is_a_block_with_its_output_as_raw_bytes_and_its_status() {
         let mut s = ShellState::default();
         assert!(!s.state().known);
-        s.end(0, 3);
-        assert_eq!((s.state().known, s.state().running), (true, false));
-        s.start();
-        assert!(s.state().running);
-        s.end(5, 0);
-        assert!(!s.state().running);
+        // What is printed at the prompt is no block's.
+        feed(&mut s, false, b"prompt % ");
+        feed(&mut s, false, &start("cargo test", "/w"));
+        feed(&mut s, false, b"\x1b[32mrunning\x1b[0m 2 tests\r\n");
+        let n = s.news().unwrap();
+        assert!(n.told.known && n.told.running);
+        assert_eq!(n.blocks.len(), 1);
+        assert_eq!(
+            (n.blocks[0].cmd.as_str(), n.blocks[0].cwd.as_str()),
+            ("cargo test", "/w")
+        );
+        assert!(n.blocks[0].running);
+        // Colours and all: the bytes as the program printed them.
+        assert_eq!(
+            n.outs,
+            [(0, b"\x1b[32mrunning\x1b[0m 2 tests\r\n".to_vec())]
+        );
+        feed(&mut s, false, b"test result: ok\r\n");
+        feed(&mut s, false, &end(0));
+        let n = s.news().unwrap();
+        assert!(!n.told.running);
+        assert_eq!((n.blocks[0].code, n.blocks[0].running), (Some(0), false));
+        // Only what came since: the bytes are not sent twice.
+        assert_eq!(n.outs, [(0, b"test result: ok\r\n".to_vec())]);
+        assert_eq!(s.news(), None);
+        // A failing one.
+        feed(&mut s, false, &start("false", "/w"));
+        feed(&mut s, false, &end(1));
+        let n = s.news().unwrap();
+        assert_eq!(
+            n.blocks.iter().map(|b| (b.i, b.code)).collect::<Vec<_>>(),
+            [(1, Some(1))]
+        );
     }
 
     #[test]
-    fn the_prompt_row_keeps_its_place_as_the_screen_scrolls() {
+    fn the_prompts_reverse_percent_that_follows_output_with_no_newline_is_not_the_blocks() {
         let mut s = ShellState::default();
-        // Not a shell of jw's yet: nothing to leave out.
-        assert_eq!(s.prompt_row(0), None);
-        // The prompt starts at screen row 40 with 10 rows scrolled away.
-        s.end(10, 40);
-        assert_eq!(s.prompt_row(10), Some(40));
-        // The screen scrolled 3 more rows: the same prompt is now 3 rows higher.
-        assert_eq!(s.prompt_row(13), Some(37));
-        // Scrolled past the top: the first row.
-        assert_eq!(s.prompt_row(500), Some(0));
-        // A command runs: no prompt is left out, so its prompt and what it prints show.
-        s.start();
-        assert_eq!(s.prompt_row(10), None);
+        feed(&mut s, false, &start("printf hi", "/w"));
+        // zsh: the mark, 80 spaces to the end of the line and a carriage return, all before the prompt.
+        feed(
+            &mut s,
+            false,
+            b"hi\x1b[1m\x1b[7m%\x1b[27m\x1b[1m\x1b[0m                    \r \r",
+        );
+        feed(&mut s, false, &end(0));
+        let n = s.replay();
+        assert_eq!(n.outs, [(0, b"hi".to_vec())]);
+        // Output that ends with a newline is kept whole.
+        feed(&mut s, false, &start("echo", "/w"));
+        feed(&mut s, false, b"x\r\n");
+        feed(&mut s, false, &end(0));
+        assert_eq!(s.replay().outs[1], (1, b"x\r\n".to_vec()));
+    }
+
+    #[test]
+    fn a_program_that_draws_the_whole_screen_keeps_no_output() {
+        let mut s = ShellState::default();
+        feed(&mut s, false, &start("nvim a", "/w"));
+        feed(&mut s, false, b"before the screen changed");
+        feed(&mut s, true, b"\x1b[?1049h\x1b[2J garbage");
+        feed(&mut s, true, &end(0));
+        let n = s.replay();
+        assert!(n.blocks[0].full);
+        assert_eq!(n.outs, []);
+    }
+
+    #[test]
+    fn a_start_with_no_end_closes_the_one_before() {
+        let mut s = ShellState::default();
+        feed(&mut s, false, &start("one", "/w"));
+        feed(&mut s, false, &start("two", "/w"));
+        let n = s.replay();
+        assert_eq!((n.blocks[0].running, n.blocks[0].code), (false, None));
+        assert!(n.blocks[1].running);
+    }
+
+    #[test]
+    fn the_output_of_a_block_past_its_cap_keeps_its_end_and_says_so() {
+        let mut s = ShellState::default();
+        feed(&mut s, false, &start("yes", "/w"));
+        let chunk = vec![b'y'; 100 << 10];
+        for _ in 0..8 {
+            feed(&mut s, false, &chunk);
+        }
+        let n = s.replay();
+        assert!(n.blocks[0].truncated);
+        assert_eq!(n.outs[0].1.len(), BLOCK_MAX);
+        // The bytes held count what is kept, not what went by.
+        assert_eq!(s.held, BLOCK_MAX);
+    }
+
+    #[test]
+    fn old_blocks_are_let_go_past_the_count_and_the_total() {
+        let mut s = ShellState::default();
+        for n in 0..KEEP + 5 {
+            feed(&mut s, false, &start(&format!("c{n}"), "/w"));
+            feed(&mut s, false, &end(0));
+        }
+        let all = s.replay().blocks;
+        assert_eq!(all.len(), KEEP);
+        assert_eq!(all[0].cmd, "c5");
+        // The numbers go on: a block keeps its number.
+        assert_eq!(all[0].i, 5);
+    }
+
+    #[test]
+    fn a_client_that_asks_is_sent_the_newest_output_that_fits_oldest_first() {
+        let mut s = ShellState::default();
+        for n in 0..3 {
+            feed(&mut s, false, &start(&format!("c{n}"), "/w"));
+            feed(&mut s, false, format!("out{n}\r\n").as_bytes());
+            feed(&mut s, false, &end(0));
+        }
+        let n = s.replay();
+        assert_eq!(n.blocks.len(), 3);
+        assert_eq!(
+            n.outs,
+            [
+                (0, b"out0\r\n".to_vec()),
+                (1, b"out1\r\n".to_vec()),
+                (2, b"out2\r\n".to_vec())
+            ]
+        );
+        // That counts as told.
+        assert_eq!(s.news(), None);
     }
 
     #[test]
     fn the_line_being_typed_and_the_state_are_news_when_they_change() {
         let mut s = ShellState::default();
-        assert_eq!(s.news().map(|t| t.known), Some(false));
+        assert_eq!(s.news().map(|n| n.told.known), Some(false));
         assert_eq!(s.news(), None);
-        s.line("ls".into());
+        feed(&mut s, false, &line("ls"));
         let n = s.news().unwrap();
-        assert_eq!((n.known, n.input.as_str()), (true, "ls"));
+        assert_eq!((n.told.known, n.told.input.as_str()), (true, "ls"));
+        assert!(n.blocks.is_empty() && n.outs.is_empty());
         assert_eq!(s.news(), None);
         // Typing more is news; the same line again is not.
-        s.line("ls -l".into());
-        assert_eq!(s.news().unwrap().input, "ls -l");
-        s.line("ls -l".into());
+        feed(&mut s, false, &line("ls -l"));
+        assert_eq!(s.news().unwrap().told.input, "ls -l");
+        feed(&mut s, false, &line("ls -l"));
         assert_eq!(s.news(), None);
-        // A command starting is news, and so is the line cleared.
-        s.start();
-        assert!(s.news().unwrap().running);
-        s.end(0, 0);
-        s.line(String::new());
+        // A command starting is news, and so is the line cleared after.
+        feed(&mut s, false, &start("ls -l", "/w"));
+        assert!(s.news().unwrap().told.running);
+        feed(&mut s, false, &end(0));
+        feed(&mut s, false, &line(""));
         let n = s.news().unwrap();
-        assert_eq!((n.running, n.input.as_str()), (false, ""));
-        // A client that asks is told in full and that counts as told.
-        assert_eq!(s.tell().input, "");
-        assert_eq!(s.news(), None);
+        assert_eq!((n.told.running, n.told.input.as_str()), (false, ""));
     }
 
     #[test]

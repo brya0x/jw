@@ -15,7 +15,7 @@ pub type PaneId = u64;
 
 /// Bumped whenever a message changes shape: a client and a daemon from
 /// different builds refuse each other instead of misreading (RISK-14).
-pub const PROTOCOL: u32 = 20;
+pub const PROTOCOL: u32 = 21;
 
 /// A run of cells of one row that share a style: its first column, its
 /// text (a wide character counts two columns; the cells after it are not
@@ -42,6 +42,23 @@ pub struct ChatBlock {
     pub result: Option<String>,
     pub body: Option<String>,
     pub error: bool,
+}
+
+/// One command of a shell (mobile REQ-92): what was typed, where, how it ended and how long it
+/// took (so far, while `running`). `full` says a program drew the whole screen (nvim, htop): no
+/// output is kept for it. `truncated` says the start of its output was let go. `i` numbers the
+/// pane's commands from its start: a block with a number the client has is that block again,
+/// changed. Its output comes in `ShellOut`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ShellBlock {
+    pub i: u32,
+    pub cmd: String,
+    pub cwd: String,
+    pub code: Option<i32>,
+    pub ms: u64,
+    pub running: bool,
+    pub full: bool,
+    pub truncated: bool,
 }
 
 /// A pane to start. `cmd` runs through `sh -c`; `None` starts `$SHELL`.
@@ -396,10 +413,6 @@ pub enum DaemonMsg {
         /// The program asked for application cursor keys: the arrows are `ESC O A`.
         app_cursor: bool,
         cursor: Option<(u16, u16)>,
-        /// The row the shell's prompt starts at, while it waits at it: from there down is the
-        /// prompt and the line being typed, which a phone leaves out (its input is the line).
-        /// `None` for anything but a shell of jw's at its prompt.
-        prompt: Option<u16>,
         lines: Vec<Vec<Run>>,
     },
     /// The conversation of the agent in `pane`: `reset` says these blocks are
@@ -421,13 +434,21 @@ pub enum DaemonMsg {
     /// What the shell in `pane` says of itself, when it changes (and in full to a client that asks):
     /// `known` is false while it has marked nothing (it is not one jw started), and the pane is then
     /// plain text; `running` says a command runs, so what is typed goes to it; `input` is the line
-    /// being typed at the prompt, when it is new: the terminal's input, which a phone's input shows
-    /// as its own.
+    /// being typed at the prompt, when it is new, which a phone's input shows as its own; `blocks`
+    /// are the commands that are new or changed, each with its output in `ShellOut`.
     Shell {
         pane: PaneId,
         known: bool,
         running: bool,
         input: Option<String>,
+        blocks: Vec<ShellBlock>,
+    },
+    /// Output of the command that is block `block` of the shell in `pane`: bytes as the command
+    /// printed them, in order, to be added to what the client has of that block.
+    ShellOut {
+        pane: PaneId,
+        block: u32,
+        bytes: Vec<u8>,
     },
     /// The answer to `TextHistory`: rows of the scrollback, oldest first.
     TextHistory {
@@ -582,6 +603,14 @@ impl Raw for DaemonMsg {
                 },
                 bytes,
             )),
+            DaemonMsg::ShellOut { pane, block, bytes } => Some((
+                DaemonMsg::ShellOut {
+                    pane: *pane,
+                    block: *block,
+                    bytes: Vec::new(),
+                },
+                bytes,
+            )),
             DaemonMsg::Snapshot {
                 pane,
                 role,
@@ -634,6 +663,7 @@ impl Raw for DaemonMsg {
 
     fn join_raw(&mut self, raw: Vec<u8>) {
         if let DaemonMsg::Output { bytes, .. }
+        | DaemonMsg::ShellOut { bytes, .. }
         | DaemonMsg::Snapshot { bytes, .. }
         | DaemonMsg::Screen { bytes, .. }
         | DaemonMsg::History { bytes, .. } = self
