@@ -173,6 +173,17 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text("? ${sel.role} espera tu respuesta", color = j.fg, fontSize = 12.5.sp)
+                // What it asks, read off its screen: the question and its numbered choices.
+                val ask = remember(term, rev) { term?.screenRows()?.let(AskText::from) }
+                if (ask != null) {
+                    Text(ask.question, color = j.fg, fontSize = 12.sp, maxLines = 5, overflow = TextOverflow.Ellipsis)
+                    for (o in ask.options) {
+                        Text(
+                            (if (o.selected) "❯ " else "  ") + o.label, color = if (o.selected) j.yellow else j.dim, fontSize = 11.5.sp,
+                            maxLines = 2, overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
                 YesNo(on, "y · sí", "n · no", { session.answer(sel.pane, true) }, { session.answer(sel.pane, false) })
             }
         }
