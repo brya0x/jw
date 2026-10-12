@@ -634,6 +634,8 @@ fn hint(mode: Mode, leader: &str) -> Vec<Span<'static>> {
             t("move ·"),
             k("↵"),
             t("choose ·"),
+            k("h l"),
+            t("fold ·"),
             k("1-3"),
             t("view ·"),
             k("Tab"),
