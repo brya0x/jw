@@ -679,6 +679,33 @@ After (a debug build under `scripts/drive.py`, a temp repo with a local `origin`
 - REQ-268 WHEN `X` is pressed on a worktree, THE TUI SHALL open `Modal::Rm` in the same key event, from the entry alone, with a spinning `Work` row, no plan and no project, before any git or project lookup; WHILE that row waits, only `esc` SHALL act (`↵`, `y`, `n`, `d`, `⇥`, letters and Backspace do nothing, and nothing is typed); WHEN git answers, THE TUI SHALL fill the plan of the same modal, with the typed name empty, and drop the answer if the modal is closed or another's; IF git or the project lookup fails, THEN THE TUI SHALL close the modal and say why; no confirmation SHALL act without a project. The prototype (version 3, approved 2026-10-12) is the screen, except that `Deletes:` is left out of the waiting modal, since what is deleted (`on_disk`, whether the branch exists) is not known yet.
 - REQ-269 WHILE the remove modal would lose work, THE modal's footer SHALL read `↵ remove once the name is typed` and THE status bar SHALL say that the name must be typed first; WHILE its checks run, THE status bar SHALL say it is checking; otherwise THE bar SHALL keep `y yes · esc no`. The rule itself (REQ-12, REQ-261) does not change.
 
+### Addendum 22 (RM1–RM3): delete a session (`jw session rm`, `^D` in the session picker)
+
+| Item | What |
+|---|---|
+| Removes | the session's workspaces in the daemon (`Close`, per workspace), its registry entries, `sessions/<name>/`, the `renamed.json` pairs that lead to it or leave it, and `last` if it names it |
+| Keeps | every checkout and branch on disk: the worktrees are only forgotten. `actions::rm_plan_from` is read-only here, to say which of them hold dirty or unpushed work (`crates/core/src/session.rs`, `rm_plan`) |
+| Refuses | the session you are in. `main` is a session like any other: nothing keeps it, and a later `jw` with no session creates it again (REQ-64) |
+| Asks | when a worktree loses work (`RmPlan::loses_work`) or a pane has an agent or is busy: the CLI wants `--yes`, the TUI the typed name |
+| Daemon | one serves every session; the client sends `Close` for the target's workspaces and signals nothing. `PROTOCOL` stays 11 |
+| Prototype | version 3, approved 2026-10-12 (version 2 refused `main`; version 3, where only the current session is refused, was updated with the user's correction and not re-approved) |
+
+- REQ-270 THE `jw session rm <name>` command SHALL remove the session's registry entries, its `sessions/<name>/` directory, the `renamed.json` pairs that lead to it or leave it, and `last` when it names it.
+- REQ-271 IF the name is the session the caller is in, THEN `session::rm` and the command SHALL refuse, exit non-zero and say why; `main` SHALL be removable like any other session.
+- REQ-272 IF the name is not an existing session, or is not a valid name, THEN the command SHALL exit non-zero and delete nothing.
+- REQ-273 THE removal SHALL NOT run `git worktree remove`, delete a branch or touch a path outside the state dir.
+- REQ-274 WHEN a worktree of the session has dirty or unpushed work, or a pane has an agent or is busy, THE command SHALL list them and exit non-zero without deleting unless `--yes` is given; a worktree git cannot read SHALL count as at risk.
+- REQ-275 WHEN `--yes` is given or nothing is at risk, THE command SHALL send `Close` for each workspace of the session and then remove its files.
+- REQ-276 WHEN `^D` is pressed on a session in the picker, THE TUI SHALL open a confirm modal naming the session and what is at risk.
+- REQ-277 WHILE something is at risk, THE modal SHALL accept `↵` only when the typed text equals the session's name; otherwise `y` and `n` SHALL do.
+- REQ-278 IF the selected session is the current one, THEN `^D` SHALL close the picker, say the reason in the status bar and open no modal.
+- REQ-279 THE removal SHALL send `Close` only for workspaces of the target session and SHALL NOT signal any daemon.
+- REQ-280 THE picker's footer SHALL list `^D delete`.
+- REQ-281 IF no daemon runs, THEN the removal SHALL go on with the files alone.
+- REQ-282 THE `session` word SHALL be reserved: no session can be named `session`.
+- REQ-283 THE version SHALL be 0.0.21 and `PROTOCOL` SHALL stay 11.
+- REQ-284 WHILE the plan is read, THE TUI SHALL run no git on the UI thread; the modal opens when `session::rm_plan` answers, and the picker reopens after a removal.
+
 ## Rationale
 
 - RAT-1 **Daemon + client instead of a single process:** user decision ("copy herdr, they should survive"). The cost is the protocol and reconnection; it pays for itself because agents run for hours.
@@ -758,6 +785,10 @@ After (a debug build under `scripts/drive.py`, a temp repo with a local `origin`
 - RAT-74 **Addendum 21: the early modal is always the rm modal.** It is the stricter one, so a late MERGED can only add a way out that the user takes with a key, never loosen the prompt under their fingers. `d` is a letter of the name when the name must be typed, so there the key is `⇥`.
 - RAT-75 **Addendum 21: the timeout in core, the memory in the TUI.** A timeout belongs to the call (`Client.timeout`, off by default so the PR picker is unchanged); a TTL belongs to the session, and core keeps no state.
 - RAT-77 **Addendum 21: show the modal before git answers, and hold the keys.** `git status` sets the time on a large repo, so it cannot be made faster from jw. Opening the modal when the project is open shows it sooner, but the user cannot act sooner: the gain is that the screen answers `X`, not that a removal starts earlier. The keys wait instead of being queued: a letter typed into a prompt that is about to ask for a name, or an `↵` landing on a plan that turns out to lose work, is the case REQ-12 exists to prevent.
+- RAT-78 **Addendum 22: forget the worktrees, never delete them.** Removing a session is bookkeeping; `X` is the way to delete a checkout and it asks about each one. A session delete that ran `actions::rm` per worktree would be a bulk `X` behind one confirmation. The cost is checkouts that jw no longer lists; the CLI and the modal print their paths.
+- RAT-79 **No new message.** The client already lists workspaces and closes them by id (`Close`), so `PROTOCOL` stays 11. A `SessionRm` in the daemon would put file deletion where the daemon does not know sessions (addendum 3) and would be refused by an older daemon for no gain.
+- RAT-80 **`^D`, not a letter.** In the picker a letter types into the filter. `^D` sits beside `^R` rename and is not bound there.
+- RAT-81 **`main` is removable.** It was assumed to be a default session. It is not: `session::rename` already renames it (`session.rs` tests), and `last` falls back to it only because `jw` creates it when none exists.
 - RAT-76 **Addendum 21: not chosen.** Fetching the PR when the sidebar selection moves (a `gh` per cursor step); a daemon-side cache (a message and `PROTOCOL` for no gain); parallel `status` and `log` (kept as the fallback of RISK-80).
 
 ## Risks
@@ -847,6 +878,10 @@ After (a debug build under `scripts/drive.py`, a temp repo with a local `origin`
 - RISK-80 **The modal opens within 100 ms on most runs of a large repo; acting on it does not.** After E5 (release, 6 runs, load average 8–9): modal 60–134 ms (median about 85), work row filled 82–188 ms (median about 135), against a single 127 ms before. These numbers are from the E5 build that opened after `Project::open`; the modal now opens in the key event itself (the follow-up commit), so only the time to act, bound by `git status`, is left. Release: 59–70 ms on a tiny repo, about 127 ms (median, 88–185) on 30,000 tracked and 20,000 untracked files, where `git status` sets the time. `rm_local` and `rm_modal` in `JW_TRACE` say. Next step: read what `Project::open` needs from `.git` like `head_of` does. RISK-80's earlier text (before E5) said 59–70 ms on a tiny repo and about 127 ms on the large one.
 - RISK-81 **`rm` still does not re-check dirty and unpushed at confirm time (`actions::rm`).** The window between the modal and `↵` is as before; this addendum neither widens nor closes it.
 - RISK-82 **A remembered answer can be 30 s old.** The PR may have been merged in the browser meanwhile. It only changes the line and the offer of `d`, and `done` re-checks the merge itself.
+- RISK-83 **Forgotten worktrees are untracked.** Nothing lists a checkout once its entry is gone. Mitigation: the CLI and the modal print the paths kept; `git worktree list` still shows them.
+- RISK-84 **No lock on the registry** (RISK-50): a writer that loaded `workspaces.json` before `session::rm` can write the entries back. The file is written with a temp file and a rename, so it is never half written.
+- RISK-85 **Agent and busy state is a snapshot.** A pane can start work between the confirmation and `Close`.
+- RISK-86 **Deleting the session other panes still point at.** A pane started in a removed session keeps `$JW_SESSION`; `session::current` then names a session that has no directory. Its renames are dropped (REQ-270), so it reads as that name.
 
 ## Parts (each one ends with `cargo test` + `clippy` green and a local commit on `feat/rust-tui`; nothing is pushed)
 
@@ -932,6 +967,9 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | F3 ✓ | **now justified (key → content 146 ms, 118 ms of it the replay):** send the screen first and the history after, or a capped tail of the ring; S8 (save off the open path) only if a number shows it | 188, 190 | `daemon/src/lib.rs` |
 | F4 ✓ opening | S1 (closed workspaces), S11: stream cache guarded by `Stamp`, `folders::entry` cached per `.git` stamp, branch from `.git/HEAD` | 185 | `core/src/stream.rs`, `core/src/folders.rs`, `core/src/connectors/git.rs`, `tui/mod.rs` |
 | F5 | S5: skip unchanged rows in `screen_to`, one flush per frame, only if F0 shows draw over budget | 187 | `tui/draw.rs`, `tui/anim.rs` |
+| RM1 ✓ `43a7b2e` | `session::rm` and `session::rm_plan`; `session` reserved; version 0.0.21 | 270–273, 279, 281–283 | `core/session.rs` |
+| RM2 ✓ `5d82a9b` | `jw session rm <name> [--yes]`, with `Close` for the session's workspaces | 270–275 | `jw/main.rs`, `jw/cli.rs` |
+| RM3 ✓ | `^D` in the session picker and its confirm modal (`Modal::RmSession`, `Job::SessionRm`: the plan is read off the UI thread, then the modal opens; after a delete the picker reopens) | 276–278, 280 | `tui/finder.rs`, `tui/modal.rs`, `tui/draw.rs`, `tui/mod.rs` |
 
 Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{new_stream, rm_plan, rm, sync, done_plan}`, `src/diff.rs`, `src/view/md.rs` and `Modal::Rm` (type the name) stay as they are.
 
@@ -961,6 +999,8 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - OPEN-5 → `~/.config/jw/settings.json` (JSON, outside Go's `*.toml` glob) and the `^␣ ,` screen (addendum 3).
 - OPEN-36, OPEN-37 (addendum 20) → built with the proposed defaults: the sender prefix is opt-in (`--tag`, RAT-71) and `--pane=3` is not supported, like `pane open --of 3`; say so to change.
 - OPEN-38, OPEN-39 (addendum 21) → built with the proposed defaults: a merged PR offers `d`/`⇥` on the PR line and never switches modal by itself; the answers live 30 s and gh gets 3 s.
+- OPEN-40 (addendum 22) → defaulted: a session removal only forgets worktrees; `--worktrees` to also run `actions::rm` on clean ones is not built.
+- OPEN-41 (addendum 22) → defaulted: another client attached to the target session is not asked; its workspaces close.
 
 ## Corrections
 
@@ -1023,6 +1063,7 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - The status bar's `⟳ checking <name>` was thought to be animated. It was a static glyph; the animated spinner belonged to the agent marks only (`tick_motion`).
 - Before Addendum 21, a merged PR whose done checks failed (a dirty tree, a HEAD outside the PR) made `X` fail with an error and no modal, so the worktree could not be removed with `X` at all. It now opens the rm modal with `#n merged` (REQ-263).
 - REQ-257 said the modal opens "from `rm_plan`", and E2 to E4 opened it once git had answered. E5 opens it when the project is open and fills the plan later (REQ-268); the first row of RISK-80's next steps (an early modal) is built, the second is still open.
+- The brief for Addendum 22 said to refuse `main` as a default session. jw has no default session; `main` renames like any other (`session.rs`, `a_renamed_session_keeps_its_workspaces`). Only the current session is refused (REQ-271).
 
 ## Tests
 

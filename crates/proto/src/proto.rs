@@ -221,6 +221,14 @@ pub struct PaneInfo {
     pub cwd: Option<String>,
 }
 
+impl PaneInfo {
+    /// Output in the last 2 s, or an agent working or waiting: stopping it
+    /// now would interrupt something (REQ-274).
+    pub fn at_work(&self) -> bool {
+        self.busy || matches!(self.agent, Some(AgentState::Working | AgentState::Waiting))
+    }
+}
+
 /// An agent's state as its hooks report it (REQ-73).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

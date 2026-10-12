@@ -71,6 +71,18 @@ pub enum Modal {
     },
     /// `ctrl-r` in the session picker: a new name for a session.
     RenameSession { old: String, text: String },
+    /// `ctrl-d` in the session picker: its workspaces close and jw forgets it;
+    /// its worktrees stay on disk. When something is at risk, the name must
+    /// be typed (REQ-276, REQ-277).
+    RmSession {
+        name: String,
+        plan: crate::session::RmPlan,
+        /// Panes with an agent at work or output in the last seconds.
+        working: Vec<String>,
+        /// Panes the session has open.
+        panes: usize,
+        typed: String,
+    },
     /// Picking a PR whose review workspace exists: its agent may hold a
     /// conversation, so the prompt is sent again only on a yes (REQ-173).
     Resend {
@@ -233,6 +245,29 @@ impl Modal {
                     _ => {}
                 }
                 Outcome::Stay
+            }
+            Modal::RmSession {
+                name,
+                plan,
+                working,
+                typed,
+                ..
+            } => {
+                let risk = session_at_risk(plan, working);
+                match k.code {
+                    KeyCode::Enter if risk && typed == name => Outcome::Submit,
+                    KeyCode::Char('y') if !risk => Outcome::Submit,
+                    KeyCode::Char('n') if !risk => Outcome::Cancel,
+                    KeyCode::Backspace if risk => {
+                        typed.pop();
+                        Outcome::Stay
+                    }
+                    KeyCode::Char(c) if risk && typed.chars().count() < NAME_MAX => {
+                        typed.push(c);
+                        Outcome::Stay
+                    }
+                    _ => Outcome::Stay,
+                }
             }
             Modal::Rm {
                 plan,
@@ -561,6 +596,16 @@ impl Modal {
                 ];
                 (format!(" Rename session {old} "), l)
             }
+            Modal::RmSession {
+                name,
+                plan,
+                working,
+                panes,
+                typed,
+            } => (
+                format!(" Delete session {name}? "),
+                rm_session_lines(name, plan, working, *panes, typed),
+            ),
             Modal::Rm {
                 entry,
                 plan,
@@ -597,6 +642,97 @@ impl Modal {
         f.render_widget(block, r);
         f.render_widget(Paragraph::new(lines), inner);
     }
+}
+
+/// Whether deleting the session would lose or interrupt anything.
+pub(super) fn session_at_risk(plan: &crate::session::RmPlan, working: &[String]) -> bool {
+    plan.at_risk().next().is_some() || !working.is_empty()
+}
+
+/// The body of the session-delete modal: what closes, what is at risk, and
+/// that the worktrees stay on disk.
+fn rm_session_lines(
+    name: &str,
+    plan: &crate::session::RmPlan,
+    working: &[String],
+    panes: usize,
+    typed: &str,
+) -> Vec<Line<'static>> {
+    let dim = Style::default().fg(p().dim);
+    let mut l = vec![Line::from(format!(
+        " Closes {panes} pane{} and forgets {} worktree{}.",
+        if panes == 1 { "" } else { "s" },
+        plan.worktrees.len(),
+        if plan.worktrees.len() == 1 { "" } else { "s" },
+    ))];
+    let risk = session_at_risk(plan, working);
+    if risk {
+        l.push(Line::default());
+        l.push(Line::from(Span::styled(
+            " Work at risk:",
+            Style::default().fg(p().yellow),
+        )));
+        for (e, rm) in plan.at_risk().take(6) {
+            let mut what = Vec::new();
+            if !rm.dirty.is_empty() {
+                what.push(format!("{} uncommitted", rm.dirty.len()));
+            }
+            if !rm.unpushed.is_empty() {
+                what.push(format!("{} unpushed", rm.unpushed.len()));
+            }
+            l.push(Line::from(vec![
+                Span::raw(format!("   {} ", e.name)),
+                Span::styled(
+                    format!("{}  {}", short_path(&e.path, 36), what.join(", ")),
+                    dim,
+                ),
+            ]));
+        }
+        for w in working.iter().take(6) {
+            l.push(Line::from(format!("   {w}  agent or program running")));
+        }
+    }
+    let kept: Vec<&str> = plan
+        .worktrees
+        .iter()
+        .filter(|(_, rm)| rm.on_disk)
+        .map(|(e, _)| e.path.as_str())
+        .collect();
+    if !kept.is_empty() {
+        l.push(Line::default());
+        l.push(Line::from(Span::styled(
+            " The worktrees stay on disk; only jw forgets them.",
+            dim,
+        )));
+    }
+    l.push(Line::default());
+    if risk {
+        l.push(Line::from(vec![
+            Span::raw(" Type "),
+            Span::styled(
+                name.to_string(),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" to delete it anyway: "),
+            Span::styled(format!("{typed}▏"), Style::default().fg(p().blue)),
+        ]));
+        l.push(Line::default());
+        let ready = typed == name;
+        l.push(keys(&[
+            (
+                "↵",
+                if ready {
+                    "delete"
+                } else {
+                    "delete once the name is typed"
+                },
+            ),
+            ("esc", "cancel"),
+        ]));
+    } else {
+        l.push(keys(&[("y", "delete"), ("n", "keep")]));
+    }
+    l
 }
 
 fn rm_lines(
@@ -838,5 +974,60 @@ mod tests {
             short_path("/very/long/My Projects/myapp-wt/docs", 20),
             "…/myapp-wt/docs"
         );
+    }
+
+    fn rm_session(risky: bool) -> super::Modal {
+        let mut plan = crate::session::RmPlan::default();
+        if risky {
+            plan.worktrees.push((
+                Default::default(),
+                crate::actions::RmPlan {
+                    dirty: vec!["a.rs".into()],
+                    ..Default::default()
+                },
+            ));
+        }
+        super::Modal::RmSession {
+            name: "dev".into(),
+            plan,
+            working: Vec::new(),
+            panes: 0,
+            typed: String::new(),
+        }
+    }
+
+    fn press(m: &mut super::Modal, c: ratatui::crossterm::event::KeyCode) -> super::Outcome {
+        use ratatui::crossterm::event::{KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+        m.key(KeyEvent {
+            code: c,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        })
+    }
+
+    #[test]
+    fn deleting_a_session_with_nothing_at_risk_takes_y_and_n() {
+        use ratatui::crossterm::event::KeyCode::{Char, Enter};
+        let mut m = rm_session(false);
+        assert!(matches!(press(&mut m, Enter), super::Outcome::Stay));
+        assert!(matches!(press(&mut m, Char('n')), super::Outcome::Cancel));
+        assert!(matches!(press(&mut m, Char('y')), super::Outcome::Submit));
+    }
+
+    #[test]
+    fn deleting_a_session_at_risk_needs_its_name_typed() {
+        use ratatui::crossterm::event::KeyCode::{Backspace, Char, Enter};
+        let mut m = rm_session(true);
+        // `y` is a letter of the name here, not a yes.
+        assert!(matches!(press(&mut m, Char('y')), super::Outcome::Stay));
+        press(&mut m, Backspace);
+        assert!(matches!(press(&mut m, Enter), super::Outcome::Stay));
+        for c in "dex".chars() {
+            press(&mut m, Char(c));
+        }
+        press(&mut m, Backspace);
+        assert!(matches!(press(&mut m, Char('v')), super::Outcome::Stay));
+        assert!(matches!(press(&mut m, Enter), super::Outcome::Submit));
     }
 }

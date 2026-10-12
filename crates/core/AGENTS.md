@@ -10,7 +10,7 @@ depends on nothing of jw's.
 | `src/core/config.rs` | the project TOML: `load` looks in `.jw.toml`, then `~/.config/jw/<project>.toml`, then defaults; `save_layout` rewrites only `[layout]`'s tree |
 | `src/core/registry.rs` | `workspaces.json`, every worktree: `Entry` (`:15`), `Registry` (`:63`), `default_path` (`:71`, seeds from Go's `registry.json` once), `state_dir` (`:89`) |
 | `src/layout.rs` | `Node`, the layout as written in TOML (`:14`), and `Tree<L>`, the live split tree with every operation the daemon applies (`:155`) |
-| `src/session.rs` | named sessions: `current` (`:26`), `create` (`:206`), `rename` (`:66`), `list` (`:189`); their files live in `sessions/<name>/` |
+| `src/session.rs` | named sessions: `current` (`:26`), `create` (`:206`), `rename` (`:66`), `rm_plan` and `rm` (a session's removal: registry entries, directory, renames; never its worktrees on disk), `list` (`:189`); their files live in `sessions/<name>/` |
 | `src/folders.rs` | a session's folders: `load` (`:115`), `edit` (`:149`), `entry_for` (`:172`) |
 | `src/program.rs` | which foreground programs are agents: `is_agent_program`, `is_agent_pane` (addendum 17) |
 | `src/stream.rs` | what opening a workspace starts: `Stream` (`:19`), its panes, env, `Stamp` (whether a resolved one is still fresh), the agent's command with `--session-id` and hooks (`hooks`, `:323`), nvim's `--listen` (`listen`, `:292`) |
