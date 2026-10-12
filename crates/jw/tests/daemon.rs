@@ -1824,3 +1824,81 @@ fn a_split_client_gets_the_screen_then_the_history() {
     );
     assert!(whole.screen().scrollback() > 0, "the History has it");
 }
+
+#[test]
+fn jw_session_rm_closes_its_panes_and_forgets_it_but_keeps_the_checkouts() {
+    let d = Daemon::start();
+    let state = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let dir = work.path().canonicalize().unwrap().display().to_string();
+    let checkout = tempfile::tempdir().unwrap();
+    let sessions = state.path().join("jw").join("sessions");
+    for name in ["main", "dev"] {
+        std::fs::create_dir_all(sessions.join(name)).unwrap();
+        std::fs::write(
+            sessions.join(name).join("folders.json"),
+            format!(
+                r#"{{"folders":[{{"dir":{dir:?},"created":"2026-01-01T00:00:00Z","name":"w"}}]}}"#
+            ),
+        )
+        .unwrap();
+    }
+    // dev has a worktree git cannot read, which counts as work at risk.
+    std::fs::write(
+        state.path().join("jw").join("workspaces.json"),
+        format!(
+            r#"{{"entries":[{{"id":"wt1","name":"wt","path":{:?},"session":"dev"}}]}}"#,
+            checkout.path().display().to_string()
+        ),
+    )
+    .unwrap();
+    let jw = |args: &[&str], session: Option<&str>| {
+        let mut c = Command::new(EXE);
+        c.args(args)
+            .env("JW_SOCKET", &d.socket)
+            .env("XDG_STATE_HOME", state.path())
+            .env_remove("JW_SESSION");
+        if let Some(s) = session {
+            c.env("JW_SESSION", s);
+        }
+        c.output().unwrap()
+    };
+    let stderr = |o: &std::process::Output| String::from_utf8_lossy(&o.stderr).into_owned();
+
+    let dev_stream = jw_core::folders::id_in("dev", &dir);
+    let main_stream = jw_core::folders::id_in("main", &dir);
+    let mut c = d.client();
+    spawn(&mut c, &dev_stream, "cat", 80, 24);
+    spawn(&mut c, &main_stream, "cat", 80, 24);
+
+    // The session you are in, and one that is not there.
+    let out = jw(&["session", "rm", "dev"], Some("dev"));
+    assert!(!out.status.success() && stderr(&out).contains("the session you are in"));
+    let out = jw(&["session", "rm", "nope"], None);
+    assert!(!out.status.success() && stderr(&out).contains("no session nope"));
+
+    // At risk: nothing is removed without --yes.
+    let out = jw(&["session", "rm", "dev"], None);
+    assert!(!out.status.success(), "{out:?}");
+    assert!(stderr(&out).contains("work at risk"), "{}", stderr(&out));
+    assert!(sessions.join("dev").is_dir());
+
+    let out = jw(&["session", "rm", "dev", "--yes"], None);
+    assert!(out.status.success(), "{out:?}");
+    assert!(!sessions.join("dev").exists());
+    assert!(checkout.path().is_dir(), "the checkout stays");
+    let reg = std::fs::read_to_string(state.path().join("jw").join("workspaces.json")).unwrap();
+    assert!(!reg.contains("wt1"));
+
+    // Only dev's pane went.
+    let mut l = d.client();
+    l.send(&ClientMsg::List).unwrap();
+    let listed = loop {
+        if let DaemonMsg::Panes { panes } = next(&mut l) {
+            break panes;
+        }
+    };
+    assert!(listed.iter().all(|p| p.stream != dev_stream));
+    assert!(listed.iter().any(|p| p.stream == main_stream));
+    assert!(sessions.join("main").is_dir());
+}

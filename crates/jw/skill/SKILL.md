@@ -64,6 +64,10 @@ default ports (5173, 8081…) belong to the main checkout, not to you.
   of a workspace (that closes the workspace) and your own pane (`$JW_PANE_ID`) unless you
   add `--force`; don't.
 - `jw sessions` lists the sessions and how many of their workspaces run.
+- `jw session rm <name> [--yes]` closes a session's workspaces and removes it. Its
+  worktrees stay on disk. It refuses your own session, and without `--yes` it refuses a
+  session whose worktrees have uncommitted or unpushed work or whose agents are running.
+  Don't pass `--yes` for a session you didn't create.
 
 ## Never do these
 

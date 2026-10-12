@@ -467,6 +467,127 @@ pub fn sessions() -> Result<()> {
     Ok(())
 }
 
+const SESSION_USAGE: &str = "usage: jw session rm <name> [--yes]";
+
+/// `jw session rm <name> [--yes]`: closes the session's workspaces and
+/// forgets it (REQ-270). The worktrees stay on disk (REQ-273); what would be
+/// lost with them, or with a pane's agent, asks for `--yes` (REQ-274).
+pub fn session(args: &[String]) -> Result<()> {
+    let Some((_, rest)) = args.split_first().filter(|(v, _)| *v == "rm") else {
+        bail!("{SESSION_USAGE}");
+    };
+    let mut yes = false;
+    let mut words = Vec::new();
+    for a in rest {
+        match a.as_str() {
+            "--yes" => yes = true,
+            s if s.starts_with('-') => bail!("unknown flag {s}"),
+            s => words.push(s),
+        }
+    }
+    let [name] = words[..] else {
+        bail!("{SESSION_USAGE}");
+    };
+    let state = registry::state_dir()?;
+    // Outside a jw pane there is no session you are in.
+    let current = if std::env::var_os("JW_SESSION").is_some() {
+        crate::session::current()
+    } else {
+        String::new()
+    };
+    if name == current {
+        bail!("cannot remove {name}: it is the session you are in");
+    }
+    let plan = crate::session::rm_plan(&state, name)?;
+
+    let ids: Vec<&str> = plan.streams().collect();
+    let panes = daemon_panes()?;
+    let mine: Vec<&PaneInfo> = panes
+        .iter()
+        .filter(|p| ids.contains(&p.stream.as_str()))
+        .collect();
+    let working: Vec<&PaneInfo> = mine.iter().copied().filter(|p| p.at_work()).collect();
+
+    let kept: Vec<&str> = plan
+        .worktrees
+        .iter()
+        .filter(|(_, p)| p.on_disk)
+        .map(|(e, _)| e.path.as_str())
+        .collect();
+    if (plan.at_risk().next().is_some() || !working.is_empty()) && !yes {
+        eprintln!("session {name} has work at risk:");
+        for (e, p) in plan.at_risk() {
+            let mut what = Vec::new();
+            if !p.dirty.is_empty() {
+                what.push(format!("{} dirty", p.dirty.len()));
+            }
+            if !p.unpushed.is_empty() {
+                what.push(format!("{} unpushed", p.unpushed.len()));
+            }
+            eprintln!("  {:<20} {}  {}", e.name, e.path, what.join(", "));
+        }
+        for p in &working {
+            eprintln!(
+                "  pane {} of {}  agent or program running",
+                p.pane, p.stream
+            );
+        }
+        eprintln!(
+            "the worktrees stay on disk and only jw forgets them; \
+             jw session rm {name} --yes removes the session"
+        );
+        bail!("nothing removed");
+    }
+
+    // The daemon is told first, so nothing runs in a session that is gone.
+    let closed: std::collections::BTreeSet<&str> = mine.iter().map(|p| p.stream.as_str()).collect();
+    if !closed.is_empty() {
+        close_workspaces(&closed)?;
+    }
+    crate::session::rm(&state, name, &current)?;
+    println!(
+        "removed session {name} ({} closed, {} unregistered)",
+        pluralize(mine.len(), "pane"),
+        pluralize(plan.worktrees.len(), "worktree"),
+    );
+    if !kept.is_empty() {
+        println!("kept on disk: {}", kept.join("  "));
+    }
+    Ok(())
+}
+
+fn pluralize(n: usize, word: &str) -> String {
+    format!("{n} {word}{}", if n == 1 { "" } else { "s" })
+}
+
+/// Sends `Close` for each workspace, then asks for the panes once more: the
+/// daemon takes a connection's messages in order, so its answer says the
+/// closes are done.
+fn close_workspaces(streams: &std::collections::BTreeSet<&str>) -> Result<()> {
+    let Ok(mut c) = Client::connect(&socket_path()) else {
+        return Ok(());
+    };
+    hello(&mut c)?;
+    for s in streams {
+        c.send(&ClientMsg::Close {
+            stream: (*s).to_string(),
+        })?;
+    }
+    c.send(&ClientMsg::List)?;
+    loop {
+        match next(&mut c)? {
+            DaemonMsg::Panes { panes } => {
+                if let Some(p) = panes.iter().find(|p| streams.contains(p.stream.as_str())) {
+                    bail!("the daemon still runs pane {} of {}", p.pane, p.stream);
+                }
+                return Ok(());
+            }
+            DaemonMsg::Error { msg } => bail!("{msg}"),
+            _ => {}
+        }
+    }
+}
+
 /// `jw worktree <name>`: a worktree of the project in the current folder,
 /// in the current session, opened, with a task for its agent.
 pub fn worktree(args: &[String]) -> Result<()> {

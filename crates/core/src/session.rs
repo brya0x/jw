@@ -15,9 +15,9 @@ use crate::core::registry;
 pub const MAIN: &str = "main";
 
 /// Words `jw <name>` can't take, since they are commands.
-const RESERVED: [&str; 15] = [
-    "new", "sessions", "ls", "read", "pane", "worktree", "prompt", "hook", "daemon", "help",
-    "version", "skill", "server", "theme", "mobile",
+const RESERVED: [&str; 16] = [
+    "new", "session", "sessions", "ls", "read", "pane", "worktree", "prompt", "hook", "daemon",
+    "help", "version", "skill", "server", "theme", "mobile",
 ];
 
 static CURRENT: Mutex<String> = Mutex::new(String::new());
@@ -137,6 +137,119 @@ pub fn rename(state: &Path, old: &str, new: &str) -> Result<Vec<(String, String)
         &serde_json::to_vec_pretty(&map)?,
     )?;
     Ok(ids)
+}
+
+/// What removing a session leaves behind (REQ-273): its worktrees are only
+/// forgotten, never deleted, so the plan says which of them hold work that
+/// exists nowhere else.
+#[derive(Debug, Default)]
+pub struct RmPlan {
+    /// The ids of the session's folder workspaces, for the daemon to close.
+    pub folders: Vec<String>,
+    /// Each worktree of the session with what git says about it.
+    pub worktrees: Vec<(registry::Entry, crate::actions::RmPlan)>,
+}
+
+impl RmPlan {
+    /// The workspace ids of the session: its folders' and its worktrees'.
+    pub fn streams(&self) -> impl Iterator<Item = &str> {
+        self.folders
+            .iter()
+            .map(String::as_str)
+            .chain(self.worktrees.iter().map(|(e, _)| e.id.as_str()))
+    }
+
+    /// The worktrees with dirty or unpushed work.
+    pub fn at_risk(&self) -> impl Iterator<Item = &(registry::Entry, crate::actions::RmPlan)> {
+        self.worktrees.iter().filter(|(_, p)| p.loses_work())
+    }
+}
+
+/// Reads what removing session `name` would close and forget. Changes nothing.
+pub fn rm_plan(state: &Path, name: &str) -> Result<RmPlan> {
+    if !exists(state, name)? {
+        bail!("no session {name}");
+    }
+    let folders = crate::folders::Folders::load(&dir(state, name)?.join("folders.json"))?;
+    let reg = registry::Registry::load(&state.join("workspaces.json"))?;
+    let mut worktrees = Vec::new();
+    for e in reg.entries.into_iter().filter(|e| owns(name, &e.session)) {
+        // Nothing here deletes a branch, so whether it exists doesn't matter.
+        let plan = match crate::actions::worktree_state(&e) {
+            Ok(git) => crate::actions::rm_plan_from(&e, git, false),
+            // A checkout git can't read must not block the removal, nor pass
+            // as clean: it asks for the confirmation.
+            Err(err) => crate::actions::RmPlan {
+                on_disk: true,
+                dirty: vec![format!("git could not read it: {err}")],
+                ..Default::default()
+            },
+        };
+        worktrees.push((e, plan));
+    }
+    Ok(RmPlan {
+        folders: folders
+            .folders
+            .iter()
+            .map(|f| crate::folders::id_in(name, &f.dir))
+            .collect(),
+        worktrees,
+    })
+}
+
+/// Removes session `name` from the state dir: its worktrees' registry
+/// entries (the checkouts and branches stay), its `sessions/<name>/`, the
+/// renames that lead to it and the last-used pointer. `current` is the
+/// session the caller works in, which can't go (REQ-271). The caller closes
+/// the session's workspaces in the daemon first.
+pub fn rm(state: &Path, name: &str, current: &str) -> Result<()> {
+    if name == current {
+        bail!("cannot remove {name}: it is the session you are in");
+    }
+    if !valid(name) && name != MAIN {
+        bail!("invalid session name {name:?}");
+    }
+    if !exists(state, name)? {
+        bail!("no session {name}");
+    }
+
+    let reg_path = state.join("workspaces.json");
+    let mut reg = registry::Registry::load(&reg_path)?;
+    let before = reg.entries.len();
+    reg.entries.retain(|e| !owns(name, &e.session));
+    if reg.entries.len() != before {
+        reg.save(&reg_path)?;
+    }
+
+    let d = dir(state, name)?;
+    std::fs::remove_dir_all(&d).with_context(|| d.display().to_string())?;
+
+    // A name that led here, however many renames ago, must not lead a later
+    // session of the same name astray.
+    let mut map = renames(state);
+    let mut gone = vec![name.to_string()];
+    while let Some(g) = gone.pop() {
+        let from: Vec<String> = map
+            .iter()
+            .filter(|(k, v)| **v == g || **k == g)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for k in from {
+            if map.remove(&k).is_some() {
+                gone.push(k);
+            }
+        }
+    }
+    let renamed = root(state)?.join("renamed.json");
+    if renamed.exists() {
+        registry::write_atomic(&renamed, &serde_json::to_vec_pretty(&map)?)?;
+    }
+
+    let last = root(state)?.join("last");
+    if std::fs::read_to_string(&last).is_ok_and(|l| l.trim() == name) {
+        std::fs::remove_file(&last).with_context(|| last.display().to_string())?;
+    }
+    Ok(())
 }
 
 pub fn set(name: &str) {
@@ -322,6 +435,79 @@ mod tests {
         rename(s, MAIN, "home").unwrap();
         assert_eq!(follow(s, "main"), "home");
         assert_eq!(follow(s, "brain"), "ops");
+    }
+
+    fn entry(id: &str, session: &str, path: &str) -> registry::Entry {
+        registry::Entry {
+            id: id.into(),
+            session: session.into(),
+            path: path.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn rm_forgets_the_session_and_nothing_else() {
+        let state = tempfile::tempdir().unwrap();
+        let s = state.path();
+        let work = tempfile::tempdir().unwrap();
+        create(s, "keep", work.path()).unwrap();
+        create(s, "dev", work.path()).unwrap();
+        let checkout = tempfile::tempdir().unwrap();
+        let mut reg = registry::Registry::default();
+        reg.add(entry("a", "dev", &checkout.path().display().to_string()));
+        reg.add(entry("b", "keep", ""));
+        reg.add(entry("c", "", ""));
+        reg.save(&s.join("workspaces.json")).unwrap();
+
+        let plan = rm_plan(s, "dev").unwrap();
+        assert_eq!(plan.worktrees.len(), 1);
+        assert_eq!(plan.folders.len(), 1);
+        assert_eq!(plan.streams().count(), 2);
+        // Not a git checkout: unreadable counts as at risk, not as clean.
+        assert_eq!(plan.at_risk().count(), 1);
+
+        assert!(rm(s, "dev", "keep").is_ok());
+        assert_eq!(list(s).unwrap(), ["keep", MAIN]);
+        let reg = registry::Registry::load(&s.join("workspaces.json")).unwrap();
+        let ids: Vec<&str> = reg.entries.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(ids, ["b", "c"]);
+        // The checkout is still there (REQ-273).
+        assert!(checkout.path().is_dir());
+        // `last` pointed at dev, the latest created.
+        assert_eq!(last(s), MAIN);
+        assert!(rm(s, "dev", "keep").is_err());
+    }
+
+    #[test]
+    fn rm_refuses_the_current_session_and_takes_main_like_any_other() {
+        let state = tempfile::tempdir().unwrap();
+        let s = state.path();
+        let work = tempfile::tempdir().unwrap();
+        create(s, "ops", work.path()).unwrap();
+        assert!(rm(s, "ops", "ops").is_err());
+        assert!(rm(s, "../x", "ops").is_err());
+        assert!(list(s).unwrap().contains(&"ops".to_string()));
+        // `main` was made by the migration; nothing keeps it alive.
+        std::fs::create_dir_all(s.join("sessions/main")).unwrap();
+        assert!(rm(s, MAIN, "ops").is_ok());
+        assert_eq!(list(s).unwrap(), ["ops"]);
+    }
+
+    #[test]
+    fn rm_drops_the_renames_that_lead_to_it() {
+        let state = tempfile::tempdir().unwrap();
+        let s = state.path();
+        let work = tempfile::tempdir().unwrap();
+        create(s, "one", work.path()).unwrap();
+        create(s, "keep", work.path()).unwrap();
+        rename(s, "one", "two").unwrap();
+        rename(s, "two", "three").unwrap();
+        assert_eq!(follow(s, "one"), "three");
+        rm(s, "three", "keep").unwrap();
+        assert_eq!(follow(s, "one"), "one");
+        assert_eq!(follow(s, "two"), "two");
+        assert_eq!(follow(s, "three"), "three");
     }
 
     #[test]

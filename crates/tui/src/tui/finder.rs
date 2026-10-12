@@ -66,6 +66,8 @@ pub enum Pick {
     NewSession(String),
     /// Ask for a new name for this session.
     RenameSession(String),
+    /// `ctrl-d` in the session picker (REQ-276).
+    DeleteSession(String),
     /// Review this pull request (REQ-165).
     Review(Box<PrSummary>),
 }
@@ -402,6 +404,11 @@ impl Finder {
                     return Outcome::Pick(Pick::RenameSession(name));
                 }
             }
+            KeyCode::Char('d') if ctrl && matches!(self.kind, Kind::Sessions) => {
+                if let Some(Pick::Session(name)) = self.current().map(|it| it.pick.clone()) {
+                    return Outcome::Pick(Pick::DeleteSession(name));
+                }
+            }
             KeyCode::Up => self.sel = self.sel.saturating_sub(1),
             KeyCode::Char('p') if ctrl => self.sel = self.sel.saturating_sub(1),
             KeyCode::Right | KeyCode::Tab => {
@@ -695,6 +702,7 @@ impl Finder {
                 ("↑↓", "move"),
                 ("↵", "open"),
                 ("ctrl-r", "rename"),
+                ("ctrl-d", "delete"),
                 ("esc", "close"),
             ],
             Kind::Reviews { requested, .. } => &[
@@ -750,6 +758,7 @@ impl Finder {
             | Pick::Session(_)
             | Pick::NewSession(_)
             | Pick::RenameSession(_)
+            | Pick::DeleteSession(_)
             | Pick::Review(_) => {
                 return Vec::new();
             }
@@ -1309,5 +1318,28 @@ mod tests {
         let mut d = picker();
         d.sel = 2;
         assert!(plain(&d.preview()).contains("draft"));
+    }
+
+    #[test]
+    fn ctrl_d_in_the_session_picker_asks_to_delete_the_selected_one() {
+        let ws = |id: &str| WsItem {
+            id: id.into(),
+            label: id.into(),
+            open: false,
+            hint: String::new(),
+            preview: Vec::new(),
+        };
+        let mut f = Finder::sessions(vec![ws("dev"), ws("olv")]);
+        f.key(key(KeyCode::Down));
+        let ctrl_d = KeyEvent {
+            modifiers: KeyModifiers::CONTROL,
+            ..key(KeyCode::Char('d'))
+        };
+        match f.key(ctrl_d) {
+            Outcome::Pick(Pick::DeleteSession(name)) => assert_eq!(name, "olv"),
+            _ => panic!("want DeleteSession"),
+        }
+        let mut other = Finder::folders(std::env::temp_dir(), HashSet::new());
+        assert!(!matches!(other.key(ctrl_d), Outcome::Pick(_)));
     }
 }

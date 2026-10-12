@@ -285,7 +285,7 @@ Order (L1 to L3, after the rest): L1 first (the app cannot be tried without it),
 - The viewed mark differs from the TUI's on purpose (REQ-74): the TUI keeps it by path for the life of the pane; the phone keeps it on the device, so it must reset when the file changes.
 - The bridge accepts a commit id only as 7 to 40 hex digits and passes it to git as a revision, never first in an option position; an error now names its ask (`ask`, `ws`, `scope`), so two asks out at once do not confuse each other's failures.
 
-- Main took version 0.0.20 (addendum 21) while this branch was open; the branch is 0.0.21 after the second merge. `PROTOCOL` is 14 here and 11 on main: no other branch uses 12 to 14.
+- Main took version 0.0.20 (addendum 21) while this branch was open; the branch was 0.0.21 after the second merge. Main then took 0.0.21 (session rm, addendum 22), so after the third merge the branch is 0.0.22. `PROTOCOL` is 14 here and 11 on main: no other branch uses 12 to 14.
 
 ## Tests
 
