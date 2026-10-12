@@ -1,5 +1,6 @@
 package dev.jw.mobile
 
+import dev.jw.proto.AgentState
 import dev.jw.proto.AnswerChoices
 import dev.jw.proto.AnswerRule
 import dev.jw.proto.Control
@@ -142,7 +143,7 @@ data class Model(
     val panes: List<PaneInfo> = emptyList(),
     /** When `panes` arrived, by the session's clock; null before the first answer. */
     val panesAt: Long? = null,
-    /** Panes already answered with y or n since the latest `Panes`. */
+    /** Panes answered with y or n whose latest `Panes` still says Waiting. */
     val answered: Set<Long> = emptySet(),
 )
 
@@ -511,7 +512,7 @@ class Session(
     }
 
     /**
-     * y or n for `pane`. Sends once, and only while the latest `Panes` (at most 2 s old) says Waiting
+     * y or n for `pane`. Sends once, and only while the latest `Panes` (at most 6 s old) says Waiting
      * for that pane (REQ-20); otherwise tells the person it is no longer waiting.
      */
     fun answer(pane: Long, approve: Boolean) {
@@ -731,7 +732,12 @@ class Session(
                     val pane = Panes.parse(ev.frame)
                     if (pane != null) onPane(pane)
                     else Workspaces.parsePanes(ev.frame)?.let { ps ->
-                        _model.update { it.copy(panes = ps, panesAt = clock(), answered = emptySet()) }
+                        _model.update { m ->
+                            // An answered prompt stays answered while the pane still says Waiting, so the
+                            // buttons do not go green again between the tap and the agent moving on.
+                            val waiting = ps.filter { it.agent == AgentState.Waiting }.map { it.pane }.toSet()
+                            m.copy(panes = ps, panesAt = clock(), answered = m.answered intersect waiting)
+                        }
                     }
                 }
                 is BridgeEvent.Ended -> if (!a.bridgeFailed) a.failure = ev.failure

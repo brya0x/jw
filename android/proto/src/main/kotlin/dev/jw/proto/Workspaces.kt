@@ -157,11 +157,12 @@ class RefreshRule(private val intervalMs: Long = 2_000) {
 
 /** When the y and n buttons may be enabled (REQ-20, RISK-4). */
 object AnswerRule {
-    const val MAX_AGE_MS = 2_000L
+    /** Three polls (`pollMs` is 2 s): one late `Panes` must not turn the buttons dim and green again. */
+    const val MAX_AGE_MS = 6_000L
 
     /**
-     * Only while the latest `Panes` (at most 2 s old) says Waiting for this pane, the phone is not read-only
-     * and this snapshot has not been answered yet.
+     * Only while the latest `Panes` (at most [MAX_AGE_MS] old) says Waiting for this pane, the phone is not
+     * read-only and this prompt has not been answered yet.
      */
     fun enabled(pane: PaneInfo?, panesAtMs: Long?, nowMs: Long, readOnly: Boolean, alreadyAnswered: Boolean): Boolean =
         !readOnly && !alreadyAnswered && pane?.agent == AgentState.Waiting &&
