@@ -43,7 +43,7 @@ internal fun AskText.key(): String = question + "\u0000" + options.joinToString(
 
 /**
  * An agent's question over the whole pane (REQ-95): no keyboard, no composer, no keys and no approve or reject. One choice of
- * several (a tap sends it), several choices (a tap marks one, `Enviar` sends them), or a plan (its text, then the decisions
+ * several (a tap sends it), several choices (a tap marks one, `Enviar` sends them), or a plan (its text, and after it the decisions
  * under it). [plan] is the plan's text when the agent asks to go ahead with one. [onPick] takes an option's number, [onSend]
  * confirms the marked ones, [onOther] sends a written answer through the option that takes one, and [onEsc] cancels.
  */
@@ -76,6 +76,9 @@ fun AskView(
             Text(kicker.uppercase(), color = j.dim, fontSize = 11.sp, letterSpacing = 0.5.sp)
             if (plan != null) {
                 Text(plan, color = j.fg, fontSize = 12.5.sp, lineHeight = 20.sp)
+                // The decisions come after the reading, at the end of the plan, not over it.
+                Text("¿Seguimos con este plan?", color = j.dim, fontSize = 11.sp, modifier = Modifier.padding(top = 12.dp))
+                for (o in ask.options) Choice(o, false) { onPick(o.number) }
             } else {
                 Text(ask.question, color = j.fg, fontSize = 17.sp, lineHeight = 24.sp, fontWeight = FontWeight.Bold)
                 for (o in ask.options) {
@@ -98,11 +101,8 @@ fun AskView(
                 }
             }
         }
-        Column(Modifier.fillMaxWidth().background(j.panel).padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (plan != null) {
-                Text("¿Seguimos con este plan?", color = j.dim, fontSize = 11.sp)
-                for (o in ask.options) Choice(o, false) { onPick(o.number) }
-            } else if (ask.multi) {
+        if (plan == null) Column(Modifier.fillMaxWidth().background(j.panel).padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (ask.multi) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("${ask.options.count { it.checked == true }} elegidas", color = j.dim, fontSize = 12.sp, modifier = Modifier.weight(1f))
                     Text(
