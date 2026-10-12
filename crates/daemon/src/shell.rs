@@ -467,6 +467,8 @@ impl Blocks {
                     self.finish(None);
                     let i = self.next;
                     self.next += 1;
+                    // An agent draws its own interface: no output is kept for it.
+                    let full = runs_an_agent(&cmd);
                     self.list.push_back(Block {
                         i,
                         cmd: cap(&cmd, 2000),
@@ -477,7 +479,7 @@ impl Blocks {
                         started: Instant::now(),
                         ms: 0,
                         running: true,
-                        full: false,
+                        full,
                     });
                     if self.list.len() > KEEP {
                         self.list.pop_front();
@@ -576,6 +578,14 @@ impl Blocks {
             .map(Block::wire)
             .collect()
     }
+}
+
+/// Whether a command line starts a known agent (`claude`, `FOO=1 codex --x`): the program is the
+/// first word that is not a variable being set.
+fn runs_an_agent(cmd: &str) -> bool {
+    cmd.split_whitespace()
+        .find(|w| !w.contains('='))
+        .is_some_and(jw_core::program::is_agent_program)
 }
 
 fn cap(s: &str, max: usize) -> String {
@@ -720,6 +730,27 @@ mod tests {
         let blocks = b.all(1);
         assert!(blocks[0].full);
         assert_eq!(blocks[0].out, "");
+    }
+
+    #[test]
+    fn an_agent_started_from_a_shell_keeps_no_output() {
+        for cmd in [
+            "claude",
+            "claude --resume abc",
+            "FOO=1 claude",
+            "/usr/local/bin/claude -p x",
+        ] {
+            let mut b = Blocks::default();
+            b.feed(&start(cmd, "/w"), false);
+            b.feed(b"\x1b[2J lots of its own interface", false);
+            let blocks = b.all(1);
+            assert!(blocks[0].full, "{cmd}");
+            assert_eq!(blocks[0].out, "");
+        }
+        let mut b = Blocks::default();
+        b.feed(&start("echo claude", "/w"), false);
+        b.feed(b"claude\r\n", false);
+        assert!(!b.all(1)[0].full);
     }
 
     #[test]

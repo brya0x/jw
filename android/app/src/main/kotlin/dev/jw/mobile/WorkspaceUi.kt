@@ -129,7 +129,7 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
         onDispose { session.watchShell(null) }
     }
     val shell = remember(rev, shellPane) { shellPane?.let(session::shell) }
-    val shellView = shell?.takeIf { it.known && it.blocks.lastOrNull()?.let { b -> b.running && b.full } != true }
+    val kind = sel?.let { PaneKinds.of(it, chat, shell) } ?: PaneKind.Text
     DisposableEffect(w.id) { onDispose { nav.previous = w.id } }
     BackHandlerFor(sheet != Sheet.None) { sheet = Sheet.None }
 
@@ -170,14 +170,14 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
         Box(Modifier.weight(1f).fillMaxWidth()) {
             if (sel == null) {
                 Text("Este workspace no tiene paneles abiertos.", color = j.dim, fontSize = 12.sp, modifier = Modifier.padding(14.dp))
-            } else if (agentPane != null && chat == null) {
+            } else if (kind == PaneKind.Loading) {
                 Text("Cargando la conversación…", color = j.dim, fontSize = 12.sp, modifier = Modifier.padding(14.dp))
-            } else if (chat?.known == true) {
+            } else if (kind == PaneKind.Chat && chat != null) {
                 ChatView(chat, w.name, sel.name ?: sel.role, sel.agent == AgentState.Waiting, Modifier.fillMaxSize())
-            } else if (shellView != null) {
+            } else if (kind == PaneKind.Shell && shell != null) {
                 val clipboard = LocalContext.current.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                 ShellView(
-                    shellView, sel.cwd ?: w.path, sel.name ?: sel.role,
+                    shell, sel.cwd ?: w.path, sel.name ?: sel.role,
                     onCopy = { clipboard.setPrimaryClip(android.content.ClipData.newPlainText("jw", it)); },
                     onRerun = { cmd -> session.input(sel.pane, Keys.text(cmd)); session.input(sel.pane, Keys.key(Key.Enter)) },
                     onStop = { session.input(sel.pane, Keys.ctrl('c') ?: ByteArray(0)) },
@@ -237,12 +237,8 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
         }
         KeyRow(sel, term, session, onLeader = { sheet = Sheet.Leader })
         // What the terminal's input holds: a Claude's box read off its screen, a shell's line as it tells it.
-        val remote = when {
-            chat?.known == true -> term?.let(ClaudeInput::read)
-            shellView != null -> shellView.input
-            else -> null
-        }
-        Composer(sel, state, session, remote = remote, live = chat?.known == true || shellView != null)
+        val remote = sel?.let { PaneKinds.input(kind, it, shell) { term?.let(ClaudeInput::read) } }
+        Composer(sel, state, session, remote = remote, live = PaneKinds.live(kind, remote))
         StatusBar("TERM", j.green, sel?.let { "${it.role} · ${term?.let { t -> "${t.cols}×${t.rows}" } ?: "…"} · ^␣ menú" } ?: "sin paneles", route = state.route)
     }
 
@@ -336,6 +332,12 @@ private fun Composer(sel: PaneInfo?, state: UiState.Connected, session: Session,
     val j = LocalJw.current
     var text by remember(sel?.pane) { mutableStateOf("") }
     var typedAt by remember(sel?.pane) { mutableLongStateOf(0L) }
+    // The input became the terminal's (claude has just started in a shell): what was typed here is typed there.
+    LaunchedEffect(live) {
+        if (live && sel != null && !state.readOnly && text.isNotEmpty() && remote == "") {
+            session.input(sel.pane, MirrorTyping.bytes("", text))
+        }
+    }
     // The terminal's input changed: if the phone's has been still, it follows.
     LaunchedEffect(remote, live) {
         if (live && remote != null && remote != text && System.currentTimeMillis() - typedAt > MIRROR_STILL_MS) text = remote
