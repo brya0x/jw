@@ -655,6 +655,8 @@ Measured on this checkout before the change (one call each, 3 runs; wall clock i
 | `git rev-parse --verify` (`branch_exists`) | 32–36 ms |
 | `gh pr list --head <branch>` | 539–786 ms |
 
+After (a debug build under `scripts/drive.py`, a temp repo with a local `origin` and one worktree with an untracked file): `rm_project` 37 ms, `rm_local` 50–53 ms, `^␣ X` to modal (`rm_ask` to `rm_modal`) 89–92 ms. With `JW_GH` a script that sleeps, the modal is up at the same 89 ms, its PR row and the status bar spin, text typed meanwhile is kept, and the row reads `unknown (gh failed or timed out)` at 3.0 s (`rm_gh` 3009 ms). A release build and a large repo are not measured (RISK-80).
+
 | Piece | Shape |
 |---|---|
 | Jobs | `Job::RmReady{entry, project, plan}` after `Project::open` and `rm_plan` only; then `Job::RmPr{id, line}` from `App::ask_pr`. `DoneReady` is gone. |
@@ -839,7 +841,7 @@ Measured on this checkout before the change (one call each, 3 runs; wall clock i
 - RISK-78 **Pane ids change when the daemon restarts.** Within one daemon ids come from `next_pane` and are never reused (`new_id`), so `--pane 3` cannot reach a pane opened later. `restore` gives every restored pane a new id, so an id kept across a restart (in a script, in an agent's notes) can name another pane or none; run `jw pane ls` again.
 - RISK-79 **`Error` no longer tells "no agent" from "bad pane" except by its text.** Clients only show it (`cli.rs` `send_prompt`, `tui/mod.rs`), so nothing depends on it.
 
-- RISK-80 **The 100 ms target is for `Project::open`, `rm_plan` (three git calls) and a redraw, in series.** At 10–40 ms a call it is close, and a repo with a huge working tree makes `git status` slower. `rm_local` and `rm_modal` in `JW_TRACE` say; the fallback is `status` and `log` on two threads.
+- RISK-80 **The 100 ms target is for `Project::open`, `rm_plan` (three git calls) and a redraw, in series.** Measured 89–92 ms in a debug build on a tiny repo, so there is little room, and a repo with a huge working tree makes `git status` slower. `rm_local` and `rm_modal` in `JW_TRACE` say; the fallback is `status` and `log` on two threads.
 - RISK-81 **`rm` still does not re-check dirty and unpushed at confirm time (`actions::rm`).** The window between the modal and `↵` is as before; this addendum neither widens nor closes it.
 - RISK-82 **A remembered answer can be 30 s old.** The PR may have been merged in the browser meanwhile. It only changes the line and the offer of `d`, and `done` re-checks the merge itself.
 
