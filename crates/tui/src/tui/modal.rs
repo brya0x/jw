@@ -88,10 +88,17 @@ pub enum Modal {
     /// `rm`: when it would lose work, the stream's name must be typed.
     Rm {
         entry: Entry,
-        project: Project,
+        /// Found off the UI thread; `None` while `pending` (REQ-268).
+        project: Option<Project>,
         plan: RmPlan,
         typed: String,
         error: Option<String>,
+        /// What gh said, once it did (REQ-259).
+        pr: PrLine,
+        /// git has not said yet what the worktree holds: `plan` is empty and
+        /// only `esc` acts, so no key lands on a prompt about to change
+        /// (REQ-268).
+        pending: bool,
     },
     /// `^␣ m`: mobile. What it shows is `App::mobile`, and its keys are
     /// `mobile::key`, which can reach the daemon; this holds only what the
@@ -100,6 +107,24 @@ pub enum Modal {
     /// A phone asks to pair (REQ-45), over the screen or over the Mobile
     /// modal, which it hands back when it is answered.
     Pair(Box<super::mobile::Ask>, Option<super::mobile::View>),
+}
+
+/// The PR line of the remove modal. It is there from the first frame and only
+/// its text changes, so the modal never moves under the user's fingers; it
+/// informs and never changes what `rm` asks or refuses (REQ-259, REQ-261).
+pub enum PrLine {
+    Checking,
+    /// gh failed or took too long (REQ-264).
+    Unknown,
+    /// The branch has no PR.
+    NoPr,
+    Info(String),
+    /// Merged, and done's checks passed: `d` (or `⇥` when the name must be
+    /// typed) finishes as done (REQ-262).
+    Merged {
+        number: u64,
+        done: Box<(RmPlan, Pr)>,
+    },
 }
 
 /// The longest pane name, so it fits a pane's title.
@@ -112,6 +137,8 @@ pub enum Outcome {
     Submit,
     /// The setup step's `esc`: back to the name it came from.
     Back,
+    /// The remove modal's `d` or `⇥` on a merged PR: the done modal.
+    ToDone,
 }
 
 impl Modal {
@@ -215,11 +242,22 @@ impl Modal {
                 Outcome::Stay
             }
             Modal::Rm {
-                plan, typed, error, ..
+                plan,
+                typed,
+                error,
+                pr,
+                pending,
+                ..
             } => {
+                if *pending {
+                    return Outcome::Stay;
+                }
                 *error = None;
+                let merged = matches!(pr, PrLine::Merged { .. }) && typed.is_empty();
                 match k.code {
                     KeyCode::Enter => Outcome::Submit,
+                    KeyCode::Tab if merged => Outcome::ToDone,
+                    KeyCode::Char('d') if merged && !plan.loses_work() => Outcome::ToDone,
                     KeyCode::Char('y') if !plan.loses_work() => Outcome::Submit,
                     KeyCode::Char('n') if !plan.loses_work() => Outcome::Cancel,
                     KeyCode::Backspace => {
@@ -238,7 +276,8 @@ impl Modal {
         }
     }
 
-    pub fn draw(&self, f: &mut Frame) {
+    /// `spin` is the glyph of a line still waiting for gh.
+    pub fn draw(&self, f: &mut Frame, spin: char) {
         let (title, lines) = match self {
             Modal::Setup(s) => return s.draw(f),
             // Drawn by `mobile::draw`, which has the `App`.
@@ -538,10 +577,12 @@ impl Modal {
                 plan,
                 typed,
                 error,
+                pr,
+                pending,
                 ..
             } => (
                 format!(" Remove {}? ", entry.name),
-                rm_lines(entry, plan, typed, error),
+                rm_lines(entry, plan, typed, error, pr, *pending, spin),
             ),
         };
         boxed(f, title, lines, 64, 4);
@@ -587,11 +628,32 @@ fn rm_lines(
     plan: &RmPlan,
     typed: &str,
     error: &Option<String>,
+    pr: &PrLine,
+    pending: bool,
+    spin: char,
 ) -> Vec<Line<'static>> {
     let mut l = vec![Line::from(Span::styled(
         format!(" {}  ·  slot {}", entry.branch, entry.slot),
         Style::default().fg(p().dim),
     ))];
+    if pending {
+        l.push(Line::from(vec![
+            Span::raw(" Work "),
+            Span::styled(
+                format!("{spin} checking files and commits…"),
+                Style::default().fg(p().cyan),
+            ),
+        ]));
+        l.push(pr_line(pr, plan, typed, true, spin));
+        l.push(Line::default());
+        l.push(Line::from(Span::styled(
+            " ↵ y d and typing wait for the check",
+            Style::default().fg(p().dim),
+        )));
+        l.push(keys(&[("esc", "cancel")]));
+        return l;
+    }
+    l.push(pr_line(pr, plan, typed, false, spin));
     l.push(Line::default());
     if !plan.on_disk {
         l.push(Line::from(format!(
@@ -668,11 +730,44 @@ fn rm_lines(
         l.push(Line::default());
     }
     if plan.loses_work() {
-        l.push(keys(&[("↵", "remove"), ("esc", "cancel")]));
+        l.push(keys(&[
+            ("↵", "remove once the name is typed"),
+            ("esc", "cancel"),
+        ]));
     } else {
         l.push(keys(&[("y", "remove"), ("esc", "cancel")]));
     }
     l
+}
+
+fn pr_line(pr: &PrLine, plan: &RmPlan, typed: &str, pending: bool, spin: char) -> Line<'static> {
+    let dim = Style::default().fg(p().dim);
+    let mut l = vec![Span::raw(" PR  ")];
+    match pr {
+        PrLine::Checking => l.push(Span::styled(
+            format!("{spin} checking…"),
+            Style::default().fg(p().cyan),
+        )),
+        PrLine::Unknown => l.push(Span::styled("unknown (gh failed or timed out)", dim)),
+        PrLine::NoPr => l.push(Span::styled("none", dim)),
+        PrLine::Info(t) => l.push(Span::styled(t.clone(), dim)),
+        PrLine::Merged { number, .. } => {
+            l.push(Span::styled(
+                format!("#{number} merged"),
+                Style::default().fg(p().green),
+            ));
+            if typed.is_empty() && !pending {
+                let key = if plan.loses_work() { "⇥" } else { "d" };
+                l.push(Span::styled("  ·  ", dim));
+                l.push(Span::styled(
+                    format!(" {key} "),
+                    Style::default().bg(p().line).fg(p().blue),
+                ));
+                l.push(Span::styled(" finish as done", dim));
+            }
+        }
+    }
+    Line::from(l)
 }
 
 fn keys(pairs: &[(&str, &str)]) -> Line<'static> {

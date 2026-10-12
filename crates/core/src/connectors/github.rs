@@ -2,7 +2,8 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow, bail};
 use serde::Deserialize;
@@ -15,6 +16,9 @@ use super::{Pr, PullRequests};
 pub struct Client {
     /// The gh binary; `None` means `$JW_GH`, then `gh` on PATH.
     pub bin: Option<PathBuf>,
+    /// Kills gh when it has not answered by then; `None` waits as long as gh
+    /// takes.
+    pub timeout: Option<Duration>,
 }
 
 /// gh's shape; callers get [`Pr`].
@@ -249,11 +253,13 @@ impl Client {
     /// message (REQ-162).
     fn gh(&self, dir: &Path, args: &[&str]) -> Result<Vec<u8>> {
         let bin = self.bin()?;
-        let out = Command::new(&bin)
-            .args(args)
-            .current_dir(dir)
-            .output()
-            .map_err(|e| anyhow!("{}: {e}", bin.display()))?;
+        let mut cmd = Command::new(&bin);
+        cmd.args(args).current_dir(dir);
+        let out = match self.timeout {
+            None => cmd.output(),
+            Some(limit) => output_within(cmd, limit),
+        }
+        .map_err(|e| anyhow!("{}: {e}", bin.display()))?;
         if !out.status.success() {
             bail!(
                 "gh {}: {}",
@@ -368,6 +374,50 @@ impl Client {
     }
 }
 
+/// `cmd.output()`, but a command still running after `limit` is killed and
+/// reported as timed out.
+fn output_within(mut cmd: Command, limit: Duration) -> std::io::Result<Output> {
+    use std::io::Read;
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    // Drained on their own threads so a full pipe never stalls gh.
+    let drain = |r: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut r) = r {
+                let _ = r.read_to_end(&mut buf);
+            }
+            buf
+        })
+    };
+    let out = drain(child.stdout.take().map(|r| Box::new(r) as _));
+    let err = drain(child.stderr.take().map(|r| Box::new(r) as _));
+    let end = Instant::now() + limit;
+    let status = loop {
+        if let Some(s) = child.try_wait()? {
+            break s;
+        }
+        if Instant::now() >= end {
+            // The readers are left to end with whatever still holds the pipes.
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("timed out after {} ms", limit.as_millis()),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    Ok(Output {
+        status,
+        stdout: out.join().unwrap_or_default(),
+        stderr: err.join().unwrap_or_default(),
+    })
+}
+
 impl PullRequests for Client {
     fn for_branch(&self, dir: &Path, branch: &str) -> Result<Option<Pr>> {
         Ok(self
@@ -411,7 +461,29 @@ mod tests {
         std::fs::write(&bin, format!("#!/bin/sh\ncat <<'EOF'\n{reply}\nEOF\n")).unwrap();
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
         settle(&bin);
-        Client { bin: Some(bin) }
+        Client {
+            bin: Some(bin),
+            ..Client::default()
+        }
+    }
+
+    /// REQ-264: a gh that does not answer is killed and reported, so the
+    /// caller can say "unknown" instead of waiting.
+    #[test]
+    fn a_gh_that_hangs_times_out() {
+        let d = tempfile::tempdir().unwrap();
+        let bin = d.path().join("gh");
+        std::fs::write(&bin, "#!/bin/sh\nexec sleep 5\n").unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        settle(&bin);
+        let gh = Client {
+            bin: Some(bin),
+            timeout: Some(Duration::from_millis(200)),
+        };
+        let start = Instant::now();
+        let err = gh.for_branch(d.path(), "b").unwrap_err().to_string();
+        assert!(err.contains("timed out"), "{err}");
+        assert!(start.elapsed() < Duration::from_secs(3));
     }
 
     #[test]
@@ -463,7 +535,13 @@ mod tests {
         settle(&bin);
         // The run that settled it logged its own call.
         let _ = std::fs::remove_file(&log);
-        (Client { bin: Some(bin) }, log)
+        (
+            Client {
+                bin: Some(bin),
+                ..Client::default()
+            },
+            log,
+        )
     }
 
     #[test]
@@ -503,11 +581,15 @@ mod tests {
         let bin = d.path().join("gh");
         std::fs::write(&bin, "#!/bin/sh\necho 'not logged in' >&2\nexit 1\n").unwrap();
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let gh = Client { bin: Some(bin) };
+        let gh = Client {
+            bin: Some(bin),
+            ..Client::default()
+        };
         let err = gh.open_prs(d.path(), false).unwrap_err();
         assert_eq!(format!("{err}"), "gh pr list: not logged in");
         let missing = Client {
             bin: Some(d.path().join("nope")),
+            ..Client::default()
         };
         assert!(missing.open_prs(d.path(), false).is_err());
     }
@@ -525,7 +607,12 @@ echo '{"title":"T","author":{"login":"ana"},"comments":[{"author":{"login":"bo"}
         )
         .unwrap();
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let det = Client { bin: Some(bin) }.detail(d.path(), 3).unwrap();
+        let det = Client {
+            bin: Some(bin),
+            ..Client::default()
+        }
+        .detail(d.path(), 3)
+        .unwrap();
         assert_eq!((det.title.as_str(), det.author.as_str()), ("T", "ana"));
         assert_eq!(det.comments[0].body, "hi");
         assert_eq!(det.reviews[0].state, "APPROVED");
