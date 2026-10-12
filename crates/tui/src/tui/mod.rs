@@ -3243,9 +3243,10 @@ impl App {
     /// It runs after the modal is up and only fills its PR line (REQ-259).
     fn ask_pr(&mut self, entry: Entry, project: Project) {
         self.background(format!("checking the PR of {}", entry.name), move || {
+            use crate::connectors::PullRequests;
             let prs = prcache::client();
             let found = trace::span("rm_gh", || {
-                crate::connectors::PullRequests::for_branch(&prs, &project.repo.root, &entry.branch)
+                prs.for_branch(&project.repo.root, &entry.branch)
             });
             let line = match found {
                 Err(_) => modal::PrLine::Unknown,
