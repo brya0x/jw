@@ -120,6 +120,11 @@ enum Job {
         id: String,
         line: modal::PrLine,
     },
+    /// What removing a session closes and forgets, read off the UI thread.
+    SessionRm {
+        name: String,
+        plan: crate::session::RmPlan,
+    },
     /// A finished action with nothing else to do but say so.
     Said(String),
     /// The open PRs gh listed for the picker (REQ-160); `requested` is the
@@ -2792,6 +2797,29 @@ impl App {
         self.done(format!("session {old} is {new} now"));
     }
 
+    /// Closes the session's workspaces in the daemon and forgets it. The
+    /// worktrees stay on disk (REQ-273).
+    fn remove_session(&mut self, name: &str, plan: &crate::session::RmPlan) {
+        let state = match registry::state_dir() {
+            Ok(s) => s,
+            Err(e) => return self.fail(format!("{e:#}")),
+        };
+        // The daemon first, so nothing runs in a session that is gone.
+        for stream in plan.streams() {
+            self.send(ClientMsg::Close {
+                stream: stream.to_string(),
+            });
+        }
+        self.send(ClientMsg::List);
+        if let Err(e) = crate::session::rm(&state, name, &crate::session::current()) {
+            return self.fail(format!("{e:#}"));
+        }
+        self.done(format!(
+            "removed session {name}; its worktrees stay on disk"
+        ));
+        self.ask_session();
+    }
+
     /// Shows another session: the workspaces on screen keep running.
     fn switch_session(&mut self, name: &str) {
         if name == crate::session::current() {
@@ -3071,6 +3099,18 @@ impl App {
             finder::Pick::Review(pr) => return self.start_review(*pr),
             finder::Pick::Session(s) => return self.switch_session(&s),
             finder::Pick::NewSession(s) => return self.new_session(&s),
+            finder::Pick::DeleteSession(s) => {
+                if s == crate::session::current() {
+                    self.fail(format!("cannot delete {s}: it is the session you are in"));
+                    return;
+                }
+                self.background(format!("checking session {s}"), move || {
+                    let state = registry::state_dir()?;
+                    let plan = crate::session::rm_plan(&state, &s)?;
+                    Ok(Job::SessionRm { name: s, plan })
+                });
+                return;
+            }
             finder::Pick::RenameSession(s) => {
                 self.modal = Some(Modal::RenameSession {
                     text: s.clone(),
@@ -3513,6 +3553,7 @@ impl App {
                 }
             }
             Modal::RenameSession { old, text } => self.rename_session(&old, &text),
+            Modal::RmSession { name, plan, .. } => self.remove_session(&name, &plan),
             Modal::Done {
                 entry,
                 project,
@@ -3687,6 +3728,27 @@ impl App {
                 self.open_entry(entry, setup);
             }
             Job::SetupReady(s) => self.modal = Some(Modal::Setup(s)),
+            Job::SessionRm { name, plan } => {
+                let ids: Vec<&str> = plan.streams().collect();
+                let mine: Vec<&PaneInfo> = self
+                    .daemon_panes
+                    .iter()
+                    .filter(|p| ids.contains(&p.stream.as_str()))
+                    .collect();
+                let working = mine
+                    .iter()
+                    .filter(|p| p.at_work())
+                    .map(|p| format!("pane {} of {}", p.pane, p.stream))
+                    .collect();
+                let panes = mine.len();
+                self.modal = Some(Modal::RmSession {
+                    name,
+                    plan,
+                    working,
+                    panes,
+                    typed: String::new(),
+                });
+            }
             // Taken at the top, before `busy` is cleared.
             Job::RmPr { .. } | Job::RmWork { .. } => {}
             Job::Removed { name, note } => {

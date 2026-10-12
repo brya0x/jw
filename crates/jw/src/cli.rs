@@ -485,7 +485,7 @@ pub fn session(args: &[String]) -> Result<()> {
     let mut words = Vec::new();
     for a in rest {
         match a.as_str() {
-            "--yes" | "-y" => yes = true,
+            "--yes" => yes = true,
             s if s.starts_with('-') => bail!("unknown flag {s}"),
             s => words.push(s),
         }
@@ -505,22 +505,13 @@ pub fn session(args: &[String]) -> Result<()> {
     }
     let plan = crate::session::rm_plan(&state, name)?;
 
-    let ids: Vec<&str> = plan
-        .folders
-        .iter()
-        .map(String::as_str)
-        .chain(plan.worktrees.iter().map(|(e, _)| e.id.as_str()))
-        .collect();
+    let ids: Vec<&str> = plan.streams().collect();
     let panes = daemon_panes()?;
     let mine: Vec<&PaneInfo> = panes
         .iter()
         .filter(|p| ids.contains(&p.stream.as_str()))
         .collect();
-    let working: Vec<&PaneInfo> = mine
-        .iter()
-        .copied()
-        .filter(|p| p.busy || matches!(p.agent, Some(AgentState::Working | AgentState::Waiting)))
-        .collect();
+    let working: Vec<&PaneInfo> = mine.iter().copied().filter(|p| p.at_work()).collect();
 
     let kept: Vec<&str> = plan
         .worktrees
@@ -528,8 +519,7 @@ pub fn session(args: &[String]) -> Result<()> {
         .filter(|(_, p)| p.on_disk)
         .map(|(e, _)| e.path.as_str())
         .collect();
-    let at_risk = plan.at_risk().count() + working.len();
-    if at_risk > 0 && !yes {
+    if (plan.at_risk().next().is_some() || !working.is_empty()) && !yes {
         eprintln!("session {name} has work at risk:");
         for (e, p) in plan.at_risk() {
             let mut what = Vec::new();

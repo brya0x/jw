@@ -151,6 +151,14 @@ pub struct RmPlan {
 }
 
 impl RmPlan {
+    /// The workspace ids of the session: its folders' and its worktrees'.
+    pub fn streams(&self) -> impl Iterator<Item = &str> {
+        self.folders
+            .iter()
+            .map(String::as_str)
+            .chain(self.worktrees.iter().map(|(e, _)| e.id.as_str()))
+    }
+
     /// The worktrees with dirty or unpushed work.
     pub fn at_risk(&self) -> impl Iterator<Item = &(registry::Entry, crate::actions::RmPlan)> {
         self.worktrees.iter().filter(|(_, p)| p.loses_work())
@@ -455,6 +463,7 @@ mod tests {
         let plan = rm_plan(s, "dev").unwrap();
         assert_eq!(plan.worktrees.len(), 1);
         assert_eq!(plan.folders.len(), 1);
+        assert_eq!(plan.streams().count(), 2);
         // Not a git checkout: unreadable counts as at risk, not as clean.
         assert_eq!(plan.at_risk().count(), 1);
 

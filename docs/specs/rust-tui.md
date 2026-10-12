@@ -688,7 +688,7 @@ After (a debug build under `scripts/drive.py`, a temp repo with a local `origin`
 | Refuses | the session you are in. `main` is a session like any other: nothing keeps it, and a later `jw` with no session creates it again (REQ-64) |
 | Asks | when a worktree loses work (`RmPlan::loses_work`) or a pane has an agent or is busy: the CLI wants `--yes`, the TUI the typed name |
 | Daemon | one serves every session; the client sends `Close` for the target's workspaces and signals nothing. `PROTOCOL` stays 11 |
-| Prototype | version 2, approved 2026-10-12 |
+| Prototype | version 3, approved 2026-10-12 (version 2 refused `main`; version 3, where only the current session is refused, was updated with the user's correction and not re-approved) |
 
 - REQ-270 THE `jw session rm <name>` command SHALL remove the session's registry entries, its `sessions/<name>/` directory, the `renamed.json` pairs that lead to it or leave it, and `last` when it names it.
 - REQ-271 IF the name is the session the caller is in, THEN `session::rm` and the command SHALL refuse, exit non-zero and say why; `main` SHALL be removable like any other session.
@@ -698,12 +698,13 @@ After (a debug build under `scripts/drive.py`, a temp repo with a local `origin`
 - REQ-275 WHEN `--yes` is given or nothing is at risk, THE command SHALL send `Close` for each workspace of the session and then remove its files.
 - REQ-276 WHEN `^D` is pressed on a session in the picker, THE TUI SHALL open a confirm modal naming the session and what is at risk.
 - REQ-277 WHILE something is at risk, THE modal SHALL accept `↵` only when the typed text equals the session's name; otherwise `y` and `n` SHALL do.
-- REQ-278 IF the selected session is the current one, THEN `^D` SHALL show the reason in the picker and open no modal.
+- REQ-278 IF the selected session is the current one, THEN `^D` SHALL close the picker, say the reason in the status bar and open no modal.
 - REQ-279 THE removal SHALL send `Close` only for workspaces of the target session and SHALL NOT signal any daemon.
 - REQ-280 THE picker's footer SHALL list `^D delete`.
 - REQ-281 IF no daemon runs, THEN the removal SHALL go on with the files alone.
 - REQ-282 THE `session` word SHALL be reserved: no session can be named `session`.
 - REQ-283 THE version SHALL be 0.0.21 and `PROTOCOL` SHALL stay 11.
+- REQ-284 WHILE the plan is read, THE TUI SHALL run no git on the UI thread; the modal opens when `session::rm_plan` answers, and the picker reopens after a removal.
 
 ## Rationale
 
@@ -967,8 +968,8 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | F4 ✓ opening | S1 (closed workspaces), S11: stream cache guarded by `Stamp`, `folders::entry` cached per `.git` stamp, branch from `.git/HEAD` | 185 | `core/src/stream.rs`, `core/src/folders.rs`, `core/src/connectors/git.rs`, `tui/mod.rs` |
 | F5 | S5: skip unchanged rows in `screen_to`, one flush per frame, only if F0 shows draw over budget | 187 | `tui/draw.rs`, `tui/anim.rs` |
 | RM1 ✓ `43a7b2e` | `session::rm` and `session::rm_plan`; `session` reserved; version 0.0.21 | 270–273, 279, 281–283 | `core/session.rs` |
-| RM2 ✓ | `jw session rm <name> [--yes]`, with `Close` for the session's workspaces | 270–275 | `jw/main.rs`, `jw/cli.rs` |
-| RM3 | `^D` in the session picker and its confirm modal | 276–278, 280 | `tui/finder.rs`, `tui/modal.rs`, `tui/draw.rs`, `tui/mod.rs` |
+| RM2 ✓ `5d82a9b` | `jw session rm <name> [--yes]`, with `Close` for the session's workspaces | 270–275 | `jw/main.rs`, `jw/cli.rs` |
+| RM3 ✓ | `^D` in the session picker and its confirm modal (`Modal::RmSession`, `Job::SessionRm`: the plan is read off the UI thread, then the modal opens; after a delete the picker reopens) | 276–278, 280 | `tui/finder.rs`, `tui/modal.rs`, `tui/draw.rs`, `tui/mod.rs` |
 
 Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{new_stream, rm_plan, rm, sync, done_plan}`, `src/diff.rs`, `src/view/md.rs` and `Modal::Rm` (type the name) stay as they are.
 
