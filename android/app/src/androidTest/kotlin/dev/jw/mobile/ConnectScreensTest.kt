@@ -145,11 +145,11 @@ class ConnectScreensTest {
         onAllNodes(androidx.compose.ui.test.hasText(t, substring = true)).fetchSemanticsNodes().size
 
     @Test fun protocolNamesTheSideBehind() {
-        var pc by mutableStateOf(12)
-        show { ProtocolScreen(app = 11, pc = pc, onBack = {}) }
+        var pc by mutableStateOf(14)
+        show { ProtocolScreen(app = 13, pc = pc, onBack = {}) }
         rule.onNodeWithText("Tu app está atrasada", substring = true).assertExists()
         shot("proto")
-        rule.runOnUiThread { pc = 10 }
+        rule.runOnUiThread { pc = 12 }
         rule.waitForIdle()
         rule.onNodeWithText("Tu jw está atrasado", substring = true).assertExists()
         shot("protojw")

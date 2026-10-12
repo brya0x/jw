@@ -1364,7 +1364,7 @@ impl App {
                 self.install_snapshot(pane, role, parser, None);
             }
             // The reader thread turns these into `Msg::Snapshot` and `Msg::History`.
-            DaemonMsg::Screen { .. } | DaemonMsg::History { .. } => {}
+            DaemonMsg::Screen { .. } | DaemonMsg::History { .. } | DaemonMsg::Resized { .. } => {}
             DaemonMsg::Output { pane, bytes } => {
                 if let Some(v) = self.panes.get_mut(&pane) {
                     if let Some(h) = &mut v.history {

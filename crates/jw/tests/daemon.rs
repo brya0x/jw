@@ -311,6 +311,52 @@ fn resize_reaches_the_pty_and_the_screen() {
 }
 
 #[test]
+fn watchers_are_told_of_a_new_size_once_and_in_order_with_the_output() {
+    let d = Daemon::start();
+    let mut c = d.client();
+    let pane = spawn(&mut c, "s", "cat", 80, 24);
+    let mut watcher = d.client();
+    attach(&mut watcher, "s", pane);
+
+    // The same size twice is one change; the bytes after it come after the notice.
+    for _ in 0..2 {
+        c.send(&ClientMsg::Resize {
+            pane,
+            cols: 100,
+            rows: 30,
+        })
+        .unwrap();
+    }
+    c.send(&ClientMsg::Input {
+        pane,
+        bytes: b"after\n".to_vec(),
+    })
+    .unwrap();
+
+    let mut sizes = Vec::new();
+    let mut seen = String::new();
+    let deadline = Instant::now() + TIMEOUT;
+    while !seen.contains("after") {
+        assert!(Instant::now() < deadline, "never saw the output");
+        match recv(&mut watcher) {
+            DaemonMsg::Resized {
+                pane: p,
+                cols,
+                rows,
+            } if p == pane => {
+                assert!(seen.is_empty(), "the notice came after output: {seen:?}");
+                sizes.push((cols, rows));
+            }
+            DaemonMsg::Output { pane: p, bytes } if p == pane => {
+                seen.push_str(&String::from_utf8_lossy(&bytes))
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(sizes, [(100, 30)]);
+}
+
+#[test]
 fn an_exited_pane_keeps_its_screen_and_status() {
     let d = Daemon::start();
     let mut c = d.client();

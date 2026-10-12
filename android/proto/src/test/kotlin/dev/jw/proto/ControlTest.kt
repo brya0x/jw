@@ -17,8 +17,8 @@ class ControlTest {
     @Test fun parsesPairedReadyError() {
         val paired = Control.parse("""{"t":"paired","device":"${"f".repeat(64)}","id":"abcd1234"}""") as ServerMessage.Paired
         assertEquals("abcd1234", paired.id)
-        val ready = Control.parse("""{"t":"ready","bridge":1,"protocol":12,"read_only":true,"future":1}""") as ServerMessage.Ready
-        assertEquals(12, ready.protocol)
+        val ready = Control.parse("""{"t":"ready","bridge":1,"protocol":13,"read_only":true,"future":1}""") as ServerMessage.Ready
+        assertEquals(13, ready.protocol)
         assertTrue(ready.readOnly)
         assertEquals(Palettes.FALLBACK.dark["bg"], ready.palettes.dark["bg"])
         val err = Control.parse("""{"t":"error","code":"revoked","msg":"x"}""") as ServerMessage.Error
@@ -34,7 +34,7 @@ class ControlTest {
 
     @Test fun palettesFromReadyOverrideRoleByRole() {
         val r = Control.parse(
-            """{"t":"ready","protocol":12,"palettes":[{"name":"Other","dark":true,"colors":{"bg":"#111111"}},{"name":"One Dark","dark":true,"colors":{"bg":"#000000","fg":"nothex"}}]}""",
+            """{"t":"ready","protocol":13,"palettes":[{"name":"Other","dark":true,"colors":{"bg":"#111111"}},{"name":"One Dark","dark":true,"colors":{"bg":"#000000","fg":"nothex"}}]}""",
         ) as ServerMessage.Ready
         assertEquals("#000000", r.palettes.dark["bg"])
         assertEquals(Palettes.FALLBACK.dark["fg"], r.palettes.dark["fg"])

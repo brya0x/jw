@@ -15,7 +15,7 @@ pub type PaneId = u64;
 
 /// Bumped whenever a message changes shape: a client and a daemon from
 /// different builds refuse each other instead of misreading (RISK-14).
-pub const PROTOCOL: u32 = 12;
+pub const PROTOCOL: u32 = 13;
 
 /// A pane to start. `cmd` runs through `sh -c`; `None` starts `$SHELL`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -313,6 +313,14 @@ pub enum DaemonMsg {
     Output {
         pane: PaneId,
         bytes: Vec<u8>,
+    },
+    /// The pane's screen is now `cols` by `rows`: a client's `Resize` changed it. It comes in
+    /// order with the `Output` around it, so a client drawing the pane at its own size
+    /// resizes at the right byte (mobile REQ-70).
+    Resized {
+        pane: PaneId,
+        cols: u16,
+        rows: u16,
     },
     /// The pane's process ended. The pane and its last screen stay until Kill.
     Exited {

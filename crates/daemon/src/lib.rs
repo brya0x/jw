@@ -644,10 +644,22 @@ impl Daemon {
                 io.writer.write_all(&bytes)?;
                 io.writer.flush()?;
             }
-            ClientMsg::Resize { pane, cols, rows } => {
-                let pane = self.pane(pane)?;
+            ClientMsg::Resize {
+                pane: id,
+                cols,
+                rows,
+            } => {
+                let pane = self.pane(id)?;
                 lock(&pane.io).master.resize(size(cols, rows))?;
-                lock(&pane.state).parser.screen_mut().set_size(rows, cols);
+                let mut st = lock(&pane.state);
+                if st.parser.screen().size() != (rows, cols) {
+                    st.parser.screen_mut().set_size(rows, cols);
+                    st.broadcast(&DaemonMsg::Resized {
+                        pane: id,
+                        cols,
+                        rows,
+                    });
+                }
             }
             ClientMsg::Spawn {
                 stream,
