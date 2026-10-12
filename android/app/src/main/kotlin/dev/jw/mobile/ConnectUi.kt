@@ -1,5 +1,6 @@
 package dev.jw.mobile
 
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -260,12 +261,13 @@ fun PasteSheet(error: String?, onConnect: (String) -> Unit, onClose: () -> Unit)
                 value = text, onValueChange = { text = it }, singleLine = true,
                 textStyle = TextStyle(color = j.fg, fontSize = 13.5.sp, fontFamily = JwMono),
                 cursorBrush = SolidColor(j.fg),
-                modifier = Modifier.padding(horizontal = 12.dp).fillMaxWidth().heightIn(min = 44.dp).background(j.bg, RoundedCornerShape(6.dp))
-                    .border(BorderStroke(1.dp, j.blue), RoundedCornerShape(6.dp)),
+                modifier = Modifier.padding(horizontal = 12.dp).fillMaxWidth(),
                 decorationBox = { inner ->
-                    Box(Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
-                        if (text.isEmpty()) Text("jw://….trycloudflare.com/…", color = j.dim, fontSize = 13.5.sp)
-                        inner()
+                    FieldFrame(j.blue) {
+                        Box(Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
+                            if (text.isEmpty()) Text("jw://….trycloudflare.com/…", color = j.dim, fontSize = 13.5.sp)
+                            inner()
+                        }
                     }
                 },
             )

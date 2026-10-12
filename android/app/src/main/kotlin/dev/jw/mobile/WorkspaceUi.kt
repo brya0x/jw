@@ -1,5 +1,6 @@
 package dev.jw.mobile
 
+import androidx.compose.material3.minimumInteractiveComponentSize
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -46,6 +47,9 @@ import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -120,7 +124,7 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
                 .padding(horizontal = 4.dp, vertical = 8.dp).heightIn(min = 52.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(Modifier.width(44.dp).heightIn(min = 44.dp).clickable(role = Role.Button, onClickLabel = "Volver") { nav.open = null }, contentAlignment = Alignment.Center) { Icon(Ic.Back, j.fg, 22.dp) }
+            Box(Modifier.width(48.dp).heightIn(min = 48.dp).clickable(role = Role.Button, onClickLabel = "Volver") { nav.open = null }, contentAlignment = Alignment.Center) { Icon(Ic.Back, j.fg, 22.dp) }
             Column(Modifier.weight(1f)) {
                 Text((root?.let { "${it.name} › " } ?: "") + w.name, color = j.fg, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(
@@ -128,8 +132,8 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
                     color = j.dim, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
             }
-            Box(Modifier.width(44.dp).heightIn(min = 44.dp).clickable(role = Role.Button, onClickLabel = "Cambiar workspace") { sheet = Sheet.Pick }, contentAlignment = Alignment.Center) { Icon(Ic.Search, j.fg, 22.dp) }
-            Box(Modifier.width(44.dp).heightIn(min = 44.dp).clickable(role = Role.Button, onClickLabel = "Cambios") { nav.showChanges(w.id) }, contentAlignment = Alignment.Center) { Text("±", color = j.fg, fontSize = 18.sp) }
+            Box(Modifier.width(48.dp).heightIn(min = 48.dp).clickable(role = Role.Button, onClickLabel = "Cambiar workspace") { sheet = Sheet.Pick }, contentAlignment = Alignment.Center) { Icon(Ic.Search, j.fg, 22.dp) }
+            Box(Modifier.width(48.dp).heightIn(min = 48.dp).clickable(role = Role.Button, onClickLabel = "Cambios") { nav.showChanges(w.id) }, contentAlignment = Alignment.Center) { Text("±", color = j.fg, fontSize = 18.sp) }
         }
         // The panes of this workspace.
         Row(Modifier.fillMaxWidth().background(j.bg).horizontalScroll(rememberScrollState()).drawBehind { drawLine(j.line, Offset(0f, size.height), Offset(size.width, size.height), 1.dp.toPx()) }) {
@@ -137,7 +141,8 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
                 val on = p.pane == sel?.pane
                 val c = paneColor(p)
                 Row(
-                    Modifier.heightIn(min = 40.dp).background(if (on) j.sel else j.bg).clickable { nav.pane = p.pane }
+                    Modifier.clickable { nav.pane = p.pane }.minimumInteractiveComponentSize()
+                        .heightIn(min = 40.dp).background(if (on) j.sel else j.bg)
                         .drawBehind { if (on) drawLine(c, Offset(0f, size.height), Offset(size.width, size.height), 2.dp.toPx()) }.padding(horizontal = 14.dp),
                     verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
@@ -226,9 +231,9 @@ private fun BackHandlerFor(enabled: Boolean, onBack: () -> Unit) = androidx.acti
 private fun KeyButton(label: String, accent: Boolean = false, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val j = LocalJw.current
     Box(
-        modifier.widthIn(min = 44.dp).heightIn(min = 38.dp)
+        modifier.clickable(role = Role.Button, onClick = onClick).minimumInteractiveComponentSize().widthIn(min = 44.dp).heightIn(min = 38.dp)
             .background(j.bg, RoundedCornerShape(5.dp)).border(BorderStroke(1.dp, if (accent) j.yellow.copy(alpha = 0.5f) else j.line), RoundedCornerShape(5.dp))
-            .clickable(role = Role.Button, onClick = onClick).padding(horizontal = 10.dp),
+            .padding(horizontal = 10.dp),
         contentAlignment = Alignment.Center,
     ) { Text(label, color = if (accent) j.yellow else j.fg, fontSize = 12.sp) }
 }
@@ -240,7 +245,7 @@ private fun KeyRow(sel: PaneInfo?, term: dev.jw.term.Terminal?, session: Session
     val scope = rememberCoroutineScope()
     Row(
         Modifier.fillMaxWidth().background(j.panel).drawBehind { drawLine(j.line, Offset(0f, 0f), Offset(size.width, 0f), 1.dp.toPx()) }
-            .horizontalScroll(rememberScrollState()).padding(start = 10.dp, end = 10.dp, top = 8.dp, bottom = 4.dp),
+            .horizontalScroll(rememberScrollState()).padding(start = 10.dp, end = 10.dp, top = 3.dp),
         horizontalArrangement = Arrangement.spacedBy(5.dp),
     ) {
         KeyButton("^␣", accent = true, onClick = onLeader)
@@ -250,7 +255,7 @@ private fun KeyRow(sel: PaneInfo?, term: dev.jw.term.Terminal?, session: Session
                 if (sel != null && b != null) session.input(sel.pane, b)
             }
             Box(
-                Modifier.widthIn(min = 44.dp).heightIn(min = 38.dp).background(j.bg, RoundedCornerShape(5.dp)).border(BorderStroke(1.dp, j.line), RoundedCornerShape(5.dp))
+                Modifier
                     .pointerInput(sel?.pane, k) {
                         detectTapGestures(onPress = {
                             send()
@@ -260,7 +265,12 @@ private fun KeyRow(sel: PaneInfo?, term: dev.jw.term.Terminal?, session: Session
                                 job.cancel()
                             }
                         })
-                    }.padding(horizontal = 10.dp),
+                    }
+                    // The press is a raw gesture (it repeats while held), so say to accessibility that this is a button.
+                    .semantics(mergeDescendants = true) { role = Role.Button; onClick(k.label) { send(); true } }
+                    .minimumInteractiveComponentSize().widthIn(min = 44.dp).heightIn(min = 38.dp)
+                    .background(j.bg, RoundedCornerShape(5.dp)).border(BorderStroke(1.dp, j.line), RoundedCornerShape(5.dp))
+                    .padding(horizontal = 10.dp),
                 contentAlignment = Alignment.Center,
             ) { Text(k.label, color = j.fg, fontSize = 12.sp) }
         }
@@ -288,16 +298,19 @@ private fun Composer(sel: PaneInfo?, state: UiState.Connected, session: Session)
             value = text, onValueChange = { text = it }, enabled = sel != null && !state.readOnly,
             textStyle = TextStyle(color = j.fg, fontSize = 13.5.sp, fontFamily = JwMono), cursorBrush = SolidColor(j.fg),
             singleLine = true, keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send), keyboardActions = KeyboardActions(onSend = { send() }),
-            modifier = Modifier.weight(1f).heightIn(min = 44.dp).background(j.bg, Corner).border(BorderStroke(1.dp, j.line), Corner),
+            modifier = Modifier.weight(1f),
             decorationBox = { inner ->
-                Box(Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
-                    if (text.isEmpty()) Text(if (state.readOnly) "solo lectura" else if (sel?.role == "agent") "escribe a ${sel.role}" else "escribe un comando", color = j.dim, fontSize = 13.5.sp)
-                    inner()
+                FieldFrame(j.line) {
+                    Box(Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
+                        if (text.isEmpty()) Text(if (state.readOnly) "solo lectura" else if (sel?.role == "agent") "escribe a ${sel.role}" else "escribe un comando", color = j.dim, fontSize = 13.5.sp)
+                        inner()
+                    }
                 }
             },
         )
         Box(
-            Modifier.width(44.dp).heightIn(min = 44.dp).background(if (state.readOnly) j.dim else j.blue, Corner).clickable(enabled = !state.readOnly, role = Role.Button, onClickLabel = "Enviar", onClick = send),
+            Modifier.clickable(enabled = !state.readOnly, role = Role.Button, onClickLabel = "Enviar", onClick = send).minimumInteractiveComponentSize()
+                .width(44.dp).heightIn(min = 44.dp).background(if (state.readOnly) j.dim else j.blue, Corner),
             contentAlignment = Alignment.Center,
         ) { Text("↵", color = j.bg, fontWeight = FontWeight.Bold, fontSize = 16.sp) }
     }
@@ -368,11 +381,13 @@ internal fun PickSheet(model: Model, current: Workspace?, onPick: (Workspace) ->
         BasicTextField(
             value = q, onValueChange = { q = it }, singleLine = true,
             textStyle = TextStyle(color = j.fg, fontSize = 13.5.sp, fontFamily = JwMono), cursorBrush = SolidColor(j.fg),
-            modifier = Modifier.padding(horizontal = 12.dp).fillMaxWidth().heightIn(min = 44.dp).background(j.bg, Corner).border(BorderStroke(1.dp, j.blue), Corner),
+            modifier = Modifier.padding(horizontal = 12.dp).fillMaxWidth(),
             decorationBox = { inner ->
-                Box(Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
-                    if (q.isEmpty()) Text("buscar…", color = j.dim, fontSize = 13.5.sp)
-                    inner()
+                FieldFrame(j.blue) {
+                    Box(Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
+                        if (q.isEmpty()) Text("buscar…", color = j.dim, fontSize = 13.5.sp)
+                        inner()
+                    }
                 }
             },
         )
@@ -407,8 +422,8 @@ private fun NameSheet(sel: PaneInfo?, onDone: (String) -> Unit, onClose: () -> U
             value = name, onValueChange = { name = it }, singleLine = true,
             textStyle = TextStyle(color = j.fg, fontSize = 13.5.sp, fontFamily = JwMono), cursorBrush = SolidColor(j.fg),
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done), keyboardActions = KeyboardActions(onDone = { onDone(name) }),
-            modifier = Modifier.padding(horizontal = 12.dp).fillMaxWidth().heightIn(min = 44.dp).background(j.bg, Corner).border(BorderStroke(1.dp, j.blue), Corner),
-            decorationBox = { inner -> Box(Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) { inner() } },
+            modifier = Modifier.padding(horizontal = 12.dp).fillMaxWidth(),
+            decorationBox = { inner -> FieldFrame(j.blue) { Box(Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) { inner() } } },
         )
         SheetRow("↵", "guardar", "", onClick = { onDone(name) })
     }

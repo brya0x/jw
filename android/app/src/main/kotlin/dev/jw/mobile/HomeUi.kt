@@ -1,5 +1,6 @@
 package dev.jw.mobile
 
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
 import dev.jw.proto.Palettes
@@ -101,8 +102,8 @@ internal fun YesNo(enabled: Boolean, yLabel: String, nLabel: String, onY: () -> 
     fun Btn(label: String, color: Color, onClick: () -> Unit, mod: Modifier) {
         val c = if (enabled) color else j.dim
         Box(
-            mod.heightIn(min = 44.dp).background(c.copy(alpha = 0.18f), Corner).border(BorderStroke(1.dp, c.copy(alpha = 0.5f)), Corner)
-                .clickable(enabled = enabled, role = Role.Button, onClick = onClick),
+            mod.clickable(enabled = enabled, role = Role.Button, onClick = onClick).minimumInteractiveComponentSize()
+                .heightIn(min = 44.dp).background(c.copy(alpha = 0.18f), Corner).border(BorderStroke(1.dp, c.copy(alpha = 0.5f)), Corner),
             contentAlignment = Alignment.Center,
         ) { Text(label, color = c, fontWeight = FontWeight.Bold, fontSize = 13.sp) }
     }
@@ -194,8 +195,8 @@ fun ConnectedApp(state: UiState.Connected, session: Session, nav: Nav, answers: 
 private fun SessionChip(model: Model, nav: Nav) {
     val j = LocalJw.current
     Row(
-        Modifier.heightIn(min = 36.dp).border(BorderStroke(1.dp, j.line), Corner).background(j.bg, Corner)
-            .clickable(role = Role.Button) { nav.sessionSheet = true }.padding(horizontal = 10.dp),
+        Modifier.clickable(role = Role.Button) { nav.sessionSheet = true }.minimumInteractiveComponentSize()
+            .heightIn(min = 36.dp).border(BorderStroke(1.dp, j.line), Corner).background(j.bg, Corner).padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Text("sesión", color = j.dim, fontSize = 12.5.sp)
@@ -265,11 +266,13 @@ private fun HomeScreen(model: Model, state: UiState.Connected, session: Session,
                     value = query, onValueChange = { query = it }, singleLine = true,
                     textStyle = androidx.compose.ui.text.TextStyle(color = j.fg, fontSize = 13.5.sp, fontFamily = JwMono),
                     cursorBrush = androidx.compose.ui.graphics.SolidColor(j.fg),
-                    modifier = Modifier.weight(1f).heightIn(min = 40.dp).background(j.bg, Corner).border(BorderStroke(1.dp, j.blue), Corner),
+                    modifier = Modifier.weight(1f),
                     decorationBox = { inner ->
-                        Box(Modifier.padding(horizontal = 10.dp, vertical = 10.dp)) {
-                            if (query.isEmpty()) Text("buscar workspace, rama o ruta", color = j.dim, fontSize = 13.sp)
-                            inner()
+                        FieldFrame(j.blue, drawn = 40.dp) {
+                            Box(Modifier.padding(horizontal = 10.dp, vertical = 10.dp)) {
+                                if (query.isEmpty()) Text("buscar workspace, rama o ruta", color = j.dim, fontSize = 13.sp)
+                                inner()
+                            }
                         }
                     },
                 )
@@ -278,7 +281,7 @@ private fun HomeScreen(model: Model, state: UiState.Connected, session: Session,
                 Spacer(Modifier.weight(1f))
             }
             Box(
-                Modifier.size(44.dp).semantics { contentDescription = if (searching) "Cerrar búsqueda" else "Buscar" }
+                Modifier.size(48.dp).semantics { contentDescription = if (searching) "Cerrar búsqueda" else "Buscar" }
                     .clickable(role = Role.Button) { searching = !searching; query = "" },
                 contentAlignment = Alignment.Center,
             ) { if (searching) Icon(Ic.X, j.fg, 20.dp) else Icon(Ic.Search, j.fg, 20.dp) }
@@ -329,7 +332,8 @@ private fun AvisosScreen(model: Model, state: UiState.Connected, session: Sessio
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         YesNo(on, "y", "n", { session.answer(p.pane, true) }, { session.answer(p.pane, false) }, Modifier.weight(2f))
                         Box(
-                            Modifier.weight(1f).heightIn(min = 44.dp).border(BorderStroke(1.dp, j.line), Corner).clickable(role = Role.Button) { nav.open = w.id; nav.pane = p.pane },
+                            Modifier.weight(1f).clickable(role = Role.Button) { nav.open = w.id; nav.pane = p.pane }.minimumInteractiveComponentSize()
+                                .heightIn(min = 44.dp).border(BorderStroke(1.dp, j.line), Corner),
                             contentAlignment = Alignment.Center,
                         ) { Text("abrir", color = j.fg, fontWeight = FontWeight.Bold, fontSize = 13.sp) }
                     }

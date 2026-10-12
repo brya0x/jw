@@ -1,5 +1,6 @@
 package dev.jw.mobile
 
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -184,7 +185,7 @@ private fun ViewTabs(current: View, counts: Map<View, String>, failed: View?, on
             val on = v == current
             val c = if (on) j.blue else j.dim
             Row(
-                Modifier.weight(1f).heightIn(min = 44.dp).clickable(role = Role.Tab) { onPick(v) }
+                Modifier.weight(1f).heightIn(min = 48.dp).clickable(role = Role.Tab) { onPick(v) }
                     .drawBehind { if (on) drawLine(j.blue, Offset(0f, size.height), Offset(size.width, size.height), 2.dp.toPx()) },
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center,
             ) {
@@ -203,14 +204,14 @@ private fun CommitBar(c: CommitInfo, list: CommitList?, onBack: () -> Unit, onGo
         Modifier.fillMaxWidth().drawBehind { drawLine(j.line, Offset(0f, size.height), Offset(size.width, size.height), 1.dp.toPx()) }.padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.heightIn(min = 44.dp).clickable(role = Role.Button, onClickLabel = "Volver a los commits", onClick = onBack).padding(horizontal = 10.dp), contentAlignment = Alignment.Center) {
+        Box(Modifier.heightIn(min = 48.dp).clickable(role = Role.Button, onClickLabel = "Volver a los commits", onClick = onBack).padding(horizontal = 10.dp), contentAlignment = Alignment.Center) {
             Text("‹ commits", color = j.fg, fontSize = 11.5.sp)
         }
         Text(c.subject, color = j.dim, fontSize = 11.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         for ((glyph, step, label) in listOf(Triple("◂", -1, "Commit anterior"), Triple("▸", 1, "Commit siguiente"))) {
             val target = list?.commits?.getOrNull(at + step)
             Box(
-                Modifier.size(44.dp).clickable(enabled = target != null, role = Role.Button, onClickLabel = label) { target?.let(onGo) },
+                Modifier.size(48.dp).clickable(enabled = target != null, role = Role.Button, onClickLabel = label) { target?.let(onGo) },
                 contentAlignment = Alignment.Center,
             ) { Text(glyph, color = if (target != null) j.fg else j.dim.copy(alpha = 0.4f)) }
         }
@@ -239,7 +240,7 @@ private fun Loading(what: String) {
 private fun Failure(why: String, note: String, onRetry: () -> Unit) {
     val j = LocalJw.current
     Centre("no se pudo leer", why, color = j.red) {
-        Box(Modifier.heightIn(min = 44.dp).border(BorderStroke(1.dp, j.line), Corner).clickable(role = Role.Button, onClick = onRetry).padding(horizontal = 18.dp), contentAlignment = Alignment.Center) {
+        Box(Modifier.clickable(role = Role.Button, onClick = onRetry).minimumInteractiveComponentSize().heightIn(min = 44.dp).border(BorderStroke(1.dp, j.line), Corner).padding(horizontal = 18.dp), contentAlignment = Alignment.Center) {
             Text("reintentar", color = j.fg, fontSize = 13.sp)
         }
         Text(note, color = j.dim, fontSize = 11.sp)
@@ -349,7 +350,7 @@ private fun FileRow(f: DiffFile, listOnly: Boolean, isViewed: Boolean, onOpen: (
 @Composable
 private fun ViewedBox(on: Boolean, onClick: () -> Unit) {
     val j = LocalJw.current
-    Box(Modifier.size(44.dp).clickable(role = Role.Checkbox, onClickLabel = "Marcar visto", onClick = onClick), contentAlignment = Alignment.Center) {
+    Box(Modifier.size(48.dp).clickable(role = Role.Checkbox, onClickLabel = "Marcar visto", onClick = onClick), contentAlignment = Alignment.Center) {
         Box(
             Modifier.size(24.dp).let { if (on) it.background(j.green, RoundedCornerShape(5.dp)) else it.border(BorderStroke(1.5.dp, j.dim), RoundedCornerShape(5.dp)) },
             contentAlignment = Alignment.Center,
@@ -412,7 +413,7 @@ private fun FileHeader(f: DiffFile, isViewed: Boolean, onBack: () -> Unit, onMar
             .padding(horizontal = 4.dp, vertical = 8.dp).heightIn(min = 52.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(44.dp).clickable(role = Role.Button, onClickLabel = "Volver", onClick = onBack), contentAlignment = Alignment.Center) { Icon(Ic.Back, j.fg, 22.dp) }
+        Box(Modifier.size(48.dp).clickable(role = Role.Button, onClickLabel = "Volver", onClick = onBack), contentAlignment = Alignment.Center) { Icon(Ic.Back, j.fg, 22.dp) }
         Column(Modifier.weight(1f)) {
             Text(f.path.substringAfterLast('/'), color = j.fg, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text((f.oldPath?.let { "$it → " } ?: "") + f.path, color = j.dim, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)

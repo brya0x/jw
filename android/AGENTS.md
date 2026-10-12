@@ -11,7 +11,14 @@ export ANDROID_HOME=~/Library/Android/sdk   # or a git-ignored local.properties 
 ./gradlew :proto:test :term:test :app:testDebugUnitTest
 ```
 
-On the phone (only our own package; connectedDebugAndroidTest uninstalls the app after, so reinstall the debug APK):
+On the phone (only our own package). `connectedDebugAndroidTest` uninstalls the app after, which **deletes the pairing** (the Keystore key goes with it, and re-pairing needs someone at the PC), and `KeystoreTokenStoreTest` clears the real token store. On a phone that is paired to a daemon, install and run one class by hand instead; `TouchTargetsTest` (REQ-26) keeps its stores in memory and is safe:
+
+```sh
+./gradlew :app:installDebug :app:installDebugAndroidTest
+adb shell am instrument -w -e class dev.jw.mobile.TouchTargetsTest dev.jw.mobile.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+The whole suite, on a phone you may re-pair (reinstall the debug APK after):
 
 ```sh
 ANDROID_SERIAL=<serial> ./gradlew :app:connectedDebugAndroidTest

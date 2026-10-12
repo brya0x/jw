@@ -237,7 +237,7 @@ class Session(
     @Volatile private var foreground = true
     private val refresh = RefreshRule(pollMs)
     private var poller: Job? = null
-    private var routes = Routes(null, null)
+    @Volatile private var routes = Routes(null, null)
     private var lastWifiLook = 0L
 
     // The panes of the workspace on screen, as terminals (M5). Fed on the connection's thread, read by the surface.

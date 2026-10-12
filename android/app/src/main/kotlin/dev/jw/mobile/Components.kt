@@ -25,6 +25,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -33,7 +34,7 @@ import androidx.compose.ui.unit.sp
 
 private val Corner = RoundedCornerShape(6.dp)
 
-/** `.hdr`: panel background, a line under it, bold title and a dim subtitle; `onBack` adds the 44 dp back button. */
+/** `.hdr`: panel background, a line under it, bold title and a dim subtitle; `onBack` adds the 48 dp back button. */
 @Composable
 fun Header(title: String, subtitle: String? = null, onBack: (() -> Unit)? = null) {
     val j = LocalJw.current
@@ -46,7 +47,7 @@ fun Header(title: String, subtitle: String? = null, onBack: (() -> Unit)? = null
     ) {
         if (onBack != null) {
             Box(
-                Modifier.size(44.dp).clickable(role = Role.Button, onClickLabel = "Volver", onClick = onBack),
+                Modifier.size(48.dp).clickable(role = Role.Button, onClickLabel = "Volver", onClick = onBack),
                 contentAlignment = Alignment.Center,
             ) { Icon(Ic.Back, j.fg, 22.dp) }
         }
@@ -54,6 +55,18 @@ fun Header(title: String, subtitle: String? = null, onBack: (() -> Unit)? = null
             Text(title, color = j.fg, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (subtitle != null) Text(subtitle, color = j.dim, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
+    }
+}
+
+/**
+ * The frame of a text field: drawn [drawn] tall, but the field is 48 dp tall so that it is pressed over 48 dp (REQ-26).
+ * The text field's own touch target is the box this sits in, which is why it is made here and not by a modifier outside.
+ */
+@Composable
+fun FieldFrame(border: Color, drawn: Dp = 44.dp, content: @Composable () -> Unit) {
+    val j = LocalJw.current
+    Box(Modifier.fillMaxWidth().heightIn(min = 48.dp), contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxWidth().heightIn(min = drawn).background(j.bg, Corner).border(BorderStroke(1.dp, border), Corner), contentAlignment = Alignment.CenterStart) { content() }
     }
 }
 
