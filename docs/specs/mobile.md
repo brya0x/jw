@@ -197,8 +197,8 @@ supersedes:  []
 | T1 ✓ `6c2bc28` | The TUI: Mobile modal, `^␣ m`, indicator, pair question | 42–49 | `tui/src/tui/mobile.rs`, `modal.rs`, `mod.rs`, `draw.rs`, `settings.rs` |
 | M3 | Android shell: scan, pair, reconnect, version screen, theme | 14–17, 27 | `android/app`, `android/proto` |
 | M4 | Workspaces, sessions, enter, approve, Avisos | 12, 18–20, 28 | `android/app`, `crates/web/` |
-| M5a ✓ | The VT emulator on the device (`android/term`), checked against the daemon's vt100 | 21 | `android/term`, `crates/jw/examples/cells.rs` |
-| M5 ✓ | Terminal surface, keys, leader sheet, resize | 21–24, 70, 71 | `android/term`, `android/app` |
+| M5a ✓ `b03519e` | The VT emulator on the device (`android/term`), checked against the daemon's vt100 | 21 | `android/term`, `crates/jw/examples/cells.rs` |
+| M5 ✓ `38c846a` | Terminal surface, keys, leader sheet, resize | 21–24, 70, 71 | `android/term`, `android/app` |
 | M6 | Changes and diff | 13, 25 | `crates/web/`, `android/app` |
 | M7 | Settings, touch and mode chrome, polish | 26 | `android/app` |
 | L1 ✓ `87e38b9` | The wifi listener: `tls.rs`, the certificate, the wifi QR payload, `endpoints`, `MobileState` fields and `PROTOCOL` 12, no-wifi and no-cloudflared cases, `jw mobile` text | 56–58, 60, 61, 65 (CLI), 66–69 | `web/src/tls.rs`, `web/src/bridge.rs`, `daemon/src/mobile.rs`, `proto.rs`, `core/src/qr.rs`, `jw/src/mobile.rs` |

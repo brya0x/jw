@@ -172,7 +172,7 @@ fun TerminalView(
                                 val d = c.positionChange()
                                 val t = pane
                                 if (t != null) {
-                                    val maxScroll = t.read { it.scrollbackSize + max(0, it.rows - visibleRows) }
+                                    val maxScroll = t.read { bottomAnchor(it, visibleRows) + it.scrollbackSize }
                                     scrollLines = (scrollLines + d.y / ch).coerceIn(0f, maxScroll.toFloat())
                                     val overflow = max(0f, t.cols * cw - wPx)
                                     panX = (panX - d.x).coerceIn(0f, overflow)
@@ -248,16 +248,23 @@ fun TerminalView(
 }
 
 /**
- * The [Terminal.line] index of the first row drawn, `scroll` lines up into the history. A pane taller than the view
- * (the PC's window) ends at the cursor row, where a shell's prompt is, not at the empty bottom; a full-screen app ends at the bottom.
+ * The [Terminal.line] index of the first row drawn, `scroll` lines up into the history; see [bottomAnchor].
  */
-private fun firstLine(t: Terminal, visibleRows: Int, scroll: Float): Int {
-    val atBottom = when {
-        t.rows <= visibleRows -> 0
-        t.altScreen -> t.rows - visibleRows
-        else -> (t.cursorRow + 1 - visibleRows).coerceIn(0, t.rows - visibleRows)
+private fun firstLine(t: Terminal, visibleRows: Int, scroll: Float): Int = bottomAnchor(t, visibleRows) - scroll.toInt()
+
+/**
+ * The first row of the view at rest. A pane taller than the view (the PC's window) ends at its last used row (the
+ * cursor or the lowest row with text, so an agent's footer shows), not at its empty bottom; a full-screen app ends at the bottom.
+ */
+internal fun bottomAnchor(t: Terminal, visibleRows: Int): Int {
+    if (t.rows <= visibleRows) return 0
+    val maxFirst = t.rows - visibleRows
+    if (t.altScreen) return maxFirst
+    var last = t.cursorRow
+    for (r in t.rows - 1 downTo last + 1) {
+        if (t.line(r).ch.any { it != 0 && it != ' '.code }) { last = r; break }
     }
-    return atBottom - scroll.toInt()
+    return (last + 1 - visibleRows).coerceIn(0, maxFirst)
 }
 
 private fun inSelection(s: Selection, line: Int, col: Int): Boolean {
