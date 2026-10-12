@@ -479,11 +479,17 @@ pub(super) fn mode_of(app: &App) -> Mode {
                 | super::Modal::Done { .. }
                 | super::Modal::Rm { .. }
                 | super::Modal::Pair(..)
+                | super::Modal::RmSession { .. }
         )
     ) || matches!(&app.modal, Some(super::Modal::Mobile(v)) if v.asking());
     let confirm_mode = match &app.modal {
         Some(super::Modal::Rm { pending: true, .. }) => Mode::ConfirmWait,
         Some(super::Modal::Rm { plan, .. }) if plan.loses_work() => Mode::ConfirmName,
+        Some(super::Modal::RmSession { plan, working, .. })
+            if super::modal::session_at_risk(plan, working) =>
+        {
+            Mode::ConfirmName
+        }
         _ => Mode::Confirm,
     };
     if let Some(v) = &app.settings {
