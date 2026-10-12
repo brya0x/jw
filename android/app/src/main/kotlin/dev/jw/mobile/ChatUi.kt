@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -28,6 +29,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.drop
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -55,10 +57,16 @@ fun ChatView(chat: ChatState, fallbackTitle: String, waiting: Boolean, modifier:
     val list = rememberLazyListState()
     val open = remember { mutableStateMapOf<Int, Boolean>() }
     var stick by remember { mutableStateOf(true) }
-    LaunchedEffect(list) { snapshotFlow { list.isScrollInProgress }.collect { if (!it) stick = !list.canScrollForward } }
+    // Where the person leaves the list decides whether it follows new blocks. The first reading (nothing scrolled yet,
+    // the list still at its top) says nothing about the person, so it is skipped.
+    LaunchedEffect(list) { snapshotFlow { list.isScrollInProgress }.drop(1).collect { if (!it) stick = !list.canScrollForward } }
     val last = chat.blocks.lastOrNull()
     LaunchedEffect(chat.blocks.size, last?.i, last?.result) {
-        if (stick && chat.blocks.isNotEmpty()) list.scrollToItem(chat.blocks.size - 1)
+        if (stick && chat.blocks.isNotEmpty()) {
+            list.scrollToItem(chat.blocks.size - 1)
+            // A last block taller than the view is shown by its end, not its start.
+            list.scrollBy(LAST_LINE)
+        }
     }
     // The last call that has not answered is the one waiting for a permission.
     val pending = if (waiting) chat.blocks.lastOrNull { it.kind == "tool" && it.result == null }?.i else null
@@ -156,3 +164,6 @@ internal fun diffColored(body: String, j: JwColors): AnnotatedString = buildAnno
         if (c != null) withStyle(SpanStyle(color = c)) { append(line) } else append(line)
     }
 }
+
+/** More than any list is long: a scroll by this much stops at the end. */
+private const val LAST_LINE = 1_000_000f
