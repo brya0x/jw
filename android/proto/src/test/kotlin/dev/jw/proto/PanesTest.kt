@@ -41,4 +41,20 @@ class PanesTest {
         assertEquals("""{"t":"Resize","pane":3,"cols":50,"rows":20}""", (Panes.resizeFrame(3, 50, 20) as Frame.Json).text)
         assertTrue(Panes.attachFrame("a") is Frame.Json)
     }
+
+    @Test fun splitFollowsTheTuiRule() {
+        val wide = (Panes.splitFrame(4, "/w", 120, 30) as Frame.Json).text
+        assertEquals(
+            """{"t":"Split","pane":4,"dir":"right","new":{"role":"shell","cmd":null,"resume":null,"cwd":"/w","env":{},"cols":60,"rows":30}}""",
+            wide,
+        )
+        val tall = (Panes.splitFrame(4, "/w", 80, 50) as Frame.Json).text
+        assertTrue(tall.contains(""""dir":"down"""") && tall.contains(""""cols":80,"rows":25"""))
+    }
+
+    @Test fun killAndName() {
+        assertEquals("""{"t":"Kill","pane":9}""", (Panes.killFrame(9) as Frame.Json).text)
+        assertEquals("""{"t":"Name","pane":9,"name":"dev"}""", (Panes.nameFrame(9, " dev ") as Frame.Json).text)
+        assertEquals("""{"t":"Name","pane":9,"name":null}""", (Panes.nameFrame(9, "  ") as Frame.Json).text)
+    }
 }

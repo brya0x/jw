@@ -10,7 +10,9 @@ import dev.jw.proto.Hello
 import dev.jw.proto.PROTOCOL
 import dev.jw.proto.Hosts
 import dev.jw.proto.LanAddr
+import dev.jw.proto.PaneEvent
 import dev.jw.proto.PaneInfo
+import dev.jw.proto.Panes
 import dev.jw.proto.RefreshRule
 import dev.jw.proto.SessionInfo
 import dev.jw.proto.Workspace
@@ -19,6 +21,7 @@ import dev.jw.proto.Palettes
 import dev.jw.proto.QrPayload
 import dev.jw.proto.ReconnectPolicy
 import dev.jw.proto.ServerMessage
+import dev.jw.term.Terminal
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -34,6 +37,7 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.launch
 import java.security.SecureRandom
+import java.util.concurrent.ConcurrentHashMap
 
 /** What the screens show. None of these carries a token or a pairing code except [Pairing]'s code. */
 sealed interface UiState {
@@ -184,6 +188,78 @@ class Session(
     private var poller: Job? = null
     private var routes = Routes(null, null)
     private var lastWifiLook = 0L
+
+    // The panes of the workspace on screen, as terminals (M5). Fed on the connection's thread, read by the surface.
+    private val screens = ConcurrentHashMap<Long, Terminal>()
+    private val exits = ConcurrentHashMap<Long, Int>()
+    private val original = ConcurrentHashMap<Long, Pair<Int, Int>>()
+    @Volatile private var watching: String? = null
+    private val _termRev = MutableStateFlow(0L)
+
+    /** Moves with every byte, size change and exit of a watched pane; the surface redraws when it does. */
+    val termRev: StateFlow<Long> = _termRev.asStateFlow()
+
+    fun terminal(pane: Long): Terminal? = screens[pane]
+
+    /** The exit status of a watched pane whose process ended, else null. */
+    fun exitStatus(pane: Long): Int? = exits[pane]
+
+    /**
+     * Watches the panes of workspace `stream` (null: none). Every pane arrives as a `Snapshot` and then as
+     * output; a different workspace first lets go of the old one (REQ-21). The sizes the app changed go back.
+     */
+    fun watch(stream: String?) {
+        if (stream == watching) return
+        if (watching != null) { restoreSizes(); send(Outgoing.Binary(Panes.detachFrame())) }
+        screens.clear()
+        exits.clear()
+        watching = stream
+        stream?.let { send(Outgoing.Binary(Panes.attachFrame(it))) }
+        _termRev.update { it + 1 }
+    }
+
+    /** What a key or a paste sends to `pane`. The bridge drops it in read-only and says so. */
+    fun input(pane: Long, bytes: ByteArray) = send(Outgoing.Binary(Workspaces.inputFrame(pane, bytes)))
+
+    /**
+     * "Fit to phone": the pane takes `cols` by `rows`. The size it had is kept, once, and goes back when the
+     * pane is let go (REQ-24).
+     */
+    fun fit(pane: Long, cols: Int, rows: Int) {
+        val t = screens[pane] ?: return
+        if ((state.value as? UiState.Connected)?.readOnly != false) return
+        if (t.cols == cols && t.rows == rows) return
+        original.putIfAbsent(pane, t.cols to t.rows)
+        send(Outgoing.Binary(Panes.resizeFrame(pane, cols, rows)))
+    }
+
+    /** `^␣ t`: a shell beside `pane`, in `cwd`. */
+    fun newPane(pane: Long, cwd: String) {
+        val t = screens[pane] ?: return
+        send(Outgoing.Binary(Panes.splitFrame(pane, cwd, t.cols, t.rows)))
+    }
+
+    /** `^␣ x`: ends the pane's process and forgets the pane. */
+    fun closePane(pane: Long) = send(Outgoing.Binary(Panes.killFrame(pane)))
+
+    /** `^␣ n`: names the pane; blank goes back to its automatic title. */
+    fun namePane(pane: Long, name: String) = send(Outgoing.Binary(Panes.nameFrame(pane, name)))
+
+    /** The sizes the panes had before [fit]. */
+    fun restoreSizes() {
+        for ((pane, size) in original) send(Outgoing.Binary(Panes.resizeFrame(pane, size.first, size.second)))
+        original.clear()
+    }
+
+    private fun onPane(e: PaneEvent) {
+        when (e) {
+            is PaneEvent.Snapshot -> screens[e.pane] = Terminal(e.cols, e.rows).also { it.feed(e.bytes) }
+            is PaneEvent.Output -> screens[e.pane]?.feed(e.bytes)
+            is PaneEvent.Resized -> screens[e.pane]?.resize(e.cols, e.rows)
+            is PaneEvent.Exited -> exits[e.pane] = e.status
+        }
+        _termRev.update { it + 1 }
+    }
 
     /** The workspaces, avisos or workspace screen is on screen (the list is what is being watched). */
     fun setVisible(v: Boolean) { visible = v }
@@ -413,8 +489,12 @@ class Session(
                     a.opened = true
                     (_state.value as? UiState.Pairing)?.let { _state.value = UiState.Pairing(it.host, it.code, true, route) }
                 }
-                is BridgeEvent.Binary -> Workspaces.parsePanes(ev.frame)?.let { ps ->
-                    _model.update { it.copy(panes = ps, panesAt = clock(), answered = emptySet()) }
+                is BridgeEvent.Binary -> {
+                    val pane = Panes.parse(ev.frame)
+                    if (pane != null) onPane(pane)
+                    else Workspaces.parsePanes(ev.frame)?.let { ps ->
+                        _model.update { it.copy(panes = ps, panesAt = clock(), answered = emptySet()) }
+                    }
                 }
                 is BridgeEvent.Ended -> if (!a.bridgeFailed) a.failure = ev.failure
                 is BridgeEvent.Message -> when (val m = ev.msg) {
@@ -438,6 +518,12 @@ class Session(
                             out.trySend(Outgoing.Text(Control.sessions()))
                             out.trySend(Outgoing.Text(Control.workspaces(_model.value.session)))
                             out.trySend(Outgoing.Binary(Workspaces.listFrame()))
+                            // The screens come again as snapshots: the new one is the truth (REQ-15).
+                            screens.clear()
+                            exits.clear()
+                            original.clear()
+                            watching?.let { out.trySend(Outgoing.Binary(Panes.attachFrame(it))) }
+                            _termRev.update { it + 1 }
                         }
                     }
                     is ServerMessage.Endpoints -> {

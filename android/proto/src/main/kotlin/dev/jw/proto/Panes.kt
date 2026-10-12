@@ -1,6 +1,7 @@
 package dev.jw.proto
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -79,4 +80,44 @@ object Panes {
     /** `ClientMsg::Resize`. Dropped by the bridge in read-only. */
     fun resizeFrame(pane: Long, cols: Int, rows: Int): Frame =
         Frame.Json(buildJsonObject { put("t", "Resize"); put("pane", pane); put("cols", cols); put("rows", rows) }.toString())
+
+    /**
+     * `ClientMsg::Split`: a shell beside `pane`, in `cwd`, the way `^␣ t` does it (side by side when the pane is wide,
+     * one over the other when not; cells are about twice as tall as wide). `cols` and `rows` are the pane's.
+     */
+    fun splitFrame(pane: Long, cwd: String, cols: Int, rows: Int): Frame {
+        val right = cols >= rows * 2
+        val (c, r) = if (right) maxOf(cols / 2, 1) to rows else cols to maxOf(rows / 2, 1)
+        return Frame.Json(
+            buildJsonObject {
+                put("t", "Split")
+                put("pane", pane)
+                put("dir", if (right) "right" else "down")
+                put(
+                    "new",
+                    buildJsonObject {
+                        put("role", "shell")
+                        put("cmd", JsonNull)
+                        put("resume", JsonNull)
+                        put("cwd", cwd)
+                        put("env", buildJsonObject {})
+                        put("cols", c)
+                        put("rows", r)
+                    },
+                )
+            }.toString(),
+        )
+    }
+
+    /** `ClientMsg::Kill`: ends the pane's process and forgets the pane. */
+    fun killFrame(pane: Long): Frame = Frame.Json(buildJsonObject { put("t", "Kill"); put("pane", pane) }.toString())
+
+    /** `ClientMsg::Name`: the pane's name; blank goes back to its automatic title. */
+    fun nameFrame(pane: Long, name: String): Frame = Frame.Json(
+        buildJsonObject {
+            put("t", "Name")
+            put("pane", pane)
+            if (name.isBlank()) put("name", JsonNull) else put("name", name.trim())
+        }.toString(),
+    )
 }

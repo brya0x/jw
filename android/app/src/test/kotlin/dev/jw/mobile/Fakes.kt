@@ -28,6 +28,9 @@ class FakeBridge {
     /** Binary jw-proto bodies (kind byte onward) the phone sent. */
     val frames = java.util.concurrent.LinkedBlockingQueue<ByteArray>()
 
+    /** Answers to the phone's binary frames (kind byte onward). */
+    @Volatile var onFrame: (frame: ByteArray, ws: WebSocket) -> Unit = { _, _ -> }
+
     /** Answers to messages after the first one. */
     @Volatile var onLater: (text: String, ws: WebSocket) -> Unit = { _, _ -> }
 
@@ -39,7 +42,7 @@ class FakeBridge {
                     received.add(text)
                     if (first) { first = false; script(text, webSocket) } else onLater(text, webSocket)
                 }
-                override fun onMessage(webSocket: WebSocket, bytes: ByteString) { frames.add(bytes.toByteArray()) }
+                override fun onMessage(webSocket: WebSocket, bytes: ByteString) { frames.add(bytes.toByteArray()); onFrame(bytes.toByteArray(), webSocket) }
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {}
             }),
         )
@@ -54,6 +57,11 @@ class FakeBridge {
         fun error(code: String) = """{"t":"error","code":"$code","msg":"m"}"""
         /** A kind-0 frame, as the relay carries `Panes`. */
         fun frame(json: String): ByteString = ByteString.of(0, *json.toByteArray())
+        /** A kind-1 frame: a JSON head and the raw bytes, as `Snapshot` and `Output` come. */
+        fun raw(head: String, bytes: ByteArray): ByteString {
+            val h = head.toByteArray()
+            return ByteString.of(1, (h.size ushr 24).toByte(), (h.size ushr 16).toByte(), (h.size ushr 8).toByte(), h.size.toByte(), *h, *bytes)
+        }
         const val WORKSPACES = """{"t":"workspaces","session":"main","items":[{"id":"r1","kind":"root","name":"jw","path":"/p","project":"jw","branch":"main","pr":null,"session":"main","parent":null}]}"""
         const val SESSIONS = """{"t":"sessions","items":[{"name":"main","workspaces":1}]}"""
         fun panes(agent: String) = """{"t":"Panes","panes":[{"pane":7,"stream":"r1","role":"agent","exited":null,"fg":null,"busy":false,"bell":false,"agent":"$agent","cwd":null}]}"""

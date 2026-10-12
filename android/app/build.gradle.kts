@@ -28,6 +28,7 @@ kotlin { jvmToolchain(17) }
 
 dependencies {
     implementation(project(":proto"))
+    implementation(project(":term"))
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
     implementation(libs.compose.foundation)
