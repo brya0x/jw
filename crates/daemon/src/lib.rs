@@ -638,7 +638,15 @@ impl Daemon {
             ClientMsg::Theme(theme) => self.set_theme(theme),
             ClientMsg::Input { pane, bytes } => {
                 let pane = self.pane(pane)?;
-                lock(&pane.state).bell = false;
+                {
+                    let mut st = lock(&pane.state);
+                    st.bell = false;
+                    // The person answered what the agent waits for (from the TUI or a
+                    // phone): say so now, the agent's own hooks correct it later.
+                    if st.agent == Some(AgentState::Waiting) {
+                        st.agent = Some(answered(&bytes));
+                    }
+                }
                 let mut io = lock(&pane.io);
                 io.writer.write_all(&bytes)?;
                 io.writer.flush()?;
@@ -1444,6 +1452,18 @@ impl Daemon {
     }
 }
 
+/// What an agent that was `Waiting` is after `bytes` reach it: an Esc alone
+/// refuses, so its turn is over; a key or text answers, so it goes on; a
+/// terminal's own report (focus, mouse, cursor: they start `ESC [`, `ESC ]`
+/// or `ESC O`) answers nothing.
+fn answered(bytes: &[u8]) -> AgentState {
+    match bytes {
+        [] | [0x1b, b'[' | b']' | b'O', ..] => AgentState::Waiting,
+        [0x1b] => AgentState::Idle,
+        _ => AgentState::Working,
+    }
+}
+
 fn size(cols: u16, rows: u16) -> PtySize {
     PtySize {
         rows,
@@ -1611,6 +1631,21 @@ mod tests {
             p.process(c);
         }
         std::mem::take(p.callbacks_mut())
+    }
+
+    #[test]
+    fn an_answer_ends_the_wait_and_a_terminal_report_does_not() {
+        assert_eq!(answered(b"\r"), AgentState::Working);
+        assert_eq!(answered(b"y"), AgentState::Working);
+        assert_eq!(answered(b"\x1b"), AgentState::Idle);
+        for report in [
+            &b"\x1b[I"[..],
+            b"\x1b[<0;1;1M",
+            b"\x1b]11;rgb:0/0/0\x07",
+            b"",
+        ] {
+            assert_eq!(answered(report), AgentState::Waiting, "{report:?}");
+        }
     }
 
     #[test]

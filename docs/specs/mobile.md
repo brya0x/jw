@@ -76,7 +76,7 @@ supersedes:  []
 | 17 | THE app SHALL draw with the palette from `ready`, following the system dark or light setting unless the user pins a theme in Settings. |
 | 18 | THE workspaces screen SHALL list roots with their worktrees nested, folders in their own section, and the marks `✻ ? ⚡ ⚑` derived from `PaneInfo` as the TUI does (`tui/src/tui/mod.rs:960-979`). |
 | 19 | WHEN the user taps any workspace row, root, worktree or folder, the app SHALL attach and show its panes. |
-| 20 | WHILE a pane's agent is `Waiting`, the row and the pane SHALL offer y and n; WHEN tapped, the app SHALL send `Input` with the configured bytes. The buttons have two looks only, green and red while they can be tapped and dim while they cannot, and the state does not change between polls: a `Panes` is good for 6 s (three polls), and a tapped prompt stays answered until a `Panes` says the pane is no longer Waiting. |
+| 20 | WHILE a pane's agent is `Waiting`, the row and the pane SHALL offer y and n; WHEN tapped, the app SHALL send `Input` with the configured bytes. The buttons have two looks only, green and red while they can be tapped and dim while they cannot, and the state does not change between polls: a `Panes` is good for 6 s (three polls), and a tapped prompt stays answered until a `Panes` says the pane is no longer Waiting. The daemon ends a pane's Waiting when an `Input` answers it (Esc alone: idle; a terminal report such as focus or mouse: no change; anything else: working), because claude has no hook between an approved permission and its next tool, so the PC's panel kept showing the approved agent as waiting. |
 | 21 | THE terminal surface SHALL render `Snapshot` and `Output` through an on-device VT emulator. |
 | 22 | THE app SHALL offer a key row (^␣, esc, tab, enter, backspace, arrows, ^C, ^D, ^R, /, |, ~; arrows and backspace repeat while held), a line that sends its text then enter, and text selection to the Android clipboard. |
 | 23 | WHEN the user taps `^␣`, the app SHALL show the TUI's actions (`rust-tui.md:22-32`) and run each phone-capable one with the same client message the TUI sends (find workspace, previous workspace, sessions, open folder, files, new worktree, new / close / name pane, settings, disconnect); the ones that are operations of `core` on the PC that the phone does not ask for (rename, sync, remove, review a PR) SHALL show greyed, tagged "en el PC". |
@@ -290,6 +290,8 @@ Order (L1 to L3, after the rest): L1 first (the app cannot be tried without it),
 - A PC with sessions but no `main` was shown a `main` on the phone: `sidebar::names` always put it first. It is listed now only when it exists (mobile-fixes, 0.0.24).
 
 - The y and n buttons flashed: they were enabled only for 2 s after a `Panes` while the poll is every 2 s, so they went dim between polls, and a tap was forgotten by the next `Panes`, which made them green again. A `Panes` is good for 6 s and `answered` keeps a pane until it is not Waiting (REQ-20).
+
+- Approve reached the pane (`crates/jw/tests/mobile.rs` sends the app's `Input` frame and reads the shell's echo) but the agent stayed `Waiting` on the PC until its next `PreToolUse`: the daemon never changed it on an `Input`, and claude's hooks had nothing after a permission was granted. `PostToolUse` now reports working, and the daemon applies the answer itself (REQ-20). Agents already running keep the hooks they started with.
 
 ## Tests
 
