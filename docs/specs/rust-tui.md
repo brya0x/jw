@@ -966,8 +966,8 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | F3 ✓ | **now justified (key → content 146 ms, 118 ms of it the replay):** send the screen first and the history after, or a capped tail of the ring; S8 (save off the open path) only if a number shows it | 188, 190 | `daemon/src/lib.rs` |
 | F4 ✓ opening | S1 (closed workspaces), S11: stream cache guarded by `Stamp`, `folders::entry` cached per `.git` stamp, branch from `.git/HEAD` | 185 | `core/src/stream.rs`, `core/src/folders.rs`, `core/src/connectors/git.rs`, `tui/mod.rs` |
 | F5 | S5: skip unchanged rows in `screen_to`, one flush per frame, only if F0 shows draw over budget | 187 | `tui/draw.rs`, `tui/anim.rs` |
-| RM1 ✓ | `session::rm` and `session::rm_plan`; `session` reserved; version 0.0.21 | 270–273, 279, 281–283 | `core/session.rs` |
-| RM2 | `jw session rm <name> [--yes]`, with `Close` for the session's workspaces | 270–275 | `jw/main.rs`, `jw/cli.rs` |
+| RM1 ✓ `43a7b2e` | `session::rm` and `session::rm_plan`; `session` reserved; version 0.0.21 | 270–273, 279, 281–283 | `core/session.rs` |
+| RM2 ✓ | `jw session rm <name> [--yes]`, with `Close` for the session's workspaces | 270–275 | `jw/main.rs`, `jw/cli.rs` |
 | RM3 | `^D` in the session picker and its confirm modal | 276–278, 280 | `tui/finder.rs`, `tui/modal.rs`, `tui/draw.rs`, `tui/mod.rs` |
 
 Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{new_stream, rm_plan, rm, sync, done_plan}`, `src/diff.rs`, `src/view/md.rs` and `Modal::Rm` (type the name) stay as they are.

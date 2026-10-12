@@ -28,6 +28,11 @@ pub const COMMANDS: &[Command] = &[
         what: "lists the sessions, how many workspaces each has open, and what their agents do",
     },
     Command {
+        name: "session",
+        usage: "jw session rm <name> [--yes]",
+        what: "closes the session's workspaces and removes it; worktrees stay on disk, and --yes is needed when one has uncommitted or unpushed work or an agent runs",
+    },
+    Command {
         name: "ls",
         usage: "jw ls [--json]",
         what: "lists $JW_SESSION's workspaces: state, marks, branch and PR",

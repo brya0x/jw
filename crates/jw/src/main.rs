@@ -50,6 +50,7 @@ fn main() -> ExitCode {
             }
         },
         Some("sessions") => report("sessions", cli::sessions()),
+        Some("session") => report("session", cli::session(&args[1..])),
         Some("prompt") => report("prompt", cli::prompt(&args[1..])),
         Some("worktree") => report("worktree", cli::worktree(&args[1..])),
         Some("ls") => report("ls", cli::ls(&args[1..])),
