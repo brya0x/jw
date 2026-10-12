@@ -642,7 +642,7 @@ Open (human decisions, still unanswered):
 - REQ-255 WHERE `--tag` is given and `$JW_NAME` is set, THE CLI SHALL prefix the text with `[jw: <JW_NAME>, pane <JW_PANE_ID>] `, or with `[jw: <JW_NAME>] ` when `$JW_PANE_ID` is not set (OPEN-36).
 - REQ-256 THE jw skill SHALL tell an agent never to answer another agent's permission question with `jw prompt`, with or without `--pane`.
 
-### Addendum 21 (E1, E2): `^␣ X` opens its modal at once; the PR line fills in later
+### Addendum 21 (E1–E5): `^␣ X` opens its modal at once; the PR line and the work row fill in later
 
 `X` waited for `gh` (a network call, no timeout) before it showed anything. The modal now opens on the local git checks and only its `PR` line waits for `gh`. The PR decides done versus rm, never whether work is lost (REQ-12 reads `dirty` and `unpushed`), so it can arrive later without weakening the refusal (RAT-73, RAT-74). The prototype (approved 2026-10-11) is the screen. No message changes: `PROTOCOL` stays 11.
 
@@ -659,11 +659,11 @@ After (a debug build under `scripts/drive.py`, a temp repo with a local `origin`
 
 | Piece | Shape |
 |---|---|
-| Jobs | `Job::RmReady{entry, project, plan}` after `actions::worktree_state` (git on the worktree, on its own thread) and `Project::open` ran side by side, then `rm_plan_from`; then `Job::RmPr{id, line}` from `App::ask_pr`. `DoneReady` is gone. |
-| Modal | `Modal::Rm` has `pr: PrLine` = `Checking`, `Unknown`, `NoPr`, `Info(String)`, `Merged{number, done}`; `Outcome::ToDone` turns it into `Modal::Done` |
+| Jobs | One thread per `X`: `actions::worktree_state` (git on the worktree) starts on its own thread while `Project::open` runs; then `Job::RmOpen{entry, project}` opens the modal, `branch_exists` runs while git still reads, and `Job::RmWork{id, plan}` (`rm_plan_from(entry, state, branch_exists)`) fills the plan; `Job::RmPr{id, line}` from `App::ask_pr` fills the PR line. `RmReady` and `DoneReady` are gone. |
+| Modal | `Modal::Rm` has `pending: bool` (git has not answered: `plan` is empty, the `Work` row spins, only `esc` acts) and `pr: PrLine` = `Checking`, `Unknown`, `NoPr`, `Info(String)`, `Merged{number, done}`; `Outcome::ToDone` turns it into `Modal::Done` |
 | gh | `Client.timeout` (`connectors/github.rs`, `output_within`); `tui/prcache.rs`: `client()`, 30 s memory of answers per `(repo, branch)`, 3 s timeout, shared with `done_plan` |
 | Spinner | `tick_motion` spins while `busy` or the PR line is `Checking`; the status bar's `⟳` and the PR line use `anim::spinner` |
-| Trace | `rm_ask`, `rm_project`, `rm_local`, `rm_modal`, `rm_gh`, `rm_done_plan`, `rm_pr_dropped` under `JW_TRACE` |
+| Trace | `rm_ask`, `rm_project`, `rm_local`, `rm_modal`, `rm_gh`, `rm_done_plan`, `rm_pr_dropped`, `rm_work`, `rm_work_dropped` under `JW_TRACE` (`rm_modal` is the open, `rm_work` the moment `↵` and `y` start to act) |
 
 - REQ-257 WHEN `X` is pressed on a worktree, THE TUI SHALL open `Modal::Rm` from `rm_plan` without waiting for `gh`.
 - REQ-258 WHILE gh has not answered, THE modal's PR line SHALL show an animated "checking…" and the status bar SHALL show the same spinner.
@@ -676,6 +676,7 @@ After (a debug build under `scripts/drive.py`, a temp repo with a local `origin`
 - REQ-265 WHEN the same `(repo, branch)` is asked again within 30 s, THE TUI SHALL answer from memory with no gh call; a failure SHALL NOT be remembered.
 - REQ-266 THE UI thread SHALL run no git or gh call for this flow, and gh's answer SHALL NOT reload the registry nor clear the busy indicator of another job.
 - REQ-267 THE version SHALL be 0.0.20 and `PROTOCOL` SHALL stay 11.
+- REQ-268 WHEN the project is open, THE TUI SHALL open `Modal::Rm` with a spinning `Work` row and no plan, before git has read the worktree; WHILE that row waits, only `esc` SHALL act (`↵`, `y`, `n`, `d`, `⇥`, letters and Backspace do nothing, and nothing is typed); WHEN git answers, THE TUI SHALL fill the plan of the same modal, with the typed name empty, and drop the answer if the modal is closed or another's; IF git fails, THEN THE TUI SHALL close the modal and say why. The prototype (version 3, approved 2026-10-12) is the screen, except that `Deletes:` is left out of the waiting modal, since what is deleted (`on_disk`, whether the branch exists) is not known yet.
 
 ## Rationale
 
@@ -755,6 +756,7 @@ After (a debug build under `scripts/drive.py`, a temp repo with a local `origin`
 - RAT-73 **Addendum 21: modal first, PR as a line.** Local facts decide whether work is lost; the PR only chooses the confirmation (done or rm). Waiting 0.5–0.8 s (and unbounded offline) for the less important fact was the whole delay.
 - RAT-74 **Addendum 21: the early modal is always the rm modal.** It is the stricter one, so a late MERGED can only add a way out that the user takes with a key, never loosen the prompt under their fingers. `d` is a letter of the name when the name must be typed, so there the key is `⇥`.
 - RAT-75 **Addendum 21: the timeout in core, the memory in the TUI.** A timeout belongs to the call (`Client.timeout`, off by default so the PR picker is unchanged); a TTL belongs to the session, and core keeps no state.
+- RAT-77 **Addendum 21: show the modal before git answers, and hold the keys.** `git status` sets the time on a large repo, so it cannot be made faster from jw. Opening the modal when the project is open shows it sooner, but the user cannot act sooner: the gain is that the screen answers `X`, not that a removal starts earlier. The keys wait instead of being queued: a letter typed into a prompt that is about to ask for a name, or an `↵` landing on a plan that turns out to lose work, is the case REQ-12 exists to prevent.
 - RAT-76 **Addendum 21: not chosen.** Fetching the PR when the sidebar selection moves (a `gh` per cursor step); a daemon-side cache (a message and `PROTOCOL` for no gain); parallel `status` and `log` (kept as the fallback of RISK-80).
 
 ## Risks
@@ -841,7 +843,7 @@ After (a debug build under `scripts/drive.py`, a temp repo with a local `origin`
 - RISK-78 **Pane ids change when the daemon restarts.** Within one daemon ids come from `next_pane` and are never reused (`new_id`), so `--pane 3` cannot reach a pane opened later. `restore` gives every restored pane a new id, so an id kept across a restart (in a script, in an agent's notes) can name another pane or none; run `jw pane ls` again.
 - RISK-79 **`Error` no longer tells "no agent" from "bad pane" except by its text.** Clients only show it (`cli.rs` `send_prompt`, `tui/mod.rs`), so nothing depends on it.
 
-- RISK-80 **The 100 ms target holds on a small repo and not reliably on a large one.** Release: 59–70 ms on a tiny repo, about 127 ms (median, 88–185) on 30,000 tracked and 20,000 untracked files, where `git status` sets the time. `rm_local` and `rm_modal` in `JW_TRACE` say. Next steps: read what `Project::open` needs from `.git` like `head_of` does; or open the modal before `dirty` is known, with Enter held until it is (a screen change, so a prototype first).
+- RISK-80 **The modal opens within 100 ms on most runs of a large repo; acting on it does not.** After E5 (release, 6 runs, load average 8–9): modal 60–134 ms (median about 85), work row filled 82–188 ms (median about 135), against a single 127 ms before. The opening is bound by `Project::open`, the time to act by `git status`. Release: 59–70 ms on a tiny repo, about 127 ms (median, 88–185) on 30,000 tracked and 20,000 untracked files, where `git status` sets the time. `rm_local` and `rm_modal` in `JW_TRACE` say. Next step: read what `Project::open` needs from `.git` like `head_of` does. RISK-80's earlier text (before E5) said 59–70 ms on a tiny repo and about 127 ms on the large one.
 - RISK-81 **`rm` still does not re-check dirty and unpushed at confirm time (`actions::rm`).** The window between the modal and `↵` is as before; this addendum neither widens nor closes it.
 - RISK-82 **A remembered answer can be 30 s old.** The PR may have been merged in the browser meanwhile. It only changes the line and the offer of `d`, and `done` re-checks the merge itself.
 
@@ -920,6 +922,7 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | E2 ✓ | The two-phase `X`: `RmReady` then `RmPr`, `PrLine`, `⇥`/`d` to done, `prcache.rs`, `Client.timeout`, the spinner; tests; version 0.0.20 (past main's 0.0.19); the prototype (approved 2026-10-11) | 257–267 | `tui/mod.rs`, `tui/modal.rs`, `tui/prcache.rs`, `tui/draw.rs`, `core/src/connectors/github.rs` |
 | E3 ✓ | `rm_plan` runs `status`, `log` and the branch check on scoped threads (RISK-80): `rm_local` 50 → 22 ms, modal 92 → 68 ms in release | 257 | `core/src/actions.rs` |
 | E4 ✓ | `worktree_state` / `rm_plan_from`: the worktree's git runs while `Project::open` does; median 148 → 127 ms on the large repo | 257 | `core/src/actions.rs`, `tui/mod.rs` |
+| E5 ✓ | `Modal::Rm.pending`, `Job::RmOpen` / `Job::RmWork`, the `Work` row, keys held until git answers; `rm_plan_from` takes `branch_exists`; tests; the prototype (version 3, approved 2026-10-12) | 268 | `tui/mod.rs`, `tui/modal.rs`, `core/src/actions.rs` |
 | Cutover ✓ | Go deleted (`main.go`, `internal/`, `go.mod`), CI is Rust only, the README describes the Rust jw; `testdata/*.go.*` stay as fixtures of files in the wild | 16 | |
 | F0 ✓ | `JW_TRACE`, `scripts/bench-switch.py`, the Measurements above | 184 | `tui/trace.rs`, `tui/mod.rs`, `scripts/` |
 | F1 ✓ | S1, S9: `Stream::resolve` (the `git` spawn) off the UI thread, the frame deadline counted from the frame's start; the unexplained ≈ 100 ms of a first open | 185, 191 | `tui/mod.rs`, `core` (callers) |
@@ -1017,6 +1020,7 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 - The brief for Addendum 21 guessed that `Project::open` searches sibling worktrees. It does not (`actions.rs:28-35`); the sibling loop in `ask_remove` only runs after a failed open. The measured cost is gh.
 - The status bar's `⟳ checking <name>` was thought to be animated. It was a static glyph; the animated spinner belonged to the agent marks only (`tick_motion`).
 - Before Addendum 21, a merged PR whose done checks failed (a dirty tree, a HEAD outside the PR) made `X` fail with an error and no modal, so the worktree could not be removed with `X` at all. It now opens the rm modal with `#n merged` (REQ-263).
+- REQ-257 said the modal opens "from `rm_plan`", and E2 to E4 opened it once git had answered. E5 opens it when the project is open and fills the plan later (REQ-268); the first row of RISK-80's next steps (an early modal) is built, the second is still open.
 
 ## Tests
 

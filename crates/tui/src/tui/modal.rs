@@ -94,6 +94,10 @@ pub enum Modal {
         error: Option<String>,
         /// What gh said, once it did (REQ-259).
         pr: PrLine,
+        /// git has not said yet what the worktree holds: `plan` is empty and
+        /// only `esc` acts, so no key lands on a prompt about to change
+        /// (REQ-268).
+        pending: bool,
     },
 }
 
@@ -234,8 +238,12 @@ impl Modal {
                 typed,
                 error,
                 pr,
+                pending,
                 ..
             } => {
+                if *pending {
+                    return Outcome::Stay;
+                }
                 *error = None;
                 let merged = matches!(pr, PrLine::Merged { .. }) && typed.is_empty();
                 match k.code {
@@ -558,10 +566,11 @@ impl Modal {
                 typed,
                 error,
                 pr,
+                pending,
                 ..
             } => (
                 format!(" Remove {}? ", entry.name),
-                rm_lines(entry, plan, typed, error, pr, spin),
+                rm_lines(entry, plan, typed, error, pr, *pending, spin),
             ),
         };
         let area = f.area();
@@ -595,13 +604,31 @@ fn rm_lines(
     typed: &str,
     error: &Option<String>,
     pr: &PrLine,
+    pending: bool,
     spin: char,
 ) -> Vec<Line<'static>> {
     let mut l = vec![Line::from(Span::styled(
         format!(" {}  ·  slot {}", entry.branch, entry.slot),
         Style::default().fg(p().dim),
     ))];
-    l.push(pr_line(pr, plan, typed, spin));
+    if pending {
+        l.push(Line::from(vec![
+            Span::raw(" Work "),
+            Span::styled(
+                format!("{spin} checking files and commits…"),
+                Style::default().fg(p().cyan),
+            ),
+        ]));
+        l.push(pr_line(pr, plan, typed, true, spin));
+        l.push(Line::default());
+        l.push(Line::from(Span::styled(
+            " ↵ y d and typing wait for the check",
+            Style::default().fg(p().dim),
+        )));
+        l.push(keys(&[("esc", "cancel")]));
+        return l;
+    }
+    l.push(pr_line(pr, plan, typed, false, spin));
     l.push(Line::default());
     if !plan.on_disk {
         l.push(Line::from(format!(
@@ -685,7 +712,7 @@ fn rm_lines(
     l
 }
 
-fn pr_line(pr: &PrLine, plan: &RmPlan, typed: &str, spin: char) -> Line<'static> {
+fn pr_line(pr: &PrLine, plan: &RmPlan, typed: &str, pending: bool, spin: char) -> Line<'static> {
     let dim = Style::default().fg(p().dim);
     let mut l = vec![Span::raw(" PR  ")];
     match pr {
@@ -701,7 +728,7 @@ fn pr_line(pr: &PrLine, plan: &RmPlan, typed: &str, spin: char) -> Line<'static>
                 format!("#{number} merged"),
                 Style::default().fg(p().green),
             ));
-            if typed.is_empty() {
+            if typed.is_empty() && !pending {
                 let key = if plan.loses_work() { "⇥" } else { "d" };
                 l.push(Span::styled("  ·  ", dim));
                 l.push(Span::styled(

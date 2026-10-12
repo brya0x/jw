@@ -153,11 +153,17 @@ enum Job {
         entry: Entry,
         from: String,
     },
-    /// `X`: the local rm checks are in, so the modal can open (REQ-257).
-    RmReady {
+    /// `X`: the project is open, so the modal can open while git still reads
+    /// the worktree (REQ-257, REQ-268).
+    RmOpen {
         entry: Entry,
         project: Project,
-        plan: actions::RmPlan,
+    },
+    /// What git found in the worktree of the remove modal that is open on
+    /// `id`; only that modal's plan takes it (REQ-268). An error closes it.
+    RmWork {
+        id: String,
+        plan: Result<actions::RmPlan, String>,
     },
     Removed {
         name: String,
@@ -971,7 +977,7 @@ impl App {
                 Some(Modal::Rm {
                     pr: modal::PrLine::Checking,
                     ..
-                })
+                }) | Some(Modal::Rm { pending: true, .. })
             );
         let spinning = on
             && (waiting
@@ -3226,27 +3232,39 @@ impl App {
             .map(|e| e.path.clone())
             .collect();
         trace::mark("rm_ask", 0);
-        self.background(format!("checking {}", entry.name), move || {
-            // git on the worktree needs no project: ask it while the project
-            // opens (REQ-257).
+        self.busy = Some(format!("checking {}", entry.name));
+        let tx = self.events.clone();
+        thread::spawn(move || {
+            let send = |job| {
+                let _ = tx.send(Msg::Job(Box::new(job)));
+            };
+            // git on the worktree needs no project: it runs while the project
+            // opens, and the modal opens as soon as the project is there
+            // (REQ-257, REQ-268).
             let asked = entry.clone();
             let state =
                 thread::spawn(move || trace::span("rm_local", || actions::worktree_state(&asked)));
-            let project = trace::span("rm_project", || {
+            let opened = trace::span("rm_project", || {
                 std::iter::once(&entry.path)
                     .chain(&siblings)
                     .find_map(|p| Project::open(std::path::Path::new(p)).ok())
                     .context("no checkout of this project left to find its repository")
-            })?;
-            let state = state
+            });
+            let project = match opened {
+                Ok(p) => p,
+                Err(e) => return send(Job::Failed(format!("{e:#}"))),
+            };
+            send(Job::RmOpen {
+                entry: entry.clone(),
+                project: project.clone(),
+            });
+            let exists = project.repo.branch_exists(&entry.branch);
+            let plan = state
                 .join()
-                .unwrap_or_else(|p| std::panic::resume_unwind(p))?;
-            let plan = actions::rm_plan_from(&project, &entry, state);
-            Ok(Job::RmReady {
-                entry,
-                project,
-                plan,
-            })
+                .unwrap_or_else(|p| std::panic::resume_unwind(p))
+                .map(|state| actions::rm_plan_from(&entry, state, exists))
+                .map_err(|e| format!("{e:#}"));
+            send(Job::RmWork { id: entry.id, plan });
         });
     }
 
@@ -3492,16 +3510,19 @@ impl App {
                 plan,
                 typed,
                 pr,
+                pending,
                 ..
             } => {
-                if plan.loses_work() && typed != entry.name {
+                let unconfirmed = plan.loses_work() && typed != entry.name;
+                if pending || unconfirmed {
                     self.modal = Some(Modal::Rm {
-                        error: Some(format!("type {} to confirm", entry.name)),
+                        error: unconfirmed.then(|| format!("type {} to confirm", entry.name)),
                         entry,
                         project,
                         plan,
                         typed,
                         pr,
+                        pending,
                     });
                     return;
                 }
@@ -3588,6 +3609,29 @@ impl App {
                 }
                 return;
             }
+            Job::RmWork { id, plan } => {
+                match (&mut self.modal, plan) {
+                    (
+                        Some(Modal::Rm {
+                            entry,
+                            plan: shown,
+                            pending,
+                            ..
+                        }),
+                        Ok(plan),
+                    ) if entry.id == id => {
+                        trace::mark("rm_work", 0);
+                        *shown = plan;
+                        *pending = false;
+                    }
+                    (Some(Modal::Rm { entry, .. }), Err(e)) if entry.id == id => {
+                        self.modal = None;
+                        self.fail(e);
+                    }
+                    _ => trace::mark("rm_work_dropped", 0),
+                }
+                return;
+            }
             job => job,
         };
         self.busy = None;
@@ -3627,7 +3671,7 @@ impl App {
             }
             Job::SetupReady(s) => self.modal = Some(Modal::Setup(s)),
             // Taken at the top, before `busy` is cleared.
-            Job::RmPr { .. } => {}
+            Job::RmPr { .. } | Job::RmWork { .. } => {}
             Job::Removed { name, note } => {
                 self.done(match note {
                     Some(n) => format!("removed {name}; {n}"),
@@ -3686,20 +3730,17 @@ impl App {
                     None => self.show_view("view:diff".into(), view),
                 }
             }
-            Job::RmReady {
-                entry,
-                project,
-                plan,
-            } => {
+            Job::RmOpen { entry, project } => {
                 trace::mark("rm_modal", 0);
                 self.ask_pr(entry.clone(), project.clone());
                 self.modal = Some(Modal::Rm {
                     entry,
                     project,
-                    plan,
+                    plan: actions::RmPlan::default(),
                     typed: String::new(),
                     error: None,
                     pr: modal::PrLine::Checking,
+                    pending: true,
                 });
             }
         }
@@ -4155,6 +4196,7 @@ mod motion_tests {
             typed: typed.into(),
             error: None,
             pr,
+            pending: false,
         }
     }
 
@@ -4326,6 +4368,117 @@ mod motion_tests {
             "{:?}",
             merged[row]
         );
+    }
+
+    fn pending_modal(id: &str) -> Modal {
+        let Modal::Rm {
+            entry,
+            project,
+            plan,
+            typed,
+            error,
+            pr,
+            ..
+        } = rm_modal(id, actions::RmPlan::default(), "", modal::PrLine::Checking)
+        else {
+            unreachable!()
+        };
+        Modal::Rm {
+            entry,
+            project,
+            plan,
+            typed,
+            error,
+            pr,
+            pending: true,
+        }
+    }
+
+    /// REQ-268: while git has not said what the worktree holds, only `esc`
+    /// acts; nothing is typed and nothing confirms.
+    #[test]
+    fn nothing_acts_while_git_is_still_asked() {
+        let (mut app, _g) = app(true);
+        let mut m = pending_modal("a");
+        for c in [
+            KeyCode::Enter,
+            KeyCode::Char('y'),
+            KeyCode::Char('n'),
+            KeyCode::Char('d'),
+            KeyCode::Char('f'),
+            KeyCode::Tab,
+            KeyCode::Backspace,
+        ] {
+            assert!(matches!(m.key(KeyEvent::from(c)), Outcome::Stay), "{c:?}");
+        }
+        assert!(matches!(
+            m.key(KeyEvent::from(KeyCode::Esc)),
+            Outcome::Cancel
+        ));
+        app.modal = Some(m);
+        app.submit_modal();
+        assert!(matches!(
+            &app.modal,
+            Some(Modal::Rm { pending: true, typed, .. }) if typed.is_empty()
+        ));
+    }
+
+    /// REQ-268: the work row is there from the first frame and gives way to
+    /// the plan; the name is asked empty when work would be lost.
+    #[test]
+    fn git_fills_the_plan_of_an_open_modal() {
+        let (mut app, _g) = app(true);
+        let waiting = shown(&pending_modal("a"), '⠋');
+        assert!(
+            waiting
+                .iter()
+                .any(|l| l.contains("Work ⠋ checking files and commits…"))
+        );
+        assert!(waiting.iter().any(|l| l.contains("wait for the check")));
+        app.modal = Some(pending_modal("a"));
+        app.on_job(Job::RmWork {
+            id: "a".into(),
+            plan: Ok(dirty()),
+        });
+        let Some(
+            m @ Modal::Rm {
+                pending,
+                typed,
+                plan,
+                ..
+            },
+        ) = &app.modal
+        else {
+            panic!("the modal went away");
+        };
+        assert!(!pending && typed.is_empty() && plan.loses_work());
+        let after = shown(m, '⠋');
+        assert!(after.iter().any(|l| l.contains("1 uncommitted file(s)")));
+        assert!(after.iter().any(|l| l.contains("Type fast-rm")));
+        assert!(!after.iter().any(|l| l.contains("Work ")));
+    }
+
+    /// REQ-268: git's answer for a closed or another modal is dropped; its
+    /// failure closes the modal it belongs to.
+    #[test]
+    fn git_answers_only_the_modal_they_belong_to() {
+        let (mut app, _g) = app(true);
+        app.on_job(Job::RmWork {
+            id: "a".into(),
+            plan: Ok(dirty()),
+        });
+        assert!(app.modal.is_none());
+        app.modal = Some(pending_modal("b"));
+        app.on_job(Job::RmWork {
+            id: "a".into(),
+            plan: Ok(dirty()),
+        });
+        assert!(matches!(app.modal, Some(Modal::Rm { pending: true, .. })));
+        app.on_job(Job::RmWork {
+            id: "b".into(),
+            plan: Err("git failed".into()),
+        });
+        assert!(app.modal.is_none());
     }
 
     /// REQ-258: the PR line spins while gh is asked.

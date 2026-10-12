@@ -409,11 +409,13 @@ pub fn worktree_state(e: &Entry) -> Result<WorktreeState> {
 }
 
 pub fn rm_plan(p: &Project, e: &Entry) -> Result<RmPlan> {
-    Ok(rm_plan_from(p, e, worktree_state(e)?))
+    let state = worktree_state(e)?;
+    Ok(rm_plan_from(e, state, p.repo.branch_exists(&e.branch)))
 }
 
-/// [`rm_plan`] with the worktree's state already asked.
-pub fn rm_plan_from(p: &Project, e: &Entry, state: WorktreeState) -> RmPlan {
+/// [`rm_plan`] with git already asked: the worktree's state and whether its
+/// branch exists, which a caller can ask while the state is still running.
+pub fn rm_plan_from(e: &Entry, state: WorktreeState, branch_exists: bool) -> RmPlan {
     let WorktreeState {
         on_disk,
         dirty,
@@ -424,7 +426,7 @@ pub fn rm_plan_from(p: &Project, e: &Entry, state: WorktreeState) -> RmPlan {
     if on_disk {
         deletes.push(format!("worktree {}", e.path));
     }
-    if !keep_branch && p.repo.branch_exists(&e.branch) {
+    if !keep_branch && branch_exists {
         deletes.push(format!("local branch {}", e.branch));
     }
     RmPlan {
