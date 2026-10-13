@@ -167,10 +167,42 @@ private fun ToolCard(b: ChatBlock, open: Boolean, pending: Boolean, running: Boo
     }
 }
 
-/** `code` between backticks drawn as code; the rest as it is. */
+/** How a piece of a message is drawn: as it is, in bold (`**text**`) or as code (`` `text` ``). */
+internal enum class Mark { Plain, Bold, Code }
+
+/**
+ * A message cut into the pieces [inlineCode] draws: code between backticks (nothing inside it is read), bold between double
+ * asterisks, and the rest as it is. A mark that is never closed is text, so a stray `**` or backtick shows as it was written.
+ */
+internal fun markedPieces(text: String): List<Pair<Mark, String>> {
+    val out = ArrayList<Pair<Mark, String>>()
+    val plain = StringBuilder()
+    fun flush() { if (plain.isNotEmpty()) { out.add(Mark.Plain to plain.toString()); plain.clear() } }
+    var i = 0
+    while (i < text.length) {
+        val c = text[i]
+        if (c == '`') {
+            val end = text.indexOf('`', i + 1)
+            if (end > i + 1) { flush(); out.add(Mark.Code to text.substring(i + 1, end)); i = end + 1; continue }
+        } else if (c == '*' && text.startsWith("**", i)) {
+            val end = text.indexOf("**", i + 2)
+            if (end > i + 2 && !text[i + 2].isWhitespace()) { flush(); out.add(Mark.Bold to text.substring(i + 2, end)); i = end + 2; continue }
+        }
+        plain.append(c)
+        i++
+    }
+    flush()
+    return out
+}
+
+/** A message with its `code` and its **bold** drawn; the rest as it is. */
 internal fun inlineCode(text: String, j: JwColors): AnnotatedString = buildAnnotatedString {
-    text.split('`').forEachIndexed { n, part ->
-        if (n % 2 == 1) withStyle(SpanStyle(color = j.cyan, background = j.panel, fontFamily = JwMono)) { append(part) } else append(part)
+    for ((mark, part) in markedPieces(text)) {
+        when (mark) {
+            Mark.Code -> withStyle(SpanStyle(color = j.cyan, background = j.panel, fontFamily = JwMono)) { append(part) }
+            Mark.Bold -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(part) }
+            Mark.Plain -> append(part)
+        }
     }
 }
 
