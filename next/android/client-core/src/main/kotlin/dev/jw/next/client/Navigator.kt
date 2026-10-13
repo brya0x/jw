@@ -51,6 +51,17 @@ class Navigator(private val source: NodeSource) {
         return openWorkspace(s, route.workspace, route.pane)
     }
 
+    /**
+     * A workspace opened before its document arrived has no pane yet: once the document is
+     * here, select its first pane (and mark it seen), as opening it would have.
+     */
+    fun settle(s: ClientState): ClientState {
+        val at = s.screen as? Screen.Workspace ?: return s
+        if (at.pane != null) return s
+        val first = (source.node(at.id) as? Node.Workspace)?.panes?.firstOrNull()?.id ?: return s
+        return ClientState(at.copy(pane = first), markNode(s.seen, first))
+    }
+
     fun show(s: ClientState, screen: Screen): ClientState = ClientState(screen, s.seen)
 
     fun back(s: ClientState): ClientState = ClientState(Screen.Home, s.seen)

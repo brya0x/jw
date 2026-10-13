@@ -88,6 +88,43 @@ impl Core {
         core
     }
 
+    /// Every running terminal, for a look at what is in its foreground.
+    pub fn terms_snapshot(&self) -> Vec<(Id, Arc<Term>)> {
+        self.terms
+            .iter()
+            .map(|(id, t)| (id.clone(), t.clone()))
+            .collect()
+    }
+
+    /// Record the programs found in the panes; true when any changed. A program that ended
+    /// becomes the pane's `last_program`, and the title follows what runs.
+    pub fn set_running(&mut self, updates: &HashMap<Id, Option<Vec<String>>>) -> bool {
+        let mut changed = false;
+        for p in self
+            .model
+            .workspaces
+            .iter_mut()
+            .flat_map(|w| w.panes.iter_mut())
+        {
+            let Some(new) = updates.get(&p.id) else {
+                continue;
+            };
+            if p.running == *new {
+                continue;
+            }
+            if new.is_none() {
+                p.last_program = p.running.take();
+            }
+            p.title = new
+                .as_deref()
+                .and_then(crate::procs::title_for)
+                .unwrap_or_else(|| crate::panes::basename(&p.shell));
+            p.running = new.clone();
+            changed = true;
+        }
+        changed
+    }
+
     pub fn term(&self, pane: &str) -> Option<Arc<Term>> {
         self.terms.get(pane).cloned()
     }
@@ -417,8 +454,14 @@ impl Core {
                     title: p.title.clone(),
                     shell: p.shell.clone(),
                     cwd: p.cwd.clone(),
-                    running: None,
-                    last_program: None,
+                    running: p.running.clone().map(|argv| contract::Program {
+                        argv,
+                        exit_code: None,
+                    }),
+                    last_program: p.last_program.clone().map(|argv| contract::Program {
+                        argv,
+                        exit_code: None,
+                    }),
                     screen: self
                         .screens
                         .get(&p.id)
@@ -498,6 +541,8 @@ mod tests {
                 shell: "/bin/sh".into(),
                 cwd: "/tmp".into(),
                 attention: vec![],
+                running: None,
+                last_program: None,
             }],
             attention: vec![],
         });

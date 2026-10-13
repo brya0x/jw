@@ -20,7 +20,7 @@ fn no_pane(pane: &str) -> crate::commands::ErrorBody {
     err(ErrorCode::NotFound, format!("no pane {pane}"))
 }
 
-fn basename(shell: &str) -> String {
+pub(crate) fn basename(shell: &str) -> String {
     Path::new(shell)
         .file_name()
         .map_or_else(|| shell.to_owned(), |n| n.to_string_lossy().into_owned())
@@ -60,6 +60,8 @@ pub fn new_pane(shared: &Shared, workspace: &Id) -> Done {
         shell,
         cwd: path,
         attention: Vec::new(),
+        running: None,
+        last_program: None,
     });
     core.attach_term(&id, term);
     core.refresh();

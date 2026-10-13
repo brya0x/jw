@@ -238,7 +238,10 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
     val version = source.tick.intValue
     val ws = remember(version, screen.id) { source.node(screen.id) as? Node.Workspace }
     LaunchedEffect(screen.id) { source.open(screen.id) }
-    LaunchedEffect(ws?.panes?.map { it.id }) { ws?.panes?.forEach { source.open(it.id) } }
+    LaunchedEffect(ws?.panes?.map { it.id }) {
+        ws?.panes?.forEach { source.open(it.id) }
+        set(nav.settle(state))
+    }
     Column(Modifier.fillMaxSize()) {
         Header(ws?.name ?: "workspace", ws?.let { (if (it.branch != null) "↳ ${it.branch}  " else "") + it.path }, onBack = { set(nav.back(state)) })
         if (ws == null) {

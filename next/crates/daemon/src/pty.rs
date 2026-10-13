@@ -60,6 +60,7 @@ pub struct Term {
     writer: Mutex<Box<dyn Write + Send>>,
     master: Mutex<Box<dyn MasterPty + Send>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
+    shell_pid: Option<u32>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -102,6 +103,7 @@ pub fn spawn(
         writer: Mutex::new(writer),
         master: Mutex::new(pair.master),
         killer: Mutex::new(child.clone_killer()),
+        shell_pid: child.process_id(),
     });
 
     let parser = term.parser.clone();
@@ -138,6 +140,19 @@ pub fn spawn(
 }
 
 impl Term {
+    /// The shell's own process id.
+    pub fn shell_pid(&self) -> Option<u32> {
+        self.shell_pid
+    }
+
+    /// The process group in the foreground of the terminal: the shell at its prompt, else the
+    /// program it is running.
+    pub fn foreground(&self) -> Option<u32> {
+        lock(&self.master)
+            .process_group_leader()
+            .and_then(|p| u32::try_from(p).ok())
+    }
+
     pub fn write(&self, data: &[u8]) -> io::Result<()> {
         let mut w = lock(&self.writer);
         w.write_all(data)?;

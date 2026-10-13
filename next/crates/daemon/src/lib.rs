@@ -6,6 +6,7 @@ mod git;
 mod model;
 mod panes;
 mod persist;
+mod procs;
 mod pty;
 mod server;
 mod workspaces;

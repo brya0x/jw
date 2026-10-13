@@ -187,3 +187,27 @@ class SharedSeenTest {
         assertTrue(source.told.any { (id, rev) -> id == go.node && rev >= go.rev }, "told: ${source.told}")
     }
 }
+
+class SettleTest {
+    /** A source whose workspace documents arrive only after the screen was opened. */
+    private class Late(private val base: NodeSource) : NodeSource by base {
+        var arrived = false
+        override fun node(id: String) = base.node(id)?.takeIf { arrived || it !is Node.Workspace }
+    }
+
+    @Test
+    fun aWorkspaceOpenedBeforeItsDocumentGetsItsFirstPaneWhenItArrives() {
+        val source = Late(FixtureSource())
+        val nav = Navigator(source)
+        val ws = source.session().workspaces[0].id
+        val opened = nav.openWorkspace(ClientState(), ws)
+        assertNull((opened.screen as Screen.Workspace).pane, "nothing to select yet")
+        assertEquals(opened, nav.settle(opened), "still nothing")
+        source.arrived = true
+        val settled = nav.settle(opened)
+        val pane = (settled.screen as Screen.Workspace).pane
+        assertNotNull(pane)
+        assertTrue(settled.seen.nodes.containsKey(pane), "the pane shown is marked seen")
+        assertEquals(settled, nav.settle(settled), "settling twice changes nothing")
+    }
+}

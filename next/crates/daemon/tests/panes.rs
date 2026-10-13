@@ -427,3 +427,57 @@ fn mark_seen_ends_the_attention_for_every_client_and_a_newer_one_survives() {
     assert_eq!(e.code, ErrorCode::NotFound);
     d.stop();
 }
+
+#[test]
+fn the_program_running_in_a_pane_is_detected_and_remembered_when_it_ends() {
+    let (w, d, mut c) = world();
+    let pane = new_pane(&mut c, &w.ws);
+    c.open(&pane).unwrap();
+    c.open(&w.ws).unwrap();
+    assert!(
+        c.wait_until(WAIT, |c| c.nodes.contains_key(&pane)
+            && c.nodes.contains_key(&w.ws))
+            .unwrap()
+    );
+    assert_eq!(c.nodes[&pane]["title"], "sh");
+    assert!(
+        c.nodes[&pane].get("running").is_none(),
+        "at the prompt nothing runs"
+    );
+
+    // A program starts inside the shell: the pane stays a shell, and says what runs in it.
+    type_line(&mut c, &pane, "sleep 30");
+    assert!(
+        c.wait_until(WAIT, |c| c.nodes[&pane]["running"]["argv"][0] == "sleep")
+            .unwrap(),
+        "{}",
+        c.nodes[&pane]
+    );
+    assert_eq!(
+        c.nodes[&pane]["shell"], "/bin/sh",
+        "the pane is still the shell"
+    );
+    assert_eq!(c.nodes[&pane]["title"], "sleep");
+    assert!(
+        c.wait_until(WAIT, |c| c.nodes[&w.ws]["panes"][0]["title"] == "sleep")
+            .unwrap(),
+        "the workspace's pane row follows"
+    );
+
+    // It ends (Ctrl-C): back to the prompt, and the program is remembered.
+    c.cmd(Cmd::Write {
+        pane: pane.clone(),
+        data: "\u{3}".into(),
+    })
+    .unwrap()
+    .unwrap();
+    assert!(
+        c.wait_until(WAIT, |c| c.nodes[&pane].get("running").is_none())
+            .unwrap(),
+        "{}",
+        c.nodes[&pane]
+    );
+    assert_eq!(c.nodes[&pane]["last_program"]["argv"][0], "sleep");
+    assert_eq!(c.nodes[&pane]["title"], "sh");
+    d.stop();
+}

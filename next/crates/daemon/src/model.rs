@@ -40,6 +40,12 @@ pub struct Pane {
     pub cwd: String,
     #[serde(skip)]
     pub attention: Vec<Own>,
+    /// The program running in the shell now. Not saved: it is looked at again after a restart.
+    #[serde(skip)]
+    pub running: Option<Vec<String>>,
+    /// The program that ran last, kept so a restart can bring it back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_program: Option<Vec<String>>,
 }
 
 /// An attention a node raised itself. Not saved: it describes what is happening now.

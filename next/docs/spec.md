@@ -15,7 +15,7 @@ A client opens a node and gets a `snapshot`, then `patch`es (RFC 6902 subset `ad
 
 **Attention** is a typed item the daemon computes once and a client never re-derives: `question`, `plan`, `permission`, `shell_done` (with `exit_code`), `agent_done`, `screen`, `merged`, `ci_failed`. Each names the node that opens when tapped and the `rev` that raised it. A node's `attention` lists its whole subtree, so it bubbles to the session. Looking is shared: a client that shows a node sends `mark_seen {node, rev}` and the daemon ends the attentions that node raised up to that revision, so every client clears them (the user's decision; the first proposal was a per-client *seen*). Each client also keeps a local record so it clears at once and while offline. An attention lasts as long as its cause (a `shell_done` ends when the next command starts), so the daemon drops it then; whether a person looked at it is the client's *seen*. There is no approve/deny anywhere.
 
-A **pane is a terminal**: its process is always the user's `$SHELL`; a program runs inside it (`running`, `last_program` are reserved for that and absent in v1).
+A **pane is a terminal**: its process is always the user's `$SHELL`; a program runs inside it (`running` and `last_program` carry it, and the pane's `title` is its name).
 
 ## Interfaces
 Home of every shape is `contract/schema/contract.schema.json`; the examples are `contract/fixtures/{client,daemon,invalid}`; the Rust types are `crates/contract/src/lib.rs`. Do not restate them here.
@@ -89,9 +89,11 @@ Transport: JSON lines on a Unix socket (mode 0600, in a 0700 dir) whose path com
 - REQ-45 WHILE the terminal client only highlights a workspace it SHALL preview it and mark nothing seen; WHEN Enter opens it, or `h`/`l` focuses a pane, it SHALL mark that workspace and pane seen; `a` SHALL open a box of what waits and Enter there SHALL go to the named pane; `n` SHALL ask the daemon for a new pane.
 - REQ-46 WHEN a client sends `mark_seen {node, rev}`, the daemon SHALL end the attentions that node raised at or below `rev` and patch every client that has them; an attention raised later SHALL stay; an unknown node SHALL be `not_found`.
 - REQ-47 WHEN the phone or the terminal shows the node an attention names, it SHALL send `mark_seen` for it, so the other client drops that attention too.
+- REQ-48 WHILE a program other than the shell is in the foreground of a pane's terminal, the pane node SHALL carry it as `running` (its argv) with `title` its name (`nvim`, `claude`; an interpreter gives way to its script), and WHEN it ends `running` SHALL be absent, `last_program` SHALL hold it and `title` SHALL be the shell's name again.
+- REQ-49 WHEN a workspace is opened on the phone before its document arrives, the phone SHALL select its first pane once it does.
 - REQ-18 IF a client's outbox is full, THEN the daemon SHALL disconnect that client and no other.
 
-REQ-1 to REQ-7, REQ-12 and REQ-13 are enforced by N1 (`crates/contract/tests/conformance.rs`, `crates/identity`). REQ-8, 9, 10, 11, 15, 16, 17 are enforced by N2 (`crates/daemon/tests/session.rs`, `src/core.rs` tests); REQ-19 to REQ-22 are enforced by N3 (`crates/daemon/tests/workspaces.rs`, against real git); REQ-18 is implemented (bounded outbox) and untested; REQ-14 and REQ-23 to REQ-27 are enforced by N4 (`crates/daemon/tests/panes.rs`, real `/bin/sh` PTYs). REQ-33 to REQ-35 and REQ-39 to REQ-41 by N8 (`android/client-core` tests, `just android`; the Compose screens are built and linted, not UI-tested). REQ-31 and REQ-32 by N6 (`android/contract`, `just android`). REQ-28 to REQ-30 by N5 (`tests/session.rs`, `contract/src/patch.rs` tests, `crates/jwn/tests/e2e.rs`).
+REQ-1 to REQ-7, REQ-12 and REQ-13 are enforced by N1 (`crates/contract/tests/conformance.rs`, `crates/identity`). REQ-8, 9, 10, 11, 15, 16, 17 are enforced by N2 (`crates/daemon/tests/session.rs`, `src/core.rs` tests); REQ-19 to REQ-22 are enforced by N3 (`crates/daemon/tests/workspaces.rs`, against real git); REQ-18 is implemented (bounded outbox) and untested; REQ-14 and REQ-23 to REQ-27 are enforced by N4 (`crates/daemon/tests/panes.rs`, real `/bin/sh` PTYs). REQ-48 and REQ-49 by N13 (`crates/daemon/tests/panes.rs` with real `sleep`, `src/procs.rs`, `android/client-core`; checked by hand with `claude`, `nvim` and `sleep` on the phone). REQ-33 to REQ-35 and REQ-39 to REQ-41 by N8 (`android/client-core` tests, `just android`; the Compose screens are built and linted, not UI-tested). REQ-31 and REQ-32 by N6 (`android/contract`, `just android`). REQ-28 to REQ-30 by N5 (`tests/session.rs`, `contract/src/patch.rs` tests, `crates/jwn/tests/e2e.rs`).
 
 ---
 ## Mobile UI (the simple version)
@@ -134,6 +136,7 @@ Corrections to the model: the level 0 document is smaller than assumed (3.9 KB, 
 - RISK-8 A pane's `cwd` is where its shell started, not where it is now (needs shell integration); `title` is the shell's name until OSC titles are read.
 - RISK-9 The loopback TCP listener has no authentication: any local process controls every pane. Development only; the real phone link needs pairing and TLS first.
 - RISK-10 The Android live source is a development link (fixed address, no pairing); it has no UI tests, and it was checked by hand on a phone against the terminal client.
+- RISK-11 The program is the foreground process group of the terminal, looked at every 0.7 s with one `ps`; its argv is `ps` output split on spaces (quotes are lost), and a program shorter than the interval can be missed. Unix only.
 - RISK-4 The Kotlin suite proves the types and the patch rules, not a live connection: no Kotlin client has talked to the daemon yet.
 
 ## Open questions
@@ -171,3 +174,4 @@ Corrections to the model: the level 0 document is smaller than assumed (3.9 KB, 
 | N10 ✓ `88f6dd3` | the live link's first terminal client and a design pass on the phone (JetBrains Mono, aligned marks) | | `crates/jwn/src/tui.rs`, `android/app/.../Screens.kt` |
 | N11 | the terminal client redone as the approved prototype: today's jw frame, panes as boxes, avisos box | 44, 45 | `crates/jwn/src/tui.rs` |
 | N12 | looking is shared (`mark_seen`), the terminal reconnects, and `scripts/e2e-live.py` checks daemon, terminal and phone against each other | 46, 47 | `crates/daemon/src/commands.rs`, `scripts/e2e-live.py` |
+| N13 | the program running in each pane is detected (`running`, `last_program`, `title`); the phone selects a first pane that arrives late | 48, 49 | `crates/daemon/src/procs.rs` |

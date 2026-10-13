@@ -17,6 +17,7 @@ use crate::core::{Core, OUTBOX};
 use crate::model::Model;
 use crate::panes;
 use crate::persist;
+use crate::procs;
 
 /// The hub behind one lock. Hold it for bookkeeping only, never across I/O.
 #[derive(Clone)]
@@ -115,6 +116,12 @@ impl Daemon {
         };
         panes::restore(&shared);
         let stop = Arc::new(AtomicBool::new(false));
+        {
+            let (shared, stop) = (shared.clone(), stop.clone());
+            thread::Builder::new()
+                .name("procs".into())
+                .spawn(move || procs::run(shared, stop))?;
+        }
         let accept = {
             let stop = stop.clone();
             let shared = shared.clone();
