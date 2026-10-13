@@ -126,6 +126,15 @@ svg.i{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stro
 .ctitle .ds{color:var(--dim);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ctitle .pn{flex:none;display:flex;align-items:center;gap:5px;max-width:46%;color:var(--dim);font-size:11px;white-space:nowrap}
 .ctitle .pn i{width:7px;height:7px;border-radius:50%;background:var(--c,var(--magenta))}
+/* comandos con / : la lista de lo que claude ofrece, sobre la entrada */
+.slash{max-height:46%;overflow:auto;background:var(--panel);border-top:1px solid var(--line)}
+.slash .sh{display:flex;gap:8px;padding:6px 12px;font-size:10.5px;color:var(--dim);letter-spacing:.04em;text-transform:uppercase}
+.slash .sc{display:flex;gap:10px;align-items:flex-start;width:100%;text-align:left;min-height:52px;padding:8px 12px;border-top:1px solid var(--line)}
+.slash .sc b{font-weight:500;color:var(--blue);flex:none;min-width:96px;word-break:break-all}
+.slash .sc span{flex:1;min-width:0;font-size:11.5px;color:var(--dim);line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.slash .sc em{font-style:normal;font-size:10px;color:var(--dim);border:1px solid var(--line);border-radius:8px;padding:1px 6px;flex:none}
+.slash .sc.k em{color:var(--magenta)}
+.slash .none{padding:12px;font-size:12px;color:var(--dim)}
 /* preguntas de claude a pantalla completa, estado vivo y avisos de tareas */
 .ask{flex:1;min-height:0;display:flex;flex-direction:column;background:var(--bg)}
 .ask .top{flex:none;display:flex;align-items:center;gap:10px;height:48px;padding:0 8px 0 16px;background:var(--sel);border-bottom:1px solid var(--line);font-size:12px;color:var(--fg)}
@@ -409,6 +418,8 @@ ol.sx code{background:var(--sel);padding:1px 6px;border-radius:4px;color:var(--g
     <div class="jump"><button data-act="sim" data-sim="accept">El PC acepta</button><button data-act="sim" data-sim="denied">El PC rechaza</button><button data-act="sim" data-sim="expired">El código venció</button><button data-act="sim" data-sim="unreach">No llego al PC</button><button data-act="sim" data-sim="proto">Protocolo: la app va atrás</button><button data-act="sim" data-sim="protojw">Protocolo: jw va atrás</button><button data-act="sim" data-sim="limited">Demasiados intentos</button><button data-act="sim" data-sim="away">Sales de casa (cae al túnel)</button><button data-act="sim" data-sim="home">Vuelves a casa</button></div>
     <h2>Preguntas, pensando y avisos (nuevo)</h2>
     <p style="margin:6px 0 14px;color:var(--dim)">Cuando claude pregunta (elegir una, elegir varias, plan mode, un permiso) la pregunta ocupa <b>toda la pantalla</b>: sin teclado ni panel pequeño, sin aprobar ni rechazar. Cada opción es una fila y al tocarla se envía; en varias se marcan y se envía con un botón. ✕ esc cancela. Mientras claude trabaja, una fila viva dice «Pensando…» o «Escribiendo…» con el tiempo y los tokens, y «■ parar» manda Esc. Los avisos de tareas (subagentes y tareas en segundo plano) son una fila de aviso, no un globo; un mensaje enviado mientras claude trabaja sale «en cola». Todo está en el menú de saltos.</p>
+    <h2>Comandos con / (nuevo)</h2>
+    <p style="margin:6px 0 14px;color:var(--dim)">Al escribir <code>/</code> como primer carácter en un chat de claude, sobre la entrada aparece la lista de lo que claude ofrece en ese workspace: sus comandos, los del proyecto (<code>.claude/commands</code>) y los skills, cada uno con su descripción y de dónde viene. Se filtra mientras escribes (los que empiezan igual primero), un toque llena el campo con <code>/nombre </code> y el cursor al final para añadir argumentos, y Enviar lo manda. Si nada coincide se envía tal cual. Está en el menú de saltos (<code>Escribir /</code>, <code>Escribir /co</code>).</p>
     <h2>Entrada, nombre y shell (nuevo)</h2>
     <div class="jump"><button data-act="pctype">Escribir en el PC (simula)</button></div>
     <p style="margin:6px 0 14px;color:var(--dim)">La caja de entrada del PC y el campo de la app son un solo texto. La franja de arriba lleva el nombre del pane. El <b>shell</b> se dibuja por bloques, como Warp: bloques planos, sin bordes ni botones, de abajo hacia arriba (el más nuevo junto al editor); arriba de cada comando, en tenue, la carpeta y la duración, el comando en negrita y su salida <b>completa y con colores</b>; el prompt no se dibuja. Un comando que falla lleva barra y tinte rojos; uno que corre, barra amarilla y el editor pasa a modo programa (el botón es ^C). Tocar un bloque lo elige y abre una barra con comando, salida, repetir y enviar. En «Shell · bloque elegido» y «Shell · programa a pantalla completa» (menú de saltos) se ven los dos casos. El daemon guarda lo que imprimió cada comando tal cual y el teléfono lo interpreta en una terminal propia por bloque; un programa a pantalla completa (nvim) toma todo el pane mientras corre, con un aviso, y los bloques vuelven al salir. Un shell que jw no lanzó, o uno ya abierto, sigue como texto.</p>
@@ -803,6 +814,31 @@ function editorHtml(w){
 }
 
 /* el texto de la caja de entrada del PC y el campo de la app son uno solo */
+/* los comandos que claude ofrece en este workspace: los suyos, los del proyecto y los skills */
+const SLASH=[
+ {n:'/commit',d:'Hace git status, diff y log, y commitea todo en un solo commit convencional.',k:'comando'},
+ {n:'/compact',d:'Resume la conversación para liberar contexto.',k:'claude'},
+ {n:'/clear',d:'Borra la conversación y empieza de nuevo.',k:'claude'},
+ {n:'/code-review',d:'Revisa el diff actual buscando errores de corrección.',k:'skill'},
+ {n:'/config',d:'Abre los ajustes de claude.',k:'claude'},
+ {n:'/context',d:'Muestra cuánto contexto se usa.',k:'claude'},
+ {n:'/cost',d:'Muestra el costo y la duración de la sesión.',k:'claude'},
+ {n:'/create-spec',d:'Escribe o reestructura una spec para que un humano la lea y un agente actúe.',k:'skill'},
+ {n:'/help',d:'Ayuda y comandos disponibles.',k:'claude'},
+ {n:'/init',d:'Crea un CLAUDE.md con la documentación del código.',k:'claude'},
+ {n:'/jw',d:'Cómo trabajar dentro de un workspace de jw y con los demás.',k:'skill'},
+ {n:'/model',d:'Cambia el modelo.',k:'claude'},
+ {n:'/rust-review',d:'Revisa código Rust: duplicados, lógica compleja y reglas del repo.',k:'skill'},
+ {n:'/simplify',d:'Revisa el código cambiado y aplica simplificaciones.',k:'skill'},
+ {n:'/sync-main',d:'Vuelve a la rama por defecto, hace pull y recompila los paquetes.',k:'comando'}
+];
+function slashHtml(){
+  const d=state.draft||'';
+  if(state.pane!=='claude'||!/^\/[^\s]*$/.test(d)) return '';
+  const q=d.slice(1).toLowerCase();
+  const rows=SLASH.filter(c=>c.n.slice(1).includes(q)).sort((a,b)=>(+!a.n.slice(1).startsWith(q))-(+!b.n.slice(1).startsWith(q)));
+  return `<div class="slash" role="listbox" aria-label="Comandos"><div class="sh"><span>comandos</span><span style="flex:1"></span><span>${rows.length} de ${SLASH.length}</span></div>${rows.length?rows.map(c=>`<button class="sc ${c.k==='claude'?'':'k'}" role="option" data-act="slashpick" data-n="${c.n}"><b>${c.n}</b><span>${c.d}</span><em>${c.k}</em></button>`).join(''):'<div class="none">Ningún comando empieza así. Se envía tal cual.</div>'}</div>`;
+}
 function mirrorHtml(){
   const t=(state.draft||'').replace(/</g,'&lt;');
   return `<div class="mirror"><span class="dot"></span><span>mismo texto que en el PC</span><span class="pcbox" aria-label="Caja de entrada del PC">${state.pane==='claude'?'›':'❯'} ${t||'<em>vacío</em>'}▌</span></div>`;
@@ -828,7 +864,7 @@ function vWs(){
    ${askOn?askHtml(w):state.pane==='claude'?chatHtml(w):state.pane==='shell'?shellHtml(w):`<div class="out" id="out">${lines}</div>`}
    ${state.sel?`<div class="selbar"><span>3 líneas seleccionadas</span><button class="key" data-act="copy">copiar</button><button class="key" data-act="unsel">cancelar</button></div>`:''}
    ${askOn?'':`<div class="keys"><button class="key lead" data-sheet="leader">^␣</button>${keys.map(x=>`<button class="key" data-key="${x}">${x}</button>`).join('')}</div>`}
-   ${askOn?'':state.pane==='claude'?mirrorHtml():''}
+   ${askOn?'':state.pane==='claude'?`<div id="slashbox">${slashHtml()}</div>`+mirrorHtml():''}
    ${askOn?'':state.pane==='shell'?editorHtml(w):`<form class="comp" id="comp"><span class="pr">${state.pane==='claude'?'›':'❯'}</span><input id="msg" autocomplete="off" value="${(state.draft||'').replace(/"/g,'&quot;')}" placeholder="${state.pane==='claude'?'escribe a claude':'escribe un comando'}" aria-label="Entrada"><button class="send" aria-label="Enviar">${ic('send')}</button></form>`}
    ${statusBar('TERM',state.pane+' · texto · se ajusta al ancho · ^␣ menú')}`;
 }
@@ -953,7 +989,7 @@ function render(){
   $('#overlay').innerHTML=sheet();
   const o=$('#out'); if(o) o.scrollTop=o.scrollHeight;
   const q=$('#q'); if(q){q.focus();q.setSelectionRange(q.value.length,q.value.length)}
-  $('#jump').innerHTML=[['connect','Conexión (QR)'],['perm','Cámara: permiso · nuevo'],['permdenied','Cámara bloqueada · nuevo'],['cam','Cámara · visor · nuevo'],['paste','Pegar enlace · nuevo'],['pair','Código de emparejamiento · nuevo'],['denied','El PC rechaza · nuevo'],['expired','Código vencido · nuevo'],['unreach','No encuentro tu PC · nuevo'],['proto','Protocolo distinto · nuevo'],['set','Respuestas rápidas · nuevo'],['limited','Demasiados intentos · nuevo'],['home','Workspaces (sidebar)'],['wsroot','Entrar a la raíz'],['ws','Entrar a un worktree'],['pick','Buscador ␣'],['leader','Menú ^␣ · cambiado'],['sel','Selección de texto · nuevo'],['shblk','Shell · bloque elegido · nuevo'],['askc','Pregunta · elegir una · nuevo'],['askm','Pregunta · elegir varias · nuevo'],['askp','Pregunta · plan mode · nuevo'],['think','Chat · pensando · nuevo'],['resp','Chat · respondiendo · nuevo'],['notices','Chat · avisos de tareas · nuevo'],['shnv','Shell · programa a pantalla completa · nuevo'],['inbox','Avisos'],['changes','Cambios · General · cambiado'],['chunc','Cambios · Sin commitear · nuevo'],['chcom','Cambios · Commits · nuevo'],['chcomf','Cambios · un commit · nuevo'],['chfile','Cambios · un archivo · cambiado'],['chren','Cambios · renombrado · nuevo'],['chbin','Cambios · binario · nuevo'],['chunr','Cambios · ilegible · nuevo'],['chbig','Cambios · cortado · nuevo'],['chtoo','Cambios · demasiado grande · nuevo'],['chnobase','Cambios · sin rama base · nuevo'],['chload','Cambios · leyendo · nuevo'],['cherr','Cambios · error de una vista · nuevo'],['chempty','Cambios · sin cambios · nuevo'],['chnone','Cambios · sin workspace · nuevo'],['f1','Archivos · un workspace · nuevo'],['f2','Archivos · ocultos · nuevo'],['f3','Archivos · abrir carpeta · nuevo'],['f4','Archivos · sin permiso · nuevo'],['f5','Archivos · vacía · nuevo'],['f6','Archivos · demasiados · nuevo'],['v1','Visor · markdown · nuevo'],['v2','Visor · markdown fuente · nuevo'],['v3','Visor · texto · nuevo'],['v4','Visor · binario · nuevo'],['v5','Visor · cortado a 1 MiB · nuevo'],['v6','Visor · sin permiso · nuevo'],['w1','Nuevo worktree · nuevo'],['w2','Nuevo worktree · creando · nuevo'],['w3','Nuevo worktree · error · nuevo'],['w4','Nuevo worktree · solo lectura · nuevo'],['n1','Nueva sesión · nuevo'],['n2','Nueva sesión · nombre repetido · nuevo'],['n3','Nueva sesión · es un comando · nuevo'],['p1','Menú + · cambiado'],['settings','Ajustes y temas']].map(([k,l])=>`<button data-jump="${k}">${l}</button>`).join('');
+  $('#jump').innerHTML=[['connect','Conexión (QR)'],['perm','Cámara: permiso · nuevo'],['permdenied','Cámara bloqueada · nuevo'],['cam','Cámara · visor · nuevo'],['paste','Pegar enlace · nuevo'],['pair','Código de emparejamiento · nuevo'],['denied','El PC rechaza · nuevo'],['expired','Código vencido · nuevo'],['unreach','No encuentro tu PC · nuevo'],['proto','Protocolo distinto · nuevo'],['set','Respuestas rápidas · nuevo'],['limited','Demasiados intentos · nuevo'],['home','Workspaces (sidebar)'],['wsroot','Entrar a la raíz'],['ws','Entrar a un worktree'],['pick','Buscador ␣'],['leader','Menú ^␣ · cambiado'],['sel','Selección de texto · nuevo'],['shblk','Shell · bloque elegido · nuevo'],['slash','Escribir / · comandos · nuevo'],['slashf','Escribir /co · filtrado · nuevo'],['askc','Pregunta · elegir una · nuevo'],['askm','Pregunta · elegir varias · nuevo'],['askp','Pregunta · plan mode · nuevo'],['think','Chat · pensando · nuevo'],['resp','Chat · respondiendo · nuevo'],['notices','Chat · avisos de tareas · nuevo'],['shnv','Shell · programa a pantalla completa · nuevo'],['inbox','Avisos'],['changes','Cambios · General · cambiado'],['chunc','Cambios · Sin commitear · nuevo'],['chcom','Cambios · Commits · nuevo'],['chcomf','Cambios · un commit · nuevo'],['chfile','Cambios · un archivo · cambiado'],['chren','Cambios · renombrado · nuevo'],['chbin','Cambios · binario · nuevo'],['chunr','Cambios · ilegible · nuevo'],['chbig','Cambios · cortado · nuevo'],['chtoo','Cambios · demasiado grande · nuevo'],['chnobase','Cambios · sin rama base · nuevo'],['chload','Cambios · leyendo · nuevo'],['cherr','Cambios · error de una vista · nuevo'],['chempty','Cambios · sin cambios · nuevo'],['chnone','Cambios · sin workspace · nuevo'],['f1','Archivos · un workspace · nuevo'],['f2','Archivos · ocultos · nuevo'],['f3','Archivos · abrir carpeta · nuevo'],['f4','Archivos · sin permiso · nuevo'],['f5','Archivos · vacía · nuevo'],['f6','Archivos · demasiados · nuevo'],['v1','Visor · markdown · nuevo'],['v2','Visor · markdown fuente · nuevo'],['v3','Visor · texto · nuevo'],['v4','Visor · binario · nuevo'],['v5','Visor · cortado a 1 MiB · nuevo'],['v6','Visor · sin permiso · nuevo'],['w1','Nuevo worktree · nuevo'],['w2','Nuevo worktree · creando · nuevo'],['w3','Nuevo worktree · error · nuevo'],['w4','Nuevo worktree · solo lectura · nuevo'],['n1','Nueva sesión · nuevo'],['n2','Nueva sesión · nombre repetido · nuevo'],['n3','Nueva sesión · es un comando · nuevo'],['p1','Menú + · cambiado'],['settings','Ajustes y temas']].map(([k,l])=>`<button data-jump="${k}">${l}</button>`).join('');
 }
 function answer(v,id){
   const w=wsOf(id); if(!w) return; buzz();
@@ -972,6 +1008,7 @@ document.addEventListener('click',e=>{
     if(d.jump==='sel'){state.sess='main';enter('jw/feat/mobile-app');state.sel=true;render();return}
     if(['askc','askm','askp','think','resp','notices'].includes(d.jump)){state.sess='main';enter('jw/feat/mobile-app');state.pane='claude';state.askOff=false;state.askSel=null;state.blk=null;
       state.demo={askc:{ag:'wait',ask:'choose'},askm:{ag:'wait',ask:'multi'},askp:{ag:'wait',ask:'plan'},think:{ag:'work'},resp:{ag:'work',stream:true},notices:{ag:'work',queue:true,bg:2}}[d.jump];render();return}
+    if(d.jump==='slash'||d.jump==='slashf'){state.demo=null;state.sess='main';enter('jw/feat/mobile-app');state.pane='claude';state.draft=d.jump==='slash'?'/':'/co';state.askOff=false;render();return}
     if(d.jump==='shblk'){state.demo=null;state.sess='main';enter('jw/feat/mobile-app');state.pane='shell';state.blk=3;state.nvim=false;render();return}
     if(d.jump==='shnv'){state.sess='main';enter('jw/feat/mobile-app');state.pane='shell';state.blk=null;state.nvim=true;render();return}
     if(d.jump==='wsroot'){state.demo=null;state.sess='main';enter('jw');return}
@@ -1059,6 +1096,7 @@ document.addEventListener('click',e=>{
     case 'asksend':state.askOff=true;render();toast('enviado: '+(state.askSel||[0,1]).length+' opciones');break;
     case 'askesc':state.askOff=true;render();toast('Esc enviado');break;
     case 'esc':toast('Esc enviado: interrumpido');break;
+    case 'slashpick':state.draft=t.dataset.n+' ';render();{const i=$('#msg');if(i){i.focus();i.setSelectionRange(i.value.length,i.value.length)}}toast('listo: '+t.dataset.n);break;
     case 'copycmd':toast('comando copiado');break;
     case 'share':toast('enviado a otra app');break;
     case 'nvim':state.nvim=!state.nvim;render();break;
@@ -1075,7 +1113,7 @@ document.addEventListener('click',e=>{
     case 'createsess':state.sheet=null;state.sessNew=false;toast('sesión creada: '+(state.nsName||'trabajo'));render();break;
   }
 });
-document.addEventListener('input',e=>{if(e.target.id==='msg'){state.draft=e.target.value;const m=document.querySelector('.mirror');if(m)m.outerHTML=mirrorHtml();return}if(e.target.id==='q'){state.q=e.target.value;const s=$('#overlay');s.innerHTML=sheet();const q=$('#q');q.focus();q.setSelectionRange(q.value.length,q.value.length)}});
+document.addEventListener('input',e=>{if(e.target.id==='msg'){state.draft=e.target.value;const m=document.querySelector('.mirror');if(m)m.outerHTML=mirrorHtml();const sb=document.querySelector('#slashbox');if(sb)sb.innerHTML=slashHtml();return}if(e.target.id==='q'){state.q=e.target.value;const s=$('#overlay');s.innerHTML=sheet();const q=$('#q');q.focus();q.setSelectionRange(q.value.length,q.value.length)}});
 document.addEventListener('submit',e=>{
   if(e.target.id!=='comp') return; e.preventDefault();
   const v=$('#msg').value.trim(); if(!v) return; state.draft='';
