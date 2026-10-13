@@ -29,8 +29,7 @@ button:hover{border-color:var(--blue)}
 .side h2{font:600 12px var(--mono);margin:0;color:var(--mut)}
 .phone{width:100%;height:700px;background:var(--bg);border:1px solid var(--line);border-radius:28px;padding:10px;box-shadow:0 0 0 6px var(--panel);display:flex;flex-direction:column}
 .ph{flex:1;min-height:0;background:var(--bg);border-radius:20px;overflow:hidden;display:flex;flex-direction:column;font:13px/1.45 var(--mono);color:var(--fg)}
-.ph .hd{background:var(--panel);border-bottom:1px solid var(--line);padding:8px 8px 8px 4px;display:flex;align-items:center;gap:2px;min-height:52px}
-.ph .hd button{width:36px;height:40px;font-size:18px}
+.ph .hd{background:var(--panel);border-bottom:1px solid var(--line);padding:8px 12px;display:flex;align-items:center;min-height:52px}
 .ph .hd .t{flex:1;min-width:0}.ph .hd b{display:block;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ph .hd span{display:block;font-size:11px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ph .tabs{display:flex;background:var(--panel);border-bottom:1px solid var(--line);overflow:auto}
@@ -89,7 +88,7 @@ button:hover{border-color:var(--blue)}
   <div class="side">
     <h2>Phone</h2>
     <div class="phone"><div class="ph" id="ph">
-      <div class="hd"><button id="phPrev" type="button" aria-label="Previous workspace">‹</button><div class="t"><b id="phTitle"></b><span id="phSub"></span></div><button id="phNext" type="button" aria-label="Next workspace">›</button></div>
+      <div class="hd"><div class="t"><b id="phTitle"></b><span id="phSub"></span></div></div>
       <div class="tabs" id="phTabs"></div>
       <div class="bl" id="phBlocks"></div>
       <div class="acts" id="phActs" hidden></div>
@@ -109,7 +108,7 @@ button:hover{border-color:var(--blue)}
       <li><b>Marks sit at the right of a sidebar row</b> (most urgent unseen, with a count when there are several). No extra line under the row: the sentence lives in the pane's title and in <code>a</code>.</li>
       <li><b>Avisos</b> opens as a box over the pane area: one row per unseen attention, <code>↵</code> goes to that pane, focus and seen both change.</li>
       <li><b>The shell as blocks</b> (the terminal's version of what the phone prototype already does): inside a shell pane's box, each command is a block with its folder, branch and time, a bar at the left (green done, red failed, yellow running), bold command and its coloured output; newest at the bottom. A click selects a block and the status bar offers copy command, copy output, repeat. The editor sits at the foot of the box with the folder and branch chips; while a program runs it shows the program and <code>■ ^C</code>. (Only the shell for now: no agents, no full-screen programs.) Open a shell pane, press Enter, type, press Enter.</li>
-      <li><b>On the phone</b> the same blocks are drawn flat, newest at the bottom: folder and time dim on top, the command in bold, the coloured output below, and the bar at the left (green, red, yellow). The shell's panes are tabs (the phone's way; the terminal uses boxes). Tapping a block selects it and shows <code>Comando</code>, <code>Salida</code> and <code>Repetir</code>. The editor sits at the foot with the folder and branch chips; while a program runs the chip is the program, the border turns dashed and the send button becomes a red stop (<code>^C</code>). The special keys (esc, tab, arrows) have no buttons for now; where they go is still to be decided. The arrows at the top change workspace here; on the real phone Home does that.</li>
+      <li><b>On the phone</b> the same blocks are drawn flat, newest at the bottom: folder and time dim on top, the command in bold, the coloured output below, and the bar at the left (green, red, yellow). The shell's panes are tabs (the phone's way; the terminal uses boxes). Tapping a block selects it and shows <code>Comando</code>, <code>Salida</code> and <code>Repetir</code>. The editor sits at the foot with the folder and branch chips; while a program runs the chip is the program, the border turns dashed and the send button becomes a red stop (<code>^C</code>). The special keys (esc, tab, arrows) have no buttons for now; where they go is still to be decided. The phone shows the workspace highlighted in the terminal; on the real phone Home picks it.</li>
       <li><b>Seen</b> is shared: looking at a pane here clears its aviso on the phone too. Moving the highlight previews a workspace; <code>↵</code> or focusing a pane marks it seen.</li>
     </ol>
   </div>
@@ -319,14 +318,12 @@ function drawPhone(){
   const bl = $('phBlocks'); bl.scrollTop = bl.scrollHeight;
 }
 $('ph').addEventListener('click', e => {
-  const w = model.ws[ui.sel], t = e.target.closest('[data-tab],[data-blk],[data-act],#phGo.stop,#phPrev,#phNext'); if (!t) return;
+  const w = model.ws[ui.sel], t = e.target.closest('[data-tab],[data-blk],[data-act],#phGo.stop'); if (!t) return;
   const p = w.panes[ph.pane];
   if (t.dataset.tab !== undefined){ ph.pane = +t.dataset.tab; ph.blk = null; w.panes[ph.pane].att.forEach(a => seen[a.kind + a.rev] = true); }
   else if (t.dataset.blk !== undefined){ ph.blk = {pane:p.id, idx:+t.dataset.blk}; p.att.forEach(a => seen[a.kind + a.rev] = true); }
   else if (t.dataset.act){ const b = p.blocks[ph.blk.idx]; if (t.dataset.act === 'r') runCmd(p, b.cmd); ui.msg = t.dataset.act === 'c' ? 'comando copiado' : t.dataset.act === 'o' ? 'salida copiada' : 'repetido: ' + b.cmd; setTimeout(() => { ui.msg = ''; draw(); }, 1500); ph.blk = null; }
   else if (t.id === 'phGo'){ const b = p.blocks.at(-1); if (b && b.running){ b.running = false; b.code = 130; b.dur = '^C'; b.out.push({t:'^C', c:'d'}); } }
-  else if (t.id === 'phPrev'){ ui.sel = Math.max(0, ui.sel - 1); ui.open = null; ph.pane = 0; ph.blk = null; }
-  else if (t.id === 'phNext'){ ui.sel = Math.min(model.ws.length - 1, ui.sel + 1); ui.open = null; ph.pane = 0; ph.blk = null; }
   draw();
 });
 $('phForm').addEventListener('submit', e => { e.preventDefault(); const w = model.ws[ui.sel], p = w.panes[ph.pane], v = $('phIn').value.trim(); if (p && v){ runCmd(p, v); $('phIn').value = ''; p.att.forEach(a => seen[a.kind + a.rev] = true); draw(); } });
