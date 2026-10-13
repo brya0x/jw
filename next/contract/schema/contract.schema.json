@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "contract.schema.json",
+  "$id": "https://schema.jwn.invalid/contract.schema.json",
   "title": "jwn contract",
   "description": "Every document the daemon and a client exchange. Entry points: ClientMsg, DaemonMsg. Unknown properties are allowed everywhere on purpose (additive changes never break an old peer).",
   "$defs": {

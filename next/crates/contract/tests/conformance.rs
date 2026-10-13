@@ -179,3 +179,35 @@ fn rust_enums_match_the_schema() {
         assert!(parsed.is_ok(), "Rust does not know error code {c}");
     }
 }
+
+/// Every patch case applies the same way in every language: `after` for a good case, an
+/// error for a bad one. The Kotlin suite reads the same files.
+#[test]
+fn patch_cases_apply_as_written() {
+    for (name, case) in fixtures("patch-cases") {
+        let ops: Vec<contract::PatchOp> = serde_json::from_value(case["ops"].clone()).unwrap();
+        let to = case["to"].as_u64().unwrap();
+        let mut doc = case["before"].clone();
+        let result = contract::patch::apply_patch(&mut doc, &ops, to);
+        if case["error"] == true {
+            assert!(result.is_err(), "patch-cases/{name} should fail");
+        } else {
+            result.unwrap_or_else(|e| panic!("patch-cases/{name}: {e}"));
+            assert_eq!(doc, case["after"], "patch-cases/{name}");
+        }
+    }
+}
+
+/// What `diff` makes applies to the same result, for every good case.
+#[test]
+fn diff_of_a_patch_case_reproduces_its_after() {
+    for (name, case) in fixtures("patch-cases") {
+        if case["error"] == true {
+            continue;
+        }
+        let ops = contract::patch::diff(&case["before"], &case["after"]);
+        let mut doc = case["before"].clone();
+        contract::patch::apply_patch(&mut doc, &ops, case["to"].as_u64().unwrap()).unwrap();
+        assert_eq!(doc, case["after"], "patch-cases/{name} via diff {ops:?}");
+    }
+}

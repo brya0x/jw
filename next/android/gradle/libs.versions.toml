@@ -1,0 +1,13 @@
+[versions]
+kotlin = "2.2.21"
+serialization = "1.9.0"
+schema-validator = "1.5.8"
+
+[libraries]
+serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
+kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test-junit5", version.ref = "kotlin" }
+schema-validator = { module = "com.networknt:json-schema-validator", version.ref = "schema-validator" }
+
+[plugins]
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }

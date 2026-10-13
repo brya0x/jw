@@ -1,0 +1,17 @@
+{
+  "before": {
+    "rev": 1,
+    "l": [
+      1
+    ]
+  },
+  "ops": [
+    {
+      "op": "replace",
+      "path": "/l/5",
+      "value": 0
+    }
+  ],
+  "to": 2,
+  "error": true
+}

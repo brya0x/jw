@@ -1,5 +1,5 @@
 ---
-status: built (N0–N5); UIs and the Android conformance suite are next
+status: built (N0–N6); the UIs are next
 scope: [next/contract, next/crates/contract, next/crates/daemon]
 depends_on: []
 supersedes: []
@@ -70,9 +70,11 @@ Transport: JSON lines on a Unix socket (mode 0600, in a 0700 dir) whose path com
 - REQ-28 WHILE no node a client has open changes, the daemon SHALL send that client nothing.
 - REQ-29 WHEN an item is added to or removed from the end of a list in a node, the patch SHALL be one `add` or `remove` op for it, not the whole list.
 - REQ-30 THE daemon SHALL be drivable with JSON alone through the `jwn` binary: start, commands, stop, restart, state restored (`crates/jwn/tests/e2e.rs`).
+- REQ-31 THE Kotlin contract module SHALL parse every valid fixture, write back the identical JSON, validate it against the same schema, reject the invalid ones, and apply every `patch-cases` file as Rust does (`android/contract`, `ConformanceTest`).
+- REQ-32 IF a fixture or the schema changes without the Kotlin types following, THEN the Kotlin suite SHALL fail (Gradle treats `contract/` as a test input).
 - REQ-18 IF a client's outbox is full, THEN the daemon SHALL disconnect that client and no other.
 
-REQ-1 to REQ-7, REQ-12 and REQ-13 are enforced by N1 (`crates/contract/tests/conformance.rs`, `crates/identity`). REQ-8, 9, 10, 11, 15, 16, 17 are enforced by N2 (`crates/daemon/tests/session.rs`, `src/core.rs` tests); REQ-19 to REQ-22 are enforced by N3 (`crates/daemon/tests/workspaces.rs`, against real git); REQ-18 is implemented (bounded outbox) and untested; REQ-14 and REQ-23 to REQ-27 are enforced by N4 (`crates/daemon/tests/panes.rs`, real `/bin/sh` PTYs). REQ-28 to REQ-30 by N5 (`tests/session.rs`, `contract/src/patch.rs` tests, `crates/jwn/tests/e2e.rs`).
+REQ-1 to REQ-7, REQ-12 and REQ-13 are enforced by N1 (`crates/contract/tests/conformance.rs`, `crates/identity`). REQ-8, 9, 10, 11, 15, 16, 17 are enforced by N2 (`crates/daemon/tests/session.rs`, `src/core.rs` tests); REQ-19 to REQ-22 are enforced by N3 (`crates/daemon/tests/workspaces.rs`, against real git); REQ-18 is implemented (bounded outbox) and untested; REQ-14 and REQ-23 to REQ-27 are enforced by N4 (`crates/daemon/tests/panes.rs`, real `/bin/sh` PTYs). REQ-31 and REQ-32 by N6 (`android/contract`, `just android`). REQ-28 to REQ-30 by N5 (`tests/session.rs`, `contract/src/patch.rs` tests, `crates/jwn/tests/e2e.rs`).
 
 ---
 ## Rationale
@@ -110,7 +112,7 @@ Corrections to the model: the level 0 document is smaller than assumed (3.9 KB, 
 - RISK-6 `jwn stop` ends the daemon with SIGTERM and does not remove the socket or pid file; the next start clears a stale socket, and `stop` only signals a pid while the socket answers.
 - RISK-7 `restore` drops a pane whose shell cannot start (say its folder is gone) and saves that, so a transient failure loses the pane; its workspace stays.
 - RISK-8 A pane's `cwd` is where its shell started, not where it is now (needs shell integration); `title` is the shell's name until OSC titles are read.
-- RISK-4 Nothing yet proves the Kotlin side parses the fixtures; REQ-12 only makes it possible. The Android phase adds that suite.
+- RISK-4 The Kotlin suite proves the types and the patch rules, not a live connection: no Kotlin client has talked to the daemon yet.
 
 ## Open questions
 - OPEN-1 Retention: how many revisions per node the daemon keeps for resume (proposed 256).
@@ -118,6 +120,9 @@ Corrections to the model: the level 0 document is smaller than assumed (3.9 KB, 
 
 ## Corrections
 - A client that resumed with the connection's epoch instead of its cached document's epoch would keep a dead daemon's data (found by test in N2); the client now uses the document's.
+- The schema's `$id` was the relative `contract.schema.json`; the Rust validator accepted it and the Kotlin one refused it (not an absolute URI). It is now `https://schema.jwn.invalid/contract.schema.json`.
+- Gradle called the Kotlin test task up to date when only a fixture changed, so drift would have passed silently; `contract/` is now declared a task input (found by mutating a fixture).
+- Patch application had only Rust unit tests; it now has shared `fixtures/patch-cases/` that both languages apply (REQ-31).
 - The task note said a binary kind and a PROTOCOL integer were needed for the phone; they are not part of this contract.
 
 ## Tests
@@ -131,4 +136,5 @@ Corrections to the model: the level 0 document is smaller than assumed (3.9 KB, 
 | N2 ✓ `759e5d2` | daemon core: socket, hello/epoch, tree, persistence, patches | 8–11, 15–18 | `crates/{wire,daemon,jwn}` |
 | N3 ✓ `6b0f336` | folders and git worktrees as workspaces | 19–22 | `crates/daemon/src/{git,workspaces}.rs` | |
 | N4 ✓ `43eab72` | panes: PTY shell, screen node, input, resize, close, restore | 14, 23–27 | `crates/daemon/src/{pty,panes}.rs` |
-| N5 ✓ (this commit) | wire measurements (`jwn bench`) and the JSON-only end-to-end test | 28–30 | `crates/jwn/src/bench.rs`, `crates/jwn/tests/e2e.rs` |
+| N5 ✓ `0921e63` | wire measurements (`jwn bench`) and the JSON-only end-to-end test | 28–30 | `crates/jwn/src/bench.rs`, `crates/jwn/tests/e2e.rs` |
+| N6 | the Kotlin conformance suite: types, schema validation, patch cases | 31, 32 | `android/contract`, `contract/fixtures/patch-cases` |

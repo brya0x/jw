@@ -1,0 +1,25 @@
+{
+  "before": {
+    "rev": 1,
+    "a/b": 1,
+    "c~d": 2
+  },
+  "ops": [
+    {
+      "op": "replace",
+      "path": "/a~1b",
+      "value": 3
+    },
+    {
+      "op": "replace",
+      "path": "/c~0d",
+      "value": 4
+    }
+  ],
+  "to": 2,
+  "after": {
+    "rev": 2,
+    "a/b": 3,
+    "c~d": 4
+  }
+}

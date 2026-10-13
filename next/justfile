@@ -1,7 +1,7 @@
 # `just ci` for next/. Green before every commit.
 default: ci
 
-ci: fmt-check clippy test
+ci: fmt-check clippy test android
 
 fmt-check:
     cargo fmt --all --check
@@ -11,3 +11,7 @@ clippy:
 
 test:
     cargo test --workspace --locked
+
+# The Kotlin side of the contract: the same fixtures, parsed and re-written by Kotlin.
+android:
+    cd android && ./gradlew --no-daemon :contract:test

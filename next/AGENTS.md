@@ -29,3 +29,4 @@ what they do and why, never pasted.
 | `crates/jwn` | the binary: `daemon`, `stop`, `watch`, `cmd`, `bench`; the JSON end-to-end test |
 
 Never reach a real daemon from a test: use a private socket dir (`JWN_SOCKET`, `JWN_STATE_DIR`) and stop it with `jwn stop` (it signals only the pid recorded in that dir, and only while the socket answers).
+| `android/contract` | the Kotlin types of the JSON documents and `ConformanceTest`, which reads the same `contract/` files as the Rust suite |
