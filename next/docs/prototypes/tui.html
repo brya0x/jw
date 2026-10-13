@@ -45,6 +45,9 @@ button:hover{border-color:var(--blue)}
     <button id="evOk" type="button">A command finishes</button>
     <button id="evPerm" type="button">An agent asks permission</button>
     <button id="evPane" type="button">New pane here</button>
+    <button id="evRun" type="button">Start a long command</button>
+    <button id="evEnd" type="button">It finishes</button>
+    <button id="evNvim" type="button">Open nvim (full pane)</button>
     <button id="evReset" type="button">Reset</button>
     <select id="size" aria-label="Terminal size"><option value="120x32">120 × 32</option><option value="96x28">96 × 28</option></select>
   </div>
@@ -58,7 +61,8 @@ button:hover{border-color:var(--blue)}
       <li><b>Panes are rounded boxes</b> sharing the area (side by side, two columns from three panes), the focused one with a blue border. The title carries what runs there, and what waits on that pane (<code>✗ salió 3</code>) sits at the right end of its top border.</li>
       <li><b>Marks sit at the right of a sidebar row</b> (most urgent unseen, with a count when there are several). No extra line under the row: the sentence lives in the pane's title and in <code>a</code>.</li>
       <li><b>Avisos</b> opens as a box over the pane area: one row per unseen attention, <code>↵</code> goes to that pane, focus and seen both change.</li>
-      <li><b>Seen</b> is this terminal's own. Moving the highlight previews a workspace; <code>↵</code> or focusing a pane marks it seen.</li>
+      <li><b>The shell as blocks</b> (the terminal's version of what the phone prototype already does): inside a shell pane's box, each command is a block with its folder, branch and time, a bar at the left (green done, red failed, yellow running), bold command and its coloured output; newest at the bottom. A click selects a block and the status bar offers copy command, copy output, repeat. The editor sits at the foot of the box with the folder and branch chips; while a program runs it shows the program and <code>■ ^C</code>. A full-screen program (nvim) takes the whole box and the blocks return when it exits. Open a shell pane, press Enter, type, press Enter.</li>
+      <li><b>Seen</b> is shared: looking at a pane here clears its aviso on the phone too. Moving the highlight previews a workspace; <code>↵</code> or focusing a pane marks it seen.</li>
     </ol>
   </div>
 </div>
@@ -83,10 +87,13 @@ function reset(){
     { id:'w3', name:'feat/login', kind:'worktree', project:'api', branch:'feat/login', path:'~/ws/api-wt/feat-login', att:[], panes:[
       {id:'p3', title:'claude', lines:['> arregla el test de login','','  Leyendo src/auth.ts …','  ¿Puedo ejecutar `pnpm install`?',''], att:[att('permission','p3')]},
       {id:'p4', title:'nvim', lines:['  1 import { login } from "./auth"','  2 ','  3 export function run() {','  4   return login()','~','~'], att:[]},
-      {id:'p5', title:'zsh', lines:['~/ws/api-wt/feat-login ❯ cargo test','test auth::login_ok ... ok','test auth::expired ... ok','test result: ok. 14 passed','~/ws/api-wt/feat-login ❯ '], att:[att('shell_done','p5',0)]} ] },
+      {id:'p5', title:'zsh', lines:[], att:[att('shell_done','p5',0)], shell:true, input:'', cwd:'~/ws/api-wt/feat-login', branch:'feat/login', blocks:[
+        {cmd:'git status', dur:'0.1s', code:0, out:[{t:'On branch feat/login'},{t:'nothing to commit, working tree clean'}]},
+        {cmd:'cargo test', dur:'4.2s', code:101, out:[{t:'   Compiling app v0.3.1',c:'d'},{t:'running 14 tests'},{t:'test auth::login_ok ... ok',c:'c-green'},{t:'test auth::expired ... FAILED',c:'c-red'},{t:'test result: FAILED. 13 passed; 1 failed',c:'c-red'}]},
+        {cmd:'cargo test auth::expired', dur:'1.8s', code:0, out:[{t:'test auth::expired ... ok',c:'c-green'},{t:'test result: ok. 1 passed',c:'c-green'}]} ]} ] },
     { id:'w4', name:'infra', kind:'folder', path:'~/ws/infra', att:[], panes:[] },
   ]};
-  ui = { sel:2, open:null, focus:0, avisos:false, av:0 };
+  ui = { sel:2, open:null, focus:0, avisos:false, av:0, blk:null, hits:[], msg:'' };
 }
 const wsAtt = w => [...w.att.map(a => ({...a, node:w.id})), ...w.panes.flatMap(p => p.att.map(a => ({...a, node:p.id})))];
 const unseen = (list) => list.filter(a => !seen[a.kind + a.rev]).sort((a, b) => KINDS[a.kind][2] - KINDS[b.kind][2]);
@@ -111,6 +118,7 @@ function paint(g){
 
 function draw(){
   const g = grid(), SB = 28;
+  ui.hits = [];
   // sidebar
   for (let y = 0; y < ROWS - 1; y++) put(g, SB - 1, y, '│', 'c-line');
   put(g, 1, 0, model.name, 'b d'); put(g, SB - 1 - 13, 0, '^␣ s sessions', 'd');
@@ -152,16 +160,22 @@ function draw(){
         const focused = ui.open === w.id && ui.focus === i;
         const un = paneUnseen(p)[0];
         box(g, x0, y0, bw, bh, p.title, focused ? 'c-blue' : 'c-line', un ? (markOf(un)[0] + ' ' + whatOf(un)) : '', un ? markOf(un)[1] + ' b' : '');
-        p.lines.slice(0, bh - 2).forEach((l, k) => put(g, x0 + 2, y0 + 1 + k, [...l].slice(0, bw - 4).join('')));
-        if (focused){ const k = Math.min(p.lines.length - 1, bh - 3); const l = p.lines[k] || ''; g.cells[y0 + 1 + k][x0 + 2 + [...l].length] = [' ', 'cur']; }
+        if (p.shell && !p.full) drawShell(g, p, x0, y0, bw, bh, focused);
+        else {
+          if (p.full) put(g, x0 + 2, y0 + 1, clipTo('nvim · ocupa todo el panel · los bloques vuelven al salir', bw - 4), 'd');
+          const top0 = p.full ? 2 : 1;
+          p.lines.slice(0, bh - 1 - top0).forEach((l, k) => put(g, x0 + 2, y0 + top0 + k, clipTo(l, bw - 4)));
+          if (focused && p.lines.length){ const k = Math.min(p.lines.length - 1, bh - 2 - top0); const l = p.lines[k] || ''; g.cells[y0 + top0 + k][x0 + 2 + [...l].length] = [' ', 'cur']; }
+        }
       });
     }
   }
   // status bar
   for (let x = 0; x < COLS; x++) g.cells[ROWS - 1][x] = [' ', 'bg-panel'];
-  const mode = ui.avisos ? [' AVISOS ', 'chip-yellow b'] : ui.open ? [' TERM ', 'chip-green b'] : [' MOVE ', 'chip-blue b'];
+  const typing = termShell();
+  const mode = ui.avisos ? [' AVISOS ', 'chip-yellow b'] : ui.blk ? [' BLOQUE ', 'chip-yellow b'] : ui.open ? [' TERM ', 'chip-green b'] : [' MOVE ', 'chip-blue b'];
   put(g, 0, ROWS - 1, mode[0], mode[1]);
-  put(g, mode[0].length + 1, ROWS - 1, ui.avisos ? 'j/k mover · ↵ ir · esc volver' : 'j/k workspace · h/l panel · ↵ abrir · a avisos · q salir', 'd bg-panel');
+  put(g, mode[0].length + 1, ROWS - 1, ui.msg ? ui.msg : ui.avisos ? 'j/k mover · ↵ ir · esc volver' : ui.blk ? 'c comando · o salida · r repetir · esc soltar' : typing ? 'escribe · ↵ ejecuta · tab otro panel · esc salir' : 'j/k workspace · h/l panel · ↵ abrir · a avisos · q salir', ui.msg ? 'c-green bg-panel' : 'd bg-panel');
   const all = model.ws.flatMap(x => unseen(wsAtt(x))).length;
   if (all){ const t = `avisos ${all}`; put(g, COLS - t.length - 1, ROWS - 1, t, 'c-yellow b bg-panel'); }
 
@@ -179,6 +193,54 @@ function draw(){
   paint(g);
 }
 
+const short = path => { const a = path.split('/').filter(Boolean); return a.length > 2 ? '…/' + a.slice(-2).join('/') : path; };
+const clipTo = (t, n) => { const a = [...t]; return a.length <= n ? t : a.slice(0, Math.max(0, n - 1)).join('') + '…'; };
+/* A shell pane in blocks: newest at the bottom, each command with its folder, time and output,
+   a bar at the left that says how it ended, and the editor at the foot of the box. */
+function drawShell(g, p, x0, y0, bw, bh, focused){
+  const ix = x0 + 2, iw = bw - 4, top = y0 + 1, edTop = y0 + bh - 4;
+  const lines = [];
+  p.blocks.forEach((b, bi) => {
+    const state = b.running ? 'c-yellow' : b.code ? 'c-red' : 'c-green';
+    const head = b.running ? `corriendo ${b.dur}` : b.code ? `salió ${b.code} · ${b.dur}` : b.dur;
+    lines.push({bi, bar:state, parts:[[clipTo(short(p.cwd), Math.max(4, iw - 6 - [...head].length)), 'd']], right:[head, b.code && !b.running ? 'c-red' : 'd']});
+    lines.push({bi, bar:state, parts:[['❯ ' + b.cmd, 'b']]});
+    b.out.forEach(o => lines.push({bi, bar:state, parts:[[o.t, o.c || '']]}));
+    lines.push({bi, bar:null, parts:[]});
+  });
+  const room = edTop - top, shown = lines.slice(Math.max(0, lines.length - room));
+  shown.forEach((ln, k) => {
+    const y = top + k, sel = ui.blk && ui.blk.pane === p.id && ui.blk.idx === ln.bi;
+    if (sel) for (let i = 1; i < bw - 1; i++) g.cells[y][x0 + i] = [g.cells[y][x0 + i][0], 'bg-sel'];
+    if (ln.bar) put(g, ix - 1, y, '▌', ln.bar + (sel ? ' bg-sel' : ''));
+    let x = ix + 1; ln.parts.forEach(([t, c]) => { put(g, x, y, clipTo(t, iw - 2), c + (sel ? ' bg-sel' : '')); x += [...t].length; });
+    if (ln.right){ const t = ln.right[0]; put(g, ix + iw - [...t].length, y, t, ln.right[1] + (sel ? ' bg-sel' : '')); }
+    if (!ui.hits.some(h => h.blk === ln.bi && h.pane === p.id)) ui.hits.push({x:x0 + 1, y, w:bw - 2, h:1, pane:p.id, blk:ln.bi, rows:shown.filter(s => s.bi === ln.bi).length});
+  });
+  // the editor: a rule, a row of chips, the prompt
+  put(g, x0 + 1, edTop, '─'.repeat(bw - 2), 'c-line');
+  const running = p.blocks.at(-1) && p.blocks.at(-1).running;
+  if (running){ put(g, ix, edTop + 1, '◌ ' + clipTo(p.blocks.at(-1).cmd, iw - 12), 'c-yellow'); put(g, ix + iw - 7, edTop + 1, '■ ^C', 'c-red b'); }
+  else { put(g, ix, edTop + 1, clipTo(p.cwd, iw - 18), 'c-blue'); if (p.branch) put(g, ix + [...clipTo(p.cwd, iw - 18)].length + 2, edTop + 1, '⎇ ' + p.branch, 'c-mag'); }
+  put(g, ix, edTop + 2, '❯ ', 'c-green b');
+  if (p.input) put(g, ix + 2, edTop + 2, clipTo(p.input, iw - 4), ''); else put(g, ix + 2, edTop + 2, focused ? '' : 'escribe un comando', 'd');
+  if (focused){ const cx = ix + 2 + [...p.input].length; if (cx < ix + iw) g.cells[edTop + 2][cx] = [' ', 'cur']; }
+}
+const termShell = () => { const w = cur(); const p = ui.open === w.id ? w.panes[ui.focus] : null; return p && p.shell && !p.full && !ui.avisos ? p : null; };
+function typeKey(k){
+  const p = termShell(); if (!p) return;
+  if (k === 'Escape'){ if (ui.blk){ ui.blk = null; } else ui.open = null; }
+  else if (k === 'Tab'){ const w = cur(); openWs(w, (ui.focus + 1) % w.panes.length); }
+  else if (k === 'Backspace') p.input = [...p.input].slice(0, -1).join('');
+  else if (k === 'Enter'){ if (p.input.trim()) runCmd(p, p.input.trim()); p.input = ''; }
+  else if (k.length === 1) p.input += k;
+  draw();
+}
+function runCmd(p, cmd){
+  const b = {cmd, dur:'0.0s', code:0, running:true, out:[]}; p.blocks.push(b);
+  const fail = /fail|false|exit/.test(cmd);
+  setTimeout(() => { b.running = false; b.code = fail ? 1 : 0; b.dur = (0.4 + Math.random() * 2).toFixed(1) + 's'; b.out = fail ? [{t:'error: command failed', c:'c-red'}] : [{t:'ok', c:'c-green'}]; p.att = p.att.filter(a => a.kind !== 'shell_done'); p.att.push({kind:'shell_done', pane:p.id, exit:b.code, rev:++rev}); draw(); }, 700);
+}
 /* ---- behaviour ---- */
 const openWs = (w, focus) => { ui.open = w.id; ui.focus = focus ?? 0; const p = w.panes[ui.focus]; if (p) p.att.forEach(a => seen[a.kind + a.rev] = true); w.att.forEach(a => seen[a.kind + a.rev] = true); };
 function key(k){
@@ -198,14 +260,25 @@ function key(k){
   draw();
 }
 const scr = document.getElementById('scr');
-scr.addEventListener('keydown', e => { if (['j','k','h','l','a','n','Enter','Escape','Tab'].includes(e.key)){ e.preventDefault(); key(e.key); } });
+scr.addEventListener('keydown', e => {
+  if (ui.blk && ['c','o','r','Escape'].includes(e.key)){ e.preventDefault(); const p = cur().panes.find(x => x.id === ui.blk.pane), b = p.blocks[ui.blk.idx];
+    if (e.key === 'Escape') ui.blk = null; else { ui.msg = e.key === 'c' ? 'comando copiado' : e.key === 'o' ? 'salida copiada' : 'repetido: ' + b.cmd; if (e.key === 'r') runCmd(p, b.cmd); setTimeout(() => { ui.msg = ''; draw(); }, 1500); }
+    draw(); return; }
+  if (termShell() && !e.ctrlKey && !e.metaKey && (e.key.length === 1 || ['Backspace','Enter','Escape','Tab'].includes(e.key))){ e.preventDefault(); typeKey(e.key); return; }
+  if (['j','k','h','l','a','n','Enter','Escape','Tab'].includes(e.key)){ e.preventDefault(); key(e.key); } });
 scr.addEventListener('click', e => { scr.focus(); const r = scr.getBoundingClientRect(), cw = r.width / COLS, ch = r.height / ROWS, cx = Math.floor((e.clientX - r.left) / cw), cy = Math.floor((e.clientY - r.top) / ch);
-  if (cx < 27 && cy >= 2 && cy - 2 < model.ws.length && !ui.avisos){ ui.sel = cy - 2; ui.open = null; draw(); } });
+  if (cx < 27 && cy >= 2 && cy - 2 < model.ws.length && !ui.avisos){ ui.sel = cy - 2; ui.open = null; ui.blk = null; draw(); return; }
+  const h = ui.hits.find(h => cx >= h.x && cx < h.x + h.w && cy >= h.y && cy < h.y + h.rows);
+  if (h){ const w = cur(), i = w.panes.findIndex(p => p.id === h.pane); openWs(w, i); ui.blk = {pane:h.pane, idx:h.blk}; draw(); } });
 const cur = () => model.ws[ui.sel], paneOf = () => { const w = cur(); return ui.open === w.id ? w.panes[ui.focus] : w.panes[0]; };
 document.getElementById('evFail').onclick = () => { const p = paneOf(); if (p){ p.att = p.att.filter(a => a.kind !== 'shell_done'); p.att.push({kind:'shell_done', pane:p.id, exit:2, rev:++rev}); p.lines = [...p.lines.slice(0, -1), 'error: test failed', p.lines.at(-1)]; draw(); } };
 document.getElementById('evOk').onclick = () => { const p = paneOf(); if (p){ p.att = p.att.filter(a => a.kind !== 'shell_done'); p.att.push({kind:'shell_done', pane:p.id, exit:0, rev:++rev}); draw(); } };
 document.getElementById('evPerm').onclick = () => { const p = paneOf(); if (p){ p.att = p.att.filter(a => a.kind !== 'permission'); p.att.push({kind:'permission', pane:p.id, rev:++rev}); draw(); } };
 document.getElementById('evPane').onclick = () => { const w = cur(); w.panes.push({id:'p' + (++rev), title:'zsh', lines:['~ ❯ '], att:[]}); draw(); };
+const shellPane = () => { const w = cur(); return w.panes.find(p => p.shell); };
+document.getElementById('evRun').onclick = () => { const p = shellPane(); if (p){ p.blocks.push({cmd:'cargo watch -x test', dur:'12s', code:0, running:true, out:[{t:'[Running cargo test]', c:'d'}]}); draw(); } };
+document.getElementById('evEnd').onclick = () => { const p = shellPane(); const b = p && p.blocks.at(-1); if (b && b.running){ b.running = false; b.dur = '12.4s'; b.out = [{t:'test result: ok. 14 passed', c:'c-green'}]; draw(); } };
+document.getElementById('evNvim').onclick = () => { const p = shellPane(); if (p){ p.full = !p.full; p.lines = p.full ? ['  1 import { login } from "./auth"','  2 ','  3 export function run() {','  4   return login()','~','~'] : []; draw(); } };
 document.getElementById('evReset').onclick = () => { reset(); draw(); };
 document.getElementById('size').onchange = e => { [COLS, ROWS] = e.target.value.split('x').map(Number); draw(); };
 reset(); draw();
