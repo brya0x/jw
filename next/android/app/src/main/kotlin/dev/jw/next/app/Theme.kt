@@ -1,7 +1,9 @@
 package dev.jw.next.app
 
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import dev.jw.next.client.Tone
 
 /** The One Dark palette of the mobile prototype (`docs/prototypes/mobile.html`). */
@@ -20,7 +22,11 @@ object Palette {
     val cyan = Color(0xFF56B6C2)
 }
 
-val MonoFont = FontFamily.Monospace
+/** JetBrains Mono: one real monospace face, so marks, names and screens line up on every phone. */
+val MonoFont = FontFamily(
+    Font(R.font.jetbrains_mono_regular, FontWeight.Normal),
+    Font(R.font.jetbrains_mono_bold, FontWeight.Bold),
+)
 
 fun Tone.color(): Color = when (this) {
     Tone.Danger -> Palette.red

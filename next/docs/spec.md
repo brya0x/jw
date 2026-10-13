@@ -38,6 +38,8 @@ Command semantics (N3): `open_folder` takes an absolute path of an existing dire
 
 Panes (N4): `new_pane` starts the user's `$SHELL` (else `/bin/sh`) in the workspace folder on a PTY (24×80 until `resize`, at most 500 each) with `TERM=xterm-256color` and `JWN_PANE_ID` set (`identity::env_var`), and replies `result: {pane}`. The pane node's `screen` is the vt100 screen as text rows. A shell that exits takes its pane with it, like closing a terminal; `close_pane` and `remove_workspace` end the shells. After a daemon restart the saved panes get a fresh shell with the same ids (the screen and scrollback are not kept). A shell that prints OSC 133 marks (`ESC ] 133 ; D ; <code> BEL` finished, `ESC ] 133 ; C BEL` command started) raises `shell_done` with the exit code, which the next command start ends; shell integration scripts that print them for zsh, bash and fish come later.
 
+Development link: with `JWN_TCP=127.0.0.1:7870` the daemon also listens on loopback TCP, and `adb reverse tcp:7870 tcp:7870` lets a phone on a cable reach it; any process on the machine can use it, so it is off by default and prints a warning. The phone gets pairing, TLS and the tunnel later.
+
 Transport: JSON lines on a Unix socket (mode 0600, in a 0700 dir) whose path comes from `identity::socket_path()` (`crates/identity/src/lib.rs`). `session.json` in `identity::state_dir()` is private to the daemon (written whole, atomically; a file it cannot read is moved to `session.json.bad`, never overwritten). Client side: `crates/wire` (`Client` keeps the node cache and applies patches). The phone later carries the same objects one per WebSocket text message.
 
 ## Acceptance
@@ -79,8 +81,11 @@ Transport: JSON lines on a Unix socket (mode 0600, in a 0700 dir) whose path com
 - REQ-37 THE pane screens (claude, dev, shell) SHALL stay as in `docs/specs/mobile-prototype.html`; only the key row changes (REQ-38).
 - REQ-38 THE key row of a pane SHALL be one slim borderless line of at most 8 keys: `^␣ esc tab ↑ ↓ ← → ^C`.
 - REQ-39 THE Android client SHALL draw Home, Avisos and a workspace's panes from the shared fixtures, under the application id and label of `identity.toml`, beside any other jw app.
-- REQ-40 THE pane tabs SHALL be labelled with the pane's `title` (the program running in the shell, else the shell); a pane SHALL NOT have a role chosen at creation.
+- REQ-40 THE phone's pane tabs and the terminal's pane rows SHALL be labelled with the pane's `title` (the program running in the shell, else the shell); a pane SHALL NOT have a role chosen at creation.
 - REQ-41 WHEN a patch does not start at the revision a client holds, or its epoch differs, THEN the client SHALL drop the node and open it again for a snapshot.
+- REQ-42 WHERE `<PREFIX>_TCP` names a loopback address, the daemon SHALL serve the same JSON lines there too; IF the address is not loopback, THEN it SHALL refuse to start.
+- REQ-43 WHEN the Android client is started with `-e live host:port`, it SHALL draw that daemon's nodes, opening them on demand and retrying a lost connection, and SHALL write to the socket off the UI thread.
+- REQ-44 THE terminal client SHALL draw the same documents with the same marks as the phone and keep its own seen record; draw a workspace's panes as rows of a tree under it (not tabs; tabs are the phone's), moving the highlight SHALL only preview, Enter SHALL open and mark seen, and `a` SHALL list what waits with Enter going to the named pane.
 - REQ-18 IF a client's outbox is full, THEN the daemon SHALL disconnect that client and no other.
 
 REQ-1 to REQ-7, REQ-12 and REQ-13 are enforced by N1 (`crates/contract/tests/conformance.rs`, `crates/identity`). REQ-8, 9, 10, 11, 15, 16, 17 are enforced by N2 (`crates/daemon/tests/session.rs`, `src/core.rs` tests); REQ-19 to REQ-22 are enforced by N3 (`crates/daemon/tests/workspaces.rs`, against real git); REQ-18 is implemented (bounded outbox) and untested; REQ-14 and REQ-23 to REQ-27 are enforced by N4 (`crates/daemon/tests/panes.rs`, real `/bin/sh` PTYs). REQ-33 to REQ-35 and REQ-39 to REQ-41 by N8 (`android/client-core` tests, `just android`; the Compose screens are built and linted, not UI-tested). REQ-31 and REQ-32 by N6 (`android/contract`, `just android`). REQ-28 to REQ-30 by N5 (`tests/session.rs`, `contract/src/patch.rs` tests, `crates/jwn/tests/e2e.rs`).
@@ -124,6 +129,8 @@ Corrections to the model: the level 0 document is smaller than assumed (3.9 KB, 
 - RISK-6 `jwn stop` ends the daemon with SIGTERM and does not remove the socket or pid file; the next start clears a stale socket, and `stop` only signals a pid while the socket answers.
 - RISK-7 `restore` drops a pane whose shell cannot start (say its folder is gone) and saves that, so a transient failure loses the pane; its workspace stays.
 - RISK-8 A pane's `cwd` is where its shell started, not where it is now (needs shell integration); `title` is the shell's name until OSC titles are read.
+- RISK-9 The loopback TCP listener has no authentication: any local process controls every pane. Development only; the real phone link needs pairing and TLS first.
+- RISK-10 The Android live source is a development link (fixed address, no pairing); it has no UI tests, and it was checked by hand on a phone against the terminal client.
 - RISK-4 The Kotlin suite proves the types and the patch rules, not a live connection: no Kotlin client has talked to the daemon yet.
 
 ## Open questions
@@ -138,6 +145,7 @@ Corrections to the model: the level 0 document is smaller than assumed (3.9 KB, 
 - The schema's `$id` was the relative `contract.schema.json`; the Rust validator accepted it and the Kotlin one refused it (not an absolute URI). It is now `https://schema.jwn.invalid/contract.schema.json`.
 - Gradle called the Kotlin test task up to date when only a fixture changed, so drift would have passed silently; `contract/` is now declared a task input (found by mutating a fixture).
 - Patch application had only Rust unit tests; it now has shared `fixtures/patch-cases/` that both languages apply (REQ-31).
+- Running the live app on a phone found three bugs no test had: a socket write on the UI thread crashed it (`NetworkOnMainThreadException`; writes now go through their own thread); Compose's strong skipping meant a node arriving did not redraw the screen (the screens now read the source's tick themselves); and a daemon started inside a terminal window dies with the window (start it detached).
 - The task note said a binary kind and a PROTOCOL integer were needed for the phone; they are not part of this contract.
 
 ## Tests
@@ -154,4 +162,6 @@ Corrections to the model: the level 0 document is smaller than assumed (3.9 KB, 
 | N5 ✓ `0921e63` | wire measurements (`jwn bench`) and the JSON-only end-to-end test | 28–30 | `crates/jwn/src/bench.rs`, `crates/jwn/tests/e2e.rs` |
 | N6 | the Kotlin conformance suite: types, schema validation, patch cases | 31, 32 | `android/contract`, `contract/fixtures/patch-cases` |
 | N7 ✓ `2570339` | the mobile UI spec: attention marks, go row, Avisos, per-phone seen, slim key row | 33–38 | `docs/prototypes/mobile.html` |
-| N8 | the Android client on fixtures: `client-core` (seen, navigator, node cache) and the Compose app | 39–41 | `android/client-core`, `android/app` |
+| N8 ✓ `76e1353` | the Android client on fixtures: `client-core` (seen, navigator, node cache) and the Compose app | 39–41 | `android/client-core`, `android/app` |
+| N9 | the live link: loopback TCP listener, `adb reverse`, the Android live source | 42, 43 | `crates/daemon/src/server.rs`, `android/app/.../Data.kt` |
+| N10 | the terminal client (`jwn tui`) and a design pass on both UIs (JetBrains Mono, aligned marks) | 44 | `crates/jwn/src/tui.rs`, `android/app/.../Screens.kt` |

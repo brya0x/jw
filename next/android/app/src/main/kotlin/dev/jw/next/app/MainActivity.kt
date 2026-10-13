@@ -21,12 +21,16 @@ import dev.jw.next.client.Screen
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val source = FixtureSource(this)
+        // `am start -e live 127.0.0.1:7870` draws a running daemon; without it, the fixtures.
+        val live = intent.getStringExtra("live")?.split(":")?.takeIf { it.size == 2 && it[1].toIntOrNull() != null }
+        val source: AppSource = if (live != null) LiveSource(live[0], live[1].toInt()) else FixtureSource(this)
         val store = SeenStore(this)
         val nav = Navigator(source)
         setContent {
             // A record from another epoch is not trusted: it is emptied before first use.
-            var state by remember { mutableStateOf(ClientState(seen = store.load().forEpoch(source.epoch))) }
+            var state by remember { mutableStateOf(ClientState(seen = store.load())) }
+            val epoch = source.epoch
+            LaunchedEffect(epoch) { if (epoch.isNotEmpty()) state = state.copy(seen = state.seen.forEpoch(epoch)) }
             LaunchedEffect(state.seen) { store.save(state.seen) }
             BackHandler(enabled = state.screen is Screen.Workspace) { state = nav.back(state) }
             Box(Modifier.fillMaxSize().background(Palette.bg).statusBarsPadding()) {

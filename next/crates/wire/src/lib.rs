@@ -4,6 +4,7 @@
 mod client;
 
 use std::io::{self, BufRead, BufReader, Read, Write};
+use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::Duration;
@@ -22,9 +23,75 @@ pub fn default_accepts() -> std::collections::BTreeMap<String, Vec<u32>> {
 /// The longest line either side accepts; a longer one is a protocol error.
 pub const MAX_LINE: usize = 16 * 1024 * 1024;
 
+/// A connected socket of either kind: the same lines travel on both.
+pub enum Stream {
+    Unix(UnixStream),
+    Tcp(TcpStream),
+}
+
+impl From<UnixStream> for Stream {
+    fn from(s: UnixStream) -> Self {
+        Stream::Unix(s)
+    }
+}
+
+impl From<TcpStream> for Stream {
+    fn from(s: TcpStream) -> Self {
+        Stream::Tcp(s)
+    }
+}
+
+impl Stream {
+    pub fn try_clone(&self) -> io::Result<Stream> {
+        match self {
+            Stream::Unix(s) => s.try_clone().map(Stream::Unix),
+            Stream::Tcp(s) => s.try_clone().map(Stream::Tcp),
+        }
+    }
+
+    pub fn shutdown(&self) -> io::Result<()> {
+        match self {
+            Stream::Unix(s) => s.shutdown(Shutdown::Both),
+            Stream::Tcp(s) => s.shutdown(Shutdown::Both),
+        }
+    }
+
+    pub fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        match self {
+            Stream::Unix(s) => s.set_read_timeout(timeout),
+            Stream::Tcp(s) => s.set_read_timeout(timeout),
+        }
+    }
+}
+
+impl Read for Stream {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Stream::Unix(s) => s.read(buf),
+            Stream::Tcp(s) => s.read(buf),
+        }
+    }
+}
+
+impl Write for Stream {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self {
+            Stream::Unix(s) => s.write(buf),
+            Stream::Tcp(s) => s.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Stream::Unix(s) => s.flush(),
+            Stream::Tcp(s) => s.flush(),
+        }
+    }
+}
+
 pub struct Conn {
-    reader: BufReader<UnixStream>,
-    writer: UnixStream,
+    reader: BufReader<Stream>,
+    writer: Stream,
     /// Bytes of a line read so far, kept across a read timeout.
     pending: Vec<u8>,
 }
@@ -34,7 +101,12 @@ impl Conn {
         Conn::from_stream(UnixStream::connect(path)?)
     }
 
-    pub fn from_stream(stream: UnixStream) -> io::Result<Conn> {
+    pub fn connect_tcp(addr: SocketAddr) -> io::Result<Conn> {
+        Conn::from_stream(TcpStream::connect(addr)?)
+    }
+
+    pub fn from_stream(stream: impl Into<Stream>) -> io::Result<Conn> {
+        let stream = stream.into();
         Ok(Conn {
             reader: BufReader::new(stream.try_clone()?),
             writer: stream,
@@ -43,7 +115,7 @@ impl Conn {
     }
 
     /// A second handle on the same socket, for a writer thread.
-    pub fn try_clone_writer(&self) -> io::Result<UnixStream> {
+    pub fn try_clone_writer(&self) -> io::Result<Stream> {
         self.writer.try_clone()
     }
 

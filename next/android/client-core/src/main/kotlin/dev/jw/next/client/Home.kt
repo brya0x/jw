@@ -66,7 +66,7 @@ fun homeRows(session: Node.Session, seen: Seen): List<HomeRow> = session.workspa
     HomeRow(
         id = w.id,
         name = w.name,
-        detail = (if (w.kind == WorkspaceKind.Worktree) "⎇ ${w.branch ?: ""}" else "carpeta") +
+        detail = (if (w.kind == WorkspaceKind.Worktree) "↳ ${w.branch ?: ""}" else "carpeta") +
             " · ${w.paneCount} ${if (w.paneCount == 1) "panel" else "paneles"}",
         paneCount = w.paneCount,
         mark = top?.mark(),

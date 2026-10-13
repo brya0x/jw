@@ -325,3 +325,42 @@ fn nothing_is_sent_while_nothing_changes() {
     assert_eq!(c.bytes_in, before, "an idle watcher receives nothing");
     d.stop();
 }
+
+#[test]
+fn the_development_tcp_listener_speaks_the_same_lines_and_only_on_loopback() {
+    let sb = Sandbox::new();
+    let mut config = sb.config();
+    config.tcp = Some("0.0.0.0:0".parse().unwrap());
+    let err = daemon::Daemon::start(config.clone())
+        .err()
+        .expect("a non-loopback address is refused");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+
+    config.tcp = Some("127.0.0.1:0".parse().unwrap());
+    let d = daemon::Daemon::start(config).unwrap();
+    let mut conn = Conn::connect_tcp(d.tcp_addr().unwrap()).unwrap();
+    conn.send(&ClientMsg::Hello {
+        client: Peer {
+            name: "t".into(),
+            version: "1".into(),
+        },
+        accepts: wire::default_accepts(),
+    })
+    .unwrap();
+    let DaemonMsg::Hello { root, .. } =
+        serde_json::from_str(&conn.recv_line().unwrap().unwrap()).unwrap()
+    else {
+        panic!("expected hello")
+    };
+    conn.send(&ClientMsg::Open {
+        node: root,
+        epoch: None,
+        since: None,
+    })
+    .unwrap();
+    assert!(matches!(
+        serde_json::from_str(&conn.recv_line().unwrap().unwrap()).unwrap(),
+        DaemonMsg::Snapshot { .. }
+    ));
+    d.stop();
+}

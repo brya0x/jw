@@ -44,6 +44,7 @@ pub fn run() -> Result<(), String> {
         socket: dir.join("s.sock"),
         state_dir: dir.join("state"),
         shell: Some("/bin/sh".into()),
+        tcp: None,
     };
     let socket = config.socket.clone();
     let daemon =

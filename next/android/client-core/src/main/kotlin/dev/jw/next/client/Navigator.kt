@@ -11,6 +11,9 @@ interface NodeSource {
 
     /** An opened node, or null when it is not (yet) cached. */
     fun node(id: Id): Node?
+
+    /** Ask for a node to be sent; the fixtures hold everything already. */
+    fun open(id: Id) {}
 }
 
 sealed interface Screen {

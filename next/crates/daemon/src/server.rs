@@ -1,5 +1,6 @@
 use std::fs;
 use std::io;
+use std::net::{SocketAddr, TcpListener};
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -9,7 +10,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 
 use contract::{ClientMsg, DaemonMsg, ErrorCode};
-use wire::{Conn, write_line};
+use wire::{Conn, Stream, write_line};
 
 use crate::commands;
 use crate::core::{Core, OUTBOX};
@@ -35,6 +36,10 @@ pub struct Config {
     pub state_dir: PathBuf,
     /// The shell every pane runs; `$SHELL` (else `/bin/sh`) when `None`.
     pub shell: Option<String>,
+    /// A loopback TCP listener for development: a phone on a USB cable reaches it through
+    /// `adb reverse`. Anything on this machine that connects controls every pane, so it is
+    /// off unless asked for (`$<PREFIX>_TCP`).
+    pub tcp: Option<SocketAddr>,
 }
 
 impl Config {
@@ -43,6 +48,9 @@ impl Config {
             socket: identity::socket_path(),
             state_dir: identity::state_dir(),
             shell: None,
+            tcp: std::env::var(identity::env_var("TCP"))
+                .ok()
+                .and_then(|v| v.parse().ok()),
         }
     }
 
@@ -61,6 +69,7 @@ pub struct Daemon {
     stop: Arc<AtomicBool>,
     engine: Option<JoinHandle<()>>,
     accept: Option<JoinHandle<()>>,
+    tcp: Option<(SocketAddr, JoinHandle<()>)>,
 }
 
 impl Daemon {
@@ -73,6 +82,16 @@ impl Daemon {
                 .recursive(true)
                 .mode(0o700)
                 .create(dir)?;
+        }
+        if let Some(addr) = config.tcp
+            && !addr.ip().is_loopback()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "{addr} is not a loopback address; the TCP listener is for development only"
+                ),
+            ));
         }
         claim_socket(&config.socket)?;
         let listener = UnixListener::bind(&config.socket)?;
@@ -101,7 +120,22 @@ impl Daemon {
             let shared = shared.clone();
             thread::Builder::new()
                 .name("accept".into())
-                .spawn(move || accept_loop(listener, shared, stop))?
+                .spawn(move || accept_loop(listener.incoming(), shared, stop))?
+        };
+        let tcp = match config.tcp {
+            Some(addr) => {
+                let listener = TcpListener::bind(addr)?;
+                let bound = listener.local_addr()?;
+                eprintln!(
+                    "listening on tcp {bound}: any process on this machine can control every pane (development only)"
+                );
+                let (stop, shared) = (stop.clone(), shared.clone());
+                let handle = thread::Builder::new()
+                    .name("accept-tcp".into())
+                    .spawn(move || accept_loop(listener.incoming(), shared, stop))?;
+                Some((bound, handle))
+            }
+            None => None,
         };
         Ok(Daemon {
             config,
@@ -109,7 +143,13 @@ impl Daemon {
             stop,
             engine: Some(engine),
             accept: Some(accept),
+            tcp,
         })
+    }
+
+    /// The address the development TCP listener is bound to, if it is on.
+    pub fn tcp_addr(&self) -> Option<SocketAddr> {
+        self.tcp.as_ref().map(|(addr, _)| *addr)
     }
 
     /// Block until the daemon is stopped (it is stopped by killing the process).
@@ -124,6 +164,11 @@ impl Daemon {
         // Wake the accept loop; if the socket file is already gone nothing can, so leave
         // the thread rather than wait for it forever.
         let woken = UnixStream::connect(&self.config.socket).is_ok();
+        if let Some((addr, handle)) = self.tcp.take()
+            && std::net::TcpStream::connect(addr).is_ok()
+        {
+            let _ = handle.join();
+        }
         if let Some(h) = self.accept.take()
             && woken
         {
@@ -164,13 +209,18 @@ fn claim_socket(path: &Path) -> io::Result<()> {
     fs::remove_file(path)
 }
 
-fn accept_loop(listener: UnixListener, shared: Shared, stop: Arc<AtomicBool>) {
-    for stream in listener.incoming() {
+fn accept_loop<I, S>(incoming: I, shared: Shared, stop: Arc<AtomicBool>)
+where
+    I: Iterator<Item = io::Result<S>>,
+    S: Into<Stream>,
+{
+    for stream in incoming {
         if stop.load(Ordering::SeqCst) {
             break;
         }
         match stream {
             Ok(stream) => {
+                let stream: Stream = stream.into();
                 let shared = shared.clone();
                 let spawned = thread::Builder::new().name("client".into()).spawn(move || {
                     if let Err(e) = serve(&shared, stream) {
@@ -186,7 +236,7 @@ fn accept_loop(listener: UnixListener, shared: Shared, stop: Arc<AtomicBool>) {
     }
 }
 
-fn serve(shared: &Shared, stream: UnixStream) -> io::Result<()> {
+fn serve(shared: &Shared, stream: Stream) -> io::Result<()> {
     let mut conn = Conn::from_stream(stream.try_clone()?)?;
     let (tx, rx) = sync_channel::<DaemonMsg>(OUTBOX);
     let mut out = conn.try_clone_writer()?;

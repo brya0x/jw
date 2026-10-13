@@ -3,7 +3,6 @@
 //! of each one that changed and sends a patch to whoever has it open.
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{Sender, SyncSender, TrySendError};
@@ -43,7 +42,7 @@ struct Doc {
 struct ClientState {
     tx: SyncSender<DaemonMsg>,
     /// To cut a client that cannot keep up.
-    stream: UnixStream,
+    stream: wire::Stream,
     /// Set by `hello`: node type -> the version served to this client.
     accepted: Option<BTreeMap<String, u32>>,
     open: HashSet<Id>,
@@ -130,7 +129,7 @@ impl Core {
         }
     }
 
-    pub fn add_client(&mut self, tx: SyncSender<DaemonMsg>, stream: UnixStream) -> u64 {
+    pub fn add_client(&mut self, tx: SyncSender<DaemonMsg>, stream: wire::Stream) -> u64 {
         let id = self.next_client;
         self.next_client += 1;
         self.clients.insert(
@@ -163,7 +162,7 @@ impl Core {
         match c.tx.try_send(msg) {
             Ok(()) => {}
             Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {
-                let _ = c.stream.shutdown(std::net::Shutdown::Both);
+                let _ = c.stream.shutdown();
                 self.clients.remove(&client);
             }
         }
