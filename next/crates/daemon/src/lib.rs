@@ -4,7 +4,9 @@ mod commands;
 mod core;
 mod git;
 mod model;
+mod panes;
 mod persist;
+mod pty;
 mod server;
 mod workspaces;
 

@@ -36,6 +36,8 @@ Commands (`cmd`): `rename_session`, `open_folder`, `create_worktree`, `remove_wo
 
 Command semantics (N3): `open_folder` takes an absolute path of an existing directory and opens it once (`conflict` if open; `not_found`, `bad_request` for a missing path, a file or a relative path). `create_worktree` makes `<repo parent>/<repo name>-wt/<branch with / → ->` with `git worktree add` (a new branch from `base`, or an existing branch checked out, never both) and opens it as `<repo>: <branch>`; names that are options or not branch names are `bad_request`, git's own message is `git_failed`. `remove_workspace` closes a workspace; with `remove_worktree` it first runs `git worktree remove` without force, so a worktree with changes stays and so does its workspace. A successful open replies `result: {workspace, path}`.
 
+Panes (N4): `new_pane` starts the user's `$SHELL` (else `/bin/sh`) in the workspace folder on a PTY (24×80 until `resize`, at most 500 each) with `TERM=xterm-256color` and `JWN_PANE_ID` set (`identity::env_var`), and replies `result: {pane}`. The pane node's `screen` is the vt100 screen as text rows. A shell that exits takes its pane with it, like closing a terminal; `close_pane` and `remove_workspace` end the shells. After a daemon restart the saved panes get a fresh shell with the same ids (the screen and scrollback are not kept). A shell that prints OSC 133 marks (`ESC ] 133 ; D ; <code> BEL` finished, `ESC ] 133 ; C BEL` command started) raises `shell_done` with the exit code, which the next command start ends; shell integration scripts that print them for zsh, bash and fish come later.
+
 Transport: JSON lines on a Unix socket (mode 0600, in a 0700 dir) whose path comes from `identity::socket_path()` (`crates/identity/src/lib.rs`). `session.json` in `identity::state_dir()` is private to the daemon (written whole, atomically; a file it cannot read is moved to `session.json.bad`, never overwritten). Client side: `crates/wire` (`Client` keeps the node cache and applies patches). The phone later carries the same objects one per WebSocket text message.
 
 ## Acceptance
@@ -60,9 +62,14 @@ Transport: JSON lines on a Unix socket (mode 0600, in a 0700 dir) whose path com
 - REQ-20 WHEN `create_worktree` succeeds, the daemon SHALL have a git worktree beside the repository and a `worktree` workspace for it.
 - REQ-21 IF a worktree has changes, THEN `remove_workspace` with `remove_worktree` SHALL fail with `git_failed` and change nothing.
 - REQ-22 WHEN a workspace is removed, the daemon SHALL send `gone` for its node to whoever has it open.
+- REQ-23 WHEN `new_pane` succeeds, the daemon SHALL have a live PTY running the shell in the workspace folder and a pane node whose `screen` follows its output.
+- REQ-24 WHEN the shell of a pane exits, the daemon SHALL remove the pane.
+- REQ-25 WHEN a pane's shell prints a command-finished mark, the daemon SHALL raise `shell_done` with its exit code on that pane and every ancestor; WHEN the next command starts, it SHALL end it.
+- REQ-26 WHEN a pane or its workspace is removed, the daemon SHALL end its shell.
+- REQ-27 WHEN the daemon restarts, each saved pane SHALL get a new shell under the same id.
 - REQ-18 IF a client's outbox is full, THEN the daemon SHALL disconnect that client and no other.
 
-REQ-1 to REQ-7, REQ-12 and REQ-13 are enforced by N1 (`crates/contract/tests/conformance.rs`, `crates/identity`). REQ-8, 9, 10, 11, 15, 16, 17 are enforced by N2 (`crates/daemon/tests/session.rs`, `src/core.rs` tests); REQ-19 to REQ-22 are enforced by N3 (`crates/daemon/tests/workspaces.rs`, against real git); REQ-18 is implemented (bounded outbox) and untested; REQ-14 lands with N4.
+REQ-1 to REQ-7, REQ-12 and REQ-13 are enforced by N1 (`crates/contract/tests/conformance.rs`, `crates/identity`). REQ-8, 9, 10, 11, 15, 16, 17 are enforced by N2 (`crates/daemon/tests/session.rs`, `src/core.rs` tests); REQ-19 to REQ-22 are enforced by N3 (`crates/daemon/tests/workspaces.rs`, against real git); REQ-18 is implemented (bounded outbox) and untested; REQ-14 and REQ-23 to REQ-27 are enforced by N4 (`crates/daemon/tests/panes.rs`, real `/bin/sh` PTYs).
 
 ---
 ## Rationale
@@ -80,6 +87,8 @@ REQ-1 to REQ-7, REQ-12 and REQ-13 are enforced by N1 (`crates/contract/tests/con
 - RISK-3 `Attention.rev` assumes `rev` is monotonic per node across restarts; a restart changes `epoch`, so caches and *seen* maps are keyed by `(epoch, id)` and discarded on change.
 - RISK-5 Patches are diffed from whole rebuilt documents on every change: simple and always consistent with the snapshot, but O(documents) per change. Fine at 25 workspaces; N5 measures it.
 - RISK-6 `jwn stop` ends the daemon with SIGTERM and does not remove the socket or pid file; the next start clears a stale socket, and `stop` only signals a pid while the socket answers.
+- RISK-7 `restore` drops a pane whose shell cannot start (say its folder is gone) and saves that, so a transient failure loses the pane; its workspace stays.
+- RISK-8 A pane's `cwd` is where its shell started, not where it is now (needs shell integration); `title` is the shell's name until OSC titles are read.
 - RISK-4 Nothing yet proves the Kotlin side parses the fixtures; REQ-12 only makes it possible. The Android phase adds that suite.
 
 ## Open questions
@@ -99,6 +108,6 @@ REQ-1 to REQ-7, REQ-12 and REQ-13 are enforced by N1 (`crates/contract/tests/con
 | N0 ✓ `5b73558` | skeleton, freeze rule, identity, `just ci` | 13 | `identity.toml`, `crates/identity` |
 | N1 ✓ `9b1e7bd` | node and message spec, JSON Schema, fixtures, Rust conformance | 1–7, 12 | `contract/`, `crates/contract` |
 | N2 ✓ `759e5d2` | daemon core: socket, hello/epoch, tree, persistence, patches | 8–11, 15–18 | `crates/{wire,daemon,jwn}` |
-| N3 | folders and git worktrees as workspaces | 19–22 | `crates/daemon/src/{git,workspaces}.rs` | |
-| N4 | panes: PTY shell, screen node, input, resize, close, restore | 14 | |
+| N3 ✓ `6b0f336` | folders and git worktrees as workspaces | 19–22 | `crates/daemon/src/{git,workspaces}.rs` | |
+| N4 | panes: PTY shell, screen node, input, resize, close, restore | 14, 23–27 | `crates/daemon/src/{pty,panes}.rs` |
 | N5 | wire measurements and the JSON-only end-to-end script | | |

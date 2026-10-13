@@ -28,6 +28,7 @@ impl Sandbox {
         Config {
             socket: self.dir.join("s.sock"),
             state_dir: self.dir.join("state"),
+            shell: Some("/bin/sh".into()),
         }
     }
 

@@ -5,17 +5,19 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::sync::mpsc::{SyncSender, TrySendError};
+use std::sync::Arc;
+use std::sync::mpsc::{Sender, SyncSender, TrySendError};
 
 use contract::patch::diff;
 use contract::{
-    Attention, DaemonMsg, ErrorCode, Head, Id, Node, PaneSummary, PatchOp, Session, Workspace,
-    WorkspaceSummary,
+    Attention, DaemonMsg, ErrorCode, Head, Id, Node, PaneSummary, PatchOp, Screen, Session,
+    Workspace, WorkspaceSummary,
 };
 use serde_json::Value;
 
 use crate::model::{Model, Own};
 use crate::persist;
+use crate::pty::{self, Event, Term};
 
 /// The node document versions this daemon can serve.
 pub const SUPPORTED: [(&str, &[u32]); 3] = [("session", &[1]), ("workspace", &[1]), ("pane", &[1])];
@@ -55,10 +57,21 @@ pub struct Core {
     docs: HashMap<Id, Doc>,
     clients: HashMap<u64, ClientState>,
     next_client: u64,
+    /// The running shells, by pane id, and the last screen read from each.
+    terms: HashMap<Id, Arc<Term>>,
+    screens: HashMap<Id, Screen>,
+    /// Where terminals report to, and the shell they start.
+    pub events: Sender<Event>,
+    pub shell: String,
 }
 
 impl Core {
-    pub fn new(model: Model, save_path: Option<PathBuf>) -> Core {
+    pub fn new(
+        model: Model,
+        save_path: Option<PathBuf>,
+        events: Sender<Event>,
+        shell: String,
+    ) -> Core {
         let mut core = Core {
             epoch: crate::model::new_id(),
             model,
@@ -67,9 +80,54 @@ impl Core {
             docs: HashMap::new(),
             clients: HashMap::new(),
             next_client: 1,
+            terms: HashMap::new(),
+            screens: HashMap::new(),
+            events,
+            shell,
         };
         core.refresh();
         core
+    }
+
+    pub fn term(&self, pane: &str) -> Option<Arc<Term>> {
+        self.terms.get(pane).cloned()
+    }
+
+    pub fn attach_term(&mut self, pane: &Id, term: Arc<Term>) {
+        self.screens.insert(pane.clone(), term.screen());
+        self.terms.insert(pane.clone(), term);
+    }
+
+    /// Re-read the screen of a pane whose terminal changed.
+    pub fn read_screen(&mut self, pane: &str) {
+        if let Some(term) = self.terms.get(pane) {
+            self.screens.insert(pane.to_owned(), term.screen());
+        }
+    }
+
+    /// Forget terminals whose pane is no longer in the model, and end their shells.
+    fn drop_orphan_terms(&mut self) -> Vec<Arc<Term>> {
+        let live: HashSet<&str> = self
+            .model
+            .workspaces
+            .iter()
+            .flat_map(|w| w.panes.iter().map(|p| p.id.as_str()))
+            .collect();
+        let dead: Vec<Id> = self
+            .terms
+            .keys()
+            .filter(|k| !live.contains(k.as_str()))
+            .cloned()
+            .collect();
+        self.screens.retain(|k, _| live.contains(k.as_str()));
+        dead.iter().filter_map(|k| self.terms.remove(k)).collect()
+    }
+
+    /// End every shell (the daemon is stopping).
+    pub fn shutdown(&mut self) {
+        for term in self.terms.drain().map(|(_, t)| t) {
+            term.kill();
+        }
     }
 
     pub fn add_client(&mut self, tx: SyncSender<DaemonMsg>, stream: UnixStream) -> u64 {
@@ -288,6 +346,9 @@ impl Core {
             }
         }
         self.save();
+        for term in self.drop_orphan_terms() {
+            term.kill();
+        }
     }
 
     fn broadcast(&mut self, node: &str, msg: DaemonMsg) {
@@ -351,6 +412,20 @@ impl Core {
             for p in &ws.panes {
                 let own = raised(&p.attention, &p.id);
                 attention.extend(own.iter().cloned());
+                nodes.push(Node::Pane(contract::Pane {
+                    head: head(&p.id, own.clone()),
+                    workspace: ws.id.clone(),
+                    title: p.title.clone(),
+                    shell: p.shell.clone(),
+                    cwd: p.cwd.clone(),
+                    running: None,
+                    last_program: None,
+                    screen: self
+                        .screens
+                        .get(&p.id)
+                        .cloned()
+                        .unwrap_or_else(pty::blank_screen),
+                }));
                 panes.push(PaneSummary {
                     id: p.id.clone(),
                     title: p.title.clone(),
@@ -404,6 +479,10 @@ mod tests {
     use super::*;
     use crate::model::{Pane, Workspace, new_id};
 
+    fn test_core(model: Model) -> Core {
+        Core::new(model, None, std::sync::mpsc::channel().0, "/bin/sh".into())
+    }
+
     fn model_with_pane() -> (Model, Id, Id) {
         let mut model = Model::new();
         let (ws, pane) = (new_id(), new_id());
@@ -416,7 +495,8 @@ mod tests {
             branch: None,
             panes: vec![Pane {
                 id: pane.clone(),
-                title: "zsh".into(),
+                title: "sh".into(),
+                shell: "/bin/sh".into(),
                 cwd: "/tmp".into(),
                 attention: vec![],
             }],
@@ -432,7 +512,7 @@ mod tests {
     #[test]
     fn attention_bubbles_to_every_ancestor_once_computed_by_the_daemon() {
         let (model, ws, pane) = model_with_pane();
-        let mut core = Core::new(model, None);
+        let mut core = test_core(model);
         let session = core.model.session_id.clone();
         assert!(attention_of(&core, &session).is_empty());
 
@@ -453,8 +533,9 @@ mod tests {
             );
             assert_eq!(a[0]["exit_code"], 2);
         }
-        // Raised in the revision the pane's own node got it.
-        assert_eq!(attention_of(&core, &session)[0]["rev"], 1);
+        // Raised in the revision the pane's own node got it (the pane was at 1).
+        assert_eq!(attention_of(&core, &session)[0]["rev"], 2);
+        assert_eq!(core.docs[&pane].rev, 2);
         assert_eq!(core.docs[&session].rev, 2);
         // The workspace summary in the session carries it too.
         assert_eq!(
@@ -471,7 +552,7 @@ mod tests {
     #[test]
     fn an_unchanged_model_bumps_nothing() {
         let (model, ws, _) = model_with_pane();
-        let mut core = Core::new(model, None);
+        let mut core = test_core(model);
         let before = core.docs[&ws].rev;
         core.refresh();
         core.refresh();
@@ -481,7 +562,7 @@ mod tests {
     #[test]
     fn history_is_bounded() {
         let (model, ws, _) = model_with_pane();
-        let mut core = Core::new(model, None);
+        let mut core = test_core(model);
         for i in 0..RETAIN + 10 {
             core.model.workspaces[0].name = format!("n{i}");
             core.refresh();

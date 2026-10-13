@@ -34,6 +34,9 @@ pub struct Workspace {
 pub struct Pane {
     pub id: Id,
     pub title: String,
+    /// The user's shell, always the pane's process.
+    pub shell: String,
+    /// Where the shell was started.
     pub cwd: String,
     #[serde(skip)]
     pub attention: Vec<Own>,

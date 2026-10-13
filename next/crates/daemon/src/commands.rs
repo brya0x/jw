@@ -5,6 +5,7 @@ use contract::{Cmd, ErrorCode, Outcome};
 use contract::{False, True};
 use serde_json::Value;
 
+use crate::panes;
 use crate::server::Shared;
 use crate::workspaces;
 
@@ -44,8 +45,9 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
             workspace,
             remove_worktree,
         } => workspaces::remove_workspace(shared, &workspace, remove_worktree),
-        Cmd::NewPane { .. } | Cmd::ClosePane { .. } | Cmd::Write { .. } | Cmd::Resize { .. } => {
-            Err(err(ErrorCode::Unsupported, "panes are not implemented yet"))
-        }
+        Cmd::NewPane { workspace } => panes::new_pane(shared, &workspace),
+        Cmd::ClosePane { pane } => panes::close_pane(shared, &pane),
+        Cmd::Write { pane, data } => panes::write(shared, &pane, &data),
+        Cmd::Resize { pane, rows, cols } => panes::resize(shared, &pane, rows, cols),
     }
 }

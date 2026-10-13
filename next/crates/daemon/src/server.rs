@@ -14,6 +14,7 @@ use wire::{Conn, write_line};
 use crate::commands;
 use crate::core::{Core, OUTBOX};
 use crate::model::Model;
+use crate::panes;
 use crate::persist;
 
 /// The hub behind one lock. Hold it for bookkeeping only, never across I/O.
@@ -32,6 +33,8 @@ impl Shared {
 pub struct Config {
     pub socket: PathBuf,
     pub state_dir: PathBuf,
+    /// The shell every pane runs; `$SHELL` (else `/bin/sh`) when `None`.
+    pub shell: Option<String>,
 }
 
 impl Config {
@@ -39,6 +42,7 @@ impl Config {
         Config {
             socket: identity::socket_path(),
             state_dir: identity::state_dir(),
+            shell: None,
         }
     }
 
@@ -53,7 +57,9 @@ impl Config {
 
 pub struct Daemon {
     config: Config,
+    shared: Shared,
     stop: Arc<AtomicBool>,
+    engine: Option<JoinHandle<()>>,
     accept: Option<JoinHandle<()>>,
 }
 
@@ -74,20 +80,34 @@ impl Daemon {
         fs::write(config.pid_file(), std::process::id().to_string())?;
 
         let model = persist::load(&config.session_file()).unwrap_or_else(Model::new);
+        let shell = config.shell.clone().unwrap_or_else(default_shell);
+        let (events, event_rx) = std::sync::mpsc::channel();
         let shared = Shared(Arc::new(Mutex::new(Core::new(
             model,
             Some(config.session_file()),
+            events,
+            shell,
         ))));
+        let engine = {
+            let shared = shared.clone();
+            thread::Builder::new()
+                .name("engine".into())
+                .spawn(move || panes::engine(shared, event_rx))?
+        };
+        panes::restore(&shared);
         let stop = Arc::new(AtomicBool::new(false));
         let accept = {
             let stop = stop.clone();
+            let shared = shared.clone();
             thread::Builder::new()
                 .name("accept".into())
                 .spawn(move || accept_loop(listener, shared, stop))?
         };
         Ok(Daemon {
             config,
+            shared,
             stop,
+            engine: Some(engine),
             accept: Some(accept),
         })
     }
@@ -101,14 +121,33 @@ impl Daemon {
 
     pub fn stop(mut self) {
         self.stop.store(true, Ordering::SeqCst);
-        // Wake the accept loop.
-        let _ = UnixStream::connect(&self.config.socket);
-        if let Some(h) = self.accept.take() {
+        // Wake the accept loop; if the socket file is already gone nothing can, so leave
+        // the thread rather than wait for it forever.
+        let woken = UnixStream::connect(&self.config.socket).is_ok();
+        if let Some(h) = self.accept.take()
+            && woken
+        {
+            let _ = h.join();
+        }
+        let events = {
+            let mut core = self.shared.lock();
+            core.shutdown();
+            core.events.clone()
+        };
+        let _ = events.send(crate::pty::Event::Stop);
+        if let Some(h) = self.engine.take() {
             let _ = h.join();
         }
         let _ = fs::remove_file(&self.config.socket);
         let _ = fs::remove_file(self.config.pid_file());
     }
+}
+
+fn default_shell() -> String {
+    std::env::var("SHELL")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "/bin/sh".into())
 }
 
 /// Refuse to take over a live daemon's socket; clear a stale one.
