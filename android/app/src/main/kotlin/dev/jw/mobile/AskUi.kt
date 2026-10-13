@@ -83,7 +83,7 @@ fun AskView(
                 Text(ask.question, color = j.fg, fontSize = 17.sp, lineHeight = 24.sp, fontWeight = FontWeight.Bold)
                 for (o in ask.options) {
                     if (o === ask.other && writing) continue
-                    Choice(o, ask.multi) { if (o === ask.other) writing = true else onPick(o.number) }
+                    Choice(o, ask.multi && o.checked != null) { if (o === ask.other) writing = true else onPick(o.number) }
                 }
                 if (writing) {
                     BasicTextField(

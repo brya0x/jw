@@ -22,9 +22,10 @@ class AskText(val question: String, val options: List<AskOption>, val atBottom: 
         private val OPTION = Regex("""^([❯>›➤▶]\s*)?(\d{1,2})[.)]\s+(.+)$""")
         private val CONFIRM = Regex("""(\(y/n\)|\[y/n]|\[Y/n]|\[y/N]|\(Y/n\)|\(y/N\))""")
         private val BOX = Regex("""^[\s│┃|╭╮╰╯┌┐└┘─━═╌┄\-]*$""")
-        private val OTHER = Regex("""(?i)(type something|other|chat about this|escribe)""")
+        private val OTHER = Regex("""(?i)(type something|other|escribe)""")
         private val HINT = Regex("""(?i)(enter to|esc to|↑/↓|to navigate|to select|to cancel|shift\+tab|ctrl\+[a-z])""")
         private const val MAX_QUESTION_LINES = 3
+        private val SUBMIT = Regex("""(?i)(✔\s*)?submit""")
         private const val MAX_DESCRIPTION_LINES = 3
         private const val MAX_AFTER = 6
 
@@ -67,7 +68,7 @@ class AskText(val question: String, val options: List<AskOption>, val atBottom: 
                 val (checked, label) = checkOf(m.groupValues[3])
                 val below = (line + 1 until (if (n + 1 < at.size) at[n + 1] else minOf(lines.size, line + 1 + MAX_DESCRIPTION_LINES)))
                     .map { lines[it] }
-                    .takeWhile { it.isNotEmpty() && !BOX.matches(it) && !HINT.containsMatchIn(it) }
+                    .takeWhile { it.isNotEmpty() && !BOX.matches(it) && !HINT.containsMatchIn(it) && !SUBMIT.matches(it) }
                     .filter { it.isNotEmpty() && !BOX.matches(it) && !HINT.containsMatchIn(it) }
                 AskOption(m.groupValues[2].toInt(), label.trim(), below.joinToString(" "), m.groupValues[1].isNotEmpty(), checked)
             }

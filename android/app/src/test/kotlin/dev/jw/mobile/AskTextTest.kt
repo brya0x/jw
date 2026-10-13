@@ -94,4 +94,37 @@ class AskTextTest {
         val list = AskText.from(listOf("Steps:", "1. install", "2. build", "3. run", "", "done"))
         assertEquals(false, list?.isPrompt ?: false)
     }
+
+    /** What Claude draws for a question of several choices (its `AskUserQuestion` with `multiSelect`). */
+    @Test fun aRealQuestionOfSeveralChoicesHasItsBoxesItsSubmitRowAndItsChatRow() {
+        val a = AskText.from(
+            listOf(
+                "←  ☐ Alcance  ✔ Submit  →",
+                "",
+                "¿Qué debe cubrir el cambio?",
+                "",
+                "❯ 1. [ ] Daemon",
+                "         Cambios en el daemon: PTYs, panes, session.json y el servicio móvil.",
+                "  2. [✔] App Android",
+                "         Cambios en la app nativa Kotlin/Compose para el teléfono.",
+                "  3. [ ] Spec y prototipo",
+                "         Actualizar la spec y el prototipo HTML interactivo.",
+                "  4. [ ] Pruebas",
+                "         Agregar o ajustar pruebas unitarias y de integración.",
+                "  5. [ ] Type something",
+                "     Submit",
+                "──────────────────────────────────────────",
+                "  6. Chat about this",
+                "",
+                "Enter to select · ↑/↓ to navigate · Esc to cancel",
+            ),
+        )!!
+        assertEquals("¿Qué debe cubrir el cambio?", a.question)
+        assertEquals(true, a.multi)
+        assertEquals(true, a.isPrompt)
+        assertEquals(listOf("Daemon", "App Android", "Spec y prototipo", "Pruebas", "Type something", "Chat about this"), a.options.map { it.label })
+        assertEquals(listOf(false, true, false, false, false, null), a.options.map { it.checked })
+        assertEquals("", a.options[4].description)
+        assertEquals(5, a.other?.number)
+    }
 }

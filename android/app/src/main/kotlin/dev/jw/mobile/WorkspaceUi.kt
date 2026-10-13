@@ -193,7 +193,14 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
                 AskView(
                     fullAsk, plan, sel.name ?: sel.fg?.trimStart('-')?.takeIf { it != "zsh" && it != "bash" && it != "fish" } ?: sel.role,
                     onPick = { n -> session.input(sel.pane, Keys.text(n.toString())) },
-                    onSend = { session.input(sel.pane, Keys.key(Key.Enter)) },
+                    onSend = {
+                        // The cursor goes down to the row after the check boxes, `Submit`, and Enter takes it (a number marks a box, Enter marks the one under the cursor).
+                        val boxes = fullAsk.options.count { it.checked != null }
+                        val at = fullAsk.options.indexOfFirst { it.selected }.coerceAtLeast(0)
+                        val down = Keys.key(Key.Down, term?.appCursor ?: false)
+                        repeat((boxes - at).coerceAtLeast(0)) { session.input(sel.pane, down) }
+                        session.input(sel.pane, Keys.key(Key.Enter))
+                    },
                     onOther = { text ->
                         val other = fullAsk.other
                         scope.launch {
