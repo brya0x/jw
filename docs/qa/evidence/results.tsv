@@ -102,3 +102,5 @@ M-27	not-run	-	-	-
 M-28	not-run	-	-	-
 M-29	not-run	-	-	-
 M-30	not-run	-	-	-
+AV-01	fail	-	AV-01/	Pending plan: Home row shows live "y · aprobar"/"n · rechazar", Avisos shows y/n (dim) with no content (REQ-20/98 say no y/n for plans).
+AV-02	fail	-	AV-02/	Tapping y on the plan accepted "Yes, and use auto mode": plan executed (d.txt created) and Claude switched to auto mode without the plan shown on the phone.
