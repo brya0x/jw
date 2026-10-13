@@ -27,15 +27,11 @@ Sources read for this list: `docs/specs/mobile.md` (REQ-1..103), `android/AGENTS
 **Compare tools**: `jw ls --json` (state, marks, branch, PR), `jw read` (pane text), transcript JSONL at `~/.claude/projects/<folder>/<id>.jsonl`, TUI via `scripts/drive.py`.
 Haiku subagents do screenshots, dumps and the table diffs; they return paths and short tables.
 
-**Skills found** (find-skills; nothing installed, I will ask first):
-- `vercel-labs/agent-browser@agent-browser` (1M installs): browser QA, web only; not useful for the Android app.
-- `software-mansion/argent@argent-test-ui-flow` (23.4K): UI flow testing for React Native/mobile; may give a pattern for step/expect scripts; unverified for Android native.
-- `raphaelbarbosaqwerty/maestro-dev-skills@maestro-e2e` (528): Maestro flows; needs the maestro CLI, which is not installed.
-- `sickn33/agentic-awesome-skills@android_ui_verification` (146): adb screenshot/uiautomator verification recipe; closest to my approach, low reputation.
-- `skydoves/android-testing-skills@capturing-screenshots-and-screenrecord` (61) and `@extracting-logs-with-logcat` (68): small adb helpers.
-- `jeffallan/claude-skills@test-master` (5K) and `affaan-m/ecc@browser-qa` (9.1K): generic QA process; browser-oriented.
-- Already installed and used where it fits: `android-review` (for reading app code during triage, not for QA runs).
-My view: none is needed; the adb recipe above is enough. Say if you want one installed.
+**Skills**: no skill is installed. I read `android_ui_verification`, `android-ui-journey-testing` and `argent-test-ui-flow`
+and wrote our own, `.claude/skills/jw-mobile-qa/` (`SKILL.md` plus `q.py`, an adb helper: shot, dump, texts, tap by text,
+wait/gone with latency, type, key, swipe). It is meant to be edited as the run teaches us; changes are listed in the report.
+
+**What is under test**: that the phone says what the TUI and the PC say (not GitHub/CI). Cases about PR/CI (old W-16, T-07) are removed.
 
 ## 1. Workspaces view sync
 
@@ -60,7 +56,6 @@ Spec says (REQ-12, 18) the phone asks `workspaces`/`sessions` and `Panes` is pol
 | W-13 | Tap y on phone | Daemon ends Waiting; row goes working; stays answered until `Panes` says not waiting | `jw ls` | 20 |
 | W-14 | Change branch in a worktree (`git switch`) | Branch label follows | `jw ls` branch | 18 |
 | W-15 | Counters (panes per workspace, changes) | Match PC | `jw ls` | 18 |
-| W-16 | PR/CI state: worktree with an open PR and a failing/passing check (needs GitHub; skip and say so if the test state has none) | Phone shows what `jw ls` shows; spec has no REQ for CI, so any gap is a finding about missing coverage | `jw ls`, TUI | none (gap) |
 | W-17 | Orphans: worktree whose folder was deleted on disk, or pane with dead process | Matches how `jw ls` lists them; no crash | `jw ls` | 18 |
 | W-18 | 20+ workspaces, search in the finder | Filter works, scroll smooth, touch targets 48 dp | `jw ls` | 18, 26, 71 |
 | W-19 | Phone idle 5 min with PC changing | List correct on wake, no drift | `jw ls` | 15 |
@@ -175,7 +170,6 @@ Phone: `ShellView` (`ShellUi.kt`) for a zsh pane jw marked (REQ-95); `TerminalVi
 | T-04 | Theme: Settings → light/dark/system; `cmd uimode night` | Palette from `ready`, pane colours follow, PC TUI theme unchanged | 17 |
 | T-05 | Diff tab: Uncommitted, Commits, General; tree folding, viewed marks, big diff (> DIFF_CAP), no base | As spec | 25, 72–75, 89–91 |
 | T-06 | Files screen and viewer: `..`, hidden switch, Markdown view/source, binary, big file, symlink | As spec | 77–84 |
-| T-07 | CI status: only if surfaced anywhere (W-16); else note "no REQ" | n/a | none |
 | T-08 | Delete worktree: PC-side removal while phone has it open (W-06); phone remove greyed | No crash | 23 |
 | T-09 | Portrait lock: rotate with auto-rotate on, upside down, keyboard open | Stays portrait | 103 |
 | T-10 | Settings: quick-answer presets bytes (`y`, `n`, `y + Enter`) | Preview matches what is sent to the pane | 55 |
@@ -195,9 +189,23 @@ Out of scope for QA (not exercisable on a phone, or covered by `cargo test`): RE
 4. T-01..T-15.
 Evidence per case: `NN.png`, `NN.xml`, and a `pc.txt` with the PC-side output. Result values: pass / fail / not-shown.
 
-## 6. Questions for you
+## 6. Answers so far
 
-- OK to run the phone against the test daemon only, and to ask you to re-pair with the real one at the end?
-- Do you want any of the skills above installed (my view: no)?
-- Is a GitHub remote with PR/CI available in the test state, or do I mark W-16 as untestable?
-- Claude panes: is `--model haiku` fine, and does the test environment have a logged-in `claude`?
+- Phone against the test daemon only: yes. I will ask you to re-pair with the real daemon at the end.
+- Skills: read, then write our own and iterate (done above).
+- W-16 and T-07 (PR/CI) removed.
+- Haiku for test Claude panes: yes. Still to check at run time: that the test state has a logged-in `claude`.
+
+## 7. Protocol direction (for the report, not a test)
+
+Idea to evaluate: replace today's messages (`Text` rows, `Chat` blocks, `Shell`, `Panes`, `workspaces`) with one protocol that mirrors
+the TUI's state to the phone as a virtual-DOM-like tree, sent as compact JSON diffs, so the phone renders what the TUI renders.
+Phase 2 collects the evidence for it, and QA-REPORT.md answers with it:
+- every "diff" and "not-shown" row tagged with its cause: **data missing** (the daemon never sends it), **meaning lost** (screen scraped on the phone: `AskText`, `esc to interrupt`), or **rendering** (data arrives, app draws it differently);
+- sync latency per change (the `ms` of each W- case) against the polling cadence (`Panes` every 2 s, chat 300 ms, text 80 ms);
+- cases that break after reconnect (A-10, S-22, T-01): the state the phone has to rebuild, which a single replicated tree would give it for free;
+- bytes per message for the same screen (from `adb logcat` sizes or a `jw read` of the same frame), to say whether "ultra compact" buys anything over today's `Text` runs.
+Trade-offs to weigh at the end: one tree for both clients removes the scraping and makes sync one mechanism, but couples the phone to the
+TUI's widgets (a TUI change becomes a protocol change, `PROTOCOL` bumps), and the phone's own look (REQ-94..99, chat bubbles, blocks) would have
+to be a second renderer of the same tree or a semantic layer above it. The likely shape is semantic state (blocks, prompts, panes) rather
+than a pixel-ish DOM; the report will say what the matrix supports.
