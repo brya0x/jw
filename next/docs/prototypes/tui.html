@@ -47,7 +47,6 @@ button:hover{border-color:var(--blue)}
     <button id="evPane" type="button">New pane here</button>
     <button id="evRun" type="button">Start a long command</button>
     <button id="evEnd" type="button">It finishes</button>
-    <button id="evNvim" type="button">Open nvim (full pane)</button>
     <button id="evReset" type="button">Reset</button>
     <select id="size" aria-label="Terminal size"><option value="120x32">120 × 32</option><option value="96x28">96 × 28</option></select>
   </div>
@@ -61,7 +60,7 @@ button:hover{border-color:var(--blue)}
       <li><b>Panes are rounded boxes</b> sharing the area (side by side, two columns from three panes), the focused one with a blue border. The title carries what runs there, and what waits on that pane (<code>✗ salió 3</code>) sits at the right end of its top border.</li>
       <li><b>Marks sit at the right of a sidebar row</b> (most urgent unseen, with a count when there are several). No extra line under the row: the sentence lives in the pane's title and in <code>a</code>.</li>
       <li><b>Avisos</b> opens as a box over the pane area: one row per unseen attention, <code>↵</code> goes to that pane, focus and seen both change.</li>
-      <li><b>The shell as blocks</b> (the terminal's version of what the phone prototype already does): inside a shell pane's box, each command is a block with its folder, branch and time, a bar at the left (green done, red failed, yellow running), bold command and its coloured output; newest at the bottom. A click selects a block and the status bar offers copy command, copy output, repeat. The editor sits at the foot of the box with the folder and branch chips; while a program runs it shows the program and <code>■ ^C</code>. A full-screen program (nvim) takes the whole box and the blocks return when it exits. Open a shell pane, press Enter, type, press Enter.</li>
+      <li><b>The shell as blocks</b> (the terminal's version of what the phone prototype already does): inside a shell pane's box, each command is a block with its folder, branch and time, a bar at the left (green done, red failed, yellow running), bold command and its coloured output; newest at the bottom. A click selects a block and the status bar offers copy command, copy output, repeat. The editor sits at the foot of the box with the folder and branch chips; while a program runs it shows the program and <code>■ ^C</code>. (Only the shell for now: no agents, no full-screen programs.) Open a shell pane, press Enter, type, press Enter.</li>
       <li><b>Seen</b> is shared: looking at a pane here clears its aviso on the phone too. Moving the highlight previews a workspace; <code>↵</code> or focusing a pane marks it seen.</li>
     </ol>
   </div>
@@ -81,16 +80,19 @@ let model, rev, seen, ui;
 function reset(){
   rev = 10; seen = {};
   const att = (kind, pane, exit) => ({kind, pane, exit, rev:++rev});
+  const blk = (cmd, dur, code, out) => ({cmd, dur, code, out: out.map(t => typeof t === 'string' ? {t} : t)});
+  const shell = (id, cwd, branch, blocks, extra = {}) => ({id, title:'zsh', lines:[], att:[], shell:true, input:'', cwd, branch, blocks, ...extra});
   model = { name:'demo', ws:[
-    { id:'w1', name:'notes', kind:'folder', path:'~/notes', att:[], panes:[{id:'p1', title:'zsh', lines:['~/notes ❯ git status','On branch main','nothing to commit, working tree clean','~/notes ❯ '], att:[att('shell_done','p1',0)]}] },
-    { id:'w2', name:'api', kind:'folder', path:'~/ws/api', att:[], panes:[{id:'p2', title:'zsh', lines:['~/ws/api ❯ pnpm test','FAIL  src/auth.test.ts','  expected 2, received 3','~/ws/api ❯ '], att:[att('shell_done','p2',2)]}] },
+    { id:'w1', name:'notes', kind:'folder', path:'~/notes', att:[], panes:[
+      shell('p1', '~/notes', null, [blk('git status', '0.1s', 0, ['On branch main', 'nothing to commit, working tree clean']), blk('ls', '0.0s', 0, ['ideas.md  todo.md  weekly/'])], {att:[att('shell_done','p1',0)]}) ] },
+    { id:'w2', name:'api', kind:'folder', path:'~/ws/api', att:[], panes:[
+      shell('p2', '~/ws/api', 'main', [blk('pnpm test', '6.4s', 1, [{t:'FAIL  src/auth.test.ts', c:'c-red'}, {t:'  expected 2, received 3', c:'c-red'}, {t:'Tests: 1 failed, 11 passed', c:'c-red'}])], {att:[att('shell_done','p2',2)]}) ] },
     { id:'w3', name:'feat/login', kind:'worktree', project:'api', branch:'feat/login', path:'~/ws/api-wt/feat-login', att:[], panes:[
-      {id:'p3', title:'claude', lines:['> arregla el test de login','','  Leyendo src/auth.ts …','  ¿Puedo ejecutar `pnpm install`?',''], att:[att('permission','p3')]},
-      {id:'p4', title:'nvim', lines:['  1 import { login } from "./auth"','  2 ','  3 export function run() {','  4   return login()','~','~'], att:[]},
-      {id:'p5', title:'zsh', lines:[], att:[att('shell_done','p5',0)], shell:true, input:'', cwd:'~/ws/api-wt/feat-login', branch:'feat/login', blocks:[
-        {cmd:'git status', dur:'0.1s', code:0, out:[{t:'On branch feat/login'},{t:'nothing to commit, working tree clean'}]},
-        {cmd:'cargo test', dur:'4.2s', code:101, out:[{t:'   Compiling app v0.3.1',c:'d'},{t:'running 14 tests'},{t:'test auth::login_ok ... ok',c:'c-green'},{t:'test auth::expired ... FAILED',c:'c-red'},{t:'test result: FAILED. 13 passed; 1 failed',c:'c-red'}]},
-        {cmd:'cargo test auth::expired', dur:'1.8s', code:0, out:[{t:'test auth::expired ... ok',c:'c-green'},{t:'test result: ok. 1 passed',c:'c-green'}]} ]} ] },
+      shell('p3', '~/ws/api-wt/feat-login', 'feat/login', [
+        blk('git status', '0.1s', 0, ['On branch feat/login', 'nothing to commit, working tree clean']),
+        blk('cargo test', '4.2s', 101, [{t:'   Compiling app v0.3.1', c:'d'}, 'running 14 tests', {t:'test auth::login_ok ... ok', c:'c-green'}, {t:'test auth::expired ... FAILED', c:'c-red'}, {t:'test result: FAILED. 13 passed; 1 failed', c:'c-red'}]),
+        blk('cargo test auth::expired', '1.8s', 0, [{t:'test auth::expired ... ok', c:'c-green'}, {t:'test result: ok. 1 passed', c:'c-green'}]) ], {att:[att('shell_done','p3',0)]}),
+      shell('p4', '~/ws/api-wt/feat-login', 'feat/login', [blk('git log --oneline -3', '0.0s', 0, ['a1b2c3d feat: login form', '9f8e7d6 fix: token refresh', '4c5d6e7 chore: deps'])]) ] },
     { id:'w4', name:'infra', kind:'folder', path:'~/ws/infra', att:[], panes:[] },
   ]};
   ui = { sel:2, open:null, focus:0, avisos:false, av:0, blk:null, hits:[], msg:'' };
@@ -162,8 +164,7 @@ function draw(){
         box(g, x0, y0, bw, bh, p.title, focused ? 'c-blue' : 'c-line', un ? (markOf(un)[0] + ' ' + whatOf(un)) : '', un ? markOf(un)[1] + ' b' : '');
         if (p.shell && !p.full) drawShell(g, p, x0, y0, bw, bh, focused);
         else {
-          if (p.full) put(g, x0 + 2, y0 + 1, clipTo('nvim · ocupa todo el panel · los bloques vuelven al salir', bw - 4), 'd');
-          const top0 = p.full ? 2 : 1;
+          const top0 = 1;
           p.lines.slice(0, bh - 1 - top0).forEach((l, k) => put(g, x0 + 2, y0 + top0 + k, clipTo(l, bw - 4)));
           if (focused && p.lines.length){ const k = Math.min(p.lines.length - 1, bh - 2 - top0); const l = p.lines[k] || ''; g.cells[y0 + top0 + k][x0 + 2 + [...l].length] = [' ', 'cur']; }
         }
@@ -278,7 +279,6 @@ document.getElementById('evPane').onclick = () => { const w = cur(); w.panes.pus
 const shellPane = () => { const w = cur(); return w.panes.find(p => p.shell); };
 document.getElementById('evRun').onclick = () => { const p = shellPane(); if (p){ p.blocks.push({cmd:'cargo watch -x test', dur:'12s', code:0, running:true, out:[{t:'[Running cargo test]', c:'d'}]}); draw(); } };
 document.getElementById('evEnd').onclick = () => { const p = shellPane(); const b = p && p.blocks.at(-1); if (b && b.running){ b.running = false; b.dur = '12.4s'; b.out = [{t:'test result: ok. 14 passed', c:'c-green'}]; draw(); } };
-document.getElementById('evNvim').onclick = () => { const p = shellPane(); if (p){ p.full = !p.full; p.lines = p.full ? ['  1 import { login } from "./auth"','  2 ','  3 export function run() {','  4   return login()','~','~'] : []; draw(); } };
 document.getElementById('evReset').onclick = () => { reset(); draw(); };
 document.getElementById('size').onchange = e => { [COLS, ROWS] = e.target.value.split('x').map(Number); draw(); };
 reset(); draw();
