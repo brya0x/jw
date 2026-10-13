@@ -1,5 +1,6 @@
 package dev.jw.mobile
 
+import dev.jw.proto.AgentState
 import dev.jw.proto.AnswerChoices
 import dev.jw.proto.AnswerRule
 import dev.jw.proto.Control
@@ -26,7 +27,6 @@ import dev.jw.proto.Palettes
 import dev.jw.proto.QrPayload
 import dev.jw.proto.ReconnectPolicy
 import dev.jw.proto.ServerMessage
-import dev.jw.term.Terminal
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -129,6 +129,13 @@ private class Routes(var lan: LanAddr?, var tunnel: String?) {
 }
 
 /** How long an attempt on the wifi gets to open a connection before the tunnel is tried (REQ-63). */
+/** The columns a command's output is parsed for when the pane's are not known yet, and how many commands keep their output. */
+private const val DEFAULT_COLS = 200
+private const val MAX_BLOCK_OUTS = 40
+
+/** How many rows of scrollback a scroll up asks the PC for. */
+private const val HISTORY_ROWS = 2_000
+
 private const val LAN_OPEN_MS = 3_000L
 
 /** How often the app looks again for the wifi while it is on the tunnel (REQ-63). */
@@ -142,7 +149,7 @@ data class Model(
     val panes: List<PaneInfo> = emptyList(),
     /** When `panes` arrived, by the session's clock; null before the first answer. */
     val panesAt: Long? = null,
-    /** Panes already answered with y or n since the latest `Panes`. */
+    /** Panes answered with y or n whose latest `Panes` still says Waiting. */
     val answered: Set<Long> = emptySet(),
 )
 
@@ -307,16 +314,57 @@ class Session(
     private var lastWifiLook = 0L
 
     // The panes of the workspace on screen, as terminals (M5). Fed on the connection's thread, read by the surface.
-    private val screens = ConcurrentHashMap<Long, Terminal>()
+    private val screens = ConcurrentHashMap<Long, PaneText>()
     private val exits = ConcurrentHashMap<Long, Int>()
-    private val original = ConcurrentHashMap<Long, Pair<Int, Int>>()
+    private val chats = ConcurrentHashMap<Long, ChatState>()
+    private val commandLists = ConcurrentHashMap<Long, List<dev.jw.proto.CommandInfo>>()
+    @Volatile private var chatPane: Long? = null
+    private val shells = ConcurrentHashMap<Long, ShellState>()
+    private val blockOuts = ConcurrentHashMap<Long, ConcurrentHashMap<Int, BlockOut>>()
+    @Volatile private var shellPane: Long? = null
     @Volatile private var watching: String? = null
     private val _termRev = MutableStateFlow(0L)
 
     /** Moves with every byte, size change and exit of a watched pane; the surface redraws when it does. */
     val termRev: StateFlow<Long> = _termRev.asStateFlow()
 
-    fun terminal(pane: Long): Terminal? = screens[pane]
+    fun terminal(pane: Long): PaneText? = screens[pane]
+
+    /** The rows above the screen of `pane`, once the person scrolls up (answered as [PaneEvent.History]). */
+    fun requestHistory(pane: Long) = send(Outgoing.Binary(Panes.textHistoryFrame(pane, HISTORY_ROWS)))
+
+    /** The conversation of the agent in `pane`, once the PC has answered (REQ-93); null until then. */
+    fun chat(pane: Long): ChatState? = chats[pane]
+
+    /** What the Claude in `pane` offers after `/`, once the PC has answered (REQ-101); null until then. */
+    fun commands(pane: Long): List<dev.jw.proto.CommandInfo>? = commandLists[pane]
+
+    /** Asks again what the Claude in `pane` offers after `/`: the files may have changed. */
+    fun requestCommands(pane: Long) = send(Outgoing.Binary(Panes.commandsFrame(pane)))
+
+    /** Follows the conversation of the agent in `pane` (null: none); only one at a time, the one on screen. */
+    fun watchChat(pane: Long?) {
+        if (pane == chatPane) return
+        chatPane?.let { send(Outgoing.Binary(Panes.chatUnwatchFrame(it))); chats.remove(it); commandLists.remove(it) }
+        chatPane = pane
+        pane?.let { send(Outgoing.Binary(Panes.chatWatchFrame(it))); requestCommands(it) }
+        _termRev.update { it + 1 }
+    }
+
+    /** The commands of the shell in `pane` and its line being typed, once the PC has answered (REQ-95); null until then. */
+    fun shell(pane: Long): ShellState? = shells[pane]
+
+    /** What command `block` of the shell in `pane` printed, parsed into a terminal of its own; null until some of it came. */
+    fun blockOut(pane: Long, block: Int): BlockOut? = blockOuts[pane]?.get(block)
+
+    /** Follows the commands of the shell in `pane` (null: none); only one at a time, the one on screen. */
+    fun watchShell(pane: Long?) {
+        if (pane == shellPane) return
+        shellPane?.let { send(Outgoing.Binary(Panes.shellUnwatchFrame(it))); shells.remove(it); blockOuts.remove(it) }
+        shellPane = pane
+        pane?.let { send(Outgoing.Binary(Panes.shellWatchFrame(it))) }
+        _termRev.update { it + 1 }
+    }
 
     /** The exit status of a watched pane whose process ended, else null. */
     fun exitStatus(pane: Long): Int? = exits[pane]
@@ -327,28 +375,16 @@ class Session(
      */
     fun watch(stream: String?) {
         if (stream == watching) return
-        if (watching != null) { restoreSizes(); send(Outgoing.Binary(Panes.detachFrame())) }
+        if (watching != null) { send(Outgoing.Binary(Panes.detachFrame())) }
         screens.clear()
         exits.clear()
         watching = stream
-        stream?.let { send(Outgoing.Binary(Panes.attachFrame(it))) }
+        stream?.let { send(Outgoing.Binary(Panes.textViewFrame())); send(Outgoing.Binary(Panes.attachFrame(it))) }
         _termRev.update { it + 1 }
     }
 
     /** What a key or a paste sends to `pane`. The bridge drops it in read-only and says so. */
     fun input(pane: Long, bytes: ByteArray) = send(Outgoing.Binary(Workspaces.inputFrame(pane, bytes)))
-
-    /**
-     * "Fit to phone": the pane takes `cols` by `rows`. The size it had is kept, once, and goes back when the
-     * pane is let go (REQ-24).
-     */
-    fun fit(pane: Long, cols: Int, rows: Int) {
-        val t = screens[pane] ?: return
-        if ((state.value as? UiState.Connected)?.readOnly != false) return
-        if (t.cols == cols && t.rows == rows) return
-        original.putIfAbsent(pane, t.cols to t.rows)
-        send(Outgoing.Binary(Panes.resizeFrame(pane, cols, rows)))
-    }
 
     /** `^␣ t`: a shell beside `pane`, in `cwd`. */
     fun newPane(pane: Long, cwd: String) {
@@ -362,17 +398,22 @@ class Session(
     /** `^␣ n`: names the pane; blank goes back to its automatic title. */
     fun namePane(pane: Long, name: String) = send(Outgoing.Binary(Panes.nameFrame(pane, name)))
 
-    /** The sizes the panes had before [fit]. */
-    fun restoreSizes() {
-        for ((pane, size) in original) send(Outgoing.Binary(Panes.resizeFrame(pane, size.first, size.second)))
-        original.clear()
-    }
-
     private fun onPane(e: PaneEvent) {
         when (e) {
-            is PaneEvent.Snapshot -> screens[e.pane] = Terminal(e.cols, e.rows).also { it.feed(e.bytes) }
-            is PaneEvent.Output -> screens[e.pane]?.feed(e.bytes)
-            is PaneEvent.Resized -> screens[e.pane]?.resize(e.cols, e.rows)
+            is PaneEvent.Text -> screens.getOrPut(e.pane) { PaneText(e.cols, e.rows) }.setScreen(e)
+            is PaneEvent.History -> screens[e.pane]?.setHistory(e)
+            is PaneEvent.Chat -> chats.compute(e.pane) { _, old -> ChatState.merge(old, e) }
+            is PaneEvent.Commands -> { commandLists[e.pane] = e.items; _termRev.update { it + 1 } }
+            is PaneEvent.Shell -> shells.compute(e.pane) { _, old -> ShellState.merge(old, e) }
+            is PaneEvent.ShellOut -> {
+                val outs = blockOuts.getOrPut(e.pane) { ConcurrentHashMap() }
+                // The terminal the command printed for: its columns are the pane's, which the program laid its output out for.
+                outs.getOrPut(e.block) { BlockOut(screens[e.pane]?.cols ?: DEFAULT_COLS) }.feed(e.bytes)
+                // Only the newest commands keep their output; the older ones are let go.
+                if (outs.size > MAX_BLOCK_OUTS) outs.keys.sorted().take(outs.size - MAX_BLOCK_OUTS).forEach(outs::remove)
+            }
+            // The PC sends this client text, never a terminal's bytes (`TextView`).
+            is PaneEvent.Snapshot, is PaneEvent.Output, is PaneEvent.Resized -> {}
             is PaneEvent.Exited -> exits[e.pane] = e.status
         }
         _termRev.update { it + 1 }
@@ -511,7 +552,7 @@ class Session(
     }
 
     /**
-     * y or n for `pane`. Sends once, and only while the latest `Panes` (at most 2 s old) says Waiting
+     * y or n for `pane`. Sends once, and only while the latest `Panes` (at most 6 s old) says Waiting
      * for that pane (REQ-20); otherwise tells the person it is no longer waiting.
      */
     fun answer(pane: Long, approve: Boolean) {
@@ -731,7 +772,12 @@ class Session(
                     val pane = Panes.parse(ev.frame)
                     if (pane != null) onPane(pane)
                     else Workspaces.parsePanes(ev.frame)?.let { ps ->
-                        _model.update { it.copy(panes = ps, panesAt = clock(), answered = emptySet()) }
+                        _model.update { m ->
+                            // An answered prompt stays answered while the pane still says Waiting, so the
+                            // buttons do not go green again between the tap and the agent moving on.
+                            val waiting = ps.filter { it.agent == AgentState.Waiting }.map { it.pane }.toSet()
+                            m.copy(panes = ps, panesAt = clock(), answered = m.answered intersect waiting)
+                        }
                     }
                 }
                 is BridgeEvent.Ended -> if (!a.bridgeFailed) a.failure = ev.failure
@@ -761,8 +807,16 @@ class Session(
                             // The screens come again as snapshots: the new one is the truth (REQ-15).
                             screens.clear()
                             exits.clear()
-                            original.clear()
-                            watching?.let { out.trySend(Outgoing.Binary(Panes.attachFrame(it))) }
+                            chats.clear()
+                            commandLists.clear()
+                            chatPane?.let { out.trySend(Outgoing.Binary(Panes.chatWatchFrame(it))); out.trySend(Outgoing.Binary(Panes.commandsFrame(it))) }
+                            shells.clear()
+                            blockOuts.clear()
+                            shellPane?.let { out.trySend(Outgoing.Binary(Panes.shellWatchFrame(it))) }
+                            watching?.let {
+                                out.trySend(Outgoing.Binary(Panes.textViewFrame()))
+                                out.trySend(Outgoing.Binary(Panes.attachFrame(it)))
+                            }
                             _termRev.update { it + 1 }
                         }
                     }

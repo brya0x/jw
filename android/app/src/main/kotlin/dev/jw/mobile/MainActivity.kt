@@ -98,7 +98,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             val state by vm.session.state.collectAsState()
             (state as? UiState.Connected)?.let { vm.palettes = it.palettes }
-            JwTheme(vm.palettes) { App(state, vm.session, vm.nav, vm.answers, vm.viewed) }
+            JwTheme(vm.palettes, vm.answers.theme) { App(state, vm.session, vm.nav, vm.answers, vm.viewed) }
         }
     }
 }

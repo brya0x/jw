@@ -45,7 +45,15 @@ class PaneInfo(
     val bell: Boolean,
     val agent: AgentState?,
     val cwd: String?,
+    /** What the user called the pane in the TUI (`^␣ n`); null when it has no name of its own. */
+    val name: String? = null,
 )
+
+/**
+ * Whether the pane may be a Claude session whose conversation the PC can send (REQ-94): an agent pane, or any pane
+ * with claude in the foreground (started by hand in a shell). The PC says whether it really is (`known`).
+ */
+fun PaneInfo.mayHaveConversation(): Boolean = role == "agent" || fg?.trimStart('-')?.substringAfterLast('/') == "claude"
 
 enum class Mark(val glyph: Char) { Working('✻'), Waiting('?'), Dev('⚡') }
 
@@ -110,6 +118,7 @@ object Workspaces {
                     else -> null
                 },
                 cwd = str("cwd"),
+                name = str("name"),
             )
         }
     }
@@ -157,11 +166,12 @@ class RefreshRule(private val intervalMs: Long = 2_000) {
 
 /** When the y and n buttons may be enabled (REQ-20, RISK-4). */
 object AnswerRule {
-    const val MAX_AGE_MS = 2_000L
+    /** Three polls (`pollMs` is 2 s): one late `Panes` must not turn the buttons dim and green again. */
+    const val MAX_AGE_MS = 6_000L
 
     /**
-     * Only while the latest `Panes` (at most 2 s old) says Waiting for this pane, the phone is not read-only
-     * and this snapshot has not been answered yet.
+     * Only while the latest `Panes` (at most [MAX_AGE_MS] old) says Waiting for this pane, the phone is not
+     * read-only and this prompt has not been answered yet.
      */
     fun enabled(pane: PaneInfo?, panesAtMs: Long?, nowMs: Long, readOnly: Boolean, alreadyAnswered: Boolean): Boolean =
         !readOnly && !alreadyAnswered && pane?.agent == AgentState.Waiting &&

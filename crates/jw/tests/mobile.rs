@@ -15,7 +15,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use jw_proto::client::Client;
-use jw_proto::proto::{ClientMsg, DaemonMsg, MobileState, PROTOCOL};
+use jw_proto::proto::{AgentState, ClientMsg, DaemonMsg, MobileState, PROTOCOL};
 use tungstenite::{Message, WebSocket};
 
 const EXE: &str = env!("CARGO_BIN_EXE_jw");
@@ -261,6 +261,16 @@ impl Phone {
 
     fn say(&mut self, v: serde_json::Value) {
         self.0.send(Message::text(v.to_string())).unwrap();
+    }
+
+    /// What the phone sends for a key: an `Input` frame, as the app builds it.
+    fn input(&mut self, pane: u64, bytes: &[u8]) {
+        let head = format!(r#"{{"t":"Input","pane":{pane},"bytes":[]}}"#).into_bytes();
+        let mut body = vec![1u8];
+        body.extend_from_slice(&(head.len() as u32).to_be_bytes());
+        body.extend_from_slice(&head);
+        body.extend_from_slice(bytes);
+        self.0.send(Message::binary(body)).unwrap();
     }
 
     /// The next control message, leaving out `endpoints`, which follows every
@@ -1289,6 +1299,63 @@ fn env_of(c: &mut Client, stream: &str, pane: u64, var: &str) -> String {
         }
     }
     panic!("no answer for {var}: {seen:?}");
+}
+
+/// What `pane` of `stream` says its agent is.
+fn agent_of(c: &mut Client, stream: &str, pane: u64) -> Option<AgentState> {
+    c.send(&ClientMsg::List).unwrap();
+    loop {
+        if let DaemonMsg::Panes { panes } = c.recv().unwrap().expect("the daemon hung up") {
+            return panes
+                .iter()
+                .find(|p| p.stream == stream && p.pane == pane)
+                .and_then(|p| p.agent);
+        }
+    }
+}
+
+#[test]
+fn a_phone_answering_a_waiting_agent_reaches_its_pane_and_ends_the_wait() {
+    let rig = Rig::start(Stub::Registers);
+    let proj = rig.dir.join("askproj");
+    std::fs::create_dir_all(&proj).unwrap();
+    let mut w = rig.watcher();
+    let code = up(&mut w);
+    let (mut phone, _) = pair(&rig, &code, &mut w, "Pixel");
+    let mut d = rig.client();
+    d.send(&ClientMsg::Hello { protocol: PROTOCOL }).unwrap();
+    let _ = d.recv();
+    let p = proj.to_str().unwrap();
+    phone.say(serde_json::json!({ "t": "open", "path": p, "session": "main" }));
+    let ws = phone.json()["ws"].as_str().unwrap().to_string();
+    let pane = panes_of(&mut d, &ws)[0];
+
+    // claude's `Notification` hook: the agent asks for a permission.
+    d.send(&ClientMsg::Agent {
+        pane,
+        state: AgentState::Waiting,
+    })
+    .unwrap();
+    assert_eq!(agent_of(&mut d, &ws, pane), Some(AgentState::Waiting));
+
+    // A report from the terminal answers nothing.
+    phone.input(pane, b"\x1b[I");
+    assert_eq!(agent_of(&mut d, &ws, pane), Some(AgentState::Waiting));
+
+    // Approve: the bytes reach the shell in the pane, and the wait is over.
+    d.send(&ClientMsg::Attach { stream: ws.clone() }).unwrap();
+    phone.input(pane, b"echo APPROVED_$((40+2))\r");
+    let mut seen = String::new();
+    let until = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < until && !seen.contains("APPROVED_42") {
+        if let Ok(Some(DaemonMsg::Output { pane: p, bytes })) = d.recv()
+            && p == pane
+        {
+            seen.push_str(&String::from_utf8_lossy(&bytes));
+        }
+    }
+    assert!(seen.contains("APPROVED_42"), "{seen:?}");
+    assert_eq!(agent_of(&mut d, &ws, pane), Some(AgentState::Working));
 }
 
 #[test]

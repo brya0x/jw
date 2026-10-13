@@ -52,6 +52,15 @@ class Palette(val roles: Map<String, String>) {
 class ThemeInfo(val name: String, val dark: Boolean, val colors: Map<String, String>)
 
 class Palettes(val dark: Palette, val light: Palette, val themes: List<ThemeInfo> = emptyList()) {
+    /**
+     * What the app draws with: the theme `chosen` on the phone, if the PC still offers it, else the
+     * system's dark or light. The second value says whether it is a dark theme.
+     */
+    fun resolve(chosen: String?, systemDark: Boolean): Pair<Palette, Boolean> {
+        themes.firstOrNull { it.name == chosen }?.let { return Palette(it.colors) to it.dark }
+        return (if (systemDark) dark else light) to systemDark
+    }
+
     companion object {
         val ROLES = listOf(
             "bg", "panel", "fg", "dim", "line", "sel",

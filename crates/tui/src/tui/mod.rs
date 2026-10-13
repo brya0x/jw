@@ -1461,6 +1461,13 @@ impl App {
                 }
             }
             DaemonMsg::Prompted { .. } => self.done("sent to the agent".into()),
+            // For a phone: the TUI never sends `TextView`.
+            DaemonMsg::Text { .. }
+            | DaemonMsg::TextHistory { .. }
+            | DaemonMsg::Chat { .. }
+            | DaemonMsg::Commands { .. }
+            | DaemonMsg::Shell { .. }
+            | DaemonMsg::ShellOut { .. } => {}
             DaemonMsg::Error { msg } => self.fail(msg),
             d @ (DaemonMsg::MobileState(_)
             | DaemonMsg::MobilePair { .. }
@@ -4075,6 +4082,7 @@ mod motion_tests {
             bell: false,
             agent: Some(AgentState::Working),
             cwd: None,
+            name: None,
         }
     }
 
@@ -4115,6 +4123,7 @@ mod motion_tests {
             bell: false,
             agent: None,
             cwd: None,
+            name: None,
         }
     }
 

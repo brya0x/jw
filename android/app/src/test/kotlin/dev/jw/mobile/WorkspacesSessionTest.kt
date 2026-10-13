@@ -106,13 +106,28 @@ class WorkspacesSessionTest {
         assertNull("sent once per snapshot", fake.frames.poll(500, TimeUnit.MILLISECONDS))
     }
 
+    @Test fun anAnsweredPromptStaysAnsweredUntilThePaneMovesOn() = runBlocking<Unit> {
+        var sock: okhttp3.WebSocket? = null
+        fake.enqueue { _, ws -> sock = ws; ws.send(FakeBridge.ready()); ws.send(FakeBridge.frame(FakeBridge.panes("waiting"))) }
+        val s = session()
+        s.start()
+        s.until { it.panes.isNotEmpty() }
+        s.answer(7, true)
+        assertTrue(7L in s.model.value.answered)
+        sock!!.send(FakeBridge.frame(FakeBridge.panes("waiting")))
+        delay(300)
+        assertTrue("still waiting: no green flash", 7L in s.model.value.answered)
+        sock!!.send(FakeBridge.frame(FakeBridge.panes("idle")))
+        s.until { 7L !in it.answered && it.panes.firstOrNull()?.agent != AgentState.Waiting }
+    }
+
     @Test fun staleSnapshotDoesNotSend() = runBlocking<Unit> {
         fake.enqueue { _, ws -> ws.send(FakeBridge.ready()); ws.send(FakeBridge.frame(FakeBridge.panes("waiting"))) }
         val s = session()
         s.start()
         s.until { it.panes.isNotEmpty() }
         fake.frames.poll(5, TimeUnit.SECONDS)
-        jump = 2_500
+        jump = 6_500
         s.answer(7, true)
         assertNull(fake.frames.poll(500, TimeUnit.MILLISECONDS))
     }

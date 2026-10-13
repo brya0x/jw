@@ -125,8 +125,9 @@ class WorkspacesTest {
     @Test fun answerButtonsRule() {
         val w = panes(pane(1, "a", "agent", "waiting"))[0]
         val idle = panes(pane(1, "a", "agent", "idle"))[0]
-        assertTrue(AnswerRule.enabled(w, 1_000, 3_000, false, false))
-        assertFalse("older than 2 s", AnswerRule.enabled(w, 1_000, 3_001, false, false))
+        assertTrue(AnswerRule.enabled(w, 1_000, 7_000, false, false))
+        assertTrue("a poll (2 s) may be late without dimming", AnswerRule.enabled(w, 1_000, 4_500, false, false))
+        assertFalse("older than 6 s", AnswerRule.enabled(w, 1_000, 7_001, false, false))
         assertFalse("not waiting", AnswerRule.enabled(idle, 1_000, 1_500, false, false))
         assertFalse("no pane", AnswerRule.enabled(null, 1_000, 1_500, false, false))
         assertFalse("read only", AnswerRule.enabled(w, 1_000, 1_500, true, false))
@@ -138,5 +139,23 @@ class WorkspacesTest {
         assertArrayEquals(byteArrayOf(13), AnswerChoices.approve(null).bytes)
         assertArrayEquals(byteArrayOf(27), AnswerChoices.reject("nope").bytes)
         assertArrayEquals("y\r".toByteArray(), AnswerChoices.approve("y-enter").bytes)
+    }
+
+    @Test fun anAgentPaneOrAClaudeInAShellMayHaveAConversation() {
+        fun pane(role: String, fg: String?) = PaneInfo(1, "s", role, null, fg, false, false, null, null)
+        assertTrue(pane("agent", null).mayHaveConversation())
+        assertTrue(pane("agent", "zsh").mayHaveConversation())
+        assertTrue(pane("shell", "claude").mayHaveConversation())
+        assertTrue(pane("shell", "-claude").mayHaveConversation())
+        assertFalse(pane("shell", "zsh").mayHaveConversation())
+        assertFalse(pane("shell", "nvim").mayHaveConversation())
+        assertFalse(pane("shell", null).mayHaveConversation())
+    }
+
+    @Test fun aPanesNameIsRead() {
+        val frame = Frame.Json("""{"t":"Panes","panes":[{"pane":1,"stream":"s","role":"agent","name":"claude"},{"pane":2,"stream":"s","role":"shell"}]}""")
+        val panes = Workspaces.parsePanes(frame)!!
+        assertEquals("claude", panes[0].name)
+        assertNull(panes[1].name)
     }
 }

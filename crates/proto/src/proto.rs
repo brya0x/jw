@@ -15,7 +15,72 @@ pub type PaneId = u64;
 
 /// Bumped whenever a message changes shape: a client and a daemon from
 /// different builds refuse each other instead of misreading (RISK-14).
-pub const PROTOCOL: u32 = 14;
+pub const PROTOCOL: u32 = 25;
+
+/// A run of cells of one row that share a style: its first column, its
+/// text (a wide character counts two columns; the cells after it are not
+/// in the text), the foreground and the background (0 default, `1 << 24 | i`
+/// a palette index, `2 << 24 | 0xrrggbb` a colour) and the attributes
+/// (bold 1, dim 2, italic 4, underline 8, inverse 16). A row's blank end is
+/// left out.
+pub type Run = (u16, String, u32, u32, u8);
+
+/// One block of an agent's conversation, as its transcript has it (mobile
+/// REQ-93). `kind` is `user` or `text` (a message: `text`), `think`
+/// (`result` says how long it took) or `tool` (`name`, `arg` the one line
+/// that sums the call up, `body` the command, the diff or the output, and
+/// `result` the line that sums its result up, `None` until it has one).
+/// `i` numbers the conversation's blocks from its start: a block with a
+/// number the client has is that block again, changed. Two more kinds (REQ-100): `notice` is the PC
+/// telling Claude that a subagent or a background task ended (`name` is its status, `done`, `failed`
+/// or `stopped`; `text` its title, `arg` what ran it, `agent` or `task`, and `result` how long it took when known), and `queued` is a message the
+/// person sent while Claude works, which the transcript does not have yet.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ChatBlock {
+    pub i: u32,
+    pub kind: String,
+    pub text: String,
+    pub name: String,
+    pub arg: String,
+    pub result: Option<String>,
+    pub body: Option<String>,
+    pub error: bool,
+}
+
+/// One thing a phone can type after `/` in a Claude conversation (mobile REQ-101): `name` with its slash (`/commit`,
+/// `/plugin:thing` is not listed), `desc` what it says it does (empty for Claude's own, whose words the phone has), and
+/// `kind`: `claude` (its own), `user` (`~/.claude`), `project` (the folder's `.claude`) or `skill`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CommandInfo {
+    pub name: String,
+    pub desc: String,
+    pub kind: String,
+}
+
+/// How the turn Claude is in stands (mobile REQ-99): when the person's last message was sent (ms since
+/// the epoch) and the output tokens Claude has written since.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ChatTurn {
+    pub since: u64,
+    pub tokens: u64,
+}
+
+/// One command of a shell (mobile REQ-95): what was typed, where, how it ended and how long it
+/// took (so far, while `running`). `full` says a program drew the whole screen (nvim, htop): no
+/// output is kept for it. `truncated` says the start of its output was let go. `i` numbers the
+/// pane's commands from its start: a block with a number the client has is that block again,
+/// changed. Its output comes in `ShellOut`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ShellBlock {
+    pub i: u32,
+    pub cmd: String,
+    pub cwd: String,
+    pub code: Option<i32>,
+    pub ms: u64,
+    pub running: bool,
+    pub full: bool,
+    pub truncated: bool,
+}
 
 /// A pane to start. `cmd` runs through `sh -c`; `None` starts `$SHELL`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -66,6 +131,39 @@ pub enum ClientMsg {
     /// `Screen` (small, at once) and then its `History` (the replay that
     /// rebuilds the scrollback), instead of one `Snapshot`.
     SplitSnapshots,
+    /// From now on this connection gets a pane it watches as `Text` (its
+    /// screen as styled rows, at most every 80 ms and only when it changed)
+    /// instead of `Snapshot` and `Output`: a phone draws no terminal, so it
+    /// needs neither the bytes nor the replay (mobile REQ-21).
+    TextView,
+    /// From now on this connection gets the conversation of the agent in
+    /// `pane` as `Chat`: the last blocks at once, then each change.
+    ChatWatch {
+        pane: PaneId,
+    },
+    /// Ask which commands the Claude in `pane` offers after `/`: answered with `Commands`.
+    Commands {
+        pane: PaneId,
+    },
+    /// Stop getting `Chat` for `pane` (leaving the workspace does it too).
+    ChatUnwatch {
+        pane: PaneId,
+    },
+    /// From now on this connection gets what the shell in `pane` says of
+    /// itself as `Shell`: at once, then each change.
+    ShellWatch {
+        pane: PaneId,
+    },
+    /// Stop getting `Shell` for `pane` (leaving the workspace does it too).
+    ShellUnwatch {
+        pane: PaneId,
+    },
+    /// The last `count` rows of the pane's scrollback, as `TextHistory`,
+    /// oldest first (at most `SCROLLBACK`).
+    TextHistory {
+        pane: PaneId,
+        count: u32,
+    },
     /// Stop receiving output from every pane; the panes keep running.
     Detach,
     Input {
@@ -241,6 +339,9 @@ pub struct PaneInfo {
     /// The directory its foreground process is in.
     #[serde(default)]
     pub cwd: Option<String>,
+    /// What the user called it (`^␣ n`), the name a phone shows for the pane.
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 impl PaneInfo {
@@ -325,6 +426,78 @@ pub enum DaemonMsg {
     Output {
         pane: PaneId,
         bytes: Vec<u8>,
+    },
+    /// The pane's screen as styled rows, for a client that sent `TextView`.
+    /// It replaces the screen the client had. `cursor` is `None` when the
+    /// program hid it.
+    Text {
+        pane: PaneId,
+        cols: u16,
+        rows: u16,
+        alt: bool,
+        /// The program asked for application cursor keys: the arrows are `ESC O A`.
+        app_cursor: bool,
+        cursor: Option<(u16, u16)>,
+        lines: Vec<Vec<Run>>,
+    },
+    /// The conversation of the agent in `pane`: `reset` says these blocks are
+    /// all the client has (it starts or starts again), else they are the ones
+    /// that are new or changed. `title` is the name Claude gave the
+    /// conversation, when it is known or changed.
+    Chat {
+        pane: PaneId,
+        /// The pane runs a Claude session whose transcript is followed; false
+        /// for any other pane, which has no conversation to show.
+        known: bool,
+        /// The name the person gave the conversation in Claude (`/rename`).
+        name: Option<String>,
+        /// What Claude called the conversation itself.
+        title: Option<String>,
+        /// The turn in progress, when it is new or changed (REQ-99).
+        #[serde(default)]
+        turn: Option<ChatTurn>,
+        /// How many background tasks and subagents were started and have not ended, when it changed (REQ-100).
+        #[serde(default)]
+        bg: Option<u32>,
+        /// The plan Claude drafted for the conversation (its plan file), when it is new or changed:
+        /// what a phone shows over the whole pane when Claude asks to go ahead with it (REQ-98).
+        #[serde(default)]
+        plan: Option<String>,
+        /// Whether the agent is working now, when it changed: its pane printed in the last seconds. Claude
+        /// started by hand in a shell tells no hooks, so its state is read from the pane (REQ-99).
+        #[serde(default)]
+        working: Option<bool>,
+        reset: bool,
+        blocks: Vec<ChatBlock>,
+    },
+    /// The commands the Claude in `pane` offers after `/`, as the folder it runs in has them (mobile REQ-101).
+    Commands {
+        pane: PaneId,
+        items: Vec<CommandInfo>,
+    },
+    /// What the shell in `pane` says of itself, when it changes (and in full to a client that asks):
+    /// `known` is false while it has marked nothing (it is not one jw started), and the pane is then
+    /// plain text; `running` says a command runs, so what is typed goes to it; `input` is the line
+    /// being typed at the prompt, when it is new, which a phone's input shows as its own; `blocks`
+    /// are the commands that are new or changed, each with its output in `ShellOut`.
+    Shell {
+        pane: PaneId,
+        known: bool,
+        running: bool,
+        input: Option<String>,
+        blocks: Vec<ShellBlock>,
+    },
+    /// Output of the command that is block `block` of the shell in `pane`: bytes as the command
+    /// printed them, in order, to be added to what the client has of that block.
+    ShellOut {
+        pane: PaneId,
+        block: u32,
+        bytes: Vec<u8>,
+    },
+    /// The answer to `TextHistory`: rows of the scrollback, oldest first.
+    TextHistory {
+        pane: PaneId,
+        lines: Vec<Vec<Run>>,
     },
     /// The pane's screen is now `cols` by `rows`: a client's `Resize` changed it. It comes in
     /// order with the `Output` around it, so a client drawing the pane at its own size
@@ -474,6 +647,14 @@ impl Raw for DaemonMsg {
                 },
                 bytes,
             )),
+            DaemonMsg::ShellOut { pane, block, bytes } => Some((
+                DaemonMsg::ShellOut {
+                    pane: *pane,
+                    block: *block,
+                    bytes: Vec::new(),
+                },
+                bytes,
+            )),
             DaemonMsg::Snapshot {
                 pane,
                 role,
@@ -526,6 +707,7 @@ impl Raw for DaemonMsg {
 
     fn join_raw(&mut self, raw: Vec<u8>) {
         if let DaemonMsg::Output { bytes, .. }
+        | DaemonMsg::ShellOut { bytes, .. }
         | DaemonMsg::Snapshot { bytes, .. }
         | DaemonMsg::Screen { bytes, .. }
         | DaemonMsg::History { bytes, .. } = self

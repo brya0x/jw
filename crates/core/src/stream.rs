@@ -438,8 +438,8 @@ fn session_of(entry: &Entry) -> String {
 }
 
 /// Claude settings that report the agent's state to jw: working when it
-/// gets a prompt or runs a tool, waiting when it asks for something, idle
-/// when its turn ends. `jw hook` finds the pane by `JW_PANE_ID`.
+/// gets a prompt, runs a tool or has just run one (an approved permission
+/// ends there), waiting when it asks for something, idle when its turn ends. `jw hook` finds the pane by `JW_PANE_ID`.
 pub fn hooks() -> String {
     let exe = std::env::current_exe()
         .map(|p| p.display().to_string())
@@ -454,6 +454,7 @@ pub fn hooks() -> String {
     serde_json::json!({ "hooks": {
         "UserPromptSubmit": run("working"),
         "PreToolUse": run("working"),
+        "PostToolUse": run("working"),
         "Notification": run("waiting"),
         "Stop": run("idle"),
     } })

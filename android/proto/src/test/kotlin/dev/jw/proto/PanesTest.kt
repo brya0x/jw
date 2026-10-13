@@ -57,4 +57,99 @@ class PanesTest {
         assertEquals("""{"t":"Name","pane":9,"name":"dev"}""", (Panes.nameFrame(9, " dev ") as Frame.Json).text)
         assertEquals("""{"t":"Name","pane":9,"name":null}""", (Panes.nameFrame(9, "  ") as Frame.Json).text)
     }
+
+    @Test fun parsesAnAgentsConversationAsBlocks() {
+        val c = Panes.parse(
+            Frame.Json(
+                """{"t":"Chat","pane":7,"known":true,"title":"Arreglar el socket","reset":true,"blocks":[
+                {"i":0,"kind":"user","text":"hola","name":"","arg":"","result":null,"body":null,"error":false},
+                {"i":1,"kind":"tool","text":"","name":"Edit","arg":"a.rs","result":"+1 −2","body":"- x\n+ z","error":false}]}""",
+            ),
+        ) as PaneEvent.Chat
+        assertEquals(7, c.pane); assertTrue(c.known); assertTrue(c.reset)
+        assertEquals("Arreglar el socket", c.title)
+        assertEquals(listOf("user", "tool"), c.blocks.map { it.kind })
+        assertEquals("hola", c.blocks[0].text)
+        assertNull(c.blocks[0].result)
+        assertEquals("+1 −2", c.blocks[1].result)
+        assertEquals("- x\n+ z", c.blocks[1].body)
+        // A pane that is no Claude session: known false, no blocks.
+        val none = Panes.parse(Frame.Json("""{"t":"Chat","pane":8,"known":false,"title":null,"reset":true,"blocks":[]}""")) as PaneEvent.Chat
+        assertFalse(none.known); assertEquals(0, none.blocks.size)
+        // A block that is not an object, or has no number, refuses the message.
+        assertNull(Panes.parse(Frame.Json("""{"t":"Chat","pane":8,"known":true,"reset":false,"blocks":[1]}""")))
+        assertNull(Panes.parse(Frame.Json("""{"t":"Chat","pane":8,"known":true,"reset":false,"blocks":[{"kind":"user"}]}""")))
+    }
+
+    @Test fun theChatCarriesTheNameThePersonGaveIt() {
+        val c = Panes.parse(Frame.Json("""{"t":"Chat","pane":7,"known":true,"name":"mobile-fixes","title":"Arreglar","reset":true,"blocks":[]}""")) as PaneEvent.Chat
+        assertEquals("mobile-fixes", c.name); assertEquals("Arreglar", c.title)
+        assertNull((Panes.parse(Frame.Json("""{"t":"Chat","pane":7,"known":true,"name":null,"title":null,"reset":true,"blocks":[]}""")) as PaneEvent.Chat).name)
+    }
+
+    @Test fun theChatCarriesTheTurnTheTasksAndTheNewKindsOfBlock() {
+        val c = Panes.parse(
+            Frame.Json(
+                """{"t":"Chat","pane":7,"known":true,"turn":{"since":1791828000500,"tokens":42},"bg":2,"reset":false,"blocks":[
+                {"i":3,"kind":"notice","text":"Scout","name":"done","arg":"agent","result":"19 s","body":null,"error":false},
+                {"i":4,"kind":"queued","text":"y esto","name":"","arg":"","result":null,"body":null,"error":false}]}""",
+            ),
+        ) as PaneEvent.Chat
+        assertEquals(1791828000500L, c.turn?.since); assertEquals(42L, c.turn?.tokens); assertEquals(2, c.bg)
+        assertEquals(listOf("notice", "queued"), c.blocks.map { it.kind })
+        assertEquals("done", c.blocks[0].name); assertEquals("19 s", c.blocks[0].result)
+        // Neither says nothing: they are not news.
+        val none = Panes.parse(Frame.Json("""{"t":"Chat","pane":7,"known":true,"reset":false,"blocks":[]}""")) as PaneEvent.Chat
+        assertNull(none.turn); assertNull(none.bg); assertNull(none.plan)
+        val withPlan = Panes.parse(Frame.Json("""{"t":"Chat","pane":7,"known":true,"plan":"# Plan\n1. Daemon","reset":false,"blocks":[]}""")) as PaneEvent.Chat
+        assertEquals("# Plan\n1. Daemon", withPlan.plan)
+        val busy = Panes.parse(Frame.Json("""{"t":"Chat","pane":7,"known":true,"working":true,"reset":false,"blocks":[]}""")) as PaneEvent.Chat
+        assertEquals(true, busy.working); assertNull(none.working)
+    }
+
+    @Test fun parsesTheCommandsAClaudeOffersAfterASlash() {
+        val c = Panes.parse(
+            Frame.Json("""{"t":"Commands","pane":7,"items":[{"name":"/commit","desc":"Commits it all","kind":"user"},{"name":"/help","desc":"","kind":"claude"}]}"""),
+        ) as PaneEvent.Commands
+        assertEquals(7, c.pane)
+        assertEquals(listOf("/commit", "/help"), c.items.map { it.name })
+        assertEquals("Commits it all", c.items[0].desc); assertEquals("claude", c.items[1].kind)
+        // An item that is not an object, or has no name, refuses the message.
+        assertNull(Panes.parse(Frame.Json("""{"t":"Commands","pane":7,"items":[1]}""")))
+        assertNull(Panes.parse(Frame.Json("""{"t":"Commands","pane":7,"items":[{"desc":"x"}]}""")))
+        assertEquals("""{"t":"Commands","pane":7}""", (Panes.commandsFrame(7) as Frame.Json).text)
+    }
+
+    @Test fun parsesWhatAShellSaysOfItselfAndItsCommands() {
+        val s = Panes.parse(
+            Frame.Json(
+                """{"t":"Shell","pane":9,"known":true,"running":true,"input":"git st","blocks":[
+                {"i":0,"cmd":"cargo test","cwd":"/w","code":0,"ms":6200,"running":false,"full":false,"truncated":false},
+                {"i":1,"cmd":"nvim a","cwd":"/w","code":null,"ms":12000,"running":true,"full":true,"truncated":true}]}""",
+            ),
+        ) as PaneEvent.Shell
+        assertEquals(9, s.pane); assertTrue(s.known); assertTrue(s.running); assertEquals("git st", s.input)
+        assertEquals(listOf("cargo test", "nvim a"), s.blocks.map { it.cmd })
+        assertEquals(0, s.blocks[0].code); assertNull(s.blocks[1].code)
+        assertTrue(s.blocks[1].running); assertTrue(s.blocks[1].full); assertTrue(s.blocks[1].truncated)
+        assertEquals(6200L, s.blocks[0].ms)
+        // No line in the message: not news. A block with no number refuses the message.
+        assertNull((Panes.parse(Frame.Json("""{"t":"Shell","pane":9,"known":false,"running":false,"blocks":[]}""")) as PaneEvent.Shell).input)
+        assertNull(Panes.parse(Frame.Json("""{"t":"Shell","pane":9,"known":true,"running":false,"blocks":[{"cmd":"x"}]}""")))
+        assertEquals("""{"t":"ShellWatch","pane":9}""", (Panes.shellWatchFrame(9) as Frame.Json).text)
+        assertEquals("""{"t":"ShellUnwatch","pane":9}""", (Panes.shellUnwatchFrame(9) as Frame.Json).text)
+    }
+
+    @Test fun parsesTheBytesACommandPrinted() {
+        val o = Panes.parse(Frame.Raw("""{"t":"ShellOut","pane":9,"block":3,"bytes":[]}""", byteArrayOf(65, 66))) as PaneEvent.ShellOut
+        assertEquals(9, o.pane); assertEquals(3, o.block); assertArrayEquals(byteArrayOf(65, 66), o.bytes)
+        // Bytes with no number of block, or no bytes, are not an event.
+        assertNull(Panes.parse(Frame.Raw("""{"t":"ShellOut","pane":9,"bytes":[]}""", byteArrayOf(1))))
+        assertNull(Panes.parse(Frame.Json("""{"t":"ShellOut","pane":9,"block":3}""")))
+    }
+
+    @Test fun chatFramesNameThePane() {
+        assertEquals("""{"t":"ChatWatch","pane":9}""", (Panes.chatWatchFrame(9) as Frame.Json).text)
+        assertEquals("""{"t":"ChatUnwatch","pane":9}""", (Panes.chatUnwatchFrame(9) as Frame.Json).text)
+    }
 }

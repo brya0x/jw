@@ -31,9 +31,12 @@ use anyhow::{Context, Result, anyhow, bail};
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use serde::{Deserialize, Serialize};
 
+mod chat;
+mod commands;
 mod mobile;
 mod outbox;
 mod ring;
+mod shell;
 
 use jw_web::bridge::Look;
 use mobile::{Mobile, Tuning};
@@ -42,7 +45,7 @@ use ring::Ring;
 
 use crate::layout::{Dir, Tree};
 use crate::proto::{
-    AgentState, ClientMsg, DaemonMsg, NewPane, PROTOCOL, PaneId, PaneInfo, PaneLeaf, Theme,
+    AgentState, ClientMsg, DaemonMsg, NewPane, PROTOCOL, PaneId, PaneInfo, PaneLeaf, Run, Theme,
     is_view, pidfile, read_frame, write_frame,
 };
 
@@ -54,6 +57,15 @@ const MOBILE_STOP_WITHIN: Duration = Duration::from_secs(2);
 
 /// Lines of scrollback each pane keeps.
 const SCROLLBACK: usize = 10_000;
+
+/// How often a followed transcript is read for what it gained.
+const CHAT_EVERY: Duration = Duration::from_millis(300);
+
+/// How often a followed pane is asked which Claude session it runs.
+const RESOLVE_EVERY: Duration = Duration::from_secs(2);
+
+/// How often the phones watching a pane are sent its screen, when it changed.
+const TEXT_EVERY: Duration = Duration::from_millis(80);
 
 /// Runs the daemon on `socket` until the process is killed, or stopped by a
 /// signal (see `save_on_signal`). `look` is what a phone's `ready` carries
@@ -76,6 +88,27 @@ pub fn run(socket: &Path, look: Look) -> Result<()> {
         loop {
             thread::sleep(SAVE_EVERY);
             saver.save_scrollback();
+        }
+    });
+    let chatter = Arc::clone(&daemon);
+    thread::spawn(move || {
+        loop {
+            thread::sleep(CHAT_EVERY);
+            chatter.chat_poll();
+        }
+    });
+    let shell_watcher = Arc::clone(&daemon);
+    thread::spawn(move || {
+        loop {
+            thread::sleep(CHAT_EVERY);
+            shell_watcher.shell_poll();
+        }
+    });
+    let texter = Arc::clone(&daemon);
+    thread::spawn(move || {
+        loop {
+            thread::sleep(TEXT_EVERY);
+            texter.flush_text();
         }
     });
     for conn in listener.incoming() {
@@ -183,9 +216,95 @@ struct Daemon {
     theme: Arc<Mutex<Theme>>,
     next_pane: AtomicU64,
     next_client: AtomicU64,
+    /// The conversations of the agents a phone watches (mobile REQ-93). Its
+    /// lock is taken on its own: never with a pane's or a workspace's.
+    chats: Mutex<BTreeMap<PaneId, ChatWatch>>,
+    /// Who watches the commands of which pane's shell; its lock is taken on
+    /// its own, never with a pane's.
+    shells: Mutex<BTreeMap<PaneId, Vec<Sub>>>,
     /// Mobile: its own locks and threads, none shared with the panes
     /// (REQ-40).
     mobile: Mobile,
+}
+
+/// A transcript followed for the phones that watch it.
+struct ChatWatch {
+    /// The Claude session in the pane and the folder it runs in; `None`
+    /// while the pane has none (a shell that has not started claude yet).
+    session: Option<(String, PathBuf)>,
+    tail: chat::Tail,
+    /// Whether the pane was printing when the watchers were last told (REQ-99).
+    working: bool,
+    /// When the pane's session was last looked for.
+    resolved: Instant,
+    subs: Vec<Sub>,
+}
+
+impl ChatWatch {
+    fn new() -> Self {
+        Self {
+            session: None,
+            tail: chat::Tail::new(None),
+            working: false,
+            resolved: Instant::now(),
+            subs: Vec::new(),
+        }
+    }
+
+    /// Follows `session`: true when that is another conversation than the one
+    /// followed, which then starts from its beginning.
+    fn follow(&mut self, session: Option<(String, PathBuf)>) -> bool {
+        self.resolved = Instant::now();
+        if session == self.session {
+            return false;
+        }
+        self.session = session;
+        self.tail = chat::Tail::new(None);
+        true
+    }
+
+    /// What is new in the transcript, as a message for the watchers.
+    fn news(&mut self, pane: PaneId) -> Option<DaemonMsg> {
+        let (id, cwd) = self.session.as_ref()?;
+        self.tail.locate(id, cwd);
+        let news = self.tail.poll();
+        (news != chat::Changes::default()).then_some(DaemonMsg::Chat {
+            pane,
+            known: true,
+            name: news.name,
+            title: news.title,
+            turn: news.turn,
+            bg: news.bg,
+            plan: news.plan,
+            working: None,
+            reset: false,
+            blocks: news.blocks,
+        })
+    }
+
+    /// All the conversation held, for a client that starts or starts again.
+    fn all(&mut self, pane: PaneId) -> DaemonMsg {
+        if let Some((id, cwd)) = &self.session {
+            self.tail.locate(id, cwd);
+            self.tail.poll();
+        }
+        DaemonMsg::Chat {
+            pane,
+            known: self.session.is_some(),
+            name: self.tail.name().map(str::to_string),
+            title: self.tail.title().map(str::to_string),
+            turn: self.tail.turn(),
+            bg: Some(self.tail.bg()),
+            plan: self.tail.plan(),
+            working: Some(self.working),
+            reset: true,
+            blocks: self.tail.last(chat::FIRST),
+        }
+    }
+
+    fn tell(&mut self, msg: &DaemonMsg) {
+        self.subs.retain(|s| s.tx.send(msg.clone()).is_ok());
+    }
 }
 
 /// An open workspace: how its panes are laid out, and who watches it.
@@ -246,6 +365,10 @@ struct PaneState {
     ring: Ring,
     /// What its agent's hooks reported last.
     agent: Option<AgentState>,
+    /// Its screen changed since the last `Text` went to the phones watching it.
+    text_dirty: bool,
+    /// What its shell says of itself, when the shell is one of jw's (mobile REQ-95).
+    shell: shell::ShellState,
 }
 
 /// Catches what a pane's program says beyond its screen: the window title,
@@ -366,6 +489,8 @@ impl vt100::Callbacks for Titles {
 
 /// How recent output must be for a pane to count as busy.
 const BUSY: Duration = Duration::from_secs(2);
+/// What Claude's status line says while a turn runs, and only then (REQ-99): typing in its box, a pane that prints, or a tip do not say it.
+const INTERRUPT: &str = "esc to interrupt";
 
 /// One client's interest in one pane or workspace.
 struct Sub {
@@ -374,9 +499,35 @@ struct Sub {
 }
 
 impl PaneState {
+    /// Feeds what the pane printed to its screen. The marks its shell prints are taken out of
+    /// what the screen gets; what a command prints between its marks is also kept as its block's.
+    fn process(&mut self, bytes: &[u8]) {
+        for piece in self.shell.scan(bytes) {
+            match piece {
+                shell::Piece::Data(d) => {
+                    self.parser.process(&d);
+                    let alt = self.parser.screen().alternate_screen();
+                    self.shell.data(&d, alt);
+                }
+                shell::Piece::Start { cmd, cwd } => self.shell.start(cmd, cwd),
+                shell::Piece::End { status } => self.shell.end(status),
+                shell::Piece::Line { text } => self.shell.line(text),
+            }
+        }
+    }
+
     /// Sends to every subscriber, dropping the ones whose client went away.
+    /// `Output` goes to the clients that draw a terminal, `Text` to the ones
+    /// that asked for `TextView`.
     fn broadcast(&mut self, msg: &DaemonMsg) {
-        self.subs.retain(|s| s.tx.send(msg.clone()).is_ok());
+        let wants_text = match msg {
+            DaemonMsg::Output { .. } => Some(false),
+            DaemonMsg::Text { .. } => Some(true),
+            _ => None,
+        };
+        self.subs.retain(|s| {
+            wants_text.is_some_and(|w| s.tx.text() != w) || s.tx.send(msg.clone()).is_ok()
+        });
     }
 }
 
@@ -429,6 +580,120 @@ fn screen_bytes(st: &PaneState) -> Vec<u8> {
             .replay(screen.alternate_screen()),
     );
     bytes
+}
+
+/// What a shell says of itself, to one client: the state and the blocks, then the bytes of each
+/// block's output.
+fn send_shell(tx: &Tx, pane: PaneId, news: shell::News) -> Result<(), outbox::Closed> {
+    tx.send(DaemonMsg::Shell {
+        pane,
+        known: news.told.known,
+        running: news.told.running,
+        input: Some(news.told.input),
+        blocks: news.blocks,
+    })?;
+    for (block, bytes) in news.outs {
+        tx.send(DaemonMsg::ShellOut { pane, block, bytes })?;
+    }
+    Ok(())
+}
+
+/// The pane's screen as the styled rows a `TextView` client draws.
+/// Whether the last rows of the pane's screen say that Claude runs a turn (REQ-99).
+fn shows_interrupt(st: &PaneState) -> bool {
+    let screen = st.parser.screen();
+    let (rows, cols) = screen.size();
+    screen
+        .rows(0, cols)
+        .skip(usize::from(rows).saturating_sub(8))
+        .any(|r| r.to_lowercase().contains(INTERRUPT))
+}
+
+fn text_screen(id: PaneId, st: &PaneState) -> DaemonMsg {
+    let screen = st.parser.screen();
+    let (rows, cols) = screen.size();
+    DaemonMsg::Text {
+        pane: id,
+        cols,
+        rows,
+        alt: screen.alternate_screen(),
+        app_cursor: screen.application_cursor(),
+        cursor: (!screen.hide_cursor()).then(|| screen.cursor_position()),
+        lines: (0..rows).map(|r| runs_of(screen, r, cols)).collect(),
+    }
+}
+
+/// The last `count` rows of the scrollback, oldest first. The screen is moved
+/// up through the history a page at a time and put back.
+fn history_rows(parser: &mut vt100::Parser<Titles>, count: usize) -> Vec<Vec<Run>> {
+    let screen = parser.screen_mut();
+    screen.set_scrollback(usize::MAX);
+    let total = screen.scrollback();
+    let (rows, cols) = screen.size();
+    let mut at = total.min(count);
+    let mut out = Vec::with_capacity(at);
+    while at > 0 {
+        screen.set_scrollback(at);
+        let take = at.min(rows as usize);
+        for r in 0..take {
+            out.push(runs_of(screen, r as u16, cols));
+        }
+        at -= take;
+    }
+    screen.set_scrollback(0);
+    out
+}
+
+/// One colour in the wire's encoding (see `proto::Run`).
+fn color_code(c: vt100::Color) -> u32 {
+    match c {
+        vt100::Color::Default => 0,
+        vt100::Color::Idx(i) => 1 << 24 | u32::from(i),
+        vt100::Color::Rgb(r, g, b) => {
+            2 << 24 | u32::from(r) << 16 | u32::from(g) << 8 | u32::from(b)
+        }
+    }
+}
+
+/// Row `row` of the visible screen as runs of one style, its blank end left off.
+fn runs_of(screen: &vt100::Screen, row: u16, cols: u16) -> Vec<Run> {
+    let mut runs: Vec<Run> = Vec::new();
+    for col in 0..cols {
+        let Some(cell) = screen.cell(row, col) else {
+            break;
+        };
+        if cell.is_wide_continuation() {
+            continue;
+        }
+        let attrs = u8::from(cell.bold())
+            | u8::from(cell.dim()) << 1
+            | u8::from(cell.italic()) << 2
+            | u8::from(cell.underline()) << 3
+            | u8::from(cell.inverse()) << 4;
+        let (fg, bg) = (color_code(cell.fgcolor()), color_code(cell.bgcolor()));
+        let text = if cell.has_contents() {
+            cell.contents()
+        } else {
+            " "
+        };
+        match runs.last_mut() {
+            Some(r) if (r.2, r.3, r.4) == (fg, bg, attrs) => r.1.push_str(text),
+            _ => runs.push((col, text.to_string(), fg, bg, attrs)),
+        }
+    }
+    // A blank end that draws nothing (no background, underline or inverse).
+    while let Some(last) = runs.last_mut() {
+        if last.3 != 0 || last.4 & 0b1_1000 != 0 {
+            break;
+        }
+        let kept = last.1.trim_end_matches(' ').len();
+        last.1.truncate(kept);
+        if !last.1.is_empty() {
+            break;
+        }
+        runs.pop();
+    }
+    runs
 }
 
 /// A snapshot in two: the `Screen` to draw at once and the `History` to
@@ -508,6 +773,8 @@ impl Daemon {
             theme: Arc::default(),
             next_pane: AtomicU64::new(0),
             next_client: AtomicU64::new(0),
+            chats: Mutex::default(),
+            shells: Mutex::default(),
             mobile,
         }
     }
@@ -562,6 +829,35 @@ impl Daemon {
                 let _ = tx.send(DaemonMsg::Hello { protocol: PROTOCOL });
             }
             ClientMsg::SplitSnapshots => tx.set_split(),
+            ClientMsg::TextView => tx.set_text(),
+            ClientMsg::ChatWatch { pane } => self.chat_watch(client, tx, pane)?,
+            ClientMsg::Commands { pane } => {
+                let p = self.pane(pane)?;
+                let cwd = leader_of(&p).and_then(process_cwd);
+                let items = commands::list(cwd.as_deref().map(Path::new));
+                let _ = tx.send(DaemonMsg::Commands { pane, items });
+            }
+            ClientMsg::ShellWatch { pane } => self.shell_watch(client, tx, pane)?,
+            ClientMsg::ShellUnwatch { pane } => {
+                if let Some(subs) = lock(&self.shells).get_mut(&pane) {
+                    subs.retain(|s| s.client != client);
+                }
+            }
+            ClientMsg::ChatUnwatch { pane } => {
+                if let Some(w) = lock(&self.chats).get_mut(&pane) {
+                    w.subs.retain(|s| s.client != client);
+                }
+            }
+            ClientMsg::TextHistory { pane, count } => {
+                let pane_id = pane;
+                let pane = self.pane(pane)?;
+                let mut st = lock(&pane.state);
+                let lines = history_rows(&mut st.parser, (count as usize).min(SCROLLBACK));
+                let _ = tx.send(DaemonMsg::TextHistory {
+                    pane: pane_id,
+                    lines,
+                });
+            }
             ClientMsg::MobileWatch => self.mobile.watch(client, tx),
             ClientMsg::MobileStart { read_only } => self.mobile.start(read_only, tx),
             ClientMsg::MobileStop => self.mobile.stop(Duration::ZERO),
@@ -596,6 +892,11 @@ impl Daemon {
                     .iter()
                     .map(|(id, p)| (*id, Arc::clone(p)))
                     .collect();
+                let names: std::collections::HashMap<PaneId, String> = lock(&self.workspaces)
+                    .values()
+                    .flat_map(|ws| ws.tree.leaves())
+                    .filter_map(|l| Some((l.id, l.name.clone()?)))
+                    .collect();
                 let panes = all
                     .iter()
                     .map(|(id, p)| {
@@ -620,6 +921,7 @@ impl Daemon {
                             bell,
                             agent,
                             cwd,
+                            name: names.get(id).cloned(),
                         }
                     })
                     .collect();
@@ -638,7 +940,15 @@ impl Daemon {
             ClientMsg::Theme(theme) => self.set_theme(theme),
             ClientMsg::Input { pane, bytes } => {
                 let pane = self.pane(pane)?;
-                lock(&pane.state).bell = false;
+                {
+                    let mut st = lock(&pane.state);
+                    st.bell = false;
+                    // The person answered what the agent waits for (from the TUI or a
+                    // phone): say so now, the agent's own hooks correct it later.
+                    if st.agent == Some(AgentState::Waiting) {
+                        st.agent = Some(answered(&bytes));
+                    }
+                }
                 let mut io = lock(&pane.io);
                 io.writer.write_all(&bytes)?;
                 io.writer.flush()?;
@@ -653,6 +963,7 @@ impl Daemon {
                 let mut st = lock(&pane.state);
                 if st.parser.screen().size() != (rows, cols) {
                     st.parser.screen_mut().set_size(rows, cols);
+                    st.text_dirty = true;
                     st.broadcast(&DaemonMsg::Resized {
                         pane: id,
                         cols,
@@ -772,7 +1083,9 @@ impl Daemon {
     fn watch(&self, client: u64, tx: &Tx, id: PaneId) {
         let Ok(pane) = self.pane(id) else { return };
         let mut st = lock(&pane.state);
-        if tx.split() {
+        if tx.text() {
+            let _ = tx.send(text_screen(id, &st));
+        } else if tx.split() {
             for m in split_snapshot(id, &pane, &st) {
                 let _ = tx.send(m);
             }
@@ -1245,6 +1558,157 @@ impl Daemon {
         self.next_pane.fetch_add(1, Ordering::Relaxed) + 1
     }
 
+    /// Starts `client` on the conversation of the agent in `id`: all it has now,
+    /// then each change (`chat_poll`). A pane that runs no Claude session yet is
+    /// told so, and again when it does.
+    fn chat_watch(&self, client: u64, tx: &Tx, id: PaneId) -> Result<()> {
+        let pane = self.pane(id)?;
+        // `ps` and the pane's terminal are asked with no lock held.
+        let session = claude_session(&pane);
+        let mut chats = lock(&self.chats);
+        let w = chats.entry(id).or_insert_with(ChatWatch::new);
+        if w.follow(session) {
+            let msg = w.all(id);
+            w.tell(&msg);
+        } else if let Some(msg) = w.news(id) {
+            w.tell(&msg);
+        }
+        let _ = tx.send(w.all(id));
+        subscribe(&mut w.subs, client, tx);
+        Ok(())
+    }
+
+    /// Starts `client` on what the shell in `id` says of itself and its commands: all of it now,
+    /// then each change (`shell_poll`).
+    fn shell_watch(&self, client: u64, tx: &Tx, id: PaneId) -> Result<()> {
+        let pane = self.pane(id)?;
+        let news = lock(&pane.state).shell.replay();
+        let _ = send_shell(tx, id, news);
+        subscribe(lock(&self.shells).entry(id).or_default(), client, tx);
+        Ok(())
+    }
+
+    /// Tells the watchers of each shell what changed in it and what its commands printed; a pane
+    /// with no watcher is left alone.
+    fn shell_poll(&self) {
+        let watched: Vec<PaneId> = {
+            let mut shells = lock(&self.shells);
+            shells.retain(|_, subs| !subs.is_empty());
+            shells.keys().copied().collect()
+        };
+        for id in watched {
+            let Ok(pane) = self.pane(id) else { continue };
+            let news = lock(&pane.state).shell.news();
+            let Some(news) = news else { continue };
+            if let Some(subs) = lock(&self.shells).get_mut(&id) {
+                subs.retain(|s| send_shell(&s.tx, id, news.clone()).is_ok());
+            }
+        }
+    }
+
+    /// Looks again for each followed pane's session now and then (a Claude
+    /// started later, another in the same pane), reads what the transcripts
+    /// gained and tells their watchers; one nobody watches any more is let go.
+    fn chat_poll(&self) {
+        let due: Vec<PaneId> = lock(&self.chats)
+            .iter()
+            .filter(|(_, w)| w.resolved.elapsed() >= RESOLVE_EVERY)
+            .map(|(id, _)| *id)
+            .collect();
+        let found: Vec<_> = due
+            .into_iter()
+            .map(|id| (id, self.pane(id).ok().and_then(|p| claude_session(&p))))
+            .collect();
+        // Which watched panes print now, one pane's lock at a time and never with `chats`.
+        let ids: Vec<PaneId> = lock(&self.chats).keys().copied().collect();
+        let printing: BTreeMap<PaneId, bool> = ids
+            .into_iter()
+            .map(|id| {
+                let now = self
+                    .pane(id)
+                    .is_ok_and(|p| shows_interrupt(&lock(&p.state)));
+                (id, now)
+            })
+            .collect();
+        let mut chats = lock(&self.chats);
+        for (id, session) in found {
+            if let Some(w) = chats.get_mut(&id)
+                && w.follow(session)
+            {
+                let msg = w.all(id);
+                w.tell(&msg);
+            }
+        }
+        chats.retain(|id, w| {
+            if let Some(msg) = w.news(*id) {
+                w.tell(&msg);
+            }
+            if let Some(&now) = printing.get(id)
+                && now != w.working
+            {
+                w.working = now;
+                w.tell(&DaemonMsg::Chat {
+                    pane: *id,
+                    known: w.session.is_some(),
+                    name: None,
+                    title: None,
+                    turn: None,
+                    bg: None,
+                    plan: None,
+                    working: Some(now),
+                    reset: false,
+                    blocks: Vec::new(),
+                });
+            }
+            !w.subs.is_empty()
+        });
+    }
+
+    /// Sends each pane's screen to the clients that watch it as text, when it
+    /// changed since the last time. Every pane is looked at, one lock at a time.
+    fn flush_text(&self) {
+        let panes: Vec<(PaneId, Arc<Pane>)> = lock(&self.panes)
+            .iter()
+            .map(|(id, p)| (*id, Arc::clone(p)))
+            .collect();
+        for (id, pane) in panes {
+            let mut st = lock(&pane.state);
+            if !st.text_dirty || !st.subs.iter().any(|s| s.tx.text()) {
+                st.text_dirty = false;
+                continue;
+            }
+            st.text_dirty = false;
+            let msg = text_screen(id, &st);
+            st.broadcast(&msg);
+        }
+    }
+
+    /// Points a zsh at jw's files, which read the user's own and then mark each
+    /// command; any other shell, or `JW_SHELL_BLOCKS=0`, is left as it is.
+    fn mark_commands(&self, builder: &mut CommandBuilder, env: &BTreeMap<String, String>) {
+        if std::env::var("JW_SHELL_BLOCKS").is_ok_and(|v| v == "0") {
+            return;
+        }
+        let get = |k: &str| env.get(k).cloned().or_else(|| std::env::var(k).ok());
+        let (Some(shell), Some(home)) = (get("SHELL"), get("HOME")) else {
+            return;
+        };
+        let dir = proto::socket_path()
+            .parent()
+            .map(|p| p.join("shell").join("zsh"));
+        let Some(dir) = dir else { return };
+        let zdotdir = get("ZDOTDIR");
+        let Some(vars) = shell::prepare(&shell, &dir, zdotdir.as_deref(), &home) else {
+            return;
+        };
+        if shell::install(&dir).is_err() {
+            return;
+        }
+        for (k, v) in vars {
+            builder.env(k, v);
+        }
+    }
+
     fn pane(&self, id: PaneId) -> Result<Arc<Pane>> {
         lock(&self.panes)
             .get(&id)
@@ -1261,6 +1725,12 @@ impl Daemon {
     }
 
     fn unsubscribe(&self, client: u64) {
+        for w in lock(&self.chats).values_mut() {
+            w.subs.retain(|s| s.client != client);
+        }
+        for subs in lock(&self.shells).values_mut() {
+            subs.retain(|s| s.client != client);
+        }
         for ws in lock(&self.workspaces).values_mut() {
             ws.subs.retain(|s| s.client != client);
         }
@@ -1318,6 +1788,10 @@ impl Daemon {
             }
             None => CommandBuilder::new_default_prog(),
         };
+        // A shell that jw starts for a pane marks each command (mobile REQ-95).
+        if cmd.is_none() && role == "shell" {
+            self.mark_commands(&mut builder, &env);
+        }
         builder.cwd(&cwd);
         builder.env("TERM", "xterm-256color");
         // REQ-88: what programs that only read the environment go by.
@@ -1364,6 +1838,8 @@ impl Daemon {
                 bell: false,
                 ring: Ring::default(),
                 agent: None,
+                text_dirty: false,
+                shell: shell::ShellState::default(),
             }),
         });
         if let Some(mut bytes) = history {
@@ -1400,9 +1876,10 @@ impl Daemon {
                     Ok(0) => break,
                     Ok(n) => {
                         let mut st = lock(&pane.state);
-                        st.parser.process(&buf[..n]);
+                        st.process(&buf[..n]);
                         st.ring.push(&buf[..n]);
                         st.last_output = Instant::now();
+                        st.text_dirty = true;
                         st.broadcast(&DaemonMsg::Output {
                             pane: id,
                             bytes: buf[..n].to_vec(),
@@ -1441,6 +1918,18 @@ impl Daemon {
             st.broadcast(&DaemonMsg::Exited { pane: id, status });
         });
         Ok(id)
+    }
+}
+
+/// What an agent that was `Waiting` is after `bytes` reach it: an Esc alone
+/// refuses, so its turn is over; a key or text answers, so it goes on; a
+/// terminal's own report (focus, mouse, cursor: they start `ESC [`, `ESC ]`
+/// or `ESC O`) answers nothing.
+fn answered(bytes: &[u8]) -> AgentState {
+    match bytes {
+        [] | [0x1b, b'[' | b']' | b'O', ..] => AgentState::Waiting,
+        [0x1b] => AgentState::Idle,
+        _ => AgentState::Working,
     }
 }
 
@@ -1505,6 +1994,66 @@ fn named_agent(id: PaneId, panes: Vec<(PaneId, Arc<Pane>)>) -> Result<(PaneId, A
         "pane {id} is not an agent (it runs {})",
         program.as_deref().unwrap_or("no program")
     )
+}
+
+/// The Claude session in a pane and its folder: an agent jw started carries
+/// it in its command; a claude started by hand in a shell is found in the
+/// foreground, by its own arguments or else by the newest transcript of its
+/// folder written since it started.
+fn claude_session(pane: &Pane) -> Option<(String, PathBuf)> {
+    let (id, cwd) = {
+        let started = lock(&pane.started);
+        let id = [started.cmd.as_deref(), started.resume.as_deref()]
+            .into_iter()
+            .flatten()
+            .find_map(chat::session_id);
+        (id, started.cwd.clone())
+    };
+    if let Some(id) = id {
+        return Some((id, cwd));
+    }
+    let pid = leader_of(pane)?;
+    if process_name(pid)? != "claude" {
+        return None;
+    }
+    let cwd = PathBuf::from(process_cwd(pid)?);
+    if let Some(id) = process_args(pid).as_deref().and_then(chat::session_id) {
+        return Some((id, cwd));
+    }
+    let since =
+        std::time::SystemTime::now().checked_sub(process_age(pid)? + Duration::from_secs(2))?;
+    chat::latest_since(&cwd, since).map(|id| (id, cwd))
+}
+
+/// The command line of a process (`ps -o args=`).
+fn process_args(pid: libc::pid_t) -> Option<String> {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "args=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    let args = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!args.is_empty()).then_some(args)
+}
+
+/// How long a process has run (`ps -o etime=`: `[[dd-]hh:]mm:ss`).
+fn process_age(pid: libc::pid_t) -> Option<Duration> {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "etime=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    parse_etime(String::from_utf8_lossy(&out.stdout).trim())
+}
+
+fn parse_etime(s: &str) -> Option<Duration> {
+    let (days, rest) = match s.split_once('-') {
+        Some((d, r)) => (d.parse::<u64>().ok()?, r),
+        None => (0, s),
+    };
+    let mut secs = 0;
+    for part in rest.split(':') {
+        secs = secs * 60 + part.parse::<u64>().ok()?;
+    }
+    Some(Duration::from_secs(days * 86_400 + secs))
 }
 
 /// The command name of a process (`ps -o comm=`), without its directory.
@@ -1611,6 +2160,32 @@ mod tests {
             p.process(c);
         }
         std::mem::take(p.callbacks_mut())
+    }
+
+    #[test]
+    fn a_processs_age_is_read_from_etime() {
+        assert_eq!(parse_etime("05:07"), Some(Duration::from_secs(307)));
+        assert_eq!(parse_etime("01:05:07"), Some(Duration::from_secs(3907)));
+        assert_eq!(
+            parse_etime("2-01:05:07"),
+            Some(Duration::from_secs(2 * 86_400 + 3907))
+        );
+        assert_eq!(parse_etime("soon"), None);
+    }
+
+    #[test]
+    fn an_answer_ends_the_wait_and_a_terminal_report_does_not() {
+        assert_eq!(answered(b"\r"), AgentState::Working);
+        assert_eq!(answered(b"y"), AgentState::Working);
+        assert_eq!(answered(b"\x1b"), AgentState::Idle);
+        for report in [
+            &b"\x1b[I"[..],
+            b"\x1b[<0;1;1M",
+            b"\x1b]11;rgb:0/0/0\x07",
+            b"",
+        ] {
+            assert_eq!(answered(report), AgentState::Waiting, "{report:?}");
+        }
     }
 
     #[test]

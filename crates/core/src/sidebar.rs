@@ -97,9 +97,12 @@ fn folders_path(state: &Path, session: &str) -> std::path::PathBuf {
 }
 
 /// Every session's name, by name with `main` first, read without side
-/// effects. `main` is there even before its directory is.
+/// effects. `main` is there before `sessions/` is (the old jw's files are
+/// `main`'s), and after it only if its directory is: a PC with sessions and
+/// no `main` has none.
 pub fn names(state: &Path) -> Vec<String> {
-    let mut out: Vec<String> = std::fs::read_dir(state.join("sessions"))
+    let root = state.join("sessions");
+    let mut out: Vec<String> = std::fs::read_dir(&root)
         .into_iter()
         .flatten()
         .flatten()
@@ -108,8 +111,24 @@ pub fn names(state: &Path) -> Vec<String> {
         .filter(|n| n != session::MAIN && session::valid(n))
         .collect();
     out.sort();
-    out.insert(0, session::MAIN.to_string());
+    if !root.exists() || root.join(session::MAIN).is_dir() {
+        out.insert(0, session::MAIN.to_string());
+    }
     out
+}
+
+/// The session `jw` with no name opens, the one the TUI last used, read without
+/// side effects (`session::last` makes `sessions/`): what a phone is shown
+/// when it names none. A name that is no session any more is passed over for
+/// the first one there is.
+pub fn last(state: &Path) -> String {
+    let names = names(state);
+    std::fs::read_to_string(state.join("sessions").join("last"))
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| names.contains(s))
+        .or_else(|| names.into_iter().next())
+        .unwrap_or_else(|| session::MAIN.to_string())
 }
 
 /// The rows of `session` from the files under `state` and the registry at
@@ -622,6 +641,40 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn main_is_listed_only_when_it_exists() {
+        let dir = std::env::temp_dir().join(format!("jw-nomain-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        // Before `sessions/` exists, the old jw's files are `main`'s.
+        assert_eq!(names(&dir), ["main"]);
+        // Sessions and no `main`: the phone is not told of one.
+        std::fs::create_dir_all(dir.join("sessions").join("work")).unwrap();
+        assert_eq!(names(&dir), ["work"]);
+        std::fs::create_dir_all(dir.join("sessions").join("main")).unwrap();
+        assert_eq!(names(&dir), ["main", "work"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_phone_that_names_no_session_gets_the_last_one_used() {
+        let dir = std::env::temp_dir().join(format!("jw-last-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        // Nothing yet: `main`, which is there before `sessions/` is.
+        assert_eq!(last(&dir), "main");
+        for n in ["overlord", "work"] {
+            std::fs::create_dir_all(dir.join("sessions").join(n)).unwrap();
+        }
+        // No `main` and no `last` file: the first there is.
+        assert_eq!(last(&dir), "overlord");
+        std::fs::write(dir.join("sessions").join("last"), "work\n").unwrap();
+        assert_eq!(last(&dir), "work");
+        // A `last` that was removed is passed over, and nothing was made or moved.
+        std::fs::write(dir.join("sessions").join("last"), "gone\n").unwrap();
+        assert_eq!(last(&dir), "overlord");
+        assert_eq!(std::fs::read_dir(dir.join("sessions")).unwrap().count(), 3);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

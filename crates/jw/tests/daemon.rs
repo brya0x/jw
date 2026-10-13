@@ -23,13 +23,30 @@ struct Daemon {
 
 impl Daemon {
     fn start() -> Self {
+        Self::start_with(None)
+    }
+
+    /// A daemon whose Claude config folder, where transcripts are, is `config`.
+    fn start_with(config: Option<&Path>) -> Self {
+        Self::start_in(config, &[])
+    }
+
+    /// The same, with more of the environment its panes' shells get.
+    fn start_in(config: Option<&Path>, env: &[(&str, &Path)]) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let socket = dir.path().join("jw.sock");
-        let child = Command::new(EXE)
-            .arg("daemon")
+        let mut cmd = Command::new(EXE);
+        // A ZDOTDIR of the shell the tests run from is not the tests'.
+        cmd.arg("daemon")
             .env("JW_SOCKET", &socket)
-            .spawn()
-            .unwrap();
+            .env_remove("ZDOTDIR");
+        if let Some(config) = config {
+            cmd.env("CLAUDE_CONFIG_DIR", config);
+        }
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        let child = cmd.spawn().unwrap();
         let deadline = Instant::now() + TIMEOUT;
         while Client::connect(&socket).is_err() {
             assert!(Instant::now() < deadline, "daemon never listened");
@@ -84,9 +101,13 @@ fn spawn(c: &mut Client, stream: &str, cmd: &str, cols: u16, rows: u16) -> PaneI
         rows,
     })
     .unwrap();
-    match recv(c) {
-        DaemonMsg::Spawned { pane } => pane,
-        other => panic!("want Spawned, got {other:?}"),
+    // What an earlier pane of this client prints may come before `Spawned`.
+    loop {
+        match recv(c) {
+            DaemonMsg::Spawned { pane } => return pane,
+            DaemonMsg::Output { .. } | DaemonMsg::Title { .. } | DaemonMsg::Text { .. } => {}
+            other => panic!("want Spawned, got {other:?}"),
+        }
     }
 }
 
@@ -258,6 +279,7 @@ fn list_reports_every_pane() {
         bell: false,
         agent: None,
         cwd: None,
+        name: None,
     };
     // Every pane says where it is; whether they printed in the last 2 s
     // depends on timing.
@@ -1901,4 +1923,524 @@ fn jw_session_rm_closes_its_panes_and_forgets_it_but_keeps_the_checkouts() {
     assert!(listed.iter().all(|p| p.stream != dev_stream));
     assert!(listed.iter().any(|p| p.stream == main_stream));
     assert!(sessions.join("main").is_dir());
+}
+
+/// The text of a row of runs.
+fn row_text(row: &[jw_proto::proto::Run]) -> String {
+    row.iter().map(|r| r.1.as_str()).collect()
+}
+
+#[test]
+fn a_text_view_client_gets_the_screen_as_styled_rows_and_no_output() {
+    let d = Daemon::start();
+    let mut c = d.client();
+    c.send(&ClientMsg::TextView).unwrap();
+    let pane = spawn(
+        &mut c,
+        "s",
+        "printf 'hello \\033[31mred\\033[0m\\n'; sleep 30",
+        40,
+        5,
+    );
+    let deadline = Instant::now() + TIMEOUT;
+    let lines = loop {
+        assert!(Instant::now() < deadline, "no screen with the text");
+        match recv(&mut c) {
+            DaemonMsg::Text {
+                pane: p,
+                cols,
+                rows,
+                lines,
+                ..
+            } if p == pane && row_text(&lines[0]).contains("hello red") => {
+                assert_eq!((cols, rows, lines.len()), (40, 5, 5));
+                break lines;
+            }
+            DaemonMsg::Output { .. } => panic!("a text client got terminal output"),
+            _ => {}
+        }
+    };
+    // `red` is in palette colour 1; the blank end of the row is not sent.
+    let red = lines[0].iter().find(|r| r.1.starts_with("red")).unwrap();
+    assert_eq!((red.0, red.2), (6, 1 << 24 | 1));
+    assert_eq!(row_text(&lines[0]), "hello red");
+    assert!(lines[4].is_empty());
+}
+
+#[test]
+fn a_text_view_client_asks_for_the_history_and_gets_the_last_rows_oldest_first() {
+    let d = Daemon::start();
+    let mut c = d.client();
+    c.send(&ClientMsg::TextView).unwrap();
+    let pane = spawn(&mut c, "s", "seq 1 60; sleep 30", 20, 5);
+    // Wait until the last number is on the screen, and note which row it starts at.
+    let deadline = Instant::now() + TIMEOUT;
+    let first_on_screen: u32 = loop {
+        assert!(Instant::now() < deadline, "seq never finished");
+        if let DaemonMsg::Text { lines, .. } = recv(&mut c)
+            && lines.iter().any(|l| row_text(l) == "60")
+        {
+            break row_text(&lines[0]).parse().unwrap();
+        }
+    };
+    c.send(&ClientMsg::TextHistory { pane, count: 10 }).unwrap();
+    let deadline = Instant::now() + TIMEOUT;
+    let lines = loop {
+        assert!(Instant::now() < deadline, "no history");
+        if let DaemonMsg::TextHistory { pane: p, lines } = recv(&mut c)
+            && p == pane
+        {
+            break lines;
+        }
+    };
+    // The rows just above the screen, oldest first.
+    let got: Vec<u32> = lines.iter().map(|l| row_text(l).parse().unwrap()).collect();
+    let want: Vec<u32> = (first_on_screen - 10..first_on_screen).collect();
+    assert_eq!(got, want);
+}
+
+#[test]
+fn a_client_that_draws_a_terminal_still_gets_output_while_another_watches_text() {
+    let d = Daemon::start();
+    let mut text = d.client();
+    text.send(&ClientMsg::TextView).unwrap();
+    let pane = spawn(&mut text, "s", "cat", 40, 5);
+    let mut tui = d.client();
+    tui.send(&ClientMsg::Attach { stream: "s".into() }).unwrap();
+    text.send(&ClientMsg::Input {
+        pane,
+        bytes: b"ping\n".to_vec(),
+    })
+    .unwrap();
+    let deadline = Instant::now() + TIMEOUT;
+    let (mut saw_output, mut saw_text) = (false, false);
+    while !(saw_output && saw_text) {
+        assert!(
+            Instant::now() < deadline,
+            "output {saw_output} text {saw_text}"
+        );
+        if let Ok(Some(DaemonMsg::Output { bytes, .. })) = tui.recv() {
+            saw_output |= String::from_utf8_lossy(&bytes).contains("ping");
+        }
+        text.set_read_timeout(Some(Duration::from_millis(200)))
+            .unwrap();
+        if let Ok(Some(DaemonMsg::Text { lines, .. })) = text.recv() {
+            saw_text |= lines.iter().any(|l| row_text(l).contains("ping"));
+        }
+    }
+}
+
+#[test]
+fn a_phone_watching_an_agent_gets_its_transcript_as_blocks_and_then_each_change() {
+    use std::io::Write;
+    let config = tempfile::tempdir().unwrap();
+    let id = "0f6bd1c2-1111-4222-8333-444455556666";
+    let folder = config.path().join("projects/-some-where");
+    std::fs::create_dir_all(&folder).unwrap();
+    let file = folder.join(format!("{id}.jsonl"));
+    std::fs::write(
+        &file,
+        concat!(
+            "{\"type\":\"ai-title\",\"aiTitle\":\"Arreglar el socket\"}\n",
+            "{\"type\":\"custom-title\",\"customTitle\":\"mobile-fixes\"}\n",
+            "{\"type\":\"user\",\"message\":{\"content\":\"hola\"}}\n",
+            "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"listo\"}]}}\n",
+        ),
+    )
+    .unwrap();
+    let d = Daemon::start_with(Some(config.path()));
+    let mut c = d.client();
+    let agent = spawn(
+        &mut c,
+        "s",
+        &format!("echo --session-id {id}; sleep 30"),
+        40,
+        5,
+    );
+    let shell = spawn(&mut c, "s", "sleep 30", 40, 5);
+
+    // All of it at once, with the title Claude gave the conversation.
+    c.send(&ClientMsg::ChatWatch { pane: agent }).unwrap();
+    let DaemonMsg::Chat {
+        known,
+        name,
+        title,
+        reset,
+        blocks,
+        ..
+    } = next_chat(&mut c, agent)
+    else {
+        unreachable!()
+    };
+    assert!(known && reset);
+    assert_eq!(name.as_deref(), Some("mobile-fixes"));
+    assert_eq!(title.as_deref(), Some("Arreglar el socket"));
+    let seen: Vec<(u32, &str, &str)> = blocks
+        .iter()
+        .map(|b| (b.i, b.kind.as_str(), b.text.as_str()))
+        .collect();
+    assert_eq!(seen, [(0, "user", "hola"), (1, "text", "listo")]);
+
+    // Then only what is new, as Claude appends it.
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&file)
+        .unwrap();
+    writeln!(
+        f,
+        "{{\"type\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"Bash\",\"input\":{{\"command\":\"ls\"}}}}]}}}}"
+    )
+    .unwrap();
+    let DaemonMsg::Chat { reset, blocks, .. } = next_chat(&mut c, agent) else {
+        unreachable!()
+    };
+    assert!(!reset);
+    assert_eq!(blocks.len(), 1);
+    assert_eq!((blocks[0].i, blocks[0].name.as_str()), (2, "Bash"));
+
+    // A pane that is no Claude session has no conversation.
+    c.send(&ClientMsg::ChatWatch { pane: shell }).unwrap();
+    let DaemonMsg::Chat { known, blocks, .. } = next_chat(&mut c, shell) else {
+        unreachable!()
+    };
+    assert!(!known && blocks.is_empty());
+}
+
+#[test]
+fn a_chat_says_when_its_status_line_says_the_agent_works_and_when_it_stops() {
+    let config = tempfile::tempdir().unwrap();
+    let id = "0f6bd1c2-3333-4222-8333-444455556666";
+    let folder = config.path().join("projects").join("-w");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(
+        folder.join(format!("{id}.jsonl")),
+        "{\"type\":\"user\",\"message\":{\"content\":\"hola\"}}\n",
+    )
+    .unwrap();
+    let d = Daemon::start_with(Some(config.path()));
+    let mut c = d.client();
+    // Prints for a while without saying `esc to interrupt` (typing in its box, a tip), then says it, then clears the screen.
+    let agent = spawn(
+        &mut c,
+        "s",
+        &format!(
+            "echo --session-id {id}; for i in 1 2 3 4 5 6; do echo typing; sleep 0.3; done; echo 'esc to interrupt'; sleep 3; printf '\\033[2J\\033[H'; sleep 30"
+        ),
+        40,
+        5,
+    );
+    c.send(&ClientMsg::ChatWatch { pane: agent }).unwrap();
+    let mut said = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while said.last() != Some(&false) || !said.contains(&true) {
+        assert!(Instant::now() < deadline, "working said {said:?}");
+        if let DaemonMsg::Chat {
+            working: Some(w), ..
+        } = next_chat(&mut c, agent)
+            && said.last() != Some(&w)
+        {
+            said.push(w);
+        }
+    }
+    // Quiet while it only prints, working while the status line says so, then quiet again.
+    assert_eq!(said.first(), Some(&false));
+    assert_eq!(said.last(), Some(&false));
+    assert!(said.contains(&true), "{said:?}");
+}
+
+#[test]
+fn the_commands_a_claude_offers_after_a_slash_are_listed_from_its_files() {
+    let config = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(config.path().join("commands")).unwrap();
+    std::fs::write(
+        config.path().join("commands/ship.md"),
+        "---\ndescription: Ships it\n---\nDo it",
+    )
+    .unwrap();
+    let d = Daemon::start_with(Some(config.path()));
+    let mut c = d.client();
+    let pane = spawn(&mut c, "s", "sleep 30", 40, 5);
+    c.send(&ClientMsg::Commands { pane }).unwrap();
+    let deadline = Instant::now() + TIMEOUT;
+    let items = loop {
+        assert!(Instant::now() < deadline, "no Commands for pane {pane}");
+        if let DaemonMsg::Commands { pane: p, items } = recv(&mut c)
+            && p == pane
+        {
+            break items;
+        }
+    };
+    let by = |n: &str| items.iter().find(|c| c.name == n);
+    assert_eq!(
+        by("/ship").map(|c| (c.desc.as_str(), c.kind.as_str())),
+        Some(("Ships it", "user"))
+    );
+    assert!(by("/help").is_some_and(|c| c.kind == "claude"));
+}
+
+/// The next `Chat` of `pane`.
+fn next_chat(c: &mut Client, pane: PaneId) -> DaemonMsg {
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        assert!(Instant::now() < deadline, "no Chat for pane {pane}");
+        if let m @ DaemonMsg::Chat { pane: p, .. } = recv(c)
+            && p == pane
+        {
+            return m;
+        }
+    }
+}
+
+#[test]
+fn a_claude_started_by_hand_in_a_shell_is_followed_by_its_folders_newest_transcript() {
+    use std::os::unix::fs::symlink;
+    let config = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let proj = std::fs::canonicalize(work.path()).unwrap();
+    // A program named `claude` that only waits.
+    let bin = proj.join("claude");
+    symlink("/bin/sleep", &bin).unwrap();
+    let d = Daemon::start_with(Some(config.path()));
+    let mut c = d.client();
+    let shell = spawn(
+        &mut c,
+        "s",
+        &format!("cd {} && exec ./claude 60", proj.display()),
+        40,
+        5,
+    );
+    std::thread::sleep(Duration::from_millis(800));
+    // Claude writes its transcript after it started, in the folder named for where it runs.
+    let name: String = proj
+        .to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let folder = config.path().join("projects").join(name);
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(
+        folder.join("0f6bd1c2-1111-4222-8333-444455556666.jsonl"),
+        "{\"type\":\"user\",\"message\":{\"content\":\"hola\"}}\n",
+    )
+    .unwrap();
+
+    c.send(&ClientMsg::ChatWatch { pane: shell }).unwrap();
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        assert!(
+            Instant::now() < deadline,
+            "the shell's claude was never found"
+        );
+        if let DaemonMsg::Chat { known, blocks, .. } = next_chat(&mut c, shell)
+            && known
+        {
+            assert_eq!(blocks.len(), 1);
+            assert_eq!(blocks[0].text, "hola");
+            break;
+        }
+    }
+}
+
+#[test]
+fn a_listing_carries_the_name_the_user_gave_a_pane() {
+    let d = Daemon::start();
+    let mut c = d.client();
+    let pane = spawn(&mut c, "s", "sleep 30", 40, 5);
+    let name_of = |c: &mut Client| {
+        c.send(&ClientMsg::List).unwrap();
+        loop {
+            if let DaemonMsg::Panes { panes } = recv(c) {
+                return panes.into_iter().find(|p| p.pane == pane).unwrap().name;
+            }
+        }
+    };
+    assert_eq!(name_of(&mut c), None);
+    c.send(&ClientMsg::Name {
+        pane,
+        name: Some(" logs ".into()),
+    })
+    .unwrap();
+    // The rename is a tree edit: wait for the daemon to have it.
+    let deadline = Instant::now() + TIMEOUT;
+    while name_of(&mut c).as_deref() != Some("logs") {
+        assert!(Instant::now() < deadline, "the name never showed");
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// The latest of what a pane's shell has said, as the messages come: its state, its commands and
+/// what each printed.
+#[derive(Default)]
+struct Seen {
+    known: bool,
+    running: bool,
+    input: String,
+    blocks: BTreeMap<u32, jw_proto::proto::ShellBlock>,
+    outs: BTreeMap<u32, Vec<u8>>,
+}
+
+impl Seen {
+    /// Reads messages for `pane` until `want` is true of what has been seen so far.
+    fn until(&mut self, c: &mut Client, pane: PaneId, what: &str, want: impl Fn(&Seen) -> bool) {
+        let deadline = Instant::now() + TIMEOUT;
+        while !want(self) {
+            assert!(
+                Instant::now() < deadline,
+                "{what}: known {} running {} input {:?} blocks {:?} outs {:?}",
+                self.known,
+                self.running,
+                self.input,
+                self.blocks,
+                self.outs
+                    .iter()
+                    .map(|(i, o)| (*i, String::from_utf8_lossy(o).into_owned()))
+                    .collect::<Vec<_>>()
+            );
+            c.set_read_timeout(Some(Duration::from_millis(500)))
+                .unwrap();
+            match c.recv() {
+                Ok(Some(DaemonMsg::Shell {
+                    pane: p,
+                    known,
+                    running,
+                    input,
+                    blocks,
+                })) if p == pane => {
+                    self.known = known;
+                    self.running = running;
+                    if let Some(i) = input {
+                        self.input = i;
+                    }
+                    for b in blocks {
+                        self.blocks.insert(b.i, b);
+                    }
+                }
+                Ok(Some(DaemonMsg::ShellOut {
+                    pane: p,
+                    block,
+                    bytes,
+                })) if p == pane => {
+                    self.outs.entry(block).or_default().extend(bytes);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// What block `i` printed, as text.
+    fn out(&self, i: u32) -> String {
+        String::from_utf8_lossy(self.outs.get(&i).map_or(&[][..], |v| v)).into_owned()
+    }
+}
+
+#[test]
+fn a_zsh_jw_started_tells_its_state_its_line_and_each_command_as_a_block() {
+    if !Path::new("/bin/zsh").exists() {
+        return;
+    }
+    let home = tempfile::tempdir().unwrap();
+    // The user's own .zshrc is still read.
+    std::fs::write(home.path().join(".zshrc"), "export JW_PROBE=ok\n").unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let d = Daemon::start_in(
+        None,
+        &[("HOME", home.path()), ("SHELL", Path::new("/bin/zsh"))],
+    );
+    let mut c = d.client();
+    c.send(&ClientMsg::Spawn {
+        stream: "s".into(),
+        role: "shell".into(),
+        cmd: None,
+        cwd: work.path().to_path_buf(),
+        env: BTreeMap::new(),
+        cols: 80,
+        rows: 12,
+    })
+    .unwrap();
+    let pane = loop {
+        match recv(&mut c) {
+            DaemonMsg::Spawned { pane } => break pane,
+            DaemonMsg::Output { .. } => {}
+            other => panic!("want Spawned, got {other:?}"),
+        }
+    };
+    c.send(&ClientMsg::ShellWatch { pane }).unwrap();
+    let mut seen = Seen::default();
+    // The prompt is marked once it is shown: from then on the shell is known and idle.
+    seen.until(&mut c, pane, "the shell never marked its prompt", |s| {
+        s.known && !s.running
+    });
+
+    // What is typed at the prompt, before Enter, is the shell's line: the text a phone's input mirrors.
+    c.send(&ClientMsg::Input {
+        pane,
+        bytes: b"echo par".to_vec(),
+    })
+    .unwrap();
+    seen.until(&mut c, pane, "the typed line never showed", |s| {
+        s.input == "echo par"
+    });
+    c.send(&ClientMsg::Input {
+        pane,
+        bytes: vec![0x15],
+    })
+    .unwrap();
+    seen.until(&mut c, pane, "the cleared line never showed", |s| {
+        s.input.is_empty()
+    });
+
+    // A command that runs is a block, running, with what it printed so far, colours as printed.
+    c.send(&ClientMsg::Input {
+        pane,
+        bytes: b"printf '\\033[31mred\\033[0m\\n'; echo hello $((6*7)) $JW_PROBE ${ZDOTDIR-none}; sleep 2\n"
+            .to_vec(),
+    })
+    .unwrap();
+    seen.until(&mut c, pane, "the command never showed running", |s| {
+        s.running && s.blocks.values().any(|b| b.running) && s.out(0).contains("hello 42 ok none")
+    });
+    let block = &seen.blocks[&0];
+    assert!(
+        block.cmd.starts_with("printf '\\033[31mred"),
+        "{}",
+        block.cmd
+    );
+    assert_eq!(
+        std::fs::canonicalize(&block.cwd).unwrap(),
+        std::fs::canonicalize(work.path()).unwrap()
+    );
+    // The bytes are the program's own, styles included, with no prompt and none of the marks in them.
+    let out = seen.out(0);
+    assert!(out.contains("\x1b[31mred\x1b[0m"), "{out:?}");
+    assert!(!out.contains("7770"), "{out:?}");
+
+    // It ends: the block is closed with its status and the shell is idle again.
+    seen.until(&mut c, pane, "the command never ended", |s| {
+        !s.running && s.blocks.get(&0).is_some_and(|b| !b.running)
+    });
+    assert_eq!(seen.blocks[&0].code, Some(0));
+    assert!(seen.blocks[&0].ms >= 1500, "{}", seen.blocks[&0].ms);
+    // Nor does the prompt that follows get into the block.
+    let out = seen.out(0);
+    assert!(!out.contains('%') || out.contains("hello 42"), "{out:?}");
+    assert!(out.trim_end().ends_with("ok none"), "{out:?}");
+
+    // A failing command is the next block, with its status; a client that asks is told it all.
+    c.send(&ClientMsg::Input {
+        pane,
+        bytes: b"false\n".to_vec(),
+    })
+    .unwrap();
+    seen.until(&mut c, pane, "the failing command never ended", |s| {
+        s.blocks
+            .get(&1)
+            .is_some_and(|b| !b.running && b.code == Some(1))
+    });
+    let mut late = d.client();
+    late.send(&ClientMsg::ShellWatch { pane }).unwrap();
+    let mut told = Seen::default();
+    told.until(&mut late, pane, "a client that asks was not told", |s| {
+        s.blocks.len() == 2 && s.out(0).contains("hello 42 ok none")
+    });
+    assert_eq!(told.blocks[&1].code, Some(1));
 }

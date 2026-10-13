@@ -31,16 +31,16 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.core.content.res.ResourcesCompat
 import dev.jw.term.Attr
-import dev.jw.term.Terminal
+import dev.jw.term.Line
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 import dev.jw.term.Color as Cell
 
-/** A span of the screen and its scrollback, from where the finger went down to where it is now; lines are [Terminal.line] indexes. */
+/** A span of the screen and its scrollback, from where the finger went down to where it is now; lines are [PaneText.line] indexes. */
 class Selection(val startLine: Int, val startCol: Int, val endLine: Int, val endCol: Int) {
     /** The text it covers, a line at a time, without the spaces at the end of a line. */
-    fun text(t: Terminal): String = t.read {
+    fun text(t: PaneText): String = t.read {
         val forward = startLine < endLine || (startLine == endLine && startCol <= endCol)
         val (l0, c0, l1, c1) = if (forward) listOf(startLine, startCol, endLine, endCol) else listOf(endLine, endCol, startLine, startCol)
         val lo = max(l0, -it.scrollbackSize)
@@ -88,19 +88,17 @@ class TermColors(private val j: JwColors) {
 }
 
 /**
- * A pane's terminal, drawn cell by cell on a canvas (REQ-21). It shows the pane at its own size, scaled down to
- * fit the width until the letters would be smaller than [MIN_SP]; past that it pans sideways. Dragging up and
- * down scrolls the history; a long press selects. With [fit] on, the grid is as big as the view and [onSize] says
- * how big (REQ-24).
+ * A pane's text, drawn cell by cell on a canvas (REQ-21): the rows of the pane's screen and scrollback, each
+ * broken at the width of this view ([wrapRows]), so nothing is wider than the phone and the pane itself is never
+ * resized for it (REQ-24). Dragging up and down scrolls the history; a long press selects.
  */
 @Composable
 fun TerminalView(
-    term: Terminal?,
+    term: PaneText?,
     rev: Long,
-    fit: Boolean,
+    onScrolledUp: () -> Unit,
     selection: Selection?,
     onSelection: (Selection?) -> Unit,
-    onSize: (cols: Int, rows: Int) -> Unit,
     onTap: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -110,42 +108,33 @@ fun TerminalView(
     val density = LocalDensity.current
     val regular = remember { ResourcesCompat.getFont(ctx, R.font.jetbrains_mono_regular) ?: Typeface.MONOSPACE }
     val bold = remember { ResourcesCompat.getFont(ctx, R.font.jetbrains_mono_bold) ?: Typeface.DEFAULT_BOLD }
-    val paint = remember { Paint(Paint.ANTI_ALIAS_FLAG) }
-    var scrollLines by remember { mutableFloatStateOf(0f) }
-    var panX by remember { mutableFloatStateOf(0f) }
+    var scrollRows by remember { mutableFloatStateOf(0f) }
     val onSel by rememberUpdatedState(onSelection)
     val onTapNow by rememberUpdatedState(onTap)
 
     BoxWithConstraints(modifier.clipToBounds().semantics { contentDescription = "Terminal" }) {
         val wPx = with(density) { maxWidth.toPx() }
         val hPx = with(density) { maxHeight.toPx() }
-        paint.typeface = regular
-        val advance = run { paint.textSize = 100f; paint.measureText("M") / 100f }
-        val minPx = with(density) { MIN_SP.sp.toPx() }
-        val fitPx = with(density) { FIT_SP.sp.toPx() }
-        val maxPx = with(density) { MAX_SP.sp.toPx() }
-        val size = when {
-            fit -> fitPx
-            term == null -> fitPx
-            else -> (wPx / (term.cols * advance)).coerceIn(minPx, maxPx)
-        }
-        paint.textSize = size
-        val cw = advance * size
-        val fm = paint.fontMetrics
-        val ch = (fm.descent - fm.ascent) * 1.12f
+        val size = with(density) { TEXT_SP.sp.toPx() }
+        val metrics = remember(regular, size) { CellMetrics.of(regular, size) }
+        val painter = remember(colors, regular, bold, size) { RowPainter(colors, j, regular, bold, size) }
+        val cw = metrics.cw
+        val ch = metrics.ch
         val visibleCols = floor(wPx / cw).toInt().coerceAtLeast(1)
         val visibleRows = floor(hPx / ch).toInt().coerceAtLeast(1)
-        if (fit) LaunchedEffect(visibleCols, visibleRows) { kotlinx.coroutines.delay(250); onSize(visibleCols, visibleRows) }
 
         val pane = term
+        // The scrollback is asked for, and drawn, only while the view is up in it.
+        val scrolled = scrollRows != 0f
+        val layout = remember(pane, rev, visibleCols, scrolled) { pane?.read { wrapView(it, visibleCols, withHistory = scrolled) } }
+        val askedUp by rememberUpdatedState(onScrolledUp)
+        LaunchedEffect(scrolled, pane) { if (scrolled) askedUp() }
+        fun firstRow(): Int = layout?.firstRow(visibleRows, scrollRows.toInt()) ?: 0
         fun cellAt(p: Offset): Pair<Int, Int>? {
-            val t = pane ?: return null
-            return t.read {
-                val firstLine = firstLine(it, visibleRows, scrollLines)
-                val line = (firstLine + floor(p.y / ch).toInt()).coerceIn(-it.scrollbackSize, it.rows - 1)
-                val col = floor((p.x + panX) / cw).toInt().coerceIn(0, it.cols - 1)
-                line to col
-            }
+            val l = layout ?: return null
+            val row = l.rows.getOrNull(firstRow() + floor(p.y / ch).toInt().coerceAtLeast(0)) ?: l.rows.lastOrNull() ?: return null
+            val col = RowWrap.colAt(pane!!.read { it.line(row.line) }, row, floor(p.x / cw).toInt().coerceAtLeast(0))
+            return row.line to col
         }
 
         androidx.compose.foundation.Canvas(
@@ -169,14 +158,8 @@ fun TerminalView(
                             onTapNow()
                         } else {
                             drag(down.id) { c ->
-                                val d = c.positionChange()
-                                val t = pane
-                                if (t != null) {
-                                    val (up, down) = t.read { scrollRange(it, visibleRows) }
-                                    scrollLines = (scrollLines + d.y / ch).coerceIn(down.toFloat(), up.toFloat())
-                                    val overflow = max(0f, t.cols * cw - wPx)
-                                    panX = (panX - d.x).coerceIn(0f, overflow)
-                                }
+                                val (up, down) = layout?.scrollRange(visibleRows) ?: (0 to 0)
+                                scrollRows = (scrollRows + c.positionChange().y / ch).coerceIn(down.toFloat(), up.toFloat())
                                 c.consume()
                             }
                         }
@@ -187,58 +170,24 @@ fun TerminalView(
             rev.hashCode()
             drawRect(j.bg)
             val t = pane ?: return@Canvas
+            val l = layout ?: return@Canvas
             t.read { tm ->
                 drawIntoCanvas { canvas ->
                     val nc = canvas.nativeCanvas
-                    val first = firstLine(tm, visibleRows, scrollLines)
-                    val base = -fm.ascent + (ch - (fm.descent - fm.ascent)) / 2
+                    val first = firstRow()
                     val sel = selection
                     for (vr in 0 until visibleRows) {
-                        val li = first + vr
-                        if (li < -tm.scrollbackSize || li >= tm.rows) continue
-                        val line = tm.line(li)
+                        val row = l.rows.getOrNull(first + vr) ?: continue
+                        if (row.line >= tm.rows || row.line < -tm.scrollbackSize) continue
+                        val line = tm.line(row.line)
                         val y = vr * ch
-                        var c = 0
-                        while (c < line.cols) {
-                            val fl = line.flags[c]
-                            val inv = fl and Attr.INVERSE != 0
-                            var fgc = colors.resolve(line.fg[c], j.fg)
-                            var bgc = colors.resolve(line.bg[c], Color.Unspecified)
-                            if (inv) { val f = fgc; fgc = if (bgc == Color.Unspecified) j.bg else bgc; bgc = f }
-                            val selected = sel != null && inSelection(sel, li, c)
-                            val x = c * cw - panX
-                            val span = if (fl and Attr.WIDE != 0) 2 else 1
-                            if (x + span * cw >= 0 && x <= wPx) {
-                                if (bgc != Color.Unspecified) {
-                                    paint.color = bgc.toArgb(); paint.style = Paint.Style.FILL
-                                    nc.drawRect(x, y, x + span * cw + 0.5f, y + ch, paint)
-                                }
-                                if (selected) {
-                                    paint.color = j.blue.copy(alpha = 0.35f).toArgb()
-                                    nc.drawRect(x, y, x + span * cw, y + ch, paint)
-                                }
-                                val cp = line.ch[c]
-                                if (cp != 0 && cp != ' '.code && fl and Attr.CONT == 0) {
-                                    paint.typeface = if (fl and Attr.BOLD != 0) bold else regular
-                                    paint.textSkewX = if (fl and Attr.ITALIC != 0) -0.2f else 0f
-                                    paint.color = (if (fl and Attr.DIM != 0) fgc.copy(alpha = 0.6f) else fgc).toArgb()
-                                    val s = StringBuilder().appendCodePoint(cp).append(line.marksAt(c) ?: "").toString()
-                                    nc.drawText(s, x, y + base, paint)
-                                }
-                                if (fl and Attr.UNDERLINE != 0 && fl and Attr.CONT == 0) {
-                                    paint.color = fgc.toArgb()
-                                    nc.drawRect(x, y + ch - 2f, x + span * cw, y + ch - 1f, paint)
-                                }
-                            }
-                            c += span
-                        }
+                        painter.draw(nc, line, row.cols, y, metrics) { c -> sel != null && inSelection(sel, row.line, c) }
                     }
-                    if (tm.cursorVisible && scrollLines == 0f) {
-                        val vr = tm.cursorRow - first
-                        if (vr in 0 until visibleRows) {
-                            val cx = (tm.cursorCol.coerceAtMost(tm.cols - 1)) * cw - panX
-                            paint.color = j.fg.copy(alpha = 0.55f).toArgb()
-                            nc.drawRect(cx, vr * ch, cx + cw, (vr + 1) * ch, paint)
+                    if (tm.cursorVisible && scrollRows == 0f) {
+                        val at = l.rows.indexOfFirst { it.line == tm.cursorRow && tm.cursorCol in it.cols }
+                        val vr = at - first
+                        if (at >= 0 && vr in 0 until visibleRows) {
+                            painter.cursor(nc, RowWrap.xOf(tm.line(tm.cursorRow), l.rows[at], tm.cursorCol) * cw, vr * ch, metrics)
                         }
                     }
                 }
@@ -248,31 +197,47 @@ fun TerminalView(
 }
 
 /**
- * The [Terminal.line] index of the first row drawn, `scroll` lines up into the history; see [bottomAnchor].
+ * The rows of a pane as the view draws them, and where the view rests: [end] rows in, at the bottom of the view (a
+ * shell or an agent on the main screen), or at the top of the rows ([topRest], a full-screen app drawn from the top).
+ * Only a full-screen app ([alt]) can be dragged down the pane past its rest.
  */
-private fun firstLine(t: Terminal, visibleRows: Int, scroll: Float): Int = bottomAnchor(t, visibleRows) - scroll.toInt()
+internal class WrapView(val rows: List<VRow>, private val end: Int, private val alt: Boolean, private val topRest: Boolean) {
+    private fun base(visibleRows: Int) = if (topRest) 0 else (end - visibleRows).coerceAtLeast(0)
+    private fun last(visibleRows: Int) = (rows.size - visibleRows).coerceAtLeast(0)
 
-/**
- * The first row of the view at rest. A shell or an agent on the main screen, in a pane taller than the view (the PC's
- * window), ends at its last used row (the cursor or the lowest row with text, so a footer shows), not at its empty
- * bottom. A full-screen app (the alternate screen) draws from the top, so it starts at the top, unless its cursor is
- * shown below the view: then it follows the cursor.
- */
-internal fun bottomAnchor(t: Terminal, visibleRows: Int): Int {
-    if (t.rows <= visibleRows) return 0
-    val maxFirst = t.rows - visibleRows
-    if (t.altScreen) return if (t.cursorVisible) (t.cursorRow + 1 - visibleRows).coerceIn(0, maxFirst) else 0
-    var last = t.cursorRow
-    for (r in t.rows - 1 downTo last + 1) {
-        if (t.line(r).ch.any { it != 0 && it != ' '.code }) { last = r; break }
-    }
-    return (last + 1 - visibleRows).coerceIn(0, maxFirst)
+    /** The index of the first row drawn, `scroll` rows up from the rest (negative: down). */
+    fun firstRow(visibleRows: Int, scroll: Int): Int = (base(visibleRows) - scroll).coerceIn(0, if (alt) last(visibleRows) else base(visibleRows))
+
+    /** How far the view may be dragged: `up` rows into the history, and `down` (zero or negative) rows below the rest. */
+    fun scrollRange(visibleRows: Int): Pair<Int, Int> =
+        base(visibleRows) to if (alt) -(last(visibleRows) - base(visibleRows)).coerceAtLeast(0) else 0
 }
 
-/** How far the view may be dragged: `up` lines into the history, `down` lines further down the pane (a full-screen app only). */
-internal fun scrollRange(t: Terminal, visibleRows: Int): Pair<Int, Int> {
-    val anchor = bottomAnchor(t, visibleRows)
-    return if (t.altScreen) anchor to -(t.rows - visibleRows - anchor).coerceAtLeast(0) else (anchor + t.scrollbackSize) to 0
+/**
+ * Breaks every row of the pane's screen and its recent scrollback at [cols], leaving off the blank end of a row (a
+ * row of blanks is one empty row), so the text of a 200-column pane is as wide as the phone and nothing pans. At rest
+ * the view ends at the last used row: the cursor or the lowest row with text, so a footer shows, not the empty bottom;
+ * a full-screen app (the alternate screen) follows its cursor, or starts at its top when the cursor is hidden.
+ */
+internal fun wrapView(t: PaneText, cols: Int, withHistory: Boolean = true): WrapView {
+    val out = ArrayList<VRow>()
+    var anchor = t.cursorRow
+    for (li in -(if (withHistory) minOf(t.scrollbackSize, WRAP_HISTORY) else 0) until t.rows) {
+        val line = t.line(li)
+        var used = usedCols(line)
+        if (li >= 0 && used > 0 && li > anchor && !t.altScreen) anchor = li
+        if (li == t.cursorRow && t.cursorVisible) used = max(used, minOf(t.cursorCol + 1, line.cols))
+        if (used == 0) { out.add(VRow(li, IntArray(0))); continue }
+        out.addAll(RowWrap.rows(li, line, used, cols, if (li == t.cursorRow && t.cursorVisible) t.cursorCol else -1))
+    }
+    if (t.altScreen) anchor = t.cursorRow
+    return WrapView(out, out.indexOfLast { it.line <= anchor } + 1, t.altScreen, t.altScreen && !t.cursorVisible)
+}
+
+/** The columns of [line] up to its last cell with text or a background. */
+private fun usedCols(line: Line): Int {
+    for (c in line.cols - 1 downTo 0) if ((line.ch[c] != 0 && line.ch[c] != ' '.code) || line.bg[c] != 0) return if (line.flags[c] and Attr.WIDE != 0) minOf(c + 2, line.cols) else c + 1
+    return 0
 }
 
 private fun inSelection(s: Selection, line: Int, col: Int): Boolean {
@@ -284,6 +249,7 @@ private fun inSelection(s: Selection, line: Int, col: Int): Boolean {
     return true
 }
 
-private const val MIN_SP = 9f
-private const val FIT_SP = 11f
-private const val MAX_SP = 14f
+private const val TEXT_SP = 11f
+
+/** How many rows of scrollback are broken at the view's width (the terminal keeps up to 5000). */
+private const val WRAP_HISTORY = 2000

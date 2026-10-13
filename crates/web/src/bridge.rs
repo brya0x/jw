@@ -171,7 +171,8 @@ fn sane_look(look: &serde_json::Value) -> (serde_json::Value, serde_json::Value)
 
 /// What a phone can ask the PC to list (REQ-12).
 pub enum Query {
-    /// The workspaces of a session, by name.
+    /// The workspaces of a session, by name; the empty name is the one in use
+    /// on the PC, which the answer's `session` then says.
     Workspaces(String),
     /// Every session.
     Sessions,
@@ -1145,11 +1146,15 @@ fn start_ask(shared: &Shared, later: &Later, ask: Ask) -> Option<Message> {
     // The ask's own fields, echoed in its answer and in its error, so the phone can tell which ask an answer is for.
     let (query, tag, fields): (Query, &'static str, Vec<(&'static str, String)>) = match ask {
         Ask::Workspaces { session } => {
-            let session = session.unwrap_or_else(|| "main".into());
+            // No session named: the lister picks the one in use and says which.
+            let fields = session
+                .iter()
+                .map(|s| ("session", s.clone()))
+                .collect::<Vec<_>>();
             (
-                Query::Workspaces(session.clone()),
+                Query::Workspaces(session.unwrap_or_default()),
                 "workspaces",
-                vec![("session", session)],
+                fields,
             )
         }
         Ask::Sessions => (Query::Sessions, "sessions", Vec::new()),
@@ -1285,7 +1290,19 @@ fn tag_of(body: &[u8]) -> Option<String> {
 fn looking(body: &[u8]) -> bool {
     matches!(
         tag_of(body).as_deref(),
-        Some("Hello" | "Attach" | "Detach" | "List")
+        Some(
+            "Hello"
+                | "Attach"
+                | "Detach"
+                | "List"
+                | "TextView"
+                | "TextHistory"
+                | "ChatWatch"
+                | "ChatUnwatch"
+                | "Commands"
+                | "ShellWatch"
+                | "ShellUnwatch"
+        )
     )
 }
 
@@ -1449,9 +1466,12 @@ mod tests {
                         if s == "slow" {
                             thread::sleep(Duration::from_millis(700));
                         }
+                        // The real lister names the session in use when none is asked for.
+                        let session = if s.is_empty() { "last" } else { s.as_str() };
                         Ok(serde_json::json!({
-                            "items": [{ "id": "w1", "session": s }],
+                            "items": [{ "id": "w1", "session": session }],
                             "truncated": false,
+                            "session": session,
                         }))
                     }
                     Query::Sessions => {
@@ -2075,7 +2095,8 @@ mod tests {
         say(&mut p, serde_json::json!({ "t": "workspaces" }));
         let v = json(&mut p);
         assert_eq!(v["t"], "workspaces", "{v}");
-        assert_eq!(v["session"], "main");
+        // None named: the lister's choice, the session in use, is what the answer says.
+        assert_eq!(v["session"], "last");
         assert_eq!(v["items"][0]["id"], "w1");
         say(
             &mut p,

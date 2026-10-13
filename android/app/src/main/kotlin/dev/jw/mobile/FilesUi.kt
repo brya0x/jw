@@ -100,7 +100,7 @@ fun FilesScreen(session: Session, nav: Nav, workspace: String, state: UiState.Co
     fun leave() {
         nav.filesPath = null
         nav.pick = null
-        if (pick == PickFor.SessionDir) nav.sheet = HomeSheet.NewSession
+        if (pick == PickFor.SessionDir) { nav.sessionSheet = true; nav.sessionForm = true }
     }
     LaunchedEffect(path) { session.requestLs(path) }
     DisposableEffect(Unit) { onDispose { session.clearFiles(); session.clearMake() } }
@@ -149,7 +149,7 @@ fun FilesScreen(session: Session, nav: Nav, workspace: String, state: UiState.Co
                         Modifier.heightIn(min = 48.dp).background(if (ok) j.blue else j.line, Corner)
                             .clickable(enabled = ok, role = Role.Button) {
                                 if (pick == PickFor.OpenFolder) { session.clearMake(); session.requestOpen(here, targetSession) }
-                                else { nav.sessionDir = here; nav.pick = null; nav.filesPath = null; nav.sheet = HomeSheet.NewSession }
+                                else { nav.sessionDir = here; nav.pick = null; nav.filesPath = null; nav.sessionSheet = true; nav.sessionForm = true }
                             }.padding(horizontal = 16.dp),
                         contentAlignment = Alignment.Center,
                     ) { Text(label, color = if (ok) j.bg else j.dim, fontWeight = FontWeight.Bold, fontSize = 13.sp) }

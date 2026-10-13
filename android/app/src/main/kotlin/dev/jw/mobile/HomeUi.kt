@@ -1,6 +1,7 @@
 package dev.jw.mobile
 
 import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
 import dev.jw.proto.Palettes
@@ -65,6 +66,11 @@ class Nav {
     var open by mutableStateOf<String?>(null)
     var pane by mutableStateOf<Long?>(null)
     var sessionSheet by mutableStateOf(false)
+
+    /** The new-session form is showing inside the sessions sheet (REQ-86), in place of its list. */
+    var sessionForm by mutableStateOf(false)
+
+    fun closeSessions() { sessionSheet = false; sessionForm = false }
 
     /** The workspace that was open before this one, for `^␣ tab`. */
     var previous by mutableStateOf<String?>(null)
@@ -180,7 +186,8 @@ fun ConnectedApp(state: UiState.Connected, session: Session, nav: Nav, answers: 
     BackHandler(nav.sheet != null || nav.sessionSheet || nav.open != null || nav.tab != Tab.Home) {
         when {
             nav.sheet != null -> nav.sheet = null
-            nav.sessionSheet -> nav.sessionSheet = false
+            nav.sessionForm -> nav.sessionForm = false
+            nav.sessionSheet -> nav.closeSessions()
             nav.open != null -> nav.open = null
             else -> nav.tab = Tab.Home
         }
@@ -198,11 +205,10 @@ fun ConnectedApp(state: UiState.Connected, session: Session, nav: Nav, answers: 
             nav.tab == Tab.Diff -> ChangesScreen(model, state, session, nav, viewed, now, waiting)
             else -> SettingsScreen(state, session, answers, nav, waiting)
         }
-        if (nav.sessionSheet) SessionSheet(model, session, nav)
+        if (nav.sessionSheet) SessionSheet(model, state, session, nav)
         when (nav.sheet) {
             HomeSheet.Plus -> PlusSheet(nav) { nav.worktreeProject = null; nav.sheet = HomeSheet.Worktree }
             HomeSheet.Worktree -> WorktreeSheet(model, state, session, nav)
-            HomeSheet.NewSession -> NewSessionSheet(state, session, nav)
             null -> {}
         }
         MakeDone(model, session, nav)
@@ -396,16 +402,17 @@ internal fun stateLabel(p: PaneInfo) = when {
 }
 
 @Composable
-private fun SessionSheet(model: Model, session: Session, nav: Nav) {
+private fun SessionSheet(model: Model, state: UiState.Connected, session: Session, nav: Nav) {
     val j = LocalJw.current
-    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.5f)).clickable { nav.sessionSheet = false })
+    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.5f)).clickable { nav.closeSessions() })
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
         Column(Modifier.fillMaxWidth().background(j.panel, RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp)).clickable(enabled = false) {}.padding(bottom = 16.dp)) {
             Box(Modifier.padding(top = 8.dp, bottom = 4.dp).align(Alignment.CenterHorizontally).width(36.dp).heightIn(min = 4.dp).background(j.line, RoundedCornerShape(2.dp)))
+            if (nav.sessionForm) { NewSessionForm(state, session, nav); return@Column }
             Text("sesiones", color = j.dim, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp))
             for (s in model.sessions) {
                 Row(
-                    Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable { session.requestWorkspaces(s.name); nav.sessionSheet = false }.padding(horizontal = 14.dp),
+                    Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable { session.requestWorkspaces(s.name); nav.closeSessions() }.padding(horizontal = 14.dp),
                     verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     Text(if (s.name == model.session) "●" else " ", color = j.yellow, modifier = Modifier.width(34.dp).border(BorderStroke(1.dp, j.line), RoundedCornerShape(4.dp)).background(j.bg).padding(3.dp), textAlign = TextAlign.Center)
@@ -415,7 +422,7 @@ private fun SessionSheet(model: Model, session: Session, nav: Nav) {
             }
             if (model.sessions.isEmpty()) Body("Sin sesiones todavía.", j.dim, 12.0)
             Row(
-                Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(role = Role.Button) { nav.sessionSheet = false; nav.sheet = HomeSheet.NewSession }.padding(horizontal = 14.dp),
+                Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(role = Role.Button) { nav.sessionForm = true }.padding(horizontal = 14.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Text("+", color = j.yellow, modifier = Modifier.width(34.dp).border(BorderStroke(1.dp, j.line), RoundedCornerShape(4.dp)).background(j.bg).padding(3.dp), textAlign = TextAlign.Center)
@@ -487,13 +494,18 @@ private fun SettingsScreen(state: UiState.Connected, session: Session, answers: 
                 color = j.dim, fontSize = 12.sp, modifier = Modifier.padding(14.dp),
             )
             Section("tema")
-            ThemeGrid(state.palettes)
+            Text(
+                "Lo eliges aquí, no en el PC: pinta la app, los colores del terminal y la salida del agente. " +
+                    "El PC y el agente siguen con su tema. Son los temas que tu PC ofrece (jw theme ls).",
+                color = j.dim, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+            )
+            ThemeGrid(state.palettes, answers.theme, answers::chooseTheme)
+            ThemePreview()
             Section("terminal")
-            var fit by remember { mutableStateOf(answers.fitToPhone) }
             SettingRow(
-                "ajustar al teléfono", "el panel toma el tamaño de esta pantalla; al salir recupera el suyo",
-                right = if (fit) "● activado" else "apagado", rightColor = if (fit) j.green else j.dim,
-            ) { fit = !fit; answers.fitToPhone = fit }
+                "texto de los paneles",
+                "la app recibe el texto del panel y lo ajusta al ancho de esta pantalla; el panel no cambia de tamaño en el PC",
+            )
             Section("general")
             SettingRow("líder", "^␣ abre el menú de teclas")
         }
@@ -526,11 +538,11 @@ private fun SettingRow(title: String, sub: String?, color: Color = LocalJw.curre
 }
 
 /**
- * The PC's themes as the prototype's grid, read-only: the app follows the system's dark or light (the
- * user's choice), and nothing in the bridge writes `settings.json`. The theme in use is marked.
+ * The PC's themes as the prototype's grid. Tapping one chooses it for this phone; `seguir al sistema` goes back
+ * to the system's dark or light. Nothing in the bridge writes the PC's `settings.json`.
  */
 @Composable
-private fun ThemeGrid(palettes: Palettes) {
+private fun ThemeGrid(palettes: Palettes, chosen: String?, onChoose: (String?) -> Unit) {
     val j = LocalJw.current
     val dark = androidx.compose.foundation.isSystemInDarkTheme()
     val inUse = if (dark) palettes.dark else palettes.light
@@ -545,9 +557,11 @@ private fun ThemeGrid(palettes: Palettes) {
         for (row in themes.chunked(2)) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 for (t in row) {
-                    val used = t.colors["bg"] == inUse["bg"] && t.dark == dark
+                    val used = if (chosen != null) t.name == chosen else t.colors["bg"] == inUse["bg"] && t.dark == dark
                     Column(
-                        Modifier.weight(1f).background(colorOf(t, "bg"), RoundedCornerShape(8.dp))
+                        Modifier.weight(1f).clickable(role = Role.RadioButton) { onChoose(t.name) }
+                            .semantics { selected = used }
+                            .background(colorOf(t, "bg"), RoundedCornerShape(8.dp))
                             .border(if (used) 2.dp else 1.dp, if (used) j.blue else colorOf(t, "line"), RoundedCornerShape(8.dp)).padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
@@ -561,5 +575,26 @@ private fun ThemeGrid(palettes: Palettes) {
                 if (row.size == 1) Spacer(Modifier.weight(1f))
             }
         }
+        if (chosen != null) {
+            Text(
+                "seguir al sistema (claro u oscuro)", color = j.blue, fontSize = 12.sp,
+                modifier = Modifier.clickable(role = Role.Button) { onChoose(null) }.minimumInteractiveComponentSize(),
+            )
+        }
     }
+}
+
+/** How the panes look with the theme in use: the roles a terminal draws with. */
+@Composable
+private fun ThemePreview() {
+    val j = LocalJw.current
+    Text(
+        buildAnnotatedString {
+            fun c(color: Color, t: String) { pushStyle(androidx.compose.ui.text.SpanStyle(color = color)); append(t); pop() }
+            c(j.dim, "~/ws/jw "); c(j.green, "✓"); append(" 42 tests "); c(j.red, "✗"); append(" 1 falló ")
+            c(j.yellow, "⚠"); append(" aviso "); c(j.blue, "info "); c(j.magenta, "claude "); c(j.cyan, "cyan")
+        },
+        color = j.fg, fontSize = 11.5.sp, fontFamily = JwMono,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp).background(j.bg, RoundedCornerShape(6.dp)).padding(10.dp),
+    )
 }

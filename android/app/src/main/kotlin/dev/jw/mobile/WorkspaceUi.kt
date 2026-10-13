@@ -30,6 +30,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -45,6 +47,8 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
@@ -57,6 +61,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.jw.proto.AgentState
+import dev.jw.proto.mayHaveConversation
 import dev.jw.proto.AnswerRule
 import dev.jw.proto.Kind
 import dev.jw.proto.PaneInfo
@@ -104,17 +109,48 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
     val exit = sel?.let { session.exitStatus(it.pane) }
     var sheet by remember { mutableStateOf(Sheet.None) }
     var selection by remember(sel?.pane) { mutableStateOf<Selection?>(null) }
-    val fit = remember { answers.fitToPhone }
     val ctx = LocalContext.current
+    // A tap on the pane, outside the keyboard and its field, closes the keyboard.
+    val focus = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
+    val hideKeyboard: () -> Unit = { focus.clearFocus(); keyboard?.hide() }
 
-    // Watch this workspace's panes while it is on screen; the size a pane had comes back when it is let go (REQ-24).
+    // Watch this workspace's panes while it is on screen. The app never resizes a pane (REQ-24).
     val watching = panes.isNotEmpty()
     DisposableEffect(w.id, watching) {
         session.watch(if (watching) w.id else null)
-        onDispose { session.restoreSizes(); session.watch(null) }
+        onDispose { session.watch(null) }
+    }
+    // An agent's conversation, even one started by hand in a shell, is drawn from the PC's transcript of it (REQ-93/94).
+    val agentPane = sel?.takeIf { it.mayHaveConversation() }?.pane
+    DisposableEffect(agentPane) {
+        session.watchChat(agentPane)
+        onDispose { session.watchChat(null) }
+    }
+    val chat = remember(rev, agentPane) { agentPane?.let(session::chat) }
+    // A shell jw started tells the line being typed at its prompt: its text is the input's (REQ-95, REQ-96). The pane stays text.
+    val shellPane = sel?.takeIf { !it.mayHaveConversation() && it.role == "shell" }?.pane
+    DisposableEffect(shellPane) {
+        session.watchShell(shellPane)
+        onDispose { session.watchShell(null) }
+    }
+    val shell = remember(rev, shellPane) { shellPane?.let(session::shell) }
+    val kind = sel?.let { PaneKinds.of(it, chat, shell) } ?: PaneKind.Text
+    // What an agent that waits asks, read off its screen (REQ-98): a question with choices is the whole pane. The one the person
+    // closed with Esc stays closed while it is on the screen, and one that is open stays until the screen no longer shows it
+    // (the daemon takes the agent out of Waiting at the first key, and marking several choices takes several).
+    val scope = rememberCoroutineScope()
+    val waiting = sel?.agent == AgentState.Waiting
+    var shownAsk by remember(sel?.pane) { mutableStateOf<String?>(null) }
+    var closedAsk by remember(sel?.pane) { mutableStateOf<String?>(null) }
+    val ask = remember(term, rev) { if (sel != null) term?.screenRows()?.let(AskText::from) else null }
+    val askClosed = closedAsk?.takeIf { it == ask?.key() }
+    val fullAsk = ask?.takeIf { it.options.isNotEmpty() && it.key() != askClosed && (waiting || it.key() == shownAsk || it.isPrompt) }
+    LaunchedEffect(fullAsk?.key()) {
+        shownAsk = fullAsk?.key()
+        if (fullAsk != null) hideKeyboard()
     }
     DisposableEffect(w.id) { onDispose { nav.previous = w.id } }
-    DisposableEffect(sel?.pane) { onDispose { session.restoreSizes() } }
     BackHandlerFor(sheet != Sheet.None) { sheet = Sheet.None }
 
     Column(Modifier.fillMaxSize().background(j.bg).imePadding()) {
@@ -151,13 +187,62 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
                 }
             }
         }
-        Box(Modifier.weight(1f).fillMaxWidth()) {
-            if (sel == null) {
+        Box(Modifier.weight(1f).fillMaxWidth().onTapAnywhere(hideKeyboard)) {
+            if (fullAsk != null && sel != null) {
+                val plan = if (PLAN.containsMatchIn(fullAsk.question)) chat?.plan ?: chat?.blocks?.lastOrNull { it.kind == "tool" && it.name == "ExitPlanMode" && it.result == null }?.body else null
+                AskView(
+                    fullAsk, plan, sel.name ?: sel.fg?.trimStart('-')?.takeIf { it != "zsh" && it != "bash" && it != "fish" } ?: sel.role,
+                    onPick = { n -> session.input(sel.pane, Keys.text(n.toString())) },
+                    onSend = {
+                        // The cursor goes down to the row after the check boxes, `Submit`, and Enter takes it (a number marks a box, Enter marks the one under the cursor).
+                        val boxes = fullAsk.options.count { it.checked != null }
+                        val at = fullAsk.options.indexOfFirst { it.selected }.coerceAtLeast(0)
+                        val down = Keys.key(Key.Down, term?.appCursor ?: false)
+                        repeat((boxes - at).coerceAtLeast(0)) { session.input(sel.pane, down) }
+                        session.input(sel.pane, Keys.key(Key.Enter))
+                    },
+                    onOther = { text ->
+                        val other = fullAsk.other
+                        scope.launch {
+                            if (other != null) { session.input(sel.pane, Keys.text(other.number.toString())); delay(250) }
+                            session.input(sel.pane, Keys.text(text))
+                            session.input(sel.pane, Keys.key(Key.Enter))
+                        }
+                    },
+                    onEsc = { session.input(sel.pane, Keys.key(Key.Esc)); closedAsk = fullAsk.key() },
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else if (sel == null) {
                 Text("Este workspace no tiene paneles abiertos.", color = j.dim, fontSize = 12.sp, modifier = Modifier.padding(14.dp))
+            } else if (kind == PaneKind.Loading) {
+                Text("Cargando la conversación…", color = j.dim, fontSize = 12.sp, modifier = Modifier.padding(14.dp))
+            } else if (kind == PaneKind.Chat && chat != null) {
+                ChatView(
+                    chat, w.name, sel.name ?: sel.role, sel.agent == AgentState.Waiting, working = sel.agent == AgentState.Working || chat.working,
+                    onStop = { session.input(sel.pane, Keys.key(Key.Esc)) }, modifier = Modifier.fillMaxSize(),
+                )
+            } else if (kind == PaneKind.Shell && shell != null) {
+                val clipboard = LocalContext.current.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                ShellView(
+                    shell, rev, { i -> session.blockOut(sel.pane, i) },
+                    onCopy = { clipboard.setPrimaryClip(android.content.ClipData.newPlainText("jw", it)) },
+                    onRerun = { cmd -> session.input(sel.pane, Keys.text(cmd)); session.input(sel.pane, Keys.key(Key.Enter)) },
+                    onShare = { text ->
+                        val send = android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain").putExtra(android.content.Intent.EXTRA_TEXT, text)
+                        ctx.startActivity(android.content.Intent.createChooser(send, null).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+                    },
+                    modifier = Modifier.fillMaxSize(),
+                )
             } else {
+                if (shell?.running == true && shell.blocks.lastOrNull()?.full == true) {
+                    Text(
+                        "${shell.blocks.last().cmd.substringBefore(' ')} ocupa toda la pantalla · los bloques vuelven al salir", color = j.dim, fontSize = 11.sp, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis, modifier = Modifier.align(Alignment.TopStart).fillMaxWidth().background(j.sel).padding(horizontal = 16.dp, vertical = 8.dp),
+                    )
+                }
                 TerminalView(
-                    term = term, rev = rev, fit = fit, selection = selection, onSelection = { selection = it },
-                    onSize = { c, r -> session.fit(sel.pane, c, r) }, onTap = {},
+                    term = term, rev = rev, selection = selection, onSelection = { selection = it }, onTap = {},
+                    onScrolledUp = { session.requestHistory(sel.pane) },
                     modifier = Modifier.fillMaxSize().padding(horizontal = 4.dp),
                 )
                 if (exit != null) {
@@ -168,13 +253,15 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
                 }
             }
         }
-        if (sel != null && sel.agent == AgentState.Waiting) {
+        if (fullAsk == null && askClosed == null && sel != null && sel.agent == AgentState.Waiting && (ask == null || ask.options.isEmpty())) {
             val on = AnswerRule.enabled(sel, model.panesAt, now, state.readOnly, sel.pane in model.answered)
             Column(
                 Modifier.fillMaxWidth().background(j.yellow.copy(alpha = 0.12f).compositeOver(j.bg)).padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text("? ${sel.role} espera tu respuesta", color = j.fg, fontSize = 12.5.sp)
+                // What it asks, read off its screen: a line that asks (y/n).
+                if (ask != null) Text(ask.question, color = j.fg, fontSize = 12.sp, maxLines = 5, overflow = TextOverflow.Ellipsis)
                 YesNo(on, "y · sí", "n · no", { session.answer(sel.pane, true) }, { session.answer(sel.pane, false) })
             }
         }
@@ -195,9 +282,17 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
                 KeyButton("cancelar") { selection = null }
             }
         }
-        KeyRow(sel, term, session, onLeader = { sheet = Sheet.Leader })
-        Composer(sel, state, session)
-        StatusBar("TERM", j.green, sel?.let { "${it.role} · ${term?.let { t -> "${t.cols}×${t.rows}" } ?: "…"} · ^␣ menú" } ?: "sin paneles", route = state.route)
+        if (fullAsk == null) KeyRow(sel, term, session, onLeader = { sheet = Sheet.Leader })
+        // What the terminal's input holds: a Claude's box read off its screen, a shell's line as it tells it.
+        val remote = sel?.let { PaneKinds.input(it, shell) { term?.let(ClaudeInput::read) } }
+        val running = kind == PaneKind.Shell && shell?.running == true
+        val chips = if (kind != PaneKind.Shell) emptyList() else if (running) listOf((shell?.blocks?.lastOrNull()?.cmd ?: "") to j.yellow)
+            else listOfNotNull((sel?.cwd ?: w.path) to j.dim, w.branch.takeIf { w.kind == Kind.Worktree && it.isNotEmpty() }?.let { "⎇ $it" to j.magenta })
+        if (fullAsk == null) Composer(
+            sel, state, session, remote = remote, live = PaneKinds.live(kind, remote), chips = chips, running = running,
+            commands = sel?.let { session.commands(it.pane) }, onNeedCommands = { sel?.let { session.requestCommands(it.pane) } },
+        )
+        if (fullAsk == null) StatusBar("TERM", j.green, sel?.let { "${it.role} · ${term?.let { t -> "${t.cols}×${t.rows}" } ?: "…"} · ^␣ menú" } ?: "sin paneles", route = state.route)
     }
 
     when (sheet) {
@@ -242,7 +337,7 @@ private fun KeyButton(label: String, accent: Boolean = false, modifier: Modifier
 
 /** `.keys`: `^␣` first, then the keys a phone keyboard lacks; the arrows and ⌫ repeat while held. */
 @Composable
-private fun KeyRow(sel: PaneInfo?, term: dev.jw.term.Terminal?, session: Session, onLeader: () -> Unit) {
+private fun KeyRow(sel: PaneInfo?, term: PaneText?, session: Session, onLeader: () -> Unit) {
     val j = LocalJw.current
     val scope = rememberCoroutineScope()
     Row(
@@ -279,44 +374,97 @@ private fun KeyRow(sel: PaneInfo?, term: dev.jw.term.Terminal?, session: Session
     }
 }
 
-/** `.comp`: a line typed here goes to the pane, then Enter. */
+/**
+ * `.comp`: the input. Where the PC shows the terminal's own input ([live]: a conversation or a marked shell) it is the same
+ * text: what is typed on the phone is typed in the terminal as it goes ([MirrorTyping]), and what changes in the
+ * terminal's input (typed at the PC) is put here once the phone's has been still for a moment; Enter only sends it.
+ * Elsewhere a line typed here goes to the pane, then Enter, when it is sent.
+ */
 @Composable
-private fun Composer(sel: PaneInfo?, state: UiState.Connected, session: Session) {
+private fun Composer(
+    sel: PaneInfo?, state: UiState.Connected, session: Session, remote: String?, live: Boolean,
+    chips: List<Pair<String, Color>> = emptyList(), running: Boolean = false,
+    commands: List<dev.jw.proto.CommandInfo>? = null, onNeedCommands: () -> Unit = {},
+) {
     val j = LocalJw.current
     var text by remember(sel?.pane) { mutableStateOf("") }
+    var typedAt by remember(sel?.pane) { mutableLongStateOf(0L) }
+    // The line just sent: the terminal still reports it until its next prompt, and it must not come back into the field.
+    var sent by remember(sel?.pane) { mutableStateOf<String?>(null) }
+    // The input became the terminal's (claude has just started in a shell): what was typed here is typed there.
+    LaunchedEffect(live) {
+        if (live && sel != null && !state.readOnly && text.isNotEmpty() && remote == "") {
+            session.input(sel.pane, MirrorTyping.bytes("", text))
+        }
+    }
+    // The terminal's input changed: if the phone's has been still, it follows.
+    LaunchedEffect(remote, live) {
+        if (remote != sent) sent = null
+        if (live && remote != null && remote != text && remote != sent && System.currentTimeMillis() - typedAt > MIRROR_STILL_MS) text = remote
+    }
     val send = {
         if (sel != null) {
-            if (text.isNotEmpty()) session.input(sel.pane, Keys.text(text))
+            if (!live && text.isNotEmpty()) session.input(sel.pane, Keys.text(text))
             session.input(sel.pane, Keys.key(Key.Enter))
+            if (text.isNotEmpty()) sent = text
             text = ""
+            typedAt = System.currentTimeMillis()
+        }
+    }
+    val edit = { new: String ->
+        if (live && sel != null && !state.readOnly) {
+            val bytes = MirrorTyping.bytes(text, new)
+            if (bytes.isNotEmpty()) session.input(sel.pane, bytes)
+        }
+        text = new
+        typedAt = System.currentTimeMillis()
+    }
+    // `/` as the first character of a Claude's input opens what it offers (REQ-102); the list is asked again as it opens.
+    val slash = commands != null && sel?.mayHaveConversation() == true && isSlashCommand(text)
+    LaunchedEffect(slash) { if (slash) onNeedCommands() }
+    if (slash && commands != null) SlashList(slashMatches(commands, text), commands.size, onPick = { edit(it.name + " ") })
+    if (chips.isNotEmpty()) {
+        Row(Modifier.fillMaxWidth().background(j.panel).horizontalScroll(rememberScrollState()).padding(start = 10.dp, end = 10.dp, top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            for ((label, color) in chips) {
+                Text(label, color = color, fontSize = 11.sp, maxLines = 1, modifier = Modifier.heightIn(min = 26.dp).background(j.sel, RoundedCornerShape(13.dp)).padding(horizontal = 10.dp, vertical = 5.dp))
+            }
         }
     }
     Row(
         Modifier.fillMaxWidth().background(j.panel).padding(start = 10.dp, end = 10.dp, top = 4.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Text(if (sel?.role == "agent") "›" else "❯", color = j.green, fontWeight = FontWeight.Bold)
+        if (chips.isEmpty()) Text(if (sel?.mayHaveConversation() == true) "›" else "❯", color = j.green, fontWeight = FontWeight.Bold)
         BasicTextField(
-            value = text, onValueChange = { text = it }, enabled = sel != null && !state.readOnly,
+            value = text, onValueChange = edit, enabled = sel != null && !state.readOnly,
             textStyle = TextStyle(color = j.fg, fontSize = 13.5.sp, fontFamily = JwMono), cursorBrush = SolidColor(j.fg),
-            singleLine = true, keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send), keyboardActions = KeyboardActions(onSend = { send() }),
+            singleLine = !live, keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send), keyboardActions = KeyboardActions(onSend = { send() }),
             modifier = Modifier.weight(1f),
             decorationBox = { inner ->
                 FieldFrame(j.line) {
                     Box(Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
-                        if (text.isEmpty()) Text(if (state.readOnly) "solo lectura" else if (sel?.role == "agent") "escribe a ${sel.role}" else "escribe un comando", color = j.dim, fontSize = 13.5.sp)
+                        if (text.isEmpty()) Text(if (state.readOnly) "solo lectura" else if (sel?.mayHaveConversation() == true) "escribe a ${sel.fg?.trimStart('-')?.takeIf { it != "zsh" } ?: sel.role}" else if (running) "Lo que escribas va al programa" else "escribe un comando", color = j.dim, fontSize = 13.5.sp)
                         inner()
                     }
                 }
             },
         )
+        val stop = running && text.isEmpty()
         Box(
-            Modifier.clickable(enabled = !state.readOnly, role = Role.Button, onClickLabel = "Enviar", onClick = send).minimumInteractiveComponentSize()
-                .width(44.dp).heightIn(min = 44.dp).background(if (state.readOnly) j.dim else j.blue, Corner),
+            Modifier.clickable(enabled = !state.readOnly, role = Role.Button, onClickLabel = if (stop) "Parar con Control C" else "Enviar") {
+                if (stop && sel != null) session.input(sel.pane, Keys.ctrl('c') ?: ByteArray(0)) else send()
+            }.minimumInteractiveComponentSize()
+                .width(44.dp).heightIn(min = 44.dp).background(if (state.readOnly) j.dim else if (stop) j.red else j.blue, Corner),
             contentAlignment = Alignment.Center,
-        ) { Text("↵", color = j.bg, fontWeight = FontWeight.Bold, fontSize = 16.sp) }
+        ) { Text(if (stop) "■" else "↵", color = j.bg, fontWeight = FontWeight.Bold, fontSize = 16.sp) }
     }
 }
+
+/** A question about a plan: Claude asks to go ahead with the one it drafted. */
+private val PLAN = Regex("""(?i)\bplan\b""")
+
+/** How long the phone's input must have been still before a change in the terminal's replaces it. */
+private const val MIRROR_STILL_MS = 800L
 
 @Composable
 internal fun SheetFrame(onClose: () -> Unit, content: @Composable () -> Unit) {

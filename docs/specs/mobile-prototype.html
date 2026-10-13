@@ -103,6 +103,15 @@ svg.i{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stro
 @media (prefers-reduced-motion:reduce){.cur{animation:none}*{transition:none!important}}
 .ask{background:color-mix(in srgb,var(--yellow) 12%,var(--bg));border-top:1px solid color-mix(in srgb,var(--yellow) 40%,transparent);padding:10px 12px}
 .ask p{margin:0 0 8px;font-size:12.5px}
+/* la pregunta del agente: una barra compacta; las opciones se abren en una hoja, con el teclado escondido */
+.askbar{display:flex;align-items:center;gap:10px;padding:6px 12px;min-height:44px;background:color-mix(in srgb,var(--yellow) 12%,var(--bg));border-top:1px solid color-mix(in srgb,var(--yellow) 40%,transparent)}
+.askbar span{flex:1;min-width:0;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.askbar button{min-height:36px;padding:0 14px;border-radius:6px;background:var(--yellow);color:var(--bg);font-weight:700}
+.sheet .q{margin:0 14px 10px;font-size:12.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
+.sheet .opt{display:flex;align-items:center;gap:12px;width:calc(100% - 24px);margin:0 12px 8px;min-height:52px;padding:0 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);text-align:left;font-size:13px}
+.sheet .opt kbd{flex:none;min-width:26px;text-align:center;color:var(--yellow);border:1px solid var(--line);border-radius:4px;padding:2px 6px;font-size:12px}
+.sheet .opt.cur{border-color:var(--yellow)}
+.sheet .opt.no{color:var(--red)}
 .ask .yn{padding:0}
 .selbar{display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--sel);border-top:1px solid var(--line);font-size:12px}.selbar span{flex:1;color:var(--dim)}
 .keys{display:flex;gap:5px;overflow:auto;padding:8px 10px 4px;background:var(--panel);scrollbar-width:none;border-top:1px solid var(--line)}
@@ -110,6 +119,99 @@ svg.i{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stro
 .key{min-width:44px;height:38px;padding:0 10px;border-radius:5px;background:var(--bg);border:1px solid var(--line);font-size:12px;display:grid;place-items:center;flex:none;text-align:center}
 .key.lead{color:var(--yellow);border-color:color-mix(in srgb,var(--yellow) 50%,var(--line))}
 .key:active{background:var(--blue);color:var(--bg)}
+/* conversación nativa: el transcript de claude como bloques, sin la pantalla del terminal */
+.ctitle{flex:none;display:flex;align-items:center;gap:8px;padding:4px 12px;min-height:34px;border-bottom:1px solid var(--line);background:var(--bg);font-size:12px;color:var(--dim)}
+.ctitle .nm{flex:1;min-width:0;display:flex;flex-direction:column}
+.ctitle b{color:var(--fg);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.ctitle .ds{color:var(--dim);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ctitle .pn{flex:none;display:flex;align-items:center;gap:5px;max-width:46%;color:var(--dim);font-size:11px;white-space:nowrap}
+.ctitle .pn i{width:7px;height:7px;border-radius:50%;background:var(--c,var(--magenta))}
+/* comandos con / : la lista de lo que claude ofrece, sobre la entrada */
+.slash{max-height:46%;overflow:auto;background:var(--panel);border-top:1px solid var(--line)}
+.slash .sh{display:flex;gap:8px;padding:6px 12px;font-size:10.5px;color:var(--dim);letter-spacing:.04em;text-transform:uppercase}
+.slash .sc{display:flex;gap:10px;align-items:flex-start;width:100%;text-align:left;min-height:52px;padding:8px 12px;border-top:1px solid var(--line)}
+.slash .sc b{font-weight:500;color:var(--blue);flex:none;min-width:96px;word-break:break-all}
+.slash .sc span{flex:1;min-width:0;font-size:11.5px;color:var(--dim);line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.slash .sc em{font-style:normal;font-size:10px;color:var(--dim);border:1px solid var(--line);border-radius:8px;padding:1px 6px;flex:none}
+.slash .sc.k em{color:var(--magenta)}
+.slash .none{padding:12px;font-size:12px;color:var(--dim)}
+/* preguntas de claude a pantalla completa, estado vivo y avisos de tareas */
+.ask{flex:1;min-height:0;display:flex;flex-direction:column;background:var(--bg)}
+.ask .top{flex:none;display:flex;align-items:center;gap:10px;height:48px;padding:0 8px 0 16px;background:var(--sel);border-bottom:1px solid var(--line);font-size:12px;color:var(--fg)}
+.ask .top i{width:8px;height:8px;border-radius:50%;background:var(--c,var(--yellow));animation:pulse 1.6s infinite}.ask .top span{flex:1}
+.ask .top button{height:44px;padding:0 14px;color:var(--dim);font-size:12px}
+.ask .bd{flex:1;min-height:0;overflow:auto;padding:20px 16px;display:flex;flex-direction:column;gap:12px}
+.ask .kick{font-size:11px;color:var(--dim);letter-spacing:.04em;text-transform:uppercase}
+.ask .qq{font-size:17px;line-height:1.4;font-weight:700;color:var(--fg)}
+.ask .ch{width:100%;text-align:left;min-height:64px;padding:12px 14px;display:flex;gap:12px;align-items:flex-start;border:1px solid var(--line);border-radius:12px;background:var(--panel);font-size:13.5px}
+.ask .ch.on{border:2px solid var(--blue);background:var(--sel)}
+.ask .ch b{display:block}.ask .ch small{display:block;font-size:11.5px;color:var(--dim);margin-top:3px;line-height:1.45}
+.ask .ch .mk{flex:none;width:26px;height:26px;border-radius:50%;border:1.5px solid var(--dim);display:grid;place-items:center;font-size:12px;color:var(--dim)}
+.ask .ch.on .mk{border-color:var(--blue);color:var(--blue)}.ask .ch .mk.sq{border-radius:7px}.ask .ch.on .mk.sq{background:var(--blue);color:var(--bg);font-weight:700}
+.ask .oth{min-height:52px;padding:0 14px;display:flex;align-items:center;gap:10px;border:1px dashed var(--line);border-radius:12px;color:var(--dim);font-size:13px}
+.ask .plan{font-size:12.5px;line-height:1.65}.ask .plan h4{margin:10px 0 4px;color:var(--fg)}
+.ask .ft{flex:none;padding:12px 16px;background:var(--panel);border-top:1px solid var(--line);display:flex;flex-direction:column;gap:8px}
+.ask .ft .go{height:52px;border-radius:12px;background:var(--blue);color:var(--bg);font-weight:700;font-size:14px;padding:0 28px}
+@keyframes pulse{0%,100%{opacity:.35}50%{opacity:1}}
+.live{display:flex;align-items:center;gap:10px;padding:2px 2px 4px;font-size:12.5px;color:var(--magenta)}
+.live .g{font-size:16px;animation:pulse 1.2s infinite}.live em{font-style:normal;font-size:11px;color:var(--dim)}.live .sp{flex:1}
+.live button{height:36px;padding:0 12px;border:1px solid var(--line);border-radius:18px;background:var(--panel);color:var(--red);font-size:11px}
+.notice{display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--line);border-left:3px solid var(--c);border-radius:8px;background:var(--panel)}
+.notice>i{font-style:normal;color:var(--c);flex:none}.notice>span{flex:1;min-width:0}.notice b{display:block;font-weight:400;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.notice small{display:block;font-size:10.5px;color:var(--dim);margin-top:2px}.notice em{font-style:normal;font-size:10.5px;color:var(--c)}
+.queued{align-self:flex-end;max-width:88%;background:var(--sel);border:1px dashed var(--line);border-radius:10px 10px 2px 10px;padding:8px 10px;font-size:12.5px;line-height:1.5;color:var(--dim)}.queued small{display:block;font-size:10.5px;color:var(--yellow);margin-bottom:3px}
+.bgrow{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:10px;background:var(--sel);border:1px solid var(--line);font-size:12px}.bgrow span{flex:1}.bgrow em{font-style:normal;color:var(--dim);font-size:11px}
+.msg.a .cur2{display:inline-block;width:7px;height:14px;background:var(--magenta);vertical-align:-2px;margin-left:2px;animation:pulse 1s infinite}
+/* shell por bloques, como Warp: de abajo hacia arriba, la salida completa y con colores */
+.blocks{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;justify-content:flex-end;background:var(--bg);position:relative}
+.blk{position:relative;padding:10px 16px 12px;border-top:1px solid var(--line)}
+.blk.bad{background:color-mix(in srgb,var(--red) 9%,var(--bg))}
+.blk.bad::before,.blk.run::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--red)}
+.blk.run{background:color-mix(in srgb,var(--yellow) 6%,var(--bg))}.blk.run::before{background:var(--yellow)}
+.blk.on{background:var(--sel);outline:2px solid var(--blue);outline-offset:-2px}
+.blk .bm{display:flex;align-items:center;gap:7px;font-size:10.5px;color:var(--dim)}
+.blk .bm .ms{margin-left:auto}.blk .bm .ms.ok{color:var(--green)}.blk .bm .ms.bad{color:var(--red)}.blk .bm .ms.run{color:var(--yellow)}
+.blk .bc{font-size:13.5px;font-weight:700;color:var(--bright,var(--fg));margin:5px 0 7px;word-break:break-word}
+.blk .bo{font-size:12px;line-height:1.55;white-space:pre-wrap;word-break:break-word;color:var(--fg)}
+.blk.bad .bo{color:var(--red)}
+.bar{flex:none;display:flex;justify-content:center;padding:8px 12px;background:var(--bg)}
+.bar>div{display:flex;gap:2px;padding:4px;border-radius:14px;background:var(--panel);border:1px solid var(--line);box-shadow:0 6px 20px rgba(0,0,0,.45)}
+.bar button{width:74px;height:52px;border-radius:10px;font-size:10.5px;color:var(--fg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px}
+.bar button b{font-size:16px;font-weight:400}
+.edit{background:var(--panel);border-top:1px solid var(--line);padding:10px 12px 0}
+.edit .chips{display:flex;gap:6px;margin-bottom:8px;overflow:hidden}
+.edit .chips span{height:26px;padding:0 10px;border-radius:13px;background:var(--sel);font-size:11px;display:flex;align-items:center;white-space:nowrap;color:var(--dim)}
+.edit .chips .br{color:var(--magenta)}.edit .chips .rn{color:var(--yellow)}
+.edit .row2{display:flex;gap:8px;align-items:flex-end;padding-bottom:6px}
+.edit input{flex:1;min-width:0;height:48px;border-radius:12px;border:1px solid var(--line);background:var(--bg);color:var(--fg);padding:0 14px;font:inherit;font-size:13.5px}
+.edit.prog input{border-style:dashed}
+.edit .go{width:48px;height:48px;border-radius:12px;background:var(--blue);color:var(--bg);display:grid;place-items:center;flex:none}
+.edit .go.stop{background:var(--red)}
+.sticky{position:sticky;top:0;z-index:2;display:flex;gap:8px;padding:8px 16px;background:var(--panel);border-bottom:1px solid var(--line);font-size:12px}
+.sticky b{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sticky span{color:var(--dim);font-size:10.5px}
+.full{flex:1;min-height:0;display:flex;flex-direction:column}
+.full .ban{flex:none;display:flex;gap:10px;padding:0 16px;height:36px;align-items:center;background:var(--sel);border-bottom:1px solid var(--line);font-size:11px;color:var(--dim)}
+.full .ban b{color:var(--yellow);font-weight:400}.full .ban i{font-style:normal;color:var(--blue)}
+.full pre{flex:1;margin:0;padding:6px 12px;font:12px/1.5 inherit;overflow:hidden;white-space:pre}
+.chip{font-size:10.5px;padding:2px 7px;border-radius:10px;border:1px solid currentColor;flex:none}
+.chip.ok{color:var(--green)}.chip.bad{color:var(--red)}.chip.run{color:var(--yellow)}
+.mirror{display:flex;align-items:center;gap:8px;padding:5px 12px;background:var(--panel);border-top:1px solid var(--line);font-size:11px;color:var(--dim)}
+.mirror .dot{width:7px;height:7px;border-radius:50%;background:var(--green);flex:none}
+.mirror .pcbox{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg);border:1px solid var(--line);border-radius:5px;padding:3px 8px;background:var(--bg)}
+.mirror .pcbox em{font-style:normal;color:var(--dim)}
+.chat{flex:1;min-height:0;overflow:auto;padding:10px 12px;display:flex;flex-direction:column;gap:10px;background:var(--bg)}
+.msg.u{align-self:flex-end;max-width:88%;background:var(--sel);border-radius:10px 10px 2px 10px;padding:8px 10px;font-size:12.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
+.msg.a{font-size:12.5px;line-height:1.55;word-break:break-word}
+.msg.a code{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:0 4px;color:var(--cyan)}
+.msg.a ol,.msg.a ul{margin:4px 0;padding-left:20px}
+.tool{border:1px solid var(--line);border-radius:8px;background:var(--panel);overflow:hidden}
+.tool .th{display:flex;align-items:center;gap:8px;padding:0 10px;min-height:42px;width:100%;text-align:left;font-size:12px}
+.tool .th b{color:var(--blue);font-weight:700}
+.tool .th .ar{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg)}
+.tool .th em{font-style:normal;color:var(--dim);font-size:11px;flex:none}
+.tool .th .ok{color:var(--green)}.tool .th .pend{color:var(--yellow)}
+.tool .tb{border-top:1px solid var(--line);padding:8px 10px;font-size:11.5px;color:var(--dim);white-space:pre-wrap;word-break:break-word;max-height:170px;overflow:auto;background:var(--bg)}
+.tool .tb .a{color:var(--green)}.tool .tb .x{color:var(--red)}
+.think{font-size:11.5px;color:var(--dim);display:flex;align-items:center;gap:6px;min-height:28px}
 .comp{display:flex;align-items:center;gap:6px;padding:4px 10px 8px;background:var(--panel)}
 .comp .pr{color:var(--green);font-weight:700}
 .comp input{flex:1;min-width:0;height:44px;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:var(--fg);padding:0 12px;font:inherit}
@@ -314,6 +416,13 @@ ol.sx code{background:var(--sel);padding:1px 6px;border-radius:4px;color:var(--g
     <div class="jump" id="jump"></div>
     <h2>Simular (solo maqueta)</h2>
     <div class="jump"><button data-act="sim" data-sim="accept">El PC acepta</button><button data-act="sim" data-sim="denied">El PC rechaza</button><button data-act="sim" data-sim="expired">El código venció</button><button data-act="sim" data-sim="unreach">No llego al PC</button><button data-act="sim" data-sim="proto">Protocolo: la app va atrás</button><button data-act="sim" data-sim="protojw">Protocolo: jw va atrás</button><button data-act="sim" data-sim="limited">Demasiados intentos</button><button data-act="sim" data-sim="away">Sales de casa (cae al túnel)</button><button data-act="sim" data-sim="home">Vuelves a casa</button></div>
+    <h2>Preguntas, pensando y avisos (nuevo)</h2>
+    <p style="margin:6px 0 14px;color:var(--dim)">Cuando claude pregunta (elegir una, elegir varias, plan mode, un permiso) la pregunta ocupa <b>toda la pantalla</b>: sin teclado ni panel pequeño, sin aprobar ni rechazar. Cada opción es una fila y al tocarla se envía; en varias se marcan y se envía con un botón. ✕ esc cancela. Mientras claude trabaja, una fila viva dice «Pensando…» o «Escribiendo…» con el tiempo y los tokens, y «■ parar» manda Esc. Los avisos de tareas (subagentes y tareas en segundo plano) son una fila de aviso, no un globo; un mensaje enviado mientras claude trabaja sale «en cola». Todo está en el menú de saltos.</p>
+    <h2>Comandos con / (nuevo)</h2>
+    <p style="margin:6px 0 14px;color:var(--dim)">Al escribir <code>/</code> como primer carácter en un chat de claude, sobre la entrada aparece la lista de lo que claude ofrece en ese workspace: sus comandos, los del proyecto (<code>.claude/commands</code>) y los skills, cada uno con su descripción y de dónde viene. Se filtra mientras escribes (los que empiezan igual primero), un toque llena el campo con <code>/nombre </code> y el cursor al final para añadir argumentos, y Enviar lo manda. Si nada coincide se envía tal cual. Está en el menú de saltos (<code>Escribir /</code>, <code>Escribir /co</code>).</p>
+    <h2>Entrada, nombre y shell (nuevo)</h2>
+    <div class="jump"><button data-act="pctype">Escribir en el PC (simula)</button></div>
+    <p style="margin:6px 0 14px;color:var(--dim)">La caja de entrada del PC y el campo de la app son un solo texto. La franja de arriba lleva el nombre del pane. El <b>shell</b> se dibuja por bloques, como Warp: bloques planos, sin bordes ni botones, de abajo hacia arriba (el más nuevo junto al editor); arriba de cada comando, en tenue, la carpeta y la duración, el comando en negrita y su salida <b>completa y con colores</b>; el prompt no se dibuja. Un comando que falla lleva barra y tinte rojos; uno que corre, barra amarilla y el editor pasa a modo programa (el botón es ^C). Tocar un bloque lo elige y abre una barra con comando, salida, repetir y enviar. En «Shell · bloque elegido» y «Shell · programa a pantalla completa» (menú de saltos) se ven los dos casos. El daemon guarda lo que imprimió cada comando tal cual y el teléfono lo interpreta en una terminal propia por bloque; un programa a pantalla completa (nvim) toma todo el pane mientras corre, con un aviso, y los bloques vuelven al salir. Un shell que jw no lanzó, o uno ya abierto, sigue como texto.</p>
     <h2>Wifi primero, túnel de respaldo</h2>
     <p style="margin:0 0 14px;color:var(--dim)">Cuando el PC y el teléfono comparten wifi, la app se conecta directo a la IP local (TLS con certificado propio de jw, fijado por la huella del QR). El túnel de Cloudflare queda guardado como respaldo: jw se lo avisa a la app cuando está listo, y otra vez si cambia de dirección. La app usa el wifi mientras responda y cae sola al túnel si no (botones «Sales de casa» y «Vuelves a casa»). La barra de estado muestra por dónde va (<code>wifi</code> o <code>túnel</code>); en ajustes se ven las dos rutas; «No encuentro tu PC» cuenta también la fila del wifi, medida con un plazo corto.</p>
     <h2>Qué comprueba de verdad la app</h2>
@@ -616,9 +725,10 @@ function vSettings(){
    <div class="srow"><div class="t"><b>túnel</b><span>jw-7f3a.trycloudflare.com · respaldo</span></div><span style="color:${state.route==='tunnel'?'var(--green)':'var(--dim)'}">${state.route==='tunnel'?'● en uso':'listo'}</span></div>
    <div class="srow"><div class="t"><b>protocolo</b><span>jw-proto v8 · compatible</span></div></div>
    <button class="srow" data-act="disc" style="color:var(--red)"><div class="t"><b>desconectar</b></div></button>
-   ${ansSection()}<div class="sec">tema</div><div class="themes">${Object.entries(THEMES).map(([n,t])=>`<button class="th" aria-pressed="${state.theme===n}" data-theme="${n}" style="--tbg:${t.bg};--tfg:${t.fg};--tdim:${t.dim}"><div class="s3">${['blue','green','red','yellow'].map(k=>`<i style="--c:${t[k]}"></i>`).join('')}</div><b>${n}</b><span>${t.dark?'oscuro':'claro'}</span></button>`).join('')}</div>
+   ${ansSection()}<div class="sec">tema</div><div class="prev">Lo eliges aquí, no en el PC: pinta la app, los colores del terminal y la salida del agente. El PC y el agente siguen con su tema. Los temas son los que tu PC ofrece (<b>jw theme ls</b>).</div><div class="themes">${Object.entries(THEMES).map(([n,t])=>`<button class="th" aria-pressed="${state.theme===n}" data-theme="${n}" style="--tbg:${t.bg};--tfg:${t.fg};--tdim:${t.dim}"><div class="s3">${['blue','green','red','yellow'].map(k=>`<i style="--c:${t[k]}"></i>`).join('')}</div><b>${n}</b><span>${t.dark?'oscuro':'claro'}</span></button>`).join('')}</div>
+   <div class="prev" style="border-top:1px solid var(--line)"><b>así se ve el panel con «${state.theme}»</b><div class="out" style="padding:8px 0 0;max-height:none;font-size:11.5px;background:transparent"><span class="d">~/ws/jw</span> <span class="g">✓</span> 42 tests <span class="r">✗</span> 1 falló <span class="y">⚠</span> aviso <span class="b">info</span> <span class="m">claude</span> <span class="c">cyan</span></div></div>
    <div class="sec">terminal</div>
-   <div class="srow"><div class="t"><b>ajustar al teléfono</b><span>el panel toma el tamaño de esta pantalla; al salir recupera el suyo</span></div>${sw('fit')}</div>
+   <div class="srow"><div class="t"><b>texto de los paneles</b><span>la app recibe el texto del panel y lo ajusta al ancho de esta pantalla; el PTY no cambia de tamaño, así que el TUI nunca queda encogido</span></div></div>
    <div class="sec">general</div>
    <div class="srow"><div class="t"><b>líder</b><span>^␣ abre el menú de teclas</span></div></div>
    <div class="srow"><div class="t"><b>animaciones</b></div>${sw('anim')}</div>
@@ -626,22 +736,137 @@ function vSettings(){
    ${statusBar('SET','settings.json')}${nav()}`;
 }
 
+/* lo que claude escribió en su transcript (~/.claude/projects/…/<id>.jsonl), como bloques */
+const CHAT={
+ 'jw/fix/daemon-sock':[
+  {k:'u',t:'El socket del daemon se queda colgado cuando el directorio de runtime no existe. ¿Puedes arreglarlo?'},
+  {k:'think',s:6},
+  {k:'a',t:'Voy a mirar cómo se crea el socket y qué pasa si falta <code>XDG_RUNTIME_DIR</code>.'},
+  {k:'tool',n:'Read',a:'crates/daemon/src/lib.rs',r:'1 640 líneas',b:'fn bind(socket: &Path) -> Result<UnixListener> {\n    …'},
+  {k:'tool',n:'Grep',a:'create_dir_all',r:'3 coincidencias',b:'crates/daemon/src/lib.rs:2087\ncrates/proto/src/client.rs:44\ncrates/jw/src/main.rs:61'},
+  {k:'a',t:'<code>bind</code> no crea el directorio padre. Lo agrego con permisos <code>0700</code> y un test.'},
+  {k:'tool',n:'Edit',a:'crates/daemon/src/lib.rs',r:'+9 −1',b:'<span class="x">- let listener = UnixListener::bind(socket)?;</span>\n<span class="a">+ if let Some(dir) = socket.parent() {</span>\n<span class="a">+     DirBuilder::new().recursive(true).mode(0o700).create(dir)?;</span>\n<span class="a">+ }</span>\n<span class="a">+ let listener = UnixListener::bind(socket)?;</span>'},
+  {k:'tool',n:'Bash',a:'cargo test -p jw-daemon',r:'42 pasan',ok:1,b:'running 42 tests\ntest result: ok. 42 passed; 0 failed'},
+  {k:'a',t:'Listo: el socket se crea aunque falte el directorio.<ol><li>Cambio en <code>bind</code></li><li>Test nuevo <code>creates_missing_runtime_dir</code></li></ol>'}
+ ]
+};
+CHAT['jw/feat/mobile-app']=[
+  {k:'u',t:'revisa cómo se ve la selección y el estado pensando'},
+  {k:'think',s:4},
+  {k:'n',c:'var(--green)',i:'✓',t:'Scout ask UI',d:'subagente · terminó · 18 s',r:'listo'},
+  {k:'n',c:'var(--green)',i:'✓',t:'Scout thinking state',d:'subagente · terminó · 25 s',r:'listo'},
+  {k:'n',c:'var(--red)',i:'✕',t:'cargo test --workspace',d:'tarea en segundo plano · falló · salió 101',r:'falló'},
+  {k:'n',c:'var(--dim)',i:'■',t:'Servidor de pruebas',d:'tarea en segundo plano · se detuvo antes de terminar',r:'detenida'},
+  {k:'a',t:'Los dos scouts respondieron. El test falló en <code>daemon.rs</code>; lo reviso.'}
+];
+const CHAT_TITLE={'jw/fix/daemon-sock':'Arreglar el socket del daemon','jw/feat/mobile-app':'App móvil: prototipo','api/feat/auth':'Tests del refresh token','web/feat/onboarding':'Onboarding: instalar dependencias'};
+const CHAT_NAME={'jw/fix/daemon-sock':'daemon-sock','jw/feat/mobile-app':'mobile-fixes','api/feat/auth':'auth-refresh'};
+function chatName(w){return CHAT_NAME[w.id]||null}
+function chatTitle(w){return CHAT_TITLE[w.id]||w.name}
+function chatOf(w){return CHAT[w.id]||[{k:'u',t:'¿En qué estás?'},{k:'a',t:w.last}]}
+function chatHtml(w){
+  state.open=state.open||{};
+  const items=chatOf(w).map((x,i)=>{
+    if(x.k==='u') return `<div class="msg u">${x.t}</div>`;
+    if(x.k==='a') return `<div class="msg a">${x.t}</div>`;
+    if(x.k==='n') return `<div class="notice" style="--c:${x.c}"><i>${x.i}</i><span><b>${x.t}</b><small>${x.d}</small></span><em>${x.r}</em></div>`;
+    if(x.k==='think') return `<div class="think"><span>✻</span> pensó ${x.s} s</div>`;
+    const op=state.open[w.id+i];
+    return `<div class="tool"><button class="th" data-act="tool" data-i="${w.id+i}" aria-expanded="${!!op}"><b>${x.n}</b><span class="ar">${x.a}</span><em class="${x.ok?'ok':''}">${x.r}</em><span style="color:var(--dim)">${op?'▾':'▸'}</span></button>${op?`<div class="tb">${x.b}</div>`:''}</div>`;
+  });
+  const ag=(state.demo&&state.demo.ag)||w.ag;
+  if(state.demo&&state.demo.stream){const last=items.pop();items.push((last||'').replace(/<\/div>$/,'<span class="cur2"></span></div>'))}
+  if(ag==='wait') items.push(`<div class="tool"><div class="th"><b>Bash</b><span class="ar">pnpm install</span><em class="pend">espera permiso</em></div></div>`);
+  if(state.demo&&state.demo.queue) items.push(`<div class="queued"><small>en cola · se envía cuando Claude termine</small>también cuando los agentes responden</div>`);
+  if(state.demo&&state.demo.bg) items.push(`<div class="bgrow"><span>◌ ${state.demo.bg} tareas en segundo plano</span><em>ver ›</em></div>`);
+  if(ag==='work') items.push(`<div class="live"><span class="g">✻</span><span>${state.demo&&state.demo.stream?'Escribiendo…':'Pensando…'}</span><em>${state.demo&&state.demo.stream?'21 s · ↓ 2,1k tokens':'12 s · ↓ 1,4k tokens'}</em><span class="sp"></span><button data-act="esc" aria-label="Interrumpir con Escape">■ parar</button></div>`);
+  const nm=chatName(w), ti=chatTitle(w);
+  return `<div class="ctitle"><span style="color:var(--magenta)">✻</span><span class="nm"><b title="el nombre que le diste a esta conversación en Claude (/rename)">${nm||ti}</b>${nm?`<span class="ds" title="la descripción que Claude le puso">${ti}</span>`:''}</span><span class="pn" title="el nombre del pane en el TUI"><i></i>${paneName()}</span></div><div class="chat" id="out">${items.join('')}</div>`;
+}
+/* el nombre del pane: el que se le dio en el TUI (^␣ n) o su rol */
+function paneName(){return state.pane}
+
+/* shell por bloques: cada comando es una tarjeta con su salida completa y a color; los más nuevos abajo, junto a la entrada */
+const SHELL={
+ 'jw/feat/mobile-app':[
+  {cmd:'git status -sb',cwd:'~/ws/jw-wt/mobile-app',code:0,ms:41,out:'## feat/mobile-app...origin/feat/mobile-app\n<span class="y"> M</span> docs/specs/mobile.md\n<span class="y"> M</span> android/app/src/main/kotlin/dev/jw/mobile/ChatUi.kt'},
+  {cmd:'ls -a',cwd:'~/ws/jw-wt/mobile-app',code:0,ms:12,out:'<span class="b">.</span> <span class="b">..</span> <span class="b">.git</span> .gitignore AGENTS.md Cargo.lock Cargo.toml <span class="b">crates</span> <span class="b">docs</span> justfile README.md <span class="b">target</span>'},
+  {cmd:'cargo clippy --workspace -- -D warnings',cwd:'~/ws/jw-wt/mobile-app',code:101,ms:2100,out:'<span class="r">error</span>: unused variable: `x`\n  <span class="b">--></span> crates/daemon/src/lib.rs:88:9\n<span class="r">error</span>: could not compile `jw-daemon`'},
+  {cmd:'cargo test -p jw-daemon',cwd:'~/ws/jw-wt/mobile-app',code:0,ms:6200,out:'running 45 tests\ntest shell::tests::a_command_is_a_block ... <span class="g">ok</span>\ntest chat::tests::an_edit_says_what_it_changed ... <span class="g">ok</span>\n…\ntest result: <span class="g">ok</span>. 45 passed; 0 failed'},
+  {cmd:'cargo watch -x test',cwd:'~/ws/jw-wt/mobile-app',run:1,ms:12000,out:'[Running: cargo test]\n   <span class="g">Compiling</span> jw-proto v0.0.24'}
+ ]
+};
+function shellHtml(w){
+  if(state.nvim)return `<div class="full"><div class="ban"><b>nvim</b><span style="flex:1">ocupa toda la pantalla</span><i>los bloques vuelven al salir</i></div><pre>${'<span class="m">fn</span> <span class="b">main</span>() {\n    <span class="m">let</span> d = start();\n    d.run();\n}\n\n'+'<span class="d">~\n</span>'.repeat(8)}</pre></div>`;
+  const all=SHELL[w.id]||SHELL['jw/feat/mobile-app'];
+  const items=all.map((b,i)=>{
+    const t=b.run?`corriendo ${Math.round(b.ms/1000)} s`:b.code===0?(b.ms<1000?b.ms+' ms':(b.ms/1000).toFixed(1)+' s'):`salió ${b.code} · ${b.ms<1000?b.ms+' ms':(b.ms/1000).toFixed(1)+' s'}`;
+    const cl=b.run?'run':b.code>0?'bad':'ok';
+    return `<div class="blk ${b.run?'run':b.code>0?'bad':''} ${state.blk===i?'on':''}" data-blk="${i}"><div class="bm"><span>${b.cwd}</span><span class="ms ${cl}">${t}</span></div><div class="bc">${b.cmd}</div><div class="bo">${b.out}</div></div>`;
+  });
+  const bar=state.blk!=null?`<div class="bar"><div role="toolbar" aria-label="Acciones del bloque"><button data-act="copycmd"><b>›_</b>Comando</button><button data-act="copyout"><b>⧉</b>Salida</button><button data-act="rerun"><b>↻</b>Repetir</button><button data-act="share"><b>↥</b>Enviar</button></div></div>`:'';
+  return `<div class="ctitle"><span style="color:var(--green)">❯</span><b style="flex:1;min-width:0"><span class="nm" style="display:block">${w.path}</span></b><span class="pn" style="--c:var(--dim)"><i></i>${paneName()}</span></div><div class="blocks" id="out">${items.join('')}</div>${bar}`;
+}
+function editorHtml(w){
+  const run=!!(SHELL[w.id]||SHELL['jw/feat/mobile-app']).some(b=>b.run);
+  const t=(state.draft||'').replace(/"/g,'&quot;');
+  return `<div class="edit ${run?'prog':''}"><div class="chips">${run?`<span class="rn">◌ cargo watch -x test</span>`:`<span>${ic('folder')} ${w.path}</span><span class="br">⎇ ${w.name}</span>`}</div><form class="row2" id="comp"><input id="msg" autocomplete="off" value="${t}" placeholder="${run?'Lo que escribas va al programa':'Escribe un comando'}" aria-label="Entrada">${run?`<button type="button" class="go stop" data-act="stop" aria-label="Parar con Control C">■</button>`:`<button class="go" aria-label="Enviar">${ic('send')}</button>`}</form></div>`;
+}
+
+/* el texto de la caja de entrada del PC y el campo de la app son uno solo */
+/* los comandos que claude ofrece en este workspace: los suyos, los del proyecto y los skills */
+const SLASH=[
+ {n:'/commit',d:'Hace git status, diff y log, y commitea todo en un solo commit convencional.',k:'comando'},
+ {n:'/compact',d:'Resume la conversación para liberar contexto.',k:'claude'},
+ {n:'/clear',d:'Borra la conversación y empieza de nuevo.',k:'claude'},
+ {n:'/code-review',d:'Revisa el diff actual buscando errores de corrección.',k:'skill'},
+ {n:'/config',d:'Abre los ajustes de claude.',k:'claude'},
+ {n:'/context',d:'Muestra cuánto contexto se usa.',k:'claude'},
+ {n:'/cost',d:'Muestra el costo y la duración de la sesión.',k:'claude'},
+ {n:'/create-spec',d:'Escribe o reestructura una spec para que un humano la lea y un agente actúe.',k:'skill'},
+ {n:'/help',d:'Ayuda y comandos disponibles.',k:'claude'},
+ {n:'/init',d:'Crea un CLAUDE.md con la documentación del código.',k:'claude'},
+ {n:'/jw',d:'Cómo trabajar dentro de un workspace de jw y con los demás.',k:'skill'},
+ {n:'/model',d:'Cambia el modelo.',k:'claude'},
+ {n:'/rust-review',d:'Revisa código Rust: duplicados, lógica compleja y reglas del repo.',k:'skill'},
+ {n:'/simplify',d:'Revisa el código cambiado y aplica simplificaciones.',k:'skill'},
+ {n:'/sync-main',d:'Vuelve a la rama por defecto, hace pull y recompila los paquetes.',k:'comando'}
+];
+function slashHtml(){
+  const d=state.draft||'';
+  if(state.pane!=='claude'||!/^\/[^\s]*$/.test(d)) return '';
+  const q=d.slice(1).toLowerCase();
+  const rows=SLASH.filter(c=>c.n.slice(1).includes(q)).sort((a,b)=>(+!a.n.slice(1).startsWith(q))-(+!b.n.slice(1).startsWith(q)));
+  return `<div class="slash" role="listbox" aria-label="Comandos"><div class="sh"><span>comandos</span><span style="flex:1"></span><span>${rows.length} de ${SLASH.length}</span></div>${rows.length?rows.map(c=>`<button class="sc ${c.k==='claude'?'':'k'}" role="option" data-act="slashpick" data-n="${c.n}"><b>${c.n}</b><span>${c.d}</span><em>${c.k}</em></button>`).join(''):'<div class="none">Ningún comando empieza así. Se envía tal cual.</div>'}</div>`;
+}
+function mirrorHtml(){
+  const t=(state.draft||'').replace(/</g,'&lt;');
+  return `<div class="mirror"><span class="dot"></span><span>mismo texto que en el PC</span><span class="pcbox" aria-label="Caja de entrada del PC">${state.pane==='claude'?'›':'❯'} ${t||'<em>vacío</em>'}▌</span></div>`;
+}
+function askHtml(w){
+  const k=(state.demo&&state.demo.ask)||'choose', sel=state.askSel||(k==='multi'?[0,1]:[0]);
+  const top=(t,c)=>`<div class="top" style="--c:${c||'var(--yellow)'}"><i></i><span>${t}</span><button data-act="askesc" aria-label="Cancelar con Escape">✕ esc</button></div>`;
+  if(k==='plan') return `<div class="ask">${top('claude propone un plan','var(--magenta)')}<div class="bd plan"><div class="kick">Plan</div><div class="qq">El shell como bloques planos</div><h4>1. Daemon</h4>Vaciar la línea al empezar un comando. Sin cambios de protocolo.<h4>2. App</h4>Reescribir <code>ShellUi.kt</code>: bloques sin borde, barra de acciones, editor con chips.<h4>3. Spec</h4>REQ-97 y una línea en Corrections.<h4>4. Pruebas</h4>Un test por cambio y <code>just ci</code>.</div><div class="ft"><div class="kick">¿Seguimos con este plan?</div>${[['Sí, y aceptar los cambios solos',''],['Sí, y pedirme cada cambio','']].map(([a,b],i)=>`<button class="ch ${i===0?'on':''}" data-act="askpick" data-i="${i}"><span class="mk">${i+1}</span><span><b>${a}</b></span></button>`).join('')}<div class="oth">✎ Sigue planeando…</div></div></div>`;
+  const multi=k==='multi';
+  const items=multi?[['Daemon','Bloques, marcas de zsh'],['App Android','ShellUi y el editor'],['Spec y prototipo','REQ-97 y el diseño'],['Pruebas','Rust y Android']]:[['Un terminal por bloque','Cada comando guarda sus bytes y el teléfono los interpreta. Recomendado.'],['Texto plano','Solo las líneas de la pantalla, sin colores.'],['Una tarjeta con borde','Como antes: marco, botones y cabecera por comando.']];
+  return `<div class="ask">${top(multi?'claude te pregunta · elige varias':'claude te pregunta')}<div class="bd"><div class="kick">${multi?'Alcance':'Enfoque'}</div><div class="qq">${multi?'¿Qué debe cubrir el cambio?':'¿Cómo quieres dibujar los bloques del shell?'}</div>${items.map(([a,b],i)=>`<button class="ch ${sel.includes(i)?'on':''}" data-act="askpick" data-i="${i}"><span class="mk ${multi?'sq':''}">${multi?(sel.includes(i)?'✓':''):i+1}</span><span><b>${a}</b><small>${b}</small></span></button>`).join('')}<div class="oth">✎ Otra respuesta…</div></div>${multi?`<div class="ft" style="flex-direction:row;align-items:center"><span style="flex:1;font-size:12px;color:var(--dim)">${sel.length} elegidas</span><button class="go" data-act="asksend">Enviar</button></div>`:`<div class="ft" style="font-size:11px;color:var(--dim);text-align:center">Toca una opción: se envía al instante. No hay aprobar ni rechazar.</div>`}</div>`;
+}
 function vWs(){
   const w=wsOf(state.ws), proj=w.kind==='root'?w.id:w.proj, root=wsOf(proj);
   const panes=[['claude','var(--magenta)'],['dev','var(--green)'],['shell','var(--dim)']];
   const k=`${w.id}|${state.pane}`, lines=logFor(k).join('\n');
-  const askOn=w.ag==='wait'&&state.pane==='claude';
+  const askOn=((state.demo&&state.demo.ag)||w.ag)==='wait'&&state.pane==='claude'&&!state.askOff;
   const keys=['esc','tab','⏎','↑','↓','←','→','^C','^D','^R','/','|','~'];
   return `<div class="hdr"><button class="ib" data-go="home" aria-label="Volver a workspaces">${ic('back')}</button>
     <div class="t"><b>${w.kind==='wt'?root.name+' › ':''}${w.name}</b><span>${w.kind==='wt'?'⎇ '+w.name+' · base main · '+(w.pr||'sin PR')+' · ':''}${w.path}</span></div>
     <button class="ib" data-sheet="pick" aria-label="Cambiar workspace">${ic('search')}</button><button class="ib" data-act="wsfiles" aria-label="Archivos">${ic('folder')}</button><button class="ib" data-go="changes" aria-label="Cambios" style="font-size:16px">±</button></div>
    <div class="panes" role="tablist">${panes.map(([p,c])=>`<button class="pt" role="tab" aria-selected="${state.pane===p}" data-pane="${p}" style="--c:${c}"><i></i>${p}</button>`).join('')}</div>
-   <div class="out" id="out">${lines}${w.ag==='work'&&state.pane==='claude'?' <span class="cur"></span>':''}</div>
-   ${askOn?`<div class="ask"><p><b style="color:var(--yellow)">?</b> ${w.last}</p><div class="yn"><button class="y" data-ans="y|${w.id}">y · sí</button><button class="x" data-ans="n|${w.id}">n · no</button></div></div>`:''}
+   ${askOn?askHtml(w):state.pane==='claude'?chatHtml(w):state.pane==='shell'?shellHtml(w):`<div class="out" id="out">${lines}</div>`}
    ${state.sel?`<div class="selbar"><span>3 líneas seleccionadas</span><button class="key" data-act="copy">copiar</button><button class="key" data-act="unsel">cancelar</button></div>`:''}
-   <div class="keys"><button class="key lead" data-sheet="leader">^␣</button>${keys.map(x=>`<button class="key" data-key="${x}">${x}</button>`).join('')}</div>
-   <form class="comp" id="comp"><span class="pr">${state.pane==='claude'?'›':'❯'}</span><input id="msg" autocomplete="off" placeholder="${state.pane==='claude'?'escribe a claude':'escribe un comando'}" aria-label="Entrada"><button class="send" aria-label="Enviar">${ic('send')}</button></form>
-   ${statusBar('TERM',state.pane+' · 54×22 · ^␣ menú')}`;
+   ${askOn?'':`<div class="keys"><button class="key lead" data-sheet="leader">^␣</button>${keys.map(x=>`<button class="key" data-key="${x}">${x}</button>`).join('')}</div>`}
+   ${askOn?'':state.pane==='claude'?`<div id="slashbox">${slashHtml()}</div>`+mirrorHtml():''}
+   ${askOn?'':state.pane==='shell'?editorHtml(w):`<form class="comp" id="comp"><span class="pr">${state.pane==='claude'?'›':'❯'}</span><input id="msg" autocomplete="off" value="${(state.draft||'').replace(/"/g,'&quot;')}" placeholder="${state.pane==='claude'?'escribe a claude':'escribe un comando'}" aria-label="Entrada"><button class="send" aria-label="Enviar">${ic('send')}</button></form>`}
+   ${statusBar('TERM',state.pane+' · texto · se ajusta al ancho · ^␣ menú')}`;
 }
 
 
@@ -699,8 +924,20 @@ function vViewer(){
    <div class="scroll">${body}</div>${statusBar('NORMAL',v.kind==='bin'?'binario':v.kind==='big'?'1 MiB de 3,4 MiB':md?(v.src?'markdown · fuente':'markdown · vista'):'texto · '+TXT.length+' líneas')}`;
 }
 
+/* nueva sesión: el formulario vive dentro de la hoja de sesiones (no abre otra hoja) */
+function newSessForm(){
+  const st=state.ns||'form';
+  return `<h3><button class="ib" data-act="sessback" aria-label="Volver a las sesiones" style="display:inline-flex;vertical-align:middle;margin-right:4px">${ic('back')}</button>nueva sesión</h3>
+      <label class="fld"><label>nombre</label></label><input id="nsname" value="${state.nsName||'trabajo'}" ${state.ro?'disabled':''} aria-label="Nombre de la sesión">
+      <label class="fld"><label>carpeta con la que empieza</label></label>
+      <button class="pick" data-act="pickfolder"><span>${state.nsDir}</span><em>elegir ▸</em></button>
+      ${st==='err'?'<div class="bad">ya existe una sesión con ese nombre</div>':''}${st==='cmd'?'<div class="bad">ese nombre es un comando de jw</div>':''}
+      ${state.ro?'<div class="bad" style="color:var(--yellow)">solo lectura: este puente no deja crear sesiones</div>':''}
+      <button class="gobtn" data-act="createsess" ${state.ro?'disabled':''}>crear y abrir</button>`;
+}
 function sheet(){
   const s=state.sheet; if(!s) return '';
+  if(s!=='sess') state.sessNew=false;
   let body='';
   if(s==='pick'){
     const q=state.q.toLowerCase(), l=state.w.filter(x=>(x.name+x.path).toLowerCase().includes(q));
@@ -709,9 +946,14 @@ function sheet(){
   if(s==='sess'){
     const ss=[...new Set(state.w.map(x=>x.sess))];
     body=`<h3>sesiones</h3><div class="list">${ss.map(n=>`<button class="lk" data-sess="${n}"><kbd>${n===state.sess?'●':' '}</kbd><span>${n}</span><em>${state.w.filter(x=>x.sess===n).length} workspaces</em></button>`).join('')}<button class="lk" data-act="newsess"><kbd>+</kbd><span>nueva sesión</span></button></div>`;
+    if(state.sessNew) body=newSessForm();
   }
   if(s==='open'){
-    body=`<h3>abrir</h3><div class="list"><button class="lk" data-act="folder"><kbd>o</kbd><span>abrir carpeta</span><em>del PC</em></button><button class="lk" data-act="newwt"><kbd>w</kbd><span>nuevo worktree</span><em>de un proyecto</em></button><button class="lk" data-act="newsess"><kbd>a</kbd><span>nueva sesión</span></button><button class="lk" data-sheet="pick"><kbd>␣</kbd><span>buscar workspace</span></button></div>`;
+    body=`<h3>abrir</h3><div class="list"><button class="lk" data-act="folder"><kbd>o</kbd><span>abrir carpeta</span><em>del PC</em></button><button class="lk" data-act="newwt"><kbd>w</kbd><span>nuevo worktree</span><em>de un proyecto</em></button><button class="lk" data-sheet="pick"><kbd>␣</kbd><span>buscar workspace</span></button></div>`;
+  }
+  if(s==='answer'){
+    const w=wsOf(state.ws), opts=['Yes','Yes, and don\'t ask again for pnpm commands','No, and tell Claude what to do differently'];
+    body=`<h3>claude pregunta</h3><div class="q">${w.last}</div>${opts.map((o,i)=>`<button class="opt ${i===0?'cur':''} ${i===2?'no':''}" data-act="pickopt" data-i="${i}"><kbd>${i+1}</kbd><span>${o}</span></button>`).join('')}<div class="note2">Al abrirla, la app esconde el teclado. Tocar una opción mueve la selección de claude hasta ella y confirma.</div>`;
   }
   if(s==='leader'){
     const it=[['␣','buscar workspace','ir'],['o','abrir carpeta','ir'],['/','archivos','ir'],['w','nuevo worktree','worktree'],['tab','workspace anterior','ir'],['a','sesiones','ir'],['t','panel nuevo','paneles'],['x','cerrar panel','paneles'],['n','nombrar panel','paneles'],['d','cambios (diff)','worktree'],[',','ajustes','ir'],['q','desconectar','']];
@@ -735,16 +977,6 @@ function sheet(){
   if(s==='newwtproj'){
     body=`<h3>proyecto</h3><div class="list">${state.w.filter(x=>x.kind==='root').map(x=>`<button class="lk" data-act="setproj" data-proj="${x.name}"><kbd>${x.name===state.nwProj?'●':' '}</kbd><span>${x.name}</span><em>${x.path}</em></button>`).join('')}</div>`;
   }
-  if(s==='newsess'){
-    const st=state.ns||'form';
-    body=`<h3>nueva sesión</h3>
-      <label class="fld"><label>nombre</label></label><input id="nsname" value="${state.nsName||'trabajo'}" ${state.ro?'disabled':''} aria-label="Nombre de la sesión">
-      <label class="fld"><label>carpeta con la que empieza</label></label>
-      <button class="pick" data-act="pickfolder"><span>${state.nsDir}</span><em>elegir ▸</em></button>
-      ${st==='err'?'<div class="bad">ya existe una sesión con ese nombre</div>':''}${st==='cmd'?'<div class="bad">ese nombre es un comando de jw</div>':''}
-      ${state.ro?'<div class="bad" style="color:var(--yellow)">solo lectura: este puente no deja crear sesiones</div>':''}
-      <button class="gobtn" data-act="createsess" ${state.ro?'disabled':''}>crear y abrir</button>`;
-  }
   if(s==='paste'){
     body=`<h3>pegar enlace</h3><input id="lnk" placeholder="jw://….trycloudflare.com/…" autocomplete="off" aria-label="Enlace"><div class="lerr">${state.linkerr||''}</div><div class="list"><button class="lk" data-act="link"><kbd>↵</kbd><span>conectar</span><em>solo túneles de jw</em></button></div>`;
   }
@@ -757,7 +989,7 @@ function render(){
   $('#overlay').innerHTML=sheet();
   const o=$('#out'); if(o) o.scrollTop=o.scrollHeight;
   const q=$('#q'); if(q){q.focus();q.setSelectionRange(q.value.length,q.value.length)}
-  $('#jump').innerHTML=[['connect','Conexión (QR)'],['perm','Cámara: permiso · nuevo'],['permdenied','Cámara bloqueada · nuevo'],['cam','Cámara · visor · nuevo'],['paste','Pegar enlace · nuevo'],['pair','Código de emparejamiento · nuevo'],['denied','El PC rechaza · nuevo'],['expired','Código vencido · nuevo'],['unreach','No encuentro tu PC · nuevo'],['proto','Protocolo distinto · nuevo'],['set','Respuestas rápidas · nuevo'],['limited','Demasiados intentos · nuevo'],['home','Workspaces (sidebar)'],['wsroot','Entrar a la raíz'],['ws','Entrar a un worktree'],['pick','Buscador ␣'],['leader','Menú ^␣ · cambiado'],['sel','Selección de texto · nuevo'],['inbox','Avisos'],['changes','Cambios · General · cambiado'],['chunc','Cambios · Sin commitear · nuevo'],['chcom','Cambios · Commits · nuevo'],['chcomf','Cambios · un commit · nuevo'],['chfile','Cambios · un archivo · cambiado'],['chren','Cambios · renombrado · nuevo'],['chbin','Cambios · binario · nuevo'],['chunr','Cambios · ilegible · nuevo'],['chbig','Cambios · cortado · nuevo'],['chtoo','Cambios · demasiado grande · nuevo'],['chnobase','Cambios · sin rama base · nuevo'],['chload','Cambios · leyendo · nuevo'],['cherr','Cambios · error de una vista · nuevo'],['chempty','Cambios · sin cambios · nuevo'],['chnone','Cambios · sin workspace · nuevo'],['f1','Archivos · un workspace · nuevo'],['f2','Archivos · ocultos · nuevo'],['f3','Archivos · abrir carpeta · nuevo'],['f4','Archivos · sin permiso · nuevo'],['f5','Archivos · vacía · nuevo'],['f6','Archivos · demasiados · nuevo'],['v1','Visor · markdown · nuevo'],['v2','Visor · markdown fuente · nuevo'],['v3','Visor · texto · nuevo'],['v4','Visor · binario · nuevo'],['v5','Visor · cortado a 1 MiB · nuevo'],['v6','Visor · sin permiso · nuevo'],['w1','Nuevo worktree · nuevo'],['w2','Nuevo worktree · creando · nuevo'],['w3','Nuevo worktree · error · nuevo'],['w4','Nuevo worktree · solo lectura · nuevo'],['n1','Nueva sesión · nuevo'],['n2','Nueva sesión · nombre repetido · nuevo'],['n3','Nueva sesión · es un comando · nuevo'],['p1','Menú + · cambiado'],['settings','Ajustes y temas']].map(([k,l])=>`<button data-jump="${k}">${l}</button>`).join('');
+  $('#jump').innerHTML=[['connect','Conexión (QR)'],['perm','Cámara: permiso · nuevo'],['permdenied','Cámara bloqueada · nuevo'],['cam','Cámara · visor · nuevo'],['paste','Pegar enlace · nuevo'],['pair','Código de emparejamiento · nuevo'],['denied','El PC rechaza · nuevo'],['expired','Código vencido · nuevo'],['unreach','No encuentro tu PC · nuevo'],['proto','Protocolo distinto · nuevo'],['set','Respuestas rápidas · nuevo'],['limited','Demasiados intentos · nuevo'],['home','Workspaces (sidebar)'],['wsroot','Entrar a la raíz'],['ws','Entrar a un worktree'],['pick','Buscador ␣'],['leader','Menú ^␣ · cambiado'],['sel','Selección de texto · nuevo'],['shblk','Shell · bloque elegido · nuevo'],['slash','Escribir / · comandos · nuevo'],['slashf','Escribir /co · filtrado · nuevo'],['askc','Pregunta · elegir una · nuevo'],['askm','Pregunta · elegir varias · nuevo'],['askp','Pregunta · plan mode · nuevo'],['think','Chat · pensando · nuevo'],['resp','Chat · respondiendo · nuevo'],['notices','Chat · avisos de tareas · nuevo'],['shnv','Shell · programa a pantalla completa · nuevo'],['inbox','Avisos'],['changes','Cambios · General · cambiado'],['chunc','Cambios · Sin commitear · nuevo'],['chcom','Cambios · Commits · nuevo'],['chcomf','Cambios · un commit · nuevo'],['chfile','Cambios · un archivo · cambiado'],['chren','Cambios · renombrado · nuevo'],['chbin','Cambios · binario · nuevo'],['chunr','Cambios · ilegible · nuevo'],['chbig','Cambios · cortado · nuevo'],['chtoo','Cambios · demasiado grande · nuevo'],['chnobase','Cambios · sin rama base · nuevo'],['chload','Cambios · leyendo · nuevo'],['cherr','Cambios · error de una vista · nuevo'],['chempty','Cambios · sin cambios · nuevo'],['chnone','Cambios · sin workspace · nuevo'],['f1','Archivos · un workspace · nuevo'],['f2','Archivos · ocultos · nuevo'],['f3','Archivos · abrir carpeta · nuevo'],['f4','Archivos · sin permiso · nuevo'],['f5','Archivos · vacía · nuevo'],['f6','Archivos · demasiados · nuevo'],['v1','Visor · markdown · nuevo'],['v2','Visor · markdown fuente · nuevo'],['v3','Visor · texto · nuevo'],['v4','Visor · binario · nuevo'],['v5','Visor · cortado a 1 MiB · nuevo'],['v6','Visor · sin permiso · nuevo'],['w1','Nuevo worktree · nuevo'],['w2','Nuevo worktree · creando · nuevo'],['w3','Nuevo worktree · error · nuevo'],['w4','Nuevo worktree · solo lectura · nuevo'],['n1','Nueva sesión · nuevo'],['n2','Nueva sesión · nombre repetido · nuevo'],['n3','Nueva sesión · es un comando · nuevo'],['p1','Menú + · cambiado'],['settings','Ajustes y temas']].map(([k,l])=>`<button data-jump="${k}">${l}</button>`).join('');
 }
 function answer(v,id){
   const w=wsOf(id); if(!w) return; buzz();
@@ -768,12 +1000,18 @@ function answer(v,id){
 function enter(id){state.sel=false;state.ws=id;state.pane='claude';state.screen='ws';state.sheet=null;state.q='';const w=wsOf(id);w.t=w.t==='ahora'?'ahora':w.t;render()}
 
 document.addEventListener('click',e=>{
-  const t=e.target.closest('[data-go],[data-open],[data-ans],[data-act],[data-theme],[data-sw],[data-pane],[data-key],[data-file],[data-pcfile],[data-fs],[data-view],[data-dir],[data-vtab],[data-commit],[data-cn],[data-jump],[data-sheet],[data-sess],[data-lead],[data-preset],[data-opt]'); if(!t) return;
+  const t=e.target.closest('[data-go],[data-open],[data-ans],[data-act],[data-theme],[data-sw],[data-pane],[data-blk],[data-key],[data-file],[data-pcfile],[data-fs],[data-view],[data-dir],[data-vtab],[data-commit],[data-cn],[data-jump],[data-sheet],[data-sess],[data-lead],[data-preset],[data-opt]'); if(!t) return;
   const d=t.dataset;
+  if(d.blk!==undefined&&!d.act){state.blk=state.blk===+d.blk?null:+d.blk;render();return}
   if(d.jump){state.sheet=null;state.file=null;state.conn='idle';
     if(CONN.includes(d.jump)){goConn(d.jump);return}
     if(d.jump==='sel'){state.sess='main';enter('jw/feat/mobile-app');state.sel=true;render();return}
-    if(d.jump==='wsroot'){state.sess='main';enter('jw');return}
+    if(['askc','askm','askp','think','resp','notices'].includes(d.jump)){state.sess='main';enter('jw/feat/mobile-app');state.pane='claude';state.askOff=false;state.askSel=null;state.blk=null;
+      state.demo={askc:{ag:'wait',ask:'choose'},askm:{ag:'wait',ask:'multi'},askp:{ag:'wait',ask:'plan'},think:{ag:'work'},resp:{ag:'work',stream:true},notices:{ag:'work',queue:true,bg:2}}[d.jump];render();return}
+    if(d.jump==='slash'||d.jump==='slashf'){state.demo=null;state.sess='main';enter('jw/feat/mobile-app');state.pane='claude';state.draft=d.jump==='slash'?'/':'/co';state.askOff=false;render();return}
+    if(d.jump==='shblk'){state.demo=null;state.sess='main';enter('jw/feat/mobile-app');state.pane='shell';state.blk=3;state.nvim=false;render();return}
+    if(d.jump==='shnv'){state.sess='main';enter('jw/feat/mobile-app');state.pane='shell';state.blk=null;state.nvim=true;render();return}
+    if(d.jump==='wsroot'){state.demo=null;state.sess='main';enter('jw');return}
     if(d.jump==='ws'){state.sess='main';enter('jw/fix/daemon-sock');return}
     if(d.jump==='pick'||d.jump==='leader'){state.screen='home';state.sheet=d.jump;render();return}
     if(/^[fvwnp][0-9]$/.test(d.jump)){const j=d.jump,m={f1:['~/ws/jw'],f2:['~/ws/jw',1],f3:['~/ws','open'],f4:['~/.ssh'],f5:['~/Downloads'],f6:['~/ws/jw','big']};
@@ -781,7 +1019,7 @@ document.addEventListener('click',e=>{
       if(j[0]==='f'){const a=m[j];state.fs={path:a[0],mode:a[1]==='open'?'open':'browse',hidden:a[1]===1,big:a[1]==='big'};state.sess='main';state.ws='jw/feat/mobile-app';state.screen='files';render();return}
       if(j[0]==='v'){state.viewer={path:'~/ws/jw/docs/specs/mobile.md',kind:'ok',src:false};if(j==='v2')state.viewer.src=true;if(j==='v3')state.viewer={path:'~/ws/jw/crates/core/Cargo.toml',kind:'ok',src:false};if(j==='v4')state.viewer={path:'~/ws/jw/logo.png',kind:'bin',src:false};if(j==='v5')state.viewer={path:'~/ws/jw/docs/specs/rust-tui.md',kind:'big',src:false};if(j==='v6')state.viewer={path:'~/.ssh/id_ed25519',kind:'err',src:false};state.screen='viewer';render();return}
       if(j[0]==='w'){state.sess='main';state.screen='home';state.sheet='newwt';if(j==='w2')state.nw='busy';if(j==='w3')state.nw='err';if(j==='w4')state.ro=true;render();return}
-      if(j[0]==='n'){state.sess='main';state.screen='home';state.sheet='newsess';if(j==='n2')state.ns='err';if(j==='n3'){state.ns='cmd';state.nsName='worktree'}else state.nsName='';render();return}
+      if(j[0]==='n'){state.sess='main';state.screen='home';state.sheet='sess';state.sessNew=true;if(j==='n2')state.ns='err';if(j==='n3'){state.ns='cmd';state.nsName='worktree'}else state.nsName='';render();return}
       if(j==='p1'){state.sess='main';state.screen='home';state.sheet='open';render();return}}
     if(d.jump.startsWith('ch')||d.jump==='changes'){const j=d.jump;state.screen='changes';state.vst={gen:'ok',unc:'ok',com:'ok'};state.view='unc';state.commit=null;state.file=null;
       const set=(v,x)=>{state.view=v;state.vst[v]=x};
@@ -853,17 +1091,32 @@ document.addEventListener('click',e=>{
     case 'vsrc0':state.viewer.src=false;render();break;
     case 'vsrc1':state.viewer.src=true;render();break;
     case 'newwt':state.sheet='newwt';render();break;
-    case 'newsess':state.sheet='newsess';render();break;
+    case 'copyout':toast('salida copiada');break;
+    case 'askpick':{const i=+t.dataset.i,k=(state.demo&&state.demo.ask)||'choose';if(k==='multi'){const c=state.askSel||[0,1];state.askSel=c.includes(i)?c.filter(x=>x!==i):[...c,i];render()}else{state.askOff=true;render();toast('enviado: opción '+(i+1))}break}
+    case 'asksend':state.askOff=true;render();toast('enviado: '+(state.askSel||[0,1]).length+' opciones');break;
+    case 'askesc':state.askOff=true;render();toast('Esc enviado');break;
+    case 'esc':toast('Esc enviado: interrumpido');break;
+    case 'slashpick':state.draft=t.dataset.n+' ';render();{const i=$('#msg');if(i){i.focus();i.setSelectionRange(i.value.length,i.value.length)}}toast('listo: '+t.dataset.n);break;
+    case 'copycmd':toast('comando copiado');break;
+    case 'share':toast('enviado a otra app');break;
+    case 'nvim':state.nvim=!state.nvim;render();break;
+    case 'rerun':toast('repetido en el shell');break;
+    case 'stop':toast('^C enviado');break;
+    case 'pickopt':{const i=+t.dataset.i;state.sheet=null;answer(i===2?'n':'y',state.ws);toast('enviado: opción '+(i+1));break}
+    case 'pctype':state.draft=(state.draft?state.draft+' ':'')+'revisa también el test del socket';render();toast('escrito en el PC');break;
+    case 'tool':state.open=state.open||{};state.open[t.dataset.i]=!state.open[t.dataset.i];render();break;
+    case 'newsess':state.sheet='sess';state.sessNew=true;render();break;
+    case 'sessback':state.sessNew=false;render();break;
     case 'setproj':state.nwProj=t.dataset.proj;state.sheet='newwt';render();break;
     case 'pickfolder':state.sheet=null;state.screen='files';state.fs={path:'~/ws',mode:'open',hidden:false};render();break;
     case 'createwt':state.nw='busy';render();setTimeout(()=>{state.nw='form';state.sheet=null;enter('jw/feat/mobile-app')},1400);break;
-    case 'createsess':state.sheet=null;toast('sesión creada: '+(state.nsName||'trabajo'));render();break;
+    case 'createsess':state.sheet=null;state.sessNew=false;toast('sesión creada: '+(state.nsName||'trabajo'));render();break;
   }
 });
-document.addEventListener('input',e=>{if(e.target.id==='q'){state.q=e.target.value;const s=$('#overlay');s.innerHTML=sheet();const q=$('#q');q.focus();q.setSelectionRange(q.value.length,q.value.length)}});
+document.addEventListener('input',e=>{if(e.target.id==='msg'){state.draft=e.target.value;const m=document.querySelector('.mirror');if(m)m.outerHTML=mirrorHtml();const sb=document.querySelector('#slashbox');if(sb)sb.innerHTML=slashHtml();return}if(e.target.id==='q'){state.q=e.target.value;const s=$('#overlay');s.innerHTML=sheet();const q=$('#q');q.focus();q.setSelectionRange(q.value.length,q.value.length)}});
 document.addEventListener('submit',e=>{
   if(e.target.id!=='comp') return; e.preventDefault();
-  const v=$('#msg').value.trim(); if(!v) return;
+  const v=$('#msg').value.trim(); if(!v) return; state.draft='';
   const w=wsOf(state.ws), k=`${w.id}|${state.pane}`, esc=v.replace(/</g,'&lt;');
   logFor(k).push(state.pane==='claude'?`<span class="b">›</span> ${esc}`:`<span class="g">❯</span> ${esc}`);
   if(state.pane==='claude'){w.ag='work';w.last=v;w.t='ahora';logFor(k).push('<span class="m">✻</span> Pensando…')}

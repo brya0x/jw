@@ -24,6 +24,8 @@ struct Shared {
     /// Set by the connection's own thread before it reads the `Attach` that
     /// reads it, so `Relaxed` is enough.
     split: AtomicBool,
+    /// The client asked for `Text` instead of `Snapshot` and `Output`.
+    text: AtomicBool,
 }
 
 #[derive(Default)]
@@ -46,6 +48,7 @@ impl Tx {
             q: Mutex::new(Queue::default()),
             ready: Condvar::new(),
             split: AtomicBool::new(false),
+            text: AtomicBool::new(false),
         }))
     }
 
@@ -57,6 +60,14 @@ impl Tx {
         self.0.split.load(Ordering::Relaxed)
     }
 
+    pub fn set_text(&self) {
+        self.0.text.store(true, Ordering::Relaxed);
+    }
+
+    pub fn text(&self) -> bool {
+        self.0.text.load(Ordering::Relaxed)
+    }
+
     fn queue(&self) -> std::sync::MutexGuard<'_, Queue> {
         self.0.q.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -65,6 +76,13 @@ impl Tx {
         let mut q = self.queue();
         if q.closed {
             return Err(Closed);
+        }
+        // A screen replaces the one still waiting: a slow client skips frames
+        // instead of queueing them.
+        if let DaemonMsg::Text { pane, .. } = &msg {
+            let pane = *pane;
+            q.msgs
+                .retain(|m| !matches!(m, DaemonMsg::Text { pane: p, .. } if *p == pane));
         }
         if let DaemonMsg::Output { pane, bytes } = &msg {
             let pane = *pane;
