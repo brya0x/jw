@@ -40,6 +40,8 @@ Every row's evidence is under `docs/qa/evidence/<id>/`; per-case verdicts are in
 | B-16 | low | A fresh agent at its idle prompt is "waiting ?" | open a new agent worktree | idle | PC (`jw ls`) and phone both say waiting (Notification hook); consistent, but the mark means "needs you" and nothing is asked | W-11/ | 18, 20 |
 | B-17 | low | Phone and PC name workspaces differently | worktree `qa-wt1` of project `qa-origin` | same name | PC `qa-origin/qa-wt1`, phone `qa-wt1` under root `demo` (folder name, not the project name) | W-02/ | 18 |
 | B-18 | low | Box-drawing characters are clipped | `printf '┌──┐'` in a shell block | full glyphs | drawn as a bracket under the baseline | S-10/01.png | 97 |
+| B-20 | medium | PR merged is never shown on the phone | a worktree whose PR is merged: the TUI draws `⚑` | the same mark, as REQ-18 lists `✻ ? ⚡ ⚑` | the app's `Mark` is only Working, Waiting, Dev (`proto/Workspaces.kt:58`) and the code says the bridge "cannot know" the merged-PR flag; the phone legend has no ⚑. Found by reading the code, not run (no GitHub in the test state) | android/proto/.../Workspaces.kt:58,136 | 18 |
+| B-21 | low | "Finished" is not a state the phone shows or announces | an agent ends its turn | something that says it finished (and the PC's `rang` bell mark, if that is the signal) | the working mark and the "Pensando…" row simply disappear; no "terminó" mark, row text or alert (Avisos lists only waiting panes; its idle text "en reposo" appears only there). Background alerts when the app is closed were not tested | W-10, M-17 | 18, 28 |
 
 ## Workspaces sync
 
@@ -74,6 +76,19 @@ Every row's evidence is under `docs/qa/evidence/<id>/`; per-case verdicts are in
 | M-21 | status / mode line | S | | | x | no way to see "manual / plan / auto mode" or context % |
 | M-26 | `/status`, `/config`, other panels | S | | | x | B-03 |
 | not run | M-11, 14, 20, 22 (no TodoWrite in this Claude), 23–25, 27–30 | | | | | |
+
+## States: what the phone shows for each
+
+| state of the agent / workspace | PC shows | phone shows | tested |
+|---|---|---|---|
+| thinking / working | `✻`, `esc to interrupt` | `✻` on the row and tab; chat ends in "Pensando…" (then "Escribiendo…") with seconds and "■ parar"; tool cards with a ring | yes, matches (W-10, M-17) |
+| tool running | spinner on the call | card with a turning ring and seconds | partly (Bash seen running) |
+| question or plan waiting | `?` | `?` on the row and tab, full-screen question in the workspace, and the y/n buttons of B-19 on Home and Avisos | yes, with the B-19 problem |
+| background task / subagent | task count | "N tareas en segundo plano" row, notice when done | yes |
+| finished (turn done) | `✻` clears, idle | mark clears, live row disappears; nothing says "finished" | yes (B-21) |
+| exited agent | pane exited | chat/pane left as it was | seen once (B-02) |
+| PR merged | `⚑` | nothing (B-20) | by code only |
+| dev server | `⚡` | `⚡` in the legend | not run |
 
 ## Shell findings
 
