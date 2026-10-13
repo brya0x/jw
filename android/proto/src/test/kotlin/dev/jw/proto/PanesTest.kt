@@ -103,6 +103,8 @@ class PanesTest {
         assertNull(none.turn); assertNull(none.bg); assertNull(none.plan)
         val withPlan = Panes.parse(Frame.Json("""{"t":"Chat","pane":7,"known":true,"plan":"# Plan\n1. Daemon","reset":false,"blocks":[]}""")) as PaneEvent.Chat
         assertEquals("# Plan\n1. Daemon", withPlan.plan)
+        val busy = Panes.parse(Frame.Json("""{"t":"Chat","pane":7,"known":true,"working":true,"reset":false,"blocks":[]}""")) as PaneEvent.Chat
+        assertEquals(true, busy.working); assertNull(none.working)
     }
 
     @Test fun parsesWhatAShellSaysOfItselfAndItsCommands() {

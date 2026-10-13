@@ -75,7 +75,7 @@ sealed interface PaneEvent {
      */
     class Chat(
         override val pane: Long, val known: Boolean, val name: String?, val title: String?, val reset: Boolean,
-        val blocks: List<ChatBlock>, val turn: ChatTurn? = null, val bg: Int? = null, val plan: String? = null,
+        val blocks: List<ChatBlock>, val turn: ChatTurn? = null, val bg: Int? = null, val plan: String? = null, val working: Boolean? = null,
     ) : PaneEvent {
         override fun toString() = "Chat(pane=$pane, known=$known, ${blocks.size} blocks)"
     }
@@ -161,6 +161,7 @@ object Panes {
                     },
                     (o["bg"] as? JsonPrimitive)?.intOrNull,
                     (o["plan"] as? JsonPrimitive)?.contentOrNull,
+                    (o["working"] as? JsonPrimitive)?.booleanOrNull,
                 )
             }
             "Shell" -> {

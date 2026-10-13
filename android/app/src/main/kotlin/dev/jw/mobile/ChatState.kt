@@ -11,6 +11,8 @@ class ChatState(
     val turn: ChatTurn? = null, val bg: Int = 0,
     /** The plan Claude drafted for the conversation, when the PC sent it (REQ-95). */
     val plan: String? = null,
+    /** The agent is working now, as its pane says (a Claude started by hand tells no hooks), REQ-96. */
+    val working: Boolean = false,
 ) {
     companion object {
         /** The most blocks held; the oldest go first. */
@@ -23,10 +25,11 @@ class ChatState(
             val turn = e.turn ?: old?.turn.takeIf { !e.reset }
             val bg = e.bg ?: old?.bg?.takeIf { !e.reset } ?: 0
             val plan = e.plan ?: old?.plan?.takeIf { !e.reset }
-            if (e.reset || old == null) return ChatState(e.known, name, title, e.blocks.sortedBy { it.i }.takeLast(KEEP), turn, bg, plan)
+            val working = e.working ?: old?.working?.takeIf { !e.reset } ?: false
+            if (e.reset || old == null) return ChatState(e.known, name, title, e.blocks.sortedBy { it.i }.takeLast(KEEP), turn, bg, plan, working)
             val byNumber = old.blocks.associateByTo(java.util.TreeMap()) { it.i }
             for (b in e.blocks) byNumber[b.i] = b
-            return ChatState(old.known, name, title, byNumber.values.toList().takeLast(KEEP), turn, bg, plan)
+            return ChatState(old.known, name, title, byNumber.values.toList().takeLast(KEEP), turn, bg, plan, working)
         }
     }
 }

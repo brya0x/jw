@@ -15,7 +15,7 @@ pub type PaneId = u64;
 
 /// Bumped whenever a message changes shape: a client and a daemon from
 /// different builds refuse each other instead of misreading (RISK-14).
-pub const PROTOCOL: u32 = 23;
+pub const PROTOCOL: u32 = 24;
 
 /// A run of cells of one row that share a style: its first column, its
 /// text (a wide character counts two columns; the cells after it are not
@@ -449,6 +449,10 @@ pub enum DaemonMsg {
         /// what a phone shows over the whole pane when Claude asks to go ahead with it (REQ-95).
         #[serde(default)]
         plan: Option<String>,
+        /// Whether the agent is working now, when it changed: its pane printed in the last seconds. Claude
+        /// started by hand in a shell tells no hooks, so its state is read from the pane (REQ-96).
+        #[serde(default)]
+        working: Option<bool>,
         reset: bool,
         blocks: Vec<ChatBlock>,
     },

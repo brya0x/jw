@@ -104,4 +104,12 @@ class ChatStateTest {
         assertEquals("# Otro", ChatState.merge(a, PaneEvent.Chat(7, true, null, null, false, emptyList(), plan = "# Otro")).plan)
         assertNull(ChatState.merge(a, event(true, block(2))).plan)
     }
+
+    @Test fun theWorkingStateIsWhatThePcLastSaidAndAResetStartsQuiet() {
+        val a = ChatState.merge(null, PaneEvent.Chat(7, true, null, null, true, emptyList(), working = true))
+        assertEquals(true, a.working)
+        assertEquals(true, ChatState.merge(a, event(false, block(1))).working)
+        assertEquals(false, ChatState.merge(a, PaneEvent.Chat(7, true, null, null, false, emptyList(), working = false)).working)
+        assertEquals(false, ChatState.merge(a, event(true, block(2))).working)
+    }
 }

@@ -2106,6 +2106,47 @@ fn a_phone_watching_an_agent_gets_its_transcript_as_blocks_and_then_each_change(
     assert!(!known && blocks.is_empty());
 }
 
+#[test]
+fn a_chat_says_when_its_pane_is_printing_and_when_it_stops() {
+    let config = tempfile::tempdir().unwrap();
+    let id = "0f6bd1c2-3333-4222-8333-444455556666";
+    let folder = config.path().join("projects").join("-w");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(
+        folder.join(format!("{id}.jsonl")),
+        "{\"type\":\"user\",\"message\":{\"content\":\"hola\"}}\n",
+    )
+    .unwrap();
+    let d = Daemon::start_with(Some(config.path()));
+    let mut c = d.client();
+    // Prints for a few seconds, then is quiet.
+    let agent = spawn(
+        &mut c,
+        "s",
+        &format!(
+            "for i in 1 2 3 4 5 6 7 8 9 10; do echo --session-id {id}; sleep 0.3; done; sleep 30"
+        ),
+        40,
+        5,
+    );
+    c.send(&ClientMsg::ChatWatch { pane: agent }).unwrap();
+    let mut said = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while said.last() != Some(&false) || !said.contains(&true) {
+        assert!(Instant::now() < deadline, "working said {said:?}");
+        if let DaemonMsg::Chat {
+            working: Some(w), ..
+        } = next_chat(&mut c, agent)
+            && said.last() != Some(&w)
+        {
+            said.push(w);
+        }
+    }
+    // Quiet at the start of the watch (nothing had printed), printing, then quiet again.
+    assert_eq!(said.last(), Some(&false));
+    assert!(said.contains(&true), "{said:?}");
+}
+
 /// The next `Chat` of `pane`.
 fn next_chat(c: &mut Client, pane: PaneId) -> DaemonMsg {
     let deadline = Instant::now() + TIMEOUT;

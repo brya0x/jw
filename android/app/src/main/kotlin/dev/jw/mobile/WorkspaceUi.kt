@@ -218,7 +218,7 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
                 Text("Cargando la conversación…", color = j.dim, fontSize = 12.sp, modifier = Modifier.padding(14.dp))
             } else if (kind == PaneKind.Chat && chat != null) {
                 ChatView(
-                    chat, w.name, sel.name ?: sel.role, sel.agent == AgentState.Waiting, working = sel.agent == AgentState.Working,
+                    chat, w.name, sel.name ?: sel.role, sel.agent == AgentState.Waiting, working = sel.agent == AgentState.Working || chat.working,
                     onStop = { session.input(sel.pane, Keys.key(Key.Esc)) }, modifier = Modifier.fillMaxSize(),
                 )
             } else if (kind == PaneKind.Shell && shell != null) {

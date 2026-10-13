@@ -232,6 +232,8 @@ struct ChatWatch {
     /// while the pane has none (a shell that has not started claude yet).
     session: Option<(String, PathBuf)>,
     tail: chat::Tail,
+    /// Whether the pane was printing when the watchers were last told (REQ-96).
+    working: bool,
     /// When the pane's session was last looked for.
     resolved: Instant,
     subs: Vec<Sub>,
@@ -242,6 +244,7 @@ impl ChatWatch {
         Self {
             session: None,
             tail: chat::Tail::new(None),
+            working: false,
             resolved: Instant::now(),
             subs: Vec::new(),
         }
@@ -272,6 +275,7 @@ impl ChatWatch {
             turn: news.turn,
             bg: news.bg,
             plan: news.plan,
+            working: None,
             reset: false,
             blocks: news.blocks,
         })
@@ -291,6 +295,7 @@ impl ChatWatch {
             turn: self.tail.turn(),
             bg: Some(self.tail.bg()),
             plan: self.tail.plan(),
+            working: Some(self.working),
             reset: true,
             blocks: self.tail.last(chat::FIRST),
         }
@@ -483,6 +488,8 @@ impl vt100::Callbacks for Titles {
 
 /// How recent output must be for a pane to count as busy.
 const BUSY: Duration = Duration::from_secs(2);
+/// How long after a pane's last output a Claude in it still counts as working: it prints all the while it thinks or writes (REQ-96).
+const WORKING: Duration = Duration::from_secs(5);
 
 /// One client's interest in one pane or workspace.
 struct Sub {
@@ -1595,6 +1602,17 @@ impl Daemon {
             .into_iter()
             .map(|id| (id, self.pane(id).ok().and_then(|p| claude_session(&p))))
             .collect();
+        // Which watched panes print now, one pane's lock at a time and never with `chats`.
+        let ids: Vec<PaneId> = lock(&self.chats).keys().copied().collect();
+        let printing: BTreeMap<PaneId, bool> = ids
+            .into_iter()
+            .map(|id| {
+                let now = self
+                    .pane(id)
+                    .is_ok_and(|p| lock(&p.state).last_output.elapsed() < WORKING);
+                (id, now)
+            })
+            .collect();
         let mut chats = lock(&self.chats);
         for (id, session) in found {
             if let Some(w) = chats.get_mut(&id)
@@ -1607,6 +1625,23 @@ impl Daemon {
         chats.retain(|id, w| {
             if let Some(msg) = w.news(*id) {
                 w.tell(&msg);
+            }
+            if let Some(&now) = printing.get(id)
+                && now != w.working
+            {
+                w.working = now;
+                w.tell(&DaemonMsg::Chat {
+                    pane: *id,
+                    known: w.session.is_some(),
+                    name: None,
+                    title: None,
+                    turn: None,
+                    bg: None,
+                    plan: None,
+                    working: Some(now),
+                    reset: false,
+                    blocks: Vec::new(),
+                });
             }
             !w.subs.is_empty()
         });
