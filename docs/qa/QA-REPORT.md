@@ -12,6 +12,11 @@ Every row's evidence is under `docs/qa/evidence/<id>/`; per-case verdicts are in
 - Latencies are coarse (see "Workspaces sync"): the driver adds seconds, so they bound the sync time from above and do not measure it.
 - Judgement calls the reader should know: the theme result (B-06) depends on the PC theme pair, which I did not inspect; B-12 (stray "-") may come from the keyboard.
 
+## Scope decisions (owner, 2026-10-13)
+
+- **This QA writes no code and starts no fixes.** Everything under "Suggested changes" is a list for a later fix worktree, to be started only when the owner asks; no product code, spec or version was changed here.
+- **B-19:** remove the y/n buttons entirely (Home row and Avisos, plain permissions included) and show the tool or question that is waiting, with a button that opens the full-screen question.
+
 ## Bugs, by severity
 
 | id | sev | title | steps | expected | actual | evidence | REQ |
