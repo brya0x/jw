@@ -28,4 +28,12 @@ class MarkedPiecesTest {
             markedPieces("**uno**, **dos**"),
         )
     }
+
+    @Test fun aRunOfBackticksIsClosedByAsManyAndDoesNotShiftTheBoldAfterIt() {
+        assertEquals(
+            listOf(Mark.Plain to "tal cual ", Mark.Code to "`**x**`", Mark.Plain to " y ", Mark.Bold to "negrita"),
+            markedPieces("tal cual `` `**x**` `` y **negrita**"),
+        )
+        assertEquals(listOf(Mark.Code to "**"), markedPieces("`**`"))
+    }
 }

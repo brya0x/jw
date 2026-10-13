@@ -182,8 +182,23 @@ internal fun markedPieces(text: String): List<Pair<Mark, String>> {
     while (i < text.length) {
         val c = text[i]
         if (c == '`') {
-            val end = text.indexOf('`', i + 1)
-            if (end > i + 1) { flush(); out.add(Mark.Code to text.substring(i + 1, end)); i = end + 1; continue }
+            // A run of backticks opens code that the next run of as many closes: `` `x` `` is the code `x`.
+            var n = 1
+            while (i + n < text.length && text[i + n] == '`') n++
+            val fence = "`".repeat(n)
+            var end = text.indexOf(fence, i + n)
+            // A longer run than this one is not its end.
+            while (end >= 0 && (text.getOrNull(end - 1) == '`' || text.getOrNull(end + n) == '`')) end = text.indexOf(fence, end + 1)
+            if (end > i + n) {
+                val code = text.substring(i + n, end)
+                flush()
+                out.add(Mark.Code to if (code.length > 2 && code.startsWith(" ") && code.endsWith(" ")) code.substring(1, code.length - 1) else code)
+                i = end + n
+                continue
+            }
+            plain.append(fence)
+            i += n
+            continue
         } else if (c == '*' && text.startsWith("**", i)) {
             val end = text.indexOf("**", i + 2)
             if (end > i + 2 && !text[i + 2].isWhitespace()) { flush(); out.add(Mark.Bold to text.substring(i + 2, end)); i = end + 2; continue }

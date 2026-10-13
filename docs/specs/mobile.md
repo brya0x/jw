@@ -355,3 +355,4 @@ Order (L1 to L3, after the rest): L1 first (the app cannot be tried without it),
 - The count of tasks in the background (REQ-97) subtracted every notice, so one from before the transcript's start hid a task that ran: it counts the calls that have not ended, by their id.
 - Claude's texts showed `**bold**` with its asterisks: the app only knew `code`. It now draws bold too (REQ-91).
 - The live row appeared as soon as the person typed in Claude's box: the pane printed, and printing was taken for working. The daemon now reads the screen's status line (`esc to interrupt`), which typing does not draw (REQ-96).
+- A run of backticks of any length is code (`` `x` `` is `x`): with only single ones a double run shifted every mark after it and left stray `**` in the text (REQ-91).
