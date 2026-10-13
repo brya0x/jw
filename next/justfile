@@ -1,0 +1,13 @@
+# `just ci` for next/. Green before every commit.
+default: ci
+
+ci: fmt-check clippy test
+
+fmt-check:
+    cargo fmt --all --check
+
+clippy:
+    cargo clippy --workspace --all-targets --locked -- -D warnings
+
+test:
+    cargo test --workspace --locked

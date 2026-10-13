@@ -1,0 +1,25 @@
+# next/ — the new jw, written from scratch
+
+## CODE FREEZE on the old jw
+Everything outside `next/` (the `crates/`, `android/`, root manifests, old specs) is
+**frozen: only security and blocking fixes.** New work goes in `next/`.
+Nothing from jw 0.0.26 files is copied into `next/`; the old code and specs are read for
+what they do and why, never pasted.
+
+## Rules
+- **Identity lives in `identity.toml` only.** Names, dirs, socket, env prefix, applicationId
+  come from the `identity` crate. Never spell `jwn`, `JWN_` or a path by hand.
+- **The JSON documents are the contract** (`contract/schema`, `contract/fixtures`). The
+  envelope never changes; node documents are versioned per type (`v`). See `docs/spec.md`.
+- **A pane is a terminal first**: always the user's `$SHELL`; a program runs inside it.
+- **Spec before code** (`docs/spec.md`: Contract, Interfaces, REQ-n, RISK-n, parts table).
+  UI parts need an approved interactive HTML prototype before spec or code.
+- **`just ci` (in `next/`) green before every commit.** One local commit per part.
+- **Never push or open a PR** unless asked. **Never `pkill jw`/`jwn`**: tests use their own
+  socket dir and kill only the pid they recorded.
+- Never bind a key with Alt (AeroSpace owns it).
+
+## Map
+| Crate | Owns |
+|---|---|
+| `crates/identity` | the product identity and the paths/env names derived from it |

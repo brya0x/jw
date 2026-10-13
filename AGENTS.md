@@ -56,3 +56,6 @@ To see the TUI as text from a script, use `scripts/drive.py` (needs
   An old daemon must be refused, not silently misread.
 - **Never `pkill jw`.** The user's daemon runs their real work. Tests and scripts use their own
   socket dir and kill only that pid.
+
+- **CODE FREEZE:** everything outside `next/` is frozen — only security and blocking fixes.
+  New work goes in `next/` (see `next/AGENTS.md`).
