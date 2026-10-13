@@ -1,0 +1,213 @@
+<title>jwn TUI</title>
+<style>
+/* Terminal-first: a character grid on One Dark, like the jw TUI it replaces. */
+:root{
+  --bg:#282c34; --panel:#21252b; --fg:#abb2bf; --dim:#5c6370; --line:#3e4451; --sel:#2c313a;
+  --blue:#61afef; --green:#98c379; --yellow:#e5c07b; --red:#e06c75; --magenta:#c678dd; --cyan:#56b6c2;
+  --page:#16181d; --ink:#c3c9d4; --mut:#7d8594;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}}
+:root[data-theme="light"]{--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.55 'IBM Plex Sans',system-ui,sans-serif;padding-inline:16px;padding-block:20px 40px}
+.wrap{max-width:1100px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
+h1{font:600 20px/1.2 var(--mono);margin:0}
+p{margin:0;max-width:72ch;color:var(--mut)}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button,select{font:12px var(--mono);color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;min-height:32px;cursor:pointer}
+button:hover{border-color:var(--blue)}
+:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto}
+.term pre{margin:0;font:13px/1.25 var(--mono);color:var(--fg);outline:none;width:max-content}
+.term pre:focus-visible{outline:none}
+.hint{font:12px var(--mono);color:var(--mut)}
+.decide{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px;color:var(--fg)}
+.decide h2{font:600 12px var(--mono);margin:0 0 8px;color:var(--mut)}
+.decide ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+.decide code{font:12px var(--mono)}
+.b{font-weight:700}.d{color:var(--dim)}.c-blue{color:var(--blue)}.c-green{color:var(--green)}.c-yellow{color:var(--yellow)}
+.c-red{color:var(--red)}.c-mag{color:var(--magenta)}.c-cyan{color:var(--cyan)}.c-line{color:var(--line)}
+.bg-sel{background:var(--sel)}.bg-panel{background:var(--panel)}
+.chip-green{background:var(--green);color:var(--panel)}.chip-blue{background:var(--blue);color:var(--panel)}.chip-yellow{background:var(--yellow);color:var(--panel)}
+.cur{background:var(--fg);color:var(--bg)}
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&family=JetBrains+Mono:wght@400;700&display=swap">
+
+<div class="wrap">
+  <div>
+    <h1>jwn TUI</h1>
+    <p>The layout of today's jw, with the new model inside it: workspaces on the left with the marks of what waits, a row of facts on top, and each pane drawn as its own rounded box, not a tab. Click the terminal or tab into it; the keys are on the status bar.</p>
+  </div>
+  <div class="bar" aria-label="Simulate">
+    <button id="evFail" type="button">A command fails in the focused pane</button>
+    <button id="evOk" type="button">A command finishes</button>
+    <button id="evPerm" type="button">An agent asks permission</button>
+    <button id="evPane" type="button">New pane here</button>
+    <button id="evReset" type="button">Reset</button>
+    <select id="size" aria-label="Terminal size"><option value="120x32">120 × 32</option><option value="96x28">96 × 28</option></select>
+  </div>
+  <div class="term"><pre id="scr" tabindex="0" aria-label="Terminal client. j and k move, h and l change pane, Enter opens, a lists what waits."></pre></div>
+  <div class="hint" id="keys">j/k workspace · h/l pane · ↵ open · a avisos · esc back</div>
+
+  <div class="decide">
+    <h2>To approve</h2>
+    <ol>
+      <li><b>The frame is today's jw:</b> a 28-column sidebar with a right border, numbered rows with <code>●</code> open and <code>○</code> closed, <code>↳</code> for a worktree under its project, one header row with project, branch and path, a status bar with a mode chip.</li>
+      <li><b>Panes are rounded boxes</b> sharing the area (side by side, two columns from three panes), the focused one with a blue border. The title carries what runs there, and what waits on that pane (<code>✗ salió 3</code>) sits at the right end of its top border.</li>
+      <li><b>Marks sit at the right of a sidebar row</b> (most urgent unseen, with a count when there are several). No extra line under the row: the sentence lives in the pane's title and in <code>a</code>.</li>
+      <li><b>Avisos</b> opens as a box over the pane area: one row per unseen attention, <code>↵</code> goes to that pane, focus and seen both change.</li>
+      <li><b>Seen</b> is this terminal's own. Moving the highlight previews a workspace; <code>↵</code> or focusing a pane marks it seen.</li>
+    </ol>
+  </div>
+</div>
+
+<script>
+(() => {
+'use strict';
+const E = 'e1', esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+let COLS = 120, ROWS = 32;
+const KINDS = { permission:['!','c-red',0,'pide permiso'], question:['?','c-yellow',1,'hace una pregunta'], plan:['◆','c-mag',2,'plan listo'],
+  ci_failed:['✗','c-red',3,'CI falló'], shell_done:['❯','c-green',4,'comando terminó'], screen:['…','d',5,'espera en pantalla'], agent_done:['✓','c-green',6,'agente listo'], merged:['⚑','c-cyan',7,'mergeado'] };
+const markOf = a => a.kind === 'shell_done' && a.exit ? ['✗','c-red'] : [KINDS[a.kind][0], KINDS[a.kind][1]];
+const whatOf = a => a.kind === 'shell_done' ? `salió ${a.exit}` : KINDS[a.kind][3];
+
+let model, rev, seen, ui;
+function reset(){
+  rev = 10; seen = {};
+  const att = (kind, pane, exit) => ({kind, pane, exit, rev:++rev});
+  model = { name:'demo', ws:[
+    { id:'w1', name:'notes', kind:'folder', path:'~/notes', att:[], panes:[{id:'p1', title:'zsh', lines:['~/notes ❯ git status','On branch main','nothing to commit, working tree clean','~/notes ❯ '], att:[att('shell_done','p1',0)]}] },
+    { id:'w2', name:'api', kind:'folder', path:'~/ws/api', att:[], panes:[{id:'p2', title:'zsh', lines:['~/ws/api ❯ pnpm test','FAIL  src/auth.test.ts','  expected 2, received 3','~/ws/api ❯ '], att:[att('shell_done','p2',2)]}] },
+    { id:'w3', name:'feat/login', kind:'worktree', project:'api', branch:'feat/login', path:'~/ws/api-wt/feat-login', att:[], panes:[
+      {id:'p3', title:'claude', lines:['> arregla el test de login','','  Leyendo src/auth.ts …','  ¿Puedo ejecutar `pnpm install`?',''], att:[att('permission','p3')]},
+      {id:'p4', title:'nvim', lines:['  1 import { login } from "./auth"','  2 ','  3 export function run() {','  4   return login()','~','~'], att:[]},
+      {id:'p5', title:'zsh', lines:['~/ws/api-wt/feat-login ❯ cargo test','test auth::login_ok ... ok','test auth::expired ... ok','test result: ok. 14 passed','~/ws/api-wt/feat-login ❯ '], att:[att('shell_done','p5',0)]} ] },
+    { id:'w4', name:'infra', kind:'folder', path:'~/ws/infra', att:[], panes:[] },
+  ]};
+  ui = { sel:2, open:null, focus:0, avisos:false, av:0 };
+}
+const wsAtt = w => [...w.att.map(a => ({...a, node:w.id})), ...w.panes.flatMap(p => p.att.map(a => ({...a, node:p.id})))];
+const unseen = (list) => list.filter(a => !seen[a.kind + a.rev]).sort((a, b) => KINDS[a.kind][2] - KINDS[b.kind][2]);
+const paneUnseen = p => unseen(p.att.map(a => ({...a, node:p.id})));
+
+/* ---- the character grid ---- */
+function grid(){ return { cells: Array.from({length:ROWS}, () => Array.from({length:COLS}, () => [' ', ''])) }; }
+function put(g, x, y, text, cls = ''){ if (y < 0 || y >= ROWS) return; [...text].forEach((ch, i) => { const cx = x + i; if (cx >= 0 && cx < COLS) g.cells[y][cx] = [ch, cls]; }); }
+function fill(g, x, y, w, cls){ for (let i = 0; i < w; i++) if (x + i < COLS && y < ROWS) g.cells[y][x + i] = [g.cells[y][x + i][0], (g.cells[y][x + i][1] + ' ' + cls).trim()]; }
+function box(g, x, y, w, h, title, cls, right, rightCls){
+  put(g, x, y, '╭' + '─'.repeat(w - 2) + '╮', cls); put(g, x, y + h - 1, '╰' + '─'.repeat(w - 2) + '╯', cls);
+  for (let i = 1; i < h - 1; i++){ put(g, x, y + i, '│', cls); put(g, x + w - 1, y + i, '│', cls); }
+  if (title) put(g, x + 2, y, ' ' + title + ' ', cls.includes('blue') ? 'b c-blue' : 'b');
+  if (right) put(g, x + w - 3 - [...right].length, y, ' ' + right + ' ', rightCls);
+}
+function paint(g){
+  const rows = g.cells.map(r => { let out = '', cur = null, buf = '';
+    for (const [ch, cls] of r){ if (cls !== cur){ if (buf) out += cur ? `<span class="${cur}">${buf}</span>` : buf; buf = ''; cur = cls; } buf += esc(ch); }
+    if (buf) out += cur ? `<span class="${cur}">${buf}</span>` : buf; return out; });
+  document.getElementById('scr').innerHTML = rows.join('\n');
+}
+
+function draw(){
+  const g = grid(), SB = 28;
+  // sidebar
+  for (let y = 0; y < ROWS - 1; y++) put(g, SB - 1, y, '│', 'c-line');
+  put(g, 1, 0, model.name, 'b d'); put(g, SB - 1 - 13, 0, '^␣ s sessions', 'd');
+  let y = 2, n = 0; const rowsMap = [];
+  const rowFor = (w, child) => {
+    const sel = rowsMap.length === ui.sel, open = ui.open === w.id, un = unseen(wsAtt(w));
+    n++; rowsMap.push(w.id);
+    const label = child ? '↳ ' + w.name : w.name;
+    put(g, 0, y, n < 10 ? String(n) : ' ', 'd');
+    put(g, 2, y, open || w.panes.length ? '●' : '○', w.panes.length ? 'c-green' : 'd');
+    put(g, 4, y, label.length > 16 ? label.slice(0, 15) + '…' : label, sel ? 'b c-blue' : (w.panes.length ? '' : 'd'));
+    if (un.length){ const [gl, cl] = markOf(un[0]); put(g, SB - 4, y, gl, cl + ' b'); if (un.length > 1) put(g, SB - 3, y, String(un.length), 'd'); }
+    if (sel) for (let i = 0; i < SB - 1; i++){ g.cells[y][i] = [g.cells[y][i][0], (g.cells[y][i][1] + ' bg-sel').trim()]; }
+    y++;
+  };
+  const seenProj = new Set();
+  model.ws.forEach(w => {
+    if (w.kind === 'worktree' && !seenProj.has(w.project)){ /* its project row is the folder named like it */ }
+    rowFor(w, w.kind === 'worktree');
+  });
+  // legend
+  put(g, 1, ROWS - 5, '! permiso  ? pregunta', 'd'); put(g, 1, ROWS - 4, '◆ plan   ❯ comando', 'd'); put(g, 1, ROWS - 3, '✓ listo  ⚑ merge  ✗ falló', 'd');
+
+  // header + panes
+  const w = model.ws[ui.sel]; const px = SB + 1, pw = COLS - px;
+  if (w){
+    const head = w.kind === 'worktree' ? [' ' + w.project + '/', 'd', w.name, 'b c-blue', '  ⎇ ' + w.branch, 'c-mag'] : [' ', '', w.name, 'b c-blue', '', ''];
+    let x = px; for (let i = 0; i < head.length; i += 2){ put(g, x, 0, head[i], head[i + 1]); x += [...head[i]].length; }
+    put(g, COLS - 1 - [...w.path].length, 0, w.path, 'd');
+    const n = w.panes.length, top = 1, h = ROWS - 2;
+    if (!n){ put(g, px + 2, 3, 'este workspace no tiene paneles · n abre uno', 'd'); }
+    else {
+      // One pane fills the area; two sit side by side; from three, the first takes the left
+      // half and the rest stack on the right.
+      const rects = n === 1 ? [[0, 0, pw, h]] : n === 2 ? [[0, 0, Math.floor(pw / 2), h], [Math.floor(pw / 2), 0, pw - Math.floor(pw / 2), h]]
+        : [[0, 0, Math.floor(pw / 2), h], ...Array.from({length: n - 1}, (_, i) => { const rh = Math.floor(h / (n - 1)); return [Math.floor(pw / 2), i * rh, pw - Math.floor(pw / 2), i === n - 2 ? h - i * rh : rh]; })];
+      w.panes.forEach((p, i) => {
+        const [dx, dy, bw, bh] = rects[i], x0 = px + dx, y0 = top + dy;
+        const focused = ui.open === w.id && ui.focus === i;
+        const un = paneUnseen(p)[0];
+        box(g, x0, y0, bw, bh, p.title, focused ? 'c-blue' : 'c-line', un ? (markOf(un)[0] + ' ' + whatOf(un)) : '', un ? markOf(un)[1] + ' b' : '');
+        p.lines.slice(0, bh - 2).forEach((l, k) => put(g, x0 + 2, y0 + 1 + k, [...l].slice(0, bw - 4).join('')));
+        if (focused){ const k = Math.min(p.lines.length - 1, bh - 3); const l = p.lines[k] || ''; g.cells[y0 + 1 + k][x0 + 2 + [...l].length] = [' ', 'cur']; }
+      });
+    }
+  }
+  // status bar
+  for (let x = 0; x < COLS; x++) g.cells[ROWS - 1][x] = [' ', 'bg-panel'];
+  const mode = ui.avisos ? [' AVISOS ', 'chip-yellow b'] : ui.open ? [' TERM ', 'chip-green b'] : [' MOVE ', 'chip-blue b'];
+  put(g, 0, ROWS - 1, mode[0], mode[1]);
+  put(g, mode[0].length + 1, ROWS - 1, ui.avisos ? 'j/k mover · ↵ ir · esc volver' : 'j/k workspace · h/l panel · ↵ abrir · a avisos · q salir', 'd bg-panel');
+  const all = model.ws.flatMap(x => unseen(wsAtt(x))).length;
+  if (all){ const t = `avisos ${all}`; put(g, COLS - t.length - 1, ROWS - 1, t, 'c-yellow b bg-panel'); }
+
+  // avisos
+  if (ui.avisos){
+    const items = model.ws.flatMap(x => unseen(wsAtt(x)).map(a => ({w:x, a}))); const bw = 56, bh = Math.max(5, items.length + 4), bx = SB + 1 + Math.floor((pw - bw) / 2), by = 4;
+    for (let i = 0; i < bh; i++) put(g, bx, by + i, ' '.repeat(bw), 'bg-panel');
+    box(g, bx, by, bw, bh, 'avisos', 'c-yellow');
+    if (!items.length) put(g, bx + 3, by + 2, 'Nada espera.', 'd');
+    items.forEach(({w:x, a}, i) => { const yy = by + 2 + i, [gl, cl] = markOf(a);
+      if (i === ui.av) for (let k = 1; k < bw - 1; k++) g.cells[yy][bx + k] = [g.cells[yy][bx + k][0], 'bg-sel'];
+      put(g, bx + 3, yy, gl, cl + ' b' + (i === ui.av ? ' bg-sel' : '')); put(g, bx + 6, yy, (x.kind === 'worktree' ? x.project + '/' : '') + x.name, 'b' + (i === ui.av ? ' bg-sel' : ''));
+      const t = whatOf(a); put(g, bx + bw - 3 - t.length, yy, t, (cl === 'c-red' ? cl : 'd') + (i === ui.av ? ' bg-sel' : '')); });
+  }
+  paint(g);
+}
+
+/* ---- behaviour ---- */
+const openWs = (w, focus) => { ui.open = w.id; ui.focus = focus ?? 0; const p = w.panes[ui.focus]; if (p) p.att.forEach(a => seen[a.kind + a.rev] = true); w.att.forEach(a => seen[a.kind + a.rev] = true); };
+function key(k){
+  const w = model.ws[ui.sel];
+  if (ui.avisos){
+    const items = model.ws.flatMap(x => unseen(wsAtt(x)).map(a => ({w:x, a})));
+    if (k === 'j') ui.av = Math.min(ui.av + 1, items.length - 1); else if (k === 'k') ui.av = Math.max(ui.av - 1, 0);
+    else if (k === 'Escape' || k === 'a') ui.avisos = false;
+    else if (k === 'Enter' && items[ui.av]){ const {w:x, a} = items[ui.av]; ui.avisos = false; ui.sel = model.ws.indexOf(x); const i = x.panes.findIndex(p => p.id === a.node); openWs(x, i < 0 ? 0 : i); }
+  } else if (k === 'j'){ ui.sel = Math.min(ui.sel + 1, model.ws.length - 1); ui.open = null; }
+  else if (k === 'k'){ ui.sel = Math.max(ui.sel - 1, 0); ui.open = null; }
+  else if (k === 'Enter') openWs(w);
+  else if ((k === 'l' || k === 'Tab') && w.panes.length){ if (ui.open !== w.id) openWs(w); else openWs(w, Math.min(ui.focus + 1, w.panes.length - 1)); }
+  else if (k === 'h' && w.panes.length && ui.open === w.id) openWs(w, Math.max(ui.focus - 1, 0));
+  else if (k === 'a'){ ui.avisos = true; ui.av = 0; }
+  else if (k === 'n'){ document.getElementById('evPane').click(); return; }
+  draw();
+}
+const scr = document.getElementById('scr');
+scr.addEventListener('keydown', e => { if (['j','k','h','l','a','n','Enter','Escape','Tab'].includes(e.key)){ e.preventDefault(); key(e.key); } });
+scr.addEventListener('click', e => { scr.focus(); const r = scr.getBoundingClientRect(), cw = r.width / COLS, ch = r.height / ROWS, cx = Math.floor((e.clientX - r.left) / cw), cy = Math.floor((e.clientY - r.top) / ch);
+  if (cx < 27 && cy >= 2 && cy - 2 < model.ws.length && !ui.avisos){ ui.sel = cy - 2; ui.open = null; draw(); } });
+const cur = () => model.ws[ui.sel], paneOf = () => { const w = cur(); return ui.open === w.id ? w.panes[ui.focus] : w.panes[0]; };
+document.getElementById('evFail').onclick = () => { const p = paneOf(); if (p){ p.att = p.att.filter(a => a.kind !== 'shell_done'); p.att.push({kind:'shell_done', pane:p.id, exit:2, rev:++rev}); p.lines = [...p.lines.slice(0, -1), 'error: test failed', p.lines.at(-1)]; draw(); } };
+document.getElementById('evOk').onclick = () => { const p = paneOf(); if (p){ p.att = p.att.filter(a => a.kind !== 'shell_done'); p.att.push({kind:'shell_done', pane:p.id, exit:0, rev:++rev}); draw(); } };
+document.getElementById('evPerm').onclick = () => { const p = paneOf(); if (p){ p.att = p.att.filter(a => a.kind !== 'permission'); p.att.push({kind:'permission', pane:p.id, rev:++rev}); draw(); } };
+document.getElementById('evPane').onclick = () => { const w = cur(); w.panes.push({id:'p' + (++rev), title:'zsh', lines:['~ ❯ '], att:[]}); draw(); };
+document.getElementById('evReset').onclick = () => { reset(); draw(); };
+document.getElementById('size').onchange = e => { [COLS, ROWS] = e.target.value.split('x').map(Number); draw(); };
+reset(); draw();
+})();
+</script>
