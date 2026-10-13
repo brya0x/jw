@@ -2,7 +2,7 @@ id	verdict	latency_ms	evidence	note
 W-01	diff	-	W-01/	Phone with 0 workspaces on PC shows "workspaces · 0" + "Esperando la lista del PC…" (reads as still loading); after first folder opened, list follows. Phone nests worktrees under their root; PC lists "qa-origin/qa-wt1" (project name from remote), phone "demo › qa-wt1" (folder name): names differ.
 W-02	pass	<5000	W-02/	Worktree created on PC appears nested under root. Timing coarse (includes creation, ~5 s).
 W-04	pass	<11600*	W-04/	Rename follows on phone (name and branch). *timing includes drive.py start, ~5 s overhead.
-W-05	todo	-	-	-
+W-05	pass	2400	W-05/	Closing the "run" pane on the PC removes its tab on the phone about 2.4 s later (polling bound).
 W-06	pass	<12000	W-06/	Worktree removed on PC while phone was inside it: phone returned to the list, no crash. git worktree list confirms removal.
 W-03	pass	2145	W-03/	Phone creates a worktree (name taken refused in the sheet; new one created, phone entered it, jw ls shows it). Notes: "crear y abrir" is hidden under the keyboard once the name is typed; the name got a trailing "-" ("phone-wt-") that I did not type (IME suspected, not confirmed).
 S-01	pass	-	S-01/	New shell pane opens in the block view with folder/branch chips.
@@ -49,55 +49,55 @@ W-12	pass	-	M-07/	After tapping Yes on the phone jw ls goes waiting → idle.
 W-13	pass	-	M-07/	Same.
 S-03	not-run	-	-	not reached in this session
 S-04	not-run	-	-	not reached in this session
-S-05	not-run	-	-	not reached in this session
+S-05	pass	-	S-05/	Up arrow on the key row gives history: PC line shows "echo one" after two presses; the phone editor mirrors it ~1 s later (the first press showed an empty editor for a moment).
 S-07	not-run	-	-	not reached in this session
-S-09	not-run	-	-	not reached in this session
-S-14	not-run	-	-	not reached in this session
-S-16	not-run	-	-	not reached in this session
+S-09	diff	-	S-09/	seq 1 150000 (~1 MB): the block shows "3023 líneas" and the end of the output; the first ~147000 lines are gone with no "truncated" note (REQ-95 says the daemon marks truncated, the phone does not show it).
+S-14	pass	-	S-14/	Tab completes ("ls /tm" → "ls /tmp/") and the phone editor follows; the key row scrolls; ^C/^D/^R/ not checked one by one.
+S-16	pass	-	S-16/	Program prompts: "name:" input goes to the program, silent password prompt works, block ends; running chip and red stop shown.
 S-17	not-run	-	-	not reached in this session
-S-18	not-run	-	-	not reached in this session
-S-19	not-run	-	-	not reached in this session
-S-20	not-run	-	-	not reached in this session
-S-21	not-run	-	-	not reached in this session
+S-18	pass	-	S-18/	Tapping the output closes the keyboard.
+S-19	pass	-	S-19/	Tap a block: Comando / Salida / Repetir / Enviar; Repetir re-ran the command on the PC (count 1→2); Enviar opens the Android share sheet.
+S-20	pass	-	S-20/	A nested bash (not marked by jw) is treated as a running command: "corriendo N s", its output with colours, input goes to it, stop button; ends on exit.
+S-21	pass	-	S-21/	cd /tmp: the chip shows /private/tmp.
 S-23	not-run	-	-	not reached in this session
 S-24	not-run	-	-	not reached in this session
-S-25	not-run	-	-	not reached in this session
-W-05	not-run	-	-	not reached in this session
+S-25	diff	-	S-25/	Combining accents, full-width letters, arrows and CJK/emoji fine; box-drawing characters are drawn as disjoint pieces (B-18 confirmed).
+W-05	pass	2400	W-05/	Closing the "run" pane on the PC removes its tab on the phone about 2.4 s later (polling bound).
 W-07	not-run	-	-	not reached in this session
 W-08	not-run	-	-	not reached in this session
-W-14	not-run	-	-	not reached in this session
+W-14	diff	never	W-14/	`git switch -c feat/qa-branch2` in a worktree: neither `jw ls` nor the phone showed the new branch after 3+ minutes; both keep the creation branch (PC and phone agree, both stale).
 W-15	not-run	-	-	not reached in this session
-W-17	not-run	-	-	not reached in this session
+W-17	pass	-	W-17/	Worktree folder deleted behind jw's back: PC and phone both keep the row ("waiting ?" after the agent settles); nothing marks the folder as gone.
 W-18	not-run	-	-	not reached in this session
 W-19	not-run	-	-	not reached in this session
 W-20	not-run	-	-	not reached in this session
-A-01	not-run	-	-	not reached in this session
+A-01	diff	-	A-01/	Fresh agent pane (no transcript yet) opens as a chat saying "Sin mensajes todavía." instead of the pane's text (REQ-94 says known:false is drawn as text); the screen is invisible until the first message (root of B-02).
 A-03	not-run	-	-	not reached in this session
-A-04	not-run	-	-	not reached in this session
+A-04	pass	-	A-04/	claude started by hand in the shell tab: drawn as plain text ("Terminal") while it has no conversation, switches to the chat after the first message (title "Brief greeting").
 A-05	not-run	-	-	not reached in this session
 A-06	not-run	-	-	not reached in this session
 A-07	not-run	-	-	not reached in this session
 A-09	not-run	-	-	not reached in this session
-A-10	not-run	-	-	not reached in this session
+A-10	diff	25000	A-10/	Network off 14 s inside a chat: "sin conexión · No encuentro tu PC"; 25 s after it returns the app is back in the same workspace but on its first tab (agent), not the pane it was in; no duplicated blocks seen.
 A-11	not-run	-	-	not reached in this session
-A-12	not-run	-	-	not reached in this session
+A-12	inconclusive	-	A-12/	Second message sent while Claude worked appeared as a normal right-hand bubble at once, no "en cola" label; Claude's turn may have ended before it counted as queued.
 A-13	not-run	-	-	not reached in this session
 A-14	not-run	-	-	not reached in this session
 T-02	not-run	-	-	not reached in this session
 T-03	not-run	-	-	not reached in this session
 T-10	not-run	-	-	not reached in this session
-T-11	not-run	-	-	not reached in this session
-T-12	not-run	-	-	not reached in this session
+T-11	pass	-	T-11/	No clickable element under 48 dp on Home, Avisos, Settings or the diff tab; one 32x48 dp view on the workspace screen.
+T-12	pass	-	T-12/	Logcat of the app process: 31 lines, no tokens, links, passwords or terminal text (only the fresh process was inspected).
 T-13	not-run	-	-	not reached in this session
 T-14	not-run	-	-	not reached in this session
 T-15	not-run	-	-	not reached in this session
 M-03	pass	-	M-16/	"✻ pensó 1 s" dim line shown for thinking (no thought text, as designed).
-M-11	not-run	-	-	-
-M-14	not-run	-	-	-
-M-20	not-run	-	-	-
-M-23	not-run	-	-	-
+M-11	diff	-	M-11/	Two questions in one AskUserQuestion: shown one after the other (color, then size); the PC's tab bar and the review of both answers are not shown.
+M-14	pass	-	M-14/	A project command .claude/commands/qahello.md appears in the "/" list tagged "comando"; running it shows the /qahello bubble and the answer.
+M-20	not-shown	-	M-20/	Read of a PNG: the tool card says "sin salida"; the image is not shown.
+M-23	diff	-	M-23/	/compact: the continuation summary is drawn as the person's own message ("This session is being continued…") and the command output shows raw ANSI escapes (".[2mCompacted …[22m").
 M-24	not-run	-	-	-
-M-25	not-run	-	-	-
+M-25	inconclusive	-	M-25/	"!ls -a" typed in the chat: Claude answered with a listing; whether it ran as a shell escape was not shown as a "!ls -a" command block.
 M-27	not-run	-	-	-
 M-28	not-run	-	-	-
 M-29	not-run	-	-	-

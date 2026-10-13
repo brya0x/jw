@@ -1,0 +1,30 @@
+jwt-qa
+jwtcr
+logitech_kiros_agent-3bb99e3e853f91df2ac1243583fdb2b6
+logitech_kiros_updater
+main_mod.rs
+main_spec.md
+main-spec.md
+mine.md
+mobile.keep
+nohome
+nopath-bin
+prospects.bak
+stream.rs.bak
+term-test.log
+theirs.md
+tmux-501
+warp_docktile_2026-10-10_21-22-51.log
+warp_docktile_2026-10-12_18-26-09.log
+WorkspaceUi.kt.bak
+wtest.log
+x
+x.js
+
+/tmp via  v24.14.1 via 🦀 v1.98.1
+❯ bash --noprofile --norc
+
+The default interactive shell is now zsh.
+To update your account to use zsh, please run `chsh -s /bin/zsh`.
+For more details, please visit https://support.apple.com/kb/HT208050.
+bash-3.2$

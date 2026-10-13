@@ -1,0 +1,17 @@
+
+── restored 11:07 ──
+
+demo on  main [?]
+❯ echo one
+one
+
+demo on  main [?]
+❯ echo two
+two
+
+demo on  main [?]
+❯ ls -G /tmp/jwt-qa/home
+Applications demo         demo-wt      Library      lsdir
+
+demo on  main [?]
+❯

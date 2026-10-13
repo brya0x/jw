@@ -7,8 +7,10 @@ Every row's evidence is under `docs/qa/evidence/<id>/`; per-case verdicts are in
 
 - **Workspaces and shell cases** ran against an isolated test daemon (`scripts/jw-test`, state `/tmp/jwt-qa`), killed by its own pid at the end.
 - **Agent cases** ran in a throwaway session `qa-test` of the user's real jw, by the user's decision, because Claude was not logged in under the test HOME and linking the keychain was refused. Only that session was touched; the phone driver (`q.py`) refused to tap or type outside it.
-- About 45 of ~110 checklist cases were run. **Not run** (marked `not-run` in `results.tsv`): S-03–05, 07, 09, 14, 16–21, 23–25; W-05, 07, 08, 14, 15, 17–20; A-01, 03–07, 09–14; M-11, 14, 20, 23–25, 27–30; T-02, 03, 10–15.
-  The agent matrix is therefore filled for the rows listed below, not for every row.
+- **75 of 106 checklist cases have a verdict** (pass, diff, fail, not-shown or inconclusive); 31 are `not-run` in `results.tsv`. Why those were left:
+  - not possible through adb: paste (S-17), text selection (S-24), typing on the PC side (S-03, S-04, A-03; the user's TUI cannot be driven safely);
+  - would change the user's real daemon or pairing: read-only toggle, revoke, pairing-failure screens (W-20, T-13, T-14, T-15), and the network-route fallback (T-02, T-03 need the tunnel or a daemon restart);
+  - not reached: S-07, S-23, W-07, W-08, W-15, W-18, W-19, A-05, A-06, A-07, A-09, A-11, A-13, A-14, T-10, M-24, M-27 to M-30.
 - Latencies are coarse (see "Workspaces sync"): the driver adds seconds, so they bound the sync time from above and do not measure it.
 - Judgement calls the reader should know: the theme result (B-06) depends on the PC theme pair, which I did not inspect; B-12 (stray "-") may come from the keyboard.
 
@@ -43,6 +45,11 @@ Every row's evidence is under `docs/qa/evidence/<id>/`; per-case verdicts are in
 | B-20 | medium | PR merged is never shown on the phone | a worktree whose PR is merged: the TUI draws `⚑` | the same mark, as REQ-18 lists `✻ ? ⚡ ⚑` | the app's `Mark` is only Working, Waiting, Dev (`proto/Workspaces.kt:58`) and the code says the bridge "cannot know" the merged-PR flag; the phone legend has no ⚑. Found by reading the code, not run (no GitHub in the test state) | android/proto/.../Workspaces.kt:58,136 | 18 |
 | B-21 | low | "Finished" is not a state the phone shows or announces | an agent ends its turn | something that says it finished (and the PC's `rang` bell mark, if that is the signal) | the working mark and the "Pensando…" row simply disappear; no "terminó" mark, row text or alert (Avisos lists only waiting panes; its idle text "en reposo" appears only there). Background alerts when the app is closed were not tested | W-10, M-17 | 18, 28 |
 | B-22 | high | A Claude started by hand shows "working" on the PC and nothing on the phone | in a `qa-test` workspace open a pane that runs `claude` by hand (no jw hooks; role `run`) and give it a prompt that takes ~10 s; watch `jw ls` and the phone's Home row | the same mark on both | `jw ls`: `demo working ✻` for the first ~4 s, then `waiting ?`; the phone's `demo` row carries no mark at all during the whole turn (no ✻, no ?). Reproduces what the owner saw ("one chat was working but no status in the app"). The phone derives marks only from the hooks' `PaneInfo.agent`; the PC also counts the pane's screen activity, and the phone only learns "working" from `Chat.working` once the chat view of that pane is open | ST-01/ | 18, 99 |
+| B-23 | low | A very long output is cut with no notice | shell: `seq 1 150000` (~1 MB) | the block says it was cut (REQ-95 keeps 512 KiB and flags `truncated`) | the block header says "3023 líneas" and shows the end; the first ~147,000 lines are gone and nothing says so | S-09/ | 95, 97 |
+| B-24 | low | Branch label does not follow `git switch` | in a worktree `git switch -c feat/qa-branch2`; watch `jw ls` and the Home row for 3+ minutes | the new branch | both `jw ls` and the phone keep the branch the worktree was created with. PC and phone agree, both stale | W-14/ | 18 |
+| B-25 | low | `/compact` shows Claude's summary as the person's message and leaks ANSI | `/compact` in a chat | a notice or the summary as Claude's; clean output | the continuation summary ("This session is being continued…") is drawn as a right-hand user bubble; the output reads ".[2mCompacted (ctrl+o to see full summary).[22m" | M-23/ | 93, 94 |
+| B-26 | low | App reopens on another session and resets its place after a reconnect | close the app and reopen it (it opened on the user's `sales-assist` session, not `qa-test`); drop the network inside a chat | the last session and pane | opening on a different session is a hazard when several sessions hold real work; after a reconnect the app is back in the workspace but on its first tab, not the pane it was in | A-10/ | 15 |
+| B-27 | low | Image tool results show as "sin salida" | ask Claude to read a PNG | the image or a note that there is one | the card says "sin salida"; the image is not shown | M-20/ | 94 |
 
 ## Workspaces sync
 
@@ -76,7 +83,13 @@ Every row's evidence is under `docs/qa/evidence/<id>/`; per-case verdicts are in
 | M-19 | long output | T | not tested for truncation | | | |
 | M-21 | status / mode line | S | | | x | no way to see "manual / plan / auto mode" or context % |
 | M-26 | `/status`, `/config`, other panels | S | | | x | B-03 |
-| not run | M-11, 14, 20, 22 (no TodoWrite in this Claude), 23–25, 27–30 | | | | | |
+| M-11 | two questions in one prompt | S | | x | | one after the other; the PC's tab bar and the final review are not shown |
+| M-14 | custom `/command` | T + disk | x | | | listed as "comando", runs |
+| M-20 | image (Read of a PNG) | T | | | x | card says "sin salida" (B-27) |
+| M-22 | todo list | T | n/a | | | no TodoWrite in this Claude |
+| M-23 | `/compact` | T | | x | | summary shown as the person's message, ANSI leaked (B-25) |
+| M-25 | `!` shell escape | T | inconclusive | | | |
+| not run | M-24, 27–30 | | | | | |
 
 ## States: what the phone shows for each
 
@@ -94,12 +107,13 @@ Every row's evidence is under `docs/qa/evidence/<id>/`; per-case verdicts are in
 ## Shell findings
 
 Pass: new shell block view, command and output, failed command (red, `salió 1`), running command (`corriendo N s`, red stop button), stop (Ctrl-C, `salió 130`), 3000-line output with `N líneas`, colours (red, bold, RGB, background), CJK and emoji.
-Fail or diff: B-05, B-06, B-13, B-14, B-18, and the unreachable interactive cases (S-16 to S-20 were not run: paste, keyboard behaviour, non-zsh, block actions).
+Also pass: history with the arrow key, tab completion, a program that asks for input (including a silent password prompt), tapping the output closes the keyboard, block actions (copy command, copy output, repeat, share sheet), a nested bash treated as a running command, `cd` updating the folder chip.
+Fail or diff: B-05, B-06, B-13, B-14, B-18, B-23. Not run: paste, selection, wide PC pane, `ls` colours.
 
 ## Transversal
 
 Pass: portrait lock holds against a landscape request (REQ-103); diff tab matches `git status` (3 files, counts right); Files and Markdown viewer; sessions sheet.
-Fail: B-01, B-07, B-08.
+Also pass: touch targets (no clickable under 48 dp on the main screens) and logcat hygiene on the fresh process. Fail: B-01, B-07, B-08, B-26.
 
 ## Recommendation
 
