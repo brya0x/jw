@@ -468,6 +468,7 @@ impl Core {
                         argv,
                         exit_code: None,
                     }),
+                    blocks: None,
                     screen: self
                         .screens
                         .get(&p.id)

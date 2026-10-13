@@ -174,6 +174,21 @@ class ConformanceTest {
         }
     }
 
+    /** The blocks patch applies to the blocks snapshot and leaves a valid node. */
+    @Test
+    fun aBlocksPatchFinishesTheRunningBlock() {
+        val snap = fixtures("daemon").first { it.first == "snapshot-blocks.json" }.second.jsonObject.getValue("node")
+        val patch = fixtures("daemon").first { it.first == "patch-blocks-append.json" }.second
+        val msg = ContractJson.decodeFromJsonElement(DaemonMsg.serializer(), patch) as DaemonMsg.Patch
+        val node = ContractJson.decodeFromJsonElement(Node.serializer(), applyPatch(snap, msg.ops, msg.to)) as Node.Blocks
+        val last = node.blocks.last()
+        assertEquals(5L, node.rev)
+        assertEquals(false, last.running)
+        assertEquals(0, last.code)
+        assertEquals(12400L, last.ms)
+        assertEquals("test result: ok. 14 passed", last.out.last().first().t)
+    }
+
     /** A patch from a daemon snapshot fixture stays a valid node of the same type. */
     @Test
     fun aPatchedSnapshotStillParsesAsANode() {

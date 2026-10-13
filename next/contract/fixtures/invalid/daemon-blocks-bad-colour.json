@@ -1,0 +1,32 @@
+{
+  "t": "snapshot",
+  "node": {
+    "id": "00000000-0000-4000-8000-0000000000d1",
+    "type": "blocks",
+    "v": 1,
+    "epoch": "00000000-0000-4000-8000-000000000001",
+    "rev": 1,
+    "attention": [],
+    "pane": "00000000-0000-4000-8000-0000000000c2",
+    "mode": "blocks",
+    "blocks": [
+      {
+        "id": 1,
+        "cmd": "git status",
+        "cwd": "/home/u/code/app-login",
+        "started": 1791932000000,
+        "running": false,
+        "code": 0,
+        "ms": 120,
+        "out": [
+          [
+            {
+              "t": "x",
+              "fg": 300
+            }
+          ]
+        ]
+      }
+    ]
+  }
+}

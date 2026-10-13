@@ -15,7 +15,43 @@
     "AttentionKind": {
       "enum": ["question", "plan", "permission", "shell_done", "agent_done", "screen", "merged", "ci_failed"]
     },
-    "NodeType": { "enum": ["session", "workspace", "pane"] },
+    "NodeType": { "enum": ["session", "workspace", "pane", "blocks"] },
+    "BlocksMode": { "enum": ["blocks", "full"] },
+    "Color": {
+      "description": "A palette index (0 to 255) or a #rrggbb string.",
+      "oneOf": [
+        { "type": "integer", "minimum": 0, "maximum": 255 },
+        { "type": "string", "pattern": "^#[0-9a-f]{6}$" }
+      ]
+    },
+    "Span": {
+      "type": "object",
+      "required": ["t"],
+      "properties": {
+        "t": { "type": "string" },
+        "fg": { "$ref": "#/$defs/Color" },
+        "bg": { "$ref": "#/$defs/Color" },
+        "b": { "const": true },
+        "i": { "const": true },
+        "u": { "const": true }
+      }
+    },
+    "Block": {
+      "type": "object",
+      "required": ["id", "cmd", "cwd", "started", "running", "out"],
+      "properties": {
+        "id": { "type": "integer", "minimum": 0 },
+        "cmd": { "type": "string" },
+        "cwd": { "type": "string" },
+        "started": { "type": "integer", "minimum": 0 },
+        "running": { "type": "boolean" },
+        "code": { "type": "integer" },
+        "ms": { "type": "integer", "minimum": 0 },
+        "truncated": { "const": true },
+        "full": { "const": true },
+        "out": { "type": "array", "items": { "type": "array", "items": { "$ref": "#/$defs/Span" } } }
+      }
+    },
     "WorkspaceKind": { "enum": ["worktree", "folder"] },
     "Attention": {
       "type": "object",
@@ -122,7 +158,18 @@
             "cwd": { "type": "string" },
             "running": { "$ref": "#/$defs/Program" },
             "last_program": { "$ref": "#/$defs/Program" },
-            "screen": { "$ref": "#/$defs/Screen" }
+            "screen": { "$ref": "#/$defs/Screen" },
+            "blocks": { "$ref": "#/$defs/Id" }
+          }
+        },
+        {
+          "allOf": [{ "$ref": "#/$defs/Head" }],
+          "required": ["pane", "mode", "blocks"],
+          "properties": {
+            "type": { "const": "blocks" },
+            "pane": { "$ref": "#/$defs/Id" },
+            "mode": { "$ref": "#/$defs/BlocksMode" },
+            "blocks": { "type": "array", "items": { "$ref": "#/$defs/Block" } }
           }
         }
       ]

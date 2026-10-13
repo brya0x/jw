@@ -277,6 +277,7 @@ fn rev_of(n: &Node) -> u64 {
         Node::Session(s) => s.head.rev,
         Node::Workspace(w) => w.head.rev,
         Node::Pane(p) => p.head.rev,
+        Node::Blocks(b) => b.head.rev,
     }
 }
 
@@ -361,6 +362,8 @@ impl View {
                 Node::Pane(p) => {
                     self.panes.insert(id, p);
                 }
+                // Shell blocks come with the blocks view of the terminal client.
+                Node::Blocks(_) => {}
             }
         }
     }

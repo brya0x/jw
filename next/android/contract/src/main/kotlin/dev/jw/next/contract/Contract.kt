@@ -9,6 +9,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonClassDiscriminator
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 
 /**
  * The JSON documents shared by the daemon and every client. The schema in `contract/schema`
@@ -270,5 +271,60 @@ sealed interface Node {
         val running: Program? = null,
         @SerialName("last_program") val lastProgram: Program? = null,
         val screen: Screen,
+        /** The node of this pane's shell blocks, once the shell has reported its first prompt. */
+        val blocks: Id? = null,
+    ) : Node
+
+    /** Level 2 as command blocks: what a pane's shell ran, newest last. */
+    @Serializable @SerialName("blocks")
+    data class Blocks(
+        override val id: Id,
+        override val v: Int,
+        override val epoch: String,
+        override val rev: Long,
+        override val attention: List<Attention>,
+        val pane: Id,
+        val mode: BlocksMode,
+        val blocks: List<Block>,
     ) : Node
 }
+
+/** `Full` while a program has the whole screen: draw the pane's screen instead. */
+@Serializable
+enum class BlocksMode {
+    @SerialName("blocks") Blocks,
+    @SerialName("full") Full,
+}
+
+@Serializable
+data class Block(
+    /** Counts up per pane and is never reused. */
+    val id: Long,
+    val cmd: String,
+    /** Where the command started. */
+    val cwd: String,
+    /** Unix milliseconds. */
+    val started: Long,
+    val running: Boolean,
+    /** The exit status; absent while it runs. */
+    val code: Int? = null,
+    /** How long it took in milliseconds; absent while it runs. */
+    val ms: Long? = null,
+    /** The start of the output was dropped to stay within the limits. */
+    val truncated: Boolean = false,
+    /** The command used the whole screen; its output is not kept. */
+    val full: Boolean = false,
+    /** The output as rows of styled spans: the daemon resolves colours and attributes. */
+    val out: List<List<Span>>,
+)
+
+/** A run of text with one style. [fg] and [bg] are a palette index (a number) or `#rrggbb` (a string). */
+@Serializable
+data class Span(
+    val t: String,
+    val fg: JsonPrimitive? = null,
+    val bg: JsonPrimitive? = null,
+    val b: Boolean = false,
+    val i: Boolean = false,
+    val u: Boolean = false,
+)

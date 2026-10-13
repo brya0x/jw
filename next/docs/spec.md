@@ -15,6 +15,8 @@ A client opens a node and gets a `snapshot`, then `patch`es (RFC 6902 subset `ad
 
 **Attention** is a typed item the daemon computes once and a client never re-derives: `question`, `plan`, `permission`, `shell_done` (with `exit_code`), `agent_done`, `screen`, `merged`, `ci_failed`. Each names the node that opens when tapped and the `rev` that raised it. A node's `attention` lists its whole subtree, so it bubbles to the session. Looking is shared: a client that shows a node sends `mark_seen {node, rev}` and the daemon ends the attentions that node raised up to that revision, so every client clears them (the user's decision; the first proposal was a per-client *seen*). Each client also keeps a local record so it clears at once and while offline. An attention lasts as long as its cause (a `shell_done` ends when the next command starts), so the daemon drops it then; whether a person looked at it is the client's *seen*. There is no approve/deny anywhere.
 
+**Shell blocks.** A shell pane can also be read as the commands it ran. When the shell reports its marks (below), the pane carries `blocks`, the id of a `blocks` node (type `blocks`, v1, opened on demand like any node): the pane's commands, newest last, each with its folder, start time, duration, exit status and output. The output is rows of styled spans (text with colour and bold, italic, underline), resolved by the daemon, so a client draws spans and needs no terminal emulator. A command that takes the whole screen (nvim) is a block with `full` and no output, and the node is in mode `full` while it runs: clients then draw the pane's screen node instead. The designs are `docs/prototypes/tui.html` (terminal and phone). The shell's input stays with the shell: a client's editor sends the line with `write` (text, then `\r`), stops a program with `write` of `^C`, and repeating or copying a block is the client's business.
+
 A **pane is a terminal**: its process is always the user's `$SHELL`; a program runs inside it (`running` and `last_program` carry it, and the pane's `title` is its name).
 
 ## Interfaces
@@ -31,6 +33,8 @@ Home of every shape is `contract/schema/contract.schema.json`; the examples are 
 | | `gone` | node removed or unknown |
 | | `reply` | `id`, `ok` + `result?` or `error{code,message}` |
 | | `error` | a message with no `id` to reply to |
+
+The `blocks` node: `pane`, `mode` (`blocks` or `full`), `blocks`: `Block {id, cmd, cwd, started, running, code?, ms?, truncated?, full?, out}`, `out` = rows of `Span {t, fg?, bg?, b?, i?, u?}`, colours a palette index (0 to 255) or `#rrggbb`. Everything is in `contract/schema/contract.schema.json`; examples in `contract/fixtures/daemon/{snapshot-blocks,snapshot-blocks-full,patch-blocks-append}.json`.
 
 Commands (`cmd`): `rename_session`, `open_folder`, `create_worktree`, `remove_workspace`, `new_pane`, `close_pane`, `write`, `resize`. Error codes: `bad_request`, `not_found`, `unsupported`, `conflict`, `git_failed`, `io`.
 
@@ -95,6 +99,13 @@ Transport: JSON lines on a Unix socket (mode 0600, in a 0700 dir) whose path com
 - REQ-51 WHEN the program is an agent (`claude`) that names no conversation, the daemon SHALL start it with its own `--session-id <uuid>`.
 - REQ-52 WHEN the daemon restarts, a pane whose agent was running with a known conversation that has a saved transcript SHALL start that agent again as `claude --resume <id>`; an agent that ended, or whose conversation has no transcript, SHALL NOT be started again, and the pane SHALL be a shell.
 - REQ-53 THE terminal client SHALL take the mouse: a left click on a workspace row opens it, on a pane's box focuses it, on `avisos N` in the status bar opens the list, on an item of the list goes there, and outside the list closes it; the wheel over the sidebar or the list moves the highlight; a click anywhere else SHALL change nothing.
+- REQ-54 WHEN a pane's shell has reported a prompt, the pane node SHALL carry `blocks` and that node SHALL list one block per command the shell ran, oldest first; a pane whose shell has not (an unsupported shell) SHALL have none and clients SHALL draw its screen.
+- REQ-55 WHILE a command runs its block SHALL have `running` true and no `code` or `ms`; WHEN it ends it SHALL carry `code`, `ms` and `running` false.
+- REQ-56 THE output of a block SHALL be rows of spans with colours and attributes already resolved by the daemon, and SHALL NOT contain the prompt, the typed command or the marks.
+- REQ-57 THE daemon SHALL keep at most 100 blocks per pane and 500 rows per block (the start of a longer output is dropped and the block marked `truncated`), and at most 4 MiB of output in all by dropping the oldest blocks.
+- REQ-58 WHILE a command uses the alternate screen, the node SHALL be in mode `full` and its block SHALL be `full` with no output kept; clients SHALL then draw the pane's screen.
+- REQ-59 THE daemon SHALL give zsh, bash and fish a shell integration that reports, with OSC 133 (`A` prompt, `B` input, `C` output start, `D;<code>` end) and OSC 633 (`E;<base64 command>`, `P;Cwd=<base64 folder>`), what each command was, where it started and how it ended; any other shell SHALL run unchanged.
+- REQ-60 A client's editor SHALL send a line with `write` (the text and `\r`) and stop a running program with `write` of `\u0003`; no new command is needed.
 - REQ-18 IF a client's outbox is full, THEN the daemon SHALL disconnect that client and no other.
 
 REQ-1 to REQ-7, REQ-12 and REQ-13 are enforced by N1 (`crates/contract/tests/conformance.rs`, `crates/identity`). REQ-8, 9, 10, 11, 15, 16, 17 are enforced by N2 (`crates/daemon/tests/session.rs`, `src/core.rs` tests); REQ-19 to REQ-22 are enforced by N3 (`crates/daemon/tests/workspaces.rs`, against real git); REQ-18 is implemented (bounded outbox) and untested; REQ-14 and REQ-23 to REQ-27 are enforced by N4 (`crates/daemon/tests/panes.rs`, real `/bin/sh` PTYs). REQ-48 and REQ-49 by N13 (`crates/daemon/tests/panes.rs` with real `sleep`, `src/procs.rs`, `android/client-core`; checked by hand with `claude`, `nvim` and `sleep` on the phone). REQ-33 to REQ-35 and REQ-39 to REQ-41 by N8 (`android/client-core` tests, `just android`; the Compose screens are built and linted, not UI-tested). REQ-31 and REQ-32 by N6 (`android/contract`, `just android`). REQ-28 to REQ-30 by N5 (`tests/session.rs`, `contract/src/patch.rs` tests, `crates/jwn/tests/e2e.rs`).
@@ -130,6 +141,11 @@ A pane is a zsh (the user's `$SHELL`); claude or nvim run inside it, so the tab 
 
 Corrections to the model: the level 0 document is smaller than assumed (3.9 KB, because panes are not in it); pushing makes idle cost zero instead of about 34 KB, and a phone that only polls pays 15 KB per 10 minutes with resume checks. The first measurement showed a 4.1 KB patch for adding one workspace because a list that changed length was replaced whole; `diff` now appends and trims (REQ-29, 0.3 KB).
 
+- RAT-8 **Spans, not bytes.** The old jw kept each block's raw bytes and every phone ran its own terminal emulator (a Kotlin module with golden tests to keep it equal to the daemon's). Resolving colours once in the daemon (it already runs vt100) means clients draw runs of text and the terminal client, the phone and a future web client cannot disagree. The cost is a larger document per block, bounded by REQ-57.
+- RAT-9 **Standard marks.** OSC 133 is what other terminals' shell integrations speak; the command text and folder use OSC 633 (VS Code's `E` and `P`) because 133 carries neither. The old jw used a private OSC 7770 and only for zsh; one set of marks now covers three shells.
+- RAT-10 **A separate node, a field on the pane.** Blocks can be large and change on every line of output; keeping them out of the pane node keeps the pane's screen patches small and lets a client that only draws the screen never open them. The pane says where they are (`blocks`) so a client does not guess.
+- RAT-11 **The editor is the client's, the line is the shell's.** The shell keeps its history, completion and key bindings; a client sends the finished line. Mirroring the shell's own buffer both ways (what the old jw did with zle's `$BUFFER`) is left for later (OPEN-6).
+
 ## Risks
 - RISK-1 Index-based patch paths break if a client applies a patch to a node at a revision other than `from`. Mitigation: a client that sees a gap drops the node and reopens it for a snapshot.
 - RISK-2 Round-trip equality forbids unknown fields inside valid fixtures, so forward-compatibility is tested by one synthetic test (`unknown_fields_are_ignored`), not by fixtures.
@@ -142,12 +158,17 @@ Corrections to the model: the level 0 document is smaller than assumed (3.9 KB, 
 - RISK-10 The Android live source is a development link (fixed address, no pairing); it has no UI tests, and it was checked by hand on a phone against the terminal client.
 - RISK-11 The program is the foreground process group of the terminal, looked at every 0.7 s with one `ps`; its argv is `ps` output split on spaces (quotes are lost), and a program shorter than the interval can be missed. Unix only.
 - RISK-12 Only an agent with a known conversation comes back: one started through `new_pane` (we give it an id) or typed with `--resume <id>`/`--session-id <id>`. A plain `claude` typed at a prompt is shown as running but not resumed. Whether a conversation exists is a look for `<id>.jsonl` under Claude's `projects/` directory, which is Claude's layout, not a contract.
+- RISK-13 The daemon rebuilds and diffs whole documents on each change (RISK-5); a `blocks` node with 100 blocks of 500 rows is large. A command printing continuously changes one block every 20 ms. Measure with the real node (N17) and, if it hurts, diff only the changed block.
+- RISK-14 The integration adds hooks to the user's shell (zsh `ZDOTDIR` shim, bash `--rcfile` wrapper, fish `--init-command`) and the user's own rc files must still run. Prompt frameworks (starship, powerlevel10k) also use these hooks; the order may matter.
+- RISK-15 A program that redraws in place (progress bars with cursor moves) is rendered by the daemon's vt100, so its rows are the final screen, not every intermediate frame.
 - RISK-4 The Kotlin suite proves the types and the patch rules, not a live connection: no Kotlin client has talked to the daemon yet.
 
 ## Open questions
 - OPEN-1 Retention: how many revisions per node the daemon keeps for resume (proposed 256).
 - OPEN-3 The permission and question screens inside the claude pane still offer their options; whether they change too is the user's call (the prototype leaves them).
 - OPEN-4 The terminal client's workspace list has no prototype yet; the phone comes first.
+- OPEN-6 Mirroring the shell's line buffer into the clients' editors (what you type at a terminal shows in the phone's editor) and the other way round.
+- OPEN-7 History and completion in the editors: from the shell, or kept by the client.
 - OPEN-5 Where the special keys (`esc`, `tab`, arrows, `^C` beyond the stop button, `^D`, `^R`, …) go on the phone now that the key row is removed (the user: think about it later).
 - OPEN-2 Whether a `pane` screen needs styled cells (colour, bold) before the first UI; v1 is text only.
 
@@ -183,3 +204,9 @@ Corrections to the model: the level 0 document is smaller than assumed (3.9 KB, 
 | N13 | the program running in each pane is detected (`running`, `last_program`, `title`); the phone selects a first pane that arrives late | 48, 49 | `crates/daemon/src/procs.rs` |
 | N14 | programs start inside the shell through a wrapper (`new_pane program`); an agent gets its own conversation id and is resumed after a restart | 50–52 | `crates/daemon/src/launch.rs`, `crates/daemon/tests/launch.rs` |
 | N15 | the terminal client takes the mouse (clicks and the wheel), tested in the real client through a pty | 53 | `crates/jwn/src/tui.rs`, `scripts/e2e-live.py` |
+| N16 ✓ (this commit) | the spec and the contract of the shell blocks: the `blocks` node, schema, fixtures, Rust and Kotlin types, conformance | 54–60 | `contract/`, `crates/contract`, `android/contract` |
+| N17 | the shell integration (zsh, bash, fish) and the blocks in the daemon | 54–59 | `crates/daemon` |
+| N18 | typing into panes: the terminal client forwards keys, the phone has an editor | 60 | `crates/jwn/src/tui.rs`, `android/app` |
+| N19 | the blocks view in the terminal client | | `crates/jwn/src/tui.rs` |
+| N20 | the blocks view on the phone | | `android/app` |
+| N21 | opening a pane with a choice (shell, claude, nvim) and resizing a pane to its client | | |

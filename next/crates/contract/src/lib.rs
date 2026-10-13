@@ -209,6 +209,7 @@ pub enum Node {
     Session(Session),
     Workspace(Workspace),
     Pane(Pane),
+    Blocks(Blocks),
 }
 
 /// Fields every node carries.
@@ -266,6 +267,77 @@ pub struct Pane {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_program: Option<Program>,
     pub screen: Screen,
+    /// The node of this pane's shell blocks; present once the shell has reported its first
+    /// prompt (so only for shells with the integration).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocks: Option<Id>,
+}
+
+/// Level 2 as command blocks: what a pane's shell ran, newest last, each with its output.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Blocks {
+    #[serde(flatten)]
+    pub head: Head,
+    pub pane: Id,
+    pub mode: BlocksMode,
+    pub blocks: Vec<Block>,
+}
+
+/// `full` while a program has the whole screen (nvim): clients draw the pane's screen instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BlocksMode {
+    Blocks,
+    Full,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Block {
+    /// Counts up per pane and is never reused.
+    pub id: u64,
+    pub cmd: String,
+    /// Where the command started.
+    pub cwd: String,
+    /// Unix milliseconds.
+    pub started: u64,
+    pub running: bool,
+    /// The exit status; absent while it runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<i32>,
+    /// How long it took, in milliseconds; absent while it runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ms: Option<u64>,
+    /// The start of the output was dropped to stay within the limits.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
+    /// The command used the whole screen; its output is not kept.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub full: bool,
+    /// The output as rows of styled spans: the daemon resolves colours and attributes.
+    pub out: Vec<Vec<Span>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Span {
+    pub t: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fg: Option<Color>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bg: Option<Color>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub b: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub i: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub u: bool,
+}
+
+/// A palette index (0 to 255) or a `#rrggbb` string.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Color {
+    Index(u8),
+    Rgb(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -357,5 +429,6 @@ pub fn node_id(node: &Node) -> &Id {
         Node::Session(n) => &n.head.id,
         Node::Workspace(n) => &n.head.id,
         Node::Pane(n) => &n.head.id,
+        Node::Blocks(n) => &n.head.id,
     }
 }
