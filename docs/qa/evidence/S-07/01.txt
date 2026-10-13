@@ -1,15 +1,12 @@
 (156, 165, 244, 215) demo
 (156, 215, 636, 254) /private/tmp/jwt-qa/home/demo
 (982, 177, 1011, 242) ±
-(81, 361, 181, 383) agent
-(304, 361, 364, 383) run
-(487, 361, 587, 383) shell
-(48, 753, 926, 791) /private/tmp/jwt-qa/home/demo
-(947, 753, 1032, 791) 13 ms
-(48, 806, 532, 854) ls -G /tmp/jwt-qa/home
-(48, 530, 943, 568) /private/tmp/jwt-qa/home/demo
-(964, 530, 1032, 568) 0 ms
-(48, 583, 224, 631) echo two
+(81, 361, 181, 405) agent
+(304, 361, 404, 405) shell
+(48, 578, 926, 616) /private/tmp/jwt-qa/home/demo
+(947, 578, 1032, 616) 13 ms
+(48, 631, 1016, 679) CLICOLOR_FORCE=1 ls -lG /tmp/jwt-qa/colordir
+(0, 415, 1080, 559) un programa a pantalla completa: sin salida
 (83, 1050, 121, 1093) ^␣
 (233, 1050, 290, 1093) esc
 (392, 1050, 449, 1093) tab

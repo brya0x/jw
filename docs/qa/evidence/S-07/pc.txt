@@ -1,17 +1,30 @@
+ take a moment to review what's in this folder first.
 
-── restored 11:07 ──
+ Claude Code'll be able to read, edit, and execute files here.
+
+ Security guide
+
+ ❯ No, exit
+   Yes, I trust this folder
+
+ Enter to confirm · Esc to cancel
+
+/tmp via  v24.14.1 via 🦀 v1.98.1 took 27s
+❯ cd /private/tmp/jwt-qa/home/demo
 
 demo on  main [?]
-❯ echo one
-one
+❯ /tmp/jwt-qa/claude-haiku.sh
 
-demo on  main [?]
-❯ echo two
-two
+Resume this session with:
+claude --resume 418ff5da-3697-498a-b7e2-368fc450bfc0
 
-demo on  main [?]
-❯ ls -G /tmp/jwt-qa/home
-Applications demo         demo-wt      Library      lsdir
+demo on  main [?] took 30m21s
+❯ CLICOLOR_FORCE=1 ls -lG /tmp/jwt-qa/colordir
+total 0
+-rw-r--r--@ 1 bastacio  wheel   0 Oct 13 11:59 a.txt
+lrwxr-xr-x@ 1 bastacio  wheel   5 Oct 13 11:59 link -> a.txt
+-rwxr-xr-x@ 1 bastacio  wheel   0 Oct 13 11:59 run.sh
+drwxr-xr-x@ 2 bastacio  wheel  64 Oct 13 11:59 sub
 
 demo on  main [?]
 ❯

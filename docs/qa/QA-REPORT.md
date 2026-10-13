@@ -7,10 +7,10 @@ Every row's evidence is under `docs/qa/evidence/<id>/`; per-case verdicts are in
 
 - **Workspaces and shell cases** ran against an isolated test daemon (`scripts/jw-test`, state `/tmp/jwt-qa`), killed by its own pid at the end.
 - **Agent cases** ran in a throwaway session `qa-test` of the user's real jw, by the user's decision, because Claude was not logged in under the test HOME and linking the keychain was refused. Only that session was touched; the phone driver (`q.py`) refused to tap or type outside it.
-- **75 of 106 checklist cases have a verdict** (pass, diff, fail, not-shown or inconclusive); 31 are `not-run` in `results.tsv`. Why those were left:
-  - not possible through adb: paste (S-17), text selection (S-24), typing on the PC side (S-03, S-04, A-03; the user's TUI cannot be driven safely);
-  - would change the user's real daemon or pairing: read-only toggle, revoke, pairing-failure screens (W-20, T-13, T-14, T-15), and the network-route fallback (T-02, T-03 need the tunnel or a daemon restart);
-  - not reached: S-07, S-23, W-07, W-08, W-15, W-18, W-19, A-05, A-06, A-07, A-09, A-11, A-13, A-14, T-10, M-24, M-27 to M-30.
+- **91 of 106 checklist cases have a verdict** (pass, diff, fail, not-shown or inconclusive); 15 are `not-run` in `results.tsv`:
+  - the owner excluded two groups: pairing/revoke/read-only/route cases (W-20, T-02, T-03, T-13, T-14, T-15) and anything that needs adb to paste, select or type on the PC (S-03, S-04, S-17, S-24, A-03);
+  - not built: A-14 (a chat of 400+ blocks, costly), M-24 (MCP / WebFetch), M-28 (permission prompt in a Claude with no hooks);
+  - inconclusive after trying: A-06 (text selection: adb long-press did not raise the toolbar; the code wraps the chat in a `SelectionContainer`), A-12 (queued message), M-25 (`!ls`), M-27 (`/resume` list on the PC side).
 - Latencies are coarse (see "Workspaces sync"): the driver adds seconds, so they bound the sync time from above and do not measure it.
 - Judgement calls the reader should know: the theme result (B-06) depends on the PC theme pair, which I did not inspect; B-12 (stray "-") may come from the keyboard.
 
@@ -23,7 +23,7 @@ Every row's evidence is under `docs/qa/evidence/<id>/`; per-case verdicts are in
 
 | id | sev | title | steps | expected | actual | evidence | REQ |
 |---|---|---|---|---|---|---|---|
-| B-19 | high | "y · aprobar" / "n · rechazar" buttons approve a plan or answer a question the person has not seen | a Claude pane waits on a plan (or a choice); look at the Home row and at Avisos | no y/n: REQ-20 allows them only for a plain yes/no permission, REQ-98 says "no approve or reject buttons" for plans and choices | the Home row shows live green "y · aprobar" and red "n · rechazar" under the waiting workspace, and Avisos shows y / n (dim) with the pane's name and no content. Tapping **y** on a pending plan accepted option 1, "Yes, and use auto mode": the plan ran and Claude was switched into auto mode, all without the plan ever being on the phone | AV-01/, AV-02/ | 20, 28, 98 |
+| B-19 | high | "y · aprobar" / "n · rechazar" buttons approve a plan or answer a question the person has not seen | a Claude pane waits on a plan (or a choice); look at the Home row and at Avisos | no y/n: REQ-20 allows them only for a plain yes/no permission, REQ-98 says "no approve or reject buttons" for plans and choices | the Home row shows live green "y · aprobar" and red "n · rechazar" under the waiting workspace, and Avisos shows y / n (dim) with the pane's name and no content. The default "Claude Code" quick-answer preset makes **y** send Enter, which accepts whatever option the cursor is on. Tapping **y** on a pending plan accepted option 1, "Yes, and use auto mode": the plan ran and Claude was switched into auto mode, all without the plan ever being on the phone | AV-01/, AV-02/ | 20, 28, 98 |
 | B-01 | high | App crashes when the system day/night mode changes inside a workspace | open any shell or agent workspace; `adb shell cmd uimode night yes` | theme change, no crash | `IllegalArgumentException: Mismatching scroller orientation; single-line, non-wrap text fields can only scroll horizontally` at `WorkspaceUi.kt:438` (Composer `BasicTextField`); the app closes. Reproduced 3 times (shell and agent); the home list survives. Auto day/night switching would trigger it in normal use | T-04/crash.txt | 17 |
 | B-02 | high | First-run Claude prompt is invisible and answered blind | new agent worktree whose folder Claude does not trust yet; open it on the phone | the "trust this folder" question and its options shown | agent chat reads "Sin mensajes todavía."; only the key row works. A blind Up, Down, Enter chose "No, exit" and the agent pane exited. Not seen under the real daemon (folder already trusted) | M-08/, M-08b/ | 94, 98 |
 | B-03 | medium | Screen-only Claude panels are not shown, and the pane stays inside them | send `/status` or `/config` from the phone | something shows the panel, or says Claude shows one | the chat stays as it was, no command bubble, no panel; the PC pane stays in the panel until Esc is sent from the key row | M-26/ | 94, 98 |
@@ -50,6 +50,10 @@ Every row's evidence is under `docs/qa/evidence/<id>/`; per-case verdicts are in
 | B-25 | low | `/compact` shows Claude's summary as the person's message and leaks ANSI | `/compact` in a chat | a notice or the summary as Claude's; clean output | the continuation summary ("This session is being continued…") is drawn as a right-hand user bubble; the output reads ".[2mCompacted (ctrl+o to see full summary).[22m" | M-23/ | 93, 94 |
 | B-26 | low | App reopens on another session and resets its place after a reconnect | close the app and reopen it (it opened on the user's `sales-assist` session, not `qa-test`); drop the network inside a chat | the last session and pane | opening on a different session is a hazard when several sessions hold real work; after a reconnect the app is back in the workspace but on its first tab, not the pane it was in | A-10/ | 15 |
 | B-27 | low | Image tool results show as "sin salida" | ask Claude to read a PNG | the image or a note that there is one | the card says "sin salida"; the image is not shown | M-20/ | 94 |
+| B-28 | medium | An exited agent pane looks alive | restart jw (or let an agent exit); open the workspace | something saying the agent ended | the chat keeps the old conversation, the composer reads "escribe a agent", the tab has a red dot; typing "hello" and sending shows nothing and goes nowhere | B-exited/ | 94, 99 |
+| B-29 | medium | After a jw restart, agent panes exit instead of resuming (PC side) | restart the daemon with agent workspaces open | the agents come back | the agent panes of `demo` and `qa-perm` were `exited 1`; the pane text says "Session ID … is already in use". Caveat: the project's start/resume commands were my wrapper script, which may have contributed | W-05/, B-nav/ | 15 |
+| B-30 | medium | Two hand-started Claudes in one folder show the same conversation | two `claude` panes (role `run`) in one workspace, each with its own prompt | each tab its own chat, tabs told apart | both tabs show the newest transcript (the one for the second pane), and both tabs are labelled "run" | A-13/ | 93, 94 |
+| B-31 | low | The `^␣` sheet has no greyed "en el PC" rows | open `^␣` in a workspace | rename, sync, remove, review listed greyed with "en el PC" | those four are not listed at all | W-07/ | 23 |
 
 ## Workspaces sync
 
@@ -113,7 +117,7 @@ Fail or diff: B-05, B-06, B-13, B-14, B-18, B-23. Not run: paste, selection, wid
 ## Transversal
 
 Pass: portrait lock holds against a landscape request (REQ-103); diff tab matches `git status` (3 files, counts right); Files and Markdown viewer; sessions sheet.
-Also pass: touch targets (no clickable under 48 dp on the main screens) and logcat hygiene on the fresh process. Fail: B-01, B-07, B-08, B-26.
+Also pass: touch targets (no clickable under 48 dp on the main screens) and logcat hygiene on the fresh process. Also pass: quick-answer presets (T-10), 5-minute idle sync (W-19), 16-row list, scroll and search (W-18). Fail: B-01, B-07, B-08, B-26.
 
 ## Recommendation
 
