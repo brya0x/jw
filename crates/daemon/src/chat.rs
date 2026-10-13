@@ -132,9 +132,8 @@ pub struct Tail {
     msg_tokens: HashMap<String, u64>,
     /// The blocks of messages the person sent while Claude worked and the transcript has not yet.
     queued: Vec<u32>,
-    /// Background tasks and subagents started, and the ones whose end was told (REQ-97).
-    bg_started: u32,
-    bg_ended: u32,
+    /// The calls that started a background task or subagent and whose end was not told yet (REQ-97).
+    bg_open: HashSet<String>,
     notices: HashSet<String>,
     /// The name Claude gives the conversation's plan file (`<config>/plans/<slug>.md`), and what that file held when last read.
     slug: Option<String>,
@@ -156,8 +155,7 @@ impl Tail {
             turn: None,
             msg_tokens: HashMap::new(),
             queued: Vec::new(),
-            bg_started: 0,
-            bg_ended: 0,
+            bg_open: HashSet::new(),
             notices: HashSet::new(),
             slug: None,
             plan: None,
@@ -195,7 +193,7 @@ impl Tail {
 
     /// Background tasks and subagents started that have not ended.
     pub fn bg(&self) -> u32 {
-        self.bg_started.saturating_sub(self.bg_ended)
+        self.bg_open.len() as u32
     }
 
     /// The transcript's path, once it exists: a conversation that has not
@@ -473,7 +471,9 @@ impl Tail {
         if !id.is_empty() && !self.notices.insert(id) {
             return;
         }
-        self.bg_ended += 1;
+        if let Some(id) = tag(xml, "tool-use-id") {
+            self.bg_open.remove(&id);
+        }
         let summary = tag(xml, "summary").unwrap_or_default();
         let title = match (summary.find('"'), summary.rfind('"')) {
             (Some(a), Some(b)) if b > a => summary[a + 1..b].to_string(),
@@ -506,8 +506,10 @@ impl Tail {
     }
 
     fn tool_use(&mut self, part: &Value, touched: &mut Vec<u32>) {
-        if part["input"]["run_in_background"].as_bool() == Some(true) {
-            self.bg_started += 1;
+        if part["input"]["run_in_background"].as_bool() == Some(true)
+            && let Some(id) = part["id"].as_str()
+        {
+            self.bg_open.insert(id.to_string());
         }
         let name = part["name"].as_str().unwrap_or("").to_string();
         let (arg, body, result) = summarise(&name, &part["input"]);
@@ -937,11 +939,11 @@ mod tests {
 
     #[test]
     fn a_task_notice_is_a_notice_and_not_a_message_of_the_person_and_ends_a_background_task() {
-        let note = "<task-notification>\n<task-id>abc</task-id>\n<status>completed</status>\n<summary>Agent \"Scout ask UI\" finished</summary>\n<usage><duration_ms>18488</duration_ms></usage>\n</task-notification>";
+        let note = "<task-notification>\n<task-id>abc</task-id>\n<tool-use-id>a</tool-use-id>\n<status>completed</status>\n<summary>Agent \"Scout ask UI\" finished</summary>\n<usage><duration_ms>18488</duration_ms></usage>\n</task-notification>";
         let note_line = serde_json::json!({"type":"user","origin":{"kind":"task-notification"},"message":{"content":note}}).to_string();
         // The same notice also comes as a queued command: it counts once.
         let queued_line = serde_json::json!({"type":"attachment","attachment":{"type":"queued_command","prompt":note}}).to_string();
-        let failed = "<task-notification>\n<task-id>def</task-id>\n<status>failed</status>\n<summary>Background command \"cargo test\" failed</summary>\n</task-notification>";
+        let failed = "<task-notification>\n<task-id>def</task-id>\n<tool-use-id>b</tool-use-id>\n<status>failed</status>\n<summary>Background command \"cargo test\" failed</summary>\n</task-notification>";
         let failed_line =
             serde_json::json!({"type":"user","message":{"content":failed}}).to_string();
         let (t, blocks, _d) = tail_of(&[
@@ -969,6 +971,14 @@ mod tests {
             ("failed", "cargo test", "task")
         );
         assert_eq!(t.bg(), 0);
+        // A notice of a task started before this transcript's start does not end one that runs.
+        let old = "<task-notification>\n<task-id>z</task-id>\n<tool-use-id>gone</tool-use-id>\n<status>stopped</status>\n<summary>Background command \"x\" stopped</summary>\n</task-notification>";
+        let old_line = serde_json::json!({"type":"user","message":{"content":old}}).to_string();
+        let (t, _b, _d) = tail_of(&[
+            &old_line,
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"c","name":"Bash","input":{"command":"sleep 30","run_in_background":true}}]}}"#,
+        ]);
+        assert_eq!(t.bg(), 1);
     }
 
     #[test]
