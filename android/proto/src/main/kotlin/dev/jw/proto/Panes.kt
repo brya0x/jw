@@ -24,7 +24,8 @@ class TextRun(val col: Int, val text: String, val fg: Int, val bg: Int, val attr
  * One block of an agent's conversation (`ChatBlock` in `proto.rs`): `kind` is `user` or `text` (a message: [text]),
  * `think` ([result] says how long), `notice` (the PC telling that a subagent or a background task ended: [name] is `done`, `failed` or
  * `stopped`, [text] its title, [arg] `agent` or `task`, [result] how long it took), `queued` (a message the person sent while Claude
- * works, [text]) or `tool` ([name], [arg] the one line that sums the call up, [body] the command,
+ * works, [text]), `command` (a slash command the person ran, [text] is `/commit`, or `!ls` for a shell line), `commandout` (what a local
+ * command printed, [text]) or `tool` ([name], [arg] the one line that sums the call up, [body] the command,
  * the diff or the output, [result] the line that sums its result up, null until it answered). [i] numbers the
  * blocks from the start of the conversation; a block with a number already held is that block, changed.
  */

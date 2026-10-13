@@ -373,6 +373,11 @@ impl Tail {
                         self.notice(&xml, touched);
                         return;
                     }
+                    // A slash command the person ran, or the output of a local one: not the person's own words.
+                    if let Some(b) = command_block(text) {
+                        self.push(b, touched);
+                        return;
+                    }
                 }
                 // A subagent's own conversation, and what Claude wrote for
                 // itself (hook output, caveats), is not the person's chat.
@@ -565,6 +570,35 @@ impl Tail {
         }
         touched.push(i);
     }
+}
+
+/// A user entry that is a slash command or a local command's output, as the block it is drawn as (REQ-91): `command` (`text` is
+/// what was run, `/commit` or `/model opus`, or `!ls` for a shell line) and `commandout` (`text` is what it printed).
+fn command_block(text: &str) -> Option<ChatBlock> {
+    let t = text.trim_start();
+    let block = |kind: &str, text: String| ChatBlock {
+        kind: kind.into(),
+        text: cut(text.trim(), TEXT_MAX),
+        ..ChatBlock::default()
+    };
+    if t.starts_with("<command-name>") || t.starts_with("<command-message>") {
+        let name = tag(t, "command-name")
+            .or_else(|| tag(t, "command-message").map(|m| format!("/{m}")))?;
+        let args = tag(t, "command-args").unwrap_or_default();
+        return Some(block("command", format!("{name} {args}")));
+    }
+    if t.starts_with("<bash-input>") {
+        return Some(block("command", format!("!{}", tag(t, "bash-input")?)));
+    }
+    if t.starts_with("<local-command-stdout>") || t.starts_with("<bash-stdout>") {
+        let out = tag(t, "local-command-stdout")
+            .or_else(|| tag(t, "bash-stdout"))
+            .unwrap_or_default();
+        let err = tag(t, "bash-stderr").unwrap_or_default();
+        let all = format!("{out}\n{err}");
+        return (!all.trim().is_empty()).then(|| block("commandout", all));
+    }
+    None
 }
 
 /// How an entry that is the PC's notice of an ended task begins.
@@ -1055,5 +1089,36 @@ mod tests {
             tail_of(&[r#"{"type":"user","slug":"../x","message":{"content":"hola"}}"#]);
         assert_eq!(t2.plan(), None);
         unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") };
+    }
+
+    #[test]
+    fn a_slash_command_and_a_local_commands_output_are_not_the_persons_words() {
+        let (_t, blocks, _d) = tail_of(&[
+            &serde_json::json!({"type":"user","message":{"content":"<command-message>commit</command-message>\n<command-name>/commit</command-name>"}}).to_string(),
+            &serde_json::json!({"type":"user","message":{"content":"<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>opus</command-args>"}}).to_string(),
+            &serde_json::json!({"type":"user","message":{"content":"<local-command-stdout>Set model to opus</local-command-stdout>"}}).to_string(),
+            &serde_json::json!({"type":"user","message":{"content":"<bash-input>ls -a</bash-input>"}}).to_string(),
+            &serde_json::json!({"type":"user","message":{"content":"<bash-stdout>.git\nsrc</bash-stdout><bash-stderr></bash-stderr>"}}).to_string(),
+            // The person's own words that only mention a tag stay their words.
+            &serde_json::json!({"type":"user","message":{"content":"un caso como los <task-notifications> y <command-name>"}}).to_string(),
+        ]);
+        let seen: Vec<(&str, &str)> = blocks
+            .iter()
+            .map(|b| (b.kind.as_str(), b.text.as_str()))
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                ("command", "/commit"),
+                ("command", "/model opus"),
+                ("commandout", "Set model to opus"),
+                ("command", "!ls -a"),
+                ("commandout", ".git\nsrc"),
+                (
+                    "user",
+                    "un caso como los <task-notifications> y <command-name>"
+                ),
+            ]
+        );
     }
 }

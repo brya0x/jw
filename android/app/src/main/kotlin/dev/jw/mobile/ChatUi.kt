@@ -111,6 +111,8 @@ fun ChatView(
                         "text" -> Text(
                             inlineCode(b.text + if (working && b.i == last?.i) " ▍" else "", j), color = j.fg, fontSize = 12.5.sp, lineHeight = 19.sp,
                         )
+                        "command" -> CommandBubble(b.text)
+                        "commandout" -> Text(b.text, color = j.dim, fontSize = 11.sp, fontFamily = JwMono, lineHeight = 16.sp, maxLines = 12, overflow = TextOverflow.Ellipsis)
                         "notice" -> NoticeRow(b)
                         "queued" -> QueuedBubble(b.text)
                         "think" -> Text("✻ pensó ${b.result ?: ""}".trim(), color = j.dim, fontSize = 11.5.sp)
@@ -244,6 +246,18 @@ internal fun PaneChip(name: String, color: Color) {
     Row(Modifier.widthIn(max = 150.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
         Box(Modifier.width(7.dp).heightIn(min = 7.dp).background(color, RoundedCornerShape(4.dp)))
         Text(name, color = j.dim, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/** A slash command the person ran (`/commit`, `!ls`): at the right like their messages, in the terminal's face, never its raw tags (REQ-94). */
+@Composable
+private fun CommandBubble(text: String) {
+    val j = LocalJw.current
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
+        Text(
+            text, color = j.blue, fontSize = 12.5.sp, fontFamily = JwMono, maxLines = 4, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.background(j.sel, RoundedCornerShape(10.dp, 10.dp, 2.dp, 10.dp)).padding(horizontal = 10.dp, vertical = 8.dp),
+        )
     }
 }
 
