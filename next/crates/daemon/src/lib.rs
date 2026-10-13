@@ -2,8 +2,10 @@
 
 mod commands;
 mod core;
+mod git;
 mod model;
 mod persist;
 mod server;
+mod workspaces;
 
 pub use server::{Config, Daemon};

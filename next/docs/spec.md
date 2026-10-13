@@ -34,6 +34,8 @@ Home of every shape is `contract/schema/contract.schema.json`; the examples are 
 
 Commands (`cmd`): `rename_session`, `open_folder`, `create_worktree`, `remove_workspace`, `new_pane`, `close_pane`, `write`, `resize`. Error codes: `bad_request`, `not_found`, `unsupported`, `conflict`, `git_failed`, `io`.
 
+Command semantics (N3): `open_folder` takes an absolute path of an existing directory and opens it once (`conflict` if open; `not_found`, `bad_request` for a missing path, a file or a relative path). `create_worktree` makes `<repo parent>/<repo name>-wt/<branch with / → ->` with `git worktree add` (a new branch from `base`, or an existing branch checked out, never both) and opens it as `<repo>: <branch>`; names that are options or not branch names are `bad_request`, git's own message is `git_failed`. `remove_workspace` closes a workspace; with `remove_worktree` it first runs `git worktree remove` without force, so a worktree with changes stays and so does its workspace. A successful open replies `result: {workspace, path}`.
+
 Transport: JSON lines on a Unix socket (mode 0600, in a 0700 dir) whose path comes from `identity::socket_path()` (`crates/identity/src/lib.rs`). `session.json` in `identity::state_dir()` is private to the daemon (written whole, atomically; a file it cannot read is moved to `session.json.bad`, never overwritten). Client side: `crates/wire` (`Client` keeps the node cache and applies patches). The phone later carries the same objects one per WebSocket text message.
 
 ## Acceptance
@@ -54,9 +56,13 @@ Transport: JSON lines on a Unix socket (mode 0600, in a 0700 dir) whose path com
 - REQ-15 IF a daemon is already listening on the socket, THEN a second daemon SHALL refuse to start; a socket nobody listens on SHALL be cleared.
 - REQ-16 WHEN the daemon restarts, the session id and workspaces SHALL be the same and the epoch new.
 - REQ-17 IF a line is not a contract message, or comes before `hello`, THEN the daemon SHALL send `error` and keep the connection.
+- REQ-19 WHEN `open_folder` names an existing directory not yet open, the daemon SHALL add a `folder` workspace and patch the session node.
+- REQ-20 WHEN `create_worktree` succeeds, the daemon SHALL have a git worktree beside the repository and a `worktree` workspace for it.
+- REQ-21 IF a worktree has changes, THEN `remove_workspace` with `remove_worktree` SHALL fail with `git_failed` and change nothing.
+- REQ-22 WHEN a workspace is removed, the daemon SHALL send `gone` for its node to whoever has it open.
 - REQ-18 IF a client's outbox is full, THEN the daemon SHALL disconnect that client and no other.
 
-REQ-1 to REQ-7, REQ-12 and REQ-13 are enforced by N1 (`crates/contract/tests/conformance.rs`, `crates/identity`). REQ-8, 9, 10, 11, 15, 16, 17 are enforced by N2 (`crates/daemon/tests/session.rs`, `src/core.rs` tests); REQ-18 is implemented (bounded outbox) and untested; REQ-14 lands with N4.
+REQ-1 to REQ-7, REQ-12 and REQ-13 are enforced by N1 (`crates/contract/tests/conformance.rs`, `crates/identity`). REQ-8, 9, 10, 11, 15, 16, 17 are enforced by N2 (`crates/daemon/tests/session.rs`, `src/core.rs` tests); REQ-19 to REQ-22 are enforced by N3 (`crates/daemon/tests/workspaces.rs`, against real git); REQ-18 is implemented (bounded outbox) and untested; REQ-14 lands with N4.
 
 ---
 ## Rationale
@@ -92,7 +98,7 @@ REQ-1 to REQ-7, REQ-12 and REQ-13 are enforced by N1 (`crates/contract/tests/con
 |---|---|---|---|
 | N0 ✓ `5b73558` | skeleton, freeze rule, identity, `just ci` | 13 | `identity.toml`, `crates/identity` |
 | N1 ✓ `9b1e7bd` | node and message spec, JSON Schema, fixtures, Rust conformance | 1–7, 12 | `contract/`, `crates/contract` |
-| N2 | daemon core: socket, hello/epoch, tree, persistence, patches | 8–11, 15–18 | `crates/{wire,daemon,jwn}` |
-| N3 | folders and git worktrees as workspaces | | |
+| N2 ✓ `759e5d2` | daemon core: socket, hello/epoch, tree, persistence, patches | 8–11, 15–18 | `crates/{wire,daemon,jwn}` |
+| N3 | folders and git worktrees as workspaces | 19–22 | `crates/daemon/src/{git,workspaces}.rs` | |
 | N4 | panes: PTY shell, screen node, input, resize, close, restore | 14 | |
 | N5 | wire measurements and the JSON-only end-to-end script | | |

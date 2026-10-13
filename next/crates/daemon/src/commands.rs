@@ -1,10 +1,12 @@
 //! What a client's `cmd` does. Runs without the hub lock held for anything slow.
 
-use contract::{Cmd, ErrorBody, ErrorCode, Outcome};
+pub use contract::ErrorBody;
+use contract::{Cmd, ErrorCode, Outcome};
 use contract::{False, True};
 use serde_json::Value;
 
 use crate::server::Shared;
+use crate::workspaces;
 
 pub type Done = Result<Option<Value>, ErrorBody>;
 
@@ -34,6 +36,16 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
             core.refresh();
             Ok(None)
         }
-        _ => Err(err(ErrorCode::Unsupported, "not implemented yet")),
+        Cmd::OpenFolder { path } => workspaces::open_folder(shared, &path),
+        Cmd::CreateWorktree { repo, branch, base } => {
+            workspaces::create_worktree(shared, &repo, &branch, base.as_deref())
+        }
+        Cmd::RemoveWorkspace {
+            workspace,
+            remove_worktree,
+        } => workspaces::remove_workspace(shared, &workspace, remove_worktree),
+        Cmd::NewPane { .. } | Cmd::ClosePane { .. } | Cmd::Write { .. } | Cmd::Resize { .. } => {
+            Err(err(ErrorCode::Unsupported, "panes are not implemented yet"))
+        }
     }
 }
