@@ -1,0 +1,15 @@
+[package]
+name = "jwn"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "jwn"
+path = "src/main.rs"
+
+[dependencies]
+contract = { path = "../contract" }
+daemon = { path = "../daemon" }
+identity = { path = "../identity" }
+wire = { path = "../wire" }
+serde_json = "1"

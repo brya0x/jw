@@ -6,6 +6,8 @@
 //! break an old peer. Optional fields are skipped when absent so a round trip through
 //! these types reproduces the document exactly.
 
+pub mod patch;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -338,4 +340,12 @@ pub enum PatchOp {
     Add { path: String, value: Value },
     Remove { path: String },
     Replace { path: String, value: Value },
+}
+
+pub fn node_id(node: &Node) -> &Id {
+    match node {
+        Node::Session(n) => &n.head.id,
+        Node::Workspace(n) => &n.head.id,
+        Node::Pane(n) => &n.head.id,
+    }
 }

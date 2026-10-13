@@ -45,8 +45,12 @@ pub fn config_dir() -> PathBuf {
     xdg("XDG_CONFIG_HOME", ".config").join(&get().name)
 }
 
+/// `$<PREFIX>_STATE_DIR`, else `$XDG_STATE_HOME/<name>`, else `~/.local/state/<name>`.
 pub fn state_dir() -> PathBuf {
-    xdg("XDG_STATE_HOME", ".local/state").join(&get().name)
+    match std::env::var_os(env_var("STATE_DIR")) {
+        Some(v) if !v.is_empty() => PathBuf::from(v),
+        _ => xdg("XDG_STATE_HOME", ".local/state").join(&get().name),
+    }
 }
 
 /// The daemon's socket: `$<PREFIX>_SOCKET`, else `<state_dir>/<name>.sock`.
