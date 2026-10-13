@@ -1,4 +1,4 @@
-<title>jwn TUI</title>
+<title>jwn Shell Blocks</title>
 <style>
 /* Terminal-first: a character grid on One Dark, like the jw TUI it replaces. */
 :root{
@@ -12,7 +12,7 @@
 :root[data-theme="light"]{--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}
 *{box-sizing:border-box}
 body{margin:0;background:var(--page);color:var(--ink);font:14px/1.55 'IBM Plex Sans',system-ui,sans-serif;padding-inline:16px;padding-block:20px 40px}
-.wrap{max-width:1100px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
+.wrap{max-width:1500px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
 h1{font:600 20px/1.2 var(--mono);margin:0}
 p{margin:0;max-width:72ch;color:var(--mut)}
 .bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
@@ -23,6 +23,39 @@ button:hover{border-color:var(--blue)}
 .term pre{margin:0;font:13px/1.25 var(--mono);color:var(--fg);outline:none;width:max-content}
 .term pre:focus-visible{outline:none}
 .hint{font:12px var(--mono);color:var(--mut)}
+.stage{display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap}
+.col{flex:1 1 700px;min-width:0;display:flex;flex-direction:column;gap:8px}
+.side{flex:0 0 auto;width:100%;max-width:376px;margin-inline:auto;display:flex;flex-direction:column;gap:8px}
+.side h2{font:600 12px var(--mono);margin:0;color:var(--mut)}
+.phone{width:100%;height:700px;background:var(--bg);border:1px solid var(--line);border-radius:28px;padding:10px;box-shadow:0 0 0 6px var(--panel);display:flex;flex-direction:column}
+.ph{flex:1;min-height:0;background:var(--bg);border-radius:20px;overflow:hidden;display:flex;flex-direction:column;font:13px/1.45 var(--mono);color:var(--fg)}
+.ph .hd{background:var(--panel);border-bottom:1px solid var(--line);padding:8px 8px 8px 4px;display:flex;align-items:center;gap:2px;min-height:52px}
+.ph .hd button{width:36px;height:40px;font-size:18px}
+.ph .hd .t{flex:1;min-width:0}.ph .hd b{display:block;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ph .hd span{display:block;font-size:11px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ph .tabs{display:flex;background:var(--panel);border-bottom:1px solid var(--line);overflow:auto}
+.ph .tab{padding:0 14px;min-height:40px;display:flex;align-items:center;gap:6px;border:0;border-bottom:2px solid transparent;border-radius:0;background:none;color:var(--dim);cursor:pointer}
+.ph .tab.on{color:var(--fg);font-weight:700;border-bottom-color:var(--blue)}
+.ph .bl{flex:1;min-height:0;overflow:auto;padding:6px 0;display:flex;flex-direction:column;justify-content:flex-end}
+.ph .blk{padding:6px 12px 6px 10px;border-left:3px solid var(--line);margin:3px 0;cursor:pointer}
+.ph .blk.ok{border-left-color:var(--green)}.ph .blk.bad{border-left-color:var(--red)}.ph .blk.run{border-left-color:var(--yellow)}
+.ph .blk.on{background:var(--sel)}
+.ph .bm{display:flex;justify-content:space-between;gap:8px;font-size:11px;color:var(--dim)}
+.ph .bm i{font-style:normal}.ph .bm .bad{color:var(--red)}
+.ph .bc{font-weight:700;margin:1px 0 3px}
+.ph .bo{white-space:pre-wrap;word-break:break-word;font-size:12px}
+.ph .acts{display:flex;gap:6px;padding:6px 10px;border-top:1px solid var(--line);background:var(--panel)}
+.ph .acts button{flex:1;min-height:36px;font-size:12px}
+.ph .edit{border-top:1px solid var(--line);background:var(--panel);padding:8px 10px 6px;display:flex;flex-direction:column;gap:6px}
+.ph .chips{display:flex;gap:8px;font-size:11px;white-space:nowrap;overflow:hidden}
+.ph .ed{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:6px;padding:0 8px;background:var(--bg)}
+.ph .ed.prog{border-style:dashed}
+.ph .ed input{flex:1;min-width:0;height:40px;border:0;background:none;color:var(--fg);font:13px var(--mono);outline:none}
+.ph .ed button{min-width:40px;height:36px;border:0;background:none;color:var(--blue);font-size:15px}
+.ph .ed button.stop{color:var(--red)}
+.ph .kb{display:flex;overflow:auto;padding:0 6px 6px}
+.ph .kb span{min-width:38px;min-height:30px;padding:0 8px;display:grid;place-items:center;font-size:12px;color:var(--dim)}
+.ph .none{padding:24px 16px;color:var(--dim)}
 .decide{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px;color:var(--fg)}
 .decide h2{font:600 12px var(--mono);margin:0 0 8px;color:var(--mut)}
 .decide ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
@@ -37,8 +70,8 @@ button:hover{border-color:var(--blue)}
 
 <div class="wrap">
   <div>
-    <h1>jwn TUI</h1>
-    <p>The layout of today's jw, with the new model inside it: workspaces on the left with the marks of what waits, a row of facts on top, and each pane drawn as its own rounded box, not a tab. Click the terminal or tab into it; the keys are on the status bar.</p>
+    <h1>The shell as blocks, in the terminal and on the phone</h1>
+    <p>One model, two screens. The terminal draws today's jw layout with each shell pane as a rounded box of command blocks; the phone draws the same blocks flat, with the pane tabs, an editor and a slim key row. Both read the same data: run a command in one and it appears in the other, and what you look at clears on both. Click the terminal or tab into it; the keys are on its status bar.</p>
   </div>
   <div class="bar" aria-label="Simulate">
     <button id="evFail" type="button">A command fails in the focused pane</button>
@@ -50,8 +83,26 @@ button:hover{border-color:var(--blue)}
     <button id="evReset" type="button">Reset</button>
     <select id="size" aria-label="Terminal size"><option value="120x32">120 × 32</option><option value="96x28">96 × 28</option></select>
   </div>
+  <div class="stage">
+  <div class="col">
   <div class="term"><pre id="scr" tabindex="0" aria-label="Terminal client. j and k move, h and l change pane, Enter opens, a lists what waits."></pre></div>
   <div class="hint" id="keys">j/k workspace · h/l pane · ↵ open · a avisos · esc back</div>
+  </div>
+  <div class="side">
+    <h2>Phone</h2>
+    <div class="phone"><div class="ph" id="ph">
+      <div class="hd"><button id="phPrev" type="button" aria-label="Previous workspace">‹</button><div class="t"><b id="phTitle"></b><span id="phSub"></span></div><button id="phNext" type="button" aria-label="Next workspace">›</button></div>
+      <div class="tabs" id="phTabs"></div>
+      <div class="bl" id="phBlocks"></div>
+      <div class="acts" id="phActs" hidden></div>
+      <div class="edit" id="phEdit">
+        <div class="chips" id="phChips"></div>
+        <form class="ed" id="phForm" autocomplete="off"><span class="c-green b">❯</span><input id="phIn" placeholder="escribe un comando" aria-label="Command"><button id="phGo" type="submit" aria-label="Run">↵</button></form>
+      </div>
+      <div class="kb"><span class="c-yellow">^␣</span><span>esc</span><span>tab</span><span>↑</span><span>↓</span><span>←</span><span>→</span><span>^C</span></div>
+    </div></div>
+  </div>
+  </div>
 
   <div class="decide">
     <h2>To approve</h2>
@@ -61,6 +112,7 @@ button:hover{border-color:var(--blue)}
       <li><b>Marks sit at the right of a sidebar row</b> (most urgent unseen, with a count when there are several). No extra line under the row: the sentence lives in the pane's title and in <code>a</code>.</li>
       <li><b>Avisos</b> opens as a box over the pane area: one row per unseen attention, <code>↵</code> goes to that pane, focus and seen both change.</li>
       <li><b>The shell as blocks</b> (the terminal's version of what the phone prototype already does): inside a shell pane's box, each command is a block with its folder, branch and time, a bar at the left (green done, red failed, yellow running), bold command and its coloured output; newest at the bottom. A click selects a block and the status bar offers copy command, copy output, repeat. The editor sits at the foot of the box with the folder and branch chips; while a program runs it shows the program and <code>■ ^C</code>. (Only the shell for now: no agents, no full-screen programs.) Open a shell pane, press Enter, type, press Enter.</li>
+      <li><b>On the phone</b> the same blocks are drawn flat, newest at the bottom: folder and time dim on top, the command in bold, the coloured output below, and the bar at the left (green, red, yellow). The shell's panes are tabs (the phone's way; the terminal uses boxes). Tapping a block selects it and shows <code>Comando</code>, <code>Salida</code> and <code>Repetir</code>. The editor sits above the slim key row with the folder and branch chips; while a program runs the chip is the program, the border turns dashed and the send button becomes a red stop (<code>^C</code>). The arrows at the top change workspace here; on the real phone Home does that.</li>
       <li><b>Seen</b> is shared: looking at a pane here clears its aviso on the phone too. Moving the highlight previews a workspace; <code>↵</code> or focusing a pane marks it seen.</li>
     </ol>
   </div>
@@ -192,6 +244,7 @@ function draw(){
       const t = whatOf(a); put(g, bx + bw - 3 - t.length, yy, t, (cl === 'c-red' ? cl : 'd') + (i === ui.av ? ' bg-sel' : '')); });
   }
   paint(g);
+  drawPhone();
 }
 
 const short = path => { const a = path.split('/').filter(Boolean); return a.length > 2 ? '…/' + a.slice(-2).join('/') : path; };
@@ -242,6 +295,44 @@ function runCmd(p, cmd){
   const fail = /fail|false|exit/.test(cmd);
   setTimeout(() => { b.running = false; b.code = fail ? 1 : 0; b.dur = (0.4 + Math.random() * 2).toFixed(1) + 's'; b.out = fail ? [{t:'error: command failed', c:'c-red'}] : [{t:'ok', c:'c-green'}]; p.att = p.att.filter(a => a.kind !== 'shell_done'); p.att.push({kind:'shell_done', pane:p.id, exit:b.code, rev:++rev}); draw(); }, 700);
 }
+/* ---- the phone: the same model, drawn flat ---- */
+const $ = id => document.getElementById(id);
+const ph = { pane:0, blk:null };
+const phBars = b => b.running ? 'run' : b.code ? 'bad' : 'ok';
+function drawPhone(){
+  const w = model.ws[ui.sel]; if (!w) return;
+  if (ph.pane >= w.panes.length) ph.pane = 0;
+  const p = w.panes[ph.pane];
+  $('phTitle').textContent = (w.kind === 'worktree' ? w.project + ' › ' : '') + w.name;
+  $('phSub').textContent = (w.kind === 'worktree' ? '↳ ' + w.branch + '  ' : '') + w.path;
+  $('phTabs').innerHTML = w.panes.map((q, i) => { const u = paneUnseen(q)[0]; return `<button class="tab ${i === ph.pane ? 'on' : ''}" data-tab="${i}" type="button">${esc(q.title)}${u ? ` <span class="${markOf(u)[1]} b">${markOf(u)[0]}</span>` : ''}</button>`; }).join('');
+  if (!p){ $('phBlocks').innerHTML = '<div class="none">Este workspace no tiene paneles.</div>'; $('phActs').hidden = true; $('phChips').innerHTML = ''; $('phIn').disabled = true; return; }
+  $('phIn').disabled = false;
+  const sel = ph.blk && ph.blk.pane === p.id ? ph.blk.idx : null;
+  $('phBlocks').innerHTML = p.blocks.map((b, i) => `<div class="blk ${phBars(b)} ${sel === i ? 'on' : ''}" data-blk="${i}">
+      <div class="bm"><span>${esc(short(p.cwd))}</span><i class="${b.code && !b.running ? 'bad' : ''}">${b.running ? 'corriendo ' + b.dur : b.code ? 'salió ' + b.code + ' · ' + b.dur : b.dur}</i></div>
+      <div class="bc">${esc(b.cmd)}</div>
+      <div class="bo">${b.out.map(o => `<span class="${o.c || ''}">${esc(o.t)}</span>`).join('\n')}</div></div>`).join('');
+  const last = p.blocks.at(-1), running = last && last.running;
+  $('phChips').innerHTML = running ? `<span class="c-yellow">◌ ${esc(last.cmd)}</span>` : `<span class="c-blue">${esc(short(p.cwd))}</span>${p.branch ? `<span class="c-mag">⎇ ${esc(p.branch)}</span>` : ''}`;
+  $('phForm').classList.toggle('prog', !!running);
+  $('phGo').outerHTML = running ? '<button id="phGo" class="stop" type="button" aria-label="Stop (^C)">■</button>' : '<button id="phGo" type="submit" aria-label="Run">↵</button>';
+  const acts = $('phActs'); acts.hidden = sel === null;
+  acts.innerHTML = ['Comando|c', 'Salida|o', 'Repetir|r'].map(x => `<button type="button" data-act="${x.split('|')[1]}">${x.split('|')[0]}</button>`).join('');
+  const bl = $('phBlocks'); bl.scrollTop = bl.scrollHeight;
+}
+$('ph').addEventListener('click', e => {
+  const w = model.ws[ui.sel], t = e.target.closest('[data-tab],[data-blk],[data-act],#phGo.stop,#phPrev,#phNext'); if (!t) return;
+  const p = w.panes[ph.pane];
+  if (t.dataset.tab !== undefined){ ph.pane = +t.dataset.tab; ph.blk = null; w.panes[ph.pane].att.forEach(a => seen[a.kind + a.rev] = true); }
+  else if (t.dataset.blk !== undefined){ ph.blk = {pane:p.id, idx:+t.dataset.blk}; p.att.forEach(a => seen[a.kind + a.rev] = true); }
+  else if (t.dataset.act){ const b = p.blocks[ph.blk.idx]; if (t.dataset.act === 'r') runCmd(p, b.cmd); ui.msg = t.dataset.act === 'c' ? 'comando copiado' : t.dataset.act === 'o' ? 'salida copiada' : 'repetido: ' + b.cmd; setTimeout(() => { ui.msg = ''; draw(); }, 1500); ph.blk = null; }
+  else if (t.id === 'phGo'){ const b = p.blocks.at(-1); if (b && b.running){ b.running = false; b.code = 130; b.dur = '^C'; b.out.push({t:'^C', c:'d'}); } }
+  else if (t.id === 'phPrev'){ ui.sel = Math.max(0, ui.sel - 1); ui.open = null; ph.pane = 0; ph.blk = null; }
+  else if (t.id === 'phNext'){ ui.sel = Math.min(model.ws.length - 1, ui.sel + 1); ui.open = null; ph.pane = 0; ph.blk = null; }
+  draw();
+});
+$('phForm').addEventListener('submit', e => { e.preventDefault(); const w = model.ws[ui.sel], p = w.panes[ph.pane], v = $('phIn').value.trim(); if (p && v){ runCmd(p, v); $('phIn').value = ''; p.att.forEach(a => seen[a.kind + a.rev] = true); draw(); } });
 /* ---- behaviour ---- */
 const openWs = (w, focus) => { ui.open = w.id; ui.focus = focus ?? 0; const p = w.panes[ui.focus]; if (p) p.att.forEach(a => seen[a.kind + a.rev] = true); w.att.forEach(a => seen[a.kind + a.rev] = true); };
 function key(k){
