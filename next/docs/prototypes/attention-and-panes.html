@@ -1,0 +1,381 @@
+<title>jwn Attention Prototype</title>
+<style>
+/* Layout: one document, two renderings. Left the TUI, right the phone, below the wire. */
+:root{
+  --bg:#16191f; --panel:#1d2128; --raise:#252a33; --fg:#c3c9d4; --dim:#6b7380; --line:#323843;
+  --sel:#2b3a52; --amber:#e5b567; --green:#8cc474; --red:#e0707a; --blue:#6fb1ef; --mag:#c58be0; --cyan:#59b8c4;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  --sans:'IBM Plex Sans',system-ui,-apple-system,'Segoe UI',sans-serif;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){
+  --bg:#f3f1ee; --panel:#ffffff; --raise:#ebe8e4; --fg:#2c313a; --dim:#7a808c; --line:#d6d2cc;
+  --sel:#dbe6f6; --amber:#a86a00; --green:#3a7d2a; --red:#b53a45; --blue:#1f6fb8; --mag:#8a3fb0; --cyan:#17707c; color-scheme:light}}
+:root[data-theme="light"]{
+  --bg:#f3f1ee; --panel:#ffffff; --raise:#ebe8e4; --fg:#2c313a; --dim:#7a808c; --line:#d6d2cc;
+  --sel:#dbe6f6; --amber:#a86a00; --green:#3a7d2a; --red:#b53a45; --blue:#1f6fb8; --mag:#8a3fb0; --cyan:#17707c; color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 var(--sans);padding-inline:16px;padding-block:20px 40px}
+.wrap{max-width:1180px;margin-inline:auto;display:flex;flex-direction:column;gap:20px}
+h1{font:600 22px/1.2 var(--mono);margin:0;text-wrap:balance}
+h2{font:600 12px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--dim);margin:0 0 10px}
+p{margin:0;max-width:70ch}
+.intro{display:flex;flex-direction:column;gap:8px}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;font:12px var(--mono);color:var(--dim)}
+.legend b{font-weight:600}
+.stage{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,.75fr);gap:20px;align-items:start}
+@media (max-width:900px){.stage{grid-template-columns:minmax(0,1fr)}}
+.col{display:flex;flex-direction:column;gap:8px;min-width:0}
+.sim{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.sim label{font:12px var(--mono);color:var(--dim)}
+select,button{font:12px var(--mono);color:var(--fg);background:var(--raise);border:1px solid var(--line);border-radius:4px;padding:6px 10px;min-height:32px}
+button{cursor:pointer} button:hover{border-color:var(--blue)}
+:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+/* TUI */
+.tui{background:var(--panel);border:1px solid var(--line);border-radius:6px;font:13px/1.45 var(--mono);overflow:hidden}
+.tui .bar{display:flex;justify-content:space-between;padding:5px 10px;border-bottom:1px solid var(--line);color:var(--dim);font-size:12px}
+.tui .body{display:grid;grid-template-columns:minmax(150px,230px) minmax(0,1fr);min-height:380px}
+.tui .side{border-right:1px solid var(--line);padding:6px 0;min-width:0}
+.tui .row{display:flex;gap:6px;align-items:center;padding:3px 10px;cursor:pointer;white-space:nowrap;border-left:2px solid transparent}
+.tui .row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.tui .row.sel{background:var(--sel);border-left-color:var(--blue)}
+.tui .row .sub{color:var(--dim);font-size:11px}
+.tui .main{display:flex;flex-direction:column;min-width:0}
+.tui .tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);padding:4px 6px 0;flex-wrap:wrap}
+.tui .tab{padding:3px 10px;border:1px solid transparent;border-bottom:0;border-radius:4px 4px 0 0;cursor:pointer;color:var(--dim);display:flex;gap:6px}
+.tui .tab.sel{color:var(--fg);background:var(--raise);border-color:var(--line)}
+.tui .screen{margin:0;padding:8px 10px;flex:1;white-space:pre;overflow:auto;min-height:280px}
+.tui .foot{border-top:1px solid var(--line);padding:4px 10px;color:var(--dim);font-size:11px;display:flex;gap:14px;flex-wrap:wrap}
+.tui .empty{padding:20px 12px;color:var(--dim)}
+.cur{background:var(--fg);color:var(--bg)}
+/* marks */
+.mk{display:inline-block;min-width:1.2em;text-align:center;font-weight:700}
+.k-question{color:var(--amber)}.k-plan{color:var(--mag)}.k-permission{color:var(--red)}.k-ok{color:var(--green)}
+.k-fail{color:var(--red)}.k-screen{color:var(--dim)}.k-merged{color:var(--cyan)}
+.cnt{font-size:11px;color:var(--dim)}
+/* phone */
+.phone{width:100%;max-width:360px;margin-inline:auto;height:660px;background:var(--bg);border:1px solid var(--line);border-radius:26px;padding:10px;display:flex;flex-direction:column;box-shadow:0 0 0 6px var(--raise)}
+.phone .scr{flex:1;min-height:0;background:var(--panel);border-radius:18px;display:flex;flex-direction:column;overflow:hidden}
+.phone .status{display:flex;justify-content:space-between;padding:8px 16px 2px;font:11px var(--mono);color:var(--dim)}
+.phone .app{display:flex;align-items:center;gap:8px;padding:10px 12px;font:600 15px var(--mono);min-height:48px}
+.phone .app button{border:0;background:none;font-size:18px;min-width:44px;min-height:44px;padding:0}
+.phone .list{flex:1;overflow:auto;padding-bottom:8px}
+.phone h3{font:600 11px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--dim);margin:12px 14px 4px}
+.phone .item{display:flex;gap:10px;align-items:center;padding:10px 14px;min-height:56px;border:0;border-top:1px solid var(--line);width:100%;text-align:left;background:none;border-radius:0;font:13px var(--mono);color:var(--fg)}
+.phone .item .mk{font-size:16px;min-width:1.4em}
+.phone .item .tx{flex:1;min-width:0;display:flex;flex-direction:column}
+.phone .item .tx span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.phone .item .tx .s{font-size:11px;color:var(--dim)}
+.phone .item .go{color:var(--dim)}
+.phone .item.wait{background:color-mix(in srgb,var(--amber) 9%,var(--panel))}
+.phone .none{padding:10px 14px;color:var(--dim);font:12px var(--mono)}
+.phone .term{margin:0;flex:1;padding:8px 10px;font:11px/1.4 var(--mono);white-space:pre;overflow:auto;background:var(--bg)}
+.phone .keys{display:flex;gap:6px;padding:6px 8px;border-top:1px solid var(--line)}
+.phone .keys button{flex:1;min-height:40px}
+.phone .input{display:flex;gap:6px;padding:6px 8px 10px}
+.phone .input span{flex:1;border:1px solid var(--line);border-radius:6px;padding:10px;color:var(--dim);font:12px var(--mono)}
+/* wire */
+.wire{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:20px}
+@media (max-width:900px){.wire{grid-template-columns:minmax(0,1fr)}}
+.tabsrow{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+.tabsrow button[aria-pressed=true]{border-color:var(--blue);color:var(--blue)}
+pre.json{margin:0;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:10px;font:11px/1.45 var(--mono);overflow:auto;max-height:340px;white-space:pre}
+.decide{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px;display:flex;flex-direction:column;gap:6px}
+.decide ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+.decide code,.legend code{font-family:var(--mono);font-size:12px}
+@media (prefers-reduced-motion:no-preference){.row,.tab,.item{transition:background .12s}}
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&family=JetBrains+Mono:wght@400;600;700&display=swap">
+
+<div class="wrap">
+  <div class="intro">
+    <h1>One document, two renderings</h1>
+    <p>The same session document drives the terminal on the left and the phone on the right. Raise something below and watch it climb from the pane to the workspace to the Home list, then open it: each client keeps its own seen record, so the daemon never learns who looked.</p>
+    <div class="legend" id="legend"></div>
+  </div>
+
+  <div class="sim" aria-label="Daemon events">
+    <label for="evPane">where</label><select id="evPane"></select>
+    <label for="evKind">what</label><select id="evKind"></select>
+    <label for="evExit">exit</label><select id="evExit"><option>0</option><option selected>3</option><option>101</option></select>
+    <button id="evRaise" type="button">Raise attention</button>
+    <button id="evClear" type="button">Next command starts</button>
+    <button id="evPane2" type="button">New pane here</button>
+    <button id="evFolder" type="button">Open folder</button>
+    <button id="evReset" type="button">Reset</button>
+  </div>
+
+  <div class="stage">
+    <div class="col">
+      <h2>Terminal client</h2>
+      <div class="tui" id="tui" tabindex="0" aria-label="Terminal client. j and k move, h and l switch pane, Enter opens."></div>
+    </div>
+    <div class="col">
+      <h2>Android client</h2>
+      <div class="phone"><div class="scr" id="phone"></div></div>
+    </div>
+  </div>
+
+  <div class="wire">
+    <div>
+      <h2>On the wire</h2>
+      <div class="tabsrow" id="wireTabs"></div>
+      <pre class="json" id="wireView"></pre>
+    </div>
+    <div>
+      <h2>Patch log (newest first)</h2>
+      <pre class="json" id="patchLog">Nothing has changed yet.</pre>
+    </div>
+  </div>
+
+  <div class="decide">
+    <h2>To approve</h2>
+    <ol>
+      <li><b>Marks.</b> One glyph per attention kind, in the order of the legend; a finished command is <code>✓</code> on exit 0 and <code>✗</code> otherwise. Only <code>shell_done</code> exists in the first daemon; the rest are drawn so the marks are settled before agents arrive.</li>
+      <li><b>Home leads with what waits.</b> A "Waiting" list above the workspaces, one row per unseen attention, tapping a row opens the node it names (the pane, not the workspace).</li>
+      <li><b>Seen is per client.</b> Opening the target node marks it seen on that client only. The terminal and the phone clear independently.</li>
+      <li><b>A workspace row</b> shows its most urgent unseen mark and a count when there are several; a folder with nothing waiting shows nothing.</li>
+      <li><b>The terminal layout</b> is workspaces on the left, the open workspace's panes as tabs, one pane's screen below. No approve or deny buttons anywhere.</li>
+    </ol>
+  </div>
+</div>
+
+<script>
+(() => {
+'use strict';
+const EPOCH = 'e7a1…';
+const KINDS = {
+  permission:{g:'!',c:'k-permission',t:'Permission',p:0}, question:{g:'?',c:'k-question',t:'Question',p:1},
+  plan:{g:'◆',c:'k-plan',t:'Plan ready',p:2}, ci_failed:{g:'✗',c:'k-fail',t:'CI failed',p:3},
+  shell_done:{g:'✓',c:'k-ok',t:'Command finished',p:4}, screen:{g:'…',c:'k-screen',t:'Waiting on screen',p:5},
+  agent_done:{g:'●',c:'k-ok',t:'Agent finished',p:6}, merged:{g:'⎇',c:'k-merged',t:'Merged',p:7},
+};
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const mark = a => {
+  const k = KINDS[a.kind];
+  const bad = a.kind === 'shell_done' && a.exit_code !== 0;
+  return `<span class="mk ${bad ? 'k-fail' : k.c}" title="${k.t}">${bad ? '✗' : k.g}</span>`;
+};
+const what = a => a.kind === 'shell_done' ? `Command finished · exit ${a.exit_code}` : KINDS[a.kind].t;
+
+/* ---- the model the daemon would hold ---- */
+let model, docs, patches, counter;
+const screens = {
+  zsh: ['~/ws/app-wt/feat-login ❯ cargo test','   Compiling app v0.3.1','test auth::login_ok ... ok','test auth::expired ... ok','test result: ok. 14 passed','~/ws/app-wt/feat-login ❯ '],
+  fail: ['~/ws/app-wt/fix-socket ❯ cargo test','test socket::reconnect ... FAILED','  assertion `left == right` failed','    left: 2','   right: 3','test result: FAILED. 11 passed; 1 failed','~/ws/app-wt/fix-socket ❯ '],
+  notes: ['~/notes ❯ git status','On branch main','nothing to commit, working tree clean','~/notes ❯ '],
+  idle: ['~/ws/app-wt/feat-login ❯ '],
+};
+function reset(){
+  counter = 0;
+  const own = (kind, exit) => ({kind, exit_code: exit, rev: null});
+  model = { id:'s0', name:'demo', workspaces:[
+    { id:'w1', name:'app: feat/login', kind:'worktree', path:'~/ws/app-wt/feat-login', branch:'feat/login', attention:[], panes:[
+      { id:'p1', title:'zsh', cwd:'~/ws/app-wt/feat-login', lines:screens.zsh, attention:[own('shell_done',0)] },
+      { id:'p2', title:'zsh', cwd:'~/ws/app-wt/feat-login', lines:screens.idle, attention:[] } ]},
+    { id:'w2', name:'app: fix/socket', kind:'worktree', path:'~/ws/app-wt/fix-socket', branch:'fix/socket', attention:[], panes:[
+      { id:'p3', title:'zsh', cwd:'~/ws/app-wt/fix-socket', lines:screens.fail, attention:[own('shell_done',101)] } ]},
+    { id:'w3', name:'notes', kind:'folder', path:'~/notes', attention:[own('merged')], panes:[
+      { id:'p4', title:'zsh', cwd:'~/notes', lines:screens.notes, attention:[] } ]},
+    { id:'w4', name:'infra', kind:'folder', path:'~/ws/infra', attention:[], panes:[] },
+  ]};
+  docs = {}; patches = [];
+  refresh(false);
+  tui = { seen:{}, ws:'w1', pane:'p1' };
+  phone = { seen:{}, stack:['s0'] };
+  seeSeen(tui, 'p1'); 
+}
+let tui, phone, wireTab = 'tui';
+
+/* ---- build docs from the model (what core.rs does) ---- */
+function build(){
+  const out = {};
+  const raised = (own, id) => own.map(o => ({kind:o.kind, node:id, rev:o.rev ?? 0, ...(o.exit_code != null ? {exit_code:o.exit_code} : {})}));
+  const sessionAtt = [], summaries = [];
+  for (const w of model.workspaces) {
+    let att = raised(w.attention, w.id); const panes = [];
+    for (const p of w.panes) {
+      const own = raised(p.attention, p.id); att = att.concat(own);
+      panes.push({id:p.id, title:p.title, attention:own});
+      out[p.id] = {type:'pane', id:p.id, v:1, epoch:EPOCH, rev:0, attention:own, workspace:w.id, title:p.title, shell:'/bin/zsh', cwd:p.cwd,
+        screen:{rows:6, cols:60, lines:p.lines.slice(), cursor:{row:p.lines.length-1, col:p.lines[p.lines.length-1].length, visible:true}}};
+    }
+    sessionAtt.push(...att);
+    summaries.push({id:w.id, name:w.name, kind:w.kind, path:w.path, ...(w.branch ? {branch:w.branch} : {}), pane_count:w.panes.length, attention:att});
+    out[w.id] = {type:'workspace', id:w.id, v:1, epoch:EPOCH, rev:0, attention:att, name:w.name, kind:w.kind, path:w.path, ...(w.branch ? {branch:w.branch} : {}), panes};
+  }
+  out[model.id] = {type:'session', id:model.id, v:1, epoch:EPOCH, rev:0, attention:sessionAtt, name:model.name, workspaces:summaries};
+  return out;
+}
+/* A new attention shows up in the next revision of its node. */
+function assignRevs(){
+  const next = id => (docs[id]?.rev || 0) + 1;
+  for (const w of model.workspaces) {
+    w.attention.filter(o => o.rev == null).forEach(o => o.rev = next(w.id));
+    for (const p of w.panes) p.attention.filter(o => o.rev == null).forEach(o => o.rev = next(p.id));
+  }
+}
+function diff(a, b, path = '', ops = []){
+  if (JSON.stringify(a) === JSON.stringify(b)) return ops;
+  const isObj = v => v && typeof v === 'object' && !Array.isArray(v);
+  if (isObj(a) && isObj(b)) {
+    for (const k of Object.keys(a)) if (!(k in b)) ops.push({op:'remove', path:`${path}/${k}`});
+    for (const k of Object.keys(b)) k in a ? diff(a[k], b[k], `${path}/${k}`, ops) : ops.push({op:'add', path:`${path}/${k}`, value:b[k]});
+  } else if (Array.isArray(a) && Array.isArray(b)) {
+    const n = Math.min(a.length, b.length);
+    for (let i = 0; i < n; i++) diff(a[i], b[i], `${path}/${i}`, ops);
+    for (let i = a.length - 1; i >= b.length; i--) ops.push({op:'remove', path:`${path}/${i}`});
+    for (let i = a.length; i < b.length; i++) ops.push({op:'add', path:`${path}/-`, value:b[i]});
+  } else ops.push({op:'replace', path, value:b});
+  return ops;
+}
+function refresh(log = true){
+  assignRevs();
+  const next = build();
+  for (const [id, doc] of Object.entries(next)) {
+    const old = docs[id];
+    if (!old) { doc.rev = 1; docs[id] = doc; continue; }
+    doc.rev = old.rev;
+    const ops = diff(old, doc);
+    if (!ops.length) continue;
+    doc.rev = old.rev + 1; docs[id] = doc;
+    if (log) patches.unshift({node:id, from:old.rev, to:doc.rev, ops});
+  }
+  for (const id of Object.keys(docs)) if (!next[id]) { delete docs[id]; if (log) patches.unshift({gone:id}); }
+}
+
+/* ---- per-client seen ---- */
+const seeSeen = (client, node) => { if (docs[node]) client.seen[node] = docs[node].rev; };
+const unseen = (client, list) => list.filter(a => a.rev > (client.seen[a.node] || 0)).sort((a, b) => KINDS[a.kind].p - KINDS[b.kind].p);
+const top = list => list[0];
+const markCell = (client, list) => {
+  const u = unseen(client, list);
+  return u.length ? `${mark(top(u))}${u.length > 1 ? `<span class="cnt">${u.length}</span>` : ''}` : '<span class="mk"> </span>';
+};
+const wsOfPane = id => model.workspaces.find(w => w.panes.some(p => p.id === id));
+const label = id => { const p = docs[id]; if (!p) return id; if (p.type === 'pane') return `${docs[p.workspace].name} › ${p.title}`; return p.name; };
+
+/* ---- terminal rendering ---- */
+function renderTui(){
+  const s = docs[model.id];
+  const w = docs[tui.ws], ws = model.workspaces.find(x => x.id === tui.ws);
+  const side = s.workspaces.map(x => `<div class="row ${x.id === tui.ws ? 'sel' : ''}" data-ws="${x.id}">
+      <span class="nm">${esc(x.name)}</span>${markCell(tui, x.attention)}</div>
+      <div class="row sub" style="cursor:default;padding-top:0"><span class="sub">${x.kind === 'worktree' ? '⎇ ' + esc(x.branch) : '▫ folder'} · ${x.pane_count} pane${x.pane_count === 1 ? '' : 's'}</span></div>`).join('');
+  let main;
+  if (!ws || !ws.panes.length) main = `<div class="empty">${esc(w?.name || '')} has no panes.<br>Press <b>n</b> to open one.</div>`;
+  else {
+    const tabs = w.panes.map(p => `<div class="tab ${p.id === tui.pane ? 'sel' : ''}" data-pane="${p.id}">${esc(p.title)}${markCell(tui, p.attention)}</div>`).join('');
+    const pane = docs[tui.pane];
+    const lines = pane.screen.lines.map((l, i) => i === pane.screen.cursor.row ? esc(l) + '<span class="cur"> </span>' : esc(l)).join('\n');
+    main = `<div class="tabs">${tabs}</div><pre class="screen">${lines}</pre>`;
+  }
+  document.getElementById('tui').innerHTML = `<div class="bar"><span>jwn · ${esc(s.name)}</span><span>rev ${s.rev}</span></div>
+    <div class="body"><div class="side">${side}</div><div class="main">${main}</div></div>
+    <div class="foot"><span>j/k workspace</span><span>h/l pane</span><span>↵ open</span><span>n new pane</span></div>`;
+}
+function tuiOpenWs(id){
+  tui.ws = id; const ws = model.workspaces.find(x => x.id === id);
+  if (!ws.panes.some(p => p.id === tui.pane)) tui.pane = ws.panes[0]?.id;
+  seeSeen(tui, id); if (tui.pane) seeSeen(tui, tui.pane);
+}
+function tuiOpenPane(id){ tui.pane = id; seeSeen(tui, id); }
+
+/* ---- phone rendering ---- */
+const phoneTop = () => phone.stack[phone.stack.length - 1];
+function renderPhone(){
+  const id = phoneTop(), d = docs[id], el = document.getElementById('phone');
+  const head = (title, back) => `<div class="status"><span>9:41</span><span>jwn</span></div><div class="app">${back ? '<button data-back aria-label="Back">‹</button>' : ''}<span>${esc(title)}</span></div>`;
+  if (!d) { phone.stack = ['s0']; return renderPhone(); }
+  if (d.type === 'session') {
+    const waits = unseen(phone, d.attention);
+    const w = waits.map(a => `<button class="item wait" data-open="${a.node}">${mark(a)}<span class="tx"><span>${esc(label(a.node))}</span><span class="s">${esc(what(a))}</span></span><span class="go">›</span></button>`).join('');
+    const rows = d.workspaces.map(x => `<button class="item" data-open="${x.id}"><span>${markCell(phone, x.attention)}</span><span class="tx"><span>${esc(x.name)}</span><span class="s">${x.kind === 'worktree' ? '⎇ ' + esc(x.branch) : 'folder'} · ${x.pane_count} pane${x.pane_count === 1 ? '' : 's'}</span></span><span class="go">›</span></button>`).join('');
+    el.innerHTML = head(`jwn · ${d.name}`, false) + `<div class="list"><h3>Waiting${waits.length ? ' · ' + waits.length : ''}</h3>${w || '<div class="none">Nothing is waiting.</div>'}<h3>Workspaces</h3>${rows}</div>`;
+  } else if (d.type === 'workspace') {
+    const rows = d.panes.map(p => `<button class="item" data-open="${p.id}"><span>${markCell(phone, p.attention)}</span><span class="tx"><span>${esc(p.title)}</span><span class="s">${esc(docs[p.id].cwd)}</span></span><span class="go">›</span></button>`).join('');
+    el.innerHTML = head(d.name, true) + `<div class="list"><h3>Panes</h3>${rows || '<div class="none">No panes yet.</div>'}</div>`;
+  } else {
+    const lines = d.screen.lines.map((l, i) => i === d.screen.cursor.row ? esc(l) + '<span class="cur"> </span>' : esc(l)).join('\n');
+    el.innerHTML = head(`${docs[d.workspace].name} › ${d.title}`, true) + `<pre class="term">${lines}</pre>
+      <div class="keys"><button type="button">Esc</button><button type="button">Tab</button><button type="button">Ctrl</button><button type="button">↑</button></div>
+      <div class="input"><span>type to the shell…</span></div>`;
+  }
+}
+function phoneOpen(id){
+  const d = docs[id]; if (!d) return;
+  if (d.type === 'pane') phone.stack = ['s0', d.workspace, id];
+  else if (d.type === 'workspace') phone.stack = ['s0', id];
+  else phone.stack = ['s0'];
+  seeSeen(phone, id);
+}
+
+/* ---- the wire ---- */
+function renderWire(){
+  const tabs = [['tui','Open in terminal'],['phone','Open on phone'],['session','Session node']];
+  document.getElementById('wireTabs').innerHTML = tabs.map(([k, t]) => `<button type="button" data-wire="${k}" aria-pressed="${wireTab === k}">${t}</button>`).join('');
+  const id = wireTab === 'tui' ? (tui.pane || tui.ws) : wireTab === 'phone' ? phoneTop() : model.id;
+  const doc = docs[id];
+  const txt = doc ? JSON.stringify(doc, null, 1) : '';
+  document.getElementById('wireView').textContent = `${txt}\n\n// ${txt.length} bytes pretty-printed; ids shortened for the prototype`;
+  document.getElementById('patchLog').textContent = patches.length
+    ? patches.slice(0, 8).map(p => p.gone ? `gone ${p.gone}` : `patch ${p.node} ${p.from}→${p.to}  (${JSON.stringify(p).length} bytes)\n${p.ops.map(o => '  ' + JSON.stringify(o)).join('\n')}`).join('\n\n')
+    : 'Nothing has changed yet.';
+}
+function render(){ renderTui(); renderPhone(); renderWire(); fillPaneSelect(); }
+function fillPaneSelect(){
+  const sel = document.getElementById('evPane'), keep = sel.value;
+  const opts = []; model.workspaces.forEach(w => { opts.push(`<option value="${w.id}">${esc(w.name)} (workspace)</option>`); w.panes.forEach(p => opts.push(`<option value="${p.id}">${esc(w.name)} › ${p.id}</option>`)); });
+  sel.innerHTML = opts.join(''); if ([...sel.options].some(o => o.value === keep)) sel.value = keep;
+}
+
+/* ---- events ---- */
+const targetOwn = () => { const id = document.getElementById('evPane').value; const w = model.workspaces.find(x => x.id === id); if (w) return w; for (const x of model.workspaces) { const p = x.panes.find(y => y.id === id); if (p) return p; } };
+document.getElementById('evKind').innerHTML = Object.entries(KINDS).map(([k, v]) => `<option value="${k}">${v.g} ${k}</option>`).join('');
+document.getElementById('evRaise').onclick = () => {
+  const t = targetOwn(), kind = document.getElementById('evKind').value, exit = +document.getElementById('evExit').value;
+  t.attention = t.attention.filter(o => o.kind !== kind);
+  t.attention.push({kind, exit_code: kind === 'shell_done' ? exit : undefined, rev:null});
+  if (t.attention.at(-1).exit_code === undefined) delete t.attention.at(-1).exit_code;
+  refresh(); render();
+};
+document.getElementById('evClear').onclick = () => {
+  const t = targetOwn(); t.attention = t.attention.filter(o => o.kind !== 'shell_done'); refresh(); render();
+};
+document.getElementById('evPane2').onclick = () => {
+  const v = document.getElementById('evPane').value; const w = model.workspaces.find(x => x.id === v) || wsOfPane(v);
+  const id = 'p' + (++counter + 4); w.panes.push({id, title:'zsh', cwd:w.path, lines:['~ ❯ '], attention:[]}); refresh(); render();
+};
+document.getElementById('evFolder').onclick = () => {
+  const id = 'w' + (++counter + 4); model.workspaces.push({id, name:'scratch-' + counter, kind:'folder', path:'~/scratch-' + counter, attention:[], panes:[]}); refresh(); render();
+};
+document.getElementById('evReset').onclick = () => { reset(); render(); };
+
+/* ---- input ---- */
+document.getElementById('tui').addEventListener('click', e => {
+  const r = e.target.closest('[data-ws]'), t = e.target.closest('[data-pane]');
+  if (r) tuiOpenWs(r.dataset.ws); else if (t) tuiOpenPane(t.dataset.pane); else return;
+  render();
+});
+document.getElementById('tui').addEventListener('keydown', e => {
+  const ids = model.workspaces.map(w => w.id), i = ids.indexOf(tui.ws), ws = model.workspaces[i];
+  const pi = ws.panes.findIndex(p => p.id === tui.pane);
+  if (e.key === 'j') tuiOpenWs(ids[Math.min(i + 1, ids.length - 1)]);
+  else if (e.key === 'k') tuiOpenWs(ids[Math.max(i - 1, 0)]);
+  else if (e.key === 'l' && ws.panes.length) tuiOpenPane(ws.panes[Math.min(pi + 1, ws.panes.length - 1)].id);
+  else if (e.key === 'h' && ws.panes.length) tuiOpenPane(ws.panes[Math.max(pi - 1, 0)].id);
+  else if (e.key === 'n') { document.getElementById('evPane').value = tui.ws; document.getElementById('evPane2').click(); tuiOpenWs(tui.ws); }
+  else return;
+  e.preventDefault(); render(); document.getElementById('tui').focus();
+});
+document.getElementById('phone').addEventListener('click', e => {
+  if (e.target.closest('[data-back]')) { phone.stack.pop(); if (!phone.stack.length) phone.stack = ['s0']; }
+  else { const o = e.target.closest('[data-open]'); if (!o) return; phoneOpen(o.dataset.open); }
+  render();
+});
+document.getElementById('wireTabs').addEventListener('click', e => { const b = e.target.closest('[data-wire]'); if (b) { wireTab = b.dataset.wire; renderWire(); } });
+document.getElementById('legend').innerHTML = Object.entries(KINDS).map(([k, v]) => `<span><b class="${v.c}">${v.g}</b> <code>${k}</code></span>`).join('') + '<span><b class="k-fail">✗</b> <code>shell_done</code> exit ≠ 0</span>';
+
+reset(); render();
+})();
+</script>
