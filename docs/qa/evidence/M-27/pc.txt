@@ -1,0 +1,10 @@
+❯ say the single word pong
+
+⏺ pong
+
+✻ Crunched for 0s · done 12:09 PM
+                                                        28% until auto-compact
+────────────────────────────────────────────────────────────────────────────────
+❯ Nothing obvious to suggest here.
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← 3 agents

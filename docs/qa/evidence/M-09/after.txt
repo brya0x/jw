@@ -1,0 +1,39 @@
+(156, 164, 464, 214) demo › qa-perm
+(156, 214, 636, 254) ⎇ feat/qa-perm · /private/tmp/jwt-qa/home/demo-wt/qa-perm
+(982, 177, 1011, 242) ±
+(81, 361, 181, 405) agent
+(304, 361, 404, 405) shell
+(36, 493, 60, 537) ✻
+(84, 494, 426, 537) Shell date command
+(959, 496, 1044, 535) agent
+(187, 578, 1014, 581) run the shell command date
+(66, 677, 142, 720) Bash
+(166, 677, 497, 720) date
+(521, 679, 971, 718) Tue Oct 13 09:31:57 AST 2026
+(995, 677, 1014, 720) ▸
+(36, 791, 1044, 895) The current date is Tuesday, October 13, 2026, 09:31:57 AST.
+(187, 949, 1014, 1053) create b.txt with the text hi using the Write tool
+(36, 1107, 249, 1149) ✻ pensó 1 s
+(66, 1221, 161, 1264) Write
+(185, 1221, 497, 1264) /private/tmp/jwt-qa/home/demo-wt/qa-perm/b.txt
+(521, 1223, 971, 1262) File created successfully at: /private/tmp/jwt-qa/home/demo-wt/qa-perm/b.txt (fi…
+(995, 1221, 1014, 1264) ▸
+(36, 1335, 1044, 1491) I created b.txt in the worktree at /private/tmp/jwt-qa/home/demo-wt/qa-perm/b.txt with the text hi.
+(187, 1545, 1014, 1649) use AskUserQuestion to ask me red or blue with two options
+(66, 1745, 351, 1788) AskUserQuestion
+(521, 1747, 971, 1786) Your questions have been answered: "Red or blue?"="Blue". You can now continue w…
+(995, 1745, 1014, 1788) ▸
+(36, 1859, 356, 1911) You picked blue.
+(83, 2001, 121, 2044) ^␣
+(233, 2001, 290, 2044) esc
+(392, 2001, 449, 2044) tab
+(570, 2001, 589, 2044) ⏎
+(729, 2001, 748, 2044) ⌫
+(888, 2001, 907, 2044) ↑
+(1047, 2001, 1066, 2044) ↓
+(30, 2153, 52, 2203) ›
+(106, 2154, 458, 2202) escribe a claude
+(967, 2149, 989, 2208) ↵
+(60, 2299, 136, 2340) TERM
+(184, 2299, 944, 2340) agent · 78×46 · ^␣ menú
+(968, 2299, 1044, 2340) wifi

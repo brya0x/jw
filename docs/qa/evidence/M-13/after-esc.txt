@@ -1,0 +1,34 @@
+(156, 165, 244, 215) demo
+(156, 215, 636, 254) /private/tmp/jwt-qa/home/demo
+(982, 177, 1011, 242) ±
+(81, 361, 181, 405) agent
+(304, 361, 404, 405) shell
+(36, 493, 60, 537) ✻
+(84, 494, 521, 537) Greeting in three words
+(959, 496, 1044, 535) agent
+(36, 610, 249, 652) ✻ pensó 1 s
+(36, 682, 1044, 890) The demo folder contains 2 files: .jw.toml (hidden) and a.txt, which I created earlier. The earlier ls count of 0 was before a.txt existed, and plain ls doesn't show dotfiles.
+(72, 963, 94, 1013) ✓
+(124, 947, 618, 990) Count files in demo folder
+(124, 990, 549, 1028) subagente · terminó · 6 s
+(923, 969, 1008, 1007) listo
+(187, 1109, 1014, 1213) make a 3 item todo list with TodoWrite then complete all items
+(36, 1267, 249, 1309) ✻ pensó 1 s
+(66, 1381, 256, 1424) ToolSearch
+(280, 1381, 497, 1424) select:TodoWrite
+(521, 1383, 971, 1422) No matching deferred tools found
+(995, 1381, 1014, 1424) ▸
+(36, 1495, 1044, 1911) I can't use TodoWrite here. The tool isn't in this session's tool list, and a search for it returned nothing, so I can't create the todo list through that tool.⏎⏎I can still track the three items in my replies. Say the word and I'll do them now, or tell me what the three items should be.
+(83, 2001, 121, 2044) ^␣
+(233, 2001, 290, 2044) esc
+(392, 2001, 449, 2044) tab
+(570, 2001, 589, 2044) ⏎
+(729, 2001, 748, 2044) ⌫
+(888, 2001, 907, 2044) ↑
+(1047, 2001, 1066, 2044) ↓
+(30, 2153, 52, 2203) ›
+(106, 2154, 458, 2202) escribe a claude
+(967, 2149, 989, 2208) ↵
+(60, 2299, 136, 2340) TERM
+(184, 2299, 944, 2340) agent · 78×46 · ^␣ menú
+(968, 2299, 1044, 2340) wifi

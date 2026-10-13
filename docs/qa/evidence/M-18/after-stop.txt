@@ -1,0 +1,36 @@
+(156, 164, 464, 214) demo › qa-perm
+(156, 214, 636, 254) ⎇ feat/qa-perm · /private/tmp/jwt-qa/home/demo-wt/qa-perm
+(982, 177, 1011, 242) ±
+(81, 361, 181, 405) agent
+(304, 361, 404, 405) shell
+(36, 493, 60, 537) ✻
+(84, 494, 426, 537) Shell date command
+(959, 496, 1044, 535) agent
+(36, 614, 249, 656) ✻ pensó 1 s
+(66, 728, 142, 771) Bash
+(166, 728, 497, 771) for i in $(seq 1 50); do echo $i; sleep 2; done
+(521, 730, 971, 769) The user doesn't want to proceed with this tool use. The too… · 2 líneas
+(995, 728, 1014, 771) ▸
+(187, 866, 1014, 970) [Request interrupted by user for tool use]
+(72, 1067, 94, 1117) ✓
+(124, 1051, 846, 1094) Sleep for 45 seconds in the background
+(124, 1094, 668, 1132) tarea en segundo plano · terminó
+(923, 1073, 1008, 1111) listo
+(36, 1189, 1044, 1761) The background sleep 45 finished with exit code 0. That's an automated notice, not a message from you.⏎⏎You rejected the 1-to-50 counting command, so I didn't run it. Tell me how you'd like to proceed. For example, I could run it in the background, count with a different pace, or skip it.⏎⏎Plan mode is still on, and the c.txt plan was also rejected. No file has been created for it. ▍
+(36, 1822, 68, 1881) ✻
+(98, 1829, 338, 1873) Escribiendo…
+(368, 1832, 823, 1871) 5 s · ↓ 130 tokens
+(853, 1779, 1044, 1923) ■ parar
+(83, 2001, 121, 2044) ^␣
+(233, 2001, 290, 2044) esc
+(392, 2001, 449, 2044) tab
+(570, 2001, 589, 2044) ⏎
+(729, 2001, 748, 2044) ⌫
+(888, 2001, 907, 2044) ↑
+(1047, 2001, 1066, 2044) ↓
+(30, 2153, 52, 2203) ›
+(106, 2154, 458, 2202) escribe a claude
+(967, 2149, 989, 2208) ↵
+(60, 2299, 136, 2340) TERM
+(184, 2299, 944, 2340) agent · 78×46 · ^␣ menú
+(968, 2299, 1044, 2340) wifi

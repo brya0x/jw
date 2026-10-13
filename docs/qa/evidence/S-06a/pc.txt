@@ -1,0 +1,8 @@
+bastacio@Bryans-MacBook-Pro phone-wt- % echo hi
+hi
+bastacio@Bryans-MacBook-Pro phone-wt- % echo two
+two
+bastacio@Bryans-MacBook-Pro phone-wt- % cd /tmp/jwt-qa/home/lsdir %26 ls
+cd: too many arguments
+bastacio@Bryans-MacBook-Pro phone-wt- % cd /tmp/jwt-qa/home/lsdir
+bastacio@Bryans-MacBook-Pro lsdir %

@@ -1,0 +1,3 @@
+demo                             idle         main
+qa-origin/qa-wt1                 idle         feat/qa-wt1
+qa-origin/qa-renamed             idle         feat/qa-renamed

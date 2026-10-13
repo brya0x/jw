@@ -1,0 +1,107 @@
+id	verdict	latency_ms	evidence	note
+W-01	diff	-	W-01/	Phone with 0 workspaces on PC shows "workspaces · 0" + "Esperando la lista del PC…" (reads as still loading); after first folder opened, list follows. Phone nests worktrees under their root; PC lists "qa-origin/qa-wt1" (project name from remote), phone "demo › qa-wt1" (folder name): names differ.
+W-02	pass	<5000	W-02/	Worktree created on PC appears nested under root. Timing coarse (includes creation, ~5 s).
+W-04	pass	<11600*	W-04/	Rename follows on phone (name and branch). *timing includes drive.py start, ~5 s overhead.
+W-05	pass	2400	W-05/	Closing the "run" pane on the PC removes its tab on the phone about 2.4 s later (polling bound).
+W-06	pass	<12000	W-06/	Worktree removed on PC while phone was inside it: phone returned to the list, no crash. git worktree list confirms removal.
+W-03	pass	2145	W-03/	Phone creates a worktree (name taken refused in the sheet; new one created, phone entered it, jw ls shows it). Notes: "crear y abrir" is hidden under the keyboard once the name is typed; the name got a trailing "-" ("phone-wt-") that I did not type (IME suspected, not confirmed).
+S-01	pass	-	S-01/	New shell pane opens in the block view with folder/branch chips.
+S-02	diff	-	S-02/	Command runs and block shows the output. Enter key event (adb keyevent 66) runs the command but leaves "echo hi⏎" in the editor; the app's send button clears it. Block output text is not in the uiautomator tree (screenshot only).
+S-06	fail	-	S-06/	ls of 32 names: PC has 6 columns; phone re-columns into rows that overflow (2 names then 1 orphan per row, irregular order) instead of a clean column set for the phone width (REQ-97).
+S-08	pass	-	S-08/	seq 1 3000: block shows "3000 líneas", ends at 3000, jw read agrees.
+S-10	diff	-	S-10/01.png	Colours (red, bold green, RGB, bg) correct. Box drawing "┌──┐" is drawn clipped (looks like a bracket under the baseline); emoji and CJK fine.
+S-11	pass	7	S-11/	Failed command: red bar and tint, "salió 1".
+S-12	pass	-	S-12/	Running command: "corriendo N s", red stop button.
+S-13	pass	-	S-12/	Stop button sends Ctrl-C: block "salió 130", PC shows ^C.
+S-15	fail	-	S-15/	less on a 206x112 pane: phone shows only the bottom 24 rows (all "~" and "(END)"); the file content is off screen at the top and the person cannot see it. No visible full-screen notice; normal key row shown.
+T-09	pass	-	T-09/	Requested landscape (accelerometer off, user_rotation=1): app stays ROTATION_0 portrait.
+T-04	fail	-	T-04/	(1) CRASH: IllegalArgumentException "Mismatching scroller orientation; single-line, non-wrap text fields can only scroll horizontally" at WorkspaceUi.kt:438 (Composer BasicTextField) whenever the system day/night mode changes while a workspace screen (shell or agent) is open; reproduced 3 times, home screen survives. (2) With "seguir al sistema" selected and system night mode on, the app stays light, status bar icons (white) become unreadable; picking catppuccin-mocha explicitly gives dark. Not confirmed whether the PC's theme pair has a dark member in this test state. Evidence crash.txt.
+W-11	pass	-	W-11/	agent-wt and agent2 (Claude trust-folder dialog = Notification hook) show "?" on the phone and "waiting ?" in jw ls; same set.
+M-08	fail	-	M-08/	Claude's first-run "trust this folder" dialog is a selection prompt on an agent pane with no transcript yet: phone shows "Sin mensajes todavía." with the key row only; the question and options are not shown, so the person answers blind (my blind Up/Down/Enter selected "No, exit" and the agent pane exited).
+S-22	diff	18071	S-22/	Wifi+data off for ~12 s while in a shell workspace: phone shows "reconectando · Sin conexión con el PC" with a "olvidar este PC" button and "reintento en 10 s"; 18 s after the network is back it is connected, but on the Home list, not back in the workspace/pane the person was in. (The sleep command itself was not started: ↵ not found.)
+T-01	diff	18071	S-22/	Same as S-22; route chip showed the tunnel host while offline, then wifi.
+T-05	pass	-	T-05/	Diff tab: Uncommitted shows 3 files (untracked docs/sub/readme.md +5, staged new.txt +2, untracked.txt +1) matching git status; folder row, counts, "0/3 vistos".
+T-06	pass	-	T-06/	Files screen from a workspace; Markdown viewer renders heading, bold, list; view/source switch present.
+W-09	pass	-	W-09/	Sessions sheet lists main with "6 workspaces" = jw sessions; new session with a taken name refused with "session main already exists: jw main opens it".
+A-02	pass	-	A-02/	Message from the phone: user bubble, Claude text, title "Greeting in three words" (ai-title) in the bar; matches the transcript.
+A-08	pass	-	A-08/	"/" opens the slash list ("37 de 37": Claude's commands, user skills with descriptions); "mod" narrows to /model.
+M-01	pass	-	A-02/	Assistant text same.
+M-02	diff	-	M-02/	Markdown table shown as raw pipes, "## Fruits" heading as raw text, fence language "js" printed as a line above the code; only code/bold are formatted (as REQ-94 says).
+M-04	pass	-	M-04/	Bash tool card: name, one-line command, result "0"; expands.
+M-05	pass	-	M-05/	Write and Edit cards; Edit shows "+1 −1".
+M-06	pass	-	M-06/	Read of a missing file: card result "File does not exist…" (the card shows the error text).
+M-07	diff	-	M-07/	Permission prompt (Write) opens as full-screen question with options 1/2/3; the file preview ("1 hi") the PC shows above the question is not shown, option 2 is cut ("…common file"), and nothing says what file content. Tapping Yes worked; b.txt created; pane back to idle.
+M-08	fail	-	M-08/, M-08b/	First-run trust dialog on an agent pane with no transcript (test daemon): phone "Sin mensajes todavía.", options not shown, answered blind. (Did not recur under the real daemon: folder already trusted.)
+M-09	diff	-	M-09/	Single choice AskUserQuestion: question and options with descriptions shown, tap answers; the PC heading "☐ Color" is dropped; "Type something."/"Chat about this" rows shown as options 3 and 4.
+M-10	diff	-	M-10/	Multi-select: boxes via tap (marks), "N elegidas", Enviar; then Claude's second step "Ready to submit your answers? Submit/Cancel" is shown as a new single-choice question and the review summary ("→ a, c") is not shown.
+M-12	pass	-	M-12/	/plan: plan text shown complete and scrollable with the three decisions. Observation: after cancelling with ✕ esc the phone briefly showed another question ("Steps") and later was on the Home list; not reproduced, unconfirmed.
+M-13	diff	-	M-13/	/model picker is read off the screen and shown as a full-screen question with tap-to-choose (works), but its footer says "Enter to set as default": tapping an option changes the user's default model for new sessions; effort slider and "s: this session only" are unreachable.
+M-15	pass	-	M-15b/	"1 tarea en segundo plano" row while it runs; notice row "tarea en segundo plano · terminó ✓" when done.
+M-16	pass	-	M-16/	Subagent: "pensó" line, final text, and a notice "subagente · terminó · 6 s"; the subagent's own steps are not shown (by design).
+M-17	pass	-	M-17/	"Pensando…" with "■ parar" while Claude works; gone when idle.
+M-18	pass	-	M-18/	■ parar interrupts; "[Request interrupted by user for tool use]" shown.
+M-19	diff	-	M-19/	Claude printed 400 numbers inline: shown in one text block; not a tool-output truncation test.
+M-21	not-shown	-	-	Status line / mode line (e.g. "manual mode on", "28% until auto-compact", "← 3 agents") is on the PC screen only.
+M-22	n/a	-	M-22/	TodoWrite is not available in this Claude version; not testable.
+M-26	not-shown	-	M-26/	/status and /config open full-screen panels on the PC; the phone keeps showing the chat, no command bubble and no panel; the pane stays in the panel until Esc is sent from the key row.
+W-10	pass	-	M-17/	Working: phone "Pensando…", jw ls "working ✻".
+W-12	pass	-	M-07/	After tapping Yes on the phone jw ls goes waiting → idle.
+W-13	pass	-	M-07/	Same.
+S-03	not-run	-	-	not reached in this session
+S-04	not-run	-	-	not reached in this session
+S-05	pass	-	S-05/	Up arrow on the key row gives history: PC line shows "echo one" after two presses; the phone editor mirrors it ~1 s later (the first press showed an empty editor for a moment).
+S-07	pass	-	S-07/	CLICOLOR_FORCE ls -lG: directory blue, executable red, symlink magenta, lines wrapped at the pane width.
+S-09	diff	-	S-09/	seq 1 150000 (~1 MB): the block shows "3023 líneas" and the end of the output; the first ~147000 lines are gone with no "truncated" note (REQ-95 says the daemon marks truncated, the phone does not show it).
+S-14	pass	-	S-14/	Tab completes ("ls /tm" → "ls /tmp/") and the phone editor follows; the key row scrolls; ^C/^D/^R/ not checked one by one.
+S-16	pass	-	S-16/	Program prompts: "name:" input goes to the program, silent password prompt works, block ends; running chip and red stop shown.
+S-17	not-run	-	-	not reached in this session
+S-18	pass	-	S-18/	Tapping the output closes the keyboard.
+S-19	pass	-	S-19/	Tap a block: Comando / Salida / Repetir / Enviar; Repetir re-ran the command on the PC (count 1→2); Enviar opens the Android share sheet.
+S-20	pass	-	S-20/	A nested bash (not marked by jw) is treated as a running command: "corriendo N s", its output with colours, input goes to it, stop button; ends on exit.
+S-21	pass	-	S-21/	cd /tmp: the chip shows /private/tmp.
+S-23	diff	-	S-23b/	Wide output (ps aux, 1894 lines): lines wider than the phone are wrapped, so a table becomes one field per row and is hard to read (expected from REQ-21, but the pane is 80 columns, not wider).
+S-24	not-run	-	-	not reached in this session
+S-25	diff	-	S-25/	Combining accents, full-width letters, arrows and CJK/emoji fine; box-drawing characters are drawn as disjoint pieces (B-18 confirmed).
+W-05	pass	2400	W-05/	Closing the "run" pane on the PC removes its tab on the phone about 2.4 s later (polling bound).
+W-07	diff	-	W-07/	The ^␣ sheet lists search, previous, sessions, panes, open folder, files, new worktree, diff, settings, disconnect; no greyed "en el PC" rows for rename, sync, remove, review (REQ-23).
+W-08	pass	-	W-08/	Folder added from the phone appears in jw ls (and the PC-side list); adding or removing a folder from the PC has no CLI, so that direction was not testable.
+W-14	diff	never	W-14/	`git switch -c feat/qa-branch2` in a worktree: neither `jw ls` nor the phone showed the new branch after 3+ minutes; both keep the creation branch (PC and phone agree, both stale).
+W-15	pass	-	W-15/	Home count "workspaces · 16" and later 17 match jw ls (16, 17 rows) after creating 12 and 1 worktrees.
+W-17	pass	-	W-17/	Worktree folder deleted behind jw's back: PC and phone both keep the row ("waiting ?" after the agent settles); nothing marks the folder as gone.
+W-18	pass	-	W-18/	16 rows: the list scrolls, rows beyond 9 have no number, search filters ("many1" → many10, 11, 12).
+W-19	pass	-	W-19/	Phone idle 5 minutes with the screen on while the PC created a worktree: the count updated to 17.
+W-20	not-run	-	-	not reached in this session
+A-01	diff	-	A-01/	Fresh agent pane (no transcript yet) opens as a chat saying "Sin mensajes todavía." instead of the pane's text (REQ-94 says known:false is drawn as text); the screen is invisible until the first message (root of B-02).
+A-03	not-run	-	-	not reached in this session
+A-04	pass	-	A-04/	claude started by hand in the shell tab: drawn as plain text ("Terminal") while it has no conversation, switches to the chat after the first message (title "Brief greeting").
+A-05	pass	-	A-05/	Scrolled up in a live chat; a new block from the PC did not move the view.
+A-06	inconclusive	-	A-06/	adb long-press did not bring up the selection toolbar; the chat list is inside a SelectionContainer in the code (ChatUi.kt:102).
+A-07	diff	-	M-02/	Covered by M-02 (markdown table, heading and fence shown raw).
+A-09	pass	-	M-13/, M-23/	Covered by M-13 and M-23.
+A-10	diff	25000	A-10/	Network off 14 s inside a chat: "sin conexión · No encuentro tu PC"; 25 s after it returns the app is back in the same workspace but on its first tab (agent), not the pane it was in; no duplicated blocks seen.
+A-11	pass	-	M-18/	Covered by M-18.
+A-12	inconclusive	-	A-12/	Second message sent while Claude worked appeared as a normal right-hand bubble at once, no "en cola" label; Claude's turn may have ended before it counted as queued.
+A-13	fail	-	A-13/	Two hand-started Claudes in the same folder: both "run" tabs show the same conversation (the newest transcript, "Banana"), and both tabs are labelled "run".
+A-14	not-run	-	-	Needs 400+ blocks; not built (cost).
+T-02	not-run	-	-	not reached in this session
+T-03	not-run	-	-	not reached in this session
+T-10	pass	-	T-10/	Presets change the preview (y⏎ / n⏎) and restore; the default "Claude Code" preset makes y send Enter, which accepts whatever option the cursor is on.
+T-11	pass	-	T-11/	No clickable element under 48 dp on Home, Avisos, Settings or the diff tab; one 32x48 dp view on the workspace screen.
+T-12	pass	-	T-12/	Logcat of the app process: 31 lines, no tokens, links, passwords or terminal text (only the fresh process was inspected).
+T-13	not-run	-	-	not reached in this session
+T-14	not-run	-	-	not reached in this session
+T-15	not-run	-	-	not reached in this session
+M-03	pass	-	M-16/	"✻ pensó 1 s" dim line shown for thinking (no thought text, as designed).
+M-11	diff	-	M-11/	Two questions in one AskUserQuestion: shown one after the other (color, then size); the PC's tab bar and the review of both answers are not shown.
+M-14	pass	-	M-14/	A project command .claude/commands/qahello.md appears in the "/" list tagged "comando"; running it shows the /qahello bubble and the answer.
+M-20	not-shown	-	M-20/	Read of a PNG: the tool card says "sin salida"; the image is not shown.
+M-23	diff	-	M-23/	/compact: the continuation summary is drawn as the person's own message ("This session is being continued…") and the command output shows raw ANSI escapes (".[2mCompacted …[22m").
+M-24	not-run	-	-	-
+M-25	inconclusive	-	M-25/	"!ls -a" typed in the chat: Claude answered with a listing; whether it ran as a shell escape was not shown as a "!ls -a" command block.
+M-27	inconclusive	-	M-27/	/resume sent from the phone: no list, bubble or panel on the phone; the PC pane was not read for that pane.
+M-28	not-run	-	-	-
+M-29	pass	-	B-nav/	After the daemon restart the chat of a pane shows the previous conversation (last blocks) again.
+M-30	pass	-	M-30/	/clear: the conversation resets to the new session; the bar keeps the old title ("Banana").
+AV-01	fail	-	AV-01/	Pending plan: Home row shows live "y · aprobar"/"n · rechazar", Avisos shows y/n (dim) with no content (REQ-20/98 say no y/n for plans).
+AV-02	fail	-	AV-02/	Tapping y on the plan accepted "Yes, and use auto mode": plan executed (d.txt created) and Claude switched to auto mode without the plan shown on the phone.
+ST-01	fail	-	ST-01/	Hook-less Claude (role run) working: jw ls demo "working ✻" then "waiting ?"; phone Home row for demo shows no mark all along (B-22).

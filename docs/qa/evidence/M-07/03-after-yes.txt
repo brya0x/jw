@@ -1,0 +1,34 @@
+(156, 164, 464, 214) demo › qa-perm
+(156, 214, 636, 254) ⎇ feat/qa-perm · /private/tmp/jwt-qa/home/demo-wt/qa-perm
+(982, 177, 1011, 242) ±
+(81, 361, 181, 405) agent
+(304, 361, 404, 405) shell
+(36, 493, 60, 537) ✻
+(84, 494, 426, 537) Shell date command
+(959, 496, 1044, 535) agent
+(187, 632, 1014, 684) run the shell command date
+(66, 780, 142, 823) Bash
+(166, 780, 497, 823) date
+(521, 782, 971, 821) Tue Oct 13 09:31:57 AST 2026
+(995, 780, 1014, 823) ▸
+(36, 894, 1044, 998) The current date is Tuesday, October 13, 2026, 09:31:57 AST.
+(187, 1052, 1014, 1156) create b.txt with the text hi using the Write tool
+(36, 1210, 249, 1252) ✻ pensó 1 s
+(66, 1324, 161, 1367) Write
+(185, 1324, 497, 1367) /private/tmp/jwt-qa/home/demo-wt/qa-perm/b.txt
+(521, 1326, 971, 1365) File created successfully at: /private/tmp/jwt-qa/home/demo-wt/qa-perm/b.txt (fi…
+(995, 1324, 1014, 1367) ▸
+(36, 1438, 1044, 1594) I created b.txt in the worktree at /private/tmp/jwt-qa/home/demo-wt/qa-perm/b.txt with the text hi.
+(83, 2001, 121, 2044) ^␣
+(233, 2001, 290, 2044) esc
+(392, 2001, 449, 2044) tab
+(570, 2001, 589, 2044) ⏎
+(729, 2001, 748, 2044) ⌫
+(888, 2001, 907, 2044) ↑
+(1047, 2001, 1066, 2044) ↓
+(30, 2153, 52, 2203) ›
+(106, 2154, 458, 2202) escribe a claude
+(967, 2149, 989, 2208) ↵
+(60, 2299, 136, 2340) TERM
+(184, 2299, 944, 2340) agent · 78×46 · ^␣ menú
+(968, 2299, 1044, 2340) wifi

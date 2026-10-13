@@ -1,0 +1,20 @@
+(156, 164, 464, 214) demo › qa-perm
+(156, 214, 636, 254) ⎇ feat/qa-perm · /private/tmp/jwt-qa/home/demo-wt/qa-perm
+(982, 177, 1011, 242) ±
+(81, 361, 181, 405) agent
+(304, 361, 404, 405) shell
+(102, 506, 859, 549) claude te pregunta · elige varias
+(889, 455, 1068, 599) ✕ esc
+(48, 659, 268, 698) ELIGE VARIAS
+(48, 734, 831, 799) Which of a, b, c do you like?
+(204, 881, 226, 929) a
+(204, 938, 356, 982) Option a
+(204, 1109, 226, 1157) b
+(204, 1166, 356, 1210) Option b
+(204, 1337, 226, 1385) c
+(204, 1394, 356, 1438) Option c
+(204, 1591, 512, 1639) Type something
+(120, 1822, 139, 1865) 5
+(204, 1819, 534, 1867) Chat about this
+(48, 2229, 696, 2272) 0 elegidas
+(732, 2172, 1032, 2328) Enviar

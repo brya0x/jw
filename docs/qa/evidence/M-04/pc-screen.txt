@@ -1,0 +1,40 @@
+❯ say hi in 3 words
+
+⏺ Hi there, friend!
+
+✻ Sautéed for 1s · done 9:23 AM
+
+❯ reply with a markdown table of 2 fruits and a js code fence and a heading
+
+⏺ Fruits
+
+  ┌────────┬────────┐
+  │ Fruit  │ Color  │
+  ├────────┼────────┤
+  │ Apple  │ Red    │
+  ├────────┼────────┤
+  │ Banana │ Yellow │
+  └────────┴────────┘
+
+  const fruits = ["Apple", "Banana"];
+  console.log(fruits);
+
+✻ Crunched for 1s · done 9:24 AM
+
+❯ run the shell command ls and tell me the count
+
+  Listed 1 directory
+
+⏺ The ls command returned a count of 0, so the working directory
+  (/private/tmp/jwt-qa/home/demo) has no visible entries. Hidden files
+  (starting with .) aren't counted by plain ls. The .jw.toml file from the git
+  status snapshot is hidden, so it wouldn't show up here.
+
+✻ Baked for 3s · done 9:24 AM
+
+
+                                                      28% until auto-compact
+──────────────────────────────────────────────────────────────────────────────
+❯
+──────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← 3 agents

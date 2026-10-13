@@ -1,0 +1,30 @@
+/System/Library/
+bastacio         68462   0.0  0.0 435367216   2048   ??  Ss   11:57AM   0:00.04
+/System/Library/
+bastacio         68461   0.0  0.0 435340928   7232   ??  S    11:57AM   0:00.12
+/System/Library/
+bastacio         68409   0.0  0.1 435360736  17120   ??  S    11:57AM   0:01.01
+/System/Library/
+bastacio         68408   0.0  0.1 435352384  19008   ??  S    11:57AM   0:00.45
+/System/Library/
+bastacio          8098   0.0  0.6 1951145040  98064   ??  S    11:54AM   0:00.27
+ /Applications/Go
+bastacio         64795   0.0  0.0 435344416   8016   ??  Ss   11:52AM   0:00.31
+/System/Library/
+root             64778   0.0  0.0 435340688   6096   ??  Ss   11:52AM   0:00.09
+/System/Library/
+root             64777   0.0  0.0 435313632   3312   ??  Ss   11:52AM   0:00.10
+/System/Library/
+root             64775   0.0  0.0 435305520   3440   ??  Ss   11:52AM   0:00.06
+/System/Library/
+bastacio         64774   0.0  0.1 435865792  12128   ??  S    11:52AM   0:00.19
+/System/Library/
+bastacio         64772   0.0  0.0 435301200   2672   ??  S    11:52AM   0:00.03
+/System/Library/
+root             64773   0.0  0.0 435305872   3424   ??  Ss   11:52AM   0:00.06
+/System/Library/
+bastacio         64771   0.0  0.1 435340272  11568   ??  S    11:52AM   0:00.57
+/usr/libexec/tri
+
+demo on  main [?]
+❯

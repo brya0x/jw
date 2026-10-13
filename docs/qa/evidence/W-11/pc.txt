@@ -1,0 +1,6 @@
+demo                             idle         main
+qa-origin/qa-renamed             idle         feat/qa-renamed
+qa-origin/phone-wt-              idle         feat/phone-wt-
+qa-origin/agent-wt               waiting  ?   feat/agent-wt
+qa-origin/agent2                 waiting  ?   feat/agent2
+qa-origin/agent3                 idle         feat/agent3

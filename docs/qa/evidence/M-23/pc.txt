@@ -1,0 +1,8 @@
+❯ /compact
+  ⎿  Compacted (ctrl+o to see full summary)
+  ⎿  Skills restored (qahello)
+
+────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← 3 agents

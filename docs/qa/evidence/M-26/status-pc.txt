@@ -1,0 +1,18 @@
+
+✻ Sautéed for 2s · done 9:39 AM
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ 18% until auto-compact ▔
+   Settings  Status   Config   Usage   Stats
+
+   Version:           2.1.296
+   Session name:      Shell date command
+   Session ID:        f150ef7d-5793-4a00-af59-d2ab180517cf
+   Session kind:      interactive
+   Peer address:      uds:/tmp/cc-socks/58173.sock
+   cwd:               /private/tmp/jwt-qa/home/demo-wt/qa-perm
+
+   Model:             haiku (claude-haiku-5-5)
+   MCP servers:       2 connected, 3 need auth · /mcp
+   Setting sources:   User settings, Command line arguments
+   Auto mode server:  Enabled
+
+   Esc to cancel

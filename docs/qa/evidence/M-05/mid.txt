@@ -1,0 +1,30 @@
+(156, 165, 244, 215) demo
+(156, 215, 636, 254) /private/tmp/jwt-qa/home/demo
+(982, 177, 1011, 242) ±
+(81, 361, 181, 405) agent
+(304, 361, 404, 405) shell
+(36, 493, 60, 537) ✻
+(84, 494, 521, 537) Greeting in three words
+(959, 496, 1044, 535) agent
+(66, 636, 161, 679) Write
+(185, 636, 497, 679) /private/tmp/jwt-qa/home/demo/a.txt
+(521, 638, 971, 677) File created successfully at: /private/tmp/jwt-qa/home/demo/a.txt (file state is…
+(995, 636, 1014, 679) ▸
+(66, 792, 142, 835) Edit
+(166, 792, 862, 835) /private/tmp/jwt-qa/home/demo/a.txt
+(886, 794, 971, 833) +1 −1
+(995, 792, 1014, 835) ▸
+(36, 906, 1044, 1062) I created a.txt in the working directory with the text hi, then changed it to yo. The file now contains yo.
+(83, 1152, 121, 1195) ^␣
+(233, 1152, 290, 1195) esc
+(392, 1152, 449, 1195) tab
+(570, 1152, 589, 1195) ⏎
+(729, 1152, 748, 1195) ⌫
+(888, 1152, 907, 1195) ↑
+(1047, 1152, 1066, 1195) ↓
+(30, 1304, 52, 1354) ›
+(106, 1305, 458, 1353) escribe a claude
+(967, 1300, 989, 1359) ↵
+(60, 1450, 136, 1491) TERM
+(184, 1450, 944, 1491) agent · 78×46 · ^␣ menú
+(968, 1450, 1044, 1491) wifi

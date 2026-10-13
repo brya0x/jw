@@ -1,0 +1,2 @@
+mobile-qa                        idle         
+demo                             idle         main

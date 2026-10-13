@@ -1,0 +1,40 @@
+      1 hi
+
+⏺ Update(a.txt)
+  ⎿  Added 1 line, removed 1 line
+      1 -hi
+      1 +yo
+
+⏺ I created a.txt in the working directory with the text hi, then changed it
+  to yo. The file now contains yo.
+
+✻ Cooked for 3s · done 9:25 AM
+
+❯ read the file /nonexistent and report the error
+
+  Read 1 file
+
+⏺ Reading /nonexistent failed with the error: "File does not exist." The tool
+  also noted the current working directory, /private/tmp/jwt-qa/home/demo.
+
+✻ Cooked for 2s · done 9:25 AM
+
+❯ run sleep 25 in the background with run_in_background and then reply
+  started
+
+  Ran 1 shell command
+
+⏺ started
+
+✻ Brewed for 2s · done 9:26 AM
+
+⏺ Background command "Sleep 25 seconds in background" completed (exit code 0)
+
+⏺ The background sleep 25 finished with exit code 0.
+
+✻ Crunched for 1s · done 9:26 AM
+                                                      26% until auto-compact
+──────────────────────────────────────────────────────────────────────────────
+❯ check if the background sleep finished
+──────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← 3 agents
