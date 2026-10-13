@@ -53,8 +53,6 @@ button:hover{border-color:var(--blue)}
 .ph .ed input{flex:1;min-width:0;height:40px;border:0;background:none;color:var(--fg);font:13px var(--mono);outline:none}
 .ph .ed button{min-width:40px;height:36px;border:0;background:none;color:var(--blue);font-size:15px}
 .ph .ed button.stop{color:var(--red)}
-.ph .kb{display:flex;overflow:auto;padding:0 6px 6px}
-.ph .kb span{min-width:38px;min-height:30px;padding:0 8px;display:grid;place-items:center;font-size:12px;color:var(--dim)}
 .ph .none{padding:24px 16px;color:var(--dim)}
 .decide{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px;color:var(--fg)}
 .decide h2{font:600 12px var(--mono);margin:0 0 8px;color:var(--mut)}
@@ -71,7 +69,7 @@ button:hover{border-color:var(--blue)}
 <div class="wrap">
   <div>
     <h1>The shell as blocks, in the terminal and on the phone</h1>
-    <p>One model, two screens. The terminal draws today's jw layout with each shell pane as a rounded box of command blocks; the phone draws the same blocks flat, with the pane tabs, an editor and a slim key row. Both read the same data: run a command in one and it appears in the other, and what you look at clears on both. Click the terminal or tab into it; the keys are on its status bar.</p>
+    <p>One model, two screens. The terminal draws today's jw layout with each shell pane as a rounded box of command blocks; the phone draws the same blocks flat, with the pane tabs and an editor. Both read the same data: run a command in one and it appears in the other, and what you look at clears on both. Click the terminal or tab into it; the keys are on its status bar.</p>
   </div>
   <div class="bar" aria-label="Simulate">
     <button id="evFail" type="button">A command fails in the focused pane</button>
@@ -99,7 +97,6 @@ button:hover{border-color:var(--blue)}
         <div class="chips" id="phChips"></div>
         <form class="ed" id="phForm" autocomplete="off"><span class="c-green b">❯</span><input id="phIn" placeholder="escribe un comando" aria-label="Command"><button id="phGo" type="submit" aria-label="Run">↵</button></form>
       </div>
-      <div class="kb"><span class="c-yellow">^␣</span><span>esc</span><span>tab</span><span>↑</span><span>↓</span><span>←</span><span>→</span><span>^C</span></div>
     </div></div>
   </div>
   </div>
@@ -112,7 +109,7 @@ button:hover{border-color:var(--blue)}
       <li><b>Marks sit at the right of a sidebar row</b> (most urgent unseen, with a count when there are several). No extra line under the row: the sentence lives in the pane's title and in <code>a</code>.</li>
       <li><b>Avisos</b> opens as a box over the pane area: one row per unseen attention, <code>↵</code> goes to that pane, focus and seen both change.</li>
       <li><b>The shell as blocks</b> (the terminal's version of what the phone prototype already does): inside a shell pane's box, each command is a block with its folder, branch and time, a bar at the left (green done, red failed, yellow running), bold command and its coloured output; newest at the bottom. A click selects a block and the status bar offers copy command, copy output, repeat. The editor sits at the foot of the box with the folder and branch chips; while a program runs it shows the program and <code>■ ^C</code>. (Only the shell for now: no agents, no full-screen programs.) Open a shell pane, press Enter, type, press Enter.</li>
-      <li><b>On the phone</b> the same blocks are drawn flat, newest at the bottom: folder and time dim on top, the command in bold, the coloured output below, and the bar at the left (green, red, yellow). The shell's panes are tabs (the phone's way; the terminal uses boxes). Tapping a block selects it and shows <code>Comando</code>, <code>Salida</code> and <code>Repetir</code>. The editor sits above the slim key row with the folder and branch chips; while a program runs the chip is the program, the border turns dashed and the send button becomes a red stop (<code>^C</code>). The arrows at the top change workspace here; on the real phone Home does that.</li>
+      <li><b>On the phone</b> the same blocks are drawn flat, newest at the bottom: folder and time dim on top, the command in bold, the coloured output below, and the bar at the left (green, red, yellow). The shell's panes are tabs (the phone's way; the terminal uses boxes). Tapping a block selects it and shows <code>Comando</code>, <code>Salida</code> and <code>Repetir</code>. The editor sits at the foot with the folder and branch chips; while a program runs the chip is the program, the border turns dashed and the send button becomes a red stop (<code>^C</code>). The special keys (esc, tab, arrows) have no buttons for now; where they go is still to be decided. The arrows at the top change workspace here; on the real phone Home does that.</li>
       <li><b>Seen</b> is shared: looking at a pane here clears its aviso on the phone too. Moving the highlight previews a workspace; <code>↵</code> or focusing a pane marks it seen.</li>
     </ol>
   </div>

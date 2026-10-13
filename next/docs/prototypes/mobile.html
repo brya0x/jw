@@ -887,7 +887,6 @@ function vWs(){
    <div class="panes" role="tablist">${panes.map(([p,c])=>`<button class="pt" role="tab" aria-selected="${state.pane===p}" data-pane="${p}" style="--c:${c}"><i></i>${p}</button>`).join('')}</div>
    ${askOn?askHtml(w):state.pane==='claude'?chatHtml(w):state.pane==='shell'?shellHtml(w):`<div class="out" id="out">${lines}</div>`}
    ${state.sel?`<div class="selbar"><span>3 líneas seleccionadas</span><button class="key" data-act="copy">copiar</button><button class="key" data-act="unsel">cancelar</button></div>`:''}
-   ${askOn?'':`<div class="keys"><button class="key lead" data-sheet="leader">^␣</button>${keys.map(x=>`<button class="key" data-key="${x}">${x}</button>`).join('')}</div>`}
    ${askOn?'':state.pane==='claude'?`<div id="slashbox">${slashHtml()}</div>`+mirrorHtml():''}
    ${askOn?'':state.pane==='shell'?editorHtml(w):`<form class="comp" id="comp"><span class="pr">${state.pane==='claude'?'›':'❯'}</span><input id="msg" autocomplete="off" value="${(state.draft||'').replace(/"/g,'&quot;')}" placeholder="${state.pane==='claude'?'escribe a claude':'escribe un comando'}" aria-label="Entrada"><button class="send" aria-label="Enviar">${ic('send')}</button></form>`}
    ${statusBar('TERM',state.pane+' · texto · se ajusta al ancho · ^␣ menú')}`;

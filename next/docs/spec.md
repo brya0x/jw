@@ -79,7 +79,7 @@ Transport: JSON lines on a Unix socket (mode 0600, in a 0700 dir) whose path com
 - REQ-35 THE phone SHALL keep a local seen record, node id to revision; it SHALL treat an attention as seen when its `rev` is not above the recorded one, and SHALL drop the record of a node from another epoch.
 - REQ-36 THE phone SHALL NOT offer approve or deny controls on Home or Avisos.
 - REQ-37 THE pane screens (claude, dev, shell) SHALL stay as in `docs/specs/mobile-prototype.html`; only the key row changes (REQ-38).
-- REQ-38 THE key row of a pane SHALL be one slim borderless line of at most 8 keys: `^␣ esc tab ↑ ↓ ← → ^C`.
+- REQ-38 (withdrawn) The pane key row (`^␣ esc tab ↑ ↓ ← → ^C`) is removed for now; where those keys go is OPEN-5. The editor's stop button (`■`, `^C`) stays.
 - REQ-39 THE Android client SHALL draw Home, Avisos and a workspace's panes from the shared fixtures, under the application id and label of `identity.toml`, beside any other jw app.
 - REQ-40 THE phone's pane tabs and the terminal's pane rows SHALL be labelled with the pane's `title` (the program running in the shell, else the shell); a pane SHALL NOT have a role chosen at creation.
 - REQ-41 WHEN a patch does not start at the revision a client holds, or its epoch differs, THEN the client SHALL drop the node and open it again for a snapshot.
@@ -148,7 +148,7 @@ Corrections to the model: the level 0 document is smaller than assumed (3.9 KB, 
 - OPEN-1 Retention: how many revisions per node the daemon keeps for resume (proposed 256).
 - OPEN-3 The permission and question screens inside the claude pane still offer their options; whether they change too is the user's call (the prototype leaves them).
 - OPEN-4 The terminal client's workspace list has no prototype yet; the phone comes first.
-- OPEN-5 Keys dropped from the key row (`⏎ ^D ^R / | ~`): do they move to the `^␣` menu, or go.
+- OPEN-5 Where the special keys (`esc`, `tab`, arrows, `^C` beyond the stop button, `^D`, `^R`, …) go on the phone now that the key row is removed (the user: think about it later).
 - OPEN-2 Whether a `pane` screen needs styled cells (colour, bold) before the first UI; v1 is text only.
 
 ## Corrections

@@ -260,7 +260,6 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
                 fontFamily = MonoFont, fontSize = 12.sp, lineHeight = 18.sp, color = Palette.fg, softWrap = false,
             )
         }
-        KeyRow()
         Row(Modifier.fillMaxWidth().background(Palette.panel).navigationBarsPadding().padding(horizontal = Gutter, vertical = 14.dp)) {
             Mono("❯", Palette.dim, 13, bold = true)
             Spacer(Modifier.width(10.dp))
@@ -306,20 +305,5 @@ private fun PaneTabs(panes: List<PaneSummary>, current: String?, state: ClientSt
             }
         }
         Hairline()
-    }
-}
-
-/** One slim line, no boxes (REQ-38). */
-@Composable
-private fun KeyRow() {
-    Column(Modifier.fillMaxWidth().background(Palette.panel)) {
-        Hairline()
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp)) {
-            listOf("^␣", "esc", "tab", "↑", "↓", "←", "→", "^C").forEachIndexed { i, k ->
-                Box(Modifier.defaultMinSize(minWidth = 38.dp, minHeight = 34.dp).padding(horizontal = 8.dp), contentAlignment = Alignment.Center) {
-                    Mono(k, if (i == 0) Palette.yellow else Palette.dim, 12)
-                }
-            }
-        }
     }
 }
