@@ -70,6 +70,12 @@ class Tui:
         os.write(self.fd, s.encode())
         time.sleep(0.3)
 
+    def click(self, x, y):  # cells are 0-based here; the terminal's mouse protocol counts from 1
+        self.keys(f"\x1b[<0;{x + 1};{y + 1}M\x1b[<0;{x + 1};{y + 1}m")
+
+    def wheel(self, down, x, y):
+        self.keys(f"\x1b[<{65 if down else 64};{x + 1};{y + 1}M")
+
     def drain(self):
         while True:
             try:
@@ -189,6 +195,19 @@ def main():
         tui.keys("\r")
         check("the terminal looked at it", until(lambda: avisos_count_tui(tui.text()) == 0, "tui"), tui.text().split("\n")[-1])
         check("the phone dropped it because the terminal looked", until(lambda: avisos_count_phone(phone_text()) == 0, "phone"), phone_text())
+
+        print("\n-- the mouse in the terminal client")
+        write(pa, mark(9))
+        check("a new failure is waiting on both", until(lambda: avisos_count_tui(tui.text()) == 1 and avisos_count_phone(phone_text()) == 1, "both"), tui.text().split("\n")[-1])
+        tui.click(113, 31)  # "avisos 1" in the status bar
+        check("clicking avisos in the status bar opens the list", until(lambda: "AVISOS" in tui.text().split("\n")[-1], "tui"), tui.text().split("\n")[-1])
+        tui.click(52, 6)  # the first item of the list
+        check("clicking an item goes there and clears it on the terminal", until(lambda: avisos_count_tui(tui.text()) == 0 and "TERM" in tui.text().split("\n")[-1], "tui"), tui.text().split("\n")[-1])
+        check("and on the phone", until(lambda: avisos_count_phone(phone_text()) == 0, "phone"), phone_text())
+        tui.click(5, 3)  # the second workspace row
+        check("clicking a workspace row opens it", until(lambda: tui.text().split("\n")[0].split("│")[1].strip().startswith("b") and "TERM" in tui.text().split("\n")[-1], "tui"), tui.text().split("\n")[0])
+        tui.wheel(False, 5, 3)  # the wheel over the sidebar moves the highlight up
+        check("the wheel over the sidebar moves the highlight", until(lambda: tui.text().split("\n")[0].split("│")[1].strip().startswith("a") and "MOVE" in tui.text().split("\n")[-1], "tui"), tui.text().split("\n")[0])
 
         print("\n-- what a pane prints reaches both")
         write(pa, "echo hello-e2e")

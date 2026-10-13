@@ -10,7 +10,10 @@ use std::io::{Write, stdout};
 use std::time::Duration;
 
 use contract::{Attention, AttentionKind, Cmd, Node, Pane, Session, Workspace, WorkspaceKind};
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+    MouseButton, MouseEventKind,
+};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{cursor, execute};
 use wire::Client;
@@ -543,6 +546,53 @@ impl View {
         After::Continue
     }
 
+    /// A left click at cell (`x`, `y`) of a `cols` × `rows` screen. A workspace row opens it,
+    /// a pane's box focuses it, `avisos N` in the status bar opens the list, an item of the
+    /// list goes there, and a click outside the list closes it.
+    pub fn click(&mut self, x: usize, y: usize, cols: usize, rows: usize) -> After {
+        let waiting = self.avisos().len();
+        if self.mode == Mode::Avisos {
+            let rect = avisos_rect(waiting, panes_rect(cols, rows));
+            if !inside(rect, x, y) {
+                self.mode = Mode::Workspaces;
+            } else if y >= rect.1 + 2
+                && y < rect.1 + 2 + waiting
+                && x > rect.0
+                && x + 1 < rect.0 + rect.2
+            {
+                self.avisos_selected = y - rect.1 - 2;
+                return self.press(Key::Enter);
+            }
+            return After::Continue;
+        }
+        let label = format!("avisos {waiting}");
+        let start = cols.saturating_sub(label.chars().count() + 1);
+        if waiting > 0 && y + 1 == rows && x >= start && x < start + label.chars().count() {
+            return self.press(Key::Avisos);
+        }
+        let workspaces = self.session.as_ref().map_or(0, |s| s.workspaces.len());
+        if x + 1 < SIDEBAR && y >= 2 && y < rows.saturating_sub(5) && y - 2 < workspaces {
+            self.selected = y - 2;
+            return self.press(Key::Enter);
+        }
+        if let Some(doc) = self.shown() {
+            let id = doc.head.id.clone();
+            let rects = pane_rects(doc.panes.len(), panes_rect(cols, rows));
+            if let Some(i) = rects.iter().position(|r| inside(*r, x, y)) {
+                self.open(&id, i);
+            }
+        }
+        After::Continue
+    }
+
+    /// The wheel over the sidebar (or the avisos list) moves the highlight.
+    pub fn scroll(&mut self, down: bool, x: usize) -> After {
+        if self.mode == Mode::Avisos || x < SIDEBAR {
+            return self.press(if down { Key::Down } else { Key::Up });
+        }
+        After::Continue
+    }
+
     fn grid(&self, cols: usize, rows: usize) -> Grid {
         let mut g = Grid::new(cols, rows);
         let Some(session) = &self.session else {
@@ -724,24 +774,7 @@ impl View {
             );
             return;
         }
-        let half = w / 2;
-        let rects: Vec<(usize, usize, usize, usize)> = match n {
-            1 => vec![(x, y, w, h)],
-            2 => vec![(x, y, half, h), (x + half, y, w - half, h)],
-            _ => {
-                let rh = h / (n - 1);
-                std::iter::once((x, y, half, h))
-                    .chain((0..n - 1).map(|i| {
-                        (
-                            x + half,
-                            y + i * rh,
-                            w - half,
-                            if i == n - 2 { h - i * rh } else { rh },
-                        )
-                    }))
-                    .collect()
-            }
-        };
+        let rects = pane_rects(n, (x, y, w, h));
         let opened = self.opened.as_deref() == Some(doc.head.id.as_str());
         for (i, (summary, rect)) in doc.panes.iter().zip(rects).enumerate() {
             let focused = opened && i == self.focus;
@@ -789,12 +822,9 @@ impl View {
         }
     }
 
-    fn avisos_box(&self, g: &mut Grid, (x, y, w, _): (usize, usize, usize, usize)) {
+    fn avisos_box(&self, g: &mut Grid, (x, y, w, h): Rect) {
         let items = self.avisos();
-        let bw = 56.min(w.saturating_sub(2));
-        let bh = items.len().max(1) + 4;
-        let bx = x + w.saturating_sub(bw) / 2;
-        let by = y + 3;
+        let (bx, by, bw, bh) = avisos_rect(items.len(), (x, y, w, h));
         for r in 0..bh {
             for c in 0..bw {
                 if by + r < g.rows && bx + c < g.cols {
@@ -840,6 +870,48 @@ impl View {
     }
 }
 
+type Rect = (usize, usize, usize, usize);
+
+fn inside((x, y, w, h): Rect, px: usize, py: usize) -> bool {
+    px >= x && px < x + w && py >= y && py < y + h
+}
+
+/// The area the panes share: right of the sidebar, between the header and the status bar.
+fn panes_rect(cols: usize, rows: usize) -> Rect {
+    let x = SIDEBAR + 1;
+    (x, 1, cols.saturating_sub(x), rows.saturating_sub(2))
+}
+
+/// One pane fills the area; two sit side by side; from three, the first takes the left half
+/// and the rest stack on the right.
+fn pane_rects(n: usize, (x, y, w, h): Rect) -> Vec<Rect> {
+    let half = w / 2;
+    match n {
+        0 => vec![],
+        1 => vec![(x, y, w, h)],
+        2 => vec![(x, y, half, h), (x + half, y, w - half, h)],
+        _ => {
+            let rh = h / (n - 1);
+            std::iter::once((x, y, half, h))
+                .chain((0..n - 1).map(|i| {
+                    (
+                        x + half,
+                        y + i * rh,
+                        w - half,
+                        if i == n - 2 { h - i * rh } else { rh },
+                    )
+                }))
+                .collect()
+        }
+    }
+}
+
+/// Where the avisos box sits over the panes' area, for `items` rows.
+fn avisos_rect(items: usize, (x, y, w, _): Rect) -> Rect {
+    let bw = 56.min(w.saturating_sub(2));
+    (x + w.saturating_sub(bw) / 2, y + 3, bw, items.max(1) + 4)
+}
+
 fn base(path: &str) -> &str {
     path.rsplit('/').find(|s| !s.is_empty()).unwrap_or(path)
 }
@@ -850,14 +922,24 @@ struct Terminal;
 impl Terminal {
     fn enter() -> std::io::Result<Terminal> {
         terminal::enable_raw_mode()?;
-        execute!(stdout(), EnterAlternateScreen, cursor::Hide)?;
+        execute!(
+            stdout(),
+            EnterAlternateScreen,
+            cursor::Hide,
+            EnableMouseCapture
+        )?;
         Ok(Terminal)
     }
 }
 
 impl Drop for Terminal {
     fn drop(&mut self) {
-        let _ = execute!(stdout(), cursor::Show, LeaveAlternateScreen);
+        let _ = execute!(
+            stdout(),
+            DisableMouseCapture,
+            cursor::Show,
+            LeaveAlternateScreen
+        );
         let _ = terminal::disable_raw_mode();
     }
 }
@@ -941,16 +1023,25 @@ pub fn run() -> Result<(), String> {
             let _ = client.cmd(Cmd::MarkSeen { node, rev });
         }
         while event::poll(Duration::ZERO).map_err(|e| e.to_string())? {
-            let Event::Key(KeyEvent {
-                code,
-                kind: KeyEventKind::Press,
-                ..
-            }) = event::read().map_err(|e| e.to_string())?
-            else {
-                continue;
+            let after = match event::read().map_err(|e| e.to_string())? {
+                Event::Key(KeyEvent {
+                    code,
+                    kind: KeyEventKind::Press,
+                    ..
+                }) => key_of(code).map_or(After::Continue, |key| view.press(key)),
+                Event::Mouse(m) => {
+                    let (cols, rows) = (cols as usize, rows as usize);
+                    let (x, y) = (m.column as usize, m.row as usize);
+                    match m.kind {
+                        MouseEventKind::Down(MouseButton::Left) => view.click(x, y, cols, rows),
+                        MouseEventKind::ScrollUp => view.scroll(false, x),
+                        MouseEventKind::ScrollDown => view.scroll(true, x),
+                        _ => After::Continue,
+                    }
+                }
+                _ => After::Continue,
             };
-            let Some(key) = key_of(code) else { continue };
-            match view.press(key) {
+            match after {
                 After::Quit => return Ok(()),
                 After::NewPane(workspace) => {
                     let _ = client.cmd(Cmd::NewPane {
@@ -1120,6 +1211,75 @@ mod tests {
         assert!(!told.is_empty(), "opening a workspace queues what was seen");
         assert!(told.iter().all(|(_, rev)| *rev > 0));
         assert!(v.take_outbox().is_empty(), "each look is told once");
+    }
+
+    #[test]
+    fn clicking_a_workspace_row_opens_it() {
+        let mut v = fixture_view();
+        let before = v.avisos().len();
+        // The second row of the sidebar is y = 3 (row 1 of the list is y = 2).
+        v.click(5, 3, 120, 30);
+        assert_eq!(v.selected, 1);
+        assert!(v.opened.is_some(), "a click opens, like Enter");
+        assert!(v.avisos().len() <= before);
+        assert!(v.plain(120, 30).lines().last().unwrap().contains("TERM"));
+    }
+
+    #[test]
+    fn clicking_a_pane_box_focuses_it() {
+        let mut v = fixture_view();
+        v.click(5, 2, 120, 30); // the first workspace, two panes side by side
+        let panes_x = SIDEBAR + 1;
+        let (w, h) = (120 - panes_x, 28);
+        v.click(panes_x + w - 3, 1 + h / 2, 120, 30); // inside the right box
+        assert_eq!(v.focus, 1);
+        v.click(panes_x + 3, 1 + h / 2, 120, 30);
+        assert_eq!(v.focus, 0);
+    }
+
+    #[test]
+    fn clicking_avisos_in_the_status_bar_opens_the_list_and_an_item_goes_there() {
+        let mut v = fixture_view();
+        let waiting = v.avisos().len();
+        let label = format!("avisos {waiting}");
+        v.click(120 - label.len() - 1 + 2, 29, 120, 30);
+        assert_eq!(v.mode, Mode::Avisos);
+        let rect = avisos_rect(waiting, panes_rect(120, 30));
+        v.click(rect.0 + 6, rect.1 + 2, 120, 30);
+        assert_eq!(v.mode, Mode::Workspaces);
+        assert!(v.opened.is_some());
+        assert!(v.avisos().len() < waiting, "going there cleared it");
+    }
+
+    #[test]
+    fn clicking_outside_the_avisos_list_closes_it() {
+        let mut v = fixture_view();
+        v.press(Key::Avisos);
+        v.click(2, 20, 120, 30);
+        assert_eq!(v.mode, Mode::Workspaces);
+        assert!(v.opened.is_none(), "closing opens nothing");
+    }
+
+    #[test]
+    fn the_wheel_over_the_sidebar_moves_the_highlight_and_elsewhere_does_nothing() {
+        let mut v = fixture_view();
+        v.scroll(true, 5);
+        assert_eq!(v.selected, 1);
+        v.scroll(false, 5);
+        assert_eq!(v.selected, 0);
+        v.scroll(true, 80);
+        assert_eq!(v.selected, 0, "the wheel over a pane is not ours");
+    }
+
+    #[test]
+    fn clicks_on_empty_space_change_nothing() {
+        let mut v = fixture_view();
+        let before = v.avisos().len();
+        v.click(5, 25, 120, 30); // below the workspace rows
+        v.click(0, 0, 120, 30); // the header
+        assert_eq!(v.selected, 0);
+        assert!(v.opened.is_none());
+        assert_eq!(v.avisos().len(), before);
     }
 
     #[test]
