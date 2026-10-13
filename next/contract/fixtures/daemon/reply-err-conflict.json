@@ -1,0 +1,9 @@
+{
+  "t": "reply",
+  "id": "c11",
+  "ok": false,
+  "error": {
+    "code": "conflict",
+    "message": "workspace already open"
+  }
+}

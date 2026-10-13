@@ -1,0 +1,235 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "contract.schema.json",
+  "title": "jwn contract",
+  "description": "Every document the daemon and a client exchange. Entry points: ClientMsg, DaemonMsg. Unknown properties are allowed everywhere on purpose (additive changes never break an old peer).",
+  "$defs": {
+    "Id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+    "Rev": { "type": "integer", "minimum": 0 },
+    "Peer": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": { "name": { "type": "string" }, "version": { "type": "string" } }
+    },
+    "ErrorCode": { "enum": ["bad_request", "not_found", "unsupported", "conflict", "git_failed", "io"] },
+    "AttentionKind": {
+      "enum": ["question", "plan", "permission", "shell_done", "agent_done", "screen", "merged", "ci_failed"]
+    },
+    "NodeType": { "enum": ["session", "workspace", "pane"] },
+    "WorkspaceKind": { "enum": ["worktree", "folder"] },
+    "Attention": {
+      "type": "object",
+      "required": ["kind", "node", "rev"],
+      "properties": {
+        "kind": { "$ref": "#/$defs/AttentionKind" },
+        "node": { "$ref": "#/$defs/Id" },
+        "rev": { "$ref": "#/$defs/Rev" },
+        "exit_code": { "type": "integer" }
+      }
+    },
+    "Head": {
+      "type": "object",
+      "required": ["id", "type", "v", "epoch", "rev", "attention"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "type": { "$ref": "#/$defs/NodeType" },
+        "v": { "type": "integer", "minimum": 1 },
+        "epoch": { "$ref": "#/$defs/Id" },
+        "rev": { "$ref": "#/$defs/Rev" },
+        "attention": { "type": "array", "items": { "$ref": "#/$defs/Attention" } }
+      }
+    },
+    "WorkspaceSummary": {
+      "type": "object",
+      "required": ["id", "name", "kind", "path", "pane_count", "attention"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "name": { "type": "string" },
+        "kind": { "$ref": "#/$defs/WorkspaceKind" },
+        "path": { "type": "string" },
+        "branch": { "type": "string" },
+        "pane_count": { "type": "integer", "minimum": 0 },
+        "attention": { "type": "array", "items": { "$ref": "#/$defs/Attention" } }
+      }
+    },
+    "PaneSummary": {
+      "type": "object",
+      "required": ["id", "title", "attention"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "title": { "type": "string" },
+        "attention": { "type": "array", "items": { "$ref": "#/$defs/Attention" } }
+      }
+    },
+    "Program": {
+      "type": "object",
+      "required": ["argv"],
+      "properties": {
+        "argv": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "exit_code": { "type": "integer" }
+      }
+    },
+    "Screen": {
+      "type": "object",
+      "required": ["rows", "cols", "lines", "cursor"],
+      "properties": {
+        "rows": { "type": "integer", "minimum": 1 },
+        "cols": { "type": "integer", "minimum": 1 },
+        "lines": { "type": "array", "items": { "type": "string" } },
+        "cursor": {
+          "type": "object",
+          "required": ["row", "col", "visible"],
+          "properties": {
+            "row": { "type": "integer", "minimum": 0 },
+            "col": { "type": "integer", "minimum": 0 },
+            "visible": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "Node": {
+      "oneOf": [
+        {
+          "allOf": [{ "$ref": "#/$defs/Head" }],
+          "required": ["name", "workspaces"],
+          "properties": {
+            "type": { "const": "session" },
+            "name": { "type": "string" },
+            "workspaces": { "type": "array", "items": { "$ref": "#/$defs/WorkspaceSummary" } }
+          }
+        },
+        {
+          "allOf": [{ "$ref": "#/$defs/Head" }],
+          "required": ["name", "kind", "path", "panes"],
+          "properties": {
+            "type": { "const": "workspace" },
+            "name": { "type": "string" },
+            "kind": { "$ref": "#/$defs/WorkspaceKind" },
+            "path": { "type": "string" },
+            "project": { "type": "string" },
+            "branch": { "type": "string" },
+            "panes": { "type": "array", "items": { "$ref": "#/$defs/PaneSummary" } }
+          }
+        },
+        {
+          "allOf": [{ "$ref": "#/$defs/Head" }],
+          "required": ["workspace", "title", "shell", "cwd", "screen"],
+          "properties": {
+            "type": { "const": "pane" },
+            "workspace": { "$ref": "#/$defs/Id" },
+            "title": { "type": "string" },
+            "shell": { "type": "string" },
+            "cwd": { "type": "string" },
+            "running": { "$ref": "#/$defs/Program" },
+            "last_program": { "$ref": "#/$defs/Program" },
+            "screen": { "$ref": "#/$defs/Screen" }
+          }
+        }
+      ]
+    },
+    "PatchOp": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["op", "path", "value"],
+          "properties": { "op": { "const": "add" }, "path": { "type": "string" } }
+        },
+        {
+          "type": "object",
+          "required": ["op", "path"],
+          "properties": { "op": { "const": "remove" }, "path": { "type": "string" } }
+        },
+        {
+          "type": "object",
+          "required": ["op", "path", "value"],
+          "properties": { "op": { "const": "replace" }, "path": { "type": "string" } }
+        }
+      ]
+    },
+    "Cmd": {
+      "oneOf": [
+        { "type": "object", "required": ["cmd", "name"], "properties": { "cmd": { "const": "rename_session" }, "name": { "type": "string", "minLength": 1 } } },
+        { "type": "object", "required": ["cmd", "path"], "properties": { "cmd": { "const": "open_folder" }, "path": { "type": "string" } } },
+        { "type": "object", "required": ["cmd", "repo", "branch"], "properties": { "cmd": { "const": "create_worktree" }, "repo": { "type": "string" }, "branch": { "type": "string", "minLength": 1 }, "base": { "type": "string" } } },
+        { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "remove_workspace" }, "workspace": { "$ref": "#/$defs/Id" }, "remove_worktree": { "type": "boolean" } } },
+        { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "new_pane" }, "workspace": { "$ref": "#/$defs/Id" } } },
+        { "type": "object", "required": ["cmd", "pane"], "properties": { "cmd": { "const": "close_pane" }, "pane": { "$ref": "#/$defs/Id" } } },
+        { "type": "object", "required": ["cmd", "pane", "data"], "properties": { "cmd": { "const": "write" }, "pane": { "$ref": "#/$defs/Id" }, "data": { "type": "string" } } },
+        { "type": "object", "required": ["cmd", "pane", "rows", "cols"], "properties": { "cmd": { "const": "resize" }, "pane": { "$ref": "#/$defs/Id" }, "rows": { "type": "integer", "minimum": 1 }, "cols": { "type": "integer", "minimum": 1 } } }
+      ]
+    },
+    "ClientMsg": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["t", "client", "accepts"],
+          "properties": {
+            "t": { "const": "hello" },
+            "client": { "$ref": "#/$defs/Peer" },
+            "accepts": { "type": "object", "propertyNames": { "$ref": "#/$defs/NodeType" }, "additionalProperties": { "type": "array", "items": { "type": "integer", "minimum": 1 } } }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["t", "node"],
+          "properties": {
+            "t": { "const": "open" },
+            "node": { "$ref": "#/$defs/Id" },
+            "epoch": { "$ref": "#/$defs/Id" },
+            "since": { "$ref": "#/$defs/Rev" }
+          }
+        },
+        { "type": "object", "required": ["t", "node"], "properties": { "t": { "const": "close" }, "node": { "$ref": "#/$defs/Id" } } },
+        { "type": "object", "required": ["t", "id", "cmd"], "properties": { "t": { "const": "cmd" }, "id": { "type": "string" }, "cmd": { "$ref": "#/$defs/Cmd" } } }
+      ]
+    },
+    "DaemonMsg": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["t", "daemon", "epoch", "root", "accepted"],
+          "properties": {
+            "t": { "const": "hello" },
+            "daemon": { "$ref": "#/$defs/Peer" },
+            "epoch": { "$ref": "#/$defs/Id" },
+            "root": { "$ref": "#/$defs/Id" },
+            "accepted": { "type": "object", "propertyNames": { "$ref": "#/$defs/NodeType" }, "additionalProperties": { "type": "integer", "minimum": 1 } }
+          }
+        },
+        { "type": "object", "required": ["t", "node"], "properties": { "t": { "const": "snapshot" }, "node": { "$ref": "#/$defs/Node" } } },
+        {
+          "type": "object",
+          "required": ["t", "node", "epoch", "from", "to", "ops"],
+          "properties": {
+            "t": { "const": "patch" },
+            "node": { "$ref": "#/$defs/Id" },
+            "epoch": { "$ref": "#/$defs/Id" },
+            "from": { "$ref": "#/$defs/Rev" },
+            "to": { "$ref": "#/$defs/Rev" },
+            "ops": { "type": "array", "items": { "$ref": "#/$defs/PatchOp" } }
+          }
+        },
+        { "type": "object", "required": ["t", "node"], "properties": { "t": { "const": "gone" }, "node": { "$ref": "#/$defs/Id" } } },
+        {
+          "type": "object",
+          "required": ["t", "id", "ok"],
+          "properties": { "t": { "const": "reply" }, "id": { "type": "string" } },
+          "oneOf": [
+            { "required": ["ok"], "not": { "required": ["error"] }, "properties": { "ok": { "const": true }, "result": { "type": "object" } } },
+            { "required": ["ok", "error"], "properties": { "ok": { "const": false }, "error": { "$ref": "#/$defs/ErrorBody" } } }
+          ]
+        },
+        {
+          "type": "object",
+          "required": ["t", "code", "message"],
+          "properties": { "t": { "const": "error" }, "code": { "$ref": "#/$defs/ErrorCode" }, "message": { "type": "string" } }
+        }
+      ]
+    },
+    "ErrorBody": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": { "code": { "$ref": "#/$defs/ErrorCode" }, "message": { "type": "string" } }
+    }
+  }
+}

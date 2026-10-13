@@ -23,3 +23,4 @@ what they do and why, never pasted.
 | Crate | Owns |
 |---|---|
 | `crates/identity` | the product identity and the paths/env names derived from it |
+| `crates/contract` | the Rust types of the JSON documents; `tests/conformance.rs` checks them against `contract/` |

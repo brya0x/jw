@@ -1,0 +1,28 @@
+{
+  "t": "patch",
+  "node": "00000000-0000-4000-8000-0000000000a1",
+  "epoch": "00000000-0000-4000-8000-000000000001",
+  "from": 3,
+  "to": 4,
+  "ops": [
+    {
+      "op": "add",
+      "path": "/attention/-",
+      "value": {
+        "kind": "shell_done",
+        "node": "00000000-0000-4000-8000-0000000000c2",
+        "rev": 4,
+        "exit_code": 0
+      }
+    },
+    {
+      "op": "replace",
+      "path": "/workspaces/0/pane_count",
+      "value": 3
+    },
+    {
+      "op": "remove",
+      "path": "/workspaces/1/branch"
+    }
+  ]
+}

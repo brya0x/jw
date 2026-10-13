@@ -1,0 +1,10 @@
+{
+  "t": "cmd",
+  "id": "c3",
+  "cmd": {
+    "cmd": "create_worktree",
+    "repo": "/home/u/code/app",
+    "branch": "feat/login",
+    "base": "main"
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "t": "snapshot",
+  "node": {
+    "id": "00000000-0000-4000-8000-0000000000c1",
+    "type": "pane",
+    "v": 1,
+    "epoch": "00000000-0000-4000-8000-000000000001",
+    "rev": 9,
+    "attention": [],
+    "workspace": "00000000-0000-4000-8000-0000000000b1",
+    "title": "zsh",
+    "shell": "/bin/zsh",
+    "cwd": "/home/u/code/app-login",
+    "running": {
+      "argv": [
+        "nvim",
+        "src/main.rs"
+      ]
+    },
+    "last_program": {
+      "argv": [
+        "cargo",
+        "test"
+      ],
+      "exit_code": 101
+    },
+    "screen": {
+      "rows": 4,
+      "cols": 40,
+      "lines": [
+        "$ cargo test",
+        "error: test failed",
+        "$ ",
+        ""
+      ],
+      "cursor": {
+        "row": 1,
+        "col": 2,
+        "visible": true
+      }
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "t": "cmd",
+  "id": "c1",
+  "cmd": {
+    "cmd": "rename_session",
+    "name": "work"
+  }
+}

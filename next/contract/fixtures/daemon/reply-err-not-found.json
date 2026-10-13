@@ -1,0 +1,9 @@
+{
+  "t": "reply",
+  "id": "c10",
+  "ok": false,
+  "error": {
+    "code": "not_found",
+    "message": "no such pane"
+  }
+}

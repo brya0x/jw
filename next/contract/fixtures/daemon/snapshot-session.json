@@ -1,0 +1,31 @@
+{
+  "t": "snapshot",
+  "node": {
+    "id": "00000000-0000-4000-8000-0000000000a1",
+    "type": "session",
+    "v": 1,
+    "epoch": "00000000-0000-4000-8000-000000000001",
+    "rev": 3,
+    "attention": [],
+    "name": "work",
+    "workspaces": [
+      {
+        "id": "00000000-0000-4000-8000-0000000000b1",
+        "name": "app: feat/login",
+        "kind": "worktree",
+        "path": "/home/u/code/app-login",
+        "branch": "feat/login",
+        "pane_count": 2,
+        "attention": []
+      },
+      {
+        "id": "00000000-0000-4000-8000-0000000000b2",
+        "name": "notes",
+        "kind": "folder",
+        "path": "/home/u/notes",
+        "pane_count": 1,
+        "attention": []
+      }
+    ]
+  }
+}

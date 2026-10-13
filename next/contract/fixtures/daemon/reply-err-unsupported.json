@@ -1,0 +1,9 @@
+{
+  "t": "reply",
+  "id": "c12",
+  "ok": false,
+  "error": {
+    "code": "unsupported",
+    "message": "node type pane has no common version"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "t": "patch",
+  "node": "00000000-0000-4000-8000-0000000000c1",
+  "epoch": "00000000-0000-4000-8000-000000000001",
+  "from": 9,
+  "to": 10,
+  "ops": [
+    {
+      "op": "replace",
+      "path": "/screen/lines/2",
+      "value": "$ ls"
+    },
+    {
+      "op": "replace",
+      "path": "/screen/cursor/col",
+      "value": 4
+    }
+  ]
+}
