@@ -118,6 +118,10 @@ sealed interface Cmd {
 
     @Serializable @SerialName("resize")
     data class Resize(val pane: Id, val rows: Int, val cols: Int) : Cmd
+
+    /** A person looked at [node] at [rev]: the daemon ends the attentions raised up to it, for every client. */
+    @Serializable @SerialName("mark_seen")
+    data class MarkSeen(val node: Id, val rev: Long) : Cmd
 }
 
 /** What the daemon sends. */

@@ -190,6 +190,12 @@ pub enum Cmd {
         rows: u16,
         cols: u16,
     },
+    /// A person looked at `node` at revision `rev`: the daemon ends the attentions it raised
+    /// up to that revision, for every client.
+    MarkSeen {
+        node: Id,
+        rev: u64,
+    },
 }
 
 /// A node: one document of the tree, opened on demand and cached by clients.

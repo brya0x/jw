@@ -45,9 +45,36 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
             workspace,
             remove_worktree,
         } => workspaces::remove_workspace(shared, &workspace, remove_worktree),
+        Cmd::MarkSeen { node, rev } => mark_seen(shared, &node, rev),
         Cmd::NewPane { workspace } => panes::new_pane(shared, &workspace),
         Cmd::ClosePane { pane } => panes::close_pane(shared, &pane),
         Cmd::Write { pane, data } => panes::write(shared, &pane, &data),
         Cmd::Resize { pane, rows, cols } => panes::resize(shared, &pane, rows, cols),
     }
+}
+
+/// End the attentions a node raised up to `rev`, so every client stops showing them.
+fn mark_seen(shared: &Shared, node: &str, rev: u64) -> Done {
+    let mut core = shared.lock();
+    let ended = |own: &mut Vec<crate::model::Own>| {
+        let before = own.len();
+        own.retain(|o| !o.rev.is_some_and(|r| r <= rev));
+        before != own.len()
+    };
+    let mut found = false;
+    for ws in &mut core.model.workspaces {
+        if ws.id == node {
+            found = true;
+            ended(&mut ws.attention);
+        }
+        for p in ws.panes.iter_mut().filter(|p| p.id == node) {
+            found = true;
+            ended(&mut p.attention);
+        }
+    }
+    if !found {
+        return Err(err(ErrorCode::NotFound, format!("no node {node}")));
+    }
+    core.refresh();
+    Ok(None)
 }

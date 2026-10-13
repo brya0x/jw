@@ -166,3 +166,24 @@ class NavigatorTest {
         assertEquals(Screen.Avisos, nav.show(s1, Screen.Avisos).screen)
     }
 }
+
+class SharedSeenTest {
+    private val inner = FixtureSource()
+
+    /** A source that remembers what the phone told the daemon. */
+    private class Recording(private val base: NodeSource) : NodeSource by base {
+        val told = mutableListOf<Pair<String, Long>>()
+        override fun markSeen(id: String, rev: Long) {
+            told += id to rev
+        }
+    }
+
+    @Test
+    fun goingToAnAttentionTellsTheDaemonSoTheOtherClientsClearIt() {
+        val source = Recording(inner)
+        val nav = Navigator(source)
+        val go = homeRows(source.session(), Seen())[0].go!!
+        nav.go(ClientState(), go)
+        assertTrue(source.told.any { (id, rev) -> id == go.node && rev >= go.rev }, "told: ${source.told}")
+    }
+}

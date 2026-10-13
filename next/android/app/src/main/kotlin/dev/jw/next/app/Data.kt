@@ -7,6 +7,7 @@ import dev.jw.next.client.NodeCache
 import dev.jw.next.client.NodeSource
 import dev.jw.next.client.Seen
 import dev.jw.next.contract.ClientMsg
+import dev.jw.next.contract.Cmd
 import dev.jw.next.contract.ContractJson
 import dev.jw.next.contract.DaemonMsg
 import dev.jw.next.contract.Id
@@ -91,6 +92,12 @@ class LiveSource(private val host: String, private val port: Int) : AppSource() 
     override fun open(id: Id) {
         synchronized(lock) { opened.add(id) }
         send(ClientMsg.Open(id, epoch = cachedEpoch(id), since = cachedRev(id)))
+    }
+
+    private var commands = 0
+
+    override fun markSeen(id: Id, rev: Long) {
+        send(ClientMsg.Command("m${++commands}", Cmd.MarkSeen(id, rev)))
     }
 
     fun close() {

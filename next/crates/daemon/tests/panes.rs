@@ -367,3 +367,63 @@ fn bad_pane_requests_are_refused() {
     assert_eq!(e.code, ErrorCode::NotFound);
     d.stop();
 }
+
+#[test]
+fn mark_seen_ends_the_attention_for_every_client_and_a_newer_one_survives() {
+    let (w, d, mut c) = world();
+    let pane = new_pane(&mut c, &w.ws);
+    let mut other = w.sb.client();
+    let root = c.root.clone();
+    for client in [&mut c, &mut other] {
+        client.open(&root).unwrap();
+        assert!(
+            client
+                .wait_until(WAIT, |c| c.nodes.contains_key(&root))
+                .unwrap()
+        );
+    }
+    let waiting = |c: &Client| c.nodes[&root]["attention"].as_array().unwrap().len();
+
+    type_line(&mut c, &pane, r"printf '\033]133;D;3\007'");
+    assert!(other.wait_until(WAIT, |c| waiting(c) == 1).unwrap());
+    let rev = other.nodes[&root]["attention"][0]["rev"].as_u64().unwrap();
+
+    // One client looks; the other stops showing it.
+    c.cmd(Cmd::MarkSeen {
+        node: pane.clone(),
+        rev,
+    })
+    .unwrap()
+    .unwrap();
+    assert!(
+        other.wait_until(WAIT, |c| waiting(c) == 0).unwrap(),
+        "the other client cleared it too"
+    );
+
+    // A later signal is a new attention; looking at the old revision does not end it.
+    type_line(&mut c, &pane, r"printf '\033]133;D;4\007'");
+    assert!(other.wait_until(WAIT, |c| waiting(c) == 1).unwrap());
+    c.cmd(Cmd::MarkSeen {
+        node: pane.clone(),
+        rev,
+    })
+    .unwrap()
+    .unwrap();
+    assert!(
+        !other
+            .wait_until(Duration::from_millis(300), |c| waiting(c) == 0)
+            .unwrap()
+    );
+    assert_eq!(waiting(&other), 1);
+
+    let nowhere = "00000000-0000-4000-8000-0000000000aa".to_owned();
+    let e = c
+        .cmd(Cmd::MarkSeen {
+            node: nowhere,
+            rev: 1,
+        })
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::NotFound);
+    d.stop();
+}

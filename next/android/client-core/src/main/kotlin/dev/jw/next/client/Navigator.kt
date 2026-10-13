@@ -14,6 +14,9 @@ interface NodeSource {
 
     /** Ask for a node to be sent; the fixtures hold everything already. */
     fun open(id: Id) {}
+
+    /** Tell the daemon this phone looked at [id] at [rev], so every client clears it. */
+    fun markSeen(id: Id, rev: Long) {}
 }
 
 sealed interface Screen {
@@ -58,6 +61,7 @@ class Navigator(private val source: NodeSource) {
         val rev = source.node(id)?.rev
             ?: session.workspaces.flatMap { it.attention }.filter { it.node == id }.maxOfOrNull { it.rev }
             ?: return seen
+        source.markSeen(id, rev)
         return seen.mark(id, rev, source.epoch)
     }
 }

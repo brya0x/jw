@@ -293,6 +293,10 @@ pub struct View {
     opened: Option<String>,
     focus: usize,
     status: String,
+    /// The daemon epoch the seen record belongs to.
+    epoch: Option<String>,
+    /// What this terminal looked at and the daemon has not been told yet: (node, revision).
+    outbox: Vec<(String, u64)>,
 }
 
 impl View {
@@ -309,7 +313,29 @@ impl View {
             opened: None,
             focus: 0,
             status: status.to_owned(),
+            epoch: None,
+            outbox: Vec::new(),
         }
+    }
+
+    /// The looks to tell the daemon about, so every client stops showing them.
+    pub fn take_outbox(&mut self) -> Vec<(String, u64)> {
+        std::mem::take(&mut self.outbox)
+    }
+
+    /// Revisions only mean something inside one daemon epoch: a restarted daemon starts over,
+    /// so what this terminal had seen is forgotten.
+    pub fn set_epoch(&mut self, epoch: &str) {
+        if self.epoch.as_deref() != Some(epoch) {
+            self.epoch = Some(epoch.to_owned());
+            self.seen.clear();
+            self.opened = None;
+            self.focus = 0;
+        }
+    }
+
+    pub fn set_status(&mut self, status: &str) {
+        self.status = status.to_owned();
     }
 
     /// Replace what is drawn with the documents the client currently holds.
@@ -385,6 +411,9 @@ impl View {
         });
         let e = self.seen.entry(id.to_owned()).or_insert(0);
         *e = (*e).max(rev);
+        if rev > 0 {
+            self.outbox.push((id.to_owned(), rev));
+        }
     }
 
     fn avisos(&self) -> Vec<(String, String, Attention)> {
@@ -848,13 +877,20 @@ fn key_of(code: KeyCode) -> Option<Key> {
     })
 }
 
-pub fn run() -> Result<(), String> {
+fn connect(view: &mut View) -> Result<Client, String> {
     let socket = identity::socket_path();
     let mut client = Client::connect(&socket, "jwn-tui")
         .map_err(|e| format!("cannot reach {}: {e}", socket.display()))?;
     let root = client.root.clone();
     client.open(&root).map_err(|e| e.to_string())?;
-    let mut view = View::new("en vivo");
+    view.set_epoch(&client.epoch);
+    view.set_status("en vivo");
+    Ok(client)
+}
+
+pub fn run() -> Result<(), String> {
+    let mut view = View::new("conectando");
+    let mut client = connect(&mut view)?;
     // `JWN_TUI_DUMP`: also write each frame, without colours, to this file (for tests).
     let dump = std::env::var_os(identity::env_var("TUI_DUMP"));
     let _term = Terminal::enter().map_err(|e| e.to_string())?;
@@ -879,9 +915,31 @@ pub fn run() -> Result<(), String> {
             }
             last = frame;
         }
-        client
-            .poll(Duration::from_millis(40))
-            .map_err(|e| e.to_string())?;
+        // A lost daemon is waited for, not fatal: the screen stays and says so.
+        if client.poll(Duration::from_millis(40)).is_err() {
+            view.set_status("sin conexión, reintentando");
+            loop {
+                if let Ok(c) = connect(&mut view) {
+                    client = c;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(500));
+                if event::poll(Duration::ZERO).map_err(|e| e.to_string())?
+                    && matches!(
+                        event::read().map_err(|e| e.to_string())?,
+                        Event::Key(KeyEvent {
+                            code: KeyCode::Char('q'),
+                            ..
+                        })
+                    )
+                {
+                    return Ok(());
+                }
+            }
+        }
+        for (node, rev) in view.take_outbox() {
+            let _ = client.cmd(Cmd::MarkSeen { node, rev });
+        }
         while event::poll(Duration::ZERO).map_err(|e| e.to_string())? {
             let Event::Key(KeyEvent {
                 code,
@@ -1029,6 +1087,36 @@ mod tests {
             "going there cleared the attention"
         );
         assert!(v.opened.is_some());
+    }
+
+    #[test]
+    fn a_new_daemon_epoch_forgets_what_was_seen() {
+        let mut v = fixture_view();
+        v.set_epoch("epoch-one");
+        v.press(Key::Enter);
+        let after_open = v.avisos().len();
+        v.set_epoch("epoch-one");
+        assert_eq!(
+            v.avisos().len(),
+            after_open,
+            "the same epoch keeps the record"
+        );
+        v.set_epoch("epoch-two");
+        assert!(
+            v.avisos().len() > after_open,
+            "a restarted daemon's revisions start over"
+        );
+        assert!(v.opened.is_none());
+    }
+
+    #[test]
+    fn looking_is_told_to_the_daemon_so_every_client_clears_it() {
+        let mut v = fixture_view();
+        v.press(Key::Enter);
+        let told = v.take_outbox();
+        assert!(!told.is_empty(), "opening a workspace queues what was seen");
+        assert!(told.iter().all(|(_, rev)| *rev > 0));
+        assert!(v.take_outbox().is_empty(), "each look is told once");
     }
 
     #[test]
