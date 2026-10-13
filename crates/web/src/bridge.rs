@@ -1299,6 +1299,7 @@ fn looking(body: &[u8]) -> bool {
                 | "TextHistory"
                 | "ChatWatch"
                 | "ChatUnwatch"
+                | "Commands"
                 | "ShellWatch"
                 | "ShellUnwatch"
         )

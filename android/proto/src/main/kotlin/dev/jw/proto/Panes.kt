@@ -34,6 +34,9 @@ class ChatBlock(
     val result: String?, val body: String?, val error: Boolean,
 )
 
+/** One thing offered after `/` (`CommandInfo` in `proto.rs`): [name] with its slash, [desc] (empty for Claude's own) and [kind]: `claude`, `user`, `project` or `skill`. */
+class CommandInfo(val name: String, val desc: String, val kind: String)
+
 /** How the turn Claude is in stands (`ChatTurn` in `proto.rs`): when the person's last message was sent (ms since the epoch) and the output tokens since. */
 class ChatTurn(val since: Long, val tokens: Long)
 
@@ -79,6 +82,11 @@ sealed interface PaneEvent {
         val blocks: List<ChatBlock>, val turn: ChatTurn? = null, val bg: Int? = null, val plan: String? = null, val working: Boolean? = null,
     ) : PaneEvent {
         override fun toString() = "Chat(pane=$pane, known=$known, ${blocks.size} blocks)"
+    }
+
+    /** What the Claude in the pane offers after `/` (`DaemonMsg::Commands`, REQ-101). */
+    class Commands(override val pane: Long, val items: List<CommandInfo>) : PaneEvent {
+        override fun toString() = "Commands(pane=$pane, ${items.size} items)"
     }
 
     /**
@@ -165,6 +173,14 @@ object Panes {
                     (o["working"] as? JsonPrimitive)?.booleanOrNull,
                 )
             }
+            "Commands" -> {
+                val items = (o["items"] as? JsonArray)?.takeIf { it.size <= MAX_COMMANDS }?.map { c ->
+                    val co = c as? JsonObject ?: return null
+                    fun str(k: String) = (co[k] as? JsonPrimitive)?.contentOrNull
+                    CommandInfo(str("name") ?: return null, str("desc") ?: "", str("kind") ?: "")
+                } ?: return null
+                PaneEvent.Commands(pane, items)
+            }
             "Shell" -> {
                 val blocks = (o["blocks"] as? JsonArray)?.takeIf { it.size <= MAX_CHAT_BLOCKS }?.map { b ->
                     val bo = b as? JsonObject ?: return null
@@ -192,6 +208,7 @@ object Panes {
     private const val MAX_HISTORY_ROWS = 10_000
     private const val MAX_RUNS = 2000
     private const val MAX_CHAT_BLOCKS = 1000
+    private const val MAX_COMMANDS = 1000
 
     /** `lines` of `Text` and `TextHistory`: rows of runs, `[col, text, fg, bg, attrs]` each; null when malformed. */
     private fun rows(el: kotlinx.serialization.json.JsonElement?, max: Int): List<List<TextRun>>? {
@@ -234,6 +251,9 @@ object Panes {
 
     /** `ClientMsg::ChatWatch`: the conversation of the agent in `pane`, answered as [PaneEvent.Chat]. Allowed in read-only. */
     fun chatWatchFrame(pane: Long): Frame = Frame.Json(buildJsonObject { put("t", "ChatWatch"); put("pane", pane) }.toString())
+
+    /** `ClientMsg::Commands`: what the Claude in `pane` offers after `/`, answered as [PaneEvent.Commands]. Allowed in read-only. */
+    fun commandsFrame(pane: Long): Frame = Frame.Json(buildJsonObject { put("t", "Commands"); put("pane", pane) }.toString())
 
     /** `ClientMsg::ChatUnwatch`. Allowed in read-only. */
     fun chatUnwatchFrame(pane: Long): Frame = Frame.Json(buildJsonObject { put("t", "ChatUnwatch"); put("pane", pane) }.toString())

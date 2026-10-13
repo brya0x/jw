@@ -2148,6 +2148,36 @@ fn a_chat_says_when_its_status_line_says_the_agent_works_and_when_it_stops() {
     assert!(said.contains(&true), "{said:?}");
 }
 
+#[test]
+fn the_commands_a_claude_offers_after_a_slash_are_listed_from_its_files() {
+    let config = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(config.path().join("commands")).unwrap();
+    std::fs::write(
+        config.path().join("commands/ship.md"),
+        "---\ndescription: Ships it\n---\nDo it",
+    )
+    .unwrap();
+    let d = Daemon::start_with(Some(config.path()));
+    let mut c = d.client();
+    let pane = spawn(&mut c, "s", "sleep 30", 40, 5);
+    c.send(&ClientMsg::Commands { pane }).unwrap();
+    let deadline = Instant::now() + TIMEOUT;
+    let items = loop {
+        assert!(Instant::now() < deadline, "no Commands for pane {pane}");
+        if let DaemonMsg::Commands { pane: p, items } = recv(&mut c)
+            && p == pane
+        {
+            break items;
+        }
+    };
+    let by = |n: &str| items.iter().find(|c| c.name == n);
+    assert_eq!(
+        by("/ship").map(|c| (c.desc.as_str(), c.kind.as_str())),
+        Some(("Ships it", "user"))
+    );
+    assert!(by("/help").is_some_and(|c| c.kind == "claude"));
+}
+
 /// The next `Chat` of `pane`.
 fn next_chat(c: &mut Client, pane: PaneId) -> DaemonMsg {
     let deadline = Instant::now() + TIMEOUT;

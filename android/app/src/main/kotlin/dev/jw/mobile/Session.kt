@@ -317,6 +317,7 @@ class Session(
     private val screens = ConcurrentHashMap<Long, PaneText>()
     private val exits = ConcurrentHashMap<Long, Int>()
     private val chats = ConcurrentHashMap<Long, ChatState>()
+    private val commandLists = ConcurrentHashMap<Long, List<dev.jw.proto.CommandInfo>>()
     @Volatile private var chatPane: Long? = null
     private val shells = ConcurrentHashMap<Long, ShellState>()
     private val blockOuts = ConcurrentHashMap<Long, ConcurrentHashMap<Int, BlockOut>>()
@@ -335,12 +336,18 @@ class Session(
     /** The conversation of the agent in `pane`, once the PC has answered (REQ-93); null until then. */
     fun chat(pane: Long): ChatState? = chats[pane]
 
+    /** What the Claude in `pane` offers after `/`, once the PC has answered (REQ-101); null until then. */
+    fun commands(pane: Long): List<dev.jw.proto.CommandInfo>? = commandLists[pane]
+
+    /** Asks again what the Claude in `pane` offers after `/`: the files may have changed. */
+    fun requestCommands(pane: Long) = send(Outgoing.Binary(Panes.commandsFrame(pane)))
+
     /** Follows the conversation of the agent in `pane` (null: none); only one at a time, the one on screen. */
     fun watchChat(pane: Long?) {
         if (pane == chatPane) return
-        chatPane?.let { send(Outgoing.Binary(Panes.chatUnwatchFrame(it))); chats.remove(it) }
+        chatPane?.let { send(Outgoing.Binary(Panes.chatUnwatchFrame(it))); chats.remove(it); commandLists.remove(it) }
         chatPane = pane
-        pane?.let { send(Outgoing.Binary(Panes.chatWatchFrame(it))) }
+        pane?.let { send(Outgoing.Binary(Panes.chatWatchFrame(it))); requestCommands(it) }
         _termRev.update { it + 1 }
     }
 
@@ -396,6 +403,7 @@ class Session(
             is PaneEvent.Text -> screens.getOrPut(e.pane) { PaneText(e.cols, e.rows) }.setScreen(e)
             is PaneEvent.History -> screens[e.pane]?.setHistory(e)
             is PaneEvent.Chat -> chats.compute(e.pane) { _, old -> ChatState.merge(old, e) }
+            is PaneEvent.Commands -> { commandLists[e.pane] = e.items; _termRev.update { it + 1 } }
             is PaneEvent.Shell -> shells.compute(e.pane) { _, old -> ShellState.merge(old, e) }
             is PaneEvent.ShellOut -> {
                 val outs = blockOuts.getOrPut(e.pane) { ConcurrentHashMap() }
@@ -800,7 +808,8 @@ class Session(
                             screens.clear()
                             exits.clear()
                             chats.clear()
-                            chatPane?.let { out.trySend(Outgoing.Binary(Panes.chatWatchFrame(it))) }
+                            commandLists.clear()
+                            chatPane?.let { out.trySend(Outgoing.Binary(Panes.chatWatchFrame(it))); out.trySend(Outgoing.Binary(Panes.commandsFrame(it))) }
                             shells.clear()
                             blockOuts.clear()
                             shellPane?.let { out.trySend(Outgoing.Binary(Panes.shellWatchFrame(it))) }

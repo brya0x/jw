@@ -15,7 +15,7 @@ pub type PaneId = u64;
 
 /// Bumped whenever a message changes shape: a client and a daemon from
 /// different builds refuse each other instead of misreading (RISK-14).
-pub const PROTOCOL: u32 = 24;
+pub const PROTOCOL: u32 = 25;
 
 /// A run of cells of one row that share a style: its first column, its
 /// text (a wide character counts two columns; the cells after it are not
@@ -45,6 +45,16 @@ pub struct ChatBlock {
     pub result: Option<String>,
     pub body: Option<String>,
     pub error: bool,
+}
+
+/// One thing a phone can type after `/` in a Claude conversation (mobile REQ-101): `name` with its slash (`/commit`,
+/// `/plugin:thing` is not listed), `desc` what it says it does (empty for Claude's own, whose words the phone has), and
+/// `kind`: `claude` (its own), `user` (`~/.claude`), `project` (the folder's `.claude`) or `skill`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CommandInfo {
+    pub name: String,
+    pub desc: String,
+    pub kind: String,
 }
 
 /// How the turn Claude is in stands (mobile REQ-99): when the person's last message was sent (ms since
@@ -129,6 +139,10 @@ pub enum ClientMsg {
     /// From now on this connection gets the conversation of the agent in
     /// `pane` as `Chat`: the last blocks at once, then each change.
     ChatWatch {
+        pane: PaneId,
+    },
+    /// Ask which commands the Claude in `pane` offers after `/`: answered with `Commands`.
+    Commands {
         pane: PaneId,
     },
     /// Stop getting `Chat` for `pane` (leaving the workspace does it too).
@@ -455,6 +469,11 @@ pub enum DaemonMsg {
         working: Option<bool>,
         reset: bool,
         blocks: Vec<ChatBlock>,
+    },
+    /// The commands the Claude in `pane` offers after `/`, as the folder it runs in has them (mobile REQ-101).
+    Commands {
+        pane: PaneId,
+        items: Vec<CommandInfo>,
     },
     /// What the shell in `pane` says of itself, when it changes (and in full to a client that asks):
     /// `known` is false while it has marked nothing (it is not one jw started), and the pane is then

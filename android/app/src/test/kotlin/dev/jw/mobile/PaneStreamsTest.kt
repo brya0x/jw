@@ -138,6 +138,9 @@ class PaneStreamsTest {
     @Test fun watchChatAsksForTheConversationAndTheBlocksFillIt() = runBlocking<Unit> {
         fake.enqueue { _, ws -> ws.send(FakeBridge.ready()) }
         fake.onFrame = { f, ws ->
+            if (json(f)?.contains("\"Commands\"") == true) {
+                ws.send(FakeBridge.frame("""{"t":"Commands","pane":7,"items":[{"name":"/commit","desc":"Commits it all","kind":"user"}]}"""))
+            }
             if (json(f)?.contains("ChatWatch") == true) {
                 ws.send(FakeBridge.frame("""{"t":"Chat","pane":7,"known":true,"title":"Mi chat","reset":true,"blocks":[{"i":0,"kind":"user","text":"hola","name":"","arg":"","result":null,"body":null,"error":false}]}"""))
                 ws.send(FakeBridge.frame("""{"t":"Chat","pane":7,"known":true,"title":null,"reset":false,"blocks":[{"i":1,"kind":"text","text":"listo","name":"","arg":"","result":null,"body":null,"error":false}]}"""))
@@ -148,12 +151,16 @@ class PaneStreamsTest {
         s.connected()
         s.watchChat(7)
         assertEquals("""{"t":"ChatWatch","pane":7}""", next())
-        withTimeout(10_000) { while ((s.chat(7)?.blocks?.size ?: 0) < 2) kotlinx.coroutines.delay(10) }
+        // With the conversation it asks what the Claude offers after `/` (REQ-101).
+        assertEquals("""{"t":"Commands","pane":7}""", next())
+        withTimeout(10_000) { while ((s.chat(7)?.blocks?.size ?: 0) < 2 || s.commands(7) == null) kotlinx.coroutines.delay(10) }
+        assertEquals(listOf("/commit"), s.commands(7)!!.map { it.name })
         assertEquals("Mi chat", s.chat(7)!!.title)
         assertEquals(listOf("hola", "listo"), s.chat(7)!!.blocks.map { it.text })
         s.watchChat(null)
         assertEquals("""{"t":"ChatUnwatch","pane":7}""", next())
         assertNull(s.chat(7))
+        assertNull(s.commands(7))
     }
 
     @Test fun watchShellAsksForItsCommandsAndTheirOutputParsesIntoATerminalEach() = runBlocking<Unit> {

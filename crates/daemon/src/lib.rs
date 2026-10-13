@@ -32,6 +32,7 @@ use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_s
 use serde::{Deserialize, Serialize};
 
 mod chat;
+mod commands;
 mod mobile;
 mod outbox;
 mod ring;
@@ -830,6 +831,12 @@ impl Daemon {
             ClientMsg::SplitSnapshots => tx.set_split(),
             ClientMsg::TextView => tx.set_text(),
             ClientMsg::ChatWatch { pane } => self.chat_watch(client, tx, pane)?,
+            ClientMsg::Commands { pane } => {
+                let p = self.pane(pane)?;
+                let cwd = leader_of(&p).and_then(process_cwd);
+                let items = commands::list(cwd.as_deref().map(Path::new));
+                let _ = tx.send(DaemonMsg::Commands { pane, items });
+            }
             ClientMsg::ShellWatch { pane } => self.shell_watch(client, tx, pane)?,
             ClientMsg::ShellUnwatch { pane } => {
                 if let Some(subs) = lock(&self.shells).get_mut(&pane) {

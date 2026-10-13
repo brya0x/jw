@@ -288,7 +288,10 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
         val running = kind == PaneKind.Shell && shell?.running == true
         val chips = if (kind != PaneKind.Shell) emptyList() else if (running) listOf((shell?.blocks?.lastOrNull()?.cmd ?: "") to j.yellow)
             else listOfNotNull((sel?.cwd ?: w.path) to j.dim, w.branch.takeIf { w.kind == Kind.Worktree && it.isNotEmpty() }?.let { "⎇ $it" to j.magenta })
-        if (fullAsk == null) Composer(sel, state, session, remote = remote, live = PaneKinds.live(kind, remote), chips = chips, running = running)
+        if (fullAsk == null) Composer(
+            sel, state, session, remote = remote, live = PaneKinds.live(kind, remote), chips = chips, running = running,
+            commands = sel?.let { session.commands(it.pane) }, onNeedCommands = { sel?.let { session.requestCommands(it.pane) } },
+        )
         if (fullAsk == null) StatusBar("TERM", j.green, sel?.let { "${it.role} · ${term?.let { t -> "${t.cols}×${t.rows}" } ?: "…"} · ^␣ menú" } ?: "sin paneles", route = state.route)
     }
 
@@ -381,6 +384,7 @@ private fun KeyRow(sel: PaneInfo?, term: PaneText?, session: Session, onLeader: 
 private fun Composer(
     sel: PaneInfo?, state: UiState.Connected, session: Session, remote: String?, live: Boolean,
     chips: List<Pair<String, Color>> = emptyList(), running: Boolean = false,
+    commands: List<dev.jw.proto.CommandInfo>? = null, onNeedCommands: () -> Unit = {},
 ) {
     val j = LocalJw.current
     var text by remember(sel?.pane) { mutableStateOf("") }
@@ -415,6 +419,10 @@ private fun Composer(
         text = new
         typedAt = System.currentTimeMillis()
     }
+    // `/` as the first character of a Claude's input opens what it offers (REQ-102); the list is asked again as it opens.
+    val slash = commands != null && sel?.mayHaveConversation() == true && isSlashCommand(text)
+    LaunchedEffect(slash) { if (slash) onNeedCommands() }
+    if (slash && commands != null) SlashList(slashMatches(commands, text), commands.size, onPick = { edit(it.name + " ") })
     if (chips.isNotEmpty()) {
         Row(Modifier.fillMaxWidth().background(j.panel).horizontalScroll(rememberScrollState()).padding(start = 10.dp, end = 10.dp, top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             for ((label, color) in chips) {

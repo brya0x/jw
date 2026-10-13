@@ -1465,6 +1465,7 @@ impl App {
             DaemonMsg::Text { .. }
             | DaemonMsg::TextHistory { .. }
             | DaemonMsg::Chat { .. }
+            | DaemonMsg::Commands { .. }
             | DaemonMsg::Shell { .. }
             | DaemonMsg::ShellOut { .. } => {}
             DaemonMsg::Error { msg } => self.fail(msg),

@@ -44,8 +44,12 @@ pub fn session_id(cmd: &str) -> Option<String> {
     None
 }
 
+/// The tests that point `CLAUDE_CONFIG_DIR` at a folder of their own take turns, whichever module they are in.
+#[cfg(test)]
+pub(crate) static CONFIG_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Claude's config folder: `$CLAUDE_CONFIG_DIR`, else `~/.claude`.
-fn config_dir() -> Option<PathBuf> {
+pub(crate) fn config_dir() -> Option<PathBuf> {
     match std::env::var_os("CLAUDE_CONFIG_DIR").filter(|d| !d.is_empty()) {
         Some(d) => Some(PathBuf::from(d)),
         None => Some(PathBuf::from(std::env::var_os("HOME")?).join(".claude")),
@@ -743,8 +747,7 @@ mod tests {
 
     const UUID: &str = "0f6bd1c2-1111-4222-8333-444455556666";
 
-    /// The tests that point `CLAUDE_CONFIG_DIR` at a folder of their own take turns.
-    static CONFIG: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    use super::CONFIG_ENV as CONFIG;
 
     #[test]
     fn the_session_is_in_the_command_that_started_the_agent() {

@@ -107,6 +107,19 @@ class PanesTest {
         assertEquals(true, busy.working); assertNull(none.working)
     }
 
+    @Test fun parsesTheCommandsAClaudeOffersAfterASlash() {
+        val c = Panes.parse(
+            Frame.Json("""{"t":"Commands","pane":7,"items":[{"name":"/commit","desc":"Commits it all","kind":"user"},{"name":"/help","desc":"","kind":"claude"}]}"""),
+        ) as PaneEvent.Commands
+        assertEquals(7, c.pane)
+        assertEquals(listOf("/commit", "/help"), c.items.map { it.name })
+        assertEquals("Commits it all", c.items[0].desc); assertEquals("claude", c.items[1].kind)
+        // An item that is not an object, or has no name, refuses the message.
+        assertNull(Panes.parse(Frame.Json("""{"t":"Commands","pane":7,"items":[1]}""")))
+        assertNull(Panes.parse(Frame.Json("""{"t":"Commands","pane":7,"items":[{"desc":"x"}]}""")))
+        assertEquals("""{"t":"Commands","pane":7}""", (Panes.commandsFrame(7) as Frame.Json).text)
+    }
+
     @Test fun parsesWhatAShellSaysOfItselfAndItsCommands() {
         val s = Panes.parse(
             Frame.Json(
