@@ -45,6 +45,7 @@ pub fn run() -> Result<(), String> {
         state_dir: dir.join("state"),
         shell: Some("/bin/sh".into()),
         tcp: None,
+        env: Vec::new(),
     };
     let socket = config.socket.clone();
     let daemon =
@@ -75,6 +76,7 @@ fn measure(dir: &std::path::Path, socket: &std::path::Path) -> Result<(), String
             let r = admin
                 .cmd(Cmd::NewPane {
                     workspace: ws.clone(),
+                    program: None,
                 })
                 .map_err(e)?
                 .map_err(|x| x.message)?;

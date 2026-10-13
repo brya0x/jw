@@ -30,6 +30,7 @@ impl Sandbox {
             state_dir: self.dir.join("state"),
             shell: Some("/bin/sh".into()),
             tcp: None,
+            env: Vec::new(),
         }
     }
 

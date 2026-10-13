@@ -38,6 +38,7 @@ fn new_pane(c: &mut Client, ws: &str) -> String {
     let r = c
         .cmd(Cmd::NewPane {
             workspace: ws.into(),
+            program: None,
         })
         .unwrap()
         .unwrap()
@@ -352,6 +353,7 @@ fn bad_pane_requests_are_refused() {
     let e = c
         .cmd(Cmd::NewPane {
             workspace: nowhere.clone(),
+            program: None,
         })
         .unwrap()
         .unwrap_err();

@@ -46,7 +46,7 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
             remove_worktree,
         } => workspaces::remove_workspace(shared, &workspace, remove_worktree),
         Cmd::MarkSeen { node, rev } => mark_seen(shared, &node, rev),
-        Cmd::NewPane { workspace } => panes::new_pane(shared, &workspace),
+        Cmd::NewPane { workspace, program } => panes::new_pane(shared, &workspace, program),
         Cmd::ClosePane { pane } => panes::close_pane(shared, &pane),
         Cmd::Write { pane, data } => panes::write(shared, &pane, &data),
         Cmd::Resize { pane, rows, cols } => panes::resize(shared, &pane, rows, cols),

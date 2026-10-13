@@ -3,6 +3,7 @@
 mod commands;
 mod core;
 mod git;
+mod launch;
 mod model;
 mod panes;
 mod persist;

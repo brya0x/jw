@@ -41,6 +41,8 @@ pub struct Config {
     /// `adb reverse`. Anything on this machine that connects controls every pane, so it is
     /// off unless asked for (`$<PREFIX>_TCP`).
     pub tcp: Option<SocketAddr>,
+    /// Extra environment for every pane's shell.
+    pub env: Vec<(String, String)>,
 }
 
 impl Config {
@@ -52,6 +54,7 @@ impl Config {
             tcp: std::env::var(identity::env_var("TCP"))
                 .ok()
                 .and_then(|v| v.parse().ok()),
+            env: Vec::new(),
         }
     }
 
@@ -107,6 +110,7 @@ impl Daemon {
             Some(config.session_file()),
             events,
             shell,
+            config.env.clone(),
         ))));
         let engine = {
             let shared = shared.clone();

@@ -1,0 +1,13 @@
+{
+  "t": "cmd",
+  "id": "c10",
+  "cmd": {
+    "cmd": "new_pane",
+    "workspace": "00000000-0000-4000-8000-0000000000b1",
+    "program": [
+      "claude",
+      "--resume",
+      "7c1d2f7a-3b4e-4c55-9a10-0e5f2d9a8b11"
+    ]
+  }
+}

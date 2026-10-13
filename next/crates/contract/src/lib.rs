@@ -174,8 +174,12 @@ pub enum Cmd {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         remove_worktree: bool,
     },
+    /// Open a pane: the user's shell, with `program` run inside it when given (the shell
+    /// starts it, and is still there when it ends).
     NewPane {
         workspace: Id,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        program: Option<Vec<String>>,
     },
     ClosePane {
         pane: Id,

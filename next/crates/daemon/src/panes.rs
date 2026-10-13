@@ -26,8 +26,14 @@ pub(crate) fn basename(shell: &str) -> String {
         .map_or_else(|| shell.to_owned(), |n| n.to_string_lossy().into_owned())
 }
 
-pub fn new_pane(shared: &Shared, workspace: &Id) -> Done {
-    let (path, events, shell) = {
+/// Open a pane; with `program`, the shell starts it and stays when it ends. An agent gets
+/// its conversation id here, so a restart can resume it.
+pub fn new_pane(shared: &Shared, workspace: &Id, program: Option<Vec<String>>) -> Done {
+    if program.as_ref().is_some_and(|p| p.is_empty()) {
+        return Err(err(ErrorCode::BadRequest, "program is empty"));
+    }
+    let argv = program.map(|p| crate::launch::with_session(&p, new_id));
+    let (path, events, shell, env) = {
         let core = shared.lock();
         let ws = core
             .model
@@ -35,11 +41,16 @@ pub fn new_pane(shared: &Shared, workspace: &Id) -> Done {
             .iter()
             .find(|w| w.id == *workspace)
             .ok_or_else(|| err(ErrorCode::NotFound, format!("no workspace {workspace}")))?;
-        (ws.path.clone(), core.events.clone(), core.shell.clone())
+        (
+            ws.path.clone(),
+            core.events.clone(),
+            core.shell.clone(),
+            core.env.clone(),
+        )
     };
     let id = new_id();
-    let term =
-        pty::spawn(&id, &shell, Path::new(&path), events).map_err(|m| err(ErrorCode::Io, m))?;
+    let term = pty::spawn(&id, &shell, Path::new(&path), argv.as_deref(), &env, events)
+        .map_err(|m| err(ErrorCode::Io, m))?;
     let mut core = shared.lock();
     let Some(ws) = core
         .model
@@ -62,6 +73,7 @@ pub fn new_pane(shared: &Shared, workspace: &Id) -> Done {
         attention: Vec::new(),
         running: None,
         last_program: None,
+        resume: argv.as_deref().and_then(crate::launch::agent_resume),
     });
     core.attach_term(&id, term);
     core.refresh();
@@ -106,28 +118,55 @@ pub fn resize(shared: &Shared, pane: &Id, rows: u16, cols: u16) -> Done {
 /// Start the shells of the panes a restored session remembers; a pane whose shell cannot
 /// start is dropped (its workspace stays).
 pub fn restore(shared: &Shared) {
-    let (events, shell, wanted) = {
+    let (events, shell, env, wanted) = {
         let core = shared.lock();
-        let wanted: Vec<(Id, String, String)> = core
+        let wanted: Vec<(Id, String, String, Option<Vec<String>>)> = core
             .model
             .workspaces
             .iter()
             .flat_map(|w| {
-                w.panes
-                    .iter()
-                    .map(|p| (p.id.clone(), p.shell.clone(), p.cwd.clone()))
+                w.panes.iter().map(|p| {
+                    (
+                        p.id.clone(),
+                        p.shell.clone(),
+                        p.cwd.clone(),
+                        p.resume.clone(),
+                    )
+                })
             })
             .collect();
-        (core.events.clone(), core.shell.clone(), wanted)
+        (
+            core.events.clone(),
+            core.shell.clone(),
+            core.env.clone(),
+            wanted,
+        )
     };
     let mut failed = Vec::new();
-    for (id, saved_shell, cwd) in wanted {
+    let mut resumed = Vec::new();
+    for (id, saved_shell, cwd, resume) in wanted {
         let shell = if saved_shell.is_empty() {
             shell.clone()
         } else {
             saved_shell
         };
-        match pty::spawn(&id, &shell, Path::new(&cwd), events.clone()) {
+        // An agent that was running comes back with its conversation, when it has one saved;
+        // anything else is a shell.
+        let resume = resume.filter(|argv| {
+            argv.get(2)
+                .is_some_and(|id| crate::launch::transcript_exists(&env, id))
+        });
+        if resume.is_some() {
+            resumed.push(id.clone());
+        }
+        match pty::spawn(
+            &id,
+            &shell,
+            Path::new(&cwd),
+            resume.as_deref(),
+            &env,
+            events.clone(),
+        ) {
             Ok(term) => shared.lock().attach_term(&id, term),
             Err(m) => {
                 eprintln!("pane {id} not restored: {m}");
@@ -138,6 +177,14 @@ pub fn restore(shared: &Shared) {
     let mut core = shared.lock();
     for ws in &mut core.model.workspaces {
         ws.panes.retain(|p| !failed.contains(&p.id));
+        // The title says what runs now; the saved one names a program that may be gone.
+        for p in &mut ws.panes {
+            p.title = basename(&p.shell);
+            // What was not brought back is not waiting to be.
+            if !resumed.contains(&p.id) {
+                p.resume = None;
+            }
+        }
     }
     core.refresh();
 }

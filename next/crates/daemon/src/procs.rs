@@ -16,8 +16,8 @@ use crate::server::Shared;
 const EVERY: Duration = Duration::from_millis(700);
 
 /// Interpreters that stand in front of the program the person thinks they ran.
-const RUNTIMES: [&str; 8] = [
-    "node", "python", "python3", "ruby", "bun", "deno", "perl", "java",
+const RUNTIMES: [&str; 12] = [
+    "node", "python", "python3", "ruby", "bun", "deno", "perl", "java", "sh", "bash", "zsh", "fish",
 ];
 
 fn file_name(path: &str) -> &str {

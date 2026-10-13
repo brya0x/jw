@@ -953,7 +953,10 @@ pub fn run() -> Result<(), String> {
             match view.press(key) {
                 After::Quit => return Ok(()),
                 After::NewPane(workspace) => {
-                    let _ = client.cmd(Cmd::NewPane { workspace });
+                    let _ = client.cmd(Cmd::NewPane {
+                        workspace,
+                        program: None,
+                    });
                 }
                 After::Continue => {}
             }

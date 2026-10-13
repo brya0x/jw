@@ -62,6 +62,8 @@ pub struct Core {
     /// Where terminals report to, and the shell they start.
     pub events: Sender<Event>,
     pub shell: String,
+    /// Extra environment for every pane's shell.
+    pub env: Vec<(String, String)>,
 }
 
 impl Core {
@@ -70,6 +72,7 @@ impl Core {
         save_path: Option<PathBuf>,
         events: Sender<Event>,
         shell: String,
+        env: Vec<(String, String)>,
     ) -> Core {
         let mut core = Core {
             epoch: crate::model::new_id(),
@@ -83,6 +86,7 @@ impl Core {
             screens: HashMap::new(),
             events,
             shell,
+            env,
         };
         core.refresh();
         core
@@ -115,6 +119,8 @@ impl Core {
             if new.is_none() {
                 p.last_program = p.running.take();
             }
+            // An agent with a known conversation is what a restart brings back.
+            p.resume = new.as_deref().and_then(crate::launch::agent_resume);
             p.title = new
                 .as_deref()
                 .and_then(crate::procs::title_for)
@@ -522,7 +528,13 @@ mod tests {
     use crate::model::{Pane, Workspace, new_id};
 
     fn test_core(model: Model) -> Core {
-        Core::new(model, None, std::sync::mpsc::channel().0, "/bin/sh".into())
+        Core::new(
+            model,
+            None,
+            std::sync::mpsc::channel().0,
+            "/bin/sh".into(),
+            Vec::new(),
+        )
     }
 
     fn model_with_pane() -> (Model, Id, Id) {
@@ -543,6 +555,7 @@ mod tests {
                 attention: vec![],
                 running: None,
                 last_program: None,
+                resume: None,
             }],
             attention: vec![],
         });

@@ -46,6 +46,10 @@ pub struct Pane {
     /// The program that ran last, kept so a restart can bring it back.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_program: Option<Vec<String>>,
+    /// How to bring back the agent that was running when the daemon last saved: set while it
+    /// runs, cleared when it ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume: Option<Vec<String>>,
 }
 
 /// An attention a node raised itself. Not saved: it describes what is happening now.
