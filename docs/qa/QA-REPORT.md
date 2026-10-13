@@ -105,14 +105,14 @@ Fail: B-01, B-07, B-08.
 
 This is a list for a fix worktree; QA changed no product code.
 
-**B-19, the owner's direction: the row says what is waiting, not "y / n".** Replace the y/n buttons on the Home row and in Avisos with a label for the thing Claude is blocked on, and one way in:
+**B-19, the owner's direction: the row says what is waiting, not "y / n", and y/n goes away.** Replace the y/n buttons on the Home row and in Avisos with a label for the thing Claude is blocked on, and one way in:
 - plan: `plan · añadir d.txt` (from `ExitPlanMode`), button **ver plan**;
 - one or several questions: `pregunta · Red or blue?` / `elige varias · Which of a, b, c`, button **responder**;
-- permission for a tool: `permiso · Write b.txt` / `permiso · Bash: rm -rf x`, button **revisar**; a plain yes/no may keep y/n only when the row also shows that line, never alone;
+- permission for a tool: `permiso · Write b.txt` / `permiso · Bash: rm -rf x`, button **revisar**;
 - the screen-only cases (trust dialog, picker, `/config`): `Claude espera en pantalla`, button **abrir**.
 Every button opens the full-screen question already built (REQ-98), which has the whole plan, options and preview. Avisos lists the same line per pane.
 - Where the data comes from: the transcript already holds it. The pending call is the last `tool_use` with no `tool_result` (the chat card already says "espera permiso"), and `chat.rs` `summarise()` already makes its one-line summary (`ExitPlanMode` carries the plan body). The daemon would send it per pane (for example `PaneInfo.waiting_for {kind, tool, summary}`), which needs a `PROTOCOL` bump. For a pane with no transcript (the trust dialog) the kind is `screen`.
-- Remove `y · aprobar` / `n · rechazar` from the Home row; keep Settings "respuestas rápidas" only for a plain permission and say so there.
+- **No y/n anywhere** (owner's decision): remove `y · aprobar` / `n · rechazar` from the Home row and the y/n from Avisos, plain permissions included; the row shows the waiting tool or question and its button opens the full-screen question. That makes Settings "respuestas rápidas" (REQ-55) and the y/n parts of REQ-20 and REQ-28 obsolete: drop them with the change, and update `mobile.md` in the same commit.
 
 **The rest, in order:** B-01 crash; B-02, B-03, B-10 with a "ver pantalla" toggle and a Shift+Tab key; B-08 reconnect back to the pane; B-05, B-06 layout; B-07, B-04 theme and the `/model` default; then the low rows B-09 to B-18.
 
