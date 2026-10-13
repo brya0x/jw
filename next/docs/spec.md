@@ -78,13 +78,16 @@ Transport: JSON lines on a Unix socket (mode 0600, in a 0700 dir) whose path com
 - REQ-36 THE phone SHALL NOT offer approve or deny controls on Home or Avisos.
 - REQ-37 THE pane screens (claude, dev, shell) SHALL stay as in `docs/specs/mobile-prototype.html`; only the key row changes (REQ-38).
 - REQ-38 THE key row of a pane SHALL be one slim borderless line of at most 8 keys: `^␣ esc tab ↑ ↓ ← → ^C`.
+- REQ-39 THE Android client SHALL draw Home, Avisos and a workspace's panes from the shared fixtures, under the application id and label of `identity.toml`, beside any other jw app.
+- REQ-40 THE pane tabs SHALL be labelled with the pane's `title` (the program running in the shell, else the shell); a pane SHALL NOT have a role chosen at creation.
+- REQ-41 WHEN a patch does not start at the revision a client holds, or its epoch differs, THEN the client SHALL drop the node and open it again for a snapshot.
 - REQ-18 IF a client's outbox is full, THEN the daemon SHALL disconnect that client and no other.
 
-REQ-1 to REQ-7, REQ-12 and REQ-13 are enforced by N1 (`crates/contract/tests/conformance.rs`, `crates/identity`). REQ-8, 9, 10, 11, 15, 16, 17 are enforced by N2 (`crates/daemon/tests/session.rs`, `src/core.rs` tests); REQ-19 to REQ-22 are enforced by N3 (`crates/daemon/tests/workspaces.rs`, against real git); REQ-18 is implemented (bounded outbox) and untested; REQ-14 and REQ-23 to REQ-27 are enforced by N4 (`crates/daemon/tests/panes.rs`, real `/bin/sh` PTYs). REQ-31 and REQ-32 by N6 (`android/contract`, `just android`). REQ-28 to REQ-30 by N5 (`tests/session.rs`, `contract/src/patch.rs` tests, `crates/jwn/tests/e2e.rs`).
+REQ-1 to REQ-7, REQ-12 and REQ-13 are enforced by N1 (`crates/contract/tests/conformance.rs`, `crates/identity`). REQ-8, 9, 10, 11, 15, 16, 17 are enforced by N2 (`crates/daemon/tests/session.rs`, `src/core.rs` tests); REQ-19 to REQ-22 are enforced by N3 (`crates/daemon/tests/workspaces.rs`, against real git); REQ-18 is implemented (bounded outbox) and untested; REQ-14 and REQ-23 to REQ-27 are enforced by N4 (`crates/daemon/tests/panes.rs`, real `/bin/sh` PTYs). REQ-33 to REQ-35 and REQ-39 to REQ-41 by N8 (`android/client-core` tests, `just android`; the Compose screens are built and linted, not UI-tested). REQ-31 and REQ-32 by N6 (`android/contract`, `just android`). REQ-28 to REQ-30 by N5 (`tests/session.rs`, `contract/src/patch.rs` tests, `crates/jwn/tests/e2e.rs`).
 
 ---
 ## Mobile UI (the simple version)
-Design baseline and the thing to approve: `docs/prototypes/mobile.html` (REQ-33 to REQ-38). The mark glyphs are `!` permission, `?` question, `◆` plan, `❯` command done (`✗` on a non-zero exit), `✓` agent done, `…` screen, `⚑` merged, `✗` CI failed; the existing `✻` agent and `⚡` dev stay. Only `shell_done` has a producer in the daemon today.
+A pane is a zsh (the user's `$SHELL`); claude or nvim run inside it, so the tab shows what runs there and the screen is a terminal. The claude-style conversation view comes when the daemon detects an agent in a pane, not from a role. Design baseline and the thing to approve: `docs/prototypes/mobile.html` (REQ-33 to REQ-38). The mark glyphs are `!` permission, `?` question, `◆` plan, `❯` command done (`✗` on a non-zero exit), `✓` agent done, `…` screen, `⚑` merged, `✗` CI failed; the existing `✻` agent and `⚡` dev stay. Only `shell_done` has a producer in the daemon today.
 
 ## Rationale
 - RAT-1 **Fixtures, not generated code, are the contract.** Generated Kotlin from a schema is poor and hides drift; two hand-written sets of types checked against the same files cannot drift without a red test. The round trip (parse then write equals the file) catches a field one side drops.
@@ -150,4 +153,5 @@ Corrections to the model: the level 0 document is smaller than assumed (3.9 KB, 
 | N4 ✓ `43eab72` | panes: PTY shell, screen node, input, resize, close, restore | 14, 23–27 | `crates/daemon/src/{pty,panes}.rs` |
 | N5 ✓ `0921e63` | wire measurements (`jwn bench`) and the JSON-only end-to-end test | 28–30 | `crates/jwn/src/bench.rs`, `crates/jwn/tests/e2e.rs` |
 | N6 | the Kotlin conformance suite: types, schema validation, patch cases | 31, 32 | `android/contract`, `contract/fixtures/patch-cases` |
-| N7 | the mobile UI spec: attention marks, go row, Avisos, per-phone seen, slim key row | 33–38 | `docs/prototypes/mobile.html` |
+| N7 ✓ `2570339` | the mobile UI spec: attention marks, go row, Avisos, per-phone seen, slim key row | 33–38 | `docs/prototypes/mobile.html` |
+| N8 | the Android client on fixtures: `client-core` (seen, navigator, node cache) and the Compose app | 39–41 | `android/client-core`, `android/app` |

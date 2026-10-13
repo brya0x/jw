@@ -14,4 +14,4 @@ test:
 
 # The Kotlin side of the contract: the same fixtures, parsed and re-written by Kotlin.
 android:
-    cd android && ./gradlew --no-daemon :contract:test
+    cd android && ./gradlew --no-daemon :contract:test :client-core:test :app:lintDebug :app:assembleDebug

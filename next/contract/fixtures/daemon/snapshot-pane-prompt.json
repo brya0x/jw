@@ -1,0 +1,41 @@
+{
+  "t": "snapshot",
+  "node": {
+    "id": "00000000-0000-4000-8000-0000000000c2",
+    "type": "pane",
+    "v": 1,
+    "epoch": "00000000-0000-4000-8000-000000000001",
+    "rev": 5,
+    "attention": [
+      {
+        "kind": "permission",
+        "node": "00000000-0000-4000-8000-0000000000c2",
+        "rev": 4
+      },
+      {
+        "kind": "agent_done",
+        "node": "00000000-0000-4000-8000-0000000000c2",
+        "rev": 5
+      }
+    ],
+    "workspace": "00000000-0000-4000-8000-0000000000b1",
+    "title": "zsh",
+    "shell": "/bin/zsh",
+    "cwd": "/home/u/code/app-login",
+    "screen": {
+      "rows": 4,
+      "cols": 40,
+      "lines": [
+        "$ git status",
+        "On branch feat/login",
+        "$ ",
+        ""
+      ],
+      "cursor": {
+        "row": 3,
+        "col": 2,
+        "visible": true
+      }
+    }
+  }
+}
