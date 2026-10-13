@@ -1,5 +1,5 @@
 ---
-status: draft
+status: built (N0–N5); UIs and the Android conformance suite are next
 scope: [next/contract, next/crates/contract, next/crates/daemon]
 depends_on: []
 supersedes: []
@@ -67,9 +67,12 @@ Transport: JSON lines on a Unix socket (mode 0600, in a 0700 dir) whose path com
 - REQ-25 WHEN a pane's shell prints a command-finished mark, the daemon SHALL raise `shell_done` with its exit code on that pane and every ancestor; WHEN the next command starts, it SHALL end it.
 - REQ-26 WHEN a pane or its workspace is removed, the daemon SHALL end its shell.
 - REQ-27 WHEN the daemon restarts, each saved pane SHALL get a new shell under the same id.
+- REQ-28 WHILE no node a client has open changes, the daemon SHALL send that client nothing.
+- REQ-29 WHEN an item is added to or removed from the end of a list in a node, the patch SHALL be one `add` or `remove` op for it, not the whole list.
+- REQ-30 THE daemon SHALL be drivable with JSON alone through the `jwn` binary: start, commands, stop, restart, state restored (`crates/jwn/tests/e2e.rs`).
 - REQ-18 IF a client's outbox is full, THEN the daemon SHALL disconnect that client and no other.
 
-REQ-1 to REQ-7, REQ-12 and REQ-13 are enforced by N1 (`crates/contract/tests/conformance.rs`, `crates/identity`). REQ-8, 9, 10, 11, 15, 16, 17 are enforced by N2 (`crates/daemon/tests/session.rs`, `src/core.rs` tests); REQ-19 to REQ-22 are enforced by N3 (`crates/daemon/tests/workspaces.rs`, against real git); REQ-18 is implemented (bounded outbox) and untested; REQ-14 and REQ-23 to REQ-27 are enforced by N4 (`crates/daemon/tests/panes.rs`, real `/bin/sh` PTYs).
+REQ-1 to REQ-7, REQ-12 and REQ-13 are enforced by N1 (`crates/contract/tests/conformance.rs`, `crates/identity`). REQ-8, 9, 10, 11, 15, 16, 17 are enforced by N2 (`crates/daemon/tests/session.rs`, `src/core.rs` tests); REQ-19 to REQ-22 are enforced by N3 (`crates/daemon/tests/workspaces.rs`, against real git); REQ-18 is implemented (bounded outbox) and untested; REQ-14 and REQ-23 to REQ-27 are enforced by N4 (`crates/daemon/tests/panes.rs`, real `/bin/sh` PTYs). REQ-28 to REQ-30 by N5 (`tests/session.rs`, `contract/src/patch.rs` tests, `crates/jwn/tests/e2e.rs`).
 
 ---
 ## Rationale
@@ -80,6 +83,24 @@ REQ-1 to REQ-7, REQ-12 and REQ-13 are enforced by N1 (`crates/contract/tests/con
 - RAT-5 **RFC 6902 subset** is known, small, and easy to apply in Kotlin; array edits go by index and are safe because a patch always applies on exactly `from`.
 - RAT-6 **One daemon is one session** in v1: a second session is a second daemon and socket (`JWN_SOCKET`). The session node's id is stable across restarts; its `epoch` is not.
 - RAT-7 **The shell is the pane's process** (the program is launched as `$SHELL -i -c '<program>; exec $SHELL -i'`) so no keystrokes race the prompt, the exit status is exact and the pane survives the program. Detail lands with the first feature that launches a program.
+
+## Measurements (N5, `jwn bench`)
+25 workspaces × 2 panes, real `/bin/sh` shells, release build, Unix socket, one machine (reproduce with `cargo run --release -p jwn -- bench`).
+
+| What | Measured | The brain's model |
+|---|---|---|
+| level 0 snapshot (session, 25 summaries) | 3.9 KB | about 17 KB |
+| level 1 (one workspace) / level 2 (one pane, 24×80) | 0.4 KB / 0.4 KB | |
+| every node opened (1 + 25 + 50) | 36 KB | |
+| patch: rename, or add a workspace | 0.2 KB / 0.3 KB | about 0.3 KB |
+| patch: a command ends with an exit code (3 patches: pane, workspace, session) | 1.3 KB | |
+| idle, 76 nodes open | 0 bytes | about 34 KB per 10 min |
+| resume check with a current cache | 0.25 KB (request and empty patch) | |
+| polling the session snapshot every 10 s for 10 min | 234 KB (resume checks: 15 KB) | about 3 MB |
+| command to reply / visible on a second client (p50, p95) | 0.5 ms, 1.6 ms / 0.5 ms, 1.7 ms | |
+| keystrokes to the output visible on a second client (p50, p95) | 28 ms, 31 ms (20 ms of it is the coalescing window) | |
+
+Corrections to the model: the level 0 document is smaller than assumed (3.9 KB, because panes are not in it); pushing makes idle cost zero instead of about 34 KB, and a phone that only polls pays 15 KB per 10 minutes with resume checks. The first measurement showed a 4.1 KB patch for adding one workspace because a list that changed length was replaced whole; `diff` now appends and trims (REQ-29, 0.3 KB).
 
 ## Risks
 - RISK-1 Index-based patch paths break if a client applies a patch to a node at a revision other than `from`. Mitigation: a client that sees a gap drops the node and reopens it for a snapshot.
@@ -109,5 +130,5 @@ REQ-1 to REQ-7, REQ-12 and REQ-13 are enforced by N1 (`crates/contract/tests/con
 | N1 ✓ `9b1e7bd` | node and message spec, JSON Schema, fixtures, Rust conformance | 1–7, 12 | `contract/`, `crates/contract` |
 | N2 ✓ `759e5d2` | daemon core: socket, hello/epoch, tree, persistence, patches | 8–11, 15–18 | `crates/{wire,daemon,jwn}` |
 | N3 ✓ `6b0f336` | folders and git worktrees as workspaces | 19–22 | `crates/daemon/src/{git,workspaces}.rs` | |
-| N4 | panes: PTY shell, screen node, input, resize, close, restore | 14, 23–27 | `crates/daemon/src/{pty,panes}.rs` |
-| N5 | wire measurements and the JSON-only end-to-end script | | |
+| N4 ✓ `43eab72` | panes: PTY shell, screen node, input, resize, close, restore | 14, 23–27 | `crates/daemon/src/{pty,panes}.rs` |
+| N5 ✓ (this commit) | wire measurements (`jwn bench`) and the JSON-only end-to-end test | 28–30 | `crates/jwn/src/bench.rs`, `crates/jwn/tests/e2e.rs` |

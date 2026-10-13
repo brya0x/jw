@@ -50,9 +50,21 @@ fn diff_at(old: &Value, new: &Value, path: String, ops: &mut Vec<PatchOp>) {
                 }
             }
         }
-        (Value::Array(a), Value::Array(b)) if a.len() == b.len() => {
+        (Value::Array(a), Value::Array(b)) => {
             for (i, (x, y)) in a.iter().zip(b).enumerate() {
                 diff_at(x, y, format!("{path}/{i}"), ops);
+            }
+            // Then drop the tail (last first, so indexes stay valid) or append the new items.
+            for i in (b.len()..a.len()).rev() {
+                ops.push(PatchOp::Remove {
+                    path: format!("{path}/{i}"),
+                });
+            }
+            for item in b.iter().skip(a.len()) {
+                ops.push(PatchOp::Add {
+                    path: format!("{path}/-"),
+                    value: item.clone(),
+                });
             }
         }
         _ => ops.push(PatchOp::Replace {
@@ -152,6 +164,10 @@ mod tests {
         round(json!({"a": 1, "b": 2}), json!({"a": 1}));
         round(json!({"l": [1, 2, 3]}), json!({"l": [1, 9, 3]}));
         round(json!({"l": [1, 2, 3]}), json!({"l": [1, 2]}));
+        round(json!({"l": [1, 2, 3]}), json!({"l": [1, 2, 3, 4, 5]}));
+        round(json!({"l": [1, 2, 3]}), json!({"l": [2, 3]}));
+        round(json!({"l": [{"a": 1}]}), json!({"l": [{"a": 1}, {"a": 2}]}));
+        round(json!({"l": [1]}), json!({"l": []}));
         round(
             json!({"o": {"x": {"y": [{"z": 1}]}}}),
             json!({"o": {"x": {"y": [{"z": 2}]}}}),
@@ -162,6 +178,21 @@ mod tests {
     #[test]
     fn an_unchanged_document_has_no_ops() {
         assert!(diff(&json!({"a": [1, {"b": 2}]}), &json!({"a": [1, {"b": 2}]})).is_empty());
+    }
+
+    #[test]
+    fn appending_an_item_is_one_small_op() {
+        let ops = diff(
+            &json!({"l": [{"a": 1}]}),
+            &json!({"l": [{"a": 1}, {"a": 2}]}),
+        );
+        assert_eq!(
+            ops,
+            [PatchOp::Add {
+                path: "/l/-".into(),
+                value: json!({"a": 2})
+            }]
+        );
     }
 
     #[test]

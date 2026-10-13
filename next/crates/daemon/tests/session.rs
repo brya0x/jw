@@ -311,3 +311,17 @@ fn bad_lines_get_an_error_and_the_connection_lives() {
     ));
     d.stop();
 }
+
+#[test]
+fn nothing_is_sent_while_nothing_changes() {
+    let sb = Sandbox::new();
+    let d = sb.start();
+    let mut c = sb.client();
+    let root = c.root.clone();
+    c.open(&root).unwrap();
+    assert!(c.wait_until(WAIT, |c| c.nodes.contains_key(&root)).unwrap());
+    let before = c.bytes_in;
+    c.wait_until(Duration::from_millis(500), |_| false).unwrap();
+    assert_eq!(c.bytes_in, before, "an idle watcher receives nothing");
+    d.stop();
+}

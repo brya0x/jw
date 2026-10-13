@@ -24,3 +24,8 @@ what they do and why, never pasted.
 |---|---|
 | `crates/identity` | the product identity and the paths/env names derived from it |
 | `crates/contract` | the Rust types of the JSON documents; `tests/conformance.rs` checks them against `contract/` |
+| `crates/wire` | the transport (JSON lines on a Unix socket) and `Client`, a client with a node cache |
+| `crates/daemon` | the session, the node tree, patches, git worktrees, PTY panes |
+| `crates/jwn` | the binary: `daemon`, `stop`, `watch`, `cmd`, `bench`; the JSON end-to-end test |
+
+Never reach a real daemon from a test: use a private socket dir (`JWN_SOCKET`, `JWN_STATE_DIR`) and stop it with `jwn stop` (it signals only the pid recorded in that dir, and only while the socket answers).

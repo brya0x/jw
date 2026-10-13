@@ -13,3 +13,6 @@ daemon = { path = "../daemon" }
 identity = { path = "../identity" }
 wire = { path = "../wire" }
 serde_json = "1"
+
+[dev-dependencies]
+serde_json = "1"

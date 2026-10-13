@@ -1,5 +1,7 @@
 //! `jwn`: the daemon and a few JSON-speaking commands to drive and watch it.
 
+mod bench;
+
 use std::process::ExitCode;
 use std::time::Duration;
 
@@ -11,7 +13,8 @@ const USAGE: &str = "usage:
   jwn daemon              run the daemon (foreground)
   jwn stop                stop the daemon recorded in the pid file
   jwn watch [NODE]        print every JSON line for NODE (default: the session)
-  jwn cmd '<json cmd>'    send one command, print its reply (exit 1 if it failed)";
+  jwn cmd '<json cmd>'    send one command, print its reply (exit 1 if it failed)
+  jwn bench               measure sizes and latency on a private daemon";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -26,6 +29,7 @@ fn main() -> ExitCode {
         ["watch"] => watch(None),
         ["watch", node] => watch(Some(node)),
         ["cmd", json] => cmd(json),
+        ["bench"] => bench::run().map(|()| ExitCode::SUCCESS),
         _ => Err(USAGE.into()),
     };
     match result {
