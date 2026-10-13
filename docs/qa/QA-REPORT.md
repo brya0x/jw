@@ -101,6 +101,21 @@ Fail: B-01, B-07, B-08.
 - What it would cost: the phone's look (bubbles, blocks, full-screen questions) is not the TUI's look, so a widget tree would need a second renderer on the phone or a semantic layer on top, and every TUI change becomes a protocol bump (PROTOCOL is already at 25).
 - A safer shape is **semantic state, not widget state**: one replicated document per workspace (panes, agent state, chat blocks, pending question, plan, background count) sent as versioned diffs, with the screen text as a fallback field. Much of it exists (`Chat`, `Shell`, `Panes`, `Text`); the real gain is a single revision number and resync after reconnect. This QA did not measure message sizes, so the "ultra compact" benefit is unevidenced; the screen text is the only large payload I saw.
 
+## Suggested changes (all of the above, with the owner's design for B-19)
+
+This is a list for a fix worktree; QA changed no product code.
+
+**B-19, the owner's direction: the row says what is waiting, not "y / n".** Replace the y/n buttons on the Home row and in Avisos with a label for the thing Claude is blocked on, and one way in:
+- plan: `plan · añadir d.txt` (from `ExitPlanMode`), button **ver plan**;
+- one or several questions: `pregunta · Red or blue?` / `elige varias · Which of a, b, c`, button **responder**;
+- permission for a tool: `permiso · Write b.txt` / `permiso · Bash: rm -rf x`, button **revisar**; a plain yes/no may keep y/n only when the row also shows that line, never alone;
+- the screen-only cases (trust dialog, picker, `/config`): `Claude espera en pantalla`, button **abrir**.
+Every button opens the full-screen question already built (REQ-98), which has the whole plan, options and preview. Avisos lists the same line per pane.
+- Where the data comes from: the transcript already holds it. The pending call is the last `tool_use` with no `tool_result` (the chat card already says "espera permiso"), and `chat.rs` `summarise()` already makes its one-line summary (`ExitPlanMode` carries the plan body). The daemon would send it per pane (for example `PaneInfo.waiting_for {kind, tool, summary}`), which needs a `PROTOCOL` bump. For a pane with no transcript (the trust dialog) the kind is `screen`.
+- Remove `y · aprobar` / `n · rechazar` from the Home row; keep Settings "respuestas rápidas" only for a plain permission and say so there.
+
+**The rest, in order:** B-01 crash; B-02, B-03, B-10 with a "ver pantalla" toggle and a Shift+Tab key; B-08 reconnect back to the pane; B-05, B-06 layout; B-07, B-04 theme and the `/model` default; then the low rows B-09 to B-18.
+
 ## Setup left behind
 
 - Test daemon: stopped (pid 18492). `/tmp/jwt-qa` holds the demo repo, worktrees and a Claude wrapper script; delete it when done.
