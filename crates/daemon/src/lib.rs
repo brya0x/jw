@@ -488,8 +488,8 @@ impl vt100::Callbacks for Titles {
 
 /// How recent output must be for a pane to count as busy.
 const BUSY: Duration = Duration::from_secs(2);
-/// How long after a pane's last output a Claude in it still counts as working: it prints all the while it thinks or writes (REQ-96).
-const WORKING: Duration = Duration::from_secs(5);
+/// What Claude's status line says while a turn runs, and only then (REQ-96): typing in its box, a pane that prints, or a tip do not say it.
+const INTERRUPT: &str = "esc to interrupt";
 
 /// One client's interest in one pane or workspace.
 struct Sub {
@@ -598,6 +598,16 @@ fn send_shell(tx: &Tx, pane: PaneId, news: shell::News) -> Result<(), outbox::Cl
 }
 
 /// The pane's screen as the styled rows a `TextView` client draws.
+/// Whether the last rows of the pane's screen say that Claude runs a turn (REQ-96).
+fn shows_interrupt(st: &PaneState) -> bool {
+    let screen = st.parser.screen();
+    let (rows, cols) = screen.size();
+    screen
+        .rows(0, cols)
+        .skip(usize::from(rows).saturating_sub(8))
+        .any(|r| r.to_lowercase().contains(INTERRUPT))
+}
+
 fn text_screen(id: PaneId, st: &PaneState) -> DaemonMsg {
     let screen = st.parser.screen();
     let (rows, cols) = screen.size();
@@ -1609,7 +1619,7 @@ impl Daemon {
             .map(|id| {
                 let now = self
                     .pane(id)
-                    .is_ok_and(|p| lock(&p.state).last_output.elapsed() < WORKING);
+                    .is_ok_and(|p| shows_interrupt(&lock(&p.state)));
                 (id, now)
             })
             .collect();

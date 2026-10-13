@@ -2107,7 +2107,7 @@ fn a_phone_watching_an_agent_gets_its_transcript_as_blocks_and_then_each_change(
 }
 
 #[test]
-fn a_chat_says_when_its_pane_is_printing_and_when_it_stops() {
+fn a_chat_says_when_its_status_line_says_the_agent_works_and_when_it_stops() {
     let config = tempfile::tempdir().unwrap();
     let id = "0f6bd1c2-3333-4222-8333-444455556666";
     let folder = config.path().join("projects").join("-w");
@@ -2119,12 +2119,12 @@ fn a_chat_says_when_its_pane_is_printing_and_when_it_stops() {
     .unwrap();
     let d = Daemon::start_with(Some(config.path()));
     let mut c = d.client();
-    // Prints for a few seconds, then is quiet.
+    // Prints for a while without saying `esc to interrupt` (typing in its box, a tip), then says it, then clears the screen.
     let agent = spawn(
         &mut c,
         "s",
         &format!(
-            "for i in 1 2 3 4 5 6 7 8 9 10; do echo --session-id {id}; sleep 0.3; done; sleep 30"
+            "echo --session-id {id}; for i in 1 2 3 4 5 6; do echo typing; sleep 0.3; done; echo 'esc to interrupt'; sleep 3; printf '\\033[2J\\033[H'; sleep 30"
         ),
         40,
         5,
@@ -2142,7 +2142,8 @@ fn a_chat_says_when_its_pane_is_printing_and_when_it_stops() {
             said.push(w);
         }
     }
-    // Quiet at the start of the watch (nothing had printed), printing, then quiet again.
+    // Quiet while it only prints, working while the status line says so, then quiet again.
+    assert_eq!(said.first(), Some(&false));
     assert_eq!(said.last(), Some(&false));
     assert!(said.contains(&true), "{said:?}");
 }
