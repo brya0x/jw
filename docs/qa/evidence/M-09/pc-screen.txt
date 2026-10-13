@@ -1,0 +1,20 @@
+⏺ I created b.txt in the worktree at
+  /private/tmp/jwt-qa/home/demo-wt/qa-perm/b.txt with the text hi.
+
+✻ Churned for 2s · done 9:32 AM
+
+❯ use AskUserQuestion to ask me red or blue with two options
+──────────────────────────────────────────────────────────────────────────────
+ ☐ Color
+
+Red or blue?
+
+❯ 1. Red
+     Choose red
+  2. Blue
+     Choose blue
+  3. Type something.
+──────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel

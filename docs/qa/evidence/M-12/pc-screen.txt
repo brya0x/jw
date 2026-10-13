@@ -1,0 +1,30 @@
+
+   Steps
+
+   1. Create /private/tmp/jwt-qa/home/demo-wt/qa-perm/c.txt with the Write
+      tool.
+   2. Content: a single line, hello, ending in a newline. The request
+      didn't specify the text, so this is my default. Say if you want
+      something else.
+
+   Verification
+
+   - Run cat c.txt and confirm it prints exactly one line.
+   - Run git status and confirm c.txt shows as the only new untracked file
+     (plus b.txt from earlier).
+  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+
+
+
+
+
+  ──────────────────────────────────────────────────────────────────────────
+   Claude has written up a plan and is ready to execute. Would you like to
+   proceed?
+
+   ❯ 1. Yes, and use auto mode
+     2. Yes, manually approve edits
+     3. Tell Claude what to change
+        shift+tab to approve with this feedback
+
+   ctrl+g to edit in VS Code · ~/.claude/plans/stateful-purring-finch.md

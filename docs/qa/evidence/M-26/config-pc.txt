@@ -1,0 +1,30 @@
+     Thinking can't be turned off for Haiku 5.5
+     Prompt suggestions                    true
+     Session recap                         true
+     Rewind code (checkpoints)             true
+     Dynamic workflows                     true
+     Ultracode keyword trigger             true
+     Dynamic workflow size                 medium (default)
+     Artifacts                             true
+     Verbose output                        false
+     Terminal progress bar                 true
+     Show turn duration                    true
+     Time format                           auto ›
+     Default permission mode               Manual
+     Worktree base ref                     fresh
+     Use auto mode during plan             true
+     Respect .gitignore in file picker     true
+     Skip the /copy picker                 false
+     Copy on select                        true
+     Auto-scroll                           true
+     Open agents view by default           false
+     ← opens agents                        true
+     Auto-update channel                   latest ›
+     Theme                                 Auto (match terminal) ›
+     Local notifications                   Auto
+     Push when actions required            false
+     Push when Claude decides              false
+     Output style                          default ›
+     ↓ 12 more
+
+   Type to filter · Enter/↓ to select · ↑ to tabs · Esc to clear

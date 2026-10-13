@@ -1,0 +1,14 @@
+(156, 164, 464, 214) demo › qa-perm
+(156, 214, 636, 254) ⎇ feat/qa-perm · /private/tmp/jwt-qa/home/demo-wt/qa-perm
+(982, 177, 1011, 242) ±
+(81, 361, 181, 405) agent
+(304, 361, 404, 405) shell
+(102, 506, 859, 549) claude te pregunta
+(889, 455, 1068, 599) ✕ esc
+(48, 659, 195, 698) PREGUNTA
+(48, 734, 831, 799) Ready to submit your answers?
+(120, 910, 139, 953) 1
+(204, 907, 512, 955) Submit answers
+(120, 1138, 139, 1181) 2
+(204, 1135, 336, 1183) Cancel
+(48, 2240, 1032, 2328) Toca una opción: se envía al instante. No hay aprobar ni rechazar.

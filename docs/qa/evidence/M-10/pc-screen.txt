@@ -1,0 +1,20 @@
+✻ Crunched for 2s · done 9:33 AM
+
+❯ use AskUserQuestion with multiSelect true to ask which of a b c I like
+──────────────────────────────────────────────────────────────────────────────
+←  ☐ Options  ✔ Submit  →
+
+Which of a, b, c do you like?
+
+❯ 1. [ ] a
+         Option a
+  2. [ ] b
+         Option b
+  3. [ ] c
+         Option c
+  4. [ ] Type something
+     Submit
+──────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel

@@ -1,0 +1,40 @@
+❯ say hi in 3 words
+
+⏺ Hi there, friend!
+
+✻ Sautéed for 1s · done 9:23 AM
+
+❯ reply with a markdown table of 2 fruits and a js code fence and a heading
+
+⏺ Fruits
+
+  ┌────────┬────────┐
+  │ Fruit  │ Color  │
+  ├────────┼────────┤
+  │ Apple  │ Red    │
+  ├────────┼────────┤
+  │ Banana │ Yellow │
+  └────────┴────────┘
+
+  const fruits = ["Apple", "Banana"];
+  console.log(fruits);
+
+✻ Crunched for 1s · done 9:24 AM
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                      29% until auto-compact
+──────────────────────────────────────────────────────────────────────────────
+❯
+──────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← 3 agents

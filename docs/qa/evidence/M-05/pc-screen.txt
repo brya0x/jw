@@ -1,0 +1,40 @@
+  ├────────┼────────┤
+  │ Banana │ Yellow │
+  └────────┴────────┘
+
+  const fruits = ["Apple", "Banana"];
+  console.log(fruits);
+
+✻ Crunched for 1s · done 9:24 AM
+
+❯ run the shell command ls and tell me the count
+
+  Listed 1 directory
+
+⏺ The ls command returned a count of 0, so the working directory
+  (/private/tmp/jwt-qa/home/demo) has no visible entries. Hidden files
+  (starting with .) aren't counted by plain ls. The .jw.toml file from the git
+  status snapshot is hidden, so it wouldn't show up here.
+
+✻ Baked for 3s · done 9:24 AM
+
+❯ create a file a.txt with the text hi then change hi to yo
+
+⏺ Write(a.txt)
+  ⎿  Wrote 1 line to a.txt
+      1 hi
+
+⏺ Update(a.txt)
+  ⎿  Added 1 line, removed 1 line
+      1 -hi
+      1 +yo
+
+⏺ I created a.txt in the working directory with the text hi, then changed it
+  to yo. The file now contains yo.
+
+✻ Cooked for 3s · done 9:25 AM
+                                                      28% until auto-compact
+──────────────────────────────────────────────────────────────────────────────
+❯ show me the contents of a.txt
+──────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← 3 agents

@@ -1,0 +1,15 @@
+bastacio@Bryans-MacBook-Pro phone-wt- % echo hi
+hi
+bastacio@Bryans-MacBook-Pro phone-wt- % echo two
+two
+bastacio@Bryans-MacBook-Pro phone-wt- % cd /tmp/jwt-qa/home/lsdir %26 ls
+cd: too many arguments
+bastacio@Bryans-MacBook-Pro phone-wt- % cd /tmp/jwt-qa/home/lsdir
+bastacio@Bryans-MacBook-Pro lsdir % ls
+dir-a                   file-number-13.txt      file-number-19.txt      file-number-24.txt      file-number-3.txt       file-number-8.txt
+dir-b                   file-number-14.txt      file-number-2.txt       file-number-25.txt      file-number-30.txt      file-number-9.txt
+file-number-1.txt       file-number-15.txt      file-number-20.txt      file-number-26.txt      file-number-4.txt
+file-number-10.txt      file-number-16.txt      file-number-21.txt      file-number-27.txt      file-number-5.txt
+file-number-11.txt      file-number-17.txt      file-number-22.txt      file-number-28.txt      file-number-6.txt
+file-number-12.txt      file-number-18.txt      file-number-23.txt      file-number-29.txt      file-number-7.txt
+bastacio@Bryans-MacBook-Pro lsdir %

@@ -19,6 +19,11 @@ the run (cases are independent), and every check has a PC side.
 - **Isolated daemon only.** `scripts/jw-test` (state `/tmp/jwt`). Before the first case print the socket `jw ls`
   uses and confirm it is the test one. Never `pkill`; kill only the pid in `/tmp/jwt/run/jw/jw.pid`. Never write
   in the user's real panes.
+- **Real-daemon mode (user decision, 2026-10-13):** agent and feature cases run in a throwaway session of the user's real jw
+  (`qa-test`), because a login for the test HOME was refused. Only that session: every `jw` call sets `JW_SESSION=qa-test`
+  explicitly, the phone driver runs with `QA_SESSION=qa-test` and `QA_ALLOW=<regex of the QA workspace names>` so `q.py` refuses
+  to tap, type or swipe on any other session's screen, and nothing is ever typed into a pane that is not a QA one.
+  Never `jw server stop`, never `pkill`, never remove a worktree that is not a QA one.
 - **Real Claude panes cost tokens:** `--model haiku`, prompts of a few words, `/clear` between cases.
 - **No secrets in evidence:** no pairing token, no device token, no `adb logcat` lines carrying them (REQ-27).
 - Report only. A bug found is a row in the report, never a patch.

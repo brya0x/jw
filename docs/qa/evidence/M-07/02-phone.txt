@@ -1,0 +1,16 @@
+(156, 164, 464, 214) demo › qa-perm
+(156, 214, 636, 254) ⎇ feat/qa-perm · /private/tmp/jwt-qa/home/demo-wt/qa-perm
+(982, 177, 1011, 242) ±
+(81, 361, 181, 405) agent
+(304, 361, 404, 405) shell
+(102, 506, 859, 549) claude te pregunta
+(889, 455, 1068, 599) ✕ esc
+(48, 659, 195, 698) PREGUNTA
+(48, 734, 804, 799) Do you want to create b.txt?
+(120, 910, 139, 953) 1
+(204, 907, 270, 955) Yes
+(120, 1150, 139, 1193) 2
+(204, 1099, 990, 1243) Yes, and switch to accept edits (auto-approve file edits and common file
+(120, 1390, 139, 1433) 3
+(204, 1387, 248, 1435) No
+(48, 2240, 1032, 2328) Toca una opción: se envía al instante. No hay aprobar ni rechazar.
