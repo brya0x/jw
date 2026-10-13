@@ -1,4 +1,4 @@
-//! A shell's commands as blocks, a command and its output each, like Warp's (mobile REQ-92).
+//! A shell's commands as blocks, a command and its output each, like Warp's (mobile REQ-95).
 //!
 //! jw gives the zsh it starts for a pane a few lines of its own (`install`,
 //! `prepare`) that print an OSC 7770 sequence: `start` before each command (with
@@ -32,7 +32,7 @@ const PREFIX: &[u8] = b"\x1b]7770;";
 /// `.zprofile` and `.zshrc` of the folder jw points `ZDOTDIR` at read the user's
 /// own, so nothing of theirs is lost; the hooks come last, after whatever
 /// their prompt does.
-const ZSHENV: &str = r#"# jw's shell integration (mobile REQ-92): reads your own .zshenv.
+const ZSHENV: &str = r#"# jw's shell integration (mobile REQ-95): reads your own .zshenv.
 if [[ -n "$JW_USER_ZDOTDIR" ]]; then
   __jw_z="$ZDOTDIR"; ZDOTDIR="$JW_USER_ZDOTDIR"
   [[ -f "$ZDOTDIR/.zshenv" ]] && . "$ZDOTDIR/.zshenv"
@@ -40,7 +40,7 @@ if [[ -n "$JW_USER_ZDOTDIR" ]]; then
 fi
 "#;
 
-const ZPROFILE: &str = r#"# jw's shell integration (mobile REQ-92): reads your own .zprofile.
+const ZPROFILE: &str = r#"# jw's shell integration (mobile REQ-95): reads your own .zprofile.
 if [[ -n "$JW_USER_ZDOTDIR" ]]; then
   __jw_z="$ZDOTDIR"; ZDOTDIR="$JW_USER_ZDOTDIR"
   [[ -f "$ZDOTDIR/.zprofile" ]] && . "$ZDOTDIR/.zprofile"
@@ -48,7 +48,7 @@ if [[ -n "$JW_USER_ZDOTDIR" ]]; then
 fi
 "#;
 
-const ZSHRC: &str = r#"# jw's shell integration (mobile REQ-92): reads your own .zshrc, then marks each command.
+const ZSHRC: &str = r#"# jw's shell integration (mobile REQ-95): reads your own .zshrc, then marks each command.
 if [[ -n "$JW_USER_ZDOTDIR" ]]; then
   ZDOTDIR="$JW_USER_ZDOTDIR"; unset JW_USER_ZDOTDIR
   [[ -f "$ZDOTDIR/.zshrc" ]] && . "$ZDOTDIR/.zshrc"

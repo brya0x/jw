@@ -5,7 +5,7 @@ import dev.jw.term.Key
 import dev.jw.term.Keys
 import dev.jw.term.Line
 
-/** The keys that make the terminal's input go from one text to another, as the phone's input is edited (REQ-93). */
+/** The keys that make the terminal's input go from one text to another, as the phone's input is edited (REQ-96). */
 object MirrorTyping {
     /**
      * Typing at the end adds the characters; deleting at the end is a backspace each; any other edit (a paste, an
@@ -22,7 +22,7 @@ object MirrorTyping {
     }
 }
 
-/** Reads what is typed in the input box of Claude's screen (REQ-93), the one heuristic of the mirror: Claude gives no other way. */
+/** Reads what is typed in the input box of Claude's screen (REQ-96), the one heuristic of the mirror: Claude gives no other way. */
 object ClaudeInput {
     private val PROMPT = Regex("""^[>❯›](?: (.*))?$""")
     private const val NBSP = 0xA0

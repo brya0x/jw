@@ -6,7 +6,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
-/** REQ-93: the phone's input and the terminal's are one text. */
+/** REQ-96: the phone's input and the terminal's are one text. */
 class MirrorInputTest {
     private val e = "\u001b"
     private fun screen(text: String) = Terminal(60, 12).also { it.feed(text.toByteArray()) }.toPaneText()

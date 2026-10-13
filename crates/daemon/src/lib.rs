@@ -215,7 +215,7 @@ struct Daemon {
     theme: Arc<Mutex<Theme>>,
     next_pane: AtomicU64,
     next_client: AtomicU64,
-    /// The conversations of the agents a phone watches (mobile REQ-90). Its
+    /// The conversations of the agents a phone watches (mobile REQ-93). Its
     /// lock is taken on its own: never with a pane's or a workspace's.
     chats: Mutex<BTreeMap<PaneId, ChatWatch>>,
     /// Who watches the commands of which pane's shell; its lock is taken on
@@ -232,7 +232,7 @@ struct ChatWatch {
     /// while the pane has none (a shell that has not started claude yet).
     session: Option<(String, PathBuf)>,
     tail: chat::Tail,
-    /// Whether the pane was printing when the watchers were last told (REQ-96).
+    /// Whether the pane was printing when the watchers were last told (REQ-99).
     working: bool,
     /// When the pane's session was last looked for.
     resolved: Instant,
@@ -366,7 +366,7 @@ struct PaneState {
     agent: Option<AgentState>,
     /// Its screen changed since the last `Text` went to the phones watching it.
     text_dirty: bool,
-    /// What its shell says of itself, when the shell is one of jw's (mobile REQ-92).
+    /// What its shell says of itself, when the shell is one of jw's (mobile REQ-95).
     shell: shell::ShellState,
 }
 
@@ -488,7 +488,7 @@ impl vt100::Callbacks for Titles {
 
 /// How recent output must be for a pane to count as busy.
 const BUSY: Duration = Duration::from_secs(2);
-/// What Claude's status line says while a turn runs, and only then (REQ-96): typing in its box, a pane that prints, or a tip do not say it.
+/// What Claude's status line says while a turn runs, and only then (REQ-99): typing in its box, a pane that prints, or a tip do not say it.
 const INTERRUPT: &str = "esc to interrupt";
 
 /// One client's interest in one pane or workspace.
@@ -598,7 +598,7 @@ fn send_shell(tx: &Tx, pane: PaneId, news: shell::News) -> Result<(), outbox::Cl
 }
 
 /// The pane's screen as the styled rows a `TextView` client draws.
-/// Whether the last rows of the pane's screen say that Claude runs a turn (REQ-96).
+/// Whether the last rows of the pane's screen say that Claude runs a turn (REQ-99).
 fn shows_interrupt(st: &PaneState) -> bool {
     let screen = st.parser.screen();
     let (rows, cols) = screen.size();
@@ -1781,7 +1781,7 @@ impl Daemon {
             }
             None => CommandBuilder::new_default_prog(),
         };
-        // A shell that jw starts for a pane marks each command (mobile REQ-92).
+        // A shell that jw starts for a pane marks each command (mobile REQ-95).
         if cmd.is_none() && role == "shell" {
             self.mark_commands(&mut builder, &env);
         }

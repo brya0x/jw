@@ -3,7 +3,7 @@ package dev.jw.mobile
 import dev.jw.term.Terminal
 
 /**
- * What one command of a shell printed, parsed into a terminal of its own (REQ-92): Warp's grid for each command. The bytes are
+ * What one command of a shell printed, parsed into a terminal of its own (REQ-95): Warp's grid for each command. The bytes are
  * as the program printed them, laid out for the width the PC's terminal had, so a closed block never changes; how it is drawn
  * for the phone's width is [RowWrap]'s.
  */

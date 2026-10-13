@@ -3,7 +3,7 @@ package dev.jw.mobile
 import dev.jw.proto.PaneInfo
 import dev.jw.proto.mayHaveConversation
 
-/** How the pane on screen is drawn (REQ-21, REQ-91). */
+/** How the pane on screen is drawn (REQ-21, REQ-94). */
 enum class PaneKind {
     /** A Claude that has not been answered about yet: nothing to draw. */
     Loading,
@@ -19,7 +19,7 @@ enum class PaneKind {
 }
 
 /**
- * What a pane is drawn as, and which text is the terminal's own input (REQ-93), from what the PC has said about it. It
+ * What a pane is drawn as, and which text is the terminal's own input (REQ-96), from what the PC has said about it. It
  * follows the pane as it changes: a shell jw marked is its commands as cards; when it starts claude (the foreground program
  * becomes an agent) the pane waits for the PC, stays text until the agent has a transcript, then is its conversation; when it
  * exits, cards again. A program that draws the whole screen in it is text for as long as it runs. The input is the terminal's all along.

@@ -51,7 +51,7 @@ import androidx.compose.ui.unit.sp
 import dev.jw.proto.ChatBlock
 
 /**
- * An agent's conversation as blocks instead of its screen (REQ-90): what the person said and Claude answered, its
+ * An agent's conversation as blocks instead of its screen (REQ-93): what the person said and Claude answered, its
  * thoughts as one dim line, and each tool call as a card that opens to its command, diff or output. The strip on top
  * has the name the person gave the conversation in Claude (`/rename`), under it the title Claude gave it, and the
  * pane's name. The view stays on the last block until the person scrolls up.
@@ -247,7 +247,7 @@ internal fun PaneChip(name: String, color: Color) {
     }
 }
 
-/** A subagent or a background task that ended (REQ-97): a bar and an icon of the status colour, its title and what ran it. */
+/** A subagent or a background task that ended (REQ-100): a bar and an icon of the status colour, its title and what ran it. */
 @Composable
 private fun NoticeRow(b: ChatBlock) {
     val j = LocalJw.current
@@ -272,7 +272,7 @@ private fun NoticeRow(b: ChatBlock) {
     }
 }
 
-/** A message the person sent while the agent works: it is the person's when the turn takes it (REQ-97). */
+/** A message the person sent while the agent works: it is the person's when the turn takes it (REQ-100). */
 @Composable
 private fun QueuedBubble(text: String) {
     val j = LocalJw.current
@@ -300,7 +300,7 @@ private fun BackgroundRow(n: Int) {
 }
 
 /**
- * The live row (REQ-96): `Pensando…` or, while Claude's text is the last block, `Escribiendo…`, with the seconds since the
+ * The live row (REQ-99): `Pensando…` or, while Claude's text is the last block, `Escribiendo…`, with the seconds since the
  * person's message and the output tokens, and a stop that sends Esc.
  */
 @Composable

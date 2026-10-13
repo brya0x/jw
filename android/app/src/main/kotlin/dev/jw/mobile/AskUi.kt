@@ -42,7 +42,7 @@ import androidx.compose.ui.unit.sp
 internal fun AskText.key(): String = question + "\u0000" + options.joinToString("\u0001") { it.label }
 
 /**
- * An agent's question over the whole pane (REQ-95): no keyboard, no composer, no keys and no approve or reject. One choice of
+ * An agent's question over the whole pane (REQ-98): no keyboard, no composer, no keys and no approve or reject. One choice of
  * several (a tap sends it), several choices (a tap marks one, `Enviar` sends them), or a plan (its text, and after it the decisions
  * under it). [plan] is the plan's text when the agent asks to go ahead with one. [onPick] takes an option's number, [onSend]
  * confirms the marked ones, [onOther] sends a written answer through the option that takes one, and [onEsc] cancels.

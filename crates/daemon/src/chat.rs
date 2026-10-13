@@ -1,7 +1,7 @@
 //! A Claude agent's conversation as blocks, read from the transcript Claude
 //! writes as it goes (`~/.claude/projects/<folder>/<session-id>.jsonl`, one
 //! JSON entry a line): what a phone draws instead of the agent's screen
-//! (mobile REQ-90). The file is Claude's, not jw's: every shape here is read
+//! (mobile REQ-93). The file is Claude's, not jw's: every shape here is read
 //! leniently and an entry that is not understood is skipped, never an error.
 
 use std::collections::{HashMap, HashSet};
@@ -126,13 +126,13 @@ pub struct Tail {
     /// agent has: the first wins when both are there.
     custom_name: Option<String>,
     agent_name: Option<String>,
-    /// The turn in progress (REQ-96): from the person's last message, with the output tokens of each
+    /// The turn in progress (REQ-99): from the person's last message, with the output tokens of each
     /// message of Claude's since (a message is written once per block it has, with the same count).
     turn: Option<ChatTurn>,
     msg_tokens: HashMap<String, u64>,
     /// The blocks of messages the person sent while Claude worked and the transcript has not yet.
     queued: Vec<u32>,
-    /// The calls that started a background task or subagent and whose end was not told yet (REQ-97).
+    /// The calls that started a background task or subagent and whose end was not told yet (REQ-100).
     bg_open: HashSet<String>,
     notices: HashSet<String>,
     /// The name Claude gives the conversation's plan file (`<config>/plans/<slug>.md`), and what that file held when last read.
@@ -647,7 +647,7 @@ fn summarise(name: &str, input: &Value) -> (String, Option<String>, Option<Strin
         "WebFetch" => (cut(s("url"), ARG_MAX), None, None),
         "WebSearch" => (cut(s("query"), ARG_MAX), None, None),
         "Task" | "Agent" => (cut(s("description"), ARG_MAX), None, None),
-        // The plan Claude asks to go ahead with: its text is what a phone shows full screen (REQ-95).
+        // The plan Claude asks to go ahead with: its text is what a phone shows full screen (REQ-98).
         "ExitPlanMode" => ("plan".into(), Some(cut(s("plan"), TEXT_MAX)), None),
         _ => {
             let first = input

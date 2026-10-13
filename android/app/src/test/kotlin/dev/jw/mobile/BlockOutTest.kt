@@ -5,7 +5,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** REQ-92: what a command printed is parsed into a terminal of its own and drawn complete, for the phone's width. */
+/** REQ-95: what a command printed is parsed into a terminal of its own and drawn complete, for the phone's width. */
 class BlockOutTest {
     private fun rows(o: BlockOut) = o.text().let { t -> t.read { p -> (0 until p.rows).map { p.line(it).text() } } }
 

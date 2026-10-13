@@ -454,6 +454,29 @@ The diff pane (`^␣ d`, and the left half of a review workspace) mixed committe
 
 ---
 
+### Addendum 23 (T1): the diff sidebar is a directory tree, and the pane opens on Uncommitted
+
+Prototype: https://claude.ai/artifact/Y9G3Sz1fKjsVPtEU6BLz1N (version 2, approved 2026-10-12).
+
+The sidebar listed a view's files flat, by basename, so two `mod.rs` looked alike and a large change did not read by folder. It is now a tree, and the views are reordered: **Uncommitted**, **Commits**, **General**, with `1 2 3` following that order. TUI only: `diff::report` (the phone) and the CLI do not use this list.
+
+| Piece | Shape |
+|---|---|
+| Order | `Shown::from` sorts a view's files with `tree_cmp`: at every level directories first, each by name. The scroll (`items`) follows the same order |
+| Tree | `Tree::new(files)` (`tui/diffview.rs`) gives `dirs` (`Dir{key, label, depth, parent, files, added, deleted}`), `nodes` in order, and each file's depth and directory. A directory with no file of its own and one directory in it is merged into the row below (`crates/tui/src/`) |
+| Rows | `Row::Dir(i)` beside `Row::File(i)`; `file_rows` leaves out what a closed directory hides. `Pos.closed` holds the closed `Dir::key`s per view or commit, kept by path |
+| Open on | `Job::Diff` carries the Uncommitted load; `DiffView::new` opens on `Which::Uncommitted`, General is `Idle` until first visit |
+
+- REQ-285 THE sidebar SHALL list a view's files as a tree: directories before files at every level, each in name order, a directory row `▾ name/` (closed `▸`) with its file count, `+added` and `−deleted`, and a file row with its mark and basename, two columns in for each level.
+- REQ-286 WHEN a directory has no file of its own and exactly one directory in it, THE sidebar SHALL show the chain as one row (`crates/tui/src/`) that opens and closes as one.
+- REQ-287 WHEN a view or commit is first shown, every directory SHALL be open; a directory closed by the reader SHALL stay closed, by path, when the view is left and returned to, and SHALL hide only its rows in the sidebar, never its files in the scroll.
+- REQ-288 WHILE the cursor is in the sidebar, `l` or `→` SHALL open a closed directory, or move to the first row below an open one; `h` or `←` SHALL close an open directory, or move to the directory above a file or a closed directory; `↵` and a click SHALL toggle a directory and, on a file, go to it as REQ-230 says; the hint line SHALL show `h l fold`.
+- REQ-289 THE files in the scroll, `j` and `k` among them, SHALL follow the tree's order; WHILE the file being read is under a closed directory, THE sidebar SHALL mark that directory's row in its place.
+- REQ-290 WHEN a diff pane opens, THE TUI SHALL show Uncommitted and load only it; THE sidebar SHALL list Uncommitted, Commits, General in that order, and `1`, `2`, `3` SHALL show them in that order. This replaces REQ-222's General, REQ-229's key order and REQ-245's General.
+- REQ-291 THE change SHALL add no `ClientMsg`, `DaemonMsg` or `PaneInfo` field and SHALL NOT change `PROTOCOL`; the version SHALL be 0.0.24.
+
+---
+
 ### Addendum 16 (F0–F4): switching workspace stays inside a 16.6 ms frame budget
 
 Switching worktree is slow and its animation stutters. Fix the time, measure first, keep every frame ≤ 16.6 ms (60 fps).
@@ -970,6 +993,7 @@ P0–P9 were built against v1: core, connectors, daemon, layout, the first TUI, 
 | RM1 ✓ `43a7b2e` | `session::rm` and `session::rm_plan`; `session` reserved; version 0.0.21 | 270–273, 279, 281–283 | `core/session.rs` |
 | RM2 ✓ `5d82a9b` | `jw session rm <name> [--yes]`, with `Close` for the session's workspaces | 270–275 | `jw/main.rs`, `jw/cli.rs` |
 | RM3 ✓ | `^D` in the session picker and its confirm modal (`Modal::RmSession`, `Job::SessionRm`: the plan is read off the UI thread, then the modal opens; after a delete the picker reopens) | 276–278, 280 | `tui/finder.rs`, `tui/modal.rs`, `tui/draw.rs`, `tui/mod.rs` |
+| T1 ✓ | the diff sidebar as a directory tree with compact folders; views ordered Uncommitted, Commits, General; the pane opens on Uncommitted; version 0.0.24 | 285–291 | `tui/diffview.rs`, `tui/mod.rs` |
 | CI1 ✓ | `justfile` (rust, mobile-rust, android, mobile, ci) and CI calling it: the Rust job runs `just fmt-check`, `clippy`, `test`; a separate Android job (JDK 17, SDK, Gradle cache) runs `just android` only when `android/**`, `crates/proto/**`, the justfile or the workflow changed | — | `justfile`, `.github/workflows/ci.yml` |
 
 Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{new_stream, rm_plan, rm, sync, done_plan}`, `src/diff.rs`, `src/view/md.rs` and `Modal::Rm` (type the name) stay as they are.
@@ -1005,6 +1029,7 @@ Reuse: `focus_towards` (`tui/mod.rs`) becomes `layout::neighbour`; `actions::{ne
 
 ## Corrections
 
+- Addendum 23 reordered the diff views (Uncommitted, Commits, General) and opens the pane on Uncommitted; REQ-222, REQ-229 and REQ-245 said General first and `1 2 3` as General, Uncommitted, Commits. REQ-290 now holds.
 - `^␣ m` (`mobile`, group `go`) opens the Mobile modal (mobile.md, REQ-43 to 49). A default key that another action's own binding already took leaves the new action with no key, so an existing `settings.json` is never overridden.
 - REQ-129 and REQ-130 specified a keyboard select mode (`^␣ v`, `SEL`). The user dropped it: terminals today select with the mouse and the shell edits the prompt, so jw keeps the mouse and adds the copied banner (REQ-135).
 - Addendum 15's hand test found two things the first build lacked: `X` listed the PR's own commit as unpushed work (it lives only in `refs/jw/pr-<n>`, REQ-175 now says so and `rm_plan` honours it), and the header told a review its layout had changed (REQ-183).

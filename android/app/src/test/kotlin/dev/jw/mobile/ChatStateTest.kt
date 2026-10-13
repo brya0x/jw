@@ -6,7 +6,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
-/** REQ-90: the blocks of a conversation merge by their number, and the title and the cap are kept. */
+/** REQ-93: the blocks of a conversation merge by their number, and the title and the cap are kept. */
 class ChatStateTest {
     private fun block(i: Int, text: String = "m$i", result: String? = null) = ChatBlock(i, "tool", text, "Bash", "ls", result, null, false)
     private fun event(reset: Boolean, vararg blocks: ChatBlock, title: String? = null, name: String? = null, known: Boolean = true) =

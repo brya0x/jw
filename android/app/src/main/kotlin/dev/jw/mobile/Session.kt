@@ -332,7 +332,7 @@ class Session(
     /** The rows above the screen of `pane`, once the person scrolls up (answered as [PaneEvent.History]). */
     fun requestHistory(pane: Long) = send(Outgoing.Binary(Panes.textHistoryFrame(pane, HISTORY_ROWS)))
 
-    /** The conversation of the agent in `pane`, once the PC has answered (REQ-90); null until then. */
+    /** The conversation of the agent in `pane`, once the PC has answered (REQ-93); null until then. */
     fun chat(pane: Long): ChatState? = chats[pane]
 
     /** Follows the conversation of the agent in `pane` (null: none); only one at a time, the one on screen. */
@@ -344,7 +344,7 @@ class Session(
         _termRev.update { it + 1 }
     }
 
-    /** The commands of the shell in `pane` and its line being typed, once the PC has answered (REQ-92); null until then. */
+    /** The commands of the shell in `pane` and its line being typed, once the PC has answered (REQ-95); null until then. */
     fun shell(pane: Long): ShellState? = shells[pane]
 
     /** What command `block` of the shell in `pane` printed, parsed into a terminal of its own; null until some of it came. */

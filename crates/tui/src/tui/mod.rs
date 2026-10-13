@@ -142,7 +142,7 @@ enum Job {
         dir: String,
         /// General, which a diff pane opens on (REQ-222); git's complaint
         /// when it failed (REQ-246).
-        general: Result<crate::diff::Loaded, String>,
+        uncommitted: Result<crate::diff::Loaded, String>,
         /// The viewer pane to fill, when it is already in the tree (a
         /// client attaching to a workspace that shows one).
         into: Option<PaneId>,
@@ -3407,18 +3407,16 @@ impl App {
         };
         self.background(format!("diffing {}", entry.name), move || {
             let stream = Stream::resolve(&entry)?;
-            let general = crate::diff::load(
+            let uncommitted = crate::diff::load(
                 std::path::Path::new(&entry.path),
-                &crate::diff::Scope::Branch {
-                    base: stream.base.clone(),
-                },
+                &crate::diff::Scope::Uncommitted,
             )
             .map_err(|e| format!("{e:#}"));
             Ok(Job::Diff {
                 name: entry.name,
                 base: stream.base,
                 dir: entry.path,
-                general,
+                uncommitted,
                 into,
             })
         });
@@ -3819,10 +3817,10 @@ impl App {
                 name,
                 base,
                 dir,
-                general,
+                uncommitted,
                 into,
             } => {
-                let view = View::Diff(diffview::DiffView::new(name, base, dir, general));
+                let view = View::Diff(diffview::DiffView::new(name, base, dir, uncommitted));
                 match into {
                     Some(id) => {
                         self.views.insert(id, view);
@@ -4912,7 +4910,7 @@ mod diff_tests {
             .join("\n")
     }
 
-    /// REQ-235, REQ-237: `2` asks for Uncommitted, git runs on a worker, the
+    /// REQ-235, REQ-237: `1` asks for Uncommitted again, git runs on a worker, the
     /// answer comes back as a job and fills the view; the answer is taken
     /// without reading the registry again.
     #[test]
@@ -4925,12 +4923,12 @@ mod diff_tests {
             "t".into(),
             String::new(),
             repo.path().to_string_lossy().into_owned(),
-            Ok(crate::diff::Loaded::Files(Vec::new())),
+            Err("not loaded".into()),
         );
         app.views.insert(7, View::Diff(view));
         app.focus = Some(7);
 
-        app.on_key(KeyEvent::from(KeyCode::Char('2')));
+        app.on_key(KeyEvent::from(KeyCode::Char('1')));
         assert!(screen(&mut app, 7).contains("loading"));
         let Msg::Job(job) = rx.recv_timeout(Duration::from_secs(10)).unwrap() else {
             panic!("expected a job");

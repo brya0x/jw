@@ -71,7 +71,7 @@ private sealed interface Piece {
 }
 
 /**
- * A shell as its commands, as Warp draws them (REQ-92, REQ-94): flat blocks from the bottom up, the newest right above the
+ * A shell as its commands, as Warp draws them (REQ-95, REQ-97): flat blocks from the bottom up, the newest right above the
  * editor. No border or button of its own: the folder and the time dim, the command in bold, and the output complete, with its
  * colours, laid out for the phone's width. A command that fails has a red bar and tint, one that runs a yellow bar. A tap
  * chooses a block and a bar offers what can be done with it. While an output taller than the screen is read its command stays

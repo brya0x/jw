@@ -3,7 +3,7 @@ package dev.jw.mobile
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
-/** REQ-91: a message's `code` and **bold** are drawn; a mark that is not closed is text. */
+/** REQ-94: a message's `code` and **bold** are drawn; a mark that is not closed is text. */
 class MarkedPiecesTest {
     @Test fun boldAndCodeAreCutOutOfTheText() {
         assertEquals(

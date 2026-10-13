@@ -4,14 +4,14 @@ import dev.jw.proto.ChatBlock
 import dev.jw.proto.ChatTurn
 import dev.jw.proto.PaneEvent
 
-/** The conversation of an agent as the PC sent it: its name, its title and its blocks, oldest first (REQ-90). */
+/** The conversation of an agent as the PC sent it: its name, its title and its blocks, oldest first (REQ-93). */
 class ChatState(
     val known: Boolean, val name: String?, val title: String?, val blocks: List<ChatBlock>,
-    /** The turn in progress and the background tasks that have not ended (REQ-96, REQ-97). */
+    /** The turn in progress and the background tasks that have not ended (REQ-99, REQ-100). */
     val turn: ChatTurn? = null, val bg: Int = 0,
-    /** The plan Claude drafted for the conversation, when the PC sent it (REQ-95). */
+    /** The plan Claude drafted for the conversation, when the PC sent it (REQ-98). */
     val plan: String? = null,
-    /** The agent is working now, as its pane says (a Claude started by hand tells no hooks), REQ-96. */
+    /** The agent is working now, as its pane says (a Claude started by hand tells no hooks), REQ-99. */
     val working: Boolean = false,
 ) {
     companion object {
@@ -36,7 +36,7 @@ class ChatState(
 
 /**
  * What a shell says of itself and its commands, as the PC sent it: whether it is one jw marked, whether a command runs, the line typed at
- * its prompt and the commands, oldest first (REQ-92). What each printed is in its [BlockOut].
+ * its prompt and the commands, oldest first (REQ-95). What each printed is in its [BlockOut].
  */
 class ShellState(val known: Boolean, val running: Boolean, val input: String?, val blocks: List<dev.jw.proto.ShellBlock>) {
     companion object {

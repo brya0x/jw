@@ -121,14 +121,14 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
         session.watch(if (watching) w.id else null)
         onDispose { session.watch(null) }
     }
-    // An agent's conversation, even one started by hand in a shell, is drawn from the PC's transcript of it (REQ-90/91).
+    // An agent's conversation, even one started by hand in a shell, is drawn from the PC's transcript of it (REQ-93/94).
     val agentPane = sel?.takeIf { it.mayHaveConversation() }?.pane
     DisposableEffect(agentPane) {
         session.watchChat(agentPane)
         onDispose { session.watchChat(null) }
     }
     val chat = remember(rev, agentPane) { agentPane?.let(session::chat) }
-    // A shell jw started tells the line being typed at its prompt: its text is the input's (REQ-92, REQ-93). The pane stays text.
+    // A shell jw started tells the line being typed at its prompt: its text is the input's (REQ-95, REQ-96). The pane stays text.
     val shellPane = sel?.takeIf { !it.mayHaveConversation() && it.role == "shell" }?.pane
     DisposableEffect(shellPane) {
         session.watchShell(shellPane)
@@ -136,7 +136,7 @@ fun WorkspaceScreen(w: Workspace, model: Model, state: UiState.Connected, sessio
     }
     val shell = remember(rev, shellPane) { shellPane?.let(session::shell) }
     val kind = sel?.let { PaneKinds.of(it, chat, shell) } ?: PaneKind.Text
-    // What an agent that waits asks, read off its screen (REQ-95): a question with choices is the whole pane. The one the person
+    // What an agent that waits asks, read off its screen (REQ-98): a question with choices is the whole pane. The one the person
     // closed with Esc stays closed while it is on the screen, and one that is open stays until the screen no longer shows it
     // (the daemon takes the agent out of Waiting at the first key, and marking several choices takes several).
     val scope = rememberCoroutineScope()

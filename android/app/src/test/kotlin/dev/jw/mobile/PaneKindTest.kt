@@ -9,7 +9,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** A pane changes what it is as its programs change, and its input stays the terminal's (REQ-93). */
+/** A pane changes what it is as its programs change, and its input stays the terminal's (REQ-96). */
 class PaneKindTest {
     private fun pane(role: String, fg: String?) = PaneInfo(1, "s", role, null, fg, false, false, null, null)
     private fun chat(known: Boolean) = ChatState.merge(null, PaneEvent.Chat(1, known, null, null, true, emptyList()))
