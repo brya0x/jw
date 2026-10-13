@@ -72,11 +72,20 @@ Transport: JSON lines on a Unix socket (mode 0600, in a 0700 dir) whose path com
 - REQ-30 THE daemon SHALL be drivable with JSON alone through the `jwn` binary: start, commands, stop, restart, state restored (`crates/jwn/tests/e2e.rs`).
 - REQ-31 THE Kotlin contract module SHALL parse every valid fixture, write back the identical JSON, validate it against the same schema, reject the invalid ones, and apply every `patch-cases` file as Rust does (`android/contract`, `ConformanceTest`).
 - REQ-32 IF a fixture or the schema changes without the Kotlin types following, THEN the Kotlin suite SHALL fail (Gradle treats `contract/` as a test input).
+- REQ-33 WHILE a workspace has attention its phone has not seen, its Home row SHALL show the mark of the most urgent one, with a count when there are several, and one line saying what it is.
+- REQ-34 WHEN the person taps that row's go control or an item in Avisos, the phone SHALL open the node the attention names (the pane's tab, not only the workspace) and mark it seen on that phone.
+- REQ-35 THE phone SHALL keep its own seen record, node id to revision; it SHALL treat an attention as seen when its `rev` is not above the recorded one, and SHALL drop the record of a node from another epoch.
+- REQ-36 THE phone SHALL NOT offer approve or deny controls on Home or Avisos.
+- REQ-37 THE pane screens (claude, dev, shell) SHALL stay as in `docs/specs/mobile-prototype.html`; only the key row changes (REQ-38).
+- REQ-38 THE key row of a pane SHALL be one slim borderless line of at most 8 keys: `^␣ esc tab ↑ ↓ ← → ^C`.
 - REQ-18 IF a client's outbox is full, THEN the daemon SHALL disconnect that client and no other.
 
 REQ-1 to REQ-7, REQ-12 and REQ-13 are enforced by N1 (`crates/contract/tests/conformance.rs`, `crates/identity`). REQ-8, 9, 10, 11, 15, 16, 17 are enforced by N2 (`crates/daemon/tests/session.rs`, `src/core.rs` tests); REQ-19 to REQ-22 are enforced by N3 (`crates/daemon/tests/workspaces.rs`, against real git); REQ-18 is implemented (bounded outbox) and untested; REQ-14 and REQ-23 to REQ-27 are enforced by N4 (`crates/daemon/tests/panes.rs`, real `/bin/sh` PTYs). REQ-31 and REQ-32 by N6 (`android/contract`, `just android`). REQ-28 to REQ-30 by N5 (`tests/session.rs`, `contract/src/patch.rs` tests, `crates/jwn/tests/e2e.rs`).
 
 ---
+## Mobile UI (the simple version)
+Design baseline and the thing to approve: `docs/prototypes/mobile.html` (REQ-33 to REQ-38). The mark glyphs are `!` permission, `?` question, `◆` plan, `❯` command done (`✗` on a non-zero exit), `✓` agent done, `…` screen, `⚑` merged, `✗` CI failed; the existing `✻` agent and `⚡` dev stay. Only `shell_done` has a producer in the daemon today.
+
 ## Rationale
 - RAT-1 **Fixtures, not generated code, are the contract.** Generated Kotlin from a schema is poor and hides drift; two hand-written sets of types checked against the same files cannot drift without a red test. The round trip (parse then write equals the file) catches a field one side drops.
 - RAT-2 **A frozen envelope with versioned documents** (the user's point) means no forced daemon stop when a client or a document changes. The old jw bumped `PROTOCOL` 25 times, each refusing the old peer. A new daemon binary still needs a restart to run (it owns the PTYs), but nothing forces it for a JSON change.
@@ -116,6 +125,9 @@ Corrections to the model: the level 0 document is smaller than assumed (3.9 KB, 
 
 ## Open questions
 - OPEN-1 Retention: how many revisions per node the daemon keeps for resume (proposed 256).
+- OPEN-3 The permission and question screens inside the claude pane still offer their options; whether they change too is the user's call (the prototype leaves them).
+- OPEN-4 The terminal client's workspace list has no prototype yet; the phone comes first.
+- OPEN-5 Keys dropped from the key row (`⏎ ^D ^R / | ~`): do they move to the `^␣` menu, or go.
 - OPEN-2 Whether a `pane` screen needs styled cells (colour, bold) before the first UI; v1 is text only.
 
 ## Corrections
@@ -138,3 +150,4 @@ Corrections to the model: the level 0 document is smaller than assumed (3.9 KB, 
 | N4 ✓ `43eab72` | panes: PTY shell, screen node, input, resize, close, restore | 14, 23–27 | `crates/daemon/src/{pty,panes}.rs` |
 | N5 ✓ `0921e63` | wire measurements (`jwn bench`) and the JSON-only end-to-end test | 28–30 | `crates/jwn/src/bench.rs`, `crates/jwn/tests/e2e.rs` |
 | N6 | the Kotlin conformance suite: types, schema validation, patch cases | 31, 32 | `android/contract`, `contract/fixtures/patch-cases` |
+| N7 | the mobile UI spec: attention marks, go row, Avisos, per-phone seen, slim key row | 33–38 | `docs/prototypes/mobile.html` |
