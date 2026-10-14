@@ -1,5 +1,6 @@
 package dev.jw.next.app
 
+import android.content.ClipData
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -31,6 +32,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -38,7 +40,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -67,6 +70,7 @@ import dev.jw.next.contract.Attention
 import dev.jw.next.contract.BlocksMode
 import dev.jw.next.contract.Node
 import dev.jw.next.contract.PaneSummary
+import kotlinx.coroutines.launch
 
 private val Gutter = 16.dp
 private val MarkColumn = 28.dp
@@ -271,16 +275,18 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
         LaunchedEffect(blocksId) { blocksId?.let { source.open(it) } }
         val blocks = remember(version, blocksId) { blocksId?.let { source.node(it) as? Node.Blocks } }
         var picked by remember(screen.pane) { mutableStateOf<Long?>(null) }
-        val clipboard = LocalClipboardManager.current
+        val clipboard = LocalClipboard.current
+        val scope = rememberCoroutineScope()
+        val copy = { text: String -> scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("jwn", text))) }; Unit }
         val block = blocks?.blocks?.firstOrNull { it.id == picked }
-        val asBlocks = blocks != null && blocks.mode == BlocksMode.Blocks
-        if (asBlocks) {
-            BlocksList(blocks!!.blocks, picked, Modifier.weight(1f)) { picked = it }
+        val shown = blocks?.takeIf { it.mode == BlocksMode.Blocks }
+        if (shown != null) {
+            BlocksList(shown.blocks, picked, Modifier.weight(1f)) { picked = it }
             if (block != null) {
                 BlockActions(
                     canRepeat = source.writable,
-                    copyCmd = { clipboard.setText(AnnotatedString(block.cmd)) },
-                    copyOut = { clipboard.setText(AnnotatedString(block.outputText())) },
+                    copyCmd = { copy(block.cmd) },
+                    copyOut = { copy(block.outputText()) },
                     repeat = {
                         screen.pane?.let { source.write(it, block.cmd + "\r") }
                         picked = null
@@ -300,13 +306,13 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
                 )
             }
         }
-        val running = asBlocks && blocks!!.blocks.lastOrNull()?.running == true
+        val last = shown?.blocks?.lastOrNull()
         Composer(
             enabled = source.writable && screen.pane != null,
-            running = running,
-            chips = if (!asBlocks) null else {
+            running = last?.running == true,
+            chips = if (shown == null) null else {
                 {
-                    if (running) Chip("◌ ${blocks!!.blocks.last().cmd}", Palette.yellow)
+                    if (last?.running == true) Chip("◌ ${last.cmd}", Palette.yellow)
                     else {
                         pane?.let { Chip(shortPath(it.cwd), Palette.fg) }
                         ws.branch?.let { Chip("⎇ $it", Palette.magenta) }

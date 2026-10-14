@@ -414,6 +414,14 @@ impl View {
                 }
             }
         }
+        let gone = self.blk.as_ref().is_some_and(|(pane, id)| {
+            !self
+                .blocks_of(pane)
+                .is_some_and(|b| b.blocks.iter().any(|k| k.id == *id))
+        });
+        if gone {
+            self.blk = None;
+        }
     }
 
     /// Nodes this view would draw but does not have yet.
@@ -1623,6 +1631,20 @@ mod tests {
         v.press(Key::Enter);
         v.revs.remove(BLOCKS);
         assert!(v.wants().contains(&BLOCKS.to_owned()), "{:?}", v.wants());
+    }
+
+    #[test]
+    fn a_selection_whose_block_is_gone_is_dropped() {
+        let mut v = open_blocks();
+        v.click(80, 3, 120, 30);
+        assert!(v.blk.is_some());
+        v.blocks.get_mut(BLOCKS).unwrap().blocks.remove(0);
+        let docs: Vec<serde_json::Value> = vec![];
+        v.sync(docs.iter());
+        assert!(
+            v.blk.is_none(),
+            "nothing left to act on, so keys are the client's again"
+        );
     }
 
     #[test]

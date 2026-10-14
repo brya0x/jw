@@ -85,7 +85,7 @@ private fun output(rows: List<List<Span>>, base: Color): AnnotatedString = build
 
 /** The blocks of a shell, the newest at the bottom next to the editor; a tap picks one. */
 @Composable
-fun BlocksList(blocks: List<Block>, picked: Long?, modifier: Modifier = Modifier, pick: (Long?) -> Unit) {
+internal fun BlocksList(blocks: List<Block>, picked: Long?, modifier: Modifier = Modifier, pick: (Long?) -> Unit) {
     val running = blocks.lastOrNull()?.running == true
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(running) {
@@ -138,17 +138,16 @@ private fun BlockCard(b: Block, selected: Boolean, now: Long, click: () -> Unit)
         if (b.truncated) Mono("… el inicio se recortó", Palette.dim, 11)
         if (b.full) Mono("pantalla completa", Palette.dim, 11)
         if (b.out.isNotEmpty()) {
-            Text(
-                output(b.out, if (state == BlockState.Failed) Palette.red else Palette.fg),
-                fontFamily = MonoFont, fontSize = 12.sp, lineHeight = 18.sp,
-            )
+            val failed = state == BlockState.Failed
+            val text = remember(b.out, failed) { output(b.out, if (failed) Palette.red else Palette.fg) }
+            Text(text, fontFamily = MonoFont, fontSize = 12.sp, lineHeight = 18.sp)
         }
     }
 }
 
 /** What can be done with the picked block: copy its command or output, run it again. */
 @Composable
-fun BlockActions(canRepeat: Boolean, copyCmd: () -> Unit, copyOut: () -> Unit, repeat: () -> Unit) {
+internal fun BlockActions(canRepeat: Boolean, copyCmd: () -> Unit, copyOut: () -> Unit, repeat: () -> Unit) {
     Box(Modifier.fillMaxWidth().background(Palette.bg).padding(horizontal = 12.dp, vertical = 8.dp), contentAlignment = Alignment.Center) {
         Row(
             Modifier.background(Palette.panel, RoundedCornerShape(14.dp)).border(1.dp, Palette.line, RoundedCornerShape(14.dp)).padding(4.dp),
@@ -176,7 +175,7 @@ private fun Action(glyph: String, label: String, enabled: Boolean, click: () -> 
 
 /** A small rounded fact above the input: the folder, the branch, or the running program. */
 @Composable
-fun Chip(text: String, color: Color) {
+internal fun Chip(text: String, color: Color) {
     Box(Modifier.height(26.dp).background(Palette.sel, RoundedCornerShape(13.dp)).padding(horizontal = 10.dp), contentAlignment = Alignment.Center) {
         Mono(text, color, 11)
     }
