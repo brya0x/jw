@@ -23,6 +23,7 @@ import dev.jw.next.client.parsePairLink
 /** What the app is showing at the top level: no PC yet, or a source of nodes. */
 private sealed interface Mode {
     data object Welcome : Mode
+    data object Scan : Mode
     data class Paste(val error: Boolean = false) : Mode
     data class Running(val source: AppSource) : Mode
 }
@@ -50,7 +51,11 @@ class MainActivity : ComponentActivity() {
             var mode by remember { mutableStateOf(initial) }
             Box(Modifier.fillMaxSize().background(Palette.bg).statusBarsPadding()) {
                 when (val m = mode) {
-                    is Mode.Welcome -> WelcomeScreen({ mode = Mode.Paste() }, { mode = Mode.Running(FixtureSource(this@MainActivity)) })
+                    is Mode.Welcome -> WelcomeScreen({ mode = Mode.Scan }, { mode = Mode.Paste() }, { mode = Mode.Running(FixtureSource(this@MainActivity)) })
+                    is Mode.Scan -> {
+                        BackHandler { mode = Mode.Welcome }
+                        ScanFlow({ mode = open(it) }, { mode = Mode.Paste() }) { mode = Mode.Welcome }
+                    }
                     is Mode.Paste -> {
                         BackHandler { mode = Mode.Welcome }
                         PasteScreen(m.error, { mode = open(it) }) { mode = Mode.Welcome }
@@ -68,7 +73,7 @@ class MainActivity : ComponentActivity() {
         val leave = { link?.close(); go(Mode.Welcome) }
         when (ui) {
             is LinkUi.Pairing -> return PairingScreen(ui, leave)
-            is LinkUi.Failed -> return LinkFailScreen(ui.fail, { link.close(); go(Mode.Paste()) }, {
+            is LinkUi.Failed -> return LinkFailScreen(ui.fail, { link.close(); go(Mode.Scan) }, { link.close(); go(Mode.Paste()) }, {
                 link.close()
                 go(Mode.Welcome)
             })

@@ -11,6 +11,7 @@ kotlin {
 
 dependencies {
     api(project(":contract"))
+    implementation(libs.zxing.core)
     testImplementation(libs.kotlin.test)
 }
 

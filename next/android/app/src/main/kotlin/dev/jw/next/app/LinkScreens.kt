@@ -36,7 +36,7 @@ import dev.jw.next.client.LinkFail
 private val Gutter = 16.dp
 
 @Composable
-private fun Button(text: String, fill: Boolean, click: () -> Unit) {
+internal fun Button(text: String, fill: Boolean, click: () -> Unit) {
     Box(
         Modifier.fillMaxWidth().defaultMinSize(minHeight = 52.dp)
             .background(if (fill) Palette.blue else Palette.sel, RoundedCornerShape(12.dp))
@@ -60,12 +60,13 @@ private fun Hero(title: String, body: String, content: @Composable () -> Unit) {
 
 /** First screen of a phone with no PC: pair, or look at the example data. */
 @Composable
-fun WelcomeScreen(paste: () -> Unit, example: () -> Unit) {
+fun WelcomeScreen(scan: () -> Unit, paste: () -> Unit, example: () -> Unit) {
     Column(Modifier.fillMaxSize()) {
         Header("jwn", "sin PC emparejado")
         Box(Modifier.weight(1f)) {
-            Hero("Empareja este teléfono", "En tu PC ejecuta jwn pair. Enseña un código QR y un enlace: pega aquí el enlace. El código por cámara llega después.") {
-                Button("pegar enlace", true, paste)
+            Hero("Empareja este teléfono", "En tu PC ejecuta jwn pair. Enseña un código QR y un enlace: escanea el código o pega el enlace.") {
+                Button("escanear código", true, scan)
+                Button("pegar enlace", false, paste)
                 Button("ver datos de ejemplo", false, example)
             }
         }
@@ -115,19 +116,21 @@ fun PairingScreen(ui: LinkUi.Pairing, cancel: () -> Unit) {
 
 /** Why the link did not come up, and what to do. */
 @Composable
-fun LinkFailScreen(fail: LinkFail, again: () -> Unit, back: () -> Unit) {
+fun LinkFailScreen(fail: LinkFail, scan: () -> Unit, paste: () -> Unit, back: () -> Unit) {
     val (title, body, label) = when (fail) {
-        LinkFail.Expired -> Triple("Ese código ya no sirve", "Cada código vale una vez y dos minutos. En tu PC ejecuta jwn pair otra vez para uno nuevo.", "pegar otro enlace")
-        LinkFail.Declined -> Triple("Tu PC rechazó este teléfono", "Si no fuiste tú quien lo pidió, otra persona pudo ver el código. Ejecuta jwn pair otra vez para uno nuevo.", "pegar otro enlace")
+        LinkFail.Expired -> Triple("Ese código ya no sirve", "Cada código vale una vez y dos minutos. En tu PC ejecuta jwn pair otra vez para uno nuevo.", "escanear otro código")
+        LinkFail.Declined -> Triple("Tu PC rechazó este teléfono", "Si no fuiste tú quien lo pidió, otra persona pudo ver el código. Ejecuta jwn pair otra vez para uno nuevo.", "escanear otro código")
         LinkFail.Locked -> Triple("Demasiados intentos", "Tu PC bloqueó los intentos desde aquí. Espera un minuto y vuelve a intentarlo.", "volver")
         LinkFail.Revoked -> Triple("Este teléfono ya no está emparejado", "Desde tu PC se quitó este teléfono. Empareja de nuevo con jwn pair.", "empezar de nuevo")
-        LinkFail.Unreachable -> Triple("No encuentro tu PC", "Cada vez que se reinicia el enlace, la dirección del túnel cambia. Comprueba que el PC esté encendido y vuelve a pegar un enlace nuevo de jwn pair.", "pegar otro enlace")
+        LinkFail.Unreachable -> Triple("No encuentro tu PC", "Cada vez que se reinicia el enlace, la dirección del túnel cambia. Comprueba que el PC esté encendido y vuelve a pegar un enlace nuevo de jwn pair.", "escanear otro código")
         LinkFail.Versions -> Triple("La app y jwn no hablan igual", "Actualiza la app o jwn.", "volver")
     }
     Column(Modifier.fillMaxSize()) {
         Header("sin conexión", "jwn pair", onBack = back)
         Hero(title, body) {
-            Button(label, true, if (fail == LinkFail.Locked || fail == LinkFail.Versions) back else again)
+            val retry = fail != LinkFail.Locked && fail != LinkFail.Versions
+            Button(label, true, if (retry) scan else back)
+            if (retry) Button("pegar enlace", false, paste)
         }
     }
 }
