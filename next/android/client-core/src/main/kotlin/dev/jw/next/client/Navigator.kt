@@ -46,11 +46,19 @@ interface NodeSource {
 
     /** Stop watching [id]: the daemon stops patching it and stops reading git for it. */
     fun close(id: Id) {}
+
+    /** Close a pane (its shell ends); [reply] gets the daemon's message when it refuses. */
+    fun closePane(pane: Id, reply: (Result<Unit>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
 }
 
 sealed interface Screen {
     data object Home : Screen
     data object Avisos : Screen
+
+    /** The mode and the theme (REQ-157). */
+    data object Settings : Screen
     data class Workspace(val id: Id, val pane: Id?) : Screen
 
     /** The changes of one workspace (REQ-113). */
@@ -86,13 +94,16 @@ class Navigator(private val source: NodeSource) {
 
     /**
      * A workspace opened before its document arrived has no pane yet: once the document is
-     * here, select its first pane (and mark it seen), as opening it would have.
+     * here, select its first pane (and mark it seen), as opening it would have. The same when
+     * the selected pane is gone (it was closed): the first one takes its place, or none.
      */
     fun settle(s: ClientState): ClientState {
         val at = s.screen as? Screen.Workspace ?: return s
-        if (at.pane != null) return s
-        val first = (source.node(at.id) as? Node.Workspace)?.panes?.firstOrNull()?.id ?: return s
-        return s.copy(screen = at.copy(pane = first), seen = markNode(s.seen, first))
+        val ws = source.node(at.id) as? Node.Workspace ?: return s
+        if (at.pane != null && ws.panes.any { it.id == at.pane }) return s
+        val first = ws.panes.firstOrNull()?.id
+        val seen = if (first != null) markNode(s.seen, first) else s.seen
+        return s.copy(screen = at.copy(pane = first), seen = seen)
     }
 
     fun show(s: ClientState, screen: Screen): ClientState = s.copy(screen = screen)

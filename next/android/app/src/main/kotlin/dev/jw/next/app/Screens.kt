@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -27,8 +29,14 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
@@ -42,6 +50,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -54,6 +64,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.jw.next.client.Aviso
+import dev.jw.next.client.CloseSheet
 import dev.jw.next.client.ClientState
 import dev.jw.next.client.HomeRow
 import dev.jw.next.client.Navigator
@@ -61,6 +72,7 @@ import dev.jw.next.client.Screen
 import dev.jw.next.client.Tone
 import dev.jw.next.client.avisos
 import dev.jw.next.client.byUrgency
+import dev.jw.next.client.closeSheet
 import dev.jw.next.client.homeRows
 import dev.jw.next.client.mark
 import dev.jw.next.client.outputText
@@ -161,12 +173,13 @@ fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, pcs: (() -
                 MainTab.Workspaces -> set(nav.show(state, Screen.Home))
                 MainTab.Avisos -> set(nav.show(state, Screen.Avisos))
                 MainTab.Diff -> nav.changes(state)?.let(set)
+                MainTab.Settings -> set(nav.show(state, Screen.Settings))
             }
         }
     }
 }
 
-internal enum class MainTab { Workspaces, Avisos, Diff }
+internal enum class MainTab { Workspaces, Avisos, Diff, Settings }
 
 /** Words like the status line of the terminal client; the open one is underlined. */
 @Composable
@@ -177,6 +190,7 @@ internal fun MainTabBar(current: MainTab, waiting: Int, go: (MainTab) -> Unit) {
             TabCell("workspaces", null, current == MainTab.Workspaces, Modifier.weight(1f)) { go(MainTab.Workspaces) }
             TabCell("avisos", waiting.takeIf { it > 0 }, current == MainTab.Avisos, Modifier.weight(1f)) { go(MainTab.Avisos) }
             TabCell("± diff", null, current == MainTab.Diff, Modifier.weight(1f)) { go(MainTab.Diff) }
+            TabCell("ajustes", null, current == MainTab.Settings, Modifier.weight(1f)) { go(MainTab.Settings) }
         }
     }
 }
@@ -186,7 +200,7 @@ private fun TabCell(label: String, count: Int?, on: Boolean, modifier: Modifier,
     Column(modifier.fillMaxSize().clickable(onClick = click), horizontalAlignment = Alignment.CenterHorizontally) {
         Box(Modifier.fillMaxWidth().height(2.dp).background(if (on) Palette.blue else Color.Transparent))
         Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Mono(label, if (on) Palette.blue else Palette.dim, 13, bold = on)
+            Mono(label, if (on) Palette.blue else Palette.dim, 12, bold = on)
             if (count != null) Mono("$count", Palette.yellow, 12, bold = true)
         }
     }
@@ -194,7 +208,7 @@ private fun TabCell(label: String, count: Int?, on: Boolean, modifier: Modifier,
 
 /** A dim section label with a hairline that fills the rest of the line. */
 @Composable
-private fun Section(text: String) {
+internal fun Section(text: String) {
     Row(Modifier.fillMaxWidth().padding(start = Gutter, end = Gutter, top = 18.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         Mono(text, Palette.dim, 11)
         Spacer(Modifier.width(10.dp))
@@ -281,6 +295,11 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
         ws?.panes?.forEach { source.open(it.id) }
         set(nav.settle(state))
     }
+    // Asking before a pane is closed (REQ-148 to REQ-150): the sheet, what the PC said, and whether it is answering.
+    var closing by remember(screen.id) { mutableStateOf<CloseSheet?>(null) }
+    var closeError by remember(screen.id) { mutableStateOf<String?>(null) }
+    var closeBusy by remember(screen.id) { mutableStateOf(false) }
+    Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize()) {
         Header(ws?.name ?: "workspace", ws?.let { (if (it.branch != null) "↳ ${it.branch}  " else "") + it.path }, onBack = { set(nav.back(state)) }) {
             Box(Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp).clickable { nav.changes(state)?.let(set) }, contentAlignment = Alignment.Center) {
@@ -291,7 +310,10 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
             Box(Modifier.weight(1f).padding(Gutter)) { Mono("Abriendo el workspace…", Palette.dim, 13, lines = 3) }
             return@Column
         }
-        PaneTabs(ws.panes, screen.pane, state) { set(nav.selectPane(state, it)) }
+        PaneTabs(ws.panes, screen.pane, state, select = { set(nav.selectPane(state, it)) }) { pane ->
+            closeError = null
+            closing = closeSheet(source, pane)
+        }
         val pane = remember(version, screen.pane) { screen.pane?.let { source.node(it) as? Node.Pane } }
         val blocksId = pane?.blocks
         LaunchedEffect(blocksId) { blocksId?.let { source.open(it) } }
@@ -302,6 +324,8 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
         val copy = { text: String -> scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("jwn", text))) }; Unit }
         val block = blocks?.blocks?.firstOrNull { it.id == picked }
         val shown = blocks?.takeIf { it.mode == BlocksMode.Blocks }
+        // A shell with blocks that have not arrived: its screen would show for a moment and then give way to them.
+        val waitingBlocks = blocksId != null && blocks == null
         if (shown != null) {
             BlocksList(shown.blocks, picked, Modifier.weight(1f)) { picked = it }
             if (block != null) {
@@ -321,7 +345,7 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
                 Modifier.weight(1f).fillMaxWidth().background(Palette.bg).verticalScroll(rememberScrollState())
                     .horizontalScroll(rememberScrollState()).padding(horizontal = Gutter - 4.dp, vertical = 10.dp),
             ) {
-                if (pane == null) Mono("Abriendo el panel…", Palette.dim, 12)
+                if (pane == null || waitingBlocks) PaneSkeleton()
                 else Text(
                     terminalText(pane.screen.lines, pane.screen.cursor.row, pane.screen.cursor.col, pane.screen.cursor.visible),
                     fontFamily = MonoFont, fontSize = 12.sp, lineHeight = 18.sp, color = Palette.fg, softWrap = false,
@@ -346,6 +370,53 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
             screen.pane?.let { source.write(it, line + "\r") }
         }
     }
+    closing?.let { sheet ->
+        ClosePaneSheet(sheet, closeError, closeBusy, cancel = { closing = null }) {
+            closeBusy = true
+            closeError = null
+            source.closePane(sheet.pane) { result ->
+                closeBusy = false
+                result.onSuccess { closing = null }.onFailure { closeError = it.message ?: "el PC no pudo cerrar el panel" }
+            }
+        }
+    }
+    }
+}
+
+/** The question before a pane is closed: it always asks, and says the workspace stays (REQ-148, REQ-149). */
+@Composable
+private fun BoxScope.ClosePaneSheet(sheet: CloseSheet, error: String?, busy: Boolean, cancel: () -> Unit, confirm: () -> Unit) {
+    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.55f)).clickable(onClick = cancel))
+    Column(
+        Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Palette.panel, RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp))
+            .navigationBarsPadding().padding(Gutter),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Mono(sheet.heading, Palette.fg, 14, bold = true, lines = 2)
+        Mono(sheet.body, Palette.dim, 12, lines = 6)
+        if (error != null) Mono(error, Palette.red, 12, lines = 4)
+        Mono(
+            if (busy) "cerrando…" else "× cerrar el panel", Palette.red, 14, bold = true,
+            modifier = Modifier.fillMaxWidth().clickable(enabled = !busy, onClick = confirm).padding(vertical = 12.dp),
+        )
+        Mono("cancelar", Palette.fg, 14, modifier = Modifier.fillMaxWidth().clickable(onClick = cancel).padding(vertical = 12.dp))
+    }
+}
+
+/** What the pane looks like before its document arrives: grey bars where the lines will be, breathing. */
+@Composable
+private fun PaneSkeleton() {
+    val alpha by rememberInfiniteTransition(label = "skeleton").animateFloat(
+        initialValue = 0.25f,
+        targetValue = 0.6f,
+        animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
+        label = "alpha",
+    )
+    Column(Modifier.fillMaxWidth().semantics { contentDescription = "Abriendo el panel" }, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        listOf(0.55f, 0.8f, 0.4f, 0.65f, 0.3f).forEach { w ->
+            Box(Modifier.fillMaxWidth(w).height(12.dp).background(Palette.line.copy(alpha = alpha), RoundedCornerShape(4.dp)))
+        }
+    }
 }
 
 /** A program with the whole screen (nvim) takes the pane; the blocks come back when it exits. */
@@ -368,7 +439,8 @@ private fun Composer(
 ) {
     var text by remember { mutableStateOf("") }
     val go = { if (enabled) { send(text); text = "" } }
-    Column(Modifier.fillMaxWidth().background(Palette.panel).navigationBarsPadding()) {
+    // The field rides up with the keyboard: the app draws edge to edge, so nothing else moves it.
+    Column(Modifier.fillMaxWidth().background(Palette.panel).navigationBarsPadding().imePadding()) {
         if (chips != null) {
             Row(
                 Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(start = Gutter, end = Gutter, top = 10.dp),
@@ -429,7 +501,7 @@ private fun terminalText(lines: List<String>, row: Int, col: Int, visible: Boole
 
 /** Open pane underlined in blue; an unseen mark sits beside the name. */
 @Composable
-private fun PaneTabs(panes: List<PaneSummary>, current: String?, state: ClientState, select: (String) -> Unit) {
+private fun PaneTabs(panes: List<PaneSummary>, current: String?, state: ClientState, select: (String) -> Unit, close: (String) -> Unit) {
     Column(Modifier.fillMaxWidth().background(Palette.panel)) {
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
             panes.forEach { p ->
@@ -443,6 +515,9 @@ private fun PaneTabs(panes: List<PaneSummary>, current: String?, state: ClientSt
                     ) {
                         Mono(p.title, if (on) Palette.fg else Palette.dim, 13, bold = on)
                         unseen.firstOrNull()?.let { a -> a.mark().let { Mono(it.glyph, it.tone.color(), 14, bold = true) } }
+                        if (on) {
+                            Box(Modifier.size(32.dp).clickable { close(p.id) }, contentAlignment = Alignment.Center) { Mono("×", Palette.dim, 18) }
+                        }
                     }
                     Box(Modifier.fillMaxWidth().height(2.dp).background(if (on) Palette.blue else Color.Transparent))
                 }

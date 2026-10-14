@@ -139,6 +139,12 @@ abstract class ProtocolSource : AppSource() {
         command(Cmd.SetViewed(node, path, viewed))
     }
 
+    override fun closePane(pane: Id, reply: (Result<Unit>) -> Unit) {
+        command(Cmd.ClosePane(pane)) {
+            reply(if (it.ok) Result.success(Unit) else Result.failure(Exception(it.error?.message ?: "el PC no pudo cerrar el panel")))
+        }
+    }
+
     override fun close(id: Id) {
         synchronized(lock) { opened.remove(id) }
         send(ClientMsg.Close(id))

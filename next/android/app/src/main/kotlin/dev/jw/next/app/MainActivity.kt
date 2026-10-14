@@ -1,5 +1,6 @@
 package dev.jw.next.app
 
+import android.content.res.Configuration
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -7,16 +8,20 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
+import androidx.core.view.WindowCompat
 import dev.jw.next.client.ClientState
+import dev.jw.next.client.Look
 import dev.jw.next.client.Navigator
 import dev.jw.next.client.Pairing
 import dev.jw.next.client.Screen
@@ -42,6 +47,10 @@ class MainActivity : ComponentActivity() {
         return Mode.Running(WsLinkSource(links, null, link))
     }
 
+    /** Whether the phone is in its dark mode: what `system` follows at start. */
+    private fun isNight(): Boolean =
+        resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
+
     /** Where to go when there is no PC connected: the list, or the welcome of a phone with none. */
     private fun idle(): Mode = if (links.load().pcs.isEmpty()) Mode.Welcome else Mode.Pcs(null)
 
@@ -56,8 +65,24 @@ class MainActivity : ComponentActivity() {
             else -> links.load().lastUsed()?.let { Mode.Running(WsLinkSource(links, it, null)) } ?: Mode.Welcome
         }
         val store = SeenStore(this)
+        val looks = LookStore(this)
+        // Drawn in the chosen theme from the first frame, not after one in the default.
+        Palette.use(looks.load().theme(isNight()))
         setContent {
             var mode by remember { mutableStateOf(initial) }
+            var look by remember { mutableStateOf(looks.load()) }
+            val osDark = isSystemInDarkTheme()
+            val setLook = { l: Look ->
+                look = l
+                looks.save(l)
+                Palette.use(l.theme(osDark))
+            }
+            SideEffect {
+                Palette.use(look.theme(osDark))
+                val bars = WindowCompat.getInsetsController(window, window.decorView)
+                bars.isAppearanceLightStatusBars = !look.isDark(osDark)
+                bars.isAppearanceLightNavigationBars = !look.isDark(osDark)
+            }
             Box(Modifier.fillMaxSize().background(Palette.bg).statusBarsPadding()) {
                 when (val m = mode) {
                     is Mode.Welcome -> WelcomeScreen({ mode = Mode.Scan(Mode.Welcome) }, { mode = Mode.Paste(Mode.Welcome) }, { mode = Mode.Running(FixtureSource(this@MainActivity)) })
@@ -70,7 +95,7 @@ class MainActivity : ComponentActivity() {
                         PasteScreen(m.error, { mode = open(it, m.back) }) { mode = m.back }
                     }
                     is Mode.Pcs -> Pcs(m) { mode = it }
-                    is Mode.Running -> Running(m.source, store) { mode = it }
+                    is Mode.Running -> Running(m.source, store, look, osDark, setLook) { mode = it }
                 }
             }
         }
@@ -118,7 +143,7 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun Running(source: AppSource, store: SeenStore, go: (Mode) -> Unit) {
+    private fun Running(source: AppSource, store: SeenStore, look: Look, osDark: Boolean, setLook: (Look) -> Unit, go: (Mode) -> Unit) {
         val link = source as? WsLinkSource
         val ui = link?.ui?.value
         when (ui) {
@@ -142,10 +167,11 @@ class MainActivity : ComponentActivity() {
         val epoch = source.epoch
         LaunchedEffect(epoch) { if (epoch.isNotEmpty()) state = state.copy(seen = state.seen.forEpoch(epoch)) }
         LaunchedEffect(state.seen) { store.save(state.seen) }
-        BackHandler(enabled = state.screen is Screen.Workspace) { state = nav.back(state) }
+        BackHandler(enabled = state.screen is Screen.Workspace || state.screen is Screen.Settings) { state = nav.back(state) }
         when (val screen = state.screen) {
             is Screen.Workspace -> WorkspaceScreen(source, state, screen, nav) { state = it }
             is Screen.Changes -> ChangesScreen(source, state, screen, nav) { state = it }
+            is Screen.Settings -> SettingsScreen(source, state, nav, look, osDark, setLook) { state = it }
             else -> HomeScreen(source, state, nav, pcs) { state = it }
         }
     }

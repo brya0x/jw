@@ -108,6 +108,7 @@ fun ChangesScreen(source: AppSource, state: ClientState, screen: Screen.Changes,
                 MainTab.Workspaces -> set(nav.show(state, Screen.Home))
                 MainTab.Avisos -> set(nav.show(state, Screen.Avisos))
                 MainTab.Diff -> {}
+                MainTab.Settings -> set(nav.show(state, Screen.Settings))
             }
         }
     }
