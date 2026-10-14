@@ -415,8 +415,8 @@ The shapes REQ-91 to REQ-103 name (nodes, commands, fields) are enforced by N31 
 | N38 ✓ `c8b8c27` | the spec of parity: closing panes and workspaces, removing a worktree without force, the look (a mode and ten palettes, five dark and five light); no sessions | 139–158 | `docs/prototypes/{tui-manage,mobile}.html` |
 | N39 ✓ `8c685a0` | the terminal client closes panes and workspaces and removes worktrees | 139–147 | `crates/jwn/src/tui/manage.rs`, `crates/jwn/src/tui.rs` |
 | N40 ✓ `d4bd558` | the terminal client's themes, mode and `settings.json`, with `contract/themes.json` | 151–156 | `contract/themes.json`, `crates/contract/src/themes.rs`, `crates/jwn/src/tui/{look,settings,manage}.rs` |
-| N41 ✓ (this commit) | the phone closes a pane and has the `ajustes` tab; its field rises with the keyboard and a pane that is opening shows grey bars | 148–150, 156–158, 167, 168 | `android/app`, `android/client-core/.../{Look,ClosePane}.kt` |
-| N42 ✓ (next commit) | the terminal client turns the link on and pairs a phone (`m`); the same grey bars for a pane that is opening | 159–166, 168 | `crates/jwn/src/tui/phone.rs`, `crates/jwn/src/tui.rs` |
+| N41 ✓ `8783b30` | the phone closes a pane and has the `ajustes` tab; its field rises with the keyboard and a pane that is opening shows grey bars | 148–150, 156–158, 167, 168 | `android/app`, `android/client-core/.../{Look,ClosePane}.kt` |
+| N42 ✓ `902bff6` | the terminal client turns the link on and pairs a phone (`m`); the same grey bars for a pane that is opening | 159–166, 168 | `crates/jwn/src/tui/phone.rs`, `crates/jwn/src/tui.rs` |
 
 ## What is left
 In this order, which is proposed except for the viewer of files and Markdown, whose place (7th, after everything else) the user chose on 2026-10-14 because he does not want to work on Markdown yet. Each becomes a part (N35 onwards) with its REQs when it starts; a part with a screen starts from an approved prototype.
