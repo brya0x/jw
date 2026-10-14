@@ -1,5 +1,6 @@
 //! The look the person chose for the terminal client: a mode (system, dark, light) and a
-//! theme, in `settings.json` under the config directory (spec REQ-151 to REQ-154). Nothing
+//! theme for each kind, in `settings.json` under the config directory (spec REQ-151 to
+//! REQ-154). Nothing
 //! here fails: a missing or unreadable file, or a value it does not know, is the default for
 //! that value.
 
@@ -43,18 +44,23 @@ impl Mode {
     }
 }
 
+/// What the person chose: the mode, and the theme each kind uses. A dark theme is used while
+/// the mode is dark, a light one while it is light, so changing the mode brings back the theme
+/// last picked for it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Settings {
     pub mode: Mode,
-    /// The id of one of `contract::themes`.
-    pub theme: String,
+    /// Ids of `contract::themes`: a dark one and a light one.
+    pub dark: String,
+    pub light: String,
 }
 
 impl Default for Settings {
     fn default() -> Settings {
         Settings {
             mode: Mode::System,
-            theme: themes::DEFAULT.to_owned(),
+            dark: themes::DEFAULT_DARK.to_owned(),
+            light: themes::DEFAULT_LIGHT.to_owned(),
         }
     }
 }
@@ -80,10 +86,8 @@ impl Settings {
                 .into_iter()
                 .find(|m| doc["mode"].as_str() == Some(m.id()))
                 .unwrap_or_default(),
-            theme: doc["theme"]
-                .as_str()
-                .and_then(themes::find)
-                .map_or_else(|| themes::DEFAULT.to_owned(), |t| t.id.clone()),
+            dark: kept(&doc["dark"], true),
+            light: kept(&doc["light"], false),
         }
     }
 
@@ -97,7 +101,11 @@ impl Settings {
             std::fs::create_dir_all(dir)?;
         }
         let tmp = path.with_extension("json.tmp");
-        let doc = serde_json::json!({ "mode": self.mode.id(), "theme": self.theme });
+        let doc = serde_json::json!({
+            "mode": self.mode.id(),
+            "dark": self.dark,
+            "light": self.light,
+        });
         std::fs::write(&tmp, serde_json::to_string_pretty(&doc)? + "\n")?;
         std::fs::rename(&tmp, path)
     }
@@ -111,9 +119,36 @@ impl Settings {
         }
     }
 
-    pub fn palette(&self, os_dark: bool) -> contract::themes::Palette {
-        themes::get(&self.theme).palette(self.is_dark(os_dark))
+    /// The theme in force: the dark choice while it is dark, the light one while it is light.
+    pub fn theme(&self, os_dark: bool) -> &'static themes::Theme {
+        let dark = self.is_dark(os_dark);
+        themes::get(if dark { &self.dark } else { &self.light }, dark)
     }
+
+    pub fn palette(&self, os_dark: bool) -> themes::Palette {
+        self.theme(os_dark).palette
+    }
+
+    /// Use `id` for the kind in force.
+    pub fn choose(&mut self, os_dark: bool, id: &str) {
+        let slot = if self.is_dark(os_dark) {
+            &mut self.dark
+        } else {
+            &mut self.light
+        };
+        *slot = id.to_owned();
+    }
+}
+
+/// The id in `value` when it names a theme of that kind, else the kind's default.
+fn kept(value: &serde_json::Value, dark: bool) -> String {
+    let default = if dark {
+        themes::DEFAULT_DARK
+    } else {
+        themes::DEFAULT_LIGHT
+    };
+    let id = value.as_str().unwrap_or(default);
+    themes::get(id, dark).id.clone()
 }
 
 /// Whether the machine is in dark mode: dark where it cannot tell (macOS prints `Dark` when
@@ -142,11 +177,21 @@ mod tests {
     }
 
     #[test]
-    fn each_value_falls_back_alone() {
-        let s = Settings::parse(r#"{"mode": "light", "theme": "nope"}"#);
-        assert_eq!((s.mode, s.theme.as_str()), (Mode::Light, "one"));
-        let s = Settings::parse(r#"{"mode": "sepia", "theme": "gruvbox"}"#);
-        assert_eq!((s.mode, s.theme.as_str()), (Mode::System, "gruvbox"));
+    fn each_value_falls_back_alone_and_a_theme_must_be_of_its_kind() {
+        let s = Settings::parse(r#"{"mode": "light", "dark": "nope", "light": "gruvbox-light"}"#);
+        assert_eq!(s.mode, Mode::Light);
+        assert_eq!(
+            (s.dark.as_str(), s.light.as_str()),
+            ("one-dark", "gruvbox-light")
+        );
+        let s =
+            Settings::parse(r#"{"mode": "sepia", "dark": "tokyo-night", "light": "tokyo-night"}"#);
+        assert_eq!(s.mode, Mode::System);
+        assert_eq!(
+            (s.dark.as_str(), s.light.as_str()),
+            ("tokyo-night", "one-light"),
+            "a dark theme is not a light choice"
+        );
     }
 
     #[test]
@@ -155,7 +200,8 @@ mod tests {
         let path = dir.join("nested").join("settings.json");
         let s = Settings {
             mode: Mode::Dark,
-            theme: "tokyo-night".into(),
+            dark: "tokyo-night".into(),
+            light: "tokyo-day".into(),
         };
         s.save_to(&path).unwrap();
         assert_eq!(Settings::load_from(&path), s);
@@ -168,6 +214,26 @@ mod tests {
             Settings::default()
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_theme_in_force_follows_the_kind_and_each_kind_keeps_its_choice() {
+        let mut s = Settings::default();
+        s.choose(true, "gruvbox-dark");
+        assert_eq!(s.theme(true).id, "gruvbox-dark");
+        assert_eq!(
+            s.theme(false).id,
+            "one-light",
+            "the light choice was not touched"
+        );
+        s.mode = Mode::Light;
+        s.choose(true, "solarized-light");
+        assert_eq!(
+            (s.dark.as_str(), s.light.as_str()),
+            ("gruvbox-dark", "solarized-light")
+        );
+        s.mode = Mode::Dark;
+        assert_eq!(s.theme(false).id, "gruvbox-dark", "back to the dark one");
     }
 
     #[test]

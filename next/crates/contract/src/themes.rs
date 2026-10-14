@@ -1,6 +1,7 @@
-//! The ten palettes the clients draw with (`contract/themes.json`): five themes, each with a
-//! dark and a light member. The file is the home of the colours; the terminal client reads it
-//! through here and the phone's table is tested against it.
+//! The ten palettes the clients draw with (`contract/themes.json`): five dark and five light,
+//! each saying which it is, so a selector shows only the kind in force. The file is the home
+//! of the colours; the terminal client reads it through here and the phone's table is tested
+//! against it.
 
 use std::sync::OnceLock;
 
@@ -25,22 +26,18 @@ pub struct Palette {
     pub cyan: Rgb,
 }
 
+/// One palette: a theme of the list, dark or light.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Theme {
     pub id: String,
     pub name: String,
-    pub dark: Palette,
-    pub light: Palette,
+    pub dark: bool,
+    pub palette: Palette,
 }
 
-impl Theme {
-    pub fn palette(&self, dark: bool) -> Palette {
-        if dark { self.dark } else { self.light }
-    }
-}
-
-/// The theme a person who chose nothing gets.
-pub const DEFAULT: &str = "one";
+/// The themes a person who chose nothing gets, one for each kind.
+pub const DEFAULT_DARK: &str = "one-dark";
+pub const DEFAULT_LIGHT: &str = "one-light";
 
 const FILE: &str = include_str!("../../../contract/themes.json");
 
@@ -50,13 +47,19 @@ pub fn all() -> &'static [Theme] {
     ALL.get_or_init(|| parse(FILE).expect("contract/themes.json is not a list of themes"))
 }
 
-pub fn find(id: &str) -> Option<&'static Theme> {
-    all().iter().find(|t| t.id == id)
+/// The themes of one kind: what a selector shows while the mode is dark (or light).
+pub fn of_kind(dark: bool) -> impl Iterator<Item = &'static Theme> {
+    all().iter().filter(move |t| t.dark == dark)
 }
 
-/// The theme named `id`, or the default one.
-pub fn get(id: &str) -> &'static Theme {
-    find(id).or_else(|| find(DEFAULT)).unwrap_or(&all()[0])
+/// The theme named `id` when it is of this kind, else the default one of the kind.
+pub fn get(id: &str, dark: bool) -> &'static Theme {
+    let default = if dark { DEFAULT_DARK } else { DEFAULT_LIGHT };
+    of_kind(dark)
+        .find(|t| t.id == id)
+        .or_else(|| of_kind(dark).find(|t| t.id == default))
+        .or_else(|| of_kind(dark).next())
+        .unwrap_or(&all()[0])
 }
 
 #[derive(Deserialize)]
@@ -68,12 +71,7 @@ struct RawFile {
 struct RawTheme {
     id: String,
     name: String,
-    dark: RawPalette,
-    light: RawPalette,
-}
-
-#[derive(Deserialize)]
-struct RawPalette {
+    kind: String,
     bg: String,
     panel: String,
     fg: String,
@@ -99,38 +97,38 @@ fn hex(text: &str) -> Result<Rgb, String> {
     Ok((part(0)?, part(2)?, part(4)?))
 }
 
-impl RawPalette {
-    fn palette(&self) -> Result<Palette, String> {
-        Ok(Palette {
-            bg: hex(&self.bg)?,
-            panel: hex(&self.panel)?,
-            fg: hex(&self.fg)?,
-            dim: hex(&self.dim)?,
-            line: hex(&self.line)?,
-            sel: hex(&self.sel)?,
-            blue: hex(&self.blue)?,
-            green: hex(&self.green)?,
-            yellow: hex(&self.yellow)?,
-            red: hex(&self.red)?,
-            magenta: hex(&self.magenta)?,
-            cyan: hex(&self.cyan)?,
+impl RawTheme {
+    fn theme(&self) -> Result<Theme, String> {
+        let dark = match self.kind.as_str() {
+            "dark" => true,
+            "light" => false,
+            other => return Err(format!("{}: kind is {other}, not dark or light", self.id)),
+        };
+        Ok(Theme {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            dark,
+            palette: Palette {
+                bg: hex(&self.bg)?,
+                panel: hex(&self.panel)?,
+                fg: hex(&self.fg)?,
+                dim: hex(&self.dim)?,
+                line: hex(&self.line)?,
+                sel: hex(&self.sel)?,
+                blue: hex(&self.blue)?,
+                green: hex(&self.green)?,
+                yellow: hex(&self.yellow)?,
+                red: hex(&self.red)?,
+                magenta: hex(&self.magenta)?,
+                cyan: hex(&self.cyan)?,
+            },
         })
     }
 }
 
 fn parse(text: &str) -> Result<Vec<Theme>, String> {
     let file: RawFile = serde_json::from_str(text).map_err(|e| e.to_string())?;
-    file.themes
-        .iter()
-        .map(|t| {
-            Ok(Theme {
-                id: t.id.clone(),
-                name: t.name.clone(),
-                dark: t.dark.palette()?,
-                light: t.light.palette()?,
-            })
-        })
-        .collect()
+    file.themes.iter().map(RawTheme::theme).collect()
 }
 
 #[cfg(test)]
@@ -138,23 +136,59 @@ mod tests {
     use super::*;
 
     #[test]
-    fn there_are_five_themes_with_two_members_each() {
-        let ids: Vec<&str> = all().iter().map(|t| t.id.as_str()).collect();
+    fn there_are_five_dark_and_five_light_themes_and_each_says_which() {
+        let ids = |dark| of_kind(dark).map(|t| t.id.as_str()).collect::<Vec<_>>();
         assert_eq!(
-            ids,
-            ["one", "catppuccin", "tokyo-night", "gruvbox", "solarized"]
+            ids(true),
+            [
+                "one-dark",
+                "catppuccin-mocha",
+                "tokyo-night",
+                "gruvbox-dark",
+                "solarized-dark"
+            ]
+        );
+        assert_eq!(
+            ids(false),
+            [
+                "one-light",
+                "catppuccin-latte",
+                "tokyo-day",
+                "gruvbox-light",
+                "solarized-light"
+            ]
         );
         for t in all() {
-            assert_ne!(t.dark, t.light, "{}", t.id);
-            assert!(t.dark.bg.0 < t.light.bg.0, "{}: dark is darker", t.id);
+            let (bg, fg) = (t.palette.bg, t.palette.fg);
+            let lum = |c: Rgb| u32::from(c.0) + u32::from(c.1) + u32::from(c.2);
+            assert_eq!(
+                lum(bg) < lum(fg),
+                t.dark,
+                "{}: the ground is the kind",
+                t.id
+            );
         }
+        let all_ids: std::collections::HashSet<_> = all().iter().map(|t| &t.id).collect();
+        assert_eq!(all_ids.len(), all().len(), "ids are unique");
     }
 
     #[test]
-    fn an_unknown_theme_is_the_default_one() {
-        assert_eq!(get("nope").id, DEFAULT);
-        assert_eq!(get("gruvbox").name, "Gruvbox");
-        assert_eq!(get("one").dark.bg, (0x28, 0x2c, 0x34));
+    fn a_theme_of_the_other_kind_or_an_unknown_one_is_the_default_of_the_kind() {
+        assert_eq!(get("nope", true).id, DEFAULT_DARK);
+        assert_eq!(get("nope", false).id, DEFAULT_LIGHT);
+        assert_eq!(
+            get("one-light", true).id,
+            DEFAULT_DARK,
+            "light is not a dark choice"
+        );
+        assert_eq!(get("gruvbox-light", false).name, "Gruvbox Light");
+        assert_eq!(get("one-dark", true).palette.bg, (0x28, 0x2c, 0x34));
+    }
+
+    #[test]
+    fn a_kind_that_is_neither_dark_nor_light_is_an_error() {
+        let text = FILE.replacen("\"kind\": \"dark\"", "\"kind\": \"dim\"", 1);
+        assert!(parse(&text).is_err());
     }
 
     #[test]

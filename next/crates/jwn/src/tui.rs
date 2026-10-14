@@ -424,6 +424,22 @@ impl View {
 
     pub fn set_os_dark(&mut self, dark: bool) {
         self.os_dark = dark;
+        if matches!(self.manage, Some(Manage::Settings { .. })) {
+            self.manage = Some(self.settings_question());
+        }
+    }
+
+    /// The settings question, on the theme in force among those of the kind in force (the
+    /// mode picks the kind, so changing it brings the list of the other kind).
+    fn settings_question(&self) -> Manage {
+        let dark = self.settings.is_dark(self.os_dark);
+        let chosen = &self.settings.theme(self.os_dark).id;
+        Manage::Settings {
+            cursor: contract::themes::of_kind(dark)
+                .position(|t| t.id == *chosen)
+                .unwrap_or(0),
+            shown: contract::themes::of_kind(dark).count(),
+        }
     }
 
     /// A change of the settings waits to be written: the file must not be read over it.
@@ -804,14 +820,18 @@ impl View {
             None => After::Continue,
             Some(Act::ClosePane(pane)) => After::ClosePane(pane),
             Some(Act::Check(workspace)) => After::Check(workspace),
-            Some(Act::Theme(id)) => {
-                self.settings.theme = id;
-                self.save = true;
+            Some(Act::Theme(at)) => {
+                let kind = self.settings.is_dark(self.os_dark);
+                if let Some(t) = contract::themes::of_kind(kind).nth(at) {
+                    self.settings.choose(self.os_dark, &t.id);
+                    self.save = true;
+                }
                 After::Continue
             }
             Some(Act::StepMode(forward)) => {
                 self.settings.mode = self.settings.mode.step(forward);
                 self.save = true;
+                self.manage = Some(self.settings_question());
                 After::Continue
             }
             Some(Act::RemoveWorkspace {
@@ -974,13 +994,7 @@ impl View {
             }
             (Mode::Workspaces, Key::ClosePane) => return self.ask_close_pane(),
             (Mode::Workspaces, Key::CloseWorkspace) => self.ask_close_workspace(),
-            (Mode::Workspaces, Key::Settings) => {
-                let cursor = contract::themes::all()
-                    .iter()
-                    .position(|t| t.id == self.settings.theme)
-                    .unwrap_or(0);
-                self.manage = Some(Manage::Settings { cursor });
-            }
+            (Mode::Workspaces, Key::Settings) => self.manage = Some(self.settings_question()),
             (Mode::Avisos, Key::Down) => {
                 let last = self.avisos().len().saturating_sub(1);
                 self.avisos_selected = (self.avisos_selected + 1).min(last);
@@ -2904,10 +2918,14 @@ mod tests {
         assert_eq!(v.take_save(), None);
         v.press_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         let saved = v.take_save().expect("a choice is written");
-        assert_eq!(saved.theme, "tokyo-night");
+        assert_eq!(saved.dark, "tokyo-night");
+        assert_eq!(saved.light, "one-light", "the light choice is left alone");
         assert!(v.take_save().is_none(), "once");
         v.plain(120, 30);
-        assert_eq!(look::bg(), contract::themes::get("tokyo-night").dark.bg);
+        assert_eq!(
+            look::bg(),
+            contract::themes::get("tokyo-night", true).palette.bg
+        );
         v.press_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(v.manage.is_none());
     }
@@ -2921,14 +2939,14 @@ mod tests {
         tap(&mut v, 'm');
         assert_eq!(v.settings().mode, settings::Mode::Light);
         assert!(v.unsaved(), "the file must not be read over it");
-        let light = contract::themes::get("one").light;
+        let light = contract::themes::get("one-light", false).palette;
         let frame = v.grid(100, 20).rows_ansi().join("");
         let (r, g, b) = light.bg;
         assert!(
             frame.contains(&format!("48;2;{r};{g};{b}m")),
             "the light ground"
         );
-        let (r, g, b) = contract::themes::get("one").dark.bg;
+        let (r, g, b) = contract::themes::get("one-dark", true).palette.bg;
         assert!(
             !frame.contains(&format!("48;2;{r};{g};{b}m")),
             "no dark ground left"
@@ -2942,28 +2960,92 @@ mod tests {
         let mut v = idle_view();
         v.set_os_dark(false);
         v.plain(100, 20);
-        assert_eq!(look::bg(), contract::themes::get("one").light.bg);
+        assert_eq!(
+            look::bg(),
+            contract::themes::get("one-light", false).palette.bg
+        );
         v.set_os_dark(true);
         v.plain(100, 20);
-        assert_eq!(look::bg(), contract::themes::get("one").dark.bg);
+        assert_eq!(
+            look::bg(),
+            contract::themes::get("one-dark", true).palette.bg
+        );
     }
 
     #[test]
-    fn every_theme_draws_the_frame_in_both_members_without_overflowing() {
+    fn every_theme_draws_the_frame_with_its_own_ground() {
         let mut v = idle_view();
         for t in contract::themes::all() {
-            for dark in [true, false] {
-                v.set_settings(Settings {
-                    mode: if dark {
-                        settings::Mode::Dark
-                    } else {
-                        settings::Mode::Light
-                    },
-                    theme: t.id.clone(),
-                });
-                let rows = v.grid(100, 20).rows_plain();
-                assert_eq!(rows.len(), 20, "{} {dark}", t.id);
-            }
+            let mut s = Settings {
+                mode: if t.dark {
+                    settings::Mode::Dark
+                } else {
+                    settings::Mode::Light
+                },
+                ..Settings::default()
+            };
+            s.choose(true, &t.id);
+            v.set_settings(s);
+            let rows = v.grid(100, 20).rows_plain();
+            assert_eq!(rows.len(), 20, "{}", t.id);
+            assert_eq!(look::bg(), t.palette.bg, "{}", t.id);
         }
+    }
+
+    #[test]
+    fn the_selector_lists_only_the_kind_in_force_and_each_kind_keeps_its_choice() {
+        let mut v = idle_view();
+        tap(&mut v, ',');
+        tap(&mut v, 'm');
+        assert_eq!(v.settings().mode, settings::Mode::Dark);
+        let t = v.plain(120, 30);
+        for name in [
+            "One Dark",
+            "Catppuccin Mocha",
+            "Tokyo Night",
+            "Gruvbox Dark",
+            "Solarized Dark",
+        ] {
+            assert!(t.contains(name), "{name}: {t}");
+        }
+        assert!(t.contains("Temas oscuros"), "{t}");
+        assert!(!t.contains("One Light") && !t.contains("Tokyo Day"), "{t}");
+        // Pick Gruvbox Dark, go to light mode: only the light ones, and the light choice is
+        // still the default.
+        for _ in 0..3 {
+            tap(&mut v, 'j');
+        }
+        v.press_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(v.settings().dark, "gruvbox-dark");
+        tap(&mut v, 'm');
+        assert_eq!(v.settings().mode, settings::Mode::Light);
+        let t = v.plain(120, 30);
+        assert!(t.contains("Temas claros") && t.contains("Tokyo Day"), "{t}");
+        assert!(
+            !t.contains("Gruvbox Dark") && !t.contains("One Dark"),
+            "{t}"
+        );
+        assert!(
+            t.contains("❯ ● One Light"),
+            "the light choice, not the dark one: {t}"
+        );
+        // Choose in light mode; the dark choice stays.
+        tap(&mut v, 'j');
+        v.press_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(v.settings().light, "catppuccin-latte");
+        assert_eq!(v.settings().dark, "gruvbox-dark");
+        // `system` shows the kind the machine is in.
+        tap(&mut v, 'm');
+        assert_eq!(v.settings().mode, settings::Mode::System);
+        v.set_os_dark(false);
+        let t = v.plain(120, 30);
+        assert!(t.contains("Temas claros (la máquina está en claro)"), "{t}");
+        v.set_os_dark(true);
+        let t = v.plain(120, 30);
+        assert!(
+            t.contains("Temas oscuros (la máquina está en oscuro)"),
+            "{t}"
+        );
+        assert!(t.contains("❯ ● Gruvbox Dark"), "{t}");
     }
 }

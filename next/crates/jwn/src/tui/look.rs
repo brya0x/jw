@@ -9,7 +9,7 @@ use contract::themes::{self, Palette, Rgb};
 
 thread_local! {
     static CURRENT: Cell<(Palette, bool)> =
-        Cell::new((themes::get(themes::DEFAULT).dark, true));
+        Cell::new((themes::get(themes::DEFAULT_DARK, true).palette, true));
 }
 
 /// Draw with `palette` from now on; `dark` says which member of its theme it is.
@@ -91,7 +91,7 @@ mod tests {
     fn the_default_is_one_dark_and_set_changes_it_for_this_thread() {
         assert_eq!(bg(), (0x28, 0x2c, 0x34));
         assert!(is_dark());
-        let light = themes::get("one").light;
+        let light = themes::get("one-light", false).palette;
         set(light, false);
         assert_eq!(bg(), light.bg);
         assert!(!is_dark());

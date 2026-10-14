@@ -489,22 +489,23 @@ const I = {
 I.folder='<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>';
 const ic = (n,s) => `<svg class="i" viewBox="0 0 24 24" aria-hidden="true"${s?` style="width:${s}px;height:${s}px"`:''}>${I[n]}</svg>`;
 
-const FAM = {
-  'One':{dark:{bg:'#282c34',panel:'#21252b',fg:'#abb2bf',dim:'#5c6370',line:'#3e4451',sel:'#2c313a',blue:'#61afef',green:'#98c379',yellow:'#e5c07b',red:'#e06c75',magenta:'#c678dd',cyan:'#56b6c2'},
-         light:{bg:'#fafafa',panel:'#f0f0f1',fg:'#383a42',dim:'#a0a1a7',line:'#dbdbdc',sel:'#e5e5e6',blue:'#4078f2',green:'#50a14f',yellow:'#c18401',red:'#e45649',magenta:'#a626a4',cyan:'#0184bc'}},
-  'Catppuccin':{dark:{bg:'#1e1e2e',panel:'#181825',fg:'#cdd6f4',dim:'#6c7086',line:'#313244',sel:'#45475a',blue:'#89b4fa',green:'#a6e3a1',yellow:'#f9e2af',red:'#f38ba8',magenta:'#cba6f7',cyan:'#94e2d5'},
-         light:{bg:'#eff1f5',panel:'#e6e9ef',fg:'#4c4f69',dim:'#9ca0b0',line:'#ccd0da',sel:'#dce0e8',blue:'#1e66f5',green:'#40a02b',yellow:'#df8e1d',red:'#d20f39',magenta:'#8839ef',cyan:'#179299'}},
-  'Tokyo Night':{dark:{bg:'#1a1b26',panel:'#16161e',fg:'#c0caf5',dim:'#565f89',line:'#292e42',sel:'#283457',blue:'#7aa2f7',green:'#9ece6a',yellow:'#e0af68',red:'#f7768e',magenta:'#bb9af7',cyan:'#7dcfff'},
-         light:{bg:'#e1e2e7',panel:'#d5d6db',fg:'#3760bf',dim:'#848cb5',line:'#c4c8da',sel:'#d0d5e3',blue:'#2e7de9',green:'#587539',yellow:'#8c6c3e',red:'#f52a65',magenta:'#9854f1',cyan:'#007197'}},
-  'Gruvbox':{dark:{bg:'#282828',panel:'#1d2021',fg:'#ebdbb2',dim:'#928374',line:'#3c3836',sel:'#32302f',blue:'#83a598',green:'#b8bb26',yellow:'#fabd2f',red:'#fb4934',magenta:'#d3869b',cyan:'#8ec07c'},
-         light:{bg:'#fbf1c7',panel:'#f2e5bc',fg:'#3c3836',dim:'#7c6f64',line:'#d5c4a1',sel:'#ebdbb2',blue:'#076678',green:'#79740e',yellow:'#b57614',red:'#9d0006',magenta:'#8f3f71',cyan:'#427b58'}},
-  'Solarized':{dark:{bg:'#002b36',panel:'#00212b',fg:'#93a1a1',dim:'#586e75',line:'#0f4350',sel:'#073642',blue:'#268bd2',green:'#859900',yellow:'#b58900',red:'#dc322f',magenta:'#d33682',cyan:'#2aa198'},
-         light:{bg:'#fdf6e3',panel:'#eee8d5',fg:'#586e75',dim:'#93a1a1',line:'#e0dac3',sel:'#e6dfc8',blue:'#268bd2',green:'#859900',yellow:'#b58900',red:'#dc322f',magenta:'#d33682',cyan:'#2aa198'}}
-};
+const THEMES=[{id:'one-dark',name:'One Dark',kind:'dark',bg:'#282c34',panel:'#21252b',fg:'#abb2bf',dim:'#5c6370',line:'#3e4451',sel:'#2c313a',blue:'#61afef',green:'#98c379',yellow:'#e5c07b',red:'#e06c75',magenta:'#c678dd',cyan:'#56b6c2'},
+  {id:'one-light',name:'One Light',kind:'light',bg:'#fafafa',panel:'#f0f0f1',fg:'#383a42',dim:'#a0a1a7',line:'#dbdbdc',sel:'#e5e5e6',blue:'#4078f2',green:'#50a14f',yellow:'#c18401',red:'#e45649',magenta:'#a626a4',cyan:'#0184bc'},
+  {id:'catppuccin-mocha',name:'Catppuccin Mocha',kind:'dark',bg:'#1e1e2e',panel:'#181825',fg:'#cdd6f4',dim:'#6c7086',line:'#313244',sel:'#45475a',blue:'#89b4fa',green:'#a6e3a1',yellow:'#f9e2af',red:'#f38ba8',magenta:'#cba6f7',cyan:'#94e2d5'},
+  {id:'catppuccin-latte',name:'Catppuccin Latte',kind:'light',bg:'#eff1f5',panel:'#e6e9ef',fg:'#4c4f69',dim:'#9ca0b0',line:'#ccd0da',sel:'#dce0e8',blue:'#1e66f5',green:'#40a02b',yellow:'#df8e1d',red:'#d20f39',magenta:'#8839ef',cyan:'#179299'},
+  {id:'tokyo-night',name:'Tokyo Night',kind:'dark',bg:'#1a1b26',panel:'#16161e',fg:'#c0caf5',dim:'#565f89',line:'#292e42',sel:'#283457',blue:'#7aa2f7',green:'#9ece6a',yellow:'#e0af68',red:'#f7768e',magenta:'#bb9af7',cyan:'#7dcfff'},
+  {id:'tokyo-day',name:'Tokyo Day',kind:'light',bg:'#e1e2e7',panel:'#d5d6db',fg:'#3760bf',dim:'#848cb5',line:'#c4c8da',sel:'#d0d5e3',blue:'#2e7de9',green:'#587539',yellow:'#8c6c3e',red:'#f52a65',magenta:'#9854f1',cyan:'#007197'},
+  {id:'gruvbox-dark',name:'Gruvbox Dark',kind:'dark',bg:'#282828',panel:'#1d2021',fg:'#ebdbb2',dim:'#928374',line:'#3c3836',sel:'#32302f',blue:'#83a598',green:'#b8bb26',yellow:'#fabd2f',red:'#fb4934',magenta:'#d3869b',cyan:'#8ec07c'},
+  {id:'gruvbox-light',name:'Gruvbox Light',kind:'light',bg:'#fbf1c7',panel:'#f2e5bc',fg:'#3c3836',dim:'#7c6f64',line:'#d5c4a1',sel:'#ebdbb2',blue:'#076678',green:'#79740e',yellow:'#b57614',red:'#9d0006',magenta:'#8f3f71',cyan:'#427b58'},
+  {id:'solarized-dark',name:'Solarized Dark',kind:'dark',bg:'#002b36',panel:'#00212b',fg:'#93a1a1',dim:'#586e75',line:'#0f4350',sel:'#073642',blue:'#268bd2',green:'#859900',yellow:'#b58900',red:'#dc322f',magenta:'#d33682',cyan:'#2aa198'},
+  {id:'solarized-light',name:'Solarized Light',kind:'light',bg:'#fdf6e3',panel:'#eee8d5',fg:'#586e75',dim:'#93a1a1',line:'#e0dac3',sel:'#e6dfc8',blue:'#268bd2',green:'#859900',yellow:'#b58900',red:'#dc322f',magenta:'#d33682',cyan:'#2aa198'}];
 const MODES=['sistema','oscuro','claro'];
+const ofKind=k=>THEMES.filter(t=>t.kind===k);
 const isDark=()=>state.mode==='sistema'?matchMedia('(prefers-color-scheme: dark)').matches:state.mode==='oscuro';
+const chosen=()=>isDark()?state.dark:state.light;   // each kind remembers its own theme
+const themeNow=()=>THEMES.find(t=>t.id===chosen());
 function applyTheme(){
-  const dk=isDark(), t=FAM[state.fam][dk?'dark':'light']; const r=document.documentElement.style;
+  const dk=isDark(), t=themeNow(); const r=document.documentElement.style;
   for(const k of ['bg','panel','fg','dim','line','sel','blue','green','yellow','red','magenta','cyan']) r.setProperty('--'+k,t[k]);
   r.colorScheme=dk?'dark':'light';
 }
@@ -512,7 +513,7 @@ function applyTheme(){
 /* workspace = project root | worktree | plain folder (spec rust-tui.md:12) */
 const state = {
   route:'wifi',
-  screen:'connect', fam:'One', mode:'oscuro', conn:'idle', sess:'main', ws:'jw/feat/mobile-app', pane:'claude',
+  screen:'connect', dark:'one-dark', light:'one-light', mode:'oscuro', conn:'idle', sess:'main', ws:'jw/feat/mobile-app', pane:'claude',
   sheet:null, q:'', file:null, ro:false, nw:'form', nwProj:'jw', ns:'form', nsDir:'~/ws/jw', fs:{path:'~/ws/jw',mode:'browse',hidden:false}, viewer:{path:'~/ws/jw/docs/specs/mobile.md',kind:'ok',src:false}, view:'unc', commit:null, closed:{}, vst:{gen:'ok',unc:'ok',com:'ok'}, viewed:{}, anim:true, haptic:true, fit:false, msg:'',
   w:[
     {id:'jw', kind:'root', name:'jw', path:'~/ws/jw', sess:'main', ag:'idle', dev:0, pr:'', last:'Shell libre en la raíz del proyecto.', t:'1 h'},
@@ -771,15 +772,16 @@ function ansSection(){
   return `<div class="sec">respuestas rápidas</div><div class="presets">${PRESETS.map(([k,n,d,ks])=>`<button class="pre ${state.preset===k?'on':''}" data-preset="${k}"><span class="radio"></span><span><b style="font-weight:500">${n}</b><br><span style="font-size:11.5px;color:var(--dim)">${d}</span></span><span class="keys2">${ks.map(x=>`<kbd>${x}</kbd>`).join('')}</span></button>`).join('')}</div>${prev}`;
 }
 function vSettings(){
-  const dk=isDark(), t=FAM[state.fam][dk?'dark':'light'];
+  const dk=isDark(), t=themeNow();
   return `<div class="hdr"><div class="t"><b>ajustes</b><span>solo el tema</span></div></div>
   <div class="scroll"><div class="sec">modo</div>
    <div class="seg" role="tablist" style="margin:0 14px 4px;border:1px solid var(--line);border-radius:8px;overflow:hidden">${MODES.map(m=>`<button role="tab" aria-selected="${state.mode===m}" data-mode="${m}">${m}</button>`).join('')}</div>
    <div class="prev">${state.mode==='sistema'?'Sigue el modo oscuro o claro de Android: ahora usa el '+(dk?'oscuro':'claro')+'.':'Fijo en '+state.mode+', diga lo que diga Android.'}</div>
-   <div class="sec">tema</div><div class="prev">Lo eliges aquí, no en el PC: pinta la app, los colores del terminal y la salida del agente. El terminal del PC tiene los mismos cinco temas y su propio ajuste.</div>
-   <div class="themes">${Object.entries(FAM).map(([n,f])=>{const v=f[dk?'dark':'light'];return `<button class="th" aria-pressed="${state.fam===n}" data-fam="${n}" style="--tbg:${v.bg};--tfg:${v.fg};--tdim:${v.dim}"><div class="s3">${['blue','green','red','yellow'].map(k=>`<i style="--c:${v[k]}"></i>`).join('')}</div><b>${n}</b><span>${dk?'oscuro':'claro'}</span></button>`}).join('')}</div>
-   <div class="prev" style="border-top:1px solid var(--line)"><b>así se ve el panel con «${state.fam}» ${dk?'oscuro':'claro'}</b><div class="out" style="padding:8px 0 0;max-height:none;font-size:11.5px;background:transparent"><span class="d">~/ws/jw</span> <span class="g">✓</span> 42 tests <span class="r">✗</span> 1 falló <span class="y">⚠</span> aviso <span class="b">info</span> <span class="m">claude</span> <span class="c">cyan</span></div></div></div>
-   ${statusBar('SET',state.fam+' · '+state.mode)}${nav()}`;
+   <div class="prev">Cada modo recuerda su tema. Lo eliges aquí, no en el PC: pinta la app, los colores del terminal y la salida del agente. El terminal del PC tiene los mismos diez temas (cinco oscuros y cinco claros) y su propio ajuste.</div>
+   <div class="sec">temas ${dk?'oscuros':'claros'}</div>
+   <div class="themes">${ofKind(dk?'dark':'light').map(v=>`<button class="th" aria-pressed="${chosen()===v.id}" data-theme="${v.id}" style="--tbg:${v.bg};--tfg:${v.fg};--tdim:${v.dim}"><div class="s3">${['blue','green','red','yellow'].map(k=>`<i style="--c:${v[k]}"></i>`).join('')}</div><b>${v.name}</b></button>`).join('')}</div>
+   <div class="prev" style="border-top:1px solid var(--line)"><b>así se ve el panel con «${t.name}»</b><div class="out" style="padding:8px 0 0;max-height:none;font-size:11.5px;background:transparent"><span class="d">~/ws/jw</span> <span class="g">✓</span> 42 tests <span class="r">✗</span> 1 falló <span class="y">⚠</span> aviso <span class="b">info</span> <span class="m">claude</span> <span class="c">cyan</span></div></div></div>
+   ${statusBar('SET',t.name+' · '+state.mode)}${nav()}`;
 }
 
 /* lo que claude escribió en su transcript (~/.claude/projects/…/<id>.jsonl), como bloques */
@@ -1093,7 +1095,7 @@ function answer(v,id){
 function enter(id,pane){state.sel=false;state.ws=id;state.pane=pane||'claude';state.screen='ws';state.sheet=null;state.q='';const w=wsOf(id);w.t=w.t==='ahora'?'ahora':w.t;markSeen(w);render()}
 
 document.addEventListener('click',e=>{
-  const t=e.target.closest('[data-att],[data-go],[data-open],[data-ans],[data-act],[data-fam],[data-mode],[data-sw],[data-pane],[data-blk],[data-key],[data-file],[data-pcfile],[data-fs],[data-view],[data-dir],[data-vtab],[data-commit],[data-cn],[data-jump],[data-sheet],[data-sess],[data-lead],[data-preset],[data-opt]'); if(!t) return;
+  const t=e.target.closest('[data-att],[data-go],[data-open],[data-ans],[data-act],[data-theme],[data-mode],[data-sw],[data-pane],[data-blk],[data-key],[data-file],[data-pcfile],[data-fs],[data-view],[data-dir],[data-vtab],[data-commit],[data-cn],[data-jump],[data-sheet],[data-sess],[data-lead],[data-preset],[data-opt]'); if(!t) return;
   const d=t.dataset;
   if(d.act==='pcretry'){toast('buscando otra vez…');return}
   if(d.act==='pcgo'){pcGo(d.pc);return}
@@ -1157,7 +1159,7 @@ document.addEventListener('click',e=>{
   if(d.open){if(state.screen==='changes'){state.ws=d.open;state.sheet=null;state.file=null;render();return}enter(d.open);return}
   if(d.ans){const [v,id]=d.ans.split('|');answer(v,id);return}
   if(d.preset){state.preset=d.preset;render();return}
-  if(d.fam){state.fam=d.fam;applyTheme();render();return}
+  if(d.theme){state[isDark()?'dark':'light']=d.theme;applyTheme();render();return}
   if(d.mode){state.mode=d.mode;applyTheme();render();return}
   if(d.sw){state[d.sw]=!state[d.sw];render();return}
   if(d.pane){state.pane=d.pane;markSeen(wsOf(state.ws));render();return}

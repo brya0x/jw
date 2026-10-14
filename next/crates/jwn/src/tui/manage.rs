@@ -42,8 +42,9 @@ pub enum Manage {
     Clean(Target),
     /// The daemon refused, or could not be asked.
     Failed { title: String, text: String },
-    /// `,`: the mode and the theme; `cursor` is the theme the keys are on.
-    Settings { cursor: usize },
+    /// `,`: the mode and the themes of the kind in force; `cursor` is the one the keys are on
+    /// and `shown` how many there are.
+    Settings { cursor: usize, shown: usize },
 }
 
 /// What a key asks the client to send.
@@ -56,8 +57,8 @@ pub enum Act {
     },
     /// Read the workspace's `uncommitted` changes.
     Check(String),
-    /// Use the theme with this id.
-    Theme(String),
+    /// Use the theme at this place in the list of the kind in force.
+    Theme(usize),
     /// The next mode, or the one before it.
     StepMode(bool),
 }
@@ -68,34 +69,22 @@ impl Manage {
         let esc = code == KeyCode::Esc;
         let key = |c: char| code == KeyCode::Char(c);
         match self {
-            Manage::Settings { cursor } => {
-                let last = themes::all().len() - 1;
+            Manage::Settings { cursor, shown } => {
+                let here = |cursor| Some(Manage::Settings { cursor, shown });
                 match code {
                     KeyCode::Esc | KeyCode::Char(',' | 'q') => (None, None),
-                    KeyCode::Char('j') | KeyCode::Down => (
-                        Some(Manage::Settings {
-                            cursor: (cursor + 1).min(last),
-                        }),
-                        None,
-                    ),
-                    KeyCode::Char('k') | KeyCode::Up => (
-                        Some(Manage::Settings {
-                            cursor: cursor.saturating_sub(1),
-                        }),
-                        None,
-                    ),
-                    KeyCode::Enter => (
-                        Some(Manage::Settings { cursor }),
-                        Some(Act::Theme(themes::all()[cursor.min(last)].id.clone())),
-                    ),
-                    KeyCode::Char('m' | 'l') | KeyCode::Right => {
-                        (Some(Manage::Settings { cursor }), Some(Act::StepMode(true)))
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        (here((cursor + 1).min(shown.saturating_sub(1))), None)
                     }
-                    KeyCode::Char('h') | KeyCode::Left => (
-                        Some(Manage::Settings { cursor }),
-                        Some(Act::StepMode(false)),
-                    ),
-                    _ => (Some(Manage::Settings { cursor }), None),
+                    KeyCode::Char('k') | KeyCode::Up => (here(cursor.saturating_sub(1)), None),
+                    KeyCode::Enter => (here(cursor), Some(Act::Theme(cursor))),
+                    KeyCode::Char('m' | 'l') | KeyCode::Right => {
+                        (here(cursor), Some(Act::StepMode(true)))
+                    }
+                    KeyCode::Char('h') | KeyCode::Left => {
+                        (here(cursor), Some(Act::StepMode(false)))
+                    }
+                    _ => (here(cursor), None),
                 }
             }
             // Anything but `y` leaves the pane alone.
@@ -166,7 +155,7 @@ impl Manage {
     }
 
     /// Title, border colour and the lines of the box.
-    fn text(&self, settings: &Settings) -> (String, Rgb, Vec<(String, Look)>) {
+    fn text(&self, settings: &Settings, os_dark: bool) -> (String, Rgb, Vec<(String, Look)>) {
         let plain = |s: &str| (s.to_owned(), Look::Plain);
         let dim = |s: &str| (s.to_owned(), Look::Dim);
         let blank = || (String::new(), Look::Plain);
@@ -255,7 +244,8 @@ impl Manage {
                     ],
                 )
             }
-            Manage::Settings { cursor } => {
+            Manage::Settings { cursor, .. } => {
+                let dark = settings.is_dark(os_dark);
                 let modes = Mode::ALL
                     .iter()
                     .map(|m| {
@@ -267,9 +257,18 @@ impl Manage {
                     })
                     .collect::<Vec<_>>()
                     .join("  ");
-                let mut lines = vec![(format!("Modo   {modes}"), Look::Plain), blank()];
-                lines.extend(themes::all().iter().enumerate().map(|(i, t)| {
-                    let chosen = if t.id == settings.theme { '●' } else { '○' };
+                let kind = if dark { "oscuros" } else { "claros" };
+                let heading = match settings.mode {
+                    Mode::System => format!(
+                        "Temas {kind} (la máquina está en {})",
+                        if dark { "oscuro" } else { "claro" }
+                    ),
+                    _ => format!("Temas {kind}"),
+                };
+                let mut lines = vec![(format!("Modo   {modes}"), Look::Plain), dim(&heading)];
+                let chosen_id = &settings.theme(os_dark).id;
+                lines.extend(themes::of_kind(dark).enumerate().map(|(i, t)| {
+                    let chosen = if t.id == *chosen_id { '●' } else { '○' };
                     let at = if i == *cursor { '❯' } else { ' ' };
                     let look = if i == *cursor {
                         Look::Accent
@@ -280,6 +279,7 @@ impl Manage {
                 }));
                 lines.extend([
                     blank(),
+                    dim("Cada modo recuerda su tema."),
                     dim("Se aplica al momento y se guarda en settings.json."),
                 ]);
                 ("ajustes · tema".to_owned(), look::blue(), lines)
@@ -297,7 +297,7 @@ impl Manage {
 
     /// Draw the question over `area`, near its top and centred.
     pub fn draw(&self, g: &mut Grid, (x, y, w, _): Rect, settings: &Settings, os_dark: bool) {
-        let (title, border, lines) = self.text(settings);
+        let (title, border, lines) = self.text(settings, os_dark);
         let widest = lines
             .iter()
             .map(|(l, _)| l.chars().count())
@@ -335,16 +335,16 @@ impl Manage {
                 style.on(look::panel()),
             );
         }
-        if matches!(self, Manage::Settings { .. }) {
-            // Each theme's own colours, in the member the mode picks.
-            for (i, t) in themes::all().iter().enumerate() {
-                let p = t.palette(settings.is_dark(os_dark));
+        if let Manage::Settings { cursor, .. } = self {
+            // The colours of the theme the keys are on, to see it before choosing it.
+            if let Some(t) = themes::of_kind(settings.is_dark(os_dark)).nth(*cursor) {
+                let p = t.palette;
                 for (k, c) in [p.blue, p.green, p.yellow, p.red, p.magenta, p.cyan]
                     .into_iter()
                     .enumerate()
                 {
                     let at = (bx + bw).saturating_sub(15) + 2 * k;
-                    g.put(at, by + 4 + i, "██", Style::fg(c).on(look::panel()));
+                    g.put(at, by + 4 + cursor, "██", Style::fg(c).on(look::panel()));
                 }
             }
         }
@@ -498,15 +498,14 @@ mod tests {
         assert_eq!(wrap("", 5), Vec::<String>::new());
     }
     #[test]
-    fn the_settings_move_between_themes_and_ask_for_what_is_chosen() {
-        let at = |cursor| Manage::Settings { cursor };
-        let last = themes::all().len() - 1;
+    fn the_settings_move_between_the_themes_shown_and_ask_for_what_is_chosen() {
+        let at = |cursor| Manage::Settings { cursor, shown: 5 };
         assert_eq!(at(0).press(KeyCode::Char('k')), (Some(at(0)), None));
-        assert_eq!(at(last).press(KeyCode::Char('j')), (Some(at(last)), None));
+        assert_eq!(at(4).press(KeyCode::Char('j')), (Some(at(4)), None));
         assert_eq!(at(1).press(KeyCode::Char('j')), (Some(at(2)), None));
         assert_eq!(
             at(1).press(KeyCode::Enter),
-            (Some(at(1)), Some(Act::Theme("catppuccin".into())))
+            (Some(at(1)), Some(Act::Theme(1)))
         );
         assert_eq!(
             at(1).press(KeyCode::Char('m')),
