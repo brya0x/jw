@@ -13,7 +13,9 @@ data class HostPort(val host: String, val port: Int) {
 }
 
 /** What the pairing link (the QR's text) tells a phone: where the PC is and the one-use token. */
-data class PairLink(val token: String, val lan: HostPort?, val fp: String?, val tunnel: String?)
+data class PairLink(val token: String, val lan: HostPort?, val fp: String?, val tunnel: String?) {
+    fun candidates(): List<Candidate> = candidatesOf(lan, fp, tunnel)
+}
 
 private val hex32 = Regex("^[0-9a-f]{32}$")
 private val hex64 = Regex("^[0-9a-f]{64}$")
@@ -58,6 +60,12 @@ fun parsePairLink(text: String, scheme: String): PairLink? {
 /** A way to reach the PC, in the order a phone tries them: the network first, then the tunnel. */
 data class Candidate(val url: String, val lan: Boolean)
 
+/** The network address only counts with the fingerprint that pins its certificate. */
+private fun candidatesOf(lan: HostPort?, fp: String?, tunnel: String?): List<Candidate> = listOfNotNull(
+    lan?.takeIf { fp != null }?.let { Candidate("wss://$it/", true) },
+    tunnel?.let { Candidate("wss://$it/", false) },
+)
+
 /** What a paired phone keeps: its device, its secret and where the PC was last seen. */
 @Serializable
 data class Pairing(
@@ -67,15 +75,12 @@ data class Pairing(
     val fp: String? = null,
     val tunnel: String? = null,
 ) {
-    fun candidates(): List<Candidate> = listOfNotNull(
-        lan?.takeIf { fp != null }?.let { Candidate("wss://$it/", true) },
-        tunnel?.let { Candidate("wss://$it/", false) },
-    )
+    fun candidates(): List<Candidate> = candidatesOf(lan, fp, tunnel)
 
     /** The PC reported its addresses over an authenticated connection; a host that is not allowed is ignored. */
     fun withEndpoints(newLan: String?, newTunnel: String?) = copy(
-        lan = newLan?.let(::parseHostPort) ?: if (newLan == null) null else lan,
-        tunnel = newTunnel?.takeIf(::isTunnelHost) ?: if (newTunnel == null) null else tunnel,
+        lan = if (newLan == null) null else parseHostPort(newLan) ?: lan,
+        tunnel = if (newTunnel == null) null else newTunnel.takeIf(::isTunnelHost) ?: tunnel,
     )
 
     fun toJson(): String = Json.encodeToString(serializer(), this)
@@ -100,7 +105,7 @@ fun certMatches(der: ByteArray, fp: String): Boolean =
 fun pairingCode(random: SecureRandom = SecureRandom()): String = "%06d".format(random.nextInt(1_000_000))
 
 /** Why the link failed, as the screens say it. */
-enum class LinkFail { Expired, Declined, Locked, Revoked, Unreachable, Versions }
+enum class LinkFail { Expired, Declined, Locked, Revoked, Unreachable }
 
 fun Denied.toFail(): LinkFail = when (this) {
     Denied.BadToken -> LinkFail.Expired

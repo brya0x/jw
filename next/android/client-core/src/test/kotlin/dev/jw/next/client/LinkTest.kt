@@ -63,6 +63,13 @@ class LinkTest {
     }
 
     @Test
+    fun aLinkIsTriedTheSameWayAsAPairing() {
+        val both = parsePairLink("jwn://192.168.1.20:7443/$token?fp=$fp&t=a-b.trycloudflare.com", "jwn")!!
+        assertEquals(listOf(Candidate("wss://192.168.1.20:7443/", true), Candidate("wss://a-b.trycloudflare.com/", false)), both.candidates())
+        assertEquals(listOf(Candidate("wss://a-b.trycloudflare.com/", false)), parsePairLink("jwn://a-b.trycloudflare.com/$token", "jwn")!!.candidates())
+    }
+
+    @Test
     fun aPairingSurvivesItsJson() {
         val p = Pairing("d", "s", HostPort("10.0.0.5", 7443), fp, "a.trycloudflare.com")
         assertEquals(p, Pairing.fromJson(p.toJson()))

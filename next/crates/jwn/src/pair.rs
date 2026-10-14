@@ -27,8 +27,16 @@ fn connect() -> Result<Client, String> {
 }
 
 fn run(client: &mut Client, cmd: Cmd) -> Result<Option<serde_json::Value>, String> {
+    run_within(client, cmd, Duration::from_secs(30))
+}
+
+fn run_within(
+    client: &mut Client,
+    cmd: Cmd,
+    wait: Duration,
+) -> Result<Option<serde_json::Value>, String> {
     client
-        .cmd(cmd)
+        .cmd_within(cmd, wait)
         .map_err(|e| e.to_string())?
         .map_err(|e| e.message)
 }
@@ -38,10 +46,7 @@ pub fn pair() -> Res {
     let mut client = connect()?;
     println!("Abriendo el túnel… (puede tardar hasta un minuto)");
     // The tunnel may take about a minute to resolve (the daemon waits up to 90 s).
-    let started = client
-        .cmd_within(Cmd::MobileStart {}, Duration::from_secs(120))
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.message)?
+    let started = run_within(&mut client, Cmd::MobileStart {}, Duration::from_secs(120))?
         .ok_or("the daemon gave no link")?;
     let uri = started["uri"].as_str().ok_or("the daemon gave no link")?;
     if let Ok(code) = QrCode::new(uri) {

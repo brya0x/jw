@@ -123,12 +123,11 @@ fun LinkFailScreen(fail: LinkFail, scan: () -> Unit, paste: () -> Unit, back: ()
         LinkFail.Locked -> Triple("Demasiados intentos", "Tu PC bloqueó los intentos desde aquí. Espera un minuto y vuelve a intentarlo.", "volver")
         LinkFail.Revoked -> Triple("Este teléfono ya no está emparejado", "Desde tu PC se quitó este teléfono. Empareja de nuevo con jwn pair.", "empezar de nuevo")
         LinkFail.Unreachable -> Triple("No encuentro tu PC", "Cada vez que se reinicia el enlace, la dirección del túnel cambia. Comprueba que el PC esté encendido y vuelve a pegar un enlace nuevo de jwn pair.", "escanear otro código")
-        LinkFail.Versions -> Triple("La app y jwn no hablan igual", "Actualiza la app o jwn.", "volver")
     }
     Column(Modifier.fillMaxSize()) {
         Header("sin conexión", "jwn pair", onBack = back)
         Hero(title, body) {
-            val retry = fail != LinkFail.Locked && fail != LinkFail.Versions
+            val retry = fail != LinkFail.Locked
             Button(label, true, if (retry) scan else back)
             if (retry) Button("pegar enlace", false, paste)
         }

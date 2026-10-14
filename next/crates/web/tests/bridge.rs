@@ -404,3 +404,29 @@ fn phones_are_told_the_addresses_after_ready_and_whenever_they_change() {
         })
     );
 }
+
+#[test]
+fn a_phone_is_told_the_addresses_once_even_when_none_was_ever_set() {
+    let r = rig();
+    let (id, secret) = r.store.add("Pixel").unwrap();
+    let mut ws = r.connect("203.0.113.14").unwrap();
+    say(
+        &mut ws,
+        serde_json::json!({"t": "auth", "device": id, "secret": secret}),
+    );
+    assert_eq!(hear(&mut ws), Some(BridgeMsg::Ready));
+    ws.get_ref()
+        .set_read_timeout(Some(Duration::from_millis(50)))
+        .unwrap();
+    let mut told = 0;
+    // Bounded by the clock: a quiet connection times out, a chatty one must not hang the test.
+    let end = Instant::now() + Duration::from_millis(400);
+    while Instant::now() < end {
+        if let Ok(Message::Text(t)) = ws.read()
+            && serde_json::from_str::<serde_json::Value>(&t).unwrap()["t"] == "endpoints"
+        {
+            told += 1;
+        }
+    }
+    assert_eq!(told, 1, "REQ-82: once, not on every tick");
+}

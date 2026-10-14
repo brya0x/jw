@@ -8,7 +8,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
-/** The scanner reads what `jwn pair` prints. */
+/** REQ-83: the scanner reads what `jwn pair` prints. */
 class QrTest {
     private val link = "jwn://192.168.100.152:49211/298ab0a2575a934bd5ff000db05f0129?fp=" + "a6".repeat(32) + "&t=try-velocity-confidentiality-predicted.trycloudflare.com"
 

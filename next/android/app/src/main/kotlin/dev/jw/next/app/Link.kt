@@ -17,6 +17,7 @@ import dev.jw.next.client.toFail
 import dev.jw.next.contract.BridgeMsg
 import dev.jw.next.contract.ContractJson
 import dev.jw.next.contract.Denied
+import dev.jw.next.contract.PhoneMsg
 import java.security.KeyStore
 import java.security.cert.X509Certificate
 import java.util.concurrent.LinkedBlockingQueue
@@ -141,15 +142,7 @@ class WsLinkSource(
         socket?.send(line)
     }
 
-    private fun candidates(): List<Candidate> =
-        pairing?.candidates()
-            ?: link?.let { l ->
-                listOfNotNull(
-                    l.lan?.let { Candidate("wss://$it/", true) },
-                    l.tunnel?.let { Candidate("wss://$it/", false) },
-                )
-            }
-            ?: emptyList()
+    private fun candidates(): List<Candidate> = pairing?.candidates() ?: link?.candidates() ?: emptyList()
 
     private fun fingerprint(): String? = pairing?.fp ?: link?.fp
 
@@ -206,12 +199,9 @@ class WsLinkSource(
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     opened = true
                     val p = pairing
-                    val first = if (p != null) {
-                        """{"t":"auth","device":"${p.device}","secret":"${p.secret}"}"""
-                    } else {
-                        """{"t":"pair","token":"${link!!.token}","name":${kotlinx.serialization.json.JsonPrimitive(deviceName)},"code":"$code"}"""
-                    }
-                    webSocket.send(first)
+                    // The contract's own type writes it: nothing a person typed is spliced into JSON by hand.
+                    val first = if (p != null) PhoneMsg.Auth(p.device, p.secret) else PhoneMsg.Pair(link!!.token, deviceName, code)
+                    webSocket.send(ContractJson.encodeToString(PhoneMsg.serializer(), first))
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) = message(webSocket, text)

@@ -412,7 +412,8 @@ fn relay<S: Link>(mut ws: WebSocket<S>, ctx: &Ctx, device: &str) {
     let _ = ws.get_ref().set_read_timeout(Some(TICK));
     let mut out = &daemon;
     let mut checked = Instant::now();
-    let mut told = 0;
+    // The version of the endpoints this phone was last told; none yet.
+    let mut told = None;
     'relay: loop {
         if ctx.stop.load(Ordering::SeqCst) {
             break;
@@ -428,8 +429,8 @@ fn relay<S: Link>(mut ws: WebSocket<S>, ctx: &Ctx, device: &str) {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
-        if version != told || told == 0 {
-            told = version.max(1);
+        if told != Some(version) {
+            told = Some(version);
             let msg = BridgeMsg::Endpoints {
                 lan: endpoints.lan,
                 tunnel: endpoints.tunnel,
