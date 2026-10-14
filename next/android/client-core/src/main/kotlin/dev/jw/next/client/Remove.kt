@@ -2,7 +2,6 @@ package dev.jw.next.client
 
 import dev.jw.next.contract.Id
 import dev.jw.next.contract.Node
-import dev.jw.next.contract.WorkspaceKind
 import dev.jw.next.contract.WorkspaceSummary
 
 /** The workspace a long press is on, with what the sheet needs to know about it (REQ-183, REQ-227). */
@@ -37,8 +36,10 @@ fun workspaceMenu(kind: HomeKind, repo: String?): List<MenuItem> = when (kind) {
     )
 }
 
-fun menuTitle(t: WorkspaceTarget): String =
-    "${when (t.kind) { HomeKind.Worktree -> "worktree"; HomeKind.Folder -> "carpeta"; HomeKind.Root -> "workspace" }} «${t.shown}»"
+/** What the sheet calls each kind: the root of a repository is a plain «workspace». */
+private val HomeKind.word get() = when (this) { HomeKind.Worktree -> "worktree"; HomeKind.Folder -> "carpeta"; HomeKind.Root -> "workspace" }
+
+fun menuTitle(t: WorkspaceTarget): String = "${t.kind.word} «${t.shown}»"
 
 /** What `remove_workspace` is asked for: the workspace only, or a worktree's folder with it. */
 enum class RemoveMode(val removesWorktree: Boolean) { Workspace(false), KeepWorktree(false), Worktree(true) }

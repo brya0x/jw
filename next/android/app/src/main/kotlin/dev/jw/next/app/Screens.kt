@@ -225,7 +225,7 @@ fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, set: (Clie
     var removing by remember { mutableStateOf<RemoveSheet?>(null) }
     // A long press on the title, or the `+`: a folder to open (REQ-201); a worktree is made from a workspace (REQ-213).
     var newMenu by remember { mutableStateOf(false) }
-    var worktree by remember { mutableStateOf<WorktreeStart?>(null) }
+    var worktree by remember { mutableStateOf<String?>(null) }
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
             if (onAvisos) Header("avisos", "lo que espera algo de ti", onBack = { set(nav.back(state)) }) else Header("jwn · ${session.name}", source.status, action = {
@@ -242,7 +242,7 @@ fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, set: (Clie
         menu?.let { target ->
             WorkspaceMenuSheet(target, dismiss = { menu = null }) { action ->
                 menu = null
-                choose(target, action, rename = { naming = Naming.Workspace(target.id, target.shown) }, newWorktree = { worktree = WorktreeStart(it, null) }, remove = { removing = it })
+                choose(target, action, rename = { naming = Naming.Workspace(target.id, target.shown) }, newWorktree = { worktree = it }, remove = { removing = it })
             }
         }
         naming?.let { RenameSheet(source, it) { naming = null } }
@@ -375,7 +375,7 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
     var paneMenu by remember(screen.id) { mutableStateOf<PaneSummary?>(null) }
     var wsMenu by remember(screen.id) { mutableStateOf(false) }
     var removing by remember(screen.id) { mutableStateOf<RemoveSheet?>(null) }
-    var worktree by remember(screen.id) { mutableStateOf<WorktreeStart?>(null) }
+    var worktree by remember(screen.id) { mutableStateOf<String?>(null) }
     var naming by remember(screen.id) { mutableStateOf<Naming?>(null) }
     var closing by remember(screen.id) { mutableStateOf<CloseSheet?>(null) }
     var closeError by remember(screen.id) { mutableStateOf<String?>(null) }
@@ -460,7 +460,7 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
         val target = ws.target()
         WorkspaceMenuSheet(target, dismiss = { wsMenu = false }) { action ->
             wsMenu = false
-            choose(target, action, rename = { naming = Naming.Workspace(target.id, target.shown) }, newWorktree = { worktree = WorktreeStart(it, null) }, remove = { removing = it })
+            choose(target, action, rename = { naming = Naming.Workspace(target.id, target.shown) }, newWorktree = { worktree = it }, remove = { removing = it })
         }
     }
     worktree?.let { WorktreeSheet(source, it, state, nav, set) { worktree = null } }

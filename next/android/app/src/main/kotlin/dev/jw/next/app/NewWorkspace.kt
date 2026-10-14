@@ -64,9 +64,6 @@ private fun OpenWhenShown(source: AppSource, id: Id?, state: ClientState, nav: N
     LaunchedEffect(version, id) { if (id != null) nav.openWhenShown(state, id)?.let(set) }
 }
 
-/** The repository a new worktree starts from and the branch it starts at (null: the one the repository is on). */
-internal data class WorktreeStart(val repo: String, val base: String?)
-
 /** What a long press on the title of Home, or its `+`, offers (REQ-201). */
 @Composable
 internal fun BoxScope.NewWorkspaceSheet(dismiss: () -> Unit, folders: () -> Unit) {
@@ -204,19 +201,18 @@ private fun Dock(view: FolderView, busy: Boolean, click: () -> Unit) {
  * what it will make and why it cannot, and what the PC says when git refuses.
  */
 @Composable
-internal fun BoxScope.WorktreeSheet(source: AppSource, start: WorktreeStart, state: ClientState, nav: Navigator, set: (ClientState) -> Unit, dismiss: () -> Unit) {
+internal fun BoxScope.WorktreeSheet(source: AppSource, repoAtStart: String, state: ClientState, nav: Navigator, set: (ClientState) -> Unit, dismiss: () -> Unit) {
     val version = source.tick.intValue
     val session = remember(version) { source.session() }
-    var repo by remember(start) { mutableStateOf(start.repo) }
-    var base by remember(start) { mutableStateOf(start.base) }
-    var typed by remember(start) { mutableStateOf<String?>(null) }
-    var there by remember(start) { mutableStateOf<DirListing?>(null) }
-    var choosing by remember(start) { mutableStateOf(false) }
-    var error by remember(start) { mutableStateOf<String?>(null) }
-    var busy by remember(start) { mutableStateOf(false) }
-    var waiting by remember(start) { mutableStateOf<Id?>(null) }
+    var repo by remember(repoAtStart) { mutableStateOf(repoAtStart) }
+    var typed by remember(repoAtStart) { mutableStateOf<String?>(null) }
+    var there by remember(repoAtStart) { mutableStateOf<DirListing?>(null) }
+    var choosing by remember(repoAtStart) { mutableStateOf(false) }
+    var error by remember(repoAtStart) { mutableStateOf<String?>(null) }
+    var busy by remember(repoAtStart) { mutableStateOf(false) }
+    var waiting by remember(repoAtStart) { mutableStateOf<Id?>(null) }
     val focus = remember { FocusRequester() }
-    LaunchedEffect(start) { focus.requestFocus() }
+    LaunchedEffect(repoAtStart) { focus.requestFocus() }
     LaunchedEffect(repo) {
         there = null
         source.listDir(worktreesDir(repo), false) { result -> there = result.getOrNull() }
@@ -229,7 +225,7 @@ internal fun BoxScope.WorktreeSheet(source: AppSource, start: WorktreeStart, sta
         if (!busy && plan is WorktreePlan.Ok) {
             busy = true
             error = null
-            source.createWorktree(repo, plan.branch, base, plan.folder) { result ->
+            source.createWorktree(repo, plan.branch, null, plan.folder) { result ->
                 result.onSuccess { waiting = it }.onFailure { busy = false; error = it.message ?: "el PC no pudo crear el worktree" }
             }
         }
@@ -243,7 +239,7 @@ internal fun BoxScope.WorktreeSheet(source: AppSource, start: WorktreeStart, sta
             if (all.size > 1) Mono("▾", Palette.dim, 11)
         }
         if (choosing) all.forEach { r ->
-            SheetAction(if (r == repo) "●" else " ", repoName(r)) { if (r != repo) base = null; repo = r; typed = null; choosing = false }
+            SheetAction(if (r == repo) "●" else " ", repoName(r)) { repo = r; typed = null; choosing = false }
         }
         else {
             Mono("nombre", Palette.dim, 11)
@@ -265,7 +261,7 @@ internal fun BoxScope.WorktreeSheet(source: AppSource, start: WorktreeStart, sta
                 is WorktreePlan.Wrong -> Mono(plan.why, Palette.red, 12, lines = 3)
                 is WorktreePlan.Ok -> Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Row { Mono("rama    ", Palette.dim, 12); Mono(plan.branch, Palette.fg, 12) }
-                    Row { Mono("desde   ", Palette.dim, 12); Mono(base ?: "la rama actual", Palette.fg, 12) }
+                    Row { Mono("desde   ", Palette.dim, 12); Mono("la rama actual", Palette.fg, 12) }
                     Row { Mono("carpeta ", Palette.dim, 12); Mono("${repoName(repo)}-wt/${plan.folder}", Palette.fg, 12, lines = 2) }
                 }
             }
