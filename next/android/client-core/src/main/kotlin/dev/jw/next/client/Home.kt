@@ -50,6 +50,8 @@ enum class HomeKind(val label: String) { Root("raíz"), Worktree("worktree"), Fo
 data class HomeRow(
     val id: Id,
     val kind: HomeKind,
+    /** Its place in the list, from 1, for the number before the row. */
+    val number: Int,
     val name: String,
     val detail: String,
     val paneCount: Int,
@@ -75,20 +77,28 @@ fun shownName(name: String, kind: WorkspaceKind, branch: String?): String =
 /** The name of a summary as the lists draw it: a worktree has `↳` before it. */
 fun WorkspaceSummary.shown(): String = shownName(name, kind, branch)
 
-private fun WorkspaceSummary.homeKind() = when {
-    kind == WorkspaceKind.Worktree -> HomeKind.Worktree
-    project != null -> HomeKind.Root
-    else -> HomeKind.Folder
+/**
+ * A folder is a root when it says so (`project` is set) or, for a daemon that does not say it,
+ * when a worktree names it as its repository.
+ */
+private fun Node.Session.homeKind(w: WorkspaceSummary): HomeKind {
+    val named = workspaces.any { it.kind == WorkspaceKind.Worktree && it.project == w.path }
+    return when {
+        w.kind == WorkspaceKind.Worktree -> HomeKind.Worktree
+        w.project != null || named -> HomeKind.Root
+        else -> HomeKind.Folder
+    }
 }
 
-fun homeRows(session: Node.Session, seen: Seen): List<HomeRow> = session.workspaces.map { w ->
+fun homeRows(session: Node.Session, seen: Seen): List<HomeRow> = session.workspaces.mapIndexed { i, w ->
     val unseen = w.attention.filterNot(seen::isSeen).byUrgency()
     val top = unseen.firstOrNull()
-    val kind = w.homeKind()
+    val kind = session.homeKind(w)
     HomeRow(
         id = w.id,
         kind = kind,
-        name = (if (kind == HomeKind.Worktree) "↳ " else "") + w.shown(),
+        number = i + 1,
+        name = w.shown(),
         detail = "${kind.label} · ${w.paneCount} ${if (w.paneCount == 1) "panel" else "paneles"}",
         paneCount = w.paneCount,
         mark = top?.mark(),
@@ -130,7 +140,8 @@ fun homeItems(session: Node.Session, seen: Seen): List<HomeItem> {
                 folders = true
                 if (before != null) items += HomeItem.Heading("carpetas")
             }
-            rows[i].kind == HomeKind.Worktree && project != null && before?.project != project -> items += HomeItem.Heading(repoName(project))
+            rows[i].kind == HomeKind.Worktree && project != null && !(before != null && rows[i - 1].kind != HomeKind.Folder && (before.project == project || before.path == project)) ->
+                items += HomeItem.Heading(repoName(project))
         }
         items += HomeItem.Row(rows[i])
     }

@@ -2,6 +2,8 @@
 //! workspaces with each repository's root and worktrees together and the folders that are not
 //! repositories last (REQ-219); the sidebar adds the headings between them.
 
+use std::collections::HashSet;
+
 use contract::{WorkspaceKind, WorkspaceSummary};
 
 use super::base;
@@ -15,21 +17,33 @@ pub enum Side {
 
 /// `list` as rows: the name of a repository above its worktrees when its root is not what comes
 /// before them (REQ-220), and `carpetas` above the folders that are not repositories when
-/// something comes before them (REQ-221).
+/// something comes before them (REQ-221). A folder is a root when it says so (`project` is its
+/// own path) or, for a daemon that does not say it, when a worktree names it as its repository.
 pub fn rows(list: &[WorkspaceSummary]) -> Vec<Side> {
+    let repos: HashSet<&str> = list
+        .iter()
+        .filter(|w| w.kind == WorkspaceKind::Worktree)
+        .filter_map(|w| w.project.as_deref())
+        .collect();
+    let root = |w: &WorkspaceSummary| {
+        w.kind == WorkspaceKind::Folder
+            && (w.project.as_deref() == Some(w.path.as_str()) || repos.contains(w.path.as_str()))
+    };
     let mut rows = Vec::new();
     let mut loose = false;
     for (i, w) in list.iter().enumerate() {
         let before = i.checked_sub(1).map(|b| &list[b]);
         match (w.kind, &w.project) {
-            (WorkspaceKind::Folder, None) if !loose => {
+            (WorkspaceKind::Folder, None) if !loose && !root(w) => {
                 loose = true;
                 if before.is_some() {
                     rows.push(Side::Head("carpetas".into()));
                 }
             }
             (WorkspaceKind::Worktree, Some(project))
-                if before.is_none_or(|b| b.project.as_ref() != Some(project)) =>
+                if before.is_none_or(|b| {
+                    b.project.as_ref() != Some(project) && !(root(b) && b.path == *project)
+                }) =>
             {
                 rows.push(Side::Head(base(project).into()));
             }
@@ -98,5 +112,13 @@ mod tests {
             ws(Worktree, Some("/r/b")),
         ];
         assert_eq!(heads(&rows(&list)), ["# a", "0", "1", "# b", "2"]);
+    }
+
+    #[test]
+    fn a_daemon_that_sends_no_project_for_a_root_is_understood_by_its_path() {
+        let mut root = ws(Folder, None);
+        root.path = "/r/loom".into();
+        let list = [root, ws(Worktree, Some("/r/loom")), ws(Folder, None)];
+        assert_eq!(heads(&rows(&list)), ["0", "1", "# carpetas", "2"]);
     }
 }

@@ -41,10 +41,18 @@ class HomeListTest {
     }
 
     @Test
-    fun aWorktreeKeepsItsArrowAndAFolderItsName() {
+    fun aRowCarriesItsNumberAndTheNameWithoutTheArrow() {
         val rows = homeRows(session, Seen())
         assertEquals(WorkspaceKind.Worktree, worktree.kind)
-        assertEquals("↳ feat/login", rows[0].name)
+        assertEquals(listOf(1, 2), rows.map { it.number })
+        assertEquals("feat/login", rows[0].name)
         assertEquals("notes", rows[1].name)
+    }
+
+    @Test
+    fun aDaemonThatSendsNoProjectForARootIsUnderstoodByItsPath() {
+        val root = notes.copy(id = "r1", name = "loom", path = "/home/u/code/app", project = null)
+        val old = session.copy(workspaces = listOf(root, worktree))
+        assertEquals(listOf("Root:r1", "Worktree:b1"), shape(old))
     }
 }

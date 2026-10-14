@@ -27,10 +27,10 @@ class RenameTest {
 
     @Test
     fun theRowsAndTheAvisosUseTheShownName() {
-        val row = homeRows(session, Seen()).first { it.name.startsWith("↳") }
-        assertEquals("↳ feat/login", row.name)
+        val row = homeRows(session, Seen()).first { it.kind == HomeKind.Worktree }
+        assertEquals("feat/login", row.name)
         assertTrue(row.detail.startsWith("worktree · "), row.detail)
-        val folder = homeRows(session, Seen()).first { !it.name.startsWith("↳") }
+        val folder = homeRows(session, Seen()).first { it.kind != HomeKind.Worktree }
         assertTrue(folder.detail.startsWith("carpeta · "), folder.detail)
         assertTrue(avisos(session, Seen()).any { it.workspace == "feat/login" })
     }
@@ -38,7 +38,7 @@ class RenameTest {
     @Test
     fun aRenamedWorktreeShowsTheNameChosen() {
         val renamed = session.copy(workspaces = session.workspaces.map { if (it.kind == WorkspaceKind.Worktree) it.copy(name = "login fix") else it })
-        assertTrue(homeRows(renamed, Seen()).any { it.name == "↳ login fix" })
+        assertTrue(homeRows(renamed, Seen()).any { it.name == "login fix" })
     }
 
     @Test

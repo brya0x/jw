@@ -5,6 +5,7 @@ package dev.jw.next.app
 import android.content.ClipData
 import androidx.compose.foundation.background
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
@@ -50,6 +51,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.ClipEntry
@@ -72,6 +75,7 @@ import dev.jw.next.client.CloseSheet
 import dev.jw.next.client.ClientState
 import dev.jw.next.client.HomeItem
 import dev.jw.next.client.HomeKind
+import dev.jw.next.client.HomeRow
 import dev.jw.next.client.Navigator
 import dev.jw.next.client.Screen
 import dev.jw.next.client.Tone
@@ -255,43 +259,62 @@ private fun WorkspaceList(items: List<HomeItem>, nav: Navigator, state: ClientSt
     LazyColumn(Modifier.fillMaxSize()) {
         item { Section("workspaces · ${items.count { it is HomeItem.Row }}", create) }
         items(items, key = { it.key }) { item ->
-            if (item is HomeItem.Heading) {
-                Section(item.text)
-                return@items
+            when (item) {
+                is HomeItem.Heading -> Section(item.text)
+                is HomeItem.Row -> WorkspaceRow(item.row, current = item.row.id == state.last, open = { set(nav.openWorkspace(state, item.row.id)) }, hold = { hold(item.row.id) }, go = { a -> set(nav.go(state, a)) })
             }
-            val row = (item as HomeItem.Row).row
-            // A worktree is drawn under its root, further in (REQ-224).
-            val indent = if (row.kind == HomeKind.Worktree) 20.dp else 0.dp
-            Row(
-                Modifier.fillMaxWidth().combinedClickable(onClick = { set(nav.openWorkspace(state, row.id)) }, onLongClick = { hold(row.id) }).padding(start = Gutter - 4.dp + indent, end = Gutter, top = 10.dp, bottom = 8.dp),
-                verticalAlignment = Alignment.Top,
-            ) {
-                MarkColumn(row.go, row.unseen)
-                Column(Modifier.weight(1f).padding(start = 4.dp)) {
-                    Mono(row.name, bold = true, size = 14)
-                    Mono(row.detail, Palette.dim, 11, modifier = Modifier.padding(top = 2.dp))
-                    val go = row.go
-                    if (go != null && row.line != null) {
-                        Row(Modifier.fillMaxWidth().padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Mono(row.line!!, go.lineColor(), 12, modifier = Modifier.weight(1f))
-                            GoControl { set(nav.go(state, go)) }
-                        }
-                    }
-                }
-                if (row.kind != HomeKind.Worktree) Tag(row.kind.label, Palette.dim)
-            }
-            Hairline()
         }
         item { Legend(create) }
     }
 }
 
-/** Text with a chevron; a border would shout over the row, and a tall target would open a gap under every message. */
+/**
+ * A row as `docs/prototypes/mobile.html` draws it: its number, `●` (a root or a folder) or `↳`
+ * (a worktree, further in, REQ-224) lit when it has panes, the name over its detail, the tag
+ * and the mark of its most urgent attention; under it that attention and the go control. The
+ * workspace opened last is the one with the blue bar.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun WorkspaceRow(row: HomeRow, current: Boolean, open: () -> Unit, hold: () -> Unit, go: (Attention) -> Unit) {
+    val indent = if (row.kind == HomeKind.Worktree) 20.dp else 0.dp
+    val bar = Palette.blue
+    Column(Modifier.fillMaxWidth().background(if (current) Palette.sel else Color.Transparent).drawBehind { if (current) drawRect(bar, size = Size(3.dp.toPx(), size.height)) }) {
+        Row(
+            Modifier.fillMaxWidth().defaultMinSize(minHeight = 50.dp).combinedClickable(onClick = open, onLongClick = hold).padding(start = Gutter - 2.dp + indent, end = 8.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Mono("${row.number}", Palette.dim, 11, modifier = Modifier.width(14.dp))
+            Mono(if (row.kind == HomeKind.Worktree) "↳" else "●", if (row.paneCount > 0) Palette.green else Palette.dim, 14, modifier = Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Mono(row.name, bold = true, size = 14)
+                Mono(row.detail, Palette.dim, 11)
+            }
+            if (row.kind != HomeKind.Worktree) Tag(row.kind.label, Palette.dim)
+            row.mark?.let { m ->
+                Mono(m.glyph, m.tone.color(), 14, bold = true)
+                if (row.unseen > 1) Mono("${row.unseen}", Palette.dim, 11)
+            }
+        }
+        val attention = row.go
+        if (attention != null && row.line != null) {
+            Row(Modifier.fillMaxWidth().padding(start = 51.dp, end = Gutter, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Mono(row.line!!, attention.lineColor(), 12, modifier = Modifier.weight(1f))
+                GoControl { go(attention) }
+            }
+        }
+        Hairline()
+    }
+}
+
+/** The go control of a row or an item of Avisos: «ir ›» in a bordered button, as the prototype draws it. */
 @Composable
 private fun GoControl(click: () -> Unit) {
-    Box(Modifier.defaultMinSize(minWidth = 52.dp, minHeight = 32.dp).clickable(onClick = click).padding(start = 12.dp), contentAlignment = Alignment.CenterEnd) {
-        Mono("ir ›", Palette.blue, 13, bold = true)
-    }
+    Box(
+        Modifier.height(36.dp).border(1.dp, Palette.line, RoundedCornerShape(6.dp)).clickable(onClick = click).padding(horizontal = 12.dp),
+        contentAlignment = Alignment.Center,
+    ) { Mono("ir ›", Palette.fg, 13) }
 }
 
 @Composable
@@ -320,7 +343,7 @@ private fun AvisosList(items: List<Aviso>, nav: Navigator, state: ClientState, s
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun Legend(create: () -> Unit) {
-    val items = listOf("!" to "permiso", "?" to "pregunta", "◆" to "plan", "❯" to "comando", "✓" to "agente listo", "⚑" to "mergeado", "✗" to "falló")
+    val items = listOf("●" to "abierto", "!" to "permiso", "?" to "pregunta", "◆" to "plan", "❯" to "comando", "✓" to "agente listo", "⚑" to "mergeado", "✗" to "falló")
     FlowRow(
         Modifier.fillMaxWidth().combinedClickable(onClick = {}, onLongClick = create).padding(Gutter),
         horizontalArrangement = Arrangement.spacedBy(16.dp),
