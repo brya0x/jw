@@ -138,7 +138,7 @@ internal fun Header(title: String, subtitle: String?, onBack: (() -> Unit)? = nu
 
 /** Opens the list of PCs from Home. */
 @Composable
-private fun PcButton(open: () -> Unit) {
+internal fun PcButton(open: () -> Unit) {
     Box(Modifier.defaultMinSize(minWidth = 56.dp, minHeight = 48.dp).clickable(onClick = open), contentAlignment = Alignment.Center) {
         Mono("PCs", Palette.blue, 13, bold = true)
     }

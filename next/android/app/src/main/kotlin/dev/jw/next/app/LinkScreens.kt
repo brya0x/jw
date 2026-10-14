@@ -46,7 +46,7 @@ internal fun Button(text: String, fill: Boolean, click: () -> Unit) {
 }
 
 @Composable
-private fun Hero(title: String, body: String, content: @Composable () -> Unit) {
+internal fun Hero(title: String, body: String, content: @Composable () -> Unit) {
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = Gutter + 8.dp, vertical = 32.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -130,6 +130,21 @@ fun LinkFailScreen(fail: LinkFail, scan: () -> Unit, paste: () -> Unit, back: ()
             val retry = fail != LinkFail.Locked
             Button(label, true, if (retry) scan else back)
             if (retry) Button("pegar enlace", false, paste)
+        }
+    }
+}
+
+/** The last PC does not answer: say so, keep trying, and let the person pick another (REQ-90). */
+@Composable
+fun OfflineScreen(name: String?, retry: () -> Unit, pcs: () -> Unit) {
+    val pc = name ?: "tu PC"
+    Column(Modifier.fillMaxSize()) {
+        Header("jwn", "sin respuesta de $pc", action = { PcButton(pcs) })
+        Box(Modifier.weight(1f)) {
+            Hero("No encuentro «$pc»", "Está apagado o fuera de tu red. Sigo intentando cada pocos segundos; en cuanto conteste, entras solo.") {
+                Button("reintentar ahora", true, retry)
+                Button("ver mis PCs", false, pcs)
+            }
         }
     }
 }

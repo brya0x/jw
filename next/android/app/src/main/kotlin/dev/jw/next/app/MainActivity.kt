@@ -134,6 +134,8 @@ class MainActivity : ComponentActivity() {
             )
             else -> {}
         }
+        val pcs = link?.let { { go(Mode.Pcs(it)) } }
+        if (link?.offline?.value == true) return OfflineScreen(link.name, link::retryNow) { pcs?.invoke() }
         val nav = remember(source) { Navigator(source) }
         // A record from another epoch is not trusted: it is emptied before first use.
         var state by remember(source) { mutableStateOf(ClientState(seen = store.load())) }
@@ -141,7 +143,6 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(epoch) { if (epoch.isNotEmpty()) state = state.copy(seen = state.seen.forEpoch(epoch)) }
         LaunchedEffect(state.seen) { store.save(state.seen) }
         BackHandler(enabled = state.screen is Screen.Workspace) { state = nav.back(state) }
-        val pcs = link?.let { { go(Mode.Pcs(it)) } }
         when (val screen = state.screen) {
             is Screen.Workspace -> WorkspaceScreen(source, state, screen, nav) { state = it }
             else -> HomeScreen(source, state, nav, pcs) { state = it }

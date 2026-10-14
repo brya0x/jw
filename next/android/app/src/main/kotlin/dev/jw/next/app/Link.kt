@@ -160,6 +160,18 @@ class WsLinkSource(
     /** The paired PC this source talks to, once there is one. */
     val device: String? get() = pairing?.device
 
+    /** The name that PC gave itself, if it ever has. */
+    val name: String? get() = pairing?.name
+
+    /** A paired PC that this source has not reached once, and that does not answer (REQ-90). */
+    val offline = mutableStateOf(false)
+    private var reachedOnce = false
+
+    /** Wakes the wait between attempts: "reintentar ahora". */
+    private val wake = java.util.concurrent.Semaphore(0)
+
+    fun retryNow() = wake.release()
+
     @Volatile
     private var socket: WebSocket? = null
 
@@ -181,6 +193,7 @@ class WsLinkSource(
 
     fun close() {
         closed = true
+        wake.release()
         socket?.cancel()
     }
 
@@ -212,8 +225,9 @@ class WsLinkSource(
                 return
             }
             ui.value = LinkUi.Connecting
+            offline.value = !reachedOnce && !reached
             dropped()
-            Thread.sleep(2000)
+            wake.tryAcquire(2, TimeUnit.SECONDS)
         }
     }
 
@@ -272,6 +286,8 @@ class WsLinkSource(
                 outcome.offer(Attempt.Denied)
             }
             is BridgeMsg.Ready -> {
+                reachedOnce = true
+                offline.value = false
                 ui.value = LinkUi.Connected
                 pairing?.let { p ->
                     val named = p.copy(name = cleanHost(msg.host) ?: p.name)
