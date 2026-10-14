@@ -180,6 +180,10 @@ abstract class ProtocolSource : AppSource() {
         }
     }
 
+    override fun newPane(workspace: Id, reply: (Result<Id>) -> Unit) {
+        command(Cmd.NewPane(workspace)) { reply(it.made("pane", "el panel", "el PC no pudo abrir el panel")) }
+    }
+
     override fun removeWorkspace(workspace: Id, removeWorktree: Boolean, reply: (Result<Unit>) -> Unit) {
         command(Cmd.RemoveWorkspace(workspace, removeWorktree)) { reply(it.done("el PC no pudo quitar el workspace")) }
     }

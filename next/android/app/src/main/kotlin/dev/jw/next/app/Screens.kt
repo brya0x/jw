@@ -386,6 +386,11 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
     var paneMenu by remember(screen.id) { mutableStateOf<PaneSummary?>(null) }
     var wsMenu by remember(screen.id) { mutableStateOf(false) }
     var removing by remember(screen.id) { mutableStateOf<RemoveSheet?>(null) }
+    // A shell asked for: the answer, then the pane once the workspace shows it (REQ-234, REQ-235).
+    var asking by remember(screen.id) { mutableStateOf(false) }
+    var waitingPane by remember(screen.id) { mutableStateOf<String?>(null) }
+    var addError by remember(screen.id) { mutableStateOf<String?>(null) }
+    LaunchedEffect(version, waitingPane) { waitingPane?.let { p -> nav.selectWhenShown(state, screen.id, p)?.let { set(it); waitingPane = null } } }
     var worktree by remember(screen.id) { mutableStateOf<String?>(null) }
     var naming by remember(screen.id) { mutableStateOf<Naming?>(null) }
     var closing by remember(screen.id) { mutableStateOf<CloseSheet?>(null) }
@@ -403,7 +408,15 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
             Box(Modifier.weight(1f).padding(Gutter)) { Mono("Abriendo el workspace…", Palette.dim, 13, lines = 3) }
             return@Column
         }
-        PaneTabs(ws.panes, screen.pane, state, select = { set(nav.selectPane(state, it)) }) { paneMenu = it }
+        PaneTabs(ws.panes, screen.pane, state, adding = asking || waitingPane != null, select = { set(nav.selectPane(state, it)) }, hold = { paneMenu = it }) {
+            asking = true
+            addError = null
+            source.newPane(screen.id) { result ->
+                result.onSuccess { waitingPane = it }.onFailure { addError = it.message ?: "el PC no pudo abrir el panel" }
+                asking = false
+            }
+        }
+        addError?.let { Mono(it, Palette.red, 12, lines = 3, modifier = Modifier.fillMaxWidth().background(Palette.panel).padding(horizontal = Gutter, vertical = 8.dp)) }
         val pane = remember(version, screen.pane) { screen.pane?.let { source.node(it) as? Node.Pane } }
         val blocksId = pane?.blocks
         LaunchedEffect(blocksId) { blocksId?.let { source.open(it) } }
@@ -652,9 +665,10 @@ private fun terminalText(lines: List<String>, row: Int, col: Int, visible: Boole
 
 /** Open pane underlined in blue; an unseen mark sits beside the name. */
 @Composable
-private fun PaneTabs(panes: List<PaneSummary>, current: String?, state: ClientState, select: (String) -> Unit, hold: (PaneSummary) -> Unit) {
+private fun PaneTabs(panes: List<PaneSummary>, current: String?, state: ClientState, adding: Boolean, select: (String) -> Unit, hold: (PaneSummary) -> Unit, add: () -> Unit) {
     Column(Modifier.fillMaxWidth().background(Palette.panel)) {
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+        Row(Modifier.fillMaxWidth()) {
+        Row(Modifier.weight(1f).horizontalScroll(rememberScrollState())) {
             panes.forEach { p ->
                 val on = p.id == current
                 val unseen = p.attention.filterNot(state.seen::isSeen).byUrgency()
@@ -670,6 +684,12 @@ private fun PaneTabs(panes: List<PaneSummary>, current: String?, state: ClientSt
                     Box(Modifier.fillMaxWidth().height(2.dp).background(if (on) Palette.blue else Color.Transparent))
                 }
             }
+        }
+        // A shell more (REQ-234): fixed at the end, so it is there however many tabs there are.
+        Box(
+            Modifier.width(48.dp).height(46.dp).clickable(enabled = !adding, onClick = add).semantics { contentDescription = "Panel nuevo" },
+            contentAlignment = Alignment.Center,
+        ) { Mono(if (adding) "…" else "+", Palette.blue, 20, bold = true) }
         }
         Hairline()
     }

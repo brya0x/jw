@@ -78,6 +78,11 @@ interface NodeSource {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
     }
 
+    /** Open a pane with a shell in [workspace]; [reply] gets the new pane's id, or the PC's message. */
+    fun newPane(workspace: Id, reply: (Result<Id>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
     /** Close a pane (its shell ends); [reply] gets the daemon's message when it refuses. */
     fun closePane(pane: Id, reply: (Result<Unit>) -> Unit) {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
@@ -157,6 +162,15 @@ class Navigator(private val source: NodeSource) {
      */
     fun openWhenShown(s: ClientState, id: Id): ClientState? =
         if (source.session().workspaces.any { it.id == id }) openWorkspace(s, id) else null
+
+    /**
+     * Selects [pane] of [workspace] once the workspace's document lists it: a pane the phone just
+     * asked for is not there until the daemon says so (REQ-235). Null until then.
+     */
+    fun selectWhenShown(s: ClientState, workspace: Id, pane: Id): ClientState? {
+        val shown = (source.node(workspace) as? Node.Workspace)?.panes.orEmpty().any { it.id == pane }
+        return if (shown) selectPane(s, pane) else null
+    }
 
     fun show(s: ClientState, screen: Screen): ClientState = s.copy(screen = screen)
 
