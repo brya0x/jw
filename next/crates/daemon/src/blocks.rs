@@ -345,6 +345,14 @@ impl BlockStore {
             }
             Mark::Command { cmd, cwd } => {
                 self.integrated = true;
+                // fish 4 marks the start of a command itself, before our script can say what
+                // it is, and then our own mark follows: the second one names the same command.
+                if let Some(run) = self.running.as_mut().filter(|r| r.cmd.is_empty()) {
+                    run.cmd = cmd;
+                    run.cwd = cwd;
+                    self.version += 1;
+                    return;
+                }
                 if self.running.is_some() {
                     self.finish(None);
                 }
@@ -642,6 +650,30 @@ mod tests {
         let blocks = s.view().unwrap().2;
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].out.len(), 1);
+    }
+
+    #[test]
+    fn a_second_start_mark_names_the_command_the_first_one_began() {
+        let mut s = BlockStore::new(80);
+        s.mark(Mark::Prompt);
+        s.mark(Mark::Command {
+            cmd: String::new(),
+            cwd: String::new(),
+        });
+        s.mark(Mark::Command {
+            cmd: "echo hi".into(),
+            cwd: "/tmp".into(),
+        });
+        s.data(b"hi\r\n");
+        s.mark(Mark::Done(Some(0)));
+        s.mark(Mark::Done(Some(0)));
+        let blocks = s.view().unwrap().2;
+        assert_eq!(blocks.len(), 1, "one command, one block: {blocks:?}");
+        assert_eq!(
+            (blocks[0].cmd.as_str(), blocks[0].cwd.as_str()),
+            ("echo hi", "/tmp")
+        );
+        assert_eq!(blocks[0].code, Some(0));
     }
 
     #[test]

@@ -131,8 +131,9 @@ impl Rig {
                     .as_array()
                     .is_some_and(|b| b.len() >= n && b[n - 1]["running"] == false))
                 .unwrap(),
-            "block {n} did not end: {}",
-            self.c.nodes[&id]
+            "block {n} did not end: {}\nscreen: {}",
+            self.c.nodes[&id],
+            self.c.nodes[&self.pane]["screen"]["lines"]
         );
         self.blocks()[n - 1].clone()
     }
@@ -157,9 +158,15 @@ fn check_shell(shell: &str) {
     let mut r = rig(shell);
 
     // A command is a block: its words as typed, its folder, its status, its output, no prompt.
-    r.run(r#"echo "it's $((1+1))""#);
+    // fish has no `$((…))`.
+    let sum = if shell.ends_with("fish") {
+        r#"echo "it's "(math 1+1)"#
+    } else {
+        r#"echo "it's $((1+1))""#
+    };
+    r.run(sum);
     let b = r.finished(1);
-    assert_eq!(b["cmd"], r#"echo "it's $((1+1))""#, "{shell}");
+    assert_eq!(b["cmd"], sum, "{shell}");
     assert_eq!(b["cwd"], r.dir.to_string_lossy().as_ref(), "{shell}");
     assert_eq!(
         (b["code"].as_i64(), b["running"].as_bool()),

@@ -17,6 +17,7 @@ what they do and why, never pasted.
 - **`just ci` (in `next/`) green before every commit.** One local commit per part.
 - **Never push or open a PR** unless asked. **Never `pkill jw`/`jwn`**: tests use their own
   socket dir and kill only the pid they recorded.
+- **CI** is `.github/workflows/next.yml` (it lives outside `next/` because GitHub reads workflows only there, and does not touch the old jw's `ci.yml`): it runs the recipes of `next/justfile` on pull requests that change `next/`.
 - Never bind a key with Alt (AeroSpace owns it).
 
 ## Map
