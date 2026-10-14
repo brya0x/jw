@@ -76,15 +76,16 @@ fn unb64(text: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+fn take_data(data: &mut Vec<u8>, out: &mut Vec<Piece>) {
+    if !data.is_empty() {
+        out.push(Piece::Data(std::mem::take(data)));
+    }
+}
+
 impl Scanner {
     pub fn feed(&mut self, bytes: &[u8]) -> Vec<Piece> {
         let mut out: Vec<Piece> = Vec::new();
         let mut data: Vec<u8> = Vec::new();
-        let flush = |data: &mut Vec<u8>, out: &mut Vec<Piece>| {
-            if !data.is_empty() {
-                out.push(Piece::Data(std::mem::take(data)));
-            }
-        };
         for &b in bytes {
             match std::mem::take(&mut self.state) {
                 State::Text => {
@@ -102,7 +103,7 @@ impl Scanner {
                     }
                 }
                 State::Osc(mut body) => match b {
-                    0x07 => self.finish(body, &[0x07], &mut data, &mut out, &flush),
+                    0x07 => self.end_osc(&body, &[0x07], &mut data, &mut out),
                     0x1b => self.state = State::OscEsc(body),
                     _ if body.len() >= MARK_MAX => {
                         data.extend([0x1b, b']']);
@@ -116,7 +117,7 @@ impl Scanner {
                 },
                 State::OscEsc(body) => {
                     if b == b'\\' {
-                        self.finish(body, &[0x1b, b'\\'], &mut data, &mut out, &flush);
+                        self.end_osc(&body, &[0x1b, b'\\'], &mut data, &mut out);
                     } else {
                         // Not a terminator: the ESC started something else inside the string.
                         data.extend([0x1b, b']']);
@@ -126,57 +127,72 @@ impl Scanner {
                 }
             }
         }
-        flush(&mut data, &mut out);
+        take_data(&mut data, &mut out);
         out
     }
 
-    fn finish(
+    fn end_osc(
         &mut self,
-        body: Vec<u8>,
+        body: &[u8],
         terminator: &[u8],
         data: &mut Vec<u8>,
         out: &mut Vec<Piece>,
-        flush: &dyn Fn(&mut Vec<u8>, &mut Vec<Piece>),
     ) {
-        let text = String::from_utf8_lossy(&body).into_owned();
-        let mark = match text.split_once(';') {
-            Some(("133", rest)) => match rest.split(';').next() {
-                Some("A") => Some(Mark::Prompt),
-                Some("B") => Some(Mark::Input),
-                Some("C") => Some(Mark::Command {
-                    cmd: std::mem::take(&mut self.cmd),
-                    cwd: std::mem::take(&mut self.cwd),
-                }),
-                Some("D") => Some(Mark::Done(
-                    rest.split(';').nth(1).and_then(|c| c.parse().ok()),
-                )),
-                _ => None,
-            },
-            Some(("633", rest)) => {
-                if let Some(c) = rest.strip_prefix("E;") {
-                    self.cmd = unb64(c);
-                    return;
-                }
-                if let Some(p) = rest.strip_prefix("P;Cwd=") {
-                    self.cwd = unb64(p);
-                    return;
-                }
-                None
-            }
-            _ => None,
-        };
-        match mark {
-            Some(m) => {
-                flush(data, out);
+        match self.finish(body) {
+            Finished::Mark(m) => {
+                take_data(data, out);
                 out.push(Piece::Mark(m));
             }
-            None => {
+            Finished::Remembered => {}
+            Finished::Passthrough => {
                 data.extend([0x1b, b']']);
-                data.extend(&body);
+                data.extend(body);
                 data.extend(terminator);
             }
         }
     }
+
+    /// What a complete OSC string turned out to be.
+    fn finish(&mut self, body: &[u8]) -> Finished {
+        let text = String::from_utf8_lossy(body);
+        match text.split_once(';') {
+            Some(("133", rest)) => {
+                let mut parts = rest.split(';');
+                match parts.next() {
+                    Some("A") => Finished::Mark(Mark::Prompt),
+                    Some("B") => Finished::Mark(Mark::Input),
+                    Some("C") => Finished::Mark(Mark::Command {
+                        cmd: std::mem::take(&mut self.cmd),
+                        cwd: std::mem::take(&mut self.cwd),
+                    }),
+                    Some("D") => {
+                        Finished::Mark(Mark::Done(parts.next().and_then(|c| c.parse().ok())))
+                    }
+                    _ => Finished::Passthrough,
+                }
+            }
+            Some(("633", rest)) => {
+                if let Some(c) = rest.strip_prefix("E;") {
+                    self.cmd = unb64(c);
+                    Finished::Remembered
+                } else if let Some(p) = rest.strip_prefix("P;Cwd=") {
+                    self.cwd = unb64(p);
+                    Finished::Remembered
+                } else {
+                    Finished::Passthrough
+                }
+            }
+            _ => Finished::Passthrough,
+        }
+    }
+}
+
+enum Finished {
+    Mark(Mark),
+    /// A command's text or folder, kept for the `C` mark that follows.
+    Remembered,
+    /// Not ours: the terminal gets it.
+    Passthrough,
 }
 
 fn now_ms() -> u64 {
@@ -407,8 +423,9 @@ impl BlockStore {
         }
     }
 
-    /// What a client sees, or `None` until the shell has reported a prompt.
-    pub fn view(&self) -> Option<(BlocksMode, Vec<Block>)> {
+    /// What a client sees, with the version it is a view of; `None` until the shell has
+    /// reported a prompt.
+    pub fn view(&self) -> Option<(u64, BlocksMode, Vec<Block>)> {
         if !self.integrated {
             return None;
         }
@@ -420,7 +437,7 @@ impl BlockStore {
                 mode = BlocksMode::Full;
             }
         }
-        Some((mode, blocks))
+        Some((self.version, mode, blocks))
     }
 }
 
@@ -494,7 +511,7 @@ mod tests {
         });
         s.data(out);
         s.mark(Mark::Done(Some(2)));
-        s.view().unwrap().1.pop().unwrap()
+        s.view().unwrap().2.pop().unwrap()
     }
 
     #[test]
@@ -534,7 +551,7 @@ mod tests {
             cwd: "/".into(),
         });
         s.data(b"working\r\n");
-        let (mode, blocks) = s.view().unwrap();
+        let (_, mode, blocks) = s.view().unwrap();
         assert_eq!(mode, BlocksMode::Blocks);
         assert!(blocks[0].running && blocks[0].code.is_none() && blocks[0].ms.is_none());
         assert_eq!(blocks[0].out.len(), 1);
@@ -549,11 +566,11 @@ mod tests {
             cwd: "/".into(),
         });
         s.data(b"\x1b[?1049hhello");
-        let (mode, blocks) = s.view().unwrap();
+        let (_, mode, blocks) = s.view().unwrap();
         assert_eq!(mode, BlocksMode::Full);
         assert!(blocks[0].full && blocks[0].out.is_empty());
         s.mark(Mark::Done(Some(0)));
-        let (mode, blocks) = s.view().unwrap();
+        let (_, mode, blocks) = s.view().unwrap();
         assert_eq!(mode, BlocksMode::Blocks);
         assert!(blocks[0].full && blocks[0].out.is_empty());
     }
@@ -568,7 +585,7 @@ mod tests {
         });
         s.data(b"\x1b[?1049hhello\x1b[?1049l");
         s.mark(Mark::Done(Some(0)));
-        let b = &s.view().unwrap().1[0];
+        let b = &s.view().unwrap().2[0];
         assert!(b.full && b.out.is_empty());
     }
 
@@ -583,7 +600,7 @@ mod tests {
         s.data(b"\x1b[?10");
         s.data(b"49hdraw\x1b[?1049l");
         s.mark(Mark::Done(Some(0)));
-        assert!(s.view().unwrap().1[0].full);
+        assert!(s.view().unwrap().2[0].full);
     }
 
     #[test]
@@ -592,7 +609,7 @@ mod tests {
         s.data(b"no prompt yet");
         assert!(s.view().is_none());
         s.mark(Mark::Prompt);
-        assert_eq!(s.view().unwrap().1.len(), 0);
+        assert_eq!(s.view().unwrap().2.len(), 0);
     }
 
     #[test]
@@ -607,7 +624,7 @@ mod tests {
         s.data(b"result\r\n");
         s.mark(Mark::Done(Some(0)));
         s.data(b"~ $ ");
-        let blocks = s.view().unwrap().1;
+        let blocks = s.view().unwrap().2;
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].out.len(), 1);
     }
@@ -623,7 +640,7 @@ mod tests {
             });
             s.mark(Mark::Done(Some(0)));
         }
-        let blocks = s.view().unwrap().1;
+        let blocks = s.view().unwrap().2;
         assert_eq!(blocks.len(), MAX_BLOCKS);
         assert_eq!(blocks[0].id, 6);
         assert_eq!(blocks.last().unwrap().id, (MAX_BLOCKS + 5) as u64);

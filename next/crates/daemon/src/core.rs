@@ -183,15 +183,15 @@ impl Core {
         let Some(term) = self.terms.get(pane) else {
             return;
         };
-        let version = term.blocks_version();
+        let seen = term.blocks_version();
         if self
             .blocks_views
             .get(pane)
-            .is_some_and(|(v, _, _)| *v == version)
+            .is_some_and(|(v, _, _)| *v == seen)
         {
             return;
         }
-        if let Some((mode, blocks)) = term.blocks_view() {
+        if let Some((version, mode, blocks)) = term.blocks_view() {
             self.blocks_ids
                 .entry(pane.to_owned())
                 .or_insert_with(crate::model::new_id);

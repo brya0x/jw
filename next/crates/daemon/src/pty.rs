@@ -36,8 +36,8 @@ pub enum Mark {
     CommandDone(Option<i32>),
 }
 
-/// Lock order: the hub's lock, then `parser`. The reader thread takes only `parser`, so
-/// it can never wait on the hub while the hub waits on it.
+/// Lock order: the hub's lock, then `parser` or `blocks` (never both at once). The reader
+/// thread takes only those, so it can never wait on the hub while the hub waits on it.
 pub struct Term {
     parser: Arc<Mutex<vt100::Parser>>,
     blocks: Arc<Mutex<BlockStore>>,
@@ -151,7 +151,7 @@ impl Term {
     }
 
     /// The blocks, once the shell has reported a prompt.
-    pub fn blocks_view(&self) -> Option<(BlocksMode, Vec<Block>)> {
+    pub fn blocks_view(&self) -> Option<(u64, BlocksMode, Vec<Block>)> {
         lock(&self.blocks).view()
     }
 
