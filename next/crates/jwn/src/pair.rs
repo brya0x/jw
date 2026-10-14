@@ -91,6 +91,11 @@ pub fn stop() -> Res {
     Ok(ExitCode::SUCCESS)
 }
 
+/// How many phones are paired.
+pub fn paired_count() -> usize {
+    store().list().map_or(0, |d| d.len())
+}
+
 fn store() -> Store {
     Store::new(devices_file(&Config::from_identity().state_dir))
 }

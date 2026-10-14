@@ -25,6 +25,7 @@ mod changes;
 mod diff_lines;
 mod look;
 mod manage;
+mod phone;
 mod settings;
 mod shell;
 
@@ -279,6 +280,8 @@ pub enum Key {
     CloseWorkspace,
     /// The mode and the theme.
     Settings,
+    /// The phone link: its box.
+    Phone,
     /// With a block selected: copy its command, copy its output, run it again.
     CopyCmd,
     CopyOut,
@@ -375,6 +378,15 @@ pub struct View {
     os_dark: bool,
     /// The settings changed here and are not written yet.
     save: bool,
+    /// The phone link, and whether its box is open, how many phones are paired, whether the
+    /// loop should start the thread that turns it on, and what to tell that thread.
+    phone: phone::State,
+    phone_open: bool,
+    phone_paired: usize,
+    phone_start: bool,
+    phone_says: Vec<phone::Say>,
+    /// When the pairing question appeared, in `now_ms`: a key typed before it was read is not an answer.
+    ask_at: u64,
 }
 
 impl View {
@@ -410,6 +422,12 @@ impl View {
             settings: Settings::default(),
             os_dark: true,
             save: false,
+            phone: phone::State::Off,
+            phone_open: false,
+            phone_paired: 0,
+            phone_start: false,
+            phone_says: Vec::new(),
+            ask_at: 0,
         }
     }
 
@@ -813,6 +831,9 @@ impl View {
         };
         let (next, act) = question.press(ev.code);
         self.manage = next;
+        if self.manage.is_none() {
+            self.surface_ask();
+        }
         if !self.manage.as_ref().is_some_and(Manage::is_check) {
             self.drop_check();
         }
@@ -842,6 +863,121 @@ impl View {
                 remove_worktree,
             },
         }
+    }
+
+    /// `m`: show the phone box, turning the link on when it is off.
+    fn open_phone(&mut self) {
+        if self.manage.is_some() {
+            return;
+        }
+        if matches!(self.phone, phone::State::Off | phone::State::Failed(_)) {
+            self.phone = phone::State::Starting;
+            self.phone_start = true;
+        }
+        self.phone_open = true;
+    }
+
+    /// A key in the phone box. While a phone asks to pair only `y` accepts, and only once the
+    /// question has been on the screen for a moment; any other key refuses.
+    fn phone_key(&mut self, ev: KeyEvent) -> After {
+        if ev.modifiers.contains(KeyModifiers::CONTROL) {
+            return After::Continue;
+        }
+        match (&self.phone, ev.code) {
+            (phone::State::Asking { .. }, KeyCode::Char('y')) => {
+                if self.now_ms >= self.ask_at + ANSWER_DELAY_MS {
+                    self.phone_says.push(phone::Say::Answer(true));
+                }
+            }
+            (phone::State::Asking { .. }, _) => self.phone_says.push(phone::Say::Answer(false)),
+            (phone::State::Failed(_), _) => {
+                self.phone = phone::State::Off;
+                self.phone_open = false;
+            }
+            (phone::State::Ready(link), KeyCode::Char('c')) => {
+                let uri = link.uri.clone();
+                self.flash = "enlace copiado".into();
+                return After::Copy(uri);
+            }
+            (phone::State::Ready(_), KeyCode::Char('s')) => {
+                self.phone_says.push(phone::Say::Stop);
+                self.phone = phone::State::Off;
+                self.phone_open = false;
+                self.flash = "el enlace con el teléfono está apagado".into();
+            }
+            (_, KeyCode::Esc) => self.phone_open = false,
+            _ => {}
+        }
+        After::Continue
+    }
+
+    /// What the thread of the phone link reported.
+    pub fn phone_event(&mut self, event: phone::Event) {
+        use phone::{Event, State};
+        let link = match &self.phone {
+            State::Ready(l) | State::Asking { link: l, .. } => Some(l.clone()),
+            _ => None,
+        };
+        match (event, link) {
+            (Event::Ready(link), _) => {
+                self.phone = State::Ready(link);
+                if !self.phone_open {
+                    self.flash = "enlace con el teléfono listo · m".into();
+                }
+            }
+            (Event::Failed(why), _) => {
+                self.phone = State::Failed(why);
+                self.phone_open = self.manage.is_none();
+            }
+            (Event::Ask { name, code }, Some(link)) => {
+                self.phone = State::Asking { link, name, code };
+                self.ask_at = self.now_ms;
+                self.surface_ask();
+            }
+            (Event::Answered { yes }, Some(link)) => {
+                let name = match &self.phone {
+                    State::Asking { name, .. } => name.clone(),
+                    _ => String::new(),
+                };
+                self.phone = State::Ready(link);
+                self.flash = if yes {
+                    format!("emparejado «{name}»")
+                } else {
+                    format!("rechazado «{name}»")
+                };
+            }
+            (Event::Paired(n), _) => self.phone_paired = n,
+            (Event::Off, _) => {
+                self.phone = State::Off;
+                self.phone_open = false;
+            }
+            (Event::Ask { .. } | Event::Answered { .. }, None) => {}
+        }
+    }
+
+    /// The pairing question opens its box by itself, unless another question is open: a key
+    /// meant for that one must not answer this.
+    fn surface_ask(&mut self) {
+        if matches!(self.phone, phone::State::Asking { .. }) && self.manage.is_none() {
+            self.phone_open = true;
+            self.typing = false;
+        } else if matches!(self.phone, phone::State::Asking { .. }) {
+            self.flash = "un teléfono pide emparejarse · m".into();
+        }
+    }
+
+    /// The loop starts the thread of the link when this says so.
+    pub fn take_phone_start(&mut self) -> bool {
+        std::mem::take(&mut self.phone_start)
+    }
+
+    pub fn take_phone_says(&mut self) -> Vec<phone::Say> {
+        std::mem::take(&mut self.phone_says)
+    }
+
+    /// The link was turned off: the thread is done.
+    pub fn phone_is_off(&self) -> bool {
+        self.phone == phone::State::Off
     }
 
     /// Stop watching the node a worktree's changes were read from.
@@ -888,6 +1024,9 @@ impl View {
     /// open) a command of the client.
     pub fn press_key(&mut self, ev: KeyEvent) -> After {
         self.flash.clear();
+        if self.phone_open {
+            return self.phone_key(ev);
+        }
         if self.manage.is_some() {
             return self.manage_key(ev);
         }
@@ -995,6 +1134,7 @@ impl View {
             (Mode::Workspaces, Key::ClosePane) => return self.ask_close_pane(),
             (Mode::Workspaces, Key::CloseWorkspace) => self.ask_close_workspace(),
             (Mode::Workspaces, Key::Settings) => self.manage = Some(self.settings_question()),
+            (Mode::Workspaces, Key::Phone) => self.open_phone(),
             (Mode::Avisos, Key::Down) => {
                 let last = self.avisos().len().saturating_sub(1);
                 self.avisos_selected = (self.avisos_selected + 1).min(last);
@@ -1099,7 +1239,7 @@ impl View {
     /// a pane's box focuses it, `avisos N` in the status bar opens the list, an item of the
     /// list goes there, and a click outside the list closes it.
     pub fn click(&mut self, x: usize, y: usize, cols: usize, rows: usize) -> After {
-        if self.manage.is_some() {
+        if self.manage.is_some() || self.phone_open {
             return After::Continue;
         }
         if self.changes.is_some() {
@@ -1156,7 +1296,7 @@ impl View {
     /// The wheel over the sidebar (or the avisos list) moves the highlight; over a pane drawn
     /// as blocks it scrolls them.
     pub fn scroll(&mut self, down: bool, x: usize, y: usize, cols: usize, rows: usize) -> After {
-        if self.manage.is_some() {
+        if self.manage.is_some() || self.phone_open {
             return After::Continue;
         }
         if self.changes.is_some() {
@@ -1276,6 +1416,15 @@ impl View {
         {
             g.put(1, rows.saturating_sub(4) + i, line, dim);
         }
+        // The phone link, while it is on, above the legend.
+        if self.phone.is_on() {
+            g.put(
+                1,
+                rows.saturating_sub(5),
+                "● teléfono · m",
+                Style::fg(look::magenta()),
+            );
+        }
 
         // The header row and the panes.
         let px = SIDEBAR + 1;
@@ -1333,6 +1482,13 @@ impl View {
         let (chip, bg, hint) = match (&self.manage, &diff_status) {
             (Some(Manage::Failed { .. }), _) => (" ERROR ", look::red(), self.manage_hint()),
             (Some(Manage::Settings { .. }), _) => (" AJUSTES ", look::blue(), self.manage_hint()),
+            (None, _) if self.phone_open => match &self.phone {
+                phone::State::Asking { .. } => {
+                    (" PREGUNTA ", look::yellow(), phone::hint(&self.phone))
+                }
+                phone::State::Failed(_) => (" ERROR ", look::red(), phone::hint(&self.phone)),
+                _ => (" TELÉFONO ", look::magenta(), phone::hint(&self.phone)),
+            },
             (Some(_), _) => (" PREGUNTA ", look::yellow(), self.manage_hint()),
             (None, Some((hint, _))) => (" DIFF ", look::cyan(), hint.as_str()),
             (None, None) => match (self.mode, typing) {
@@ -1404,6 +1560,14 @@ impl View {
         if self.mode == Mode::Avisos {
             self.avisos_box(&mut g, (px, 1, pw, rows.saturating_sub(2)));
         }
+        if self.phone_open {
+            phone::draw(
+                &mut g,
+                (px, 1, pw, rows.saturating_sub(2)),
+                &self.phone,
+                self.phone_paired,
+            );
+        }
         if let Some(question) = &self.manage {
             question.draw(
                 &mut g,
@@ -1460,11 +1624,20 @@ impl View {
             );
             let (bx, by, bw, bh) = rect;
             let Some(p) = self.panes.get(&summary.id) else {
-                g.put(bx + 2, by + 1, "abriendo el panel…", Style::fg(look::dim()));
+                skeleton(g, rect);
                 continue;
             };
             if let Some(b) = self.blocks_of(&summary.id) {
                 self.blocks_view(g, b, p, rect, focused, branch);
+                continue;
+            }
+            // The shell has blocks that have not arrived: the screen would show for a moment
+            // and then give way to them, so it waits.
+            if p.blocks
+                .as_ref()
+                .is_some_and(|id| !self.blocks.contains_key(id))
+            {
+                skeleton(g, rect);
                 continue;
             }
             for (r, line) in p.screen.lines.iter().take(bh.saturating_sub(2)).enumerate() {
@@ -1635,6 +1808,8 @@ type Rect = (usize, usize, usize, usize);
 const STOP: &str = "■ ^C";
 /// Lines one notch of the wheel moves a pane's blocks.
 const SCROLL_STEP: usize = 3;
+/// How long a pairing question is on the screen before `y` answers it.
+const ANSWER_DELAY_MS: u64 = 800;
 /// The editor under the blocks: a rule, the chips, the prompt line.
 const EDITOR_ROWS: usize = 3;
 
@@ -1699,6 +1874,15 @@ fn pane_rects(n: usize, (x, y, w, h): Rect) -> Vec<Rect> {
 fn avisos_rect(items: usize, (x, y, w, _): Rect) -> Rect {
     let bw = 56.min(w.saturating_sub(2));
     (x + w.saturating_sub(bw) / 2, y + 3, bw, items.max(1) + 4)
+}
+
+/// What a pane's box shows before its document arrives: grey bars where the lines will be.
+fn skeleton(g: &mut Grid, (x, y, w, _): Rect) {
+    let inner = w.saturating_sub(4);
+    for (i, share) in [55, 80, 40, 65, 30].into_iter().enumerate() {
+        let bar = "░".repeat((inner * share / 100).max(1));
+        g.put(x + 2, y + 2 + i * 2, &bar, Style::fg(look::line()));
+    }
 }
 
 /// The name a running program is shown by: its command without the folders.
@@ -1792,6 +1976,7 @@ fn key_of(code: KeyCode) -> Option<Key> {
         KeyCode::Char('x') => Key::ClosePane,
         KeyCode::Char('X') => Key::CloseWorkspace,
         KeyCode::Char(',') => Key::Settings,
+        KeyCode::Char('m') => Key::Phone,
         KeyCode::Char('c') => Key::CopyCmd,
         KeyCode::Char('o') => Key::CopyOut,
         KeyCode::Char('r') => Key::Repeat,
@@ -1928,6 +2113,7 @@ pub fn run() -> Result<(), String> {
     let mut last: Vec<String> = Vec::new();
     view.set_settings(Settings::load());
     view.set_os_dark(settings::os_is_dark());
+    let mut phone_worker: Option<phone::Worker> = None;
     let (mut settings_read, mut appearance_read) = (Instant::now(), Instant::now());
     loop {
         // The settings file may be changed by another terminal; the machine's appearance by
@@ -2000,6 +2186,20 @@ pub fn run() -> Result<(), String> {
             let _ = client.cmd(Cmd::MarkSeen { node, rev });
         }
         serve_asks(&mut view, &mut client);
+        if view.take_phone_start() {
+            phone_worker = Some(phone::Worker::spawn());
+        }
+        if let Some(worker) = &phone_worker {
+            while let Ok(event) = worker.events.try_recv() {
+                view.phone_event(event);
+            }
+            for say in view.take_phone_says() {
+                worker.say(say);
+            }
+            if view.phone_is_off() {
+                phone_worker = None;
+            }
+        }
         if let Some(chosen) = view.take_save() {
             if let Err(e) = chosen.save() {
                 view.flash(&format!("no se pudo guardar settings.json: {e}"));
@@ -3047,5 +3247,172 @@ mod tests {
             "{t}"
         );
         assert!(t.contains("❯ ● Gruvbox Dark"), "{t}");
+    }
+    #[test]
+    fn a_shell_whose_blocks_have_not_arrived_does_not_flash_its_screen() {
+        let mut v = idle_view();
+        v.press(Key::Enter);
+        let pane = v.shown().unwrap().panes[1].id.clone();
+        let blocks = v.panes[&pane].blocks.clone().expect("a pane with blocks");
+        v.panes.get_mut(&pane).unwrap().screen.lines[0] = "SCREEN-TEXT".into();
+        v.blocks.remove(&blocks);
+        let t = v.plain(120, 30);
+        assert!(t.contains("░░░"), "grey bars stand for the lines: {t}");
+        assert!(
+            !t.contains("SCREEN-TEXT"),
+            "the screen must not show first: {t}"
+        );
+    }
+    fn link() -> phone::Link {
+        phone::Link {
+            uri: "jwn://192.168.1.20:7871/t0kenabc?fp=ab".into(),
+            lan: Some("192.168.1.20:7871".into()),
+            tunnel: None,
+        }
+    }
+
+    fn ready_view() -> View {
+        let mut v = idle_view();
+        tap(&mut v, 'm');
+        v.phone_event(phone::Event::Ready(link()));
+        v
+    }
+
+    #[test]
+    fn m_opens_the_box_and_asks_the_loop_to_turn_the_link_on_once() {
+        let mut v = idle_view();
+        assert_eq!(tap(&mut v, 'm'), After::Continue);
+        assert!(v.take_phone_start());
+        assert!(!v.take_phone_start(), "once");
+        let t = v.plain(120, 30);
+        assert!(t.contains("Encendiendo el enlace"), "{t}");
+        assert!(t.contains(" TELÉFONO "), "{t}");
+        // Closing it leaves the link opening; `m` shows it again without a second start.
+        v.press_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!v.phone_open);
+        tap(&mut v, 'm');
+        assert!(v.phone_open && !v.take_phone_start());
+    }
+
+    #[test]
+    fn a_ready_link_shows_the_qr_the_addresses_and_that_there_is_no_tunnel() {
+        let mut v = ready_view();
+        let t = v.plain(140, 50);
+        assert!(t.contains("Escanea el código con la app"), "{t}");
+        assert!(t.contains("jwn://192.168.1.20:7871/t0kenabc"), "{t}");
+        assert!(t.contains("red local   192.168.1.20:7871"), "{t}");
+        assert!(t.contains("sin túnel: solo desde tu red"), "{t}");
+        assert!(t.contains("ningún teléfono emparejado todavía"), "{t}");
+        assert!(t.contains('█') || t.contains('▀'), "the QR: {t}");
+        v.phone_event(phone::Event::Paired(2));
+        assert!(v.plain(140, 50).contains("2 teléfonos emparejados"));
+        // A terminal too small for the QR still shows the link and says so.
+        let t = v.plain(100, 24);
+        assert!(t.contains("agranda la terminal para ver el QR"), "{t}");
+        assert!(t.contains("jwn://192.168.1.20"), "{t}");
+    }
+
+    #[test]
+    fn esc_leaves_the_link_on_and_the_sidebar_says_so() {
+        let mut v = ready_view();
+        v.press_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!v.phone_open && v.phone.is_on());
+        assert!(v.plain(120, 30).contains("● teléfono · m"));
+        assert!(
+            v.take_phone_says().is_empty(),
+            "closing the box does not turn it off"
+        );
+    }
+
+    #[test]
+    fn c_copies_the_link_and_s_turns_it_off() {
+        let mut v = ready_view();
+        assert_eq!(tap(&mut v, 'c'), After::Copy(link().uri));
+        assert!(v.phone_open);
+        assert_eq!(tap(&mut v, 's'), After::Continue);
+        assert_eq!(v.take_phone_says(), vec![phone::Say::Stop]);
+        assert!(!v.phone_open && v.phone_is_off());
+        assert!(!v.plain(120, 30).contains("● teléfono"));
+    }
+
+    #[test]
+    fn a_phone_asking_opens_the_box_by_itself_and_only_y_after_a_moment_accepts() {
+        let mut v = ready_view();
+        v.press_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        v.set_now(1_000);
+        v.phone_event(phone::Event::Ask {
+            name: "Pixel 8".into(),
+            code: "482 913".into(),
+        });
+        assert!(v.phone_open, "even though it was closed");
+        let t = v.plain(120, 30);
+        assert!(t.contains("¿Emparejar «Pixel 8»?"), "{t}");
+        assert!(t.contains("482 913"), "{t}");
+        assert!(t.contains(" PREGUNTA "), "{t}");
+        // A `y` typed before the question could be read is not an answer.
+        tap(&mut v, 'y');
+        assert!(v.take_phone_says().is_empty());
+        v.set_now(2_000);
+        tap(&mut v, 'y');
+        assert_eq!(v.take_phone_says(), vec![phone::Say::Answer(true)]);
+        // Anything else refuses, at once.
+        tap(&mut v, 'x');
+        assert_eq!(v.take_phone_says(), vec![phone::Say::Answer(false)]);
+        v.phone_event(phone::Event::Answered { yes: true });
+        assert!(
+            matches!(v.phone, phone::State::Ready(_)),
+            "back to the link"
+        );
+        assert_eq!(v.flash, "emparejado «Pixel 8»");
+    }
+
+    #[test]
+    fn a_question_that_is_open_is_not_answered_by_the_pairing_one() {
+        let mut v = fixture_view();
+        v.press(Key::Enter);
+        v.typing = false;
+        v.phone = phone::State::Ready(link());
+        tap(&mut v, 'X');
+        assert!(v.manage.is_some());
+        v.set_now(5_000);
+        v.phone_event(phone::Event::Ask {
+            name: "Pixel 8".into(),
+            code: "111 222".into(),
+        });
+        assert!(!v.phone_open, "the `y` meant for closing must not pair");
+        assert!(v.flash.contains("pide emparejarse"));
+        v.press_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(
+            v.manage.is_none() && v.phone_open,
+            "now it is the pairing question's turn"
+        );
+    }
+
+    #[test]
+    fn a_failure_is_a_red_box_with_the_reason_and_any_key_leaves() {
+        let mut v = idle_view();
+        tap(&mut v, 'm');
+        v.phone_event(phone::Event::Failed("address in use".into()));
+        let t = v.plain(120, 30);
+        assert!(
+            t.contains("No se pudo encender el enlace con el teléfono:"),
+            "{t}"
+        );
+        assert!(t.contains("address in use"), "{t}");
+        assert!(t.contains(" ERROR "), "{t}");
+        tap(&mut v, 'q');
+        assert!(!v.phone_open && v.phone_is_off());
+        // And `m` tries again.
+        tap(&mut v, 'm');
+        assert!(v.take_phone_start());
+    }
+
+    #[test]
+    fn keys_and_clicks_stay_in_the_box_while_it_is_open() {
+        let mut v = ready_view();
+        assert_eq!(tap(&mut v, 'j'), After::Continue);
+        assert_eq!(v.selected, 0);
+        assert_eq!(v.click(5, 3, 110, 30), After::Continue);
+        assert!(v.phone_open);
     }
 }
