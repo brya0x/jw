@@ -50,9 +50,7 @@ pub struct Client {
 impl Client {
     pub fn connect(path: &Path, name: &str) -> Result<Client, ClientError> {
         let mut conn = Conn::connect(path)?;
-        let accepts = ["session", "workspace", "pane"]
-            .map(|t| (t.to_owned(), vec![1]))
-            .into();
+        let accepts = crate::default_accepts();
         conn.send(&ClientMsg::Hello {
             client: Peer {
                 name: name.into(),

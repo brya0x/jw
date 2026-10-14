@@ -14,6 +14,7 @@ use wire::{Conn, Stream, write_line};
 
 use crate::commands;
 use crate::core::{Core, OUTBOX};
+use crate::integration;
 use crate::model::Model;
 use crate::panes;
 use crate::persist;
@@ -43,6 +44,8 @@ pub struct Config {
     pub tcp: Option<SocketAddr>,
     /// Extra environment for every pane's shell.
     pub env: Vec<(String, String)>,
+    /// Install the shell integration (blocks); `$<PREFIX>_SHELL_BLOCKS=0` turns it off.
+    pub blocks: bool,
 }
 
 impl Config {
@@ -55,6 +58,7 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok()),
             env: Vec::new(),
+            blocks: std::env::var(identity::env_var("SHELL_BLOCKS")).map_or(true, |v| v != "0"),
         }
     }
 
@@ -103,6 +107,10 @@ impl Daemon {
         fs::write(config.pid_file(), std::process::id().to_string())?;
 
         let model = persist::load(&config.session_file()).unwrap_or_else(Model::new);
+        let integration_dir = config.blocks.then(|| config.state_dir.join("shell"));
+        if let Some(dir) = &integration_dir {
+            integration::install(dir)?;
+        }
         let shell = config.shell.clone().unwrap_or_else(default_shell);
         let (events, event_rx) = std::sync::mpsc::channel();
         let shared = Shared(Arc::new(Mutex::new(Core::new(
@@ -111,6 +119,7 @@ impl Daemon {
             events,
             shell,
             config.env.clone(),
+            integration_dir,
         ))));
         let engine = {
             let shared = shared.clone();

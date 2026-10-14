@@ -46,6 +46,7 @@ pub fn run() -> Result<(), String> {
         shell: Some("/bin/sh".into()),
         tcp: None,
         env: Vec::new(),
+        blocks: true,
     };
     let socket = config.socket.clone();
     let daemon =

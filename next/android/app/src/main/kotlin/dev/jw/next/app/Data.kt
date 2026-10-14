@@ -132,7 +132,7 @@ class LiveSource(private val host: String, private val port: Int) : AppSource() 
                     socket.connect(java.net.InetSocketAddress(host, port), 3000)
                     synchronized(lock) { out = socket.getOutputStream() }
                     state = "conectado"
-                    send(ClientMsg.Hello(Peer("jwn-android", "0.0.1"), mapOf("session" to listOf(1), "workspace" to listOf(1), "pane" to listOf(1))))
+                    send(ClientMsg.Hello(Peer("jwn-android", "0.0.1"), mapOf("session" to listOf(1), "workspace" to listOf(1), "pane" to listOf(1), "blocks" to listOf(1))))
                     socket.getInputStream().bufferedReader().forEachLine { line -> receive(line) }
                 }
             } catch (_: java.io.IOException) {

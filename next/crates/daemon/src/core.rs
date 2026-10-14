@@ -19,7 +19,12 @@ use crate::persist;
 use crate::pty::{self, Event, Term};
 
 /// The node document versions this daemon can serve.
-pub const SUPPORTED: [(&str, &[u32]); 3] = [("session", &[1]), ("workspace", &[1]), ("pane", &[1])];
+pub const SUPPORTED: [(&str, &[u32]); 4] = [
+    ("session", &[1]),
+    ("workspace", &[1]),
+    ("pane", &[1]),
+    ("blocks", &[1]),
+];
 
 /// How many patches per node are kept for a resuming client.
 pub const RETAIN: usize = 256;
@@ -59,11 +64,17 @@ pub struct Core {
     /// The running shells, by pane id, and the last screen read from each.
     terms: HashMap<Id, Arc<Term>>,
     screens: HashMap<Id, Screen>,
+    /// The last blocks read from each shell (with their version), and the id of the node
+    /// each pane's blocks are served as.
+    blocks_views: HashMap<Id, (u64, contract::BlocksMode, Vec<contract::Block>)>,
+    blocks_ids: HashMap<Id, Id>,
     /// Where terminals report to, and the shell they start.
     pub events: Sender<Event>,
     pub shell: String,
     /// Extra environment for every pane's shell.
     pub env: Vec<(String, String)>,
+    /// Where the shell integration scripts are installed; none turns blocks off.
+    pub integration: Option<PathBuf>,
 }
 
 impl Core {
@@ -73,6 +84,7 @@ impl Core {
         events: Sender<Event>,
         shell: String,
         env: Vec<(String, String)>,
+        integration: Option<PathBuf>,
     ) -> Core {
         let mut core = Core {
             epoch: crate::model::new_id(),
@@ -84,9 +96,12 @@ impl Core {
             next_client: 1,
             terms: HashMap::new(),
             screens: HashMap::new(),
+            blocks_views: HashMap::new(),
+            blocks_ids: HashMap::new(),
             events,
             shell,
             env,
+            integration,
         };
         core.refresh();
         core
@@ -131,6 +146,21 @@ impl Core {
         changed
     }
 
+    /// How `shell` is started with the integration (nothing when blocks are off).
+    pub fn integration_for(&self, shell: &str) -> crate::integration::Setup {
+        let Some(dir) = &self.integration else {
+            return Default::default();
+        };
+        let lookup = |k: &str| {
+            self.env
+                .iter()
+                .find(|(n, _)| n == k)
+                .map(|(_, v)| v.clone())
+                .or_else(|| std::env::var(k).ok())
+        };
+        crate::integration::setup(shell, dir, &lookup)
+    }
+
     pub fn term(&self, pane: &str) -> Option<Arc<Term>> {
         self.terms.get(pane).cloned()
     }
@@ -144,6 +174,29 @@ impl Core {
     pub fn read_screen(&mut self, pane: &str) {
         if let Some(term) = self.terms.get(pane) {
             self.screens.insert(pane.to_owned(), term.screen());
+        }
+    }
+
+    /// Re-read the blocks of a pane whose terminal changed them. Once a shell has reported
+    /// a prompt the pane gets a blocks node of its own.
+    pub fn read_blocks(&mut self, pane: &str) {
+        let Some(term) = self.terms.get(pane) else {
+            return;
+        };
+        let version = term.blocks_version();
+        if self
+            .blocks_views
+            .get(pane)
+            .is_some_and(|(v, _, _)| *v == version)
+        {
+            return;
+        }
+        if let Some((mode, blocks)) = term.blocks_view() {
+            self.blocks_ids
+                .entry(pane.to_owned())
+                .or_insert_with(crate::model::new_id);
+            self.blocks_views
+                .insert(pane.to_owned(), (version, mode, blocks));
         }
     }
 
@@ -162,6 +215,8 @@ impl Core {
             .cloned()
             .collect();
         self.screens.retain(|k, _| live.contains(k.as_str()));
+        self.blocks_views.retain(|k, _| live.contains(k.as_str()));
+        self.blocks_ids.retain(|k, _| live.contains(k.as_str()));
         dead.iter().filter_map(|k| self.terms.remove(k)).collect()
     }
 
@@ -468,13 +523,27 @@ impl Core {
                         argv,
                         exit_code: None,
                     }),
-                    blocks: None,
+                    blocks: self
+                        .blocks_ids
+                        .get(&p.id)
+                        .filter(|_| self.blocks_views.contains_key(&p.id))
+                        .cloned(),
                     screen: self
                         .screens
                         .get(&p.id)
                         .cloned()
                         .unwrap_or_else(pty::blank_screen),
                 }));
+                if let (Some(id), Some((_, mode, blocks))) =
+                    (self.blocks_ids.get(&p.id), self.blocks_views.get(&p.id))
+                {
+                    nodes.push(Node::Blocks(contract::Blocks {
+                        head: head(id, Vec::new()),
+                        pane: p.id.clone(),
+                        mode: *mode,
+                        blocks: blocks.clone(),
+                    }));
+                }
                 panes.push(PaneSummary {
                     id: p.id.clone(),
                     title: p.title.clone(),
@@ -535,6 +604,7 @@ mod tests {
             std::sync::mpsc::channel().0,
             "/bin/sh".into(),
             Vec::new(),
+            None,
         )
     }
 

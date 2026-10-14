@@ -24,9 +24,30 @@ pub fn quote(shell: &str, word: &str) -> String {
 }
 
 /// The `-c` script that runs `argv` and then turns the shell back into an ordinary one.
-pub fn script(shell: &str, argv: &[String]) -> String {
+pub fn script(shell: &str, argv: &[String], setup: &crate::integration::Setup) -> String {
     let words: Vec<String> = argv.iter().map(|w| quote(shell, w)).collect();
-    format!("{}; exec {} -i", words.join(" "), quote(shell, shell))
+    // The shell that takes over keeps the integration: its environment and its arguments.
+    let env: Vec<String> = setup
+        .env
+        .iter()
+        .map(|(k, v)| quote(shell, &format!("{k}={v}")))
+        .collect();
+    let args: Vec<String> = setup.args.iter().map(|a| quote(shell, a)).collect();
+    let env_prefix = if env.is_empty() {
+        String::new()
+    } else {
+        format!("env {} ", env.join(" "))
+    };
+    let arg_part = if args.is_empty() {
+        String::new()
+    } else {
+        format!("{} ", args.join(" "))
+    };
+    format!(
+        "{}; exec {env_prefix}{} {arg_part}-i",
+        words.join(" "),
+        quote(shell, shell)
+    )
 }
 
 pub fn is_agent(argv: &[String]) -> bool {
@@ -99,8 +120,20 @@ mod tests {
 
     #[test]
     fn the_script_runs_the_program_then_becomes_the_shell() {
-        let s = script("/bin/zsh", &["nvim".into(), "a b.rs".into()]);
+        let s = script(
+            "/bin/zsh",
+            &["nvim".into(), "a b.rs".into()],
+            &Default::default(),
+        );
         assert_eq!(s, "'nvim' 'a b.rs'; exec '/bin/zsh' -i");
+        let with = crate::integration::Setup {
+            args: vec!["--rcfile".into(), "/s/rc.sh".into()],
+            env: vec![("K".into(), "v w".into())],
+        };
+        assert_eq!(
+            script("/bin/bash", &["ls".into()], &with),
+            "'ls'; exec env 'K=v w' '/bin/bash' '--rcfile' '/s/rc.sh' -i"
+        );
     }
 
     #[test]

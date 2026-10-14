@@ -6,7 +6,9 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 
-use contract::{Cursor, Id, Screen};
+use crate::blocks::{self, BlockStore, Scanner};
+use crate::integration::Setup;
+use contract::{Block, BlocksMode, Cursor, Id, Screen};
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 pub const ROWS: u16 = 24;
@@ -34,29 +36,11 @@ pub enum Mark {
     CommandDone(Option<i32>),
 }
 
-#[derive(Default)]
-struct Marks(Vec<Mark>);
-
-impl vt100::Callbacks for Marks {
-    fn unhandled_osc(&mut self, _: &mut vt100::Screen, params: &[&[u8]]) {
-        match params {
-            [b"133", b"C", ..] => self.0.push(Mark::CommandStart),
-            [b"133", b"D", rest @ ..] => {
-                let code = rest
-                    .first()
-                    .and_then(|c| std::str::from_utf8(c).ok())
-                    .and_then(|c| c.parse().ok());
-                self.0.push(Mark::CommandDone(code));
-            }
-            _ => {}
-        }
-    }
-}
-
 /// Lock order: the hub's lock, then `parser`. The reader thread takes only `parser`, so
 /// it can never wait on the hub while the hub waits on it.
 pub struct Term {
-    parser: Arc<Mutex<vt100::Parser<Marks>>>,
+    parser: Arc<Mutex<vt100::Parser>>,
+    blocks: Arc<Mutex<BlockStore>>,
     writer: Mutex<Box<dyn Write + Send>>,
     master: Mutex<Box<dyn MasterPty + Send>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
@@ -75,6 +59,7 @@ pub fn spawn(
     cwd: &Path,
     program: Option<&[String]>,
     env: &[(String, String)],
+    integration: &Setup,
     events: Sender<Event>,
 ) -> Result<Arc<Term>, String> {
     let pair = native_pty_system()
@@ -86,11 +71,12 @@ pub fn spawn(
         })
         .map_err(|e| format!("cannot open a pty: {e}"))?;
     let mut cmd = CommandBuilder::new(shell);
+    cmd.args(&integration.args);
     if let Some(argv) = program.filter(|a| !a.is_empty()) {
-        cmd.args(["-i", "-c", &crate::launch::script(shell, argv)]);
+        cmd.args(["-i", "-c", &crate::launch::script(shell, argv, integration)]);
     }
     cmd.cwd(cwd);
-    for (k, v) in env {
+    for (k, v) in env.iter().chain(&integration.env) {
         cmd.env(k, v);
     }
     cmd.env("TERM", "xterm-256color");
@@ -103,12 +89,8 @@ pub fn spawn(
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
     let term = Arc::new(Term {
-        parser: Arc::new(Mutex::new(vt100::Parser::new_with_callbacks(
-            ROWS,
-            COLS,
-            0,
-            Marks::default(),
-        ))),
+        parser: Arc::new(Mutex::new(vt100::Parser::new(ROWS, COLS, 0))),
+        blocks: Arc::new(Mutex::new(BlockStore::new(COLS))),
         writer: Mutex::new(writer),
         master: Mutex::new(pair.master),
         killer: Mutex::new(child.clone_killer()),
@@ -116,21 +98,35 @@ pub fn spawn(
     });
 
     let parser = term.parser.clone();
+    let store = term.blocks.clone();
     let pane = pane.clone();
     thread::Builder::new()
         .name("pty".into())
         .spawn(move || {
             let mut buf = [0u8; 8192];
+            let mut scanner = Scanner::default();
             loop {
                 let n = match reader.read(&mut buf) {
                     Ok(0) | Err(_) => break,
                     Ok(n) => n,
                 };
-                let marks = {
-                    let mut p = lock(&parser);
-                    p.process(&buf[..n]);
-                    std::mem::take(&mut p.callbacks_mut().0)
-                };
+                let mut marks = Vec::new();
+                for piece in scanner.feed(&buf[..n]) {
+                    match piece {
+                        blocks::Piece::Data(d) => {
+                            lock(&parser).process(&d);
+                            lock(&store).data(&d);
+                        }
+                        blocks::Piece::Mark(m) => {
+                            match &m {
+                                blocks::Mark::Command { .. } => marks.push(Mark::CommandStart),
+                                blocks::Mark::Done(code) => marks.push(Mark::CommandDone(*code)),
+                                _ => {}
+                            }
+                            lock(&store).mark(m);
+                        }
+                    }
+                }
                 if events
                     .send(Event::Output {
                         pane: pane.clone(),
@@ -149,6 +145,16 @@ pub fn spawn(
 }
 
 impl Term {
+    /// Changes whenever the blocks a client would see change.
+    pub fn blocks_version(&self) -> u64 {
+        lock(&self.blocks).version()
+    }
+
+    /// The blocks, once the shell has reported a prompt.
+    pub fn blocks_view(&self) -> Option<(BlocksMode, Vec<Block>)> {
+        lock(&self.blocks).view()
+    }
+
     /// The shell's own process id.
     pub fn shell_pid(&self) -> Option<u32> {
         self.shell_pid
@@ -178,6 +184,7 @@ impl Term {
             })
             .map_err(|e| e.to_string())?;
         lock(&self.parser).screen_mut().set_size(rows, cols);
+        lock(&self.blocks).set_cols(cols);
         Ok(())
     }
 

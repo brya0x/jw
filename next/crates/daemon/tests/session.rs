@@ -22,7 +22,7 @@ fn hello_names_the_root_and_the_versions_served() {
     let d = sb.start();
     let c = sb.client();
     assert_eq!(c.accepted.get("session"), Some(&1));
-    assert_eq!(c.accepted.len(), 3);
+    assert_eq!(c.accepted.len(), 4);
     d.stop();
 }
 

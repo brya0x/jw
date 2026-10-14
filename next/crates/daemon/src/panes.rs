@@ -33,7 +33,7 @@ pub fn new_pane(shared: &Shared, workspace: &Id, program: Option<Vec<String>>) -
         return Err(err(ErrorCode::BadRequest, "program is empty"));
     }
     let argv = program.map(|p| crate::launch::with_session(&p, new_id));
-    let (path, events, shell, env) = {
+    let (path, events, shell, env, setup) = {
         let core = shared.lock();
         let ws = core
             .model
@@ -46,11 +46,20 @@ pub fn new_pane(shared: &Shared, workspace: &Id, program: Option<Vec<String>>) -
             core.events.clone(),
             core.shell.clone(),
             core.env.clone(),
+            core.integration_for(&core.shell),
         )
     };
     let id = new_id();
-    let term = pty::spawn(&id, &shell, Path::new(&path), argv.as_deref(), &env, events)
-        .map_err(|m| err(ErrorCode::Io, m))?;
+    let term = pty::spawn(
+        &id,
+        &shell,
+        Path::new(&path),
+        argv.as_deref(),
+        &env,
+        &setup,
+        events,
+    )
+    .map_err(|m| err(ErrorCode::Io, m))?;
     let mut core = shared.lock();
     let Some(ws) = core
         .model
@@ -159,12 +168,14 @@ pub fn restore(shared: &Shared) {
         if resume.is_some() {
             resumed.push(id.clone());
         }
+        let setup = shared.lock().integration_for(&shell);
         match pty::spawn(
             &id,
             &shell,
             Path::new(&cwd),
             resume.as_deref(),
             &env,
+            &setup,
             events.clone(),
         ) {
             Ok(term) => shared.lock().attach_term(&id, term),
@@ -218,6 +229,7 @@ fn apply(shared: &Shared, batch: Vec<Event>) {
         match event {
             Event::Output { pane, marks } => {
                 core.read_screen(&pane);
+                core.read_blocks(&pane);
                 let Some(p) = core
                     .model
                     .workspaces
