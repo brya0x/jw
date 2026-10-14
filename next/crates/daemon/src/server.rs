@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::sync_channel;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use contract::{ClientMsg, DaemonMsg, ErrorCode};
 use wire::{Conn, Stream, write_line};
@@ -50,6 +51,10 @@ pub struct Config {
     pub link: crate::mobile::LinkConfig,
     /// The binary an agent's hooks run (`<exe> hook <event>`); none gives agents no hooks.
     pub hook_exe: Option<PathBuf>,
+    /// `gh`, to look at pull requests; none turns that off.
+    pub gh: Option<PathBuf>,
+    /// How often the pull requests of the worktrees in use are looked at.
+    pub github_every: Duration,
 }
 
 impl Config {
@@ -65,6 +70,8 @@ impl Config {
             blocks: std::env::var(identity::env_var("SHELL_BLOCKS")).map_or(true, |v| v != "0"),
             link: crate::mobile::LinkConfig::from_identity(),
             hook_exe: std::env::current_exe().ok(),
+            gh: crate::github::find(),
+            github_every: Duration::from_secs(60),
         }
     }
 
@@ -155,6 +162,12 @@ impl Daemon {
             thread::Builder::new()
                 .name("changes".into())
                 .spawn(move || crate::diff::run(shared, stop))?;
+        }
+        if let Some(program) = config.gh.clone() {
+            let (shared, stop, every) = (shared.clone(), stop.clone(), config.github_every);
+            thread::Builder::new()
+                .name("github".into())
+                .spawn(move || crate::github::run(shared, stop, program, every))?;
         }
         let accept = {
             let stop = stop.clone();

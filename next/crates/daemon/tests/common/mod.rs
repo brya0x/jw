@@ -35,6 +35,8 @@ impl Sandbox {
             blocks: true,
             link: daemon::LinkConfig::off(),
             hook_exe: None,
+            gh: None,
+            github_every: Duration::from_millis(100),
         }
     }
 

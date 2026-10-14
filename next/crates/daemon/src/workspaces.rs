@@ -81,6 +81,7 @@ pub fn open_folder(shared: &Shared, path: &str) -> Done {
             branch: None,
             panes: Vec::new(),
             attention: Vec::new(),
+            github: None,
         },
     )
 }
@@ -152,6 +153,7 @@ pub fn create_worktree(shared: &Shared, repo: &str, branch: &str, base: Option<&
             branch: Some(branch.to_owned()),
             panes: Vec::new(),
             attention: Vec::new(),
+            github: None,
         },
     )
 }

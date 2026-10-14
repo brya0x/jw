@@ -7,6 +7,7 @@ mod commands;
 mod core;
 mod diff;
 mod git;
+mod github;
 mod integration;
 mod launch;
 mod mobile;

@@ -34,6 +34,10 @@ pub struct Workspace {
     pub panes: Vec<Pane>,
     #[serde(skip)]
     pub attention: Vec<Own>,
+    /// What was last seen of the branch's pull request, so an attention is raised when it
+    /// changes and not again while it does not. Not saved: a restart sees it afresh.
+    #[serde(skip)]
+    pub github: Option<crate::github::Pr>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

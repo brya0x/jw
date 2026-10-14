@@ -21,6 +21,8 @@ A client opens a node and gets a `snapshot`, then `patch`es (RFC 6902 subset `ad
 
 **Agent attention.** An agent the daemon starts (`claude`) is given hooks for that run only (`--settings` with a file the daemon writes; it merges with the person's own hooks and writes nothing to their settings). Each hook runs `jwn hook <event>`, which tells the daemon with `agent_event` what the agent is doing, for the pane named by the environment. The daemon, not the hook, turns that into attention: a permission prompt is `permission`, a question or a plan awaiting approval is `question` or `plan`, a finished turn is `agent_done`, and the agent moving on (a tool ran, a prompt was sent, the session or the program ended) ends what it had raised. A `claude` typed at a prompt has no hooks (RISK-29).
 
+**Pull requests.** For each worktree workspace with a pane, the daemon looks every minute at the newest pull request of its branch with `gh` (the person's own login; the daemon holds no token) and raises `merged` when it was merged, or `ci_failed` when it is open and a check failed. It raises only when what it sees changes, so a mark a person has looked at does not come back; the old jw looked at merges only (`⚑`) and had no failed-CI mark.
+
 A **pane is a terminal**: its process is always the user's `$SHELL`; a program runs inside it (`running` and `last_program` carry it, and the pane's `title` is its name).
 
 ## Interfaces
@@ -198,6 +200,10 @@ Transport: JSON lines on a Unix socket (mode 0600, in a 0700 dir) whose path com
 - REQ-132 THE `jwn hook <event>` command SHALL send `agent_event` for the pane named by `JWN_PANE_ID` with the `notification_type` and `tool_name` of the JSON on its stdin, and SHALL exit 0 without a word whatever fails (no pane, no daemon, unreadable input, an event it does not know).
 - REQ-133 WHEN an agent's program ends, the daemon SHALL end the `permission`, `question`, `plan` and `agent_done` attentions of its pane.
 - REQ-134 WHILE a `plan` or a `question` is pending on a pane, a `notification` of `permission_prompt` SHALL NOT raise `permission` on it.
+- REQ-135 WHERE `gh` is found (on the path, or named by `JWN_GH`), THE daemon SHALL look every 60 seconds at the newest pull request of the branch of each worktree workspace that has a pane, with `gh pr list --head <branch> --state all --limit 1 --json number,state,mergedAt,statusCheckRollup` run in the worktree, outside the hub's lock and waiting at most 10 seconds.
+- REQ-136 WHEN that pull request is merged, the daemon SHALL raise `merged` on the workspace; WHEN it is open and a check ended in failure, timeout or start-up failure, or a commit status in failure or error, it SHALL raise `ci_failed`.
+- REQ-137 THE daemon SHALL raise an attention from a pull request only when what it sees differs from the last time (the pull request, merged, failing), ending the `merged` and `ci_failed` it had raised before, so that one a person has seen does not return while nothing changes; WHEN the branch has no pull request, it SHALL end them.
+- REQ-138 IF `gh` is missing, fails or does not answer in time, THEN the daemon SHALL keep what it had and say it once in its log.
 - REQ-83 THE phone SHALL keep its device secret in Keystore-backed storage and SHALL pair from the QR link's text (from the QR the camera reads or from pasted text).
 - REQ-84 THE bridge SHALL answer a `mobile_*` command from a phone with an `unsupported` error and not pass it on; THE daemon SHALL end the tunnel it started when it is stopped, and the next start SHALL end one a dead daemon left (recorded in `<state>/tunnel.pid`).
 - REQ-85 WHEN a phone pairs, it SHALL show the six-digit code it sent and wait for the PC; WHEN the bridge denies it or the PC cannot be reached, it SHALL say which of expired, declined, locked out, no longer paired or unreachable happened; WHEN the PC revokes it, the phone SHALL forget the pairing and say so.
@@ -270,6 +276,7 @@ Corrections to the model: the level 0 document is smaller than assumed (3.9 KB, 
 - RISK-25 Untracked files are read from disk by the daemon, not by git: a file being written while it is read can show a partial last line; the next read corrects it.
 - RISK-26 The viewer's requests to the daemon (`open_diff` reads git) run in the terminal client's loop and wait up to 20 seconds, so a very large repository freezes the screen, and the live updates of the panes with it, while a view is first read. The node comes back in the next frame; a worker thread would remove the pause.
 - RISK-27 `ChangesModel` and the screen decode a `diff` document each time they read it (the node cache keeps documents as JSON), up to three times per redraw for the tabs' counts; a 1 MB diff costs tens of milliseconds per redraw on the phone. A decoded copy kept per revision would remove it.
+- RISK-30 A pull request is looked at with one `gh` call a minute per worktree in use, a use of the person's GitHub quota; many worktrees open make many calls. What was last seen is not saved, so a restarted daemon raises `merged` or `ci_failed` again once for what it finds. A cancelled or skipped run is not a failure, and a check that is still running is not one yet, so a pull request whose only red check was cancelled shows nothing. The shape of `gh`'s JSON was checked against a real open and a real merged pull request of this repository; the commit-status shape (`state`) is from `gh`'s documentation.
 - RISK-29 Only an agent the daemon started has hooks: a `claude` typed at a prompt has none and raises no attention (it also has no conversation id for a restart, RISK-12). Of the events, `UserPromptSubmit`, `PreToolUse`, `PostToolUse` and `Stop` were seen firing with a real claude (2.1.299) through the daemon, and `agent_done` reached the pane; the `Notification` types and the tool names `AskUserQuestion` and `ExitPlanMode` are taken from Claude's documentation and were not triggered live. `PostToolUse` runs `jwn hook` after every tool, one process each.
 - RISK-28 No client can close a pane: `close_pane` is in the contract and the daemon, but neither the terminal client nor the phone has a control for it. A pane goes away only when its shell exits (REQ-24: typing `exit`), so panes pile up until then. It is part 4 of *What is left*.
 - RISK-4 The Kotlin conformance suite proves the types and the patch rules, not a live connection; the live flows of the phone are checked by hand against a real daemon (RISK-10).
@@ -303,6 +310,8 @@ Corrections to the model: the level 0 document is smaller than assumed (3.9 KB, 
 `cargo test -p contract` (`crates/contract/tests/conformance.rs`): fixtures round-trip and validate, invalid fixtures are rejected, every schema variant has a fixture, unknown fields are ignored, Rust enums match the schema. Mutating a fixture or a Rust field turns it red.
 
 ### What enforces each REQ
+REQ-135 to REQ-138 by N37: `crates/daemon/src/github.rs` tests (what counts as merged and as failing, over the shapes `gh` prints) and `crates/daemon/tests/github.rs` (a real daemon and a stand-in `gh`: a worktree nobody works in is not looked up, it runs in the worktree with those arguments, failing, passing, merged, seen and not coming back, a failing `gh` changing nothing, and no pull request ending it); it found a lock held across the `gh` call, which would have stopped the daemon. Not run against the real GitHub by a test.
+
 REQ-129 to REQ-134 by N36: `crates/daemon/src/agents.rs` and `launch.rs` tests (the mapping, the settings file and where `--settings` goes), `crates/daemon/tests/agents.rs` (a real daemon with JSON alone: raise, end, bubble to the session, a plan beating a permission, an unknown pane; a stand-in `claude` started with the hooks and a gone agent leaving no attention), `crates/jwn/tests/hook.rs` (the real `jwn hook` as claude runs it, and never failing). With a real claude in a pane of a real daemon, `agent_done` appeared after its answer.
 
 REQ-128 is `.github/workflows/next.yml`; it has not run on GitHub yet (nothing is pushed), and the same recipes were run on macOS and, for the Rust ones, in a Linux container (aarch64; the runners are x86_64).
@@ -348,7 +357,8 @@ The shapes REQ-91 to REQ-103 name (nodes, commands, fields) are enforced by N31 
 | N33 ✓ `2c5421f` | the diff in the terminal client, as `docs/prototypes/tui-diff.html` | 104–112 | `crates/jwn/src/tui/{changes,diff_lines}.rs` |
 | N34 ✓ `6d9de29` | the diff on the phone, as the Cambios screens of `docs/prototypes/mobile.html` | 113–121 | `android/client-core/.../{ChangesModel,DiffTree}.kt`, `android/app/.../ChangesScreen.kt` |
 | N35 ✓ `343b103` | CI for `next/`, and the first run of the fish integration, which CI's Linux job needed | 128 | `.github/workflows/next.yml`, `crates/daemon/src/blocks.rs`, `crates/daemon/tests/blocks.rs` |
-| N36 ✓ (this commit) | claude's hooks become attention: `jwn hook`, `agent_event`, the settings file an agent starts with | 129–134 | `crates/daemon/src/{agents,launch}.rs`, `crates/jwn/src/hook.rs` |
+| N36 ✓ `6341a8d` | claude's hooks become attention: `jwn hook`, `agent_event`, the settings file an agent starts with | 129–134 | `crates/daemon/src/{agents,launch}.rs`, `crates/jwn/src/hook.rs` |
+| N37 ✓ (this commit) | pull requests become attention: `merged` and `ci_failed` from `gh` | 135–138 | `crates/daemon/src/github.rs` |
 
 ## What is left
 In this order, which is proposed except for the viewer of files and Markdown, whose place (7th, after everything else) the user chose on 2026-10-14 because he does not want to work on Markdown yet. Each becomes a part (N35 onwards) with its REQs when it starts; a part with a screen starts from an approved prototype.
@@ -357,7 +367,7 @@ In this order, which is proposed except for the viewer of files and Markdown, wh
 |---|---|
 | 1 | ✓ Clean the spec the `spec-reviewer` found wanting: the enforcement notes moved below the fold, REQ-54, 57, 59 and 60 split (REQ-122 to REQ-127, with the blocks node's id lifecycle), the stale text fixed. Still long for one claim: REQ-44, 65, 69, 87, 100, 107 |
 | 2 | ✓ CI for `next/`: `.github/workflows/next.yml` (REQ-128). Written and its commands run locally and on Linux in a container, but not yet run by GitHub, since nothing is pushed |
-| 3 | The producers of attention that did not exist: claude's hooks (permission, question, plan, agent done) ✓ N36; GitHub (CI failed, merged) is left |
+| 3 | ✓ The producers of attention that did not exist: claude's hooks (permission, question, plan, agent done) N36, and GitHub (merged, CI failed) N37 |
 | 4 | Parity of what the old jw let a person do: closing a pane (no client can today, RISK-28), sessions (create, switch, list from a client), settings and themes |
 | 5 | Where `esc`, `tab`, the arrows and `^C` go on the phone (OPEN-5) |
 | 6 | The swap day: delete the old jw, move `next/` to the root, rename `jwn` to `jw`, decide the Android application id |

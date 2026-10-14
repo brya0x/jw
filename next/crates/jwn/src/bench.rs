@@ -49,6 +49,8 @@ pub fn run() -> Result<(), String> {
         blocks: true,
         link: daemon::LinkConfig::off(),
         hook_exe: None,
+        gh: None,
+        github_every: std::time::Duration::from_secs(60),
     };
     let socket = config.socket.clone();
     let daemon =

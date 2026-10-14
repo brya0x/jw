@@ -38,5 +38,6 @@ Never reach a real daemon from a test: use a private socket dir (`JWN_SOCKET`, `
 | `crates/jwn/src/tui/{changes,diff_lines}.rs` | the diff viewer of the terminal client: its state, keys and drawing, and the pure part (a `diff` node as lines, the tree of files, words that changed, syntax tones) |
 | `crates/jwn/src/tui.rs` | the terminal client (`jwn tui`): a pure `View` tested on the fixtures, and the loop that moves bytes |
 | `crates/daemon/src/agents.rs`, `launch.rs`; `crates/jwn/src/hook.rs` | an agent's hooks: the settings file claude starts with, `jwn hook <event>` (what claude runs) and the attention the daemon makes of `agent_event` |
+| `crates/daemon/src/github.rs` | what GitHub says of a worktree's branch (`gh`): the pull request, merged, failing checks, as attention |
 | `crates/daemon/src/diff.rs`, `changes.rs` | the changes of a workspace: git read into `diff` and `commits` nodes (three scopes, the 2 s poll of `uncommitted`), and the commands that open, refresh and mark them |
 | `crates/daemon/src/blocks.rs`, `integration.rs`, `shell/` | the shell blocks: the scanner for OSC 133/633 marks, the per-pane block store (vt100 into styled spans), and the zsh, bash and fish scripts that report prompts and commands |

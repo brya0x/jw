@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 
 use contract::patch::diff;
 use contract::{
-    Attention, DaemonMsg, ErrorCode, Head, Id, Node, PaneSummary, PatchOp, Screen, Session,
-    Workspace, WorkspaceSummary,
+    Attention, AttentionKind, DaemonMsg, ErrorCode, Head, Id, Node, PaneSummary, PatchOp, Screen,
+    Session, Workspace, WorkspaceSummary,
 };
 use serde_json::Value;
 
@@ -374,6 +374,54 @@ impl Core {
                 self.model.viewed.remove(&key);
             }
         }
+    }
+
+    /// The worktrees a person is working in (a branch and a pane): what GitHub says of their
+    /// pull requests is looked up for these only.
+    pub fn github_jobs(&self) -> Vec<crate::github::Job> {
+        self.model
+            .workspaces
+            .iter()
+            .filter(|w| !w.panes.is_empty())
+            .filter_map(|w| {
+                Some(crate::github::Job {
+                    workspace: w.id.clone(),
+                    dir: PathBuf::from(&w.path),
+                    branch: w.branch.clone()?,
+                })
+            })
+            .collect()
+    }
+
+    /// A pull request was looked up: raise `merged` or `ci_failed` on the workspace when what is
+    /// seen differs from last time, and end what was raised before. Nothing changing raises
+    /// nothing, so an attention a person has seen does not come back.
+    pub fn github_apply(&mut self, workspace: &str, seen: Option<crate::github::Pr>) {
+        let Some(ws) = self
+            .model
+            .workspaces
+            .iter_mut()
+            .find(|w| w.id == workspace)
+            .filter(|w| w.github != seen)
+        else {
+            return;
+        };
+        ws.attention
+            .retain(|o| !matches!(o.kind, AttentionKind::Merged | AttentionKind::CiFailed));
+        let kind = seen.as_ref().and_then(|pr| match (pr.merged, pr.failing) {
+            (true, _) => Some(AttentionKind::Merged),
+            (_, true) => Some(AttentionKind::CiFailed),
+            _ => None,
+        });
+        if let Some(kind) = kind {
+            ws.attention.push(Own {
+                kind,
+                exit_code: None,
+                rev: None,
+            });
+        }
+        ws.github = seen;
+        self.refresh();
     }
 
     /// Record that `path` of a `diff` node was looked at, or forget it (REQ-100).
@@ -962,6 +1010,7 @@ mod tests {
                 resume: None,
             }],
             attention: vec![],
+            github: None,
         });
         (model, ws, pane)
     }
