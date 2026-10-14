@@ -34,7 +34,6 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.jw.next.client.ClientState
-import dev.jw.next.client.HomeKind
 import dev.jw.next.client.Navigator
 import dev.jw.next.client.findWorkspaces
 import dev.jw.next.client.shortPath
@@ -82,7 +81,7 @@ internal fun BoxScope.FindSheet(source: AppSource, state: ClientState, nav: Navi
                         Mono(row.name, bold = true, size = 14)
                         Mono(shortPath(f.path), Palette.dim, 11)
                     }
-                    Tag(if (row.kind == HomeKind.Worktree) "worktree" else row.kind.label, Palette.dim)
+                    Tag(row.kind.label, Palette.dim)
                     row.mark?.let { m -> Mono(m.glyph, m.tone.color(), 14, bold = true) }
                 }
             }
