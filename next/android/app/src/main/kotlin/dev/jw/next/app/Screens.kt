@@ -175,6 +175,14 @@ internal fun Header(
     }
 }
 
+/** Opens the search of workspaces (REQ-231). */
+@Composable
+private fun SearchButton(open: () -> Unit) {
+    Box(Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp).clickable(onClick = open).semantics { contentDescription = "Buscar workspace" }, contentAlignment = Alignment.Center) {
+        GlyphIcon(Glyph.Search, Palette.fg)
+    }
+}
+
 /** Opens the sheet of a workspace made new, as a long press on the title does. */
 @Composable
 private fun PlusButton(open: () -> Unit) {
@@ -225,10 +233,12 @@ fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, set: (Clie
     var removing by remember { mutableStateOf<RemoveSheet?>(null) }
     // A long press on the title, or the `+`: a folder to open (REQ-201); a worktree is made from a workspace (REQ-213).
     var newMenu by remember { mutableStateOf(false) }
+    var finding by remember { mutableStateOf(false) }
     var worktree by remember { mutableStateOf<String?>(null) }
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
             if (onAvisos) Header("avisos", "lo que espera algo de ti", onBack = { set(nav.back(state)) }) else Header("jwn · ${session.name}", source.status, action = {
+                SearchButton { finding = true }
                 PlusButton { newMenu = true }
                 BellButton(waiting.size) { set(nav.show(state, Screen.Avisos)) }
                 GearButton { set(nav.show(state, Screen.Settings)) }
@@ -247,6 +257,7 @@ fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, set: (Clie
         }
         naming?.let { RenameSheet(source, it) { naming = null } }
         removing?.let { RemoveWorkspaceSheet(source, it, cancel = { removing = null }) { removing = null } }
+        if (finding) FindSheet(source, state, nav, dismiss = { finding = false }) { finding = false; set(it) }
         if (newMenu) NewWorkspaceSheet(dismiss = { newMenu = false }) { newMenu = false; set(nav.show(state, Screen.Folders)) }
         worktree?.let { WorktreeSheet(source, it, state, nav, set) { worktree = null } }
     }

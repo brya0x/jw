@@ -13,8 +13,8 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 
-/** The two icons of Home's header, drawn as in `docs/prototypes/mobile.html` (a 24-unit grid, a thin round stroke). */
-internal enum class Glyph { Bell, Gear }
+/** The icons of Home's header, drawn as in `docs/prototypes/mobile.html` (a 24-unit grid, a thin round stroke). */
+internal enum class Glyph { Search, Bell, Gear }
 
 @Composable
 internal fun GlyphIcon(glyph: Glyph, color: Color, size: Int = 22) {
@@ -23,6 +23,10 @@ internal fun GlyphIcon(glyph: Glyph, color: Color, size: Int = 22) {
         val stroke = Stroke(1.8f * k, cap = StrokeCap.Round, join = StrokeJoin.Round)
         fun at(x: Float, y: Float) = Offset(x * k, y * k)
         when (glyph) {
+            Glyph.Search -> {
+                drawCircle(color, 6f * k, at(11f, 11f), style = stroke)
+                drawLine(color, at(20f, 20f), at(15.3f, 15.3f), stroke.width, StrokeCap.Round)
+            }
             Glyph.Bell -> {
                 val bell = Path().apply {
                     moveTo(6f * k, 16f * k)

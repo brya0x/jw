@@ -99,20 +99,31 @@ sealed interface Screen {
     data object Folders : Screen
 }
 
-/** [last] is the workspace opened most recently: the one the `diff` tab opens. */
-data class ClientState(val screen: Screen = Screen.Home, val seen: Seen = Seen(), val last: Id? = null)
+/**
+ * [last] is the workspace opened most recently: the one the changes of the `±` open. [recent] is
+ * every workspace opened on this phone, the latest first, for the search (REQ-232).
+ */
+data class ClientState(
+    val screen: Screen = Screen.Home,
+    val seen: Seen = Seen(),
+    val last: Id? = null,
+    val recent: List<Id> = emptyList(),
+)
 
 /**
  * Moves between screens and keeps the seen record: opening the node an attention names is
  * what marks it seen (REQ-34), on this phone only (REQ-35).
  */
+/** How many opened workspaces the phone remembers for the search. */
+private const val RECENT = 30
+
 class Navigator(private val source: NodeSource) {
     fun openWorkspace(s: ClientState, id: Id, pane: Id? = null): ClientState {
         val ws = source.node(id) as? Node.Workspace
         val target = pane ?: ws?.panes?.firstOrNull()?.id
         var seen = markNode(s.seen, id)
         if (target != null) seen = markNode(seen, target)
-        return ClientState(Screen.Workspace(id, target), seen, id)
+        return ClientState(Screen.Workspace(id, target), seen, id, listOf(id) + s.recent.filter { it != id }.take(RECENT - 1))
     }
 
     fun selectPane(s: ClientState, pane: Id): ClientState {

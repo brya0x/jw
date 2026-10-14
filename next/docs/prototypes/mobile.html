@@ -1023,7 +1023,7 @@ function sheet(){
   if(s!=='sess') state.sessNew=false;
   let body='';
   if(s==='pick'){
-    const q=state.q.toLowerCase(), l=state.w.filter(x=>(x.name+x.path).toLowerCase().includes(q));
+    const q=state.q.toLowerCase().trim(), rec=state.recent||[], ord=[...rec.map(id=>state.w.find(x=>x.id===id)).filter(Boolean),...state.w.filter(x=>!rec.includes(x.id))], l=ord.filter(x=>!q||(x.name+(x.branch||'')+x.path+(x.proj||'')).toLowerCase().includes(q));
     body=`<h3>workspaces por último uso</h3><input id="q" value="${state.q}" placeholder="buscar…" aria-label="Buscar" autocomplete="off"><div class="list">${l.map((x,i)=>`<button class="row ${x.kind==='wt'?'':'root'}" style="padding-left:14px" data-open="${x.id}"><span class="o" style="color:var(--green)">●</span><span class="nm"><b>${x.kind==='wt'?x.proj+'/':''}${x.name}</b><span>${x.path}</span></span><span class="tag">${x.kind==='root'?'raíz':x.kind==='wt'?'worktree':'carpeta'}</span>${marks(x)}</button>`).join('')||'<div style="padding:20px;color:var(--dim)">sin resultados</div>'}</div>`;
   }
   if(s==='wsmenu'){
@@ -1150,7 +1150,7 @@ function answer(v,id){
   logFor(id+'|claude').push('',`<span class="${v==='y'?'g':'r'}">❯ ${v}</span> <span class="d">(desde el teléfono)</span>`);
   toast(v==='y'?'aprobado':'rechazado'); render();
 }
-function enter(id,pane){state.sel=false;state.ws=id;state.pane=pane||'claude';state.screen='ws';state.sheet=null;state.q='';const w=wsOf(id);w.t=w.t==='ahora'?'ahora':w.t;markSeen(w);render()}
+function enter(id,pane){state.recent=[id,...(state.recent||[]).filter(x=>x!==id)].slice(0,30);state.sel=false;state.ws=id;state.pane=pane||'claude';state.screen='ws';state.sheet=null;state.q='';const w=wsOf(id);w.t=w.t==='ahora'?'ahora':w.t;markSeen(w);render()}
 
 /* a long press (or a right click) on [data-hold] opens its menu; the click that follows it is ignored */
 let holdT=null, held=false;
