@@ -49,6 +49,7 @@ import dev.jw.next.client.Navigator
 import dev.jw.next.client.Screen
 import dev.jw.next.client.TreeRow
 import dev.jw.next.client.ago
+import dev.jw.next.client.avisos
 import dev.jw.next.client.hunkRows
 import dev.jw.next.client.treeRows
 import dev.jw.next.client.whyUnread
@@ -81,6 +82,7 @@ fun ChangesScreen(source: AppSource, state: ClientState, screen: Screen.Changes,
         model.onNodes()
         model.content()
     }
+    val counts = remember(version) { ChangesView.entries.associateWith(model::count) }
     val updatedFor = model.updatedFor()
     LaunchedEffect(version) {
         if (updatedFor > 0) {
@@ -88,7 +90,7 @@ fun ChangesScreen(source: AppSource, state: ClientState, screen: Screen.Changes,
             bump.intValue++
         }
     }
-    val waiting = dev.jw.next.client.avisos(session, state.seen).size
+    val waiting = avisos(session, state.seen).size
     val name = session.workspaces.firstOrNull { it.id == screen.workspace }?.name ?: "workspace"
     val open = (content as? Content.Files)?.diff?.let(model::openFileIn)
     Column(Modifier.fillMaxSize()) {
@@ -98,7 +100,7 @@ fun ChangesScreen(source: AppSource, state: ClientState, screen: Screen.Changes,
             ChangesHeader(model, name, content, session.workspaces.map { it.id to it.name }) { id ->
                 set(nav.show(state, Screen.Changes(id)).copy(last = id))
             }
-            ViewTabs(model, version)
+            ViewTabs(model, counts)
             Box(Modifier.weight(1f)) { ChangesBody(model, content, version) }
         }
         MainTabBar(MainTab.Diff, waiting) { tab ->
@@ -145,9 +147,7 @@ private fun seenText(content: Content.Files): String {
 }
 
 @Composable
-private fun ViewTabs(model: ChangesModel, version: Int) {
-    // The counts come from the nodes, which change without this function's inputs changing.
-    check(version >= 0)
+private fun ViewTabs(model: ChangesModel, counts: Map<ChangesView, String?>) {
     Column(Modifier.fillMaxWidth().background(Palette.panel)) {
         Row(Modifier.fillMaxWidth().height(44.dp)) {
             listOf(ChangesView.Uncommitted to "Sin commitear", ChangesView.Commits to "Commits", ChangesView.General to "General").forEach { (view, label) ->
@@ -155,7 +155,7 @@ private fun ViewTabs(model: ChangesModel, version: Int) {
                 Column(Modifier.weight(1f).clickable { model.select(view) }, horizontalAlignment = Alignment.CenterHorizontally) {
                     Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Mono(label, if (on) Palette.blue else Palette.dim, 12, bold = on)
-                        model.count(view)?.let { Mono(it, if (on) Palette.blue else Palette.dim, 11) }
+                        counts[view]?.let { Mono(it, if (on) Palette.blue else Palette.dim, 11) }
                     }
                     Box(Modifier.fillMaxWidth().height(2.dp).background(if (on) Palette.blue else Color.Transparent))
                 }
@@ -235,7 +235,7 @@ private fun FilesList(model: ChangesModel, content: Content.Files, version: Int)
                     Note("este diff pasó de 2 MiB: se listan ${diff.files.size}$left, sin líneas. Míralo entero en el PC.")
                 }
             }
-            items(rows, key = { row -> if (row is TreeRow.Dir) "d${row.key}" else "f${(row as TreeRow.File).file.path}" }) { row ->
+            items(rows, key = { row -> when (row) { is TreeRow.Dir -> "d${row.key}"; is TreeRow.File -> "f${row.file.path}" } }) { row ->
                 when (row) {
                     is TreeRow.Dir -> DirRow(row, diff.tooLarge) { model.toggleFolder(row.key) }
                     is TreeRow.File -> FileRow(row, diff.tooLarge, { model.openFile(row.file.path) }, { model.toggleViewed(row.file.path) })
@@ -299,12 +299,7 @@ private fun FileRow(row: TreeRow.File, big: Boolean, open: () -> Unit, mark: () 
         Box(Modifier.size(18.dp).background(tone, RoundedCornerShape(4.dp)), contentAlignment = Alignment.Center) { Mono(letter, Palette.bg, 10, bold = true) }
         Column(Modifier.weight(1f)) {
             Mono(f.path.substringAfterLast('/'), if (seen) Palette.dim else Palette.fg, 13)
-            val why = when {
-                f.unreadable != null -> whyUnread(f.unreadable!!)
-                f.binary -> "binario"
-                f.oldPath != null -> "← ${f.oldPath}"
-                else -> null
-            }
+            val why = f.unreadable?.let(::whyUnread) ?: if (f.binary) "binario" else f.oldPath?.let { "← $it" }
             why?.let { Mono(it, if (f.unreadable != null) Palette.yellow else Palette.cyan, 11) }
         }
         if (!big) Counts(f.added, f.deleted)
@@ -336,7 +331,7 @@ private fun ColumnScope.FileScreen(file: DiffFile, model: ChangesModel) {
     Column(Modifier.weight(1f)) {
         if (file.seen == Seen.Changed) Note("este archivo cambió desde que lo marcaste como visto")
         val reason = when {
-            file.unreadable != null -> "${whyUnread(file.unreadable!!)}: el contenido no se muestra"
+            file.unreadable != null -> "${file.unreadable?.let(::whyUnread)}: el contenido no se muestra"
             file.binary -> "archivo binario: no hay líneas que mostrar"
             file.hunks.isEmpty() && file.status == FileStatus.Renamed -> "renombrado, sin cambios en el contenido"
             file.hunks.isEmpty() -> "sin cambios en el contenido"

@@ -76,11 +76,14 @@ class ChangesModel(
         want(Key.Uncommitted)
     }
 
-    private fun key(): Key = when (view) {
+    /** The node a view shows before anything is chosen inside it. */
+    private fun root(view: ChangesView): Key = when (view) {
         ChangesView.Uncommitted -> Key.Uncommitted
         ChangesView.General -> Key.General
-        ChangesView.Commits -> commit?.let { Key.Commit(it) } ?: Key.Commits
+        ChangesView.Commits -> Key.Commits
     }
+
+    private fun key(): Key = commit?.takeIf { view == ChangesView.Commits }?.let { Key.Commit(it) } ?: root(view)
 
     /** Ask for the node of [key] once. */
     private fun want(key: Key) {
@@ -121,19 +124,19 @@ class ChangesModel(
         onChange()
     }
 
-    /** `◂` and `▸`: the previous or next commit of the list, when the list is here. */
-    fun stepCommit(delta: Int) {
-        val shown = commit ?: return
-        val commits = commitList()?.commits ?: return
-        val at = commits.indexOfFirst { it.sha == shown }
-        commits.getOrNull(at + delta)?.let { openCommit(it.sha) }
+    /** The commit [delta] places from the open one in the list, when the list is here. */
+    private fun neighbour(delta: Int): String? {
+        val shown = commit ?: return null
+        val commits = commitList()?.commits ?: return null
+        return commits.getOrNull(commits.indexOfFirst { it.sha == shown } + delta)?.sha
     }
 
-    fun hasCommit(delta: Int): Boolean {
-        val shown = commit ?: return false
-        val commits = commitList()?.commits ?: return false
-        return commits.getOrNull(commits.indexOfFirst { it.sha == shown } + delta) != null
+    /** `◂` and `▸`: the previous or next commit of the list. */
+    fun stepCommit(delta: Int) {
+        neighbour(delta)?.let(::openCommit)
     }
+
+    fun hasCommit(delta: Int): Boolean = neighbour(delta) != null
 
     fun openFile(path: String) {
         file = path
@@ -201,12 +204,7 @@ class ChangesModel(
 
     /** What the tabs show once each view is known: the files or commits it holds, `!` when it failed. */
     fun count(of: ChangesView): String? {
-        val key = when (of) {
-            ChangesView.Uncommitted -> Key.Uncommitted
-            ChangesView.General -> Key.General
-            ChangesView.Commits -> Key.Commits
-        }
-        val (node, error) = synchronized(lock) { slots[key]?.let { it.node to it.error } } ?: return null
+        val (node, error) = synchronized(lock) { slots[root(of)]?.let { it.node to it.error } } ?: return null
         if (error != null) return "!"
         return when (val doc = node?.let(source::node)) {
             is Node.Diff -> doc.files.size.toString()
