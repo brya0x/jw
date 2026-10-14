@@ -145,6 +145,7 @@ class MainActivity : ComponentActivity() {
         BackHandler(enabled = state.screen is Screen.Workspace) { state = nav.back(state) }
         when (val screen = state.screen) {
             is Screen.Workspace -> WorkspaceScreen(source, state, screen, nav) { state = it }
+            is Screen.Changes -> ChangesScreen(source, state, screen, nav) { state = it }
             else -> HomeScreen(source, state, nav, pcs) { state = it }
         }
     }

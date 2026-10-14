@@ -1,6 +1,7 @@
 package dev.jw.next.client
 
 import dev.jw.next.contract.Attention
+import dev.jw.next.contract.DiffScope
 import dev.jw.next.contract.Id
 import dev.jw.next.contract.Node
 
@@ -20,15 +21,44 @@ interface NodeSource {
 
     /** Type [data] into a pane's shell (text; `\r` is Enter, `\u0003` is ^C). */
     fun write(pane: Id, data: String) {}
+
+    /** The revision of a cached node, without decoding it. */
+    fun rev(id: Id): Long? = node(id)?.rev
+
+    /**
+     * Ask the daemon for the `diff` node of [workspace] for [scope] ([commit] names the commit
+     * of the `commit` scope). [reply] gets the node's id, or the daemon's message.
+     */
+    fun openDiff(workspace: Id, scope: DiffScope, commit: String?, reply: (Result<Id>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** Ask the daemon for the `commits` node of [workspace]. */
+    fun openCommits(workspace: Id, reply: (Result<Id>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** Read a `diff` or `commits` node again now. */
+    fun refreshDiff(node: Id) {}
+
+    /** Record that [path] of a `diff` node was looked at, or forget it: the PC keeps it for every client. */
+    fun setViewed(node: Id, path: String, viewed: Boolean) {}
+
+    /** Stop watching [id]: the daemon stops patching it and stops reading git for it. */
+    fun close(id: Id) {}
 }
 
 sealed interface Screen {
     data object Home : Screen
     data object Avisos : Screen
     data class Workspace(val id: Id, val pane: Id?) : Screen
+
+    /** The changes of one workspace (REQ-113). */
+    data class Changes(val workspace: Id) : Screen
 }
 
-data class ClientState(val screen: Screen = Screen.Home, val seen: Seen = Seen())
+/** [last] is the workspace opened most recently: the one the `diff` tab opens. */
+data class ClientState(val screen: Screen = Screen.Home, val seen: Seen = Seen(), val last: Id? = null)
 
 /**
  * Moves between screens and keeps the seen record: opening the node an attention names is
@@ -40,12 +70,12 @@ class Navigator(private val source: NodeSource) {
         val target = pane ?: ws?.panes?.firstOrNull()?.id
         var seen = markNode(s.seen, id)
         if (target != null) seen = markNode(seen, target)
-        return ClientState(Screen.Workspace(id, target), seen)
+        return ClientState(Screen.Workspace(id, target), seen, id)
     }
 
     fun selectPane(s: ClientState, pane: Id): ClientState {
         val at = s.screen as? Screen.Workspace ?: return s
-        return ClientState(at.copy(pane = pane), markNode(s.seen, pane))
+        return s.copy(screen = at.copy(pane = pane), seen = markNode(s.seen, pane))
     }
 
     /** The go control of a row or an Avisos item. */
@@ -62,12 +92,23 @@ class Navigator(private val source: NodeSource) {
         val at = s.screen as? Screen.Workspace ?: return s
         if (at.pane != null) return s
         val first = (source.node(at.id) as? Node.Workspace)?.panes?.firstOrNull()?.id ?: return s
-        return ClientState(at.copy(pane = first), markNode(s.seen, first))
+        return s.copy(screen = at.copy(pane = first), seen = markNode(s.seen, first))
     }
 
-    fun show(s: ClientState, screen: Screen): ClientState = ClientState(screen, s.seen)
+    fun show(s: ClientState, screen: Screen): ClientState = s.copy(screen = screen)
 
-    fun back(s: ClientState): ClientState = ClientState(Screen.Home, s.seen)
+    fun back(s: ClientState): ClientState = s.copy(screen = Screen.Home)
+
+    /**
+     * The `diff` tab: the changes of the workspace opened last, else the first one.
+     * Null while the session has no workspace.
+     */
+    fun changes(s: ClientState): ClientState? {
+        val ws = s.last?.takeIf { id -> source.session().workspaces.any { it.id == id } }
+            ?: source.session().workspaces.firstOrNull()?.id
+            ?: return null
+        return s.copy(screen = Screen.Changes(ws), last = ws)
+    }
 
     /** Seen at the node's revision when it is cached, else at the newest attention raised on it. */
     private fun markNode(seen: Seen, id: Id): Seen {

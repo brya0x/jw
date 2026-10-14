@@ -156,18 +156,27 @@ fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, pcs: (() -
         Box(Modifier.weight(1f)) {
             if (onAvisos) AvisosList(waiting, nav, state, set) else WorkspaceList(homeRows(session, state.seen), nav, state, set)
         }
-        TabBar(onAvisos, waiting.size, { set(nav.show(state, Screen.Home)) }, { set(nav.show(state, Screen.Avisos)) })
+        MainTabBar(if (onAvisos) MainTab.Avisos else MainTab.Workspaces, waiting.size) { tab ->
+            when (tab) {
+                MainTab.Workspaces -> set(nav.show(state, Screen.Home))
+                MainTab.Avisos -> set(nav.show(state, Screen.Avisos))
+                MainTab.Diff -> nav.changes(state)?.let(set)
+            }
+        }
     }
 }
 
-/** Two words like the status line of the terminal client; the open one is underlined. */
+internal enum class MainTab { Workspaces, Avisos, Diff }
+
+/** Words like the status line of the terminal client; the open one is underlined. */
 @Composable
-private fun TabBar(onAvisos: Boolean, waiting: Int, home: () -> Unit, avisos: () -> Unit) {
+internal fun MainTabBar(current: MainTab, waiting: Int, go: (MainTab) -> Unit) {
     Column(Modifier.fillMaxWidth().background(Palette.panel).navigationBarsPadding()) {
         Hairline()
         Row(Modifier.fillMaxWidth().height(48.dp)) {
-            TabCell("workspaces", null, !onAvisos, Modifier.weight(1f), home)
-            TabCell("avisos", waiting.takeIf { it > 0 }, onAvisos, Modifier.weight(1f), avisos)
+            TabCell("workspaces", null, current == MainTab.Workspaces, Modifier.weight(1f)) { go(MainTab.Workspaces) }
+            TabCell("avisos", waiting.takeIf { it > 0 }, current == MainTab.Avisos, Modifier.weight(1f)) { go(MainTab.Avisos) }
+            TabCell("± diff", null, current == MainTab.Diff, Modifier.weight(1f)) { go(MainTab.Diff) }
         }
     }
 }
@@ -273,7 +282,11 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
         set(nav.settle(state))
     }
     Column(Modifier.fillMaxSize()) {
-        Header(ws?.name ?: "workspace", ws?.let { (if (it.branch != null) "↳ ${it.branch}  " else "") + it.path }, onBack = { set(nav.back(state)) })
+        Header(ws?.name ?: "workspace", ws?.let { (if (it.branch != null) "↳ ${it.branch}  " else "") + it.path }, onBack = { set(nav.back(state)) }) {
+            Box(Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp).clickable { nav.changes(state)?.let(set) }, contentAlignment = Alignment.Center) {
+                Mono("±", Palette.blue, 18, bold = true)
+            }
+        }
         if (ws == null) {
             Box(Modifier.weight(1f).padding(Gutter)) { Mono("Abriendo el workspace…", Palette.dim, 13, lines = 3) }
             return@Column

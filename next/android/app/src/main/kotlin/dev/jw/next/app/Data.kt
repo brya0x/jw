@@ -10,11 +10,18 @@ import dev.jw.next.contract.ClientMsg
 import dev.jw.next.contract.Cmd
 import dev.jw.next.contract.ContractJson
 import dev.jw.next.contract.DaemonMsg
+import dev.jw.next.contract.DiffScope
+import dev.jw.next.contract.DiffState
+import dev.jw.next.contract.ErrorBody
+import dev.jw.next.contract.ErrorCode
 import dev.jw.next.contract.Id
 import dev.jw.next.contract.Node
 import dev.jw.next.contract.Peer
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.serialization.SerializationException
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 
 /** A source the UI can watch: [tick] changes whenever a node arrives. */
 abstract class AppSource : NodeSource {
@@ -48,6 +55,19 @@ class FixtureSource(context: Context) : AppSource() {
     override val epoch: String = session.epoch
     override fun session(): Node.Session = session
     override fun node(id: Id): Node? = nodes[id]
+
+    /** The changes are the fixtures' too: the same diff for every workspace, and marks are not kept. */
+    private fun found(node: Node?): Result<Id> =
+        node?.let { Result.success(it.id) } ?: Result.failure(Exception("sin datos de ejemplo"))
+
+    override fun openDiff(workspace: Id, scope: DiffScope, commit: String?, reply: (Result<Id>) -> Unit) {
+        val whole = nodes.values.filterIsInstance<Node.Diff>().filter { it.state == DiffState.Ok && !it.tooLarge }
+        reply(found(whole.firstOrNull { it.scope == scope }))
+    }
+
+    override fun openCommits(workspace: Id, reply: (Result<Id>) -> Unit) {
+        reply(found(nodes.values.filterIsInstance<Node.Commits>().firstOrNull { !it.more }))
+    }
 }
 
 /** This phone's seen record, in private preferences; nothing here leaves the phone. */
@@ -70,7 +90,10 @@ abstract class ProtocolSource : AppSource() {
     private val cache = NodeCache()
     private val opened = LinkedHashSet<Id>()
     private var rootId: Id? = null
-    private var commands = 0
+    private val commands = AtomicInteger()
+
+    /** What to do with the reply to a command, by the command's id. */
+    private val replies = mutableMapOf<String, (DaemonMsg.Reply) -> Unit>()
 
     /** Hand one line to the transport without blocking the caller (the UI thread calls this). */
     protected abstract fun sendLine(line: String)
@@ -91,11 +114,51 @@ abstract class ProtocolSource : AppSource() {
     override val writable: Boolean = true
 
     override fun write(pane: Id, data: String) {
-        send(ClientMsg.Command("w${++commands}", Cmd.Write(pane, data)))
+        command(Cmd.Write(pane, data))
     }
 
     override fun markSeen(id: Id, rev: Long) {
-        send(ClientMsg.Command("m${++commands}", Cmd.MarkSeen(id, rev)))
+        command(Cmd.MarkSeen(id, rev))
+    }
+
+    override fun rev(id: Id): Long? = cachedRev(id)
+
+    override fun openDiff(workspace: Id, scope: DiffScope, commit: String?, reply: (Result<Id>) -> Unit) {
+        command(Cmd.OpenDiff(workspace, scope, commit)) { reply(it.nodeId()) }
+    }
+
+    override fun openCommits(workspace: Id, reply: (Result<Id>) -> Unit) {
+        command(Cmd.OpenCommits(workspace)) { reply(it.nodeId()) }
+    }
+
+    override fun refreshDiff(node: Id) {
+        command(Cmd.RefreshDiff(node))
+    }
+
+    override fun setViewed(node: Id, path: String, viewed: Boolean) {
+        command(Cmd.SetViewed(node, path, viewed))
+    }
+
+    override fun close(id: Id) {
+        synchronized(lock) { opened.remove(id) }
+        send(ClientMsg.Close(id))
+    }
+
+    /** Send a command; [reply] runs on the thread that reads the answer, or with a failure if the link drops first. */
+    private fun command(cmd: Cmd, reply: ((DaemonMsg.Reply) -> Unit)? = null) {
+        val id = "c${commands.incrementAndGet()}"
+        if (reply != null) synchronized(lock) { replies[id] = reply }
+        send(ClientMsg.Command(id, cmd))
+    }
+
+    /** The node a command made, or the PC's message. */
+    private fun DaemonMsg.Reply.nodeId(): Result<Id> {
+        val node = (result?.get("node") as? JsonPrimitive)?.contentOrNull
+        return when {
+            ok && node != null -> Result.success(node)
+            ok -> Result.failure(Exception("el PC no dio el nodo"))
+            else -> Result.failure(Exception(error?.message ?: "el PC no pudo hacerlo"))
+        }
     }
 
     private fun cachedRev(id: Id) = synchronized(lock) { cache.rev(id) }
@@ -105,11 +168,15 @@ abstract class ProtocolSource : AppSource() {
 
     /** The transport is up: say hello; the daemon answers with its root, and everything opened is opened again. */
     protected fun greet() {
-        send(ClientMsg.Hello(Peer("jwn-android", "0.0.1"), mapOf("session" to listOf(1), "workspace" to listOf(1), "pane" to listOf(1), "blocks" to listOf(1))))
+        send(ClientMsg.Hello(Peer("jwn-android", "0.0.1"), mapOf("session" to listOf(1), "workspace" to listOf(1), "pane" to listOf(1), "blocks" to listOf(1), "diff" to listOf(1), "commits" to listOf(1))))
     }
 
     /** The transport is gone. */
     protected fun dropped() {
+        // An answer that was still to come never will: say so, so nothing waits for it for ever.
+        val lost = synchronized(lock) { replies.values.toList().also { replies.clear() } }
+        val gone = DaemonMsg.Reply("", false, null, ErrorBody(ErrorCode.Io, "se perdió la conexión con el PC"))
+        lost.forEach { it(gone) }
         tick.intValue++
     }
 
@@ -130,6 +197,7 @@ abstract class ProtocolSource : AppSource() {
             if (result is CacheResult.Reopen) result.node else null
         }
         if (msg is DaemonMsg.Hello) synchronized(lock) { opened.toList() }.forEach(::open)
+        if (msg is DaemonMsg.Reply) synchronized(lock) { replies.remove(msg.id) }?.invoke(msg)
         if (reopen != null) send(ClientMsg.Open(reopen))
         tick.intValue++
     }

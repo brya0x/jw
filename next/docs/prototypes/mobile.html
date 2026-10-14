@@ -229,6 +229,9 @@ svg.i{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stro
 .pm .a{color:var(--green)} .pm .x{color:var(--red)}
 .vw{width:24px;height:24px;border-radius:5px;border:1.5px solid var(--dim);display:grid;place-items:center;color:var(--bg);font-size:13px;flex:none}
 .vw[aria-pressed=true]{background:var(--green);border-color:var(--green)}
+.vw.ch{background:none;border-color:var(--yellow);color:var(--yellow);font-size:17px;line-height:1}
+em.live{font-style:normal;display:inline;color:var(--green)} em.live.on{color:var(--yellow)}
+.fl.seen .nm b{color:var(--dim)}
 .hunk{border-bottom:1px solid var(--line);font-size:11.5px}
 .hunk .h{padding:6px 12px;color:var(--cyan);background:var(--sel)}
 .hunk .l{padding:1px 12px;white-space:pre-wrap;word-break:break-word}
@@ -533,7 +536,7 @@ const attCls=a=>a.kind==='shell_done'&&a.exit?'x':AK[a.kind].c;
 const attMark=a=>`<span class="${attCls(a)}">${a.kind==='shell_done'&&a.exit?'✗':AK[a.kind].g}</span>`;
 const attWhat=a=>a.kind==='shell_done'?`${a.s} · salió ${a.exit}`:`${AK[a.kind].t}${a.s?' · '+a.s:''}`;
 function markSeen(w){ if(!w)return; w.att.forEach(a=>{ if(a.pane===null||(state.screen==='ws'&&a.pane===state.pane)) state.seen[akey(w,a)]=true }) }
-const WHY={'symlink':'enlace simbólico (no se sigue)','not a regular file':'no es un archivo normal','too large':'demasiado grande','permission denied':'sin permiso','it went away':'ya no está','it could not be read':'no se pudo leer','the name is not UTF-8':'nombre que no es UTF-8'};
+const WHY={'symlink':'enlace simbólico (no se sigue)','too_big':'demasiado grande','special':'no es un archivo normal','repository':'es otro repositorio','gone':'ya no está','not a regular file':'no es un archivo normal','too large':'demasiado grande','permission denied':'sin permiso','it went away':'ya no está','it could not be read':'no se pudo leer','the name is not UTF-8':'nombre que no es UTF-8'};
 const FILES=[
   {n:'crates/proto/src/proto.rs',a:34,d:2,h:[['@@ -14,6 +14,8 @@ pub const PROTOCOL',[['n','use serde::{Deserialize, Serialize};'],['x','pub const PROTOCOL: u32 = 8;'],['a','pub const PROTOCOL: u32 = 9;'],['a','pub const WS_SUBPROTOCOL: &str = "jw.v9";'],['n','pub const MAX_FRAME: usize = 16 << 20;']]]]},
   {n:'crates/jw/src/mobile.rs',a:212,d:0,h:[['@@ -0,0 +1,5 @@ nuevo',[['a','//! jw mobile: puente WebSocket sobre el socket del daemon.'],['a','pub async fn serve(cfg: Bridge) -> Result<()> {'],['a','    let tunnel = Tunnel::open(cfg.provider).await?;'],['a','    qr::print(&tunnel.url, &cfg.token);'],['a','}']]]]},
@@ -715,10 +718,14 @@ const TITLE=()=>wsOf(state.ws).name+' vs '+(wsOf(state.ws).kind==='wt'?'origin/m
 function lineNos(h){const m=/@@ -(\d+)(?:,\d+)? \+(\d+)/.exec(h);return m?[+m[1],+m[2]]:[1,1]}
 function hunkHtml([h,ls]){let [o,n]=lineNos(h);return `<div class="hunk"><div class="h">${h}</div>${ls.map(([k,t])=>{const a=k==='a'?'':o++, b=k==='x'?'':n++;return `<div class="l ${k}"><span class="n1">${k==='a'?'':a}</span><span class="n2">${k==='x'?'':b}</span><span class="tx">${t.replace(/</g,'&lt;')}</span></div>`}).join('')}</div>`}
 function fileKey(f){return f.n}
+// A file's mark of having looked is only good while its content (its version here) is the same; the PC keeps the marks, so the terminal and the phone share them.
+function seenOf(f){const v=state.viewed[state.view+'|'+fileKey(f)];return v===undefined?0:v===(f.hv||1)?1:2}
+function toggleViewed(key){const name=key.split('|').slice(1).join('|'),f=fileList().find(x=>fileKey(x)===name);if(!f)return;
+  if(seenOf(f)===1)delete state.viewed[key];else state.viewed[key]=f.hv||1}
 function vChanges(){
   const cw=wsOf(state.ws), v=state.view||'unc', ds=(state.vst||{})[v]||'ok';
   const base=cw.kind==='wt'?'origin/main':'HEAD';
-  const sub=v==='gen'?(ds==='nobase'?'sin rama base':cw.name+' vs '+base+' · commiteado'):v==='unc'?cw.name+' · sin commitear':(state.commit===null?COMMITS.length+' commits':COMMITS[state.commit].sha+' · '+(state.commit+1)+'/'+COMMITS.length);
+  const sub=v==='gen'?(ds==='nobase'?'sin rama base':cw.name+' vs '+base+' · commiteado'):v==='unc'?'sin commitear'+(ds==='ok'?' · <em class="live'+(state.liveFlash?' on':'')+'">● '+(state.liveFlash?'actualizado':'en vivo')+'</em>':''):(state.commit===null?COMMITS.length+' commits':COMMITS[state.commit].sha+' · '+(state.commit+1)+'/'+COMMITS.length);
   const tabs=`<div class="seg" role="tablist">${VIEWS.map(([k,l])=>{const st=((state.vst||{})[k]||'ok');return `<button role="tab" aria-selected="${v===k}" data-vtab="${k}">${l}<b>${st==='load'?'…':st==='err'?'!':vcount(k)}</b></button>`}).join('')}</div>`;
   const head=`<div class="hdr"><button class="ib" data-sheet="pick" aria-label="Elegir workspace" style="width:auto;padding:0 8px;gap:6px;display:flex;align-items:center"><span style="text-align:left"><b style="display:block;font-weight:500">cambios · ${cw.name}</b><span style="font-size:11px;color:var(--dim)">${sub}</span></span><span style="color:var(--dim)">▾</span></button></div>${tabs}`;
   if(ds==='none') return `${head}<div class="scroll"><div class="centre"><span class="big">elige un workspace</span>entra a uno, o toca el nombre arriba,<br>para ver sus cambios.</div></div>${statusBar('DIFF','sin workspace')}${nav()}`;
@@ -736,15 +743,15 @@ function vChanges(){
       :f.big?`<div class="centre"><span class="big">demasiado grande para mostrar</span>el diff de esta vista pasó de 2 MiB.<br>Ábrelo en el PC.</div>`
       :f.st==='R'&&!f.h.length?`<div class="centre"><span class="big">renombrado</span>${f.o} → ${f.n}<br>sin cambios en el contenido</div>`
       :(f.tr?`<div class="note">se muestran las primeras ${f.tr} líneas de +${f.a}</div>`:'')+f.h.map(hunkHtml).join('');
-    return `<div class="hdr"><button class="ib" data-act="closefile" aria-label="Volver">${ic('back')}</button><div class="t"><b>${f.n.split('/').pop()}</b><span>${f.o?f.o+' → ':''}${f.n}</span></div><button class="vw" data-view="${v}|${fileKey(f)}" aria-pressed="${!!state.viewed[v+'|'+fileKey(f)]}" aria-label="Marcar visto">✓</button></div>
-    <div class="scroll">${body}</div>${statusBar('DIFF','archivo '+(state.file+1)+'/'+L.length)}`;
+    return `<div class="hdr"><button class="ib" data-act="closefile" aria-label="Volver">${ic('back')}</button><div class="t"><b>${f.n.split('/').pop()}</b><span>${f.o?f.o+' → ':''}${f.n}</span></div><button class="vw${seenOf(f)===2?' ch':''}" data-view="${v}|${fileKey(f)}" aria-pressed="${seenOf(f)===1}" aria-label="${seenOf(f)===2?'Cambió desde que lo viste: marcar visto':'Marcar visto'}">${seenOf(f)===2?'◌':'✓'}</button></div>
+    <div class="scroll">${seenOf(f)===2?'<div class="note">este archivo cambió desde que lo marcaste como visto</div>':''}${body}</div>${statusBar('DIFF','archivo '+(state.file+1)+'/'+L.length)}`;
   }
   const big=ds==='big';
   const nav2=v==='com'?`<div class="cnav"><button data-act="commits" aria-label="Volver a los commits">‹ commits</button><span>${COMMITS[state.commit].s}</span><button data-cn="-1" aria-label="Commit anterior" ${state.commit===0?'disabled':''}>◂</button><button data-cn="1" aria-label="Commit siguiente" ${state.commit===COMMITS.length-1?'disabled':''}>▸</button></div>`:'';
   return `${head}${nav2}
    <div class="scroll">${big?`<div class="note">este diff pasó de 2 MiB: se listan 200 de 1 234 archivos, sin líneas. Míralo entero en el PC.</div>`:''}${treeRows(L).map(t=>{if(t.dir!==undefined)return `<button class="fl dr" data-dir="${t.dir}" aria-expanded="${!t.shut}" style="padding-left:${14+t.depth*16}px"><span class="chev">${t.shut?'▸':'▾'}</span><span class="nm"><b>${t.label}/</b></span><span class="cnt">${t.n}</span>${big?'':`<span class="pm"><span class="a">+${t.a}</span> <span class="x">-${t.d}</span></span>`}</button>`;
-     const f=L[t.file],i=t.file,st=f.u?'?':(f.st||'M');return `<button class="fl" data-file="${i}" style="padding-left:${14+t.depth*16}px"><span class="st ${f.u?'U':st}" aria-label="${{A:'nuevo',D:'borrado',R:'renombrado',M:'modificado','?':'sin seguimiento'}[st]}">${st}</span><span class="nm"><b>${f.n.split('/').pop()}</b>${f.unr||f.bin||f.o?`<span>${f.unr?`<span class="why">${WHY[f.unr]||f.unr}</span>`:f.bin?'<i>binario</i>':''}${f.o?'<i>← '+f.o+'</i>':''}</span>`:''}</span>${big?'':`<span class="pm"><span class="a">+${f.a}</span> <span class="x">-${f.d}</span></span>`}<span class="vw" aria-pressed="${!!state.viewed[v+'|'+fileKey(f)]}">✓</span></button>`}).join('')}</div>
-   ${statusBar('DIFF',L.filter(f=>state.viewed[v+'|'+fileKey(f)]).length+'/'+L.length+' vistos')}${nav()}`;
+     const f=L[t.file],i=t.file,st=f.u?'?':(f.st||'M');return `<button class="fl${seenOf(f)===1?' seen':''}" data-file="${i}" style="padding-left:${14+t.depth*16}px"><span class="st ${f.u?'U':st}" aria-label="${{A:'nuevo',D:'borrado',R:'renombrado',M:'modificado','?':'sin seguimiento'}[st]}">${st}</span><span class="nm"><b>${f.n.split('/').pop()}</b>${f.unr||f.bin||f.o?`<span>${f.unr?`<span class="why">${WHY[f.unr]||f.unr}</span>`:f.bin?'<i>binario</i>':''}${f.o?'<i>← '+f.o+'</i>':''}</span>`:''}</span>${big?'':`<span class="pm"><span class="a">+${f.a}</span> <span class="x">-${f.d}</span></span>`}<span class="vw${seenOf(f)===2?' ch':''}" aria-pressed="${seenOf(f)===1}">${seenOf(f)===2?'◌':'✓'}</span></button>`}).join('')}</div>
+   ${statusBar('DIFF',L.filter(f=>seenOf(f)===1).length+'/'+L.length+' vistos')}${nav()}`;
 }
 
 const PRESETS=[['claude','Claude Code · por verificar','Enter · Esc',['⏎','esc']],['yn','Pregunta s/n','y · n',['y','n']],['ynx','Pregunta s/n con Enter','y y Enter · n y Enter',['y⏎','n⏎']]];
@@ -1069,7 +1076,7 @@ function render(){
   $('#overlay').innerHTML=sheet();
   const o=$('#out'); if(o) o.scrollTop=o.scrollHeight;
   const q=$('#q'); if(q){q.focus();q.setSelectionRange(q.value.length,q.value.length)}
-  $('#jump').innerHTML=[['connect','Conexión (QR)'],['perm','Cámara: permiso · nuevo'],['permdenied','Cámara bloqueada · nuevo'],['cam','Cámara · visor · nuevo'],['paste','Pegar enlace · nuevo'],['pair','Código de emparejamiento · nuevo'],['denied','El PC rechaza · nuevo'],['expired','Código vencido · nuevo'],['unreach','No encuentro tu PC · nuevo'],['proto','Protocolo distinto · nuevo'],['set','Respuestas rápidas · nuevo'],['limited','Demasiados intentos · nuevo'],['pcoff','Home · el último PC no contesta · nuevo'],['pcs','Mis PCs · nuevo'],['pcsbusy','Mis PCs · conectando · nuevo'],['pcsnone','Mis PCs · ninguno encendido · nuevo'],['home','Workspaces (sidebar)'],['wsroot','Entrar a la raíz'],['ws','Entrar a un worktree'],['pick','Buscador ␣'],['leader','Menú ^␣ · cambiado'],['sel','Selección de texto · nuevo'],['shblk','Shell · bloque elegido · nuevo'],['slash','Escribir / · comandos · nuevo'],['slashf','Escribir /co · filtrado · nuevo'],['askc','Pregunta · elegir una · nuevo'],['askm','Pregunta · elegir varias · nuevo'],['askp','Pregunta · plan mode · nuevo'],['think','Chat · pensando · nuevo'],['resp','Chat · respondiendo · nuevo'],['notices','Chat · avisos de tareas · nuevo'],['shnv','Shell · programa a pantalla completa · nuevo'],['inbox','Avisos'],['changes','Cambios · General · cambiado'],['chunc','Cambios · Sin commitear · nuevo'],['chcom','Cambios · Commits · nuevo'],['chcomf','Cambios · un commit · nuevo'],['chfile','Cambios · un archivo · cambiado'],['chren','Cambios · renombrado · nuevo'],['chbin','Cambios · binario · nuevo'],['chunr','Cambios · ilegible · nuevo'],['chbig','Cambios · cortado · nuevo'],['chtoo','Cambios · demasiado grande · nuevo'],['chnobase','Cambios · sin rama base · nuevo'],['chload','Cambios · leyendo · nuevo'],['cherr','Cambios · error de una vista · nuevo'],['chempty','Cambios · sin cambios · nuevo'],['chnone','Cambios · sin workspace · nuevo'],['f1','Archivos · un workspace · nuevo'],['f2','Archivos · ocultos · nuevo'],['f3','Archivos · abrir carpeta · nuevo'],['f4','Archivos · sin permiso · nuevo'],['f5','Archivos · vacía · nuevo'],['f6','Archivos · demasiados · nuevo'],['v1','Visor · markdown · nuevo'],['v2','Visor · markdown fuente · nuevo'],['v3','Visor · texto · nuevo'],['v4','Visor · binario · nuevo'],['v5','Visor · cortado a 1 MiB · nuevo'],['v6','Visor · sin permiso · nuevo'],['w1','Nuevo worktree · nuevo'],['w2','Nuevo worktree · creando · nuevo'],['w3','Nuevo worktree · error · nuevo'],['w4','Nuevo worktree · solo lectura · nuevo'],['n1','Nueva sesión · nuevo'],['n2','Nueva sesión · nombre repetido · nuevo'],['n3','Nueva sesión · es un comando · nuevo'],['p1','Menú + · cambiado'],['settings','Ajustes y temas']].map(([k,l])=>`<button data-jump="${k}">${l}</button>`).join('');
+  $('#jump').innerHTML=[['connect','Conexión (QR)'],['perm','Cámara: permiso · nuevo'],['permdenied','Cámara bloqueada · nuevo'],['cam','Cámara · visor · nuevo'],['paste','Pegar enlace · nuevo'],['pair','Código de emparejamiento · nuevo'],['denied','El PC rechaza · nuevo'],['expired','Código vencido · nuevo'],['unreach','No encuentro tu PC · nuevo'],['proto','Protocolo distinto · nuevo'],['set','Respuestas rápidas · nuevo'],['limited','Demasiados intentos · nuevo'],['pcoff','Home · el último PC no contesta · nuevo'],['pcs','Mis PCs · nuevo'],['pcsbusy','Mis PCs · conectando · nuevo'],['pcsnone','Mis PCs · ninguno encendido · nuevo'],['home','Workspaces (sidebar)'],['wsroot','Entrar a la raíz'],['ws','Entrar a un worktree'],['pick','Buscador ␣'],['leader','Menú ^␣ · cambiado'],['sel','Selección de texto · nuevo'],['shblk','Shell · bloque elegido · nuevo'],['slash','Escribir / · comandos · nuevo'],['slashf','Escribir /co · filtrado · nuevo'],['askc','Pregunta · elegir una · nuevo'],['askm','Pregunta · elegir varias · nuevo'],['askp','Pregunta · plan mode · nuevo'],['think','Chat · pensando · nuevo'],['resp','Chat · respondiendo · nuevo'],['notices','Chat · avisos de tareas · nuevo'],['shnv','Shell · programa a pantalla completa · nuevo'],['inbox','Avisos'],['changes','Cambios · General · cambiado'],['chunc','Cambios · Sin commitear · nuevo'],['chcom','Cambios · Commits · nuevo'],['chcomf','Cambios · un commit · nuevo'],['chfile','Cambios · un archivo · cambiado'],['chren','Cambios · renombrado · nuevo'],['chbin','Cambios · binario · nuevo'],['chunr','Cambios · ilegible · nuevo'],['chbig','Cambios · cortado · nuevo'],['chtoo','Cambios · demasiado grande · nuevo'],['chnobase','Cambios · sin rama base · nuevo'],['chload','Cambios · leyendo · nuevo'],['cherr','Cambios · error de una vista · nuevo'],['chempty','Cambios · sin cambios · nuevo'],['chnone','Cambios · sin workspace · nuevo'],['chseen','Cambios · vistos compartidos con la PC · nuevo'],['chchg','Cambios · un archivo cambió desde que lo viste · nuevo'],['chlive','Cambios · el agente edita, en vivo · nuevo'],['chnorepo','Cambios · la carpeta no es un repositorio · nuevo'],['f1','Archivos · un workspace · nuevo'],['f2','Archivos · ocultos · nuevo'],['f3','Archivos · abrir carpeta · nuevo'],['f4','Archivos · sin permiso · nuevo'],['f5','Archivos · vacía · nuevo'],['f6','Archivos · demasiados · nuevo'],['v1','Visor · markdown · nuevo'],['v2','Visor · markdown fuente · nuevo'],['v3','Visor · texto · nuevo'],['v4','Visor · binario · nuevo'],['v5','Visor · cortado a 1 MiB · nuevo'],['v6','Visor · sin permiso · nuevo'],['w1','Nuevo worktree · nuevo'],['w2','Nuevo worktree · creando · nuevo'],['w3','Nuevo worktree · error · nuevo'],['w4','Nuevo worktree · solo lectura · nuevo'],['n1','Nueva sesión · nuevo'],['n2','Nueva sesión · nombre repetido · nuevo'],['n3','Nueva sesión · es un comando · nuevo'],['p1','Menú + · cambiado'],['settings','Ajustes y temas']].map(([k,l])=>`<button data-jump="${k}">${l}</button>`).join('');
 }
 function answer(v,id){
   const w=wsOf(id); if(!w) return; buzz();
@@ -1110,7 +1117,7 @@ document.addEventListener('click',e=>{
       if(j[0]==='w'){state.sess='main';state.screen='home';state.sheet='newwt';if(j==='w2')state.nw='busy';if(j==='w3')state.nw='err';if(j==='w4')state.ro=true;render();return}
       if(j[0]==='n'){state.sess='main';state.screen='home';state.sheet='sess';state.sessNew=true;if(j==='n2')state.ns='err';if(j==='n3'){state.ns='cmd';state.nsName='worktree'}else state.nsName='';render();return}
       if(j==='p1'){state.sess='main';state.screen='home';state.sheet='open';render();return}}
-    if(d.jump.startsWith('ch')||d.jump==='changes'){const j=d.jump;state.screen='changes';state.vst={gen:'ok',unc:'ok',com:'ok'};state.view='unc';state.commit=null;state.file=null;
+    if(d.jump.startsWith('ch')||d.jump==='changes'){const j=d.jump;state.liveFlash=false;state.screen='changes';state.vst={gen:'ok',unc:'ok',com:'ok'};state.view='unc';state.commit=null;state.file=null;
       const set=(v,x)=>{state.view=v;state.vst[v]=x};
       if(j==='chunc')state.view='unc';
       else if(j==='chcom')state.view='com';
@@ -1126,6 +1133,10 @@ document.addEventListener('click',e=>{
       else if(j==='chnobase')set('gen','nobase');
       else if(j==='chtoo')set('unc','big');
       else if(j==='chnone')set('gen','none');
+      else if(j==='chseen'){state.viewed={};UNC.forEach((f,i)=>{if(i<2)state.viewed['unc|'+fileKey(f)]=f.hv||1})}
+      else if(j==='chchg'){state.viewed={};UNC.forEach((f,i)=>{if(i<2)state.viewed['unc|'+fileKey(f)]=f.hv||1});UNC[0].hv=(UNC[0].hv||1)+1;state.file=0}
+      else if(j==='chlive'){state.viewed={};UNC.forEach((f,i)=>{if(i<2)state.viewed['unc|'+fileKey(f)]=f.hv||1});UNC[0].hv=(UNC[0].hv||1)+1;UNC[0].a++;state.liveFlash=true;clearTimeout(state.liveT);state.liveT=setTimeout(()=>{state.liveFlash=false;render()},2500);setTimeout(()=>toast('actualizado: '+UNC[0].n.split('/').pop()),50)}
+      else if(j==='chnorepo'){set('unc','err');state.derr='not inside a git repository'}
       render();return}
     state.dstate='ok';state.screen=d.jump;render();return}
   if(d.sheet){state.sheet=d.sheet==='close'?null:d.sheet;render();return}
@@ -1150,7 +1161,7 @@ document.addEventListener('click',e=>{
   if(d.commit!==undefined){state.commit=+d.commit;state.file=null;render();return}
   if(d.cn){state.commit=Math.max(0,Math.min(COMMITS.length-1,state.commit+(+d.cn)));state.file=null;render();return}
   if(d.file){state.file=+d.file;render();return}
-  if(d.view){state.viewed[d.view]=!state.viewed[d.view];render();return}
+  if(d.view){toggleViewed(d.view);render();return}
   if(d.key){logFor(`${state.ws}|${state.pane}`).push(`<span class="d">⌨ ${d.key}</span>`);toast('enviado '+d.key);render();return}
   switch(d.act){
     case 'copy':state.sel=false;toast('copiado');render();break;

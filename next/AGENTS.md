@@ -31,7 +31,7 @@ what they do and why, never pasted.
 
 Never reach a real daemon from a test: use a private socket dir (`JWN_SOCKET`, `JWN_STATE_DIR`) and stop it with `jwn stop` (it signals only the pid recorded in that dir, and only while the socket answers).
 | `android/contract` | the Kotlin types of the JSON documents and `ConformanceTest`, which reads the same `contract/` files as the Rust suite |
-| `android/client-core` | what the phone knows: the seen record, the node cache, Home rows, the navigator (pure Kotlin, tested on the JVM) |
+| `android/client-core` | what the phone knows: the seen record, the node cache, Home rows, the navigator, and the changes screen's model and file tree (pure Kotlin, tested on the JVM) |
 | `android/app` | the Compose app (`dev.jw.next`, from `identity.toml`); draws the shared fixtures for now |
 | `crates/jwn/src/tui/shell.rs` | the shell as blocks in the terminal client: colours, block lines, OSC 52 |
 | `crates/jwn/src/tui/{changes,diff_lines}.rs` | the diff viewer of the terminal client: its state, keys and drawing, and the pure part (a `diff` node as lines, the tree of files, words that changed, syntax tones) |
