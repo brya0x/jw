@@ -264,6 +264,15 @@ enum Mode {
     Avisos,
 }
 
+/// Where the person is: the workspaces of the sidebar, the panels of the open workspace, or
+/// typing in a panel. What a key does is what the level is about (spec REQ-169 to REQ-176).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Level {
+    Workspaces,
+    Panels,
+    Terminal,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Key {
     Up,
@@ -275,9 +284,12 @@ pub enum Key {
     NewPane,
     /// Open the diff of the highlighted workspace.
     Changes,
-    /// Close the focused pane, or the highlighted workspace.
-    ClosePane,
-    CloseWorkspace,
+    /// Close what the level is about: the highlighted workspace, or the focused panel.
+    Close,
+    /// The focused panel fills the area.
+    Full,
+    /// The keys of the level.
+    Help,
     /// The mode and the theme.
     Settings,
     /// The phone link: its box.
@@ -378,6 +390,9 @@ pub struct View {
     os_dark: bool,
     /// The settings changed here and are not written yet.
     save: bool,
+    /// The focused panel fills the area, and the box of the keys of the level is open.
+    full: bool,
+    help: bool,
     /// The phone link, and whether its box is open, how many phones are paired, whether the
     /// loop should start the thread that turns it on, and what to tell that thread.
     phone: phone::State,
@@ -422,6 +437,8 @@ impl View {
             settings: Settings::default(),
             os_dark: true,
             save: false,
+            full: false,
+            help: false,
             phone: phone::State::Off,
             phone_open: false,
             phone_paired: 0,
@@ -728,7 +745,7 @@ impl View {
     /// Open a workspace and focus one of its panes, marking both seen on this terminal.
     fn open(&mut self, ws: &str, focus: usize) {
         self.opened = Some(ws.to_owned());
-        self.typing = true;
+        self.typing = false;
         self.blk = None;
         self.mark_seen(ws);
         let pane = self
@@ -744,6 +761,59 @@ impl View {
         if let Some(p) = pane {
             self.mark_seen(&p);
         }
+    }
+
+    /// Where the person is.
+    fn level(&self) -> Level {
+        if self.typing_pane().is_some() {
+            Level::Terminal
+        } else if self.opened.is_some() && self.opened == self.selected_id() {
+            Level::Panels
+        } else {
+            Level::Workspaces
+        }
+    }
+
+    /// The rectangles of the panels: while one is shown full, it has the whole area and the
+    /// others none.
+    fn layout(&self, n: usize, area: Rect) -> Vec<Rect> {
+        let mut rects = pane_rects(n, area);
+        if self.full && self.level() != Level::Workspaces {
+            for (i, r) in rects.iter_mut().enumerate() {
+                *r = if i == self.focus { area } else { (0, 0, 0, 0) };
+            }
+        }
+        rects
+    }
+
+    /// Move the highlight of the sidebar to the next or the previous workspace.
+    fn select_workspace(&mut self, forward: bool) {
+        let n = self.session.as_ref().map_or(0, |s| s.workspaces.len());
+        self.typing = false;
+        self.selected = if forward {
+            (self.selected + 1).min(n.saturating_sub(1))
+        } else {
+            self.selected.saturating_sub(1)
+        };
+        self.opened = None;
+        self.focus = 0;
+    }
+
+    /// Focus the next or the previous panel of the open workspace.
+    fn go_panel(&mut self, forward: bool) {
+        let Some(id) = self.opened.clone() else {
+            return;
+        };
+        let panes = self.workspaces.get(&id).map_or(0, |d| d.panes.len());
+        if panes == 0 {
+            return;
+        }
+        let next = if forward {
+            (self.focus + 1).min(panes - 1)
+        } else {
+            self.focus.saturating_sub(1)
+        };
+        self.open(&id, next);
     }
 
     /// The pane the keyboard goes to: the focused pane of the opened workspace, while typing.
@@ -1027,6 +1097,10 @@ impl View {
     /// open) a command of the client.
     pub fn press_key(&mut self, ev: KeyEvent) -> After {
         self.flash.clear();
+        if self.help {
+            self.help = false;
+            return After::Continue;
+        }
         if self.phone_open {
             return self.phone_key(ev);
         }
@@ -1055,7 +1129,7 @@ impl View {
     pub fn take_resize(&mut self, cols: usize, rows: usize) -> Option<(String, u16, u16)> {
         let pane = self.typing_pane()?;
         let n = self.workspaces.get(self.opened.as_deref()?)?.panes.len();
-        let (_, _, w, h) = *pane_rects(n, panes_rect(cols, rows)).get(self.focus)?;
+        let (_, _, w, h) = *self.layout(n, panes_rect(cols, rows)).get(self.focus)?;
         let want = (
             pane,
             h.saturating_sub(2).max(1) as u16,
@@ -1068,7 +1142,6 @@ impl View {
     }
 
     pub fn press(&mut self, key: Key) -> After {
-        let n = self.session.as_ref().map_or(0, |s| s.workspaces.len());
         if self.blk.is_some() && self.mode == Mode::Workspaces {
             match key {
                 Key::Up | Key::Down => {
@@ -1083,45 +1156,57 @@ impl View {
                 _ => {}
             }
         }
+        let level = self.level();
         match (self.mode, key) {
-            (_, Key::Quit) | (Mode::Workspaces, Key::Back) => return After::Quit,
+            (_, Key::Quit) => return After::Quit,
+            // `esc` goes up a level; at the first there is nowhere to go.
+            (Mode::Workspaces, Key::Back) => {
+                if level == Level::Panels {
+                    self.opened = None;
+                    self.full = false;
+                    self.blk = None;
+                }
+            }
             (Mode::Avisos, Key::Back | Key::Avisos) => self.mode = Mode::Workspaces,
             (Mode::Workspaces, Key::Avisos) => {
                 self.mode = Mode::Avisos;
                 self.avisos_selected = 0;
             }
-            (Mode::Workspaces, Key::Down) => {
-                self.typing = false;
-                self.selected = (self.selected + 1).min(n.saturating_sub(1));
-                self.opened = None;
-                self.focus = 0;
+            (Mode::Workspaces, Key::Help) => self.help = true,
+            (Mode::Workspaces, Key::Down) if level == Level::Workspaces => {
+                self.select_workspace(true)
             }
-            (Mode::Workspaces, Key::Up) => {
-                self.typing = false;
-                self.selected = self.selected.saturating_sub(1);
-                self.opened = None;
-                self.focus = 0;
+            (Mode::Workspaces, Key::Up) if level == Level::Workspaces => {
+                self.select_workspace(false)
             }
-            (Mode::Workspaces, Key::Enter) => {
-                if let Some(id) = self.selected_id() {
-                    self.open(&id, 0);
-                }
+            (Mode::Workspaces, Key::Down | Key::Right) if level == Level::Panels => {
+                self.go_panel(true)
             }
-            (Mode::Workspaces, Key::Left | Key::Right) => {
-                if let Some(id) = self.selected_id() {
-                    let panes = self.workspaces.get(&id).map_or(0, |d| d.panes.len());
-                    if self.opened.as_deref() != Some(id.as_str()) {
-                        self.open(&id, 0);
-                    } else if panes > 0 {
-                        let next = if key == Key::Right {
-                            (self.focus + 1).min(panes - 1)
-                        } else {
-                            self.focus.saturating_sub(1)
-                        };
-                        self.open(&id, next);
+            (Mode::Workspaces, Key::Up | Key::Left) if level == Level::Panels => {
+                self.go_panel(false)
+            }
+            (Mode::Workspaces, Key::Enter) => match level {
+                Level::Workspaces => {
+                    if let Some(id) = self.selected_id() {
+                        self.open(&id, self.focus);
                     }
                 }
-            }
+                Level::Panels => {
+                    let panes = self
+                        .opened
+                        .as_ref()
+                        .and_then(|id| self.workspaces.get(id))
+                        .map_or(0, |d| d.panes.len());
+                    self.typing = panes > 0;
+                }
+                Level::Terminal => {}
+            },
+            (Mode::Workspaces, Key::Full) if level == Level::Panels => self.full = !self.full,
+            (Mode::Workspaces, Key::Close) => match level {
+                Level::Workspaces => self.ask_close_workspace(),
+                Level::Panels => return self.ask_close_pane(),
+                Level::Terminal => {}
+            },
             (Mode::Workspaces, Key::Changes) => {
                 if let Some(id) = self.selected_id() {
                     self.typing = false;
@@ -1129,13 +1214,11 @@ impl View {
                     self.changes = Some(Changes::open(&id));
                 }
             }
-            (Mode::Workspaces, Key::NewPane) => {
+            (Mode::Workspaces, Key::NewPane) if level == Level::Panels => {
                 if let Some(id) = self.selected_id() {
                     return After::NewPane(id);
                 }
             }
-            (Mode::Workspaces, Key::ClosePane) => return self.ask_close_pane(),
-            (Mode::Workspaces, Key::CloseWorkspace) => self.ask_close_workspace(),
             (Mode::Workspaces, Key::Settings) => self.manage = Some(self.settings_question()),
             (Mode::Workspaces, Key::Phone) => self.open_phone(),
             (Mode::Avisos, Key::Down) => {
@@ -1162,6 +1245,11 @@ impl View {
                         self.selected = i;
                     }
                     self.open(&ws, focus);
+                    // An attention is a call to answer: the keyboard goes to the pane.
+                    self.typing = self
+                        .workspaces
+                        .get(&ws)
+                        .is_some_and(|d| !d.panes.is_empty());
                 }
             }
             _ => {}
@@ -1281,15 +1369,21 @@ impl View {
         }
         let workspaces = self.session.as_ref().map_or(0, |s| s.workspaces.len());
         if x + 1 < SIDEBAR && y >= 2 && y < rows.saturating_sub(5) && y - 2 < workspaces {
+            let same = self.selected == y - 2;
             self.selected = y - 2;
-            return self.press(Key::Enter);
+            if let Some(id) = self.selected_id() {
+                self.open(&id, if same { self.focus } else { 0 });
+            }
+            return After::Continue;
         }
         if let Some(doc) = self.shown() {
             let id = doc.head.id.clone();
-            let rects = pane_rects(doc.panes.len(), panes_rect(cols, rows));
+            let rects = self.layout(doc.panes.len(), panes_rect(cols, rows));
             if let Some(i) = rects.iter().position(|r| inside(*r, x, y)) {
                 let pane = doc.panes[i].id.clone();
                 self.open(&id, i);
+                // A click in a panel starts typing in it, unless it picks a block.
+                self.typing = true;
                 return self.click_pane(&pane, rects[i], x, y);
             }
         }
@@ -1311,13 +1405,17 @@ impl View {
             }
             self.close_changes();
         }
-        if self.mode == Mode::Avisos || x < SIDEBAR {
+        if self.mode == Mode::Avisos {
             return self.press(if down { Key::Down } else { Key::Up });
+        }
+        if x < SIDEBAR {
+            self.select_workspace(down);
+            return After::Continue;
         }
         let Some(doc) = self.shown() else {
             return After::Continue;
         };
-        let rects = pane_rects(doc.panes.len(), panes_rect(cols, rows));
+        let rects = self.layout(doc.panes.len(), panes_rect(cols, rows));
         let Some(i) = rects.iter().position(|r| inside(*r, x, y)) else {
             return After::Continue;
         };
@@ -1353,9 +1451,14 @@ impl View {
             return g;
         };
         let dim = Style::fg(look::dim());
-        // The sidebar and its border.
+        // The sidebar and its border, blue while the sidebar is where the person is.
+        let divider = if self.mode == Mode::Workspaces && self.level() == Level::Workspaces {
+            look::blue()
+        } else {
+            look::line()
+        };
         for y in 0..rows.saturating_sub(1) {
-            g.put(SIDEBAR - 1, y, "│", Style::fg(look::line()));
+            g.put(SIDEBAR - 1, y, "│", Style::fg(divider));
         }
         g.put(1, 0, &clip(&session.name, 12), dim.bold());
         g.put(SIDEBAR - 14, 0, "^␣ s sessions", dim);
@@ -1480,7 +1583,7 @@ impl View {
         for x in 0..cols {
             g.cells[(rows - 1) * cols + x] = (' ', Style::default().on(look::panel()));
         }
-        let typing = self.typing_pane().is_some();
+        let level = self.level();
         let diff_status = self.changes.as_ref().map(|c| c.status(&self.docs()));
         let (chip, bg, hint) = match (&self.manage, &diff_status) {
             (Some(Manage::Failed { .. }), _) => (" ERROR ", look::red(), self.manage_hint()),
@@ -1494,22 +1597,27 @@ impl View {
             },
             (Some(_), _) => (" PREGUNTA ", look::yellow(), self.manage_hint()),
             (None, Some((hint, _))) => (" DIFF ", look::cyan(), hint.as_str()),
-            (None, None) => match (self.mode, typing) {
+            (None, None) => match (self.mode, level) {
                 (Mode::Avisos, _) => (" AVISOS ", look::yellow(), "j/k mover · ↵ ir · esc volver"),
-                (_, false) if self.blk.is_some() => (
+                (_, Level::Terminal) => (
+                    " TERMINAL ",
+                    look::green(),
+                    "escribes en el panel · ^␣ para salir",
+                ),
+                (_, Level::Panels) if self.blk.is_some() => (
                     " BLOQUE ",
                     look::magenta(),
                     "c comando · o salida · r repetir · j/k mover · esc soltar",
                 ),
-                (_, true) => (
-                    " TERM ",
-                    look::green(),
-                    "escribes en el panel · ^␣ para moverte",
+                (_, Level::Panels) => (
+                    " PANEL ",
+                    look::magenta(),
+                    "h/l panel · ↵ escribir · n nuevo · f completa · x cerrar · esc volver · ? teclas",
                 ),
-                (_, false) => (
-                    " MOVE ",
+                (_, Level::Workspaces) => (
+                    " WORKSPACE ",
                     look::blue(),
-                    "j/k workspace · ↵ escribir · h/l panel · n nuevo · x cerrar · X cerrar workspace · d cambios · a avisos · , ajustes · q salir",
+                    "j/k mover · ↵ entrar · x cerrar · d cambios · a avisos · m teléfono · ? teclas · q salir",
                 ),
             },
         };
@@ -1563,6 +1671,9 @@ impl View {
         if self.mode == Mode::Avisos {
             self.avisos_box(&mut g, (px, 1, pw, rows.saturating_sub(2)));
         }
+        if self.help {
+            self.help_box(&mut g, (px, 1, pw, rows.saturating_sub(2)));
+        }
         if self.phone_open {
             phone::draw(
                 &mut g,
@@ -1597,14 +1708,17 @@ impl View {
             g.put(
                 x + 2,
                 y + 2,
-                "este workspace no tiene paneles · n abre uno",
+                "este workspace no tiene paneles · ↵ y luego n abre uno",
                 Style::fg(look::dim()),
             );
             return;
         }
-        let rects = pane_rects(n, (x, y, w, h));
+        let rects = self.layout(n, (x, y, w, h));
         let opened = self.opened.as_deref() == Some(doc.head.id.as_str());
         for (i, (summary, rect)) in doc.panes.iter().zip(rects).enumerate() {
+            if rect.2 == 0 {
+                continue;
+            }
             let focused = opened && i == self.focus;
             let un = self.unseen(&summary.attention);
             let badge = un.first().map(|a| {
@@ -1795,6 +1909,47 @@ impl View {
         }
     }
 
+    /// The keys of the level, as a box.
+    fn help_box(&self, g: &mut Grid, (x, y, w, _): Rect) {
+        let (title, keys): (&str, &[(&str, &str)]) = match self.level() {
+            Level::Workspaces => ("teclas · workspace", WORKSPACE_KEYS),
+            Level::Panels => ("teclas · panel", PANEL_KEYS),
+            Level::Terminal => ("teclas · terminal", TERMINAL_KEYS),
+        };
+        let bw = 62.min(w.saturating_sub(2));
+        let bh = keys.len() + 4;
+        let (bx, by) = (x + w.saturating_sub(bw) / 2, y + 3);
+        for r in 0..bh {
+            for c in 0..bw {
+                if by + r < g.rows && bx + c < g.cols {
+                    g.cells[(by + r) * g.cols + bx + c] = (' ', Style::default().on(look::panel()));
+                }
+            }
+        }
+        g.boxed(
+            (bx, by, bw, bh),
+            title,
+            look::blue(),
+            Style::fg(look::fg()).bold(),
+            None,
+        );
+        for (i, (key, what)) in keys.iter().enumerate() {
+            let at = by + 2 + i;
+            g.put(
+                bx + 3,
+                at,
+                key,
+                Style::fg(look::blue()).bold().on(look::panel()),
+            );
+            g.put(
+                bx + 14,
+                at,
+                &clip(what, bw.saturating_sub(17)),
+                Style::fg(look::fg()).on(look::panel()),
+            );
+        }
+    }
+
     fn manage_hint(&self) -> &'static str {
         self.manage.as_ref().map_or("", Manage::hint)
     }
@@ -1811,6 +1966,31 @@ type Rect = (usize, usize, usize, usize);
 const STOP: &str = "■ ^C";
 /// Lines one notch of the wheel moves a pane's blocks.
 const SCROLL_STEP: usize = 3;
+/// The keys of each level, for the box `?` opens. Only what the client does is listed.
+const WORKSPACE_KEYS: &[(&str, &str)] = &[
+    ("j k", "mover por los workspaces"),
+    ("↵", "entrar al workspace"),
+    ("x", "cerrar el workspace (y quitar su worktree)"),
+    ("d", "ver sus cambios"),
+    ("a", "avisos"),
+    ("m", "enlace con el teléfono"),
+    (",", "ajustes"),
+    ("q", "salir (los paneles siguen)"),
+];
+const PANEL_KEYS: &[(&str, &str)] = &[
+    ("h j k l", "cambiar de panel"),
+    ("↵", "escribir en el panel"),
+    ("n", "panel nuevo"),
+    ("f", "el panel a pantalla completa"),
+    ("x", "cerrar el panel"),
+    ("d a m ,", "cambios · avisos · teléfono · ajustes"),
+    ("esc", "volver a los workspaces"),
+];
+const TERMINAL_KEYS: &[(&str, &str)] = &[
+    ("todo", "va al programa, esc y ctrl incluidos"),
+    ("^␣", "salir al nivel de paneles"),
+];
+
 /// How long a pairing question is on the screen before `y` answers it.
 const ANSWER_DELAY_MS: u64 = 800;
 /// The editor under the blocks: a rule, the chips, the prompt line.
@@ -1976,8 +2156,9 @@ fn key_of(code: KeyCode) -> Option<Key> {
         KeyCode::Char('a') => Key::Avisos,
         KeyCode::Char('n') => Key::NewPane,
         KeyCode::Char('d') => Key::Changes,
-        KeyCode::Char('x') => Key::ClosePane,
-        KeyCode::Char('X') => Key::CloseWorkspace,
+        KeyCode::Char('x') => Key::Close,
+        KeyCode::Char('f') => Key::Full,
+        KeyCode::Char('?') => Key::Help,
         KeyCode::Char(',') => Key::Settings,
         KeyCode::Char('m') => Key::Phone,
         KeyCode::Char('c') => Key::CopyCmd,
@@ -2553,7 +2734,13 @@ mod tests {
         v.press_key(plain(KeyCode::Esc));
         assert_eq!(v.take_asks(), [Ask::Close("the-node".into())]);
         assert!(!v.plain(180, 44).contains(" vs HEAD"));
-        assert!(v.plain(180, 44).lines().last().unwrap().contains("MOVE"));
+        assert!(
+            v.plain(180, 44)
+                .lines()
+                .last()
+                .unwrap()
+                .contains("WORKSPACE")
+        );
     }
 
     #[test]
@@ -2577,10 +2764,24 @@ mod tests {
     fn enter_opens_marks_seen_and_the_status_bar_shows_the_mode() {
         let mut v = fixture_view();
         let before = v.avisos().len();
-        assert!(v.plain(120, 30).lines().last().unwrap().contains("MOVE"));
+        assert!(
+            v.plain(120, 30)
+                .lines()
+                .last()
+                .unwrap()
+                .contains("WORKSPACE")
+        );
         v.press(Key::Enter);
         assert!(v.avisos().len() < before, "opening cleared something");
-        assert!(v.plain(120, 30).lines().last().unwrap().contains("TERM"));
+        assert!(v.plain(120, 30).lines().last().unwrap().contains("PANEL"));
+        v.press(Key::Enter);
+        assert!(
+            v.plain(120, 30)
+                .lines()
+                .last()
+                .unwrap()
+                .contains("TERMINAL")
+        );
     }
 
     #[test]
@@ -2589,7 +2790,13 @@ mod tests {
         let before = v.avisos().len();
         v.press(Key::Down);
         assert_eq!(v.avisos().len(), before, "a preview marks nothing seen");
-        assert!(v.plain(120, 30).lines().last().unwrap().contains("MOVE"));
+        assert!(
+            v.plain(120, 30)
+                .lines()
+                .last()
+                .unwrap()
+                .contains("WORKSPACE")
+        );
     }
 
     #[test]
@@ -2658,7 +2865,7 @@ mod tests {
         assert_eq!(v.selected, 1);
         assert!(v.opened.is_some(), "a click opens, like Enter");
         assert!(v.avisos().len() <= before);
-        assert!(v.plain(120, 30).lines().last().unwrap().contains("TERM"));
+        assert!(v.plain(120, 30).lines().last().unwrap().contains("PANEL"));
     }
 
     #[test]
@@ -2730,7 +2937,12 @@ mod tests {
     fn once_a_pane_is_open_the_keyboard_goes_to_its_shell() {
         let mut v = fixture_view();
         v.press(Key::Enter);
-        let pane = v.typing_pane().expect("opening a workspace starts typing");
+        assert!(
+            v.typing_pane().is_none(),
+            "opening a workspace is the panel level"
+        );
+        v.press(Key::Enter);
+        let pane = v.typing_pane().expect("Enter on a panel starts typing");
         assert_eq!(
             v.press_key(plain(KeyCode::Char('x'))),
             After::Write {
@@ -2817,16 +3029,19 @@ mod tests {
     fn the_leader_gives_the_keyboard_back_to_the_client() {
         let mut v = fixture_view();
         v.press(Key::Enter);
+        v.press(Key::Enter);
+        assert!(v.typing_pane().is_some());
         assert_eq!(
             v.press_key(key(KeyCode::Char(' '), KeyModifiers::CONTROL)),
             After::Continue
         );
         assert!(v.typing_pane().is_none());
-        assert!(v.plain(120, 30).lines().last().unwrap().contains("MOVE"));
-        // Now `j` moves, as before.
+        assert!(v.plain(120, 30).lines().last().unwrap().contains("PANEL"));
+        // Now `j` moves to the next panel, as at the panel level.
+        let focus = v.focus;
         v.press_key(plain(KeyCode::Char('j')));
-        assert_eq!(v.selected, 1);
-        // Enter goes back to typing in the workspace it opens.
+        assert_eq!(v.focus, focus + 1);
+        // Enter goes back to typing in that panel.
         v.press_key(plain(KeyCode::Enter));
         assert!(v.typing_pane().is_some());
     }
@@ -2845,6 +3060,12 @@ mod tests {
         let mut v = fixture_view();
         assert_eq!(v.take_resize(120, 30), None, "nothing is typed into yet");
         v.press(Key::Enter);
+        assert_eq!(
+            v.take_resize(120, 30),
+            None,
+            "the panel level types nothing"
+        );
+        v.press(Key::Enter);
         let (pane, rows, cols) = v.take_resize(120, 30).expect("the focused box's size");
         assert_eq!(Some(pane), v.typing_pane());
         let (_, _, w, h) = pane_rects(2, panes_rect(120, 30))[0];
@@ -2859,6 +3080,12 @@ mod tests {
     #[test]
     fn n_asks_for_a_pane_in_the_highlighted_workspace() {
         let mut v = fixture_view();
+        assert_eq!(
+            v.press(Key::NewPane),
+            After::Continue,
+            "not at the workspace level"
+        );
+        v.press(Key::Enter);
         assert!(matches!(v.press(Key::NewPane), After::NewPane(_)));
     }
 
@@ -2867,7 +3094,12 @@ mod tests {
         let mut v = fixture_view();
         v.press(Key::Avisos);
         assert_eq!(v.press(Key::Back), After::Continue);
-        assert_eq!(v.press(Key::Back), After::Quit);
+        assert_eq!(
+            v.press(Key::Back),
+            After::Continue,
+            "esc at the first level goes nowhere"
+        );
+        assert_eq!(v.press(Key::Quit), After::Quit);
     }
 
     #[test]
@@ -2889,6 +3121,12 @@ mod tests {
             assert!(rows.iter().all(|l| l.chars().count() <= c));
         }
     }
+    /// `x` at the workspace level: up from the panel level `idle_view` is at, then close.
+    fn close_workspace(v: &mut View) -> After {
+        v.press(Key::Back);
+        tap(v, 'x')
+    }
+
     fn tap(v: &mut View, c: char) -> After {
         v.press_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE))
     }
@@ -2957,12 +3195,15 @@ mod tests {
     }
 
     #[test]
-    fn x_needs_a_workspace_opened_to_know_which_pane() {
+    fn x_at_the_workspace_level_is_about_the_workspace_never_a_pane() {
         let mut v = idle_view();
         v.opened = None;
+        assert_eq!(v.level(), Level::Workspaces);
         assert_eq!(tap(&mut v, 'x'), After::Continue);
-        assert!(v.manage.is_none());
-        assert!(v.plain(110, 30).contains("↵ abre el workspace"));
+        assert!(
+            matches!(v.manage, Some(Manage::Workspace(_))),
+            "the workspace is asked about"
+        );
     }
 
     #[test]
@@ -2982,7 +3223,7 @@ mod tests {
     #[test]
     fn x_closes_a_workspace_without_its_worktree_and_asks_first() {
         let mut v = idle_view();
-        assert_eq!(tap(&mut v, 'X'), After::Continue);
+        assert_eq!(close_workspace(&mut v), After::Continue);
         let t = v.plain(120, 30);
         assert!(t.contains("Se terminan sus 2 paneles."), "{t}");
         assert!(
@@ -3004,8 +3245,9 @@ mod tests {
     #[test]
     fn a_folder_does_not_offer_to_remove_a_worktree() {
         let mut v = idle_view();
+        v.press(Key::Back);
         v.press(Key::Down);
-        tap(&mut v, 'X');
+        tap(&mut v, 'x');
         let t = v.plain(120, 30);
         assert!(t.contains("La carpeta se queda en el disco."), "{t}");
         assert!(!t.contains("quitar el worktree"), "{t}");
@@ -3016,7 +3258,7 @@ mod tests {
     #[test]
     fn a_worktree_with_changes_lists_them_and_cannot_be_removed() {
         let mut v = idle_view();
-        tap(&mut v, 'X');
+        close_workspace(&mut v);
         let ws = v.selected_id().unwrap();
         assert_eq!(tap(&mut v, 'd'), After::Check(ws));
         assert!(matches!(v.manage, Some(Manage::Checking(_))));
@@ -3046,7 +3288,7 @@ mod tests {
     #[test]
     fn a_clean_worktree_is_removed_on_y_and_esc_goes_back() {
         let mut v = idle_view();
-        tap(&mut v, 'X');
+        close_workspace(&mut v);
         tap(&mut v, 'd');
         v.check_made("node");
         let (_, diff) = uncommitted(true);
@@ -3078,7 +3320,7 @@ mod tests {
     #[test]
     fn a_refusal_is_shown_and_the_workspace_stays() {
         let mut v = idle_view();
-        tap(&mut v, 'X');
+        close_workspace(&mut v);
         tap(&mut v, 'd');
         v.check_made("node");
         v.manage_failed("No se pudo quitar el worktree", "contains modified files");
@@ -3100,7 +3342,7 @@ mod tests {
         let mut v = fixture_view();
         v.press(Key::Enter);
         v.typing = false;
-        tap(&mut v, 'X');
+        close_workspace(&mut v);
         assert_eq!(tap(&mut v, 'j'), After::Continue);
         assert_eq!(v.selected, 0, "the highlight did not move");
         assert_eq!(v.click(5, 3, 110, 30), After::Continue);
@@ -3375,7 +3617,7 @@ mod tests {
         v.press(Key::Enter);
         v.typing = false;
         v.phone = phone::State::Ready(link());
-        tap(&mut v, 'X');
+        close_workspace(&mut v);
         assert!(v.manage.is_some());
         v.set_now(5_000);
         v.phone_event(phone::Event::Ask {
@@ -3417,5 +3659,141 @@ mod tests {
         assert_eq!(v.selected, 0);
         assert_eq!(v.click(5, 3, 110, 30), After::Continue);
         assert!(v.phone_open);
+    }
+    #[test]
+    fn enter_goes_in_a_level_and_esc_comes_out_and_the_chip_says_where() {
+        let mut v = fixture_view();
+        let chip = |v: &View| v.plain(120, 30).lines().last().unwrap().to_owned();
+        assert_eq!(v.level(), Level::Workspaces);
+        assert!(chip(&v).contains(" WORKSPACE "));
+        v.press(Key::Enter);
+        assert_eq!(v.level(), Level::Panels);
+        assert!(chip(&v).contains(" PANEL "));
+        v.press(Key::Enter);
+        assert_eq!(v.level(), Level::Terminal);
+        assert!(chip(&v).contains(" TERMINAL "));
+        // `esc` is the program's at the last level; `^␣` is the way out.
+        assert!(matches!(
+            v.press_key(plain(KeyCode::Esc)),
+            After::Write { .. }
+        ));
+        assert_eq!(v.level(), Level::Terminal);
+        v.press_key(key(KeyCode::Char(' '), KeyModifiers::CONTROL));
+        assert_eq!(v.level(), Level::Panels);
+        v.press_key(plain(KeyCode::Esc));
+        assert_eq!(v.level(), Level::Workspaces);
+        assert_eq!(
+            v.press_key(plain(KeyCode::Esc)),
+            After::Continue,
+            "nowhere further up"
+        );
+    }
+
+    #[test]
+    fn j_and_k_move_the_workspaces_at_the_first_level_and_the_panels_at_the_second() {
+        let mut v = fixture_view();
+        v.press_key(plain(KeyCode::Char('j')));
+        assert_eq!((v.selected, v.level()), (1, Level::Workspaces));
+        v.press_key(plain(KeyCode::Char('k')));
+        assert_eq!(v.selected, 0);
+        v.press_key(plain(KeyCode::Enter));
+        v.press_key(plain(KeyCode::Char('j')));
+        assert_eq!(
+            (v.selected, v.focus),
+            (0, 1),
+            "the next panel, not the next workspace"
+        );
+        v.press_key(plain(KeyCode::Char('h')));
+        assert_eq!(v.focus, 0);
+        // `h` and `l` do nothing at the first level.
+        v.press_key(plain(KeyCode::Esc));
+        v.press_key(plain(KeyCode::Char('l')));
+        assert_eq!((v.selected, v.level()), (0, Level::Workspaces));
+    }
+
+    #[test]
+    fn x_closes_what_the_level_is_about() {
+        let mut v = idle_view();
+        let pane = v.shown().unwrap().panes[v.focus].id.clone();
+        assert_eq!(
+            tap(&mut v, 'x'),
+            After::ClosePane(pane),
+            "panel level: the panel"
+        );
+        v.press(Key::Back);
+        tap(&mut v, 'x');
+        assert!(
+            matches!(v.manage, Some(Manage::Workspace(_))),
+            "workspace level: the workspace"
+        );
+        v.press_key(plain(KeyCode::Esc));
+        // `X` is not a key any more.
+        assert_eq!(tap(&mut v, 'X'), After::Continue);
+        assert!(v.manage.is_none());
+    }
+
+    #[test]
+    fn n_makes_a_panel_only_at_the_panel_level_and_f_fills_the_area_with_one() {
+        let mut v = idle_view();
+        assert!(matches!(v.press(Key::NewPane), After::NewPane(_)));
+        let area = panes_rect(120, 30);
+        let two = v.layout(2, area);
+        assert_ne!(two[0], area, "two panels share the area");
+        v.press(Key::Full);
+        let full = v.layout(2, area);
+        assert_eq!(full[v.focus], area);
+        assert!(
+            full.iter()
+                .enumerate()
+                .all(|(i, r)| i == v.focus || r.2 == 0)
+        );
+        let t = v.plain(120, 30);
+        assert_eq!(
+            t.matches("╭─ zsh").count(),
+            1,
+            "only the focused panel is drawn: {t}"
+        );
+        // Back at the workspaces it is not full any more.
+        v.press(Key::Back);
+        assert!(!v.full);
+        assert_eq!(v.layout(2, area), two);
+        // And `f` does nothing there.
+        v.press(Key::Full);
+        assert!(!v.full);
+    }
+
+    #[test]
+    fn a_click_on_a_row_opens_the_workspace_and_a_click_on_a_panel_starts_typing() {
+        let mut v = fixture_view();
+        v.click(5, 2, 120, 30);
+        assert_eq!(v.level(), Level::Panels);
+        v.click(SIDEBAR + 10, 5, 120, 30);
+        assert_eq!(v.level(), Level::Terminal);
+        // The wheel over the sidebar moves the workspaces whatever the level.
+        v.scroll(true, 5, 5, 120, 30);
+        assert_eq!((v.selected, v.level()), (1, Level::Workspaces));
+    }
+
+    #[test]
+    fn question_mark_lists_the_keys_of_the_level_and_any_key_closes_it() {
+        let mut v = fixture_view();
+        v.press_key(plain(KeyCode::Char('?')));
+        let t = v.plain(120, 30);
+        assert!(t.contains("teclas · workspace"), "{t}");
+        assert!(t.contains("entrar al workspace"), "{t}");
+        v.press_key(plain(KeyCode::Char('j')));
+        assert_eq!(v.selected, 0, "the key only closed the box");
+        v.press(Key::Enter);
+        v.press_key(plain(KeyCode::Char('?')));
+        let t = v.plain(120, 30);
+        assert!(
+            t.contains("teclas · panel") && t.contains("a pantalla completa"),
+            "{t}"
+        );
+        v.press_key(plain(KeyCode::Esc));
+        v.press(Key::Enter);
+        v.press_key(plain(KeyCode::Char('?')));
+        assert_eq!(v.level(), Level::Terminal, "`?` is typed into the program");
+        assert!(!v.help);
     }
 }
