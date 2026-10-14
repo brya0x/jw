@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 use std::io::{Write, stdout};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use contract::{
     Attention, AttentionKind, Blocks, BlocksMode, Cmd, DiffScope, Node, Pane, Program, Session,
@@ -170,7 +170,7 @@ impl Grid {
                         if st.reverse {
                             out.push_str("\x1b[7m");
                         }
-                        // The screen paints its own One Dark ground, whatever the terminal's theme.
+                        // The screen paints the theme's own ground, whatever the terminal's colours are.
                         let (f, b) = (st.fg.unwrap_or(look::fg()), st.bg.unwrap_or(look::bg()));
                         out.push_str(&format!(
                             "\x1b[38;2;{};{};{}m\x1b[48;2;{};{};{}m",
@@ -1914,17 +1914,18 @@ pub fn run() -> Result<(), String> {
     let mut last: Vec<String> = Vec::new();
     view.set_settings(Settings::load());
     view.set_os_dark(settings::os_is_dark());
-    let mut looked = (std::time::Instant::now(), std::time::Instant::now());
+    let (mut settings_read, mut appearance_read) = (Instant::now(), Instant::now());
     loop {
         // The settings file may be changed by another terminal; the machine's appearance by
         // the person, at any time.
-        if looked.0.elapsed() >= SETTINGS_EVERY && !view.unsaved() {
-            looked.0 = std::time::Instant::now();
+        if settings_read.elapsed() >= SETTINGS_EVERY && !view.unsaved() {
+            settings_read = Instant::now();
             view.set_settings(Settings::load());
         }
-        if view.settings().mode == settings::Mode::System && looked.1.elapsed() >= APPEARANCE_EVERY
+        if view.settings().mode == settings::Mode::System
+            && appearance_read.elapsed() >= APPEARANCE_EVERY
         {
-            looked.1 = std::time::Instant::now();
+            appearance_read = Instant::now();
             view.set_os_dark(settings::os_is_dark());
         }
         view.set_now(
@@ -1989,7 +1990,7 @@ pub fn run() -> Result<(), String> {
             if let Err(e) = chosen.save() {
                 view.flash(&format!("no se pudo guardar settings.json: {e}"));
             }
-            looked.0 = std::time::Instant::now();
+            settings_read = Instant::now();
         }
         while event::poll(Duration::ZERO).map_err(|e| e.to_string())? {
             let after = match event::read().map_err(|e| e.to_string())? {

@@ -89,7 +89,9 @@ struct RawPalette {
 }
 
 fn hex(text: &str) -> Result<Rgb, String> {
-    let h = text.strip_prefix('#').filter(|h| h.len() == 6);
+    let h = text
+        .strip_prefix('#')
+        .filter(|h| h.len() == 6 && h.bytes().all(|b| b.is_ascii_hexdigit()));
     let part = |a: usize| {
         h.and_then(|h| u8::from_str_radix(&h[a..a + 2], 16).ok())
             .ok_or_else(|| format!("not a colour: {text}"))
@@ -159,6 +161,8 @@ mod tests {
     fn a_bad_colour_is_an_error() {
         assert!(hex("#12345").is_err());
         assert!(hex("123456").is_err());
+        assert!(hex("#+f+f+f").is_err(), "a sign is not a digit");
+        assert!(hex("#ééé").is_err(), "multi-byte text does not panic");
         assert_eq!(hex("#0a0B0c"), Ok((10, 11, 12)));
     }
 }
