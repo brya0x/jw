@@ -7,7 +7,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use common::{Sandbox, WAIT};
+use common::{Sandbox, WAIT, wait_kinds};
 use contract::{AgentEvent, Cmd, ErrorCode};
 use wire::Client;
 
@@ -64,23 +64,6 @@ fn event(
     })
     .unwrap()
     .unwrap();
-}
-
-fn kinds(c: &Client, node: &str) -> Vec<String> {
-    c.nodes[node]["attention"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|a| a["kind"].as_str().unwrap().to_owned())
-        .collect()
-}
-
-fn wait_kinds(c: &mut Client, node: &str, want: &[&str]) {
-    assert!(
-        c.wait_until(WAIT, |c| kinds(c, node) == want).unwrap(),
-        "wanted {want:?}, found {:?}",
-        c.nodes[node]["attention"]
-    );
 }
 
 #[test]

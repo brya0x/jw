@@ -7,7 +7,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use common::{Sandbox, WAIT, git, text};
+use common::{Sandbox, git, kinds, text, wait_kinds};
 use contract::Cmd;
 use wire::Client;
 
@@ -32,31 +32,8 @@ fn answer(dir: &Path, json: &str) {
 
 fn pr(state: &str, conclusion: &str) -> String {
     format!(
-        r#"[{{"number":9,"state":"{state}","mergedAt":{},"statusCheckRollup":[{{"__typename":"CheckRun","conclusion":"{conclusion}","status":"COMPLETED"}}]}}]"#,
-        if state == "MERGED" {
-            "\"2026-10-13T12:14:53Z\""
-        } else {
-            "null"
-        }
+        r#"[{{"number":9,"state":"{state}","statusCheckRollup":[{{"__typename":"CheckRun","conclusion":"{conclusion}","status":"COMPLETED"}}]}}]"#
     )
-}
-
-fn kinds(c: &Client, node: &str) -> Vec<String> {
-    c.nodes[node]["attention"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|a| a["kind"].as_str().unwrap().to_owned())
-        .collect()
-}
-
-fn wait_kinds(c: &mut Client, node: &str, want: &[&str]) {
-    assert!(
-        c.wait_until(Duration::from_secs(8), |c| kinds(c, node) == want)
-            .unwrap(),
-        "wanted {want:?}, found {:?}",
-        c.nodes[node]["attention"]
-    );
 }
 
 #[test]
@@ -108,7 +85,9 @@ fn a_merged_or_failing_pull_request_is_attention_that_comes_back_only_when_it_ch
     wait_kinds(&mut c, &root, &["ci_failed"]);
     let args = std::fs::read_to_string(gh_dir.join("gh.args")).unwrap();
     assert!(
-        args.contains("pr list --head feat/login --state all --limit 1 --json"),
+        args.contains(
+            "pr list --head feat/login --state all --limit 1 --json number,state,statusCheckRollup"
+        ),
         "{args}"
     );
     let cwd = std::fs::read_to_string(gh_dir.join("gh.cwd")).unwrap();
@@ -162,5 +141,4 @@ fn a_merged_or_failing_pull_request_is_attention_that_comes_back_only_when_it_ch
     answer(&gh_dir, "[]");
     wait_kinds(&mut c, &ws, &[]);
     d.stop();
-    let _ = WAIT;
 }

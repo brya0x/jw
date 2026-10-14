@@ -34,8 +34,9 @@ pub fn parse(json: &str) -> Result<Option<Pr>, String> {
     let Some(pr) = list.as_array().ok_or("not a list")?.first() else {
         return Ok(None);
     };
+    // `mergedAt` is not read: older `gh` fills it with a zero time for a pull request never merged.
     let state = pr["state"].as_str().unwrap_or_default();
-    let merged = state == "MERGED" || pr["mergedAt"].as_str().is_some_and(|t| !t.is_empty());
+    let merged = state == "MERGED";
     // A cancelled or skipped run is not a failure; a status that is still running is not one yet.
     let failed = |check: &Value| {
         matches!(
@@ -118,7 +119,7 @@ pub fn lookup(program: &Path, dir: &Path, branch: &str) -> Result<Option<Pr>, St
             "--limit",
             "1",
             "--json",
-            "number,state,mergedAt,statusCheckRollup",
+            "number,state,statusCheckRollup",
         ],
     )?;
     parse(&text)
@@ -178,14 +179,13 @@ mod tests {
     use super::*;
 
     fn pr(state: &str, checks: &str) -> String {
-        format!(
-            r#"[{{"number":7,"state":"{state}","mergedAt":{},"statusCheckRollup":{checks}}}]"#,
-            if state == "MERGED" {
-                "\"2026-10-13T12:14:53Z\""
-            } else {
-                "null"
-            }
-        )
+        format!(r#"[{{"number":7,"state":"{state}","statusCheckRollup":{checks}}}]"#)
+    }
+
+    #[test]
+    fn a_zero_merge_time_does_not_make_a_pull_request_merged() {
+        let json = r#"[{"number":3,"state":"OPEN","mergedAt":"0001-01-01T00:00:00Z","statusCheckRollup":[]}]"#;
+        assert!(!parse(json).unwrap().unwrap().merged);
     }
 
     #[test]

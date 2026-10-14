@@ -83,3 +83,23 @@ pub fn git(dir: &Path, args: &[&str]) {
 pub fn text(p: &Path) -> String {
     p.to_string_lossy().into_owned()
 }
+
+/// The kinds of attention a node carries, in the order it lists them.
+pub fn kinds(c: &Client, node: &str) -> Vec<String> {
+    c.nodes[node]["attention"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["kind"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// Wait until a node carries exactly these kinds of attention.
+pub fn wait_kinds(c: &mut Client, node: &str, want: &[&str]) {
+    assert!(
+        c.wait_until(Duration::from_secs(8), |c| kinds(c, node) == want)
+            .unwrap(),
+        "wanted {want:?}, found {:?}",
+        c.nodes[node]["attention"]
+    );
+}

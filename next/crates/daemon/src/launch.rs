@@ -98,7 +98,10 @@ pub fn hook_settings(exe: &Path) -> String {
 /// Write the agent's hooks to `<state>/claude-hooks.json`, which `--settings` takes.
 pub fn write_hooks(state_dir: &Path, exe: &Path) -> std::io::Result<PathBuf> {
     let file = state_dir.join("claude-hooks.json");
-    std::fs::write(&file, hook_settings(exe))?;
+    // Through a rename, so an agent starting meanwhile never reads half of it.
+    let tmp = file.with_extension("json.tmp");
+    std::fs::write(&tmp, hook_settings(exe))?;
+    std::fs::rename(&tmp, &file)?;
     Ok(file)
 }
 
