@@ -12,6 +12,7 @@ import dev.jw.next.client.PairLink
 import dev.jw.next.client.Pairing
 import dev.jw.next.client.PcList
 import dev.jw.next.client.certMatches
+import dev.jw.next.client.cleanHost
 import dev.jw.next.client.fromLink
 import dev.jw.next.client.pairingCode
 import dev.jw.next.client.toFail
@@ -145,12 +146,16 @@ private enum class Attempt { Unreachable, Ended, Denied }
  */
 class WsLinkSource(
     private val store: LinkStore,
-    private var pairing: Pairing?,
+    initial: Pairing?,
     private val link: PairLink?,
     private val deviceName: String = Build.MODEL,
 ) : ProtocolSource() {
     val ui = mutableStateOf<LinkUi>(LinkUi.Connecting)
     private val code = pairingCode()
+
+    /** Set from the connection's thread and read from the UI's. */
+    @Volatile
+    private var pairing: Pairing? = initial
 
     /** The paired PC this source talks to, once there is one. */
     val device: String? get() = pairing?.device
@@ -269,7 +274,7 @@ class WsLinkSource(
             is BridgeMsg.Ready -> {
                 ui.value = LinkUi.Connected
                 pairing?.let { p ->
-                    val named = p.copy(name = msg.host ?: p.name)
+                    val named = p.copy(name = cleanHost(msg.host) ?: p.name)
                     pairing = named
                     store.update { it.update(p.device) { _ -> named }.used(p.device) }
                 }

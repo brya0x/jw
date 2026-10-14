@@ -173,3 +173,33 @@ fn a_lan_listener_refuses_a_public_or_unspecified_address() {
         assert!(Bridge::start(cfg).is_err(), "{ip}");
     }
 }
+
+/// The retry on a busy port leaves nothing behind: a failed start must not keep the loopback port.
+#[test]
+fn a_failed_lan_bind_leaves_nothing_listening() {
+    let held = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let busy = held.local_addr().unwrap().port();
+    let free = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap().port()
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = Config {
+        bind: format!("127.0.0.1:{free}").parse().unwrap(),
+        lan: Some(Lan {
+            ip: "127.0.0.1".parse().unwrap(),
+            port: busy,
+            cert: dir.path().join("c.pem"),
+        }),
+        daemon_socket: dir.path().join("x.sock"),
+        store: Arc::new(Store::new(dir.path().join("d.json"))),
+        pairing: Arc::new(Pairing::new(Duration::from_secs(1))),
+        confirm: Arc::new(|_| Answer::No),
+        host: None,
+    };
+    assert!(Bridge::start(cfg).is_err(), "the network port is taken");
+    assert!(
+        std::net::TcpListener::bind(("127.0.0.1", free)).is_ok(),
+        "the bridge's own port was released"
+    );
+}

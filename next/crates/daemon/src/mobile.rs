@@ -230,10 +230,9 @@ impl Hub {
         let hub = self.clone();
         let _ = std::thread::Builder::new()
             .name("mobile-resume".into())
-            .spawn(move || {
-                if hub.ensure_bridge().is_ok() {
-                    hub.ensure_tunnel();
-                }
+            .spawn(move || match hub.ensure_bridge() {
+                Ok(()) => hub.ensure_tunnel(),
+                Err(e) => eprintln!("the phone link did not come back: {e}"),
             });
     }
 

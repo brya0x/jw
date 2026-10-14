@@ -127,9 +127,11 @@ impl Bridge {
                 format!("{} is not a loopback address", cfg.bind),
             ));
         }
+        // Everything that can fail is done before any thread starts, so a failure leaves nothing running.
         let listener = TcpListener::bind(cfg.bind)?;
         listener.set_nonblocking(true)?;
         let addr = listener.local_addr()?;
+        let lan_setup = cfg.lan.as_ref().map(lan_listener).transpose()?;
         let ctx = Arc::new(Ctx {
             daemon_socket: cfg.daemon_socket,
             store: cfg.store,
@@ -144,18 +146,8 @@ impl Bridge {
         let tunnel: Handler = Arc::new(|s, peer, ctx| serve(s, peer, ctx, Route::Tunnel));
         let mut accepts = vec![listen("bridge-accept", listener, &ctx, tunnel)?];
         let mut lan = None;
-        if let Some(l) = cfg.lan {
-            if !tls::bindable(l.ip) {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("{} is neither loopback nor a private address", l.ip),
-                ));
-            }
-            let identity = Identity::load_or_create(&l.cert)?;
-            let tls_config = identity.server_config()?;
-            let listener = TcpListener::bind((l.ip, l.port))?;
-            listener.set_nonblocking(true)?;
-            lan = Some((listener.local_addr()?, identity.fingerprint()));
+        if let Some((listener, tls_config, at, fp)) = lan_setup {
+            lan = Some((at, fp));
             let direct: Handler = Arc::new(move |s, peer, ctx| {
                 if let Ok(link) = TlsLink::new(&tls_config, s) {
                     serve(link, peer, ctx, Route::Direct);
@@ -186,6 +178,24 @@ impl Bridge {
             let _ = t.join();
         }
     }
+}
+
+/// The TLS listener of the private address: bound, with its certificate, ready to be served.
+fn lan_listener(
+    l: &Lan,
+) -> io::Result<(TcpListener, Arc<rustls::ServerConfig>, SocketAddr, String)> {
+    if !tls::bindable(l.ip) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{} is neither loopback nor a private address", l.ip),
+        ));
+    }
+    let identity = Identity::load_or_create(&l.cert)?;
+    let config = identity.server_config()?;
+    let listener = TcpListener::bind((l.ip, l.port))?;
+    listener.set_nonblocking(true)?;
+    let at = listener.local_addr()?;
+    Ok((listener, config, at, identity.fingerprint()))
 }
 
 fn listen(

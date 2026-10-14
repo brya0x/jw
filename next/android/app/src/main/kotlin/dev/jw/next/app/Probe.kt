@@ -2,6 +2,7 @@ package dev.jw.next.app
 
 import dev.jw.next.client.Candidate
 import dev.jw.next.client.Pairing
+import dev.jw.next.client.cleanHost
 import dev.jw.next.client.PcState
 import dev.jw.next.contract.BridgeMsg
 import dev.jw.next.contract.ContractJson
@@ -15,7 +16,7 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 
 /** What one look at a PC found: how it answered, and its name when it said one. */
-data class Seen(val state: PcState, val host: String?)
+internal data class Seen(val state: PcState, val host: String?)
 
 private const val PROBE_WAIT_SECONDS = 6L
 
@@ -25,7 +26,7 @@ private const val PROBE_WAIT_SECONDS = 6L
  * addresses are tried in order. A PC that does not answer fails before authenticating, so it
  * never counts against the PC's limit on failed attempts. Blocks: call it off the UI thread.
  */
-fun lookAt(pairing: Pairing): Seen {
+internal fun lookAt(pairing: Pairing): Seen {
     for (c in pairing.candidates()) {
         val seen = once(c, pairing)
         if (seen.state != PcState.Offline) return seen
@@ -45,7 +46,7 @@ private fun once(c: Candidate, p: Pairing): Seen {
             override fun onMessage(webSocket: WebSocket, text: String) {
                 if (messageType(text) !in BRIDGE_TYPES) return
                 when (val msg = ContractJson.decodeFromString(BridgeMsg.serializer(), text)) {
-                    is BridgeMsg.Ready -> answer.offer(Seen(PcState.Online, msg.host))
+                    is BridgeMsg.Ready -> answer.offer(Seen(PcState.Online, cleanHost(msg.host)))
                     is BridgeMsg.DeniedMsg -> answer.offer(
                         // A lockout is the PC being cautious, not this phone being unpaired.
                         Seen(if (msg.reason == Denied.BadSecret || msg.reason == Denied.Revoked) PcState.Revoked else PcState.Offline, null),

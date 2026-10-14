@@ -99,6 +99,14 @@ class LinkTest {
     private fun pc(id: String, name: String? = null) = Pairing(id, "s".repeat(64), HostPort("192.168.1.20", 7443), fp, "a-$id.trycloudflare.com", name)
 
     @Test
+    fun aPcNameIsTrimmedAndCutToWhatTheContractAllows() {
+        assertEquals("MacBook", cleanHost("  MacBook \n"))
+        assertEquals(64, cleanHost("x".repeat(500))?.length)
+        assertNull(cleanHost("   "))
+        assertNull(cleanHost(null))
+    }
+
+    @Test
     fun aPhoneKeepsSeveralPcsAndTheLastOneUsed() {
         val list = PcList().add(pc("a1")).add(pc("b2"))
         assertEquals(listOf("a1", "b2"), list.pcs.map { it.device })

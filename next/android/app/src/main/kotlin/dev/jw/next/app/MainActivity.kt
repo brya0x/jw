@@ -81,13 +81,19 @@ class MainActivity : ComponentActivity() {
         // The PC being connected to must say ready before the one in use is let go.
         LaunchedEffect(m.next) {
             val next = m.next ?: return@LaunchedEffect
-            val end = snapshotFlow { next.ui.value }.first { it is LinkUi.Connected || it is LinkUi.Failed }
-            if (end is LinkUi.Connected) {
-                m.current?.close()
-                go(Mode.Running(next))
-            } else {
-                next.close()
-                go(Mode.Pcs(m.current))
+            var handedOver = false
+            try {
+                val end = snapshotFlow { next.ui.value }.first { it is LinkUi.Connected || it is LinkUi.Failed }
+                if (end is LinkUi.Connected) {
+                    m.current?.close()
+                    handedOver = true
+                    go(Mode.Running(next))
+                } else {
+                    go(Mode.Pcs(m.current))
+                }
+            } finally {
+                // Leaving the list while it connects (Back) must not leave a connection nobody holds.
+                if (!handedOver) next.close()
             }
         }
         m.current?.let { current -> BackHandler { go(Mode.Running(current)) } }

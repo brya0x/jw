@@ -116,6 +116,9 @@ fun Denied.toFail(): LinkFail = when (this) {
     Denied.BadSecret, Denied.Revoked -> LinkFail.Revoked
 }
 
+/** A PC's name as shown: a bridge may say anything, so it is trimmed and cut to the 64 characters the contract allows. */
+fun cleanHost(host: String?): String? = host?.trim()?.takeIf { it.isNotEmpty() }?.take(64)
+
 /** How a paired PC answered the last look. */
 enum class PcState { Checking, Online, Offline, Revoked }
 
