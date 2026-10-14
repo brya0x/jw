@@ -248,7 +248,7 @@ Corrections to the model: the level 0 document is smaller than assumed (3.9 KB, 
 - RISK-4 The Kotlin suite proves the types and the patch rules, not a live connection: no Kotlin client has talked to the daemon yet.
 
 ## Open questions
-- OPEN-9 The viewer of files and Markdown (the old jw's reader), as its own part after the diff: opening a file from a diff, and Markdown rendered in both clients.
+- OPEN-9 The viewer of files and Markdown (the old jw's reader): opening a file from a diff, and Markdown rendered in both clients. Deferred by the user (2026-10-14): it is the 7th of what is left (see *What is left*), to be worked on later and not now.
 - OPEN-8 Whether a phone may be read-only (one switch, or per device) and whether a device secret should expire.
 - OPEN-1 Retention: how many revisions per node the daemon keeps for resume (proposed 256).
 - OPEN-3 The permission and question screens inside the claude pane still offer their options; whether they change too is the user's call (the prototype leaves them).
@@ -309,3 +309,16 @@ Corrections to the model: the level 0 document is smaller than assumed (3.9 KB, 
 | N32 ✓ (this commit) | the daemon reads git: the three scopes, the poll of `uncommitted`, the shared marks | 91–103 | `crates/daemon/src/{diff,changes,git,core}.rs` |
 | N33 ✓ (this commit) | the diff in the terminal client, as `docs/prototypes/tui-diff.html` | 104–112 | `crates/jwn/src/tui/{changes,diff_lines}.rs` |
 | N34 ✓ (this commit) | the diff on the phone, as the Cambios screens of `docs/prototypes/mobile.html` | 113–121 | `android/client-core/.../{ChangesModel,DiffTree}.kt`, `android/app/.../ChangesScreen.kt` |
+
+## What is left
+In this order, which is proposed except for the viewer of files and Markdown, whose place (7th, after everything else) the user chose on 2026-10-14 because he does not want to work on Markdown yet. Each becomes a part (N35 onwards) with its REQs when it starts; a part with a screen starts from an approved prototype.
+
+| # | What |
+|---|---|
+| 1 | Clean the spec the `spec-reviewer` found wanting: the REQs above the fold, the REQs with several claims (54, 57, 59, 60), the missing REQ for the blocks node's id, and the stale text (REQ-37, the N7 row, RISK-4, the frontmatter `status`) |
+| 2 | CI for `next/` (`just ci` runs only on a machine today) |
+| 3 | The producers of attention that do not exist yet: claude's hooks (permission, question, plan, agent done) and GitHub (CI failed, merged); only `shell_done` has one |
+| 4 | Parity of the sessions (create, switch, list from a client) and of settings and themes |
+| 5 | Where `esc`, `tab`, the arrows and `^C` go on the phone (OPEN-5) |
+| 6 | The swap day: delete the old jw, move `next/` to the root, rename `jwn` to `jw`, decide the Android application id |
+| 7 | The viewer of files and Markdown (OPEN-9), for both clients; until it is done, what the old jw's reader did is not in `next/` |
