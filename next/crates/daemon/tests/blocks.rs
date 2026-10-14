@@ -262,6 +262,31 @@ fn fish_reports_its_commands_as_blocks() {
     }
 }
 
+/// REQ-123: the node of a pane's blocks is the same for as long as the pane lives, and
+/// closing the pane takes it away.
+#[test]
+fn the_blocks_node_keeps_its_id_while_the_pane_lives_and_goes_with_it() {
+    let Some(shell) = find("bash").or_else(|| find("zsh")) else {
+        return;
+    };
+    let mut r = rig(&shell);
+    r.run("echo one");
+    r.finished(1);
+    let (pane, blocks) = (r.pane.clone(), r.blocks.clone());
+    assert_eq!(
+        r.c.nodes[&pane]["blocks"].as_str(),
+        Some(blocks.as_str()),
+        "the pane still names the same node after a command"
+    );
+    r.c.cmd(Cmd::ClosePane { pane }).unwrap().unwrap();
+    assert!(
+        r.c.wait_until(WAIT, |c| !c.nodes.contains_key(&blocks))
+            .unwrap(),
+        "gone was sent for the blocks node"
+    );
+    r.d.take().unwrap().stop();
+}
+
 #[test]
 fn a_shell_without_the_integration_has_no_blocks() {
     let sb = Sandbox::new();
