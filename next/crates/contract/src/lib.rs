@@ -9,6 +9,7 @@
 pub mod link;
 pub use link::{BridgeMsg, Denied, PhoneMsg};
 pub mod patch;
+pub mod themes;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

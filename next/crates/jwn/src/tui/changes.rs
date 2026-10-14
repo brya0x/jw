@@ -13,10 +13,7 @@ use crossterm::event::KeyCode;
 use super::diff_lines::{
     Kind, Line, Row, Tone, TreeRow, ago, build, clean, order as tree_order, tones, tree_rows,
 };
-use super::{
-    ADD_BG, ADD_WORD, BLUE, CYAN, DEL_BG, DEL_WORD, DIM, FG, GREEN, Grid, LINE, MAGENTA, PANEL,
-    RED, SEL, SIDEBAR, Style, YELLOW, clip,
-};
+use super::{Grid, SIDEBAR, Style, clip, look};
 
 /// Width of the tree column.
 const TREE: usize = 30;
@@ -817,15 +814,15 @@ impl Changes {
         };
         let watching = src == Src::Uncommitted && diff.is_some_and(|d| d.state == DiffState::Ok);
         let live = watching.then_some(if now_ms < self.live_until {
-            ("actualizado", YELLOW)
+            ("actualizado", look::yellow())
         } else {
-            ("en vivo", GREEN)
+            ("en vivo", look::green())
         });
         g.boxed(
             (m.x, m.y, m.w, m.h),
             &format!("cambios · {} vs {against}", clean(label)),
-            LINE,
-            Style::fg(CYAN).bold(),
+            look::line(),
+            Style::fg(look::cyan()).bold(),
             live.map(|(t, c)| (format!("● {t}"), Style::fg(c).bold())),
         );
         let mut at = m.ix + 1;
@@ -834,15 +831,15 @@ impl Changes {
             let broken = self.slots.get(&tab.root());
             let style = if on {
                 Style {
-                    fg: Some(PANEL),
-                    bg: Some(BLUE),
+                    fg: Some(look::panel()),
+                    bg: Some(look::blue()),
                     bold: true,
                     ..Style::default()
                 }
             } else if broken.is_some_and(|s| s.error.is_some()) {
-                Style::fg(RED)
+                Style::fg(look::red())
             } else {
-                Style::fg(DIM)
+                Style::fg(look::dim())
             };
             g.put(at, m.y + 1, &text, style);
             at += text.chars().count() + 1;
@@ -854,7 +851,7 @@ impl Changes {
         let tree = m.tree_on || self.focus == Focus::Tree;
         if m.tree_on {
             for y in m.top..m.top + m.rows {
-                g.put(m.ix + TREE, y, "│", Style::fg(LINE));
+                g.put(m.ix + TREE, y, "│", Style::fg(look::line()));
             }
         }
         if self.tab == Tab::Commits && self.commit.is_none() {
@@ -863,14 +860,19 @@ impl Changes {
                 iw: m.bw,
                 ..m
             };
-            self.centre(g, rest, "elige un commit con ↵", "", DIM);
+            self.centre(g, rest, "elige un commit con ↵", "", look::dim());
         } else if let Some((d, cache)) = diff.and_then(|d| Some((d, self.cache_for(d)?))) {
             self.draw_body(g, m, d, cache);
         }
         if tree {
             if !m.tree_on {
                 for y in m.top..m.top + m.rows {
-                    g.put(m.ix, y, &" ".repeat(TREE), Style::default().on(PANEL));
+                    g.put(
+                        m.ix,
+                        y,
+                        &" ".repeat(TREE),
+                        Style::default().on(look::panel()),
+                    );
                 }
             }
             self.draw_tree(g, m, docs, now_ms);
@@ -890,13 +892,13 @@ impl Changes {
                 m.bx,
                 y,
                 &" ".repeat(m.bw.saturating_sub(1)),
-                Style::default().on(PANEL),
+                Style::default().on(look::panel()),
             );
             g.put(
                 m.bx + 1,
                 y,
                 &clip(&text, m.bw.saturating_sub(3)),
-                Style::fg(YELLOW).on(PANEL),
+                Style::fg(look::yellow()).on(look::panel()),
             );
         }
     }
@@ -912,14 +914,14 @@ impl Changes {
                     "{}\nr reintentar · las otras vistas siguen: 1 2 3",
                     clean(why)
                 ),
-                RED,
+                look::red(),
             ));
         }
         match src {
             Src::Commits => match self.list(docs) {
                 None => Some(loading(self.tab)),
                 Some(l) if l.commits.is_empty() => {
-                    Some(("sin commits en la rama".into(), String::new(), DIM))
+                    Some(("sin commits en la rama".into(), String::new(), look::dim()))
                 }
                 Some(_) => None,
             },
@@ -931,7 +933,7 @@ impl Changes {
                     return Some((
                         "origin no tiene rama por defecto: no hay contra qué comparar".into(),
                         "mira «Sin commitear» o «Commits»".into(),
-                        FG,
+                        look::fg(),
                     ));
                 }
                 d.files.is_empty().then(|| {
@@ -940,7 +942,7 @@ impl Changes {
                         Tab::Uncommitted => "sin cambios sin commitear",
                         Tab::Commits => "este commit no cambió archivos",
                     };
-                    (text.into(), String::new(), DIM)
+                    (text.into(), String::new(), look::dim())
                 })
             }
         }
@@ -949,7 +951,7 @@ impl Changes {
     fn centre(&self, g: &mut Grid, m: Geom, title: &str, detail: &str, tone: crate::tui::Rgb) {
         let y0 = m.top + m.rows / 2 - (m.rows / 2).min(2);
         let mid = m.ix + m.iw / 2;
-        let rows = std::iter::once((title, tone)).chain(detail.lines().map(|l| (l, DIM)));
+        let rows = std::iter::once((title, tone)).chain(detail.lines().map(|l| (l, look::dim())));
         for (i, (text, colour)) in rows.enumerate() {
             let text = clip(text, m.iw.saturating_sub(2));
             let w = text.chars().count();
@@ -968,19 +970,19 @@ impl Changes {
         for (n, item) in items.iter().skip(first).take(visible).enumerate() {
             let y = m.top + n * per;
             let cursor = self.focus == Focus::Tree && first + n == self.row;
-            let on = |st: Style| if cursor { st.on(SEL) } else { st };
+            let on = |st: Style| if cursor { st.on(look::sel()) } else { st };
             if cursor {
                 for k in 0..per {
-                    g.paint_bg(m.ix, y + k, TREE, SEL);
+                    g.paint_bg(m.ix, y + k, TREE, look::sel());
                 }
             }
             match item {
                 Item::Back => {
-                    g.put_over(m.ix + 1, y, "‹ commits", on(Style::fg(BLUE).bold()));
+                    g.put_over(m.ix + 1, y, "‹ commits", on(Style::fg(look::blue()).bold()));
                     if let Some(sha) = &self.commit {
                         let short = short_sha(sha);
                         let at = (m.ix + TREE).saturating_sub(1 + short.chars().count());
-                        g.put_over(at, y, &short, on(Style::fg(DIM)));
+                        g.put_over(at, y, &short, on(Style::fg(look::dim())));
                     }
                 }
                 Item::Commit(i) => {
@@ -991,10 +993,15 @@ impl Changes {
                         m.ix + 1,
                         y,
                         &clip(&clean(&c.subject), TREE - 3),
-                        on(Style::fg(FG).bold()),
+                        on(Style::fg(look::fg()).bold()),
                     );
                     let line = format!("{} · {}", c.short, ago(now_ms / 1000, c.time));
-                    g.put_over(m.ix + 1, y + 1, &clip(&line, TREE - 3), on(Style::fg(DIM)));
+                    g.put_over(
+                        m.ix + 1,
+                        y + 1,
+                        &clip(&line, TREE - 3),
+                        on(Style::fg(look::dim())),
+                    );
                 }
                 Item::Tree(TreeRow::Dir {
                     label,
@@ -1005,7 +1012,12 @@ impl Changes {
                     ..
                 }) => {
                     let ind = m.ix + 1 + depth * 2;
-                    g.put_over(ind, y, if *shut { "▸" } else { "▾" }, on(Style::fg(DIM)));
+                    g.put_over(
+                        ind,
+                        y,
+                        if *shut { "▸" } else { "▾" },
+                        on(Style::fg(look::dim())),
+                    );
                     let right = if big {
                         String::new()
                     } else {
@@ -1016,7 +1028,7 @@ impl Changes {
                         ind + 2,
                         y,
                         &clip(&format!("{}/", clean(label)), room),
-                        on(Style::fg(FG).bold()),
+                        on(Style::fg(look::fg()).bold()),
                     );
                     counts(g, m.ix + TREE - 1, y, *added, *deleted, big, cursor);
                 }
@@ -1031,20 +1043,20 @@ impl Changes {
                     let seen = f.seen == Some(Seen::Yes);
                     let name = f.path.rsplit('/').next().unwrap_or(&f.path);
                     let style = if *pos == here && !seen {
-                        Style::fg(BLUE).bold()
+                        Style::fg(look::blue()).bold()
                     } else if seen {
-                        Style::fg(DIM)
+                        Style::fg(look::dim())
                     } else {
-                        Style::fg(FG)
+                        Style::fg(look::fg())
                     };
                     let room = (m.ix + TREE).saturating_sub(ind + 4 + if big { 0 } else { 9 });
                     g.put_over(ind + 2, y, &clip(&clean(name), room), on(style));
                     counts(g, m.ix + TREE - 3, y, f.added, f.deleted, big, cursor);
                     let (mark, colour) = match f.seen {
-                        Some(Seen::Yes) => ("✓", GREEN),
-                        Some(Seen::Changed) => ("◌", YELLOW),
-                        None if *pos == here => ("▸", BLUE),
-                        None => (" ", FG),
+                        Some(Seen::Yes) => ("✓", look::green()),
+                        Some(Seen::Changed) => ("◌", look::yellow()),
+                        None if *pos == here => ("▸", look::blue()),
+                        None => (" ", look::fg()),
                     };
                     g.put_over(m.ix + TREE - 2, y, mark, on(Style::fg(colour)));
                 }
@@ -1071,15 +1083,15 @@ impl Changes {
                     m.bx + 3,
                     y,
                     &clip(text, w.saturating_sub(4)),
-                    Style::fg(DIM),
+                    Style::fg(look::dim()),
                 ),
                 Line::Hunk(_, text) => {
-                    g.paint_bg(m.bx, y, w, SEL);
+                    g.paint_bg(m.bx, y, w, look::sel());
                     g.put_over(
                         m.bx + 1,
                         y,
                         &clip(text, w.saturating_sub(2)),
-                        Style::fg(CYAN).on(SEL),
+                        Style::fg(look::cyan()).on(look::sel()),
                     );
                 }
                 Line::One(_, row) => one_column(g, m.bx, y, w, row),
@@ -1105,7 +1117,7 @@ impl Changes {
                 m.bx + w,
                 m.top + r,
                 if on { "┃" } else { "│" },
-                Style::fg(if on { BLUE } else { LINE }),
+                Style::fg(if on { look::blue() } else { look::line() }),
             );
         }
     }
@@ -1120,7 +1132,7 @@ fn loading(tab: Tab) -> (String, String, crate::tui::Rgb) {
     (
         format!("◌ leyendo {what}…"),
         "git corre en el PC; puede tardar en repos grandes".into(),
-        YELLOW,
+        look::yellow(),
     )
 }
 
@@ -1139,11 +1151,11 @@ fn window(items: usize, per: usize, rows: usize, cursor: usize) -> usize {
 
 fn status(s: FileStatus) -> (&'static str, crate::tui::Rgb) {
     match s {
-        FileStatus::Modified => ("M", YELLOW),
-        FileStatus::Added => ("A", GREEN),
-        FileStatus::Deleted => ("D", RED),
-        FileStatus::Renamed => ("R", CYAN),
-        FileStatus::Untracked => ("?", DIM),
+        FileStatus::Modified => ("M", look::yellow()),
+        FileStatus::Added => ("A", look::green()),
+        FileStatus::Deleted => ("D", look::red()),
+        FileStatus::Renamed => ("R", look::cyan()),
+        FileStatus::Untracked => ("?", look::dim()),
     }
 }
 
@@ -1156,10 +1168,10 @@ fn counts(g: &mut Grid, end: usize, y: usize, added: u32, deleted: u32, big: boo
     let at = end.saturating_sub(a.chars().count() + 1 + d.chars().count());
     let on = |c| {
         let s = Style::fg(c);
-        if cursor { s.on(SEL) } else { s }
+        if cursor { s.on(look::sel()) } else { s }
     };
-    g.put_over(at, y, &a, on(GREEN));
-    g.put_over(at + a.chars().count() + 1, y, &d, on(RED));
+    g.put_over(at, y, &a, on(look::green()));
+    g.put_over(at + a.chars().count() + 1, y, &d, on(look::red()));
 }
 
 fn file_head(g: &mut Grid, x: usize, y: usize, w: usize, d: &Diff, cache: &Cache, pos: usize) {
@@ -1168,10 +1180,10 @@ fn file_head(g: &mut Grid, x: usize, y: usize, w: usize, d: &Diff, cache: &Cache
     };
     let f = &d.files[at];
     for i in 0..w {
-        g.cells[y * g.cols + x + i] = (' ', Style::default().on(PANEL));
+        g.cells[y * g.cols + x + i] = (' ', Style::default().on(look::panel()));
     }
     let (letter, colour) = status(f.status);
-    g.put(x + 1, y, letter, Style::fg(colour).bold().on(PANEL));
+    g.put(x + 1, y, letter, Style::fg(colour).bold().on(look::panel()));
     let seen = match f.seen {
         Some(Seen::Yes) => "   ✓ visto",
         Some(Seen::Changed) => "   ◌ cambió",
@@ -1191,23 +1203,28 @@ fn file_head(g: &mut Grid, x: usize, y: usize, w: usize, d: &Diff, cache: &Cache
         x + 3,
         y,
         &clip(&name, w.saturating_sub(4 + right.chars().count())),
-        Style::fg(FG).bold().on(PANEL),
+        Style::fg(look::fg()).bold().on(look::panel()),
     );
     let at = x + w - 1 - right.chars().count();
     let tone = match f.seen {
-        Some(Seen::Yes) => GREEN,
-        Some(Seen::Changed) => YELLOW,
-        None => DIM,
+        Some(Seen::Yes) => look::green(),
+        Some(Seen::Changed) => look::yellow(),
+        None => look::dim(),
     };
-    g.put(at, y, &right, Style::fg(tone).on(PANEL));
+    g.put(at, y, &right, Style::fg(tone).on(look::panel()));
     if !d.too_large {
-        g.put(at, y, &format!("+{}", f.added), Style::fg(GREEN).on(PANEL));
+        g.put(
+            at,
+            y,
+            &format!("+{}", f.added),
+            Style::fg(look::green()).on(look::panel()),
+        );
         let minus = at + format!("+{}", f.added).chars().count() + 1;
         g.put(
             minus,
             y,
             &format!("−{}", f.deleted),
-            Style::fg(RED).on(PANEL),
+            Style::fg(look::red()).on(look::panel()),
         );
     }
 }
@@ -1216,19 +1233,19 @@ fn file_head(g: &mut Grid, x: usize, y: usize, w: usize, d: &Diff, cache: &Cache
 /// changed, a stronger background.
 fn code(g: &mut Grid, x: usize, y: usize, w: usize, row: &Row, bg: Option<crate::tui::Rgb>) {
     let strong = if row.kind == Kind::Add {
-        ADD_WORD
+        look::add_word()
     } else {
-        DEL_WORD
+        look::del_word()
     };
     let cells: Vec<(char, Tone)> = row.text.chars().zip(tones(&row.text)).collect();
     for i in 0..w {
         let (ch, tone) = cells.get(i).copied().unwrap_or((' ', Tone::Plain));
         let fg = match tone {
-            Tone::Plain => FG,
-            Tone::Keyword => MAGENTA,
-            Tone::Text => GREEN,
-            Tone::Number => YELLOW,
-            Tone::Comment => DIM,
+            Tone::Plain => look::fg(),
+            Tone::Keyword => look::magenta(),
+            Tone::Text => look::green(),
+            Tone::Number => look::yellow(),
+            Tone::Comment => look::dim(),
         };
         let changed = row.words.is_some_and(|(a, b)| i >= a && i < b);
         g.cells[y * g.cols + x + i] = (
@@ -1244,16 +1261,16 @@ fn code(g: &mut Grid, x: usize, y: usize, w: usize, row: &Row, bg: Option<crate:
 
 fn row_bg(row: &Row) -> Option<crate::tui::Rgb> {
     match row.kind {
-        Kind::Add => Some(ADD_BG),
-        Kind::Del => Some(DEL_BG),
+        Kind::Add => Some(look::add_bg()),
+        Kind::Del => Some(look::del_bg()),
         Kind::Ctx => None,
     }
 }
 
 fn marker(kind: Kind) -> (&'static str, Style) {
     match kind {
-        Kind::Add => ("+", Style::fg(GREEN).bold()),
-        Kind::Del => ("−", Style::fg(RED).bold()),
+        Kind::Add => ("+", Style::fg(look::green()).bold()),
+        Kind::Del => ("−", Style::fg(look::red()).bold()),
         Kind::Ctx => (" ", Style::default()),
     }
 }
@@ -1269,7 +1286,7 @@ fn one_column(g: &mut Grid, x: usize, y: usize, w: usize, row: &Row) {
         x,
         y,
         &format!("{} {} ", number(row.old), number(row.new)),
-        tint(Style::fg(DIM)),
+        tint(Style::fg(look::dim())),
     );
     let (m, style) = marker(row.kind);
     g.put(x + 9, y, m, tint(style));
@@ -1289,21 +1306,26 @@ fn two_columns(
     let side = |g: &mut Grid, x: usize, w: usize, row: &Option<Row>, old: bool| {
         let Some(row) = row else {
             for i in 0..w {
-                g.cells[y * g.cols + x + i] = (' ', Style::default().on(PANEL));
+                g.cells[y * g.cols + x + i] = (' ', Style::default().on(look::panel()));
             }
             return;
         };
         let bg = row_bg(row);
         let tint = |s: Style| Style { bg, ..s };
         let n = if old { row.old } else { row.new };
-        g.put(x, y, &format!("{} ", number(n)), tint(Style::fg(DIM)));
+        g.put(
+            x,
+            y,
+            &format!("{} ", number(n)),
+            tint(Style::fg(look::dim())),
+        );
         let (m, style) = marker(row.kind);
         g.put(x + 5, y, m, tint(style));
         g.put(x + 6, y, " ", tint(Style::default()));
         code(g, x + 7, y, w.saturating_sub(7), row, bg);
     };
     side(g, x, half, left, true);
-    g.put(x + half, y, "│", Style::fg(LINE));
+    g.put(x + half, y, "│", Style::fg(look::line()));
     side(g, x + half + 1, w - half - 1, right, false);
 }
 

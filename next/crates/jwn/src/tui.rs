@@ -23,34 +23,19 @@ use wire::Client;
 
 mod changes;
 mod diff_lines;
+mod look;
 mod manage;
+mod settings;
 mod shell;
 
 pub use changes::Ask;
 use changes::{Changes, Docs, Outcome, Src};
 use contract::ErrorBody;
 use manage::{Act, Manage, Target};
+use settings::Settings;
 use wire::ClientError;
 
-/// The One Dark palette of the mobile prototype, as 24-bit colours.
-type Rgb = (u8, u8, u8);
-const FG: Rgb = (0xab, 0xb2, 0xbf);
-const BG: Rgb = (0x28, 0x2c, 0x34);
-const PANEL: Rgb = (0x21, 0x25, 0x2b);
-const DIM: Rgb = (0x5c, 0x63, 0x70);
-const LINE: Rgb = (0x3e, 0x44, 0x51);
-const SEL: Rgb = (0x2c, 0x31, 0x3a);
-const BLUE: Rgb = (0x61, 0xaf, 0xef);
-const GREEN: Rgb = (0x98, 0xc3, 0x79);
-const YELLOW: Rgb = (0xe5, 0xc0, 0x7b);
-const RED: Rgb = (0xe0, 0x6c, 0x75);
-const MAGENTA: Rgb = (0xc6, 0x78, 0xdd);
-const CYAN: Rgb = (0x56, 0xb6, 0xc2);
-/// The diff: a line added or deleted, and the words inside it that changed.
-const ADD_BG: Rgb = (0x2a, 0x3b, 0x2c);
-const DEL_BG: Rgb = (0x40, 0x29, 0x2d);
-const ADD_WORD: Rgb = (0x3f, 0x5a, 0x42);
-const DEL_WORD: Rgb = (0x6a, 0x3a, 0x40);
+type Rgb = contract::themes::Rgb;
 
 const SIDEBAR: usize = 28;
 
@@ -186,7 +171,7 @@ impl Grid {
                             out.push_str("\x1b[7m");
                         }
                         // The screen paints its own One Dark ground, whatever the terminal's theme.
-                        let (f, b) = (st.fg.unwrap_or(FG), st.bg.unwrap_or(BG));
+                        let (f, b) = (st.fg.unwrap_or(look::fg()), st.bg.unwrap_or(look::bg()));
                         out.push_str(&format!(
                             "\x1b[38;2;{};{};{}m\x1b[48;2;{};{};{}m",
                             f.0, f.1, f.2, b.0, b.1, b.2
@@ -239,15 +224,15 @@ const URGENCY: [AttentionKind; 8] = [
 
 fn mark(a: &Attention) -> (&'static str, Rgb) {
     match a.kind {
-        AttentionKind::Permission => ("!", RED),
-        AttentionKind::Question => ("?", YELLOW),
-        AttentionKind::Plan => ("◆", MAGENTA),
-        AttentionKind::CiFailed => ("✗", RED),
-        AttentionKind::ShellDone if a.exit_code.unwrap_or(0) != 0 => ("✗", RED),
-        AttentionKind::ShellDone => ("❯", GREEN),
-        AttentionKind::Screen => ("…", DIM),
-        AttentionKind::AgentDone => ("✓", GREEN),
-        AttentionKind::Merged => ("⚑", CYAN),
+        AttentionKind::Permission => ("!", look::red()),
+        AttentionKind::Question => ("?", look::yellow()),
+        AttentionKind::Plan => ("◆", look::magenta()),
+        AttentionKind::CiFailed => ("✗", look::red()),
+        AttentionKind::ShellDone if a.exit_code.unwrap_or(0) != 0 => ("✗", look::red()),
+        AttentionKind::ShellDone => ("❯", look::green()),
+        AttentionKind::Screen => ("…", look::dim()),
+        AttentionKind::AgentDone => ("✓", look::green()),
+        AttentionKind::Merged => ("⚑", look::cyan()),
     }
 }
 
@@ -267,7 +252,7 @@ fn what(a: &Attention) -> String {
 /// Only what needs a decision or went wrong is tinted; the rest stays dim.
 fn tone(a: &Attention) -> Rgb {
     match mark(a).1 {
-        c if c == GREEN || c == DIM || c == CYAN => DIM,
+        c if c == look::green() || c == look::dim() || c == look::cyan() => look::dim(),
         c => c,
     }
 }
@@ -292,6 +277,8 @@ pub enum Key {
     /// Close the focused pane, or the highlighted workspace.
     ClosePane,
     CloseWorkspace,
+    /// The mode and the theme.
+    Settings,
     /// With a block selected: copy its command, copy its output, run it again.
     CopyCmd,
     CopyOut,
@@ -383,6 +370,11 @@ pub struct View {
     check_node: Option<String>,
     /// What the last command did, in the status bar until the next key.
     flash: String,
+    /// The look the person chose, and whether the machine is dark (what `system` follows).
+    settings: Settings,
+    os_dark: bool,
+    /// The settings changed here and are not written yet.
+    save: bool,
 }
 
 impl View {
@@ -415,7 +407,33 @@ impl View {
             manage: None,
             check_node: None,
             flash: String::new(),
+            settings: Settings::default(),
+            os_dark: true,
+            save: false,
         }
+    }
+
+    pub fn settings(&self) -> &Settings {
+        &self.settings
+    }
+
+    /// The settings file changed (or was read for the first time).
+    pub fn set_settings(&mut self, settings: Settings) {
+        self.settings = settings;
+    }
+
+    pub fn set_os_dark(&mut self, dark: bool) {
+        self.os_dark = dark;
+    }
+
+    /// A change of the settings waits to be written: the file must not be read over it.
+    pub fn unsaved(&self) -> bool {
+        self.save
+    }
+
+    /// The settings the person just changed, to write.
+    pub fn take_save(&mut self) -> Option<Settings> {
+        std::mem::take(&mut self.save).then(|| self.settings.clone())
     }
 
     /// The looks to tell the daemon about, so every client stops showing them.
@@ -786,6 +804,16 @@ impl View {
             None => After::Continue,
             Some(Act::ClosePane(pane)) => After::ClosePane(pane),
             Some(Act::Check(workspace)) => After::Check(workspace),
+            Some(Act::Theme(id)) => {
+                self.settings.theme = id;
+                self.save = true;
+                After::Continue
+            }
+            Some(Act::StepMode(forward)) => {
+                self.settings.mode = self.settings.mode.step(forward);
+                self.save = true;
+                After::Continue
+            }
             Some(Act::RemoveWorkspace {
                 workspace,
                 remove_worktree,
@@ -946,6 +974,13 @@ impl View {
             }
             (Mode::Workspaces, Key::ClosePane) => return self.ask_close_pane(),
             (Mode::Workspaces, Key::CloseWorkspace) => self.ask_close_workspace(),
+            (Mode::Workspaces, Key::Settings) => {
+                let cursor = contract::themes::all()
+                    .iter()
+                    .position(|t| t.id == self.settings.theme)
+                    .unwrap_or(0);
+                self.manage = Some(Manage::Settings { cursor });
+            }
             (Mode::Avisos, Key::Down) => {
                 let last = self.avisos().len().saturating_sub(1);
                 self.avisos_selected = (self.avisos_selected + 1).min(last);
@@ -1146,20 +1181,24 @@ impl View {
     }
 
     fn grid(&self, cols: usize, rows: usize) -> Grid {
+        look::set(
+            self.settings.palette(self.os_dark),
+            self.settings.is_dark(self.os_dark),
+        );
         let mut g = Grid::new(cols, rows);
         let Some(session) = &self.session else {
             g.put(
                 1,
                 0,
                 &format!("conectando… {}", self.status),
-                Style::fg(DIM),
+                Style::fg(look::dim()),
             );
             return g;
         };
-        let dim = Style::fg(DIM);
+        let dim = Style::fg(look::dim());
         // The sidebar and its border.
         for y in 0..rows.saturating_sub(1) {
-            g.put(SIDEBAR - 1, y, "│", Style::fg(LINE));
+            g.put(SIDEBAR - 1, y, "│", Style::fg(look::line()));
         }
         g.put(1, 0, &clip(&session.name, 12), dim.bold());
         g.put(SIDEBAR - 14, 0, "^␣ s sessions", dim);
@@ -1171,7 +1210,7 @@ impl View {
             let on = i == self.selected && self.mode == Mode::Workspaces;
             let un = self.unseen(&w.attention);
             if on {
-                g.paint_bg(0, y, SIDEBAR - 1, SEL);
+                g.paint_bg(0, y, SIDEBAR - 1, look::sel());
             }
             let name = if w.kind == WorkspaceKind::Worktree {
                 format!("↳ {}", w.branch.clone().unwrap_or_else(|| w.name.clone()))
@@ -1179,11 +1218,11 @@ impl View {
                 w.name.clone()
             };
             let name_style = if on {
-                Style::fg(BLUE).bold()
+                Style::fg(look::blue()).bold()
             } else if w.pane_count == 0 {
                 dim
             } else {
-                Style::fg(FG)
+                Style::fg(look::fg())
             };
             let number = if i < 9 {
                 (i + 1).to_string()
@@ -1196,7 +1235,7 @@ impl View {
                 y,
                 if w.pane_count > 0 { "●" } else { "○" },
                 if w.pane_count > 0 {
-                    Style::fg(GREEN)
+                    Style::fg(look::green())
                 } else {
                     dim
                 },
@@ -1242,14 +1281,14 @@ impl View {
             } else {
                 ws.name.clone()
             };
-            g.put(x, 0, &title, Style::fg(BLUE).bold());
+            g.put(x, 0, &title, Style::fg(look::blue()).bold());
             x += title.chars().count() + 2;
             if ws.kind == WorkspaceKind::Worktree {
                 g.put(
                     x,
                     0,
                     &format!("⎇ {}", ws.branch.clone().unwrap_or_default()),
-                    Style::fg(MAGENTA),
+                    Style::fg(look::magenta()),
                 );
             }
             let path = &ws.path;
@@ -1273,26 +1312,31 @@ impl View {
 
         // The status bar.
         for x in 0..cols {
-            g.cells[(rows - 1) * cols + x] = (' ', Style::default().on(PANEL));
+            g.cells[(rows - 1) * cols + x] = (' ', Style::default().on(look::panel()));
         }
         let typing = self.typing_pane().is_some();
         let diff_status = self.changes.as_ref().map(|c| c.status(&self.docs()));
         let (chip, bg, hint) = match (&self.manage, &diff_status) {
-            (Some(Manage::Failed { .. }), _) => (" ERROR ", RED, self.manage_hint()),
-            (Some(_), _) => (" PREGUNTA ", YELLOW, self.manage_hint()),
-            (None, Some((hint, _))) => (" DIFF ", CYAN, hint.as_str()),
+            (Some(Manage::Failed { .. }), _) => (" ERROR ", look::red(), self.manage_hint()),
+            (Some(Manage::Settings { .. }), _) => (" AJUSTES ", look::blue(), self.manage_hint()),
+            (Some(_), _) => (" PREGUNTA ", look::yellow(), self.manage_hint()),
+            (None, Some((hint, _))) => (" DIFF ", look::cyan(), hint.as_str()),
             (None, None) => match (self.mode, typing) {
-                (Mode::Avisos, _) => (" AVISOS ", YELLOW, "j/k mover · ↵ ir · esc volver"),
+                (Mode::Avisos, _) => (" AVISOS ", look::yellow(), "j/k mover · ↵ ir · esc volver"),
                 (_, false) if self.blk.is_some() => (
                     " BLOQUE ",
-                    MAGENTA,
+                    look::magenta(),
                     "c comando · o salida · r repetir · j/k mover · esc soltar",
                 ),
-                (_, true) => (" TERM ", GREEN, "escribes en el panel · ^␣ para moverte"),
+                (_, true) => (
+                    " TERM ",
+                    look::green(),
+                    "escribes en el panel · ^␣ para moverte",
+                ),
                 (_, false) => (
                     " MOVE ",
-                    BLUE,
-                    "j/k workspace · ↵ escribir · h/l panel · n nuevo · x cerrar panel · X cerrar workspace · d cambios · a avisos · q salir",
+                    look::blue(),
+                    "j/k workspace · ↵ escribir · h/l panel · n nuevo · x cerrar · X cerrar workspace · d cambios · a avisos · , ajustes · q salir",
                 ),
             },
         };
@@ -1301,15 +1345,15 @@ impl View {
             rows - 1,
             chip,
             Style {
-                fg: Some(PANEL),
+                fg: Some(look::panel()),
                 bg: Some(bg),
                 bold: true,
                 ..Style::default()
             },
         );
         let (hint, hint_style) = match self.flash.as_str() {
-            "" => (hint, dim.on(PANEL)),
-            flash => (flash, Style::fg(GREEN).on(PANEL)),
+            "" => (hint, dim.on(look::panel())),
+            flash => (flash, Style::fg(look::green()).on(look::panel())),
         };
         g.put(
             chip.chars().count() + 1,
@@ -1322,23 +1366,37 @@ impl View {
         if waiting > 0 {
             let t = format!("avisos {waiting}");
             right = cols.saturating_sub(t.chars().count() + 1);
-            g.put(right, rows - 1, &t, Style::fg(YELLOW).bold().on(PANEL));
+            g.put(
+                right,
+                rows - 1,
+                &t,
+                Style::fg(look::yellow()).bold().on(look::panel()),
+            );
         }
         if let Some((_, Some((seen, total)))) = &diff_status {
             let t = format!("{seen}/{total} vistos");
-            let tone = if seen == total { GREEN } else { DIM };
+            let tone = if seen == total {
+                look::green()
+            } else {
+                look::dim()
+            };
             g.put(
                 right.saturating_sub(t.chars().count() + 2),
                 rows - 1,
                 &t,
-                Style::fg(tone).on(PANEL),
+                Style::fg(tone).on(look::panel()),
             );
         }
         if self.mode == Mode::Avisos {
             self.avisos_box(&mut g, (px, 1, pw, rows.saturating_sub(2)));
         }
         if let Some(question) = &self.manage {
-            question.draw(&mut g, (px, 1, pw, rows.saturating_sub(2)));
+            question.draw(
+                &mut g,
+                (px, 1, pw, rows.saturating_sub(2)),
+                &self.settings,
+                self.os_dark,
+            );
         }
         g
     }
@@ -1359,7 +1417,7 @@ impl View {
                 x + 2,
                 y + 2,
                 "este workspace no tiene paneles · n abre uno",
-                Style::fg(DIM),
+                Style::fg(look::dim()),
             );
             return;
         }
@@ -1375,20 +1433,20 @@ impl View {
                 )
             });
             let title_style = if focused {
-                Style::fg(BLUE).bold()
+                Style::fg(look::blue()).bold()
             } else {
-                Style::fg(FG).bold()
+                Style::fg(look::fg()).bold()
             };
             g.boxed(
                 rect,
                 &summary.title,
-                if focused { BLUE } else { LINE },
+                if focused { look::blue() } else { look::line() },
                 title_style,
                 badge,
             );
             let (bx, by, bw, bh) = rect;
             let Some(p) = self.panes.get(&summary.id) else {
-                g.put(bx + 2, by + 1, "abriendo el panel…", Style::fg(DIM));
+                g.put(bx + 2, by + 1, "abriendo el panel…", Style::fg(look::dim()));
                 continue;
             };
             if let Some(b) = self.blocks_of(&summary.id) {
@@ -1400,7 +1458,7 @@ impl View {
                     bx + 2,
                     by + 1 + r,
                     &clip(line, bw.saturating_sub(4)),
-                    Style::fg(FG),
+                    Style::fg(look::fg()),
                 );
             }
             let c = p.screen.cursor;
@@ -1443,7 +1501,7 @@ impl View {
         for (r, line) in lines[start..].iter().take(lh).enumerate() {
             let y = top + r;
             if picked.is_some() && line.block == picked {
-                g.paint_bg(ix, y, iw, SEL);
+                g.paint_bg(ix, y, iw, look::sel());
             }
             if let Some(bar) = line.bar {
                 g.put_over(ix, y, "▌", Style::fg(bar));
@@ -1460,7 +1518,7 @@ impl View {
             }
         }
         let ey = iy + lh;
-        g.put(ix, ey, &"─".repeat(iw), Style::fg(LINE));
+        g.put(ix, ey, &"─".repeat(iw), Style::fg(look::line()));
         let last = b.blocks.last();
         if let Some(k) = last.filter(|k| k.running) {
             g.put(
@@ -1470,30 +1528,30 @@ impl View {
                     "◌ {}",
                     clip(&k.cmd, iw.saturating_sub(STOP.chars().count() + 4))
                 ),
-                Style::fg(YELLOW),
+                Style::fg(look::yellow()),
             );
             g.put(
                 ix + iw - STOP.chars().count(),
                 ey + 1,
                 STOP,
-                Style::fg(RED).bold(),
+                Style::fg(look::red()).bold(),
             );
         } else {
             let folder = shell::short(&p.cwd);
-            g.put(ix, ey + 1, &clip(&folder, iw), Style::fg(BLUE));
+            g.put(ix, ey + 1, &clip(&folder, iw), Style::fg(look::blue()));
             if let Some(branch) = branch {
                 let at = ix + folder.chars().count() + 2;
                 g.put(
                     at,
                     ey + 1,
                     &clip(&format!("⎇ {branch}"), (ix + iw).saturating_sub(at)),
-                    Style::fg(MAGENTA),
+                    Style::fg(look::magenta()),
                 );
             }
         }
         let cur = p.screen.cursor;
         if let Some(line) = p.screen.lines.get(cur.row as usize) {
-            g.put(ix, ey + 2, &clip(line, iw), Style::fg(FG));
+            g.put(ix, ey + 2, &clip(line, iw), Style::fg(look::fg()));
         }
         if focused && cur.visible && (cur.col as usize) < iw {
             g.cells[(ey + 2) * g.cols + ix + cur.col as usize].1.reverse = true;
@@ -1506,27 +1564,32 @@ impl View {
         for r in 0..bh {
             for c in 0..bw {
                 if by + r < g.rows && bx + c < g.cols {
-                    g.cells[(by + r) * g.cols + bx + c] = (' ', Style::default().on(PANEL));
+                    g.cells[(by + r) * g.cols + bx + c] = (' ', Style::default().on(look::panel()));
                 }
             }
         }
         g.boxed(
             (bx, by, bw, bh),
             "avisos",
-            YELLOW,
-            Style::fg(FG).bold(),
+            look::yellow(),
+            Style::fg(look::fg()).bold(),
             None,
         );
         // The box leaves the panel background under its border characters.
         if items.is_empty() {
-            g.put(bx + 3, by + 2, "Nada espera.", Style::fg(DIM).on(PANEL));
+            g.put(
+                bx + 3,
+                by + 2,
+                "Nada espera.",
+                Style::fg(look::dim()).on(look::panel()),
+            );
         }
         for (i, (_, name, a)) in items.iter().enumerate() {
             let row = by + 2 + i;
             let bg = if i == self.avisos_selected {
-                SEL
+                look::sel()
             } else {
-                PANEL
+                look::panel()
             };
             g.paint_bg(bx + 1, row, bw - 2, bg);
             let (glyph, colour) = mark(a);
@@ -1535,7 +1598,7 @@ impl View {
                 bx + 6,
                 row,
                 &clip(name, bw.saturating_sub(24)),
-                Style::fg(FG).bold(),
+                Style::fg(look::fg()).bold(),
             );
             let t = what(a);
             g.put_over(bx + bw - 3 - t.chars().count(), row, &t, Style::fg(tone(a)));
@@ -1714,6 +1777,7 @@ fn key_of(code: KeyCode) -> Option<Key> {
         KeyCode::Char('d') => Key::Changes,
         KeyCode::Char('x') => Key::ClosePane,
         KeyCode::Char('X') => Key::CloseWorkspace,
+        KeyCode::Char(',') => Key::Settings,
         KeyCode::Char('c') => Key::CopyCmd,
         KeyCode::Char('o') => Key::CopyOut,
         KeyCode::Char('r') => Key::Repeat,
@@ -1733,6 +1797,10 @@ fn connect(view: &mut View) -> Result<Client, String> {
     view.set_status("en vivo");
     Ok(client)
 }
+
+/// How often the settings file is read again, and the machine asked whether it is dark.
+const SETTINGS_EVERY: Duration = Duration::from_secs(2);
+const APPEARANCE_EVERY: Duration = Duration::from_secs(5);
 
 /// How long the diff viewer waits for the daemon to read git for it.
 const ASK_WAIT: Duration = Duration::from_secs(20);
@@ -1844,7 +1912,21 @@ pub fn run() -> Result<(), String> {
     let dump = std::env::var_os(identity::env_var("TUI_DUMP"));
     let _term = Terminal::enter().map_err(|e| e.to_string())?;
     let mut last: Vec<String> = Vec::new();
+    view.set_settings(Settings::load());
+    view.set_os_dark(settings::os_is_dark());
+    let mut looked = (std::time::Instant::now(), std::time::Instant::now());
     loop {
+        // The settings file may be changed by another terminal; the machine's appearance by
+        // the person, at any time.
+        if looked.0.elapsed() >= SETTINGS_EVERY && !view.unsaved() {
+            looked.0 = std::time::Instant::now();
+            view.set_settings(Settings::load());
+        }
+        if view.settings().mode == settings::Mode::System && looked.1.elapsed() >= APPEARANCE_EVERY
+        {
+            looked.1 = std::time::Instant::now();
+            view.set_os_dark(settings::os_is_dark());
+        }
         view.set_now(
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1903,6 +1985,12 @@ pub fn run() -> Result<(), String> {
             let _ = client.cmd(Cmd::MarkSeen { node, rev });
         }
         serve_asks(&mut view, &mut client);
+        if let Some(chosen) = view.take_save() {
+            if let Err(e) = chosen.save() {
+                view.flash(&format!("no se pudo guardar settings.json: {e}"));
+            }
+            looked.0 = std::time::Instant::now();
+        }
         while event::poll(Duration::ZERO).map_err(|e| e.to_string())? {
             let after = match event::read().map_err(|e| e.to_string())? {
                 Event::Key(ev) if ev.kind == KeyEventKind::Press => view.press_key(ev),
@@ -2799,5 +2887,82 @@ mod tests {
         assert_eq!(v.selected, 0, "the highlight did not move");
         assert_eq!(v.click(5, 3, 110, 30), After::Continue);
         assert!(v.manage.is_some());
+    }
+    #[test]
+    fn comma_opens_the_settings_and_enter_chooses_a_theme_to_save() {
+        let mut v = idle_view();
+        assert_eq!(tap(&mut v, ','), After::Continue);
+        let t = v.plain(120, 30);
+        assert!(t.contains("ajustes · tema"), "{t}");
+        assert!(t.contains("[sistema]"), "{t}");
+        assert!(t.contains("❯ ● One"), "{t}");
+        assert!(t.contains(" AJUSTES "), "{t}");
+        assert!(v.take_save().is_none(), "opening changes nothing");
+        tap(&mut v, 'j');
+        tap(&mut v, 'j');
+        assert_eq!(v.take_save(), None);
+        v.press_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let saved = v.take_save().expect("a choice is written");
+        assert_eq!(saved.theme, "tokyo-night");
+        assert!(v.take_save().is_none(), "once");
+        v.plain(120, 30);
+        assert_eq!(look::bg(), contract::themes::get("tokyo-night").dark.bg);
+        v.press_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(v.manage.is_none());
+    }
+
+    #[test]
+    fn the_mode_changes_the_colours_the_frame_is_painted_with() {
+        let mut v = idle_view();
+        tap(&mut v, ',');
+        tap(&mut v, 'm');
+        assert_eq!(v.settings().mode, settings::Mode::Dark);
+        tap(&mut v, 'm');
+        assert_eq!(v.settings().mode, settings::Mode::Light);
+        assert!(v.unsaved(), "the file must not be read over it");
+        let light = contract::themes::get("one").light;
+        let frame = v.grid(100, 20).rows_ansi().join("");
+        let (r, g, b) = light.bg;
+        assert!(
+            frame.contains(&format!("48;2;{r};{g};{b}m")),
+            "the light ground"
+        );
+        let (r, g, b) = contract::themes::get("one").dark.bg;
+        assert!(
+            !frame.contains(&format!("48;2;{r};{g};{b}m")),
+            "no dark ground left"
+        );
+        tap(&mut v, 'h');
+        assert_eq!(v.settings().mode, settings::Mode::Dark);
+    }
+
+    #[test]
+    fn system_follows_the_machine_until_the_person_picks_a_mode() {
+        let mut v = idle_view();
+        v.set_os_dark(false);
+        v.plain(100, 20);
+        assert_eq!(look::bg(), contract::themes::get("one").light.bg);
+        v.set_os_dark(true);
+        v.plain(100, 20);
+        assert_eq!(look::bg(), contract::themes::get("one").dark.bg);
+    }
+
+    #[test]
+    fn every_theme_draws_the_frame_in_both_members_without_overflowing() {
+        let mut v = idle_view();
+        for t in contract::themes::all() {
+            for dark in [true, false] {
+                v.set_settings(Settings {
+                    mode: if dark {
+                        settings::Mode::Dark
+                    } else {
+                        settings::Mode::Light
+                    },
+                    theme: t.id.clone(),
+                });
+                let rows = v.grid(100, 20).rows_plain();
+                assert_eq!(rows.len(), 20, "{} {dark}", t.id);
+            }
+        }
     }
 }

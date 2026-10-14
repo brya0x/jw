@@ -4,10 +4,12 @@
 //! what comes out and the daemon decides: it never removes a worktree by force, so a
 //! worktree with changes is refused there as well as here.
 
+use contract::themes;
 use contract::{Diff, FileStatus};
 use crossterm::event::KeyCode;
 
-use super::{DIM, FG, Grid, PANEL, RED, Rect, Rgb, Style, YELLOW, clip};
+use super::settings::{Mode, Settings};
+use super::{Grid, Rect, Rgb, Style, clip, look};
 
 /// The workspace a question is about, with what the question says of it.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -40,6 +42,8 @@ pub enum Manage {
     Clean(Target),
     /// The daemon refused, or could not be asked.
     Failed { title: String, text: String },
+    /// `,`: the mode and the theme; `cursor` is the theme the keys are on.
+    Settings { cursor: usize },
 }
 
 /// What a key asks the client to send.
@@ -52,6 +56,10 @@ pub enum Act {
     },
     /// Read the workspace's `uncommitted` changes.
     Check(String),
+    /// Use the theme with this id.
+    Theme(String),
+    /// The next mode, or the one before it.
+    StepMode(bool),
 }
 
 impl Manage {
@@ -60,6 +68,36 @@ impl Manage {
         let esc = code == KeyCode::Esc;
         let key = |c: char| code == KeyCode::Char(c);
         match self {
+            Manage::Settings { cursor } => {
+                let last = themes::all().len() - 1;
+                match code {
+                    KeyCode::Esc | KeyCode::Char(',' | 'q') => (None, None),
+                    KeyCode::Char('j') | KeyCode::Down => (
+                        Some(Manage::Settings {
+                            cursor: (cursor + 1).min(last),
+                        }),
+                        None,
+                    ),
+                    KeyCode::Char('k') | KeyCode::Up => (
+                        Some(Manage::Settings {
+                            cursor: cursor.saturating_sub(1),
+                        }),
+                        None,
+                    ),
+                    KeyCode::Enter => (
+                        Some(Manage::Settings { cursor }),
+                        Some(Act::Theme(themes::all()[cursor.min(last)].id.clone())),
+                    ),
+                    KeyCode::Char('m' | 'l') | KeyCode::Right => {
+                        (Some(Manage::Settings { cursor }), Some(Act::StepMode(true)))
+                    }
+                    KeyCode::Char('h') | KeyCode::Left => (
+                        Some(Manage::Settings { cursor }),
+                        Some(Act::StepMode(false)),
+                    ),
+                    _ => (Some(Manage::Settings { cursor }), None),
+                }
+            }
             // Anything but `y` leaves the pane alone.
             Manage::Pane { pane, .. } if key('y') => (None, Some(Act::ClosePane(pane))),
             Manage::Pane { .. } => (None, None),
@@ -107,6 +145,7 @@ impl Manage {
             Manage::Dirty(..) => "c cerrar solo el workspace · esc volver",
             Manage::Clean(_) => "y quitar · esc cancelar",
             Manage::Failed { .. } => "cualquier tecla para seguir",
+            Manage::Settings { .. } => "j/k tema · m modo · ↵ elegir · esc cerrar",
         }
     }
 
@@ -127,14 +166,14 @@ impl Manage {
     }
 
     /// Title, border colour and the lines of the box.
-    fn text(&self) -> (String, Rgb, Vec<(String, Look)>) {
+    fn text(&self, settings: &Settings) -> (String, Rgb, Vec<(String, Look)>) {
         let plain = |s: &str| (s.to_owned(), Look::Plain);
         let dim = |s: &str| (s.to_owned(), Look::Dim);
         let blank = || (String::new(), Look::Plain);
         match self {
             Manage::Pane { title, what, .. } => (
                 format!("Cerrar {title}?"),
-                YELLOW,
+                look::yellow(),
                 vec![
                     plain(&format!("{what} sigue corriendo en este panel.")),
                     dim("Cerrarlo lo detiene."),
@@ -160,13 +199,13 @@ impl Manage {
                 };
                 (
                     format!("Cerrar {}?", t.name),
-                    YELLOW,
+                    look::yellow(),
                     vec![plain(&first), dim(stays), blank(), dim(self.hint())],
                 )
             }
             Manage::Checking(t) => (
                 format!("Quitar el worktree {}?", t.name),
-                RED,
+                look::red(),
                 vec![
                     plain("Mirando si tiene cambios sin commitear…"),
                     blank(),
@@ -198,7 +237,7 @@ impl Manage {
                     blank(),
                     dim(self.hint()),
                 ]);
-                (format!("No se puede quitar {}", t.name), RED, lines)
+                (format!("No se puede quitar {}", t.name), look::red(), lines)
             }
             Manage::Clean(t) => {
                 let branch = t
@@ -207,7 +246,7 @@ impl Manage {
                     .map_or("La rama".to_owned(), |b| format!("La rama {b}"));
                 (
                     format!("Quitar el worktree {}?", t.name),
-                    RED,
+                    look::red(),
                     vec![
                         plain(&format!("Se borra la carpeta {}.", t.path)),
                         dim(&format!("No hay cambios sin commitear. {branch} se queda.")),
@@ -216,20 +255,49 @@ impl Manage {
                     ],
                 )
             }
+            Manage::Settings { cursor } => {
+                let modes = Mode::ALL
+                    .iter()
+                    .map(|m| {
+                        if *m == settings.mode {
+                            format!("[{}]", m.label())
+                        } else {
+                            format!(" {} ", m.label())
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("  ");
+                let mut lines = vec![(format!("Modo   {modes}"), Look::Plain), blank()];
+                lines.extend(themes::all().iter().enumerate().map(|(i, t)| {
+                    let chosen = if t.id == settings.theme { '●' } else { '○' };
+                    let at = if i == *cursor { '❯' } else { ' ' };
+                    let look = if i == *cursor {
+                        Look::Accent
+                    } else {
+                        Look::Plain
+                    };
+                    (format!("{at} {chosen} {}", t.name), look)
+                }));
+                lines.extend([
+                    blank(),
+                    dim("Se aplica al momento y se guarda en settings.json."),
+                ]);
+                ("ajustes · tema".to_owned(), look::blue(), lines)
+            }
             Manage::Failed { title, text } => {
                 let mut lines: Vec<(String, Look)> = wrap(text, 70)
                     .into_iter()
                     .map(|l| (l, Look::Plain))
                     .collect();
                 lines.extend([blank(), dim(self.hint())]);
-                (title.clone(), RED, lines)
+                (title.clone(), look::red(), lines)
             }
         }
     }
 
     /// Draw the question over `area`, near its top and centred.
-    pub fn draw(&self, g: &mut Grid, (x, y, w, _): Rect) {
-        let (title, border, lines) = self.text();
+    pub fn draw(&self, g: &mut Grid, (x, y, w, _): Rect, settings: &Settings, os_dark: bool) {
+        let (title, border, lines) = self.text(settings);
         let widest = lines
             .iter()
             .map(|(l, _)| l.chars().count())
@@ -242,23 +310,43 @@ impl Manage {
         for r in 0..bh {
             for c in 0..bw {
                 if by + r < g.rows && bx + c < g.cols {
-                    g.cells[(by + r) * g.cols + bx + c] = (' ', Style::default().on(PANEL));
+                    g.cells[(by + r) * g.cols + bx + c] = (' ', Style::default().on(look::panel()));
                 }
             }
         }
-        g.boxed((bx, by, bw, bh), &title, border, Style::fg(FG).bold(), None);
-        for (i, (text, look)) in lines.iter().enumerate() {
-            let style = match look {
-                Look::Plain => Style::fg(FG),
-                Look::Dim => Style::fg(DIM),
-                Look::Warn => Style::fg(YELLOW),
+        g.boxed(
+            (bx, by, bw, bh),
+            &title,
+            border,
+            Style::fg(look::fg()).bold(),
+            None,
+        );
+        for (i, (text, tone)) in lines.iter().enumerate() {
+            let style = match tone {
+                Look::Plain => Style::fg(look::fg()),
+                Look::Dim => Style::fg(look::dim()),
+                Look::Warn => Style::fg(look::yellow()),
+                Look::Accent => Style::fg(look::blue()).bold(),
             };
             g.put(
                 bx + 3,
                 by + 2 + i,
                 &clip(text, bw.saturating_sub(6)),
-                style.on(PANEL),
+                style.on(look::panel()),
             );
+        }
+        if matches!(self, Manage::Settings { .. }) {
+            // Each theme's own colours, in the member the mode picks.
+            for (i, t) in themes::all().iter().enumerate() {
+                let p = t.palette(settings.is_dark(os_dark));
+                for (k, c) in [p.blue, p.green, p.yellow, p.red, p.magenta, p.cyan]
+                    .into_iter()
+                    .enumerate()
+                {
+                    let at = (bx + bw).saturating_sub(15) + 2 * k;
+                    g.put(at, by + 4 + i, "██", Style::fg(c).on(look::panel()));
+                }
+            }
         }
     }
 }
@@ -271,6 +359,7 @@ enum Look {
     Plain,
     Dim,
     Warn,
+    Accent,
 }
 
 fn remove(t: &Target, remove_worktree: bool) -> Act {
@@ -407,5 +496,27 @@ mod tests {
     fn wrapping_breaks_at_spaces() {
         assert_eq!(wrap("aa bb cc", 5), ["aa bb", "cc"]);
         assert_eq!(wrap("", 5), Vec::<String>::new());
+    }
+    #[test]
+    fn the_settings_move_between_themes_and_ask_for_what_is_chosen() {
+        let at = |cursor| Manage::Settings { cursor };
+        let last = themes::all().len() - 1;
+        assert_eq!(at(0).press(KeyCode::Char('k')), (Some(at(0)), None));
+        assert_eq!(at(last).press(KeyCode::Char('j')), (Some(at(last)), None));
+        assert_eq!(at(1).press(KeyCode::Char('j')), (Some(at(2)), None));
+        assert_eq!(
+            at(1).press(KeyCode::Enter),
+            (Some(at(1)), Some(Act::Theme("catppuccin".into())))
+        );
+        assert_eq!(
+            at(1).press(KeyCode::Char('m')),
+            (Some(at(1)), Some(Act::StepMode(true)))
+        );
+        assert_eq!(
+            at(1).press(KeyCode::Left),
+            (Some(at(1)), Some(Act::StepMode(false)))
+        );
+        assert_eq!(at(1).press(KeyCode::Esc), (None, None));
+        assert_eq!(at(1).press(KeyCode::Char('z')), (Some(at(1)), None));
     }
 }

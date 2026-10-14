@@ -3,22 +3,24 @@
 
 use contract::{Block, Color, Span};
 
-use super::{BLUE, CYAN, DIM, FG, GREEN, MAGENTA, RED, Rgb, Style, YELLOW, clip};
+use super::{Rgb, Style, clip, look};
 
-/// The 256-colour palette: the sixteen named colours are the theme's, the rest the usual
-/// cube and gray ramp.
+/// The 256-colour palette: the sixteen named colours are the theme's (black and bright white
+/// turn into the text colour on a light theme, where a literal one would vanish), the rest
+/// the usual cube and gray ramp.
 pub fn palette(i: u8) -> Rgb {
-    const BLACK: Rgb = (0x3f, 0x44, 0x51);
+    let dark = look::is_dark();
     match i {
-        0 => BLACK,
-        1 | 9 => RED,
-        2 | 10 => GREEN,
-        3 | 11 => YELLOW,
-        4 | 12 => BLUE,
-        5 | 13 => MAGENTA,
-        6 | 14 => CYAN,
-        7 => FG,
-        8 => DIM,
+        0 if dark => look::line(),
+        0 | 15 if !dark => look::fg(),
+        1 | 9 => look::red(),
+        2 | 10 => look::green(),
+        3 | 11 => look::yellow(),
+        4 | 12 => look::blue(),
+        5 | 13 => look::magenta(),
+        6 | 14 => look::cyan(),
+        7 => look::fg(),
+        8 => look::dim(),
         15 => (0xff, 0xff, 0xff),
         16..=231 => {
             let n = i - 16;
@@ -40,7 +42,7 @@ pub fn color_of(c: &Color) -> Rgb {
             let part = |a: usize| h.get(a..a + 2).and_then(|p| u8::from_str_radix(p, 16).ok());
             match (part(0), part(2), part(4)) {
                 (Some(r), Some(g), Some(b)) => (r, g, b),
-                _ => FG,
+                _ => look::fg(),
             }
         }
     }
@@ -91,22 +93,22 @@ pub fn block_lines(blocks: &[Block], now_ms: u64, width: usize) -> Vec<Line> {
     let mut out = Vec::new();
     for b in blocks {
         let bar = if b.running {
-            YELLOW
+            look::yellow()
         } else if b.code.unwrap_or(0) != 0 {
-            RED
+            look::red()
         } else {
-            GREEN
+            look::green()
         };
         let (right, right_style) = if b.running {
             (
                 format!("corriendo {}", duration(now_ms.saturating_sub(b.started))),
-                Style::fg(DIM),
+                Style::fg(look::dim()),
             )
         } else {
             let time = duration(b.ms.unwrap_or(0));
             match b.code {
-                Some(c) if c != 0 => (format!("salió {c} · {time}"), Style::fg(RED)),
-                _ => (time, Style::fg(DIM)),
+                Some(c) if c != 0 => (format!("salió {c} · {time}"), Style::fg(look::red())),
+                _ => (time, Style::fg(look::dim())),
             }
         };
         let id = Some(b.id);
@@ -114,7 +116,7 @@ pub fn block_lines(blocks: &[Block], now_ms: u64, width: usize) -> Vec<Line> {
         out.push(Line {
             block: id,
             bar: Some(bar),
-            spans: vec![(clip(&short(&b.cwd), room.max(4)), Style::fg(DIM))],
+            spans: vec![(clip(&short(&b.cwd), room.max(4)), Style::fg(look::dim()))],
             right: Some((right, right_style)),
         });
         out.push(Line {
@@ -127,7 +129,7 @@ pub fn block_lines(blocks: &[Block], now_ms: u64, width: usize) -> Vec<Line> {
             out.push(Line {
                 block: id,
                 bar: Some(bar),
-                spans: vec![("… el inicio se recortó".into(), Style::fg(DIM))],
+                spans: vec![("… el inicio se recortó".into(), Style::fg(look::dim()))],
                 right: None,
             });
         }
@@ -135,7 +137,7 @@ pub fn block_lines(blocks: &[Block], now_ms: u64, width: usize) -> Vec<Line> {
             out.push(Line {
                 block: id,
                 bar: Some(bar),
-                spans: vec![("pantalla completa".into(), Style::fg(DIM))],
+                spans: vec![("pantalla completa".into(), Style::fg(look::dim()))],
                 right: None,
             });
         }
@@ -198,14 +200,14 @@ mod tests {
 
     #[test]
     fn colours_are_the_themes_for_the_named_ones_and_the_usual_ramp_for_the_rest() {
-        assert_eq!(palette(1), RED);
-        assert_eq!(palette(2), GREEN);
+        assert_eq!(palette(1), look::red());
+        assert_eq!(palette(2), look::green());
         assert_eq!(palette(16), (0, 0, 0));
         assert_eq!(palette(196), (255, 0, 0));
         assert_eq!(palette(231), (255, 255, 255));
         assert_eq!(palette(232), (8, 8, 8));
         assert_eq!(color_of(&Color::Rgb("#e5c07b".into())), (0xe5, 0xc0, 0x7b));
-        assert_eq!(color_of(&Color::Rgb("nope".into())), FG);
+        assert_eq!(color_of(&Color::Rgb("nope".into())), look::fg());
     }
 
     #[test]
@@ -263,21 +265,21 @@ mod tests {
         assert!(
             lines[..3]
                 .iter()
-                .all(|l| l.bar == Some(GREEN) && l.block == Some(1))
+                .all(|l| l.bar == Some(look::green()) && l.block == Some(1))
         );
     }
 
     #[test]
     fn a_failure_is_red_and_says_how_it_ended() {
         let lines = block_lines(&[block(1, "false", Some(101), false)], 0, 40);
-        assert_eq!(lines[0].bar, Some(RED));
+        assert_eq!(lines[0].bar, Some(look::red()));
         assert_eq!(lines[0].right.as_ref().unwrap().0, "salió 101 · 4.2s");
     }
 
     #[test]
     fn a_running_block_is_yellow_with_the_time_so_far() {
         let lines = block_lines(&[block(1, "sleep 9", None, true)], 3000, 40);
-        assert_eq!(lines[0].bar, Some(YELLOW));
+        assert_eq!(lines[0].bar, Some(look::yellow()));
         assert_eq!(lines[0].right.as_ref().unwrap().0, "corriendo 2.0s");
     }
 
