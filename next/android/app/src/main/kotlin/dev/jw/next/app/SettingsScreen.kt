@@ -18,7 +18,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -35,7 +34,7 @@ import dev.jw.next.client.Theme
  * the phone's own: nothing here reaches the PC.
  */
 @Composable
-fun SettingsScreen(source: AppSource, state: ClientState, nav: Navigator, look: Look, osDark: Boolean, pc: PcEntry?, change: (Look) -> Unit, set: (ClientState) -> Unit) {
+fun SettingsScreen(state: ClientState, nav: Navigator, look: Look, osDark: Boolean, pc: PcEntry?, change: (Look) -> Unit, set: (ClientState) -> Unit) {
     val dark = look.isDark(osDark)
     val now = look.theme(osDark)
     Column(Modifier.fillMaxSize()) {

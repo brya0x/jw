@@ -51,7 +51,6 @@ import dev.jw.next.client.Navigator
 import dev.jw.next.client.Screen
 import dev.jw.next.client.TreeRow
 import dev.jw.next.client.ago
-import dev.jw.next.client.avisos
 import dev.jw.next.client.hunkRows
 import dev.jw.next.client.treeRows
 import dev.jw.next.client.whyUnread
