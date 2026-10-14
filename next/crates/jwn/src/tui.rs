@@ -1511,7 +1511,6 @@ impl View {
             g.put(SIDEBAR - 1, y, "│", Style::fg(divider));
         }
         g.put(1, 0, &clip(&session.name, 12), dim.bold());
-        g.put(SIDEBAR - 14, 0, "^␣ s sessions", dim);
         for (i, w) in session.workspaces.iter().enumerate() {
             let y = 2 + i;
             if y >= rows.saturating_sub(5) {
@@ -2575,7 +2574,10 @@ mod tests {
             "permission is the most urgent: {first}"
         );
         assert!(t.lines().nth(3).unwrap().starts_with("2 ● notes"), "{t}");
-        assert!(t.contains("^␣ s sessions"), "{t}");
+        assert!(
+            !t.contains("sessions"),
+            "the sessions of the old jw are not here: {t}"
+        );
     }
 
     #[test]
