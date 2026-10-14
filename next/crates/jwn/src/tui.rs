@@ -9,7 +9,10 @@ use std::collections::HashMap;
 use std::io::{Write, stdout};
 use std::time::Duration;
 
-use contract::{Attention, AttentionKind, Cmd, Node, Pane, Session, Workspace, WorkspaceKind};
+use contract::{
+    Attention, AttentionKind, Blocks, BlocksMode, Cmd, Node, Pane, Session, Workspace,
+    WorkspaceKind,
+};
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
     KeyModifiers, MouseButton, MouseEventKind,
@@ -17,6 +20,8 @@ use crossterm::event::{
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{cursor, execute};
 use wire::Client;
+
+mod shell;
 
 /// The One Dark palette of the mobile prototype, as 24-bit colours.
 type Rgb = (u8, u8, u8);
@@ -35,11 +40,13 @@ const CYAN: Rgb = (0x56, 0xb6, 0xc2);
 
 const SIDEBAR: usize = 28;
 
-#[derive(Clone, Copy, PartialEq, Default)]
+#[derive(Clone, Copy, PartialEq, Default, Debug)]
 struct Style {
     fg: Option<Rgb>,
     bg: Option<Rgb>,
     bold: bool,
+    italic: bool,
+    underline: bool,
     reverse: bool,
 }
 
@@ -94,7 +101,7 @@ impl Grid {
                 self.cells[y * self.cols + x + i] = (
                     ch,
                     Style {
-                        bg: under.bg,
+                        bg: style.bg.or(under.bg),
                         ..style
                     },
                 );
@@ -154,6 +161,12 @@ impl Grid {
                         out.push_str("\x1b[0m");
                         if st.bold {
                             out.push_str("\x1b[1m");
+                        }
+                        if st.italic {
+                            out.push_str("\x1b[3m");
+                        }
+                        if st.underline {
+                            out.push_str("\x1b[4m");
                         }
                         if st.reverse {
                             out.push_str("\x1b[7m");
@@ -260,6 +273,10 @@ pub enum Key {
     Enter,
     Avisos,
     NewPane,
+    /// With a block selected: copy its command, copy its output, run it again.
+    CopyCmd,
+    CopyOut,
+    Repeat,
     Back,
     Quit,
 }
@@ -275,6 +292,8 @@ pub enum After {
         pane: String,
         data: String,
     },
+    /// Text for the clipboard (OSC 52).
+    Copy(String),
 }
 
 fn rev_of(n: &Node) -> u64 {
@@ -310,6 +329,14 @@ pub struct View {
     typing: bool,
     /// The size last asked of the focused pane, so it is asked once.
     last_size: Option<(String, u16, u16)>,
+    /// The blocks nodes, by node id.
+    blocks: HashMap<String, Blocks>,
+    /// The selected block: its pane and its id.
+    blk: Option<(String, u64)>,
+    /// How many lines each pane's blocks are scrolled up from the newest.
+    scroll: HashMap<String, usize>,
+    /// The clock the running blocks count from, in ms since the epoch.
+    now_ms: u64,
 }
 
 impl View {
@@ -330,6 +357,10 @@ impl View {
             outbox: Vec::new(),
             typing: false,
             last_size: None,
+            blocks: HashMap::new(),
+            blk: None,
+            scroll: HashMap::new(),
+            now_ms: 0,
         }
     }
 
@@ -349,6 +380,10 @@ impl View {
         }
     }
 
+    pub fn set_now(&mut self, ms: u64) {
+        self.now_ms = ms;
+    }
+
     pub fn set_status(&mut self, status: &str) {
         self.status = status.to_owned();
     }
@@ -358,6 +393,7 @@ impl View {
         self.session = None;
         self.workspaces.clear();
         self.panes.clear();
+        self.blocks.clear();
         self.revs.clear();
         for doc in nodes {
             let Ok(node) = serde_json::from_value::<Node>(doc.clone()) else {
@@ -373,8 +409,9 @@ impl View {
                 Node::Pane(p) => {
                     self.panes.insert(id, p);
                 }
-                // Shell blocks come with the blocks view of the terminal client.
-                Node::Blocks(_) => {}
+                Node::Blocks(b) => {
+                    self.blocks.insert(id, b);
+                }
             }
         }
     }
@@ -388,8 +425,21 @@ impl View {
         if let Some(w) = self.shown() {
             ids.extend(w.panes.iter().map(|p| p.id.clone()));
         }
+        ids.extend(
+            self.shown()
+                .iter()
+                .flat_map(|w| w.panes.iter())
+                .filter_map(|p| self.panes.get(&p.id)?.blocks.clone()),
+        );
         ids.retain(|id| !self.revs.contains_key(id));
         ids
+    }
+
+    /// The pane's blocks, when it is drawn as blocks (a program with the whole screen, or a
+    /// shell without the integration, is drawn as its screen).
+    fn blocks_of(&self, pane: &str) -> Option<&Blocks> {
+        let id = self.panes.get(pane)?.blocks.as_ref()?;
+        self.blocks.get(id).filter(|b| b.mode == BlocksMode::Blocks)
     }
 
     fn selected_id(&self) -> Option<String> {
@@ -470,6 +520,7 @@ impl View {
     fn open(&mut self, ws: &str, focus: usize) {
         self.opened = Some(ws.to_owned());
         self.typing = true;
+        self.blk = None;
         self.mark_seen(ws);
         let pane = self
             .workspaces
@@ -530,6 +581,20 @@ impl View {
 
     pub fn press(&mut self, key: Key) -> After {
         let n = self.session.as_ref().map_or(0, |s| s.workspaces.len());
+        if self.blk.is_some() && self.mode == Mode::Workspaces {
+            match key {
+                Key::Up | Key::Down => {
+                    self.step_block(key == Key::Down);
+                    return After::Continue;
+                }
+                Key::Back => {
+                    self.blk = None;
+                    return After::Continue;
+                }
+                Key::CopyCmd | Key::CopyOut | Key::Repeat => return self.block_action(key),
+                _ => {}
+            }
+        }
         match (self.mode, key) {
             (_, Key::Quit) | (Mode::Workspaces, Key::Back) => return After::Quit,
             (Mode::Avisos, Key::Back | Key::Avisos) => self.mode = Mode::Workspaces,
@@ -605,6 +670,74 @@ impl View {
         After::Continue
     }
 
+    /// Move the selection to the next (or previous) block of its pane.
+    fn step_block(&mut self, forward: bool) {
+        let Some((pane, id)) = self.blk.clone() else {
+            return;
+        };
+        let Some(b) = self.blocks_of(&pane) else {
+            return;
+        };
+        let Some(at) = b.blocks.iter().position(|k| k.id == id) else {
+            return;
+        };
+        let to = if forward {
+            (at + 1).min(b.blocks.len() - 1)
+        } else {
+            at.saturating_sub(1)
+        };
+        self.blk = Some((pane, b.blocks[to].id));
+    }
+
+    /// Copy the selected block's command or output, or run its command again.
+    fn block_action(&mut self, key: Key) -> After {
+        let Some((pane, id)) = self.blk.clone() else {
+            return After::Continue;
+        };
+        let Some(b) = self
+            .blocks_of(&pane)
+            .and_then(|b| b.blocks.iter().find(|k| k.id == id))
+        else {
+            return After::Continue;
+        };
+        match key {
+            Key::CopyCmd => After::Copy(b.cmd.clone()),
+            Key::CopyOut => After::Copy(shell::output_text(b)),
+            _ => {
+                let data = format!("{}\r", b.cmd);
+                self.blk = None;
+                After::Write { pane, data }
+            }
+        }
+    }
+
+    /// A click inside a pane's box: a block selects, `■ ^C` stops the running command.
+    fn click_pane(&mut self, pane: &str, rect: Rect, x: usize, y: usize) -> After {
+        let Some(b) = self.blocks_of(pane) else {
+            return After::Continue;
+        };
+        let (ix, iy, iw, ih) = inner(rect);
+        let lh = list_h(ih);
+        if (iy..iy + lh).contains(&y) && (ix..ix + iw).contains(&x) {
+            let lines = shell::block_lines(&b.blocks, self.now_ms, iw.saturating_sub(2));
+            let start = window_start(lines.len(), lh, self.scroll.get(pane).copied().unwrap_or(0));
+            if let Some(id) = lines.get(start + y - iy).and_then(|l| l.block) {
+                self.blk = Some((pane.to_owned(), id));
+                self.typing = false;
+            }
+        } else if y == iy + lh + 1
+            && b.blocks.last().is_some_and(|k| k.running)
+            && x + STOP.chars().count() >= ix + iw
+            && x < ix + iw
+        {
+            return After::Write {
+                pane: pane.to_owned(),
+                data: "\x03".into(),
+            };
+        }
+        After::Continue
+    }
+
     /// A left click at cell (`x`, `y`) of a `cols` × `rows` screen. A workspace row opens it,
     /// a pane's box focuses it, `avisos N` in the status bar opens the list, an item of the
     /// list goes there, and a click outside the list closes it.
@@ -638,17 +771,40 @@ impl View {
             let id = doc.head.id.clone();
             let rects = pane_rects(doc.panes.len(), panes_rect(cols, rows));
             if let Some(i) = rects.iter().position(|r| inside(*r, x, y)) {
+                let pane = doc.panes[i].id.clone();
                 self.open(&id, i);
+                return self.click_pane(&pane, rects[i], x, y);
             }
         }
         After::Continue
     }
 
-    /// The wheel over the sidebar (or the avisos list) moves the highlight.
-    pub fn scroll(&mut self, down: bool, x: usize) -> After {
+    /// The wheel over the sidebar (or the avisos list) moves the highlight; over a pane drawn
+    /// as blocks it scrolls them.
+    pub fn scroll(&mut self, down: bool, x: usize, y: usize, cols: usize, rows: usize) -> After {
         if self.mode == Mode::Avisos || x < SIDEBAR {
             return self.press(if down { Key::Down } else { Key::Up });
         }
+        let Some(doc) = self.shown() else {
+            return After::Continue;
+        };
+        let rects = pane_rects(doc.panes.len(), panes_rect(cols, rows));
+        let Some(i) = rects.iter().position(|r| inside(*r, x, y)) else {
+            return After::Continue;
+        };
+        let pane = doc.panes[i].id.clone();
+        let Some(b) = self.blocks_of(&pane) else {
+            return After::Continue;
+        };
+        let (_, _, iw, ih) = inner(rects[i]);
+        let total = shell::block_lines(&b.blocks, self.now_ms, iw.saturating_sub(2)).len();
+        let most = total.saturating_sub(list_h(ih));
+        let at = self.scroll.entry(pane).or_insert(0);
+        *at = if down {
+            at.saturating_sub(SCROLL_STEP)
+        } else {
+            (*at + SCROLL_STEP).min(most)
+        };
         After::Continue
     }
 
@@ -761,7 +917,12 @@ impl View {
             }
             let path = &ws.path;
             g.put(cols.saturating_sub(path.chars().count() + 1), 0, path, dim);
-            self.panes_area(&mut g, doc, (px, 1, pw, rows.saturating_sub(2)));
+            self.panes_area(
+                &mut g,
+                doc,
+                ws.branch.as_deref(),
+                (px, 1, pw, rows.saturating_sub(2)),
+            );
         }
 
         // The status bar.
@@ -771,6 +932,11 @@ impl View {
         let typing = self.typing_pane().is_some();
         let (chip, bg, hint) = match (self.mode, typing) {
             (Mode::Avisos, _) => (" AVISOS ", YELLOW, "j/k mover · ↵ ir · esc volver"),
+            (_, false) if self.blk.is_some() => (
+                " BLOQUE ",
+                MAGENTA,
+                "c comando · o salida · r repetir · j/k mover · esc soltar",
+            ),
             (_, true) => (" TERM ", GREEN, "escribes en el panel · ^␣ para moverte"),
             (_, false) => (
                 " MOVE ",
@@ -786,7 +952,7 @@ impl View {
                 fg: Some(PANEL),
                 bg: Some(bg),
                 bold: true,
-                reverse: false,
+                ..Style::default()
             },
         );
         g.put(
@@ -817,6 +983,7 @@ impl View {
         &self,
         g: &mut Grid,
         doc: Option<&Workspace>,
+        branch: Option<&str>,
         (x, y, w, h): (usize, usize, usize, usize),
     ) {
         let Some(doc) = doc else { return };
@@ -858,6 +1025,10 @@ impl View {
                 g.put(bx + 2, by + 1, "abriendo el panel…", Style::fg(DIM));
                 continue;
             };
+            if let Some(b) = self.blocks_of(&summary.id) {
+                self.blocks_view(g, b, p, rect, focused, branch);
+                continue;
+            }
             for (r, line) in p.screen.lines.iter().take(bh.saturating_sub(2)).enumerate() {
                 g.put(
                     bx + 2,
@@ -875,6 +1046,90 @@ impl View {
                 let at = (by + 1 + c.row as usize) * g.cols + bx + 2 + c.col as usize;
                 g.cells[at].1.reverse = true;
             }
+        }
+    }
+
+    /// A shell pane as blocks: the list, newest at the bottom, and the editor under it (a rule,
+    /// the chips, and the line the shell is editing, which is the cursor's line of its screen).
+    fn blocks_view(
+        &self,
+        g: &mut Grid,
+        b: &Blocks,
+        p: &Pane,
+        rect: Rect,
+        focused: bool,
+        branch: Option<&str>,
+    ) {
+        let (ix, iy, iw, ih) = inner(rect);
+        if iw < 8 || ih < 4 {
+            return;
+        }
+        let lh = list_h(ih);
+        let lines = shell::block_lines(&b.blocks, self.now_ms, iw - 2);
+        let scrolled = self.scroll.get(&p.head.id).copied().unwrap_or(0);
+        let start = window_start(lines.len(), lh, scrolled);
+        let picked = self
+            .blk
+            .as_ref()
+            .filter(|(pane, _)| *pane == p.head.id)
+            .map(|(_, id)| *id);
+        for (r, line) in lines[start..].iter().take(lh).enumerate() {
+            let y = iy + r;
+            if picked.is_some() && line.block == picked {
+                g.paint_bg(ix, y, iw, SEL);
+            }
+            if let Some(bar) = line.bar {
+                g.put_over(ix, y, "▌", Style::fg(bar));
+            }
+            let mut x = ix + 2;
+            for (text, style) in &line.spans {
+                let text = clip(text, (ix + iw).saturating_sub(x));
+                g.put_over(x, y, &text, *style);
+                x += text.chars().count();
+            }
+            if let Some((text, style)) = &line.right {
+                let at = (ix + iw).saturating_sub(text.chars().count()).max(ix + 2);
+                g.put_over(at, y, text, *style);
+            }
+        }
+        let ey = iy + lh;
+        g.put(ix, ey, &"─".repeat(iw), Style::fg(LINE));
+        let last = b.blocks.last();
+        if let Some(k) = last.filter(|k| k.running) {
+            g.put(
+                ix,
+                ey + 1,
+                &format!(
+                    "◌ {}",
+                    clip(&k.cmd, iw.saturating_sub(STOP.chars().count() + 4))
+                ),
+                Style::fg(YELLOW),
+            );
+            g.put(
+                ix + iw - STOP.chars().count(),
+                ey + 1,
+                STOP,
+                Style::fg(RED).bold(),
+            );
+        } else {
+            let folder = shell::short(&p.cwd);
+            g.put(ix, ey + 1, &clip(&folder, iw), Style::fg(BLUE));
+            if let Some(branch) = branch {
+                let at = ix + folder.chars().count() + 2;
+                g.put(
+                    at,
+                    ey + 1,
+                    &clip(&format!("⎇ {branch}"), (ix + iw).saturating_sub(at)),
+                    Style::fg(MAGENTA),
+                );
+            }
+        }
+        let cur = p.screen.cursor;
+        if let Some(line) = p.screen.lines.get(cur.row as usize) {
+            g.put(ix, ey + 2, &clip(line, iw), Style::fg(FG));
+        }
+        if focused && cur.visible && (cur.col as usize) < iw {
+            g.cells[(ey + 2) * g.cols + ix + cur.col as usize].1.reverse = true;
         }
     }
 
@@ -927,6 +1182,30 @@ impl View {
 }
 
 type Rect = (usize, usize, usize, usize);
+
+/// The stop chip of a running command, at the right of the editor's chips row.
+const STOP: &str = "■ ^C";
+/// Lines one notch of the wheel moves a pane's blocks.
+const SCROLL_STEP: usize = 3;
+/// The editor under the blocks: a rule, the chips, the prompt line.
+const EDITOR_ROWS: usize = 3;
+
+/// What a pane's box holds: inside the border and its padding.
+fn inner((x, y, w, h): Rect) -> Rect {
+    (x + 2, y + 1, w.saturating_sub(4), h.saturating_sub(2))
+}
+
+/// Rows of the list of blocks in a box `h` rows tall.
+fn list_h(h: usize) -> usize {
+    h.saturating_sub(EDITOR_ROWS)
+}
+
+/// The first line of `total` shown in `rows`, with the newest at the bottom and the list
+/// scrolled `up` lines from it. A list that fits starts at the top.
+fn window_start(total: usize, rows: usize, up: usize) -> usize {
+    let most = total.saturating_sub(rows);
+    most - up.min(most)
+}
 
 fn inside((x, y, w, h): Rect, px: usize, py: usize) -> bool {
     px >= x && px < x + w && py >= y && py < y + h
@@ -1046,6 +1325,9 @@ fn key_of(code: KeyCode) -> Option<Key> {
         KeyCode::Enter => Key::Enter,
         KeyCode::Char('a') => Key::Avisos,
         KeyCode::Char('n') => Key::NewPane,
+        KeyCode::Char('c') => Key::CopyCmd,
+        KeyCode::Char('o') => Key::CopyOut,
+        KeyCode::Char('r') => Key::Repeat,
         KeyCode::Esc => Key::Back,
         KeyCode::Char('q') => Key::Quit,
         _ => return None,
@@ -1071,6 +1353,11 @@ pub fn run() -> Result<(), String> {
     let _term = Terminal::enter().map_err(|e| e.to_string())?;
     let mut last: Vec<String> = Vec::new();
     loop {
+        view.set_now(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_millis() as u64),
+        );
         view.sync(client.nodes.values());
         for id in view.wants() {
             let _ = client.open(&id);
@@ -1130,8 +1417,8 @@ pub fn run() -> Result<(), String> {
                     let (x, y) = (m.column as usize, m.row as usize);
                     match m.kind {
                         MouseEventKind::Down(MouseButton::Left) => view.click(x, y, cols, rows),
-                        MouseEventKind::ScrollUp => view.scroll(false, x),
-                        MouseEventKind::ScrollDown => view.scroll(true, x),
+                        MouseEventKind::ScrollUp => view.scroll(false, x, y, cols, rows),
+                        MouseEventKind::ScrollDown => view.scroll(true, x, y, cols, rows),
                         _ => After::Continue,
                     }
                 }
@@ -1147,6 +1434,11 @@ pub fn run() -> Result<(), String> {
                         workspace,
                         program: None,
                     });
+                }
+                After::Copy(text) => {
+                    let mut out = stdout();
+                    let _ = write!(out, "{}", shell::osc52(&text));
+                    let _ = out.flush();
                 }
                 After::Continue => {}
             }
@@ -1170,6 +1462,7 @@ mod tests {
             "snapshot-pane.json",
             "snapshot-pane-prompt.json",
             "snapshot-pane-agent.json",
+            "snapshot-blocks.json",
         ]
         .iter()
         .map(|n| {
@@ -1213,6 +1506,131 @@ mod tests {
             "the first pane's screen is in its box: {t}"
         );
         assert!(!t.contains("└ "), "no tree rows, no tabs: {t}");
+    }
+
+    const BLOCKS: &str = "00000000-0000-4000-8000-0000000000d1";
+    const SHELL: &str = "00000000-0000-4000-8000-0000000000c2";
+
+    fn open_blocks() -> View {
+        let mut v = fixture_view();
+        v.press(Key::Enter);
+        v
+    }
+
+    #[test]
+    fn a_shell_pane_is_blocks_with_an_editor_under_them() {
+        let t = open_blocks().plain(120, 30);
+        assert!(t.contains("▌ ❯ git status"), "{t}");
+        assert!(t.contains("salió 101 · 4.2s"), "{t}");
+        assert!(t.contains("corriendo"), "{t}");
+        assert!(
+            t.contains("── ◌ ") || t.contains("◌ cargo watch -x test"),
+            "{t}"
+        );
+        assert!(
+            t.contains("■ ^C"),
+            "the running command can be stopped: {t}"
+        );
+        assert!(
+            t.contains("$ cargo test"),
+            "a pane with no blocks stays a screen: {t}"
+        );
+    }
+
+    #[test]
+    fn a_program_with_the_whole_screen_is_drawn_as_its_screen() {
+        let mut v = open_blocks();
+        v.blocks.get_mut(BLOCKS).unwrap().mode = BlocksMode::Full;
+        let t = v.plain(120, 30);
+        assert!(!t.contains("❯ git status") && !t.contains("■ ^C"), "{t}");
+    }
+
+    #[test]
+    fn the_editor_shows_the_folder_and_branch_when_nothing_runs() {
+        let mut v = open_blocks();
+        v.blocks.get_mut(BLOCKS).unwrap().blocks.pop();
+        let t = v.plain(120, 30);
+        assert!(!t.contains("■ ^C"), "{t}");
+        assert!(t.contains("⎇ feat/login"), "{t}");
+    }
+
+    #[test]
+    fn a_click_selects_a_block_and_c_o_r_act_on_it() {
+        let mut v = open_blocks();
+        assert_eq!(v.click(80, 3, 120, 30), After::Continue);
+        assert!(v.plain(120, 30).lines().last().unwrap().contains("BLOQUE"));
+        assert_eq!(v.press(Key::CopyCmd), After::Copy("git status".into()));
+        assert_eq!(
+            v.press(Key::CopyOut),
+            After::Copy("On branch feat/login\nnothing to commit, working tree clean".into())
+        );
+        assert_eq!(
+            v.press(Key::Repeat),
+            After::Write {
+                pane: SHELL.into(),
+                data: "git status\r".into()
+            }
+        );
+        assert!(v.blk.is_none(), "running it again lets go");
+    }
+
+    #[test]
+    fn with_a_block_selected_j_k_move_between_blocks_and_esc_lets_go() {
+        let mut v = open_blocks();
+        v.click(80, 3, 120, 30);
+        v.press(Key::Down);
+        assert_eq!(v.blk, Some((SHELL.into(), 2)));
+        v.press(Key::Down);
+        v.press(Key::Down);
+        assert_eq!(v.blk, Some((SHELL.into(), 3)), "stops at the newest");
+        v.press(Key::Up);
+        assert_eq!(v.blk, Some((SHELL.into(), 2)));
+        assert_eq!(v.press(Key::Back), After::Continue, "esc does not quit");
+        assert!(v.blk.is_none());
+        assert_eq!(v.press(Key::CopyCmd), After::Continue, "nothing to copy");
+    }
+
+    #[test]
+    fn the_stop_chip_sends_ctrl_c() {
+        let mut v = open_blocks();
+        assert_eq!(
+            v.click(116, 26, 120, 30),
+            After::Write {
+                pane: SHELL.into(),
+                data: "\x03".into()
+            }
+        );
+    }
+
+    #[test]
+    fn the_wheel_over_a_pane_scrolls_its_blocks() {
+        let mut v = open_blocks();
+        let before = v.plain(120, 16);
+        assert!(!before.contains("❯ git status"), "{before}");
+        for _ in 0..4 {
+            v.scroll(false, 100, 5, 120, 16);
+        }
+        assert!(v.plain(120, 16).contains("❯ git status"));
+        for _ in 0..8 {
+            v.scroll(true, 100, 5, 120, 16);
+        }
+        assert_eq!(v.plain(120, 16), before, "back at the newest");
+    }
+
+    #[test]
+    fn the_blocks_node_of_a_shown_pane_is_asked_for() {
+        let mut v = fixture_view();
+        v.press(Key::Enter);
+        v.revs.remove(BLOCKS);
+        assert!(v.wants().contains(&BLOCKS.to_owned()), "{:?}", v.wants());
+    }
+
+    #[test]
+    fn the_window_keeps_the_newest_at_the_bottom() {
+        assert_eq!(window_start(5, 10, 0), 0);
+        assert_eq!(window_start(30, 10, 0), 20);
+        assert_eq!(window_start(30, 10, 4), 16);
+        assert_eq!(window_start(30, 10, 99), 0);
     }
 
     #[test]
@@ -1362,11 +1780,11 @@ mod tests {
     #[test]
     fn the_wheel_over_the_sidebar_moves_the_highlight_and_elsewhere_does_nothing() {
         let mut v = fixture_view();
-        v.scroll(true, 5);
+        v.scroll(true, 5, 3, 120, 30);
         assert_eq!(v.selected, 1);
-        v.scroll(false, 5);
+        v.scroll(false, 5, 3, 120, 30);
         assert_eq!(v.selected, 0);
-        v.scroll(true, 80);
+        v.scroll(true, 80, 3, 120, 30);
         assert_eq!(v.selected, 0, "the wheel over a pane is not ours");
     }
 

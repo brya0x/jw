@@ -32,5 +32,6 @@ Never reach a real daemon from a test: use a private socket dir (`JWN_SOCKET`, `
 | `android/contract` | the Kotlin types of the JSON documents and `ConformanceTest`, which reads the same `contract/` files as the Rust suite |
 | `android/client-core` | what the phone knows: the seen record, the node cache, Home rows, the navigator (pure Kotlin, tested on the JVM) |
 | `android/app` | the Compose app (`dev.jw.next`, from `identity.toml`); draws the shared fixtures for now |
+| `crates/jwn/src/tui/shell.rs` | the shell as blocks in the terminal client: colours, block lines, OSC 52 |
 | `crates/jwn/src/tui.rs` | the terminal client (`jwn tui`): a pure `View` tested on the fixtures, and the loop that moves bytes |
 | `crates/daemon/src/blocks.rs`, `integration.rs`, `shell/` | the shell blocks: the scanner for OSC 133/633 marks, the per-pane block store (vt100 into styled spans), and the zsh, bash and fish scripts that report prompts and commands |
