@@ -40,11 +40,24 @@ pub enum Manage {
     Dirty(Target, Vec<String>),
     /// The worktree has none: it can.
     Clean(Target),
+    /// `r`: the name of a workspace or a panel being typed.
+    Rename {
+        target: Named,
+        title: String,
+        text: String,
+    },
     /// The daemon refused, or could not be asked.
     Failed { title: String, text: String },
     /// `,`: the mode and the themes of the kind in force; `cursor` is the one the keys are on
     /// and `shown` how many there are.
     Settings { cursor: usize, shown: usize },
+}
+
+/// What a name is for.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Named {
+    Workspace(String),
+    Pane(String),
 }
 
 /// What a key asks the client to send.
@@ -57,6 +70,11 @@ pub enum Act {
     },
     /// Read the workspace's `uncommitted` changes.
     Check(String),
+    /// Give a workspace or a panel this name (empty: the automatic one).
+    Rename {
+        target: Named,
+        name: String,
+    },
     /// Use the theme at this place in the list of the kind in force.
     Theme(usize),
     /// The next mode, or the one before it.
@@ -69,6 +87,44 @@ impl Manage {
         let esc = code == KeyCode::Esc;
         let key = |c: char| code == KeyCode::Char(c);
         match self {
+            Manage::Rename {
+                target,
+                title,
+                mut text,
+            } => match code {
+                KeyCode::Esc => (None, None),
+                KeyCode::Enter => (None, Some(Act::Rename { target, name: text })),
+                KeyCode::Backspace => {
+                    text.pop();
+                    (
+                        Some(Manage::Rename {
+                            target,
+                            title,
+                            text,
+                        }),
+                        None,
+                    )
+                }
+                KeyCode::Char(c) => {
+                    text.push(c);
+                    (
+                        Some(Manage::Rename {
+                            target,
+                            title,
+                            text,
+                        }),
+                        None,
+                    )
+                }
+                _ => (
+                    Some(Manage::Rename {
+                        target,
+                        title,
+                        text,
+                    }),
+                    None,
+                ),
+            },
             Manage::Settings { cursor, shown } => {
                 let here = |cursor| Some(Manage::Settings { cursor, shown });
                 match code {
@@ -135,6 +191,7 @@ impl Manage {
             Manage::Clean(_) => "y quitar · esc cancelar",
             Manage::Failed { .. } => "cualquier tecla para seguir",
             Manage::Settings { .. } => "j/k tema · m modo · ↵ elegir · esc cerrar",
+            Manage::Rename { .. } => "↵ aceptar · esc cancelar (vacío: el nombre automático)",
         }
     }
 
@@ -284,6 +341,16 @@ impl Manage {
                 ]);
                 ("ajustes · tema".to_owned(), look::blue(), lines)
             }
+            Manage::Rename { title, text, .. } => (
+                title.clone(),
+                look::blue(),
+                vec![
+                    dim("nombre"),
+                    (format!("❯ {text}▏"), Look::Accent),
+                    blank(),
+                    dim(self.hint()),
+                ],
+            ),
             Manage::Failed { title, text } => {
                 let mut lines: Vec<(String, Look)> = wrap(text, 70)
                     .into_iter()

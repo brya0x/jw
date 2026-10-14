@@ -305,3 +305,64 @@ fn workspaces_survive_a_restart() {
     assert_eq!(s["workspaces"][0]["branch"], "keep");
     d.stop();
 }
+
+#[test]
+fn a_workspace_is_renamed_without_touching_its_folder_and_an_empty_name_brings_the_old_back() {
+    let sb = Sandbox::new();
+    let d = sb.start();
+    let app = repo(&sb);
+    let mut c = sb.client();
+    session(&mut c);
+    let folder = id_of(
+        c.cmd(Cmd::OpenFolder { path: text(&app) })
+            .unwrap()
+            .unwrap(),
+    );
+    let wt = id_of(
+        c.cmd(Cmd::CreateWorktree {
+            repo: text(&app),
+            branch: "feat/login".into(),
+            base: None,
+        })
+        .unwrap()
+        .unwrap(),
+    );
+    let names = |c: &mut wire::Client| -> Vec<String> {
+        let s = session(c);
+        s["workspaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| w["name"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let before = names(&mut c);
+    for (id, name) in [(&folder, "my app"), (&wt, "login fix")] {
+        c.cmd(Cmd::RenameWorkspace {
+            workspace: id.clone(),
+            name: format!(" {name} "),
+        })
+        .unwrap()
+        .unwrap();
+    }
+    assert_eq!(names(&mut c), ["my app", "login fix"]);
+    assert!(app.exists(), "the folder is untouched");
+    assert!(app.parent().unwrap().join("app-wt/feat-login").exists());
+    // It is kept across a restart.
+    drop(c);
+    d.stop();
+    let d = sb.start();
+    let mut c = sb.client();
+    assert_eq!(names(&mut c), ["my app", "login fix"]);
+    // An empty name brings back the one each had.
+    for id in [&folder, &wt] {
+        c.cmd(Cmd::RenameWorkspace {
+            workspace: id.clone(),
+            name: "".into(),
+        })
+        .unwrap()
+        .unwrap();
+    }
+    assert_eq!(names(&mut c), before);
+    d.stop();
+}

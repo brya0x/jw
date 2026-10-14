@@ -151,6 +151,12 @@ sealed interface Cmd {
     @Serializable @SerialName("new_pane")
     data class NewPane(val workspace: Id, val program: List<String>? = null) : Cmd
 
+    @Serializable @SerialName("rename_workspace")
+    data class RenameWorkspace(val workspace: Id, val name: String) : Cmd
+
+    @Serializable @SerialName("rename_pane")
+    data class RenamePane(val pane: Id, val name: String) : Cmd
+
     @Serializable @SerialName("close_pane")
     data class ClosePane(val pane: Id) : Cmd
 

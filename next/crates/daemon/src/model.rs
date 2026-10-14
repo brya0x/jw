@@ -43,7 +43,11 @@ pub struct Workspace {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Pane {
     pub id: Id,
+    /// What the pane is called: the person's name for it, else what runs in it.
     pub title: String,
+    /// The name the person gave it; the title stays this whatever runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// The user's shell, always the pane's process.
     pub shell: String,
     /// Where the shell was started.

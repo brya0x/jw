@@ -16,6 +16,7 @@ mod panes;
 mod persist;
 mod procs;
 mod pty;
+mod rename;
 mod server;
 mod workspaces;
 

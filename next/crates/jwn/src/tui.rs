@@ -32,7 +32,7 @@ mod shell;
 pub use changes::Ask;
 use changes::{Changes, Docs, Outcome, Src};
 use contract::ErrorBody;
-use manage::{Act, Manage, Target};
+use manage::{Act, Manage, Named, Target};
 use settings::Settings;
 use wire::ClientError;
 
@@ -317,6 +317,11 @@ pub enum After {
     Copy(String),
     /// Close a pane.
     ClosePane(String),
+    /// Name a workspace or a panel (empty: the automatic name).
+    Rename {
+        target: Named,
+        name: String,
+    },
     /// Close a workspace, and with `remove_worktree` remove its worktree. The daemon never
     /// forces: git refuses a worktree with changes.
     RemoveWorkspace {
@@ -867,6 +872,41 @@ impl View {
         }
     }
 
+    /// `r`: ask for a new name for the highlighted workspace, or for the focused panel.
+    fn ask_rename(&mut self, level: Level) {
+        let (target, title, text) = match level {
+            Level::Workspaces => {
+                let Some(w) = self
+                    .session
+                    .as_ref()
+                    .and_then(|s| s.workspaces.get(self.selected))
+                else {
+                    return;
+                };
+                (
+                    Named::Workspace(w.id.clone()),
+                    "renombrar el workspace".to_owned(),
+                    shown_name(&w.name, w.kind, w.branch.as_deref()).to_owned(),
+                )
+            }
+            _ => {
+                let Some(p) = self.shown().and_then(|w| w.panes.get(self.focus)) else {
+                    return;
+                };
+                (
+                    Named::Pane(p.id.clone()),
+                    "nombrar el panel".to_owned(),
+                    p.title.clone(),
+                )
+            }
+        };
+        self.manage = Some(Manage::Rename {
+            target,
+            title,
+            text,
+        });
+    }
+
     /// `x` at the workspace level: ask before the highlighted workspace is closed.
     fn ask_close_workspace(&mut self) {
         let Some(w) = self
@@ -896,6 +936,10 @@ impl View {
 
     /// A key while a question is open: it answers it, and is never a pane's.
     fn manage_key(&mut self, ev: KeyEvent) -> After {
+        // A chord is not a letter of a name: it answers nothing.
+        if ev.modifiers.contains(KeyModifiers::CONTROL) {
+            return After::Continue;
+        }
         let Some(question) = self.manage.take() else {
             return After::Continue;
         };
@@ -911,6 +955,7 @@ impl View {
             None => After::Continue,
             Some(Act::ClosePane(pane)) => After::ClosePane(pane),
             Some(Act::Check(workspace)) => After::Check(workspace),
+            Some(Act::Rename { target, name }) => After::Rename { target, name },
             Some(Act::Theme(at)) => {
                 let kind = self.settings.is_dark(self.os_dark);
                 if let Some(t) = contract::themes::of_kind(kind).nth(at) {
@@ -1202,6 +1247,7 @@ impl View {
                 Level::Terminal => {}
             },
             (Mode::Workspaces, Key::Full) if level == Level::Panels => self.full = !self.full,
+            (Mode::Workspaces, Key::Repeat) if level != Level::Terminal => self.ask_rename(level),
             (Mode::Workspaces, Key::Close) => match level {
                 Level::Workspaces => self.ask_close_workspace(),
                 Level::Panels => return self.ask_close_pane(),
@@ -1477,7 +1523,7 @@ impl View {
                 g.paint_bg(0, y, SIDEBAR - 1, look::sel());
             }
             let name = if w.kind == WorkspaceKind::Worktree {
-                format!("↳ {}", w.branch.clone().unwrap_or_else(|| w.name.clone()))
+                format!("↳ {}", shown_name(&w.name, w.kind, w.branch.as_deref()))
             } else {
                 w.name.clone()
             };
@@ -1549,11 +1595,7 @@ impl View {
                 g.put(x, 0, &project, dim);
                 x += project.chars().count();
             }
-            let title = if ws.kind == WorkspaceKind::Worktree {
-                ws.branch.clone().unwrap_or_else(|| ws.name.clone())
-            } else {
-                ws.name.clone()
-            };
+            let title = shown_name(&ws.name, ws.kind, ws.branch.as_deref()).to_owned();
             g.put(x, 0, &title, Style::fg(look::blue()).bold());
             x += title.chars().count() + 2;
             if ws.kind == WorkspaceKind::Worktree {
@@ -1616,12 +1658,12 @@ impl View {
                 (_, Level::Panels) => (
                     " PANEL ",
                     look::magenta(),
-                    "h/l panel · ↵ escribir · n nuevo · f completa · x cerrar · esc volver · ? teclas",
+                    "h/l panel · ↵ escribir · n nuevo · r nombrar · f completa · x cerrar · esc volver · ? teclas",
                 ),
                 (_, Level::Workspaces) => (
                     " WORKSPACE ",
                     look::blue(),
-                    "j/k mover · ↵ entrar · x cerrar · d cambios · a avisos · m teléfono · ? teclas · q salir",
+                    "j/k mover · ↵ entrar · r renombrar · x cerrar · d cambios · a avisos · m teléfono · ? teclas · q salir",
                 ),
             },
         };
@@ -1974,6 +2016,7 @@ const SCROLL_STEP: usize = 3;
 const WORKSPACE_KEYS: &[(&str, &str)] = &[
     ("j k", "mover por los workspaces"),
     ("↵", "entrar al workspace"),
+    ("r", "renombrar el workspace"),
     ("x", "cerrar el workspace (y quitar su worktree)"),
     ("d", "ver sus cambios"),
     ("a", "avisos"),
@@ -1985,6 +2028,7 @@ const PANEL_KEYS: &[(&str, &str)] = &[
     ("h j k l", "cambiar de panel"),
     ("↵", "escribir en el panel"),
     ("n", "panel nuevo"),
+    ("r", "nombrar el panel"),
     ("f", "el panel a pantalla completa"),
     ("x", "cerrar el panel"),
     ("d a m ,", "cambios · avisos · teléfono · ajustes"),
@@ -2061,6 +2105,19 @@ fn pane_rects(n: usize, (x, y, w, h): Rect) -> Vec<Rect> {
 fn avisos_rect(items: usize, (x, y, w, _): Rect) -> Rect {
     let bw = 56.min(w.saturating_sub(2));
     (x + w.saturating_sub(bw) / 2, y + 3, bw, items.max(1) + 4)
+}
+
+/// What a workspace is called on the screen: a worktree that has the name it got when it was
+/// made (`repo: branch`) shows its branch, and a name the person chose shows as chosen.
+fn shown_name<'a>(name: &'a str, kind: WorkspaceKind, branch: Option<&'a str>) -> &'a str {
+    match (kind, branch) {
+        (WorkspaceKind::Worktree, Some(branch))
+            if name.strip_suffix(branch).is_some_and(|p| p.ends_with(": ")) =>
+        {
+            branch
+        }
+        _ => name,
+    }
 }
 
 /// What a pane's box shows before its document arrives: grey bars where the lines will be.
@@ -2419,6 +2476,14 @@ pub fn run() -> Result<(), String> {
                         workspace,
                         program: None,
                     });
+                }
+                After::Rename { target, name } => {
+                    let cmd = match target {
+                        Named::Workspace(workspace) => Cmd::RenameWorkspace { workspace, name },
+                        Named::Pane(pane) => Cmd::RenamePane { pane, name },
+                    };
+                    let reply = client.cmd(cmd);
+                    told(&mut view, "No se pudo renombrar", "renombrado", reply);
                 }
                 After::ClosePane(pane) => {
                     let reply = client.cmd(Cmd::ClosePane { pane });
@@ -3820,5 +3885,105 @@ mod tests {
         v.click(5, 3, 120, 30);
         assert!(!v.help);
         assert_eq!(v.level(), Level::Workspaces);
+    }
+    #[test]
+    fn r_asks_for_the_name_of_the_workspace_at_the_first_level_prefilled_with_what_it_shows() {
+        let mut v = fixture_view();
+        assert_eq!(tap(&mut v, 'r'), After::Continue);
+        let t = v.plain(120, 30);
+        assert!(t.contains("renombrar el workspace"), "{t}");
+        assert!(
+            t.contains("❯ feat/login▏"),
+            "a worktree shows its branch: {t}"
+        );
+        assert!(t.contains(" PREGUNTA "), "{t}");
+        // Typing edits it, `backspace` takes a letter away, a chord is no letter.
+        for c in ['-', '2'] {
+            tap(&mut v, c);
+        }
+        v.press_key(plain(KeyCode::Backspace));
+        v.press_key(key(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        assert!(v.plain(120, 30).contains("❯ feat/login-▏"));
+        let ws = v.selected_id().unwrap();
+        assert_eq!(
+            v.press_key(plain(KeyCode::Enter)),
+            After::Rename {
+                target: Named::Workspace(ws),
+                name: "feat/login-".into()
+            }
+        );
+        assert!(v.manage.is_none());
+    }
+
+    #[test]
+    fn r_at_the_panel_level_names_the_panel_and_esc_changes_nothing() {
+        let mut v = idle_view();
+        let pane = v.shown().unwrap().panes[v.focus].id.clone();
+        let title = v.shown().unwrap().panes[v.focus].title.clone();
+        tap(&mut v, 'r');
+        assert!(v.plain(120, 30).contains("nombrar el panel"));
+        assert!(v.plain(120, 30).contains(&format!("❯ {title}▏")));
+        for c in "tests".chars() {
+            tap(&mut v, c);
+        }
+        assert_eq!(
+            v.press_key(plain(KeyCode::Enter)),
+            After::Rename {
+                target: Named::Pane(pane),
+                name: format!("{title}tests")
+            }
+        );
+        tap(&mut v, 'r');
+        assert_eq!(v.press_key(plain(KeyCode::Esc)), After::Continue);
+        assert!(v.manage.is_none());
+        // An empty name is sent as it is: the daemon brings the automatic one back.
+        tap(&mut v, 'r');
+        for _ in 0..title.chars().count() {
+            v.press_key(plain(KeyCode::Backspace));
+        }
+        assert!(matches!(
+            v.press_key(plain(KeyCode::Enter)),
+            After::Rename { name, .. } if name.is_empty()
+        ));
+    }
+
+    #[test]
+    fn r_is_the_programs_while_typing_and_the_blocks_while_one_is_selected() {
+        let mut v = idle_view();
+        v.press(Key::Enter);
+        assert!(
+            matches!(tap(&mut v, 'r'), After::Write { .. }),
+            "typed into the shell"
+        );
+        assert!(v.manage.is_none());
+    }
+
+    #[test]
+    fn a_worktree_with_a_name_of_its_own_shows_it_and_the_default_shows_its_branch() {
+        let mut v = fixture_view();
+        let t = v.plain(120, 30);
+        assert!(t.contains("↳ feat/login"), "{t}");
+        let ws = v.selected_id().unwrap();
+        for node in v.workspaces.values_mut() {
+            if node.head.id == ws {
+                node.name = "login fix".into();
+            }
+        }
+        v.session.as_mut().unwrap().workspaces[0].name = "login fix".into();
+        let t = v.plain(120, 30);
+        assert!(t.contains("↳ login fix"), "{t}");
+        assert_eq!(
+            shown_name("login fix", WorkspaceKind::Worktree, Some("feat/login")),
+            "login fix"
+        );
+        assert_eq!(
+            shown_name(
+                "app: feat/login",
+                WorkspaceKind::Worktree,
+                Some("feat/login")
+            ),
+            "feat/login"
+        );
+        assert_eq!(shown_name("x: y", WorkspaceKind::Folder, None), "x: y");
     }
 }

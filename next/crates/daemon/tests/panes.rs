@@ -498,3 +498,98 @@ fn the_program_running_in_a_pane_is_detected_and_remembered_when_it_ends() {
     assert_eq!(c.nodes[&pane]["title"], "sh");
     d.stop();
 }
+
+#[test]
+fn a_pane_keeps_the_name_it_was_given_whatever_runs_and_it_survives_a_restart() {
+    let (w, d, mut c) = world();
+    let pane = new_pane(&mut c, &w.ws);
+    c.open(&pane).unwrap();
+    c.open(&w.ws).unwrap();
+    assert!(
+        c.wait_until(WAIT, |c| c.nodes.contains_key(&pane)
+            && c.nodes.contains_key(&w.ws))
+            .unwrap()
+    );
+    c.cmd(Cmd::RenamePane {
+        pane: pane.clone(),
+        name: "  tests  ".into(),
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(c.nodes[&pane]["title"], "tests", "the pane and");
+    assert!(
+        c.wait_until(WAIT, |c| c.nodes[&w.ws]["panes"][0]["title"] == "tests")
+            .unwrap(),
+        "the workspace's row follow"
+    );
+    // A program starts: the name stays, the program is still reported.
+    type_line(&mut c, &pane, "sleep 30");
+    assert!(
+        c.wait_until(WAIT, |c| c.nodes[&pane]["running"]["argv"][0] == "sleep")
+            .unwrap()
+    );
+    assert_eq!(c.nodes[&pane]["title"], "tests", "not `sleep`");
+    // An empty name brings back what runs in it.
+    c.cmd(Cmd::RenamePane {
+        pane: pane.clone(),
+        name: "".into(),
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(c.nodes[&pane]["title"], "sleep");
+    c.cmd(Cmd::RenamePane {
+        pane: pane.clone(),
+        name: "keep me".into(),
+    })
+    .unwrap()
+    .unwrap();
+    drop(c);
+    d.stop();
+
+    // A restart brings the pane back with its name.
+    let d = w.sb.start();
+    let mut c = w.sb.client();
+    c.open(&w.ws).unwrap();
+    assert!(c.wait_until(WAIT, |c| c.nodes.contains_key(&w.ws)).unwrap());
+    assert_eq!(c.nodes[&w.ws]["panes"][0]["title"], "keep me");
+    d.stop();
+}
+
+#[test]
+fn a_bad_name_or_an_unknown_node_is_refused() {
+    let (w, d, mut c) = world();
+    let pane = new_pane(&mut c, &w.ws);
+    let e = c
+        .cmd(Cmd::RenamePane {
+            pane: pane.clone(),
+            name: "x".repeat(81),
+        })
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::BadRequest);
+    let e = c
+        .cmd(Cmd::RenamePane {
+            pane,
+            name: "a\nb".into(),
+        })
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::BadRequest);
+    let e = c
+        .cmd(Cmd::RenamePane {
+            pane: "nope".into(),
+            name: "x".into(),
+        })
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::NotFound);
+    let e = c
+        .cmd(Cmd::RenameWorkspace {
+            workspace: "nope".into(),
+            name: "x".into(),
+        })
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::NotFound);
+    d.stop();
+}

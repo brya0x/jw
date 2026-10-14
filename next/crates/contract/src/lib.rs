@@ -177,6 +177,18 @@ pub enum Cmd {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         remove_worktree: bool,
     },
+    /// Give a workspace a name to be shown by; an empty name brings back the one it had
+    /// (the folder's name, or `repo: branch` for a worktree). Its folder is not touched.
+    RenameWorkspace {
+        workspace: Id,
+        name: String,
+    },
+    /// Give a pane a name that stays whatever runs in it; an empty name brings back the
+    /// automatic one (what runs in it, else its shell).
+    RenamePane {
+        pane: Id,
+        name: String,
+    },
     /// Open a pane: the user's shell, with `program` run inside it when given (the shell
     /// starts it, and is still there when it ends).
     NewPane {

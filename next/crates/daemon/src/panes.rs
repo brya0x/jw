@@ -79,6 +79,7 @@ pub fn new_pane(shared: &Shared, workspace: &Id, program: Option<Vec<String>>) -
     ws.panes.push(Pane {
         id: id.clone(),
         title: basename(&shell),
+        name: None,
         shell,
         cwd: path,
         attention: Vec::new(),
@@ -202,7 +203,7 @@ pub fn restore(shared: &Shared) {
         ws.panes.retain(|p| !failed.contains(&p.id));
         // The title says what runs now; the saved one names a program that may be gone.
         for p in &mut ws.panes {
-            p.title = basename(&p.shell);
+            p.title = p.name.clone().unwrap_or_else(|| basename(&p.shell));
             // What was not brought back is not waiting to be.
             if !resumed.contains(&p.id) {
                 p.resume = None;

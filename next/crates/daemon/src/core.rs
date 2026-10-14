@@ -191,10 +191,11 @@ impl Core {
             }
             // An agent with a known conversation is what a restart brings back.
             p.resume = new.as_deref().and_then(crate::launch::agent_resume);
-            p.title = new
-                .as_deref()
-                .and_then(crate::procs::title_for)
-                .unwrap_or_else(|| crate::panes::basename(&p.shell));
+            p.title = p.name.clone().unwrap_or_else(|| {
+                new.as_deref()
+                    .and_then(crate::procs::title_for)
+                    .unwrap_or_else(|| crate::panes::basename(&p.shell))
+            });
             p.running = new.clone();
             changed = true;
         }
@@ -1002,6 +1003,7 @@ mod tests {
             panes: vec![Pane {
                 id: pane.clone(),
                 title: "sh".into(),
+                name: None,
                 shell: "/bin/sh".into(),
                 cwd: "/tmp".into(),
                 attention: vec![],
