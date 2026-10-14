@@ -34,6 +34,7 @@ impl Sandbox {
             env: Vec::new(),
             blocks: true,
             link: daemon::LinkConfig::off(),
+            hook_exe: None,
         }
     }
 

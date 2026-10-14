@@ -180,6 +180,15 @@ sealed interface Cmd {
     @Serializable @SerialName("set_viewed")
     data class SetViewed(val node: Id, val path: String, val viewed: Boolean) : Cmd
 
+    /** An agent in [pane] reported what it is doing through a hook; the daemon turns it into attention. */
+    @Serializable @SerialName("agent_event")
+    data class AgentEvent(
+        val pane: Id,
+        val event: dev.jw.next.contract.AgentEvent,
+        @SerialName("notification_type") val notificationType: String? = null,
+        val tool: String? = null,
+    ) : Cmd
+
     /** Turn the phone link on and make a pairing token; the result carries the link to pair from. */
     @Serializable @SerialName("mobile_start")
     data object MobileStart : Cmd
@@ -394,6 +403,17 @@ sealed interface Node {
         val more: Boolean = false,
         val commits: List<CommitInfo>,
     ) : Node
+}
+
+/** The hooks of an agent the daemon listens to. */
+@Serializable
+enum class AgentEvent {
+    @SerialName("notification") Notification,
+    @SerialName("pre_tool_use") PreToolUse,
+    @SerialName("post_tool_use") PostToolUse,
+    @SerialName("user_prompt_submit") UserPromptSubmit,
+    @SerialName("stop") Stop,
+    @SerialName("session_end") SessionEnd,
 }
 
 @Serializable

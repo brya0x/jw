@@ -48,6 +48,8 @@ pub struct Config {
     pub blocks: bool,
     /// The phone link: the tunnel and the private-address listener.
     pub link: crate::mobile::LinkConfig,
+    /// The binary an agent's hooks run (`<exe> hook <event>`); none gives agents no hooks.
+    pub hook_exe: Option<PathBuf>,
 }
 
 impl Config {
@@ -62,6 +64,7 @@ impl Config {
             env: Vec::new(),
             blocks: std::env::var(identity::env_var("SHELL_BLOCKS")).map_or(true, |v| v != "0"),
             link: crate::mobile::LinkConfig::from_identity(),
+            hook_exe: std::env::current_exe().ok(),
         }
     }
 
@@ -130,6 +133,9 @@ impl Daemon {
             )),
         ))));
         shared.lock().mobile.clone().resume();
+        if let Some(exe) = &config.hook_exe {
+            shared.lock().hooks = Some(crate::launch::write_hooks(&config.state_dir, exe)?);
+        }
         let engine = {
             let shared = shared.clone();
             thread::Builder::new()

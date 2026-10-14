@@ -5,6 +5,7 @@ use contract::{Cmd, ErrorCode, Outcome};
 use contract::{False, True};
 use serde_json::Value;
 
+use crate::agents;
 use crate::changes;
 use crate::panes;
 use crate::server::Shared;
@@ -59,6 +60,18 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
         Cmd::OpenCommits { workspace } => changes::open_commits(shared, &workspace),
         Cmd::RefreshDiff { node } => changes::refresh(shared, &node),
         Cmd::SetViewed { node, path, viewed } => changes::set_viewed(shared, &node, &path, viewed),
+        Cmd::AgentEvent {
+            pane,
+            event,
+            notification_type,
+            tool,
+        } => agents::event(
+            shared,
+            &pane,
+            event,
+            notification_type.as_deref(),
+            tool.as_deref(),
+        ),
         Cmd::MobileStart {} => {
             let hub = shared.lock().mobile.clone();
             hub.start().map(Some).map_err(|why| err(ErrorCode::Io, why))

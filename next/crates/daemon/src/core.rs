@@ -118,6 +118,8 @@ pub struct Core {
     pub integration: Option<PathBuf>,
     /// The phone link: it is used without this lock held, since it waits.
     pub mobile: Arc<crate::mobile::Hub>,
+    /// The settings file an agent is started with, so its hooks tell this daemon what it does.
+    pub hooks: Option<PathBuf>,
 }
 
 impl Core {
@@ -149,6 +151,7 @@ impl Core {
             env,
             integration,
             mobile,
+            hooks: None,
         };
         core.refresh();
         core
@@ -179,6 +182,11 @@ impl Core {
                 continue;
             }
             if new.is_none() {
+                // An agent that is gone has nothing left to ask.
+                if p.running.as_deref().is_some_and(crate::launch::is_agent) {
+                    p.attention
+                        .retain(|o| !crate::agents::KINDS.contains(&o.kind));
+                }
                 p.last_program = p.running.take();
             }
             // An agent with a known conversation is what a restart brings back.

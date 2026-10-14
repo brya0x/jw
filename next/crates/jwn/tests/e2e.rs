@@ -2,99 +2,17 @@
 //! socket dir, make a session's worth of state with `jwn cmd`, stop it with `jwn stop`
 //! (only its own pid), start it again and find the state back.
 
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
+mod common;
 
+use std::time::Duration;
+
+use common::{Env, git};
 use serde_json::Value;
 use wire::Client;
 
-const JWN: &str = env!("CARGO_BIN_EXE_jwn");
-
-struct Env {
-    dir: PathBuf,
-}
-
-impl Env {
-    fn jwn(&self) -> Command {
-        let mut c = Command::new(JWN);
-        c.env("JWN_STATE_DIR", self.dir.join("state"))
-            .env("JWN_SOCKET", self.dir.join("s.sock"))
-            .env("SHELL", "/bin/sh")
-            .stdin(Stdio::null());
-        c
-    }
-
-    fn start(&self) -> Child {
-        let mut child = self.jwn().arg("daemon").spawn().unwrap();
-        let end = Instant::now() + Duration::from_secs(5);
-        while Instant::now() < end {
-            if wire::Conn::connect(&self.dir.join("s.sock")).is_ok() {
-                return child;
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        let _ = child.kill();
-        let _ = child.wait();
-        panic!("the daemon did not come up");
-    }
-
-    /// `jwn cmd '<json>'`: its reply line as JSON.
-    fn cmd(&self, json: &str) -> Value {
-        let out = self.jwn().args(["cmd", json]).output().unwrap();
-        let line = String::from_utf8(out.stdout).unwrap();
-        assert!(
-            out.status.success(),
-            "cmd {json} failed: {line} {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        serde_json::from_str(&line).unwrap()
-    }
-
-    fn stop(&self, mut child: Child) {
-        assert!(self.jwn().arg("stop").status().unwrap().success());
-        let end = Instant::now() + Duration::from_secs(5);
-        while Instant::now() < end {
-            if child.try_wait().unwrap().is_some() {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        child.kill().unwrap();
-        panic!("the daemon ignored `jwn stop`");
-    }
-}
-
-impl Drop for Env {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
-    }
-}
-
-fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args([
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@t",
-            "-c",
-            "commit.gpgsign=false",
-        ])
-        .args(args)
-        .output()
-        .unwrap();
-    assert!(out.status.success(), "git {args:?}");
-}
-
 #[test]
 fn a_session_is_built_with_json_and_comes_back_after_a_restart() {
-    let env = Env {
-        dir: PathBuf::from(format!("/tmp/jwn-e2e-{}", std::process::id())),
-    };
-    std::fs::create_dir_all(&env.dir).unwrap();
+    let env = Env::new("e2e");
     let work = std::fs::canonicalize(&env.dir).unwrap().join("work");
     let repo = work.join("app");
     let notes = work.join("notes");

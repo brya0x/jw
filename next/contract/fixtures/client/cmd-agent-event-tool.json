@@ -1,0 +1,10 @@
+{
+  "t": "cmd",
+  "id": "c21",
+  "cmd": {
+    "cmd": "agent_event",
+    "pane": "00000000-0000-4000-8000-0000000000c1",
+    "event": "pre_tool_use",
+    "tool": "ExitPlanMode"
+  }
+}

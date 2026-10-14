@@ -33,7 +33,7 @@ pub fn new_pane(shared: &Shared, workspace: &Id, program: Option<Vec<String>>) -
         return Err(err(ErrorCode::BadRequest, "program is empty"));
     }
     let argv = program.map(|p| crate::launch::with_session(&p, new_id));
-    let (path, events, shell, env, setup) = {
+    let (path, events, shell, env, setup, hooks) = {
         let core = shared.lock();
         let ws = core
             .model
@@ -47,14 +47,16 @@ pub fn new_pane(shared: &Shared, workspace: &Id, program: Option<Vec<String>>) -
             core.shell.clone(),
             core.env.clone(),
             core.integration_for(&core.shell),
+            core.hooks.clone(),
         )
     };
+    let launched = with_agent_hooks(argv.as_deref(), hooks.as_deref());
     let id = new_id();
     let term = pty::spawn(
         &id,
         &shell,
         Path::new(&path),
-        argv.as_deref(),
+        launched.as_deref(),
         &env,
         &setup,
         events,
@@ -87,6 +89,14 @@ pub fn new_pane(shared: &Shared, workspace: &Id, program: Option<Vec<String>>) -
     core.attach_term(&id, term);
     core.refresh();
     Ok(Some(json!({ "pane": id })))
+}
+
+/// `argv` with the hooks of an agent, when there are hooks to give.
+fn with_agent_hooks(argv: Option<&[String]>, hooks: Option<&Path>) -> Option<Vec<String>> {
+    match (argv, hooks) {
+        (Some(argv), Some(file)) => Some(crate::launch::with_hooks(argv, file)),
+        (argv, _) => argv.map(<[String]>::to_vec),
+    }
 }
 
 pub fn close_pane(shared: &Shared, pane: &Id) -> Done {
@@ -127,7 +137,7 @@ pub fn resize(shared: &Shared, pane: &Id, rows: u16, cols: u16) -> Done {
 /// Start the shells of the panes a restored session remembers; a pane whose shell cannot
 /// start is dropped (its workspace stays).
 pub fn restore(shared: &Shared) {
-    let (events, shell, env, wanted) = {
+    let (events, shell, env, hooks, wanted) = {
         let core = shared.lock();
         let wanted: Vec<(Id, String, String, Option<Vec<String>>)> = core
             .model
@@ -148,6 +158,7 @@ pub fn restore(shared: &Shared) {
             core.events.clone(),
             core.shell.clone(),
             core.env.clone(),
+            core.hooks.clone(),
             wanted,
         )
     };
@@ -169,11 +180,12 @@ pub fn restore(shared: &Shared) {
             resumed.push(id.clone());
         }
         let setup = shared.lock().integration_for(&shell);
+        let launched = with_agent_hooks(resume.as_deref(), hooks.as_deref());
         match pty::spawn(
             &id,
             &shell,
             Path::new(&cwd),
-            resume.as_deref(),
+            launched.as_deref(),
             &env,
             &setup,
             events.clone(),

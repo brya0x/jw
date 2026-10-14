@@ -6,6 +6,10 @@
 //! files (`-i`), and when the program ends the same process becomes an ordinary shell, so
 //! the pane never dies with it.
 
+use std::path::{Path, PathBuf};
+
+use serde_json::json;
+
 use crate::procs::title_for;
 
 /// Flags that name a Claude conversation: the value after them is its id.
@@ -60,6 +64,50 @@ pub fn with_session(argv: &[String], new_id: impl FnOnce() -> String) -> Vec<Str
     let mut out = argv.to_vec();
     if is_agent(argv) && !argv.iter().any(|a| CHOOSING_FLAGS.contains(&a.as_str())) {
         out.extend(["--session-id".to_owned(), new_id()]);
+    }
+    out
+}
+
+/// The hooks an agent is started with: each runs `<exe> hook <event>`, which tells the daemon
+/// (`agents.rs`). `Notification` is only asked for the kinds that need a person, and
+/// `PreToolUse` only for the tools that ask a question or present a plan.
+pub fn hook_settings(exe: &Path) -> String {
+    let exe = quote("/bin/sh", &exe.to_string_lossy());
+    let hook = |event: &str, matcher: Option<&str>| {
+        let mut group = json!({"hooks": [{
+            "type": "command",
+            "command": format!("{exe} hook {event}"),
+            "timeout": 5,
+        }]});
+        if let Some(m) = matcher {
+            group["matcher"] = m.into();
+        }
+        json!([group])
+    };
+    json!({"hooks": {
+        "Notification": hook("notification", Some("permission_prompt|elicitation_dialog|agent_needs_input")),
+        "PreToolUse": hook("pre_tool_use", Some("AskUserQuestion|ExitPlanMode")),
+        "PostToolUse": hook("post_tool_use", None),
+        "UserPromptSubmit": hook("user_prompt_submit", None),
+        "Stop": hook("stop", None),
+        "SessionEnd": hook("session_end", None),
+    }})
+    .to_string()
+}
+
+/// Write the agent's hooks to `<state>/claude-hooks.json`, which `--settings` takes.
+pub fn write_hooks(state_dir: &Path, exe: &Path) -> std::io::Result<PathBuf> {
+    let file = state_dir.join("claude-hooks.json");
+    std::fs::write(&file, hook_settings(exe))?;
+    Ok(file)
+}
+
+/// An agent gets the hooks for this run only (`--settings` writes nothing and merges with the
+/// person's own hooks), unless it was started with settings of its own.
+pub fn with_hooks(argv: &[String], file: &Path) -> Vec<String> {
+    let mut out = argv.to_vec();
+    if is_agent(argv) && !argv.iter().any(|a| a == "--settings") {
+        out.extend(["--settings".to_owned(), file.to_string_lossy().into_owned()]);
     }
     out
 }
@@ -153,6 +201,42 @@ mod tests {
             argv("nvim a.rs"),
             "only agents"
         );
+    }
+
+    #[test]
+    fn an_agent_gets_the_hooks_once_and_others_do_not() {
+        let file = Path::new("/s/claude-hooks.json");
+        assert_eq!(
+            with_hooks(&argv("claude --session-id abc"), file),
+            argv("claude --session-id abc --settings /s/claude-hooks.json")
+        );
+        let own = argv("claude --settings /mine.json");
+        assert_eq!(with_hooks(&own, file), own, "its own settings stay");
+        assert_eq!(with_hooks(&argv("nvim a.rs"), file), argv("nvim a.rs"));
+    }
+
+    #[test]
+    fn the_hooks_run_the_binary_with_the_event_and_ask_only_for_what_needs_a_person() {
+        let v: serde_json::Value =
+            serde_json::from_str(&hook_settings(Path::new("/opt/my jwn/jwn"))).unwrap();
+        let h = &v["hooks"];
+        assert_eq!(
+            h["Stop"][0]["hooks"][0]["command"], "'/opt/my jwn/jwn' hook stop",
+            "the path is quoted for the shell that runs it"
+        );
+        assert_eq!(h["Stop"][0]["hooks"][0]["timeout"], 5);
+        assert!(h["Stop"][0].get("matcher").is_none());
+        assert_eq!(
+            h["Notification"][0]["matcher"],
+            "permission_prompt|elicitation_dialog|agent_needs_input"
+        );
+        assert_eq!(
+            h["PreToolUse"][0]["matcher"],
+            "AskUserQuestion|ExitPlanMode"
+        );
+        for e in ["PostToolUse", "UserPromptSubmit", "SessionEnd"] {
+            assert!(h[e].is_array(), "{e}");
+        }
     }
 
     #[test]

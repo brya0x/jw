@@ -48,6 +48,7 @@ pub fn run() -> Result<(), String> {
         env: Vec::new(),
         blocks: true,
         link: daemon::LinkConfig::off(),
+        hook_exe: None,
     };
     let socket = config.socket.clone();
     let daemon =

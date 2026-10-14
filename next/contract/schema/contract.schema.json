@@ -52,6 +52,7 @@
         "out": { "type": "array", "items": { "type": "array", "items": { "$ref": "#/$defs/Span" } } }
       }
     },
+    "AgentEvent": { "description": "The hooks of an agent the daemon listens to.", "enum": ["notification", "pre_tool_use", "post_tool_use", "user_prompt_submit", "stop", "session_end"] },
     "Sha": { "type": "string", "pattern": "^[0-9a-f]{4,40}$" },
     "DiffScope": { "description": "What a diff compares: the working tree with HEAD, this branch with its merge base with origin's default branch, or one commit with its first parent.", "enum": ["uncommitted", "general", "commit"] },
     "DiffState": { "description": "no_base: origin has no default branch, so a general diff has nothing to compare with.", "enum": ["ok", "no_base"] },
@@ -283,6 +284,17 @@
         { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "open_commits" }, "workspace": { "$ref": "#/$defs/Id" } } },
         { "type": "object", "required": ["cmd", "node"], "properties": { "cmd": { "const": "refresh_diff" }, "node": { "$ref": "#/$defs/Id" } } },
         { "type": "object", "required": ["cmd", "node", "path", "viewed"], "properties": { "cmd": { "const": "set_viewed" }, "node": { "$ref": "#/$defs/Id" }, "path": { "type": "string", "minLength": 1 }, "viewed": { "type": "boolean" } } },
+        {
+          "type": "object",
+          "required": ["cmd", "pane", "event"],
+          "properties": {
+            "cmd": { "const": "agent_event" },
+            "pane": { "$ref": "#/$defs/Id" },
+            "event": { "$ref": "#/$defs/AgentEvent" },
+            "notification_type": { "type": "string" },
+            "tool": { "type": "string" }
+          }
+        },
         { "type": "object", "required": ["cmd"], "properties": { "cmd": { "const": "mobile_start" } } },
         { "type": "object", "required": ["cmd", "seconds"], "properties": { "cmd": { "const": "mobile_wait" }, "seconds": { "type": "integer", "minimum": 0, "maximum": 300 } } },
         { "type": "object", "required": ["cmd", "yes"], "properties": { "cmd": { "const": "mobile_answer" }, "yes": { "type": "boolean" } } },

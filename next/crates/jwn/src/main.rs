@@ -1,6 +1,7 @@
 //! `jwn`: the daemon and a few JSON-speaking commands to drive and watch it.
 
 mod bench;
+mod hook;
 mod pair;
 mod tui;
 
@@ -21,7 +22,8 @@ const USAGE: &str = "usage:
   jwn pair stop           turn the phone link off (paired phones are kept)
   jwn devices             list the paired phones
   jwn revoke <id|name>    unpair a phone and drop its connection
-  jwn bench               measure sizes and latency on a private daemon";
+  jwn bench               measure sizes and latency on a private daemon
+  jwn hook <event>        an agent's hook (claude runs it): tell the daemon what the agent does";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -41,6 +43,7 @@ fn main() -> ExitCode {
         ["devices"] => pair::devices(),
         ["revoke", which] => pair::revoke(which),
         ["bench"] => bench::run().map(|()| ExitCode::SUCCESS),
+        ["hook", event] => Ok(hook::run(event)),
         ["tui"] => tui::run().map(|()| ExitCode::SUCCESS),
         _ => Err(USAGE.into()),
     };

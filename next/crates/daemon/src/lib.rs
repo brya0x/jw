@@ -1,5 +1,6 @@
 //! The daemon: owns the session, serves the node tree over a Unix socket.
 
+mod agents;
 mod blocks;
 mod changes;
 mod commands;

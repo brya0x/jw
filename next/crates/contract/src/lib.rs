@@ -224,6 +224,18 @@ pub enum Cmd {
         path: String,
         viewed: bool,
     },
+    /// An agent (claude) in `pane` reported what it is doing, through one of its hooks; the
+    /// daemon turns it into attention (or ends it).
+    AgentEvent {
+        pane: Id,
+        event: AgentEvent,
+        /// What a `notification` is about (`permission_prompt`, `elicitation_dialog`, …).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        notification_type: Option<String>,
+        /// The tool a `pre_tool_use` or `post_tool_use` is about.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool: Option<String>,
+    },
     /// Turn the phone link on (bridge, tunnel, private-address listener) and make a pairing
     /// token. The result is `{uri, tunnel?, lan?}`; the phone is paired from `uri`.
     MobileStart {},
@@ -415,6 +427,18 @@ pub struct Commits {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub more: bool,
     pub commits: Vec<CommitInfo>,
+}
+
+/// The hooks of an agent that the daemon listens to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentEvent {
+    Notification,
+    PreToolUse,
+    PostToolUse,
+    UserPromptSubmit,
+    Stop,
+    SessionEnd,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
