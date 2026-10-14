@@ -95,4 +95,38 @@ class LinkTest {
             listOf(Denied.BadToken, Denied.Declined, Denied.Timeout, Denied.BadSecret, Denied.Revoked, Denied.LockedOut).map { it.toFail() },
         )
     }
+
+    private fun pc(id: String, name: String? = null) = Pairing(id, "s".repeat(64), HostPort("192.168.1.20", 7443), fp, "a-$id.trycloudflare.com", name)
+
+    @Test
+    fun aPhoneKeepsSeveralPcsAndTheLastOneUsed() {
+        val list = PcList().add(pc("a1")).add(pc("b2"))
+        assertEquals(listOf("a1", "b2"), list.pcs.map { it.device })
+        assertEquals("b2", list.lastUsed()?.device, "REQ-88: the app opens on the last one")
+        assertEquals("a1", list.used("a1").lastUsed()?.device)
+        assertEquals(list, list.used("nope"), "an unknown device is not 'used'")
+        val again = list.add(pc("a1", "MacBook"))
+        assertEquals(2, again.pcs.size, "the same device is replaced, not repeated")
+        assertEquals("MacBook", again.pcs.first { it.device == "a1" }.name)
+    }
+
+    @Test
+    fun forgettingAPcKeepsTheOthersAndFallsBackToTheFirst() {
+        val list = PcList().add(pc("a1")).add(pc("b2"))
+        val without = list.remove("b2")
+        assertEquals(listOf("a1"), without.pcs.map { it.device })
+        assertNull(without.last)
+        assertEquals("a1", without.lastUsed()?.device)
+        assertNull(without.remove("a1").lastUsed())
+    }
+
+    @Test
+    fun aPcIsUpdatedInPlaceAndTheListSurvivesItsJson() {
+        val list = PcList().add(pc("a1")).add(pc("b2")).update("a1") { it.copy(name = "Mac mini").withEndpoints("192.168.1.30:7443", null) }
+        assertEquals("Mac mini", list.pcs.first().name)
+        assertNull(list.pcs.first().tunnel)
+        assertEquals(list, PcList.fromJson(list.toJson()))
+        assertNull(PcList.fromJson("nope"))
+        assertEquals(PcList(listOf(pc("a1")), "a1"), PcList.ofOne(pc("a1")))
+    }
 }

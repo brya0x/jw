@@ -272,6 +272,7 @@ dependencies = [
  "contract",
  "identity",
  "portable-pty",
+ "rustls",
  "serde",
  "serde_json",
  "tungstenite",

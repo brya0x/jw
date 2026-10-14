@@ -129,6 +129,7 @@ impl Daemon {
                 config.link.clone(),
             )),
         ))));
+        shared.lock().mobile.clone().resume();
         let engine = {
             let shared = shared.clone();
             thread::Builder::new()

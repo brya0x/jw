@@ -116,7 +116,7 @@ private fun Attention.lineColor(): Color = when (val tone = mark().tone) {
 }
 
 @Composable
-internal fun Header(title: String, subtitle: String?, onBack: (() -> Unit)? = null) {
+internal fun Header(title: String, subtitle: String?, onBack: (() -> Unit)? = null, action: (@Composable () -> Unit)? = null) {
     Column(Modifier.fillMaxWidth().background(Palette.panel)) {
         Row(Modifier.fillMaxWidth().defaultMinSize(minHeight = 56.dp), verticalAlignment = Alignment.CenterVertically) {
             if (onBack != null) {
@@ -130,22 +130,31 @@ internal fun Header(title: String, subtitle: String?, onBack: (() -> Unit)? = nu
                 Mono(title, bold = true, size = 15)
                 if (subtitle != null) Mono(subtitle, Palette.dim, 11)
             }
+            action?.invoke()
         }
         Hairline()
     }
 }
 
+/** Opens the list of PCs from Home. */
 @Composable
-fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, forget: (() -> Unit)? = null, set: (ClientState) -> Unit) {
+private fun PcButton(open: () -> Unit) {
+    Box(Modifier.defaultMinSize(minWidth = 56.dp, minHeight = 48.dp).clickable(onClick = open), contentAlignment = Alignment.Center) {
+        Mono("PCs", Palette.blue, 13, bold = true)
+    }
+}
+
+@Composable
+fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, pcs: (() -> Unit)? = null, set: (ClientState) -> Unit) {
     // Reading the tick is what redraws the screen when a node arrives from the daemon.
     val version = source.tick.intValue
     val session = remember(version) { source.session() }
     val waiting = avisos(session, state.seen)
     val onAvisos = state.screen == Screen.Avisos
     Column(Modifier.fillMaxSize()) {
-        if (onAvisos) Header("avisos", "lo que espera algo de ti") else Header("jwn · ${session.name}", source.status)
+        if (onAvisos) Header("avisos", "lo que espera algo de ti") else Header("jwn · ${session.name}", source.status, action = pcs?.let { open -> { PcButton(open) } })
         Box(Modifier.weight(1f)) {
-            if (onAvisos) AvisosList(waiting, nav, state, set) else WorkspaceList(homeRows(session, state.seen), nav, state, forget, set)
+            if (onAvisos) AvisosList(waiting, nav, state, set) else WorkspaceList(homeRows(session, state.seen), nav, state, set)
         }
         TabBar(onAvisos, waiting.size, { set(nav.show(state, Screen.Home)) }, { set(nav.show(state, Screen.Avisos)) })
     }
@@ -185,7 +194,7 @@ private fun Section(text: String) {
 }
 
 @Composable
-private fun WorkspaceList(rows: List<HomeRow>, nav: Navigator, state: ClientState, forget: (() -> Unit)?, set: (ClientState) -> Unit) {
+private fun WorkspaceList(rows: List<HomeRow>, nav: Navigator, state: ClientState, set: (ClientState) -> Unit) {
     LazyColumn(Modifier.fillMaxSize()) {
         item { Section("workspaces · ${rows.size}") }
         items(rows, key = { it.id }) { row ->
@@ -209,9 +218,6 @@ private fun WorkspaceList(rows: List<HomeRow>, nav: Navigator, state: ClientStat
             Hairline()
         }
         item { Legend() }
-        if (forget != null) {
-            item { Mono("olvidar este PC", Palette.red, 12, modifier = Modifier.clickable(onClick = forget).padding(horizontal = Gutter, vertical = 14.dp)) }
-        }
     }
 }
 

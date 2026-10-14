@@ -29,6 +29,8 @@ pub struct LinkConfig {
     pub resolve: bool,
     /// Also listen with TLS on the private address.
     pub lan: bool,
+    /// Listen there instead of on the address found for this machine (tests use loopback).
+    pub lan_ip: Option<std::net::Ipv4Addr>,
 }
 
 impl LinkConfig {
@@ -38,6 +40,7 @@ impl LinkConfig {
             resolve: override_.is_none(),
             tunnel: Some(override_.unwrap_or_else(|| identity::get().tunnel_program.clone())),
             lan: true,
+            lan_ip: None,
         }
     }
 
@@ -46,6 +49,7 @@ impl LinkConfig {
             tunnel: None,
             resolve: false,
             lan: false,
+            lan_ip: None,
         }
     }
 }
@@ -141,11 +145,22 @@ pub struct Hub {
     config: LinkConfig,
     asker: Arc<Asker>,
     running: Mutex<Option<Running>>,
+    /// Held while a tunnel is being brought up, so two callers never start two.
+    tunnel_lock: Mutex<()>,
 }
 
 /// The paired devices: a file `jwn devices` reads with no daemon running.
 pub fn devices_file(state_dir: &std::path::Path) -> PathBuf {
     state_dir.join(&identity::get().pairing_store)
+}
+
+/// The name of this machine as a phone shows it: `hostname` without a `.local` tail, if it says one.
+fn host_name() -> Option<String> {
+    let out = std::process::Command::new("hostname").output().ok()?;
+    let name = String::from_utf8_lossy(&out.stdout);
+    let name = name.trim().trim_end_matches(".local");
+    (!name.is_empty() && name.chars().count() <= 64 && !name.chars().any(char::is_control))
+        .then(|| name.to_owned())
 }
 
 /// `<scheme>://<ipv4>:<port>/<token>?fp=<hex>[&t=<tunnel>]`, or `<scheme>://<tunnel>/<token>`.
@@ -173,16 +188,17 @@ impl Hub {
             config,
             asker: Arc::default(),
             running: Mutex::new(None),
+            tunnel_lock: Mutex::new(()),
         }
     }
 
-    /// Turn the link on if it is off, and make a new pairing token.
+    /// Turn the link on if it is off, and make a new pairing token. Waits for the tunnel (up to
+    /// 90 s) without holding the lock that `stop` needs.
     pub fn start(&self) -> Result<Value, String> {
-        let mut slot = guard(&self.running);
-        if slot.is_none() {
-            *slot = Some(self.bring_up()?);
-        }
-        let run = slot.as_ref().expect("just set");
+        self.ensure_bridge()?;
+        self.ensure_tunnel();
+        let slot = guard(&self.running);
+        let run = slot.as_ref().ok_or("the phone link was turned off")?;
         let token = run
             .pairing
             .issue()
@@ -201,51 +217,116 @@ impl Hub {
         Ok(out)
     }
 
-    fn bring_up(&self) -> Result<Running, String> {
+    /// A daemon that starts with phones already paired opens the link again, on the same network
+    /// port, so those phones find this PC without anyone running `jwn pair` (REQ-86). The tunnel
+    /// comes up in the background.
+    pub fn resume(self: &Arc<Self>) {
+        let paired = Store::new(devices_file(&self.state_dir))
+            .list()
+            .is_ok_and(|l| !l.is_empty());
+        if !paired {
+            return;
+        }
+        let hub = self.clone();
+        let _ = std::thread::Builder::new()
+            .name("mobile-resume".into())
+            .spawn(move || {
+                if hub.ensure_bridge().is_ok() {
+                    hub.ensure_tunnel();
+                }
+            });
+    }
+
+    /// The bridge and the private-address listener, started if they are not running.
+    fn ensure_bridge(&self) -> Result<(), String> {
+        let mut slot = guard(&self.running);
+        if slot.is_some() {
+            return Ok(());
+        }
         let store = Arc::new(Store::new(devices_file(&self.state_dir)));
         let pairing = Arc::new(Pairing::new(TOKEN_LIFE));
         let asker = self.asker.clone();
         let confirm: Arc<Confirm> = Arc::new(move |ask| asker.ask(ask));
-        let lan_ip = if self.config.lan { tls::lan_ip() } else { None };
-        let bridge = Bridge::start(BridgeConfig {
+        let lan_ip = self
+            .config
+            .lan_ip
+            .or_else(|| if self.config.lan { tls::lan_ip() } else { None });
+        let port_file = self.state_dir.join("link-port");
+        let config = |port: u16| BridgeConfig {
             bind: "127.0.0.1:0".parse().expect("a literal address"),
             lan: lan_ip.map(|ip| Lan {
                 ip,
-                port: 0,
+                port,
                 cert: self.state_dir.join("link-cert.pem"),
             }),
             daemon_socket: self.socket.clone(),
-            store,
+            store: store.clone(),
             pairing: pairing.clone(),
-            confirm,
-        })
-        .map_err(|e| format!("cannot start the phone link: {e}"))?;
-        let pidfile = self.state_dir.join("tunnel.pid");
-        let tunnel = self.config.tunnel.as_deref().and_then(|program| {
-            web::tunnel::reap(&pidfile, program);
-            match Tunnel::up(
-                program,
-                bridge.addr.port(),
-                self.config.resolve,
-                TUNNEL_WAIT,
-                Some(&pidfile),
-            ) {
-                Ok(t) => Some(t),
-                Err(e) => {
-                    eprintln!("no tunnel: {e}");
-                    None
-                }
-            }
-        });
+            confirm: confirm.clone(),
+            host: host_name(),
+        };
+        let saved = std::fs::read_to_string(&port_file)
+            .ok()
+            .and_then(|t| t.trim().parse::<u16>().ok())
+            .unwrap_or(0);
+        // The port a phone remembers; if something else holds it now, any port will do.
+        let bridge = Bridge::start(config(saved))
+            .or_else(|_| Bridge::start(config(0)))
+            .map_err(|e| format!("cannot start the phone link: {e}"))?;
+        if let Some((addr, _)) = &bridge.lan {
+            let _ = std::fs::write(&port_file, addr.port().to_string());
+        }
         bridge.set_endpoints(Endpoints {
             lan: bridge.lan.as_ref().map(|(a, _)| a.to_string()),
-            tunnel: tunnel.as_ref().map(|t| t.host.clone()),
+            tunnel: None,
         });
-        Ok(Running {
+        *slot = Some(Running {
             bridge,
             pairing,
-            tunnel,
-        })
+            tunnel: None,
+        });
+        Ok(())
+    }
+
+    /// The tunnel to the running bridge, started if it is not. It is brought up without the
+    /// `running` lock (it takes up to a minute and a half) and attached only if the link is
+    /// still the one it was made for.
+    fn ensure_tunnel(&self) {
+        let Some(program) = self.config.tunnel.as_deref() else {
+            return;
+        };
+        let _one_at_a_time = guard(&self.tunnel_lock);
+        let port = match &*guard(&self.running) {
+            Some(run) if run.tunnel.is_none() => run.bridge.addr.port(),
+            _ => return,
+        };
+        let pidfile = self.state_dir.join("tunnel.pid");
+        web::tunnel::reap(&pidfile, program);
+        let tunnel = match Tunnel::up(
+            program,
+            port,
+            self.config.resolve,
+            TUNNEL_WAIT,
+            Some(&pidfile),
+        ) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("no tunnel: {e}");
+                return;
+            }
+        };
+        let mut slot = guard(&self.running);
+        match slot.as_mut() {
+            Some(run) if run.bridge.addr.port() == port => {
+                run.bridge.set_endpoints(Endpoints {
+                    lan: run.bridge.lan.as_ref().map(|(a, _)| a.to_string()),
+                    tunnel: Some(tunnel.host.clone()),
+                });
+                run.tunnel = Some(tunnel);
+            }
+            // The link was turned off meanwhile: the tunnel ends with this value.
+            _ => {}
+        }
     }
 
     pub fn wait(&self, seconds: u32) -> Option<Ask> {

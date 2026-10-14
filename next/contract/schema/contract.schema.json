@@ -328,7 +328,7 @@
           "required": ["t", "reason"],
           "properties": { "t": { "const": "denied" }, "reason": { "$ref": "#/$defs/Denied" } }
         },
-        { "type": "object", "required": ["t"], "properties": { "t": { "const": "ready" } } },
+        { "type": "object", "required": ["t"], "properties": { "t": { "const": "ready" }, "host": { "type": "string", "minLength": 1, "maxLength": 64 } } },
         {
           "type": "object",
           "required": ["t"],

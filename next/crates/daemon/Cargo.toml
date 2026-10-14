@@ -16,3 +16,4 @@ vt100 = "0.16.2"
 
 [dev-dependencies]
 tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
+rustls = { version = "=0.23.45", default-features = false, features = ["ring", "std", "tls12"] }

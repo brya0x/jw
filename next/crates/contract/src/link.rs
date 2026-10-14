@@ -43,7 +43,11 @@ pub enum BridgeMsg {
         reason: Denied,
     },
     /// The daemon's protocol starts: the stream now carries `ClientMsg` and `DaemonMsg`.
-    Ready,
+    Ready {
+        /// The PC's name, so a phone with several can tell them apart.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        host: Option<String>,
+    },
     /// Where the PC can be reached; sent after `ready` and whenever it changes.
     Endpoints {
         #[serde(default, skip_serializing_if = "Option::is_none")]

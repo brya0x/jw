@@ -74,6 +74,8 @@ data class Pairing(
     val lan: HostPort? = null,
     val fp: String? = null,
     val tunnel: String? = null,
+    /** The PC's name, as its bridge told this phone. */
+    val name: String? = null,
 ) {
     fun candidates(): List<Candidate> = candidatesOf(lan, fp, tunnel)
 
@@ -112,4 +114,34 @@ fun Denied.toFail(): LinkFail = when (this) {
     Denied.Declined, Denied.Timeout -> LinkFail.Declined
     Denied.LockedOut -> LinkFail.Locked
     Denied.BadSecret, Denied.Revoked -> LinkFail.Revoked
+}
+
+/** How a paired PC answered the last look. */
+enum class PcState { Checking, Online, Offline, Revoked }
+
+/** Every PC this phone is paired with, and the one it used last (REQ-87, REQ-88). */
+@Serializable
+data class PcList(val pcs: List<Pairing> = emptyList(), val last: String? = null) {
+    /** A pairing is new, or replaces the one of the same device; it becomes the last used. */
+    fun add(p: Pairing) = copy(pcs = pcs.filterNot { it.device == p.device } + p, last = p.device)
+
+    fun remove(device: String) = copy(pcs = pcs.filterNot { it.device == device }, last = last.takeIf { it != device })
+
+    fun update(device: String, change: (Pairing) -> Pairing) =
+        copy(pcs = pcs.map { if (it.device == device) change(it) else it })
+
+    fun used(device: String) = if (pcs.any { it.device == device }) copy(last = device) else this
+
+    /** The PC to connect to when the app opens. */
+    fun lastUsed(): Pairing? = pcs.firstOrNull { it.device == last } ?: pcs.firstOrNull()
+
+    fun toJson(): String = Json.encodeToString(serializer(), this)
+
+    companion object {
+        fun fromJson(text: String?): PcList? =
+            text?.let { runCatching { Json.decodeFromString(serializer(), it) }.getOrNull() }
+
+        /** A phone that paired before there could be several holds one pairing. */
+        fun ofOne(p: Pairing) = PcList(listOf(p), p.device)
+    }
 }

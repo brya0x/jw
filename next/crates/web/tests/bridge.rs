@@ -68,6 +68,7 @@ fn rig() -> Rig {
         store: store.clone(),
         pairing: pairing.clone(),
         confirm,
+        host: Some("test-pc".into()),
     })
     .unwrap();
     Rig {
@@ -83,6 +84,13 @@ fn rig() -> Rig {
 }
 
 type Ws = WebSocket<TcpStream>;
+
+/// What the bridge says when a phone is let in: the PC's name is the one the rig gave it.
+fn ready() -> BridgeMsg {
+    BridgeMsg::Ready {
+        host: Some("test-pc".into()),
+    }
+}
 
 impl Rig {
     /// A phone connecting as the tunnel would present it.
@@ -160,7 +168,7 @@ fn a_confirmed_pairing_gives_a_device_then_relays_lines() {
             code: "482913".into()
         }]
     );
-    assert_eq!(hear(&mut ws), Some(BridgeMsg::Ready));
+    assert_eq!(hear(&mut ws), Some(ready()));
     say(&mut ws, serde_json::json!({"t": "open", "node": "x"}));
     let echo = line(&mut ws).unwrap();
     assert_eq!(echo["t"], "echo");
@@ -197,7 +205,7 @@ fn a_paired_device_comes_back_with_its_secret_and_a_wrong_one_never_reaches_the_
         &mut ws,
         serde_json::json!({"t": "auth", "device": id, "secret": secret}),
     );
-    assert_eq!(hear(&mut ws), Some(BridgeMsg::Ready));
+    assert_eq!(hear(&mut ws), Some(ready()));
     say(&mut ws, serde_json::json!({"t": "close", "node": "x"}));
     assert_eq!(line(&mut ws).unwrap()["t"], "echo");
 }
@@ -296,7 +304,7 @@ fn revoking_a_device_closes_its_connection_within_two_seconds() {
         &mut ws,
         serde_json::json!({"t": "auth", "device": id, "secret": secret}),
     );
-    assert_eq!(hear(&mut ws), Some(BridgeMsg::Ready));
+    assert_eq!(hear(&mut ws), Some(ready()));
     let started = Instant::now();
     assert!(r.store.revoke("Pixel").unwrap());
     assert!(line(&mut ws).is_none(), "the connection ends");
@@ -328,7 +336,7 @@ fn a_message_with_a_newline_or_over_a_mebibyte_ends_the_connection() {
             &mut ws,
             serde_json::json!({"t": "auth", "device": id, "secret": secret}),
         );
-        assert_eq!(hear(&mut ws), Some(BridgeMsg::Ready));
+        assert_eq!(hear(&mut ws), Some(ready()));
         ws
     };
     let mut ws = ready(&r);
@@ -353,6 +361,7 @@ fn a_bridge_refuses_a_non_loopback_address() {
         store: Arc::new(Store::new(dir.path().join("d.json"))),
         pairing: Arc::new(Pairing::new(Duration::from_secs(1))),
         confirm: Arc::new(|_| Answer::No),
+        host: None,
     };
     assert!(Bridge::start(cfg).is_err());
 }
@@ -366,7 +375,7 @@ fn a_stopped_bridge_ends_its_relays() {
         &mut ws,
         serde_json::json!({"t": "auth", "device": id, "secret": secret}),
     );
-    assert_eq!(hear(&mut ws), Some(BridgeMsg::Ready));
+    assert_eq!(hear(&mut ws), Some(ready()));
     r.bridge.take().unwrap().stop();
     assert!(line(&mut ws).is_none());
 }
@@ -384,7 +393,7 @@ fn phones_are_told_the_addresses_after_ready_and_whenever_they_change() {
         &mut ws,
         serde_json::json!({"t": "auth", "device": id, "secret": secret}),
     );
-    assert_eq!(hear(&mut ws), Some(BridgeMsg::Ready));
+    assert_eq!(hear(&mut ws), Some(ready()));
     assert_eq!(
         hear(&mut ws),
         Some(BridgeMsg::Endpoints {
@@ -414,7 +423,7 @@ fn a_phone_is_told_the_addresses_once_even_when_none_was_ever_set() {
         &mut ws,
         serde_json::json!({"t": "auth", "device": id, "secret": secret}),
     );
-    assert_eq!(hear(&mut ws), Some(BridgeMsg::Ready));
+    assert_eq!(hear(&mut ws), Some(ready()));
     ws.get_ref()
         .set_read_timeout(Some(Duration::from_millis(50)))
         .unwrap();

@@ -10,13 +10,13 @@ import dev.jw.next.client.Candidate
 import dev.jw.next.client.LinkFail
 import dev.jw.next.client.PairLink
 import dev.jw.next.client.Pairing
+import dev.jw.next.client.PcList
 import dev.jw.next.client.certMatches
 import dev.jw.next.client.fromLink
 import dev.jw.next.client.pairingCode
 import dev.jw.next.client.toFail
 import dev.jw.next.contract.BridgeMsg
 import dev.jw.next.contract.ContractJson
-import dev.jw.next.contract.Denied
 import dev.jw.next.contract.PhoneMsg
 import java.security.KeyStore
 import java.security.cert.X509Certificate
@@ -46,35 +46,44 @@ sealed interface LinkUi {
 }
 
 /**
- * The pairing (device secret and where the PC is), encrypted with a key that lives in the
- * Android Keystore and never leaves it (REQ-83). A blob that cannot be read is no pairing.
+ * The PCs this phone is paired with (device secrets and where each PC was last seen),
+ * encrypted with a key that lives in the Android Keystore and never leaves it (REQ-83). A blob
+ * that cannot be read is no pairing.
  */
 class LinkStore(context: Context) {
     private val prefs = context.getSharedPreferences("link", Context.MODE_PRIVATE)
 
-    fun load(): Pairing? {
-        val blob = prefs.getString("pairing", null) ?: return null
+    @Synchronized
+    fun load(): PcList {
+        read("pcs")?.let { PcList.fromJson(it) }?.let { return it }
+        // A phone that paired before there could be several holds one pairing.
+        return read("pairing")?.let { Pairing.fromJson(it) }?.let(PcList::ofOne) ?: PcList()
+    }
+
+    /** Change the list under one lock, so a pairing and a reconnecting phone never overwrite each other. */
+    @Synchronized
+    fun update(change: (PcList) -> PcList): PcList {
+        val next = change(load())
+        val sealed = Cipher.getInstance(TRANSFORM).run {
+            init(Cipher.ENCRYPT_MODE, key())
+            iv + doFinal(next.toJson().toByteArray())
+        }
+        prefs.edit().putString("pcs", Base64.encodeToString(sealed, Base64.NO_WRAP)).remove("pairing").apply()
+        return next
+    }
+
+    private fun read(name: String): String? {
+        val blob = prefs.getString(name, null) ?: return null
         return try {
             val raw = Base64.decode(blob, Base64.NO_WRAP)
             val cipher = Cipher.getInstance(TRANSFORM)
             cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, raw.copyOfRange(0, IV)))
-            Pairing.fromJson(String(cipher.doFinal(raw, IV, raw.size - IV)))
+            String(cipher.doFinal(raw, IV, raw.size - IV))
         } catch (_: java.security.GeneralSecurityException) {
             null
         } catch (_: IllegalArgumentException) {
             null
         }
-    }
-
-    fun save(pairing: Pairing?) {
-        if (pairing == null) {
-            prefs.edit().remove("pairing").apply()
-            return
-        }
-        val cipher = Cipher.getInstance(TRANSFORM)
-        cipher.init(Cipher.ENCRYPT_MODE, key())
-        val sealed = cipher.iv + cipher.doFinal(pairing.toJson().toByteArray())
-        prefs.edit().putString("pairing", Base64.encodeToString(sealed, Base64.NO_WRAP)).apply()
     }
 
     private fun key(): SecretKey {
@@ -97,6 +106,35 @@ class LinkStore(context: Context) {
     }
 }
 
+/** An HTTP client for one way of reaching a PC: the network address is trusted only by its pinned fingerprint. */
+internal fun linkClient(candidate: Candidate, fp: String?): OkHttpClient {
+    val builder = OkHttpClient.Builder().connectTimeout(5, TimeUnit.SECONDS).pingInterval(20, TimeUnit.SECONDS)
+    if (candidate.lan && fp != null) {
+        // Only the fingerprint the QR carried makes the certificate trusted: names and chains do not matter.
+        val pin = object : X509TrustManager {
+            override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) = throw java.security.cert.CertificateException("no client certificates")
+            override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
+                if (chain.isEmpty() || !certMatches(chain[0].encoded, fp)) throw java.security.cert.CertificateException("not the pinned certificate")
+            }
+            override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+        }
+        val ssl = SSLContext.getInstance("TLS").apply { init(null, arrayOf(pin), null) }
+        builder.sslSocketFactory(ssl.socketFactory, pin).hostnameVerifier { _, _ -> true }
+    }
+    return builder.build()
+}
+
+/** The text of a bridge message's `t`, or null when it is not JSON. */
+internal fun messageType(text: String): String? = try {
+    ContractJson.parseToJsonElement(text).jsonObject["t"]?.jsonPrimitive?.content
+} catch (_: SerializationException) {
+    null
+} catch (_: IllegalArgumentException) {
+    null
+}
+
+internal val BRIDGE_TYPES = setOf("paired", "denied", "ready", "endpoints")
+
 private enum class Attempt { Unreachable, Ended, Denied }
 
 /**
@@ -114,6 +152,9 @@ class WsLinkSource(
     val ui = mutableStateOf<LinkUi>(LinkUi.Connecting)
     private val code = pairingCode()
 
+    /** The paired PC this source talks to, once there is one. */
+    val device: String? get() = pairing?.device
+
     @Volatile
     private var socket: WebSocket? = null
 
@@ -123,7 +164,7 @@ class WsLinkSource(
 
     override val status: String
         get() = when (ui.value) {
-            is LinkUi.Connected -> "en vivo · por el enlace"
+            is LinkUi.Connected -> "en vivo · ${pairing?.name ?: "por el enlace"}"
             is LinkUi.Connecting -> "conectando…"
             is LinkUi.Pairing -> "emparejando…"
             is LinkUi.Failed -> "sin conexión"
@@ -171,29 +212,11 @@ class WsLinkSource(
         }
     }
 
-    private fun client(c: Candidate): OkHttpClient {
-        val builder = OkHttpClient.Builder().connectTimeout(5, TimeUnit.SECONDS).pingInterval(20, TimeUnit.SECONDS)
-        val fp = fingerprint()
-        if (c.lan && fp != null) {
-            // Only the fingerprint the QR carried makes the certificate trusted: names and chains do not matter.
-            val pin = object : X509TrustManager {
-                override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) = throw java.security.cert.CertificateException("no client certificates")
-                override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
-                    if (chain.isEmpty() || !certMatches(chain[0].encoded, fp)) throw java.security.cert.CertificateException("not the pinned certificate")
-                }
-                override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
-            }
-            val ssl = SSLContext.getInstance("TLS").apply { init(null, arrayOf(pin), null) }
-            builder.sslSocketFactory(ssl.socketFactory, pin).hostnameVerifier { _, _ -> true }
-        }
-        return builder.build()
-    }
-
     private fun attempt(c: Candidate): Attempt {
         outcome.clear()
         if (pairing == null) ui.value = LinkUi.Pairing(code, c.url.removePrefix("wss://").trimEnd('/'))
         var opened = false
-        val ws = client(c).newWebSocket(
+        val ws = linkClient(c, fingerprint()).newWebSocket(
             Request.Builder().url(c.url).build(),
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
@@ -204,7 +227,7 @@ class WsLinkSource(
                     webSocket.send(ContractJson.encodeToString(PhoneMsg.serializer(), first))
                 }
 
-                override fun onMessage(webSocket: WebSocket, text: String) = message(webSocket, text)
+                override fun onMessage(webSocket: WebSocket, text: String) = message(text)
 
                 override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
                     // OkHttp reports the end only once this side has answered the close.
@@ -227,15 +250,8 @@ class WsLinkSource(
         return result
     }
 
-    private fun message(ws: WebSocket, text: String) {
-        val type = try {
-            ContractJson.parseToJsonElement(text).jsonObject["t"]?.jsonPrimitive?.content
-        } catch (_: SerializationException) {
-            null
-        } catch (_: IllegalArgumentException) {
-            null
-        }
-        if (type !in BRIDGE) {
+    private fun message(text: String) {
+        if (messageType(text) !in BRIDGE_TYPES) {
             receive(text)
             return
         }
@@ -243,29 +259,27 @@ class WsLinkSource(
             is BridgeMsg.Paired -> {
                 val made = fromLink(link!!, msg.device, msg.secret)
                 pairing = made
-                store.save(made)
+                store.update { it.add(made) }
             }
             is BridgeMsg.DeniedMsg -> {
+                // The entry stays in the list whatever the PC says: only the person forgets a PC (REQ-87).
                 ui.value = LinkUi.Failed(msg.reason.toFail())
-                if (msg.reason == Denied.BadSecret || msg.reason == Denied.Revoked) {
-                    pairing = null
-                    store.save(null)
-                }
                 outcome.offer(Attempt.Denied)
             }
             is BridgeMsg.Ready -> {
                 ui.value = LinkUi.Connected
+                pairing?.let { p ->
+                    val named = p.copy(name = msg.host ?: p.name)
+                    pairing = named
+                    store.update { it.update(p.device) { _ -> named }.used(p.device) }
+                }
                 greet()
             }
-            is BridgeMsg.Endpoints -> pairing?.let {
-                val moved = it.withEndpoints(msg.lan, msg.tunnel)
+            is BridgeMsg.Endpoints -> pairing?.let { p ->
+                val moved = p.withEndpoints(msg.lan, msg.tunnel)
                 pairing = moved
-                store.save(moved)
+                store.update { it.update(p.device) { _ -> moved } }
             }
         }
-    }
-
-    private companion object {
-        val BRIDGE = setOf("paired", "denied", "ready", "endpoints")
     }
 }

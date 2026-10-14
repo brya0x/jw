@@ -111,7 +111,7 @@ enum class Denied {
     @SerialName("locked_out") LockedOut,
 }
 
-/** What the bridge sends a phone; after [Ready] the stream carries [ClientMsg] and [DaemonMsg]. */
+/** What the bridge sends a phone; [Ready] says the PC's name, and after it the stream carries [ClientMsg] and [DaemonMsg]. */
 @Serializable
 @JsonClassDiscriminator("t")
 sealed interface BridgeMsg {
@@ -122,7 +122,7 @@ sealed interface BridgeMsg {
     data class DeniedMsg(val reason: Denied) : BridgeMsg
 
     @Serializable @SerialName("ready")
-    data object Ready : BridgeMsg
+    data class Ready(val host: String? = null) : BridgeMsg
 
     /** Where the PC can be reached; sent after [Ready] and whenever it changes. */
     @Serializable @SerialName("endpoints")

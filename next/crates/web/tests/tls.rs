@@ -53,6 +53,7 @@ fn rig(cert: Option<std::path::PathBuf>) -> Rig {
         store: store.clone(),
         pairing: Arc::new(Pairing::new(Duration::from_secs(120))),
         confirm: Arc::new(|_| Answer::Yes),
+        host: None,
     })
     .unwrap();
     Rig {
@@ -167,6 +168,7 @@ fn a_lan_listener_refuses_a_public_or_unspecified_address() {
             store: Arc::new(Store::new(dir.path().join("d.json"))),
             pairing: Arc::new(Pairing::new(Duration::from_secs(1))),
             confirm: Arc::new(|_| Answer::No),
+            host: None,
         };
         assert!(Bridge::start(cfg).is_err(), "{ip}");
     }

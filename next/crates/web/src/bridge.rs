@@ -90,6 +90,8 @@ pub struct Config {
     pub store: Arc<Store>,
     pub pairing: Arc<Pairing>,
     pub confirm: Arc<Confirm>,
+    /// The PC's name, told to every phone that gets in.
+    pub host: Option<String>,
 }
 
 pub(crate) struct Ctx {
@@ -97,6 +99,7 @@ pub(crate) struct Ctx {
     store: Arc<Store>,
     pairing: Arc<Pairing>,
     confirm: Arc<Confirm>,
+    host: Option<String>,
     limiter: Limiter,
     stop: AtomicBool,
     open: AtomicUsize,
@@ -132,6 +135,7 @@ impl Bridge {
             store: cfg.store,
             pairing: cfg.pairing,
             confirm: cfg.confirm,
+            host: cfg.host,
             limiter: Limiter::default(),
             stop: AtomicBool::new(false),
             open: AtomicUsize::new(0),
@@ -366,7 +370,13 @@ fn admit<S: Link>(ws: &mut WebSocket<S>, ctx: &Ctx, key: &str) -> Option<String>
     };
     ctx.limiter.cleared(key);
     let _ = ctx.store.touch(&device);
-    send(ws, &BridgeMsg::Ready).then_some(device)
+    send(
+        ws,
+        &BridgeMsg::Ready {
+            host: ctx.host.clone(),
+        },
+    )
+    .then_some(device)
 }
 
 /// The reply to a `mobile_*` command from a phone, which only the PC's own tools may send

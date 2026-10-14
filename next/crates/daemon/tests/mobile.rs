@@ -25,6 +25,7 @@ fn start_with_tunnel(sb: &Sandbox) -> Daemon {
         tunnel: Some(script.to_string_lossy().into()),
         resolve: false,
         lan: false,
+        lan_ip: None,
     };
     Daemon::start(config).unwrap()
 }
@@ -84,9 +85,10 @@ fn a_phone_pairs_through_the_daemon_and_then_sees_the_session() {
     let paired = serde_json::from_value::<BridgeMsg>(text(&mut ws)).unwrap();
     assert!(matches!(paired, BridgeMsg::Paired { .. }), "{paired:?}");
     assert_eq!(person.join().unwrap()["code"], "482913");
-    assert_eq!(
-        serde_json::from_value::<BridgeMsg>(text(&mut ws)).unwrap(),
-        BridgeMsg::Ready
+    let ready = serde_json::from_value::<BridgeMsg>(text(&mut ws)).unwrap();
+    assert!(
+        matches!(&ready, BridgeMsg::Ready { host: Some(h) } if !h.is_empty() && !h.ends_with(".local")),
+        "the phone is told the PC's name: {ready:?}"
     );
 
     // From here the phone speaks the daemon's own protocol.
@@ -172,4 +174,85 @@ fn without_a_tunnel_or_a_network_the_link_says_so() {
     let reply = pc.cmd(Cmd::MobileStart {}).unwrap();
     assert!(reply.is_err(), "no way to reach this PC");
     d.stop();
+}
+
+/// REQ-86: a daemon that restarts with phones paired opens the link again, on the same port, with
+/// nobody running `jwn pair`.
+#[test]
+fn a_restarted_daemon_is_found_again_by_a_paired_phone_on_the_same_port() {
+    let sb = Sandbox::new();
+    let mut config = sb.config();
+    config.link = LinkConfig {
+        tunnel: None,
+        resolve: false,
+        lan: true,
+        lan_ip: Some("127.0.0.1".parse().unwrap()),
+    };
+    let first = Daemon::start(config.clone()).unwrap();
+    let mut pc = sb.client();
+    let started = pc.cmd(Cmd::MobileStart {}).unwrap().unwrap().unwrap();
+    let lan: std::net::SocketAddr = started["lan"].as_str().unwrap().parse().unwrap();
+    let uri = started["uri"].as_str().unwrap();
+    let fp = uri.split("fp=").nth(1).unwrap().to_owned();
+    let token = uri
+        .split('/')
+        .nth(3)
+        .unwrap()
+        .split('?')
+        .next()
+        .unwrap()
+        .to_owned();
+
+    let socket = sb.config().socket;
+    let person = std::thread::spawn(move || {
+        let mut pc = wire::Client::connect(&socket, "pair").unwrap();
+        pc.cmd(Cmd::MobileWait { seconds: 10 }).unwrap().unwrap();
+        pc.cmd(Cmd::MobileAnswer { yes: true }).unwrap().unwrap();
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    let mut ws = phone(started["local"].as_str().unwrap());
+    ws.send(Message::text(
+        serde_json::json!({"t": "pair", "token": token, "name": "Pixel", "code": "482913"})
+            .to_string(),
+    ))
+    .unwrap();
+    let Ok(BridgeMsg::Paired { device, secret }) =
+        serde_json::from_value::<BridgeMsg>(text(&mut ws))
+    else {
+        panic!("not paired");
+    };
+    person.join().unwrap();
+    drop(ws);
+    first.stop();
+
+    // Nobody runs `jwn pair` now: the phone only knows the address and the fingerprint it paired with.
+    let second = Daemon::start(config).unwrap();
+    let mut tls = None;
+    for _ in 0..40 {
+        if let Ok(sock) = std::net::TcpStream::connect(lan) {
+            tls = Some(sock);
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let sock = tls.expect("the link is open again on the same port");
+    sock.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let conn = rustls::ClientConnection::new(
+        web::tls::Pinned::client_config(&fp).unwrap(),
+        "jwn.local".try_into().unwrap(),
+    )
+    .unwrap();
+    let req = format!("ws://{lan}").into_client_request().unwrap();
+    let (mut ws, _) = tungstenite::client(req, rustls::StreamOwned::new(conn, sock)).unwrap();
+    ws.send(Message::text(
+        serde_json::json!({"t": "auth", "device": device, "secret": secret}).to_string(),
+    ))
+    .unwrap();
+    let ready = loop {
+        if let Message::Text(t) = ws.read().unwrap() {
+            break serde_json::from_str::<BridgeMsg>(&t).unwrap();
+        }
+    };
+    assert!(matches!(ready, BridgeMsg::Ready { .. }), "{ready:?}");
+    second.stop();
 }
