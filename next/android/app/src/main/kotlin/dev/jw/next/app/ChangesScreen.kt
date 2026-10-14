@@ -103,14 +103,7 @@ fun ChangesScreen(source: AppSource, state: ClientState, screen: Screen.Changes,
             ViewTabs(model, counts)
             Box(Modifier.weight(1f)) { ChangesBody(model, content, version) }
         }
-        MainTabBar(MainTab.Diff, waiting) { tab ->
-            when (tab) {
-                MainTab.Workspaces -> set(nav.show(state, Screen.Home))
-                MainTab.Avisos -> set(nav.show(state, Screen.Avisos))
-                MainTab.Diff -> {}
-                MainTab.Settings -> set(nav.show(state, Screen.Settings))
-            }
-        }
+        MainTabBar(MainTab.Diff, waiting) { nav.goTab(state, MainTab.Diff, it, set) }
     }
 }
 

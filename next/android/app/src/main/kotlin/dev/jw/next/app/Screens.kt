@@ -168,18 +168,23 @@ fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, pcs: (() -
         Box(Modifier.weight(1f)) {
             if (onAvisos) AvisosList(waiting, nav, state, set) else WorkspaceList(homeRows(session, state.seen), nav, state, set)
         }
-        MainTabBar(if (onAvisos) MainTab.Avisos else MainTab.Workspaces, waiting.size) { tab ->
-            when (tab) {
-                MainTab.Workspaces -> set(nav.show(state, Screen.Home))
-                MainTab.Avisos -> set(nav.show(state, Screen.Avisos))
-                MainTab.Diff -> nav.changes(state)?.let(set)
-                MainTab.Settings -> set(nav.show(state, Screen.Settings))
-            }
-        }
+        val current = if (onAvisos) MainTab.Avisos else MainTab.Workspaces
+        MainTabBar(current, waiting.size) { nav.goTab(state, current, it, set) }
     }
 }
 
 internal enum class MainTab { Workspaces, Avisos, Diff, Settings }
+
+/** What a tap on a tab of the bar does: go there, unless it is the one that is open. */
+internal fun Navigator.goTab(state: ClientState, current: MainTab, tab: MainTab, set: (ClientState) -> Unit) {
+    if (tab == current) return
+    when (tab) {
+        MainTab.Workspaces -> set(show(state, Screen.Home))
+        MainTab.Avisos -> set(show(state, Screen.Avisos))
+        MainTab.Diff -> changes(state)?.let(set)
+        MainTab.Settings -> set(show(state, Screen.Settings))
+    }
+}
 
 /** Words like the status line of the terminal client; the open one is underlined. */
 @Composable

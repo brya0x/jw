@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -26,7 +27,6 @@ import dev.jw.next.client.ClientState
 import dev.jw.next.client.Look
 import dev.jw.next.client.LookMode
 import dev.jw.next.client.Navigator
-import dev.jw.next.client.Screen
 import dev.jw.next.client.Theme
 import dev.jw.next.client.avisos
 
@@ -37,8 +37,10 @@ import dev.jw.next.client.avisos
  */
 @Composable
 fun SettingsScreen(source: AppSource, state: ClientState, nav: Navigator, look: Look, osDark: Boolean, change: (Look) -> Unit, set: (ClientState) -> Unit) {
+    // Reading the tick is what redraws the count of avisos when a node arrives from the daemon.
     val version = source.tick.intValue
-    val waiting = avisos(source.session().also { version }, state.seen).size
+    val session = remember(version) { source.session() }
+    val waiting = avisos(session, state.seen).size
     val dark = look.isDark(osDark)
     val now = look.theme(osDark)
     Column(Modifier.fillMaxSize()) {
@@ -86,14 +88,7 @@ fun SettingsScreen(source: AppSource, state: ClientState, nav: Navigator, look: 
                 }
             }
         }
-        MainTabBar(MainTab.Settings, waiting) { tab ->
-            when (tab) {
-                MainTab.Workspaces -> set(nav.show(state, Screen.Home))
-                MainTab.Avisos -> set(nav.show(state, Screen.Avisos))
-                MainTab.Diff -> nav.changes(state)?.let(set)
-                MainTab.Settings -> {}
-            }
-        }
+        MainTabBar(MainTab.Settings, waiting) { nav.goTab(state, MainTab.Settings, it, set) }
     }
 }
 

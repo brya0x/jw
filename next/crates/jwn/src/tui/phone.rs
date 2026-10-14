@@ -5,6 +5,7 @@
 //! client what happened with [`Event`]s and is told what to do with [`Say`]s; the box and
 //! the state are `View`'s.
 
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::thread;
 use std::time::Duration;
@@ -78,9 +79,13 @@ pub struct Worker {
 
 impl Worker {
     pub fn spawn() -> Worker {
+        Worker::spawn_at(identity::socket_path())
+    }
+
+    fn spawn_at(socket: PathBuf) -> Worker {
         let (event_tx, events) = channel();
         let (says, say_rx) = channel();
-        thread::spawn(move || work(&event_tx, &say_rx));
+        thread::spawn(move || work(&socket, &event_tx, &say_rx));
         Worker { events, says }
     }
 
@@ -95,88 +100,86 @@ const LISTEN_SECONDS: u32 = 2;
 const ANSWER_WAIT: Duration = Duration::from_secs(120);
 const START_WAIT: Duration = Duration::from_secs(120);
 
-fn work(events: &Sender<Event>, says: &Receiver<Say>) {
+/// Ask the daemon for a command's result: its message when it refuses, and why when it cannot be asked.
+fn ask(client: &mut Client, cmd: Cmd, wait: Duration) -> Result<Option<serde_json::Value>, String> {
+    client
+        .cmd_within(cmd, wait)
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.message)
+}
+
+/// Turn the link on and report it; then listen for phones until told to stop or until the
+/// daemon cannot be reached.
+fn work(socket: &Path, events: &Sender<Event>, says: &Receiver<Say>) {
     let tell = |e: Event| events.send(e).is_ok();
-    let socket = identity::socket_path();
-    let mut client = match Client::connect(&socket, "jwn-tui-phone") {
-        Ok(c) => c,
-        Err(e) => {
-            tell(Event::Failed(format!(
-                "cannot reach {}: {e}",
-                socket.display()
-            )));
-            return;
-        }
-    };
-    let started = client.cmd_within(Cmd::MobileStart {}, START_WAIT);
-    let link = match started {
-        Ok(Ok(Some(v))) => match link_of(&v) {
-            Some(link) => link,
-            None => {
-                tell(Event::Failed("the daemon gave no link".into()));
-                return;
-            }
-        },
-        Ok(Ok(None)) => {
-            tell(Event::Failed("the daemon gave no link".into()));
-            return;
-        }
-        Ok(Err(e)) => {
-            tell(Event::Failed(e.message));
-            return;
-        }
-        Err(e) => {
-            tell(Event::Failed(e.to_string()));
+    let started = Client::connect(socket, "jwn-tui-phone")
+        .map_err(|e| format!("cannot reach {}: {e}", socket.display()))
+        .and_then(|mut client| {
+            let link = ask(&mut client, Cmd::MobileStart {}, START_WAIT)?
+                .as_ref()
+                .and_then(link_of)
+                .ok_or("the daemon gave no link")?;
+            Ok((client, link))
+        });
+    let (mut client, link) = match started {
+        Ok(ok) => ok,
+        Err(why) => {
+            tell(Event::Failed(why));
             return;
         }
     };
     if !tell(Event::Ready(link)) || !tell(Event::Paired(crate::pair::paired_count())) {
         return;
     }
+    if let Err(why) = listen(&mut client, says, &tell) {
+        tell(Event::Failed(why));
+    }
+}
+
+/// The loop of the link: each phone that asks is told to the client, and its answer is
+/// passed on. `Ok` when the link was turned off.
+fn listen(
+    client: &mut Client,
+    says: &Receiver<Say>,
+    tell: &impl Fn(Event) -> bool,
+) -> Result<(), String> {
     loop {
         if let Ok(Say::Stop) = says.try_recv() {
-            let _ = client.cmd(Cmd::MobileStop {});
-            tell(Event::Off);
-            return;
+            return stop(client, tell);
         }
-        match client.cmd_within(
-            Cmd::MobileWait {
-                seconds: LISTEN_SECONDS,
-            },
-            Duration::from_secs(u64::from(LISTEN_SECONDS) + 10),
-        ) {
-            Ok(Ok(Some(ask))) => {
-                let name = ask["name"].as_str().unwrap_or("?").to_owned();
-                let code = ask["code"].as_str().unwrap_or("?").to_owned();
-                if !tell(Event::Ask { name, code }) {
-                    return;
-                }
-                let yes = match says.recv_timeout(ANSWER_WAIT) {
-                    Ok(Say::Answer(yes)) => yes,
-                    Ok(Say::Stop) => {
-                        let _ = client.cmd(Cmd::MobileAnswer { yes: false });
-                        let _ = client.cmd(Cmd::MobileStop {});
-                        tell(Event::Off);
-                        return;
-                    }
-                    Err(RecvTimeoutError::Timeout) => false,
-                    Err(RecvTimeoutError::Disconnected) => return,
-                };
-                let _ = client.cmd(Cmd::MobileAnswer { yes });
-                tell(Event::Answered { yes });
-                tell(Event::Paired(crate::pair::paired_count()));
-            }
-            Ok(Ok(None)) => {}
-            Ok(Err(e)) => {
-                tell(Event::Failed(e.message));
-                return;
-            }
-            Err(e) => {
-                tell(Event::Failed(e.to_string()));
-                return;
-            }
+        let wait = Cmd::MobileWait {
+            seconds: LISTEN_SECONDS,
+        };
+        let within = Duration::from_secs(u64::from(LISTEN_SECONDS) + 10);
+        let Some(asked) = ask(client, wait, within)? else {
+            continue;
+        };
+        let text = |key: &str| asked[key].as_str().unwrap_or("?").to_owned();
+        if !tell(Event::Ask {
+            name: text("name"),
+            code: text("code"),
+        }) {
+            return Ok(());
         }
+        let yes = match says.recv_timeout(ANSWER_WAIT) {
+            Ok(Say::Answer(yes)) => yes,
+            Ok(Say::Stop) => {
+                ask(client, Cmd::MobileAnswer { yes: false }, START_WAIT)?;
+                return stop(client, tell);
+            }
+            Err(RecvTimeoutError::Timeout) => false,
+            Err(RecvTimeoutError::Disconnected) => return Ok(()),
+        };
+        ask(client, Cmd::MobileAnswer { yes }, START_WAIT)?;
+        tell(Event::Answered { yes });
+        tell(Event::Paired(crate::pair::paired_count()));
     }
+}
+
+fn stop(client: &mut Client, tell: &impl Fn(Event) -> bool) -> Result<(), String> {
+    ask(client, Cmd::MobileStop {}, START_WAIT)?;
+    tell(Event::Off);
+    Ok(())
 }
 
 fn link_of(v: &serde_json::Value) -> Option<Link> {
@@ -451,5 +454,115 @@ mod tests {
             None
         );
         assert_eq!(link_of(&serde_json::json!({})), None);
+    }
+    /// A daemon of its own in a short private directory, with a phone link that listens on loopback and has no tunnel.
+    struct Pc {
+        dir: PathBuf,
+        daemon: Option<daemon::Daemon>,
+    }
+
+    impl Pc {
+        fn start(link: daemon::LinkConfig) -> Pc {
+            static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            let dir = PathBuf::from(format!(
+                "/tmp/jwn-ph-{}-{}",
+                std::process::id(),
+                N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            let config = daemon::Config {
+                socket: dir.join("s.sock"),
+                state_dir: dir.join("state"),
+                shell: Some("/bin/sh".into()),
+                tcp: None,
+                env: Vec::new(),
+                blocks: true,
+                link,
+                hook_exe: None,
+                gh: None,
+                github_every: Duration::from_millis(100),
+            };
+            Pc {
+                dir,
+                daemon: Some(daemon::Daemon::start(config).expect("a daemon")),
+            }
+        }
+
+        fn socket(&self) -> PathBuf {
+            self.dir.join("s.sock")
+        }
+    }
+
+    impl Drop for Pc {
+        fn drop(&mut self) {
+            if let Some(d) = self.daemon.take() {
+                d.stop();
+            }
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    fn loopback() -> daemon::LinkConfig {
+        daemon::LinkConfig {
+            tunnel: None,
+            resolve: false,
+            lan: true,
+            lan_ip: Some(std::net::Ipv4Addr::LOCALHOST),
+        }
+    }
+
+    fn next(w: &Worker) -> Event {
+        w.events
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the thread reports")
+    }
+
+    #[test]
+    fn the_thread_turns_the_link_on_reports_it_and_turns_it_off_when_told() {
+        let pc = Pc::start(loopback());
+        let w = Worker::spawn_at(pc.socket());
+        let Event::Ready(link) = next(&w) else {
+            panic!("the link was not reported")
+        };
+        assert!(
+            link.uri
+                .starts_with(&format!("{}://127.0.0.1:", identity::get().name)),
+            "{}",
+            link.uri
+        );
+        assert!(
+            link.lan
+                .as_deref()
+                .is_some_and(|a| a.starts_with("127.0.0.1:"))
+        );
+        assert_eq!(link.tunnel, None, "there is no tunnel program");
+        assert!(matches!(next(&w), Event::Paired(_)));
+        w.say(Say::Stop);
+        assert_eq!(next(&w), Event::Off);
+        // The daemon's link is off: a new thread turns it on again.
+        let again = Worker::spawn_at(pc.socket());
+        assert!(matches!(next(&again), Event::Ready(_)));
+        assert!(matches!(next(&again), Event::Paired(_)));
+        again.say(Say::Stop);
+        assert_eq!(next(&again), Event::Off);
+    }
+
+    #[test]
+    fn a_daemon_that_cannot_open_the_link_gives_its_reason() {
+        let pc = Pc::start(daemon::LinkConfig::off());
+        let w = Worker::spawn_at(pc.socket());
+        let Event::Failed(why) = next(&w) else {
+            panic!("a failure was expected")
+        };
+        assert!(why.contains("no way to reach this PC"), "{why}");
+    }
+
+    #[test]
+    fn no_daemon_is_a_failure_that_names_the_socket() {
+        let w = Worker::spawn_at(PathBuf::from("/tmp/jwn-ph-nobody-here.sock"));
+        let Event::Failed(why) = next(&w) else {
+            panic!("a failure was expected")
+        };
+        assert!(why.contains("jwn-ph-nobody-here.sock"), "{why}");
     }
 }

@@ -928,6 +928,9 @@ impl View {
             (Event::Failed(why), _) => {
                 self.phone = State::Failed(why);
                 self.phone_open = self.manage.is_none();
+                if !self.phone_open {
+                    self.flash = "no se pudo encender el enlace con el teléfono · m".into();
+                }
             }
             (Event::Ask { name, code }, Some(link)) => {
                 self.phone = State::Asking { link, name, code };
