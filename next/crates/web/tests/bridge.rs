@@ -63,6 +63,7 @@ fn rig() -> Rig {
     };
     let bridge = Bridge::start(Config {
         bind: "127.0.0.1:0".parse().unwrap(),
+        lan: None,
         daemon_socket: sock,
         store: store.clone(),
         pairing: pairing.clone(),
@@ -347,6 +348,7 @@ fn a_bridge_refuses_a_non_loopback_address() {
     let dir = tempfile::tempdir().unwrap();
     let cfg = Config {
         bind: "192.168.1.5:0".parse().unwrap(),
+        lan: None,
         daemon_socket: dir.path().join("x.sock"),
         store: Arc::new(Store::new(dir.path().join("d.json"))),
         pairing: Arc::new(Pairing::new(Duration::from_secs(1))),

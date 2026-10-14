@@ -15,15 +15,19 @@ use sha2::{Digest, Sha256};
 pub fn random_hex(bytes: usize) -> io::Result<String> {
     let mut buf = vec![0u8; bytes];
     fs::File::open("/dev/urandom")?.read_exact(&mut buf)?;
-    Ok(hex(&buf))
+    Ok(hex_bytes(&buf))
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub fn hex_bytes(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 pub fn sha256_hex(text: &str) -> String {
-    hex(&Sha256::digest(text.as_bytes()))
+    sha256_bytes_hex(text.as_bytes())
+}
+
+pub fn sha256_bytes_hex(bytes: &[u8]) -> String {
+    hex_bytes(&Sha256::digest(bytes))
 }
 
 /// Equality that takes the same time wherever the texts differ.

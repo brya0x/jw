@@ -2,7 +2,7 @@
 //! then its text messages and the daemon's lines are passed to each other (REQ-79).
 
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -18,6 +18,7 @@ use tungstenite::protocol::WebSocketConfig;
 use tungstenite::{Error as WsError, Message, WebSocket};
 
 use crate::auth::{Limiter, Pairing, Store};
+use crate::tls::{self, Identity, TlsLink};
 
 /// Longest message either way (REQ-79) and the longest a phone may send before it is let in.
 const MAX_MESSAGE: usize = 1 << 20;
@@ -72,9 +73,19 @@ pub enum Route {
     Direct,
 }
 
+/// The TLS listener on the PC's own network (REQ-81).
+pub struct Lan {
+    /// Loopback or private (`tls::bindable`).
+    pub ip: Ipv4Addr,
+    pub port: u16,
+    /// Where the certificate is kept.
+    pub cert: PathBuf,
+}
+
 pub struct Config {
     /// Must be a loopback address.
     pub bind: SocketAddr,
+    pub lan: Option<Lan>,
     pub daemon_socket: PathBuf,
     pub store: Arc<Store>,
     pub pairing: Arc<Pairing>,
@@ -95,9 +106,14 @@ pub(crate) struct Ctx {
 
 pub struct Bridge {
     pub addr: SocketAddr,
+    /// Where the TLS listener is, and the fingerprint of its certificate (the QR's `fp`).
+    pub lan: Option<(SocketAddr, String)>,
     ctx: Arc<Ctx>,
-    accept: Option<JoinHandle<()>>,
+    accepts: Vec<JoinHandle<()>>,
 }
+
+/// What a listener does with an accepted socket.
+type Handler = Arc<dyn Fn(TcpStream, Option<IpAddr>, &Arc<Ctx>) + Send + Sync>;
 
 impl Bridge {
     /// Listen on loopback; every connection is a tunnel's.
@@ -121,16 +137,33 @@ impl Bridge {
             open: AtomicUsize::new(0),
             endpoints: Mutex::new((0, Endpoints::default())),
         });
-        let accept = {
-            let ctx = ctx.clone();
-            thread::Builder::new()
-                .name("bridge-accept".into())
-                .spawn(move || accept_loop(&listener, &ctx, Route::Tunnel))?
-        };
+        let tunnel: Handler = Arc::new(|s, peer, ctx| serve(s, peer, ctx, Route::Tunnel));
+        let mut accepts = vec![listen("bridge-accept", listener, &ctx, tunnel)?];
+        let mut lan = None;
+        if let Some(l) = cfg.lan {
+            if !tls::bindable(l.ip) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("{} is neither loopback nor a private address", l.ip),
+                ));
+            }
+            let identity = Identity::load_or_create(&l.cert)?;
+            let tls_config = identity.server_config()?;
+            let listener = TcpListener::bind((l.ip, l.port))?;
+            listener.set_nonblocking(true)?;
+            lan = Some((listener.local_addr()?, identity.fingerprint()));
+            let direct: Handler = Arc::new(move |s, peer, ctx| {
+                if let Ok(link) = TlsLink::new(&tls_config, s) {
+                    serve(link, peer, ctx, Route::Direct);
+                }
+            });
+            accepts.push(listen("bridge-accept-lan", listener, &ctx, direct)?);
+        }
         Ok(Bridge {
             addr,
+            lan,
             ctx,
-            accept: Some(accept),
+            accepts,
         })
     }
 
@@ -145,13 +178,25 @@ impl Bridge {
     /// Stop accepting and end every relay.
     pub fn stop(mut self) {
         self.ctx.stop.store(true, Ordering::SeqCst);
-        if let Some(t) = self.accept.take() {
+        for t in self.accepts.drain(..) {
             let _ = t.join();
         }
     }
 }
 
-fn accept_loop(listener: &TcpListener, ctx: &Arc<Ctx>, route: Route) {
+fn listen(
+    name: &str,
+    listener: TcpListener,
+    ctx: &Arc<Ctx>,
+    handler: Handler,
+) -> io::Result<JoinHandle<()>> {
+    let ctx = ctx.clone();
+    thread::Builder::new()
+        .name(name.into())
+        .spawn(move || accept_loop(&listener, &ctx, &handler))
+}
+
+fn accept_loop(listener: &TcpListener, ctx: &Arc<Ctx>, handler: &Handler) {
     while !ctx.stop.load(Ordering::SeqCst) {
         match listener.accept() {
             Ok((stream, _)) => {
@@ -160,11 +205,11 @@ fn accept_loop(listener: &TcpListener, ctx: &Arc<Ctx>, route: Route) {
                     continue;
                 }
                 let spawned = thread::Builder::new().name("bridge-conn".into()).spawn({
-                    let ctx = ctx.clone();
+                    let (ctx, handler) = (ctx.clone(), handler.clone());
                     move || {
                         if stream.set_nonblocking(false).is_ok() {
                             let peer = stream.peer_addr().ok().map(|a| a.ip());
-                            serve(stream, peer, &ctx, route);
+                            handler(stream, peer, &ctx);
                         }
                         ctx.open.fetch_sub(1, Ordering::SeqCst);
                     }
