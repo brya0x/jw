@@ -493,3 +493,26 @@ fn list_dir_without_a_path_starts_at_home_and_refuses_what_is_not_a_folder() {
     assert_eq!(code(&mut c, "relative".into()), ErrorCode::BadRequest);
     d.stop();
 }
+
+#[test]
+fn list_dir_sends_the_first_500_folders_and_counts_them_all() {
+    let sb = Sandbox::new();
+    let d = sb.start();
+    let mut c = sb.client();
+    let dir = std::fs::canonicalize(&sb.dir).unwrap().join("many");
+    for n in 0..505 {
+        std::fs::create_dir_all(dir.join(format!("d{n:03}"))).unwrap();
+    }
+    let seen = c
+        .cmd(Cmd::ListDir {
+            path: Some(text(&dir)),
+            hidden: false,
+        })
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(seen["total"], 505);
+    assert_eq!(seen["dirs"].as_array().unwrap().len(), 500);
+    assert_eq!(seen["dirs"][499]["name"], "d499");
+    d.stop();
+}

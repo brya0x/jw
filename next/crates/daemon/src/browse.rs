@@ -6,7 +6,7 @@ use contract::ErrorCode;
 use serde_json::json;
 
 use crate::commands::{Done, err};
-use crate::workspaces::absolute;
+use crate::workspaces::directory;
 
 /// The most folders one `list_dir` returns; `total` says how many there were.
 const LIMIT: usize = 500;
@@ -43,15 +43,9 @@ pub fn home() -> PathBuf {
 pub fn list_dir(path: Option<&str>, hidden: bool) -> Done {
     let home = home();
     let dir = match path {
-        Some(p) => absolute(p)?,
-        None => absolute(&home.to_string_lossy())?,
+        Some(p) => directory(p)?,
+        None => directory(&home.to_string_lossy())?,
     };
-    if !dir.is_dir() {
-        return Err(err(
-            ErrorCode::BadRequest,
-            format!("{} is not a directory", dir.display()),
-        ));
-    }
     let names = read_subdirs(&dir, hidden).map_err(|e| {
         let code = match e.kind() {
             std::io::ErrorKind::NotFound => ErrorCode::NotFound,

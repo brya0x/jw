@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -32,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
@@ -41,7 +41,6 @@ import androidx.compose.ui.unit.sp
 import dev.jw.next.client.ClientState
 import dev.jw.next.client.FolderView
 import dev.jw.next.client.Navigator
-import dev.jw.next.client.NodeSource
 import dev.jw.next.client.Screen
 import dev.jw.next.client.WorktreePlan
 import dev.jw.next.client.folderView
@@ -54,6 +53,7 @@ import dev.jw.next.client.takenNames
 import dev.jw.next.client.worktreesDir
 import dev.jw.next.contract.DirListing
 import dev.jw.next.contract.Id
+import java.util.concurrent.atomic.AtomicInteger
 
 private val Gutter = 16.dp
 
@@ -88,7 +88,9 @@ fun FoldersScreen(source: AppSource, state: ClientState, nav: Navigator, set: (C
     var hidden by remember { mutableStateOf(false) }
     var listing by remember { mutableStateOf<DirListing?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    var refusal by remember { mutableStateOf<String?>(null) }
     var opening by remember { mutableStateOf(false) }
+    val asks = remember { AtomicInteger() }
     var waiting by remember { mutableStateOf<Id?>(null) }
     val version = source.tick.intValue
     val session = remember(version) { source.session() }
@@ -96,8 +98,11 @@ fun FoldersScreen(source: AppSource, state: ClientState, nav: Navigator, set: (C
     BackHandler(onBack = back)
     LaunchedEffect(path, hidden) {
         error = null
+        refusal = null
+        val asked = asks.incrementAndGet()
         source.listDir(path, hidden) { result ->
-            result.onSuccess { listing = it }.onFailure { error = it.message ?: "el PC no pudo leer la carpeta" }
+            // A slower answer to an earlier tap must not replace the folder asked for last.
+            if (asked == asks.get()) result.onSuccess { listing = it }.onFailure { error = it.message ?: "el PC no pudo leer la carpeta" }
         }
     }
     OpenWhenShown(source, waiting, state, nav, set)
@@ -119,13 +124,15 @@ fun FoldersScreen(source: AppSource, state: ClientState, nav: Navigator, set: (C
                 else -> FolderList(view) { path = it }
             }
         }
+        refusal?.let { Mono(it, Palette.red, 12, lines = 4, modifier = Modifier.fillMaxWidth().background(Palette.panel).padding(Gutter)) }
         if (view != null && error == null) Dock(view, busy = opening || waiting != null) {
             val here = view.here
             if (here != null) set(nav.openWorkspace(state, here))
             else {
                 opening = true
+                refusal = null
                 source.openFolder(view.path) { result ->
-                    result.onSuccess { waiting = it }.onFailure { error = it.message ?: "el PC no pudo abrir la carpeta" }
+                    result.onSuccess { waiting = it }.onFailure { refusal = it.message ?: "el PC no pudo abrir la carpeta" }
                     opening = false
                 }
             }
@@ -175,7 +182,7 @@ private fun FolderRowView(glyph: String, name: String, detail: String, open: Id?
 }
 
 @Composable
-private fun Tag(text: String, color: androidx.compose.ui.graphics.Color) {
+private fun Tag(text: String, color: Color) {
     Box(Modifier.padding(start = 6.dp).border(1.dp, Palette.line, RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 1.dp)) { Mono(text, color, 10) }
 }
 

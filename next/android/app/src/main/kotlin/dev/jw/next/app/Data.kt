@@ -200,25 +200,19 @@ abstract class ProtocolSource : AppSource() {
     private fun DaemonMsg.Reply.done(fallback: String): Result<Unit> =
         if (ok) Result.success(Unit) else Result.failure(Exception(error?.message ?: fallback))
 
-    /** The workspace a command opened, or the PC's message. */
-    private fun DaemonMsg.Reply.workspaceId(fallback: String): Result<Id> {
-        val id = (result?.get("workspace") as? JsonPrimitive)?.contentOrNull
+    /** What a command made, as the id under [key] of its result, or the PC's message ([fallback] when it gave none). */
+    private fun DaemonMsg.Reply.made(key: String, what: String, fallback: String): Result<Id> {
+        val id = (result?.get(key) as? JsonPrimitive)?.contentOrNull
         return when {
             ok && id != null -> Result.success(id)
-            ok -> Result.failure(Exception("el PC no dio el workspace"))
+            ok -> Result.failure(Exception("el PC no dio $what"))
             else -> Result.failure(Exception(error?.message ?: fallback))
         }
     }
 
-    /** The node a command made, or the PC's message. */
-    private fun DaemonMsg.Reply.nodeId(): Result<Id> {
-        val node = (result?.get("node") as? JsonPrimitive)?.contentOrNull
-        return when {
-            ok && node != null -> Result.success(node)
-            ok -> Result.failure(Exception("el PC no dio el nodo"))
-            else -> Result.failure(Exception(error?.message ?: "el PC no pudo hacerlo"))
-        }
-    }
+    private fun DaemonMsg.Reply.workspaceId(fallback: String) = made("workspace", "el workspace", fallback)
+
+    private fun DaemonMsg.Reply.nodeId() = made("node", "el nodo", "el PC no pudo hacerlo")
 
     private fun cachedRev(id: Id) = synchronized(lock) { cache.rev(id) }
     private fun cachedEpoch(id: Id) = synchronized(lock) { cache.epoch }.takeIf { cachedRev(id) != null }

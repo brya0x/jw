@@ -10,7 +10,7 @@ use crate::git;
 use crate::model::{Workspace, new_id};
 use crate::server::Shared;
 
-pub fn absolute(path: &str) -> Result<PathBuf, crate::commands::ErrorBody> {
+fn absolute(path: &str) -> Result<PathBuf, crate::commands::ErrorBody> {
     let p = Path::new(path);
     if !p.is_absolute() {
         return Err(err(
@@ -26,6 +26,19 @@ pub fn absolute(path: &str) -> Result<PathBuf, crate::commands::ErrorBody> {
         };
         err(code, format!("{path}: {e}"))
     })
+}
+
+/// An existing folder, by its canonical path.
+pub fn directory(path: &str) -> Result<PathBuf, crate::commands::ErrorBody> {
+    let dir = absolute(path)?;
+    if dir.is_dir() {
+        Ok(dir)
+    } else {
+        Err(err(
+            ErrorCode::BadRequest,
+            format!("{} is not a directory", dir.display()),
+        ))
+    }
 }
 
 fn already_open(shared: &Shared, path: &str) -> Result<(), crate::commands::ErrorBody> {
@@ -58,13 +71,7 @@ fn added(shared: &Shared, ws: Workspace) -> Done {
 }
 
 pub fn open_folder(shared: &Shared, path: &str) -> Done {
-    let dir = absolute(path)?;
-    if !dir.is_dir() {
-        return Err(err(
-            ErrorCode::BadRequest,
-            format!("{} is not a directory", dir.display()),
-        ));
-    }
+    let dir = directory(path)?;
     let path = dir.to_string_lossy().into_owned();
     already_open(shared, &path)?;
     let name = dir

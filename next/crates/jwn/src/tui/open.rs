@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crossterm::event::KeyCode;
-
 use daemon::browse::{home, is_git, subdirs};
 
 use super::{Grid, Rect, Style, clip, look};
