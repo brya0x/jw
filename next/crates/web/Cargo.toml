@@ -1,0 +1,14 @@
+[package]
+name = "web"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+contract = { path = "../contract" }
+serde.workspace = true
+serde_json = "1"
+sha2 = "0.11"
+tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
+
+[dev-dependencies]
+tempfile = "3"

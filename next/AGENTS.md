@@ -25,6 +25,7 @@ what they do and why, never pasted.
 | `crates/identity` | the product identity and the paths/env names derived from it |
 | `crates/contract` | the Rust types of the JSON documents; `tests/conformance.rs` checks them against `contract/` |
 | `crates/wire` | the transport (JSON lines on a Unix socket) and `Client`, a client with a node cache |
+| `crates/web` | the phone link: pairing, the paired devices, and the WebSocket bridge to the daemon socket; it never talks to the daemon before a phone is authenticated |
 | `crates/daemon` | the session, the node tree, patches, git worktrees, PTY panes |
 | `crates/jwn` | the binary: `daemon`, `stop`, `watch`, `cmd`, `bench`; the JSON end-to-end test |
 
