@@ -1,7 +1,8 @@
 #![allow(dead_code)]
 //! Shared helpers: a private socket dir per test (short, for the Unix path limit).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
@@ -52,3 +53,30 @@ impl Drop for Sandbox {
 }
 
 pub const WAIT: Duration = Duration::from_secs(5);
+
+/// Run `git -C <dir> <args>` as a test author with nothing signed; panics when git fails.
+pub fn git(dir: &Path, args: &[&str]) {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args([
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "commit.gpgsign=false",
+        ])
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+pub fn text(p: &Path) -> String {
+    p.to_string_lossy().into_owned()
+}

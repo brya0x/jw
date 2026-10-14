@@ -3,33 +3,10 @@
 mod common;
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
-use common::{Sandbox, WAIT};
+use common::{Sandbox, WAIT, git, text};
 use contract::{Cmd, ErrorCode};
 use serde_json::Value;
-
-fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args([
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@t",
-            "-c",
-            "commit.gpgsign=false",
-        ])
-        .args(args)
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
 
 /// A repository with one commit, at `<sandbox>/work/app`.
 fn repo(sb: &Sandbox) -> PathBuf {
@@ -40,10 +17,6 @@ fn repo(sb: &Sandbox) -> PathBuf {
     git(&dir, &["add", "."]);
     git(&dir, &["commit", "-q", "-m", "init"]);
     std::fs::canonicalize(dir).unwrap()
-}
-
-fn text(p: &Path) -> String {
-    p.to_string_lossy().into_owned()
 }
 
 fn session(c: &mut wire::Client) -> Value {

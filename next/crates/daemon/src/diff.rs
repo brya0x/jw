@@ -2,6 +2,7 @@
 //! commits, and the poll that keeps an `uncommitted` node current while someone watches it.
 //! Git does the comparing; this only runs it and shapes what it prints (REQ-91 to REQ-103).
 
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -267,12 +268,19 @@ fn read_untracked(path: &Path, name: String) -> DiffFile {
     if meta.file_type().is_symlink() {
         return unread(file, "symlink");
     }
-    if meta.len() > UNTRACKED_CAP {
+    // A named pipe or a device would block the read for ever.
+    if !meta.file_type().is_file() {
+        return unread(file, "special");
+    }
+    let mut bytes = Vec::new();
+    let read =
+        std::fs::File::open(path).and_then(|f| f.take(UNTRACKED_CAP + 1).read_to_end(&mut bytes));
+    if read.is_err() {
+        return unread(file, "unreadable");
+    }
+    if bytes.len() as u64 > UNTRACKED_CAP {
         return unread(file, "too_big");
     }
-    let Ok(bytes) = std::fs::read(path) else {
-        return unread(file, "unreadable");
-    };
     if bytes[..bytes.len().min(SNIFF)].contains(&0) {
         file.binary = true;
         return finish(file);
@@ -712,6 +720,28 @@ diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\n";
         let again = parse("diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1 +1 @@\n-x\n+y\n");
         assert_ne!(a[0].hash, b[0].hash);
         assert_eq!(a[0].hash, again[0].hash);
+    }
+
+    #[test]
+    fn an_untracked_file_is_read_unless_it_is_not_a_plain_file_or_too_big() {
+        let dir = std::env::temp_dir().join(format!("jwn-untracked-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "x\ny\n").unwrap();
+        std::fs::write(dir.join("big.txt"), vec![b'a'; UNTRACKED_CAP as usize + 1]).unwrap();
+        std::fs::write(dir.join("bin"), [1u8, 0, 2]).unwrap();
+        let fifo = std::process::Command::new("mkfifo")
+            .arg(dir.join("pipe"))
+            .status()
+            .unwrap();
+        assert!(fifo.success());
+
+        let read = |name: &str| read_untracked(&dir.join(name), name.to_owned());
+        assert_eq!(read("a.txt").hunks[0].lines, ["+x", "+y"]);
+        assert_eq!(read("big.txt").unreadable.as_deref(), Some("too_big"));
+        assert!(read("bin").binary);
+        assert_eq!(read("pipe").unreadable.as_deref(), Some("special"));
+        assert_eq!(read("missing").unreadable.as_deref(), Some("gone"));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -35,4 +35,5 @@ Never reach a real daemon from a test: use a private socket dir (`JWN_SOCKET`, `
 | `android/app` | the Compose app (`dev.jw.next`, from `identity.toml`); draws the shared fixtures for now |
 | `crates/jwn/src/tui/shell.rs` | the shell as blocks in the terminal client: colours, block lines, OSC 52 |
 | `crates/jwn/src/tui.rs` | the terminal client (`jwn tui`): a pure `View` tested on the fixtures, and the loop that moves bytes |
+| `crates/daemon/src/diff.rs`, `changes.rs` | the changes of a workspace: git read into `diff` and `commits` nodes (three scopes, the 2 s poll of `uncommitted`), and the commands that open, refresh and mark them |
 | `crates/daemon/src/blocks.rs`, `integration.rs`, `shell/` | the shell blocks: the scanner for OSC 133/633 marks, the per-pane block store (vt100 into styled spans), and the zsh, bash and fish scripts that report prompts and commands |
