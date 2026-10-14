@@ -250,8 +250,14 @@ pub enum Cmd {
         tool: Option<String>,
     },
     /// Turn the phone link on (bridge, tunnel, private-address listener) and make a pairing
-    /// token. The result is `{uri, tunnel?, lan?}`; the phone is paired from `uri`.
+    /// token. The result is `{uri, tunnel?, lan?, pending}`; the phone is paired from `uri`.
+    /// With a private address it answers at once and the tunnel opens in the background
+    /// (`pending`); `mobile_link` asks how it went.
     MobileStart {},
+    /// The link as it is now, with the pairing token `mobile_start` made (a new one only when
+    /// that one is gone): the result is `{uri, tunnel?, lan?, pending}`. `pending` is true
+    /// while the tunnel is still opening, so a client asks again until it is not.
+    MobileLink {},
     /// Wait up to `seconds` for a phone to ask to pair. The result is `{name, code}`, or
     /// nothing when none asked.
     MobileWait {

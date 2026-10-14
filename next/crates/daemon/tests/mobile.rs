@@ -256,3 +256,124 @@ fn a_restarted_daemon_is_found_again_by_a_paired_phone_on_the_same_port() {
     assert!(matches!(ready, BridgeMsg::Ready { .. }), "{ready:?}");
     second.stop();
 }
+
+/// A daemon whose phone link listens on loopback (the private address) and whose tunnel
+/// program takes a second to say its host, so that what comes first can be seen.
+fn start_with_slow_tunnel(sb: &Sandbox) -> Daemon {
+    let script = sb.dir.join("cloudflared");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\nsleep 1\necho 'INF https://slow-link-3.trycloudflare.com' >&2\nexec sleep 60\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut config = sb.config();
+    config.link = LinkConfig {
+        tunnel: Some(script.to_string_lossy().into()),
+        resolve: false,
+        lan: true,
+        lan_ip: Some(std::net::Ipv4Addr::LOCALHOST),
+    };
+    Daemon::start(config).unwrap()
+}
+
+fn alive(pid: &str) -> bool {
+    std::process::Command::new("kill")
+        .args(["-0", pid])
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
+fn token_of(uri: &str) -> String {
+    uri.split('/')
+        .nth(3)
+        .unwrap()
+        .split('?')
+        .next()
+        .unwrap()
+        .to_owned()
+}
+
+#[test]
+fn the_private_address_answers_at_once_and_the_tunnel_comes_later_and_stays() {
+    let sb = Sandbox::new();
+    let d = start_with_slow_tunnel(&sb);
+    let mut pc = sb.client();
+
+    let begun = std::time::Instant::now();
+    let first = pc.cmd(Cmd::MobileStart {}).unwrap().unwrap().unwrap();
+    assert!(
+        begun.elapsed() < Duration::from_millis(700),
+        "it did not wait for the tunnel: {:?}",
+        begun.elapsed()
+    );
+    let uri = first["uri"].as_str().unwrap();
+    assert!(uri.contains("://127.0.0.1:"), "{uri}");
+    assert!(!uri.contains("&t="), "no tunnel yet: {uri}");
+    assert_eq!(first["pending"], true);
+    assert!(first.get("tunnel").is_none());
+    let token = token_of(uri);
+
+    // The same token, with the tunnel in the link, once it is up.
+    let mut link = first.clone();
+    let end = std::time::Instant::now() + Duration::from_secs(8);
+    while link["pending"] == true && std::time::Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(100));
+        link = pc.cmd(Cmd::MobileLink {}).unwrap().unwrap().unwrap();
+    }
+    assert_eq!(link["pending"], false, "{link}");
+    assert_eq!(link["tunnel"], "slow-link-3.trycloudflare.com");
+    let uri = link["uri"].as_str().unwrap();
+    assert!(uri.ends_with("&t=slow-link-3.trycloudflare.com"), "{uri}");
+    assert_eq!(
+        token_of(uri),
+        token,
+        "the QR a phone is scanning stays good"
+    );
+
+    // The tunnel stays until the link is turned off: asking again, or the client going,
+    // leaves it as it is.
+    let pidfile = sb.dir.join("state/tunnel.pid");
+    let pid = std::fs::read_to_string(&pidfile).unwrap().trim().to_owned();
+    assert!(alive(&pid));
+    let again = pc.cmd(Cmd::MobileStart {}).unwrap().unwrap().unwrap();
+    assert_eq!(again["pending"], false);
+    assert_eq!(again["tunnel"], "slow-link-3.trycloudflare.com");
+    drop(pc);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(alive(&pid), "the client going did not end the tunnel");
+    assert_eq!(std::fs::read_to_string(&pidfile).unwrap().trim(), pid);
+
+    let mut pc = sb.client();
+    pc.cmd(Cmd::MobileStop {}).unwrap().unwrap();
+    let end = std::time::Instant::now() + Duration::from_secs(5);
+    while alive(&pid) && std::time::Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(!alive(&pid), "turning the link off ends the tunnel");
+    d.stop();
+}
+
+#[test]
+fn a_link_that_is_off_has_nothing_to_show_and_without_a_tunnel_nothing_is_pending() {
+    let sb = Sandbox::new();
+    let mut config = sb.config();
+    config.link = LinkConfig {
+        tunnel: None,
+        resolve: false,
+        lan: true,
+        lan_ip: Some(std::net::Ipv4Addr::LOCALHOST),
+    };
+    let d = Daemon::start(config).unwrap();
+    let mut pc = sb.client();
+    let e = pc.cmd(Cmd::MobileLink {}).unwrap().unwrap_err();
+    assert_eq!(e.code, contract::ErrorCode::Io);
+    let started = pc.cmd(Cmd::MobileStart {}).unwrap().unwrap().unwrap();
+    assert_eq!(started["pending"], false);
+    assert_eq!(
+        pc.cmd(Cmd::MobileLink {}).unwrap().unwrap().unwrap()["uri"],
+        started["uri"],
+        "the same link, the same token"
+    );
+    d.stop();
+}

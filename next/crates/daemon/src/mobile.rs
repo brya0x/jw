@@ -3,6 +3,7 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -147,6 +148,8 @@ pub struct Hub {
     running: Mutex<Option<Running>>,
     /// Held while a tunnel is being brought up, so two callers never start two.
     tunnel_lock: Mutex<()>,
+    /// A tunnel is being brought up in the background: what `pending` says.
+    tunnel_busy: AtomicBool,
 }
 
 /// The paired devices: a file `jwn devices` reads with no daemon running.
@@ -189,25 +192,62 @@ impl Hub {
             asker: Arc::default(),
             running: Mutex::new(None),
             tunnel_lock: Mutex::new(()),
+            tunnel_busy: AtomicBool::new(false),
         }
     }
 
-    /// Turn the link on if it is off, and make a new pairing token. Waits for the tunnel (up to
-    /// 90 s) without holding the lock that `stop` needs.
-    pub fn start(&self) -> Result<Value, String> {
+    /// Turn the link on if it is off, and make a new pairing token. With a private address the
+    /// answer is at once, over that address, and the tunnel opens in the background (the
+    /// connected phones are told its host when it is up); without one, the tunnel is the only
+    /// way in and this waits for it, up to 90 s, without holding the lock that `stop` needs.
+    pub fn start(self: &Arc<Self>) -> Result<Value, String> {
         self.ensure_bridge()?;
-        self.ensure_tunnel();
+        let lan = guard(&self.running)
+            .as_ref()
+            .is_some_and(|r| r.bridge.lan.is_some());
+        if lan {
+            self.open_tunnel_in_background();
+        } else {
+            self.ensure_tunnel();
+        }
+        let token = {
+            let slot = guard(&self.running);
+            let run = slot.as_ref().ok_or("the phone link was turned off")?;
+            run.pairing
+                .issue()
+                .map_err(|e| format!("no random numbers: {e}"))?
+        };
+        self.link_with(&token)
+    }
+
+    /// The link as it is now, with the pairing token on offer (a new one only when it is gone
+    /// or spent): what a client asks for while the tunnel opens.
+    pub fn link(&self) -> Result<Value, String> {
+        let token = {
+            let slot = guard(&self.running);
+            let run = slot.as_ref().ok_or("the phone link is off")?;
+            match run.pairing.current() {
+                Some(t) => t,
+                None => run
+                    .pairing
+                    .issue()
+                    .map_err(|e| format!("no random numbers: {e}"))?,
+            }
+        };
+        self.link_with(&token)
+    }
+
+    fn link_with(&self, token: &str) -> Result<Value, String> {
         let slot = guard(&self.running);
         let run = slot.as_ref().ok_or("the phone link was turned off")?;
-        let token = run
-            .pairing
-            .issue()
-            .map_err(|e| format!("no random numbers: {e}"))?;
         let lan = run.bridge.lan.as_ref();
         let tunnel = run.tunnel.as_ref().map(|t| t.host.as_str());
-        let uri = link_uri(&token, lan.map(|(a, fp)| (a, fp.as_str())), tunnel)
+        let uri = link_uri(token, lan.map(|(a, fp)| (a, fp.as_str())), tunnel)
             .ok_or("there is no way to reach this PC: install cloudflared or join a network")?;
-        let mut out = json!({"uri": uri, "local": run.bridge.addr.to_string()});
+        let pending = self.config.tunnel.is_some()
+            && run.tunnel.is_none()
+            && self.tunnel_busy.load(Ordering::SeqCst);
+        let mut out = json!({"uri": uri, "local": run.bridge.addr.to_string(), "pending": pending});
         if let Some((addr, _)) = lan {
             out["lan"] = json!(addr.to_string());
         }
@@ -215,6 +255,29 @@ impl Hub {
             out["tunnel"] = json!(host);
         }
         Ok(out)
+    }
+
+    /// Bring the tunnel up on a thread of its own, unless there is one or one is coming. It
+    /// stays up until the link is turned off, whoever asked for it.
+    fn open_tunnel_in_background(self: &Arc<Self>) {
+        if self.config.tunnel.is_none()
+            || guard(&self.running)
+                .as_ref()
+                .is_none_or(|r| r.tunnel.is_some())
+            || self.tunnel_busy.swap(true, Ordering::SeqCst)
+        {
+            return;
+        }
+        let hub = self.clone();
+        let spawned = std::thread::Builder::new()
+            .name("mobile-tunnel".into())
+            .spawn(move || {
+                hub.ensure_tunnel();
+                hub.tunnel_busy.store(false, Ordering::SeqCst);
+            });
+        if spawned.is_err() {
+            self.tunnel_busy.store(false, Ordering::SeqCst);
+        }
     }
 
     /// A daemon that starts with phones already paired opens the link again, on the same network
@@ -231,7 +294,7 @@ impl Hub {
         let _ = std::thread::Builder::new()
             .name("mobile-resume".into())
             .spawn(move || match hub.ensure_bridge() {
-                Ok(()) => hub.ensure_tunnel(),
+                Ok(()) => hub.open_tunnel_in_background(),
                 Err(e) => eprintln!("the phone link did not come back: {e}"),
             });
     }

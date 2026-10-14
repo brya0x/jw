@@ -79,6 +79,10 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
             let hub = shared.lock().mobile.clone();
             hub.start().map(Some).map_err(|why| err(ErrorCode::Io, why))
         }
+        Cmd::MobileLink {} => {
+            let hub = shared.lock().mobile.clone();
+            hub.link().map(Some).map_err(|why| err(ErrorCode::Io, why))
+        }
         Cmd::MobileWait { seconds } => {
             let hub = shared.lock().mobile.clone();
             Ok(hub

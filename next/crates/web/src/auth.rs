@@ -67,6 +67,14 @@ impl Pairing {
         Ok(token)
     }
 
+    /// The token on offer, while it can still be spent.
+    pub fn current(&self) -> Option<String> {
+        lock(&self.token)
+            .as_ref()
+            .filter(|(_, at)| at.elapsed() <= self.ttl)
+            .map(|(t, _)| t.clone())
+    }
+
     /// Whether `presented` is the live token. A match spends it, whatever comes next.
     pub fn take(&self, presented: &str) -> bool {
         let mut slot = lock(&self.token);

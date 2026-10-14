@@ -24,6 +24,8 @@ pub struct Link {
     pub lan: Option<String>,
     /// The host name of the tunnel, when there is one.
     pub tunnel: Option<String>,
+    /// The tunnel is still opening: the link over the private address is good meanwhile.
+    pub pending: bool,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -128,10 +130,11 @@ fn work(socket: &Path, events: &Sender<Event>, says: &Receiver<Say>) {
             return;
         }
     };
+    let pending = link.pending;
     if !tell(Event::Ready(link)) || !tell(Event::Paired(crate::pair::paired_count())) {
         return;
     }
-    if let Err(why) = listen(&mut client, says, &tell) {
+    if let Err(why) = listen(&mut client, says, &tell, pending) {
         tell(Event::Failed(why));
     }
 }
@@ -142,10 +145,23 @@ fn listen(
     client: &mut Client,
     says: &Receiver<Say>,
     tell: &impl Fn(Event) -> bool,
+    mut pending: bool,
 ) -> Result<(), String> {
     loop {
         if let Ok(Say::Stop) = says.try_recv() {
             return stop(client, tell);
+        }
+        // The tunnel opens in the daemon: the link is asked for again, with the same token,
+        // until it says the tunnel is up or that there is none.
+        if pending
+            && let Some(link) = ask(client, Cmd::MobileLink {}, START_WAIT)?
+                .as_ref()
+                .and_then(link_of)
+        {
+            pending = link.pending;
+            if !pending {
+                tell(Event::Ready(link));
+            }
         }
         let wait = Cmd::MobileWait {
             seconds: LISTEN_SECONDS,
@@ -188,6 +204,7 @@ fn link_of(v: &serde_json::Value) -> Option<Link> {
         uri: text("uri")?,
         lan: text("lan"),
         tunnel: text("tunnel"),
+        pending: v["pending"].as_bool().unwrap_or(false),
     })
 }
 
@@ -292,6 +309,10 @@ fn link_lines(link: &Link, paired: usize, hint: &str) -> Vec<(String, Style)> {
     }
     lines.push(match &link.tunnel {
         Some(host) => plain(&format!("túnel       {host}")),
+        None if link.pending => (
+            "túnel       abriendo… (hasta un minuto; la red local ya sirve)".to_owned(),
+            Style::fg(look::yellow()),
+        ),
         None => (
             "túnel       sin túnel: solo desde tu red".to_owned(),
             Style::fg(look::yellow()),
@@ -404,6 +425,7 @@ mod tests {
             uri: "jwn://192.168.1.20:7871/t0k?fp=ab".into(),
             lan: Some("192.168.1.20:7871".into()),
             tunnel: None,
+            pending: false,
         }
     }
 
@@ -444,7 +466,8 @@ mod tests {
             Some(Link {
                 uri: "jwn://x".into(),
                 lan: Some("10.0.0.2:1".into()),
-                tunnel: Some("a.b".into())
+                tunnel: Some("a.b".into()),
+                pending: false,
             })
         );
         assert_eq!(
@@ -564,5 +587,50 @@ mod tests {
             panic!("a failure was expected")
         };
         assert!(why.contains("jwn-ph-nobody-here.sock"), "{why}");
+    }
+    #[test]
+    fn the_link_comes_over_the_network_first_and_again_with_the_tunnel_when_it_is_up() {
+        use std::os::unix::fs::PermissionsExt;
+        // A tunnel program that takes a second to say its host.
+        let dir = PathBuf::from(format!("/tmp/jwn-ph-slow-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("cloudflared");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nsleep 1\necho 'INF https://slow-4.trycloudflare.com' >&2\nexec sleep 60\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let pc = Pc::start(daemon::LinkConfig {
+            tunnel: Some(script.to_string_lossy().into()),
+            resolve: false,
+            lan: true,
+            lan_ip: Some(std::net::Ipv4Addr::LOCALHOST),
+        });
+        let w = Worker::spawn_at(pc.socket());
+        let Event::Ready(first) = next(&w) else {
+            panic!("the link was not reported")
+        };
+        assert!(first.pending && first.tunnel.is_none(), "{first:?}");
+        assert!(first.lan.is_some(), "it did not wait for the tunnel");
+        assert!(matches!(next(&w), Event::Paired(_)));
+        let Event::Ready(second) = next(&w) else {
+            panic!("the link with the tunnel was not reported")
+        };
+        assert!(!second.pending);
+        assert_eq!(second.tunnel.as_deref(), Some("slow-4.trycloudflare.com"));
+        assert!(
+            second.uri.ends_with("&t=slow-4.trycloudflare.com"),
+            "{}",
+            second.uri
+        );
+        assert_eq!(
+            second.uri.split('/').nth(3).unwrap().split('?').next(),
+            first.uri.split('/').nth(3).unwrap().split('?').next(),
+            "the same token: the QR on the screen stays good"
+        );
+        w.say(Say::Stop);
+        assert_eq!(next(&w), Event::Off);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

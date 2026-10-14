@@ -298,6 +298,7 @@
           }
         },
         { "type": "object", "required": ["cmd"], "properties": { "cmd": { "const": "mobile_start" } } },
+        { "type": "object", "required": ["cmd"], "properties": { "cmd": { "const": "mobile_link" } } },
         { "type": "object", "required": ["cmd", "seconds"], "properties": { "cmd": { "const": "mobile_wait" }, "seconds": { "type": "integer", "minimum": 0, "maximum": 300 } } },
         { "type": "object", "required": ["cmd", "yes"], "properties": { "cmd": { "const": "mobile_answer" }, "yes": { "type": "boolean" } } },
         { "type": "object", "required": ["cmd"], "properties": { "cmd": { "const": "mobile_stop" } } }

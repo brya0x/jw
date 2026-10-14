@@ -199,6 +199,10 @@ sealed interface Cmd {
     @Serializable @SerialName("mobile_start")
     data object MobileStart : Cmd
 
+    /** The link as it is now, with the pairing token of `mobile_start`. */
+    @Serializable @SerialName("mobile_link")
+    data object MobileLink : Cmd
+
     /** Wait up to [seconds] for a phone to ask to pair. */
     @Serializable @SerialName("mobile_wait")
     data class MobileWait(val seconds: Int) : Cmd

@@ -44,25 +44,29 @@ fn run_within(
 /// Turn the link on, show the QR, and answer one pairing question.
 pub fn pair() -> Res {
     let mut client = connect()?;
-    println!("Abriendo el túnel… (puede tardar hasta un minuto)");
-    // The tunnel may take about a minute to resolve (the daemon waits up to 90 s).
+    // The link over the private address comes at once; the tunnel opens in the daemon (up to a
+    // minute and a half) and is shown, with the link that includes it, when it is up.
     let started = run_within(&mut client, Cmd::MobileStart {}, Duration::from_secs(120))?
         .ok_or("the daemon gave no link")?;
-    let uri = started["uri"].as_str().ok_or("the daemon gave no link")?;
-    if let Ok(code) = QrCode::new(uri) {
-        println!("{}", code.render::<Dense1x2>().quiet_zone(true).build());
-    }
-    println!("{uri}\n");
-    for (what, key) in [("tunnel", "tunnel"), ("red local", "lan")] {
-        if let Some(addr) = started[key].as_str() {
-            println!("{what}: {addr}");
-        }
+    show(&started)?;
+    let mut pending = started["pending"].as_bool().unwrap_or(false);
+    if pending {
+        println!("túnel: abriendo… (la red local ya sirve)");
     }
     println!(
         "\nEscanea el código o pega el enlace en la app del teléfono. Esperando… (Ctrl-C para salir; el enlace sigue activo)"
     );
     loop {
-        let Some(ask) = run(&mut client, Cmd::MobileWait { seconds: 25 })? else {
+        if pending {
+            let link = run(&mut client, Cmd::MobileLink {})?.ok_or("the daemon gave no link")?;
+            pending = link["pending"].as_bool().unwrap_or(false);
+            if !pending && link["tunnel"].is_string() {
+                println!("\nEl túnel está listo; este enlace lo incluye:");
+                show(&link)?;
+            }
+        }
+        let seconds = if pending { 2 } else { 25 };
+        let Some(ask) = run(&mut client, Cmd::MobileWait { seconds })? else {
             continue;
         };
         let (name, code) = (
@@ -83,6 +87,21 @@ pub fn pair() -> Res {
         println!("{}", if yes { "Emparejado." } else { "Rechazado." });
         return Ok(ExitCode::SUCCESS);
     }
+}
+
+/// The QR of a link, the link, and where the PC can be reached.
+fn show(link: &serde_json::Value) -> Result<(), String> {
+    let uri = link["uri"].as_str().ok_or("the daemon gave no link")?;
+    if let Ok(code) = QrCode::new(uri) {
+        println!("{}", code.render::<Dense1x2>().quiet_zone(true).build());
+    }
+    println!("{uri}\n");
+    for (what, key) in [("tunnel", "tunnel"), ("red local", "lan")] {
+        if let Some(addr) = link[key].as_str() {
+            println!("{what}: {addr}");
+        }
+    }
+    Ok(())
 }
 
 pub fn stop() -> Res {

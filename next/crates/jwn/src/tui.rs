@@ -1034,7 +1034,18 @@ impl View {
             _ => None,
         };
         match (event, link) {
-            (Event::Ready(link), _) => {
+            // The link again, with the tunnel in it: a phone asking stays asked.
+            (Event::Ready(link), Some(_)) => {
+                let opened = link.tunnel.clone();
+                self.phone = match std::mem::replace(&mut self.phone, State::Off) {
+                    State::Asking { name, code, .. } => State::Asking { link, name, code },
+                    _ => State::Ready(link),
+                };
+                if opened.is_some() && !self.phone_open {
+                    self.flash = "túnel listo: el teléfono ya puede entrar desde fuera · m".into();
+                }
+            }
+            (Event::Ready(link), None) => {
                 self.phone = State::Ready(link);
                 if !self.phone_open {
                     self.flash = "enlace con el teléfono listo · m".into();
@@ -3584,6 +3595,7 @@ mod tests {
             uri: "jwn://192.168.1.20:7871/t0kenabc?fp=ab".into(),
             lan: Some("192.168.1.20:7871".into()),
             tunnel: None,
+            pending: false,
         }
     }
 
@@ -3987,5 +3999,41 @@ mod tests {
             "feat/login"
         );
         assert_eq!(shown_name("x: y", WorkspaceKind::Folder, None), "x: y");
+    }
+    #[test]
+    fn the_link_over_the_network_shows_first_and_the_tunnel_joins_it_when_it_is_up() {
+        let mut v = idle_view();
+        tap(&mut v, 'm');
+        let mut first = link();
+        first.pending = true;
+        v.phone_event(phone::Event::Ready(first.clone()));
+        let t = v.plain(140, 50);
+        assert!(t.contains("red local   192.168.1.20:7871"), "{t}");
+        assert!(t.contains("túnel       abriendo…"), "{t}");
+        assert!(!t.contains("sin túnel"), "it is coming, not missing: {t}");
+        // A phone asks meanwhile: the tunnel arriving does not lose the question.
+        v.set_now(1_000);
+        v.phone_event(phone::Event::Ask {
+            name: "Pixel 8".into(),
+            code: "123 456".into(),
+        });
+        let mut up = first.clone();
+        up.pending = false;
+        up.tunnel = Some("quiet-river.trycloudflare.com".into());
+        up.uri = format!("{}&t=quiet-river.trycloudflare.com", first.uri);
+        v.phone_event(phone::Event::Ready(up.clone()));
+        assert!(
+            matches!(&v.phone, phone::State::Asking { link, name, .. } if link.tunnel.is_some() && name == "Pixel 8"),
+            "{:?}",
+            v.phone
+        );
+        v.phone_event(phone::Event::Answered { yes: false });
+        let t = v.plain(140, 50);
+        assert!(
+            t.contains("túnel       quiet-river.trycloudflare.com"),
+            "{t}"
+        );
+        assert!(!t.contains("abriendo…"), "{t}");
+        assert!(v.phone.is_on());
     }
 }
