@@ -13,7 +13,7 @@ use contract::{BridgeMsg, Denied};
 use tungstenite::client::IntoClientRequest;
 use tungstenite::{Message, WebSocket};
 use web::auth::{Pairing, Store};
-use web::bridge::{Answer, Ask, Bridge, Config};
+use web::bridge::{Answer, Ask, Bridge, Config, Endpoints};
 
 struct Rig {
     _dir: tempfile::TempDir,
@@ -119,10 +119,16 @@ fn hear(ws: &mut Ws) -> Option<BridgeMsg> {
     }
 }
 
+/// The next line from the daemon; the bridge's own `endpoints` messages are skipped.
 fn line(ws: &mut Ws) -> Option<serde_json::Value> {
     loop {
         match ws.read() {
-            Ok(Message::Text(t)) => return serde_json::from_str(&t).ok(),
+            Ok(Message::Text(t)) => {
+                let v: serde_json::Value = serde_json::from_str(&t).ok()?;
+                if v["t"] != "endpoints" {
+                    return Some(v);
+                }
+            }
             Ok(Message::Close(_)) | Err(_) => return None,
             Ok(_) => {}
         }
@@ -361,4 +367,38 @@ fn a_stopped_bridge_ends_its_relays() {
     assert_eq!(hear(&mut ws), Some(BridgeMsg::Ready));
     r.bridge.take().unwrap().stop();
     assert!(line(&mut ws).is_none());
+}
+
+#[test]
+fn phones_are_told_the_addresses_after_ready_and_whenever_they_change() {
+    let r = rig();
+    let (id, secret) = r.store.add("Pixel").unwrap();
+    r.bridge.as_ref().unwrap().set_endpoints(Endpoints {
+        lan: None,
+        tunnel: Some("quiet-river-1234.trycloudflare.com".into()),
+    });
+    let mut ws = r.connect("203.0.113.13").unwrap();
+    say(
+        &mut ws,
+        serde_json::json!({"t": "auth", "device": id, "secret": secret}),
+    );
+    assert_eq!(hear(&mut ws), Some(BridgeMsg::Ready));
+    assert_eq!(
+        hear(&mut ws),
+        Some(BridgeMsg::Endpoints {
+            lan: None,
+            tunnel: Some("quiet-river-1234.trycloudflare.com".into())
+        })
+    );
+    r.bridge.as_ref().unwrap().set_endpoints(Endpoints {
+        lan: Some("192.168.1.20:7443".into()),
+        tunnel: None,
+    });
+    assert_eq!(
+        hear(&mut ws),
+        Some(BridgeMsg::Endpoints {
+            lan: Some("192.168.1.20:7443".into()),
+            tunnel: None
+        })
+    );
 }

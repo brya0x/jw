@@ -5,9 +5,9 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, TryRecvError};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -41,6 +41,13 @@ pub enum Answer {
     Yes,
     No,
     Timeout,
+}
+
+/// Where the PC can be reached besides loopback; phones are told when it changes (REQ-82).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Endpoints {
+    pub lan: Option<String>,
+    pub tunnel: Option<String>,
 }
 
 pub type Confirm = dyn Fn(&Ask) -> Answer + Send + Sync;
@@ -82,6 +89,8 @@ pub(crate) struct Ctx {
     limiter: Limiter,
     stop: AtomicBool,
     open: AtomicUsize,
+    /// The current addresses and how many times they have been set.
+    endpoints: Mutex<(u64, Endpoints)>,
 }
 
 pub struct Bridge {
@@ -110,6 +119,7 @@ impl Bridge {
             limiter: Limiter::default(),
             stop: AtomicBool::new(false),
             open: AtomicUsize::new(0),
+            endpoints: Mutex::new((0, Endpoints::default())),
         });
         let accept = {
             let ctx = ctx.clone();
@@ -122,6 +132,14 @@ impl Bridge {
             ctx,
             accept: Some(accept),
         })
+    }
+
+    /// Say where the PC can be reached now; every connected phone is told.
+    pub fn set_endpoints(&self, now: Endpoints) {
+        let mut slot = self.ctx.endpoints.lock().unwrap_or_else(|e| e.into_inner());
+        if slot.1 != now {
+            *slot = (slot.0 + 1, now);
+        }
     }
 
     /// Stop accepting and end every relay.
@@ -332,6 +350,7 @@ fn relay<S: Link>(mut ws: WebSocket<S>, ctx: &Ctx, device: &str) {
     let _ = ws.get_ref().set_read_timeout(Some(TICK));
     let mut out = &daemon;
     let mut checked = Instant::now();
+    let mut told = 0;
     'relay: loop {
         if ctx.stop.load(Ordering::SeqCst) {
             break;
@@ -339,6 +358,21 @@ fn relay<S: Link>(mut ws: WebSocket<S>, ctx: &Ctx, device: &str) {
         if checked.elapsed() >= REVOKED_CHECK {
             checked = Instant::now();
             if !ctx.store.is_paired(device) {
+                break;
+            }
+        }
+        let (version, endpoints) = ctx
+            .endpoints
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if version != told || told == 0 {
+            told = version.max(1);
+            let msg = BridgeMsg::Endpoints {
+                lan: endpoints.lan,
+                tunnel: endpoints.tunnel,
+            };
+            if !send(&mut ws, &msg) {
                 break;
             }
         }
