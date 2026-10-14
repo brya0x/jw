@@ -428,7 +428,7 @@ The shapes REQ-91 to REQ-103 name (nodes, commands, fields) are enforced by N31 
 | N40 ✓ `d4bd558` | the terminal client's themes, mode and `settings.json`, with `contract/themes.json` | 151–156 | `contract/themes.json`, `crates/contract/src/themes.rs`, `crates/jwn/src/tui/{look,settings,manage}.rs` |
 | N41 ✓ `8783b30` | the phone closes a pane and has the `ajustes` tab; its field rises with the keyboard and a pane that is opening shows grey bars | 148–150, 156–158, 167, 168 | `android/app`, `android/client-core/.../{Look,ClosePane}.kt` |
 | N42 ✓ `902bff6` | the terminal client turns the link on and pairs a phone (`m`); the same grey bars for a pane that is opening | 159–166, 168 | `crates/jwn/src/tui/phone.rs`, `crates/jwn/src/tui.rs` |
-| N43 ✓ (this commit) | the three levels of the terminal client: workspaces, panels, terminal; `esc` up, `^␣` out of typing, `x` closes what the level is about, `n` and `f` at the panel level, `?` lists the keys | 169–176 | `crates/jwn/src/tui.rs` |
+| N43 ✓ `de36dbe` | the three levels of the terminal client: workspaces, panels, terminal; `esc` up, `^␣` out of typing, `x` closes what the level is about, `n` and `f` at the panel level, `?` lists the keys | 169–176 | `crates/jwn/src/tui.rs` |
 
 ## What is left
 In this order, which is proposed. The user chose on 2026-10-14 that the daily flow of the terminal client comes next, that the special keys of the phone are among the last things, and that the viewer of files and Markdown is the very last (he does not want to work on Markdown yet). Each becomes a part (N43 onwards) with its REQs when it starts; a part with a screen starts from an approved prototype. What is missing was found by setting the old jw's README against what `next/` does today.

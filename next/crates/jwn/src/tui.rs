@@ -744,6 +744,9 @@ impl View {
 
     /// Open a workspace and focus one of its panes, marking both seen on this terminal.
     fn open(&mut self, ws: &str, focus: usize) {
+        if self.opened.as_deref() != Some(ws) {
+            self.full = false;
+        }
         self.opened = Some(ws.to_owned());
         self.typing = false;
         self.blk = None;
@@ -790,6 +793,7 @@ impl View {
     fn select_workspace(&mut self, forward: bool) {
         let n = self.session.as_ref().map_or(0, |s| s.workspaces.len());
         self.typing = false;
+        self.full = false;
         self.selected = if forward {
             (self.selected + 1).min(n.saturating_sub(1))
         } else {
@@ -845,10 +849,6 @@ impl View {
         let Some(ws) = self.shown() else {
             return After::Continue;
         };
-        if self.opened.as_deref() != Some(ws.head.id.as_str()) {
-            self.flash = "↵ abre el workspace para elegir el panel".into();
-            return After::Continue;
-        }
         let Some(pane) = ws.panes.get(self.focus) else {
             self.flash = "no hay panel enfocado".into();
             return After::Continue;
@@ -867,7 +867,7 @@ impl View {
         }
     }
 
-    /// `X`: ask before the highlighted workspace is closed.
+    /// `x` at the workspace level: ask before the highlighted workspace is closed.
     fn ask_close_workspace(&mut self) {
         let Some(w) = self
             .session
@@ -1330,6 +1330,10 @@ impl View {
     /// a pane's box focuses it, `avisos N` in the status bar opens the list, an item of the
     /// list goes there, and a click outside the list closes it.
     pub fn click(&mut self, x: usize, y: usize, cols: usize, rows: usize) -> After {
+        if self.help {
+            self.help = false;
+            return After::Continue;
+        }
         if self.manage.is_some() || self.phone_open {
             return After::Continue;
         }
@@ -1393,7 +1397,7 @@ impl View {
     /// The wheel over the sidebar (or the avisos list) moves the highlight; over a pane drawn
     /// as blocks it scrolls them.
     pub fn scroll(&mut self, down: bool, x: usize, y: usize, cols: usize, rows: usize) -> After {
-        if self.manage.is_some() || self.phone_open {
+        if self.help || self.manage.is_some() || self.phone_open {
             return After::Continue;
         }
         if self.changes.is_some() {
@@ -3795,5 +3799,26 @@ mod tests {
         v.press_key(plain(KeyCode::Char('?')));
         assert_eq!(v.level(), Level::Terminal, "`?` is typed into the program");
         assert!(!v.help);
+    }
+    #[test]
+    fn a_panel_shown_full_is_not_full_in_the_next_workspace_and_a_click_closes_the_keys() {
+        let mut v = fixture_view();
+        v.press(Key::Enter);
+        v.press(Key::Full);
+        assert!(v.full);
+        // Another workspace opened by a click, an attention or `j` + `↵` starts as usual.
+        v.click(5, 3, 120, 30);
+        assert!(!v.full, "opening another workspace");
+        v.full = true;
+        v.select_workspace(true);
+        assert!(!v.full, "moving the highlight to another workspace");
+        v.press(Key::Enter);
+        v.press(Key::Back);
+        // A click while the box of keys is open closes it and does nothing else.
+        v.press_key(plain(KeyCode::Char('?')));
+        assert!(v.help);
+        v.click(5, 3, 120, 30);
+        assert!(!v.help);
+        assert_eq!(v.level(), Level::Workspaces);
     }
 }
