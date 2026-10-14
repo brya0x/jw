@@ -13,11 +13,12 @@ use daemon::{Config, Daemon};
 use wire::Conn;
 
 const USAGE: &str = "usage:
+  jwn                     the terminal client; starts the daemon in the background when none runs
   jwn daemon              run the daemon (foreground)
   jwn stop                stop the daemon recorded in the pid file
   jwn watch [NODE]        print every JSON line for NODE (default: the session)
   jwn cmd '<json cmd>'    send one command, print its reply (exit 1 if it failed)
-  jwn tui                 a small terminal client of the daemon
+  jwn tui                 the same as jwn with no arguments
   jwn pair                turn the phone link on, show the QR and answer the pairing question
   jwn pair stop           turn the phone link off (paired phones are kept)
   jwn devices             list the paired phones
@@ -44,7 +45,7 @@ fn main() -> ExitCode {
         ["revoke", which] => pair::revoke(which),
         ["bench"] => bench::run().map(|()| ExitCode::SUCCESS),
         ["hook", event] => Ok(hook::run(event)),
-        ["tui"] => tui::run().map(|()| ExitCode::SUCCESS),
+        [] | ["tui"] => enter().map(|()| ExitCode::SUCCESS),
         _ => Err(USAGE.into()),
     };
     match result {
@@ -57,6 +58,65 @@ fn main() -> ExitCode {
 }
 
 type Res = Result<ExitCode, String>;
+
+/// How long a daemon started for the client has to answer on its socket.
+const DAEMON_WAIT: Duration = Duration::from_secs(5);
+
+/// The terminal client, with a daemon to talk to: the one that answers, else one started
+/// here in the background (REQ-186). It keeps running when the client or its terminal ends.
+fn enter() -> Result<(), String> {
+    ensure_daemon()?;
+    tui::run()
+}
+
+fn ensure_daemon() -> Result<(), String> {
+    let config = Config::from_identity();
+    if Conn::connect(&config.socket).is_ok() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(&config.state_dir)
+        .map_err(|e| format!("{}: {e}", config.state_dir.display()))?;
+    let log_path = config.state_dir.join("daemon.log");
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .map_err(|e| format!("{}: {e}", log_path.display()))?;
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    // Its own process group, so that the terminal's hang-up does not reach it, and no
+    // terminal to read or write: what it says goes to its log.
+    let mut daemon = std::process::Command::new(exe);
+    daemon
+        .arg("daemon")
+        .stdin(std::process::Stdio::null())
+        .stdout(log.try_clone().map_err(|e| e.to_string())?)
+        .stderr(log);
+    std::os::unix::process::CommandExt::process_group(&mut daemon, 0);
+    let mut child = daemon
+        .spawn()
+        .map_err(|e| format!("cannot start the daemon: {e}"))?;
+    eprintln!("jwn: starting the daemon (log: {})", log_path.display());
+    let end = std::time::Instant::now() + DAEMON_WAIT;
+    while std::time::Instant::now() < end {
+        if Conn::connect(&config.socket).is_ok() {
+            return Ok(());
+        }
+        // It ended already (another one holds the socket, or it cannot start): say why.
+        if let Ok(Some(status)) = child.try_wait() {
+            return Err(format!(
+                "the daemon ended ({status}); see {}",
+                log_path.display()
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Err(format!(
+        "the daemon did not answer on {} within {} s; see {}",
+        config.socket.display(),
+        DAEMON_WAIT.as_secs(),
+        log_path.display()
+    ))
+}
 
 fn run_daemon() -> Res {
     let daemon =
