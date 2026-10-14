@@ -272,6 +272,21 @@ fn closing_a_pane_ends_its_shell_and_its_node() {
 }
 
 #[test]
+fn closing_the_last_pane_leaves_the_workspace() {
+    let (w, d, mut c) = world();
+    let pane = new_pane(&mut c, &w.ws);
+    c.cmd(Cmd::ClosePane { pane }).unwrap().unwrap();
+    c.open(&w.ws).unwrap();
+    assert!(c.wait_until(WAIT, |c| c.nodes.contains_key(&w.ws)).unwrap());
+    assert_eq!(
+        c.nodes[&w.ws]["panes"].as_array().map(Vec::len),
+        Some(0),
+        "the workspace stays, with no panes (REQ-141)"
+    );
+    d.stop();
+}
+
+#[test]
 fn a_shell_that_exits_takes_its_pane_with_it() {
     let (w, d, mut c) = world();
     let pane = new_pane(&mut c, &w.ws);

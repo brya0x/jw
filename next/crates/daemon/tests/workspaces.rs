@@ -247,6 +247,17 @@ fn removing_a_workspace_keeps_the_folder_and_can_remove_a_clean_worktree() {
     .unwrap()
     .unwrap();
     assert!(!wt_dir.exists());
+    // The folder goes and the branch stays, with whatever commits it held (REQ-147).
+    let branches = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&app)
+        .args(["branch", "--list", "b1"])
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&branches.stdout).contains("b1"),
+        "the branch was deleted"
+    );
     // The `gone` arrives before the reply, so the cache has already dropped the node.
     assert!(!c.nodes.contains_key(&wt));
 

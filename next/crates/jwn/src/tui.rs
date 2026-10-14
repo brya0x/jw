@@ -10,8 +10,8 @@ use std::io::{Write, stdout};
 use std::time::Duration;
 
 use contract::{
-    Attention, AttentionKind, Blocks, BlocksMode, Cmd, Node, Pane, Session, Workspace,
-    WorkspaceKind,
+    Attention, AttentionKind, Blocks, BlocksMode, Cmd, DiffScope, Node, Pane, Program, Session,
+    Workspace, WorkspaceKind,
 };
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
@@ -23,11 +23,13 @@ use wire::Client;
 
 mod changes;
 mod diff_lines;
+mod manage;
 mod shell;
 
 pub use changes::Ask;
 use changes::{Changes, Docs, Outcome, Src};
 use contract::ErrorBody;
+use manage::{Act, Manage, Target};
 use wire::ClientError;
 
 /// The One Dark palette of the mobile prototype, as 24-bit colours.
@@ -287,6 +289,9 @@ pub enum Key {
     NewPane,
     /// Open the diff of the highlighted workspace.
     Changes,
+    /// Close the focused pane, or the highlighted workspace.
+    ClosePane,
+    CloseWorkspace,
     /// With a block selected: copy its command, copy its output, run it again.
     CopyCmd,
     CopyOut,
@@ -308,6 +313,16 @@ pub enum After {
     },
     /// Text for the clipboard (OSC 52).
     Copy(String),
+    /// Close a pane.
+    ClosePane(String),
+    /// Close a workspace, and with `remove_worktree` remove its worktree. The daemon never
+    /// forces: git refuses a worktree with changes.
+    RemoveWorkspace {
+        workspace: String,
+        remove_worktree: bool,
+    },
+    /// Read the workspace's uncommitted changes, to know whether its worktree may go.
+    Check(String),
 }
 
 fn rev_of(n: &Node) -> u64 {
@@ -362,6 +377,12 @@ pub struct View {
     asks: Vec<Ask>,
     /// The terminal's size as the loop last said it.
     size: (usize, usize),
+    /// The question being asked before a pane or a workspace is closed.
+    manage: Option<Manage>,
+    /// The `uncommitted` node `manage` reads a worktree's changes from, while it is open.
+    check_node: Option<String>,
+    /// What the last command did, in the status bar until the next key.
+    flash: String,
 }
 
 impl View {
@@ -391,6 +412,9 @@ impl View {
             changes: None,
             asks: Vec::new(),
             size: (0, 0),
+            manage: None,
+            check_node: None,
+            flash: String::new(),
         }
     }
 
@@ -528,6 +552,8 @@ impl View {
             }
         }
         self.update_changes();
+        self.advance_manage();
+        self.clamp();
         let gone = self.blk.as_ref().is_some_and(|(pane, id)| {
             !self
                 .blocks_of(pane)
@@ -535,6 +561,15 @@ impl View {
         });
         if gone {
             self.blk = None;
+        }
+    }
+
+    /// A workspace or a pane that was closed leaves the highlight on its neighbour.
+    fn clamp(&mut self) {
+        let workspaces = self.session.as_ref().map_or(0, |s| s.workspaces.len());
+        self.selected = self.selected.min(workspaces.saturating_sub(1));
+        if let Some(panes) = self.shown().map(|w| w.panes.len()) {
+            self.focus = self.focus.min(panes.saturating_sub(1));
         }
     }
 
@@ -668,9 +703,148 @@ impl View {
         Some(ws.panes.get(self.focus)?.id.clone())
     }
 
+    /// What runs in a pane, when something does: a program in its shell, or a command still
+    /// going (`None` when the shell waits at its prompt).
+    fn busy(&self, pane: &str) -> Option<String> {
+        let p = self.panes.get(pane)?;
+        if let Some(program) = &p.running {
+            return Some(program_name(program));
+        }
+        let blocks = self.blocks.get(p.blocks.as_ref()?)?;
+        let last = blocks.blocks.last().filter(|k| k.running)?;
+        Some(clip(
+            last.cmd.split_whitespace().next().unwrap_or(&last.cmd),
+            24,
+        ))
+    }
+
+    /// `x`: close the focused pane at once when its shell is idle, ask when something runs.
+    fn ask_close_pane(&mut self) -> After {
+        let Some(ws) = self.shown() else {
+            return After::Continue;
+        };
+        if self.opened.as_deref() != Some(ws.head.id.as_str()) {
+            self.flash = "↵ abre el workspace para elegir el panel".into();
+            return After::Continue;
+        }
+        let Some(pane) = ws.panes.get(self.focus) else {
+            self.flash = "no hay panel enfocado".into();
+            return After::Continue;
+        };
+        let (id, title) = (pane.id.clone(), pane.title.clone());
+        match self.busy(&id) {
+            None => After::ClosePane(id),
+            Some(what) => {
+                self.typing = false;
+                self.manage = Some(Manage::Pane {
+                    pane: id,
+                    title,
+                    what,
+                });
+                After::Continue
+            }
+        }
+    }
+
+    /// `X`: ask before the highlighted workspace is closed.
+    fn ask_close_workspace(&mut self) {
+        let Some(w) = self
+            .session
+            .as_ref()
+            .and_then(|s| s.workspaces.get(self.selected))
+        else {
+            return;
+        };
+        let doc = self.workspaces.get(&w.id);
+        let running = doc
+            .into_iter()
+            .flat_map(|d| d.panes.iter())
+            .filter_map(|p| self.busy(&p.id))
+            .collect();
+        let target = Target {
+            workspace: w.id.clone(),
+            name: self.label(&w.id),
+            path: w.path.clone(),
+            branch: w.branch.clone(),
+            worktree: w.kind == WorkspaceKind::Worktree,
+            panes: doc.map_or(w.pane_count as usize, |d| d.panes.len()),
+            running,
+        };
+        self.typing = false;
+        self.manage = Some(Manage::Workspace(target));
+    }
+
+    /// A key while a question is open: it answers it, and is never a pane's.
+    fn manage_key(&mut self, ev: KeyEvent) -> After {
+        let Some(question) = self.manage.take() else {
+            return After::Continue;
+        };
+        let (next, act) = question.press(ev.code);
+        self.manage = next;
+        if !self.manage.as_ref().is_some_and(Manage::is_check) {
+            self.drop_check();
+        }
+        match act {
+            None => After::Continue,
+            Some(Act::ClosePane(pane)) => After::ClosePane(pane),
+            Some(Act::Check(workspace)) => After::Check(workspace),
+            Some(Act::RemoveWorkspace {
+                workspace,
+                remove_worktree,
+            }) => After::RemoveWorkspace {
+                workspace,
+                remove_worktree,
+            },
+        }
+    }
+
+    /// Stop watching the node a worktree's changes were read from.
+    fn drop_check(&mut self) {
+        if let Some(node) = self.check_node.take() {
+            self.asks.push(Ask::Close(node));
+        }
+    }
+
+    /// The daemon made the node of the worktree's changes; its document will follow.
+    pub fn check_made(&mut self, node: &str) {
+        if self.manage.as_ref().is_some_and(Manage::is_check) {
+            self.check_node = Some(node.to_owned());
+            self.asks.push(Ask::Watch(node.to_owned()));
+        } else {
+            self.asks.push(Ask::Close(node.to_owned()));
+        }
+    }
+
+    /// The daemon refused something the person asked: say why, and leave things as they are.
+    pub fn manage_failed(&mut self, title: &str, text: &str) {
+        self.drop_check();
+        self.manage = Some(Manage::Failed {
+            title: title.to_owned(),
+            text: text.to_owned(),
+        });
+    }
+
+    pub fn flash(&mut self, text: &str) {
+        self.flash = text.to_owned();
+    }
+
+    /// The question reads the changes as they arrive.
+    fn advance_manage(&mut self) {
+        let Some(Manage::Checking(target)) = &self.manage else {
+            return;
+        };
+        if let Some(diff) = self.check_node.as_ref().and_then(|n| self.diffs.get(n)) {
+            self.manage = Some(Manage::with_changes(target.clone(), diff));
+        }
+    }
+
     /// A key at the keyboard: typed into the pane, or (after the leader, or when no pane is
     /// open) a command of the client.
     pub fn press_key(&mut self, ev: KeyEvent) -> After {
+        self.flash.clear();
+        if self.manage.is_some() {
+            return self.manage_key(ev);
+        }
         if self.changes.is_some() {
             self.changes_key(ev);
             return After::Continue;
@@ -772,6 +946,8 @@ impl View {
                     return After::NewPane(id);
                 }
             }
+            (Mode::Workspaces, Key::ClosePane) => return self.ask_close_pane(),
+            (Mode::Workspaces, Key::CloseWorkspace) => self.ask_close_workspace(),
             (Mode::Avisos, Key::Down) => {
                 let last = self.avisos().len().saturating_sub(1);
                 self.avisos_selected = (self.avisos_selected + 1).min(last);
@@ -876,6 +1052,9 @@ impl View {
     /// a pane's box focuses it, `avisos N` in the status bar opens the list, an item of the
     /// list goes there, and a click outside the list closes it.
     pub fn click(&mut self, x: usize, y: usize, cols: usize, rows: usize) -> After {
+        if self.manage.is_some() {
+            return After::Continue;
+        }
         if self.changes.is_some() {
             if x > SIDEBAR {
                 if let Some(c) = self.changes.as_mut() {
@@ -930,6 +1109,9 @@ impl View {
     /// The wheel over the sidebar (or the avisos list) moves the highlight; over a pane drawn
     /// as blocks it scrolls them.
     pub fn scroll(&mut self, down: bool, x: usize, y: usize, cols: usize, rows: usize) -> After {
+        if self.manage.is_some() {
+            return After::Continue;
+        }
         if self.changes.is_some() {
             if x >= SIDEBAR {
                 if let Some(c) = self.changes.as_mut() {
@@ -1097,9 +1279,11 @@ impl View {
         }
         let typing = self.typing_pane().is_some();
         let diff_status = self.changes.as_ref().map(|c| c.status(&self.docs()));
-        let (chip, bg, hint) = match &diff_status {
-            Some((hint, _)) => (" DIFF ", CYAN, hint.as_str()),
-            None => match (self.mode, typing) {
+        let (chip, bg, hint) = match (&self.manage, &diff_status) {
+            (Some(Manage::Failed { .. }), _) => (" ERROR ", RED, self.manage_hint()),
+            (Some(_), _) => (" PREGUNTA ", YELLOW, self.manage_hint()),
+            (None, Some((hint, _))) => (" DIFF ", CYAN, hint.as_str()),
+            (None, None) => match (self.mode, typing) {
                 (Mode::Avisos, _) => (" AVISOS ", YELLOW, "j/k mover · ↵ ir · esc volver"),
                 (_, false) if self.blk.is_some() => (
                     " BLOQUE ",
@@ -1110,7 +1294,7 @@ impl View {
                 (_, false) => (
                     " MOVE ",
                     BLUE,
-                    "j/k workspace · ↵ escribir · h/l panel · n panel nuevo · d cambios · a avisos · q salir",
+                    "j/k workspace · ↵ escribir · h/l panel · n nuevo · x cerrar panel · X cerrar workspace · d cambios · a avisos · q salir",
                 ),
             },
         };
@@ -1125,11 +1309,15 @@ impl View {
                 ..Style::default()
             },
         );
+        let (hint, hint_style) = match self.flash.as_str() {
+            "" => (hint, dim.on(PANEL)),
+            flash => (flash, Style::fg(GREEN).on(PANEL)),
+        };
         g.put(
             chip.chars().count() + 1,
             rows - 1,
             &clip(hint, cols.saturating_sub(chip.chars().count() + 14)),
-            dim.on(PANEL),
+            hint_style,
         );
         let waiting = self.avisos().len();
         let mut right = cols;
@@ -1150,6 +1338,9 @@ impl View {
         }
         if self.mode == Mode::Avisos {
             self.avisos_box(&mut g, (px, 1, pw, rows.saturating_sub(2)));
+        }
+        if let Some(question) = &self.manage {
+            question.draw(&mut g, (px, 1, pw, rows.saturating_sub(2)));
         }
         g
     }
@@ -1353,6 +1544,10 @@ impl View {
         }
     }
 
+    fn manage_hint(&self) -> &'static str {
+        self.manage.as_ref().map_or("", Manage::hint)
+    }
+
     #[cfg(test)]
     fn plain(&self, cols: usize, rows: usize) -> String {
         self.grid(cols, rows).rows_plain().join("\n")
@@ -1429,6 +1624,15 @@ fn pane_rects(n: usize, (x, y, w, h): Rect) -> Vec<Rect> {
 fn avisos_rect(items: usize, (x, y, w, _): Rect) -> Rect {
     let bw = 56.min(w.saturating_sub(2));
     (x + w.saturating_sub(bw) / 2, y + 3, bw, items.max(1) + 4)
+}
+
+/// The name a running program is shown by: its command without the folders.
+fn program_name(program: &Program) -> String {
+    program
+        .argv
+        .first()
+        .map_or("un programa", |a| base(a))
+        .to_owned()
 }
 
 fn base(path: &str) -> &str {
@@ -1510,6 +1714,8 @@ fn key_of(code: KeyCode) -> Option<Key> {
         KeyCode::Char('a') => Key::Avisos,
         KeyCode::Char('n') => Key::NewPane,
         KeyCode::Char('d') => Key::Changes,
+        KeyCode::Char('x') => Key::ClosePane,
+        KeyCode::Char('X') => Key::CloseWorkspace,
         KeyCode::Char('c') => Key::CopyCmd,
         KeyCode::Char('o') => Key::CopyOut,
         KeyCode::Char('r') => Key::Repeat,
@@ -1590,6 +1796,15 @@ fn serve_asks(view: &mut View, client: &mut Client) {
                 }
             }
         }
+    }
+}
+
+/// Show how the daemon answered a close or a removal: `done` in the status bar, or why not.
+fn told(view: &mut View, failed: &str, done: &str, reply: Reply) {
+    match reply {
+        Ok(Ok(_)) => view.flash(done),
+        Ok(Err(e)) => view.manage_failed(failed, &e.message),
+        Err(e) => view.manage_failed(failed, &e.to_string()),
     }
 }
 
@@ -1684,6 +1899,61 @@ pub fn run() -> Result<(), String> {
                         workspace,
                         program: None,
                     });
+                }
+                After::ClosePane(pane) => {
+                    let reply = client.cmd(Cmd::ClosePane { pane });
+                    told(
+                        &mut view,
+                        "No se pudo cerrar el panel",
+                        "panel cerrado",
+                        reply,
+                    );
+                }
+                After::RemoveWorkspace {
+                    workspace,
+                    remove_worktree,
+                } => {
+                    let reply = client.cmd(Cmd::RemoveWorkspace {
+                        workspace,
+                        remove_worktree,
+                    });
+                    if remove_worktree {
+                        told(
+                            &mut view,
+                            "No se pudo quitar el worktree",
+                            "worktree quitado · la rama se queda",
+                            reply,
+                        );
+                    } else {
+                        told(
+                            &mut view,
+                            "No se pudo cerrar el workspace",
+                            "workspace cerrado · la carpeta se queda",
+                            reply,
+                        );
+                    }
+                }
+                After::Check(workspace) => {
+                    let cmd = Cmd::OpenDiff {
+                        workspace,
+                        scope: DiffScope::Uncommitted,
+                        commit: None,
+                    };
+                    match client.cmd_within(cmd, ASK_WAIT) {
+                        Ok(Ok(result)) => match result.as_ref().and_then(|r| r["node"].as_str()) {
+                            Some(node) => view.check_made(node),
+                            None => view.manage_failed(
+                                "No se pudo mirar los cambios",
+                                "el daemon no dio el nodo",
+                            ),
+                        },
+                        Ok(Err(e)) => {
+                            view.manage_failed("No se pudo mirar los cambios", &e.message)
+                        }
+                        Err(e) => {
+                            view.manage_failed("No se pudo mirar los cambios", &e.to_string())
+                        }
+                    }
                 }
                 After::Copy(text) => {
                     let mut out = stdout();
@@ -2304,5 +2574,223 @@ mod tests {
             assert_eq!(rows.len(), r);
             assert!(rows.iter().all(|l| l.chars().count() <= c));
         }
+    }
+    fn tap(v: &mut View, c: char) -> After {
+        v.press_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE))
+    }
+
+    /// The first workspace opened, with the keyboard back at the client, and nothing running.
+    fn idle_view() -> View {
+        let mut v = fixture_view();
+        v.press(Key::Enter);
+        v.typing = false;
+        for p in v.panes.values_mut() {
+            p.running = None;
+        }
+        for b in v.blocks.values_mut() {
+            for k in &mut b.blocks {
+                k.running = false;
+            }
+        }
+        v
+    }
+
+    fn uncommitted(clean: bool) -> (String, contract::Diff) {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../contract/fixtures/daemon");
+        let doc: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("snapshot-diff-uncommitted.json")).unwrap(),
+        )
+        .unwrap();
+        let Node::Diff(mut d) = serde_json::from_value(doc["node"].clone()).unwrap() else {
+            panic!("not a diff");
+        };
+        if clean {
+            d.files.clear();
+        }
+        (d.head.id.clone(), d)
+    }
+
+    #[test]
+    fn x_closes_an_idle_pane_at_once() {
+        let mut v = idle_view();
+        let pane = v.shown().unwrap().panes[v.focus].id.clone();
+        assert_eq!(tap(&mut v, 'x'), After::ClosePane(pane));
+        assert!(v.manage.is_none());
+    }
+
+    #[test]
+    fn x_asks_first_when_a_program_or_a_command_runs() {
+        let mut v = fixture_view();
+        v.press(Key::Enter);
+        v.typing = false;
+        // The first pane runs nvim.
+        assert_eq!(tap(&mut v, 'x'), After::Continue);
+        assert!(matches!(&v.manage, Some(Manage::Pane { what, .. }) if what == "nvim"));
+        let t = v.plain(110, 30);
+        assert!(t.contains("nvim sigue corriendo en este panel."), "{t}");
+        assert!(t.contains(" PREGUNTA "), "{t}");
+        // Anything but y leaves it.
+        assert_eq!(tap(&mut v, 'n'), After::Continue);
+        assert!(v.manage.is_none());
+        // The second runs `cargo watch`, a command of its shell.
+        v.press(Key::Right);
+        v.typing = false;
+        assert_eq!(tap(&mut v, 'x'), After::Continue);
+        assert!(matches!(&v.manage, Some(Manage::Pane { what, .. }) if what == "cargo"));
+        let pane = v.shown().unwrap().panes[1].id.clone();
+        assert_eq!(tap(&mut v, 'y'), After::ClosePane(pane));
+        assert!(v.manage.is_none());
+    }
+
+    #[test]
+    fn x_needs_a_workspace_opened_to_know_which_pane() {
+        let mut v = idle_view();
+        v.opened = None;
+        assert_eq!(tap(&mut v, 'x'), After::Continue);
+        assert!(v.manage.is_none());
+        assert!(v.plain(110, 30).contains("↵ abre el workspace"));
+    }
+
+    #[test]
+    fn the_focus_moves_to_a_neighbour_when_a_pane_goes() {
+        let mut v = idle_view();
+        v.press(Key::Right);
+        assert_eq!(v.focus, 1);
+        let ws = v.selected_id().unwrap();
+        v.workspaces.get_mut(&ws).unwrap().panes.pop();
+        v.clamp();
+        assert_eq!(v.focus, 0, "the pane before it");
+        v.session.as_mut().unwrap().workspaces.clear();
+        v.clamp();
+        assert_eq!(v.selected, 0, "no workspace left");
+    }
+
+    #[test]
+    fn x_closes_a_workspace_without_its_worktree_and_asks_first() {
+        let mut v = idle_view();
+        assert_eq!(tap(&mut v, 'X'), After::Continue);
+        let t = v.plain(120, 30);
+        assert!(t.contains("Se terminan sus 2 paneles."), "{t}");
+        assert!(
+            t.contains("El worktree y su carpeta se quedan en el disco."),
+            "{t}"
+        );
+        assert!(t.contains("d quitar el worktree"), "{t}");
+        let ws = v.selected_id().unwrap();
+        assert_eq!(
+            tap(&mut v, 'y'),
+            After::RemoveWorkspace {
+                workspace: ws,
+                remove_worktree: false
+            }
+        );
+        assert!(v.manage.is_none());
+    }
+
+    #[test]
+    fn a_folder_does_not_offer_to_remove_a_worktree() {
+        let mut v = idle_view();
+        v.press(Key::Down);
+        tap(&mut v, 'X');
+        let t = v.plain(120, 30);
+        assert!(t.contains("La carpeta se queda en el disco."), "{t}");
+        assert!(!t.contains("quitar el worktree"), "{t}");
+        assert_eq!(tap(&mut v, 'd'), After::Continue, "d does nothing here");
+        assert!(matches!(v.manage, Some(Manage::Workspace(_))));
+    }
+
+    #[test]
+    fn a_worktree_with_changes_lists_them_and_cannot_be_removed() {
+        let mut v = idle_view();
+        tap(&mut v, 'X');
+        let ws = v.selected_id().unwrap();
+        assert_eq!(tap(&mut v, 'd'), After::Check(ws));
+        assert!(matches!(v.manage, Some(Manage::Checking(_))));
+        v.check_made("node");
+        assert!(v.take_asks().contains(&Ask::Watch("node".into())));
+        let (_, diff) = uncommitted(false);
+        v.diffs.insert("node".into(), diff);
+        v.advance_manage();
+        let t = v.plain(120, 30);
+        assert!(t.contains("No se puede quitar"), "{t}");
+        assert!(t.contains("Tiene 3 archivos sin commitear:"), "{t}");
+        assert!(t.contains("no se borra nada a la fuerza"), "{t}");
+        assert!(t.contains("c cerrar solo el workspace"), "{t}");
+        // `y` does not remove it; `c` closes the workspace alone and lets go of the node.
+        assert_eq!(tap(&mut v, 'y'), After::Continue);
+        let ws = v.selected_id().unwrap();
+        assert_eq!(
+            tap(&mut v, 'c'),
+            After::RemoveWorkspace {
+                workspace: ws,
+                remove_worktree: false
+            }
+        );
+        assert_eq!(v.take_asks(), vec![Ask::Close("node".into())]);
+    }
+
+    #[test]
+    fn a_clean_worktree_is_removed_on_y_and_esc_goes_back() {
+        let mut v = idle_view();
+        tap(&mut v, 'X');
+        tap(&mut v, 'd');
+        v.check_made("node");
+        let (_, diff) = uncommitted(true);
+        v.diffs.insert("node".into(), diff);
+        v.advance_manage();
+        let t = v.plain(120, 30);
+        assert!(
+            t.contains("No hay cambios sin commitear. La rama feat/login se queda."),
+            "{t}"
+        );
+        v.press_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(matches!(v.manage, Some(Manage::Workspace(_))));
+        assert!(v.take_asks().contains(&Ask::Close("node".into())));
+        tap(&mut v, 'd');
+        v.check_made("node2");
+        let (_, diff) = uncommitted(true);
+        v.diffs.insert("node2".into(), diff);
+        v.advance_manage();
+        let ws = v.selected_id().unwrap();
+        assert_eq!(
+            tap(&mut v, 'y'),
+            After::RemoveWorkspace {
+                workspace: ws,
+                remove_worktree: true
+            }
+        );
+    }
+
+    #[test]
+    fn a_refusal_is_shown_and_the_workspace_stays() {
+        let mut v = idle_view();
+        tap(&mut v, 'X');
+        tap(&mut v, 'd');
+        v.check_made("node");
+        v.manage_failed("No se pudo quitar el worktree", "contains modified files");
+        let t = v.plain(120, 30);
+        assert!(t.contains("No se pudo quitar el worktree"), "{t}");
+        assert!(t.contains("contains modified files"), "{t}");
+        assert!(t.contains(" ERROR "), "{t}");
+        assert_eq!(
+            v.take_asks(),
+            vec![Ask::Watch("node".into()), Ask::Close("node".into())]
+        );
+        tap(&mut v, 'q');
+        assert!(v.manage.is_none());
+        assert!(v.session.is_some());
+    }
+
+    #[test]
+    fn while_a_question_is_open_keys_and_clicks_do_not_reach_the_panes() {
+        let mut v = fixture_view();
+        v.press(Key::Enter);
+        v.typing = true;
+        v.typing = false;
+        tap(&mut v, 'X');
+        assert_eq!(tap(&mut v, 'j'), After::Continue);
+        assert_eq!(v.selected, 0, "the highlight did not move");
+        assert_eq!(v.click(5, 3, 110, 30), After::Continue);
+        assert!(v.manage.is_some());
     }
 }
