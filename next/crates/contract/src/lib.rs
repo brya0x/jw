@@ -6,6 +6,8 @@
 //! break an old peer. Optional fields are skipped when absent so a round trip through
 //! these types reproduces the document exactly.
 
+pub mod link;
+pub use link::{BridgeMsg, Denied, PhoneMsg};
 pub mod patch;
 
 use serde::{Deserialize, Serialize};

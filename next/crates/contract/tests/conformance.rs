@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use contract::{ClientMsg, DaemonMsg};
+use contract::{BridgeMsg, ClientMsg, DaemonMsg, PhoneMsg};
 use jsonschema::Validator;
 use serde_json::Value;
 
@@ -65,16 +65,35 @@ fn daemon_fixtures_round_trip_and_validate() {
     }
 }
 
+#[test]
+fn phone_and_bridge_fixtures_round_trip_and_validate() {
+    let phone = validator("PhoneMsg");
+    for (name, doc) in fixtures("phone") {
+        let errs: Vec<_> = phone.iter_errors(&doc).map(|e| e.to_string()).collect();
+        assert!(errs.is_empty(), "phone/{name} breaks the schema: {errs:?}");
+        round_trip::<PhoneMsg>(&format!("phone/{name}"), &doc);
+    }
+    let bridge = validator("BridgeMsg");
+    for (name, doc) in fixtures("bridge") {
+        let errs: Vec<_> = bridge.iter_errors(&doc).map(|e| e.to_string()).collect();
+        assert!(errs.is_empty(), "bridge/{name} breaks the schema: {errs:?}");
+        round_trip::<BridgeMsg>(&format!("bridge/{name}"), &doc);
+    }
+}
+
 /// Every invalid fixture must be rejected by the schema (and name its side by prefix).
 #[test]
 fn invalid_fixtures_are_rejected() {
     let client = validator("ClientMsg");
     let daemon = validator("DaemonMsg");
+    let phone = validator("PhoneMsg");
+    let bridge = validator("BridgeMsg");
     for (name, doc) in fixtures("invalid") {
-        let v = if name.starts_with("client-") {
-            &client
-        } else {
-            &daemon
+        let v = match name.split('-').next() {
+            Some("client") => &client,
+            Some("phone") => &phone,
+            Some("bridge") => &bridge,
+            _ => &daemon,
         };
         assert!(!v.is_valid(&doc), "invalid/{name} passed the schema");
     }
@@ -142,7 +161,7 @@ fn found(dir: &str, key: &str) -> BTreeSet<String> {
 /// valid fixture is an untested corner: fail until one is added.
 #[test]
 fn every_schema_variant_has_a_fixture() {
-    let cases: [(&str, &str, &str, &str); 7] = [
+    let cases: [(&str, &str, &str, &str); 10] = [
         ("ClientMsg", "t", "client", "t"),
         ("DaemonMsg", "t", "daemon", "t"),
         ("Cmd", "cmd", "client", "cmd"),
@@ -150,6 +169,9 @@ fn every_schema_variant_has_a_fixture() {
         ("AttentionKind", "", "daemon", "kind"),
         ("NodeType", "", "daemon", "type"),
         ("ErrorCode", "", "daemon", "code"),
+        ("PhoneMsg", "t", "phone", "t"),
+        ("BridgeMsg", "t", "bridge", "t"),
+        ("Denied", "", "bridge", "reason"),
     ];
     for (def, prop, dir, key) in cases {
         let want = schema_values(def, prop);

@@ -20,7 +20,7 @@ A client opens a node and gets a `snapshot`, then `patch`es (RFC 6902 subset `ad
 A **pane is a terminal**: its process is always the user's `$SHELL`; a program runs inside it (`running` and `last_program` carry it, and the pane's `title` is its name).
 
 ## Interfaces
-Home of every shape is `contract/schema/contract.schema.json`; the examples are `contract/fixtures/{client,daemon,invalid}`; the Rust types are `crates/contract/src/lib.rs`. Do not restate them here.
+Home of every shape is `contract/schema/contract.schema.json`; the examples are `contract/fixtures/{client,daemon,phone,bridge,invalid}`; the Rust types are `crates/contract/src/lib.rs`. Do not restate them here. The phone link adds `PhoneMsg` and `BridgeMsg` (`crates/contract/src/link.rs`). The QR link is `jwn://<ipv4>:<port>/<token>?fp=<64 hex>` for the private-address listener, `jwn://<tunnel host>/<token>` for the tunnel, and with both `jwn://<ipv4>:<port>/<token>?fp=<64 hex>&t=<tunnel host>`.
 
 | Direction | `t` | Purpose |
 |---|---|---|
@@ -43,6 +43,8 @@ Command semantics (N3): `open_folder` takes an absolute path of an existing dire
 Panes (N4): `new_pane` starts the user's `$SHELL` (else `/bin/sh`) in the workspace folder on a PTY (24×80 until `resize`, at most 500 each) with `TERM=xterm-256color` and `JWN_PANE_ID` set (`identity::env_var`), and replies `result: {pane}`. The pane node's `screen` is the vt100 screen as text rows. A shell that exits takes its pane with it, like closing a terminal; `close_pane` and `remove_workspace` end the shells. After a daemon restart the saved panes get a fresh shell with the same ids (the screen and scrollback are not kept). A shell that prints OSC 133 marks (`ESC ] 133 ; D ; <code> BEL` finished, `ESC ] 133 ; C BEL` command started) raises `shell_done` with the exit code, which the next command start ends; shell integration scripts that print them for zsh, bash and fish come later.
 
 Development link: with `JWN_TCP=127.0.0.1:7870` the daemon also listens on loopback TCP, and `adb reverse tcp:7870 tcp:7870` lets a phone on a cable reach it; any process on the machine can use it, so it is off by default and prints a warning. The phone gets pairing, TLS and the tunnel later.
+
+The phone link (N22–N27): a **bridge** the daemon hosts (crate `web`) lets a phone reach the daemon away from a cable. The phone opens a WebSocket to the bridge (loopback, fronted by a Cloudflare quick tunnel that ends TLS; optionally also a TLS listener on the PC's private address with a self-signed certificate the phone pins), sends `pair` (first time) or `auth` (afterwards), and once the bridge answers `ready` every WebSocket text message is one daemon line, both ways. The bridge connects to the daemon's own socket only after the phone is authenticated. Pairing: `jwn pair` makes a one-use token and prints a QR link; the phone sends it with its name and a code it shows; the person at that terminal compares the code and answers `y`; only then a device secret is issued (the PC keeps its hash). `jwn devices` and `jwn revoke` manage them without a daemon.
 
 Transport: JSON lines on a Unix socket (mode 0600, in a 0700 dir) whose path comes from `identity::socket_path()` (`crates/identity/src/lib.rs`). `session.json` in `identity::state_dir()` is private to the daemon (written whole, atomically; a file it cannot read is moved to `session.json.bad`, never overwritten). Client side: `crates/wire` (`Client` keeps the node cache and applies patches). The phone later carries the same objects one per WebSocket text message.
 
@@ -116,6 +118,18 @@ Transport: JSON lines on a Unix socket (mode 0600, in a 0700 dir) whose path com
 - REQ-68 THE wheel over a pane drawn as blocks SHALL scroll its blocks, the newest at the bottom when not scrolled.
 - REQ-69 WHEN the focused pane has a `blocks` node in mode `blocks`, THE phone SHALL draw it as flat blocks, the newest at the bottom: folder and time (`corriendo N s`, `salió N · t`), the command in bold, the output with its colours, a red bar and tint for a failure, a yellow one while it runs; WHEN the mode is `full`, or the pane has none, it SHALL draw the pane's screen (with a notice in the first case).
 - REQ-70 WHEN a block is tapped, THE phone SHALL pick it and show Comando, Salida and Repetir; Repetir SHALL `write` its command and `\r` to the pane, and tapping the block again SHALL let it go.
+- REQ-72 THE bridge SHALL accept WebSockets only on loopback and on a private IPv4 address (10/8, 172.16/12, 192.168/16), never on `0.0.0.0`, and SHALL refuse a request that carries an `Origin` header.
+- REQ-73 THE bridge SHALL NOT connect to the daemon for a connection until its `auth` succeeded or its `pair` was confirmed.
+- REQ-74 THE pairing token SHALL be 128 random bits, valid 120 seconds, and spent the first time it is presented, whatever the answer.
+- REQ-75 WHEN a phone presents a valid pairing token, `jwn pair` SHALL show its name and code and issue a device only on `y`; IF no answer comes in 60 seconds, or `jwn pair` is not running, THEN the bridge SHALL send `denied` (`timeout` or `declined`).
+- REQ-76 THE device secret SHALL be 256 random bits shown to the phone once; the PC SHALL keep only its SHA-256 in `<config>/devices.json` (mode 0600) and compare in constant time.
+- REQ-77 IF an address fails 5 times in 60 seconds, THEN the bridge SHALL answer `locked_out` to it for the next 60 seconds; on the tunnel the address is `Cf-Connecting-Ip`, and a tunnel request without it SHALL be refused.
+- REQ-78 WHEN a device is revoked (`jwn revoke`), the bridge SHALL refuse its secret and close its connections within 2 seconds; `jwn devices` and `jwn revoke` SHALL work with no daemon running.
+- REQ-79 WHEN a phone is authenticated, the bridge SHALL send `ready` and then relay each WebSocket text message as one daemon line and each daemon line as one text message; IF a message is over 1 MiB, THEN the bridge SHALL close the connection.
+- REQ-80 WHERE `cloudflared` is installed, `jwn pair` SHALL start a quick tunnel to the bridge's loopback port, show the QR only after the tunnel's host name resolves, and stop the tunnel when it ends.
+- REQ-81 WHERE the PC has a private IPv4 address, the bridge SHALL also listen there with TLS, using a self-signed certificate kept at `<state>/link-cert.pem` and reused across starts; the QR SHALL carry its SHA-256 as `fp`, and the phone SHALL connect to that address only if the certificate's SHA-256 equals the `fp` it stored.
+- REQ-82 WHEN the addresses change, and after `ready`, the bridge SHALL send `endpoints`; the phone SHALL accept tunnel hosts under `trycloudflare.com` only and send its device secret only to a host it stored or one `endpoints` named over an authenticated connection.
+- REQ-83 THE phone SHALL keep its device secret in Keystore-backed storage and SHALL pair from the QR link's text (a camera scan is OPEN-9).
 - REQ-71 THE phone's editor SHALL show chips (folder and `⎇ branch`, or `◌ program` while the last block runs); WHILE it runs, a `■` button SHALL `write` `\u0003`.
 - REQ-18 IF a client's outbox is full, THEN the daemon SHALL disconnect that client and no other.
 
@@ -174,9 +188,15 @@ Corrections to the model: the level 0 document is smaller than assumed (3.9 KB, 
 - RISK-13 (measured: three blocks, one of 300 lines, are a 9 KB snapshot, and a short command is patches of about 330 and 270 bytes; the cost for a 100-block pane is not measured yet.) The daemon rebuilds and diffs whole documents on each change (RISK-5); a `blocks` node with 100 blocks of 500 rows is large. A command printing continuously changes one block every 20 ms. Measure with the real node (N17) and, if it hurts, diff only the changed block.
 - RISK-14 The integration adds hooks to the user's shell (zsh `ZDOTDIR` shim, bash `--rcfile` wrapper, fish `--init-command`) and the user's own rc files must still run. Prompt frameworks (starship, powerlevel10k) also use these hooks; the order may matter.
 - RISK-15 A program that redraws in place (progress bars with cursor moves) is rendered by the daemon's vt100, so its rows are the final screen, not every intermediate frame.
+- RISK-18 A quick tunnel has no SLA and a new host name each run; a phone that stored the old one reaches the PC only over the private address until it is paired again or `endpoints` arrives. Registered can come about 60 s before DNS resolves (REQ-80 waits for it).
+- RISK-19 A lost phone keeps full access until `jwn revoke`: the secret does not expire, and the phone can control every pane (it could read any file the daemon's user can through a shell).
+- RISK-20 Anyone on the same network can reach the private-address listener (the pairing token and the person's `y` are what stop them), and the self-signed certificate is trusted only through the QR's `fp`.
+- RISK-21 A SIGKILLed daemon can leave `cloudflared` running; the next `jwn pair` does not look for it.
 - RISK-4 The Kotlin suite proves the types and the patch rules, not a live connection: no Kotlin client has talked to the daemon yet.
 
 ## Open questions
+- OPEN-8 Whether a phone may be read-only (one switch, or per device) and whether a device secret should expire.
+- OPEN-9 Pairing by scanning the QR with the camera: the phone needs a scanner (a library or a system intent), so v1 takes the link's text.
 - OPEN-1 Retention: how many revisions per node the daemon keeps for resume (proposed 256).
 - OPEN-3 The permission and question screens inside the claude pane still offer their options; whether they change too is the user's call (the prototype leaves them).
 - OPEN-4 The terminal client's workspace list has no prototype yet; the phone comes first.
@@ -221,5 +241,11 @@ Corrections to the model: the level 0 document is smaller than assumed (3.9 KB, 
 | N17 ✓ (this commit) | the shell integration (zsh, bash, fish) and the blocks in the daemon | 54–59 | `crates/daemon/src/{blocks,integration}.rs`, `crates/daemon/shell/` |
 | N18 ✓ | typing into panes: the terminal client forwards keys (leader `^␣`), fits the pane to its box, and the phone has an input line | 60–64 | `crates/jwn/src/tui.rs`, `android/app` |
 | N19 ✓ | the blocks view in the terminal client | 65–68 | `crates/jwn/src/tui.rs`, `crates/jwn/src/tui/shell.rs` |
-| N20 ✓ (this commit) | the blocks view on the phone | 69–71 | `android/app`, `android/client-core` |
-| N21 ✓ (this commit) | no chooser when opening a pane: every pane is a shell, draws as blocks from its first moment, and the daemon marks the node `full` while a known interactive program runs; the terminal client's blocks sit at the bottom | 54, 58, 65 | `crates/daemon/src/{pty,blocks,procs,core}.rs`, `crates/jwn/src/tui.rs` |
+| N20 ✓ | the blocks view on the phone | 69–71 | `android/app`, `android/client-core` |
+| N21 ✓ | no chooser when opening a pane: every pane is a shell, draws as blocks from its first moment, and the daemon marks the node `full` while a known interactive program runs; the terminal client's blocks sit at the bottom | 54, 58, 65 | `crates/daemon/src/{pty,blocks,procs,core}.rs`, `crates/jwn/src/tui.rs` |
+| N22 ✓ (this commit) | the phone link's spec and contract: `PhoneMsg`, `BridgeMsg`, schema, fixtures, Rust and Kotlin types | 72–83 | `contract/`, `crates/contract/src/link.rs`, `android/contract` |
+| N23 | the `web` crate: pairing store, rate limiter, the WebSocket bridge and its relay, tested without a tunnel | 72–79 | `crates/web` |
+| N24 | the Cloudflare quick tunnel and `endpoints` | 80, 82 | `crates/web/src/tunnel.rs` |
+| N25 | the private-address TLS listener and the pinned certificate | 81 | `crates/web/src/tls.rs` |
+| N26 | the daemon hosts the bridge; `jwn pair`, `jwn devices`, `jwn revoke`, the QR | 75, 78 | `crates/daemon`, `crates/jwn` |
+| N27 | the phone pairs and connects over the link (its pairing screen follows the approved mobile prototype) | 82, 83 | `android/app`, `android/client-core` |

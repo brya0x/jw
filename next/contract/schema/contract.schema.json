@@ -278,6 +278,63 @@
       "type": "object",
       "required": ["code", "message"],
       "properties": { "code": { "$ref": "#/$defs/ErrorCode" }, "message": { "type": "string" } }
+    },
+    "Denied": {
+      "description": "Why the bridge refused a phone: the pairing token was wrong, expired or spent; the person at the PC said no or did not answer; the device secret is unknown or revoked; too many failures from this address.",
+      "enum": ["bad_token", "declined", "timeout", "bad_secret", "revoked", "locked_out"]
+    },
+    "PhoneMsg": {
+      "description": "What a phone sends the bridge before the daemon's protocol starts: it either spends a pairing token or proves a paired device. After `ready` the stream carries ClientMsg.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["t", "token", "name", "code"],
+          "properties": {
+            "t": { "const": "pair" },
+            "token": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+            "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "code": { "type": "string", "pattern": "^[0-9]{4,12}$" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["t", "device", "secret"],
+          "properties": {
+            "t": { "const": "auth" },
+            "device": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
+            "secret": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          }
+        }
+      ]
+    },
+    "BridgeMsg": {
+      "description": "What the bridge sends a phone: the answer to pair or auth, then (after `ready`) the addresses the PC can be reached at. After `ready` the stream also carries DaemonMsg.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["t", "device", "secret"],
+          "properties": {
+            "t": { "const": "paired" },
+            "device": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
+            "secret": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["t", "reason"],
+          "properties": { "t": { "const": "denied" }, "reason": { "$ref": "#/$defs/Denied" } }
+        },
+        { "type": "object", "required": ["t"], "properties": { "t": { "const": "ready" } } },
+        {
+          "type": "object",
+          "required": ["t"],
+          "properties": {
+            "t": { "const": "endpoints" },
+            "lan": { "type": "string", "description": "host:port of the TLS listener on the PC's private address" },
+            "tunnel": { "type": "string", "description": "host name of the Cloudflare tunnel" }
+          }
+        }
+      ]
     }
   }
 }

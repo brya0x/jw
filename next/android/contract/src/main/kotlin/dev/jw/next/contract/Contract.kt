@@ -89,6 +89,46 @@ sealed interface ClientMsg {
     data class Command(val id: String, val cmd: Cmd) : ClientMsg
 }
 
+/** What a phone sends the bridge before the daemon's protocol starts. */
+@Serializable
+@JsonClassDiscriminator("t")
+sealed interface PhoneMsg {
+    @Serializable @SerialName("pair")
+    data class Pair(val token: String, val name: String, val code: String) : PhoneMsg
+
+    @Serializable @SerialName("auth")
+    data class Auth(val device: String, val secret: String) : PhoneMsg
+}
+
+/** Why the bridge refused a phone. */
+@Serializable
+enum class Denied {
+    @SerialName("bad_token") BadToken,
+    @SerialName("declined") Declined,
+    @SerialName("timeout") Timeout,
+    @SerialName("bad_secret") BadSecret,
+    @SerialName("revoked") Revoked,
+    @SerialName("locked_out") LockedOut,
+}
+
+/** What the bridge sends a phone; after [Ready] the stream carries [ClientMsg] and [DaemonMsg]. */
+@Serializable
+@JsonClassDiscriminator("t")
+sealed interface BridgeMsg {
+    @Serializable @SerialName("paired")
+    data class Paired(val device: String, val secret: String) : BridgeMsg
+
+    @Serializable @SerialName("denied")
+    data class DeniedMsg(val reason: Denied) : BridgeMsg
+
+    @Serializable @SerialName("ready")
+    data object Ready : BridgeMsg
+
+    /** Where the PC can be reached; sent after [Ready] and whenever it changes. */
+    @Serializable @SerialName("endpoints")
+    data class Endpoints(val lan: String? = null, val tunnel: String? = null) : BridgeMsg
+}
+
 /** A client action; the daemon answers with a `reply` carrying the same id. */
 @Serializable
 @JsonClassDiscriminator("cmd")

@@ -80,11 +80,25 @@ class ConformanceTest {
     }
 
     @Test
+    fun phoneAndBridgeFixturesRoundTripAndValidate() {
+        val phone = validator("PhoneMsg")
+        for ((name, doc) in fixtures("phone")) {
+            assertEquals(emptyList(), errors(phone, doc), "phone/$name breaks the schema")
+            roundTrip("phone/$name", PhoneMsg.serializer(), doc)
+        }
+        val bridge = validator("BridgeMsg")
+        for ((name, doc) in fixtures("bridge")) {
+            assertEquals(emptyList(), errors(bridge, doc), "bridge/$name breaks the schema")
+            roundTrip("bridge/$name", BridgeMsg.serializer(), doc)
+        }
+    }
+
+    @Test
     fun invalidFixturesAreRejectedBySchema() {
-        val client = validator("ClientMsg")
+        val validators = listOf("client", "phone", "bridge").associateWith { validator(it.replaceFirstChar(Char::uppercase) + "Msg") }
         val daemon = validator("DaemonMsg")
         for ((name, doc) in fixtures("invalid")) {
-            val schema = if (name.startsWith("client-")) client else daemon
+            val schema = validators[name.substringBefore('-')] ?: daemon
             assertTrue(errors(schema, doc).isNotEmpty(), "invalid/$name passed the schema")
         }
     }
@@ -136,6 +150,9 @@ class ConformanceTest {
             listOf("AttentionKind", "", "daemon", "kind"),
             listOf("NodeType", "", "daemon", "type"),
             listOf("ErrorCode", "", "daemon", "code"),
+            listOf("PhoneMsg", "t", "phone", "t"),
+            listOf("BridgeMsg", "t", "bridge", "t"),
+            listOf("Denied", "", "bridge", "reason"),
         )
         for ((def, prop, dir, key) in cases) {
             val want = schemaValues(def, prop)
@@ -153,6 +170,7 @@ class ConformanceTest {
         assertEquals(kinds.size, AttentionKind.entries.size, "Kotlin has an attention kind the schema lacks")
         assertEquals(schemaValues("ErrorCode", "").size, ErrorCode.entries.size, "Kotlin has an error code the schema lacks")
         assertEquals(schemaValues("WorkspaceKind", "").size, WorkspaceKind.entries.size)
+        assertEquals(schemaValues("Denied", "").size, Denied.entries.size, "Kotlin has a denial the schema lacks")
     }
 
     /** Every patch case applies the same way as in Rust: `after`, or an error. */
