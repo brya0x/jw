@@ -35,8 +35,10 @@ private sealed interface Mode {
     data class Paste(val back: Mode, val error: Boolean = false) : Mode
 
     /** The PCs. [current] stays connected until [next], the one being connected to, is ready. */
-    data class Pcs(val current: WsLinkSource?, val next: WsLinkSource? = null) : Mode
-    data class Running(val source: AppSource) : Mode
+    data class Pcs(val current: WsLinkSource?, val next: WsLinkSource? = null, val from: Screen = Screen.Home) : Mode
+
+    /** A source of nodes, with the screen it opens on: where the person was before going to the list of PCs. */
+    data class Running(val source: AppSource, val start: Screen = Screen.Home) : Mode
 }
 
 class MainActivity : ComponentActivity() {
@@ -95,7 +97,7 @@ class MainActivity : ComponentActivity() {
                         PasteScreen(m.error, { mode = open(it, m.back) }) { mode = m.back }
                     }
                     is Mode.Pcs -> Pcs(m) { mode = it }
-                    is Mode.Running -> Running(m.source, store, look, osDark, setLook) { mode = it }
+                    is Mode.Running -> Running(m.source, m.start, store, look, osDark, setLook) { mode = it }
                 }
             }
         }
@@ -114,36 +116,36 @@ class MainActivity : ComponentActivity() {
                     handedOver = true
                     go(Mode.Running(next))
                 } else {
-                    go(Mode.Pcs(m.current))
+                    go(Mode.Pcs(m.current, from = m.from))
                 }
             } finally {
                 // Leaving the list while it connects (Back) must not leave a connection nobody holds.
                 if (!handedOver) next.close()
             }
         }
-        m.current?.let { current -> BackHandler { go(Mode.Running(current)) } }
+        m.current?.let { current -> BackHandler { go(Mode.Running(current, m.from)) } }
         PcsScreen(
             store = links,
             current = m.current?.device,
             busy = m.next?.device,
-            connect = { p: Pairing -> go(Mode.Pcs(m.current, WsLinkSource(links, p, null))) },
-            open = { m.current?.let { go(Mode.Running(it)) } },
+            connect = { p: Pairing -> go(Mode.Pcs(m.current, WsLinkSource(links, p, null), m.from)) },
+            open = { m.current?.let { go(Mode.Running(it, m.from)) } },
             forget = { p ->
                 links.update { it.remove(p.device) }
                 val dropped = m.current?.device == p.device
                 if (dropped) m.current?.close()
-                go(if (links.load().pcs.isEmpty()) Mode.Welcome else Mode.Pcs(if (dropped) null else m.current))
+                go(if (links.load().pcs.isEmpty()) Mode.Welcome else Mode.Pcs(if (dropped) null else m.current, from = m.from))
             },
             add = {
                 m.current?.close()
                 go(Mode.Scan(Mode.Pcs(null)))
             },
-            back = m.current?.let { current -> { go(Mode.Running(current)) } },
+            back = m.current?.let { current -> { go(Mode.Running(current, m.from)) } },
         )
     }
 
     @Composable
-    private fun Running(source: AppSource, store: SeenStore, look: Look, osDark: Boolean, setLook: (Look) -> Unit, go: (Mode) -> Unit) {
+    private fun Running(source: AppSource, start: Screen, store: SeenStore, look: Look, osDark: Boolean, setLook: (Look) -> Unit, go: (Mode) -> Unit) {
         val link = source as? WsLinkSource
         val ui = link?.ui?.value
         when (ui) {
@@ -159,21 +161,23 @@ class MainActivity : ComponentActivity() {
             )
             else -> {}
         }
-        val pcs = link?.let { { go(Mode.Pcs(it)) } }
-        if (link?.offline?.value == true) return OfflineScreen(link.name, link::retryNow) { pcs?.invoke() }
+        if (link?.offline?.value == true) return OfflineScreen(link.name, link::retryNow) { go(Mode.Pcs(link)) }
         val nav = remember(source) { Navigator(source) }
         // A record from another epoch is not trusted: it is emptied before first use.
-        var state by remember(source) { mutableStateOf(ClientState(seen = store.load())) }
+        var state by remember(source) { mutableStateOf(ClientState(screen = start, seen = store.load())) }
         val epoch = source.epoch
         LaunchedEffect(epoch) { if (epoch.isNotEmpty()) state = state.copy(seen = state.seen.forEpoch(epoch)) }
         LaunchedEffect(state.seen) { store.save(state.seen) }
-        BackHandler(enabled = state.screen is Screen.Workspace || state.screen is Screen.Settings) { state = nav.back(state) }
+        BackHandler(enabled = state.screen is Screen.Workspace || state.screen is Screen.Settings || state.screen is Screen.Avisos) { state = nav.back(state) }
         when (val screen = state.screen) {
             is Screen.Workspace -> WorkspaceScreen(source, state, screen, nav) { state = it }
             is Screen.Changes -> ChangesScreen(source, state, screen, nav) { state = it }
             is Screen.Folders -> FoldersScreen(source, state, nav) { state = it }
-            is Screen.Settings -> SettingsScreen(source, state, nav, look, osDark, setLook) { state = it }
-            else -> HomeScreen(source, state, nav, pcs) { state = it }
+            is Screen.Settings -> {
+                val pc = link?.let { PcEntry(it.name ?: "este PC", source.status, links.load().pcs.size) { go(Mode.Pcs(it, from = Screen.Settings)) } }
+                SettingsScreen(source, state, nav, look, osDark, pc, setLook) { state = it }
+            }
+            else -> HomeScreen(source, state, nav) { state = it }
         }
     }
 }

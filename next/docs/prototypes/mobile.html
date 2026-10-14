@@ -47,7 +47,8 @@ svg.i{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stro
 .hdr .t{flex:1;min-width:0}
 .hdr .t b{display:block;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .hdr .t span{display:block;font-size:11px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ib{width:44px;height:44px;display:grid;place-items:center;border-radius:6px;flex:none}
+.ib{width:44px;height:44px;display:grid;place-items:center;border-radius:6px;flex:none;position:relative}
+.ib .bdg{position:absolute;top:3px;right:1px;min-width:16px;height:16px;border-radius:8px;background:var(--yellow);color:var(--bg);font-size:10px;font-weight:700;display:grid;place-items:center;padding:0 4px;pointer-events:none}
 .ib:active,.row:active{background:var(--sel)}
 .sess{display:flex;align-items:center;gap:6px;height:36px;padding:0 10px;border:1px solid var(--line);border-radius:6px;background:var(--bg);font-weight:700;font-size:12.5px}
 .sess em{font-style:normal;color:var(--dim);font-weight:400}
@@ -87,12 +88,6 @@ svg.i{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stro
 .status .hint{color:var(--dim);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .status .msg{color:var(--yellow)}
 .status .route{color:var(--cyan)}
-.nav{display:flex;background:var(--panel);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom,0px)}
-.nav button{flex:1;height:54px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;color:var(--dim);font-size:11px;position:relative}
-.nav button b{font-size:17px;font-weight:500;line-height:1}
-.nav button[aria-selected=true]{color:var(--blue)}
-.nav button[aria-selected=true]::before{content:'';position:absolute;top:0;left:22%;right:22%;height:2px;background:var(--blue)}
-.nav .ct{position:absolute;top:5px;left:54%;min-width:16px;height:16px;border-radius:8px;background:var(--yellow);color:var(--bg);font-size:10px;font-weight:700;display:grid;place-items:center;padding:0 4px}
 
 /* workspace */
 .panes{display:flex;border-bottom:1px solid var(--line);background:var(--bg)}
@@ -491,7 +486,9 @@ const I = {
   more:'<circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/>',
   scan:'<path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M4 12h16"/>',
   link:'<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
-  search:'<circle cx="11" cy="11" r="6"/><path d="M20 20l-4-4"/>'
+  search:'<circle cx="11" cy="11" r="6"/><path d="M20 20l-4-4"/>',
+  bell:'<path d="M6 16v-5a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 21h4"/>',
+  gear:'<circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/>'
 };
 I.folder='<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>';
 const ic = (n,s) => `<svg class="i" viewBox="0 0 24 24" aria-hidden="true"${s?` style="width:${s}px;height:${s}px"`:''}>${I[n]}</svg>`;
@@ -586,11 +583,6 @@ function qrSvg(){
   return `<svg class="qr" viewBox="0 0 ${n*c} ${n*c}" role="img" aria-label="Código QR de ejemplo"><g fill="#111">${s}</g>${f(0,0)}${f(n-7,0)}${f(0,n-7)}</svg>`;
 }
 
-function nav(){
-  const cur=state.screen==='ws'?'home':state.screen, n=waiting().length;
-  const t=[['home','≡','workspaces'],['inbox','?','avisos'],['changes','±','diff'],['settings','⚙','ajustes']];
-  return `<nav class="nav" role="tablist">${t.map(([k,g,l])=>`<button role="tab" aria-selected="${cur===k}" data-go="${k}"><b>${g}</b>${l}${k==='inbox'&&n?`<span class="ct">${n}</span>`:''}</button>`).join('')}</nav>`;
-}
 function statusBar(mode,hint){return `<div class="status"><span class="chip" style="--c:${mode==='TERM'?'var(--green)':mode==='DIFF'?'var(--cyan)':mode==='?'||mode==='PAIR'?'var(--yellow)':mode==='ERR'?'var(--red)':'var(--blue)'}">${mode}</span><span class="hint">${hint}</span>${state.msg?`<span class="msg">${state.msg}</span>`:''}${['home','inbox','changes','settings','ws'].includes(state.screen)?`<span class="route">${state.route==='tunnel'?'túnel':'wifi'}</span>`:''}</div>`}
 
 function vConnect(){
@@ -688,20 +680,21 @@ function vHome(){
   const roots=list.filter(x=>x.kind==='root'), dirs=list.filter(x=>x.kind==='dir');
   roots.forEach(r=>{out+=row(r,i++);list.filter(x=>x.proj===r.id).forEach(w=>{out+=row(w,i++)})});
   if(dirs.length){out+='<div class="sec">carpetas</div>';dirs.forEach(d=>{out+=row(d,i++)})}
-  return `<div class="hdr"><button class="sess" data-sheet="sess"><em>sesión</em> ${state.sess} ▾</button><span style="flex:1"></span>
-      <button class="ib" data-go="pcs" aria-label="Mis PCs">${ic('pc')}</button><button class="ib" data-sheet="pick" aria-label="Buscar workspace">${ic('search')}</button><button class="ib" data-sheet="open" aria-label="Abrir">${ic('plus')}</button></div>
+  const n=waiting().length, pc=(state.pcs.find(x=>x.id===state.pcCur)||state.pcs[0]||{}).name||'tu PC';
+  return `<div class="hdr"><div class="t"><b>jwn · ${state.sess}</b><span>${pc} · ${state.route==='tunnel'?'túnel':'wifi'}</span></div>
+      <button class="ib" data-sheet="pick" aria-label="Buscar workspace">${ic('search')}</button><button class="ib" data-sheet="open" aria-label="Workspace nuevo">${ic('plus')}</button><button class="ib" data-go="inbox" aria-label="Avisos${n?': '+n+' esperando':''}">${ic('bell')}${n?`<span class="bdg">${n}</span>`:''}</button><button class="ib" data-go="settings" aria-label="Ajustes">${ic('gear')}</button></div>
     <div class="scroll"><div class="sec" data-hold="open">workspaces · ${list.length}</div>${out}
       <div class="legend" data-hold="open"><b><span style="color:var(--green)">●</span> abierto</b><b><span style="color:var(--magenta)">✻</span> agente</b><b><span style="color:var(--green)">⚡</span> dev</b><b><span style="color:var(--red)">!</span> permiso</b><b><span style="color:var(--yellow)">?</span> pregunta</b><b><span style="color:var(--magenta)">◆</span> plan</b><b><span style="color:var(--green)">❯</span> comando</b><b><span style="color:var(--green)">✓</span> agente listo</b><b><span style="color:var(--cyan)">⚑</span> mergeado</b><b><span style="color:var(--red)">✗</span> falló</b></div></div>
-    ${statusBar('NORMAL','toca una fila · mantén pulsado el título para crear')}${nav()}`;
+    ${statusBar('NORMAL','toca una fila · mantén pulsado el título para crear')}`;
 }
 
 function vInbox(){
   const w=waiting();
-  return `<div class="hdr"><div class="t"><b>avisos</b><span>lo que espera algo de ti</span></div></div>
+  return `<div class="hdr"><button class="ib" data-go="home" aria-label="Volver a workspaces">${ic('back')}</button><div class="t"><b>avisos</b><span>lo que espera algo de ti</span></div></div>
    <div class="scroll">${w.length?w.map(({w:x,a})=>`<div style="border-bottom:1px solid var(--line);padding:12px 14px">
       <div style="display:flex;gap:8px;align-items:center"><span class="mk">${attMark(a)}</span><b style="font-weight:500">${x.kind==='wt'?x.proj+'/':''}${x.name}</b><span style="margin-left:auto;color:var(--dim);font-size:11px">${a.t}</span></div>
       <div class="wf" style="padding:6px 0 0 22px"><span class="tx" style="color:var(--fg)">${attWhat(a)}</span><button class="go" data-att="${x.id}|${a.kind}|${a.rev}">ir ›</button></div></div>`).join(''):`<div style="padding:40px 20px;text-align:center;color:var(--dim)">Nada espera. Cuando algo termine o pregunte, aparece aquí.</div>`}</div>
-   ${statusBar('?',w.length+' esperando')}${nav()}`;
+   ${statusBar('?',w.length+' esperando')}`;
 }
 
 const UNC=[
@@ -744,14 +737,14 @@ function vChanges(){
   const base=cw.kind==='wt'?'origin/main':'HEAD';
   const sub=v==='gen'?(ds==='nobase'?'sin rama base':cw.name+' vs '+base+' · commiteado'):v==='unc'?'sin commitear'+(ds==='ok'?' · <em class="live'+(state.liveFlash?' on':'')+'">● '+(state.liveFlash?'actualizado':'en vivo')+'</em>':''):(state.commit===null?COMMITS.length+' commits':COMMITS[state.commit].sha+' · '+(state.commit+1)+'/'+COMMITS.length);
   const tabs=`<div class="seg" role="tablist">${VIEWS.map(([k,l])=>{const st=((state.vst||{})[k]||'ok');return `<button role="tab" aria-selected="${v===k}" data-vtab="${k}">${l}<b>${st==='load'?'…':st==='err'?'!':vcount(k)}</b></button>`}).join('')}</div>`;
-  const head=`<div class="hdr"><button class="ib" data-sheet="pick" aria-label="Elegir workspace" style="width:auto;padding:0 8px;gap:6px;display:flex;align-items:center"><span style="text-align:left"><b style="display:block;font-weight:500">cambios · ${cw.name}</b><span style="font-size:11px;color:var(--dim)">${sub}</span></span><span style="color:var(--dim)">▾</span></button></div>${tabs}`;
-  if(ds==='none') return `${head}<div class="scroll"><div class="centre"><span class="big">elige un workspace</span>entra a uno, o toca el nombre arriba,<br>para ver sus cambios.</div></div>${statusBar('DIFF','sin workspace')}${nav()}`;
-  if(ds==='load') return `${head}<div class="scroll"><div class="centre"><span class="spin"></span><span class="big">leyendo ${v==='com'?'los commits':'los cambios'}</span>git corre en el PC; puede tardar en repos grandes</div></div>${statusBar('DIFF','cargando')}${nav()}`;
-  if(ds==='err') return `${head}<div class="scroll"><div class="centre"><span class="big" style="color:var(--red)">no se pudo leer</span>${state.derr||'fatal: bad revision'}<button data-act="retry">reintentar</button><span style="font-size:11px">las otras vistas siguen disponibles</span></div></div>${statusBar('ERR','el PC respondió con un error')}${nav()}`;
-  if(ds==='nobase') return `${head}<div class="scroll"><div class="nodiff">origin no tiene rama por defecto: no hay contra qué comparar.<br>Mira «Sin commitear» o «Commits».</div></div>${statusBar('DIFF','sin base')}${nav()}`;
-  if(ds==='empty') return `${head}<div class="scroll"><div class="nodiff">${v==='gen'?'nada commiteado contra '+base:v==='unc'?'sin cambios sin commitear':'sin commits en la rama'}</div></div>${statusBar('DIFF','0 archivos')}${nav()}`;
+  const head=`<div class="hdr"><button class="ib" data-act="chback" aria-label="Volver al workspace">${ic('back')}</button><button class="ib" data-sheet="pick" aria-label="Elegir workspace" style="width:auto;padding:0 8px;gap:6px;display:flex;align-items:center"><span style="text-align:left"><b style="display:block;font-weight:500">cambios · ${cw.name}</b><span style="font-size:11px;color:var(--dim)">${sub}</span></span><span style="color:var(--dim)">▾</span></button></div>${tabs}`;
+  if(ds==='none') return `${head}<div class="scroll"><div class="centre"><span class="big">elige un workspace</span>entra a uno, o toca el nombre arriba,<br>para ver sus cambios.</div></div>${statusBar('DIFF','sin workspace')}`;
+  if(ds==='load') return `${head}<div class="scroll"><div class="centre"><span class="spin"></span><span class="big">leyendo ${v==='com'?'los commits':'los cambios'}</span>git corre en el PC; puede tardar en repos grandes</div></div>${statusBar('DIFF','cargando')}`;
+  if(ds==='err') return `${head}<div class="scroll"><div class="centre"><span class="big" style="color:var(--red)">no se pudo leer</span>${state.derr||'fatal: bad revision'}<button data-act="retry">reintentar</button><span style="font-size:11px">las otras vistas siguen disponibles</span></div></div>${statusBar('ERR','el PC respondió con un error')}`;
+  if(ds==='nobase') return `${head}<div class="scroll"><div class="nodiff">origin no tiene rama por defecto: no hay contra qué comparar.<br>Mira «Sin commitear» o «Commits».</div></div>${statusBar('DIFF','sin base')}`;
+  if(ds==='empty') return `${head}<div class="scroll"><div class="nodiff">${v==='gen'?'nada commiteado contra '+base:v==='unc'?'sin cambios sin commitear':'sin commits en la rama'}</div></div>${statusBar('DIFF','0 archivos')}`;
   // a commit's list (Commits, nothing chosen yet)
-  if(v==='com'&&state.commit===null) return `${head}<div class="scroll">${COMMITS.map((c,i)=>`<button class="fl" data-commit="${i}"><span class="nm"><b>${c.s}</b><span><i>${c.sha}</i> · ${c.t}</span></span><span class="pm"><span>${c.files.length}</span></span></button>`).join('')}<div class="note">se listan los últimos 200 commits; hay más antiguos</div></div>${statusBar('DIFF','toca un commit')}${nav()}`;
+  if(v==='com'&&state.commit===null) return `${head}<div class="scroll">${COMMITS.map((c,i)=>`<button class="fl" data-commit="${i}"><span class="nm"><b>${c.s}</b><span><i>${c.sha}</i> · ${c.t}</span></span><span class="pm"><span>${c.files.length}</span></span></button>`).join('')}<div class="note">se listan los últimos 200 commits; hay más antiguos</div></div>${statusBar('DIFF','toca un commit')}`;
   const L=fileList();
   if(state.file!==null&&L[state.file]){
     const f=L[state.file];
@@ -768,7 +761,7 @@ function vChanges(){
   return `${head}${nav2}
    <div class="scroll">${big?`<div class="note">este diff pasó de 2 MiB: se listan 200 de 1 234 archivos, sin líneas. Míralo entero en el PC.</div>`:''}${treeRows(L).map(t=>{if(t.dir!==undefined)return `<button class="fl dr" data-dir="${t.dir}" aria-expanded="${!t.shut}" style="padding-left:${14+t.depth*16}px"><span class="chev">${t.shut?'▸':'▾'}</span><span class="nm"><b>${t.label}/</b></span><span class="cnt">${t.n}</span>${big?'':`<span class="pm"><span class="a">+${t.a}</span> <span class="x">-${t.d}</span></span>`}</button>`;
      const f=L[t.file],i=t.file,st=f.u?'?':(f.st||'M');return `<button class="fl${seenOf(f)===1?' seen':''}" data-file="${i}" style="padding-left:${14+t.depth*16}px"><span class="st ${f.u?'U':st}" aria-label="${{A:'nuevo',D:'borrado',R:'renombrado',M:'modificado','?':'sin seguimiento'}[st]}">${st}</span><span class="nm"><b>${f.n.split('/').pop()}</b>${f.unr||f.bin||f.o?`<span>${f.unr?`<span class="why">${WHY[f.unr]||f.unr}</span>`:f.bin?'<i>binario</i>':''}${f.o?'<i>← '+f.o+'</i>':''}</span>`:''}</span>${big?'':`<span class="pm"><span class="a">+${f.a}</span> <span class="x">-${f.d}</span></span>`}<span class="vw${seenOf(f)===2?' ch':''}" aria-pressed="${seenOf(f)===1}">${seenOf(f)===2?'◌':'✓'}</span></button>`}).join('')}</div>
-   ${statusBar('DIFF',L.filter(f=>seenOf(f)===1).length+'/'+L.length+' vistos')}${nav()}`;
+   ${statusBar('DIFF',L.filter(f=>seenOf(f)===1).length+'/'+L.length+' vistos')}`;
 }
 
 const PRESETS=[['claude','Claude Code · por verificar','Enter · Esc',['⏎','esc']],['yn','Pregunta s/n','y · n',['y','n']],['ynx','Pregunta s/n con Enter','y y Enter · n y Enter',['y⏎','n⏎']]];
@@ -780,15 +773,19 @@ function ansSection(){
 }
 function vSettings(){
   const dk=isDark(), t=themeNow();
-  return `<div class="hdr"><div class="t"><b>ajustes</b><span>solo el tema</span></div></div>
-  <div class="scroll"><div class="sec">modo</div>
+  const cur=state.pcs.find(x=>x.id===state.pcCur)||state.pcs[0]||{name:'ninguno',via:'',addr:''};
+  return `<div class="hdr"><button class="ib" data-go="home" aria-label="Volver a workspaces">${ic('back')}</button><div class="t"><b>ajustes</b><span>PCs y tema</span></div></div>
+  <div class="scroll"><div class="sec">pc</div>
+   <button class="fe" data-act="pcsfromset" aria-label="Mis PCs"><span class="g" style="color:var(--green)">●</span><span class="nm"><b>${cur.name}</b><span>${cur.via} · ${cur.addr}</span></span><span class="tg">mis PCs · ${state.pcs.length} ›</span></button>
+   <div class="prev">Aquí cambias de PC o emparejas otro. El PC al que estás conectado es el verde.</div>
+   <div class="sec">modo</div>
    <div class="seg" role="tablist" style="margin:0 14px 4px;border:1px solid var(--line);border-radius:8px;overflow:hidden">${MODES.map(m=>`<button role="tab" aria-selected="${state.mode===m}" data-mode="${m}">${m}</button>`).join('')}</div>
    <div class="prev">${state.mode==='sistema'?'Sigue el modo oscuro o claro de Android: ahora usa el '+(dk?'oscuro':'claro')+'.':'Fijo en '+state.mode+', diga lo que diga Android.'}</div>
    <div class="prev">Cada modo recuerda su tema. Lo eliges aquí, no en el PC: pinta la app, los colores del terminal y la salida del agente. El terminal del PC tiene los mismos diez temas (cinco oscuros y cinco claros) y su propio ajuste.</div>
    <div class="sec">temas ${dk?'oscuros':'claros'}</div>
    <div class="themes">${ofKind(dk?'dark':'light').map(v=>`<button class="th" aria-pressed="${chosen()===v.id}" data-theme="${v.id}" style="--tbg:${v.bg};--tfg:${v.fg};--tdim:${v.dim}"><div class="s3">${['blue','green','red','yellow'].map(k=>`<i style="--c:${v[k]}"></i>`).join('')}</div><b>${v.name}</b></button>`).join('')}</div>
    <div class="prev" style="border-top:1px solid var(--line)"><b>así se ve el panel con «${t.name}»</b><div class="out" style="padding:8px 0 0;max-height:none;font-size:11.5px;background:transparent"><span class="d">~/ws/jw</span> <span class="g">✓</span> 42 tests <span class="r">✗</span> 1 falló <span class="y">⚠</span> aviso <span class="b">info</span> <span class="m">claude</span> <span class="c">cyan</span></div></div></div>
-   ${statusBar('SET',t.name+' · '+state.mode)}${nav()}`;
+   ${statusBar('SET',t.name+' · '+state.mode)}`;
 }
 
 /* lo que claude escribió en su transcript (~/.claude/projects/…/<id>.jsonl), como bloques */
@@ -1124,7 +1121,7 @@ function render(){
   $('#overlay').innerHTML=sheet();
   const o=$('#out'); if(o) o.scrollTop=o.scrollHeight;
   const q=$('#q'); if(q){q.focus();q.setSelectionRange(q.value.length,q.value.length)}
-  $('#jump').innerHTML=[['connect','Conexión (QR)'],['perm','Cámara: permiso · nuevo'],['permdenied','Cámara bloqueada · nuevo'],['cam','Cámara · visor · nuevo'],['paste','Pegar enlace · nuevo'],['pair','Código de emparejamiento · nuevo'],['denied','El PC rechaza · nuevo'],['expired','Código vencido · nuevo'],['unreach','No encuentro tu PC · nuevo'],['proto','Protocolo distinto · nuevo'],['set','Respuestas rápidas · nuevo'],['limited','Demasiados intentos · nuevo'],['pcoff','Home · el último PC no contesta · nuevo'],['pcs','Mis PCs · nuevo'],['pcsbusy','Mis PCs · conectando · nuevo'],['pcsnone','Mis PCs · ninguno encendido · nuevo'],['home','Workspaces (sidebar)'],['wsroot','Entrar a la raíz'],['ws','Entrar a un worktree'],['pick','Buscador ␣'],['leader','Menú ^␣ · cambiado'],['sel','Selección de texto · nuevo'],['shblk','Shell · bloque elegido · nuevo'],['slash','Escribir / · comandos · nuevo'],['slashf','Escribir /co · filtrado · nuevo'],['askc','Pregunta · elegir una · nuevo'],['askm','Pregunta · elegir varias · nuevo'],['askp','Pregunta · plan mode · nuevo'],['think','Chat · pensando · nuevo'],['resp','Chat · respondiendo · nuevo'],['notices','Chat · avisos de tareas · nuevo'],['shnv','Shell · programa a pantalla completa · nuevo'],['inbox','Avisos'],['changes','Cambios · General · cambiado'],['chunc','Cambios · Sin commitear · nuevo'],['chcom','Cambios · Commits · nuevo'],['chcomf','Cambios · un commit · nuevo'],['chfile','Cambios · un archivo · cambiado'],['chren','Cambios · renombrado · nuevo'],['chbin','Cambios · binario · nuevo'],['chunr','Cambios · ilegible · nuevo'],['chbig','Cambios · cortado · nuevo'],['chtoo','Cambios · demasiado grande · nuevo'],['chnobase','Cambios · sin rama base · nuevo'],['chload','Cambios · leyendo · nuevo'],['cherr','Cambios · error de una vista · nuevo'],['chempty','Cambios · sin cambios · nuevo'],['chnone','Cambios · sin workspace · nuevo'],['chseen','Cambios · vistos compartidos con la PC · nuevo'],['chchg','Cambios · un archivo cambió desde que lo viste · nuevo'],['chlive','Cambios · el agente edita, en vivo · nuevo'],['chnorepo','Cambios · la carpeta no es un repositorio · nuevo'],['f1','Archivos · un workspace · nuevo'],['f2','Archivos · ocultos · nuevo'],['f3','Abrir carpeta · navegador · cambiado'],['f7','Abrir carpeta · ya abierta · nuevo'],['f8','Abrir carpeta · un repositorio · nuevo'],['f9','Abrir carpeta · demasiadas · nuevo'],['f4','Archivos · sin permiso · nuevo'],['f5','Archivos · vacía · nuevo'],['f6','Archivos · demasiados · nuevo'],['v1','Visor · markdown · nuevo'],['v2','Visor · markdown fuente · nuevo'],['v3','Visor · texto · nuevo'],['v4','Visor · binario · nuevo'],['v5','Visor · cortado a 1 MiB · nuevo'],['v6','Visor · sin permiso · nuevo'],['w1','Worktree nuevo · el formulario · cambiado'],['w2','Worktree nuevo · creando · cambiado'],['w3','Worktree nuevo · git lo rechaza · cambiado'],['w4','Worktree nuevo · nombre no válido · nuevo'],['w5','Worktree nuevo · ya existe · nuevo'],['w6','Worktree nuevo · otro proyecto · nuevo'],['w7','Worktree nuevo · la carpeta no es un repositorio · nuevo'],['wsmenuh','Mantener pulsada una fila de Home · nuevo'],['wsmenud','Mantener pulsada una carpeta · nuevo'],['n1','Nueva sesión · nuevo'],['n2','Nueva sesión · nombre repetido · nuevo'],['n3','Nueva sesión · es un comando · nuevo'],['p1','Mantener pulsado el título de Home · cambiado'],['settings','Ajustes: tema y modo · cambiado'],['closepane','Cerrar un panel · nuevo'],['wsmenu','Mantener pulsado un workspace · nuevo'],['panemenu','Mantener pulsado un panel · nuevo'],['renws','Renombrar un workspace · nuevo'],['renpane','Nombrar un panel · nuevo']].map(([k,l])=>`<button data-jump="${k}">${l}</button>`).join('');
+  $('#jump').innerHTML=[['connect','Conexión (QR)'],['perm','Cámara: permiso · nuevo'],['permdenied','Cámara bloqueada · nuevo'],['cam','Cámara · visor · nuevo'],['paste','Pegar enlace · nuevo'],['pair','Código de emparejamiento · nuevo'],['denied','El PC rechaza · nuevo'],['expired','Código vencido · nuevo'],['unreach','No encuentro tu PC · nuevo'],['proto','Protocolo distinto · nuevo'],['set','Respuestas rápidas · nuevo'],['limited','Demasiados intentos · nuevo'],['pcoff','Home · el último PC no contesta · nuevo'],['pcs','Mis PCs · nuevo'],['pcsbusy','Mis PCs · conectando · nuevo'],['pcsnone','Mis PCs · ninguno encendido · nuevo'],['home','Workspaces (sidebar)'],['wsroot','Entrar a la raíz'],['ws','Entrar a un worktree'],['pick','Buscador ␣'],['leader','Menú ^␣ · cambiado'],['sel','Selección de texto · nuevo'],['shblk','Shell · bloque elegido · nuevo'],['slash','Escribir / · comandos · nuevo'],['slashf','Escribir /co · filtrado · nuevo'],['askc','Pregunta · elegir una · nuevo'],['askm','Pregunta · elegir varias · nuevo'],['askp','Pregunta · plan mode · nuevo'],['think','Chat · pensando · nuevo'],['resp','Chat · respondiendo · nuevo'],['notices','Chat · avisos de tareas · nuevo'],['shnv','Shell · programa a pantalla completa · nuevo'],['inbox','Avisos'],['changes','Cambios · General · cambiado'],['chunc','Cambios · Sin commitear · nuevo'],['chcom','Cambios · Commits · nuevo'],['chcomf','Cambios · un commit · nuevo'],['chfile','Cambios · un archivo · cambiado'],['chren','Cambios · renombrado · nuevo'],['chbin','Cambios · binario · nuevo'],['chunr','Cambios · ilegible · nuevo'],['chbig','Cambios · cortado · nuevo'],['chtoo','Cambios · demasiado grande · nuevo'],['chnobase','Cambios · sin rama base · nuevo'],['chload','Cambios · leyendo · nuevo'],['cherr','Cambios · error de una vista · nuevo'],['chempty','Cambios · sin cambios · nuevo'],['chnone','Cambios · sin workspace · nuevo'],['chseen','Cambios · vistos compartidos con la PC · nuevo'],['chchg','Cambios · un archivo cambió desde que lo viste · nuevo'],['chlive','Cambios · el agente edita, en vivo · nuevo'],['chnorepo','Cambios · la carpeta no es un repositorio · nuevo'],['f1','Archivos · un workspace · nuevo'],['f2','Archivos · ocultos · nuevo'],['f3','Abrir carpeta · navegador · cambiado'],['f7','Abrir carpeta · ya abierta · nuevo'],['f8','Abrir carpeta · un repositorio · nuevo'],['f9','Abrir carpeta · demasiadas · nuevo'],['f4','Archivos · sin permiso · nuevo'],['f5','Archivos · vacía · nuevo'],['f6','Archivos · demasiados · nuevo'],['v1','Visor · markdown · nuevo'],['v2','Visor · markdown fuente · nuevo'],['v3','Visor · texto · nuevo'],['v4','Visor · binario · nuevo'],['v5','Visor · cortado a 1 MiB · nuevo'],['v6','Visor · sin permiso · nuevo'],['w1','Worktree nuevo · el formulario · cambiado'],['w2','Worktree nuevo · creando · cambiado'],['w3','Worktree nuevo · git lo rechaza · cambiado'],['w4','Worktree nuevo · nombre no válido · nuevo'],['w5','Worktree nuevo · ya existe · nuevo'],['w6','Worktree nuevo · otro proyecto · nuevo'],['w7','Worktree nuevo · la carpeta no es un repositorio · nuevo'],['wsmenuh','Mantener pulsada una fila de Home · nuevo'],['wsmenud','Mantener pulsada una carpeta · nuevo'],['n1','Nueva sesión · nuevo'],['n2','Nueva sesión · nombre repetido · nuevo'],['n3','Nueva sesión · es un comando · nuevo'],['p1','Mantener pulsado el título de Home · cambiado'],['settings','Ajustes: PC, modo y tema · cambiado'],['closepane','Cerrar un panel · nuevo'],['wsmenu','Mantener pulsado un workspace · nuevo'],['panemenu','Mantener pulsado un panel · nuevo'],['renws','Renombrar un workspace · nuevo'],['renpane','Nombrar un panel · nuevo']].map(([k,l])=>`<button data-jump="${k}">${l}</button>`).join('');
 }
 function answer(v,id){
   const w=wsOf(id); if(!w) return; buzz();
@@ -1148,7 +1145,9 @@ document.addEventListener('click',e=>{if(held){held=false;e.stopPropagation();e.
   if(d.act==='pcmore'){state.pcSel=d.pc;state.sheet='forgetpc';render();return}
   if(d.act==='pcforget'){const p=state.pcs.find(x=>x.id===state.pcSel);state.pcs=state.pcs.filter(x=>x.id!==state.pcSel);if(state.pcCur===state.pcSel)state.pcCur=null;state.sheet=null;toast('olvidaste '+(p?p.name:'el PC'));render();return}
   if(d.act==='addpc'){state.screen='connect';render();return}
-  if(d.act==='pcback'){state.screen='home';render();return}
+  if(d.act==='pcback'){state.screen=state.pcFrom==='settings'?'settings':'home';state.pcFrom=null;render();return}
+  if(d.act==='pcsfromset'){state.pcFrom='settings';state.screen='pcs';render();return}
+  if(d.act==='chback'){state.screen='ws';render();return}
   if(d.blk!==undefined&&!d.act){state.blk=state.blk===+d.blk?null:+d.blk;render();return}
   if(d.jump){state.sheet=null;state.file=null;state.conn='idle';
     if(CONN.includes(d.jump)){goConn(d.jump);return}
@@ -1207,7 +1206,7 @@ document.addEventListener('click',e=>{if(held){held=false;e.stopPropagation();e.
     if(k==='␣'){state.sheet='pick'}else if(k==='a'){state.sheet='sess'}else if(k==='o'){state.screen='files';state.fs={path:'~',mode:'open',hidden:false}}else if(k==='w'){defaultWt()}else if(k==='/'){state.fs={path:wsOf(state.ws).path,mode:'browse',hidden:false};state.screen='files'}else if(k==='q'){state.screen='connect'}
     else if(k==='1-9'){state.screen='home'}else toast('^␣ '+k);
     render();return}
-  if(d.go){state.screen=d.go;state.file=null;state.sheet=null;render();return}
+  if(d.go){if(d.go==='pcs')state.pcFrom=null;state.screen=d.go;state.file=null;state.sheet=null;render();return}
   if(d.open){if(state.screen==='changes'){state.ws=d.open;state.sheet=null;state.file=null;render();return}enter(d.open);return}
   if(d.ans){const [v,id]=d.ans.split('|');answer(v,id);return}
   if(d.preset){state.preset=d.preset;render();return}

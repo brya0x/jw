@@ -146,6 +146,12 @@ class Navigator(private val source: NodeSource) {
 
     fun back(s: ClientState): ClientState = s.copy(screen = Screen.Home)
 
+    /** Leaves the changes of a workspace for the workspace itself; anywhere else it is [back]. */
+    fun leaveChanges(s: ClientState): ClientState {
+        val at = s.screen as? Screen.Changes ?: return back(s)
+        return openWorkspace(s, at.workspace)
+    }
+
     /**
      * The `diff` tab: the changes of the workspace opened last, else the first one.
      * Null while the session has no workspace.

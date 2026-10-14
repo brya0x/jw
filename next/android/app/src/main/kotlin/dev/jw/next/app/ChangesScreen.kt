@@ -36,6 +36,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.jw.next.client.ChangesModel
@@ -74,7 +76,7 @@ fun ChangesScreen(source: AppSource, state: ClientState, screen: Screen.Changes,
             model.close()
         }
     }
-    BackHandler { if (!model.back()) set(nav.back(state)) }
+    BackHandler { if (!model.back()) set(nav.leaveChanges(state)) }
     // Either the PC sent a node or the person did something: read the model again.
     val version = source.tick.intValue + bump.intValue
     val session = remember(version) { source.session() }
@@ -90,25 +92,23 @@ fun ChangesScreen(source: AppSource, state: ClientState, screen: Screen.Changes,
             bump.intValue++
         }
     }
-    val waiting = avisos(session, state.seen).size
     val name = session.workspaces.firstOrNull { it.id == screen.workspace }?.name ?: "workspace"
     val open = (content as? Content.Files)?.diff?.let(model::openFileIn)
     Column(Modifier.fillMaxSize()) {
         if (open != null) {
             FileScreen(open, model)
         } else {
-            ChangesHeader(model, name, content, session.workspaces.map { it.id to it.name }) { id ->
+            ChangesHeader(model, name, content, session.workspaces.map { it.id to it.name }, back = { set(nav.leaveChanges(state)) }) { id ->
                 set(nav.show(state, Screen.Changes(id)).copy(last = id))
             }
             ViewTabs(model, counts)
             Box(Modifier.weight(1f)) { ChangesBody(model, content, version) }
         }
-        MainTabBar(MainTab.Diff, waiting) { nav.goTab(state, MainTab.Diff, it, set) }
     }
 }
 
 @Composable
-private fun ChangesHeader(model: ChangesModel, name: String, content: Content, workspaces: List<Pair<String, String>>, pick: (String) -> Unit) {
+private fun ChangesHeader(model: ChangesModel, name: String, content: Content, workspaces: List<Pair<String, String>>, back: () -> Unit, pick: (String) -> Unit) {
     var menu by remember { mutableStateOf(false) }
     val sub = when (model.view) {
         ChangesView.Uncommitted -> "sin commitear" + if (content is Content.Files) liveText(model) + seenText(content) else ""
@@ -116,15 +116,18 @@ private fun ChangesHeader(model: ChangesModel, name: String, content: Content, w
         ChangesView.General -> (content as? Content.Files)?.diff?.base ?: "contra la rama por defecto"
     }
     Column(Modifier.fillMaxWidth().background(Palette.panel)) {
-        Row(Modifier.fillMaxWidth().defaultMinSize(minHeight = 56.dp).clickable { menu = true }.padding(horizontal = Gutter), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Mono("cambios · $name", bold = true, size = 15)
-                Mono(sub, if (model.live() == Live.Updated && model.view == ChangesView.Uncommitted) Palette.yellow else Palette.dim, 11)
-            }
-            Mono("▾", Palette.dim, 14)
-            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                workspaces.forEach { (id, label) ->
-                    DropdownMenuItem(text = { Mono(label, size = 13) }, onClick = { menu = false; pick(id) })
+        Row(Modifier.fillMaxWidth().defaultMinSize(minHeight = 56.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.width(48.dp).height(56.dp).clickable(onClick = back).semantics { contentDescription = "Volver al workspace" }, contentAlignment = Alignment.Center) { Mono("‹", Palette.fg, 24) }
+            Row(Modifier.weight(1f).clickable { menu = true }.padding(end = Gutter), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Mono("cambios · $name", bold = true, size = 15)
+                    Mono(sub, if (model.live() == Live.Updated && model.view == ChangesView.Uncommitted) Palette.yellow else Palette.dim, 11)
+                }
+                Mono("▾", Palette.dim, 14)
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    workspaces.forEach { (id, label) ->
+                        DropdownMenuItem(text = { Mono(label, size = 13) }, onClick = { menu = false; pick(id) })
+                    }
                 }
             }
         }

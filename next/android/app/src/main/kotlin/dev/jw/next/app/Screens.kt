@@ -171,7 +171,28 @@ private fun PlusButton(open: () -> Unit) {
     }
 }
 
-/** Opens the list of PCs from Home. */
+/** Opens the avisos; the count is what waits for the person and has not been seen on this phone (REQ-215). */
+@Composable
+private fun BellButton(waiting: Int, open: () -> Unit) {
+    val said = if (waiting > 0) "Avisos: $waiting esperando" else "Avisos"
+    Box(Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp).clickable(onClick = open).semantics { contentDescription = said }, contentAlignment = Alignment.Center) {
+        GlyphIcon(Glyph.Bell, Palette.fg)
+        if (waiting > 0) {
+            Box(Modifier.align(Alignment.TopEnd).padding(top = 6.dp, end = 4.dp).defaultMinSize(minWidth = 16.dp).background(Palette.yellow, RoundedCornerShape(8.dp)).padding(horizontal = 4.dp), contentAlignment = Alignment.Center) {
+                Mono("$waiting", Palette.bg, 10, bold = true)
+            }
+        }
+    }
+}
+
+@Composable
+private fun GearButton(open: () -> Unit) {
+    Box(Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp).clickable(onClick = open).semantics { contentDescription = "Ajustes" }, contentAlignment = Alignment.Center) {
+        GlyphIcon(Glyph.Gear, Palette.fg)
+    }
+}
+
+/** Opens the list of PCs from the screen that cannot find the PC (REQ-90). */
 @Composable
 internal fun PcButton(open: () -> Unit) {
     Box(Modifier.defaultMinSize(minWidth = 56.dp, minHeight = 48.dp).clickable(onClick = open), contentAlignment = Alignment.Center) {
@@ -180,7 +201,7 @@ internal fun PcButton(open: () -> Unit) {
 }
 
 @Composable
-fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, pcs: (() -> Unit)? = null, set: (ClientState) -> Unit) {
+fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, set: (ClientState) -> Unit) {
     // Reading the tick is what redraws the screen when a node arrives from the daemon.
     val version = source.tick.intValue
     val session = remember(version) { source.session() }
@@ -195,17 +216,16 @@ fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, pcs: (() -
     val latest = session.workspaces.firstOrNull { it.id == state.last } ?: session.workspaces.firstOrNull()
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
-            if (onAvisos) Header("avisos", "lo que espera algo de ti") else Header("jwn · ${session.name}", source.status, action = {
+            if (onAvisos) Header("avisos", "lo que espera algo de ti", onBack = { set(nav.back(state)) }) else Header("jwn · ${session.name}", source.status, action = {
                 PlusButton { newMenu = true }
-                pcs?.let { open -> PcButton(open) }
+                BellButton(waiting.size) { set(nav.show(state, Screen.Avisos)) }
+                GearButton { set(nav.show(state, Screen.Settings)) }
             })
             Box(Modifier.weight(1f)) {
                 if (onAvisos) AvisosList(waiting, nav, state, set) else WorkspaceList(homeRows(session, state.seen), nav, state, set, create = { newMenu = true }) { id ->
                     session.workspaces.firstOrNull { it.id == id }?.let { menu = Naming.Workspace(it.id, it.shown()) }
                 }
             }
-            val current = if (onAvisos) MainTab.Avisos else MainTab.Workspaces
-            MainTabBar(current, waiting.size) { nav.goTab(state, current, it, set) }
         }
         menu?.let { target ->
             val ws = session.workspaces.firstOrNull { it.id == target.id }
@@ -214,44 +234,6 @@ fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, pcs: (() -
         naming?.let { RenameSheet(source, it) { naming = null } }
         if (newMenu) NewWorkspaceSheet(latest?.repo(), dismiss = { newMenu = false }, folders = { newMenu = false; set(nav.show(state, Screen.Folders)) }, worktree = { latest?.let { worktree = WorktreeStart(it.repo(), it.branch) }; newMenu = false })
         worktree?.let { WorktreeSheet(source, it, state, nav, set) { worktree = null } }
-    }
-}
-
-internal enum class MainTab { Workspaces, Avisos, Diff, Settings }
-
-/** What a tap on a tab of the bar does: go there, unless it is the one that is open. */
-internal fun Navigator.goTab(state: ClientState, current: MainTab, tab: MainTab, set: (ClientState) -> Unit) {
-    if (tab == current) return
-    when (tab) {
-        MainTab.Workspaces -> set(show(state, Screen.Home))
-        MainTab.Avisos -> set(show(state, Screen.Avisos))
-        MainTab.Diff -> changes(state)?.let(set)
-        MainTab.Settings -> set(show(state, Screen.Settings))
-    }
-}
-
-/** Words like the status line of the terminal client; the open one is underlined. */
-@Composable
-internal fun MainTabBar(current: MainTab, waiting: Int, go: (MainTab) -> Unit) {
-    Column(Modifier.fillMaxWidth().background(Palette.panel).navigationBarsPadding()) {
-        Hairline()
-        Row(Modifier.fillMaxWidth().height(48.dp)) {
-            TabCell("workspaces", null, current == MainTab.Workspaces, Modifier.weight(1f)) { go(MainTab.Workspaces) }
-            TabCell("avisos", waiting.takeIf { it > 0 }, current == MainTab.Avisos, Modifier.weight(1f)) { go(MainTab.Avisos) }
-            TabCell("± diff", null, current == MainTab.Diff, Modifier.weight(1f)) { go(MainTab.Diff) }
-            TabCell("ajustes", null, current == MainTab.Settings, Modifier.weight(1f)) { go(MainTab.Settings) }
-        }
-    }
-}
-
-@Composable
-private fun TabCell(label: String, count: Int?, on: Boolean, modifier: Modifier, click: () -> Unit) {
-    Column(modifier.fillMaxSize().clickable(onClick = click), horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(Modifier.fillMaxWidth().height(2.dp).background(if (on) Palette.blue else Color.Transparent))
-        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Mono(label, if (on) Palette.blue else Palette.dim, 12, bold = on)
-            if (count != null) Mono("$count", Palette.yellow, 12, bold = true)
-        }
     }
 }
 
