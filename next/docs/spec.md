@@ -473,7 +473,7 @@ The shapes REQ-91 to REQ-103 name (nodes, commands, fields) are enforced by N31 
 | N46 ✓ `0ddb68c` | `jwn` opens the client and starts the daemon in the background when none runs | 186–187 | `crates/jwn/src/main.rs`, `crates/jwn/tests/enter.rs` |
 | N47 ✓ `3c47dc5` | the sidebar's `^␣ s sessions` hint, which had no key, is gone | | `crates/jwn/src/tui.rs` |
 | N48 ✓ `f048515` | the phone link: the network address first, the tunnel opens in the background and is told to the phones when it is up, and it stays until the link is turned off; `mobile_link` | 188–191 | `crates/daemon/src/mobile.rs`, `crates/jwn/src/tui/phone.rs`, `crates/jwn/src/pair.rs` |
-| N49 ✓ (this commit) | open a folder (`o`) and make a worktree (`w`) in the terminal client, with `create_worktree`'s optional `folder` | 192–200 | `crates/jwn/src/tui/open.rs`, `crates/daemon/src/workspaces.rs` |
+| N49 ✓ `d6d442f` | open a folder (`o`) and make a worktree (`w`) in the terminal client, with `create_worktree`'s optional `folder` | 192–200 | `crates/jwn/src/tui/open.rs`, `crates/daemon/src/workspaces.rs` |
 
 ## What is left
 In this order, which is proposed. The user chose on 2026-10-14 that the daily flow of the terminal client comes next, that the special keys of the phone are among the last things, and that the viewer of files and Markdown is the very last (he does not want to work on Markdown yet). Each becomes a part (N43 onwards) with its REQs when it starts; a part with a screen starts from an approved prototype. What is missing was found by setting the old jw's README against what `next/` does today.

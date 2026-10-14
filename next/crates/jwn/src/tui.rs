@@ -2566,10 +2566,14 @@ fn shown_in_a_pane(view: &mut View, client: &mut Client, reply: Reply, failed: &
     match reply {
         Ok(Ok(result)) => {
             if let Some(ws) = result.as_ref().and_then(|r| r["workspace"].as_str()) {
-                let _ = client.cmd(Cmd::NewPane {
+                match client.cmd(Cmd::NewPane {
                     workspace: ws.to_owned(),
                     program: None,
-                });
+                }) {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(e)) => view.manage_failed("No se pudo abrir un panel", &e.message),
+                    Err(e) => view.manage_failed("No se pudo abrir un panel", &e.to_string()),
+                }
                 view.goto(ws);
             }
         }

@@ -42,6 +42,12 @@ pub struct Picker {
     pub dir: PathBuf,
     pub query: String,
     pub sel: usize,
+    /// What `dir` holds, read once when the browser comes to it: each folder and whether it is
+    /// a repository. The screen is drawn many times a second and a folder may hold thousands.
+    entries: Vec<(String, bool)>,
+    /// The folder the highlighted row stands for and the names of the folders in it, read when
+    /// the highlight lands on it.
+    look: (PathBuf, Vec<String>),
 }
 
 /// The folders of `dir` a person would open: no hidden ones, sorted without regard to case.
@@ -89,17 +95,54 @@ pub fn home() -> PathBuf {
 impl Picker {
     /// Starts in `dir`, the folder beside the project the person is in.
     pub fn new(dir: PathBuf) -> Picker {
-        Picker {
+        let mut p = Picker {
             dir,
             query: String::new(),
             sel: 0,
+            entries: Vec::new(),
+            look: (PathBuf::new(), Vec::new()),
+        };
+        p.reload();
+        p.refresh();
+        p
+    }
+
+    /// Read the folder the browser is in.
+    fn reload(&mut self) {
+        self.entries = subdirs(&self.dir)
+            .into_iter()
+            .map(|n| {
+                let git = is_git(&self.dir.join(&n));
+                (n, git)
+            })
+            .collect();
+        self.look.0 = PathBuf::new();
+    }
+
+    /// The highlighted row's folder was not looked into yet: do it.
+    fn refresh(&mut self) {
+        let rows = self.rows(&|_| false);
+        let row = &rows[self.sel.min(rows.len() - 1)];
+        if self.look.0 != row.path {
+            self.look = (
+                row.path.clone(),
+                if row.kind == Kind::New {
+                    Vec::new()
+                } else {
+                    subdirs(&row.path).into_iter().take(12).collect()
+                },
+            );
         }
+    }
+
+    /// The names of the folders in the highlighted row's folder.
+    pub fn look(&self) -> &[String] {
+        &self.look.1
     }
 
     /// The rows: this folder, then its folders that match what was typed, then the row that
     /// makes a folder of that name when there is none.
     pub fn rows(&self, is_open: &dyn Fn(&Path) -> bool) -> Vec<Row> {
-        let subs = subdirs(&self.dir);
         let mut rows = vec![Row {
             kind: Kind::Here,
             name: "abrir esta carpeta".into(),
@@ -108,20 +151,21 @@ impl Picker {
             open: is_open(&self.dir),
         }];
         rows.extend(
-            subs.iter()
-                .filter(|n| self.query.is_empty() || fuzzy(&self.query, n))
-                .map(|n| {
+            self.entries
+                .iter()
+                .filter(|(n, _)| self.query.is_empty() || fuzzy(&self.query, n))
+                .map(|(n, git)| {
                     let path = self.dir.join(n);
                     Row {
                         kind: Kind::Dir,
                         name: format!("{n}/"),
-                        git: is_git(&path),
+                        git: *git,
                         open: is_open(&path),
                         path,
                     }
                 }),
         );
-        if valid_new(&self.query) && !subs.contains(&self.query) {
+        if valid_new(&self.query) && !self.entries.iter().any(|(n, _)| *n == self.query) {
             rows.push(Row {
                 kind: Kind::New,
                 name: format!("crear «{}»/", self.query),
@@ -134,6 +178,12 @@ impl Picker {
     }
 
     pub fn press(&mut self, code: KeyCode, ctrl: bool, is_open: &dyn Fn(&Path) -> bool) -> Pick {
+        let pick = self.act(code, ctrl, is_open);
+        self.refresh();
+        pick
+    }
+
+    fn act(&mut self, code: KeyCode, ctrl: bool, is_open: &dyn Fn(&Path) -> bool) -> Pick {
         let rows = self.rows(is_open);
         let at = self.sel.min(rows.len() - 1);
         match code {
@@ -147,6 +197,7 @@ impl Picker {
                 if rows[at].kind == Kind::Dir {
                     self.dir = rows[at].path.clone();
                     self.reset();
+                    self.reload();
                 }
             }
             KeyCode::Left => self.up(),
@@ -158,6 +209,7 @@ impl Picker {
             KeyCode::Char('~') if self.query.is_empty() && !ctrl => {
                 self.dir = home();
                 self.reset();
+                self.reload();
             }
             KeyCode::Enter => {
                 let row = &rows[at];
@@ -185,6 +237,7 @@ impl Picker {
             self.dir = parent.to_path_buf();
         }
         self.reset();
+        self.reload();
     }
 }
 
@@ -323,7 +376,7 @@ pub fn draw_picker(g: &mut Grid, (x, y, w, h): Rect, p: &Picker, is_open: &dyn F
         );
     }
     if row.kind != Kind::New {
-        let kids = subdirs(&row.path);
+        let kids = p.look();
         if kids.is_empty() {
             g.put(px, by + 6, "vacía", on_panel(Style::fg(look::dim())));
         }
@@ -429,13 +482,13 @@ impl Worktree {
             open,
             plan: Plan::Wrong(String::new()),
         };
-        w.name = (1..)
-            .map(|n| format!("ws-{n}"))
-            .find(|n| {
-                w.name = n.clone();
-                matches!(w.check(), Plan::Ok { .. })
-            })
-            .unwrap_or_default();
+        // The first `ws-N` that is free; a thousand taken is a sign nothing will be.
+        for n in 1..=1000 {
+            w.name = format!("ws-{n}");
+            if matches!(w.check(), Plan::Ok { .. }) {
+                break;
+            }
+        }
         w.plan = w.check();
         w
     }
@@ -780,6 +833,28 @@ mod tests {
             }
         );
         assert_eq!(t.press(KeyCode::Esc, false), Make::Close);
+        let _ = std::fs::remove_dir_all(root);
+    }
+    #[test]
+    fn a_folder_is_read_when_the_browser_comes_to_it_and_not_on_every_draw() {
+        let root = tree("cache");
+        let mut p = Picker::new(root.clone());
+        assert_eq!(p.look().len(), 3, "what the first row, this folder, holds");
+        // Something appears on disk: the list the screen draws from does not change by itself.
+        std::fs::create_dir_all(root.join("later")).unwrap();
+        let names = |p: &Picker| {
+            p.rows(&none)
+                .into_iter()
+                .map(|r| r.name)
+                .collect::<Vec<_>>()
+        };
+        assert!(!names(&p).contains(&"later/".to_owned()));
+        // Going into a folder and back reads it again; the look follows the highlight.
+        p.press(KeyCode::Down, false, &none);
+        assert_eq!(p.look(), ["src".to_owned()], "what api holds");
+        p.press(KeyCode::Right, false, &none);
+        p.press(KeyCode::Left, false, &none);
+        assert!(names(&p).contains(&"later/".to_owned()));
         let _ = std::fs::remove_dir_all(root);
     }
 }
