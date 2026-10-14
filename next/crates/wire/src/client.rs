@@ -107,6 +107,15 @@ impl Client {
         Ok(())
     }
 
+    /// Send a command without waiting for its reply (typing must not wait on the daemon).
+    /// The reply is read, and ignored, by whatever call reads next.
+    pub fn send(&mut self, cmd: Cmd) -> Result<(), ClientError> {
+        let id = format!("c{}", self.next_cmd);
+        self.next_cmd += 1;
+        self.conn.send(&ClientMsg::Cmd { id, cmd })?;
+        Ok(())
+    }
+
     /// Send a command and read until its reply arrives, applying updates on the way.
     pub fn cmd(&mut self, cmd: Cmd) -> Result<Result<Option<Value>, ErrorBody>, ClientError> {
         let id = format!("c{}", self.next_cmd);

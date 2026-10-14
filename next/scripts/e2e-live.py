@@ -49,12 +49,29 @@ def phone_nodes():
             nodes.append((t, ((x1 + x2) // 2, (y1 + y2) // 2)))
     return nodes
 
+def phone_edit():
+    """The centre of the phone's input field, if one is on screen."""
+    adb("shell", "uiautomator", "dump", "/sdcard/jwn-e2e.xml")
+    xml = adb("exec-out", "cat", "/sdcard/jwn-e2e.xml")
+    for n in ET.fromstring(xml[xml.index("<"):]).iter("node"):
+        if n.get("class") == "android.widget.EditText":
+            x1, y1, x2, y2 = map(int, re.findall(r"\d+", n.get("bounds")))
+            return ((x1 + x2) // 2, (y1 + y2) // 2)
+    return None
+
 def phone_text():
     return "\n".join(t for t, _ in phone_nodes())
 
-def phone_tap(label, nth=0):
-    hits = [c for t, c in phone_nodes() if t == label]
-    adb("shell", "input", "tap", str(hits[nth][0]), str(hits[nth][1]))
+def phone_tap(label, nth=0, timeout=10):
+    """Tap the nth node with this text, waiting for it to appear (the dump can lag a frame)."""
+    end = time.time() + timeout
+    while time.time() < end:
+        hits = [c for t, c in phone_nodes() if t == label]
+        if len(hits) > nth:
+            adb("shell", "input", "tap", str(hits[nth][0]), str(hits[nth][1]))
+            return
+        time.sleep(0.5)
+    raise AssertionError(f"nothing on the phone says {label!r}: {phone_text()!r}")
 
 # ---- the terminal client, in a pty with a keyboard ----
 class Tui:
@@ -69,6 +86,9 @@ class Tui:
     def keys(self, s):
         os.write(self.fd, s.encode())
         time.sleep(0.3)
+
+    def nav(self, keys):  # keys of the client itself: the leader (Ctrl-Space) first
+        self.keys("\x00" + keys)
 
     def click(self, x, y):  # cells are 0-based here; the terminal's mouse protocol counts from 1
         self.keys(f"\x1b[<0;{x + 1};{y + 1}M\x1b[<0;{x + 1};{y + 1}m")
@@ -174,8 +194,8 @@ def main():
         check("the terminal dropped the same aviso", until(lambda: avisos_count_tui(tui.text()) == 1, "tui"), tui.text().split("\n")[-1])
         check("the terminal's row for a is clear", until(lambda: "✗" not in sidebar(tui.text(), 1), "tui"), sidebar(tui.text(), 1))
         adb("shell", "input", "keyevent", "KEYCODE_BACK")
-        tui.keys("a")
-        tui.keys("\r")  # the terminal goes to the remaining aviso (b)
+        tui.nav("a")
+        tui.nav("\r")  # the terminal goes to the remaining aviso (b)
         check("the terminal has nothing waiting now", until(lambda: avisos_count_tui(tui.text()) == 0, "tui"), tui.text().split("\n")[-1])
         check("the phone dropped it too", until(lambda: avisos_count_phone(phone_text()) == 0 and "salió 0" not in phone_text(), "phone"), phone_text())
 
@@ -191,8 +211,8 @@ def main():
         check("terminal sees the new failure", until(lambda: avisos_count_tui(tui.text()) == 1, "tui"), tui.text().split("\n")[-1])
         check("phone sees the new failure", until(lambda: "salió 5" in phone_text(), "phone"), phone_text())
         # and the other way: the terminal looks, the phone drops it
-        tui.keys("a")
-        tui.keys("\r")
+        tui.nav("a")
+        tui.nav("\r")
         check("the terminal looked at it", until(lambda: avisos_count_tui(tui.text()) == 0, "tui"), tui.text().split("\n")[-1])
         check("the phone dropped it because the terminal looked", until(lambda: avisos_count_phone(phone_text()) == 0, "phone"), phone_text())
 
@@ -211,12 +231,34 @@ def main():
 
         print("\n-- what a pane prints reaches both")
         write(pa, "echo hello-e2e")
-        tui.keys("k")
-        tui.keys("\r")  # open a in the terminal
+        tui.nav("k")
+        tui.nav("\r")  # open a in the terminal
         check("terminal draws the pane's output", until(lambda: "hello-e2e" in tui.text(), "tui"), tui.text()[:200])
         phone_tap("a", 0)  # the workspace row: nothing waits there any more, so no "ir ›"
         check("phone draws the pane's output", until(lambda: "hello-e2e" in phone_text(), "phone"), phone_text())
         adb("shell", "input", "keyevent", "KEYCODE_BACK")
+
+        print("\n-- typing into a pane, from the terminal and from the phone")
+        tui.nav("\r")  # open workspace a again: the keyboard goes to its shell
+        tui.keys("echo from-tui\r")
+        check("what the terminal types runs in the shell", until(lambda: "from-tui" in tui.text() and "echo from-tui" in tui.text(), "tui"), tui.text()[:300])
+        phone_tap("a", 0)
+        check("and the phone shows it", until(lambda: "from-tui" in phone_text(), "phone"), phone_text())
+        edit = phone_edit()
+        check("the phone has an input field", edit is not None)
+        if edit:
+            adb("shell", "input", "tap", str(edit[0]), str(edit[1]))
+            adb("shell", "input", "text", "echo%sfrom-phone")
+            adb("shell", "input", "keyevent", "KEYCODE_ENTER")
+            check("what the phone types runs in the shell", until(lambda: "from-phone" in phone_text(), "phone"), phone_text())
+            check("and the terminal shows it", until(lambda: "from-phone" in tui.text(), "tui"), tui.text()[:300])
+        adb("shell", "input", "keyevent", "KEYCODE_BACK")
+        adb("shell", "input", "keyevent", "KEYCODE_BACK")
+        tui.keys("sleep 30\r")
+        tui.keys("\x03")  # Ctrl-C reaches the program, not the client
+        tui.keys("echo after-interrupt\r")
+        check("Ctrl-C from the terminal stops the program and the shell answers", until(lambda: "after-interrupt" in tui.text(), "tui"), tui.text()[:300])
+        tui.nav("")  # give the keyboard back to the client for what follows
 
         print("\n-- structure changes reach both")
         c = cmd({"cmd": "open_folder", "path": f"{DIR}/work/c"})["result"]["workspace"]

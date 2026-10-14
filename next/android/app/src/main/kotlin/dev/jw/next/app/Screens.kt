@@ -13,10 +13,16 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -24,10 +30,17 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -260,10 +273,40 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
                 fontFamily = MonoFont, fontSize = 12.sp, lineHeight = 18.sp, color = Palette.fg, softWrap = false,
             )
         }
-        Row(Modifier.fillMaxWidth().background(Palette.panel).navigationBarsPadding().padding(horizontal = Gutter, vertical = 14.dp)) {
-            Mono("❯", Palette.dim, 13, bold = true)
-            Spacer(Modifier.width(10.dp))
-            Mono("solo lectura por ahora", Palette.dim, 12)
+        Composer(enabled = source.writable && screen.pane != null) { line ->
+            screen.pane?.let { source.write(it, line + "\r") }
+        }
+    }
+}
+
+/** The line a person types for the shell; Enter (or the button) sends it with a `\r`. */
+@Composable
+private fun Composer(enabled: Boolean, send: (String) -> Unit) {
+    var text by remember { mutableStateOf("") }
+    val go = { if (enabled) { send(text); text = "" } }
+    Row(
+        Modifier.fillMaxWidth().background(Palette.panel).navigationBarsPadding().padding(start = Gutter, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Mono("❯", if (enabled) Palette.green else Palette.dim, 14, bold = true)
+        Spacer(Modifier.width(10.dp))
+        BasicTextField(
+            value = text,
+            onValueChange = { text = it },
+            enabled = enabled,
+            singleLine = true,
+            textStyle = TextStyle(color = Palette.fg, fontFamily = MonoFont, fontSize = 13.sp),
+            cursorBrush = SolidColor(Palette.blue),
+            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, imeAction = ImeAction.Send),
+            keyboardActions = KeyboardActions(onSend = { go() }),
+            modifier = Modifier.weight(1f).heightIn(min = 48.dp).wrapContentHeight(Alignment.CenterVertically),
+            decorationBox = { inner ->
+                if (text.isEmpty()) Mono(if (enabled) "escribe un comando" else "solo lectura: datos de ejemplo", Palette.dim, 13)
+                inner()
+            },
+        )
+        Box(Modifier.size(48.dp).clickable(enabled = enabled, onClick = go), contentAlignment = Alignment.Center) {
+            Mono("↵", if (enabled) Palette.blue else Palette.dim, 16, bold = true)
         }
     }
 }

@@ -12,7 +12,7 @@ use std::time::Duration;
 use contract::{Attention, AttentionKind, Cmd, Node, Pane, Session, Workspace, WorkspaceKind};
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
-    MouseButton, MouseEventKind,
+    KeyModifiers, MouseButton, MouseEventKind,
 };
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{cursor, execute};
@@ -270,6 +270,11 @@ pub enum After {
     Quit,
     /// Ask the daemon for a new pane in this workspace.
     NewPane(String),
+    /// Bytes for a pane's shell: what was typed.
+    Write {
+        pane: String,
+        data: String,
+    },
 }
 
 fn rev_of(n: &Node) -> u64 {
@@ -301,6 +306,10 @@ pub struct View {
     epoch: Option<String>,
     /// What this terminal looked at and the daemon has not been told yet: (node, revision).
     outbox: Vec<(String, u64)>,
+    /// The keyboard goes to the focused pane's shell; the leader (`^␣`) gives it back.
+    typing: bool,
+    /// The size last asked of the focused pane, so it is asked once.
+    last_size: Option<(String, u16, u16)>,
 }
 
 impl View {
@@ -319,6 +328,8 @@ impl View {
             status: status.to_owned(),
             epoch: None,
             outbox: Vec::new(),
+            typing: false,
+            last_size: None,
         }
     }
 
@@ -458,6 +469,7 @@ impl View {
     /// Open a workspace and focus one of its panes, marking both seen on this terminal.
     fn open(&mut self, ws: &str, focus: usize) {
         self.opened = Some(ws.to_owned());
+        self.typing = true;
         self.mark_seen(ws);
         let pane = self
             .workspaces
@@ -474,6 +486,48 @@ impl View {
         }
     }
 
+    /// The pane the keyboard goes to: the focused pane of the opened workspace, while typing.
+    fn typing_pane(&self) -> Option<String> {
+        if !self.typing || self.mode != Mode::Workspaces {
+            return None;
+        }
+        let ws = self.workspaces.get(self.opened.as_deref()?)?;
+        Some(ws.panes.get(self.focus)?.id.clone())
+    }
+
+    /// A key at the keyboard: typed into the pane, or (after the leader, or when no pane is
+    /// open) a command of the client.
+    pub fn press_key(&mut self, ev: KeyEvent) -> After {
+        let Some(pane) = self.typing_pane() else {
+            return key_of(ev.code).map_or(After::Continue, |k| self.press(k));
+        };
+        if is_leader(&ev) {
+            self.typing = false;
+            return After::Continue;
+        }
+        match bytes_of(&ev) {
+            Some(data) => After::Write { pane, data },
+            None => After::Continue,
+        }
+    }
+
+    /// The size the typing pane's box has, when it differs from what was last asked: a shell
+    /// should wrap where its box does.
+    pub fn take_resize(&mut self, cols: usize, rows: usize) -> Option<(String, u16, u16)> {
+        let pane = self.typing_pane()?;
+        let n = self.workspaces.get(self.opened.as_deref()?)?.panes.len();
+        let (_, _, w, h) = *pane_rects(n, panes_rect(cols, rows)).get(self.focus)?;
+        let want = (
+            pane,
+            h.saturating_sub(2).max(1) as u16,
+            w.saturating_sub(4).max(1) as u16,
+        );
+        (self.last_size.as_ref() != Some(&want)).then(|| {
+            self.last_size = Some(want.clone());
+            want
+        })
+    }
+
     pub fn press(&mut self, key: Key) -> After {
         let n = self.session.as_ref().map_or(0, |s| s.workspaces.len());
         match (self.mode, key) {
@@ -484,11 +538,13 @@ impl View {
                 self.avisos_selected = 0;
             }
             (Mode::Workspaces, Key::Down) => {
+                self.typing = false;
                 self.selected = (self.selected + 1).min(n.saturating_sub(1));
                 self.opened = None;
                 self.focus = 0;
             }
             (Mode::Workspaces, Key::Up) => {
+                self.typing = false;
                 self.selected = self.selected.saturating_sub(1);
                 self.opened = None;
                 self.focus = 0;
@@ -712,17 +768,14 @@ impl View {
         for x in 0..cols {
             g.cells[(rows - 1) * cols + x] = (' ', Style::default().on(PANEL));
         }
-        let (chip, bg, hint) = match (self.mode, &self.opened) {
+        let typing = self.typing_pane().is_some();
+        let (chip, bg, hint) = match (self.mode, typing) {
             (Mode::Avisos, _) => (" AVISOS ", YELLOW, "j/k mover · ↵ ir · esc volver"),
-            (_, Some(_)) => (
-                " TERM ",
-                GREEN,
-                "h/l panel · j/k workspace · n panel nuevo · a avisos · q salir",
-            ),
-            _ => (
+            (_, true) => (" TERM ", GREEN, "escribes en el panel · ^␣ para moverte"),
+            (_, false) => (
                 " MOVE ",
                 BLUE,
-                "j/k workspace · ↵ abrir · h/l panel · n panel nuevo · a avisos · q salir",
+                "j/k workspace · ↵ escribir · h/l panel · n panel nuevo · a avisos · q salir",
             ),
         };
         g.put(
@@ -947,6 +1000,43 @@ impl Drop for Terminal {
     }
 }
 
+/// `^␣` (Ctrl-Space), the key that gives the keyboard back to the client.
+fn is_leader(ev: &KeyEvent) -> bool {
+    ev.modifiers.contains(KeyModifiers::CONTROL)
+        && matches!(ev.code, KeyCode::Char(' ') | KeyCode::Char('@'))
+}
+
+/// What a key sends to a shell: the bytes a terminal would.
+fn bytes_of(ev: &KeyEvent) -> Option<String> {
+    let ctrl = ev.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = ev.modifiers.contains(KeyModifiers::ALT);
+    let body = match ev.code {
+        KeyCode::Char(c) if ctrl && c.is_ascii_alphabetic() => {
+            ((c.to_ascii_lowercase() as u8 - b'a' + 1) as char).to_string()
+        }
+        KeyCode::Char(c) if ctrl && matches!(c, '[' | '\\' | ']' | '^' | '_') => {
+            ((c as u8 & 0x1f) as char).to_string()
+        }
+        KeyCode::Char(c) => c.to_string(),
+        KeyCode::Enter => "\r".into(),
+        KeyCode::Backspace => "\x7f".into(),
+        KeyCode::Tab => "\t".into(),
+        KeyCode::BackTab => "\x1b[Z".into(),
+        KeyCode::Esc => "\x1b".into(),
+        KeyCode::Up => "\x1b[A".into(),
+        KeyCode::Down => "\x1b[B".into(),
+        KeyCode::Right => "\x1b[C".into(),
+        KeyCode::Left => "\x1b[D".into(),
+        KeyCode::Home => "\x1b[H".into(),
+        KeyCode::End => "\x1b[F".into(),
+        KeyCode::Delete => "\x1b[3~".into(),
+        KeyCode::PageUp => "\x1b[5~".into(),
+        KeyCode::PageDown => "\x1b[6~".into(),
+        _ => return None,
+    };
+    Some(if alt { format!("\x1b{body}") } else { body })
+}
+
 fn key_of(code: KeyCode) -> Option<Key> {
     Some(match code {
         KeyCode::Char('j') | KeyCode::Down => Key::Down,
@@ -1022,16 +1112,19 @@ pub fn run() -> Result<(), String> {
                 }
             }
         }
+        if let Some((pane, rows, cols_)) = view.take_resize(cols as usize, rows as usize) {
+            let _ = client.send(Cmd::Resize {
+                pane,
+                rows,
+                cols: cols_,
+            });
+        }
         for (node, rev) in view.take_outbox() {
             let _ = client.cmd(Cmd::MarkSeen { node, rev });
         }
         while event::poll(Duration::ZERO).map_err(|e| e.to_string())? {
             let after = match event::read().map_err(|e| e.to_string())? {
-                Event::Key(KeyEvent {
-                    code,
-                    kind: KeyEventKind::Press,
-                    ..
-                }) => key_of(code).map_or(After::Continue, |key| view.press(key)),
+                Event::Key(ev) if ev.kind == KeyEventKind::Press => view.press_key(ev),
                 Event::Mouse(m) => {
                     let (cols, rows) = (cols as usize, rows as usize);
                     let (x, y) = (m.column as usize, m.row as usize);
@@ -1046,6 +1139,9 @@ pub fn run() -> Result<(), String> {
             };
             match after {
                 After::Quit => return Ok(()),
+                After::Write { pane, data } => {
+                    let _ = client.send(Cmd::Write { pane, data });
+                }
                 After::NewPane(workspace) => {
                     let _ = client.cmd(Cmd::NewPane {
                         workspace,
@@ -1283,6 +1379,144 @@ mod tests {
         assert_eq!(v.selected, 0);
         assert!(v.opened.is_none());
         assert_eq!(v.avisos().len(), before);
+    }
+
+    fn key(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
+        KeyEvent::new(code, mods)
+    }
+
+    fn plain(code: KeyCode) -> KeyEvent {
+        key(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn once_a_pane_is_open_the_keyboard_goes_to_its_shell() {
+        let mut v = fixture_view();
+        v.press(Key::Enter);
+        let pane = v.typing_pane().expect("opening a workspace starts typing");
+        assert_eq!(
+            v.press_key(plain(KeyCode::Char('x'))),
+            After::Write {
+                pane: pane.clone(),
+                data: "x".into()
+            }
+        );
+        // The client's own keys are the shell's now, `j` and `q` included.
+        assert_eq!(
+            v.press_key(plain(KeyCode::Char('j'))),
+            After::Write {
+                pane: pane.clone(),
+                data: "j".into()
+            }
+        );
+        assert_eq!(
+            v.press_key(plain(KeyCode::Char('q'))),
+            After::Write {
+                pane: pane.clone(),
+                data: "q".into()
+            }
+        );
+        assert_eq!(
+            v.press_key(plain(KeyCode::Enter)),
+            After::Write {
+                pane: pane.clone(),
+                data: "\r".into()
+            }
+        );
+        assert_eq!(
+            v.press_key(plain(KeyCode::Esc)),
+            After::Write {
+                pane,
+                data: "\x1b".into()
+            }
+        );
+        assert!(v.plain(120, 30).lines().last().unwrap().contains("TERM"));
+    }
+
+    #[test]
+    fn keys_become_the_bytes_a_terminal_sends() {
+        let b = |c, m| bytes_of(&key(c, m));
+        assert_eq!(
+            b(KeyCode::Char('c'), KeyModifiers::CONTROL).as_deref(),
+            Some("\x03")
+        );
+        assert_eq!(
+            b(KeyCode::Char('d'), KeyModifiers::CONTROL).as_deref(),
+            Some("\x04")
+        );
+        assert_eq!(
+            b(KeyCode::Char('b'), KeyModifiers::ALT).as_deref(),
+            Some("\x1bb")
+        );
+        assert_eq!(
+            b(KeyCode::Backspace, KeyModifiers::NONE).as_deref(),
+            Some("\x7f")
+        );
+        assert_eq!(b(KeyCode::Tab, KeyModifiers::NONE).as_deref(), Some("\t"));
+        assert_eq!(
+            b(KeyCode::Up, KeyModifiers::NONE).as_deref(),
+            Some("\x1b[A")
+        );
+        assert_eq!(
+            b(KeyCode::Left, KeyModifiers::NONE).as_deref(),
+            Some("\x1b[D")
+        );
+        assert_eq!(
+            b(KeyCode::Delete, KeyModifiers::NONE).as_deref(),
+            Some("\x1b[3~")
+        );
+        assert_eq!(
+            b(KeyCode::Char('é'), KeyModifiers::NONE).as_deref(),
+            Some("é")
+        );
+        assert_eq!(
+            b(KeyCode::F(5), KeyModifiers::NONE),
+            None,
+            "keys with no bytes send nothing"
+        );
+    }
+
+    #[test]
+    fn the_leader_gives_the_keyboard_back_to_the_client() {
+        let mut v = fixture_view();
+        v.press(Key::Enter);
+        assert_eq!(
+            v.press_key(key(KeyCode::Char(' '), KeyModifiers::CONTROL)),
+            After::Continue
+        );
+        assert!(v.typing_pane().is_none());
+        assert!(v.plain(120, 30).lines().last().unwrap().contains("MOVE"));
+        // Now `j` moves, as before.
+        v.press_key(plain(KeyCode::Char('j')));
+        assert_eq!(v.selected, 1);
+        // Enter goes back to typing in the workspace it opens.
+        v.press_key(plain(KeyCode::Enter));
+        assert!(v.typing_pane().is_some());
+    }
+
+    #[test]
+    fn before_a_pane_is_open_keys_are_the_clients() {
+        let mut v = fixture_view();
+        assert!(v.typing_pane().is_none());
+        v.press_key(plain(KeyCode::Char('j')));
+        assert_eq!(v.selected, 1);
+        assert_eq!(v.press_key(plain(KeyCode::Char('q'))), After::Quit);
+    }
+
+    #[test]
+    fn the_pane_is_asked_to_fit_its_box_once() {
+        let mut v = fixture_view();
+        assert_eq!(v.take_resize(120, 30), None, "nothing is typed into yet");
+        v.press(Key::Enter);
+        let (pane, rows, cols) = v.take_resize(120, 30).expect("the focused box's size");
+        assert_eq!(Some(pane), v.typing_pane());
+        let (_, _, w, h) = pane_rects(2, panes_rect(120, 30))[0];
+        assert_eq!((rows, cols), ((h - 2) as u16, (w - 4) as u16));
+        assert_eq!(v.take_resize(120, 30), None, "asked once");
+        assert!(
+            v.take_resize(100, 30).is_some(),
+            "a smaller terminal is a new size"
+        );
     }
 
     #[test]

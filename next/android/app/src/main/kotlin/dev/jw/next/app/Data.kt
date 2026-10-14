@@ -22,6 +22,9 @@ abstract class AppSource : NodeSource {
 
     /** What the header says about where the data comes from. */
     abstract val status: String
+
+    /** Whether typing reaches a shell: not with the fixtures. */
+    open val writable: Boolean = false
 }
 
 /** The nodes the shared fixtures hold: what the app draws when no daemon is given. */
@@ -94,7 +97,13 @@ class LiveSource(private val host: String, private val port: Int) : AppSource() 
         send(ClientMsg.Open(id, epoch = cachedEpoch(id), since = cachedRev(id)))
     }
 
+    override val writable: Boolean = true
+
     private var commands = 0
+
+    override fun write(pane: Id, data: String) {
+        send(ClientMsg.Command("w${++commands}", Cmd.Write(pane, data)))
+    }
 
     override fun markSeen(id: Id, rev: Long) {
         send(ClientMsg.Command("m${++commands}", Cmd.MarkSeen(id, rev)))

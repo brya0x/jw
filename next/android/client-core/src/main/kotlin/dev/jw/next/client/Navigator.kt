@@ -17,6 +17,9 @@ interface NodeSource {
 
     /** Tell the daemon this phone looked at [id] at [rev], so every client clears it. */
     fun markSeen(id: Id, rev: Long) {}
+
+    /** Type [data] into a pane's shell (text; `\r` is Enter, `\u0003` is ^C). */
+    fun write(pane: Id, data: String) {}
 }
 
 sealed interface Screen {
