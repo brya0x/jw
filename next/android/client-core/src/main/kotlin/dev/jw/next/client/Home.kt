@@ -135,13 +135,14 @@ fun homeItems(session: Node.Session, seen: Seen): List<HomeItem> {
     session.workspaces.forEachIndexed { i, w ->
         val before = session.workspaces.getOrNull(i - 1)
         val project = w.project
+        // What comes before is this worktree's root or another worktree of its repository.
+        val follows = before != null && (before.project == project || before.path == project)
         when {
             rows[i].kind == HomeKind.Folder && !folders -> {
                 folders = true
                 if (before != null) items += HomeItem.Heading("carpetas")
             }
-            rows[i].kind == HomeKind.Worktree && project != null && !(before != null && rows[i - 1].kind != HomeKind.Folder && (before.project == project || before.path == project)) ->
-                items += HomeItem.Heading(repoName(project))
+            rows[i].kind == HomeKind.Worktree && project != null && !follows -> items += HomeItem.Heading(repoName(project))
         }
         items += HomeItem.Row(rows[i])
     }

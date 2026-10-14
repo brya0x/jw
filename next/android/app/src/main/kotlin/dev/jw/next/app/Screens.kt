@@ -298,9 +298,10 @@ private fun WorkspaceRow(row: HomeRow, current: Boolean, open: () -> Unit, hold:
             }
         }
         val attention = row.go
-        if (attention != null && row.line != null) {
+        val line = row.line
+        if (attention != null && line != null) {
             Row(Modifier.fillMaxWidth().padding(start = 51.dp, end = Gutter, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Mono(row.line!!, attention.lineColor(), 12, modifier = Modifier.weight(1f))
+                Mono(line, attention.lineColor(), 12, modifier = Modifier.weight(1f))
                 GoControl { go(attention) }
             }
         }
