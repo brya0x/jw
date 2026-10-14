@@ -1,5 +1,5 @@
 ---
-status: built
+status: agreed
 scope: [next/contract, next/crates, next/android, next/docs/prototypes]
 depends_on: []
 supersedes: []
@@ -22,6 +22,8 @@ A client opens a node and gets a `snapshot`, then `patch`es (RFC 6902 subset `ad
 **Agent attention.** An agent the daemon starts (`claude`) is given hooks for that run only (`--settings` with a file the daemon writes; it merges with the person's own hooks and writes nothing to their settings). Each hook runs `jwn hook <event>`, which tells the daemon with `agent_event` what the agent is doing, for the pane named by the environment. The daemon, not the hook, turns that into attention: a permission prompt is `permission`, a question or a plan awaiting approval is `question` or `plan`, a finished turn is `agent_done`, and the agent moving on (a tool ran, a prompt was sent, the session or the program ended) ends what it had raised. A `claude` typed at a prompt has no hooks (RISK-29).
 
 **Pull requests.** For each worktree workspace with a pane, the daemon looks every minute at the newest pull request of its branch with `gh` (the person's own login; the daemon holds no token) and raises `merged` when it was merged, or `ci_failed` when it is open and a check failed. It raises only when what it sees changes, so a mark a person has looked at does not come back; the old jw looked at merges only (`⚑`) and had no failed-CI mark.
+
+**Closing, removing and looks.** A client can close a pane (`close_pane`), close a workspace (`remove_workspace`) and, for a worktree workspace, remove the worktree with it; the terminal client does all three, the phone only closes a pane. A worktree is never removed by force: the client reads the `uncommitted` changes first and, when there are any, lists them and offers only to close the workspace; the branch stays, so commits not yet pushed are safe. The look of each client (a **mode**: system, dark or light; and one of five **themes**: One, Catppuccin, Tokyo Night, Gruvbox, Solarized, each with a dark and a light member) is a setting of that client, not of the daemon: the terminal's is the file `settings.json`, the phone's is kept on the phone, and neither changes the other. Several sessions in one daemon are not built (RAT-16). The designs are `docs/prototypes/tui-manage.html` (terminal) and, in `docs/prototypes/mobile.html`, the screens *Ajustes: tema y modo* and *Cerrar un panel*.
 
 A **pane is a terminal**: its process is always the user's `$SHELL`; a program runs inside it (`running` and `last_program` carry it, and the pane's `title` is its name).
 
@@ -62,6 +64,8 @@ Agent hooks (N36): `agent_event {pane, event, notification_type?, tool?}` with `
 | `pre_tool_use` `ExitPlanMode` | the same | `plan` |
 | `post_tool_use`, `user_prompt_submit`, `session_end` | the same | |
 | `stop` | the same | `agent_done` |
+
+Looks (N38): `settings.json` in `identity::config_dir()` is `{"mode": "system"|"dark"|"light", "theme": "one"|"catppuccin"|"tokyo-night"|"gruvbox"|"solarized"}`, both optional. The ten palettes are `contract/themes.json` (added with N40): per theme and mode the twelve colours `bg panel fg dim line sel blue green yellow red magenta cyan`, the ones `docs/prototypes/tui-manage.html` and `mobile.html` draw with. Closing and removing use the commands that exist: `close_pane {pane}`, `remove_workspace {workspace, remove_worktree?}` (N3), and `open_diff {workspace, scope: uncommitted}` to know whether a worktree is clean; no message changes.
 
 Development link: with `JWN_TCP=127.0.0.1:7870` the daemon also listens on loopback TCP, and `adb reverse tcp:7870 tcp:7870` lets a phone on a cable reach it; any process on the machine can use it, so it is off by default and prints a warning. The phone gets pairing, TLS and the tunnel later.
 
@@ -204,6 +208,26 @@ Transport: JSON lines on a Unix socket (mode 0600, in a 0700 dir) whose path com
 - REQ-136 WHEN that pull request is merged, the daemon SHALL raise `merged` on the workspace; WHEN it is open and a check ended in failure, timeout or start-up failure, or a commit status in failure or error, it SHALL raise `ci_failed`.
 - REQ-137 THE daemon SHALL raise an attention from a pull request only when what it sees differs from the last time (the pull request, merged, failing), ending the `merged` and `ci_failed` it had raised before, so that one a person has seen does not return while nothing changes; WHEN the branch has no pull request, it SHALL end them.
 - REQ-138 IF `gh` is missing, fails or does not answer in time, THEN the daemon SHALL keep what it had and say it once in its log.
+- REQ-139 WHEN the person presses `x` on a pane of the terminal client whose shell is idle (no program running in it and no block running), THE client SHALL send `close_pane` for it at once.
+- REQ-140 WHEN the person presses `x` on a pane where a program or a block is running, THE client SHALL ask first, naming it, and send `close_pane` only on `y`; any other key SHALL cancel.
+- REQ-141 WHEN a pane is closed, THE workspace SHALL stay, even with no panes left, and the terminal client SHALL move its focus to a neighbouring pane when there is one.
+- REQ-142 WHEN the person presses `X` on a workspace, THE terminal client SHALL ask, and on `y` send `remove_workspace` without `remove_worktree`.
+- REQ-143 WHERE the workspace is a worktree, THE question of `X` SHALL also offer `d`, to remove the worktree as well.
+- REQ-144 WHEN the person chooses `d`, THE terminal client SHALL open the workspace's `uncommitted` changes; WHERE they list any file, it SHALL show those files (path and status), say the worktree cannot be removed, and offer only `c`, to close the workspace and keep the worktree.
+- REQ-145 WHERE the `uncommitted` changes list no file, THE terminal client SHALL ask for `y` and then send `remove_workspace` with `remove_worktree`.
+- REQ-146 IF the daemon answers a `remove_workspace` with an error (changes that appeared since the client looked, for one), THEN THE terminal client SHALL show the message and leave the workspace and its worktree as they are.
+- REQ-147 WHEN a worktree is removed, THE daemon SHALL leave its branch in place.
+- REQ-148 WHEN the person taps the `×` of the selected pane's tab, THE phone SHALL open a sheet naming the pane and saying what closing does, and send `close_pane` only on «cerrar el panel»; it SHALL ask whatever runs in the pane.
+- REQ-149 THE phone SHALL NOT offer to close a workspace or remove a worktree, and the sheet SHALL say that is done on the PC.
+- REQ-150 IF the PC answers `close_pane` with an error or the link drops before it answers, THEN THE phone SHALL show the message and keep the pane's tab.
+- REQ-151 THE terminal client SHALL read `mode` and `theme` from `settings.json`; WHERE the file is missing, unreadable or holds a value it does not know, it SHALL use `system` and `one` for that value and not fail.
+- REQ-152 WHEN the person presses `,` in the terminal client, it SHALL show settings with the mode and the five themes; choosing one SHALL apply it at once and write `settings.json` whole and atomically.
+- REQ-153 WHILE the terminal client runs, it SHALL read `settings.json` again at most every 2 seconds and repaint when the mode or the theme changed.
+- REQ-154 WHILE the mode is `system`, THE terminal client SHALL follow the machine's dark or light appearance (macOS `AppleInterfaceStyle`), and SHALL be dark where it cannot tell.
+- REQ-155 THE terminal client SHALL draw every colour it chooses itself (backgrounds, borders, selection, marks, diff tints) from the theme and mode in force.
+- REQ-156 THE ten palettes SHALL be defined once in `contract/themes.json`, and each client SHALL have a test that its own table equals it.
+- REQ-157 THE phone SHALL have an `ajustes` tab with the mode and the themes, apply a choice at once, keep it on the phone across launches, and send nothing to the PC for it.
+- REQ-158 WHILE the phone's mode is `system`, THE phone SHALL follow Android's dark or light setting.
 - REQ-83 THE phone SHALL keep its device secret in Keystore-backed storage and SHALL pair from the QR link's text (from the QR the camera reads or from pasted text).
 - REQ-84 THE bridge SHALL answer a `mobile_*` command from a phone with an `unsupported` error and not pass it on; THE daemon SHALL end the tunnel it started when it is stopped, and the next start SHALL end one a dead daemon left (recorded in `<state>/tunnel.pid`).
 - REQ-85 WHEN a phone pairs, it SHALL show the six-digit code it sent and wait for the PC; WHEN the bridge denies it or the PC cannot be reached, it SHALL say which of expired, declined, locked out, no longer paired or unreachable happened; WHEN the PC revokes it, the phone SHALL forget the pairing and say so.
@@ -227,6 +251,8 @@ Transport: JSON lines on a Unix socket (mode 0600, in a 0700 dir) whose path com
 - RAT-13 **Lines as prefixed strings, no numbers.** `"+text"` is a third of the size of `{"k":"add","text":…,"old":…,"new":…}`, and the numbers follow from the hunk's starts, so a client that derives them cannot disagree with the daemon. Words changed and syntax colours are drawn by each client: they are a way of drawing, not data.
 - RAT-14 **Marks belong to a file's content, not to a person.** `hash` covers the path, status and lines, so a file that changes after it was looked at says so (`changed`) without anyone comparing, and the mark is shared like attention (RAT-4): looking on the terminal clears it on the phone. The old jw kept them per phone.
 - RAT-15 **Hooks for this run, and the daemon decides.** `--settings` is the one way to give an agent hooks without editing the person's own settings, and it merges with theirs; the file is read, not written, by claude. The hook command only forwards the event's name and two fields, so what an event means (and any later change to it) lives in one place, the daemon, and is tested with JSON alone. A prompt for permission and a plan are both permission requests, so the more specific one wins (REQ-134). The old jw passed hooks the same way but kept only `working`, `waiting` and `idle`, so it could not tell a question from a permission or say a plan was ready.
+- RAT-16 **One daemon is still one session** (RAT-6); the user decided on 2026-10-14, after asking whether several were needed. Worktrees already group by project and the finder (`^␣ ␣`) changes workspace fast; hiding the workspaces of another session would hide their attentions, which is what the product is for; and a session in the contract means more nodes and UI in two clients and a migration. What the old jw's sessions gave (a named list one daemon served, filtered by the client) is a client view, cheap to add later if a person keeps over about 30 workspaces or needs contexts that share one attention list (OPEN-10). Anyone who wants two separate contexts today runs a second daemon with its own `JWN_SOCKET`.
+- RAT-17 **Looks are per client, closing is not.** A theme is taste of the screen it is shown on (the phone in daylight, the terminal in a dark room), so each client keeps its own and `settings.json` is read by the terminal client, not the daemon; the ten palettes are one file both read so they cannot drift (RAT-1). Closing a workspace or removing a worktree is left to the terminal (the user's call): a thumb on a phone is the wrong place for something that deletes a folder, and the phone only closes a pane. A worktree is never removed by force (the user's call): the old jw's `--force` threw uncommitted work away, so here a dirty worktree stays and the client offers to close the workspace only.
 
 ### Mobile UI (the simple version)
 A pane is a zsh (the user's `$SHELL`); claude or nvim run inside it, so the tab shows what runs there and the screen is a terminal. The claude-style conversation view comes when the daemon detects an agent in a pane, not from a role. Design baseline and the thing to approve: `docs/prototypes/mobile.html` (REQ-33 to REQ-38). The mark glyphs are `!` permission, `?` question, `◆` plan, `❯` command done (`✗` on a non-zero exit), `✓` agent done, `…` screen, `⚑` merged, `✗` CI failed; the existing `✻` agent and `⚡` dev stay. Only `shell_done` has a producer in the daemon today.
@@ -278,10 +304,12 @@ Corrections to the model: the level 0 document is smaller than assumed (3.9 KB, 
 - RISK-27 `ChangesModel` and the screen decode a `diff` document each time they read it (the node cache keeps documents as JSON), up to three times per redraw for the tabs' counts; a 1 MB diff costs tens of milliseconds per redraw on the phone. A decoded copy kept per revision would remove it.
 - RISK-30 `mergedAt` is not read (older `gh` prints a zero time for a pull request never merged); `state` decides. A pull request is looked at with one `gh` call a minute per worktree in use, a use of the person's GitHub quota; many worktrees open make many calls. What was last seen is not saved, so a restarted daemon raises `merged` or `ci_failed` again once for what it finds. A cancelled or skipped run is not a failure, and a check that is still running is not one yet, so a pull request whose only red check was cancelled shows nothing. The shape of `gh`'s JSON was checked against a real open and a real merged pull request of this repository; the commit-status shape (`state`) is from `gh`'s documentation.
 - RISK-29 Only an agent the daemon started has hooks: a `claude` typed at a prompt has none and raises no attention (it also has no conversation id for a restart, RISK-12). Of the events, `UserPromptSubmit`, `PreToolUse`, `PostToolUse` and `Stop` were seen firing with a real claude (2.1.299) through the daemon, and `agent_done` reached the pane; the `Notification` types and the tool names `AskUserQuestion` and `ExitPlanMode` are taken from Claude's documentation and were not triggered live. `PostToolUse` runs `jwn hook` after every tool, one process each.
-- RISK-28 No client can close a pane: `close_pane` is in the contract and the daemon, but neither the terminal client nor the phone has a control for it. A pane goes away only when its shell exits (REQ-24: typing `exit`), so panes pile up until then. It is part 4 of *What is left*.
+- RISK-28 No client can close a pane until N39 (terminal) and N41 (phone): `close_pane` is in the contract and the daemon, but neither client has a control for it, so a pane goes away only when its shell exits (REQ-24: typing `exit`) and panes pile up.
+- RISK-31 A worktree seen clean may get changes before `remove_workspace` arrives; the daemon does not force, so git refuses and the client shows its message (REQ-146), which is the only guard. The colours a command prints (palette indices 0 to 15 in a block's spans) stay the terminal's own on the terminal client and become the theme's on the phone, so the same output can look different on each; the themes cover what each client draws itself (REQ-155). The terminal client asks the machine for its appearance with one command (`defaults read -g AppleInterfaceStyle` on macOS); on Linux it cannot tell and stays dark, and a terminal that is light while the machine is dark is the person's to fix with the mode.
 - RISK-4 The Kotlin conformance suite proves the types and the patch rules, not a live connection; the live flows of the phone are checked by hand against a real daemon (RISK-10).
 
 ## Open questions
+- OPEN-10 Several sessions in one daemon (RAT-16): not built; reconsider when a person routinely has more than about 30 workspaces, or needs to separate contexts that share one attention list.
 - OPEN-9 The viewer of files and Markdown (the old jw's reader): opening a file from a diff, and Markdown rendered in both clients. Deferred by the user (2026-10-14): it is the 7th of what is left (see *What is left*), to be worked on later and not now.
 - OPEN-8 Whether a phone may be read-only (one switch, or per device) and whether a device secret should expire.
 - OPEN-1 (closed) Retention: how many revisions per node the daemon keeps for resume; it is 256 (`RETAIN` in `crates/daemon/src/core.rs`).
@@ -305,11 +333,14 @@ Corrections to the model: the level 0 document is smaller than assumed (3.9 KB, 
 - RISK-4 said no Kotlin client had talked to the daemon; the phone has since (N9, N27, N34). OPEN-1, OPEN-2 and OPEN-4 stayed listed as open after they were decided.
 - The fish integration had never been run (RISK-16); its first run in N35 found the shared test written in bash syntax and fish 4's own OSC 133 marks arriving before ours, which the scanner now tolerates.
 - REQ-54, 57, 59 and 60 each held several claims, and REQ-60 was not in EARS form; each now holds one and the rest are REQ-122 to REQ-127 (ids are never renumbered).
+- The plan for part 4 listed sessions and settings as parity with the old jw; the user cut them: no sessions (RAT-16) and settings only for the look (mode and theme), without the old leader key, animations or themes of their own. `remove_worktree` stays unforced.
 
 ## Tests
 `cargo test -p contract` (`crates/contract/tests/conformance.rs`): fixtures round-trip and validate, invalid fixtures are rejected, every schema variant has a fixture, unknown fields are ignored, Rust enums match the schema. Mutating a fixture or a Rust field turns it red.
 
 ### What enforces each REQ
+REQ-139 to REQ-158 by N39 to N41: not built yet; N38 is the spec and the two prototypes the user approved on 2026-10-14.
+
 REQ-135 to REQ-138 by N37: `crates/daemon/src/github.rs` tests (what counts as merged and as failing, over the shapes `gh` prints) and `crates/daemon/tests/github.rs` (a real daemon and a stand-in `gh`: a worktree nobody works in is not looked up, it runs in the worktree with those arguments, failing, passing, merged, seen and not coming back, a failing `gh` changing nothing, and no pull request ending it); it found a lock held across the `gh` call, which would have stopped the daemon. Not run against the real GitHub by a test.
 
 REQ-129 to REQ-134 by N36: `crates/daemon/src/agents.rs` and `launch.rs` tests (the mapping, the settings file and where `--settings` goes), `crates/daemon/tests/agents.rs` (a real daemon with JSON alone: raise, end, bubble to the session, a plan beating a permission, an unknown pane; a stand-in `claude` started with the hooks and a gone agent leaving no attention), `crates/jwn/tests/hook.rs` (the real `jwn hook` as claude runs it, and never failing). With a real claude in a pane of a real daemon, `agent_done` appeared after its answer.
@@ -358,7 +389,11 @@ The shapes REQ-91 to REQ-103 name (nodes, commands, fields) are enforced by N31 
 | N34 ✓ `6d9de29` | the diff on the phone, as the Cambios screens of `docs/prototypes/mobile.html` | 113–121 | `android/client-core/.../{ChangesModel,DiffTree}.kt`, `android/app/.../ChangesScreen.kt` |
 | N35 ✓ `343b103` | CI for `next/`, and the first run of the fish integration, which CI's Linux job needed | 128 | `.github/workflows/next.yml`, `crates/daemon/src/blocks.rs`, `crates/daemon/tests/blocks.rs` |
 | N36 ✓ `6341a8d` | claude's hooks become attention: `jwn hook`, `agent_event`, the settings file an agent starts with | 129–134 | `crates/daemon/src/{agents,launch}.rs`, `crates/jwn/src/hook.rs` |
-| N37 ✓ (this commit) | pull requests become attention: `merged` and `ci_failed` from `gh` | 135–138 | `crates/daemon/src/github.rs` |
+| N37 ✓ `8d078cc` | pull requests become attention: `merged` and `ci_failed` from `gh` | 135–138 | `crates/daemon/src/github.rs` |
+| N38 ✓ (this commit) | the spec of parity: closing panes and workspaces, removing a worktree without force, the look (mode and five themes); no sessions | 139–158 | `docs/prototypes/{tui-manage,mobile}.html` |
+| N39 | the terminal client closes panes and workspaces and removes worktrees | 139–147 | `crates/jwn/src/tui.rs` |
+| N40 | the terminal client's themes, mode and `settings.json`, with `contract/themes.json` | 151–156 | `contract/themes.json`, `crates/jwn/src/tui.rs` |
+| N41 | the phone closes a pane and has the `ajustes` tab | 148–150, 156–158 | `android/app`, `android/client-core` |
 
 ## What is left
 In this order, which is proposed except for the viewer of files and Markdown, whose place (7th, after everything else) the user chose on 2026-10-14 because he does not want to work on Markdown yet. Each becomes a part (N35 onwards) with its REQs when it starts; a part with a screen starts from an approved prototype.
@@ -368,7 +403,7 @@ In this order, which is proposed except for the viewer of files and Markdown, wh
 | 1 | ✓ Clean the spec the `spec-reviewer` found wanting: the enforcement notes moved below the fold, REQ-54, 57, 59 and 60 split (REQ-122 to REQ-127, with the blocks node's id lifecycle), the stale text fixed. Still long for one claim: REQ-44, 65, 69, 87, 100, 107 |
 | 2 | ✓ CI for `next/`: `.github/workflows/next.yml` (REQ-128). Written and its commands run locally and on Linux in a container, but not yet run by GitHub, since nothing is pushed |
 | 3 | ✓ The producers of attention that did not exist: claude's hooks (permission, question, plan, agent done) N36, and GitHub (merged, CI failed) N37 |
-| 4 | Parity of what the old jw let a person do: closing a pane (no client can today, RISK-28), sessions (create, switch, list from a client), settings and themes |
+| 4 | Parity of what the old jw let a person do, as `docs/prototypes/tui-manage.html` and `mobile.html`: closing panes, workspaces and worktrees (N39, N41, RISK-28) and the look (N40, N41). Spec N38 ✓; sessions were decided against for now (RAT-16, OPEN-10) |
 | 5 | Where `esc`, `tab`, the arrows and `^C` go on the phone (OPEN-5) |
 | 6 | The swap day: delete the old jw, move `next/` to the root, rename `jwn` to `jw`, decide the Android application id |
 | 7 | The viewer of files and Markdown (OPEN-9), for both clients; until it is done, what the old jw's reader did is not in `next/` |

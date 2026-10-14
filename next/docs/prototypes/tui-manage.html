@@ -1,0 +1,259 @@
+<title>jwn Close and Themes</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Terminal-first, the same character grid as the other terminal prototypes. The colours come from the chosen theme, so the whole screen changes with it. */
+:root{
+  --bg:#282c34; --panel:#21252b; --fg:#abb2bf; --dim:#5c6370; --line:#3e4451; --sel:#2c313a;
+  --blue:#61afef; --green:#98c379; --yellow:#e5c07b; --red:#e06c75; --magenta:#c678dd; --cyan:#56b6c2;
+  --page:#16181d; --ink:#c3c9d4; --mut:#7d8594;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}}
+:root[data-theme="light"]{--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.55 'IBM Plex Sans',system-ui,sans-serif;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px 40px}
+.wrap{max-width:1500px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
+h1{font:600 20px/1.2 var(--mono);margin:0}
+p{margin:0;max-width:72ch;color:var(--mut)}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button,select{font:12px var(--mono);color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;min-height:32px;cursor:pointer}
+button:hover{border-color:var(--blue)}
+:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto}
+.term pre{margin:0;font:13px/1.25 var(--mono);color:var(--fg);outline:none;width:max-content}
+.term pre:focus-visible{outline:none}
+.hint{font:12px var(--mono);color:var(--mut)}
+.decide{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px;color:var(--fg)}
+.decide h2{font:600 12px var(--mono);margin:0 0 8px;color:var(--mut)}
+.decide ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+.decide code{font:12px var(--mono)}
+.b{font-weight:700}.d{color:var(--dim)}.c-blue{color:var(--blue)}.c-green{color:var(--green)}.c-yellow{color:var(--yellow)}
+.c-red{color:var(--red)}.c-mag{color:var(--magenta)}.c-cyan{color:var(--cyan)}.c-line{color:var(--line)}
+.bg-sel{background:var(--sel)}.bg-panel{background:var(--panel)}
+.chip-green{background:var(--green);color:var(--panel)}.chip-blue{background:var(--blue);color:var(--panel)}.chip-yellow{background:var(--yellow);color:var(--panel)}.chip-red{background:var(--red);color:var(--panel)}
+.cur{background:var(--fg);color:var(--bg)}
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&family=JetBrains+Mono:wght@400;700&display=swap">
+
+<div class="wrap">
+  <div>
+    <h1>Closing things, and the theme</h1>
+    <p>The terminal client gets the keys to close a pane, close a workspace and remove a worktree, each asking only when something would be lost, and a settings box (<code>,</code>) to choose the theme. Click the terminal or tab into it; the keys are on its status bar. The theme you pick here repaints the whole page, and the same five themes and three modes are on the phone.</p>
+  </div>
+  <div class="bar" aria-label="Simulate">
+    <button id="evClean" type="button">El worktree está limpio / con cambios</button>
+    <button id="evRun" type="button">claude corre / no corre en el panel</button>
+    <button id="evSet" type="button">Abrir ajustes (,)</button>
+    <button id="evReset" type="button">Reset</button>
+  </div>
+  <div class="term"><pre id="scr" tabindex="0" aria-label="Terminal client. x closes the focused pane, X closes or removes the workspace, comma opens the settings."></pre></div>
+  <div class="hint" id="keys">j/k workspace · h/l panel · x cerrar panel · X cerrar workspace · , ajustes</div>
+
+  <div class="decide">
+    <h2>To approve</h2>
+    <ol>
+      <li><b>Close a pane: <code>x</code></b> on the focused pane (<code>↵</code> or <code>h</code>/<code>l</code> focuses one). A shell sitting at its prompt closes at once. If a program runs in it (claude, nvim, a command still going) a box asks first: <code>y cerrar · esc cancelar</code>, and says what stops. A workspace may be left with no panes.</li>
+      <li><b>Close a workspace: <code>X</code></b>. One box: the panes end (it names any program still running) and the folder or worktree stays on disk. For a worktree the box also offers <code>d</code>, remove the worktree.</li>
+      <li><b>Remove a worktree: <code>d</code> from that box.</b> It never forces. The client looks at the uncommitted files first: with none, <code>y quitar</code> deletes the folder (the branch stays); with some, the box lists them and says they must be committed or dropped first, and offers <code>c</code> to close the workspace and leave everything. A branch with commits not pushed is safe: the branch is kept. Use the first button to see both cases.</li>
+      <li><b>Theme: <code>,</code> opens settings.</b> <i>Modo</i> is sistema, oscuro or claro; <i>Tema</i> is one of five families (One, Catppuccin, Tokyo Night, Gruvbox, Solarized), each with a dark and a light member, so five themes by three modes make ten palettes. Choosing applies at once and is kept in <code>settings.json</code>; <i>sistema</i> follows the machine's dark or light setting. Try <code>j</code>/<code>k</code>, <code>↵</code> and <code>m</code>.</li>
+      <li><b>Not here:</b> leader and rebindable keys, animations and your own themes (only the theme is in scope), and closing a workspace or removing a worktree from the phone (the phone only closes a pane).</li>
+    </ol>
+  </div>
+</div>
+
+<script>
+(() => {
+'use strict';
+const esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+let COLS = 150, ROWS = 38;
+const SB = 28;
+
+/* five families, each with a dark and a light member */
+const FAM = {
+  'One':{dark:{bg:'#282c34',panel:'#21252b',fg:'#abb2bf',dim:'#5c6370',line:'#3e4451',sel:'#2c313a',blue:'#61afef',green:'#98c379',yellow:'#e5c07b',red:'#e06c75',magenta:'#c678dd',cyan:'#56b6c2'},
+         light:{bg:'#fafafa',panel:'#f0f0f1',fg:'#383a42',dim:'#a0a1a7',line:'#dbdbdc',sel:'#e5e5e6',blue:'#4078f2',green:'#50a14f',yellow:'#c18401',red:'#e45649',magenta:'#a626a4',cyan:'#0184bc'}},
+  'Catppuccin':{dark:{bg:'#1e1e2e',panel:'#181825',fg:'#cdd6f4',dim:'#6c7086',line:'#313244',sel:'#45475a',blue:'#89b4fa',green:'#a6e3a1',yellow:'#f9e2af',red:'#f38ba8',magenta:'#cba6f7',cyan:'#94e2d5'},
+         light:{bg:'#eff1f5',panel:'#e6e9ef',fg:'#4c4f69',dim:'#9ca0b0',line:'#ccd0da',sel:'#dce0e8',blue:'#1e66f5',green:'#40a02b',yellow:'#df8e1d',red:'#d20f39',magenta:'#8839ef',cyan:'#179299'}},
+  'Tokyo Night':{dark:{bg:'#1a1b26',panel:'#16161e',fg:'#c0caf5',dim:'#565f89',line:'#292e42',sel:'#283457',blue:'#7aa2f7',green:'#9ece6a',yellow:'#e0af68',red:'#f7768e',magenta:'#bb9af7',cyan:'#7dcfff'},
+         light:{bg:'#e1e2e7',panel:'#d5d6db',fg:'#3760bf',dim:'#848cb5',line:'#c4c8da',sel:'#d0d5e3',blue:'#2e7de9',green:'#587539',yellow:'#8c6c3e',red:'#f52a65',magenta:'#9854f1',cyan:'#007197'}},
+  'Gruvbox':{dark:{bg:'#282828',panel:'#1d2021',fg:'#ebdbb2',dim:'#928374',line:'#3c3836',sel:'#32302f',blue:'#83a598',green:'#b8bb26',yellow:'#fabd2f',red:'#fb4934',magenta:'#d3869b',cyan:'#8ec07c'},
+         light:{bg:'#fbf1c7',panel:'#f2e5bc',fg:'#3c3836',dim:'#7c6f64',line:'#d5c4a1',sel:'#ebdbb2',blue:'#076678',green:'#79740e',yellow:'#b57614',red:'#9d0006',magenta:'#8f3f71',cyan:'#427b58'}},
+  'Solarized':{dark:{bg:'#002b36',panel:'#00212b',fg:'#93a1a1',dim:'#586e75',line:'#0f4350',sel:'#073642',blue:'#268bd2',green:'#859900',yellow:'#b58900',red:'#dc322f',magenta:'#d33682',cyan:'#2aa198'},
+         light:{bg:'#fdf6e3',panel:'#eee8d5',fg:'#586e75',dim:'#93a1a1',line:'#e0dac3',sel:'#e6dfc8',blue:'#268bd2',green:'#859900',yellow:'#b58900',red:'#dc322f',magenta:'#d33682',cyan:'#2aa198'}}
+};
+const FAMS = Object.keys(FAM), MODES = ['sistema','oscuro','claro'];
+const osDark = () => matchMedia('(prefers-color-scheme: dark)').matches;
+function applyTheme(){
+  const dark = S.mode === 'sistema' ? osDark() : S.mode === 'oscuro';
+  const t = FAM[S.fam][dark ? 'dark' : 'light'], r = document.documentElement.style;
+  for (const k in t) r.setProperty('--' + k, t[k]);
+  r.setProperty('--page', dark ? '#16181d' : '#ecebe8'); r.setProperty('--ink', dark ? '#c3c9d4' : '#2c313a'); r.setProperty('--mut', dark ? '#7d8594' : '#6b7280');
+  r.colorScheme = dark ? 'dark' : 'light';
+}
+
+let S;
+function reset(){
+  S = { fam:'One', mode:'oscuro', dirty:true, claude:true, sel:2, focus:1, modal:null, mi:0, msg:'', setRow:0, setFam:0,
+        ws:[
+          {id:'w1', name:'notes', kind:'folder', path:'~/notes', panes:[{t:'zsh'}]},
+          {id:'w2', name:'api', kind:'folder', path:'~/ws/api', panes:[{t:'zsh'}]},
+          {id:'w3', name:'feat/login', kind:'worktree', project:'api', path:'~/ws/api-wt/feat-login', panes:[{t:'zsh'}, {t:'claude', prog:'claude'}]},
+          {id:'w4', name:'infra', kind:'folder', path:'~/ws/infra', panes:[]}
+        ] };
+  applyTheme();
+}
+const DIRTY = ['src/auth.rs', 'TODO.md', 'logo.bin'];
+
+/* ---- the character grid ---- */
+let g;
+const grid = () => ({cells:Array.from({length:ROWS}, () => Array.from({length:COLS}, () => [' ', '']))});
+const put = (x, y, text, cls = '') => { if (y < 0 || y >= ROWS) return; [...text].forEach((ch, i) => { const cx = x + i; if (cx >= 0 && cx < COLS) g.cells[y][cx] = [ch, cls]; }); };
+const tint = (x, y, w, cls) => { for (let i = 0; i < w; i++) if (x + i < COLS && y < ROWS) g.cells[y][x + i] = [g.cells[y][x + i][0], (g.cells[y][x + i][1] + ' ' + cls).trim()]; };
+const clip = (t, n) => { const a = [...t]; return a.length <= n ? t : a.slice(0, Math.max(0, n - 1)).join('') + '…'; };
+function box(x, y, w, h, title, cls, tcls){
+  put(x, y, '╭' + '─'.repeat(w - 2) + '╮', cls); put(x, y + h - 1, '╰' + '─'.repeat(w - 2) + '╯', cls);
+  for (let i = 1; i < h - 1; i++){ put(x, y + i, '│', cls); put(x + w - 1, y + i, '│', cls); }
+  if (title) put(x + 2, y, ' ' + title + ' ', tcls || 'b');
+}
+function paint(){
+  document.getElementById('scr').innerHTML = g.cells.map(r => { let out = '', cur = null, buf = '';
+    for (const [ch, cls] of r){ if (cls !== cur){ if (buf) out += cur ? `<span class="${cur}">${buf}</span>` : buf; buf = ''; cur = cls; } buf += esc(ch); }
+    if (buf) out += cur ? `<span class="${cur}">${buf}</span>` : buf; return out; }).join('\n');
+}
+function modalBox(w, lines, title, tcls){
+  const h = lines.length + 4, bx = SB + 1 + Math.floor((COLS - SB - 1 - w) / 2), by = 5;
+  for (let r = 0; r < h; r++) put(bx, by + r, ' '.repeat(w), 'bg-panel');
+  box(bx, by, w, h, title, tcls || 'c-yellow', 'b');
+  lines.forEach(([t, c], i) => put(bx + 3, by + 2 + i, clip(t, w - 6), (c || '') + ' bg-panel'));
+  return [bx, by, w, h];
+}
+
+const cur = () => S.ws[S.sel];
+const running = p => p && p.prog;
+function draw(){
+  g = grid();
+  for (let y = 0; y < ROWS - 1; y++) put(SB - 1, y, '│', 'c-line');
+  put(1, 0, 'demo', 'b d'); put(SB - 14, 0, '^␣ s sessions', 'd');
+  S.ws.forEach((w, i) => { const y = 2 + i, on = i === S.sel, name = w.kind === 'worktree' ? '↳ ' + w.name : w.name;
+    put(0, y, String(i + 1), 'd'); put(2, y, w.panes.length ? '●' : '○', w.panes.length ? 'c-green' : 'd');
+    put(4, y, clip(name, SB - 10), on ? 'b c-blue' : (w.panes.length ? '' : 'd')); if (on) tint(0, y, SB - 1, 'bg-sel'); });
+  put(1, ROWS - 3, 'x cerrar panel', 'd'); put(1, ROWS - 2, 'X workspace · , ajustes', 'd');
+  const w = cur(), px = SB + 1, pw = COLS - px;
+  if (w){
+    put(px + 1, 0, w.kind === 'worktree' ? w.project + '/' : '', 'd'); put(px + 1 + (w.kind === 'worktree' ? w.project.length + 1 : 0), 0, w.name, 'b c-blue');
+    put(COLS - 1 - w.path.length, 0, w.path, 'd');
+    const n = w.panes.length, h = ROWS - 2;
+    if (!n) put(px + 2, 3, 'este workspace no tiene paneles · n abre uno', 'd');
+    else {
+      const half = Math.floor(pw / 2), rects = n === 1 ? [[0, pw]] : [[0, half], [half, pw - half]];
+      w.panes.forEach((p, i) => { const [dx, bw] = rects[i], x0 = px + dx, focused = i === S.focus && !S.modal;
+        box(x0, 1, bw, h, p.t, focused ? 'c-blue' : 'c-line', focused ? 'b c-blue' : 'b');
+        if (p.prog){ put(x0 + 2, 2, '▌ ~/ws/api-wt/feat-login ⎇ feat/login', 'c-yellow'); put(x0 + 4, 3, '❯ ' + p.prog, 'b'); put(x0 + 4, 4, '✻ Pensando…', 'c-mag'); }
+        else { put(x0 + 2, 2, '▌ ' + w.path, 'c-green'); put(x0 + 4, 3, '❯ git status', 'b'); put(x0 + 4, 4, 'On branch main · nada por commitear', 'd'); put(x0 + 2, h - 2, '❯ ', 'c-green b'); }
+      });
+    }
+  }
+  for (let x = 0; x < COLS; x++) g.cells[ROWS - 1][x] = [' ', 'bg-panel'];
+  const mode = S.modal ? (S.modal.k === 'set' ? [' AJUSTES ', 'chip-blue b'] : [' PREGUNTA ', 'chip-yellow b']) : [' MOVE ', 'chip-blue b'];
+  put(0, ROWS - 1, mode[0], mode[1]);
+  const hint = S.msg ? S.msg : S.modal ? modalHint() : 'j/k workspace · h/l panel · x cerrar panel · X cerrar workspace · , ajustes · q salir';
+  put(mode[0].length + 1, ROWS - 1, clip(hint, COLS - 14), S.msg ? 'c-green bg-panel' : 'd bg-panel');
+  if (S.modal) drawModal();
+  paint();
+  document.getElementById('keys').textContent = S.modal ? modalHint() : 'j/k workspace · h/l panel · x cerrar panel · X cerrar workspace · , ajustes';
+}
+function modalHint(){
+  const m = S.modal;
+  if (m.k === 'set') return 'j/k tema · m modo · ↵ elegir · esc cerrar';
+  if (m.k === 'ws') return cur().kind === 'worktree' ? 'y cerrar el workspace · d quitar el worktree · esc cancelar' : 'y cerrar · esc cancelar';
+  if (m.k === 'rm') return S.dirty ? 'c cerrar solo el workspace · esc volver' : 'y quitar · esc cancelar';
+  return 'y cerrar · esc cancelar';
+}
+function drawModal(){
+  const m = S.modal, w = cur();
+  if (m.k === 'pane'){
+    const p = w.panes[S.focus];
+    modalBox(62, [[`${p.prog} sigue corriendo en este panel.`, ''], ['Cerrarlo lo detiene.', 'd'], ['', ''], ['y cerrar · esc cancelar', 'd']], `Cerrar ${p.t}?`);
+  } else if (m.k === 'ws'){
+    const progs = w.panes.filter(running).map(p => p.prog);
+    const lines = [[`Se ${w.panes.length === 1 ? 'termina su panel' : 'terminan sus ' + w.panes.length + ' paneles'}${progs.length ? ' (' + progs.join(', ') + ' sigue corriendo)' : ''}.`, '']];
+    lines.push([w.kind === 'worktree' ? 'El worktree y su carpeta se quedan en el disco.' : 'La carpeta se queda en el disco.', 'd'], ['', '']);
+    lines.push(w.kind === 'worktree' ? ['y cerrar el workspace · d quitar el worktree · esc cancelar', 'd'] : ['y cerrar · esc cancelar', 'd']);
+    modalBox(66, lines, `Cerrar ${w.name}?`);
+  } else if (m.k === 'rm'){
+    if (S.dirty){
+      const lines = [[`Tiene ${DIRTY.length} archivos sin commitear:`, '']];
+      DIRTY.forEach(f => lines.push(['  M ' + f, 'c-yellow']));
+      lines.push(['', ''], ['Commitéalos o descártalos en un panel: no se borra nada a la fuerza.', 'd'], ['La rama y sus commits se quedan.', 'd'], ['', ''], ['c cerrar solo el workspace · esc volver', 'd']);
+      modalBox(78, lines, `No se puede quitar ${w.name}`, 'c-red');
+    } else {
+      modalBox(70, [[`Se borra la carpeta ${w.path}.`, ''], ['No hay cambios sin commitear. La rama feat/login se queda.', 'd'], ['', ''], ['y quitar · esc cancelar', 'd']], `Quitar el worktree ${w.name}?`, 'c-red');
+    }
+  } else if (m.k === 'set'){
+    const rows = 5 + FAMS.length, lines = [];
+    lines.push([`Modo   ${MODES.map((x, i) => (MODES[i] === S.mode ? '[' + x + ']' : ' ' + x + ' ')).join('  ')}`, S.setRow === 0 ? 'c-blue b' : '']);
+    lines.push(['', '']);
+    FAMS.forEach((f, i) => { const on = f === S.fam, at = i === S.setFam; lines.push([`${at ? '❯' : ' '} ${on ? '●' : '○'} ${f}`, (at ? 'c-blue b' : '')]); });
+    lines.push(['', ''], ['Se aplica al momento y se guarda en settings.json.', 'd']);
+    const [bx, by, bw] = modalBox(58, lines, 'ajustes · tema');
+    // swatches
+    const dark = S.mode === 'sistema' ? osDark() : S.mode === 'oscuro';
+    const sw = [['blue', 'c-blue'], ['green', 'c-green'], ['yellow', 'c-yellow'], ['red', 'c-red'], ['magenta', 'c-mag'], ['cyan', 'c-cyan']];
+    sw.forEach(([, c], i) => put(bx + bw - 3 - sw.length * 2 + i * 2, by + 4 + S.setFam, '██', c + ' bg-panel'));
+  }
+}
+
+/* ---- behaviour ---- */
+const flash = t => { S.msg = t; draw(); clearTimeout(flash.t); flash.t = setTimeout(() => { S.msg = ''; draw(); }, 1700); };
+function closePane(){
+  const w = cur(), p = w.panes[S.focus];
+  if (!p) return flash('no hay panel enfocado: ↵ abre el workspace');
+  if (running(p)) { S.modal = {k:'pane'}; draw(); return; }
+  doClosePane();
+}
+function doClosePane(){ const w = cur(); const t = w.panes[S.focus].t; w.panes.splice(S.focus, 1); S.focus = Math.max(0, Math.min(S.focus, w.panes.length - 1)); S.modal = null; flash('panel «' + t + '» cerrado'); }
+function key(e){
+  const k = e.key, m = S.modal;
+  if (m){
+    if (k === 'Escape'){ S.modal = (m.k === 'rm') ? {k:'ws'} : null; draw(); return true; }
+    if (m.k === 'pane' && k === 'y'){ doClosePane(); return true; }
+    if (m.k === 'ws'){
+      if (k === 'y'){ const w = cur(); S.ws = S.ws.filter(x => x !== w); S.sel = Math.min(S.sel, S.ws.length - 1); S.focus = 0; S.modal = null; flash('workspace «' + w.name + '» cerrado · la carpeta se queda'); return true; }
+      if (k === 'd' && cur().kind === 'worktree'){ S.modal = {k:'rm'}; draw(); return true; }
+    }
+    if (m.k === 'rm'){
+      if (!S.dirty && k === 'y'){ const w = cur(); S.ws = S.ws.filter(x => x !== w); S.sel = Math.min(S.sel, S.ws.length - 1); S.focus = 0; S.modal = null; flash('worktree «' + w.name + '» quitado · la rama se queda'); return true; }
+      if (S.dirty && k === 'c'){ const w = cur(); S.ws = S.ws.filter(x => x !== w); S.sel = Math.min(S.sel, S.ws.length - 1); S.focus = 0; S.modal = null; flash('workspace cerrado · no se borró nada'); return true; }
+    }
+    if (m.k === 'set'){
+      if (k === 'j' || k === 'ArrowDown'){ S.setFam = Math.min(S.setFam + 1, FAMS.length - 1); draw(); return true; }
+      if (k === 'k' || k === 'ArrowUp'){ S.setFam = Math.max(S.setFam - 1, 0); draw(); return true; }
+      if (k === 'Enter'){ S.fam = FAMS[S.setFam]; applyTheme(); draw(); return true; }
+      if (k === 'm' || k === 'l' || k === 'ArrowRight'){ S.mode = MODES[(MODES.indexOf(S.mode) + 1) % 3]; applyTheme(); draw(); return true; }
+      if (k === 'h' || k === 'ArrowLeft'){ S.mode = MODES[(MODES.indexOf(S.mode) + 2) % 3]; applyTheme(); draw(); return true; }
+    }
+    return ['y','d','c','j','k','m','h','l','Enter'].includes(k);
+  }
+  const w = cur();
+  if (k === 'j'){ S.sel = Math.min(S.sel + 1, S.ws.length - 1); S.focus = 0; }
+  else if (k === 'k'){ S.sel = Math.max(S.sel - 1, 0); S.focus = 0; }
+  else if (k === 'l'){ S.focus = Math.min(S.focus + 1, w.panes.length - 1); }
+  else if (k === 'h'){ S.focus = Math.max(S.focus - 1, 0); }
+  else if (k === 'x'){ closePane(); return true; }
+  else if (k === 'X'){ if (!w) return true; S.modal = {k:'ws'}; }
+  else if (k === ',' ){ S.modal = {k:'set'}; S.setFam = FAMS.indexOf(S.fam); }
+  else return false;
+  draw(); return true;
+}
+const scr = document.getElementById('scr');
+scr.addEventListener('keydown', e => { if (e.ctrlKey || e.metaKey) return; if (key(e)) e.preventDefault(); });
+scr.addEventListener('click', () => scr.focus());
+document.getElementById('evClean').onclick = () => { S.dirty = !S.dirty; flash(S.dirty ? 'el worktree tiene 3 archivos sin commitear' : 'el worktree está limpio'); scr.focus(); };
+document.getElementById('evRun').onclick = () => { const w = S.ws.find(x => x.id === 'w3'); if (w){ const p = w.panes.find(q => q.t === 'claude') || w.panes[1]; if (p){ p.prog = p.prog ? null : 'claude'; flash(p.prog ? 'claude corre' : 'claude ya no corre'); } } scr.focus(); };
+document.getElementById('evSet').onclick = () => { S.modal = {k:'set'}; S.setFam = FAMS.indexOf(S.fam); draw(); scr.focus(); };
+document.getElementById('evReset').onclick = () => { reset(); draw(); scr.focus(); };
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (S.mode === 'sistema'){ applyTheme(); draw(); } });
+reset(); draw();
+})();
+</script>
