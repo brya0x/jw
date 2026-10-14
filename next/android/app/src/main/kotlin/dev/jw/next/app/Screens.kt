@@ -77,8 +77,11 @@ import dev.jw.next.client.HomeItem
 import dev.jw.next.client.HomeKind
 import dev.jw.next.client.HomeRow
 import dev.jw.next.client.Navigator
+import dev.jw.next.client.RemoveSheet
 import dev.jw.next.client.Screen
 import dev.jw.next.client.Tone
+import dev.jw.next.client.WorkspaceTarget
+import dev.jw.next.client.WsAction
 import dev.jw.next.client.avisos
 import dev.jw.next.client.byUrgency
 import dev.jw.next.client.closeSheet
@@ -86,6 +89,10 @@ import dev.jw.next.client.homeItems
 import dev.jw.next.client.shown
 import dev.jw.next.client.shownName
 import dev.jw.next.client.mark
+import dev.jw.next.client.menuTitle
+import dev.jw.next.client.removeSheet
+import dev.jw.next.client.target
+import dev.jw.next.client.workspaceMenu
 import dev.jw.next.client.repo
 import dev.jw.next.client.outputText
 import dev.jw.next.client.shortPath
@@ -212,9 +219,10 @@ fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, set: (Clie
     val session = remember(version) { source.session() }
     val waiting = avisos(session, state.seen)
     val onAvisos = state.screen == Screen.Avisos
-    // A long press on a workspace: its sheet, then the field of its name (REQ-183, REQ-184).
-    var menu by remember { mutableStateOf<Naming.Workspace?>(null) }
+    // A long press on a workspace: its sheet, then the field of its name or the question before it is let go of (REQ-183, REQ-184, REQ-227).
+    var menu by remember { mutableStateOf<WorkspaceTarget?>(null) }
     var naming by remember { mutableStateOf<Naming?>(null) }
+    var removing by remember { mutableStateOf<RemoveSheet?>(null) }
     // A long press on the title, or the `+`: a folder to open (REQ-201); a worktree is made from a workspace (REQ-213).
     var newMenu by remember { mutableStateOf(false) }
     var worktree by remember { mutableStateOf<WorktreeStart?>(null) }
@@ -227,16 +235,18 @@ fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, set: (Clie
             })
             Box(Modifier.weight(1f)) {
                 if (onAvisos) AvisosList(waiting, nav, state, set) else WorkspaceList(homeItems(session, state.seen), nav, state, set, create = { newMenu = true }) { id ->
-                    session.workspaces.firstOrNull { it.id == id }?.let { menu = Naming.Workspace(it.id, it.shown()) }
+                    session.workspaces.firstOrNull { it.id == id }?.let { menu = session.target(it) }
                 }
             }
         }
         menu?.let { target ->
-            val ws = session.workspaces.firstOrNull { it.id == target.id }
-            val repo = ws?.repo()
-            WorkspaceMenuSheet(target, dismiss = { menu = null }, worktree = repo?.let { r -> { worktree = WorktreeStart(r, ws.branch); menu = null } }) { naming = target; menu = null }
+            WorkspaceMenuSheet(target, dismiss = { menu = null }) { action ->
+                menu = null
+                choose(target, action, rename = { naming = Naming.Workspace(target.id, target.shown) }, newWorktree = { worktree = WorktreeStart(it, null) }, remove = { removing = it })
+            }
         }
         naming?.let { RenameSheet(source, it) { naming = null } }
+        removing?.let { RemoveWorkspaceSheet(source, it, cancel = { removing = null }) { removing = null } }
         if (newMenu) NewWorkspaceSheet(dismiss = { newMenu = false }) { newMenu = false; set(nav.show(state, Screen.Folders)) }
         worktree?.let { WorktreeSheet(source, it, state, nav, set) { worktree = null } }
     }
@@ -364,6 +374,7 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
     // before a pane is closed (REQ-148 to REQ-150): the sheet, what the PC said, and whether it is answering.
     var paneMenu by remember(screen.id) { mutableStateOf<PaneSummary?>(null) }
     var wsMenu by remember(screen.id) { mutableStateOf(false) }
+    var removing by remember(screen.id) { mutableStateOf<RemoveSheet?>(null) }
     var worktree by remember(screen.id) { mutableStateOf<WorktreeStart?>(null) }
     var naming by remember(screen.id) { mutableStateOf<Naming?>(null) }
     var closing by remember(screen.id) { mutableStateOf<CloseSheet?>(null) }
@@ -446,10 +457,14 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
         }
     }
     if (wsMenu && ws != null) {
-        val target = Naming.Workspace(ws.id, shownName(ws.name, ws.kind, ws.branch))
-        WorkspaceMenuSheet(target, dismiss = { wsMenu = false }, worktree = ws.project?.let { r -> { worktree = WorktreeStart(r, ws.branch); wsMenu = false } }) { naming = target; wsMenu = false }
+        val target = ws.target()
+        WorkspaceMenuSheet(target, dismiss = { wsMenu = false }) { action ->
+            wsMenu = false
+            choose(target, action, rename = { naming = Naming.Workspace(target.id, target.shown) }, newWorktree = { worktree = WorktreeStart(it, null) }, remove = { removing = it })
+        }
     }
     worktree?.let { WorktreeSheet(source, it, state, nav, set) { worktree = null } }
+    removing?.let { RemoveWorkspaceSheet(source, it, cancel = { removing = null }) { removing = null; set(nav.back(state)) } }
     naming?.let { RenameSheet(source, it) { naming = null } }
     closing?.let { sheet ->
         ClosePaneSheet(sheet, closeError, closeBusy, cancel = { closing = null }) {
@@ -486,15 +501,45 @@ private fun BoxScope.PaneMenuSheet(pane: PaneSummary, dismiss: () -> Unit, renam
     }
 }
 
-/** What a long press on a workspace offers (REQ-183, REQ-201): a worktree of its repository and its name; closing it is the PC's. */
+/** What a long press on a workspace offers, one sheet for each kind (REQ-183, REQ-227): [pick] gets the choice. */
 @Composable
-internal fun BoxScope.WorkspaceMenuSheet(workspace: Naming.Workspace, dismiss: () -> Unit, worktree: (() -> Unit)?, rename: () -> Unit) {
+internal fun BoxScope.WorkspaceMenuSheet(target: WorkspaceTarget, dismiss: () -> Unit, pick: (WsAction) -> Unit) {
     Sheet(dismiss) {
-        Mono("workspace «${workspace.shown}»", Palette.fg, 14, bold = true, lines = 2)
-        if (worktree != null) SheetAction("w", "worktree nuevo", click = worktree)
-        else SheetAction("w", "worktree nuevo · no es un repositorio git", Palette.dim, enabled = false) {}
-        SheetAction("✎", "renombrar el workspace", click = rename)
-        Mono("Cerrar un workspace o quitar un worktree se hace en el PC.", Palette.dim, 12, lines = 3)
+        Mono(menuTitle(target), Palette.fg, 14, bold = true, lines = 2)
+        workspaceMenu(target.kind, target.repo).forEach { item ->
+            val color = if (item.danger) Palette.red else Palette.fg
+            SheetAction(item.glyph, item.label + (item.note?.let { " · $it" } ?: ""), color) { pick(item.action) }
+        }
+    }
+}
+
+/** What a choice of the sheet of a workspace leads to: the field of its name, a worktree to make, or the question before a removal. */
+private fun choose(target: WorkspaceTarget, action: WsAction, rename: () -> Unit, newWorktree: (String) -> Unit, remove: (RemoveSheet) -> Unit) {
+    when (action) {
+        WsAction.Rename -> rename()
+        WsAction.NewWorktree -> target.repo?.let(newWorktree)
+        else -> removeSheet(target, action)?.let(remove)
+    }
+}
+
+/** The question before a workspace is let go of (REQ-228): what it does, what the PC says when it refuses, and whether it is answering. */
+@Composable
+private fun BoxScope.RemoveWorkspaceSheet(source: AppSource, sheet: RemoveSheet, cancel: () -> Unit, done: () -> Unit) {
+    var busy by remember(sheet) { mutableStateOf(false) }
+    var error by remember(sheet) { mutableStateOf<String?>(null) }
+    Sheet(cancel) {
+        Mono(sheet.heading, Palette.fg, 14, bold = true, lines = 3)
+        Mono(sheet.body, Palette.dim, 12, lines = 8)
+        if (error != null) Mono(error.orEmpty(), Palette.red, 12, lines = 5)
+        SheetAction("×", if (busy) "quitando…" else sheet.action, Palette.red, enabled = !busy) {
+            busy = true
+            error = null
+            source.removeWorkspace(sheet.workspace, sheet.mode.removesWorktree) { result ->
+                busy = false
+                result.onSuccess { done() }.onFailure { error = it.message ?: "el PC no pudo quitar el workspace" }
+            }
+        }
+        Mono("cancelar", Palette.fg, 14, modifier = Modifier.fillMaxWidth().clickable(onClick = cancel).padding(vertical = 12.dp))
     }
 }
 

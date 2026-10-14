@@ -180,6 +180,10 @@ abstract class ProtocolSource : AppSource() {
         }
     }
 
+    override fun removeWorkspace(workspace: Id, removeWorktree: Boolean, reply: (Result<Unit>) -> Unit) {
+        command(Cmd.RemoveWorkspace(workspace, removeWorktree)) { reply(it.done("el PC no pudo quitar el workspace")) }
+    }
+
     override fun closePane(pane: Id, reply: (Result<Unit>) -> Unit) {
         command(Cmd.ClosePane(pane)) { reply(it.done("el PC no pudo cerrar el panel")) }
     }

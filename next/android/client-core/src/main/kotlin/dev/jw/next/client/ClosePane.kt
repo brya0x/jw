@@ -13,7 +13,7 @@ data class CloseSheet(val pane: Id, val title: String, val running: String?) {
     val body: String
         get() {
             val effect = if (running != null) "$running sigue corriendo en este panel. Cerrarlo lo detiene." else "Cerrarlo termina su shell."
-            return "$effect El workspace se queda, aunque sea sin paneles. Cerrar un workspace o quitar un worktree se hace en el PC."
+            return "$effect El workspace se queda, aunque sea sin paneles."
         }
 }
 

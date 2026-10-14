@@ -73,6 +73,11 @@ interface NodeSource {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
     }
 
+    /** Let go of a workspace; with [removeWorktree] a worktree's folder goes too. [reply] gets the PC's message when it refuses (git, for a worktree with changes). */
+    fun removeWorkspace(workspace: Id, removeWorktree: Boolean, reply: (Result<Unit>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
     /** Close a pane (its shell ends); [reply] gets the daemon's message when it refuses. */
     fun closePane(pane: Id, reply: (Result<Unit>) -> Unit) {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))

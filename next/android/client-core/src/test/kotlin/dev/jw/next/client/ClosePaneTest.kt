@@ -35,7 +35,7 @@ class ClosePaneTest {
         assertEquals("nvim", sheet.running)
         assertTrue(sheet.body.startsWith("nvim sigue corriendo en este panel. Cerrarlo lo detiene."), sheet.body)
         assertTrue("El workspace se queda, aunque sea sin paneles." in sheet.body)
-        assertTrue("Cerrar un workspace o quitar un worktree se hace en el PC." in sheet.body)
+        assertTrue("Cerrar un workspace" !in sheet.body, "closing a workspace has its own sheet now")
         // The second is a shell with a command still going.
         assertEquals("cargo", closeSheet(pc, panes[1].id)!!.running)
     }

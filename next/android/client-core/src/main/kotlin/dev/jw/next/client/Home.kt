@@ -81,13 +81,13 @@ fun WorkspaceSummary.shown(): String = shownName(name, kind, branch)
  * A folder is a root when it says so (`project` is set) or, for a daemon that does not say it,
  * when a worktree names it as its repository.
  */
-private fun Node.Session.homeKind(w: WorkspaceSummary): HomeKind {
-    val named = workspaces.any { it.kind == WorkspaceKind.Worktree && it.project == w.path }
-    return when {
-        w.kind == WorkspaceKind.Worktree -> HomeKind.Worktree
-        w.project != null || named -> HomeKind.Root
-        else -> HomeKind.Folder
-    }
+internal fun Node.Session.homeKind(w: WorkspaceSummary): HomeKind =
+    homeKind(w.kind, w.project, namedAsRepo = workspaces.any { it.kind == WorkspaceKind.Worktree && it.project == w.path })
+
+internal fun homeKind(kind: WorkspaceKind, project: String?, namedAsRepo: Boolean): HomeKind = when {
+    kind == WorkspaceKind.Worktree -> HomeKind.Worktree
+    project != null || namedAsRepo -> HomeKind.Root
+    else -> HomeKind.Folder
 }
 
 fun homeRows(session: Node.Session, seen: Seen): List<HomeRow> = session.workspaces.mapIndexed { i, w ->
