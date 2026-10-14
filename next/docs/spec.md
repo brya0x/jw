@@ -327,14 +327,14 @@ Corrections to the model: the level 0 document is smaller than assumed (3.9 KB, 
 
 ## Open questions
 - OPEN-10 Several sessions in one daemon (RAT-16): not built; reconsider when a person routinely has more than about 30 workspaces, or needs to separate contexts that share one attention list.
-- OPEN-9 The viewer of files and Markdown (the old jw's reader): opening a file from a diff, and Markdown rendered in both clients. Deferred by the user (2026-10-14): it is the 7th of what is left (see *What is left*), to be worked on later and not now.
+- OPEN-9 The viewer of files and Markdown (the old jw's reader): opening a file from a diff, and Markdown rendered in both clients. Deferred by the user (2026-10-14): it is the last of what is left (see *What is left*), to be worked on much later and not now.
 - OPEN-8 Whether a phone may be read-only (one switch, or per device) and whether a device secret should expire.
 - OPEN-1 (closed) Retention: how many revisions per node the daemon keeps for resume; it is 256 (`RETAIN` in `crates/daemon/src/core.rs`).
 - OPEN-3 The permission and question screens inside the claude pane still offer their options; whether they change too is the user's call (the prototype leaves them).
 - OPEN-4 (closed) The terminal client's workspace list has its prototype, `docs/prototypes/tui.html` (N11).
 - OPEN-6 Mirroring the shell's line buffer into the clients' editors (what you type at a terminal shows in the phone's editor) and the other way round.
 - OPEN-7 History and completion in the editors: from the shell, or kept by the client.
-- OPEN-5 Where the special keys (`esc`, `tab`, arrows, `^C` beyond the stop button, `^D`, `^R`, …) go on the phone now that the key row is removed (the user: think about it later).
+- OPEN-5 Where the special keys (`esc`, `tab`, arrows, `^C` beyond the stop button, `^D`, `^R`, …) go on the phone now that the key row is removed (the user: think about it later; it is among the last things to do).
 - OPEN-2 (closed) Whether a `pane` screen needs styled cells: it stays text; styled output lives in the `blocks` node (RAT-8).
 
 ## Corrections
@@ -419,14 +419,15 @@ The shapes REQ-91 to REQ-103 name (nodes, commands, fields) are enforced by N31 
 | N42 ✓ `902bff6` | the terminal client turns the link on and pairs a phone (`m`); the same grey bars for a pane that is opening | 159–166, 168 | `crates/jwn/src/tui/phone.rs`, `crates/jwn/src/tui.rs` |
 
 ## What is left
-In this order, which is proposed except for the viewer of files and Markdown, whose place (7th, after everything else) the user chose on 2026-10-14 because he does not want to work on Markdown yet. Each becomes a part (N35 onwards) with its REQs when it starts; a part with a screen starts from an approved prototype.
+In this order, which is proposed. The user chose on 2026-10-14 that the daily flow of the terminal client comes next, that the special keys of the phone are among the last things, and that the viewer of files and Markdown is the very last (he does not want to work on Markdown yet). Each becomes a part (N43 onwards) with its REQs when it starts; a part with a screen starts from an approved prototype. What is missing was found by setting the old jw's README against what `next/` does today.
 
 | # | What |
 |---|---|
-| 1 | ✓ Clean the spec the `spec-reviewer` found wanting: the enforcement notes moved below the fold, REQ-54, 57, 59 and 60 split (REQ-122 to REQ-127, with the blocks node's id lifecycle), the stale text fixed. Still long for one claim: REQ-44, 65, 69, 87, 100, 107 |
-| 2 | ✓ CI for `next/`: `.github/workflows/next.yml` (REQ-128). Written and its commands run locally and on Linux in a container, but not yet run by GitHub, since nothing is pushed |
-| 3 | ✓ The producers of attention that did not exist: claude's hooks (permission, question, plan, agent done) N36, and GitHub (merged, CI failed) N37 |
-| 4 | ✓ Parity of what the old jw let a person do, as `docs/prototypes/tui-manage.html`, `tui-phone.html` and `mobile.html`: closing panes, workspaces and worktrees (N39, N41), the look (N40, N41) and pairing a phone from the terminal (N42). Sessions were decided against for now (RAT-16, OPEN-10) |
-| 5 | Where `esc`, `tab`, the arrows and `^C` go on the phone (OPEN-5) |
-| 6 | The swap day: delete the old jw, move `next/` to the root, rename `jwn` to `jw`, decide the Android application id |
-| 7 | The viewer of files and Markdown (OPEN-9), for both clients; until it is done, what the old jw's reader did is not in `next/` |
+| 1 to 4 | ✓ Spec cleanup, CI for `next/`, the producers of attention (claude's hooks, GitHub) and the parity of closing, the look and pairing a phone from the terminal (N35 to N42). Sessions were decided against for now (RAT-16, OPEN-10) |
+| 5 | **The daily flow of the terminal client**, in parts: (a) open a folder (`o`), make a worktree (`w`) and open a pane with a program (`t`: shell, claude, nvim, a command), which the daemon already supports and the client has no key for; (b) rename a workspace (`r`), sync a worktree with its base (`s`), name a pane (`n`), a pane full screen (`f`), and `X` asking for the worktree's name when work would be lost; (c) moving between workspaces (arrows, `tab`, numbers, the finder) and a header that follows the focused pane's folder and branch; (d) the panes' layout: splits, moving them, resizing by dragging; (e) history above the screen and selecting and copying with the mouse |
+| 6 | Projects: `.jw.toml` (where worktrees go, branch template, setup commands, the agent), the layout a worktree opens with, ports per worktree and `.env` files |
+| 7 | What agents use: the `jw` commands (`ls`, `read`, `worktree`, `prompt`, `pane`, `skill install`) and the review of a pull request (`^␣ R`) |
+| 8 | The history of each pane and its blocks surviving a daemon restart (today a restarted daemon gives new shells with an empty screen) |
+| 9 | The swap day: delete the old jw, move `next/` to the root, rename `jwn` to `jw`, decide the Android application id |
+| 10 | Where `esc`, `tab`, the arrows and `^C` go on the phone (OPEN-5) |
+| 11 | The viewer of files and Markdown (OPEN-9), for both clients; until it is done, what the old jw's reader did is not in `next/` |
