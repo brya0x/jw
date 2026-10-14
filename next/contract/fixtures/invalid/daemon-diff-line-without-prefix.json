@@ -1,0 +1,35 @@
+{
+  "t": "snapshot",
+  "node": {
+    "id": "00000000-0000-4000-8000-0000000000d2",
+    "type": "diff",
+    "v": 1,
+    "epoch": "00000000-0000-4000-8000-000000000001",
+    "rev": 3,
+    "attention": [],
+    "workspace": "00000000-0000-4000-8000-0000000000b1",
+    "scope": "general",
+    "state": "ok",
+    "files": [
+      {
+        "path": "a.rs",
+        "status": "modified",
+        "added": 1,
+        "deleted": 0,
+        "hash": "3f9a1c0e7b2d4a58",
+        "hunks": [
+          {
+            "context": "",
+            "old_start": 1,
+            "old_lines": 0,
+            "new_start": 1,
+            "new_lines": 1,
+            "lines": [
+              "added with no prefix"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

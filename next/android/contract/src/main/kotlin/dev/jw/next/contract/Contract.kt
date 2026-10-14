@@ -164,6 +164,22 @@ sealed interface Cmd {
     @Serializable @SerialName("mark_seen")
     data class MarkSeen(val node: Id, val rev: Long) : Cmd
 
+    /** Make (or find) the `diff` node of [workspace] for [scope]; [commit] names the commit of the `commit` scope. The result is `{node}`. */
+    @Serializable @SerialName("open_diff")
+    data class OpenDiff(val workspace: Id, val scope: DiffScope, val commit: String? = null) : Cmd
+
+    /** Make (or find) the `commits` node of [workspace]. The result is `{node}`. */
+    @Serializable @SerialName("open_commits")
+    data class OpenCommits(val workspace: Id) : Cmd
+
+    /** Read a `diff` node again now. */
+    @Serializable @SerialName("refresh_diff")
+    data class RefreshDiff(val node: Id) : Cmd
+
+    /** Record that [path] of a `diff` node was looked at (or forget it), for every client. */
+    @Serializable @SerialName("set_viewed")
+    data class SetViewed(val node: Id, val path: String, val viewed: Boolean) : Cmd
+
     /** Turn the phone link on and make a pairing token; the result carries the link to pair from. */
     @Serializable @SerialName("mobile_start")
     data object MobileStart : Cmd
@@ -341,7 +357,112 @@ sealed interface Node {
         val mode: BlocksMode,
         val blocks: List<Block>,
     ) : Node
+
+    /** A workspace's changes: its files, hunk by hunk, against a scope. */
+    @Serializable @SerialName("diff")
+    data class Diff(
+        override val id: Id,
+        override val v: Int,
+        override val epoch: String,
+        override val rev: Long,
+        override val attention: List<Attention>,
+        val workspace: Id,
+        val scope: DiffScope,
+        /** The commit of the `commit` scope. */
+        val commit: String? = null,
+        /** What `general` compares with, such as `origin/main`. */
+        val base: String? = null,
+        val state: DiffState,
+        /** Over 2 MiB: the files are listed with no hunks. */
+        @SerialName("too_large") val tooLarge: Boolean = false,
+        /** Files left out of a too large diff. */
+        val omitted: Int? = null,
+        val files: List<DiffFile>,
+    ) : Node
+
+    /** The commits of a workspace's branch, newest first. */
+    @Serializable @SerialName("commits")
+    data class Commits(
+        override val id: Id,
+        override val v: Int,
+        override val epoch: String,
+        override val rev: Long,
+        override val attention: List<Attention>,
+        val workspace: Id,
+        val base: String? = null,
+        /** Older commits exist than the ones listed. */
+        val more: Boolean = false,
+        val commits: List<CommitInfo>,
+    ) : Node
 }
+
+@Serializable
+enum class DiffScope {
+    @SerialName("uncommitted") Uncommitted,
+    @SerialName("general") General,
+    @SerialName("commit") Commit,
+}
+
+@Serializable
+enum class DiffState {
+    @SerialName("ok") Ok,
+    /** `origin` has no default branch: a `general` diff has nothing to compare with. */
+    @SerialName("no_base") NoBase,
+}
+
+@Serializable
+enum class FileStatus {
+    @SerialName("added") Added,
+    @SerialName("modified") Modified,
+    @SerialName("deleted") Deleted,
+    @SerialName("renamed") Renamed,
+    @SerialName("untracked") Untracked,
+}
+
+@Serializable
+enum class Seen {
+    /** Looked at, and unchanged since. */
+    @SerialName("yes") Yes,
+    /** Looked at, but the file differs now. */
+    @SerialName("changed") Changed,
+}
+
+@Serializable
+data class DiffFile(
+    val path: String,
+    @SerialName("old_path") val oldPath: String? = null,
+    val status: FileStatus,
+    val binary: Boolean = false,
+    /** Why the daemon did not read the file (`symlink`, `too_big`). */
+    val unreadable: String? = null,
+    val added: Int,
+    val deleted: Int,
+    /** Fingerprint of the path, status and lines; a mark of having looked is only good while it stays. */
+    val hash: String,
+    val seen: Seen? = null,
+    val hunks: List<Hunk>,
+)
+
+@Serializable
+data class Hunk(
+    /** What git prints after the second `@@`, usually the enclosing function. */
+    val context: String,
+    @SerialName("old_start") val oldStart: Int,
+    @SerialName("old_lines") val oldLines: Int,
+    @SerialName("new_start") val newStart: Int,
+    @SerialName("new_lines") val newLines: Int,
+    /** Each line prefixed with `+` (added), `-` (deleted) or a space (unchanged). */
+    val lines: List<String>,
+)
+
+@Serializable
+data class CommitInfo(
+    val sha: String,
+    val short: String,
+    val subject: String,
+    /** Commit time in Unix seconds. */
+    val time: Long,
+)
 
 /** `Full` while a program has the whole screen: draw the pane's screen instead. */
 @Serializable

@@ -15,7 +15,7 @@
     "AttentionKind": {
       "enum": ["question", "plan", "permission", "shell_done", "agent_done", "screen", "merged", "ci_failed"]
     },
-    "NodeType": { "enum": ["session", "workspace", "pane", "blocks"] },
+    "NodeType": { "enum": ["session", "workspace", "pane", "blocks", "diff", "commits"] },
     "BlocksMode": { "enum": ["blocks", "full"] },
     "Color": {
       "description": "A palette index (0 to 255) or a #rrggbb string.",
@@ -50,6 +50,49 @@
         "truncated": { "const": true },
         "full": { "const": true },
         "out": { "type": "array", "items": { "type": "array", "items": { "$ref": "#/$defs/Span" } } }
+      }
+    },
+    "Sha": { "type": "string", "pattern": "^[0-9a-f]{4,40}$" },
+    "DiffScope": { "description": "What a diff compares: the working tree with HEAD, this branch with its merge base with origin's default branch, or one commit with its first parent.", "enum": ["uncommitted", "general", "commit"] },
+    "DiffState": { "description": "no_base: origin has no default branch, so a general diff has nothing to compare with.", "enum": ["ok", "no_base"] },
+    "FileStatus": { "enum": ["added", "modified", "deleted", "renamed", "untracked"] },
+    "Seen": { "description": "yes: looked at and unchanged since; changed: looked at, but the file differs now.", "enum": ["yes", "changed"] },
+    "Hunk": {
+      "type": "object",
+      "required": ["context", "old_start", "old_lines", "new_start", "new_lines", "lines"],
+      "properties": {
+        "context": { "type": "string", "description": "The text git prints after the second @@ (usually the enclosing function)." },
+        "old_start": { "type": "integer", "minimum": 0 },
+        "old_lines": { "type": "integer", "minimum": 0 },
+        "new_start": { "type": "integer", "minimum": 0 },
+        "new_lines": { "type": "integer", "minimum": 0 },
+        "lines": { "type": "array", "items": { "type": "string", "pattern": "^[-+ ]" }, "description": "Each line prefixed with + (added), - (deleted) or a space (unchanged)." }
+      }
+    },
+    "DiffFile": {
+      "type": "object",
+      "required": ["path", "status", "added", "deleted", "hash", "hunks"],
+      "properties": {
+        "path": { "type": "string" },
+        "old_path": { "type": "string" },
+        "status": { "$ref": "#/$defs/FileStatus" },
+        "binary": { "const": true },
+        "unreadable": { "type": "string", "minLength": 1, "description": "Why the daemon did not read the file: symlink, too_big." },
+        "added": { "type": "integer", "minimum": 0 },
+        "deleted": { "type": "integer", "minimum": 0 },
+        "hash": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
+        "seen": { "$ref": "#/$defs/Seen" },
+        "hunks": { "type": "array", "items": { "$ref": "#/$defs/Hunk" } }
+      }
+    },
+    "CommitInfo": {
+      "type": "object",
+      "required": ["sha", "short", "subject", "time"],
+      "properties": {
+        "sha": { "$ref": "#/$defs/Sha" },
+        "short": { "$ref": "#/$defs/Sha" },
+        "subject": { "type": "string" },
+        "time": { "type": "integer", "minimum": 0, "description": "Commit time in Unix seconds." }
       }
     },
     "WorkspaceKind": { "enum": ["worktree", "folder"] },
@@ -171,6 +214,32 @@
             "mode": { "$ref": "#/$defs/BlocksMode" },
             "blocks": { "type": "array", "items": { "$ref": "#/$defs/Block" } }
           }
+        },
+        {
+          "allOf": [{ "$ref": "#/$defs/Head" }],
+          "required": ["workspace", "scope", "state", "files"],
+          "properties": {
+            "type": { "const": "diff" },
+            "workspace": { "$ref": "#/$defs/Id" },
+            "scope": { "$ref": "#/$defs/DiffScope" },
+            "commit": { "$ref": "#/$defs/Sha" },
+            "base": { "type": "string", "description": "What general compares with, such as origin/main." },
+            "state": { "$ref": "#/$defs/DiffState" },
+            "too_large": { "const": true },
+            "omitted": { "type": "integer", "minimum": 1, "description": "Files left out of a too large diff." },
+            "files": { "type": "array", "items": { "$ref": "#/$defs/DiffFile" } }
+          }
+        },
+        {
+          "allOf": [{ "$ref": "#/$defs/Head" }],
+          "required": ["workspace", "commits"],
+          "properties": {
+            "type": { "const": "commits" },
+            "workspace": { "$ref": "#/$defs/Id" },
+            "base": { "type": "string" },
+            "more": { "const": true },
+            "commits": { "type": "array", "items": { "$ref": "#/$defs/CommitInfo" } }
+          }
         }
       ]
     },
@@ -204,6 +273,16 @@
         { "type": "object", "required": ["cmd", "pane", "data"], "properties": { "cmd": { "const": "write" }, "pane": { "$ref": "#/$defs/Id" }, "data": { "type": "string" } } },
         { "type": "object", "required": ["cmd", "pane", "rows", "cols"], "properties": { "cmd": { "const": "resize" }, "pane": { "$ref": "#/$defs/Id" }, "rows": { "type": "integer", "minimum": 1 }, "cols": { "type": "integer", "minimum": 1 } } },
         { "type": "object", "required": ["cmd", "node", "rev"], "properties": { "cmd": { "const": "mark_seen" }, "node": { "$ref": "#/$defs/Id" }, "rev": { "$ref": "#/$defs/Rev" } } },
+        {
+          "type": "object",
+          "required": ["cmd", "workspace", "scope"],
+          "properties": { "cmd": { "const": "open_diff" }, "workspace": { "$ref": "#/$defs/Id" }, "scope": { "$ref": "#/$defs/DiffScope" }, "commit": { "$ref": "#/$defs/Sha" } },
+          "if": { "properties": { "scope": { "const": "commit" } } },
+          "then": { "required": ["commit"] }
+        },
+        { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "open_commits" }, "workspace": { "$ref": "#/$defs/Id" } } },
+        { "type": "object", "required": ["cmd", "node"], "properties": { "cmd": { "const": "refresh_diff" }, "node": { "$ref": "#/$defs/Id" } } },
+        { "type": "object", "required": ["cmd", "node", "path", "viewed"], "properties": { "cmd": { "const": "set_viewed" }, "node": { "$ref": "#/$defs/Id" }, "path": { "type": "string", "minLength": 1 }, "viewed": { "type": "boolean" } } },
         { "type": "object", "required": ["cmd"], "properties": { "cmd": { "const": "mobile_start" } } },
         { "type": "object", "required": ["cmd", "seconds"], "properties": { "cmd": { "const": "mobile_wait" }, "seconds": { "type": "integer", "minimum": 0, "maximum": 300 } } },
         { "type": "object", "required": ["cmd", "yes"], "properties": { "cmd": { "const": "mobile_answer" }, "yes": { "type": "boolean" } } },

@@ -50,6 +50,11 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
         Cmd::ClosePane { pane } => panes::close_pane(shared, &pane),
         Cmd::Write { pane, data } => panes::write(shared, &pane, &data),
         Cmd::Resize { pane, rows, cols } => panes::resize(shared, &pane, rows, cols),
+        // The daemon reads git for these in N32.
+        Cmd::OpenDiff { .. }
+        | Cmd::OpenCommits { .. }
+        | Cmd::RefreshDiff { .. }
+        | Cmd::SetViewed { .. } => Err(err(ErrorCode::Unsupported, "changes are not served yet")),
         Cmd::MobileStart {} => {
             let hub = shared.lock().mobile.clone();
             hub.start().map(Some).map_err(|why| err(ErrorCode::Io, why))

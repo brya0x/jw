@@ -1,0 +1,21 @@
+{
+  "t": "snapshot",
+  "node": {
+    "id": "00000000-0000-4000-8000-0000000000d8",
+    "type": "commits",
+    "v": 1,
+    "epoch": "00000000-0000-4000-8000-000000000001",
+    "rev": 1,
+    "attention": [],
+    "workspace": "00000000-0000-4000-8000-0000000000b1",
+    "more": true,
+    "commits": [
+      {
+        "sha": "4f5e6d7c8b9a00112233445566778899aabbccdd",
+        "short": "4f5e6d7",
+        "subject": "feat(web): el límite de intentos por dirección",
+        "time": 1791930000
+      }
+    ]
+  }
+}

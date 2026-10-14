@@ -302,6 +302,8 @@ fn rev_of(n: &Node) -> u64 {
         Node::Workspace(w) => w.head.rev,
         Node::Pane(p) => p.head.rev,
         Node::Blocks(b) => b.head.rev,
+        Node::Diff(d) => d.head.rev,
+        Node::Commits(c) => c.head.rev,
     }
 }
 
@@ -412,6 +414,8 @@ impl View {
                 Node::Blocks(b) => {
                     self.blocks.insert(id, b);
                 }
+                // This client does not draw changes yet (N33).
+                Node::Diff(_) | Node::Commits(_) => {}
             }
         }
         let gone = self.blk.as_ref().is_some_and(|(pane, id)| {

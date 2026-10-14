@@ -1,0 +1,505 @@
+<title>jwn Diff Viewer</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Terminal-first, same One Dark grid as the shell-blocks prototype. The diff takes the pane area of the workspace. */
+:root{
+  --bg:#282c34; --panel:#21252b; --fg:#abb2bf; --dim:#5c6370; --line:#3e4451; --sel:#2c313a;
+  --blue:#61afef; --green:#98c379; --yellow:#e5c07b; --red:#e06c75; --magenta:#c678dd; --cyan:#56b6c2;
+  --add:#2a3b2c; --del:#40292d; --addw:#3f5a42; --delw:#6a3a40;
+  --page:#16181d; --ink:#c3c9d4; --mut:#7d8594;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}}
+:root[data-theme="light"]{--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.55 'IBM Plex Sans',system-ui,sans-serif;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px 40px}
+.wrap{max-width:1500px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
+h1{font:600 20px/1.2 var(--mono);margin:0}
+p{margin:0;max-width:72ch;color:var(--mut)}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button,select{font:12px var(--mono);color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;min-height:32px;cursor:pointer}
+button:hover{border-color:var(--blue)}
+:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto}
+.term pre{margin:0;font:13px/1.25 var(--mono);color:var(--fg);outline:none;width:max-content}
+.term pre:focus-visible{outline:none}
+.hint{font:12px var(--mono);color:var(--mut)}
+.decide{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px;color:var(--fg)}
+.decide h2{font:600 12px var(--mono);margin:0 0 8px;color:var(--mut)}
+.decide ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+.decide code{font:12px var(--mono)}
+.b{font-weight:700}.d{color:var(--dim)}.c-blue{color:var(--blue)}.c-green{color:var(--green)}.c-yellow{color:var(--yellow)}
+.c-red{color:var(--red)}.c-mag{color:var(--magenta)}.c-cyan{color:var(--cyan)}.c-line{color:var(--line)}
+.bg-sel{background:var(--sel)}.bg-panel{background:var(--panel)}
+.bg-add{background:var(--add)}.bg-del{background:var(--del)}.bg-wa{background:var(--addw)}.bg-wd{background:var(--delw)}
+.chip-green{background:var(--green);color:var(--panel)}.chip-blue{background:var(--blue);color:var(--panel)}.chip-yellow{background:var(--yellow);color:var(--panel)}.chip-cyan{background:var(--cyan);color:var(--panel)}
+.cur{background:var(--fg);color:var(--bg)}
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&family=JetBrains+Mono:wght@400;700&display=swap">
+
+<div class="wrap">
+  <div>
+    <h1>The diff, in the terminal</h1>
+    <p>Press <code>d</code> in a workspace and its changes fill the pane area: Sin commitear, Commits and General, as on the phone. Click the terminal or tab into it; the keys are on its status bar. The buttons simulate what the daemon would send, and the sizes show the layout changing with the width.</p>
+  </div>
+  <div class="bar" aria-label="Simulate">
+    <button id="evOpen" type="button">Abrir / cerrar cambios (d)</button>
+    <button id="evEdit" type="button">El agente edita un archivo</button>
+    <select id="vstate" aria-label="Estado de la vista actual">
+      <option value="ok">Vista: normal</option><option value="load">Vista: leyendo</option><option value="err">Vista: error</option>
+      <option value="empty">Vista: sin cambios</option><option value="nobase">Vista: sin rama base</option><option value="big">Vista: demasiado grande</option>
+    </select>
+    <select id="size" aria-label="Terminal size"><option value="180x44">180 × 44</option><option value="140x36">140 × 36</option><option value="96x28">96 × 28</option></select>
+    <button id="evReset" type="button">Reset</button>
+  </div>
+  <div class="term"><pre id="scr" tabindex="0" aria-label="Terminal client showing the diff of a workspace. j and k change file, brackets change hunk, v marks a file as seen."></pre></div>
+  <div class="hint" id="keys">j/k archivo · ]/[ hunk · v visto · tab árbol · 1 2 3 vistas · s lado a lado · r releer · esc cerrar</div>
+
+  <div class="decide">
+    <h2>To approve</h2>
+    <ol>
+      <li><b>Opening:</b> <code>d</code> on a workspace (the same key as before) shows its changes over the pane area, like Avisos. <code>esc</code> or <code>q</code> closes it and the panes are as you left them. The sidebar stays.</li>
+      <li><b>Three views</b>, keys <code>1 2 3</code>: Sin commitear (opens here), Commits, General (this branch against <code>origin/&lt;base&gt;</code>). The same three as the phone and the old jw. In Commits the left column lists the commits (200 at most); <code>↵</code> opens one and <code>( )</code> step between commits.</li>
+      <li><b>Left, the tree</b> of changed files: single-child folders on one row, <code>+ −</code> totals per folder and per file, a status letter (M A D R ?), <code>✓</code> when seen. <code>tab</code> moves focus there; <code>j k</code> move, <code>h l</code> fold and unfold, <code>↵</code> jumps to the file.</li>
+      <li><b>Right, every file of the view in one scroll</b> with the current file's header pinned on top. Side by side when the body is 100 columns or wider (180 × 44 here; 140 × 36 shows one column), one column below (<code>s</code> forces one or the other). Syntax colours, the changed words marked, hunks as <code>@@</code> rows. Under 84 columns the tree hides and <code>tab</code> shows it over the body (96 × 28).</li>
+      <li><b>Seen:</b> <code>v</code> marks the current file and jumps to the next; a seen file folds to its header. The marks are kept by the daemon, so the phone shows the same ones. When a file changes after you saw it, its mark becomes <code>◌ cambió</code> and it unfolds.</li>
+      <li><b>Live:</b> while Sin commitear is open it refreshes by itself (the daemon looks at git every 2 s only while someone watches it), so you see the agent's edits arrive. Try the button. Commits and General load when opened and with <code>r</code>.</li>
+      <li><b>Limits, as on the phone:</b> more than 2 MiB lists names only; a binary file, a rename without changes or an unreadable one (a symlink) is one line; an <code>origin</code> with no default branch says so in General. Each view has its own loading and error state, so one failing does not hide the others (use the state list above).</li>
+      <li><b>Not in this part:</b> <code>↵</code> opening the file in an editor (it waits for programs inside the shell), and the Markdown viewer (its own section later).</li>
+    </ol>
+  </div>
+</div>
+
+<script>
+(() => {
+'use strict';
+const esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+let COLS = 180, ROWS = 44;
+const SB = 28, TW = 30;
+
+/* ---- the repo under the diff ---- */
+const file = (n, st, hs, extra = {}) => ({n, st, hs, hash:1, ...extra});
+const GEN = () => [
+  file('crates/web/src/auth.rs', 'M', [
+    [41, 41, 'impl Auth {', [
+      ' impl Auth {',
+      '-    pub fn check(&self, secret: &str) -> Result<Device, AuthError> {',
+      '+    pub fn check(&self, addr: IpAddr, secret: &str) -> Result<Device, AuthError> {',
+      '         let hash = sha256(secret.as_bytes());',
+      '-        let found = self.store.find(&hash);',
+      '-        match found {',
+      '-            Some(d) => Ok(d),',
+      '-            None => Err(AuthError::Unknown),',
+      '-        }',
+      '+        let Some(device) = self.store.find(&hash) else {',
+      '+            self.limiter.fail(addr);',
+      '+            return Err(AuthError::Unknown);',
+      '+        };',
+      '+        self.limiter.clear(addr);',
+      '+        Ok(device)',
+      '     }']],
+    [88, 90, 'impl Auth {', [
+      '     }',
+      ' ',
+      '+    pub fn revoke(&self, id: &str) -> bool {',
+      '+        self.store.remove(id)',
+      '+    }',
+      '+',
+      '     fn token() -> String {',
+      '         random_hex(32)']]]),
+  file('crates/web/src/login.rs', 'A', [[0, 1, '', [
+    '+use crate::auth::{Auth, AuthError};',
+    '+use std::net::IpAddr;',
+    '+',
+    '+/// One attempt to sign in; the secret never reaches a log line.',
+    '+pub fn attempt(auth: &Auth, addr: IpAddr, secret: &str) -> Result<String, AuthError> {',
+    '+    let device = auth.check(addr, secret)?;',
+    '+    // the id is public, the secret is not',
+    '+    Ok(device.id)',
+    '+}',
+    '+',
+    '+pub const MAX_FAILS: u32 = 5;']]]),
+  file('crates/web/src/lib.rs', 'M', [[3, 3, '', [
+    ' pub mod auth;',
+    '+pub mod login;',
+    ' pub mod bridge;',
+    ' pub mod limiter;']]]),
+  file('crates/web/tests/login.rs', 'A', [[0, 1, '', [
+    '+use jw_web::login;',
+    '+',
+    '+#[test]',
+    '+fn five_wrong_secrets_lock_the_address() {',
+    '+    let auth = fixture();',
+    '+    for _ in 0..5 {',
+    '+        assert!(login::attempt(&auth, ip(), "nope").is_err());',
+    '+    }',
+    '+    assert!(login::attempt(&auth, ip(), &auth.secret()).is_err());',
+    '+}']]]),
+  file('crates/web/src/session.rs', 'R', [[12, 12, 'pub struct Session {', [
+    ' pub struct Session {',
+    '-    pub born: u64,',
+    '+    pub born_ms: u64,',
+    '     pub device: String,',
+    ' }']]], {o:'crates/web/src/sess.rs'}),
+  file('docs/spec.md', 'M', [[210, 210, '## Risks', [
+    ' - RISK-18 The tunnel address changes on every start.',
+    '+- RISK-23 A phone that guesses secrets: five failures a minute lock the address (REQ-82).',
+    ' - RISK-19 The pairing code is typed on the phone.']]]),
+  file('assets/logo.png', 'M', [], {bin:true}),
+];
+const UNC = () => [
+  file('crates/web/src/auth.rs', 'M', [[120, 124, 'impl Auth {', [
+    '         let hash = sha256(secret.as_bytes());',
+    '+        tracing::debug!(%addr, "checking a secret");',
+    '         let Some(device) = self.store.find(&hash) else {',
+    '             self.limiter.fail(addr);']]]),
+  file('crates/web/src/limiter.rs', 'M', [[17, 17, 'impl Limiter {', [
+    '     pub fn fail(&self, addr: IpAddr) {',
+    '-        let n = self.fails.entry(addr).or_insert(0);',
+    '-        *n += 1;',
+    '+        let mut n = self.fails.entry(addr).or_insert(0);',
+    '+        *n = n.saturating_add(1);',
+    '+        tracing::warn!(%addr, fails = *n, "wrong secret");',
+    '     }',
+    ' ',
+    '-    pub fn blocked(&self, addr: IpAddr) -> bool {',
+    '-        self.fails.get(&addr).map_or(false, |n| *n >= MAX_FAILS)',
+    '+    pub fn blocked(&self, addr: IpAddr) -> bool {',
+    '+        self.fails.get(&addr).is_some_and(|n| *n >= MAX_FAILS)',
+    '     }']]]),
+  file('notes/todo.md', 'A', [[0, 1, '', [
+    '+- probar el diff en el terminal',
+    '+- revisar el límite de 200 commits']]]),
+  file('scratch/current', '?', [], {unr:'es un enlace simbólico'}),
+  file('old/gone.txt', 'D', [[1, 0, '', ['-adiós', '-mundo']]]),
+];
+const COMMITS = G => [
+  {sha:'0123456', s:'fix(web): valida el id de commit antes de git', t:'hace 2 h', files:[G[0], G[2]]},
+  {sha:'89abcde', s:'feat(core): el diff en tres vistas', t:'hace 5 h', files:[G[1], G[3], G[5]]},
+  {sha:'4f5e6d7', s:'feat(web): el límite de intentos por dirección', t:'ayer', files:[G[1]]},
+];
+
+/* ---- the lines of a hunk, numbered, with the words that changed ---- */
+const wr = (a, b) => {
+  let p = 0; while (p < a.length && p < b.length && a[p] === b[p]) p++;
+  let s = 0; while (s < a.length - p && s < b.length - p && a[a.length - 1 - s] === b[b.length - 1 - s]) s++;
+  return (p + s) < Math.min(a.length, b.length) * 0.3 ? [null, null] : [[p, a.length - s], [p, b.length - s]];
+};
+function norm(f){
+  f.a = 0; f.d = 0;
+  f.hunks = f.hs.map(([o, n, ctx, ls]) => {
+    let oo = o, nn = n, oc = 0, nc = 0;
+    const L = ls.map(s => { const k = s[0] === '+' ? 'a' : s[0] === '-' ? 'x' : 'n', r = {k, t:s.slice(1), o:k === 'a' ? null : oo, n:k === 'x' ? null : nn};
+      if (k !== 'a'){ oo++; oc++; } if (k !== 'x'){ nn++; nc++; } if (k === 'a') f.a++; if (k === 'x') f.d++; return r; });
+    const items = [];
+    for (let i = 0; i < L.length;){
+      if (L[i].k === 'n'){ items.push(L[i++]); continue; }
+      const dels = [], adds = [];
+      while (i < L.length && L[i].k === 'x') dels.push(L[i++]);
+      while (i < L.length && L[i].k === 'a') adds.push(L[i++]);
+      for (let j = 0; j < Math.min(dels.length, adds.length); j++){ const [x, y] = wr(dels[j].t, adds[j].t); dels[j].wr = x; adds[j].wr = y; }
+      items.push({run:true, dels, adds});
+    }
+    return {head:`@@ -${o},${oc} +${n},${nc} @@ ${ctx}`.trim(), items};
+  });
+  return f;
+}
+
+let R, S;
+function reset(){
+  const gen = GEN().map(norm), unc = UNC().map(norm);
+  R = {gen, unc, commits:COMMITS(gen), editStep:0, ws:'feat/login', base:'origin/main'};
+  R.commits.forEach(c => c.files.forEach(f => f.hash = 1));
+  S = {open:true, view:'unc', commit:null, scroll:0, focus:'body', trow:0, closed:{}, viewed:{}, split:'auto', vst:{unc:'ok', com:'ok', gen:'ok'}, msg:'', live:'', hits:[], lines:[]};
+  S.viewed['unc||notes/todo.md'] = 1;
+  S.viewed['gen||crates/web/src/lib.rs'] = 1;
+  document.getElementById('vstate').value = 'ok';
+}
+
+/* ---- the file lists and the tree ---- */
+const treeCmp = (a, b) => { const x = a.split('/'), y = b.split('/'); for (let i = 0;; i++){ if (i >= x.length || i >= y.length) return (i < x.length) - (i < y.length); const dx = i < x.length - 1, dy = i < y.length - 1; if (dx !== dy) return dx ? -1 : 1; if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1; } };
+const fileList = () => (S.view === 'unc' ? R.unc : S.view === 'com' ? (S.commit === null ? [] : R.commits[S.commit].files) : R.gen).slice().sort((p, q) => treeCmp(p.n, q.n));
+const vkey = f => S.view + '|' + (S.view === 'com' ? S.commit : '') + '|' + f.n;
+const vstate = f => { const v = S.viewed[vkey(f)]; return v === undefined ? 0 : v === f.hash ? 1 : 2; };
+const closedKey = k => S.view + '|' + (S.view === 'com' ? S.commit : '') + '|' + k;
+function treeRows(L){
+  const out = [], P = L.map(f => f.n.split('/'));
+  (function walk(lo, hi, base, depth, hidden){
+    let i = lo;
+    while (i < hi){
+      if (P[i].length === base + 1){ if (!hidden) out.push({k:'file', i, depth}); i++; continue; }
+      let e = i; while (e < hi && P[e].length > base + 1 && P[e][base] === P[i][base]) e++;
+      let k = 1; while (P.slice(i, e).every(q => q.length > base + k + 1 && q[base + k] === P[i][base + k])) k++;
+      const key = P[i].slice(0, base + k).join('/') + '/', g = L.slice(i, e), shut = !!S.closed[closedKey(key)];
+      if (!hidden) out.push({k:'dir', key, label:P[i].slice(base, base + k).join('/'), depth, a:g.reduce((t, f) => t + f.a, 0), d:g.reduce((t, f) => t + f.d, 0), shut});
+      walk(i, e, base + k, depth + 1, hidden || shut); i = e;
+    }
+  })(0, L.length, 0, 0, false);
+  return out;
+}
+function rowsModel(){
+  if (S.view === 'com' && S.commit === null) return R.commits.map((c, i) => ({k:'commit', i}));
+  const rows = treeRows(fileList());
+  return S.view === 'com' ? [{k:'back'}, ...rows] : rows;
+}
+
+/* ---- the body: every file of the view as lines ---- */
+function buildLines(L, split0){
+  const out = [];
+  L.forEach((f, fi) => {
+    const split = split0 && f.st !== 'A' && f.st !== 'D';  // a new or deleted file has one side only
+    out.push({t:'file', fi});
+    if (vstate(f) === 1){ out.push({t:'gap', fi}); return; }
+    if (f.unr) out.push({t:'note', fi, text:f.unr + ': el contenido no se muestra'});
+    else if (f.bin) out.push({t:'note', fi, text:'archivo binario: no hay líneas que mostrar'});
+    else if (f.st === 'R' && !f.hunks.length) out.push({t:'note', fi, text:'renombrado, sin cambios en el contenido'});
+    else f.hunks.forEach(h => {
+      out.push({t:'hunk', fi, text:h.head});
+      h.items.forEach(it => {
+        if (!it.run){ out.push(split ? {t:'s', fi, L:it, R:it} : {t:'u', fi, l:it}); return; }
+        if (split) for (let j = 0; j < Math.max(it.dels.length, it.adds.length); j++) out.push({t:'s', fi, L:it.dels[j] || null, R:it.adds[j] || null});
+        else { it.dels.forEach(l => out.push({t:'u', fi, l})); it.adds.forEach(l => out.push({t:'u', fi, l})); }
+      });
+    });
+    out.push({t:'gap', fi});
+  });
+  return out;
+}
+const KW = /\b(fn|let|mut|pub|use|struct|impl|if|else|match|return|async|await|const|enum|mod|Self|self|true|false|None|Some|Ok|Err)\b/g;
+function syn(t){
+  const c = new Array(t.length).fill('');
+  const mark = (re, cls) => { re.lastIndex = 0; let m; while ((m = re.exec(t))){ for (let i = m.index; i < m.index + m[0].length && i < c.length; i++) c[i] = cls; if (!m[0].length) re.lastIndex++; } };
+  mark(KW, 'c-mag'); mark(/\b\d+\b/g, 'c-yellow'); mark(/"[^"]*"/g, 'c-green'); mark(/\/\/.*$/g, 'd');
+  return c;
+}
+const lineCells = (t, w, bg, range, strong) => { const sy = syn(t); return t.split('').slice(0, w).map((c, i) => [c, (sy[i] + ' ' + bg + (range && i >= range[0] && i < range[1] ? ' ' + strong : '')).trim()]); };
+
+/* ---- the character grid ---- */
+const grid = () => ({cells:Array.from({length:ROWS}, () => Array.from({length:COLS}, () => [' ', '']))});
+const put = (g, x, y, text, cls = '') => { if (y < 0 || y >= ROWS) return; [...text].forEach((ch, i) => { const cx = x + i; if (cx >= 0 && cx < COLS) g.cells[y][cx] = [ch, cls]; }); };
+const tint = (g, x, y, w, cls) => { for (let i = 0; i < w; i++) if (x + i < COLS && y < ROWS) g.cells[y][x + i] = [g.cells[y][x + i][0], (g.cells[y][x + i][1] + ' ' + cls).trim()]; };
+const putCells = (g, x, y, cells, w, bg) => { for (let i = 0; i < w; i++) if (x + i < COLS) g.cells[y][x + i] = cells[i] || [' ', bg || '']; };
+function box(g, x, y, w, h, title, cls, right, rightCls){
+  put(g, x, y, '╭' + '─'.repeat(w - 2) + '╮', cls); put(g, x, y + h - 1, '╰' + '─'.repeat(w - 2) + '╯', cls);
+  for (let i = 1; i < h - 1; i++){ put(g, x, y + i, '│', cls); put(g, x + w - 1, y + i, '│', cls); }
+  if (title) put(g, x + 2, y, ' ' + title + ' ', 'b c-cyan');
+  if (right) put(g, x + w - 3 - [...right].length, y, ' ' + right + ' ', rightCls);
+}
+function paint(g){
+  const rows = g.cells.map(r => { let out = '', cur = null, buf = '';
+    for (const [ch, cls] of r){ if (cls !== cur){ if (buf) out += cur ? `<span class="${cur}">${buf}</span>` : buf; buf = ''; cur = cls; } buf += esc(ch); }
+    if (buf) out += cur ? `<span class="${cur}">${buf}</span>` : buf; return out; });
+  document.getElementById('scr').innerHTML = rows.join('\n');
+}
+const clipTo = (t, n) => { const a = [...t]; return a.length <= n ? t : a.slice(0, Math.max(0, n - 1)).join('') + '…'; };
+const pad = (v, n) => String(v ?? '').padStart(n);
+const ST = {M:['M', 'c-yellow'], A:['A', 'c-green'], D:['D', 'c-red'], R:['R', 'c-cyan'], '?':['?', 'd']};
+
+/* ---- geometry ---- */
+function geom(){
+  const x0 = SB + 1, pw = COLS - x0, ix = x0 + 1, iw = pw - 2, treeOn = pw >= 84;
+  const bx = treeOn ? ix + TW + 1 : ix, bw = treeOn ? iw - TW - 1 : iw;
+  const top = 3, h = ROWS - 2 - 1 - 2;  // box rows 1..ROWS-2: border, tabs, then content, border
+  const split = S.split === 'uni' ? false : S.split === 'side' ? bw - 1 >= 60 : bw - 1 >= 100;
+  return {x0, pw, ix, iw, treeOn, bx, bw, top, h, split};
+}
+const curFile = () => { const ln = S.lines[S.scroll]; return ln ? ln.fi : 0; };
+const fileLine = fi => S.lines.findIndex(l => l.t === 'file' && l.fi === fi);
+function relayout(){ const G = geom(); S.lines = S.view === 'com' && S.commit === null ? [] : buildLines(fileList(), G.split); S.scroll = Math.max(0, Math.min(S.scroll, Math.max(0, S.lines.length - G.h))); return G; }
+
+/* ---- drawing ---- */
+function drawFileHead(g, x, y, w, f){
+  put(g, x, y, ' '.repeat(w), 'bg-panel');
+  const [s, sc] = ST[f.st] || ST.M, big = S.vst[S.view] === 'big', v = vstate(f);
+  put(g, x + 1, y, s, sc + ' b bg-panel');
+  const name = f.n + (f.o ? '  ← ' + f.o : '');
+  const right = (big ? '' : `+${f.a} −${f.d}`) + (v === 1 ? '   ✓ visto' : v === 2 ? '   ◌ cambió' : '');
+  put(g, x + 3, y, clipTo(name, w - 4 - [...right].length), 'b bg-panel');
+  const rc = v === 1 ? 'c-green' : v === 2 ? 'c-yellow' : 'd';
+  put(g, x + w - 1 - [...right].length, y, right, rc + ' bg-panel');
+  if (!big && right) { const p = x + w - 1 - [...right].length; put(g, p, y, `+${f.a}`, 'c-green bg-panel'); put(g, p + 2 + String(f.a).length, y, `−${f.d}`, 'c-red bg-panel'); }
+}
+function drawBody(g, G){
+  const {bx, bw, top, h, split} = G, w = bw - 1;
+  const first = S.lines[S.scroll], pin = first && first.t !== 'file' ? 1 : 0;  // the pinned header takes a row of its own
+  S.lines.slice(S.scroll, S.scroll + h - pin).forEach((ln, r) => {
+    const y = top + pin + r; const L = fileList();
+    if (ln.t === 'file') drawFileHead(g, bx, y, w, L[ln.fi]);
+    else if (ln.t === 'note') put(g, bx + 3, y, clipTo(ln.text, w - 4), 'd');
+    else if (ln.t === 'hunk'){ tint(g, bx, y, w, 'bg-sel'); put(g, bx + 1, y, clipTo(ln.text, w - 2), 'c-cyan bg-sel'); }
+    else if (ln.t === 'u'){
+      const l = ln.l, bg = l.k === 'a' ? 'bg-add' : l.k === 'x' ? 'bg-del' : '', mk = l.k === 'a' ? '+' : l.k === 'x' ? '−' : ' ';
+      put(g, bx, y, pad(l.o, 4) + ' ' + pad(l.n, 4) + ' ', 'd ' + bg); put(g, bx + 9, y, mk, (l.k === 'a' ? 'c-green' : l.k === 'x' ? 'c-red' : '') + ' b ' + bg); put(g, bx + 10, y, ' ', bg);
+      putCells(g, bx + 11, y, lineCells(l.t, w - 11, bg, l.wr, l.k === 'a' ? 'bg-wa' : 'bg-wd'), w - 11, bg);
+    } else if (ln.t === 's'){
+      const hw = Math.floor((w - 1) / 2), half = (l, x, ww, side) => {
+        if (!l){ tint(g, x, y, ww, 'bg-panel'); return; }
+        const bg = l.k === 'a' ? 'bg-add' : l.k === 'x' ? 'bg-del' : '', mk = l.k === 'a' ? '+' : l.k === 'x' ? '−' : ' ';
+        put(g, x, y, pad(side === 'L' ? l.o : l.n, 4) + ' ', 'd ' + bg); put(g, x + 5, y, mk, (l.k === 'a' ? 'c-green' : l.k === 'x' ? 'c-red' : '') + ' b ' + bg); put(g, x + 6, y, ' ', bg);
+        putCells(g, x + 7, y, lineCells(l.t, ww - 7, bg, l.wr, l.k === 'a' ? 'bg-wa' : 'bg-wd'), ww - 7, bg);
+      };
+      half(ln.L, bx, hw, 'L'); put(g, bx + hw, y, '│', 'c-line'); half(ln.R, bx + hw + 1, w - hw - 1, 'R');
+    }
+  });
+  // pinned header: the file of the top line, unless the top line is that file's own header
+  if (pin) drawFileHead(g, bx, top, w, fileList()[first.fi]);
+  // scrollbar
+  const n = S.lines.length, thumb = Math.max(1, Math.round(h * Math.min(1, h / Math.max(1, n)))), pos = n > h ? Math.round((h - thumb) * S.scroll / (n - h)) : 0;
+  for (let r = 0; r < h; r++) put(g, bx + w, top + r, n > h && r >= pos && r < pos + thumb ? '┃' : '│', n > h && r >= pos && r < pos + thumb ? 'c-blue' : 'c-line');
+}
+function drawTree(g, G, x, w){
+  const {top, h} = G, rows = rowsModel(), L = fileList(), big = S.vst[S.view] === 'big', cf = curFile();
+  S.trow = Math.max(0, Math.min(S.trow, rows.length - 1));
+  const per = S.view === 'com' && S.commit === null ? 2 : 1, vis = Math.floor(h / per);
+  const off = Math.max(0, Math.min(S.trow - vis + 1, Math.max(0, rows.length - vis)));
+  rows.slice(off, off + vis).forEach((row, r) => {
+    const y = top + r * per, idx = off + r, cur = S.focus === 'tree' && idx === S.trow;
+    if (cur) for (let k = 0; k < per; k++) tint(g, x, y + k, w, 'bg-sel');
+    const bgc = cur ? ' bg-sel' : '';
+    S.hits.push({x, y, w, h:per, fn:() => { S.focus = 'tree'; S.trow = idx; activate(); }});
+    if (row.k === 'back'){ put(g, x + 1, y, '‹ commits', 'c-blue b' + bgc); put(g, x + w - 2 - [...R.commits[S.commit].sha].length, y, R.commits[S.commit].sha, 'd' + bgc); }
+    else if (row.k === 'commit'){ const c = R.commits[row.i]; put(g, x + 1, y, clipTo(c.s, w - 3), 'b' + bgc); put(g, x + 1, y + 1, c.sha + ' · ' + c.t, 'd' + bgc); put(g, x + w - 3, y + 1, String(c.files.length), 'd' + bgc); }
+    else if (row.k === 'dir'){ const ind = 1 + row.depth * 2, right = big ? '' : `+${row.a} −${row.d}`;
+      put(g, x + ind, y, row.shut ? '▸' : '▾', 'd' + bgc); put(g, x + ind + 2, y, clipTo(row.label + '/', w - ind - 4 - [...right].length), 'b' + bgc);
+      if (right){ const p = x + w - 1 - [...right].length; put(g, p, y, `+${row.a}`, 'c-green' + bgc); put(g, p + 2 + String(row.a).length, y, `−${row.d}`, 'c-red' + bgc); } }
+    else { const f = L[row.i], ind = 1 + row.depth * 2, [s, sc] = ST[f.st] || ST.M, v = vstate(f), here = row.i === cf && S.lines.length;
+      put(g, x + ind, y, s, sc + ' b' + bgc); put(g, x + ind + 2, y, clipTo(f.n.split('/').pop(), w - ind - 3 - (big ? 2 : 10)), (here ? 'c-blue b' : v === 1 ? 'd' : '') + bgc);
+      if (!big){ const right = `+${f.a} −${f.d}`, p = x + w - 3 - [...right].length; put(g, p, y, `+${f.a}`, 'c-green' + bgc); put(g, p + 2 + String(f.a).length, y, `−${f.d}`, 'c-red' + bgc); }
+      put(g, x + w - 2, y, v === 1 ? '✓' : v === 2 ? '◌' : here ? '▸' : ' ', (v === 1 ? 'c-green' : v === 2 ? 'c-yellow' : 'c-blue') + bgc); }
+  });
+}
+function centre(g, G, lines){
+  const y0 = G.top + Math.floor(G.h / 2) - 2, cx = G.ix + Math.floor(G.iw / 2);
+  lines.forEach(([t, c], i) => put(g, cx - Math.floor([...t].length / 2), y0 + i, t, c));
+}
+function draw(){
+  const g = grid(); S.hits = [];
+  // sidebar, as in the blocks prototype
+  for (let y = 0; y < ROWS - 1; y++) put(g, SB - 1, y, '│', 'c-line');
+  put(g, 1, 0, 'demo', 'b d'); put(g, SB - 14, 0, '^␣ s sessions', 'd');
+  [['notes', 0], ['api', 1], ['↳ feat/login', 1], ['infra', 0]].forEach(([n, o], i) => { const sel = i === 2;
+    put(g, 0, 2 + i, String(i + 1), 'd'); put(g, 2, 2 + i, o ? '●' : '○', o ? 'c-green' : 'd'); put(g, 4, 2 + i, n, sel ? 'b c-blue' : o ? '' : 'd'); if (sel) tint(g, 0, 2 + i, SB - 1, 'bg-sel'); });
+  const px = SB + 1;
+  put(g, px, 0, ' api/', 'd'); put(g, px + 5, 0, 'feat/login', 'b c-blue'); put(g, px + 17, 0, '⎇ feat/login', 'c-mag');
+  const path = '~/ws/api-wt/feat-login'; put(g, COLS - 1 - path.length, 0, path, 'd');
+  const G = geom();
+  if (!S.open){
+    const bw = COLS - px, bh = ROWS - 2;
+    for (let y = 1; y < ROWS - 1; y++) { put(g, px, y, '│', 'c-line'); }
+    put(g, px, 1, '╭' + '─'.repeat(bw - 2) + '╮', 'c-blue'); put(g, px, ROWS - 2, '╰' + '─'.repeat(bw - 2) + '╯', 'c-blue');
+    for (let i = 2; i < ROWS - 2; i++){ put(g, px, i, '│', 'c-blue'); put(g, px + bw - 1, i, '│', 'c-blue'); }
+    put(g, px + 2, 1, ' zsh ', 'b c-blue');
+    put(g, px + 3, ROWS - 6, '▌ ~/ws/api-wt/feat-login ⎇ feat/login', 'c-green'); put(g, px + 5, ROWS - 5, '❯ git status', 'b'); put(g, px + 5, ROWS - 4, 'M crates/web/src/auth.rs  A notes/todo.md  …', 'd');
+    put(g, px + 3, ROWS - 3, '❯ ', 'c-green b'); put(g, px + 5, ROWS - 3, 'd abre los cambios de este workspace', 'd');
+  } else {
+    const right = S.view === 'unc' && S.vst.unc === 'ok' ? (S.live ? '● ' + S.live : '● en vivo') : '', rc = S.live ? 'c-yellow b' : 'c-green';
+    box(g, G.x0, 1, G.pw, ROWS - 2, 'cambios · ' + R.ws + ' vs ' + (S.view === 'unc' ? 'HEAD' : R.base), 'c-line', right, rc);
+    // tabs
+    const tabs = [['unc', '1', 'Sin commitear', R.unc.length], ['com', '2', 'Commits', R.commits.length], ['gen', '3', 'General', R.gen.length]];
+    let tx = G.ix + 1;
+    tabs.forEach(([k, key, label, n]) => { const st = S.vst[k], cnt = st === 'load' ? '…' : st === 'err' ? '!' : st === 'empty' || st === 'nobase' ? '0' : String(n), t = ` ${key} ${label} ${cnt} `, on = S.view === k;
+      put(g, tx, 2, t, on ? 'chip-blue b' : (st === 'err' ? 'c-red' : 'd')); const x = tx; S.hits.push({x, y:2, w:[...t].length, h:1, fn:() => setView(k)}); tx += [...t].length + 1; });
+    const st = S.vst[S.view];
+    if (st === 'load') centre(g, G, [['◌ leyendo ' + (S.view === 'com' ? 'los commits' : 'los cambios') + '…', 'c-yellow b'], ['git corre en el PC; puede tardar en repos grandes', 'd']]);
+    else if (st === 'err') centre(g, G, [['no se pudo leer', 'c-red b'], ['fatal: bad revision \'origin/main..HEAD\'', 'd'], ['r reintentar', 'c-blue'], ['las otras vistas siguen disponibles: 1 2 3', 'd']]);
+    else if (st === 'nobase') centre(g, G, [['origin no tiene rama por defecto: no hay contra qué comparar', ''], ['mira «Sin commitear» o «Commits»', 'd']]);
+    else if (st === 'empty') centre(g, G, [[S.view === 'gen' ? 'nada commiteado contra ' + R.base : S.view === 'unc' ? 'sin cambios sin commitear' : 'sin commits en la rama', 'd']]);
+    else {
+      const showTree = G.treeOn || S.focus === 'tree';
+      if (G.treeOn) for (let y = G.top; y < G.top + G.h; y++) put(g, G.ix + TW, y, '│', 'c-line');
+      if (S.view === 'com' && S.commit === null) centre(g, {...G, ix:G.bx, iw:G.bw}, [['elige un commit con ↵', 'd']]);
+      else drawBody(g, G);
+      if (showTree){ if (!G.treeOn) for (let y = G.top; y < G.top + G.h; y++) put(g, G.ix, y, ' '.repeat(TW), 'bg-panel'); drawTree(g, G, G.ix, TW); }
+      if (S.vst[S.view] === 'big'){ const t = 'pasó de 2 MiB: 200 de 1 234 archivos, sin líneas; míralo entero en un editor'; put(g, G.bx + 1, G.top + G.h - 1, clipTo(t, G.bw - 3), 'c-yellow bg-panel'); tint(g, G.bx, G.top + G.h - 1, G.bw - 1, 'bg-panel'); }
+    }
+  }
+  // status bar
+  for (let x = 0; x < COLS; x++) g.cells[ROWS - 1][x] = [' ', 'bg-panel'];
+  const mode = S.open ? [' DIFF ', 'chip-cyan b'] : [' MOVE ', 'chip-blue b'];
+  put(g, 0, ROWS - 1, mode[0], mode[1]);
+  const L = fileList(), seen = L.filter(f => vstate(f) === 1).length;
+  const hint = S.msg ? S.msg : !S.open ? 'j/k workspace · h/l panel · ↵ abrir · d cambios · a avisos · q salir'
+    : S.focus === 'tree' ? 'j/k mover · h/l plegar · ↵ ir · tab cuerpo · esc cerrar'
+    : S.view === 'com' && S.commit !== null ? 'j/k archivo · ]/[ hunk · v visto · ( ) commit · h commits · tab árbol · esc cerrar'
+    : 'j/k archivo · ]/[ hunk · v visto · tab árbol · 1 2 3 vistas · s lado a lado · r releer · esc cerrar';
+  put(g, mode[0].length + 1, ROWS - 1, clipTo(hint, COLS - 24), S.msg ? 'c-green bg-panel' : 'd bg-panel');
+  if (S.open && L.length && S.vst[S.view] === 'ok'){ const t = `${seen}/${L.length} vistos`; put(g, COLS - t.length - 1, ROWS - 1, t, (seen === L.length ? 'c-green' : 'd') + ' bg-panel'); }
+  paint(g);
+  document.getElementById('keys').textContent = S.open ? 'ancho del cuerpo: ' + (G.bw - 1) + ' columnas · ' + (G.split ? 'lado a lado' : 'una columna') + (G.treeOn ? '' : ' · árbol oculto') : 'd abre los cambios';
+}
+
+/* ---- behaviour ---- */
+const flash = t => { S.msg = t; draw(); clearTimeout(flash.t); flash.t = setTimeout(() => { S.msg = ''; draw(); }, 1600); };
+function setView(v){ S.view = v; S.commit = null; S.scroll = 0; S.trow = 0; S.focus = 'body'; document.getElementById('vstate').value = S.vst[v]; relayout(); draw(); }
+function goFile(fi){ relayout(); const i = fileLine(fi); if (i >= 0) S.scroll = Math.min(i, Math.max(0, S.lines.length - geom().h)); }
+function activate(){
+  const row = rowsModel()[S.trow]; if (!row) return;
+  if (row.k === 'back'){ S.commit = null; S.scroll = 0; S.trow = 0; relayout(); }
+  else if (row.k === 'commit'){ S.commit = row.i; S.scroll = 0; S.trow = 1; relayout(); }
+  else if (row.k === 'dir'){ S.closed[closedKey(row.key)] = !row.shut; }
+  else { goFile(row.i); S.focus = 'body'; }
+  draw();
+}
+function step(d){ const L = fileList(); if (!L.length) return; const fi = Math.max(0, Math.min(L.length - 1, curFile() + d)); goFile(fi); }
+function hunk(d){ const idx = S.lines.map((l, i) => l.t === 'hunk' ? i : -1).filter(i => i >= 0); const t = d > 0 ? idx.find(i => i > S.scroll) : [...idx].reverse().find(i => i < S.scroll); if (t !== undefined) S.scroll = Math.min(t, Math.max(0, S.lines.length - geom().h)); }
+function mark(){
+  const L = fileList(), fi = curFile(), f = L[fi]; if (!f) return;
+  const was = vstate(f) === 1; S.viewed[vkey(f)] = was ? undefined : f.hash; if (was) delete S.viewed[vkey(f)];
+  relayout(); goFile(!was && fi + 1 < L.length ? fi + 1 : fi);
+}
+function key(e){
+  const k = e.key;
+  if (!S.open){ if (k === 'd'){ S.open = true; relayout(); draw(); return true; } return false; }
+  if (S.focus === 'tree'){
+    const rows = rowsModel(), row = rows[S.trow];
+    if (k === 'j' || k === 'ArrowDown') S.trow = Math.min(S.trow + 1, rows.length - 1);
+    else if (k === 'k' || k === 'ArrowUp') S.trow = Math.max(S.trow - 1, 0);
+    else if (k === 'l' && row && row.k === 'dir' && row.shut) S.closed[closedKey(row.key)] = false;
+    else if (k === 'h'){ if (row && row.k === 'dir' && !row.shut) S.closed[closedKey(row.key)] = true; else if (S.view === 'com' && S.commit !== null){ S.trow = 0; activate(); return true; } }
+    else if (k === 'Enter') { activate(); return true; }
+    else if (k === 'Tab'){ S.focus = 'body'; }
+    else return glob(e);
+    draw(); return true;
+  }
+  if (k === 'j' || k === 'ArrowDown'){ step(1); }
+  else if (k === 'k' || k === 'ArrowUp'){ step(-1); }
+  else if (k === ']') hunk(1); else if (k === '[') hunk(-1);
+  else if (k === ' ' || k === 'PageDown') S.scroll = Math.min(S.scroll + geom().h - 2, Math.max(0, S.lines.length - geom().h));
+  else if (k === 'b' || k === 'PageUp') S.scroll = Math.max(0, S.scroll - geom().h + 2);
+  else if (k === 'g') S.scroll = 0; else if (k === 'G') S.scroll = Math.max(0, S.lines.length - geom().h);
+  else if (k === 'v'){ mark(); }
+  else if (k === 'Tab'){ S.focus = 'tree'; }
+  else if (k === 'h' && S.view === 'com' && S.commit !== null){ S.commit = null; S.scroll = 0; S.trow = 0; relayout(); }
+  else return glob(e);
+  draw(); return true;
+}
+function glob(e){
+  const k = e.key;
+  if (k === '1' || k === '2' || k === '3'){ setView(['unc', 'com', 'gen'][+k - 1]); return true; }
+  if ((k === '(' || k === ')') && S.view === 'com' && S.commit !== null){ const n = S.commit + (k === ')' ? 1 : -1); if (n >= 0 && n < R.commits.length){ S.commit = n; S.scroll = 0; S.trow = 1; relayout(); } draw(); return true; }
+  if (k === 's'){ S.split = S.split === 'auto' ? 'uni' : S.split === 'uni' ? 'side' : 'auto'; relayout(); flash(S.split === 'auto' ? 'según el ancho' : S.split === 'uni' ? 'una columna' : 'lado a lado'); return true; }
+  if (k === 'r'){ if (S.vst[S.view] === 'err') { S.vst[S.view] = 'ok'; document.getElementById('vstate').value = 'ok'; } relayout(); flash('releído'); return true; }
+  if (k === 'Escape' || k === 'q'){ S.open = false; draw(); return true; }
+  return false;
+}
+function agentEdit(){
+  const f = R.unc[0], hk = f.hs[0], first = R.editStep === 0;
+  if (first) hk[3].splice(2, 0, '+        let ip = addr.ip();'); else hk[3].splice(3, 0, '+        metrics::counter!("auth_checks").increment(1);');
+  R.editStep++; f.hash++; norm(f);
+  S.live = 'cambió ' + f.n.split('/').pop(); relayout(); draw();
+  clearTimeout(agentEdit.t); agentEdit.t = setTimeout(() => { S.live = ''; draw(); }, 2500);
+}
+const scr = document.getElementById('scr');
+scr.addEventListener('keydown', e => { if (e.ctrlKey || e.metaKey) return; if (key(e)) e.preventDefault(); });
+scr.addEventListener('wheel', e => { if (!S.open) return; e.preventDefault(); S.scroll = Math.max(0, Math.min(S.scroll + (e.deltaY > 0 ? 3 : -3), Math.max(0, S.lines.length - geom().h))); draw(); }, {passive:false});
+scr.addEventListener('click', e => { scr.focus(); const r = scr.getBoundingClientRect(), cw = r.width / COLS, ch = r.height / ROWS, cx = Math.floor((e.clientX - r.left) / cw), cy = Math.floor((e.clientY - r.top) / ch);
+  const h = S.hits.find(h => cx >= h.x && cx < h.x + h.w && cy >= h.y && cy < h.y + h.h); if (h) h.fn(); });
+document.getElementById('evOpen').onclick = () => { S.open = !S.open; relayout(); draw(); scr.focus(); };
+document.getElementById('evEdit').onclick = () => { agentEdit(); };
+document.getElementById('evReset').onclick = () => { reset(); relayout(); draw(); };
+document.getElementById('vstate').onchange = e => { S.vst[S.view] = e.target.value; relayout(); draw(); };
+document.getElementById('size').onchange = e => { [COLS, ROWS] = e.target.value.split('x').map(Number); relayout(); draw(); };
+reset(); relayout(); draw();
+})();
+</script>

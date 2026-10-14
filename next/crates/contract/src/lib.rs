@@ -202,6 +202,28 @@ pub enum Cmd {
         node: Id,
         rev: u64,
     },
+    /// Make (or find) the `diff` node of `workspace` for `scope`; `commit` names the commit of
+    /// the `commit` scope. The result is `{node}`.
+    OpenDiff {
+        workspace: Id,
+        scope: DiffScope,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        commit: Option<String>,
+    },
+    /// Make (or find) the `commits` node of `workspace`. The result is `{node}`.
+    OpenCommits {
+        workspace: Id,
+    },
+    /// Read a `diff` node again now.
+    RefreshDiff {
+        node: Id,
+    },
+    /// Record that `path` of a `diff` node was looked at (or forget it), for every client.
+    SetViewed {
+        node: Id,
+        path: String,
+        viewed: bool,
+    },
     /// Turn the phone link on (bridge, tunnel, private-address listener) and make a pairing
     /// token. The result is `{uri, tunnel?, lan?}`; the phone is paired from `uri`.
     MobileStart {},
@@ -226,6 +248,8 @@ pub enum Node {
     Workspace(Workspace),
     Pane(Pane),
     Blocks(Blocks),
+    Diff(Diff),
+    Commits(Commits),
 }
 
 /// Fields every node carries.
@@ -356,6 +380,120 @@ pub enum Color {
     Rgb(String),
 }
 
+/// What a workspace's changes are: its files, hunk by hunk, against a scope.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Diff {
+    #[serde(flatten)]
+    pub head: Head,
+    pub workspace: Id,
+    pub scope: DiffScope,
+    /// The commit of the `commit` scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit: Option<String>,
+    /// What `general` compares with, such as `origin/main`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
+    pub state: DiffState,
+    /// Over 2 MiB: the files are listed with no hunks.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub too_large: bool,
+    /// Files left out of a too large diff.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub omitted: Option<u32>,
+    pub files: Vec<DiffFile>,
+}
+
+/// The commits of a workspace's branch, newest first.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Commits {
+    #[serde(flatten)]
+    pub head: Head,
+    pub workspace: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
+    /// Older commits exist than the ones listed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub more: bool,
+    pub commits: Vec<CommitInfo>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiffScope {
+    Uncommitted,
+    General,
+    Commit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiffState {
+    Ok,
+    /// `origin` has no default branch: a `general` diff has nothing to compare with.
+    NoBase,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileStatus {
+    Added,
+    Modified,
+    Deleted,
+    Renamed,
+    Untracked,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Seen {
+    /// Looked at, and unchanged since.
+    Yes,
+    /// Looked at, but the file differs now.
+    Changed,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiffFile {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old_path: Option<String>,
+    pub status: FileStatus,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub binary: bool,
+    /// Why the daemon did not read the file (`symlink`, `too_big`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unreadable: Option<String>,
+    pub added: u32,
+    pub deleted: u32,
+    /// Fingerprint of the path, status and lines: a mark of having looked at the file is
+    /// only good while this stays the same.
+    pub hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seen: Option<Seen>,
+    pub hunks: Vec<Hunk>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Hunk {
+    /// What git prints after the second `@@`, usually the enclosing function.
+    pub context: String,
+    pub old_start: u32,
+    pub old_lines: u32,
+    pub new_start: u32,
+    pub new_lines: u32,
+    /// Each line prefixed with `+` (added), `-` (deleted) or a space (unchanged).
+    pub lines: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CommitInfo {
+    pub sha: String,
+    pub short: String,
+    pub subject: String,
+    /// Commit time in Unix seconds.
+    pub time: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkspaceKind {
@@ -446,5 +584,7 @@ pub fn node_id(node: &Node) -> &Id {
         Node::Workspace(n) => &n.head.id,
         Node::Pane(n) => &n.head.id,
         Node::Blocks(n) => &n.head.id,
+        Node::Diff(n) => &n.head.id,
+        Node::Commits(n) => &n.head.id,
     }
 }

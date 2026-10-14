@@ -1,0 +1,27 @@
+{
+  "t": "snapshot",
+  "node": {
+    "id": "00000000-0000-4000-8000-0000000000d7",
+    "type": "commits",
+    "v": 1,
+    "epoch": "00000000-0000-4000-8000-000000000001",
+    "rev": 1,
+    "attention": [],
+    "workspace": "00000000-0000-4000-8000-0000000000b1",
+    "base": "origin/main",
+    "commits": [
+      {
+        "sha": "0123456789abcdef0123456789abcdef01234567",
+        "short": "0123456",
+        "subject": "fix(web): valida el id de commit antes de git",
+        "time": 1791950000
+      },
+      {
+        "sha": "89abcde0123456789abcdef0123456789abcdef0",
+        "short": "89abcde",
+        "subject": "feat(core): el diff en tres vistas",
+        "time": 1791940000
+      }
+    ]
+  }
+}
