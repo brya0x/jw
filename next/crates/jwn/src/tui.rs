@@ -726,10 +726,11 @@ impl View {
         };
         let (ix, iy, iw, ih) = inner(rect);
         let lh = list_h(ih);
-        if (iy..iy + lh).contains(&y) && (ix..ix + iw).contains(&x) {
-            let lines = shell::block_lines(&b.blocks, self.now_ms, iw.saturating_sub(2));
+        let lines = shell::block_lines(&b.blocks, self.now_ms, iw.saturating_sub(2));
+        let top = iy + gap(lines.len(), lh);
+        if (top..iy + lh).contains(&y) && (ix..ix + iw).contains(&x) {
             let start = window_start(lines.len(), lh, self.scroll.get(pane).copied().unwrap_or(0));
-            if let Some(id) = lines.get(start + y - iy).and_then(|l| l.block) {
+            if let Some(id) = lines.get(start + y - top).and_then(|l| l.block) {
                 self.blk = Some((pane.to_owned(), id));
                 self.typing = false;
             }
@@ -1081,8 +1082,9 @@ impl View {
             .as_ref()
             .filter(|(pane, _)| *pane == p.head.id)
             .map(|(_, id)| *id);
+        let top = iy + gap(lines.len(), lh);
         for (r, line) in lines[start..].iter().take(lh).enumerate() {
-            let y = iy + r;
+            let y = top + r;
             if picked.is_some() && line.block == picked {
                 g.paint_bg(ix, y, iw, SEL);
             }
@@ -1208,8 +1210,14 @@ fn list_h(h: usize) -> usize {
     h.saturating_sub(EDITOR_ROWS)
 }
 
+/// Empty rows above a list of `total` lines in `rows`: the list sits at the bottom, next to
+/// the editor, like on the phone.
+fn gap(total: usize, rows: usize) -> usize {
+    rows.saturating_sub(total)
+}
+
 /// The first line of `total` shown in `rows`, with the newest at the bottom and the list
-/// scrolled `up` lines from it. A list that fits starts at the top.
+/// scrolled `up` lines from it.
 fn window_start(total: usize, rows: usize, up: usize) -> usize {
     let most = total.saturating_sub(rows);
     most - up.min(most)
@@ -1546,6 +1554,26 @@ mod tests {
     }
 
     #[test]
+    fn a_short_list_of_blocks_sits_at_the_bottom_next_to_the_editor() {
+        let t = open_blocks().plain(120, 30);
+        let rows: Vec<&str> = t.lines().collect();
+        let cmd = rows
+            .iter()
+            .position(|l| l.contains("❯ cargo watch"))
+            .unwrap();
+        let rule = cmd
+            + rows[cmd..]
+                .iter()
+                .position(|l| l.contains("────────────"))
+                .unwrap();
+        assert_eq!(
+            rule - cmd,
+            3,
+            "the newest block ends right above the editor: {t}"
+        );
+    }
+
+    #[test]
     fn a_program_with_the_whole_screen_is_drawn_as_its_screen() {
         let mut v = open_blocks();
         v.blocks.get_mut(BLOCKS).unwrap().mode = BlocksMode::Full;
@@ -1565,7 +1593,7 @@ mod tests {
     #[test]
     fn a_click_selects_a_block_and_c_o_r_act_on_it() {
         let mut v = open_blocks();
-        assert_eq!(v.click(80, 3, 120, 30), After::Continue);
+        assert_eq!(v.click(80, 8, 120, 30), After::Continue);
         assert!(v.plain(120, 30).lines().last().unwrap().contains("BLOQUE"));
         assert_eq!(v.press(Key::CopyCmd), After::Copy("git status".into()));
         assert_eq!(
@@ -1585,7 +1613,7 @@ mod tests {
     #[test]
     fn with_a_block_selected_j_k_move_between_blocks_and_esc_lets_go() {
         let mut v = open_blocks();
-        v.click(80, 3, 120, 30);
+        v.click(80, 8, 120, 30);
         v.press(Key::Down);
         assert_eq!(v.blk, Some((SHELL.into(), 2)));
         v.press(Key::Down);
@@ -1636,7 +1664,7 @@ mod tests {
     #[test]
     fn a_selection_whose_block_is_gone_is_dropped() {
         let mut v = open_blocks();
-        v.click(80, 3, 120, 30);
+        v.click(80, 8, 120, 30);
         assert!(v.blk.is_some());
         v.blocks.get_mut(BLOCKS).unwrap().blocks.remove(0);
         let docs: Vec<serde_json::Value> = vec![];
@@ -1650,6 +1678,8 @@ mod tests {
     #[test]
     fn the_window_keeps_the_newest_at_the_bottom() {
         assert_eq!(window_start(5, 10, 0), 0);
+        assert_eq!(gap(5, 10), 5, "a short list sits at the bottom");
+        assert_eq!(gap(30, 10), 0);
         assert_eq!(window_start(30, 10, 0), 20);
         assert_eq!(window_start(30, 10, 4), 16);
         assert_eq!(window_start(30, 10, 99), 0);

@@ -41,6 +41,17 @@ pub fn title_for(argv: &[String]) -> Option<String> {
     (!first.is_empty()).then(|| first.to_owned())
 }
 
+/// Programs that draw their own screen, with or without the alternate one (claude does not
+/// use it): while one is in the foreground the pane is drawn as its screen, not as blocks.
+const FULL_SCREEN: [&str; 15] = [
+    "claude", "nvim", "vim", "vi", "nano", "emacs", "htop", "btop", "top", "less", "man", "tmux",
+    "ssh", "lazygit", "k9s",
+];
+
+pub fn takes_screen(argv: &[String]) -> bool {
+    title_for(argv).is_some_and(|t| FULL_SCREEN.contains(&t.as_str()))
+}
+
 /// The command lines of `pids`, from one `ps`.
 fn args_of(pids: &HashSet<u32>) -> HashMap<u32, Vec<String>> {
     if pids.is_empty() {
@@ -107,6 +118,14 @@ mod tests {
 
     fn argv(s: &str) -> Vec<String> {
         s.split_whitespace().map(str::to_owned).collect()
+    }
+
+    #[test]
+    fn a_program_that_draws_its_own_screen_is_found_by_its_name() {
+        assert!(takes_screen(&argv("claude --resume 1234")));
+        assert!(takes_screen(&argv("/usr/bin/nvim a.rs")));
+        assert!(!takes_screen(&argv("sleep 60")));
+        assert!(!takes_screen(&argv("cargo test")));
     }
 
     #[test]

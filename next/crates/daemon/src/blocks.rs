@@ -325,6 +325,12 @@ impl BlockStore {
         self.version
     }
 
+    /// The shell was started with the integration: its blocks exist (empty) from the start,
+    /// so a client draws blocks before the first prompt.
+    pub fn integrate(&mut self) {
+        self.integrated = true;
+    }
+
     pub fn set_cols(&mut self, cols: u16) {
         self.cols = cols;
     }
@@ -423,8 +429,8 @@ impl BlockStore {
         }
     }
 
-    /// What a client sees, with the version it is a view of; `None` until the shell has
-    /// reported a prompt.
+    /// What a client sees, with the version it is a view of; `None` for a shell without the
+    /// integration.
     pub fn view(&self) -> Option<(u64, BlocksMode, Vec<Block>)> {
         if !self.integrated {
             return None;
@@ -444,6 +450,15 @@ impl BlockStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_integrated_shell_has_empty_blocks_before_its_first_prompt() {
+        let mut s = BlockStore::new(80);
+        assert!(s.view().is_none(), "no integration, no blocks");
+        s.integrate();
+        let (_, mode, blocks) = s.view().unwrap();
+        assert!(blocks.is_empty() && mode == BlocksMode::Blocks);
+    }
 
     fn pieces(chunks: &[&[u8]]) -> Vec<Piece> {
         let mut s = Scanner::default();

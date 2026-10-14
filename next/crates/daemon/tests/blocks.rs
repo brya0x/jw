@@ -77,7 +77,7 @@ fn rig(shell: &str) -> Rig {
             .get(&pane)
             .is_some_and(|n| n.get("blocks").is_some()))
             .unwrap(),
-        "{shell}: the shell never reported a prompt: {:?}",
+        "{shell}: the pane has no blocks node: {:?}",
         c.nodes.get(&pane)
     );
     let blocks = c.nodes[&pane]["blocks"].as_str().unwrap().to_owned();

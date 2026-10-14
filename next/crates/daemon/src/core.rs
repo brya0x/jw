@@ -177,8 +177,8 @@ impl Core {
         }
     }
 
-    /// Re-read the blocks of a pane whose terminal changed them. Once a shell has reported
-    /// a prompt the pane gets a blocks node of its own.
+    /// Re-read the blocks of a pane whose terminal changed them. A shell started with the
+    /// integration has a blocks node of its own.
     pub fn read_blocks(&mut self, pane: &str) {
         let Some(term) = self.terms.get(pane) else {
             return;
@@ -540,7 +540,11 @@ impl Core {
                     nodes.push(Node::Blocks(contract::Blocks {
                         head: head(id, Vec::new()),
                         pane: p.id.clone(),
-                        mode: *mode,
+                        mode: if p.running.as_deref().is_some_and(crate::procs::takes_screen) {
+                            contract::BlocksMode::Full
+                        } else {
+                            *mode
+                        },
                         blocks: blocks.clone(),
                     }));
                 }

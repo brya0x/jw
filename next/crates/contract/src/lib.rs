@@ -267,8 +267,8 @@ pub struct Pane {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_program: Option<Program>,
     pub screen: Screen,
-    /// The node of this pane's shell blocks; present once the shell has reported its first
-    /// prompt (so only for shells with the integration).
+    /// The node of this pane's shell blocks; present for a shell started with the integration
+    /// (zsh, bash, fish), from the start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocks: Option<Id>,
 }

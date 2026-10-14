@@ -271,7 +271,7 @@ sealed interface Node {
         val running: Program? = null,
         @SerialName("last_program") val lastProgram: Program? = null,
         val screen: Screen,
-        /** The node of this pane's shell blocks, once the shell has reported its first prompt. */
+        /** The node of this pane's shell blocks, for a shell started with the integration. */
         val blocks: Id? = null,
     ) : Node
 

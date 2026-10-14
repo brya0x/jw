@@ -260,7 +260,7 @@ function drawShell(g, p, x0, y0, bw, bh, focused){
   });
   const room = edTop - top, shown = lines.slice(Math.max(0, lines.length - room));
   shown.forEach((ln, k) => {
-    const y = top + k, sel = ui.blk && ui.blk.pane === p.id && ui.blk.idx === ln.bi;
+    const y = top + (room - shown.length) + k, sel = ui.blk && ui.blk.pane === p.id && ui.blk.idx === ln.bi;
     if (sel) for (let i = 1; i < bw - 1; i++) g.cells[y][x0 + i] = [g.cells[y][x0 + i][0], 'bg-sel'];
     if (ln.bar) put(g, ix - 1, y, '▌', ln.bar + (sel ? ' bg-sel' : ''));
     let x = ix + 1; ln.parts.forEach(([t, c]) => { put(g, x, y, clipTo(t, iw - 2), c + (sel ? ' bg-sel' : '')); x += [...t].length; });

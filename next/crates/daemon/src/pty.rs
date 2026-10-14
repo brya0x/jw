@@ -96,6 +96,9 @@ pub fn spawn(
         killer: Mutex::new(child.clone_killer()),
         shell_pid: child.process_id(),
     });
+    if !integration.args.is_empty() || !integration.env.is_empty() {
+        lock(&term.blocks).integrate();
+    }
 
     let parser = term.parser.clone();
     let store = term.blocks.clone();
@@ -150,7 +153,7 @@ impl Term {
         lock(&self.blocks).version()
     }
 
-    /// The blocks, once the shell has reported a prompt.
+    /// The blocks of a shell started with the integration.
     pub fn blocks_view(&self) -> Option<(u64, BlocksMode, Vec<Block>)> {
         lock(&self.blocks).view()
     }
