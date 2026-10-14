@@ -537,7 +537,7 @@ The shapes REQ-91 to REQ-103 name (nodes, commands, fields) are enforced by N31 
 | N53 ✓ `0ac85b3` | the phone's list drawn as the prototype (number, `●` or `↳`, tag, mark at the right, bordered go control, blue bar on the last opened) and a root an older daemon does not mark understood by its path | 224, 226 | `android/app/.../Screens.kt`, `android/client-core/.../Home.kt`, `crates/jwn/src/tui/side.rs` |
 | N54 ✓ `c4f5bd2` | the phone lets go of workspaces: a sheet for each kind (root, folder, worktree) and a question before «quitar», «cerrar el workspace» or «quitar el worktree», over `remove_workspace` | 227–230 | `android/client-core/.../Remove.kt`, `android/app/.../Screens.kt` |
 | N55 ✓ `ffdc6d0` | the phone searches workspaces: a search icon on Home opens a sheet with a field over every workspace, the lately opened first | 231–233 | `android/client-core/.../Find.kt`, `android/app/.../Find.kt` |
-| N56 ✓ | the phone opens a shell: a `+` at the end of the pane tabs over `new_pane` | 234–235 | `android/client-core/.../Navigator.kt`, `android/app/.../Screens.kt` |
+| N56 ✓ `7a7b99c` | the phone opens a shell: a `+` at the end of the pane tabs over `new_pane` | 234–235 | `android/client-core/.../Navigator.kt`, `android/app/.../Screens.kt` |
 
 ## What is left
 In this order, which is proposed. The user chose on 2026-10-14 that the daily flow of the terminal client comes next, that the special keys of the phone are among the last things, and that the viewer of files and Markdown is the very last (he does not want to work on Markdown yet). Each becomes a part (N43 onwards) with its REQs when it starts; a part with a screen starts from an approved prototype. What is missing was found by setting the old jw's README against what `next/` does today.

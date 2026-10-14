@@ -102,10 +102,12 @@ import dev.jw.next.contract.BlocksMode
 import dev.jw.next.contract.Id
 import dev.jw.next.contract.Node
 import dev.jw.next.contract.PaneSummary
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private val Gutter = 16.dp
 private val MarkColumn = 28.dp
+private const val PANE_WAIT_MS = 5_000L
 
 @Composable
 internal fun Mono(
@@ -391,6 +393,8 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
     var waitingPane by remember(screen.id) { mutableStateOf<String?>(null) }
     var addError by remember(screen.id) { mutableStateOf<String?>(null) }
     LaunchedEffect(version, waitingPane) { waitingPane?.let { p -> nav.selectWhenShown(state, screen.id, p)?.let { set(it); waitingPane = null } } }
+    // A shell that ends at once takes its pane with it before the workspace lists it: the `+` must not wait for ever.
+    LaunchedEffect(waitingPane) { if (waitingPane != null) { delay(PANE_WAIT_MS); waitingPane = null } }
     var worktree by remember(screen.id) { mutableStateOf<String?>(null) }
     var naming by remember(screen.id) { mutableStateOf<Naming?>(null) }
     var closing by remember(screen.id) { mutableStateOf<CloseSheet?>(null) }
@@ -668,28 +672,28 @@ private fun terminalText(lines: List<String>, row: Int, col: Int, visible: Boole
 private fun PaneTabs(panes: List<PaneSummary>, current: String?, state: ClientState, adding: Boolean, select: (String) -> Unit, hold: (PaneSummary) -> Unit, add: () -> Unit) {
     Column(Modifier.fillMaxWidth().background(Palette.panel)) {
         Row(Modifier.fillMaxWidth()) {
-        Row(Modifier.weight(1f).horizontalScroll(rememberScrollState())) {
-            panes.forEach { p ->
-                val on = p.id == current
-                val unseen = p.attention.filterNot(state.seen::isSeen).byUrgency()
-                Column(Modifier.combinedClickable(onClick = { select(p.id) }, onLongClick = { hold(p) })) {
-                    Row(
-                        Modifier.defaultMinSize(minHeight = 44.dp).padding(horizontal = Gutter),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Mono(p.title, if (on) Palette.fg else Palette.dim, 13, bold = on)
-                        unseen.firstOrNull()?.let { a -> a.mark().let { Mono(it.glyph, it.tone.color(), 14, bold = true) } }
+            Row(Modifier.weight(1f).horizontalScroll(rememberScrollState())) {
+                panes.forEach { p ->
+                    val on = p.id == current
+                    val unseen = p.attention.filterNot(state.seen::isSeen).byUrgency()
+                    Column(Modifier.combinedClickable(onClick = { select(p.id) }, onLongClick = { hold(p) })) {
+                        Row(
+                            Modifier.defaultMinSize(minHeight = 44.dp).padding(horizontal = Gutter),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Mono(p.title, if (on) Palette.fg else Palette.dim, 13, bold = on)
+                            unseen.firstOrNull()?.let { a -> a.mark().let { Mono(it.glyph, it.tone.color(), 14, bold = true) } }
+                        }
+                        Box(Modifier.fillMaxWidth().height(2.dp).background(if (on) Palette.blue else Color.Transparent))
                     }
-                    Box(Modifier.fillMaxWidth().height(2.dp).background(if (on) Palette.blue else Color.Transparent))
                 }
             }
-        }
-        // A shell more (REQ-234): fixed at the end, so it is there however many tabs there are.
-        Box(
-            Modifier.width(48.dp).height(46.dp).clickable(enabled = !adding, onClick = add).semantics { contentDescription = "Panel nuevo" },
-            contentAlignment = Alignment.Center,
-        ) { Mono(if (adding) "…" else "+", Palette.blue, 20, bold = true) }
+            // A shell more (REQ-234): fixed at the end, so it is there however many tabs there are.
+            Box(
+                Modifier.width(48.dp).height(46.dp).clickable(enabled = !adding, onClick = add).semantics { contentDescription = "Panel nuevo" },
+                contentAlignment = Alignment.Center,
+            ) { Mono(if (adding) "…" else "+", Palette.blue, 20, bold = true) }
         }
         Hairline()
     }
