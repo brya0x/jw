@@ -279,6 +279,12 @@ em.live{font-style:normal;display:inline;color:var(--green)} em.live.on{color:va
 .dock{display:flex;gap:8px;align-items:center;padding:8px 12px;background:var(--panel);border-top:1px solid var(--line)}
 .dock .p{flex:1;min-width:0;font-size:11px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dock button.go{min-height:48px;padding:0 16px;border-radius:6px;background:var(--blue);color:var(--bg);font-weight:700}
+.dock button.go.here{background:transparent;color:var(--green);border:1px solid var(--green)}
+.dock button.go[disabled]{opacity:.6}
+.fe .tg.on{color:var(--green)}
+.kv{display:grid;grid-template-columns:64px 1fr;gap:4px 10px;padding:2px 16px 10px;font-size:12px}
+.kv em{font-style:normal;color:var(--dim)}.kv b{font-weight:400;overflow-wrap:anywhere}
+.sec[data-hold]{user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
 .vsw{display:flex;border-bottom:1px solid var(--line);background:var(--panel)}.vsw button{flex:1;min-height:44px;color:var(--dim);font-size:12px;border-bottom:2px solid transparent}.vsw button[aria-selected=true]{color:var(--blue);border-bottom-color:var(--blue)}
 .src{padding:8px 0;font-size:11.5px;line-height:1.5}.src div{display:flex;gap:8px;padding:0 10px}.src i{font-style:normal;flex:none;width:30px;text-align:right;color:var(--dim);font-size:10.5px}.src span{white-space:pre-wrap;word-break:break-word;flex:1}
 .md{padding:12px 16px;font-size:13px;line-height:1.55}.md h1{font-size:17px;margin:.2em 0 .5em}.md h2{font-size:15px;margin:1em 0 .4em;color:var(--blue)}.md h3{font-size:13.5px;margin:.9em 0 .3em;color:var(--cyan)}
@@ -684,9 +690,9 @@ function vHome(){
   if(dirs.length){out+='<div class="sec">carpetas</div>';dirs.forEach(d=>{out+=row(d,i++)})}
   return `<div class="hdr"><button class="sess" data-sheet="sess"><em>sesión</em> ${state.sess} ▾</button><span style="flex:1"></span>
       <button class="ib" data-go="pcs" aria-label="Mis PCs">${ic('pc')}</button><button class="ib" data-sheet="pick" aria-label="Buscar workspace">${ic('search')}</button><button class="ib" data-sheet="open" aria-label="Abrir">${ic('plus')}</button></div>
-    <div class="scroll"><div class="sec">workspaces · ${list.length}</div>${out}
-      <div class="legend"><b><span style="color:var(--green)">●</span> abierto</b><b><span style="color:var(--magenta)">✻</span> agente</b><b><span style="color:var(--green)">⚡</span> dev</b><b><span style="color:var(--red)">!</span> permiso</b><b><span style="color:var(--yellow)">?</span> pregunta</b><b><span style="color:var(--magenta)">◆</span> plan</b><b><span style="color:var(--green)">❯</span> comando</b><b><span style="color:var(--green)">✓</span> agente listo</b><b><span style="color:var(--cyan)">⚑</span> mergeado</b><b><span style="color:var(--red)">✗</span> falló</b></div></div>
-    ${statusBar('NORMAL','toca una fila para entrar · ␣ busca')}${nav()}`;
+    <div class="scroll"><div class="sec" data-hold="open">workspaces · ${list.length}</div>${out}
+      <div class="legend" data-hold="open"><b><span style="color:var(--green)">●</span> abierto</b><b><span style="color:var(--magenta)">✻</span> agente</b><b><span style="color:var(--green)">⚡</span> dev</b><b><span style="color:var(--red)">!</span> permiso</b><b><span style="color:var(--yellow)">?</span> pregunta</b><b><span style="color:var(--magenta)">◆</span> plan</b><b><span style="color:var(--green)">❯</span> comando</b><b><span style="color:var(--green)">✓</span> agente listo</b><b><span style="color:var(--cyan)">⚑</span> mergeado</b><b><span style="color:var(--red)">✗</span> falló</b></div></div>
+    ${statusBar('NORMAL','toca una fila · mantén pulsado el título para crear')}${nav()}`;
 }
 
 function vInbox(){
@@ -922,7 +928,9 @@ function vWs(){
 /* ---- M8: the PC's files, the viewer and the creation sheets ---- */
 const FS={
  '~':['Downloads/','notes/','ws/','.ssh/','.zshrc','todo.txt'],
- '~/ws':['jw/','jw-wt/','mctekk-api/','mctekk-web/'],
+ '~/ws':['blog/','jw/','jw-wt/','mctekk-api/','mctekk-web/','scratch/'],
+ '~/ws/blog':['.git/','posts/'],'~/ws/scratch':['a.txt'],'~/ws/jw-wt':['daemon-sock/','mobile-app/','motion/'],
+ '~/ws/mctekk-api':['.git/','src/'],'~/ws/mctekk-web':['.git/','src/'],
  '~/ws/jw':['.git/','android/','crates/','docs/','scripts/','AGENTS.md','Cargo.toml','README.md','logo.png','link-a-etc'],
  '~/ws/jw/docs':['specs/','README.md'],
  '~/ws/jw/docs/specs':['mobile.md','mobile-prototype.html','rust-tui.md'],
@@ -938,6 +946,28 @@ const hidden=n=>n.startsWith('.');
 const isDir=n=>n.endsWith('/');
 const parentOf=p=>p==='~'?null:p.slice(0,p.lastIndexOf('/'))||'~';
 function fsErr(p){return p==='~/.ssh'?'sin permiso':null}
+const isGit=p=>(FS[p]||[]).includes('.git/')||p.includes('-wt/');
+const isOpened=p=>state.w.some(x=>x.path===p);
+const WTN={jw:['mobile-app','daemon-sock','motion','old'],'mctekk-api':['auth','ws-1'],'mctekk-web':['onboarding']};
+const rootOf=n=>state.w.find(x=>x.kind!=='wt'&&x.name===n);
+const NOBASE='la rama actual';
+const baseOf=w=>w.kind==='wt'?w.name:NOBASE;
+const freeWs=proj=>{const t=WTN[proj]||[];let i=1;while(t.includes('ws-'+i))i++;return 'ws-'+i};
+/* el nombre del worktree, como el cuadro de w en el PC (REQ-197, REQ-198) */
+function nwCheck(proj,name){
+  if(!/^[a-z0-9-]+$/.test(name)) return 'solo letras minúsculas, números y guiones';
+  if((WTN[proj]||[]).includes(name)) return name==='old'?'la rama feat/old ya existe':'ya hay un worktree «'+name+'»';
+  return null}
+function nwPrev(){
+  const st=state.nw||'form', proj=state.nwProj, name=state.nwName||freeWs(proj), err=nwCheck(proj,name), r=rootOf(proj);
+  const kv=`<div class="kv"><em>rama</em><b>feat/${name}</b><em>desde</em><b>${state.nwBase}</b><em>carpeta</em><b>${r?r.path:''}-wt/${name}</b></div>`;
+  return (err?`<div class="bad">${err}</div>`:kv)+(st==='fail'&&!err?'<div class="bad">'+(r&&r.kind==='dir'?'git no pudo crearlo: fatal: not a git repository (or any of the parent directories): .git':'git no pudo crearlo: fatal: a branch named \'feat/'+name+'\' already exists')+'</div>':'')+
+    `<button class="gobtn" data-act="createwt" ${err||st==='busy'?'disabled':''}>${st==='busy'?'<span class="spin"></span>creando…':'crear y abrir'}</button>
+     <div class="note2">crea el worktree y le abre un shell, como w en el PC</div>`}
+function defaultWt(){const w=wsOf(state.ws),p=curProj(),pr=rootOf(p);openWt(p,w&&w.kind==='wt'&&pr&&w.proj===pr.id?w.name:NOBASE)}
+function openWt(proj,base){state.nwProj=proj;state.nwBase=base;state.nwName='';state.nw='form';state.sheet='newwt'}
+function curProj(){const w=wsOf(state.ws);return w.kind==='wt'?w.proj&&rootOf2(w.proj).name:w.kind==='root'?w.name:'jw'}
+function rootOf2(id){return state.w.find(x=>x.id===id)}
 
 function vFiles(){
   const f=state.fs, p=f.path, ent=FS[p], err=fsErr(p), open=f.mode==='open', w=wsOf(state.ws);
@@ -947,18 +977,20 @@ function vFiles(){
   if(state.fload) list=`<div class="centre"><span class="spin"></span><span class="big">leyendo ${p}</span></div>`;
   else if(err) list=`<div class="centre"><span class="big" style="color:var(--red)">${err}</span>el PC no deja leer esta carpeta<button data-fs="${parentOf(p)||'~'}">subir</button></div>`;
   else{
-    let rows=(ent||[]).filter(n=>f.hidden||!hidden(n)).sort((a,b)=>(isDir(b)-isDir(a))||a.localeCompare(b));
+    let rows=(ent||[]).filter(n=>(f.hidden||!hidden(n))&&(!open||(isDir(n)&&n!=='.git/'))).sort((a,b)=>open?(a.toLowerCase()<b.toLowerCase()?-1:1):(isDir(b)-isDir(a))||a.localeCompare(b));
     const up=parentOf(p);
     list=(up?`<button class="fe d" data-fs="${up}"><span class="g">‹</span><span class="nm"><b>..</b><span>${up}</span></span></button>`:'')+
       rows.map(n=>{const d=isDir(n), nm=n.replace(/\/$/,''), md=/\.md$/.test(n), lk=n==='link-a-etc';
         const sub=d?(FS[p+'/'+nm]===undefined?'':FS[p+'/'+nm]===null?'sin permiso':((FS[p+'/'+nm]||[]).length+' elementos')):lk?'enlace → /etc/hosts':(md?'4 KB':'1 KB');
-        return `<button class="fe ${d?'d':md?'md':''} ${open&&!d?'off':''}" data-${d?'fs':'pcfile'}="${p}/${nm}" ${open&&!d?'aria-disabled="true"':''}><span class="g">${d?'▸':lk?'↗':'·'}</span><span class="nm"><b>${nm}</b><span>${sub}</span></span>${md?'<span class="tg">md</span>':''}</button>`}).join('')+
-      (rows.length?'':'<div class="nodiff">carpeta vacía</div>')+(f.big?'<div class="note">se listan los primeros 2 000 elementos de 14 213</div>':'');
+        if(open){const q=p+'/'+nm, g=isGit(q);return `<button class="fe d" data-fs="${q}"><span class="g">▸</span><span class="nm"><b>${nm}</b><span>${g?'repositorio git':'carpeta'}</span></span>${isOpened(q)?'<span class="tg on">● abierta</span>':''}${g?'<span class="tg">git</span>':''}</button>`}
+        return `<button class="fe ${d?'d':md?'md':''}" data-${d?'fs':'pcfile'}="${p}/${nm}"><span class="g">${d?'▸':lk?'↗':'·'}</span><span class="nm"><b>${nm}</b><span>${sub}</span></span>${md?'<span class="tg">md</span>':''}</button>`}).join('')+
+      (rows.length?'':`<div class="nodiff">${open?'sin subcarpetas':'carpeta vacía'}</div>`)+(f.big?`<div class="note">${open?'se listan las primeras 500 carpetas de 1 214':'se listan los primeros 2 000 elementos de 14 213'}</div>`:'');
   }
   const head=`<div class="hdr"><button class="ib" data-act="filesback" aria-label="Volver">${ic('back')}</button><div class="t"><b>${open?'abrir carpeta':w.name+' · archivos'}</b><span>${p}</span></div>
      <button class="ib" data-act="hidden" aria-label="Archivos ocultos" aria-pressed="${f.hidden}" style="width:auto;padding:0 10px;font-size:12px;color:${f.hidden?'var(--blue)':'var(--dim)'}">.ocultos</button></div>`;
-  const dock=open?`<div class="dock"><span class="p">${p}</span><button class="go" data-act="openhere" ${err?'disabled':''}>abrir esta carpeta</button></div>`:'';
-  return `${head}<div class="crumbs">${crumbs}</div><div class="scroll">${list}</div>${dock}${statusBar(open?'NORMAL':'NORMAL',open?'elige una carpeta · se abre como workspace':'toca un archivo · .md se lee con formato')}`;
+  const here=isOpened(p), busy=!!state.fopen;
+  const dock=open?`<div class="dock"><span class="p">${p}</span><button class="go ${here?'here':''}" data-act="openhere" ${err||busy?'disabled':''}>${busy?'<span class="spin"></span>abriendo…':here?'ya abierta · ir':'abrir esta carpeta'}</button></div>`:'';
+  return `${head}<div class="crumbs">${crumbs}</div><div class="scroll">${list}</div>${dock}${statusBar('NORMAL',open?'toca una carpeta para entrar · se abre como workspace':'toca un archivo · .md se lee con formato')}`;
 }
 
 function vViewer(){
@@ -994,7 +1026,8 @@ function sheet(){
   }
   if(s==='wsmenu'){
     const w=wsOf(state.holdWs||state.ws), nm=(state.wn||{})[w.id]||w.name;
-    body=`<h3>workspace «${nm}»</h3><div class="list"><button class="lk" data-sheet="renws"><kbd>✎</kbd><span>renombrar el workspace</span></button></div><p style="margin:6px 16px 10px;color:var(--dim);font-size:12px">Cerrar un workspace o quitar un worktree se hace en el PC.</p>`;
+    const pr=w.kind==='wt'?rootOf2(w.proj):w;
+    body=`<h3>workspace «${nm}»</h3><div class="list"><button class="lk" data-act="newwtfor" data-wsid="${w.id}"><kbd>w</kbd><span>worktree nuevo</span><em>de «${pr.name}»</em></button><button class="lk" data-sheet="renws"><kbd>✎</kbd><span>renombrar el workspace</span></button></div><p style="margin:6px 16px 10px;color:var(--dim);font-size:12px">Cerrar un workspace o quitar un worktree se hace en el PC.</p>`;
   }
   if(s==='panemenu'){
     const p=state.pane, nm=(state.pn||{})[p]||p;
@@ -1017,7 +1050,7 @@ function sheet(){
     if(state.sessNew) body=newSessForm();
   }
   if(s==='open'){
-    body=`<h3>abrir</h3><div class="list"><button class="lk" data-act="folder"><kbd>o</kbd><span>abrir carpeta</span><em>del PC</em></button><button class="lk" data-act="newwt"><kbd>w</kbd><span>nuevo worktree</span><em>de un proyecto</em></button><button class="lk" data-sheet="pick"><kbd>␣</kbd><span>buscar workspace</span></button></div>`;
+    body=`<h3>workspace nuevo</h3><div class="list"><button class="lk" data-act="folder"><kbd>o</kbd><span>abrir una carpeta</span><em>del PC</em></button><button class="lk" data-act="newwt"><kbd>w</kbd><span>worktree nuevo</span><em>de «${curProj()}»</em></button><button class="lk" data-sheet="pick"><kbd>␣</kbd><span>buscar workspace</span></button></div>`;
   }
   if(s==='answer'){
     const w=wsOf(state.ws), opts=['Yes','Yes, and don\'t ask again for pnpm commands','No, and tell Claude what to do differently'];
@@ -1030,17 +1063,11 @@ function sheet(){
   }
 
   if(s==='newwt'){
-    const ro=state.ro, st=state.nw||'form', roots=state.w.filter(x=>x.kind==='root');
-    body=`<h3>nuevo worktree</h3>
+    const st=state.nw||'form';
+    body=`<h3>worktree nuevo</h3>
       <button class="pick" data-sheet="newwtproj" ${st==='busy'?'disabled':''}><em>proyecto</em><span>${state.nwProj}</span><em>▾</em></button>
-      <label class="fld"><label>nombre</label></label><input id="nwname" value="${state.nwName||'feat/ajustes-rapidos'}" ${st==='busy'||ro?'disabled':''} aria-label="Nombre">
-      <label class="fld"><label>rama · si la dejas vacía, la del nombre</label></label><input id="nwbranch" placeholder="feat/ajustes-rapidos" ${st==='busy'||ro?'disabled':''} aria-label="Rama">
-      <label class="fld"><label>tarea para el agente · opcional</label></label><textarea id="nwtask" placeholder="Qué debe hacer el agente al abrir" ${st==='busy'||ro?'disabled':''}></textarea>
-      <div class="note2">sale de origin/main y corre el setup del proyecto, como ^␣ w en el PC</div>
-      ${st==='err'?'<div class="bad">la rama feat/ajustes-rapidos ya existe en este proyecto</div>':''}
-      ${ro?'<div class="bad" style="color:var(--yellow)">solo lectura: este puente no deja crear worktrees</div>':''}
-      <button class="gobtn" data-act="createwt" ${st==='busy'||ro?'disabled':''}>${st==='busy'?'<span class="spin"></span>creando · 18 s':'crear y abrir'}</button>
-      ${st==='busy'?'<div class="note2">puede tardar: corre el setup. Puedes cerrar esto; seguirá en el PC.</div>':''}`;
+      <label class="fld"><label>nombre</label></label><input id="nwname" value="${state.nwName||freeWs(state.nwProj)}" ${st==='busy'?'disabled':''} autocomplete="off" autocapitalize="none" aria-label="Nombre">
+      <div id="nwprev">${nwPrev()}</div>`;
   }
   if(s==='newwtproj'){
     body=`<h3>proyecto</h3><div class="list">${state.w.filter(x=>x.kind==='root').map(x=>`<button class="lk" data-act="setproj" data-proj="${x.name}"><kbd>${x.name===state.nwProj?'●':' '}</kbd><span>${x.name}</span><em>${x.path}</em></button>`).join('')}</div>`;
@@ -1097,7 +1124,7 @@ function render(){
   $('#overlay').innerHTML=sheet();
   const o=$('#out'); if(o) o.scrollTop=o.scrollHeight;
   const q=$('#q'); if(q){q.focus();q.setSelectionRange(q.value.length,q.value.length)}
-  $('#jump').innerHTML=[['connect','Conexión (QR)'],['perm','Cámara: permiso · nuevo'],['permdenied','Cámara bloqueada · nuevo'],['cam','Cámara · visor · nuevo'],['paste','Pegar enlace · nuevo'],['pair','Código de emparejamiento · nuevo'],['denied','El PC rechaza · nuevo'],['expired','Código vencido · nuevo'],['unreach','No encuentro tu PC · nuevo'],['proto','Protocolo distinto · nuevo'],['set','Respuestas rápidas · nuevo'],['limited','Demasiados intentos · nuevo'],['pcoff','Home · el último PC no contesta · nuevo'],['pcs','Mis PCs · nuevo'],['pcsbusy','Mis PCs · conectando · nuevo'],['pcsnone','Mis PCs · ninguno encendido · nuevo'],['home','Workspaces (sidebar)'],['wsroot','Entrar a la raíz'],['ws','Entrar a un worktree'],['pick','Buscador ␣'],['leader','Menú ^␣ · cambiado'],['sel','Selección de texto · nuevo'],['shblk','Shell · bloque elegido · nuevo'],['slash','Escribir / · comandos · nuevo'],['slashf','Escribir /co · filtrado · nuevo'],['askc','Pregunta · elegir una · nuevo'],['askm','Pregunta · elegir varias · nuevo'],['askp','Pregunta · plan mode · nuevo'],['think','Chat · pensando · nuevo'],['resp','Chat · respondiendo · nuevo'],['notices','Chat · avisos de tareas · nuevo'],['shnv','Shell · programa a pantalla completa · nuevo'],['inbox','Avisos'],['changes','Cambios · General · cambiado'],['chunc','Cambios · Sin commitear · nuevo'],['chcom','Cambios · Commits · nuevo'],['chcomf','Cambios · un commit · nuevo'],['chfile','Cambios · un archivo · cambiado'],['chren','Cambios · renombrado · nuevo'],['chbin','Cambios · binario · nuevo'],['chunr','Cambios · ilegible · nuevo'],['chbig','Cambios · cortado · nuevo'],['chtoo','Cambios · demasiado grande · nuevo'],['chnobase','Cambios · sin rama base · nuevo'],['chload','Cambios · leyendo · nuevo'],['cherr','Cambios · error de una vista · nuevo'],['chempty','Cambios · sin cambios · nuevo'],['chnone','Cambios · sin workspace · nuevo'],['chseen','Cambios · vistos compartidos con la PC · nuevo'],['chchg','Cambios · un archivo cambió desde que lo viste · nuevo'],['chlive','Cambios · el agente edita, en vivo · nuevo'],['chnorepo','Cambios · la carpeta no es un repositorio · nuevo'],['f1','Archivos · un workspace · nuevo'],['f2','Archivos · ocultos · nuevo'],['f3','Archivos · abrir carpeta · nuevo'],['f4','Archivos · sin permiso · nuevo'],['f5','Archivos · vacía · nuevo'],['f6','Archivos · demasiados · nuevo'],['v1','Visor · markdown · nuevo'],['v2','Visor · markdown fuente · nuevo'],['v3','Visor · texto · nuevo'],['v4','Visor · binario · nuevo'],['v5','Visor · cortado a 1 MiB · nuevo'],['v6','Visor · sin permiso · nuevo'],['w1','Nuevo worktree · nuevo'],['w2','Nuevo worktree · creando · nuevo'],['w3','Nuevo worktree · error · nuevo'],['w4','Nuevo worktree · solo lectura · nuevo'],['n1','Nueva sesión · nuevo'],['n2','Nueva sesión · nombre repetido · nuevo'],['n3','Nueva sesión · es un comando · nuevo'],['p1','Menú + · cambiado'],['settings','Ajustes: tema y modo · cambiado'],['closepane','Cerrar un panel · nuevo'],['wsmenu','Mantener pulsado un workspace · nuevo'],['panemenu','Mantener pulsado un panel · nuevo'],['renws','Renombrar un workspace · nuevo'],['renpane','Nombrar un panel · nuevo']].map(([k,l])=>`<button data-jump="${k}">${l}</button>`).join('');
+  $('#jump').innerHTML=[['connect','Conexión (QR)'],['perm','Cámara: permiso · nuevo'],['permdenied','Cámara bloqueada · nuevo'],['cam','Cámara · visor · nuevo'],['paste','Pegar enlace · nuevo'],['pair','Código de emparejamiento · nuevo'],['denied','El PC rechaza · nuevo'],['expired','Código vencido · nuevo'],['unreach','No encuentro tu PC · nuevo'],['proto','Protocolo distinto · nuevo'],['set','Respuestas rápidas · nuevo'],['limited','Demasiados intentos · nuevo'],['pcoff','Home · el último PC no contesta · nuevo'],['pcs','Mis PCs · nuevo'],['pcsbusy','Mis PCs · conectando · nuevo'],['pcsnone','Mis PCs · ninguno encendido · nuevo'],['home','Workspaces (sidebar)'],['wsroot','Entrar a la raíz'],['ws','Entrar a un worktree'],['pick','Buscador ␣'],['leader','Menú ^␣ · cambiado'],['sel','Selección de texto · nuevo'],['shblk','Shell · bloque elegido · nuevo'],['slash','Escribir / · comandos · nuevo'],['slashf','Escribir /co · filtrado · nuevo'],['askc','Pregunta · elegir una · nuevo'],['askm','Pregunta · elegir varias · nuevo'],['askp','Pregunta · plan mode · nuevo'],['think','Chat · pensando · nuevo'],['resp','Chat · respondiendo · nuevo'],['notices','Chat · avisos de tareas · nuevo'],['shnv','Shell · programa a pantalla completa · nuevo'],['inbox','Avisos'],['changes','Cambios · General · cambiado'],['chunc','Cambios · Sin commitear · nuevo'],['chcom','Cambios · Commits · nuevo'],['chcomf','Cambios · un commit · nuevo'],['chfile','Cambios · un archivo · cambiado'],['chren','Cambios · renombrado · nuevo'],['chbin','Cambios · binario · nuevo'],['chunr','Cambios · ilegible · nuevo'],['chbig','Cambios · cortado · nuevo'],['chtoo','Cambios · demasiado grande · nuevo'],['chnobase','Cambios · sin rama base · nuevo'],['chload','Cambios · leyendo · nuevo'],['cherr','Cambios · error de una vista · nuevo'],['chempty','Cambios · sin cambios · nuevo'],['chnone','Cambios · sin workspace · nuevo'],['chseen','Cambios · vistos compartidos con la PC · nuevo'],['chchg','Cambios · un archivo cambió desde que lo viste · nuevo'],['chlive','Cambios · el agente edita, en vivo · nuevo'],['chnorepo','Cambios · la carpeta no es un repositorio · nuevo'],['f1','Archivos · un workspace · nuevo'],['f2','Archivos · ocultos · nuevo'],['f3','Abrir carpeta · navegador · cambiado'],['f7','Abrir carpeta · ya abierta · nuevo'],['f8','Abrir carpeta · un repositorio · nuevo'],['f9','Abrir carpeta · demasiadas · nuevo'],['f4','Archivos · sin permiso · nuevo'],['f5','Archivos · vacía · nuevo'],['f6','Archivos · demasiados · nuevo'],['v1','Visor · markdown · nuevo'],['v2','Visor · markdown fuente · nuevo'],['v3','Visor · texto · nuevo'],['v4','Visor · binario · nuevo'],['v5','Visor · cortado a 1 MiB · nuevo'],['v6','Visor · sin permiso · nuevo'],['w1','Worktree nuevo · el formulario · cambiado'],['w2','Worktree nuevo · creando · cambiado'],['w3','Worktree nuevo · git lo rechaza · cambiado'],['w4','Worktree nuevo · nombre no válido · nuevo'],['w5','Worktree nuevo · ya existe · nuevo'],['w6','Worktree nuevo · otro proyecto · nuevo'],['w7','Worktree nuevo · la carpeta no es un repositorio · nuevo'],['wsmenuh','Mantener pulsada una fila de Home · nuevo'],['wsmenud','Mantener pulsada una carpeta · nuevo'],['n1','Nueva sesión · nuevo'],['n2','Nueva sesión · nombre repetido · nuevo'],['n3','Nueva sesión · es un comando · nuevo'],['p1','Mantener pulsado el título de Home · cambiado'],['settings','Ajustes: tema y modo · cambiado'],['closepane','Cerrar un panel · nuevo'],['wsmenu','Mantener pulsado un workspace · nuevo'],['panemenu','Mantener pulsado un panel · nuevo'],['renws','Renombrar un workspace · nuevo'],['renpane','Nombrar un panel · nuevo']].map(([k,l])=>`<button data-jump="${k}">${l}</button>`).join('');
 }
 function answer(v,id){
   const w=wsOf(id); if(!w) return; buzz();
@@ -1137,13 +1164,17 @@ document.addEventListener('click',e=>{if(held){held=false;e.stopPropagation();e.
     if(d.jump==='wsroot'){state.demo=null;state.sess='main';enter('jw');return}
     if(d.jump==='ws'){state.sess='main';enter('jw/fix/daemon-sock');return}
     if(d.jump==='pick'||d.jump==='leader'){state.screen='home';state.sheet=d.jump;render();return}
-    if(/^[fvwnp][0-9]$/.test(d.jump)){const j=d.jump,m={f1:['~/ws/jw'],f2:['~/ws/jw',1],f3:['~/ws','open'],f4:['~/.ssh'],f5:['~/Downloads'],f6:['~/ws/jw','big']};
-      state.ro=false;state.nw='form';state.ns='form';state.sheet=null;
-      if(j[0]==='f'){const a=m[j];state.fs={path:a[0],mode:a[1]==='open'?'open':'browse',hidden:a[1]===1,big:a[1]==='big'};state.sess='main';state.ws='jw/feat/mobile-app';state.screen='files';render();return}
+    if(/^[fvwnp][0-9]$/.test(d.jump)){const j=d.jump,m={f1:['~/ws/jw'],f2:['~/ws/jw',1],f3:['~/ws','open'],f4:['~/.ssh'],f5:['~/Downloads'],f6:['~/ws/jw','big'],f7:['~/ws/jw','open'],f8:['~/ws/blog','open'],f9:['~/ws','open','big']};
+      state.ro=false;state.nw='form';state.ns='form';state.sheet=null;state.fopen=false;
+      if(j[0]==='f'){const a=m[j];state.fs={path:a[0],mode:a[1]==='open'?'open':'browse',hidden:a[1]===1,big:a[1]==='big'||a[2]==='big'};if(j==='f8'){state.nwDemo=0}state.sess='main';state.ws='jw/feat/mobile-app';state.screen='files';render();return}
       if(j[0]==='v'){state.viewer={path:'~/ws/jw/docs/specs/mobile.md',kind:'ok',src:false};if(j==='v2')state.viewer.src=true;if(j==='v3')state.viewer={path:'~/ws/jw/crates/core/Cargo.toml',kind:'ok',src:false};if(j==='v4')state.viewer={path:'~/ws/jw/logo.png',kind:'bin',src:false};if(j==='v5')state.viewer={path:'~/ws/jw/docs/specs/rust-tui.md',kind:'big',src:false};if(j==='v6')state.viewer={path:'~/.ssh/id_ed25519',kind:'err',src:false};state.screen='viewer';render();return}
-      if(j[0]==='w'){state.sess='main';state.screen='home';state.sheet='newwt';if(j==='w2')state.nw='busy';if(j==='w3')state.nw='err';if(j==='w4')state.ro=true;render();return}
+      if(j[0]==='w'){state.sess='main';state.screen='home';state.ws='jw/feat/mobile-app';defaultWt();
+        if(j==='w2'){state.nw='busy';state.nwName='ws-1'}if(j==='w3'){state.nwName='falla';state.nw='fail'}if(j==='w4')state.nwName='Mi Rama';if(j==='w5')state.nwName='motion';
+        if(j==='w6'){openWt('mctekk-api',NOBASE)}if(j==='w7'){openWt('~/notes',NOBASE);state.nw='fail'}
+        render();return}
       if(j[0]==='n'){state.sess='main';state.screen='home';state.sheet='sess';state.sessNew=true;if(j==='n2')state.ns='err';if(j==='n3'){state.ns='cmd';state.nsName='worktree'}else state.nsName='';render();return}
       if(j==='p1'){state.sess='main';state.screen='home';state.sheet='open';render();return}}
+    if(d.jump==='wsmenuh'||d.jump==='wsmenud'){state.sess='main';state.screen='home';state.holdWs=d.jump==='wsmenuh'?'jw/fix/daemon-sock':'~/notes';state.sheet='wsmenu';render();return}
     if(d.jump==='wsmenu'||d.jump==='panemenu'){state.screen='ws';state.ws=state.ws||'jw/feat/mobile-app';state.pane='claude';state.holdWs=null;state.sheet=d.jump;render();return}
     if(d.jump==='renws'||d.jump==='renpane'){state.screen='ws';state.ws=state.ws||'jw/feat/mobile-app';state.pane='claude';state.sheet=d.jump;render();return}
     if(d.jump==='closepane'){state.gone=[];state.screen='ws';state.ws=state.ws||'jw/feat/mobile-app';state.pane='claude';state.sheet='closepane';render();return}
@@ -1173,7 +1204,7 @@ document.addEventListener('click',e=>{if(held){held=false;e.stopPropagation();e.
   if(d.sess){state.sess=d.sess;state.sheet=null;toast('sesión '+d.sess);render();return}
   if(d.pc){toast('^␣ '+d.pc+' solo se hace en el PC: usa jw ahí');return}
   if(d.lead){const k=d.lead;state.sheet=null;
-    if(k==='␣'){state.sheet='pick'}else if(k==='a'){state.sheet='sess'}else if(k==='o'){state.screen='files';state.fs={path:'~',mode:'open',hidden:false}}else if(k==='w'){state.sheet='newwt'}else if(k==='/'){state.fs={path:wsOf(state.ws).path,mode:'browse',hidden:false};state.screen='files'}else if(k==='q'){state.screen='connect'}
+    if(k==='␣'){state.sheet='pick'}else if(k==='a'){state.sheet='sess'}else if(k==='o'){state.screen='files';state.fs={path:'~',mode:'open',hidden:false}}else if(k==='w'){defaultWt()}else if(k==='/'){state.fs={path:wsOf(state.ws).path,mode:'browse',hidden:false};state.screen='files'}else if(k==='q'){state.screen='connect'}
     else if(k==='1-9'){state.screen='home'}else toast('^␣ '+k);
     render();return}
   if(d.go){state.screen=d.go;state.file=null;state.sheet=null;render();return}
@@ -1225,11 +1256,17 @@ document.addEventListener('click',e=>{if(held){held=false;e.stopPropagation();e.
     case 'wsfiles':state.fs={path:wsOf(state.ws).path,mode:'browse',hidden:false};state.screen='files';state.sheet=null;render();break;
     case 'filesback':state.screen=state.fs.mode==='open'&&state.fromSheet?'home':(state.fs.mode==='open'?'home':'ws');render();break;
     case 'hidden':state.fs.hidden=!state.fs.hidden;render();break;
-    case 'openhere':toast('abierta como workspace: '+state.fs.path.split('/').pop());state.screen='home';render();break;
+    case 'openhere':{const path=state.fs.path,w=state.w.find(x=>x.path===path);
+      if(w){enter(w.id,'shell');break}
+      state.fopen=true;render();
+      setTimeout(()=>{const g=isGit(path),nm=path.split('/').pop(),id=g?nm:path;
+        state.w.push({id,kind:g?'root':'dir',name:g?nm:path,path,sess:'main',ag:'idle',dev:0,pr:'',last:'Shell nuevo en la carpeta.',t:'ahora',att:[]});
+        state.fopen=false;enter(id,'shell')},900);break}
     case 'viewback':state.screen='files';render();break;
     case 'vsrc0':state.viewer.src=false;render();break;
     case 'vsrc1':state.viewer.src=true;render();break;
-    case 'newwt':state.sheet='newwt';render();break;
+    case 'newwt':defaultWt();render();break;
+    case 'newwtfor':{const w=wsOf(t.dataset.wsid),pr=w.kind==='wt'?rootOf2(w.proj):w;openWt(pr.name,baseOf(w));render();break}
     case 'copyout':toast('salida copiada');break;
     case 'askpick':{const i=+t.dataset.i,k=(state.demo&&state.demo.ask)||'choose';if(k==='multi'){const c=state.askSel||[0,1];state.askSel=c.includes(i)?c.filter(x=>x!==i):[...c,i];render()}else{state.askOff=true;render();toast('enviado: opción '+(i+1))}break}
     case 'asksend':state.askOff=true;render();toast('enviado: '+(state.askSel||[0,1]).length+' opciones');break;
@@ -1246,13 +1283,17 @@ document.addEventListener('click',e=>{if(held){held=false;e.stopPropagation();e.
     case 'tool':state.open=state.open||{};state.open[t.dataset.i]=!state.open[t.dataset.i];render();break;
     case 'newsess':state.sheet='sess';state.sessNew=true;render();break;
     case 'sessback':state.sessNew=false;render();break;
-    case 'setproj':state.nwProj=t.dataset.proj;state.sheet='newwt';render();break;
+    case 'setproj':openWt(t.dataset.proj,NOBASE);render();break;
     case 'pickfolder':state.sheet=null;state.screen='files';state.fs={path:'~/ws',mode:'open',hidden:false};render();break;
-    case 'createwt':state.nw='busy';render();setTimeout(()=>{state.nw='form';state.sheet=null;enter('jw/feat/mobile-app')},1400);break;
+    case 'createwt':{const proj=state.nwProj,name=state.nwName||freeWs(proj),r=rootOf(proj);if(nwCheck(proj,name))break;state.nw='busy';render();
+      setTimeout(()=>{if(name==='falla'||r.kind==='dir'){state.nw='fail';render();return}
+        const id=r.id+'/feat/'+name;(WTN[proj]=WTN[proj]||[]).push(name);
+        state.w.push({id,kind:'wt',proj:r.id,name:'feat/'+name,path:r.path+'-wt/'+name,sess:r.sess,ag:'idle',dev:0,pr:'',last:'Shell nuevo en el worktree.',t:'ahora',att:[]});
+        state.nw='form';state.nwName='';enter(id,'shell')},1400);break}
     case 'createsess':state.sheet=null;state.sessNew=false;toast('sesión creada: '+(state.nsName||'trabajo'));render();break;
   }
 });
-document.addEventListener('input',e=>{if(e.target.id==='msg'){state.draft=e.target.value;const m=document.querySelector('.mirror');if(m)m.outerHTML=mirrorHtml();const sb=document.querySelector('#slashbox');if(sb)sb.innerHTML=slashHtml();return}if(e.target.id==='q'){state.q=e.target.value;const s=$('#overlay');s.innerHTML=sheet();const q=$('#q');q.focus();q.setSelectionRange(q.value.length,q.value.length)}});
+document.addEventListener('input',e=>{if(e.target.id==='msg'){state.draft=e.target.value;const m=document.querySelector('.mirror');if(m)m.outerHTML=mirrorHtml();const sb=document.querySelector('#slashbox');if(sb)sb.innerHTML=slashHtml();return}if(e.target.id==='nwname'){state.nwName=e.target.value.trim();const pv=$('#nwprev');if(pv)pv.innerHTML=nwPrev();return}if(e.target.id==='q'){state.q=e.target.value;const s=$('#overlay');s.innerHTML=sheet();const q=$('#q');q.focus();q.setSelectionRange(q.value.length,q.value.length)}});
 document.addEventListener('submit',e=>{
   if(e.target.id!=='comp') return; e.preventDefault();
   const v=$('#msg').value.trim(); if(!v) return; state.draft='';

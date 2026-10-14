@@ -171,6 +171,7 @@ class MainActivity : ComponentActivity() {
         when (val screen = state.screen) {
             is Screen.Workspace -> WorkspaceScreen(source, state, screen, nav) { state = it }
             is Screen.Changes -> ChangesScreen(source, state, screen, nav) { state = it }
+            is Screen.Folders -> FoldersScreen(source, state, nav) { state = it }
             is Screen.Settings -> SettingsScreen(source, state, nav, look, osDark, setLook) { state = it }
             else -> HomeScreen(source, state, nav, pcs) { state = it }
         }

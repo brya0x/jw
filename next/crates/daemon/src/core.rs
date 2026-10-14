@@ -877,6 +877,7 @@ impl Core {
                 name: ws.name.clone(),
                 kind: ws.kind,
                 path: ws.path.clone(),
+                project: ws.project.clone(),
                 branch: ws.branch.clone(),
                 pane_count: ws.panes.len() as u32,
                 attention: attention.clone(),

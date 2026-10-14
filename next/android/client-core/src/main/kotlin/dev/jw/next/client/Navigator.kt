@@ -2,6 +2,7 @@ package dev.jw.next.client
 
 import dev.jw.next.contract.Attention
 import dev.jw.next.contract.DiffScope
+import dev.jw.next.contract.DirListing
 import dev.jw.next.contract.Id
 import dev.jw.next.contract.Node
 
@@ -57,6 +58,21 @@ interface NodeSource {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
     }
 
+    /** Read the subfolders of [path] (the PC's home when null); [hidden] adds those starting with a dot. */
+    fun listDir(path: String?, hidden: Boolean, reply: (Result<DirListing>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** Open [path] as a workspace with a shell in it; [reply] gets the workspace's id, or the PC's message. */
+    fun openFolder(path: String, reply: (Result<Id>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** Make a worktree of [repo] on [branch] from [base], in the folder [folder] of `<repo>-wt`, with a shell in it. */
+    fun createWorktree(repo: String, branch: String, base: String?, folder: String, reply: (Result<Id>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
     /** Close a pane (its shell ends); [reply] gets the daemon's message when it refuses. */
     fun closePane(pane: Id, reply: (Result<Unit>) -> Unit) {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
@@ -73,6 +89,9 @@ sealed interface Screen {
 
     /** The changes of one workspace (REQ-113). */
     data class Changes(val workspace: Id) : Screen
+
+    /** The PC's folders, to choose one to open (REQ-201). */
+    data object Folders : Screen
 }
 
 /** [last] is the workspace opened most recently: the one the `diff` tab opens. */
@@ -115,6 +134,13 @@ class Navigator(private val source: NodeSource) {
         val seen = if (first != null) markNode(s.seen, first) else s.seen
         return s.copy(screen = at.copy(pane = first), seen = seen)
     }
+
+    /**
+     * Opens [id] once the session shows it: a workspace the phone just asked for is not in the
+     * session until the daemon says so. Null until then.
+     */
+    fun openWhenShown(s: ClientState, id: Id): ClientState? =
+        if (source.session().workspaces.any { it.id == id }) openWorkspace(s, id) else null
 
     fun show(s: ClientState, screen: Screen): ClientState = s.copy(screen = screen)
 

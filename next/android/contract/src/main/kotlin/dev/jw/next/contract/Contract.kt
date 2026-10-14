@@ -139,6 +139,10 @@ sealed interface Cmd {
     @Serializable @SerialName("open_folder")
     data class OpenFolder(val path: String) : Cmd
 
+    /** Read the subfolders of [path] (the PC's home when none); the result is a [DirListing]. */
+    @Serializable @SerialName("list_dir")
+    data class ListDir(val path: String? = null, val hidden: Boolean = false) : Cmd
+
     @Serializable @SerialName("create_worktree")
     data class CreateWorktree(val repo: String, val branch: String, val base: String? = null, val folder: String? = null) : Cmd
 
@@ -279,12 +283,21 @@ sealed interface PatchOp {
     data class Replace(override val path: String, val value: JsonElement) : PatchOp
 }
 
+/** One folder of a [DirListing]; [git] when it is a repository. */
+@Serializable
+data class DirEntry(val name: String, val git: Boolean = false)
+
+/** The result of `list_dir`: [dirs] is cut to the first ones when [total] is more than they are. */
+@Serializable
+data class DirListing(val path: String, val parent: String? = null, val home: String, val dirs: List<DirEntry>, val total: Int)
+
 @Serializable
 data class WorkspaceSummary(
     val id: Id,
     val name: String,
     val kind: WorkspaceKind,
     val path: String,
+    val project: String? = null,
     val branch: String? = null,
     @SerialName("pane_count") val paneCount: Int,
     val attention: List<Attention>,

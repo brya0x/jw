@@ -1,0 +1,9 @@
+{
+  "t": "cmd",
+  "id": "c9",
+  "cmd": {
+    "cmd": "list_dir",
+    "path": "/home/u/ws",
+    "hidden": true
+  }
+}

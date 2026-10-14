@@ -134,6 +134,8 @@ fn a_worktree_is_made_beside_the_repo_and_opened() {
     );
     assert_eq!(n["project"], text(&app));
     assert_eq!(n["path"], text(&std::fs::canonicalize(&wt).unwrap()));
+    let summary = &session(&mut c)["workspaces"][0];
+    assert_eq!(summary["project"], text(&app), "the summary says it too");
     d.stop();
 }
 
@@ -406,5 +408,88 @@ fn a_worktree_folder_may_be_named_and_cannot_leave_its_parent() {
     // A folder that is there is a conflict.
     let e = make(&mut c, "feat/again", Some("login")).unwrap_err();
     assert_eq!(e.code, ErrorCode::Conflict);
+    d.stop();
+}
+
+#[test]
+fn list_dir_names_the_folders_and_marks_repositories() {
+    let sb = Sandbox::new();
+    let d = sb.start();
+    let mut c = sb.client();
+    let dir = std::fs::canonicalize(&sb.dir).unwrap().join("browse");
+    for name in ["Beta", "alpha", ".hidden", "repo/.git"] {
+        std::fs::create_dir_all(dir.join(name)).unwrap();
+    }
+    std::fs::write(dir.join("a-file"), "x").unwrap();
+    let list = |c: &mut wire::Client, hidden: bool| {
+        c.cmd(Cmd::ListDir {
+            path: Some(text(&dir)),
+            hidden,
+        })
+        .unwrap()
+        .unwrap()
+        .unwrap()
+    };
+    let seen = list(&mut c, false);
+    assert_eq!(seen["path"], text(&dir));
+    assert_eq!(seen["parent"], text(dir.parent().unwrap()));
+    assert_eq!(seen["total"], 3);
+    let names: Vec<_> = seen["dirs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| {
+            (
+                e["name"].as_str().unwrap().to_owned(),
+                e["git"].as_bool().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        names,
+        [
+            ("alpha".into(), false),
+            ("Beta".into(), false),
+            ("repo".into(), true)
+        ]
+    );
+    assert_eq!(list(&mut c, true)["total"], 4);
+    d.stop();
+}
+
+#[test]
+fn list_dir_without_a_path_starts_at_home_and_refuses_what_is_not_a_folder() {
+    let sb = Sandbox::new();
+    let d = sb.start();
+    let mut c = sb.client();
+    let home = c
+        .cmd(Cmd::ListDir {
+            path: None,
+            hidden: false,
+        })
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(home["path"], home["home"]);
+    let dir = std::fs::canonicalize(&sb.dir).unwrap();
+    std::fs::write(dir.join("a-file"), "x").unwrap();
+    let code = |c: &mut wire::Client, path: String| {
+        c.cmd(Cmd::ListDir {
+            path: Some(path),
+            hidden: false,
+        })
+        .unwrap()
+        .unwrap_err()
+        .code
+    };
+    assert_eq!(
+        code(&mut c, text(&dir.join("missing"))),
+        ErrorCode::NotFound
+    );
+    assert_eq!(
+        code(&mut c, text(&dir.join("a-file"))),
+        ErrorCode::BadRequest
+    );
+    assert_eq!(code(&mut c, "relative".into()), ErrorCode::BadRequest);
     d.stop();
 }

@@ -164,6 +164,15 @@ pub enum Cmd {
     OpenFolder {
         path: String,
     },
+    /// Read the subfolders of `path` (the daemon's home when none), for a client choosing a
+    /// folder to open. The result is `{path, parent?, home, dirs: [{name, git}], total}`.
+    ListDir {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+        /// Also list the folders whose names start with a dot.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        hidden: bool,
+    },
     /// Make a git worktree of `repo` on `branch` and open it as a workspace.
     CreateWorktree {
         repo: String,
@@ -554,6 +563,9 @@ pub struct WorkspaceSummary {
     pub name: String,
     pub kind: WorkspaceKind,
     pub path: String,
+    /// The repository a worktree belongs to: where a new worktree of it is made from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
     pub pane_count: u32,

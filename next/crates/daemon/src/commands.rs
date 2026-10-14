@@ -6,6 +6,7 @@ use contract::{False, True};
 use serde_json::Value;
 
 use crate::agents;
+use crate::browse;
 use crate::changes;
 use crate::panes;
 use crate::rename;
@@ -43,6 +44,7 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
         Cmd::RenameWorkspace { workspace, name } => rename::workspace(shared, &workspace, &name),
         Cmd::RenamePane { pane, name } => rename::pane(shared, &pane, &name),
         Cmd::OpenFolder { path } => workspaces::open_folder(shared, &path),
+        Cmd::ListDir { path, hidden } => browse::list_dir(path.as_deref(), hidden),
         Cmd::CreateWorktree {
             repo,
             branch,

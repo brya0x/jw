@@ -81,6 +81,7 @@ import dev.jw.next.client.homeRows
 import dev.jw.next.client.shown
 import dev.jw.next.client.shownName
 import dev.jw.next.client.mark
+import dev.jw.next.client.repo
 import dev.jw.next.client.outputText
 import dev.jw.next.client.shortPath
 import dev.jw.next.client.what
@@ -162,6 +163,14 @@ internal fun Header(
     }
 }
 
+/** Opens the sheet of a workspace made new, as a long press on the title does. */
+@Composable
+private fun PlusButton(open: () -> Unit) {
+    Box(Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp).clickable(onClick = open).semantics { contentDescription = "Workspace nuevo" }, contentAlignment = Alignment.Center) {
+        Mono("+", Palette.blue, 20, bold = true)
+    }
+}
+
 /** Opens the list of PCs from Home. */
 @Composable
 internal fun PcButton(open: () -> Unit) {
@@ -180,19 +189,31 @@ fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, pcs: (() -
     // A long press on a workspace: its sheet, then the field of its name (REQ-183, REQ-184).
     var menu by remember { mutableStateOf<Naming.Workspace?>(null) }
     var naming by remember { mutableStateOf<Naming?>(null) }
+    // A long press on the title, or the `+`: a workspace made new (REQ-201): a folder to open or a worktree to make.
+    var newMenu by remember { mutableStateOf(false) }
+    var worktree by remember { mutableStateOf<WorktreeStart?>(null) }
+    val latest = session.workspaces.firstOrNull { it.id == state.last } ?: session.workspaces.firstOrNull()
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
-            if (onAvisos) Header("avisos", "lo que espera algo de ti") else Header("jwn · ${session.name}", source.status, action = pcs?.let { open -> { PcButton(open) } })
+            if (onAvisos) Header("avisos", "lo que espera algo de ti") else Header("jwn · ${session.name}", source.status, action = {
+                PlusButton { newMenu = true }
+                pcs?.let { open -> PcButton(open) }
+            })
             Box(Modifier.weight(1f)) {
-                if (onAvisos) AvisosList(waiting, nav, state, set) else WorkspaceList(homeRows(session, state.seen), nav, state, set) { id ->
+                if (onAvisos) AvisosList(waiting, nav, state, set) else WorkspaceList(homeRows(session, state.seen), nav, state, set, create = { newMenu = true }) { id ->
                     session.workspaces.firstOrNull { it.id == id }?.let { menu = Naming.Workspace(it.id, it.shown()) }
                 }
             }
             val current = if (onAvisos) MainTab.Avisos else MainTab.Workspaces
             MainTabBar(current, waiting.size) { nav.goTab(state, current, it, set) }
         }
-        menu?.let { target -> WorkspaceMenuSheet(target, dismiss = { menu = null }) { naming = target; menu = null } }
+        menu?.let { target ->
+            val ws = session.workspaces.firstOrNull { it.id == target.id }
+            WorkspaceMenuSheet(target, dismiss = { menu = null }, worktree = { ws?.let { worktree = WorktreeStart(it.repo(), it.branch) }; menu = null }) { naming = target; menu = null }
+        }
         naming?.let { RenameSheet(source, it) { naming = null } }
+        if (newMenu) NewWorkspaceSheet(latest?.repo(), dismiss = { newMenu = false }, folders = { newMenu = false; set(nav.show(state, Screen.Folders)) }, worktree = { latest?.let { worktree = WorktreeStart(it.repo(), it.branch) }; newMenu = false })
+        worktree?.let { WorktreeSheet(source, it, state, nav, set) { worktree = null } }
     }
 }
 
@@ -235,9 +256,11 @@ private fun TabCell(label: String, count: Int?, on: Boolean, modifier: Modifier,
 }
 
 /** A dim section label with a hairline that fills the rest of the line. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-internal fun Section(text: String) {
-    Row(Modifier.fillMaxWidth().padding(start = Gutter, end = Gutter, top = 18.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+internal fun Section(text: String, onLongClick: (() -> Unit)? = null) {
+    val press = if (onLongClick != null) Modifier.combinedClickable(onClick = {}, onLongClick = onLongClick) else Modifier
+    Row(Modifier.fillMaxWidth().then(press).padding(start = Gutter, end = Gutter, top = 18.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         Mono(text, Palette.dim, 11)
         Spacer(Modifier.width(10.dp))
         Box(Modifier.weight(1f).height(1.dp).background(Palette.line))
@@ -245,9 +268,9 @@ internal fun Section(text: String) {
 }
 
 @Composable
-private fun WorkspaceList(rows: List<HomeRow>, nav: Navigator, state: ClientState, set: (ClientState) -> Unit, hold: (Id) -> Unit) {
+private fun WorkspaceList(rows: List<HomeRow>, nav: Navigator, state: ClientState, set: (ClientState) -> Unit, create: () -> Unit, hold: (Id) -> Unit) {
     LazyColumn(Modifier.fillMaxSize()) {
-        item { Section("workspaces · ${rows.size}") }
+        item { Section("workspaces · ${rows.size}", create) }
         items(rows, key = { it.id }) { row ->
             Row(
                 Modifier.fillMaxWidth().combinedClickable(onClick = { set(nav.openWorkspace(state, row.id)) }, onLongClick = { hold(row.id) }).padding(start = Gutter - 4.dp, end = Gutter, top = 10.dp, bottom = 8.dp),
@@ -268,7 +291,7 @@ private fun WorkspaceList(rows: List<HomeRow>, nav: Navigator, state: ClientStat
             }
             Hairline()
         }
-        item { Legend() }
+        item { Legend(create) }
     }
 }
 
@@ -305,10 +328,10 @@ private fun AvisosList(items: List<Aviso>, nav: Navigator, state: ClientState, s
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun Legend() {
+private fun Legend(create: () -> Unit) {
     val items = listOf("!" to "permiso", "?" to "pregunta", "◆" to "plan", "❯" to "comando", "✓" to "agente listo", "⚑" to "mergeado", "✗" to "falló")
     FlowRow(
-        Modifier.fillMaxWidth().padding(Gutter),
+        Modifier.fillMaxWidth().combinedClickable(onClick = {}, onLongClick = create).padding(Gutter),
         horizontalArrangement = Arrangement.spacedBy(16.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) { items.forEach { (g, t) -> Mono("$g $t", Palette.dim, 11) } }
@@ -327,6 +350,7 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
     // before a pane is closed (REQ-148 to REQ-150): the sheet, what the PC said, and whether it is answering.
     var paneMenu by remember(screen.id) { mutableStateOf<PaneSummary?>(null) }
     var wsMenu by remember(screen.id) { mutableStateOf(false) }
+    var worktree by remember(screen.id) { mutableStateOf<WorktreeStart?>(null) }
     var naming by remember(screen.id) { mutableStateOf<Naming?>(null) }
     var closing by remember(screen.id) { mutableStateOf<CloseSheet?>(null) }
     var closeError by remember(screen.id) { mutableStateOf<String?>(null) }
@@ -409,8 +433,9 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
     }
     if (wsMenu && ws != null) {
         val target = Naming.Workspace(ws.id, shownName(ws.name, ws.kind, ws.branch))
-        WorkspaceMenuSheet(target, dismiss = { wsMenu = false }) { naming = target; wsMenu = false }
+        WorkspaceMenuSheet(target, dismiss = { wsMenu = false }, worktree = { worktree = WorktreeStart(ws.project ?: ws.path, ws.branch); wsMenu = false }) { naming = target; wsMenu = false }
     }
+    worktree?.let { WorktreeSheet(source, it, state, nav, set) { worktree = null } }
     naming?.let { RenameSheet(source, it) { naming = null } }
     closing?.let { sheet ->
         ClosePaneSheet(sheet, closeError, closeBusy, cancel = { closing = null }) {
@@ -447,11 +472,12 @@ private fun BoxScope.PaneMenuSheet(pane: PaneSummary, dismiss: () -> Unit, renam
     }
 }
 
-/** What a long press on a workspace offers (REQ-183): its name; closing it is the PC's. */
+/** What a long press on a workspace offers (REQ-183, REQ-201): a worktree of its repository and its name; closing it is the PC's. */
 @Composable
-internal fun BoxScope.WorkspaceMenuSheet(workspace: Naming.Workspace, dismiss: () -> Unit, rename: () -> Unit) {
+internal fun BoxScope.WorkspaceMenuSheet(workspace: Naming.Workspace, dismiss: () -> Unit, worktree: () -> Unit, rename: () -> Unit) {
     Sheet(dismiss) {
         Mono("workspace «${workspace.shown}»", Palette.fg, 14, bold = true, lines = 2)
+        SheetAction("w", "worktree nuevo", click = worktree)
         SheetAction("✎", "renombrar el workspace", click = rename)
         Mono("Cerrar un workspace o quitar un worktree se hace en el PC.", Palette.dim, 12, lines = 3)
     }

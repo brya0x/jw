@@ -930,7 +930,7 @@ impl View {
             .project_of_selected()
             .and_then(|(_, project, _, _)| project.parent().map(std::path::Path::to_path_buf))
             .filter(|d| d.is_dir())
-            .unwrap_or_else(open::home);
+            .unwrap_or_else(daemon::browse::home);
         self.picker = Some(open::Picker::new(dir));
     }
 

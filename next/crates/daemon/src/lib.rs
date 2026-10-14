@@ -2,6 +2,7 @@
 
 mod agents;
 mod blocks;
+pub mod browse;
 mod changes;
 mod commands;
 mod core;

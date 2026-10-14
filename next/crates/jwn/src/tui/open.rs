@@ -9,6 +9,8 @@ use std::process::Command;
 
 use crossterm::event::KeyCode;
 
+use daemon::browse::{home, is_git, subdirs};
+
 use super::{Grid, Rect, Style, clip, look};
 
 /// What a row of the browser is.
@@ -50,24 +52,6 @@ pub struct Picker {
     look: (PathBuf, Vec<String>),
 }
 
-/// The folders of `dir` a person would open: no hidden ones, sorted without regard to case.
-pub fn subdirs(dir: &Path) -> Vec<String> {
-    let mut names: Vec<String> = std::fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|e| e.path().is_dir())
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|n| !n.starts_with('.'))
-        .collect();
-    names.sort_by_key(|n| n.to_lowercase());
-    names
-}
-
-fn is_git(path: &Path) -> bool {
-    path.join(".git").exists()
-}
-
 /// The letters of `query` appear in `name` in that order.
 fn fuzzy(query: &str, name: &str) -> bool {
     let mut want = query.chars().flat_map(char::to_lowercase);
@@ -86,10 +70,6 @@ fn valid_new(name: &str) -> bool {
     chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
         && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
         && name.len() <= 80
-}
-
-pub fn home() -> PathBuf {
-    std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from)
 }
 
 impl Picker {

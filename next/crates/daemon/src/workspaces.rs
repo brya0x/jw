@@ -10,7 +10,7 @@ use crate::git;
 use crate::model::{Workspace, new_id};
 use crate::server::Shared;
 
-fn absolute(path: &str) -> Result<PathBuf, crate::commands::ErrorBody> {
+pub fn absolute(path: &str) -> Result<PathBuf, crate::commands::ErrorBody> {
     let p = Path::new(path);
     if !p.is_absolute() {
         return Err(err(

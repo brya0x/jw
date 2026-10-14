@@ -11,6 +11,7 @@ import dev.jw.next.contract.Cmd
 import dev.jw.next.contract.ContractJson
 import dev.jw.next.contract.DaemonMsg
 import dev.jw.next.contract.DiffScope
+import dev.jw.next.contract.DirListing
 import dev.jw.next.contract.DiffState
 import dev.jw.next.contract.ErrorBody
 import dev.jw.next.contract.ErrorCode
@@ -147,6 +148,38 @@ abstract class ProtocolSource : AppSource() {
         command(Cmd.RenamePane(pane, name)) { reply(it.done("el PC no pudo nombrar el panel")) }
     }
 
+    override fun listDir(path: String?, hidden: Boolean, reply: (Result<DirListing>) -> Unit) {
+        command(Cmd.ListDir(path, hidden)) { r ->
+            reply(
+                when {
+                    !r.ok -> Result.failure(Exception(r.error?.message ?: "el PC no pudo leer la carpeta"))
+                    r.result == null -> Result.failure(Exception("el PC no dio la carpeta"))
+                    else -> try {
+                        Result.success(ContractJson.decodeFromJsonElement(DirListing.serializer(), r.result!!))
+                    } catch (e: SerializationException) {
+                        Result.failure(Exception("el PC dio una carpeta que no se entiende"))
+                    }
+                },
+            )
+        }
+    }
+
+    override fun openFolder(path: String, reply: (Result<Id>) -> Unit) {
+        command(Cmd.OpenFolder(path)) { r -> withShell(r.workspaceId("el PC no pudo abrir la carpeta"), reply) }
+    }
+
+    override fun createWorktree(repo: String, branch: String, base: String?, folder: String, reply: (Result<Id>) -> Unit) {
+        command(Cmd.CreateWorktree(repo, branch, base, folder)) { r -> withShell(r.workspaceId("el PC no pudo crear el worktree"), reply) }
+    }
+
+    /** A workspace just made gets a shell, as the terminal client does (REQ-208); [reply] gets its id, or what failed. */
+    private fun withShell(made: Result<Id>, reply: (Result<Id>) -> Unit) {
+        val workspace = made.getOrElse { return reply(made) }
+        command(Cmd.NewPane(workspace)) { p ->
+            reply(if (p.ok) made else Result.failure(Exception("se abrió, pero sin shell: ${p.error?.message ?: "el PC no pudo abrir el panel"}")))
+        }
+    }
+
     override fun closePane(pane: Id, reply: (Result<Unit>) -> Unit) {
         command(Cmd.ClosePane(pane)) { reply(it.done("el PC no pudo cerrar el panel")) }
     }
@@ -166,6 +199,16 @@ abstract class ProtocolSource : AppSource() {
     /** Nothing, or the PC's message ([fallback] when it gave none). */
     private fun DaemonMsg.Reply.done(fallback: String): Result<Unit> =
         if (ok) Result.success(Unit) else Result.failure(Exception(error?.message ?: fallback))
+
+    /** The workspace a command opened, or the PC's message. */
+    private fun DaemonMsg.Reply.workspaceId(fallback: String): Result<Id> {
+        val id = (result?.get("workspace") as? JsonPrimitive)?.contentOrNull
+        return when {
+            ok && id != null -> Result.success(id)
+            ok -> Result.failure(Exception("el PC no dio el workspace"))
+            else -> Result.failure(Exception(error?.message ?: fallback))
+        }
+    }
 
     /** The node a command made, or the PC's message. */
     private fun DaemonMsg.Reply.nodeId(): Result<Id> {
