@@ -21,7 +21,14 @@ use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{cursor, execute};
 use wire::Client;
 
+mod changes;
+mod diff_lines;
 mod shell;
+
+pub use changes::Ask;
+use changes::{Changes, Docs, Outcome, Src};
+use contract::ErrorBody;
+use wire::ClientError;
 
 /// The One Dark palette of the mobile prototype, as 24-bit colours.
 type Rgb = (u8, u8, u8);
@@ -37,6 +44,11 @@ const YELLOW: Rgb = (0xe5, 0xc0, 0x7b);
 const RED: Rgb = (0xe0, 0x6c, 0x75);
 const MAGENTA: Rgb = (0xc6, 0x78, 0xdd);
 const CYAN: Rgb = (0x56, 0xb6, 0xc2);
+/// The diff: a line added or deleted, and the words inside it that changed.
+const ADD_BG: Rgb = (0x2a, 0x3b, 0x2c);
+const DEL_BG: Rgb = (0x40, 0x29, 0x2d);
+const ADD_WORD: Rgb = (0x3f, 0x5a, 0x42);
+const DEL_WORD: Rgb = (0x6a, 0x3a, 0x40);
 
 const SIDEBAR: usize = 28;
 
@@ -273,6 +285,8 @@ pub enum Key {
     Enter,
     Avisos,
     NewPane,
+    /// Open the diff of the highlighted workspace.
+    Changes,
     /// With a block selected: copy its command, copy its output, run it again.
     CopyCmd,
     CopyOut,
@@ -339,6 +353,15 @@ pub struct View {
     scroll: HashMap<String, usize>,
     /// The clock the running blocks count from, in ms since the epoch.
     now_ms: u64,
+    /// The diffs and lists of commits the daemon sent, by node id.
+    diffs: HashMap<String, contract::Diff>,
+    commit_lists: HashMap<String, contract::Commits>,
+    /// The diff viewer, while it is open.
+    changes: Option<Changes>,
+    /// What the viewer asked for as it closed: to stop watching its nodes.
+    asks: Vec<Ask>,
+    /// The terminal's size as the loop last said it.
+    size: (usize, usize),
 }
 
 impl View {
@@ -363,6 +386,11 @@ impl View {
             blk: None,
             scroll: HashMap::new(),
             now_ms: 0,
+            diffs: HashMap::new(),
+            commit_lists: HashMap::new(),
+            changes: None,
+            asks: Vec::new(),
+            size: (0, 0),
         }
     }
 
@@ -386,6 +414,81 @@ impl View {
         self.now_ms = ms;
     }
 
+    pub fn set_size(&mut self, cols: usize, rows: usize) {
+        self.size = (cols, rows);
+    }
+
+    fn docs(&self) -> Docs<'_> {
+        Docs {
+            diffs: &self.diffs,
+            commits: &self.commit_lists,
+        }
+    }
+
+    /// The viewer follows the documents and the terminal.
+    fn update_changes(&mut self) {
+        if let Some(c) = self.changes.as_mut() {
+            let docs = Docs {
+                diffs: &self.diffs,
+                commits: &self.commit_lists,
+            };
+            c.update(&docs, self.size, self.now_ms);
+        }
+    }
+
+    fn close_changes(&mut self) {
+        if let Some(c) = self.changes.take() {
+            self.asks.extend(c.close());
+        }
+    }
+
+    /// What the diff viewer wants the daemon to do, for the loop to send.
+    pub fn take_asks(&mut self) -> Vec<Ask> {
+        let mut asks = std::mem::take(&mut self.asks);
+        if let Some(c) = self.changes.as_mut() {
+            asks.extend(c.take_asks());
+        }
+        asks
+    }
+
+    /// The daemon made the node the viewer asked for.
+    pub fn changes_made(&mut self, src: Src, node: &str) {
+        if let Some(c) = self.changes.as_mut() {
+            c.made(src, node);
+        }
+    }
+
+    pub fn changes_failed(&mut self, src: Src, why: &str) {
+        if let Some(c) = self.changes.as_mut() {
+            c.failed(src, why);
+        }
+    }
+
+    pub fn changes_flash(&mut self, text: &str) {
+        if let Some(c) = self.changes.as_mut() {
+            c.flash(text);
+        }
+    }
+
+    /// A key while the diff is open: it is the viewer's, never a pane's.
+    fn changes_key(&mut self, ev: KeyEvent) {
+        if ev.modifiers.contains(KeyModifiers::CONTROL) {
+            return;
+        }
+        let Some(c) = self.changes.as_mut() else {
+            return;
+        };
+        let docs = Docs {
+            diffs: &self.diffs,
+            commits: &self.commit_lists,
+        };
+        if c.press(ev.code, &docs, self.size, self.now_ms) == Outcome::Close {
+            self.close_changes();
+        } else {
+            self.update_changes();
+        }
+    }
+
     pub fn set_status(&mut self, status: &str) {
         self.status = status.to_owned();
     }
@@ -396,6 +499,8 @@ impl View {
         self.workspaces.clear();
         self.panes.clear();
         self.blocks.clear();
+        self.diffs.clear();
+        self.commit_lists.clear();
         self.revs.clear();
         for doc in nodes {
             let Ok(node) = serde_json::from_value::<Node>(doc.clone()) else {
@@ -414,10 +519,15 @@ impl View {
                 Node::Blocks(b) => {
                     self.blocks.insert(id, b);
                 }
-                // This client does not draw changes yet (N33).
-                Node::Diff(_) | Node::Commits(_) => {}
+                Node::Diff(d) => {
+                    self.diffs.insert(id, d);
+                }
+                Node::Commits(c) => {
+                    self.commit_lists.insert(id, c);
+                }
             }
         }
+        self.update_changes();
         let gone = self.blk.as_ref().is_some_and(|(pane, id)| {
             !self
                 .blocks_of(pane)
@@ -551,7 +661,7 @@ impl View {
 
     /// The pane the keyboard goes to: the focused pane of the opened workspace, while typing.
     fn typing_pane(&self) -> Option<String> {
-        if !self.typing || self.mode != Mode::Workspaces {
+        if !self.typing || self.mode != Mode::Workspaces || self.changes.is_some() {
             return None;
         }
         let ws = self.workspaces.get(self.opened.as_deref()?)?;
@@ -561,6 +671,10 @@ impl View {
     /// A key at the keyboard: typed into the pane, or (after the leader, or when no pane is
     /// open) a command of the client.
     pub fn press_key(&mut self, ev: KeyEvent) -> After {
+        if self.changes.is_some() {
+            self.changes_key(ev);
+            return After::Continue;
+        }
         let Some(pane) = self.typing_pane() else {
             return key_of(ev.code).map_or(After::Continue, |k| self.press(k));
         };
@@ -644,6 +758,13 @@ impl View {
                         };
                         self.open(&id, next);
                     }
+                }
+            }
+            (Mode::Workspaces, Key::Changes) => {
+                if let Some(id) = self.selected_id() {
+                    self.typing = false;
+                    self.blk = None;
+                    self.changes = Some(Changes::open(&id));
                 }
             }
             (Mode::Workspaces, Key::NewPane) => {
@@ -755,6 +876,20 @@ impl View {
     /// a pane's box focuses it, `avisos N` in the status bar opens the list, an item of the
     /// list goes there, and a click outside the list closes it.
     pub fn click(&mut self, x: usize, y: usize, cols: usize, rows: usize) -> After {
+        if self.changes.is_some() {
+            if x > SIDEBAR {
+                if let Some(c) = self.changes.as_mut() {
+                    let docs = Docs {
+                        diffs: &self.diffs,
+                        commits: &self.commit_lists,
+                    };
+                    c.click(x, y, &docs, (cols, rows));
+                }
+                self.update_changes();
+                return After::Continue;
+            }
+            self.close_changes();
+        }
         let waiting = self.avisos().len();
         if self.mode == Mode::Avisos {
             let rect = avisos_rect(waiting, panes_rect(cols, rows));
@@ -795,6 +930,15 @@ impl View {
     /// The wheel over the sidebar (or the avisos list) moves the highlight; over a pane drawn
     /// as blocks it scrolls them.
     pub fn scroll(&mut self, down: bool, x: usize, y: usize, cols: usize, rows: usize) -> After {
+        if self.changes.is_some() {
+            if x >= SIDEBAR {
+                if let Some(c) = self.changes.as_mut() {
+                    c.wheel(down, x, (cols, rows));
+                }
+                return After::Continue;
+            }
+            self.close_changes();
+        }
         if self.mode == Mode::Avisos || x < SIDEBAR {
             return self.press(if down { Key::Down } else { Key::Up });
         }
@@ -938,24 +1082,37 @@ impl View {
             );
         }
 
+        if let Some(c) = &self.changes {
+            c.draw(
+                &mut g,
+                &self.docs(),
+                &self.label(c.workspace()),
+                self.now_ms,
+            );
+        }
+
         // The status bar.
         for x in 0..cols {
             g.cells[(rows - 1) * cols + x] = (' ', Style::default().on(PANEL));
         }
         let typing = self.typing_pane().is_some();
-        let (chip, bg, hint) = match (self.mode, typing) {
-            (Mode::Avisos, _) => (" AVISOS ", YELLOW, "j/k mover · ↵ ir · esc volver"),
-            (_, false) if self.blk.is_some() => (
-                " BLOQUE ",
-                MAGENTA,
-                "c comando · o salida · r repetir · j/k mover · esc soltar",
-            ),
-            (_, true) => (" TERM ", GREEN, "escribes en el panel · ^␣ para moverte"),
-            (_, false) => (
-                " MOVE ",
-                BLUE,
-                "j/k workspace · ↵ escribir · h/l panel · n panel nuevo · a avisos · q salir",
-            ),
+        let diff_status = self.changes.as_ref().map(|c| c.status(&self.docs()));
+        let (chip, bg, hint) = match &diff_status {
+            Some((hint, _)) => (" DIFF ", CYAN, hint.as_str()),
+            None => match (self.mode, typing) {
+                (Mode::Avisos, _) => (" AVISOS ", YELLOW, "j/k mover · ↵ ir · esc volver"),
+                (_, false) if self.blk.is_some() => (
+                    " BLOQUE ",
+                    MAGENTA,
+                    "c comando · o salida · r repetir · j/k mover · esc soltar",
+                ),
+                (_, true) => (" TERM ", GREEN, "escribes en el panel · ^␣ para moverte"),
+                (_, false) => (
+                    " MOVE ",
+                    BLUE,
+                    "j/k workspace · ↵ escribir · h/l panel · n panel nuevo · d cambios · a avisos · q salir",
+                ),
+            },
         };
         g.put(
             0,
@@ -975,13 +1132,20 @@ impl View {
             dim.on(PANEL),
         );
         let waiting = self.avisos().len();
+        let mut right = cols;
         if waiting > 0 {
             let t = format!("avisos {waiting}");
+            right = cols.saturating_sub(t.chars().count() + 1);
+            g.put(right, rows - 1, &t, Style::fg(YELLOW).bold().on(PANEL));
+        }
+        if let Some((_, Some((seen, total)))) = &diff_status {
+            let t = format!("{seen}/{total} vistos");
+            let tone = if seen == total { GREEN } else { DIM };
             g.put(
-                cols.saturating_sub(t.chars().count() + 1),
+                right.saturating_sub(t.chars().count() + 2),
                 rows - 1,
                 &t,
-                Style::fg(YELLOW).bold().on(PANEL),
+                Style::fg(tone).on(PANEL),
             );
         }
         if self.mode == Mode::Avisos {
@@ -1345,6 +1509,7 @@ fn key_of(code: KeyCode) -> Option<Key> {
         KeyCode::Enter => Key::Enter,
         KeyCode::Char('a') => Key::Avisos,
         KeyCode::Char('n') => Key::NewPane,
+        KeyCode::Char('d') => Key::Changes,
         KeyCode::Char('c') => Key::CopyCmd,
         KeyCode::Char('o') => Key::CopyOut,
         KeyCode::Char('r') => Key::Repeat,
@@ -1365,6 +1530,69 @@ fn connect(view: &mut View) -> Result<Client, String> {
     Ok(client)
 }
 
+/// How long the diff viewer waits for the daemon to read git for it.
+const ASK_WAIT: Duration = Duration::from_secs(20);
+
+type Reply = Result<Result<Option<serde_json::Value>, ErrorBody>, ClientError>;
+
+/// Tell the viewer how the daemon answered a request for a node.
+fn answer(view: &mut View, src: Src, reply: Reply) {
+    match reply {
+        Ok(Ok(result)) => match result.as_ref().and_then(|r| r["node"].as_str()) {
+            Some(node) => view.changes_made(src, node),
+            None => view.changes_failed(src, "el daemon no dio el nodo"),
+        },
+        Ok(Err(e)) => view.changes_failed(src, &e.message),
+        Err(e) => view.changes_failed(src, &e.to_string()),
+    }
+}
+
+/// Send what the diff viewer asked for. A node it asked to be made is opened as soon as the
+/// reply names it.
+fn serve_asks(view: &mut View, client: &mut Client) {
+    loop {
+        let asks = view.take_asks();
+        if asks.is_empty() {
+            return;
+        }
+        for ask in asks {
+            match ask {
+                Ask::OpenDiff {
+                    src,
+                    workspace,
+                    scope,
+                    commit,
+                } => {
+                    let cmd = Cmd::OpenDiff {
+                        workspace,
+                        scope,
+                        commit,
+                    };
+                    answer(view, src, client.cmd_within(cmd, ASK_WAIT));
+                }
+                Ask::OpenCommits { workspace } => {
+                    let cmd = Cmd::OpenCommits { workspace };
+                    answer(view, Src::Commits, client.cmd_within(cmd, ASK_WAIT));
+                }
+                Ask::Watch(node) => {
+                    let _ = client.open(&node);
+                }
+                Ask::Refresh { node, .. } => {
+                    if let Ok(Err(e)) = client.cmd_within(Cmd::RefreshDiff { node }, ASK_WAIT) {
+                        view.changes_flash(&e.message);
+                    }
+                }
+                Ask::SetViewed { node, path, viewed } => {
+                    let _ = client.send(Cmd::SetViewed { node, path, viewed });
+                }
+                Ask::Close(node) => {
+                    let _ = client.close(&node);
+                }
+            }
+        }
+    }
+}
+
 pub fn run() -> Result<(), String> {
     let mut view = View::new("conectando");
     let mut client = connect(&mut view)?;
@@ -1378,11 +1606,12 @@ pub fn run() -> Result<(), String> {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_millis() as u64),
         );
+        let (cols, rows) = terminal::size().map_err(|e| e.to_string())?;
+        view.set_size(cols as usize, rows as usize);
         view.sync(client.nodes.values());
         for id in view.wants() {
             let _ = client.open(&id);
         }
-        let (cols, rows) = terminal::size().map_err(|e| e.to_string())?;
         let grid = view.grid(cols as usize, rows as usize);
         let frame = grid.rows_ansi();
         if frame != last {
@@ -1429,6 +1658,7 @@ pub fn run() -> Result<(), String> {
         for (node, rev) in view.take_outbox() {
             let _ = client.cmd(Cmd::MarkSeen { node, rev });
         }
+        serve_asks(&mut view, &mut client);
         while event::poll(Duration::ZERO).map_err(|e| e.to_string())? {
             let after = match event::read().map_err(|e| e.to_string())? {
                 Event::Key(ev) if ev.kind == KeyEventKind::Press => view.press_key(ev),
@@ -1708,6 +1938,55 @@ mod tests {
         let t = v.plain(120, 30);
         assert!(t.lines().next().unwrap().contains("app/"), "{t}");
         assert!(t.lines().next().unwrap().contains("⎇ feat/login"), "{t}");
+    }
+
+    #[test]
+    fn d_opens_the_diff_over_the_panes_and_esc_closes_it_and_stops_watching() {
+        let mut v = fixture_view();
+        v.set_size(180, 44);
+        assert!(!v.plain(180, 44).contains(" vs HEAD"));
+        v.press(Key::Changes);
+        let asks = v.take_asks();
+        assert!(
+            matches!(
+                &asks[..],
+                [Ask::OpenDiff {
+                    src: Src::Uncommitted,
+                    ..
+                }]
+            ),
+            "{asks:?}"
+        );
+        let screen = v.plain(180, 44);
+        assert!(screen.contains(" vs HEAD"), "{screen}");
+        assert!(screen.lines().last().unwrap().contains("DIFF"));
+        assert!(screen.contains("leyendo los cambios"));
+
+        v.changes_made(Src::Uncommitted, "the-node");
+        assert_eq!(v.take_asks(), [Ask::Watch("the-node".into())]);
+        // Keys are the viewer's, never a pane's.
+        assert_eq!(v.press_key(plain(KeyCode::Char('x'))), After::Continue);
+        v.press_key(plain(KeyCode::Esc));
+        assert_eq!(v.take_asks(), [Ask::Close("the-node".into())]);
+        assert!(!v.plain(180, 44).contains(" vs HEAD"));
+        assert!(v.plain(180, 44).lines().last().unwrap().contains("MOVE"));
+    }
+
+    #[test]
+    fn clicking_the_sidebar_leaves_the_diff_and_a_click_in_it_picks_a_tab() {
+        let mut v = fixture_view();
+        v.set_size(180, 44);
+        v.press(Key::Changes);
+        v.take_asks();
+        // The second tab starts after the first, which is ` 1 Sin commitear ` wide.
+        v.click(SIDEBAR + 4 + 20, 2, 180, 44);
+        let asks = v.take_asks();
+        assert!(matches!(&asks[..], [Ask::OpenCommits { .. }]), "{asks:?}");
+        v.click(3, 2, 180, 44);
+        assert!(
+            !v.plain(180, 44).contains(" vs HEAD"),
+            "the sidebar closes it"
+        );
     }
 
     #[test]
