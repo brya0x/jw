@@ -86,8 +86,34 @@ pub fn open_folder(shared: &Shared, path: &str) -> Done {
     )
 }
 
-/// The worktree goes beside the repository, in `<repo>-wt/<branch slug>`.
-pub fn create_worktree(shared: &Shared, repo: &str, branch: &str, base: Option<&str>) -> Done {
+/// A folder name a person gave: one path component, nothing that moves out of `<repo>-wt/`.
+fn valid_folder(name: &str) -> bool {
+    !name.is_empty()
+        && name.chars().count() <= 80
+        && name != "."
+        && name != ".."
+        && !name
+            .chars()
+            .any(|c| c == '/' || c == '\\' || c.is_control())
+}
+
+/// The worktree goes beside the repository, in `<repo>-wt/<folder>`, the folder being the
+/// given name or else the branch with its slashes made dashes.
+pub fn create_worktree(
+    shared: &Shared,
+    repo: &str,
+    branch: &str,
+    base: Option<&str>,
+    folder: Option<&str>,
+) -> Done {
+    if let Some(f) = folder
+        && !valid_folder(f)
+    {
+        return Err(err(
+            ErrorCode::BadRequest,
+            format!("{f:?} is not a usable folder name"),
+        ));
+    }
     let repo_dir = absolute(repo)?;
     let git_err = |m: String| err(ErrorCode::GitFailed, m);
     let top = PathBuf::from(git::toplevel(&repo_dir).map_err(git_err)?);
@@ -117,7 +143,7 @@ pub fn create_worktree(shared: &Shared, repo: &str, branch: &str, base: Option<&
     })?;
     let dest = parent
         .join(format!("{repo_name}-wt"))
-        .join(git::slug(branch));
+        .join(folder.map_or_else(|| git::slug(branch), str::to_owned));
     let dest_text = dest.to_string_lossy().into_owned();
     already_open(shared, &dest_text)?;
     if dest.exists() {

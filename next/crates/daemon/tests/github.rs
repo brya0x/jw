@@ -59,6 +59,7 @@ fn a_merged_or_failing_pull_request_is_attention_that_comes_back_only_when_it_ch
             repo: text(&repo),
             branch: "feat/login".into(),
             base: None,
+            folder: None,
         })
         .unwrap()
         .unwrap()

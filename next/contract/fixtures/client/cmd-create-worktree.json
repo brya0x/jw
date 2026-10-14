@@ -5,6 +5,7 @@
     "cmd": "create_worktree",
     "repo": "/home/u/code/app",
     "branch": "feat/login",
-    "base": "main"
+    "base": "main",
+    "folder": "login"
   }
 }

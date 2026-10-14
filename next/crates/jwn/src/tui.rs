@@ -25,6 +25,7 @@ mod changes;
 mod diff_lines;
 mod look;
 mod manage;
+mod open;
 mod phone;
 mod settings;
 mod shell;
@@ -292,6 +293,8 @@ pub enum Key {
     Help,
     /// The mode and the theme.
     Settings,
+    /// A worktree of the project the person is in.
+    Worktree,
     /// The phone link: its box.
     Phone,
     /// With a block selected: copy its command, copy its output, run it again.
@@ -321,6 +324,19 @@ pub enum After {
     Rename {
         target: Named,
         name: String,
+    },
+    /// Open a folder as a workspace with a shell; with `create`, make the folder first.
+    OpenFolder {
+        path: std::path::PathBuf,
+        create: bool,
+    },
+    /// Make a worktree of `repo` on a new `branch` from `from`, in the folder `folder` of
+    /// `<repo>-wt`, and open it with a shell.
+    CreateWorktree {
+        repo: std::path::PathBuf,
+        branch: String,
+        from: String,
+        folder: String,
     },
     /// Close a workspace, and with `remove_worktree` remove its worktree. The daemon never
     /// forces: git refuses a worktree with changes.
@@ -395,6 +411,12 @@ pub struct View {
     os_dark: bool,
     /// The settings changed here and are not written yet.
     save: bool,
+    /// The folder browser and the worktree box, while one is open.
+    picker: Option<open::Picker>,
+    worktree: Option<open::Worktree>,
+    /// A workspace made by the client's own request, to open when it shows up in the session
+    /// (or at the time given, in `now_ms`, if it does not).
+    goto: Option<(String, u64)>,
     /// The focused panel fills the area, and the box of the keys of the level is open.
     full: bool,
     help: bool,
@@ -442,6 +464,9 @@ impl View {
             settings: Settings::default(),
             os_dark: true,
             save: false,
+            picker: None,
+            worktree: None,
+            goto: None,
             full: false,
             help: false,
             phone: phone::State::Off,
@@ -627,6 +652,7 @@ impl View {
         }
         self.update_changes();
         self.advance_manage();
+        self.follow_goto();
         self.clamp();
         let gone = self.blk.as_ref().is_some_and(|(pane, id)| {
             !self
@@ -869,6 +895,151 @@ impl View {
                 });
                 After::Continue
             }
+        }
+    }
+
+    /// The folders of the workspaces that are open.
+    fn open_paths(&self) -> Vec<std::path::PathBuf> {
+        self.session
+            .iter()
+            .flat_map(|s| s.workspaces.iter())
+            .map(|w| std::path::PathBuf::from(&w.path))
+            .collect()
+    }
+
+    /// The project folder of the highlighted workspace (a worktree's repository, or the
+    /// folder itself), with its name, kind and branch.
+    fn project_of_selected(
+        &self,
+    ) -> Option<(String, std::path::PathBuf, WorkspaceKind, Option<String>)> {
+        let w = self.session.as_ref()?.workspaces.get(self.selected)?;
+        let project = self
+            .workspaces
+            .get(&w.id)
+            .and_then(|d| d.project.clone())
+            .map_or_else(
+                || std::path::PathBuf::from(&w.path),
+                std::path::PathBuf::from,
+            );
+        Some((w.name.clone(), project, w.kind, w.branch.clone()))
+    }
+
+    /// `o`: the folder browser, beside the project the person is in (else at home).
+    fn open_picker(&mut self) {
+        let dir = self
+            .project_of_selected()
+            .and_then(|(_, project, _, _)| project.parent().map(std::path::Path::to_path_buf))
+            .filter(|d| d.is_dir())
+            .unwrap_or_else(open::home);
+        self.picker = Some(open::Picker::new(dir));
+    }
+
+    /// `w`: the box of a worktree of the project the person is in.
+    fn open_worktree_box(&mut self) {
+        let Some((name, project, kind, branch)) = self.project_of_selected() else {
+            return;
+        };
+        let (repo, from) = match (kind, branch) {
+            (WorkspaceKind::Worktree, Some(branch)) => (Some(project), Some(branch)),
+            _ => (
+                open::git_out(&project, &["rev-parse", "--show-toplevel"])
+                    .map(std::path::PathBuf::from),
+                open::git_out(&project, &["rev-parse", "--abbrev-ref", "HEAD"]),
+            ),
+        };
+        let Some(repo) = repo else {
+            self.flash = format!("«{name}» no es un repositorio git: w necesita uno");
+            return;
+        };
+        self.worktree = Some(open::Worktree::new(
+            repo,
+            from.unwrap_or_else(|| "HEAD".into()),
+            self.open_paths(),
+        ));
+    }
+
+    /// A key in the folder browser.
+    fn picker_key(&mut self, ev: KeyEvent) -> After {
+        let paths = self.open_paths();
+        let is_open = |p: &std::path::Path| paths.iter().any(|o| o == p);
+        let Some(picker) = self.picker.as_mut() else {
+            return After::Continue;
+        };
+        let ctrl = ev.modifiers.contains(KeyModifiers::CONTROL);
+        match picker.press(ev.code, ctrl, &is_open) {
+            open::Pick::Stay => After::Continue,
+            open::Pick::Close => {
+                self.picker = None;
+                After::Continue
+            }
+            open::Pick::Open { path, create } => {
+                self.picker = None;
+                // Already open: go to it.
+                let there = self.session.as_ref().and_then(|s| {
+                    s.workspaces
+                        .iter()
+                        .position(|w| std::path::Path::new(&w.path) == path)
+                        .map(|i| (i, s.workspaces[i].id.clone()))
+                });
+                if let Some((i, id)) = there {
+                    self.selected = i;
+                    self.open(&id, 0);
+                    self.flash = "ya estaba abierta: voy a ella".into();
+                    return After::Continue;
+                }
+                After::OpenFolder { path, create }
+            }
+        }
+    }
+
+    /// A key in the worktree box.
+    fn worktree_key(&mut self, ev: KeyEvent) -> After {
+        let Some(t) = self.worktree.as_mut() else {
+            return After::Continue;
+        };
+        match t.press(ev.code, ev.modifiers.contains(KeyModifiers::CONTROL)) {
+            open::Make::Stay => After::Continue,
+            open::Make::Close => {
+                self.worktree = None;
+                After::Continue
+            }
+            open::Make::Create {
+                repo,
+                branch,
+                from,
+                folder,
+            } => {
+                self.worktree = None;
+                After::CreateWorktree {
+                    repo,
+                    branch,
+                    from,
+                    folder,
+                }
+            }
+        }
+    }
+
+    /// Open this workspace as soon as the daemon shows it: the client asked for it to be made.
+    pub fn goto(&mut self, workspace: &str) {
+        self.goto = Some((workspace.to_owned(), self.now_ms + 8_000));
+    }
+
+    /// The workspace the client asked for, once it is in the session: selected and opened.
+    fn follow_goto(&mut self) {
+        let Some((id, until)) = self.goto.clone() else {
+            return;
+        };
+        let at = self
+            .session
+            .as_ref()
+            .and_then(|s| s.workspaces.iter().position(|w| w.id == id));
+        if let Some(i) = at {
+            self.selected = i;
+            self.open(&id, 0);
+            self.goto = None;
+        } else if self.now_ms > until {
+            self.goto = None;
         }
     }
 
@@ -1157,6 +1328,12 @@ impl View {
             self.help = false;
             return After::Continue;
         }
+        if self.picker.is_some() {
+            return self.picker_key(ev);
+        }
+        if self.worktree.is_some() {
+            return self.worktree_key(ev);
+        }
         if self.phone_open {
             return self.phone_key(ev);
         }
@@ -1259,6 +1436,10 @@ impl View {
             },
             (Mode::Workspaces, Key::Full) if level == Level::Panels => self.full = !self.full,
             (Mode::Workspaces, Key::Repeat) if level != Level::Terminal => self.ask_rename(level),
+            (Mode::Workspaces, Key::CopyOut) if level != Level::Terminal => self.open_picker(),
+            (Mode::Workspaces, Key::Worktree) if level != Level::Terminal => {
+                self.open_worktree_box()
+            }
             (Mode::Workspaces, Key::Close) => match level {
                 Level::Workspaces => self.ask_close_workspace(),
                 Level::Panels => return self.ask_close_pane(),
@@ -1391,7 +1572,11 @@ impl View {
             self.help = false;
             return After::Continue;
         }
-        if self.manage.is_some() || self.phone_open {
+        if self.manage.is_some()
+            || self.phone_open
+            || self.picker.is_some()
+            || self.worktree.is_some()
+        {
             return After::Continue;
         }
         if self.changes.is_some() {
@@ -1454,7 +1639,12 @@ impl View {
     /// The wheel over the sidebar (or the avisos list) moves the highlight; over a pane drawn
     /// as blocks it scrolls them.
     pub fn scroll(&mut self, down: bool, x: usize, y: usize, cols: usize, rows: usize) -> After {
-        if self.help || self.manage.is_some() || self.phone_open {
+        if self.help
+            || self.manage.is_some()
+            || self.phone_open
+            || self.picker.is_some()
+            || self.worktree.is_some()
+        {
             return After::Continue;
         }
         if self.changes.is_some() {
@@ -1642,6 +1832,14 @@ impl View {
         let level = self.level();
         let diff_status = self.changes.as_ref().map(|c| c.status(&self.docs()));
         let (chip, bg, hint) = match (&self.manage, &diff_status) {
+            (None, _) if self.picker.is_some() => (
+                " ABRIR ",
+                look::cyan(),
+                "↑↓ mover · → entrar · ← subir · ~ casa · ↵ abrir · esc cerrar",
+            ),
+            (None, _) if self.worktree.is_some() => {
+                (" WORKTREE ", look::cyan(), "↵ crear · esc cancelar")
+            }
             (Some(Manage::Failed { .. }), _) => (" ERROR ", look::red(), self.manage_hint()),
             (Some(Manage::Settings { .. }), _) => (" AJUSTES ", look::blue(), self.manage_hint()),
             (None, _) if self.phone_open => match &self.phone {
@@ -1673,7 +1871,7 @@ impl View {
                 (_, Level::Workspaces) => (
                     " WORKSPACE ",
                     look::blue(),
-                    "j/k mover · ↵ entrar · r renombrar · x cerrar · d cambios · a avisos · m teléfono · ? teclas · q salir",
+                    "j/k mover · ↵ entrar · r renombrar · o carpeta · w worktree · x cerrar · d cambios · m teléfono · ? teclas · q salir",
                 ),
             },
         };
@@ -1726,6 +1924,15 @@ impl View {
         }
         if self.mode == Mode::Avisos {
             self.avisos_box(&mut g, (px, 1, pw, rows.saturating_sub(2)));
+        }
+        if let Some(p) = &self.picker {
+            let paths = self.open_paths();
+            open::draw_picker(&mut g, (px, 1, pw, rows.saturating_sub(2)), p, &|d| {
+                paths.iter().any(|o| o == d)
+            });
+        }
+        if let Some(t) = &self.worktree {
+            open::draw_worktree(&mut g, (px, 1, pw, rows.saturating_sub(2)), t);
         }
         if self.help {
             self.help_box(&mut g, (px, 1, pw, rows.saturating_sub(2)));
@@ -2027,6 +2234,8 @@ const WORKSPACE_KEYS: &[(&str, &str)] = &[
     ("j k", "mover por los workspaces"),
     ("↵", "entrar al workspace"),
     ("r", "renombrar el workspace"),
+    ("o", "abrir una carpeta"),
+    ("w", "worktree nuevo del proyecto"),
     ("x", "cerrar el workspace (y quitar su worktree)"),
     ("d", "ver sus cambios"),
     ("a", "avisos"),
@@ -2041,6 +2250,7 @@ const PANEL_KEYS: &[(&str, &str)] = &[
     ("r", "nombrar el panel"),
     ("f", "el panel a pantalla completa"),
     ("x", "cerrar el panel"),
+    ("o w", "abrir una carpeta · worktree nuevo"),
     ("d a m ,", "cambios · avisos · teléfono · ajustes"),
     ("esc", "volver a los workspaces"),
 ];
@@ -2232,6 +2442,7 @@ fn key_of(code: KeyCode) -> Option<Key> {
         KeyCode::Char('?') => Key::Help,
         KeyCode::Char(',') => Key::Settings,
         KeyCode::Char('m') => Key::Phone,
+        KeyCode::Char('w') => Key::Worktree,
         KeyCode::Char('c') => Key::CopyCmd,
         KeyCode::Char('o') => Key::CopyOut,
         KeyCode::Char('r') => Key::Repeat,
@@ -2347,6 +2558,23 @@ fn check_changes(view: &mut View, client: &mut Client, workspace: String) {
         }
         Ok(Err(e)) => view.manage_failed(FAILED, &e.message),
         Err(e) => view.manage_failed(FAILED, &e.to_string()),
+    }
+}
+
+/// A workspace the daemon made for the client: give it a shell, and open it when it appears.
+fn shown_in_a_pane(view: &mut View, client: &mut Client, reply: Reply, failed: &str) {
+    match reply {
+        Ok(Ok(result)) => {
+            if let Some(ws) = result.as_ref().and_then(|r| r["workspace"].as_str()) {
+                let _ = client.cmd(Cmd::NewPane {
+                    workspace: ws.to_owned(),
+                    program: None,
+                });
+                view.goto(ws);
+            }
+        }
+        Ok(Err(e)) => view.manage_failed(failed, &e.message),
+        Err(e) => view.manage_failed(failed, &e.to_string()),
     }
 }
 
@@ -2486,6 +2714,43 @@ pub fn run() -> Result<(), String> {
                         workspace,
                         program: None,
                     });
+                }
+                After::OpenFolder { path, create } => {
+                    if create && let Err(e) = std::fs::create_dir(&path) {
+                        view.manage_failed("No se pudo crear la carpeta", &e.to_string());
+                    } else {
+                        let reply = client.cmd(Cmd::OpenFolder {
+                            path: path.to_string_lossy().into_owned(),
+                        });
+                        shown_in_a_pane(
+                            &mut view,
+                            &mut client,
+                            reply,
+                            "No se pudo abrir la carpeta",
+                        );
+                    }
+                }
+                After::CreateWorktree {
+                    repo,
+                    branch,
+                    from,
+                    folder,
+                } => {
+                    let reply = client.cmd_within(
+                        Cmd::CreateWorktree {
+                            repo: repo.to_string_lossy().into_owned(),
+                            branch,
+                            base: Some(from),
+                            folder: Some(folder),
+                        },
+                        ASK_WAIT,
+                    );
+                    shown_in_a_pane(
+                        &mut view,
+                        &mut client,
+                        reply,
+                        "No se pudo crear el worktree",
+                    );
                 }
                 After::Rename { target, name } => {
                     let cmd = match target {
@@ -4035,5 +4300,198 @@ mod tests {
         );
         assert!(!t.contains("abriendo…"), "{t}");
         assert!(v.phone.is_on());
+    }
+    /// A folder tree to open from: `root/{app (git, with a worktree), notes}`.
+    fn disk(name: &str) -> std::path::PathBuf {
+        let root =
+            std::path::PathBuf::from(format!("/tmp/jwn-tui-open-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for d in ["app", "notes"] {
+            std::fs::create_dir_all(root.join(d)).unwrap();
+        }
+        for args in [
+            vec!["init", "-q", "-b", "main"],
+            vec![
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "i",
+            ],
+        ] {
+            assert!(
+                std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(root.join("app"))
+                    .args(&args)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        root
+    }
+
+    /// The fixture view with its two workspaces on that disk: the first (the worktree) of
+    /// `app`, the second the folder `notes`.
+    fn view_on(root: &std::path::Path) -> View {
+        let mut v = fixture_view();
+        let s = v.session.as_mut().unwrap();
+        s.workspaces[0].path = root.join("app-wt/login").to_string_lossy().into_owned();
+        s.workspaces[1].path = root.join("notes").to_string_lossy().into_owned();
+        let id = s.workspaces[0].id.clone();
+        v.workspaces.get_mut(&id).unwrap().project =
+            Some(root.join("app").to_string_lossy().into_owned());
+        v
+    }
+
+    #[test]
+    fn o_opens_the_browser_beside_the_project_and_enter_opens_the_folder_in_a_pane() {
+        let root = disk("o");
+        let mut v = view_on(&root);
+        assert_eq!(tap(&mut v, 'o'), After::Continue);
+        let t = v.plain(120, 30);
+        assert!(t.contains("abrir una carpeta"), "{t}");
+        assert!(t.contains("abrir esta carpeta"), "{t}");
+        assert!(
+            t.contains("repositorio git") || t.contains("no es un repositorio git"),
+            "{t}"
+        );
+        assert!(t.contains(" ABRIR "), "{t}");
+        // It starts beside the project (`app`), so `app/` and `notes/` are in the list.
+        assert!(t.contains("app/") && t.contains("notes/"), "{t}");
+        // Down to `app/` (git), then Enter: the daemon is asked to open it.
+        v.press_key(plain(KeyCode::Down));
+        assert_eq!(
+            v.press_key(plain(KeyCode::Enter)),
+            After::OpenFolder {
+                path: root.join("app"),
+                create: false
+            }
+        );
+        assert!(v.picker.is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_folder_already_open_is_gone_to_and_a_new_name_is_created() {
+        let root = disk("o2");
+        let mut v = view_on(&root);
+        tap(&mut v, 'o');
+        // `notes` is the second workspace: Enter on it selects it, asks the daemon nothing.
+        v.press_key(plain(KeyCode::Down));
+        v.press_key(plain(KeyCode::Down));
+        assert_eq!(v.press_key(plain(KeyCode::Enter)), After::Continue);
+        assert_eq!(v.selected, 1);
+        assert_eq!(v.level(), Level::Panels);
+        assert!(v.flash.contains("ya estaba abierta"));
+        // A name that is not a folder: its row makes it.
+        tap(&mut v, 'o');
+        for c in "fresh".chars() {
+            tap(&mut v, c);
+        }
+        v.press_key(plain(KeyCode::Down));
+        assert_eq!(
+            v.press_key(plain(KeyCode::Enter)),
+            After::OpenFolder {
+                path: root.join("fresh"),
+                create: true
+            }
+        );
+        tap(&mut v, 'o');
+        assert_eq!(v.press_key(plain(KeyCode::Esc)), After::Continue);
+        assert!(v.picker.is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn w_makes_a_worktree_of_the_project_and_only_of_a_repository() {
+        let root = disk("w");
+        let mut v = view_on(&root);
+        // The first workspace is a worktree of `app`, on `feat/login`.
+        assert_eq!(tap(&mut v, 'w'), After::Continue);
+        let t = v.plain(120, 30);
+        assert!(t.contains("worktree nuevo de app"), "{t}");
+        assert!(t.contains("nombre    ws-1▏"), "{t}");
+        assert!(t.contains("rama      feat/ws-1"), "{t}");
+        assert!(t.contains("desde     feat/login"), "{t}");
+        assert!(t.contains("app-wt/ws-1"), "{t}");
+        assert!(t.contains(" WORKTREE "), "{t}");
+        // Typing replaces the suggestion, and a bad name says why.
+        tap(&mut v, 'X');
+        assert!(v.plain(120, 30).contains("nombre no válido"));
+        assert_eq!(v.press_key(plain(KeyCode::Enter)), After::Continue);
+        v.press_key(plain(KeyCode::Backspace));
+        for c in "fix".chars() {
+            tap(&mut v, c);
+        }
+        assert_eq!(
+            v.press_key(plain(KeyCode::Enter)),
+            After::CreateWorktree {
+                repo: root.join("app"),
+                branch: "feat/fix".into(),
+                from: "feat/login".into(),
+                folder: "fix".into()
+            }
+        );
+        assert!(v.worktree.is_none());
+        // A folder that is no repository has no worktrees to make.
+        v.press(Key::Back);
+        v.press(Key::Down);
+        tap(&mut v, 'w');
+        assert!(v.worktree.is_none());
+        assert!(v.flash.contains("no es un repositorio git"), "{}", v.flash);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_workspace_the_client_asked_for_is_opened_when_it_shows_up() {
+        let mut v = fixture_view();
+        let id = v.session.as_ref().unwrap().workspaces[1].id.clone();
+        v.set_now(1_000);
+        v.goto(&id);
+        v.sync(std::iter::empty());
+        assert!(v.goto.is_some(), "no session yet: it waits");
+        // The session is there again with it in: it is selected and opened at the panel level.
+        let mut v = fixture_view();
+        v.set_now(1_000);
+        v.goto(&id);
+        let ws = v.session.clone().unwrap();
+        v.session = Some(ws);
+        v.follow_goto();
+        assert_eq!((v.selected, v.level()), (1, Level::Panels));
+        assert!(v.goto.is_none());
+        // One that never comes is given up on.
+        let mut v = fixture_view();
+        v.set_now(1_000);
+        v.goto("nope");
+        v.set_now(20_000);
+        v.follow_goto();
+        assert!(v.goto.is_none());
+    }
+
+    #[test]
+    fn keys_and_clicks_stay_in_the_browser_and_the_box() {
+        let root = disk("guard");
+        let mut v = view_on(&root);
+        tap(&mut v, 'o');
+        assert_eq!(v.click(5, 3, 120, 30), After::Continue);
+        assert!(v.picker.is_some());
+        assert_eq!(v.scroll(true, 5, 5, 120, 30), After::Continue);
+        v.press_key(plain(KeyCode::Esc));
+        tap(&mut v, 'w');
+        assert_eq!(v.click(5, 3, 120, 30), After::Continue);
+        assert!(v.worktree.is_some());
+        // `o` and `w` are the program's at the terminal level.
+        let mut v = view_on(&root);
+        v.press(Key::Enter);
+        v.press(Key::Enter);
+        assert!(matches!(tap(&mut v, 'o'), After::Write { .. }));
+        assert!(matches!(tap(&mut v, 'w'), After::Write { .. }));
+        let _ = std::fs::remove_dir_all(root);
     }
 }

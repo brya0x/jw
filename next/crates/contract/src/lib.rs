@@ -170,6 +170,10 @@ pub enum Cmd {
         branch: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         base: Option<String>,
+        /// The name of the worktree's folder inside `<repo>-wt/`; the branch's name with
+        /// its slashes made dashes when none is given.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        folder: Option<String>,
     },
     /// Close a workspace (a worktree is removed from disk only when `remove_worktree`).
     RemoveWorkspace {

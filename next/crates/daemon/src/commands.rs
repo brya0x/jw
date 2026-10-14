@@ -43,8 +43,13 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
         Cmd::RenameWorkspace { workspace, name } => rename::workspace(shared, &workspace, &name),
         Cmd::RenamePane { pane, name } => rename::pane(shared, &pane, &name),
         Cmd::OpenFolder { path } => workspaces::open_folder(shared, &path),
-        Cmd::CreateWorktree { repo, branch, base } => {
-            workspaces::create_worktree(shared, &repo, &branch, base.as_deref())
+        Cmd::CreateWorktree {
+            repo,
+            branch,
+            base,
+            folder,
+        } => {
+            workspaces::create_worktree(shared, &repo, &branch, base.as_deref(), folder.as_deref())
         }
         Cmd::RemoveWorkspace {
             workspace,

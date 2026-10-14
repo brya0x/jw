@@ -140,7 +140,7 @@ sealed interface Cmd {
     data class OpenFolder(val path: String) : Cmd
 
     @Serializable @SerialName("create_worktree")
-    data class CreateWorktree(val repo: String, val branch: String, val base: String? = null) : Cmd
+    data class CreateWorktree(val repo: String, val branch: String, val base: String? = null, val folder: String? = null) : Cmd
 
     @Serializable @SerialName("remove_workspace")
     data class RemoveWorkspace(

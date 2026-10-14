@@ -109,6 +109,7 @@ fn a_worktree_is_made_beside_the_repo_and_opened() {
             repo: text(&app),
             branch: "feat/login".into(),
             base: Some("main".into()),
+            folder: None,
         })
         .unwrap()
         .unwrap(),
@@ -148,6 +149,7 @@ fn an_existing_branch_is_checked_out_and_a_bad_request_is_refused() {
             repo: text(repo),
             branch: branch.into(),
             base: base.map(Into::into),
+            folder: None,
         })
         .unwrap()
     };
@@ -209,6 +211,7 @@ fn removing_a_workspace_keeps_the_folder_and_can_remove_a_clean_worktree() {
             repo: text(&app),
             branch: "b1".into(),
             base: None,
+            folder: None,
         })
         .unwrap()
         .unwrap(),
@@ -291,6 +294,7 @@ fn workspaces_survive_a_restart() {
             repo: text(&app),
             branch: "keep".into(),
             base: None,
+            folder: None,
         })
         .unwrap()
         .unwrap(),
@@ -323,6 +327,7 @@ fn a_workspace_is_renamed_without_touching_its_folder_and_an_empty_name_brings_t
             repo: text(&app),
             branch: "feat/login".into(),
             base: None,
+            folder: None,
         })
         .unwrap()
         .unwrap(),
@@ -364,5 +369,42 @@ fn a_workspace_is_renamed_without_touching_its_folder_and_an_empty_name_brings_t
         .unwrap();
     }
     assert_eq!(names(&mut c), before);
+    d.stop();
+}
+
+#[test]
+fn a_worktree_folder_may_be_named_and_cannot_leave_its_parent() {
+    let sb = Sandbox::new();
+    let d = sb.start();
+    let app = repo(&sb);
+    let mut c = sb.client();
+    session(&mut c);
+    let make = |c: &mut wire::Client, branch: &str, folder: Option<&str>| {
+        c.cmd(Cmd::CreateWorktree {
+            repo: text(&app),
+            branch: branch.into(),
+            base: None,
+            folder: folder.map(Into::into),
+        })
+        .unwrap()
+    };
+    // The folder is the name, the branch is its own: `<repo>-wt/login` on `feat/login`.
+    let made = make(&mut c, "feat/login", Some("login")).unwrap().unwrap();
+    let wt = app.parent().unwrap().join("app-wt");
+    assert!(wt.join("login").exists());
+    assert!(!wt.join("feat-login").exists());
+    assert_eq!(made["path"], text(&wt.join("login")).as_str());
+    // Without one it is still the branch with dashes.
+    make(&mut c, "feat/other", None).unwrap().unwrap();
+    assert!(wt.join("feat-other").exists());
+    // A name that is not one path component is refused before git is run.
+    for bad in ["", ".", "..", "a/b", "../escape", "x\ny"] {
+        let e = make(&mut c, "feat/bad", Some(bad)).unwrap_err();
+        assert_eq!(e.code, ErrorCode::BadRequest, "{bad:?}");
+    }
+    assert!(!wt.join("escape").exists() && !app.parent().unwrap().join("escape").exists());
+    // A folder that is there is a conflict.
+    let e = make(&mut c, "feat/again", Some("login")).unwrap_err();
+    assert_eq!(e.code, ErrorCode::Conflict);
     d.stop();
 }

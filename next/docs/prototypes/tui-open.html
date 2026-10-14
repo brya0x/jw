@@ -102,11 +102,11 @@ function paint(){
 const W = () => S.ws[S.sel];
 const running = p => p && p.prog;
 const KEYS = {
-  1: [['j k','mover'],['↵','entrar al workspace'],['r','renombrar'],['x','cerrar'],['o','abrir una carpeta'],['w','worktree nuevo'],['s','sincronizar'],['d','ver cambios'],['a','avisos'],['m','teléfono'],[',','ajustes'],['q','salir']],
+  1: [['j k','mover'],['↵','entrar al workspace'],['r','renombrar'],['x','cerrar'],['o','abrir una carpeta'],['w','worktree nuevo (del proyecto)'],['s','sincronizar'],['d','ver cambios'],['a','avisos'],['m','teléfono'],[',','ajustes'],['q','salir']],
   2: [['h j k l','cambiar de panel'],['↵','escribir en el panel'],['n','panel nuevo'],['r','nombrar el panel'],['f','pantalla completa'],['x','cerrar el panel'],['o w s d','como en workspaces'],['a m ,','avisos · teléfono · ajustes'],['esc','volver a workspaces']],
   3: [['todo','va al programa (esc y ctrl incluidos)'],['^␣','salir al nivel de paneles']]
 };
-const hint = () => S.input ? '↵ aceptar · esc cancelar' : S.ask ? 'y sí · esc cancelar' : S.help ? 'cualquier tecla para cerrar'
+const hint = () => S.pick ? '↑↓ mover · → entrar · ← subir · ~ casa · ↵ abrir · esc cerrar' : S.wt ? '↵ crear · esc cancelar' : S.input ? '↵ aceptar · esc cancelar' : S.ask ? 'y sí · esc cancelar' : S.help ? 'cualquier tecla para cerrar'
   : S.level === 1 ? 'j/k mover · ↵ entrar · r renombrar · x cerrar · o carpeta · w worktree · ? teclas · q salir'
   : S.level === 2 ? 'h/l panel · ↵ escribir · n nuevo · r nombrar · f completa · x cerrar · esc volver · ? teclas'
   : 'escribes en el panel · ^␣ para salir';
@@ -140,9 +140,11 @@ function draw(){
   }
   put(1, ROWS - 3, '! permiso  ? pregunta', 'd'); put(1, ROWS - 2, '◆ plan   ❯ comando', 'd');
   for (let x = 0; x < COLS; x++) g.cells[ROWS - 1][x] = [' ', 'bg-panel'];
-  const chip = S.leader ? [' LÍDER ', 'chip-yellow b'] : [' ' + LV[S.level][0] + ' ', LV[S.level][1] + ' b'];
+  const chip = S.pick ? [' ABRIR ', 'chip-cyan b'] : S.wt ? [' WORKTREE ', 'chip-cyan b'] : S.leader ? [' LÍDER ', 'chip-yellow b'] : [' ' + LV[S.level][0] + ' ', LV[S.level][1] + ' b'];
   put(0, ROWS - 1, chip[0], chip[1]);
   put(chip[0].length + 1, ROWS - 1, clip(S.msg || (S.leader ? 'tecla del nivel de paneles · esc cancelar' : hint()), COLS - 14), (S.msg ? 'c-green' : 'd') + ' bg-panel');
+  if (S.pick) drawPicker();
+  if (S.wt) drawWorktree();
   if (S.help){ const lines = KEYS[S.level].map(([k, d]) => [k.padEnd(10) + d, '']); modalBox(60, lines, 'teclas · ' + LV[S.level][0].toLowerCase(), 'c-blue'); }
   if (S.ask) modalBox(62, [[S.ask.text, ''], [S.ask.sub, 'd'], ['', ''], ['y sí · esc cancelar', 'd']], S.ask.title, 'c-yellow');
   if (S.input) modalBox(52, [[S.input.label, 'd'], ['❯ ' + S.input.text + '▏', 'b'], ['', ''], ['↵ aceptar · esc cancelar', 'd']], S.input.title, 'c-blue');
@@ -157,13 +159,108 @@ function global(k){
   if (k === 'a'){ later('avisos'); return true; } if (k === 'm'){ later('teléfono'); return true; } if (k === ','){ later('ajustes'); return true; }
   if (k === '?'){ S.help = true; draw(); return true; } return false;
 }
+const BRANCHES = ['main', 'feat/login'];
+function openPicker(){ S.pick = {dir: startDir(), q: '', sel: 0}; draw(); }
+function projectOf(w){ return w.kind === 'worktree' ? S.ws.find(x => x.name === 'api') : (FS[w.path] && FS[w.path].git) || w.path === '~/ws/api' ? w : null; }
+function openWorktreeBox(){
+  const w = W(), proj = projectOf(w);
+  if (!proj){ flash('«' + w.name + '» no es un repositorio git: w necesita uno'); return; }
+  const taken = S.ws.filter(x => x.kind === 'worktree').map(x => base(x.path));
+  let n = 1; while (taken.includes('ws-' + n) || (FS['~/ws/api-wt'] && FS['~/ws/api-wt'].kids['ws-' + n])) n++;
+  S.wt = {proj, name: 'ws-' + n, picked: true, from: w.kind === 'worktree' ? w.name : 'main'}; draw();
+}
+function wtPlan(){
+  const t = S.wt, name = t.name, branch = 'feat/' + name, folder = '~/ws/api-wt/' + name;
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) return {err: 'nombre no válido: usa minúsculas, números y guiones'};
+  if (S.ws.some(x => x.kind === 'worktree' && base(x.path) === name)) return {err: 'api/' + name + ' ya existe'};
+  if (FS['~/ws/api-wt'] && FS['~/ws/api-wt'].kids[name]) return {err: folder + ' ya existe'};
+  if (BRANCHES.includes(branch)) return {err: 'la rama ' + branch + ' ya existe'};
+  return {name, branch, folder};
+}
+function createWorktree(){
+  const plan = wtPlan(); if (plan.err) return;
+  FS['~/ws/api-wt'].kids[plan.name] = dir(0, 1); BRANCHES.push(plan.branch);
+  S.ws.push({name: plan.branch, kind: 'worktree', project: 'api', path: plan.folder, panes: [{t: 'zsh'}]});
+  S.sel = S.ws.length - 1; S.focus = 0; S.level = 2; S.wt = null; flash('creado ' + plan.name + ' en ' + plan.branch);
+}
+function openFolder(path, create){
+  if (create){ const par = parent(path); FS[par].kids[base(path)] = dir(); FS[path] = dir(); }
+  const at = S.ws.findIndex(w => w.path === path);
+  if (at >= 0){ S.sel = at; S.level = 2; S.focus = 0; S.pick = null; flash('«' + S.ws[at].name + '» ya estaba abierto: voy a él'); return; }
+  S.ws.push({name: base(path), kind: 'folder', path, panes: [{t: 'zsh'}]}); S.sel = S.ws.length - 1; S.focus = 0; S.level = 2; S.pick = null;
+  flash('abierto «' + base(path) + '»' + (create ? ' · carpeta creada' : ''));
+}
+function pickRows(){
+  const p = S.pick, q = p.q.toLowerCase(), subs = subdirs(p.dir);
+  const rows = [{k: 'here', name: 'abrir esta carpeta', path: p.dir, open: isOpen(p.dir), git: !!(FS[p.dir] && FS[p.dir].git)}];
+  subs.filter(([n]) => !q || fuzzy(q, n)).forEach(([n, v]) => rows.push({k: 'dir', name: n + '/', path: p.dir + '/' + n, git: v.git, open: isOpen(p.dir + '/' + n)}));
+  if (p.q && /^[a-z0-9][a-z0-9._-]*$/i.test(p.q) && !subs.some(([n]) => n === p.q)) rows.push({k: 'new', name: 'crear «' + p.q + '»/', path: p.dir + '/' + p.q, isNew: true});
+  return rows;
+}
+function pickKey(e){
+  const k = e.key, p = S.pick, rows = pickRows(), r = rows[Math.min(p.sel, rows.length - 1)];
+  if (k === 'Escape'){ S.pick = null; draw(); return true; }
+  if (k === 'ArrowDown' || (e.ctrlKey && k === 'n')){ p.sel = Math.min(p.sel + 1, rows.length - 1); draw(); return true; }
+  if (k === 'ArrowUp' || (e.ctrlKey && k === 'p')){ p.sel = Math.max(p.sel - 1, 0); draw(); return true; }
+  if (k === 'ArrowRight' || k === 'Tab'){ if (r && r.k === 'dir'){ p.dir = r.path; p.q = ''; p.sel = 0; } draw(); return true; }
+  if (k === 'ArrowLeft' || (k === 'Backspace' && !p.q)){ p.dir = parent(p.dir); p.q = ''; p.sel = 0; draw(); return true; }
+  if (k === '~' && !p.q){ p.dir = '~'; p.sel = 0; draw(); return true; }
+  if (k === 'Backspace'){ p.q = [...p.q].slice(0, -1).join(''); p.sel = 0; draw(); return true; }
+  if (e.ctrlKey && k === 'u'){ p.q = ''; p.sel = 0; draw(); return true; }
+  if (k === 'Enter'){ if (r) openFolder(r.path, r.isNew); draw(); return true; }
+  if (k.length === 1 && !e.ctrlKey){ p.q += k; p.sel = 0; draw(); return true; }
+  return true;
+}
+function wtKey(e){
+  const k = e.key, t = S.wt;
+  if (k === 'Escape'){ S.wt = null; draw(); return true; }
+  if (k === 'Enter'){ if (!wtPlan().err){ createWorktree(); } draw(); return true; }
+  if (k === 'Backspace'){ t.name = t.picked ? '' : [...t.name].slice(0, -1).join(''); t.picked = false; draw(); return true; }
+  if (k.length === 1 && !e.ctrlKey){ t.name = t.picked ? k : t.name + k; t.picked = false; draw(); return true; }
+  return true;
+}
+function drawPicker(){
+  const p = S.pick, rows = pickRows(), sel = Math.min(p.sel, rows.length - 1), w = 82, h = 22, bx = SB + 1 + Math.floor((COLS - SB - 1 - w) / 2), by = 2, lw = 36;
+  for (let r = 0; r < h; r++) put(bx, by + r, ' '.repeat(w), 'bg-panel');
+  box(bx, by, w, h, 'abrir una carpeta', 'c-blue', 'b');
+  put(bx + 3, by + 1, clip(p.dir, lw - 2), 'd bg-panel');
+  put(bx + 3, by + 2, '❯ ' + (p.q ? p.q + '▏' : 'escribe para filtrar esta carpeta…'), (p.q ? 'b' : 'd') + ' bg-panel');
+  const visible = rows.slice(0, h - 7);
+  visible.forEach((r, i) => { const y = by + 4 + i, on = i === sel;
+    const mark = r.k === 'here' ? '.' : r.k === 'new' ? '+' : r.open ? '●' : '▸';
+    put(bx + 2, y, ' '.repeat(lw), 'bg-panel' + (on ? ' bg-sel' : ''));
+    put(bx + 3, y, mark, r.open ? 'c-green' : r.k === 'new' ? 'c-yellow' : 'd');
+    put(bx + 5, y, clip(r.name, lw - 14), on ? 'b c-blue' : '');
+    const tag = r.k === 'new' ? 'nueva' : r.git ? 'git' : r.open ? 'abierta' : '';
+    if (tag) put(bx + 2 + lw - tag.length - 1, y, tag, 'd'); });
+  if (rows.length === 1 && p.q) put(bx + 5, by + 5, 'Nada coincide.', 'd bg-panel');
+  for (let r = 1; r < h - 1; r++) put(bx + lw + 3, by + r, '│', 'c-line bg-panel');
+  const r = rows[sel], px = bx + lw + 6;
+  put(px, by + 2, clip(r.path, w - lw - 10), 'b bg-panel');
+  put(px, by + 3, r.isNew ? 'carpeta nueva: se crea al abrirla' : r.git ? 'repositorio git' : 'no es un repositorio git', (r.git ? 'c-green' : 'd') + ' bg-panel');
+  if (r.open) put(px, by + 4, '● abierta: ↵ va ahí', 'c-green bg-panel');
+  const kids = r.isNew ? [] : Object.keys((FS[r.path] || {kids: {}}).kids).filter(n => !n.startsWith('.')).slice(0, 12);
+  if (!r.isNew && !kids.length) put(px, by + 6, 'vacía', 'd bg-panel');
+  kids.forEach((n, i) => put(px, by + 6 + i, ((FS[r.path].kids[n] ? '▸ ' + n + '/' : '  ' + n)), (FS[r.path].kids[n] ? '' : 'd') + ' bg-panel'));
+  put(bx + 3, by + h - 2, '↑↓ mover · → entrar · ← subir · ~ casa · ↵ abrir · esc cerrar', 'd bg-panel');
+}
+function drawWorktree(){
+  const t = S.wt, plan = wtPlan(), name = t.name, w = 64;
+  const lines = [['nombre    ' + name + '▏', 'b'], ['', '']];
+  if (plan.err) lines.push([plan.err, 'c-red']), lines.push(['', ''], ['', '']);
+  else lines.push(['rama      ' + plan.branch, 'c-green'], ['desde     ' + t.from, ''], ['carpeta   ' + plan.folder, '']);
+  lines.push(['', ''], ['↵ crear' + (plan.err ? '' : ' y abrir') + ' · esc cancelar', 'd']);
+  modalBox(w, lines, 'worktree nuevo de ' + t.proj.name, plan.err ? 'c-red' : 'c-blue');
+}
 function workspaceKeys(k){
-  if (k === 'o'){ later('abrir una carpeta'); return true; } if (k === 'w'){ later('worktree nuevo'); return true; }
+  if (k === 'o'){ openPicker(); return true; } if (k === 'w'){ openWorktreeBox(); return true; }
   if (k === 's'){ later('sincronizar con la base'); return true; } if (k === 'd'){ later('ver cambios'); return true; } return false;
 }
 function key(e){
   const k = e.key;
   if (S.help){ S.help = false; draw(); return true; }
+  if (S.pick) return pickKey(e);
+  if (S.wt) return wtKey(e);
   if (S.input){
     if (k === 'Escape'){ S.input = null; draw(); return true; }
     if (k === 'Enter'){ const v = S.input.text.trim(); if (v){ if (S.input.what === 'ws') W().name = v; else W().panes[S.focus].t = v; flash('renombrado a «' + v + '»'); } S.input = null; draw(); return true; }
@@ -205,13 +302,11 @@ function key(e){
   draw(); return true;
 }
 const scr = document.getElementById('scr');
-scr.addEventListener('keydown', e => { if (e.metaKey) return; if (e.ctrlKey && !(e.key === ' ' || S.level === 3)) return; if (key(e)) e.preventDefault(); });
+scr.addEventListener('keydown', e => { if (e.metaKey) return; if (e.ctrlKey && !(e.key === ' ' || S.level === 3 || S.pick)) return; if (key(e)) e.preventDefault(); });
 scr.addEventListener('click', e => { scr.focus(); const r = scr.getBoundingClientRect(), cw = r.width / COLS, ch = r.height / ROWS, x = Math.floor((e.clientX - r.left) / cw), y = Math.floor((e.clientY - r.top) / ch);
-  if (S.input || S.ask || S.help) return;
+  if (S.input || S.ask || S.help || S.pick || S.wt) return;
   if (x < SB - 1 && y >= 2 && y - 2 < S.ws.length){ S.sel = y - 2; S.focus = 0; S.level = 2; S.full = false; draw(); }
   else if (x >= SB && y >= 1 && y < ROWS - 1 && W().panes.length){ const w = W(), pw = COLS - SB - 1, half = Math.floor(pw / 2); S.focus = w.panes.length === 1 || x - SB - 1 < half ? 0 : Math.min(1, w.panes.length - 1); S.level = 3; S.typed = ''; draw(); } });
-document.getElementById('evLeader').onclick = () => { if (S.level === 3){ S.level = 2; } else { S.leader = true; } draw(); scr.focus(); };
-document.getElementById('evProg').onclick = () => { const p = W().panes[S.focus] || W().panes[0]; if (p){ p.prog = p.prog ? null : 'claude'; flash(p.prog ? 'claude corre en el panel' : 'el panel está en reposo'); } scr.focus(); };
 document.getElementById('evReset').onclick = () => { reset(); draw(); scr.focus(); };
 reset(); draw();
 })();
