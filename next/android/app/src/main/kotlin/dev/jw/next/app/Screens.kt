@@ -305,7 +305,6 @@ private fun WorkspaceRow(row: HomeRow, current: Boolean, open: () -> Unit, hold:
                 GoControl { go(attention) }
             }
         }
-        Hairline()
     }
 }
 
