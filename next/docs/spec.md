@@ -222,4 +222,4 @@ Corrections to the model: the level 0 document is smaller than assumed (3.9 KB, 
 | N18 ✓ | typing into panes: the terminal client forwards keys (leader `^␣`), fits the pane to its box, and the phone has an input line | 60–64 | `crates/jwn/src/tui.rs`, `android/app` |
 | N19 ✓ | the blocks view in the terminal client | 65–68 | `crates/jwn/src/tui.rs`, `crates/jwn/src/tui/shell.rs` |
 | N20 ✓ (this commit) | the blocks view on the phone | 69–71 | `android/app`, `android/client-core` |
-| N21 | opening a pane with a choice (shell, claude, nvim) and resizing a pane to its client | | |
+| N21 | withdrawn: no chooser when opening a pane (every pane is a shell and the shell recognises the program, N13); what is left is how the clients draw a running interactive program and resizing | | |
