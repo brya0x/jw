@@ -33,7 +33,6 @@ button:hover{border-color:var(--blue)}
 .ph .hd .t{flex:1;min-width:0}.ph .hd b{display:block;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ph .hd span{display:block;font-size:11px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ph .tabs{display:flex;background:var(--panel);border-bottom:1px solid var(--line);overflow:auto}
-.ph{position:relative}.ph .sheetp{position:absolute;left:0;right:0;bottom:0;background:var(--panel);border-top:1px solid var(--line);border-radius:14px 14px 0 0;padding:10px 0 14px;box-shadow:0 -8px 24px rgba(0,0,0,.5);z-index:5}.ph .sheetp[hidden]{display:none}.ph .sheetp h3{margin:2px 16px 8px;font-size:12px;font-weight:400;color:var(--dim)}.ph .sheetp button{display:flex;gap:12px;align-items:baseline;width:100%;min-height:52px;padding:8px 16px;border:0;background:none;color:var(--fg);text-align:left;cursor:pointer}.ph .sheetp button b{min-width:56px}.ph .sheetp button span{color:var(--dim);font-size:11px}.ph .sheetp p{margin:8px 16px 0;font-size:11px;color:var(--dim)}.ph .ban{padding:8px 14px;background:var(--sel);font-size:11px;color:var(--dim)}
 .ph .tab{padding:0 14px;min-height:40px;display:flex;align-items:center;gap:6px;border:0;border-bottom:2px solid transparent;border-radius:0;background:none;color:var(--dim);cursor:pointer}
 .ph .tab.on{color:var(--fg);font-weight:700;border-bottom-color:var(--blue)}
 .ph .bl{flex:1;min-height:0;overflow:auto;padding:6px 0;display:flex;flex-direction:column;justify-content:flex-end}
@@ -69,13 +68,13 @@ button:hover{border-color:var(--blue)}
 <div class="wrap">
   <div>
     <h1>The shell as blocks, in the terminal and on the phone</h1>
-    <p>One model, two screens. The terminal draws today's jw layout with each shell pane as a rounded box of command blocks; the phone draws the same blocks flat, with the pane tabs and an editor. Both read the same data: run a command in one and it appears in the other, and what you look at clears on both. Click the terminal or tab into it; the keys are on its status bar. <b>New: opening a pane asks what to run in it.</b> In the terminal, <kbd>n</kbd> (or the button, or a click) opens a small box with shell, claude and nvim; j/k, 1–3, ↵ or a click choose, esc cancels. On the phone, the <kbd>+</kbd> at the end of the pane tabs opens the same three choices as a sheet. Every pane is a shell: the choice only says what it runs first. Pick claude or nvim to see a program with the whole screen (the phone shows a notice, and its ■ stops it and brings the blocks back).</p>
+    <p>One model, two screens. The terminal draws today's jw layout with each shell pane as a rounded box of command blocks; the phone draws the same blocks flat, with the pane tabs and an editor. Both read the same data: run a command in one and it appears in the other, and what you look at clears on both. Click the terminal or tab into it; the keys are on its status bar.</p>
   </div>
   <div class="bar" aria-label="Simulate">
     <button id="evFail" type="button">A command fails in the focused pane</button>
     <button id="evOk" type="button">A command finishes</button>
     <button id="evPerm" type="button">An agent asks permission</button>
-    <button id="evPane" type="button">New pane (the chooser)</button>
+    <button id="evPane" type="button">New pane here</button>
     <button id="evRun" type="button">Start a long command</button>
     <button id="evEnd" type="button">It finishes</button>
     <button id="evReset" type="button">Reset</button>
@@ -91,7 +90,6 @@ button:hover{border-color:var(--blue)}
     <div class="phone"><div class="ph" id="ph">
       <div class="hd"><div class="t"><b id="phTitle"></b><span id="phSub"></span></div></div>
       <div class="tabs" id="phTabs"></div>
-      <div class="sheetp" id="phSheet" hidden><h3>panel nuevo</h3><button type="button" data-mk="shell"><b>shell</b><span>un zsh limpio en la carpeta del workspace</span></button><button type="button" data-mk="claude"><b>claude</b><span>el agente; se reanuda si reabres el panel</span></button><button type="button" data-mk="nvim"><b>nvim</b><span>el editor, a pantalla completa</span></button><p>Todo es un shell: lo que elijas corre dentro y, al salir, vuelves al prompt.</p></div>
       <div class="bl" id="phBlocks"></div>
       <div class="acts" id="phActs" hidden></div>
       <div class="edit" id="phEdit">
@@ -127,16 +125,6 @@ const markOf = a => a.kind === 'shell_done' && a.exit ? ['✗','c-red'] : [KINDS
 const whatOf = a => a.kind === 'shell_done' ? `salió ${a.exit}` : KINDS[a.kind][3];
 
 let model, rev, seen, ui;
-const KINDS3 = [['shell', 'un zsh limpio en la carpeta del workspace'], ['claude', 'el agente; se reanuda si reabres el panel'], ['nvim', 'el editor, a pantalla completa']];
-function newPane(kind){
-  const w = cur(), id = 'p' + (++rev);
-  const base = {id, att:[], shell:true, input:'', cwd:w.path, branch:w.branch || null, blocks:[]};
-  const p = kind === 'shell' ? {...base, title:'zsh', lines:[]}
-    : kind === 'claude' ? {...base, title:'claude', full:true, lines:['╭────────────────────────╮', '│ ✻ Welcome to Claude    │', '╰────────────────────────╯', '', '› ']}
-    : {...base, title:'nvim', full:true, lines:['', '~', '~', '~', '"[No Name]" 0L, 0B']};
-  w.panes.push(p); ui.newp = null; ph.sheet = false; ph.pane = w.panes.length - 1; openWs(w, w.panes.length - 1);
-  ui.msg = 'panel nuevo: ' + kind; setTimeout(() => { ui.msg = ''; draw(); }, 1500);
-}
 function reset(){
   rev = 10; seen = {};
   const att = (kind, pane, exit) => ({kind, pane, exit, rev:++rev});
@@ -155,7 +143,7 @@ function reset(){
       shell('p4', '~/ws/api-wt/feat-login', 'feat/login', [blk('git log --oneline -3', '0.0s', 0, ['a1b2c3d feat: login form', '9f8e7d6 fix: token refresh', '4c5d6e7 chore: deps'])]) ] },
     { id:'w4', name:'infra', kind:'folder', path:'~/ws/infra', att:[], panes:[] },
   ]};
-  ui = { sel:2, open:null, focus:0, avisos:false, av:0, blk:null, hits:[], msg:'', newp:null };
+  ui = { sel:2, open:null, focus:0, avisos:false, av:0, blk:null, hits:[], msg:'' };
 }
 const wsAtt = w => [...w.att.map(a => ({...a, node:w.id})), ...w.panes.flatMap(p => p.att.map(a => ({...a, node:p.id})))];
 const unseen = (list) => list.filter(a => !seen[a.kind + a.rev]).sort((a, b) => KINDS[a.kind][2] - KINDS[b.kind][2]);
@@ -234,9 +222,9 @@ function draw(){
   // status bar
   for (let x = 0; x < COLS; x++) g.cells[ROWS - 1][x] = [' ', 'bg-panel'];
   const typing = termShell();
-  const mode = ui.newp !== null ? [' NUEVO ', 'chip-blue b'] : ui.avisos ? [' AVISOS ', 'chip-yellow b'] : ui.blk ? [' BLOQUE ', 'chip-yellow b'] : ui.open ? [' TERM ', 'chip-green b'] : [' MOVE ', 'chip-blue b'];
+  const mode = ui.avisos ? [' AVISOS ', 'chip-yellow b'] : ui.blk ? [' BLOQUE ', 'chip-yellow b'] : ui.open ? [' TERM ', 'chip-green b'] : [' MOVE ', 'chip-blue b'];
   put(g, 0, ROWS - 1, mode[0], mode[1]);
-  put(g, mode[0].length + 1, ROWS - 1, ui.msg ? ui.msg : ui.newp !== null ? 'j/k elegir · 1-3 · ↵ abrir · esc cancelar' : ui.avisos ? 'j/k mover · ↵ ir · esc volver' : ui.blk ? 'c comando · o salida · r repetir · esc soltar' : typing ? 'escribe · ↵ ejecuta · tab otro panel · esc salir' : 'j/k workspace · h/l panel · ↵ abrir · a avisos · q salir', ui.msg ? 'c-green bg-panel' : 'd bg-panel');
+  put(g, mode[0].length + 1, ROWS - 1, ui.msg ? ui.msg : ui.avisos ? 'j/k mover · ↵ ir · esc volver' : ui.blk ? 'c comando · o salida · r repetir · esc soltar' : typing ? 'escribe · ↵ ejecuta · tab otro panel · esc salir' : 'j/k workspace · h/l panel · ↵ abrir · a avisos · q salir', ui.msg ? 'c-green bg-panel' : 'd bg-panel');
   const all = model.ws.flatMap(x => unseen(wsAtt(x))).length;
   if (all){ const t = `avisos ${all}`; put(g, COLS - t.length - 1, ROWS - 1, t, 'c-yellow b bg-panel'); }
 
@@ -250,16 +238,6 @@ function draw(){
       if (i === ui.av) for (let k = 1; k < bw - 1; k++) g.cells[yy][bx + k] = [g.cells[yy][bx + k][0], 'bg-sel'];
       put(g, bx + 3, yy, gl, cl + ' b' + (i === ui.av ? ' bg-sel' : '')); put(g, bx + 6, yy, (x.kind === 'worktree' ? x.project + '/' : '') + x.name, 'b' + (i === ui.av ? ' bg-sel' : ''));
       const t = whatOf(a); put(g, bx + bw - 3 - t.length, yy, t, (cl === 'c-red' ? cl : 'd') + (i === ui.av ? ' bg-sel' : '')); });
-  }
-  if (ui.newp !== null){
-    const bw = 52, bh = 8, bx = SB + 1 + Math.floor((pw - bw) / 2), by = 4;
-    for (let i = 0; i < bh; i++) put(g, bx, by + i, ' '.repeat(bw), 'bg-panel');
-    box(g, bx, by, bw, bh, 'panel nuevo en ' + cur().name, 'c-blue');
-    KINDS3.forEach(([k, d], i) => { const yy = by + 2 + i, on = i === ui.newp;
-      if (on) for (let c = 1; c < bw - 1; c++) g.cells[yy][bx + c] = [g.cells[yy][bx + c][0], 'bg-sel'];
-      put(g, bx + 3, yy, String(i + 1), 'd' + (on ? ' bg-sel' : '')); put(g, bx + 6, yy, k, 'b' + (on ? ' c-blue bg-sel' : '')); put(g, bx + 14, yy, clipTo(d, bw - 17), 'd' + (on ? ' bg-sel' : ''));
-      ui.hits.push({x:bx + 1, y:yy, w:bw - 2, h:1, rows:1, newp:i}); });
-    put(g, bx + 3, by + bh - 2, 'es un shell; lo que elijas corre dentro', 'd');
   }
   paint(g);
   drawPhone();
@@ -298,7 +276,7 @@ function drawShell(g, p, x0, y0, bw, bh, focused){
   if (p.input) put(g, ix + 2, edTop + 2, clipTo(p.input, iw - 4), ''); else put(g, ix + 2, edTop + 2, focused ? '' : 'escribe un comando', 'd');
   if (focused){ const cx = ix + 2 + [...p.input].length; if (cx < ix + iw) g.cells[edTop + 2][cx] = [' ', 'cur']; }
 }
-const termShell = () => { const w = cur(); const p = ui.open === w.id ? w.panes[ui.focus] : null; return p && p.shell && !p.full && !ui.avisos && ui.newp === null ? p : null; };
+const termShell = () => { const w = cur(); const p = ui.open === w.id ? w.panes[ui.focus] : null; return p && p.shell && !p.full && !ui.avisos ? p : null; };
 function typeKey(k){
   const p = termShell(); if (!p) return;
   if (k === 'Escape'){ if (ui.blk){ ui.blk = null; } else ui.open = null; }
@@ -315,7 +293,7 @@ function runCmd(p, cmd){
 }
 /* ---- the phone: the same model, drawn flat ---- */
 const $ = id => document.getElementById(id);
-const ph = { pane:0, blk:null, sheet:false };
+const ph = { pane:0, blk:null };
 const phBars = b => b.running ? 'run' : b.code ? 'bad' : 'ok';
 function drawPhone(){
   const w = model.ws[ui.sel]; if (!w) return;
@@ -323,15 +301,9 @@ function drawPhone(){
   const p = w.panes[ph.pane];
   $('phTitle').textContent = (w.kind === 'worktree' ? w.project + ' › ' : '') + w.name;
   $('phSub').textContent = (w.kind === 'worktree' ? '↳ ' + w.branch + '  ' : '') + w.path;
-  $('phSheet').hidden = !ph.sheet;
-  $('phTabs').innerHTML = w.panes.map((q, i) => { const u = paneUnseen(q)[0]; return `<button class="tab ${i === ph.pane ? 'on' : ''}" data-tab="${i}" type="button">${esc(q.title)}${u ? ` <span class="${markOf(u)[1]} b">${markOf(u)[0]}</span>` : ''}</button>`; }).join('') + '<button class="tab" data-newp="1" type="button" aria-label="Panel nuevo">+</button>';
+  $('phTabs').innerHTML = w.panes.map((q, i) => { const u = paneUnseen(q)[0]; return `<button class="tab ${i === ph.pane ? 'on' : ''}" data-tab="${i}" type="button">${esc(q.title)}${u ? ` <span class="${markOf(u)[1]} b">${markOf(u)[0]}</span>` : ''}</button>`; }).join('');
   if (!p){ $('phBlocks').innerHTML = '<div class="none">Este workspace no tiene paneles.</div>'; $('phActs').hidden = true; $('phChips').innerHTML = ''; $('phIn').disabled = true; return; }
   $('phIn').disabled = false;
-  if (p.full){
-    $('phBlocks').innerHTML = `<div class="ban">${esc(p.title)} ocupa toda la pantalla · los bloques vuelven al salir</div><pre style="margin:0;padding:8px 14px;font-size:12px">${esc(p.lines.join('\n'))}</pre>`;
-    $('phActs').hidden = true; $('phChips').innerHTML = `<span class="c-yellow">◌ ${esc(p.title)}</span>`; $('phForm').classList.add('prog');
-    $('phGo').outerHTML = '<button id="phGo" class="stop" type="button" aria-label="Stop (^C)">■</button>'; return;
-  }
   const sel = ph.blk && ph.blk.pane === p.id ? ph.blk.idx : null;
   $('phBlocks').innerHTML = p.blocks.map((b, i) => `<div class="blk ${phBars(b)} ${sel === i ? 'on' : ''}" data-blk="${i}">
       <div class="bm"><span>${esc(short(p.cwd))}</span><i class="${b.code && !b.running ? 'bad' : ''}">${b.running ? 'corriendo ' + b.dur : b.code ? 'salió ' + b.code + ' · ' + b.dur : b.dur}</i></div>
@@ -346,14 +318,11 @@ function drawPhone(){
   const bl = $('phBlocks'); bl.scrollTop = bl.scrollHeight;
 }
 $('ph').addEventListener('click', e => {
-  const w = model.ws[ui.sel], t = e.target.closest('[data-tab],[data-blk],[data-act],[data-newp],[data-mk],#phGo.stop'); if (!t){ if (ph.sheet){ ph.sheet = false; draw(); } return; }
+  const w = model.ws[ui.sel], t = e.target.closest('[data-tab],[data-blk],[data-act],#phGo.stop'); if (!t) return;
   const p = w.panes[ph.pane];
-  if (t.dataset.newp){ ph.sheet = !ph.sheet; draw(); return; }
-  if (t.dataset.mk){ newPane(t.dataset.mk); draw(); return; }
-  if (t.dataset.tab !== undefined){ ph.sheet = false; ph.pane = +t.dataset.tab; ph.blk = null; w.panes[ph.pane].att.forEach(a => seen[a.kind + a.rev] = true); }
+  if (t.dataset.tab !== undefined){ ph.pane = +t.dataset.tab; ph.blk = null; w.panes[ph.pane].att.forEach(a => seen[a.kind + a.rev] = true); }
   else if (t.dataset.blk !== undefined){ ph.blk = {pane:p.id, idx:+t.dataset.blk}; p.att.forEach(a => seen[a.kind + a.rev] = true); }
   else if (t.dataset.act){ const b = p.blocks[ph.blk.idx]; if (t.dataset.act === 'r') runCmd(p, b.cmd); ui.msg = t.dataset.act === 'c' ? 'comando copiado' : t.dataset.act === 'o' ? 'salida copiada' : 'repetido: ' + b.cmd; setTimeout(() => { ui.msg = ''; draw(); }, 1500); ph.blk = null; }
-  else if (t.id === 'phGo' && p.full){ p.full = false; p.title = 'zsh'; ui.msg = 'el programa salió: vuelven los bloques'; setTimeout(() => { ui.msg = ''; draw(); }, 1500); }
   else if (t.id === 'phGo'){ const b = p.blocks.at(-1); if (b && b.running){ b.running = false; b.code = 130; b.dur = '^C'; b.out.push({t:'^C', c:'d'}); } }
   draw();
 });
@@ -362,13 +331,6 @@ $('phForm').addEventListener('submit', e => { e.preventDefault(); const w = mode
 const openWs = (w, focus) => { ui.open = w.id; ui.focus = focus ?? 0; const p = w.panes[ui.focus]; if (p) p.att.forEach(a => seen[a.kind + a.rev] = true); w.att.forEach(a => seen[a.kind + a.rev] = true); };
 function key(k){
   const w = model.ws[ui.sel];
-  if (ui.newp !== null){
-    if (k === 'j') ui.newp = Math.min(ui.newp + 1, 2); else if (k === 'k') ui.newp = Math.max(ui.newp - 1, 0);
-    else if (k === 'Escape') ui.newp = null;
-    else if (['1', '2', '3'].includes(k)) newPane(KINDS3[+k - 1][0]);
-    else if (k === 'Enter') newPane(KINDS3[ui.newp][0]);
-    draw(); return;
-  }
   if (ui.avisos){
     const items = model.ws.flatMap(x => unseen(wsAtt(x)).map(a => ({w:x, a})));
     if (k === 'j') ui.av = Math.min(ui.av + 1, items.length - 1); else if (k === 'k') ui.av = Math.max(ui.av - 1, 0);
@@ -380,7 +342,7 @@ function key(k){
   else if ((k === 'l' || k === 'Tab') && w.panes.length){ if (ui.open !== w.id) openWs(w); else openWs(w, Math.min(ui.focus + 1, w.panes.length - 1)); }
   else if (k === 'h' && w.panes.length && ui.open === w.id) openWs(w, Math.max(ui.focus - 1, 0));
   else if (k === 'a'){ ui.avisos = true; ui.av = 0; }
-  else if (k === 'n' && w){ ui.newp = 0; }
+  else if (k === 'n'){ document.getElementById('evPane').click(); return; }
   draw();
 }
 const scr = document.getElementById('scr');
@@ -389,9 +351,8 @@ scr.addEventListener('keydown', e => {
     if (e.key === 'Escape') ui.blk = null; else { ui.msg = e.key === 'c' ? 'comando copiado' : e.key === 'o' ? 'salida copiada' : 'repetido: ' + b.cmd; if (e.key === 'r') runCmd(p, b.cmd); setTimeout(() => { ui.msg = ''; draw(); }, 1500); }
     draw(); return; }
   if (termShell() && !e.ctrlKey && !e.metaKey && (e.key.length === 1 || ['Backspace','Enter','Escape','Tab'].includes(e.key))){ e.preventDefault(); typeKey(e.key); return; }
-  if (['j','k','h','l','a','n','Enter','Escape','Tab', ...(ui.newp !== null ? ['1', '2', '3'] : [])].includes(e.key)){ e.preventDefault(); key(e.key); } });
+  if (['j','k','h','l','a','n','Enter','Escape','Tab'].includes(e.key)){ e.preventDefault(); key(e.key); } });
 scr.addEventListener('click', e => { scr.focus(); const r = scr.getBoundingClientRect(), cw = r.width / COLS, ch = r.height / ROWS, cx = Math.floor((e.clientX - r.left) / cw), cy = Math.floor((e.clientY - r.top) / ch);
-  if (ui.newp !== null){ const h = ui.hits.find(h => h.newp !== undefined && cx >= h.x && cx < h.x + h.w && cy === h.y); if (h) newPane(KINDS3[h.newp][0]); else ui.newp = null; draw(); return; }
   if (cx < 27 && cy >= 2 && cy - 2 < model.ws.length && !ui.avisos){ ui.sel = cy - 2; ui.open = null; ui.blk = null; draw(); return; }
   const h = ui.hits.find(h => cx >= h.x && cx < h.x + h.w && cy >= h.y && cy < h.y + h.rows);
   if (h){ const w = cur(), i = w.panes.findIndex(p => p.id === h.pane); openWs(w, i); ui.blk = {pane:h.pane, idx:h.blk}; draw(); } });
@@ -399,7 +360,7 @@ const cur = () => model.ws[ui.sel], paneOf = () => { const w = cur(); return ui.
 document.getElementById('evFail').onclick = () => { const p = paneOf(); if (p){ p.att = p.att.filter(a => a.kind !== 'shell_done'); p.att.push({kind:'shell_done', pane:p.id, exit:2, rev:++rev}); p.lines = [...p.lines.slice(0, -1), 'error: test failed', p.lines.at(-1)]; draw(); } };
 document.getElementById('evOk').onclick = () => { const p = paneOf(); if (p){ p.att = p.att.filter(a => a.kind !== 'shell_done'); p.att.push({kind:'shell_done', pane:p.id, exit:0, rev:++rev}); draw(); } };
 document.getElementById('evPerm').onclick = () => { const p = paneOf(); if (p){ p.att = p.att.filter(a => a.kind !== 'permission'); p.att.push({kind:'permission', pane:p.id, rev:++rev}); draw(); } };
-document.getElementById('evPane').onclick = () => { ui.newp = 0; ui.avisos = false; draw(); };
+document.getElementById('evPane').onclick = () => { const w = cur(); w.panes.push({id:'p' + (++rev), title:'zsh', lines:['~ ❯ '], att:[]}); draw(); };
 const shellPane = () => { const w = cur(); return w.panes.find(p => p.shell); };
 document.getElementById('evRun').onclick = () => { const p = shellPane(); if (p){ p.blocks.push({cmd:'cargo watch -x test', dur:'12s', code:0, running:true, out:[{t:'[Running cargo test]', c:'d'}]}); draw(); } };
 document.getElementById('evEnd').onclick = () => { const p = shellPane(); const b = p && p.blocks.at(-1); if (b && b.running){ b.running = false; b.dur = '12.4s'; b.out = [{t:'test result: ok. 14 passed', c:'c-green'}]; draw(); } };
