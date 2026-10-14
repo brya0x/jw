@@ -15,7 +15,7 @@ pub use client::{Client, ClientError};
 
 /// The node versions this build of the client library can read, for `hello`.
 pub fn default_accepts() -> std::collections::BTreeMap<String, Vec<u32>> {
-    ["session", "workspace", "pane", "blocks"]
+    ["session", "workspace", "pane", "blocks", "diff", "commits"]
         .map(|t| (t.to_owned(), vec![1]))
         .into()
 }

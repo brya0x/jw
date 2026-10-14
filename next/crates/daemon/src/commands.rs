@@ -5,6 +5,7 @@ use contract::{Cmd, ErrorCode, Outcome};
 use contract::{False, True};
 use serde_json::Value;
 
+use crate::changes;
 use crate::panes;
 use crate::server::Shared;
 use crate::workspaces;
@@ -50,11 +51,14 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
         Cmd::ClosePane { pane } => panes::close_pane(shared, &pane),
         Cmd::Write { pane, data } => panes::write(shared, &pane, &data),
         Cmd::Resize { pane, rows, cols } => panes::resize(shared, &pane, rows, cols),
-        // The daemon reads git for these in N32.
-        Cmd::OpenDiff { .. }
-        | Cmd::OpenCommits { .. }
-        | Cmd::RefreshDiff { .. }
-        | Cmd::SetViewed { .. } => Err(err(ErrorCode::Unsupported, "changes are not served yet")),
+        Cmd::OpenDiff {
+            workspace,
+            scope,
+            commit,
+        } => changes::open_diff(shared, &workspace, scope, commit.as_deref()),
+        Cmd::OpenCommits { workspace } => changes::open_commits(shared, &workspace),
+        Cmd::RefreshDiff { node } => changes::refresh(shared, &node),
+        Cmd::SetViewed { node, path, viewed } => changes::set_viewed(shared, &node, &path, viewed),
         Cmd::MobileStart {} => {
             let hub = shared.lock().mobile.clone();
             hub.start().map(Some).map_err(|why| err(ErrorCode::Io, why))

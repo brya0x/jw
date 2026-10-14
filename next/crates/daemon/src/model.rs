@@ -1,5 +1,7 @@
 //! What the daemon remembers. Node documents are built from this; `session.json` is this.
 
+use std::collections::BTreeMap;
+
 use contract::{AttentionKind, Id, WorkspaceKind};
 use serde::{Deserialize, Serialize};
 
@@ -12,6 +14,10 @@ pub struct Model {
     pub session_id: Id,
     pub name: String,
     pub workspaces: Vec<Workspace>,
+    /// Files of a diff that a person looked at, by `<workspace id>|<scope key>`: each path
+    /// with the file's `hash` at that moment.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub viewed: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,6 +73,7 @@ impl Model {
             session_id: new_id(),
             name: "main".into(),
             workspaces: Vec::new(),
+            viewed: BTreeMap::new(),
         }
     }
 }

@@ -1,8 +1,10 @@
 //! The daemon: owns the session, serves the node tree over a Unix socket.
 
 mod blocks;
+mod changes;
 mod commands;
 mod core;
+mod diff;
 mod git;
 mod integration;
 mod launch;

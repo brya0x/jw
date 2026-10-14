@@ -1,5 +1,7 @@
 //! Git, by running `git`: no library, so behaviour matches what the user's own git does.
 
+use std::ffi::OsStr;
+use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -23,6 +25,63 @@ pub fn run(dir: &Path, args: &[&str]) -> Result<String, String> {
             msg
         })
     }
+}
+
+/// What a bounded read printed.
+pub struct Output {
+    pub bytes: Vec<u8>,
+    /// The output passed the cap: `bytes` holds the first `cap` of it and git was stopped.
+    pub over: bool,
+}
+
+/// Run `git --no-pager -C <dir> <args>` for a read: no pager, none of git's optional locks (so
+/// it never blocks the user's own git) and at most `cap` bytes of output. Git's message when
+/// it fails, unless it was stopped for printing too much.
+pub fn read<S: AsRef<OsStr>>(dir: &Path, args: &[S], cap: usize) -> Result<Output, String> {
+    let mut child = Command::new("git")
+        .arg("--no-pager")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("cannot run git: {e}"))?;
+    let mut stderr = child.stderr.take().expect("stderr is piped");
+    // Drained on its own thread so a chatty git cannot fill the pipe while stdout is read.
+    let message = std::thread::spawn(move || {
+        let mut text = Vec::new();
+        let _ = stderr.read_to_end(&mut text);
+        String::from_utf8_lossy(&text).trim().to_owned()
+    });
+    let mut bytes = Vec::new();
+    let mut stdout = child.stdout.take().expect("stdout is piped");
+    let read = stdout
+        .by_ref()
+        .take(cap as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("cannot read git's output: {e}"));
+    let over = bytes.len() > cap;
+    if over {
+        bytes.truncate(cap);
+        let _ = child.kill();
+    }
+    let status = child
+        .wait()
+        .map_err(|e| format!("cannot wait for git: {e}"))?;
+    let message = message.join().unwrap_or_default();
+    read?;
+    if over || status.success() {
+        return Ok(Output { bytes, over });
+    }
+    Err(if message.is_empty() {
+        "git failed".to_owned()
+    } else {
+        message
+    })
 }
 
 /// The top of the working tree `dir` is in.

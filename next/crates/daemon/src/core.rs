@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{Sender, SyncSender, TrySendError};
+use std::time::{Duration, Instant};
 
 use contract::patch::diff;
 use contract::{
@@ -14,17 +15,23 @@ use contract::{
 };
 use serde_json::Value;
 
+use crate::diff::{self, Scope};
 use crate::model::{Model, Own};
 use crate::persist;
 use crate::pty::{self, Event, Term};
 
 /// The node document versions this daemon can serve.
-pub const SUPPORTED: [(&str, &[u32]); 4] = [
+pub const SUPPORTED: [(&str, &[u32]); 6] = [
     ("session", &[1]),
     ("workspace", &[1]),
     ("pane", &[1]),
     ("blocks", &[1]),
+    ("diff", &[1]),
+    ("commits", &[1]),
 ];
+
+/// How long a diff or commits node nobody has open is kept (REQ-102).
+const IDLE: Duration = Duration::from_secs(60);
 
 /// How many patches per node are kept for a resuming client.
 pub const RETAIN: usize = 256;
@@ -42,6 +49,37 @@ struct Doc {
     value: Value,
     rev: u64,
     history: VecDeque<PatchRec>,
+}
+
+/// What a `diff` node is built from: the last read of one workspace and scope.
+struct DiffEntry {
+    workspace: Id,
+    scope: Scope,
+    read: diff::Read,
+    /// The document must be built again (its read or its marks changed).
+    dirty: bool,
+    /// The last moment a client was seen to have it open, or when it was made.
+    idle_since: Instant,
+}
+
+struct CommitsEntry {
+    workspace: Id,
+    list: diff::CommitList,
+    dirty: bool,
+    idle_since: Instant,
+}
+
+/// A watched node to read again, off the lock.
+pub struct DiffJob {
+    pub node: Id,
+    pub dir: PathBuf,
+    pub scope: Scope,
+}
+
+/// What `refresh_diff` has to read again.
+pub enum Reread {
+    Diff(Scope),
+    Commits,
 }
 
 struct ClientState {
@@ -68,6 +106,9 @@ pub struct Core {
     /// each pane's blocks are served as.
     blocks_views: HashMap<Id, (u64, contract::BlocksMode, Vec<contract::Block>)>,
     blocks_ids: HashMap<Id, Id>,
+    /// The `diff` and `commits` nodes in use, by node id.
+    diffs: HashMap<Id, DiffEntry>,
+    commit_lists: HashMap<Id, CommitsEntry>,
     /// Where terminals report to, and the shell they start.
     pub events: Sender<Event>,
     pub shell: String,
@@ -101,6 +142,8 @@ impl Core {
             screens: HashMap::new(),
             blocks_views: HashMap::new(),
             blocks_ids: HashMap::new(),
+            diffs: HashMap::new(),
+            commit_lists: HashMap::new(),
             events,
             shell,
             env,
@@ -202,6 +245,209 @@ impl Core {
             self.blocks_views
                 .insert(pane.to_owned(), (version, mode, blocks));
         }
+    }
+
+    pub fn workspace_dir(&self, workspace: &str) -> Option<PathBuf> {
+        self.model
+            .workspaces
+            .iter()
+            .find(|w| w.id == workspace)
+            .map(|w| PathBuf::from(&w.path))
+    }
+
+    /// The `diff` node of a workspace and scope, if one is in use.
+    pub fn find_diff(&mut self, workspace: &str, scope: &Scope) -> Option<Id> {
+        self.diffs
+            .iter_mut()
+            .find(|(_, e)| e.workspace == workspace && e.scope == *scope)
+            .map(|(id, e)| {
+                e.idle_since = Instant::now();
+                id.clone()
+            })
+    }
+
+    /// Make the `diff` node for what was just read, unless another client made it meanwhile.
+    pub fn add_diff(&mut self, workspace: &Id, scope: Scope, read: diff::Read) -> Id {
+        if let Some(id) = self.find_diff(workspace, &scope) {
+            return id;
+        }
+        self.prune_viewed(workspace, &scope, &read);
+        let id = crate::model::new_id();
+        self.diffs.insert(
+            id.clone(),
+            DiffEntry {
+                workspace: workspace.clone(),
+                scope,
+                read,
+                dirty: true,
+                idle_since: Instant::now(),
+            },
+        );
+        self.refresh();
+        id
+    }
+
+    pub fn find_commits(&mut self, workspace: &str) -> Option<Id> {
+        self.commit_lists
+            .iter_mut()
+            .find(|(_, e)| e.workspace == workspace)
+            .map(|(id, e)| {
+                e.idle_since = Instant::now();
+                id.clone()
+            })
+    }
+
+    pub fn add_commits(&mut self, workspace: &Id, list: diff::CommitList) -> Id {
+        if let Some(id) = self.find_commits(workspace) {
+            return id;
+        }
+        let id = crate::model::new_id();
+        self.commit_lists.insert(
+            id.clone(),
+            CommitsEntry {
+                workspace: workspace.clone(),
+                list,
+                dirty: true,
+                idle_since: Instant::now(),
+            },
+        );
+        self.refresh();
+        id
+    }
+
+    /// Where and how to read a `diff` or `commits` node again.
+    pub fn reread_target(&self, node: &str) -> Option<(PathBuf, Reread)> {
+        if let Some(e) = self.diffs.get(node) {
+            return Some((
+                self.workspace_dir(&e.workspace)?,
+                Reread::Diff(e.scope.clone()),
+            ));
+        }
+        let e = self.commit_lists.get(node)?;
+        Some((self.workspace_dir(&e.workspace)?, Reread::Commits))
+    }
+
+    /// A node was read again: patch it when what was read differs.
+    pub fn diff_update(&mut self, node: &str, read: diff::Read) {
+        let Some(e) = self.diffs.get(node).filter(|e| e.read != read) else {
+            return;
+        };
+        let (workspace, scope) = (e.workspace.clone(), e.scope.clone());
+        self.prune_viewed(&workspace, &scope, &read);
+        if let Some(e) = self.diffs.get_mut(node) {
+            e.read = read;
+            e.dirty = true;
+        }
+        self.refresh();
+    }
+
+    pub fn commits_update(&mut self, node: &str, list: diff::CommitList) {
+        let Some(e) = self.commit_lists.get_mut(node).filter(|e| e.list != list) else {
+            return;
+        };
+        e.list = list;
+        e.dirty = true;
+        self.refresh();
+    }
+
+    /// Marks of files that left an `uncommitted` or `general` diff are dropped (REQ-101); a
+    /// commit's are kept, and a read that is not the whole diff proves nothing.
+    fn prune_viewed(&mut self, workspace: &str, scope: &Scope, read: &diff::Read) {
+        if matches!(scope, Scope::Commit(_))
+            || read.too_large
+            || read.state != contract::DiffState::Ok
+        {
+            return;
+        }
+        let key = viewed_key(workspace, scope);
+        if let Some(marks) = self.model.viewed.get_mut(&key) {
+            marks.retain(|path, _| read.files.iter().any(|f| f.path == *path));
+            if marks.is_empty() {
+                self.model.viewed.remove(&key);
+            }
+        }
+    }
+
+    /// Record that `path` of a `diff` node was looked at, or forget it (REQ-100).
+    pub fn set_viewed(
+        &mut self,
+        node: &str,
+        path: &str,
+        viewed: bool,
+    ) -> Result<(), (ErrorCode, String)> {
+        let e = self
+            .diffs
+            .get_mut(node)
+            .ok_or_else(|| (ErrorCode::NotFound, format!("no diff node {node}")))?;
+        if e.read.too_large {
+            return Err((
+                ErrorCode::Unsupported,
+                "a diff over the limit cannot be marked".into(),
+            ));
+        }
+        let hash = e
+            .read
+            .files
+            .iter()
+            .find(|f| f.path == path)
+            .map(|f| f.hash.clone())
+            .ok_or_else(|| (ErrorCode::NotFound, format!("no file {path} in {node}")))?;
+        e.dirty = true;
+        let key = viewed_key(&e.workspace, &e.scope);
+        if viewed {
+            self.model
+                .viewed
+                .entry(key)
+                .or_default()
+                .insert(path.to_owned(), hash);
+        } else if let Some(marks) = self.model.viewed.get_mut(&key) {
+            marks.remove(path);
+            if marks.is_empty() {
+                self.model.viewed.remove(&key);
+            }
+        }
+        self.refresh();
+        Ok(())
+    }
+
+    /// The `uncommitted` nodes a client has open, to be read again by the poll. Nodes nobody
+    /// has had open for `IDLE` go (REQ-102).
+    pub fn diff_jobs(&mut self) -> Vec<DiffJob> {
+        let now = Instant::now();
+        let watched: HashSet<Id> = self
+            .clients
+            .values()
+            .flat_map(|c| c.open.iter().cloned())
+            .collect();
+        for (id, e) in &mut self.diffs {
+            if watched.contains(id) {
+                e.idle_since = now;
+            }
+        }
+        for (id, e) in &mut self.commit_lists {
+            if watched.contains(id) {
+                e.idle_since = now;
+            }
+        }
+        let before = self.diffs.len() + self.commit_lists.len();
+        self.diffs
+            .retain(|_, e| now.duration_since(e.idle_since) < IDLE);
+        self.commit_lists
+            .retain(|_, e| now.duration_since(e.idle_since) < IDLE);
+        if self.diffs.len() + self.commit_lists.len() != before {
+            self.refresh();
+        }
+        self.diffs
+            .iter()
+            .filter(|(id, e)| e.scope == Scope::Uncommitted && watched.contains(*id))
+            .filter_map(|(id, e)| {
+                Some(DiffJob {
+                    node: id.clone(),
+                    dir: self.workspace_dir(&e.workspace)?,
+                    scope: e.scope.clone(),
+                })
+            })
+            .collect()
     }
 
     /// Forget terminals whose pane is no longer in the model, and end their shells.
@@ -379,8 +625,14 @@ impl Core {
     /// Rebuild every document from the model; patch what changed; save the model.
     pub fn refresh(&mut self) {
         self.assign_attention_revs();
-        let built = self.build();
-        let mut seen = HashSet::new();
+        let live: HashSet<Id> = self.model.workspaces.iter().map(|w| w.id.clone()).collect();
+        self.diffs.retain(|_, e| live.contains(&e.workspace));
+        self.commit_lists.retain(|_, e| live.contains(&e.workspace));
+        self.model
+            .viewed
+            .retain(|key, _| key.split('|').next().is_some_and(|w| live.contains(w)));
+        let (built, kept) = self.build();
+        let mut seen: HashSet<Id> = kept.into_iter().collect();
         let mut patches: Vec<(Id, u64, u64, Vec<PatchOp>)> = Vec::new();
         for node in built {
             let mut value = serde_json::to_value(&node).expect("nodes serialise");
@@ -420,6 +672,8 @@ impl Core {
                 }
             }
         }
+        self.diffs.values_mut().for_each(|e| e.dirty = false);
+        self.commit_lists.values_mut().for_each(|e| e.dirty = false);
         let epoch = self.epoch.clone();
         for (node, from, to, ops) in patches {
             self.broadcast(
@@ -495,7 +749,9 @@ impl Core {
         }
     }
 
-    fn build(&self) -> Vec<Node> {
+    /// Every node document, and the ids of the diff and commits nodes whose documents are
+    /// still current and so were not built again.
+    fn build(&self) -> (Vec<Node>, Vec<Id>) {
         let rev = |id: &str| self.docs.get(id).map_or(0, |d| d.rev);
         let head = |id: &Id, attention: Vec<Attention>| Head {
             id: id.clone(),
@@ -583,8 +839,64 @@ impl Core {
             name: self.model.name.clone(),
             workspaces: summaries,
         }));
-        nodes
+        let mut kept = Vec::new();
+        for (id, e) in &self.diffs {
+            if !e.dirty && self.docs.contains_key(id) {
+                kept.push(id.clone());
+                continue;
+            }
+            let marks = self.model.viewed.get(&viewed_key(&e.workspace, &e.scope));
+            let seen = |f: &contract::DiffFile| {
+                let hash = marks?.get(&f.path)?;
+                Some(if *hash == f.hash {
+                    contract::Seen::Yes
+                } else {
+                    contract::Seen::Changed
+                })
+            };
+            nodes.push(Node::Diff(contract::Diff {
+                head: head(id, Vec::new()),
+                workspace: e.workspace.clone(),
+                scope: e.scope.kind(),
+                commit: match &e.scope {
+                    Scope::Commit(sha) => Some(sha.clone()),
+                    _ => None,
+                },
+                base: e.read.base.clone(),
+                state: e.read.state,
+                too_large: e.read.too_large,
+                omitted: e.read.omitted,
+                files: e
+                    .read
+                    .files
+                    .iter()
+                    .map(|f| contract::DiffFile {
+                        seen: if e.read.too_large { None } else { seen(f) },
+                        ..f.clone()
+                    })
+                    .collect(),
+            }));
+        }
+        for (id, e) in &self.commit_lists {
+            if !e.dirty && self.docs.contains_key(id) {
+                kept.push(id.clone());
+                continue;
+            }
+            nodes.push(Node::Commits(contract::Commits {
+                head: head(id, Vec::new()),
+                workspace: e.workspace.clone(),
+                base: e.list.base.clone(),
+                more: e.list.more,
+                commits: e.list.commits.clone(),
+            }));
+        }
+        (nodes, kept)
     }
+}
+
+/// The key a diff's marks of having looked are kept under in the model.
+fn viewed_key(workspace: &str, scope: &Scope) -> String {
+    format!("{workspace}|{}", scope.key())
 }
 
 fn raised(own: &[Own], node: &Id) -> Vec<Attention> {
@@ -698,6 +1010,74 @@ mod tests {
         core.refresh();
         core.refresh();
         assert_eq!(core.docs[&ws].rev, before);
+    }
+
+    fn nothing_read() -> diff::Read {
+        diff::Read {
+            base: None,
+            state: contract::DiffState::Ok,
+            too_large: false,
+            omitted: None,
+            files: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn only_watched_nodes_are_read_and_idle_ones_go() {
+        let (model, ws, _) = model_with_pane();
+        let mut core = test_core(model);
+        let live = core.add_diff(&ws, Scope::Uncommitted, nothing_read());
+        assert_eq!(
+            core.add_diff(&ws, Scope::Uncommitted, nothing_read()),
+            live,
+            "one node for one workspace and scope"
+        );
+        let other = core.add_diff(&ws, Scope::General, nothing_read());
+        assert!(
+            core.diff_jobs().is_empty(),
+            "nobody has the node open, so git is not run for it"
+        );
+
+        let (tx, _rx) = std::sync::mpsc::sync_channel(64);
+        let (stream, _peer) = std::os::unix::net::UnixStream::pair().unwrap();
+        let client = core.add_client(tx, stream.into());
+        core.hello(client, &wire::default_accepts());
+        core.open(client, &live, None, None);
+        core.open(client, &other, None, None);
+        let jobs = core.diff_jobs();
+        assert_eq!(
+            jobs.iter().map(|j| j.node.as_str()).collect::<Vec<_>>(),
+            [live.as_str()],
+            "only the uncommitted scope is polled"
+        );
+
+        // Both closed, and unseen for longer than the limit: both go, with their documents.
+        core.close(client, &live);
+        core.close(client, &other);
+        let long_ago = Instant::now()
+            .checked_sub(IDLE + Duration::from_secs(1))
+            .expect("the machine has been up for a minute");
+        for e in core.diffs.values_mut() {
+            e.idle_since = long_ago;
+        }
+        assert!(core.diff_jobs().is_empty());
+        assert!(core.diffs.is_empty());
+        assert!(!core.docs.contains_key(&live) && !core.docs.contains_key(&other));
+    }
+
+    #[test]
+    fn a_node_that_has_not_changed_is_not_built_again() {
+        let (model, ws, _) = model_with_pane();
+        let mut core = test_core(model);
+        let node = core.add_diff(&ws, Scope::Uncommitted, nothing_read());
+        let rev = core.docs[&node].rev;
+        core.refresh();
+        core.diff_update(&node, nothing_read());
+        assert_eq!(core.docs[&node].rev, rev, "the same read changes nothing");
+        let mut changed = nothing_read();
+        changed.base = Some("origin/main".into());
+        core.diff_update(&node, changed);
+        assert_eq!(core.docs[&node].rev, rev + 1);
     }
 
     #[test]

@@ -144,6 +144,12 @@ impl Daemon {
                 .name("procs".into())
                 .spawn(move || procs::run(shared, stop))?;
         }
+        {
+            let (shared, stop) = (shared.clone(), stop.clone());
+            thread::Builder::new()
+                .name("changes".into())
+                .spawn(move || crate::diff::run(shared, stop))?;
+        }
         let accept = {
             let stop = stop.clone();
             let shared = shared.clone();
