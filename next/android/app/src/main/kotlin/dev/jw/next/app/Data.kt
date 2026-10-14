@@ -139,10 +139,16 @@ abstract class ProtocolSource : AppSource() {
         command(Cmd.SetViewed(node, path, viewed))
     }
 
+    override fun renameWorkspace(workspace: Id, name: String, reply: (Result<Unit>) -> Unit) {
+        command(Cmd.RenameWorkspace(workspace, name)) { reply(it.done("el PC no pudo renombrar el workspace")) }
+    }
+
+    override fun renamePane(pane: Id, name: String, reply: (Result<Unit>) -> Unit) {
+        command(Cmd.RenamePane(pane, name)) { reply(it.done("el PC no pudo nombrar el panel")) }
+    }
+
     override fun closePane(pane: Id, reply: (Result<Unit>) -> Unit) {
-        command(Cmd.ClosePane(pane)) {
-            reply(if (it.ok) Result.success(Unit) else Result.failure(Exception(it.error?.message ?: "el PC no pudo cerrar el panel")))
-        }
+        command(Cmd.ClosePane(pane)) { reply(it.done("el PC no pudo cerrar el panel")) }
     }
 
     override fun close(id: Id) {
@@ -156,6 +162,10 @@ abstract class ProtocolSource : AppSource() {
         if (reply != null) synchronized(lock) { replies[id] = reply }
         send(ClientMsg.Command(id, cmd))
     }
+
+    /** Nothing, or the PC's message ([fallback] when it gave none). */
+    private fun DaemonMsg.Reply.done(fallback: String): Result<Unit> =
+        if (ok) Result.success(Unit) else Result.failure(Exception(error?.message ?: fallback))
 
     /** The node a command made, or the PC's message. */
     private fun DaemonMsg.Reply.nodeId(): Result<Id> {

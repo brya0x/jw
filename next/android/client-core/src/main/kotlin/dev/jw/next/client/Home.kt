@@ -5,6 +5,7 @@ import dev.jw.next.contract.AttentionKind
 import dev.jw.next.contract.Id
 import dev.jw.next.contract.Node
 import dev.jw.next.contract.WorkspaceKind
+import dev.jw.next.contract.WorkspaceSummary
 
 /** The mark drawn for an attention: a glyph and a tone the UI colours. */
 data class Mark(val glyph: String, val tone: Tone)
@@ -60,13 +61,23 @@ data class HomeRow(
 /** An item of Avisos: one unseen attention and the workspace it belongs to. */
 data class Aviso(val workspaceId: Id, val workspace: String, val attention: Attention)
 
+/**
+ * What a workspace is called on the screen (REQ-185): a worktree that has the name it got when
+ * it was made (`repo: branch`) shows its branch, and a name the person chose shows as chosen.
+ */
+fun shownName(name: String, kind: WorkspaceKind, branch: String?): String =
+    if (kind == WorkspaceKind.Worktree && branch != null && name.endsWith(": $branch")) branch else name
+
+/** The name of a summary as the lists draw it: a worktree has `↳` before it. */
+fun WorkspaceSummary.shown(): String = shownName(name, kind, branch)
+
 fun homeRows(session: Node.Session, seen: Seen): List<HomeRow> = session.workspaces.map { w ->
     val unseen = w.attention.filterNot(seen::isSeen).byUrgency()
     val top = unseen.firstOrNull()
     HomeRow(
         id = w.id,
-        name = w.name,
-        detail = (if (w.kind == WorkspaceKind.Worktree) "↳ ${w.branch ?: ""}" else "carpeta") +
+        name = (if (w.kind == WorkspaceKind.Worktree) "↳ " else "") + w.shown(),
+        detail = (if (w.kind == WorkspaceKind.Worktree) "worktree" else "carpeta") +
             " · ${w.paneCount} ${if (w.paneCount == 1) "panel" else "paneles"}",
         paneCount = w.paneCount,
         mark = top?.mark(),
@@ -77,7 +88,7 @@ fun homeRows(session: Node.Session, seen: Seen): List<HomeRow> = session.workspa
 }
 
 fun avisos(session: Node.Session, seen: Seen): List<Aviso> = session.workspaces.flatMap { w ->
-    w.attention.filterNot(seen::isSeen).byUrgency().map { Aviso(w.id, w.name, it) }
+    w.attention.filterNot(seen::isSeen).byUrgency().map { Aviso(w.id, w.shown(), it) }
 }
 
 /** Where tapping an attention goes: the workspace, and the pane when the attention names one. */

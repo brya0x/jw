@@ -47,6 +47,16 @@ interface NodeSource {
     /** Stop watching [id]: the daemon stops patching it and stops reading git for it. */
     fun close(id: Id) {}
 
+    /** Name a workspace (empty: its automatic name); [reply] gets the daemon's message when it refuses. */
+    fun renameWorkspace(workspace: Id, name: String, reply: (Result<Unit>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** Name a pane (empty: the automatic name). */
+    fun renamePane(pane: Id, name: String, reply: (Result<Unit>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
     /** Close a pane (its shell ends); [reply] gets the daemon's message when it refuses. */
     fun closePane(pane: Id, reply: (Result<Unit>) -> Unit) {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))

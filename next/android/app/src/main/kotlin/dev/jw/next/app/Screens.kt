@@ -1,8 +1,12 @@
+@file:OptIn(ExperimentalFoundationApi::class)
+
 package dev.jw.next.app
 
 import android.content.ClipData
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -74,12 +78,15 @@ import dev.jw.next.client.avisos
 import dev.jw.next.client.byUrgency
 import dev.jw.next.client.closeSheet
 import dev.jw.next.client.homeRows
+import dev.jw.next.client.shown
+import dev.jw.next.client.shownName
 import dev.jw.next.client.mark
 import dev.jw.next.client.outputText
 import dev.jw.next.client.shortPath
 import dev.jw.next.client.what
 import dev.jw.next.contract.Attention
 import dev.jw.next.contract.BlocksMode
+import dev.jw.next.contract.Id
 import dev.jw.next.contract.Node
 import dev.jw.next.contract.PaneSummary
 import kotlinx.coroutines.launch
@@ -128,7 +135,13 @@ private fun Attention.lineColor(): Color = when (val tone = mark().tone) {
 }
 
 @Composable
-internal fun Header(title: String, subtitle: String?, onBack: (() -> Unit)? = null, action: (@Composable () -> Unit)? = null) {
+internal fun Header(
+    title: String,
+    subtitle: String?,
+    onBack: (() -> Unit)? = null,
+    onTitleLongClick: (() -> Unit)? = null,
+    action: (@Composable () -> Unit)? = null,
+) {
     Column(Modifier.fillMaxWidth().background(Palette.panel)) {
         Row(Modifier.fillMaxWidth().defaultMinSize(minHeight = 56.dp), verticalAlignment = Alignment.CenterVertically) {
             if (onBack != null) {
@@ -138,7 +151,8 @@ internal fun Header(title: String, subtitle: String?, onBack: (() -> Unit)? = nu
             } else {
                 Spacer(Modifier.width(Gutter))
             }
-            Column(Modifier.weight(1f).padding(end = Gutter)) {
+            val hold = if (onTitleLongClick != null) Modifier.combinedClickable(onClick = {}, onLongClick = onTitleLongClick) else Modifier
+            Column(Modifier.weight(1f).then(hold).padding(end = Gutter)) {
                 Mono(title, bold = true, size = 15)
                 if (subtitle != null) Mono(subtitle, Palette.dim, 11)
             }
@@ -163,13 +177,22 @@ fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, pcs: (() -
     val session = remember(version) { source.session() }
     val waiting = avisos(session, state.seen)
     val onAvisos = state.screen == Screen.Avisos
-    Column(Modifier.fillMaxSize()) {
-        if (onAvisos) Header("avisos", "lo que espera algo de ti") else Header("jwn · ${session.name}", source.status, action = pcs?.let { open -> { PcButton(open) } })
-        Box(Modifier.weight(1f)) {
-            if (onAvisos) AvisosList(waiting, nav, state, set) else WorkspaceList(homeRows(session, state.seen), nav, state, set)
+    // A long press on a workspace: its sheet, then the field of its name (REQ-183, REQ-184).
+    var menu by remember { mutableStateOf<Naming.Workspace?>(null) }
+    var naming by remember { mutableStateOf<Naming?>(null) }
+    Box(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize()) {
+            if (onAvisos) Header("avisos", "lo que espera algo de ti") else Header("jwn · ${session.name}", source.status, action = pcs?.let { open -> { PcButton(open) } })
+            Box(Modifier.weight(1f)) {
+                if (onAvisos) AvisosList(waiting, nav, state, set) else WorkspaceList(homeRows(session, state.seen), nav, state, set) { id ->
+                    session.workspaces.firstOrNull { it.id == id }?.let { menu = Naming.Workspace(it.id, it.shown()) }
+                }
+            }
+            val current = if (onAvisos) MainTab.Avisos else MainTab.Workspaces
+            MainTabBar(current, waiting.size) { nav.goTab(state, current, it, set) }
         }
-        val current = if (onAvisos) MainTab.Avisos else MainTab.Workspaces
-        MainTabBar(current, waiting.size) { nav.goTab(state, current, it, set) }
+        menu?.let { target -> WorkspaceMenuSheet(target, dismiss = { menu = null }) { naming = target; menu = null } }
+        naming?.let { RenameSheet(source, it) { naming = null } }
     }
 }
 
@@ -222,12 +245,12 @@ internal fun Section(text: String) {
 }
 
 @Composable
-private fun WorkspaceList(rows: List<HomeRow>, nav: Navigator, state: ClientState, set: (ClientState) -> Unit) {
+private fun WorkspaceList(rows: List<HomeRow>, nav: Navigator, state: ClientState, set: (ClientState) -> Unit, hold: (Id) -> Unit) {
     LazyColumn(Modifier.fillMaxSize()) {
         item { Section("workspaces · ${rows.size}") }
         items(rows, key = { it.id }) { row ->
             Row(
-                Modifier.fillMaxWidth().clickable { set(nav.openWorkspace(state, row.id)) }.padding(start = Gutter - 4.dp, end = Gutter, top = 10.dp, bottom = 8.dp),
+                Modifier.fillMaxWidth().combinedClickable(onClick = { set(nav.openWorkspace(state, row.id)) }, onLongClick = { hold(row.id) }).padding(start = Gutter - 4.dp, end = Gutter, top = 10.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.Top,
             ) {
                 MarkColumn(row.go, row.unseen)
@@ -300,13 +323,18 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
         ws?.panes?.forEach { source.open(it.id) }
         set(nav.settle(state))
     }
-    // Asking before a pane is closed (REQ-148 to REQ-150): the sheet, what the PC said, and whether it is answering.
+    // A long press opens a sheet (REQ-182, REQ-183); its choices lead to the field of a name (REQ-184) or to asking
+    // before a pane is closed (REQ-148 to REQ-150): the sheet, what the PC said, and whether it is answering.
+    var paneMenu by remember(screen.id) { mutableStateOf<PaneSummary?>(null) }
+    var wsMenu by remember(screen.id) { mutableStateOf(false) }
+    var naming by remember(screen.id) { mutableStateOf<Naming?>(null) }
     var closing by remember(screen.id) { mutableStateOf<CloseSheet?>(null) }
     var closeError by remember(screen.id) { mutableStateOf<String?>(null) }
     var closeBusy by remember(screen.id) { mutableStateOf(false) }
     Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize()) {
-        Header(ws?.name ?: "workspace", ws?.let { (if (it.branch != null) "↳ ${it.branch}  " else "") + it.path }, onBack = { set(nav.back(state)) }) {
+        val title = ws?.let { shownName(it.name, it.kind, it.branch) } ?: "workspace"
+        Header(title, ws?.let { (if (it.branch != null) "⎇ ${it.branch}  " else "") + it.path }, onBack = { set(nav.back(state)) }, onTitleLongClick = { if (ws != null) wsMenu = true }) {
             Box(Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp).clickable { nav.changes(state)?.let(set) }, contentAlignment = Alignment.Center) {
                 Mono("±", Palette.blue, 18, bold = true)
             }
@@ -315,10 +343,7 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
             Box(Modifier.weight(1f).padding(Gutter)) { Mono("Abriendo el workspace…", Palette.dim, 13, lines = 3) }
             return@Column
         }
-        PaneTabs(ws.panes, screen.pane, state, select = { set(nav.selectPane(state, it)) }) { pane ->
-            closeError = null
-            closing = closeSheet(source, pane)
-        }
+        PaneTabs(ws.panes, screen.pane, state, select = { set(nav.selectPane(state, it)) }) { paneMenu = it }
         val pane = remember(version, screen.pane) { screen.pane?.let { source.node(it) as? Node.Pane } }
         val blocksId = pane?.blocks
         LaunchedEffect(blocksId) { blocksId?.let { source.open(it) } }
@@ -375,6 +400,18 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
             screen.pane?.let { source.write(it, line + "\r") }
         }
     }
+    paneMenu?.let { held ->
+        PaneMenuSheet(held, dismiss = { paneMenu = null }, rename = { naming = Naming.Pane(held.id, held.title); paneMenu = null }) {
+            closeError = null
+            closing = closeSheet(source, held.id)
+            paneMenu = null
+        }
+    }
+    if (wsMenu && ws != null) {
+        val target = Naming.Workspace(ws.id, shownName(ws.name, ws.kind, ws.branch))
+        WorkspaceMenuSheet(target, dismiss = { wsMenu = false }) { naming = target; wsMenu = false }
+    }
+    naming?.let { RenameSheet(source, it) { naming = null } }
     closing?.let { sheet ->
         ClosePaneSheet(sheet, closeError, closeBusy, cancel = { closing = null }) {
             closeBusy = true
@@ -391,20 +428,32 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
 /** The question before a pane is closed: it always asks, and says the workspace stays (REQ-148, REQ-149). */
 @Composable
 private fun BoxScope.ClosePaneSheet(sheet: CloseSheet, error: String?, busy: Boolean, cancel: () -> Unit, confirm: () -> Unit) {
-    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.55f)).clickable(onClick = cancel))
-    Column(
-        Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Palette.panel, RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp))
-            .navigationBarsPadding().padding(Gutter),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
+    Sheet(cancel) {
         Mono(sheet.heading, Palette.fg, 14, bold = true, lines = 2)
         Mono(sheet.body, Palette.dim, 12, lines = 6)
         if (error != null) Mono(error, Palette.red, 12, lines = 4)
-        Mono(
-            if (busy) "cerrando…" else "× cerrar el panel", Palette.red, 14, bold = true,
-            modifier = Modifier.fillMaxWidth().clickable(enabled = !busy, onClick = confirm).padding(vertical = 12.dp),
-        )
+        SheetAction("×", if (busy) "cerrando…" else "cerrar el panel", Palette.red, enabled = !busy, click = confirm)
         Mono("cancelar", Palette.fg, 14, modifier = Modifier.fillMaxWidth().clickable(onClick = cancel).padding(vertical = 12.dp))
+    }
+}
+
+/** What a long press on a pane's tab offers (REQ-182). */
+@Composable
+private fun BoxScope.PaneMenuSheet(pane: PaneSummary, dismiss: () -> Unit, rename: () -> Unit, close: () -> Unit) {
+    Sheet(dismiss) {
+        Mono("panel «${pane.title}»", Palette.fg, 14, bold = true, lines = 2)
+        SheetAction("✎", "nombrar el panel", click = rename)
+        SheetAction("×", "cerrar el panel", Palette.red, click = close)
+    }
+}
+
+/** What a long press on a workspace offers (REQ-183): its name; closing it is the PC's. */
+@Composable
+internal fun BoxScope.WorkspaceMenuSheet(workspace: Naming.Workspace, dismiss: () -> Unit, rename: () -> Unit) {
+    Sheet(dismiss) {
+        Mono("workspace «${workspace.shown}»", Palette.fg, 14, bold = true, lines = 2)
+        SheetAction("✎", "renombrar el workspace", click = rename)
+        Mono("Cerrar un workspace o quitar un worktree se hace en el PC.", Palette.dim, 12, lines = 3)
     }
 }
 
@@ -506,13 +555,13 @@ private fun terminalText(lines: List<String>, row: Int, col: Int, visible: Boole
 
 /** Open pane underlined in blue; an unseen mark sits beside the name. */
 @Composable
-private fun PaneTabs(panes: List<PaneSummary>, current: String?, state: ClientState, select: (String) -> Unit, close: (String) -> Unit) {
+private fun PaneTabs(panes: List<PaneSummary>, current: String?, state: ClientState, select: (String) -> Unit, hold: (PaneSummary) -> Unit) {
     Column(Modifier.fillMaxWidth().background(Palette.panel)) {
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
             panes.forEach { p ->
                 val on = p.id == current
                 val unseen = p.attention.filterNot(state.seen::isSeen).byUrgency()
-                Column(Modifier.clickable { select(p.id) }) {
+                Column(Modifier.combinedClickable(onClick = { select(p.id) }, onLongClick = { hold(p) })) {
                     Row(
                         Modifier.defaultMinSize(minHeight = 44.dp).padding(horizontal = Gutter),
                         verticalAlignment = Alignment.CenterVertically,
@@ -520,9 +569,6 @@ private fun PaneTabs(panes: List<PaneSummary>, current: String?, state: ClientSt
                     ) {
                         Mono(p.title, if (on) Palette.fg else Palette.dim, 13, bold = on)
                         unseen.firstOrNull()?.let { a -> a.mark().let { Mono(it.glyph, it.tone.color(), 14, bold = true) } }
-                        if (on) {
-                            Box(Modifier.size(32.dp).clickable { close(p.id) }, contentAlignment = Alignment.Center) { Mono("×", Palette.dim, 18) }
-                        }
                     }
                     Box(Modifier.fillMaxWidth().height(2.dp).background(if (on) Palette.blue else Color.Transparent))
                 }
