@@ -482,7 +482,7 @@ impl View {
             diffs: &self.diffs,
             commits: &self.commit_lists,
         };
-        if c.press(ev.code, &docs, self.size, self.now_ms) == Outcome::Close {
+        if c.press(ev.code, &docs, self.size) == Outcome::Close {
             self.close_changes();
         } else {
             self.update_changes();
@@ -1577,7 +1577,7 @@ fn serve_asks(view: &mut View, client: &mut Client) {
                 Ask::Watch(node) => {
                     let _ = client.open(&node);
                 }
-                Ask::Refresh { node, .. } => {
+                Ask::Refresh(node) => {
                     if let Ok(Err(e)) = client.cmd_within(Cmd::RefreshDiff { node }, ASK_WAIT) {
                         view.changes_flash(&e.message);
                     }

@@ -43,6 +43,17 @@ enum Tab {
     General,
 }
 
+impl Tab {
+    /// The node a tab shows before anything is chosen inside it.
+    fn root(self) -> Src {
+        match self {
+            Tab::Uncommitted => Src::Uncommitted,
+            Tab::Commits => Src::Commits,
+            Tab::General => Src::General,
+        }
+    }
+}
+
 /// Where a node of this viewer comes from; the loop hands the answer back by it.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Src {
@@ -67,10 +78,7 @@ pub enum Ask {
     /// Open a node to be patched.
     Watch(String),
     /// Read a node again now.
-    Refresh {
-        src: Src,
-        node: String,
-    },
+    Refresh(String),
     SetViewed {
         node: String,
         path: String,
@@ -351,6 +359,14 @@ impl Changes {
         self.clamp(g);
     }
 
+    /// The cached lines, when they are the lines of this very document: a drawing that mixed
+    /// the lines of one revision with the files of another would index past the files.
+    fn cache_for(&self, d: &Diff) -> Option<&Cache> {
+        self.cache
+            .as_ref()
+            .filter(|c| c.key.0 == d.head.id && c.key.1 == d.head.rev)
+    }
+
     fn clamp(&mut self, g: Geom) {
         let n = self.cache.as_ref().map_or(0, |c| c.lines.len());
         self.scroll = self.scroll.min(n.saturating_sub(g.rows));
@@ -389,7 +405,10 @@ impl Changes {
             let n = self.list(docs).map_or(0, |l| l.commits.len());
             return (0..n).map(Item::Commit).collect();
         }
-        let (Some(d), Some(cache)) = (self.diff(docs), &self.cache) else {
+        let Some(d) = self.diff(docs) else {
+            return Vec::new();
+        };
+        let Some(cache) = self.cache_for(d) else {
             return Vec::new();
         };
         let prefix = self.shut_prefix();
@@ -478,7 +497,8 @@ impl Changes {
 
     /// Mark the file at the top as looked at (or not, when it already is) and go to the next.
     fn mark(&mut self, docs: &Docs) {
-        let (Some(d), Some(cache)) = (self.diff(docs), &self.cache) else {
+        let Some(d) = self.diff(docs) else { return };
+        let Some(cache) = self.cache_for(d) else {
             return;
         };
         let pos = self.current();
@@ -511,19 +531,13 @@ impl Changes {
         });
     }
 
-    pub fn press(
-        &mut self,
-        code: KeyCode,
-        docs: &Docs,
-        size: (usize, usize),
-        now_ms: u64,
-    ) -> Outcome {
+    pub fn press(&mut self, code: KeyCode, docs: &Docs, size: (usize, usize)) -> Outcome {
         let g = geom(size, self.split);
         self.msg.clear();
-        let Some(res) = self.tree_or_body(code, docs, g) else {
-            return self.global(code, docs, g, now_ms);
-        };
-        res
+        match self.tree_or_body(code, docs, g) {
+            Some(outcome) => outcome,
+            None => self.global(code, docs),
+        }
     }
 
     /// Keys of the focused column; `None` for one that is not theirs.
@@ -595,7 +609,7 @@ impl Changes {
     }
 
     /// Keys that mean the same wherever the focus is.
-    fn global(&mut self, code: KeyCode, docs: &Docs, g: Geom, _now_ms: u64) -> Outcome {
+    fn global(&mut self, code: KeyCode, docs: &Docs) -> Outcome {
         match code {
             KeyCode::Char('1') => self.set_tab(Tab::Uncommitted),
             KeyCode::Char('2') => self.set_tab(Tab::Commits),
@@ -621,7 +635,6 @@ impl Changes {
             KeyCode::Esc | KeyCode::Char('q') => return Outcome::Close,
             _ => {}
         }
-        let _ = g;
         Outcome::Stay
     }
 
@@ -638,7 +651,7 @@ impl Changes {
                 self.want(src);
             }
             Some((Some(node), false)) => {
-                self.asks.push(Ask::Refresh { src, node });
+                self.asks.push(Ask::Refresh(node));
                 self.msg = "releyendo".into();
             }
             _ => {}
@@ -745,13 +758,13 @@ impl Changes {
             }
         };
         [
-            (Tab::Uncommitted, "1 Sin commitear", Src::Uncommitted),
-            (Tab::Commits, "2 Commits", Src::Commits),
-            (Tab::General, "3 General", Src::General),
+            (Tab::Uncommitted, "1 Sin commitear"),
+            (Tab::Commits, "2 Commits"),
+            (Tab::General, "3 General"),
         ]
         .into_iter()
-        .map(|(tab, name, src)| {
-            let n = count(src, tab);
+        .map(|(tab, name)| {
+            let n = count(tab.root(), tab);
             let label = if n.is_empty() {
                 format!(" {name} ")
             } else {
@@ -796,9 +809,10 @@ impl Changes {
         let against = match (self.tab, diff.and_then(|d| d.base.as_deref())) {
             (Tab::General, Some(base)) => base.to_owned(),
             (Tab::General, None) => "origin".into(),
-            (Tab::Commits, _) => self.commit.as_deref().map_or("commits".into(), |s| {
-                format!("commit {}", &s[..s.len().min(7)])
-            }),
+            (Tab::Commits, _) => self
+                .commit
+                .as_deref()
+                .map_or("commits".into(), |s| format!("commit {}", short_sha(s))),
             _ => "HEAD".into(),
         };
         let watching = src == Src::Uncommitted && diff.is_some_and(|d| d.state == DiffState::Ok);
@@ -817,11 +831,7 @@ impl Changes {
         let mut at = m.ix + 1;
         for (tab, text) in self.tab_labels(docs) {
             let on = tab == self.tab;
-            let broken = self.slots.get(&match tab {
-                Tab::Uncommitted => Src::Uncommitted,
-                Tab::Commits => Src::Commits,
-                Tab::General => Src::General,
-            });
+            let broken = self.slots.get(&tab.root());
             let style = if on {
                 Style {
                     fg: Some(PANEL),
@@ -854,7 +864,7 @@ impl Changes {
                 ..m
             };
             self.centre(g, rest, "elige un commit con ↵", "", DIM);
-        } else if let (Some(d), Some(cache)) = (diff, &self.cache) {
+        } else if let Some((d, cache)) = diff.and_then(|d| Some((d, self.cache_for(d)?))) {
             self.draw_body(g, m, d, cache);
         }
         if tree {
@@ -968,8 +978,9 @@ impl Changes {
                 Item::Back => {
                     g.put_over(m.ix + 1, y, "‹ commits", on(Style::fg(BLUE).bold()));
                     if let Some(sha) = &self.commit {
-                        let short = &sha[..sha.len().min(7)];
-                        g.put_over(m.ix + TREE - 1 - short.len(), y, short, on(Style::fg(DIM)));
+                        let short = short_sha(sha);
+                        let at = (m.ix + TREE).saturating_sub(1 + short.chars().count());
+                        g.put_over(at, y, &short, on(Style::fg(DIM)));
                     }
                 }
                 Item::Commit(i) => {
@@ -1010,7 +1021,7 @@ impl Changes {
                     counts(g, m.ix + TREE - 1, y, *added, *deleted, big, cursor);
                 }
                 Item::Tree(TreeRow::File { pos, depth }) => {
-                    let (Some(d), Some(cache)) = (d, &self.cache) else {
+                    let Some((d, cache)) = d.and_then(|d| Some((d, self.cache_for(d)?))) else {
                         continue;
                     };
                     let f = &d.files[cache.order[*pos]];
@@ -1111,6 +1122,11 @@ fn loading(tab: Tab) -> (String, String, crate::tui::Rgb) {
         "git corre en el PC; puede tardar en repos grandes".into(),
         YELLOW,
     )
+}
+
+/// The first 7 characters of a commit id.
+fn short_sha(sha: &str) -> String {
+    sha.chars().take(7).collect()
 }
 
 /// The first row of `items` rows of `per` lines each, in `rows` lines, that keeps `cursor` in view.
@@ -1343,7 +1359,7 @@ mod tests {
         }
         fn key(&mut self, code: KeyCode) -> Outcome {
             let (size, diffs, commits) = (self.size, &self.diffs, &self.commits);
-            let out = self.changes.press(code, &Docs { diffs, commits }, size, 0);
+            let out = self.changes.press(code, &Docs { diffs, commits }, size);
             self.changes.update(
                 &Docs {
                     diffs: &self.diffs,
@@ -1578,7 +1594,6 @@ mod tests {
                 commits: &k,
             },
             (180, 44),
-            0,
         );
         assert!(matches!(c.take_asks()[0], Ask::OpenDiff { .. }));
     }
