@@ -211,3 +211,42 @@ class SettleTest {
         assertEquals(settled, nav.settle(settled), "settling twice changes nothing")
     }
 }
+
+/** REQ-69 and REQ-70 on the blocks fixture. */
+class BlocksTest {
+    private val dir = File(System.getProperty("contract.dir") ?: error("contract.dir is not set"), "fixtures/daemon")
+
+    private val blocks = ((ContractJson.decodeFromString(DaemonMsg.serializer(), File(dir, "snapshot-blocks.json").readText()) as DaemonMsg.Snapshot).node as Node.Blocks).blocks
+
+    @Test
+    fun aBlockIsOkFailedOrRunningAndSaysHowItWent() {
+        assertEquals(listOf(BlockState.Ok, BlockState.Failed, BlockState.Running), blocks.map { it.state() })
+        assertEquals("120 ms", blocks[0].timeLabel(0))
+        assertEquals("salió 101 · 4.2 s", blocks[1].timeLabel(0))
+        assertEquals("corriendo 3 s", blocks[2].timeLabel(blocks[2].started + 3500))
+        assertEquals("corriendo 0 s", blocks[2].timeLabel(blocks[2].started - 9000), "a clock behind never shows a negative time")
+    }
+
+    @Test
+    fun theOutputIsTheRowsJoined() {
+        assertEquals("On branch feat/login\nnothing to commit, working tree clean", blocks[0].outputText())
+        assertTrue(blocks[1].outputText().contains("test auth::expired ... FAILED"))
+    }
+
+    @Test
+    fun aPathIsShortenedToItsLastTwoFolders() {
+        assertEquals("…/code/app-login", shortPath("/home/u/code/app-login"))
+        assertEquals("/tmp", shortPath("/tmp"))
+    }
+
+    @Test
+    fun coloursAreNamedIndexesFixedRgbOrNothing() {
+        val spans = blocks[1].out.flatten()
+        assertEquals(SpanColor.Named(8), spans.first { it.t.contains("Compiling") }.fg?.spanColor())
+        assertEquals(SpanColor.Rgb(0xFFE5C07B.toInt()), spans.first { it.t == "warning" }.fg?.spanColor())
+        assertEquals(SpanColor.Rgb(0xFFFF0000.toInt()), kotlinx.serialization.json.JsonPrimitive(196).spanColor())
+        assertEquals(SpanColor.Rgb(0xFF080808.toInt()), kotlinx.serialization.json.JsonPrimitive(232).spanColor())
+        assertNull(kotlinx.serialization.json.JsonPrimitive("nope").spanColor())
+        assertNull(kotlinx.serialization.json.JsonPrimitive(300).spanColor())
+    }
+}

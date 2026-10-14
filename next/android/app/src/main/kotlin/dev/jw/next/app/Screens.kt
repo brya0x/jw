@@ -38,6 +38,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -59,8 +60,11 @@ import dev.jw.next.client.avisos
 import dev.jw.next.client.byUrgency
 import dev.jw.next.client.homeRows
 import dev.jw.next.client.mark
+import dev.jw.next.client.outputText
+import dev.jw.next.client.shortPath
 import dev.jw.next.client.what
 import dev.jw.next.contract.Attention
+import dev.jw.next.contract.BlocksMode
 import dev.jw.next.contract.Node
 import dev.jw.next.contract.PaneSummary
 
@@ -68,7 +72,7 @@ private val Gutter = 16.dp
 private val MarkColumn = 28.dp
 
 @Composable
-private fun Mono(
+internal fun Mono(
     text: String,
     color: Color = Palette.fg,
     size: Int = 13,
@@ -263,50 +267,119 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
         }
         PaneTabs(ws.panes, screen.pane, state) { set(nav.selectPane(state, it)) }
         val pane = remember(version, screen.pane) { screen.pane?.let { source.node(it) as? Node.Pane } }
-        Box(
-            Modifier.weight(1f).fillMaxWidth().background(Palette.bg).verticalScroll(rememberScrollState())
-                .horizontalScroll(rememberScrollState()).padding(horizontal = Gutter - 4.dp, vertical = 10.dp),
-        ) {
-            if (pane == null) Mono("Abriendo el panel…", Palette.dim, 12)
-            else Text(
-                terminalText(pane.screen.lines, pane.screen.cursor.row, pane.screen.cursor.col, pane.screen.cursor.visible),
-                fontFamily = MonoFont, fontSize = 12.sp, lineHeight = 18.sp, color = Palette.fg, softWrap = false,
-            )
+        val blocksId = pane?.blocks
+        LaunchedEffect(blocksId) { blocksId?.let { source.open(it) } }
+        val blocks = remember(version, blocksId) { blocksId?.let { source.node(it) as? Node.Blocks } }
+        var picked by remember(screen.pane) { mutableStateOf<Long?>(null) }
+        val clipboard = LocalClipboardManager.current
+        val block = blocks?.blocks?.firstOrNull { it.id == picked }
+        val asBlocks = blocks != null && blocks.mode == BlocksMode.Blocks
+        if (asBlocks) {
+            BlocksList(blocks!!.blocks, picked, Modifier.weight(1f)) { picked = it }
+            if (block != null) {
+                BlockActions(
+                    canRepeat = source.writable,
+                    copyCmd = { clipboard.setText(AnnotatedString(block.cmd)) },
+                    copyOut = { clipboard.setText(AnnotatedString(block.outputText())) },
+                    repeat = {
+                        screen.pane?.let { source.write(it, block.cmd + "\r") }
+                        picked = null
+                    },
+                )
+            }
+        } else {
+            if (blocks != null) FullScreenBanner(pane?.running?.argv?.firstOrNull())
+            Box(
+                Modifier.weight(1f).fillMaxWidth().background(Palette.bg).verticalScroll(rememberScrollState())
+                    .horizontalScroll(rememberScrollState()).padding(horizontal = Gutter - 4.dp, vertical = 10.dp),
+            ) {
+                if (pane == null) Mono("Abriendo el panel…", Palette.dim, 12)
+                else Text(
+                    terminalText(pane.screen.lines, pane.screen.cursor.row, pane.screen.cursor.col, pane.screen.cursor.visible),
+                    fontFamily = MonoFont, fontSize = 12.sp, lineHeight = 18.sp, color = Palette.fg, softWrap = false,
+                )
+            }
         }
-        Composer(enabled = source.writable && screen.pane != null) { line ->
+        val running = asBlocks && blocks!!.blocks.lastOrNull()?.running == true
+        Composer(
+            enabled = source.writable && screen.pane != null,
+            running = running,
+            chips = if (!asBlocks) null else {
+                {
+                    if (running) Chip("◌ ${blocks!!.blocks.last().cmd}", Palette.yellow)
+                    else {
+                        pane?.let { Chip(shortPath(it.cwd), Palette.fg) }
+                        ws.branch?.let { Chip("⎇ $it", Palette.magenta) }
+                    }
+                }
+            },
+            stop = { screen.pane?.let { source.write(it, "\u0003") } },
+        ) { line ->
             screen.pane?.let { source.write(it, line + "\r") }
         }
     }
 }
 
+/** A program with the whole screen (nvim) takes the pane; the blocks come back when it exits. */
+@Composable
+private fun FullScreenBanner(program: String?) {
+    Row(Modifier.fillMaxWidth().height(36.dp).background(Palette.sel).padding(horizontal = Gutter), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Mono(program ?: "programa", Palette.yellow, 11)
+        Mono("ocupa toda la pantalla · los bloques vuelven al salir", Palette.dim, 11)
+    }
+}
+
 /** The line a person types for the shell; Enter (or the button) sends it with a `\r`. */
 @Composable
-private fun Composer(enabled: Boolean, send: (String) -> Unit) {
+private fun Composer(
+    enabled: Boolean,
+    running: Boolean = false,
+    chips: (@Composable () -> Unit)? = null,
+    stop: () -> Unit = {},
+    send: (String) -> Unit,
+) {
     var text by remember { mutableStateOf("") }
     val go = { if (enabled) { send(text); text = "" } }
-    Row(
-        Modifier.fillMaxWidth().background(Palette.panel).navigationBarsPadding().padding(start = Gutter, end = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Mono("❯", if (enabled) Palette.green else Palette.dim, 14, bold = true)
-        Spacer(Modifier.width(10.dp))
-        BasicTextField(
-            value = text,
-            onValueChange = { text = it },
-            enabled = enabled,
-            singleLine = true,
-            textStyle = TextStyle(color = Palette.fg, fontFamily = MonoFont, fontSize = 13.sp),
-            cursorBrush = SolidColor(Palette.blue),
-            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, imeAction = ImeAction.Send),
-            keyboardActions = KeyboardActions(onSend = { go() }),
-            modifier = Modifier.weight(1f).heightIn(min = 48.dp).wrapContentHeight(Alignment.CenterVertically),
-            decorationBox = { inner ->
-                if (text.isEmpty()) Mono(if (enabled) "escribe un comando" else "solo lectura: datos de ejemplo", Palette.dim, 13)
-                inner()
-            },
-        )
-        Box(Modifier.size(48.dp).clickable(enabled = enabled, onClick = go), contentAlignment = Alignment.Center) {
-            Mono("↵", if (enabled) Palette.blue else Palette.dim, 16, bold = true)
+    Column(Modifier.fillMaxWidth().background(Palette.panel).navigationBarsPadding()) {
+        if (chips != null) {
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(start = Gutter, end = Gutter, top = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) { chips() }
+        }
+        Row(Modifier.fillMaxWidth().padding(start = Gutter, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Mono("❯", if (enabled) Palette.green else Palette.dim, 14, bold = true)
+            Spacer(Modifier.width(10.dp))
+            BasicTextField(
+                value = text,
+                onValueChange = { text = it },
+                enabled = enabled,
+                singleLine = true,
+                textStyle = TextStyle(color = Palette.fg, fontFamily = MonoFont, fontSize = 13.sp),
+                cursorBrush = SolidColor(Palette.blue),
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, imeAction = ImeAction.Send),
+                keyboardActions = KeyboardActions(onSend = { go() }),
+                modifier = Modifier.weight(1f).heightIn(min = 48.dp).wrapContentHeight(Alignment.CenterVertically),
+                decorationBox = { inner ->
+                    if (text.isEmpty()) {
+                        val hint = when {
+                            !enabled -> "solo lectura: datos de ejemplo"
+                            running -> "lo que escribas va al programa"
+                            else -> "escribe un comando"
+                        }
+                        Mono(hint, Palette.dim, 13)
+                    }
+                    inner()
+                },
+            )
+            if (running && enabled) {
+                Box(Modifier.size(48.dp).clickable(onClick = stop), contentAlignment = Alignment.Center) {
+                    Mono("■", Palette.red, 18, bold = true)
+                }
+            }
+            Box(Modifier.size(48.dp).clickable(enabled = enabled, onClick = go), contentAlignment = Alignment.Center) {
+                Mono("↵", if (enabled) Palette.blue else Palette.dim, 16, bold = true)
+            }
         }
     }
 }
