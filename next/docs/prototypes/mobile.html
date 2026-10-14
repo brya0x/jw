@@ -1047,7 +1047,7 @@ function sheet(){
     if(state.sessNew) body=newSessForm();
   }
   if(s==='open'){
-    body=`<h3>workspace nuevo</h3><div class="list"><button class="lk" data-act="folder"><kbd>o</kbd><span>abrir una carpeta</span><em>del PC</em></button><button class="lk" data-act="newwt"><kbd>w</kbd><span>worktree nuevo</span><em>de «${curProj()}»</em></button><button class="lk" data-sheet="pick"><kbd>␣</kbd><span>buscar workspace</span></button></div>`;
+    body=`<h3>workspace nuevo</h3><div class="list"><button class="lk" data-act="folder"><kbd>o</kbd><span>abrir una carpeta</span><em>del PC</em></button><button class="lk" data-sheet="pick"><kbd>␣</kbd><span>buscar workspace</span></button></div>`;
   }
   if(s==='answer'){
     const w=wsOf(state.ws), opts=['Yes','Yes, and don\'t ask again for pnpm commands','No, and tell Claude what to do differently'];

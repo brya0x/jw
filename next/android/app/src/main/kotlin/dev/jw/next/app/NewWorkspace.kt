@@ -69,12 +69,11 @@ internal data class WorktreeStart(val repo: String, val base: String?)
 
 /** What a long press on the title of Home, or its `+`, offers (REQ-201). */
 @Composable
-internal fun BoxScope.NewWorkspaceSheet(repo: String?, dismiss: () -> Unit, folders: () -> Unit, worktree: () -> Unit) {
+internal fun BoxScope.NewWorkspaceSheet(dismiss: () -> Unit, folders: () -> Unit) {
     Sheet(dismiss) {
         Mono("workspace nuevo", Palette.fg, 14, bold = true)
         SheetAction("o", "abrir una carpeta del PC", click = folders)
-        if (repo != null) SheetAction("w", "worktree nuevo de «${repoName(repo)}»", click = worktree)
-        else Mono("Abre una carpeta para poder hacer worktrees de ella.", Palette.dim, 12, lines = 3)
+        Mono("Un worktree se hace con una pulsación larga sobre un workspace.", Palette.dim, 12, lines = 2)
     }
 }
 

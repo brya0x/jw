@@ -210,10 +210,9 @@ fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, set: (Clie
     // A long press on a workspace: its sheet, then the field of its name (REQ-183, REQ-184).
     var menu by remember { mutableStateOf<Naming.Workspace?>(null) }
     var naming by remember { mutableStateOf<Naming?>(null) }
-    // A long press on the title, or the `+`: a workspace made new (REQ-201): a folder to open or a worktree to make.
+    // A long press on the title, or the `+`: a folder to open (REQ-201); a worktree is made from a workspace (REQ-213).
     var newMenu by remember { mutableStateOf(false) }
     var worktree by remember { mutableStateOf<WorktreeStart?>(null) }
-    val latest = session.workspaces.firstOrNull { it.id == state.last } ?: session.workspaces.firstOrNull()
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
             if (onAvisos) Header("avisos", "lo que espera algo de ti", onBack = { set(nav.back(state)) }) else Header("jwn · ${session.name}", source.status, action = {
@@ -232,7 +231,7 @@ fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, set: (Clie
             WorkspaceMenuSheet(target, dismiss = { menu = null }, worktree = { ws?.let { worktree = WorktreeStart(it.repo(), it.branch) }; menu = null }) { naming = target; menu = null }
         }
         naming?.let { RenameSheet(source, it) { naming = null } }
-        if (newMenu) NewWorkspaceSheet(latest?.repo(), dismiss = { newMenu = false }, folders = { newMenu = false; set(nav.show(state, Screen.Folders)) }, worktree = { latest?.let { worktree = WorktreeStart(it.repo(), it.branch) }; newMenu = false })
+        if (newMenu) NewWorkspaceSheet(dismiss = { newMenu = false }) { newMenu = false; set(nav.show(state, Screen.Folders)) }
         worktree?.let { WorktreeSheet(source, it, state, nav, set) { worktree = null } }
     }
 }
