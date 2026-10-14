@@ -252,7 +252,7 @@ internal fun BoxScope.WorktreeSheet(source: AppSource, repoAtStart: String, stat
                 cursorBrush = SolidColor(Palette.blue),
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = { make() }),
-                modifier = Modifier.fillMaxWidth().focusRequester(focus),
+                modifier = Modifier.fillMaxWidth().focusRequester(focus).keepsKeyboard(),
                 decorationBox = { inner ->
                     Box(Modifier.fillMaxWidth().defaultMinSize(minHeight = 44.dp).border(1.dp, Palette.blue, RoundedCornerShape(6.dp)).padding(horizontal = 12.dp), contentAlignment = Alignment.CenterStart) { inner() }
                 },

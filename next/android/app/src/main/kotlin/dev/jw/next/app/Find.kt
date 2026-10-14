@@ -59,7 +59,7 @@ internal fun BoxScope.FindSheet(source: AppSource, state: ClientState, nav: Navi
             textStyle = TextStyle(color = Palette.fg, fontFamily = MonoFont, fontSize = 14.sp),
             cursorBrush = SolidColor(Palette.blue),
             keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, imeAction = ImeAction.Search),
-            modifier = Modifier.fillMaxWidth().focusRequester(focus),
+            modifier = Modifier.fillMaxWidth().focusRequester(focus).keepsKeyboard(),
             decorationBox = { inner ->
                 Box(Modifier.fillMaxWidth().defaultMinSize(minHeight = 44.dp).border(1.dp, Palette.blue, RoundedCornerShape(6.dp)).padding(horizontal = 12.dp), contentAlignment = Alignment.CenterStart) {
                     if (text.isEmpty()) Mono("buscar…", Palette.dim, 14)

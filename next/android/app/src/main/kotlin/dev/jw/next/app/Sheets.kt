@@ -12,8 +12,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -52,7 +50,7 @@ internal fun BoxScope.Sheet(dismiss: () -> Unit, content: @Composable ColumnScop
     Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.55f)).clickable(onClick = dismiss))
     Column(
         Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Palette.panel, RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp))
-            .navigationBarsPadding().imePadding().padding(SheetGutter),
+            .navigationBarsUnlessKeyboard().padding(SheetGutter),
         verticalArrangement = Arrangement.spacedBy(12.dp),
         content = content,
     )
@@ -115,7 +113,7 @@ internal fun BoxScope.RenameSheet(source: NodeSource, naming: Naming, dismiss: (
             cursorBrush = SolidColor(Palette.blue),
             keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, imeAction = ImeAction.Done),
             keyboardActions = KeyboardActions(onDone = { save() }),
-            modifier = Modifier.fillMaxWidth().focusRequester(focus),
+            modifier = Modifier.fillMaxWidth().focusRequester(focus).keepsKeyboard(),
             decorationBox = { inner ->
                 Box(Modifier.fillMaxWidth().defaultMinSize(minHeight = 44.dp).border(1.dp, Palette.blue, RoundedCornerShape(6.dp)).padding(horizontal = 12.dp), contentAlignment = Alignment.CenterStart) {
                     if (text.text.isEmpty()) Mono(if (workspace) "nombre del workspace" else "nombre del panel", Palette.dim, 14)

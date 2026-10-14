@@ -6,7 +6,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -85,7 +84,7 @@ class MainActivity : ComponentActivity() {
                 bars.isAppearanceLightStatusBars = !look.isDark(osDark)
                 bars.isAppearanceLightNavigationBars = !look.isDark(osDark)
             }
-            Box(Modifier.fillMaxSize().background(Palette.bg).statusBarsPadding()) {
+            KeyboardRoot(Modifier.fillMaxSize().background(Palette.bg).statusBarsPadding()) {
                 when (val m = mode) {
                     is Mode.Welcome -> WelcomeScreen({ mode = Mode.Scan(Mode.Welcome) }, { mode = Mode.Paste(Mode.Welcome) }, { mode = Mode.Running(FixtureSource(this@MainActivity)) })
                     is Mode.Scan -> {

@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -77,7 +76,7 @@ fun WelcomeScreen(scan: () -> Unit, paste: () -> Unit, example: () -> Unit) {
 @Composable
 fun PasteScreen(error: Boolean, connect: (String) -> Unit, back: () -> Unit) {
     var text by remember { mutableStateOf("") }
-    Column(Modifier.fillMaxSize().navigationBarsPadding()) {
+    Column(Modifier.fillMaxSize().navigationBarsUnlessKeyboard()) {
         Header("pegar enlace", "el que muestra jwn pair", onBack = back)
         Column(Modifier.padding(Gutter), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             BasicTextField(
@@ -86,7 +85,7 @@ fun PasteScreen(error: Boolean, connect: (String) -> Unit, back: () -> Unit) {
                 textStyle = TextStyle(color = Palette.fg, fontFamily = MonoFont, fontSize = 12.sp),
                 cursorBrush = SolidColor(Palette.blue),
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false),
-                modifier = Modifier.fillMaxWidth().height(140.dp).background(Palette.panel, RoundedCornerShape(12.dp))
+                modifier = Modifier.fillMaxWidth().height(140.dp).keepsKeyboard().background(Palette.panel, RoundedCornerShape(12.dp))
                     .border(1.dp, if (error) Palette.red else Palette.line, RoundedCornerShape(12.dp)).padding(12.dp),
                 decorationBox = { inner ->
                     if (text.isEmpty()) Mono("jwn://…", Palette.dim, 12)

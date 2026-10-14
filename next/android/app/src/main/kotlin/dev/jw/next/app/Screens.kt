@@ -21,9 +21,7 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -607,8 +605,8 @@ private fun Composer(
 ) {
     var text by remember { mutableStateOf("") }
     val go = { if (enabled) { send(text); text = "" } }
-    // The field rides up with the keyboard: the app draws edge to edge, so nothing else moves it.
-    Column(Modifier.fillMaxWidth().background(Palette.panel).navigationBarsPadding().imePadding()) {
+    // Everything in it keeps the keyboard up, the send button too, so a line after a line needs no tap on the field.
+    Column(Modifier.fillMaxWidth().background(Palette.panel).navigationBarsUnlessKeyboard().keepsKeyboard()) {
         if (chips != null) {
             Row(
                 Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(start = Gutter, end = Gutter, top = 10.dp),
