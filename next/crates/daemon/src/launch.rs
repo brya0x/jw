@@ -109,7 +109,11 @@ pub fn write_hooks(state_dir: &Path, exe: &Path) -> std::io::Result<PathBuf> {
 /// person's own hooks), unless it was started with settings of its own.
 pub fn with_hooks(argv: &[String], file: &Path) -> Vec<String> {
     let mut out = argv.to_vec();
-    if is_agent(argv) && !argv.iter().any(|a| a == "--settings") {
+    if is_agent(argv)
+        && !argv
+            .iter()
+            .any(|a| a == "--settings" || a.starts_with("--settings="))
+    {
         out.extend(["--settings".to_owned(), file.to_string_lossy().into_owned()]);
     }
     out
@@ -215,6 +219,8 @@ mod tests {
         );
         let own = argv("claude --settings /mine.json");
         assert_eq!(with_hooks(&own, file), own, "its own settings stay");
+        let joined = argv("claude --settings=/mine.json");
+        assert_eq!(with_hooks(&joined, file), joined, "also as --settings=…");
         assert_eq!(with_hooks(&argv("nvim a.rs"), file), argv("nvim a.rs"));
     }
 
