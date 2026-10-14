@@ -46,6 +46,8 @@ pub struct Config {
     pub env: Vec<(String, String)>,
     /// Install the shell integration (blocks); `$<PREFIX>_SHELL_BLOCKS=0` turns it off.
     pub blocks: bool,
+    /// The phone link: the tunnel and the private-address listener.
+    pub link: crate::mobile::LinkConfig,
 }
 
 impl Config {
@@ -59,6 +61,7 @@ impl Config {
                 .and_then(|v| v.parse().ok()),
             env: Vec::new(),
             blocks: std::env::var(identity::env_var("SHELL_BLOCKS")).map_or(true, |v| v != "0"),
+            link: crate::mobile::LinkConfig::from_identity(),
         }
     }
 
@@ -120,6 +123,11 @@ impl Daemon {
             shell,
             config.env.clone(),
             integration_dir,
+            Arc::new(crate::mobile::Hub::new(
+                config.socket.clone(),
+                config.state_dir.clone(),
+                config.link.clone(),
+            )),
         ))));
         let engine = {
             let shared = shared.clone();
@@ -194,6 +202,8 @@ impl Daemon {
         {
             let _ = h.join();
         }
+        let hub = self.shared.lock().mobile.clone();
+        hub.stop();
         let events = {
             let mut core = self.shared.lock();
             core.shutdown();

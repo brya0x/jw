@@ -50,6 +50,29 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
         Cmd::ClosePane { pane } => panes::close_pane(shared, &pane),
         Cmd::Write { pane, data } => panes::write(shared, &pane, &data),
         Cmd::Resize { pane, rows, cols } => panes::resize(shared, &pane, rows, cols),
+        Cmd::MobileStart {} => {
+            let hub = shared.lock().mobile.clone();
+            hub.start().map(Some).map_err(|why| err(ErrorCode::Io, why))
+        }
+        Cmd::MobileWait { seconds } => {
+            let hub = shared.lock().mobile.clone();
+            Ok(hub
+                .wait(seconds)
+                .map(|ask| serde_json::json!({"name": ask.name, "code": ask.code})))
+        }
+        Cmd::MobileAnswer { yes } => {
+            let hub = shared.lock().mobile.clone();
+            if hub.answer(yes) {
+                Ok(None)
+            } else {
+                Err(err(ErrorCode::NotFound, "no phone is asking to pair"))
+            }
+        }
+        Cmd::MobileStop {} => {
+            let hub = shared.lock().mobile.clone();
+            hub.stop();
+            Ok(None)
+        }
     }
 }
 

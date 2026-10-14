@@ -4,6 +4,7 @@
 
 use std::io::{self, BufRead, BufReader};
 use std::net::ToSocketAddrs;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
@@ -13,12 +14,39 @@ use std::time::{Duration, Instant};
 pub struct Tunnel {
     pub host: String,
     child: Child,
+    pidfile: Option<PathBuf>,
 }
 
 impl Drop for Tunnel {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        if let Some(p) = &self.pidfile {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}
+
+/// End a tunnel left running by a daemon that did not get to stop it (it was killed, or
+/// asked to end by a signal). Only a process that still looks like a tunnel to `program` is
+/// signalled: the pid may belong to something else by now. (RISK-21.)
+pub fn reap(pidfile: &Path, program: &str) {
+    let Some(pid) = std::fs::read_to_string(pidfile)
+        .ok()
+        .and_then(|t| t.trim().parse::<u32>().ok())
+    else {
+        return;
+    };
+    let _ = std::fs::remove_file(pidfile);
+    let Ok(out) = Command::new("ps")
+        .args(["-o", "command=", "-p", &pid.to_string()])
+        .output()
+    else {
+        return;
+    };
+    let command = String::from_utf8_lossy(&out.stdout);
+    if command.contains(program) && command.contains("tunnel --url") {
+        let _ = Command::new("kill").arg(pid.to_string()).status();
     }
 }
 
@@ -64,6 +92,7 @@ impl Tunnel {
         port: u16,
         resolve: bool,
         wait: Duration,
+        pidfile: Option<&Path>,
     ) -> Result<Tunnel, TunnelError> {
         let mut child = Command::new(program)
             .args([
@@ -77,6 +106,9 @@ impl Tunnel {
             .stderr(Stdio::piped())
             .spawn()
             .map_err(TunnelError::Start)?;
+        if let Some(p) = pidfile {
+            let _ = std::fs::write(p, child.id().to_string());
+        }
         let stderr = child.stderr.take().expect("stderr was piped");
         let (tx, rx) = mpsc::channel::<(Option<String>, String)>();
         thread::spawn(move || {
@@ -96,11 +128,18 @@ impl Tunnel {
                 Err(_) => {
                     let _ = child.kill();
                     let _ = child.wait();
+                    if let Some(p) = pidfile {
+                        let _ = std::fs::remove_file(p);
+                    }
                     return Err(TunnelError::NoHost(last));
                 }
             }
         };
-        let mut tunnel = Tunnel { host, child };
+        let mut tunnel = Tunnel {
+            host,
+            child,
+            pidfile: pidfile.map(Path::to_path_buf),
+        };
         if resolve {
             let name = format!("{}:443", tunnel.host);
             while name.to_socket_addrs().is_err() {
@@ -156,7 +195,7 @@ mod tests {
                 pidfile.display()
             ),
         );
-        let t = Tunnel::up(&program, 7000, false, Duration::from_secs(5)).unwrap();
+        let t = Tunnel::up(&program, 7000, false, Duration::from_secs(5), None).unwrap();
         assert_eq!(t.host, "fake-one-2.trycloudflare.com");
         let pid: i32 = std::fs::read_to_string(&pidfile)
             .unwrap()
@@ -174,10 +213,38 @@ mod tests {
     }
 
     #[test]
+    fn a_tunnel_left_by_a_dead_daemon_is_ended_by_the_next_one_and_other_processes_are_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let program = script(dir.path(), "sleep 60 &\nwait");
+        let pidfile = dir.path().join("tunnel.pid");
+        let mut stale = Command::new(&program)
+            .args(["tunnel", "--url", "http://127.0.0.1:1", "--no-autoupdate"])
+            .stdin(Stdio::null())
+            .spawn()
+            .unwrap();
+        std::fs::write(&pidfile, stale.id().to_string()).unwrap();
+        reap(&pidfile, &program);
+        assert!(
+            stale.wait().is_ok() && !pidfile.exists(),
+            "the stale tunnel ended"
+        );
+        // A pid that is now something else is left alone.
+        let mut other = Command::new("sleep").arg("30").spawn().unwrap();
+        std::fs::write(&pidfile, other.id().to_string()).unwrap();
+        reap(&pidfile, &program);
+        assert!(
+            other.try_wait().unwrap().is_none(),
+            "an unrelated process is not signalled"
+        );
+        let _ = other.kill();
+        let _ = other.wait();
+    }
+
+    #[test]
     fn a_tunnel_that_says_nothing_useful_is_an_error_and_a_missing_program_too() {
         let dir = tempfile::tempdir().unwrap();
         let program = script(dir.path(), "echo 'ERR no network' >&2\nexit 1");
-        let e = Tunnel::up(&program, 7000, false, Duration::from_secs(2))
+        let e = Tunnel::up(&program, 7000, false, Duration::from_secs(2), None)
             .err()
             .unwrap();
         assert!(
@@ -189,6 +256,7 @@ mod tests {
             7000,
             false,
             Duration::from_secs(1),
+            None,
         )
         .err()
         .unwrap();

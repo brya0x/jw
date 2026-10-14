@@ -32,6 +32,7 @@ impl Sandbox {
             tcp: None,
             env: Vec::new(),
             blocks: true,
+            link: daemon::LinkConfig::off(),
         }
     }
 

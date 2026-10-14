@@ -202,6 +202,20 @@ pub enum Cmd {
         node: Id,
         rev: u64,
     },
+    /// Turn the phone link on (bridge, tunnel, private-address listener) and make a pairing
+    /// token. The result is `{uri, tunnel?, lan?}`; the phone is paired from `uri`.
+    MobileStart {},
+    /// Wait up to `seconds` for a phone to ask to pair. The result is `{name, code}`, or
+    /// nothing when none asked.
+    MobileWait {
+        seconds: u32,
+    },
+    /// Answer the pairing question `mobile_wait` returned.
+    MobileAnswer {
+        yes: bool,
+    },
+    /// Turn the phone link off; connected phones are dropped, paired devices are kept.
+    MobileStop {},
 }
 
 /// A node: one document of the tree, opened on demand and cached by clients.

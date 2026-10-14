@@ -163,6 +163,20 @@ sealed interface Cmd {
     /** A person looked at [node] at [rev]: the daemon ends the attentions raised up to it, for every client. */
     @Serializable @SerialName("mark_seen")
     data class MarkSeen(val node: Id, val rev: Long) : Cmd
+
+    /** Turn the phone link on and make a pairing token; the result carries the link to pair from. */
+    @Serializable @SerialName("mobile_start")
+    data object MobileStart : Cmd
+
+    /** Wait up to [seconds] for a phone to ask to pair. */
+    @Serializable @SerialName("mobile_wait")
+    data class MobileWait(val seconds: Int) : Cmd
+
+    @Serializable @SerialName("mobile_answer")
+    data class MobileAnswer(val yes: Boolean) : Cmd
+
+    @Serializable @SerialName("mobile_stop")
+    data object MobileStop : Cmd
 }
 
 /** What the daemon sends. */

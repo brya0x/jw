@@ -118,6 +118,15 @@ impl Client {
 
     /// Send a command and read until its reply arrives, applying updates on the way.
     pub fn cmd(&mut self, cmd: Cmd) -> Result<Result<Option<Value>, ErrorBody>, ClientError> {
+        self.cmd_within(cmd, Duration::from_secs(30))
+    }
+
+    /// Like `cmd`, for one the daemon may take longer than 30 seconds to answer.
+    pub fn cmd_within(
+        &mut self,
+        cmd: Cmd,
+        wait: Duration,
+    ) -> Result<Result<Option<Value>, ErrorBody>, ClientError> {
         let id = format!("c{}", self.next_cmd);
         self.next_cmd += 1;
         self.conn.send(&ClientMsg::Cmd {
@@ -125,7 +134,7 @@ impl Client {
             cmd,
         })?;
         loop {
-            let Some(msg) = self.poll(Duration::from_secs(30))? else {
+            let Some(msg) = self.poll(wait)? else {
                 return Err(ClientError::Protocol("no reply".into()));
             };
             if let DaemonMsg::Reply { id: got, outcome } = msg

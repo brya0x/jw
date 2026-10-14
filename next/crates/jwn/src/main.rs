@@ -1,6 +1,7 @@
 //! `jwn`: the daemon and a few JSON-speaking commands to drive and watch it.
 
 mod bench;
+mod pair;
 mod tui;
 
 use std::process::ExitCode;
@@ -16,6 +17,10 @@ const USAGE: &str = "usage:
   jwn watch [NODE]        print every JSON line for NODE (default: the session)
   jwn cmd '<json cmd>'    send one command, print its reply (exit 1 if it failed)
   jwn tui                 a small terminal client of the daemon
+  jwn pair                turn the phone link on, show the QR and answer the pairing question
+  jwn pair stop           turn the phone link off (paired phones are kept)
+  jwn devices             list the paired phones
+  jwn revoke <id|name>    unpair a phone and drop its connection
   jwn bench               measure sizes and latency on a private daemon";
 
 fn main() -> ExitCode {
@@ -31,6 +36,10 @@ fn main() -> ExitCode {
         ["watch"] => watch(None),
         ["watch", node] => watch(Some(node)),
         ["cmd", json] => cmd(json),
+        ["pair"] => pair::pair(),
+        ["pair", "stop"] => pair::stop(),
+        ["devices"] => pair::devices(),
+        ["revoke", which] => pair::revoke(which),
         ["bench"] => bench::run().map(|()| ExitCode::SUCCESS),
         ["tui"] => tui::run().map(|()| ExitCode::SUCCESS),
         _ => Err(USAGE.into()),
@@ -62,6 +71,11 @@ fn stop() -> Res {
             "no daemon is listening on {}",
             config.socket.display()
         ));
+    }
+    // Turn the phone link off first: its tunnel is a process of its own, and a signal does
+    // not let the daemon stop it.
+    if let Ok(mut client) = wire::Client::connect(&config.socket, "jwn-stop") {
+        let _ = client.cmd(contract::Cmd::MobileStop {});
     }
     let pid_file = config.pid_file();
     let pid = std::fs::read_to_string(&pid_file)

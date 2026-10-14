@@ -6,6 +6,7 @@ mod core;
 mod git;
 mod integration;
 mod launch;
+mod mobile;
 mod model;
 mod panes;
 mod persist;
@@ -14,4 +15,5 @@ mod pty;
 mod server;
 mod workspaces;
 
+pub use mobile::{LinkConfig, devices_file};
 pub use server::{Config, Daemon};

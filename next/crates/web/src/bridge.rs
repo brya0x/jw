@@ -369,6 +369,23 @@ fn admit<S: Link>(ws: &mut WebSocket<S>, ctx: &Ctx, key: &str) -> Option<String>
     send(ws, &BridgeMsg::Ready).then_some(device)
 }
 
+/// The reply to a `mobile_*` command from a phone, which only the PC's own tools may send
+/// (REQ-84): the phone link cannot be reconfigured through the phone link.
+fn refused_control(text: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(text).ok()?;
+    let is_control = v["t"] == "cmd"
+        && v["cmd"]["cmd"]
+            .as_str()
+            .is_some_and(|c| c.starts_with("mobile_"));
+    is_control.then(|| {
+        serde_json::json!({
+            "t": "reply", "id": v["id"], "ok": false,
+            "error": {"code": "unsupported", "message": "the phone link is controlled from the PC"}
+        })
+        .to_string()
+    })
+}
+
 /// Pass text messages and daemon lines to each other until either side ends or the device
 /// is revoked.
 fn relay<S: Link>(mut ws: WebSocket<S>, ctx: &Ctx, device: &str) {
@@ -434,7 +451,14 @@ fn relay<S: Link>(mut ws: WebSocket<S>, ctx: &Ctx, device: &str) {
         }
         match ws.read() {
             Ok(Message::Text(t)) => {
-                if t.contains('\n') || writeln!(out, "{t}").is_err() {
+                if t.contains('\n') {
+                    break;
+                }
+                if let Some(reply) = refused_control(&t) {
+                    if ws.send(Message::text(reply)).is_err() {
+                        break;
+                    }
+                } else if writeln!(out, "{t}").is_err() {
                     break;
                 }
             }
@@ -451,4 +475,30 @@ fn relay<S: Link>(mut ws: WebSocket<S>, ctx: &Ctx, device: &str) {
     let _ = ws.close(None);
     let _ = ws.flush();
     let _ = daemon.shutdown(std::net::Shutdown::Both);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_mobile_commands_are_refused() {
+        let reply =
+            refused_control(r#"{"t":"cmd","id":"c1","cmd":{"cmd":"mobile_stop"}}"#).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&reply).unwrap();
+        assert_eq!(
+            (
+                v["id"].as_str(),
+                v["ok"].as_bool(),
+                v["error"]["code"].as_str()
+            ),
+            (Some("c1"), Some(false), Some("unsupported"))
+        );
+        assert!(
+            refused_control(r#"{"t":"cmd","id":"c2","cmd":{"cmd":"write","pane":"p","data":"x"}}"#)
+                .is_none()
+        );
+        assert!(refused_control(r#"{"t":"open","node":"mobile_x"}"#).is_none());
+        assert!(refused_control("not json").is_none());
+    }
 }

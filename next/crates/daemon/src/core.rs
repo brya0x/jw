@@ -75,6 +75,8 @@ pub struct Core {
     pub env: Vec<(String, String)>,
     /// Where the shell integration scripts are installed; none turns blocks off.
     pub integration: Option<PathBuf>,
+    /// The phone link: it is used without this lock held, since it waits.
+    pub mobile: Arc<crate::mobile::Hub>,
 }
 
 impl Core {
@@ -85,6 +87,7 @@ impl Core {
         shell: String,
         env: Vec<(String, String)>,
         integration: Option<PathBuf>,
+        mobile: Arc<crate::mobile::Hub>,
     ) -> Core {
         let mut core = Core {
             epoch: crate::model::new_id(),
@@ -102,6 +105,7 @@ impl Core {
             shell,
             env,
             integration,
+            mobile,
         };
         core.refresh();
         core
@@ -609,6 +613,11 @@ mod tests {
             "/bin/sh".into(),
             Vec::new(),
             None,
+            Arc::new(crate::mobile::Hub::new(
+                PathBuf::new(),
+                PathBuf::new(),
+                crate::mobile::LinkConfig::off(),
+            )),
         )
     }
 

@@ -1,0 +1,8 @@
+{
+  "t": "cmd",
+  "id": "c9",
+  "cmd": {
+    "cmd": "mobile_wait",
+    "seconds": 30
+  }
+}

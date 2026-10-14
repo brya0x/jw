@@ -203,7 +203,11 @@
         { "type": "object", "required": ["cmd", "pane"], "properties": { "cmd": { "const": "close_pane" }, "pane": { "$ref": "#/$defs/Id" } } },
         { "type": "object", "required": ["cmd", "pane", "data"], "properties": { "cmd": { "const": "write" }, "pane": { "$ref": "#/$defs/Id" }, "data": { "type": "string" } } },
         { "type": "object", "required": ["cmd", "pane", "rows", "cols"], "properties": { "cmd": { "const": "resize" }, "pane": { "$ref": "#/$defs/Id" }, "rows": { "type": "integer", "minimum": 1 }, "cols": { "type": "integer", "minimum": 1 } } },
-        { "type": "object", "required": ["cmd", "node", "rev"], "properties": { "cmd": { "const": "mark_seen" }, "node": { "$ref": "#/$defs/Id" }, "rev": { "$ref": "#/$defs/Rev" } } }
+        { "type": "object", "required": ["cmd", "node", "rev"], "properties": { "cmd": { "const": "mark_seen" }, "node": { "$ref": "#/$defs/Id" }, "rev": { "$ref": "#/$defs/Rev" } } },
+        { "type": "object", "required": ["cmd"], "properties": { "cmd": { "const": "mobile_start" } } },
+        { "type": "object", "required": ["cmd", "seconds"], "properties": { "cmd": { "const": "mobile_wait" }, "seconds": { "type": "integer", "minimum": 0, "maximum": 300 } } },
+        { "type": "object", "required": ["cmd", "yes"], "properties": { "cmd": { "const": "mobile_answer" }, "yes": { "type": "boolean" } } },
+        { "type": "object", "required": ["cmd"], "properties": { "cmd": { "const": "mobile_stop" } } }
       ]
     },
     "ClientMsg": {
