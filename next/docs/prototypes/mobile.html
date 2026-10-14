@@ -410,6 +410,19 @@ ol.sx code{background:var(--sel);padding:1px 6px;border-radius:4px;color:var(--g
 .pre .radio{width:18px;height:18px;border-radius:50%;border:2px solid var(--dim)}.pre.on .radio{border-color:var(--blue);background:radial-gradient(var(--blue) 42%,transparent 46%)}
 .keys2{display:flex;gap:6px}.keys2 kbd{font:inherit;font-size:11.5px;border:1px solid var(--line);background:var(--bg);border-radius:4px;padding:2px 7px;color:var(--yellow)}
 .prev{padding:10px 14px;font-size:12px;color:var(--dim);border-bottom:1px solid var(--line)}.prev b{color:var(--fg);font-weight:500}
+.pcl{flex:1;overflow:auto;padding:4px 0}
+.pcr{display:flex;align-items:center;gap:10px;padding:12px 8px 12px 16px;border-bottom:1px solid var(--line)}
+.pcr .st{width:10px;height:10px;border-radius:50%;flex:none;background:var(--dim)}
+.pcr .st.on,.pcr .st.cur{background:var(--green);box-shadow:0 0 0 4px color-mix(in srgb,var(--green) 22%,transparent)}
+.pcr .st.check,.pcr .st.busy{background:var(--yellow);animation:pulse 1s infinite}
+.pcr .nm{flex:1;min-width:0}.pcr .nm b{display:block;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pcr .nm span{display:block;font-size:11px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pcr .nm em{display:block;font-style:normal;font-size:11px;margin-top:2px}
+.pcr .nm em.on,.pcr .nm em.cur{color:var(--green)}.pcr .nm em.off{color:var(--dim)}.pcr .nm em.check,.pcr .nm em.busy{color:var(--yellow)}
+.pcr .go{height:40px;min-width:92px;padding:0 14px;border-radius:6px;font-weight:700;font-size:12.5px;flex:none}
+.pcr .go.fill{background:var(--blue);color:var(--bg)}.pcr .go.tone{border:1px solid var(--line)}.pcr .go[disabled]{opacity:.55}
+.pcf{padding:12px 16px calc(12px + env(safe-area-inset-bottom));display:grid;gap:10px;border-top:1px solid var(--line);background:var(--panel)}
+.pcf small{color:var(--dim);font-size:11px;text-align:center}
 </style>
 
 <div class="stage">
@@ -656,7 +669,7 @@ function vHome(){
   roots.forEach(r=>{out+=row(r,i++);list.filter(x=>x.proj===r.id).forEach(w=>{out+=row(w,i++)})});
   if(dirs.length){out+='<div class="sec">carpetas</div>';dirs.forEach(d=>{out+=row(d,i++)})}
   return `<div class="hdr"><button class="sess" data-sheet="sess"><em>sesión</em> ${state.sess} ▾</button><span style="flex:1"></span>
-      <button class="ib" data-sheet="pick" aria-label="Buscar workspace">${ic('search')}</button><button class="ib" data-sheet="open" aria-label="Abrir">${ic('plus')}</button></div>
+      <button class="ib" data-go="pcs" aria-label="Mis PCs">${ic('pc')}</button><button class="ib" data-sheet="pick" aria-label="Buscar workspace">${ic('search')}</button><button class="ib" data-sheet="open" aria-label="Abrir">${ic('plus')}</button></div>
     <div class="scroll"><div class="sec">workspaces · ${list.length}</div>${out}
       <div class="legend"><b><span style="color:var(--green)">●</span> abierto</b><b><span style="color:var(--magenta)">✻</span> agente</b><b><span style="color:var(--green)">⚡</span> dev</b><b><span style="color:var(--red)">!</span> permiso</b><b><span style="color:var(--yellow)">?</span> pregunta</b><b><span style="color:var(--magenta)">◆</span> plan</b><b><span style="color:var(--green)">❯</span> comando</b><b><span style="color:var(--green)">✓</span> agente listo</b><b><span style="color:var(--cyan)">⚑</span> mergeado</b><b><span style="color:var(--red)">✗</span> falló</b></div></div>
     ${statusBar('NORMAL','toca una fila para entrar · ␣ busca')}${nav()}`;
@@ -966,6 +979,10 @@ function sheet(){
     const q=state.q.toLowerCase(), l=state.w.filter(x=>(x.name+x.path).toLowerCase().includes(q));
     body=`<h3>workspaces por último uso</h3><input id="q" value="${state.q}" placeholder="buscar…" aria-label="Buscar" autocomplete="off"><div class="list">${l.map((x,i)=>`<button class="row ${x.kind==='wt'?'':'root'}" style="padding-left:14px" data-open="${x.id}"><span class="o" style="color:var(--green)">●</span><span class="nm"><b>${x.kind==='wt'?x.proj+'/':''}${x.name}</b><span>${x.path}</span></span><span class="tag">${x.kind==='root'?'raíz':x.kind==='wt'?'worktree':'carpeta'}</span>${marks(x)}</button>`).join('')||'<div style="padding:20px;color:var(--dim)">sin resultados</div>'}</div>`;
   }
+  if(s==='forgetpc'){
+    const p=state.pcs.find(x=>x.id===state.pcSel)||{name:'este PC'};
+    body=`<h3>olvidar «${p.name}»</h3><p style="margin:0 16px 12px;color:var(--dim);font-size:12.5px">Este teléfono dejará de poder entrar a ese PC. Para volver tendrás que emparejar de nuevo con <code>jwn pair</code>.</p><div class="list"><button class="lk" data-act="pcforget"><kbd style="color:var(--red)">✕</kbd><span style="color:var(--red)">olvidar este PC</span></button><button class="lk" data-sheet="close"><kbd> </kbd><span>cancelar</span></button></div>`;
+  }
   if(s==='sess'){
     const ss=[...new Set(state.w.map(x=>x.sess))];
     body=`<h3>sesiones</h3><div class="list">${ss.map(n=>`<button class="lk" data-sess="${n}"><kbd>${n===state.sess?'●':' '}</kbd><span>${n}</span><em>${state.w.filter(x=>x.sess===n).length} workspaces</em></button>`).join('')}<button class="lk" data-act="newsess"><kbd>+</kbd><span>nueva sesión</span></button></div>`;
@@ -1006,13 +1023,44 @@ function sheet(){
   return `<div class="back" data-sheet="close"></div><div class="sheet" role="dialog" aria-label="${s}"><div class="grab"></div>${body}</div>`;
 }
 
+/* Varios PCs emparejados: el teléfono los comprueba y muestra en verde el que está encendido. */
+const PCS0=()=>[
+  {id:'mac',name:'MacBook de Bryan',via:'wifi',addr:'192.168.100.152',st:'on',seen:'ahora'},
+  {id:'dev',name:'Servidor de desarrollo',via:'túnel',addr:'try-velocity-confidentiality.trycloudflare.com',st:'on',seen:'ahora'},
+  {id:'office',name:'Mac mini · oficina',via:'wifi',addr:'10.0.0.12',st:'off',seen:'hace 3 días'},
+  {id:'old',name:'Portátil viejo',via:'túnel',addr:'quiet-river-1234.trycloudflare.com',st:'check'}];
+state.pcs=PCS0();state.pcCur='mac';state.pcBusy=null;state.pcSel=null;
+function pcSim(){ if(state.pcT||!state.pcs.some(p=>p.st==='check'))return;
+  state.pcT=setTimeout(()=>{state.pcT=null;state.pcs.forEach(p=>{if(p.st==='check')p.st=p.id==='old'?'off':'on'});if(state.screen==='pcs')render()},2200)}
+function vPcs(){
+  pcSim();
+  const rows=state.pcs.map(p=>{
+    const cur=p.id===state.pcCur&&p.st==='on', busy=state.pcBusy===p.id, k=busy?'busy':cur?'cur':p.st;
+    const text=busy?'conectando…':cur?'conectado · ahora':p.st==='on'?'en línea':p.st==='check'?'comprobando…':'apagado · visto '+p.seen;
+    const label=busy?'conectando…':cur?'abrir':p.st==='on'?'conectar':p.st==='check'?'comprobando…':'reintentar';
+    const cls=cur||p.st==='off'?'tone':'fill';
+    const off=busy||p.st==='check'||(state.pcBusy&&!busy);
+    return `<div class="pcr"><i class="st ${k}"></i><div class="nm"><b>${p.name}</b><span>${p.via} · ${p.addr}</span><em class="${k}">${text}</em></div>
+      <button class="go ${cls}" data-act="pcgo" data-pc="${p.id}" ${off?'disabled':''}>${label}</button>
+      <button class="ib" data-act="pcmore" data-pc="${p.id}" aria-label="Más sobre ${p.name}">${ic('more')}</button></div>`}).join('');
+  const on=state.pcs.filter(p=>p.st==='on').length;
+  return connHdr('mis PCs',on?on+(on===1?' encendido':' encendidos')+' · '+state.pcs.length+' emparejados':'ninguno encendido',state.pcCur?'pcback':'back')+`<div class="pcl">${rows}</div>
+    <div class="pcf"><button class="btn tone" data-act="addpc">${ic('plus')}emparejar otro PC</button><small>Se comprueban cada 10 s mientras esta pantalla está abierta.</small></div>`+statusBar('PCS','el verde está encendido · toca conectar');
+}
+function pcGo(id){
+  const p=state.pcs.find(x=>x.id===id); if(!p||state.pcBusy)return;
+  if(p.st==='off'){p.st='check';render();return}
+  if(id===state.pcCur){state.screen='home';render();return}
+  state.pcBusy=id;render();
+  setTimeout(()=>{state.pcCur=id;state.pcBusy=null;state.screen='home';toast('conectado a '+p.name);render()},1300);
+}
 function render(){
   const s=state.screen, el=$('#screen');
-  el.innerHTML=s==='connect'?vConnect():s==='perm'?vPerm():s==='scan'?vScan():s==='pair'?vPair():s==='fail'?vFail():s==='home'?vHome():s==='inbox'?vInbox():s==='changes'?vChanges():s==='settings'?vSettings():s==='files'?vFiles():s==='viewer'?vViewer():vWs();
+  el.innerHTML=s==='connect'?vConnect():s==='perm'?vPerm():s==='scan'?vScan():s==='pair'?vPair():s==='fail'?vFail():s==='pcs'?vPcs():s==='home'?vHome():s==='inbox'?vInbox():s==='changes'?vChanges():s==='settings'?vSettings():s==='files'?vFiles():s==='viewer'?vViewer():vWs();
   $('#overlay').innerHTML=sheet();
   const o=$('#out'); if(o) o.scrollTop=o.scrollHeight;
   const q=$('#q'); if(q){q.focus();q.setSelectionRange(q.value.length,q.value.length)}
-  $('#jump').innerHTML=[['connect','Conexión (QR)'],['perm','Cámara: permiso · nuevo'],['permdenied','Cámara bloqueada · nuevo'],['cam','Cámara · visor · nuevo'],['paste','Pegar enlace · nuevo'],['pair','Código de emparejamiento · nuevo'],['denied','El PC rechaza · nuevo'],['expired','Código vencido · nuevo'],['unreach','No encuentro tu PC · nuevo'],['proto','Protocolo distinto · nuevo'],['set','Respuestas rápidas · nuevo'],['limited','Demasiados intentos · nuevo'],['home','Workspaces (sidebar)'],['wsroot','Entrar a la raíz'],['ws','Entrar a un worktree'],['pick','Buscador ␣'],['leader','Menú ^␣ · cambiado'],['sel','Selección de texto · nuevo'],['shblk','Shell · bloque elegido · nuevo'],['slash','Escribir / · comandos · nuevo'],['slashf','Escribir /co · filtrado · nuevo'],['askc','Pregunta · elegir una · nuevo'],['askm','Pregunta · elegir varias · nuevo'],['askp','Pregunta · plan mode · nuevo'],['think','Chat · pensando · nuevo'],['resp','Chat · respondiendo · nuevo'],['notices','Chat · avisos de tareas · nuevo'],['shnv','Shell · programa a pantalla completa · nuevo'],['inbox','Avisos'],['changes','Cambios · General · cambiado'],['chunc','Cambios · Sin commitear · nuevo'],['chcom','Cambios · Commits · nuevo'],['chcomf','Cambios · un commit · nuevo'],['chfile','Cambios · un archivo · cambiado'],['chren','Cambios · renombrado · nuevo'],['chbin','Cambios · binario · nuevo'],['chunr','Cambios · ilegible · nuevo'],['chbig','Cambios · cortado · nuevo'],['chtoo','Cambios · demasiado grande · nuevo'],['chnobase','Cambios · sin rama base · nuevo'],['chload','Cambios · leyendo · nuevo'],['cherr','Cambios · error de una vista · nuevo'],['chempty','Cambios · sin cambios · nuevo'],['chnone','Cambios · sin workspace · nuevo'],['f1','Archivos · un workspace · nuevo'],['f2','Archivos · ocultos · nuevo'],['f3','Archivos · abrir carpeta · nuevo'],['f4','Archivos · sin permiso · nuevo'],['f5','Archivos · vacía · nuevo'],['f6','Archivos · demasiados · nuevo'],['v1','Visor · markdown · nuevo'],['v2','Visor · markdown fuente · nuevo'],['v3','Visor · texto · nuevo'],['v4','Visor · binario · nuevo'],['v5','Visor · cortado a 1 MiB · nuevo'],['v6','Visor · sin permiso · nuevo'],['w1','Nuevo worktree · nuevo'],['w2','Nuevo worktree · creando · nuevo'],['w3','Nuevo worktree · error · nuevo'],['w4','Nuevo worktree · solo lectura · nuevo'],['n1','Nueva sesión · nuevo'],['n2','Nueva sesión · nombre repetido · nuevo'],['n3','Nueva sesión · es un comando · nuevo'],['p1','Menú + · cambiado'],['settings','Ajustes y temas']].map(([k,l])=>`<button data-jump="${k}">${l}</button>`).join('');
+  $('#jump').innerHTML=[['connect','Conexión (QR)'],['perm','Cámara: permiso · nuevo'],['permdenied','Cámara bloqueada · nuevo'],['cam','Cámara · visor · nuevo'],['paste','Pegar enlace · nuevo'],['pair','Código de emparejamiento · nuevo'],['denied','El PC rechaza · nuevo'],['expired','Código vencido · nuevo'],['unreach','No encuentro tu PC · nuevo'],['proto','Protocolo distinto · nuevo'],['set','Respuestas rápidas · nuevo'],['limited','Demasiados intentos · nuevo'],['pcs','Mis PCs · nuevo'],['pcsbusy','Mis PCs · conectando · nuevo'],['pcsnone','Mis PCs · ninguno encendido · nuevo'],['home','Workspaces (sidebar)'],['wsroot','Entrar a la raíz'],['ws','Entrar a un worktree'],['pick','Buscador ␣'],['leader','Menú ^␣ · cambiado'],['sel','Selección de texto · nuevo'],['shblk','Shell · bloque elegido · nuevo'],['slash','Escribir / · comandos · nuevo'],['slashf','Escribir /co · filtrado · nuevo'],['askc','Pregunta · elegir una · nuevo'],['askm','Pregunta · elegir varias · nuevo'],['askp','Pregunta · plan mode · nuevo'],['think','Chat · pensando · nuevo'],['resp','Chat · respondiendo · nuevo'],['notices','Chat · avisos de tareas · nuevo'],['shnv','Shell · programa a pantalla completa · nuevo'],['inbox','Avisos'],['changes','Cambios · General · cambiado'],['chunc','Cambios · Sin commitear · nuevo'],['chcom','Cambios · Commits · nuevo'],['chcomf','Cambios · un commit · nuevo'],['chfile','Cambios · un archivo · cambiado'],['chren','Cambios · renombrado · nuevo'],['chbin','Cambios · binario · nuevo'],['chunr','Cambios · ilegible · nuevo'],['chbig','Cambios · cortado · nuevo'],['chtoo','Cambios · demasiado grande · nuevo'],['chnobase','Cambios · sin rama base · nuevo'],['chload','Cambios · leyendo · nuevo'],['cherr','Cambios · error de una vista · nuevo'],['chempty','Cambios · sin cambios · nuevo'],['chnone','Cambios · sin workspace · nuevo'],['f1','Archivos · un workspace · nuevo'],['f2','Archivos · ocultos · nuevo'],['f3','Archivos · abrir carpeta · nuevo'],['f4','Archivos · sin permiso · nuevo'],['f5','Archivos · vacía · nuevo'],['f6','Archivos · demasiados · nuevo'],['v1','Visor · markdown · nuevo'],['v2','Visor · markdown fuente · nuevo'],['v3','Visor · texto · nuevo'],['v4','Visor · binario · nuevo'],['v5','Visor · cortado a 1 MiB · nuevo'],['v6','Visor · sin permiso · nuevo'],['w1','Nuevo worktree · nuevo'],['w2','Nuevo worktree · creando · nuevo'],['w3','Nuevo worktree · error · nuevo'],['w4','Nuevo worktree · solo lectura · nuevo'],['n1','Nueva sesión · nuevo'],['n2','Nueva sesión · nombre repetido · nuevo'],['n3','Nueva sesión · es un comando · nuevo'],['p1','Menú + · cambiado'],['settings','Ajustes y temas']].map(([k,l])=>`<button data-jump="${k}">${l}</button>`).join('');
 }
 function answer(v,id){
   const w=wsOf(id); if(!w) return; buzz();
@@ -1025,6 +1073,11 @@ function enter(id,pane){state.sel=false;state.ws=id;state.pane=pane||'claude';st
 document.addEventListener('click',e=>{
   const t=e.target.closest('[data-att],[data-go],[data-open],[data-ans],[data-act],[data-theme],[data-sw],[data-pane],[data-blk],[data-key],[data-file],[data-pcfile],[data-fs],[data-view],[data-dir],[data-vtab],[data-commit],[data-cn],[data-jump],[data-sheet],[data-sess],[data-lead],[data-preset],[data-opt]'); if(!t) return;
   const d=t.dataset;
+  if(d.act==='pcgo'){pcGo(d.pc);return}
+  if(d.act==='pcmore'){state.pcSel=d.pc;state.sheet='forgetpc';render();return}
+  if(d.act==='pcforget'){const p=state.pcs.find(x=>x.id===state.pcSel);state.pcs=state.pcs.filter(x=>x.id!==state.pcSel);if(state.pcCur===state.pcSel)state.pcCur=null;state.sheet=null;toast('olvidaste '+(p?p.name:'el PC'));render();return}
+  if(d.act==='addpc'){state.screen='connect';render();return}
+  if(d.act==='pcback'){state.screen='home';render();return}
   if(d.blk!==undefined&&!d.act){state.blk=state.blk===+d.blk?null:+d.blk;render();return}
   if(d.jump){state.sheet=null;state.file=null;state.conn='idle';
     if(CONN.includes(d.jump)){goConn(d.jump);return}
@@ -1034,6 +1087,9 @@ document.addEventListener('click',e=>{
     if(d.jump==='slash'||d.jump==='slashf'){state.demo=null;state.sess='main';enter('jw/feat/mobile-app');state.pane='claude';state.draft=d.jump==='slash'?'/':'/co';state.askOff=false;render();return}
     if(d.jump==='shblk'){state.demo=null;state.sess='main';enter('jw/feat/mobile-app');state.pane='shell';state.blk=3;state.nvim=false;render();return}
     if(d.jump==='shnv'){state.sess='main';enter('jw/feat/mobile-app');state.pane='shell';state.blk=null;state.nvim=true;render();return}
+    if(d.jump==='pcs'||d.jump==='pcsbusy'||d.jump==='pcsnone'){state.pcs=PCS0();state.pcCur='mac';state.pcBusy=d.jump==='pcsbusy'?'dev':null;state.sheet=null;
+      if(d.jump==='pcsnone'){state.pcs.forEach(p=>{p.st='off';p.seen=p.seen==='ahora'?'hace 2 h':p.seen||'hace 5 días'});state.pcCur=null}
+      state.screen='pcs';render();return}
     if(d.jump==='wsroot'){state.demo=null;state.sess='main';enter('jw');return}
     if(d.jump==='ws'){state.sess='main';enter('jw/fix/daemon-sock');return}
     if(d.jump==='pick'||d.jump==='leader'){state.screen='home';state.sheet=d.jump;render();return}
