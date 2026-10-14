@@ -62,27 +62,18 @@ class SeenStore(context: Context) {
 }
 
 /**
- * The live daemon, over the same JSON lines the terminal client uses. Development link: the
- * phone reaches the daemon's loopback listener through `adb reverse`. Nodes are opened on
- * demand and kept in a [NodeCache]; a dropped connection is retried and reopens them.
+ * The daemon's protocol over any transport that carries its lines: nodes are opened on demand
+ * and kept in a [NodeCache], and when the transport comes back every opened node is opened again.
  */
-class LiveSource(private val host: String, private val port: Int) : AppSource() {
+abstract class ProtocolSource : AppSource() {
     private val lock = Any()
     private val cache = NodeCache()
     private val opened = LinkedHashSet<Id>()
     private var rootId: Id? = null
-    private var out: java.io.OutputStream? = null
+    private var commands = 0
 
-    @Volatile
-    private var state = "conectando…"
-    override val status: String get() = "en vivo · $host:$port · $state"
-
-    @Volatile
-    private var closed = false
-
-    init {
-        Thread({ run() }, "live-source").apply { isDaemon = true }.start()
-    }
+    /** Hand one line to the transport without blocking the caller (the UI thread calls this). */
+    protected abstract fun sendLine(line: String)
 
     override val epoch: String get() = synchronized(lock) { cache.epoch.orEmpty() }
 
@@ -99,8 +90,6 @@ class LiveSource(private val host: String, private val port: Int) : AppSource() 
 
     override val writable: Boolean = true
 
-    private var commands = 0
-
     override fun write(pane: Id, data: String) {
         send(ClientMsg.Command("w${++commands}", Cmd.Write(pane, data)))
     }
@@ -109,52 +98,23 @@ class LiveSource(private val host: String, private val port: Int) : AppSource() 
         send(ClientMsg.Command("m${++commands}", Cmd.MarkSeen(id, rev)))
     }
 
-    fun close() {
-        closed = true
-        writer.shutdown()
-    }
-
     private fun cachedRev(id: Id) = synchronized(lock) { cache.rev(id) }
     private fun cachedEpoch(id: Id) = synchronized(lock) { cache.epoch }.takeIf { cachedRev(id) != null }
 
-    /** Writes happen on one thread of their own: a socket write on the UI thread is refused. */
-    private val writer = Executors.newSingleThreadExecutor { r -> Thread(r, "live-writer").apply { isDaemon = true } }
+    protected fun send(msg: ClientMsg) = sendLine(ContractJson.encodeToString(ClientMsg.serializer(), msg))
 
-    private fun send(msg: ClientMsg) {
-        val line = ContractJson.encodeToString(ClientMsg.serializer(), msg) + "\n"
-        writer.execute {
-            try {
-                synchronized(lock) { out }?.let {
-                    it.write(line.toByteArray())
-                    it.flush()
-                }
-            } catch (_: java.io.IOException) {
-                // The reader notices the dead socket and reconnects.
-            }
-        }
+    /** The transport is up: say hello; the daemon answers with its root, and everything opened is opened again. */
+    protected fun greet() {
+        send(ClientMsg.Hello(Peer("jwn-android", "0.0.1"), mapOf("session" to listOf(1), "workspace" to listOf(1), "pane" to listOf(1), "blocks" to listOf(1))))
     }
 
-    private fun run() {
-        while (!closed) {
-            try {
-                java.net.Socket().use { socket ->
-                    socket.connect(java.net.InetSocketAddress(host, port), 3000)
-                    synchronized(lock) { out = socket.getOutputStream() }
-                    state = "conectado"
-                    send(ClientMsg.Hello(Peer("jwn-android", "0.0.1"), mapOf("session" to listOf(1), "workspace" to listOf(1), "pane" to listOf(1), "blocks" to listOf(1))))
-                    socket.getInputStream().bufferedReader().forEachLine { line -> receive(line) }
-                }
-            } catch (_: java.io.IOException) {
-                // Fall through to the retry below.
-            }
-            synchronized(lock) { out = null }
-            state = "sin conexión, reintentando"
-            tick.intValue++
-            Thread.sleep(2000)
-        }
+    /** The transport is gone. */
+    protected fun dropped() {
+        tick.intValue++
     }
 
-    private fun receive(line: String) {
+    /** One line from the daemon. */
+    protected fun receive(line: String) {
         val msg = try {
             ContractJson.decodeFromString(DaemonMsg.serializer(), line)
         } catch (e: SerializationException) {
@@ -172,5 +132,66 @@ class LiveSource(private val host: String, private val port: Int) : AppSource() 
         if (msg is DaemonMsg.Hello) synchronized(lock) { opened.toList() }.forEach(::open)
         if (reopen != null) send(ClientMsg.Open(reopen))
         tick.intValue++
+    }
+}
+
+/**
+ * The live daemon over its loopback TCP listener. Development link: the phone reaches it
+ * through `adb reverse`. A dropped connection is retried.
+ */
+class LiveSource(private val host: String, private val port: Int) : ProtocolSource() {
+    private var out: java.io.OutputStream? = null
+    private val lock = Any()
+
+    @Volatile
+    private var state = "conectando…"
+    override val status: String get() = "en vivo · $host:$port · $state"
+
+    @Volatile
+    private var closed = false
+
+    init {
+        Thread({ run() }, "live-source").apply { isDaemon = true }.start()
+    }
+
+    fun close() {
+        closed = true
+        writer.shutdown()
+    }
+
+    /** Writes happen on one thread of their own: a socket write on the UI thread is refused. */
+    private val writer = Executors.newSingleThreadExecutor { r -> Thread(r, "live-writer").apply { isDaemon = true } }
+
+    override fun sendLine(line: String) {
+        writer.execute {
+            try {
+                synchronized(lock) { out }?.let {
+                    it.write((line + "\n").toByteArray())
+                    it.flush()
+                }
+            } catch (_: java.io.IOException) {
+                // The reader notices the dead socket and reconnects.
+            }
+        }
+    }
+
+    private fun run() {
+        while (!closed) {
+            try {
+                java.net.Socket().use { socket ->
+                    socket.connect(java.net.InetSocketAddress(host, port), 3000)
+                    synchronized(lock) { out = socket.getOutputStream() }
+                    state = "conectado"
+                    greet()
+                    socket.getInputStream().bufferedReader().forEachLine { line -> receive(line) }
+                }
+            } catch (_: java.io.IOException) {
+                // Fall through to the retry below.
+            }
+            synchronized(lock) { out = null }
+            state = "sin conexión, reintentando"
+            dropped()
+            Thread.sleep(2000)
+        }
     }
 }

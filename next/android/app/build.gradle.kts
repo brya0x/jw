@@ -21,6 +21,7 @@ android {
         versionCode = 1
         versionName = "0.0.1"
         manifestPlaceholders["appLabel"] = identity("label")
+        buildConfigField("String", "LINK_SCHEME", "\"${identity("name")}\"")
     }
 
     compileOptions {
@@ -28,7 +29,10 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
 
     // The shared fixtures ship in the app until it talks to a daemon: assets/fixtures/**.
     sourceSets["main"].assets.srcDir(rootDir.resolve("../contract"))
@@ -45,4 +49,5 @@ dependencies {
     implementation(libs.compose.foundation)
     implementation(libs.compose.material3)
     implementation(libs.activity.compose)
+    implementation(libs.okhttp)
 }
