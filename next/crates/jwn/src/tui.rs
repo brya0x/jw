@@ -735,7 +735,6 @@ impl View {
         match self.busy(&id) {
             None => After::ClosePane(id),
             Some(what) => {
-                self.typing = false;
                 self.manage = Some(Manage::Pane {
                     pane: id,
                     title,
@@ -770,7 +769,6 @@ impl View {
             panes: doc.map_or(w.pane_count as usize, |d| d.panes.len()),
             running,
         };
-        self.typing = false;
         self.manage = Some(Manage::Workspace(target));
     }
 
@@ -1799,6 +1797,37 @@ fn serve_asks(view: &mut View, client: &mut Client) {
     }
 }
 
+/// Read a worktree's uncommitted changes for the question that asks to remove it. A node the
+/// daemon still holds from an earlier look is returned as it was and is only read again while
+/// somebody watches it, so it is read now and the copy this client kept is dropped: the
+/// answer decides what is offered.
+fn check_changes(view: &mut View, client: &mut Client, workspace: String) {
+    const FAILED: &str = "No se pudo mirar los cambios";
+    let cmd = Cmd::OpenDiff {
+        workspace,
+        scope: DiffScope::Uncommitted,
+        commit: None,
+    };
+    let node = match client.cmd_within(cmd, ASK_WAIT) {
+        Ok(Ok(result)) => result
+            .as_ref()
+            .and_then(|r| r["node"].as_str().map(str::to_owned)),
+        Ok(Err(e)) => return view.manage_failed(FAILED, &e.message),
+        Err(e) => return view.manage_failed(FAILED, &e.to_string()),
+    };
+    let Some(node) = node else {
+        return view.manage_failed(FAILED, "el daemon no dio el nodo");
+    };
+    match client.cmd_within(Cmd::RefreshDiff { node: node.clone() }, ASK_WAIT) {
+        Ok(Ok(_)) => {
+            client.nodes.remove(&node);
+            view.check_made(&node);
+        }
+        Ok(Err(e)) => view.manage_failed(FAILED, &e.message),
+        Err(e) => view.manage_failed(FAILED, &e.to_string()),
+    }
+}
+
 /// Show how the daemon answered a close or a removal: `done` in the status bar, or why not.
 fn told(view: &mut View, failed: &str, done: &str, reply: Reply) {
     match reply {
@@ -1933,28 +1962,7 @@ pub fn run() -> Result<(), String> {
                         );
                     }
                 }
-                After::Check(workspace) => {
-                    let cmd = Cmd::OpenDiff {
-                        workspace,
-                        scope: DiffScope::Uncommitted,
-                        commit: None,
-                    };
-                    match client.cmd_within(cmd, ASK_WAIT) {
-                        Ok(Ok(result)) => match result.as_ref().and_then(|r| r["node"].as_str()) {
-                            Some(node) => view.check_made(node),
-                            None => view.manage_failed(
-                                "No se pudo mirar los cambios",
-                                "el daemon no dio el nodo",
-                            ),
-                        },
-                        Ok(Err(e)) => {
-                            view.manage_failed("No se pudo mirar los cambios", &e.message)
-                        }
-                        Err(e) => {
-                            view.manage_failed("No se pudo mirar los cambios", &e.to_string())
-                        }
-                    }
-                }
+                After::Check(workspace) => check_changes(&mut view, &mut client, workspace),
                 After::Copy(text) => {
                     let mut out = stdout();
                     let _ = write!(out, "{}", shell::osc52(&text));
@@ -2785,7 +2793,6 @@ mod tests {
     fn while_a_question_is_open_keys_and_clicks_do_not_reach_the_panes() {
         let mut v = fixture_view();
         v.press(Key::Enter);
-        v.typing = true;
         v.typing = false;
         tap(&mut v, 'X');
         assert_eq!(tap(&mut v, 'j'), After::Continue);

@@ -213,7 +213,7 @@ Transport: JSON lines on a Unix socket (mode 0600, in a 0700 dir) whose path com
 - REQ-141 WHEN a pane is closed, THE workspace SHALL stay, even with no panes left, and the terminal client SHALL move its focus to a neighbouring pane when there is one.
 - REQ-142 WHEN the person presses `X` on a workspace, THE terminal client SHALL ask, and on `y` send `remove_workspace` without `remove_worktree`.
 - REQ-143 WHERE the workspace is a worktree, THE question of `X` SHALL also offer `d`, to remove the worktree as well.
-- REQ-144 WHEN the person chooses `d`, THE terminal client SHALL open the workspace's `uncommitted` changes; WHERE they list any file, it SHALL show those files (path and status), say the worktree cannot be removed, and offer only `c`, to close the workspace and keep the worktree.
+- REQ-144 WHEN the person chooses `d`, THE terminal client SHALL read the workspace's `uncommitted` changes afresh (the daemon returns a node it still holds from an earlier look without reading it again); WHERE they list any file, it SHALL show those files (path and status), say the worktree cannot be removed, and offer only `c`, to close the workspace and keep the worktree.
 - REQ-145 WHERE the `uncommitted` changes list no file, THE terminal client SHALL ask for `y` and then send `remove_workspace` with `remove_worktree`.
 - REQ-146 IF the daemon answers a `remove_workspace` with an error (changes that appeared since the client looked, for one), THEN THE terminal client SHALL show the message and leave the workspace and its worktree as they are.
 - REQ-147 WHEN a worktree is removed, THE daemon SHALL leave its branch in place.
