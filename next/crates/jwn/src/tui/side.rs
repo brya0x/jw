@@ -4,16 +4,13 @@
 
 use contract::{WorkspaceKind, WorkspaceSummary};
 
+use super::base;
+
 /// A row of the sidebar: a heading, which is never highlighted, or the workspace at an index.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Side {
     Head(String),
     Workspace(usize),
-}
-
-/// The last folder of a path.
-fn base(path: &str) -> &str {
-    path.rsplit('/').find(|s| !s.is_empty()).unwrap_or(path)
 }
 
 /// `list` as rows: the name of a repository above its worktrees when its root is not what comes

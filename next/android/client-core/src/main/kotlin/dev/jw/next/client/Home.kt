@@ -44,7 +44,7 @@ fun Attention.what(): String = when (kind) {
 fun List<Attention>.byUrgency(): List<Attention> = sortedBy { urgency.indexOf(it.kind) }
 
 /** What a row of Home is: a repository's root, a worktree of one, or a folder that is not a repository (REQ-222). */
-enum class HomeKind { Root, Worktree, Folder }
+enum class HomeKind(val label: String) { Root("raíz"), Worktree("worktree"), Folder("carpeta") }
 
 /** One row of Home (REQ-33). */
 data class HomeRow(
@@ -89,8 +89,7 @@ fun homeRows(session: Node.Session, seen: Seen): List<HomeRow> = session.workspa
         id = w.id,
         kind = kind,
         name = (if (kind == HomeKind.Worktree) "↳ " else "") + w.shown(),
-        detail = when (kind) { HomeKind.Root -> "raíz"; HomeKind.Worktree -> "worktree"; HomeKind.Folder -> "carpeta" } +
-            " · ${w.paneCount} ${if (w.paneCount == 1) "panel" else "paneles"}",
+        detail = "${kind.label} · ${w.paneCount} ${if (w.paneCount == 1) "panel" else "paneles"}",
         paneCount = w.paneCount,
         mark = top?.mark(),
         unseen = unseen.size,
@@ -101,8 +100,16 @@ fun homeRows(session: Node.Session, seen: Seen): List<HomeRow> = session.workspa
 
 /** A line of Home's list: a heading, or a workspace's row. */
 sealed interface HomeItem {
-    data class Heading(val text: String) : HomeItem
-    data class Row(val row: HomeRow) : HomeItem
+    /** What keeps the line in place in a list. */
+    val key: String
+
+    data class Heading(val text: String) : HomeItem {
+        override val key get() = "heading:$text"
+    }
+
+    data class Row(val row: HomeRow) : HomeItem {
+        override val key get() = row.id
+    }
 }
 
 /**
@@ -117,12 +124,13 @@ fun homeItems(session: Node.Session, seen: Seen): List<HomeItem> {
     var folders = false
     session.workspaces.forEachIndexed { i, w ->
         val before = session.workspaces.getOrNull(i - 1)
+        val project = w.project
         when {
             rows[i].kind == HomeKind.Folder && !folders -> {
                 folders = true
                 if (before != null) items += HomeItem.Heading("carpetas")
             }
-            rows[i].kind == HomeKind.Worktree && w.project != null && before?.project != w.project -> items += HomeItem.Heading(repoName(w.project!!))
+            rows[i].kind == HomeKind.Worktree && project != null && before?.project != project -> items += HomeItem.Heading(repoName(project))
         }
         items += HomeItem.Row(rows[i])
     }

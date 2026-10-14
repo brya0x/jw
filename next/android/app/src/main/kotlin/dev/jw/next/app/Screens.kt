@@ -254,12 +254,12 @@ internal fun Section(text: String, onLongClick: (() -> Unit)? = null) {
 private fun WorkspaceList(items: List<HomeItem>, nav: Navigator, state: ClientState, set: (ClientState) -> Unit, create: () -> Unit, hold: (Id) -> Unit) {
     LazyColumn(Modifier.fillMaxSize()) {
         item { Section("workspaces · ${items.count { it is HomeItem.Row }}", create) }
-        items(items, key = { if (it is HomeItem.Row) it.row.id else "heading:" + (it as HomeItem.Heading).text }) { item ->
-            val row = (item as? HomeItem.Row)?.row
-            if (row == null) {
-                Section((item as HomeItem.Heading).text)
+        items(items, key = { it.key }) { item ->
+            if (item is HomeItem.Heading) {
+                Section(item.text)
                 return@items
             }
+            val row = (item as HomeItem.Row).row
             // A worktree is drawn under its root, further in (REQ-224).
             val indent = if (row.kind == HomeKind.Worktree) 20.dp else 0.dp
             Row(
@@ -278,11 +278,7 @@ private fun WorkspaceList(items: List<HomeItem>, nav: Navigator, state: ClientSt
                         }
                     }
                 }
-                when (row.kind) {
-                    HomeKind.Root -> Tag("raíz", Palette.dim)
-                    HomeKind.Folder -> Tag("carpeta", Palette.dim)
-                    HomeKind.Worktree -> {}
-                }
+                if (row.kind != HomeKind.Worktree) Tag(row.kind.label, Palette.dim)
             }
             Hairline()
         }
