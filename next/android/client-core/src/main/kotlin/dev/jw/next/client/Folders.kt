@@ -41,13 +41,13 @@ fun folderView(listing: DirListing, session: Node.Session): FolderView {
     )
 }
 
-/** The repository a workspace stands for: its worktree's repository, else its own folder. */
-fun WorkspaceSummary.repo(): String = project ?: path
+/** The repository a workspace is the root of or a worktree of, or null for a folder that is not one. */
+fun WorkspaceSummary.repo(): String? = project
 
 fun repoName(repo: String): String = repo.trimEnd('/').substringAfterLast('/').ifEmpty { "repo" }
 
 /** The repositories to make a worktree of, each once, in the session's order. */
-fun repos(session: Node.Session): List<String> = session.workspaces.map { it.repo() }.distinct()
+fun repos(session: Node.Session): List<String> = session.workspaces.mapNotNull { it.repo() }.distinct()
 
 /** Where the worktrees of [repo] go: `<repo>-wt`, beside it. */
 fun worktreesDir(repo: String): String {

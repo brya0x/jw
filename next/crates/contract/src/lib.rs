@@ -326,7 +326,7 @@ pub struct Workspace {
     pub name: String,
     pub kind: WorkspaceKind,
     pub path: String,
-    /// The repository a worktree belongs to.
+    /// The repository a worktree belongs to, or the folder's own path when it is a repository's root.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -563,7 +563,7 @@ pub struct WorkspaceSummary {
     pub name: String,
     pub kind: WorkspaceKind,
     pub path: String,
-    /// The repository a worktree belongs to: where a new worktree of it is made from.
+    /// The repository a worktree belongs to, or the folder's own path when it is a repository's root: where a new worktree of it is made from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

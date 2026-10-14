@@ -528,6 +528,7 @@ const state = {
     {id:'api', kind:'root', name:'mctekk-api', path:'~/ws/mctekk-api', sess:'mctekk', ag:'idle', dev:1, pr:'', last:'Sin cambios pendientes.', t:'3 h'},
     {id:'api/feat/auth', kind:'wt', proj:'api', name:'feat/auth', path:'~/ws/mctekk-api-wt/auth', sess:'mctekk', ag:'work', dev:1, pr:'#212', last:'Escribiendo los tests del refresh token.', t:'ahora'},
     {id:'web', kind:'root', name:'mctekk-web', path:'~/ws/mctekk-web', sess:'mctekk', ag:'idle', dev:0, pr:'', last:'Sin cambios pendientes.', t:'5 h'},
+    {id:'tools/feat/cli', kind:'wt', proj:'tools', name:'feat/cli', path:'~/ws/tools-wt/cli', sess:'main', ag:'idle', dev:0, pr:'', last:'Shell nuevo en el worktree.', t:'3 h'},
     {id:'web/feat/onboarding', kind:'wt', proj:'web', name:'feat/onboarding', path:'~/ws/mctekk-web-wt/onboarding', sess:'mctekk', ag:'wait', dev:0, pr:'#88', last:'Necesito permiso para ejecutar pnpm install.', t:'8 min'}
   ],
   logs:{}
@@ -679,6 +680,8 @@ function vHome(){
   const list=inSess(); let i=0, out='';
   const roots=list.filter(x=>x.kind==='root'), dirs=list.filter(x=>x.kind==='dir');
   roots.forEach(r=>{out+=row(r,i++);list.filter(x=>x.proj===r.id).forEach(w=>{out+=row(w,i++)})});
+  const orphans=[...new Set(list.filter(x=>x.kind==='wt'&&!roots.some(r=>r.id===x.proj)).map(x=>x.proj))];
+  orphans.forEach(pr=>{out+=`<div class="sec">${(GHOST[pr]||{name:pr}).name}</div>`;list.filter(x=>x.proj===pr).forEach(w=>{out+=row(w,i++)})});
   if(dirs.length){out+='<div class="sec">carpetas</div>';dirs.forEach(d=>{out+=row(d,i++)})}
   const n=waiting().length, pc=(state.pcs.find(x=>x.id===state.pcCur)||state.pcs[0]||{}).name||'tu PC';
   return `<div class="hdr"><div class="t"><b>jwn · ${state.sess}</b><span>${pc} · ${state.route==='tunnel'?'túnel':'wifi'}</span></div>
@@ -946,7 +949,9 @@ function fsErr(p){return p==='~/.ssh'?'sin permiso':null}
 const isGit=p=>(FS[p]||[]).includes('.git/')||p.includes('-wt/');
 const isOpened=p=>state.w.some(x=>x.path===p);
 const WTN={jw:['mobile-app','daemon-sock','motion','old'],'mctekk-api':['auth','ws-1'],'mctekk-web':['onboarding']};
-const rootOf=n=>state.w.find(x=>x.kind!=='wt'&&x.name===n);
+/* a repository whose root is not open as a workspace: only its worktrees are */
+const GHOST={tools:{id:'tools',kind:'root',name:'tools',path:'~/ws/tools',sess:'main'}};
+const rootOf=n=>state.w.find(x=>x.kind!=='wt'&&x.name===n)||GHOST[n];
 const NOBASE='la rama actual';
 const baseOf=w=>w.kind==='wt'?w.name:NOBASE;
 const freeWs=proj=>{const t=WTN[proj]||[];let i=1;while(t.includes('ws-'+i))i++;return 'ws-'+i};
@@ -958,13 +963,13 @@ function nwCheck(proj,name){
 function nwPrev(){
   const st=state.nw||'form', proj=state.nwProj, name=state.nwName||freeWs(proj), err=nwCheck(proj,name), r=rootOf(proj);
   const kv=`<div class="kv"><em>rama</em><b>feat/${name}</b><em>desde</em><b>${state.nwBase}</b><em>carpeta</em><b>${r?r.path:''}-wt/${name}</b></div>`;
-  return (err?`<div class="bad">${err}</div>`:kv)+(st==='fail'&&!err?'<div class="bad">'+(r&&r.kind==='dir'?'git no pudo crearlo: fatal: not a git repository (or any of the parent directories): .git':'git no pudo crearlo: fatal: a branch named \'feat/'+name+'\' already exists')+'</div>':'')+
+  return (err?`<div class="bad">${err}</div>`:kv)+(st==='fail'&&!err?'<div class="bad">git no pudo crearlo: fatal: a branch named \'feat/'+name+'\' already exists</div>':'')+
     `<button class="gobtn" data-act="createwt" ${err||st==='busy'?'disabled':''}>${st==='busy'?'<span class="spin"></span>creando…':'crear y abrir'}</button>
      <div class="note2">crea el worktree y le abre un shell, como w en el PC</div>`}
 function defaultWt(){const w=wsOf(state.ws),p=curProj(),pr=rootOf(p);openWt(p,w&&w.kind==='wt'&&pr&&w.proj===pr.id?w.name:NOBASE)}
 function openWt(proj,base){state.nwProj=proj;state.nwBase=base;state.nwName='';state.nw='form';state.sheet='newwt'}
 function curProj(){const w=wsOf(state.ws);return w.kind==='wt'?w.proj&&rootOf2(w.proj).name:w.kind==='root'?w.name:'jw'}
-function rootOf2(id){return state.w.find(x=>x.id===id)}
+function rootOf2(id){return state.w.find(x=>x.id===id)||GHOST[id]}
 
 function vFiles(){
   const f=state.fs, p=f.path, ent=FS[p], err=fsErr(p), open=f.mode==='open', w=wsOf(state.ws);
@@ -1023,8 +1028,8 @@ function sheet(){
   }
   if(s==='wsmenu'){
     const w=wsOf(state.holdWs||state.ws), nm=(state.wn||{})[w.id]||w.name;
-    const pr=w.kind==='wt'?rootOf2(w.proj):w;
-    body=`<h3>workspace «${nm}»</h3><div class="list"><button class="lk" data-act="newwtfor" data-wsid="${w.id}"><kbd>w</kbd><span>worktree nuevo</span><em>de «${pr.name}»</em></button><button class="lk" data-sheet="renws"><kbd>✎</kbd><span>renombrar el workspace</span></button></div><p style="margin:6px 16px 10px;color:var(--dim);font-size:12px">Cerrar un workspace o quitar un worktree se hace en el PC.</p>`;
+    const pr=w.kind==='wt'?rootOf2(w.proj):w.kind==='root'?w:null;
+    body=`<h3>workspace «${nm}»</h3><div class="list">${pr?`<button class="lk" data-act="newwtfor" data-wsid="${w.id}"><kbd>w</kbd><span>worktree nuevo</span><em>de «${pr.name}»</em></button>`:`<button class="lk off" aria-disabled="true"><kbd>w</kbd><span>worktree nuevo</span><em>no es un repositorio git</em></button>`}<button class="lk" data-sheet="renws"><kbd>✎</kbd><span>renombrar el workspace</span></button></div><p style="margin:6px 16px 10px;color:var(--dim);font-size:12px">Cerrar un workspace o quitar un worktree se hace en el PC.</p>`;
   }
   if(s==='panemenu'){
     const p=state.pane, nm=(state.pn||{})[p]||p;
@@ -1121,7 +1126,7 @@ function render(){
   $('#overlay').innerHTML=sheet();
   const o=$('#out'); if(o) o.scrollTop=o.scrollHeight;
   const q=$('#q'); if(q){q.focus();q.setSelectionRange(q.value.length,q.value.length)}
-  $('#jump').innerHTML=[['connect','Conexión (QR)'],['perm','Cámara: permiso · nuevo'],['permdenied','Cámara bloqueada · nuevo'],['cam','Cámara · visor · nuevo'],['paste','Pegar enlace · nuevo'],['pair','Código de emparejamiento · nuevo'],['denied','El PC rechaza · nuevo'],['expired','Código vencido · nuevo'],['unreach','No encuentro tu PC · nuevo'],['proto','Protocolo distinto · nuevo'],['set','Respuestas rápidas · nuevo'],['limited','Demasiados intentos · nuevo'],['pcoff','Home · el último PC no contesta · nuevo'],['pcs','Mis PCs · nuevo'],['pcsbusy','Mis PCs · conectando · nuevo'],['pcsnone','Mis PCs · ninguno encendido · nuevo'],['home','Workspaces (sidebar)'],['wsroot','Entrar a la raíz'],['ws','Entrar a un worktree'],['pick','Buscador ␣'],['leader','Menú ^␣ · cambiado'],['sel','Selección de texto · nuevo'],['shblk','Shell · bloque elegido · nuevo'],['slash','Escribir / · comandos · nuevo'],['slashf','Escribir /co · filtrado · nuevo'],['askc','Pregunta · elegir una · nuevo'],['askm','Pregunta · elegir varias · nuevo'],['askp','Pregunta · plan mode · nuevo'],['think','Chat · pensando · nuevo'],['resp','Chat · respondiendo · nuevo'],['notices','Chat · avisos de tareas · nuevo'],['shnv','Shell · programa a pantalla completa · nuevo'],['inbox','Avisos'],['changes','Cambios · General · cambiado'],['chunc','Cambios · Sin commitear · nuevo'],['chcom','Cambios · Commits · nuevo'],['chcomf','Cambios · un commit · nuevo'],['chfile','Cambios · un archivo · cambiado'],['chren','Cambios · renombrado · nuevo'],['chbin','Cambios · binario · nuevo'],['chunr','Cambios · ilegible · nuevo'],['chbig','Cambios · cortado · nuevo'],['chtoo','Cambios · demasiado grande · nuevo'],['chnobase','Cambios · sin rama base · nuevo'],['chload','Cambios · leyendo · nuevo'],['cherr','Cambios · error de una vista · nuevo'],['chempty','Cambios · sin cambios · nuevo'],['chnone','Cambios · sin workspace · nuevo'],['chseen','Cambios · vistos compartidos con la PC · nuevo'],['chchg','Cambios · un archivo cambió desde que lo viste · nuevo'],['chlive','Cambios · el agente edita, en vivo · nuevo'],['chnorepo','Cambios · la carpeta no es un repositorio · nuevo'],['f1','Archivos · un workspace · nuevo'],['f2','Archivos · ocultos · nuevo'],['f3','Abrir carpeta · navegador · cambiado'],['f7','Abrir carpeta · ya abierta · nuevo'],['f8','Abrir carpeta · un repositorio · nuevo'],['f9','Abrir carpeta · demasiadas · nuevo'],['f4','Archivos · sin permiso · nuevo'],['f5','Archivos · vacía · nuevo'],['f6','Archivos · demasiados · nuevo'],['v1','Visor · markdown · nuevo'],['v2','Visor · markdown fuente · nuevo'],['v3','Visor · texto · nuevo'],['v4','Visor · binario · nuevo'],['v5','Visor · cortado a 1 MiB · nuevo'],['v6','Visor · sin permiso · nuevo'],['w1','Worktree nuevo · el formulario · cambiado'],['w2','Worktree nuevo · creando · cambiado'],['w3','Worktree nuevo · git lo rechaza · cambiado'],['w4','Worktree nuevo · nombre no válido · nuevo'],['w5','Worktree nuevo · ya existe · nuevo'],['w6','Worktree nuevo · otro proyecto · nuevo'],['w7','Worktree nuevo · la carpeta no es un repositorio · nuevo'],['wsmenuh','Mantener pulsada una fila de Home · nuevo'],['wsmenud','Mantener pulsada una carpeta · nuevo'],['n1','Nueva sesión · nuevo'],['n2','Nueva sesión · nombre repetido · nuevo'],['n3','Nueva sesión · es un comando · nuevo'],['p1','Mantener pulsado el título de Home · cambiado'],['settings','Ajustes: PC, modo y tema · cambiado'],['closepane','Cerrar un panel · nuevo'],['wsmenu','Mantener pulsado un workspace · nuevo'],['panemenu','Mantener pulsado un panel · nuevo'],['renws','Renombrar un workspace · nuevo'],['renpane','Nombrar un panel · nuevo']].map(([k,l])=>`<button data-jump="${k}">${l}</button>`).join('');
+  $('#jump').innerHTML=[['connect','Conexión (QR)'],['perm','Cámara: permiso · nuevo'],['permdenied','Cámara bloqueada · nuevo'],['cam','Cámara · visor · nuevo'],['paste','Pegar enlace · nuevo'],['pair','Código de emparejamiento · nuevo'],['denied','El PC rechaza · nuevo'],['expired','Código vencido · nuevo'],['unreach','No encuentro tu PC · nuevo'],['proto','Protocolo distinto · nuevo'],['set','Respuestas rápidas · nuevo'],['limited','Demasiados intentos · nuevo'],['pcoff','Home · el último PC no contesta · nuevo'],['pcs','Mis PCs · nuevo'],['pcsbusy','Mis PCs · conectando · nuevo'],['pcsnone','Mis PCs · ninguno encendido · nuevo'],['home','Workspaces (sidebar)'],['wsroot','Entrar a la raíz'],['ws','Entrar a un worktree'],['pick','Buscador ␣'],['leader','Menú ^␣ · cambiado'],['sel','Selección de texto · nuevo'],['shblk','Shell · bloque elegido · nuevo'],['slash','Escribir / · comandos · nuevo'],['slashf','Escribir /co · filtrado · nuevo'],['askc','Pregunta · elegir una · nuevo'],['askm','Pregunta · elegir varias · nuevo'],['askp','Pregunta · plan mode · nuevo'],['think','Chat · pensando · nuevo'],['resp','Chat · respondiendo · nuevo'],['notices','Chat · avisos de tareas · nuevo'],['shnv','Shell · programa a pantalla completa · nuevo'],['inbox','Avisos'],['changes','Cambios · General · cambiado'],['chunc','Cambios · Sin commitear · nuevo'],['chcom','Cambios · Commits · nuevo'],['chcomf','Cambios · un commit · nuevo'],['chfile','Cambios · un archivo · cambiado'],['chren','Cambios · renombrado · nuevo'],['chbin','Cambios · binario · nuevo'],['chunr','Cambios · ilegible · nuevo'],['chbig','Cambios · cortado · nuevo'],['chtoo','Cambios · demasiado grande · nuevo'],['chnobase','Cambios · sin rama base · nuevo'],['chload','Cambios · leyendo · nuevo'],['cherr','Cambios · error de una vista · nuevo'],['chempty','Cambios · sin cambios · nuevo'],['chnone','Cambios · sin workspace · nuevo'],['chseen','Cambios · vistos compartidos con la PC · nuevo'],['chchg','Cambios · un archivo cambió desde que lo viste · nuevo'],['chlive','Cambios · el agente edita, en vivo · nuevo'],['chnorepo','Cambios · la carpeta no es un repositorio · nuevo'],['f1','Archivos · un workspace · nuevo'],['f2','Archivos · ocultos · nuevo'],['f3','Abrir carpeta · navegador · cambiado'],['f7','Abrir carpeta · ya abierta · nuevo'],['f8','Abrir carpeta · un repositorio · nuevo'],['f9','Abrir carpeta · demasiadas · nuevo'],['f4','Archivos · sin permiso · nuevo'],['f5','Archivos · vacía · nuevo'],['f6','Archivos · demasiados · nuevo'],['v1','Visor · markdown · nuevo'],['v2','Visor · markdown fuente · nuevo'],['v3','Visor · texto · nuevo'],['v4','Visor · binario · nuevo'],['v5','Visor · cortado a 1 MiB · nuevo'],['v6','Visor · sin permiso · nuevo'],['w1','Worktree nuevo · el formulario · cambiado'],['w2','Worktree nuevo · creando · cambiado'],['w3','Worktree nuevo · git lo rechaza · cambiado'],['w4','Worktree nuevo · nombre no válido · nuevo'],['w5','Worktree nuevo · ya existe · nuevo'],['w6','Worktree nuevo · otro proyecto · nuevo'],['wsmenuh','Mantener pulsada una fila de Home · nuevo'],['wsmenud','Mantener pulsada una carpeta (sin worktree) · cambiado'],['n1','Nueva sesión · nuevo'],['n2','Nueva sesión · nombre repetido · nuevo'],['n3','Nueva sesión · es un comando · nuevo'],['p1','Mantener pulsado el título de Home · cambiado'],['settings','Ajustes: PC, modo y tema · cambiado'],['closepane','Cerrar un panel · nuevo'],['wsmenu','Mantener pulsado un workspace · nuevo'],['panemenu','Mantener pulsado un panel · nuevo'],['renws','Renombrar un workspace · nuevo'],['renpane','Nombrar un panel · nuevo']].map(([k,l])=>`<button data-jump="${k}">${l}</button>`).join('');
 }
 function answer(v,id){
   const w=wsOf(id); if(!w) return; buzz();
@@ -1169,7 +1174,7 @@ document.addEventListener('click',e=>{if(held){held=false;e.stopPropagation();e.
       if(j[0]==='v'){state.viewer={path:'~/ws/jw/docs/specs/mobile.md',kind:'ok',src:false};if(j==='v2')state.viewer.src=true;if(j==='v3')state.viewer={path:'~/ws/jw/crates/core/Cargo.toml',kind:'ok',src:false};if(j==='v4')state.viewer={path:'~/ws/jw/logo.png',kind:'bin',src:false};if(j==='v5')state.viewer={path:'~/ws/jw/docs/specs/rust-tui.md',kind:'big',src:false};if(j==='v6')state.viewer={path:'~/.ssh/id_ed25519',kind:'err',src:false};state.screen='viewer';render();return}
       if(j[0]==='w'){state.sess='main';state.screen='home';state.ws='jw/feat/mobile-app';defaultWt();
         if(j==='w2'){state.nw='busy';state.nwName='ws-1'}if(j==='w3'){state.nwName='falla';state.nw='fail'}if(j==='w4')state.nwName='Mi Rama';if(j==='w5')state.nwName='motion';
-        if(j==='w6'){openWt('mctekk-api',NOBASE)}if(j==='w7'){openWt('~/notes',NOBASE);state.nw='fail'}
+        if(j==='w6'){openWt('mctekk-api',NOBASE)}
         render();return}
       if(j[0]==='n'){state.sess='main';state.screen='home';state.sheet='sess';state.sessNew=true;if(j==='n2')state.ns='err';if(j==='n3'){state.ns='cmd';state.nsName='worktree'}else state.nsName='';render();return}
       if(j==='p1'){state.sess='main';state.screen='home';state.sheet='open';render();return}}
@@ -1285,7 +1290,7 @@ document.addEventListener('click',e=>{if(held){held=false;e.stopPropagation();e.
     case 'setproj':openWt(t.dataset.proj,NOBASE);render();break;
     case 'pickfolder':state.sheet=null;state.screen='files';state.fs={path:'~/ws',mode:'open',hidden:false};render();break;
     case 'createwt':{const proj=state.nwProj,name=state.nwName||freeWs(proj),r=rootOf(proj);if(nwCheck(proj,name))break;state.nw='busy';render();
-      setTimeout(()=>{if(name==='falla'||r.kind==='dir'){state.nw='fail';render();return}
+      setTimeout(()=>{if(name==='falla'){state.nw='fail';render();return}
         const id=r.id+'/feat/'+name;(WTN[proj]=WTN[proj]||[]).push(name);
         state.w.push({id,kind:'wt',proj:r.id,name:'feat/'+name,path:r.path+'-wt/'+name,sess:r.sess,ag:'idle',dev:0,pr:'',last:'Shell nuevo en el worktree.',t:'ahora',att:[]});
         state.nw='form';state.nwName='';enter(id,'shell')},1400);break}

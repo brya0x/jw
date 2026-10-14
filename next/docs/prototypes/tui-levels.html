@@ -57,6 +57,7 @@ button:hover{border-color:var(--blue)}
       <li><b>Level 3 · TERMINAL</b> (typing). Everything goes to the program, <code>esc</code> and <code>ctrl</code> keys included (nvim, claude and the shell use them). The only way out is <code>^␣</code>, which takes you to the panel level; so the old muscle memory still works: <code>^␣ x</code>, <code>^␣ n</code>, <code>^␣ m</code> are the key you would press at level 2.</li>
       <li><b>Where you are is always visible</b>: the chip (WORKSPACE, PANEL, TERMINAL), a blue border on the active area only, and the keys of the level on the status bar. <code>?</code> opens the whole list of the level.</li>
       <li><b>The mouse goes straight in</b>: a click on a workspace opens it (panel level) and a click on a panel starts typing in it (terminal level).</li>
+      <li><b>The list is grouped</b>: each repository's root, then its worktrees indented under it (<code>↳</code>, the dot and the name moved four columns in); a worktree whose root is not open sits under the repository's name; the folders that are not repositories come last under <code>carpetas</code>. The numbers and <code>j</code>/<code>k</code> follow what is drawn; headings are not highlighted. The same grouping is on the phone.</li>
       <li><b>Changes from today</b>: <code>X</code> (close workspace) and <code>x</code> (close panel) become one <code>x</code> that closes what the level is about; <code>↵</code> on a workspace no longer starts typing at once (one more <code>↵</code>); <code>n</code> stays "new panel".</li>
     </ol>
   </div>
@@ -69,10 +70,12 @@ const COLS = 112, ROWS = 28, SB = 28;
 let S, g;
 const LV = {1:['WORKSPACE','chip-blue'], 2:['PANEL','chip-mag'], 3:['TERMINAL','chip-green']};
 function reset(){
-  S = { level:1, sel:2, focus:0, full:false, ask:null, input:null, help:false, leader:false, msg:'', prog:false, typed:'',
-    ws:[ {name:'notes', kind:'folder', path:'~/notes', panes:[{t:'zsh'}]},
-         {name:'api', kind:'folder', path:'~/ws/api', panes:[{t:'zsh'}]},
+  S = { level:1, sel:1, focus:0, full:false, ask:null, input:null, help:false, leader:false, msg:'', prog:false, typed:'',
+    // The daemon's order: each repository's root first and its worktrees after it, then the folders that are not repositories.
+    ws:[ {name:'api', kind:'folder', project:'api', path:'~/ws/api', panes:[{t:'zsh'}]},
          {name:'feat/login', kind:'worktree', project:'api', path:'~/ws/api-wt/feat-login', panes:[{t:'zsh'},{t:'claude',prog:'claude'}]},
+         {name:'feat/cli', kind:'worktree', project:'tools', path:'~/ws/tools-wt/feat-cli', panes:[{t:'zsh'}]},
+         {name:'notes', kind:'folder', path:'~/notes', panes:[{t:'zsh'}]},
          {name:'infra', kind:'folder', path:'~/ws/infra', panes:[]} ] };
 }
 const grid = () => ({cells:Array.from({length:ROWS}, () => Array.from({length:COLS}, () => [' ', '']))});
@@ -90,6 +93,16 @@ function paint(){
     if (buf) out += cur ? `<span class="${cur}">${buf}</span>` : buf; return out; }).join('\n');
 }
 const W = () => S.ws[S.sel];
+// What the sidebar draws: the workspaces in the daemon's order, a heading before a worktree whose repository's root is not open
+// (its name), and one before the first folder that is not a repository («carpetas»). Headings are never highlighted.
+function sideRows(){
+  const rows = []; let loose = false;
+  S.ws.forEach((w, i) => { const prev = S.ws[i - 1];
+    if (w.kind === 'folder' && !w.project && !loose){ rows.push({head: 'carpetas'}); loose = true; }
+    else if (w.kind === 'worktree' && !(prev && prev.project === w.project)) rows.push({head: w.project});
+    rows.push({i}); });
+  return rows;
+}
 const running = p => p && p.prog;
 const KEYS = {
   1: [['j k','mover'],['↵','entrar al workspace'],['r','renombrar'],['x','cerrar'],['o','abrir una carpeta'],['w','worktree nuevo'],['s','sincronizar'],['d','ver cambios'],['a','avisos'],['m','teléfono'],[',','ajustes'],['q','salir']],
@@ -110,10 +123,12 @@ function draw(){
   g = grid();
   const active1 = S.level === 1;
   for (let y = 0; y < ROWS - 1; y++) put(SB - 1, y, '│', active1 ? 'c-blue' : 'c-line');
-  put(1, 0, 'demo', 'b d'); put(SB - 14, 0, '^␣ s sessions', 'd');
-  S.ws.forEach((w, i) => { const y = 2 + i, on = i === S.sel, name = w.kind === 'worktree' ? '↳ ' + w.name : w.name;
-    put(0, y, String(i + 1), 'd'); put(2, y, w.panes.length ? '●' : '○', w.panes.length ? 'c-green' : 'd');
-    put(4, y, clip(name, SB - 10), on ? (active1 ? 'b c-blue' : 'b') : (w.panes.length ? '' : 'd')); if (on) tint(0, y, SB - 1, active1 ? 'bg-sel' : 'bg-sel'); });
+  put(1, 0, 'demo', 'b d'); 
+  sideRows().forEach((r, k) => { const y = 2 + k;
+    if (r.head !== undefined){ put(2, y, r.head, 'd'); return; }
+    const i = r.i, w = S.ws[i], on = i === S.sel, wt = w.kind === 'worktree', dot = wt ? 6 : 2, at = wt ? 8 : 4;
+    put(0, y, String(i + 1), 'd'); if (wt) put(4, y, '↳', 'd'); put(dot, y, w.panes.length ? '●' : '○', w.panes.length ? 'c-green' : 'd');
+    put(at, y, clip(w.name, SB - at - 2), on ? (active1 ? 'b c-blue' : 'b') : (w.panes.length ? '' : 'd')); if (on) tint(0, y, SB - 1, 'bg-sel'); });
   const w = W(), px = SB + 1, pw = COLS - px;
   put(px + 1, 0, w.kind === 'worktree' ? w.project + '/' : '', 'd'); put(px + 1 + (w.kind === 'worktree' ? w.project.length + 1 : 0), 0, w.name, 'b c-blue'); put(COLS - 1 - w.path.length, 0, w.path, 'd');
   const n = w.panes.length, h = ROWS - 2;
@@ -198,7 +213,8 @@ const scr = document.getElementById('scr');
 scr.addEventListener('keydown', e => { if (e.metaKey) return; if (e.ctrlKey && !(e.key === ' ' || S.level === 3)) return; if (key(e)) e.preventDefault(); });
 scr.addEventListener('click', e => { scr.focus(); const r = scr.getBoundingClientRect(), cw = r.width / COLS, ch = r.height / ROWS, x = Math.floor((e.clientX - r.left) / cw), y = Math.floor((e.clientY - r.top) / ch);
   if (S.input || S.ask || S.help) return;
-  if (x < SB - 1 && y >= 2 && y - 2 < S.ws.length){ S.sel = y - 2; S.focus = 0; S.level = 2; S.full = false; draw(); }
+  const row = x < SB - 1 && y >= 2 ? sideRows()[y - 2] : null;
+  if (row && row.i !== undefined){ S.sel = row.i; S.focus = 0; S.level = 2; S.full = false; draw(); }
   else if (x >= SB && y >= 1 && y < ROWS - 1 && W().panes.length){ const w = W(), pw = COLS - SB - 1, half = Math.floor(pw / 2); S.focus = w.panes.length === 1 || x - SB - 1 < half ? 0 : Math.min(1, w.panes.length - 1); S.level = 3; S.typed = ''; draw(); } });
 document.getElementById('evLeader').onclick = () => { if (S.level === 3){ S.level = 2; } else { S.leader = true; } draw(); scr.focus(); };
 document.getElementById('evProg').onclick = () => { const p = W().panes[S.focus] || W().panes[0]; if (p){ p.prog = p.prog ? null : 'claude'; flash(p.prog ? 'claude corre en el panel' : 'el panel está en reposo'); } scr.focus(); };

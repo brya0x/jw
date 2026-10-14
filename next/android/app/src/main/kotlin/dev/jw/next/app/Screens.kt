@@ -70,14 +70,15 @@ import androidx.compose.ui.unit.sp
 import dev.jw.next.client.Aviso
 import dev.jw.next.client.CloseSheet
 import dev.jw.next.client.ClientState
-import dev.jw.next.client.HomeRow
+import dev.jw.next.client.HomeItem
+import dev.jw.next.client.HomeKind
 import dev.jw.next.client.Navigator
 import dev.jw.next.client.Screen
 import dev.jw.next.client.Tone
 import dev.jw.next.client.avisos
 import dev.jw.next.client.byUrgency
 import dev.jw.next.client.closeSheet
-import dev.jw.next.client.homeRows
+import dev.jw.next.client.homeItems
 import dev.jw.next.client.shown
 import dev.jw.next.client.shownName
 import dev.jw.next.client.mark
@@ -221,14 +222,15 @@ fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, set: (Clie
                 GearButton { set(nav.show(state, Screen.Settings)) }
             })
             Box(Modifier.weight(1f)) {
-                if (onAvisos) AvisosList(waiting, nav, state, set) else WorkspaceList(homeRows(session, state.seen), nav, state, set, create = { newMenu = true }) { id ->
+                if (onAvisos) AvisosList(waiting, nav, state, set) else WorkspaceList(homeItems(session, state.seen), nav, state, set, create = { newMenu = true }) { id ->
                     session.workspaces.firstOrNull { it.id == id }?.let { menu = Naming.Workspace(it.id, it.shown()) }
                 }
             }
         }
         menu?.let { target ->
             val ws = session.workspaces.firstOrNull { it.id == target.id }
-            WorkspaceMenuSheet(target, dismiss = { menu = null }, worktree = { ws?.let { worktree = WorktreeStart(it.repo(), it.branch) }; menu = null }) { naming = target; menu = null }
+            val repo = ws?.repo()
+            WorkspaceMenuSheet(target, dismiss = { menu = null }, worktree = repo?.let { r -> { worktree = WorktreeStart(r, ws.branch); menu = null } }) { naming = target; menu = null }
         }
         naming?.let { RenameSheet(source, it) { naming = null } }
         if (newMenu) NewWorkspaceSheet(dismiss = { newMenu = false }) { newMenu = false; set(nav.show(state, Screen.Folders)) }
@@ -249,12 +251,19 @@ internal fun Section(text: String, onLongClick: (() -> Unit)? = null) {
 }
 
 @Composable
-private fun WorkspaceList(rows: List<HomeRow>, nav: Navigator, state: ClientState, set: (ClientState) -> Unit, create: () -> Unit, hold: (Id) -> Unit) {
+private fun WorkspaceList(items: List<HomeItem>, nav: Navigator, state: ClientState, set: (ClientState) -> Unit, create: () -> Unit, hold: (Id) -> Unit) {
     LazyColumn(Modifier.fillMaxSize()) {
-        item { Section("workspaces · ${rows.size}", create) }
-        items(rows, key = { it.id }) { row ->
+        item { Section("workspaces · ${items.count { it is HomeItem.Row }}", create) }
+        items(items, key = { if (it is HomeItem.Row) it.row.id else "heading:" + (it as HomeItem.Heading).text }) { item ->
+            val row = (item as? HomeItem.Row)?.row
+            if (row == null) {
+                Section((item as HomeItem.Heading).text)
+                return@items
+            }
+            // A worktree is drawn under its root, further in (REQ-224).
+            val indent = if (row.kind == HomeKind.Worktree) 20.dp else 0.dp
             Row(
-                Modifier.fillMaxWidth().combinedClickable(onClick = { set(nav.openWorkspace(state, row.id)) }, onLongClick = { hold(row.id) }).padding(start = Gutter - 4.dp, end = Gutter, top = 10.dp, bottom = 8.dp),
+                Modifier.fillMaxWidth().combinedClickable(onClick = { set(nav.openWorkspace(state, row.id)) }, onLongClick = { hold(row.id) }).padding(start = Gutter - 4.dp + indent, end = Gutter, top = 10.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.Top,
             ) {
                 MarkColumn(row.go, row.unseen)
@@ -268,6 +277,11 @@ private fun WorkspaceList(rows: List<HomeRow>, nav: Navigator, state: ClientStat
                             GoControl { set(nav.go(state, go)) }
                         }
                     }
+                }
+                when (row.kind) {
+                    HomeKind.Root -> Tag("raíz", Palette.dim)
+                    HomeKind.Folder -> Tag("carpeta", Palette.dim)
+                    HomeKind.Worktree -> {}
                 }
             }
             Hairline()
@@ -414,7 +428,7 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
     }
     if (wsMenu && ws != null) {
         val target = Naming.Workspace(ws.id, shownName(ws.name, ws.kind, ws.branch))
-        WorkspaceMenuSheet(target, dismiss = { wsMenu = false }, worktree = { worktree = WorktreeStart(ws.project ?: ws.path, ws.branch); wsMenu = false }) { naming = target; wsMenu = false }
+        WorkspaceMenuSheet(target, dismiss = { wsMenu = false }, worktree = ws.project?.let { r -> { worktree = WorktreeStart(r, ws.branch); wsMenu = false } }) { naming = target; wsMenu = false }
     }
     worktree?.let { WorktreeSheet(source, it, state, nav, set) { worktree = null } }
     naming?.let { RenameSheet(source, it) { naming = null } }
@@ -455,10 +469,11 @@ private fun BoxScope.PaneMenuSheet(pane: PaneSummary, dismiss: () -> Unit, renam
 
 /** What a long press on a workspace offers (REQ-183, REQ-201): a worktree of its repository and its name; closing it is the PC's. */
 @Composable
-internal fun BoxScope.WorkspaceMenuSheet(workspace: Naming.Workspace, dismiss: () -> Unit, worktree: () -> Unit, rename: () -> Unit) {
+internal fun BoxScope.WorkspaceMenuSheet(workspace: Naming.Workspace, dismiss: () -> Unit, worktree: (() -> Unit)?, rename: () -> Unit) {
     Sheet(dismiss) {
         Mono("workspace «${workspace.shown}»", Palette.fg, 14, bold = true, lines = 2)
-        SheetAction("w", "worktree nuevo", click = worktree)
+        if (worktree != null) SheetAction("w", "worktree nuevo", click = worktree)
+        else SheetAction("w", "worktree nuevo · no es un repositorio git", Palette.dim, enabled = false) {}
         SheetAction("✎", "renombrar el workspace", click = rename)
         Mono("Cerrar un workspace o quitar un worktree se hace en el PC.", Palette.dim, 12, lines = 3)
     }

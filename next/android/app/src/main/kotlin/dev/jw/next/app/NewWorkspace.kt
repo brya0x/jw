@@ -181,7 +181,7 @@ private fun FolderRowView(glyph: String, name: String, detail: String, open: Id?
 }
 
 @Composable
-private fun Tag(text: String, color: Color) {
+internal fun Tag(text: String, color: Color) {
     Box(Modifier.padding(start = 6.dp).border(1.dp, Palette.line, RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 1.dp)) { Mono(text, color, 10) }
 }
 

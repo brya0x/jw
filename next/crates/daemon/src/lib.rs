@@ -9,6 +9,7 @@ mod core;
 mod diff;
 mod git;
 mod github;
+mod grouping;
 mod integration;
 mod launch;
 mod mobile;

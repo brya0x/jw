@@ -516,3 +516,47 @@ fn list_dir_sends_the_first_500_folders_and_counts_them_all() {
     assert_eq!(seen["dirs"][499]["name"], "d499");
     d.stop();
 }
+
+#[test]
+fn a_repositorys_root_is_its_own_project_and_the_session_lists_repositories_before_other_folders() {
+    let sb = Sandbox::new();
+    let d = sb.start();
+    let app = repo(&sb);
+    let plain = std::fs::canonicalize(&sb.dir).unwrap().join("plain");
+    std::fs::create_dir_all(&plain).unwrap();
+    let mut c = sb.client();
+    let open = |c: &mut wire::Client, path: &Path| {
+        c.cmd(Cmd::OpenFolder { path: text(path) })
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    };
+    open(&mut c, &plain);
+    open(&mut c, &app);
+    c.cmd(Cmd::CreateWorktree {
+        repo: text(&app),
+        branch: "feat/x".into(),
+        base: None,
+        folder: None,
+    })
+    .unwrap()
+    .unwrap();
+    let list = &session(&mut c)["workspaces"];
+    let seen: Vec<_> = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| (w["kind"].as_str().unwrap(), w["project"].as_str()))
+        .collect();
+    let app_text = text(&app);
+    assert_eq!(
+        seen,
+        [
+            ("folder", Some(app_text.as_str())),
+            ("worktree", Some(app_text.as_str())),
+            ("folder", None),
+        ]
+    );
+    assert_eq!(list[0]["path"], app_text);
+    d.stop();
+}

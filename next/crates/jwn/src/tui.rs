@@ -29,6 +29,7 @@ mod open;
 mod phone;
 mod settings;
 mod shell;
+mod side;
 
 pub use changes::Ask;
 use changes::{Changes, Docs, Outcome, Src};
@@ -1613,10 +1614,14 @@ impl View {
         if waiting > 0 && y + 1 == rows && x >= start && x < start + label.chars().count() {
             return self.press(Key::Avisos);
         }
-        let workspaces = self.session.as_ref().map_or(0, |s| s.workspaces.len());
-        if x + 1 < SIDEBAR && y >= 2 && y < rows.saturating_sub(5) && y - 2 < workspaces {
-            let same = self.selected == y - 2;
-            self.selected = y - 2;
+        let row = self
+            .session
+            .as_ref()
+            .filter(|_| x + 1 < SIDEBAR && y >= 2 && y < rows.saturating_sub(5))
+            .and_then(|s| side::rows(&s.workspaces).into_iter().nth(y - 2));
+        if let Some(side::Side::Workspace(i)) = row {
+            let same = self.selected == i;
+            self.selected = i;
             if let Some(id) = self.selected_id() {
                 self.open(&id, if same { self.focus } else { 0 });
             }
@@ -1712,21 +1717,31 @@ impl View {
             g.put(SIDEBAR - 1, y, "│", Style::fg(divider));
         }
         g.put(1, 0, &clip(&session.name, 12), dim.bold());
-        for (i, w) in session.workspaces.iter().enumerate() {
-            let y = 2 + i;
+        for (k, row) in side::rows(&session.workspaces).iter().enumerate() {
+            let y = 2 + k;
             if y >= rows.saturating_sub(5) {
                 break;
             }
+            let side::Side::Workspace(i) = *row else {
+                if let side::Side::Head(head) = row {
+                    g.put_over(2, y, &clip(head, SIDEBAR - 4), dim);
+                }
+                continue;
+            };
+            let w = &session.workspaces[i];
+            let worktree = w.kind == WorkspaceKind::Worktree;
             let on = i == self.selected && self.mode == Mode::Workspaces;
             let un = self.unseen(&w.attention);
             if on {
                 g.paint_bg(0, y, SIDEBAR - 1, look::sel());
             }
-            let name = if w.kind == WorkspaceKind::Worktree {
-                format!("↳ {}", shown_name(&w.name, w.kind, w.branch.as_deref()))
+            let name = if worktree {
+                shown_name(&w.name, w.kind, w.branch.as_deref()).to_owned()
             } else {
                 w.name.clone()
             };
+            // A worktree is drawn four columns in, under its root (REQ-223).
+            let (dot, text) = if worktree { (6, 8) } else { (2, 4) };
             let name_style = if on {
                 Style::fg(look::blue()).bold()
             } else if w.pane_count == 0 {
@@ -1740,8 +1755,11 @@ impl View {
                 " ".into()
             };
             g.put_over(0, y, &number, dim);
+            if worktree {
+                g.put_over(4, y, "↳", dim);
+            }
             g.put_over(
-                2,
+                dot,
                 y,
                 if w.pane_count > 0 { "●" } else { "○" },
                 if w.pane_count > 0 {
@@ -1750,7 +1768,7 @@ impl View {
                     dim
                 },
             );
-            g.put_over(4, y, &clip(&name, SIDEBAR - 10), name_style);
+            g.put_over(text, y, &clip(&name, SIDEBAR - text - 6), name_style);
             if let Some(a) = un.first() {
                 let (glyph, colour) = mark(a);
                 g.put_over(SIDEBAR - 5, y, glyph, Style::fg(colour).bold());
@@ -2845,15 +2863,13 @@ mod tests {
     fn the_sidebar_numbers_workspaces_and_puts_the_most_urgent_mark_at_the_right() {
         let t = fixture_view().plain(110, 30);
         let first = t.lines().nth(2).unwrap();
-        assert!(
-            first.starts_with("1 ● ↳ login") || first.starts_with("1 ● ↳ feat/login"),
-            "{first}"
-        );
+        assert!(first.starts_with("1   ↳ ● feat/login"), "{first}");
         assert!(
             first[..28].contains('!'),
             "permission is the most urgent: {first}"
         );
-        assert!(t.lines().nth(3).unwrap().starts_with("2 ● notes"), "{t}");
+        assert!(t.lines().nth(3).unwrap().starts_with("  carpetas"), "{t}");
+        assert!(t.lines().nth(4).unwrap().starts_with("2 ● notes"), "{t}");
         assert!(
             !t.contains("sessions"),
             "the sessions of the old jw are not here: {t}"
@@ -3211,8 +3227,11 @@ mod tests {
     fn clicking_a_workspace_row_opens_it() {
         let mut v = fixture_view();
         let before = v.avisos().len();
-        // The second row of the sidebar is y = 3 (row 1 of the list is y = 2).
+        // The second workspace is y = 4: `carpetas` is the row between (y = 3), and a click on it does nothing.
         v.click(5, 3, 120, 30);
+        assert_eq!(v.selected, 0, "a heading is not a workspace");
+        assert!(v.opened.is_none());
+        v.click(5, 4, 120, 30);
         assert_eq!(v.selected, 1);
         assert!(v.opened.is_some(), "a click opens, like Enter");
         assert!(v.avisos().len() <= before);
@@ -4155,7 +4174,7 @@ mod tests {
         v.press(Key::Full);
         assert!(v.full);
         // Another workspace opened by a click, an attention or `j` + `↵` starts as usual.
-        v.click(5, 3, 120, 30);
+        v.click(5, 4, 120, 30);
         assert!(!v.full, "opening another workspace");
         v.full = true;
         v.select_workspace(true);
@@ -4245,7 +4264,7 @@ mod tests {
     fn a_worktree_with_a_name_of_its_own_shows_it_and_the_default_shows_its_branch() {
         let mut v = fixture_view();
         let t = v.plain(120, 30);
-        assert!(t.contains("↳ feat/login"), "{t}");
+        assert!(t.contains("↳ ● feat/login"), "{t}");
         let ws = v.selected_id().unwrap();
         for node in v.workspaces.values_mut() {
             if node.head.id == ws {
@@ -4254,7 +4273,7 @@ mod tests {
         }
         v.session.as_mut().unwrap().workspaces[0].name = "login fix".into();
         let t = v.plain(120, 30);
-        assert!(t.contains("↳ login fix"), "{t}");
+        assert!(t.contains("↳ ● login fix"), "{t}");
         assert_eq!(
             shown_name("login fix", WorkspaceKind::Worktree, Some("feat/login")),
             "login fix"

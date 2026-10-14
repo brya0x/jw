@@ -50,8 +50,8 @@ class FoldersTest {
     @Test
     fun aWorktreeIsMadeOfTheRepositoryAndFromTheBranchOfTheWorkspace() {
         assertEquals("/home/u/code/app", worktree.repo())
-        assertEquals("/home/u/notes", notes.repo())
-        assertEquals(listOf("/home/u/code/app", "/home/u/notes"), repos(session))
+        assertNull(notes.repo(), "a folder that is not a repository has none")
+        assertEquals(listOf("/home/u/code/app"), repos(session))
         assertEquals("/home/u/code/app-wt", worktreesDir("/home/u/code/app"))
         assertEquals("app", repoName("/home/u/code/app/"))
     }

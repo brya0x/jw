@@ -43,9 +43,13 @@ fun Attention.what(): String = when (kind) {
 /** Most urgent first, the order of the legend in the prototype. */
 fun List<Attention>.byUrgency(): List<Attention> = sortedBy { urgency.indexOf(it.kind) }
 
+/** What a row of Home is: a repository's root, a worktree of one, or a folder that is not a repository (REQ-222). */
+enum class HomeKind { Root, Worktree, Folder }
+
 /** One row of Home (REQ-33). */
 data class HomeRow(
     val id: Id,
+    val kind: HomeKind,
     val name: String,
     val detail: String,
     val paneCount: Int,
@@ -71,13 +75,21 @@ fun shownName(name: String, kind: WorkspaceKind, branch: String?): String =
 /** The name of a summary as the lists draw it: a worktree has `↳` before it. */
 fun WorkspaceSummary.shown(): String = shownName(name, kind, branch)
 
+private fun WorkspaceSummary.homeKind() = when {
+    kind == WorkspaceKind.Worktree -> HomeKind.Worktree
+    project != null -> HomeKind.Root
+    else -> HomeKind.Folder
+}
+
 fun homeRows(session: Node.Session, seen: Seen): List<HomeRow> = session.workspaces.map { w ->
     val unseen = w.attention.filterNot(seen::isSeen).byUrgency()
     val top = unseen.firstOrNull()
+    val kind = w.homeKind()
     HomeRow(
         id = w.id,
-        name = (if (w.kind == WorkspaceKind.Worktree) "↳ " else "") + w.shown(),
-        detail = (if (w.kind == WorkspaceKind.Worktree) "worktree" else "carpeta") +
+        kind = kind,
+        name = (if (kind == HomeKind.Worktree) "↳ " else "") + w.shown(),
+        detail = when (kind) { HomeKind.Root -> "raíz"; HomeKind.Worktree -> "worktree"; HomeKind.Folder -> "carpeta" } +
             " · ${w.paneCount} ${if (w.paneCount == 1) "panel" else "paneles"}",
         paneCount = w.paneCount,
         mark = top?.mark(),
@@ -85,6 +97,36 @@ fun homeRows(session: Node.Session, seen: Seen): List<HomeRow> = session.workspa
         line = top?.what(),
         go = top,
     )
+}
+
+/** A line of Home's list: a heading, or a workspace's row. */
+sealed interface HomeItem {
+    data class Heading(val text: String) : HomeItem
+    data class Row(val row: HomeRow) : HomeItem
+}
+
+/**
+ * Home's list as it is drawn (REQ-219 to REQ-221): the daemon sends each repository's root and
+ * worktrees together and the folders that are not repositories last. A worktree whose root is
+ * not what comes before it gets the repository's name above it, and the first folder gets
+ * `carpetas` when something comes before it.
+ */
+fun homeItems(session: Node.Session, seen: Seen): List<HomeItem> {
+    val rows = homeRows(session, seen)
+    val items = mutableListOf<HomeItem>()
+    var folders = false
+    session.workspaces.forEachIndexed { i, w ->
+        val before = session.workspaces.getOrNull(i - 1)
+        when {
+            rows[i].kind == HomeKind.Folder && !folders -> {
+                folders = true
+                if (before != null) items += HomeItem.Heading("carpetas")
+            }
+            rows[i].kind == HomeKind.Worktree && w.project != null && before?.project != w.project -> items += HomeItem.Heading(repoName(w.project!!))
+        }
+        items += HomeItem.Row(rows[i])
+    }
+    return items
 }
 
 fun avisos(session: Node.Session, seen: Seen): List<Aviso> = session.workspaces.flatMap { w ->

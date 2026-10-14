@@ -3,7 +3,7 @@
 //! of each one that changed and sends a patch to whoever has it open.
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{Sender, SyncSender, TrySendError};
 use std::time::{Duration, Instant};
@@ -11,10 +11,11 @@ use std::time::{Duration, Instant};
 use contract::patch::diff;
 use contract::{
     Attention, AttentionKind, DaemonMsg, ErrorCode, Head, Id, Node, PaneSummary, PatchOp, Screen,
-    Session, Workspace, WorkspaceSummary,
+    Session, Workspace, WorkspaceKind, WorkspaceSummary,
 };
 use serde_json::Value;
 
+use crate::browse::is_git;
 use crate::diff::{self, Scope};
 use crate::model::{Model, Own};
 use crate::persist;
@@ -872,12 +873,17 @@ impl Core {
                 });
             }
             session_attention.extend(attention.iter().cloned());
+            // A folder that is a repository's root is its own project; a worktree's is its repository.
+            let project = ws.project.clone().or_else(|| {
+                (ws.kind == WorkspaceKind::Folder && is_git(Path::new(&ws.path)))
+                    .then(|| ws.path.clone())
+            });
             summaries.push(WorkspaceSummary {
                 id: ws.id.clone(),
                 name: ws.name.clone(),
                 kind: ws.kind,
                 path: ws.path.clone(),
-                project: ws.project.clone(),
+                project: project.clone(),
                 branch: ws.branch.clone(),
                 pane_count: ws.panes.len() as u32,
                 attention: attention.clone(),
@@ -887,7 +893,7 @@ impl Core {
                 name: ws.name.clone(),
                 kind: ws.kind,
                 path: ws.path.clone(),
-                project: ws.project.clone(),
+                project,
                 branch: ws.branch.clone(),
                 panes,
             }));
@@ -895,7 +901,7 @@ impl Core {
         nodes.push(Node::Session(Session {
             head: head(&self.model.session_id, session_attention),
             name: self.model.name.clone(),
-            workspaces: summaries,
+            workspaces: crate::grouping::group(summaries),
         }));
         let mut kept = Vec::new();
         for (id, e) in &self.diffs {
