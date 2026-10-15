@@ -140,9 +140,13 @@ pub fn loading(g: &mut Grid, (x, y, w, h): Rect, phase: Phase, name: &str, now_m
     }
 }
 
-/// How many lines a block takes in the list: its two heading lines, the notices, its output and a gap.
+/// How many lines a block takes in the list: its two heading lines, the notices, its output and a gap;
+/// the mark of a restart takes one.
 /// It does not depend on the width, so the list can be measured without building it.
 fn block_height(b: &Block) -> usize {
+    if b.restart {
+        return 1;
+    }
     2 + usize::from(b.truncated) + usize::from(b.full) + b.out.len() + 1
 }
 
@@ -181,18 +185,49 @@ pub fn window_lines(
     out
 }
 
+/// The line across the list where the daemon restarted: what is above it was kept, what is below is new.
+fn restart_line(b: &Block, now_ms: u64, width: usize) -> Line {
+    let when = super::diff_lines::ago(now_ms / 1000, b.started / 1000);
+    let text = format!(" el daemon se reinició · {when} ");
+    let fill = width.saturating_sub(text.chars().count());
+    let (left, right) = (fill / 2, fill - fill / 2);
+    Line {
+        block: None,
+        bar: None,
+        spans: vec![(
+            format!("{}{text}{}", "─".repeat(left), "─".repeat(right)),
+            Style::fg(look::dim()),
+        )],
+        right: None,
+    }
+}
+
 /// Every block as lines, oldest first: the folder and time, the command, the output, a gap.
 pub fn block_lines(blocks: &[Block], now_ms: u64, width: usize) -> Vec<Line> {
     let mut out = Vec::new();
     for b in blocks {
-        let bar = if b.running {
+        if b.restart {
+            out.push(restart_line(b, now_ms, width));
+            continue;
+        }
+        let bar = if b.interrupted {
+            look::dim()
+        } else if b.running {
             look::yellow()
         } else if b.code.unwrap_or(0) != 0 {
             look::red()
         } else {
             look::green()
         };
-        let (right, right_style) = if b.running {
+        let (right, right_style) = if b.interrupted {
+            let ran =
+                b.ms.filter(|ms| *ms >= 1000)
+                    .map(|ms| format!(" · {}", duration(ms)));
+            (
+                format!("interrumpido{}", ran.unwrap_or_default()),
+                Style::fg(look::yellow()),
+            )
+        } else if b.running {
             (
                 format!("corriendo {}", duration(now_ms.saturating_sub(b.started))),
                 Style::fg(look::dim()),
@@ -336,6 +371,8 @@ mod tests {
             ms: code.map(|_| 4200),
             truncated: false,
             full: false,
+            interrupted: false,
+            restart: false,
             out: vec![vec![Span {
                 t: "out".into(),
                 fg: None,
@@ -491,6 +528,8 @@ mod window_tests {
             ms: (!running).then_some(5),
             truncated,
             full,
+            interrupted: false,
+            restart: false,
             out: (0..out)
                 .map(|r| {
                     vec![Span {
@@ -514,6 +553,65 @@ mod window_tests {
             block(4, 12, false, false, false),
             block(5, 2, false, false, true),
         ]
+    }
+
+    fn cut(id: u64, ms: Option<u64>) -> Block {
+        Block {
+            running: false,
+            code: None,
+            ms,
+            interrupted: true,
+            ..block(id, 1, false, false, false)
+        }
+    }
+
+    fn mark(id: u64, started: u64) -> Block {
+        Block {
+            cmd: String::new(),
+            cwd: String::new(),
+            started,
+            restart: true,
+            code: None,
+            ms: None,
+            out: vec![],
+            ..block(id, 0, false, false, false)
+        }
+    }
+
+    fn text(l: &Line) -> String {
+        l.spans.iter().map(|s| s.0.as_str()).collect()
+    }
+
+    #[test]
+    fn the_mark_of_a_restart_is_one_line_across_the_list_that_says_when() {
+        let blocks = [block(1, 1, false, false, false), mark(2, 1_000_000)];
+        let lines = block_lines(&blocks, 1_000_000 + 2 * 3600 * 1000, 40);
+        let line = lines.last().unwrap();
+        assert_eq!(line.block, None, "it is not a block to select");
+        let shown = text(line);
+        assert!(
+            shown.contains(" el daemon se reinició · hace 2 h "),
+            "{shown}"
+        );
+        assert_eq!(shown.chars().count(), 40);
+        assert!(shown.starts_with('─') && shown.ends_with('─'));
+        assert_eq!(total_lines(&blocks), block_lines(&blocks, 0, 40).len());
+        assert_eq!(block_height(&blocks[1]), 1);
+    }
+
+    #[test]
+    fn a_command_cut_by_a_restart_says_so_with_how_long_it_had_run() {
+        let lines = block_lines(&[cut(3, Some(12_400))], 0, 60);
+        assert_eq!(lines[0].right.as_ref().unwrap().0, "interrumpido · 12.4s");
+        assert_eq!(
+            lines[0].bar,
+            Some(look::dim()),
+            "not red or green: its end was never seen"
+        );
+        let short = block_lines(&[cut(3, Some(300))], 0, 60);
+        assert_eq!(short[0].right.as_ref().unwrap().0, "interrumpido");
+        let unknown = block_lines(&[cut(3, None)], 0, 60);
+        assert_eq!(unknown[0].right.as_ref().unwrap().0, "interrumpido");
     }
 
     #[test]

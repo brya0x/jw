@@ -195,7 +195,7 @@ enum Finished {
     Passthrough,
 }
 
-fn now_ms() -> u64 {
+pub fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as u64)
@@ -336,6 +336,57 @@ impl BlockStore {
         self.integrated = true;
     }
 
+    /// Take the blocks a daemon saved before it stopped (spec REQ-298 to REQ-300): the history as it
+    /// was, a command that was running as interrupted (it ran until `saved_at` as far as anyone
+    /// knows), and a mark where this daemon began unless the last block already is one. Nothing
+    /// is taken when there was nothing saved.
+    pub fn restore(&mut self, saved: Vec<Block>, saved_at: u64, now: u64) {
+        let mut blocks: VecDeque<Block> = saved
+            .into_iter()
+            .map(|mut b| {
+                if b.running {
+                    b.running = false;
+                    b.interrupted = true;
+                    b.code = None;
+                    b.ms = Some(saved_at.saturating_sub(b.started));
+                }
+                b
+            })
+            .collect();
+        if blocks.is_empty() {
+            return;
+        }
+        self.next_id = self
+            .next_id
+            .max(blocks.iter().map(|b| b.id).max().unwrap_or(0) + 1);
+        if !blocks.back().is_some_and(|b| b.restart) {
+            blocks.push_back(Block {
+                id: self.next_id,
+                cmd: String::new(),
+                cwd: String::new(),
+                started: now,
+                running: false,
+                code: None,
+                ms: None,
+                truncated: false,
+                full: false,
+                interrupted: false,
+                restart: true,
+                out: Vec::new(),
+            });
+            self.next_id += 1;
+        }
+        while blocks.len() > MAX_BLOCKS {
+            blocks.pop_front();
+        }
+        while blocks.iter().map(weight).sum::<usize>() > MAX_BYTES && blocks.len() > 1 {
+            blocks.pop_front();
+        }
+        self.done = blocks;
+        self.integrated = true;
+        self.version += 1;
+    }
+
     pub fn set_cols(&mut self, cols: u16) {
         self.cols = cols;
     }
@@ -439,6 +490,8 @@ impl BlockStore {
             ms: None,
             truncated: run.newlines >= usize::from(MAX_ROWS),
             full: run.full,
+            interrupted: false,
+            restart: false,
             out: if run.full {
                 Vec::new()
             } else {
@@ -624,6 +677,83 @@ mod tests {
         }
         s.mark(Mark::Done(Some(0)));
         assert_eq!(s.view().unwrap().2.len(), 3);
+    }
+
+    fn saved(id: u64, cmd: &str, running: bool) -> Block {
+        Block {
+            id,
+            cmd: cmd.into(),
+            cwd: "/w".into(),
+            started: 1000,
+            running,
+            code: (!running).then_some(0),
+            ms: (!running).then_some(5),
+            truncated: false,
+            full: false,
+            interrupted: false,
+            restart: false,
+            out: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_restored_history_keeps_its_blocks_cuts_the_running_one_and_marks_the_restart() {
+        let mut s = BlockStore::new(40);
+        s.restore(
+            vec![saved(1, "ls", false), saved(7, "cargo watch", true)],
+            4000,
+            9000,
+        );
+        let (_, _, blocks) = s.view().expect("a restored history needs no prompt first");
+        assert_eq!(blocks.len(), 3);
+        assert_eq!((blocks[0].id, blocks[0].interrupted), (1, false));
+        let cut = &blocks[1];
+        assert_eq!(
+            (cut.id, cut.running, cut.interrupted, cut.code, cut.ms),
+            (7, false, true, None, Some(3000)),
+            "it had run until the daemon last saved"
+        );
+        let mark = &blocks[2];
+        assert_eq!((mark.id, mark.restart, mark.started), (8, true, 9000));
+        // The next command goes on after them.
+        s.mark(Mark::Command {
+            cmd: "pwd".into(),
+            cwd: "/w".into(),
+        });
+        s.mark(Mark::Done(Some(0)));
+        assert_eq!(s.view().unwrap().2.last().unwrap().id, 9);
+    }
+
+    #[test]
+    fn a_second_restart_with_nothing_run_between_does_not_add_a_second_mark() {
+        let mut s = BlockStore::new(40);
+        s.restore(vec![saved(1, "ls", false)], 2000, 3000);
+        let first = s.view().unwrap().2;
+        let mut again = BlockStore::new(40);
+        again.restore(first.clone(), 4000, 5000);
+        assert_eq!(
+            again.view().unwrap().2,
+            first,
+            "the mark that is there says it"
+        );
+    }
+
+    #[test]
+    fn nothing_saved_restores_nothing_and_the_caps_hold_for_what_is() {
+        let mut s = BlockStore::new(40);
+        s.restore(Vec::new(), 1, 2);
+        assert!(
+            s.view().is_none(),
+            "no integration, no blocks, until a prompt"
+        );
+        let many: Vec<Block> = (1..=(MAX_BLOCKS as u64 + 30))
+            .map(|i| saved(i, "x", false))
+            .collect();
+        s.restore(many, 1, 2);
+        let blocks = s.view().unwrap().2;
+        assert_eq!(blocks.len(), MAX_BLOCKS);
+        assert!(blocks.last().unwrap().restart);
+        assert_eq!(blocks[0].id, 32, "the oldest went first");
     }
 
     #[test]

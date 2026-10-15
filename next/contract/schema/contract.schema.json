@@ -49,6 +49,8 @@
         "ms": { "type": "integer", "minimum": 0 },
         "truncated": { "const": true },
         "full": { "const": true },
+        "interrupted": { "const": true },
+        "restart": { "const": true },
         "out": { "type": "array", "items": { "type": "array", "items": { "$ref": "#/$defs/Span" } } }
       }
     },

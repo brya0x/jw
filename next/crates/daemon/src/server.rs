@@ -139,6 +139,7 @@ impl Daemon {
                 config.link.clone(),
             )),
         ))));
+        shared.lock().history_dir = Some(crate::history::dir(&config.state_dir));
         shared.lock().mobile.clone().resume();
         if let Some(exe) = &config.hook_exe {
             shared.lock().hooks = Some(crate::launch::write_hooks(&config.state_dir, exe)?);

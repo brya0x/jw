@@ -472,6 +472,14 @@ pub struct Block {
     /// The command used the whole screen; its output is not kept.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub full: bool,
+    /// The daemon restarted while it ran: its end was never seen, and `ms` is how long it had
+    /// run when the daemon last saved.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub interrupted: bool,
+    /// Not a command: the place where the daemon restarted, `started` being when. What is before
+    /// it was kept from before.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub restart: bool,
     /// The output as rows of styled spans: the daemon resolves colours and attributes.
     pub out: Vec<Vec<Span>>,
 }

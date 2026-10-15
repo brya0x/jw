@@ -23,6 +23,7 @@ fn find(name: &str) -> Option<String> {
 
 struct Rig {
     _sb: Sandbox,
+    config: daemon::Config,
     d: Option<Daemon>,
     c: Client,
     pane: String,
@@ -97,6 +98,7 @@ fn rig(shell: &str) -> Rig {
     );
     Rig {
         _sb: sb,
+        config,
         d: Some(d),
         c,
         pane,
@@ -297,6 +299,111 @@ fn clear_empties_the_blocks_of_the_pane() {
     assert_eq!(Rig::text(&b), ["three"]);
     assert_eq!(b["id"], 4, "ids go on after a clear");
     r.d.take().unwrap().stop();
+}
+
+/// REQ-297 to REQ-303: the blocks of a pane are saved, and come back with the daemon, a command
+/// that was running cut and a mark where the daemon restarted.
+#[test]
+fn the_blocks_of_a_pane_come_back_after_a_restart_with_the_cut_command_and_a_mark() {
+    let Some(shell) = find("bash").or_else(|| find("zsh")) else {
+        return;
+    };
+    let mut r = rig(&shell);
+    r.run("echo one");
+    r.finished(1);
+    r.run("echo two");
+    r.finished(2);
+    r.run("sleep 30");
+    assert!(
+        r.c.wait_until(WAIT, |c| c.nodes[&r.blocks]["blocks"][2]["running"] == true)
+            .unwrap()
+    );
+    let (pane, config) = (r.pane.clone(), r.config.clone());
+    let file = config
+        .state_dir
+        .join("history")
+        .join(format!("{pane}.json"));
+    // The daemon stops: what it has is written.
+    let Rig { _sb, d, c, .. } = r;
+    drop(c);
+    d.unwrap().stop();
+    assert!(file.is_file(), "the history of the pane is on disk");
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&file).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "for the person alone");
+    }
+
+    let d = Daemon::start(config.clone()).unwrap();
+    let mut c = Client::connect(&config.socket, "test").unwrap();
+    c.open(&pane).unwrap();
+    assert!(
+        c.wait_until(WAIT, |c| c
+            .nodes
+            .get(&pane)
+            .is_some_and(|n| n.get("blocks").is_some()))
+            .unwrap(),
+        "the pane has its blocks node from the start"
+    );
+    let blocks = c.nodes[&pane]["blocks"].as_str().unwrap().to_owned();
+    c.open(&blocks).unwrap();
+    assert!(
+        c.wait_until(WAIT, |c| c.nodes.contains_key(&blocks))
+            .unwrap()
+    );
+    let list = c.nodes[&blocks]["blocks"].as_array().unwrap().clone();
+    let cmds: Vec<&str> = list.iter().map(|b| b["cmd"].as_str().unwrap()).collect();
+    assert_eq!(cmds, ["echo one", "echo two", "sleep 30", ""]);
+    assert_eq!(list[0]["code"], 0);
+    assert_eq!(
+        (
+            list[2]["running"].as_bool(),
+            list[2]["interrupted"].as_bool()
+        ),
+        (Some(false), Some(true)),
+        "the command that was running was cut"
+    );
+    assert!(list[2]["ms"].as_u64().is_some());
+    assert_eq!(list[3]["restart"], true);
+    let last_id = list[3]["id"].as_u64().unwrap();
+    assert!(last_id > list[2]["id"].as_u64().unwrap());
+
+    // The new shell goes on after the mark, and the ids go on.
+    c.cmd(Cmd::Write {
+        pane: pane.clone(),
+        data: "echo three\r".into(),
+    })
+    .unwrap()
+    .unwrap();
+    assert!(
+        c.wait_until(WAIT, |c| c.nodes[&blocks]["blocks"]
+            .as_array()
+            .is_some_and(|b| b.len() == 5 && b[4]["running"] == false))
+            .unwrap(),
+        "{}",
+        c.nodes[&blocks]
+    );
+    assert_eq!(c.nodes[&blocks]["blocks"][4]["cmd"], "echo three");
+    assert!(c.nodes[&blocks]["blocks"][4]["id"].as_u64().unwrap() > last_id);
+
+    // Closing the pane takes its history away.
+    c.cmd(Cmd::ClosePane { pane }).unwrap().unwrap();
+    assert!(
+        wait_for(|| !file.exists()),
+        "the history of a closed pane is removed"
+    );
+    d.stop();
+}
+
+fn wait_for(mut done: impl FnMut() -> bool) -> bool {
+    let end = std::time::Instant::now() + WAIT;
+    while std::time::Instant::now() < end {
+        if done() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    done()
 }
 
 /// REQ-123: the node of a pane's blocks is the same for as long as the pane lives, and

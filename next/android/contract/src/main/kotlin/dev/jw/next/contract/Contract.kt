@@ -572,6 +572,10 @@ data class Block(
     val truncated: Boolean = false,
     /** The command used the whole screen; its output is not kept. */
     val full: Boolean = false,
+    /** The daemon restarted while it ran: its end was never seen; [ms] is how long it had run when the daemon last saved. */
+    val interrupted: Boolean = false,
+    /** Not a command: where the daemon restarted ([started] is when); what is before it was kept from before. */
+    val restart: Boolean = false,
     /** The output as rows of styled spans: the daemon resolves colours and attributes. */
     val out: List<List<Span>>,
 )

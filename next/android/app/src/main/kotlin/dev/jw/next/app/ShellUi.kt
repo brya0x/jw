@@ -43,6 +43,7 @@ import dev.jw.next.client.SpanColor
 import dev.jw.next.client.shortPath
 import dev.jw.next.client.spanColor
 import dev.jw.next.client.state
+import dev.jw.next.client.restartLabel
 import dev.jw.next.client.timeLabel
 import dev.jw.next.contract.Block
 import dev.jw.next.contract.Span
@@ -96,8 +97,18 @@ internal fun BlocksList(blocks: List<Block>, picked: Long?, modifier: Modifier =
     }
     LazyColumn(modifier.fillMaxSize().background(Palette.bg), reverseLayout = true) {
         items(blocks.asReversed(), key = { it.id }) { b ->
-            BlockCard(b, b.id == picked, now) { pick(if (b.id == picked) null else b.id) }
+            if (b.restart) RestartRow(b, now) else BlockCard(b, b.id == picked, now) { pick(if (b.id == picked) null else b.id) }
         }
+    }
+}
+
+/** Where the daemon restarted: a line across the list with when, not a block to pick. */
+@Composable
+private fun RestartRow(b: Block, now: Long) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.weight(1f).height(1.dp).background(Palette.line))
+        Mono(b.restartLabel(now), Palette.dim, 11, modifier = Modifier.padding(horizontal = 10.dp))
+        Box(Modifier.weight(1f).height(1.dp).background(Palette.line))
     }
 }
 
@@ -107,16 +118,17 @@ private fun BlockCard(b: Block, selected: Boolean, now: Long, click: () -> Unit)
     val bar = when (state) {
         BlockState.Failed -> Palette.red
         BlockState.Running -> Palette.yellow
+        BlockState.Interrupted -> Palette.dim
         BlockState.Ok -> null
     }
     val tint = when (state) {
         BlockState.Failed -> Palette.red.copy(alpha = 0.09f).compositeOver(Palette.bg)
         BlockState.Running -> Palette.yellow.copy(alpha = 0.06f).compositeOver(Palette.bg)
-        BlockState.Ok -> Palette.bg
+        BlockState.Interrupted, BlockState.Ok -> Palette.bg
     }
     val timeColor = when (state) {
         BlockState.Failed -> Palette.red
-        BlockState.Running -> Palette.yellow
+        BlockState.Running, BlockState.Interrupted -> Palette.yellow
         BlockState.Ok -> Palette.green
     }
     Column(

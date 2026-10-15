@@ -1870,12 +1870,13 @@ impl View {
         let Some(at) = b.blocks.iter().position(|k| k.id == id) else {
             return;
         };
-        let to = if forward {
-            (at + 1).min(b.blocks.len() - 1)
+        // The mark of a restart is no block to select.
+        let next = if forward {
+            (at + 1..b.blocks.len()).find(|i| !b.blocks[*i].restart)
         } else {
-            at.saturating_sub(1)
+            (0..at).rev().find(|i| !b.blocks[*i].restart)
         };
-        self.blk = Some((pane, b.blocks[to].id));
+        self.blk = Some((pane, b.blocks[next.unwrap_or(at)].id));
     }
 
     /// Copy the selected block's command or output, or run its command again.

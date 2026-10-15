@@ -208,7 +208,7 @@ pub fn resize(shared: &Shared, pane: &Id, rows: u16, cols: u16) -> Done {
 /// Start the shells of the panes a restored session remembers; a pane whose shell cannot
 /// start is dropped (its workspace stays).
 pub fn restore(shared: &Shared) {
-    let (events, shell, env, hooks, wanted) = {
+    let (events, shell, env, hooks, history_dir, wanted) = {
         let core = shared.lock();
         let wanted: Vec<(Id, String, String, Option<Vec<String>>)> = core
             .model
@@ -230,6 +230,7 @@ pub fn restore(shared: &Shared) {
             core.shell.clone(),
             core.env.clone(),
             core.hooks.clone(),
+            core.history_dir.clone(),
             wanted,
         )
     };
@@ -261,7 +262,18 @@ pub fn restore(shared: &Shared) {
             &setup,
             events.clone(),
         ) {
-            Ok(term) => shared.lock().attach_term(&id, term),
+            Ok(term) => {
+                // The blocks it had come back with it, ahead of what the new shell runs.
+                if let Some(saved) = history_dir
+                    .as_deref()
+                    .and_then(|dir| crate::history::load(dir, &id))
+                {
+                    term.restore_blocks(saved.blocks, saved.saved_at, crate::blocks::now_ms());
+                }
+                let mut core = shared.lock();
+                core.attach_term(&id, term);
+                core.read_blocks(&id);
+            }
             Err(m) => {
                 eprintln!("pane {id} not restored: {m}");
                 failed.push(id);
@@ -281,11 +293,46 @@ pub fn restore(shared: &Shared) {
         }
     }
     core.refresh();
+    if let Some(dir) = history_dir {
+        let live: std::collections::HashSet<&str> = core
+            .model
+            .workspaces
+            .iter()
+            .flat_map(|w| w.panes.iter().map(|p| p.id.as_str()))
+            .collect();
+        crate::history::prune(&dir, &live);
+    }
+}
+
+/// How long the engine waits for an event before it looks at what is due to be saved.
+const SAVE_TICK: Duration = Duration::from_secs(2);
+
+/// Write the blocks of the panes that are due (spec REQ-297), with the lock let go.
+fn save_histories(shared: &Shared, force: bool) {
+    let writes = shared.lock().history_writes(force);
+    let mut written = Vec::new();
+    for (dir, pane, text) in writes {
+        match crate::history::save(&dir, &pane, &text) {
+            Ok(()) => written.push(pane),
+            Err(e) => eprintln!("cannot save the history of pane {pane}: {e}"),
+        }
+    }
+    if !written.is_empty() {
+        shared.lock().forget_written(&written);
+    }
 }
 
 /// Apply what shells report: fold bursts of output into one refresh.
 pub fn engine(shared: Shared, rx: Receiver<Event>) {
-    while let Ok(first) = rx.recv() {
+    loop {
+        let first = match rx.recv_timeout(SAVE_TICK) {
+            Ok(first) => first,
+            Err(RecvTimeoutError::Timeout) => {
+                save_histories(&shared, false);
+                continue;
+            }
+            Err(RecvTimeoutError::Disconnected) => return,
+        };
         let mut batch = vec![first];
         let deadline = Instant::now() + COALESCE;
         loop {
@@ -300,9 +347,11 @@ pub fn engine(shared: Shared, rx: Receiver<Event>) {
             }
         }
         if batch.iter().any(|e| matches!(e, Event::Stop)) {
+            save_histories(&shared, true);
             return;
         }
         apply(&shared, batch);
+        save_histories(&shared, false);
     }
 }
 

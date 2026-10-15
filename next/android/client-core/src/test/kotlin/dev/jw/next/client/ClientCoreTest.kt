@@ -228,6 +228,17 @@ class BlocksTest {
     }
 
     @Test
+    fun aRestartLeavesACutCommandAndAMarkThatSaysWhen() {
+        val kept = ((ContractJson.decodeFromString(DaemonMsg.serializer(), File(dir, "snapshot-blocks-restart.json").readText()) as DaemonMsg.Snapshot).node as Node.Blocks).blocks
+        assertEquals(listOf(BlockState.Ok, BlockState.Interrupted, BlockState.Ok), kept.map { it.state() })
+        assertEquals("interrumpido · 12.4 s", kept[1].timeLabel(0))
+        assertEquals("interrumpido", kept[1].copy(ms = 300).timeLabel(0), "a command that ran under a second says no time")
+        assertEquals("interrumpido", kept[1].copy(ms = null).timeLabel(0))
+        assertEquals(true, kept[2].restart)
+        assertEquals("el daemon se reinició · hace 2 h", kept[2].restartLabel(kept[2].started + 2 * 3600 * 1000))
+    }
+
+    @Test
     fun theOutputIsTheRowsJoined() {
         assertEquals("On branch feat/login\nnothing to commit, working tree clean", blocks[0].outputText())
         assertTrue(blocks[1].outputText().contains("test auth::expired ... FAILED"))

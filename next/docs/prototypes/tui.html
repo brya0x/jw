@@ -39,6 +39,8 @@ button:hover{border-color:var(--blue)}
 .ph .blk{padding:6px 12px 6px 10px;border-left:3px solid var(--line);margin:3px 0;cursor:pointer}
 .ph .blk.ok{border-left-color:var(--green)}.ph .blk.bad{border-left-color:var(--red)}.ph .blk.run{border-left-color:var(--yellow)}
 .ph .blk.on{background:var(--sel)}
+.ph .blk.int{border-left-color:var(--dim)}.ph .bm .int{color:var(--yellow)}
+.ph .rs{display:flex;align-items:center;gap:8px;margin:8px 10px;font-size:11px;color:var(--dim)}.ph .rs::before,.ph .rs::after{content:'';flex:1;height:1px;background:var(--line)}
 .ph .bm{display:flex;justify-content:space-between;gap:8px;font-size:11px;color:var(--dim)}
 .ph .bm i{font-style:normal}.ph .bm .bad{color:var(--red)}
 .ph .bc{font-weight:700;margin:1px 0 3px}
@@ -83,6 +85,7 @@ button:hover{border-color:var(--blue)}
     <select id="progName" aria-label="Program"><option>claude</option><option>nvim</option><option>mole</option><option>htop</option><option>lazygit</option><option>fzf</option></select>
     <button id="evClaude" type="button">Start the program (takes the screen)</button>
     <button id="evClaudeEnd" type="button">The program exits (takes a second)</button>
+    <button id="evRestart" type="button">The daemon restarts (history kept)</button>
     <button id="evReset" type="button">Reset</button>
     <select id="size" aria-label="Terminal size"><option value="120x32">120 × 32</option><option value="96x28">96 × 28</option></select>
   </div>
@@ -109,6 +112,7 @@ button:hover{border-color:var(--blue)}
   <div class="decide">
     <h2>To approve</h2>
     <ol>
+      <li><b>When the daemon restarts the history stays</b> (button «The daemon restarts»). Each shell pane's blocks are saved on disk by the daemon and come back with it: the last 100 blocks and no more than 4 MiB of them for each pane, the oldest going first. A line across the pane says <i>el daemon se reinició</i> and the time: what is above it was kept, what is below it is new, in the terminal and on the phone. A command that was running is kept as <i>interrumpido</i> with the time it had run, in grey, because its end was never seen; a program that had the whole screen (claude, nvim) is gone and the pane is the shell again, as today. The prompt starts empty. <code>clear</code> empties the saved history too.</li>
       <li><b>The frame is today's jw:</b> a 28-column sidebar with a right border, numbered rows with <code>●</code> open and <code>○</code> closed, <code>↳</code> for a worktree under its project, one header row with project, branch and path, a status bar with a mode chip.</li>
       <li><b>Panes are rounded boxes</b> sharing the area (side by side, two columns from three panes), the focused one with a blue border. The title carries what runs there, and what waits on that pane (<code>✗ salió 3</code>) sits at the right end of its top border.</li>
       <li><b>Marks sit at the right of a sidebar row</b> (most urgent unseen, with a count when there are several). No extra line under the row: the sentence lives in the pane's title and in <code>a</code>.</li>
@@ -268,9 +272,11 @@ function drawShell(g, p, x0, y0, bw, bh, focused){
   const shownRows = rowsOf.slice(-5), n = shownRows.length, edTop = y0 + bh - 5 - n;
   const lines = [];
   p.blocks.forEach((b, bi) => {
-    const state = b.running ? 'c-yellow' : b.code ? 'c-red' : 'c-green';
-    const head = b.running ? `corriendo ${b.dur}` : b.code ? `salió ${b.code} · ${b.dur}` : b.dur;
-    lines.push({bi, bar:state, parts:[[clipTo(short(p.cwd), Math.max(4, iw - 6 - [...head].length)), 'd']], right:[head, b.code && !b.running ? 'c-red' : 'd']});
+    // Where the daemon restarted: one line across the box. What is above it was kept, what is below it is new.
+    if (b.restart){ lines.push({bi, bar:null, divider:'el daemon se reinició · ' + b.restart, parts:[]}); return; }
+    const state = b.interrupted ? 'd' : b.running ? 'c-yellow' : b.code ? 'c-red' : 'c-green';
+    const head = b.interrupted ? `interrumpido · ${b.dur}` : b.running ? `corriendo ${b.dur}` : b.code ? `salió ${b.code} · ${b.dur}` : b.dur;
+    lines.push({bi, bar:state, parts:[[clipTo(short(p.cwd), Math.max(4, iw - 6 - [...head].length)), 'd']], right:[head, b.interrupted ? 'c-yellow' : b.code && !b.running ? 'c-red' : 'd']});
     lines.push({bi, bar:state, parts:[['❯ ' + b.cmd, 'b']]});
     b.out.forEach(o => lines.push({bi, bar:state, parts:[[o.t, o.c || '']]}));
     lines.push({bi, bar:null, parts:[]});
@@ -278,6 +284,7 @@ function drawShell(g, p, x0, y0, bw, bh, focused){
   const room = edTop - top, shown = lines.slice(Math.max(0, lines.length - room));
   shown.forEach((ln, k) => {
     const y = top + (room - shown.length) + k, sel = ui.blk && ui.blk.pane === p.id && ui.blk.idx === ln.bi;
+    if (ln.divider){ const t = ' ' + ln.divider + ' ', n = iw - 2, pad = Math.max(0, Math.floor((n - [...t].length) / 2)); put(g, ix + 1, y, '─'.repeat(pad) + t + '─'.repeat(Math.max(0, n - pad - [...t].length)), 'd'); return; }
     if (sel) for (let i = 1; i < bw - 1; i++) g.cells[y][x0 + i] = [g.cells[y][x0 + i][0], 'bg-sel'];
     if (ln.bar) put(g, ix - 1, y, '▌', ln.bar + (sel ? ' bg-sel' : ''));
     let x = ix + 1; ln.parts.forEach(([t, c]) => { put(g, x, y, clipTo(t, iw - 2), c + (sel ? ' bg-sel' : '')); x += [...t].length; });
@@ -298,7 +305,7 @@ function drawShell(g, p, x0, y0, bw, bh, focused){
 /* A program that draws its own screen (claude) has the pane. Until it has painted something the box says it is starting,
    with a spinner, instead of showing the shell's screen as it was; once it paints, the screen is drawn as it is. */
 const SPIN = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
-const rawLines = p => [...p.blocks.flatMap(b => [short(p.cwd), '❯ ' + b.cmd, ...b.out.map(o => o.t), '']), ...(p.prog.painted ? p.prog.ui : [])];
+const rawLines = p => [...p.blocks.filter(b => !b.restart).flatMap(b => [short(p.cwd), '❯ ' + b.cmd, ...b.out.map(o => o.t), '']), ...(p.prog.painted ? p.prog.ui : [])];
 function drawProgram(g, p, x0, y0, bw, bh){
   if (!p.prog.painted || p.prog.closing){
     const t = SPIN[Math.floor(Date.now() / 110) % SPIN.length] + (p.prog.closing ? ' cerrando ' : ' iniciando ') + p.prog.name + '…', h = p.prog.closing ? 'esperando a que termine' : '^C cancela';
@@ -331,7 +338,7 @@ function runCmd(p, cmd){
 /* ---- the phone: the same model, drawn flat ---- */
 const $ = id => document.getElementById(id);
 const ph = { pane:0, blk:null };
-const phBars = b => b.running ? 'run' : b.code ? 'bad' : 'ok';
+const phBars = b => b.interrupted ? 'int' : b.running ? 'run' : b.code ? 'bad' : 'ok';
 function drawPhone(){
   const w = model.ws[ui.sel]; if (!w) return;
   if (ph.pane >= w.panes.length) ph.pane = 0;
@@ -347,8 +354,8 @@ function drawPhone(){
     $('phChips').innerHTML = `<span class="c-yellow">◌ ${esc(p.blocks.at(-1).cmd)}</span>`;
     $('phGo').outerHTML = '<button id="phGo" class="stop" type="button" aria-label="Stop (^C)">■</button>'; $('phActs').hidden = true; return;
   }
-  $('phBlocks').innerHTML = p.blocks.map((b, i) => `<div class="blk ${phBars(b)} ${sel === i ? 'on' : ''}" data-blk="${i}">
-      <div class="bm"><span>${esc(short(p.cwd))}</span><i class="${b.code && !b.running ? 'bad' : ''}">${b.running ? 'corriendo ' + b.dur : b.code ? 'salió ' + b.code + ' · ' + b.dur : b.dur}</i></div>
+  $('phBlocks').innerHTML = p.blocks.map((b, i) => b.restart ? `<div class="rs">el daemon se reinició · ${esc(b.restart)}</div>` : `<div class="blk ${phBars(b)} ${sel === i ? 'on' : ''}" data-blk="${i}">
+      <div class="bm"><span>${esc(short(p.cwd))}</span><i class="${b.interrupted ? 'int' : b.code && !b.running ? 'bad' : ''}">${b.interrupted ? 'interrumpido · ' + b.dur : b.running ? 'corriendo ' + b.dur : b.code ? 'salió ' + b.code + ' · ' + b.dur : b.dur}</i></div>
       <div class="bc">${esc(b.cmd)}</div>
       <div class="bo">${b.out.map(o => `<span class="${o.c || ''}">${esc(o.t)}</span>`).join('\n')}</div></div>`).join('');
   const last = p.blocks.at(-1), running = last && last.running;
@@ -411,6 +418,13 @@ document.getElementById('evClaudeEnd').onclick = () => { const p = shellPane(), 
 const shellPane = () => { const w = cur(); return w.panes.find(p => p.shell); };
 document.getElementById('evRun').onclick = () => { const p = shellPane(); if (p){ p.blocks.push({cmd:'cargo watch -x test', dur:'12s', code:0, running:true, out:[{t:'[Running cargo test]', c:'d'}]}); draw(); } };
 document.getElementById('evEnd').onclick = () => { const p = shellPane(); const b = p && p.blocks.at(-1); if (b && b.running){ b.running = false; b.dur = '12.4s'; b.out = [{t:'test result: ok. 14 passed', c:'c-green'}]; draw(); } };
+document.getElementById('evRestart').onclick = () => {
+  // The daemon's blocks are saved on disk and come back with it; what was running was cut, and a program on the whole screen is gone.
+  const at = new Date().toTimeString().slice(0, 5);
+  model.ws.forEach(w => w.panes.forEach(p => { if (!p.shell) return; const b = p.blocks.at(-1);
+    if (b && b.running && !b.restart){ b.running = false; b.interrupted = true; }
+    p.prog = null; if (b && !b.restart || !b) p.blocks.push({restart:at}); }));
+  draw(); };
 document.getElementById('evReset').onclick = () => { reset(); draw(); };
 document.getElementById('size').onchange = e => { [COLS, ROWS] = e.target.value.split('x').map(Number); draw(); };
 reset(); draw();

@@ -148,6 +148,8 @@ mod tests {
             code: None,
             ms: None,
             truncated: false,
+            interrupted: false,
+            restart: false,
             full: false,
             out: Vec::new(),
         }

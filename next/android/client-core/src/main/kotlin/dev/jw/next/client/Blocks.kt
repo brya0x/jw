@@ -4,9 +4,10 @@ import dev.jw.next.contract.Block
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.intOrNull
 
-enum class BlockState { Ok, Failed, Running }
+enum class BlockState { Ok, Failed, Running, Interrupted }
 
 fun Block.state(): BlockState = when {
+    interrupted -> BlockState.Interrupted
     running -> BlockState.Running
     (code ?: 0) != 0 -> BlockState.Failed
     else -> BlockState.Ok
@@ -19,7 +20,11 @@ fun Block.timeLabel(nowMs: Long): String = when (state()) {
     BlockState.Running -> "corriendo ${maxOf(0, nowMs - started) / 1000} s"
     BlockState.Failed -> "salió $code · ${formatMs(ms ?: 0)}"
     BlockState.Ok -> formatMs(ms ?: 0)
+    BlockState.Interrupted -> ms?.takeIf { it >= 1000 }?.let { "interrumpido · ${formatMs(it)}" } ?: "interrumpido"
 }
+
+/** The line where the daemon restarted: what is above it was kept, what is below is new (spec REQ-301). */
+fun Block.restartLabel(nowMs: Long): String = "el daemon se reinició · ${ago(nowMs / 1000, started / 1000)}"
 
 /** What a block printed, as text (the "Salida" action). */
 fun Block.outputText(): String = out.joinToString("\n") { row -> row.joinToString("") { it.t } }

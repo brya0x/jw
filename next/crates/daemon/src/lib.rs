@@ -10,6 +10,7 @@ mod diff;
 mod git;
 mod github;
 mod grouping;
+mod history;
 mod integration;
 mod launch;
 mod layout;

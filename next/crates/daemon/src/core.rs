@@ -17,6 +17,7 @@ use serde_json::Value;
 
 use crate::browse::is_git;
 use crate::diff::{self, Scope};
+use crate::history;
 use crate::model::{Model, Own};
 use crate::persist;
 use crate::pty::{self, Event, Term};
@@ -123,7 +124,15 @@ pub struct Core {
     pub mobile: Arc<crate::mobile::Hub>,
     /// The settings file an agent is started with, so its hooks tell this daemon what it does.
     pub hooks: Option<PathBuf>,
+    /// Where each pane's blocks are kept so they come back with the daemon; none keeps nothing.
+    pub history_dir: Option<PathBuf>,
+    /// The panes whose blocks changed since they were saved, and when each was last saved.
+    history_dirty: HashSet<Id>,
+    history_written: HashMap<Id, Instant>,
 }
+
+/// The most often the blocks of a pane are written to disk.
+const HISTORY_EVERY: Duration = Duration::from_secs(2);
 
 impl Core {
     pub fn new(
@@ -148,6 +157,9 @@ impl Core {
             inputs: HashMap::new(),
             blocks_views: HashMap::new(),
             blocks_ids: HashMap::new(),
+            history_dir: None,
+            history_dirty: HashSet::new(),
+            history_written: HashMap::new(),
             diffs: HashMap::new(),
             commit_lists: HashMap::new(),
             events,
@@ -267,6 +279,81 @@ impl Core {
                 .or_insert_with(crate::model::new_id);
             self.blocks_views
                 .insert(pane.to_owned(), (version, mode, blocks));
+            self.history_dirty.insert(pane.to_owned());
+        }
+    }
+
+    /// The files of blocks to write now, serialised here so the caller can write them without the
+    /// lock: those of each pane whose blocks changed and were not written in the last two seconds,
+    /// or all that changed when `force`.
+    pub fn history_writes(&mut self, force: bool) -> Vec<(PathBuf, Id, String)> {
+        let Some(dir) = self.history_dir.clone() else {
+            return Vec::new();
+        };
+        let now = Instant::now();
+        let due: Vec<Id> = self
+            .history_dirty
+            .iter()
+            .filter(|p| {
+                force
+                    || self
+                        .history_written
+                        .get(*p)
+                        .is_none_or(|t| now.duration_since(*t) >= HISTORY_EVERY)
+            })
+            .cloned()
+            .collect();
+        let at = crate::blocks::now_ms();
+        due.into_iter()
+            .filter_map(|pane| {
+                self.history_dirty.remove(&pane);
+                let (_, _, blocks) = self.blocks_views.get(&pane)?;
+                self.history_written.insert(pane.clone(), now);
+                Some((dir.clone(), pane, history::to_text(blocks, at)))
+            })
+            .collect()
+    }
+
+    /// Take away the file of each of these panes that is gone: one written after its pane was
+    /// closed (the write is done without the lock, so a close can come between).
+    pub fn forget_written(&mut self, panes: &[Id]) {
+        let Some(dir) = &self.history_dir else {
+            return;
+        };
+        for pane in panes {
+            let live = self
+                .model
+                .workspaces
+                .iter()
+                .any(|w| w.panes.iter().any(|p| p.id == *pane));
+            if !live {
+                history::remove(dir, pane);
+            }
+        }
+    }
+
+    /// Take away the saved blocks of panes that are gone.
+    fn prune_histories(&mut self) {
+        let Some(dir) = &self.history_dir else {
+            return;
+        };
+        let live: HashSet<&str> = self
+            .model
+            .workspaces
+            .iter()
+            .flat_map(|w| w.panes.iter().map(|p| p.id.as_str()))
+            .collect();
+        let gone: Vec<Id> = self
+            .history_written
+            .keys()
+            .chain(self.history_dirty.iter())
+            .filter(|p| !live.contains(p.as_str()))
+            .cloned()
+            .collect();
+        for pane in gone {
+            history::remove(dir, &pane);
+            self.history_written.remove(&pane);
+            self.history_dirty.remove(&pane);
         }
     }
 
@@ -809,6 +896,7 @@ impl Core {
     }
 
     fn save(&mut self) {
+        self.prune_histories();
         let Some(path) = &self.save_path else { return };
         let text = persist::to_text(&self.model);
         if text != self.last_saved {

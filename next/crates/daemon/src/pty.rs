@@ -198,6 +198,11 @@ impl Term {
         lock(&self.blocks).version()
     }
 
+    /// Give the blocks a daemon saved before it stopped to this shell's store.
+    pub fn restore_blocks(&self, blocks: Vec<contract::Block>, saved_at: u64, now: u64) {
+        lock(&self.blocks).restore(blocks, saved_at, now);
+    }
+
     /// The blocks of a shell started with the integration.
     pub fn blocks_view(&self) -> Option<(u64, BlocksMode, Vec<Block>)> {
         lock(&self.blocks).view()
