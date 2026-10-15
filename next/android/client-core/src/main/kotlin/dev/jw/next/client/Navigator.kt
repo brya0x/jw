@@ -6,6 +6,7 @@ import dev.jw.next.contract.DirListing
 import dev.jw.next.contract.FileListing
 import dev.jw.next.contract.Id
 import dev.jw.next.contract.Node
+import dev.jw.next.contract.ProjectInfo
 
 /** Where the nodes come from: fixtures now, a live daemon later. */
 interface NodeSource {
@@ -74,7 +75,17 @@ interface NodeSource {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
     }
 
-    /** Make a worktree of [repo] on [branch] from [base], in the folder [folder] of `<repo>-wt`, with a shell in it. */
+    /** Read the settings of the repository [repo] is in (its `.jw.toml`); [reply] gets the PC's message when it cannot be used. */
+    fun projectConfig(repo: String, reply: (Result<ProjectInfo>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** Start the panes of a workspace that has none: its repository's layout and setup. */
+    fun startWorkspace(workspace: Id, reply: (Result<Unit>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** Make a worktree of [repo] on [branch] from [base], in the folder [folder] of the repository's worktree folder, and start its panes. */
     fun createWorktree(repo: String, branch: String, base: String?, folder: String, reply: (Result<Id>) -> Unit) {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
     }

@@ -285,7 +285,7 @@ em.live{font-style:normal;display:inline;color:var(--green)} em.live.on{color:va
 .dock button.go[disabled]{opacity:.6}
 .fe .tg.on{color:var(--green)}
 .kv{display:grid;grid-template-columns:64px 1fr;gap:4px 10px;padding:2px 16px 10px;font-size:12px}
-.kv em{font-style:normal;color:var(--dim)}.kv b{font-weight:400;overflow-wrap:anywhere}
+.kv em{font-style:normal;color:var(--dim)}.kv b{font-weight:400;overflow-wrap:anywhere}.kv b.cmd{color:var(--yellow)}
 .sec[data-hold]{user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
 .vsw{display:flex;border-bottom:1px solid var(--line);background:var(--panel)}.vsw button{flex:1;min-height:44px;color:var(--dim);font-size:12px;border-bottom:2px solid transparent}.vsw button[aria-selected=true]{color:var(--blue);border-bottom-color:var(--blue)}
 .src{padding:8px 0;font-size:11.5px;line-height:1.5}.src div{display:flex;gap:8px;padding:0 10px}.src i{font-style:normal;flex:none;width:30px;text-align:right;color:var(--dim);font-size:10.5px}.src span{white-space:pre-wrap;word-break:break-word;flex:1}
@@ -967,22 +967,35 @@ const WTN={jw:['mobile-app','daemon-sock','motion','old'],'mctekk-api':['auth','
 /* a repository whose root is not open as a workspace: only its worktrees are */
 const GHOST={tools:{id:'tools',kind:'root',name:'tools',path:'~/ws/tools',sess:'main'}};
 const rootOf=n=>state.w.find(x=>x.kind!=='wt'&&x.name===n)||GHOST[n];
+/* what the PC says of each repository's .jw.toml (project_config): where worktrees go, the branch's template, the setup and the panes that open, or why it cannot be read */
+const CFG={
+  jw:{file:false,root:'~/ws/jw-wt',branch:'feat/{name}',setup:[],panes:['zsh']},
+  'mctekk-api':{file:true,root:'~/ws/mctekk-api-trees',branch:'bryan/{name}',setup:['bun install --frozen-lockfile','cp .env.example .env'],panes:['nvim','claude']},
+  'mctekk-web':{file:true,err:'.jw.toml, line 2: «{nme}» is no marker (use {name})'},
+  tools:{file:true,root:'~/ws/tools-wt',branch:'feat/{name}',setup:['cargo fetch'],panes:['claude']}};
+const cfgOf=proj=>CFG[proj]||CFG.jw;
 const NOBASE='la rama actual';
 const baseOf=w=>w.kind==='wt'?w.name:NOBASE;
 const freeWs=proj=>{const t=WTN[proj]||[];let i=1;while(t.includes('ws-'+i))i++;return 'ws-'+i};
 /* el nombre del worktree, como el cuadro de w en el PC (REQ-197, REQ-198) */
 function nwCheck(proj,name){
+  const c=cfgOf(proj);
+  if(state.nwCfg==='read') return 'leyendo';
+  if(c.err) return c.err;
   if(!/^[a-z0-9-]+$/.test(name)) return 'solo letras minúsculas, números y guiones';
-  if((WTN[proj]||[]).includes(name)) return name==='old'?'la rama feat/old ya existe':'ya hay un worktree «'+name+'»';
+  if((WTN[proj]||[]).includes(name)) return name==='old'?'la rama '+c.branch.replace('{name}','old')+' ya existe':'ya hay un worktree «'+name+'»';
   return null}
 function nwPrev(){
-  const st=state.nw||'form', proj=state.nwProj, name=state.nwName||freeWs(proj), err=nwCheck(proj,name), r=rootOf(proj);
-  const kv=`<div class="kv"><em>rama</em><b>feat/${name}</b><em>desde</em><b>${state.nwBase}</b><em>carpeta</em><b>${r?r.path:''}-wt/${name}</b></div>`;
-  return (err?`<div class="bad">${err}</div>`:kv)+(st==='fail'&&!err?'<div class="bad">git no pudo crearlo: fatal: a branch named \'feat/'+name+'\' already exists</div>':'')+
+  const st=state.nw||'form', proj=state.nwProj, name=state.nwName||freeWs(proj), err=nwCheck(proj,name), c=cfgOf(proj), branch=(c.branch||'').replace('{name}',name);
+  const kv=!err&&`<div class="kv"><em>rama</em><b>${branch}</b><em>desde</em><b>${state.nwBase}</b><em>carpeta</em><b>${c.root.split('/').pop()}/${name}</b>`+
+    (c.setup.length?c.setup.map((l,i)=>`<em>${i?'':'setup'}</em><b class="cmd">${l}</b>`).join(''):'')+
+    `<em>paneles</em><b>${c.panes.join(' │ ')}${c.setup.length?' │ setup':''}</b></div><div class="note2">${c.file?'según el .jw.toml del repositorio':'sin .jw.toml: como siempre'}</div>`;
+  return (err==='leyendo'?'<div class="note2">leyendo .jw.toml…</div>':err?`<div class="bad">${err}</div>`:kv)+(st==='fail'&&!err?'<div class="bad">git no pudo crearlo: fatal: a branch named \''+branch+'\' already exists</div>':'')+
     `<button class="gobtn" data-act="createwt" ${err||st==='busy'?'disabled':''}>${st==='busy'?'<span class="spin"></span>creando…':'crear y abrir'}</button>
-     <div class="note2">crea el worktree y le abre un shell, como w en el PC</div>`}
+     <div class="note2">crea el worktree y abre los paneles del proyecto, como w en el PC</div>`}
 function defaultWt(){const w=wsOf(state.ws),p=curProj(),pr=rootOf(p);openWt(p,w&&w.kind==='wt'&&pr&&w.proj===pr.id?w.name:NOBASE)}
-function openWt(proj,base){state.nwProj=proj;state.nwBase=base;state.nwName='';state.nw='form';state.sheet='newwt'}
+function openWt(proj,base){state.nwProj=proj;state.nwBase=base;state.nwName='';state.nw='form';state.sheet='newwt';state.nwCfg='read';
+  setTimeout(()=>{if(state.sheet==='newwt'&&state.nwProj===proj){state.nwCfg='ready';const pv=$('#nwprev');if(pv)pv.innerHTML=nwPrev()}},700)}
 function curProj(){const w=wsOf(state.ws);return w.kind==='wt'?w.proj&&rootOf2(w.proj).name:w.kind==='root'?w.name:'jw'}
 function rootOf2(id){return state.w.find(x=>x.id===id)||GHOST[id]}
 
@@ -1337,11 +1350,11 @@ document.addEventListener('click',e=>{if(held){held=false;e.stopPropagation();e.
     case 'sessback':state.sessNew=false;render();break;
     case 'setproj':openWt(t.dataset.proj,NOBASE);render();break;
     case 'pickfolder':state.sheet=null;state.screen='files';state.fs={path:'~/ws',mode:'open',hidden:false};render();break;
-    case 'createwt':{const proj=state.nwProj,name=state.nwName||freeWs(proj),r=rootOf(proj);if(nwCheck(proj,name))break;state.nw='busy';render();
+    case 'createwt':{const proj=state.nwProj,name=state.nwName||freeWs(proj),r=rootOf(proj),c=cfgOf(proj),branch=c.branch.replace('{name}',name);if(nwCheck(proj,name))break;state.nw='busy';render();
       setTimeout(()=>{if(name==='falla'){state.nw='fail';render();return}
-        const id=r.id+'/feat/'+name;(WTN[proj]=WTN[proj]||[]).push(name);
-        state.w.push({id,kind:'wt',proj:r.id,name:'feat/'+name,path:r.path+'-wt/'+name,sess:r.sess,ag:'idle',dev:0,pr:'',last:'Shell nuevo en el worktree.',t:'ahora',att:[]});
-        state.nw='form';state.nwName='';enter(id,'shell')},1400);break}
+        const id=r.id+'/'+branch;(WTN[proj]=WTN[proj]||[]).push(name);
+        state.w.push({id,kind:'wt',proj:r.id,name:branch,path:c.root+'/'+name,sess:r.sess,ag:'idle',dev:0,pr:'',last:'Shell nuevo en el worktree.',t:'ahora',att:[]});
+        state.nw='form';state.nwName='';enter(id,'shell');toast('creado · '+c.panes.join(' │ ')+(c.setup.length?' │ setup corriendo':''))},1400);break}
     case 'createsess':state.sheet=null;state.sessNew=false;toast('sesión creada: '+(state.nsName||'trabajo'));render();break;
   }
 });

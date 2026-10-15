@@ -43,6 +43,7 @@ import dev.jw.next.client.FolderView
 import dev.jw.next.client.Navigator
 import dev.jw.next.client.Screen
 import dev.jw.next.client.WorktreePlan
+import dev.jw.next.client.WorktreeSettings
 import dev.jw.next.client.folderView
 import dev.jw.next.client.freeName
 import dev.jw.next.client.planWorktree
@@ -50,7 +51,6 @@ import dev.jw.next.client.repoName
 import dev.jw.next.client.repos
 import dev.jw.next.client.tildePath
 import dev.jw.next.client.takenNames
-import dev.jw.next.client.worktreesDir
 import dev.jw.next.contract.DirListing
 import dev.jw.next.contract.Id
 import java.util.concurrent.atomic.AtomicInteger
@@ -213,14 +213,23 @@ internal fun BoxScope.WorktreeSheet(source: AppSource, repoAtStart: String, stat
     var waiting by remember(repoAtStart) { mutableStateOf<Id?>(null) }
     val focus = remember { FocusRequester() }
     LaunchedEffect(repoAtStart) { focus.requestFocus() }
+    var settings by remember(repoAtStart) { mutableStateOf<WorktreeSettings>(WorktreeSettings.Reading) }
     LaunchedEffect(repo) {
+        val asked = repo
+        settings = WorktreeSettings.Reading
+        source.projectConfig(asked) { result ->
+            if (repo == asked) settings = result.fold({ WorktreeSettings.Ready(it) }, { WorktreeSettings.Refused(it.message ?: "el PC no pudo leer el .jw.toml") })
+        }
+    }
+    val root = (settings as? WorktreeSettings.Ready)?.info?.root
+    LaunchedEffect(root) {
         there = null
-        source.listDir(worktreesDir(repo), false) { result -> there = result.getOrNull() }
+        if (root != null) source.listDir(root, false) { result -> if ((settings as? WorktreeSettings.Ready)?.info?.root == root) there = result.getOrNull() }
     }
     OpenWhenShown(source, waiting, state, nav, set)
-    val taken = takenNames(repo, there, session)
+    val taken = if (root == null) emptySet() else takenNames(root, there, session)
     val name = typed ?: freeName(taken)
-    val plan = planWorktree(repo, name, taken)
+    val plan = planWorktree(settings, name, taken)
     val make = {
         if (!busy && plan is WorktreePlan.Ok) {
             busy = true
@@ -258,16 +267,22 @@ internal fun BoxScope.WorktreeSheet(source: AppSource, repoAtStart: String, stat
                 },
             )
             when (plan) {
+                WorktreePlan.Reading -> Mono("leyendo .jw.toml…", Palette.dim, 12)
                 is WorktreePlan.Wrong -> Mono(plan.why, Palette.red, 12, lines = 3)
                 is WorktreePlan.Ok -> Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Row { Mono("rama    ", Palette.dim, 12); Mono(plan.branch, Palette.fg, 12) }
                     Row { Mono("desde   ", Palette.dim, 12); Mono("la rama actual", Palette.fg, 12) }
-                    Row { Mono("carpeta ", Palette.dim, 12); Mono("${repoName(repo)}-wt/${plan.folder}", Palette.fg, 12, lines = 2) }
+                    Row { Mono("carpeta ", Palette.dim, 12); Mono(plan.place, Palette.fg, 12, lines = 2) }
+                    plan.info.setup.forEachIndexed { i, line ->
+                        Row { Mono(if (i == 0) "setup   " else "        ", Palette.dim, 12); Mono(line, Palette.yellow, 12, lines = 2) }
+                    }
+                    Row { Mono("paneles ", Palette.dim, 12); Mono((plan.info.panes + listOf("setup").filter { plan.info.setup.isNotEmpty() }).joinToString(" │ "), Palette.fg, 12, lines = 2) }
+                    Mono(if (plan.info.source != null) "según el .jw.toml del repositorio" else "sin .jw.toml: como siempre", Palette.dim, 12)
                 }
             }
             if (error != null) Mono(error.orEmpty(), Palette.red, 12, lines = 5)
             SheetAction("↵", if (busy) "creando…" else "crear y abrir", Palette.blue, enabled = !busy && plan is WorktreePlan.Ok, click = make)
-            Mono("Crea el worktree y le abre un shell, como w en el PC.", Palette.dim, 12, lines = 2)
+            Mono("Crea el worktree y abre los paneles del proyecto, como w en el PC.", Palette.dim, 12, lines = 2)
         }
     }
 }

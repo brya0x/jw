@@ -3,6 +3,7 @@ package dev.jw.next.client
 import dev.jw.next.contract.DirListing
 import dev.jw.next.contract.Id
 import dev.jw.next.contract.Node
+import dev.jw.next.contract.ProjectInfo
 import dev.jw.next.contract.WorkspaceSummary
 
 /** A path with the PC's home written as `~`. */
@@ -49,15 +50,9 @@ fun repoName(repo: String): String = repo.trimEnd('/').substringAfterLast('/').i
 /** The repositories to make a worktree of, each once, in the session's order. */
 fun repos(session: Node.Session): List<String> = session.workspaces.mapNotNull { it.repo() }.distinct()
 
-/** Where the worktrees of [repo] go: `<repo>-wt`, beside it. */
-fun worktreesDir(repo: String): String {
-    val trimmed = repo.trimEnd('/')
-    return "${trimmed.substringBeforeLast('/', "")}/${repoName(trimmed)}-wt"
-}
-
-/** The names a worktree of [repo] cannot take: the folders there and the workspaces already open in it. */
-fun takenNames(repo: String, there: DirListing?, session: Node.Session): Set<String> {
-    val dir = worktreesDir(repo)
+/** The names a worktree cannot take in [root]: the folders there and the workspaces already open in it (REQ-350). */
+fun takenNames(root: String, there: DirListing?, session: Node.Session): Set<String> {
+    val dir = root.trimEnd('/')
     return there?.dirs.orEmpty().map { it.name }.toSet() +
         session.workspaces.filter { it.path.substringBeforeLast('/') == dir }.map { it.path.substringAfterLast('/') }
 }
@@ -65,17 +60,52 @@ fun takenNames(repo: String, there: DirListing?, session: Node.Session): Set<Str
 /** The first `ws-N` not in [taken]. */
 fun freeName(taken: Set<String>): String = generateSequence(1) { it + 1 }.map { "ws-$it" }.first { it !in taken }
 
-/** What a name will make, or why it cannot be used (REQ-206, REQ-207). */
+/** What the sheet knows of the repository's `.jw.toml`: the PC's answer to `project_config` (REQ-347, REQ-348). */
+sealed interface WorktreeSettings {
+    data object Reading : WorktreeSettings
+    data class Ready(val info: ProjectInfo) : WorktreeSettings
+    data class Refused(val why: String) : WorktreeSettings
+}
+
+/** What a name will make, or why it cannot be used (REQ-210, REQ-211, REQ-347 to REQ-349). */
 sealed interface WorktreePlan {
-    data class Ok(val branch: String, val folder: String) : WorktreePlan
+    /** [place] is the last folder of the settings' `root` and the name; [info] says the setup and the panes. */
+    data class Ok(val branch: String, val folder: String, val place: String, val info: ProjectInfo) : WorktreePlan
+    data object Reading : WorktreePlan
     data class Wrong(val why: String) : WorktreePlan
 }
 
-fun planWorktree(repo: String, name: String, taken: Set<String>): WorktreePlan {
+fun planWorktree(settings: WorktreeSettings, name: String, taken: Set<String>): WorktreePlan {
+    val info = when (settings) {
+        WorktreeSettings.Reading -> return WorktreePlan.Reading
+        is WorktreeSettings.Refused -> return WorktreePlan.Wrong(settings.why)
+        is WorktreeSettings.Ready -> settings.info
+    }
     val valid = name.isNotEmpty() && name.length <= 40 && name.all { it in 'a'..'z' || it in '0'..'9' || it == '-' } && !name.startsWith('-')
+    val place = "${repoName(info.root)}/$name"
     return when {
         !valid -> WorktreePlan.Wrong("nombre no válido: usa minúsculas, números y guiones")
-        name in taken -> WorktreePlan.Wrong("${repoName(repo)}-wt/$name ya existe")
-        else -> WorktreePlan.Ok("feat/$name", name)
+        name in taken -> WorktreePlan.Wrong("$place ya existe")
+        else -> WorktreePlan.Ok(info.branch.replace("{name}", name), name, place, info)
+    }
+}
+
+/**
+ * A worktree just made gets the panes of its repository (REQ-351); when the PC refuses [start], it gets one shell and
+ * [reply] says so with the PC's message (REQ-352).
+ */
+fun worktreeStarted(
+    made: Result<Id>,
+    start: (Id, (Result<Unit>) -> Unit) -> Unit,
+    shell: (Id, (Result<Id>) -> Unit) -> Unit,
+    reply: (Result<Id>) -> Unit,
+) {
+    val workspace = made.getOrElse { return reply(made) }
+    start(workspace) { started ->
+        if (started.isSuccess) return@start reply(made)
+        val why = started.exceptionOrNull()?.message ?: "el PC no pudo abrir los paneles"
+        shell(workspace) { pane ->
+            reply(Result.failure(Exception(if (pane.isSuccess) "se abrió con un shell, pero $why" else "se abrió, pero sin paneles ni shell: $why")))
+        }
     }
 }

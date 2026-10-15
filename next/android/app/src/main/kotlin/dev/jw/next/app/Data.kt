@@ -6,6 +6,7 @@ import dev.jw.next.client.CacheResult
 import dev.jw.next.client.NodeCache
 import dev.jw.next.client.NodeSource
 import dev.jw.next.client.Seen
+import dev.jw.next.client.worktreeStarted
 import dev.jw.next.contract.ClientMsg
 import dev.jw.next.contract.Cmd
 import dev.jw.next.contract.ContractJson
@@ -19,6 +20,7 @@ import dev.jw.next.contract.FileListing
 import dev.jw.next.contract.Id
 import dev.jw.next.contract.Node
 import dev.jw.next.contract.Peer
+import dev.jw.next.contract.ProjectInfo
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.serialization.DeserializationStrategy
@@ -162,11 +164,21 @@ abstract class ProtocolSource : AppSource() {
         command(Cmd.OpenFolder(path)) { r -> withShell(r.workspaceId("el PC no pudo abrir la carpeta"), reply) }
     }
 
-    override fun createWorktree(repo: String, branch: String, base: String?, folder: String, reply: (Result<Id>) -> Unit) {
-        command(Cmd.CreateWorktree(repo, branch, base, folder)) { r -> withShell(r.workspaceId("el PC no pudo crear el worktree"), reply) }
+    override fun projectConfig(repo: String, reply: (Result<ProjectInfo>) -> Unit) {
+        command(Cmd.ProjectConfig(repo)) { r -> reply(r.read(ProjectInfo.serializer())) }
     }
 
-    /** A workspace just made gets a shell, as the terminal client does (REQ-208); [reply] gets its id, or what failed. */
+    override fun startWorkspace(workspace: Id, reply: (Result<Unit>) -> Unit) {
+        command(Cmd.StartWorkspace(workspace)) { reply(it.done("el PC no pudo abrir los paneles")) }
+    }
+
+    override fun createWorktree(repo: String, branch: String, base: String?, folder: String, reply: (Result<Id>) -> Unit) {
+        command(Cmd.CreateWorktree(repo, branch, base, folder)) { r ->
+            worktreeStarted(r.workspaceId("el PC no pudo crear el worktree"), ::startWorkspace, ::newPane, reply)
+        }
+    }
+
+    /** A folder just opened gets a shell, as the terminal client does (REQ-208); [reply] gets its id, or what failed. */
     private fun withShell(made: Result<Id>, reply: (Result<Id>) -> Unit) {
         val workspace = made.getOrElse { return reply(made) }
         command(Cmd.NewPane(workspace)) { p ->
