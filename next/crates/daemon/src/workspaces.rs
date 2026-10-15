@@ -10,7 +10,7 @@ use crate::git;
 use crate::model::{Workspace, new_id};
 use crate::server::Shared;
 
-fn absolute(path: &str) -> Result<PathBuf, crate::commands::ErrorBody> {
+pub fn absolute(path: &str) -> Result<PathBuf, crate::commands::ErrorBody> {
     let p = Path::new(path);
     if !p.is_absolute() {
         return Err(err(
@@ -94,7 +94,7 @@ pub fn open_folder(shared: &Shared, path: &str) -> Done {
     )
 }
 
-/// A folder name a person gave: one path component, nothing that moves out of `<repo>-wt/`.
+/// A folder name a person gave: one path component, nothing that moves out of the worktrees' folder.
 fn valid_folder(name: &str) -> bool {
     !name.is_empty()
         && name.chars().count() <= 80
@@ -105,8 +105,9 @@ fn valid_folder(name: &str) -> bool {
             .any(|c| c == '/' || c == '\\' || c.is_control())
 }
 
-/// The worktree goes beside the repository, in `<repo>-wt/<folder>`, the folder being the
-/// given name or else the branch with its slashes made dashes.
+/// The worktree goes in `<root>/<folder>`, the root being the one of the repository's `.jw.toml`
+/// (`<repo>-wt`, beside it, by default) and the folder the given name or else the branch with its
+/// slashes made dashes.
 pub fn create_worktree(
     shared: &Shared,
     repo: &str,
@@ -143,14 +144,8 @@ pub fn create_worktree(
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "repo".into());
-    let parent = top.parent().ok_or_else(|| {
-        err(
-            ErrorCode::BadRequest,
-            "the repository has no parent directory",
-        )
-    })?;
-    let dest = parent
-        .join(format!("{repo_name}-wt"))
+    let dest = crate::start::load(&top)?
+        .root
         .join(folder.map_or_else(|| git::slug(branch), str::to_owned));
     let dest_text = dest.to_string_lossy().into_owned();
     already_open(shared, &dest_text)?;

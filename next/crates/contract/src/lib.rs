@@ -241,6 +241,17 @@ pub enum Cmd {
         workspace: Id,
         query: String,
     },
+    /// Read the settings of the repository `repo` is in (its `.jw.toml`, with the defaults
+    /// for what it does not say). The result is a `ProjectInfo`.
+    ProjectConfig {
+        repo: String,
+    },
+    /// Start the panes of a workspace that has none: a worktree's from its repository's
+    /// `.jw.toml` (the layout and, in a pane of its own, the setup), any other's one shell.
+    /// The result is `{panes: [id]}`, in the order of the layout.
+    StartWorkspace {
+        workspace: Id,
+    },
     /// Open a pane: the user's shell, with `program` run inside it when given (the shell
     /// starts it, and is still there when it ends).
     NewPane {
@@ -436,6 +447,22 @@ pub struct FileListing {
     pub path: String,
     pub entries: Vec<FileEntry>,
     pub total: usize,
+}
+
+/// The result of `project_config`: what a worktree of the repository will be. `panes` are the
+/// programs of the layout's panes (the `setup` pane is not among them).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectInfo {
+    /// The `.jw.toml` read; none when the repository has no file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// The folder worktrees go in.
+    pub root: String,
+    /// The template of a worktree's branch; clients replace `{name}`.
+    pub branch: String,
+    /// The setup commands as written.
+    pub setup: Vec<String>,
+    pub panes: Vec<String>,
 }
 
 /// The result of `find_files`: paths relative to the workspace's folder, cut when `cut`.

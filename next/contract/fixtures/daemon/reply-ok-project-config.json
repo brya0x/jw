@@ -1,0 +1,17 @@
+{
+  "t": "reply",
+  "id": "c14",
+  "ok": true,
+  "result": {
+    "source": "/home/u/code/app/.jw.toml",
+    "root": "/home/u/code/app-trees",
+    "branch": "bryan/{name}",
+    "setup": [
+      "bun install --frozen-lockfile"
+    ],
+    "panes": [
+      "nvim",
+      "claude"
+    ]
+  }
+}

@@ -275,6 +275,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "toml",
  "tungstenite",
  "uuid",
  "vt100",

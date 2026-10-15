@@ -161,6 +161,14 @@ sealed interface Cmd {
     @Serializable @SerialName("sync_workspace")
     data class SyncWorkspace(val workspace: Id) : Cmd
 
+    /** Read the settings of the repository [repo] is in (its `.jw.toml`); the result is a [ProjectInfo]. */
+    @Serializable @SerialName("project_config")
+    data class ProjectConfig(val repo: String) : Cmd
+
+    /** Start the panes of a workspace that has none; the result is `{panes: [id]}`. */
+    @Serializable @SerialName("start_workspace")
+    data class StartWorkspace(val workspace: Id) : Cmd
+
     @Serializable @SerialName("new_pane")
     data class NewPane(val workspace: Id, val program: List<String>? = null, val beside: Id? = null, val dir: SplitDir? = null) : Cmd
 
@@ -344,6 +352,16 @@ data class FileEntry(
 /** The result of `list_files`: [path] is relative to the workspace's folder; [entries] is cut to the first ones when [total] is more than they are. */
 @Serializable
 data class FileListing(val path: String, val entries: List<FileEntry>, val total: Int)
+
+/** The result of `project_config`: [panes] are the programs of the layout's panes, the `setup` pane not among them. */
+@Serializable
+data class ProjectInfo(
+    val source: String? = null,
+    val root: String,
+    val branch: String,
+    val setup: List<String>,
+    val panes: List<String>,
+)
 
 /** The result of `list_dir`: [dirs] is cut to the first ones when [total] is more than they are. */
 @Serializable

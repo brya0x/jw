@@ -544,6 +544,8 @@ pub struct View {
     /// The folder browser and the worktree box, while one is open.
     picker: Option<open::Picker>,
     worktree: Option<open::Worktree>,
+    /// Repositories whose `.jw.toml` the worktree box waits to hear of.
+    project_asks: Vec<std::path::PathBuf>,
     /// A workspace made by the client's own request, to open when it shows up in the session
     /// (or at the time given, in `now_ms`, if it does not).
     goto: Option<(String, u64)>,
@@ -609,6 +611,7 @@ impl View {
             launcher: None,
             picker: None,
             worktree: None,
+            project_asks: Vec::new(),
             goto: None,
             full: false,
             new_pane: None,
@@ -1283,11 +1286,33 @@ impl View {
             self.flash = format!("«{name}» no es un repositorio git: w necesita uno");
             return;
         };
+        self.project_asks.push(repo.clone());
         self.worktree = Some(open::Worktree::new(
             repo,
             from.unwrap_or_else(|| "HEAD".into()),
             self.open_paths(),
         ));
+    }
+
+    /// The repositories whose settings the worktree box asks the daemon for, once.
+    pub fn take_project_asks(&mut self) -> Vec<std::path::PathBuf> {
+        std::mem::take(&mut self.project_asks)
+    }
+
+    /// The daemon's answer to `project_config` for `repo`: it goes to the worktree box if that
+    /// is still open and for the same repository.
+    pub fn project_replied(&mut self, repo: &std::path::Path, reply: Reply) {
+        let Some(t) = self.worktree.as_mut().filter(|t| t.repo == repo) else {
+            return;
+        };
+        t.set_config(match reply {
+            Ok(Ok(Some(v))) => {
+                serde_json::from_value::<contract::ProjectInfo>(v).map_err(|e| e.to_string())
+            }
+            Ok(Ok(None)) => Err("el daemon no contestó nada".to_owned()),
+            Ok(Err(e)) => Err(e.message),
+            Err(e) => Err(e.to_string()),
+        });
     }
 
     /// A key in the folder browser.
@@ -3780,19 +3805,41 @@ fn check_changes(view: &mut View, client: &mut Client, workspace: String) {
 }
 
 /// A workspace the daemon made for the client: give it a shell, and open it when it appears.
-fn shown_in_a_pane(view: &mut View, client: &mut Client, reply: Reply, failed: &str) {
+fn shown_in_a_pane(view: &mut View, client: &mut Client, reply: Reply, failed: &str, start: bool) {
     match reply {
         Ok(Ok(result)) => {
             if let Some(ws) = result.as_ref().and_then(|r| r["workspace"].as_str()) {
-                match client.cmd(Cmd::NewPane {
-                    workspace: ws.to_owned(),
-                    program: None,
-                    beside: None,
-                    dir: None,
-                }) {
-                    Ok(Ok(_)) => {}
-                    Ok(Err(e)) => view.manage_failed("No se pudo abrir un panel", &e.message),
-                    Err(e) => view.manage_failed("No se pudo abrir un panel", &e.to_string()),
+                // A worktree starts the panes its repository's `.jw.toml` says; when that
+                // cannot be done, or for a folder, it is one shell.
+                let started = start && {
+                    match client.cmd_within(
+                        Cmd::StartWorkspace {
+                            workspace: ws.to_owned(),
+                        },
+                        ASK_WAIT,
+                    ) {
+                        Ok(Ok(_)) => true,
+                        Ok(Err(e)) => {
+                            view.manage_failed("No se pudieron abrir los paneles", &e.message);
+                            false
+                        }
+                        Err(e) => {
+                            view.manage_failed("No se pudieron abrir los paneles", &e.to_string());
+                            false
+                        }
+                    }
+                };
+                if !started {
+                    match client.cmd(Cmd::NewPane {
+                        workspace: ws.to_owned(),
+                        program: None,
+                        beside: None,
+                        dir: None,
+                    }) {
+                        Ok(Ok(_)) => {}
+                        Ok(Err(e)) => view.manage_failed("No se pudo abrir un panel", &e.message),
+                        Err(e) => view.manage_failed("No se pudo abrir un panel", &e.to_string()),
+                    }
                 }
                 view.goto(ws);
             }
@@ -3902,6 +3949,15 @@ pub fn run() -> Result<(), String> {
             let _ = client.cmd(Cmd::MarkSeen { node, rev });
         }
         serve_asks(&mut view, &mut client);
+        for repo in view.take_project_asks() {
+            let reply = client.cmd_within(
+                Cmd::ProjectConfig {
+                    repo: repo.to_string_lossy().into_owned(),
+                },
+                ASK_WAIT,
+            );
+            view.project_replied(&repo, reply);
+        }
         while let Ok(reply) = sync_rx.try_recv() {
             view.sync_done(reply);
         }
@@ -4022,6 +4078,7 @@ pub fn run() -> Result<(), String> {
                             &mut client,
                             reply,
                             "No se pudo abrir la carpeta",
+                            false,
                         );
                     }
                 }
@@ -4045,6 +4102,7 @@ pub fn run() -> Result<(), String> {
                         &mut client,
                         reply,
                         "No se pudo crear el worktree",
+                        true,
                     );
                 }
                 After::Sync { workspace } => spawn_sync(workspace, sync_tx.clone()),
@@ -6850,14 +6908,84 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// What the daemon answers to `project_config`.
+    fn project_reply(root: &std::path::Path, setup: Option<&[&str]>) -> Reply {
+        Ok(Ok(Some(serde_json::json!({
+            "source": setup.map(|_| root.join(".jw.toml")),
+            "root": root,
+            "branch": "feat/{name}",
+            "setup": setup.unwrap_or(&[]),
+            "panes": if setup.is_some() { vec!["nvim", "claude"] } else { vec!["zsh"] },
+        }))))
+    }
+
+    #[test]
+    fn the_box_shows_the_setup_and_the_panes_the_repository_asks_for_and_a_refusal() {
+        let root = disk("wset");
+        let mut v = view_on(&root);
+        tap(&mut v, 'w');
+        let _ = v.take_project_asks();
+        v.project_replied(
+            &root.join("app"),
+            project_reply(
+                &root.join("app-wt"),
+                Some(&["bun install", "cp .env.example .env"]),
+            ),
+        );
+        let t = v.plain(120, 30);
+        assert!(t.contains("setup     bun install"), "{t}");
+        assert!(t.contains("          cp .env.example .env"), "{t}");
+        assert!(t.contains("paneles   nvim │ claude │ setup"), "{t}");
+        assert!(t.contains("según el .jw.toml de app"), "{t}");
+        // An answer for another repository is not this box's.
+        v.project_replied(
+            &root.join("other"),
+            Ok(Err(contract::ErrorBody {
+                code: contract::ErrorCode::BadRequest,
+                message: "x".into(),
+            })),
+        );
+        assert!(v.plain(120, 30).contains("paneles   nvim"));
+        // A repository with no file: its panes and a line that says so.
+        let mut v = view_on(&root);
+        tap(&mut v, 'w');
+        v.project_replied(&root.join("app"), project_reply(&root.join("app-wt"), None));
+        let t = v.plain(120, 30);
+        assert!(t.contains("paneles   zsh"), "{t}");
+        assert!(t.contains("sin .jw.toml: como siempre"), "{t}");
+        // The daemon's refusal is the box's whole content and ↵ does nothing.
+        let mut v = view_on(&root);
+        tap(&mut v, 'w');
+        v.project_replied(
+            &root.join("app"),
+            Ok(Err(contract::ErrorBody {
+                code: contract::ErrorCode::BadRequest,
+                message: ".jw.toml, line 3: «{nme}» is no marker (use {name})".into(),
+            })),
+        );
+        let t = v.plain(120, 30);
+        assert!(t.contains(".jw.toml, line 3"), "{t}");
+        assert!(!t.contains("y abrir"), "{t}");
+        assert_eq!(v.press_key(plain(KeyCode::Enter)), After::Continue);
+        assert!(v.worktree.is_some());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn w_makes_a_worktree_of_the_project_and_only_of_a_repository() {
         let root = disk("w");
         let mut v = view_on(&root);
         // The first workspace is a worktree of `app`, on `feat/login`.
         assert_eq!(tap(&mut v, 'w'), After::Continue);
+        // The box asks the daemon for the repository's settings and waits for them.
+        assert_eq!(v.take_project_asks(), [root.join("app")]);
         let t = v.plain(120, 30);
         assert!(t.contains("worktree nuevo de app"), "{t}");
+        assert!(t.contains("leyendo .jw.toml…"), "{t}");
+        assert_eq!(v.press_key(plain(KeyCode::Enter)), After::Continue);
+        assert!(v.worktree.is_some(), "↵ does nothing while it waits");
+        v.project_replied(&root.join("app"), project_reply(&root.join("app-wt"), None));
+        let t = v.plain(120, 30);
         assert!(t.contains("nombre    ws-1▏"), "{t}");
         assert!(t.contains("rama      feat/ws-1"), "{t}");
         assert!(t.contains("desde     feat/login"), "{t}");
@@ -6935,5 +7063,105 @@ mod tests {
         assert!(matches!(tap(&mut v, 'o'), After::Write { .. }));
         assert!(matches!(tap(&mut v, 'w'), After::Write { .. }));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A daemon of its own in `/tmp`, with a repository `app` that has one commit.
+    fn daemon_with_repo(name: &str, jw: &str) -> (std::path::PathBuf, daemon::Daemon, Client) {
+        let dir = std::path::PathBuf::from(format!("/tmp/jwn-tu-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("app")).unwrap();
+        let dir = std::fs::canonicalize(dir).unwrap();
+        let git = |args: &[&str]| {
+            let st = std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir.join("app"))
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .status()
+                .unwrap();
+            assert!(st.success());
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "i"]);
+        std::fs::write(dir.join("app/.jw.toml"), jw).unwrap();
+        let config = daemon::Config {
+            socket: dir.join("s.sock"),
+            state_dir: dir.join("state"),
+            shell: Some("/bin/sh".into()),
+            tcp: None,
+            env: Vec::new(),
+            blocks: true,
+            link: daemon::LinkConfig::off(),
+            hook_exe: None,
+            gh: None,
+            github_every: Duration::from_millis(100),
+        };
+        let d = daemon::Daemon::start(config.clone()).unwrap();
+        let c = Client::connect(&config.socket, "test").unwrap();
+        (dir, d, c)
+    }
+
+    fn panes_of(c: &mut Client, ws: &str) -> usize {
+        c.open(ws).unwrap();
+        assert!(
+            c.wait_until(Duration::from_secs(5), |c| c.nodes.contains_key(ws))
+                .unwrap()
+        );
+        c.nodes[ws]["panes"].as_array().unwrap().len()
+    }
+
+    #[test]
+    fn a_new_worktree_gets_the_panes_of_its_repository_and_when_that_fails_one_shell() {
+        let (dir, d, mut c) = daemon_with_repo("start", "setup = [\"true\"]\n");
+        let repo = dir.join("app");
+        let make = |c: &mut Client, name: &str| {
+            c.cmd(Cmd::CreateWorktree {
+                repo: repo.to_string_lossy().into_owned(),
+                branch: format!("feat/{name}"),
+                base: None,
+                folder: Some(name.to_owned()),
+            })
+        };
+        let mut v = fixture_view();
+
+        // With a setup there is a shell and the setup's pane.
+        let reply = make(&mut c, "one");
+        let ws = reply.as_ref().unwrap().as_ref().unwrap().as_ref().unwrap()["workspace"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        shown_in_a_pane(&mut v, &mut c, reply, "x", true);
+        assert_eq!(panes_of(&mut c, &ws), 2);
+        assert!(v.manage.is_none(), "nothing failed");
+        assert!(v.goto.is_some(), "and the client goes there");
+
+        // A file that went bad after the worktree was made: the message is shown and the workspace still gets a shell.
+        let reply = make(&mut c, "two");
+        std::fs::write(repo.join(".jw.toml"), "setup = [").unwrap();
+        let ws = reply.as_ref().unwrap().as_ref().unwrap().as_ref().unwrap()["workspace"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        shown_in_a_pane(&mut v, &mut c, reply, "x", true);
+        assert!(
+            matches!(&v.manage, Some(Manage::Failed { text, .. }) if text.contains(".jw.toml")),
+            "the message is shown"
+        );
+        assert_eq!(panes_of(&mut c, &ws), 1);
+
+        // Without `start` (a folder) it is one shell, whatever the file says.
+        std::fs::write(repo.join(".jw.toml"), "setup = [\"true\"]\n").unwrap();
+        v.manage = None;
+        let reply = c.cmd(Cmd::OpenFolder {
+            path: repo.to_string_lossy().into_owned(),
+        });
+        let ws = reply.as_ref().unwrap().as_ref().unwrap().as_ref().unwrap()["workspace"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        shown_in_a_pane(&mut v, &mut c, reply, "x", false);
+        assert_eq!(panes_of(&mut c, &ws), 1);
+        d.stop();
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

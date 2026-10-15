@@ -12,6 +12,7 @@ use crate::files;
 use crate::panes;
 use crate::rename;
 use crate::server::Shared;
+use crate::start;
 use crate::sync;
 use crate::workspaces;
 
@@ -59,6 +60,8 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
         } => {
             workspaces::create_worktree(shared, &repo, &branch, base.as_deref(), folder.as_deref())
         }
+        Cmd::ProjectConfig { repo } => start::project_config(shared, &repo),
+        Cmd::StartWorkspace { workspace } => start::start_workspace(shared, &workspace),
         Cmd::RemoveWorkspace {
             workspace,
             remove_worktree,

@@ -20,10 +20,12 @@ mod model;
 mod panes;
 mod persist;
 mod procs;
+mod project;
 mod pty;
 mod rename;
 mod replies;
 mod server;
+mod start;
 mod sync;
 mod workspaces;
 

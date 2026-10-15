@@ -251,3 +251,17 @@ fn the_reply_of_list_files_is_a_file_listing() {
     assert_eq!(listing.entries[3].kind, contract::FileKind::Link);
     assert_eq!(serde_json::to_value(&listing).unwrap(), doc["result"]);
 }
+
+/// The result of `project_config` in the fixture is what `ProjectInfo` writes and reads.
+#[test]
+fn the_reply_of_project_config_is_a_project_info() {
+    let docs = fixtures("daemon");
+    let (_, doc) = docs
+        .iter()
+        .find(|(n, _)| n == "reply-ok-project-config.json")
+        .expect("the fixture");
+    let info: contract::ProjectInfo = serde_json::from_value(doc["result"].clone()).unwrap();
+    assert_eq!(info.branch, "bryan/{name}");
+    assert_eq!(info.panes, ["nvim", "claude"]);
+    assert_eq!(serde_json::to_value(&info).unwrap(), doc["result"]);
+}

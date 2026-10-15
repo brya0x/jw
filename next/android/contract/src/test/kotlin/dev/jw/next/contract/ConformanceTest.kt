@@ -219,4 +219,15 @@ class ConformanceTest {
         assertEquals("$ ls", node.screen.lines[2])
         assertEquals(4, node.screen.cursor.col)
     }
+
+    /** The result of `project_config` in the fixture is what [ProjectInfo] reads, and writes back as it was. */
+    @Test
+    fun theReplyOfProjectConfigIsAProjectInfo() {
+        val reply = fixtures("daemon").first { it.first == "reply-ok-project-config.json" }.second
+        val result = (ContractJson.decodeFromJsonElement(DaemonMsg.serializer(), reply) as DaemonMsg.Reply).result!!
+        val info = ContractJson.decodeFromJsonElement(ProjectInfo.serializer(), result)
+        assertEquals("bryan/{name}", info.branch)
+        assertEquals(listOf("nvim", "claude"), info.panes)
+        assertEquals(result, ContractJson.encodeToJsonElement(ProjectInfo.serializer(), info))
+    }
 }

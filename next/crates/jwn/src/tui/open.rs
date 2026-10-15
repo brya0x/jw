@@ -7,6 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use contract::ProjectInfo;
 use crossterm::event::KeyCode;
 use daemon::browse::{home, is_git, subdirs};
 
@@ -372,8 +373,22 @@ pub fn draw_picker(g: &mut Grid, (x, y, w, h): Rect, p: &Picker, is_open: &dyn F
 /// What making a worktree will make, or why it cannot be made.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Plan {
-    Ok { branch: String, folder: PathBuf },
+    Ok {
+        branch: String,
+        folder: PathBuf,
+    },
+    /// The daemon has not yet said what the repository's `.jw.toml` holds.
+    Reading,
     Wrong(String),
+}
+
+/// What the box knows of the repository's settings (`.jw.toml`): the daemon's answer to
+/// `project_config`, which says where the worktree goes, its branch and what opens with it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Config {
+    Reading,
+    Ready(ProjectInfo),
+    Refused(String),
 }
 
 /// What a key in the worktree box asks.
@@ -399,6 +414,7 @@ pub struct Worktree {
     picked: bool,
     /// The folders of the open workspaces, to tell a worktree that is already there.
     open: Vec<PathBuf>,
+    pub config: Config,
     plan: Plan,
 }
 
@@ -420,13 +436,6 @@ fn repo_name(repo: &Path) -> String {
         .map_or_else(|| "repo".into(), |n| n.to_string_lossy().into_owned())
 }
 
-/// The folder worktrees of `repo` go in: `<repo>-wt`, beside it.
-fn worktrees_dir(repo: &Path) -> PathBuf {
-    let name = format!("{}-wt", repo_name(repo));
-    repo.parent()
-        .map_or_else(|| PathBuf::from(&name), |p| p.join(&name))
-}
-
 fn branch_exists(repo: &Path, branch: &str) -> bool {
     git_out(
         repo,
@@ -441,32 +450,49 @@ fn branch_exists(repo: &Path, branch: &str) -> bool {
 }
 
 impl Worktree {
-    /// A box for a worktree of `repo` starting from `from`, with the next `ws-N` free as the name.
+    /// A box for a worktree of `repo` starting from `from`. It waits for the daemon to say what
+    /// the repository's settings are (`set_config`) before it can name a place or a branch.
     pub fn new(repo: PathBuf, from: String, open: Vec<PathBuf>) -> Worktree {
-        let mut w = Worktree {
+        Worktree {
             repo,
             from,
-            name: String::new(),
+            name: "ws-1".into(),
             picked: true,
             open,
-            plan: Plan::Wrong(String::new()),
-        };
-        // The first `ws-N` that is free; a thousand taken is a sign nothing will be.
-        for n in 1..=1000 {
-            w.name = format!("ws-{n}");
-            if matches!(w.check(), Plan::Ok { .. }) {
-                break;
-            }
+            config: Config::Reading,
+            plan: Plan::Reading,
         }
-        w.plan = w.check();
-        w
     }
 
     pub fn plan(&self) -> &Plan {
         &self.plan
     }
 
+    /// The daemon's answer to `project_config`. While the name is still the suggested one it
+    /// moves to the first `ws-N` that is free.
+    pub fn set_config(&mut self, reply: Result<ProjectInfo, String>) {
+        self.config = match reply {
+            Ok(info) => Config::Ready(info),
+            Err(why) => Config::Refused(why),
+        };
+        if self.picked {
+            // A thousand taken is a sign nothing will be.
+            for n in 1..=1000 {
+                self.name = format!("ws-{n}");
+                if matches!(self.check(), Plan::Ok { .. }) {
+                    break;
+                }
+            }
+        }
+        self.plan = self.check();
+    }
+
     fn check(&self) -> Plan {
+        let info = match &self.config {
+            Config::Reading => return Plan::Reading,
+            Config::Refused(why) => return Plan::Wrong(why.clone()),
+            Config::Ready(info) => info,
+        };
         let name = &self.name;
         let valid = !name.is_empty()
             && name.len() <= 40
@@ -477,8 +503,8 @@ impl Worktree {
         if !valid {
             return Plan::Wrong("nombre no válido: usa minúsculas, números y guiones".into());
         }
-        let folder = worktrees_dir(&self.repo).join(name);
-        let branch = format!("feat/{name}");
+        let folder = Path::new(&info.root).join(name);
+        let branch = info.branch.replace("{name}", name);
         if self.open.contains(&folder) {
             return Plan::Wrong(format!("{}/{name} ya existe", repo_name(&self.repo)));
         }
@@ -535,17 +561,45 @@ pub fn draw_worktree(g: &mut Grid, (x, y, w, _): Rect, t: &Worktree) {
             (format!("nombre    {}▏", t.name), plain.bold()),
             (String::new(), plain),
         ];
-        match t.plan() {
-            Plan::Wrong(why) => v.extend([
+        match (t.plan(), &t.config) {
+            (Plan::Reading, _) => v.extend([
+                ("leyendo .jw.toml…".to_owned(), Style::fg(look::dim())),
+                (String::new(), plain),
+                (String::new(), plain),
+            ]),
+            (Plan::Wrong(why), _) => v.extend([
                 (why.clone(), Style::fg(look::red())),
                 (String::new(), plain),
                 (String::new(), plain),
             ]),
-            Plan::Ok { branch, folder } => v.extend([
-                (format!("rama      {branch}"), Style::fg(look::green())),
-                (format!("desde     {}", t.from), plain),
-                (format!("carpeta   {}", short(folder)), plain),
-            ]),
+            (Plan::Ok { branch, folder }, config) => {
+                v.extend([
+                    (format!("rama      {branch}"), Style::fg(look::green())),
+                    (format!("desde     {}", t.from), plain),
+                    (format!("carpeta   {}", short(folder)), plain),
+                ]);
+                if let Config::Ready(info) = config {
+                    for (i, line) in info.setup.iter().enumerate() {
+                        let label = if i == 0 { "setup     " } else { "          " };
+                        v.push((format!("{label}{line}"), Style::fg(look::yellow())));
+                    }
+                    let setup = if info.setup.is_empty() {
+                        ""
+                    } else {
+                        " │ setup"
+                    };
+                    v.push((
+                        format!("paneles   {}{setup}", info.panes.join(" │ ")),
+                        plain,
+                    ));
+                    let source = if info.source.is_some() {
+                        format!("según el .jw.toml de {}", repo_name(&t.repo))
+                    } else {
+                        "sin .jw.toml: como siempre".to_owned()
+                    };
+                    v.push((source, Style::fg(look::dim())));
+                }
+            }
         }
         v.push((String::new(), plain));
         let ok = matches!(t.plan(), Plan::Ok { .. });
@@ -568,10 +622,10 @@ pub fn draw_worktree(g: &mut Grid, (x, y, w, _): Rect, t: &Worktree) {
     let bh = lines.len() + 4;
     let (bx, by) = (x + w.saturating_sub(bw) / 2, y + 3);
     g.clear_box((bx, by, bw, bh));
-    let border = if matches!(t.plan(), Plan::Ok { .. }) {
-        look::blue()
-    } else {
+    let border = if matches!(t.plan(), Plan::Wrong(_)) {
         look::red()
+    } else {
+        look::blue()
     };
     g.boxed(
         (bx, by, bw, bh),
@@ -725,11 +779,29 @@ mod tests {
         app
     }
 
+    /// What the daemon says of a repository with no `.jw.toml`: its worktrees beside it.
+    fn defaults(root: &Path) -> ProjectInfo {
+        ProjectInfo {
+            source: None,
+            root: root.join("app-wt").to_string_lossy().into_owned(),
+            branch: "feat/{name}".into(),
+            setup: Vec::new(),
+            panes: vec!["zsh".into()],
+        }
+    }
+
+    /// A box whose repository's settings the daemon has told.
+    fn ready(app: &Path, open: Vec<PathBuf>, info: ProjectInfo) -> Worktree {
+        let mut t = Worktree::new(app.to_path_buf(), "main".into(), open);
+        t.set_config(Ok(info));
+        t
+    }
+
     #[test]
     fn the_worktree_box_suggests_the_next_free_name_and_shows_what_it_will_make() {
         let root = tree("wt");
         let app = repo(&root);
-        let t = Worktree::new(app.clone(), "main".into(), vec![]);
+        let t = ready(&app, vec![], defaults(&root));
         assert_eq!(t.name, "ws-1");
         let Plan::Ok { branch, folder } = t.plan() else {
             panic!("{:?}", t.plan())
@@ -737,11 +809,11 @@ mod tests {
         assert_eq!(branch, "feat/ws-1");
         assert_eq!(*folder, root.join("app-wt").join("ws-1"));
         // The first one is taken (open, on disk, or as a branch): the suggestion moves on.
-        let t = Worktree::new(app.clone(), "main".into(), vec![root.join("app-wt/ws-1")]);
+        let t = ready(&app, vec![root.join("app-wt/ws-1")], defaults(&root));
         assert_eq!(t.name, "ws-2");
         std::fs::create_dir_all(root.join("app-wt/ws-2")).unwrap();
         assert!(git_out(&app, &["branch", "feat/ws-3"]).is_some());
-        let t = Worktree::new(app, "main".into(), vec![root.join("app-wt/ws-1")]);
+        let t = ready(&app, vec![root.join("app-wt/ws-1")], defaults(&root));
         assert_eq!(t.name, "ws-4");
         let _ = std::fs::remove_dir_all(root);
     }
@@ -752,7 +824,7 @@ mod tests {
         let app = repo(&root);
         std::fs::create_dir_all(root.join("app-wt/taken")).unwrap();
         assert!(git_out(&app, &["branch", "feat/old"]).is_some());
-        let mut t = Worktree::new(app.clone(), "main".into(), vec![root.join("app-wt/there")]);
+        let mut t = ready(&app, vec![root.join("app-wt/there")], defaults(&root));
         let type_name = |t: &mut Worktree, s: &str| {
             for _ in 0..12 {
                 t.press(KeyCode::Backspace, false);
@@ -765,7 +837,7 @@ mod tests {
         assert_eq!(t.name, "x", "the first key replaced ws-1");
         let why = |t: &Worktree| match t.plan() {
             Plan::Wrong(w) => w.clone(),
-            Plan::Ok { .. } => String::new(),
+            Plan::Ok { .. } | Plan::Reading => String::new(),
         };
         type_name(&mut t, "Bad Name");
         assert_eq!(
@@ -798,6 +870,79 @@ mod tests {
         assert_eq!(t.press(KeyCode::Esc, false), Make::Close);
         let _ = std::fs::remove_dir_all(root);
     }
+    #[test]
+    fn the_box_waits_for_the_daemon_and_enter_does_nothing_until_it_has_answered() {
+        let root = tree("wt3");
+        let app = repo(&root);
+        let mut t = Worktree::new(app.clone(), "main".into(), vec![]);
+        assert_eq!((t.plan(), &t.config), (&Plan::Reading, &Config::Reading));
+        assert_eq!(t.press(KeyCode::Enter, false), Make::Stay);
+        // Typing meanwhile is kept: the answer does not replace the name the person chose.
+        t.press(KeyCode::Char('q'), false);
+        assert_eq!(t.plan(), &Plan::Reading);
+        t.set_config(Ok(defaults(&root)));
+        assert_eq!(t.name, "q");
+        assert!(matches!(t.plan(), Plan::Ok { .. }));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_refusal_of_the_daemon_is_shown_in_place_of_the_plan_and_nothing_can_be_made() {
+        let root = tree("wt4");
+        let app = repo(&root);
+        let mut t = Worktree::new(app, "main".into(), vec![]);
+        t.set_config(Err(
+            ".jw.toml, line 2: «{nme}» is no marker (use {name})".into()
+        ));
+        assert_eq!(
+            t.plan(),
+            &Plan::Wrong(".jw.toml, line 2: «{nme}» is no marker (use {name})".into())
+        );
+        assert_eq!(t.press(KeyCode::Enter, false), Make::Stay);
+        t.press(KeyCode::Char('x'), false);
+        assert!(matches!(t.plan(), Plan::Wrong(w) if w.contains(".jw.toml")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn the_branch_and_the_folder_come_from_the_settings_and_the_names_are_checked_on_them() {
+        let root = tree("wt5");
+        let app = repo(&root);
+        let info = ProjectInfo {
+            source: Some(app.join(".jw.toml").to_string_lossy().into_owned()),
+            root: root.join("trees").to_string_lossy().into_owned(),
+            branch: "bryan/{name}".into(),
+            setup: vec!["bun install".into()],
+            panes: vec!["nvim".into(), "claude".into()],
+        };
+        let t = ready(&app, vec![], info.clone());
+        let Plan::Ok { branch, folder } = t.plan() else {
+            panic!("{:?}", t.plan())
+        };
+        assert_eq!(branch, "bryan/ws-1");
+        assert_eq!(*folder, root.join("trees/ws-1"));
+        // The branch of the template is the one that counts: `feat/ws-1` does not stop it.
+        assert!(git_out(&app, &["branch", "feat/ws-1"]).is_some());
+        assert!(git_out(&app, &["branch", "bryan/ws-1"]).is_some());
+        std::fs::create_dir_all(root.join("trees/ws-2")).unwrap();
+        let mut t = ready(&app, vec![], info);
+        assert_eq!(
+            t.name, "ws-3",
+            "the branch of ws-1 and the folder of ws-2 are taken"
+        );
+        t.press(KeyCode::Char('x'), false);
+        assert_eq!(
+            t.press(KeyCode::Enter, false),
+            Make::Create {
+                repo: app,
+                branch: "bryan/x".into(),
+                from: "main".into(),
+                folder: "x".into()
+            }
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn a_folder_is_read_when_the_browser_comes_to_it_and_not_on_every_draw() {
         let root = tree("cache");
