@@ -22,6 +22,27 @@ pub struct Target {
     pub panes: usize,
     /// What runs in its panes (a program, or a command still going).
     pub running: Vec<String>,
+    /// Commits of its branch that no remote has: they stay in the branch when the worktree goes.
+    pub unpushed: u64,
+}
+
+impl Target {
+    /// What is typed to remove the worktree with what it holds: its branch, else its name.
+    pub fn confirm(&self) -> &str {
+        self.branch.as_deref().unwrap_or(&self.name)
+    }
+
+    /// The line that says what stays of the commits no remote has.
+    fn unpushed_note(&self) -> Option<String> {
+        let branch = self.confirm();
+        match self.unpushed {
+            0 => None,
+            1 => Some(format!("1 commit sin subir se queda en la rama {branch}.")),
+            n => Some(format!(
+                "{n} commits sin subir se quedan en la rama {branch}."
+            )),
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -36,8 +57,13 @@ pub enum Manage {
     Workspace(Target),
     /// `d` in `Workspace`: the changes of the worktree are being read.
     Checking(Target),
-    /// The worktree has changes: it cannot be removed.
-    Dirty(Target, Vec<String>),
+    /// The worktree has changes that would be lost: it is removed only after the branch's name
+    /// is typed, and then by force.
+    Dirty {
+        target: Target,
+        files: Vec<String>,
+        typed: String,
+    },
     /// The worktree has none: it can.
     Clean(Target),
     /// `r`: the name of a workspace or a panel being typed.
@@ -69,6 +95,7 @@ pub enum Act {
     RemoveWorkspace {
         workspace: String,
         remove_worktree: bool,
+        force: bool,
     },
     /// Read the workspace's `uncommitted` changes.
     Check(String),
@@ -149,7 +176,7 @@ impl Manage {
             Manage::Pane { pane, .. } if key('y') => (None, Some(Act::ClosePane(pane))),
             Manage::Pane { .. } => (None, None),
             Manage::Workspace(t) if key('y') => {
-                let act = remove(&t, false);
+                let act = remove(&t, false, false);
                 (None, Some(act))
             }
             Manage::Workspace(t) if key('d') && t.worktree => {
@@ -158,13 +185,49 @@ impl Manage {
             }
             Manage::Workspace(_) if esc => (None, None),
             Manage::Checking(t) | Manage::Clean(t) if esc => (Some(Manage::Workspace(t)), None),
-            Manage::Dirty(t, _) if esc => (Some(Manage::Workspace(t)), None),
-            Manage::Dirty(t, _) if key('c') => {
-                let act = remove(&t, false);
-                (None, Some(act))
-            }
+            Manage::Dirty { target, .. } if esc => (Some(Manage::Workspace(target)), None),
+            Manage::Dirty {
+                target,
+                files,
+                mut typed,
+            } => match code {
+                KeyCode::Enter if typed == target.confirm() => {
+                    let act = remove(&target, true, true);
+                    (None, Some(act))
+                }
+                KeyCode::Backspace => {
+                    typed.pop();
+                    (
+                        Some(Manage::Dirty {
+                            target,
+                            files,
+                            typed,
+                        }),
+                        None,
+                    )
+                }
+                KeyCode::Char(c) => {
+                    typed.push(c);
+                    (
+                        Some(Manage::Dirty {
+                            target,
+                            files,
+                            typed,
+                        }),
+                        None,
+                    )
+                }
+                _ => (
+                    Some(Manage::Dirty {
+                        target,
+                        files,
+                        typed,
+                    }),
+                    None,
+                ),
+            },
             Manage::Clean(t) if key('y') => {
-                let act = remove(&t, true);
+                let act = remove(&t, true, false);
                 (None, Some(act))
             }
             Manage::Failed { .. } => (None, None),
@@ -176,7 +239,7 @@ impl Manage {
     pub fn is_check(&self) -> bool {
         matches!(
             self,
-            Manage::Checking(_) | Manage::Dirty(..) | Manage::Clean(_)
+            Manage::Checking(_) | Manage::Dirty { .. } | Manage::Clean(_)
         )
     }
 
@@ -189,7 +252,10 @@ impl Manage {
             }
             Manage::Workspace(_) => "y cerrar · esc cancelar",
             Manage::Checking(_) => "esc cancelar",
-            Manage::Dirty(..) => "c cerrar solo el workspace · esc volver",
+            Manage::Dirty { target, typed, .. } if *typed == target.confirm() => {
+                "↵ quitar igual · esc volver"
+            }
+            Manage::Dirty { .. } => "↵ espera a que el nombre coincida · esc volver",
             Manage::Clean(_) => "y quitar · esc cancelar",
             Manage::Failed { .. } => "cualquier tecla para seguir",
             Manage::Syncing { .. } => "subiendo… espera",
@@ -211,7 +277,11 @@ impl Manage {
         if let Some(n) = diff.omitted.filter(|n| *n > 0) {
             lines.push(format!("…y {n} más"));
         }
-        Manage::Dirty(t, lines)
+        Manage::Dirty {
+            target: t,
+            files: lines,
+            typed: String::new(),
+        }
     }
 
     /// Title, border colour and the lines of the box.
@@ -266,7 +336,11 @@ impl Manage {
                     dim(self.hint()),
                 ],
             ),
-            Manage::Dirty(t, files) => {
+            Manage::Dirty {
+                target,
+                files,
+                typed,
+            } => {
                 let shown = files.len().min(MAX_FILES);
                 let mut lines = vec![plain(&format!(
                     "Tiene {} sin commitear:",
@@ -284,14 +358,26 @@ impl Manage {
                 if files.len() > shown {
                     lines.push(dim(&format!("  …y {} más", files.len() - shown)));
                 }
+                lines.extend(target.unpushed_note().map(|n| dim(&n)));
+                let hint_name = if typed.is_empty() {
+                    format!("  {}", target.confirm())
+                } else {
+                    String::new()
+                };
                 lines.extend([
                     blank(),
-                    dim("Commitéalos o descártalos en un panel: no se borra nada a la fuerza."),
-                    dim("La rama y sus commits se quedan."),
+                    dim("Quitarlo borra la carpeta y eso se pierde."),
+                    dim("Para quitarlo igual escribe el nombre de la rama:"),
+                    blank(),
+                    (format!("❯ {typed}▏{hint_name}"), Look::Accent),
                     blank(),
                     dim(self.hint()),
                 ]);
-                (format!("No se puede quitar {}", t.name), look::red(), lines)
+                (
+                    format!("Quitar {}: se perdería trabajo", target.name),
+                    look::red(),
+                    lines,
+                )
             }
             Manage::Clean(t) => {
                 let branch = t
@@ -301,12 +387,15 @@ impl Manage {
                 (
                     format!("Quitar el worktree {}?", t.name),
                     look::red(),
-                    vec![
-                        plain(&format!("Se borra la carpeta {}.", t.path)),
-                        dim(&format!("No hay cambios sin commitear. {branch} se queda.")),
-                        blank(),
-                        dim(self.hint()),
-                    ],
+                    [
+                        vec![
+                            plain(&format!("Se borra la carpeta {}.", t.path)),
+                            dim(&format!("No hay cambios sin commitear. {branch} se queda.")),
+                        ],
+                        t.unpushed_note().iter().map(|n| dim(n)).collect(),
+                        vec![blank(), dim(self.hint())],
+                    ]
+                    .concat(),
                 )
             }
             Manage::Settings { cursor, .. } => {
@@ -450,10 +539,11 @@ enum Look {
     Accent,
 }
 
-fn remove(t: &Target, remove_worktree: bool) -> Act {
+fn remove(t: &Target, remove_worktree: bool, force: bool) -> Act {
     Act::RemoveWorkspace {
         workspace: t.workspace.clone(),
         remove_worktree,
+        force,
     }
 }
 
@@ -496,6 +586,7 @@ mod tests {
             worktree,
             panes: 2,
             running: vec!["claude".into()],
+            unpushed: 0,
         }
     }
 
@@ -503,6 +594,15 @@ mod tests {
         Act::RemoveWorkspace {
             workspace: "w".into(),
             remove_worktree: worktree,
+            force: false,
+        }
+    }
+
+    fn dirty(typed: &str) -> Manage {
+        Manage::Dirty {
+            target: target(true),
+            files: vec!["M src/a.rs".into()],
+            typed: typed.into(),
         }
     }
 
@@ -543,17 +643,38 @@ mod tests {
     }
 
     #[test]
-    fn a_worktree_with_changes_offers_only_to_close_the_workspace() {
-        let q = Manage::Dirty(target(true), vec!["M src/a.rs".into()]);
-        assert_eq!(q.clone().press(KeyCode::Char('y')), (Some(q.clone()), None));
-        assert_eq!(q.clone().press(KeyCode::Char('d')), (Some(q.clone()), None));
+    fn a_worktree_with_changes_is_removed_only_when_its_branch_is_typed_and_then_by_force() {
+        // `y` and `d` are letters of the name here, not answers.
+        let (next, act) = dirty("").press(KeyCode::Char('y'));
+        assert_eq!((next, act), (Some(dirty("y")), None));
+        // `↵` waits for the name to match, and a name that is not the branch's never does.
         assert_eq!(
-            q.clone().press(KeyCode::Char('c')),
-            (None, Some(removal(false)))
+            dirty("feat").press(KeyCode::Enter),
+            (Some(dirty("feat")), None)
         );
         assert_eq!(
-            q.press(KeyCode::Esc),
-            (Some(Manage::Workspace(target(true))), None)
+            dirty("feat/login ").press(KeyCode::Enter),
+            (Some(dirty("feat/login ")), None)
+        );
+        assert_eq!(
+            dirty("feat/login").press(KeyCode::Enter),
+            (
+                None,
+                Some(Act::RemoveWorkspace {
+                    workspace: "w".into(),
+                    remove_worktree: true,
+                    force: true,
+                })
+            )
+        );
+        assert_eq!(
+            dirty("fea").press(KeyCode::Backspace),
+            (Some(dirty("fe")), None)
+        );
+        assert_eq!(
+            dirty("feat").press(KeyCode::Esc),
+            (Some(Manage::Workspace(target(true))), None),
+            "esc goes back to the question and nothing is typed any more"
         );
     }
 
@@ -565,6 +686,11 @@ mod tests {
             (None, Some(removal(true)))
         );
         assert_eq!(q.clone().press(KeyCode::Char('c')), (Some(q), None));
+        assert_eq!(
+            Manage::Clean(target(true)).press(KeyCode::Char('y')),
+            (None, Some(removal(true))),
+            "a clean worktree is not removed by force"
+        );
     }
 
     #[test]

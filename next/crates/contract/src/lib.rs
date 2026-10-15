@@ -189,6 +189,14 @@ pub enum Cmd {
         workspace: Id,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         remove_worktree: bool,
+        /// With `remove_worktree`: take the folder away even with changes not committed
+        /// (`git worktree remove --force`). The branch stays either way.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        force: bool,
+    },
+    /// Count the commits of a worktree's branch that no remote has. The result is `{ahead}`.
+    CheckWorkspace {
+        workspace: Id,
     },
     /// Give a workspace a name to be shown by; an empty name brings back the one it had
     /// (the folder's name, or `repo: branch` for a worktree). Its folder is not touched.

@@ -45,6 +45,7 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
         Cmd::RenameWorkspace { workspace, name } => rename::workspace(shared, &workspace, &name),
         Cmd::RenamePane { pane, name } => rename::pane(shared, &pane, &name),
         Cmd::SyncWorkspace { workspace } => sync::workspace(shared, &workspace),
+        Cmd::CheckWorkspace { workspace } => sync::check(shared, &workspace),
         Cmd::OpenFolder { path } => workspaces::open_folder(shared, &path),
         Cmd::ListDir { path, hidden } => browse::list_dir(path.as_deref(), hidden),
         Cmd::CreateWorktree {
@@ -58,7 +59,8 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
         Cmd::RemoveWorkspace {
             workspace,
             remove_worktree,
-        } => workspaces::remove_workspace(shared, &workspace, remove_worktree),
+            force,
+        } => workspaces::remove_workspace(shared, &workspace, remove_worktree, force),
         Cmd::MarkSeen { node, rev } => mark_seen(shared, &node, rev),
         Cmd::NewPane { workspace, program } => panes::new_pane(shared, &workspace, program),
         Cmd::ClosePane { pane } => panes::close_pane(shared, &pane),

@@ -371,6 +371,7 @@ pub enum After {
     RemoveWorkspace {
         workspace: String,
         remove_worktree: bool,
+        force: bool,
     },
     /// Read the workspace's uncommitted changes, to know whether its worktree may go.
     Check(String),
@@ -1259,6 +1260,7 @@ impl View {
             worktree: w.kind == WorkspaceKind::Worktree,
             panes: doc.map_or(w.pane_count as usize, |d| d.panes.len()),
             running,
+            unpushed: 0,
         };
         self.manage = Some(Manage::Workspace(target));
     }
@@ -1302,9 +1304,11 @@ impl View {
             Some(Act::RemoveWorkspace {
                 workspace,
                 remove_worktree,
+                force,
             }) => After::RemoveWorkspace {
                 workspace,
                 remove_worktree,
+                force,
             },
         }
     }
@@ -1467,6 +1471,13 @@ impl View {
     fn drop_check(&mut self) {
         if let Some(node) = self.check_node.take() {
             self.asks.push(Ask::Close(node));
+        }
+    }
+
+    /// How many commits of the worktree's branch no remote has, for the question to say they stay.
+    pub fn check_unpushed(&mut self, n: u64) {
+        if let Some(Manage::Checking(target)) = &mut self.manage {
+            target.unpushed = n;
         }
     }
 
@@ -2819,6 +2830,15 @@ fn serve_asks(view: &mut View, client: &mut Client) {
 /// answer decides what is offered.
 fn check_changes(view: &mut View, client: &mut Client, workspace: String) {
     const FAILED: &str = "No se pudo mirar los cambios";
+    // What is not pushed is only said, never needed: without it the question just says less.
+    if let Ok(Ok(Some(r))) = client.cmd_within(
+        Cmd::CheckWorkspace {
+            workspace: workspace.clone(),
+        },
+        ASK_WAIT,
+    ) {
+        view.check_unpushed(r["ahead"].as_u64().unwrap_or(0));
+    }
     let cmd = Cmd::OpenDiff {
         workspace,
         scope: DiffScope::Uncommitted,
@@ -3078,10 +3098,12 @@ pub fn run() -> Result<(), String> {
                 After::RemoveWorkspace {
                     workspace,
                     remove_worktree,
+                    force,
                 } => {
                     let reply = client.cmd(Cmd::RemoveWorkspace {
                         workspace,
                         remove_worktree,
+                        force,
                     });
                     if remove_worktree {
                         told(
@@ -4304,7 +4326,8 @@ mod tests {
             tap(&mut v, 'y'),
             After::RemoveWorkspace {
                 workspace: ws,
-                remove_worktree: false
+                remove_worktree: false,
+                force: false
             }
         );
         assert!(v.manage.is_none());
@@ -4324,30 +4347,49 @@ mod tests {
     }
 
     #[test]
-    fn a_worktree_with_changes_lists_them_and_cannot_be_removed() {
+    fn a_worktree_with_changes_lists_them_and_asks_for_its_branch_before_removing_it_by_force() {
         let mut v = idle_view();
         close_workspace(&mut v);
         let ws = v.selected_id().unwrap();
-        assert_eq!(tap(&mut v, 'd'), After::Check(ws));
+        assert_eq!(tap(&mut v, 'd'), After::Check(ws.clone()));
         assert!(matches!(v.manage, Some(Manage::Checking(_))));
+        v.check_unpushed(3);
         v.check_made("node");
         assert!(v.take_asks().contains(&Ask::Watch("node".into())));
         let (_, diff) = uncommitted(false);
         v.diffs.insert("node".into(), diff);
         v.advance_manage();
         let t = v.plain(120, 30);
-        assert!(t.contains("No se puede quitar"), "{t}");
+        assert!(t.contains("se perdería trabajo"), "{t}");
         assert!(t.contains("Tiene 3 archivos sin commitear:"), "{t}");
-        assert!(t.contains("no se borra nada a la fuerza"), "{t}");
-        assert!(t.contains("c cerrar solo el workspace"), "{t}");
-        // `y` does not remove it; `c` closes the workspace alone and lets go of the node.
-        assert_eq!(tap(&mut v, 'y'), After::Continue);
-        let ws = v.selected_id().unwrap();
+        assert!(
+            t.contains("3 commits sin subir se quedan en la rama feat/login."),
+            "{t}"
+        );
+        assert!(t.contains("escribe el nombre de la rama"), "{t}");
+        assert!(t.contains("❯ ▏  feat/login"), "{t}");
+        // Typing is typing: `y`, `d` and `c` answer nothing, and `↵` waits for the name.
+        for c in "yd".chars() {
+            assert_eq!(tap(&mut v, c), After::Continue);
+        }
         assert_eq!(
-            tap(&mut v, 'c'),
+            v.press_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            After::Continue
+        );
+        assert!(v.plain(120, 30).contains("espera a que el nombre coincida"));
+        for _ in 0..2 {
+            v.press_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        }
+        for c in "feat/login".chars() {
+            tap(&mut v, c);
+        }
+        assert!(v.plain(120, 30).contains("quitar igual"));
+        assert_eq!(
+            v.press_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
             After::RemoveWorkspace {
                 workspace: ws,
-                remove_worktree: false
+                remove_worktree: true,
+                force: true
             }
         );
         assert_eq!(v.take_asks(), vec![Ask::Close("node".into())]);
@@ -4367,6 +4409,10 @@ mod tests {
             t.contains("No hay cambios sin commitear. La rama feat/login se queda."),
             "{t}"
         );
+        assert!(
+            !t.contains("sin subir"),
+            "nothing is said when all is pushed: {t}"
+        );
         v.press_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(matches!(v.manage, Some(Manage::Workspace(_))));
         assert!(v.take_asks().contains(&Ask::Close("node".into())));
@@ -4380,7 +4426,8 @@ mod tests {
             tap(&mut v, 'y'),
             After::RemoveWorkspace {
                 workspace: ws,
-                remove_worktree: true
+                remove_worktree: true,
+                force: false
             }
         );
     }

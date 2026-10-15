@@ -191,7 +191,18 @@ pub fn create_worktree(
     )
 }
 
-pub fn remove_workspace(shared: &Shared, workspace: &Id, remove_worktree: bool) -> Done {
+pub fn remove_workspace(
+    shared: &Shared,
+    workspace: &Id,
+    remove_worktree: bool,
+    force: bool,
+) -> Done {
+    if force && !remove_worktree {
+        return Err(err(
+            ErrorCode::BadRequest,
+            "force is for removing a worktree",
+        ));
+    }
     let (kind, path, project) = {
         let core = shared.lock();
         let ws = core.workspace(workspace)?;
@@ -207,9 +218,14 @@ pub fn remove_workspace(shared: &Shared, workspace: &Id, remove_worktree: bool) 
                 ));
             }
         };
-        // No --force: a worktree with changes stays, and so does its workspace.
-        git::run(Path::new(&project), &["worktree", "remove", &path])
-            .map_err(|m| err(ErrorCode::GitFailed, m))?;
+        // Without `force` a worktree with changes stays, and so does its workspace; the client asks
+        // for it only after the person has typed the branch's name.
+        let mut args = vec!["worktree", "remove"];
+        if force {
+            args.push("--force");
+        }
+        args.push(&path);
+        git::run(Path::new(&project), &args).map_err(|m| err(ErrorCode::GitFailed, m))?;
     }
     let mut core = shared.lock();
     core.model.workspaces.retain(|w| w.id != *workspace);

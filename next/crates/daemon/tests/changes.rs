@@ -568,6 +568,7 @@ fn removing_a_workspace_takes_its_nodes_with_it() {
     c.cmd(Cmd::RemoveWorkspace {
         workspace: ws,
         remove_worktree: false,
+        force: false,
     })
     .unwrap()
     .unwrap();

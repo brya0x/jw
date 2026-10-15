@@ -228,6 +228,7 @@ fn removing_a_workspace_keeps_the_folder_and_can_remove_a_clean_worktree() {
         .cmd(Cmd::RemoveWorkspace {
             workspace: folder.clone(),
             remove_worktree: true,
+            force: false,
         })
         .unwrap()
         .unwrap_err();
@@ -238,6 +239,7 @@ fn removing_a_workspace_keeps_the_folder_and_can_remove_a_clean_worktree() {
         .cmd(Cmd::RemoveWorkspace {
             workspace: wt.clone(),
             remove_worktree: true,
+            force: false,
         })
         .unwrap()
         .unwrap_err();
@@ -248,6 +250,7 @@ fn removing_a_workspace_keeps_the_folder_and_can_remove_a_clean_worktree() {
     c.cmd(Cmd::RemoveWorkspace {
         workspace: wt.clone(),
         remove_worktree: true,
+        force: false,
     })
     .unwrap()
     .unwrap();
@@ -270,6 +273,7 @@ fn removing_a_workspace_keeps_the_folder_and_can_remove_a_clean_worktree() {
     c.cmd(Cmd::RemoveWorkspace {
         workspace: folder.clone(),
         remove_worktree: false,
+        force: false,
     })
     .unwrap()
     .unwrap();
@@ -278,6 +282,7 @@ fn removing_a_workspace_keeps_the_folder_and_can_remove_a_clean_worktree() {
         .cmd(Cmd::RemoveWorkspace {
             workspace: folder,
             remove_worktree: false,
+            force: false,
         })
         .unwrap()
         .unwrap_err();
@@ -600,6 +605,16 @@ fn sync_pushes_the_worktrees_branch_and_says_how_many_commits_went_up() {
         git(&wt, &["add", "."]);
         git(&wt, &["commit", "-q", "-m", n]);
     }
+    let ahead = |c: &mut wire::Client| {
+        c.cmd(Cmd::CheckWorkspace {
+            workspace: ws.clone(),
+        })
+        .unwrap()
+        .unwrap()
+        .unwrap()["ahead"]
+            .as_u64()
+    };
+    assert_eq!(ahead(&mut c), Some(2), "both commits are in no remote");
     // A branch the remote does not have yet: it is made there, with the commits no remote has.
     let r = sync(&mut c, &ws).unwrap().unwrap().unwrap();
     assert_eq!(
@@ -630,6 +645,7 @@ fn sync_pushes_the_worktrees_branch_and_says_how_many_commits_went_up() {
     };
     assert_eq!(on_origin("feat/login"), head(&wt));
 
+    assert_eq!(ahead(&mut c), Some(0), "all went up");
     // Nothing new: nothing is pushed.
     let r = sync(&mut c, &ws).unwrap().unwrap().unwrap();
     assert_eq!(
@@ -708,5 +724,62 @@ fn sync_without_a_remote_says_what_git_says() {
         .unwrap_err();
     assert_eq!(e.code, ErrorCode::GitFailed);
     assert!(e.message.contains("origin"), "{}", e.message);
+    d.stop();
+}
+
+/// REQ-281 to REQ-285: a worktree with changes is removed only by force, and its branch stays.
+#[test]
+fn a_worktree_with_changes_goes_only_by_force_and_its_branch_stays() {
+    let sb = Sandbox::new();
+    let d = sb.start();
+    let app = repo(&sb);
+    let mut c = sb.client();
+    session(&mut c);
+    let ws = id_of(
+        c.cmd(Cmd::CreateWorktree {
+            repo: text(&app),
+            branch: "feat/x".into(),
+            base: None,
+            folder: None,
+        })
+        .unwrap()
+        .unwrap(),
+    );
+    let wt = app.parent().unwrap().join("app-wt/feat-x");
+    std::fs::write(wt.join("unsaved"), "x").unwrap();
+    let remove = |c: &mut wire::Client, remove_worktree: bool, force: bool| {
+        c.cmd(Cmd::RemoveWorkspace {
+            workspace: ws.clone(),
+            remove_worktree,
+            force,
+        })
+        .unwrap()
+    };
+    // Without force git refuses and the workspace stays.
+    assert_eq!(
+        remove(&mut c, true, false).unwrap_err().code,
+        ErrorCode::GitFailed
+    );
+    assert!(wt.exists());
+    // Force is for removing a worktree: on its own it is a bad request and nothing happens.
+    assert_eq!(
+        remove(&mut c, false, true).unwrap_err().code,
+        ErrorCode::BadRequest
+    );
+    assert!(wt.exists());
+    // By force the folder goes with its changes, the workspace goes, the branch stays.
+    remove(&mut c, true, true).unwrap();
+    assert!(!wt.exists());
+    let branches = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&app)
+        .args(["branch", "--list", "feat/x"])
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&branches.stdout).contains("feat/x"));
+    assert_eq!(
+        remove(&mut c, true, false).unwrap_err().code,
+        ErrorCode::NotFound
+    );
     d.stop();
 }

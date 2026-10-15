@@ -325,6 +325,7 @@ fn removing_a_workspace_ends_its_shells() {
     c.cmd(Cmd::RemoveWorkspace {
         workspace: w.ws.clone(),
         remove_worktree: false,
+        force: false,
     })
     .unwrap()
     .unwrap();

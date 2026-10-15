@@ -150,7 +150,12 @@ sealed interface Cmd {
     data class RemoveWorkspace(
         val workspace: Id,
         @SerialName("remove_worktree") val removeWorktree: Boolean = false,
+        val force: Boolean = false,
     ) : Cmd
+
+    /** Count the commits of a worktree's branch that no remote has; the result is `{ahead}`. */
+    @Serializable @SerialName("check_workspace")
+    data class CheckWorkspace(val workspace: Id) : Cmd
 
     /** Push the worktree's branch to its remote; the result is `{branch, pushed, new_branch}`. */
     @Serializable @SerialName("sync_workspace")

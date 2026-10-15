@@ -67,6 +67,7 @@ button:hover{border-color:var(--blue)}
       <li><b>Level 1 · WORKSPACE</b> (the sidebar is active). <code>j</code>/<code>k</code> move, <code>↵</code> goes into the workspace. <code>r</code> renames it, <code>x</code> closes it (and <code>d</code> in that question removes a worktree, as today), <code>o</code> opens a folder, <code>w</code> makes a worktree, <code>s</code> syncs it, <code>d</code> opens its changes. <code>q</code> quits.</li>
       <li><b>Level 2 · PANEL</b> (the panels of the workspace). <code>h</code>/<code>j</code>/<code>k</code>/<code>l</code> change panel, <code>↵</code> starts typing in it. <code>n</code> makes a new panel, <code>r</code> names the panel, <code>f</code> shows it full screen, <code>x</code> closes it. <code>esc</code> goes back to the workspaces. Workspace commands that do not clash (<code>o</code> <code>w</code> <code>s</code> <code>d</code>) work here too, and so do <code>a</code> avisos, <code>m</code> phone and <code>,</code> settings at both levels.</li>
       <li><b>Level 3 · TERMINAL</b> (typing). Everything goes to the program, <code>esc</code> and <code>ctrl</code> keys included (nvim, claude and the shell use them). The only way out is <code>^␣</code>, which takes you to the panel level; so the old muscle memory still works: <code>^␣ x</code>, <code>^␣ n</code>, <code>^␣ m</code> are the key you would press at level 2.</li>
+      <li><b>Remove a worktree</b> (<code>x</code>, then <code>d</code>): git is asked what would be lost. With nothing to lose it is one <code>y</code>. With files not committed the box lists them and asks you to type the branch's name before it goes ahead, and then the folder goes by force. The branch always stays, with its commits (the box says how many are not pushed; <code>s</code> pushes them).</li>
       <li><b>Where you are is always visible</b>: the chip (WORKSPACE, PANEL, TERMINAL), a blue border on the active area only, and the keys of the level on the status bar. <code>?</code> opens the whole list of the level.</li>
       <li><b>The mouse goes straight in</b>: a click on a workspace opens it (panel level) and a click on a panel starts typing in it (terminal level).</li>
       <li><b>The list is grouped</b>: each repository's root, then its worktrees indented under it (<code>↳</code>, the dot and the name moved four columns in); a worktree whose root is not open sits under the repository's name; the folders that are not repositories come last under <code>carpetas</code>. The numbers and <code>j</code>/<code>k</code> follow what is drawn; headings are not highlighted. The same grouping is on the phone.</li>
@@ -86,11 +87,12 @@ const COLS = 112, ROWS = 28, SB = 28;
 let S, g;
 const LV = {1:['WORKSPACE','chip-blue'], 2:['PANEL','chip-mag'], 3:['TERMINAL','chip-green']};
 function reset(){
-  S = { busy:null, fail:null, level:1, sel:1, focus:0, full:false, ask:null, input:null, help:false, leader:false, msg:'', prog:false, typed:'', menu:null,
+  S = { busy:null, fail:null, rm:null, delBranch:false, level:1, sel:1, focus:0, full:false, ask:null, input:null, help:false, leader:false, msg:'', prog:false, typed:'', menu:null,
     // The daemon's order: each repository's root first and its worktrees after it, then the folders that are not repositories.
     ws:[ {name:'api', kind:'folder', project:'api', path:'~/ws/api', panes:[{t:'zsh'}]},
-         {name:'feat/login', kind:'worktree', project:'api', path:'~/ws/api-wt/feat-login', git:{remote:false, ahead:3}, panes:[{t:'zsh'},{t:'claude',prog:'claude'}]},
-         {name:'feat/cli', kind:'worktree', project:'tools', path:'~/ws/tools-wt/feat-cli', git:{remote:true, ahead:1, rejected:true}, panes:[{t:'zsh'}]},
+         {name:'feat/login', kind:'worktree', project:'api', path:'~/ws/api-wt/feat-login', git:{remote:false, ahead:3, dirty:['M  src/auth.rs','?? notes.md']}, panes:[{t:'zsh'},{t:'claude',prog:'claude'}]},
+         {name:'feat/cli', kind:'worktree', project:'tools', path:'~/ws/tools-wt/feat-cli', git:{remote:true, ahead:1, rejected:true, dirty:[]}, panes:[{t:'zsh'}]},
+         {name:'fix/typo', kind:'worktree', project:'tools', path:'~/ws/tools-wt/fix-typo', git:{remote:true, ahead:0, dirty:[]}, panes:[{t:'zsh'}]},
          {name:'notes', kind:'folder', path:'~/notes', panes:[{t:'zsh'}]},
          {name:'infra', kind:'folder', path:'~/ws/infra', panes:[]} ] };
 }
@@ -171,7 +173,7 @@ const KEYS = {
   menu: [['j k','mover'],['↵','abrir en un panel nuevo'],['letra','abre ese programa'],['esc','cancelar']],
   3: [['todo','va al programa (esc y ctrl incluidos)'],['^␣','salir al nivel de paneles']]
 };
-const hint = () => S.busy ? 'subiendo… espera' : S.fail ? 'cualquier tecla para cerrar' : S.menu ? 'j/k mover · ↵ abrir · letra directa · esc cancelar' : S.input ? '↵ aceptar · esc cancelar' : S.ask ? 'y sí · esc cancelar' : S.help ? 'cualquier tecla para cerrar'
+const hint = () => S.rm ? (S.rm.stage === 'risk' ? 'escribe el nombre de la rama · ↵ quitar · esc volver' : S.rm.stage === 'check' ? 'esc volver' : 'y quitar · esc volver') : S.busy ? 'subiendo… espera' : S.fail ? 'cualquier tecla para cerrar' : S.menu ? 'j/k mover · ↵ abrir · letra directa · esc cancelar' : S.input ? '↵ aceptar · esc cancelar' : S.ask ? 'y sí · esc cancelar' : S.help ? 'cualquier tecla para cerrar'
   : S.level === 1 ? 'j/k mover · ↵ entrar · r renombrar · x cerrar · o carpeta · w worktree · s subir · ? teclas · q salir'
   : S.level === 2 ? 'h/l panel · ↵ escribir · n nuevo · N con programa · r nombrar · f completa · x cerrar · esc volver · ? teclas'
   : 'escribes en el panel · ^␣ para salir';
@@ -180,6 +182,37 @@ function modalBox(w, lines, title, cls){
   for (let r = 0; r < h; r++) put(bx, by + r, ' '.repeat(w), 'bg-panel');
   box(bx, by, w, h, title, cls || 'c-yellow', 'b');
   lines.forEach(([t, c], i) => put(bx + 3, by + 2 + i, clip(t, w - 6), (c || '') + ' bg-panel'));
+}
+// What is lost if the worktree goes: the files with changes that were not committed, and (only when removing also deletes the
+// branch) the commits no remote has. Nothing is forced unless the branch's name is typed.
+function atRisk(w){
+  const gt = w.git, unpushed = S.delBranch && gt.ahead > 0 ? gt.ahead : 0;
+  return {files: gt.dirty, commits: unpushed, kept: !S.delBranch && gt.ahead > 0 ? gt.ahead : 0, any: gt.dirty.length > 0 || unpushed > 0};
+}
+function drawRm(){
+  const w = S.rm.w, r = atRisk(w), branchWord = S.delBranch ? 'y su rama ' + w.name : 'La rama ' + w.name + ' se queda';
+  if (S.rm.stage === 'check') return modalBox(62, [['Mirando cambios y commits sin subir…', ''], ['', ''], [['⠋','⠙','⠹','⠸'][Math.floor(Date.now() / 120) % 4] + ' esperando a git', 'c-yellow']], 'Quitar el worktree ' + w.name + '?', 'c-red');
+  if (S.rm.stage === 'clean'){
+    const lines = [['No tiene cambios ni commits que se pierdan.', '']];
+    if (r.kept) lines.push([r.kept + (r.kept === 1 ? ' commit sin subir se queda' : ' commits sin subir se quedan') + ' en la rama ' + w.name + '.', 'd']);
+    lines.push([S.delBranch ? 'Se borra su carpeta y su rama ' + w.name + '.' : 'Se borra su carpeta. La rama ' + w.name + ' se queda.', 'd'], ['', ''], ['y quitar · esc volver', 'd']);
+    return modalBox(66, lines, 'Quitar el worktree ' + w.name + '?', 'c-red');
+  }
+  const lines = [];
+  if (r.files.length){ lines.push(['Tiene ' + (r.files.length === 1 ? 'un archivo' : r.files.length + ' archivos') + ' sin commitear:', '']); r.files.forEach(f => lines.push(['  ' + f, 'c-yellow'])); }
+  if (r.commits) lines.push(['Tiene ' + r.commits + (r.commits === 1 ? ' commit sin subir' : ' commits sin subir') + ': se borrarían con la rama.', '']);
+  else if (r.kept) lines.push([r.kept + (r.kept === 1 ? ' commit sin subir se queda' : ' commits sin subir se quedan') + ' en la rama.', 'd']);
+  lines.push(['', ''], ['Quitarlo borra la carpeta' + (S.delBranch ? ' y la rama' : '') + ' y eso se pierde.', 'd'], ['Para quitarlo igual escribe el nombre de la rama:', 'd'], ['', ''], ['❯ ' + S.rm.typed + '▏' + (S.rm.typed ? '' : '  ' + w.name), S.rm.typed === w.name ? 'c-green b' : 'b'], ['', ''], [S.rm.typed === w.name ? '↵ quitar igual · esc volver' : '↵ espera a que el nombre coincida · esc volver', 'd']);
+  modalBox(70, lines, 'Quitar ' + w.name + ': se perdería trabajo', 'c-red');
+}
+function removeWt(){
+  const w = S.rm.w, nm = w.name; const i = S.ws.indexOf(w); S.ws.splice(i, 1); S.sel = Math.max(0, Math.min(S.sel, S.ws.length - 1)); S.level = 1; S.focus = 0; S.ask = null; S.rm = null;
+  flash('worktree «' + nm + '» quitado · ' + (S.delBranch ? 'la rama se borró' : 'la rama se queda'));
+}
+function startRm(){
+  const w = W(); S.rm = {w, stage:'check', typed:''}; draw();
+  const tick = setInterval(() => { if (S.rm && S.rm.stage === 'check') draw(); }, 120);
+  setTimeout(() => { clearInterval(tick); if (!S.rm || S.rm.w !== w) return; S.rm.stage = atRisk(w).any ? 'risk' : 'clean'; draw(); }, 900);
 }
 function draw(){
   g = grid();
@@ -228,7 +261,8 @@ function draw(){
     put(bx + 3, y, '↵ abrir · la letra abre directo · esc cancelar', 'd bg-panel'); put(bx + 3, y + 1, 'se edita en ~/.config/jwn/config.toml', 'd bg-panel'); }
   if (S.busy) modalBox(62, [['git push origin ' + S.busy.branch, 'd'], ['', ''], [['⠋','⠙','⠹','⠸'][Math.floor(Date.now() / 120) % 4] + ' subiendo ' + S.busy.branch + '…', 'c-yellow']], 'subir el worktree', 'c-blue');
   if (S.fail) modalBox(70, [...S.fail.text.map(t => [t, 'c-red']), ['', ''], ['cualquier tecla para cerrar', 'd']], S.fail.title, 'c-red');
-  if (S.ask) modalBox(62, [[S.ask.text, ''], [S.ask.sub, 'd'], ['', ''], ['y sí · esc cancelar', 'd']], S.ask.title, 'c-yellow');
+  if (S.rm) drawRm();
+  else if (S.ask) modalBox(62, [[S.ask.text, ''], [S.ask.sub, 'd'], ['', ''], [S.ask.canRemove ? 'y cerrar el workspace · d quitar el worktree · esc cancelar' : 'y sí · esc cancelar', 'd']], S.ask.title, 'c-yellow');
   if (S.input) modalBox(52, [[S.input.label, 'd'], ['❯ ' + S.input.text + '▏', 'b'], ['', ''], ['↵ aceptar · esc cancelar', 'd']], S.input.title, 'c-blue');
   paint();
   document.getElementById('keys').textContent = S.leader ? 'tecla del nivel de paneles · esc cancelar' : hint();
@@ -272,7 +306,17 @@ function key(e){
     if (k === 'Backspace'){ S.input.text = [...S.input.text].slice(0, -1).join(''); draw(); return true; }
     if (k.length === 1){ S.input.text += k; draw(); return true; } return true;
   }
-  if (S.ask){ if (k === 'y'){ S.ask.yes(); return true; } if (k === 'Escape'){ S.ask = null; draw(); return true; } return true; }
+  if (S.rm){
+    if (k === 'Escape'){ S.rm = null; draw(); return true; }
+    if (S.rm.stage === 'clean' && k === 'y'){ removeWt(); return true; }
+    if (S.rm.stage === 'risk'){
+      if (k === 'Enter'){ if (S.rm.typed === S.rm.w.name) removeWt(); else { flash('el nombre no coincide: ' + S.rm.w.name); } return true; }
+      if (k === 'Backspace'){ S.rm.typed = [...S.rm.typed].slice(0, -1).join(''); draw(); return true; }
+      if (k.length === 1){ S.rm.typed += k; draw(); return true; }
+    }
+    return true;
+  }
+  if (S.ask){ if (k === 'd' && S.ask.canRemove){ startRm(); return true; } if (k === 'y'){ S.ask.yes(); return true; } if (k === 'Escape'){ S.ask = null; draw(); return true; } return true; }
   if (S.menu){ const rows = menuRows();
     if (k === 'Escape'){ S.menu = null; draw(); return true; }
     if (k === 'j' || k === 'ArrowDown'){ S.menu.sel = Math.min(S.menu.sel + 1, rows.length - 1); draw(); return true; }
@@ -293,7 +337,7 @@ function key(e){
     else if (k === 'k'){ S.sel = Math.max(S.sel - 1, 0); S.focus = 0; }
     else if (k === 'Enter'){ if (!S.ws.length) return true; S.level = 2; S.focus = Math.min(S.focus, Math.max(0, w.panes.length - 1)); }
     else if (k === 'r'){ if (w.kind === 'worktree') S.input = {what:'ws', title:'renombrar el worktree', label:'nombre nuevo', text:w.name}; }
-    else if (k === 'x'){ S.ask = {title:'Cerrar ' + w.name + '?', text: w.panes.length ? 'Se terminan sus ' + w.panes.length + ' paneles.' : 'No tiene paneles abiertos.', sub: w.kind === 'worktree' ? 'El worktree y su carpeta se quedan en el disco.' : 'La carpeta se queda en el disco.', yes: closeWs}; }
+    else if (k === 'x'){ S.ask = {title:'Cerrar ' + w.name + '?', text: w.panes.length ? 'Se terminan sus ' + w.panes.length + ' paneles.' : 'No tiene paneles abiertos.', sub: w.kind === 'worktree' ? 'El worktree y su carpeta se quedan en el disco.' : 'La carpeta se queda en el disco.', yes: closeWs, canRemove: w.kind === 'worktree'}; }
     else if (k === 'q'){ flash('salir: el daemon y los paneles siguen corriendo'); return true; }
     else if (workspaceKeys(k) || global(k)) return true;
     else return false;
