@@ -858,11 +858,7 @@ impl Core {
                     nodes.push(Node::Blocks(contract::Blocks {
                         head: head(id, Vec::new()),
                         pane: p.id.clone(),
-                        mode: if p.running.as_deref().is_some_and(crate::procs::takes_screen) {
-                            contract::BlocksMode::Full
-                        } else {
-                            *mode
-                        },
+                        mode: crate::procs::mode_of(*mode, blocks, p.running.as_deref()),
                         blocks: blocks.clone(),
                     }));
                 }

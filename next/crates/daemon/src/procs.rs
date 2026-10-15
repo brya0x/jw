@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use contract::Id;
+use contract::{Block, BlocksMode, Id};
 
 use crate::server::Shared;
 
@@ -50,6 +50,23 @@ const FULL_SCREEN: [&str; 15] = [
 
 pub fn takes_screen(argv: &[String]) -> bool {
     title_for(argv).is_some_and(|t| FULL_SCREEN.contains(&t.as_str()))
+}
+
+/// How a pane with a blocks node is drawn (spec REQ-250, REQ-251). While the shell reports a
+/// command running, the pane is its screen when the command names a program that takes it
+/// (known the moment the shell says so) or when the foreground is one (the look every 0.7 s
+/// finds what an alias or a script started). With no command running it is `stored`: the
+/// foreground is not asked, as it still names a program that has already ended for up to one look.
+pub fn mode_of(stored: BlocksMode, blocks: &[Block], foreground: Option<&[String]>) -> BlocksMode {
+    let Some(running) = blocks.last().filter(|b| b.running) else {
+        return stored;
+    };
+    let named: Vec<String> = running.cmd.split_whitespace().map(str::to_owned).collect();
+    if takes_screen(&named) || foreground.is_some_and(takes_screen) {
+        BlocksMode::Full
+    } else {
+        stored
+    }
 }
 
 /// The command lines of `pids`, from one `ps`.
@@ -118,6 +135,57 @@ mod tests {
 
     fn argv(s: &str) -> Vec<String> {
         s.split_whitespace().map(str::to_owned).collect()
+    }
+
+    fn block(cmd: &str, running: bool) -> Block {
+        Block {
+            id: 1,
+            cmd: cmd.into(),
+            cwd: "/".into(),
+            started: 0,
+            running,
+            code: None,
+            ms: None,
+            truncated: false,
+            full: false,
+            out: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn the_mode_follows_the_command_the_shell_reports_and_not_only_the_look_at_the_foreground() {
+        let claude = argv("claude");
+        // The command names the program: full at once, with the foreground still unknown.
+        let named = [block("ls", false), block("claude --resume 1", true)];
+        assert_eq!(mode_of(BlocksMode::Blocks, &named, None), BlocksMode::Full);
+        // An alias or a script: the look at the foreground finds it.
+        let alias = [block("ai", true)];
+        assert_eq!(
+            mode_of(BlocksMode::Blocks, &alias, None),
+            BlocksMode::Blocks
+        );
+        assert_eq!(
+            mode_of(BlocksMode::Blocks, &alias, Some(&claude)),
+            BlocksMode::Full
+        );
+        // The shell says it ended: blocks, though the foreground may still say claude.
+        let ended = [block("claude", false)];
+        assert_eq!(
+            mode_of(BlocksMode::Blocks, &ended, Some(&claude)),
+            BlocksMode::Blocks
+        );
+        assert_eq!(
+            mode_of(BlocksMode::Blocks, &[], Some(&claude)),
+            BlocksMode::Blocks,
+            "no command has been reported at all"
+        );
+        // A command that draws no screen of its own, and what the store saw of an alternate screen.
+        let sleeping = [block("sleep 5", true)];
+        assert_eq!(
+            mode_of(BlocksMode::Blocks, &sleeping, None),
+            BlocksMode::Blocks
+        );
+        assert_eq!(mode_of(BlocksMode::Full, &sleeping, None), BlocksMode::Full);
     }
 
     #[test]

@@ -388,3 +388,54 @@ fn a_program_started_by_the_wrapper_leaves_a_shell_with_blocks() {
     );
     d.stop();
 }
+
+/// REQ-250 and REQ-251: the mode follows the command the shell reports, not the 0.7 s look at
+/// the foreground. A stand-in `claude` (it draws on the normal screen, as the real one does).
+#[test]
+fn a_program_that_takes_the_screen_is_full_from_its_block_to_its_end_and_not_a_poll_later() {
+    use std::os::unix::fs::PermissionsExt;
+    let Some(shell) = find("zsh").or_else(|| find("bash")) else {
+        return;
+    };
+    let mut r = rig(&shell);
+    let stub = r.dir.join("claude");
+    std::fs::write(
+        &stub,
+        "#!/bin/sh\nprintf 'a screen of its own\\n'\nsleep 1.5\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let id = r.blocks.clone();
+    let mode = |r: &Rig| r.c.nodes[&r.blocks]["mode"].as_str().unwrap().to_owned();
+    let running = move |c: &Client| {
+        c.nodes[&id]["blocks"]
+            .as_array()
+            .is_some_and(|b| b.last().is_some_and(|l| l["running"] == true))
+    };
+
+    r.run("sleep 1");
+    assert!(
+        r.c.wait_until(Duration::from_secs(10), running.clone())
+            .unwrap()
+    );
+    assert_eq!(
+        mode(&r),
+        "blocks",
+        "a command that draws no screen of its own"
+    );
+    r.finished(1);
+
+    r.run(&stub.to_string_lossy());
+    assert!(r.c.wait_until(Duration::from_secs(10), running).unwrap());
+    assert_eq!(
+        mode(&r),
+        "full",
+        "full from the block the shell reports, not from the next look at the foreground"
+    );
+    r.finished(2);
+    assert_eq!(
+        mode(&r),
+        "blocks",
+        "blocks as soon as the shell says it ended, while the foreground may still say claude"
+    );
+}
