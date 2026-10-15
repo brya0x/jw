@@ -114,8 +114,8 @@ enum Seen {
 
 /// The tree with the nearest split of `dir` around `pane` moved so that the pane gets `by`
 /// thousandths more of it (less when negative), kept within range; `None` when no split of
-/// that direction is around the pane.
-pub fn grow(tree: Layout, pane: &str, dir: SplitDir, by: i16) -> Option<Layout> {
+/// that direction is around the pane, and then the tree as it was.
+pub fn grow(tree: Layout, pane: &str, dir: SplitDir, by: i16) -> Result<Layout, Layout> {
     fn go(tree: Layout, pane: &str, dir: SplitDir, by: i16) -> (Layout, Seen) {
         let Layout::Split {
             dir: d,
@@ -161,8 +161,8 @@ pub fn grow(tree: Layout, pane: &str, dir: SplitDir, by: i16) -> Option<Layout> 
         (tree, seen)
     }
     match go(tree, pane, dir, by) {
-        (tree, Seen::Done) => Some(tree),
-        _ => None,
+        (tree, Seen::Done) => Ok(tree),
+        (tree, _) => Err(tree),
     }
 }
 
@@ -420,17 +420,17 @@ mod tests {
         assert_eq!(ratio_of(&lower, &[false]), 450);
         assert_eq!(
             grow(t.clone(), "a", SplitDir::Col, 50),
-            None,
+            Err(t.clone()),
             "none of that direction around `a`"
         );
         assert_eq!(
-            grow(t, "zz", SplitDir::Row, 50),
-            None,
+            grow(t.clone(), "zz", SplitDir::Row, 50),
+            Err(t),
             "not a pane of the tree"
         );
         assert_eq!(
             grow(leaf("a"), "a", SplitDir::Row, 50),
-            None,
+            Err(leaf("a")),
             "a lone pane has no split"
         );
     }
@@ -438,15 +438,15 @@ mod tests {
     #[test]
     fn growing_stops_at_the_least_and_the_most() {
         let t = row(leaf("a"), leaf("b"));
-        let mut t = Some(t);
+        let mut t = t;
         for _ in 0..20 {
-            t = grow(t.unwrap(), "a", SplitDir::Row, 50);
+            t = grow(t, "a", SplitDir::Row, 50).unwrap_or_else(|t| t);
         }
-        assert_eq!(ratio_of(&t.clone().unwrap(), &[]), MAX_RATIO);
+        assert_eq!(ratio_of(&t, &[]), MAX_RATIO);
         for _ in 0..40 {
-            t = grow(t.unwrap(), "a", SplitDir::Row, -50);
+            t = grow(t, "a", SplitDir::Row, -50).unwrap_or_else(|t| t);
         }
-        assert_eq!(ratio_of(&t.unwrap(), &[]), MIN_RATIO);
+        assert_eq!(ratio_of(&t, &[]), MIN_RATIO);
     }
 
     #[test]

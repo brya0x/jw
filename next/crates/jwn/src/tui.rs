@@ -1803,6 +1803,16 @@ impl View {
                         Key::SplitCol => Some(SplitDir::Col),
                         _ => None,
                     };
+                    // A daemon from before layouts would put the panel where it likes, not where
+                    // `|` or `-` says: better to say so than to leave it below.
+                    if dir.is_some()
+                        && self
+                            .shown()
+                            .is_some_and(|d| !d.panes.is_empty() && d.layout.is_none())
+                    {
+                        self.flash("el daemon es anterior al layout: jwn stop y abre jwn otra vez");
+                        return After::Continue;
+                    }
                     return After::NewPane(id, self.place(dir));
                 }
             }
@@ -5176,6 +5186,21 @@ mod tests {
         assert_eq!(
             v.press_key(plain(KeyCode::Char('n'))),
             After::NewPane(ws, place(SplitDir::Row))
+        );
+    }
+
+    #[test]
+    fn a_daemon_with_no_layout_cannot_split_where_asked_and_the_person_is_told() {
+        let mut v = idle_view();
+        let id = v.opened.clone().unwrap();
+        v.workspaces.get_mut(&id).unwrap().layout = None;
+        for ch in ['|', '-'] {
+            assert_eq!(v.press_key(plain(KeyCode::Char(ch))), After::Continue);
+            assert!(v.plain(120, 30).contains("el daemon es anterior al layout"));
+        }
+        assert!(
+            matches!(v.press_key(plain(KeyCode::Char('n'))), After::NewPane(..)),
+            "n asks for a panel all the same: the daemon puts it where it does"
         );
     }
 

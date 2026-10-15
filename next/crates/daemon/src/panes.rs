@@ -156,10 +156,10 @@ pub fn grow_pane(shared: &Shared, pane: &Id, dir: SplitDir, by: i16) -> Done {
     let Some(tree) = ws.layout.take() else {
         return Err(err(ErrorCode::BadRequest, "the workspace has no layout"));
     };
-    match crate::layout::grow(tree.clone(), pane, dir, by) {
-        Some(grown) => ws.layout = Some(grown),
-        None => {
-            ws.layout = Some(tree);
+    match crate::layout::grow(tree, pane, dir, by) {
+        Ok(grown) => ws.layout = Some(grown),
+        Err(unchanged) => {
+            ws.layout = Some(unchanged);
             return Err(err(
                 ErrorCode::BadRequest,
                 "no split around the pane goes that way",
