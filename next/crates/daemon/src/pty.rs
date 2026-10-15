@@ -220,23 +220,27 @@ impl Term {
     }
 
     pub fn screen(&self) -> Screen {
-        let parser = lock(&self.parser);
-        let screen = parser.screen();
-        let (rows, cols) = screen.size();
-        let (row, col) = screen.cursor_position();
-        Screen {
-            rows,
-            cols,
-            lines: screen
-                .rows(0, cols)
-                .map(|l| l.trim_end().to_owned())
-                .collect(),
-            cursor: Cursor {
-                row,
-                col,
-                visible: !screen.hide_cursor(),
-            },
-        }
+        screen_of(lock(&self.parser).screen())
+    }
+}
+
+/// A terminal's screen as the pane node carries it.
+pub fn screen_of(screen: &vt100::Screen) -> Screen {
+    let (rows, cols) = screen.size();
+    let (row, col) = screen.cursor_position();
+    Screen {
+        rows,
+        cols,
+        lines: screen
+            .rows(0, cols)
+            .map(|l| l.trim_end().to_owned())
+            .collect(),
+        cursor: Cursor {
+            row,
+            col,
+            visible: !screen.hide_cursor(),
+        },
+        alt: screen.alternate_screen(),
     }
 }
 
@@ -288,6 +292,7 @@ pub fn blank_screen() -> Screen {
             col: 0,
             visible: true,
         },
+        alt: false,
     }
 }
 
@@ -333,6 +338,20 @@ mod tests {
         let held = input("1\r\n2\r\n3\r\n4\r\n5\r\n❯ abcdefghijklmnopqrstuvwxy", 2);
         assert_eq!(held.text, "abcdefghijklmnopqrstuvwxy");
         assert_eq!(held.cursor, 25);
+    }
+
+    #[test]
+    fn the_screen_says_whether_the_program_is_on_the_alternate_screen() {
+        let mut p = vt100::Parser::new(6, 20, 0);
+        p.process(b"$ nvim");
+        assert!(!screen_of(p.screen()).alt);
+        p.process(b"\x1b[?1049h~");
+        assert!(screen_of(p.screen()).alt, "entered");
+        p.process(b"\x1b[?1049l");
+        assert!(
+            !screen_of(p.screen()).alt,
+            "left: the shell's own screen is back"
+        );
     }
 
     #[test]

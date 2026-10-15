@@ -102,12 +102,25 @@ pub fn program_name(cmd: &str) -> String {
 /// The frames of the spinner of a program that is starting, one every 110 ms.
 const SPIN: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-/// What a pane says while the program that has its screen has not painted anything: the spinner
-/// and `iniciando <name>…` in the middle of its box, and that `^C` cancels (spec REQ-259).
-pub fn loading(g: &mut Grid, (x, y, w, h): Rect, name: &str, now_ms: u64) {
+/// What a program that has the pane's screen is doing when the pane cannot show its screen.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Phase {
+    /// It has not painted anything yet.
+    Starting,
+    /// It left its screen and has not finished: the shell's own screen is back under it.
+    Closing,
+}
+
+/// What a pane says instead of its screen: the spinner and `iniciando <name>…` (and that `^C`
+/// cancels) or `cerrando <name>…` (and that it is waiting for it to end), in the middle of its box
+/// (spec REQ-259, REQ-264).
+pub fn loading(g: &mut Grid, (x, y, w, h): Rect, phase: Phase, name: &str, now_ms: u64) {
     let frame = SPIN[(now_ms / 110) as usize % SPIN.len()];
-    let line = clip(&format!("{frame} iniciando {name}…"), w.saturating_sub(4));
-    let hint = "^C cancela";
+    let (what, hint) = match phase {
+        Phase::Starting => ("iniciando", "^C cancela"),
+        Phase::Closing => ("cerrando", "esperando a que termine"),
+    };
+    let line = clip(&format!("{frame} {what} {name}…"), w.saturating_sub(4));
     let mid = y + h / 2;
     let centre = |text: &str| x + w.saturating_sub(text.chars().count()) / 2;
     g.put(
@@ -396,7 +409,7 @@ mod loading_tests {
     #[test]
     fn the_loading_says_what_starts_and_leaves_the_border_of_a_short_box_alone() {
         let mut g = Grid::new(30, 8);
-        loading(&mut g, (0, 0, 30, 8), "claude", 0);
+        loading(&mut g, (0, 0, 30, 8), Phase::Starting, "claude", 0);
         let rows = g.rows_plain();
         assert!(
             rows.iter().any(|r| r.contains("⠋ iniciando claude…")),
@@ -404,7 +417,7 @@ mod loading_tests {
         );
         assert!(rows.iter().any(|r| r.contains("^C cancela")), "{rows:?}");
         let mut g = Grid::new(30, 4);
-        loading(&mut g, (0, 0, 30, 4), "claude", 110);
+        loading(&mut g, (0, 0, 30, 4), Phase::Starting, "claude", 110);
         let rows = g.rows_plain();
         assert!(
             rows[1].contains("⠙ iniciando claude…"),

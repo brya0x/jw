@@ -412,6 +412,9 @@ pub struct View {
     /// The block of each pane whose program has painted something on the normal screen: once it has, the pane
     /// never says it is starting again for that block, whatever the program clears.
     painted: HashMap<String, u64>,
+    /// Each pane whose running program has left the alternate screen: its block, and when this client saw it leave
+    /// (the shell's own screen is back under the program until the command ends).
+    left_alt: HashMap<String, (u64, u64)>,
     /// The selected block: its pane and its id.
     blk: Option<(String, u64)>,
     /// How many lines each pane's blocks are scrolled up from the newest.
@@ -481,6 +484,7 @@ impl View {
             last_size: None,
             blocks: HashMap::new(),
             painted: HashMap::new(),
+            left_alt: HashMap::new(),
             blk: None,
             scroll: HashMap::new(),
             now_ms: 0,
@@ -689,6 +693,7 @@ impl View {
             }
         }
         self.note_painted();
+        self.note_left_alt();
         self.update_changes();
         self.advance_manage();
         self.follow_goto();
@@ -742,6 +747,44 @@ impl View {
                 self.painted.insert(id.clone(), k.id);
             }
         }
+    }
+
+    /// Remember when a program left the alternate screen and is still running (see `left_alt`).
+    fn note_left_alt(&mut self) {
+        self.left_alt
+            .retain(|pane, _| self.panes.contains_key(pane));
+        for (id, p) in &self.panes {
+            let leaving = p
+                .blocks
+                .as_ref()
+                .and_then(|b| self.blocks.get(b))
+                .filter(|b| b.mode == BlocksMode::Full)
+                .and_then(running_block)
+                .filter(|k| k.full && !p.screen.alt);
+            match leaving {
+                Some(k) => {
+                    let since = self.left_alt.get(id).filter(|(block, _)| *block == k.id);
+                    let since = since.map_or(self.now_ms, |(_, at)| *at);
+                    self.left_alt.insert(id.clone(), (k.id, since));
+                }
+                None => {
+                    self.left_alt.remove(id);
+                }
+            }
+        }
+    }
+
+    /// The program that used the alternate screen, left it and has not ended (spec REQ-264): the
+    /// pane's screen is the shell's own again, as it was before the program. A program that stays so
+    /// for `CLOSING_MAX_MS` is running something else on purpose and its screen is shown.
+    fn closing(&self, pane: &str) -> Option<String> {
+        let p = self.panes.get(pane)?;
+        let b = self.blocks.get(p.blocks.as_ref()?)?;
+        let k =
+            running_block(b).filter(|k| b.mode == BlocksMode::Full && k.full && !p.screen.alt)?;
+        let (block, since) = self.left_alt.get(pane)?;
+        (*block == k.id && self.now_ms.saturating_sub(*since) < CLOSING_MAX_MS)
+            .then(|| shell::program_name(&k.cmd))
     }
 
     /// The program a pane's blocks say has the screen and has not painted anything yet (spec
@@ -2151,8 +2194,15 @@ impl View {
                 self.blocks_view(g, b, p, rect, focused, branch);
                 continue;
             }
-            if let Some(name) = self.starting(&summary.id) {
-                shell::loading(g, (bx, by, bw, bh), &name, self.now_ms);
+            let loading = self
+                .closing(&summary.id)
+                .map(|name| (shell::Phase::Closing, name))
+                .or_else(|| {
+                    self.starting(&summary.id)
+                        .map(|name| (shell::Phase::Starting, name))
+                });
+            if let Some((phase, name)) = loading {
+                shell::loading(g, (bx, by, bw, bh), phase, &name, self.now_ms);
                 continue;
             }
             // The shell has blocks that have not arrived: the screen would show for a moment
@@ -2376,6 +2426,8 @@ fn list_h(h: usize, band: usize) -> usize {
 
 /// How long a program that has the screen is waited for before the pane shows its screen as it is.
 const LOADING_MAX_MS: u64 = 20_000;
+/// How long a program that left the alternate screen is waited for to end before the pane shows its screen.
+const CLOSING_MAX_MS: u64 = 3_000;
 
 /// The command a pane's blocks say is running: the last block, while it runs.
 fn running_block(b: &Blocks) -> Option<&contract::Block> {
@@ -3189,6 +3241,82 @@ mod tests {
         v.set_now(1_000 + LOADING_MAX_MS);
         let t = v.plain(120, 30);
         assert!(t.contains("SCREEN-TEXT") && !t.contains("iniciando"), "{t}");
+    }
+
+    /// The shell pane of the fixture with `nvim` just left: it used the alternate screen, left it, and the
+    /// command has not ended, so the pane's screen is the shell's own again.
+    fn nvim_closing() -> View {
+        let mut v = open_blocks();
+        let node = v.blocks.get_mut(BLOCKS).unwrap();
+        node.mode = BlocksMode::Full;
+        let k = node.blocks.last_mut().unwrap();
+        k.id = 98;
+        k.cmd = "nvim src/main.rs".into();
+        k.running = true;
+        k.full = true;
+        k.out.clear();
+        let pane = v.panes.get_mut(SHELL).unwrap();
+        pane.screen.lines[0] = "SCREEN-TEXT".into();
+        pane.screen.alt = false;
+        v.set_now(5_000);
+        v.note_left_alt();
+        v
+    }
+
+    #[test]
+    fn a_program_that_left_the_alternate_screen_and_has_not_ended_is_closing_not_the_shells_screen()
+    {
+        let t = nvim_closing().plain(120, 30);
+        assert!(t.contains("cerrando nvim…"), "{t}");
+        assert!(t.contains("esperando a que termine"), "{t}");
+        assert!(
+            !t.contains("SCREEN-TEXT"),
+            "the shell's own screen stays hidden: {t}"
+        );
+    }
+
+    #[test]
+    fn a_program_on_the_alternate_screen_a_normal_one_or_one_that_stays_out_for_long_shows_its_screen()
+     {
+        let screen = |v: &View| {
+            let t = v.plain(120, 30);
+            assert!(!t.contains("cerrando"), "{t}");
+            assert!(t.contains("SCREEN-TEXT"), "{t}");
+        };
+        let mut v = nvim_closing();
+        v.panes.get_mut(SHELL).unwrap().screen.alt = true;
+        v.note_left_alt();
+        screen(&v);
+        let mut v = nvim_closing();
+        v.blocks
+            .get_mut(BLOCKS)
+            .unwrap()
+            .blocks
+            .last_mut()
+            .unwrap()
+            .full = false;
+        v.note_left_alt();
+        paint(&mut v, "its own output");
+        screen(&v);
+        let mut v = nvim_closing();
+        v.set_now(5_000 + CLOSING_MAX_MS);
+        screen(&v);
+    }
+
+    #[test]
+    fn going_back_to_the_alternate_screen_starts_the_wait_over() {
+        let mut v = nvim_closing();
+        v.set_now(7_000);
+        v.panes.get_mut(SHELL).unwrap().screen.alt = true;
+        v.note_left_alt();
+        v.set_now(9_000);
+        v.panes.get_mut(SHELL).unwrap().screen.alt = false;
+        v.note_left_alt();
+        v.set_now(9_000 + CLOSING_MAX_MS - 1);
+        assert!(
+            v.plain(120, 30).contains("cerrando nvim…"),
+            "the 3 s count from the second time"
+        );
     }
 
     #[test]

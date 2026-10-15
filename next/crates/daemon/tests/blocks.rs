@@ -513,3 +513,53 @@ fn the_pane_carries_what_the_shell_holds_at_its_prompt_and_nothing_while_a_comma
         "back at the prompt the line is empty again"
     );
 }
+
+/// REQ-263: the pane's screen says whether its program is on the alternate screen, and the program that
+/// left it is still a running block in mode `full` until the shell says it ended.
+#[test]
+fn the_pane_says_when_its_program_is_on_the_alternate_screen_and_when_it_left_it_before_it_ended() {
+    use std::os::unix::fs::PermissionsExt;
+    let Some(shell) = find("zsh").or_else(|| find("bash")) else {
+        return;
+    };
+    let mut r = rig(&shell);
+    let stub = r.dir.join("altprog");
+    std::fs::write(
+        &stub,
+        "#!/bin/sh\nprintf '\\033[?1049h'\nsleep 1\nprintf '\\033[?1049l'\nsleep 1.5\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let (pane, blocks) = (r.pane.clone(), r.blocks.clone());
+    let alt = move |c: &Client| c.nodes[&pane]["screen"]["alt"] == true;
+    let pane = r.pane.clone();
+    let left = move |c: &Client| {
+        c.nodes[&pane]["screen"].get("alt").is_none()
+            && c.nodes[&blocks]["blocks"].as_array().is_some_and(|b| {
+                b.last()
+                    .is_some_and(|k| k["running"] == true && k["full"] == true)
+            })
+    };
+
+    assert!(
+        r.c.nodes[&r.pane]["screen"].get("alt").is_none(),
+        "at the shell's prompt the flag is absent"
+    );
+    r.run(&stub.to_string_lossy());
+    assert!(
+        r.c.wait_until(Duration::from_secs(10), alt).unwrap(),
+        "{}",
+        r.c.nodes[&r.pane]
+    );
+    assert!(
+        r.c.wait_until(Duration::from_secs(10), left).unwrap(),
+        "it left the alternate screen and is still the running block, full: {}",
+        r.c.nodes[&r.blocks]
+    );
+    assert_eq!(
+        r.c.nodes[&r.blocks]["mode"], "full",
+        "the node stays full until the shell says the command ended"
+    );
+    r.finished(1);
+    assert_eq!(r.c.nodes[&r.blocks]["mode"], "blocks");
+}

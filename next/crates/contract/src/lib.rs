@@ -606,6 +606,9 @@ pub struct Screen {
     /// Exactly `rows` lines of text, trailing blanks trimmed.
     pub lines: Vec<String>,
     pub cursor: Cursor,
+    /// The program is on the alternate screen (nvim, htop, claude…); absent otherwise.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub alt: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

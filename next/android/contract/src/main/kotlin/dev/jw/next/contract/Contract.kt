@@ -317,7 +317,8 @@ data class Program(val argv: List<String>, @SerialName("exit_code") val exitCode
 data class Cursor(val row: Int, val col: Int, val visible: Boolean)
 
 @Serializable
-data class Screen(val rows: Int, val cols: Int, val lines: List<String>, val cursor: Cursor)
+/** [alt]: the program is on the alternate screen (nvim, htop, claude…). */
+data class Screen(val rows: Int, val cols: Int, val lines: List<String>, val cursor: Cursor, val alt: Boolean = false)
 
 /**
  * A node: one document of the tree, opened on demand and cached by clients. `v` is the

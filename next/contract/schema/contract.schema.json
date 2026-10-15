@@ -165,6 +165,7 @@
         "rows": { "type": "integer", "minimum": 1 },
         "cols": { "type": "integer", "minimum": 1 },
         "lines": { "type": "array", "items": { "type": "string" } },
+        "alt": { "type": "boolean" },
         "cursor": {
           "type": "object",
           "required": ["row", "col", "visible"],

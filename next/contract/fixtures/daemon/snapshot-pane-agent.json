@@ -37,7 +37,8 @@
         "row": 3,
         "col": 2,
         "visible": true
-      }
+      },
+      "alt": true
     }
   }
 }
