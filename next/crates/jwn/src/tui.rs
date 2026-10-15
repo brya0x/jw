@@ -740,7 +740,7 @@ impl View {
     fn note_painted(&mut self) {
         self.painted.retain(|pane, _| self.panes.contains_key(pane));
         for (id, p) in &self.panes {
-            let Some(b) = p.blocks.as_ref().and_then(|b| self.blocks.get(b)) else {
+            let Some(b) = blocks_node(&self.blocks, p) else {
                 continue;
             };
             if let Some(k) = running_block(b).filter(|k| shell::has_ink(&k.out)) {
@@ -754,12 +754,8 @@ impl View {
         self.left_alt
             .retain(|pane, _| self.panes.contains_key(pane));
         for (id, p) in &self.panes {
-            let leaving = p
-                .blocks
-                .as_ref()
-                .and_then(|b| self.blocks.get(b))
-                .filter(|b| b.mode == BlocksMode::Full)
-                .and_then(running_block)
+            let leaving = blocks_node(&self.blocks, p)
+                .and_then(running_full)
                 .filter(|k| k.full && !p.screen.alt);
             match leaving {
                 Some(k) => {
@@ -779,9 +775,7 @@ impl View {
     /// for `CLOSING_MAX_MS` is running something else on purpose and its screen is shown.
     fn closing(&self, pane: &str) -> Option<String> {
         let p = self.panes.get(pane)?;
-        let b = self.blocks.get(p.blocks.as_ref()?)?;
-        let k =
-            running_block(b).filter(|k| b.mode == BlocksMode::Full && k.full && !p.screen.alt)?;
+        let k = running_full(blocks_node(&self.blocks, p)?).filter(|k| k.full && !p.screen.alt)?;
         let (block, since) = self.left_alt.get(pane)?;
         (*block == k.id && self.now_ms.saturating_sub(*since) < CLOSING_MAX_MS)
             .then(|| shell::program_name(&k.cmd))
@@ -792,8 +786,7 @@ impl View {
     /// as it was. A program that has not painted in `LOADING_MAX_MS` is not waited for.
     fn starting(&self, pane: &str) -> Option<String> {
         let p = self.panes.get(pane)?;
-        let b = self.blocks.get(p.blocks.as_ref()?)?;
-        let k = running_block(b).filter(|k| b.mode == BlocksMode::Full && !k.full)?;
+        let k = running_full(blocks_node(&self.blocks, p)?).filter(|k| !k.full)?;
         let waiting = !shell::has_ink(&k.out)
             && self.painted.get(pane) != Some(&k.id)
             && self.now_ms.saturating_sub(k.started) < LOADING_MAX_MS;
@@ -803,8 +796,7 @@ impl View {
     /// The pane's blocks, when it is drawn as blocks (a program with the whole screen, or a
     /// shell without the integration, is drawn as its screen).
     fn blocks_of(&self, pane: &str) -> Option<&Blocks> {
-        let id = self.panes.get(pane)?.blocks.as_ref()?;
-        self.blocks.get(id).filter(|b| b.mode == BlocksMode::Blocks)
+        blocks_node(&self.blocks, self.panes.get(pane)?).filter(|b| b.mode == BlocksMode::Blocks)
     }
 
     fn selected_id(&self) -> Option<String> {
@@ -975,8 +967,7 @@ impl View {
         if let Some(program) = &p.running {
             return Some(program_name(program));
         }
-        let blocks = self.blocks.get(p.blocks.as_ref()?)?;
-        let last = running_block(blocks)?;
+        let last = running_block(blocks_node(&self.blocks, p)?)?;
         Some(clip(&shell::program_name(&last.cmd), 24))
     }
 
@@ -2428,6 +2419,16 @@ fn list_h(h: usize, band: usize) -> usize {
 const LOADING_MAX_MS: u64 = 20_000;
 /// How long a program that left the alternate screen is waited for to end before the pane shows its screen.
 const CLOSING_MAX_MS: u64 = 3_000;
+
+/// The blocks node of a pane, when it has one and it has arrived.
+fn blocks_node<'a>(nodes: &'a HashMap<String, Blocks>, pane: &Pane) -> Option<&'a Blocks> {
+    nodes.get(pane.blocks.as_ref()?)
+}
+
+/// The command running in a node that is in mode `full` (a program has the screen).
+fn running_full(b: &Blocks) -> Option<&contract::Block> {
+    running_block(b).filter(|_| b.mode == BlocksMode::Full)
+}
 
 /// The command a pane's blocks say is running: the last block, while it runs.
 fn running_block(b: &Blocks) -> Option<&contract::Block> {
