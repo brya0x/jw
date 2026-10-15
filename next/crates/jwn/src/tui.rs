@@ -121,6 +121,18 @@ impl Grid {
         }
     }
 
+    /// Blank a box on the panel colour, before a popup is drawn over what is under it.
+    fn clear_box(&mut self, (x, y, w, h): (usize, usize, usize, usize)) {
+        for r in 0..h {
+            for c in 0..w {
+                if y + r < self.rows && x + c < self.cols {
+                    self.cells[(y + r) * self.cols + x + c] =
+                        (' ', Style::default().on(look::panel()));
+                }
+            }
+        }
+    }
+
     /// A rounded box; the title sits on the top border at the left, `badge` at the right.
     fn boxed(
         &mut self,
@@ -2214,13 +2226,7 @@ impl View {
     fn avisos_box(&self, g: &mut Grid, (x, y, w, h): Rect) {
         let items = self.avisos();
         let (bx, by, bw, bh) = avisos_rect(items.len(), (x, y, w, h));
-        for r in 0..bh {
-            for c in 0..bw {
-                if by + r < g.rows && bx + c < g.cols {
-                    g.cells[(by + r) * g.cols + bx + c] = (' ', Style::default().on(look::panel()));
-                }
-            }
-        }
+        g.clear_box((bx, by, bw, bh));
         g.boxed(
             (bx, by, bw, bh),
             "avisos",
@@ -2268,13 +2274,7 @@ impl View {
         let bw = 62.min(w.saturating_sub(2));
         let bh = keys.len() + 4;
         let (bx, by) = (x + w.saturating_sub(bw) / 2, y + 3);
-        for r in 0..bh {
-            for c in 0..bw {
-                if by + r < g.rows && bx + c < g.cols {
-                    g.cells[(by + r) * g.cols + bx + c] = (' ', Style::default().on(look::panel()));
-                }
-            }
-        }
+        g.clear_box((bx, by, bw, bh));
         g.boxed(
             (bx, by, bw, bh),
             title,

@@ -372,13 +372,7 @@ pub fn draw(g: &mut Grid, (x, y, w, h): Rect, state: &State, paired: usize) {
         lines.len() + 4
     };
     let (bx, by) = (x + w.saturating_sub(bw) / 2, y + 2);
-    for r in 0..bh {
-        for c in 0..bw {
-            if by + r < g.rows && bx + c < g.cols {
-                g.cells[(by + r) * g.cols + bx + c] = (' ', Style::default().on(look::panel()));
-            }
-        }
-    }
+    g.clear_box((bx, by, bw, bh));
     g.boxed(
         (bx, by, bw, bh),
         title,

@@ -230,10 +230,6 @@ fn short(path: &Path) -> String {
     }
 }
 
-fn panel() -> Style {
-    Style::default().on(look::panel())
-}
-
 /// Draw the browser over `area`: the list at the left, a look at the highlighted folder at
 /// the right.
 pub fn draw_picker(g: &mut Grid, (x, y, w, h): Rect, p: &Picker, is_open: &dyn Fn(&Path) -> bool) {
@@ -241,13 +237,7 @@ pub fn draw_picker(g: &mut Grid, (x, y, w, h): Rect, p: &Picker, is_open: &dyn F
     let bh = 22.min(h.saturating_sub(1)).max(10);
     let (bx, by) = (x + w.saturating_sub(bw) / 2, y + 1);
     let list = bw * 4 / 9;
-    for r in 0..bh {
-        for c in 0..bw {
-            if by + r < g.rows && bx + c < g.cols {
-                g.cells[(by + r) * g.cols + bx + c] = (' ', panel());
-            }
-        }
-    }
+    g.clear_box((bx, by, bw, bh));
     g.boxed(
         (bx, by, bw, bh),
         "abrir una carpeta",
@@ -577,13 +567,7 @@ pub fn draw_worktree(g: &mut Grid, (x, y, w, _): Rect, t: &Worktree) {
         .max(30);
     let bh = lines.len() + 4;
     let (bx, by) = (x + w.saturating_sub(bw) / 2, y + 3);
-    for r in 0..bh {
-        for c in 0..bw {
-            if by + r < g.rows && bx + c < g.cols {
-                g.cells[(by + r) * g.cols + bx + c] = (' ', panel());
-            }
-        }
-    }
+    g.clear_box((bx, by, bw, bh));
     let border = if matches!(t.plan(), Plan::Ok { .. }) {
         look::blue()
     } else {

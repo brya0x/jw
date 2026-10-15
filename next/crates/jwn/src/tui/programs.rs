@@ -17,7 +17,7 @@ use super::{Grid, Rect, Style, clip, look};
 const RESERVED: [char; 3] = ['j', 'k', 'n'];
 /// How wide the menu is, at most.
 const WIDTH: usize = 66;
-/// Where a row's name and its command start inside the box, and how wide the name may be.
+/// The columns, inside the box, where a row's name and its command start.
 const NAME_AT: usize = 8;
 const COMMAND_AT: usize = 28;
 
@@ -228,13 +228,7 @@ impl Launcher {
     /// Draw the menu over `area`, near its top and centred.
     pub fn draw(&self, g: &mut Grid, area: Rect, programs: &Programs) {
         let (bx, by, bw, bh) = frame(area, programs);
-        for r in 0..bh {
-            for c in 0..bw {
-                if by + r < g.rows && bx + c < g.cols {
-                    g.cells[(by + r) * g.cols + bx + c] = (' ', Style::default().on(look::panel()));
-                }
-            }
-        }
+        g.clear_box((bx, by, bw, bh));
         g.boxed(
             (bx, by, bw, bh),
             "panel nuevo",
@@ -381,6 +375,13 @@ command = ["cargo", "test"]
         assert_eq!(Programs::parse("# nothing yet\n").unwrap(), built_in());
         let dir = std::env::temp_dir().join(format!("jwn-programs-{}", std::process::id()));
         assert_eq!(Programs::read_from(&dir.join("none.toml")), Ok(built_in()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let unreadable = Programs::read_from(&dir).unwrap_err();
+        assert!(
+            unreadable.starts_with("no se pudo leer config.toml: "),
+            "{unreadable}"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
         let only: Vec<_> = Programs::parse("[[program]]\nname = \"v\"\ncommand = [\"nvim\"]\n")
             .unwrap()
             .into_iter()
