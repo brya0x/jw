@@ -711,7 +711,9 @@ dependencies = [
  "daemon",
  "identity",
  "qrcode",
+ "serde",
  "serde_json",
+ "toml",
  "web",
  "wire",
 ]

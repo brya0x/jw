@@ -27,6 +27,7 @@ mod look;
 mod manage;
 mod open;
 mod phone;
+mod programs;
 mod settings;
 mod shell;
 mod side;
@@ -35,6 +36,7 @@ pub use changes::Ask;
 use changes::{Changes, Docs, Outcome, Src};
 use contract::ErrorBody;
 use manage::{Act, Manage, Named, Target};
+use programs::{Launcher, Pick, Programs};
 use settings::Settings;
 use wire::ClientError;
 
@@ -284,6 +286,8 @@ pub enum Key {
     Enter,
     Avisos,
     NewPane,
+    /// The menu of programs a new panel can start (`N`).
+    NewProgram,
     /// Open the diff of the highlighted workspace.
     Changes,
     /// Close what the level is about: the highlighted workspace, or the focused panel.
@@ -312,6 +316,11 @@ pub enum After {
     Quit,
     /// Ask the daemon for a new pane in this workspace.
     NewPane(String),
+    /// Ask the daemon for a new pane that starts this program (the program and its arguments).
+    NewProgram {
+        workspace: String,
+        program: Vec<String>,
+    },
     /// Bytes for a pane's shell: what was typed.
     Write {
         pane: String,
@@ -412,6 +421,9 @@ pub struct View {
     os_dark: bool,
     /// The settings changed here and are not written yet.
     save: bool,
+    /// The programs `config.toml` offers a new panel, and the menu over them while it is open.
+    programs: Programs,
+    launcher: Option<Launcher>,
     /// The folder browser and the worktree box, while one is open.
     picker: Option<open::Picker>,
     worktree: Option<open::Worktree>,
@@ -465,6 +477,8 @@ impl View {
             settings: Settings::default(),
             os_dark: true,
             save: false,
+            programs: Programs::default(),
+            launcher: None,
             picker: None,
             worktree: None,
             goto: None,
@@ -481,6 +495,11 @@ impl View {
 
     pub fn settings(&self) -> &Settings {
         &self.settings
+    }
+
+    /// `config.toml` was read: the list the menu offers, or why the one it has stays.
+    pub fn set_programs(&mut self, read: Result<Vec<programs::Program>, String>) {
+        self.programs.apply(read);
     }
 
     /// The settings file changed (or was read for the first time).
@@ -1152,6 +1171,31 @@ impl View {
         }
     }
 
+    /// A key while the menu of programs is open: it moves, picks or cancels, and is never a pane's.
+    fn launcher_key(&mut self, ev: KeyEvent) -> After {
+        // A chord is not a letter of the menu: it answers nothing.
+        if ev.modifiers.contains(KeyModifiers::CONTROL) {
+            return After::Continue;
+        }
+        let Some(menu) = self.launcher.take() else {
+            return After::Continue;
+        };
+        let (next, pick) = menu.press(ev.code, &self.programs);
+        self.launcher = next;
+        self.started(pick)
+    }
+
+    /// What the menu started, in the workspace the keys are on.
+    fn started(&mut self, pick: Option<Pick>) -> After {
+        let (Some(pick), Some(workspace)) = (pick, self.selected_id()) else {
+            return After::Continue;
+        };
+        match pick {
+            Pick::Shell => After::NewPane(workspace),
+            Pick::Program(program) => After::NewProgram { workspace, program },
+        }
+    }
+
     /// `m`: show the phone box, turning the link on when it is off.
     fn open_phone(&mut self) {
         if self.manage.is_some() {
@@ -1335,6 +1379,9 @@ impl View {
         if self.worktree.is_some() {
             return self.worktree_key(ev);
         }
+        if self.launcher.is_some() {
+            return self.launcher_key(ev);
+        }
         if self.phone_open {
             return self.phone_key(ev);
         }
@@ -1458,6 +1505,11 @@ impl View {
                     return After::NewPane(id);
                 }
             }
+            (Mode::Workspaces, Key::NewProgram) if level == Level::Panels => {
+                if self.selected_id().is_some() {
+                    self.launcher = Some(Launcher::default());
+                }
+            }
             (Mode::Workspaces, Key::Settings) => self.manage = Some(self.settings_question()),
             (Mode::Workspaces, Key::Phone) => self.open_phone(),
             (Mode::Avisos, Key::Down) => {
@@ -1573,6 +1625,13 @@ impl View {
             self.help = false;
             return After::Continue;
         }
+        if let Some(menu) = self.launcher {
+            let px = SIDEBAR + 1;
+            let area = (px, 1, cols.saturating_sub(px), rows.saturating_sub(2));
+            let (next, pick) = menu.click(area, &self.programs, x, y);
+            self.launcher = next;
+            return self.started(pick);
+        }
         if self.manage.is_some()
             || self.phone_open
             || self.picker.is_some()
@@ -1646,6 +1705,7 @@ impl View {
     pub fn scroll(&mut self, down: bool, x: usize, y: usize, cols: usize, rows: usize) -> After {
         if self.help
             || self.manage.is_some()
+            || self.launcher.is_some()
             || self.phone_open
             || self.picker.is_some()
             || self.worktree.is_some()
@@ -1850,6 +1910,11 @@ impl View {
         let level = self.level();
         let diff_status = self.changes.as_ref().map(|c| c.status(&self.docs()));
         let (chip, bg, hint) = match (&self.manage, &diff_status) {
+            (None, _) if self.launcher.is_some() => (
+                " PANEL ",
+                look::magenta(),
+                "j/k mover · ↵ abrir · letra directa · esc cancelar",
+            ),
             (None, _) if self.picker.is_some() => (
                 " ABRIR ",
                 look::cyan(),
@@ -1884,7 +1949,7 @@ impl View {
                 (_, Level::Panels) => (
                     " PANEL ",
                     look::magenta(),
-                    "h/l panel · ↵ escribir · n nuevo · r nombrar · f completa · x cerrar · esc volver · ? teclas",
+                    "h/l panel · ↵ escribir · n nuevo · N con programa · r nombrar · f completa · x cerrar · esc volver · ? teclas",
                 ),
                 (_, Level::Workspaces) => (
                     " WORKSPACE ",
@@ -1962,6 +2027,9 @@ impl View {
                 &self.phone,
                 self.phone_paired,
             );
+        }
+        if let Some(menu) = &self.launcher {
+            menu.draw(&mut g, (px, 1, pw, rows.saturating_sub(2)), &self.programs);
         }
         if let Some(question) = &self.manage {
             question.draw(
@@ -2264,7 +2332,8 @@ const WORKSPACE_KEYS: &[(&str, &str)] = &[
 const PANEL_KEYS: &[(&str, &str)] = &[
     ("h j k l", "cambiar de panel"),
     ("↵", "escribir en el panel"),
-    ("n", "panel nuevo"),
+    ("n", "panel nuevo (shell)"),
+    ("N", "panel nuevo con un programa (^␣ N)"),
     ("r", "nombrar el panel"),
     ("f", "el panel a pantalla completa"),
     ("x", "cerrar el panel"),
@@ -2454,6 +2523,7 @@ fn key_of(code: KeyCode) -> Option<Key> {
         KeyCode::Enter => Key::Enter,
         KeyCode::Char('a') => Key::Avisos,
         KeyCode::Char('n') => Key::NewPane,
+        KeyCode::Char('N') => Key::NewProgram,
         KeyCode::Char('d') => Key::Changes,
         KeyCode::Char('x') => Key::Close,
         KeyCode::Char('f') => Key::Full,
@@ -2617,15 +2687,21 @@ pub fn run() -> Result<(), String> {
     let _term = Terminal::enter().map_err(|e| e.to_string())?;
     let mut last: Vec<String> = Vec::new();
     view.set_settings(Settings::load());
+    view.set_programs(Programs::read());
     view.set_os_dark(settings::os_is_dark());
     let mut phone_worker: Option<phone::Worker> = None;
     let (mut settings_read, mut appearance_read) = (Instant::now(), Instant::now());
+    let mut programs_read = Instant::now();
     loop {
         // The settings file may be changed by another terminal; the machine's appearance by
         // the person, at any time.
         if settings_read.elapsed() >= SETTINGS_EVERY && !view.unsaved() {
             settings_read = Instant::now();
             view.set_settings(Settings::load());
+        }
+        if programs_read.elapsed() >= SETTINGS_EVERY {
+            programs_read = Instant::now();
+            view.set_programs(Programs::read());
         }
         if view.settings().mode == settings::Mode::System
             && appearance_read.elapsed() >= APPEARANCE_EVERY
@@ -2737,6 +2813,14 @@ pub fn run() -> Result<(), String> {
                         program: None,
                     });
                 }
+                After::NewProgram { workspace, program } => match client.cmd(Cmd::NewPane {
+                    workspace,
+                    program: Some(program),
+                }) {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(e)) => view.manage_failed("No se pudo abrir el programa", &e.message),
+                    Err(e) => view.manage_failed("No se pudo abrir el programa", &e.to_string()),
+                },
                 After::OpenFolder { path, create } => {
                     if create && let Err(e) = std::fs::create_dir(&path) {
                         view.manage_failed("No se pudo crear la carpeta", &e.to_string());
@@ -3457,6 +3541,123 @@ mod tests {
         );
         v.press(Key::Enter);
         assert!(matches!(v.press(Key::NewPane), After::NewPane(_)));
+    }
+
+    const PROGRAMS: &str = "[[program]]\nname = \"claude\"\nkey = \"c\"\ncommand = [\"claude\"]\n\n[[program]]\nname = \"claude opus\"\nkey = \"o\"\ncommand = [\"claude\", \"--model\", \"opus\"]\n";
+
+    fn menu_view() -> View {
+        let mut v = fixture_view();
+        v.set_programs(Programs::parse(PROGRAMS));
+        v.press(Key::Enter);
+        v
+    }
+
+    fn shift_n() -> KeyEvent {
+        key(KeyCode::Char('N'), KeyModifiers::SHIFT)
+    }
+
+    #[test]
+    fn shift_n_opens_the_menu_of_programs_at_the_panel_level_and_n_still_makes_a_shell() {
+        let mut v = fixture_view();
+        v.set_programs(Programs::parse(PROGRAMS));
+        v.press_key(shift_n());
+        assert!(v.launcher.is_none(), "not at the workspace level");
+        v.press(Key::Enter);
+        assert_eq!(v.press_key(shift_n()), After::Continue);
+        assert!(v.launcher.is_some());
+        let text = v.plain(120, 30);
+        for want in ["panel nuevo", "shell", "claude opus", "claude --model opus"] {
+            assert!(text.contains(want), "{want}\n{text}");
+        }
+        v.press_key(plain(KeyCode::Esc));
+        assert!(v.launcher.is_none());
+        assert!(matches!(
+            v.press_key(plain(KeyCode::Char('n'))),
+            After::NewPane(_)
+        ));
+    }
+
+    #[test]
+    fn the_menu_starts_a_program_by_its_row_or_its_letter_in_the_workspace_the_keys_are_on() {
+        let mut v = menu_view();
+        let workspace = v.selected_id().unwrap();
+        v.press_key(shift_n());
+        v.press_key(plain(KeyCode::Char('j')));
+        v.press_key(plain(KeyCode::Char('j')));
+        assert_eq!(
+            v.press_key(plain(KeyCode::Enter)),
+            After::NewProgram {
+                workspace: workspace.clone(),
+                program: vec!["claude".into(), "--model".into(), "opus".into()],
+            }
+        );
+        assert!(v.launcher.is_none(), "a pick closes the menu");
+        v.press_key(shift_n());
+        assert_eq!(
+            v.press_key(plain(KeyCode::Char('c'))),
+            After::NewProgram {
+                workspace: workspace.clone(),
+                program: vec!["claude".into()],
+            }
+        );
+        v.press_key(shift_n());
+        assert_eq!(
+            v.press_key(plain(KeyCode::Enter)),
+            After::NewPane(workspace),
+            "the first row is the shell"
+        );
+    }
+
+    #[test]
+    fn while_the_menu_is_open_a_chord_and_the_mouse_wheel_do_nothing_and_a_click_picks() {
+        let mut v = menu_view();
+        v.press_key(shift_n());
+        assert_eq!(
+            v.press_key(key(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            After::Continue
+        );
+        assert!(v.launcher.is_some());
+        v.scroll(true, 40, 10, 120, 30);
+        assert!(v.launcher.is_some());
+        let area = (SIDEBAR + 1, 1, 120 - SIDEBAR - 1, 28);
+        let (bx, by, ..) = programs::frame(area, &v.programs);
+        assert!(matches!(
+            v.click(bx + 10, by + 3 + 1, 120, 30),
+            After::NewProgram { .. }
+        ));
+        v.press_key(shift_n());
+        assert_eq!(v.click(0, 0, 120, 30), After::Continue);
+        assert!(v.launcher.is_none(), "a click outside closes it");
+    }
+
+    #[test]
+    fn the_leader_then_shift_n_opens_the_menu_from_the_terminal_level() {
+        let mut v = menu_view();
+        v.press(Key::Enter);
+        assert!(v.typing_pane().is_some());
+        v.press_key(key(KeyCode::Char(' '), KeyModifiers::CONTROL));
+        v.press_key(shift_n());
+        assert!(v.launcher.is_some());
+        assert!(v.typing_pane().is_none(), "the keys are the menu's");
+    }
+
+    #[test]
+    fn a_file_that_does_not_read_is_said_in_the_menu_and_the_list_stays() {
+        let mut v = menu_view();
+        v.set_programs(Programs::parse("[[program]]\nname = \"a\"\n"));
+        v.press_key(shift_n());
+        let text = v.plain(120, 30);
+        assert!(
+            text.contains("línea 1: [[program]] sin «command»"),
+            "{text}"
+        );
+        assert!(text.contains("se sigue con la lista anterior"), "{text}");
+        assert!(
+            text.contains("claude opus"),
+            "the list before stays: {text}"
+        );
+        v.set_programs(Programs::parse(PROGRAMS));
+        assert!(!v.plain(120, 30).contains("se sigue con la lista anterior"));
     }
 
     #[test]
