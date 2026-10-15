@@ -38,7 +38,9 @@ pub enum Mark {
 }
 
 /// Lock order: the hub's lock, then `parser` or `blocks` (never both at once). The reader
-/// thread takes only those, so it can never wait on the hub while the hub waits on it.
+/// thread takes only those, so it can never wait on the hub while the hub waits on it; nor on the
+/// input: the answers it owes the program go to a thread of their own, the only one besides a
+/// client's `write` that takes `writer`.
 pub struct Term {
     parser: Arc<Mutex<vt100::Parser>>,
     blocks: Arc<Mutex<BlockStore>>,
@@ -141,15 +143,15 @@ pub fn spawn(
                     match piece {
                         blocks::Piece::Data(d) => {
                             // The screen is read where each query stood, for the cursor's place.
-                            let mut screen = lock(&parser);
+                            let mut emulator = lock(&parser);
                             let mut from = 0;
                             for (end, query) in queries.feed(&d) {
-                                screen.process(&d[from..end]);
+                                emulator.process(&d[from..end]);
                                 from = end;
-                                let _ = answers.send(query.reply(screen.screen()));
+                                let _ = answers.send(query.reply(emulator.screen()));
                             }
-                            screen.process(&d[from..]);
-                            drop(screen);
+                            emulator.process(&d[from..]);
+                            drop(emulator);
                             lock(&store).data(&d);
                         }
                         blocks::Piece::Mark(m) => {
