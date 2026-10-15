@@ -19,6 +19,7 @@ mod persist;
 mod procs;
 mod pty;
 mod rename;
+mod replies;
 mod server;
 mod workspaces;
 

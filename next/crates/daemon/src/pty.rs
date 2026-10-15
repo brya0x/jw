@@ -2,12 +2,13 @@
 
 use std::io::{self, Read, Write};
 use std::path::Path;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 
 use crate::blocks::{self, BlockStore, Scanner};
 use crate::integration::Setup;
+use crate::replies::Queries;
 use contract::{Block, BlocksMode, Cursor, Id, PaneInput, Screen};
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
@@ -44,7 +45,7 @@ pub struct Term {
     /// The column of the screen where the shell's prompt ended (OSC 133;B), while it waits for a
     /// line: the reader sets it at that mark and clears it when a command starts or ends.
     input_col: Arc<Mutex<Option<u16>>>,
-    writer: Mutex<Box<dyn Write + Send>>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
     master: Mutex<Box<dyn MasterPty + Send>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     shell_pid: Option<u32>,
@@ -95,7 +96,7 @@ pub fn spawn(
         parser: Arc::new(Mutex::new(vt100::Parser::new(ROWS, COLS, 0))),
         blocks: Arc::new(Mutex::new(BlockStore::new(COLS))),
         input_col: Arc::new(Mutex::new(None)),
-        writer: Mutex::new(writer),
+        writer: Arc::new(Mutex::new(writer)),
         master: Mutex::new(pair.master),
         killer: Mutex::new(child.clone_killer()),
         shell_pid: child.process_id(),
@@ -103,6 +104,22 @@ pub fn spawn(
     if !integration.args.is_empty() || !integration.env.is_empty() {
         lock(&term.blocks).integrate();
     }
+
+    // What the program asks its terminal is answered on its input by a thread of its own, so the
+    // reader never waits on the input: a program blocked writing cannot hold up the pane (spec REQ-268).
+    let (answers, to_answer) = mpsc::channel::<Vec<u8>>();
+    let input = term.writer.clone();
+    thread::Builder::new()
+        .name("pty-answers".into())
+        .spawn(move || {
+            for answer in to_answer {
+                let mut w = lock(&input);
+                if w.write_all(&answer).and_then(|()| w.flush()).is_err() {
+                    break;
+                }
+            }
+        })
+        .map_err(|e| e.to_string())?;
 
     let parser = term.parser.clone();
     let store = term.blocks.clone();
@@ -113,6 +130,7 @@ pub fn spawn(
         .spawn(move || {
             let mut buf = [0u8; 8192];
             let mut scanner = Scanner::default();
+            let mut queries = Queries::default();
             loop {
                 let n = match reader.read(&mut buf) {
                     Ok(0) | Err(_) => break,
@@ -122,7 +140,16 @@ pub fn spawn(
                 for piece in scanner.feed(&buf[..n]) {
                     match piece {
                         blocks::Piece::Data(d) => {
-                            lock(&parser).process(&d);
+                            // The screen is read where each query stood, for the cursor's place.
+                            let mut screen = lock(&parser);
+                            let mut from = 0;
+                            for (end, query) in queries.feed(&d) {
+                                screen.process(&d[from..end]);
+                                from = end;
+                                let _ = answers.send(query.reply(screen.screen()));
+                            }
+                            screen.process(&d[from..]);
+                            drop(screen);
                             lock(&store).data(&d);
                         }
                         blocks::Piece::Mark(m) => {

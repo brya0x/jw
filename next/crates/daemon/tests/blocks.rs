@@ -563,3 +563,40 @@ fn the_pane_says_when_its_program_is_on_the_alternate_screen_and_when_it_left_it
     r.finished(1);
     assert_eq!(r.c.nodes[&r.blocks]["mode"], "blocks");
 }
+
+/// REQ-266 and REQ-268: a program that asks its terminal something is answered, and does not wait.
+#[test]
+fn a_program_that_asks_its_terminal_who_it_is_is_answered_at_once() {
+    use std::os::unix::fs::PermissionsExt;
+    let Some(bash) = find("bash") else {
+        return;
+    };
+    let mut r = rig(&bash);
+    // It asks for the device attributes and the cursor's place, and reads up to a second for each answer.
+    let stub = r.dir.join("asker");
+    std::fs::write(
+        &stub,
+        "#!/bin/bash\n\
+         ask() { printf \"$1\"; IFS= read -rs -t 1 -d \"$2\" got; printf '%s=%q\\n' \"$3\" \"$got\"; }\n\
+         ask '\\033[c' c ATTRS\n\
+         ask '\\033[6n' R CURSOR\n\
+         ask '\\033[>0q' '\\\\' VERSION\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let started = std::time::Instant::now();
+    r.run(&stub.to_string_lossy());
+    let block = r.finished(1);
+    let said = Rig::text(&block).join("\n");
+    assert!(said.contains("ATTRS=") && said.contains("62;22"), "{said}");
+    assert!(said.contains("CURSOR=") && said.contains(';'), "{said}");
+    assert!(
+        said.contains("VERSION=") && said.contains(&identity::get().name),
+        "{said}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_millis(2500),
+        "three questions answered at once, not after their timeouts: {:?}\n{said}",
+        started.elapsed()
+    );
+}
