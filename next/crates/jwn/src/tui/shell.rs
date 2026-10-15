@@ -135,6 +135,47 @@ pub fn loading(g: &mut Grid, (x, y, w, h): Rect, phase: Phase, name: &str, now_m
     }
 }
 
+/// How many lines a block takes in the list: its two heading lines, the notices, its output and a gap.
+/// It does not depend on the width, so the list can be measured without building it.
+fn block_height(b: &Block) -> usize {
+    2 + usize::from(b.truncated) + usize::from(b.full) + b.out.len() + 1
+}
+
+/// How many lines the list of `blocks` has.
+pub fn total_lines(blocks: &[Block]) -> usize {
+    blocks.iter().map(block_height).sum()
+}
+
+/// At most `rows` lines of the list from line `start` (as `block_lines` has them): only the blocks
+/// that reach them are built, so what a pane costs to draw is what it shows and not its history.
+pub fn window_lines(
+    blocks: &[Block],
+    now_ms: u64,
+    width: usize,
+    start: usize,
+    rows: usize,
+) -> Vec<Line> {
+    let mut at = 0;
+    let mut out = Vec::new();
+    for b in blocks {
+        let height = block_height(b);
+        if at + height > start && out.len() < rows {
+            let lines = block_lines(std::slice::from_ref(b), now_ms, width);
+            out.extend(
+                lines
+                    .into_iter()
+                    .skip(start.saturating_sub(at))
+                    .take(rows - out.len()),
+            );
+        }
+        at += height;
+        if out.len() >= rows {
+            break;
+        }
+    }
+    out
+}
+
 /// Every block as lines, oldest first: the folder and time, the command, the output, a gap.
 pub fn block_lines(blocks: &[Block], now_ms: u64, width: usize) -> Vec<Line> {
     let mut out = Vec::new();
@@ -427,5 +468,76 @@ mod loading_tests {
             rows[3].trim().is_empty(),
             "the last row of a box is its border: {rows:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::*;
+
+    fn block(id: u64, out: usize, truncated: bool, full: bool, running: bool) -> Block {
+        Block {
+            id,
+            cmd: format!("cmd {id}"),
+            cwd: "/w".into(),
+            started: 0,
+            running,
+            code: (!running).then_some(0),
+            ms: (!running).then_some(5),
+            truncated,
+            full,
+            out: (0..out)
+                .map(|r| {
+                    vec![Span {
+                        t: format!("row {r} of {id}"),
+                        fg: None,
+                        bg: None,
+                        b: false,
+                        i: false,
+                        u: false,
+                    }]
+                })
+                .collect(),
+        }
+    }
+
+    fn list() -> Vec<Block> {
+        vec![
+            block(1, 0, false, false, false),
+            block(2, 5, true, false, false),
+            block(3, 3, false, true, false),
+            block(4, 12, false, false, false),
+            block(5, 2, false, false, true),
+        ]
+    }
+
+    #[test]
+    fn the_height_of_a_list_is_the_lines_it_builds() {
+        let blocks = list();
+        assert_eq!(total_lines(&blocks), block_lines(&blocks, 0, 40).len());
+        assert_eq!(total_lines(&[]), 0);
+    }
+
+    #[test]
+    fn a_window_is_the_same_lines_as_the_whole_list_has_there() {
+        let blocks = list();
+        let whole = block_lines(&blocks, 1_000, 40);
+        let text = |ls: &[Line]| -> Vec<(Option<u64>, String)> {
+            ls.iter()
+                .map(|l| {
+                    (
+                        l.block,
+                        l.spans.iter().map(|s| s.0.clone()).collect::<String>(),
+                    )
+                })
+                .collect()
+        };
+        for start in 0..=whole.len() + 2 {
+            for rows in [0, 1, 3, 7, whole.len(), whole.len() + 5] {
+                let want: Vec<Line> = whole.iter().skip(start).take(rows).cloned().collect();
+                let got = window_lines(&blocks, 1_000, 40, start, rows);
+                assert_eq!(text(&got), text(&want), "start {start}, rows {rows}");
+            }
+        }
     }
 }

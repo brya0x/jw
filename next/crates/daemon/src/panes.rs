@@ -1,6 +1,7 @@
 //! Panes: terminals inside a workspace, and the engine that turns shell events into
 //! model changes.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
@@ -236,13 +237,29 @@ pub fn engine(shared: Shared, rx: Receiver<Event>) {
     }
 }
 
+/// For each pane with output in `batch`, where its last output is: its screen and blocks are read
+/// there once, whatever came before it in the batch (spec REQ-270).
+fn last_outputs(batch: &[Event]) -> HashMap<String, usize> {
+    batch
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| match e {
+            Event::Output { pane, .. } => Some((pane.clone(), i)),
+            _ => None,
+        })
+        .collect()
+}
+
 fn apply(shared: &Shared, batch: Vec<Event>) {
     let mut core = shared.lock();
-    for event in batch {
+    let last = last_outputs(&batch);
+    for (at, event) in batch.into_iter().enumerate() {
         match event {
             Event::Output { pane, marks } => {
-                core.read_screen(&pane);
-                core.read_blocks(&pane);
+                if last.get(&pane) == Some(&at) {
+                    core.read_screen(&pane);
+                    core.read_blocks(&pane);
+                }
                 let Some(p) = core
                     .model
                     .workspaces
@@ -273,4 +290,32 @@ fn apply(shared: &Shared, batch: Vec<Event>) {
         }
     }
     core.refresh();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn out(pane: &str) -> Event {
+        Event::Output {
+            pane: pane.into(),
+            marks: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_batch_reads_each_pane_once_at_its_last_output() {
+        let batch = [
+            out("a"),
+            out("b"),
+            out("a"),
+            Event::Stop,
+            out("a"),
+            out("b"),
+        ];
+        let last = last_outputs(&batch);
+        assert_eq!(last.len(), 2);
+        assert_eq!((last["a"], last["b"]), (4, 5));
+        assert!(last_outputs(&[Event::Stop]).is_empty());
+    }
 }

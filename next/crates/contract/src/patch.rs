@@ -51,6 +51,16 @@ fn diff_at(old: &Value, new: &Value, path: String, ops: &mut Vec<PatchOp>) {
             }
         }
         (Value::Array(a), Value::Array(b)) => {
+            // A list that lost items at its front and gained at its end (the oldest block of a pane
+            // dropping off, a screen that scrolled) is those removals, not every item replaced by the
+            // one after it. Whatever else differs is still said below, so the result is `b` either way.
+            let dropped = front_dropped(a, b);
+            for _ in 0..dropped {
+                ops.push(PatchOp::Remove {
+                    path: format!("{path}/0"),
+                });
+            }
+            let a = &a[dropped..];
             for (i, (x, y)) in a.iter().zip(b).enumerate() {
                 diff_at(x, y, format!("{path}/{i}"), ops);
             }
@@ -72,6 +82,28 @@ fn diff_at(old: &Value, new: &Value, path: String, ops: &mut Vec<PatchOp>) {
             value: new.clone(),
         }),
     }
+}
+
+/// How many items `a` lost at its front to become `b`, as far as a look at the first two items
+/// can tell (0 when it did not, or when it cannot be told); the most it looks for. A guess that is
+/// wrong costs a bigger patch and never a wrong one, so a short list is not looked at twice.
+const MAX_DROPPED: usize = 8;
+
+fn front_dropped(a: &[Value], b: &[Value]) -> usize {
+    let Some(first) = b.first() else {
+        return 0;
+    };
+    if a.first().is_none_or(|x| x == first) {
+        return 0;
+    }
+    (1..a.len().min(MAX_DROPPED + 1))
+        .find(|&k| {
+            a[k] == *first
+                && (b.len() <= 3
+                    || b.get(1)
+                        .is_none_or(|second| a.get(k + 1).is_none_or(|x| x == second)))
+        })
+        .unwrap_or(0)
 }
 
 /// Apply `ops` in order, then set the document's `rev` to `to`.
@@ -232,5 +264,76 @@ mod tests {
             value: json!(0),
         }];
         assert!(apply_patch(&mut doc, &bad, 2).is_err());
+    }
+
+    /// The ops that turn `before` into `after` (both held under a key, as a document is), and what
+    /// applying them gives.
+    fn applied(before: &Value, after: &Value) -> (Vec<PatchOp>, Value) {
+        let (from, to) = (
+            serde_json::json!({"x": before}),
+            serde_json::json!({"x": after}),
+        );
+        let ops = diff(&from, &to);
+        let mut doc = from.clone();
+        apply_patch(&mut doc, &ops, 0).unwrap();
+        (ops, doc["x"].clone())
+    }
+
+    #[test]
+    fn a_list_that_lost_its_first_item_is_a_removal_and_not_every_item_replaced() {
+        let before = serde_json::json!([{"id": 1, "out": "aaa"}, {"id": 2, "out": "bbb"}, {"id": 3, "out": "ccc"}]);
+        let after = serde_json::json!([{"id": 2, "out": "bbb"}, {"id": 3, "out": "ccc"}, {"id": 4, "out": "ddd"}]);
+        let (ops, doc) = applied(&before, &after);
+        assert_eq!(doc, after);
+        assert_eq!(ops.len(), 2, "remove the first, add the new one: {ops:?}");
+        assert!(matches!(&ops[0], PatchOp::Remove { path } if path == "/x/0"));
+    }
+
+    #[test]
+    fn the_item_that_changed_while_the_front_dropped_is_still_said() {
+        // The running block ends (it changes) as the oldest drops off the front.
+        let before = serde_json::json!([{"id": 1}, {"id": 2}, {"id": 3, "running": true}]);
+        let after = serde_json::json!([{"id": 2}, {"id": 3, "running": false}, {"id": 4}]);
+        let (ops, doc) = applied(&before, &after);
+        assert_eq!(doc, after);
+        assert!(ops.len() <= 3, "{ops:?}");
+    }
+
+    #[test]
+    fn a_screen_that_scrolled_and_lists_that_only_look_alike_still_come_out_right() {
+        let cases = [
+            (
+                serde_json::json!(["a", "b", "c", "d"]),
+                serde_json::json!(["b", "c", "d", "e"]),
+            ),
+            (
+                serde_json::json!(["", "", "x", ""]),
+                serde_json::json!(["", "x", "", ""]),
+            ),
+            (
+                serde_json::json!(["a", "b", "c"]),
+                serde_json::json!(["c", "b", "a"]),
+            ),
+            (
+                serde_json::json!([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]),
+                serde_json::json!([10, 11, 12]),
+            ),
+            (serde_json::json!([1, 2]), serde_json::json!([])),
+            (serde_json::json!([]), serde_json::json!([1])),
+            (serde_json::json!([1, 2, 3]), serde_json::json!([2])),
+            (serde_json::json!([5, 6]), serde_json::json!([6, 7, 8, 9])),
+        ];
+        for (before, after) in cases {
+            let (_, doc) = applied(&before, &after);
+            assert_eq!(doc, after, "{before} -> {after}");
+        }
+    }
+
+    #[test]
+    fn a_front_that_dropped_more_than_it_looks_for_is_still_right() {
+        let before: Vec<i32> = (0..30).collect();
+        let after: Vec<i32> = (20..31).collect();
+        let (_, doc) = applied(&serde_json::json!(before), &serde_json::json!(after));
+        assert_eq!(doc, serde_json::json!(after));
     }
 }

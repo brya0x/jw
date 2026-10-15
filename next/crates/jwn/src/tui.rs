@@ -5,7 +5,9 @@
 //! record. `View` is pure (documents in, a character grid out) so it is tested without a
 //! terminal; `run` only moves bytes between the socket, the keyboard and the screen.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+
+use serde::Deserialize;
 use std::io::{Write, stdout};
 use std::time::{Duration, Instant};
 
@@ -409,6 +411,8 @@ pub struct View {
     last_size: Option<(String, u16, u16)>,
     /// The blocks nodes, by node id.
     blocks: HashMap<String, Blocks>,
+    /// The epoch and revision each document held here was read at.
+    read: HashMap<String, (String, u64)>,
     /// The block of each pane whose program has painted something on the normal screen: once it has, the pane
     /// never says it is starting again for that block, whatever the program clears.
     painted: HashMap<String, u64>,
@@ -483,6 +487,7 @@ impl View {
             typing: false,
             last_size: None,
             blocks: HashMap::new(),
+            read: HashMap::new(),
             painted: HashMap::new(),
             left_alt: HashMap::new(),
             blk: None,
@@ -658,21 +663,33 @@ impl View {
         self.status = status.to_owned();
     }
 
-    /// Replace what is drawn with the documents the client currently holds.
+    /// Bring what is drawn up to date with the documents the client holds (spec REQ-269). Reading a document costs what it weighs, and the blocks of one pane weigh megabytes,
+    /// so only a document whose epoch or revision is not the one already read is read again, and what
+    /// the client no longer holds goes.
     pub fn sync<'a>(&mut self, nodes: impl Iterator<Item = &'a serde_json::Value>) {
-        self.session = None;
-        self.workspaces.clear();
-        self.panes.clear();
-        self.blocks.clear();
-        self.diffs.clear();
-        self.commit_lists.clear();
-        self.revs.clear();
+        let mut held: HashSet<&str> = HashSet::new();
         for doc in nodes {
-            let Ok(node) = serde_json::from_value::<Node>(doc.clone()) else {
+            let Some(id) = doc["id"].as_str() else {
+                continue;
+            };
+            held.insert(id);
+            let stamp = (
+                doc["epoch"].as_str().unwrap_or_default(),
+                doc["rev"].as_u64().unwrap_or_default(),
+            );
+            if self
+                .read
+                .get(id)
+                .is_some_and(|(epoch, rev)| (epoch.as_str(), *rev) == stamp)
+            {
+                continue;
+            }
+            let Ok(node) = Node::deserialize(doc) else {
                 continue;
             };
             let id = contract::node_id(&node).clone();
             self.revs.insert(id.clone(), rev_of(&node));
+            self.read.insert(id.clone(), (stamp.0.to_owned(), stamp.1));
             match node {
                 Node::Session(s) => self.session = Some(s),
                 Node::Workspace(w) => {
@@ -690,6 +707,24 @@ impl View {
                 Node::Commits(c) => {
                     self.commit_lists.insert(id, c);
                 }
+            }
+        }
+        let gone: Vec<String> = self
+            .read
+            .keys()
+            .filter(|id| !held.contains(id.as_str()))
+            .cloned()
+            .collect();
+        for id in &gone {
+            self.read.remove(id);
+            self.revs.remove(id);
+            self.workspaces.remove(id);
+            self.panes.remove(id);
+            self.blocks.remove(id);
+            self.diffs.remove(id);
+            self.commit_lists.remove(id);
+            if self.session.as_ref().is_some_and(|s| s.head.id == *id) {
+                self.session = None;
             }
         }
         self.note_painted();
@@ -1675,13 +1710,15 @@ impl View {
             return After::Continue;
         };
         let lh = list_h(ih, field_of(doc, b, iw).band_rows());
-        let lines = shell::block_lines(&b.blocks, self.now_ms, iw.saturating_sub(2));
-        let top = iy + gap(lines.len(), lh);
+        let total = shell::total_lines(&b.blocks);
+        let top = iy + gap(total, lh);
         let on_marks = y == iy + lh + Field::FIRST_TEXT;
         let running = running_block(b).is_some();
         if (top..iy + lh).contains(&y) && (ix..ix + iw).contains(&x) {
-            let start = window_start(lines.len(), lh, self.scroll.get(pane).copied().unwrap_or(0));
-            if let Some(id) = lines.get(start + y - top).and_then(|l| l.block) {
+            let start = window_start(total, lh, self.scroll.get(pane).copied().unwrap_or(0));
+            let width = iw.saturating_sub(2);
+            let line = shell::window_lines(&b.blocks, self.now_ms, width, start + y - top, 1);
+            if let Some(id) = line.first().and_then(|l| l.block) {
                 self.blk = Some((pane.to_owned(), id));
                 self.typing = false;
             }
@@ -1828,7 +1865,7 @@ impl View {
         let Some(doc) = self.panes.get(&pane) else {
             return After::Continue;
         };
-        let total = shell::block_lines(&b.blocks, self.now_ms, iw.saturating_sub(2)).len();
+        let total = shell::total_lines(&b.blocks);
         let most = total.saturating_sub(list_h(ih, field_of(doc, b, iw).band_rows()));
         let at = self.scroll.entry(pane).or_insert(0);
         *at = if down {
@@ -2242,16 +2279,17 @@ impl View {
         }
         let field = field_of(p, b, iw);
         let lh = list_h(ih, field.band_rows());
-        let lines = shell::block_lines(&b.blocks, self.now_ms, iw - 2);
+        let total = shell::total_lines(&b.blocks);
         let scrolled = self.scroll.get(&p.head.id).copied().unwrap_or(0);
-        let start = window_start(lines.len(), lh, scrolled);
+        let start = window_start(total, lh, scrolled);
+        let lines = shell::window_lines(&b.blocks, self.now_ms, iw - 2, start, lh);
         let picked = self
             .blk
             .as_ref()
             .filter(|(pane, _)| *pane == p.head.id)
             .map(|(_, id)| *id);
-        let top = iy + gap(lines.len(), lh);
-        for (r, line) in lines[start..].iter().take(lh).enumerate() {
+        let top = iy + gap(total, lh);
+        for (r, line) in lines.iter().enumerate() {
             let y = top + r;
             if picked.is_some() && line.block == picked {
                 g.paint_bg(ix, y, iw, look::sel());
@@ -3006,10 +3044,10 @@ mod tests {
 
     use super::*;
 
-    /// A view of the shared fixtures: the same documents the phone draws.
-    fn fixture_view() -> View {
+    /// The shared fixtures as the documents a client holds: the same ones the phone draws.
+    fn fixture_docs() -> Vec<serde_json::Value> {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../contract/fixtures/daemon");
-        let docs: Vec<serde_json::Value> = [
+        [
             "snapshot-session-attention.json",
             "snapshot-workspace.json",
             "snapshot-workspace-notes.json",
@@ -3026,10 +3064,71 @@ mod tests {
             .unwrap()["node"]
                 .clone()
         })
-        .collect();
+        .collect()
+    }
+
+    fn fixture_view() -> View {
+        let mut v = View::new("fixtures");
+        v.sync(fixture_docs().iter());
+        v
+    }
+
+    #[test]
+    fn a_document_that_did_not_change_is_not_read_again() {
+        let docs = fixture_docs();
         let mut v = View::new("fixtures");
         v.sync(docs.iter());
-        v
+        // Something this view holds that a second reading of the same documents would undo.
+        v.blocks.get_mut(BLOCKS).unwrap().mode = BlocksMode::Full;
+        v.sync(docs.iter());
+        assert_eq!(
+            v.blocks[BLOCKS].mode,
+            BlocksMode::Full,
+            "the blocks were not read again"
+        );
+    }
+
+    #[test]
+    fn a_document_with_another_revision_or_another_epoch_is_read_again() {
+        let mut docs = fixture_docs();
+        let blocks = docs.len() - 1;
+        let mut v = View::new("fixtures");
+        v.sync(docs.iter());
+        v.blocks.get_mut(BLOCKS).unwrap().mode = BlocksMode::Full;
+        let rev = docs[blocks]["rev"].as_u64().unwrap();
+        docs[blocks]["rev"] = (rev + 1).into();
+        v.sync(docs.iter());
+        assert_eq!(
+            v.blocks[BLOCKS].mode,
+            BlocksMode::Blocks,
+            "a new revision is read"
+        );
+        v.blocks.get_mut(BLOCKS).unwrap().mode = BlocksMode::Full;
+        docs[blocks]["epoch"] = "00000000-0000-4000-8000-0000000000ee".into();
+        v.sync(docs.iter());
+        assert_eq!(
+            v.blocks[BLOCKS].mode,
+            BlocksMode::Blocks,
+            "a restarted daemon starts its revisions over: the same number is another document"
+        );
+    }
+
+    #[test]
+    fn what_the_client_no_longer_holds_goes_and_comes_back_when_it_does() {
+        let docs = fixture_docs();
+        let mut v = View::new("fixtures");
+        v.sync(docs.iter());
+        assert!(v.blocks.contains_key(BLOCKS) && v.revs.contains_key(BLOCKS));
+        v.sync(docs[..docs.len() - 1].iter());
+        assert!(!v.blocks.contains_key(BLOCKS) && !v.revs.contains_key(BLOCKS));
+        assert!(
+            v.wants().iter().any(|id| id == BLOCKS),
+            "it is asked for again"
+        );
+        v.sync(docs.iter());
+        assert!(v.blocks.contains_key(BLOCKS));
+        v.sync([].iter());
+        assert!(v.session.is_none() && v.panes.is_empty() && v.workspaces.is_empty());
     }
 
     #[test]
