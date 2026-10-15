@@ -833,6 +833,10 @@ impl View {
         self.advance_manage();
         self.follow_goto();
         self.clamp();
+        // A tree that is shown over another workspace than it was asked for needs its folders.
+        if self.tree_on {
+            self.ask_folders();
+        }
         let gone = self.blk.as_ref().is_some_and(|(pane, id)| {
             !self
                 .blocks_of(pane)
@@ -4449,6 +4453,26 @@ mod tests {
             .unwrap();
         let mark = g.cells[y * 120 + 117];
         assert_eq!((mark.0, mark.1.fg), ('M', Some(look::yellow())));
+    }
+
+    #[test]
+    fn selecting_another_workspace_with_the_tree_shown_asks_for_that_workspaces_folder() {
+        let (mut v, first) = tree_view();
+        v.press_key(plain(KeyCode::Esc));
+        v.press(Key::Back);
+        v.press(Key::Down);
+        let second = v.selected_id().unwrap();
+        assert_ne!(first, second);
+        v.sync(fixture_docs().iter());
+        assert_eq!(
+            v.take_file_asks(),
+            [FileAsk::List {
+                workspace: second,
+                path: String::new()
+            }]
+        );
+        v.sync(fixture_docs().iter());
+        assert!(v.take_file_asks().is_empty(), "once");
     }
 
     #[test]

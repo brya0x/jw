@@ -224,7 +224,8 @@ pub fn matches(query: &str, path: &str) -> bool {
 pub fn best(query: &str, paths: impl Iterator<Item = String>) -> (Vec<String>, bool) {
     let q = query.to_lowercase();
     let mut found: Vec<String> = paths.filter(|p| matches(query, p)).collect();
-    found.sort_by_key(|p| {
+    // The key is made once for each path: a one-letter query matches nearly every file of a big repository.
+    found.sort_by_cached_key(|p| {
         let name = p.rsplit('/').next().unwrap_or(p).to_lowercase();
         (!name.contains(&q), p.chars().count(), p.clone())
     });
