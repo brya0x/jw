@@ -54,6 +54,13 @@ pub fn script(shell: &str, argv: &[String], setup: &crate::integration::Setup) -
     )
 }
 
+/// `claude` or `codex` when `argv` runs that agent, whoever started it: an interpreter's script
+/// counts (`node /opt/claude/cli.js`).
+pub fn agent_name(argv: &[String]) -> Option<&'static str> {
+    let title = title_for(argv)?;
+    ["claude", "codex"].into_iter().find(|a| *a == title)
+}
+
 pub fn is_agent(argv: &[String]) -> bool {
     title_for(argv).as_deref() == Some("claude")
 }
@@ -278,5 +285,29 @@ mod tests {
         );
         assert_eq!(agent_resume(&argv("claude")), None, "no known conversation");
         assert_eq!(agent_resume(&argv("nvim --resume abc")), None);
+    }
+
+    #[test]
+    fn an_agent_is_the_program_claude_or_codex_whoever_started_it() {
+        assert_eq!(agent_name(&argv("claude --session-id x")), Some("claude"));
+        assert_eq!(
+            agent_name(&argv("/usr/local/bin/codex resume")),
+            Some("codex")
+        );
+        assert_eq!(
+            agent_name(&argv("node /opt/claude/cli.js")),
+            None,
+            "the script is cli"
+        );
+        assert_eq!(agent_name(&argv("node /opt/bin/claude")), Some("claude"));
+        assert_eq!(
+            agent_name(&argv("python3 -u codex.py")),
+            Some("codex"),
+            "a script's name without its extension"
+        );
+        assert_eq!(agent_name(&argv("-claude")), Some("claude"));
+        assert_eq!(agent_name(&argv("nvim claude.md")), None);
+        assert_eq!(agent_name(&argv("claude-notes")), None);
+        assert_eq!(agent_name(&[]), None);
     }
 }

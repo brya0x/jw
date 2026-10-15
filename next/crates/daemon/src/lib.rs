@@ -29,5 +29,6 @@ mod start;
 mod sync;
 mod workspaces;
 
+pub use launch::agent_name;
 pub use mobile::{LinkConfig, devices_file};
 pub use server::{Config, Daemon};

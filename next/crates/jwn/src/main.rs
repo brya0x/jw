@@ -1,5 +1,6 @@
 //! `jwn`: the daemon and a few JSON-speaking commands to drive and watch it.
 
+mod agent;
 mod bench;
 mod hook;
 mod pair;
@@ -24,7 +25,9 @@ const USAGE: &str = "usage:
   jwn devices             list the paired phones
   jwn revoke <id|name>    unpair a phone and drop its connection
   jwn bench               measure sizes and latency on a private daemon
-  jwn hook <event>        an agent's hook (claude runs it): tell the daemon what the agent does";
+  jwn hook <event>        an agent's hook (claude runs it): tell the daemon what the agent does
+  jwn ls | read | prompt | worktree | pane | skill
+                          what an agent in a pane uses: jwn <command> shows each one's usage";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -45,6 +48,10 @@ fn main() -> ExitCode {
         ["revoke", which] => pair::revoke(which),
         ["bench"] => bench::run().map(|()| ExitCode::SUCCESS),
         ["hook", event] => Ok(hook::run(event)),
+        [
+            c @ ("ls" | "read" | "prompt" | "worktree" | "pane" | "skill"),
+            rest @ ..,
+        ] => Ok(agent::run(c, rest)),
         [] | ["tui"] => enter().map(|()| ExitCode::SUCCESS),
         _ => Err(USAGE.into()),
     };

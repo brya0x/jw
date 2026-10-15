@@ -235,7 +235,7 @@ fn clip(text: &str, cols: usize) -> String {
 }
 
 /// Most urgent first: the order of the legend.
-const URGENCY: [AttentionKind; 8] = [
+pub(crate) const URGENCY: [AttentionKind; 8] = [
     AttentionKind::Permission,
     AttentionKind::Question,
     AttentionKind::Plan,
