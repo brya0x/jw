@@ -269,6 +269,34 @@ fn fish_reports_its_commands_as_blocks() {
     }
 }
 
+/// REQ-273: `clear` empties the pane's blocks, its own one included, and the next command is a block.
+#[test]
+fn clear_empties_the_blocks_of_the_pane() {
+    let Some(shell) = find("bash").or_else(|| find("zsh")) else {
+        return;
+    };
+    let mut r = rig(&shell);
+    r.run("echo one");
+    r.finished(1);
+    r.run("echo two");
+    r.finished(2);
+    r.run("clear");
+    let id = r.blocks.clone();
+    assert!(
+        r.c.wait_until(Duration::from_secs(10), |c| c.nodes[&id]["blocks"]
+            .as_array()
+            .is_some_and(Vec::is_empty))
+            .unwrap(),
+        "the blocks were not dropped: {}",
+        r.c.nodes[&id]
+    );
+    r.run("echo three");
+    let b = r.finished(1);
+    assert_eq!(Rig::text(&b), ["three"]);
+    assert_eq!(b["id"], 4, "ids go on after a clear");
+    r.d.take().unwrap().stop();
+}
+
 /// REQ-123: the node of a pane's blocks is the same for as long as the pane lives, and
 /// closing the pane takes it away.
 #[test]

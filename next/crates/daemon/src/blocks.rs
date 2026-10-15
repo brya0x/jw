@@ -299,6 +299,11 @@ pub fn rows_of(screen: &vt100::Screen) -> Vec<Vec<Span>> {
     out
 }
 
+/// The command that clears the pane's history: `clear` alone (`clear -x` keeps what is above).
+fn is_clear(cmd: &str) -> bool {
+    cmd.trim() == "clear"
+}
+
 fn weight(b: &Block) -> usize {
     b.cmd.len()
         + b.cwd.len()
@@ -404,6 +409,11 @@ impl BlockStore {
         let Some(run) = self.running.take() else {
             return;
         };
+        if is_clear(&run.cmd) && code.unwrap_or(0) == 0 {
+            self.done.clear();
+            self.version += 1;
+            return;
+        }
         let mut block = Self::block_of(&run);
         block.running = false;
         block.code = Some(code.unwrap_or(0));
@@ -551,6 +561,58 @@ mod tests {
             .map(|r| r.iter().map(|s| s.t.clone()).collect())
             .collect();
         assert_eq!(text, ["one", "two"]);
+    }
+
+    #[test]
+    fn clear_that_succeeds_drops_every_block_and_leaves_none_of_its_own() {
+        let mut s = BlockStore::new(40);
+        s.mark(Mark::Prompt);
+        for cmd in ["ls", "git status"] {
+            s.mark(Mark::Command {
+                cmd: cmd.into(),
+                cwd: "/w".into(),
+            });
+            s.mark(Mark::Done(Some(0)));
+        }
+        assert_eq!(s.view().unwrap().2.len(), 2);
+        let before = s.version();
+        s.mark(Mark::Command {
+            cmd: " clear ".into(),
+            cwd: "/w".into(),
+        });
+        s.data(b"\x1b[H\x1b[2J\x1b[3J");
+        s.mark(Mark::Done(Some(0)));
+        assert!(s.view().unwrap().2.is_empty());
+        assert!(s.version() > before, "the clients are told");
+        s.mark(Mark::Command {
+            cmd: "pwd".into(),
+            cwd: "/w".into(),
+        });
+        s.mark(Mark::Done(Some(0)));
+        assert_eq!(
+            s.view().unwrap().2[0].id,
+            4,
+            "ids go on, none is reused after a clear"
+        );
+    }
+
+    #[test]
+    fn clear_with_arguments_or_that_fails_is_a_block_like_any_other() {
+        for (cmd, code) in [("clear -x", 0), ("clear", 1), ("clearish", 0)] {
+            let mut s = BlockStore::new(40);
+            s.mark(Mark::Prompt);
+            s.mark(Mark::Command {
+                cmd: "ls".into(),
+                cwd: "/w".into(),
+            });
+            s.mark(Mark::Done(Some(0)));
+            s.mark(Mark::Command {
+                cmd: cmd.into(),
+                cwd: "/w".into(),
+            });
+            s.mark(Mark::Done(Some(code)));
+            assert_eq!(s.view().unwrap().2.len(), 2, "{cmd} {code}");
+        }
     }
 
     #[test]

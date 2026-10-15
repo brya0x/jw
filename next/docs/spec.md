@@ -358,6 +358,7 @@ Transport: JSON lines on a Unix socket (mode 0600, in a 0700 dir) whose path com
 - REQ-270 WHEN a batch of output events holds several for one pane, THE daemon SHALL read that pane's screen and blocks once, at the last of them.
 - REQ-271 WHEN a list in a node loses items at its front and gains items at its end, THE patch of the daemon SHALL say it as the removals of the first items and the additions at the end (up to 8 items dropped at once), with whatever else changed said as usual; applying the patch SHALL give the new document whatever the lists hold.
 - REQ-272 THE terminal client SHALL build the lines of only those blocks that reach the rows it shows, and SHALL take the height of the list from counting, so that drawing a pane costs what it shows and not its history.
+- REQ-273 WHEN a command whose text is `clear`, alone, ends with status 0, THE daemon SHALL drop every block of the pane, that one included, and tell its clients; a `clear` with arguments or that fails SHALL be a block like any other; the ids that follow SHALL go on and none SHALL be reused.
 - REQ-83 THE phone SHALL keep its device secret in Keystore-backed storage and SHALL pair from the QR link's text (from the QR the camera reads or from pasted text).
 - REQ-84 THE bridge SHALL answer a `mobile_*` command from a phone with an `unsupported` error and not pass it on; THE daemon SHALL end the tunnel it started when it is stopped, and the next start SHALL end one a dead daemon left (recorded in `<state>/tunnel.pid`).
 - REQ-85 WHEN a phone pairs, it SHALL show the six-digit code it sent and wait for the PC; WHEN the bridge denies it or the PC cannot be reached, it SHALL say which of expired, declined, locked out, no longer paired or unreachable happened; WHEN the PC revokes it, the phone SHALL forget the pairing and say so.
@@ -512,6 +513,8 @@ REQ-154 by N59: `crates/jwn/src/tui/settings.rs` (`dark_from`: Dark is dark, a f
 
 REQ-238 by N58: no automated test (the keyboard's action is Compose's); tried by hand.
 
+REQ-273 by N69: `crates/daemon/src/blocks.rs` tests (a `clear` that succeeds drops all and itself, with arguments or failing it is a block, ids go on) and `tests/blocks.rs` against a real shell (`clear` empties the node and the next command is block 4).
+
 REQ-269 to REQ-272 by N67: `crates/jwn/src/tui.rs` tests (a document that did not change is not read again; a new revision or another epoch is; what the client no longer holds goes and is asked for again), `crates/jwn/src/tui/shell.rs` tests (the height of a list is the lines it builds; a window of lines is the same lines the whole list has there, for every start and size), `crates/daemon/src/panes.rs` (the last output of each pane in a batch), `crates/contract/src/patch.rs` (a list that lost its first item is a removal and an addition; the item that changed meanwhile is still said; scrolled screens, look-alike lists, empty lists and a front that dropped more than it looks for come out right) and `android/contract/src/test/kotlin/dev/jw/next/contract/PatchFrontTest.kt` (the phone applies removals at index 0). Measured with the numbers of RAT-26.
 
 REQ-266 to REQ-268 by N66: `crates/daemon/src/replies.rs` tests (every answered query is read; what only looks like one, the replies a terminal sends itself, and what is inside a string are not; a query split between two reads is read once; the offsets are where each ends; a runaway sequence is dropped; the answers are what a terminal says, the cursor's place from the screen) and `crates/daemon/tests/blocks.rs` (a script that asks the attributes, the cursor and the version and reads each for a second finishes in well under the three seconds it would take unanswered; it failed with the answers taken out). Measured on a real daemon with the real `nvim` and `claude`, before and after: `nvim` quit 1.11 s to 0.10 s; `claude` ended 1.52 s to 1.00 s after the second `^C`.
@@ -638,6 +641,7 @@ The shapes REQ-91 to REQ-103 name (nodes, commands, fields) are enforced by N31 
 | N66 ✓ | the daemon answers what a program asks its terminal (device attributes, cursor position, status, version, keyboard flags, modes, text area), so a program no longer waits a second for a terminal that does not answer (`nvim` quits in 0.10 s instead of 1.11 s) | 266–268 | `crates/daemon/src/replies.rs`, `crates/daemon/src/pty.rs`, `crates/daemon/tests/blocks.rs` |
 | N67 ✓ | the terminal client no longer reads again what did not change nor builds the lines of the whole history, and the daemon reads each pane once per batch and patches a list that lost its first items as removals: the client idles at 2 % CPU and 67 MB (was 100 % and 412 MB) and a noisy command takes 4.7 s instead of 116.7 s | 269–272 | `crates/jwn/src/tui.rs`, `crates/jwn/src/tui/shell.rs`, `crates/daemon/src/panes.rs`, `crates/contract/src/patch.rs`, `android/contract/.../PatchFrontTest.kt` |
 | N68 | rename only for worktrees and panes: the daemon refuses `rename_workspace` for a folder or a repository's root; `r` does nothing on them; the phone's sheets lose «renombrar» | 178, 180, 227 | `crates/daemon/src/rename.rs`, `crates/jwn/src/tui.rs`, `android/client-core/.../Remove.kt` |
+| N69 | `clear` empties the pane's blocks (the daemon drops them when the command ends), RAT decided 2026-10-15 | 273 | `crates/daemon/src/blocks.rs`, `crates/daemon/tests/blocks.rs` |
 
 ## What is left
 In this order, which the user set on 2026-10-15 (before it, on 2026-10-14, he chose that the daily flow of the terminal client comes next, that the special keys of the phone are among the last things and that Markdown comes last; the file tree, which both the viewer and the editor need, is now ahead of them). Each becomes a part (N43 onwards) with its REQs when it starts; a part with a screen starts from an approved prototype. What is missing was found by setting the old jw's README against what `next/` does today.
@@ -645,13 +649,13 @@ In this order, which the user set on 2026-10-15 (before it, on 2026-10-14, he ch
 | # | What |
 |---|---|
 | 1 to 4 | ✓ Spec cleanup, CI for `next/`, the producers of attention (claude's hooks, GitHub) and the parity of closing, the look and pairing a phone from the terminal (N35 to N42). Sessions were decided against for now (RAT-16, OPEN-10) |
-| 5 | `clear`: the command that clears a pane's buffer (it clears the blocks, in the daemon's store too, and the screen; RAT decided 2026-10-15) |
+| 5 | ✓ `clear`: the command that clears a pane's buffer (N69) |
 | 6 | Sync a worktree with its base (`s`) |
 | 7 | Close a worktree, asking its name when work would be lost (an unsaved change or an unpushed commit) |
 | 8 | The panes' layout: splits, moving them, resizing by dragging |
 | 9 | The history of each pane and its blocks surviving a daemon restart (today a restarted daemon gives new shells with an empty screen) |
 | 10 | Selecting and copying with the mouse in the terminal client |
-| 11 | Remove the renaming of a workspace that is a folder or a repository's root (it is a directory on disk): only worktrees (their shown name, not their branch or directory) and panes are renamed (decided 2026-10-15), in the terminal client, on the phone and in the daemon |
+| 11 | ✓ (N68) Remove the renaming of a workspace that is a folder or a repository's root (it is a directory on disk): only worktrees (their shown name, not their branch or directory) and panes are renamed (decided 2026-10-15), in the terminal client, on the phone and in the daemon |
 | 12 | What agents use: the `jw` commands (`ls`, `read`, `worktree`, `prompt`, `pane`, `skill install`) and the review of a pull request (`^␣ R`) |
 | 13 | Projects: `.jw.toml` (where worktrees go, branch template, setup commands, the agent), the layout a worktree opens with, ports per worktree and `.env` files |
 | 14 | A file tree of the workspace, in both clients: what the viewer of Markdown and the editor start from |
