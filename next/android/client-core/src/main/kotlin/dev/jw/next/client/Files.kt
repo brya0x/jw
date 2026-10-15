@@ -55,13 +55,14 @@ data class FilesView(val workspace: String, val path: String, val rows: List<Fil
     /** Where the screen says it is: `/` for the workspace's folder, else its path under it. */
     val where: String get() = "/$path"
 
-    /** The workspace's name and then each folder down to [path], each with the path it goes to. */
-    val crumbs: List<Pair<String, String>>
-        get() {
-            val names = path.split('/').filter { it.isNotEmpty() }
-            val paths = names.runningFold("") { at, name -> if (at.isEmpty()) name else "$at/$name" }
-            return listOf(workspace to paths.first()) + names.zip(paths.drop(1))
-        }
+    val crumbs: List<Pair<String, String>> get() = crumbsOf(workspace, path)
+}
+
+/** The workspace's name and then each folder down to [path], each with the path it goes to. */
+fun crumbsOf(workspace: String, path: String): List<Pair<String, String>> {
+    val names = path.split('/').filter { it.isNotEmpty() }
+    val paths = names.runningFold("") { at, name -> if (at.isEmpty()) name else "$at/$name" }
+    return listOf(workspace to paths.first()) + names.zip(paths.drop(1))
 }
 
 fun filesView(workspaceName: String, listing: FileListing, hidden: Boolean): FilesView {

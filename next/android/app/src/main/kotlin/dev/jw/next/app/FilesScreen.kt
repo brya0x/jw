@@ -34,6 +34,7 @@ import dev.jw.next.client.FilesView
 import dev.jw.next.client.MarkTone
 import dev.jw.next.client.Navigator
 import dev.jw.next.client.Screen
+import dev.jw.next.client.crumbsOf
 import dev.jw.next.client.filesView
 import dev.jw.next.contract.FileKind
 import dev.jw.next.contract.FileListing
@@ -74,7 +75,7 @@ fun FilesScreen(source: AppSource, state: ClientState, screen: Screen.Files, nav
                 Mono(".ocultos", if (hidden) Palette.blue else Palette.dim, 12)
             }
         })
-        Crumbs(view?.crumbs ?: FilesView(name, path, emptyList(), 0, 0, hidden).crumbs, path) { path = it }
+        Crumbs(crumbsOf(name, path), path) { path = it }
         Box(Modifier.weight(1f)) {
             when {
                 error != null -> Column(
@@ -109,7 +110,7 @@ private fun Crumbs(crumbs: List<Pair<String, String>>, here: String, go: (String
 @Composable
 private fun FileList(view: FilesView, go: (String) -> Unit) {
     LazyColumn(Modifier.fillMaxSize()) {
-        view.parent?.let { up -> item(key = "..") { FileRowView("‹", Palette.dim, "..", "/$up", null, false, true) { go(up) } } }
+        view.parent?.let { up -> item(key = "..") { FileRowView("‹", Palette.dim, "..", "/$up", null, false) { go(up) } } }
         items(view.rows, key = { it.path }) { row -> FileLine(row, go) }
         if (view.rows.isEmpty()) item { Mono(if (view.hidden || view.total == 0) "carpeta vacía" else "solo hay archivos ocultos", Palette.dim, 13, modifier = Modifier.padding(Gutter)) }
         if (view.cut) item { Mono("se listan los primeros ${view.sent} de ${view.total}", Palette.dim, 11, lines = 2, modifier = Modifier.padding(Gutter)) }
@@ -124,20 +125,20 @@ private fun FileLine(row: FileRow, go: (String) -> Unit) {
         FileKind.Link -> "↗" to Palette.dim
         FileKind.File -> "·" to Palette.dim
     }
-    FileRowView(glyph, tone, row.name, row.detail, row.mark, row.ignored, row.kind == FileKind.Dir) { go(row.path) }
+    FileRowView(glyph, tone, row.name, row.detail, row.mark, row.ignored, if (row.kind == FileKind.Dir) ({ go(row.path) }) else null)
 }
 
 @Composable
-private fun FileRowView(glyph: String, tone: Color, name: String, detail: String?, mark: FileMark?, dim: Boolean, tappable: Boolean, click: () -> Unit) {
+private fun FileRowView(glyph: String, tone: Color, name: String, detail: String?, mark: FileMark?, dim: Boolean, click: (() -> Unit)?) {
     Row(
         Modifier.fillMaxWidth().alpha(if (dim) 0.5f else 1f).defaultMinSize(minHeight = 48.dp)
-            .then(if (tappable) Modifier.clickable(onClick = click) else Modifier)
+            .then(if (click != null) Modifier.clickable(onClick = click) else Modifier)
             .padding(horizontal = Gutter, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Mono(glyph, tone, 13, modifier = Modifier.padding(end = 12.dp))
         Column(Modifier.weight(1f)) {
-            Mono(name, bold = tappable, size = 14)
+            Mono(name, bold = click != null, size = 14)
             if (detail != null) Mono(detail, Palette.dim, 11)
         }
         if (mark != null) Mono(mark.glyph, markColor(mark.tone), 12, bold = true, modifier = Modifier.padding(start = 8.dp))

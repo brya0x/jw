@@ -21,6 +21,7 @@ import dev.jw.next.contract.Node
 import dev.jw.next.contract.Peer
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -150,35 +151,11 @@ abstract class ProtocolSource : AppSource() {
     }
 
     override fun listFiles(workspace: Id, path: String?, reply: (Result<FileListing>) -> Unit) {
-        command(Cmd.ListFiles(workspace, path)) { r ->
-            reply(
-                when {
-                    !r.ok -> Result.failure(Exception(r.error?.message ?: "el PC no pudo leer la carpeta"))
-                    r.result == null -> Result.failure(Exception("el PC no dio la carpeta"))
-                    else -> try {
-                        Result.success(ContractJson.decodeFromJsonElement(FileListing.serializer(), r.result!!))
-                    } catch (e: SerializationException) {
-                        Result.failure(Exception("el PC dio una carpeta que no se entiende"))
-                    }
-                },
-            )
-        }
+        command(Cmd.ListFiles(workspace, path)) { r -> reply(r.read(FileListing.serializer())) }
     }
 
     override fun listDir(path: String?, hidden: Boolean, reply: (Result<DirListing>) -> Unit) {
-        command(Cmd.ListDir(path, hidden)) { r ->
-            reply(
-                when {
-                    !r.ok -> Result.failure(Exception(r.error?.message ?: "el PC no pudo leer la carpeta"))
-                    r.result == null -> Result.failure(Exception("el PC no dio la carpeta"))
-                    else -> try {
-                        Result.success(ContractJson.decodeFromJsonElement(DirListing.serializer(), r.result!!))
-                    } catch (e: SerializationException) {
-                        Result.failure(Exception("el PC dio una carpeta que no se entiende"))
-                    }
-                },
-            )
-        }
+        command(Cmd.ListDir(path, hidden)) { r -> reply(r.read(DirListing.serializer())) }
     }
 
     override fun openFolder(path: String, reply: (Result<Id>) -> Unit) {
@@ -219,6 +196,17 @@ abstract class ProtocolSource : AppSource() {
         val id = "c${commands.incrementAndGet()}"
         if (reply != null) synchronized(lock) { replies[id] = reply }
         send(ClientMsg.Command(id, cmd))
+    }
+
+    /** What a command read, as a [T]: the PC's message when it refused, else what is wrong with its answer. */
+    private fun <T> DaemonMsg.Reply.read(serializer: DeserializationStrategy<T>): Result<T> {
+        if (!ok) return Result.failure(Exception(error?.message ?: "el PC no pudo leer la carpeta"))
+        val body = result ?: return Result.failure(Exception("el PC no dio la carpeta"))
+        return try {
+            Result.success(ContractJson.decodeFromJsonElement(serializer, body))
+        } catch (e: SerializationException) {
+            Result.failure(Exception("el PC dio una carpeta que no se entiende"))
+        }
     }
 
     /** Nothing, or the PC's message ([fallback] when it gave none). */
