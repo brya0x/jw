@@ -53,6 +53,9 @@ button:hover{border-color:var(--blue)}
 .ph .ed button{min-width:40px;height:36px;border:0;background:none;color:var(--blue);font-size:15px}
 .ph .ed button.stop{color:var(--red)}
 .ph .none{padding:24px 16px;color:var(--dim)}
+.ph .boot{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;font-size:13px}
+.ph .boot small{color:var(--dim);font-size:11px}
+.ph .raw{margin:0;padding:8px 10px;font:12px/1.35 var(--mono);color:var(--fg);white-space:pre;overflow:hidden}
 .decide{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px;color:var(--fg)}
 .decide h2{font:600 12px var(--mono);margin:0 0 8px;color:var(--mut)}
 .decide ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
@@ -77,6 +80,8 @@ button:hover{border-color:var(--blue)}
     <button id="evPane" type="button">New pane here</button>
     <button id="evRun" type="button">Start a long command</button>
     <button id="evEnd" type="button">It finishes</button>
+    <button id="evClaude" type="button">Start claude (takes the screen)</button>
+    <button id="evClaudeEnd" type="button">claude exits</button>
     <button id="evReset" type="button">Reset</button>
     <select id="size" aria-label="Terminal size"><option value="120x32">120 × 32</option><option value="96x28">96 × 28</option></select>
   </div>
@@ -109,6 +114,7 @@ button:hover{border-color:var(--blue)}
       <li><b>Avisos</b> opens as a box over the pane area: one row per unseen attention, <code>↵</code> goes to that pane, focus and seen both change.</li>
       <li><b>The shell as blocks</b> (the terminal's version of what the phone prototype already does): inside a shell pane's box, each command is a block with its folder, branch and time, a bar at the left (green done, red failed, yellow running), bold command and its coloured output; newest at the bottom. A click selects a block and the status bar offers copy command, copy output, repeat. The editor sits at the foot of the box with the folder and branch chips; while a program runs it shows the program and <code>■ ^C</code>. (Only the shell for now: no agents, no full-screen programs.) Open a shell pane, press Enter, type, press Enter.</li>
       <li><b>The field at the foot (changed)</b> is drawn as the phone's today, which is flat: no box, a band of its own colour under the blocks. On it, a row of chips (the folder and, when there is one, <code>⎇ branch</code>, each a pill; while a command runs, <code>◌</code> and the command in yellow), and under it the line: the green <code>❯</code>, the text you type, and the blue send mark <code>➤</code> at the right. With nothing typed it says «escribe un comando»; while something runs it says «va al programa» (the phone's longer «lo que escribas va al programa» does not fit a narrow pane) and a red <code>■ ^C</code> sits beside the send mark (the phone's red stop beside its send). The band has room around it, as the phone's has: a free row over the chips, one between the chips and the line, one under the line, and a column of margin at each side (five rows in all, where the old editor took three). A line longer than the line wraps under it and the band grows, up to five rows of text. The shell still owns the line (history, tab and its key bindings work as today): the client draws what the shell has typed, after its prompt. For that the daemon has to say where the typed text starts: one optional field in the <code>blocks</code> node (the cursor at the shell's prompt-end mark), which is also what mirroring the line on the phone (OPEN-6) needs. Without it, only the band, the chips and the marks could change, not the text or the placeholder.</li>
+      <li><b>A program that takes the screen (new)</b>: when a command that draws its own screen starts (claude), the pane no longer shows the shell's screen as it was while the program has not painted anything. The box says «iniciando claude…» with a spinner (and the phone the same, with «toca ■ para cancelar»), and the moment the program paints, the screen is drawn as it is. When the program ends the blocks come back at once. Try <i>Start claude</i> and <i>claude exits</i> above; in the terminal <code>^C</code> still cancels. The daemon says when the program has painted: its running block has output (<code>out</code>) from then on, which is also what keeps the loading from showing for a program that paints at once (nvim: a screen of its own, no loading).</li>
       <li><b>On the phone</b> the same blocks are drawn flat, newest at the bottom: folder and time dim on top, the command in bold, the coloured output below, and the bar at the left (green, red, yellow). The shell's panes are tabs (the phone's way; the terminal uses boxes). Tapping a block selects it and shows <code>Comando</code>, <code>Salida</code> and <code>Repetir</code>. The editor sits at the foot with the folder and branch chips; while a program runs the chip is the program, the border turns dashed and the send button becomes a red stop (<code>^C</code>). The special keys (esc, tab, arrows) have no buttons for now; where they go is still to be decided. The phone shows the workspace highlighted in the terminal; on the real phone Home picks it.</li>
       <li><b>Seen</b> is shared: looking at a pane here clears its aviso on the phone too. Moving the highlight previews a workspace; <code>↵</code> or focusing a pane marks it seen.</li>
     </ol>
@@ -211,7 +217,8 @@ function draw(){
         const focused = ui.open === w.id && ui.focus === i;
         const un = paneUnseen(p)[0];
         box(g, x0, y0, bw, bh, p.title, focused ? 'c-blue' : 'c-line', un ? (markOf(un)[0] + ' ' + whatOf(un)) : '', un ? markOf(un)[1] + ' b' : '');
-        if (p.shell && !p.full) drawShell(g, p, x0, y0, bw, bh, focused);
+        if (p.shell && p.prog) drawProgram(g, p, x0, y0, bw, bh);
+        else if (p.shell && !p.full) drawShell(g, p, x0, y0, bw, bh, focused);
         else {
           const top0 = 1;
           p.lines.slice(0, bh - 1 - top0).forEach((l, k) => put(g, x0 + 2, y0 + top0 + k, clipTo(l, bw - 4)));
@@ -287,7 +294,24 @@ function drawShell(g, p, x0, y0, bw, bh, focused){
   if (focused){ const last = shownRows[n - 1], cx = tx + [...last].length, cy = edTop + 2 + n;
     if (cx < fx + fw - 2){ const was = g.cells[cy][cx]; g.cells[cy][cx] = [was[0], 'cur']; } }
 }
-const termShell = () => { const w = cur(); const p = ui.open === w.id ? w.panes[ui.focus] : null; return p && p.shell && !p.full && !ui.avisos ? p : null; };
+/* A program that draws its own screen (claude) has the pane. Until it has painted something the box says it is starting,
+   with a spinner, instead of showing the shell's screen as it was; once it paints, the screen is drawn as it is. */
+const SPIN = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
+const rawLines = p => [...p.blocks.flatMap(b => [short(p.cwd), '❯ ' + b.cmd, ...b.out.map(o => o.t), '']), ...(p.prog.painted ? p.prog.ui : [])];
+function drawProgram(g, p, x0, y0, bw, bh){
+  if (!p.prog.painted){
+    const t = SPIN[Math.floor(Date.now() / 110) % SPIN.length] + ' iniciando ' + p.prog.name + '…', h = '^C cancela';
+    const cy = y0 + Math.floor(bh / 2) - 1;
+    put(g, x0 + Math.floor((bw - [...t].length) / 2), cy, t, 'c-yellow'); put(g, x0 + Math.floor((bw - h.length) / 2), cy + 2, h, 'd');
+    return;
+  }
+  const lines = rawLines(p), room = bh - 2;
+  lines.slice(-room).forEach((l, k) => put(g, x0 + 2, y0 + 1 + k, clipTo(l, bw - 4), l.startsWith('❯') ? 'b' : ''));
+}
+const startClaude = p => { p.blocks.push({cmd:'claude', dur:'0.0s', code:0, running:true, out:[]}); p.prog = {name:'claude', painted:false, ui:['  ╭─ claude ' + '─'.repeat(19) + '╮', '  │ > ¿qué hacemos hoy?'.padEnd(31) + '│', '  ╰' + '─'.repeat(28) + '╯']};
+  const spin = setInterval(() => { if (p.prog && !p.prog.painted) draw(); else clearInterval(spin); }, 110);
+  setTimeout(() => { if (p.prog) p.prog.painted = true; draw(); }, 2200); };
+const termShell = () => { const w = cur(); const p = ui.open === w.id ? w.panes[ui.focus] : null; return p && p.shell && !p.full && !p.prog && !ui.avisos ? p : null; };
 function typeKey(k){
   const p = termShell(); if (!p) return;
   if (k === 'Escape'){ if (ui.blk){ ui.blk = null; } else ui.open = null; }
@@ -316,6 +340,11 @@ function drawPhone(){
   if (!p){ $('phBlocks').innerHTML = '<div class="none">Este workspace no tiene paneles.</div>'; $('phActs').hidden = true; $('phChips').innerHTML = ''; $('phIn').disabled = true; return; }
   $('phIn').disabled = false;
   const sel = ph.blk && ph.blk.pane === p.id ? ph.blk.idx : null;
+  if (p.prog){
+    $('phBlocks').innerHTML = p.prog.painted ? `<pre class="raw">${esc(rawLines(p).join('\n'))}</pre>` : `<div class="boot"><span class="c-yellow">${SPIN[Math.floor(Date.now() / 110) % SPIN.length]}</span> iniciando ${esc(p.prog.name)}…<small>toca ■ para cancelar</small></div>`;
+    $('phChips').innerHTML = `<span class="c-yellow">◌ ${esc(p.blocks.at(-1).cmd)}</span>`;
+    $('phGo').outerHTML = '<button id="phGo" class="stop" type="button" aria-label="Stop (^C)">■</button>'; $('phActs').hidden = true; return;
+  }
   $('phBlocks').innerHTML = p.blocks.map((b, i) => `<div class="blk ${phBars(b)} ${sel === i ? 'on' : ''}" data-blk="${i}">
       <div class="bm"><span>${esc(short(p.cwd))}</span><i class="${b.code && !b.running ? 'bad' : ''}">${b.running ? 'corriendo ' + b.dur : b.code ? 'salió ' + b.code + ' · ' + b.dur : b.dur}</i></div>
       <div class="bc">${esc(b.cmd)}</div>
@@ -371,6 +400,8 @@ document.getElementById('evFail').onclick = () => { const p = paneOf(); if (p){ 
 document.getElementById('evOk').onclick = () => { const p = paneOf(); if (p){ p.att = p.att.filter(a => a.kind !== 'shell_done'); p.att.push({kind:'shell_done', pane:p.id, exit:0, rev:++rev}); draw(); } };
 document.getElementById('evPerm').onclick = () => { const p = paneOf(); if (p){ p.att = p.att.filter(a => a.kind !== 'permission'); p.att.push({kind:'permission', pane:p.id, rev:++rev}); draw(); } };
 document.getElementById('evPane').onclick = () => { const w = cur(); w.panes.push({id:'p' + (++rev), title:'zsh', lines:['~ ❯ '], att:[]}); draw(); };
+document.getElementById('evClaude').onclick = () => { const p = shellPane(); if (p && !p.prog){ startClaude(p); draw(); } };
+document.getElementById('evClaudeEnd').onclick = () => { const p = shellPane(), b = p && p.blocks.at(-1); if (p && p.prog){ const ui_ = p.prog.painted ? p.prog.ui : []; p.prog = null; b.running = false; b.dur = '4.1s'; b.out = ui_.map(t => ({t})); draw(); } };
 const shellPane = () => { const w = cur(); return w.panes.find(p => p.shell); };
 document.getElementById('evRun').onclick = () => { const p = shellPane(); if (p){ p.blocks.push({cmd:'cargo watch -x test', dur:'12s', code:0, running:true, out:[{t:'[Running cargo test]', c:'d'}]}); draw(); } };
 document.getElementById('evEnd').onclick = () => { const p = shellPane(); const b = p && p.blocks.at(-1); if (b && b.running){ b.running = false; b.dur = '12.4s'; b.out = [{t:'test result: ok. 14 passed', c:'c-green'}]; draw(); } };

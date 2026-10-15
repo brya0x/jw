@@ -3,7 +3,7 @@
 
 use contract::{Block, Color, Span};
 
-use super::{Rgb, Style, clip, look};
+use super::{Grid, Rgb, Style, clip, look};
 
 /// The 256-colour palette: the sixteen named colours are the theme's (black and bright white
 /// turn into the text colour on a light theme, where a literal one would vanish), the rest
@@ -86,6 +86,38 @@ pub fn short(path: &str) -> String {
     } else {
         path.to_owned()
     }
+}
+
+/// Whether a block's output has anything to see: a program that draws on the normal screen (claude)
+/// has painted once a row of its own has more than blanks in it.
+pub fn has_ink(out: &[Vec<Span>]) -> bool {
+    out.iter().flatten().any(|s| !s.t.trim().is_empty())
+}
+
+/// The program a command line names: the file name of its first word.
+pub fn program_name(cmd: &str) -> String {
+    let word = cmd.split_whitespace().next().unwrap_or(cmd);
+    word.rsplit('/').next().unwrap_or(word).to_owned()
+}
+
+/// The frames of the spinner of a program that is starting, one every 110 ms.
+const SPIN: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// What a pane says while the program that has its screen has not painted anything: the spinner
+/// and `iniciando <name>…` in the middle of its box, and that `^C` cancels (spec REQ-259).
+pub fn loading(g: &mut Grid, (x, y, w, h): (usize, usize, usize, usize), name: &str, now_ms: u64) {
+    let frame = SPIN[(now_ms / 110) as usize % SPIN.len()];
+    let line = clip(&format!("{frame} iniciando {name}…"), w.saturating_sub(4));
+    let hint = "^C cancela";
+    let mid = y + h / 2;
+    let centre = |text: &str| x + w.saturating_sub(text.chars().count()) / 2;
+    g.put(
+        centre(&line),
+        mid.saturating_sub(1),
+        &line,
+        Style::fg(look::yellow()),
+    );
+    g.put(centre(hint), mid + 1, hint, Style::fg(look::dim()));
 }
 
 /// Every block as lines, oldest first: the folder and time, the command, the output, a gap.
@@ -315,5 +347,42 @@ mod tests {
             }],
         ];
         assert_eq!(output_text(&b), "ab\nc");
+    }
+}
+
+#[cfg(test)]
+mod starting_tests {
+    use super::*;
+
+    fn rows(rows: &[&[&str]]) -> Vec<Vec<Span>> {
+        rows.iter()
+            .map(|r| {
+                r.iter()
+                    .map(|t| Span {
+                        t: (*t).into(),
+                        fg: None,
+                        bg: None,
+                        b: false,
+                        i: false,
+                        u: false,
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_program_has_painted_when_a_row_of_its_own_has_more_than_blanks() {
+        assert!(!has_ink(&[]));
+        assert!(!has_ink(&rows(&[&["   "], &[""]])));
+        assert!(has_ink(&rows(&[&["  "], &["╭─ claude", "  "]])));
+    }
+
+    #[test]
+    fn a_command_names_its_program_by_the_file_name_of_its_first_word() {
+        assert_eq!(program_name("claude --resume 12"), "claude");
+        assert_eq!(program_name("/usr/local/bin/claude"), "claude");
+        assert_eq!(program_name("  nvim ."), "nvim");
+        assert_eq!(program_name(""), "");
     }
 }

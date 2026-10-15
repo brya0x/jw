@@ -409,6 +409,9 @@ pub struct View {
     last_size: Option<(String, u16, u16)>,
     /// The blocks nodes, by node id.
     blocks: HashMap<String, Blocks>,
+    /// The block of each pane whose program has painted something on the normal screen: once it has, the pane
+    /// never says it is starting again for that block, whatever the program clears.
+    painted: HashMap<String, u64>,
     /// The selected block: its pane and its id.
     blk: Option<(String, u64)>,
     /// How many lines each pane's blocks are scrolled up from the newest.
@@ -477,6 +480,7 @@ impl View {
             typing: false,
             last_size: None,
             blocks: HashMap::new(),
+            painted: HashMap::new(),
             blk: None,
             scroll: HashMap::new(),
             now_ms: 0,
@@ -684,6 +688,7 @@ impl View {
                 }
             }
         }
+        self.note_painted();
         self.update_changes();
         self.advance_manage();
         self.follow_goto();
@@ -724,6 +729,32 @@ impl View {
         );
         ids.retain(|id| !self.revs.contains_key(id));
         ids
+    }
+
+    /// Remember the panes whose running program has painted something (see `painted`).
+    fn note_painted(&mut self) {
+        self.painted.retain(|pane, _| self.panes.contains_key(pane));
+        for (id, p) in &self.panes {
+            let Some(b) = p.blocks.as_ref().and_then(|b| self.blocks.get(b)) else {
+                continue;
+            };
+            if let Some(k) = running_block(b).filter(|k| shell::has_ink(&k.out)) {
+                self.painted.insert(id.clone(), k.id);
+            }
+        }
+    }
+
+    /// The program a pane's blocks say has the screen and has not painted anything yet (spec
+    /// REQ-259): it draws on the normal screen, so the pane's own screen would still be the shell's
+    /// as it was. A program that has not painted in `LOADING_MAX_MS` is not waited for.
+    fn starting(&self, pane: &str) -> Option<String> {
+        let p = self.panes.get(pane)?;
+        let b = self.blocks.get(p.blocks.as_ref()?)?;
+        let k = running_block(b).filter(|k| b.mode == BlocksMode::Full && !k.full)?;
+        let waiting = !shell::has_ink(&k.out)
+            && self.painted.get(pane) != Some(&k.id)
+            && self.now_ms.saturating_sub(k.started) < LOADING_MAX_MS;
+        waiting.then(|| shell::program_name(&k.cmd))
     }
 
     /// The pane's blocks, when it is drawn as blocks (a program with the whole screen, or a
@@ -2123,6 +2154,10 @@ impl View {
                 self.blocks_view(g, b, p, rect, focused, branch);
                 continue;
             }
+            if let Some(name) = self.starting(&summary.id) {
+                shell::loading(g, (bx, by, bw, bh), &name, self.now_ms);
+                continue;
+            }
             // The shell has blocks that have not arrived: the screen would show for a moment
             // and then give way to them, so it waits.
             if p.blocks
@@ -2341,6 +2376,9 @@ fn inner((x, y, w, h): Rect) -> Rect {
 fn list_h(h: usize, band: usize) -> usize {
     h.saturating_sub(band)
 }
+
+/// How long a program that has the screen is waited for before the pane shows its screen as it is.
+const LOADING_MAX_MS: u64 = 20_000;
 
 /// The command a pane's blocks say is running: the last block, while it runs.
 fn running_block(b: &Blocks) -> Option<&contract::Block> {
@@ -3076,6 +3114,84 @@ mod tests {
         pane.screen.cursor.col = 8;
         let t = v.plain(120, 30);
         assert!(t.contains("❯ ❯ ls -la") || t.contains("❯ ls -la"), "{t}");
+    }
+
+    /// The shell pane of the fixture with `claude` just started on the normal screen: the node is in
+    /// mode `full`, the running block is not an alternate screen and has drawn nothing yet.
+    fn claude_starting() -> View {
+        let mut v = open_blocks();
+        let node = v.blocks.get_mut(BLOCKS).unwrap();
+        node.mode = BlocksMode::Full;
+        let k = node.blocks.last_mut().unwrap();
+        // A new command, as the fixture's block had painted already when it was loaded.
+        k.id = 99;
+        k.cmd = "claude".into();
+        k.running = true;
+        k.full = false;
+        k.started = 1_000;
+        k.out.clear();
+        v.panes.get_mut(SHELL).unwrap().screen.lines[0] = "SCREEN-TEXT".into();
+        v.set_now(1_500);
+        v
+    }
+
+    fn paint(v: &mut View, text: &str) {
+        let k = v.blocks.get_mut(BLOCKS).unwrap().blocks.last_mut().unwrap();
+        k.out = vec![vec![contract::Span {
+            t: text.into(),
+            fg: None,
+            bg: None,
+            b: false,
+            i: false,
+            u: false,
+        }]];
+        v.note_painted();
+    }
+
+    #[test]
+    fn a_program_that_has_the_screen_and_has_painted_nothing_is_starting_and_not_the_shells_old_screen()
+     {
+        let t = claude_starting().plain(120, 30);
+        assert!(t.contains("iniciando claude…"), "{t}");
+        assert!(t.contains("^C cancela"), "{t}");
+        assert!(
+            !t.contains("SCREEN-TEXT"),
+            "the shell's screen as it was stays hidden: {t}"
+        );
+    }
+
+    #[test]
+    fn once_it_paints_its_screen_is_drawn_as_it_is_and_it_never_starts_again_for_that_command() {
+        let mut v = claude_starting();
+        paint(&mut v, "╭─ claude");
+        let t = v.plain(120, 30);
+        assert!(t.contains("SCREEN-TEXT") && !t.contains("iniciando"), "{t}");
+        // It clears its screen for a moment: that is not starting over.
+        let k = v.blocks.get_mut(BLOCKS).unwrap().blocks.last_mut().unwrap();
+        k.out.clear();
+        let t = v.plain(120, 30);
+        assert!(t.contains("SCREEN-TEXT") && !t.contains("iniciando"), "{t}");
+    }
+
+    #[test]
+    fn a_program_on_the_alternate_screen_or_one_that_never_paints_does_not_load_for_ever() {
+        let mut v = claude_starting();
+        v.blocks
+            .get_mut(BLOCKS)
+            .unwrap()
+            .blocks
+            .last_mut()
+            .unwrap()
+            .full = true;
+        let t = v.plain(120, 30);
+        assert!(
+            t.contains("SCREEN-TEXT") && !t.contains("iniciando"),
+            "an alternate screen is blank and its own: {t}"
+        );
+        let mut v = claude_starting();
+        v.set_now(1_000 + LOADING_MAX_MS);
+        let t = v.plain(120, 30);
+        assert!(t.contains("SCREEN-TEXT") && !t.contains("iniciando"), "{t}");
     }
 
     #[test]

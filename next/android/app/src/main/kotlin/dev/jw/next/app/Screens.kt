@@ -40,6 +40,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.remember
@@ -79,6 +80,9 @@ import dev.jw.next.client.Screen
 import dev.jw.next.client.WorkspaceTarget
 import dev.jw.next.client.WsAction
 import dev.jw.next.client.avisos
+import dev.jw.next.client.hasInk
+import dev.jw.next.client.programName
+import dev.jw.next.client.starting
 import dev.jw.next.client.byUrgency
 import dev.jw.next.client.closeSheet
 import dev.jw.next.client.homeItems
@@ -417,6 +421,15 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
         val copy = { text: String -> scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("jwn", text))) }; Unit }
         val block = blocks?.blocks?.firstOrNull { it.id == picked }
         val shown = blocks?.takeIf { it.mode == BlocksMode.Blocks }
+        // A program with the whole screen that has painted nothing is starting: its pane would show the shell's screen as it
+        // was. Once it has painted it never starts again (it may clear its screen), and one that paints nothing is not waited for.
+        val running = blocks?.blocks?.lastOrNull()?.takeIf { it.running }
+        val ink = running?.hasInk() == true
+        var painted by remember(screen.pane, running?.id) { mutableStateOf(ink) }
+        LaunchedEffect(ink) { if (ink) painted = true }
+        var gaveUp by remember(screen.pane, running?.id) { mutableStateOf(false) }
+        LaunchedEffect(screen.pane, running?.id) { delay(LOADING_MAX_MS); gaveUp = true }
+        val booting = blocks?.starting()?.takeIf { !painted && !gaveUp }
         // A shell with blocks that have not arrived: its screen would show for a moment and then give way to them.
         val waitingBlocks = blocksId != null && blocks == null
         if (shown != null) {
@@ -439,6 +452,7 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
                     .horizontalScroll(rememberScrollState()).padding(horizontal = Gutter - 4.dp, vertical = 10.dp),
             ) {
                 if (pane == null || waitingBlocks) PaneSkeleton()
+                else if (booting != null) Booting(programName(booting.cmd))
                 else Text(
                     terminalText(pane.screen.lines, pane.screen.cursor.row, pane.screen.cursor.col, pane.screen.cursor.visible),
                     fontFamily = MonoFont, fontSize = 12.sp, lineHeight = 18.sp, color = Palette.fg, softWrap = false,
@@ -448,7 +462,7 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
         val last = shown?.blocks?.lastOrNull()
         Composer(
             enabled = source.writable && screen.pane != null,
-            running = last?.running == true,
+            running = running != null,
             chips = if (shown == null) null else {
                 {
                     if (last?.running == true) Chip("◌ ${last.cmd}", Palette.yellow)
@@ -570,6 +584,25 @@ private fun PaneSkeleton() {
         listOf(0.55f, 0.8f, 0.4f, 0.65f, 0.3f).forEach { w ->
             Box(Modifier.fillMaxWidth(w).height(12.dp).background(Palette.line.copy(alpha = alpha), RoundedCornerShape(4.dp)))
         }
+    }
+}
+
+private const val LOADING_MAX_MS = 20_000L
+private val Spin = listOf("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+
+/** What the pane says while the program that has its screen has not painted anything: a spinner and its name. */
+@Composable
+private fun Booting(program: String) {
+    var frame by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) { while (true) { delay(110); frame = (frame + 1) % Spin.size } }
+    Column(
+        Modifier.fillMaxWidth().padding(top = 96.dp).semantics { contentDescription = "Iniciando $program" },
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Mono(Spin[frame], Palette.yellow, 18)
+        Mono("iniciando $program…", Palette.fg, 13)
+        Mono("toca ■ para cancelar", Palette.dim, 11)
     }
 }
 
