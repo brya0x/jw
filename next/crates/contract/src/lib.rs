@@ -210,6 +210,18 @@ pub enum Cmd {
     SyncWorkspace {
         workspace: Id,
     },
+    /// Swap the places of two panes of a workspace in its layout.
+    SwapPanes {
+        a: Id,
+        b: Id,
+    },
+    /// Make a pane wider (`row`) or taller (`col`) by moving the nearest split of that direction
+    /// around it, `by` thousandths of the split's size; a negative `by` makes it narrower or lower.
+    GrowPane {
+        pane: Id,
+        dir: SplitDir,
+        by: i16,
+    },
     /// Give a pane a name that stays whatever runs in it; an empty name brings back the
     /// automatic one (what runs in it, else its shell).
     RenamePane {

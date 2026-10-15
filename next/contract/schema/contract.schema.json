@@ -301,6 +301,8 @@
         { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "remove_workspace" }, "workspace": { "$ref": "#/$defs/Id" }, "remove_worktree": { "type": "boolean" }, "force": { "type": "boolean" } } },
         { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "check_workspace" }, "workspace": { "$ref": "#/$defs/Id" } } },
         { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "sync_workspace" }, "workspace": { "$ref": "#/$defs/Id" } } },
+        { "type": "object", "required": ["cmd", "a", "b"], "properties": { "cmd": { "const": "swap_panes" }, "a": { "$ref": "#/$defs/Id" }, "b": { "$ref": "#/$defs/Id" } } },
+        { "type": "object", "required": ["cmd", "pane", "dir", "by"], "properties": { "cmd": { "const": "grow_pane" }, "pane": { "$ref": "#/$defs/Id" }, "dir": { "$ref": "#/$defs/SplitDir" }, "by": { "type": "integer", "minimum": -800, "maximum": 800 } } },
         { "type": "object", "required": ["cmd", "workspace", "name"], "properties": { "cmd": { "const": "rename_workspace" }, "workspace": { "$ref": "#/$defs/Id" }, "name": { "type": "string", "maxLength": 80 } } },
         { "type": "object", "required": ["cmd", "pane", "name"], "properties": { "cmd": { "const": "rename_pane" }, "pane": { "$ref": "#/$defs/Id" }, "name": { "type": "string", "maxLength": 80 } } },
         { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "new_pane" }, "workspace": { "$ref": "#/$defs/Id" }, "program": { "type": "array", "items": { "type": "string" }, "minItems": 1 }, "beside": { "$ref": "#/$defs/Id" }, "dir": { "$ref": "#/$defs/SplitDir" } } },

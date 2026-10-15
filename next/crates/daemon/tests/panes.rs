@@ -726,3 +726,101 @@ fn the_layout_splits_where_asked_collapses_on_close_and_survives_a_restart() {
     );
     d.stop();
 }
+
+/// REQ-293 to REQ-296: two panes swap places, a pane grows by moving a split, and both are kept.
+#[test]
+fn panes_swap_and_grow_by_the_layout_and_it_is_kept() {
+    use contract::SplitDir::{Col, Row};
+    let (w, d, mut c) = world();
+    c.open(&w.ws).unwrap();
+    assert!(c.wait_until(WAIT, |c| c.nodes.contains_key(&w.ws)).unwrap());
+    let a = new_pane(&mut c, &w.ws);
+    let grow = |c: &mut Client, pane: &str, dir, by| {
+        c.cmd(Cmd::GrowPane {
+            pane: pane.into(),
+            dir,
+            by,
+        })
+        .unwrap()
+    };
+    // Alone, a pane has no split to move.
+    assert_eq!(
+        grow(&mut c, &a, Row, 50).unwrap_err().code,
+        ErrorCode::BadRequest
+    );
+    let b = pane_beside(&mut c, &w.ws, &a, Row).unwrap();
+    let cpane = pane_beside(&mut c, &w.ws, &b, Col).unwrap();
+    assert!(
+        c.wait_until(WAIT, |c| leaf_ids(&c.nodes[&w.ws]["layout"]).len() == 3)
+            .unwrap()
+    );
+    // `a | (b over c)`: `a` and `c` swap places.
+    c.cmd(Cmd::SwapPanes {
+        a: a.clone(),
+        b: cpane.clone(),
+    })
+    .unwrap()
+    .unwrap();
+    assert!(
+        c.wait_until(WAIT, |c| leaf_ids(&c.nodes[&w.ws]["layout"])
+            == [cpane.clone(), b.clone(), a.clone()])
+            .unwrap()
+    );
+    // The panes' own order is not touched.
+    let order: Vec<&str> = c.nodes[&w.ws]["panes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(order, [a.as_str(), b.as_str(), cpane.as_str()]);
+    // `c` is now on the left: wider moves the outer split; `a` is below `b`: taller moves the inner one.
+    grow(&mut c, &cpane, Row, 50).unwrap();
+    grow(&mut c, &a, Col, 100).unwrap();
+    assert!(
+        c.wait_until(WAIT, |c| c.nodes[&w.ws]["layout"]["ratio"] == 550)
+            .unwrap()
+    );
+    assert_eq!(
+        layout_of(&c, &w.ws)["b"]["ratio"],
+        400,
+        "a is the second side"
+    );
+    // A direction with no split around the pane, a size out of range, and what cannot be swapped.
+    assert_eq!(
+        grow(&mut c, &cpane, Col, 50).unwrap_err().code,
+        ErrorCode::BadRequest
+    );
+    assert_eq!(
+        grow(&mut c, &a, Row, 900).unwrap_err().code,
+        ErrorCode::BadRequest
+    );
+    assert_eq!(
+        grow(&mut c, "nowhere", Row, 50).unwrap_err().code,
+        ErrorCode::NotFound
+    );
+    for (x, y, code) in [
+        (&a, &a, ErrorCode::BadRequest),
+        (&a, &"nowhere".to_owned(), ErrorCode::BadRequest),
+        (&"nowhere".to_owned(), &a, ErrorCode::NotFound),
+    ] {
+        let e = c
+            .cmd(Cmd::SwapPanes {
+                a: x.clone(),
+                b: y.clone(),
+            })
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(e.code, code);
+    }
+    // A restart keeps the arrangement.
+    let before = layout_of(&c, &w.ws);
+    drop(c);
+    d.stop();
+    let d = w.sb.start();
+    let mut c = w.sb.client();
+    c.open(&w.ws).unwrap();
+    assert!(c.wait_until(WAIT, |c| c.nodes.contains_key(&w.ws)).unwrap());
+    assert_eq!(layout_of(&c, &w.ws), before);
+    d.stop();
+}

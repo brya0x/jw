@@ -324,6 +324,10 @@ pub enum Key {
     SplitCol,
     /// The next panel in the order they were made.
     Next,
+    /// Swap the focused panel with the one on this side.
+    Swap(split::Side),
+    /// Make the focused panel wider or taller (`true`), narrower or lower, by moving a split.
+    Resize(SplitDir, bool),
     /// The phone link: its box.
     Phone,
     /// With a block selected: copy its command, copy its output, run it again.
@@ -347,6 +351,14 @@ pub enum After {
     Quit,
     /// Ask the daemon for a new pane in this workspace, where `Place` says.
     NewPane(String, Place),
+    /// Swap two panes of the open workspace.
+    Swap(String, String),
+    /// Move the split around a pane so that it gets `by` thousandths more of the way `dir`.
+    Grow {
+        pane: String,
+        dir: SplitDir,
+        by: i16,
+    },
     /// Ask the daemon for a new pane that starts this program (the program and its arguments).
     NewProgram {
         workspace: String,
@@ -1020,26 +1032,54 @@ impl View {
         Place { beside, dir }
     }
 
+    /// The place in the open workspace of the panel on this side of the focused one.
+    fn neighbour_toward(&self, side: split::Side) -> Option<usize> {
+        let doc = self.shown()?;
+        let (cols, rows) = self.size;
+        let at = split::rects(doc.layout.as_ref()?, panes_rect(cols, rows));
+        let id = split::neighbour(&at, &doc.panes.get(self.focus)?.id, side)?;
+        doc.panes.iter().position(|p| p.id == id)
+    }
+
+    /// `H` `J` `K` `L`: ask to swap the focused panel with the one on that side.
+    fn swap_toward(&mut self, side: split::Side) -> After {
+        let Some(doc) = self.shown() else {
+            return After::Continue;
+        };
+        let pair = self.neighbour_toward(side).and_then(|to| {
+            Some((
+                doc.panes.get(self.focus)?.id.clone(),
+                doc.panes.get(to)?.id.clone(),
+            ))
+        });
+        match pair {
+            Some((a, b)) => After::Swap(a, b),
+            None => {
+                self.flash("no hay un panel en esa dirección");
+                After::Continue
+            }
+        }
+    }
+
+    /// `<` `>` `{` `}`: ask to move the split around the focused panel by a twentieth.
+    fn resize_focused(&mut self, dir: SplitDir, bigger: bool) -> After {
+        let Some(pane) = self.shown().and_then(|d| d.panes.get(self.focus)) else {
+            return After::Continue;
+        };
+        After::Grow {
+            pane: pane.id.clone(),
+            dir,
+            by: if bigger { RESIZE_STEP } else { -RESIZE_STEP },
+        }
+    }
+
     /// Focus the panel on this side of the focused one, when there is one.
     fn focus_toward(&mut self, side: split::Side) {
-        let Some(doc) = self.shown() else {
-            return;
-        };
-        let Some(tree) = &doc.layout else {
+        if self.shown().is_some_and(|d| d.layout.is_none()) {
             self.go_panel(matches!(side, split::Side::Right | split::Side::Down));
-            return;
-        };
-        let (cols, rows) = self.size;
-        let at = split::rects(tree, panes_rect(cols, rows));
-        let Some(to) = doc
-            .panes
-            .get(self.focus)
-            .and_then(|p| split::neighbour(&at, &p.id, side))
-            .and_then(|id| doc.panes.iter().position(|p| p.id == id))
-        else {
-            return;
-        };
-        self.focus = to;
+        } else if let Some(to) = self.neighbour_toward(side) {
+            self.focus = to;
+        }
     }
 
     /// The panel the client just asked for takes the focus as soon as it shows up.
@@ -1701,6 +1741,12 @@ impl View {
                 self.select_workspace(false)
             }
             (Mode::Workspaces, Key::Next) if level == Level::Panels => self.go_panel(true),
+            (Mode::Workspaces, Key::Swap(side)) if level == Level::Panels => {
+                return self.swap_toward(side);
+            }
+            (Mode::Workspaces, Key::Resize(dir, bigger)) if level == Level::Panels => {
+                return self.resize_focused(dir, bigger);
+            }
             (Mode::Workspaces, Key::Left) if level == Level::Panels => {
                 self.focus_toward(split::Side::Left)
             }
@@ -2218,7 +2264,7 @@ impl View {
                 (_, Level::Panels) => (
                     " PANEL ",
                     look::magenta(),
-                    "hjkl panel · ↵ escribir · n | - nuevo · N con programa · r nombrar · f completa · x cerrar · esc volver · ? teclas",
+                    "hjkl panel · HJKL mover · ↵ escribir · n | - nuevo · < > { } tamaño · x cerrar · esc volver · ? teclas",
                 ),
                 (_, Level::Workspaces) => (
                     " WORKSPACE ",
@@ -2576,6 +2622,9 @@ const PANEL_KEYS: &[(&str, &str)] = &[
     ("↵", "escribir en el panel"),
     ("n", "panel nuevo (por el lado más largo)"),
     ("| -", "panel nuevo a la derecha · debajo"),
+    ("H J K L", "intercambiar con el panel de ese lado"),
+    ("< >", "panel más estrecho · más ancho"),
+    ("{ }", "panel más bajo · más alto"),
     ("N", "panel nuevo con un programa (^␣ N)"),
     ("r", "nombrar el panel"),
     ("f", "el panel a pantalla completa"),
@@ -2799,6 +2848,14 @@ fn key_of(code: KeyCode) -> Option<Key> {
         KeyCode::Char('h') | KeyCode::Left => Key::Left,
         KeyCode::Char('l') | KeyCode::Right => Key::Right,
         KeyCode::Tab => Key::Next,
+        KeyCode::Char('H') => Key::Swap(split::Side::Left),
+        KeyCode::Char('L') => Key::Swap(split::Side::Right),
+        KeyCode::Char('K') => Key::Swap(split::Side::Up),
+        KeyCode::Char('J') => Key::Swap(split::Side::Down),
+        KeyCode::Char('>') => Key::Resize(SplitDir::Row, true),
+        KeyCode::Char('<') => Key::Resize(SplitDir::Row, false),
+        KeyCode::Char('}') => Key::Resize(SplitDir::Col, true),
+        KeyCode::Char('{') => Key::Resize(SplitDir::Col, false),
         KeyCode::Char('|') => Key::SplitRow,
         KeyCode::Char('-') => Key::SplitCol,
         KeyCode::Enter => Key::Enter,
@@ -2862,6 +2919,9 @@ fn commits(n: u64) -> String {
         format!("{n} commits")
     }
 }
+
+/// How much of a split one press of `<` `>` `{` `}` moves, in thousandths.
+const RESIZE_STEP: i16 = 50;
 
 /// How long a panel the client asked for is waited for, to focus it.
 const NEW_PANE_WAIT_MS: u64 = 5000;
@@ -3140,6 +3200,23 @@ pub fn run() -> Result<(), String> {
                 After::Quit => return Ok(()),
                 After::Write { pane, data } => {
                     let _ = client.send(Cmd::Write { pane, data });
+                }
+                After::Swap(a, b) => {
+                    let reply = client.cmd(Cmd::SwapPanes { a, b });
+                    told(
+                        &mut view,
+                        "No se pudo intercambiar los paneles",
+                        "paneles intercambiados",
+                        reply,
+                    );
+                }
+                After::Grow { pane, dir, by } => {
+                    if let Ok(Err(_)) = client.cmd(Cmd::GrowPane { pane, dir, by }) {
+                        view.flash(match dir {
+                            SplitDir::Row => "no hay división en horizontal para este panel",
+                            SplitDir::Col => "no hay división en vertical para este panel",
+                        });
+                    }
                 }
                 After::NewPane(workspace, place) => {
                     let reply = client.cmd(Cmd::NewPane {
@@ -4945,6 +5022,107 @@ mod tests {
             After::Continue,
             "nowhere further up"
         );
+    }
+
+    /// The idle view with a third panel: `a` on the left, `b` over `c` on the right.
+    fn three_panels() -> (View, [String; 3]) {
+        let mut v = idle_view();
+        let id = v.opened.clone().unwrap();
+        let doc = v.workspaces.get_mut(&id).unwrap();
+        let third = contract::PaneSummary {
+            id: "third".into(),
+            title: "zsh".into(),
+            attention: vec![],
+        };
+        doc.panes.push(third);
+        let [a, b, c] = [0, 1, 2].map(|i| doc.panes[i].id.clone());
+        let pane = |id: &str| contract::Layout::Pane { pane: id.into() };
+        doc.layout = Some(contract::Layout::Split {
+            dir: SplitDir::Row,
+            ratio: 500,
+            a: Box::new(pane(&a)),
+            b: Box::new(contract::Layout::Split {
+                dir: SplitDir::Col,
+                ratio: 500,
+                a: Box::new(pane(&b)),
+                b: Box::new(pane(&c)),
+            }),
+        });
+        v.focus = 0;
+        (v, [a, b, c])
+    }
+
+    #[test]
+    fn hjkl_go_to_the_panel_on_that_side_and_nowhere_when_there_is_none() {
+        let (mut v, _) = three_panels();
+        v.press_key(plain(KeyCode::Char('l')));
+        assert_eq!(v.focus, 1, "the upper of the two it touches");
+        v.press_key(plain(KeyCode::Char('j')));
+        assert_eq!(v.focus, 2);
+        v.press_key(plain(KeyCode::Char('j')));
+        assert_eq!(v.focus, 2, "nothing below");
+        v.press_key(plain(KeyCode::Char('h')));
+        assert_eq!(v.focus, 0);
+        v.press_key(plain(KeyCode::Char('k')));
+        assert_eq!(v.focus, 0);
+    }
+
+    #[test]
+    fn shift_hjkl_ask_to_swap_with_the_panel_on_that_side() {
+        let (mut v, [a, b, c]) = three_panels();
+        let shift = |ch| key(KeyCode::Char(ch), KeyModifiers::SHIFT);
+        assert_eq!(v.press_key(shift('L')), After::Swap(a.clone(), b.clone()));
+        v.focus = 1;
+        assert_eq!(v.press_key(shift('J')), After::Swap(b.clone(), c.clone()));
+        assert_eq!(v.press_key(shift('H')), After::Swap(b, a));
+        v.focus = 2;
+        assert_eq!(
+            v.press_key(shift('K')),
+            After::Swap(c, v.shown().unwrap().panes[1].id.clone())
+        );
+        v.focus = 0;
+        assert_eq!(v.press_key(shift('H')), After::Continue);
+        assert!(
+            v.plain(120, 30)
+                .contains("no hay un panel en esa dirección")
+        );
+    }
+
+    #[test]
+    fn the_four_size_keys_ask_to_move_a_split_by_a_twentieth_toward_or_away_from_the_panel() {
+        let (mut v, [a, ..]) = three_panels();
+        let grow = |dir, by| After::Grow {
+            pane: a.clone(),
+            dir,
+            by,
+        };
+        assert_eq!(
+            v.press_key(plain(KeyCode::Char('>'))),
+            grow(SplitDir::Row, 50)
+        );
+        assert_eq!(
+            v.press_key(plain(KeyCode::Char('<'))),
+            grow(SplitDir::Row, -50)
+        );
+        assert_eq!(
+            v.press_key(plain(KeyCode::Char('}'))),
+            grow(SplitDir::Col, 50)
+        );
+        assert_eq!(
+            v.press_key(plain(KeyCode::Char('{'))),
+            grow(SplitDir::Col, -50)
+        );
+    }
+
+    #[test]
+    fn swapping_and_resizing_are_for_the_panel_level_only() {
+        let mut v = fixture_view();
+        for ch in ['H', '>', '{'] {
+            assert_eq!(
+                v.press_key(key(KeyCode::Char(ch), KeyModifiers::SHIFT)),
+                After::Continue
+            );
+        }
     }
 
     #[test]

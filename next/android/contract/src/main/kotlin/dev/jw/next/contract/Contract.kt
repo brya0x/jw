@@ -164,6 +164,14 @@ sealed interface Cmd {
     @Serializable @SerialName("new_pane")
     data class NewPane(val workspace: Id, val program: List<String>? = null, val beside: Id? = null, val dir: SplitDir? = null) : Cmd
 
+    /** Swap the places of two panes of a workspace in its layout. */
+    @Serializable @SerialName("swap_panes")
+    data class SwapPanes(val a: Id, val b: Id) : Cmd
+
+    /** Make a pane wider ([SplitDir.Row]) or taller ([SplitDir.Col]) by [by] thousandths; negative makes it narrower or lower. */
+    @Serializable @SerialName("grow_pane")
+    data class GrowPane(val pane: Id, val dir: SplitDir, val by: Int) : Cmd
+
     @Serializable @SerialName("rename_workspace")
     data class RenameWorkspace(val workspace: Id, val name: String) : Cmd
 

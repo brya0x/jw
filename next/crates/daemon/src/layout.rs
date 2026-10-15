@@ -82,6 +82,90 @@ pub fn split(tree: Layout, beside: &str, new: &str, dir: SplitDir) -> Layout {
     }
 }
 
+/// The tree with the places of two panes exchanged.
+pub fn swap(tree: Layout, a: &str, b: &str) -> Layout {
+    match tree {
+        Layout::Pane { pane } if pane == a => leaf(b),
+        Layout::Pane { pane } if pane == b => leaf(a),
+        Layout::Pane { .. } => tree,
+        Layout::Split {
+            dir,
+            ratio,
+            a: x,
+            b: y,
+        } => Layout::Split {
+            dir,
+            ratio,
+            a: Box::new(swap(*x, a, b)),
+            b: Box::new(swap(*y, a, b)),
+        },
+    }
+}
+
+/// What `grow` knows about a part of the tree.
+#[derive(PartialEq, Eq)]
+enum Seen {
+    /// The pane is not in it.
+    No,
+    /// The pane is in it, and no split of the direction asked for has been moved yet.
+    Inside,
+    Done,
+}
+
+/// The tree with the nearest split of `dir` around `pane` moved so that the pane gets `by`
+/// thousandths more of it (less when negative), kept within range; `None` when no split of
+/// that direction is around the pane.
+pub fn grow(tree: Layout, pane: &str, dir: SplitDir, by: i16) -> Option<Layout> {
+    fn go(tree: Layout, pane: &str, dir: SplitDir, by: i16) -> (Layout, Seen) {
+        let Layout::Split {
+            dir: d,
+            ratio,
+            a,
+            b,
+        } = tree
+        else {
+            let seen = if matches!(&tree, Layout::Pane { pane: p } if p == pane) {
+                Seen::Inside
+            } else {
+                Seen::No
+            };
+            return (tree, seen);
+        };
+        let (a, in_a) = go(*a, pane, dir, by);
+        let (b, in_b) = if in_a == Seen::No {
+            go(*b, pane, dir, by)
+        } else {
+            (*b, Seen::No)
+        };
+        let (side_is_a, seen) = if in_a == Seen::No {
+            (false, in_b)
+        } else {
+            (true, in_a)
+        };
+        let (seen, ratio) = match seen {
+            // This split is around the pane and goes the way asked for: it is the nearest.
+            Seen::Inside if d == dir => {
+                let by = i32::from(if side_is_a { by } else { -by });
+                let moved =
+                    (i32::from(ratio) + by).clamp(i32::from(MIN_RATIO), i32::from(MAX_RATIO));
+                (Seen::Done, moved as u16)
+            }
+            other => (other, ratio),
+        };
+        let tree = Layout::Split {
+            dir: d,
+            ratio,
+            a: Box::new(a),
+            b: Box::new(b),
+        };
+        (tree, seen)
+    }
+    match go(tree, pane, dir, by) {
+        (tree, Seen::Done) => Some(tree),
+        _ => None,
+    }
+}
+
 /// The tree without the panes that `keep` does not hold, and without a pane it has twice: a split
 /// that loses a side is its other side, so a closed pane's room goes to its neighbour. Ratios are
 /// brought into range.
@@ -278,6 +362,91 @@ mod tests {
             panic!("a split")
         };
         assert_eq!(ratio, MAX_RATIO);
+    }
+
+    #[test]
+    fn a_swap_exchanges_two_places_and_keeps_the_shape_and_the_shares() {
+        let t = split(row(leaf("a"), leaf("b")), "b", "c", SplitDir::Col);
+        let s = swap(t.clone(), "a", "c");
+        assert_eq!(leaves(&s), ["c", "b", "a"]);
+        assert_eq!(swap(s, "a", "c"), t, "swapping back");
+        assert_eq!(swap(t.clone(), "a", "zz"), leaf_replaced(&t, "a", "zz"));
+    }
+
+    /// `t` with the pane `from` called `to`, which is what a swap with a pane that is not there does.
+    fn leaf_replaced(t: &Layout, from: &str, to: &str) -> Layout {
+        match t {
+            Layout::Pane { pane } if pane == from => leaf(to),
+            Layout::Pane { .. } => t.clone(),
+            Layout::Split { dir, ratio, a, b } => Layout::Split {
+                dir: *dir,
+                ratio: *ratio,
+                a: Box::new(leaf_replaced(a, from, to)),
+                b: Box::new(leaf_replaced(b, from, to)),
+            },
+        }
+    }
+
+    fn ratio_of(tree: &Layout, path: &[bool]) -> u16 {
+        match (tree, path.split_first()) {
+            (Layout::Split { ratio, .. }, None) => *ratio,
+            (Layout::Split { a, b, .. }, Some((first, rest))) => {
+                ratio_of(if *first { a } else { b }, rest)
+            }
+            _ => panic!("no split there"),
+        }
+    }
+
+    #[test]
+    fn a_pane_grows_by_moving_the_nearest_split_of_the_direction_toward_the_other_side() {
+        // `a` on the left, `b` over `c` on the right.
+        let t = split(row(leaf("a"), leaf("b")), "b", "c", SplitDir::Col);
+        let wider = grow(t.clone(), "a", SplitDir::Row, 50).unwrap();
+        assert_eq!(
+            ratio_of(&wider, &[]),
+            550,
+            "`a` is the first side: its share grows"
+        );
+        let wider_b = grow(t.clone(), "b", SplitDir::Row, 50).unwrap();
+        assert_eq!(ratio_of(&wider_b, &[]), 450, "`b` is in the second side");
+        let taller = grow(t.clone(), "c", SplitDir::Col, 50).unwrap();
+        assert_eq!(
+            ratio_of(&taller, &[]),
+            500,
+            "the outer split is not touched"
+        );
+        assert_eq!(ratio_of(&taller, &[false]), 450, "the one around `c` is");
+        let lower = grow(t.clone(), "b", SplitDir::Col, -50).unwrap();
+        assert_eq!(ratio_of(&lower, &[false]), 450);
+        assert_eq!(
+            grow(t.clone(), "a", SplitDir::Col, 50),
+            None,
+            "none of that direction around `a`"
+        );
+        assert_eq!(
+            grow(t, "zz", SplitDir::Row, 50),
+            None,
+            "not a pane of the tree"
+        );
+        assert_eq!(
+            grow(leaf("a"), "a", SplitDir::Row, 50),
+            None,
+            "a lone pane has no split"
+        );
+    }
+
+    #[test]
+    fn growing_stops_at_the_least_and_the_most() {
+        let t = row(leaf("a"), leaf("b"));
+        let mut t = Some(t);
+        for _ in 0..20 {
+            t = grow(t.unwrap(), "a", SplitDir::Row, 50);
+        }
+        assert_eq!(ratio_of(&t.clone().unwrap(), &[]), MAX_RATIO);
+        for _ in 0..40 {
+            t = grow(t.unwrap(), "a", SplitDir::Row, -50);
+        }
+        assert_eq!(ratio_of(&t.unwrap(), &[]), MIN_RATIO);
     }
 
     #[test]

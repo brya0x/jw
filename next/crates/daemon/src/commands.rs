@@ -69,6 +69,8 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
             dir,
         } => panes::new_pane(shared, &workspace, program, beside, dir),
         Cmd::ClosePane { pane } => panes::close_pane(shared, &pane),
+        Cmd::SwapPanes { a, b } => panes::swap_panes(shared, &a, &b),
+        Cmd::GrowPane { pane, dir, by } => panes::grow_pane(shared, &pane, dir, by),
         Cmd::Write { pane, data } => panes::write(shared, &pane, &data),
         Cmd::Resize { pane, rows, cols } => panes::resize(shared, &pane, rows, cols),
         Cmd::OpenDiff {

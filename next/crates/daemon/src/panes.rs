@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use contract::{AttentionKind, ErrorCode, Id, SplitDir};
 use serde_json::json;
 
-use crate::commands::{Done, err};
+use crate::commands::{Done, ErrorBody, err};
 use crate::model::{Own, Pane, new_id};
 use crate::pty::{self, Event, Mark};
 use crate::server::Shared;
@@ -115,6 +115,59 @@ fn with_agent_hooks(argv: Option<&[String]>, hooks: Option<&Path>) -> Option<Vec
         (Some(argv), Some(file)) => Some(crate::launch::with_hooks(argv, file)),
         (argv, _) => argv.map(<[String]>::to_vec),
     }
+}
+
+/// The workspace that has the pane, with its layout made to agree with its panes.
+fn workspace_of<'a>(
+    core: &'a mut crate::core::Core,
+    pane: &Id,
+) -> Result<&'a mut crate::model::Workspace, ErrorBody> {
+    let ws = core
+        .model
+        .workspaces
+        .iter_mut()
+        .find(|w| w.panes.iter().any(|p| p.id == *pane))
+        .ok_or_else(|| no_pane(pane))?;
+    let ids: Vec<Id> = ws.panes.iter().map(|p| p.id.clone()).collect();
+    ws.layout = crate::layout::reconcile(ws.layout.take(), &ids);
+    Ok(ws)
+}
+
+pub fn swap_panes(shared: &Shared, a: &Id, b: &Id) -> Done {
+    let mut core = shared.lock();
+    let ws = workspace_of(&mut core, a)?;
+    if a == b || !ws.panes.iter().any(|p| p.id == *b) {
+        return Err(err(
+            ErrorCode::BadRequest,
+            "swapping takes two different panes of one workspace",
+        ));
+    }
+    ws.layout = ws.layout.take().map(|t| crate::layout::swap(t, a, b));
+    core.refresh();
+    Ok(None)
+}
+
+pub fn grow_pane(shared: &Shared, pane: &Id, dir: SplitDir, by: i16) -> Done {
+    if !(-800..=800).contains(&by) {
+        return Err(err(ErrorCode::BadRequest, "by is -800 to 800 thousandths"));
+    }
+    let mut core = shared.lock();
+    let ws = workspace_of(&mut core, pane)?;
+    let Some(tree) = ws.layout.take() else {
+        return Err(err(ErrorCode::BadRequest, "the workspace has no layout"));
+    };
+    match crate::layout::grow(tree.clone(), pane, dir, by) {
+        Some(grown) => ws.layout = Some(grown),
+        None => {
+            ws.layout = Some(tree);
+            return Err(err(
+                ErrorCode::BadRequest,
+                "no split around the pane goes that way",
+            ));
+        }
+    }
+    core.refresh();
+    Ok(None)
 }
 
 pub fn close_pane(shared: &Shared, pane: &Id) -> Done {
