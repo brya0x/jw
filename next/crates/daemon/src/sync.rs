@@ -42,7 +42,7 @@ fn ahead(dir: &Path) -> Result<(bool, u64), ErrorBody> {
     Ok((upstream.is_some(), count.parse().unwrap_or(0)))
 }
 
-/// `check_workspace`: the commits of the worktree's branch that no remote has (REQ-285).
+/// `check_workspace`: the commits of the worktree's branch that no remote has (REQ-283).
 pub fn check(shared: &Shared, workspace: &str) -> Done {
     let (path, _) = worktree_of(shared, workspace)?;
     let (_, ahead) = ahead(Path::new(&path))?;

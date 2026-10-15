@@ -120,40 +120,25 @@ impl Manage {
                 target,
                 title,
                 mut text,
-            } => match code {
-                KeyCode::Esc => (None, None),
-                KeyCode::Enter => (None, Some(Act::Rename { target, name: text })),
-                KeyCode::Backspace => {
-                    text.pop();
-                    (
-                        Some(Manage::Rename {
-                            target,
-                            title,
-                            text,
-                        }),
-                        None,
-                    )
+            } => {
+                match code {
+                    KeyCode::Esc => return (None, None),
+                    KeyCode::Enter => return (None, Some(Act::Rename { target, name: text })),
+                    KeyCode::Backspace => {
+                        text.pop();
+                    }
+                    KeyCode::Char(c) => text.push(c),
+                    _ => {}
                 }
-                KeyCode::Char(c) => {
-                    text.push(c);
-                    (
-                        Some(Manage::Rename {
-                            target,
-                            title,
-                            text,
-                        }),
-                        None,
-                    )
-                }
-                _ => (
+                (
                     Some(Manage::Rename {
                         target,
                         title,
                         text,
                     }),
                     None,
-                ),
-            },
+                )
+            }
             Manage::Settings { cursor, shown } => {
                 let here = |cursor| Some(Manage::Settings { cursor, shown });
                 match code {
@@ -190,42 +175,26 @@ impl Manage {
                 target,
                 files,
                 mut typed,
-            } => match code {
-                KeyCode::Enter if typed == target.confirm() => {
-                    let act = remove(&target, true, true);
-                    (None, Some(act))
+            } => {
+                match code {
+                    KeyCode::Enter if typed == target.confirm() => {
+                        return (None, Some(remove(&target, true, true)));
+                    }
+                    KeyCode::Backspace => {
+                        typed.pop();
+                    }
+                    KeyCode::Char(c) => typed.push(c),
+                    _ => {}
                 }
-                KeyCode::Backspace => {
-                    typed.pop();
-                    (
-                        Some(Manage::Dirty {
-                            target,
-                            files,
-                            typed,
-                        }),
-                        None,
-                    )
-                }
-                KeyCode::Char(c) => {
-                    typed.push(c);
-                    (
-                        Some(Manage::Dirty {
-                            target,
-                            files,
-                            typed,
-                        }),
-                        None,
-                    )
-                }
-                _ => (
+                (
                     Some(Manage::Dirty {
                         target,
                         files,
                         typed,
                     }),
                     None,
-                ),
-            },
+                )
+            }
             Manage::Clean(t) if key('y') => {
                 let act = remove(&t, true, false);
                 (None, Some(act))
@@ -384,18 +353,16 @@ impl Manage {
                     .branch
                     .as_deref()
                     .map_or("La rama".to_owned(), |b| format!("La rama {b}"));
+                let mut lines = vec![
+                    plain(&format!("Se borra la carpeta {}.", t.path)),
+                    dim(&format!("No hay cambios sin commitear. {branch} se queda.")),
+                ];
+                lines.extend(t.unpushed_note().map(|n| dim(&n)));
+                lines.extend([blank(), dim(self.hint())]);
                 (
                     format!("Quitar el worktree {}?", t.name),
                     look::red(),
-                    [
-                        vec![
-                            plain(&format!("Se borra la carpeta {}.", t.path)),
-                            dim(&format!("No hay cambios sin commitear. {branch} se queda.")),
-                        ],
-                        t.unpushed_note().iter().map(|n| dim(n)).collect(),
-                        vec![blank(), dim(self.hint())],
-                    ]
-                    .concat(),
+                    lines,
                 )
             }
             Manage::Settings { cursor, .. } => {
@@ -675,6 +642,26 @@ mod tests {
             dirty("feat").press(KeyCode::Esc),
             (Some(Manage::Workspace(target(true))), None),
             "esc goes back to the question and nothing is typed any more"
+        );
+    }
+
+    #[test]
+    fn what_stays_of_the_commits_no_remote_has_is_said_with_its_count() {
+        let said = |n| {
+            Target {
+                unpushed: n,
+                ..target(true)
+            }
+            .unpushed_note()
+        };
+        assert_eq!(said(0), None);
+        assert_eq!(
+            said(1).as_deref(),
+            Some("1 commit sin subir se queda en la rama feat/login.")
+        );
+        assert_eq!(
+            said(4).as_deref(),
+            Some("4 commits sin subir se quedan en la rama feat/login.")
         );
     }
 
