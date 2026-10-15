@@ -323,6 +323,15 @@ fn the_blocks_of_a_pane_come_back_after_a_restart_with_the_cut_command_and_a_mar
         .state_dir
         .join("history")
         .join(format!("{pane}.json"));
+    // A command that starts is on disk at once, not after the pause between writes: a daemon that
+    // is stopped with a signal saves nothing more.
+    assert!(
+        wait_within(Duration::from_millis(800), || std::fs::read_to_string(
+            &file
+        )
+        .is_ok_and(|t| t.contains("sleep 30"))),
+        "the running command was not saved when it started"
+    );
     // The daemon stops: what it has is written.
     let Rig { _sb, d, c, .. } = r;
     drop(c);
@@ -395,8 +404,12 @@ fn the_blocks_of_a_pane_come_back_after_a_restart_with_the_cut_command_and_a_mar
     d.stop();
 }
 
-fn wait_for(mut done: impl FnMut() -> bool) -> bool {
-    let end = std::time::Instant::now() + WAIT;
+fn wait_for(done: impl FnMut() -> bool) -> bool {
+    wait_within(WAIT, done)
+}
+
+fn wait_within(within: Duration, mut done: impl FnMut() -> bool) -> bool {
+    let end = std::time::Instant::now() + within;
     while std::time::Instant::now() < end {
         if done() {
             return true;

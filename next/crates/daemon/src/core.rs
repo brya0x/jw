@@ -129,6 +129,8 @@ pub struct Core {
     /// The panes whose blocks changed since they were saved, and when each was last saved.
     history_dirty: HashSet<Id>,
     history_written: HashMap<Id, Instant>,
+    /// How many blocks a pane had, and whether the last was running, when it was last saved.
+    history_shape: HashMap<Id, (usize, bool)>,
 }
 
 /// The most often the blocks of a pane are written to disk.
@@ -160,6 +162,7 @@ impl Core {
             history_dir: None,
             history_dirty: HashSet::new(),
             history_written: HashMap::new(),
+            history_shape: HashMap::new(),
             diffs: HashMap::new(),
             commit_lists: HashMap::new(),
             events,
@@ -283,9 +286,17 @@ impl Core {
         }
     }
 
+    /// What a pane's blocks are shaped like: how many and whether the last is running. A command
+    /// starting or ending, or `clear`, changes it; the output of a running one does not.
+    fn blocks_shape(&self, pane: &str) -> Option<(usize, bool)> {
+        let (_, _, blocks) = self.blocks_views.get(pane)?;
+        Some((blocks.len(), blocks.last().is_some_and(|b| b.running)))
+    }
+
     /// The files of blocks to write now, serialised here so the caller can write them without the
-    /// lock: those of each pane whose blocks changed and were not written in the last two seconds,
-    /// or all that changed when `force`.
+    /// lock: those of each pane whose blocks changed and either changed shape or were not written in
+    /// the last two seconds, or all that changed when `force`. A daemon that is stopped with a
+    /// signal does not get to save once more, so what matters is saved as it happens.
     pub fn history_writes(&mut self, force: bool) -> Vec<(PathBuf, Id, String)> {
         if self.history_dirty.is_empty() {
             return Vec::new();
@@ -299,6 +310,7 @@ impl Core {
             .iter()
             .filter(|p| {
                 force
+                    || self.history_shape.get(*p) != self.blocks_shape(p).as_ref()
                     || self
                         .history_written
                         .get(*p)
@@ -312,7 +324,11 @@ impl Core {
                 self.history_dirty.remove(&pane);
                 let (_, _, blocks) = self.blocks_views.get(&pane)?;
                 self.history_written.insert(pane.clone(), now);
-                Some((dir.clone(), pane, history::to_text(blocks, at)))
+                let text = history::to_text(blocks, at);
+                if let Some(shape) = self.blocks_shape(&pane) {
+                    self.history_shape.insert(pane.clone(), shape);
+                }
+                Some((dir.clone(), pane, text))
             })
             .collect()
     }
@@ -356,6 +372,7 @@ impl Core {
         for pane in gone {
             history::remove(dir, &pane);
             self.history_written.remove(&pane);
+            self.history_shape.remove(&pane);
             self.history_dirty.remove(&pane);
         }
     }

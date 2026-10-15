@@ -305,7 +305,7 @@ pub fn restore(shared: &Shared) {
 }
 
 /// How long the engine waits for an event before it looks at what is due to be saved.
-const SAVE_TICK: Duration = Duration::from_secs(2);
+const SAVE_TICK: Duration = Duration::from_secs(1);
 
 /// Write the blocks of the panes that are due (spec REQ-297), with the lock let go.
 fn save_histories(shared: &Shared, force: bool) {
