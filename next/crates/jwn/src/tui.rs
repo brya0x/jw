@@ -31,6 +31,7 @@ mod manage;
 mod open;
 mod phone;
 mod programs;
+mod select;
 mod settings;
 mod shell;
 mod side;
@@ -338,6 +339,36 @@ pub enum Key {
     Quit,
 }
 
+/// A drag that began in a pane's list of blocks, with the button still down.
+#[derive(Debug)]
+struct Drag {
+    pane: String,
+    /// The cell it began on: a press that never moved is the click it was.
+    start: (usize, usize),
+    anchor: select::Point,
+    /// How wide the lines of the list are, for the text that is copied.
+    width: usize,
+    moved: bool,
+    /// Past the top (`true`) or the bottom of the list, since when: the list scrolls while it is.
+    scrolling: Option<(bool, u64)>,
+}
+
+/// Where the list of blocks of a pane is on the screen.
+struct ListGeom {
+    /// Left of the cells of the list, and where its text begins.
+    left: usize,
+    text_x: usize,
+    /// The rows the lines are on, from `top` up to `bottom` (not included).
+    top: usize,
+    bottom: usize,
+    /// The first line shown, and the width the lines are built for.
+    start: usize,
+    width: usize,
+}
+
+/// How often a drag past the edge of a list scrolls it.
+const DRAG_SCROLL_MS: u64 = 60;
+
 /// Where a new panel goes: it splits this one, along this way.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Place {
@@ -445,6 +476,9 @@ pub struct View {
     blk: Option<(String, u64)>,
     /// How many lines each pane's blocks are scrolled up from the newest.
     scroll: HashMap<String, usize>,
+    /// What a drag of the mouse covers in a pane's list, and the drag while the button is down.
+    selection: Option<select::Selection>,
+    drag: Option<Drag>,
     /// The clock the running blocks count from, in ms since the epoch.
     now_ms: u64,
     /// The diffs and lists of commits the daemon sent, by node id.
@@ -516,6 +550,8 @@ impl View {
             left_alt: HashMap::new(),
             blk: None,
             scroll: HashMap::new(),
+            selection: None,
+            drag: None,
             now_ms: 0,
             diffs: HashMap::new(),
             commit_lists: HashMap::new(),
@@ -1649,6 +1685,7 @@ impl View {
     /// open) a command of the client.
     pub fn press_key(&mut self, ev: KeyEvent) -> After {
         self.flash.clear();
+        self.selection = None;
         if self.help {
             self.help = false;
             return After::Continue;
@@ -2059,22 +2096,225 @@ impl View {
             return After::Continue;
         };
         let pane = doc.panes[i].id.clone();
-        let Some(b) = self.blocks_of(&pane) else {
+        self.scroll_pane(&pane, rects[i], !down, SCROLL_STEP);
+        After::Continue
+    }
+
+    /// The rectangle of a pane of the open workspace on a `cols` × `rows` screen.
+    fn pane_rect(&self, pane: &str, cols: usize, rows: usize) -> Option<Rect> {
+        let doc = self.shown()?;
+        let at = doc.panes.iter().position(|p| p.id == pane)?;
+        let rect = *self.layout(doc, panes_rect(cols, rows)).get(at)?;
+        (rect.2 > 0).then_some(rect)
+    }
+
+    fn list_geom(&self, pane: &str, rect: Rect) -> Option<ListGeom> {
+        let b = self.blocks_of(pane)?;
+        let (ix, iy, iw, ih) = inner(rect);
+        let doc = self.panes.get(pane)?;
+        let lh = list_h(ih, field_of(doc, b, iw).band_rows());
+        let total = shell::total_lines(&b.blocks);
+        Some(ListGeom {
+            left: ix,
+            text_x: ix + 2,
+            top: iy + gap(total, lh),
+            bottom: iy + lh,
+            start: window_start(total, lh, self.scroll.get(pane).copied().unwrap_or(0)),
+            width: iw.saturating_sub(2),
+        })
+    }
+
+    /// A press on a command or an output line of a pane's list begins a drag (REQ-304); any other
+    /// press is a click. Either way, what was selected is let go of. `true` when a drag began.
+    pub fn press_select(&mut self, x: usize, y: usize, cols: usize, rows: usize) -> bool {
+        self.selection = None;
+        self.drag = None;
+        if self.help
+            || self.manage.is_some()
+            || self.launcher.is_some()
+            || self.phone_open
+            || self.picker.is_some()
+            || self.worktree.is_some()
+            || self.changes.is_some()
+            || self.mode != Mode::Workspaces
+        {
+            return false;
+        }
+        let Some(doc) = self.shown() else {
+            return false;
+        };
+        let rects = self.layout(doc, panes_rect(cols, rows));
+        let Some(i) = rects.iter().position(|r| inside(*r, x, y)) else {
+            return false;
+        };
+        let pane = doc.panes[i].id.clone();
+        let Some(g) = self.list_geom(&pane, rects[i]) else {
+            return false;
+        };
+        let (_, _, iw, _) = inner(rects[i]);
+        if !(g.top..g.bottom).contains(&y) || !(g.left..g.left + iw).contains(&x) {
+            return false;
+        }
+        let line = g.start + (y - g.top);
+        let on_text = self.blocks_of(&pane).is_some_and(|b| {
+            shell::window_lines(&b.blocks, self.now_ms, g.width, line, 1)
+                .first()
+                .is_some_and(|l| matches!(l.kind, shell::Kind::Command | shell::Kind::Output))
+        });
+        if !on_text {
+            return false;
+        }
+        self.drag = Some(Drag {
+            pane,
+            start: (x, y),
+            anchor: select::Point {
+                line,
+                col: x.saturating_sub(g.text_x),
+            },
+            width: g.width,
+            moved: false,
+            scrolling: None,
+        });
+        true
+    }
+
+    /// The pointer moved with the button down: the selection goes from where the drag began to
+    /// the line and column it is on, or, past the top or the bottom of the list, to its first or
+    /// last line, which scrolls (REQ-305).
+    pub fn drag_to(&mut self, x: usize, y: usize) {
+        let Some(d) = self.drag.as_ref() else {
+            return;
+        };
+        let (cols, rows) = self.size;
+        let pane = d.pane.clone();
+        let Some(g) = self
+            .pane_rect(&pane, cols, rows)
+            .and_then(|r| self.list_geom(&pane, r))
+        else {
+            self.drag = None;
+            return;
+        };
+        let last = g.start + (g.bottom - g.top).saturating_sub(1);
+        let (head, edge) = if y < g.top {
+            (
+                select::Point {
+                    line: g.start,
+                    col: 0,
+                },
+                Some(true),
+            )
+        } else if y >= g.bottom {
+            (
+                select::Point {
+                    line: last,
+                    col: usize::from(u16::MAX),
+                },
+                Some(false),
+            )
+        } else {
+            (
+                select::Point {
+                    line: g.start + (y - g.top),
+                    col: x.saturating_sub(g.text_x),
+                },
+                None,
+            )
+        };
+        let now = self.now_ms;
+        let Some(d) = self.drag.as_mut() else {
+            return;
+        };
+        d.moved |= head != d.anchor;
+        d.scrolling = match (edge, d.scrolling) {
+            (Some(up), Some((was, since))) if up == was => Some((up, since)),
+            (Some(up), _) => Some((up, now)),
+            (None, _) => None,
+        };
+        let anchor = d.anchor;
+        self.selection = Some(select::Selection { pane, anchor, head });
+    }
+
+    /// While a drag is held past the edge of a list, scroll it a line every so often and keep the
+    /// selection at its edge.
+    pub fn drag_tick(&mut self) {
+        let Some(Drag {
+            pane,
+            scrolling: Some((up, since)),
+            ..
+        }) = self.drag.as_ref()
+        else {
+            return;
+        };
+        if self.now_ms < since + DRAG_SCROLL_MS {
+            return;
+        }
+        let (pane, up) = (pane.clone(), *up);
+        let (cols, rows) = self.size;
+        let Some(rect) = self.pane_rect(&pane, cols, rows) else {
+            return;
+        };
+        self.scroll_pane(&pane, rect, up, 1);
+        let Some(g) = self.list_geom(&pane, rect) else {
+            return;
+        };
+        let line = if up {
+            g.start
+        } else {
+            g.start + (g.bottom - g.top).saturating_sub(1)
+        };
+        let col = if up { 0 } else { usize::from(u16::MAX) };
+        if let (Some(d), Some(sel)) = (self.drag.as_mut(), self.selection.as_mut()) {
+            d.scrolling = Some((up, self.now_ms));
+            sel.head = select::Point { line, col };
+        }
+    }
+
+    /// The button was let go: a drag that never moved is the click it was; one that did copies what it
+    /// covers (REQ-306) and leaves it lit until the next press or key.
+    pub fn release(&mut self, cols: usize, rows: usize) -> After {
+        let Some(d) = self.drag.take() else {
             return After::Continue;
         };
-        let (_, _, iw, ih) = inner(rects[i]);
-        let Some(doc) = self.panes.get(&pane) else {
+        if !d.moved {
+            self.selection = None;
+            return self.click(d.start.0, d.start.1, cols, rows);
+        }
+        let Some(text) = self.selection.as_ref().and_then(|sel| {
+            let b = self.blocks_of(&sel.pane)?;
+            Some(select::selected_text(&b.blocks, self.now_ms, d.width, sel))
+        }) else {
             return After::Continue;
+        };
+        if text.is_empty() {
+            self.selection = None;
+            return After::Continue;
+        }
+        let lines = text.lines().count();
+        self.flash(&format!(
+            "copiado · {lines} {} · {} caracteres",
+            if lines == 1 { "línea" } else { "líneas" },
+            text.chars().count()
+        ));
+        After::Copy(text)
+    }
+
+    /// Move a pane's list `by` lines up (`true`) or down, within what there is to see.
+    fn scroll_pane(&mut self, pane: &str, rect: Rect, up: bool, by: usize) {
+        let Some(b) = self.blocks_of(pane) else {
+            return;
+        };
+        let (_, _, iw, ih) = inner(rect);
+        let Some(doc) = self.panes.get(pane) else {
+            return;
         };
         let total = shell::total_lines(&b.blocks);
         let most = total.saturating_sub(list_h(ih, field_of(doc, b, iw).band_rows()));
-        let at = self.scroll.entry(pane).or_insert(0);
-        *at = if down {
-            at.saturating_sub(SCROLL_STEP)
+        let at = self.scroll.entry(pane.to_owned()).or_insert(0);
+        *at = if up {
+            (*at + by).min(most)
         } else {
-            (*at + SCROLL_STEP).min(most)
+            at.saturating_sub(by)
         };
-        After::Continue
     }
 
     fn grid(&self, cols: usize, rows: usize) -> Grid {
@@ -2508,6 +2748,23 @@ impl View {
             if let Some((text, style)) = &line.right {
                 let at = (ix + iw).saturating_sub(text.chars().count()).max(ix + 2);
                 g.put_over(at, y, text, *style);
+            }
+            // What a drag covers: the theme's most visible colour (REQ-308).
+            let covered = self
+                .selection
+                .as_ref()
+                .filter(|s| s.pane == p.head.id && line.kind != shell::Kind::Other)
+                .and_then(|s| s.on_line(start + r, select::text_of(line).chars().count()));
+            if let Some((from, to)) = covered {
+                let (lit, text) = look::selection();
+                for cx in (ix + 2 + from..ix + 2 + to).take_while(|cx| *cx < ix + iw) {
+                    if y < g.rows && cx < g.cols {
+                        let style = &mut g.cells[y * g.cols + cx].1;
+                        style.bg = Some(lit);
+                        style.fg = Some(text);
+                        style.reverse = false;
+                    }
+                }
             }
         }
         let running = running_block(b);
@@ -3119,6 +3376,7 @@ pub fn run() -> Result<(), String> {
         let (cols, rows) = terminal::size().map_err(|e| e.to_string())?;
         view.set_size(cols as usize, rows as usize);
         view.sync(client.nodes.values());
+        view.drag_tick();
         for id in view.wants() {
             let _ = client.open(&id);
         }
@@ -3199,7 +3457,18 @@ pub fn run() -> Result<(), String> {
                     let (cols, rows) = (cols as usize, rows as usize);
                     let (x, y) = (m.column as usize, m.row as usize);
                     match m.kind {
-                        MouseEventKind::Down(MouseButton::Left) => view.click(x, y, cols, rows),
+                        MouseEventKind::Down(MouseButton::Left) => {
+                            if view.press_select(x, y, cols, rows) {
+                                After::Continue
+                            } else {
+                                view.click(x, y, cols, rows)
+                            }
+                        }
+                        MouseEventKind::Drag(MouseButton::Left) => {
+                            view.drag_to(x, y);
+                            After::Continue
+                        }
+                        MouseEventKind::Up(MouseButton::Left) => view.release(cols, rows),
                         MouseEventKind::ScrollUp => view.scroll(false, x, y, cols, rows),
                         MouseEventKind::ScrollDown => view.scroll(true, x, y, cols, rows),
                         _ => After::Continue,
@@ -3490,6 +3759,123 @@ mod tests {
         let mut v = fixture_view();
         v.press(Key::Enter);
         v
+    }
+
+    /// Where `text` is in the frame: the column it starts at and its row.
+    fn find(v: &View, text: &str) -> (usize, usize) {
+        for (y, row) in v.grid(120, 30).rows_plain().iter().enumerate() {
+            if let Some(i) = row.find(text) {
+                return (row[..i].chars().count(), y);
+            }
+        }
+        panic!("{text} is not on the screen");
+    }
+
+    #[test]
+    fn a_drag_over_the_output_copies_what_it_covers_when_the_button_is_let_go() {
+        let mut v = open_blocks();
+        let (x, y) = find(&v, "On branch feat/login");
+        assert!(
+            v.press_select(x + 3, y, 120, 30),
+            "a press on the output begins a drag"
+        );
+        v.drag_to(x + 9, y + 1);
+        let after = v.release(120, 30);
+        assert_eq!(
+            after,
+            After::Copy("branch feat/login\nnothing to".into()),
+            "from where it began to where it ended"
+        );
+        assert!(
+            v.plain(120, 30)
+                .contains("copiado · 2 líneas · 28 caracteres")
+        );
+    }
+
+    #[test]
+    fn what_a_drag_covers_is_lit_in_the_most_visible_colour_of_the_theme_until_a_key_or_a_press() {
+        let mut v = open_blocks();
+        let (x, y) = find(&v, "On branch feat/login");
+        v.press_select(x + 3, y, 120, 30);
+        v.drag_to(x + 9, y + 1);
+        v.release(120, 30);
+        let (lit, text) = look::selection();
+        let g = v.grid(120, 30);
+        let cell = |g: &Grid, cx: usize, cy: usize| g.cells[cy * g.cols + cx].1;
+        for (cx, cy) in [(x + 3, y), (x + 19, y), (x, y + 1), (x + 9, y + 1)] {
+            let st = cell(&g, cx, cy);
+            assert_eq!((st.bg, st.fg), (Some(lit), Some(text)), "{cx},{cy}");
+        }
+        for (cx, cy) in [(x + 2, y), (x + 10, y + 1), (x, y + 2)] {
+            assert_ne!(cell(&g, cx, cy).bg, Some(lit), "{cx},{cy} is not covered");
+        }
+        // A key lets it go.
+        v.press_key(plain(KeyCode::Esc));
+        assert_ne!(cell(&v.grid(120, 30), x + 3, y).bg, Some(lit));
+        // So does the next press.
+        v.press_select(x + 3, y, 120, 30);
+        v.drag_to(x + 9, y);
+        assert!(v.selection.is_some());
+        v.press_select(x, y + 1, 120, 30);
+        assert!(v.selection.is_none());
+    }
+
+    #[test]
+    fn a_press_that_never_moves_is_the_click_it_was() {
+        let mut v = open_blocks();
+        let (x, y) = find(&v, "On branch feat/login");
+        assert!(v.press_select(x + 3, y, 120, 30));
+        assert_eq!(v.release(120, 30), After::Continue, "nothing is copied");
+        assert!(v.selection.is_none());
+        assert_eq!(
+            v.blk,
+            Some((SHELL.into(), 1)),
+            "the block under it is picked, as a click does"
+        );
+        // On what cannot be selected the press is the click at once: the sidebar, the folder line.
+        assert!(!v.press_select(3, 3, 120, 30));
+        let (fx, fy) = find(&v, "…/code/app-login");
+        assert!(
+            !v.press_select(fx + 1, fy, 120, 30),
+            "the folder and time line is not text to select"
+        );
+    }
+
+    #[test]
+    fn a_drag_past_the_edge_of_the_list_scrolls_it_while_it_is_held() {
+        let mut v = open_blocks();
+        v.set_size(120, 16);
+        let rows = v.grid(120, 16).rows_plain();
+        let (y, row) = rows
+            .iter()
+            .enumerate()
+            .find(|(_, r)| r.contains("❯ cargo watch"))
+            .expect("the command at the bottom of the list");
+        let x = row.find("cargo").map(|i| row[..i].chars().count()).unwrap();
+        v.set_now(1_000);
+        assert!(v.press_select(x, y, 120, 16));
+        v.drag_to(x + 4, 1);
+        let sel = v.selection.clone().unwrap();
+        assert_eq!(sel.head.col, 0, "to the start of the first line shown");
+        v.drag_tick();
+        assert_eq!(
+            v.scroll.get(SHELL),
+            None,
+            "not before it has been held a moment"
+        );
+        v.set_now(1_000 + DRAG_SCROLL_MS);
+        v.drag_tick();
+        assert_eq!(v.scroll.get(SHELL), Some(&1), "a line up");
+        v.set_now(1_000 + 2 * DRAG_SCROLL_MS);
+        v.drag_tick();
+        assert_eq!(v.scroll.get(SHELL), Some(&2));
+        assert!(matches!(v.release(120, 16), After::Copy(_)));
+        // Back inside the list it stops.
+        v.scroll.clear();
+        assert!(v.press_select(x, y, 120, 16));
+        v.drag_to(x + 4, 1);
+        v.drag_to(x + 4, y);
+        assert!(v.drag.as_ref().unwrap().scrolling.is_none());
     }
 
     #[test]

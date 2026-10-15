@@ -4,6 +4,7 @@
 :root{
   --bg:#282c34; --panel:#21252b; --fg:#abb2bf; --dim:#5c6370; --line:#3e4451; --sel:#2c313a;
   --blue:#61afef; --green:#98c379; --yellow:#e5c07b; --red:#e06c75; --magenta:#c678dd; --cyan:#56b6c2;
+  --hl:#e5c07b; --hlfg:#21252b;
   --page:#16181d; --ink:#c3c9d4; --mut:#7d8594;
   --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
   color-scheme:dark;
@@ -67,6 +68,7 @@ button:hover{border-color:var(--blue)}
 .bg-sel{background:var(--sel)}.bg-panel{background:var(--panel)}
 .chip-green{background:var(--green);color:var(--panel)}.chip-blue{background:var(--blue);color:var(--panel)}.chip-yellow{background:var(--yellow);color:var(--panel)}
 .cur{background:var(--fg);color:var(--bg)}
+.hl{background:var(--hl)!important;color:var(--hlfg)!important}
 </style>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&family=JetBrains+Mono:wght@400;700&display=swap">
 
@@ -86,6 +88,9 @@ button:hover{border-color:var(--blue)}
     <button id="evClaude" type="button">Start the program (takes the screen)</button>
     <button id="evClaudeEnd" type="button">The program exits (takes a second)</button>
     <button id="evRestart" type="button">The daemon restarts (history kept)</button>
+    <label class="hint" for="theme">Theme</label>
+    <select id="theme" aria-label="Theme"></select>
+    <span class="hint" id="hlinfo"></span>
     <button id="evReset" type="button">Reset</button>
     <select id="size" aria-label="Terminal size"><option value="120x32">120 × 32</option><option value="96x28">96 × 28</option></select>
   </div>
@@ -112,6 +117,7 @@ button:hover{border-color:var(--blue)}
   <div class="decide">
     <h2>To approve</h2>
     <ol>
+      <li><b>The mouse selects text</b>: press in the output of a pane, drag, and what the drag covers is lit and copied when the button is let go («copiado · 3 líneas · 120 caracteres» on the status bar). The selection goes from where the drag began to where it ended, line after line, over the commands and the output of the blocks (not the folder and time lines, not the editor). A drag past the top or the bottom of the pane scrolls it while the button is held. The highlight is the colour of the theme that shows best against its ground, with the text in the ground colour or the text colour, whichever reads better on it: try the themes above. It stays lit until the next press, a key or <code>esc</code>. A press with no drag is the click it was (a panel, a block). The wheel scrolls the pane under it.</li>
       <li><b>When the daemon restarts the history stays</b> (button «The daemon restarts»). Each shell pane's blocks are saved on disk by the daemon and come back with it: the last 100 blocks and no more than 4 MiB of them for each pane, the oldest going first. A line across the pane says <i>el daemon se reinició</i> and the time: what is above it was kept, what is below it is new, in the terminal and on the phone. A command that was running is kept as <i>interrumpido</i> with the time it had run, in grey, because its end was never seen; a program that had the whole screen (claude, nvim) is gone and the pane is the shell again, as today. The prompt starts empty. <code>clear</code> empties the saved history too.</li>
       <li><b>The frame is today's jw:</b> a 28-column sidebar with a right border, numbered rows with <code>●</code> open and <code>○</code> closed, <code>↳</code> for a worktree under its project, one header row with project, branch and path, a status bar with a mode chip.</li>
       <li><b>Panes are rounded boxes</b> sharing the area (side by side, two columns from three panes), the focused one with a blue border. The title carries what runs there, and what waits on that pane (<code>✗ salió 3</code>) sits at the right end of its top border.</li>
@@ -155,7 +161,7 @@ function reset(){
       shell('p4', '~/ws/api-wt/feat-login', 'feat/login', [blk('git log --oneline -3', '0.0s', 0, ['a1b2c3d feat: login form', '9f8e7d6 fix: token refresh', '4c5d6e7 chore: deps'])]) ] },
     { id:'w4', name:'infra', kind:'folder', path:'~/ws/infra', att:[], panes:[] },
   ]};
-  ui = { sel:2, open:null, focus:0, avisos:false, av:0, blk:null, hits:[], msg:'' };
+  ui = { sel:2, open:null, focus:0, avisos:false, av:0, blk:null, hits:[], rows:[], hl:null, msg:'' };
 }
 const wsAtt = w => [...w.att.map(a => ({...a, node:w.id})), ...w.panes.flatMap(p => p.att.map(a => ({...a, node:p.id})))];
 const unseen = (list) => list.filter(a => !seen[a.kind + a.rev]).sort((a, b) => KINDS[a.kind][2] - KINDS[b.kind][2]);
@@ -180,7 +186,7 @@ function paint(g){
 
 function draw(){
   const g = grid(), SB = 28;
-  ui.hits = [];
+  ui.hits = []; ui.rows = [];
   // sidebar
   for (let y = 0; y < ROWS - 1; y++) put(g, SB - 1, y, '│', 'c-line');
   put(g, 1, 0, model.name, 'b d'); put(g, SB - 1 - 13, 0, '^␣ s sessions', 'd');
@@ -276,18 +282,26 @@ function drawShell(g, p, x0, y0, bw, bh, focused){
     if (b.restart){ lines.push({bi, bar:null, divider:'el daemon se reinició · ' + b.restart, parts:[]}); return; }
     const state = b.interrupted ? 'd' : b.running ? 'c-yellow' : b.code ? 'c-red' : 'c-green';
     const head = b.interrupted ? `interrumpido · ${b.dur}` : b.running ? `corriendo ${b.dur}` : b.code ? `salió ${b.code} · ${b.dur}` : b.dur;
-    lines.push({bi, bar:state, parts:[[clipTo(short(p.cwd), Math.max(4, iw - 6 - [...head].length)), 'd']], right:[head, b.interrupted ? 'c-yellow' : b.code && !b.running ? 'c-red' : 'd']});
-    lines.push({bi, bar:state, parts:[['❯ ' + b.cmd, 'b']]});
-    b.out.forEach(o => lines.push({bi, bar:state, parts:[[o.t, o.c || '']]}));
-    lines.push({bi, bar:null, parts:[]});
+    lines.push({bi, kind:'head', bar:state, parts:[[clipTo(short(p.cwd), Math.max(4, iw - 6 - [...head].length)), 'd']], right:[head, b.interrupted ? 'c-yellow' : b.code && !b.running ? 'c-red' : 'd']});
+    lines.push({bi, kind:'cmd', bar:state, parts:[['❯ ' + b.cmd, 'b']]});
+    b.out.forEach(o => lines.push({bi, kind:'out', bar:state, parts:[[o.t, o.c || '']]}));
+    lines.push({bi, kind:'gap', bar:null, parts:[]});
   });
-  const room = edTop - top, shown = lines.slice(Math.max(0, lines.length - room));
+  // The list is scrolled `p.scroll` lines up from the newest (the wheel, or a drag past the edge).
+  const room = edTop - top; p.scroll = Math.max(0, Math.min(p.scroll || 0, lines.length - room));
+  const end = lines.length - p.scroll, start = Math.max(0, end - room), shown = lines.slice(start, end);
+  const mark = ui.hl && ui.hl.pane === p.id ? (() => { const a = ui.hl.a, b = ui.hl.b, f = a.l < b.l || a.l === b.l && a.c <= b.c; return f ? [a, b] : [b, a]; })() : null;
   shown.forEach((ln, k) => {
     const y = top + (room - shown.length) + k, sel = ui.blk && ui.blk.pane === p.id && ui.blk.idx === ln.bi;
+    const li = start + k, text = ln.parts.map(q => q[0]).join('');
+    if (ln.kind === 'cmd' || ln.kind === 'out') ui.rows.push({pane:p.id, y, x:ix + 1, w:iw - 2, line:li, kind:ln.kind, text, top:top, bottom:top + room - 1});
+    if (mark && (ln.kind === 'cmd' || ln.kind === 'out') && li >= mark[0].l && li <= mark[1].l){ const n = [...text].length, from = li === mark[0].l ? mark[0].c : 0, to = li === mark[1].l ? Math.min(n, mark[1].c + 1) : n;
+      ln.hl = [from, Math.max(from, to)]; }
     if (ln.divider){ const t = ' ' + ln.divider + ' ', n = iw - 2, pad = Math.max(0, Math.floor((n - [...t].length) / 2)); put(g, ix + 1, y, '─'.repeat(pad) + t + '─'.repeat(Math.max(0, n - pad - [...t].length)), 'd'); return; }
     if (sel) for (let i = 1; i < bw - 1; i++) g.cells[y][x0 + i] = [g.cells[y][x0 + i][0], 'bg-sel'];
     if (ln.bar) put(g, ix - 1, y, '▌', ln.bar + (sel ? ' bg-sel' : ''));
     let x = ix + 1; ln.parts.forEach(([t, c]) => { put(g, x, y, clipTo(t, iw - 2), c + (sel ? ' bg-sel' : '')); x += [...t].length; });
+    if (ln.hl) for (let i = ln.hl[0]; i < ln.hl[1] && ix + 1 + i < ix + iw - 1; i++) g.cells[y][ix + 1 + i] = [g.cells[y][ix + 1 + i][0], 'hl'];
     if (ln.right){ const t = ln.right[0]; put(g, ix + iw - [...t].length, y, t, ln.right[1] + (sel ? ' bg-sel' : '')); }
     if (!ui.hits.some(h => h.blk === ln.bi && h.pane === p.id)) ui.hits.push({x:x0 + 1, y, w:bw - 2, h:1, pane:p.id, blk:ln.bi, rows:shown.filter(s => s.bi === ln.bi).length});
   });
@@ -395,15 +409,46 @@ function key(k){
 }
 const scr = document.getElementById('scr');
 scr.addEventListener('keydown', e => {
+  if (ui.hl){ ui.hl = null; if (e.key === 'Escape'){ e.preventDefault(); draw(); return; } }
   if (ui.blk && ['c','o','r','Escape'].includes(e.key)){ e.preventDefault(); const p = cur().panes.find(x => x.id === ui.blk.pane), b = p.blocks[ui.blk.idx];
     if (e.key === 'Escape') ui.blk = null; else { ui.msg = e.key === 'c' ? 'comando copiado' : e.key === 'o' ? 'salida copiada' : 'repetido: ' + b.cmd; if (e.key === 'r') runCmd(p, b.cmd); setTimeout(() => { ui.msg = ''; draw(); }, 1500); }
     draw(); return; }
   if (termShell() && !e.ctrlKey && !e.metaKey && (e.key.length === 1 || ['Backspace','Enter','Escape','Tab'].includes(e.key))){ e.preventDefault(); typeKey(e.key); return; }
   if (['j','k','h','l','a','n','Enter','Escape','Tab'].includes(e.key)){ e.preventDefault(); key(e.key); } });
-scr.addEventListener('click', e => { scr.focus(); const r = scr.getBoundingClientRect(), cw = r.width / COLS, ch = r.height / ROWS, cx = Math.floor((e.clientX - r.left) / cw), cy = Math.floor((e.clientY - r.top) / ch);
+/* The mouse selects text: press in the output of a pane, drag, and what the drag covers is lit with the colour that shows best on
+   the theme and copied when the button is let go. A drag past the top or bottom of the pane scrolls it. A press with no drag is
+   the click it was. The selection stays lit until the next press, a key or esc, so what was copied can be seen. */
+const cellOf = e => { const r = scr.getBoundingClientRect(); return {cx:Math.floor((e.clientX - r.left) / (r.width / COLS)), cy:Math.floor((e.clientY - r.top) / (r.height / ROWS))}; };
+const rowFor = (pane, cy) => ui.rows.find(r => r.pane === pane && r.y === cy);
+const pointOf = (r, cx) => ({l:r.line, c:Math.max(0, Math.min([...r.text].length - 1, cx - r.x))});
+let drag = null, scrollTimer = null;
+scr.addEventListener('mousedown', e => { if (e.button !== 0) return; const {cx, cy} = cellOf(e); ui.dragged = false; const had = ui.hl; ui.hl = null;
+  const r = ui.rows.find(r => cy === r.y && cx >= r.x && cx < r.x + r.w);
+  drag = r ? {pane:r.pane, a:pointOf(r, cx), moved:false} : null; if (had) draw(); });
+scr.addEventListener('mousemove', e => { if (!drag || !(e.buttons & 1)) return; const {cx, cy} = cellOf(e); const rows = ui.rows.filter(r => r.pane === drag.pane); if (!rows.length) return;
+  const first = rows[0], last = rows[rows.length - 1], p = cur().panes.find(q => q.id === drag.pane);
+  clearInterval(scrollTimer);
+  if (cy < first.top || cy > first.bottom){ const up = cy < first.top; // past the edge: scroll while the button is held
+    scrollTimer = setInterval(() => { p.scroll = Math.max(0, (p.scroll || 0) + (up ? 1 : -1)); const rs = ui.rows.filter(r => r.pane === drag.pane), edge = up ? rs[0] : rs[rs.length - 1]; if (edge){ ui.hl = {pane:drag.pane, a:drag.a, b:pointOf(edge, up ? edge.x : edge.x + edge.w)}; } draw(); }, 60); }
+  const r = rowFor(drag.pane, cy) || (cy < first.y ? first : last), pt = pointOf(r, cy < first.y ? r.x : cy > last.y ? r.x + r.w : cx);
+  if (pt.l !== drag.a.l || pt.c !== drag.a.c || drag.moved){ drag.moved = true; ui.hl = {pane:drag.pane, a:drag.a, b:pt}; draw(); } });
+window.addEventListener('mouseup', e => { clearInterval(scrollTimer); if (!drag) return; const d = drag; drag = null; if (!d.moved || !ui.hl) return; ui.dragged = true;
+  const p = cur().panes.find(q => q.id === d.pane), text = selectedText(p, ui.hl);
+  try { navigator.clipboard.writeText(text).catch(() => {}); } catch (_) {}
+  const n = text ? text.split('\n').length : 0; ui.msg = text ? 'copiado · ' + n + (n === 1 ? ' línea' : ' líneas') + ' · ' + [...text].length + ' caracteres' : '';
+  clearTimeout(ui.msgT); ui.msgT = setTimeout(() => { ui.msg = ''; draw(); }, 2200); draw(); });
+/* What the drag covered, as text: the command and output lines between its ends, the first from where it began and the last to where it ended. */
+function selectedText(p, hl){ const a = hl.a, b = hl.b, f = a.l < b.l || a.l === b.l && a.c <= b.c, from = f ? a : b, to = f ? b : a;
+  // the same lines as drawShell lists, a header before each command, so the indexes match
+  const lines = []; p.blocks.forEach(blk => { if (blk.restart){ lines.push({kind:'rs', t:''}); return; } lines.push({kind:'head', t:''}); lines.push({kind:'cmd', t:'❯ ' + blk.cmd}); blk.out.forEach(o => lines.push({kind:'out', t:o.t})); lines.push({kind:'gap', t:''}); });
+  const out = []; for (let l = from.l; l <= to.l && l < lines.length; l++){ const ln = lines[l]; if (ln.kind !== 'cmd' && ln.kind !== 'out') continue; const ch = [...ln.t], i0 = l === from.l ? from.c : 0, i1 = l === to.l ? to.c + 1 : ch.length;
+    let t = ch.slice(i0, i1).join(''); if (ln.kind === 'cmd' && i0 < 2) t = [...t].slice(Math.max(0, 2 - i0)).join(''); out.push(t); }
+  return out.join('\n'); }
+scr.addEventListener('click', e => { scr.focus(); if (ui.dragged){ ui.dragged = false; return; } const r = scr.getBoundingClientRect(), cw = r.width / COLS, ch = r.height / ROWS, cx = Math.floor((e.clientX - r.left) / cw), cy = Math.floor((e.clientY - r.top) / ch);
   if (cx < 27 && cy >= 2 && cy - 2 < model.ws.length && !ui.avisos){ ui.sel = cy - 2; ui.open = null; ui.blk = null; draw(); return; }
   const h = ui.hits.find(h => cx >= h.x && cx < h.x + h.w && cy >= h.y && cy < h.y + h.rows);
   if (h){ const w = cur(), i = w.panes.findIndex(p => p.id === h.pane); openWs(w, i); ui.blk = {pane:h.pane, idx:h.blk}; draw(); } });
+scr.addEventListener('wheel', e => { const {cx, cy} = cellOf(e); const r = ui.rows.find(r => cy >= r.top && cy <= r.bottom && cx >= r.x && cx < r.x + r.w); if (!r) return; const p = cur().panes.find(q => q.id === r.pane); e.preventDefault(); p.scroll = Math.max(0, (p.scroll || 0) + (e.deltaY < 0 ? 3 : -3)); draw(); }, {passive:false});
 const cur = () => model.ws[ui.sel], paneOf = () => { const w = cur(); return ui.open === w.id ? w.panes[ui.focus] : w.panes[0]; };
 document.getElementById('evFail').onclick = () => { const p = paneOf(); if (p){ p.att = p.att.filter(a => a.kind !== 'shell_done'); p.att.push({kind:'shell_done', pane:p.id, exit:2, rev:++rev}); p.lines = [...p.lines.slice(0, -1), 'error: test failed', p.lines.at(-1)]; draw(); } };
 document.getElementById('evOk').onclick = () => { const p = paneOf(); if (p){ p.att = p.att.filter(a => a.kind !== 'shell_done'); p.att.push({kind:'shell_done', pane:p.id, exit:0, rev:++rev}); draw(); } };
@@ -425,8 +470,23 @@ document.getElementById('evRestart').onclick = () => {
     if (b && b.running && !b.restart){ b.running = false; b.interrupted = true; }
     p.prog = null; if (b && !b.restart || !b) p.blocks.push({restart:at}); }));
   draw(); };
+const THEMES = [
+  {n:'Dark · One', bg:'#282c34', panel:'#21252b', fg:'#abb2bf', dim:'#5c6370', line:'#3e4451', sel:'#2c313a', blue:'#61afef', green:'#98c379', yellow:'#e5c07b', red:'#e06c75', magenta:'#c678dd', cyan:'#56b6c2'},
+  {n:'Dark · Gruvbox', bg:'#282828', panel:'#1d2021', fg:'#ebdbb2', dim:'#7c6f64', line:'#3c3836', sel:'#32302f', blue:'#83a598', green:'#b8bb26', yellow:'#fabd2f', red:'#fb4934', magenta:'#d3869b', cyan:'#8ec07c'},
+  {n:'Light · Paper', bg:'#fafafa', panel:'#f0f0f0', fg:'#383a42', dim:'#9a9ca3', line:'#d4d4d8', sel:'#e8e8ec', blue:'#4078f2', green:'#50a14f', yellow:'#c18401', red:'#e45649', magenta:'#a626a4', cyan:'#0184bc'},
+  {n:'Light · Solarized', bg:'#fdf6e3', panel:'#eee8d5', fg:'#586e75', dim:'#93a1a1', line:'#d6cfb7', sel:'#f2ebd3', blue:'#268bd2', green:'#859900', yellow:'#b58900', red:'#dc322f', magenta:'#d33682', cyan:'#2aa198'},
+];
+const lum = h => { const c = [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16) / 255).map(v => v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
+const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+/* The highlight is the colour of the theme that shows best against its ground, with the text in the ground or the text colour, whichever reads best on it. */
+function highlightOf(t){ const names = ['blue', 'green', 'yellow', 'red', 'magenta', 'cyan'], best = names.map(k => [k, t[k]]).sort((a, b) => contrast(b[1], t.bg) - contrast(a[1], t.bg))[0];
+  const text = contrast(t.bg, best[1]) >= contrast(t.fg, best[1]) ? t.bg : t.fg; return {name:best[0], bg:best[1], fg:text, ratio:contrast(best[1], t.bg)}; }
+function applyTheme(i){ const t = THEMES[i], root = document.documentElement.style; ['bg','panel','fg','dim','line','sel','blue','green','yellow','red','magenta','cyan'].forEach(k => root.setProperty('--' + k, t[k]));
+  const h = highlightOf(t); root.setProperty('--hl', h.bg); root.setProperty('--hlfg', h.fg); document.getElementById('hlinfo').textContent = 'highlight: ' + h.name + ' ' + h.bg + ' (' + h.ratio.toFixed(1) + ':1 on the ground)'; draw(); }
+document.getElementById('theme').innerHTML = THEMES.map((t, i) => `<option value="${i}">${t.n}</option>`).join('');
+document.getElementById('theme').onchange = e => applyTheme(+e.target.value);
 document.getElementById('evReset').onclick = () => { reset(); draw(); };
 document.getElementById('size').onchange = e => { [COLS, ROWS] = e.target.value.split('x').map(Number); draw(); };
-reset(); draw();
+reset(); applyTheme(0);
 })();
 </script>

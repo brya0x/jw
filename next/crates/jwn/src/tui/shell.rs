@@ -59,10 +59,19 @@ pub fn span_style(s: &Span) -> Style {
     }
 }
 
+/// What a line of the list is, for selecting text with the mouse: only the command and the output are.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    Command,
+    Output,
+    Other,
+}
+
 /// One line of the list of blocks.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Line {
     pub block: Option<u64>,
+    pub kind: Kind,
     /// The bar at the left: how the block is going.
     pub bar: Option<Rgb>,
     pub spans: Vec<(String, Style)>,
@@ -193,6 +202,7 @@ fn restart_line(b: &Block, now_ms: u64, width: usize) -> Line {
     let (left, right) = (fill / 2, fill - fill / 2);
     Line {
         block: None,
+        kind: Kind::Other,
         bar: None,
         spans: vec![(
             format!("{}{text}{}", "─".repeat(left), "─".repeat(right)),
@@ -243,12 +253,14 @@ pub fn block_lines(blocks: &[Block], now_ms: u64, width: usize) -> Vec<Line> {
         let room = width.saturating_sub(right.chars().count() + 3);
         out.push(Line {
             block: id,
+            kind: Kind::Other,
             bar: Some(bar),
             spans: vec![(clip(&short(&b.cwd), room.max(4)), Style::fg(look::dim()))],
             right: Some((right, right_style)),
         });
         out.push(Line {
             block: id,
+            kind: Kind::Command,
             bar: Some(bar),
             spans: vec![(format!("❯ {}", b.cmd), Style::default().bold())],
             right: None,
@@ -256,6 +268,7 @@ pub fn block_lines(blocks: &[Block], now_ms: u64, width: usize) -> Vec<Line> {
         if b.truncated {
             out.push(Line {
                 block: id,
+                kind: Kind::Other,
                 bar: Some(bar),
                 spans: vec![("… el inicio se recortó".into(), Style::fg(look::dim()))],
                 right: None,
@@ -264,6 +277,7 @@ pub fn block_lines(blocks: &[Block], now_ms: u64, width: usize) -> Vec<Line> {
         if b.full {
             out.push(Line {
                 block: id,
+                kind: Kind::Other,
                 bar: Some(bar),
                 spans: vec![("pantalla completa".into(), Style::fg(look::dim()))],
                 right: None,
@@ -272,6 +286,7 @@ pub fn block_lines(blocks: &[Block], now_ms: u64, width: usize) -> Vec<Line> {
         for row in &b.out {
             out.push(Line {
                 block: id,
+                kind: Kind::Output,
                 bar: Some(bar),
                 spans: row.iter().map(|s| (s.t.clone(), span_style(s))).collect(),
                 right: None,
@@ -279,6 +294,7 @@ pub fn block_lines(blocks: &[Block], now_ms: u64, width: usize) -> Vec<Line> {
         }
         out.push(Line {
             block: None,
+            kind: Kind::Other,
             bar: None,
             spans: vec![],
             right: None,

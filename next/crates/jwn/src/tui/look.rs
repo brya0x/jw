@@ -62,6 +62,41 @@ pub fn cyan() -> Rgb {
     pal().cyan
 }
 
+/// How bright a colour looks, from 0 (black) to 1 (white).
+fn luminance((r, g, b): Rgb) -> f64 {
+    let lin = |c: u8| {
+        let c = f64::from(c) / 255.0;
+        if c <= 0.03928 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+}
+
+/// How well two colours tell apart, from 1 (the same) to 21 (black on white).
+pub fn contrast(a: Rgb, b: Rgb) -> f64 {
+    let (x, y) = (luminance(a), luminance(b));
+    (x.max(y) + 0.05) / (x.min(y) + 0.05)
+}
+
+/// What a selection is lit with (spec REQ-308): the colour of the theme that shows best against its
+/// ground, and the text on it, the ground or the text colour, whichever reads better on it.
+pub fn selection() -> (Rgb, Rgb) {
+    let p = pal();
+    let lit = [p.blue, p.green, p.yellow, p.red, p.magenta, p.cyan]
+        .into_iter()
+        .max_by(|a, b| contrast(*a, p.bg).total_cmp(&contrast(*b, p.bg)))
+        .unwrap_or(p.blue);
+    let text = if contrast(p.bg, lit) >= contrast(p.fg, lit) {
+        p.bg
+    } else {
+        p.fg
+    };
+    (lit, text)
+}
+
 /// A line the diff added or deleted, and the words inside it that changed: the ground with a
 /// little of green or red in it, so they read on every theme.
 pub fn add_bg() -> Rgb {
@@ -86,6 +121,39 @@ fn mix(a: Rgb, b: Rgb, t: f32) -> Rgb {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn contrast_is_one_for_the_same_colour_and_twenty_one_for_black_on_white() {
+        assert!((contrast((9, 9, 9), (9, 9, 9)) - 1.0).abs() < 1e-9);
+        assert!((contrast((0, 0, 0), (255, 255, 255)) - 21.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn on_every_theme_the_selection_is_the_colour_that_shows_best_and_its_text_reads_on_it() {
+        for theme in themes::all() {
+            set(theme.palette, theme.dark);
+            let p = theme.palette;
+            let (lit, text) = selection();
+            let best = [p.blue, p.green, p.yellow, p.red, p.magenta, p.cyan]
+                .into_iter()
+                .map(|c| contrast(c, p.bg))
+                .fold(0.0, f64::max);
+            assert!((contrast(lit, p.bg) - best).abs() < 1e-9, "{}", theme.id);
+            assert!(
+                contrast(lit, p.bg) >= 3.0,
+                "{} lit {lit:?} on {:?}",
+                theme.id,
+                p.bg
+            );
+            assert!(
+                contrast(text, lit) >= 3.0,
+                "{} text {text:?} on {lit:?}",
+                theme.id
+            );
+            assert!(text == p.bg || text == p.fg);
+        }
+        set(themes::get(themes::DEFAULT_DARK, true).palette, true);
+    }
 
     #[test]
     fn the_default_is_one_dark_and_set_changes_it_for_this_thread() {
