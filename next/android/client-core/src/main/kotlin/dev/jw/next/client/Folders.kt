@@ -60,6 +60,9 @@ fun takenNames(root: String, there: DirListing?, session: Node.Session): Set<Str
 /** The first `ws-N` not in [taken]. */
 fun freeName(taken: Set<String>): String = generateSequence(1) { it + 1 }.map { "ws-$it" }.first { it !in taken }
 
+/** The programs the worktree opens with: the layout's panes and, when there are setup lines, the `setup` pane (REQ-349). */
+val ProjectInfo.programs: List<String> get() = if (setup.isEmpty()) panes else panes + "setup"
+
 /** What the sheet knows of the repository's `.jw.toml`: the PC's answer to `project_config` (REQ-347, REQ-348). */
 sealed interface WorktreeSettings {
     data object Reading : WorktreeSettings

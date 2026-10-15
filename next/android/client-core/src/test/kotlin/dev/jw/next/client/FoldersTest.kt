@@ -100,6 +100,8 @@ class FoldersTest {
         assertEquals("app-trees/ws-3", plan.place)
         assertEquals(listOf("bun install", "cp .env.example .env"), plan.info.setup)
         assertEquals(listOf("nvim", "claude"), plan.info.panes)
+        assertEquals(listOf("nvim", "claude", "setup"), plan.info.programs)
+        assertEquals(listOf("zsh"), defaults.programs, "no setup, no setup pane")
         assertEquals(WorktreePlan.Wrong("app-trees/ws-1 ya existe"), planWorktree(WorktreeSettings.Ready(info), "ws-1", setOf("ws-1")))
     }
 

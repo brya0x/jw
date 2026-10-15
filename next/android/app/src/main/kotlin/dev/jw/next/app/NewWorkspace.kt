@@ -47,6 +47,7 @@ import dev.jw.next.client.WorktreeSettings
 import dev.jw.next.client.folderView
 import dev.jw.next.client.freeName
 import dev.jw.next.client.planWorktree
+import dev.jw.next.client.programs
 import dev.jw.next.client.repoName
 import dev.jw.next.client.repos
 import dev.jw.next.client.tildePath
@@ -197,8 +198,8 @@ private fun Dock(view: FolderView, busy: Boolean, click: () -> Unit) {
 }
 
 /**
- * A worktree of a repository (REQ-206 to REQ-209), as `w` in the terminal client: the name,
- * what it will make and why it cannot, and what the PC says when git refuses.
+ * A worktree of a repository (REQ-206 to REQ-209, REQ-347 to REQ-352), as `w` in the terminal client: the name,
+ * what the repository's `.jw.toml` makes of it and why it cannot be made, and what the PC says when git refuses.
  */
 @Composable
 internal fun BoxScope.WorktreeSheet(source: AppSource, repoAtStart: String, state: ClientState, nav: Navigator, set: (ClientState) -> Unit, dismiss: () -> Unit) {
@@ -276,7 +277,7 @@ internal fun BoxScope.WorktreeSheet(source: AppSource, repoAtStart: String, stat
                     plan.info.setup.forEachIndexed { i, line ->
                         Row { Mono(if (i == 0) "setup   " else "        ", Palette.dim, 12); Mono(line, Palette.yellow, 12, lines = 2) }
                     }
-                    Row { Mono("paneles ", Palette.dim, 12); Mono((plan.info.panes + listOf("setup").filter { plan.info.setup.isNotEmpty() }).joinToString(" │ "), Palette.fg, 12, lines = 2) }
+                    Row { Mono("paneles ", Palette.dim, 12); Mono(plan.info.programs.joinToString(" │ "), Palette.fg, 12, lines = 2) }
                     Mono(if (plan.info.source != null) "según el .jw.toml del repositorio" else "sin .jw.toml: como siempre", Palette.dim, 12)
                 }
             }
