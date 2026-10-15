@@ -409,7 +409,7 @@ impl BlockStore {
         let Some(run) = self.running.take() else {
             return;
         };
-        if is_clear(&run.cmd) && code.unwrap_or(0) == 0 {
+        if is_clear(&run.cmd) && code == Some(0) {
             self.done.clear();
             self.version += 1;
             return;
@@ -613,6 +613,17 @@ mod tests {
             s.mark(Mark::Done(Some(code)));
             assert_eq!(s.view().unwrap().2.len(), 2, "{cmd} {code}");
         }
+        // One that ended with no status (another command began first) did not finish its work.
+        let mut s = BlockStore::new(40);
+        s.mark(Mark::Prompt);
+        for cmd in ["ls", "clear", "pwd"] {
+            s.mark(Mark::Command {
+                cmd: cmd.into(),
+                cwd: "/w".into(),
+            });
+        }
+        s.mark(Mark::Done(Some(0)));
+        assert_eq!(s.view().unwrap().2.len(), 3);
     }
 
     #[test]
