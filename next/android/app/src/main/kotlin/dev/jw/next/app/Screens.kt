@@ -27,7 +27,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -106,6 +105,9 @@ import kotlinx.coroutines.launch
 private val Gutter = 16.dp
 private val MarkColumn = 28.dp
 private const val PANE_WAIT_MS = 5_000L
+
+/** How many lines the composer grows to before it scrolls. */
+private const val COMPOSER_LINES = 5
 
 @Composable
 internal fun Mono(
@@ -620,11 +622,11 @@ private fun Composer(
                 value = text,
                 onValueChange = { text = it },
                 enabled = enabled,
-                singleLine = true,
+                // The keyboard's enter is a new line (REQ-238); only the button sends.
+                maxLines = COMPOSER_LINES,
                 textStyle = TextStyle(color = Palette.fg, fontFamily = MonoFont, fontSize = 13.sp),
                 cursorBrush = SolidColor(Palette.blue),
-                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { go() }),
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, imeAction = ImeAction.Default),
                 modifier = Modifier.weight(1f).heightIn(min = 48.dp).wrapContentHeight(Alignment.CenterVertically),
                 decorationBox = { inner ->
                     if (text.isEmpty()) {
@@ -643,8 +645,8 @@ private fun Composer(
                     Mono("■", Palette.red, 18, bold = true)
                 }
             }
-            Box(Modifier.size(48.dp).clickable(enabled = enabled, onClick = go), contentAlignment = Alignment.Center) {
-                Mono("↵", if (enabled) Palette.blue else Palette.dim, 16, bold = true)
+            Box(Modifier.size(48.dp).clickable(enabled = enabled, onClick = go).semantics { contentDescription = "Enviar" }, contentAlignment = Alignment.Center) {
+                GlyphIcon(Glyph.Send, if (enabled) Palette.blue else Palette.dim)
             }
         }
     }
