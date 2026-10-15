@@ -42,7 +42,8 @@ pub fn title_for(argv: &[String]) -> Option<String> {
 }
 
 /// Programs that draw their own screen, with or without the alternate one (claude does not
-/// use it): while one is in the foreground the pane is drawn as its screen, not as blocks.
+/// use it): while one runs as a command (see `mode_of`) the pane is drawn as its screen, not as
+/// blocks.
 const FULL_SCREEN: [&str; 15] = [
     "claude", "nvim", "vim", "vi", "nano", "emacs", "htop", "btop", "top", "less", "man", "tmux",
     "ssh", "lazygit", "k9s",
