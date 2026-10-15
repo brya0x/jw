@@ -151,18 +151,32 @@ fn kept(value: &serde_json::Value, dark: bool) -> String {
     themes::get(id, dark).id.clone()
 }
 
-/// Whether the machine is in dark mode: dark where it cannot tell (macOS prints `Dark` when
-/// it is, and fails when it is light; nothing is asked on other systems).
+/// Whether the machine is in dark mode: dark where it cannot tell (nothing is asked on other
+/// systems, nor when `defaults` cannot run).
 pub fn os_is_dark() -> bool {
     if !cfg!(target_os = "macos") {
         return true;
     }
-    Command::new("defaults")
+    let asked = Command::new("defaults")
         .args(["read", "-g", "AppleInterfaceStyle"])
         .output()
-        .map_or(true, |o| {
-            !o.status.success() || String::from_utf8_lossy(&o.stdout).trim() == "Dark"
-        })
+        .ok()
+        .map(|o| {
+            (
+                o.status.success(),
+                String::from_utf8_lossy(&o.stdout).into_owned(),
+            )
+        });
+    dark_from(asked)
+}
+
+/// What macOS answered about `AppleInterfaceStyle`: `Dark` when it is dark, and *fails* (the
+/// key is not there) when it is light, so a failure is light; `None` is not having been able to ask.
+fn dark_from(asked: Option<(bool, String)>) -> bool {
+    match asked {
+        Some((succeeded, said)) => succeeded && said.trim() == "Dark",
+        None => true,
+    }
 }
 
 #[cfg(test)]
@@ -251,5 +265,17 @@ mod tests {
         assert!(!s.is_dark(true));
         s.mode = Mode::Dark;
         assert!(s.is_dark(false));
+    }
+
+    #[test]
+    fn macos_says_dark_when_it_is_and_fails_when_it_is_light() {
+        assert!(dark_from(Some((true, "Dark\n".into()))));
+        assert!(
+            !dark_from(Some((false, String::new()))),
+            "the key is not there: light"
+        );
+        assert!(!dark_from(Some((true, String::new()))));
+        assert!(!dark_from(Some((true, "Light".into()))));
+        assert!(dark_from(None), "not being able to ask is dark");
     }
 }
