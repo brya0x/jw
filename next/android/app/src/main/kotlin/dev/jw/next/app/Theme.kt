@@ -7,6 +7,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import dev.jw.next.client.Need
 import dev.jw.next.client.Theme
 import dev.jw.next.client.Themes
 import dev.jw.next.client.Tone
@@ -42,6 +43,12 @@ val MonoFont = FontFamily(
     Font(R.font.jetbrains_mono_regular, FontWeight.Normal),
     Font(R.font.jetbrains_mono_bold, FontWeight.Bold),
 )
+
+fun Need.color(): Color = when (this) {
+    Need.Decide -> Palette.yellow
+    Need.Failed -> Palette.red
+    Need.Review -> Palette.cyan
+}
 
 fun Tone.color(): Color = when (this) {
     Tone.Danger -> Palette.red

@@ -72,9 +72,14 @@ svg.i{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stro
 .mk{display:flex;gap:6px;font-size:14px;flex:none}
 .mk .w{color:var(--magenta)} .mk .q{color:var(--yellow);font-weight:700} .mk .d{color:var(--green)} .mk .m{color:var(--cyan)}
 .mk .p{color:var(--red);font-weight:700} .mk .pl{color:var(--magenta)} .mk .f{color:var(--green)} .mk .x{color:var(--red)} .mk .dm{color:var(--dim)} .mk .c{font-size:11px;color:var(--dim)}
-.wf{display:flex;gap:8px;align-items:center;padding:0 14px 8px 51px}
-.wf .tx{flex:1;min-width:0;font-size:12px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.wf .go{height:36px;padding:0 12px;border-radius:6px;border:1px solid var(--line);color:var(--fg);flex:none}
+.at,.inb{--tone:var(--rv,var(--cyan));color:var(--tone)}
+.decide{--tone:var(--yellow)}.failed{--tone:var(--red)}
+.row .nm .at{color:var(--tone);font-size:11.5px;padding:3px 0}
+.inb{display:block;width:100%;padding:10px 14px;border:0;border-bottom:1px solid var(--line);background:none;text-align:left;font:inherit}
+.inb .tx{min-width:0;font-size:12px}
+.inb .ago{flex:none;font-size:11px;color:var(--dim)}
+.inb .h{display:flex;gap:8px;align-items:center;color:var(--fg)}.inb .h b{font-weight:500;flex:1;min-width:0}
+.inb .tx{display:block;margin:6px 0 0 22px;color:var(--tone)}
 .yn{display:flex;gap:6px;padding:0 14px 8px 51px}
 .yn button{flex:1;height:44px;border-radius:6px;display:grid;place-items:center;font-weight:700}
 .yn .y{background:color-mix(in srgb,var(--green) 20%,transparent);color:var(--green);border:1px solid color-mix(in srgb,var(--green) 50%,transparent)}
@@ -440,6 +445,9 @@ ol.sx code{background:var(--sel);padding:1px 6px;border-radius:4px;color:var(--g
     <div class="jump" id="jump"></div>
     <h2>Simular (solo maqueta)</h2>
     <div class="jump"><button data-act="sim" data-sim="accept">El PC acepta</button><button data-act="sim" data-sim="denied">El PC rechaza</button><button data-act="sim" data-sim="expired">El código venció</button><button data-act="sim" data-sim="unreach">No llego al PC</button><button data-act="sim" data-sim="proto">Protocolo: la app va atrás</button><button data-act="sim" data-sim="protojw">Protocolo: jw va atrás</button><button data-act="sim" data-sim="limited">Demasiados intentos</button><button data-act="sim" data-sim="away">Sales de casa (cae al túnel)</button><button data-act="sim" data-sim="home">Vuelves a casa</button></div>
+    <h2>La atención en la fila (cambia)</h2>
+    <p style="margin:6px 0 8px;color:var(--dim)">Sin el botón «ir ›». Lo que espera en un workspace es <b>una línea de texto en color</b> dentro de su misma fila, debajo del resumen (solo el texto, sin fondo, barra ni fila aparte), con lo que pasó; <b>tocar esa línea abre el panel que pide revisión</b> (y lo marca visto), tocar la fila abre el workspace como siempre. La campana (Avisos) hace lo mismo: cada aviso es una sola fila tocable. El color dice qué se espera: amarillo, que decidas (permiso, pregunta, plan); rojo, que algo falló; el color de revisión, que hay algo que mirar (agente listo, comando terminado bien, mergeado). Elige el color de revisión:</p>
+    <div class="jump" id="rvpick"><button data-act="rvcolor" data-c="cyan">cian</button><button data-act="rvcolor" data-c="magenta">magenta</button><button data-act="rvcolor" data-c="green">verde</button></div>
     <h2>Eventos del daemon (nuevo)</h2>
     <p style="margin:6px 0 8px;color:var(--dim)">Levantan una atención en el workspace abierto. «Visto» es de este teléfono: abrir el panel que nombra la atención la marca vista aquí, y nada más.</p>
     <div class="jump"><button data-act="simatt" data-k="permission">! permiso en claude</button><button data-act="simatt" data-k="question">? pregunta en claude</button><button data-act="simatt" data-k="shell_done0">❯ comando terminó (salió 0)</button><button data-act="simatt" data-k="shell_done1">✗ comando terminó (salió 1)</button><button data-act="simatt" data-k="agent_done">✓ agente listo</button><button data-act="simatt" data-k="ci_failed">✗ CI falló</button><button data-act="simclr">volver a marcar todo como no visto</button></div>
@@ -550,6 +558,8 @@ const unseenOf=w=>w.att.filter(a=>!state.seen[akey(w,a)]).sort((a,b)=>AK[a.kind]
 const allUnseen=()=>state.w.flatMap(w=>unseenOf(w).map(a=>({w,a})));
 const attCls=a=>a.kind==='shell_done'&&a.exit?'x':AK[a.kind].c;
 const attMark=a=>`<span class="${attCls(a)}">${a.kind==='shell_done'&&a.exit?'✗':AK[a.kind].g}</span>`;
+/* Cómo se ve una atención: te piden decidir (amarillo), algo falló (rojo) o hay algo que revisar (el color de revisión). */
+const attTone=a=>['permission','question','plan'].includes(a.kind)?'decide':a.kind==='ci_failed'||(a.kind==='shell_done'&&a.exit)?'failed':'review';
 const attWhat=a=>a.kind==='shell_done'?`${a.s} · salió ${a.exit}`:`${AK[a.kind].t}${a.s?' · '+a.s:''}`;
 function markSeen(w){ if(!w)return; w.att.forEach(a=>{ if(a.pane===null||(state.screen==='ws'&&a.pane===state.pane)) state.seen[akey(w,a)]=true }) }
 const WHY={'symlink':'enlace simbólico (no se sigue)','too_big':'demasiado grande','special':'no es un archivo normal','repository':'es otro repositorio','gone':'ya no está','not a regular file':'no es un archivo normal','too large':'demasiado grande','permission denied':'sin permiso','it went away':'ya no está','it could not be read':'no se pudo leer','the name is not UTF-8':'nombre que no es UTF-8'};
@@ -673,9 +683,8 @@ function row(w,i){
   const cur=w.id===state.ws;
   return `<button class="row ${w.kind==='wt'?'wt':w.kind==='root'?'root':''}" data-open="${w.id}" data-hold="wsmenu" data-wsid="${w.id}" aria-current="${cur}">
     <span class="n">${i<9?i+1:''}</span><span class="o" style="color:${w.ag==='idle'&&!w.dev&&w.kind!=='root'?'var(--dim)':'var(--green)'}">${w.kind==='wt'?'↳':'●'}</span>
-    <span class="nm"><b>${w.name}</b><span>${w.kind==='root'?'raíz · ':''}${w.last}</span></span>
-    ${w.kind==='root'?'<span class="tag">raíz</span>':w.kind==='dir'?'<span class="tag">carpeta</span>':''}${marks(w)}</button>
-    ${(()=>{const a=unseenOf(w)[0];return a?`<div class="wf"><span class="tx" style="color:var(--${a.kind==='permission'||a.kind==='question'?'yellow':a.kind==='shell_done'&&a.exit||a.kind==='ci_failed'?'red':'dim'})">${attWhat(a)}</span><button class="go" data-att="${w.id}|${a.kind}|${a.rev}">ir ›</button></div>`:''})()}`;
+    <span class="nm"><b>${w.name}</b><span>${w.kind==='root'?'raíz · ':''}${w.last}</span>${(()=>{const a=unseenOf(w)[0];return a?`<span class="at ${attTone(a)}" data-att="${w.id}|${a.kind}|${a.rev}" aria-label="${attWhat(a)}. Abre el panel">${attWhat(a)}</span>`:''})()}</span>
+    ${w.kind==='root'?'<span class="tag">raíz</span>':w.kind==='dir'?'<span class="tag">carpeta</span>':''}${marks(w)}</button>`;
 }
 function vHome(){
   const list=inSess(); let i=0, out='';
@@ -688,16 +697,16 @@ function vHome(){
   return `<div class="hdr"><div class="t"><b>jwn · ${state.sess}</b><span>${pc} · ${state.route==='tunnel'?'túnel':'wifi'}</span></div>
       <button class="ib" data-sheet="pick" aria-label="Buscar workspace">${ic('search')}</button><button class="ib" data-sheet="open" aria-label="Workspace nuevo">${ic('plus')}</button><button class="ib" data-go="inbox" aria-label="Avisos${n?': '+n+' esperando':''}">${ic('bell')}${n?`<span class="bdg">${n}</span>`:''}</button><button class="ib" data-go="settings" aria-label="Ajustes">${ic('gear')}</button></div>
     <div class="scroll"><div class="sec" data-hold="open">workspaces · ${list.length}</div>${out}
-      <div class="legend" data-hold="open"><b><span style="color:var(--green)">●</span> abierto</b><b><span style="color:var(--magenta)">✻</span> agente</b><b><span style="color:var(--green)">⚡</span> dev</b><b><span style="color:var(--red)">!</span> permiso</b><b><span style="color:var(--yellow)">?</span> pregunta</b><b><span style="color:var(--magenta)">◆</span> plan</b><b><span style="color:var(--green)">❯</span> comando</b><b><span style="color:var(--green)">✓</span> agente listo</b><b><span style="color:var(--cyan)">⚑</span> mergeado</b><b><span style="color:var(--red)">✗</span> falló</b></div></div>
+      <div class="legend" data-hold="open"><b><span style="color:var(--green)">●</span> abierto</b><b><span style="color:var(--magenta)">✻</span> agente</b><b><span style="color:var(--green)">⚡</span> dev</b><b><span style="color:var(--red)">!</span> permiso</b><b><span style="color:var(--yellow)">?</span> pregunta</b><b><span style="color:var(--magenta)">◆</span> plan</b><b><span style="color:var(--green)">❯</span> comando</b><b><span style="color:var(--green)">✓</span> agente listo</b><b><span style="color:var(--cyan)">⚑</span> mergeado</b><b><span style="color:var(--red)">✗</span> falló</b><b>línea: <span style="color:var(--yellow)">te espera</span></b><b><span style="color:var(--red)">falló</span></b><b><span style="color:var(--rv,var(--cyan))">por revisar</span></b></div></div>
     ${statusBar('NORMAL','toca una fila · mantén pulsado el título para crear')}`;
 }
 
 function vInbox(){
   const w=waiting();
   return `<div class="hdr"><button class="ib" data-go="home" aria-label="Volver a workspaces">${ic('back')}</button><div class="t"><b>avisos</b><span>lo que espera algo de ti</span></div></div>
-   <div class="scroll">${w.length?w.map(({w:x,a})=>`<div style="border-bottom:1px solid var(--line);padding:12px 14px">
-      <div style="display:flex;gap:8px;align-items:center"><span class="mk">${attMark(a)}</span><b style="font-weight:500">${x.kind==='wt'?x.proj+'/':''}${x.name}</b><span style="margin-left:auto;color:var(--dim);font-size:11px">${a.t}</span></div>
-      <div class="wf" style="padding:6px 0 0 22px"><span class="tx" style="color:var(--fg)">${attWhat(a)}</span><button class="go" data-att="${x.id}|${a.kind}|${a.rev}">ir ›</button></div></div>`).join(''):`<div style="padding:40px 20px;text-align:center;color:var(--dim)">Nada espera. Cuando algo termine o pregunte, aparece aquí.</div>`}</div>
+   <div class="scroll">${w.length?w.map(({w:x,a})=>`<button class="inb ${attTone(a)}" data-att="${x.id}|${a.kind}|${a.rev}" aria-label="${x.name}: ${attWhat(a)}. Abre el panel">
+      <div class="h"><span class="mk">${attMark(a)}</span><b>${x.kind==='wt'?x.proj+'/':''}${x.name}</b><span class="ago">${a.t}</span></div>
+      <span class="tx">${attWhat(a)}</span></button>`).join(''):`<div style="padding:40px 20px;text-align:center;color:var(--dim)">Nada espera. Cuando algo termine o pregunte, aparece aquí.</div>`}</div>
    ${statusBar('?',w.length+' esperando')}`;
 }
 
@@ -1252,6 +1261,7 @@ document.addEventListener('click',e=>{if(held){held=false;e.stopPropagation();e.
     case 'copy':state.sel=false;toast('copiado');render();break;
     case 'unsel':state.sel=false;render();break;
     case 'scan':goConn(state.perm==='granted'?'scan':'perm');break;
+    case 'rvcolor':document.getElementById('phone').style.setProperty('--rv','var(--'+d.c+')');render();break;
     case 'simatt':{const w=wsOf(state.ws),k=t.dataset.k,kind=k.replace(/[01]$/,''),
       a={kind,pane:{permission:'claude',question:'claude',plan:'claude',agent_done:'claude',shell_done:'shell'}[kind]||null,rev:++attRev,t:'ahora',s:{permission:'Bash: git push',question:'¿Qué enfoque prefieres?',shell_done:'just ci',agent_done:'Listo.',ci_failed:'ci / rust'}[kind]||''};
       if(kind==='shell_done')a.exit=+k.slice(-1);w.att=w.att.filter(x=>x.kind!==kind);w.att.push(a);toast('atención: '+AK[kind].t);render();break}

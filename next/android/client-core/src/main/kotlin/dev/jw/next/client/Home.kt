@@ -28,6 +28,16 @@ fun Attention.mark(): Mark = when (kind) {
     AttentionKind.Merged -> Mark("⚑", Tone.Merged)
 }
 
+/** What an attention asks of the person; the UI colours the line that says it by this (REQ-247). */
+enum class Need { Decide, Failed, Review }
+
+fun Attention.need(): Need = when (kind) {
+    AttentionKind.Permission, AttentionKind.Question, AttentionKind.Plan -> Need.Decide
+    AttentionKind.CiFailed -> Need.Failed
+    AttentionKind.ShellDone -> if ((exitCode ?: 0) != 0) Need.Failed else Need.Review
+    AttentionKind.Screen, AttentionKind.AgentDone, AttentionKind.Merged -> Need.Review
+}
+
 /** What an attention says, in Spanish like the rest of the app. */
 fun Attention.what(): String = when (kind) {
     AttentionKind.Permission -> "pide permiso"
@@ -59,7 +69,7 @@ data class HomeRow(
     val mark: Mark?,
     /** How many unseen attentions, for the count beside the mark. */
     val unseen: Int,
-    /** The line under the row and the attention its go control opens. */
+    /** The line under the row's detail and the attention a tap on it opens. */
     val line: String?,
     val go: Attention?,
 )

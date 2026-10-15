@@ -5,7 +5,6 @@ package dev.jw.next.app
 import android.content.ClipData
 import androidx.compose.foundation.background
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
@@ -74,9 +73,9 @@ import dev.jw.next.client.HomeItem
 import dev.jw.next.client.HomeKind
 import dev.jw.next.client.HomeRow
 import dev.jw.next.client.Navigator
+import dev.jw.next.client.Need
 import dev.jw.next.client.RemoveSheet
 import dev.jw.next.client.Screen
-import dev.jw.next.client.Tone
 import dev.jw.next.client.WorkspaceTarget
 import dev.jw.next.client.WsAction
 import dev.jw.next.client.avisos
@@ -87,6 +86,7 @@ import dev.jw.next.client.shown
 import dev.jw.next.client.shownName
 import dev.jw.next.client.mark
 import dev.jw.next.client.menuTitle
+import dev.jw.next.client.need
 import dev.jw.next.client.removeSheet
 import dev.jw.next.client.target
 import dev.jw.next.client.workspaceMenu
@@ -141,12 +141,6 @@ private fun MarkColumn(a: Attention?, count: Int) {
             if (count > 1) Mono("$count", Palette.dim, 10)
         }
     }
-}
-
-/** What an attention says, tinted only when it needs a decision or went wrong. */
-private fun Attention.lineColor(): Color = when (val tone = mark().tone) {
-    Tone.Good, Tone.Dim, Tone.Merged -> Palette.dim
-    else -> tone.color()
 }
 
 @Composable
@@ -294,8 +288,8 @@ private fun WorkspaceList(items: List<HomeItem>, nav: Navigator, state: ClientSt
 /**
  * A row as `docs/prototypes/mobile.html` draws it: its number, `●` (a root or a folder) or `↳`
  * (a worktree, further in, REQ-224) lit when it has panes, the name over its detail, the tag
- * and the mark of its most urgent attention; under it that attention and the go control. The
- * workspace opened last is the one with the blue bar.
+ * and the mark of its most urgent attention; under the detail, that attention as a line of
+ * coloured text (REQ-247). The workspace opened last is the one with the blue bar.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -313,6 +307,11 @@ private fun WorkspaceRow(row: HomeRow, current: Boolean, open: () -> Unit, hold:
             Column(Modifier.weight(1f)) {
                 Mono(row.name, bold = true, size = 14)
                 Mono(row.detail, Palette.dim, 11)
+                val attention = row.go
+                val line = row.line
+                if (attention != null && line != null) {
+                    Mono(line, attention.need().color(), 12, modifier = Modifier.combinedClickable(onClick = { go(attention) }, onLongClick = hold).padding(vertical = 3.dp))
+                }
             }
             if (row.kind != HomeKind.Worktree) Tag(row.kind.label, Palette.dim)
             row.mark?.let { m ->
@@ -320,24 +319,7 @@ private fun WorkspaceRow(row: HomeRow, current: Boolean, open: () -> Unit, hold:
                 if (row.unseen > 1) Mono("${row.unseen}", Palette.dim, 11)
             }
         }
-        val attention = row.go
-        val line = row.line
-        if (attention != null && line != null) {
-            Row(Modifier.fillMaxWidth().padding(start = 51.dp, end = Gutter, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Mono(line, attention.lineColor(), 12, modifier = Modifier.weight(1f))
-                GoControl { go(attention) }
-            }
-        }
     }
-}
-
-/** The go control of a row or an item of Avisos: «ir ›» in a bordered button, as the prototype draws it. */
-@Composable
-private fun GoControl(click: () -> Unit) {
-    Box(
-        Modifier.height(36.dp).border(1.dp, Palette.line, RoundedCornerShape(6.dp)).clickable(onClick = click).padding(horizontal = 12.dp),
-        contentAlignment = Alignment.Center,
-    ) { Mono("ir ›", Palette.fg, 13) }
 }
 
 @Composable
@@ -354,9 +336,8 @@ private fun AvisosList(items: List<Aviso>, nav: Navigator, state: ClientState, s
                 MarkColumn(item.attention, 1)
                 Column(Modifier.weight(1f).padding(start = 4.dp)) {
                     Mono(item.workspace, bold = true, size = 14)
-                    Mono(item.attention.what(), item.attention.lineColor(), 12, modifier = Modifier.padding(top = 2.dp))
+                    Mono(item.attention.what(), item.attention.need().color(), 12, modifier = Modifier.padding(top = 2.dp))
                 }
-                GoControl { set(nav.go(state, item.attention)) }
             }
             Hairline()
         }
@@ -367,11 +348,16 @@ private fun AvisosList(items: List<Aviso>, nav: Navigator, state: ClientState, s
 @Composable
 private fun Legend(create: () -> Unit) {
     val items = listOf("●" to "abierto", "!" to "permiso", "?" to "pregunta", "◆" to "plan", "❯" to "comando", "✓" to "agente listo", "⚑" to "mergeado", "✗" to "falló")
+    val lines = listOf("te espera" to Need.Decide, "falló" to Need.Failed, "por revisar" to Need.Review)
     FlowRow(
         Modifier.fillMaxWidth().combinedClickable(onClick = {}, onLongClick = create).padding(Gutter),
         horizontalArrangement = Arrangement.spacedBy(16.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) { items.forEach { (g, t) -> Mono("$g $t", Palette.dim, 11) } }
+    ) {
+        items.forEach { (g, t) -> Mono("$g $t", Palette.dim, 11) }
+        Mono("línea:", Palette.dim, 11)
+        lines.forEach { (t, need) -> Mono(t, need.color(), 11) }
+    }
 }
 
 @Composable
