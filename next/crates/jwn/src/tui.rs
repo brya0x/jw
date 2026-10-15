@@ -902,7 +902,7 @@ impl View {
             return Some(program_name(program));
         }
         let blocks = self.blocks.get(p.blocks.as_ref()?)?;
-        let last = blocks.blocks.last().filter(|k| k.running)?;
+        let last = running_block(blocks)?;
         Some(clip(
             last.cmd.split_whitespace().next().unwrap_or(&last.cmd),
             24,
@@ -1616,7 +1616,7 @@ impl View {
         let lines = shell::block_lines(&b.blocks, self.now_ms, iw.saturating_sub(2));
         let top = iy + gap(lines.len(), lh);
         let on_marks = y == iy + lh + Field::FIRST_TEXT;
-        let running = b.blocks.last().is_some_and(|k| k.running);
+        let running = running_block(b).is_some();
         if (top..iy + lh).contains(&y) && (ix..ix + iw).contains(&x) {
             let start = window_start(lines.len(), lh, self.scroll.get(pane).copied().unwrap_or(0));
             if let Some(id) = lines.get(start + y - top).and_then(|l| l.block) {
@@ -2197,7 +2197,7 @@ impl View {
                 g.put_over(at, y, text, *style);
             }
         }
-        let running = b.blocks.last().filter(|k| k.running);
+        let running = running_block(b);
         let chips: Vec<(String, Rgb)> = match running {
             Some(k) => vec![(format!("◌ {}", k.cmd), look::yellow())],
             None => std::iter::once((shell::short(&p.cwd), look::dim()))
@@ -2342,10 +2342,15 @@ fn list_h(h: usize, band: usize) -> usize {
     h.saturating_sub(band)
 }
 
+/// The command a pane's blocks say is running: the last block, while it runs.
+fn running_block(b: &Blocks) -> Option<&contract::Block> {
+    b.blocks.last().filter(|k| k.running)
+}
+
 /// The field of a shell pane drawn as blocks: what its shell holds at the prompt, the line of its
 /// screen when the daemon does not say, or nothing while a command runs.
 fn field_of(p: &Pane, b: &Blocks, iw: usize) -> Field {
-    if b.blocks.last().is_some_and(|k| k.running) {
+    if running_block(b).is_some() {
         return Field::new(None, None, iw);
     }
     let c = p.screen.cursor;

@@ -10,7 +10,7 @@ use super::{Grid, Rgb, STOP, Style, clip, look};
 
 /// Rows of text the field grows to before it shows the end of the line only.
 pub const MAX_TEXT_ROWS: usize = 5;
-/// Rows of the band that are not text: free over the chips, the chips, free under them, free under the line.
+/// Rows of the band that are not text: a free one over the chips, the chips, a free one between them and the text, and a free one under the text.
 const AROUND: usize = 4;
 /// The send mark, at the right of the first row of text.
 pub const SEND: &str = "➤";
@@ -23,8 +23,6 @@ const MARKS: usize = 4;
 pub struct Field {
     rows: Vec<String>,
     cursor: (usize, usize),
-    /// Nothing is typed (or nothing can be shown), so the row says what to type.
-    empty: bool,
 }
 
 /// Columns of text a pane `iw` wide holds in a row of the field.
@@ -46,14 +44,17 @@ impl Field {
             (None, Some((line, col))) => Field {
                 rows: vec![line.to_owned()],
                 cursor: (0, col),
-                empty: false,
             },
             (None, None) => Field {
                 rows: vec![String::new()],
                 cursor: (0, 0),
-                empty: true,
             },
         }
+    }
+
+    /// Nothing is typed (or nothing can be shown), so the row says what to type.
+    fn is_empty(&self) -> bool {
+        self.rows.iter().all(String::is_empty)
     }
 
     /// Rows of the band: the text and what is around it.
@@ -101,7 +102,7 @@ impl Field {
                 Style::fg(look::fg()).on(ground),
             );
         }
-        if self.empty || self.rows.iter().all(String::is_empty) {
+        if self.is_empty() {
             let ask = if running {
                 "va al programa"
             } else {
@@ -176,7 +177,6 @@ fn wrap(text: &str, cursor: usize, width: usize) -> Field {
     let start = rows.len().saturating_sub(MAX_TEXT_ROWS).min(at.0);
     let kept: Vec<String> = rows.into_iter().skip(start).take(MAX_TEXT_ROWS).collect();
     Field {
-        empty: kept.iter().all(String::is_empty),
         rows: kept,
         cursor: (at.0 - start, at.1),
     }
@@ -197,15 +197,15 @@ mod tests {
     fn a_short_line_is_one_row_with_the_cursor_after_it() {
         let f = Field::new(Some(&input("git status", 10)), None, 60);
         assert_eq!(f.rows, ["git status"]);
-        assert_eq!((f.cursor, f.empty, f.band_rows()), ((0, 10), false, 5));
+        assert_eq!((f.cursor, f.is_empty(), f.band_rows()), ((0, 10), false, 5));
     }
 
     #[test]
     fn nothing_typed_is_empty_and_says_what_to_type() {
         let f = Field::new(Some(&input("", 0)), None, 60);
-        assert_eq!((f.rows.len(), f.cursor, f.empty), (1, (0, 0), true));
+        assert_eq!((f.rows.len(), f.cursor, f.is_empty()), (1, (0, 0), true));
         assert!(
-            Field::new(None, None, 60).empty,
+            Field::new(None, None, 60).is_empty(),
             "a running command shows no line"
         );
     }
@@ -265,7 +265,7 @@ mod tests {
     fn without_the_daemons_input_the_screens_line_is_shown_as_it_is() {
         let f = Field::new(None, Some(("❯ ls -la", 8)), 60);
         assert_eq!(
-            (f.rows.as_slice(), f.cursor, f.empty),
+            (f.rows.as_slice(), f.cursor, f.is_empty()),
             (&["❯ ls -la".to_owned()][..], (0, 8), false)
         );
     }

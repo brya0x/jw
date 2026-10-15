@@ -129,8 +129,8 @@ pub fn spawn(
                             // The screen is exactly at the mark: the cursor is where typing starts.
                             match &m {
                                 blocks::Mark::Input => {
-                                    *lock(&input_col) =
-                                        Some(lock(&parser).screen().cursor_position().1);
+                                    let col = lock(&parser).screen().cursor_position().1;
+                                    *lock(&input_col) = Some(col);
                                 }
                                 blocks::Mark::Command { .. } => {
                                     *lock(&input_col) = None;
