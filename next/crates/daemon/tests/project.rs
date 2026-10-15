@@ -111,11 +111,7 @@ fn project_config_tells_the_defaults_and_what_the_file_says() {
 
     let r = ok(&mut c, Cmd::ProjectConfig { repo: text(&top) });
     assert!(r.get("source").is_none());
-    assert_eq!(
-        r["root"],
-        text(&sb.dir.join("work/app-wt"))
-            .replace("/tmp", &text(&std::fs::canonicalize("/tmp").unwrap()))
-    );
+    assert_eq!(r["root"], text(&top.parent().unwrap().join("app-wt")));
     assert_eq!(r["branch"], "feat/{name}");
     assert_eq!(r["setup"], serde_json::json!([]));
     assert_eq!(r["panes"], serde_json::json!(["sh"]));

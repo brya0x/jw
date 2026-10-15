@@ -1305,14 +1305,9 @@ impl View {
         let Some(t) = self.worktree.as_mut().filter(|t| t.repo == repo) else {
             return;
         };
-        t.set_config(match reply {
-            Ok(Ok(Some(v))) => {
-                serde_json::from_value::<contract::ProjectInfo>(v).map_err(|e| e.to_string())
-            }
-            Ok(Ok(None)) => Err("el daemon no contestó nada".to_owned()),
-            Ok(Err(e)) => Err(e.message),
-            Err(e) => Err(e.to_string()),
-        });
+        t.set_config(reply_value(reply).and_then(|v| {
+            serde_json::from_value::<contract::ProjectInfo>(v).map_err(|e| e.to_string())
+        }));
     }
 
     /// A key in the folder browser.
@@ -2252,12 +2247,7 @@ impl View {
         let Some(t) = self.trees.get_mut(workspace) else {
             return;
         };
-        let value = match reply {
-            Ok(Ok(Some(v))) => Ok(v),
-            Ok(Ok(None)) => Err("el daemon no contestó nada".to_owned()),
-            Ok(Err(e)) => Err(e.message),
-            Err(e) => Err(e.to_string()),
-        };
+        let value = reply_value(reply);
         match ask {
             FileAsk::List { path, .. } => {
                 let dir = match value.and_then(|v| {
@@ -3646,6 +3636,17 @@ const ASK_WAIT: Duration = Duration::from_secs(20);
 
 type Reply = Result<Result<Option<serde_json::Value>, ErrorBody>, ClientError>;
 
+/// What a command answered, or why it did not: the daemon's message, the link's failure, or that
+/// it gave no result when one was expected.
+fn reply_value(reply: Reply) -> Result<serde_json::Value, String> {
+    match reply {
+        Ok(Ok(Some(v))) => Ok(v),
+        Ok(Ok(None)) => Err("el daemon no contestó nada".to_owned()),
+        Ok(Err(e)) => Err(e.message),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// What a push that worked says: the commits that went up and whether the branch is new there.
 fn sync_said(branch: &str, result: Option<&serde_json::Value>) -> String {
     let pushed = result.and_then(|r| r["pushed"].as_u64()).unwrap_or(0);
@@ -3811,24 +3812,19 @@ fn shown_in_a_pane(view: &mut View, client: &mut Client, reply: Reply, failed: &
             if let Some(ws) = result.as_ref().and_then(|r| r["workspace"].as_str()) {
                 // A worktree starts the panes its repository's `.jw.toml` says; when that
                 // cannot be done, or for a folder, it is one shell.
-                let started = start && {
-                    match client.cmd_within(
+                let started = start
+                    && match reply_value(client.cmd_within(
                         Cmd::StartWorkspace {
                             workspace: ws.to_owned(),
                         },
                         ASK_WAIT,
-                    ) {
-                        Ok(Ok(_)) => true,
-                        Ok(Err(e)) => {
-                            view.manage_failed("No se pudieron abrir los paneles", &e.message);
+                    )) {
+                        Ok(_) => true,
+                        Err(why) => {
+                            view.manage_failed("No se pudieron abrir los paneles", &why);
                             false
                         }
-                        Err(e) => {
-                            view.manage_failed("No se pudieron abrir los paneles", &e.to_string());
-                            false
-                        }
-                    }
-                };
+                    };
                 if !started {
                     match client.cmd(Cmd::NewPane {
                         workspace: ws.to_owned(),
