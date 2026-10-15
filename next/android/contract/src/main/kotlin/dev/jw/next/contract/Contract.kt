@@ -162,7 +162,7 @@ sealed interface Cmd {
     data class SyncWorkspace(val workspace: Id) : Cmd
 
     @Serializable @SerialName("new_pane")
-    data class NewPane(val workspace: Id, val program: List<String>? = null) : Cmd
+    data class NewPane(val workspace: Id, val program: List<String>? = null, val beside: Id? = null, val dir: SplitDir? = null) : Cmd
 
     @Serializable @SerialName("rename_workspace")
     data class RenameWorkspace(val workspace: Id, val name: String) : Cmd
@@ -312,6 +312,21 @@ data class WorkspaceSummary(
     val attention: List<Attention>,
 )
 
+/** Which way a split puts its two sides: a row is side by side, a col one over the other. */
+@Serializable
+enum class SplitDir {
+    @SerialName("row") Row,
+    @SerialName("col") Col,
+}
+
+/** The panes of a workspace as a tree of splits; [Split.ratio] is the share of [Split.a] in thousandths. */
+@Serializable
+@JsonClassDiscriminator("t")
+sealed interface Layout {
+    @Serializable @SerialName("pane") data class Pane(val pane: Id) : Layout
+    @Serializable @SerialName("split") data class Split(val dir: SplitDir, val ratio: Int, val a: Layout, val b: Layout) : Layout
+}
+
 @Serializable
 data class PaneSummary(val id: Id, val title: String, val attention: List<Attention>)
 
@@ -370,6 +385,7 @@ sealed interface Node {
         val project: String? = null,
         val branch: String? = null,
         val panes: List<PaneSummary>,
+        val layout: Layout? = null,
     ) : Node
 
     /** Level 2: one pane, a terminal. */

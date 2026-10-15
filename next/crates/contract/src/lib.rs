@@ -222,6 +222,12 @@ pub enum Cmd {
         workspace: Id,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         program: Option<Vec<String>>,
+        /// Split this pane of the workspace to make room for the new one, along `dir` (a row
+        /// when absent). Without it the pane goes after the last one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        beside: Option<Id>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dir: Option<SplitDir>,
     },
     ClosePane {
         pane: Id,
@@ -346,6 +352,36 @@ pub struct Workspace {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
     pub panes: Vec<PaneSummary>,
+    /// How the panes are laid out: a tree whose leaves are exactly `panes`. Absent from a
+    /// daemon that does not keep one: the client lays them out itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<Layout>,
+}
+
+/// Which way a split puts its two sides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SplitDir {
+    /// Side by side: `a` on the left, `b` on the right.
+    Row,
+    /// One over the other: `a` above, `b` below.
+    Col,
+}
+
+/// The panes of a workspace as a tree of splits.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "t", rename_all = "snake_case")]
+pub enum Layout {
+    Pane {
+        pane: Id,
+    },
+    /// `ratio` is the share of `a`, in thousandths of the split's width or height.
+    Split {
+        dir: SplitDir,
+        ratio: u16,
+        a: Box<Layout>,
+        b: Box<Layout>,
+    },
 }
 
 /// Level 2: one pane, a terminal.

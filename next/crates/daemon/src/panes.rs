@@ -6,7 +6,7 @@ use std::path::Path;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
-use contract::{AttentionKind, ErrorCode, Id};
+use contract::{AttentionKind, ErrorCode, Id, SplitDir};
 use serde_json::json;
 
 use crate::commands::{Done, err};
@@ -29,7 +29,13 @@ pub(crate) fn basename(shell: &str) -> String {
 
 /// Open a pane; with `program`, the shell starts it and stays when it ends. An agent gets
 /// its conversation id here, so a restart can resume it.
-pub fn new_pane(shared: &Shared, workspace: &Id, program: Option<Vec<String>>) -> Done {
+pub fn new_pane(
+    shared: &Shared,
+    workspace: &Id,
+    program: Option<Vec<String>>,
+    beside: Option<Id>,
+    dir: Option<SplitDir>,
+) -> Done {
     if program.as_ref().is_some_and(|p| p.is_empty()) {
         return Err(err(ErrorCode::BadRequest, "program is empty"));
     }
@@ -37,6 +43,15 @@ pub fn new_pane(shared: &Shared, workspace: &Id, program: Option<Vec<String>>) -
     let (path, events, shell, env, setup, hooks) = {
         let core = shared.lock();
         let ws = core.workspace(workspace)?;
+        if beside
+            .as_ref()
+            .is_some_and(|b| !ws.panes.iter().any(|p| p.id == *b))
+        {
+            return Err(err(
+                ErrorCode::BadRequest,
+                "beside is not a pane of this workspace",
+            ));
+        }
         (
             ws.path.clone(),
             core.events.clone(),
@@ -72,6 +87,12 @@ pub fn new_pane(shared: &Shared, workspace: &Id, program: Option<Vec<String>>) -
             format!("workspace {workspace} was removed"),
         ));
     };
+    let ids: Vec<Id> = ws.panes.iter().map(|p| p.id.clone()).collect();
+    if let Some(beside) = beside.filter(|b| ids.contains(b)) {
+        let tree = crate::layout::reconcile(ws.layout.take(), &ids);
+        ws.layout =
+            tree.map(|t| crate::layout::split(t, &beside, &id, dir.unwrap_or(SplitDir::Row)));
+    }
     ws.panes.push(Pane {
         id: id.clone(),
         title: basename(&shell),

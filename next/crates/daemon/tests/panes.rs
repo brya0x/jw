@@ -39,6 +39,8 @@ fn new_pane(c: &mut Client, ws: &str) -> String {
         .cmd(Cmd::NewPane {
             workspace: ws.into(),
             program: None,
+            beside: None,
+            dir: None,
         })
         .unwrap()
         .unwrap()
@@ -370,6 +372,8 @@ fn bad_pane_requests_are_refused() {
         .cmd(Cmd::NewPane {
             workspace: nowhere.clone(),
             program: None,
+            beside: None,
+            dir: None,
         })
         .unwrap()
         .unwrap_err();
@@ -592,5 +596,133 @@ fn a_bad_name_or_an_unknown_node_is_refused() {
         .unwrap()
         .unwrap_err();
     assert_eq!(e.code, ErrorCode::NotFound);
+    d.stop();
+}
+
+fn pane_beside(
+    c: &mut Client,
+    ws: &str,
+    beside: &str,
+    dir: contract::SplitDir,
+) -> Result<String, ErrorCode> {
+    let r = c
+        .cmd(Cmd::NewPane {
+            workspace: ws.into(),
+            program: None,
+            beside: Some(beside.into()),
+            dir: Some(dir),
+        })
+        .unwrap();
+    match r {
+        Ok(v) => Ok(v.unwrap()["pane"].as_str().unwrap().to_owned()),
+        Err(e) => Err(e.code),
+    }
+}
+
+fn layout_of(c: &Client, ws: &str) -> serde_json::Value {
+    c.nodes[ws]["layout"].clone()
+}
+
+fn leaf_ids(layout: &serde_json::Value) -> Vec<String> {
+    match layout["t"].as_str() {
+        Some("pane") => vec![layout["pane"].as_str().unwrap().to_owned()],
+        _ => {
+            let mut v = leaf_ids(&layout["a"]);
+            v.extend(leaf_ids(&layout["b"]));
+            v
+        }
+    }
+}
+
+/// REQ-286 to REQ-291: the layout is a tree the daemon keeps; a new pane splits the one it is
+/// beside, a closed one gives its room to its neighbour, and it survives a restart.
+#[test]
+fn the_layout_splits_where_asked_collapses_on_close_and_survives_a_restart() {
+    use contract::SplitDir::{Col, Row};
+    let (w, d, mut c) = world();
+    c.open(&w.ws).unwrap();
+    assert!(c.wait_until(WAIT, |c| c.nodes.contains_key(&w.ws)).unwrap());
+    assert!(
+        c.nodes[&w.ws].get("layout").is_none(),
+        "no panes, no layout"
+    );
+    let a = new_pane(&mut c, &w.ws);
+    assert!(
+        c.wait_until(WAIT, |c| c.nodes[&w.ws]["layout"]["t"] == "pane")
+            .unwrap()
+    );
+    assert_eq!(layout_of(&c, &w.ws)["pane"], a.as_str());
+    // Beside `a`, to the right (the default), and then below the new one.
+    let b = pane_beside(&mut c, &w.ws, &a, Row).unwrap();
+    let cpane = pane_beside(&mut c, &w.ws, &b, Col).unwrap();
+    assert!(
+        c.wait_until(WAIT, |c| leaf_ids(&c.nodes[&w.ws]["layout"]).len() == 3)
+            .unwrap()
+    );
+    let l = layout_of(&c, &w.ws);
+    assert_eq!(
+        (l["t"].as_str(), l["dir"].as_str(), l["ratio"].as_u64()),
+        (Some("split"), Some("row"), Some(500))
+    );
+    assert_eq!(l["a"]["pane"], a.as_str());
+    assert_eq!(
+        (l["b"]["dir"].as_str(), l["b"]["a"]["pane"].as_str()),
+        (Some("col"), Some(b.as_str()))
+    );
+    assert_eq!(l["b"]["b"]["pane"], cpane.as_str());
+
+    // A restart keeps the tree, with the same panes.
+    drop(c);
+    d.stop();
+    let d = w.sb.start();
+    let mut c = w.sb.client();
+    c.open(&w.ws).unwrap();
+    assert!(c.wait_until(WAIT, |c| c.nodes.contains_key(&w.ws)).unwrap());
+    assert_eq!(layout_of(&c, &w.ws), l);
+
+    // Closing `b` gives its room to `c`: the tree is `a | c`.
+    c.cmd(Cmd::ClosePane { pane: b.clone() }).unwrap().unwrap();
+    assert!(
+        c.wait_until(WAIT, |c| leaf_ids(&c.nodes[&w.ws]["layout"]).len() == 2)
+            .unwrap()
+    );
+    let l = layout_of(&c, &w.ws);
+    assert_eq!(
+        (
+            l["dir"].as_str(),
+            l["a"]["pane"].as_str(),
+            l["b"]["pane"].as_str()
+        ),
+        (Some("row"), Some(a.as_str()), Some(cpane.as_str()))
+    );
+
+    // `beside` must be a pane of the workspace, and a pane made with none goes after the last.
+    assert_eq!(
+        pane_beside(&mut c, &w.ws, "nowhere", Row),
+        Err(ErrorCode::BadRequest)
+    );
+    assert_eq!(
+        pane_beside(&mut c, &w.ws, &b, Row),
+        Err(ErrorCode::BadRequest),
+        "a closed pane"
+    );
+    let last = new_pane(&mut c, &w.ws);
+    assert!(
+        c.wait_until(WAIT, |c| leaf_ids(&c.nodes[&w.ws]["layout"])
+            .contains(&last))
+            .unwrap()
+    );
+    assert_eq!(
+        leaf_ids(&layout_of(&c, &w.ws)),
+        [a.clone(), cpane.clone(), last.clone()]
+    );
+    // Closing every pane leaves none.
+    for p in [a, cpane, last] {
+        c.cmd(Cmd::ClosePane { pane: p }).unwrap().unwrap();
+    }
+    assert!(
+        c.wait_until(WAIT, |c| c.nodes[&w.ws].get("layout").is_none())
+            .unwrap()
+    );
     d.stop();
 }

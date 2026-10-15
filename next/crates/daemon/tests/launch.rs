@@ -50,6 +50,8 @@ fn new_pane(c: &mut Client, ws: &str, program: Option<Vec<&str>>) -> String {
         .cmd(Cmd::NewPane {
             workspace: ws.into(),
             program,
+            beside: None,
+            dir: None,
         })
         .unwrap()
         .unwrap()
@@ -131,6 +133,8 @@ fn an_empty_program_is_refused() {
         .cmd(Cmd::NewPane {
             workspace: ws,
             program: Some(vec![]),
+            beside: None,
+            dir: None,
         })
         .unwrap()
         .unwrap_err();

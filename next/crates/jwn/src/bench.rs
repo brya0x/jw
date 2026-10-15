@@ -82,6 +82,8 @@ fn measure(dir: &std::path::Path, socket: &std::path::Path) -> Result<(), String
                 .cmd(Cmd::NewPane {
                     workspace: ws.clone(),
                     program: None,
+                    beside: None,
+                    dir: None,
                 })
                 .map_err(e)?
                 .map_err(|x| x.message)?;

@@ -37,6 +37,8 @@ fn new_pane(c: &mut Client, ws: &str, program: Option<Vec<&str>>) -> String {
         .cmd(Cmd::NewPane {
             workspace: ws.into(),
             program: program.map(|p| p.into_iter().map(str::to_owned).collect()),
+            beside: None,
+            dir: None,
         })
         .unwrap()
         .unwrap()

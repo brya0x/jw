@@ -708,6 +708,12 @@ impl Core {
 
     /// Rebuild every document from the model; patch what changed; save the model.
     pub fn refresh(&mut self) {
+        for ws in &mut self.model.workspaces {
+            let ids: Vec<Id> = ws.panes.iter().map(|p| p.id.clone()).collect();
+            if !crate::layout::agrees(&ws.layout, &ids) {
+                ws.layout = crate::layout::reconcile(ws.layout.take(), &ids);
+            }
+        }
         self.assign_attention_revs();
         let live: HashSet<Id> = self.model.workspaces.iter().map(|w| w.id.clone()).collect();
         self.diffs.retain(|_, e| live.contains(&e.workspace));
@@ -919,6 +925,7 @@ impl Core {
                 project,
                 branch: ws.branch.clone(),
                 panes,
+                layout: ws.layout.clone(),
             }));
         }
         nodes.push(Node::Session(Session {
@@ -1041,6 +1048,7 @@ mod tests {
                 last_program: None,
                 resume: None,
             }],
+            layout: None,
             attention: vec![],
             github: None,
         });

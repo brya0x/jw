@@ -79,6 +79,8 @@ fn a_merged_or_failing_pull_request_is_attention_that_comes_back_only_when_it_ch
     c.cmd(Cmd::NewPane {
         workspace: ws.clone(),
         program: None,
+        beside: None,
+        dir: None,
     })
     .unwrap()
     .unwrap();

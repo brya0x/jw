@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use contract::{
     Attention, AttentionKind, Blocks, BlocksMode, Cmd, DiffScope, Node, Pane, Program, Session,
-    Workspace, WorkspaceKind,
+    SplitDir, Workspace, WorkspaceKind,
 };
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
@@ -34,6 +34,7 @@ mod programs;
 mod settings;
 mod shell;
 mod side;
+mod split;
 
 pub use changes::Ask;
 use changes::{Changes, Docs, Outcome, Src};
@@ -318,6 +319,11 @@ pub enum Key {
     Worktree,
     /// Push the highlighted worktree's branch.
     Sync,
+    /// A new panel beside the focused one, to its right (`|`) or below it (`-`).
+    SplitRow,
+    SplitCol,
+    /// The next panel in the order they were made.
+    Next,
     /// The phone link: its box.
     Phone,
     /// With a block selected: copy its command, copy its output, run it again.
@@ -328,16 +334,24 @@ pub enum Key {
     Quit,
 }
 
+/// Where a new panel goes: it splits this one, along this way.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Place {
+    pub beside: Option<String>,
+    pub dir: SplitDir,
+}
+
 #[derive(PartialEq, Eq, Debug)]
 pub enum After {
     Continue,
     Quit,
-    /// Ask the daemon for a new pane in this workspace.
-    NewPane(String),
+    /// Ask the daemon for a new pane in this workspace, where `Place` says.
+    NewPane(String, Place),
     /// Ask the daemon for a new pane that starts this program (the program and its arguments).
     NewProgram {
         workspace: String,
         program: Vec<String>,
+        place: Place,
     },
     /// Bytes for a pane's shell: what was typed.
     Write {
@@ -450,6 +464,8 @@ pub struct View {
     /// A workspace made by the client's own request, to open when it shows up in the session
     /// (or at the time given, in `now_ms`, if it does not).
     goto: Option<(String, u64)>,
+    /// A panel this client asked for, to focus when it appears in its workspace.
+    new_pane: Option<String>,
     /// The focused panel fills the area, and the box of the keys of the level is open.
     full: bool,
     help: bool,
@@ -505,6 +521,7 @@ impl View {
             worktree: None,
             goto: None,
             full: false,
+            new_pane: None,
             help: false,
             phone: phone::State::Off,
             phone_open: false,
@@ -738,6 +755,13 @@ impl View {
 
     /// A workspace or a pane that was closed leaves the highlight on its neighbour.
     fn clamp(&mut self) {
+        if let Some(at) = self.new_pane.as_ref().and_then(|id| {
+            self.shown()
+                .and_then(|d| d.panes.iter().position(|p| p.id == *id))
+        }) {
+            self.focus = at;
+            self.new_pane = None;
+        }
         let workspaces = self.session.as_ref().map_or(0, |s| s.workspaces.len());
         self.selected = self.selected.min(workspaces.saturating_sub(1));
         if let Some(panes) = self.shown().map(|w| w.panes.len()) {
@@ -936,10 +960,20 @@ impl View {
         }
     }
 
-    /// The rectangles of the panels: while one is shown full, it has the whole area and the
-    /// others none.
-    fn layout(&self, n: usize, area: Rect) -> Vec<Rect> {
-        let mut rects = pane_rects(n, area);
+    /// The rectangles of the panels, in the order of `doc.panes`: those of the daemon's layout, or
+    /// the client's own arrangement when the daemon keeps none. While one is shown full, it has
+    /// the whole area and the others none.
+    fn layout(&self, doc: &Workspace, area: Rect) -> Vec<Rect> {
+        let mut rects = match &doc.layout {
+            Some(tree) => {
+                let at = split::rects(tree, area);
+                doc.panes
+                    .iter()
+                    .map(|p| at.get(p.id.as_str()).copied().unwrap_or((0, 0, 0, 0)))
+                    .collect()
+            }
+            None => pane_rects(doc.panes.len(), area),
+        };
         if self.full && self.level() != Level::Workspaces {
             for (i, r) in rects.iter_mut().enumerate() {
                 *r = if i == self.focus { area } else { (0, 0, 0, 0) };
@@ -960,6 +994,54 @@ impl View {
         };
         self.opened = None;
         self.focus = 0;
+    }
+
+    /// Where a new panel goes: beside the focused one, along `dir` or, when none is given, along
+    /// the longer side of the focused panel.
+    fn place(&self, dir: Option<SplitDir>) -> Place {
+        let doc = self.shown();
+        let beside = doc
+            .and_then(|d| d.panes.get(self.focus))
+            .map(|p| p.id.clone());
+        let dir = dir.unwrap_or_else(|| {
+            let (cols, rows) = self.size;
+            doc.and_then(|d| {
+                self.layout(d, panes_rect(cols, rows))
+                    .get(self.focus)
+                    .copied()
+            })
+            .map_or(SplitDir::Row, split::auto_dir)
+        });
+        Place { beside, dir }
+    }
+
+    /// Focus the panel on this side of the focused one, when there is one.
+    fn focus_toward(&mut self, side: split::Side) {
+        let Some(doc) = self.shown() else {
+            return;
+        };
+        let Some(tree) = &doc.layout else {
+            self.go_panel(matches!(side, split::Side::Right | split::Side::Down));
+            return;
+        };
+        let (cols, rows) = self.size;
+        let at = split::rects(tree, panes_rect(cols, rows));
+        let Some(to) = doc
+            .panes
+            .get(self.focus)
+            .and_then(|p| split::neighbour(&at, &p.id, side))
+            .and_then(|id| doc.panes.iter().position(|p| p.id == id))
+        else {
+            return;
+        };
+        self.focus = to;
+    }
+
+    /// The panel the client just asked for takes the focus as soon as it shows up.
+    pub fn focus_new(&mut self, reply: &Reply) {
+        if let Ok(Ok(Some(r))) = reply {
+            self.new_pane = r["pane"].as_str().map(str::to_owned);
+        }
     }
 
     /// Focus the next or the previous panel of the open workspace.
@@ -1333,8 +1415,12 @@ impl View {
             return After::Continue;
         };
         match pick {
-            Pick::Shell => After::NewPane(workspace),
-            Pick::Program(program) => After::NewProgram { workspace, program },
+            Pick::Shell => After::NewPane(workspace, self.place(None)),
+            Pick::Program(program) => After::NewProgram {
+                workspace,
+                program,
+                place: self.place(None),
+            },
         }
     }
 
@@ -1558,8 +1644,8 @@ impl View {
     /// should wrap where its box does.
     pub fn take_resize(&mut self, cols: usize, rows: usize) -> Option<(String, u16, u16)> {
         let pane = self.typing_pane()?;
-        let n = self.workspaces.get(self.opened.as_deref()?)?.panes.len();
-        let (_, _, w, h) = *self.layout(n, panes_rect(cols, rows)).get(self.focus)?;
+        let doc = self.workspaces.get(self.opened.as_deref()?)?;
+        let (_, _, w, h) = *self.layout(doc, panes_rect(cols, rows)).get(self.focus)?;
         let want = (
             pane,
             h.saturating_sub(2).max(1) as u16,
@@ -1609,11 +1695,18 @@ impl View {
             (Mode::Workspaces, Key::Up) if level == Level::Workspaces => {
                 self.select_workspace(false)
             }
-            (Mode::Workspaces, Key::Down | Key::Right) if level == Level::Panels => {
-                self.go_panel(true)
+            (Mode::Workspaces, Key::Next) if level == Level::Panels => self.go_panel(true),
+            (Mode::Workspaces, Key::Left) if level == Level::Panels => {
+                self.focus_toward(split::Side::Left)
             }
-            (Mode::Workspaces, Key::Up | Key::Left) if level == Level::Panels => {
-                self.go_panel(false)
+            (Mode::Workspaces, Key::Right) if level == Level::Panels => {
+                self.focus_toward(split::Side::Right)
+            }
+            (Mode::Workspaces, Key::Up) if level == Level::Panels => {
+                self.focus_toward(split::Side::Up)
+            }
+            (Mode::Workspaces, Key::Down) if level == Level::Panels => {
+                self.focus_toward(split::Side::Down)
             }
             (Mode::Workspaces, Key::Enter) => match level {
                 Level::Workspaces => {
@@ -1650,9 +1743,16 @@ impl View {
                     self.changes = Some(Changes::open(&id));
                 }
             }
-            (Mode::Workspaces, Key::NewPane) if level == Level::Panels => {
+            (Mode::Workspaces, Key::NewPane | Key::SplitRow | Key::SplitCol)
+                if level == Level::Panels =>
+            {
                 if let Some(id) = self.selected_id() {
-                    return After::NewPane(id);
+                    let dir = match key {
+                        Key::SplitRow => Some(SplitDir::Row),
+                        Key::SplitCol => Some(SplitDir::Col),
+                        _ => None,
+                    };
+                    return After::NewPane(id, self.place(dir));
                 }
             }
             (Mode::Workspaces, Key::NewProgram) if level == Level::Panels => {
@@ -1849,7 +1949,7 @@ impl View {
         }
         if let Some(doc) = self.shown() {
             let id = doc.head.id.clone();
-            let rects = self.layout(doc.panes.len(), panes_rect(cols, rows));
+            let rects = self.layout(doc, panes_rect(cols, rows));
             if let Some(i) = rects.iter().position(|r| inside(*r, x, y)) {
                 let pane = doc.panes[i].id.clone();
                 self.open(&id, i);
@@ -1892,7 +1992,7 @@ impl View {
         let Some(doc) = self.shown() else {
             return After::Continue;
         };
-        let rects = self.layout(doc.panes.len(), panes_rect(cols, rows));
+        let rects = self.layout(doc, panes_rect(cols, rows));
         let Some(i) = rects.iter().position(|r| inside(*r, x, y)) else {
             return After::Continue;
         };
@@ -2113,7 +2213,7 @@ impl View {
                 (_, Level::Panels) => (
                     " PANEL ",
                     look::magenta(),
-                    "h/l panel · ↵ escribir · n nuevo · N con programa · r nombrar · f completa · x cerrar · esc volver · ? teclas",
+                    "hjkl panel · ↵ escribir · n | - nuevo · N con programa · r nombrar · f completa · x cerrar · esc volver · ? teclas",
                 ),
                 (_, Level::Workspaces) => (
                     " WORKSPACE ",
@@ -2227,7 +2327,7 @@ impl View {
             );
             return;
         }
-        let rects = self.layout(n, (x, y, w, h));
+        let rects = self.layout(doc, (x, y, w, h));
         let opened = self.opened.as_deref() == Some(doc.head.id.as_str());
         for (i, (summary, rect)) in doc.panes.iter().zip(rects).enumerate() {
             if rect.2 == 0 {
@@ -2466,9 +2566,11 @@ const WORKSPACE_KEYS: &[(&str, &str)] = &[
     ("q", "salir (los paneles siguen)"),
 ];
 const PANEL_KEYS: &[(&str, &str)] = &[
-    ("h j k l", "cambiar de panel"),
+    ("h j k l", "ir al panel de ese lado"),
+    ("tab", "el panel siguiente"),
     ("↵", "escribir en el panel"),
-    ("n", "panel nuevo (shell)"),
+    ("n", "panel nuevo (por el lado más largo)"),
+    ("| -", "panel nuevo a la derecha · debajo"),
     ("N", "panel nuevo con un programa (^␣ N)"),
     ("r", "nombrar el panel"),
     ("f", "el panel a pantalla completa"),
@@ -2690,7 +2792,10 @@ fn key_of(code: KeyCode) -> Option<Key> {
         KeyCode::Char('j') | KeyCode::Down => Key::Down,
         KeyCode::Char('k') | KeyCode::Up => Key::Up,
         KeyCode::Char('h') | KeyCode::Left => Key::Left,
-        KeyCode::Char('l') | KeyCode::Right | KeyCode::Tab => Key::Right,
+        KeyCode::Char('l') | KeyCode::Right => Key::Right,
+        KeyCode::Tab => Key::Next,
+        KeyCode::Char('|') => Key::SplitRow,
+        KeyCode::Char('-') => Key::SplitCol,
         KeyCode::Enter => Key::Enter,
         KeyCode::Char('a') => Key::Avisos,
         KeyCode::Char('n') => Key::NewPane,
@@ -2872,6 +2977,8 @@ fn shown_in_a_pane(view: &mut View, client: &mut Client, reply: Reply, failed: &
                 match client.cmd(Cmd::NewPane {
                     workspace: ws.to_owned(),
                     program: None,
+                    beside: None,
+                    dir: None,
                 }) {
                     Ok(Ok(_)) => {}
                     Ok(Err(e)) => view.manage_failed("No se pudo abrir un panel", &e.message),
@@ -3026,20 +3133,37 @@ pub fn run() -> Result<(), String> {
                 After::Write { pane, data } => {
                     let _ = client.send(Cmd::Write { pane, data });
                 }
-                After::NewPane(workspace) => {
-                    let _ = client.cmd(Cmd::NewPane {
+                After::NewPane(workspace, place) => {
+                    let reply = client.cmd(Cmd::NewPane {
                         workspace,
                         program: None,
+                        beside: place.beside,
+                        dir: Some(place.dir),
                     });
+                    view.focus_new(&reply);
                 }
-                After::NewProgram { workspace, program } => match client.cmd(Cmd::NewPane {
+                After::NewProgram {
                     workspace,
-                    program: Some(program),
-                }) {
-                    Ok(Ok(_)) => {}
-                    Ok(Err(e)) => view.manage_failed("No se pudo abrir el programa", &e.message),
-                    Err(e) => view.manage_failed("No se pudo abrir el programa", &e.to_string()),
-                },
+                    program,
+                    place,
+                } => {
+                    let reply = client.cmd(Cmd::NewPane {
+                        workspace,
+                        program: Some(program),
+                        beside: place.beside,
+                        dir: Some(place.dir),
+                    });
+                    view.focus_new(&reply);
+                    match reply {
+                        Ok(Ok(_)) => {}
+                        Ok(Err(e)) => {
+                            view.manage_failed("No se pudo abrir el programa", &e.message)
+                        }
+                        Err(e) => {
+                            view.manage_failed("No se pudo abrir el programa", &e.to_string())
+                        }
+                    }
+                }
                 After::OpenFolder { path, create } => {
                     if create && let Err(e) = std::fs::create_dir(&path) {
                         view.manage_failed("No se pudo crear la carpeta", &e.to_string());
@@ -3162,8 +3286,14 @@ mod tests {
         .collect()
     }
 
+    /// The rectangles of the panels of the workspace shown.
+    fn rects_of(v: &View, area: Rect) -> Vec<Rect> {
+        v.layout(v.shown().unwrap(), area)
+    }
+
     fn fixture_view() -> View {
         let mut v = View::new("fixtures");
+        v.set_size(120, 30);
         v.sync(fixture_docs().iter());
         v
     }
@@ -4010,9 +4140,9 @@ mod tests {
         );
         assert!(v.typing_pane().is_none());
         assert!(v.plain(120, 30).lines().last().unwrap().contains("PANEL"));
-        // Now `j` moves to the next panel, as at the panel level.
+        // Now `l` moves to the panel on the right, as at the panel level.
         let focus = v.focus;
-        v.press_key(plain(KeyCode::Char('j')));
+        v.press_key(plain(KeyCode::Char('l')));
         assert_eq!(v.focus, focus + 1);
         // Enter goes back to typing in that panel.
         v.press_key(plain(KeyCode::Enter));
@@ -4059,7 +4189,7 @@ mod tests {
             "not at the workspace level"
         );
         v.press(Key::Enter);
-        assert!(matches!(v.press(Key::NewPane), After::NewPane(_)));
+        assert!(matches!(v.press(Key::NewPane), After::NewPane(..)));
     }
 
     const PROGRAMS: &str = "[[program]]\nname = \"claude\"\nkey = \"c\"\ncommand = [\"claude\"]\n\n[[program]]\nname = \"claude opus\"\nkey = \"o\"\ncommand = [\"claude\", \"--model\", \"opus\"]\n";
@@ -4092,7 +4222,7 @@ mod tests {
         assert!(v.launcher.is_none());
         assert!(matches!(
             v.press_key(plain(KeyCode::Char('n'))),
-            After::NewPane(_)
+            After::NewPane(..)
         ));
     }
 
@@ -4100,6 +4230,8 @@ mod tests {
     fn the_menu_starts_a_program_by_its_row_or_its_letter_in_the_workspace_the_keys_are_on() {
         let mut v = menu_view();
         let workspace = v.selected_id().unwrap();
+        let place = v.place(None);
+        assert!(place.beside.is_some(), "beside the focused panel");
         v.press_key(shift_n());
         v.press_key(plain(KeyCode::Char('j')));
         v.press_key(plain(KeyCode::Char('j')));
@@ -4108,6 +4240,7 @@ mod tests {
             After::NewProgram {
                 workspace: workspace.clone(),
                 program: vec!["claude".into(), "--model".into(), "opus".into()],
+                place: place.clone(),
             }
         );
         assert!(v.launcher.is_none(), "a pick closes the menu");
@@ -4117,12 +4250,13 @@ mod tests {
             After::NewProgram {
                 workspace: workspace.clone(),
                 program: vec!["claude".into()],
+                place: place.clone(),
             }
         );
         v.press_key(shift_n());
         assert_eq!(
             v.press_key(plain(KeyCode::Enter)),
-            After::NewPane(workspace),
+            After::NewPane(workspace, place),
             "the first row is the shell"
         );
     }
@@ -4806,6 +4940,88 @@ mod tests {
     }
 
     #[test]
+    fn the_daemons_layout_decides_where_the_panels_are() {
+        let v = idle_view();
+        let area = panes_rect(120, 30);
+        let r = rects_of(&v, area);
+        assert_eq!(r.len(), 2);
+        assert_eq!(
+            (r[0].1, r[0].3, r[1].1, r[1].3),
+            (area.1, area.3, area.1, area.3)
+        );
+        assert_eq!(r[0].0 + r[0].2, r[1].0, "side by side, meeting");
+        assert_eq!(r[0].2 + r[1].2, area.2);
+    }
+
+    #[test]
+    fn a_workspace_with_no_layout_is_arranged_by_the_client_and_l_goes_to_the_next_panel() {
+        let mut v = idle_view();
+        let id = v.opened.clone().unwrap();
+        v.workspaces.get_mut(&id).unwrap().layout = None;
+        v.focus = 0;
+        v.press(Key::Right);
+        assert_eq!(v.focus, 1);
+        assert_eq!(rects_of(&v, panes_rect(120, 30)).len(), 2);
+    }
+
+    #[test]
+    fn bar_and_pipe_split_the_focused_panel_below_and_to_the_right_and_n_along_its_longer_side() {
+        let mut v = idle_view();
+        let first = v.shown().unwrap().panes[0].id.clone();
+        let ws = v.selected_id().unwrap();
+        let place = |dir| Place {
+            beside: Some(first.clone()),
+            dir,
+        };
+        assert_eq!(
+            v.press_key(plain(KeyCode::Char('|'))),
+            After::NewPane(ws.clone(), place(SplitDir::Row))
+        );
+        assert_eq!(
+            v.press_key(plain(KeyCode::Char('-'))),
+            After::NewPane(ws.clone(), place(SplitDir::Col))
+        );
+        // A panel 45 wide and 28 high is tall: `n` splits it below. At 240 columns it is wide.
+        assert_eq!(
+            v.press_key(plain(KeyCode::Char('n'))),
+            After::NewPane(ws.clone(), place(SplitDir::Col))
+        );
+        v.set_size(240, 30);
+        assert_eq!(
+            v.press_key(plain(KeyCode::Char('n'))),
+            After::NewPane(ws, place(SplitDir::Row))
+        );
+    }
+
+    #[test]
+    fn the_panel_asked_for_takes_the_focus_when_it_appears() {
+        let mut v = idle_view();
+        let second = v.shown().unwrap().panes[1].id.clone();
+        v.focus = 0;
+        v.focus_new(&Ok(Ok(Some(serde_json::json!({ "pane": second })))));
+        assert_eq!(v.focus, 0, "not before it is there to be focused");
+        v.sync(fixture_docs().iter());
+        assert_eq!(v.focus, 1);
+        v.focus = 0;
+        v.sync(fixture_docs().iter());
+        assert_eq!(v.focus, 0, "only once");
+        v.focus_new(&Ok(Err(ErrorBody {
+            code: contract::ErrorCode::BadRequest,
+            message: "no".into(),
+        })));
+        assert!(v.new_pane.is_none());
+    }
+
+    #[test]
+    fn tab_goes_to_the_next_panel_in_the_order_they_were_made() {
+        let mut v = idle_view();
+        v.focus = 0;
+        assert_eq!(key_of(KeyCode::Tab), Some(Key::Next));
+        v.press(Key::Next);
+        assert_eq!(v.focus, 1);
+    }
+
+    #[test]
     fn j_and_k_move_the_workspaces_at_the_first_level_and_the_panels_at_the_second() {
         let mut v = fixture_view();
         v.press_key(plain(KeyCode::Char('j')));
@@ -4813,12 +5029,14 @@ mod tests {
         v.press_key(plain(KeyCode::Char('k')));
         assert_eq!(v.selected, 0);
         v.press_key(plain(KeyCode::Enter));
-        v.press_key(plain(KeyCode::Char('j')));
+        v.press_key(plain(KeyCode::Char('l')));
         assert_eq!(
             (v.selected, v.focus),
             (0, 1),
-            "the next panel, not the next workspace"
+            "the panel on the right, not the next workspace"
         );
+        v.press_key(plain(KeyCode::Char('j')));
+        assert_eq!(v.focus, 1, "nothing is below it");
         v.press_key(plain(KeyCode::Char('h')));
         assert_eq!(v.focus, 0);
         // `h` and `l` do nothing at the first level.
@@ -4851,12 +5069,12 @@ mod tests {
     #[test]
     fn n_makes_a_panel_only_at_the_panel_level_and_f_fills_the_area_with_one() {
         let mut v = idle_view();
-        assert!(matches!(v.press(Key::NewPane), After::NewPane(_)));
+        assert!(matches!(v.press(Key::NewPane), After::NewPane(..)));
         let area = panes_rect(120, 30);
-        let two = v.layout(2, area);
+        let two = rects_of(&v, area);
         assert_ne!(two[0], area, "two panels share the area");
         v.press(Key::Full);
-        let full = v.layout(2, area);
+        let full = rects_of(&v, area);
         assert_eq!(full[v.focus], area);
         assert!(
             full.iter()
@@ -4872,7 +5090,7 @@ mod tests {
         // Back at the workspaces it is not full any more.
         v.press(Key::Back);
         assert!(!v.full);
-        assert_eq!(v.layout(2, area), two);
+        assert_eq!(rects_of(&v, area), two);
         // And `f` does nothing there.
         v.press(Key::Full);
         assert!(!v.full);

@@ -32,6 +32,9 @@ pub struct Workspace {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
     pub panes: Vec<Pane>,
+    /// How the panes are laid out; made to agree with `panes` whenever the model changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<contract::Layout>,
     #[serde(skip)]
     pub attention: Vec<Own>,
     /// What was last seen of the branch's pull request, so an attention is raised when it

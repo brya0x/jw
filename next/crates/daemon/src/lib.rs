@@ -12,6 +12,7 @@ mod github;
 mod grouping;
 mod integration;
 mod launch;
+mod layout;
 mod mobile;
 mod model;
 mod panes;

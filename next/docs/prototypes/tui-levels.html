@@ -68,6 +68,7 @@ button:hover{border-color:var(--blue)}
       <li><b>Level 2 · PANEL</b> (the panels of the workspace). <code>h</code>/<code>j</code>/<code>k</code>/<code>l</code> change panel, <code>↵</code> starts typing in it. <code>n</code> makes a new panel, <code>r</code> names the panel, <code>f</code> shows it full screen, <code>x</code> closes it. <code>esc</code> goes back to the workspaces. Workspace commands that do not clash (<code>o</code> <code>w</code> <code>s</code> <code>d</code>) work here too, and so do <code>a</code> avisos, <code>m</code> phone and <code>,</code> settings at both levels.</li>
       <li><b>Level 3 · TERMINAL</b> (typing). Everything goes to the program, <code>esc</code> and <code>ctrl</code> keys included (nvim, claude and the shell use them). The only way out is <code>^␣</code>, which takes you to the panel level; so the old muscle memory still works: <code>^␣ x</code>, <code>^␣ n</code>, <code>^␣ m</code> are the key you would press at level 2.</li>
       <li><b>Remove a worktree</b> (<code>x</code>, then <code>d</code>): git is asked what would be lost. With nothing to lose it is one <code>y</code>. With files not committed the box lists them and asks you to type the branch's name before it goes ahead, and then the folder goes by force. The branch always stays, with its commits (the box says how many are not pushed; <code>s</code> pushes them).</li>
+      <li><b>The panels' layout is a tree the daemon keeps</b> for each workspace, so it survives closing the terminal client and restarting the daemon. At the panel level: <code>h</code> <code>j</code> <code>k</code> <code>l</code> go to the panel on that side (by where the boxes are, no longer by number); <code>H</code> <code>J</code> <code>K</code> <code>L</code> swap the panel with the one on that side; <code>|</code> splits to the right and <code>-</code> below; <code>n</code> splits along the longer side of the focused panel (and <code>N</code> does the same with a program); <code>&lt;</code> <code>&gt;</code> make the panel narrower or wider, <code>{</code> <code>}</code> lower or taller (5 % a press, never under 10 %); <code>x</code> closes a panel and its space goes to its neighbour. Dragging a border with the mouse comes with the mouse part. A workspace made before layouts opens with its first panel on the left and the rest stacked on the right, as today.</li>
       <li><b>Where you are is always visible</b>: the chip (WORKSPACE, PANEL, TERMINAL), a blue border on the active area only, and the keys of the level on the status bar. <code>?</code> opens the whole list of the level.</li>
       <li><b>The mouse goes straight in</b>: a click on a workspace opens it (panel level) and a click on a panel starts typing in it (terminal level).</li>
       <li><b>The list is grouped</b>: each repository's root, then its worktrees indented under it (<code>↳</code>, the dot and the name moved four columns in); a worktree whose root is not open sits under the repository's name; the folders that are not repositories come last under <code>carpetas</code>. The numbers and <code>j</code>/<code>k</code> follow what is drawn; headings are not highlighted. The same grouping is on the phone.</li>
@@ -86,6 +87,7 @@ const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;
 const COLS = 112, ROWS = 28, SB = 28;
 let S, g;
 const LV = {1:['WORKSPACE','chip-blue'], 2:['PANEL','chip-mag'], 3:['TERMINAL','chip-green']};
+let PID = 0;
 function reset(){
   S = { busy:null, fail:null, rm:null, delBranch:false, level:1, sel:1, focus:0, full:false, ask:null, input:null, help:false, leader:false, msg:'', prog:false, typed:'', menu:null,
     // The daemon's order: each repository's root first and its worktrees after it, then the folders that are not repositories.
@@ -95,6 +97,7 @@ function reset(){
          {name:'fix/typo', kind:'worktree', project:'tools', path:'~/ws/tools-wt/fix-typo', git:{remote:true, ahead:0, dirty:[]}, panes:[{t:'zsh'}]},
          {name:'notes', kind:'folder', path:'~/notes', panes:[{t:'zsh'}]},
          {name:'infra', kind:'folder', path:'~/ws/infra', panes:[]} ] };
+  S.ws.forEach(w => w.panes.forEach(p => { p.id = ++PID; }));
 }
 const grid = () => ({cells:Array.from({length:ROWS}, () => Array.from({length:COLS}, () => [' ', '']))});
 const put = (x, y, text, cls = '') => { if (y < 0 || y >= ROWS) return; [...text].forEach((ch, i) => { const cx = x + i; if (cx >= 0 && cx < COLS) g.cells[y][cx] = [ch, cls]; }); };
@@ -169,13 +172,13 @@ function showToml(){
 }
 const KEYS = {
   1: [['j k','mover'],['↵','entrar al workspace'],['r','renombrar el worktree'],['x','cerrar'],['o','abrir una carpeta'],['w','worktree nuevo'],['s','subir el worktree a origin'],['d','ver cambios'],['a','avisos'],['m','teléfono'],[',','ajustes'],['q','salir']],
-  2: [['h j k l','cambiar de panel'],['↵','escribir en el panel'],['n','panel nuevo (shell)'],['N','panel nuevo con un programa'],['r','nombrar el panel'],['f','pantalla completa'],['x','cerrar el panel'],['o w s d','como en workspaces'],['a m ,','avisos · teléfono · ajustes'],['esc','volver a workspaces']],
+  2: [['h j k l','ir al panel de esa dirección'],['H J K L','intercambiar con el panel de esa dirección'],['↵','escribir en el panel'],['n','panel nuevo (por el lado más largo)'],['| -','dividir: a la derecha · debajo'],['< >','panel más estrecho · más ancho'],['{ }','panel más bajo · más alto'],['N','panel nuevo con un programa'],['r','nombrar el panel'],['f','pantalla completa'],['x','cerrar el panel'],['o w s d','como en workspaces'],['a m ,','avisos · teléfono · ajustes'],['esc','volver a workspaces']],
   menu: [['j k','mover'],['↵','abrir en un panel nuevo'],['letra','abre ese programa'],['esc','cancelar']],
   3: [['todo','va al programa (esc y ctrl incluidos)'],['^␣','salir al nivel de paneles']]
 };
 const hint = () => S.rm ? (S.rm.stage === 'risk' ? 'escribe el nombre de la rama · ↵ quitar · esc volver' : S.rm.stage === 'check' ? 'esc volver' : 'y quitar · esc volver') : S.busy ? 'subiendo… espera' : S.fail ? 'cualquier tecla para cerrar' : S.menu ? 'j/k mover · ↵ abrir · letra directa · esc cancelar' : S.input ? '↵ aceptar · esc cancelar' : S.ask ? 'y sí · esc cancelar' : S.help ? 'cualquier tecla para cerrar'
   : S.level === 1 ? 'j/k mover · ↵ entrar · r renombrar · x cerrar · o carpeta · w worktree · s subir · ? teclas · q salir'
-  : S.level === 2 ? 'h/l panel · ↵ escribir · n nuevo · N con programa · r nombrar · f completa · x cerrar · esc volver · ? teclas'
+  : S.level === 2 ? 'hjkl panel · HJKL mover · ↵ escribir · n | - nuevo · < > { } tamaño · x cerrar · esc volver · ? teclas'
   : 'escribes en el panel · ^␣ para salir';
 function modalBox(w, lines, title, cls){
   const h = lines.length + 4, bx = SB + 1 + Math.floor((COLS - SB - 1 - w) / 2), by = 4;
@@ -188,6 +191,68 @@ function modalBox(w, lines, title, cls){
 function atRisk(w){
   const gt = w.git, unpushed = S.delBranch && gt.ahead > 0 ? gt.ahead : 0;
   return {files: gt.dirty, commits: unpushed, kept: !S.delBranch && gt.ahead > 0 ? gt.ahead : 0, any: gt.dirty.length > 0 || unpushed > 0};
+}
+// The panes' layout is a tree the daemon keeps for each workspace: a leaf is a pane, a split has a direction
+// (row: side by side, col: one over the other), the share of the first child in thousandths, and two children.
+// Without one (a workspace the daemon had before layouts) it is made from the panes: the first on the left, the rest stacked on the right.
+const leaf = id => ({pane: id});
+function treeOf(w){
+  if (!w.tree){
+    const ids = w.panes.map(p => p.id);
+    if (!ids.length) return null;
+    const stack = a => a.length === 1 ? leaf(a[0]) : {dir:'col', ratio: Math.round(1000 / a.length), a: leaf(a[0]), b: stack(a.slice(1))};
+    w.tree = ids.length === 1 ? leaf(ids[0]) : {dir:'row', ratio:500, a: leaf(ids[0]), b: stack(ids.slice(1))};
+  }
+  return w.tree;
+}
+function rectsOf(node, [x, y, w, h], out = {}){
+  if (node.pane !== undefined){ out[node.pane] = [x, y, w, h]; return out; }
+  if (node.dir === 'row'){ const a = Math.round(w * node.ratio / 1000); rectsOf(node.a, [x, y, a, h], out); rectsOf(node.b, [x + a, y, w - a, h], out); }
+  else { const a = Math.round(h * node.ratio / 1000); rectsOf(node.a, [x, y, w, a], out); rectsOf(node.b, [x, y + a, w, h - a], out); }
+  return out;
+}
+const AREA = () => [SB + 1, 1, COLS - SB - 1, ROWS - 2];
+const rectMap = w => { const t = treeOf(w); return t ? rectsOf(t, AREA()) : {}; };
+function findPath(node, id, path = []){
+  if (node.pane !== undefined) return node.pane === id ? path : null;
+  return findPath(node.a, id, [...path, 'a']) || findPath(node.b, id, [...path, 'b']);
+}
+const at = (t, path) => path.reduce((n, k) => n[k], t);
+function splitPane(dir){
+  const w = W(), t = treeOf(w), cur = w.panes[S.focus];
+  if (!cur) return;
+  if (w.panes.length >= 6){ flash('este prototipo muestra hasta 6 paneles'); return; }
+  const np = {t:'zsh', id: ++PID}; w.panes.push(np);
+  const path = findPath(t, cur.id), node = at(t, path), repl = {dir, ratio:500, a: node, b: leaf(np.id)};
+  if (!path.length) w.tree = repl; else at(t, path.slice(0, -1))[path[path.length - 1]] = repl;
+  S.focus = w.panes.length - 1; S.full = false;
+  flash(dir === 'row' ? 'panel nuevo a la derecha' : 'panel nuevo debajo');
+}
+// `n`: along the pane's longer side (a cell is about twice as tall as wide)
+function autoDir(){ const w = W(), r = rectMap(w)[w.panes[S.focus].id]; return r && r[2] >= 2 * r[3] ? 'row' : 'col'; }
+function dropLeaf(w, id){
+  const t = treeOf(w), path = findPath(t, id);
+  if (!path.length){ w.tree = null; return; }
+  const parent = at(t, path.slice(0, -1)), sibling = parent[path[path.length - 1] === 'a' ? 'b' : 'a'];
+  if (path.length === 1) w.tree = sibling; else at(t, path.slice(0, -2))[path[path.length - 2]] = sibling;
+}
+// The neighbour of a pane on one side, by where the boxes are
+function neighbour(w, id, side){
+  const m = rectMap(w), [x, y, bw, bh] = m[id], cx = x + bw / 2, cy = y + bh / 2; let best = null, bd = 1e9;
+  for (const [oid, [ox, oy, ow, oh]] of Object.entries(m)){ if (+oid === id) continue;
+    const ocx = ox + ow / 2, ocy = oy + oh / 2;
+    const ok = side === 'h' ? ox + ow <= x + 1 && oy < y + bh && oy + oh > y : side === 'l' ? ox >= x + bw - 1 && oy < y + bh && oy + oh > y
+      : side === 'k' ? oy + oh <= y + 1 && ox < x + bw && ox + ow > x : oy >= y + bh - 1 && ox < x + bw && ox + ow > x;
+    const d = Math.abs(ocx - cx) + Math.abs(ocy - cy) * 2;
+    if (ok && d < bd){ bd = d; best = +oid; } }
+  return best;
+}
+function swapLeaves(t, a, b){ (function go(n){ if (n.pane === undefined){ go(n.a); go(n.b); } else if (n.pane === a) n.pane = b; else if (n.pane === b) n.pane = a; })(t); }
+function resizePane(dir, grow){
+  const w = W(), t = treeOf(w), id = w.panes[S.focus].id; let path = findPath(t, id);
+  for (let k = path.length; k > 0; k--){ const n = at(t, path.slice(0, k - 1)); if (n.dir !== dir) continue;
+    const inA = path[k - 1] === 'a'; n.ratio = Math.max(100, Math.min(900, n.ratio + (inA === grow ? 50 : -50))); return; }
+  flash(dir === 'row' ? 'no hay división en horizontal para este panel' : 'no hay división en vertical para este panel');
 }
 function drawRm(){
   const w = S.rm.w, r = atRisk(w), branchWord = S.delBranch ? 'y su rama ' + w.name : 'La rama ' + w.name + ' se queda';
@@ -229,13 +294,15 @@ function draw(){
   const n = w.panes.length, h = ROWS - 2;
   if (!n) put(px + 2, 3, 'este workspace no tiene paneles · ↵ y luego n abre uno', 'd');
   else {
-    const half = Math.floor(pw / 2), idx = S.full ? [S.focus] : w.panes.map((_, i) => i);
-    const rects = S.full ? [[0, pw]] : n === 1 ? [[0, pw]] : [[0, half], [half, pw - half]];
-    idx.forEach((pi, k) => { const p = w.panes[pi], [dx, bw] = rects[k] || rects[rects.length - 1];
-      const focused = pi === S.focus && S.level >= 2, typing = focused && S.level === 3;
-      box(px + dx, 1, bw, h, p.t + (S.full ? ' · completa' : ''), focused ? 'c-blue' : 'c-line', focused ? 'b c-blue' : 'b');
-      if (p.prog){ put(px + dx + 2, 2, '▌ ' + w.path + ' ⎇ feat/login', 'c-yellow'); put(px + dx + 4, 3, '❯ ' + p.prog, 'b'); put(px + dx + 4, 4, p.prog.startsWith('claude') ? '✻ Pensando…' : 'corriendo…', p.prog.startsWith('claude') ? 'c-mag' : 'd'); }
-      else { put(px + dx + 2, 2, '▌ ' + w.path, 'c-green'); put(px + dx + 4, 3, '❯ git status', 'b'); put(px + dx + 4, 4, 'On branch main · nada por commitear', 'd'); put(px + dx + 2, h - 2, '❯ ' + (typing ? S.typed : ''), 'c-green b'); if (typing){ const cx = px + dx + 4 + S.typed.length; if (cx < COLS) g.cells[h - 2][cx] = [' ', 'cur']; } }
+    const rm = rectMap(w), full = [SB + 1, 1, pw, h];
+    w.panes.forEach((p, pi) => { if (S.full && pi !== S.focus) return;
+      const [bx, by, bw, bh] = S.full ? full : rm[p.id], focused = pi === S.focus && S.level >= 2, typing = focused && S.level === 3;
+      box(bx, by, bw, bh, clip(p.t + (S.full ? ' · completa' : ''), bw - 4), focused ? 'c-blue' : 'c-line', focused ? 'b c-blue' : 'b');
+      const c = clip.bind(null), room = bw - 6;
+      if (bh < 4) return;
+      if (p.prog){ put(bx + 2, by + 1, clip('▌ ' + w.path + ' ⎇ feat/login', bw - 4), 'c-yellow'); if (bh > 5){ put(bx + 4, by + 2, clip('❯ ' + p.prog, room), 'b'); put(bx + 4, by + 3, clip(p.prog.startsWith('claude') ? '✻ Pensando…' : 'corriendo…', room), p.prog.startsWith('claude') ? 'c-mag' : 'd'); } }
+      else { put(bx + 2, by + 1, clip('▌ ' + w.path, bw - 4), 'c-green'); if (bh > 5){ put(bx + 4, by + 2, clip('❯ git status', room), 'b'); put(bx + 4, by + 3, clip('On branch main · nada por commitear', room), 'd'); }
+        put(bx + 2, by + bh - 2, clip('❯ ' + (typing ? S.typed : ''), bw - 4), 'c-green b'); if (typing){ const cx = bx + 4 + S.typed.length; if (cx < bx + bw - 1) g.cells[by + bh - 2][cx] = [' ', 'cur']; } }
     });
   }
   put(1, ROWS - 3, '! permiso  ? pregunta', 'd'); put(1, ROWS - 2, '◆ plan   ❯ comando', 'd');
@@ -270,8 +337,10 @@ function draw(){
 const flash = t => { S.msg = t; draw(); clearTimeout(flash.t); flash.t = setTimeout(() => { S.msg = ''; draw(); }, 2200); };
 const later = n => flash(n + ' · llega en una parte siguiente');
 function closeWs(){ const nm = W().name; S.ws.splice(S.sel, 1); S.sel = Math.max(0, Math.min(S.sel, S.ws.length - 1)); S.level = 1; S.focus = 0; S.ask = null; flash('workspace «' + nm + '» cerrado · la carpeta se queda'); }
-function closePane(){ const w = W(), p = w.panes[S.focus]; w.panes.splice(S.focus, 1); S.focus = Math.max(0, Math.min(S.focus, w.panes.length - 1)); S.full = false; S.ask = null; flash('panel «' + p.t + '» cerrado'); }
-function newPane(t, prog){ const w = W(); if (w.panes.length >= 4){ flash('este prototipo muestra hasta 4 paneles'); return; } w.panes.push(prog ? {t, prog} : {t:'zsh'}); S.focus = w.panes.length - 1; S.full = false; flash(prog ? '«' + t + '» corre en un panel nuevo · al terminar queda el shell' : 'panel nuevo'); }
+function closePane(){ const w = W(), p = w.panes[S.focus]; dropLeaf(w, p.id); w.panes.splice(S.focus, 1); S.focus = Math.max(0, Math.min(S.focus, w.panes.length - 1)); S.full = false; S.ask = null; flash('panel «' + p.t + '» cerrado · su espacio pasa al vecino'); }
+function newPane(t, prog){ const w = W(); if (!w.panes.length){ w.panes.push(prog ? {t, prog, id: ++PID} : {t:'zsh', id: ++PID}); w.tree = null; S.focus = 0; flash('panel nuevo'); return; }
+  const before = w.panes.length; splitPane(autoDir()); if (w.panes.length === before) return;
+  const np = w.panes[w.panes.length - 1]; if (prog){ np.t = t; np.prog = prog; } flash(prog ? '«' + t + '» corre en un panel nuevo · al terminar queda el shell' : 'panel nuevo ' + (rectMap(w)[np.id] ? '' : '')); }
 function pickMenu(r){ S.menu = null; if (r.shell) newPane('zsh'); else newPane(r.name, r.cmd); }
 function global(k){
   if (k === 'a'){ later('avisos'); return true; } if (k === 'm'){ later('teléfono'); return true; } if (k === ','){ later('ajustes'); return true; }
@@ -345,8 +414,12 @@ function key(e){
   }
   const w = W();
   if (k === 'Escape'){ S.level = 1; S.full = false; }
-  else if (k === 'h' || k === 'k'){ S.focus = Math.max(0, S.focus - 1); }
-  else if (k === 'l' || k === 'j'){ S.focus = Math.min(w.panes.length - 1, S.focus + 1); }
+  else if ('hjkl'.includes(k) && k.length === 1){ if (!w.panes.length) return true; const nb = neighbour(w, w.panes[S.focus].id, k); if (nb !== null) S.focus = w.panes.findIndex(p => p.id === nb); }
+  else if ('HJKL'.includes(k) && k.length === 1){ if (!w.panes.length) return true; const me = w.panes[S.focus].id, nb = neighbour(w, me, k.toLowerCase()); if (nb === null){ flash('no hay un panel en esa dirección'); return true; } swapLeaves(treeOf(w), me, nb); flash('panel intercambiado'); }
+  else if (k === '|'){ splitPane('row'); }
+  else if (k === '-'){ splitPane('col'); }
+  else if (k === '>' || k === '<'){ if (!w.panes.length) return true; resizePane('row', k === '>'); }
+  else if (k === '}' || k === '{'){ if (!w.panes.length) return true; resizePane('col', k === '}'); }
   else if (k === 'Enter'){ if (!w.panes.length) return true; S.level = 3; S.typed = ''; }
   else if (k === 'n'){ newPane('zsh'); return true; }
   else if (k === 'N'){ S.menu = {sel:0}; }
@@ -365,7 +438,7 @@ scr.addEventListener('click', e => { scr.focus(); const r = scr.getBoundingClien
   if (S.input || S.ask || S.help) return;
   const row = x < SB - 1 && y >= 2 ? sideRows()[y - 2] : null;
   if (row && row.i !== undefined){ S.sel = row.i; S.focus = 0; S.level = 2; S.full = false; draw(); }
-  else if (x >= SB && y >= 1 && y < ROWS - 1 && W().panes.length){ const w = W(), pw = COLS - SB - 1, half = Math.floor(pw / 2); S.focus = w.panes.length === 1 || x - SB - 1 < half ? 0 : Math.min(1, w.panes.length - 1); S.level = 3; S.typed = ''; draw(); } });
+  else if (x >= SB && y >= 1 && y < ROWS - 1 && W().panes.length){ const w = W(), m = rectMap(w); const hit = w.panes.findIndex(p => { const r = m[p.id]; return x >= r[0] && x < r[0] + r[2] && y >= r[1] && y < r[1] + r[3]; }); if (hit >= 0) S.focus = hit; S.level = 3; S.typed = ''; draw(); } });
 document.getElementById('evLeader').onclick = () => { if (S.level === 3){ S.level = 2; } else { S.leader = true; } draw(); scr.focus(); };
 document.getElementById('evProg').onclick = () => { const p = W().panes[S.focus] || W().panes[0]; if (p){ p.prog = p.prog ? null : 'claude'; flash(p.prog ? 'claude corre en el panel' : 'el panel está en reposo'); } scr.focus(); };
 document.getElementById('evReset').onclick = () => { reset(); draw(); scr.focus(); };

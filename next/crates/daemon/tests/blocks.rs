@@ -63,6 +63,8 @@ fn rig(shell: &str) -> Rig {
         .cmd(Cmd::NewPane {
             workspace: ws,
             program: None,
+            beside: None,
+            dir: None,
         })
         .unwrap()
         .unwrap()
@@ -343,6 +345,8 @@ fn a_shell_without_the_integration_has_no_blocks() {
         .cmd(Cmd::NewPane {
             workspace: ws,
             program: None,
+            beside: None,
+            dir: None,
         })
         .unwrap()
         .unwrap()
@@ -396,6 +400,8 @@ fn a_program_started_by_the_wrapper_leaves_a_shell_with_blocks() {
         .cmd(Cmd::NewPane {
             workspace: ws,
             program: Some(vec!["echo".into(), "from the wrapper".into()]),
+            beside: None,
+            dir: None,
         })
         .unwrap()
         .unwrap()
