@@ -136,7 +136,7 @@ class Navigator(private val source: NodeSource) {
         return s.copy(screen = at.copy(pane = pane), seen = markNode(s.seen, pane))
     }
 
-    /** The go control of a row or an Avisos item. */
+    /** A tap on the line of an attention in a Home row, or on an Avisos item: open the pane it names (REQ-34). */
     fun go(s: ClientState, a: Attention): ClientState {
         val route = routeOf(source.session(), a) ?: return s
         return openWorkspace(s, route.workspace, route.pane)
