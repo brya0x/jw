@@ -1943,19 +1943,14 @@ impl View {
         let Some(b) = self.blocks_of(pane) else {
             return After::Continue;
         };
-        let (ix, iy, iw, ih) = inner(rect);
-        let Some(doc) = self.panes.get(pane) else {
+        let (ix, _, iw, _) = inner(rect);
+        let Some(g) = self.list_geom(pane, rect) else {
             return After::Continue;
         };
-        let lh = list_h(ih, field_of(doc, b, iw).band_rows());
-        let total = shell::total_lines(&b.blocks);
-        let top = iy + gap(total, lh);
-        let on_marks = y == iy + lh + Field::FIRST_TEXT;
+        let on_marks = y == g.bottom + Field::FIRST_TEXT;
         let running = running_block(b).is_some();
-        if (top..iy + lh).contains(&y) && (ix..ix + iw).contains(&x) {
-            let start = window_start(total, lh, self.scroll.get(pane).copied().unwrap_or(0));
-            let width = iw.saturating_sub(2);
-            let line = shell::window_lines(&b.blocks, self.now_ms, width, start + y - top, 1);
+        if (g.top..g.bottom).contains(&y) && (ix..ix + iw).contains(&x) {
+            let line = shell::window_lines(&b.blocks, self.now_ms, g.width, g.start + y - g.top, 1);
             if let Some(id) = line.first().and_then(|l| l.block) {
                 self.blk = Some((pane.to_owned(), id));
                 self.typing = false;
@@ -2731,6 +2726,7 @@ impl View {
             .filter(|(pane, _)| *pane == p.head.id)
             .map(|(_, id)| *id);
         let top = iy + gap(total, lh);
+        let lit_by = self.selection.as_ref().filter(|s| s.pane == p.head.id);
         for (r, line) in lines.iter().enumerate() {
             let y = top + r;
             if picked.is_some() && line.block == picked {
@@ -2750,11 +2746,9 @@ impl View {
                 g.put_over(at, y, text, *style);
             }
             // What a drag covers: the theme's most visible colour (REQ-308).
-            let covered = self
-                .selection
-                .as_ref()
-                .filter(|s| s.pane == p.head.id && line.kind != shell::Kind::Other)
-                .and_then(|s| s.on_line(start + r, select::text_of(line).chars().count()));
+            let covered = lit_by
+                .filter(|_| line.kind != shell::Kind::Other)
+                .and_then(|s| s.on_line(start + r, select::len_of(line)));
             if let Some((from, to)) = covered {
                 let (lit, text) = look::selection();
                 for cx in (ix + 2 + from..ix + 2 + to).take_while(|cx| *cx < ix + iw) {

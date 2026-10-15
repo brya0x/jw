@@ -3,7 +3,7 @@
 //! what it covers is lit and copied when the button is let go. This is what is selected and what
 //! it says; where the mouse is and what is drawn are the client's.
 
-use super::shell::{Kind, Line, block_lines};
+use super::shell::{Kind, Line, window_lines};
 use contract::Block;
 
 /// A place in the list of a pane: a line, counted from its first, and a column of its text.
@@ -53,6 +53,11 @@ pub fn text_of(line: &Line) -> String {
     line.spans.iter().map(|(t, _)| t.as_str()).collect()
 }
 
+/// How many characters the text of a line has.
+pub fn len_of(line: &Line) -> usize {
+    line.spans.iter().map(|(t, _)| t.chars().count()).sum()
+}
+
 /// The prompt mark that goes before a command and is not part of it.
 const PROMPT: &str = "❯ ";
 
@@ -60,9 +65,11 @@ const PROMPT: &str = "❯ ";
 /// folder and time, the notes and the gaps left out, and a command without its prompt mark.
 pub fn selected_text(blocks: &[Block], now_ms: u64, width: usize, sel: &Selection) -> String {
     let (a, b) = sel.ends();
-    let lines = block_lines(blocks, now_ms, width);
+    // Only the blocks that reach the lines it covers are built.
+    let lines = window_lines(blocks, now_ms, width, a.line, b.line - a.line + 1);
     let mut out: Vec<String> = Vec::new();
-    for (at, line) in lines.iter().enumerate().take(b.line + 1).skip(a.line) {
+    for (i, line) in lines.iter().enumerate() {
+        let at = a.line + i;
         if !matches!(line.kind, Kind::Command | Kind::Output) {
             continue;
         }
