@@ -36,12 +36,7 @@ pub fn new_pane(shared: &Shared, workspace: &Id, program: Option<Vec<String>>) -
     let argv = program.map(|p| crate::launch::with_session(&p, new_id));
     let (path, events, shell, env, setup, hooks) = {
         let core = shared.lock();
-        let ws = core
-            .model
-            .workspaces
-            .iter()
-            .find(|w| w.id == *workspace)
-            .ok_or_else(|| err(ErrorCode::NotFound, format!("no workspace {workspace}")))?;
+        let ws = core.workspace(workspace)?;
         (
             ws.path.clone(),
             core.events.clone(),

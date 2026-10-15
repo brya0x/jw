@@ -15,12 +15,7 @@ pub fn workspace(shared: &Shared, workspace: &str) -> Done {
     // The lock is let go before git runs: a push may take as long as the network does.
     let (path, branch) = {
         let core = shared.lock();
-        let ws = core
-            .model
-            .workspaces
-            .iter()
-            .find(|w| w.id == workspace)
-            .ok_or_else(|| err(ErrorCode::NotFound, format!("no workspace {workspace}")))?;
+        let ws = core.workspace(workspace)?;
         match (ws.kind, ws.branch.clone()) {
             (WorkspaceKind::Worktree, Some(branch)) if !branch.starts_with('-') => {
                 (ws.path.clone(), branch)

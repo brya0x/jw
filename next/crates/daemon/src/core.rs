@@ -270,6 +270,18 @@ impl Core {
         }
     }
 
+    /// The workspace with this id, or the `not_found` a command answers with.
+    pub fn workspace(
+        &self,
+        id: &str,
+    ) -> Result<&crate::model::Workspace, crate::commands::ErrorBody> {
+        self.model
+            .workspaces
+            .iter()
+            .find(|w| w.id == id)
+            .ok_or_else(|| crate::commands::err(ErrorCode::NotFound, format!("no workspace {id}")))
+    }
+
     pub fn workspace_dir(&self, workspace: &str) -> Option<PathBuf> {
         self.model
             .workspaces

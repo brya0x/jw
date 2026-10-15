@@ -194,12 +194,7 @@ pub fn create_worktree(
 pub fn remove_workspace(shared: &Shared, workspace: &Id, remove_worktree: bool) -> Done {
     let (kind, path, project) = {
         let core = shared.lock();
-        let ws = core
-            .model
-            .workspaces
-            .iter()
-            .find(|w| w.id == *workspace)
-            .ok_or_else(|| err(ErrorCode::NotFound, format!("no workspace {workspace}")))?;
+        let ws = core.workspace(workspace)?;
         (ws.kind, ws.path.clone(), ws.project.clone())
     };
     if remove_worktree {
