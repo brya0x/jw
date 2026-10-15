@@ -22,6 +22,6 @@ fun closeSheet(source: NodeSource, pane: Id): CloseSheet? {
     val p = source.node(pane) as? Node.Pane ?: return null
     val program = p.running?.argv?.firstOrNull()?.substringAfterLast('/')
     val command = (p.blocks?.let(source::node) as? Node.Blocks)?.blocks?.lastOrNull()?.takeIf { it.running }
-        ?.cmd?.trim()?.substringBefore(' ')
+        ?.let { programName(it.cmd) }
     return CloseSheet(pane, p.title, program ?: command)
 }

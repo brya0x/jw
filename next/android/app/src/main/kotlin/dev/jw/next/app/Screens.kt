@@ -428,8 +428,9 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
         var painted by remember(screen.pane, running?.id) { mutableStateOf(ink) }
         LaunchedEffect(ink) { if (ink) painted = true }
         var gaveUp by remember(screen.pane, running?.id) { mutableStateOf(false) }
-        LaunchedEffect(screen.pane, running?.id) { delay(LOADING_MAX_MS); gaveUp = true }
-        val booting = blocks?.starting()?.takeIf { !painted && !gaveUp }
+        val starting = blocks?.starting()
+        LaunchedEffect(screen.pane, starting?.id) { if (starting != null) { delay(LOADING_MAX_MS); gaveUp = true } }
+        val booting = starting?.takeIf { !painted && !gaveUp }
         // A shell with blocks that have not arrived: its screen would show for a moment and then give way to them.
         val waitingBlocks = blocksId != null && blocks == null
         if (shown != null) {
@@ -446,7 +447,7 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
                 )
             }
         } else {
-            if (blocks != null) FullScreenBanner(pane?.running?.argv?.firstOrNull())
+            if (blocks != null) FullScreenBanner(running?.let { programName(it.cmd) } ?: pane?.running?.argv?.firstOrNull())
             Box(
                 Modifier.weight(1f).fillMaxWidth().background(Palette.bg).verticalScroll(rememberScrollState())
                     .horizontalScroll(rememberScrollState()).padding(horizontal = Gutter - 4.dp, vertical = 10.dp),

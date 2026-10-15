@@ -3,7 +3,7 @@
 
 use contract::{Block, Color, Span};
 
-use super::{Grid, Rgb, Style, clip, look};
+use super::{Grid, Rect, Rgb, Style, base, clip, look};
 
 /// The 256-colour palette: the sixteen named colours are the theme's (black and bright white
 /// turn into the text colour on a light theme, where a literal one would vanish), the rest
@@ -96,8 +96,7 @@ pub fn has_ink(out: &[Vec<Span>]) -> bool {
 
 /// The program a command line names: the file name of its first word.
 pub fn program_name(cmd: &str) -> String {
-    let word = cmd.split_whitespace().next().unwrap_or(cmd);
-    word.rsplit('/').next().unwrap_or(word).to_owned()
+    base(cmd.split_whitespace().next().unwrap_or(cmd)).to_owned()
 }
 
 /// The frames of the spinner of a program that is starting, one every 110 ms.
@@ -105,7 +104,7 @@ const SPIN: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"
 
 /// What a pane says while the program that has its screen has not painted anything: the spinner
 /// and `iniciando <name>…` in the middle of its box, and that `^C` cancels (spec REQ-259).
-pub fn loading(g: &mut Grid, (x, y, w, h): (usize, usize, usize, usize), name: &str, now_ms: u64) {
+pub fn loading(g: &mut Grid, (x, y, w, h): Rect, name: &str, now_ms: u64) {
     let frame = SPIN[(now_ms / 110) as usize % SPIN.len()];
     let line = clip(&format!("{frame} iniciando {name}…"), w.saturating_sub(4));
     let hint = "^C cancela";
@@ -117,7 +116,10 @@ pub fn loading(g: &mut Grid, (x, y, w, h): (usize, usize, usize, usize), name: &
         &line,
         Style::fg(look::yellow()),
     );
-    g.put(centre(hint), mid + 1, hint, Style::fg(look::dim()));
+    // The border is the last row of the box: in a box too short for both lines the hint is left out.
+    if mid + 1 < y + h.saturating_sub(1) {
+        g.put(centre(hint), mid + 1, hint, Style::fg(look::dim()));
+    }
 }
 
 /// Every block as lines, oldest first: the folder and time, the command, the output, a gap.
@@ -384,5 +386,33 @@ mod starting_tests {
         assert_eq!(program_name("/usr/local/bin/claude"), "claude");
         assert_eq!(program_name("  nvim ."), "nvim");
         assert_eq!(program_name(""), "");
+    }
+}
+
+#[cfg(test)]
+mod loading_tests {
+    use super::*;
+
+    #[test]
+    fn the_loading_says_what_starts_and_leaves_the_border_of_a_short_box_alone() {
+        let mut g = Grid::new(30, 8);
+        loading(&mut g, (0, 0, 30, 8), "claude", 0);
+        let rows = g.rows_plain();
+        assert!(
+            rows.iter().any(|r| r.contains("⠋ iniciando claude…")),
+            "{rows:?}"
+        );
+        assert!(rows.iter().any(|r| r.contains("^C cancela")), "{rows:?}");
+        let mut g = Grid::new(30, 4);
+        loading(&mut g, (0, 0, 30, 4), "claude", 110);
+        let rows = g.rows_plain();
+        assert!(
+            rows[1].contains("⠙ iniciando claude…"),
+            "the spinner moves: {rows:?}"
+        );
+        assert!(
+            rows[3].trim().is_empty(),
+            "the last row of a box is its border: {rows:?}"
+        );
     }
 }

@@ -934,10 +934,7 @@ impl View {
         }
         let blocks = self.blocks.get(p.blocks.as_ref()?)?;
         let last = running_block(blocks)?;
-        Some(clip(
-            last.cmd.split_whitespace().next().unwrap_or(&last.cmd),
-            24,
-        ))
+        Some(clip(&shell::program_name(&last.cmd), 24))
     }
 
     /// `x`: close the focused pane at once when its shell is idle, ask when something runs.
