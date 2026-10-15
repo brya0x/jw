@@ -464,8 +464,9 @@ pub struct View {
     /// A workspace made by the client's own request, to open when it shows up in the session
     /// (or at the time given, in `now_ms`, if it does not).
     goto: Option<(String, u64)>,
-    /// A panel this client asked for, to focus when it appears in its workspace.
-    new_pane: Option<String>,
+    /// A panel this client asked for, to focus when it appears in its workspace, and when it was
+    /// asked: one that never shows up is forgotten.
+    new_pane: Option<(String, u64)>,
     /// The focused panel fills the area, and the box of the keys of the level is open.
     full: bool,
     help: bool,
@@ -755,12 +756,16 @@ impl View {
 
     /// A workspace or a pane that was closed leaves the highlight on its neighbour.
     fn clamp(&mut self) {
-        if let Some(at) = self.new_pane.as_ref().and_then(|id| {
-            self.shown()
-                .and_then(|d| d.panes.iter().position(|p| p.id == *id))
-        }) {
-            self.focus = at;
-            self.new_pane = None;
+        if let Some((id, asked)) = &self.new_pane {
+            let at = self
+                .shown()
+                .and_then(|d| d.panes.iter().position(|p| p.id == *id));
+            if let Some(at) = at {
+                self.focus = at;
+                self.new_pane = None;
+            } else if self.now_ms > asked + NEW_PANE_WAIT_MS {
+                self.new_pane = None;
+            }
         }
         let workspaces = self.session.as_ref().map_or(0, |s| s.workspaces.len());
         self.selected = self.selected.min(workspaces.saturating_sub(1));
@@ -1040,7 +1045,7 @@ impl View {
     /// The panel the client just asked for takes the focus as soon as it shows up.
     pub fn focus_new(&mut self, reply: &Reply) {
         if let Ok(Ok(Some(r))) = reply {
-            self.new_pane = r["pane"].as_str().map(str::to_owned);
+            self.new_pane = r["pane"].as_str().map(|id| (id.to_owned(), self.now_ms));
         }
     }
 
@@ -2857,6 +2862,9 @@ fn commits(n: u64) -> String {
         format!("{n} commits")
     }
 }
+
+/// How long a panel the client asked for is waited for, to focus it.
+const NEW_PANE_WAIT_MS: u64 = 5000;
 
 /// How long a push is waited for.
 const SYNC_WAIT: Duration = Duration::from_secs(120);
@@ -5005,6 +5013,12 @@ mod tests {
         v.focus = 0;
         v.sync(fixture_docs().iter());
         assert_eq!(v.focus, 0, "only once");
+        // One that never appears is forgotten, and does not take the focus when it does.
+        v.set_now(1000);
+        v.focus_new(&Ok(Ok(Some(serde_json::json!({ "pane": "later" })))));
+        v.set_now(7000);
+        v.sync(fixture_docs().iter());
+        assert!(v.new_pane.is_none());
         v.focus_new(&Ok(Err(ErrorBody {
             code: contract::ErrorCode::BadRequest,
             message: "no".into(),

@@ -35,28 +35,27 @@ pub fn leaves(tree: &Layout) -> Vec<&str> {
 /// The first pane on the left, the others stacked on the right, each with an even share: what a
 /// workspace gets when nothing says otherwise.
 pub fn default_tree(ids: &[Id]) -> Option<Layout> {
-    fn stack(ids: &[Id]) -> Layout {
-        match ids {
-            [one] => leaf(one),
-            [first, rest @ ..] => Layout::Split {
+    fn stack(first: &Id, rest: &[Id]) -> Layout {
+        match rest.split_first() {
+            None => leaf(first),
+            Some((next, after)) => Layout::Split {
                 dir: SplitDir::Col,
-                ratio: (1000 / ids.len()) as u16,
+                ratio: (1000 / (rest.len() + 1)) as u16,
                 a: Box::new(leaf(first)),
-                b: Box::new(stack(rest)),
+                b: Box::new(stack(next, after)),
             },
-            [] => unreachable!("a stack has a pane"),
         }
     }
-    match ids {
-        [] => None,
-        [one] => Some(leaf(one)),
-        [first, rest @ ..] => Some(Layout::Split {
+    let (first, rest) = ids.split_first()?;
+    Some(match rest.split_first() {
+        None => leaf(first),
+        Some((next, after)) => Layout::Split {
             dir: SplitDir::Row,
             ratio: 500,
             a: Box::new(leaf(first)),
-            b: Box::new(stack(rest)),
-        }),
-    }
+            b: Box::new(stack(next, after)),
+        },
+    })
 }
 
 /// The tree with `new` beside `beside`, which keeps the first side and the half.
