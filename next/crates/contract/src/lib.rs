@@ -228,6 +228,19 @@ pub enum Cmd {
         pane: Id,
         name: String,
     },
+    /// List one folder of a workspace: `path` is relative to the workspace's folder (the folder
+    /// itself when absent). The result is a `FileListing`.
+    ListFiles {
+        workspace: Id,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
+    /// Find files of a workspace whose path holds `query` (letters in order, any case), the tracked
+    /// and the untracked ones that git does not ignore. The result is a `FoundFiles`.
+    FindFiles {
+        workspace: Id,
+        query: String,
+    },
     /// Open a pane: the user's shell, with `program` run inside it when given (the shell
     /// starts it, and is still there when it ends).
     NewPane {
@@ -378,6 +391,59 @@ pub enum SplitDir {
     Row,
     /// One over the other: `a` above, `b` below.
     Col,
+}
+
+/// What an entry of a folder is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileKind {
+    Dir,
+    File,
+    /// A symbolic link, whatever it points at: it is not followed.
+    Link,
+}
+
+/// What git says of an entry; of a folder, the most serious of what is under it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GitMark {
+    Conflict,
+    Modified,
+    Deleted,
+    Added,
+    Untracked,
+}
+
+/// One entry of a folder.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileEntry {
+    pub name: String,
+    pub kind: FileKind,
+    /// Bytes, for a file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git: Option<GitMark>,
+    /// Git ignores it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ignored: bool,
+}
+
+/// The result of `list_files`: folders first, then files, each by name; `entries` is cut to the
+/// first ones when `total` is more than they are.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileListing {
+    pub path: String,
+    pub entries: Vec<FileEntry>,
+    pub total: usize,
+}
+
+/// The result of `find_files`: paths relative to the workspace's folder, cut when `cut`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FoundFiles {
+    pub paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cut: bool,
 }
 
 /// The panes of a workspace as a tree of splits.

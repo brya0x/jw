@@ -7,6 +7,7 @@ mod changes;
 mod commands;
 mod core;
 mod diff;
+mod files;
 mod git;
 mod github;
 mod grouping;

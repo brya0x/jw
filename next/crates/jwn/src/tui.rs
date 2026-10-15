@@ -12,8 +12,8 @@ use std::io::{Write, stdout};
 use std::time::{Duration, Instant};
 
 use contract::{
-    Attention, AttentionKind, Blocks, BlocksMode, Cmd, DiffScope, Node, Pane, Program, Session,
-    SplitDir, Workspace, WorkspaceKind,
+    Attention, AttentionKind, Blocks, BlocksMode, Cmd, DiffScope, FileKind, FileListing,
+    FoundFiles, GitMark, Node, Pane, Program, Session, SplitDir, Workspace, WorkspaceKind,
 };
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
@@ -36,6 +36,7 @@ mod settings;
 mod shell;
 mod side;
 mod split;
+mod tree;
 
 pub use changes::Ask;
 use changes::{Changes, Docs, Outcome, Src};
@@ -325,6 +326,8 @@ pub enum Key {
     SplitCol,
     /// The next panel in the order they were made.
     Next,
+    /// Show the file tree, give it the keys, or close it.
+    Tree,
     /// Swap the focused panel with the one on this side.
     Swap(split::Side),
     /// Make the focused panel wider or taller (`true`), narrower or lower, by moving a split.
@@ -337,6 +340,34 @@ pub enum Key {
     Repeat,
     Back,
     Quit,
+}
+
+/// Columns of the file tree, as wide as the sidebar.
+const TREE_W: usize = SIDEBAR;
+/// How long the daemon is waited for to list a folder or search.
+const FILES_WAIT: Duration = Duration::from_secs(30);
+
+/// What the file tree asks the daemon for, with the workspace it is for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FileAsk {
+    List { workspace: String, path: String },
+    Find { workspace: String, query: String },
+}
+
+/// The daemon's answer to a `FileAsk`.
+pub struct FilesReply {
+    ask: FileAsk,
+    reply: Reply,
+}
+
+/// The program that opens a file: `$VISUAL`, else `$EDITOR`, else `nvim`, with its arguments.
+fn editor_from(visual: Option<String>, editor: Option<String>) -> Vec<String> {
+    [visual, editor]
+        .into_iter()
+        .flatten()
+        .map(|v| v.split_whitespace().map(str::to_owned).collect::<Vec<_>>())
+        .find(|v| !v.is_empty())
+        .unwrap_or_else(|| vec!["nvim".to_owned()])
 }
 
 /// A drag that began in a pane's list of blocks, with the button still down.
@@ -479,6 +510,12 @@ pub struct View {
     /// What a drag of the mouse covers in a pane's list, and the drag while the button is down.
     selection: Option<select::Selection>,
     drag: Option<Drag>,
+    /// The file tree: whether its column is shown, whether the keys are in it, and what each
+    /// workspace's holds.
+    tree_on: bool,
+    tree_focus: bool,
+    trees: HashMap<String, tree::Tree>,
+    file_asks: Vec<FileAsk>,
     /// The clock the running blocks count from, in ms since the epoch.
     now_ms: u64,
     /// The diffs and lists of commits the daemon sent, by node id.
@@ -552,6 +589,10 @@ impl View {
             scroll: HashMap::new(),
             selection: None,
             drag: None,
+            tree_on: false,
+            tree_focus: false,
+            trees: HashMap::new(),
+            file_asks: Vec::new(),
             now_ms: 0,
             diffs: HashMap::new(),
             commit_lists: HashMap::new(),
@@ -1059,7 +1100,7 @@ impl View {
         let dir = dir.unwrap_or_else(|| {
             let (cols, rows) = self.size;
             doc.and_then(|d| {
-                self.layout(d, panes_rect(cols, rows))
+                self.layout(d, self.panes_space(cols, rows))
                     .get(self.focus)
                     .copied()
             })
@@ -1072,7 +1113,7 @@ impl View {
     fn neighbour_toward(&self, side: split::Side) -> Option<usize> {
         let doc = self.shown()?;
         let (cols, rows) = self.size;
-        let at = split::rects(doc.layout.as_ref()?, panes_rect(cols, rows));
+        let at = split::rects(doc.layout.as_ref()?, self.panes_space(cols, rows));
         let id = split::neighbour(&at, &doc.panes.get(self.focus)?.id, side)?;
         doc.panes.iter().position(|p| p.id == id)
     }
@@ -1709,6 +1750,9 @@ impl View {
             self.changes_key(ev);
             return After::Continue;
         }
+        if self.tree_focus && self.tree_on {
+            return self.tree_key(ev);
+        }
         let Some(pane) = self.typing_pane() else {
             return key_of(ev.code).map_or(After::Continue, |k| self.press(k));
         };
@@ -1727,7 +1771,9 @@ impl View {
     pub fn take_resize(&mut self, cols: usize, rows: usize) -> Option<(String, u16, u16)> {
         let pane = self.typing_pane()?;
         let doc = self.workspaces.get(self.opened.as_deref()?)?;
-        let (_, _, w, h) = *self.layout(doc, panes_rect(cols, rows)).get(self.focus)?;
+        let (_, _, w, h) = *self
+            .layout(doc, self.panes_space(cols, rows))
+            .get(self.focus)?;
         let want = (
             pane,
             h.saturating_sub(2).max(1) as u16,
@@ -1778,6 +1824,7 @@ impl View {
                 self.select_workspace(false)
             }
             (Mode::Workspaces, Key::Next) if level == Level::Panels => self.go_panel(true),
+            (Mode::Workspaces, Key::Tree) if level != Level::Terminal => self.toggle_tree(),
             (Mode::Workspaces, Key::Swap(side)) if level == Level::Panels => {
                 return self.swap_toward(side);
             }
@@ -1994,6 +2041,12 @@ impl View {
         {
             return After::Continue;
         }
+        if self.changes.is_none() {
+            if self.tree_on && x + TREE_W >= cols {
+                return self.tree_click(y, rows);
+            }
+            self.tree_focus = false;
+        }
         if self.changes.is_some() {
             if x > SIDEBAR {
                 if let Some(c) = self.changes.as_mut() {
@@ -2010,7 +2063,7 @@ impl View {
         }
         let waiting = self.avisos().len();
         if self.mode == Mode::Avisos {
-            let rect = avisos_rect(waiting, panes_rect(cols, rows));
+            let rect = avisos_rect(waiting, self.panes_space(cols, rows));
             if !inside(rect, x, y) {
                 self.mode = Mode::Workspaces;
             } else if y >= rect.1 + 2
@@ -2043,7 +2096,7 @@ impl View {
         }
         if let Some(doc) = self.shown() {
             let id = doc.head.id.clone();
-            let rects = self.layout(doc, panes_rect(cols, rows));
+            let rects = self.layout(doc, self.panes_space(cols, rows));
             if let Some(i) = rects.iter().position(|r| inside(*r, x, y)) {
                 let pane = doc.panes[i].id.clone();
                 self.open(&id, i);
@@ -2079,6 +2132,18 @@ impl View {
         if self.mode == Mode::Avisos {
             return self.press(if down { Key::Down } else { Key::Up });
         }
+        if self.tree_on && x + TREE_W >= cols {
+            let room = Self::tree_room(rows);
+            if let Some((_, t)) = self.tree_mut() {
+                let most = t.rows().len().saturating_sub(room);
+                t.scroll = if down {
+                    (t.scroll + SCROLL_STEP).min(most)
+                } else {
+                    t.scroll.saturating_sub(SCROLL_STEP)
+                };
+            }
+            return After::Continue;
+        }
         if x < SIDEBAR {
             self.select_workspace(down);
             return After::Continue;
@@ -2086,7 +2151,7 @@ impl View {
         let Some(doc) = self.shown() else {
             return After::Continue;
         };
-        let rects = self.layout(doc, panes_rect(cols, rows));
+        let rects = self.layout(doc, self.panes_space(cols, rows));
         let Some(i) = rects.iter().position(|r| inside(*r, x, y)) else {
             return After::Continue;
         };
@@ -2095,11 +2160,386 @@ impl View {
         After::Continue
     }
 
+    /// How many columns the file tree takes from the panels' area.
+    fn tree_w(&self) -> usize {
+        if self.tree_on { TREE_W } else { 0 }
+    }
+
+    /// The area the panels share, less the file tree's column when it is shown.
+    fn panes_space(&self, cols: usize, rows: usize) -> Rect {
+        let (x, y, w, h) = panes_rect(cols, rows);
+        (x, y, w.saturating_sub(self.tree_w()), h)
+    }
+
+    /// Rows of the file tree that show entries: under its title and above its legend.
+    fn tree_room(rows: usize) -> usize {
+        rows.saturating_sub(6)
+    }
+
+    fn tree_mut(&mut self) -> Option<(String, &mut tree::Tree)> {
+        let ws = self.selected_id()?;
+        let t = self.trees.entry(ws.clone()).or_default();
+        Some((ws, t))
+    }
+
+    /// Ask for the folders of the open workspace's tree that nobody has asked for.
+    fn ask_folders(&mut self) {
+        let Some((workspace, t)) = self.tree_mut() else {
+            return;
+        };
+        let asks: Vec<FileAsk> = t
+            .wanted()
+            .into_iter()
+            .map(|path| FileAsk::List {
+                workspace: workspace.clone(),
+                path,
+            })
+            .collect();
+        self.file_asks.extend(asks);
+    }
+
+    /// `t`: show the file tree and give it the keys; with it shown, the keys; with them, close it.
+    fn toggle_tree(&mut self) {
+        if self.tree_on && self.tree_focus {
+            self.tree_on = false;
+            self.tree_focus = false;
+        } else {
+            self.tree_on = true;
+            self.tree_focus = true;
+            self.typing = false;
+            self.ask_folders();
+        }
+    }
+
+    /// What the tree asks the daemon for, once.
+    pub fn take_file_asks(&mut self) -> Vec<FileAsk> {
+        std::mem::take(&mut self.file_asks)
+    }
+
+    /// The daemon answered a folder or a search.
+    pub fn files_replied(&mut self, r: FilesReply) {
+        let FilesReply { ask, reply } = r;
+        let (FileAsk::List { workspace, .. } | FileAsk::Find { workspace, .. }) = &ask;
+        let Some(t) = self.trees.get_mut(workspace) else {
+            return;
+        };
+        let value = match reply {
+            Ok(Ok(Some(v))) => Ok(v),
+            Ok(Ok(None)) => Err("el daemon no contestó nada".to_owned()),
+            Ok(Err(e)) => Err(e.message),
+            Err(e) => Err(e.to_string()),
+        };
+        match ask {
+            FileAsk::List { path, .. } => {
+                let dir = match value.and_then(|v| {
+                    serde_json::from_value::<FileListing>(v).map_err(|e| e.to_string())
+                }) {
+                    Ok(l) => tree::Dir::Ready {
+                        entries: l.entries,
+                        total: l.total,
+                    },
+                    Err(why) => tree::Dir::Failed(why),
+                };
+                t.listed(&path, dir);
+            }
+            FileAsk::Find { query, .. } => {
+                // Only the answer for what is typed now counts.
+                if t.filter.as_deref() == Some(query.as_str())
+                    && let Ok(f) = value.and_then(|v| {
+                        serde_json::from_value::<FoundFiles>(v).map_err(|e| e.to_string())
+                    })
+                {
+                    t.found = Some(tree::Found {
+                        query,
+                        paths: f.paths,
+                        cut: f.cut,
+                    });
+                    t.sel = 0;
+                    t.scroll = 0;
+                }
+            }
+        }
+    }
+
+    /// Open a file of the tree in the editor, in a new panel.
+    fn open_file(&mut self, path: &str) -> After {
+        let Some(workspace) = self.selected_id() else {
+            return After::Continue;
+        };
+        let mut program = editor_from(std::env::var("VISUAL").ok(), std::env::var("EDITOR").ok());
+        program.push(path.to_owned());
+        self.tree_focus = false;
+        self.typing = false;
+        if let Some((_, t)) = self.tree_mut() {
+            t.filter = None;
+            t.found = None;
+        }
+        if path.ends_with(".md") {
+            self.flash("un .md se leerá con formato cuando exista el visor");
+        }
+        After::NewProgram {
+            workspace,
+            program,
+            place: self.place(None),
+        }
+    }
+
+    /// A key while the keys are in the file tree.
+    fn tree_key(&mut self, ev: KeyEvent) -> After {
+        if ev.modifiers.contains(KeyModifiers::CONTROL) {
+            return After::Continue;
+        }
+        let rows_shown = self.size.1;
+        let Some((workspace, t)) = self.tree_mut() else {
+            return After::Continue;
+        };
+        let rows = t.rows();
+        let at = rows.get(t.sel).filter(|r| !r.note).cloned();
+        let mut after = After::Continue;
+        let mut ask_find: Option<String> = None;
+        let mut reread = false;
+        let mut flash = None;
+        if let Some(text) = t.filter.clone() {
+            match ev.code {
+                KeyCode::Esc => {
+                    t.filter = None;
+                    t.found = None;
+                    t.sel = 0;
+                }
+                KeyCode::Enter => {
+                    if let Some(r) = at {
+                        return self.open_file(&r.path);
+                    }
+                }
+                KeyCode::Down => t.sel += 1,
+                KeyCode::Up => t.sel = t.sel.saturating_sub(1),
+                KeyCode::Backspace => {
+                    let mut text = text;
+                    text.pop();
+                    ask_find = Some(text.clone());
+                    t.filter = Some(text);
+                }
+                KeyCode::Char(c) => {
+                    let text = format!("{text}{c}");
+                    ask_find = Some(text.clone());
+                    t.filter = Some(text);
+                }
+                _ => {}
+            }
+        } else {
+            match ev.code {
+                KeyCode::Char('j') | KeyCode::Down => t.sel += 1,
+                KeyCode::Char('k') | KeyCode::Up => t.sel = t.sel.saturating_sub(1),
+                KeyCode::Char('l') | KeyCode::Right | KeyCode::Enter => {
+                    if let Some(r) = at {
+                        if r.kind == FileKind::Dir {
+                            t.toggle(&r.path);
+                        } else {
+                            return self.open_file(&r.path);
+                        }
+                    }
+                }
+                KeyCode::Char('h') | KeyCode::Left => {
+                    if let Some(r) = at {
+                        if r.kind == FileKind::Dir && r.open {
+                            t.toggle(&r.path);
+                        } else if let Some(i) = rows
+                            .iter()
+                            .position(|q| q.path == tree::Tree::parent_of(&r.path) && !q.note)
+                        {
+                            t.sel = i;
+                        }
+                    }
+                }
+                KeyCode::Char('.') => {
+                    t.hidden = !t.hidden;
+                    t.sel = 0;
+                    flash = Some(if t.hidden {
+                        "archivos ocultos visibles"
+                    } else {
+                        "archivos ocultos escondidos"
+                    });
+                }
+                KeyCode::Char('/') => {
+                    t.filter = Some(String::new());
+                    t.found = None;
+                    t.sel = 0;
+                }
+                KeyCode::Char('y') => {
+                    if let Some(r) = at {
+                        flash = Some("ruta copiada");
+                        after = After::Copy(r.path);
+                    }
+                }
+                KeyCode::Char('r') => reread = true,
+                KeyCode::Char('t') => {
+                    self.tree_on = false;
+                    self.tree_focus = false;
+                    return After::Continue;
+                }
+                KeyCode::Esc => {
+                    self.tree_focus = false;
+                    return After::Continue;
+                }
+                _ => {}
+            }
+        }
+        if reread {
+            t.forget();
+        }
+        let len = t.rows().len();
+        t.clamp(len, Self::tree_room(rows_shown));
+        if let Some(query) = ask_find {
+            if query.trim().is_empty() {
+                t.found = None;
+            } else {
+                self.file_asks.push(FileAsk::Find { workspace, query });
+            }
+        }
+        self.ask_folders();
+        if let Some(f) = flash {
+            self.flash(f);
+        }
+        if reread {
+            self.flash("leído de nuevo del PC");
+        }
+        after
+    }
+
+    /// A click in the file tree's column: a row is lit, a folder opens or closes, a file opens.
+    fn tree_click(&mut self, y: usize, rows: usize) -> After {
+        self.tree_focus = true;
+        self.typing = false;
+        if !(2..rows.saturating_sub(4)).contains(&y) {
+            return After::Continue;
+        }
+        let Some((_, t)) = self.tree_mut() else {
+            return After::Continue;
+        };
+        let at = t.scroll + y - 2;
+        let Some(r) = t.rows().get(at).filter(|r| !r.note).cloned() else {
+            return After::Continue;
+        };
+        t.sel = at;
+        if r.kind == FileKind::Dir {
+            t.toggle(&r.path);
+            self.ask_folders();
+            After::Continue
+        } else {
+            self.open_file(&r.path)
+        }
+    }
+
+    /// The rows of the file tree on the screen, and what git says of each, at the right of the panels.
+    fn draw_tree(&self, g: &mut Grid, cols: usize, rows: usize) {
+        let Some(t) = self.selected_id().and_then(|ws| self.trees.get(&ws)) else {
+            return;
+        };
+        let x0 = cols.saturating_sub(TREE_W);
+        let dim = Style::fg(look::dim());
+        let divider = if self.tree_focus {
+            look::blue()
+        } else {
+            look::line()
+        };
+        for y in 0..rows.saturating_sub(1) {
+            g.put(x0, y, "│", Style::fg(divider));
+        }
+        g.put(x0 + 2, 0, "archivos", dim.bold());
+        match &t.filter {
+            Some(text) => g.put(
+                x0 + 2,
+                1,
+                &clip(&format!("/ {text}▏"), TREE_W - 3),
+                Style::fg(look::yellow()).bold(),
+            ),
+            None if t.hidden => g.put(x0 + 2, 1, "ocultos visibles", dim),
+            None => {}
+        }
+        let all = t.rows();
+        let room = Self::tree_room(rows);
+        for (k, r) in all.iter().skip(t.scroll).take(room).enumerate() {
+            let y = 2 + k;
+            let on = t.scroll + k == t.sel;
+            if on && !r.note {
+                g.paint_bg(x0 + 1, y, TREE_W - 1, look::sel());
+            }
+            let lead = x0 + 2 + r.depth * 2;
+            if r.note {
+                g.put_over(lead, y, &clip(&r.name, TREE_W - 4 - r.depth * 2), dim);
+                continue;
+            }
+            let (glyph, glyph_style) = match r.kind {
+                FileKind::Dir if r.open => ("▾", Style::fg(look::blue())),
+                FileKind::Dir => ("▸", Style::fg(look::blue())),
+                FileKind::Link => ("↗", dim),
+                FileKind::File => ("·", dim),
+            };
+            g.put_over(lead, y, glyph, glyph_style);
+            let mut style = if r.ignored {
+                dim
+            } else {
+                Style::fg(look::fg())
+            };
+            if on {
+                style = if self.tree_focus {
+                    Style::fg(look::blue()).bold()
+                } else {
+                    style.bold()
+                };
+            }
+            let name = if r.kind == FileKind::Dir {
+                format!("{}/", r.name)
+            } else {
+                r.name.clone()
+            };
+            g.put_over(
+                lead + 2,
+                y,
+                &clip(&name, TREE_W.saturating_sub(9 + r.depth * 2)),
+                style,
+            );
+            let (mark, mark_style) = match (r.git, r.ignored) {
+                (Some(GitMark::Conflict), _) => ("!", Style::fg(look::red()).bold()),
+                (Some(GitMark::Modified), _) => ("M", Style::fg(look::yellow()).bold()),
+                (Some(GitMark::Deleted), _) => ("D", Style::fg(look::red()).bold()),
+                (Some(GitMark::Added), _) => ("A", Style::fg(look::green()).bold()),
+                (Some(GitMark::Untracked), _) => ("?", Style::fg(look::green()).bold()),
+                (None, true) => ("◌", dim),
+                (None, false) => ("", dim),
+            };
+            g.put_over(cols.saturating_sub(3), y, mark, mark_style);
+        }
+        if all.is_empty() {
+            let text = if t.filter.is_some() {
+                "escribe para buscar"
+            } else {
+                "carpeta vacía"
+            };
+            g.put(x0 + 2, 2, text, dim);
+        }
+        g.put(x0 + 2, rows.saturating_sub(4), "M cambiado · ? nuevo", dim);
+        g.put(x0 + 2, rows.saturating_sub(3), "◌ ignorado por git", dim);
+        let count = match &t.filter {
+            Some(_) => format!(
+                "{} {}",
+                all.len(),
+                if all.len() == 1 {
+                    "coincidencia"
+                } else {
+                    "coincidencias"
+                }
+            ),
+            None => format!("{} / {}", (t.sel + 1).min(all.len()), all.len()),
+        };
+        g.put(x0 + 2, rows.saturating_sub(2), &count, dim);
+    }
+
     /// The rectangle of a pane of the open workspace on a `cols` × `rows` screen.
     fn pane_rect(&self, pane: &str, cols: usize, rows: usize) -> Option<Rect> {
         let doc = self.shown()?;
         let at = doc.panes.iter().position(|p| p.id == pane)?;
-        let rect = *self.layout(doc, panes_rect(cols, rows)).get(at)?;
+        let rect = *self.layout(doc, self.panes_space(cols, rows)).get(at)?;
         (rect.2 > 0).then_some(rect)
     }
 
@@ -2138,7 +2578,7 @@ impl View {
         let Some(doc) = self.shown() else {
             return false;
         };
-        let rects = self.layout(doc, panes_rect(cols, rows));
+        let rects = self.layout(doc, self.panes_space(cols, rows));
         let Some(i) = rects.iter().position(|r| inside(*r, x, y)) else {
             return false;
         };
@@ -2446,13 +2886,22 @@ impl View {
                 );
             }
             let path = &ws.path;
-            g.put(cols.saturating_sub(path.chars().count() + 1), 0, path, dim);
+            let path_at = cols.saturating_sub(path.chars().count() + 1 + self.tree_w());
+            g.put(path_at, 0, path, dim);
             self.panes_area(
                 &mut g,
                 doc,
                 ws.branch.as_deref(),
-                (px, 1, pw, rows.saturating_sub(2)),
+                (
+                    px,
+                    1,
+                    pw.saturating_sub(self.tree_w()),
+                    rows.saturating_sub(2),
+                ),
             );
+            if self.tree_on {
+                self.draw_tree(&mut g, cols, rows);
+            }
         }
 
         if let Some(c) = &self.changes {
@@ -2502,6 +2951,11 @@ impl View {
                     look::green(),
                     "escribes en el panel · ^␣ para salir",
                 ),
+                _ if self.tree_on && self.tree_focus => (
+                    " ARCHIVOS ",
+                    look::cyan(),
+                    "j/k mover · ↵ abrir · h cerrar · / buscar · . ocultos · y ruta · r leer · esc volver · t cerrar",
+                ),
                 (_, Level::Panels) if self.blk.is_some() => (
                     " BLOQUE ",
                     look::magenta(),
@@ -2510,7 +2964,7 @@ impl View {
                 (_, Level::Panels) => (
                     " PANEL ",
                     look::magenta(),
-                    "hjkl panel · HJKL mover · ↵ escribir · n | - nuevo · < > { } tamaño · x cerrar · esc volver · ? teclas",
+                    "hjkl panel · HJKL mover · ↵ escribir · n | - nuevo · < > { } tamaño · t archivos · x cerrar · esc volver · ? teclas",
                 ),
                 (_, Level::Workspaces) => (
                     " WORKSPACE ",
@@ -2869,6 +3323,7 @@ const WORKSPACE_KEYS: &[(&str, &str)] = &[
     ("↵", "entrar al workspace"),
     ("r", "renombrar el worktree"),
     ("o", "abrir una carpeta"),
+    ("t", "archivos del workspace"),
     ("w", "worktree nuevo del proyecto"),
     ("s", "subir el worktree a origin"),
     ("x", "cerrar el workspace (y quitar su worktree)"),
@@ -2892,8 +3347,8 @@ const PANEL_KEYS: &[(&str, &str)] = &[
     ("f", "el panel a pantalla completa"),
     ("x", "cerrar el panel"),
     (
-        "o w s",
-        "abrir una carpeta · worktree nuevo · subir el worktree",
+        "o w s t",
+        "abrir una carpeta · worktree nuevo · subir el worktree · archivos",
     ),
     ("d a m ,", "cambios · avisos · teléfono · ajustes"),
     ("esc", "volver a los workspaces"),
@@ -3110,6 +3565,7 @@ fn key_of(code: KeyCode) -> Option<Key> {
         KeyCode::Char('h') | KeyCode::Left => Key::Left,
         KeyCode::Char('l') | KeyCode::Right => Key::Right,
         KeyCode::Tab => Key::Next,
+        KeyCode::Char('t') => Key::Tree,
         KeyCode::Char('H') => Key::Swap(split::Side::Left),
         KeyCode::Char('L') => Key::Swap(split::Side::Right),
         KeyCode::Char('K') => Key::Swap(split::Side::Up),
@@ -3187,6 +3643,26 @@ const RESIZE_STEP: i16 = 50;
 
 /// How long a panel the client asked for is waited for, to focus it.
 const NEW_PANE_WAIT_MS: u64 = 5000;
+
+/// List a folder or search in a thread of its own, with a connection of its own: git may take
+/// as long as the repository is big, and the screen goes on meanwhile.
+fn spawn_files(ask: FileAsk, tx: std::sync::mpsc::Sender<FilesReply>) {
+    std::thread::spawn(move || {
+        let cmd = match &ask {
+            FileAsk::List { workspace, path } => Cmd::ListFiles {
+                workspace: workspace.clone(),
+                path: Some(path.clone()),
+            },
+            FileAsk::Find { workspace, query } => Cmd::FindFiles {
+                workspace: workspace.clone(),
+                query: query.clone(),
+            },
+        };
+        let reply = Client::connect(&identity::socket_path(), "jwn-tui-files")
+            .and_then(|mut c| c.cmd_within(cmd, FILES_WAIT));
+        let _ = tx.send(FilesReply { ask, reply });
+    });
+}
 
 /// How long a push is waited for.
 const SYNC_WAIT: Duration = Duration::from_secs(120);
@@ -3343,6 +3819,7 @@ pub fn run() -> Result<(), String> {
     view.set_os_dark(settings::os_is_dark());
     let mut phone_worker: Option<phone::Worker> = None;
     let (sync_tx, sync_rx) = std::sync::mpsc::channel::<Reply>();
+    let (files_tx, files_rx) = std::sync::mpsc::channel::<FilesReply>();
     let (mut settings_read, mut appearance_read) = (Instant::now(), Instant::now());
     let mut programs_read = Instant::now();
     loop {
@@ -3423,6 +3900,12 @@ pub fn run() -> Result<(), String> {
         serve_asks(&mut view, &mut client);
         while let Ok(reply) = sync_rx.try_recv() {
             view.sync_done(reply);
+        }
+        while let Ok(reply) = files_rx.try_recv() {
+            view.files_replied(reply);
+        }
+        for ask in view.take_file_asks() {
+            spawn_files(ask, files_tx.clone());
         }
         if view.take_phone_start() {
             phone_worker = Some(phone::Worker::spawn());
@@ -3870,6 +4353,273 @@ mod tests {
         v.drag_to(x + 4, 1);
         v.drag_to(x + 4, y);
         assert!(v.drag.as_ref().unwrap().scrolling.is_none());
+    }
+
+    fn file(
+        name: &str,
+        kind: FileKind,
+        git: Option<GitMark>,
+        ignored: bool,
+    ) -> contract::FileEntry {
+        contract::FileEntry {
+            name: name.into(),
+            kind,
+            size: None,
+            git,
+            ignored,
+        }
+    }
+
+    /// The daemon's answer for the listing of `path`.
+    fn listing(ws: &str, path: &str, entries: Vec<contract::FileEntry>) -> FilesReply {
+        let total = entries.len();
+        FilesReply {
+            ask: FileAsk::List {
+                workspace: ws.into(),
+                path: path.into(),
+            },
+            reply: Ok(Ok(Some(
+                serde_json::to_value(FileListing {
+                    path: path.into(),
+                    entries,
+                    total,
+                })
+                .unwrap(),
+            ))),
+        }
+    }
+
+    /// A view with the tree shown, the root answered: `src/`, `target/` (ignored), `Cargo.toml` (changed), `.gitignore`.
+    fn tree_view() -> (View, String) {
+        let mut v = fixture_view();
+        let ws = v.selected_id().unwrap();
+        v.press(Key::Tree);
+        assert_eq!(
+            v.take_file_asks(),
+            [FileAsk::List {
+                workspace: ws.clone(),
+                path: String::new()
+            }]
+        );
+        v.files_replied(listing(
+            &ws,
+            "",
+            vec![
+                file("src", FileKind::Dir, Some(GitMark::Modified), false),
+                file("target", FileKind::Dir, None, true),
+                file("Cargo.toml", FileKind::File, Some(GitMark::Modified), false),
+                file(".gitignore", FileKind::File, None, false),
+            ],
+        ));
+        (v, ws)
+    }
+
+    #[test]
+    fn t_shows_the_tree_at_the_right_gives_it_the_keys_and_draws_the_folder_with_what_git_says() {
+        let (v, _) = tree_view();
+        assert!(v.tree_on && v.tree_focus);
+        let text = v.plain(120, 30);
+        for want in [
+            "archivos",
+            "▸ src/",
+            "▸ target/",
+            "· Cargo.toml",
+            "M cambiado",
+            "◌ ignorado",
+        ] {
+            assert!(text.contains(want), "{want}\n{text}");
+        }
+        assert!(
+            !text.contains(".gitignore"),
+            "the hidden ones are not shown"
+        );
+        assert!(text.lines().last().unwrap().contains(" ARCHIVOS "));
+        let (_, _, w, _) = panes_rect(120, 30);
+        assert_eq!(
+            v.panes_space(120, 30).2,
+            w - TREE_W,
+            "the panels give it room"
+        );
+        // The marks are at the right, in their colours.
+        let g = v.grid(120, 30);
+        let y = g
+            .rows_plain()
+            .iter()
+            .position(|r| r.contains("Cargo.toml"))
+            .unwrap();
+        let mark = g.cells[y * 120 + 117];
+        assert_eq!((mark.0, mark.1.fg), ('M', Some(look::yellow())));
+    }
+
+    #[test]
+    fn j_k_move_enter_opens_a_folder_and_asks_for_it_and_a_file_opens_in_the_editor() {
+        let (mut v, ws) = tree_view();
+        v.press_key(plain(KeyCode::Enter));
+        assert_eq!(
+            v.take_file_asks(),
+            [FileAsk::List {
+                workspace: ws.clone(),
+                path: "src".into()
+            }],
+            "the folder is asked for when it opens, once"
+        );
+        assert!(v.plain(120, 30).contains("leyendo…"));
+        v.files_replied(listing(
+            &ws,
+            "src",
+            vec![file("main.rs", FileKind::File, None, false)],
+        ));
+        assert!(v.plain(120, 30).contains("▾ src/") && v.plain(120, 30).contains("main.rs"));
+        v.press_key(plain(KeyCode::Enter));
+        assert!(v.take_file_asks().is_empty(), "closing asks for nothing");
+        v.press_key(plain(KeyCode::Char('j')));
+        v.press_key(plain(KeyCode::Char('j')));
+        let after = v.press_key(plain(KeyCode::Enter));
+        let After::NewProgram {
+            workspace,
+            program,
+            place,
+        } = after
+        else {
+            panic!("{after:?}");
+        };
+        assert_eq!(workspace, ws);
+        assert_eq!(program.last().map(String::as_str), Some("Cargo.toml"));
+        assert!(place.beside.is_some());
+        assert!(
+            !v.tree_focus && v.tree_on,
+            "the keys go back to the panels, the tree stays"
+        );
+    }
+
+    #[test]
+    fn h_closes_a_folder_or_goes_up_y_copies_the_path_and_dot_shows_the_hidden() {
+        let (mut v, ws) = tree_view();
+        v.press_key(plain(KeyCode::Enter));
+        v.take_file_asks();
+        v.files_replied(listing(
+            &ws,
+            "src",
+            vec![file("main.rs", FileKind::File, None, false)],
+        ));
+        v.press_key(plain(KeyCode::Char('j')));
+        assert_eq!(
+            v.press_key(plain(KeyCode::Char('y'))),
+            After::Copy("src/main.rs".into())
+        );
+        assert!(v.plain(120, 30).contains("ruta copiada"));
+        v.press_key(plain(KeyCode::Char('h')));
+        assert_eq!(v.trees[&ws].sel, 0, "up to the folder that holds it");
+        v.press_key(plain(KeyCode::Char('h')));
+        assert!(!v.plain(120, 30).contains("main.rs"), "and then it closes");
+        v.press_key(plain(KeyCode::Char('.')));
+        assert!(v.plain(120, 30).contains(".gitignore"));
+        v.press_key(plain(KeyCode::Char('.')));
+        assert!(!v.plain(120, 30).contains(".gitignore"));
+    }
+
+    #[test]
+    fn a_search_asks_for_what_is_typed_and_only_what_is_typed_now_is_shown() {
+        let (mut v, ws) = tree_view();
+        v.press_key(plain(KeyCode::Char('/')));
+        for c in ['t', 'o'] {
+            v.press_key(plain(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            v.take_file_asks(),
+            [
+                FileAsk::Find {
+                    workspace: ws.clone(),
+                    query: "t".into()
+                },
+                FileAsk::Find {
+                    workspace: ws.clone(),
+                    query: "to".into()
+                },
+            ]
+        );
+        let found = |q: &str, paths: &[&str]| FilesReply {
+            ask: FileAsk::Find {
+                workspace: ws.clone(),
+                query: q.into(),
+            },
+            reply: Ok(Ok(Some(
+                serde_json::to_value(FoundFiles {
+                    paths: paths.iter().map(|p| (*p).to_owned()).collect(),
+                    cut: false,
+                })
+                .unwrap(),
+            ))),
+        };
+        v.files_replied(found("t", &["a/other.rs"]));
+        assert!(
+            !v.plain(120, 30).contains("other.rs"),
+            "the answer for «t» is old"
+        );
+        v.files_replied(found("to", &["src/auth/token.rs"]));
+        let text = v.plain(120, 30);
+        assert!(
+            text.contains("/ to▏") && text.contains("src/auth/token.rs"),
+            "{text}"
+        );
+        assert!(text.contains("1 coincidencia"), "{text}");
+        let after = v.press_key(plain(KeyCode::Enter));
+        assert!(
+            matches!(&after, After::NewProgram { program, .. } if program.last().map(String::as_str) == Some("src/auth/token.rs"))
+        );
+        assert!(v.trees[&ws].filter.is_none(), "opening ends the search");
+        // esc ends it too, and a second one gives the keys back.
+        let (mut v, _) = tree_view();
+        v.press_key(plain(KeyCode::Char('/')));
+        v.press_key(plain(KeyCode::Esc));
+        assert!(v.tree_focus && v.trees.values().all(|t| t.filter.is_none()));
+        v.press_key(plain(KeyCode::Esc));
+        assert!(!v.tree_focus && v.tree_on);
+        v.press(Key::Tree);
+        assert!(v.tree_focus, "t gives the keys back");
+        v.press_key(plain(KeyCode::Char('t')));
+        assert!(!v.tree_on, "and closes it from inside");
+    }
+
+    #[test]
+    fn a_click_in_the_tree_opens_a_folder_or_a_file_and_a_click_on_the_panels_gives_them_the_keys()
+    {
+        let (mut v, ws) = tree_view();
+        assert_eq!(v.click(110, 2, 120, 30), After::Continue);
+        assert_eq!(
+            v.take_file_asks(),
+            [FileAsk::List {
+                workspace: ws.clone(),
+                path: "src".into()
+            }],
+            "the first row is a folder: it opens"
+        );
+        // src, its note, target and then Cargo.toml.
+        let after = v.click(110, 5, 120, 30);
+        assert!(
+            matches!(after, After::NewProgram { .. }),
+            "a file opens: {after:?}"
+        );
+        v.press(Key::Tree);
+        assert!(v.tree_focus);
+        v.click(40, 8, 120, 30);
+        assert!(!v.tree_focus, "a click on the panels takes the keys back");
+        // The wheel scrolls the tree and not the panels.
+        v.scroll(true, 110, 5, 120, 30);
+        assert_eq!(v.trees[&ws].scroll, 0, "nothing to scroll in so few rows");
+    }
+
+    #[test]
+    fn the_program_that_opens_a_file_is_visual_then_editor_then_nvim() {
+        let s = |t: &str| Some(t.to_owned());
+        assert_eq!(editor_from(s("hx"), s("vim")), ["hx"]);
+        assert_eq!(editor_from(None, s("code -w")), ["code", "-w"]);
+        assert_eq!(
+            editor_from(s("  "), s("vim")),
+            ["vim"],
+            "an empty one is none"
+        );
+        assert_eq!(editor_from(None, None), ["nvim"]);
     }
 
     #[test]

@@ -172,6 +172,14 @@ sealed interface Cmd {
     @Serializable @SerialName("grow_pane")
     data class GrowPane(val pane: Id, val dir: SplitDir, val by: Int) : Cmd
 
+    /** List one folder of a workspace ([path] is relative to its folder); the result is a file listing. */
+    @Serializable @SerialName("list_files")
+    data class ListFiles(val workspace: Id, val path: String? = null) : Cmd
+
+    /** Find the files of a workspace whose path holds [query]; the result is the paths found. */
+    @Serializable @SerialName("find_files")
+    data class FindFiles(val workspace: Id, val query: String) : Cmd
+
     @Serializable @SerialName("rename_workspace")
     data class RenameWorkspace(val workspace: Id, val name: String) : Cmd
 

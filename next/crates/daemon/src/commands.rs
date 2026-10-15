@@ -8,6 +8,7 @@ use serde_json::Value;
 use crate::agents;
 use crate::browse;
 use crate::changes;
+use crate::files;
 use crate::panes;
 use crate::rename;
 use crate::server::Shared;
@@ -48,6 +49,8 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
         Cmd::CheckWorkspace { workspace } => sync::check(shared, &workspace),
         Cmd::OpenFolder { path } => workspaces::open_folder(shared, &path),
         Cmd::ListDir { path, hidden } => browse::list_dir(path.as_deref(), hidden),
+        Cmd::ListFiles { workspace, path } => files::list(shared, &workspace, path.as_deref()),
+        Cmd::FindFiles { workspace, query } => files::find(shared, &workspace, &query),
         Cmd::CreateWorktree {
             repo,
             branch,
