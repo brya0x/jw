@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 
 use contract::patch::diff;
 use contract::{
-    Attention, AttentionKind, DaemonMsg, ErrorCode, Head, Id, Node, PaneSummary, PatchOp, Screen,
-    Session, Workspace, WorkspaceKind, WorkspaceSummary,
+    Attention, AttentionKind, DaemonMsg, ErrorCode, Head, Id, Node, PaneInput, PaneSummary,
+    PatchOp, Screen, Session, Workspace, WorkspaceKind, WorkspaceSummary,
 };
 use serde_json::Value;
 
@@ -103,6 +103,8 @@ pub struct Core {
     /// The running shells, by pane id, and the last screen read from each.
     terms: HashMap<Id, Arc<Term>>,
     screens: HashMap<Id, Screen>,
+    /// What each pane's shell holds at its prompt, for the panes that have said where it starts.
+    inputs: HashMap<Id, PaneInput>,
     /// The last blocks read from each shell (with their version), and the id of the node
     /// each pane's blocks are served as.
     blocks_views: HashMap<Id, (u64, contract::BlocksMode, Vec<contract::Block>)>,
@@ -143,6 +145,7 @@ impl Core {
             next_client: 1,
             terms: HashMap::new(),
             screens: HashMap::new(),
+            inputs: HashMap::new(),
             blocks_views: HashMap::new(),
             blocks_ids: HashMap::new(),
             diffs: HashMap::new(),
@@ -224,6 +227,7 @@ impl Core {
 
     pub fn attach_term(&mut self, pane: &Id, term: Arc<Term>) {
         self.screens.insert(pane.clone(), term.screen());
+        self.set_input(pane, term.input());
         self.terms.insert(pane.clone(), term);
     }
 
@@ -231,7 +235,16 @@ impl Core {
     pub fn read_screen(&mut self, pane: &str) {
         if let Some(term) = self.terms.get(pane) {
             self.screens.insert(pane.to_owned(), term.screen());
+            let input = term.input();
+            self.set_input(pane, input);
         }
+    }
+
+    fn set_input(&mut self, pane: &str, input: Option<PaneInput>) {
+        match input {
+            Some(i) => self.inputs.insert(pane.to_owned(), i),
+            None => self.inputs.remove(pane),
+        };
     }
 
     /// Re-read the blocks of a pane whose terminal changed them. A shell started with the
@@ -523,6 +536,7 @@ impl Core {
             .cloned()
             .collect();
         self.screens.retain(|k, _| live.contains(k.as_str()));
+        self.inputs.retain(|k, _| live.contains(k.as_str()));
         self.blocks_views.retain(|k, _| live.contains(k.as_str()));
         self.blocks_ids.retain(|k, _| live.contains(k.as_str()));
         dead.iter().filter_map(|k| self.terms.remove(k)).collect()
@@ -851,6 +865,7 @@ impl Core {
                         .get(&p.id)
                         .cloned()
                         .unwrap_or_else(pty::blank_screen),
+                    input: self.inputs.get(&p.id).cloned().map(Box::new),
                 }));
                 if let (Some(id), Some((_, mode, blocks))) =
                     (self.blocks_ids.get(&p.id), self.blocks_views.get(&p.id))

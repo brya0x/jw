@@ -23,6 +23,7 @@ use wire::Client;
 
 mod changes;
 mod diff_lines;
+mod field;
 mod look;
 mod manage;
 mod open;
@@ -35,6 +36,7 @@ mod side;
 pub use changes::Ask;
 use changes::{Changes, Docs, Outcome, Src};
 use contract::ErrorBody;
+use field::Field;
 use manage::{Act, Manage, Named, Target};
 use programs::{Launcher, Pick, Programs};
 use settings::Settings;
@@ -1607,23 +1609,32 @@ impl View {
             return After::Continue;
         };
         let (ix, iy, iw, ih) = inner(rect);
-        let lh = list_h(ih);
+        let Some(doc) = self.panes.get(pane) else {
+            return After::Continue;
+        };
+        let lh = list_h(ih, field_of(doc, b, iw).band_rows());
         let lines = shell::block_lines(&b.blocks, self.now_ms, iw.saturating_sub(2));
         let top = iy + gap(lines.len(), lh);
+        let on_marks = y == iy + lh + Field::FIRST_TEXT;
+        let running = b.blocks.last().is_some_and(|k| k.running);
         if (top..iy + lh).contains(&y) && (ix..ix + iw).contains(&x) {
             let start = window_start(lines.len(), lh, self.scroll.get(pane).copied().unwrap_or(0));
             if let Some(id) = lines.get(start + y - top).and_then(|l| l.block) {
                 self.blk = Some((pane.to_owned(), id));
                 self.typing = false;
             }
-        } else if y == iy + lh + 1
-            && b.blocks.last().is_some_and(|k| k.running)
-            && x + STOP.chars().count() >= ix + iw
-            && x < ix + iw
+        } else if on_marks
+            && running
+            && (field::stop_at(ix, iw)..field::stop_at(ix, iw) + STOP.chars().count()).contains(&x)
         {
             return After::Write {
                 pane: pane.to_owned(),
                 data: "\x03".into(),
+            };
+        } else if on_marks && x == field::send_at(ix, iw) {
+            return After::Write {
+                pane: pane.to_owned(),
+                data: "\r".into(),
             };
         }
         After::Continue
@@ -1752,8 +1763,11 @@ impl View {
             return After::Continue;
         };
         let (_, _, iw, ih) = inner(rects[i]);
+        let Some(doc) = self.panes.get(&pane) else {
+            return After::Continue;
+        };
         let total = shell::block_lines(&b.blocks, self.now_ms, iw.saturating_sub(2)).len();
-        let most = total.saturating_sub(list_h(ih));
+        let most = total.saturating_sub(list_h(ih, field_of(doc, b, iw).band_rows()));
         let at = self.scroll.entry(pane).or_insert(0);
         *at = if down {
             at.saturating_sub(SCROLL_STEP)
@@ -2138,8 +2152,8 @@ impl View {
         }
     }
 
-    /// A shell pane as blocks: the list, newest at the bottom, and the editor under it (a rule,
-    /// the chips, and the line the shell is editing, which is the cursor's line of its screen).
+    /// A shell pane as blocks: the list, newest at the bottom, and the field under it (the chips
+    /// and the line the shell holds, in a band of their own, `field.rs`).
     fn blocks_view(
         &self,
         g: &mut Grid,
@@ -2153,7 +2167,8 @@ impl View {
         if iw < 8 || ih < 4 {
             return;
         }
-        let lh = list_h(ih);
+        let field = field_of(p, b, iw);
+        let lh = list_h(ih, field.band_rows());
         let lines = shell::block_lines(&b.blocks, self.now_ms, iw - 2);
         let scrolled = self.scroll.get(&p.head.id).copied().unwrap_or(0);
         let start = window_start(lines.len(), lh, scrolled);
@@ -2182,45 +2197,14 @@ impl View {
                 g.put_over(at, y, text, *style);
             }
         }
-        let ey = iy + lh;
-        g.put(ix, ey, &"─".repeat(iw), Style::fg(look::line()));
-        let last = b.blocks.last();
-        if let Some(k) = last.filter(|k| k.running) {
-            g.put(
-                ix,
-                ey + 1,
-                &format!(
-                    "◌ {}",
-                    clip(&k.cmd, iw.saturating_sub(STOP.chars().count() + 4))
-                ),
-                Style::fg(look::yellow()),
-            );
-            g.put(
-                ix + iw - STOP.chars().count(),
-                ey + 1,
-                STOP,
-                Style::fg(look::red()).bold(),
-            );
-        } else {
-            let folder = shell::short(&p.cwd);
-            g.put(ix, ey + 1, &clip(&folder, iw), Style::fg(look::blue()));
-            if let Some(branch) = branch {
-                let at = ix + folder.chars().count() + 2;
-                g.put(
-                    at,
-                    ey + 1,
-                    &clip(&format!("⎇ {branch}"), (ix + iw).saturating_sub(at)),
-                    Style::fg(look::magenta()),
-                );
-            }
-        }
-        let cur = p.screen.cursor;
-        if let Some(line) = p.screen.lines.get(cur.row as usize) {
-            g.put(ix, ey + 2, &clip(line, iw), Style::fg(look::fg()));
-        }
-        if focused && cur.visible && (cur.col as usize) < iw {
-            g.cells[(ey + 2) * g.cols + ix + cur.col as usize].1.reverse = true;
-        }
+        let running = b.blocks.last().filter(|k| k.running);
+        let chips: Vec<(String, Rgb)> = match running {
+            Some(k) => vec![(format!("◌ {}", k.cmd), look::yellow())],
+            None => std::iter::once((shell::short(&p.cwd), look::dim()))
+                .chain(branch.map(|br| (format!("⎇ {br}"), look::magenta())))
+                .collect(),
+        };
+        field.draw(g, (ix, iy + lh, iw), &chips, running.is_some(), focused);
     }
 
     fn avisos_box(&self, g: &mut Grid, (x, y, w, h): Rect) {
@@ -2348,17 +2332,29 @@ const TERMINAL_KEYS: &[(&str, &str)] = &[
 
 /// How long a pairing question is on the screen before `y` answers it.
 const ANSWER_DELAY_MS: u64 = 800;
-/// The editor under the blocks: a rule, the chips, the prompt line.
-const EDITOR_ROWS: usize = 3;
-
 /// What a pane's box holds: inside the border and its padding.
 fn inner((x, y, w, h): Rect) -> Rect {
     (x + 2, y + 1, w.saturating_sub(4), h.saturating_sub(2))
 }
 
-/// Rows of the list of blocks in a box `h` rows tall.
-fn list_h(h: usize) -> usize {
-    h.saturating_sub(EDITOR_ROWS)
+/// Rows of the list of blocks in a box `h` rows tall under a field of `band` rows.
+fn list_h(h: usize, band: usize) -> usize {
+    h.saturating_sub(band)
+}
+
+/// The field of a shell pane drawn as blocks: what its shell holds at the prompt, the line of its
+/// screen when the daemon does not say, or nothing while a command runs.
+fn field_of(p: &Pane, b: &Blocks, iw: usize) -> Field {
+    if b.blocks.last().is_some_and(|k| k.running) {
+        return Field::new(None, None, iw);
+    }
+    let c = p.screen.cursor;
+    let line = p
+        .screen
+        .lines
+        .get(c.row as usize)
+        .map(|l| (l.as_str(), c.col as usize));
+    Field::new(p.input.as_deref(), line, iw)
 }
 
 /// Empty rows above a list of `total` lines in `rows`: the list sits at the bottom, next to
@@ -2989,10 +2985,8 @@ mod tests {
         assert!(t.contains("▌ ❯ git status"), "{t}");
         assert!(t.contains("salió 101 · 4.2s"), "{t}");
         assert!(t.contains("corriendo"), "{t}");
-        assert!(
-            t.contains("── ◌ ") || t.contains("◌ cargo watch -x test"),
-            "{t}"
-        );
+        assert!(t.contains("◌ cargo watch -x test"), "{t}");
+        assert!(t.contains("va al programa"), "{t}");
         assert!(
             t.contains("■ ^C"),
             "the running command can be stopped: {t}"
@@ -3007,20 +3001,76 @@ mod tests {
     fn a_short_list_of_blocks_sits_at_the_bottom_next_to_the_editor() {
         let t = open_blocks().plain(120, 30);
         let rows: Vec<&str> = t.lines().collect();
-        let cmd = rows
+        let last = rows.iter().position(|l| l.contains("[Running")).unwrap();
+        let chips = rows
             .iter()
-            .position(|l| l.contains("❯ cargo watch"))
+            .position(|l| l.contains("◌ cargo watch"))
             .unwrap();
-        let rule = cmd
-            + rows[cmd..]
-                .iter()
-                .position(|l| l.contains("────────────"))
-                .unwrap();
         assert_eq!(
-            rule - cmd,
+            chips - last,
             3,
-            "the newest block ends right above the editor: {t}"
+            "the newest block ends, a free row of the list and one of the band, and the chips: {t}"
         );
+    }
+
+    /// The idle shell pane of the fixture: its last block ended, with what the shell holds.
+    fn idle(input: Option<(&str, u32)>) -> View {
+        let mut v = open_blocks();
+        v.blocks
+            .get_mut(BLOCKS)
+            .unwrap()
+            .blocks
+            .last_mut()
+            .unwrap()
+            .running = false;
+        v.panes.get_mut(SHELL).unwrap().input = input.map(|(text, cursor)| {
+            Box::new(contract::PaneInput {
+                text: text.into(),
+                cursor,
+            })
+        });
+        v
+    }
+
+    #[test]
+    fn the_field_shows_what_the_shell_holds_after_a_green_prompt_and_asks_when_it_is_empty() {
+        let t = idle(Some(("git sta", 7))).plain(120, 30);
+        assert!(t.contains("❯ git sta"), "{t}");
+        assert!(!t.contains("escribe un comando"), "{t}");
+        let t = idle(Some(("", 0))).plain(120, 30);
+        assert!(t.contains("❯ escribe un comando"), "{t}");
+        assert!(t.contains("➤"), "the send mark: {t}");
+        assert!(!t.contains("■ ^C"), "nothing runs to stop: {t}");
+        assert!(
+            t.contains("app-login"),
+            "the folder is a chip over the field: {t}"
+        );
+    }
+
+    #[test]
+    fn a_line_that_wraps_makes_the_field_grow_and_the_list_give_way() {
+        let short = idle(Some(("ls", 2))).plain(120, 30);
+        let long_text = "x".repeat(200);
+        let long = idle(Some((&long_text, 200))).plain(120, 30);
+        let rows = |t: &str| t.lines().filter(|l| l.contains("xxxxxxxx")).count();
+        assert_eq!(rows(&short), 0);
+        assert!(rows(&long) >= 2, "the text wraps inside the field: {long}");
+        let blocks = |t: &str| t.lines().filter(|l| l.contains("▌")).count();
+        assert!(
+            blocks(&long) < blocks(&short),
+            "the list has fewer rows: {long}"
+        );
+    }
+
+    #[test]
+    fn without_the_daemons_input_the_line_of_the_screen_is_the_field() {
+        let mut v = idle(None);
+        let pane = v.panes.get_mut(SHELL).unwrap();
+        pane.screen.lines[0] = "❯ ls -la".into();
+        pane.screen.cursor.row = 0;
+        pane.screen.cursor.col = 8;
+        let t = v.plain(120, 30);
+        assert!(t.contains("❯ ❯ ls -la") || t.contains("❯ ls -la"), "{t}");
     }
 
     #[test]
@@ -3076,15 +3126,43 @@ mod tests {
         assert_eq!(v.press(Key::CopyCmd), After::Continue, "nothing to copy");
     }
 
+    /// The cell of the first `mark` on the screen, to click it.
+    fn cell_of(v: &View, mark: &str) -> (usize, usize) {
+        let t = v.plain(120, 30);
+        let (y, line) = t
+            .lines()
+            .enumerate()
+            .find(|(_, l)| l.contains(mark))
+            .unwrap_or_else(|| panic!("no {mark} on\n{t}"));
+        (line[..line.find(mark).unwrap()].chars().count(), y)
+    }
+
     #[test]
-    fn the_stop_chip_sends_ctrl_c() {
+    fn the_stop_mark_sends_ctrl_c_and_the_send_mark_sends_the_line() {
         let mut v = open_blocks();
+        let (x, y) = cell_of(&v, "■ ^C");
         assert_eq!(
-            v.click(116, 26, 120, 30),
+            v.click(x + 1, y, 120, 30),
             After::Write {
                 pane: SHELL.into(),
                 data: "\x03".into()
             }
+        );
+        let (x, y) = cell_of(&v, "➤");
+        assert_eq!(
+            v.click(x, y, 120, 30),
+            After::Write {
+                pane: SHELL.into(),
+                data: "\r".into()
+            }
+        );
+        let mut idle = idle(Some(("", 0)));
+        let (x, y) = cell_of(&idle, "➤");
+        assert!(matches!(idle.click(x, y, 120, 30), After::Write { .. }));
+        assert_eq!(
+            idle.click(x - 4, y, 120, 30),
+            After::Continue,
+            "no stop mark when nothing runs"
         );
     }
 

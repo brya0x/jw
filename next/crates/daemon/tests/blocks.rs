@@ -439,3 +439,77 @@ fn a_program_that_takes_the_screen_is_full_from_its_block_to_its_end_and_not_a_p
         "blocks as soon as the shell says it ended, while the foreground may still say claude"
     );
 }
+
+/// REQ-252 and REQ-253: the pane says what its shell holds at the prompt, from where the shell
+/// says the prompt ends, and nothing while a command runs.
+#[test]
+fn the_pane_carries_what_the_shell_holds_at_its_prompt_and_nothing_while_a_command_runs() {
+    let Some(shell) = find("zsh").or_else(|| find("bash")) else {
+        return;
+    };
+    let mut r = rig(&shell);
+    let pane = r.pane.clone();
+    let input = |c: &Client, pane: &str| c.nodes[pane].get("input").cloned();
+    let held = |text: &'static str, cursor: u64| {
+        let pane = pane.clone();
+        move |c: &Client| {
+            input(c, &pane).is_some_and(|i| i["text"] == text && i["cursor"] == cursor)
+        }
+    };
+
+    assert!(
+        r.c.wait_until(Duration::from_secs(10), held("", 0))
+            .unwrap(),
+        "{}",
+        r.c.nodes[&pane]
+    );
+    r.c.cmd(Cmd::Write {
+        pane: pane.clone(),
+        data: "echo hi".into(),
+    })
+    .unwrap()
+    .unwrap();
+    assert!(
+        r.c.wait_until(Duration::from_secs(10), held("echo hi", 7))
+            .unwrap(),
+        "{}",
+        r.c.nodes[&pane]
+    );
+    // ^B moves the cursor back; the text stays whole.
+    r.c.cmd(Cmd::Write {
+        pane: pane.clone(),
+        data: "\x02\x02".into(),
+    })
+    .unwrap()
+    .unwrap();
+    assert!(
+        r.c.wait_until(Duration::from_secs(10), held("echo hi", 5))
+            .unwrap()
+    );
+
+    // ^U empties the line, and a command that runs has no line to show.
+    r.c.cmd(Cmd::Write {
+        pane: pane.clone(),
+        data: "\x05\x15".into(),
+    })
+    .unwrap()
+    .unwrap();
+    assert!(
+        r.c.wait_until(Duration::from_secs(10), held("", 0))
+            .unwrap()
+    );
+    r.run("sleep 1.5");
+    let p2 = pane.clone();
+    assert!(
+        r.c.wait_until(Duration::from_secs(10), move |c| input(c, &p2).is_none())
+            .unwrap(),
+        "a running command has no input: {}",
+        r.c.nodes[&pane]
+    );
+    r.finished(1);
+    assert!(
+        r.c.wait_until(Duration::from_secs(10), held("", 0))
+            .unwrap(),
+        "back at the prompt the line is empty again"
+    );
+}

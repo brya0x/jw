@@ -46,9 +46,9 @@ button:hover{border-color:var(--blue)}
 .ph .acts{display:flex;gap:6px;padding:6px 10px;border-top:1px solid var(--line);background:var(--panel)}
 .ph .acts button{flex:1;min-height:36px;font-size:12px}
 .ph .edit{border-top:1px solid var(--line);background:var(--panel);padding:8px 10px 6px;display:flex;flex-direction:column;gap:6px}
-.ph .chips{display:flex;gap:8px;font-size:11px;white-space:nowrap;overflow:hidden}
-.ph .ed{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:6px;padding:0 8px;background:var(--bg)}
-.ph .ed.prog{border-style:dashed}
+.ph .chips{display:flex;gap:6px;font-size:11px;white-space:nowrap;overflow:hidden}
+.ph .chips span{background:var(--sel);border-radius:999px;padding:5px 12px}
+.ph .ed{display:flex;align-items:center;gap:8px;padding:0 4px}
 .ph .ed input{flex:1;min-width:0;height:40px;border:0;background:none;color:var(--fg);font:13px var(--mono);outline:none}
 .ph .ed button{min-width:40px;height:36px;border:0;background:none;color:var(--blue);font-size:15px}
 .ph .ed button.stop{color:var(--red)}
@@ -94,7 +94,7 @@ button:hover{border-color:var(--blue)}
       <div class="acts" id="phActs" hidden></div>
       <div class="edit" id="phEdit">
         <div class="chips" id="phChips"></div>
-        <form class="ed" id="phForm" autocomplete="off"><span class="c-green b">❯</span><input id="phIn" placeholder="escribe un comando" aria-label="Command"><button id="phGo" type="submit" aria-label="Run">↵</button></form>
+        <form class="ed" id="phForm" autocomplete="off"><span class="c-green b">❯</span><input id="phIn" placeholder="escribe un comando" aria-label="Command"><button id="phGo" type="submit" aria-label="Enviar">➤</button></form>
       </div>
     </div></div>
   </div>
@@ -108,6 +108,7 @@ button:hover{border-color:var(--blue)}
       <li><b>Marks sit at the right of a sidebar row</b> (most urgent unseen, with a count when there are several). No extra line under the row: the sentence lives in the pane's title and in <code>a</code>.</li>
       <li><b>Avisos</b> opens as a box over the pane area: one row per unseen attention, <code>↵</code> goes to that pane, focus and seen both change.</li>
       <li><b>The shell as blocks</b> (the terminal's version of what the phone prototype already does): inside a shell pane's box, each command is a block with its folder, branch and time, a bar at the left (green done, red failed, yellow running), bold command and its coloured output; newest at the bottom. A click selects a block and the status bar offers copy command, copy output, repeat. The editor sits at the foot of the box with the folder and branch chips; while a program runs it shows the program and <code>■ ^C</code>. (Only the shell for now: no agents, no full-screen programs.) Open a shell pane, press Enter, type, press Enter.</li>
+      <li><b>The field at the foot (changed)</b> is drawn as the phone's today, which is flat: no box, a band of its own colour under the blocks. On it, a row of chips (the folder and, when there is one, <code>⎇ branch</code>, each a pill; while a command runs, <code>◌</code> and the command in yellow), and under it the line: the green <code>❯</code>, the text you type, and the blue send mark <code>➤</code> at the right. With nothing typed it says «escribe un comando»; while something runs it says «va al programa» (the phone's longer «lo que escribas va al programa» does not fit a narrow pane) and a red <code>■ ^C</code> sits beside the send mark (the phone's red stop beside its send). The band has room around it, as the phone's has: a free row over the chips, one between the chips and the line, one under the line, and a column of margin at each side (five rows in all, where the old editor took three). A line longer than the line wraps under it and the band grows, up to five rows of text. The shell still owns the line (history, tab and its key bindings work as today): the client draws what the shell has typed, after its prompt. For that the daemon has to say where the typed text starts: one optional field in the <code>blocks</code> node (the cursor at the shell's prompt-end mark), which is also what mirroring the line on the phone (OPEN-6) needs. Without it, only the band, the chips and the marks could change, not the text or the placeholder.</li>
       <li><b>On the phone</b> the same blocks are drawn flat, newest at the bottom: folder and time dim on top, the command in bold, the coloured output below, and the bar at the left (green, red, yellow). The shell's panes are tabs (the phone's way; the terminal uses boxes). Tapping a block selects it and shows <code>Comando</code>, <code>Salida</code> and <code>Repetir</code>. The editor sits at the foot with the folder and branch chips; while a program runs the chip is the program, the border turns dashed and the send button becomes a red stop (<code>^C</code>). The special keys (esc, tab, arrows) have no buttons for now; where they go is still to be decided. The phone shows the workspace highlighted in the terminal; on the real phone Home picks it.</li>
       <li><b>Seen</b> is shared: looking at a pane here clears its aviso on the phone too. Moving the highlight previews a workspace; <code>↵</code> or focusing a pane marks it seen.</li>
     </ol>
@@ -248,7 +249,15 @@ const clipTo = (t, n) => { const a = [...t]; return a.length <= n ? t : a.slice(
 /* A shell pane in blocks: newest at the bottom, each command with its folder, time and output,
    a bar at the left that says how it ended, and the editor at the foot of the box. */
 function drawShell(g, p, x0, y0, bw, bh, focused){
-  const ix = x0 + 2, iw = bw - 4, top = y0 + 1, edTop = y0 + bh - 4;
+  const ix = x0 + 2, iw = bw - 4, top = y0 + 1;
+  const running = p.blocks.at(-1) && p.blocks.at(-1).running;
+  // The field, as the phone's today: no box, a band of its own colour at the foot with room around it: a row of chips
+  // (the folder and branch as pills, or what runs), a free row, the line (the green prompt, the text or what to type, and
+  // the send mark at the right) and a free row under it. A text longer than the line wraps under it, up to five rows.
+  const fx = ix + 1, fw = iw - 2, tx = fx + 2, tw = Math.max(8, fw - 2 - 12), txt = [...p.input];
+  let rowsOf = []; for (let i = 0; i < txt.length; i += tw) rowsOf.push(txt.slice(i, i + tw).join(''));
+  if (!rowsOf.length || txt.length % tw === 0 && txt.length) rowsOf.push('');
+  const shownRows = rowsOf.slice(-5), n = shownRows.length, edTop = y0 + bh - 5 - n;
   const lines = [];
   p.blocks.forEach((b, bi) => {
     const state = b.running ? 'c-yellow' : b.code ? 'c-red' : 'c-green';
@@ -267,14 +276,16 @@ function drawShell(g, p, x0, y0, bw, bh, focused){
     if (ln.right){ const t = ln.right[0]; put(g, ix + iw - [...t].length, y, t, ln.right[1] + (sel ? ' bg-sel' : '')); }
     if (!ui.hits.some(h => h.blk === ln.bi && h.pane === p.id)) ui.hits.push({x:x0 + 1, y, w:bw - 2, h:1, pane:p.id, blk:ln.bi, rows:shown.filter(s => s.bi === ln.bi).length});
   });
-  // the editor: a rule, a row of chips, the prompt
-  put(g, x0 + 1, edTop, '─'.repeat(bw - 2), 'c-line');
-  const running = p.blocks.at(-1) && p.blocks.at(-1).running;
-  if (running){ put(g, ix, edTop + 1, '◌ ' + clipTo(p.blocks.at(-1).cmd, iw - 12), 'c-yellow'); put(g, ix + iw - 7, edTop + 1, '■ ^C', 'c-red b'); }
-  else { put(g, ix, edTop + 1, clipTo(p.cwd, iw - 18), 'c-blue'); if (p.branch) put(g, ix + [...clipTo(p.cwd, iw - 18)].length + 2, edTop + 1, '⎇ ' + p.branch, 'c-mag'); }
-  put(g, ix, edTop + 2, '❯ ', 'c-green b');
-  if (p.input) put(g, ix + 2, edTop + 2, clipTo(p.input, iw - 4), ''); else put(g, ix + 2, edTop + 2, focused ? '' : 'escribe un comando', 'd');
-  if (focused){ const cx = ix + 2 + [...p.input].length; if (cx < ix + iw) g.cells[edTop + 2][cx] = [' ', 'cur']; }
+  for (let y = edTop; y <= edTop + n + 3; y++) fill(g, x0 + 1, y, bw - 2, 'bg-panel');
+  const pp = (x, y, t, c = '') => put(g, x, y, t, (c + ' bg-panel').trim()), chip = (x, y, t, c = '') => { put(g, x, y, ' ' + t + ' ', (c + ' bg-sel').trim()); return x + [...t].length + 3; };
+  if (running) chip(fx, edTop + 1, '◌ ' + clipTo(p.blocks.at(-1).cmd, fw - 8), 'c-yellow');
+  else { const bw2 = p.branch ? [...p.branch].length + 5 : 0, nx = chip(fx, edTop + 1, clipTo(p.cwd, Math.max(6, fw - bw2 - 3)), 'd'); if (p.branch) chip(nx, edTop + 1, '⎇ ' + p.branch, 'c-mag'); }
+  shownRows.forEach((r, k) => { const y = edTop + 3 + k; if (k === 0) pp(fx, y, '❯', 'c-green b'); pp(tx, y, r); });
+  if (!p.input) pp(tx, edTop + 3, running ? 'va al programa' : 'escribe un comando', 'd');
+  if (running) pp(fx + fw - 9, edTop + 3, '■ ^C', 'c-red b');
+  pp(fx + fw - 2, edTop + 3, '➤', 'c-blue b');
+  if (focused){ const last = shownRows[n - 1], cx = tx + [...last].length, cy = edTop + 2 + n;
+    if (cx < fx + fw - 2){ const was = g.cells[cy][cx]; g.cells[cy][cx] = [was[0], 'cur']; } }
 }
 const termShell = () => { const w = cur(); const p = ui.open === w.id ? w.panes[ui.focus] : null; return p && p.shell && !p.full && !ui.avisos ? p : null; };
 function typeKey(k){
@@ -310,9 +321,8 @@ function drawPhone(){
       <div class="bc">${esc(b.cmd)}</div>
       <div class="bo">${b.out.map(o => `<span class="${o.c || ''}">${esc(o.t)}</span>`).join('\n')}</div></div>`).join('');
   const last = p.blocks.at(-1), running = last && last.running;
-  $('phChips').innerHTML = running ? `<span class="c-yellow">◌ ${esc(last.cmd)}</span>` : `<span class="c-blue">${esc(short(p.cwd))}</span>${p.branch ? `<span class="c-mag">⎇ ${esc(p.branch)}</span>` : ''}`;
-  $('phForm').classList.toggle('prog', !!running);
-  $('phGo').outerHTML = running ? '<button id="phGo" class="stop" type="button" aria-label="Stop (^C)">■</button>' : '<button id="phGo" type="submit" aria-label="Run">↵</button>';
+  $('phChips').innerHTML = running ? `<span class="c-yellow">◌ ${esc(last.cmd)}</span>` : `<span class="d">${esc(short(p.cwd))}</span>${p.branch ? `<span class="c-mag">⎇ ${esc(p.branch)}</span>` : ''}`;
+  $('phGo').outerHTML = running ? '<button id="phGo" class="stop" type="button" aria-label="Stop (^C)">■</button>' : '<button id="phGo" type="submit" aria-label="Enviar">➤</button>';
   const acts = $('phActs'); acts.hidden = sel === null;
   acts.innerHTML = ['Comando|c', 'Salida|o', 'Repetir|r'].map(x => `<button type="button" data-act="${x.split('|')[1]}">${x.split('|')[0]}</button>`).join('');
   const bl = $('phBlocks'); bl.scrollTop = bl.scrollHeight;

@@ -355,6 +355,19 @@ pub struct Pane {
     /// (zsh, bash, fish), from the start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocks: Option<Id>,
+    /// What the person has typed at the shell's prompt; absent while a command runs and for a
+    /// shell started without the integration.
+    /// Boxed so the node stays small: a snapshot is the largest message and is as large as this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<Box<PaneInput>>,
+}
+
+/// The line the shell is holding: its text, wrapped rows joined, and where the cursor is in it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneInput {
+    pub text: String,
+    /// The cursor's place in `text`, counted in characters.
+    pub cursor: u32,
 }
 
 /// Level 2 as command blocks: what a pane's shell ran, newest last, each with its output.

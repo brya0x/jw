@@ -150,6 +150,14 @@
         "exit_code": { "type": "integer" }
       }
     },
+    "PaneInput": {
+      "type": "object",
+      "required": ["text", "cursor"],
+      "properties": {
+        "text": { "type": "string" },
+        "cursor": { "type": "integer", "minimum": 0 }
+      }
+    },
     "Screen": {
       "type": "object",
       "required": ["rows", "cols", "lines", "cursor"],
@@ -204,7 +212,8 @@
             "running": { "$ref": "#/$defs/Program" },
             "last_program": { "$ref": "#/$defs/Program" },
             "screen": { "$ref": "#/$defs/Screen" },
-            "blocks": { "$ref": "#/$defs/Id" }
+            "blocks": { "$ref": "#/$defs/Id" },
+            "input": { "$ref": "#/$defs/PaneInput" }
           }
         },
         {

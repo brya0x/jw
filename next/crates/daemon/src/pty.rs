@@ -8,7 +8,7 @@ use std::thread;
 
 use crate::blocks::{self, BlockStore, Scanner};
 use crate::integration::Setup;
-use contract::{Block, BlocksMode, Cursor, Id, Screen};
+use contract::{Block, BlocksMode, Cursor, Id, PaneInput, Screen};
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 pub const ROWS: u16 = 24;
@@ -41,6 +41,9 @@ pub enum Mark {
 pub struct Term {
     parser: Arc<Mutex<vt100::Parser>>,
     blocks: Arc<Mutex<BlockStore>>,
+    /// The column of the screen where the shell's prompt ended (OSC 133;B), while it waits for a
+    /// line: the reader sets it at that mark and clears it when a command starts or ends.
+    input_col: Arc<Mutex<Option<u16>>>,
     writer: Mutex<Box<dyn Write + Send>>,
     master: Mutex<Box<dyn MasterPty + Send>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
@@ -91,6 +94,7 @@ pub fn spawn(
     let term = Arc::new(Term {
         parser: Arc::new(Mutex::new(vt100::Parser::new(ROWS, COLS, 0))),
         blocks: Arc::new(Mutex::new(BlockStore::new(COLS))),
+        input_col: Arc::new(Mutex::new(None)),
         writer: Mutex::new(writer),
         master: Mutex::new(pair.master),
         killer: Mutex::new(child.clone_killer()),
@@ -102,6 +106,7 @@ pub fn spawn(
 
     let parser = term.parser.clone();
     let store = term.blocks.clone();
+    let input_col = term.input_col.clone();
     let pane = pane.clone();
     thread::Builder::new()
         .name("pty".into())
@@ -121,10 +126,21 @@ pub fn spawn(
                             lock(&store).data(&d);
                         }
                         blocks::Piece::Mark(m) => {
+                            // The screen is exactly at the mark: the cursor is where typing starts.
                             match &m {
-                                blocks::Mark::Command { .. } => marks.push(Mark::CommandStart),
-                                blocks::Mark::Done(code) => marks.push(Mark::CommandDone(*code)),
-                                _ => {}
+                                blocks::Mark::Input => {
+                                    *lock(&input_col) =
+                                        Some(lock(&parser).screen().cursor_position().1);
+                                }
+                                blocks::Mark::Command { .. } => {
+                                    *lock(&input_col) = None;
+                                    marks.push(Mark::CommandStart);
+                                }
+                                blocks::Mark::Done(code) => {
+                                    *lock(&input_col) = None;
+                                    marks.push(Mark::CommandDone(*code));
+                                }
+                                blocks::Mark::Prompt => *lock(&input_col) = None,
                             }
                             lock(&store).mark(m);
                         }
@@ -196,6 +212,13 @@ impl Term {
         let _ = lock(&self.killer).kill();
     }
 
+    /// What the person has typed at the shell's prompt; `None` while a command runs, and for a
+    /// shell that has not said where its prompt ends.
+    pub fn input(&self) -> Option<PaneInput> {
+        let col = (*lock(&self.input_col))?;
+        Some(input_of(lock(&self.parser).screen(), col))
+    }
+
     pub fn screen(&self) -> Screen {
         let parser = lock(&self.parser);
         let screen = parser.screen();
@@ -217,6 +240,44 @@ impl Term {
     }
 }
 
+/// The line the shell holds: from `start_col` of the first row of the wrapped line the cursor is
+/// in, to its end, with the rows a wrap split joined (a typed space at the end of a row stays).
+/// A line with a hard break (a multi-line zsh buffer) is read from its last row.
+pub fn input_of(screen: &vt100::Screen, start_col: u16) -> PaneInput {
+    let (row, col) = screen.cursor_position();
+    let (_, cols) = screen.size();
+    let mut first = row;
+    while first > 0 && screen.row_wrapped(first - 1) {
+        first -= 1;
+    }
+    let mut text = String::new();
+    let mut cursor = 0u32;
+    for r in first..=row {
+        let from = if r == first { start_col.min(cols) } else { 0 };
+        let mut line = String::new();
+        let mut before = 0u32;
+        for c in from..cols {
+            let Some(cell) = screen.cell(r, c) else { break };
+            if cell.is_wide_continuation() {
+                continue;
+            }
+            if r == row && c < col {
+                before += 1;
+            }
+            let s = cell.contents();
+            line.push_str(if s.is_empty() { " " } else { s });
+        }
+        if r == row {
+            // Trailing blanks are not typed, but those before the cursor are.
+            let kept = line.trim_end().chars().count().max(before as usize);
+            line = line.chars().take(kept).collect();
+            cursor = text.chars().count() as u32 + before;
+        }
+        text.push_str(&line);
+    }
+    PaneInput { text, cursor }
+}
+
 pub fn blank_screen() -> Screen {
     Screen {
         rows: ROWS,
@@ -227,5 +288,56 @@ pub fn blank_screen() -> Screen {
             col: 0,
             visible: true,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A screen of 20 columns after `bytes`, and what the shell holds from column `from`.
+    fn input(bytes: &str, from: u16) -> PaneInput {
+        let mut p = vt100::Parser::new(6, 20, 0);
+        p.process(bytes.as_bytes());
+        input_of(p.screen(), from)
+    }
+
+    #[test]
+    fn what_is_typed_after_the_prompt_is_the_input_and_the_cursor_is_in_characters() {
+        let held = input("old output\r\n❯ git status", 2);
+        assert_eq!((held.text.as_str(), held.cursor), ("git status", 10));
+        let empty = input("❯ ", 2);
+        assert_eq!((empty.text.as_str(), empty.cursor), ("", 0));
+    }
+
+    #[test]
+    fn a_trailing_space_before_the_cursor_is_typed_and_text_after_it_is_kept() {
+        let held = input("❯ ls ", 2);
+        assert_eq!((held.text.as_str(), held.cursor), ("ls ", 3));
+        // The cursor moved back two characters, as with ^B: the text stays whole.
+        let held = input("❯ git status\x1b[2D", 2);
+        assert_eq!((held.text.as_str(), held.cursor), ("git status", 8));
+    }
+
+    #[test]
+    fn a_line_the_screen_wrapped_is_one_line() {
+        // 20 columns: the prompt takes two, so 18 characters fit in the first row.
+        let held = input("❯ abcdefghijklmnopqrstuvwxy", 2);
+        assert_eq!(held.text, "abcdefghijklmnopqrstuvwxy");
+        assert_eq!(held.cursor, 25);
+    }
+
+    #[test]
+    fn a_line_that_scrolled_the_screen_is_still_read_from_its_first_row() {
+        // The prompt is on the last row, so the wrap scrolls everything up by one.
+        let held = input("1\r\n2\r\n3\r\n4\r\n5\r\n❯ abcdefghijklmnopqrstuvwxy", 2);
+        assert_eq!(held.text, "abcdefghijklmnopqrstuvwxy");
+        assert_eq!(held.cursor, 25);
+    }
+
+    #[test]
+    fn wide_characters_count_once() {
+        let held = input("❯ 日本語", 2);
+        assert_eq!((held.text.as_str(), held.cursor), ("日本語", 3));
     }
 }

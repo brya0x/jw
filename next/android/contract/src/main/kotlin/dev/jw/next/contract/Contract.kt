@@ -306,6 +306,10 @@ data class WorkspaceSummary(
 @Serializable
 data class PaneSummary(val id: Id, val title: String, val attention: List<Attention>)
 
+/** The line the shell is holding: its text, and the cursor's place in it in characters. */
+@Serializable
+data class PaneInput(val text: String, val cursor: Int)
+
 @Serializable
 data class Program(val argv: List<String>, @SerialName("exit_code") val exitCode: Int? = null)
 
@@ -375,6 +379,8 @@ sealed interface Node {
         val screen: Screen,
         /** The node of this pane's shell blocks, for a shell started with the integration. */
         val blocks: Id? = null,
+        /** What the person has typed at the shell's prompt, when the shell says where it starts. */
+        val input: PaneInput? = null,
     ) : Node
 
     /** Level 2 as command blocks: what a pane's shell ran, newest last. */
