@@ -374,22 +374,10 @@ pub enum After {
     Check(String),
 }
 
-fn rev_of(n: &Node) -> u64 {
-    match n {
-        Node::Session(s) => s.head.rev,
-        Node::Workspace(w) => w.head.rev,
-        Node::Pane(p) => p.head.rev,
-        Node::Blocks(b) => b.head.rev,
-        Node::Diff(d) => d.head.rev,
-        Node::Commits(c) => c.head.rev,
-    }
-}
-
 pub struct View {
     session: Option<Session>,
     workspaces: HashMap<String, Workspace>,
     panes: HashMap<String, Pane>,
-    revs: HashMap<String, u64>,
     /// Node id -> revision this terminal had it open at. Never sent anywhere.
     seen: HashMap<String, u64>,
     mode: Mode,
@@ -411,7 +399,8 @@ pub struct View {
     last_size: Option<(String, u16, u16)>,
     /// The blocks nodes, by node id.
     blocks: HashMap<String, Blocks>,
-    /// The epoch and revision each document held here was read at.
+    /// The epoch and revision each document held here was read at: what the client holds, and what
+    /// the seen record counts from.
     read: HashMap<String, (String, u64)>,
     /// The block of each pane whose program has painted something on the normal screen: once it has, the pane
     /// never says it is starting again for that block, whatever the program clears.
@@ -474,7 +463,6 @@ impl View {
             session: None,
             workspaces: HashMap::new(),
             panes: HashMap::new(),
-            revs: HashMap::new(),
             seen: HashMap::new(),
             mode: Mode::Workspaces,
             selected: 0,
@@ -688,7 +676,6 @@ impl View {
                 continue;
             };
             let id = contract::node_id(&node).clone();
-            self.revs.insert(id.clone(), rev_of(&node));
             self.read.insert(id.clone(), (stamp.0.to_owned(), stamp.1));
             match node {
                 Node::Session(s) => self.session = Some(s),
@@ -717,7 +704,6 @@ impl View {
             .collect();
         for id in &gone {
             self.read.remove(id);
-            self.revs.remove(id);
             self.workspaces.remove(id);
             self.panes.remove(id);
             self.blocks.remove(id);
@@ -767,7 +753,7 @@ impl View {
                 .flat_map(|w| w.panes.iter())
                 .filter_map(|p| self.panes.get(&p.id)?.blocks.clone()),
         );
-        ids.retain(|id| !self.revs.contains_key(id));
+        ids.retain(|id| !self.read.contains_key(id));
         ids
     }
 
@@ -858,7 +844,7 @@ impl View {
     }
 
     fn mark_seen(&mut self, id: &str) {
-        let rev = self.revs.get(id).copied().unwrap_or_else(|| {
+        let rev = self.read.get(id).map(|(_, rev)| *rev).unwrap_or_else(|| {
             // Not opened yet: seen at the newest attention raised on it.
             self.session
                 .iter()
@@ -3118,9 +3104,9 @@ mod tests {
         let docs = fixture_docs();
         let mut v = View::new("fixtures");
         v.sync(docs.iter());
-        assert!(v.blocks.contains_key(BLOCKS) && v.revs.contains_key(BLOCKS));
+        assert!(v.blocks.contains_key(BLOCKS) && v.read.contains_key(BLOCKS));
         v.sync(docs[..docs.len() - 1].iter());
-        assert!(!v.blocks.contains_key(BLOCKS) && !v.revs.contains_key(BLOCKS));
+        assert!(!v.blocks.contains_key(BLOCKS) && !v.read.contains_key(BLOCKS));
         assert!(
             v.wants().iter().any(|id| id == BLOCKS),
             "it is asked for again"
@@ -3531,7 +3517,7 @@ mod tests {
     fn the_blocks_node_of_a_shown_pane_is_asked_for() {
         let mut v = fixture_view();
         v.press(Key::Enter);
-        v.revs.remove(BLOCKS);
+        v.read.remove(BLOCKS);
         assert!(v.wants().contains(&BLOCKS.to_owned()), "{:?}", v.wants());
     }
 
@@ -4101,7 +4087,7 @@ mod tests {
     fn a_pane_not_opened_yet_is_asked_for() {
         let mut v = fixture_view();
         v.panes.clear();
-        v.revs
+        v.read
             .retain(|k, _| !k.ends_with("c1") && !k.ends_with("c2"));
         assert!(!v.wants().is_empty());
     }

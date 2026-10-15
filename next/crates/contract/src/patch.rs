@@ -84,11 +84,12 @@ fn diff_at(old: &Value, new: &Value, path: String, ops: &mut Vec<PatchOp>) {
     }
 }
 
-/// How many items `a` lost at its front to become `b`, as far as a look at the first two items
-/// can tell (0 when it did not, or when it cannot be told); the most it looks for. A guess that is
-/// wrong costs a bigger patch and never a wrong one, so a short list is not looked at twice.
+/// The most items at the front of a list that are looked for as dropped.
 const MAX_DROPPED: usize = 8;
 
+/// How many items `a` lost at its front to become `b`, as far as a look at the first two items can
+/// tell: 0 when it did not, or when it cannot be told. A guess that is wrong costs a bigger patch and
+/// never a wrong one, so a short list is not looked at twice.
 fn front_dropped(a: &[Value], b: &[Value]) -> usize {
     let Some(first) = b.first() else {
         return 0;
