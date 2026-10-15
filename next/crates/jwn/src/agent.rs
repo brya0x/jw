@@ -106,8 +106,6 @@ pub fn run(cmd: &str, args: &[&str]) -> ExitCode {
     }
 }
 
-// ---- arguments
-
 /// The arguments of a command: the flags it was given, what is not a flag, and what follows `--`.
 #[derive(Default, Debug)]
 struct Args {
@@ -162,14 +160,38 @@ impl Args {
     }
 }
 
-// ---- naming things
-
 /// The last folder of a path.
 fn folder_of(path: &str) -> &str {
     path.trim_end_matches('/')
         .rsplit('/')
         .next()
         .unwrap_or(path)
+}
+
+/// The one candidate that `word` names, trying `stages` in turn (the first that fits any is
+/// the one that counts): none or several is said, the several listed by `label`.
+fn the_one<'a, T>(
+    word: &str,
+    what: &str,
+    stages: [Vec<&'a T>; 3],
+    label: impl Fn(&T) -> &str,
+) -> Result<&'a T, String> {
+    let found = stages
+        .into_iter()
+        .find(|f| !f.is_empty())
+        .unwrap_or_default();
+    match found.as_slice() {
+        [one] => Ok(one),
+        [] => Err(format!("no {what} is named «{word}»")),
+        several => Err(format!(
+            "«{word}» fits several {what}s: {}",
+            several
+                .iter()
+                .map(|c| label(c))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
 }
 
 /// The workspace `word` names: its id, else exactly its name, branch or folder, else the one
@@ -179,9 +201,6 @@ fn resolve_workspace<'a>(
     all: &'a [WorkspaceSummary],
 ) -> Result<&'a WorkspaceSummary, String> {
     let lower = word.to_lowercase();
-    let pick = |fits: &dyn Fn(&WorkspaceSummary) -> bool| -> Vec<&'a WorkspaceSummary> {
-        all.iter().filter(|w| fits(w)).collect()
-    };
     let exact = |w: &WorkspaceSummary| {
         w.name.to_lowercase() == lower
             || w.branch
@@ -195,22 +214,13 @@ fn resolve_workspace<'a>(
                 .as_deref()
                 .is_some_and(|b| b.to_lowercase().starts_with(&lower))
     };
-    let found = [pick(&|w| w.id == word), pick(&exact), pick(&starts)]
-        .into_iter()
-        .find(|f| !f.is_empty())
-        .unwrap_or_default();
-    match found.as_slice() {
-        [one] => Ok(one),
-        [] => Err(format!("no workspace is named «{word}»")),
-        several => Err(format!(
-            "«{word}» fits several workspaces: {}",
-            several
-                .iter()
-                .map(|w| w.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        )),
-    }
+    let stage = |fits: &dyn Fn(&WorkspaceSummary) -> bool| all.iter().filter(|w| fits(w)).collect();
+    the_one(
+        word,
+        "workspace",
+        [stage(&|w| w.id == word), stage(&exact), stage(&starts)],
+        |w| &w.name,
+    )
 }
 
 /// What is known of a pane of a workspace.
@@ -227,32 +237,18 @@ struct PaneInfo {
 /// The pane `word` names: its id, the start of one id, or exactly a title.
 fn resolve_pane<'a>(word: &str, panes: &'a [PaneInfo]) -> Result<&'a PaneInfo, String> {
     let lower = word.to_lowercase();
-    let found = [
-        panes.iter().filter(|p| p.id == word).collect::<Vec<_>>(),
-        panes.iter().filter(|p| p.id.starts_with(word)).collect(),
-        panes
-            .iter()
-            .filter(|p| p.title.to_lowercase() == lower)
-            .collect(),
-    ]
-    .into_iter()
-    .find(|f| !f.is_empty())
-    .unwrap_or_default();
-    match found.as_slice() {
-        [one] => Ok(one),
-        [] => Err(format!("no pane is named «{word}»")),
-        several => Err(format!(
-            "«{word}» fits several panes: {}",
-            several
-                .iter()
-                .map(|p| p.id.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        )),
-    }
+    let stage = |fits: &dyn Fn(&PaneInfo) -> bool| panes.iter().filter(|p| fits(p)).collect();
+    the_one(
+        word,
+        "pane",
+        [
+            stage(&|p| p.id == word),
+            stage(&|p| p.id.starts_with(word)),
+            stage(&|p| p.title.to_lowercase() == lower),
+        ],
+        |p| &p.id,
+    )
 }
-
-// ---- texts
 
 /// The last `n` lines of a screen, without the blank ones at the end.
 fn screen_text(lines: &[String], n: usize) -> String {
@@ -298,7 +294,8 @@ fn paste(text: &str) -> String {
     format!("\x1b[200~{text}\x1b[201~")
 }
 
-fn kind_name(kind: AttentionKind) -> String {
+/// The name a kind or an enum has in the JSON documents (`ci_failed`, `folder`).
+fn name_of(kind: impl serde::Serialize) -> String {
     serde_json::to_value(kind)
         .ok()
         .and_then(|v| v.as_str().map(str::to_owned))
@@ -335,8 +332,6 @@ impl Settle {
         lines.iter().any(|l| !l.trim().is_empty()) && now.duration_since(self.since) >= SETTLED
     }
 }
-
-// ---- the daemon
 
 /// A connection with the nodes it has opened.
 struct Link {
@@ -431,8 +426,6 @@ fn own_pane() -> Option<String> {
         .filter(|p| !p.is_empty())
 }
 
-// ---- ls and pane ls
-
 fn ls(args: &[&str]) -> Out {
     let a = Args::parse(args, &[], &["json"])?;
     a.words::<0>()?;
@@ -445,7 +438,7 @@ fn ls(args: &[&str]) -> Out {
                 let mut row = json!({
                     "id": w.id, "name": w.name, "kind": w.kind, "path": w.path,
                     "panes": w.pane_count,
-                    "attention": w.attention.iter().map(|a| kind_name(a.kind)).collect::<Vec<_>>(),
+                    "attention": w.attention.iter().map(|a| name_of(a.kind)).collect::<Vec<_>>(),
                 });
                 if let Some(p) = &w.project {
                     row["project"] = json!(p);
@@ -462,16 +455,13 @@ fn ls(args: &[&str]) -> Out {
         );
     } else {
         for w in &all {
-            let kind = serde_json::to_value(w.kind)
-                .ok()
-                .and_then(|v| v.as_str().map(str::to_owned))
-                .unwrap_or_default();
             println!(
-                "{}\t{kind}\t{}\t{} panes\t{}",
+                "{}\t{}\t{}\t{} panes\t{}",
                 w.name,
+                name_of(w.kind),
                 w.branch.as_deref().unwrap_or("-"),
                 w.pane_count,
-                most_urgent(&w.attention).map_or_else(|| "-".to_owned(), kind_name),
+                most_urgent(&w.attention).map_or_else(|| "-".to_owned(), name_of),
             );
         }
     }
@@ -518,8 +508,6 @@ fn pane_ls(args: &[&str]) -> Out {
     Ok(())
 }
 
-// ---- read
-
 fn lines_flag(a: &Args) -> Out<usize> {
     match a.value("lines") {
         None => Ok(DEFAULT_LINES),
@@ -560,8 +548,6 @@ fn read(args: &[&str]) -> Out {
     }
     Ok(())
 }
-
-// ---- prompt
 
 /// Type `text` into `pane` the way a person pastes it and presses Enter. Unless `now`, wait
 /// first for the screen to settle (REQ-363).
@@ -635,8 +621,6 @@ fn prompt(args: &[&str]) -> Out {
     Ok(())
 }
 
-// ---- worktree
-
 /// The repository of `worktree`: `--in` (a folder, or a workspace), else the project of the
 /// workspace this command runs in, else the folder it runs in.
 fn repo_of(s: &mut Link, given: Option<&str>) -> Out<String> {
@@ -686,21 +670,23 @@ fn worktree(args: &[&str]) -> Out {
         return fail("the daemon did not say what it made");
     };
     let (id, path) = (id.to_owned(), path.to_owned());
-    if let Err(Fail::Error(why)) = s.cmd(Cmd::StartWorkspace {
+    let started = s.cmd(Cmd::StartWorkspace {
         workspace: id.clone(),
-    }) {
+    });
+    if started.is_err() {
         let _ = s.cmd(Cmd::NewPane {
             workspace: id.clone(),
             program: None,
             beside: None,
             dir: None,
         });
-        println!("{id} {path}");
+    }
+    println!("{id} {path}");
+    if let Err(Fail::Error(why)) = started {
         return fail(format!(
             "the worktree was made at {path} and opened with one shell, but its panes were refused: {why}"
         ));
     }
-    println!("{id} {path}");
     if let Some(task) = a.value("task") {
         let deadline = Instant::now() + agent_wait();
         let agent = loop {
@@ -721,8 +707,6 @@ fn worktree(args: &[&str]) -> Out {
     }
     Ok(())
 }
-
-// ---- pane open and close
 
 fn pane_open(args: &[&str]) -> Out {
     let a = Args::parse(args, &["split", "of"], &[])?;
@@ -778,8 +762,6 @@ fn pane_close(args: &[&str]) -> Out {
     s.cmd(Cmd::ClosePane { pane: target })?;
     Ok(())
 }
-
-// ---- skill
 
 /// The skill with the binary's name and the pane variable of the product's identity.
 fn skill_text() -> String {
@@ -1020,7 +1002,7 @@ mod tests {
             ]),
             Some(AttentionKind::Question)
         );
-        assert_eq!(kind_name(AttentionKind::CiFailed), "ci_failed");
+        assert_eq!(name_of(AttentionKind::CiFailed), "ci_failed");
     }
 
     #[test]
