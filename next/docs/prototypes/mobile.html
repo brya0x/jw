@@ -276,7 +276,8 @@ em.live{font-style:normal;display:inline;color:var(--green)} em.live.on{color:va
 .fe{display:flex;align-items:center;gap:10px;min-height:48px;padding:4px 14px;width:100%;border-bottom:1px solid var(--line)}
 .fe .g{width:18px;text-align:center;flex:none;color:var(--dim)}.fe.d .g{color:var(--blue)}.fe.md .g{color:var(--cyan)}
 .fe .nm{flex:1;min-width:0}.fe .nm b{font-weight:500;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.fe .nm span{font-size:11px;color:var(--dim)}
-.fe.off{opacity:.45}.fe .tg{font-size:10.5px;color:var(--cyan);border:1px solid var(--line);border-radius:4px;padding:1px 6px}
+.fe.off{opacity:.45}.fe.ign{opacity:.5}.fe.nf{cursor:default}
+.fe .mk{font:700 12px var(--mono);flex:none;margin-left:6px}.mk.m{color:var(--yellow)}.mk.n{color:var(--green)}.mk.i{color:var(--dim);font-weight:400}.fe .tg{font-size:10.5px;color:var(--cyan);border:1px solid var(--line);border-radius:4px;padding:1px 6px}
 .dock{display:flex;gap:8px;align-items:center;padding:8px 12px;background:var(--panel);border-top:1px solid var(--line)}
 .dock .p{flex:1;min-width:0;font-size:11px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dock button.go{min-height:48px;padding:0 16px;border-radius:6px;background:var(--blue);color:var(--bg);font-weight:700}
@@ -941,7 +942,8 @@ const FS={
  '~/ws':['blog/','jw/','jw-wt/','mctekk-api/','mctekk-web/','scratch/'],
  '~/ws/blog':['.git/','posts/'],'~/ws/scratch':['a.txt'],'~/ws/jw-wt':['daemon-sock/','mobile-app/','motion/'],
  '~/ws/mctekk-api':['.git/','src/'],'~/ws/mctekk-web':['.git/','src/'],
- '~/ws/jw':['.git/','android/','crates/','docs/','scripts/','AGENTS.md','Cargo.toml','README.md','logo.png','link-a-etc'],
+ '~/ws/jw/secrets':null,'~/ws/jw/vacia':[],
+ '~/ws/jw':['.git/','android/','crates/','docs/','scripts/','secrets/','vacia/','AGENTS.md','Cargo.toml','README.md','logo.png','link-a-etc'],
  '~/ws/jw/docs':['specs/','README.md'],
  '~/ws/jw/docs/specs':['mobile.md','mobile-prototype.html','rust-tui.md'],
  '~/ws/jw/crates':['core/','daemon/','proto/','tui/','web/'],
@@ -952,6 +954,9 @@ const FS={
 const MDSRC='# jw mobile\n\nUna app para trabajar en tus sesiones de jw desde el teléfono.\n\n## Cómo se usa\n\n- Escanea el QR de `jw mobile`.\n- Entra a un workspace y escribe.\n\n```sh\njw mobile\n```\n';
 const MDHTML=`<h1>jw mobile</h1><p>Una app para trabajar en tus sesiones de <b>jw</b> desde el teléfono. Mira <a>la especificación</a>.</p><h2>Cómo se usa</h2><ul><li>Escanea el QR de <code>jw mobile</code>.</li><li>Entra a un workspace y escribe.</li></ul><pre><code>jw mobile</code></pre><h3>Vistas</h3><table><tr><th>vista</th><th>qué muestra</th></tr><tr><td>General</td><td>lo commiteado</td></tr><tr><td>Sin commitear</td><td>el árbol de trabajo</td></tr></table><blockquote>El PC tiene el archivo entero.</blockquote>`;
 const TXT=['[package]','name = "jw-core"','version = "0.0.21"','edition = "2024"','','[dependencies]','anyhow = "1"','serde = { version = "1", features = ["derive"] }'];
+// What git says of an entry (the PC sends it with the listing): M changed, ? not tracked, ◌ ignored. A folder shows the most serious of what is under it.
+const GM={'~/ws/jw/docs':'M','~/ws/jw/docs/README.md':'M','~/ws/jw/AGENTS.md':'M','~/ws/jw/Cargo.toml':'?','~/ws/jw/crates':'M','~/ws/jw/logo.png':'i','~/ws/jw/scripts':'i'};
+const mkOf=q=>{const m=GM[q];return m?`<span class="mk ${m==='M'?'m':m==='?'?'n':'i'}">${m==='i'?'◌':m==='?'?'?':'M'}</span>`:''};
 const hidden=n=>n.startsWith('.');
 const isDir=n=>n.endsWith('/');
 const parentOf=p=>p==='~'?null:p.slice(0,p.lastIndexOf('/'))||'~';
@@ -983,26 +988,29 @@ function rootOf2(id){return state.w.find(x=>x.id===id)||GHOST[id]}
 
 function vFiles(){
   const f=state.fs, p=f.path, ent=FS[p], err=fsErr(p), open=f.mode==='open', w=wsOf(state.ws);
-  const parts=p.split('/'); let acc='';
-  const crumbs=parts.map((x,i)=>{acc+=(i?'/':'')+x;return `<button data-fs="${acc}">${x==='~'?'~':x}</button>`}).join('<i>›</i>');
+  // Inside a workspace the walk starts at its folder and goes no higher: its name is the first crumb and the path is read from there.
+  const rootP=open?null:w.path, rel=rootP?p.slice(rootP.length).split('/').filter(Boolean):null;
+  const parts=rootP?[rootP,...rel]:p.split('/'); let acc='';
+  const crumbs=parts.map((x,i)=>{acc=rootP?(i?acc+'/'+x:x):(acc+(i?'/':'')+x);return `<button data-fs="${acc}">${rootP&&!i?w.name:x==='~'?'~':x}</button>`}).join('<i>›</i>');
   let list='';
   if(state.fload) list=`<div class="centre"><span class="spin"></span><span class="big">leyendo ${p}</span></div>`;
   else if(err) list=`<div class="centre"><span class="big" style="color:var(--red)">${err}</span>el PC no deja leer esta carpeta<button data-fs="${parentOf(p)||'~'}">subir</button></div>`;
   else{
     let rows=(ent||[]).filter(n=>(f.hidden||!hidden(n))&&(!open||(isDir(n)&&n!=='.git/'))).sort((a,b)=>open?(a.toLowerCase()<b.toLowerCase()?-1:1):(isDir(b)-isDir(a))||a.localeCompare(b));
-    const up=parentOf(p);
-    list=(up?`<button class="fe d" data-fs="${up}"><span class="g">‹</span><span class="nm"><b>..</b><span>${up}</span></span></button>`:'')+
+    const up=rootP&&p===rootP?null:parentOf(p);
+    list=(up?`<button class="fe d" data-fs="${up}"><span class="g">‹</span><span class="nm"><b>..</b><span>${rootP?'/'+up.slice(rootP.length).replace(/^\//,''):up}</span></span></button>`:'')+
       rows.map(n=>{const d=isDir(n), nm=n.replace(/\/$/,''), md=/\.md$/.test(n), lk=n==='link-a-etc';
         const sub=d?(FS[p+'/'+nm]===undefined?'':FS[p+'/'+nm]===null?'sin permiso':((FS[p+'/'+nm]||[]).length+' elementos')):lk?'enlace → /etc/hosts':(md?'4 KB':'1 KB');
         if(open){const q=p+'/'+nm, g=isGit(q);return `<button class="fe d" data-fs="${q}"><span class="g">▸</span><span class="nm"><b>${nm}</b><span>${g?'repositorio git':'carpeta'}</span></span>${isOpened(q)?'<span class="tg on">● abierta</span>':''}${g?'<span class="tg">git</span>':''}</button>`}
-        return `<button class="fe ${d?'d':md?'md':''}" data-${d?'fs':'pcfile'}="${p}/${nm}"><span class="g">${d?'▸':lk?'↗':'·'}</span><span class="nm"><b>${nm}</b><span>${sub}</span></span>${md?'<span class="tg">md</span>':''}</button>`}).join('')+
+        if(!d) return `<div class="fe nf ${GM[p+'/'+nm]==='i'?'ign':''}"><span class="g">${lk?'↗':'·'}</span><span class="nm"><b>${nm}</b><span>${sub}</span></span>${mkOf(p+'/'+nm)}</div>`;
+        return `<button class="fe ${d?'d':md?'md':''} ${GM[p+'/'+nm]==='i'?'ign':''}" data-${d?'fs':'pcfile'}="${p}/${nm}"><span class="g">${d?'▸':lk?'↗':'·'}</span><span class="nm"><b>${nm}</b><span>${sub}</span></span>${md?'<span class="tg">md</span>':''}${mkOf(p+'/'+nm)}</button>`}).join('')+
       (rows.length?'':`<div class="nodiff">${open?'sin subcarpetas':'carpeta vacía'}</div>`)+(f.big?`<div class="note">${open?'se listan las primeras 500 carpetas de 1 214':'se listan los primeros 2 000 elementos de 14 213'}</div>`:'');
   }
-  const head=`<div class="hdr"><button class="ib" data-act="filesback" aria-label="Volver">${ic('back')}</button><div class="t"><b>${open?'abrir carpeta':w.name+' · archivos'}</b><span>${p}</span></div>
+  const head=`<div class="hdr"><button class="ib" data-act="filesback" aria-label="Volver">${ic('back')}</button><div class="t"><b>${open?'abrir carpeta':w.name+' · archivos'}</b><span>${open?p:('/'+rel.join('/'))}</span></div>
      <button class="ib" data-act="hidden" aria-label="Archivos ocultos" aria-pressed="${f.hidden}" style="width:auto;padding:0 10px;font-size:12px;color:${f.hidden?'var(--blue)':'var(--dim)'}">.ocultos</button></div>`;
   const here=isOpened(p), busy=!!state.fopen;
   const dock=open?`<div class="dock"><span class="p">${p}</span><button class="go ${here?'here':''}" data-act="openhere" ${err||busy?'disabled':''}>${busy?'<span class="spin"></span>abriendo…':here?'ya abierta · ir':'abrir esta carpeta'}</button></div>`:'';
-  return `${head}<div class="crumbs">${crumbs}</div><div class="scroll">${list}</div>${dock}${statusBar('NORMAL',open?'toca una carpeta para entrar · se abre como workspace':'toca un archivo · .md se lee con formato')}`;
+  return `${head}<div class="crumbs">${crumbs}</div><div class="scroll">${list}</div>${dock}${statusBar('NORMAL',open?'toca una carpeta para entrar · se abre como workspace':'toca una carpeta para entrar · los archivos se abren más adelante')}`;
 }
 
 function vViewer(){
@@ -1194,9 +1202,9 @@ document.addEventListener('click',e=>{if(held){held=false;e.stopPropagation();e.
     if(d.jump==='wsroot'){state.demo=null;state.sess='main';enter('jw');return}
     if(d.jump==='ws'){state.sess='main';enter('jw/fix/daemon-sock');return}
     if(d.jump==='pick'||d.jump==='leader'){state.screen='home';state.sheet=d.jump;render();return}
-    if(/^[fvwnp][0-9]$/.test(d.jump)){const j=d.jump,m={f1:['~/ws/jw'],f2:['~/ws/jw',1],f3:['~/ws','open'],f4:['~/.ssh'],f5:['~/Downloads'],f6:['~/ws/jw','big'],f7:['~/ws/jw','open'],f8:['~/ws/blog','open'],f9:['~/ws','open','big']};
+    if(/^[fvwnp][0-9]$/.test(d.jump)){const j=d.jump,m={f1:['~/ws/jw'],f2:['~/ws/jw',1],f3:['~/ws','open'],f4:['~/ws/jw/secrets'],f5:['~/ws/jw/vacia'],f6:['~/ws/jw','big'],f7:['~/ws/jw','open'],f8:['~/ws/blog','open'],f9:['~/ws','open','big']};
       state.ro=false;state.nw='form';state.ns='form';state.sheet=null;state.fopen=false;
-      if(j[0]==='f'){const a=m[j];state.fs={path:a[0],mode:a[1]==='open'?'open':'browse',hidden:a[1]===1,big:a[1]==='big'||a[2]==='big'};if(j==='f8'){state.nwDemo=0}state.sess='main';state.ws='jw/feat/mobile-app';state.screen='files';render();return}
+      if(j[0]==='f'){const a=m[j];state.fs={path:a[0],mode:a[1]==='open'?'open':'browse',hidden:a[1]===1,big:a[1]==='big'||a[2]==='big'};if(j==='f8'){state.nwDemo=0}state.sess='main';state.ws=a[1]==='open'||a[0]==='~/ws'?'jw/feat/mobile-app':'jw';state.screen='files';render();return}
       if(j[0]==='v'){state.viewer={path:'~/ws/jw/docs/specs/mobile.md',kind:'ok',src:false};if(j==='v2')state.viewer.src=true;if(j==='v3')state.viewer={path:'~/ws/jw/crates/core/Cargo.toml',kind:'ok',src:false};if(j==='v4')state.viewer={path:'~/ws/jw/logo.png',kind:'bin',src:false};if(j==='v5')state.viewer={path:'~/ws/jw/docs/specs/rust-tui.md',kind:'big',src:false};if(j==='v6')state.viewer={path:'~/.ssh/id_ed25519',kind:'err',src:false};state.screen='viewer';render();return}
       if(j[0]==='w'){state.sess='main';state.screen='home';state.ws='jw/feat/mobile-app';defaultWt();
         if(j==='w2'){state.nw='busy';state.nwName='ws-1'}if(j==='w3'){state.nwName='falla';state.nw='fail'}if(j==='w4')state.nwName='Mi Rama';if(j==='w5')state.nwName='motion';

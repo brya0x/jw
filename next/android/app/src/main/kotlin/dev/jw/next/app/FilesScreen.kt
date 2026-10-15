@@ -1,0 +1,153 @@
+package dev.jw.next.app
+
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
+import dev.jw.next.client.ClientState
+import dev.jw.next.client.FileMark
+import dev.jw.next.client.FileRow
+import dev.jw.next.client.FilesView
+import dev.jw.next.client.MarkTone
+import dev.jw.next.client.Navigator
+import dev.jw.next.client.Screen
+import dev.jw.next.client.filesView
+import dev.jw.next.contract.FileKind
+import dev.jw.next.contract.FileListing
+import java.util.concurrent.atomic.AtomicInteger
+
+private val Gutter = 16.dp
+
+/**
+ * The files of a workspace, folder by folder and no higher than its own (REQ-323 to REQ-328): the
+ * PC lists one folder at a time with what git says of each entry. Back goes up a folder, and
+ * out of the screen at the workspace's own. A file is listed, not opened.
+ */
+@Composable
+fun FilesScreen(source: AppSource, state: ClientState, screen: Screen.Files, nav: Navigator, set: (ClientState) -> Unit) {
+    val version = source.tick.intValue
+    val name = remember(version, screen.workspace) { source.session().workspaces.firstOrNull { it.id == screen.workspace }?.name ?: "workspace" }
+    var path by remember(screen.workspace) { mutableStateOf("") }
+    var hidden by remember(screen.workspace) { mutableStateOf(false) }
+    var listing by remember(screen.workspace) { mutableStateOf<FileListing?>(null) }
+    var error by remember(screen.workspace) { mutableStateOf<String?>(null) }
+    var again by remember(screen.workspace) { mutableIntStateOf(0) }
+    val asks = remember(screen.workspace) { AtomicInteger() }
+    val view = listing?.let { filesView(name, it, hidden) }
+    val leave = { set(nav.leaveFiles(state)) }
+    BackHandler { view?.parent?.let { path = it } ?: leave() }
+    LaunchedEffect(screen.workspace, path, again) {
+        error = null
+        listing = null
+        val asked = asks.incrementAndGet()
+        source.listFiles(screen.workspace, path.ifEmpty { null }) { result ->
+            // A slower answer to an earlier tap must not replace the folder asked for last.
+            if (asked == asks.get()) result.onSuccess { listing = it }.onFailure { error = it.message ?: "el PC no pudo leer la carpeta" }
+        }
+    }
+    Column(Modifier.fillMaxSize()) {
+        Header("$name · archivos", "/$path", onBack = leave, action = {
+            Box(Modifier.defaultMinSize(minWidth = 72.dp, minHeight = 48.dp).clickable { hidden = !hidden }, contentAlignment = Alignment.Center) {
+                Mono(".ocultos", if (hidden) Palette.blue else Palette.dim, 12)
+            }
+        })
+        Crumbs(view?.crumbs ?: FilesView(name, path, emptyList(), 0, 0, hidden).crumbs, path) { path = it }
+        Box(Modifier.weight(1f)) {
+            when {
+                error != null -> Column(
+                    Modifier.fillMaxSize().padding(Gutter),
+                    verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Mono(error.orEmpty(), Palette.red, 13, lines = 4)
+                    SheetAction("↻", "leer otra vez", Palette.blue) { again++ }
+                    view?.parent?.let { up -> SheetAction("‹", "subir", Palette.blue) { path = up } }
+                }
+                view == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Mono("leyendo…", Palette.dim, 13) }
+                else -> FileList(view) { path = it }
+            }
+        }
+    }
+}
+
+@Composable
+private fun Crumbs(crumbs: List<Pair<String, String>>, here: String, go: (String) -> Unit) {
+    Row(Modifier.fillMaxWidth().background(Palette.panel).horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        crumbs.forEachIndexed { i, (label, at) ->
+            if (i > 0) Mono("›", Palette.dim, 12)
+            Box(Modifier.defaultMinSize(minHeight = 44.dp).clickable { go(at) }.padding(horizontal = 8.dp), contentAlignment = Alignment.Center) {
+                Mono(label, if (at == here) Palette.fg else Palette.dim, 12)
+            }
+        }
+    }
+    Hairline()
+}
+
+@Composable
+private fun FileList(view: FilesView, go: (String) -> Unit) {
+    LazyColumn(Modifier.fillMaxSize()) {
+        view.parent?.let { up -> item(key = "..") { FileRowView("‹", Palette.dim, "..", "/$up", null, false, true) { go(up) } } }
+        items(view.rows, key = { it.path }) { row -> FileLine(row, go) }
+        if (view.rows.isEmpty()) item { Mono(if (view.hidden || view.total == 0) "carpeta vacía" else "solo hay archivos ocultos", Palette.dim, 13, modifier = Modifier.padding(Gutter)) }
+        if (view.cut) item { Mono("se listan los primeros ${view.sent} de ${view.total}", Palette.dim, 11, lines = 2, modifier = Modifier.padding(Gutter)) }
+    }
+}
+
+/** A folder goes in when it is tapped; a file or a link is listed and does nothing (REQ-325). */
+@Composable
+private fun FileLine(row: FileRow, go: (String) -> Unit) {
+    val (glyph, tone) = when (row.kind) {
+        FileKind.Dir -> "▸" to Palette.blue
+        FileKind.Link -> "↗" to Palette.dim
+        FileKind.File -> "·" to Palette.dim
+    }
+    FileRowView(glyph, tone, row.name, row.detail, row.mark, row.ignored, row.kind == FileKind.Dir) { go(row.path) }
+}
+
+@Composable
+private fun FileRowView(glyph: String, tone: Color, name: String, detail: String?, mark: FileMark?, dim: Boolean, tappable: Boolean, click: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().alpha(if (dim) 0.5f else 1f).defaultMinSize(minHeight = 48.dp)
+            .then(if (tappable) Modifier.clickable(onClick = click) else Modifier)
+            .padding(horizontal = Gutter, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Mono(glyph, tone, 13, modifier = Modifier.padding(end = 12.dp))
+        Column(Modifier.weight(1f)) {
+            Mono(name, bold = tappable, size = 14)
+            if (detail != null) Mono(detail, Palette.dim, 11)
+        }
+        if (mark != null) Mono(mark.glyph, markColor(mark.tone), 12, bold = true, modifier = Modifier.padding(start = 8.dp))
+    }
+    Hairline()
+}
+
+private fun markColor(tone: MarkTone): Color = when (tone) {
+    MarkTone.Changed -> Palette.yellow
+    MarkTone.New -> Palette.green
+    MarkTone.Bad -> Palette.red
+    MarkTone.Ignored -> Palette.dim
+}

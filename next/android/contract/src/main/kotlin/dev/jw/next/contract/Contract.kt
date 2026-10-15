@@ -312,6 +312,39 @@ sealed interface PatchOp {
 @Serializable
 data class DirEntry(val name: String, val git: Boolean = false)
 
+/** What an entry of a workspace's folder is. */
+@Serializable
+enum class FileKind {
+    @SerialName("dir") Dir,
+    @SerialName("file") File,
+    /** A symbolic link, whatever it points at: it is not followed. */
+    @SerialName("link") Link,
+}
+
+/** What git says of an entry; of a folder, the most serious of what is under it. */
+@Serializable
+enum class GitMark {
+    @SerialName("conflict") Conflict,
+    @SerialName("modified") Modified,
+    @SerialName("deleted") Deleted,
+    @SerialName("added") Added,
+    @SerialName("untracked") Untracked,
+}
+
+/** One entry of a [FileListing]; [size] in bytes for a file, [ignored] when git ignores it. */
+@Serializable
+data class FileEntry(
+    val name: String,
+    val kind: FileKind,
+    val size: Long? = null,
+    val git: GitMark? = null,
+    val ignored: Boolean = false,
+)
+
+/** The result of `list_files`: [path] is relative to the workspace's folder; [entries] is cut to the first ones when [total] is more than they are. */
+@Serializable
+data class FileListing(val path: String, val entries: List<FileEntry>, val total: Int)
+
 /** The result of `list_dir`: [dirs] is cut to the first ones when [total] is more than they are. */
 @Serializable
 data class DirListing(val path: String, val parent: String? = null, val home: String, val dirs: List<DirEntry>, val total: Int)

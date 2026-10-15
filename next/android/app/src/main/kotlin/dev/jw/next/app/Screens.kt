@@ -394,8 +394,13 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
     Column(Modifier.fillMaxSize()) {
         val title = ws?.let { shownName(it.name, it.kind, it.branch) } ?: "workspace"
         Header(title, ws?.let { (if (it.branch != null) "⎇ ${it.branch}  " else "") + it.path }, onBack = { set(nav.back(state)) }, onTitleLongClick = { if (ws != null) wsMenu = true }) {
-            Box(Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp).clickable { nav.changes(state)?.let(set) }, contentAlignment = Alignment.Center) {
-                Mono("±", Palette.blue, 18, bold = true)
+            Row {
+                Box(Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp).clickable { set(nav.files(state, screen.id)) }.semantics { contentDescription = "Archivos" }, contentAlignment = Alignment.Center) {
+                    GlyphIcon(Glyph.Folder, Palette.blue, 20)
+                }
+                Box(Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp).clickable { nav.changes(state)?.let(set) }, contentAlignment = Alignment.Center) {
+                    Mono("±", Palette.blue, 18, bold = true)
+                }
             }
         }
         if (ws == null) {

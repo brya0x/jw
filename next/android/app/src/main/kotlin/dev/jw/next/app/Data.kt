@@ -15,6 +15,7 @@ import dev.jw.next.contract.DirListing
 import dev.jw.next.contract.DiffState
 import dev.jw.next.contract.ErrorBody
 import dev.jw.next.contract.ErrorCode
+import dev.jw.next.contract.FileListing
 import dev.jw.next.contract.Id
 import dev.jw.next.contract.Node
 import dev.jw.next.contract.Peer
@@ -146,6 +147,22 @@ abstract class ProtocolSource : AppSource() {
 
     override fun renamePane(pane: Id, name: String, reply: (Result<Unit>) -> Unit) {
         command(Cmd.RenamePane(pane, name)) { reply(it.done("el PC no pudo nombrar el panel")) }
+    }
+
+    override fun listFiles(workspace: Id, path: String?, reply: (Result<FileListing>) -> Unit) {
+        command(Cmd.ListFiles(workspace, path)) { r ->
+            reply(
+                when {
+                    !r.ok -> Result.failure(Exception(r.error?.message ?: "el PC no pudo leer la carpeta"))
+                    r.result == null -> Result.failure(Exception("el PC no dio la carpeta"))
+                    else -> try {
+                        Result.success(ContractJson.decodeFromJsonElement(FileListing.serializer(), r.result!!))
+                    } catch (e: SerializationException) {
+                        Result.failure(Exception("el PC dio una carpeta que no se entiende"))
+                    }
+                },
+            )
+        }
     }
 
     override fun listDir(path: String?, hidden: Boolean, reply: (Result<DirListing>) -> Unit) {

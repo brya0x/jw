@@ -3,6 +3,7 @@ package dev.jw.next.client
 import dev.jw.next.contract.Attention
 import dev.jw.next.contract.DiffScope
 import dev.jw.next.contract.DirListing
+import dev.jw.next.contract.FileListing
 import dev.jw.next.contract.Id
 import dev.jw.next.contract.Node
 
@@ -63,6 +64,11 @@ interface NodeSource {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
     }
 
+    /** Read one folder of [workspace] ([path] relative to its folder, its own folder when null); [reply] gets the PC's message when it refuses. */
+    fun listFiles(workspace: Id, path: String?, reply: (Result<FileListing>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
     /** Open [path] as a workspace with a shell in it; [reply] gets the workspace's id, or the PC's message. */
     fun openFolder(path: String, reply: (Result<Id>) -> Unit) {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
@@ -102,6 +108,9 @@ sealed interface Screen {
 
     /** The PC's folders, to choose one to open (REQ-201). */
     data object Folders : Screen
+
+    /** The files of one workspace, folder by folder and no higher than its own (REQ-323). */
+    data class Files(val workspace: Id) : Screen
 }
 
 /**
@@ -175,6 +184,15 @@ class Navigator(private val source: NodeSource) {
     fun show(s: ClientState, screen: Screen): ClientState = s.copy(screen = screen)
 
     fun back(s: ClientState): ClientState = s.copy(screen = Screen.Home)
+
+    /** The files of [workspace]. */
+    fun files(s: ClientState, workspace: Id): ClientState = s.copy(screen = Screen.Files(workspace), last = workspace)
+
+    /** Leaves the files of a workspace for the workspace itself; anywhere else it is [back]. */
+    fun leaveFiles(s: ClientState): ClientState {
+        val at = s.screen as? Screen.Files ?: return back(s)
+        return openWorkspace(s, at.workspace)
+    }
 
     /** Leaves the changes of a workspace for the workspace itself; anywhere else it is [back]. */
     fun leaveChanges(s: ClientState): ClientState {

@@ -233,3 +233,21 @@ fn diff_of_a_patch_case_reproduces_its_after() {
         assert_eq!(doc, case["after"], "patch-cases/{name} via diff {ops:?}");
     }
 }
+
+/// The result of `list_files` in the fixture is what `FileListing` writes and reads: the phone reads
+/// the same document (`BlocksTest` of the Kotlin side does for its own type).
+#[test]
+fn the_reply_of_list_files_is_a_file_listing() {
+    let docs = fixtures("daemon");
+    let (_, doc) = docs
+        .iter()
+        .find(|(n, _)| n == "reply-ok-list-files.json")
+        .expect("the fixture");
+    let listing: contract::FileListing = serde_json::from_value(doc["result"].clone()).unwrap();
+    assert_eq!((listing.path.as_str(), listing.total), ("src", 4));
+    assert_eq!(listing.entries[0].git, Some(contract::GitMark::Modified));
+    assert!(listing.entries[1].ignored);
+    assert_eq!(listing.entries[2].size, Some(1536));
+    assert_eq!(listing.entries[3].kind, contract::FileKind::Link);
+    assert_eq!(serde_json::to_value(&listing).unwrap(), doc["result"]);
+}

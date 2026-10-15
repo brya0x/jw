@@ -14,7 +14,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 
 /** The icons of Home's header, drawn as in `docs/prototypes/mobile.html` (a 24-unit grid, a thin round stroke). */
-internal enum class Glyph { Search, Bell, Gear, Send }
+internal enum class Glyph { Search, Bell, Gear, Send, Folder }
 
 @Composable
 internal fun GlyphIcon(glyph: Glyph, color: Color, size: Int = 22) {
@@ -26,6 +26,18 @@ internal fun GlyphIcon(glyph: Glyph, color: Color, size: Int = 22) {
             Glyph.Search -> {
                 drawCircle(color, 6f * k, at(11f, 11f), style = stroke)
                 drawLine(color, at(20f, 20f), at(15.3f, 15.3f), stroke.width, StrokeCap.Round)
+            }
+            Glyph.Folder -> {
+                val folder = Path().apply {
+                    moveTo(3f * k, 7f * k)
+                    lineTo(9f * k, 7f * k)
+                    lineTo(11f * k, 9f * k)
+                    lineTo(21f * k, 9f * k)
+                    lineTo(21f * k, 19f * k)
+                    lineTo(3f * k, 19f * k)
+                    close()
+                }
+                drawPath(folder, color, style = stroke)
             }
             Glyph.Send -> {
                 val plane = Path().apply {

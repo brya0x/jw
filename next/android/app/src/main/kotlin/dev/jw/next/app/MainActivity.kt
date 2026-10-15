@@ -172,6 +172,7 @@ class MainActivity : ComponentActivity() {
             is Screen.Workspace -> WorkspaceScreen(source, state, screen, nav) { state = it }
             is Screen.Changes -> ChangesScreen(source, state, screen, nav) { state = it }
             is Screen.Folders -> FoldersScreen(source, state, nav) { state = it }
+            is Screen.Files -> FilesScreen(source, state, screen, nav) { state = it }
             is Screen.Settings -> {
                 val pc = link?.let { PcEntry(it.name ?: "este PC", source.status, links.load().pcs.size) { go(Mode.Pcs(it, from = Screen.Settings)) } }
                 SettingsScreen(state, nav, look, osDark, pc, setLook) { state = it }
