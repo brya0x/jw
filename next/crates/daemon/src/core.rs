@@ -287,6 +287,9 @@ impl Core {
     /// lock: those of each pane whose blocks changed and were not written in the last two seconds,
     /// or all that changed when `force`.
     pub fn history_writes(&mut self, force: bool) -> Vec<(PathBuf, Id, String)> {
+        if self.history_dirty.is_empty() {
+            return Vec::new();
+        }
         let Some(dir) = self.history_dir.clone() else {
             return Vec::new();
         };
