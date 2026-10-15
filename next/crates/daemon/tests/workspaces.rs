@@ -313,7 +313,7 @@ fn workspaces_survive_a_restart() {
 }
 
 #[test]
-fn a_workspace_is_renamed_without_touching_its_folder_and_an_empty_name_brings_the_old_back() {
+fn a_worktree_is_renamed_a_folder_is_not_and_an_empty_name_brings_the_old_back() {
     let sb = Sandbox::new();
     let d = sb.start();
     let app = repo(&sb);
@@ -344,15 +344,13 @@ fn a_workspace_is_renamed_without_touching_its_folder_and_an_empty_name_brings_t
             .collect()
     };
     let before = names(&mut c);
-    for (id, name) in [(&folder, "my app"), (&wt, "login fix")] {
-        c.cmd(Cmd::RenameWorkspace {
-            workspace: id.clone(),
-            name: format!(" {name} "),
-        })
-        .unwrap()
-        .unwrap();
-    }
-    assert_eq!(names(&mut c), ["my app", "login fix"]);
+    c.cmd(Cmd::RenameWorkspace {
+        workspace: wt.clone(),
+        name: " login fix ".into(),
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(names(&mut c), [before[0].as_str(), "login fix"]);
     assert!(app.exists(), "the folder is untouched");
     assert!(app.parent().unwrap().join("app-wt/feat-login").exists());
     // It is kept across a restart.
@@ -360,16 +358,24 @@ fn a_workspace_is_renamed_without_touching_its_folder_and_an_empty_name_brings_t
     d.stop();
     let d = sb.start();
     let mut c = sb.client();
-    assert_eq!(names(&mut c), ["my app", "login fix"]);
-    // An empty name brings back the one each had.
-    for id in [&folder, &wt] {
-        c.cmd(Cmd::RenameWorkspace {
-            workspace: id.clone(),
-            name: "".into(),
+    assert_eq!(names(&mut c), [before[0].as_str(), "login fix"]);
+    // A folder is a directory on disk: it is not renamed.
+    let e = c
+        .cmd(Cmd::RenameWorkspace {
+            workspace: folder.clone(),
+            name: "my app".into(),
         })
         .unwrap()
-        .unwrap();
-    }
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::BadRequest);
+    assert_eq!(names(&mut c)[0], before[0]);
+    // An empty name brings back the one the worktree had.
+    c.cmd(Cmd::RenameWorkspace {
+        workspace: wt.clone(),
+        name: "".into(),
+    })
+    .unwrap()
+    .unwrap();
     assert_eq!(names(&mut c), before);
     d.stop();
 }

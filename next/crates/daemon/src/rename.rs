@@ -1,5 +1,6 @@
-//! Naming: what a workspace and a pane are called by. Only the daemon's own record changes;
-//! a worktree's folder and branch are git's and are left as they are.
+//! Naming: what a worktree and a pane are called by. Only the daemon's own record changes;
+//! a worktree's folder and branch are git's and are left as they are. A folder, or the root of a
+//! repository, is a directory on disk and is not renamed.
 
 use std::path::Path;
 
@@ -29,22 +30,15 @@ fn clean(name: &str) -> Result<Option<String>, crate::commands::ErrorBody> {
     Ok((!name.is_empty()).then(|| name.to_owned()))
 }
 
-/// The name a workspace has until it is given another: its folder's, or `repo: branch`.
-fn automatic(
-    kind: WorkspaceKind,
-    path: &str,
-    project: Option<&str>,
-    branch: Option<&str>,
-) -> String {
+/// The name a worktree has until it is given another: `repo: branch`.
+fn automatic(path: &str, project: Option<&str>, branch: Option<&str>) -> String {
     let last = |p: &str| {
         Path::new(p)
             .file_name()
             .map_or_else(|| p.to_owned(), |n| n.to_string_lossy().into_owned())
     };
-    match (kind, project, branch) {
-        (WorkspaceKind::Worktree, Some(project), Some(branch)) => {
-            format!("{}: {branch}", last(project))
-        }
+    match (project, branch) {
+        (Some(project), Some(branch)) => format!("{}: {branch}", last(project)),
         _ => last(path),
     }
 }
@@ -58,14 +52,14 @@ pub fn workspace(shared: &Shared, workspace: &str, name: &str) -> Done {
             format!("no workspace {workspace}"),
         ));
     };
-    ws.name = name.unwrap_or_else(|| {
-        automatic(
-            ws.kind,
-            &ws.path,
-            ws.project.as_deref(),
-            ws.branch.as_deref(),
-        )
-    });
+    if ws.kind != WorkspaceKind::Worktree {
+        return Err(err(
+            ErrorCode::BadRequest,
+            "only a worktree is renamed: a folder is a directory on disk",
+        ));
+    }
+    ws.name =
+        name.unwrap_or_else(|| automatic(&ws.path, ws.project.as_deref(), ws.branch.as_deref()));
     core.refresh();
     Ok(None)
 }
@@ -108,15 +102,13 @@ mod tests {
     }
 
     #[test]
-    fn the_automatic_name_is_the_folder_or_repo_and_branch() {
-        let folder = automatic(WorkspaceKind::Folder, "/home/u/notes", None, None);
-        assert_eq!(folder, "notes");
+    fn the_automatic_name_of_a_worktree_is_its_repo_and_branch() {
         let wt = automatic(
-            WorkspaceKind::Worktree,
             "/home/u/app-wt/login",
             Some("/home/u/app"),
             Some("feat/login"),
         );
         assert_eq!(wt, "app: feat/login");
+        assert_eq!(automatic("/home/u/app-wt/login", None, None), "login");
     }
 }

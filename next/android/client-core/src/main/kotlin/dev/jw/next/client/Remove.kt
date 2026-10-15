@@ -18,15 +18,13 @@ enum class WsAction { NewWorktree, Rename, RemoveWorkspace, CloseWorkspace, Remo
 
 data class MenuItem(val action: WsAction, val glyph: String, val label: String, val note: String?, val danger: Boolean)
 
-/** The sheet of a workspace is one for each kind: a repository's root, a folder that is not one, a worktree (REQ-227). */
+/** The sheet of a workspace is one for each kind: a repository's root, a folder that is not one, a worktree (REQ-227). Only a worktree is renamed: a folder is a directory on disk. */
 fun workspaceMenu(kind: HomeKind, repo: String?): List<MenuItem> = when (kind) {
     HomeKind.Root -> listOfNotNull(
         repo?.let { MenuItem(WsAction.NewWorktree, "w", "worktree nuevo", "de «${repoName(it)}»", false) },
-        MenuItem(WsAction.Rename, "✎", "renombrar el workspace", null, false),
         MenuItem(WsAction.RemoveWorkspace, "×", "quitar el workspace", "la carpeta no se toca", true),
     )
     HomeKind.Folder -> listOf(
-        MenuItem(WsAction.Rename, "✎", "renombrar la carpeta", null, false),
         MenuItem(WsAction.RemoveWorkspace, "×", "quitar la carpeta", "la carpeta no se toca", true),
     )
     HomeKind.Worktree -> listOf(

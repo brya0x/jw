@@ -1043,7 +1043,7 @@ function sheet(){
     const red='style="color:var(--red)"', redk='style="color:var(--red)"';
     const acts=[
       k==='root'&&pr?`<button class="lk" data-act="newwtfor" data-wsid="${w.id}"><kbd>w</kbd><span>worktree nuevo</span><em>de «${pr.name}»</em></button>`:'',
-      `<button class="lk" data-sheet="renws"><kbd>✎</kbd><span>${k==='wt'?'renombrar el worktree':k==='dir'?'renombrar la carpeta':'renombrar el workspace'}</span></button>`,
+      k==='wt'?`<button class="lk" data-sheet="renws"><kbd>✎</kbd><span>renombrar el worktree</span></button>`:'',
       k==='wt'?`<button class="lk" data-act="rmask" data-rm="keep" data-wsid="${w.id}"><kbd>×</kbd><span>cerrar el workspace</span><em>deja la carpeta y la rama</em></button><button class="lk" data-act="rmask" data-rm="wt" data-wsid="${w.id}" ${red}><kbd ${redk}>×</kbd><span>quitar el worktree</span><em>borra su carpeta</em></button>`
         :`<button class="lk" data-act="rmask" data-rm="ws" data-wsid="${w.id}" ${red}><kbd ${redk}>×</kbd><span>${k==='dir'?'quitar la carpeta':'quitar el workspace'}</span><em>la carpeta no se toca</em></button>`
     ].join('');

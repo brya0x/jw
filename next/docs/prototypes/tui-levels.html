@@ -166,7 +166,7 @@ function showToml(){
     : '<span class="d">(sin archivo: el menú trae solo claude)</span>';
 }
 const KEYS = {
-  1: [['j k','mover'],['↵','entrar al workspace'],['r','renombrar'],['x','cerrar'],['o','abrir una carpeta'],['w','worktree nuevo'],['s','sincronizar'],['d','ver cambios'],['a','avisos'],['m','teléfono'],[',','ajustes'],['q','salir']],
+  1: [['j k','mover'],['↵','entrar al workspace'],['r','renombrar el worktree'],['x','cerrar'],['o','abrir una carpeta'],['w','worktree nuevo'],['s','sincronizar'],['d','ver cambios'],['a','avisos'],['m','teléfono'],[',','ajustes'],['q','salir']],
   2: [['h j k l','cambiar de panel'],['↵','escribir en el panel'],['n','panel nuevo (shell)'],['N','panel nuevo con un programa'],['r','nombrar el panel'],['f','pantalla completa'],['x','cerrar el panel'],['o w s d','como en workspaces'],['a m ,','avisos · teléfono · ajustes'],['esc','volver a workspaces']],
   menu: [['j k','mover'],['↵','abrir en un panel nuevo'],['letra','abre ese programa'],['esc','cancelar']],
   3: [['todo','va al programa (esc y ctrl incluidos)'],['^␣','salir al nivel de paneles']]
@@ -274,7 +274,7 @@ function key(e){
     if (k === 'j'){ S.sel = Math.min(S.sel + 1, S.ws.length - 1); S.focus = 0; }
     else if (k === 'k'){ S.sel = Math.max(S.sel - 1, 0); S.focus = 0; }
     else if (k === 'Enter'){ if (!S.ws.length) return true; S.level = 2; S.focus = Math.min(S.focus, Math.max(0, w.panes.length - 1)); }
-    else if (k === 'r'){ S.input = {what:'ws', title:'renombrar el workspace', label:'nombre nuevo', text:w.name}; }
+    else if (k === 'r'){ if (w.kind === 'worktree') S.input = {what:'ws', title:'renombrar el worktree', label:'nombre nuevo', text:w.name}; }
     else if (k === 'x'){ S.ask = {title:'Cerrar ' + w.name + '?', text: w.panes.length ? 'Se terminan sus ' + w.panes.length + ' paneles.' : 'No tiene paneles abiertos.', sub: w.kind === 'worktree' ? 'El worktree y su carpeta se quedan en el disco.' : 'La carpeta se queda en el disco.', yes: closeWs}; }
     else if (k === 'q'){ flash('salir: el daemon y los paneles siguen corriendo'); return true; }
     else if (workspaceKeys(k) || global(k)) return true;

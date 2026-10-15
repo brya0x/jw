@@ -1160,7 +1160,8 @@ impl View {
         }
     }
 
-    /// `r`: ask for a new name for the highlighted workspace, or for the focused panel.
+    /// `r`: ask for a new name for the highlighted worktree (a folder is a directory on disk and
+    /// is not renamed), or for the focused panel.
     fn ask_rename(&mut self, level: Level) {
         let (target, title, text) = match level {
             Level::Workspaces => {
@@ -1168,12 +1169,13 @@ impl View {
                     .session
                     .as_ref()
                     .and_then(|s| s.workspaces.get(self.selected))
+                    .filter(|w| w.kind == WorkspaceKind::Worktree)
                 else {
                     return;
                 };
                 (
                     Named::Workspace(w.id.clone()),
-                    "renombrar el workspace".to_owned(),
+                    "renombrar el worktree".to_owned(),
                     shown_name(&w.name, w.kind, w.branch.as_deref()).to_owned(),
                 )
             }
@@ -2400,7 +2402,7 @@ const SCROLL_STEP: usize = 3;
 const WORKSPACE_KEYS: &[(&str, &str)] = &[
     ("j k", "mover por los workspaces"),
     ("↵", "entrar al workspace"),
-    ("r", "renombrar el workspace"),
+    ("r", "renombrar el worktree"),
     ("o", "abrir una carpeta"),
     ("w", "worktree nuevo del proyecto"),
     ("x", "cerrar el workspace (y quitar su worktree)"),
@@ -4804,7 +4806,7 @@ mod tests {
         let mut v = fixture_view();
         assert_eq!(tap(&mut v, 'r'), After::Continue);
         let t = v.plain(120, 30);
-        assert!(t.contains("renombrar el workspace"), "{t}");
+        assert!(t.contains("renombrar el worktree"), "{t}");
         assert!(
             t.contains("❯ feat/login▏"),
             "a worktree shows its branch: {t}"
@@ -4826,6 +4828,15 @@ mod tests {
             }
         );
         assert!(v.manage.is_none());
+    }
+
+    #[test]
+    fn r_does_not_ask_for_the_name_of_a_folder() {
+        let mut v = fixture_view();
+        let ws = v.session.as_mut().unwrap();
+        ws.workspaces[v.selected].kind = WorkspaceKind::Folder;
+        assert_eq!(tap(&mut v, 'r'), After::Continue);
+        assert!(v.manage.is_none(), "a folder is a directory on disk");
     }
 
     #[test]

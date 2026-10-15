@@ -23,14 +23,14 @@ class RemoveTest {
             listOf(WsAction.Rename, WsAction.CloseWorkspace, WsAction.RemoveWorktree),
             workspaceMenu(worktree.kind, worktree.repo).map { it.action },
         )
-        assertEquals(listOf(WsAction.Rename, WsAction.RemoveWorkspace), workspaceMenu(HomeKind.Folder, null).map { it.action })
+        assertEquals(listOf(WsAction.RemoveWorkspace), workspaceMenu(HomeKind.Folder, null).map { it.action })
         // Only a repository's root offers a worktree, and only when it knows the repository.
         assertEquals(
-            listOf(WsAction.NewWorktree, WsAction.Rename, WsAction.RemoveWorkspace),
+            listOf(WsAction.NewWorktree, WsAction.RemoveWorkspace),
             workspaceMenu(HomeKind.Root, "/home/u/code/app").map { it.action },
         )
         assertEquals("de «app»", workspaceMenu(HomeKind.Root, "/home/u/code/app").first().note)
-        assertEquals(listOf(WsAction.Rename, WsAction.RemoveWorkspace), workspaceMenu(HomeKind.Root, null).map { it.action })
+        assertEquals(listOf(WsAction.RemoveWorkspace), workspaceMenu(HomeKind.Root, null).map { it.action })
     }
 
     @Test
