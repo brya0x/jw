@@ -86,11 +86,11 @@ const COLS = 112, ROWS = 28, SB = 28;
 let S, g;
 const LV = {1:['WORKSPACE','chip-blue'], 2:['PANEL','chip-mag'], 3:['TERMINAL','chip-green']};
 function reset(){
-  S = { level:1, sel:1, focus:0, full:false, ask:null, input:null, help:false, leader:false, msg:'', prog:false, typed:'', menu:null,
+  S = { busy:null, fail:null, level:1, sel:1, focus:0, full:false, ask:null, input:null, help:false, leader:false, msg:'', prog:false, typed:'', menu:null,
     // The daemon's order: each repository's root first and its worktrees after it, then the folders that are not repositories.
     ws:[ {name:'api', kind:'folder', project:'api', path:'~/ws/api', panes:[{t:'zsh'}]},
-         {name:'feat/login', kind:'worktree', project:'api', path:'~/ws/api-wt/feat-login', panes:[{t:'zsh'},{t:'claude',prog:'claude'}]},
-         {name:'feat/cli', kind:'worktree', project:'tools', path:'~/ws/tools-wt/feat-cli', panes:[{t:'zsh'}]},
+         {name:'feat/login', kind:'worktree', project:'api', path:'~/ws/api-wt/feat-login', git:{remote:false, ahead:3}, panes:[{t:'zsh'},{t:'claude',prog:'claude'}]},
+         {name:'feat/cli', kind:'worktree', project:'tools', path:'~/ws/tools-wt/feat-cli', git:{remote:true, ahead:1, rejected:true}, panes:[{t:'zsh'}]},
          {name:'notes', kind:'folder', path:'~/notes', panes:[{t:'zsh'}]},
          {name:'infra', kind:'folder', path:'~/ws/infra', panes:[]} ] };
 }
@@ -166,13 +166,13 @@ function showToml(){
     : '<span class="d">(sin archivo: el menú trae solo claude)</span>';
 }
 const KEYS = {
-  1: [['j k','mover'],['↵','entrar al workspace'],['r','renombrar el worktree'],['x','cerrar'],['o','abrir una carpeta'],['w','worktree nuevo'],['s','sincronizar'],['d','ver cambios'],['a','avisos'],['m','teléfono'],[',','ajustes'],['q','salir']],
+  1: [['j k','mover'],['↵','entrar al workspace'],['r','renombrar el worktree'],['x','cerrar'],['o','abrir una carpeta'],['w','worktree nuevo'],['s','subir el worktree a origin'],['d','ver cambios'],['a','avisos'],['m','teléfono'],[',','ajustes'],['q','salir']],
   2: [['h j k l','cambiar de panel'],['↵','escribir en el panel'],['n','panel nuevo (shell)'],['N','panel nuevo con un programa'],['r','nombrar el panel'],['f','pantalla completa'],['x','cerrar el panel'],['o w s d','como en workspaces'],['a m ,','avisos · teléfono · ajustes'],['esc','volver a workspaces']],
   menu: [['j k','mover'],['↵','abrir en un panel nuevo'],['letra','abre ese programa'],['esc','cancelar']],
   3: [['todo','va al programa (esc y ctrl incluidos)'],['^␣','salir al nivel de paneles']]
 };
-const hint = () => S.menu ? 'j/k mover · ↵ abrir · letra directa · esc cancelar' : S.input ? '↵ aceptar · esc cancelar' : S.ask ? 'y sí · esc cancelar' : S.help ? 'cualquier tecla para cerrar'
-  : S.level === 1 ? 'j/k mover · ↵ entrar · r renombrar · x cerrar · o carpeta · w worktree · ? teclas · q salir'
+const hint = () => S.busy ? 'subiendo… espera' : S.fail ? 'cualquier tecla para cerrar' : S.menu ? 'j/k mover · ↵ abrir · letra directa · esc cancelar' : S.input ? '↵ aceptar · esc cancelar' : S.ask ? 'y sí · esc cancelar' : S.help ? 'cualquier tecla para cerrar'
+  : S.level === 1 ? 'j/k mover · ↵ entrar · r renombrar · x cerrar · o carpeta · w worktree · s subir · ? teclas · q salir'
   : S.level === 2 ? 'h/l panel · ↵ escribir · n nuevo · N con programa · r nombrar · f completa · x cerrar · esc volver · ? teclas'
   : 'escribes en el panel · ^␣ para salir';
 function modalBox(w, lines, title, cls){
@@ -226,6 +226,8 @@ function draw(){
     let y = by + 3 + rows.length + 1;
     if (err){ put(bx + 3, y, clip('config.toml · ' + err, w2 - 6), 'c-red bg-panel'); put(bx + 3, y + 1, 'se sigue con la lista anterior', 'd bg-panel'); y += 2; }
     put(bx + 3, y, '↵ abrir · la letra abre directo · esc cancelar', 'd bg-panel'); put(bx + 3, y + 1, 'se edita en ~/.config/jwn/config.toml', 'd bg-panel'); }
+  if (S.busy) modalBox(62, [['git push origin ' + S.busy.branch, 'd'], ['', ''], [['⠋','⠙','⠹','⠸'][Math.floor(Date.now() / 120) % 4] + ' subiendo ' + S.busy.branch + '…', 'c-yellow']], 'subir el worktree', 'c-blue');
+  if (S.fail) modalBox(70, [...S.fail.text.map(t => [t, 'c-red']), ['', ''], ['cualquier tecla para cerrar', 'd']], S.fail.title, 'c-red');
   if (S.ask) modalBox(62, [[S.ask.text, ''], [S.ask.sub, 'd'], ['', ''], ['y sí · esc cancelar', 'd']], S.ask.title, 'c-yellow');
   if (S.input) modalBox(52, [[S.input.label, 'd'], ['❯ ' + S.input.text + '▏', 'b'], ['', ''], ['↵ aceptar · esc cancelar', 'd']], S.input.title, 'c-blue');
   paint();
@@ -243,10 +245,26 @@ function global(k){
 }
 function workspaceKeys(k){
   if (k === 'o'){ later('abrir una carpeta'); return true; } if (k === 'w'){ later('worktree nuevo'); return true; }
-  if (k === 's'){ later('sincronizar con la base'); return true; } if (k === 'd'){ later('ver cambios'); return true; } return false;
+  if (k === 's'){ pushWorktree(); return true; } if (k === 'd'){ later('ver cambios'); return true; } return false;
+}
+// `s`: git push of the highlighted worktree's branch. Nothing is merged and nothing is forced.
+function pushWorktree(){
+  const w = W();
+  if (w.kind !== 'worktree'){ flash('«' + w.name + '» es una carpeta: s sube un worktree'); return; }
+  if (S.busy) return;
+  S.busy = {branch: w.name}; draw();
+  const tick = setInterval(() => { if (S.busy) draw(); }, 120);
+  setTimeout(() => { clearInterval(tick); S.busy = null; const g = w.git;
+    if (g.rejected){ S.fail = {title:'No se pudo subir ' + w.name, text:['! [rejected] ' + w.name + ' -> ' + w.name + ' (non-fast-forward)', 'hint: el remoto tiene commits que este worktree no tiene.', 'hint: tráelos con git en un panel y vuelve a pulsar s.']}; draw(); }
+    else if (!g.ahead) flash(w.name + ' · al día con origin, nada que subir');
+    else { const n = g.ahead, fresh = !g.remote; g.ahead = 0; g.remote = true;
+      flash('subido ' + w.name + ' · ' + n + (n === 1 ? ' commit' : ' commits') + (fresh ? ' · rama nueva en origin' : ' a origin')); }
+  }, 1400);
 }
 function key(e){
   const k = e.key;
+  if (S.busy) return true;
+  if (S.fail){ S.fail = null; draw(); return true; }
   if (S.help){ S.help = false; draw(); return true; }
   if (S.input){
     if (k === 'Escape'){ S.input = null; draw(); return true; }

@@ -11,6 +11,7 @@ use crate::changes;
 use crate::panes;
 use crate::rename;
 use crate::server::Shared;
+use crate::sync;
 use crate::workspaces;
 
 pub type Done = Result<Option<Value>, ErrorBody>;
@@ -43,6 +44,7 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
         }
         Cmd::RenameWorkspace { workspace, name } => rename::workspace(shared, &workspace, &name),
         Cmd::RenamePane { pane, name } => rename::pane(shared, &pane, &name),
+        Cmd::SyncWorkspace { workspace } => sync::workspace(shared, &workspace),
         Cmd::OpenFolder { path } => workspaces::open_folder(shared, &path),
         Cmd::ListDir { path, hidden } => browse::list_dir(path.as_deref(), hidden),
         Cmd::CreateWorktree {

@@ -46,6 +46,8 @@ pub enum Manage {
         title: String,
         text: String,
     },
+    /// `s`: the branch is being pushed; every key waits.
+    Syncing { branch: String },
     /// The daemon refused, or could not be asked.
     Failed { title: String, text: String },
     /// `,`: the mode and the themes of the kind in force; `cursor` is the one the keys are on
@@ -190,6 +192,7 @@ impl Manage {
             Manage::Dirty(..) => "c cerrar solo el workspace · esc volver",
             Manage::Clean(_) => "y quitar · esc cancelar",
             Manage::Failed { .. } => "cualquier tecla para seguir",
+            Manage::Syncing { .. } => "subiendo… espera",
             Manage::Settings { .. } => "j/k tema · m modo · ↵ elegir · esc cerrar",
             Manage::Rename { .. } => "↵ aceptar · esc cancelar (vacío: el nombre automático)",
         }
@@ -212,7 +215,12 @@ impl Manage {
     }
 
     /// Title, border colour and the lines of the box.
-    fn text(&self, settings: &Settings, os_dark: bool) -> (String, Rgb, Vec<(String, Look)>) {
+    fn text(
+        &self,
+        settings: &Settings,
+        os_dark: bool,
+        now_ms: u64,
+    ) -> (String, Rgb, Vec<(String, Look)>) {
         let plain = |s: &str| (s.to_owned(), Look::Plain);
         let dim = |s: &str| (s.to_owned(), Look::Dim);
         let blank = || (String::new(), Look::Plain);
@@ -351,6 +359,18 @@ impl Manage {
                     dim(self.hint()),
                 ],
             ),
+            Manage::Syncing { branch } => (
+                "subir el worktree".to_owned(),
+                look::blue(),
+                vec![
+                    dim(&format!("git push origin {branch}")),
+                    blank(),
+                    (
+                        format!("{} subiendo {branch}…", super::shell::spin(now_ms)),
+                        Look::Warn,
+                    ),
+                ],
+            ),
             Manage::Failed { title, text } => {
                 let mut lines: Vec<(String, Look)> = wrap(text, 70)
                     .into_iter()
@@ -363,8 +383,15 @@ impl Manage {
     }
 
     /// Draw the question over `area`, near its top and centred.
-    pub fn draw(&self, g: &mut Grid, (x, y, w, _): Rect, settings: &Settings, os_dark: bool) {
-        let (title, border, lines) = self.text(settings, os_dark);
+    pub fn draw(
+        &self,
+        g: &mut Grid,
+        (x, y, w, _): Rect,
+        settings: &Settings,
+        os_dark: bool,
+        now_ms: u64,
+    ) {
+        let (title, border, lines) = self.text(settings, os_dark, now_ms);
         let widest = lines
             .iter()
             .map(|(l, _)| l.chars().count())

@@ -196,6 +196,12 @@ pub enum Cmd {
         workspace: Id,
         name: String,
     },
+    /// Push a worktree's branch to its remote (`git push`, never forced, nothing merged). Only a
+    /// worktree has a branch of its own to push. The result is `{branch, pushed, new_branch}`:
+    /// the commits that went up, and whether the branch was made on the remote.
+    SyncWorkspace {
+        workspace: Id,
+    },
     /// Give a pane a name that stays whatever runs in it; an empty name brings back the
     /// automatic one (what runs in it, else its shell).
     RenamePane {

@@ -21,6 +21,7 @@ mod pty;
 mod rename;
 mod replies;
 mod server;
+mod sync;
 mod workspaces;
 
 pub use mobile::{LinkConfig, devices_file};

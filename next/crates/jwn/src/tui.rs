@@ -316,6 +316,8 @@ pub enum Key {
     Settings,
     /// A worktree of the project the person is in.
     Worktree,
+    /// Push the highlighted worktree's branch.
+    Sync,
     /// The phone link: its box.
     Phone,
     /// With a block selected: copy its command, copy its output, run it again.
@@ -372,6 +374,10 @@ pub enum After {
     },
     /// Read the workspace's uncommitted changes, to know whether its worktree may go.
     Check(String),
+    /// Push the worktree's branch.
+    Sync {
+        workspace: String,
+    },
 }
 
 pub struct View {
@@ -1197,6 +1203,39 @@ impl View {
         });
     }
 
+    /// `s`: push the highlighted worktree's branch; a folder has none of its own to push.
+    fn ask_sync(&mut self) -> After {
+        let Some((id, kind, branch)) = self
+            .session
+            .as_ref()
+            .and_then(|s| s.workspaces.get(self.selected))
+            .map(|w| (w.id.clone(), w.kind, w.branch.clone()))
+        else {
+            return After::Continue;
+        };
+        let Some(branch) = branch.filter(|_| kind == WorkspaceKind::Worktree) else {
+            let name = self.label(&id);
+            self.flash(&format!("«{name}» es una carpeta: s sube un worktree"));
+            return After::Continue;
+        };
+        self.manage = Some(Manage::Syncing { branch });
+        After::Sync { workspace: id }
+    }
+
+    /// The daemon answered the push: say what went up, or why it did not.
+    pub fn sync_done(&mut self, reply: Reply) {
+        let Some(Manage::Syncing { branch }) =
+            self.manage.take_if(|m| matches!(m, Manage::Syncing { .. }))
+        else {
+            return;
+        };
+        match reply {
+            Ok(Ok(result)) => self.flash(&sync_said(&branch, result.as_ref())),
+            Ok(Err(e)) => self.manage_failed(&format!("No se pudo subir {branch}"), &e.message),
+            Err(e) => self.manage_failed(&format!("No se pudo subir {branch}"), &e.to_string()),
+        }
+    }
+
     /// `x` at the workspace level: ask before the highlighted workspace is closed.
     fn ask_close_workspace(&mut self) {
         let Some(w) = self
@@ -1584,6 +1623,7 @@ impl View {
             (Mode::Workspaces, Key::Full) if level == Level::Panels => self.full = !self.full,
             (Mode::Workspaces, Key::Repeat) if level != Level::Terminal => self.ask_rename(level),
             (Mode::Workspaces, Key::CopyOut) if level != Level::Terminal => self.open_picker(),
+            (Mode::Workspaces, Key::Sync) if level != Level::Terminal => return self.ask_sync(),
             (Mode::Workspaces, Key::Worktree) if level != Level::Terminal => {
                 self.open_worktree_box()
             }
@@ -2067,7 +2107,7 @@ impl View {
                 (_, Level::Workspaces) => (
                     " WORKSPACE ",
                     look::blue(),
-                    "j/k mover · ↵ entrar · r renombrar · o carpeta · w worktree · x cerrar · d cambios · m teléfono · ? teclas · q salir",
+                    "j/k mover · ↵ entrar · r renombrar · o carpeta · w worktree · s subir · x cerrar · d cambios · m teléfono · ? teclas · q salir",
                 ),
             },
         };
@@ -2150,6 +2190,7 @@ impl View {
                 (px, 1, pw, rows.saturating_sub(2)),
                 &self.settings,
                 self.os_dark,
+                self.now_ms,
             );
         }
         g
@@ -2405,6 +2446,7 @@ const WORKSPACE_KEYS: &[(&str, &str)] = &[
     ("r", "renombrar el worktree"),
     ("o", "abrir una carpeta"),
     ("w", "worktree nuevo del proyecto"),
+    ("s", "subir el worktree a origin"),
     ("x", "cerrar el workspace (y quitar su worktree)"),
     ("d", "ver sus cambios"),
     ("a", "avisos"),
@@ -2420,7 +2462,10 @@ const PANEL_KEYS: &[(&str, &str)] = &[
     ("r", "nombrar el panel"),
     ("f", "el panel a pantalla completa"),
     ("x", "cerrar el panel"),
-    ("o w", "abrir una carpeta · worktree nuevo"),
+    (
+        "o w s",
+        "abrir una carpeta · worktree nuevo · subir el worktree",
+    ),
     ("d a m ,", "cambios · avisos · teléfono · ajustes"),
     ("esc", "volver a los workspaces"),
 ];
@@ -2646,6 +2691,7 @@ fn key_of(code: KeyCode) -> Option<Key> {
         KeyCode::Char(',') => Key::Settings,
         KeyCode::Char('m') => Key::Phone,
         KeyCode::Char('w') => Key::Worktree,
+        KeyCode::Char('s') => Key::Sync,
         KeyCode::Char('c') => Key::CopyCmd,
         KeyCode::Char('o') => Key::CopyOut,
         KeyCode::Char('r') => Key::Repeat,
@@ -2674,6 +2720,40 @@ const APPEARANCE_EVERY: Duration = Duration::from_secs(5);
 const ASK_WAIT: Duration = Duration::from_secs(20);
 
 type Reply = Result<Result<Option<serde_json::Value>, ErrorBody>, ClientError>;
+
+/// What a push that worked says: the commits that went up and whether the branch is new there.
+fn sync_said(branch: &str, result: Option<&serde_json::Value>) -> String {
+    let pushed = result.and_then(|r| r["pushed"].as_u64()).unwrap_or(0);
+    let new = result
+        .and_then(|r| r["new_branch"].as_bool())
+        .unwrap_or(false);
+    match (pushed, new) {
+        (0, _) => format!("{branch} · al día con origin, nada que subir"),
+        (n, true) => format!("subido {branch} · {} · rama nueva en origin", commits(n)),
+        (n, false) => format!("subido {branch} · {} a origin", commits(n)),
+    }
+}
+
+fn commits(n: u64) -> String {
+    if n == 1 {
+        "1 commit".to_owned()
+    } else {
+        format!("{n} commits")
+    }
+}
+
+/// How long a push is waited for.
+const SYNC_WAIT: Duration = Duration::from_secs(120);
+
+/// Push in a thread of its own, with a connection of its own, so the screen goes on (the spinner
+/// moves, the other keys wait) while git runs. The reply comes back through the channel.
+fn spawn_sync(workspace: String, tx: std::sync::mpsc::Sender<Reply>) {
+    std::thread::spawn(move || {
+        let reply = Client::connect(&identity::socket_path(), "jwn-tui-sync")
+            .and_then(|mut c| c.cmd_within(Cmd::SyncWorkspace { workspace }, SYNC_WAIT));
+        let _ = tx.send(reply);
+    });
+}
 
 /// Tell the viewer how the daemon answered a request for a node.
 fn answer(view: &mut View, src: Src, reply: Reply) {
@@ -2805,6 +2885,7 @@ pub fn run() -> Result<(), String> {
     view.set_programs(Programs::read());
     view.set_os_dark(settings::os_is_dark());
     let mut phone_worker: Option<phone::Worker> = None;
+    let (sync_tx, sync_rx) = std::sync::mpsc::channel::<Reply>();
     let (mut settings_read, mut appearance_read) = (Instant::now(), Instant::now());
     let mut programs_read = Instant::now();
     loop {
@@ -2882,6 +2963,9 @@ pub fn run() -> Result<(), String> {
             let _ = client.cmd(Cmd::MarkSeen { node, rev });
         }
         serve_asks(&mut view, &mut client);
+        while let Ok(reply) = sync_rx.try_recv() {
+            view.sync_done(reply);
+        }
         if view.take_phone_start() {
             phone_worker = Some(phone::Worker::spawn());
         }
@@ -2973,6 +3057,7 @@ pub fn run() -> Result<(), String> {
                         "No se pudo crear el worktree",
                     );
                 }
+                After::Sync { workspace } => spawn_sync(workspace, sync_tx.clone()),
                 After::Rename { target, name } => {
                     let cmd = match target {
                         Named::Workspace(workspace) => Cmd::RenameWorkspace { workspace, name },
@@ -4828,6 +4913,81 @@ mod tests {
             }
         );
         assert!(v.manage.is_none());
+    }
+
+    #[test]
+    fn s_pushes_the_worktree_and_waits_with_a_box_that_takes_every_key() {
+        let mut v = fixture_view();
+        let ws = v.selected_id().unwrap();
+        assert_eq!(tap(&mut v, 's'), After::Sync { workspace: ws });
+        let t = v.plain(120, 30);
+        assert!(t.contains("subir el worktree"), "{t}");
+        assert!(t.contains("git push origin feat/login"), "{t}");
+        assert!(t.contains("subiendo feat/login…"), "{t}");
+        // Nothing else is done while git runs, and a second push is not started.
+        for c in ['x', 'r', 's', 'j'] {
+            assert_eq!(tap(&mut v, c), After::Continue);
+        }
+        assert!(matches!(v.manage, Some(Manage::Syncing { .. })));
+    }
+
+    #[test]
+    fn what_a_push_says_when_it_worked() {
+        let said = |pushed: u64, new: bool| {
+            let mut v = fixture_view();
+            tap(&mut v, 's');
+            v.sync_done(Ok(Ok(Some(serde_json::json!({
+                "branch": "feat/login", "pushed": pushed, "new_branch": new
+            })))));
+            assert!(v.manage.is_none());
+            v.flash.clone()
+        };
+        assert_eq!(
+            said(3, true),
+            "subido feat/login · 3 commits · rama nueva en origin"
+        );
+        assert_eq!(said(1, false), "subido feat/login · 1 commit a origin");
+        assert_eq!(
+            said(0, false),
+            "feat/login · al día con origin, nada que subir"
+        );
+    }
+
+    #[test]
+    fn a_push_that_failed_says_why_and_any_key_closes_it() {
+        let mut v = fixture_view();
+        tap(&mut v, 's');
+        v.sync_done(Ok(Err(ErrorBody {
+            code: contract::ErrorCode::GitFailed,
+            message: "! [rejected] feat/login -> feat/login (non-fast-forward)".into(),
+        })));
+        let t = v.plain(120, 30);
+        assert!(t.contains("No se pudo subir feat/login"), "{t}");
+        assert!(t.contains("non-fast-forward"), "{t}");
+        assert_eq!(tap(&mut v, 'x'), After::Continue);
+        assert!(
+            v.manage.is_none(),
+            "any key closes it and does nothing else"
+        );
+    }
+
+    #[test]
+    fn s_on_a_folder_says_it_is_a_folder_and_pushes_nothing() {
+        let mut v = fixture_view();
+        v.session.as_mut().unwrap().workspaces[v.selected].kind = WorkspaceKind::Folder;
+        assert_eq!(tap(&mut v, 's'), After::Continue);
+        assert!(v.manage.is_none());
+        assert!(
+            v.plain(120, 30)
+                .contains("es una carpeta: s sube un worktree")
+        );
+    }
+
+    #[test]
+    fn s_works_from_the_panel_level_too() {
+        let mut v = idle_view();
+        assert_eq!(v.level(), Level::Panels);
+        assert!(matches!(tap(&mut v, 's'), After::Sync { .. }));
     }
 
     #[test]

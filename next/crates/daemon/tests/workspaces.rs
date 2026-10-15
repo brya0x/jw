@@ -566,3 +566,147 @@ fn a_repositorys_root_is_its_own_project_and_the_session_lists_repositories_befo
     assert_eq!(list[0]["path"], app_text);
     d.stop();
 }
+
+/// REQ-274 to REQ-277: `sync_workspace` pushes a worktree's branch, never forced.
+#[test]
+fn sync_pushes_the_worktrees_branch_and_says_how_many_commits_went_up() {
+    let sb = Sandbox::new();
+    let d = sb.start();
+    let app = repo(&sb);
+    let origin = sb.dir.join("origin.git");
+    git(&sb.dir, &["init", "-q", "--bare", &text(&origin)]);
+    git(&app, &["remote", "add", "origin", &text(&origin)]);
+    git(&app, &["push", "-q", "origin", "main"]);
+    let mut c = sb.client();
+    session(&mut c);
+    let ws = id_of(
+        c.cmd(Cmd::CreateWorktree {
+            repo: text(&app),
+            branch: "feat/login".into(),
+            base: None,
+            folder: None,
+        })
+        .unwrap()
+        .unwrap(),
+    );
+    let wt = app.parent().unwrap().join("app-wt/feat-login");
+    let sync = |c: &mut wire::Client, ws: &str| {
+        c.cmd(Cmd::SyncWorkspace {
+            workspace: ws.into(),
+        })
+    };
+    for n in ["a", "b"] {
+        std::fs::write(wt.join(n), n).unwrap();
+        git(&wt, &["add", "."]);
+        git(&wt, &["commit", "-q", "-m", n]);
+    }
+    // A branch the remote does not have yet: it is made there, with the commits no remote has.
+    let r = sync(&mut c, &ws).unwrap().unwrap().unwrap();
+    assert_eq!(
+        (
+            r["branch"].as_str(),
+            r["pushed"].as_u64(),
+            r["new_branch"].as_bool()
+        ),
+        (Some("feat/login"), Some(2), Some(true))
+    );
+    let on_origin = |rev: &str| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&origin)
+            .args(["rev-parse", rev])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    };
+    let head = |dir: &Path| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    };
+    assert_eq!(on_origin("feat/login"), head(&wt));
+
+    // Nothing new: nothing is pushed.
+    let r = sync(&mut c, &ws).unwrap().unwrap().unwrap();
+    assert_eq!(
+        (r["pushed"].as_u64(), r["new_branch"].as_bool()),
+        (Some(0), Some(false))
+    );
+
+    // One commit more goes up to the branch that is there.
+    std::fs::write(wt.join("c"), "c").unwrap();
+    git(&wt, &["add", "."]);
+    git(&wt, &["commit", "-q", "-m", "c"]);
+    let r = sync(&mut c, &ws).unwrap().unwrap().unwrap();
+    assert_eq!(
+        (r["pushed"].as_u64(), r["new_branch"].as_bool()),
+        (Some(1), Some(false))
+    );
+    assert_eq!(on_origin("feat/login"), head(&wt));
+
+    // The remote has a commit the worktree has not: the push is refused, never forced.
+    let other = sb.dir.join("other");
+    git(&sb.dir, &["clone", "-q", &text(&origin), &text(&other)]);
+    git(&other, &["checkout", "-q", "feat/login"]);
+    std::fs::write(other.join("z"), "z").unwrap();
+    git(&other, &["add", "."]);
+    git(&other, &["commit", "-q", "-m", "z"]);
+    git(&other, &["push", "-q", "origin", "feat/login"]);
+    std::fs::write(wt.join("d"), "d").unwrap();
+    git(&wt, &["add", "."]);
+    git(&wt, &["commit", "-q", "-m", "d"]);
+    let e = sync(&mut c, &ws).unwrap().unwrap_err();
+    assert_eq!(e.code, ErrorCode::GitFailed);
+    assert!(e.message.contains("rejected"), "{}", e.message);
+    assert_eq!(
+        on_origin("feat/login"),
+        head(&other),
+        "the remote kept its own"
+    );
+
+    // A folder has no branch of its own to push, and an unknown workspace is not found.
+    let folder = id_of(
+        c.cmd(Cmd::OpenFolder { path: text(&app) })
+            .unwrap()
+            .unwrap(),
+    );
+    let e = sync(&mut c, &folder).unwrap().unwrap_err();
+    assert_eq!(e.code, ErrorCode::BadRequest);
+    let e = sync(&mut c, "nope").unwrap().unwrap_err();
+    assert_eq!(e.code, ErrorCode::NotFound);
+    d.stop();
+}
+
+#[test]
+fn sync_without_a_remote_says_what_git_says() {
+    let sb = Sandbox::new();
+    let d = sb.start();
+    let app = repo(&sb);
+    let mut c = sb.client();
+    session(&mut c);
+    let ws = id_of(
+        c.cmd(Cmd::CreateWorktree {
+            repo: text(&app),
+            branch: "feat/x".into(),
+            base: None,
+            folder: None,
+        })
+        .unwrap()
+        .unwrap(),
+    );
+    let wt = app.parent().unwrap().join("app-wt/feat-x");
+    std::fs::write(wt.join("a"), "a").unwrap();
+    git(&wt, &["add", "."]);
+    git(&wt, &["commit", "-q", "-m", "a"]);
+    let e = c
+        .cmd(Cmd::SyncWorkspace { workspace: ws })
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::GitFailed);
+    assert!(e.message.contains("origin"), "{}", e.message);
+    d.stop();
+}

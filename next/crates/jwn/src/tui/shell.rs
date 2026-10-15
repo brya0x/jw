@@ -102,6 +102,11 @@ pub fn program_name(cmd: &str) -> String {
 /// The frames of the spinner of a program that is starting, one every 110 ms.
 const SPIN: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
+/// The frame of the spinner at `now_ms`.
+pub fn spin(now_ms: u64) -> &'static str {
+    SPIN[(now_ms / 110) as usize % SPIN.len()]
+}
+
 /// What a program that has the pane's screen is doing when the pane cannot show its screen.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Phase {
@@ -115,7 +120,7 @@ pub enum Phase {
 /// cancels) or `cerrando <name>…` (and that it is waiting for it to end), in the middle of its box
 /// (spec REQ-259, REQ-264).
 pub fn loading(g: &mut Grid, (x, y, w, h): Rect, phase: Phase, name: &str, now_ms: u64) {
-    let frame = SPIN[(now_ms / 110) as usize % SPIN.len()];
+    let frame = spin(now_ms);
     let (what, hint) = match phase {
         Phase::Starting => ("iniciando", "^C cancela"),
         Phase::Closing => ("cerrando", "esperando a que termine"),

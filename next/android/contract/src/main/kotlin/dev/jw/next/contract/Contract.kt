@@ -152,6 +152,10 @@ sealed interface Cmd {
         @SerialName("remove_worktree") val removeWorktree: Boolean = false,
     ) : Cmd
 
+    /** Push the worktree's branch to its remote; the result is `{branch, pushed, new_branch}`. */
+    @Serializable @SerialName("sync_workspace")
+    data class SyncWorkspace(val workspace: Id) : Cmd
+
     @Serializable @SerialName("new_pane")
     data class NewPane(val workspace: Id, val program: List<String>? = null) : Cmd
 
