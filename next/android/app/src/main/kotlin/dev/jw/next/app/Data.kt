@@ -184,10 +184,14 @@ abstract class ProtocolSource : AppSource() {
     }
 
     /** A folder just opened gets a shell, as the terminal client does (REQ-208); [reply] gets its id, or what failed. */
+    /** The panes a folder's settings say (REQ-503), or, if the PC cannot start them, one shell. */
     private fun withShell(made: Result<Id>, reply: (Result<Id>) -> Unit) {
         val workspace = made.getOrElse { return reply(made) }
-        command(Cmd.NewPane(workspace)) { p ->
-            reply(if (p.ok) made else Result.failure(Exception("se abrió, pero sin shell: ${p.error?.message ?: "el PC no pudo abrir el panel"}")))
+        command(Cmd.StartWorkspace(workspace)) { started ->
+            if (started.ok) return@command reply(made)
+            command(Cmd.NewPane(workspace)) { p ->
+                reply(if (p.ok) made else Result.failure(Exception("se abrió, pero sin shell: ${p.error?.message ?: "el PC no pudo abrir el panel"}")))
+            }
         }
     }
 

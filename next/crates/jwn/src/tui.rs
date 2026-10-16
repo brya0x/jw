@@ -4377,8 +4377,8 @@ fn shown_in_a_pane(view: &mut View, client: &mut Client, reply: Reply, failed: &
     match reply {
         Ok(Ok(result)) => {
             if let Some(ws) = result.as_ref().and_then(|r| r["workspace"].as_str()) {
-                // A worktree starts the panes its repository's `.jw.toml` says; when that
-                // cannot be done, or for a folder, it is one shell.
+                // A workspace starts the panes its settings say (a folder's, its repository's
+                // when it is its top level); when that cannot be done it is one shell.
                 let started = start
                     && match reply_value(client.cmd_within(
                         Cmd::StartWorkspace {
@@ -4554,7 +4554,7 @@ fn do_after(
                 let reply = client.cmd(Cmd::OpenFolder {
                     path: path.to_string_lossy().into_owned(),
                 });
-                shown_in_a_pane(view, client, reply, "No se pudo abrir la carpeta", false);
+                shown_in_a_pane(view, client, reply, "No se pudo abrir la carpeta", true);
             }
         }
         After::CreateWorktree {
@@ -7833,7 +7833,8 @@ mod tests {
         );
         assert_eq!(panes_of(&mut c, &ws), 1);
 
-        // Without `start` (a folder) it is one shell, whatever the file says.
+        // A folder that is the repository's top level has its settings but never their setup
+        // (REQ-500): with no layout it is one shell.
         std::fs::write(repo.join(".jw.toml"), "setup = [\"true\"]\n").unwrap();
         v.manage = None;
         let reply = c.cmd(Cmd::OpenFolder {
@@ -7843,8 +7844,9 @@ mod tests {
             .as_str()
             .unwrap()
             .to_owned();
-        shown_in_a_pane(&mut v, &mut c, reply, "x", false);
+        shown_in_a_pane(&mut v, &mut c, reply, "x", true);
         assert_eq!(panes_of(&mut c, &ws), 1);
+        assert!(v.manage.is_none(), "nothing failed");
         d.stop();
         let _ = std::fs::remove_dir_all(dir);
     }

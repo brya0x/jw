@@ -116,6 +116,24 @@ fn main_top(top: &Path) -> PathBuf {
     .unwrap_or_else(|| top.to_path_buf())
 }
 
+/// The settings of a folder opened as a workspace (REQ-501): its repository's when it is the top
+/// level of one, else its own `.jw.toml`, else the personal file named by its path.
+pub fn read_folder(folder: &Path, personal_dir: &Path) -> Result<Project, String> {
+    let is_top = crate::git::toplevel(folder)
+        .ok()
+        .and_then(|t| std::fs::canonicalize(t).ok())
+        .is_some_and(|t| std::fs::canonicalize(folder).is_ok_and(|f| f == t));
+    if is_top {
+        return read(folder, personal_dir);
+    }
+    read_with(
+        folder,
+        &|k| std::env::var(k).ok(),
+        &crate::browse::home(),
+        personal_file(personal_dir, None, folder),
+    )
+}
+
 /// The URL the repository came from, when it has one.
 fn origin_of(top: &Path) -> Option<String> {
     crate::git::run(top, &["remote", "get-url", "origin"])

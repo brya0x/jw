@@ -18,6 +18,12 @@ pub fn load(shared: &Shared, top: &Path) -> Result<Project, ErrorBody> {
     project::read(top, &personal).map_err(|why| err(ErrorCode::BadRequest, why))
 }
 
+/// The settings of a folder opened as a workspace (REQ-501).
+fn load_folder(shared: &Shared, folder: &Path) -> Result<Project, ErrorBody> {
+    let personal = shared.lock().projects_dir.clone();
+    project::read_folder(folder, &personal).map_err(|why| err(ErrorCode::BadRequest, why))
+}
+
 /// `project_config`: what the settings of the repository `repo` is in come to.
 pub fn project_config(shared: &Shared, repo: &str) -> Done {
     let dir = crate::workspaces::absolute(repo)?;
@@ -97,11 +103,13 @@ pub fn start_workspace(shared: &Shared, workspace: &Id) -> Done {
             ws.branch.clone().unwrap_or_default(),
         )
     };
-    let top = top.filter(|_| kind == WorkspaceKind::Worktree);
-    let Some(top) = top else {
-        return Ok(Some(json!({ "panes": [spawn(shared, workspace, None)?] })));
+    // A worktree has its repository's settings and all they give it; a folder has its own and
+    // only its panes (REQ-500).
+    let worktree_of = top.filter(|_| kind == WorkspaceKind::Worktree);
+    let project = match &worktree_of {
+        Some(top) => load(shared, &PathBuf::from(top))?,
+        None => load_folder(shared, Path::new(&path))?,
     };
-    let project = load(shared, &PathBuf::from(top))?;
 
     let mut ids = Vec::new();
     match &project.layout {
@@ -116,7 +124,7 @@ pub fn start_workspace(shared: &Shared, workspace: &Id) -> Done {
         Some(node) => tree(node, &mut ids.clone().into_iter()),
         None => ids.first().map(|id| Layout::Pane { pane: id.clone() }),
     };
-    if !project.setup.is_empty() {
+    if worktree_of.is_some() && !project.setup.is_empty() {
         let name = Path::new(&path)
             .file_name()
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());

@@ -391,8 +391,7 @@ fn design_studios_file_names_one_agent_pane() {
 }
 
 #[test]
-fn without_a_file_or_for_a_folder_start_workspace_opens_one_shell_and_a_workspace_with_panes_conflicts()
- {
+fn without_a_file_start_workspace_opens_one_shell_and_a_workspace_with_panes_conflicts() {
     let sb = Sandbox::new();
     let d = sb.start();
     let top = repo(&sb, None);
@@ -426,14 +425,15 @@ fn without_a_file_or_for_a_folder_start_workspace_opens_one_shell_and_a_workspac
     open(&mut c, &ws);
     assert_eq!(c.nodes[&ws]["panes"].as_array().unwrap().len(), 1);
 
-    // A folder gets one shell whatever its repository's file says.
+    // The top level of the repository, opened as a folder, has the layout's three panes and not
+    // the setup (REQ-500): FULL's setup lines are for worktrees.
     std::fs::write(top.join(".jw.toml"), FULL).unwrap();
     let folder = ok(&mut c, Cmd::OpenFolder { path: text(&top) })["workspace"]
         .as_str()
         .unwrap()
         .to_owned();
     let r = ok(&mut c, Cmd::StartWorkspace { workspace: folder });
-    assert_eq!(r["panes"].as_array().unwrap().len(), 1);
+    assert_eq!(r["panes"].as_array().unwrap().len(), 3);
     d.stop();
 }
 
@@ -881,4 +881,167 @@ fn repo_two(sb: &Sandbox) -> PathBuf {
     git(&dir, &["add", "."]);
     git(&dir, &["commit", "-q", "-m", "init"]);
     std::fs::canonicalize(dir).unwrap()
+}
+
+/// The personal file of a folder that is not a repository: `local_` and its path (REQ-483).
+fn folder_personal(sb: &Sandbox, folder: &Path) -> PathBuf {
+    let key: String = text(folder)
+        .trim_start_matches('/')
+        .chars()
+        .map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '-' => c,
+            '/' => '_',
+            _ => '-',
+        })
+        .collect();
+    sb.dir.join("projects").join(format!("local_{key}.toml"))
+}
+
+fn open_folder(c: &mut Client, folder: &Path) -> String {
+    ok(c, Cmd::OpenFolder { path: text(folder) })["workspace"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+const TWO: &str = "setup = [\"true\"]\nports = { web = 0 }\n[layout]\nsplit = \"right\"\na = { run = \"cat\" }\nb = { run = \"shell\" }\n";
+
+/// N94: a folder's layout (REQ-500 to REQ-502).
+#[test]
+fn a_folder_opened_gets_the_layout_of_its_personal_file_and_never_its_setup_or_ports() {
+    let sb = Sandbox::new();
+    let d = sb.start();
+    let folder = sb.dir.join("work/plain");
+    std::fs::create_dir_all(&folder).unwrap();
+    let folder = std::fs::canonicalize(folder).unwrap();
+    let mut c = sb.client();
+
+    // no settings: one shell, as always
+    let ws = open_folder(&mut c, &folder);
+    assert_eq!(
+        ok(
+            &mut c,
+            Cmd::StartWorkspace {
+                workspace: ws.clone()
+            }
+        )["panes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    c.cmd(Cmd::RemoveWorkspace {
+        workspace: ws,
+        remove_worktree: false,
+        force: false,
+    })
+    .unwrap()
+    .unwrap();
+
+    // the personal file named by its path: the layout's two panes and no setup pane
+    let personal = folder_personal(&sb, &folder);
+    std::fs::create_dir_all(personal.parent().unwrap()).unwrap();
+    std::fs::write(&personal, TWO).unwrap();
+    let ws = open_folder(&mut c, &folder);
+    let started = ok(
+        &mut c,
+        Cmd::StartWorkspace {
+            workspace: ws.clone(),
+        },
+    );
+    assert_eq!(
+        started["panes"].as_array().unwrap().len(),
+        2,
+        "REQ-500: the layout and no setup pane"
+    );
+    open(&mut c, &ws);
+    assert_eq!(leaf_ids(&c.nodes[&ws]["layout"]).len(), 2);
+    let pane = started["panes"][0].as_str().unwrap();
+    open(&mut c, pane);
+    assert!(
+        c.nodes[pane]["running"].is_null() || c.nodes[pane]["running"]["argv"][0] == "cat",
+        "the first leaf runs `cat`"
+    );
+    // a folder has no ports: nothing was given to its panes
+    assert!(sb.dir.join("projects").exists());
+    c.cmd(Cmd::RemoveWorkspace {
+        workspace: ws,
+        remove_worktree: false,
+        force: false,
+    })
+    .unwrap()
+    .unwrap();
+
+    // its own `.jw.toml` is read before the personal file
+    std::fs::write(folder.join(".jw.toml"), "[layout]\nrun = \"shell\"\n").unwrap();
+    let ws = open_folder(&mut c, &folder);
+    assert_eq!(
+        ok(
+            &mut c,
+            Cmd::StartWorkspace {
+                workspace: ws.clone()
+            }
+        )["panes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    c.cmd(Cmd::RemoveWorkspace {
+        workspace: ws,
+        remove_worktree: false,
+        force: false,
+    })
+    .unwrap()
+    .unwrap();
+
+    // settings that cannot be used: refused naming the file and the line, and nothing started
+    std::fs::write(folder.join(".jw.toml"), "[layout]\nrun = \n").unwrap();
+    let ws = open_folder(&mut c, &folder);
+    let (code, why) = refused(
+        &mut c,
+        Cmd::StartWorkspace {
+            workspace: ws.clone(),
+        },
+    );
+    assert_eq!(code, ErrorCode::BadRequest);
+    assert!(why.starts_with(".jw.toml, line"), "REQ-502: {why}");
+    open(&mut c, &ws);
+    assert_eq!(c.nodes[&ws]["panes"].as_array().map_or(0, Vec::len), 0);
+    d.stop();
+}
+
+#[test]
+fn the_top_of_a_repository_has_its_settings_and_a_folder_inside_it_does_not() {
+    let sb = Sandbox::new();
+    let d = sb.start();
+    let app = repo(&sb, Some(TWO));
+    std::fs::create_dir_all(app.join("apps/web")).unwrap();
+    let mut c = sb.client();
+    // the top level: the repository's layout, but not its setup (REQ-501)
+    let ws = open_folder(&mut c, &app);
+    let started = ok(&mut c, Cmd::StartWorkspace { workspace: ws });
+    assert_eq!(
+        started["panes"].as_array().unwrap().len(),
+        2,
+        "two panes of the layout, no setup pane"
+    );
+    // a folder inside it is not the repository: one shell, whatever the repository says
+    let inner = open_folder(&mut c, &app.join("apps/web"));
+    let started = ok(&mut c, Cmd::StartWorkspace { workspace: inner });
+    assert_eq!(started["panes"].as_array().unwrap().len(), 1);
+    // while a worktree of the repository has the setup too
+    let made = worktree(&mut c, &app, "ws-1").unwrap();
+    let started = ok(
+        &mut c,
+        Cmd::StartWorkspace {
+            workspace: made["workspace"].as_str().unwrap().to_owned(),
+        },
+    );
+    assert_eq!(
+        started["panes"].as_array().unwrap().len(),
+        3,
+        "the layout's two and the setup"
+    );
+    d.stop();
 }
