@@ -7,9 +7,12 @@ import dev.jw.next.client.NodeCache
 import dev.jw.next.client.NodeSource
 import dev.jw.next.client.Seen
 import dev.jw.next.client.worktreeStarted
+import dev.jw.next.contract.Accent
 import dev.jw.next.contract.ClientMsg
 import dev.jw.next.contract.Cmd
+import dev.jw.next.contract.ConvMode
 import dev.jw.next.contract.ContractJson
+import dev.jw.next.contract.ConversationList
 import dev.jw.next.contract.DaemonMsg
 import dev.jw.next.contract.DiffScope
 import dev.jw.next.contract.DirListing
@@ -18,6 +21,7 @@ import dev.jw.next.contract.ErrorBody
 import dev.jw.next.contract.ErrorCode
 import dev.jw.next.contract.FileListing
 import dev.jw.next.contract.Id
+import dev.jw.next.contract.Image
 import dev.jw.next.contract.Node
 import dev.jw.next.contract.Peer
 import dev.jw.next.contract.ProjectInfo
@@ -196,6 +200,34 @@ abstract class ProtocolSource : AppSource() {
 
     override fun closePane(pane: Id, reply: (Result<Unit>) -> Unit) {
         command(Cmd.ClosePane(pane)) { reply(it.done("el PC no pudo cerrar el panel")) }
+    }
+
+    override fun conversationSend(node: Id, text: String, images: List<Image>, reply: (Result<Unit>) -> Unit) {
+        command(Cmd.ConversationSend(node, text, images)) { reply(it.done("el PC no pudo enviarlo")) }
+    }
+
+    override fun conversationAnswer(node: Id, ask: String, key: String, reply: (Result<Unit>) -> Unit) {
+        command(Cmd.ConversationAnswer(node, ask, key, by = "el móvil")) { reply(it.done("el PC no pudo registrar la respuesta")) }
+    }
+
+    override fun conversationInterrupt(node: Id) {
+        command(Cmd.ConversationInterrupt(node))
+    }
+
+    override fun conversationSet(node: Id, name: String?, accent: Accent?, model: String?, effort: String?, mode: ConvMode?, reply: (Result<Unit>) -> Unit) {
+        command(Cmd.ConversationSet(node, name, accent, model, effort, mode)) { reply(it.done("el PC no pudo cambiarlo")) }
+    }
+
+    override fun conversationShell(node: Id, command: String, reply: (Result<Unit>) -> Unit) {
+        command(Cmd.ConversationShell(node, command)) { reply(it.done("el PC no pudo ejecutar la línea")) }
+    }
+
+    override fun listConversations(workspace: Id, reply: (Result<ConversationList>) -> Unit) {
+        command(Cmd.ListConversations(workspace)) { r -> reply(r.read(ConversationList.serializer())) }
+    }
+
+    override fun resumeConversation(pane: Id, id: String, reply: (Result<Unit>) -> Unit) {
+        command(Cmd.OpenConversation(pane, resume = id)) { reply(it.done("el PC no pudo retomar la conversación")) }
     }
 
     override fun close(id: Id) {

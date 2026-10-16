@@ -8,6 +8,8 @@ import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import dev.jw.next.client.Need
+import dev.jw.next.client.accentOf
+import dev.jw.next.contract.Accent
 import dev.jw.next.client.Theme
 import dev.jw.next.client.Themes
 import dev.jw.next.client.Tone
@@ -36,6 +38,9 @@ object Palette {
     val red get() = Color(theme.red)
     val magenta get() = Color(theme.magenta)
     val cyan get() = Color(theme.cyan)
+
+    /** A conversation's accent: one of the theme's six (REQ-452). */
+    fun accent(a: Accent) = Color(theme.accentOf(a))
 }
 
 /** JetBrains Mono: one real monospace face, so marks, names and screens line up on every phone. */

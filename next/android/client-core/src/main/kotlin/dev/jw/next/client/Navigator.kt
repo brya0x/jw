@@ -1,6 +1,10 @@
 package dev.jw.next.client
 
+import dev.jw.next.contract.Accent
 import dev.jw.next.contract.Attention
+import dev.jw.next.contract.ConvMode
+import dev.jw.next.contract.ConversationList
+import dev.jw.next.contract.Image
 import dev.jw.next.contract.DiffScope
 import dev.jw.next.contract.DirListing
 import dev.jw.next.contract.FileListing
@@ -102,6 +106,39 @@ interface NodeSource {
 
     /** Close a pane (its shell ends); [reply] gets the daemon's message when it refuses. */
     fun closePane(pane: Id, reply: (Result<Unit>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** Say something to Claude in a conversation, or run a command of its `/` list; [reply] gets the daemon's message when it refuses (a command that needs Claude's screen). */
+    fun conversationSend(node: Id, text: String, images: List<Image>, reply: (Result<Unit>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** Answer the question that waits in a conversation with the option [key]; the PC writes that it came from the phone. */
+    fun conversationAnswer(node: Id, ask: String, key: String, reply: (Result<Unit>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** Stop the turn that runs. */
+    fun conversationInterrupt(node: Id) {}
+
+    /** Change one thing of a conversation: its name, colour, model, effort or mode (what is null stays). */
+    fun conversationSet(node: Id, name: String? = null, accent: Accent? = null, model: String? = null, effort: String? = null, mode: ConvMode? = null, reply: (Result<Unit>) -> Unit = {}) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** Run a shell line of the person's in the pane's folder. */
+    fun conversationShell(node: Id, command: String, reply: (Result<Unit>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** The conversations Claude saved for the folder of [workspace], newest first. */
+    fun listConversations(workspace: Id, reply: (Result<ConversationList>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** Retake the saved conversation [id] in [pane]. */
+    fun resumeConversation(pane: Id, id: String, reply: (Result<Unit>) -> Unit) {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
     }
 }

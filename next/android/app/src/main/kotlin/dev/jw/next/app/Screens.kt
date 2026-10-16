@@ -390,6 +390,7 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
     var closing by remember(screen.id) { mutableStateOf<CloseSheet?>(null) }
     var closeError by remember(screen.id) { mutableStateOf<String?>(null) }
     var closeBusy by remember(screen.id) { mutableStateOf(false) }
+    var settingsAsked by remember(screen.id) { mutableIntStateOf(0) }
     Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize()) {
         val title = ws?.let { shownName(it.name, it.kind, it.branch) } ?: "workspace"
@@ -407,7 +408,16 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
             Box(Modifier.weight(1f).padding(Gutter)) { Mono("Abriendo el workspace…", Palette.dim, 13, lines = 3) }
             return@Column
         }
-        PaneTabs(ws.panes, screen.pane, state, adding = asking || waitingPane != null, select = { set(nav.selectPane(state, it)) }, hold = { paneMenu = it }) {
+        // A pane that runs `claude` is named by its conversation, in its colour; a tap on its open tab is the settings (REQ-444).
+        val tabPane = remember(version, screen.pane) { screen.pane?.let { source.node(it) as? Node.Pane } }
+        val tabConv = tabPane?.conversation?.let { c -> remember(version, c) { source.node(c) as? Node.Conversation } }
+        PaneTabs(
+            ws.panes, screen.pane, state, adding = asking || waitingPane != null,
+            select = { id -> if (id == screen.pane && tabConv != null) settingsAsked++ else set(nav.selectPane(state, id)) },
+            hold = { paneMenu = it },
+            named = tabConv?.let { c -> screen.pane?.let { it to ("claude · " + c.name) } },
+            underline = tabConv?.let { Palette.accent(it.accent) },
+        ) {
             asking = true
             addError = null
             source.newPane(screen.id) { result ->
@@ -416,7 +426,17 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
             }
         }
         addError?.let { Mono(it, Palette.red, 12, lines = 3, modifier = Modifier.fillMaxWidth().background(Palette.panel).padding(horizontal = Gutter, vertical = 8.dp)) }
-        val pane = remember(version, screen.pane) { screen.pane?.let { source.node(it) as? Node.Pane } }
+        val pane = tabPane
+        // The conversation of a pane that runs `claude` takes the place of its blocks (REQ-440).
+        val convId = pane?.conversation
+        LaunchedEffect(convId) { convId?.let { source.open(it) } }
+        if (pane != null && convId != null) {
+            when (val conv = tabConv) {
+                null -> Box(Modifier.weight(1f).padding(Gutter)) { PaneSkeleton() }
+                else -> ConversationPane(source, conv, pane, screen.id, ws.branch, settingsAsked)
+            }
+            return@Column
+        }
         val blocksId = pane?.blocks
         LaunchedEffect(blocksId) { blocksId?.let { source.open(it) } }
         val blocks = remember(version, blocksId) { blocksId?.let { source.node(it) as? Node.Blocks } }
@@ -594,7 +614,7 @@ private fun PaneSkeleton() {
 }
 
 private const val LOADING_MAX_MS = 20_000L
-private val Spin = listOf("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+internal val Spin = listOf("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 
 /** What the pane says while the program that has its screen has not painted anything: a spinner and its name. */
 @Composable
@@ -694,7 +714,10 @@ private fun terminalText(lines: List<String>, row: Int, col: Int, visible: Boole
 
 /** Open pane underlined in blue; an unseen mark sits beside the name. */
 @Composable
-private fun PaneTabs(panes: List<PaneSummary>, current: String?, state: ClientState, adding: Boolean, select: (String) -> Unit, hold: (PaneSummary) -> Unit, add: () -> Unit) {
+private fun PaneTabs(
+    panes: List<PaneSummary>, current: String?, state: ClientState, adding: Boolean, select: (String) -> Unit, hold: (PaneSummary) -> Unit,
+    named: Pair<String, String>?, underline: Color?, add: () -> Unit,
+) {
     Column(Modifier.fillMaxWidth().background(Palette.panel)) {
         Row(Modifier.fillMaxWidth()) {
             Row(Modifier.weight(1f).horizontalScroll(rememberScrollState())) {
@@ -707,10 +730,10 @@ private fun PaneTabs(panes: List<PaneSummary>, current: String?, state: ClientSt
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            Mono(p.title, if (on) Palette.fg else Palette.dim, 13, bold = on)
+                            Mono(if (named?.first == p.id) named.second else p.title, if (on) Palette.fg else Palette.dim, 13, bold = on)
                             unseen.firstOrNull()?.let { a -> a.mark().let { Mono(it.glyph, it.tone.color(), 14, bold = true) } }
                         }
-                        Box(Modifier.fillMaxWidth().height(2.dp).background(if (on) Palette.blue else Color.Transparent))
+                        Box(Modifier.fillMaxWidth().height(2.dp).background(if (on) (underline ?: Palette.blue) else Color.Transparent))
                     }
                 }
             }
