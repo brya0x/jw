@@ -132,6 +132,19 @@ impl Grid {
         }
     }
 
+    /// Light the cells `x0..x1` of row `y` the way a selection is lit (REQ-308).
+    fn light(&mut self, x0: usize, x1: usize, y: usize) {
+        let (lit, text) = look::selection();
+        for x in x0..x1 {
+            if y < self.rows && x < self.cols {
+                let style = &mut self.cells[y * self.cols + x].1;
+                style.bg = Some(lit);
+                style.fg = Some(text);
+                style.reverse = false;
+            }
+        }
+    }
+
     /// Blank a box on the panel colour, before a popup is drawn over what is under it.
     fn clear_box(&mut self, (x, y, w, h): (usize, usize, usize, usize)) {
         for r in 0..h {
@@ -538,6 +551,9 @@ pub struct View {
     /// What a drag of the mouse covers in a pane's list, and the drag while the button is down.
     selection: Option<select::Selection>,
     drag: Option<Drag>,
+    /// The pane whose conversation a drag began in, with the button still down (the drag itself
+    /// and what it covers are the conversation's own: `conversation::Ui`).
+    conv_drag: Option<String>,
     /// The file tree: whether its column is shown, whether the keys are in it, and what each
     /// workspace's holds.
     tree_on: bool,
@@ -622,6 +638,7 @@ impl View {
             scroll: HashMap::new(),
             selection: None,
             drag: None,
+            conv_drag: None,
             tree_on: false,
             tree_focus: false,
             trees: HashMap::new(),
@@ -1801,6 +1818,7 @@ impl View {
     pub fn press_key(&mut self, ev: KeyEvent) -> After {
         self.flash.clear();
         self.selection = None;
+        self.unlight_conversations();
         if self.help {
             self.help = false;
             return After::Continue;
@@ -2224,6 +2242,44 @@ impl View {
             };
         }
         After::Continue
+    }
+
+    /// Let go of what a drag covers in every conversation.
+    fn unlight_conversations(&mut self) {
+        self.conv_drag = None;
+        for ui in self.conv_ui.values_mut() {
+            ui.unlight();
+        }
+    }
+
+    /// The conversation a drag is held in and the rectangle of its pane, while there is one.
+    fn conv_drag_at(&mut self) -> Option<(String, Rect)> {
+        let pane = self.conv_drag.clone()?;
+        let (cols, rows) = self.size;
+        let found = self.conv_node(&pane).zip(self.pane_rect(&pane, cols, rows));
+        if found.is_none() {
+            self.conv_drag = None;
+        }
+        found
+    }
+
+    /// The button was let go in a conversation: a click, or the text a drag covered to copy.
+    fn release_conversation(&mut self, pane: &str, cols: usize, rows: usize) -> After {
+        let Some((node, rect)) = self.conv_node(pane).zip(self.pane_rect(pane, cols, rows)) else {
+            return After::Continue;
+        };
+        let released = match (self.convs.get(&node), self.conv_ui.get_mut(&node)) {
+            (Some(conv), Some(ui)) => ui.release(conv, inner(rect)),
+            _ => return After::Continue,
+        };
+        if let Some(says) = self.conv_ui.get_mut(&node).and_then(ConvUi::take_says) {
+            self.flash = says;
+        }
+        match released {
+            conversation::Released::Click(x, y) => self.click(x, y, cols, rows),
+            conversation::Released::Copy(text) => After::Copy(text),
+            conversation::Released::Nothing => After::Continue,
+        }
     }
 
     /// A click in the conversation of a pane: its title, an item, the field, the footer, the box that asks.
@@ -2834,6 +2890,7 @@ impl View {
     pub fn press_select(&mut self, x: usize, y: usize, cols: usize, rows: usize) -> bool {
         self.selection = None;
         self.drag = None;
+        self.unlight_conversations();
         if self.help
             || self.manage.is_some()
             || self.launcher.is_some()
@@ -2853,6 +2910,16 @@ impl View {
             return false;
         };
         let pane = doc.panes[i].id.clone();
+        if let Some(node) = self.conv_node(&pane) {
+            let began = match (self.convs.get(&node), self.conv_ui.get_mut(&node)) {
+                (Some(conv), Some(ui)) => ui.press(conv, inner(rects[i]), x, y),
+                _ => false,
+            };
+            if began {
+                self.conv_drag = Some(pane);
+            }
+            return began;
+        }
         let Some(g) = self.list_geom(&pane, rects[i]) else {
             return false;
         };
@@ -2887,6 +2954,13 @@ impl View {
     /// the line and column it is on, or, past the top or the bottom of the list, to its first or
     /// last line, which scrolls (REQ-305).
     pub fn drag_to(&mut self, x: usize, y: usize) {
+        if let Some((node, rect)) = self.conv_drag_at() {
+            let now = self.now_ms;
+            if let (Some(conv), Some(ui)) = (self.convs.get(&node), self.conv_ui.get_mut(&node)) {
+                ui.drag_to(conv, inner(rect), (x, y), now);
+            }
+            return;
+        }
         let Some(d) = self.drag.as_ref() else {
             return;
         };
@@ -2942,6 +3016,13 @@ impl View {
     /// While a drag is held past the edge of a list, scroll it a line every so often and keep the
     /// selection at its edge.
     pub fn drag_tick(&mut self) {
+        if let Some((node, rect)) = self.conv_drag_at() {
+            let now = self.now_ms;
+            if let (Some(conv), Some(ui)) = (self.convs.get(&node), self.conv_ui.get_mut(&node)) {
+                ui.drag_tick(conv, inner(rect), now);
+            }
+            return;
+        }
         let Some(Drag {
             pane,
             scrolling: Some((up, since)),
@@ -2977,6 +3058,9 @@ impl View {
     /// The button was let go: a drag that never moved is the click it was; one that did copies what it
     /// covers (REQ-306) and leaves it lit until the next press or key.
     pub fn release(&mut self, cols: usize, rows: usize) -> After {
+        if let Some(pane) = self.conv_drag.take() {
+            return self.release_conversation(&pane, cols, rows);
+        }
         let Some(d) = self.drag.take() else {
             return After::Continue;
         };
@@ -3539,15 +3623,7 @@ impl View {
                 .filter(|_| line.kind != shell::Kind::Other)
                 .and_then(|s| s.on_line(start + r, select::len_of(line)));
             if let Some((from, to)) = covered {
-                let (lit, text) = look::selection();
-                for cx in (ix + 2 + from..ix + 2 + to).take_while(|cx| *cx < ix + iw) {
-                    if y < g.rows && cx < g.cols {
-                        let style = &mut g.cells[y * g.cols + cx].1;
-                        style.bg = Some(lit);
-                        style.fg = Some(text);
-                        style.reverse = false;
-                    }
-                }
+                g.light(ix + 2 + from, (ix + 2 + to).min(ix + iw), y);
             }
         }
         let running = running_block(b);
@@ -7703,6 +7779,33 @@ mod tests {
         let (x, y) = find_in(&v, "Listo en 11 s", 24);
         v.scroll(false, x, y, 120, 24);
         v.scroll(true, x, y, 120, 24);
+    }
+
+    #[test]
+    fn a_drag_in_a_conversation_copies_what_it_covers_and_a_key_or_a_press_lets_it_go() {
+        let mut v = conv_view(true);
+        let (x, y) = find_in(&v, "mirar el test", 40);
+        assert!(v.press_select(x, y, 120, 40), "a drag begins in the list");
+        v.drag_to(x + 12, y);
+        let lit = |v: &View| {
+            let g = v.grid(120, 40);
+            g.cells[y * g.cols + x].1.bg == Some(look::selection().0)
+        };
+        assert!(lit(&v), "what it covers is lit");
+        assert_eq!(v.release(120, 40), After::Copy("mirar el test".into()));
+        assert!(v.flash.starts_with("copiado · 1 línea"), "{}", v.flash);
+        assert!(lit(&v), "it stays lit");
+        v.press_key(plain(KeyCode::Char('a')));
+        assert!(!lit(&v), "a key lets go of it");
+        // a press that does not move is a click: it picks the item
+        assert!(v.press_select(x, y, 120, 40));
+        assert_eq!(v.release(120, 40), After::Continue);
+        assert!(
+            v.grid(120, 40).rows_plain()[y].contains('▌'),
+            "the click picked it"
+        );
+        // and a press outside the list is the click it always was
+        assert!(!v.press_select(x, 39, 120, 40));
     }
 
     fn find_in(v: &View, text: &str, rows: usize) -> (usize, usize) {

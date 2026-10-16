@@ -17,7 +17,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::field::{self, Field, Look};
 use super::panels::{self, Panel, RowAct};
-use super::{Grid, Rgb, Style, clip, look};
+use super::{Grid, Rgb, Style, clip, look, select};
 use crate::claude::tools_word;
 
 /// What the keyboard or the mouse asks the daemon for: the client maps each to its command.
@@ -359,6 +359,10 @@ pub struct Ui {
     /// Lines the list is scrolled up from the newest; `most` is what the last frame could scroll.
     scroll: usize,
     most: Cell<usize>,
+    /// What a drag of the mouse covers in the list, and the drag while the button is down
+    /// (REQ-461).
+    sel: Option<select::Selection>,
+    pull: Option<Pull>,
     /// The item picked (its number from the start of the conversation) and the items opened.
     picked: Option<u32>,
     open: HashSet<u32>,
@@ -409,6 +413,57 @@ struct Line {
     spans: Vec<(String, Style)>,
     bg: Option<Rgb>,
     item: u32,
+    /// How many characters of the row are the mark that begins it (`❯ `, `● `, `  ⎿  `): what a
+    /// selection copies does not have them.
+    lead: usize,
+    /// The row goes on from the one above it, which the width broke: copied, they are one line.
+    soft: bool,
+}
+
+/// A drag that began in the list, with the button still down.
+struct Pull {
+    /// The cell it began on: a press that never moved is the click it was.
+    start: (usize, usize),
+    anchor: select::Point,
+    moved: bool,
+    /// Past the top (`true`) or the bottom of the list, since when: the list scrolls while it is.
+    scrolling: Option<(bool, u64)>,
+}
+
+/// What a button let go of comes to.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Released {
+    /// It never moved: the click it was, at this cell.
+    Click(usize, usize),
+    /// It covered text: what to put on the clipboard.
+    Copy(String),
+    Nothing,
+}
+
+/// While a drag is held past the edge of the list, it scrolls a line this often (ms).
+const EDGE_MS: u64 = 60;
+
+/// Where the lines of the list are on the screen.
+struct ListRows {
+    /// The rows they are on, from `top` up to `bottom` (not included).
+    top: usize,
+    bottom: usize,
+    /// The first line shown.
+    start: usize,
+    most: usize,
+}
+
+/// What begins a row and is not what it says.
+const MARKS: [&str; 7] = ["❯ ", "● ", "! ", "  ⎿  ", "     · ", "     ", "  "];
+
+impl Line {
+    fn text(&self) -> String {
+        self.spans.iter().map(|(t, _)| t.as_str()).collect()
+    }
+
+    fn len(&self) -> usize {
+        self.spans.iter().map(|(t, _)| t.chars().count()).sum()
+    }
 }
 
 impl Ui {
@@ -669,6 +724,8 @@ impl Ui {
                         spans: vec![],
                         bg: None,
                         item: abs,
+                        lead: 0,
+                        soft: false,
                     },
                 );
             }
@@ -687,21 +744,30 @@ impl Ui {
         let accent = accent_rgb(conv.accent);
         let dim = Style::fg(look::dim());
         let plain = Style::fg(look::fg());
+        // Set before a push: the row it makes goes on from the one above (see `Line::soft`).
+        let soft = Cell::new(false);
         let mut push = |spans: Vec<(String, Style)>, bg: Option<Rgb>| {
+            let lead = spans
+                .first()
+                .filter(|(t, _)| MARKS.contains(&t.as_str()))
+                .map_or(0, |(t, _)| t.chars().count());
             out.push(Line {
                 spans,
                 bg,
                 item: abs,
+                lead,
+                soft: soft.replace(false),
             });
         };
         let open = self.open.contains(&abs);
         match item {
             Item::User { text, images } => {
                 let rows = wrap(text, w.saturating_sub(2), plain, Style::fg(look::cyan()));
-                for (k, row) in rows.into_iter().enumerate() {
+                for (k, (continues, row)) in rows.into_iter().enumerate() {
                     let mark = if k == 0 { "❯ " } else { "  " };
                     let mut spans = vec![(mark.to_owned(), Style::fg(accent).bold())];
                     spans.extend(row);
+                    soft.set(continues);
                     push(spans, Some(look::sel()));
                 }
                 if *images > 0 {
@@ -713,13 +779,14 @@ impl Ui {
             }
             Item::Text { text, live } => {
                 let mut rows = wrap(text, w.saturating_sub(2), plain, Style::fg(look::cyan()));
-                if *live && let Some(last) = rows.last_mut() {
+                if *live && let Some((_, last)) = rows.last_mut() {
                     last.push(("▍".to_owned(), Style::fg(accent)));
                 }
-                for (k, row) in rows.into_iter().enumerate() {
+                for (k, (continues, row)) in rows.into_iter().enumerate() {
                     let mark = if k == 0 { "● " } else { "  " };
                     let mut spans = vec![(mark.to_owned(), plain)];
                     spans.extend(row);
+                    soft.set(continues);
                     push(spans, None);
                 }
             }
@@ -1001,13 +1068,16 @@ impl Ui {
         let field = self.field(iw);
         let geo = self.geo(conv, (iy, ih), field.band_rows());
         let lines = self.lines(conv, iw - 2);
-        let (ly, lh) = geo.list;
-        let most = lines.len().saturating_sub(lh);
-        self.most.set(most);
-        let start = most - self.scroll.min(most);
-        let top = ly + lh.saturating_sub(lines.len());
+        let rows = self.list_rows(&geo, lines.len());
+        self.most.set(rows.most);
+        let (start, top) = (rows.start, rows.top);
         let accent = accent_rgb(conv.accent);
-        for (r, line) in lines.iter().skip(start).take(lh).enumerate() {
+        for (r, line) in lines
+            .iter()
+            .skip(start)
+            .take(rows.bottom - rows.top)
+            .enumerate()
+        {
             let y = top + r;
             let picked = self.picked == Some(line.item);
             if let Some(bg) = line.bg {
@@ -1023,6 +1093,14 @@ impl Ui {
                 let text = clip(text, (ix + iw).saturating_sub(x));
                 g.put_over(x, y, &text, *style);
                 x += text.chars().count();
+            }
+            // What a drag covers: the theme's most visible colour, as in a pane's list (REQ-308).
+            if let Some((from, to)) = self
+                .sel
+                .as_ref()
+                .and_then(|s| s.on_line(start + r, line.len()))
+            {
+                g.light(ix + 2 + from, (ix + 2 + to).min(ix + iw), y);
             }
         }
         self.draw_todos(g, conv, (ix, iy, iw), geo.todo_rows);
@@ -1858,12 +1936,7 @@ impl Ui {
         if text.is_empty() {
             return None;
         }
-        let lines = text.lines().count();
-        self.says = format!(
-            "copiado · {lines} {} · {} caracteres",
-            if lines == 1 { "línea" } else { "líneas" },
-            text.chars().count()
-        );
+        self.says = copied(&text);
         Some(Act::Copy(text))
     }
 
@@ -1913,6 +1986,174 @@ impl Ui {
         } else {
             self.scroll.saturating_sub(n)
         };
+    }
+
+    fn list_rows(&self, geo: &Geo, total: usize) -> ListRows {
+        let (ly, lh) = geo.list;
+        let most = total.saturating_sub(lh);
+        ListRows {
+            top: ly + lh.saturating_sub(total),
+            bottom: ly + lh,
+            start: most - self.scroll.min(most),
+            most,
+        }
+    }
+
+    // ---- selecting with the mouse (REQ-461 to REQ-464) ----
+
+    /// Let go of what a drag covers, and of a drag.
+    pub fn unlight(&mut self) {
+        self.sel = None;
+        self.pull = None;
+    }
+
+    /// A press on the list begins a drag; `true` when one began. The press is a click if the
+    /// pointer never moves (see `release`).
+    pub fn press(
+        &mut self,
+        conv: &Conversation,
+        (ix, iy, iw, ih): (usize, usize, usize, usize),
+        x: usize,
+        y: usize,
+    ) -> bool {
+        self.unlight();
+        if self.pop.is_some() || iw < 12 || ih < 8 {
+            return false;
+        }
+        let geo = self.geo(conv, (iy, ih), self.field(iw).band_rows());
+        let rows = self.list_rows(&geo, self.lines(conv, iw - 2).len());
+        if !(rows.top..rows.bottom).contains(&y) || !(ix..ix + iw).contains(&x) {
+            return false;
+        }
+        self.pull = Some(Pull {
+            start: (x, y),
+            anchor: select::Point {
+                line: rows.start + (y - rows.top),
+                col: x.saturating_sub(ix + 2),
+            },
+            moved: false,
+            scrolling: None,
+        });
+        true
+    }
+
+    /// The pointer moved with the button down: the drag covers from where it began to the line
+    /// and column it is on, or, past the top or the bottom of the list, to its first or last
+    /// line, which scrolls (REQ-462).
+    pub fn drag_to(
+        &mut self,
+        conv: &Conversation,
+        (ix, iy, iw, ih): (usize, usize, usize, usize),
+        (x, y): (usize, usize),
+        now_ms: u64,
+    ) {
+        if self.pull.is_none() || iw < 12 || ih < 8 {
+            return;
+        }
+        let geo = self.geo(conv, (iy, ih), self.field(iw).band_rows());
+        let rows = self.list_rows(&geo, self.lines(conv, iw - 2).len());
+        let (head, edge) = if y < rows.top {
+            (
+                select::Point {
+                    line: rows.start,
+                    col: 0,
+                },
+                Some(true),
+            )
+        } else if y >= rows.bottom {
+            (
+                select::Point {
+                    line: rows.start + (rows.bottom - rows.top).saturating_sub(1),
+                    col: usize::from(u16::MAX),
+                },
+                Some(false),
+            )
+        } else {
+            (
+                select::Point {
+                    line: rows.start + (y - rows.top),
+                    col: x.saturating_sub(ix + 2),
+                },
+                None,
+            )
+        };
+        let Some(pull) = self.pull.as_mut() else {
+            return;
+        };
+        pull.moved |= head != pull.anchor;
+        pull.scrolling = match (edge, pull.scrolling) {
+            (Some(up), Some((was, since))) if up == was => Some((up, since)),
+            (Some(up), _) => Some((up, now_ms)),
+            (None, _) => None,
+        };
+        self.sel = Some(select::Selection {
+            pane: conv.head.id.clone(),
+            anchor: pull.anchor,
+            head,
+        });
+    }
+
+    /// While a drag is held past the edge of the list, scroll it a line every so often and keep
+    /// the drag at its edge.
+    pub fn drag_tick(
+        &mut self,
+        conv: &Conversation,
+        (_, iy, iw, ih): (usize, usize, usize, usize),
+        now_ms: u64,
+    ) {
+        let Some(Pull {
+            scrolling: Some((up, since)),
+            ..
+        }) = self.pull.as_ref()
+        else {
+            return;
+        };
+        if now_ms < since + EDGE_MS || iw < 12 || ih < 8 {
+            return;
+        }
+        let up = *up;
+        self.scroll_by(up, 1);
+        let geo = self.geo(conv, (iy, ih), self.field(iw).band_rows());
+        let rows = self.list_rows(&geo, self.lines(conv, iw - 2).len());
+        let (line, col) = if up {
+            (rows.start, 0)
+        } else {
+            (
+                rows.start + (rows.bottom - rows.top).saturating_sub(1),
+                usize::from(u16::MAX),
+            )
+        };
+        if let (Some(pull), Some(sel)) = (self.pull.as_mut(), self.sel.as_mut()) {
+            pull.scrolling = Some((up, now_ms));
+            sel.head = select::Point { line, col };
+        }
+    }
+
+    /// The button was let go: a drag that never moved is the click it was; one that did copies
+    /// what it covers (REQ-463) and leaves it lit until the next press or key.
+    pub fn release(
+        &mut self,
+        conv: &Conversation,
+        (_, _, iw, _): (usize, usize, usize, usize),
+    ) -> Released {
+        let Some(pull) = self.pull.take() else {
+            return Released::Nothing;
+        };
+        if !pull.moved {
+            self.sel = None;
+            return Released::Click(pull.start.0, pull.start.1);
+        }
+        let text = self
+            .sel
+            .as_ref()
+            .map(|sel| selected_text(&self.lines(conv, iw.saturating_sub(2)), sel))
+            .unwrap_or_default();
+        if text.is_empty() {
+            self.sel = None;
+            return Released::Nothing;
+        }
+        self.says = copied(&text);
+        Released::Copy(text)
     }
 
     // ---- the mouse ----
@@ -2307,28 +2548,29 @@ const BOLD: u8 = 2;
 
 /// `text` broken into rows of at most `width` columns, with `` `code` `` in `code` and `**bold**`
 /// bold; a fenced block is code as it is. A row that continues a list item hangs under its text.
-fn wrap(text: &str, width: usize, plain: Style, code: Style) -> Vec<Vec<(String, Style)>> {
+/// Each row says whether it goes on from the one before it, which the width broke.
+fn wrap(text: &str, width: usize, plain: Style, code: Style) -> Vec<(bool, Vec<(String, Style)>)> {
     let width = width.max(4);
     let mut rows = Vec::new();
     let mut fenced = false;
     for line in text.lines() {
         if line.trim_start().starts_with("```") {
             fenced = !fenced;
-            rows.push(vec![(clip(line, width), Style::fg(look::dim()))]);
+            rows.push((false, vec![(clip(line, width), Style::fg(look::dim()))]));
             continue;
         }
         if fenced {
-            rows.push(vec![(clip(line, width), code)]);
+            rows.push((false, vec![(clip(line, width), code)]));
             continue;
         }
         let tagged = tag(line);
         let hang = hang_of(line);
-        for row in break_words(&tagged, width, hang) {
-            rows.push(spans_of(&row, plain, code));
+        for (k, row) in break_words(&tagged, width, hang).into_iter().enumerate() {
+            rows.push((k > 0, spans_of(&row, plain, code)));
         }
     }
     if rows.is_empty() {
-        rows.push(vec![]);
+        rows.push((false, vec![]));
     }
     rows
 }
@@ -2437,6 +2679,54 @@ fn spans_of(row: &[(char, u8)], plain: Style, code: Style) -> Vec<(String, Style
 }
 
 // ---- what is copied ----
+
+/// «copiado · 3 líneas · 120 caracteres».
+fn copied(text: &str) -> String {
+    let lines = text.lines().count();
+    format!(
+        "copiado · {lines} {} · {} caracteres",
+        if lines == 1 { "línea" } else { "líneas" },
+        text.chars().count()
+    )
+}
+
+/// What a drag covers, as it reads: the marks that begin a row left out, the rows a width broke
+/// joined into one line and the blank lines between items kept (REQ-463).
+fn selected_text(lines: &[Line], sel: &select::Selection) -> String {
+    let (a, b) = sel.ends();
+    let mut out: Vec<String> = Vec::new();
+    for at in a.line..=b.line {
+        let Some(line) = lines.get(at) else {
+            break;
+        };
+        let text: Vec<char> = line.text().chars().collect();
+        let Some((from, to)) = sel.on_line(at, text.len()) else {
+            if line.spans.is_empty() {
+                out.push(String::new());
+            }
+            continue;
+        };
+        let from = from.max(line.lead);
+        if to <= from {
+            continue;
+        }
+        let piece: String = text[from..to].iter().collect();
+        match out.last_mut() {
+            Some(last) if line.soft && !last.is_empty() => {
+                last.push(' ');
+                last.push_str(piece.trim());
+            }
+            _ => out.push(piece.trim_end().to_owned()),
+        }
+    }
+    while out.first().is_some_and(String::is_empty) {
+        out.remove(0);
+    }
+    while out.last().is_some_and(String::is_empty) {
+        out.pop();
+    }
+    out.join("\n")
+}
 
 /// An item as the text that is copied from it.
 fn plain_of(item: &Item) -> String {
@@ -3058,6 +3348,126 @@ mod tests {
         assert_eq!(ui.editor.text(), "c");
     }
 
+    /// The cell of `text` in the rows of a frame: its column and its row.
+    fn at(rows: &[String], text: &str) -> (usize, usize) {
+        let y = row_of(rows, text);
+        let col = rows[y].find(text).map(|b| rows[y][..b].chars().count());
+        (col.unwrap(), y)
+    }
+
+    fn lit(g: &Grid, x: usize, y: usize) -> bool {
+        g.cells[y * g.cols + x].1.bg == Some(look::selection().0)
+    }
+
+    #[test]
+    fn a_drag_over_the_list_copies_what_it_covers_without_the_marks_and_lights_it() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        let (_, rows) = frame(&ui, &conv);
+        let (x, y) = at(&rows, "mirar el test");
+        assert!(ui.press(&conv, INNER, x, y));
+        ui.drag_to(&conv, INNER, (x + 12, y), 0);
+        let (g, _) = frame(&ui, &conv);
+        assert!(lit(&g, x, y) && lit(&g, x + 12, y), "what it covers is lit");
+        assert!(!lit(&g, x - 1, y) && !lit(&g, x + 13, y), "and no more");
+        assert_eq!(
+            ui.release(&conv, INNER),
+            Released::Copy("mirar el test".into())
+        );
+        assert_eq!(
+            ui.take_says().as_deref(),
+            Some("copiado · 1 línea · 13 caracteres")
+        );
+        let (g, _) = frame(&ui, &conv);
+        assert!(lit(&g, x, y), "it stays lit after the button is let go");
+        // a drag that begins in the mark of a row does not copy the mark
+        let (_, y) = at(&rows, "Voy a mirar el test");
+        assert!(ui.press(&conv, INNER, INNER.0, y));
+        ui.drag_to(&conv, INNER, (INNER.0 + 12, y), 0);
+        assert_eq!(ui.release(&conv, INNER), Released::Copy("Voy a mir".into()));
+        // a key lets go of it
+        ui.unlight();
+        let (g, _) = frame(&ui, &conv);
+        assert!(!lit(&g, x, y));
+    }
+
+    #[test]
+    fn a_press_that_never_moves_is_the_click_it_was_and_a_list_over_the_messages_takes_it_whole() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        let (_, rows) = frame(&ui, &conv);
+        let (x, y) = at(&rows, "mirar el test");
+        assert!(ui.press(&conv, INNER, x, y));
+        assert_eq!(ui.release(&conv, INNER), Released::Click(x, y));
+        assert!(ui.sel.is_none());
+        // a drag that returns to where it began copies nothing
+        assert!(ui.press(&conv, INNER, x, y));
+        ui.drag_to(&conv, INNER, (x + 3, y), 0);
+        ui.drag_to(&conv, INNER, (x, y), 0);
+        assert!(matches!(ui.release(&conv, INNER), Released::Copy(t) if t == "m"));
+        // the footer and the field are not the list
+        assert!(!ui.press(&conv, INNER, x, INNER.1 + INNER.3 - 1));
+        // nor is anything while a list is open
+        type_in(&mut ui, &conv, "/");
+        ui.open_pick(&conv, Of::Model);
+        assert!(!ui.press(&conv, INNER, x, y));
+    }
+
+    #[test]
+    fn rows_the_width_broke_are_copied_as_one_line_and_the_blank_between_items_stays() {
+        let mut conv = idle();
+        let long = "palabra ".repeat(30);
+        conv.items.push(Item::Text {
+            text: long.trim().to_owned(),
+            live: false,
+        });
+        let mut ui = Ui::default();
+        let (_, rows) = frame(&ui, &conv);
+        let (x, y) = at(&rows, "palabra palabra");
+        assert!(ui.press(&conv, INNER, x, y));
+        ui.drag_to(&conv, INNER, (INNER.0 + INNER.2, y + 2), 0);
+        assert_eq!(ui.release(&conv, INNER), Released::Copy(long.trim().into()));
+        // from the item before it, the blank line between them is kept
+        let (x, y) = at(&rows, "Voy a mirar el test");
+        let (_, last) = at(&rows, "palabra palabra");
+        assert!(last > y);
+        assert!(ui.press(&conv, INNER, x, y));
+        ui.drag_to(&conv, INNER, (INNER.0 + INNER.2, last), 0);
+        match ui.release(&conv, INNER) {
+            Released::Copy(t) => {
+                assert!(t.starts_with("Voy a mirar el test"), "{t}");
+                assert!(!t.contains('●') && !t.contains("  palabra"), "{t}");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_drag_held_past_the_edge_scrolls_the_list_a_line_at_a_time() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        let small = (INNER.0, INNER.1, INNER.2, 14);
+        let mut g = Grid::new(100, 60);
+        ui.draw(&mut g, &conv, small, &[], true, 0);
+        ui.scroll_by(true, 3);
+        let mut g = Grid::new(100, 60);
+        ui.draw(&mut g, &conv, small, &[], true, 0);
+        let mid = small.1 + 3;
+        assert!(ui.press(&conv, small, INNER.0 + 8, mid));
+        ui.drag_to(&conv, small, (INNER.0 + 8, small.1 + small.3), 0);
+        assert_eq!(ui.scroll, 3, "nothing moves before its time");
+        ui.drag_tick(&conv, small, EDGE_MS);
+        assert_eq!(ui.scroll, 2);
+        ui.drag_tick(&conv, small, EDGE_MS + 1);
+        assert_eq!(ui.scroll, 2, "a line each EDGE_MS");
+        ui.drag_tick(&conv, small, 2 * EDGE_MS);
+        assert_eq!(ui.scroll, 1);
+        // back inside, it stops
+        ui.drag_to(&conv, small, (INNER.0 + 8, mid), 3 * EDGE_MS);
+        ui.drag_tick(&conv, small, 9 * EDGE_MS);
+        assert_eq!(ui.scroll, 1);
+    }
+
     #[test]
     fn a_click_on_a_tool_opens_its_output_and_ctrl_o_does_too() {
         let conv = idle();
@@ -3215,7 +3625,7 @@ mod tests {
         let rows = |t: &str, w: usize| -> Vec<String> {
             wrap(t, w, plain, code)
                 .into_iter()
-                .map(|r| r.into_iter().map(|(s, _)| s).collect())
+                .map(|(_, r)| r.into_iter().map(|(s, _)| s).collect())
                 .collect()
         };
         assert_eq!(
@@ -3234,7 +3644,7 @@ mod tests {
         );
         let styled = wrap("usa `cargo test` ya", 40, plain, code);
         assert_eq!(
-            styled[0],
+            styled[0].1,
             [
                 ("usa ".to_owned(), plain),
                 ("cargo test".to_owned(), code),
@@ -3242,9 +3652,9 @@ mod tests {
             ]
         );
         let fenced = wrap("```rust\nlet x = 1;\n```", 40, plain, code);
-        assert_eq!(fenced[1], [("let x = 1;".to_owned(), code)]);
+        assert_eq!(fenced[1].1, [("let x = 1;".to_owned(), code)]);
         let bold = wrap("**ojo** aquí", 40, plain, code);
-        assert_eq!(bold[0][0], ("ojo".to_owned(), plain.bold()));
+        assert_eq!(bold[0].1[0], ("ojo".to_owned(), plain.bold()));
     }
 
     #[test]
