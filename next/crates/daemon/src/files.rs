@@ -31,7 +31,7 @@ fn root_of(shared: &Shared, workspace: &str) -> Result<PathBuf, ErrorBody> {
 
 /// `path` as a relative path of plain names with `/` between them, `""` for the folder itself;
 /// anything that could leave the folder is refused.
-fn clean_rel(path: Option<&str>) -> Result<String, ErrorBody> {
+pub(crate) fn clean_rel(path: Option<&str>) -> Result<String, ErrorBody> {
     let path = path.unwrap_or("");
     let mut names = Vec::new();
     for c in Path::new(path).components() {

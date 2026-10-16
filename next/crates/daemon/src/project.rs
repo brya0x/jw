@@ -320,16 +320,14 @@ fn parse(
 
     let mut copy = Vec::new();
     for file in raw.copy.unwrap_or_default() {
-        if !crate::provision::is_inside(file.get_ref()) {
+        let path = file.get_ref().trim();
+        if !crate::provision::is_inside(path) {
             return Err(fail(
                 file.span().start,
-                &format!(
-                    "`copy` names {:?}, which is not a path inside the repository",
-                    file.get_ref()
-                ),
+                &format!("`copy` names {path:?}, which is not a path inside the repository"),
             ));
         }
-        copy.push(file.into_inner().trim().to_owned());
+        copy.push(path.to_owned());
     }
 
     let agent = match raw.agent {

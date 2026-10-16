@@ -4,9 +4,9 @@
 //! outside the worktree.
 
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
@@ -67,7 +67,11 @@ fn copy_one(top: &Path, dest: &Path, file: &str) -> Result<(), String> {
     if !real.starts_with(top) {
         return Err("it leads outside the checkout".into());
     }
-    if meta.len() > MAX_FILE {
+    // What is read is what was opened, however the file changes after this: its size is the
+    // handle's, and a file that grows is cut at the limit instead of read whole.
+    let source = fs::File::open(&real).map_err(|e| e.to_string())?;
+    let meta = source.metadata().map_err(|e| e.to_string())?;
+    if !meta.is_file() || meta.len() > MAX_FILE {
         return Err(format!(
             "it weighs {} KiB: at most {} KiB",
             meta.len() / 1024,
@@ -76,11 +80,16 @@ fn copy_one(top: &Path, dest: &Path, file: &str) -> Result<(), String> {
     }
     let to = dest.join(&rel);
     let folder = to.parent().ok_or("it has no folder")?;
-    fs::create_dir_all(folder).map_err(|e| format!("{}: {e}", folder.display()))?;
-    // The worktree's own checkout may hold a link where the folder is.
-    if !fs::canonicalize(folder).is_ok_and(|f| f.starts_with(dest)) {
+    // The worktree's own checkout may hold a link where a folder is, and `create_dir_all` would
+    // make folders on the other side of it: the deepest folder that exists is looked at first.
+    let mut ancestor = folder;
+    while !ancestor.exists() {
+        ancestor = ancestor.parent().ok_or("it has no folder")?;
+    }
+    if !fs::canonicalize(ancestor).is_ok_and(|f| f.starts_with(dest)) {
         return Err("its folder in the worktree leads outside it".into());
     }
+    fs::create_dir_all(folder).map_err(|e| format!("{}: {e}", folder.display()))?;
     // Only the owner's bits: a copy of a secret is not more public than it was.
     let mode = meta.permissions().mode() & 0o700;
     let mut target = fs::OpenOptions::new()
@@ -92,7 +101,18 @@ fn copy_one(top: &Path, dest: &Path, file: &str) -> Result<(), String> {
             std::io::ErrorKind::AlreadyExists => "it is already in the worktree".to_owned(),
             _ => format!("{}: {e}", to.display()),
         })?;
-    let bytes = fs::read(&real).map_err(|e| e.to_string())?;
+    let mut bytes = Vec::new();
+    source
+        .take(MAX_FILE + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > MAX_FILE {
+        let _ = fs::remove_file(&to);
+        return Err(format!(
+            "it grew past {} KiB while it was read",
+            MAX_FILE / 1024
+        ));
+    }
     target
         .write_all(&bytes)
         .map_err(|e| format!("{}: {e}", to.display()))
@@ -100,15 +120,10 @@ fn copy_one(top: &Path, dest: &Path, file: &str) -> Result<(), String> {
 
 /// `file` as a path of plain names, or `None` when it is empty, absolute or goes up.
 fn clean(file: &str) -> Option<PathBuf> {
-    let mut out = PathBuf::new();
-    for c in Path::new(file).components() {
-        match c {
-            Component::Normal(n) => out.push(n),
-            Component::CurDir => {}
-            _ => return None,
-        }
-    }
-    (!out.as_os_str().is_empty()).then_some(out)
+    crate::files::clean_rel(Some(file))
+        .ok()
+        .filter(|rel| !rel.is_empty())
+        .map(PathBuf::from)
 }
 
 /// Whether `file` is a path the settings may name for `copy` (REQ-489).
@@ -187,6 +202,8 @@ mod tests {
         std::os::unix::fs::symlink(top.parent().unwrap(), top.join("out")).unwrap();
         fs::write(top.join("big"), vec![b'x'; 1024 * 1024 + 1]).unwrap();
         fs::write(top.join("d/ok"), "ok").unwrap();
+        fs::create_dir_all(top.join("d/new/sub")).unwrap();
+        fs::write(top.join("d/new/sub/f"), "f").unwrap();
         // the worktree's own checkout holds a link where a folder should be
         std::os::unix::fs::symlink(top.parent().unwrap(), dest.join("d")).unwrap();
         let got = copy_files(
@@ -199,6 +216,7 @@ mod tests {
                 "/etc/passwd".into(),
                 "out/secret".into(),
                 "d/ok".into(),
+                "d/new/sub/f".into(),
                 "".into(),
             ],
         );
@@ -210,6 +228,11 @@ mod tests {
         assert_eq!(why[3], "it is not a path inside the repository");
         assert_eq!(why[4], "it leads outside the checkout");
         assert_eq!(why[5], "its folder in the worktree leads outside it");
+        assert_eq!(why[6], "its folder in the worktree leads outside it");
+        assert!(
+            !top.parent().unwrap().join("new").exists(),
+            "not even the folders of a path that leads out are made on the other side of the link"
+        );
         assert!(
             !top.parent().unwrap().join("ok").exists(),
             "nothing was written outside the worktree"
