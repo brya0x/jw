@@ -678,11 +678,7 @@ impl Ui {
                 id,
             }),
             RowAct::Copy(text) => {
-                let lines = text.lines().count();
-                self.says = format!(
-                    "copiado · {lines} línea · {} caracteres",
-                    text.chars().count()
-                );
+                self.says = copied(&text);
                 Some(Act::Copy(text))
             }
             RowAct::Edit(path) => Some(Act::Edit(path)),
@@ -2681,7 +2677,7 @@ fn spans_of(row: &[(char, u8)], plain: Style, code: Style) -> Vec<(String, Style
 // ---- what is copied ----
 
 /// «copiado · 3 líneas · 120 caracteres».
-fn copied(text: &str) -> String {
+pub fn copied(text: &str) -> String {
     let lines = text.lines().count();
     format!(
         "copiado · {lines} {} · {} caracteres",

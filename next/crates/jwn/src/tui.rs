@@ -3078,12 +3078,7 @@ impl View {
             self.selection = None;
             return After::Continue;
         }
-        let lines = text.lines().count();
-        self.flash(&format!(
-            "copiado · {lines} {} · {} caracteres",
-            if lines == 1 { "línea" } else { "líneas" },
-            text.chars().count()
-        ));
+        self.flash(&conversation::copied(&text));
         After::Copy(text)
     }
 
