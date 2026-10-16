@@ -705,8 +705,8 @@ fn the_mode_is_changed_in_the_engine_that_runs_and_never_by_restarting_it() {
         "the same engine, with its cache and its conversation"
     );
     assert!(
-        items(&v, "note").iter().any(|n| n["text"] == "Modo: plan"),
-        "{v:#}"
+        items(&v, "note").is_empty(),
+        "the mode is in the footer, not a line: {v:#}"
     );
     // a mode that bypasses permissions is refused when it is asked as a flag
     let e = r

@@ -934,8 +934,8 @@ impl State {
                 if let Some(m) = msg["permissionMode"].as_str().and_then(Mode::from_flag)
                     && m != self.mode
                 {
+                    // The footer shows the mode; a line for each change was noise.
                     self.mode = m;
-                    self.note(format!("Modo: {}", mode_name(m)), None);
                 }
             }
             "permission_denied" => {
@@ -1473,13 +1473,6 @@ pub fn short_model(full: &str) -> String {
     }
 }
 
-pub fn mode_name(m: Mode) -> &'static str {
-    match m {
-        Mode::AcceptEdits => "accept edits",
-        other => other.flag(),
-    }
-}
-
 fn clip(s: &str, n: usize) -> String {
     let mut chars = s.chars();
     let head: String = chars.by_ref().take(n).collect();
@@ -1976,9 +1969,8 @@ mod tests {
         s.apply(&json!({"type": "system", "subtype": "status", "status": null, "permissionMode": "plan"}), 1);
         assert_eq!(s.mode, Mode::Plan);
         assert!(
-            s.items
-                .iter()
-                .any(|i| matches!(i, Item::Note { text, .. } if text == "Modo: plan"))
+            !s.items.iter().any(|i| matches!(i, Item::Note { .. })),
+            "a change of mode is in the footer and not a line of the conversation"
         );
         // while a turn runs the change waits for it to end
         s.send("go", vec![], 2);
