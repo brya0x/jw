@@ -85,6 +85,15 @@ const MODES: Choices = &[
     ("plan", "plan"),
     ("auto", "auto"),
 ];
+/// The accents in the order `COLORS` lists them.
+const ACCENTS: [Accent; 6] = [
+    Accent::Blue,
+    Accent::Green,
+    Accent::Yellow,
+    Accent::Red,
+    Accent::Magenta,
+    Accent::Cyan,
+];
 const COLORS: Choices = &[
     ("blue", "azul"),
     ("green", "verde"),
@@ -849,9 +858,14 @@ impl Ui {
         );
         let ground = look::panel();
         let (tx, tw) = (ix + 2, iw.saturating_sub(4));
-        // rows under the title and over the options
+        // The options sit at the bottom, where `click` counts them from; what the box is about
+        // takes the rows above them and is cut when the pane is too short.
+        let opts_at = (y + h).saturating_sub(2 + ask.options.len());
         let mut row = y + 1;
         let mut text_row = |g: &mut Grid, text: &str, style: Style| {
+            if row >= opts_at {
+                return;
+            }
             if let Some(bg) = style.bg {
                 g.paint_bg(tx, row, tw, bg);
             }
@@ -875,7 +889,7 @@ impl Ui {
         }
         let keys = keys_of(ask);
         for (i, o) in ask.options.iter().enumerate() {
-            let at = row + i;
+            let at = opts_at + i;
             let lit = i == self.ask_at;
             let bg = if lit { look::sel() } else { ground };
             g.paint_bg(ix + 1, at, iw - 2, bg);
@@ -970,14 +984,11 @@ impl Ui {
         pop: &Pop,
         (ix, band_y, iw): (usize, usize, usize),
     ) {
-        let (title, rows): (&str, Vec<String>) = match pop {
-            Pop::Pick { of, .. } => (
-                of.title(),
-                of.choices().iter().map(|(_, l)| (*l).to_owned()).collect(),
-            ),
-            Pop::Name(_) => ("nombre", vec![String::new()]),
+        let (title, rows) = match pop {
+            Pop::Pick { of, .. } => (of.title(), of.choices().len()),
+            Pop::Name(_) => ("nombre", 1),
         };
-        let h = rows.len() + 2;
+        let h = rows + 2;
         let w = 34.min(iw);
         let (x, y) = (ix, band_y.saturating_sub(h));
         g.clear_box((x, y, w, h));
@@ -1193,9 +1204,7 @@ impl Ui {
         }
         if line == "/rename" {
             self.editor.take();
-            let mut e = Editor::default();
-            e.set(&conv.name);
-            self.pop = Some(Pop::Name(e));
+            self.open_name(conv);
             return None;
         }
         let line = line.to_owned();
@@ -1404,12 +1413,17 @@ impl Ui {
     ) -> bool {
         let len = title(conv).chars().count().min(w.saturating_sub(6)) + 2;
         if cy == y && cx >= x + 2 && cx < x + 2 + len {
-            let mut e = Editor::default();
-            e.set(&conv.name);
-            self.pop = Some(Pop::Name(e));
+            self.open_name(conv);
             return true;
         }
         false
+    }
+
+    /// The field for the conversation's name, with the one it has.
+    fn open_name(&mut self, conv: &Conversation) {
+        let mut name = Editor::default();
+        name.set(&conv.name);
+        self.pop = Some(Pop::Name(name));
     }
 }
 
@@ -1457,7 +1471,10 @@ fn current_of(conv: &Conversation, of: Of) -> String {
             .map_or(conv.model.clone(), |(v, _)| (*v).to_owned()),
         Of::Effort => conv.effort.clone(),
         Of::Mode => conv.mode.flag().to_owned(),
-        Of::Color => format!("{:?}", conv.accent).to_lowercase(),
+        Of::Color => ACCENTS
+            .iter()
+            .position(|a| *a == conv.accent)
+            .map_or_else(String::new, |i| COLORS[i].0.to_owned()),
     }
 }
 
@@ -1479,14 +1496,7 @@ fn choose(node: &str, of: Of, at: usize) -> Option<Act> {
         },
         Of::Color => Act::Color {
             node,
-            accent: match value {
-                "blue" => Accent::Blue,
-                "green" => Accent::Green,
-                "yellow" => Accent::Yellow,
-                "red" => Accent::Red,
-                "magenta" => Accent::Magenta,
-                _ => Accent::Cyan,
-            },
+            accent: *ACCENTS.get(at)?,
         },
     })
 }
@@ -2230,6 +2240,53 @@ mod tests {
         // a click on a row answers with it
         let y = row_of(&rows, "2 Sí, y no volver");
         assert_eq!(ui.click(&conv, INNER, 20, y), answer("session"));
+    }
+
+    #[test]
+    fn in_a_short_pane_the_box_that_asks_keeps_its_options_inside_and_a_click_finds_them() {
+        let mut conv = fixture();
+        if let Some(ask) = conv.ask.as_mut() {
+            ask.diff = (0..30)
+                .map(|n| DiffLine {
+                    n: Some(n),
+                    sign: DiffSign::Add,
+                    text: format!("línea {n}"),
+                })
+                .collect();
+        }
+        let node = conv.head.id.clone();
+        let inner = (2, 1, 96, 14);
+        let mut ui = Ui::default();
+        let mut g = Grid::new(100, 16);
+        ui.draw(&mut g, &conv, inner, &[], true, 0);
+        let rows = g.rows_plain();
+        let foot = inner.1 + inner.3 - 1;
+        let third = row_of(&rows, "3 No, y decirle");
+        assert!(
+            third < foot,
+            "the options end above the footer:\n{}",
+            rows.join("\n")
+        );
+        assert!(
+            rows[third + 1].contains("1 2 3 · y a n"),
+            "the hint is under them"
+        );
+        for (n, key) in [
+            ("1 Sí", "yes"),
+            ("2 Sí, y no volver", "session"),
+            ("3 No", "no"),
+        ] {
+            let y = row_of(&rows, n);
+            assert_eq!(
+                ui.click(&conv, inner, 20, y),
+                Some(Act::Answer {
+                    node: node.clone(),
+                    ask: "req-1".into(),
+                    key: key.into()
+                }),
+                "{n}"
+            );
+        }
     }
 
     #[test]

@@ -1825,8 +1825,8 @@ impl View {
             self.typing = false;
             return After::Continue;
         }
-        if let Some(conv) = self.panes.get(&pane).and_then(|p| p.conversation.clone()) {
-            return self.conv_key(&conv, &ev);
+        if let Some(node) = self.conv_node(&pane) {
+            return self.conv_key(&node, &ev);
         }
         match bytes_of(&ev) {
             Some(data) => After::Write { pane, data },
@@ -1899,20 +1899,24 @@ impl View {
     pub fn paste(&mut self, text: &str) -> After {
         self.flash.clear();
         if self.modal() {
+            // What a key would have done, the first that asks the client for something ending the paste.
             for c in text.chars().filter(|c| *c != '\r') {
                 let code = if c == '\n' {
                     KeyCode::Enter
                 } else {
                     KeyCode::Char(c)
                 };
-                self.press_key(KeyEvent::new(code, KeyModifiers::NONE));
+                let after = self.press_key(KeyEvent::new(code, KeyModifiers::NONE));
+                if after != After::Continue {
+                    return after;
+                }
             }
             return After::Continue;
         }
         let Some(pane) = self.typing_pane() else {
             return After::Continue;
         };
-        if let Some(node) = self.panes.get(&pane).and_then(|p| p.conversation.clone()) {
+        if let Some(node) = self.conv_node(&pane) {
             self.conv_ui.entry(node.clone()).or_default().paste(text);
             self.ask_mentions(&node);
             return After::Continue;
@@ -2144,7 +2148,7 @@ impl View {
 
     /// A click inside a pane's box: a block selects, `■ ^C` stops the running command.
     fn click_pane(&mut self, pane: &str, rect: Rect, x: usize, y: usize) -> After {
-        if let Some(node) = self.panes.get(pane).and_then(|p| p.conversation.clone()) {
+        if let Some(node) = self.conv_node(pane) {
             return self.conv_click(&node, rect, x, y);
         }
         let Some(b) = self.blocks_of(pane) else {
@@ -2918,7 +2922,7 @@ impl View {
 
     /// Move a pane's list `by` lines up (`true`) or down, within what there is to see.
     fn scroll_pane(&mut self, pane: &str, rect: Rect, up: bool, by: usize) {
-        if let Some(node) = self.panes.get(pane).and_then(|p| p.conversation.clone()) {
+        if let Some(node) = self.conv_node(pane) {
             if let Some(ui) = self.conv_ui.get_mut(&node) {
                 ui.scroll_by(up, by);
             }
@@ -3136,19 +3140,21 @@ impl View {
             (None, Some((hint, _))) => (" DIFF ", look::cyan(), hint.as_str()),
             (None, None) => match (self.mode, level) {
                 (Mode::Avisos, _) => (" AVISOS ", look::yellow(), "j/k mover · ↵ ir · esc volver"),
-                (_, Level::Terminal) if conv_focus.is_some() => match conv_focus {
-                    Some((accent, true)) => (
-                        " PERMISO ",
-                        accent,
-                        "1 2 3 · y a n · ↑↓ ↵ responden · ^␣ salir",
-                    ),
-                    Some((accent, false)) => (
-                        " CLAUDE ",
-                        accent,
-                        "↵ envía · esc interrumpe · ⇧tab modo · ^O abre · ^V imagen · clic en un ítem y c copia · ^␣ salir",
-                    ),
-                    None => unreachable!(),
-                },
+                (_, Level::Terminal) if let Some((accent, asking)) = conv_focus => {
+                    if asking {
+                        (
+                            " PERMISO ",
+                            accent,
+                            "1 2 3 · y a n · ↑↓ ↵ responden · ^␣ salir",
+                        )
+                    } else {
+                        (
+                            " CLAUDE ",
+                            accent,
+                            "↵ envía · esc interrumpe · ⇧tab modo · ^O abre · ^V imagen · clic en un ítem y c copia · ^␣ salir",
+                        )
+                    }
+                }
                 (_, Level::Terminal) => (
                     " TERMINAL ",
                     look::green(),
@@ -3368,6 +3374,11 @@ impl View {
                 g.cells[at].1.reverse = true;
             }
         }
+    }
+
+    /// The node of the conversation a pane runs, whether it has arrived or not.
+    fn conv_node(&self, pane: &str) -> Option<String> {
+        self.panes.get(pane)?.conversation.clone()
     }
 
     /// The conversation of a pane, once its node has arrived.
@@ -6878,6 +6889,22 @@ mod tests {
                 target: Named::Workspace(ws),
                 name: "feat/login-".into()
             }
+        );
+        assert!(v.manage.is_none());
+    }
+
+    #[test]
+    fn a_paste_into_a_box_of_the_client_types_into_it_and_a_line_break_is_enter() {
+        let mut v = fixture_view();
+        assert_eq!(tap(&mut v, 'r'), After::Continue);
+        let ws = v.selected_id().unwrap();
+        assert_eq!(
+            v.paste("-x\r\nsobra"),
+            After::Rename {
+                target: Named::Workspace(ws),
+                name: "feat/login-x".into()
+            },
+            "the Enter of the paste confirms and what follows it is not typed"
         );
         assert!(v.manage.is_none());
     }

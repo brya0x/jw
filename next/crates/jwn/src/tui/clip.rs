@@ -67,7 +67,8 @@ impl Work {
         use std::sync::atomic::{AtomicU32, Ordering};
         static N: AtomicU32 = AtomicU32::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "jwn-clip-{}-{}",
+            "{}-clip-{}-{}",
+            identity::get().name,
             std::process::id(),
             N.fetch_add(1, Ordering::Relaxed)
         ));
@@ -91,9 +92,15 @@ const NONE: &str = "no hay una imagen en el portapapeles";
 
 fn from_clipboard(to: &Path) -> Result<(), String> {
     if cfg!(target_os = "macos") {
+        // The path is inside an AppleScript string.
+        let path = to
+            .display()
+            .to_string()
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"");
         let script = format!(
             "try\nset d to the clipboard as «class PNGf»\nset f to open for access POSIX file \"{}\" with write permission\nset eof f to 0\nwrite d to f\nclose access f\nreturn \"ok\"\non error\nreturn \"none\"\nend try",
-            to.display()
+            path
         );
         let out = Command::new("osascript")
             .arg("-e")
@@ -188,7 +195,11 @@ mod tests {
     ];
 
     fn scratch(name: &str, bytes: &[u8]) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("jwn-clip-test-{}-{name}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "{}-clip-test-{}-{name}",
+            identity::get().name,
+            std::process::id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("picture");
         std::fs::write(&file, bytes).unwrap();
