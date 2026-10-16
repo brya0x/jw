@@ -18,6 +18,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use super::field::{self, Field, Look};
 use super::panels::{self, Panel, RowAct};
 use super::{Grid, Rgb, Style, clip, look};
+use crate::claude::tools_word;
 
 /// What the keyboard or the mouse asks the daemon for: the client maps each to its command.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -784,7 +785,8 @@ impl Ui {
                     None,
                 );
                 let totals = format!(
-                    "{tools} herramientas · {} tokens · {}",
+                    "{} · {} tokens · {}",
+                    tools_word(*tools),
                     kilo(*tokens),
                     secs(*ms)
                 );
@@ -871,8 +873,9 @@ impl Ui {
                 push(
                     vec![(
                         format!(
-                            "✻ Listo en {} · {tools} herramientas · {}",
+                            "✻ Listo en {} · {} · {}",
                             secs(*ms),
+                            tools_word(*tools),
                             usd(*cost)
                         ),
                         dim,
@@ -2274,8 +2277,9 @@ fn plain_of(item: &Item) -> String {
         Item::Out { lines } => lines.join("\n"),
         Item::Result { ms, tools, cost } => {
             format!(
-                "Listo en {} · {tools} herramientas · {}",
+                "Listo en {} · {} · {}",
                 secs(*ms),
+                tools_word(*tools),
                 usd(*cost)
             )
         }
@@ -2408,6 +2412,26 @@ mod tests {
         other.accent = Accent::Cyan;
         let (g, _) = frame(&Ui::default(), &other);
         assert_eq!(g.cells[y * g.cols + 4].1.fg, Some(look::cyan()));
+    }
+
+    #[test]
+    fn one_tool_is_not_herramientas_in_the_plural() {
+        let mut conv = idle();
+        conv.items = vec![
+            serde_json::from_value(
+                serde_json::json!({"t": "result", "ms": 3000, "tools": 1, "cost": 80000}),
+            )
+            .unwrap(),
+            serde_json::from_value(
+                serde_json::json!({"t": "result", "ms": 1000, "tools": 0, "cost": 0}),
+            )
+            .unwrap(),
+        ];
+        conv.first = 0;
+        let (_, rows) = frame(&Ui::default(), &conv);
+        row_of(&rows, "Listo en 3 s · 1 herramienta · $0,08");
+        row_of(&rows, "Listo en 1 s · 0 herramientas · $0,00");
+        assert!(!rows.iter().any(|r| r.contains("1 herramientas")));
     }
 
     #[test]

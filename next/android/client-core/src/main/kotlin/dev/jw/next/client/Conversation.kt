@@ -51,6 +51,9 @@ fun convSecs(ms: Long): String {
     return if (s < 60) "$s s" else "${s / 60} min ${s % 60} s"
 }
 
+/** «1 herramienta», «3 herramientas». */
+fun convTools(n: Int): String = "$n ${if (n == 1) "herramienta" else "herramientas"}"
+
 fun convKilo(n: Long): String = if (n >= 1000) "%.1f k".format(java.util.Locale.ROOT, n / 1000.0) else "$n"
 
 fun convUsd(micro: Long): String = "\$${micro / 1_000_000},%02d".format(java.util.Locale.ROOT, (micro % 1_000_000) / 10_000)
@@ -94,7 +97,7 @@ fun itemText(item: ConvItem): String = when (item) {
     is ConvItem.Agent -> (listOf("Agent(${item.name}) ${item.description}") + item.steps).joinToString("\n")
     is ConvItem.Shell -> (listOf("! ${item.command}") + item.output).joinToString("\n")
     is ConvItem.Out -> item.lines.joinToString("\n")
-    is ConvItem.Result -> "Listo en ${convSecs(item.ms)} · ${item.tools} herramientas · ${convUsd(item.cost)}"
+    is ConvItem.Result -> "Listo en ${convSecs(item.ms)} · ${convTools(item.tools)} · ${convUsd(item.cost)}"
     is ConvItem.Divider -> item.text
 }
 

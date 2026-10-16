@@ -327,6 +327,18 @@ fn diff_line(d: &contract::conversation::DiffLine) -> String {
     format!("    {sign} {}", d.text)
 }
 
+/// «1 herramienta», «3 herramientas».
+pub fn tools_word(n: u32) -> String {
+    format!(
+        "{n} {}",
+        if n == 1 {
+            "herramienta"
+        } else {
+            "herramientas"
+        }
+    )
+}
+
 /// An item as plain lines: what the pane's own terminal and `read` show (REQ-395, REQ-455).
 pub fn item_lines(item: &Item) -> Vec<String> {
     match item {
@@ -378,7 +390,8 @@ pub fn item_lines(item: &Item) -> Vec<String> {
         } => vec![
             format!("● Agent({name}) {description}"),
             format!(
-                "  ⎿  {tools} herramientas · {}k tokens · {:.1} s",
+                "  ⎿  {} · {}k tokens · {:.1} s",
+                tools_word(*tools),
                 tokens / 1000,
                 *ms as f64 / 1000.0
             ),
@@ -391,8 +404,9 @@ pub fn item_lines(item: &Item) -> Vec<String> {
         Item::Out { lines } => lines.iter().map(|l| format!("  ⎿  {l}")).collect(),
         Item::Note { text, .. } => vec![format!("  ⎿  {text}")],
         Item::Result { ms, tools, cost } => vec![format!(
-            "✻ Listo · {} s · {tools} herramientas · ${},{:02}",
+            "✻ Listo · {} s · {} · ${},{:02}",
             ms / 1000,
+            tools_word(*tools),
             cost / 1_000_000,
             (cost % 1_000_000) / 10_000
         )],

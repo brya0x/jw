@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.jw.next.client.convKilo
 import dev.jw.next.client.convSecs
+import dev.jw.next.client.convTools
 import dev.jw.next.client.convUsd
 import dev.jw.next.client.char
 import dev.jw.next.contract.ConvItem
@@ -110,7 +111,7 @@ private fun ItemView(item: ConvItem, accent: Color, spin: String, picked: Boolea
                 item.lines.forEachIndexed { k, l -> Mono((if (k == 0) "⎿ " else "  ") + l, Palette.dim, 12, lines = 6) }
             }
             is ConvItem.Note -> Mono("⎿ ${item.text}", item.tone.color(), 12, lines = 4, modifier = Modifier.padding(horizontal = Pad))
-            is ConvItem.Result -> Mono("✻ Listo en ${convSecs(item.ms)} · ${item.tools} herramientas · ${convUsd(item.cost)}", Palette.dim, 12, modifier = Modifier.padding(horizontal = Pad))
+            is ConvItem.Result -> Mono("✻ Listo en ${convSecs(item.ms)} · ${convTools(item.tools)} · ${convUsd(item.cost)}", Palette.dim, 12, modifier = Modifier.padding(horizontal = Pad))
             is ConvItem.Divider -> Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Box(Modifier.weight(1f).height(1.dp).background(Palette.line))
                 Mono(item.text, Palette.dim, 11)
@@ -222,7 +223,7 @@ private fun Lines(lines: List<String>) {
 
 @Composable
 private fun AgentRow(a: ConvItem.Agent, spin: String, open: Boolean) {
-    val totals = "${a.tools} herramientas · ${convKilo(a.tokens)} tokens · ${convSecs(a.ms)}"
+    val totals = "${convTools(a.tools)} · ${convKilo(a.tokens)} tokens · ${convSecs(a.ms)}"
     val running = a.state == ToolState.Run || a.state == ToolState.Ask
     Column(Modifier.padding(horizontal = Pad, vertical = 6.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
