@@ -436,6 +436,8 @@ data class ProjectInfo(
     val from: ConfigFrom? = null,
     /** Where the personal file is or would be. */
     val personal: String = "",
+    /** The files of the checkout a new worktree gets a copy of. */
+    val copy: List<String> = emptyList(),
 )
 
 /** The result of `list_dir`: [dirs] is cut to the first ones when [total] is more than they are. */

@@ -264,6 +264,7 @@ class ConformanceTest {
         assertEquals("bryan/{name}", info.branch)
         assertEquals(listOf("nvim", "claude"), info.panes)
         assertEquals(ConfigFrom.Repo, info.from)
+        assertEquals(listOf(".env", "apps/web/.env.local"), info.copy)
         assertEquals("/home/u/.config/jwn/projects/github.com_acme_app.toml", info.personal)
         assertEquals(result, ContractJson.encodeToJsonElement(ProjectInfo.serializer(), info))
     }

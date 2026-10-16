@@ -144,7 +144,8 @@ pub fn create_worktree(
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "repo".into());
-    let dest = crate::start::load(shared, &top)?
+    let project = crate::start::load(shared, &top)?;
+    let dest = project
         .root
         .join(folder.map_or_else(|| git::slug(branch), str::to_owned));
     let dest_text = dest.to_string_lossy().into_owned();
@@ -171,7 +172,8 @@ pub fn create_worktree(
         }
     }
     git::run(&top, &args).map_err(git_err)?;
-    added(
+    let copied = crate::provision::copy_files(&top, &dest, &project.copy);
+    let reply = added(
         shared,
         Workspace {
             id: new_id(),
@@ -185,7 +187,11 @@ pub fn create_worktree(
             attention: Vec::new(),
             github: None,
         },
-    )
+    )?;
+    Ok(reply.map(|mut r| {
+        copied.say(&mut r);
+        r
+    }))
 }
 
 pub fn remove_workspace(

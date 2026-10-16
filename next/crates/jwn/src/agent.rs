@@ -819,6 +819,7 @@ fn worktree(args: &[&str]) -> Out {
         return fail("the daemon did not say what it made");
     };
     let (id, path) = (id.to_owned(), path.to_owned());
+    say_copies(&made);
     let started = s.cmd(Cmd::StartWorkspace {
         workspace: id.clone(),
     });
@@ -877,6 +878,30 @@ fn with_conversation(s: &mut Link, id: &str, mut pane: PaneInfo) -> Out<PaneInfo
         }
     }
     Ok(pane)
+}
+
+/// What was copied into a new worktree and what was not, on the error output so that what
+/// `worktree` prints stays as it was (REQ-493).
+fn say_copies(made: &Value) {
+    let list = |key: &str| -> Vec<String> {
+        made[key]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let copied = list("copied");
+    if !copied.is_empty() {
+        eprintln!("{} worktree: copied {}", bin(), copied.join(", "));
+    }
+    for skipped in made["skipped"].as_array().into_iter().flatten() {
+        if let (Some(path), Some(why)) = (skipped["path"].as_str(), skipped["why"].as_str()) {
+            eprintln!("{} worktree: did not copy {path}: {why}", bin());
+        }
+    }
 }
 
 fn pane_open(args: &[&str]) -> Out {

@@ -24,6 +24,7 @@ mod panes;
 mod persist;
 mod procs;
 mod project;
+mod provision;
 mod pty;
 mod rename;
 mod replies;

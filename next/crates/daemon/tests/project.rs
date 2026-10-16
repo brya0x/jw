@@ -693,3 +693,86 @@ fn writing_into_the_repository_never_goes_through_a_link_planted_where_the_tempo
     assert_eq!(mode, 0o700);
     d.stop();
 }
+
+/// N92: `copy` (REQ-489 to REQ-492).
+#[test]
+fn copy_puts_the_files_of_the_checkout_in_a_new_worktree_with_their_owners_bits_and_says_what_it_skipped()
+ {
+    use std::os::unix::fs::PermissionsExt;
+    let sb = Sandbox::new();
+    let d = sb.start();
+    let app = repo(
+        &sb,
+        Some("copy = [\".env\", \"apps/.env.local\", \"nada\", \"f.txt\"]\n"),
+    );
+    std::fs::write(app.join(".env"), "SECRETO=1\n").unwrap();
+    std::fs::set_permissions(app.join(".env"), std::fs::Permissions::from_mode(0o644)).unwrap();
+    std::fs::create_dir_all(app.join("apps")).unwrap();
+    std::fs::write(app.join("apps/.env.local"), "LOCAL=2\n").unwrap();
+    let mut c = sb.client();
+
+    assert_eq!(
+        config(&mut c, &app)["copy"],
+        serde_json::json!([".env", "apps/.env.local", "nada", "f.txt"]),
+        "REQ-489: the settings list them"
+    );
+    let made = worktree(&mut c, &app, "ws-1").unwrap();
+    let wt = PathBuf::from(made["path"].as_str().unwrap());
+    assert_eq!(
+        made["copied"],
+        serde_json::json!([".env", "apps/.env.local"])
+    );
+    assert_eq!(
+        made["skipped"],
+        serde_json::json!([
+            { "path": "nada", "why": "it is not in the checkout" },
+            { "path": "f.txt", "why": "it is already in the worktree" },
+        ])
+    );
+    assert_eq!(
+        std::fs::read_to_string(wt.join(".env")).unwrap(),
+        "SECRETO=1\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(wt.join("apps/.env.local")).unwrap(),
+        "LOCAL=2\n"
+    );
+    let mode = std::fs::metadata(wt.join(".env"))
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o600, "REQ-490");
+    assert_eq!(
+        std::fs::read_to_string(app.join(".env")).unwrap(),
+        "SECRETO=1\n",
+        "the checkout is as it was"
+    );
+    // a worktree of a repository with nothing to copy says nothing of it
+    std::fs::write(app.join(".jw.toml"), "").unwrap();
+    let plain = worktree(&mut c, &app, "ws-2").unwrap();
+    assert!(
+        plain.get("copied").is_none() && plain.get("skipped").is_none(),
+        "{plain}"
+    );
+    d.stop();
+}
+
+#[test]
+fn a_copy_that_leaves_the_repository_is_refused_naming_the_path_and_the_line() {
+    let sb = Sandbox::new();
+    let d = sb.start();
+    for bad in ["../fuera", "/etc/passwd", ""] {
+        let app = repo(
+            &sb,
+            Some(&format!("branch = \"a/{{name}}\"\ncopy = [{bad:?}]\n")),
+        );
+        let mut c = sb.client();
+        let (code, why) = refused(&mut c, Cmd::ProjectConfig { repo: text(&app) });
+        assert_eq!(code, ErrorCode::BadRequest);
+        assert!(why.starts_with(".jw.toml, line 2"), "{bad:?}: {why}");
+        assert!(why.contains("not a path inside the repository"), "{why}");
+        std::fs::remove_dir_all(&app).unwrap();
+    }
+    d.stop();
+}

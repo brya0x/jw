@@ -486,3 +486,34 @@ fn skill_prints_the_skill_and_installs_it_under_the_claude_configuration() {
         Some(2)
     );
 }
+
+#[test]
+fn worktree_says_on_its_error_output_what_it_copied_and_what_it_did_not_and_prints_as_before() {
+    let w = World::new("ag-copy");
+    w.open_repo();
+    std::fs::write(w.repo.join(".jw.toml"), "copy = [\".env\", \"nada\"]\n").unwrap();
+    std::fs::write(w.repo.join(".env"), "A=1\n").unwrap();
+    let out = w.run(None, &["worktree", "ws-1", "--in", "app"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(
+        stdout.trim().split(' ').count(),
+        2,
+        "an id and a path, as before: {stdout}"
+    );
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(stderr.contains("worktree: copied .env"), "{stderr}");
+    assert!(
+        stderr.contains("did not copy nada: it is not in the checkout"),
+        "{stderr}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(w.repo.parent().unwrap().join("app-wt/ws-1/.env")).unwrap(),
+        "A=1\n"
+    );
+    w.stop();
+}

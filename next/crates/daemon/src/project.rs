@@ -67,6 +67,8 @@ pub struct Project {
     /// The template of a worktree's branch.
     pub branch: String,
     pub setup: Vec<String>,
+    /// The files of the checkout a new worktree gets a copy of (REQ-489).
+    pub copy: Vec<String>,
     pub agent: Vec<String>,
     pub editor: Vec<String>,
     pub layout: Option<Node>,
@@ -77,6 +79,7 @@ struct Raw {
     root: Option<String>,
     branch: Option<Spanned<String>>,
     setup: Option<Vec<Spanned<String>>>,
+    copy: Option<Vec<Spanned<String>>>,
     agent: Option<Spanned<Table>>,
     layout: Option<Spanned<Table>>,
 }
@@ -315,6 +318,20 @@ fn parse(
         }
     }
 
+    let mut copy = Vec::new();
+    for file in raw.copy.unwrap_or_default() {
+        if !crate::provision::is_inside(file.get_ref()) {
+            return Err(fail(
+                file.span().start,
+                &format!(
+                    "`copy` names {:?}, which is not a path inside the repository",
+                    file.get_ref()
+                ),
+            ));
+        }
+        copy.push(file.into_inner().trim().to_owned());
+    }
+
     let agent = match raw.agent {
         Some(t) => {
             let at = t.span().start;
@@ -360,6 +377,7 @@ fn parse(
         root,
         branch,
         setup,
+        copy,
         agent,
         editor,
         layout,

@@ -564,6 +564,9 @@ pub struct ProjectInfo {
     /// The setup commands as written.
     pub setup: Vec<String>,
     pub panes: Vec<String>,
+    /// The files of the checkout a new worktree gets a copy of (REQ-489).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub copy: Vec<String>,
 }
 
 /// The result of `find_files`: paths relative to the workspace's folder, cut when `cut`.

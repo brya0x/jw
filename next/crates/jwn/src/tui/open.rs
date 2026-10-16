@@ -592,6 +592,9 @@ pub fn draw_worktree(g: &mut Grid, (x, y, w, _): Rect, t: &Worktree) {
                         format!("paneles   {}{setup}", info.panes.join(" │ ")),
                         plain,
                     ));
+                    if !info.copy.is_empty() {
+                        v.push((format!("copia     {}", info.copy.join(" · ")), plain));
+                    }
                     let source = match info.from {
                         Some(contract::ConfigFrom::Repo) => {
                             format!("según el .jw.toml de {}", repo_name(&t.repo))
@@ -789,6 +792,7 @@ mod tests {
             source: None,
             from: None,
             personal: String::new(),
+            copy: Vec::new(),
             root: root.join("app-wt").to_string_lossy().into_owned(),
             branch: "feat/{name}".into(),
             setup: Vec::new(),
@@ -918,6 +922,7 @@ mod tests {
             source: Some(app.join(".jw.toml").to_string_lossy().into_owned()),
             from: Some(contract::ConfigFrom::Repo),
             personal: String::new(),
+            copy: vec![".env".into()],
             root: root.join("trees").to_string_lossy().into_owned(),
             branch: "bryan/{name}".into(),
             setup: vec!["bun install".into()],
