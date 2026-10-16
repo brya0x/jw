@@ -1,0 +1,21 @@
+{
+  "t": "cmd",
+  "id": "c41",
+  "cmd": {
+    "cmd": "open_conversation",
+    "pane": "00000000-0000-4000-8000-0000000000c1",
+    "resume": "2cab1f5a-3d20-4cd2-9d13-485b39b26147",
+    "args": [
+      "--model",
+      "opus",
+      "--permission-mode",
+      "plan",
+      "--name",
+      "login"
+    ],
+    "env": {
+      "PATH": "/usr/local/bin:/usr/bin",
+      "HOME": "/Users/dev"
+    }
+  }
+}

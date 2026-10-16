@@ -15,8 +15,146 @@
     "AttentionKind": {
       "enum": ["question", "plan", "permission", "shell_done", "agent_done", "screen", "merged", "ci_failed"]
     },
-    "NodeType": { "enum": ["session", "workspace", "pane", "blocks", "diff", "commits"] },
+    "NodeType": { "enum": ["session", "workspace", "pane", "blocks", "diff", "commits", "conversation"] },
     "BlocksMode": { "enum": ["blocks", "full"] },
+    "Accent": { "enum": ["blue", "green", "yellow", "red", "magenta", "cyan"] },
+    "ConvMode": { "enum": ["manual", "acceptEdits", "plan", "auto"] },
+    "ConvStatus": { "enum": ["idle", "resuming", "thinking", "streaming", "tool", "asking", "compacting", "dead"] },
+    "ToolState": { "enum": ["run", "ask", "ok", "denied", "failed"] },
+    "Tone": { "enum": ["warn", "error"] },
+    "DividerKind": { "enum": ["restart", "compact", "clear", "resume"] },
+    "DiffSign": { "enum": ["+", "-", " "] },
+    "DiffLine": {
+      "type": "object",
+      "required": ["sign", "text"],
+      "properties": {
+        "n": { "type": "integer", "minimum": 0 },
+        "sign": { "$ref": "#/$defs/DiffSign" },
+        "text": { "type": "string" }
+      }
+    },
+    "Item": {
+      "description": "One thing in a conversation, oldest first.",
+      "oneOf": [
+        { "type": "object", "required": ["t", "text"], "properties": { "t": { "const": "user" }, "text": { "type": "string" }, "images": { "type": "integer", "minimum": 1 } } },
+        { "type": "object", "required": ["t", "text"], "properties": { "t": { "const": "text" }, "text": { "type": "string" }, "live": { "const": true } } },
+        {
+          "type": "object",
+          "required": ["t", "id", "name", "arg", "state"],
+          "properties": {
+            "t": { "const": "tool" },
+            "id": { "type": "string" },
+            "name": { "type": "string" },
+            "arg": { "type": "string" },
+            "state": { "$ref": "#/$defs/ToolState" },
+            "summary": { "type": "string" },
+            "output": { "type": "array", "items": { "type": "string" } },
+            "diff": { "type": "array", "items": { "$ref": "#/$defs/DiffLine" } },
+            "url": { "type": "string" },
+            "by": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["t", "id", "name", "description", "state", "tools", "tokens", "ms", "steps"],
+          "properties": {
+            "t": { "const": "agent" },
+            "id": { "type": "string" },
+            "name": { "type": "string" },
+            "description": { "type": "string" },
+            "state": { "$ref": "#/$defs/ToolState" },
+            "tools": { "type": "integer", "minimum": 0 },
+            "tokens": { "type": "integer", "minimum": 0 },
+            "ms": { "type": "integer", "minimum": 0 },
+            "last": { "type": "string" },
+            "steps": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["t", "command", "state", "output"],
+          "properties": {
+            "t": { "const": "shell" },
+            "command": { "type": "string" },
+            "state": { "$ref": "#/$defs/ToolState" },
+            "output": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        { "type": "object", "required": ["t", "lines"], "properties": { "t": { "const": "out" }, "lines": { "type": "array", "items": { "type": "string" } } } },
+        { "type": "object", "required": ["t", "text"], "properties": { "t": { "const": "note" }, "text": { "type": "string" }, "tone": { "$ref": "#/$defs/Tone" } } },
+        {
+          "type": "object",
+          "required": ["t", "ms", "tools", "cost"],
+          "properties": {
+            "t": { "const": "result" },
+            "ms": { "type": "integer", "minimum": 0 },
+            "tools": { "type": "integer", "minimum": 0 },
+            "cost": { "type": "integer", "minimum": 0, "description": "Millionths of a dollar." }
+          }
+        },
+        { "type": "object", "required": ["t", "text", "kind"], "properties": { "t": { "const": "divider" }, "text": { "type": "string" }, "kind": { "$ref": "#/$defs/DividerKind" } } }
+      ]
+    },
+    "AskKind": { "enum": ["permission", "question", "plan"] },
+    "AskOption": { "type": "object", "required": ["key", "label"], "properties": { "key": { "type": "string" }, "label": { "type": "string" } } },
+    "Ask": {
+      "type": "object",
+      "required": ["id", "kind", "tool", "title", "options"],
+      "properties": {
+        "id": { "type": "string" },
+        "kind": { "$ref": "#/$defs/AskKind" },
+        "tool": { "type": "string" },
+        "title": { "type": "string" },
+        "command": { "type": "string" },
+        "diff": { "type": "array", "items": { "$ref": "#/$defs/DiffLine" } },
+        "plan": { "type": "array", "items": { "type": "string" } },
+        "options": { "type": "array", "items": { "$ref": "#/$defs/AskOption" }, "minItems": 1 },
+        "multi": { "const": true }
+      }
+    },
+    "TaskKind": { "enum": ["agent", "bash", "monitor", "loop", "other"] },
+    "TaskState": { "enum": ["run", "done", "stopped", "failed"] },
+    "Task": {
+      "type": "object",
+      "required": ["id", "kind", "label", "state", "started"],
+      "properties": {
+        "id": { "type": "string" },
+        "kind": { "$ref": "#/$defs/TaskKind" },
+        "label": { "type": "string" },
+        "state": { "$ref": "#/$defs/TaskState" },
+        "started": { "type": "integer", "minimum": 0 },
+        "info": { "type": "string" }
+      }
+    },
+    "Todo": { "type": "object", "required": ["text", "done"], "properties": { "text": { "type": "string" }, "done": { "type": "boolean" } } },
+    "Artifact": { "type": "object", "required": ["title", "url"], "properties": { "title": { "type": "string" }, "url": { "type": "string" } } },
+    "CommandSource": { "enum": ["jwn", "claude", "project", "skill", "plugin"] },
+    "CommandKind": { "enum": ["local", "panel", "text", "prompt", "screen"] },
+    "ConvCommand": {
+      "type": "object",
+      "required": ["name", "source", "kind"],
+      "properties": {
+        "name": { "type": "string" },
+        "source": { "$ref": "#/$defs/CommandSource" },
+        "kind": { "$ref": "#/$defs/CommandKind" },
+        "description": { "type": "string" }
+      }
+    },
+    "Limits": {
+      "type": "object",
+      "properties": {
+        "five_hour": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "seven_day": { "type": "integer", "minimum": 0, "maximum": 100 }
+      }
+    },
+    "Image": {
+      "type": "object",
+      "required": ["media_type", "data"],
+      "properties": {
+        "media_type": { "enum": ["image/jpeg", "image/png", "image/webp", "image/gif"] },
+        "data": { "type": "string", "description": "Base64." }
+      }
+    },
     "Color": {
       "description": "A palette index (0 to 255) or a #rrggbb string.",
       "oneOf": [
@@ -234,7 +372,8 @@
             "last_program": { "$ref": "#/$defs/Program" },
             "screen": { "$ref": "#/$defs/Screen" },
             "blocks": { "$ref": "#/$defs/Id" },
-            "input": { "$ref": "#/$defs/PaneInput" }
+            "input": { "$ref": "#/$defs/PaneInput" },
+            "conversation": { "$ref": "#/$defs/Id" }
           }
         },
         {
@@ -271,6 +410,32 @@
             "base": { "type": "string" },
             "more": { "const": true },
             "commits": { "type": "array", "items": { "$ref": "#/$defs/CommitInfo" } }
+          }
+        },
+        {
+          "allOf": [{ "$ref": "#/$defs/Head" }],
+          "required": ["pane", "name", "accent", "model", "effort", "mode", "status", "first", "items", "queue", "tasks", "todos", "artifacts", "commands", "cost"],
+          "properties": {
+            "type": { "const": "conversation" },
+            "pane": { "$ref": "#/$defs/Id" },
+            "session": { "type": "string" },
+            "name": { "type": "string" },
+            "accent": { "$ref": "#/$defs/Accent" },
+            "model": { "type": "string" },
+            "effort": { "type": "string" },
+            "mode": { "$ref": "#/$defs/ConvMode" },
+            "status": { "$ref": "#/$defs/ConvStatus" },
+            "since": { "type": "integer", "minimum": 0 },
+            "first": { "type": "integer", "minimum": 0 },
+            "items": { "type": "array", "items": { "$ref": "#/$defs/Item" } },
+            "ask": { "$ref": "#/$defs/Ask" },
+            "queue": { "type": "array", "items": { "type": "string" } },
+            "tasks": { "type": "array", "items": { "$ref": "#/$defs/Task" } },
+            "todos": { "type": "array", "items": { "$ref": "#/$defs/Todo" } },
+            "artifacts": { "type": "array", "items": { "$ref": "#/$defs/Artifact" } },
+            "commands": { "type": "array", "items": { "$ref": "#/$defs/ConvCommand" } },
+            "cost": { "type": "integer", "minimum": 0, "description": "Millionths of a dollar." },
+            "limits": { "$ref": "#/$defs/Limits" }
           }
         }
       ]
@@ -341,7 +506,49 @@
         { "type": "object", "required": ["cmd"], "properties": { "cmd": { "const": "mobile_link" } } },
         { "type": "object", "required": ["cmd", "seconds"], "properties": { "cmd": { "const": "mobile_wait" }, "seconds": { "type": "integer", "minimum": 0, "maximum": 300 } } },
         { "type": "object", "required": ["cmd", "yes"], "properties": { "cmd": { "const": "mobile_answer" }, "yes": { "type": "boolean" } } },
-        { "type": "object", "required": ["cmd"], "properties": { "cmd": { "const": "mobile_stop" } } }
+        { "type": "object", "required": ["cmd"], "properties": { "cmd": { "const": "mobile_stop" } } },
+        {
+          "type": "object",
+          "required": ["cmd", "pane"],
+          "properties": {
+            "cmd": { "const": "open_conversation" },
+            "pane": { "$ref": "#/$defs/Id" },
+            "resume": { "type": "string", "minLength": 1 },
+            "args": { "type": "array", "items": { "type": "string" } },
+            "env": { "type": "object", "additionalProperties": { "type": "string" } }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["cmd", "node", "text"],
+          "properties": {
+            "cmd": { "const": "conversation_send" },
+            "node": { "$ref": "#/$defs/Id" },
+            "text": { "type": "string" },
+            "images": { "type": "array", "items": { "$ref": "#/$defs/Image" }, "maxItems": 4 }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["cmd", "node", "ask", "key"],
+          "properties": { "cmd": { "const": "conversation_answer" }, "node": { "$ref": "#/$defs/Id" }, "ask": { "type": "string" }, "key": { "type": "string" }, "text": { "type": "string" }, "by": { "type": "string", "maxLength": 40 } }
+        },
+        { "type": "object", "required": ["cmd", "node"], "properties": { "cmd": { "const": "conversation_interrupt" }, "node": { "$ref": "#/$defs/Id" } } },
+        {
+          "type": "object",
+          "required": ["cmd", "node"],
+          "properties": {
+            "cmd": { "const": "conversation_set" },
+            "node": { "$ref": "#/$defs/Id" },
+            "name": { "type": "string", "maxLength": 80 },
+            "accent": { "$ref": "#/$defs/Accent" },
+            "model": { "type": "string", "minLength": 1 },
+            "effort": { "type": "string", "minLength": 1 },
+            "mode": { "$ref": "#/$defs/ConvMode" }
+          }
+        },
+        { "type": "object", "required": ["cmd", "node", "command"], "properties": { "cmd": { "const": "conversation_shell" }, "node": { "$ref": "#/$defs/Id" }, "command": { "type": "string", "minLength": 1 } } },
+        { "type": "object", "required": ["cmd", "node"], "properties": { "cmd": { "const": "conversation_close" }, "node": { "$ref": "#/$defs/Id" } } }
       ]
     },
     "ClientMsg": {

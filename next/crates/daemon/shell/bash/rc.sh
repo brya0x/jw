@@ -23,3 +23,11 @@ __jwn_arm() { __jwn_ready=1; }
 trap '__jwn_debug' DEBUG
 PROMPT_COMMAND="__jwn_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND};__jwn_arm"
 PS1='\[\e]133;A\a\]'"$PS1"'\[\e]133;B\a\]'
+
+# `claude` typed in a pane of the daemon is the binary's own conversation (spec REQ-371); a
+# function exists only in the shell the person types in, so a script and `command claude` still
+# run the original. Not defined where the person already has an alias or a function of that name.
+if [ -n "$JWN_CONVERSATION" ] && [ -n "$JWN_BIN" ] && [ -n "$JWN_PANE_ID" ] \
+  && [ "$(type -t claude)" != function ] && [ "$(type -t claude)" != alias ]; then
+  claude() { "$JWN_BIN" claude "$@"; }
+fi

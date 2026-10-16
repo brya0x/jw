@@ -23,13 +23,14 @@ use crate::persist;
 use crate::pty::{self, Event, Term};
 
 /// The node document versions this daemon can serve.
-pub const SUPPORTED: [(&str, &[u32]); 6] = [
+pub const SUPPORTED: [(&str, &[u32]); 7] = [
     ("session", &[1]),
     ("workspace", &[1]),
     ("pane", &[1]),
     ("blocks", &[1]),
     ("diff", &[1]),
     ("commits", &[1]),
+    ("conversation", &[1]),
 ];
 
 /// How long a diff or commits node nobody has open is kept (REQ-102).
@@ -124,8 +125,14 @@ pub struct Core {
     pub mobile: Arc<crate::mobile::Hub>,
     /// The settings file an agent is started with, so its hooks tell this daemon what it does.
     pub hooks: Option<PathBuf>,
+    /// `claude` typed in a pane is the binary's own (a conversation), in a shell that has the
+    /// integration; then its attention comes from the engine and it is given no hooks (REQ-374).
+    pub swap: bool,
     /// Where each pane's blocks are kept so they come back with the daemon; none keeps nothing.
     pub history_dir: Option<PathBuf>,
+    /// The conversations of the panes that run `claude`, by pane id, and where they are kept.
+    pub convs: HashMap<Id, crate::engine::Conv>,
+    pub conv_dir: Option<PathBuf>,
     /// The panes whose blocks changed since they were saved, and when each was last saved.
     history_dirty: HashSet<Id>,
     history_written: HashMap<Id, Instant>,
@@ -160,6 +167,8 @@ impl Core {
             blocks_views: HashMap::new(),
             blocks_ids: HashMap::new(),
             history_dir: None,
+            convs: HashMap::new(),
+            conv_dir: None,
             history_dirty: HashSet::new(),
             history_written: HashMap::new(),
             history_shape: HashMap::new(),
@@ -171,9 +180,22 @@ impl Core {
             integration,
             mobile,
             hooks: None,
+            swap: false,
         };
         core.refresh();
         core
+    }
+
+    /// The hooks an agent started by the daemon is given: none where its shell gives the
+    /// conversation instead.
+    pub fn agent_hooks(&self) -> Option<PathBuf> {
+        let setup = self.integration_for(&self.shell);
+        let integrated = !(setup.args.is_empty() && setup.env.is_empty());
+        if self.swap && integrated {
+            None
+        } else {
+            self.hooks.clone()
+        }
     }
 
     /// Every running terminal, for a look at what is in its foreground.
@@ -184,10 +206,68 @@ impl Core {
             .collect()
     }
 
+    /// Where a pane's shell was started.
+    pub fn pane_cwd(&self, pane: &str) -> Option<PathBuf> {
+        self.model
+            .workspaces
+            .iter()
+            .flat_map(|w| &w.panes)
+            .find(|p| p.id == pane)
+            .map(|p| PathBuf::from(&p.cwd))
+    }
+
+    fn pane_mut(&mut self, pane: &str) -> Option<&mut crate::model::Pane> {
+        self.model
+            .workspaces
+            .iter_mut()
+            .flat_map(|w| w.panes.iter_mut())
+            .find(|p| p.id == pane)
+    }
+
+    /// A conversation raised something for the person: what the agent had raised is over.
+    pub fn raise_agent(&mut self, pane: &str, kind: AttentionKind) {
+        if let Some(p) = self.pane_mut(pane) {
+            p.attention
+                .retain(|o| !crate::agents::KINDS.contains(&o.kind));
+            p.attention.push(Own {
+                kind,
+                exit_code: None,
+                rev: None,
+            });
+        }
+    }
+
+    /// The question that waited was answered.
+    pub fn clear_ask(&mut self, pane: &str) {
+        if let Some(p) = self.pane_mut(pane) {
+            p.attention.retain(|o| {
+                !matches!(
+                    o.kind,
+                    AttentionKind::Permission | AttentionKind::Question | AttentionKind::Plan
+                )
+            });
+        }
+    }
+
+    /// Everything an agent had raised is over (the person moved on, or the agent is gone).
+    pub fn clear_agent(&mut self, pane: &str) {
+        if let Some(p) = self.pane_mut(pane) {
+            p.attention
+                .retain(|o| !crate::agents::KINDS.contains(&o.kind));
+        }
+    }
+
+    pub fn set_pane_resume(&mut self, pane: &str, resume: Option<Vec<String>>) {
+        if let Some(p) = self.pane_mut(pane) {
+            p.resume = resume;
+        }
+    }
+
     /// Record the programs found in the panes; true when any changed. A program that ended
     /// becomes the pane's `last_program`, and the title follows what runs.
     pub fn set_running(&mut self, updates: &HashMap<Id, Option<Vec<String>>>) -> bool {
         let mut changed = false;
+        let mut ended: Vec<Id> = Vec::new();
         for p in self
             .model
             .workspaces
@@ -208,8 +288,21 @@ impl Core {
                 }
                 p.last_program = p.running.take();
             }
-            // An agent with a known conversation is what a restart brings back.
-            p.resume = new.as_deref().and_then(crate::launch::agent_resume);
+            // An agent with a known conversation is what a restart brings back; a conversation
+            // of ours says which one itself.
+            let has_conv = self.convs.contains_key(&p.id);
+            if !(new.is_some() && has_conv) {
+                p.resume = new.as_deref().and_then(crate::launch::agent_resume);
+            }
+            if let Some(c) = self.convs.get_mut(&p.id) {
+                if new.as_deref().is_some_and(crate::launch::is_agent) {
+                    c.stub_seen = true;
+                } else if c.stub_seen {
+                    // The binary's `claude` that was in the foreground is gone (killed, or it
+                    // crashed) without closing: the conversation goes with it (REQ-377).
+                    ended.push(p.id.clone());
+                }
+            }
             p.title = p.name.clone().unwrap_or_else(|| {
                 new.as_deref()
                     .and_then(crate::procs::title_for)
@@ -217,6 +310,14 @@ impl Core {
             });
             p.running = new.clone();
             changed = true;
+        }
+        for pane in ended {
+            if let Some(c) = self.convs.remove(&pane)
+                && let Some(e) = c.engine
+            {
+                e.stop();
+            }
+            self.clear_agent(&pane);
         }
         changed
     }
@@ -658,11 +759,28 @@ impl Core {
         self.inputs.retain(|k, _| live.contains(k.as_str()));
         self.blocks_views.retain(|k, _| live.contains(k.as_str()));
         self.blocks_ids.retain(|k, _| live.contains(k.as_str()));
+        let gone: Vec<Id> = self
+            .convs
+            .keys()
+            .filter(|k| !live.contains(k.as_str()))
+            .cloned()
+            .collect();
+        for k in gone {
+            if let Some(c) = self.convs.remove(&k) {
+                if let Some(e) = c.engine {
+                    e.stop();
+                }
+                if let Some(dir) = &self.conv_dir {
+                    crate::engine::forget(dir, &k);
+                }
+            }
+        }
         dead.iter().filter_map(|k| self.terms.remove(k)).collect()
     }
 
     /// End every shell (the daemon is stopping).
     pub fn shutdown(&mut self) {
+        crate::engine::stop_all(&mut self.convs);
         for term in self.terms.drain().map(|(_, t)| t) {
             term.kill();
         }
@@ -804,7 +922,9 @@ impl Core {
             }
         }
         let node: Node = serde_json::from_value(doc.value.clone()).expect("documents are nodes");
-        DaemonMsg::Snapshot { node }
+        DaemonMsg::Snapshot {
+            node: Box::new(node),
+        }
     }
 
     pub fn close(&mut self, client: u64, node: &str) {
@@ -992,7 +1112,13 @@ impl Core {
                         .cloned()
                         .unwrap_or_else(pty::blank_screen),
                     input: self.inputs.get(&p.id).cloned().map(Box::new),
+                    conversation: self.convs.get(&p.id).map(|c| c.id.clone()),
                 }));
+                if let Some(c) = self.convs.get(&p.id) {
+                    nodes.push(Node::Conversation(Box::new(
+                        c.st.node(head(&c.id, Vec::new()), &p.id),
+                    )));
+                }
                 if let (Some(id), Some((_, mode, blocks))) =
                     (self.blocks_ids.get(&p.id), self.blocks_views.get(&p.id))
                 {
@@ -1115,6 +1241,17 @@ fn raised(own: &[Own], node: &Id) -> Vec<Attention> {
 #[cfg(test)]
 mod tests {
     use contract::{AttentionKind, WorkspaceKind};
+
+    /// The node types the daemon serves and the ones the client library asks for are two lists
+    /// that nothing else compares (the phone's `hello` is a third, in `Data.kt`).
+    #[test]
+    fn the_daemon_serves_the_types_the_client_library_asks_for() {
+        let served: std::collections::BTreeSet<&str> =
+            super::SUPPORTED.iter().map(|(t, _)| *t).collect();
+        let asked = wire::default_accepts();
+        let asked: std::collections::BTreeSet<&str> = asked.keys().map(String::as_str).collect();
+        assert_eq!(served, asked);
+    }
 
     use super::*;
     use crate::model::{Pane, Workspace, new_id};

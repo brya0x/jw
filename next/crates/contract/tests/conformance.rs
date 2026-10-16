@@ -252,6 +252,20 @@ fn the_reply_of_list_files_is_a_file_listing() {
     assert_eq!(serde_json::to_value(&listing).unwrap(), doc["result"]);
 }
 
+/// The result of `open_conversation` in the fixture is what `Opened` writes and reads.
+#[test]
+fn the_reply_of_open_conversation_is_a_node_and_a_session() {
+    let docs = fixtures("daemon");
+    let (_, doc) = docs
+        .iter()
+        .find(|(n, _)| n == "reply-ok-open-conversation.json")
+        .expect("the fixture");
+    let opened: contract::conversation::Opened =
+        serde_json::from_value(doc["result"].clone()).unwrap();
+    assert_eq!(opened.session.len(), 36);
+    assert_eq!(serde_json::to_value(&opened).unwrap(), doc["result"]);
+}
+
 /// The result of `project_config` in the fixture is what `ProjectInfo` writes and reads.
 #[test]
 fn the_reply_of_project_config_is_a_project_info() {

@@ -1,0 +1,889 @@
+<title>jwn Conversation</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Terminal-first, the same character grid as the other terminal prototypes. Every colour comes from the chosen theme. */
+:root{
+  --bg:#282c34; --panel:#21252b; --fg:#abb2bf; --dim:#5c6370; --line:#3e4451; --sel:#2c313a;
+  --blue:#61afef; --green:#98c379; --yellow:#e5c07b; --red:#e06c75; --magenta:#c678dd; --cyan:#56b6c2;
+  --page:#16181d; --ink:#c3c9d4; --mut:#7d8594;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}}
+:root[data-theme="light"]{--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.55 'IBM Plex Sans',system-ui,sans-serif;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px 40px}
+.wrap{max-width:1500px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
+h1{font:600 20px/1.2 var(--mono);margin:0}
+p{margin:0;max-width:72ch;color:var(--mut)}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button,select{font:12px var(--mono);color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;min-height:32px;cursor:pointer}
+button:hover{border-color:var(--blue)}
+:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto}
+.term pre{margin:0;font:13px/1.25 var(--mono);color:var(--fg);outline:none;width:max-content}
+.term pre:focus-visible{outline:none}
+.hint{font:12px var(--mono);color:var(--mut)}
+.stage{display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap}
+.col{flex:1 1 700px;min-width:0;display:flex;flex-direction:column;gap:8px}
+.side{flex:0 0 auto;width:100%;max-width:376px;margin-inline:auto;display:flex;flex-direction:column;gap:8px}
+.side h2{font:600 12px var(--mono);margin:0;color:var(--mut)}
+.phone{width:100%;height:760px;background:var(--bg);border:1px solid var(--line);border-radius:28px;padding:10px;box-shadow:0 0 0 6px var(--panel);display:flex;flex-direction:column}
+.ph{flex:1;min-height:0;background:var(--bg);border-radius:20px;overflow:hidden;display:flex;flex-direction:column;font:13px/1.45 var(--mono);color:var(--fg)}
+.ph .hd{background:var(--panel);border-bottom:1px solid var(--line);padding:8px 12px;display:flex;align-items:center;min-height:52px}
+.ph .hd .t{flex:1;min-width:0}.ph .hd b{display:block;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ph .hd span{display:block;font-size:11px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ph .tabs{display:flex;background:var(--panel);border-bottom:1px solid var(--line);overflow:auto}
+.ph .tab{padding:0 14px;min-height:40px;display:flex;align-items:center;gap:6px;border:0;border-bottom:2px solid var(--acc,var(--blue));border-radius:0;background:none;color:var(--fg);font-weight:700}
+.ph .msgs{flex:1;min-height:0;overflow:auto;padding:8px 0;display:flex;flex-direction:column;gap:8px}
+.ph .m{padding:0 12px;white-space:pre-wrap;word-break:break-word}
+.ph .m.u{background:var(--sel);padding-block:6px}
+.ph .m.a code,.ph .ts code{color:var(--cyan);font:inherit}
+.ph .tl{display:flex;gap:8px;align-items:baseline;padding:6px 12px;min-height:40px;cursor:pointer}
+.ph .tl .nm{font-weight:700}.ph .tl .ar{color:var(--dim);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.ph .ts{padding:0 12px 0 30px;color:var(--dim);font-size:12px;white-space:pre-wrap;word-break:break-word}
+.ph pre.df{margin:4px 0 0;padding:0;font:11.5px/1.4 var(--mono);white-space:pre-wrap;word-break:break-word}
+.ph pre.df span{display:block;padding:0 12px}
+.ph .rs{display:flex;align-items:center;gap:8px;margin:2px 10px;font-size:11px;color:var(--dim)}.ph .rs::before,.ph .rs::after{content:'';flex:1;height:1px;background:var(--line)}
+.ph .status{padding:4px 12px;color:var(--yellow);font-size:12px}
+.ph .sheet{border-top:2px solid var(--yellow);background:var(--panel);padding:10px 12px 12px;display:flex;flex-direction:column;gap:8px;max-height:60%;overflow:auto}
+.ph .sheet .sh{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.ph .sheet .sh small{color:var(--yellow);font-size:11px}
+.ph .sheet pre.df{max-height:130px;overflow:auto;border:1px solid var(--line);background:var(--bg);padding:4px 0}
+.ph .sheet .btns{display:flex;flex-direction:column;gap:6px}
+.ph .sheet .btns button{min-height:48px;border-radius:8px;font-size:13px;text-align:center;background:var(--sel)}
+.ph .sheet .btns button.pri{background:var(--green);color:var(--panel);border-color:var(--green);font-weight:700}
+.ph .sheet .btns button.neg{color:var(--red)}
+.ph .dots{display:flex;gap:10px}.ph .dots button{width:36px;height:36px;border-radius:50%;border:2px solid transparent;padding:0;min-height:0}
+.ph .dots button[aria-pressed=true]{border-color:var(--fg)}
+.ph .seg{display:flex;flex-wrap:wrap;gap:6px}.ph .seg button{min-height:40px;padding:0 12px;border-radius:999px;background:var(--sel);font-size:12px}
+.ph .seg button[aria-pressed=true]{background:var(--acc);color:var(--panel);font-weight:700}
+.ph .set{max-height:70%}.ph .set label{font-size:11px;color:var(--dim)}
+.ph .set input{height:40px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg);font:13px var(--mono);padding:0 10px}
+.ph .set .sh button{background:none;border:0;color:var(--acc);font-weight:700;min-height:32px}
+.ph .acc{color:var(--acc)}.ph .cfg{cursor:pointer}
+.ph .cmds{border-top:1px solid var(--line);background:var(--panel);max-height:42%;overflow:auto}
+.ph .cmds button{display:flex;gap:8px;width:100%;min-height:44px;align-items:baseline;padding:8px 12px;border:0;border-radius:0;background:none;text-align:left}
+.ph .cmds button:active{background:var(--sel)}
+.ph .cmds .n{font-weight:700;color:var(--acc);flex:none}.ph .cmds .ds{color:var(--dim);font-size:12px;min-width:0;flex:1}.ph .cmds .sr{color:var(--dim);font-size:11px;flex:none}
+.ph .pill{border:1px solid var(--line);background:var(--sel);color:var(--yellow);border-radius:999px;min-height:34px;padding:0 12px;font:12px var(--mono);font-weight:700}
+.ph .todo{background:var(--panel);border-bottom:1px solid var(--line);padding:6px 12px;font-size:12px;cursor:pointer}
+.ph .todo .it{padding-left:18px;color:var(--fg)}.ph .todo .it.dn{color:var(--dim)}
+.ph .rowi{display:flex;gap:8px;align-items:baseline;width:100%;min-height:44px;padding:8px 4px;border:0;border-radius:0;background:none;text-align:left;border-bottom:1px solid var(--line)}
+.ph .rowi .n{font-weight:700;flex:none;max-width:55%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ph .rowi .ds{color:var(--dim);font-size:12px;min-width:0;flex:1}
+.ph .rowi .st{color:var(--red);font-size:16px;flex:none;padding:0 6px}
+.ph .openb{margin:2px 12px 0 30px;min-height:40px;padding:0 14px;border:1px solid var(--cyan);border-radius:8px;background:none;color:var(--cyan);font:12px var(--mono);font-weight:700}
+.ph .itm{padding-block:2px}.ph .itm.sel{background:var(--sel);box-shadow:inset 3px 0 0 var(--acc)}
+.ph .acts{display:flex;gap:6px;padding:6px 10px;border-top:1px solid var(--line);background:var(--panel)}
+.ph .acts button{flex:1;min-height:44px;font-size:12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);text-align:center;padding:0 6px}
+.ph .atts{display:flex;gap:6px;flex-wrap:wrap}.ph .atts span{display:flex;align-items:center;gap:6px;background:var(--sel);border-radius:8px;padding:4px 6px 4px 10px;font-size:11px;color:var(--cyan)}
+.ph .atts button{min-width:32px;height:32px;border:0;background:none;color:var(--dim);font-size:14px;padding:0}
+.ph .toast{padding:4px 12px;color:var(--green);font-size:12px}
+.ph .edit{border-top:1px solid var(--line);background:var(--panel);padding:8px 10px 6px;display:flex;flex-direction:column;gap:6px}
+.ph .chips{display:flex;gap:6px;font-size:11px;white-space:nowrap;overflow:hidden}
+.ph .chips > span{background:var(--sel);border-radius:999px;padding:4px 9px;display:inline-flex;align-items:center;gap:5px}
+.ph .chrow{display:flex;align-items:center;gap:6px;padding:0 4px}.ph .chrow .chips{flex:1;min-width:0}
+.ph .chrow button{min-width:40px;height:36px;border:0;background:none;color:var(--blue);font-size:20px;padding:0}
+.ph .ed{display:flex;align-items:center;gap:8px;padding:0 4px}
+.ph .ed input{flex:1;min-width:0;height:40px;border:0;background:none;color:var(--fg);font:13px var(--mono);outline:none}
+.ph .ed button{min-width:40px;height:36px;border:0;background:none;color:var(--blue);font-size:15px}
+.ph .ed button.stop{color:var(--red)}
+.ph .blk{padding:6px 12px 6px 10px;border-left:3px solid var(--green)}
+.ph .blk .bc{font-weight:700}.ph .blk .bo{font-size:12px;white-space:pre-wrap}
+.ph .boot{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px}
+.ph .boot small{color:var(--dim);font-size:11px}
+.minimal{margin:0;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:10px 12px;font:12px/1.4 var(--mono);color:var(--fg);overflow:auto;max-width:100%}
+.decide{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px;color:var(--fg)}
+.decide h2{font:600 12px var(--mono);margin:0 0 8px;color:var(--mut)}
+.decide ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+.decide code{font:12px var(--mono)}
+.b{font-weight:700}.d{color:var(--dim)}.c-blue{color:var(--blue)}.c-green{color:var(--green)}.c-yellow{color:var(--yellow)}
+.c-red{color:var(--red)}.c-mag{color:var(--magenta)}.c-cyan{color:var(--cyan)}.c-line{color:var(--line)}
+.bg-sel{background:var(--sel)}.bg-panel{background:var(--panel)}
+.bg-add{background:color-mix(in srgb,var(--green) 16%,var(--bg))}.bg-del{background:color-mix(in srgb,var(--red) 16%,var(--bg))}
+.chip-green{background:var(--green);color:var(--panel)}.chip-blue{background:var(--blue);color:var(--panel)}.chip-yellow{background:var(--yellow);color:var(--panel)}
+.cur{background:var(--fg);color:var(--bg)}
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&family=JetBrains+Mono:wght@400;700&display=swap">
+
+<div class="wrap">
+  <div>
+    <h1>claude as a conversation, in the terminal and on the phone</h1>
+    <p>A pane is still a shell. When you type <code>claude</code> in it, jwn starts Claude Code as an engine (it talks JSON) and draws the conversation itself: the terminal in its own screen, the phone flat. Both read one conversation kept by the daemon, so you can start a request at the keyboard and approve it from the phone. Click the terminal, type <code>claude</code> and press Enter; then write anything and press Enter (the story of a turn plays: it reads, asks to edit, asks to run a test). The phone on the right is the same conversation.</p>
+  </div>
+  <div class="bar" aria-label="Simulate">
+    <button id="evStart" type="button">Type claude in the shell</button>
+    <button id="evSend" type="button">Send a request</button>
+    <button id="evInt" type="button">Interrupt (esc)</button>
+    <button id="evPlan" type="button">Plan mode</button>
+    <button id="evImg" type="button">Paste an image (^V)</button>
+    <button id="evBg" type="button">Background work</button>
+    <button id="evQ" type="button">Claude asks a question</button>
+    <button id="evArt" type="button">Claude publishes a page</button>
+    <button id="evRestart" type="button">The daemon restarts</button>
+    <button id="evPlain" type="button">Show the plain-terminal version</button>
+    <label class="hint" for="theme">Theme</label>
+    <select id="theme" aria-label="Theme"></select>
+    <select id="speed" aria-label="Speed"><option value="1">normal speed</option><option value="0.4">faster</option></select>
+    <button id="evReset" type="button">Reset</button>
+  </div>
+  <div class="stage">
+  <div class="col">
+    <div class="term"><pre id="scr" tabindex="0" aria-label="Terminal client. In a shell pane type claude; in the conversation write and press Enter, 1 2 3 answer a question, esc interrupts."></pre></div>
+    <div class="hint" id="keys"></div>
+    <pre class="minimal" id="plain" hidden></pre>
+  </div>
+  <div class="side">
+    <h2>Phone</h2>
+    <div class="phone"><div class="ph" id="ph">
+      <div class="hd"><div class="t"><b id="phTitle"></b><span id="phSub"></span></div><button class="pill" id="phBg" type="button" hidden></button></div>
+      <div class="tabs" id="phTabs"></div>
+      <div class="todo" id="phTodo" hidden></div>
+      <div class="msgs" id="phMsgs"></div>
+      <div class="status" id="phStatus" hidden></div>
+      <div class="acts" id="phActs" hidden></div>
+      <div class="sheet" id="phAsk" hidden></div>
+      <div class="sheet set" id="phSet" hidden></div>
+      <div class="sheet set" id="phInfo" hidden></div>
+      <div class="cmds" id="phCmds" hidden></div>
+      <div class="edit">
+        <div class="atts" id="phAtt" hidden></div>
+        <div class="chrow"><div class="chips" id="phChips"></div><button id="phAt" type="button" aria-label="Adjuntar y acciones">+</button></div>
+        <form class="ed" id="phForm" autocomplete="off"><span class="c-green b" id="phPrompt">❯</span><input id="phIn" placeholder="escribe un comando" aria-label="Message"><button id="phGo" type="submit" aria-label="Enviar">➤</button></form>
+      </div>
+    </div></div>
+  </div>
+  </div>
+
+  <div class="decide">
+    <h2>To approve</h2>
+    <ol>
+      <li><b>The swap.</b> A pane is a plain shell. When what you type starts with <code>claude</code> (also <code>claude -c</code>, <code>claude --resume</code>, <code>claude --model …</code>), the shell integration runs jwn's <code>claude</code> instead of the original. The pane's foreground program is then <code>claude</code> as before, so the sidebar title, the avisos and <code>jwn ls</code> do not change. The terminal client sees it and draws the conversation in its own screen (as it draws the program's screen for <code>full</code> mode today); the phone draws it flat. <code>command claude</code> (or the full path) runs the original Claude Code with its own screen, as today: the escape hatch for what jwn does not draw yet. Try «Type claude in the shell», then <code>command claude</code>.</li>
+      <li><b>The conversation.</b> Close to Claude's own: your messages on a band with <code>❯</code>, Claude's text with <code>●</code> (code in cyan), and each tool as one line, <code>● Read(src/auth.rs)</code>, with what it did under it (<code>⎿  Leídas 142 líneas</code>); <code>^O</code> or a click opens its output. An edit shows its diff with the lines tinted green and red from the theme, the way the shell's diffs are. A line says what Claude is doing while it works (<code>✻ Escribiendo… 8s · ↓ 1,2k</code>), and at the end of each turn the time, the tools it used and the cost. There is no Claude theme to set: every colour is the client's.</li>
+      <li><b>Questions are answered from either screen.</b> When Claude wants to edit a file or run a command, a box opens in the terminal and a sheet in the phone with the same three answers: <i>Sí</i>, <i>Sí, y no volver a preguntar … en esta sesión</i> (offered only when Claude suggests it) and <i>No</i> (Claude is told it was refused). In the terminal: <code>1</code> <code>2</code> <code>3</code>, <code>y</code> <code>a</code> <code>n</code>, or <code>↑</code> <code>↓</code> and <code>↵</code>. On the phone the three are big buttons at the bottom, reachable with a thumb. The first answer wins and the other screen says where it came from. Approve once in the terminal and the phone's sheet is gone.</li>
+      <li><b>The line at the foot.</b> Typing never waits: while Claude works, <code>↵</code> queues the message («1 en cola», it goes when the turn ends) and <code>esc</code> interrupts (Claude's own cut: «Interrumpido por ti»). The phone's send button becomes the red stop while it works, as for any program. <code>/exit</code> leaves the conversation and the pane is the shell again with a block for it (<code>claude</code>, its time and the id to resume); <code>/clear</code> empties it. The commands themselves are the next point.</li>
+      <li><b>Slash commands.</b> Typing <code>/</code> opens a list over the line (on the phone, above the keyboard; the <code>/</code> button beside the line opens it too) with every command of the conversation, filtered as you type, each tagged with where it comes from: <i>jwn</i>, <i>claude</i>, <i>proyecto</i> (<code>.claude/commands</code>), <i>skill</i> and <i>plugin</i>. The engine names its commands when it starts (115 on this machine, most of them skills and plugin commands), so the project's and your own are in the list. Four kinds: <b>jwn's own</b> (<code>/exit /clear /rename /color /model /effort /mode</code>); <b>screens jwn draws</b> because Claude cannot without its terminal (<code>/help /status /resume /tasks /artifacts /skills /permissions /memory</code>: a list in a box, or a sheet on the phone, with <code>↑</code> <code>↓</code> <code>↵</code>; <code>/resume</code> lists this project's past conversations); <b>Claude's that answer with text</b> (<code>/context /cost /usage /recap /goal /mcp /config</code>, and <code>/compact</code>, which shows a line across the conversation with the tokens before and after and drops the context); and <b>the ones that start a turn</b> (<code>/init /review</code>, the project's like <code>/deploy</code>, skills like <code>/jwn</code> or <code>/rust-review</code>, plugin skills like <code>/vercel:deploy</code>: they run as a request and Claude answers, and the line shows the command, not its expanded text). A few need Claude's own screen (<code>/doctor /insights /login /vim</code>…), dim with ↗: choosing one says so and points at <code>command claude</code>. <code>↑</code> <code>↓</code> move, <code>tab</code> completes, <code>↵</code> runs, <code>esc</code> closes. Try <code>/</code>, <code>/co</code>, <code>/tasks</code>, <code>/skills</code>, <code>/status</code>.</li>
+      <li><b>Shell with <code>!</code> and files with <code>@</code>.</b> Claude's own <code>!command</code> is not shell mode when it is run as an engine (it sends the text to the model), so jwn does it: a line that starts with <code>!</code> runs as a shell block of the pane, drawn like the shell's blocks, and its output goes to Claude as context with your next message (try <code>!git status</code>; on the phone the <code>!</code> button turns the line into a shell line). <code>@</code> opens the project's files as you type (<code>@se</code>), and <code>↵</code> puts the path in the line; on the phone the <code>+</code> button opens the same list. Images are attached the same way: pasted in the terminal (button «Paste an image»), from the camera or the gallery on the phone; each shows as <code>[Imagen#1]</code> in the line. <b>In the terminal, <code>^V</code> pastes an image</b> (as in Claude): the client reads the machine's clipboard and attaches it, so it works where the client runs beside the clipboard and not over ssh, where the clipboard would be the server's; <code>⌘V</code> is the terminal's own and pastes text. <b>Images are made smaller before they leave</b>: no longer than 1568 px on the long side and as JPEG, which is what the model uses anyway, so a 3,1 MB photo goes as about 240 KB (the line says so; on the phone each attachment is a pill with ✕ above the line). How images and <code>@</code> reach the engine is for the spec to check with a real Claude.</li>
+      <li><b>Copy and paste.</b> In the terminal, a click selects a message, a tool's output or a diff (a bar lights it), and <code>c</code> copies it, <code>t</code> copies the whole turn and <code>esc</code> lets go; the copy is OSC 52, as the shell's blocks already do, and the mouse can still drag over text as it does in the shell. On the phone a tap selects the same way and a strip over the line offers <i>Copiar</i>, <i>Copiar el turno</i> and <i>Soltar</i>; the text of the conversation can also be selected by long-press as any text. Pasting text of many lines goes in as one paste, not as many Enters. A line says how much was copied.</li>
+      <li><b>Work in the background.</b> What Claude starts and leaves running shows in one place. A <b>subagent</b> is a card, <code>● Agent(Explore) buscar los usos de verify</code>, with its progress while it works (<code>⠹ Grep · 2 herramientas · 14k tokens · 3,1 s</code>) and its totals at the end; <code>^O</code> (or a click) opens its steps, which are the tools it used (its text is not streamed by the engine). A <b>shell in the background</b>, a <b>monitor</b> (each line it prints is a note, and <i>each one starts a turn by itself</i>, so Claude answers without you writing) and a <b>/loop</b> or scheduled task are rows of the same list. In the footer, <code>⚙ 2</code> counts what runs; click it, press <code>^B</code> or type <code>/tasks</code> to open the list and <code>x</code> stops the row you are on. On the phone the pill <code>⚙ 2</code> in the header opens it as a sheet with a <code>■</code> per row. Claude's task list (<code>TaskCreate</code>) is a strip at the top, <code>☐ 2/4 tareas</code>, that <code>^T</code> or a tap opens. Because the engine lives in the daemon, all of it keeps running when the terminal client is closed. Try «Background work».</li>
+      <li><b>Questions and pages.</b> When Claude asks you to choose (its question tool) the same box and sheet as a permission opens, titled «pregunta», with the options as numbered rows or big buttons, and the sidebar and the phone show <code>?</code>; your choice goes back as its answer. When Claude publishes a page (<code>Artifact</code>) it asks first, as it is public, and then shows <code>● Artifact(Informe de pruebas)</code> with <code>↗ abrir en el navegador</code> (a button «Abrir» on the phone); <code>/artifacts</code> lists the ones of the conversation. Try «Claude asks a question» and «Claude publishes a page».</li>
+      <li><b>On the phone, with one hand.</b> Everything that needs an answer (permission, plan, question) is a sheet from the bottom with 48 px buttons, the main one first. The line at the foot is kept light: only <code>+</code>, the field and send. Above it, a row with two small pills at the left, the model that is running with its mode (<code>● sonnet-5.5 · manual</code>; it opens the conversation's settings: name, colour, model, effort, mode) and the branch, and at the right the <code>+</code>, exactly over the send button so the thumb finds both in one column. <code>+</code> opens a short list (file, photo, gallery, commands, shell); typing <code>/</code> or <code>!</code> as the first letter does the same without it. The header carries the <code>⚙</code> pill while something runs. A turn that finishes or a question that waits reaches the phone as an aviso even with the app closed, because the engine runs in the daemon.</li>
+      <li><b>Each conversation has a name and a colour.</b> The name starts as the first words of your first request (the id until then) and you change it with <code>/rename</code> or by clicking the title (on the phone, the tab opens the settings sheet). It is what Home and <code>claude --resume</code> show, and jwn passes it to Claude (<code>--name</code>) so a plain terminal shows it too. The colour is only an accent of the chat: one of the theme's six (blue, green, yellow, red, magenta, cyan), never a free colour, so it reads in every theme. It tints the pane's border and title, the <code>❯</code> marks and, on the phone, the tab and the selected options. <code>/color</code> opens the six, <code>/color red</code> sets it. Claude Code has <code>--name</code>, <code>/rename</code> and <code>/color</code> of its own; here they are the conversation's, kept by the daemon, so they are the same on both screens.</li>
+      <li><b>Model, effort and mode.</b> The footer of the conversation has two ends: at the left the <b>mode</b> and, while something runs in the background, the <code>⚙ 2</code> counter; at the right the <b>model</b>. Nothing else: the context, the cost and the limits are not drawn there (the cost of each turn is on its closing line, and <code>/context</code>, <code>/usage</code> and <code>/status</code> show the rest, effort included). A click on the mode or the model opens its list; the keys are <code>/model</code>, <code>/effort</code> and <code>⇧tab</code> for the mode (the four of Claude: manual → accept edits → plan → auto). On the phone, the pill above the line shows the model and the mode and opens a sheet with all of it, plus the name and the colour. Model and effort apply from the next message; the mode applies at once. In <i>plan</i> mode Claude reads but does not edit: it ends with a plan and a question with three answers (approve and edit without asking, approve and ask for each edit, keep planning), the same question on both screens; approving changes the mode (try «Plan mode»). <i>accept edits</i> stops asking for edits (commands still ask). <i>auto</i> lets Claude's own classifier decide what is safe: edits and ordinary commands run without asking, and anything it holds back reaches you as the same question (try it: «Auto» in the phone's sheet or <code>⇧tab</code> three times). The others Claude has (<code>bypassPermissions</code>, <code>dontAsk</code>) are not offered. How a change reaches Claude (a control message, or restarting the engine with <code>--resume</code>) is for the spec to settle; the person sees no difference.</li>
+      <li><b>Avisos come from the conversation itself.</b> A question shows <code>!</code> (red, «pide permiso») on the workspace and on the pane, and a finished turn shows <code>✓</code> until you look. Today they come from hooks only when the daemon started claude; here they come from the events, for every claude you type. «Seen» is shared as everywhere else.</li>
+      <li><b>When the daemon restarts</b> the engine process goes with it, but the conversation is Claude's own transcript on disk: a line says <i>el daemon se reinició</i>, and the next message resumes it (<code>--resume</code>, «retomando conversación…» for a moment) with everything above it kept. A turn that was running is cut, as a command is in the shell.</li>
+      <li><b>Outside the terminal client</b> (an ssh session, a plain terminal): the same <code>claude</code> draws a minimal version of the conversation as lines in the terminal (the button «Show the plain-terminal version»): no boxes, the question as a numbered prompt. The conversation is the daemon's, so it is the same one.</li>
+      <li><b>Not here yet</b> (use <code>command claude</code>), besides what the engine cannot do without a screen: workflows, sending a command that is already running to the background (<code>^B</code> here opens the list), <code>#</code> notes, and rewinding the files (<code>/rewind</code>). <code>codex</code> is a later part with the same mould.</li>
+    </ol>
+  </div>
+</div>
+
+<script>
+(() => {
+'use strict';
+const $ = id => document.getElementById(id), esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+let COLS = 120, ROWS = 32;
+const THEMES = {
+  'One Dark':{bg:'#282c34',panel:'#21252b',fg:'#abb2bf',dim:'#5c6370',line:'#3e4451',sel:'#2c313a',blue:'#61afef',green:'#98c379',yellow:'#e5c07b',red:'#e06c75',magenta:'#c678dd',cyan:'#56b6c2'},
+  'One Light':{bg:'#fafafa',panel:'#f0f0f0',fg:'#383a42',dim:'#a0a1a7',line:'#dbdbdc',sel:'#e5e5e6',blue:'#4078f2',green:'#50a14f',yellow:'#c18401',red:'#e45649',magenta:'#a626a4',cyan:'#0184bc'},
+  'Catppuccin Mocha':{bg:'#1e1e2e',panel:'#181825',fg:'#cdd6f4',dim:'#6c7086',line:'#313244',sel:'#45475a',blue:'#89b4fa',green:'#a6e3a1',yellow:'#f9e2af',red:'#f38ba8',magenta:'#cba6f7',cyan:'#94e2d5'},
+};
+$('theme').innerHTML = Object.keys(THEMES).map(n => `<option>${n}</option>`).join('');
+$('theme').onchange = () => { const t = THEMES[$('theme').value]; Object.entries(t).forEach(([k, v]) => document.documentElement.style.setProperty('--' + k, v)); };
+const speed = () => (window.__speed ?? +$('speed').value) || 1;
+
+/* ---- the model: one workspace, one shell pane that may hold a conversation ---- */
+const SPIN = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'], spin = () => SPIN[Math.floor(Date.now() / 110) % SPIN.length];
+const ACC = {blue:['azul','c-blue'], green:['verde','c-green'], yellow:['amarillo','c-yellow'], red:['rojo','c-red'], magenta:['magenta','c-mag'], cyan:['cian','c-cyan']};
+const MODELS = ['fable-5.1', 'opus-5.5', 'sonnet-5.5', 'haiku-5.5'], EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'], MODES = ['manual', 'acceptEdits', 'plan', 'auto'];
+const modeName = m => m === 'acceptEdits' ? 'accept edits' : m;
+const MODE_CLS = {manual:'d', acceptEdits:'c-mag b', plan:'c-cyan b', auto:'c-yellow b'};
+const pickOpts = kind => kind === 'model' ? MODELS : kind === 'effort' ? EFFORTS : kind === 'mode' ? MODES : Object.keys(ACC);
+const accCls = c => ACC[c.accent][1];
+const ORDER = {jwn:0, claude:1, proyecto:2, skill:3, plugin:4};
+const C = (n, d, s, kind, x = {}) => ({n, d, s, kind, ...x});
+const CMDS = [
+  C('/clear', 'vaciar la conversación', 'jwn', 'local'), C('/color', 'color de acento del chat', 'jwn', 'local'), C('/effort', 'esfuerzo de razonamiento', 'jwn', 'local'),
+  C('/exit', 'salir de la conversación', 'jwn', 'local'), C('/mode', 'manual, accept edits, plan o auto', 'jwn', 'local'), C('/model', 'cambiar de modelo', 'jwn', 'local'),
+  C('/rename', 'cambiar el nombre de la conversación', 'jwn', 'local'),
+  C('/help', 'comandos y teclas', 'jwn', 'panel'), C('/status', 'modelo, modo, sesión y límites', 'jwn', 'panel'), C('/resume', 'retomar una conversación de este proyecto', 'jwn', 'panel'),
+  C('/tasks', 'trabajo en segundo plano', 'jwn', 'panel'), C('/artifacts', 'páginas publicadas en esta conversación', 'jwn', 'panel'), C('/skills', 'skills disponibles', 'jwn', 'panel'),
+  C('/permissions', 'reglas de permisos (lectura)', 'jwn', 'panel'), C('/memory', 'abrir CLAUDE.md en un panel', 'jwn', 'panel'),
+  C('/compact', 'resumir la conversación y liberar contexto', 'claude', 'text'), C('/context', 'ver qué ocupa el contexto', 'claude', 'text'), C('/cost', 'costo de esta conversación', 'claude', 'text'),
+  C('/usage', 'uso de la suscripción', 'claude', 'text'), C('/recap', 'resumen de lo hecho', 'claude', 'text'), C('/goal', 'fijar un objetivo', 'claude', 'text'),
+  C('/mcp', 'servidores MCP', 'claude', 'text'), C('/config', 'ajustes de Claude', 'claude', 'text'),
+  C('/init', 'crear AGENTS.md para este proyecto', 'claude', 'prompt', {reads:'Cargo.toml', done:'Creé AGENTS.md con 28 líneas.'}),
+  C('/review', 'revisar los cambios de esta rama', 'claude', 'prompt', {reads:'git diff main', done:'Revisé 3 archivos: sin problemas graves y una sugerencia en `src/auth.rs`.'}),
+  C('/security-review', 'revisar la seguridad de los cambios', 'claude', 'prompt', {reads:'git diff main', done:'Sin hallazgos de seguridad en los 3 archivos.'}),
+  C('/doctor', 'diagnóstico de la instalación', 'claude', 'screen'), C('/insights', 'análisis de tu uso', 'claude', 'screen'), C('/login', 'iniciar sesión', 'claude', 'screen'), C('/vim', 'modo vim del editor', 'claude', 'screen'),
+  C('/deploy', 'publicar la rama en staging', 'proyecto', 'prompt', {reads:'.claude/commands/deploy.md', done:'Publicado en staging: api-feat-login.staging.example'}),
+  C('/commit', 'commit de lo pendiente', 'skill', 'prompt', {reads:'~/.claude/skills/commit/SKILL.md', done:'Commit hecho: `fix(auth): token que vence ahora ya no pasa`.'}),
+  C('/create-spec', 'escribir una spec', 'skill', 'prompt', {reads:'~/.claude/skills/create-spec/SKILL.md', done:'Spec lista para revisar.'}),
+  C('/jwn', 'usar jwn: paneles, worktrees y agentes', 'skill', 'prompt', {reads:'~/.claude/skills/jwn/SKILL.md', done:'Listo. Dime qué quieres hacer con jwn.'}),
+  C('/rust-review', 'limpieza de un crate de Rust', 'skill', 'prompt', {reads:'~/.claude/skills/rust-review/SKILL.md', done:'Revisé 4 archivos: 3 arreglos mecánicos.'}),
+  C('/spec-reviewer', 'revisar una spec', 'skill', 'prompt', {reads:'~/.claude/skills/spec-reviewer/SKILL.md', done:'Revisión lista: 2 hallazgos.'}),
+  C('/supabase:supabase', 'trabajar con Supabase', 'plugin', 'prompt', {reads:'supabase/SKILL.md', done:'Conectado al proyecto de Supabase.'}),
+  C('/vercel:deploy', 'publicar en Vercel', 'plugin', 'prompt', {reads:'vercel/deploy.md', done:'Despliegue en Vercel iniciado.'}),
+  C('/vercel:env', 'variables de entorno de Vercel', 'plugin', 'prompt', {reads:'vercel/env.md', done:'Variables sincronizadas.'}),
+].sort((a, b) => ORDER[a.s] - ORDER[b.s] || a.n.localeCompare(b.n));
+const TEXTS = {
+  '/usage':['Sesión actual: 2 % usado · Semana: 31 % usado'], '/recap':['Todavía no hay nada que resumir: envía un mensaje primero.'], '/goal':['No hay un objetivo fijado. Uso: /goal <condición>'],
+  '/mcp':['4 servidores MCP: 1 conectado, 3 sin conectar, 0 desactivados'], '/config':['Uso: /config clave=valor', 'claves: model, theme, verbose, …'],
+};
+const FILES = [['src/auth.rs', '142 líneas'], ['src/session.rs', '58 líneas'], ['src/main.rs', '210 líneas'], ['Cargo.toml', '24 líneas'], ['AGENTS.md', '96 líneas'], ['docs/spec.md', '1,2k líneas'], ['tests/auth.rs', '88 líneas']];
+function menuFor(inp){
+  if (/^\/\S*$/.test(inp)) return cmdFilter(inp);
+  const m = /(^|\s)@(\S*)$/.exec(inp); if (!m) return null;
+  return FILES.filter(([f]) => f.includes(m[2])).map(([f, d]) => ({n:'@' + f, d, s:'archivo', kind:'file', at:inp.length - m[2].length - 1}));
+}
+function applyMenu(x, via){
+  const c = S.conv;
+  if (x.kind === 'file'){ if (via === 'phone'){ const i = $('phIn'); i.value = i.value.slice(0, x.at) + x.n + ' '; i.focus(); } else c.input = c.input.slice(0, x.at) + x.n + ' '; return; }
+  if (via === 'phone') $('phIn').value = ''; else c.input = '';
+  S.ui.cm = 0; send(x.n, via);
+}
+const cmdFilter = q => { const t = q.slice(1); return [...CMDS.filter(x => x.n.slice(1).startsWith(t)), ...CMDS.filter(x => !x.n.slice(1).startsWith(t) && x.n.includes(t))]; };
+const WS = { project:'api', name:'feat/login', branch:'feat/login', path:'~/ws/api-wt/feat-login', cwd:'~/ws/api-wt/feat-login' };
+let S, tid = 0;
+function reset(){
+  S = { view:'shell', input:'', conv:null, saved:null, seen:true, done:false, msg:'', startAt:0,
+    blocks:[{cmd:'git status', dur:'0.1s', code:0, out:[{t:'On branch feat/login'},{t:'nothing to commit, working tree clean'}]}],
+    ui:{q:0, scroll:0, selItem:null, psel:null, hits:[], pick:null, set:false, cl:null, cm:0, info:null, pinfo:null, bang:false} };
+}
+reset();
+const newConv = () => ({ name:'', accent:'blue', model:'sonnet-5.5', effort:'high', mode:'manual', ctx:12, imgs:0, atts:[], tasks:[], todos:[], todoOpen:false, artifacts:[], pend:[], items:[], status:'idle', ask:null, queue:[], input:'', tokens:0, t0:0, tools:0, allowed:{}, sid:'a1b2c3d', dead:false, run:null, label:'' });
+const att = () => !S.conv ? null : S.conv.ask ? {kind:S.conv.ask.tool.ask.kindLabel === 'pregunta' ? 'question' : 'permission'} : S.done && !S.seen ? {kind:'agent_done'} : null;
+
+/* ---- text helpers ---- */
+const clipTo = (t, n) => { const a = [...t]; return a.length <= n ? t : a.slice(0, Math.max(0, n - 1)).join('') + '…'; };
+function words(text){ const out = []; text.split('`').forEach((seg, i) => seg.split(/(\s+)/).forEach(tok => { if (tok !== '') out.push({w:tok, c:i % 2 || /^@\S|^\[Imagen#\d+\]$/.test(tok) ? 'c-cyan' : ''}); })); return out; }
+function wrapRich(text, n){
+  const lines = [[]]; let len = 0;
+  const nl = () => { lines.push([]); len = 0; };
+  words(text).forEach(({w, c}) => {
+    if (/^\s+$/.test(w)){ if (len && len + w.length <= n){ lines.at(-1).push([w, c]); len += w.length; } return; }
+    let rest = [...w];
+    if (len && len + rest.length > n) nl();
+    while (rest.length > n - len){ const take = n - len; lines.at(-1).push([rest.slice(0, take).join(''), c]); rest = rest.slice(take); nl(); }
+    if (rest.length){ lines.at(-1).push([rest.join(''), c]); len += rest.length; }
+  });
+  return lines;
+}
+const sleep = ms => new Promise(r => setTimeout(r, ms * speed()));
+const ABORT = {};
+const wait = async (run, ms) => { const end = Date.now() + ms * speed(); while (Date.now() < end){ if (run.abort) throw ABORT; await new Promise(r => setTimeout(r, Math.min(30, Math.max(1, end - Date.now())))); } if (run.abort) throw ABORT; };
+
+/* ---- the conversation: what the daemon keeps and both screens read ---- */
+const DIFF = [{n:41, s:'-', t:'    if claims.exp < now {', c:'c-red bg-del'}, {n:41, s:'+', t:'    if claims.exp <= now {', c:'c-green bg-add'}];
+const PLAN = ['1. Cambiar `<` por `<=` en `auth::verify`', '2. Correr `cargo test auth::expired`'];
+const READ_OUT = ['pub fn verify(token: &str, now: u64) -> Result<Claims, AuthError> {', '    let claims = decode(token)?;', '    if claims.exp < now { return Err(AuthError::Expired) }', '    …'];
+async function say(run, c, text){
+  const it = {k:'text', t:'', live:true}; c.items.push(it); c.status = 'streaming';
+  for (let i = 0; i < text.length; i += 3){ it.t = text.slice(0, i + 3); c.tokens += 1; draw(); await wait(run, 22); }
+  it.t = text; it.live = false; draw();
+}
+async function tool(run, c, spec){
+  const it = {k:'tool', id:++tid, name:spec.name, arg:spec.arg, state:'run', sum:'', out:[], open:false, diff:spec.diff || null, ask:spec.ask || null, by:''};
+  c.items.push(it); c.tools++; c.status = 'tool'; c.label = spec.name;
+  const byMode = spec.ask && ((spec.ask.key === 'edit' && (c.mode === 'acceptEdits' || c.mode === 'auto')) || (spec.ask.key.startsWith('bash') && c.mode === 'auto'));
+  if (byMode) it.by = 'modo ' + modeName(c.mode);
+  if (spec.ask && !byMode && !c.allowed[spec.ask.key]){
+    it.state = 'ask'; c.status = 'asking';
+    const a = await new Promise((res, rej) => { c.ask = {tool:it, res, rej}; run.rej = rej; S.seen = false; S.ui.q = 0; draw(); });
+    c.ask = null; run.rej = null; c.status = 'tool'; it.by = a.by;
+    if (a.choice === 'no'){ it.state = 'denied'; it.sum = spec.ask.denySum || 'Rechazado'; draw(); return false; }
+    if (a.choice === 'always') c.allowed[spec.ask.key] = true;
+    it.choice = a.choice;
+  }
+  it.state = 'run'; draw();
+  await wait(run, spec.ms || 900);
+  it.state = 'ok'; it.sum = typeof spec.sum === 'function' ? spec.sum(it) : spec.sum; if (spec.url) it.url = spec.url; it.out = (spec.out || []).map(t => typeof t === 'string' ? {t} : t); if (spec.diff || spec.open) it.open = true; draw();
+  return it.choice || true;
+}
+const fmtK = n => Math.round(n / 1000) + 'k', fmtS = ms => (ms / 1000).toFixed(1).replace('.', ',') + ' s';
+function addTask(c, t){ t.state = 'run'; t.t0 = Date.now(); t.timers = []; c.tasks.push(t); draw(); return t; }
+function later(c, t, ms, fn){ t.timers.push(setTimeout(() => { if (t.state === 'run') fn(); }, ms * speed())); }
+function stopTask(c, id){ const t = c.tasks.find(x => x.id === id); if (!t || t.state !== 'run') return; t.timers.forEach(clearTimeout); t.state = 'stopped'; c.items.push({k:'note', t:'Detenido: ' + t.label}); draw(); }
+function bgEvent(c, note, reply){ c.items.push({k:'note', t:note}); if (c.status === 'idle') autoTurn(c, reply); else c.pend.push(reply); draw(); }
+async function autoTurn(c, text){
+  const run = {abort:false, rej:null}; c.run = run; c.t0 = Date.now(); c.tokens = 0; c.status = 'thinking'; draw();
+  try { await wait(run, 600); await say(run, c, text); } catch (e) { if (e !== ABORT) throw e; }
+  c.items.forEach(i => { if (i.k === 'text') i.live = false; });
+  c.run = null; c.status = 'idle'; S.done = true; S.seen = false; draw(); drain(c);
+}
+function drain(c){ const ev = c.pend.shift(); if (ev) return autoTurn(c, ev); const q = c.queue.shift(); if (q) turn(c, q); }
+function runBang(c, cmd){
+  const it = {k:'shell', id:++tid, cmd, state:'run', out:[]}; c.items.push(it); S.ui.scroll = 0; draw();
+  setTimeout(() => { const fail = /fail|false/.test(cmd); it.state = fail ? 'bad' : 'ok'; it.out = /^git status/.test(cmd) ? ['On branch feat/login', 'nothing to commit, working tree clean'] : fail ? ['error: command failed'] : ['ok']; draw(); }, 600 * speed());
+}
+async function bgScenario(run, c){
+  c.todos = [{t:'Buscar los usos de `verify`', done:false}, {t:'Compilar en segundo plano', done:false}, {t:'Vigilar el log', done:false}, {t:'Resumir resultados', done:false}];
+  addTask(c, {id:'w1c9', kind:'loop', label:'/loop · revisar el CI cada 5 min', info:'próxima ejecución en 5 min'});
+  await say(run, c, 'Lanzo tres cosas: un subagente que busca los usos de `verify`, la compilación en segundo plano y un monitor del log.');
+  const ag = {k:'agent', id:++tid, name:'Explore', arg:'buscar los usos de verify', state:'run', tools:0, tokens:0, ms:0, last:'', steps:[], open:false};
+  c.items.push(ag); c.tools++; c.status = 'tool'; c.label = 'Agent';
+  const at = addTask(c, {id:'a3865d', kind:'agent', label:'Agent · Explore · buscar usos de verify'});
+  for (const [nm, st] of [['Grep', 'Grep verify'], ['Read', 'Read src/auth.rs'], ['Read', 'Read src/session.rs']]){ await wait(run, 900); ag.tools++; ag.tokens += 7300; ag.ms += 900; ag.last = nm; ag.steps.push(st); draw(); }
+  ag.state = 'ok'; at.state = 'done'; c.todos[0].done = true; draw();
+  await tool(run, c, {name:'Bash', arg:'cargo build --release', sum:'en segundo plano · bs02u3', ms:400});
+  const bt = addTask(c, {id:'bs02u3', kind:'bash', label:'Bash · cargo build --release'});
+  later(c, bt, 4200, () => { bt.state = 'done'; c.todos[1].done = true; bgEvent(c, 'Terminó en segundo plano: cargo build --release', 'La compilación terminó bien (4,2 s, sin avisos).'); });
+  await tool(run, c, {name:'Monitor', arg:'tail -f target/build.log', sum:'Monitor iniciado · expira en 30 s', ms:400});
+  const mt = addTask(c, {id:'bhj5cm', kind:'monitor', label:'Monitor · build.log'});
+  [1500, 3000, 4500].forEach((ms, i) => later(c, mt, ms, () => bgEvent(c, `monitor: línea ${i + 1} · compilando ${(i + 1) * 4}/12`, `Línea ${i + 1} del log: va bien, sin errores.`)));
+  later(c, mt, 5200, () => { mt.state = 'done'; c.todos[2].done = true; c.todos[3].done = true; bgEvent(c, 'Terminó el monitor: build.log', 'El monitor terminó: el log cerró sin errores. Resumen: 3 usos de `verify` y la compilación correcta.'); });
+  await say(run, c, 'Quedan la compilación y el monitor en segundo plano; te aviso con cada novedad.');
+}
+async function qScenario(run, c){
+  await say(run, c, 'Antes de seguir necesito una decisión.');
+  const r = await tool(run, c, {name:'AskUserQuestion', arg:'base de datos', ms:200, sum:it => 'Elegiste: ' + it.choice,
+    ask:{key:'q1', kindLabel:'pregunta', title:'¿Qué base de datos uso?', opts:['PostgreSQL', 'SQLite', 'MySQL'], choices:['PostgreSQL', 'SQLite', 'MySQL'], phone:['PostgreSQL', 'SQLite', 'MySQL']}});
+  await say(run, c, r ? 'Perfecto, uso `' + r + '`.' : 'Entendido, lo dejo sin decidir.');
+}
+async function aScenario(run, c){
+  await say(run, c, 'Publico el informe de pruebas como una página.');
+  const url = 'https://claude.ai/artifact/6HbvGgivzfNgDnkzpDjf4Y';
+  const ok = await tool(run, c, {name:'Artifact', arg:'Informe de pruebas', sum:'Publicado · claude.ai/artifact/6HbvG…', ms:900, url,
+    ask:{key:'artifact', title:'Publicar «Informe de pruebas»', opts:['Sí', 'Sí, y no volver a preguntar por páginas en esta sesión', 'No, y decirle a Claude qué hacer distinto']}});
+  if (ok) c.artifacts.push({title:'Informe de pruebas', url});
+  await say(run, c, ok ? 'Listo: la página quedó publicada. También está en `/artifacts`.' : 'De acuerdo, no la publico.');
+}
+async function turn(c, msg, def){
+  const run = {abort:false, rej:null}; c.run = run; c.t0 = Date.now(); c.tools = 0; c.tokens = 0; S.done = false;
+  c.items.push({k:'user', t:msg}); S.ui.scroll = 0;
+  if (c.dead){ c.status = 'resuming'; draw(); try { await wait(run, 900); } catch (e) { if (e !== ABORT) throw e; } c.dead = false; }
+  c.status = 'thinking'; draw();
+  let note = '';
+  try {
+    await wait(run, 1100);
+    const kind = def ? null : /vigila|compil|fondo/i.test(msg) ? 'bg' : /base de datos|pregunta/i.test(msg) ? 'q' : /informe|artifact|publica/i.test(msg) ? 'art' : null;
+    if (kind === 'bg') await bgScenario(run, c);
+    else if (kind === 'q') await qScenario(run, c);
+    else if (kind === 'art') await aScenario(run, c);
+    else if (def){
+      await say(run, c, 'Sigo las instrucciones de `' + def.n + '`.');
+      await tool(run, c, {name:'Read', arg:def.reads, sum:'Leídas 61 líneas', out:['…'], ms:600});
+      await say(run, c, def.done);
+    } else if (c.turns++ > 0){
+      await say(run, c, 'Reviso si algo más usa la misma comparación.');
+      await tool(run, c, {name:'Read', arg:'src/session.rs', sum:'Leídas 58 líneas', out:['pub fn refresh(token: &str) -> …'], ms:700});
+      await say(run, c, 'No hay más: `auth::verify` era el único. No queda nada por cambiar.');
+    } else {
+      await say(run, c, 'Voy a mirar el test y el código que prueba.');
+      await tool(run, c, {name:'Read', arg:'src/auth.rs', sum:'Leídas 142 líneas', out:READ_OUT, ms:800});
+      const cause = 'El token que vence justo ahora pasa, porque `verify` compara con `<` en vez de `<=`.';
+      let go = true;
+      if (c.mode === 'plan'){
+        await say(run, c, cause + ' Propongo este plan:');
+        const r = await tool(run, c, {name:'ExitPlanMode', arg:'plan', sum:'Plan aprobado', ms:300, out:PLAN, open:true,
+          ask:{key:'plan', title:'Plan listo para aprobar', plan:PLAN, choices:['accept', 'manual', 'no'], denySum:'Sigue planeando',
+            opts:['Sí, y editar sin preguntar', 'Sí, preguntando cada edición', 'No, sigue planeando'], phone:['Aprobar y editar sin preguntar', 'Aprobar, preguntando cada edición', 'Seguir planeando']}});
+        if (!r){ await say(run, c, 'De acuerdo, sigo en el plan. Dime qué cambiar.'); go = false; }
+        else { c.mode = r === 'accept' ? 'acceptEdits' : 'manual'; c.items.push({k:'note', t:'Modo: ' + modeName(c.mode)}); draw(); }
+      } else await say(run, c, cause + ' Lo corrijo:');
+      if (go){
+        const ok = await tool(run, c, {name:'Edit', arg:'src/auth.rs', sum:'Actualizado con 1 adición y 1 eliminación', diff:DIFF, ms:500,
+          ask:{key:'edit', title:'Editar src/auth.rs', opts:['Sí', 'Sí, y no volver a preguntar por ediciones en esta sesión', 'No, y decirle a Claude qué hacer distinto']}});
+        if (!ok){ await say(run, c, 'Entendido, no toco el archivo. ¿Qué prefieres que haga?'); }
+        else {
+          await say(run, c, 'Corro el test para comprobarlo.');
+          const ok2 = await tool(run, c, {name:'Bash', arg:'cargo test auth::expired', sum:'test result: ok. 1 passed', ms:1300,
+            out:[{t:'   Compiling app v0.3.1', c:'d'}, 'running 1 test', {t:'test auth::expired ... ok', c:'c-green'}, {t:'test result: ok. 1 passed; 0 failed', c:'c-green'}],
+            ask:{key:'bash:cargo test', title:'Ejecutar comando', cmd:'cargo test auth::expired', opts:['Sí', 'Sí, y no volver a preguntar por «cargo test» en esta sesión', 'No, y decirle a Claude qué hacer distinto']}});
+          await say(run, c, ok2 ? 'Listo: `auth::expired` pasa. El cambio es una línea en `src/auth.rs`.' : 'De acuerdo, no corro el test. El cambio queda hecho.');
+        }
+      }
+    }
+  } catch (e) { if (e !== ABORT) throw e; note = 'Interrumpido por ti'; }
+  c.items.forEach(i => { if (i.k === 'text') i.live = false; if (i.k === 'tool' && (i.state === 'run' || i.state === 'ask')){ i.state = 'denied'; i.sum = 'Interrumpido'; } });
+  c.ask = null; c.run = null; c.status = 'idle';
+  const secs = Math.max(1, Math.round((Date.now() - c.t0) / 1000 / (1 / speed())));
+  c.items.push({k:'note', t:note, red:!!note}); c.items.push({k:'result', t:`✻ ${note ? 'Cortado' : 'Listo'} · ${secs} s · ${c.tools} ${c.tools === 1 ? 'herramienta' : 'herramientas'} · $0,0${3 + c.tools}`});
+  S.done = true; S.seen = false; S.ui.scroll = 0; draw();
+  drain(c);
+}
+function send(text, via){
+  const c = S.conv; if (!c || !text.trim()) return;
+  text = text.trim();
+  if (text[0] === '!'){ runBang(c, text.slice(1).trim()); return; }
+  if (text[0] === '/'){
+    const [cmd, ...r] = text.split(' '), arg = r.join(' ').trim();
+    if (via === 'phone' && ['/rename', '/color', '/model', '/effort', '/mode'].includes(cmd) && !arg){ S.ui.set = true; draw(); return; }
+    { const pd = CMDS.find(x => x.n === cmd && x.kind === 'panel'); if (pd){ if (via === 'phone') S.ui.pinfo = {name:cmd.slice(1), i:0}; else S.ui.info = {name:cmd.slice(1), i:0}; draw(); return; } }
+    if (cmd === '/exit') return exitConv();
+    if (cmd === '/clear'){ c.items = []; draw(); return; }
+    if (cmd === '/rename'){ if (arg) applyPick('rename', arg); else S.ui.pick = {kind:'rename', text:c.name}; draw(); return; }
+    if (cmd === '/color'){ const k = Object.keys(ACC).find(x => x === arg || ACC[x][0] === arg); if (k) applyPick('color', k); else S.ui.pick = {kind:'color', i:Object.keys(ACC).indexOf(c.accent)}; draw(); return; }
+    if (['/model', '/effort', '/mode'].includes(cmd)){ const kind = cmd.slice(1), o = pickOpts(kind); const a2 = arg === 'accept edits' ? 'acceptEdits' : arg; if (arg && o.includes(a2)) applyPick(kind, a2); else S.ui.pick = {kind, i:Math.max(0, o.indexOf(c[kind]))}; draw(); return; }
+    const def = CMDS.find(x => x.n === cmd);
+    if (def && def.kind === 'text') return runText(c, text, def);
+    if (def && def.kind === 'prompt'){ if (c.status !== 'idle'){ c.queue.push(text); draw(); return; } return turn(c, text, def); }
+    c.items.push({k:'note', t: def ? `«${cmd}» abre una pantalla de Claude · usa command claude` : `«${cmd}» no es un comando de esta conversación`}); draw(); return;
+  }
+  if (!c.name) c.name = clipTo(text.replace(/\s+/g, ' '), 28);
+  c.atts = [];
+  if (c.status !== 'idle'){ c.queue.push(text); draw(); return; }
+  turn(c, text);
+}
+function applyPick(kind, v){
+  const c = S.conv, note = t => { c.items.push({k:'note', t}); };
+  if (kind === 'rename'){ c.name = v.trim() || c.name; note('Nombre: ' + c.name); }
+  else if (kind === 'color'){ c.accent = v; note('Color: ' + ACC[v][0]); }
+  else if (kind === 'mode'){ c.mode = v; note('Modo: ' + modeName(v) + (v === 'plan' ? ' · Claude lee pero no edita hasta que apruebes un plan' : '')); }
+  else { c[kind] = v; note((kind === 'model' ? 'Modelo: ' : 'Esfuerzo: ') + v + ' · desde el siguiente mensaje'); }
+}
+function runText(c, text, def){
+  c.items.push({k:'user', t:text}); S.ui.scroll = 0;
+  if (def.n === '/compact'){ c.status = 'compacting'; c.t0 = Date.now(); draw();
+    setTimeout(() => { c.status = 'idle'; c.items.push({k:'restart', t:'conversación compactada · 48k → 6k tokens'}); c.ctx = 3; draw(); }, 1300 * speed()); return; }
+  const out = TEXTS[def.n] || (def.n === '/cost' ? [`$0,0${3 + c.tools} en esta conversación · ${c.tools} herramientas · ${c.model}`] : [`contexto ${c.ctx} % · 24k de 200k`, '▓'.repeat(Math.max(1, Math.round(c.ctx / 5))) + '░'.repeat(20 - Math.max(1, Math.round(c.ctx / 5))), 'sistema 8k · herramientas 9k · mensajes 7k']);
+  setTimeout(() => { c.items.push({k:'out', lines:out}); draw(); }, 250 * speed()); draw();
+}
+const MARK = {permission:['!', 'c-red', 'pide permiso'], question:['?', 'c-yellow', 'hace una pregunta'], agent_done:['✓', 'c-green', 'listo']};
+function infoFor(name, c){
+  const ins = x => ({type:'insert', v:x.n + ' '});
+  if (name === 'attach') return {title:'adjuntar', rows:[{t:'Archivo del workspace', d:'busca en el proyecto', act:{type:'insert', v:'@'}}, {t:'Foto', d:'cámara', act:{type:'image'}}, {t:'Galería', d:'imágenes del teléfono', act:{type:'image'}}, {t:'Comandos', d:'lista de / con búsqueda', act:{type:'insert', v:'/'}}, {t:'Shell', d:'corre un comando aquí con !', act:{type:'bang'}}]};
+  if (name === 'help') return {title:'ayuda', rows:[{t:'↵', d:'envía · esc interrumpe · ⇧tab cambia el modo'}, {t:'/', d:'lista de comandos, con búsqueda'}, {t:'!', d:'corre un comando de shell aquí'}, {t:'^O  ^T  ^B', d:'última salida · tareas · segundo plano'}, ...CMDS.filter(x => x.s === 'jwn').map(x => ({t:x.n, d:x.d, act:ins(x)}))]};
+  if (name === 'status') return {title:'estado', rows:[['modelo', c.model], ['esfuerzo', c.effort], ['modo', modeName(c.mode)], ['conversación', c.sid + (c.name ? ' · ' + c.name : '')], ['directorio', WS.cwd], ['motor', 'Claude Code 2.1.301'], ['límites', '5 h: 62 % · 7 d: 31 %']].map(([t, d]) => ({t, d}))};
+  if (name === 'resume') return {title:'retomar una conversación', rows:[{t:c.name || 'esta conversación', d:'ahora · ' + c.sid}, {t:'migrar el login a OAuth', d:'ayer · 7f3e91a', act:{type:'note', v:'Retomando «migrar el login a OAuth»…'}}, {t:'revisar el CI', d:'hace 3 días · c20d4b8', act:{type:'note', v:'Retomando «revisar el CI»…'}}]};
+  if (name === 'tasks'){ const ic = {agent:'◆', bash:'❯', monitor:'◉', loop:'⏰'}; const L = [...c.tasks].reverse();
+    return {title:'segundo plano', rows:L.length ? L.map(t => ({t:ic[t.kind] + ' ' + t.label, d:t.state === 'run' ? (t.info || 'en curso · ' + fmtS(Date.now() - t.t0)) : t.state === 'done' ? 'terminó' : 'detenido', act:t.state === 'run' ? {type:'stop', id:t.id} : null})) : [{t:'Nada corre en segundo plano.', d:''}]}; }
+  if (name === 'artifacts') return {title:'artifacts', rows:c.artifacts.length ? c.artifacts.map(a => ({t:a.title, d:a.url.replace('https://', ''), act:{type:'open', v:a.url}})) : [{t:'Todavía no se publicó nada en esta conversación.', d:''}]};
+  if (name === 'skills') return {title:'skills y comandos del proyecto', rows:CMDS.filter(x => x.s === 'skill' || x.s === 'proyecto' || x.s === 'plugin').map(x => ({t:x.n, d:x.d + ' · ' + x.s, act:ins(x)}))};
+  if (name === 'permissions') return {title:'permisos (solo lectura)', rows:[['Edit', 'pregunta · modo ' + modeName(c.mode)], ['Bash(cargo test:*)', 'permitido · proyecto'], ['Bash(rm:*)', 'denegado · usuario'], ...Object.keys(c.allowed).map(k => [k, 'permitido · esta sesión'])].map(([t, d]) => ({t, d}))};
+  if (name === 'memory') return {title:'memoria', rows:[{t:'CLAUDE.md', d:'usuario · ~/.claude', act:{type:'note', v:'Abierto ~/.claude/CLAUDE.md en un panel nuevo con nvim'}}, {t:'AGENTS.md', d:'proyecto · raíz del repositorio', act:{type:'note', v:'Abierto AGENTS.md en un panel nuevo con nvim'}}]};
+  return {title:name, rows:[]};
+}
+function infoAct(act, via){
+  const c = S.conv;
+  if (act.type === 'stop'){ stopTask(c, act.id); return; }
+  if (act.type === 'insert'){ if (via === 'phone') $('phIn').value += act.v; else c.input = act.v; }
+  else if (act.type === 'image') attachImage(c, via);
+  else if (act.type === 'bang') S.ui.bang = true;
+  else if (act.type === 'note') c.items.push({k:'note', t:act.v});
+  else if (act.type === 'open'){ S.msg = 'abierto en el navegador'; setTimeout(() => { S.msg = ''; draw(); }, 1800); c.items.push({k:'note', t:'Abierto en el navegador: ' + act.v.replace('https://', '')}); }
+  if (via === 'phone') S.ui.pinfo = null; else S.ui.info = null;
+}
+function toast(m){ S.msg = m; S.pmsg = m; clearTimeout(S.mt); S.mt = setTimeout(() => { S.msg = ''; S.pmsg = ''; draw(); }, 2400); draw(); }
+function textOf(c, i){
+  const it = c.items[i]; if (!it) return '';
+  if (it.k === 'user' || it.k === 'text') return it.t;
+  if (it.k === 'tool') return [it.name + '(' + it.arg + ')', it.sum, ...(it.diff ? it.diff.map(d => d.n + ' ' + d.s + d.t) : it.out.map(o => o.t)), it.url].filter(Boolean).join('\n');
+  if (it.k === 'agent') return ['Agent(' + it.name + ') ' + it.arg, ...it.steps].join('\n');
+  if (it.k === 'shell') return ['! ' + it.cmd, ...it.out].join('\n');
+  if (it.k === 'out') return it.lines.join('\n');
+  return it.t || '';
+}
+function turnOf(c, i){ let a = i; while (a > 0 && c.items[a].k !== 'user') a--; let b = i + 1; while (b < c.items.length && c.items[b].k !== 'user') b++; return c.items.slice(a, b).map((_, k) => textOf(c, a + k)).filter(Boolean).join('\n'); }
+function doCopy(text){ try { navigator.clipboard.writeText(text).catch(() => {}); } catch (_) {} const n = text.split('\n').length; toast('copiado · ' + n + (n === 1 ? ' línea' : ' líneas') + ' · ' + [...text].length + ' caracteres'); }
+function attachImage(c, via){
+  const n = ++c.imgs, tk = '[Imagen#' + n + '] '; c.atts.push({n, px:1568, kb:'240 KB', was:'3,1 MB'});
+  if (via === 'phone') $('phIn').value += tk; else c.input += tk;
+  toast('Imagen#' + n + ' reducida a 1568 px · 3,1 MB → 240 KB');
+}
+const cycleMode = () => applyPick('mode', MODES[(MODES.indexOf(S.conv.mode) + 1) % MODES.length]);
+function exitConv(){
+  const c = S.conv; if (c.run){ c.run.abort = true; }
+  S.saved = c; S.conv = null; S.view = 'shell'; S.input = '';
+  S.blocks.push({cmd:'claude', dur:'41s', code:0, out:[{t:'conversación «' + (c.name || c.sid) + '» guardada (' + c.sid + ')', c:'d'}, {t:'seguir: claude --resume ' + c.sid, c:'d'}]}); draw();
+}
+function interrupt(){ const c = S.conv; if (!c || !c.run) return; c.run.abort = true; if (c.run.rej) c.run.rej(ABORT); }
+function answer(choice, by){ const c = S.conv; if (!c || !c.ask) return; const a = c.ask; c.ask = null; a.res({choice, by}); }
+function restart(){
+  const c = S.conv, at = new Date().toTimeString().slice(0, 5);
+  if (c){ if (c.run){ c.run.abort = true; if (c.run.rej) c.run.rej(ABORT); } c.dead = true; setTimeout(() => { c.items.push({k:'restart', t:at}); draw(); }, 60); }
+  S.blocks.push({restart:at}); draw();
+}
+function runShell(cmd){
+  const m = /^claude(?:\s+(.*))?$/.exec(cmd);
+  if (m && !/^command /.test(cmd)){
+    S.view = 'starting'; S.startAt = Date.now(); S.blocks.push({cmd, dur:'0.0s', code:0, running:true, out:[]});
+    const tick = setInterval(() => { if (S.view !== 'starting') clearInterval(tick); else draw(); }, 110);
+    setTimeout(() => { S.blocks.pop(); S.view = 'conv'; const resume = /(-c|--resume)/.test(m[1] || '');
+      if (resume && S.saved){ S.conv = S.saved; S.conv.items.push({k:'restart', t:'conversación retomada'}); } else { S.conv = newConv(); S.conv.turns = 0; if (resume) S.conv.items.push({k:'note', t:'no hay conversación que retomar aquí · empieza una nueva'}); }
+      S.seen = true; S.done = false; draw(); }, 900 * speed());
+    draw(); return;
+  }
+  if (/^command claude/.test(cmd)){ S.blocks.push({cmd, dur:'3.2s', code:0, out:[{t:'(la pantalla propia de Claude Code, como hoy: sin la conversación de jwn)', c:'d'}]}); draw(); return; }
+  S.blocks.push({cmd, dur:'0.2s', code:/fail|false/.test(cmd) ? 1 : 0, out:[{t:/fail|false/.test(cmd) ? 'error: command failed' : 'ok', c:/fail|false/.test(cmd) ? 'c-red' : 'c-green'}]}); draw();
+}
+
+/* ---- the character grid ---- */
+function grid(){ return { cells: Array.from({length:ROWS}, () => Array.from({length:COLS}, () => [' ', ''])) }; }
+function put(g, x, y, text, cls = ''){ if (y < 0 || y >= ROWS) return; [...text].forEach((ch, i) => { const cx = x + i; if (cx >= 0 && cx < COLS) g.cells[y][cx] = [ch, cls]; }); }
+function fill(g, x, y, w, cls){ for (let i = 0; i < w; i++) if (x + i < COLS && y < ROWS && y >= 0) g.cells[y][x + i] = [g.cells[y][x + i][0], (g.cells[y][x + i][1] + ' ' + cls).trim()]; }
+function box(g, x, y, w, h, title, cls, right, rightCls){
+  put(g, x, y, '╭' + '─'.repeat(w - 2) + '╮', cls); put(g, x, y + h - 1, '╰' + '─'.repeat(w - 2) + '╯', cls);
+  for (let i = 1; i < h - 1; i++){ put(g, x, y + i, '│', cls); put(g, x + w - 1, y + i, '│', cls); }
+  if (title){ const m = cls.match(/c-(blue|green|yellow|red|mag|cyan)/); put(g, x + 2, y, ' ' + title + ' ', 'b' + (m ? ' ' + m[0] : '')); }
+  if (right) put(g, x + w - 3 - [...right].length, y, ' ' + right + ' ', rightCls);
+}
+function paint(g){
+  const rows = g.cells.map(r => { let out = '', cur = null, buf = '';
+    for (const [ch, cls] of r){ if (cls !== cur){ if (buf) out += cur ? `<span class="${cur}">${buf}</span>` : buf; buf = ''; cur = cls; } buf += esc(ch); }
+    if (buf) out += cur ? `<span class="${cur}">${buf}</span>` : buf; return out; });
+  $('scr').innerHTML = rows.join('\n');
+}
+
+/* ---- the lines of the conversation, as the terminal draws them ---- */
+const dotOf = it => it.state === 'ok' ? ['●', 'c-green'] : it.state === 'denied' ? ['●', 'c-red'] : it.state === 'ask' ? ['●', 'c-yellow b'] : [spin(), 'c-yellow'];
+function convLines(c, n){
+  const L = [], gap = () => L.push({parts:[]});
+  c.items.forEach((it, idx) => { const start = L.length;
+    if (it.k === 'user'){ wrapRich(it.t, n - 3).forEach((ps, i) => L.push({band:'bg-sel', parts:[[i ? '  ' : '❯ ', accCls(c) + ' b'], ...ps]})); gap(); }
+    else if (it.k === 'text'){ wrapRich(it.t || ' ', n - 2).forEach((ps, i) => L.push({parts:[[i ? '  ' : '● ', 'b'], ...ps]})); gap(); }
+    else if (it.k === 'tool'){
+      const [dot, dc] = dotOf(it);
+      L.push({tool:it.id, parts:[[dot + ' ', dc], [it.name, 'b'], ['(' + clipTo(it.arg, n - it.name.length - 6) + ')', 'd']]});
+      const sum = it.state === 'ask' ? ['Esperando tu permiso', 'c-yellow'] : it.state === 'run' ? ['Ejecutando…', 'd'] : it.state === 'denied' ? [it.sum + (it.by ? ' desde ' + it.by : ''), 'c-red'] : [it.sum + (it.by ? (/^modo/.test(it.by) ? ' · permitido por ' : ' · permitido desde ') + it.by : ''), 'd'];
+      L.push({tool:it.id, parts:[['  ⎿  ', 'd'], [clipTo(sum[0], n - 6), sum[1]]]});
+      if (it.diff && it.state === 'ok') it.diff.forEach(d => L.push({band:d.c.split(' ')[1], parts:[['     ' + d.n + ' ' + d.s + d.t, d.c.split(' ')[0]]]}));
+      else if (it.open && it.out.length) it.out.forEach(o => wrapRich(o.t, n - 6).forEach(ps => L.push({parts:[['     ', ''], ...ps.map(([t, k]) => [t, o.c || k || 'd'])]})));
+      if (it.url && it.state === 'ok') L.push({url:it.url, parts:[['     ↗ ', 'c-cyan'], ['abrir en el navegador', 'c-cyan b']]});
+      gap();
+    }
+    else if (it.k === 'agent'){
+      const dot = it.state === 'run' ? [spin(), 'c-yellow'] : it.state === 'ok' ? ['●', 'c-green'] : ['●', 'c-red'];
+      L.push({tool:it.id, parts:[[dot[0] + ' ', dot[1]], ['Agent', 'b'], ['(' + it.name + ') ' + clipTo(it.arg, n - 20), 'd']]});
+      const st = it.state === 'run' ? `${spin()} ${it.last || 'iniciando'} · ${it.tools} ${it.tools === 1 ? 'herramienta' : 'herramientas'} · ${fmtK(it.tokens)} tokens · ${fmtS(it.ms)}` : `${it.tools} herramientas · ${fmtK(it.tokens)} tokens · ${fmtS(it.ms)} · sonnet-5.5`;
+      L.push({tool:it.id, parts:[['  ⎿  ', 'd'], [clipTo(st, n - 6), it.state === 'run' ? 'c-yellow' : 'd']]});
+      if (it.open) it.steps.forEach((x, i) => L.push({parts:[['     ' + (i === it.steps.length - 1 ? '└ ' : '├ '), 'd'], [clipTo(x, n - 10), 'd']]}));
+      gap();
+    }
+    else if (it.k === 'shell'){
+      const bar = it.state === 'bad' ? 'c-red' : it.state === 'run' ? 'c-yellow' : 'c-green';
+      L.push({parts:[['▌ ', bar], ['! ' + it.cmd, 'b']]}); it.out.forEach(o => L.push({parts:[['▌ ', bar], [clipTo(o, n - 4), '']]}));
+      if (it.state === 'run') L.push({parts:[['▌ ', bar], [spin() + ' corriendo', 'c-yellow']]}); else L.push({parts:[['  ⎿  ', 'd'], ['la salida irá como contexto en tu próximo mensaje', 'd']]});
+      gap();
+    }
+    else if (it.k === 'note'){ if (it.t){ L.push({parts:[['  ⎿  ', 'd'], [clipTo(it.t, n - 6), it.red ? 'c-red' : 'd']]}); } }
+    else if (it.k === 'out'){ it.lines.forEach((t, i) => wrapRich(t, n - 6).forEach((ps, j) => L.push({parts:[[i === 0 && j === 0 ? '  ⎿  ' : '     ', 'd'], ...ps.map(([x, kk]) => [x, kk || ''])]}))); gap(); }
+    else if (it.k === 'result'){ L.push({parts:[[it.t, 'd']]}); gap(); }
+    else if (it.k === 'restart'){ L.push({divider:it.t.includes(':') && it.t.length === 5 ? 'el daemon se reinició · ' + it.t : it.t, parts:[]}); gap(); }
+    for (let k = start; k < L.length; k++) L[k].it = idx;
+  });
+  return L;
+}
+const statusText = c => {
+  if (c.status === 'resuming') return 'retomando conversación…';
+  if (c.status === 'compacting') return 'Compactando la conversación…';
+  if (c.status === 'asking' || c.status === 'idle') return '';
+  const what = c.status === 'thinking' ? 'Pensando…' : c.status === 'streaming' ? 'Escribiendo…' : 'Ejecutando ' + c.label + '…';
+  return `${what} (${Math.max(0, Math.round((Date.now() - c.t0) / 1000 / (1 / speed())))}s · ↓ ${(c.tokens * 38 / 1000).toFixed(1).replace('.', ',')}k · esc interrumpe)`;
+};
+
+function draw(){
+  const g = grid(), SB = 28, px = SB + 1, pw = COLS - px;
+  S.ui.hits = [];
+  for (let y = 0; y < ROWS - 1; y++) put(g, SB - 1, y, '│', 'c-line');
+  put(g, 1, 0, 'demo', 'b d');
+  ['notes', 'api', '↳ feat/login', 'infra'].forEach((nm, i) => { const sel = i === 2, y = 2 + i;
+    put(g, 0, y, String(i + 1), 'd'); put(g, 2, y, i === 2 ? '●' : '○', i === 2 ? 'c-green' : 'd'); put(g, 4, y, nm, sel ? 'b c-blue' : i === 2 ? '' : 'd');
+    if (sel){ for (let k = 0; k < SB - 1; k++) g.cells[y][k] = [g.cells[y][k][0], (g.cells[y][k][1] + ' bg-sel').trim()];
+      const a = att(); if (a){ put(g, SB - 4, y, MARK[a.kind][0], MARK[a.kind][1] + ' b bg-sel'); } } });
+  put(g, 1, ROWS - 4, '! permiso  ? pregunta', 'd'); put(g, 1, ROWS - 3, '✓ listo', 'd');
+  put(g, px, 0, ' api/', 'd'); put(g, px + 5, 0, 'feat/login', 'b c-blue'); put(g, px + 17, 0, '⎇ ' + WS.branch, 'c-mag'); put(g, COLS - 1 - [...WS.path].length, 0, WS.path, 'd');
+  const x0 = px, y0 = 1, bw = pw, bh = ROWS - 2, ix = x0 + 2, iw = bw - 4;
+  const c = S.conv, a = att();
+  box(g, x0, y0, bw, bh, S.view === 'conv' ? 'claude · ' + clipTo(c.name || c.sid, 36) : 'zsh', S.view === 'conv' ? accCls(c) : 'c-blue', a ? MARK[a.kind][0] + ' ' + MARK[a.kind][2] : '', a ? MARK[a.kind][1] + ' b' : '');
+  const top = y0 + 1;
+  if (S.view === 'conv') S.ui.hits.push({x:x0 + 2, y:y0, w:40, h:1, foot:'rename'});
+  if (S.view === 'starting'){ const t = spin() + ' iniciando claude…', h = 'esc cancela'; const cy = y0 + Math.floor(bh / 2) - 1;
+    put(g, x0 + Math.floor((bw - [...t].length) / 2), cy, t, 'c-yellow'); put(g, x0 + Math.floor((bw - h.length) / 2), cy + 2, h, 'd'); }
+  else if (S.view === 'shell') drawShell(g, x0, y0, bw, bh, ix, iw, top);
+  else drawConv(g, c, x0, y0, bw, bh, ix, iw, top);
+  for (let x = 0; x < COLS; x++) g.cells[ROWS - 1][x] = [' ', 'bg-panel'];
+  const ask = c && c.ask, run = c && c.status !== 'idle';
+  const mode = ask ? [ask.tool.ask.kindLabel === 'pregunta' ? ' PREGUNTA ' : ' PERMISO ', 'chip-yellow b'] : S.view === 'conv' ? [' CLAUDE ', 'chip-blue b'] : [' TERM ', 'chip-green b'];
+  const keys = S.msg || (S.ui.selItem !== null ? 'c copiar · t copiar el turno · esc soltar' : ask ? (ask.tool.ask.plan ? '1 aprobar y editar · 2 aprobar y preguntar · 3 seguir planeando · ↑↓ ↵' : ask.tool.ask.kindLabel === 'pregunta' ? '1 2 3 elegir · ↑↓ ↵' : '1 sí · 2 sí, esta sesión · 3 no · ↑↓ ↵') : S.view === 'conv' ? (run ? 'esc interrumpe · ↵ encola · ^O abre la salida' : '↵ envía · / comandos · ! shell · ⇧tab modo · ^T tareas · ^B segundo plano') : 'escribe · ↵ ejecuta · prueba: claude');
+  put(g, 0, ROWS - 1, mode[0], mode[1]); put(g, mode[0].length + 1, ROWS - 1, keys, 'd bg-panel');
+  paint(g); drawPhone();
+  const need = S.view === 'starting' || (c && c.status !== 'idle'); if (need && !S.timer) S.timer = setInterval(() => { if (!(S.view === 'starting' || (S.conv && S.conv.status !== 'idle'))){ clearInterval(S.timer); S.timer = null; } else draw(); }, 200);
+}
+function drawShell(g, x0, y0, bw, bh, ix, iw, top){
+  const lines = [];
+  S.blocks.forEach(b => { if (b.restart){ lines.push({divider:'el daemon se reinició · ' + b.restart}); return; }
+    lines.push({bar:b.code ? 'c-red' : 'c-green', parts:[[clipTo(WS.cwd, iw - 14), 'd']], right:b.running ? 'corriendo' : b.dur});
+    lines.push({bar:b.code ? 'c-red' : 'c-green', parts:[['❯ ' + b.cmd, 'b']]});
+    b.out.forEach(o => lines.push({bar:b.code ? 'c-red' : 'c-green', parts:[[o.t, o.c || '']]})); lines.push({parts:[]}); });
+  const fx = ix + 1, fw = iw - 2, edTop = y0 + bh - 6, room = edTop - top, shown = lines.slice(-room);
+  shown.forEach((ln, k) => { const y = top + (room - shown.length) + k;
+    if (ln.divider){ const t = ' ' + ln.divider + ' ', pad = Math.max(0, Math.floor((iw - 2 - [...t].length) / 2)); put(g, ix + 1, y, '─'.repeat(pad) + t + '─'.repeat(Math.max(0, iw - 2 - pad - [...t].length)), 'd'); return; }
+    if (ln.bar) put(g, ix - 1, y, '▌', ln.bar);
+    let x = ix + 1; (ln.parts || []).forEach(([t, cc]) => { put(g, x, y, clipTo(t, iw - 2), cc); x += [...t].length; });
+    if (ln.right) put(g, ix + iw - [...ln.right].length, y, ln.right, 'd'); });
+  for (let y = edTop; y <= edTop + 3; y++) fill(g, x0 + 1, y, bw - 2, 'bg-panel');
+  const pp = (x, y, t, cc = '') => put(g, x, y, t, (cc + ' bg-panel').trim());
+  const chip = (x, y, t, cc = '') => { put(g, x, y, ' ' + t + ' ', (cc + ' bg-sel').trim()); return x + [...t].length + 3; };
+  const nx = chip(fx, edTop + 1, clipTo(WS.cwd, fw - 20), 'd'); chip(nx, edTop + 1, '⎇ ' + WS.branch, 'c-mag');
+  pp(fx, edTop + 3, '❯', 'c-green b'); pp(fx + 2, edTop + 3, S.input || 'escribe un comando', S.input ? '' : 'd'); pp(fx + fw - 2, edTop + 3, '➤', 'c-blue b');
+  const cx = fx + 2 + [...S.input].length; if (cx < fx + fw - 2) g.cells[edTop + 3][cx] = [g.cells[edTop + 3][cx][0], 'cur'];
+}
+function drawConv(g, c, x0, y0, bw, bh, ix, iw, top){
+  const txt = [...c.input], tw = iw - 2 - 14, rowsOf = []; for (let i = 0; i < txt.length; i += tw) rowsOf.push(txt.slice(i, i + tw).join(''));
+  if (!rowsOf.length || (txt.length % tw === 0 && txt.length)) rowsOf.push('');
+  const shownRows = rowsOf.slice(-4), n = shownRows.length, edTop = y0 + bh - 6 - (n - 1), foot = y0 + bh - 2;
+  const tdn = c.todos.length ? (c.todoOpen ? c.todos.length + 1 : 1) : 0;
+  if (tdn){ const dn = c.todos.filter(t => t.done).length; fill(g, ix, top, iw, 'bg-sel');
+    put(g, ix + 1, top, (dn === c.todos.length ? '☑ ' : '☐ ') + dn + '/' + c.todos.length + ' tareas', 'b bg-sel'); put(g, ix + iw - 5, top, '^T', 'd bg-sel'); S.ui.hits.push({x:ix, y:top, w:iw, h:1, todo:true});
+    if (c.todoOpen) c.todos.forEach((t, i) => put(g, ix + 3, top + 1 + i, (t.done ? '☑ ' : '☐ ') + t.t.replace(/`/g, ''), t.done ? 'd' : ''));
+    top += tdn; }
+  // the question sits over the composer, above the line that says what Claude is doing
+  const ask = c.ask, it = ask && ask.tool, dN = it && it.diff ? it.diff.length : 0, pN = it && it.ask.plan ? it.ask.plan.length : 0, extra = it && it.ask.cmd ? 1 : 0;
+  const ml = !ask && !S.ui.pick && !S.ui.info ? menuFor(c.input) : null; S.ui.cl = ml && ml.length ? ml : null;
+  S.ui.cm = S.ui.cl ? Math.max(0, Math.min(S.ui.cm, S.ui.cl.length - 1)) : 0;
+  const mrows = S.ui.cl ? Math.min(8, S.ui.cl.length) : 0;
+  const qh = ask ? dN + pN + extra + 7 : mrows ? mrows + 2 : 0, stTop = edTop - 1;
+  const qTop = qh ? stTop - qh + 1 : 0, room = (qh ? qTop : stTop + 1) - top;
+  const lines = convLines(c, iw - 2), maxScroll = Math.max(0, lines.length - room); S.ui.scroll = Math.max(0, Math.min(S.ui.scroll, maxScroll));
+  const end = lines.length - S.ui.scroll, shown = lines.slice(Math.max(0, end - room), end);
+  shown.forEach((ln, k) => { const y = top + (room - shown.length) + k;
+    if (ln.divider){ const t = ' ' + ln.divider + ' ', pad = Math.max(0, Math.floor((iw - 2 - [...t].length) / 2)); put(g, ix + 1, y, '─'.repeat(pad) + t + '─'.repeat(Math.max(0, iw - 2 - pad - [...t].length)), 'd'); return; }
+    if (S.ui.selItem !== null && S.ui.selItem === ln.it && !ln.band) ln.band = 'bg-sel';
+    if (ln.band) fill(g, ix, y, iw, ln.band);
+    let x = ix + 1; (ln.parts || []).forEach(([t, cc]) => { put(g, x, y, t, (cc + (ln.band ? ' ' + ln.band : '')).trim()); x += [...t].length; });
+    if (ln.tool) S.ui.hits.push({x:ix, y, w:iw, h:1, tool:ln.tool}); if (ln.url) S.ui.hits.push({x:ix, y, w:iw, h:1, url:ln.url}); if (ln.it !== undefined) S.ui.hits.push({x:ix, y, w:iw, h:1, item:ln.it}); });
+  if (S.ui.scroll > 0) put(g, ix + iw - 12, top, '↑ ' + S.ui.scroll + ' líneas', 'd');
+  if (ask){
+    box(g, ix, qTop, iw, qh, it.ask.kindLabel === 'pregunta' ? 'pregunta · Claude' : (it.ask.plan ? 'plan · ' : 'permiso · ') + it.name, 'c-yellow'); for (let y = qTop + 1; y < qTop + qh - 1; y++) fill(g, ix + 1, y, iw - 2, 'bg-panel');
+    let y = qTop + 1; put(g, ix + 2, y, it.ask.title, 'b bg-panel'); y++;
+    if (it.ask.cmd){ put(g, ix + 4, y, it.ask.cmd, 'c-cyan bg-panel'); y++; }
+    (it.diff || []).forEach(d => { fill(g, ix + 2, y, iw - 4, d.c.split(' ')[1]); put(g, ix + 4, y, d.n + ' ' + d.s + d.t, d.c); y++; });
+    (it.ask.plan || []).forEach(t => { put(g, ix + 4, y, clipTo(t.replace(/`/g, ''), iw - 8), 'bg-panel'); y++; });
+    y++; it.ask.opts.forEach((o, i) => { const on = S.ui.q === i; put(g, ix + 2, y, (on ? '❯ ' : '  ') + (i + 1) + '. ' + clipTo(o, iw - 10), (on ? 'c-blue b' : '') + ' bg-panel'); S.ui.hits.push({x:ix, y, w:iw, h:1, opt:i}); y++; });
+  }
+  if (S.ui.cl){
+    const L = S.ui.cl, start = Math.max(0, Math.min(S.ui.cm - Math.floor(mrows / 2), L.length - mrows));
+    box(g, ix, qTop, iw, qh, (L[0].kind === 'file' ? 'archivos · ' : 'comandos · ') + L.length, 'c-line'); for (let y = qTop + 1; y < qTop + qh - 1; y++) fill(g, ix + 1, y, iw - 2, 'bg-panel');
+    L.slice(start, start + mrows).forEach((x, k) => { const on = start + k === S.ui.cm, y = qTop + 1 + k, dim = x.kind === 'screen';
+      if (on) fill(g, ix + 1, y, iw - 2, 'bg-sel');
+      put(g, ix + 2, y, (on ? '❯ ' : '  ') + clipTo(x.n, 28), (dim ? 'd' : on ? accCls(c) + ' b' : 'b') + (on ? ' bg-sel' : ' bg-panel'));
+      put(g, ix + 32, y, clipTo(x.d, iw - 54), 'd' + (on ? ' bg-sel' : ' bg-panel'));
+      const tag = (dim ? '↗ ' : '') + x.s; put(g, ix + iw - 3 - [...tag].length, y, tag, 'd' + (on ? ' bg-sel' : ' bg-panel')); S.ui.hits.push({x:ix + 1, y, w:iw - 2, h:1, cmd:start + k}); });
+  }
+  const st = statusText(c); if (st) put(g, ix + 1, stTop, (c.status === 'resuming' ? '◌ ' : spin() + ' ') + st, 'c-yellow');
+  for (let y = edTop; y <= edTop + n + 2; y++) fill(g, x0 + 1, y, bw - 2, 'bg-panel');
+  const pp = (x, y, t, cc = '') => put(g, x, y, t, (cc + ' bg-panel').trim());
+  const chip = (x, y, t, cc = '') => { put(g, x, y, ' ' + t + ' ', (cc + ' bg-sel').trim()); return x + [...t].length + 3; };
+  const fx = ix + 1, fw = iw - 2, nx = chip(fx, edTop + 1, clipTo(WS.cwd, fw - 30), 'd'), nx2 = chip(nx, edTop + 1, '⎇ ' + WS.branch, 'c-mag');
+  if (c.queue.length) chip(nx2, edTop + 1, c.queue.length + ' en cola', 'c-yellow');
+  shownRows.forEach((r, k) => { const y = edTop + 3 + k; if (k === 0) pp(fx, y, c.input[0] === '!' ? '!' : '❯', (c.input[0] === '!' ? 'c-yellow' : accCls(c)) + ' b'); pp(fx + 2, y, r); });
+  if (!c.input) pp(fx + 2, edTop + 3, ask ? 'responde arriba' : c.status !== 'idle' ? 'escribe: se envía al terminar' : 'escribe a claude · / comandos · ! shell', 'd');
+  if (c.status !== 'idle') pp(fx + fw - 9, edTop + 3, '■ esc', 'c-red b');
+  pp(fx + fw - 2, edTop + 3, '➤', 'c-blue b');
+  const last = shownRows[n - 1], cx = fx + 2 + [...last].length; if (!ask && cx < fx + fw - 12) g.cells[edTop + 2 + n][cx] = [g.cells[edTop + 2 + n][cx][0], 'cur'];
+  const runN = c.tasks.filter(t => t.state === 'run').length, mt = modeName(c.mode);
+  let fxp = ix + 1; put(g, fxp, foot, mt, MODE_CLS[c.mode]); S.ui.hits.push({x:fxp, y:foot, w:[...mt].length, h:1, foot:'mode'}); fxp += [...mt].length;
+  if (runN){ const gt = '⚙ ' + runN; put(g, fxp, foot, ' · ', 'd'); fxp += 3; put(g, fxp, foot, gt, 'c-yellow b'); S.ui.hits.push({x:fxp, y:foot, w:[...gt].length, h:1, tasks:true}); }
+  const rx = ix + iw - 1 - [...c.model].length; put(g, rx, foot, c.model, 'd'); S.ui.hits.push({x:rx, y:foot, w:[...c.model].length, h:1, foot:'model'});
+  if (S.ui.pick) drawPick(g, c, x0, y0, bw, bh);
+  if (S.ui.info) drawInfo(g, c, x0, y0, bw, bh);
+}
+function drawInfo(g, c, x0, y0, bw, bh){
+  const inf = S.ui.info, d = infoFor(inf.name, c), w = 76, vis = Math.min(d.rows.length, 12), h = vis + 4, bx = x0 + Math.floor((bw - w) / 2), by = y0 + 3;
+  inf.i = Math.max(0, Math.min(inf.i, d.rows.length - 1));
+  for (let i = 0; i < h; i++) put(g, bx, by + i, ' '.repeat(w), 'bg-panel');
+  box(g, bx, by, w, h, d.title, inf.name === 'tasks' ? 'c-yellow' : 'c-blue');
+  const start = Math.max(0, Math.min(inf.i - Math.floor(vis / 2), d.rows.length - vis));
+  d.rows.slice(start, start + vis).forEach((r, k) => { const on = start + k === inf.i, yy = by + 2 + k;
+    if (on) fill(g, bx + 1, yy, w - 2, 'bg-sel');
+    put(g, bx + 3, yy, (on ? '❯ ' : '  ') + clipTo(r.t, 30), (on ? 'b' : '') + (on ? ' bg-sel' : ' bg-panel')); put(g, bx + 36, yy, clipTo(r.d, w - 40), 'd' + (on ? ' bg-sel' : ' bg-panel'));
+    S.ui.hits.push({x:bx + 1, y:yy, w:w - 2, h:1, inforow:start + k}); });
+  put(g, bx + 3, by + h - 1, ' ↑↓ · ↵ elegir' + (inf.name === 'tasks' ? ' · x detener' : '') + ' · esc cerrar ', 'd bg-panel');
+}
+const KIND_TITLE = {model:'modelo', effort:'esfuerzo', mode:'modo', color:'color', rename:'nombre'};
+function drawPick(g, c, x0, y0, bw, bh){
+  const pk = S.ui.pick, opts = pk.kind === 'rename' ? [] : pickOpts(pk.kind), w = 46, h = pk.kind === 'rename' ? 5 : opts.length + 4, bx = x0 + Math.floor((bw - w) / 2), by = y0 + 4;
+  for (let i = 0; i < h; i++) put(g, bx, by + i, ' '.repeat(w), 'bg-panel');
+  box(g, bx, by, w, h, KIND_TITLE[pk.kind], pk.kind === 'color' ? accCls(c) : 'c-blue');
+  if (pk.kind === 'rename'){ put(g, bx + 3, by + 2, pk.text || 'nombre de la conversación', (pk.text ? '' : 'd') + ' bg-panel'); const cx = bx + 3 + [...pk.text].length; if (cx < bx + w - 2) g.cells[by + 2][cx] = [' ', 'cur']; return; }
+  opts.forEach((o, i) => { const on = pk.i === i, cur = c[pk.kind === 'color' ? 'accent' : pk.kind] === o, yy = by + 2 + i;
+    if (on) fill(g, bx + 1, yy, w - 2, 'bg-sel');
+    put(g, bx + 3, yy, (on ? '❯ ' : '  ') + (pk.kind === 'color' ? '● ' + ACC[o][0] : pk.kind === 'mode' ? modeName(o) : o) + (cur ? '  (actual)' : ''), (pk.kind === 'color' ? ACC[o][1] : '') + (on ? ' b bg-sel' : ' bg-panel')); S.ui.hits.push({x:bx + 1, y:yy, w:w - 2, h:1, pickopt:i}); });
+}
+
+/* ---- the phone: the same conversation, flat ---- */
+const wrapIt = (i, h) => h ? `<div class="itm ${S.ui.psel === i ? 'sel' : ''}" data-it="${i}">${h}</div>` : '';
+function drawPhone(){
+  $('phTitle').textContent = WS.project + ' › ' + WS.name; $('phSub').textContent = '↳ ' + WS.branch + '  ' + WS.path;
+  const c = S.conv, a = att();
+  $('ph').style.setProperty('--acc', 'var(--' + (c ? c.accent : 'blue') + ')');
+  $('phTabs').innerHTML = `<button class="tab" type="button" ${S.view === 'conv' ? 'data-set="open"' : ''}>${S.view === 'conv' ? 'claude · ' + esc(clipTo(c.name || c.sid, 22)) : 'zsh'}${a ? ` <span class="${MARK[a.kind][1]} b">${MARK[a.kind][0]}</span>` : ''}</button>`;
+  const msgs = $('phMsgs'), atBottom = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 60;
+  const form = $('phForm'), go = $('phGo'), ask = c && c.ask;
+  if (S.view === 'starting'){ msgs.innerHTML = `<div class="boot"><span class="c-yellow">${spin()}</span> iniciando claude…<small>toca ■ para cancelar</small></div>`; }
+  else if (S.view === 'shell'){ msgs.innerHTML = S.blocks.map(b => b.restart ? `<div class="rs">el daemon se reinició · ${esc(b.restart)}</div>` : `<div class="blk" style="border-left-color:${b.code ? 'var(--red)' : 'var(--green)'}"><div class="bc">${esc(b.cmd)}</div><div class="bo">${b.out.map(o => `<span class="${o.c || ''}">${esc(o.t)}</span>`).join('\n')}</div></div>`).join(''); }
+  else {
+    const rich = t => esc(t).replace(/`([^`]+)`/g, '<code>$1</code>');
+    msgs.innerHTML = c.items.map((it0, ii) => wrapIt(ii, (it => {
+      if (it.k === 'user') return `<div class="m u"><span class="acc b">❯</span> ${esc(it.t).replace(/(@\S+|\[Imagen#\d+\])/g, '<span class="c-cyan">$1</span>')}</div>`;
+      if (it.k === 'text') return `<div class="m a"><b>●</b> ${rich(it.t)}</div>`;
+      if (it.k === 'tool'){ const [dot, dc] = dotOf(it), sum = it.state === 'ask' ? 'Esperando tu permiso' : it.state === 'run' ? 'Ejecutando…' : it.sum + (it.by ? (it.state === 'denied' ? ' desde ' : /^modo/.test(it.by) ? ' · permitido por ' : ' · permitido desde ') + it.by : '');
+        return `<div class="tl" data-tool="${it.id}"><span class="${dc}">${dot}</span><span class="nm">${esc(it.name)}</span><span class="ar">${esc(it.arg)}</span></div><div class="ts ${it.state === 'denied' ? 'c-red' : ''}">⎿ ${esc(sum)}</div>`
+          + (it.url && it.state === 'ok' ? `<button class="openb" type="button" data-open="${esc(it.url)}">↗ Abrir</button>` : '')
+          + (it.diff && it.state === 'ok' ? `<pre class="df">${it.diff.map(d => `<span class="${d.c}">${esc(d.n + ' ' + d.s + d.t)}</span>`).join('')}</pre>` : it.open && it.out.length ? `<pre class="df">${it.out.map(o => `<span class="${o.c || 'd'}">${esc(o.t)}</span>`).join('')}</pre>` : ''); }
+      if (it.k === 'note') return it.t ? `<div class="ts ${it.red ? 'c-red' : ''}">⎿ ${esc(it.t)}</div>` : '';
+      if (it.k === 'result') return `<div class="ts">${esc(it.t)}</div>`;
+      if (it.k === 'agent'){ const dot = it.state === 'run' ? [spin(), 'c-yellow'] : it.state === 'ok' ? ['●', 'c-green'] : ['●', 'c-red'];
+        const st = it.state === 'run' ? `${spin()} ${it.last || 'iniciando'} · ${it.tools} herr. · ${fmtK(it.tokens)} tokens · ${fmtS(it.ms)}` : `${it.tools} herramientas · ${fmtK(it.tokens)} tokens · ${fmtS(it.ms)}`;
+        return `<div class="tl" data-tool="${it.id}"><span class="${dot[1]}">${dot[0]}</span><span class="nm">Agent</span><span class="ar">${esc(it.name)} · ${esc(it.arg)}</span></div><div class="ts ${it.state === 'run' ? 'c-yellow' : ''}">⎿ ${esc(st)}</div>`
+          + (it.open ? `<pre class="df">${it.steps.map((x, i) => `<span class="d">${i === it.steps.length - 1 ? '└' : '├'} ${esc(x)}</span>`).join('')}</pre>` : ''); }
+      if (it.k === 'shell'){ const bar = it.state === 'bad' ? 'var(--red)' : it.state === 'run' ? 'var(--yellow)' : 'var(--green)';
+        return `<div class="blk" style="border-left-color:${bar}"><div class="bc">! ${esc(it.cmd)}</div><div class="bo">${it.out.map(o => esc(o)).join('\n')}${it.state === 'run' ? spin() + ' corriendo' : ''}</div></div>` + (it.state === 'run' ? '' : '<div class="ts">⎿ la salida irá como contexto en tu próximo mensaje</div>'); }
+      if (it.k === 'out') return `<div class="ts">⎿ ${esc(it.lines.join('\n'))}</div>`;
+      return `<div class="rs">${esc(it.t.length === 5 ? 'el daemon se reinició · ' + it.t : it.t)}</div>`; })(it0))).join('');
+  }
+  const st = c && S.view === 'conv' ? statusText(c) : ''; const ps = $('phStatus'); ps.hidden = !(st || S.pmsg); ps.className = st ? 'status' : 'toast'; ps.textContent = st ? (c.status === 'resuming' ? '◌ ' : spin() + ' ') + st : (S.pmsg || '');
+  const ac = $('phActs'); ac.hidden = !(c && S.view === 'conv' && S.ui.psel !== null);
+  if (!ac.hidden) ac.innerHTML = '<button type="button" data-act="c">Copiar</button><button type="button" data-act="t">Copiar el turno</button><button type="button" data-act="x">Soltar</button>';
+  const at = $('phAtt'); at.hidden = !(c && c.atts.length); at.innerHTML = c ? c.atts.map((a, i) => `<span>Imagen#${a.n} · ${a.px} px · ${a.kb}<button type="button" data-rmatt="${i}" aria-label="Quitar">✕</button></span>`).join('') : '';
+  const sheet = $('phAsk'); sheet.hidden = !ask; if (!ask) sheet.innerHTML = '';
+  if (ask){ const it = ask.tool; sheet.innerHTML = `<div class="sh"><b>${esc(it.ask.title)}</b><small>${it.ask.plan ? 'plan listo' : it.ask.kindLabel === 'pregunta' ? 'pregunta' : 'pide permiso'}</small></div>` + (it.ask.cmd ? `<pre class="df"><span class="c-cyan">${esc(it.ask.cmd)}</span></pre>` : '') + (it.diff ? `<pre class="df">${it.diff.map(d => `<span class="${d.c}">${esc(d.n + ' ' + d.s + d.t)}</span>`).join('')}</pre>` : '')
+    + (it.ask.plan ? `<pre class="df">${it.ask.plan.map(t => `<span>${esc(t.replace(/`/g, ''))}</span>`).join('')}</pre>` : '')
+    + `<div class="btns">${(it.ask.phone || ['Permitir', it.ask.opts[1].replace(/^Sí, y no volver a preguntar por /, 'Permitir '), 'Denegar']).map((l, i) => `<button class="${i === 0 ? 'pri' : i === 2 ? 'neg' : ''}" type="button" data-ans="${(it.ask.choices || ['yes', 'always', 'no'])[i]}">${esc(l)}</button>`).join('')}</div>`; }
+  $('phChips').innerHTML = (c && S.view === 'conv' ? `<span class="cfg ${c.mode === 'manual' ? '' : c.mode === 'plan' ? 'c-cyan' : c.mode === 'auto' ? 'c-yellow' : 'c-mag'}" data-set="open"><span class="acc">●</span>${c.model} · ${modeName(c.mode)}</span>` : '') + `<span class="c-mag">⎇ ${esc(WS.branch)}</span>` + (c && c.queue.length ? `<span class="c-yellow">${c.queue.length} en cola</span>` : '') + (S.ui.bang ? '<span class="c-yellow">! shell</span>' : '');
+  $('phPrompt').textContent = S.ui.bang ? '!' : '❯'; $('phPrompt').className = (S.ui.bang ? 'c-yellow' : 'acc') + ' b';
+  const set = $('phSet'); set.hidden = !(c && S.view === 'conv' && S.ui.set && !ask);
+  if (!set.hidden && document.activeElement !== $('phName')){
+    const seg = (kind, list) => `<div class="seg">${list.map(o => `<button type="button" data-${kind}="${o}" aria-pressed="${c[kind] === o}">${kind === 'mode' ? modeName(o) : o}</button>`).join('')}</div>`;
+    set.innerHTML = `<div class="sh"><b>Conversación</b><button type="button" data-set="close">Listo</button></div><label>Nombre</label><input id="phName" value="${esc(c.name)}" placeholder="${esc(c.sid)}" aria-label="Nombre"><label>Color</label><div class="dots">${Object.keys(ACC).map(k => `<button type="button" data-acc="${k}" style="background:var(--${k})" aria-label="${ACC[k][0]}" aria-pressed="${c.accent === k}"></button>`).join('')}</div><label>Modelo</label>${seg('model', MODELS)}<label>Esfuerzo</label>${seg('effort', EFFORTS)}<label>Modo</label>${seg('mode', MODES)}`;
+  }
+  const runN = c ? c.tasks.filter(t => t.state === 'run').length : 0, bgb = $('phBg'); bgb.hidden = !(S.view === 'conv' && runN); bgb.textContent = '⚙ ' + runN;
+  const td = $('phTodo'), tds = c && S.view === 'conv' && c.todos.length; td.hidden = !tds;
+  if (tds){ const dn = c.todos.filter(t => t.done).length; td.innerHTML = `<b>${dn === c.todos.length ? '☑' : '☐'} ${dn}/${c.todos.length} tareas</b>` + (c.todoOpen ? c.todos.map(t => `<div class="it ${t.done ? 'dn' : ''}">${t.done ? '☑' : '☐'} ${esc(t.t.replace(/`/g, ''))}</div>`).join('') : ''); }
+  const pin = $('phInfo'); pin.hidden = !(c && S.ui.pinfo && !ask);
+  if (!pin.hidden){ const d = infoFor(S.ui.pinfo.name, c);
+    pin.innerHTML = `<div class="sh"><b>${esc(d.title)}</b><button type="button" data-pinfo="close">Cerrar</button></div>` + d.rows.map((r, i) => `<div class="rowi" ${r.act && r.act.type !== 'stop' ? `data-prow="${i}"` : ''}><span class="n">${esc(r.t)}</span><span class="ds">${esc(r.d)}</span>${r.act && r.act.type === 'stop' ? `<button class="st" type="button" data-pstop="${i}" aria-label="Detener">■</button>` : ''}</div>`).join(''); }
+  const cm = $('phCmds'), v = $('phIn').value, pl = c && S.view === 'conv' && !ask ? (menuFor(v) || []) : [];
+  cm.hidden = !pl.length; cm.innerHTML = pl.map((x, i) => `<button type="button" data-cmd="${i}"><span class="n">${x.n}</span><span class="ds">${esc(x.d)}</span><span class="sr">${x.kind === 'screen' ? '↗ ' : ''}${x.s}</span></button>`).join('');
+  S.ui.pcl = pl;
+  const busy = c && c.status !== 'idle'; go.outerHTML = busy ? '<button id="phGo" class="stop" type="button" aria-label="Stop">■</button>' : '<button id="phGo" type="submit" aria-label="Enviar">➤</button>';
+  $('phIn').placeholder = S.view === 'conv' ? (S.ui.bang ? 'comando de shell' : ask ? 'responde arriba' : busy ? 'escribe: se envía al terminar' : 'escribe a claude') : 'escribe un comando';
+  if (atBottom) msgs.scrollTop = msgs.scrollHeight;
+}
+$('ph').addEventListener('click', e => {
+  const t = e.target.closest('[data-rmatt],[data-act],[data-it],#phBg,[data-open],[data-pinfo],[data-prow],[data-pstop],[data-cmd],[data-tool],[data-ans],[data-set],[data-acc],[data-model],[data-effort],[data-mode],#phGo.stop'); if (!t) return; S.seen = true;
+  const c = S.conv;
+  if (t.dataset.rmatt !== undefined){ const a = c.atts.splice(+t.dataset.rmatt, 1)[0]; if (a) $('phIn').value = $('phIn').value.replace('[Imagen#' + a.n + '] ', ''); draw(); return; }
+  if (t.dataset.act){ const i = S.ui.psel; S.ui.psel = null; if (t.dataset.act === 'c') doCopy(textOf(c, i)); else if (t.dataset.act === 't') doCopy(turnOf(c, i)); else draw(); return; }
+  if (t.dataset.it !== undefined){ const i = +t.dataset.it; S.ui.psel = S.ui.psel === i ? null : i; draw(); return; }
+  if (t.id === 'phBg'){ S.ui.pinfo = {name:'tasks', i:0}; draw(); return; }
+  if (t.dataset.open){ c.items.push({k:'note', t:'Abierto en el navegador: ' + t.dataset.open.replace('https://', '')}); draw(); return; }
+  if (t.dataset.pinfo){ S.ui.pinfo = null; draw(); return; }
+  if (t.dataset.pstop !== undefined){ const r = infoFor(S.ui.pinfo.name, c).rows[+t.dataset.pstop]; if (r && r.act) infoAct(r.act, 'phone'); draw(); return; }
+  if (t.dataset.prow !== undefined){ const r = infoFor(S.ui.pinfo.name, c).rows[+t.dataset.prow]; if (r && r.act) infoAct(r.act, 'phone'); draw(); return; }
+  if (t.dataset.cmd !== undefined){ applyMenu(S.ui.pcl[+t.dataset.cmd], 'phone'); draw(); return; }
+  if (t.dataset.set){ S.ui.set = t.dataset.set === 'open'; draw(); return; }
+  if (t.dataset.acc){ applyPick('color', t.dataset.acc); draw(); return; }
+  if (t.dataset.model){ applyPick('model', t.dataset.model); draw(); return; }
+  if (t.dataset.effort){ applyPick('effort', t.dataset.effort); draw(); return; }
+  if (t.dataset.mode){ applyPick('mode', t.dataset.mode); draw(); return; }
+  if (t.dataset.tool){ const it = S.conv.items.find(i => (i.k === 'tool' || i.k === 'agent') && i.id === +t.dataset.tool); if (it && it.state !== 'ask') it.open = !it.open; }
+  else if (t.dataset.ans) answer(t.dataset.ans, 'el móvil');
+  else interrupt();
+  draw();
+});
+$('phIn').addEventListener('input', () => drawPhone());
+$('phTodo').addEventListener('click', () => { if (S.conv){ S.conv.todoOpen = !S.conv.todoOpen; draw(); } });
+$('phAt').addEventListener('click', () => { if (S.conv){ S.ui.pinfo = {name:'attach', i:0}; draw(); } });
+
+$('ph').addEventListener('input', e => { if (e.target.id === 'phName' && S.conv){ S.conv.name = e.target.value; draw(); } });
+$('phForm').addEventListener('submit', e => { e.preventDefault(); const v = $('phIn').value.trim(); if (!v) return; S.seen = true; $('phIn').value = ''; if (S.view === 'conv') send(S.ui.bang && v[0] !== '/' ? '!' + v : v, 'phone'); else if (S.view === 'shell') runShell(v); draw(); });
+
+/* ---- the terminal's keys ---- */
+const scr = $('scr');
+scr.addEventListener('keydown', e => {
+  const k = e.key; if (e.metaKey) return; S.seen = true;
+  const c = S.conv;
+  if (S.view === 'starting'){ if (k === 'Escape'){ e.preventDefault(); S.view = 'shell'; S.blocks.pop(); draw(); } return; }
+  if (S.view === 'shell'){
+    if (k.length === 1 && !e.ctrlKey){ e.preventDefault(); S.input += k; }
+    else if (k === 'Backspace'){ e.preventDefault(); S.input = [...S.input].slice(0, -1).join(''); }
+    else if (k === 'Enter'){ e.preventDefault(); const v = S.input.trim(); S.input = ''; if (v) runShell(v); }
+    draw(); return;
+  }
+  e.preventDefault();
+  if (S.ui.selItem !== null){
+    if (!c.input && (k === 'c' || k === 't')){ doCopy(k === 'c' ? textOf(c, S.ui.selItem) : turnOf(c, S.ui.selItem)); S.ui.selItem = null; draw(); return; }
+    if (k === 'Escape'){ S.ui.selItem = null; draw(); return; }
+    S.ui.selItem = null;
+  }
+  if (k === 'v' && e.ctrlKey){ attachImage(c, 'tui'); draw(); return; }
+  if (S.ui.info){ const inf = S.ui.info, d = infoFor(inf.name, c);
+    if (k === 'Escape') S.ui.info = null;
+    else if (k === 'ArrowDown' || k === 'j') inf.i = Math.min(inf.i + 1, d.rows.length - 1);
+    else if (k === 'ArrowUp' || k === 'k') inf.i = Math.max(inf.i - 1, 0);
+    else if (k === 'Enter'){ const r = d.rows[inf.i]; if (r && r.act) infoAct(r.act, 'tui'); }
+    else if (k === 'x' && inf.name === 'tasks'){ const r = d.rows[inf.i]; if (r && r.act && r.act.type === 'stop') infoAct(r.act, 'tui'); }
+    draw(); return; }
+  if (S.ui.pick){ const pk = S.ui.pick;
+    if (k === 'Escape') S.ui.pick = null;
+    else if (pk.kind === 'rename'){ if (k === 'Enter'){ if (pk.text.trim()) applyPick('rename', pk.text); S.ui.pick = null; } else if (k === 'Backspace') pk.text = [...pk.text].slice(0, -1).join(''); else if (k.length === 1 && !e.ctrlKey) pk.text += k; }
+    else { const o = pickOpts(pk.kind); if (k === 'ArrowDown' || k === 'j') pk.i = Math.min(pk.i + 1, o.length - 1); else if (k === 'ArrowUp' || k === 'k') pk.i = Math.max(pk.i - 1, 0); else if (k === 'Enter'){ applyPick(pk.kind, o[pk.i]); S.ui.pick = null; } }
+    draw(); return; }
+  if (k === 'Tab' && e.shiftKey){ cycleMode(); draw(); return; }
+  if (S.ui.cl && !c.ask){
+    if (k === 'ArrowDown'){ S.ui.cm = Math.min(S.ui.cm + 1, S.ui.cl.length - 1); draw(); return; }
+    if (k === 'ArrowUp'){ S.ui.cm = Math.max(S.ui.cm - 1, 0); draw(); return; }
+    if (k === 'Tab'){ const x = S.ui.cl[S.ui.cm]; if (x.kind === 'file') applyMenu(x, 'tui'); else c.input = x.n + ' '; draw(); return; }
+    if (k === 'Escape'){ if (S.ui.cl[0].kind !== 'file') c.input = ''; else c.input = c.input.slice(0, S.ui.cl[0].at); draw(); return; }
+    if (k === 'Enter'){ applyMenu(S.ui.cl[S.ui.cm], 'tui'); draw(); return; }
+  }
+  if (k.length === 1 || k === 'Backspace') S.ui.cm = 0;
+  if (c.ask){
+    const n = c.ask.tool.ask.opts.length;
+    const pick = i => answer((c.ask.tool.ask.choices || ['yes', 'always', 'no'])[i], 'el terminal');
+    if (k === 'ArrowDown') S.ui.q = Math.min(S.ui.q + 1, n - 1); else if (k === 'ArrowUp') S.ui.q = Math.max(S.ui.q - 1, 0);
+    else if (k === 'Enter') pick(S.ui.q); else if (k === '1' || k === 'y') pick(0); else if (k === '2' || k === 'a') pick(1); else if (k === '3' || k === 'n') pick(2);
+    else if (k === 'Escape') interrupt();
+    draw(); return;
+  }
+  if (k === 'Escape') interrupt();
+  else if (k === 't' && e.ctrlKey) c.todoOpen = !c.todoOpen;
+  else if (k === 'b' && e.ctrlKey) S.ui.info = {name:'tasks', i:0};
+  else if (k === 'o' && e.ctrlKey){ const ex = c.items.filter(i => (i.k === 'tool' && i.out.length && !i.diff) || (i.k === 'agent' && i.steps.length)), all = ex.every(i => i.open); ex.forEach(i => { i.open = !all; }); }
+  else if (k === 'Enter'){ const v = c.input; c.input = ''; send(v); }
+  else if (k === 'Backspace') c.input = [...c.input].slice(0, -1).join('');
+  else if (k === 'PageUp') S.ui.scroll += 8; else if (k === 'PageDown') S.ui.scroll = Math.max(0, S.ui.scroll - 8);
+  else if (k.length === 1 && !e.ctrlKey) c.input += k;
+  draw();
+});
+scr.addEventListener('click', e => { scr.focus(); const r = scr.getBoundingClientRect(), cx = Math.floor((e.clientX - r.left) / (r.width / COLS)), cy = Math.floor((e.clientY - r.top) / (r.height / ROWS));
+  const h = S.ui.hits.find(h => cx >= h.x && cx < h.x + h.w && cy === h.y); if (!h) return; const c = S.conv;
+  if (h.pickopt !== undefined){ const pk = S.ui.pick; pk.i = h.pickopt; applyPick(pk.kind, pickOpts(pk.kind)[h.pickopt]); S.ui.pick = null; }
+  else if (h.foot){ S.ui.pick = h.foot === 'rename' ? {kind:'rename', text:c.name} : {kind:h.foot, i:Math.max(0, pickOpts(h.foot).indexOf(c[h.foot]))}; }
+  else if (h.tasks) S.ui.info = {name:'tasks', i:0};
+  else if (h.todo) c.todoOpen = !c.todoOpen;
+  else if (h.url){ S.msg = 'abierto en el navegador'; setTimeout(() => { S.msg = ''; draw(); }, 1800); }
+  else if (h.inforow !== undefined){ const inf = S.ui.info; inf.i = h.inforow; const r = infoFor(inf.name, c).rows[h.inforow]; if (r && r.act) infoAct(r.act, 'tui'); }
+  else if (h.cmd !== undefined){ applyMenu(S.ui.cl[h.cmd], 'tui'); }
+  else if (h.opt !== undefined) answer((c.ask.tool.ask.choices || ['yes', 'always', 'no'])[h.opt], 'el terminal');
+  else if (h.item !== undefined && h.tool === undefined){ S.ui.selItem = S.ui.selItem === h.item ? null : h.item; }
+  else { const it = c.items.find(i => (i.k === 'tool' || i.k === 'agent') && i.id === h.tool); if (it && it.state !== 'ask') it.open = !it.open; }
+  draw(); });
+scr.addEventListener('wheel', e => { if (S.view !== 'conv') return; e.preventDefault(); S.ui.scroll = Math.max(0, S.ui.scroll + (e.deltaY < 0 ? 3 : -3)); draw(); }, {passive:false});
+
+/* ---- the buttons ---- */
+$('evStart').onclick = () => { if (S.view === 'shell'){ S.input = ''; runShell('claude'); } };
+$('evSend').onclick = () => { if (S.view === 'conv') send('arregla el test que falla en auth::expired'); else if (S.view === 'shell'){ runShell('claude'); setTimeout(() => S.conv && send('arregla el test que falla en auth::expired'), 1000 * speed()); } };
+$('evInt').onclick = () => { interrupt(); draw(); };
+$('evRestart').onclick = restart;
+const askClaude = txt => { if (S.view === 'conv') send(txt); else if (S.view === 'shell'){ runShell('claude'); setTimeout(() => S.conv && send(txt), 1000 * speed()); } };
+$('evBg').onclick = () => askClaude('vigila la compilación y busca los usos de verify');
+$('evQ').onclick = () => askClaude('¿qué base de datos uso?');
+$('evArt').onclick = () => askClaude('publica el informe de pruebas');
+$('evImg').onclick = () => { const c = S.conv; if (c) attachImage(c, 'tui'); };
+$('evPlan').onclick = () => { if (S.conv) applyPick('mode', 'plan'); else if (S.view === 'shell'){ runShell('claude'); setTimeout(() => { if (S.conv) applyPick('mode', 'plan'); draw(); }, 1000 * speed()); } draw(); };
+$('evReset').onclick = () => { const c = S.conv; if (c && c.run){ c.run.abort = true; if (c.run.rej) c.run.rej(ABORT); } reset(); $('plain').hidden = true; draw(); };
+$('evPlain').onclick = () => { const p = $('plain'); p.hidden = !p.hidden; p.textContent = [
+  '$ claude', 'jwn · conversación a1b2c3d · ~/ws/api-wt/feat-login', '',
+  '❯ arregla el test que falla en auth::expired', '',
+  '● Voy a mirar el test y el código que prueba.', '● Read(src/auth.rs)', '  ⎿  Leídas 142 líneas', '',
+  '● Edit(src/auth.rs)  ·  pide permiso', '     41 - if claims.exp < now {', '     41 + if claims.exp <= now {',
+  '  1) Sí   2) Sí, y no volver a preguntar por ediciones en esta sesión   3) No', '  elige [1-3]: _', '',
+  '(también se puede contestar desde el terminal de jwn o desde el móvil)'].join('\n'); };
+$('keys').textContent = 'type claude + ↵ · then a request + ↵ · 1 2 3 answer · esc interrupts · ^O opens the last output · ⇧tab mode · /model /effort /rename /color · click the title or the footer · PgUp/PgDn scroll';
+window.__proto = { S: () => S, send, answer, interrupt, restart };
+draw();
+})();
+</script>

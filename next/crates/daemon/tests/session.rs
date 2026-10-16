@@ -24,8 +24,8 @@ fn hello_names_the_root_and_the_versions_served() {
     assert_eq!(c.accepted.get("session"), Some(&1));
     assert_eq!(
         c.accepted.len(),
-        6,
-        "session, workspace, pane, blocks, diff, commits"
+        7,
+        "session, workspace, pane, blocks, diff, commits, conversation"
     );
     d.stop();
 }

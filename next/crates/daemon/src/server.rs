@@ -55,6 +55,10 @@ pub struct Config {
     pub gh: Option<PathBuf>,
     /// How often the pull requests of the worktrees in use are looked at.
     pub github_every: Duration,
+    /// Swap the `claude` a person types in a pane for the binary's own, which talks to the
+    /// engine headless and draws a conversation (`$<PREFIX>_CONVERSATION=1`); off until the
+    /// clients draw it.
+    pub conversation: bool,
 }
 
 impl Config {
@@ -72,6 +76,7 @@ impl Config {
             hook_exe: std::env::current_exe().ok(),
             gh: crate::github::find(),
             github_every: Duration::from_secs(60),
+            conversation: std::env::var(identity::env_var("CONVERSATION")).is_ok_and(|v| v == "1"),
         }
     }
 
@@ -126,12 +131,29 @@ impl Daemon {
         }
         let shell = config.shell.clone().unwrap_or_else(default_shell);
         let (events, event_rx) = std::sync::mpsc::channel();
+        // Every pane knows its own daemon, so what runs in it (`jwn claude`, `jwn hook`) reaches
+        // this one and never another that happens to listen at the default place.
+        let mut pane_env = config.env.clone();
+        pane_env.push((
+            identity::env_var("SOCKET"),
+            config.socket.to_string_lossy().into_owned(),
+        ));
+        pane_env.push((
+            identity::env_var("STATE_DIR"),
+            config.state_dir.to_string_lossy().into_owned(),
+        ));
+        if config.conversation
+            && let Some(exe) = &config.hook_exe
+        {
+            pane_env.push((identity::env_var("BIN"), exe.to_string_lossy().into_owned()));
+            pane_env.push((identity::env_var("CONVERSATION"), "1".into()));
+        }
         let shared = Shared(Arc::new(Mutex::new(Core::new(
             model,
             Some(config.session_file()),
             events,
             shell,
-            config.env.clone(),
+            pane_env,
             integration_dir,
             Arc::new(crate::mobile::Hub::new(
                 config.socket.clone(),
@@ -140,6 +162,8 @@ impl Daemon {
             )),
         ))));
         shared.lock().history_dir = Some(crate::history::dir(&config.state_dir));
+        shared.lock().conv_dir = Some(config.state_dir.join("conversations"));
+        shared.lock().swap = config.conversation && config.hook_exe.is_some();
         shared.lock().mobile.clone().resume();
         if let Some(exe) = &config.hook_exe {
             shared.lock().hooks = Some(crate::launch::write_hooks(&config.state_dir, exe)?);
@@ -231,6 +255,7 @@ impl Daemon {
         }
         let hub = self.shared.lock().mobile.clone();
         hub.stop();
+        crate::engine::save_due(&self.shared, true);
         let events = {
             let mut core = self.shared.lock();
             core.shutdown();

@@ -1,0 +1,982 @@
+//! The engine of a conversation: Claude Code run headless, its threads and the commands that
+//! reach it (spec: *The conversation*, REQ-371 and following; the messages are in
+//! `docs/claude-engine.md`).
+//!
+//! The engine is the daemon's: it goes on when no client is connected. Nothing here writes to it
+//! or reads from it with the state lock held (`server.rs`: never across I/O): each engine has a
+//! thread that writes what a channel hands it, a thread that reads its output and takes the lock
+//! only to apply one message, and a thread that asks for a refresh at most every 50 ms while text
+//! streams.
+
+use std::collections::{BTreeMap, VecDeque};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStdout, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Sender};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use contract::conversation::{Accent, Image, Mode};
+use contract::{ErrorCode, Id};
+use serde_json::{Value, json};
+
+use crate::commands::{Done, err};
+use crate::conversation::{Effect, OpenArgs, Saved, State, parse_args};
+use crate::model::new_id;
+use crate::server::Shared;
+
+/// How often a conversation is written to disk at most (REQ-392).
+const SAVE_EVERY: Duration = Duration::from_secs(2);
+/// How often the text that streams is shown at most (REQ-378).
+const SHOW_EVERY: Duration = Duration::from_millis(50);
+/// How long a `!command` may run (REQ-394).
+const SHELL_SECONDS: u64 = 60;
+const SHELL_BYTES: usize = 64 * 1024;
+/// A picture no larger than 5 MiB, as base64.
+const IMAGE_CHARS: usize = 7 * 1024 * 1024;
+const MAX_IMAGES: usize = 4;
+
+/// One conversation of a pane: its state and, while it runs, its engine.
+pub struct Conv {
+    pub id: Id,
+    pub st: State,
+    pub engine: Option<Engine>,
+    /// Counts up at each start, so a thread of an engine that was replaced is ignored.
+    pub generation: u64,
+    pub cwd: PathBuf,
+    /// The environment `claude` was typed in; the engine runs with it.
+    pub env: Option<BTreeMap<String, String>>,
+    /// `--add-dir`, `--settings` and `--agent`, handed to every engine of this conversation.
+    pub extra: Vec<String>,
+    /// What the person asked for with `--model` and `--effort` or `conversation_set`.
+    pub model_arg: Option<String>,
+    pub effort_arg: Option<String>,
+    pub dirty: bool,
+    pub last_saved: Option<Instant>,
+    /// The binary's `claude` was seen in the pane's foreground: when it leaves, so does this.
+    pub stub_seen: bool,
+}
+
+enum Out {
+    Line(String),
+    Close,
+}
+
+/// A running engine: where to write to it, and which process to end.
+pub struct Engine {
+    tx: Sender<Out>,
+    pid: u32,
+}
+
+impl Engine {
+    fn write(&self, v: &Value) {
+        let _ = self.tx.send(Out::Line(v.to_string()));
+    }
+
+    /// Close its input (it ends by itself) and, if it is still there a moment later, end its
+    /// process group: the tools it started die with it.
+    pub fn stop(&self) {
+        let _ = self.tx.send(Out::Close);
+        let pid = self.pid;
+        thread::spawn(move || {
+            thread::sleep(Duration::from_secs(3));
+            kill_group(pid);
+        });
+    }
+}
+
+/// End a process group by the number the daemon recorded when it started it, and nothing else.
+fn kill_group(pgid: u32) {
+    let _ = Command::new("/bin/kill")
+        .args(["-s", "KILL", "--", &format!("-{pgid}")])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+pub fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
+}
+
+/// The time of day, for the line that says the daemon restarted.
+fn clock() -> String {
+    Command::new("date")
+        .arg("+%H:%M")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_owned())
+        .unwrap_or_default()
+}
+
+/// Whether `claude` typed with these arguments is one the engine serves (REQ-372, REQ-373).
+pub fn served(args: &[String]) -> bool {
+    parse_args(args).is_ok()
+}
+
+// ---- finding and starting the engine ----
+
+fn find_in_path(name: &str, path: &str) -> Option<PathBuf> {
+    std::env::split_paths(path)
+        .map(|d| d.join(name))
+        .find(|p| p.is_file())
+}
+
+fn resolve_claude(
+    env: Option<&BTreeMap<String, String>>,
+    cfg_env: &[(String, String)],
+) -> Option<PathBuf> {
+    let path = env
+        .and_then(|e| e.get("PATH").cloned())
+        .or_else(|| {
+            cfg_env
+                .iter()
+                .rev()
+                .find(|(k, _)| k == "PATH")
+                .map(|(_, v)| v.clone())
+        })
+        .or_else(|| std::env::var("PATH").ok())?;
+    find_in_path("claude", &path)
+}
+
+struct Plan {
+    exe: PathBuf,
+    args: Vec<String>,
+    env: Option<BTreeMap<String, String>>,
+    cfg_env: Vec<(String, String)>,
+    cwd: PathBuf,
+}
+
+fn make_plan(c: &Conv, cfg_env: &[(String, String)]) -> Result<Plan, String> {
+    let exe = resolve_claude(c.env.as_ref(), cfg_env)
+        .ok_or("claude is not on the PATH it was typed in")?;
+    let mut args: Vec<String> = [
+        "-p",
+        "--input-format",
+        "stream-json",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--permission-prompt-tool",
+        "stdio",
+    ]
+    .map(str::to_owned)
+    .into();
+    // The transcript exists once the first turn ended: `--resume` needs it, `--session-id` makes it.
+    args.extend([
+        if c.st.has_transcript {
+            "--resume"
+        } else {
+            "--session-id"
+        }
+        .to_owned(),
+        c.st.session.clone(),
+        "--permission-mode".into(),
+        c.st.mode.flag().to_owned(),
+    ]);
+    if let Some(m) = &c.model_arg {
+        args.extend(["--model".into(), m.clone()]);
+    }
+    if let Some(e) = &c.effort_arg {
+        args.extend(["--effort".into(), e.clone()]);
+    }
+    if c.st.named {
+        args.extend(["--name".into(), c.st.name.clone()]);
+    }
+    args.extend(c.extra.iter().cloned());
+    Ok(Plan {
+        exe,
+        args,
+        env: c.env.clone(),
+        cfg_env: cfg_env.to_vec(),
+        cwd: c.cwd.clone(),
+    })
+}
+
+fn is_delta(msg: &Value) -> bool {
+    msg["type"] == "stream_event" && msg["event"]["type"] == "content_block_delta"
+}
+
+fn start(shared: &Shared, pane: &Id, generation: u64, plan: Plan) -> Result<Engine, String> {
+    let mut cmd = Command::new(&plan.exe);
+    cmd.args(&plan.args)
+        .current_dir(&plan.cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0);
+    match &plan.env {
+        Some(env) => {
+            cmd.env_clear().envs(env);
+        }
+        None => {
+            cmd.envs(plan.cfg_env.iter().map(|(k, v)| (k, v)));
+        }
+    }
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("cannot start {}: {e}", plan.exe.display()))?;
+    let pid = child.id();
+    let stdin = child.stdin.take().ok_or("no input")?;
+    let stdout = child.stdout.take().ok_or("no output")?;
+    let stderr = child.stderr.take().ok_or("no error output")?;
+
+    let (tx, rx) = mpsc::channel::<Out>();
+    thread::Builder::new()
+        .name("engine-in".into())
+        .spawn(move || {
+            let mut stdin = stdin;
+            for out in rx {
+                match out {
+                    Out::Line(l) => {
+                        if writeln!(stdin, "{l}").and_then(|()| stdin.flush()).is_err() {
+                            break;
+                        }
+                    }
+                    Out::Close => break,
+                }
+            }
+        })
+        .map_err(|e| e.to_string())?;
+
+    let tail: Arc<Mutex<VecDeque<String>>> = Arc::default();
+    let t = tail.clone();
+    thread::Builder::new()
+        .name("engine-err".into())
+        .spawn(move || {
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                let mut q = t.lock().unwrap_or_else(|p| p.into_inner());
+                q.push_back(line);
+                if q.len() > 20 {
+                    q.pop_front();
+                }
+            }
+        })
+        .map_err(|e| e.to_string())?;
+
+    let dirty = Arc::new(AtomicBool::new(false));
+    let alive = Arc::new(AtomicBool::new(true));
+    {
+        let (shared, pane, dirty, alive) =
+            (shared.clone(), pane.clone(), dirty.clone(), alive.clone());
+        thread::Builder::new()
+            .name("engine-show".into())
+            .spawn(move || {
+                while alive.load(Ordering::Relaxed) {
+                    thread::sleep(SHOW_EVERY);
+                    if dirty.swap(false, Ordering::Relaxed) {
+                        let mut core = shared.lock();
+                        if core
+                            .convs
+                            .get(&pane)
+                            .is_some_and(|c| c.generation == generation)
+                        {
+                            core.refresh();
+                        }
+                    }
+                }
+            })
+            .map_err(|e| e.to_string())?;
+    }
+    {
+        let (shared, pane) = (shared.clone(), pane.clone());
+        thread::Builder::new()
+            .name("engine-out".into())
+            .spawn(move || {
+                read_loop(
+                    &shared, &pane, generation, child, stdout, &tail, &dirty, &alive,
+                )
+            })
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(Engine { tx, pid })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn read_loop(
+    shared: &Shared,
+    pane: &Id,
+    generation: u64,
+    mut child: Child,
+    stdout: ChildStdout,
+    tail: &Mutex<VecDeque<String>>,
+    dirty: &AtomicBool,
+    alive: &AtomicBool,
+) {
+    for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+        let Ok(msg) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        let delta = is_delta(&msg);
+        let mut core = shared.lock();
+        let fx = match core
+            .convs
+            .get_mut(pane)
+            .filter(|c| c.generation == generation)
+        {
+            Some(c) => {
+                c.dirty = true;
+                c.st.apply(&msg, now_ms())
+            }
+            None => break,
+        };
+        run_effects(&mut core, pane, fx);
+        if delta {
+            dirty.store(true, Ordering::Relaxed);
+        } else {
+            core.refresh();
+        }
+        drop(core);
+        // A turn that ended is on disk at once: a daemon stopped by a signal has no last save.
+        if msg["type"] == "result" {
+            save_due(shared, true);
+        }
+    }
+    alive.store(false, Ordering::Relaxed);
+    let status = child.wait().ok();
+    let stderr_tail = tail
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .iter()
+        .rev()
+        .take(3)
+        .rev()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" · ");
+    let how = match status.and_then(|s| s.code()) {
+        Some(0) => "el motor terminó".to_owned(),
+        Some(c) => format!("el motor terminó con código {c}"),
+        None => "el motor se detuvo".to_owned(),
+    };
+    let reason = if stderr_tail.is_empty() {
+        how
+    } else {
+        format!("{how}: {stderr_tail}")
+    };
+    let mut core = shared.lock();
+    let Some(c) = core
+        .convs
+        .get_mut(pane)
+        .filter(|c| c.generation == generation)
+    else {
+        return;
+    };
+    c.engine = None;
+    c.dirty = true;
+    let fx = c.st.engine_gone(&reason);
+    run_effects(&mut core, pane, fx);
+    core.refresh();
+    drop(core);
+    save_due(shared, true);
+}
+
+/// Do what a message asked, under the lock and without waiting.
+fn run_effects(core: &mut crate::core::Core, pane: &Id, fx: Vec<Effect>) {
+    for e in fx {
+        match e {
+            Effect::Write(v) => {
+                if let Some(en) = core.convs.get(pane).and_then(|c| c.engine.as_ref()) {
+                    en.write(&v);
+                }
+            }
+            Effect::Raise(kind) => core.raise_agent(pane, kind),
+            Effect::ClearAsk => core.clear_ask(pane),
+            Effect::Resumable(session) => core.set_pane_resume(
+                pane,
+                Some(vec!["claude".into(), "--resume".into(), session]),
+            ),
+        }
+    }
+}
+
+/// Start the engine of a conversation that has none (it is new, or its daemon restarted).
+fn start_engine(shared: &Shared, pane: &Id) -> Result<(), crate::commands::ErrorBody> {
+    let (plan, generation) = {
+        let mut core = shared.lock();
+        let cfg_env = core.env.clone();
+        let c = core
+            .convs
+            .get_mut(pane)
+            .ok_or_else(|| err(ErrorCode::NotFound, "no conversation in this pane"))?;
+        c.generation += 1;
+        let plan = make_plan(c, &cfg_env).map_err(|m| err(ErrorCode::Io, m))?;
+        (plan, c.generation)
+    };
+    let engine = start(shared, pane, generation, plan).map_err(|m| err(ErrorCode::Io, m))?;
+    let mut core = shared.lock();
+    match core
+        .convs
+        .get_mut(pane)
+        .filter(|c| c.generation == generation)
+    {
+        Some(c) => {
+            c.engine = Some(engine);
+            c.st.engine_started();
+            core.refresh();
+        }
+        None => engine.stop(),
+    }
+    Ok(())
+}
+
+// ---- the commands ----
+
+fn no_conversation(node: &str) -> crate::commands::ErrorBody {
+    err(ErrorCode::NotFound, format!("no conversation {node}"))
+}
+
+/// The pane whose conversation is the node `node`.
+fn pane_of(core: &crate::core::Core, node: &str) -> Result<Id, crate::commands::ErrorBody> {
+    core.convs
+        .iter()
+        .find(|(_, c)| c.id == node)
+        .map(|(p, _)| p.clone())
+        .ok_or_else(|| no_conversation(node))
+}
+
+fn pwd_of(env: Option<&BTreeMap<String, String>>) -> Option<PathBuf> {
+    env.and_then(|e| e.get("PWD"))
+        .map(PathBuf::from)
+        .filter(|p| p.is_dir())
+}
+
+/// Claude's own folder of transcripts for a working folder: where `--continue` looks.
+fn projects_dir(cwd: &Path, env: Option<&BTreeMap<String, String>>) -> Option<PathBuf> {
+    let base = env
+        .and_then(|e| e.get("CLAUDE_CONFIG_DIR").cloned())
+        .or_else(|| std::env::var("CLAUDE_CONFIG_DIR").ok())
+        .map(PathBuf::from)
+        .or_else(|| {
+            env.and_then(|e| e.get("HOME").cloned())
+                .or_else(|| std::env::var("HOME").ok())
+                .map(|h| PathBuf::from(h).join(".claude"))
+        })?;
+    let encoded: String = cwd
+        .to_string_lossy()
+        .chars()
+        .map(|c| if c == '/' || c == '.' { '-' } else { c })
+        .collect();
+    Some(base.join("projects").join(encoded))
+}
+
+fn latest_session(cwd: &Path, env: Option<&BTreeMap<String, String>>) -> Option<String> {
+    let dir = projects_dir(cwd, env)?;
+    std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter(|e| e.path().extension().is_some_and(|x| x == "jsonl"))
+        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
+        .max_by_key(|(t, _)| *t)
+        .and_then(|(_, p)| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
+}
+
+pub fn open_conversation(
+    shared: &Shared,
+    pane: &Id,
+    resume: Option<String>,
+    args: Vec<String>,
+    env: Option<BTreeMap<String, String>>,
+) -> Done {
+    let parsed: OpenArgs = parse_args(&args).map_err(|m| err(ErrorCode::Unsupported, m))?;
+    let (pane_cwd, dir, old) = {
+        let mut core = shared.lock();
+        let cwd = core
+            .pane_cwd(pane)
+            .ok_or_else(|| err(ErrorCode::NotFound, format!("no pane {pane}")))?;
+        (cwd, core.conv_dir.clone(), core.convs.remove(pane))
+    };
+    if let Some(en) = old.and_then(|o| o.engine) {
+        en.stop();
+    }
+    let cwd = pwd_of(env.as_ref()).unwrap_or(pane_cwd);
+    let resume = resume.or(parsed.resume.clone()).or_else(|| {
+        parsed
+            .continue_latest
+            .then(|| latest_session(&cwd, env.as_ref()))
+            .flatten()
+    });
+    let mut model_arg = parsed.model.clone();
+    let mut effort_arg = parsed.effort.clone();
+    let (mut st, lazy) = match &resume {
+        Some(id) => {
+            let saved = dir
+                .as_deref()
+                .and_then(|d| load(d, pane))
+                .filter(|s| s.session == *id);
+            let st = match saved {
+                Some(s) => {
+                    // What it was asked to run with comes back with it, unless typed again.
+                    model_arg = model_arg.or_else(|| s.model_arg.clone());
+                    effort_arg = effort_arg.or_else(|| s.effort_arg.clone());
+                    State::restored(s, &clock())
+                }
+                None => State::resumed(id.clone()),
+            };
+            (st, true)
+        }
+        None => (
+            State::new(parsed.session_id.clone().unwrap_or_else(new_id)),
+            false,
+        ),
+    };
+    if let Some(n) = parsed.name.clone().filter(|n| !n.trim().is_empty()) {
+        st.name = n;
+        st.named = true;
+    }
+    if let Some(m) = parsed.mode {
+        st.mode = m;
+    }
+    if let Some(m) = &parsed.model {
+        st.model = m.clone();
+    }
+    if let Some(e) = &parsed.effort {
+        st.effort = e.clone();
+    }
+    let mut extra: Vec<String> = Vec::new();
+    for d in &parsed.add_dirs {
+        extra.extend(["--add-dir".into(), d.clone()]);
+    }
+    if let Some(s) = &parsed.settings {
+        extra.extend(["--settings".into(), s.clone()]);
+    }
+    if let Some(a) = &parsed.agent {
+        extra.extend(["--agent".into(), a.clone()]);
+    }
+    let node = new_id();
+    let session = st.session.clone();
+    {
+        let mut core = shared.lock();
+        if st.has_transcript {
+            core.set_pane_resume(
+                pane,
+                Some(vec!["claude".into(), "--resume".into(), session.clone()]),
+            );
+        }
+        core.convs.insert(
+            pane.clone(),
+            Conv {
+                id: node.clone(),
+                st,
+                engine: None,
+                generation: 0,
+                cwd,
+                env,
+                extra,
+                model_arg,
+                effort_arg,
+                dirty: true,
+                last_saved: None,
+                stub_seen: false,
+            },
+        );
+        core.refresh();
+    }
+    if !lazy && let Err(e) = start_engine(shared, pane) {
+        shared.lock().convs.remove(pane);
+        return Err(e);
+    }
+    if let Some(message) = parsed.message {
+        send(shared, &node, &message, Vec::new())?;
+    }
+    Ok(Some(json!({ "node": node, "session": session })))
+}
+
+fn check_images(images: &[Image]) -> Result<(), crate::commands::ErrorBody> {
+    if images.len() > MAX_IMAGES {
+        return Err(err(
+            ErrorCode::BadRequest,
+            format!("at most {MAX_IMAGES} images in a message"),
+        ));
+    }
+    for i in images {
+        if i.data.len() > IMAGE_CHARS {
+            return Err(err(ErrorCode::BadRequest, "an image is larger than 5 MiB"));
+        }
+    }
+    Ok(())
+}
+
+pub fn send(shared: &Shared, node: &str, text: &str, images: Vec<Image>) -> Done {
+    check_images(&images)?;
+    let line = text.trim();
+    if line.is_empty() && images.is_empty() {
+        return Err(err(ErrorCode::BadRequest, "nothing to send"));
+    }
+    // What jwn answers itself, so every client and `prompt` behave the same (REQ-418, REQ-419).
+    if let Some(rest) = line.strip_prefix('/') {
+        let (cmd, arg) = rest
+            .split_once(' ')
+            .map_or((rest, ""), |(c, a)| (c, a.trim()));
+        match cmd {
+            "exit" => return close(shared, node),
+            "rename" if !arg.is_empty() => {
+                return set(shared, node, Some(arg.to_owned()), None, None, None, None);
+            }
+            "color" => {
+                let accent = parse_accent(arg).ok_or_else(|| {
+                    err(
+                        ErrorCode::BadRequest,
+                        "colours: blue, green, yellow, red, magenta, cyan",
+                    )
+                })?;
+                return set(shared, node, None, Some(accent), None, None, None);
+            }
+            "model" if !arg.is_empty() => {
+                return set(shared, node, None, None, Some(arg.to_owned()), None, None);
+            }
+            "effort" if !arg.is_empty() => {
+                return set(shared, node, None, None, None, Some(arg.to_owned()), None);
+            }
+            "mode" => {
+                let mode = Mode::from_flag(&arg.replace("accept edits", "acceptEdits"))
+                    .ok_or_else(|| {
+                        err(
+                            ErrorCode::BadRequest,
+                            "modes: manual, accept edits, plan, auto",
+                        )
+                    })?;
+                return set(shared, node, None, None, None, None, Some(mode));
+            }
+            "cost" => {
+                let mut core = shared.lock();
+                let pane = pane_of(&core, node)?;
+                if let Some(c) = core.convs.get_mut(&pane) {
+                    c.st.answer_cost();
+                    c.dirty = true;
+                }
+                core.refresh();
+                return Ok(None);
+            }
+            _ => {}
+        }
+    }
+    let pane = {
+        let core = shared.lock();
+        pane_of(&core, node)?
+    };
+    let dead = shared
+        .lock()
+        .convs
+        .get(&pane)
+        .is_some_and(|c| c.engine.is_none());
+    if dead {
+        {
+            let mut core = shared.lock();
+            if let Some(c) = core.convs.get_mut(&pane) {
+                c.st.resuming();
+            }
+            core.refresh();
+        }
+        start_engine(shared, &pane)?;
+    }
+    let mut core = shared.lock();
+    let fx = {
+        let c = core
+            .convs
+            .get_mut(&pane)
+            .ok_or_else(|| no_conversation(node))?;
+        c.dirty = true;
+        c.st.send(line, images, now_ms())
+    };
+    // Sending is moving on: what the last turn asked of the person is over.
+    core.clear_agent(&pane);
+    run_effects(&mut core, &pane, fx);
+    core.refresh();
+    drop(core);
+    save_due(shared, true);
+    Ok(None)
+}
+
+fn parse_accent(s: &str) -> Option<Accent> {
+    Some(match s.trim() {
+        "blue" | "azul" => Accent::Blue,
+        "green" | "verde" => Accent::Green,
+        "yellow" | "amarillo" => Accent::Yellow,
+        "red" | "rojo" => Accent::Red,
+        "magenta" => Accent::Magenta,
+        "cyan" | "cian" => Accent::Cyan,
+        _ => return None,
+    })
+}
+
+pub fn answer(
+    shared: &Shared,
+    node: &str,
+    ask: &str,
+    key: &str,
+    text: Option<&str>,
+    by: Option<&str>,
+) -> Done {
+    let mut core = shared.lock();
+    let pane = pane_of(&core, node)?;
+    let fx = {
+        let c = core
+            .convs
+            .get_mut(&pane)
+            .ok_or_else(|| no_conversation(node))?;
+        c.dirty = true;
+        c.st.answer(ask, key, text, by)
+            .map_err(|m| err(ErrorCode::Conflict, m))?
+    };
+    run_effects(&mut core, &pane, fx);
+    core.refresh();
+    Ok(None)
+}
+
+pub fn interrupt(shared: &Shared, node: &str) -> Done {
+    let mut core = shared.lock();
+    let pane = pane_of(&core, node)?;
+    let fx = core
+        .convs
+        .get_mut(&pane)
+        .map(|c| c.st.interrupt())
+        .unwrap_or_default();
+    run_effects(&mut core, &pane, fx);
+    core.refresh();
+    Ok(None)
+}
+
+pub fn set(
+    shared: &Shared,
+    node: &str,
+    name: Option<String>,
+    accent: Option<Accent>,
+    model: Option<String>,
+    effort: Option<String>,
+    mode: Option<Mode>,
+) -> Done {
+    let dead = {
+        let core = shared.lock();
+        let pane = pane_of(&core, node)?;
+        core.convs.get(&pane).is_some_and(|c| c.engine.is_none())
+    };
+    // A command of the engine needs an engine: start it for a model, an effort or a name.
+    let needs_engine = name.is_some() || model.is_some() || effort.is_some() || mode.is_some();
+    if dead && needs_engine {
+        let pane = {
+            let core = shared.lock();
+            pane_of(&core, node)?
+        };
+        start_engine(shared, &pane)?;
+    }
+    let mut core = shared.lock();
+    let pane = pane_of(&core, node)?;
+    let fx = {
+        let c = core
+            .convs
+            .get_mut(&pane)
+            .ok_or_else(|| no_conversation(node))?;
+        if let Some(m) = &model {
+            c.model_arg = Some(m.trim().to_owned());
+        }
+        if let Some(e) = &effort {
+            c.effort_arg = Some(e.trim().to_owned());
+        }
+        c.dirty = true;
+        c.st.set(name, accent, model, effort, mode)
+    };
+    run_effects(&mut core, &pane, fx);
+    core.refresh();
+    Ok(None)
+}
+
+pub fn close(shared: &Shared, node: &str) -> Done {
+    let mut core = shared.lock();
+    let pane = pane_of(&core, node)?;
+    let conv = core.convs.remove(&pane);
+    core.clear_agent(&pane);
+    core.set_pane_resume(&pane, None);
+    core.refresh();
+    drop(core);
+    if let Some(en) = conv.and_then(|c| c.engine) {
+        en.stop();
+    }
+    Ok(None)
+}
+
+pub fn shell(shared: &Shared, node: &str, command: &str) -> Done {
+    let command = command.trim();
+    if command.is_empty() || command.len() > 4000 {
+        return Err(err(
+            ErrorCode::BadRequest,
+            "a shell line of 1 to 4000 characters",
+        ));
+    }
+    let (cwd, shell, dir) = {
+        let mut core = shared.lock();
+        let pane = pane_of(&core, node)?;
+        let shell = core.shell.clone();
+        let c = core
+            .convs
+            .get_mut(&pane)
+            .ok_or_else(|| no_conversation(node))?;
+        c.st.shell_started(command);
+        c.dirty = true;
+        let cwd = c.cwd.clone();
+        core.refresh();
+        (cwd, shell, core.conv_dir.clone())
+    };
+    let (shared, node, command) = (shared.clone(), node.to_owned(), command.to_owned());
+    thread::Builder::new()
+        .name("conv-shell".into())
+        .spawn(move || {
+            let (ok, output) = run_shell(&shell, &cwd, &command, dir.as_deref());
+            let mut core = shared.lock();
+            if let Ok(pane) = pane_of(&core, &node) {
+                if let Some(c) = core.convs.get_mut(&pane) {
+                    c.st.shell_done(&command, ok, output);
+                    c.dirty = true;
+                }
+                core.refresh();
+            }
+        })
+        .map_err(|e| err(ErrorCode::Io, e.to_string()))?;
+    Ok(None)
+}
+
+/// Run a line with the person's shell, in its own process group and with no terminal, for at
+/// most a minute; what it printed (both streams, in order) is what is returned, the last 64 KiB.
+fn run_shell(
+    shell: &str,
+    cwd: &Path,
+    command: &str,
+    scratch: Option<&Path>,
+) -> (bool, Vec<String>) {
+    let base = scratch.map_or_else(std::env::temp_dir, Path::to_path_buf);
+    let _ = std::fs::create_dir_all(&base);
+    let file = base.join(format!("shell-{}.out", new_id()));
+    let Ok(out) = std::fs::File::create(&file) else {
+        return (false, vec!["no se pudo preparar la salida".into()]);
+    };
+    let Ok(err_out) = out.try_clone() else {
+        return (false, vec!["no se pudo preparar la salida".into()]);
+    };
+    let spawned = Command::new(shell)
+        .args(["-c", command])
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(out))
+        .stderr(Stdio::from(err_out))
+        .process_group(0)
+        .spawn();
+    let mut child = match spawned {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = std::fs::remove_file(&file);
+            return (false, vec![format!("no se pudo ejecutar: {e}")]);
+        }
+    };
+    let pid = child.id();
+    let started = Instant::now();
+    let ok = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break s.success(),
+            Ok(None) if started.elapsed() > Duration::from_secs(SHELL_SECONDS) => {
+                kill_group(pid);
+                let _ = child.wait();
+                break false;
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(40)),
+            Err(_) => break false,
+        }
+    };
+    let mut bytes = Vec::new();
+    if let Ok(f) = std::fs::File::open(&file) {
+        let _ = f.take(SHELL_BYTES as u64).read_to_end(&mut bytes);
+    }
+    let _ = std::fs::remove_file(&file);
+    let mut lines: Vec<String> = String::from_utf8_lossy(&bytes)
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    if started.elapsed() > Duration::from_secs(SHELL_SECONDS) {
+        lines.push(format!("(cortado a los {SHELL_SECONDS} s)"));
+    }
+    (ok, lines)
+}
+
+// ---- saved conversations ----
+
+fn file_of(dir: &Path, pane: &str) -> PathBuf {
+    dir.join(format!("{pane}.json"))
+}
+
+fn load(dir: &Path, pane: &str) -> Option<Saved> {
+    let text = std::fs::read_to_string(file_of(dir, pane)).ok()?;
+    let saved: Saved = serde_json::from_str(&text).ok()?;
+    (saved.v == crate::conversation::SAVED_VERSION).then_some(saved)
+}
+
+/// The conversations that changed and are due, as what to write; the writing is done without the lock.
+pub fn save_due(shared: &Shared, force: bool) {
+    let due: Vec<(PathBuf, String)> = {
+        let mut core = shared.lock();
+        let Some(dir) = core.conv_dir.clone() else {
+            return;
+        };
+        let now = now_ms();
+        core.convs
+            .iter_mut()
+            .filter(|(_, c)| {
+                c.dirty && (force || c.last_saved.is_none_or(|t| t.elapsed() >= SAVE_EVERY))
+            })
+            .filter_map(|(pane, c)| {
+                c.dirty = false;
+                c.last_saved = Some(Instant::now());
+                let mut saved = c.st.saved(now);
+                saved.model_arg.clone_from(&c.model_arg);
+                saved.effort_arg.clone_from(&c.effort_arg);
+                encode(&saved).map(|text| (file_of(&dir, pane), text))
+            })
+            .collect()
+    };
+    for (path, text) in due {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let tmp = path.with_extension("json.tmp");
+        if std::fs::write(&tmp, text)
+            .and_then(|()| std::fs::rename(&tmp, &path))
+            .is_err()
+        {
+            eprintln!("cannot save {}", path.display());
+        }
+    }
+}
+
+/// The saved document, with the oldest items dropped until it takes at most 2 MiB (REQ-392).
+fn encode(saved: &Saved) -> Option<String> {
+    let mut saved = saved.clone();
+    loop {
+        let text = serde_json::to_string(&saved).ok()?;
+        if text.len() <= crate::conversation::MAX_SAVED || saved.items.len() <= 1 {
+            return Some(text);
+        }
+        let drop = (saved.items.len() / 4).max(1);
+        saved.items.drain(..drop);
+        saved.first += drop as u32;
+    }
+}
+
+/// Forget the saved conversation of a pane that is gone.
+pub fn forget(dir: &Path, pane: &str) {
+    let _ = std::fs::remove_file(file_of(dir, pane));
+}
+
+/// End every engine (the daemon is stopping).
+pub fn stop_all(convs: &mut std::collections::HashMap<Id, Conv>) {
+    for c in convs.values_mut() {
+        if let Some(en) = c.engine.take() {
+            // Its threads ignore what follows: a daemon that stops is not an engine that died.
+            c.generation += 1;
+            en.stop();
+        }
+    }
+}

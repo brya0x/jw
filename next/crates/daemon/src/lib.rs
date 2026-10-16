@@ -5,8 +5,10 @@ mod blocks;
 pub mod browse;
 mod changes;
 mod commands;
+mod conversation;
 mod core;
 mod diff;
+mod engine;
 mod files;
 mod git;
 mod github;
@@ -29,6 +31,7 @@ mod start;
 mod sync;
 mod workspaces;
 
+pub use engine::served as conversation_served;
 pub use launch::agent_name;
 pub use mobile::{LinkConfig, devices_file};
 pub use server::{Config, Daemon};

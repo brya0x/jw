@@ -8,6 +8,7 @@ use serde_json::Value;
 use crate::agents;
 use crate::browse;
 use crate::changes;
+use crate::engine;
 use crate::files;
 use crate::panes;
 use crate::rename;
@@ -126,6 +127,31 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
             hub.stop();
             Ok(None)
         }
+        Cmd::OpenConversation {
+            pane,
+            resume,
+            args,
+            env,
+        } => engine::open_conversation(shared, &pane, resume, args, env),
+        Cmd::ConversationSend { node, text, images } => engine::send(shared, &node, &text, images),
+        Cmd::ConversationAnswer {
+            node,
+            ask,
+            key,
+            text,
+            by,
+        } => engine::answer(shared, &node, &ask, &key, text.as_deref(), by.as_deref()),
+        Cmd::ConversationInterrupt { node } => engine::interrupt(shared, &node),
+        Cmd::ConversationSet {
+            node,
+            name,
+            accent,
+            model,
+            effort,
+            mode,
+        } => engine::set(shared, &node, name, accent, model, effort, mode),
+        Cmd::ConversationShell { node, command } => engine::shell(shared, &node, &command),
+        Cmd::ConversationClose { node } => engine::close(shared, &node),
     }
 }
 

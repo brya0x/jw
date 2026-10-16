@@ -1,0 +1,19 @@
+{
+  "t": "patch",
+  "node": "00000000-0000-4000-8000-0000000000e1",
+  "epoch": "00000000-0000-4000-8000-000000000001",
+  "from": 12,
+  "to": 13,
+  "ops": [
+    {
+      "op": "replace",
+      "path": "/items/1/text",
+      "value": "Voy a mirar el test y el código que prueba. El token que vence justo ahora pasa."
+    },
+    {
+      "op": "replace",
+      "path": "/status",
+      "value": "streaming"
+    }
+  ]
+}

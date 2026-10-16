@@ -51,6 +51,7 @@ pub fn run() -> Result<(), String> {
         hook_exe: None,
         gh: None,
         github_every: std::time::Duration::from_secs(60),
+        conversation: false,
     };
     let socket = config.socket.clone();
     let daemon =

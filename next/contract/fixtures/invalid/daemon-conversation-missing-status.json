@@ -1,0 +1,25 @@
+{
+  "t": "snapshot",
+  "node": {
+    "id": "00000000-0000-4000-8000-0000000000e1",
+    "type": "conversation",
+    "v": 1,
+    "epoch": "00000000-0000-4000-8000-000000000001",
+    "rev": 1,
+    "attention": [],
+    "pane": "00000000-0000-4000-8000-0000000000c1",
+    "name": "a1b2c3d",
+    "accent": "blue",
+    "model": "sonnet-5.5",
+    "effort": "high",
+    "mode": "manual",
+    "first": 0,
+    "items": [],
+    "queue": [],
+    "tasks": [],
+    "todos": [],
+    "artifacts": [],
+    "commands": [],
+    "cost": 0
+  }
+}

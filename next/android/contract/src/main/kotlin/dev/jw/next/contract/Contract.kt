@@ -249,6 +249,50 @@ sealed interface Cmd {
 
     @Serializable @SerialName("mobile_stop")
     data object MobileStop : Cmd
+
+    /**
+     * Open the conversation of [pane] (it runs `claude`): a new one, or the one of [resume]; [args] are
+     * the flags `claude` was typed with that the engine serves and [env] the environment it was typed in.
+     * The result is `{node, session}`.
+     */
+    @Serializable @SerialName("open_conversation")
+    data class OpenConversation(
+        val pane: Id,
+        val resume: String? = null,
+        val args: List<String> = emptyList(),
+        val env: Map<String, String>? = null,
+    ) : Cmd
+
+    /** Say something to Claude, or run a command of the `/` list. */
+    @Serializable @SerialName("conversation_send")
+    data class ConversationSend(val node: Id, val text: String, val images: List<Image> = emptyList()) : Cmd
+
+    /** Answer the `ask` that waits: [key] is one of its options' keys; [text] goes with a refusal; [by] says where the answer comes from. */
+    @Serializable @SerialName("conversation_answer")
+    data class ConversationAnswer(val node: Id, val ask: String, val key: String, val text: String? = null, val by: String? = null) : Cmd
+
+    /** Stop the turn that runs. */
+    @Serializable @SerialName("conversation_interrupt")
+    data class ConversationInterrupt(val node: Id) : Cmd
+
+    /** Change what the conversation is called, its colour, the model, the effort or the mode. */
+    @Serializable @SerialName("conversation_set")
+    data class ConversationSet(
+        val node: Id,
+        val name: String? = null,
+        val accent: Accent? = null,
+        val model: String? = null,
+        val effort: String? = null,
+        val mode: ConvMode? = null,
+    ) : Cmd
+
+    /** Run a shell line of the person's (`!command`) in the pane's folder. */
+    @Serializable @SerialName("conversation_shell")
+    data class ConversationShell(val node: Id, val command: String) : Cmd
+
+    /** End the conversation (`/exit`): the engine stops and the pane is the shell again. */
+    @Serializable @SerialName("conversation_close")
+    data class ConversationClose(val node: Id) : Cmd
 }
 
 /** What the daemon sends. */
@@ -474,6 +518,8 @@ sealed interface Node {
         val blocks: Id? = null,
         /** What the person has typed at the shell's prompt, when the shell says where it starts. */
         val input: PaneInput? = null,
+        /** The node of this pane's conversation while one is open: the pane runs `claude`. */
+        val conversation: Id? = null,
     ) : Node
 
     /** Level 2 as command blocks: what a pane's shell ran, newest last. */
@@ -487,6 +533,40 @@ sealed interface Node {
         val pane: Id,
         val mode: BlocksMode,
         val blocks: List<Block>,
+    ) : Node
+
+    /** A pane that runs `claude`, as a conversation: what each client draws in place of the screen. */
+    @Serializable @SerialName("conversation")
+    data class Conversation(
+        override val id: Id,
+        override val v: Int,
+        override val epoch: String,
+        override val rev: Long,
+        override val attention: List<Attention>,
+        val pane: Id,
+        /** The engine's id for this conversation; what `--resume` takes. */
+        val session: String? = null,
+        val name: String,
+        val accent: Accent,
+        val model: String,
+        val effort: String,
+        val mode: ConvMode,
+        val status: ConvStatus,
+        /** Unix milliseconds at which the turn that runs began. */
+        val since: Long? = null,
+        /** How many items came before `items[0]`: the node keeps the last 300. */
+        val first: Int,
+        val items: List<ConvItem>,
+        val ask: Ask? = null,
+        /** The messages that wait for the turn that runs to end. */
+        val queue: List<String>,
+        val tasks: List<Task>,
+        val todos: List<Todo>,
+        val artifacts: List<Artifact>,
+        val commands: List<ConvCommand>,
+        /** Millionths of a dollar. */
+        val cost: Long,
+        val limits: Limits? = null,
     ) : Node
 
     /** A workspace's changes: its files, hunk by hunk, against a scope. */

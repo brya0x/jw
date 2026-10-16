@@ -19,3 +19,12 @@ function fish_prompt
     __jwn_orig_prompt
     printf '\e]133;B\a'
 end
+
+# `claude` typed in a pane of the daemon is the binary's own conversation (spec REQ-371); a
+# function exists only in the shell the person types in, so a script and `command claude` still
+# run the original. fish runs this before the person's config, so a function of theirs wins.
+if set -q JWN_CONVERSATION; and set -q JWN_BIN; and set -q JWN_PANE_ID
+    function claude --description 'the conversation of this pane'
+        $JWN_BIN claude $argv
+    end
+end

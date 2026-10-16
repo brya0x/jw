@@ -28,6 +28,10 @@ fn file_name(path: &str) -> &str {
 /// `node /opt/claude/cli.js`-style launches is the script's name without its extension.
 pub fn title_for(argv: &[String]) -> Option<String> {
     let first = file_name(argv.first()?).trim_start_matches('-');
+    // The binary's own `claude` is the conversation of the pane: still `claude` to the person.
+    if first == identity::get().name && argv.get(1).is_some_and(|a| a == "claude") {
+        return Some("claude".to_owned());
+    }
     if RUNTIMES.contains(&first)
         && let Some(script) = argv.iter().skip(1).find(|a| !a.starts_with('-'))
     {
@@ -133,6 +137,22 @@ pub fn run(shared: Shared, stop: Arc<AtomicBool>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_binarys_own_claude_is_claude_to_the_person() {
+        let bin = format!("/opt/{}/bin/{}", identity::get().name, identity::get().name);
+        let argv: Vec<String> = [bin.as_str(), "claude", "--model", "opus"]
+            .map(str::to_owned)
+            .into();
+        assert_eq!(title_for(&argv).as_deref(), Some("claude"));
+        assert!(crate::launch::is_agent(&argv));
+        // another subcommand of the binary is still named for the binary
+        let other: Vec<String> = [bin.as_str(), "ls"].map(str::to_owned).into();
+        assert_eq!(
+            title_for(&other).as_deref(),
+            Some(identity::get().name.as_str())
+        );
+    }
 
     fn argv(s: &str) -> Vec<String> {
         s.split_whitespace().map(str::to_owned).collect()

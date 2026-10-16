@@ -811,6 +811,8 @@ impl View {
                 Node::Commits(c) => {
                     self.commit_lists.insert(id, c);
                 }
+                // Drawn by the conversation view (N82); nothing opens it yet.
+                Node::Conversation(_) => {}
             }
         }
         let gone: Vec<String> = self
@@ -7091,6 +7093,7 @@ mod tests {
             hook_exe: None,
             gh: None,
             github_every: Duration::from_millis(100),
+            conversation: false,
         };
         let d = daemon::Daemon::start(config.clone()).unwrap();
         let c = Client::connect(&config.socket, "test").unwrap();

@@ -58,7 +58,7 @@ pub fn new_pane(
             core.shell.clone(),
             core.env.clone(),
             core.integration_for(&core.shell),
-            core.hooks.clone(),
+            core.agent_hooks(),
         )
     };
     let launched = with_agent_hooks(argv.as_deref(), hooks.as_deref());
@@ -229,7 +229,7 @@ pub fn restore(shared: &Shared) {
             core.events.clone(),
             core.shell.clone(),
             core.env.clone(),
-            core.hooks.clone(),
+            core.agent_hooks(),
             core.history_dir.clone(),
             wanted,
         )
@@ -329,6 +329,7 @@ pub fn engine(shared: Shared, rx: Receiver<Event>) {
             Ok(first) => first,
             Err(RecvTimeoutError::Timeout) => {
                 save_histories(&shared, false);
+                crate::engine::save_due(&shared, false);
                 continue;
             }
             Err(RecvTimeoutError::Disconnected) => return,
@@ -352,6 +353,7 @@ pub fn engine(shared: Shared, rx: Receiver<Event>) {
         }
         apply(&shared, batch);
         save_histories(&shared, false);
+        crate::engine::save_due(&shared, false);
     }
 }
 

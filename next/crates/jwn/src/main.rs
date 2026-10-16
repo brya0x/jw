@@ -2,6 +2,7 @@
 
 mod agent;
 mod bench;
+mod claude;
 mod hook;
 mod pair;
 mod tui;
@@ -26,6 +27,7 @@ const USAGE: &str = "usage:
   jwn revoke <id|name>    unpair a phone and drop its connection
   jwn bench               measure sizes and latency on a private daemon
   jwn hook <event>        an agent's hook (claude runs it): tell the daemon what the agent does
+  jwn claude [args]       what `claude` typed in a pane runs (the shell integration's function): a conversation
   jwn ls | read | prompt | worktree | pane | skill
                           what an agent in a pane uses: jwn <command> shows each one's usage";
 
@@ -48,6 +50,7 @@ fn main() -> ExitCode {
         ["revoke", which] => pair::revoke(which),
         ["bench"] => bench::run().map(|()| ExitCode::SUCCESS),
         ["hook", event] => Ok(hook::run(event)),
+        ["claude", rest @ ..] => Ok(claude::run(rest)),
         [
             c @ ("ls" | "read" | "prompt" | "worktree" | "pane" | "skill"),
             rest @ ..,

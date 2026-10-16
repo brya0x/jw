@@ -29,3 +29,11 @@ __jwn_precmd_last() {
 }
 add-zsh-hook preexec __jwn_preexec
 precmd_functions=(__jwn_precmd_first $precmd_functions __jwn_precmd_last)
+
+# `claude` typed in a pane of the daemon is the binary's own conversation (spec REQ-371); a
+# function exists only in the shell the person types in, so a script and `command claude` still
+# run the original. Not defined where the person already has an alias or a function of that name.
+if [[ -n "$JWN_CONVERSATION" && -n "$JWN_BIN" && -n "$JWN_PANE_ID" ]] \
+  && (( ! $+functions[claude] )) && (( ! $+aliases[claude] )); then
+  claude() { "$JWN_BIN" claude "$@"; }
+fi

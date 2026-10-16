@@ -246,7 +246,7 @@ abstract class ProtocolSource : AppSource() {
 
     /** The transport is up: say hello; the daemon answers with its root, and everything opened is opened again. */
     protected fun greet() {
-        send(ClientMsg.Hello(Peer("jwn-android", "0.0.1"), mapOf("session" to listOf(1), "workspace" to listOf(1), "pane" to listOf(1), "blocks" to listOf(1), "diff" to listOf(1), "commits" to listOf(1))))
+        send(ClientMsg.Hello(Peer("jwn-android", "0.0.1"), mapOf("session" to listOf(1), "workspace" to listOf(1), "pane" to listOf(1), "blocks" to listOf(1), "diff" to listOf(1), "commits" to listOf(1), "conversation" to listOf(1))))
     }
 
     /** The transport is gone. */

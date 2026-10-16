@@ -498,6 +498,7 @@ mod tests {
                 hook_exe: None,
                 gh: None,
                 github_every: Duration::from_millis(100),
+                conversation: false,
             };
             Pc {
                 dir,

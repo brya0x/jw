@@ -15,9 +15,17 @@ pub use client::{Client, ClientError};
 
 /// The node versions this build of the client library can read, for `hello`.
 pub fn default_accepts() -> std::collections::BTreeMap<String, Vec<u32>> {
-    ["session", "workspace", "pane", "blocks", "diff", "commits"]
-        .map(|t| (t.to_owned(), vec![1]))
-        .into()
+    [
+        "session",
+        "workspace",
+        "pane",
+        "blocks",
+        "diff",
+        "commits",
+        "conversation",
+    ]
+    .map(|t| (t.to_owned(), vec![1]))
+    .into()
 }
 
 /// The longest line either side accepts; a longer one is a protocol error.

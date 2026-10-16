@@ -6,6 +6,7 @@
 //! break an old peer. Optional fields are skipped when absent so a round trip through
 //! these types reproduces the document exactly.
 
+pub mod conversation;
 pub mod link;
 pub use link::{BridgeMsg, Denied, PhoneMsg};
 pub mod patch;
@@ -56,9 +57,8 @@ pub enum DaemonMsg {
         /// here shares no version with the client and is not served.
         accepted: std::collections::BTreeMap<String, u32>,
     },
-    Snapshot {
-        node: Node,
-    },
+    /// Boxed so that the message that is not a document stays small.
+    Snapshot { node: Box<Node> },
     Patch {
         node: Id,
         epoch: String,
@@ -67,19 +67,14 @@ pub enum DaemonMsg {
         ops: Vec<PatchOp>,
     },
     /// The node was removed, or never existed.
-    Gone {
-        node: Id,
-    },
+    Gone { node: Id },
     Reply {
         id: String,
         #[serde(flatten)]
         outcome: Outcome,
     },
     /// A message the daemon could not act on that has no `id` to reply to.
-    Error {
-        code: ErrorCode,
-        message: String,
-    },
+    Error { code: ErrorCode, message: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -338,6 +333,65 @@ pub enum Cmd {
     },
     /// Turn the phone link off; connected phones are dropped, paired devices are kept.
     MobileStop {},
+    /// Open the conversation of `pane` (the pane runs `claude`): a new one, or the one of
+    /// `resume`. `args` are the flags `claude` was typed with that the engine serves; `env`
+    /// is the environment it was typed in, which the engine runs with. The result is
+    /// `{node, session}`.
+    OpenConversation {
+        pane: Id,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resume: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        args: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        env: Option<std::collections::BTreeMap<String, String>>,
+    },
+    /// Say something to Claude, or run a command of the `/` list.
+    ConversationSend {
+        node: Id,
+        text: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<conversation::Image>,
+    },
+    /// Answer the `ask` that waits: `key` is one of its options' keys; `text` goes with a
+    /// refusal, as what to do instead; `by` says where the answer comes from (`el móvil`) and
+    /// is written on the tool's line.
+    ConversationAnswer {
+        node: Id,
+        ask: String,
+        key: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        by: Option<String>,
+    },
+    /// Stop the turn that runs.
+    ConversationInterrupt {
+        node: Id,
+    },
+    /// Change what the conversation is called, its colour, the model, the effort or the mode.
+    ConversationSet {
+        node: Id,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        accent: Option<conversation::Accent>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        effort: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<conversation::Mode>,
+    },
+    /// Run a shell line of the person's (`!command`) in the pane's folder.
+    ConversationShell {
+        node: Id,
+        command: String,
+    },
+    /// End the conversation (`/exit`): the engine stops and the pane is the shell again.
+    ConversationClose {
+        node: Id,
+    },
 }
 
 /// A node: one document of the tree, opened on demand and cached by clients.
@@ -350,6 +404,8 @@ pub enum Node {
     Blocks(Blocks),
     Diff(Diff),
     Commits(Commits),
+    /// Boxed: it is by far the largest document and the others are not made larger by it.
+    Conversation(Box<conversation::Conversation>),
 }
 
 /// Fields every node carries.
@@ -515,6 +571,10 @@ pub struct Pane {
     /// Boxed so the node stays small: a snapshot is the largest message and is as large as this.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input: Option<Box<PaneInput>>,
+    /// The node of this pane's conversation while one is open: the pane runs `claude` and the
+    /// clients draw what it says in place of the screen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation: Option<Id>,
 }
 
 /// The line the shell is holding: its text, wrapped rows joined, and where the cursor is in it.
@@ -824,5 +884,6 @@ pub fn node_id(node: &Node) -> &Id {
         Node::Blocks(n) => &n.head.id,
         Node::Diff(n) => &n.head.id,
         Node::Commits(n) => &n.head.id,
+        Node::Conversation(n) => &n.head.id,
     }
 }
