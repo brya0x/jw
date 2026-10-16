@@ -8,8 +8,9 @@
 use std::collections::VecDeque;
 
 use contract::conversation::{
-    Accent, Artifact, Ask, AskKind, AskOption, ConvCommand, ConvStatus, Conversation, DiffLine,
-    DiffSign, DividerKind, Image, Item, Limits, Mode, Task, Todo, Tone, ToolState,
+    Accent, Artifact, Ask, AskKind, AskOption, CommandKind, CommandSource, ConvCommand, ConvStatus,
+    Conversation, DiffLine, DiffSign, DividerKind, Image, Item, Limits, Mode, Task, Todo, Tone,
+    ToolState,
 };
 use contract::{AttentionKind, Head, Id};
 use serde::{Deserialize, Serialize};
@@ -65,6 +66,107 @@ const SUBCOMMANDS: [&str; 9] = [
     "agents",
     "migrate-installer",
 ];
+
+/// The id of the `initialize` request every engine is sent when it starts.
+pub const INIT_REQUEST: &str = "jwn-init";
+
+/// Commands of Claude's that need its own screen: they are not sent, and the client points at
+/// `command claude` (REQ-423).
+pub const SCREEN: [&str; 12] = [
+    "login",
+    "logout",
+    "vim",
+    "theme",
+    "terminal-setup",
+    "ide",
+    "chrome",
+    "doctor",
+    "insights",
+    "upgrade",
+    "keybindings",
+    "release-notes",
+];
+
+/// Commands of Claude's that start a turn like any message.
+const PROMPTS: [&str; 3] = ["init", "review", "security-review"];
+
+/// What the engine answers «isn't available in this environment»: jwn's own lists stand in for
+/// them (N83b), so until then they are not offered.
+const UNAVAILABLE: [&str; 10] = [
+    "help",
+    "status",
+    "resume",
+    "tasks",
+    "artifacts",
+    "skills",
+    "permissions",
+    "memory",
+    "hooks",
+    "rewind",
+];
+
+/// What jwn answers itself (REQ-418, REQ-419), whatever the engine lists under the same name.
+const OWN: [(&str, &str); 7] = [
+    ("exit", "salir de la conversación"),
+    ("rename", "cambiar el nombre de la conversación"),
+    ("color", "cambiar el color de la conversación"),
+    ("model", "cambiar el modelo"),
+    ("effort", "cambiar el esfuerzo"),
+    ("mode", "cambiar el modo de permisos"),
+    ("cost", "lo que ha costado esta conversación"),
+];
+
+/// The commands every conversation has before the engine says anything.
+pub fn own_commands() -> Vec<ConvCommand> {
+    OWN.iter()
+        .map(|(name, description)| ConvCommand {
+            name: format!("/{name}"),
+            source: CommandSource::Jwn,
+            kind: CommandKind::Local,
+            description: Some((*description).to_owned()),
+        })
+        .collect()
+}
+
+/// The `/` list: jwn's own, then what the engine lists, each tagged by where it is defined
+/// (REQ-417). `skills` are the names the engine's `init` calls skills, when it has said them.
+pub fn classify_commands(listed: &Value, skills: Option<&[&str]>) -> Vec<ConvCommand> {
+    let mut out = own_commands();
+    for c in listed.as_array().into_iter().flatten() {
+        let Some(name) = c["name"].as_str().filter(|n| !n.is_empty()) else {
+            continue;
+        };
+        if OWN.iter().any(|(own, _)| *own == name) || UNAVAILABLE.contains(&name) {
+            continue;
+        }
+        let (source, kind) = if c["builtin"].as_bool().unwrap_or(false) {
+            let kind = if SCREEN.contains(&name) {
+                CommandKind::Screen
+            } else if PROMPTS.contains(&name) {
+                CommandKind::Prompt
+            } else {
+                CommandKind::Text
+            };
+            (CommandSource::Claude, kind)
+        } else if name.contains(':') {
+            (CommandSource::Plugin, CommandKind::Prompt)
+        } else if skills.is_some_and(|s| !s.contains(&name)) {
+            (CommandSource::Project, CommandKind::Prompt)
+        } else {
+            (CommandSource::Skill, CommandKind::Prompt)
+        };
+        out.push(ConvCommand {
+            name: format!("/{name}"),
+            source,
+            kind,
+            description: c["description"]
+                .as_str()
+                .filter(|d| !d.is_empty())
+                .map(|d| clip(d, 160)),
+        });
+    }
+    out
+}
 
 pub fn parse_args(args: &[String]) -> Result<OpenArgs, String> {
     if let Some(first) = args.first().filter(|a| SUBCOMMANDS.contains(&a.as_str())) {
@@ -203,6 +305,10 @@ pub struct State {
     pub todos: Vec<Todo>,
     pub artifacts: Vec<Artifact>,
     pub commands: Vec<ConvCommand>,
+    /// What the engine runs with when asked (`--model`): its name for the model, until its own answer says which one that is.
+    wanted_model: Option<String>,
+    /// The names the engine's `init` calls skills: they tell a skill from a project's command.
+    skills: Option<Vec<String>>,
     pub limits: Option<Limits>,
     /// Allowed for this session: what the person said yes to for the rest of the conversation.
     allowed: Vec<String>,
@@ -245,6 +351,9 @@ pub struct Saved {
     pub model_arg: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort_arg: Option<String>,
+    /// The `/` list the engine gave, so a conversation that comes back has it before its engine does.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<ConvCommand>,
 }
 
 pub const SAVED_VERSION: u32 = 1;
@@ -270,7 +379,9 @@ impl State {
             tasks: Vec::new(),
             todos: Vec::new(),
             artifacts: Vec::new(),
-            commands: Vec::new(),
+            commands: own_commands(),
+            wanted_model: None,
+            skills: None,
             limits: None,
             allowed: Vec::new(),
             inflight: None,
@@ -300,6 +411,9 @@ impl State {
         st.first = saved.first;
         st.items = saved.items;
         st.cost = saved.cost;
+        if !saved.commands.is_empty() {
+            st.commands = saved.commands;
+        }
         st.status = ConvStatus::Dead;
         st.push(Item::Divider {
             text: format!("el daemon se reinició · {at}"),
@@ -338,6 +452,7 @@ impl State {
             cost: self.cost,
             model_arg: None,
             effort_arg: None,
+            commands: self.commands.clone(),
         }
     }
 
@@ -662,6 +777,12 @@ impl State {
             "control_request" => self.control_request(msg),
             "control_response" => {
                 let r = &msg["response"];
+                if r["request_id"] == INIT_REQUEST {
+                    if r["subtype"] == "success" {
+                        self.initialized(&r["response"]);
+                    }
+                    return Vec::new();
+                }
                 if r["subtype"] == "error" {
                     let why = r["error"].as_str().unwrap_or("el motor rechazó el cambio");
                     self.note(clip(why, LINE_CHARS), Some(Tone::Error));
@@ -689,6 +810,9 @@ impl State {
                 }
                 if let Some(m) = msg["permissionMode"].as_str().and_then(Mode::from_flag) {
                     self.mode = m;
+                }
+                if msg["skills"].is_array() {
+                    self.learn_skills(&msg["skills"]);
                 }
                 self.begin_auto(now);
             }
@@ -1063,12 +1187,63 @@ impl State {
         self.status = ConvStatus::Resuming;
     }
 
-    /// A new engine process starts counting its cost from nothing.
-    pub fn engine_started(&mut self) {
+    /// A new engine process starts counting its cost from nothing. It is asked what it can do
+    /// and which models it has, which is what the `/` list and the model shown come from (REQ-417,
+    /// REQ-458); `wanted` is the model it was told to run with.
+    pub fn engine_started(&mut self, wanted: Option<&str>) -> Vec<Effect> {
         self.last_total_micro = 0;
+        self.wanted_model = wanted.map(str::to_owned);
         if self.status == ConvStatus::Resuming || self.status == ConvStatus::Dead {
             self.status = ConvStatus::Idle;
         }
+        vec![Effect::Write(json!({
+            "type": "control_request",
+            "request_id": INIT_REQUEST,
+            "request": {"subtype": "initialize"},
+        }))]
+    }
+
+    /// The engine's answer to `initialize`: the commands, and the model it runs with when no turn
+    /// has said it yet.
+    fn initialized(&mut self, resp: &Value) {
+        let skills: Option<Vec<&str>> = self
+            .skills
+            .as_ref()
+            .map(|s| s.iter().map(String::as_str).collect());
+        self.commands = classify_commands(&resp["commands"], skills.as_deref());
+        // Still the placeholder, or the name it was asked with (`opus`): the engine says which model that is.
+        if self.model == "claude" || self.wanted_model.as_deref() == Some(self.model.as_str()) {
+            let models = resp["models"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+            let want = self.wanted_model.as_deref().unwrap_or("default");
+            let resolved = models
+                .iter()
+                .find(|m| m["value"].as_str() == Some(want))
+                .and_then(|m| m["resolvedModel"].as_str());
+            if let Some(full) = resolved.or(want.starts_with("claude-").then_some(want)) {
+                self.model = short_model(full);
+            }
+        }
+    }
+
+    /// The skills `init` lists tell the commands that are skills from those of the project.
+    fn learn_skills(&mut self, listed: &Value) {
+        let names: Vec<String> = listed
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|n| n.as_str().map(|n| n.trim_start_matches('/').to_owned()))
+            .collect();
+        for c in &mut self.commands {
+            if matches!(c.source, CommandSource::Skill | CommandSource::Project) {
+                let name = c.name.trim_start_matches('/');
+                c.source = if names.iter().any(|n| n == name) {
+                    CommandSource::Skill
+                } else {
+                    CommandSource::Project
+                };
+            }
+        }
+        self.skills = Some(names);
     }
 
     /// The tool item with this id: its state, summary, who answered, its output and its name.
@@ -1865,5 +2040,107 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn the_engines_commands_are_tagged_by_where_they_are_defined() {
+        let listed = json!([
+            {"name": "context", "description": "Show context usage", "builtin": true},
+            {"name": "doctor", "builtin": true},
+            {"name": "init", "builtin": true},
+            {"name": "help", "builtin": true},
+            {"name": "model", "description": "the engine's own", "builtin": true},
+            {"name": "deploy", "description": "publicar"},
+            {"name": "jw", "description": "(user) skill"},
+            {"name": "vercel:deploy", "description": "(vercel) deploy"},
+            {"name": ""},
+        ]);
+        let by = |skills: Option<&[&str]>| -> Vec<(String, CommandSource, CommandKind)> {
+            classify_commands(&listed, skills)
+                .into_iter()
+                .map(|c| (c.name, c.source, c.kind))
+                .collect()
+        };
+        let all = by(None);
+        let find = |n: &str| all.iter().find(|c| c.0 == n).cloned();
+        assert_eq!(all.iter().filter(|c| c.0 == "/model").count(), 1);
+        assert_eq!(find("/model").unwrap().1, CommandSource::Jwn);
+        assert!(
+            find("/help").is_none(),
+            "the lists of jwn stand in for it later"
+        );
+        assert_eq!(find("/context").unwrap().2, CommandKind::Text);
+        assert_eq!(find("/doctor").unwrap().2, CommandKind::Screen);
+        assert_eq!(find("/init").unwrap().2, CommandKind::Prompt);
+        assert_eq!(find("/vercel:deploy").unwrap().1, CommandSource::Plugin);
+        assert_eq!(
+            find("/deploy").unwrap().1,
+            CommandSource::Skill,
+            "until init says which are skills"
+        );
+        let told = by(Some(&["jw"]));
+        assert_eq!(
+            told.iter().find(|c| c.0 == "/deploy").unwrap().1,
+            CommandSource::Project
+        );
+        assert_eq!(
+            told.iter().find(|c| c.0 == "/jw").unwrap().1,
+            CommandSource::Skill
+        );
+    }
+
+    #[test]
+    fn initialize_gives_the_commands_and_the_model_before_any_turn() {
+        let mut s = st();
+        assert_eq!(s.model, "claude", "nothing is known yet");
+        assert_eq!(
+            s.commands.len(),
+            own_commands().len(),
+            "jwn's own are always there"
+        );
+        let e = s.engine_started(None);
+        assert_eq!(writes(&e)[0]["request"]["subtype"], "initialize");
+        assert_eq!(writes(&e)[0]["request_id"], INIT_REQUEST);
+        let answer = |model: &str| {
+            json!({"type": "control_response", "response": {"subtype": "success", "request_id": INIT_REQUEST,
+                "response": {"commands": [{"name": "context", "builtin": true}],
+                    "models": [{"value": "default", "resolvedModel": "claude-sonnet-5-5"},
+                               {"value": "opus", "resolvedModel": model}]}}})
+        };
+        assert!(s.apply(&answer("claude-opus-5-5"), 1).is_empty());
+        assert_eq!(s.model, "sonnet-5.5");
+        assert!(s.commands.iter().any(|c| c.name == "/context"));
+        assert!(
+            s.items.is_empty(),
+            "an answer to initialize is not a thing to show"
+        );
+        // a model asked for by its name is shown as what the engine says it is
+        let mut s = st();
+        s.model = "opus".into();
+        s.engine_started(Some("opus"));
+        s.apply(&answer("claude-opus-5-5"), 1);
+        assert_eq!(s.model, "opus-5.5");
+        // one a turn already told stays
+        let mut s = st();
+        s.model = "haiku-5.5".into();
+        s.engine_started(None);
+        s.apply(&answer("claude-opus-5-5"), 1);
+        assert_eq!(s.model, "haiku-5.5");
+    }
+
+    #[test]
+    fn the_commands_are_saved_so_a_conversation_that_comes_back_has_them() {
+        let mut s = st();
+        s.commands = classify_commands(&json!([{"name": "deploy"}]), None);
+        let saved = s.saved(5);
+        let back = State::restored(saved, "20:00");
+        assert!(back.commands.iter().any(|c| c.name == "/deploy"));
+        let mut none = st().saved(5);
+        none.commands.clear();
+        assert_eq!(
+            State::restored(none, "20:00").commands.len(),
+            own_commands().len(),
+            "an older file has none: jwn's own"
+        );
     }
 }

@@ -462,7 +462,9 @@ fn start_engine(shared: &Shared, pane: &Id) -> Result<(), crate::commands::Error
     {
         Some(c) => {
             c.engine = Some(engine);
-            c.st.engine_started();
+            let wanted = c.model_arg.clone();
+            let fx = c.st.engine_started(wanted.as_deref());
+            run_effects(&mut core, pane, fx);
             core.refresh();
         }
         None => engine.stop(),
@@ -693,6 +695,12 @@ pub fn send(shared: &Shared, node: &str, text: &str, images: Vec<Image>) -> Done
                         )
                     })?;
                 return set(shared, node, None, None, None, None, Some(mode));
+            }
+            word if crate::conversation::SCREEN.contains(&word) => {
+                return Err(err(
+                    ErrorCode::BadRequest,
+                    format!("/{word} necesita la pantalla de Claude: usa `command claude`"),
+                ));
             }
             "cost" => {
                 let mut core = shared.lock();

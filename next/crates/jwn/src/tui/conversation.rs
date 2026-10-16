@@ -10,12 +10,12 @@ use std::collections::HashSet;
 
 use contract::PaneInput;
 use contract::conversation::{
-    Accent, Ask, AskKind, ConvStatus, Conversation, DiffLine, DiffSign, Image, Item, Mode, Tone,
-    ToolState,
+    Accent, Ask, AskKind, CommandKind, CommandSource, ConvCommand, ConvStatus, Conversation,
+    DiffLine, DiffSign, Image, Item, Mode, Tone, ToolState,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use super::field::{self, Field};
+use super::field::{self, Field, Look};
 use super::{Grid, Rgb, Style, clip, look};
 
 /// What the keyboard or the mouse asks the daemon for: the client maps each to its command.
@@ -111,6 +111,8 @@ const SHELL_SHOWN: usize = 12;
 const PAGE: usize = 10;
 /// Files the `@` list shows at most.
 const FILES_SHOWN: usize = 8;
+/// Commands the `/` list shows at once.
+const MENU_SHOWN: usize = 8;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Of {
@@ -321,6 +323,9 @@ pub struct Ui {
     pasted: u32,
     /// The files that hold what follows the `@` the line ends with, for which fragment, the
     /// one lit, the fragment last asked for and the one the person closed the list on.
+    /// The command lit in the `/` list, and the line the person closed it on.
+    menu_at: usize,
+    menu_off: String,
     files: Vec<String>,
     files_for: String,
     file_at: usize,
@@ -369,6 +374,7 @@ impl Ui {
         if matches!(self.pop, Some(Pop::Name(_))) {
             return;
         }
+        self.menu_at = 0;
         self.editor
             .insert(&text.replace("\r\n", "\n").replace('\r', "\n"));
     }
@@ -419,6 +425,45 @@ impl Ui {
         self.editor.replace_before(n, &format!("@{path} "));
         self.files.clear();
         self.asked.clear();
+    }
+
+    /// The commands whose names hold the letters after the `/` the line is, the ones that begin
+    /// with them first (REQ-416).
+    fn menu<'a>(&self, conv: &'a Conversation) -> Vec<&'a ConvCommand> {
+        let text = self.editor.text();
+        let Some(typed) = text
+            .strip_prefix('/')
+            .filter(|t| !t.contains(char::is_whitespace) && self.menu_off != text)
+        else {
+            return Vec::new();
+        };
+        let typed = typed.to_lowercase();
+        let mut hits: Vec<(bool, usize, &ConvCommand)> = conv
+            .commands
+            .iter()
+            .filter_map(|c| {
+                let name = c.name.trim_start_matches('/').to_lowercase();
+                name.contains(&typed)
+                    .then(|| (!name.starts_with(&typed), source_look(c.source).0, c))
+            })
+            .collect();
+        hits.sort_by(|a, b| (a.0, a.1, &a.2.name).cmp(&(b.0, b.1, &b.2.name)));
+        hits.into_iter().map(|(_, _, c)| c).collect()
+    }
+
+    /// What the line starts with that has a colour of its own: a command that exists, in the
+    /// colour of where it is defined, or the `!` of a shell line.
+    fn lead(&self, conv: &Conversation) -> Option<(String, Rgb)> {
+        let text = self.editor.text();
+        if text.starts_with('!') && text.len() > 1 {
+            return Some(("!".into(), look::green()));
+        }
+        let word = text
+            .split_whitespace()
+            .next()
+            .filter(|w| w.starts_with('/'))?;
+        let c = conv.commands.iter().find(|c| c.name == word)?;
+        Some((word.to_owned(), source_look(c.source).1))
     }
 
     /// Whether a list or a field is open over the conversation.
@@ -807,20 +852,20 @@ impl Ui {
             if !self.images.is_empty() {
                 chips.push((format!("▣ {}", self.images.len()), look::cyan()));
             }
-            field.draw_with(
-                g,
-                (ix, by, iw),
-                &chips,
-                self.working(conv).then_some("■ esc"),
-                focused,
-                "escribe un mensaje",
-            );
+            let look = Look {
+                stop: self.working(conv).then_some("■ esc"),
+                ask: "escribe un mensaje · / comandos",
+                lead: self.lead(conv),
+            };
+            field.draw_with(g, (ix, by, iw), &chips, focused, &look);
         }
         self.draw_foot(g, conv, (ix, geo.foot, iw));
         if let Some(pop) = &self.pop {
             self.draw_pop(g, conv, pop, (ix, by, iw));
         } else if conv.ask.is_none() && self.files_open() {
             self.draw_files(g, conv, (ix, by, iw));
+        } else if conv.ask.is_none() {
+            self.draw_menu(g, conv, (ix, by, iw));
         }
     }
 
@@ -944,6 +989,64 @@ impl Ui {
         );
     }
 
+    fn draw_menu(
+        &self,
+        g: &mut Grid,
+        conv: &Conversation,
+        (ix, band_y, iw): (usize, usize, usize),
+    ) {
+        let menu = self.menu(conv);
+        if menu.is_empty() {
+            return;
+        }
+        let at = self.menu_at.min(menu.len() - 1);
+        let shown = menu.len().min(MENU_SHOWN);
+        let first = (at + 1).saturating_sub(shown);
+        let h = shown + 2;
+        let (x, y) = (ix, band_y.saturating_sub(h));
+        g.clear_box((x, y, iw, h));
+        g.boxed(
+            (x, y, iw, h),
+            "comandos",
+            accent_rgb(conv.accent),
+            Style::fg(look::fg()).bold(),
+            Some((
+                format!("{} de {}", at + 1, menu.len()),
+                Style::fg(look::dim()),
+            )),
+        );
+        let name_w = menu[first..first + shown]
+            .iter()
+            .map(|c| c.name.chars().count())
+            .max()
+            .unwrap_or(0)
+            .min(iw / 2);
+        for (i, c) in menu[first..first + shown].iter().enumerate() {
+            let lit = first + i == at;
+            let bg = if lit { look::sel() } else { look::panel() };
+            let row = y + 1 + i;
+            g.paint_bg(x + 1, row, iw - 2, bg);
+            let (_, colour, tag) = source_look(c.source);
+            g.put(
+                x + 2,
+                row,
+                &clip(&c.name, name_w),
+                Style::fg(colour).bold().on(bg),
+            );
+            let tag_at = (x + iw).saturating_sub(tag.chars().count() + 3);
+            g.put(tag_at, row, tag, Style::fg(colour).on(bg));
+            let from = x + 4 + name_w;
+            if let Some(d) = &c.description {
+                g.put(
+                    from,
+                    row,
+                    &clip(d, tag_at.saturating_sub(from + 1)),
+                    Style::fg(look::dim()).on(bg),
+                );
+            }
+        }
+    }
+
     fn draw_files(
         &self,
         g: &mut Grid,
@@ -1037,6 +1140,31 @@ impl Ui {
             return self.pop_key(conv, ev);
         }
         let ctrl = ev.modifiers.contains(KeyModifiers::CONTROL);
+        let menu = self.menu(conv);
+        if !menu.is_empty() {
+            let at = self.menu_at.min(menu.len() - 1);
+            match ev.code {
+                KeyCode::Up => {
+                    self.menu_at = at.saturating_sub(1);
+                    return None;
+                }
+                KeyCode::Down => {
+                    self.menu_at = (at + 1).min(menu.len() - 1);
+                    return None;
+                }
+                KeyCode::Tab => {
+                    self.editor.set(&format!("{} ", menu[at].name));
+                    self.menu_at = 0;
+                    return None;
+                }
+                KeyCode::Enter => return self.run_command(conv, menu[at]),
+                KeyCode::Esc => {
+                    self.menu_off = self.editor.text();
+                    return None;
+                }
+                _ => {}
+            }
+        }
         if self.files_open() {
             match ev.code {
                 KeyCode::Up => {
@@ -1118,6 +1246,7 @@ impl Ui {
             }
             KeyCode::Up | KeyCode::Down => None,
             _ => {
+                self.menu_at = 0;
                 self.editor.edit(ev);
                 None
             }
@@ -1180,6 +1309,22 @@ impl Ui {
             }
         }
         None
+    }
+
+    /// Run a command chosen from the `/` list: it goes as the line, except one that needs
+    /// Claude's own screen, which is only said so (REQ-423).
+    fn run_command(&mut self, conv: &Conversation, c: &ConvCommand) -> Option<Act> {
+        self.menu_at = 0;
+        if c.kind == CommandKind::Screen {
+            self.editor.take();
+            self.says = format!(
+                "{} necesita la pantalla de Claude: usa `command claude`",
+                c.name
+            );
+            return None;
+        }
+        self.editor.set(&c.name);
+        self.submit(conv)
     }
 
     /// `↵`: send the line, or open the list a bare command stands for.
@@ -1329,6 +1474,16 @@ impl Ui {
             }
             return None;
         }
+        let menu = self.menu(conv);
+        if self.pop.is_none() && conv.ask.is_none() && !menu.is_empty() {
+            let shown = menu.len().min(MENU_SHOWN);
+            let first = (self.menu_at.min(menu.len() - 1) + 1).saturating_sub(shown);
+            let h = shown + 2;
+            let top = geo.band.0.saturating_sub(h);
+            if y > top && y + 1 < top + h {
+                return self.run_command(conv, menu[first + y - top - 1]);
+            }
+        }
         if let Some(Pop::Pick { of, .. }) = &self.pop {
             let of = *of;
             let h = of.choices().len() + 2;
@@ -1430,6 +1585,18 @@ impl Ui {
 /// The pane's title: what it runs and the conversation's name.
 pub fn title(conv: &Conversation) -> String {
     format!("claude · {}", conv.name)
+}
+
+/// Where a command is defined, as its list orders it, the colour it is written in and the word
+/// that says it.
+fn source_look(s: CommandSource) -> (usize, Rgb, &'static str) {
+    match s {
+        CommandSource::Jwn => (0, look::blue(), "jwn"),
+        CommandSource::Claude => (1, look::magenta(), "claude"),
+        CommandSource::Project => (2, look::green(), "proyecto"),
+        CommandSource::Skill => (3, look::yellow(), "skill"),
+        CommandSource::Plugin => (4, look::cyan(), "plugin"),
+    }
 }
 
 pub fn accent_rgb(a: Accent) -> Rgb {
@@ -2523,6 +2690,189 @@ mod tests {
         assert_eq!(fenced[1], [("let x = 1;".to_owned(), code)]);
         let bold = wrap("**ojo** aquí", 40, plain, code);
         assert_eq!(bold[0][0], ("ojo".to_owned(), plain.bold()));
+    }
+
+    #[test]
+    fn a_slash_lists_the_commands_that_hold_the_letters_the_ones_that_begin_with_them_first() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "/");
+        let all: Vec<&str> = ui.menu(&conv).iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(
+            all,
+            [
+                "/exit",
+                "/tasks",
+                "/context",
+                "/doctor",
+                "/deploy",
+                "/jwn",
+                "/vercel:deploy"
+            ],
+            "by where each is defined (jwn, claude, project, skill, plugin), then by name"
+        );
+        let (_, rows) = frame(&ui, &conv);
+        row_of(&rows, "comandos");
+        row_of(&rows, "salir de la conversación");
+        row_of(&rows, "publicar la rama en staging");
+        row_of(&rows, "proyecto");
+        row_of(&rows, "plugin");
+        type_in(&mut ui, &conv, "de");
+        let some: Vec<&str> = ui.menu(&conv).iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(
+            some,
+            ["/deploy", "/vercel:deploy"],
+            "begins with «de» first, then the ones that only hold it"
+        );
+        type_in(&mut ui, &conv, "x");
+        assert!(ui.menu(&conv).is_empty(), "nothing holds it: no list");
+        assert!(frame(&ui, &conv).1.iter().all(|r| !r.contains("comandos")));
+        // a space ends the word, and so the list
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "/model ");
+        assert!(ui.menu(&conv).is_empty());
+    }
+
+    #[test]
+    fn the_list_moves_with_the_arrows_completes_with_tab_runs_with_enter_and_closes_with_esc() {
+        let conv = idle();
+        let node = conv.head.id.clone();
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "/de");
+        press(&mut ui, &conv, KeyCode::Down);
+        assert_eq!(press(&mut ui, &conv, KeyCode::Tab), None);
+        assert_eq!(
+            ui.editor.text(),
+            "/vercel:deploy ",
+            "tab completes the one lit"
+        );
+        assert!(ui.menu(&conv).is_empty());
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "/de");
+        assert_eq!(
+            press(&mut ui, &conv, KeyCode::Enter),
+            Some(Act::Send {
+                node: node.clone(),
+                text: "/deploy".into(),
+                images: vec![]
+            }),
+            "enter runs it"
+        );
+        assert_eq!(ui.editor.text(), "");
+        // a command of jwn's that takes a value opens its list
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "/exi");
+        assert!(matches!(
+            press(&mut ui, &conv, KeyCode::Enter),
+            Some(Act::Send { text, .. }) if text == "/exit"
+        ));
+        // esc closes the list and the line stays; a key opens it again
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "/co");
+        assert_eq!(press(&mut ui, &conv, KeyCode::Esc), None);
+        assert_eq!(ui.editor.text(), "/co");
+        assert!(ui.menu(&conv).is_empty());
+        type_in(&mut ui, &conv, "n");
+        assert!(!ui.menu(&conv).is_empty());
+        // ↑ at the top and ↓ at the bottom stay where they are
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "/");
+        press(&mut ui, &conv, KeyCode::Up);
+        assert_eq!(ui.menu_at, 0);
+        for _ in 0..20 {
+            press(&mut ui, &conv, KeyCode::Down);
+        }
+        assert_eq!(ui.menu_at, 6);
+        // typing again lights the first
+        type_in(&mut ui, &conv, "d");
+        assert_eq!(ui.menu_at, 0);
+    }
+
+    #[test]
+    fn a_command_that_needs_claudes_screen_is_not_run_from_the_list_and_says_where_to_go() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "/doc");
+        assert_eq!(press(&mut ui, &conv, KeyCode::Enter), None);
+        assert_eq!(ui.editor.text(), "");
+        assert!(ui.take_says().unwrap().contains("command claude"));
+    }
+
+    #[test]
+    fn a_click_on_a_row_of_the_list_runs_it_and_a_long_list_scrolls_with_the_one_lit() {
+        let mut conv = idle();
+        let node = conv.head.id.clone();
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "/de");
+        let (_, rows) = frame(&ui, &conv);
+        let y = row_of(&rows, "/vercel:deploy");
+        assert_eq!(
+            ui.click(&conv, INNER, 20, y),
+            Some(Act::Send {
+                node,
+                text: "/vercel:deploy".into(),
+                images: vec![]
+            })
+        );
+        conv.commands = (0..20)
+            .map(|n| ConvCommand {
+                name: format!("/c{n:02}"),
+                source: CommandSource::Skill,
+                kind: CommandKind::Prompt,
+                description: None,
+            })
+            .collect();
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "/c");
+        for _ in 0..12 {
+            press(&mut ui, &conv, KeyCode::Down);
+        }
+        let (_, rows) = frame(&ui, &conv);
+        row_of(&rows, "/c12");
+        assert!(
+            !rows.iter().any(|r| r.contains("/c00")),
+            "the window follows the one lit"
+        );
+        row_of(&rows, "13 de 20");
+    }
+
+    #[test]
+    fn a_command_that_exists_is_written_in_the_colour_of_where_it_is_defined() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        let colour_of = |ui: &Ui, text: &str| {
+            let (g, rows) = frame(ui, &conv);
+            let y = row_of(&rows, text);
+            let x = rows[y].find(text).unwrap();
+            let x = rows[y][..x].chars().count();
+            g.cells[y * g.cols + x].1.fg
+        };
+        type_in(&mut ui, &conv, "/exit");
+        assert_eq!(colour_of(&ui, "/exit"), Some(look::blue()), "jwn's own");
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "/context ");
+        assert_eq!(
+            colour_of(&ui, "/context"),
+            Some(look::magenta()),
+            "Claude's"
+        );
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "/deploy ahora");
+        assert_eq!(
+            colour_of(&ui, "/deploy"),
+            Some(look::green()),
+            "the project's"
+        );
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "/nada ");
+        assert_eq!(
+            colour_of(&ui, "/nada"),
+            Some(look::fg()),
+            "one that does not exist is plain"
+        );
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "!ls");
+        assert_eq!(colour_of(&ui, "!ls"), Some(look::green()), "a shell line");
     }
 
     #[test]

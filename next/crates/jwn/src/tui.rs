@@ -3151,7 +3151,7 @@ impl View {
                         (
                             " CLAUDE ",
                             accent,
-                            "↵ envía · esc interrumpe · ⇧tab modo · ^O abre · ^V imagen · clic en un ítem y c copia · ^␣ salir",
+                            "↵ envía · / comandos · esc interrumpe · ⇧tab modo · ^O abre · ^V imagen · clic en un ítem y c copia · ^␣ salir",
                         )
                     }
                 }

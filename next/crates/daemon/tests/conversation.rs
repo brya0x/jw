@@ -257,6 +257,111 @@ fn a_new_conversation_starts_the_engine_and_a_turn_streams_to_its_end() {
 }
 
 #[test]
+fn the_engine_is_asked_what_it_can_do_and_the_model_and_the_commands_show_before_any_turn() {
+    let mut r = rig();
+    let (node, _) = r.open();
+    // REQ-458: the model is the one the engine runs with, not a placeholder, from the start
+    let v = r.until(&node, "the answer to initialize", |v| {
+        v["model"] == "sonnet-5.5" && v["commands"].as_array().is_some_and(|c| c.len() > 7)
+    });
+    assert!(
+        log_lines(&r.log).iter().any(|l| l == "control initialize"),
+        "{:?}",
+        log_lines(&r.log)
+    );
+    // REQ-417: jwn's own, and what the engine lists tagged by where it is defined
+    let find = |name: &str| {
+        v["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == name)
+            .cloned()
+            .unwrap_or_else(|| panic!("{name} is not in {:#}", v["commands"]))
+    };
+    for (name, source, kind) in [
+        ("/exit", "jwn", "local"),
+        ("/mode", "jwn", "local"),
+        ("/context", "claude", "text"),
+        ("/init", "claude", "prompt"),
+        ("/doctor", "claude", "screen"),
+        ("/deploy", "skill", "prompt"),
+        ("/vercel:deploy", "plugin", "prompt"),
+    ] {
+        let c = find(name);
+        assert_eq!(
+            (c["source"].as_str(), c["kind"].as_str()),
+            (Some(source), Some(kind)),
+            "{name}"
+        );
+    }
+    assert_eq!(find("/context")["description"], "Show context usage");
+    let names: Vec<&str> = v["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
+    assert!(
+        !names.contains(&"/help"),
+        "the lists of jwn stand in for it later"
+    );
+    assert_eq!(
+        names.iter().filter(|n| **n == "/model").count(),
+        1,
+        "jwn's own replaces the engine's"
+    );
+    // the skills the engine's init lists tell a skill from a command of the project
+    r.send(&node, "hola");
+    let v = r.until(&node, "the skills to be known", |v| {
+        v["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["name"] == "/deploy" && c["source"] == "project")
+    });
+    let jw = v["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "/jw")
+        .unwrap();
+    assert_eq!(jw["source"], "skill");
+    r.stop();
+}
+
+#[test]
+fn the_model_asked_for_with_the_flag_is_the_one_shown() {
+    let mut r = rig();
+    let (node, _) = r.open_with(None, vec!["--model", "opus"], None);
+    r.until(&node, "the model the engine resolves", |v| {
+        v["model"] == "opus-5.5"
+    });
+    r.stop();
+}
+
+#[test]
+fn a_command_that_needs_claudes_screen_is_not_sent_and_says_where_to_go() {
+    let mut r = rig();
+    let (node, _) = r.open();
+    let e = r
+        .cmd(Cmd::ConversationSend {
+            node: node.clone(),
+            text: "/doctor".into(),
+            images: vec![],
+        })
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::BadRequest);
+    assert!(e.message.contains("command claude"), "{}", e.message);
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(
+        !log_lines(&r.log).iter().any(|l| l.contains("/doctor")),
+        "it never reached the engine"
+    );
+    r.stop();
+}
+
+#[test]
 fn a_permission_waits_for_whoever_answers_first_and_says_where_it_came_from() {
     let mut r = rig();
     let (node, _) = r.open();

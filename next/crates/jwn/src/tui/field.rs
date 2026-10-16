@@ -18,6 +18,14 @@ pub const SEND: &str = "➤";
 const PROMPT: usize = 2;
 const MARKS: usize = 4;
 
+/// How a field is drawn besides its text: the stop mark when something runs, the words of the
+/// empty line, and the word the line starts with that has a colour of its own (a command).
+pub struct Look<'a> {
+    pub stop: Option<&'a str>,
+    pub ask: &'a str,
+    pub lead: Option<(String, Rgb)>,
+}
+
 /// The text of the field wrapped to its rows, and where the cursor is in them.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Field {
@@ -77,20 +85,24 @@ impl Field {
         } else {
             "escribe un comando"
         };
-        self.draw_with(g, at, chips, running.then_some(STOP), focused, ask);
+        let look = Look {
+            stop: running.then_some(STOP),
+            ask,
+            lead: None,
+        };
+        self.draw_with(g, at, chips, focused, &look);
     }
 
-    /// The same band with its own stop mark (`stop` is drawn when it is given) and the words
-    /// of the empty line.
+    /// The same band with the look the caller gives it.
     pub fn draw_with(
         &self,
         g: &mut Grid,
         (ix, y, iw): (usize, usize, usize),
         chips: &[(String, Rgb)],
-        stop: Option<&str>,
         focused: bool,
-        ask: &str,
+        look: &Look,
     ) {
+        let Look { stop, ask, lead } = look;
         for r in 0..self.band_rows() {
             g.paint_bg(ix.saturating_sub(1), y + r, iw + 2, look::panel());
         }
@@ -120,6 +132,21 @@ impl Field {
                 &clip(row, text_width(iw)),
                 Style::fg(look::fg()).on(ground),
             );
+        }
+        if let Some((word, colour)) = lead
+            && self
+                .rows
+                .first()
+                .is_some_and(|r| r.starts_with(word.as_str()))
+        {
+            let width = word.chars().count().min(text_width(iw));
+            for x in tx..tx + width {
+                if first < g.rows && x < g.cols {
+                    let st = &mut g.cells[first * g.cols + x].1;
+                    st.fg = Some(*colour);
+                    st.bold = true;
+                }
+            }
         }
         if self.is_empty() {
             g.put(

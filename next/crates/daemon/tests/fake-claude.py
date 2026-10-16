@@ -20,7 +20,7 @@ def out(o):
         sys.stdout.write(json.dumps(o) + "\n")
         sys.stdout.flush()
 def init():
-    out({"type": "system", "subtype": "init", "session_id": session, "model": "claude-sonnet-5-5", "permissionMode": "default"})
+    out({"type": "system", "subtype": "init", "session_id": session, "model": "claude-sonnet-5-5", "permissionMode": "default", "skills": ["jw"]})
 def say(text):
     out({"type": "stream_event", "event": {"type": "message_start"}})
     out({"type": "stream_event", "event": {"type": "content_block_start", "content_block": {"type": "text"}}})
@@ -71,6 +71,26 @@ edits = 0
 for line in sys.stdin:
     m = json.loads(line)
     if m.get("type") == "control_request":
+        if m["request"]["subtype"] == "initialize":
+            logline("control initialize")
+            out({"type": "control_response", "response": {"subtype": "success", "request_id": m["request_id"], "response": {
+                "commands": [
+                    {"name": "context", "description": "Show context usage", "argumentHint": "", "builtin": True},
+                    {"name": "doctor", "description": "Diagnose the install", "argumentHint": "", "builtin": True},
+                    {"name": "init", "description": "Create CLAUDE.md", "argumentHint": "", "builtin": True},
+                    {"name": "help", "description": "Show help", "argumentHint": "", "builtin": True},
+                    {"name": "model", "description": "Set the model", "argumentHint": "", "builtin": True},
+                    {"name": "deploy", "description": "publicar la rama en staging", "argumentHint": ""},
+                    {"name": "jw", "description": "work with jw (user)", "argumentHint": ""},
+                    {"name": "vercel:deploy", "description": "(vercel) deploy", "argumentHint": ""},
+                ],
+                "models": [
+                    {"value": "default", "resolvedModel": "claude-sonnet-5-5"},
+                    {"value": "opus", "resolvedModel": "claude-opus-5-5"},
+                    {"value": "haiku", "resolvedModel": "claude-haiku-5-5"},
+                ],
+            }}})
+            continue
         if m["request"]["subtype"] == "set_permission_mode":
             logline("control set_permission_mode " + m["request"]["mode"])
             out({"type": "control_response", "response": {"subtype": "success", "request_id": m["request_id"], "response": {"mode": m["request"]["mode"]}}})
