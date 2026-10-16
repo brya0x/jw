@@ -18,7 +18,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -93,7 +93,7 @@ private fun ColumnScope.Viewer(doc: MarkdownDoc, plan: PlanAnswers?, close: () -
             contentPadding = PaddingValues(horizontal = Gutter, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            itemsIndexed(doc.blocks) { _, block -> BlockView(block) }
+            items(doc.blocks) { block -> BlockView(block) }
             if (doc.truncated) item { Mono("el documento sigue más allá de lo que el PC lee", Palette.dim, 11, lines = 2) }
         }
     }
@@ -219,7 +219,7 @@ private fun TableView(table: MdBlock.Table) {
     val widths = (0 until columns).map { c -> (rows.maxOf { r -> r.getOrNull(c)?.let { plain(it).length } ?: 0 }.coerceIn(4, 36) * 8 + 20).dp }
     Column(Modifier.horizontalScroll(rememberScrollState())) {
         rows.forEachIndexed { r, row ->
-            Row(Modifier.background(if (r == 0) Palette.panel else Color.Transparent)) {
+            Row(if (r == 0) Modifier.background(Palette.panel) else Modifier) {
                 for (c in 0 until columns) {
                     Body(
                         row.getOrNull(c) ?: emptyList(),
