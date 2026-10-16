@@ -30,6 +30,7 @@ mod diff_lines;
 mod field;
 mod look;
 mod manage;
+mod markdown;
 mod open;
 mod panels;
 mod phone;
@@ -40,6 +41,7 @@ mod shell;
 mod side;
 mod split;
 mod tree;
+mod viewer;
 
 pub use changes::Ask;
 use changes::{Changes, Docs, Outcome, Src};
@@ -135,6 +137,11 @@ impl Grid {
     /// Light the cells `x0..x1` of row `y` the way a selection is lit (REQ-308).
     fn light(&mut self, x0: usize, x1: usize, y: usize) {
         let (lit, text) = look::selection();
+        self.tint(x0, x1, y, lit, text);
+    }
+
+    /// Put `text` on `lit` in the cells `x0..x1` of row `y`, keeping what they say.
+    fn tint(&mut self, x0: usize, x1: usize, y: usize, lit: Rgb, text: Rgb) {
         for x in x0..x1 {
             if y < self.rows && x < self.cols {
                 let style = &mut self.cells[y * self.cols + x].1;
@@ -470,6 +477,16 @@ pub enum After {
     Copy(String),
     /// Something the person asked of a conversation.
     Conv(ConvAct),
+    /// Read the Markdown file `path` of a workspace and show it in the viewer.
+    ReadMarkdown {
+        workspace: String,
+        path: String,
+    },
+    /// Read the plan that waits as `ask` in the conversation `node` and show it in the viewer.
+    ReadPlan {
+        node: String,
+        ask: String,
+    },
     /// Close a pane.
     ClosePane(String),
     /// Name a workspace or a panel (empty: the automatic name).
@@ -554,6 +571,8 @@ pub struct View {
     /// The pane whose conversation a drag began in, with the button still down (the drag itself
     /// and what it covers are the conversation's own: `conversation::Ui`).
     conv_drag: Option<String>,
+    /// The Markdown viewer over the panes, when one is open.
+    viewer: Option<viewer::Viewer>,
     /// The file tree: whether its column is shown, whether the keys are in it, and what each
     /// workspace's holds.
     tree_on: bool,
@@ -639,6 +658,7 @@ impl View {
             selection: None,
             drag: None,
             conv_drag: None,
+            viewer: None,
             tree_on: false,
             tree_focus: false,
             trees: HashMap::new(),
@@ -1823,6 +1843,9 @@ impl View {
             self.help = false;
             return After::Continue;
         }
+        if self.viewer.is_some() {
+            return self.viewer_key(ev);
+        }
         if self.picker.is_some() {
             return self.picker_key(ev);
         }
@@ -1938,6 +1961,7 @@ impl View {
                     place: self.place(None),
                 }
             }
+            Some(ConvAct::ViewPlan { node, ask }) => After::ReadPlan { node, ask },
             Some(act) => After::Conv(act),
             None => After::Continue,
         }
@@ -2282,6 +2306,83 @@ impl View {
         }
     }
 
+    // ---- the Markdown viewer (REQ-469 to REQ-478) ----
+
+    /// Show a document in the viewer; the keys and the mouse are its until it closes.
+    pub fn open_viewer(&mut self, doc: contract::markdown::MarkdownDoc, source: viewer::Source) {
+        self.viewer = Some(viewer::Viewer::new(doc, source));
+    }
+
+    /// Whether the plan the viewer shows still waits for an answer.
+    fn viewer_plan_waits(&self) -> bool {
+        match self.viewer.as_ref().map(|v| &v.source) {
+            Some(viewer::Source::Plan { node, ask }) => self
+                .convs
+                .get(node)
+                .and_then(|c| c.ask.as_ref())
+                .is_some_and(|a| a.id == *ask),
+            _ => false,
+        }
+    }
+
+    fn viewer_act(&mut self, act: viewer::Act) -> After {
+        match act {
+            viewer::Act::Nothing => After::Continue,
+            viewer::Act::Close => {
+                self.viewer = None;
+                After::Continue
+            }
+            viewer::Act::Copy(text) => After::Copy(text),
+            viewer::Act::Edit(path) => {
+                self.viewer = None;
+                self.conv_after(Some(ConvAct::Edit(path.into())))
+            }
+            viewer::Act::Answer(key) => {
+                let Some(viewer::Source::Plan { node, ask }) =
+                    self.viewer.as_ref().map(|v| v.source.clone())
+                else {
+                    return After::Continue;
+                };
+                if !self.viewer_plan_waits() {
+                    self.flash("ese plan ya no espera respuesta");
+                    return After::Continue;
+                }
+                self.viewer = None;
+                After::Conv(ConvAct::Answer { node, ask, key })
+            }
+        }
+    }
+
+    fn viewer_key(&mut self, ev: KeyEvent) -> After {
+        let (cols, rows) = self.size;
+        let rect = self.panes_space(cols, rows);
+        let Some(v) = self.viewer.as_mut() else {
+            return After::Continue;
+        };
+        let act = v.key(&ev, rect);
+        if let Some(says) = v.take_says() {
+            self.flash = says;
+        }
+        self.viewer_act(act)
+    }
+
+    /// The button was let go over the viewer: the click it was, or the text a drag covered.
+    fn viewer_release(&mut self, cols: usize, rows: usize) -> After {
+        let rect = self.panes_space(cols, rows);
+        let Some(v) = self.viewer.as_mut() else {
+            return After::Continue;
+        };
+        let released = v.release(rect);
+        if let Some(says) = v.take_says() {
+            self.flash = says;
+        }
+        match released {
+            viewer::Released::Click(x, y) => self.click(x, y, cols, rows),
+            viewer::Released::Copy(text) => After::Copy(text),
+            viewer::Released::Nothing => After::Continue,
+        }
+    }
+
     /// A click in the conversation of a pane: its title, an item, the field, the footer, the box that asks.
     fn conv_click(&mut self, node: &str, rect: Rect, x: usize, y: usize) -> After {
         let Some(conv) = self.convs.get(node) else {
@@ -2309,6 +2410,14 @@ impl View {
         if self.help {
             self.help = false;
             return After::Continue;
+        }
+        if self.viewer.is_some() {
+            let rect = self.panes_space(cols, rows);
+            let act = self
+                .viewer
+                .as_mut()
+                .map_or(viewer::Act::Nothing, |v| v.click(rect, x, y));
+            return self.viewer_act(act);
         }
         if let Some(menu) = self.launcher {
             let px = SIDEBAR + 1;
@@ -2394,6 +2503,10 @@ impl View {
     /// The wheel over the sidebar (or the avisos list) moves the highlight; over a pane drawn
     /// as blocks it scrolls them.
     pub fn scroll(&mut self, down: bool, x: usize, y: usize, cols: usize, rows: usize) -> After {
+        if let Some(v) = self.viewer.as_mut() {
+            v.scroll_by(!down, 3);
+            return After::Continue;
+        }
         if self.help
             || self.manage.is_some()
             || self.launcher.is_some()
@@ -2600,8 +2713,11 @@ impl View {
             t.filter = None;
             t.found = None;
         }
-        if path.ends_with(".md") {
-            self.flash("un .md se leerá con formato cuando exista el visor");
+        if is_markdown(path) {
+            return After::ReadMarkdown {
+                workspace,
+                path: path.to_owned(),
+            };
         }
         After::NewProgram {
             workspace,
@@ -2891,6 +3007,10 @@ impl View {
         self.selection = None;
         self.drag = None;
         self.unlight_conversations();
+        if self.viewer.is_some() {
+            let rect = self.panes_space(cols, rows);
+            return self.viewer.as_mut().is_some_and(|v| v.press(rect, x, y));
+        }
         if self.help
             || self.manage.is_some()
             || self.launcher.is_some()
@@ -2954,6 +3074,14 @@ impl View {
     /// the line and column it is on, or, past the top or the bottom of the list, to its first or
     /// last line, which scrolls (REQ-305).
     pub fn drag_to(&mut self, x: usize, y: usize) {
+        if self.viewer.is_some() {
+            let (cols, rows) = self.size;
+            let (rect, now) = (self.panes_space(cols, rows), self.now_ms);
+            if let Some(v) = self.viewer.as_mut() {
+                v.drag_to(rect, (x, y), now);
+            }
+            return;
+        }
         if let Some((node, rect)) = self.conv_drag_at() {
             let now = self.now_ms;
             if let (Some(conv), Some(ui)) = (self.convs.get(&node), self.conv_ui.get_mut(&node)) {
@@ -3016,6 +3144,14 @@ impl View {
     /// While a drag is held past the edge of a list, scroll it a line every so often and keep the
     /// selection at its edge.
     pub fn drag_tick(&mut self) {
+        if self.viewer.is_some() {
+            let (cols, rows) = self.size;
+            let (rect, now) = (self.panes_space(cols, rows), self.now_ms);
+            if let Some(v) = self.viewer.as_mut() {
+                v.drag_tick(rect, now);
+            }
+            return;
+        }
         if let Some((node, rect)) = self.conv_drag_at() {
             let now = self.now_ms;
             if let (Some(conv), Some(ui)) = (self.convs.get(&node), self.conv_ui.get_mut(&node)) {
@@ -3058,6 +3194,9 @@ impl View {
     /// The button was let go: a drag that never moved is the click it was; one that did copies what it
     /// covers (REQ-306) and leaves it lit until the next press or key.
     pub fn release(&mut self, cols: usize, rows: usize) -> After {
+        if self.viewer.is_some() {
+            return self.viewer_release(cols, rows);
+        }
         if let Some(pane) = self.conv_drag.take() {
             return self.release_conversation(&pane, cols, rows);
         }
@@ -3268,6 +3407,14 @@ impl View {
             );
         }
 
+        if let Some(v) = &self.viewer {
+            v.draw(
+                &mut g,
+                self.panes_space(cols, rows),
+                self.viewer_plan_waits(),
+            );
+        }
+
         // The status bar.
         for x in 0..cols {
             g.cells[(rows - 1) * cols + x] = (' ', Style::default().on(look::panel()));
@@ -3275,7 +3422,13 @@ impl View {
         let level = self.level();
         let conv_focus = self.focused_conversation();
         let diff_status = self.changes.as_ref().map(|c| c.status(&self.docs()));
+        let viewer_hint = self.viewer.as_ref().map(viewer::Viewer::hint);
         let (chip, bg, hint) = match (&self.manage, &diff_status) {
+            _ if viewer_hint.is_some() => (
+                " LEER ",
+                look::cyan(),
+                viewer_hint.as_deref().unwrap_or_default(),
+            ),
             (None, _) if self.launcher.is_some() => (
                 " PANEL ",
                 look::magenta(),
@@ -4294,13 +4447,29 @@ fn conversation_cmd(view: &mut View, client: &mut Client, act: ConvAct) {
             args: Vec::new(),
             env: None,
         },
-        ConvAct::Copy(_) | ConvAct::Edit(_) => return,
+        ConvAct::Copy(_) | ConvAct::Edit(_) | ConvAct::ViewPlan { .. } => return,
     };
     match client.cmd(cmd) {
         Ok(Ok(_)) => {}
         Ok(Err(e)) => view.flash(&e.message),
         Err(e) => view.flash(&e.to_string()),
     }
+}
+
+/// A Markdown file or a plan, asked of the daemon.
+fn read_doc(client: &mut Client, cmd: Cmd) -> Result<contract::markdown::MarkdownDoc, String> {
+    match client.cmd(cmd) {
+        Ok(Ok(Some(doc))) => serde_json::from_value(doc).map_err(|e| e.to_string()),
+        Ok(Ok(None)) => Err("el daemon no respondió con un documento".into()),
+        Ok(Err(e)) => Err(e.message),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Whether the viewer reads the file: `.md` and `.markdown`, whatever the case (REQ-470).
+fn is_markdown(path: &str) -> bool {
+    path.rsplit_once('.')
+        .is_some_and(|(_, e)| ["md", "markdown"].contains(&e.to_lowercase().as_str()))
 }
 
 /// Do what a key, a click or an answer asked for; true when the client is to quit.
@@ -4427,6 +4596,22 @@ fn do_after(
         }
         After::Check(workspace) => check_changes(view, client, workspace),
         After::Conv(act) => conversation_cmd(view, client, act),
+        After::ReadMarkdown { workspace, path } => {
+            match read_doc(client, Cmd::ReadMarkdown { workspace, path }) {
+                Ok(doc) => view.open_viewer(doc, viewer::Source::File),
+                Err(why) => view.flash(&why),
+            }
+        }
+        After::ReadPlan { node, ask } => {
+            let cmd = Cmd::ReadPlan {
+                node: node.clone(),
+                ask: ask.clone(),
+            };
+            match read_doc(client, cmd) {
+                Ok(doc) => view.open_viewer(doc, viewer::Source::Plan { node, ask }),
+                Err(why) => view.flash(&why),
+            }
+        }
         After::Copy(text) => {
             let mut out = stdout();
             let _ = write!(out, "{}", shell::osc52(&text));
@@ -7801,6 +7986,187 @@ mod tests {
         );
         // and a press outside the list is the click it always was
         assert!(!v.press_select(x, 39, 120, 40));
+    }
+
+    fn plan_ask() -> contract::conversation::Ask {
+        use contract::conversation::{Ask, AskKind, AskOption};
+        let option = |key: &str, label: &str| AskOption {
+            key: key.into(),
+            label: label.into(),
+        };
+        Ask {
+            id: "req-p".into(),
+            kind: AskKind::Plan,
+            tool: "ExitPlanMode".into(),
+            title: "Plan listo".into(),
+            command: None,
+            diff: vec![],
+            plan: vec!["# Plan".into(), "1. mirar".into()],
+            options: vec![
+                option("accept", "Aprobar y editar sin preguntar"),
+                option("manual", "Aprobar, preguntando cada edición"),
+                option("no", "Seguir planeando"),
+            ],
+            multi: false,
+        }
+    }
+
+    fn plan_doc() -> contract::markdown::MarkdownDoc {
+        use markdown::tests::{doc, head, para};
+        let mut blocks = vec![head(1, "Plan: pruebas")];
+        blocks.extend((0..40).map(|n| para(&format!("paso número {n} del plan"))));
+        let mut d = doc(blocks);
+        d.title = "Plan: pruebas".into();
+        d.path = Some("/x/plan.md".into());
+        d
+    }
+
+    #[test]
+    fn v_on_a_plan_asks_for_it_whole_and_the_viewer_answers_it_and_closes() {
+        let mut v = conv_view(true);
+        v.convs.get_mut(CONV).unwrap().ask = Some(plan_ask());
+        assert_eq!(
+            v.press_key(plain(KeyCode::Char('v'))),
+            After::ReadPlan {
+                node: CONV.into(),
+                ask: "req-p".into()
+            },
+            "REQ-469"
+        );
+        let source = viewer::Source::Plan {
+            node: CONV.into(),
+            ask: "req-p".into(),
+        };
+        v.open_viewer(plan_doc(), source.clone());
+        let screen = v.plain(120, 30);
+        assert!(
+            screen.contains("▤ plan · Plan: pruebas") && screen.contains("plan listo"),
+            "{screen}"
+        );
+        assert!(
+            screen.contains("1  aprobar y editar sin preguntar"),
+            "{screen}"
+        );
+        assert!(
+            screen.contains(" LEER ") && screen.contains("esc cerrar"),
+            "the keys are in the status bar: {screen}"
+        );
+        // every key is the viewer's, the conversation's line gets none
+        v.press_key(plain(KeyCode::Char('j')));
+        assert_eq!(v.conv_ui[CONV].editor.text(), "");
+        assert_eq!(v.viewer.as_ref().unwrap().source, source);
+        // 1 answers it as the box does, and the viewer closes
+        assert_eq!(
+            v.press_key(plain(KeyCode::Char('1'))),
+            After::Conv(ConvAct::Answer {
+                node: CONV.into(),
+                ask: "req-p".into(),
+                key: "accept".into()
+            }),
+            "REQ-475"
+        );
+        assert!(v.viewer.is_none());
+        // answered elsewhere: it says so and keeps the document
+        v.open_viewer(plan_doc(), source);
+        v.convs.get_mut(CONV).unwrap().ask = None;
+        assert_eq!(v.press_key(plain(KeyCode::Char('2'))), After::Continue);
+        assert!(v.viewer.is_some());
+        assert!(v.plain(120, 30).contains("ya no espera respuesta"));
+        assert!(
+            !v.plain(120, 30).contains("plan listo"),
+            "the bar no longer says it waits"
+        );
+        // esc leaves things as they were
+        assert_eq!(v.press_key(plain(KeyCode::Esc)), After::Continue);
+        assert!(v.viewer.is_none());
+        assert!(
+            v.plain(120, 30).contains("claude · "),
+            "the conversation is back"
+        );
+    }
+
+    #[test]
+    fn the_viewer_has_the_wheel_the_clicks_the_drag_and_the_editor() {
+        let mut v = conv_view(true);
+        v.convs.get_mut(CONV).unwrap().ask = Some(plan_ask());
+        v.open_viewer(
+            plan_doc(),
+            viewer::Source::Plan {
+                node: CONV.into(),
+                ask: "req-p".into(),
+            },
+        );
+        assert!(v.plain(120, 30).contains("paso número 0 del plan"));
+        v.scroll(true, 60, 10, 120, 30);
+        assert!(
+            v.plain(120, 30).contains("paso número 1 del plan"),
+            "the wheel moves three rows"
+        );
+        v.scroll(false, 60, 10, 120, 30);
+        // a click on an answer answers (the row above the status bar)
+        let (x, y) = find_in(&v, "aprobar, preguntando", 30);
+        assert_eq!(
+            v.click(x + 2, y, 120, 30),
+            After::Conv(ConvAct::Answer {
+                node: CONV.into(),
+                ask: "req-p".into(),
+                key: "manual".into()
+            })
+        );
+        // a drag copies, and a key lets go
+        v.open_viewer(plan_doc(), viewer::Source::File);
+        let (x, y) = find_in(&v, "paso número 2", 30);
+        assert!(v.press_select(x + 5, y, 120, 30));
+        v.drag_to(x + 10, y);
+        assert_eq!(v.release(120, 30), After::Copy("número".into()));
+        assert!(v.flash.starts_with("copiado · 1 línea"), "{}", v.flash);
+        // y copies it all, e opens its file in the editor and closes the viewer
+        let After::Copy(all) = v.press_key(plain(KeyCode::Char('y'))) else {
+            panic!("a copy");
+        };
+        assert!(
+            all.starts_with("# Plan: pruebas\n\npaso número 0 del plan"),
+            "{all}"
+        );
+        let after = v.press_key(plain(KeyCode::Char('e')));
+        let After::NewProgram { program, .. } = after else {
+            panic!("{after:?}");
+        };
+        assert_eq!(program.last().map(String::as_str), Some("/x/plan.md"));
+        assert!(v.viewer.is_none());
+    }
+
+    #[test]
+    fn a_markdown_file_of_the_tree_is_read_into_the_viewer_and_any_other_opens_the_editor() {
+        let (mut v, ws) = tree_view();
+        v.press_key(plain(KeyCode::Enter));
+        v.take_file_asks();
+        v.files_replied(listing(
+            &ws,
+            "src",
+            vec![
+                file("notas.MD", FileKind::File, None, false),
+                file("main.rs", FileKind::File, None, false),
+            ],
+        ));
+        v.press_key(plain(KeyCode::Char('j')));
+        assert_eq!(
+            v.press_key(plain(KeyCode::Enter)),
+            After::ReadMarkdown {
+                workspace: ws.clone(),
+                path: "src/notas.MD".into()
+            },
+            "REQ-470, whatever the case of the extension"
+        );
+        assert!(!v.tree_focus, "the keys go back to the panels");
+        v.tree_focus = true;
+        v.press_key(plain(KeyCode::Char('j')));
+        assert!(matches!(
+            v.press_key(plain(KeyCode::Enter)),
+            After::NewProgram { .. }
+        ));
+        assert!(is_markdown("a/b.markdown") && is_markdown("README.md"));
+        assert!(!is_markdown("md") && !is_markdown("a.mdx") && !is_markdown("Makefile"));
     }
 
     fn find_in(v: &View, text: &str, rows: usize) -> (usize, usize) {

@@ -48,6 +48,58 @@ impl Selection {
     }
 }
 
+/// While a drag is held past the edge of a list, it scrolls a line this often (ms).
+pub const EDGE_MS: u64 = 60;
+
+/// A drag with the button still down, over a list whose lines are numbered (REQ-462): where it
+/// began and whether the pointer ever moved; what each list does with it is its own.
+#[derive(Debug)]
+pub struct Pull {
+    /// The cell it began on: a press that never moved is the click it was.
+    pub start: (usize, usize),
+    pub anchor: Point,
+    pub moved: bool,
+    /// Past the top (`true`) or the bottom of the list, since when: the list scrolls while it is.
+    scrolling: Option<(bool, u64)>,
+}
+
+impl Pull {
+    pub fn new(start: (usize, usize), anchor: Point) -> Pull {
+        Pull {
+            start,
+            anchor,
+            moved: false,
+            scrolling: None,
+        }
+    }
+
+    /// The pointer is at `head`, past the top (`Some(true)`) or the bottom of the list or inside it.
+    pub fn to(&mut self, head: Point, edge: Option<bool>, now_ms: u64) {
+        self.moved |= head != self.anchor;
+        self.scrolling = match (edge, self.scrolling) {
+            (Some(up), Some((was, since))) if up == was => Some((up, since)),
+            (Some(up), _) => Some((up, now_ms)),
+            (None, _) => None,
+        };
+    }
+
+    /// The way the list is to scroll a line now (`true`: up), when the drag is held past its edge
+    /// and it is time.
+    pub fn due(&self, now_ms: u64) -> Option<bool> {
+        match self.scrolling {
+            Some((up, since)) if now_ms >= since + EDGE_MS => Some(up),
+            _ => None,
+        }
+    }
+
+    /// The list scrolled a line at `now_ms`.
+    pub fn scrolled(&mut self, now_ms: u64) {
+        if let Some((_, since)) = self.scrolling.as_mut() {
+            *since = now_ms;
+        }
+    }
+}
+
 /// The text of a line of the list: what its spans say.
 pub fn text_of(line: &Line) -> String {
     line.spans.iter().map(|(t, _)| t.as_str()).collect()

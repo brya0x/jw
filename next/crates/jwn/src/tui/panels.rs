@@ -58,11 +58,6 @@ impl Row {
     }
 }
 
-/// A row that only says something: a line of a plan.
-pub fn line(text: String) -> Row {
-    Row::new(text, "")
-}
-
 /// A list: its title, its rows and what it says when it has none.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Panel {

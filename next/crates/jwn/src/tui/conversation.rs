@@ -72,6 +72,11 @@ pub enum Act {
     },
     /// Open a file in an editor, in a new panel.
     Edit(std::path::PathBuf),
+    /// Show the plan that waits, whole, in the Markdown viewer (REQ-469).
+    ViewPlan {
+        node: String,
+        ask: String,
+    },
     /// Text for the clipboard.
     Copy(String),
 }
@@ -362,7 +367,7 @@ pub struct Ui {
     /// What a drag of the mouse covers in the list, and the drag while the button is down
     /// (REQ-461).
     sel: Option<select::Selection>,
-    pull: Option<Pull>,
+    pull: Option<select::Pull>,
     /// The item picked (its number from the start of the conversation) and the items opened.
     picked: Option<u32>,
     open: HashSet<u32>,
@@ -420,16 +425,6 @@ struct Line {
     soft: bool,
 }
 
-/// A drag that began in the list, with the button still down.
-struct Pull {
-    /// The cell it began on: a press that never moved is the click it was.
-    start: (usize, usize),
-    anchor: select::Point,
-    moved: bool,
-    /// Past the top (`true`) or the bottom of the list, since when: the list scrolls while it is.
-    scrolling: Option<(bool, u64)>,
-}
-
 /// What a button let go of comes to.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Released {
@@ -439,9 +434,6 @@ pub enum Released {
     Copy(String),
     Nothing,
 }
-
-/// While a drag is held past the edge of the list, it scrolls a line this often (ms).
-const EDGE_MS: u64 = 60;
 
 /// Where the lines of the list are on the screen.
 struct ListRows {
@@ -1717,13 +1709,10 @@ impl Ui {
         let by_key = |k: &str| ask.options.iter().position(|o| o.key == k);
         // The whole plan, when the box has room for a few lines of it only.
         if ask.kind == AskKind::Plan && ev.code == KeyCode::Char('v') {
-            let rows = ask.plan.iter().map(|l| panels::line(l.clone())).collect();
-            self.pop = Some(Pop::List(ListState::of(Panel {
-                title: "plan".into(),
-                rows,
-                empty: "El plan está vacío.".into(),
-            })));
-            return None;
+            return Some(Act::ViewPlan {
+                node: node.to_owned(),
+                ask: ask.id.clone(),
+            });
         }
         // A choice of several: a number marks or clears an option and `↵` sends the marked ones.
         if ask.multi {
@@ -2021,15 +2010,11 @@ impl Ui {
         if !(rows.top..rows.bottom).contains(&y) || !(ix..ix + iw).contains(&x) {
             return false;
         }
-        self.pull = Some(Pull {
-            start: (x, y),
-            anchor: select::Point {
-                line: rows.start + (y - rows.top),
-                col: x.saturating_sub(ix + 2),
-            },
-            moved: false,
-            scrolling: None,
-        });
+        let anchor = select::Point {
+            line: rows.start + (y - rows.top),
+            col: x.saturating_sub(ix + 2),
+        };
+        self.pull = Some(select::Pull::new((x, y), anchor));
         true
     }
 
@@ -2076,12 +2061,7 @@ impl Ui {
         let Some(pull) = self.pull.as_mut() else {
             return;
         };
-        pull.moved |= head != pull.anchor;
-        pull.scrolling = match (edge, pull.scrolling) {
-            (Some(up), Some((was, since))) if up == was => Some((up, since)),
-            (Some(up), _) => Some((up, now_ms)),
-            (None, _) => None,
-        };
+        pull.to(head, edge, now_ms);
         self.sel = Some(select::Selection {
             pane: conv.head.id.clone(),
             anchor: pull.anchor,
@@ -2097,17 +2077,12 @@ impl Ui {
         (_, iy, iw, ih): (usize, usize, usize, usize),
         now_ms: u64,
     ) {
-        let Some(Pull {
-            scrolling: Some((up, since)),
-            ..
-        }) = self.pull.as_ref()
-        else {
+        let Some(up) = self.pull.as_ref().and_then(|p| p.due(now_ms)) else {
             return;
         };
-        if now_ms < since + EDGE_MS || iw < 12 || ih < 8 {
+        if iw < 12 || ih < 8 {
             return;
         }
-        let up = *up;
         self.scroll_by(up, 1);
         let geo = self.geo(conv, (iy, ih), self.field(iw).band_rows());
         let rows = self.list_rows(&geo, self.lines(conv, iw - 2).len());
@@ -2120,7 +2095,7 @@ impl Ui {
             )
         };
         if let (Some(pull), Some(sel)) = (self.pull.as_mut(), self.sel.as_mut()) {
-            pull.scrolling = Some((up, now_ms));
+            pull.scrolled(now_ms);
             sel.head = select::Point { line, col };
         }
     }
@@ -2256,6 +2231,13 @@ impl Ui {
                     node,
                     ask: ask.id.clone(),
                     key: ask.options[y - first].key.clone(),
+                });
+            }
+            // A click on what a plan says opens it whole.
+            if ask.kind == AskKind::Plan && y > geo.band.0 && y < first {
+                return Some(Act::ViewPlan {
+                    node,
+                    ask: ask.id.clone(),
                 });
             }
             return None;
@@ -3452,15 +3434,15 @@ mod tests {
         assert!(ui.press(&conv, small, INNER.0 + 8, mid));
         ui.drag_to(&conv, small, (INNER.0 + 8, small.1 + small.3), 0);
         assert_eq!(ui.scroll, 3, "nothing moves before its time");
-        ui.drag_tick(&conv, small, EDGE_MS);
+        ui.drag_tick(&conv, small, select::EDGE_MS);
         assert_eq!(ui.scroll, 2);
-        ui.drag_tick(&conv, small, EDGE_MS + 1);
-        assert_eq!(ui.scroll, 2, "a line each EDGE_MS");
-        ui.drag_tick(&conv, small, 2 * EDGE_MS);
+        ui.drag_tick(&conv, small, select::EDGE_MS + 1);
+        assert_eq!(ui.scroll, 2, "a line each select::EDGE_MS");
+        ui.drag_tick(&conv, small, 2 * select::EDGE_MS);
         assert_eq!(ui.scroll, 1);
         // back inside, it stops
-        ui.drag_to(&conv, small, (INNER.0 + 8, mid), 3 * EDGE_MS);
-        ui.drag_tick(&conv, small, 9 * EDGE_MS);
+        ui.drag_to(&conv, small, (INNER.0 + 8, mid), 3 * select::EDGE_MS);
+        ui.drag_tick(&conv, small, 9 * select::EDGE_MS);
         assert_eq!(ui.scroll, 1);
     }
 
@@ -4134,7 +4116,7 @@ mod tests {
     }
 
     #[test]
-    fn a_plan_shows_its_first_lines_and_v_shows_all_of_it_over_the_question() {
+    fn a_plan_shows_its_first_lines_and_v_or_a_click_asks_for_all_of_it_in_the_viewer() {
         let node = fixture().head.id.clone();
         let mut c = fixture();
         c.ask = Some(Ask {
@@ -4170,15 +4152,29 @@ mod tests {
             "only the first lines fit the box"
         );
         row_of(&rows, "v ver el plan");
-        assert_eq!(press(&mut ui, &c, KeyCode::Char('v')), None);
+        // REQ-469: `v` asks for the plan whole in the viewer, which is the client's to open
+        assert_eq!(
+            press(&mut ui, &c, KeyCode::Char('v')),
+            Some(Act::ViewPlan {
+                node: node.clone(),
+                ask: "req-p".into()
+            })
+        );
+        assert!(
+            !ui.has_pop(),
+            "no list of the plan over the question any more"
+        );
+        // and so does a click on what the plan says, while a click on an answer answers
         let (_, rows) = frame(&ui, &c);
-        row_of(&rows, "paso 12");
-        row_of(&rows, "20");
-        press(&mut ui, &c, KeyCode::PageDown);
-        row_of(&frame(&ui, &c).1, "paso 20");
-        // esc gives the keys back to the question, and 2 approves asking for each edit
-        press(&mut ui, &c, KeyCode::Esc);
-        assert!(!ui.has_pop());
+        let y = row_of(&rows, "paso 3");
+        assert_eq!(
+            ui.click(&c, INNER, 12, y),
+            Some(Act::ViewPlan {
+                node: node.clone(),
+                ask: "req-p".into()
+            })
+        );
+        // 2 approves asking for each edit
         assert_eq!(
             press(&mut ui, &c, KeyCode::Char('2')),
             Some(Act::Answer {
