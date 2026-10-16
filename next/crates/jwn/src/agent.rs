@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
+use contract::conversation::{ConvStatus, Conversation, Item};
 use contract::{
     Attention, AttentionKind, Block, Blocks, Cmd, Pane, ProjectInfo, Session, SplitDir, Workspace,
     WorkspaceSummary,
@@ -24,6 +25,10 @@ const REPLY_WAIT: Duration = Duration::from_secs(60);
 /// Between the paste and the Enter: an agent's input box takes the paste as text first.
 const ENTER_AFTER: Duration = Duration::from_millis(200);
 const DEFAULT_LINES: usize = 40;
+/// How long `prompt --wait` waits for a turn to end (REQ-454).
+const TURN_WAIT: Duration = Duration::from_secs(600);
+/// How long `worktree --task` waits for the new agent's conversation before it types the task.
+const CONVERSATION_WAIT: Duration = Duration::from_secs(10);
 
 const SKILL: &str = include_str!("../skill/SKILL.md");
 
@@ -34,6 +39,8 @@ enum Fail {
     Usage(String),
     /// Anything else: exit 1.
     Error(String),
+    /// The agent waits for an answer: what it asks goes to stdout and the exit is 3 (REQ-454).
+    Waiting(String),
 }
 
 type Out<T = ()> = Result<T, Fail>;
@@ -59,9 +66,9 @@ fn usage_of(cmd: &str) -> String {
     match cmd {
         "ls" => format!("usage: {b} ls [--json]"),
         "read" => format!("usage: {b} read <workspace> [--pane <pane>] [--lines N] [--blocks]"),
-        "prompt" => {
-            format!("usage: {b} prompt <workspace> [--pane <pane>] [--tag] [--now] [--] <text>")
-        }
+        "prompt" => format!(
+            "usage: {b} prompt <workspace> [--pane <pane>] [--tag] [--now] [--wait [--timeout SECONDS]] [--] <text>"
+        ),
         "worktree" => format!(
             "usage: {b} worktree <name> [--in <repo>] [--branch <branch>] [--from <ref>] [--task <text>]"
         ),
@@ -73,7 +80,8 @@ fn usage_of(cmd: &str) -> String {
 }
 
 /// Run the subcommand `cmd` with `args`, printing what it has to say; the exit code is 0, 1 for
-/// an error and 2 for a use it does not accept (REQ-354).
+/// an error, 2 for a use it does not accept (REQ-354) and 3 for an agent that waits for an answer
+/// (REQ-454).
 pub fn run(cmd: &str, args: &[&str]) -> ExitCode {
     let done = match (cmd, args) {
         ("ls", rest) => ls(rest),
@@ -102,6 +110,10 @@ pub fn run(cmd: &str, args: &[&str]) -> ExitCode {
         Err(Fail::Error(why)) => {
             eprintln!("{} {cmd}: {why}", bin());
             ExitCode::FAILURE
+        }
+        Err(Fail::Waiting(asks)) => {
+            println!("{asks}");
+            ExitCode::from(3)
         }
     }
 }
@@ -232,6 +244,8 @@ struct PaneInfo {
     agent: Option<&'static str>,
     blocks: Option<String>,
     lines: Vec<String>,
+    /// The node of its conversation, while it has one (REQ-453).
+    conversation: Option<String>,
 }
 
 /// The pane `word` names: its id, the start of one id, or exactly a title.
@@ -384,6 +398,7 @@ impl Link {
             let pane: Pane = self.node(&summary.id)?;
             let running = pane.running.map(|p| p.argv);
             out.push(PaneInfo {
+                conversation: pane.conversation,
                 agent: running.as_deref().and_then(daemon::agent_name),
                 id: summary.id,
                 title: summary.title,
@@ -537,7 +552,10 @@ fn read(args: &[&str]) -> Out {
     let Some(pane) = pick_agent_pane(&a, &panes)?.or(panes.first()) else {
         return fail(format!("{} has no panes", ws.name));
     };
-    if a.has("blocks") {
+    if let Some(node) = pane.conversation.as_ref().filter(|_| !a.has("blocks")) {
+        let conv: Conversation = s.node(node)?;
+        println!("{}", conversation_text(&conv, n));
+    } else if a.has("blocks") {
         let Some(node) = &pane.blocks else {
             return fail(format!("pane {} has no commands to read", pane.id));
         };
@@ -581,8 +599,118 @@ fn send_prompt(s: &mut Link, pane: &str, text: &str, now: bool) -> Out {
     Ok(())
 }
 
+/// The last `n` items of a conversation as text, and what waits for an answer (REQ-455).
+fn conversation_text(conv: &Conversation, n: usize) -> String {
+    let from = conv.items.len().saturating_sub(n);
+    let mut lines: Vec<String> = conv.items[from..]
+        .iter()
+        .flat_map(crate::claude::item_lines)
+        .collect();
+    if let Some(ask) = &conv.ask {
+        lines.extend(crate::claude::ask_lines(ask));
+    }
+    lines.join("\n")
+}
+
+/// Whether the turn that `sent` started, after the item numbered `baseline`, is over, and what
+/// it came to: Claude's last words, or what the question that waits asks (REQ-454). `None` while
+/// it goes on.
+fn turn_end(conv: &Conversation, baseline: u64, sent: &str) -> Option<Out<String>> {
+    if let Some(ask) = &conv.ask {
+        return Some(Err(Fail::Waiting(crate::claude::ask_lines(ask).join("\n"))));
+    }
+    if conv.status == ConvStatus::Dead {
+        return Some(fail("the conversation's engine is gone"));
+    }
+    if conv.status != ConvStatus::Idle || !conv.queue.is_empty() {
+        return None;
+    }
+    let items = conv
+        .items
+        .get(baseline.saturating_sub(u64::from(conv.first)) as usize..)?;
+    // A command of the `/` list leaves no message of the person's behind it.
+    let start = if sent.starts_with('/') {
+        0
+    } else {
+        items
+            .iter()
+            .rposition(|i| matches!(i, Item::User { text, .. } if text == sent))?
+    };
+    let turn = &items[start..];
+    if !turn
+        .iter()
+        .any(|i| matches!(i, Item::Result { .. } | Item::Out { .. }))
+    {
+        return None;
+    }
+    let said = turn.iter().rev().find_map(|i| match i {
+        Item::Text { text, .. } => Some(text.clone()),
+        _ => None,
+    });
+    Some(Ok(said.unwrap_or_else(|| {
+        turn.iter()
+            .filter_map(|i| match i {
+                Item::Out { lines } => Some(lines.join("\n")),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    })))
+}
+
+/// Say `text` to `node`'s conversation as the person would; with `wait`, wait for the turn it
+/// starts to end and give back its answer (REQ-453, REQ-454).
+fn converse(s: &mut Link, node: &str, text: &str, wait: Option<Duration>) -> Out<Option<String>> {
+    let baseline = match wait {
+        Some(_) => {
+            let conv: Conversation = s.node(node)?;
+            u64::from(conv.first) + conv.items.len() as u64
+        }
+        None => 0,
+    };
+    s.cmd(Cmd::ConversationSend {
+        node: node.to_owned(),
+        text: text.to_owned(),
+        images: Vec::new(),
+    })?;
+    let Some(limit) = wait else {
+        return Ok(None);
+    };
+    let deadline = Instant::now() + limit;
+    loop {
+        let conv: Conversation = s.node(node)?;
+        if let Some(end) = turn_end(&conv, baseline, text) {
+            return end.map(Some);
+        }
+        if Instant::now() >= deadline {
+            return fail(format!("the turn did not end in {} s", limit.as_secs()));
+        }
+        s.c.poll(Duration::from_millis(100))
+            .map_err(|e| Fail::Error(e.to_string()))?;
+    }
+}
+
+fn timeout_flag(a: &Args) -> Out<Option<Duration>> {
+    if !a.has("wait") {
+        return match a.value("timeout") {
+            None => Ok(None),
+            Some(_) => Err(Fail::Usage("--timeout goes with --wait".into())),
+        };
+    }
+    match a.value("timeout") {
+        None => Ok(Some(TURN_WAIT)),
+        Some(n) => n
+            .parse::<u64>()
+            .ok()
+            .filter(|n| *n > 0)
+            .map(|n| Some(Duration::from_secs(n)))
+            .ok_or_else(|| Fail::Usage("--timeout needs a number of seconds above 0".into())),
+    }
+}
+
 fn prompt(args: &[&str]) -> Out {
-    let a = Args::parse(args, &["pane"], &["tag", "now"])?;
+    let a = Args::parse(args, &["pane", "timeout"], &["tag", "now", "wait"])?;
+    let wait = timeout_flag(&a)?;
     let Some((word, words)) = a.pos.split_first() else {
         return Err(Fail::Usage("expected a workspace and a text".into()));
     };
@@ -616,8 +744,30 @@ fn prompt(args: &[&str]) -> Out {
     } else {
         text
     };
-    send_prompt(&mut s, &target.id, &text, a.has("now"))?;
-    println!("sent to pane {} of {}", target.id, ws.name);
+    let sent = format!("sent to pane {} of {}", target.id, ws.name);
+    match &target.conversation {
+        Some(node) => {
+            let said = converse(&mut s, node, &text, wait)?;
+            match said {
+                Some(answer) => {
+                    eprintln!("{sent}");
+                    println!("{answer}");
+                }
+                None => println!("{sent}"),
+            }
+        }
+        None if wait.is_some() => {
+            return fail(format!(
+                "pane {} has no conversation to wait on (--wait needs `claude` run by {})",
+                target.id,
+                bin()
+            ));
+        }
+        None => {
+            send_prompt(&mut s, &target.id, &text, a.has("now"))?;
+            println!("{sent}");
+        }
+    }
     Ok(())
 }
 
@@ -691,7 +841,7 @@ fn worktree(args: &[&str]) -> Out {
         let deadline = Instant::now() + agent_wait();
         let agent = loop {
             if let Some(p) = s.panes(&id)?.into_iter().find(|p| p.agent.is_some()) {
-                break Some(p.id);
+                break Some(p);
             }
             if Instant::now() >= deadline {
                 break None;
@@ -703,9 +853,33 @@ fn worktree(args: &[&str]) -> Out {
                 "the worktree was made at {path}, but no agent took the task"
             ));
         };
-        send_prompt(&mut s, &pane, task, false)?;
+        match conversation_of(&mut s, &id, pane)? {
+            (_, Some(node)) => {
+                converse(&mut s, &node, task, None)?;
+            }
+            (pane, None) => send_prompt(&mut s, &pane, task, false)?,
+        }
     }
     Ok(())
+}
+
+/// The conversation node of the new agent `pane` of workspace `id`: `claude` opens it a moment
+/// after it starts, so it is waited for a little (REQ-456). The pane's id comes back with it.
+fn conversation_of(s: &mut Link, id: &str, pane: PaneInfo) -> Out<(String, Option<String>)> {
+    if pane.agent != Some("claude") {
+        return Ok((pane.id, pane.conversation));
+    }
+    let deadline = Instant::now() + CONVERSATION_WAIT.min(agent_wait());
+    let mut now = pane;
+    loop {
+        if now.conversation.is_some() || Instant::now() >= deadline {
+            return Ok((now.id, now.conversation));
+        }
+        let _ = s.c.poll(Duration::from_millis(200));
+        if let Some(p) = s.panes(id)?.into_iter().find(|p| p.id == now.id) {
+            now = p;
+        }
+    }
 }
 
 fn pane_open(args: &[&str]) -> Out {
@@ -878,6 +1052,7 @@ mod tests {
             agent,
             blocks: None,
             lines: Vec::new(),
+            conversation: None,
         }
     }
 
@@ -1068,5 +1243,123 @@ mod tests {
     fn the_folder_of_a_path_is_its_last_part() {
         assert_eq!(folder_of("/code/app-wt/login"), "login");
         assert_eq!(folder_of("/code/app/"), "app");
+    }
+
+    fn conversation(
+        status: &str,
+        first: u32,
+        items: Value,
+        ask: Value,
+        queue: &[&str],
+    ) -> Conversation {
+        let mut doc = json!({
+            "id": "c1", "v": 1, "epoch": "e", "rev": 1, "attention": [],
+            "pane": "p1", "name": "n", "accent": "blue", "model": "m", "effort": "high",
+            "mode": "manual", "status": status, "first": first, "items": items,
+            "queue": queue, "tasks": [], "todos": [], "artifacts": [], "commands": [], "cost": 0,
+        });
+        if !ask.is_null() {
+            doc["ask"] = ask;
+        }
+        serde_json::from_value(doc).unwrap()
+    }
+
+    fn turn() -> Value {
+        json!([
+            {"t": "user", "text": "antes"},
+            {"t": "text", "text": "vieja"},
+            {"t": "result", "ms": 1, "tools": 0, "cost": 0},
+            {"t": "user", "text": "hola"},
+            {"t": "text", "text": "primera"},
+            {"t": "text", "text": "la última"},
+            {"t": "result", "ms": 1, "tools": 0, "cost": 0},
+        ])
+    }
+
+    #[test]
+    fn a_turn_is_over_when_it_is_idle_with_its_own_result_and_the_answer_is_its_last_text() {
+        let end = |c: &Conversation, baseline, sent| turn_end(c, baseline, sent);
+        let done = conversation("idle", 10, turn(), Value::Null, &[]);
+        // the items before the baseline (13) are not this turn's: the first `hola` is item 13
+        assert_eq!(end(&done, 13, "hola"), Some(Ok("la última".into())));
+        // a message that is not there yet (the document is older than the send) is not over
+        assert_eq!(end(&done, 17, "hola"), None);
+        assert_eq!(end(&done, 13, "otra cosa"), None);
+        // an old result does not end a turn that waits in the queue or is still going
+        assert_eq!(
+            end(
+                &conversation("idle", 10, turn(), Value::Null, &["hola"]),
+                13,
+                "hola"
+            ),
+            None
+        );
+        assert_eq!(
+            end(
+                &conversation("thinking", 10, turn(), Value::Null, &[]),
+                13,
+                "hola"
+            ),
+            None
+        );
+        assert!(matches!(
+            end(
+                &conversation("dead", 10, turn(), Value::Null, &[]),
+                13,
+                "hola"
+            ),
+            Some(Err(Fail::Error(_)))
+        ));
+    }
+
+    #[test]
+    fn a_question_that_waits_ends_the_wait_with_what_it_asks_and_a_command_ends_with_its_lines() {
+        let ask = json!({
+            "id": "a1", "kind": "question", "tool": "AskUserQuestion", "title": "¿Cuál?",
+            "options": [{"key": "1", "label": "uno"}, {"key": "2", "label": "dos"}],
+        });
+        let c = conversation("asking", 0, json!([{"t": "user", "text": "x"}]), ask, &[]);
+        let Some(Err(Fail::Waiting(text))) = turn_end(&c, 0, "x") else {
+            panic!("a question waits");
+        };
+        assert_eq!(text, "? pregunta: ¿Cuál?\n  1) uno\n  2) dos");
+        let c = conversation(
+            "idle",
+            0,
+            json!([{"t": "out", "lines": ["a", "b"]}]),
+            Value::Null,
+            &[],
+        );
+        assert_eq!(turn_end(&c, 0, "/cost"), Some(Ok("a\nb".into())));
+    }
+
+    #[test]
+    fn read_of_a_conversation_prints_its_last_items_and_what_waits() {
+        let c = conversation("idle", 0, turn(), Value::Null, &[]);
+        let text = conversation_text(&c, 3);
+        assert_eq!(
+            text,
+            "● primera\n● la última\n✻ Listo · 0 s · 0 herramientas · $0,00"
+        );
+    }
+
+    #[test]
+    fn timeout_goes_with_wait_and_is_seconds_above_zero() {
+        let parse = |a: &[&str]| timeout_flag(&Args::parse(a, &["timeout"], &["wait"]).unwrap());
+        assert_eq!(parse(&[]), Ok(None));
+        assert_eq!(parse(&["--wait"]), Ok(Some(TURN_WAIT)));
+        assert_eq!(
+            parse(&["--wait", "--timeout", "30"]),
+            Ok(Some(Duration::from_secs(30)))
+        );
+        assert!(matches!(parse(&["--timeout", "30"]), Err(Fail::Usage(_))));
+        assert!(matches!(
+            parse(&["--wait", "--timeout", "0"]),
+            Err(Fail::Usage(_))
+        ));
+        assert!(matches!(
+            parse(&["--wait", "--timeout", "x"]),
+            Err(Fail::Usage(_))
+        ));
     }
 }

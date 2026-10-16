@@ -21,7 +21,9 @@ by its id (or the start of it) or its title.
 - `{bin} pane ls <workspace> [--json]` its panes: id, title, the program running in it, and
   `claude` or `codex` when that is an agent.
 - `{bin} read <workspace> [--pane P] [--lines N]` what the pane shows now (the agent's pane when
-  there is one, else the first), the last 40 lines by default.
+  there is one, else the first), the last 40 lines by default. When that agent is a `claude`
+  conversation it prints the last N items instead (what the person said, what Claude answered,
+  the tools it used), and a line that starts with `?` when it waits for an answer.
 - `{bin} read <workspace> --pane P --blocks` for a shell pane: the last commands, each with its
   output and how it ended, instead of the raw screen.
 
@@ -30,12 +32,19 @@ A workspace whose mark is `permission`, `question` or `plan` has an agent waitin
 
 ## Act
 
-- `{bin} prompt <workspace> [--pane P] [--tag] [--now] [--] <text>` types the text into the pane
-  where an agent runs and presses Enter. It waits until that agent's screen is still, so a task
-  sent to an agent that has just started is not lost; `--now` writes at once (for an agent that is
-  busy and will queue it). `--tag` starts the text with who sent it, so the other agent can answer
-  you. Anything that follows `--` is the text, even if it starts with a dash.
-  With `--pane` it types into any pane, a plain shell included, where it would run as a command.
+- `{bin} prompt <workspace> [--pane P] [--tag] [--now] [--wait [--timeout SECONDS]] [--] <text>`
+  gives the text to the agent that runs in the pane. To a `claude` conversation it is a message,
+  as if the person had typed it: it never answers a question the agent has waiting, and when the
+  agent is busy the message waits its turn. To any other agent it types the text and presses
+  Enter, after the agent's screen has been still for a second, so a task sent to an agent that
+  has just started is not lost (`--now` writes at once). `--tag` starts the text with who sent
+  it, so the other agent can answer you. Anything that follows `--` is the text, even if it
+  starts with a dash. With `--pane` it types into any pane, a plain shell included, where it
+  would run as a command.
+  `--wait` (a `claude` conversation only) waits for the turn the message starts to end, up to
+  10 minutes or `--timeout`, and prints the text of Claude's last answer instead of
+  "sent to pane". If the turn stops because Claude asks something, it prints the question with
+  its numbered options and exits 3: the person has to answer it.
 - `{bin} worktree <name> [--in repo] [--branch B] [--from REF] [--task TEXT]` makes a git worktree
   of the repository you are in (or `--in`: a folder or a workspace), the way the person would, with
   what the repository's `.jw.toml` says (its folder, its branch template, its setup and its panes).
@@ -48,10 +57,13 @@ A workspace whose mark is `permission`, `question` or `plan` has an agent waitin
 
 ## Rules
 
-- Exit codes: 0 done, 1 it failed (the message is on stderr), 2 a use it does not accept.
+- Exit codes: 0 done, 1 it failed (the message is on stderr), 2 a use it does not accept, 3 the
+  agent waits for an answer (`prompt --wait`; the question is on stdout).
 - Do not poll in a loop. Send the task, do your own work, and `read` when you need the result or
-  when `ls` shows a mark on that workspace.
-- Do not send a task to an agent that is waiting for an answer from a person (`permission`,
-  `question`, `plan`): your text would answer it. Say so to the person instead.
+  when `ls` shows a mark on that workspace. Use `--wait` only when you cannot go on without the
+  answer.
+- Do not send a task to a terminal agent that is waiting for an answer from a person
+  (`permission`, `question`, `plan`): your text would answer it. A `claude` conversation takes it
+  as a message and does not answer anything; still, tell the person what waits.
 - A worktree is a git worktree: its branch and files are the person's work. Do not remove
   worktrees; leave that to them.

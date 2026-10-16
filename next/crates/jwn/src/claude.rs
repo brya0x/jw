@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 use std::time::{Duration, Instant};
 
-use contract::conversation::{AskKind, ConvStatus, Conversation, DiffSign, Item, ToolState};
+use contract::conversation::{Ask, AskKind, ConvStatus, Conversation, DiffSign, Item, ToolState};
 use contract::{Cmd, DaemonMsg};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal;
@@ -276,20 +276,7 @@ fn draw(out: &mut impl Write, conv: &Conversation, screen: &mut Screen) {
     if let Some(ask) = &conv.ask {
         if screen.shown_ask.as_deref() != Some(ask.id.as_str()) {
             screen.shown_ask = Some(ask.id.clone());
-            let what = match ask.kind {
-                AskKind::Permission => "permiso",
-                AskKind::Question => "pregunta",
-                AskKind::Plan => "plan",
-            };
-            lines.push(format!("? {what}: {}", ask.title));
-            if let Some(c) = &ask.command {
-                lines.push(format!("    {c}"));
-            }
-            lines.extend(ask.diff.iter().map(diff_line));
-            lines.extend(ask.plan.iter().map(|p| format!("    {p}")));
-            for (i, o) in ask.options.iter().enumerate() {
-                lines.push(format!("  {}) {}", i + 1, o.label));
-            }
+            lines.extend(ask_lines(ask));
             lines.push("  elige un número (o y / n):".into());
         }
     } else {
@@ -325,6 +312,25 @@ fn diff_line(d: &contract::conversation::DiffLine) -> String {
         DiffSign::Same => ' ',
     };
     format!("    {sign} {}", d.text)
+}
+
+/// What an `ask` says, as plain lines: what it is, what it is about and its numbered options.
+pub fn ask_lines(ask: &Ask) -> Vec<String> {
+    let what = match ask.kind {
+        AskKind::Permission => "permiso",
+        AskKind::Question => "pregunta",
+        AskKind::Plan => "plan",
+    };
+    let mut lines = vec![format!("? {what}: {}", ask.title)];
+    if let Some(c) = &ask.command {
+        lines.push(format!("    {c}"));
+    }
+    lines.extend(ask.diff.iter().map(diff_line));
+    lines.extend(ask.plan.iter().map(|p| format!("    {p}")));
+    for (i, o) in ask.options.iter().enumerate() {
+        lines.push(format!("  {}) {}", i + 1, o.label));
+    }
+    lines
 }
 
 /// «1 herramienta», «3 herramientas».

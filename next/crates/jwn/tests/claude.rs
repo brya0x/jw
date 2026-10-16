@@ -97,14 +97,22 @@ impl World {
         ));
     }
 
+    /// What the pane's own terminal shows (`read` prints the conversation's items instead while
+    /// the pane has one, REQ-455).
     fn screen(&self) -> String {
-        let out = self
-            .env
-            .jwn()
-            .args(["read", &self.ws, "--pane", &self.pane, "--lines", "60"])
-            .output()
+        let mut c = self.client();
+        c.open(&self.pane).unwrap();
+        c.wait_until(Duration::from_secs(3), |c| c.nodes.contains_key(&self.pane))
             .unwrap();
-        String::from_utf8_lossy(&out.stdout).into_owned()
+        c.nodes[&self.pane]["screen"]["lines"]
+            .as_array()
+            .map(|l| {
+                l.iter()
+                    .filter_map(|v| v.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default()
     }
 
     fn wait_screen(&self, what: &str, text: &str) {
@@ -284,4 +292,167 @@ fn outside_a_pane_or_a_terminal_the_binary_runs_the_original() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(127));
+}
+
+impl World {
+    /// `claude` typed in the pane and its conversation open.
+    fn open_conversation(&self) {
+        self.type_line("claude");
+        wait_for("the conversation", || self.conversation().is_some());
+    }
+
+    /// `jwn <args>` the way an agent runs it: from outside a pane, with a short wait for agents.
+    fn agent_cmd(&self, args: &[&str]) -> std::process::Output {
+        self.env
+            .jwn()
+            .args(args)
+            .env("JWN_AGENT_WAIT_MS", "2000")
+            .output()
+            .unwrap()
+    }
+
+    fn user_lines(&self) -> Vec<String> {
+        self.engine_log()
+            .into_iter()
+            .filter(|l| l.starts_with("user "))
+            .collect()
+    }
+}
+
+fn out_of(o: &std::process::Output) -> (Option<i32>, String, String) {
+    (
+        o.status.code(),
+        String::from_utf8_lossy(&o.stdout).into_owned(),
+        String::from_utf8_lossy(&o.stderr).into_owned(),
+    )
+}
+
+#[test]
+fn prompt_with_a_conversation_is_a_message_and_wait_returns_the_answer_and_read_prints_the_items() {
+    let Some(shell) = shells().into_iter().next() else {
+        return;
+    };
+    let w = World::new("claude-prompt", &shell, true);
+    w.open_conversation();
+
+    // REQ-453: a message, with no wait for the screen and no paste
+    let (code, stdout, _) = out_of(&w.agent_cmd(&["prompt", &w.ws, "--pane", &w.pane, "hola uno"]));
+    assert_eq!(code, Some(0), "{stdout}");
+    assert!(stdout.starts_with("sent to pane "), "{stdout}");
+    wait_for("the engine to get the message", || {
+        w.user_lines().iter().any(|l| l == "user \"hola uno\"")
+    });
+    w.wait_screen("the end of the turn", "✻ Listo");
+
+    // REQ-454: --wait prints the final answer and nothing else on stdout
+    let (code, stdout, stderr) =
+        out_of(&w.agent_cmd(&["prompt", &w.ws, "--pane", &w.pane, "--wait", "hola dos"]));
+    assert_eq!(code, Some(0), "{stderr}");
+    assert_eq!(stdout, "Voy a mirar.\n");
+    assert!(stderr.starts_with("sent to pane "), "{stderr}");
+    assert!(w.user_lines().iter().any(|l| l == "user \"hola dos\""));
+
+    // REQ-455: read prints the last items as the plain terminal does
+    let (code, stdout, _) =
+        out_of(&w.agent_cmd(&["read", &w.ws, "--pane", &w.pane, "--lines", "4"]));
+    assert_eq!(code, Some(0));
+    assert!(
+        stdout.contains("❯ hola dos") && stdout.contains("● Voy a mirar."),
+        "{stdout}"
+    );
+    assert!(
+        !stdout.contains("hola uno"),
+        "only the last 4 items: {stdout}"
+    );
+
+    // the usage: --timeout goes with --wait and wants seconds
+    for bad in [
+        vec!["prompt", &w.ws, "--timeout", "5", "x"],
+        vec!["prompt", &w.ws, "--wait", "--timeout", "0", "x"],
+    ] {
+        assert_eq!(w.agent_cmd(&bad).status.code(), Some(2), "{bad:?}");
+    }
+    w.stop();
+}
+
+#[test]
+fn wait_on_a_turn_that_ends_asking_prints_the_question_and_exits_3_and_a_turn_that_lasts_times_out()
+{
+    let Some(shell) = shells().into_iter().next() else {
+        return;
+    };
+    let w = World::new("claude-wait3", &shell, true);
+    w.open_conversation();
+
+    // REQ-454: a question waiting is printed and the exit is 3
+    let (code, stdout, stderr) =
+        out_of(&w.agent_cmd(&["prompt", &w.ws, "--pane", &w.pane, "--wait", "una pregunta"]));
+    assert_eq!(code, Some(3), "{stderr}");
+    assert!(stdout.contains("? pregunta:"), "{stdout}");
+    assert!(stdout.contains("1) "), "the options are numbered: {stdout}");
+    // read says the same while it waits
+    let (_, read, _) = out_of(&w.agent_cmd(&["read", &w.ws, "--pane", &w.pane]));
+    assert!(read.contains("? pregunta:"), "{read}");
+    w.stop();
+
+    // a turn that does not end in time is an error that says so
+    let w = World::new("claude-slow", &shell, true);
+    w.open_conversation();
+    let (code, stdout, stderr) = out_of(&w.agent_cmd(&[
+        "prompt",
+        &w.ws,
+        "--pane",
+        &w.pane,
+        "--wait",
+        "--timeout",
+        "1",
+        "algo slow",
+    ]));
+    assert_eq!(code, Some(1), "{stdout}");
+    assert!(stderr.contains("did not end in 1 s"), "{stderr}");
+    w.stop();
+}
+
+#[test]
+fn wait_needs_a_conversation() {
+    let Some(shell) = shells().into_iter().next() else {
+        return;
+    };
+    let w = World::new("claude-nowait", &shell, true);
+    // the pane is a shell with no conversation
+    let (code, _, stderr) =
+        out_of(&w.agent_cmd(&["prompt", &w.ws, "--pane", &w.pane, "--wait", "hola"]));
+    assert_eq!(code, Some(1));
+    assert!(stderr.contains("no conversation to wait on"), "{stderr}");
+    w.stop();
+}
+
+#[test]
+fn worktree_task_goes_to_the_new_agents_conversation_as_a_message() {
+    let Some(shell) = shells().into_iter().next() else {
+        return;
+    };
+    let w = World::new("claude-wt", &shell, true);
+    let proj = w.env.dir.join("proj");
+    let proj = std::fs::canonicalize(&proj).unwrap();
+    common::git(&proj, &["init", "-q", "-b", "main"]);
+    std::fs::write(proj.join("f"), "x").unwrap();
+    common::git(&proj, &["add", "."]);
+    common::git(&proj, &["commit", "-q", "-m", "init"]);
+    std::fs::write(proj.join(".jw.toml"), "[layout]\nrun = \"claude\"\n").unwrap();
+
+    let out = w.agent_cmd(&[
+        "worktree",
+        "ws-1",
+        "--in",
+        &proj.to_string_lossy(),
+        "--task",
+        "haz esto",
+    ]);
+    let (code, stdout, stderr) = out_of(&out);
+    assert_eq!(code, Some(0), "{stdout} {stderr}");
+    wait_for("the task to reach the engine", || {
+        w.user_lines().iter().any(|l| l == "user \"haz esto\"")
+    });
+    w.stop();
 }
