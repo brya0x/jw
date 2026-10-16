@@ -494,7 +494,7 @@ fn pwd_of(env: Option<&BTreeMap<String, String>>) -> Option<PathBuf> {
 }
 
 /// Claude's own folder of transcripts for a working folder: where `--continue` looks.
-fn projects_dir(cwd: &Path, env: Option<&BTreeMap<String, String>>) -> Option<PathBuf> {
+pub(crate) fn projects_dir(cwd: &Path, env: Option<&BTreeMap<String, String>>) -> Option<PathBuf> {
     let base = env
         .and_then(|e| e.get("CLAUDE_CONFIG_DIR").cloned())
         .or_else(|| std::env::var("CLAUDE_CONFIG_DIR").ok())
@@ -725,16 +725,15 @@ pub fn send(shared: &Shared, node: &str, text: &str, images: Vec<Image>) -> Done
     if let Some(word) = line
         .strip_prefix('/')
         .and_then(|rest| rest.split_whitespace().next())
-        && shared
+    {
+        let why = shared
             .lock()
             .convs
             .get(&pane)
-            .is_some_and(|c| c.st.needs_screen(word))
-    {
-        return Err(err(
-            ErrorCode::BadRequest,
-            format!("/{word} necesita la pantalla de Claude: usa `command claude`"),
-        ));
+            .and_then(|c| c.st.refusal(word));
+        if let Some(why) = why {
+            return Err(err(ErrorCode::BadRequest, why));
+        }
     }
     let dead = shared
         .lock()

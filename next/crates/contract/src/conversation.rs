@@ -349,6 +349,23 @@ pub struct Opened {
     pub session: String,
 }
 
+/// One conversation Claude saved for a folder: what `/resume` lists.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedConversation {
+    /// The engine's id: what `open_conversation {resume}` takes.
+    pub id: String,
+    /// What the person (or Claude) called it, else the first thing said in it.
+    pub name: String,
+    /// Milliseconds since the epoch at which it last changed.
+    pub at: u64,
+}
+
+/// What `list_conversations` answers, newest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConversationList {
+    pub conversations: Vec<SavedConversation>,
+}
+
 /// A picture sent with a message: the client has already made it small (a JPEG of at most 1568
 /// pixels on its long side).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

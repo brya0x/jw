@@ -230,6 +230,17 @@ class ConformanceTest {
         assertEquals(result, ContractJson.encodeToJsonElement(Opened.serializer(), opened))
     }
 
+    /** The result of `list_conversations` in the fixture is what [ConversationList] reads, and writes back as it was. */
+    @Test
+    fun theReplyOfListConversationsIsTheSavedConversationsNewestFirst() {
+        val reply = fixtures("daemon").first { it.first == "reply-ok-list-conversations.json" }.second
+        val result = (ContractJson.decodeFromJsonElement(DaemonMsg.serializer(), reply) as DaemonMsg.Reply).result!!
+        val list = ContractJson.decodeFromJsonElement(ConversationList.serializer(), result)
+        assertEquals(2, list.conversations.size)
+        assertEquals(true, list.conversations[0].at > list.conversations[1].at)
+        assertEquals(result, ContractJson.encodeToJsonElement(ConversationList.serializer(), list))
+    }
+
     /** The result of `project_config` in the fixture is what [ProjectInfo] reads, and writes back as it was. */
     @Test
     fun theReplyOfProjectConfigIsAProjectInfo() {

@@ -100,7 +100,6 @@ const INTERACTIVE: &[(&str, &str)] = &[
         "referencia de capacidades de los artifacts",
     ),
     ("artifact-diagramming", "guía para diagramas en artifacts"),
-    ("artifacts", "tus artifacts"),
     (
         "autofix-pr",
         "un agente en la nube arregla el PR de la rama",
@@ -123,7 +122,6 @@ const INTERACTIVE: &[(&str, &str)] = &[
         "fork",
         "copiar la conversación a una sesión en segundo plano",
     ),
-    ("help", "ayuda y comandos"),
     ("hooks", "ver los hooks configurados"),
     ("ide", "integraciones con editores"),
     ("insights", "informe de tus sesiones recientes"),
@@ -132,10 +130,8 @@ const INTERACTIVE: &[(&str, &str)] = &[
     ("keybindings", "abrir el archivo de atajos"),
     ("login", "iniciar sesión"),
     ("logout", "cerrar sesión"),
-    ("memory", "editar CLAUDE.md y la memoria"),
     ("mobile", "QR de la app móvil de Claude"),
     ("passes", "compartir una semana gratis de Claude Code"),
-    ("permissions", "reglas de permisos de herramientas"),
     ("plugin", "gestionar plugins"),
     ("powerup", "lecciones interactivas de funciones"),
     ("privacy-settings", "ajustes de privacidad"),
@@ -147,15 +143,12 @@ const INTERACTIVE: &[(&str, &str)] = &[
     ("release-notes", "notas de las versiones"),
     ("remote-control", "controlar la sesión desde claude.ai"),
     ("remote-env", "entorno en la nube por defecto"),
-    ("resume", "retomar una conversación"),
     ("rewind", "volver a un punto anterior"),
     ("sandbox", "activar o desactivar el sandbox"),
     ("scroll-speed", "velocidad de la rueda del ratón"),
     ("setup-bedrock", "configurar Amazon Bedrock"),
     ("setup-vertex", "configurar Google Vertex"),
-    ("skills", "listar las skills"),
     ("slides", "hacer una presentación"),
-    ("status", "versión, modelo, cuenta y conexión"),
     ("statusline", "configurar la línea de estado"),
     ("stickers", "pedir stickers de Claude Code"),
     ("stop", "parar la sesión en segundo plano"),
@@ -163,7 +156,6 @@ const INTERACTIVE: &[(&str, &str)] = &[
         "subtask",
         "un subagente en segundo plano con esta conversación",
     ),
-    ("tasks", "trabajo en segundo plano"),
     ("teleport", "traer una sesión de la nube a este terminal"),
     ("terminal-setup", "atajo Shift+Enter para saltos de línea"),
     ("theme", "cambiar el tema de color"),
@@ -173,6 +165,20 @@ const INTERACTIVE: &[(&str, &str)] = &[
     ("voice", "dictado por voz"),
     ("web-setup", "conectar GitHub para sesiones en la nube"),
     ("workflows", "progreso de los workflows"),
+];
+
+/// The lists jwn draws itself (REQ-424): a client opens them from its own state and sends
+/// nothing to the engine. `continue` is `resume`'s other name.
+const PANELS: [(&str, &str); 9] = [
+    ("help", "las teclas y los comandos de jwn"),
+    ("status", "modelo, esfuerzo, modo, sesión y límites"),
+    ("resume", "retomar una conversación de esta carpeta"),
+    ("continue", "retomar una conversación de esta carpeta"),
+    ("tasks", "trabajo en segundo plano"),
+    ("artifacts", "las páginas publicadas en esta conversación"),
+    ("skills", "las skills, comandos y plugins disponibles"),
+    ("permissions", "las reglas de permisos (solo lectura)"),
+    ("memory", "CLAUDE.md y AGENTS.md: abrir en un editor"),
 ];
 
 /// What jwn answers itself (REQ-418, REQ-419), whatever the engine lists under the same name.
@@ -198,13 +204,19 @@ pub fn own_commands() -> Vec<ConvCommand> {
         kind: CommandKind::Local,
         description: Some((*description).to_owned()),
     });
+    let panels = PANELS.iter().map(|(name, description)| ConvCommand {
+        name: format!("/{name}"),
+        source: CommandSource::Jwn,
+        kind: CommandKind::Panel,
+        description: Some((*description).to_owned()),
+    });
     let screens = INTERACTIVE.iter().map(|(name, description)| ConvCommand {
         name: format!("/{name}"),
         source: CommandSource::Claude,
         kind: CommandKind::Screen,
         description: Some((*description).to_owned()),
     });
-    own.chain(screens).collect()
+    own.chain(panels).chain(screens).collect()
 }
 
 /// The `/` list: jwn's own, then what the engine lists, each tagged by where it is defined
@@ -215,7 +227,7 @@ pub fn classify_commands(listed: &Value, skills: Option<&[&str]>) -> Vec<ConvCom
         let Some(name) = c["name"].as_str().filter(|n| !n.is_empty()) else {
             continue;
         };
-        if OWN.iter().any(|(own, _)| *own == name) {
+        if OWN.iter().any(|(own, _)| *own == name) || PANELS.iter().any(|(p, _)| *p == name) {
             continue;
         }
         let (source, kind) = if c["builtin"].as_bool().unwrap_or(false) {
@@ -1313,13 +1325,26 @@ impl State {
         }
     }
 
-    /// Whether `/word` is one of the commands that only work in Claude's own screen.
-    pub fn needs_screen(&self, word: &str) -> bool {
-        SCREEN.contains(&word)
-            || self
-                .commands
-                .iter()
-                .any(|c| c.kind == CommandKind::Screen && c.name.strip_prefix('/') == Some(word))
+    /// Why `/word` is not sent to the engine, when it is not: it only works in Claude's own
+    /// screen, or it is one of the lists a client draws itself.
+    pub fn refusal(&self, word: &str) -> Option<String> {
+        let kind = self
+            .commands
+            .iter()
+            .find(|c| c.name.strip_prefix('/') == Some(word))
+            .map(|c| c.kind);
+        match kind {
+            Some(CommandKind::Panel) => Some(format!(
+                "/{word} es una lista que dibuja el cliente: ábrela desde el terminal o el móvil"
+            )),
+            Some(CommandKind::Screen) => Some(format!(
+                "/{word} necesita la pantalla de Claude: usa `command claude`"
+            )),
+            _ if SCREEN.contains(&word) => Some(format!(
+                "/{word} necesita la pantalla de Claude: usa `command claude`"
+            )),
+            _ => None,
+        }
     }
 
     /// The skills `init` lists tell the commands that are skills from those of the project.
@@ -2164,9 +2189,16 @@ mod tests {
         let help = find("/help").unwrap();
         assert_eq!(
             (help.1, help.2),
+            (CommandSource::Jwn, CommandKind::Panel),
+            "the lists jwn draws itself are its own"
+        );
+        let rewind = find("/rewind").unwrap();
+        assert_eq!(
+            (rewind.1, rewind.2),
             (CommandSource::Claude, CommandKind::Screen),
             "all of Claude's are listed; the ones only its screen has say so"
         );
+        assert_eq!(find("/continue").unwrap().2, CommandKind::Panel);
         assert_eq!(find("/plan").unwrap().1, CommandSource::Jwn);
         assert_eq!(find("/context").unwrap().2, CommandKind::Text);
         assert_eq!(find("/doctor").unwrap().2, CommandKind::Screen);
@@ -2200,7 +2232,7 @@ mod tests {
         assert!(
             s.commands
                 .iter()
-                .any(|c| c.name == "/permissions" && c.kind == CommandKind::Screen),
+                .any(|c| c.name == "/rewind" && c.kind == CommandKind::Screen),
             "and all of Claude's, before the engine says anything"
         );
         let e = s.engine_started(None);

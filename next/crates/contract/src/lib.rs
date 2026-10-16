@@ -392,6 +392,11 @@ pub enum Cmd {
     ConversationClose {
         node: Id,
     },
+    /// The conversations Claude saved for the workspace's folder, newest first, up to 50 (REQ-426).
+    /// The result is a `ConversationList`.
+    ListConversations {
+        workspace: Id,
+    },
 }
 
 /// A node: one document of the tree, opened on demand and cached by clients.

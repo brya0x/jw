@@ -266,6 +266,24 @@ fn the_reply_of_open_conversation_is_a_node_and_a_session() {
     assert_eq!(serde_json::to_value(&opened).unwrap(), doc["result"]);
 }
 
+/// The result of `list_conversations` in the fixture is what `ConversationList` writes and reads.
+#[test]
+fn the_reply_of_list_conversations_is_a_list_of_saved_conversations() {
+    let docs = fixtures("daemon");
+    let (_, doc) = docs
+        .iter()
+        .find(|(n, _)| n == "reply-ok-list-conversations.json")
+        .expect("the fixture");
+    let list: contract::conversation::ConversationList =
+        serde_json::from_value(doc["result"].clone()).unwrap();
+    assert_eq!(list.conversations.len(), 2);
+    assert!(
+        list.conversations[0].at > list.conversations[1].at,
+        "newest first"
+    );
+    assert_eq!(serde_json::to_value(&list).unwrap(), doc["result"]);
+}
+
 /// The result of `project_config` in the fixture is what `ProjectInfo` writes and reads.
 #[test]
 fn the_reply_of_project_config_is_a_project_info() {

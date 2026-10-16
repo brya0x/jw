@@ -24,6 +24,7 @@ struct Rig {
     sb: Sandbox,
     daemon: Option<Daemon>,
     client: Client,
+    ws: String,
     pane: String,
     log: PathBuf,
 }
@@ -76,6 +77,7 @@ fn rig_with(sb: Sandbox, extra_env: Vec<(String, String)>) -> Rig {
         sb,
         daemon: Some(daemon),
         client,
+        ws,
         pane,
         log,
     }
@@ -306,7 +308,8 @@ fn the_engine_is_asked_what_it_can_do_and_the_model_and_the_commands_show_before
         names.contains(&"/help") && names.contains(&"/permissions") && names.contains(&"/plan"),
         "all of Claude's and jwn's"
     );
-    assert_eq!(find("/help")["kind"], "screen");
+    assert_eq!(find("/help")["kind"], "panel");
+    assert_eq!(find("/rewind")["kind"], "screen");
     assert_eq!(
         names.iter().filter(|n| **n == "/model").count(),
         1,
@@ -363,11 +366,20 @@ fn a_command_that_needs_claudes_screen_is_not_sent_and_says_where_to_go() {
     let e = r
         .cmd(Cmd::ConversationSend {
             node: node.clone(),
-            text: "/permissions".into(),
+            text: "/rewind".into(),
             images: vec![],
         })
         .unwrap_err();
     assert!(e.message.contains("command claude"), "{}", e.message);
+    // and a list a client draws is not the engine's either
+    let e = r
+        .cmd(Cmd::ConversationSend {
+            node: node.clone(),
+            text: "/resume".into(),
+            images: vec![],
+        })
+        .unwrap_err();
+    assert!(e.message.contains("lista"), "{}", e.message);
     r.stop();
 }
 
@@ -400,6 +412,58 @@ fn plan_enters_plan_mode_and_sends_what_follows_as_the_first_message_of_the_plan
         .unwrap();
     let user_at = log.iter().position(|l| l.starts_with("user")).unwrap();
     assert!(mode_at < user_at, "the mode goes first: {log:?}");
+    r.stop();
+}
+
+#[test]
+fn the_conversations_claude_saved_for_the_folder_are_listed_newest_first() {
+    let sb = Sandbox::new();
+    let config = sb.dir.join("claude-config");
+    let mut r = rig_with(
+        sb,
+        vec![(
+            "CLAUDE_CONFIG_DIR".into(),
+            config.to_string_lossy().into_owned(),
+        )],
+    );
+    let proj = std::fs::canonicalize(&r.sb.dir).unwrap().join("proj");
+    let encoded: String = proj
+        .to_string_lossy()
+        .chars()
+        .map(|c| if c == '/' || c == '.' { '-' } else { c })
+        .collect();
+    let dir = config.join("projects").join(encoded);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("aaaa.jsonl"),
+        "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"la primera\"}}\n",
+    )
+    .unwrap();
+    std::thread::sleep(Duration::from_millis(30));
+    std::fs::write(
+        dir.join("bbbb.jsonl"),
+        "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"la segunda\"}}\n{\"type\":\"ai-title\",\"aiTitle\":\"Título\"}\n",
+    )
+    .unwrap();
+    let v = r
+        .cmd(Cmd::ListConversations {
+            workspace: r.ws.clone(),
+        })
+        .unwrap()
+        .unwrap();
+    let list = v["conversations"].as_array().unwrap();
+    let shown: Vec<(&str, &str)> = list
+        .iter()
+        .map(|c| (c["id"].as_str().unwrap(), c["name"].as_str().unwrap()))
+        .collect();
+    assert_eq!(shown, [("bbbb", "Título"), ("aaaa", "la primera")]);
+    assert!(list[0]["at"].as_u64().unwrap() >= list[1]["at"].as_u64().unwrap());
+    let e = r
+        .cmd(Cmd::ListConversations {
+            workspace: "00000000-0000-4000-8000-00000000dead".into(),
+        })
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::NotFound);
     r.stop();
 }
 

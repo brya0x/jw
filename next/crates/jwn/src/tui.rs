@@ -31,6 +31,7 @@ mod field;
 mod look;
 mod manage;
 mod open;
+mod panels;
 mod phone;
 mod programs;
 mod select;
@@ -367,6 +368,11 @@ pub enum FileAsk {
         query: String,
         node: String,
     },
+    /// The conversations Claude saved for the workspace's folder, for `/resume`.
+    Saved {
+        workspace: String,
+        node: String,
+    },
 }
 
 /// The daemon's answer to a `FileAsk`.
@@ -514,6 +520,8 @@ pub struct View {
     /// The conversation nodes by node id, and what this terminal holds about each.
     convs: HashMap<String, contract::conversation::Conversation>,
     conv_ui: HashMap<String, ConvUi>,
+    /// What an answer asked for, to do with the next events.
+    then: Option<After>,
     /// The epoch and revision each document held here was read at: what the client holds, and what
     /// the seen record counts from.
     read: HashMap<String, (String, u64)>,
@@ -606,6 +614,7 @@ impl View {
             blocks: HashMap::new(),
             convs: HashMap::new(),
             conv_ui: HashMap::new(),
+            then: None,
             read: HashMap::new(),
             painted: HashMap::new(),
             left_alt: HashMap::new(),
@@ -1841,6 +1850,9 @@ impl View {
             return After::Continue;
         };
         let ui = self.conv_ui.entry(node.to_owned()).or_default();
+        if let Some(p) = self.panes.get(&conv.pane) {
+            ui.context(&p.cwd);
+        }
         if ev.modifiers.contains(KeyModifiers::CONTROL)
             && ev.code == KeyCode::Char('v')
             && conv.ask.is_none()
@@ -1857,7 +1869,25 @@ impl View {
             self.flash = says;
         }
         self.ask_mentions(node);
-        Self::conv_after(act)
+        self.ask_saved(node);
+        self.conv_after(act)
+    }
+
+    /// The conversations `/resume` lists, asked of the daemon once.
+    fn ask_saved(&mut self, node: &str) {
+        let Some(workspace) = self.opened.clone() else {
+            return;
+        };
+        if self
+            .conv_ui
+            .get_mut(node)
+            .is_some_and(ConvUi::take_saved_ask)
+        {
+            self.file_asks.push(FileAsk::Saved {
+                workspace,
+                node: node.to_owned(),
+            });
+        }
     }
 
     /// The files an `@` in the conversation's line calls for, asked once for each fragment.
@@ -1874,9 +1904,22 @@ impl View {
         }
     }
 
-    fn conv_after(act: Option<ConvAct>) -> After {
+    fn conv_after(&self, act: Option<ConvAct>) -> After {
         match act {
             Some(ConvAct::Copy(text)) => After::Copy(text),
+            Some(ConvAct::Edit(path)) => {
+                let Some(workspace) = self.opened.clone() else {
+                    return After::Continue;
+                };
+                let mut program =
+                    editor_from(std::env::var("VISUAL").ok(), std::env::var("EDITOR").ok());
+                program.push(path.to_string_lossy().into_owned());
+                After::NewProgram {
+                    workspace,
+                    program,
+                    place: self.place(None),
+                }
+            }
             Some(act) => After::Conv(act),
             None => After::Continue,
         }
@@ -2189,6 +2232,9 @@ impl View {
             return After::Continue;
         };
         let ui = self.conv_ui.entry(node.to_owned()).or_default();
+        if let Some(p) = self.panes.get(&conv.pane) {
+            ui.context(&p.cwd);
+        }
         if ui.click_title(conv, rect, x, y) {
             return After::Continue;
         }
@@ -2196,7 +2242,8 @@ impl View {
         if let Some(says) = ui.take_says() {
             self.flash = says;
         }
-        Self::conv_after(act)
+        self.ask_saved(node);
+        self.conv_after(act)
     }
 
     /// A left click at cell (`x`, `y`) of a `cols` × `rows` screen. A workspace row opens it,
@@ -2396,6 +2443,37 @@ impl View {
         std::mem::take(&mut self.file_asks)
     }
 
+    /// The daemon listed the saved conversations: the list of `/resume` fills, or says why not.
+    fn saved_replied(&mut self, node: &str, reply: Reply) {
+        let list = reply_value(reply).and_then(|v| {
+            serde_json::from_value::<contract::conversation::ConversationList>(v)
+                .map_err(|e| e.to_string())
+        });
+        let (Some(conv), Some(ui)) = (self.convs.get(node), self.conv_ui.get_mut(node)) else {
+            return;
+        };
+        match list {
+            Ok(l) => {
+                let act = ui.listed(&l.conversations, conv);
+                if let Some(says) = ui.take_says() {
+                    self.flash = says;
+                }
+                self.then = Some(self.conv_after(act));
+            }
+            Err(why) => {
+                ui.list_failed(&format!("no se pudo listar las conversaciones: {why}"));
+                if let Some(says) = ui.take_says() {
+                    self.flash = says;
+                }
+            }
+        }
+    }
+
+    /// What an answer that came on its own asks the client to do (`/continue` taking the newest).
+    pub fn take_then(&mut self) -> Option<After> {
+        self.then.take().filter(|a| *a != After::Continue)
+    }
+
     /// The daemon answered a folder or a search.
     pub fn files_replied(&mut self, r: FilesReply) {
         let FilesReply { ask, reply } = r;
@@ -2407,9 +2485,14 @@ impl View {
             }
             return;
         }
+        if let FileAsk::Saved { node, .. } = &ask {
+            self.saved_replied(node, reply);
+            return;
+        }
         let (FileAsk::List { workspace, .. }
         | FileAsk::Find { workspace, .. }
-        | FileAsk::Mention { workspace, .. }) = &ask;
+        | FileAsk::Mention { workspace, .. }
+        | FileAsk::Saved { workspace, .. }) = &ask;
         let Some(t) = self.trees.get_mut(workspace) else {
             return;
         };
@@ -2444,7 +2527,7 @@ impl View {
                 }
             }
             // Answered above.
-            FileAsk::Mention { .. } => {}
+            FileAsk::Mention { .. } | FileAsk::Saved { .. } => {}
         }
     }
 
@@ -3925,6 +4008,9 @@ fn spawn_files(ask: FileAsk, tx: std::sync::mpsc::Sender<FilesReply>) {
                 workspace: workspace.clone(),
                 query: query.clone(),
             },
+            FileAsk::Saved { workspace, .. } => Cmd::ListConversations {
+                workspace: workspace.clone(),
+            },
         };
         let reply = Client::connect(&identity::socket_path(), "jwn-tui-files")
             .and_then(|mut c| c.cmd_within(cmd, FILES_WAIT));
@@ -4130,13 +4216,153 @@ fn conversation_cmd(view: &mut View, client: &mut Client, act: ConvAct) {
         ConvAct::Effort { node, effort } => set(node, None, None, None, Some(effort), None),
         ConvAct::Mode { node, mode } => set(node, None, None, None, None, Some(mode)),
         ConvAct::Shell { node, command } => Cmd::ConversationShell { node, command },
-        ConvAct::Copy(_) => return,
+        ConvAct::Resume { pane, id } => Cmd::OpenConversation {
+            pane,
+            resume: Some(id),
+            args: Vec::new(),
+            env: None,
+        },
+        ConvAct::Copy(_) | ConvAct::Edit(_) => return,
     };
     match client.cmd(cmd) {
         Ok(Ok(_)) => {}
         Ok(Err(e)) => view.flash(&e.message),
         Err(e) => view.flash(&e.to_string()),
     }
+}
+
+/// Do what a key, a click or an answer asked for; true when the client is to quit.
+fn do_after(
+    after: After,
+    view: &mut View,
+    client: &mut Client,
+    sync_tx: &std::sync::mpsc::Sender<Reply>,
+) -> bool {
+    match after {
+        After::Quit => return true,
+        After::Write { pane, data } => {
+            let _ = client.send(Cmd::Write { pane, data });
+        }
+        After::Swap(a, b) => {
+            let reply = client.cmd(Cmd::SwapPanes { a, b });
+            told(
+                view,
+                "No se pudo intercambiar los paneles",
+                "paneles intercambiados",
+                reply,
+            );
+        }
+        After::Grow { pane, dir, by } => {
+            if let Ok(Err(_)) = client.cmd(Cmd::GrowPane { pane, dir, by }) {
+                view.flash(match dir {
+                    SplitDir::Row => "no hay división en horizontal para este panel",
+                    SplitDir::Col => "no hay división en vertical para este panel",
+                });
+            }
+        }
+        After::NewPane(workspace, place) => {
+            let reply = client.cmd(Cmd::NewPane {
+                workspace,
+                program: None,
+                beside: place.beside,
+                dir: Some(place.dir),
+            });
+            view.focus_new(&reply);
+        }
+        After::NewProgram {
+            workspace,
+            program,
+            place,
+        } => {
+            let reply = client.cmd(Cmd::NewPane {
+                workspace,
+                program: Some(program),
+                beside: place.beside,
+                dir: Some(place.dir),
+            });
+            view.focus_new(&reply);
+            match reply {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => view.manage_failed("No se pudo abrir el programa", &e.message),
+                Err(e) => view.manage_failed("No se pudo abrir el programa", &e.to_string()),
+            }
+        }
+        After::OpenFolder { path, create } => {
+            if create && let Err(e) = std::fs::create_dir(&path) {
+                view.manage_failed("No se pudo crear la carpeta", &e.to_string());
+            } else {
+                let reply = client.cmd(Cmd::OpenFolder {
+                    path: path.to_string_lossy().into_owned(),
+                });
+                shown_in_a_pane(view, client, reply, "No se pudo abrir la carpeta", false);
+            }
+        }
+        After::CreateWorktree {
+            repo,
+            branch,
+            from,
+            folder,
+        } => {
+            let reply = client.cmd_within(
+                Cmd::CreateWorktree {
+                    repo: repo.to_string_lossy().into_owned(),
+                    branch,
+                    base: Some(from),
+                    folder: Some(folder),
+                },
+                ASK_WAIT,
+            );
+            shown_in_a_pane(view, client, reply, "No se pudo crear el worktree", true);
+        }
+        After::Sync { workspace } => spawn_sync(workspace, sync_tx.clone()),
+        After::Rename { target, name } => {
+            let cmd = match target {
+                Named::Workspace(workspace) => Cmd::RenameWorkspace { workspace, name },
+                Named::Pane(pane) => Cmd::RenamePane { pane, name },
+            };
+            let reply = client.cmd(cmd);
+            told(view, "No se pudo renombrar", "renombrado", reply);
+        }
+        After::ClosePane(pane) => {
+            let reply = client.cmd(Cmd::ClosePane { pane });
+            told(view, "No se pudo cerrar el panel", "panel cerrado", reply);
+        }
+        After::RemoveWorkspace {
+            workspace,
+            remove_worktree,
+            force,
+        } => {
+            let reply = client.cmd(Cmd::RemoveWorkspace {
+                workspace,
+                remove_worktree,
+                force,
+            });
+            if remove_worktree {
+                told(
+                    view,
+                    "No se pudo quitar el worktree",
+                    "worktree quitado · la rama se queda",
+                    reply,
+                );
+            } else {
+                told(
+                    view,
+                    "No se pudo cerrar el workspace",
+                    "workspace cerrado · la carpeta se queda",
+                    reply,
+                );
+            }
+        }
+        After::Check(workspace) => check_changes(view, client, workspace),
+        After::Conv(act) => conversation_cmd(view, client, act),
+        After::Copy(text) => {
+            let mut out = stdout();
+            let _ = write!(out, "{}", shell::osc52(&text));
+            let _ = out.flush();
+        }
+        After::Continue => {}
+    }
+    false
 }
 
 pub fn run() -> Result<(), String> {
@@ -4248,6 +4474,11 @@ pub fn run() -> Result<(), String> {
         for ask in view.take_file_asks() {
             spawn_files(ask, files_tx.clone());
         }
+        if let Some(after) = view.take_then()
+            && do_after(after, &mut view, &mut client, &sync_tx)
+        {
+            return Ok(());
+        }
         if view.take_phone_start() {
             phone_worker = Some(phone::Worker::spawn());
         }
@@ -4295,150 +4526,8 @@ pub fn run() -> Result<(), String> {
                 }
                 _ => After::Continue,
             };
-            match after {
-                After::Quit => return Ok(()),
-                After::Write { pane, data } => {
-                    let _ = client.send(Cmd::Write { pane, data });
-                }
-                After::Swap(a, b) => {
-                    let reply = client.cmd(Cmd::SwapPanes { a, b });
-                    told(
-                        &mut view,
-                        "No se pudo intercambiar los paneles",
-                        "paneles intercambiados",
-                        reply,
-                    );
-                }
-                After::Grow { pane, dir, by } => {
-                    if let Ok(Err(_)) = client.cmd(Cmd::GrowPane { pane, dir, by }) {
-                        view.flash(match dir {
-                            SplitDir::Row => "no hay división en horizontal para este panel",
-                            SplitDir::Col => "no hay división en vertical para este panel",
-                        });
-                    }
-                }
-                After::NewPane(workspace, place) => {
-                    let reply = client.cmd(Cmd::NewPane {
-                        workspace,
-                        program: None,
-                        beside: place.beside,
-                        dir: Some(place.dir),
-                    });
-                    view.focus_new(&reply);
-                }
-                After::NewProgram {
-                    workspace,
-                    program,
-                    place,
-                } => {
-                    let reply = client.cmd(Cmd::NewPane {
-                        workspace,
-                        program: Some(program),
-                        beside: place.beside,
-                        dir: Some(place.dir),
-                    });
-                    view.focus_new(&reply);
-                    match reply {
-                        Ok(Ok(_)) => {}
-                        Ok(Err(e)) => {
-                            view.manage_failed("No se pudo abrir el programa", &e.message)
-                        }
-                        Err(e) => {
-                            view.manage_failed("No se pudo abrir el programa", &e.to_string())
-                        }
-                    }
-                }
-                After::OpenFolder { path, create } => {
-                    if create && let Err(e) = std::fs::create_dir(&path) {
-                        view.manage_failed("No se pudo crear la carpeta", &e.to_string());
-                    } else {
-                        let reply = client.cmd(Cmd::OpenFolder {
-                            path: path.to_string_lossy().into_owned(),
-                        });
-                        shown_in_a_pane(
-                            &mut view,
-                            &mut client,
-                            reply,
-                            "No se pudo abrir la carpeta",
-                            false,
-                        );
-                    }
-                }
-                After::CreateWorktree {
-                    repo,
-                    branch,
-                    from,
-                    folder,
-                } => {
-                    let reply = client.cmd_within(
-                        Cmd::CreateWorktree {
-                            repo: repo.to_string_lossy().into_owned(),
-                            branch,
-                            base: Some(from),
-                            folder: Some(folder),
-                        },
-                        ASK_WAIT,
-                    );
-                    shown_in_a_pane(
-                        &mut view,
-                        &mut client,
-                        reply,
-                        "No se pudo crear el worktree",
-                        true,
-                    );
-                }
-                After::Sync { workspace } => spawn_sync(workspace, sync_tx.clone()),
-                After::Rename { target, name } => {
-                    let cmd = match target {
-                        Named::Workspace(workspace) => Cmd::RenameWorkspace { workspace, name },
-                        Named::Pane(pane) => Cmd::RenamePane { pane, name },
-                    };
-                    let reply = client.cmd(cmd);
-                    told(&mut view, "No se pudo renombrar", "renombrado", reply);
-                }
-                After::ClosePane(pane) => {
-                    let reply = client.cmd(Cmd::ClosePane { pane });
-                    told(
-                        &mut view,
-                        "No se pudo cerrar el panel",
-                        "panel cerrado",
-                        reply,
-                    );
-                }
-                After::RemoveWorkspace {
-                    workspace,
-                    remove_worktree,
-                    force,
-                } => {
-                    let reply = client.cmd(Cmd::RemoveWorkspace {
-                        workspace,
-                        remove_worktree,
-                        force,
-                    });
-                    if remove_worktree {
-                        told(
-                            &mut view,
-                            "No se pudo quitar el worktree",
-                            "worktree quitado · la rama se queda",
-                            reply,
-                        );
-                    } else {
-                        told(
-                            &mut view,
-                            "No se pudo cerrar el workspace",
-                            "workspace cerrado · la carpeta se queda",
-                            reply,
-                        );
-                    }
-                }
-                After::Check(workspace) => check_changes(&mut view, &mut client, workspace),
-                After::Conv(act) => conversation_cmd(&mut view, &mut client, act),
-                After::Copy(text) => {
-                    let mut out = stdout();
-                    let _ = write!(out, "{}", shell::osc52(&text));
-                    let _ = out.flush();
-                }
-                After::Continue => {}
+            if do_after(after, &mut view, &mut client, &sync_tx) {
+                return Ok(());
             }
         }
     }
@@ -7647,6 +7736,122 @@ mod tests {
         assert!(v.plain(120, 40).contains("src/auth.rs"));
         v.press_key(plain(KeyCode::Tab));
         assert_eq!(v.conv_ui[CONV].editor.text(), "ver @src/auth.rs ");
+    }
+
+    fn type_line(v: &mut View, text: &str) {
+        for c in text.chars() {
+            v.press_key(plain(KeyCode::Char(c)));
+        }
+    }
+
+    fn saved_reply(n: usize) -> Reply {
+        let conversations: Vec<_> = (0..n)
+            .map(|i| {
+                serde_json::json!({
+                    "id": format!("{i:08}-3d20-4cd2-9d13-485b39b26147"),
+                    "name": format!("conversación {i}"),
+                    "at": 1_792_110_000_000u64 - i as u64 * 60_000
+                })
+            })
+            .collect();
+        Ok(Ok(Some(
+            serde_json::json!({ "conversations": conversations }),
+        )))
+    }
+
+    #[test]
+    fn resume_asks_the_daemon_for_the_saved_conversations_and_choosing_one_opens_it_in_the_pane() {
+        let mut v = conv_view(true);
+        type_line(&mut v, "/resume");
+        assert_eq!(v.press_key(plain(KeyCode::Enter)), After::Continue);
+        let asks = v.take_file_asks();
+        let ws = v.opened.clone().unwrap();
+        assert_eq!(
+            asks,
+            [FileAsk::Saved {
+                workspace: ws,
+                node: CONV.into()
+            }]
+        );
+        assert!(v.plain(120, 40).contains("cargando…"));
+        v.files_replied(FilesReply {
+            ask: asks[0].clone(),
+            reply: saved_reply(30),
+        });
+        let screen = v.plain(120, 40);
+        assert!(
+            screen.contains("retomar una conversación") && screen.contains("conversación 0"),
+            "{screen}"
+        );
+        assert!(screen.contains("1 de 30"), "{screen}");
+        assert_eq!(
+            v.press_key(plain(KeyCode::Enter)),
+            After::Conv(ConvAct::Resume {
+                pane: CONV_PANE.into(),
+                id: "00000000-3d20-4cd2-9d13-485b39b26147".into()
+            })
+        );
+        assert_eq!(v.take_then(), None);
+    }
+
+    #[test]
+    fn continue_resumes_the_newest_without_a_key_and_a_failure_is_said() {
+        let mut v = conv_view(true);
+        type_line(&mut v, "/continue");
+        v.press_key(plain(KeyCode::Enter));
+        let asks = v.take_file_asks();
+        v.files_replied(FilesReply {
+            ask: asks[0].clone(),
+            reply: saved_reply(3),
+        });
+        assert_eq!(
+            v.take_then(),
+            Some(After::Conv(ConvAct::Resume {
+                pane: CONV_PANE.into(),
+                id: "00000000-3d20-4cd2-9d13-485b39b26147".into()
+            }))
+        );
+        // the daemon says no
+        let mut v = conv_view(true);
+        type_line(&mut v, "/resume");
+        v.press_key(plain(KeyCode::Enter));
+        let asks = v.take_file_asks();
+        v.files_replied(FilesReply {
+            ask: asks[0].clone(),
+            reply: Err(ClientError::Protocol("sin conexión".into())),
+        });
+        assert!(
+            !v.plain(120, 40).contains("cargando"),
+            "the list does not wait for ever"
+        );
+        assert!(v.flash.contains("no se pudo listar"), "{}", v.flash);
+    }
+
+    #[test]
+    fn a_memory_file_chosen_opens_in_an_editor_in_a_new_panel() {
+        let mut v = conv_view(true);
+        let dir = std::env::temp_dir().join(format!(
+            "{}-mem-{}",
+            identity::get().name,
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("AGENTS.md"), "x").unwrap();
+        v.panes.get_mut(CONV_PANE).unwrap().cwd = dir.to_string_lossy().into_owned();
+        type_line(&mut v, "/memory");
+        v.press_key(plain(KeyCode::Enter));
+        // the person's own files may be there too: narrow it to this one
+        type_line(&mut v, "AGENTS");
+        match v.press_key(plain(KeyCode::Enter)) {
+            After::NewProgram { program, .. } => {
+                assert_eq!(
+                    program.last().unwrap(),
+                    &dir.join("AGENTS.md").to_string_lossy().into_owned()
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

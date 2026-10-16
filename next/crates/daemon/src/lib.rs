@@ -26,6 +26,7 @@ mod project;
 mod pty;
 mod rename;
 mod replies;
+mod saved;
 mod server;
 mod start;
 mod sync;

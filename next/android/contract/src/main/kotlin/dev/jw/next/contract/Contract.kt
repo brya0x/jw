@@ -185,6 +185,10 @@ sealed interface Cmd {
     data class ListFiles(val workspace: Id, val path: String? = null) : Cmd
 
     /** Find the files of a workspace whose path holds [query]; the result is the paths found. */
+    /** The conversations Claude saved for the workspace's folder, newest first, up to 50. The result is a [ConversationList]. */
+    @Serializable @SerialName("list_conversations")
+    data class ListConversations(val workspace: Id) : Cmd
+
     @Serializable @SerialName("find_files")
     data class FindFiles(val workspace: Id, val query: String) : Cmd
 

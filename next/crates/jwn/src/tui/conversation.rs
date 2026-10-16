@@ -11,11 +11,12 @@ use std::collections::HashSet;
 use contract::PaneInput;
 use contract::conversation::{
     Accent, Ask, AskKind, CommandKind, CommandSource, ConvCommand, ConvStatus, Conversation,
-    DiffLine, DiffSign, Image, Item, Mode, Tone, ToolState,
+    DiffLine, DiffSign, Image, Item, Mode, SavedConversation, Tone, ToolState,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::field::{self, Field, Look};
+use super::panels::{self, Panel, RowAct};
 use super::{Grid, Rgb, Style, clip, look};
 
 /// What the keyboard or the mouse asks the daemon for: the client maps each to its command.
@@ -58,6 +59,13 @@ pub enum Act {
         node: String,
         command: String,
     },
+    /// Retake a saved conversation in this pane.
+    Resume {
+        pane: String,
+        id: String,
+    },
+    /// Open a file in an editor, in a new panel.
+    Edit(std::path::PathBuf),
     /// Text for the clipboard.
     Copy(String),
 }
@@ -142,9 +150,21 @@ impl Of {
     }
 }
 
+/// A list of jwn's (`panels.rs`): the rows, the one lit, what is typed to narrow them, and, for
+/// the conversations still to arrive, that it waits.
+struct ListState {
+    panel: Panel,
+    at: usize,
+    filter: String,
+    loading: bool,
+    /// `/continue`: take the first one that arrives.
+    first: bool,
+}
+
 enum Pop {
     Pick { of: Of, at: usize },
     Name(Editor),
+    List(ListState),
 }
 
 /// The line being typed: characters, and where the cursor is among them.
@@ -326,6 +346,10 @@ pub struct Ui {
     /// The command lit in the `/` list, and the line the person closed it on.
     menu_at: usize,
     menu_off: String,
+    /// The folder the pane is in, for the lists that read the machine.
+    cwd: String,
+    /// The list of saved conversations waits for the daemon: the client asks once.
+    want_saved: bool,
     files: Vec<String>,
     files_for: String,
     file_at: usize,
@@ -464,6 +488,120 @@ impl Ui {
             .filter(|w| w.starts_with('/'))?;
         let c = conv.commands.iter().find(|c| c.name == word)?;
         Some((word.to_owned(), source_look(c.source).colour))
+    }
+
+    /// The folder the pane is in.
+    pub fn context(&mut self, cwd: &str) {
+        if self.cwd != cwd {
+            cwd.clone_into(&mut self.cwd);
+        }
+    }
+
+    /// Whether the list of saved conversations has to be asked for, once.
+    pub fn take_saved_ask(&mut self) -> bool {
+        std::mem::take(&mut self.want_saved)
+    }
+
+    /// The saved conversations arrived (`/resume`); `/continue` takes the newest at once.
+    pub fn listed(&mut self, saved: &[SavedConversation], conv: &Conversation) -> Option<Act> {
+        let Some(Pop::List(l)) = &mut self.pop else {
+            return None;
+        };
+        if !l.loading {
+            return None;
+        }
+        let take_first = l.first;
+        l.panel = panels::saved(saved);
+        l.loading = false;
+        if take_first {
+            let act = l.panel.rows.first().map(|r| r.act.clone());
+            self.pop = None;
+            return match act {
+                Some(act) => self.row_act(conv, act),
+                None => {
+                    self.says = "no hay conversaciones guardadas de esta carpeta".into();
+                    None
+                }
+            };
+        }
+        None
+    }
+
+    /// The daemon could not list them.
+    pub fn list_failed(&mut self, why: &str) {
+        if matches!(&self.pop, Some(Pop::List(l)) if l.loading) {
+            self.pop = None;
+            self.says = why.to_owned();
+        }
+    }
+
+    /// `/help`, `/status`, `/resume` and the other lists of jwn's: opened from what the node and the machine hold.
+    fn open_panel(&mut self, conv: &Conversation, word: &str, arg: &str) -> Option<Act> {
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+        let cwd = std::path::PathBuf::from(&self.cwd);
+        let panel = match word {
+            "help" => panels::help(conv),
+            "status" => panels::status(conv, &self.cwd),
+            "skills" => panels::skills(conv),
+            "tasks" => panels::tasks(conv),
+            "artifacts" => panels::artifacts(conv),
+            "permissions" => panels::permissions(&cwd, home.as_deref()),
+            "memory" => panels::memory(&cwd, home.as_deref()),
+            "resume" | "continue" => {
+                if word == "resume" && !arg.is_empty() {
+                    return Some(Act::Resume {
+                        pane: conv.pane.clone(),
+                        id: arg.to_owned(),
+                    });
+                }
+                self.want_saved = true;
+                self.pop = Some(Pop::List(ListState {
+                    panel: Panel {
+                        title: "retomar una conversación".into(),
+                        rows: Vec::new(),
+                        empty: "cargando…".into(),
+                    },
+                    at: 0,
+                    filter: String::new(),
+                    loading: true,
+                    first: word == "continue",
+                }));
+                return None;
+            }
+            _ => return None,
+        };
+        self.pop = Some(Pop::List(ListState {
+            panel,
+            at: 0,
+            filter: String::new(),
+            loading: false,
+            first: false,
+        }));
+        None
+    }
+
+    /// What choosing a row of a list does.
+    fn row_act(&mut self, conv: &Conversation, act: RowAct) -> Option<Act> {
+        match act {
+            RowAct::Nothing => None,
+            RowAct::Insert(text) => {
+                self.editor.set(&text);
+                None
+            }
+            RowAct::Resume(id) => Some(Act::Resume {
+                pane: conv.pane.clone(),
+                id,
+            }),
+            RowAct::Copy(text) => {
+                let lines = text.lines().count();
+                self.says = format!(
+                    "copiado · {lines} línea · {} caracteres",
+                    text.chars().count()
+                );
+                Some(Act::Copy(text))
+            }
+            RowAct::Edit(path) => Some(Act::Edit(path)),
+        }
     }
 
     /// Whether a list or a field is open over the conversation.
@@ -860,7 +998,10 @@ impl Ui {
             field.draw_with(g, (ix, by, iw), &chips, focused, &look);
         }
         self.draw_foot(g, conv, (ix, geo.foot, iw));
-        if let Some(pop) = &self.pop {
+        if let Some(Pop::List(l)) = &self.pop {
+            let top = geo.list.0;
+            self.draw_list(g, conv, l, (ix, top, iw, by.saturating_sub(top)), now_ms);
+        } else if let Some(pop) = &self.pop {
             self.draw_pop(g, conv, pop, (ix, by, iw));
         } else if conv.ask.is_none() && self.files_open() {
             self.draw_files(g, conv, (ix, by, iw));
@@ -1081,6 +1222,114 @@ impl Ui {
         }
     }
 
+    /// A list of jwn's, over the conversation: a box with what is typed to narrow it, and the rows.
+    fn draw_list(
+        &self,
+        g: &mut Grid,
+        conv: &Conversation,
+        l: &ListState,
+        (x, y, w, h): (usize, usize, usize, usize),
+        now_ms: u64,
+    ) {
+        if h < 5 {
+            return;
+        }
+        g.clear_box((x, y, w, h));
+        let rows = visible(l);
+        let at = l.at.min(rows.len().saturating_sub(1));
+        let badge = (!rows.is_empty()).then(|| {
+            (
+                format!("{} de {}", at + 1, rows.len()),
+                Style::fg(look::dim()),
+            )
+        });
+        g.boxed(
+            (x, y, w, h),
+            &l.panel.title,
+            accent_rgb(conv.accent),
+            Style::fg(look::fg()).bold(),
+            badge,
+        );
+        let ground = look::panel();
+        let filter = if l.filter.is_empty() {
+            Style::fg(look::dim()).on(ground)
+        } else {
+            Style::fg(look::fg()).on(ground)
+        };
+        let typed = if l.filter.is_empty() {
+            "escribe para filtrar".to_owned()
+        } else {
+            format!("{}▏", l.filter)
+        };
+        g.put(x + 2, y + 1, &format!("› {typed}"), filter);
+        if rows.is_empty() {
+            let text = if l.filter.is_empty() {
+                l.panel.empty.as_str()
+            } else {
+                "Nada coincide."
+            };
+            g.put(
+                x + 2,
+                y + 3,
+                &clip(text, w.saturating_sub(4)),
+                Style::fg(look::dim()).on(ground),
+            );
+            return;
+        }
+        let capacity = h - 3;
+        let first = (at + 1).saturating_sub(capacity);
+        let two = rows.iter().any(|r| !r.detail.is_empty());
+        let label_w = rows
+            .iter()
+            .map(|r| r.label.chars().count())
+            .max()
+            .unwrap_or(0)
+            .min(w / 3);
+        for (i, r) in rows.iter().skip(first).take(capacity).enumerate() {
+            let row = y + 2 + i;
+            let lit = first + i == at;
+            let bg = if lit { look::sel() } else { ground };
+            g.paint_bg(x + 1, row, w - 2, bg);
+            let mut right = String::new();
+            if let Some(t) = r.at {
+                right.push_str(&panels::ago(now_ms, t));
+            }
+            let tag = r.tag.as_ref().map(|(t, c)| (t.as_str(), *c));
+            let tag_w = tag.map_or(0, |(t, _)| t.chars().count() + 2);
+            let right_w = right.chars().count() + tag_w;
+            let right_x = (x + w).saturating_sub(right_w + 2);
+            let avail = right_x.saturating_sub(x + 4);
+            let label = if two { label_w } else { avail };
+            let label_style = Style::fg(look::fg()).on(bg);
+            g.put(
+                x + 2,
+                row,
+                &clip(&r.label, label.min(avail)),
+                if lit { label_style.bold() } else { label_style },
+            );
+            if two && !r.detail.is_empty() {
+                let from = x + 4 + label_w;
+                g.put(
+                    from,
+                    row,
+                    &clip(&r.detail, right_x.saturating_sub(from + 1)),
+                    Style::fg(look::dim()).on(bg),
+                );
+            }
+            if !right.is_empty() {
+                g.put(right_x, row, &right, Style::fg(look::dim()).on(bg));
+            }
+            if let Some((t, c)) = tag {
+                g.put(
+                    (x + w).saturating_sub(t.chars().count() + 3),
+                    row,
+                    t,
+                    Style::fg(c).on(bg),
+                );
+            }
+        }
+    }
+
     fn draw_pop(
         &self,
         g: &mut Grid,
@@ -1091,6 +1340,7 @@ impl Ui {
         let (title, rows) = match pop {
             Pop::Pick { of, .. } => (of.title(), of.choices().len()),
             Pop::Name(_) => ("nombre", 1),
+            Pop::List(_) => return,
         };
         let h = rows + 2;
         let w = 34.min(iw);
@@ -1114,6 +1364,7 @@ impl Ui {
                     g.put(x + 4, y + 1 + i, label, Style::fg(look::fg()).on(bg));
                 }
             }
+            Pop::List(_) => {}
             Pop::Name(e) => {
                 let text = e.text();
                 g.put(
@@ -1294,6 +1545,32 @@ impl Ui {
                     e.edit(ev);
                 }
             },
+            Pop::List(l) => {
+                let n = visible(l).len();
+                match ev.code {
+                    KeyCode::Esc => self.pop = None,
+                    KeyCode::Up => l.at = l.at.saturating_sub(1),
+                    KeyCode::Down => l.at = (l.at + 1).min(n.saturating_sub(1)),
+                    KeyCode::PageUp => l.at = l.at.saturating_sub(PAGE),
+                    KeyCode::PageDown => l.at = (l.at + PAGE).min(n.saturating_sub(1)),
+                    KeyCode::Enter => {
+                        let act = visible(l).get(l.at).map(|r| r.act.clone());
+                        if let Some(act) = act {
+                            self.pop = None;
+                            return self.row_act(conv, act);
+                        }
+                    }
+                    KeyCode::Backspace => {
+                        l.filter.pop();
+                        l.at = 0;
+                    }
+                    KeyCode::Char(c) if !ev.modifiers.contains(KeyModifiers::CONTROL) => {
+                        l.filter.push(c);
+                        l.at = 0;
+                    }
+                    _ => {}
+                }
+            }
             Pop::Pick { of, at } => {
                 let n = of.choices().len();
                 match ev.code {
@@ -1327,6 +1604,15 @@ impl Ui {
         let line = text.trim();
         if line.is_empty() {
             return None;
+        }
+        if let Some(rest) = line.strip_prefix('/') {
+            let (word, arg) = rest
+                .split_once(char::is_whitespace)
+                .map_or((rest, ""), |(w, a)| (w, a.trim()));
+            if panels::is_panel(word) {
+                self.editor.take();
+                return self.open_panel(conv, word, arg);
+            }
         }
         let bare = match line {
             "/model" => Some(Of::Model),
@@ -1434,6 +1720,15 @@ impl Ui {
     }
 
     pub fn scroll_by(&mut self, up: bool, n: usize) {
+        if let Some(Pop::List(l)) = &mut self.pop {
+            let last = visible(l).len().saturating_sub(1);
+            l.at = if up {
+                l.at.saturating_sub(n)
+            } else {
+                (l.at + n).min(last)
+            };
+            return;
+        }
         self.scroll = if up {
             (self.scroll + n).min(self.most.get())
         } else {
@@ -1465,6 +1760,25 @@ impl Ui {
             } else {
                 self.dismissed.clone_from(&self.files_for);
             }
+            return None;
+        }
+        if let Some(Pop::List(l)) = &mut self.pop {
+            let top = geo.list.0;
+            let h = geo.band.0.saturating_sub(top);
+            let rows = visible(l);
+            let at = l.at.min(rows.len().saturating_sub(1));
+            let capacity = h.saturating_sub(3);
+            let first = (at + 1).saturating_sub(capacity);
+            if h >= 5
+                && y >= top + 2
+                && y < top + 2 + capacity
+                && first + (y - top - 2) < rows.len()
+            {
+                let act = rows[first + y - top - 2].act.clone();
+                self.pop = None;
+                return self.row_act(conv, act);
+            }
+            self.pop = None;
             return None;
         }
         let menu = self.menu(conv);
@@ -1573,6 +1887,23 @@ impl Ui {
         name.set(&conv.name);
         self.pop = Some(Pop::Name(name));
     }
+}
+
+/// The rows of a list that hold what is typed to narrow it, wherever they hold it.
+fn visible(l: &ListState) -> Vec<&panels::Row> {
+    let typed = l.filter.to_lowercase();
+    l.panel
+        .rows
+        .iter()
+        .filter(|r| {
+            typed.is_empty()
+                || r.label.to_lowercase().contains(&typed)
+                || r.detail.to_lowercase().contains(&typed)
+                || r.tag
+                    .as_ref()
+                    .is_some_and(|(t, _)| t.to_lowercase().contains(&typed))
+        })
+        .collect()
 }
 
 /// The pane's title: what it runs and the conversation's name.
@@ -2875,6 +3206,197 @@ mod tests {
         let mut ui = Ui::default();
         type_in(&mut ui, &conv, "!ls");
         assert_eq!(colour_of(&ui, "!ls"), Some(look::green()), "a shell line");
+    }
+
+    fn saved(n: usize) -> Vec<SavedConversation> {
+        (0..n)
+            .map(|i| SavedConversation {
+                id: format!("{i:08}-3d20-4cd2-9d13-485b39b26147"),
+                name: format!("conversación número {i}"),
+                at: 1_792_110_000_000 - i as u64 * 3_600_000,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn resume_asks_for_the_saved_conversations_once_and_draws_them_with_how_long_ago() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "/resume");
+        assert_eq!(press(&mut ui, &conv, KeyCode::Enter), None);
+        assert!(ui.take_saved_ask(), "the daemon is asked");
+        assert!(!ui.take_saved_ask(), "once");
+        let (_, rows) = frame(&ui, &conv);
+        row_of(&rows, "retomar una conversación");
+        row_of(&rows, "cargando…");
+        assert_eq!(ui.listed(&saved(30), &conv), None);
+        let (g, rows) = frame(&ui, &conv);
+        row_of(&rows, "1 de 30");
+        row_of(&rows, "conversación número 0");
+        row_of(&rows, "ahora");
+        row_of(&rows, "hace 2 h");
+        row_of(&rows, "00000001");
+        let y = row_of(&rows, "conversación número 0");
+        assert_eq!(
+            g.cells[y * g.cols + 20].1.bg,
+            Some(look::sel()),
+            "the first is lit"
+        );
+        // narrowing by what is typed, ↑↓ and ↵
+        type_in(&mut ui, &conv, "número 2");
+        let (_, rows) = frame(&ui, &conv);
+        row_of(&rows, "número 2");
+        row_of(&rows, "1 de 11");
+        assert!(!rows.iter().any(|r| r.contains("número 3")));
+        press(&mut ui, &conv, KeyCode::Down);
+        assert_eq!(
+            press(&mut ui, &conv, KeyCode::Enter),
+            Some(Act::Resume {
+                pane: conv.pane.clone(),
+                id: "00000020-3d20-4cd2-9d13-485b39b26147".into()
+            }),
+            "the second of those that hold «número 2»: 2, 20, 21…"
+        );
+        assert!(!ui.has_pop());
+    }
+
+    #[test]
+    fn a_long_list_is_paged_with_the_keys_and_the_wheel_and_the_lit_row_stays_in_view() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "/resume");
+        press(&mut ui, &conv, KeyCode::Enter);
+        ui.listed(&saved(40), &conv);
+        press(&mut ui, &conv, KeyCode::PageDown);
+        press(&mut ui, &conv, KeyCode::PageDown);
+        let (_, rows) = frame(&ui, &conv);
+        row_of(&rows, "21 de 40");
+        row_of(&rows, "conversación número 20");
+        ui.scroll_by(false, 3);
+        row_of(&frame(&ui, &conv).1, "24 de 40");
+        ui.scroll_by(true, 100);
+        row_of(&frame(&ui, &conv).1, "1 de 40");
+        for _ in 0..100 {
+            press(&mut ui, &conv, KeyCode::Down);
+        }
+        row_of(&frame(&ui, &conv).1, "40 de 40");
+        // backspace widens it again, esc closes
+        type_in(&mut ui, &conv, "zz");
+        row_of(&frame(&ui, &conv).1, "Nada coincide.");
+        press(&mut ui, &conv, KeyCode::Backspace);
+        press(&mut ui, &conv, KeyCode::Backspace);
+        row_of(&frame(&ui, &conv).1, "1 de 40");
+        press(&mut ui, &conv, KeyCode::Esc);
+        assert!(!ui.has_pop());
+    }
+
+    #[test]
+    fn a_click_on_a_row_of_the_list_resumes_it_and_a_click_outside_closes_the_list() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "/resume");
+        press(&mut ui, &conv, KeyCode::Enter);
+        ui.listed(&saved(5), &conv);
+        let (_, rows) = frame(&ui, &conv);
+        let y = row_of(&rows, "conversación número 3");
+        assert!(
+            matches!(ui.click(&conv, INNER, 20, y), Some(Act::Resume { id, .. }) if id.starts_with("00000003"))
+        );
+        assert!(!ui.has_pop());
+        press(&mut ui, &conv, KeyCode::Char('x'));
+        type_in(&mut ui, &conv, "/resume");
+        press(&mut ui, &conv, KeyCode::Enter);
+        ui.listed(&saved(5), &conv);
+        assert_eq!(ui.click(&conv, INNER, 20, INNER.1 + INNER.3 - 1), None);
+        assert!(!ui.has_pop());
+    }
+
+    #[test]
+    fn continue_takes_the_newest_at_once_and_resume_with_an_id_goes_straight_to_it() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "/continue");
+        assert_eq!(press(&mut ui, &conv, KeyCode::Enter), None);
+        assert!(ui.take_saved_ask());
+        assert_eq!(
+            ui.listed(&saved(3), &conv),
+            Some(Act::Resume {
+                pane: conv.pane.clone(),
+                id: "00000000-3d20-4cd2-9d13-485b39b26147".into()
+            })
+        );
+        assert!(!ui.has_pop());
+        // none saved
+        type_in(&mut ui, &conv, "/continue");
+        press(&mut ui, &conv, KeyCode::Enter);
+        ui.take_saved_ask();
+        assert_eq!(ui.listed(&[], &conv), None);
+        assert!(ui.take_says().unwrap().contains("no hay conversaciones"));
+        // an id
+        type_in(&mut ui, &conv, "/resume abc-123");
+        assert_eq!(
+            press(&mut ui, &conv, KeyCode::Enter),
+            Some(Act::Resume {
+                pane: conv.pane.clone(),
+                id: "abc-123".into()
+            })
+        );
+        assert!(!ui.take_saved_ask());
+        // the daemon could not
+        type_in(&mut ui, &conv, "/resume");
+        press(&mut ui, &conv, KeyCode::Enter);
+        ui.list_failed("no se pudo");
+        assert!(!ui.has_pop());
+        assert_eq!(ui.take_says().as_deref(), Some("no se pudo"));
+    }
+
+    #[test]
+    fn the_other_lists_open_from_the_node_and_what_choosing_a_row_does() {
+        let conv = idle();
+        let open = |word: &str| {
+            let mut ui = Ui::default();
+            ui.context("/work/app");
+            type_in(&mut ui, &conv, word);
+            assert_eq!(press(&mut ui, &conv, KeyCode::Enter), None, "{word}");
+            let (_, rows) = frame(&ui, &conv);
+            (ui, rows)
+        };
+        let (_, rows) = open("/help");
+        row_of(&rows, "ayuda");
+        row_of(&rows, "enviar; en cola mientras Claude trabaja");
+        let (_, rows) = open("/status");
+        row_of(&rows, "estado");
+        row_of(&rows, "sonnet-5.5");
+        row_of(&rows, "/work/app");
+        let (mut ui, rows) = open("/skills");
+        row_of(&rows, "/deploy");
+        row_of(&rows, "publicar la rama en staging");
+        assert_eq!(press(&mut ui, &conv, KeyCode::Enter), None);
+        assert_eq!(ui.editor.text(), "/deploy ", "a skill goes to the line");
+        let (_, rows) = open("/tasks");
+        row_of(&rows, "cargo build --release");
+        row_of(&rows, "en curso");
+        let (mut ui, rows) = open("/artifacts");
+        row_of(&rows, "Informe de pruebas");
+        assert_eq!(
+            press(&mut ui, &conv, KeyCode::Enter),
+            Some(Act::Copy(
+                "https://claude.ai/artifact/6HbvGgivzfNgDnkzpDjf4Y".into()
+            ))
+        );
+        let (_, rows) = open("/permissions");
+        row_of(&rows, "permisos (solo lectura)");
+        let (_, rows) = open("/memory");
+        row_of(&rows, "memoria");
+    }
+
+    #[test]
+    fn a_command_with_a_list_opens_from_the_slash_list_too() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "/tas");
+        assert_eq!(press(&mut ui, &conv, KeyCode::Enter), None);
+        assert!(ui.has_pop(), "the list, and nothing is sent to the engine");
     }
 
     #[test]

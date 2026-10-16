@@ -12,6 +12,7 @@ use crate::engine;
 use crate::files;
 use crate::panes;
 use crate::rename;
+use crate::saved;
 use crate::server::Shared;
 use crate::start;
 use crate::sync;
@@ -53,6 +54,7 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
         Cmd::ListDir { path, hidden } => browse::list_dir(path.as_deref(), hidden),
         Cmd::ListFiles { workspace, path } => files::list(shared, &workspace, path.as_deref()),
         Cmd::FindFiles { workspace, query } => files::find(shared, &workspace, &query),
+        Cmd::ListConversations { workspace } => saved::list(shared, &workspace),
         Cmd::CreateWorktree {
             repo,
             branch,

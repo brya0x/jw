@@ -222,3 +222,11 @@ data class Opened(val node: Id, val session: String)
 /** A picture sent with a message: already small (a JPEG of at most 1568 pixels on its long side); [data] is base64. */
 @Serializable
 data class Image(@SerialName("media_type") val mediaType: String, val data: String)
+
+/** One conversation Claude saved for a folder: what `/resume` lists. [at] is milliseconds since the epoch. */
+@Serializable
+data class SavedConversation(val id: String, val name: String, val at: Long)
+
+/** What `list_conversations` answers, newest first. */
+@Serializable
+data class ConversationList(val conversations: List<SavedConversation>)

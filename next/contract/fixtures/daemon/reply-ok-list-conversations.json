@@ -1,0 +1,19 @@
+{
+  "t": "reply",
+  "id": "c41",
+  "ok": true,
+  "result": {
+    "conversations": [
+      {
+        "id": "2cab1f5a-3d20-4cd2-9d13-485b39b26147",
+        "name": "arregla el test que falla en auth::expired",
+        "at": 1792110000000
+      },
+      {
+        "id": "9c97ae9c-41ad-424b-a6a5-7e72a36cd0d5",
+        "name": "Next bootstrap plan",
+        "at": 1792023600000
+      }
+    ]
+  }
+}
