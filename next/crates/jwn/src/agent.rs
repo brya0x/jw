@@ -628,7 +628,9 @@ fn turn_end(conv: &Conversation, baseline: u64, sent: &str) -> Option<Out<String
     let items = conv
         .items
         .get(baseline.saturating_sub(u64::from(conv.first)) as usize..)?;
-    // A command of the `/` list leaves no message of the person's behind it.
+    // The daemon trims what it is given before it writes it down. A command of the `/` list
+    // leaves no message of the person's behind it.
+    let sent = sent.trim();
     let start = if sent.starts_with('/') {
         0
     } else {
@@ -746,16 +748,13 @@ fn prompt(args: &[&str]) -> Out {
     };
     let sent = format!("sent to pane {} of {}", target.id, ws.name);
     match &target.conversation {
-        Some(node) => {
-            let said = converse(&mut s, node, &text, wait)?;
-            match said {
-                Some(answer) => {
-                    eprintln!("{sent}");
-                    println!("{answer}");
-                }
-                None => println!("{sent}"),
+        Some(node) => match converse(&mut s, node, &text, wait)? {
+            Some(answer) => {
+                eprintln!("{sent}");
+                println!("{answer}");
             }
-        }
+            None => println!("{sent}"),
+        },
         None if wait.is_some() => {
             return fail(format!(
                 "pane {} has no conversation to wait on (--wait needs `claude` run by {})",
@@ -853,33 +852,31 @@ fn worktree(args: &[&str]) -> Out {
                 "the worktree was made at {path}, but no agent took the task"
             ));
         };
-        match conversation_of(&mut s, &id, pane)? {
-            (_, Some(node)) => {
-                converse(&mut s, &node, task, None)?;
+        let pane = with_conversation(&mut s, &id, pane)?;
+        match &pane.conversation {
+            Some(node) => {
+                converse(&mut s, node, task, None)?;
             }
-            (pane, None) => send_prompt(&mut s, &pane, task, false)?,
+            None => send_prompt(&mut s, &pane.id, task, false)?,
         }
     }
     Ok(())
 }
 
-/// The conversation node of the new agent `pane` of workspace `id`: `claude` opens it a moment
-/// after it starts, so it is waited for a little (REQ-456). The pane's id comes back with it.
-fn conversation_of(s: &mut Link, id: &str, pane: PaneInfo) -> Out<(String, Option<String>)> {
+/// The new agent `pane` of workspace `id` once its conversation is there: `claude` opens it a
+/// moment after it starts, so it is waited for a little (REQ-456).
+fn with_conversation(s: &mut Link, id: &str, mut pane: PaneInfo) -> Out<PaneInfo> {
     if pane.agent != Some("claude") {
-        return Ok((pane.id, pane.conversation));
+        return Ok(pane);
     }
     let deadline = Instant::now() + CONVERSATION_WAIT.min(agent_wait());
-    let mut now = pane;
-    loop {
-        if now.conversation.is_some() || Instant::now() >= deadline {
-            return Ok((now.id, now.conversation));
-        }
+    while pane.conversation.is_none() && Instant::now() < deadline {
         let _ = s.c.poll(Duration::from_millis(200));
-        if let Some(p) = s.panes(id)?.into_iter().find(|p| p.id == now.id) {
-            now = p;
+        if let Some(p) = s.panes(id)?.into_iter().find(|p| p.id == pane.id) {
+            pane = p;
         }
     }
+    Ok(pane)
 }
 
 fn pane_open(args: &[&str]) -> Out {
@@ -1278,10 +1275,12 @@ mod tests {
 
     #[test]
     fn a_turn_is_over_when_it_is_idle_with_its_own_result_and_the_answer_is_its_last_text() {
-        let end = |c: &Conversation, baseline, sent| turn_end(c, baseline, sent);
+        let end = turn_end;
         let done = conversation("idle", 10, turn(), Value::Null, &[]);
         // the items before the baseline (13) are not this turn's: the first `hola` is item 13
         assert_eq!(end(&done, 13, "hola"), Some(Ok("la última".into())));
+        // the daemon writes down the text trimmed
+        assert_eq!(end(&done, 13, " hola\n"), Some(Ok("la última".into())));
         // a message that is not there yet (the document is older than the send) is not over
         assert_eq!(end(&done, 17, "hola"), None);
         assert_eq!(end(&done, 13, "otra cosa"), None);

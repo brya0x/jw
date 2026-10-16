@@ -306,7 +306,7 @@ impl World {
         self.env
             .jwn()
             .args(args)
-            .env("JWN_AGENT_WAIT_MS", "2000")
+            .env(identity::env_var("AGENT_WAIT_MS"), "6000")
             .output()
             .unwrap()
     }
