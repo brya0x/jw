@@ -24,7 +24,6 @@ struct Rig {
     sb: Sandbox,
     daemon: Option<Daemon>,
     client: Client,
-    ws: String,
     pane: String,
     log: PathBuf,
 }
@@ -77,7 +76,6 @@ fn rig_with(sb: Sandbox, extra_env: Vec<(String, String)>) -> Rig {
         sb,
         daemon: Some(daemon),
         client,
-        ws,
         pane,
         log,
     }
@@ -824,5 +822,4 @@ fn a_daemon_that_restarts_brings_the_conversation_back_and_the_next_message_resu
     );
     daemon.stop();
     let _ = std::fs::remove_dir_all(&dir);
-    let _ = r.ws;
 }

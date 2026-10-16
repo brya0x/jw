@@ -15,7 +15,7 @@ use std::process::{Command, ExitCode};
 use std::time::{Duration, Instant};
 
 use contract::conversation::{AskKind, ConvStatus, Conversation, DiffSign, Item, ToolState};
-use contract::{Cmd, DaemonMsg, ErrorCode};
+use contract::{Cmd, DaemonMsg};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal;
 use wire::Client;
@@ -81,7 +81,6 @@ fn converse(pane: &str, argv: &[String]) -> Result<ExitCode, String> {
     let opened = match reply {
         Ok(Some(v)) => v,
         Ok(None) => return Err("the daemon opened nothing".into()),
-        Err(e) if e.code == ErrorCode::Unsupported => return Err(e.message),
         Err(e) => return Err(e.message),
     };
     let node = opened["node"]

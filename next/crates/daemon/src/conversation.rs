@@ -371,6 +371,17 @@ impl State {
         }
     }
 
+    /// How long the text that is still arriving is, in bytes: what a patch of it carries whole.
+    pub fn live_len(&self) -> usize {
+        self.live_texts
+            .back()
+            .and_then(|at| self.items.get(*at))
+            .map_or(0, |i| match i {
+                Item::Text { text, .. } => text.len(),
+                _ => 0,
+            })
+    }
+
     pub fn busy(&self) -> bool {
         self.inflight.is_some() || self.auto
     }
@@ -556,7 +567,8 @@ impl State {
     ) -> Vec<Effect> {
         let mut out = Vec::new();
         if let Some(n) = name {
-            let n = clip(n.trim(), 80);
+            // One line: a name with a line break would be two lines to the engine.
+            let n = clip(&n.split_whitespace().collect::<Vec<_>>().join(" "), 80);
             if !n.is_empty() {
                 self.name = n.clone();
                 self.named = true;
@@ -1447,6 +1459,22 @@ mod tests {
             .collect();
         assert_eq!(texts.len(), 1);
         assert!(matches!(texts[0], Item::Text { live: false, .. }));
+    }
+
+    #[test]
+    fn the_length_of_the_text_that_arrives_is_known_until_the_message_settles() {
+        let mut s = st();
+        s.send("hola", vec![], 0);
+        assert_eq!(s.live_len(), 0);
+        s.apply(&json!({"type": "stream_event", "event": {"type": "content_block_start", "content_block": {"type": "text"}}}), 1);
+        s.apply(&json!({"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Voy a mirar"}}}), 2);
+        assert_eq!(s.live_len(), 11);
+        s.apply(&json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "Voy a mirar."}]}}), 3);
+        assert_eq!(
+            s.live_len(),
+            0,
+            "nothing arrives any more, so nothing is held back"
+        );
     }
 
     #[test]

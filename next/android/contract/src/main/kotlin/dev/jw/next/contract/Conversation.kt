@@ -215,6 +215,10 @@ data class ConvCommand(val name: String, val source: CommandSource, val kind: Co
 @Serializable
 data class Limits(@SerialName("five_hour") val fiveHour: Int? = null, @SerialName("seven_day") val sevenDay: Int? = null)
 
+/** What `open_conversation` answers: the conversation's node and the engine's session. */
+@Serializable
+data class Opened(val node: Id, val session: String)
+
 /** A picture sent with a message: already small (a JPEG of at most 1568 pixels on its long side); [data] is base64. */
 @Serializable
 data class Image(@SerialName("media_type") val mediaType: String, val data: String)

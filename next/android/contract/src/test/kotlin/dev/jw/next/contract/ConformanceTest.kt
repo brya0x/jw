@@ -220,6 +220,16 @@ class ConformanceTest {
         assertEquals(4, node.screen.cursor.col)
     }
 
+    /** The result of `open_conversation` in the fixture is what [Opened] reads, and writes back as it was. */
+    @Test
+    fun theReplyOfOpenConversationIsANodeAndASession() {
+        val reply = fixtures("daemon").first { it.first == "reply-ok-open-conversation.json" }.second
+        val result = (ContractJson.decodeFromJsonElement(DaemonMsg.serializer(), reply) as DaemonMsg.Reply).result!!
+        val opened = ContractJson.decodeFromJsonElement(Opened.serializer(), result)
+        assertEquals(36, opened.session.length)
+        assertEquals(result, ContractJson.encodeToJsonElement(Opened.serializer(), opened))
+    }
+
     /** The result of `project_config` in the fixture is what [ProjectInfo] reads, and writes back as it was. */
     @Test
     fun theReplyOfProjectConfigIsAProjectInfo() {

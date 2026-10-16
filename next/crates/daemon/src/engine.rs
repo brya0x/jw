@@ -13,16 +13,17 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use contract::conversation::{Accent, Image, Mode};
 use contract::{ErrorCode, Id};
 use serde_json::{Value, json};
 
+use crate::blocks::now_ms;
 use crate::commands::{Done, err};
 use crate::conversation::{Effect, OpenArgs, Saved, State, parse_args};
 use crate::model::new_id;
@@ -32,12 +33,22 @@ use crate::server::Shared;
 const SAVE_EVERY: Duration = Duration::from_secs(2);
 /// How often the text that streams is shown at most (REQ-378).
 const SHOW_EVERY: Duration = Duration::from_millis(50);
+/// A patch of a text that grows carries the whole text (the patches only replace), so the longer
+/// it is the less often it is shown: one more `SHOW_EVERY` for each `SHOW_BYTES`, up to a second.
+/// A 48 KB answer sent 2.7 MB to a client at 20 patches a second; now it sends a twelfth of that.
+const SHOW_BYTES: usize = 4096;
+const SHOW_SLOWEST: u32 = 20;
+
+fn show_pause(live_len: usize) -> Duration {
+    SHOW_EVERY * (1 + (live_len / SHOW_BYTES) as u32).min(SHOW_SLOWEST)
+}
 /// How long a `!command` may run (REQ-394).
 const SHELL_SECONDS: u64 = 60;
 const SHELL_BYTES: usize = 64 * 1024;
 /// A picture no larger than 5 MiB, as base64.
 const IMAGE_CHARS: usize = 7 * 1024 * 1024;
 const MAX_IMAGES: usize = 4;
+const IMAGE_TYPES: [&str; 4] = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 
 /// One conversation of a pane: its state and, while it runs, its engine.
 pub struct Conv {
@@ -69,6 +80,9 @@ enum Out {
 pub struct Engine {
     tx: Sender<Out>,
     pid: u32,
+    /// Its process ended and was reaped: its group is not signalled any more (the number may be
+    /// somebody else's by now).
+    exited: Arc<AtomicBool>,
 }
 
 impl Engine {
@@ -80,10 +94,12 @@ impl Engine {
     /// process group: the tools it started die with it.
     pub fn stop(&self) {
         let _ = self.tx.send(Out::Close);
-        let pid = self.pid;
+        let (pid, exited) = (self.pid, self.exited.clone());
         thread::spawn(move || {
             thread::sleep(Duration::from_secs(3));
-            kill_group(pid);
+            if !exited.load(Ordering::Relaxed) {
+                kill_group(pid);
+            }
         });
     }
 }
@@ -95,12 +111,6 @@ fn kill_group(pgid: u32) {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
-}
-
-pub fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as u64)
 }
 
 /// The time of day, for the line that says the daemon restarted.
@@ -152,9 +162,15 @@ struct Plan {
     cwd: PathBuf,
 }
 
-fn make_plan(c: &Conv, cfg_env: &[(String, String)]) -> Result<Plan, String> {
-    let exe = resolve_claude(c.env.as_ref(), cfg_env)
-        .ok_or("claude is not on the PATH it was typed in")?;
+/// What a conversation's engine is started with, taken under the lock; the program itself is
+/// looked for on disk afterwards, without it.
+struct Launch {
+    args: Vec<String>,
+    env: Option<BTreeMap<String, String>>,
+    cwd: PathBuf,
+}
+
+fn launch_of(c: &Conv) -> Launch {
     let mut args: Vec<String> = [
         "-p",
         "--input-format",
@@ -190,17 +206,29 @@ fn make_plan(c: &Conv, cfg_env: &[(String, String)]) -> Result<Plan, String> {
         args.extend(["--name".into(), c.st.name.clone()]);
     }
     args.extend(c.extra.iter().cloned());
-    Ok(Plan {
-        exe,
+    Launch {
         args,
         env: c.env.clone(),
-        cfg_env: cfg_env.to_vec(),
         cwd: c.cwd.clone(),
-    })
+    }
 }
 
 fn is_delta(msg: &Value) -> bool {
     msg["type"] == "stream_event" && msg["event"]["type"] == "content_block_delta"
+}
+
+/// What the thread that reads an engine's output needs.
+struct Feed {
+    shared: Shared,
+    pane: Id,
+    generation: u64,
+    pid: u32,
+    tail: Arc<Mutex<VecDeque<String>>>,
+    dirty: Arc<AtomicBool>,
+    alive: Arc<AtomicBool>,
+    exited: Arc<AtomicBool>,
+    /// The length of the text that is arriving, for the pace of showing it.
+    live_len: Arc<AtomicUsize>,
 }
 
 fn start(shared: &Shared, pane: &Id, generation: u64, plan: Plan) -> Result<Engine, String> {
@@ -216,7 +244,7 @@ fn start(shared: &Shared, pane: &Id, generation: u64, plan: Plan) -> Result<Engi
             cmd.env_clear().envs(env);
         }
         None => {
-            cmd.envs(plan.cfg_env.iter().map(|(k, v)| (k, v)));
+            cmd.envs(plan.cfg_env.iter().cloned());
         }
     }
     let mut child = cmd
@@ -245,13 +273,24 @@ fn start(shared: &Shared, pane: &Id, generation: u64, plan: Plan) -> Result<Engi
         })
         .map_err(|e| e.to_string())?;
 
-    let tail: Arc<Mutex<VecDeque<String>>> = Arc::default();
-    let t = tail.clone();
+    let feed = Feed {
+        shared: shared.clone(),
+        pane: pane.clone(),
+        generation,
+        pid,
+        tail: Arc::default(),
+        dirty: Arc::new(AtomicBool::new(false)),
+        alive: Arc::new(AtomicBool::new(true)),
+        exited: Arc::new(AtomicBool::new(false)),
+        live_len: Arc::new(AtomicUsize::new(0)),
+    };
+    let exited = feed.exited.clone();
+    let tail = feed.tail.clone();
     thread::Builder::new()
         .name("engine-err".into())
         .spawn(move || {
             for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                let mut q = t.lock().unwrap_or_else(|p| p.into_inner());
+                let mut q = tail.lock().unwrap_or_else(|p| p.into_inner());
                 q.push_back(line);
                 if q.len() > 20 {
                     q.pop_front();
@@ -259,56 +298,47 @@ fn start(shared: &Shared, pane: &Id, generation: u64, plan: Plan) -> Result<Engi
             }
         })
         .map_err(|e| e.to_string())?;
-
-    let dirty = Arc::new(AtomicBool::new(false));
-    let alive = Arc::new(AtomicBool::new(true));
-    {
-        let (shared, pane, dirty, alive) =
-            (shared.clone(), pane.clone(), dirty.clone(), alive.clone());
-        thread::Builder::new()
-            .name("engine-show".into())
-            .spawn(move || {
-                while alive.load(Ordering::Relaxed) {
-                    thread::sleep(SHOW_EVERY);
-                    if dirty.swap(false, Ordering::Relaxed) {
-                        let mut core = shared.lock();
-                        if core
-                            .convs
-                            .get(&pane)
-                            .is_some_and(|c| c.generation == generation)
-                        {
-                            core.refresh();
-                        }
-                    }
-                }
-            })
-            .map_err(|e| e.to_string())?;
-    }
-    {
-        let (shared, pane) = (shared.clone(), pane.clone());
-        thread::Builder::new()
-            .name("engine-out".into())
-            .spawn(move || {
-                read_loop(
-                    &shared, &pane, generation, child, stdout, &tail, &dirty, &alive,
-                )
-            })
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(Engine { tx, pid })
+    show_loop(&feed)?;
+    thread::Builder::new()
+        .name("engine-out".into())
+        .spawn(move || read_loop(&feed, child, stdout))
+        .map_err(|e| e.to_string())?;
+    Ok(Engine { tx, pid, exited })
 }
 
-#[allow(clippy::too_many_arguments)]
-fn read_loop(
-    shared: &Shared,
-    pane: &Id,
-    generation: u64,
-    mut child: Child,
-    stdout: ChildStdout,
-    tail: &Mutex<VecDeque<String>>,
-    dirty: &AtomicBool,
-    alive: &AtomicBool,
-) {
+/// Show the text that streams at most every `SHOW_EVERY`: the reader marks it and this refreshes.
+fn show_loop(feed: &Feed) -> Result<(), String> {
+    let (shared, pane, dirty, alive, live_len, generation) = (
+        feed.shared.clone(),
+        feed.pane.clone(),
+        feed.dirty.clone(),
+        feed.alive.clone(),
+        feed.live_len.clone(),
+        feed.generation,
+    );
+    thread::Builder::new()
+        .name("engine-show".into())
+        .spawn(move || {
+            while alive.load(Ordering::Relaxed) {
+                thread::sleep(show_pause(live_len.load(Ordering::Relaxed)));
+                if dirty.swap(false, Ordering::Relaxed) {
+                    let mut core = shared.lock();
+                    if core
+                        .convs
+                        .get(&pane)
+                        .is_some_and(|c| c.generation == generation)
+                    {
+                        core.refresh();
+                    }
+                }
+            }
+        })
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+fn read_loop(feed: &Feed, mut child: Child, stdout: ChildStdout) {
+    let (shared, pane, generation) = (&feed.shared, &feed.pane, feed.generation);
     for line in BufReader::new(stdout).lines().map_while(Result::ok) {
         let Ok(msg) = serde_json::from_str::<Value>(&line) else {
             continue;
@@ -322,13 +352,15 @@ fn read_loop(
         {
             Some(c) => {
                 c.dirty = true;
-                c.st.apply(&msg, now_ms())
+                let fx = c.st.apply(&msg, now_ms());
+                feed.live_len.store(c.st.live_len(), Ordering::Relaxed);
+                fx
             }
             None => break,
         };
         run_effects(&mut core, pane, fx);
         if delta {
-            dirty.store(true, Ordering::Relaxed);
+            feed.dirty.store(true, Ordering::Relaxed);
         } else {
             core.refresh();
         }
@@ -338,9 +370,18 @@ fn read_loop(
             save_due(shared, true);
         }
     }
-    alive.store(false, Ordering::Relaxed);
+    feed.alive.store(false, Ordering::Relaxed);
     let status = child.wait().ok();
-    let stderr_tail = tail
+    // What its tools left behind goes with it; the number is not signalled again afterwards.
+    kill_group(feed.pid);
+    feed.exited.store(true, Ordering::Relaxed);
+    let how = match status.and_then(|s| s.code()) {
+        Some(0) => "el motor terminó".to_owned(),
+        Some(c) => format!("el motor terminó con código {c}"),
+        None => "el motor se detuvo".to_owned(),
+    };
+    let stderr_tail = feed
+        .tail
         .lock()
         .unwrap_or_else(|p| p.into_inner())
         .iter()
@@ -350,11 +391,6 @@ fn read_loop(
         .cloned()
         .collect::<Vec<_>>()
         .join(" · ");
-    let how = match status.and_then(|s| s.code()) {
-        Some(0) => "el motor terminó".to_owned(),
-        Some(c) => format!("el motor terminó con código {c}"),
-        None => "el motor se detuvo".to_owned(),
-    };
     let reason = if stderr_tail.is_empty() {
         how
     } else {
@@ -398,7 +434,7 @@ fn run_effects(core: &mut crate::core::Core, pane: &Id, fx: Vec<Effect>) {
 
 /// Start the engine of a conversation that has none (it is new, or its daemon restarted).
 fn start_engine(shared: &Shared, pane: &Id) -> Result<(), crate::commands::ErrorBody> {
-    let (plan, generation) = {
+    let (launch, cfg_env, generation) = {
         let mut core = shared.lock();
         let cfg_env = core.env.clone();
         let c = core
@@ -406,8 +442,16 @@ fn start_engine(shared: &Shared, pane: &Id) -> Result<(), crate::commands::Error
             .get_mut(pane)
             .ok_or_else(|| err(ErrorCode::NotFound, "no conversation in this pane"))?;
         c.generation += 1;
-        let plan = make_plan(c, &cfg_env).map_err(|m| err(ErrorCode::Io, m))?;
-        (plan, c.generation)
+        (launch_of(c), cfg_env, c.generation)
+    };
+    let exe = resolve_claude(launch.env.as_ref(), &cfg_env)
+        .ok_or_else(|| err(ErrorCode::Io, "claude is not on the PATH it was typed in"))?;
+    let plan = Plan {
+        exe,
+        args: launch.args,
+        env: launch.env,
+        cfg_env,
+        cwd: launch.cwd,
     };
     let engine = start(shared, pane, generation, plan).map_err(|m| err(ErrorCode::Io, m))?;
     let mut core = shared.lock();
@@ -596,6 +640,12 @@ fn check_images(images: &[Image]) -> Result<(), crate::commands::ErrorBody> {
         ));
     }
     for i in images {
+        if !IMAGE_TYPES.contains(&i.media_type.as_str()) {
+            return Err(err(
+                ErrorCode::BadRequest,
+                "images are JPEG, PNG, WebP or GIF",
+            ));
+        }
         if i.data.len() > IMAGE_CHARS {
             return Err(err(ErrorCode::BadRequest, "an image is larger than 5 MiB"));
         }
@@ -914,9 +964,10 @@ fn load(dir: &Path, pane: &str) -> Option<Saved> {
     (saved.v == crate::conversation::SAVED_VERSION).then_some(saved)
 }
 
-/// The conversations that changed and are due, as what to write; the writing is done without the lock.
+/// The conversations that changed and are due are written without the lock: only what is
+/// to be written is copied under it.
 pub fn save_due(shared: &Shared, force: bool) {
-    let due: Vec<(PathBuf, String)> = {
+    let due: Vec<(PathBuf, Saved)> = {
         let mut core = shared.lock();
         let Some(dir) = core.conv_dir.clone() else {
             return;
@@ -927,17 +978,20 @@ pub fn save_due(shared: &Shared, force: bool) {
             .filter(|(_, c)| {
                 c.dirty && (force || c.last_saved.is_none_or(|t| t.elapsed() >= SAVE_EVERY))
             })
-            .filter_map(|(pane, c)| {
+            .map(|(pane, c)| {
                 c.dirty = false;
                 c.last_saved = Some(Instant::now());
                 let mut saved = c.st.saved(now);
                 saved.model_arg.clone_from(&c.model_arg);
                 saved.effort_arg.clone_from(&c.effort_arg);
-                encode(&saved).map(|text| (file_of(&dir, pane), text))
+                (file_of(&dir, pane), saved)
             })
             .collect()
     };
-    for (path, text) in due {
+    for (path, saved) in due {
+        let Some(text) = encode(saved) else {
+            continue;
+        };
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -946,14 +1000,13 @@ pub fn save_due(shared: &Shared, force: bool) {
             .and_then(|()| std::fs::rename(&tmp, &path))
             .is_err()
         {
-            eprintln!("cannot save {}", path.display());
+            eprintln!("cannot save the conversation {}", path.display());
         }
     }
 }
 
 /// The saved document, with the oldest items dropped until it takes at most 2 MiB (REQ-392).
-fn encode(saved: &Saved) -> Option<String> {
-    let mut saved = saved.clone();
+fn encode(mut saved: Saved) -> Option<String> {
     loop {
         let text = serde_json::to_string(&saved).ok()?;
         if text.len() <= crate::conversation::MAX_SAVED || saved.items.len() <= 1 {
@@ -978,5 +1031,20 @@ pub fn stop_all(convs: &mut std::collections::HashMap<Id, Conv>) {
             c.generation += 1;
             en.stop();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_longer_the_text_that_arrives_the_less_often_it_is_shown() {
+        assert_eq!(show_pause(0), SHOW_EVERY);
+        assert_eq!(show_pause(SHOW_BYTES - 1), SHOW_EVERY);
+        assert_eq!(show_pause(SHOW_BYTES), SHOW_EVERY * 2);
+        assert_eq!(show_pause(48 * 1024), SHOW_EVERY * 13);
+        // never slower than a second, however long it is
+        assert_eq!(show_pause(10 * 1024 * 1024), SHOW_EVERY * SHOW_SLOWEST);
     }
 }

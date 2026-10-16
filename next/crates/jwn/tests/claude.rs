@@ -16,7 +16,6 @@ const ENGINE: &str = include_str!("../../daemon/tests/fake-claude.py");
 struct World {
     env: Env,
     daemon: Option<Child>,
-    bin: PathBuf,
     log: PathBuf,
     ws: String,
     pane: String,
@@ -84,7 +83,6 @@ impl World {
         World {
             env,
             daemon: Some(child),
-            bin,
             log,
             ws,
             pane,
@@ -148,7 +146,6 @@ impl World {
         if let Some(d) = self.daemon.take() {
             self.env.stop(d);
         }
-        let _ = (&self.ws, &self.bin);
     }
 }
 
