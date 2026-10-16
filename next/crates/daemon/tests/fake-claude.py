@@ -79,7 +79,6 @@ for line in sys.stdin:
                     {"name": "context", "description": "Show context usage", "argumentHint": "", "builtin": True},
                     {"name": "doctor", "description": "Diagnose the install", "argumentHint": "", "builtin": True},
                     {"name": "init", "description": "Create CLAUDE.md", "argumentHint": "", "builtin": True},
-                    {"name": "help", "description": "Show help", "argumentHint": "", "builtin": True},
                     {"name": "model", "description": "Set the model", "argumentHint": "", "builtin": True},
                     {"name": "deploy", "description": "publicar la rama en staging", "argumentHint": ""},
                     {"name": "jw", "description": "work with jw (user)", "argumentHint": ""},

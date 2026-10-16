@@ -303,9 +303,10 @@ fn the_engine_is_asked_what_it_can_do_and_the_model_and_the_commands_show_before
         .map(|c| c["name"].as_str().unwrap())
         .collect();
     assert!(
-        !names.contains(&"/help"),
-        "the lists of jwn stand in for it later"
+        names.contains(&"/help") && names.contains(&"/permissions") && names.contains(&"/plan"),
+        "all of Claude's and jwn's"
     );
+    assert_eq!(find("/help")["kind"], "screen");
     assert_eq!(
         names.iter().filter(|n| **n == "/model").count(),
         1,
@@ -358,6 +359,15 @@ fn a_command_that_needs_claudes_screen_is_not_sent_and_says_where_to_go() {
         !log_lines(&r.log).iter().any(|l| l.contains("/doctor")),
         "it never reached the engine"
     );
+    // so is one that was only listed, not served
+    let e = r
+        .cmd(Cmd::ConversationSend {
+            node: node.clone(),
+            text: "/permissions".into(),
+            images: vec![],
+        })
+        .unwrap_err();
+    assert!(e.message.contains("command claude"), "{}", e.message);
     r.stop();
 }
 

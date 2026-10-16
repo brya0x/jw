@@ -696,12 +696,6 @@ pub fn send(shared: &Shared, node: &str, text: &str, images: Vec<Image>) -> Done
                     })?;
                 return set(shared, node, None, None, None, None, Some(mode));
             }
-            word if crate::conversation::SCREEN.contains(&word) => {
-                return Err(err(
-                    ErrorCode::BadRequest,
-                    format!("/{word} necesita la pantalla de Claude: usa `command claude`"),
-                ));
-            }
             "plan" => {
                 set(shared, node, None, None, None, None, Some(Mode::Plan))?;
                 // What follows is the first message of the plan; it waits for the mode.
@@ -728,6 +722,20 @@ pub fn send(shared: &Shared, node: &str, text: &str, images: Vec<Image>) -> Done
         let core = shared.lock();
         pane_of(&core, node)?
     };
+    if let Some(word) = line
+        .strip_prefix('/')
+        .and_then(|rest| rest.split_whitespace().next())
+        && shared
+            .lock()
+            .convs
+            .get(&pane)
+            .is_some_and(|c| c.st.needs_screen(word))
+    {
+        return Err(err(
+            ErrorCode::BadRequest,
+            format!("/{word} necesita la pantalla de Claude: usa `command claude`"),
+        ));
+    }
     let dead = shared
         .lock()
         .convs

@@ -10,8 +10,8 @@ use std::collections::HashSet;
 
 use contract::PaneInput;
 use contract::conversation::{
-    Accent, Ask, AskKind, CommandSource, ConvCommand, ConvStatus, Conversation, DiffLine, DiffSign,
-    Image, Item, Mode, Tone, ToolState,
+    Accent, Ask, AskKind, CommandKind, CommandSource, ConvCommand, ConvStatus, Conversation,
+    DiffLine, DiffSign, Image, Item, Mode, Tone, ToolState,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -1027,12 +1027,13 @@ impl Ui {
             let row = y + 1 + i;
             g.paint_bg(x + 1, row, iw - 2, bg);
             let SourceLook { colour, tag, .. } = source_look(c.source);
-            g.put(
-                x + 2,
-                row,
-                &clip(&c.name, name_w),
-                Style::fg(colour).bold().on(bg),
-            );
+            // One that only works in Claude's own screen is dimmed.
+            let name_style = if c.kind == CommandKind::Screen {
+                Style::fg(look::dim()).on(bg)
+            } else {
+                Style::fg(colour).bold().on(bg)
+            };
+            g.put(x + 2, row, &clip(&c.name, name_w), name_style);
             let tag_at = (x + iw).saturating_sub(tag.chars().count() + 3);
             g.put(tag_at, row, tag, Style::fg(colour).on(bg));
             let from = x + 4 + name_w;
@@ -1983,8 +1984,6 @@ fn turn_text(conv: &Conversation, abs: u32) -> String {
 #[cfg(test)]
 mod tests {
     use std::path::Path;
-
-    use contract::conversation::CommandKind;
 
     use super::*;
 

@@ -90,19 +90,89 @@ pub const SCREEN: [&str; 12] = [
 /// Commands of Claude's that start a turn like any message.
 const PROMPTS: [&str; 3] = ["init", "review", "security-review"];
 
-/// What the engine answers «isn't available in this environment»: jwn's own lists stand in for
-/// them (N83b), so until then they are not offered.
-const UNAVAILABLE: [&str; 10] = [
-    "help",
-    "status",
-    "resume",
-    "tasks",
-    "artifacts",
-    "skills",
-    "permissions",
-    "memory",
-    "hooks",
-    "rewind",
+/// The commands of Claude's own screen that the engine run headless does not serve, from its
+/// commands page: they are listed so that the list has all of Claude's, and the client says
+/// where they work (`command claude`) instead of sending them (REQ-423, REQ-460).
+const INTERACTIVE: &[(&str, &str)] = &[
+    ("add-dir", "añadir una carpeta de trabajo"),
+    (
+        "artifact-capabilities",
+        "referencia de capacidades de los artifacts",
+    ),
+    ("artifact-diagramming", "guía para diagramas en artifacts"),
+    ("artifacts", "tus artifacts"),
+    (
+        "autofix-pr",
+        "un agente en la nube arregla el PR de la rama",
+    ),
+    ("background", "pasar la sesión a segundo plano"),
+    ("branch", "bifurcar la conversación en este punto"),
+    ("btw", "una pregunta lateral sin tocar la conversación"),
+    ("bug", "reportar un error"),
+    ("cd", "mover la sesión a otra carpeta"),
+    ("chrome", "configurar Claude en Chrome"),
+    ("claude-in-chrome", "hacer una tarea en tu navegador"),
+    ("copy", "copiar la última respuesta"),
+    ("design-login", "dar acceso a Claude Design"),
+    ("desktop", "seguir la sesión en la app de escritorio"),
+    ("diff", "revisar los cambios del árbol de trabajo"),
+    ("doctor", "diagnosticar la instalación"),
+    ("export", "exportar la conversación como texto"),
+    ("feedback", "enviar comentarios sobre Claude Code"),
+    (
+        "fork",
+        "copiar la conversación a una sesión en segundo plano",
+    ),
+    ("help", "ayuda y comandos"),
+    ("hooks", "ver los hooks configurados"),
+    ("ide", "integraciones con editores"),
+    ("insights", "informe de tus sesiones recientes"),
+    ("install-github-app", "instalar la app de GitHub de Claude"),
+    ("install-slack-app", "instalar la app de Slack de Claude"),
+    ("keybindings", "abrir el archivo de atajos"),
+    ("login", "iniciar sesión"),
+    ("logout", "cerrar sesión"),
+    ("memory", "editar CLAUDE.md y la memoria"),
+    ("mobile", "QR de la app móvil de Claude"),
+    ("passes", "compartir una semana gratis de Claude Code"),
+    ("permissions", "reglas de permisos de herramientas"),
+    ("plugin", "gestionar plugins"),
+    ("powerup", "lecciones interactivas de funciones"),
+    ("privacy-settings", "ajustes de privacidad"),
+    ("radio", "radio lo-fi de Claude FM"),
+    (
+        "rate-limit-options",
+        "opciones cuando un límite de uso te frena",
+    ),
+    ("release-notes", "notas de las versiones"),
+    ("remote-control", "controlar la sesión desde claude.ai"),
+    ("remote-env", "entorno en la nube por defecto"),
+    ("resume", "retomar una conversación"),
+    ("rewind", "volver a un punto anterior"),
+    ("sandbox", "activar o desactivar el sandbox"),
+    ("scroll-speed", "velocidad de la rueda del ratón"),
+    ("setup-bedrock", "configurar Amazon Bedrock"),
+    ("setup-vertex", "configurar Google Vertex"),
+    ("skills", "listar las skills"),
+    ("slides", "hacer una presentación"),
+    ("status", "versión, modelo, cuenta y conexión"),
+    ("statusline", "configurar la línea de estado"),
+    ("stickers", "pedir stickers de Claude Code"),
+    ("stop", "parar la sesión en segundo plano"),
+    (
+        "subtask",
+        "un subagente en segundo plano con esta conversación",
+    ),
+    ("tasks", "trabajo en segundo plano"),
+    ("teleport", "traer una sesión de la nube a este terminal"),
+    ("terminal-setup", "atajo Shift+Enter para saltos de línea"),
+    ("theme", "cambiar el tema de color"),
+    ("tui", "elegir el modo de pantalla de Claude"),
+    ("ultrareview", "revisión profunda en la nube"),
+    ("upgrade", "cambiar a un plan superior"),
+    ("voice", "dictado por voz"),
+    ("web-setup", "conectar GitHub para sesiones en la nube"),
+    ("workflows", "progreso de los workflows"),
 ];
 
 /// What jwn answers itself (REQ-418, REQ-419), whatever the engine lists under the same name.
@@ -122,14 +192,19 @@ const OWN: [(&str, &str); 8] = [
 
 /// The commands every conversation has before the engine says anything.
 pub fn own_commands() -> Vec<ConvCommand> {
-    OWN.iter()
-        .map(|(name, description)| ConvCommand {
-            name: format!("/{name}"),
-            source: CommandSource::Jwn,
-            kind: CommandKind::Local,
-            description: Some((*description).to_owned()),
-        })
-        .collect()
+    let own = OWN.iter().map(|(name, description)| ConvCommand {
+        name: format!("/{name}"),
+        source: CommandSource::Jwn,
+        kind: CommandKind::Local,
+        description: Some((*description).to_owned()),
+    });
+    let screens = INTERACTIVE.iter().map(|(name, description)| ConvCommand {
+        name: format!("/{name}"),
+        source: CommandSource::Claude,
+        kind: CommandKind::Screen,
+        description: Some((*description).to_owned()),
+    });
+    own.chain(screens).collect()
 }
 
 /// The `/` list: jwn's own, then what the engine lists, each tagged by where it is defined
@@ -140,7 +215,7 @@ pub fn classify_commands(listed: &Value, skills: Option<&[&str]>) -> Vec<ConvCom
         let Some(name) = c["name"].as_str().filter(|n| !n.is_empty()) else {
             continue;
         };
-        if OWN.iter().any(|(own, _)| *own == name) || UNAVAILABLE.contains(&name) {
+        if OWN.iter().any(|(own, _)| *own == name) {
             continue;
         }
         let (source, kind) = if c["builtin"].as_bool().unwrap_or(false) {
@@ -159,6 +234,8 @@ pub fn classify_commands(listed: &Value, skills: Option<&[&str]>) -> Vec<ConvCom
         } else {
             (CommandSource::Skill, CommandKind::Prompt)
         };
+        // What the engine serves replaces what was only listed.
+        out.retain(|k| k.name.trim_start_matches('/') != name);
         out.push(ConvCommand {
             name: format!("/{name}"),
             source,
@@ -415,8 +492,15 @@ impl State {
         st.first = saved.first;
         st.items = saved.items;
         st.cost = saved.cost;
+        // The list the engine gave, with jwn's own in case the file is older than they are.
         if !saved.commands.is_empty() {
+            let known: Vec<String> = saved.commands.iter().map(|c| c.name.clone()).collect();
             st.commands = saved.commands;
+            st.commands.extend(
+                own_commands()
+                    .into_iter()
+                    .filter(|c| !known.contains(&c.name)),
+            );
         }
         st.status = ConvStatus::Dead;
         st.push(Item::Divider {
@@ -1227,6 +1311,15 @@ impl State {
                 self.model = short_model(full);
             }
         }
+    }
+
+    /// Whether `/word` is one of the commands that only work in Claude's own screen.
+    pub fn needs_screen(&self, word: &str) -> bool {
+        SCREEN.contains(&word)
+            || self
+                .commands
+                .iter()
+                .any(|c| c.kind == CommandKind::Screen && c.name.strip_prefix('/') == Some(word))
     }
 
     /// The skills `init` lists tell the commands that are skills from those of the project.
@@ -2052,7 +2145,6 @@ mod tests {
             {"name": "context", "description": "Show context usage", "builtin": true},
             {"name": "doctor", "builtin": true},
             {"name": "init", "builtin": true},
-            {"name": "help", "builtin": true},
             {"name": "model", "description": "the engine's own", "builtin": true},
             {"name": "deploy", "description": "publicar"},
             {"name": "jw", "description": "(user) skill"},
@@ -2069,10 +2161,13 @@ mod tests {
         let find = |n: &str| all.iter().find(|c| c.0 == n).cloned();
         assert_eq!(all.iter().filter(|c| c.0 == "/model").count(), 1);
         assert_eq!(find("/model").unwrap().1, CommandSource::Jwn);
-        assert!(
-            find("/help").is_none(),
-            "the lists of jwn stand in for it later"
+        let help = find("/help").unwrap();
+        assert_eq!(
+            (help.1, help.2),
+            (CommandSource::Claude, CommandKind::Screen),
+            "all of Claude's are listed; the ones only its screen has say so"
         );
+        assert_eq!(find("/plan").unwrap().1, CommandSource::Jwn);
         assert_eq!(find("/context").unwrap().2, CommandKind::Text);
         assert_eq!(find("/doctor").unwrap().2, CommandKind::Screen);
         assert_eq!(find("/init").unwrap().2, CommandKind::Prompt);
@@ -2101,6 +2196,12 @@ mod tests {
             s.commands.len(),
             own_commands().len(),
             "jwn's own are always there"
+        );
+        assert!(
+            s.commands
+                .iter()
+                .any(|c| c.name == "/permissions" && c.kind == CommandKind::Screen),
+            "and all of Claude's, before the engine says anything"
         );
         let e = s.engine_started(None);
         assert_eq!(writes(&e)[0]["request"]["subtype"], "initialize");
@@ -2139,6 +2240,20 @@ mod tests {
         let saved = s.saved(5);
         let back = State::restored(saved, "20:00");
         assert!(back.commands.iter().any(|c| c.name == "/deploy"));
+        // a file from before a command of jwn's existed gets it
+        let mut older = st().saved(5);
+        older.commands = vec![ConvCommand {
+            name: "/deploy".into(),
+            source: CommandSource::Skill,
+            kind: CommandKind::Prompt,
+            description: None,
+        }];
+        let names: Vec<String> = State::restored(older, "20:00")
+            .commands
+            .into_iter()
+            .map(|c| c.name)
+            .collect();
+        assert!(names.contains(&"/deploy".to_owned()) && names.contains(&"/plan".to_owned()));
         let mut none = st().saved(5);
         none.commands.clear();
         assert_eq!(
