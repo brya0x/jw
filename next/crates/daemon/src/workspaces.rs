@@ -69,13 +69,9 @@ fn added(shared: &Shared, ws: Workspace) -> Done {
     // take it first (REQ-495).
     let mut ws = ws;
     if let Some(block) = ws.ports.as_mut() {
-        let used: Vec<u32> = core
+        block.slot = core
             .model
-            .workspaces
-            .iter()
-            .filter_map(|w| w.ports.as_ref().map(|p| p.slot))
-            .collect();
-        block.slot = crate::model::free_slot(&used)
+            .free_slot()
             .ok_or_else(|| err(ErrorCode::Conflict, "no block of ports is free"))?;
     }
     let mut reply = json!({ "workspace": id, "path": path });
@@ -174,17 +170,8 @@ pub fn create_worktree(
             format!("{dest_text} already exists"),
         ));
     }
-    if !project.ports.is_empty() {
-        let used: Vec<u32> = shared
-            .lock()
-            .model
-            .workspaces
-            .iter()
-            .filter_map(|w| w.ports.as_ref().map(|p| p.slot))
-            .collect();
-        if crate::model::free_slot(&used).is_none() {
-            return Err(err(ErrorCode::Conflict, "no block of ports is free"));
-        }
+    if !project.ports.is_empty() && shared.lock().model.free_slot().is_none() {
+        return Err(err(ErrorCode::Conflict, "no block of ports is free"));
     }
     let existing = git::branch_exists(&top, branch);
     let mut args = vec!["worktree", "add"];

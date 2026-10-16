@@ -86,8 +86,20 @@ impl PortBlock {
     }
 }
 
-/// The lowest slot of `used` that is free, if its block fits below the last port (REQ-495).
-pub fn free_slot(used: &[u32]) -> Option<u32> {
+impl Model {
+    /// The lowest slot no workspace holds, if its block fits below the last port (REQ-495).
+    pub fn free_slot(&self) -> Option<u32> {
+        let used: Vec<u32> = self
+            .workspaces
+            .iter()
+            .filter_map(|w| w.ports.as_ref().map(|p| p.slot))
+            .collect();
+        free_slot(&used)
+    }
+}
+
+/// The lowest slot of `used` that is free, if its block fits below the last port.
+fn free_slot(used: &[u32]) -> Option<u32> {
     (0..)
         .find(|s| !used.contains(s))
         .filter(|s| FIRST_PORT + BLOCK * s + (BLOCK - 1) <= LAST_PORT)

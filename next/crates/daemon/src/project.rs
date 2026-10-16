@@ -347,6 +347,13 @@ fn parse(
                     &format!("`ports` names {name:?}: use lowercase letters, digits and `_`"),
                 ));
             }
+            // `<PREFIX>_PORT_BASE` is the block's first port: a name must not take its place.
+            if name == "base" {
+                return Err(fail(
+                    at,
+                    "`ports` cannot name a port `base`: that is the first port of the block",
+                ));
+            }
             let Some(n) = offset.as_integer().filter(|n| (0..=99).contains(n)) else {
                 return Err(fail(
                     at,
@@ -967,6 +974,7 @@ mod tests {
         assert!(read_text("").unwrap().ports.is_empty());
         for (text, why) in [
             ("ports = { Web = 1 }\n", "`ports` names \"Web\""),
+            ("ports = { base = 1 }\n", "cannot name a port `base`"),
             ("ports = { \"a b\" = 1 }\n", "`ports` names \"a b\""),
             (
                 "ports = { web = 100 }\n",
