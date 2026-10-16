@@ -40,7 +40,7 @@ fn wait_for(what: &str, mut f: impl FnMut() -> bool) {
 }
 
 impl World {
-    /// A daemon of its own whose panes run `shell`; `swap` is `JWN_CONVERSATION=1` for it.
+    /// A daemon of its own whose panes run `shell`; without `swap` it has `JWN_CONVERSATION=0`.
     fn new(name: &str, shell: &str, swap: bool) -> World {
         let env = Env::new(name);
         let bin = env.dir.join("bin");
@@ -59,8 +59,8 @@ impl World {
             .env("FAKE_LOG", &log)
             .env_remove("JWN_PANE_ID")
             .arg("daemon");
-        if swap {
-            cmd.env("JWN_CONVERSATION", "1");
+        if !swap {
+            cmd.env("JWN_CONVERSATION", "0");
         }
         let child = cmd.spawn().unwrap();
         wait_for("the daemon", || {

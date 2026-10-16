@@ -56,8 +56,7 @@ pub struct Config {
     /// How often the pull requests of the worktrees in use are looked at.
     pub github_every: Duration,
     /// Swap the `claude` a person types in a pane for the binary's own, which talks to the
-    /// engine headless and draws a conversation (`$<PREFIX>_CONVERSATION=1`); off until the
-    /// clients draw it.
+    /// engine headless and draws a conversation; on unless `$<PREFIX>_CONVERSATION` is `0`.
     pub conversation: bool,
 }
 
@@ -76,7 +75,8 @@ impl Config {
             hook_exe: std::env::current_exe().ok(),
             gh: crate::github::find(),
             github_every: Duration::from_secs(60),
-            conversation: std::env::var(identity::env_var("CONVERSATION")).is_ok_and(|v| v == "1"),
+            conversation: std::env::var(identity::env_var("CONVERSATION"))
+                .map_or(true, |v| v != "0"),
         }
     }
 
