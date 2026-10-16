@@ -46,12 +46,6 @@ pub enum Released {
 /// The headings are shown from this many columns on (REQ-474).
 const OUTLINE_FROM: usize = 100;
 const OUTLINE_W: usize = 26;
-/// The three answers to a plan, in the order of their keys, as the box words them.
-const ANSWERS: [(&str, &str); 3] = [
-    ("accept", "aprobar y editar sin preguntar"),
-    ("manual", "aprobar, preguntando cada edición"),
-    ("no", "seguir planeando"),
-];
 
 #[derive(Default)]
 struct Search {
@@ -72,6 +66,8 @@ pub struct Viewer {
     sel: Option<select::Selection>,
     pull: Option<select::Pull>,
     says: String,
+    /// The ways to answer a plan that waits, as the question's box has them: the key and the words.
+    answers: Vec<(String, String)>,
 }
 
 /// Where the parts of the viewer are in the rectangle it covers.
@@ -89,7 +85,7 @@ struct Geo {
 }
 
 impl Viewer {
-    pub fn new(doc: MarkdownDoc, source: Source) -> Viewer {
+    pub fn new(doc: MarkdownDoc, source: Source, answers: Vec<(String, String)>) -> Viewer {
         Viewer {
             doc,
             source,
@@ -101,6 +97,7 @@ impl Viewer {
             sel: None,
             pull: None,
             says: String::new(),
+            answers,
         }
     }
 
@@ -119,14 +116,15 @@ impl Viewer {
         } else {
             0
         };
+        let last = (y + h).saturating_sub(1);
         let mut foot = h.saturating_sub(1);
-        let answers_y = self.is_plan().then(|| {
-            foot -= 1;
-            y + h - 1
+        let answers_y = (self.is_plan() && !self.answers.is_empty()).then(|| {
+            foot = foot.saturating_sub(1);
+            last
         });
         let search_y = (self.search.typing || !self.search.query.is_empty()).then(|| {
-            foot -= 1;
-            y + h - 1 - usize::from(answers_y.is_some())
+            foot = foot.saturating_sub(1);
+            last.saturating_sub(usize::from(answers_y.is_some()))
         });
         Geo {
             outline,
@@ -232,8 +230,10 @@ impl Viewer {
                 Some(path) => return Act::Edit(path.clone()),
                 None => self.says = "este documento no tiene un archivo que abrir".into(),
             },
-            KeyCode::Char(c @ '1'..='3') if self.is_plan() => {
-                return Act::Answer(ANSWERS[c as usize - '1' as usize].0.to_owned());
+            KeyCode::Char(c @ '1'..='9') if self.is_plan() => {
+                if let Some((key, _)) = self.answers.get(c as usize - '1' as usize) {
+                    return Act::Answer(key.clone());
+                }
             }
             _ => {}
         }
@@ -417,10 +417,10 @@ impl Viewer {
             && y == ay
         {
             let mut at = rect.0 + 1;
-            for (key, label) in ANSWERS {
+            for (key, label) in &self.answers {
                 let width = 3 + label.chars().count() + 2;
                 if (at..at + width).contains(&x) {
-                    return Act::Answer(key.to_owned());
+                    return Act::Answer(key.clone());
                 }
                 at += width + 2;
             }
@@ -581,7 +581,7 @@ impl Viewer {
         }
         if let Some(ay) = geo.answers_y {
             let mut cx = x + 1;
-            for (i, (_, label)) in ANSWERS.iter().enumerate() {
+            for (i, (_, label)) in self.answers.iter().enumerate() {
                 let key = format!(" {} ", i + 1);
                 let name = format!(" {label} ");
                 let key_style = if plan_waits {
@@ -603,7 +603,7 @@ impl Viewer {
 
     /// What the status bar says the keys are.
     pub fn hint(&self) -> String {
-        let answers = if self.is_plan() {
+        let answers = if self.is_plan() && !self.answers.is_empty() {
             " · 1 2 3 responde"
         } else {
             ""
@@ -648,7 +648,19 @@ mod tests {
     }
 
     fn viewer(source: Source) -> Viewer {
-        Viewer::new(long(), source)
+        let answers = if matches!(source, Source::Plan { .. }) {
+            [
+                ("accept", "aprobar y editar sin preguntar"),
+                ("manual", "aprobar, preguntando cada edición"),
+                ("no", "seguir planeando"),
+            ]
+            .into_iter()
+            .map(|(k, l)| (k.to_owned(), l.to_owned()))
+            .collect()
+        } else {
+            Vec::new()
+        };
+        Viewer::new(long(), source, answers)
     }
 
     fn key(v: &mut Viewer, rect: (usize, usize, usize, usize), code: KeyCode) -> Act {
@@ -827,6 +839,11 @@ mod tests {
             key(&mut v, NARROW, KeyCode::Char('3')),
             Act::Answer("no".into())
         );
+        assert_eq!(
+            key(&mut v, NARROW, KeyCode::Char('4')),
+            Act::Nothing,
+            "only the answers the question has"
+        );
         let y = NARROW.3 - 1;
         let rows = screen(&v, NARROW, true);
         let at = rows[y].chars().position(|c| c == '2').unwrap();
@@ -861,7 +878,7 @@ mod tests {
         assert!(v.take_says().unwrap().contains("no tiene un archivo"));
         let mut d = long();
         d.path = Some("/w/plan.md".into());
-        let mut v = Viewer::new(d, Source::File);
+        let mut v = Viewer::new(d, Source::File, Vec::new());
         assert_eq!(
             key(&mut v, NARROW, KeyCode::Char('e')),
             Act::Edit("/w/plan.md".into())
@@ -888,6 +905,7 @@ mod tests {
                 MdBlock::Rule,
             ]),
             Source::File,
+            Vec::new(),
         );
         let rect = (0, 0, 30, 12);
         let rows = screen(&v, rect, false);
@@ -928,5 +946,24 @@ mod tests {
         assert_eq!(long_v.scroll, 1);
         long_v.drag_tick(NARROW, 2 * select::EDGE_MS);
         assert_eq!(long_v.scroll, 2);
+    }
+
+    #[test]
+    fn a_panel_with_no_room_does_not_panic_on_a_key_a_press_or_a_drag() {
+        let mut v = viewer(Source::Plan {
+            node: "n".into(),
+            ask: "a".into(),
+        });
+        for rect in [(0, 0, 3, 0), (0, 0, 5, 1), (4, 2, 120, 2)] {
+            key(&mut v, rect, KeyCode::Char('/'));
+            key(&mut v, rect, KeyCode::Esc);
+            key(&mut v, rect, KeyCode::Char('G'));
+            v.press(rect, 1, 1);
+            v.drag_to(rect, (9, 9), 0);
+            v.drag_tick(rect, 999);
+            v.release(rect);
+            v.click(rect, 0, 0);
+            screen(&v, rect, true);
+        }
     }
 }

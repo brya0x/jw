@@ -16,6 +16,8 @@ pub struct Row {
     pub bg: Option<Rgb>,
     /// It goes on from the row above, which the width broke: copied, they are one line.
     pub soft: bool,
+    /// It goes on from the middle of a word that was longer than a row: copied, with no space.
+    pub glued: bool,
     /// How many characters of the row are only how it is set (the bar of a quote, the hang under a
     /// list's mark): a copy leaves them out.
     pub lead: usize,
@@ -29,6 +31,7 @@ impl Row {
             spans,
             bg: None,
             soft: false,
+            glued: false,
             lead: 0,
             head: None,
         }
@@ -107,7 +110,9 @@ pub fn text_of(rows: &[Row], from: (usize, usize), to: (usize, usize)) -> String
         let piece: String = chars[a..b].iter().collect();
         match out.last_mut() {
             Some(last) if row.soft && !last.is_empty() => {
-                last.push(' ');
+                if !row.glued {
+                    last.push(' ');
+                }
                 last.push_str(piece.trim());
             }
             _ => out.push(piece.trim_end().to_owned()),
@@ -292,22 +297,28 @@ fn cut(atoms: Vec<Seg>, room: usize) -> (Vec<Seg>, Vec<Seg>) {
 
 /// `segs` broken into rows of at most `w` cells, at spaces; a word longer than a row is cut.
 fn wrap(segs: &[Seg], w: usize) -> Vec<Row> {
+    // Nested quotes and lists can leave no room at all; a row holds at least a cell, or a word
+    // longer than it would never be cut.
+    let w = w.max(1);
     let mut rows: Vec<Row> = Vec::new();
     let mut row: Vec<Seg> = Vec::new();
-    let (mut len, mut fresh, mut soft) = (0usize, true, false);
-    let finish = |row: &mut Vec<Seg>, soft: bool, rows: &mut Vec<Row>| {
+    let (mut len, mut fresh) = (0usize, true);
+    // What the row being made is: the continuation of the one above, and of a cut word.
+    let (mut soft, mut glued) = (false, false);
+    let finish = |row: &mut Vec<Seg>, soft: bool, glued: bool, rows: &mut Vec<Row>| {
         while row.last().is_some_and(|(t, _)| t.trim().is_empty()) {
             row.pop();
         }
         let mut r = Row::of(std::mem::take(row));
         r.soft = soft;
+        r.glued = glued;
         rows.push(r);
     };
     for piece in pieces(segs) {
         match piece {
             Piece::Break => {
-                finish(&mut row, soft, &mut rows);
-                (len, fresh, soft) = (0, true, false);
+                finish(&mut row, soft, glued, &mut rows);
+                (len, fresh, soft, glued) = (0, true, false, false);
             }
             Piece::Space(s) => {
                 let n = s.0.chars().count();
@@ -318,14 +329,14 @@ fn wrap(segs: &[Seg], w: usize) -> Vec<Row> {
             }
             Piece::Word(mut atoms, mut n) => {
                 if len + n > w && !fresh {
-                    finish(&mut row, soft, &mut rows);
-                    (len, soft) = (0, true);
+                    finish(&mut row, soft, glued, &mut rows);
+                    (len, soft, glued) = (0, true, false);
                 }
                 while len + n > w {
                     let (head, tail) = cut(atoms, w - len);
                     row.extend(head);
-                    finish(&mut row, soft, &mut rows);
-                    (len, soft) = (0, true);
+                    finish(&mut row, soft, glued, &mut rows);
+                    (len, soft, glued) = (0, true, true);
                     n = tail.iter().map(|(t, _)| t.chars().count()).sum();
                     atoms = tail;
                 }
@@ -335,7 +346,7 @@ fn wrap(segs: &[Seg], w: usize) -> Vec<Row> {
             }
         }
     }
-    finish(&mut row, soft, &mut rows);
+    finish(&mut row, soft, glued, &mut rows);
     rows
 }
 
@@ -690,5 +701,20 @@ pub mod tests {
             "una cita que ocupa varias filas\n\nfin"
         );
         assert_eq!(text_of(&l.rows, (0, 6), (0, 9)), "cita", "a part of a row");
+    }
+
+    #[test]
+    fn quotes_nested_deeper_than_the_panel_is_wide_still_come_out() {
+        let mut b = para("una palabralarguísima y otra");
+        for _ in 0..12 {
+            b = MdBlock::Quote { blocks: vec![b] };
+        }
+        let l = layout(&doc(vec![b]), 20);
+        assert!(l.rows.len() > 5, "{} rows", l.rows.len());
+        let text = text_of(&l.rows, (0, 0), (l.rows.len() - 1, usize::MAX - 1));
+        assert!(
+            text.contains("palabralarguísima"),
+            "a cut word is copied with no space in it: {text}"
+        );
     }
 }

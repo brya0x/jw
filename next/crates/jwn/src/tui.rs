@@ -1983,6 +1983,9 @@ impl View {
     /// or typed into whatever has the keyboard, a line break being Enter.
     pub fn paste(&mut self, text: &str) -> After {
         self.flash.clear();
+        if self.viewer.is_some() {
+            return After::Continue;
+        }
         if self.modal() {
             // What a key would have done, the first that asks the client for something ending the paste.
             for c in text.chars().filter(|c| *c != '\r') {
@@ -2310,7 +2313,23 @@ impl View {
 
     /// Show a document in the viewer; the keys and the mouse are its until it closes.
     pub fn open_viewer(&mut self, doc: contract::markdown::MarkdownDoc, source: viewer::Source) {
-        self.viewer = Some(viewer::Viewer::new(doc, source));
+        // A plan is answered the ways the question's box has.
+        let answers = match &source {
+            viewer::Source::Plan { node, ask } => self
+                .convs
+                .get(node)
+                .and_then(|c| c.ask.as_ref())
+                .filter(|a| a.id == *ask)
+                .map(|a| {
+                    a.options
+                        .iter()
+                        .map(|o| (o.key.clone(), o.label.clone()))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            viewer::Source::File => Vec::new(),
+        };
+        self.viewer = Some(viewer::Viewer::new(doc, source, answers));
     }
 
     /// Whether the plan the viewer shows still waits for an answer.
@@ -8044,7 +8063,7 @@ mod tests {
             "{screen}"
         );
         assert!(
-            screen.contains("1  aprobar y editar sin preguntar"),
+            screen.contains("1  Aprobar y editar sin preguntar"),
             "{screen}"
         );
         assert!(
@@ -8104,7 +8123,7 @@ mod tests {
         );
         v.scroll(false, 60, 10, 120, 30);
         // a click on an answer answers (the row above the status bar)
-        let (x, y) = find_in(&v, "aprobar, preguntando", 30);
+        let (x, y) = find_in(&v, "Aprobar, preguntando", 30);
         assert_eq!(
             v.click(x + 2, y, 120, 30),
             After::Conv(ConvAct::Answer {
@@ -8167,6 +8186,49 @@ mod tests {
         ));
         assert!(is_markdown("a/b.markdown") && is_markdown("README.md"));
         assert!(!is_markdown("md") && !is_markdown("a.mdx") && !is_markdown("Makefile"));
+    }
+
+    #[test]
+    fn a_paste_while_the_viewer_is_open_goes_nowhere() {
+        let mut v = conv_view(true);
+        v.open_viewer(plan_doc(), viewer::Source::File);
+        assert_eq!(v.paste("q hola"), After::Continue);
+        assert!(
+            v.viewer.is_some(),
+            "a `q` that was pasted does not close it"
+        );
+        assert_eq!(
+            v.conv_ui[CONV].editor.text(),
+            "",
+            "and the line behind gets nothing"
+        );
+    }
+
+    #[test]
+    fn a_plan_is_answered_the_ways_the_question_has_and_a_viewer_of_a_file_has_no_answers() {
+        let mut v = conv_view(true);
+        let mut ask = plan_ask();
+        ask.options.truncate(2);
+        v.convs.get_mut(CONV).unwrap().ask = Some(ask);
+        v.open_viewer(
+            plan_doc(),
+            viewer::Source::Plan {
+                node: CONV.into(),
+                ask: "req-p".into(),
+            },
+        );
+        let screen = v.plain(120, 30);
+        assert!(
+            screen.contains("1  Aprobar y editar") && screen.contains("2  Aprobar, preguntando"),
+            "{screen}"
+        );
+        assert!(
+            !screen.contains("Seguir planeando"),
+            "the box had two answers"
+        );
+        assert_eq!(v.press_key(plain(KeyCode::Char('3'))), After::Continue);
+        v.open_viewer(plan_doc(), viewer::Source::File);
+        assert!(!v.plain(120, 30).contains("Aprobar"));
     }
 
     fn find_in(v: &View, text: &str, rows: usize) -> (usize, usize) {
