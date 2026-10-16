@@ -22,6 +22,7 @@ import dev.jw.next.contract.ErrorCode
 import dev.jw.next.contract.FileListing
 import dev.jw.next.contract.Id
 import dev.jw.next.contract.Image
+import dev.jw.next.contract.MarkdownDoc
 import dev.jw.next.contract.Node
 import dev.jw.next.contract.Peer
 import dev.jw.next.contract.ProjectInfo
@@ -230,6 +231,14 @@ abstract class ProtocolSource : AppSource() {
         command(Cmd.ListConversations(workspace)) { r -> reply(r.read(ConversationList.serializer())) }
     }
 
+    override fun readMarkdown(workspace: Id, path: String, reply: (Result<MarkdownDoc>) -> Unit) {
+        command(Cmd.ReadMarkdown(workspace, path)) { r -> reply(r.read(MarkdownDoc.serializer(), "el documento")) }
+    }
+
+    override fun readPlan(node: Id, ask: String, reply: (Result<MarkdownDoc>) -> Unit) {
+        command(Cmd.ReadPlan(node, ask)) { r -> reply(r.read(MarkdownDoc.serializer(), "el plan")) }
+    }
+
     override fun resumeConversation(pane: Id, id: String, reply: (Result<Unit>) -> Unit) {
         command(Cmd.OpenConversation(pane, resume = id)) { reply(it.done("el PC no pudo retomar la conversación")) }
     }
@@ -247,13 +256,13 @@ abstract class ProtocolSource : AppSource() {
     }
 
     /** What a command read, as a [T]: the PC's message when it refused, else what is wrong with its answer. */
-    private fun <T> DaemonMsg.Reply.read(serializer: DeserializationStrategy<T>): Result<T> {
-        if (!ok) return Result.failure(Exception(error?.message ?: "el PC no pudo leer la carpeta"))
-        val body = result ?: return Result.failure(Exception("el PC no dio la carpeta"))
+    private fun <T> DaemonMsg.Reply.read(serializer: DeserializationStrategy<T>, what: String = "la carpeta"): Result<T> {
+        if (!ok) return Result.failure(Exception(error?.message ?: "el PC no pudo leer $what"))
+        val body = result ?: return Result.failure(Exception("el PC no dio $what"))
         return try {
             Result.success(ContractJson.decodeFromJsonElement(serializer, body))
         } catch (e: SerializationException) {
-            Result.failure(Exception("el PC dio una carpeta que no se entiende"))
+            Result.failure(Exception("el PC dio $what de una forma que no se entiende"))
         }
     }
 

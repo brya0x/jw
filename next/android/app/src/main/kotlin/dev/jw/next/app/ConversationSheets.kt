@@ -53,6 +53,7 @@ import dev.jw.next.client.listAgo
 import dev.jw.next.client.tag
 import dev.jw.next.contract.Accent
 import dev.jw.next.contract.Ask
+import dev.jw.next.contract.AskKind
 import dev.jw.next.contract.ConvMode
 import dev.jw.next.contract.Node
 
@@ -78,7 +79,7 @@ internal fun ConvSheet(dismiss: () -> Unit, content: @Composable ColumnScope.() 
 
 /** What the question needs from the person (REQ-441): what the tool is about to do, and a button of at least 48 dp for each option, the first one primary. */
 @Composable
-internal fun AskSheet(ask: Ask, busy: Boolean, dismiss: () -> Unit, answer: (String) -> Unit) {
+internal fun AskSheet(ask: Ask, busy: Boolean, dismiss: () -> Unit, viewPlan: () -> Unit, answer: (String) -> Unit) {
     // A choice of several: the options marked, sent together as their numbers with commas (REQ-435).
     var marked by remember(ask.id) { mutableStateOf(setOf<Int>()) }
     ConvSheet(dismiss) {
@@ -89,6 +90,8 @@ internal fun AskSheet(ask: Ask, busy: Boolean, dismiss: () -> Unit, answer: (Str
         ask.command?.let { Mono(it, Palette.cyan, 12, lines = 8, modifier = Modifier.fillMaxWidth().background(Palette.bg, RoundedCornerShape(6.dp)).padding(8.dp)) }
         if (ask.diff.isNotEmpty()) Diff(ask.diff.take(12))
         ask.plan.forEach { Mono(it, Palette.fg, 13, lines = 6) }
+        // The box keeps a few lines of a plan; the viewer has all of it (REQ-480).
+        if (ask.kind == AskKind.Plan) SheetAction("▤", "Ver el plan completo", Palette.blue, click = viewPlan)
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             ask.options.forEachIndexed { i, o ->
                 val primary = i == 0 && !ask.multi

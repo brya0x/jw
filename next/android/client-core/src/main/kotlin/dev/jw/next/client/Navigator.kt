@@ -9,6 +9,7 @@ import dev.jw.next.contract.DiffScope
 import dev.jw.next.contract.DirListing
 import dev.jw.next.contract.FileListing
 import dev.jw.next.contract.Id
+import dev.jw.next.contract.MarkdownDoc
 import dev.jw.next.contract.Node
 import dev.jw.next.contract.ProjectInfo
 
@@ -139,6 +140,16 @@ interface NodeSource {
 
     /** The conversations Claude saved for the folder of [workspace], newest first. */
     fun listConversations(workspace: Id, reply: (Result<ConversationList>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** A Markdown file of [workspace] ([path] relative to its folder) as blocks, or the PC's message when it refuses (REQ-466). */
+    fun readMarkdown(workspace: Id, path: String, reply: (Result<MarkdownDoc>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** The plan that waits as [ask] in the conversation [node], whole, as blocks (REQ-467). */
+    fun readPlan(node: Id, ask: String, reply: (Result<MarkdownDoc>) -> Unit) {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
     }
 

@@ -85,6 +85,7 @@ import dev.jw.next.contract.ConvCommand
 import dev.jw.next.contract.ConvMode
 import dev.jw.next.contract.ConvStatus
 import dev.jw.next.contract.Id
+import dev.jw.next.contract.MarkdownDoc
 import dev.jw.next.contract.Node
 import dev.jw.next.contract.TaskState
 import kotlinx.coroutines.Dispatchers
@@ -134,6 +135,7 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
     var notice by remember(nodeId) { mutableStateOf<Notice?>(null) }
     var answering by remember(nodeId) { mutableStateOf(false) }
     var askClosed by remember(nodeId) { mutableStateOf<String?>(null) }
+    var plan by remember(nodeId) { mutableStateOf<Pair<String, MarkdownDoc>?>(null) }
     var todosOpen by remember(nodeId) { mutableStateOf(false) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val pictures = remember(nodeId) { mutableStateListOf<Picture>() }
@@ -303,7 +305,12 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
     // ---- what asks ----
     val ask = node.ask
     if (ask != null && askClosed != ask.id) {
-        AskSheet(ask, answering, dismiss = { askClosed = ask.id }) { key ->
+        val viewPlan = {
+            source.readPlan(nodeId, ask.id) { r ->
+                r.onSuccess { plan = ask.id to it; askClosed = ask.id }.onFailure { say(it.message ?: "el PC no pudo leer el plan", error = true) }
+            }
+        }
+        AskSheet(ask, answering, dismiss = { askClosed = ask.id }, viewPlan = viewPlan) { key ->
             answering = true
             source.conversationAnswer(nodeId, ask.id, key) { r -> answering = false; fail(r) }
         }
@@ -312,6 +319,17 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
             "! ${ask.kind.tag()} · toca para responder", Palette.yellow, 12, bold = true,
             modifier = Modifier.fillMaxWidth().background(Palette.panel).clickable { askClosed = null }.padding(horizontal = Pad, vertical = 10.dp),
         )
+    }
+
+    // ---- the plan that was asked for whole, over everything (REQ-480) ----
+    plan?.let { (askId, doc) ->
+        val waiting = ask?.takeIf { it.id == askId }
+        val answers = PlanAnswers(waiting?.options.orEmpty(), waiting != null) { key ->
+            plan = null
+            answering = true
+            source.conversationAnswer(nodeId, askId, key) { r -> answering = false; fail(r) }
+        }
+        ViewerDialog(doc, answers) { plan = null }
     }
 
     // ---- the `/` list above the field (REQ-446) ----

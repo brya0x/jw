@@ -36,8 +36,11 @@ import dev.jw.next.client.Navigator
 import dev.jw.next.client.Screen
 import dev.jw.next.client.crumbsOf
 import dev.jw.next.client.filesView
+import dev.jw.next.client.isMarkdown
 import dev.jw.next.contract.FileKind
 import dev.jw.next.contract.FileListing
+import dev.jw.next.contract.MarkdownDoc
+import kotlinx.coroutines.delay
 import java.util.concurrent.atomic.AtomicInteger
 
 private val Gutter = 16.dp
@@ -45,7 +48,8 @@ private val Gutter = 16.dp
 /**
  * The files of a workspace, folder by folder and no higher than its own (REQ-323 to REQ-328): the
  * PC lists one folder at a time with what git says of each entry. Back goes up a folder, and
- * out of the screen at the workspace's own. A file is listed, not opened.
+ * out of the screen at the workspace's own. A `.md` opens in the viewer (REQ-479); any other file
+ * is listed and says that the phone does not open it.
  */
 @Composable
 fun FilesScreen(source: AppSource, state: ClientState, screen: Screen.Files, nav: Navigator, set: (ClientState) -> Unit) {
@@ -56,10 +60,22 @@ fun FilesScreen(source: AppSource, state: ClientState, screen: Screen.Files, nav
     var listing by remember(screen.workspace) { mutableStateOf<FileListing?>(null) }
     var error by remember(screen.workspace) { mutableStateOf<String?>(null) }
     var again by remember(screen.workspace) { mutableIntStateOf(0) }
+    var viewing by remember(screen.workspace) { mutableStateOf<MarkdownDoc?>(null) }
+    var note by remember(screen.workspace) { mutableStateOf<String?>(null) }
     val asks = remember(screen.workspace) { AtomicInteger() }
     val view = listing?.let { filesView(name, it, hidden) }
     val leave = { set(nav.leaveFiles(state)) }
     BackHandler { view?.parent?.let { path = it } ?: leave() }
+    LaunchedEffect(note) { if (note != null) { delay(3500); note = null } }
+    val openFile = { row: FileRow ->
+        if (isMarkdown(row.name)) {
+            source.readMarkdown(screen.workspace, row.path) { result ->
+                result.onSuccess { viewing = it }.onFailure { note = it.message ?: "el PC no pudo leer ${row.name}" }
+            }
+        } else {
+            note = "el teléfono no abre ${row.name}"
+        }
+    }
     LaunchedEffect(screen.workspace, path, again) {
         error = null
         listing = null
@@ -76,6 +92,7 @@ fun FilesScreen(source: AppSource, state: ClientState, screen: Screen.Files, nav
             }
         })
         Crumbs(crumbsOf(name, path), path) { path = it }
+        note?.let { Mono(it, Palette.yellow, 12, lines = 2, modifier = Modifier.fillMaxWidth().background(Palette.panel).padding(horizontal = Gutter, vertical = 8.dp)) }
         Box(Modifier.weight(1f)) {
             when {
                 error != null -> Column(
@@ -88,10 +105,11 @@ fun FilesScreen(source: AppSource, state: ClientState, screen: Screen.Files, nav
                     view?.parent?.let { up -> SheetAction("‹", "subir", Palette.blue) { path = up } }
                 }
                 view == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Mono("leyendo…", Palette.dim, 13) }
-                else -> FileList(view) { path = it }
+                else -> FileList(view, { path = it }, openFile)
             }
         }
     }
+    viewing?.let { doc -> ViewerDialog(doc, null) { viewing = null } }
 }
 
 @Composable
@@ -108,24 +126,29 @@ private fun Crumbs(crumbs: List<Pair<String, String>>, here: String, go: (String
 }
 
 @Composable
-private fun FileList(view: FilesView, go: (String) -> Unit) {
+private fun FileList(view: FilesView, go: (String) -> Unit, open: (FileRow) -> Unit) {
     LazyColumn(Modifier.fillMaxSize()) {
         view.parent?.let { up -> item(key = "..") { FileRowView("‹", Palette.dim, "..", "/$up", null, false) { go(up) } } }
-        items(view.rows, key = { it.path }) { row -> FileLine(row, go) }
+        items(view.rows, key = { it.path }) { row -> FileLine(row, go, open) }
         if (view.rows.isEmpty()) item { Mono(if (view.hidden || view.total == 0) "carpeta vacía" else "solo hay archivos ocultos", Palette.dim, 13, modifier = Modifier.padding(Gutter)) }
         if (view.cut) item { Mono("se listan los primeros ${view.sent} de ${view.total}", Palette.dim, 11, lines = 2, modifier = Modifier.padding(Gutter)) }
     }
 }
 
-/** A folder goes in when it is tapped; a file or a link is listed and does nothing (REQ-325). */
+/** A folder goes in when it is tapped and a file is opened (REQ-479); a link is listed and does nothing (REQ-325). */
 @Composable
-private fun FileLine(row: FileRow, go: (String) -> Unit) {
+private fun FileLine(row: FileRow, go: (String) -> Unit, open: (FileRow) -> Unit) {
     val (glyph, tone) = when (row.kind) {
         FileKind.Dir -> "▸" to Palette.blue
         FileKind.Link -> "↗" to Palette.dim
         FileKind.File -> "·" to Palette.dim
     }
-    FileRowView(glyph, tone, row.name, row.detail, row.mark, row.ignored, if (row.kind == FileKind.Dir) ({ go(row.path) }) else null)
+    val click: (() -> Unit)? = when (row.kind) {
+        FileKind.Dir -> ({ go(row.path) })
+        FileKind.File -> ({ open(row) })
+        FileKind.Link -> null
+    }
+    FileRowView(glyph, tone, row.name, row.detail, row.mark, row.ignored, click)
 }
 
 @Composable
