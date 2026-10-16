@@ -37,4 +37,6 @@ mod workspaces;
 pub use engine::served as conversation_served;
 pub use launch::agent_name;
 pub use mobile::{LinkConfig, devices_file};
+/// Where the personal settings of a repository or a folder are (REQ-483), for what has to say it.
+pub use project::personal_file;
 pub use server::{Config, Daemon};

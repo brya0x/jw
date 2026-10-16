@@ -7847,6 +7847,26 @@ mod tests {
         shown_in_a_pane(&mut v, &mut c, reply, "x", true);
         assert_eq!(panes_of(&mut c, &ws), 1);
         assert!(v.manage.is_none(), "nothing failed");
+
+        // A folder whose settings cannot be read: the message is shown and it is one shell
+        // all the same (REQ-503).
+        std::fs::write(repo.join(".jw.toml"), "[layout]\nrun = \n").unwrap();
+        let plain = dir.join("plain-folder");
+        std::fs::create_dir_all(&plain).unwrap();
+        std::fs::write(plain.join(".jw.toml"), "[layout]\nrun = \n").unwrap();
+        let reply = c.cmd(Cmd::OpenFolder {
+            path: plain.to_string_lossy().into_owned(),
+        });
+        let ws = reply.as_ref().unwrap().as_ref().unwrap().as_ref().unwrap()["workspace"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        shown_in_a_pane(&mut v, &mut c, reply, "x", true);
+        assert!(
+            matches!(&v.manage, Some(Manage::Failed { text, .. }) if text.contains(".jw.toml")),
+            "the message is shown"
+        );
+        assert_eq!(panes_of(&mut c, &ws), 1);
         d.stop();
         let _ = std::fs::remove_dir_all(dir);
     }

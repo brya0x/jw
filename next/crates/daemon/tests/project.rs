@@ -883,18 +883,9 @@ fn repo_two(sb: &Sandbox) -> PathBuf {
     std::fs::canonicalize(dir).unwrap()
 }
 
-/// The personal file of a folder that is not a repository: `local_` and its path (REQ-483).
+/// The personal file of a folder that is not a repository: named by its path (REQ-483).
 fn folder_personal(sb: &Sandbox, folder: &Path) -> PathBuf {
-    let key: String = text(folder)
-        .trim_start_matches('/')
-        .chars()
-        .map(|c| match c {
-            'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '-' => c,
-            '/' => '_',
-            _ => '-',
-        })
-        .collect();
-    sb.dir.join("projects").join(format!("local_{key}.toml"))
+    daemon::personal_file(&sb.dir.join("projects"), None, folder)
 }
 
 fn open_folder(c: &mut Client, folder: &Path) -> String {
