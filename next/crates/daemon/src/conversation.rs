@@ -106,8 +106,12 @@ const UNAVAILABLE: [&str; 10] = [
 ];
 
 /// What jwn answers itself (REQ-418, REQ-419), whatever the engine lists under the same name.
-const OWN: [(&str, &str); 7] = [
+const OWN: [(&str, &str); 8] = [
     ("exit", "salir de la conversación"),
+    (
+        "plan",
+        "entrar en modo plan, y enviar lo que sigue si hay algo",
+    ),
     ("rename", "cambiar el nombre de la conversación"),
     ("color", "cambiar el color de la conversación"),
     ("model", "cambiar el modelo"),

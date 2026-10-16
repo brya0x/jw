@@ -702,6 +702,15 @@ pub fn send(shared: &Shared, node: &str, text: &str, images: Vec<Image>) -> Done
                     format!("/{word} necesita la pantalla de Claude: usa `command claude`"),
                 ));
             }
+            "plan" => {
+                set(shared, node, None, None, None, None, Some(Mode::Plan))?;
+                // What follows is the first message of the plan; it waits for the mode.
+                return if arg.is_empty() {
+                    Ok(None)
+                } else {
+                    send(shared, node, arg, images)
+                };
+            }
             "cost" => {
                 let mut core = shared.lock();
                 let pane = pane_of(&core, node)?;

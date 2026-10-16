@@ -14,13 +14,14 @@ def logline(s):
         f.write(s + "\n")
 logline("start " + json.dumps(argv) + " cwd=" + os.getcwd() + " var=" + os.environ.get("MY_VAR", ""))
 lock = threading.Lock()
+mode = ["default"]
 total = [0.0]
 def out(o):
     with lock:
         sys.stdout.write(json.dumps(o) + "\n")
         sys.stdout.flush()
 def init():
-    out({"type": "system", "subtype": "init", "session_id": session, "model": "claude-sonnet-5-5", "permissionMode": "default", "skills": ["jw"]})
+    out({"type": "system", "subtype": "init", "session_id": session, "model": "claude-sonnet-5-5", "permissionMode": mode[0], "skills": ["jw"]})
 def say(text):
     out({"type": "stream_event", "event": {"type": "message_start"}})
     out({"type": "stream_event", "event": {"type": "content_block_start", "content_block": {"type": "text"}}})
@@ -93,6 +94,7 @@ for line in sys.stdin:
             continue
         if m["request"]["subtype"] == "set_permission_mode":
             logline("control set_permission_mode " + m["request"]["mode"])
+            mode[0] = "default" if m["request"]["mode"] == "manual" else m["request"]["mode"]
             out({"type": "control_response", "response": {"subtype": "success", "request_id": m["request_id"], "response": {"mode": m["request"]["mode"]}}})
             out({"type": "system", "subtype": "status", "status": None, "permissionMode": m["request"]["mode"], "session_id": session})
         continue

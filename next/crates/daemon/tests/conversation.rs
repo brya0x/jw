@@ -362,6 +362,38 @@ fn a_command_that_needs_claudes_screen_is_not_sent_and_says_where_to_go() {
 }
 
 #[test]
+fn plan_enters_plan_mode_and_sends_what_follows_as_the_first_message_of_the_plan() {
+    let mut r = rig();
+    let (node, _) = r.open();
+    r.send(&node, "/plan");
+    r.until(&node, "plan mode", |v| v["mode"] == "plan");
+    wait_for("the engine to have been asked", || {
+        log_lines(&r.log)
+            .iter()
+            .any(|l| l == "control set_permission_mode plan")
+    });
+    assert!(
+        !log_lines(&r.log).iter().any(|l| l.starts_with("user")),
+        "a bare /plan sends nothing to the model"
+    );
+    // back to manual, then a plan with its first message
+    r.send(&node, "/mode manual");
+    r.until(&node, "manual again", |v| v["mode"] == "manual");
+    r.send(&node, "/plan cambia el nombre de verify");
+    let v = r.idle_after(&node, 1);
+    assert_eq!(v["mode"], "plan");
+    assert_eq!(items(&v, "user")[0]["text"], "cambia el nombre de verify");
+    let log = log_lines(&r.log);
+    let mode_at = log
+        .iter()
+        .rposition(|l| l == "control set_permission_mode plan")
+        .unwrap();
+    let user_at = log.iter().position(|l| l.starts_with("user")).unwrap();
+    assert!(mode_at < user_at, "the mode goes first: {log:?}");
+    r.stop();
+}
+
+#[test]
 fn a_permission_waits_for_whoever_answers_first_and_says_where_it_came_from() {
     let mut r = rig();
     let (node, _) = r.open();
