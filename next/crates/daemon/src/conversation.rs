@@ -1384,6 +1384,7 @@ impl State {
                     _ => TaskKind::Other,
                 };
                 self.tasks.retain(|t| t.id != task);
+                self.task_links.retain(|l| l.task != task);
                 self.tasks.push(Task {
                     id: task.to_owned(),
                     kind,
@@ -1393,7 +1394,8 @@ impl State {
                     info: None,
                 });
                 if self.tasks.len() > TASKS_KEPT {
-                    self.tasks.remove(0);
+                    let gone = self.tasks.remove(0);
+                    self.task_links.retain(|l| l.task != gone.id);
                 }
                 self.task_links.push(TaskLink {
                     task: task.to_owned(),
@@ -1681,13 +1683,14 @@ impl State {
                 .unwrap_or("el motor terminó con un error");
             self.note(clip(why, LINE_CHARS), Some(Tone::Error));
         }
-        // A tool that never answered was cut with the turn.
+        // A tool that never answered was cut with the turn, and so was a subagent that ran in front.
         for id in self.running_tools() {
             self.set_tool(&id, |t| {
                 t.0 = ToolState::Denied;
                 t.1 = Some("Interrumpido".into());
             });
         }
+        self.cut_agents(false);
         self.push(Item::Result {
             ms,
             tools: self.tools_in_turn,
@@ -1762,6 +1765,8 @@ impl State {
                 t.1 = Some("El motor se detuvo".into());
             });
         }
+        self.cut_agents(true);
+        self.task_links.clear();
         self.status = ConvStatus::Dead;
         self.since = None;
         self.note(reason.to_owned(), Some(Tone::Error));
@@ -1897,6 +1902,32 @@ impl State {
                 *by = t.2;
                 *output = t.3;
                 return;
+            }
+        }
+    }
+
+    /// Subagents and tasks that ran in front die with the turn they were in; with `all`, those in the
+    /// background too, because the engine that ran them is gone. None is left running for ever.
+    fn cut_agents(&mut self, all: bool) {
+        let links = &self.task_links;
+        let behind = |tool: &str| {
+            links
+                .iter()
+                .any(|l| l.background && l.tool_use_id.as_deref() == Some(tool))
+        };
+        for item in &mut self.items {
+            if let Item::Agent { id, state, .. } = item
+                && matches!(*state, ToolState::Run | ToolState::Ask)
+                && (all || !behind(id))
+            {
+                *state = ToolState::Failed;
+            }
+        }
+        for t in &mut self.tasks {
+            if t.state == TaskState::Run
+                && (all || !links.iter().any(|l| l.task == t.id && l.background))
+            {
+                t.state = TaskState::Stopped;
             }
         }
     }
@@ -2977,5 +3008,45 @@ mod tests {
             (steps.len(), name.as_str(), steps[0].as_str()),
             (STEPS_KEPT, "Explore", "Read f0")
         );
+    }
+
+    #[test]
+    fn a_turn_that_ends_cuts_the_subagent_that_ran_in_front_but_not_the_task_in_the_background_and_a_dead_engine_cuts_both()
+     {
+        let mut s = st();
+        s.send("go", vec![], 1);
+        s.apply(&json!({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "ag", "name": "Task", "input": {"description": "d", "subagent_type": "Explore"}}]}}), 2);
+        s.apply(&json!({"type": "system", "subtype": "task_started", "task_id": "t1", "tool_use_id": "ag", "description": "d", "is_backgrounded": false, "task_type": "local_agent"}), 3);
+        s.apply(&json!({"type": "system", "subtype": "task_started", "task_id": "t2", "description": "sleep", "is_backgrounded": true, "task_type": "local_bash"}), 3);
+        s.apply(&result(0.0), 4);
+        let card = |s: &State| {
+            s.items
+                .iter()
+                .find_map(|i| {
+                    if let Item::Agent { state, .. } = i {
+                        Some(*state)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap()
+        };
+        assert_eq!(
+            card(&s),
+            ToolState::Failed,
+            "it ran in front and the turn ended without it"
+        );
+        let task = |s: &State, id: &str| s.tasks.iter().find(|t| t.id == id).unwrap().state;
+        assert_eq!(
+            (task(&s, "t1"), task(&s, "t2")),
+            (TaskState::Stopped, TaskState::Run)
+        );
+        s.engine_gone("el motor se cerró");
+        assert_eq!(
+            task(&s, "t2"),
+            TaskState::Stopped,
+            "the engine that ran it is gone"
+        );
+        assert!(s.task_links.is_empty());
     }
 }

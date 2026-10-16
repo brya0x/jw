@@ -156,6 +156,14 @@ impl Of {
     }
 }
 
+/// How many tasks the engine runs in the background: what the footer's gear counts.
+fn running_tasks(conv: &Conversation) -> usize {
+    conv.tasks
+        .iter()
+        .filter(|t| t.state == contract::conversation::TaskState::Run)
+        .count()
+}
+
 /// A list of jwn's (`panels.rs`): the rows, the one lit, what is typed to narrow them, and, for
 /// the conversations still to arrive, that it waits.
 struct ListState {
@@ -165,6 +173,19 @@ struct ListState {
     loading: bool,
     /// `/continue`: take the first one that arrives.
     first: bool,
+}
+
+impl ListState {
+    /// A list that is ready, with its first row lit and nothing typed.
+    fn of(panel: Panel) -> ListState {
+        ListState {
+            panel,
+            at: 0,
+            filter: String::new(),
+            loading: false,
+            first: false,
+        }
+    }
 }
 
 enum Pop {
@@ -573,27 +594,19 @@ impl Ui {
                 }
                 self.want_saved = true;
                 self.pop = Some(Pop::List(ListState {
-                    panel: Panel {
+                    loading: true,
+                    first: word == "continue",
+                    ..ListState::of(Panel {
                         title: "retomar una conversación".into(),
                         rows: Vec::new(),
                         empty: "cargando…".into(),
-                    },
-                    at: 0,
-                    filter: String::new(),
-                    loading: true,
-                    first: word == "continue",
+                    })
                 }));
                 return None;
             }
             _ => return None,
         };
-        self.pop = Some(Pop::List(ListState {
-            panel,
-            at: 0,
-            filter: String::new(),
-            loading: false,
-            first: false,
-        }));
+        self.pop = Some(Pop::List(ListState::of(panel)));
         None
     }
 
@@ -1203,11 +1216,7 @@ impl Ui {
     fn draw_foot(&self, g: &mut Grid, conv: &Conversation, (ix, y, iw): (usize, usize, usize)) {
         let (label, colour) = mode_look(conv.mode);
         g.put(ix + 1, y, label, Style::fg(colour));
-        let running = conv
-            .tasks
-            .iter()
-            .filter(|t| t.state == contract::conversation::TaskState::Run)
-            .count();
+        let running = running_tasks(conv);
         if running > 0 {
             g.put(
                 ix + 2 + label.chars().count(),
@@ -1635,17 +1644,11 @@ impl Ui {
         // The whole plan, when the box has room for a few lines of it only.
         if ask.kind == AskKind::Plan && ev.code == KeyCode::Char('v') {
             let rows = ask.plan.iter().map(|l| panels::line(l.clone())).collect();
-            self.pop = Some(Pop::List(ListState {
-                panel: Panel {
-                    title: "plan".into(),
-                    rows,
-                    empty: "El plan está vacío.".into(),
-                },
-                at: 0,
-                filter: String::new(),
-                loading: false,
-                first: false,
-            }));
+            self.pop = Some(Pop::List(ListState::of(Panel {
+                title: "plan".into(),
+                rows,
+                empty: "El plan está vacío.".into(),
+            })));
             return None;
         }
         // A choice of several: a number marks or clears an option and `↵` sends the marked ones.
@@ -1991,11 +1994,7 @@ impl Ui {
             let (label, _) = mode_look(conv.mode);
             let left = ix + 1..ix + 1 + label.chars().count();
             let right = (ix + iw).saturating_sub(conv.model.chars().count() + 1)..ix + iw;
-            let running = conv
-                .tasks
-                .iter()
-                .filter(|t| t.state == contract::conversation::TaskState::Run)
-                .count();
+            let running = running_tasks(conv);
             let gear_at = ix + 2 + label.chars().count();
             if left.contains(&x) {
                 self.open_pick(conv, Of::Mode);
