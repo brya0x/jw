@@ -45,11 +45,13 @@ A workspace whose mark is `permission`, `question` or `plan` has an agent waitin
   10 minutes or `--timeout`, and prints the text of Claude's last answer instead of
   "sent to pane". If the turn stops because Claude asks something, it prints the question with
   its numbered options and exits 3: the person has to answer it.
-- `{bin} worktree <name> [--in repo] [--branch B] [--from REF] [--task TEXT]` makes a git worktree
+- `{bin} worktree <name> [--in repo] [--branch B] [--from REF] [--open shell|claude] [--task TEXT]` makes a git worktree
   of the repository you are in (or `--in`: a folder or a workspace), the way the person would, with
-  what the repository's `.jw.toml` says (its folder, its branch template, its setup and its panes).
-  It prints the workspace's id and path. With `--task` it hands the text to the agent that starts
-  there, as `prompt` does.
+  what the repository's `.jw.toml` says (its folder, its branch template, its setup, the files it
+  copies and its ports). It opens one panel, a shell or `claude` (`--open`, else what the settings
+  say); its setup runs there first. It prints the workspace's id and path, and on stderr what it
+  copied and the ports it gave. With `--task` it opens `claude` and hands it the text, as `prompt`
+  does.
 - `{bin} pane open <workspace> [--split right|down] [--of P] [--] [program words]` opens a pane
   (a shell when no program is given) and prints its id.
 - `{bin} pane close <workspace> <pane> [--force]` closes a pane. It refuses your own pane and the

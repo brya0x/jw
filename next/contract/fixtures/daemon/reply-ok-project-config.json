@@ -11,10 +11,7 @@
     "setup": [
       "bun install --frozen-lockfile"
     ],
-    "panes": [
-      "nvim",
-      "claude"
-    ],
+    "open": "claude",
     "copy": [
       ".env",
       "apps/web/.env.local"

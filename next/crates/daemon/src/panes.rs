@@ -36,10 +36,25 @@ pub fn new_pane(
     beside: Option<Id>,
     dir: Option<SplitDir>,
 ) -> Done {
-    if program.as_ref().is_some_and(|p| p.is_empty()) {
+    new_pane_then(shared, workspace, program, None, beside, dir)
+}
+
+/// `new_pane`, where `then` is started when `program` ends well (a worktree's setup, and then
+/// `claude`, in one panel: REQ-507).
+pub fn new_pane_then(
+    shared: &Shared,
+    workspace: &Id,
+    program: Option<Vec<String>>,
+    then: Option<Vec<String>>,
+    beside: Option<Id>,
+    dir: Option<SplitDir>,
+) -> Done {
+    if program.as_ref().is_some_and(|p| p.is_empty()) || then.as_ref().is_some_and(|p| p.is_empty())
+    {
         return Err(err(ErrorCode::BadRequest, "program is empty"));
     }
     let argv = program.map(|p| crate::launch::with_session(&p, new_id));
+    let then = then.map(|p| crate::launch::with_session(&p, new_id));
     let (path, events, shell, env, setup, hooks) = {
         let core = shared.lock();
         let ws = core.workspace(workspace)?;
@@ -67,12 +82,16 @@ pub fn new_pane(
         )
     };
     let launched = with_agent_hooks(argv.as_deref(), hooks.as_deref());
+    let then_launched = with_agent_hooks(then.as_deref(), hooks.as_deref());
     let id = new_id();
     let term = pty::spawn(
         &id,
         &shell,
         Path::new(&path),
-        launched.as_deref(),
+        pty::Program {
+            argv: launched.as_deref(),
+            then: then_launched.as_deref(),
+        },
         &env,
         &setup,
         events,
@@ -107,7 +126,10 @@ pub fn new_pane(
         attention: Vec::new(),
         running: None,
         last_program: None,
-        resume: argv.as_deref().and_then(crate::launch::agent_resume),
+        resume: then
+            .as_deref()
+            .or(argv.as_deref())
+            .and_then(crate::launch::agent_resume),
     });
     core.attach_term(&id, term);
     core.refresh();
@@ -262,7 +284,10 @@ pub fn restore(shared: &Shared) {
             &id,
             &shell,
             Path::new(&cwd),
-            launched.as_deref(),
+            pty::Program {
+                argv: launched.as_deref(),
+                then: None,
+            },
             &env,
             &setup,
             events.clone(),

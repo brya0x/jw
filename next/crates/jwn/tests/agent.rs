@@ -26,7 +26,13 @@ impl World {
         std::fs::write(repo.join("f"), "x").unwrap();
         git(&repo, &["add", "."]);
         git(&repo, &["commit", "-q", "-m", "init"]);
-        let daemon = Some(env.start());
+        // What a panel that opens with `claude` finds: a `bin` the tests put an agent in.
+        let bin = env.dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        // Only the system's folders besides it, so that the person's own `claude` is never the one
+        // a test starts.
+        let path = format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", bin.display());
+        let daemon = Some(env.start_with(&[("PATH", path)]));
         World { env, daemon, repo }
     }
 
@@ -95,6 +101,23 @@ impl World {
         .unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
         (program, got)
+    }
+
+    /// The same stand-in, as the `claude` the daemon's panes find on their `PATH`, writing what it
+    /// got to the file that is returned.
+    fn agent_on_path(&self) -> PathBuf {
+        let got = self.env.dir.join("bin/got.txt");
+        let program = self.env.dir.join("bin/claude");
+        std::fs::write(
+            &program,
+            format!(
+                "#!/bin/sh\nprintf 'agent ready\\n'\nIFS= read -r line\nprintf '%s' \"$line\" > {}\nsleep 30\n",
+                got.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        got
     }
 
     fn stop(mut self) {
@@ -310,14 +333,10 @@ fn a_screen_that_never_settles_fails_without_writing_and_now_writes_at_once() {
 fn worktree_makes_it_with_the_repositorys_settings_and_hands_its_agent_a_task() {
     let w = World::new("ag-wt");
     let (_, shell) = w.open_repo();
-    let (program, got) = w.agent("a2");
+    let got = w.agent_on_path();
     std::fs::write(
         w.repo.join(".jw.toml"),
-        format!(
-            "branch = \"bryan/{{name}}\"\nsetup = [\"true\"]\n[layout]\nrun = \"{} {}\"\n",
-            program.display(),
-            got.display()
-        ),
+        "branch = \"bryan/{name}\"\nsetup = [\"true\"]\n",
     )
     .unwrap();
 
@@ -333,9 +352,9 @@ fn worktree_makes_it_with_the_repositorys_settings_and_hands_its_agent_a_task() 
         .output()
         .unwrap();
     assert!(String::from_utf8_lossy(&branches.stdout).contains("bryan/ws-1"));
-    // Its panes: the layout's agent and the setup.
+    // Its one panel: the setup ran in it and then the agent started (`--task` opens `claude`).
     let panes = w.json(&["pane", "ls", id, "--json"]);
-    assert_eq!(panes.as_array().unwrap().len(), 2);
+    assert_eq!(panes.as_array().unwrap().len(), 1);
     wait_for("the task", || {
         std::fs::read_to_string(&got).is_ok_and(|s| s.contains("build it"))
     });

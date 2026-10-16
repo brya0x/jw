@@ -242,11 +242,13 @@ pub enum Cmd {
     ProjectConfig {
         repo: String,
     },
-    /// Start the panes of a workspace that has none: a worktree's from its repository's
-    /// `.jw.toml` (the layout and, in a pane of its own, the setup), any other's one shell.
-    /// The result is `{panes: [id]}`, in the order of the layout.
+    /// Start the one panel of a workspace that has none: a shell or `claude`, as `open` says or,
+    /// when it does not, as the workspace's settings do; a worktree's setup runs in it first
+    /// (REQ-506, REQ-507). The result is `{panes: [id]}`.
     StartWorkspace {
         workspace: Id,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        open: Option<OpenKind>,
     },
     /// Open a pane: the user's shell, with `program` run inside it when given (the shell
     /// starts it, and is still there when it ends).
@@ -536,6 +538,15 @@ pub struct FileListing {
     pub total: usize,
 }
 
+/// What the one panel of a workspace is: a shell or `claude` (REQ-504).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenKind {
+    #[default]
+    Shell,
+    Claude,
+}
+
 /// Where a project's settings are written: its repository or the person's own folder (REQ-482).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -563,7 +574,8 @@ pub struct ProjectInfo {
     pub branch: String,
     /// The setup commands as written.
     pub setup: Vec<String>,
-    pub panes: Vec<String>,
+    /// What a workspace opens with: the one panel's program (REQ-504).
+    pub open: OpenKind,
     /// The files of the checkout a new worktree gets a copy of (REQ-489).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub copy: Vec<String>,

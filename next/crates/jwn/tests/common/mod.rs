@@ -32,7 +32,17 @@ impl Env {
     }
 
     pub fn start(&self) -> Child {
-        let mut child = self.jwn().arg("daemon").spawn().unwrap();
+        self.start_with(&[])
+    }
+
+    /// The daemon, with `env` added to its own environment (what its panes run with).
+    pub fn start_with(&self, env: &[(&str, String)]) -> Child {
+        let mut cmd = self.jwn();
+        cmd.arg("daemon");
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        let mut child = cmd.spawn().unwrap();
         let end = Instant::now() + Duration::from_secs(5);
         while Instant::now() < end {
             if wire::Conn::connect(&self.dir.join("s.sock")).is_ok() {

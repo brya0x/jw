@@ -27,9 +27,25 @@ pub fn quote(shell: &str, word: &str) -> String {
     }
 }
 
-/// The `-c` script that runs `argv` and then turns the shell back into an ordinary one.
-pub fn script(shell: &str, argv: &[String], setup: &crate::integration::Setup) -> String {
-    let words: Vec<String> = argv.iter().map(|w| quote(shell, w)).collect();
+/// The `-c` script that runs `argv` — and, when it ends well, `then` — and then turns the shell
+/// back into an ordinary one. `then` is typed in the interactive shell, so `claude` is the
+/// function that opens a conversation (REQ-371) and not the original.
+pub fn script(
+    shell: &str,
+    argv: &[String],
+    then: Option<&[String]>,
+    setup: &crate::integration::Setup,
+) -> String {
+    let line = |a: &[String]| -> String {
+        a.iter()
+            .map(|w| quote(shell, w))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let words = match then {
+        Some(then) => format!("{} && {}", line(argv), line(then)),
+        None => line(argv),
+    };
     // The shell that takes over keeps the integration: its environment and its arguments.
     let env: Vec<String> = setup
         .env
@@ -48,8 +64,7 @@ pub fn script(shell: &str, argv: &[String], setup: &crate::integration::Setup) -
         format!("{} ", args.join(" "))
     };
     format!(
-        "{}; exec {env_prefix}{} {arg_part}-i",
-        words.join(" "),
+        "{words}; exec {env_prefix}{} {arg_part}-i",
         quote(shell, shell)
     )
 }
@@ -185,15 +200,27 @@ mod tests {
         let s = script(
             "/bin/zsh",
             &["nvim".into(), "a b.rs".into()],
+            None,
             &Default::default(),
         );
         assert_eq!(s, "'nvim' 'a b.rs'; exec '/bin/zsh' -i");
+        // what follows runs only when the first ended well (REQ-507); the shell stays either way
+        let chained = script(
+            "/bin/zsh",
+            &["sh".into(), "-c".into(), "make".into()],
+            Some(&["claude".into(), "--session-id".into(), "x".into()]),
+            &Default::default(),
+        );
+        assert_eq!(
+            chained,
+            "'sh' '-c' 'make' && 'claude' '--session-id' 'x'; exec '/bin/zsh' -i"
+        );
         let with = crate::integration::Setup {
             args: vec!["--rcfile".into(), "/s/rc.sh".into()],
             env: vec![("K".into(), "v w".into())],
         };
         assert_eq!(
-            script("/bin/bash", &["ls".into()], &with),
+            script("/bin/bash", &["ls".into()], None, &with),
             "'ls'; exec env 'K=v w' '/bin/bash' '--rcfile' '/s/rc.sh' -i"
         );
     }

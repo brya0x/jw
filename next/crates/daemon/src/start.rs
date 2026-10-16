@@ -1,15 +1,15 @@
-//! `project_config` and `start_workspace`: what a worktree of a repository will be, and the
-//! panes it opens with (spec REQ-334, REQ-336 to REQ-341).
+//! `project_config` and `start_workspace`: what a worktree of a repository will be, and the one
+//! panel it opens with (spec REQ-334, REQ-342 to REQ-345, REQ-500 to REQ-511).
 
 use std::path::{Path, PathBuf};
 
-use contract::{ConfigFrom, ErrorCode, Id, Layout, ProjectInfo, SplitDir, WorkspaceKind};
+use contract::{ConfigFrom, ErrorCode, Id, OpenKind, ProjectInfo, WorkspaceKind};
 use serde_json::json;
 
 use crate::commands::{Done, ErrorBody, err};
-use crate::project::{self, Node, Project, SETUP_SHARE};
+use crate::project::{self, Project};
 use crate::server::Shared;
-use crate::{git, panes, rename};
+use crate::{git, panes};
 
 /// The settings of the repository `top` is the top level of; a file that cannot be used is a
 /// `bad_request` that says why and the line.
@@ -29,7 +29,6 @@ pub fn project_config(shared: &Shared, repo: &str) -> Done {
     let dir = crate::workspaces::absolute(repo)?;
     let top = git::toplevel(&dir).map_err(|m| err(ErrorCode::GitFailed, m))?;
     let project = load(shared, Path::new(&top))?;
-    let shell = shared.lock().shell.clone();
     let info = ProjectInfo {
         source: project
             .source
@@ -40,7 +39,7 @@ pub fn project_config(shared: &Shared, repo: &str) -> Done {
         root: project.root.to_string_lossy().into_owned(),
         branch: project.branch.clone(),
         setup: project.setup.clone(),
-        panes: project.pane_names(&shell),
+        open: project.open,
         copy: project.copy.clone(),
         ports: project.ports.clone(),
     };
@@ -62,9 +61,14 @@ pub fn write_project_config(shared: &Shared, repo: &str, to: ConfigFrom, text: &
     ))
 }
 
-/// One pane, started with `program` (the plain shell when none).
-fn spawn(shared: &Shared, workspace: &Id, program: Option<Vec<String>>) -> Result<Id, ErrorBody> {
-    let reply = panes::new_pane(shared, workspace, program, None, None)?;
+/// The one panel of a workspace, started with `program` and, when it ends well, `then`.
+fn spawn(
+    shared: &Shared,
+    workspace: &Id,
+    program: Option<Vec<String>>,
+    then: Option<Vec<String>>,
+) -> Result<Id, ErrorBody> {
+    let reply = panes::new_pane_then(shared, workspace, program, then, None, None)?;
     reply
         .as_ref()
         .and_then(|r| r["pane"].as_str())
@@ -72,21 +76,10 @@ fn spawn(shared: &Shared, workspace: &Id, program: Option<Vec<String>>) -> Resul
         .ok_or_else(|| err(ErrorCode::Io, "the pane has no id"))
 }
 
-/// The tree of `node` with the panes that were started for its leaves, in their order.
-fn tree(node: &Node, ids: &mut impl Iterator<Item = Id>) -> Option<Layout> {
-    Some(match node {
-        Node::Leaf(_) => Layout::Pane { pane: ids.next()? },
-        Node::Split { dir, ratio, a, b } => Layout::Split {
-            dir: *dir,
-            ratio: *ratio,
-            a: Box::new(tree(a, ids)?),
-            b: Box::new(tree(b, ids)?),
-        },
-    })
-}
-
-/// `start_workspace`: the panes of a workspace that has none.
-pub fn start_workspace(shared: &Shared, workspace: &Id) -> Done {
+/// `start_workspace`: the one panel of a workspace that has none (REQ-506): a shell or `claude`
+/// as `open` says or, without it, as the settings do. A worktree's setup runs in that panel first
+/// (REQ-507); a folder has no setup (REQ-500).
+pub fn start_workspace(shared: &Shared, workspace: &Id, open: Option<OpenKind>) -> Done {
     let (kind, path, top, branch) = {
         let core = shared.lock();
         let ws = core.workspace(workspace)?;
@@ -103,57 +96,22 @@ pub fn start_workspace(shared: &Shared, workspace: &Id) -> Done {
             ws.branch.clone().unwrap_or_default(),
         )
     };
-    // A worktree has its repository's settings and all they give it; a folder has its own and
-    // only its panes (REQ-500).
     let worktree_of = top.filter(|_| kind == WorkspaceKind::Worktree);
     let project = match &worktree_of {
         Some(top) => load(shared, &PathBuf::from(top))?,
         None => load_folder(shared, Path::new(&path))?,
     };
-
-    let mut ids = Vec::new();
-    match &project.layout {
-        None => ids.push(spawn(shared, workspace, None)?),
-        Some(node) => {
-            for run in node.leaves() {
-                ids.push(spawn(shared, workspace, project.argv(run))?);
-            }
-        }
-    }
-    let mut layout = match &project.layout {
-        Some(node) => tree(node, &mut ids.clone().into_iter()),
-        None => ids.first().map(|id| Layout::Pane { pane: id.clone() }),
-    };
-    if worktree_of.is_some() && !project.setup.is_empty() {
+    let claude = vec!["claude".to_owned()];
+    let agent = open.unwrap_or(project.open) == OpenKind::Claude;
+    let id = if worktree_of.is_some() && !project.setup.is_empty() {
         let name = Path::new(&path)
             .file_name()
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
         let script = project::setup_script(&project.setup, &name, &branch);
-        let id = spawn(
-            shared,
-            workspace,
-            Some(vec!["/bin/sh".into(), "-c".into(), script]),
-        )?;
-        rename::pane(shared, &id, "setup")?;
-        layout = layout.map(|above| Layout::Split {
-            dir: SplitDir::Col,
-            ratio: SETUP_SHARE,
-            a: Box::new(above),
-            b: Box::new(Layout::Pane { pane: id.clone() }),
-        });
-        ids.push(id);
-    }
-    let mut core = shared.lock();
-    if let Some(ws) = core
-        .model
-        .workspaces
-        .iter_mut()
-        .find(|w| w.id == *workspace)
-        // A pane closed while the others started leaves the tree to `reconcile`.
-        .filter(|ws| ids.iter().all(|i| ws.panes.iter().any(|p| p.id == *i)))
-    {
-        ws.layout = layout;
-    }
-    core.refresh();
-    Ok(Some(json!({ "panes": ids })))
+        let setup = vec!["/bin/sh".to_owned(), "-c".to_owned(), script];
+        spawn(shared, workspace, Some(setup), agent.then_some(claude))?
+    } else {
+        spawn(shared, workspace, agent.then_some(claude), None)?
+    };
+    Ok(Some(json!({ "panes": [id] })))
 }

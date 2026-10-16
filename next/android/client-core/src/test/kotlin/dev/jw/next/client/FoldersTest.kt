@@ -5,6 +5,7 @@ import dev.jw.next.contract.DaemonMsg
 import dev.jw.next.contract.DirEntry
 import dev.jw.next.contract.DirListing
 import dev.jw.next.contract.Node
+import dev.jw.next.contract.OpenKind
 import dev.jw.next.contract.ProjectInfo
 import java.io.File
 import kotlin.test.Test
@@ -70,7 +71,7 @@ class FoldersTest {
         assertEquals(emptySet(), takenNames("/home/u/code/app-trees", null, open), "the folder of the settings' root, not <repo>-wt")
     }
 
-    private val defaults = ProjectInfo(null, "/home/u/code/app-wt", "feat/{name}", emptyList(), listOf("zsh"))
+    private val defaults = ProjectInfo(null, "/home/u/code/app-wt", "feat/{name}", emptyList(), OpenKind.Shell)
     private val ready = WorktreeSettings.Ready(defaults)
 
     @Test
@@ -92,16 +93,15 @@ class FoldersTest {
 
     @Test
     fun theBranchTheFolderTheSetupAndThePanesComeFromTheSettings() {
-        val info = ProjectInfo("/home/u/code/app/.jw.toml", "/home/u/code/app-trees", "bryan/{name}", listOf("bun install", "cp .env.example .env"), listOf("nvim", "claude"))
+        val info = ProjectInfo("/home/u/code/app/.jw.toml", "/home/u/code/app-trees", "bryan/{name}", listOf("bun install", "cp .env.example .env"), OpenKind.Claude)
         val plan = planWorktree(WorktreeSettings.Ready(info), "ws-3", setOf("ws-1"))
         assertIs<WorktreePlan.Ok>(plan)
         assertEquals("bryan/ws-3", plan.branch)
         assertEquals("ws-3", plan.folder)
         assertEquals("app-trees/ws-3", plan.place)
         assertEquals(listOf("bun install", "cp .env.example .env"), plan.info.setup)
-        assertEquals(listOf("nvim", "claude"), plan.info.panes)
-        assertEquals(listOf("nvim", "claude", "setup"), plan.info.programs)
-        assertEquals(listOf("zsh"), defaults.programs, "no setup, no setup pane")
+        assertEquals(OpenKind.Claude, plan.info.open)
+        assertEquals(OpenKind.Shell, defaults.open, "a shell unless the settings say claude (REQ-504)")
         assertEquals(WorktreePlan.Wrong("app-trees/ws-1 ya existe"), planWorktree(WorktreeSettings.Ready(info), "ws-1", setOf("ws-1")))
     }
 
@@ -161,9 +161,9 @@ class FoldersTest {
         var got = 0
         source.listDir(null, false) { got += if (it.isFailure) 1 else 0 }
         source.openFolder("/x") { got += if (it.isFailure) 1 else 0 }
-        source.createWorktree("/x", "feat/a", null, "a") { got += if (it.isFailure) 1 else 0 }
+        source.createWorktree("/x", "feat/a", null, "a", null) { got += if (it.isFailure) 1 else 0 }
         source.projectConfig("/x") { got += if (it.isFailure) 1 else 0 }
-        source.startWorkspace("w") { got += if (it.isFailure) 1 else 0 }
+        source.startWorkspace("w", null) { got += if (it.isFailure) 1 else 0 }
         assertEquals(5, got)
     }
 }

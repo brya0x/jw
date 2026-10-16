@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use contract::ProjectInfo;
+use contract::{OpenKind, ProjectInfo};
 use crossterm::event::KeyCode;
 use daemon::browse::{home, is_git, subdirs};
 
@@ -401,6 +401,8 @@ pub enum Make {
         branch: String,
         from: String,
         folder: String,
+        /// What the worktree opens with, as the person left it (REQ-510).
+        open: OpenKind,
     },
 }
 
@@ -416,6 +418,8 @@ pub struct Worktree {
     open: Vec<PathBuf>,
     pub config: Config,
     plan: Plan,
+    /// What this worktree opens with: the settings' choice until `tab` changes it.
+    pub opens: OpenKind,
 }
 
 /// What `git` prints for `args` run in `dir`, when it succeeds.
@@ -461,6 +465,7 @@ impl Worktree {
             open,
             config: Config::Reading,
             plan: Plan::Reading,
+            opens: OpenKind::Shell,
         }
     }
 
@@ -472,7 +477,10 @@ impl Worktree {
     /// moves to the first `ws-N` that is free.
     pub fn set_config(&mut self, reply: Result<ProjectInfo, String>) {
         self.config = match reply {
-            Ok(info) => Config::Ready(info),
+            Ok(info) => {
+                self.opens = info.open;
+                Config::Ready(info)
+            }
             Err(why) => Config::Refused(why),
         };
         if self.picked {
@@ -527,8 +535,15 @@ impl Worktree {
                         branch: branch.clone(),
                         from: self.from.clone(),
                         folder: self.name.clone(),
+                        open: self.opens,
                     };
                 }
+            }
+            KeyCode::Tab => {
+                self.opens = match self.opens {
+                    OpenKind::Shell => OpenKind::Claude,
+                    OpenKind::Claude => OpenKind::Shell,
+                };
             }
             KeyCode::Backspace => {
                 if self.picked {
@@ -583,13 +598,24 @@ pub fn draw_worktree(g: &mut Grid, (x, y, w, _): Rect, t: &Worktree) {
                         let label = if i == 0 { "setup     " } else { "          " };
                         v.push((format!("{label}{line}"), Style::fg(look::yellow())));
                     }
-                    let setup = if info.setup.is_empty() {
+                    let mark = |kind: OpenKind, name: &str| {
+                        if t.opens == kind {
+                            format!("[{name}]")
+                        } else {
+                            format!(" {name} ")
+                        }
+                    };
+                    let after = if info.setup.is_empty() {
                         ""
                     } else {
-                        " │ setup"
+                        "  tras el setup"
                     };
                     v.push((
-                        format!("paneles   {}{setup}", info.panes.join(" │ ")),
+                        format!(
+                            "abre      {} {}{after}",
+                            mark(OpenKind::Shell, "shell"),
+                            mark(OpenKind::Claude, "claude")
+                        ),
                         plain,
                     ));
                     if !info.copy.is_empty() {
@@ -615,7 +641,10 @@ pub fn draw_worktree(g: &mut Grid, (x, y, w, _): Rect, t: &Worktree) {
         v.push((String::new(), plain));
         let ok = matches!(t.plan(), Plan::Ok { .. });
         v.push((
-            format!("↵ crear{} · esc cancelar", if ok { " y abrir" } else { "" }),
+            format!(
+                "↵ crear{} · tab shell o claude · esc cancelar",
+                if ok { " y abrir" } else { "" }
+            ),
             Style::fg(look::dim()),
         ));
         v
@@ -801,7 +830,7 @@ mod tests {
             root: root.join("app-wt").to_string_lossy().into_owned(),
             branch: "feat/{name}".into(),
             setup: Vec::new(),
-            panes: vec!["zsh".into()],
+            open: OpenKind::Shell,
         }
     }
 
@@ -879,7 +908,8 @@ mod tests {
                 repo: app,
                 branch: "feat/fresh".into(),
                 from: "main".into(),
-                folder: "fresh".into()
+                folder: "fresh".into(),
+                open: OpenKind::Shell,
             }
         );
         assert_eq!(t.press(KeyCode::Esc, false), Make::Close);
@@ -932,7 +962,7 @@ mod tests {
             root: root.join("trees").to_string_lossy().into_owned(),
             branch: "bryan/{name}".into(),
             setup: vec!["bun install".into()],
-            panes: vec!["nvim".into(), "claude".into()],
+            open: OpenKind::Claude,
         };
         let t = ready(&app, vec![], info.clone());
         let Plan::Ok { branch, folder } = t.plan() else {
@@ -956,7 +986,8 @@ mod tests {
                 repo: app,
                 branch: "bryan/x".into(),
                 from: "main".into(),
-                folder: "x".into()
+                folder: "x".into(),
+                open: OpenKind::Claude,
             }
         );
         let _ = std::fs::remove_dir_all(root);

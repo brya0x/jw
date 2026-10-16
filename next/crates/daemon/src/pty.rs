@@ -57,13 +57,20 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
 }
 
+/// What runs inside a pane's shell: a program and, when it ends well, another (REQ-507).
+#[derive(Clone, Copy, Default)]
+pub struct Program<'a> {
+    pub argv: Option<&'a [String]>,
+    pub then: Option<&'a [String]>,
+}
+
 /// Start `shell` in `cwd`, running `program` inside it when given (see `launch`). Its
 /// output is fed to the screen and announced on `events`.
 pub fn spawn(
     pane: &Id,
     shell: &str,
     cwd: &Path,
-    program: Option<&[String]>,
+    program: Program,
     env: &[(String, String)],
     integration: &Setup,
     events: Sender<Event>,
@@ -78,8 +85,12 @@ pub fn spawn(
         .map_err(|e| format!("cannot open a pty: {e}"))?;
     let mut cmd = CommandBuilder::new(shell);
     cmd.args(&integration.args);
-    if let Some(argv) = program.filter(|a| !a.is_empty()) {
-        cmd.args(["-i", "-c", &crate::launch::script(shell, argv, integration)]);
+    if let Some(argv) = program.argv.filter(|a| !a.is_empty()) {
+        cmd.args([
+            "-i",
+            "-c",
+            &crate::launch::script(shell, argv, program.then, integration),
+        ]);
     }
     cmd.cwd(cwd);
     for (k, v) in env.iter().chain(&integration.env) {

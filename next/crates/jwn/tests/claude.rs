@@ -439,7 +439,7 @@ fn worktree_task_goes_to_the_new_agents_conversation_as_a_message() {
     std::fs::write(proj.join("f"), "x").unwrap();
     common::git(&proj, &["add", "."]);
     common::git(&proj, &["commit", "-q", "-m", "init"]);
-    std::fs::write(proj.join(".jw.toml"), "[layout]\nrun = \"claude\"\n").unwrap();
+    std::fs::write(proj.join(".jw.toml"), "open = \"claude\"\n").unwrap();
 
     let out = w.agent_cmd(&[
         "worktree",

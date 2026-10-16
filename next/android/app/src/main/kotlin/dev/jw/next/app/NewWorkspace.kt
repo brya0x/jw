@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -47,12 +48,12 @@ import dev.jw.next.client.WorktreeSettings
 import dev.jw.next.client.folderView
 import dev.jw.next.client.freeName
 import dev.jw.next.client.planWorktree
-import dev.jw.next.client.programs
 import dev.jw.next.client.repoName
 import dev.jw.next.client.repos
 import dev.jw.next.client.tildePath
 import dev.jw.next.client.takenNames
 import dev.jw.next.contract.ConfigFrom
+import dev.jw.next.contract.OpenKind
 import dev.jw.next.contract.DirListing
 import dev.jw.next.contract.Id
 import java.util.concurrent.atomic.AtomicInteger
@@ -212,6 +213,7 @@ internal fun BoxScope.WorktreeSheet(source: AppSource, repoAtStart: String, stat
     var choosing by remember(repoAtStart) { mutableStateOf(false) }
     var error by remember(repoAtStart) { mutableStateOf<String?>(null) }
     var busy by remember(repoAtStart) { mutableStateOf(false) }
+    var opens by remember(repoAtStart) { mutableStateOf<OpenKind?>(null) }
     var waiting by remember(repoAtStart) { mutableStateOf<Id?>(null) }
     val focus = remember { FocusRequester() }
     LaunchedEffect(repoAtStart) { focus.requestFocus() }
@@ -236,7 +238,7 @@ internal fun BoxScope.WorktreeSheet(source: AppSource, repoAtStart: String, stat
         if (!busy && plan is WorktreePlan.Ok) {
             busy = true
             error = null
-            source.createWorktree(repo, plan.branch, null, plan.folder) { result ->
+            source.createWorktree(repo, plan.branch, null, plan.folder, opens) { result ->
                 result.onSuccess { waiting = it }.onFailure { busy = false; error = it.message ?: "el PC no pudo crear el worktree" }
             }
         }
@@ -278,7 +280,19 @@ internal fun BoxScope.WorktreeSheet(source: AppSource, repoAtStart: String, stat
                     plan.info.setup.forEachIndexed { i, line ->
                         Row { Mono(if (i == 0) "setup   " else "        ", Palette.dim, 12); Mono(line, Palette.yellow, 12, lines = 2) }
                     }
-                    Row { Mono("paneles ", Palette.dim, 12); Mono(plan.info.programs.joinToString(" │ "), Palette.fg, 12, lines = 2) }
+                    val chosen = opens ?: plan.info.open
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Mono("abre    ", Palette.dim, 12)
+                        listOf(OpenKind.Shell to "shell", OpenKind.Claude to "claude").forEach { (kind, label) ->
+                            Box(
+                                Modifier.defaultMinSize(minWidth = 64.dp, minHeight = 40.dp)
+                                    .background(if (chosen == kind) Palette.blue else Palette.sel, CircleShape)
+                                    .clickable(enabled = !busy) { opens = kind },
+                                contentAlignment = Alignment.Center,
+                            ) { Mono(label, if (chosen == kind) Palette.panel else Palette.fg, 12, bold = chosen == kind) }
+                        }
+                    }
+                    if (plan.info.setup.isNotEmpty()) Mono("el setup corre primero en ese panel", Palette.dim, 11)
                     if (plan.info.ports.isNotEmpty()) Row { Mono("puertos ", Palette.dim, 12); Mono(plan.info.ports.keys.joinToString(" · "), Palette.fg, 12, lines = 2) }
                     if (plan.info.copy.isNotEmpty()) Row { Mono("copia   ", Palette.dim, 12); Mono(plan.info.copy.joinToString(" · "), Palette.fg, 12, lines = 2) }
                     Mono(

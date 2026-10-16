@@ -5,56 +5,14 @@
 
 use std::path::{Component, Path, PathBuf};
 
-use contract::{ConfigFrom, SplitDir};
+use contract::{ConfigFrom, OpenKind};
 use serde::Deserialize;
-use toml::{Spanned, Table, Value};
-
-use crate::layout::{MAX_RATIO, MIN_RATIO};
-use crate::procs::title_for;
+use toml::{Spanned, Table};
 
 const FILE: &str = ".jw.toml";
-const MAX_PANES: usize = 8;
 /// The most a settings text may weigh to be written, and the most a file name is made of.
 const MAX_TEXT: usize = 64 * 1024;
 const MAX_KEY: usize = 180;
-/// What the layout keeps of a worktree's height when a setup pane goes under it, in thousandths.
-pub const SETUP_SHARE: u16 = 680;
-
-/// What a leaf of the layout starts.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Run {
-    Agent,
-    Editor,
-    Shell,
-    Command(Vec<String>),
-}
-
-/// The tree of panes a worktree opens with, as the old jw wrote it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Node {
-    Leaf(Run),
-    Split {
-        dir: SplitDir,
-        ratio: u16,
-        a: Box<Node>,
-        b: Box<Node>,
-    },
-}
-
-impl Node {
-    /// The leaves from left to right, top to bottom: the order panes are started in.
-    pub fn leaves(&self) -> Vec<&Run> {
-        match self {
-            Node::Leaf(run) => vec![run],
-            Node::Split { a, b, .. } => {
-                let mut out = a.leaves();
-                out.extend(b.leaves());
-                out
-            }
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Project {
     /// The file that was read; none when there is none and the defaults are used.
@@ -71,9 +29,8 @@ pub struct Project {
     pub copy: Vec<String>,
     /// The names of the ports and their offsets in a worktree's block (REQ-494).
     pub ports: std::collections::BTreeMap<String, u32>,
-    pub agent: Vec<String>,
-    pub editor: Vec<String>,
-    pub layout: Option<Node>,
+    /// What the one panel of a workspace is (REQ-504).
+    pub open: OpenKind,
 }
 
 #[derive(Deserialize, Default)]
@@ -83,19 +40,13 @@ struct Raw {
     setup: Option<Vec<Spanned<String>>>,
     copy: Option<Vec<Spanned<String>>>,
     ports: Option<Spanned<Table>>,
-    agent: Option<Spanned<Table>>,
-    layout: Option<Spanned<Table>>,
+    open: Option<Spanned<String>>,
 }
 
 /// The settings of the repository whose top level is `top`; `personal_dir` holds the personal
 /// files (REQ-482).
 pub fn read(top: &Path, personal_dir: &Path) -> Result<Project, String> {
-    read_with(
-        top,
-        &|k| std::env::var(k).ok(),
-        &crate::browse::home(),
-        personal_of(top, personal_dir),
-    )
+    read_with(top, &crate::browse::home(), personal_of(top, personal_dir))
 }
 
 /// The personal file of the repository `top` is the top level of, or of a worktree of it (REQ-483).
@@ -128,7 +79,6 @@ pub fn read_folder(folder: &Path, personal_dir: &Path) -> Result<Project, String
     }
     read_with(
         folder,
-        &|k| std::env::var(k).ok(),
         &crate::browse::home(),
         personal_file(personal_dir, None, folder),
     )
@@ -182,12 +132,7 @@ pub fn personal_file(personal_dir: &Path, origin: Option<&str>, top: &Path) -> P
     personal_dir.join(format!("{}.toml", key(origin, top)))
 }
 
-fn read_with(
-    top: &Path,
-    var: &dyn Fn(&str) -> Option<String>,
-    home: &Path,
-    personal: PathBuf,
-) -> Result<Project, String> {
+fn read_with(top: &Path, home: &Path, personal: PathBuf) -> Result<Project, String> {
     let found = [
         (top.join(FILE), ConfigFrom::Repo),
         (personal.clone(), ConfigFrom::Personal),
@@ -195,7 +140,7 @@ fn read_with(
     for (file, from) in found {
         match std::fs::read_to_string(&file) {
             Ok(text) => {
-                let project = parse(&text, Some(file), top, var, home)?;
+                let project = parse(&text, Some(file), top, home)?;
                 return Ok(Project {
                     from: Some(from),
                     personal,
@@ -206,7 +151,7 @@ fn read_with(
             Err(e) => return Err(format!("{}: {e}", label_of(Some(&file)))),
         }
     }
-    let project = parse("", None, top, var, home)?;
+    let project = parse("", None, top, home)?;
     Ok(Project {
         personal,
         ..project
@@ -241,13 +186,7 @@ pub fn write(
         ConfigFrom::Repo => top.join(FILE),
         ConfigFrom::Personal => personal,
     };
-    parse(
-        text,
-        Some(target.clone()),
-        top,
-        &|k| std::env::var(k).ok(),
-        &crate::browse::home(),
-    )?;
+    parse(text, Some(target.clone()), top, &crate::browse::home())?;
     let dir = target.parent().ok_or("the file has no folder")?;
     let name = label_of(Some(&target));
     let private = to == ConfigFrom::Personal;
@@ -285,13 +224,7 @@ pub fn write(
     Ok((target, private && top.join(FILE).exists()))
 }
 
-fn parse(
-    text: &str,
-    source: Option<PathBuf>,
-    top: &Path,
-    var: &dyn Fn(&str) -> Option<String>,
-    home: &Path,
-) -> Result<Project, String> {
+fn parse(text: &str, source: Option<PathBuf>, top: &Path, home: &Path) -> Result<Project, String> {
     let label = label_of(source.as_ref());
     let fail = |at: usize, why: &str| format!("{label}, line {}: {why}", line_of(text, at));
     let raw: Raw = toml::from_str(text).map_err(|e| match e.span() {
@@ -382,43 +315,19 @@ fn parse(
         }
     }
 
-    let agent = match raw.agent {
-        Some(t) => {
-            let at = t.span().start;
-            agent_of(t.get_ref()).map_err(|why| fail(at, &why))?
-        }
-        None => vec!["claude".to_owned()],
-    };
-
-    let (mut editor, mut layout) = (Vec::new(), None);
-    if let Some(t) = raw.layout {
-        let at = t.span().start;
-        let t = t.get_ref();
-        if let Some(e) = t.get("editor") {
-            let e = e
-                .as_str()
-                .ok_or_else(|| fail(at, "`editor` must be a string"))?;
-            editor = words(e).map_err(|why| fail(at, &format!("`editor`: {why}")))?;
-        }
-        if t.contains_key("run") || t.contains_key("split") {
-            let mut leaves = 0;
-            layout = Some(node(t, &mut leaves).map_err(|why| fail(at, &why))?);
-            if leaves > MAX_PANES {
+    let open = match raw.open {
+        None => OpenKind::Shell,
+        Some(o) => match o.get_ref().trim() {
+            "shell" => OpenKind::Shell,
+            "claude" => OpenKind::Claude,
+            other => {
                 return Err(fail(
-                    at,
-                    &format!("the layout has {leaves} panes and at most {MAX_PANES} are allowed"),
+                    o.span().start,
+                    &format!("`open` is {other:?}: it must be \"shell\" or \"claude\""),
                 ));
             }
-        }
-    }
-    if editor.is_empty() {
-        editor = ["VISUAL", "EDITOR"]
-            .iter()
-            .filter_map(|k| var(k))
-            .filter_map(|v| words(&v).ok())
-            .find(|w| !w.is_empty())
-            .unwrap_or_else(|| vec!["nvim".to_owned()]);
-    }
+        },
+    };
 
     Ok(Project {
         source,
@@ -429,113 +338,8 @@ fn parse(
         setup,
         copy,
         ports,
-        agent,
-        editor,
-        layout,
+        open,
     })
-}
-
-/// The program of the agent `default` names: its `start`, or else its own name.
-fn agent_of(t: &Table) -> Result<Vec<String>, String> {
-    let name = match t.get("default") {
-        None => "claude",
-        Some(Value::String(n)) if !n.trim().is_empty() => n.trim(),
-        Some(_) => return Err("`[agent] default` must be the name of an agent".into()),
-    };
-    match t.get(name) {
-        Some(Value::Table(own)) => match own.get("start") {
-            Some(Value::String(start)) if !start.trim().is_empty() => {
-                words(start).map_err(|why| format!("`[agent.{name}] start`: {why}"))
-            }
-            _ => Ok(vec![name.to_owned()]),
-        },
-        _ => Ok(vec![name.to_owned()]),
-    }
-}
-
-fn node(t: &Table, leaves: &mut usize) -> Result<Node, String> {
-    match (t.get("run"), t.get("split")) {
-        (Some(_), Some(_)) => Err("a layout node has both `run` and `split`".into()),
-        (None, None) => Err("a layout node needs `run`, or `split` with `a` and `b`".into()),
-        (Some(run), None) => {
-            let run = run.as_str().ok_or("`run` must be a string")?.trim();
-            *leaves += 1;
-            Ok(Node::Leaf(match run {
-                "" => return Err("`run` is empty".into()),
-                "agent" => Run::Agent,
-                "editor" => Run::Editor,
-                "shell" => Run::Shell,
-                line => {
-                    let w = words(line).map_err(|why| format!("`run`: {why}"))?;
-                    Run::Command(w)
-                }
-            }))
-        }
-        (None, Some(split)) => {
-            let dir = match split.as_str() {
-                Some("right") => SplitDir::Row,
-                Some("down") => SplitDir::Col,
-                _ => {
-                    return Err(format!(
-                        "`split` must be \"right\" or \"down\", not {split}"
-                    ));
-                }
-            };
-            let ratio = match t.get("ratio") {
-                None => 0.5,
-                Some(Value::Float(f)) => *f,
-                Some(Value::Integer(i)) => *i as f64,
-                Some(_) => return Err("`ratio` must be a number".into()),
-            };
-            let thousandths = (ratio * 1000.0).round().clamp(0.0, f64::from(u16::MAX)) as u16;
-            let mut side = |key: &str| -> Result<Box<Node>, String> {
-                let table = t
-                    .get(key)
-                    .and_then(Value::as_table)
-                    .ok_or_else(|| format!("`split` needs `{key}` as a table"))?;
-                node(table, leaves).map(Box::new)
-            };
-            Ok(Node::Split {
-                dir,
-                ratio: thousandths.clamp(MIN_RATIO, MAX_RATIO),
-                a: side("a")?,
-                b: side("b")?,
-            })
-        }
-    }
-}
-
-impl Project {
-    /// What a leaf starts: its words, or none for the plain shell.
-    pub fn argv(&self, run: &Run) -> Option<Vec<String>> {
-        match run {
-            Run::Agent => Some(self.agent.clone()),
-            Run::Editor => Some(self.editor.clone()),
-            Run::Shell => None,
-            Run::Command(words) => Some(words.clone()),
-        }
-    }
-
-    /// The programs of the panes the layout starts, by the names the panes carry.
-    pub fn pane_names(&self, shell: &str) -> Vec<String> {
-        let shell_name = || {
-            Path::new(shell)
-                .file_name()
-                .map_or_else(|| shell.to_owned(), |n| n.to_string_lossy().into_owned())
-        };
-        match &self.layout {
-            None => vec![shell_name()],
-            Some(tree) => tree
-                .leaves()
-                .into_iter()
-                .map(|run| {
-                    self.argv(run)
-                        .and_then(|a| title_for(&a))
-                        .unwrap_or_else(shell_name)
-                })
-                .collect(),
-        }
-    }
 }
 
 /// The script of a worktree's setup: each line is written after `❯ ` and then run, one after
@@ -559,64 +363,6 @@ pub fn setup_script(lines: &[String], name: &str, branch: &str) -> String {
         .collect::<Vec<_>>()
         .join(" && ");
     format!("{chain}; s=$?; printf '\\033]133;D;%s\\007' \"$s\"; exit \"$s\"")
-}
-
-/// The words of `line` as a shell splits them: spaces separate, `'…'` and `"…"` group and
-/// `\` quotes the next character. Nothing is expanded.
-pub fn words(line: &str) -> Result<Vec<String>, String> {
-    let open = || "a quote is left open".to_owned();
-    let (mut out, mut cur, mut started) = (Vec::new(), String::new(), false);
-    let mut chars = line.chars();
-    while let Some(c) = chars.next() {
-        match c {
-            c if c.is_whitespace() => {
-                if started {
-                    out.push(std::mem::take(&mut cur));
-                    started = false;
-                }
-            }
-            '\'' => {
-                started = true;
-                loop {
-                    match chars.next() {
-                        Some('\'') => break,
-                        Some(c) => cur.push(c),
-                        None => return Err(open()),
-                    }
-                }
-            }
-            '"' => {
-                started = true;
-                loop {
-                    match chars.next() {
-                        Some('"') => break,
-                        Some('\\') => match chars.next() {
-                            Some(c @ ('"' | '\\' | '$' | '`')) => cur.push(c),
-                            Some(c) => {
-                                cur.push('\\');
-                                cur.push(c);
-                            }
-                            None => return Err(open()),
-                        },
-                        Some(c) => cur.push(c),
-                        None => return Err(open()),
-                    }
-                }
-            }
-            '\\' => {
-                started = true;
-                cur.push(chars.next().unwrap_or('\\'));
-            }
-            c => {
-                started = true;
-                cur.push(c);
-            }
-        }
-    }
-    if started {
-        out.push(cur);
-    }
-    Ok(out)
 }
 
 /// Fails on a `{key}` that is not one of `allowed`.
@@ -671,71 +417,53 @@ mod tests {
             text,
             Some(PathBuf::from("/code/app/.jw.toml")),
             Path::new("/code/app"),
-            &|_| None,
             Path::new("/home/u"),
         )
     }
 
-    fn leaf(run: Run) -> Node {
-        Node::Leaf(run)
-    }
-
     #[test]
     fn with_no_file_everything_is_the_default() {
-        let p = parse("", None, Path::new("/code/app"), &|_| None, Path::new("/h")).unwrap();
+        let p = parse("", None, Path::new("/code/app"), Path::new("/h")).unwrap();
         assert_eq!(p.source, None);
         assert_eq!(p.root, Path::new("/code/app-wt"));
         assert_eq!(p.branch, "feat/{name}");
         assert!(p.setup.is_empty());
-        assert_eq!(p.agent, ["claude"]);
-        assert_eq!(p.editor, ["nvim"]);
-        assert_eq!(p.layout, None);
-        assert_eq!(p.pane_names("/bin/zsh"), ["zsh"]);
+        assert_eq!(p.open, OpenKind::Shell, "REQ-504");
     }
 
     #[test]
-    fn the_file_of_design_studio_reads_as_it_is() {
+    fn open_is_a_shell_or_claude_and_what_else_is_refused_naming_the_line() {
+        let open = |t: &str| read_text(t).map(|p| p.open);
+        assert_eq!(open("open = \"claude\"\n"), Ok(OpenKind::Claude));
+        assert_eq!(open("open = \" shell \"\n"), Ok(OpenKind::Shell));
+        let m = open("branch = \"a/{name}\"\nopen = \"nvim\"\n").unwrap_err();
+        assert!(
+            m.starts_with(".jw.toml, line 2:") && m.contains("\"shell\" or \"claude\""),
+            "{m}"
+        );
+        assert!(
+            open("open = 3\n")
+                .unwrap_err()
+                .starts_with(".jw.toml, line 1:")
+        );
+    }
+
+    #[test]
+    fn the_layout_the_agent_and_the_editor_are_ignored_even_when_they_are_wrong() {
+        // The file of design-studio, as N78 read it, and a layout with nothing right in it.
         let p = read_text(
-            "# jw config for sa-design-studio, written by jw on its first worktree.\n\
-             setup = [\n  \"bun install --frozen-lockfile\",\n]\n\n\
-             [agent]\ndefault = \"claude\"\n\n[layout]\neditor = \"nvim\"\nrun = \"agent\"\n",
+            "setup = [\n  \"bun install --frozen-lockfile\",\n]\n\n\
+             [agent]\ndefault = 3\n\n[layout]\neditor = \"nvim\"\nrun = \"agent\"\nsplit = \"left\"\n",
         )
         .unwrap();
         assert_eq!(p.setup, ["bun install --frozen-lockfile"]);
-        assert_eq!(p.layout, Some(leaf(Run::Agent)));
-        assert_eq!(p.pane_names("/bin/zsh"), ["claude"]);
-        assert_eq!(p.source.as_deref(), Some(Path::new("/code/app/.jw.toml")));
-    }
-
-    #[test]
-    fn every_key_is_read_and_the_ones_not_used_are_ignored() {
+        assert_eq!(p.open, OpenKind::Shell, "REQ-505");
         let p = read_text(
-            "root = \"../app-trees\"\nbranch = \"bryan/{name}\"\nports = { web = 1 }\nsync = \"merge\"\n\
-             [env]\nfile = \".env\"\n[tui]\nleader = \"x\"\n\
-             [agent]\ndefault = \"codex\"\n[agent.codex]\nstart = \"codex --full-auto\"\nresume = \"codex resume\"\n\
-             [layout]\neditor = \"nvim -c 'Diffview'\"\nsplit = \"right\"\nratio = 0.6\n\
-             a = { run = \"editor\" }\nb = { split = \"down\", a = { run = \"agent\" }, b = { run = \"htop -d 5\" } }\n",
+            "root = \"../app-trees\"\nbranch = \"bryan/{name}\"\nsync = \"merge\"\n[env]\nfile = \".env\"\n[tui]\nleader = \"x\"\n",
         )
         .unwrap();
         assert_eq!(p.root, Path::new("/code/app-trees"));
         assert_eq!(p.branch, "bryan/{name}");
-        assert_eq!(p.agent, ["codex", "--full-auto"]);
-        assert_eq!(p.editor, ["nvim", "-c", "Diffview"]);
-        let Some(Node::Split { dir, ratio, a, b }) = p.layout.clone() else {
-            panic!("a split")
-        };
-        assert_eq!((dir, ratio), (SplitDir::Row, 600));
-        assert_eq!(*a, leaf(Run::Editor));
-        let Node::Split { dir, ratio, a, b } = *b else {
-            panic!("a split")
-        };
-        assert_eq!((dir, ratio), (SplitDir::Col, 500));
-        assert_eq!(*a, leaf(Run::Agent));
-        assert_eq!(
-            *b,
-            leaf(Run::Command(vec!["htop".into(), "-d".into(), "5".into()]))
-        );
-        assert_eq!(p.pane_names("/bin/zsh"), ["nvim", "codex", "htop"]);
     }
 
     #[test]
@@ -747,56 +475,6 @@ mod tests {
         assert_eq!(root("/srv/wt"), Path::new("/srv/wt"));
         assert_eq!(root("../../x/./y"), Path::new("/x/y"));
         assert_eq!(root("  "), Path::new("/code/app-wt"));
-    }
-
-    #[test]
-    fn a_ratio_outside_the_range_is_kept_inside_it() {
-        let ratio = |r: &str| {
-            let p = read_text(&format!(
-                "[layout]\nsplit = \"right\"\nratio = {r}\na = {{ run = \"shell\" }}\nb = {{ run = \"shell\" }}"
-            ))
-            .unwrap();
-            let Some(Node::Split { ratio, .. }) = p.layout else {
-                panic!("a split")
-            };
-            ratio
-        };
-        assert_eq!(ratio("0.01"), MIN_RATIO);
-        assert_eq!(ratio("2"), MAX_RATIO);
-        assert_eq!(ratio("1"), MAX_RATIO);
-        assert_eq!(ratio("0.25"), 250);
-    }
-
-    #[test]
-    fn the_editor_comes_from_the_file_then_visual_then_editor_then_nvim() {
-        let with = |env: &'static [(&'static str, &'static str)], text: &str| {
-            parse(
-                text,
-                None,
-                Path::new("/c/a"),
-                &|k| {
-                    env.iter()
-                        .find(|(n, _)| *n == k)
-                        .map(|(_, v)| (*v).to_owned())
-                },
-                Path::new("/h"),
-            )
-            .unwrap()
-            .editor
-        };
-        let env = &[("VISUAL", "code -w"), ("EDITOR", "vim")];
-        assert_eq!(with(env, "[layout]\neditor = \"hx\""), ["hx"]);
-        assert_eq!(with(env, ""), ["code", "-w"]);
-        assert_eq!(with(&[("EDITOR", "vim")], ""), ["vim"]);
-        assert_eq!(with(&[("VISUAL", "")], ""), ["nvim"]);
-    }
-
-    #[test]
-    fn a_leaf_without_a_layout_table_or_with_only_an_editor_gives_no_layout() {
-        assert_eq!(
-            read_text("[layout]\neditor = \"nvim\"").unwrap().layout,
-            None
-        );
     }
 
     #[test]
@@ -818,55 +496,6 @@ mod tests {
         assert!(m.starts_with(".jw.toml, line"), "{m}");
         let m = bad("branch = \" \"");
         assert!(m.contains("`branch` is empty"), "{m}");
-        let m = bad("\n[layout]\nrun = \"agent\"\nsplit = \"right\"");
-        assert!(
-            m.starts_with(".jw.toml, line 2:") && m.contains("both"),
-            "{m}"
-        );
-        let m = bad("[layout]\nsplit = \"right\"\na = { run = \"agent\" }");
-        assert!(m.contains("needs `b`"), "{m}");
-        let m = bad("[layout]\nsplit = \"left\"\na = { run = \"agent\" }\nb = { run = \"agent\" }");
-        assert!(m.contains("\"right\" or \"down\""), "{m}");
-        let m = bad("[layout]\nsplit = \"right\"\na = {}\nb = { run = \"agent\" }");
-        assert!(m.contains("needs `run`"), "{m}");
-        let m = bad("[layout]\nrun = \"nvim 'x\"");
-        assert!(m.contains("a quote is left open"), "{m}");
-        let m = bad("[layout]\nrun = \"\"");
-        assert!(m.contains("`run` is empty"), "{m}");
-        let m = bad("[agent]\ndefault = 3");
-        assert!(m.contains("name of an agent"), "{m}");
-    }
-
-    #[test]
-    fn more_than_eight_panes_are_refused_and_eight_are_not() {
-        let tree = |n: usize| {
-            let mut t = "{ run = \"shell\" }".to_owned();
-            for _ in 1..n {
-                t = format!("{{ split = \"right\", a = {{ run = \"shell\" }}, b = {t} }}");
-            }
-            format!("[layout]\nsplit = \"down\"\na = {{ run = \"shell\" }}\nb = {t}")
-        };
-        // The tree has one leaf more than the nesting asked for.
-        assert!(read_text(&tree(7)).is_ok());
-        let m = read_text(&tree(8)).unwrap_err();
-        assert!(m.contains("at most 8"), "{m}");
-    }
-
-    #[test]
-    fn words_split_as_a_shell_does_without_expanding_anything() {
-        let w = |s: &str| words(s).unwrap();
-        assert_eq!(w("  nvim  -c   x "), ["nvim", "-c", "x"]);
-        assert_eq!(
-            w("nvim -c 'DiffviewOpen origin/main...HEAD'"),
-            ["nvim", "-c", "DiffviewOpen origin/main...HEAD"]
-        );
-        assert_eq!(w("echo \"a b\" c\\ d"), ["echo", "a b", "c d"]);
-        assert_eq!(w("echo \"\\$x \\q\""), ["echo", "$x \\q"]);
-        assert_eq!(w("a '' b"), ["a", "", "b"]);
-        assert_eq!(w("a$HOME ~"), ["a$HOME", "~"]);
-        assert!(w("").is_empty());
-        assert!(words("a 'b").is_err());
-        assert!(words("a \"b").is_err());
     }
 
     #[test]

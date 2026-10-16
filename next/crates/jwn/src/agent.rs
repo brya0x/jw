@@ -70,7 +70,7 @@ fn usage_of(cmd: &str) -> String {
             "usage: {b} prompt <workspace> [--pane <pane>] [--tag] [--now] [--wait [--timeout SECONDS]] [--] <text>"
         ),
         "worktree" => format!(
-            "usage: {b} worktree <name> [--in <repo>] [--branch <branch>] [--from <ref>] [--task <text>]"
+            "usage: {b} worktree <name> [--in <repo>] [--branch <branch>] [--from <ref>] [--open shell|claude] [--task <text>]"
         ),
         "pane" => format!(
             "usage: {b} pane ls <workspace> [--json]\n       {b} pane open <workspace> [--split right|down] [--of <pane>] [--] [<program words>...]\n       {b} pane close <workspace> <pane> [--force]"
@@ -799,8 +799,15 @@ fn absolute(path: &Path) -> String {
 }
 
 fn worktree(args: &[&str]) -> Out {
-    let a = Args::parse(args, &["in", "branch", "from", "task"], &[])?;
+    let a = Args::parse(args, &["in", "branch", "from", "task", "open"], &[])?;
     let [name] = a.words()?;
+    // A task is for an agent: `claude` opens it unless the person said otherwise (REQ-511).
+    let open = match (a.value("open"), a.value("task")) {
+        (Some("shell"), _) => Some(contract::OpenKind::Shell),
+        (Some("claude"), _) | (None, Some(_)) => Some(contract::OpenKind::Claude),
+        (None, None) => None,
+        (Some(_), _) => return Err(Fail::Usage("--open is shell or claude".into())),
+    };
     let mut s = Link::connect()?;
     let repo = repo_of(&mut s, a.value("in"))?;
     let info: ProjectInfo =
@@ -822,6 +829,7 @@ fn worktree(args: &[&str]) -> Out {
     say_copies(&made);
     let started = s.cmd(Cmd::StartWorkspace {
         workspace: id.clone(),
+        open,
     });
     if started.is_err() {
         let _ = s.cmd(Cmd::NewPane {

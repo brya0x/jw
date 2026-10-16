@@ -262,7 +262,7 @@ class ConformanceTest {
         val result = (ContractJson.decodeFromJsonElement(DaemonMsg.serializer(), reply) as DaemonMsg.Reply).result!!
         val info = ContractJson.decodeFromJsonElement(ProjectInfo.serializer(), result)
         assertEquals("bryan/{name}", info.branch)
-        assertEquals(listOf("nvim", "claude"), info.panes)
+        assertEquals(OpenKind.Claude, info.open)
         assertEquals(ConfigFrom.Repo, info.from)
         assertEquals(listOf(".env", "apps/web/.env.local"), info.copy)
         assertEquals(mapOf("web" to 0, "api" to 1), info.ports)

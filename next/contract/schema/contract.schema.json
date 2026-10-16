@@ -467,7 +467,7 @@
         { "type": "object", "required": ["cmd", "repo", "branch"], "properties": { "cmd": { "const": "create_worktree" }, "repo": { "type": "string" }, "branch": { "type": "string", "minLength": 1 }, "base": { "type": "string" }, "folder": { "type": "string", "minLength": 1, "maxLength": 80 } } },
         { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "remove_workspace" }, "workspace": { "$ref": "#/$defs/Id" }, "remove_worktree": { "type": "boolean" }, "force": { "type": "boolean" } } },
         { "type": "object", "required": ["cmd", "repo"], "properties": { "cmd": { "const": "project_config" }, "repo": { "type": "string" } } },
-        { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "start_workspace" }, "workspace": { "$ref": "#/$defs/Id" } } },
+        { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "start_workspace" }, "workspace": { "$ref": "#/$defs/Id" }, "open": { "enum": ["shell", "claude"] } } },
         { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "check_workspace" }, "workspace": { "$ref": "#/$defs/Id" } } },
         { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "sync_workspace" }, "workspace": { "$ref": "#/$defs/Id" } } },
         { "type": "object", "required": ["cmd", "a", "b"], "properties": { "cmd": { "const": "swap_panes" }, "a": { "$ref": "#/$defs/Id" }, "b": { "$ref": "#/$defs/Id" } } },

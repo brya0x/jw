@@ -10,6 +10,7 @@ import dev.jw.next.contract.DirListing
 import dev.jw.next.contract.FileListing
 import dev.jw.next.contract.Id
 import dev.jw.next.contract.MarkdownDoc
+import dev.jw.next.contract.OpenKind
 import dev.jw.next.contract.Node
 import dev.jw.next.contract.ProjectInfo
 
@@ -85,13 +86,13 @@ interface NodeSource {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
     }
 
-    /** Start the panes of a workspace that has none: its repository's layout and setup. */
-    fun startWorkspace(workspace: Id, reply: (Result<Unit>) -> Unit) {
+    /** Start the one panel of a workspace that has none, a shell or `claude` as [open] says or, when it is null, as its settings do; a worktree's setup runs in it first. */
+    fun startWorkspace(workspace: Id, open: OpenKind?, reply: (Result<Unit>) -> Unit) {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
     }
 
-    /** Make a worktree of [repo] on [branch] from [base], in the folder [folder] of the repository's worktree folder, and start its panes. */
-    fun createWorktree(repo: String, branch: String, base: String?, folder: String, reply: (Result<Id>) -> Unit) {
+    /** Make a worktree of [repo] on [branch] from [base], in the folder [folder] of the repository's worktree folder, and open it with [open] (null: as its settings say). */
+    fun createWorktree(repo: String, branch: String, base: String?, folder: String, open: OpenKind?, reply: (Result<Id>) -> Unit) {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
     }
 

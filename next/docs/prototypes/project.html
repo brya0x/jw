@@ -1,0 +1,219 @@
+<title>jwn Proyecto</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Terminal-first, the same character grid as the other terminal prototypes. Every colour comes from the chosen theme. */
+:root{
+  --bg:#282c34; --panel:#21252b; --fg:#abb2bf; --dim:#5c6370; --line:#3e4451; --sel:#2c313a;
+  --blue:#61afef; --green:#98c379; --yellow:#e5c07b; --red:#e06c75; --magenta:#c678dd; --cyan:#56b6c2;
+  --page:#16181d; --ink:#c3c9d4; --mut:#7d8594;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}}
+:root[data-theme="light"]{--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.55 'IBM Plex Sans',system-ui,sans-serif;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px 40px}
+.wrap{max-width:1500px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
+h1{font:600 20px/1.2 var(--mono);margin:0}
+h2.s{font:600 12px var(--mono);margin:0;color:var(--mut)}
+p{margin:0;max-width:78ch;color:var(--mut)}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button{font:12px var(--mono);color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;min-height:32px;cursor:pointer}
+button:hover{border-color:var(--blue)}
+button[aria-pressed=true]{background:var(--blue);color:var(--panel);border-color:var(--blue);font-weight:700}
+:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto}
+.term pre{margin:0;font:13px/1.25 var(--mono);color:var(--fg);outline:none;width:max-content;cursor:default}
+.hint{font:12px var(--mono);color:var(--mut)}
+.stage{display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap}
+.col{flex:1 1 700px;min-width:0;display:flex;flex-direction:column;gap:8px}
+.side{flex:0 0 auto;width:100%;max-width:376px;margin-inline:auto;display:flex;flex-direction:column;gap:8px}
+.notes{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
+.notes div{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;color:var(--fg);font:12px/1.55 var(--mono)}
+.notes b{color:var(--yellow)}.notes kbd{font:inherit;color:var(--cyan)}
+.b{font-weight:700}.dim{color:var(--dim)}.blue{color:var(--blue)}.green{color:var(--green)}.yellow{color:var(--yellow)}.red{color:var(--red)}.mag{color:var(--magenta)}.cyan{color:var(--cyan)}
+.lit{background:var(--sel)}.inv{background:var(--blue);color:var(--panel)}.btn1{background:var(--green);color:var(--panel);font-weight:700}.pan{background:var(--panel)}
+/* phone */
+.phone{width:100%;height:760px;background:var(--bg);border:1px solid var(--line);border-radius:28px;padding:10px;box-shadow:0 0 0 6px var(--panel);display:flex;flex-direction:column}
+.ph{flex:1;min-height:0;background:var(--bg);border-radius:20px;overflow:hidden;display:flex;flex-direction:column;font:13px/1.45 var(--mono);color:var(--fg);position:relative}
+.ph .hd{background:var(--panel);border-bottom:1px solid var(--line);padding:8px 12px;display:flex;align-items:center;gap:8px;min-height:52px}
+.ph .hd .t{flex:1;min-width:0}.ph .hd b{display:block;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ph .hd span{display:block;font-size:11px;color:var(--dim)}
+.ph .hd button{min-height:44px;min-width:44px;border-radius:8px}
+.ph .body{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column}
+.ph .src{padding:10px 12px;background:var(--panel);border-bottom:1px solid var(--line);font-size:12px}
+.ph .src b{color:var(--yellow)}
+.ph .row{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;min-height:56px;border-bottom:1px solid var(--line);cursor:pointer;background:none;border-left:0;border-right:0;border-top:0;border-radius:0;text-align:left;font:13px var(--mono);color:var(--fg);width:100%}
+.ph .row .k{width:92px;flex:none;color:var(--dim);font-size:11px;padding-top:2px}
+.ph .row .v{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;word-break:break-word}
+.ph .row.ro{cursor:default;opacity:.75}
+.ph .foot{border-top:2px solid var(--line);background:var(--panel);padding:8px 12px 10px;display:flex;flex-direction:column;gap:8px}
+.ph .seg{display:flex;gap:6px}.ph .seg button{flex:1;min-height:40px;border-radius:999px;font-size:12px;background:var(--sel)}
+.ph .seg button[aria-pressed=true]{background:var(--blue);color:var(--panel);font-weight:700}
+.ph .save{min-height:48px;border-radius:8px;background:var(--green);color:var(--panel);font-weight:700;border-color:var(--green);font-size:13px}
+.ph .save:disabled{background:var(--sel);color:var(--dim);border-color:var(--line)}
+.ph .warn{color:var(--yellow);font-size:11px}
+.ph .sheet{position:absolute;left:0;right:0;bottom:0;max-height:78%;overflow:auto;border-top:2px solid var(--blue);background:var(--panel);padding:12px;display:flex;flex-direction:column;gap:8px;box-shadow:0 -10px 30px #0008}
+.ph .sheet input{width:100%;min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:0 10px;font:13px var(--mono)}
+.ph .sheet .li{display:flex;gap:6px;align-items:center}.ph .sheet .li input{flex:1}
+.ph .sheet .li button{min-height:44px;min-width:44px;border-radius:6px}
+.ph .toast{position:absolute;left:12px;right:12px;bottom:140px;background:var(--sel);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--green);font-size:12px}
+</style>
+
+<div class="wrap">
+  <h1>jwn · la pantalla de proyecto</h1>
+  <p>Dónde vive la configuración de un repositorio y lo sencillo de ella: carpeta de los worktrees, rama, setup, archivos que se copian y puertos. Los paneles se ven pero se cambian en el archivo. Se abre con <kbd>p</kbd> sobre un workspace del repositorio, en el terminal, y desde el menú del workspace, en el teléfono. Todo lo que cambias queda en la pantalla hasta que lo guardas.</p>
+  <div class="bar" id="scen" role="group" aria-label="El estado de la configuración">
+    <button data-s="none" aria-pressed="false">Sin configuración</button>
+    <button data-s="personal" aria-pressed="true">Configuración personal</button>
+    <button data-s="repo" aria-pressed="false">Del repositorio (.jw.toml)</button>
+    <button id="reset">Reiniciar</button>
+    <button id="theme" aria-label="Cambiar entre tema oscuro y claro">Tema claro/oscuro</button>
+  </div>
+  <div class="stage">
+    <div class="col">
+      <h2 class="s">Terminal · panel de 100 columnas</h2>
+      <div class="term"><pre id="t" tabindex="0" aria-label="Terminal de jwn"></pre></div>
+      <div class="hint" id="keys"></div>
+    </div>
+    <div class="side">
+      <h2 class="s">Teléfono</h2>
+      <div class="phone"><div class="ph" id="ph"></div></div>
+    </div>
+  </div>
+  <div class="notes">
+    <div><b>Sin configuración</b><br>Se abre con los valores de siempre, en gris. Guardar crea <i>tu</i> archivo personal, fuera del repositorio. Nunca se pregunta ni se escribe nada hasta que guardas.</div>
+    <div><b>Personal</b><br>El archivo vive en tu carpeta de configuración, con el nombre del origin del repositorio. Lo comparten todos los clones y todos sus worktrees. Se puede guardar también en el repositorio para el equipo.</div>
+    <div><b>Del repositorio</b><br>Manda sobre el personal. Guardar cambia el <code>.jw.toml</code> que ve el equipo, y la pantalla lo dice antes. Guardar en el personal queda tapado, y también lo dice.</div>
+    <div><b>Teclas</b><br><kbd>↑ ↓</kbd> campo · <kbd>↵</kbd> editar · en una lista <kbd>a</kbd> añade, <kbd>d</kbd> quita · <kbd>g</kbd> dónde se guarda · <kbd>s</kbd> guarda · <kbd>e</kbd> abre el archivo en el editor · <kbd>esc</kbd> cierra (y avisa si hay cambios sin guardar).</div>
+  </div>
+</div>
+
+<script>
+const BASE={
+  none:{from:null,file:null,root:'../app-wt',branch:'feat/{name}',setup:[],copy:[],ports:[],panes:'zsh'},
+  personal:{from:'personal',file:'~/.config/jwn/projects/github.com_acme_app.toml',root:'../app-wt',branch:'bryan/{name}',setup:['bun install --frozen-lockfile','cp .env.example .env'],copy:['.env','apps/web/.env.local'],ports:[['web',0],['api',1]],panes:'nvim │ claude'},
+  repo:{from:'repo',file:'~/code/app/.jw.toml',root:'../app-trees',branch:'feat/{name}',setup:['make deps'],copy:['.env'],ports:[['web',0]],panes:'nvim │ claude'}
+};
+const S={scen:'personal',cfg:null,orig:null,sel:0,sub:null,editing:null,buf:'',to:'personal',saved:'',toast:'',sheet:null};
+const FIELDS=[['root','carpeta de worktrees','text'],['branch','rama','text'],['setup','setup','list'],['copy','copiar','list'],['ports','puertos','map'],['panes','paneles','ro']];
+const clone=o=>JSON.parse(JSON.stringify(o));
+function reset(){ S.cfg=clone(BASE[S.scen]); S.orig=clone(BASE[S.scen]); S.sel=0; S.sub=null; S.editing=null; S.saved=''; S.toast=''; S.sheet=null; S.to=S.cfg.from==='repo'?'repo':'personal'; }
+const dirty=()=>JSON.stringify(S.cfg)!==JSON.stringify(S.orig);
+const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;');
+const pad=(s,n)=>{s=String(s);return s.length>=n?s.slice(0,n):s+' '.repeat(n-s.length)};
+const val=(f)=>{ const v=S.cfg[f[0]]; return f[2]==='list'?v:f[2]==='map'?v.map(([n,o])=>n+' +'+o):f[2]==='ro'?[v]:[v]; };
+const isDefault=(k)=>S.cfg.from===null&&JSON.stringify(S.cfg[k])===JSON.stringify(BASE.none[k]);
+function where(){ if(S.cfg.from==='repo')return 'del repositorio · '+S.cfg.file; if(S.cfg.from==='personal')return 'personal · '+S.cfg.file; return 'ninguna: los valores de siempre'; }
+function target(){ return S.to==='repo'?'~/code/app/.jw.toml (lo ve el equipo)':'~/.config/jwn/projects/github.com_acme_app.toml'; }
+function warn(){ if(S.to==='personal'&&S.cfg.from==='repo')return 'quedaría tapada por el .jw.toml del repositorio'; if(S.to==='repo'&&S.cfg.from!=='repo')return 'crea un .jw.toml en el repositorio'; if(S.to==='repo')return 'cambia el .jw.toml que ve el equipo'; return ''; }
+
+/* ---------- the terminal ---------- */
+const W=100,H=30;
+function term(){
+  const L=[]; const put=(s,c)=>L.push({s,c:c||''});
+  put(' ╭─ proyecto · app '+'─'.repeat(W-22)+'╮','dim');
+  put(' │ configuración   '+where(),S.cfg.from===null?'dim':S.cfg.from==='repo'?'yellow':'green');
+  if(S.cfg.from==='repo') put(' │                 manda sobre tu archivo personal; el equipo lo ve','dim');
+  else if(S.cfg.from===null) put(' │                 guardar crea tu archivo personal; el repositorio no se toca','dim');
+  else put(' │                 está fuera del repositorio; todos tus worktrees lo comparten','dim');
+  put(' │','dim');
+  FIELDS.forEach((f,i)=>{
+    const on=i===S.sel, vals=val(f), def=isDefault(f[0]);
+    const first=S.editing===i?(S.buf+'▏'):(vals[0]===undefined?'—':vals[0]);
+    const mark=on?'▸':' ';
+    put(' │ '+mark+' '+pad(f[1],22)+first+(def&&S.editing!==i?'   (por defecto)':'')+(f[2]==='ro'&&on?'   e abre el archivo':''),on?'lit':'');
+    if(S.editing!==i||true) vals.slice(1).forEach((v,k)=>put(' │   '+pad('',22)+v,on?'lit':''));
+    if(on&&f[2]==='list'&&S.sub!==null) {}
+  });
+  put(' │','dim');
+  const nlist=S.sub!==null;
+  if(nlist){ const f=FIELDS[S.sel]; put(' │ '+f[1]+': ↑↓ elegir · ↵ editar · a añadir · d quitar · esc volver','yellow'); }
+  put(' │ guardar en   '+(S.to==='personal'?'[personal]':' personal ')+'  '+(S.to==='repo'?'[repositorio]':' repositorio ')+'   '+target(),'');
+  const w=warn(); put(' │              '+(w?'⚠ '+w:''),w?'yellow':'');
+  put(' │ '+(S.saved?'✓ '+S.saved:dirty()?'● hay cambios sin guardar':'sin cambios'),S.saved?'green':dirty()?'yellow':'dim');
+  while(L.length<H-3)put(' │','dim');
+  put(' ╰'+'─'.repeat(W-4)+'╯','dim');
+  put(' ↑↓ campo · ↵ editar · g dónde guarda · s guardar · e abrir el archivo · esc cerrar','dim');
+  return L.slice(0,H);
+}
+function paintTerm(){
+  const L=term(); const out=L.map(l=>{ let s=esc(l.s); if(l.c==='lit'){ s=s.replace(/ │ ▸/,' │ <span class="blue b">▸</span>'); } return '<span class="'+l.c+'">'+s+'</span>'; });
+  document.getElementById('t').innerHTML=out.join('\n');
+  document.getElementById('keys').textContent=S.editing!==null?'Escribes el valor · ↵ lo acepta · esc lo deja como estaba':S.sub!==null?'Lista: ↑↓ elegir · ↵ editar · a añadir · d quitar · esc volver':'Teclas: ↑ ↓ campo · ↵ editar · g · s · e · esc';
+}
+function key(e){
+  const k=e.key, f=FIELDS[S.sel];
+  if(S.editing!==null){
+    if(k==='Enter'){ commit(); } else if(k==='Escape'){ S.editing=null; } else if(k==='Backspace'){ S.buf=S.buf.slice(0,-1); } else if(k.length===1){ S.buf+=k; } else return;
+    e.preventDefault(); paintAll(); return;
+  }
+  if(S.sub!==null){
+    const list=S.cfg[f[0]];
+    if(k==='ArrowDown')S.sub=Math.min(list.length-1,S.sub+1); else if(k==='ArrowUp')S.sub=Math.max(0,S.sub-1);
+    else if(k==='Enter'&&list.length){ S.editing=S.sel; S.buf=f[2]==='map'?list[S.sub].join('='):list[S.sub]; }
+    else if(k==='a'){ list.push(f[2]==='map'?['nuevo',list.length]:''); S.sub=list.length-1; S.editing=S.sel; S.buf=f[2]==='map'?'nuevo='+(list.length-1):''; }
+    else if(k==='d'&&list.length){ list.splice(S.sub,1); S.sub=list.length?Math.min(S.sub,list.length-1):null; }
+    else if(k==='Escape')S.sub=null; else return;
+    e.preventDefault(); paintAll(); return;
+  }
+  if(k==='ArrowDown')S.sel=Math.min(FIELDS.length-1,S.sel+1); else if(k==='ArrowUp')S.sel=Math.max(0,S.sel-1);
+  else if(k==='Enter'){ if(f[2]==='text'){ S.editing=S.sel; S.buf=S.cfg[f[0]]; } else if(f[2]==='list'||f[2]==='map'){ if(!S.cfg[f[0]].length){ S.cfg[f[0]].push(f[2]==='map'?['web',0]:''); } S.sub=0; } }
+  else if(k==='g'){ S.to=S.to==='repo'?'personal':'repo'; S.saved=''; }
+  else if(k==='s'){ save(); }
+  else if(k==='e'){ S.saved='se abre '+(S.cfg.file||target())+' en nvim'; }
+  else if(k==='Escape'){ S.saved=dirty()?'hay cambios sin guardar: s guarda, esc otra vez descarta':'(la pantalla se cierra)'; if(S._esc){ reset(); } S._esc=dirty(); }
+  else return;
+  e.preventDefault(); paintAll();
+}
+function commit(){
+  const f=FIELDS[S.sel], list=S.cfg[f[0]];
+  if(f[2]==='text'){ S.cfg[f[0]]=S.buf; }
+  else if(f[2]==='list'){ list[S.sub]=S.buf; if(!S.buf.trim())list.splice(S.sub,1); }
+  else if(f[2]==='map'){ const [n,o]=S.buf.split('='); const off=parseInt(o); if(!/^[a-z0-9_]+$/.test(n||'')||n==='base'||!(off>=0&&off<=99)){ S.saved='⚠ puerto: nombre en minúsculas y un desplazamiento de 0 a 99'; return; } list[S.sub]=[n,off]; }
+  S.editing=null; S.saved='';
+  if(S.sub!==null&&!S.cfg[f[0]].length)S.sub=null;
+}
+function save(){
+  if(!dirty()&&S.cfg.from!==null){ S.saved='no hay nada que guardar'; return; }
+  S.orig=clone(S.cfg); S.cfg.from=S.to; S.orig.from=S.to; S.cfg.file=S.to==='repo'?'~/code/app/.jw.toml':'~/.config/jwn/projects/github.com_acme_app.toml'; S.orig.file=S.cfg.file;
+  S.saved='guardado en '+(S.to==='repo'?'el repositorio':'tu archivo personal')+(warn()?' · '+warn():''); S.toast=S.saved;
+}
+
+/* ---------- the phone ---------- */
+function phone(){
+  const el=document.getElementById('ph'); const f=S.cfg;
+  let h='<div class="hd"><button id="pb" aria-label="Volver">‹</button><div class="t"><b>Proyecto · app</b><span>'+(f.from===null?'sin configuración':f.from==='repo'?'del repositorio':'personal')+'</span></div></div>';
+  h+='<div class="body"><div class="src">'+(f.from===null?'<b>ninguna</b>: se abre con los valores de siempre. Guardar crea tu archivo personal; el repositorio no se toca.':f.from==='repo'?'<b>del repositorio</b> (.jw.toml): manda sobre tu archivo personal y lo ve el equipo.':'<b>personal</b>: fuera del repositorio; todos tus worktrees lo comparten.')+'</div>';
+  FIELDS.forEach((fd,i)=>{
+    const vals=val(fd), dflt=isDefault(fd[0]);
+    h+='<button class="row'+(fd[2]==='ro'?' ro':'')+'" data-i="'+i+'"><span class="k">'+fd[1]+'</span><span class="v">'+(vals.length?vals.map(v=>'<span>'+esc(v)+'</span>').join(''):'<span class="dim">—</span>')+(dflt?'<span class="dim" style="font-size:11px">por defecto</span>':'')+(fd[2]==='ro'?'<span class="dim" style="font-size:11px">se cambian en el archivo</span>':'')+'</span></button>';
+  });
+  h+='</div><div class="foot"><div class="seg" role="group" aria-label="Dónde se guarda"><button data-to="personal" aria-pressed="'+(S.to==='personal')+'">Personal</button><button data-to="repo" aria-pressed="'+(S.to==='repo')+'">Repositorio</button></div>'+(warn()?'<div class="warn">⚠ '+warn()+'</div>':'')+'<button class="save" id="ps" '+(dirty()||f.from===null?'':'disabled')+'>Guardar</button></div>';
+  if(S.sheet!==null){
+    const fd=FIELDS[S.sheet]; const v=S.cfg[fd[0]];
+    h+='<div class="sheet"><b>'+fd[1]+'</b>';
+    if(fd[2]==='text') h+='<input id="pi" value="'+esc(v)+'" aria-label="'+fd[1]+'">'+(fd[0]==='branch'?'<span class="dim" style="font-size:11px">{name} es el nombre del worktree</span>':'');
+    else { v.forEach((x,i)=>{ h+='<div class="li"><input data-l="'+i+'" value="'+esc(fd[2]==='map'?x.join('='):x)+'" aria-label="'+fd[1]+' '+(i+1)+'"><button data-d="'+i+'" aria-label="Quitar">✕</button></div>'; }); h+='<button id="pa" style="min-height:44px">+ añadir</button>'+(fd[2]==='map'?'<span class="dim" style="font-size:11px">nombre=desplazamiento (0 a 99)</span>':''); }
+    h+='<button id="pok" class="save">Listo</button></div>';
+  }
+  if(S.toast)h+='<div class="toast">'+esc(S.toast)+'</div>';
+  el.innerHTML=h;
+  el.querySelectorAll('.row[data-i]').forEach(b=>b.onclick=()=>{ const i=+b.dataset.i; if(FIELDS[i][2]==='ro')return; S.sheet=i; phone(); const inp=el.querySelector('input'); if(inp)inp.focus(); });
+  el.querySelectorAll('[data-to]').forEach(b=>b.onclick=()=>{S.to=b.dataset.to;S.saved='';paintAll()});
+  const ps=el.querySelector('#ps'); if(ps)ps.onclick=()=>{save();paintAll();setTimeout(()=>{S.toast='';phone()},2200)};
+  const pi=el.querySelector('#pi'); if(pi)pi.oninput=()=>{S.cfg[FIELDS[S.sheet][0]]=pi.value;paintTerm()};
+  el.querySelectorAll('input[data-l]').forEach(inp=>inp.onchange=()=>{ const fd=FIELDS[S.sheet],i=+inp.dataset.l; if(fd[2]==='map'){const [n,o]=inp.value.split('=');const off=parseInt(o);if(/^[a-z0-9_]+$/.test(n||'')&&n!=='base'&&off>=0&&off<=99)S.cfg[fd[0]][i]=[n,off];} else S.cfg[fd[0]][i]=inp.value; paintAll(); });
+  el.querySelectorAll('[data-d]').forEach(b=>b.onclick=()=>{ const fd=FIELDS[S.sheet]; S.cfg[fd[0]].splice(+b.dataset.d,1); paintAll(); });
+  const pa=el.querySelector('#pa'); if(pa)pa.onclick=()=>{ const fd=FIELDS[S.sheet]; S.cfg[fd[0]].push(fd[2]==='map'?['nuevo',S.cfg[fd[0]].length]:''); paintAll(); const ins=el.querySelectorAll('input[data-l]'); if(ins.length)ins[ins.length-1].focus(); };
+  const pok=el.querySelector('#pok'); if(pok)pok.onclick=()=>{ const fd=FIELDS[S.sheet]; if(fd[2]==='list')S.cfg[fd[0]]=S.cfg[fd[0]].filter(x=>String(x).trim()); S.sheet=null; paintAll(); };
+}
+function paintAll(){ paintTerm(); phone(); }
+document.getElementById('scen').addEventListener('click',e=>{ const b=e.target.closest('[data-s]'); if(!b)return; S.scen=b.dataset.s; reset(); document.querySelectorAll('#scen [data-s]').forEach(x=>x.setAttribute('aria-pressed',x===b)); paintAll(); });
+document.getElementById('reset').onclick=()=>{reset();paintAll()};
+document.getElementById('theme').onclick=()=>{const r=document.documentElement;const dark=r.dataset.theme?r.dataset.theme==='dark':!matchMedia('(prefers-color-scheme: light)').matches;r.dataset.theme=dark?'light':'dark';
+  const v=r.dataset.theme==='light'?{'--bg':'#fafafa','--panel':'#f0f0f1','--fg':'#383a42','--dim':'#a0a1a7','--line':'#dbdbdc','--sel':'#e5e5e6','--blue':'#4078f2','--green':'#50a14f','--yellow':'#c18401','--red':'#e45649','--magenta':'#a626a4','--cyan':'#0184bc'}:{'--bg':'#282c34','--panel':'#21252b','--fg':'#abb2bf','--dim':'#5c6370','--line':'#3e4451','--sel':'#2c313a','--blue':'#61afef','--green':'#98c379','--yellow':'#e5c07b','--red':'#e06c75','--magenta':'#c678dd','--cyan':'#56b6c2'};
+  for(const k in v)r.style.setProperty(k,v[k]); };
+const t=document.getElementById('t'); t.addEventListener('keydown',key);
+reset(); paintAll(); t.focus({preventScroll:true});
+</script>

@@ -165,9 +165,9 @@ sealed interface Cmd {
     @Serializable @SerialName("project_config")
     data class ProjectConfig(val repo: String) : Cmd
 
-    /** Start the panes of a workspace that has none; the result is `{panes: [id]}`. */
+    /** Start the one panel of a workspace that has none, as [open] says or, when it is null, as its settings do; the result is `{panes: [id]}`. */
     @Serializable @SerialName("start_workspace")
-    data class StartWorkspace(val workspace: Id) : Cmd
+    data class StartWorkspace(val workspace: Id, val open: OpenKind? = null) : Cmd
 
     @Serializable @SerialName("new_pane")
     data class NewPane(val workspace: Id, val program: List<String>? = null, val beside: Id? = null, val dir: SplitDir? = null) : Cmd
@@ -417,6 +417,13 @@ data class FileEntry(
 @Serializable
 data class FileListing(val path: String, val entries: List<FileEntry>, val total: Int)
 
+/** What the one panel of a workspace is: a shell or `claude` (REQ-504). */
+@Serializable
+enum class OpenKind {
+    @SerialName("shell") Shell,
+    @SerialName("claude") Claude,
+}
+
 /** Where a project's settings are written (REQ-482). */
 @Serializable
 enum class ConfigFrom {
@@ -431,7 +438,8 @@ data class ProjectInfo(
     val root: String,
     val branch: String,
     val setup: List<String>,
-    val panes: List<String>,
+    /** What a workspace opens with: the one panel's program. */
+    val open: OpenKind,
     /** Which file the settings are of: the repository's own or the personal one; none when the defaults are used. */
     val from: ConfigFrom? = null,
     /** Where the personal file is or would be. */

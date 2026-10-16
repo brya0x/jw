@@ -23,6 +23,7 @@ import dev.jw.next.contract.FileListing
 import dev.jw.next.contract.Id
 import dev.jw.next.contract.Image
 import dev.jw.next.contract.MarkdownDoc
+import dev.jw.next.contract.OpenKind
 import dev.jw.next.contract.Node
 import dev.jw.next.contract.Peer
 import dev.jw.next.contract.ProjectInfo
@@ -173,13 +174,13 @@ abstract class ProtocolSource : AppSource() {
         command(Cmd.ProjectConfig(repo)) { r -> reply(r.read(ProjectInfo.serializer())) }
     }
 
-    override fun startWorkspace(workspace: Id, reply: (Result<Unit>) -> Unit) {
-        command(Cmd.StartWorkspace(workspace)) { reply(it.done("el PC no pudo abrir los paneles")) }
+    override fun startWorkspace(workspace: Id, open: OpenKind?, reply: (Result<Unit>) -> Unit) {
+        command(Cmd.StartWorkspace(workspace, open)) { reply(it.done("el PC no pudo abrir el panel")) }
     }
 
-    override fun createWorktree(repo: String, branch: String, base: String?, folder: String, reply: (Result<Id>) -> Unit) {
+    override fun createWorktree(repo: String, branch: String, base: String?, folder: String, open: OpenKind?, reply: (Result<Id>) -> Unit) {
         command(Cmd.CreateWorktree(repo, branch, base, folder)) { r ->
-            worktreeStarted(r.workspaceId("el PC no pudo crear el worktree"), ::startWorkspace, ::newPane, reply)
+            worktreeStarted(r.workspaceId("el PC no pudo crear el worktree"), { ws, done -> startWorkspace(ws, open, done) }, ::newPane, reply)
         }
     }
 

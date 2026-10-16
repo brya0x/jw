@@ -500,12 +500,13 @@ pub enum After {
         create: bool,
     },
     /// Make a worktree of `repo` on a new `branch` from `from`, in the folder `folder` of
-    /// `<repo>-wt`, and open it with a shell.
+    /// `<repo>-wt`, and open it with a shell or `claude` as `open` says.
     CreateWorktree {
         repo: std::path::PathBuf,
         branch: String,
         from: String,
         folder: String,
+        open: contract::OpenKind,
     },
     /// Close a workspace, and with `remove_worktree` remove its worktree. The daemon never
     /// forces: git refuses a worktree with changes.
@@ -1447,6 +1448,7 @@ impl View {
                 branch,
                 from,
                 folder,
+                open,
             } => {
                 self.worktree = None;
                 After::CreateWorktree {
@@ -1454,6 +1456,7 @@ impl View {
                     branch,
                     from,
                     folder,
+                    open,
                 }
             }
         }
@@ -4373,25 +4376,32 @@ fn check_changes(view: &mut View, client: &mut Client, workspace: String) {
 }
 
 /// A workspace the daemon made for the client: give it a shell, and open it when it appears.
-fn shown_in_a_pane(view: &mut View, client: &mut Client, reply: Reply, failed: &str, start: bool) {
+fn shown_in_a_pane(
+    view: &mut View,
+    client: &mut Client,
+    reply: Reply,
+    failed: &str,
+    open: Option<contract::OpenKind>,
+) {
     match reply {
         Ok(Ok(result)) => {
             if let Some(ws) = result.as_ref().and_then(|r| r["workspace"].as_str()) {
-                // A workspace starts the panes its settings say (a folder's, its repository's
-                // when it is its top level); when that cannot be done it is one shell.
-                let started = start
-                    && match reply_value(client.cmd_within(
-                        Cmd::StartWorkspace {
-                            workspace: ws.to_owned(),
-                        },
-                        ASK_WAIT,
-                    )) {
-                        Ok(_) => true,
-                        Err(why) => {
-                            view.manage_failed("No se pudieron abrir los paneles", &why);
-                            false
-                        }
-                    };
+                // A workspace opens with the one panel its settings or the person's choice say
+                // (a folder's, its repository's when it is its top level); when that cannot be
+                // done it is one shell.
+                let started = match reply_value(client.cmd_within(
+                    Cmd::StartWorkspace {
+                        workspace: ws.to_owned(),
+                        open,
+                    },
+                    ASK_WAIT,
+                )) {
+                    Ok(_) => true,
+                    Err(why) => {
+                        view.manage_failed("No se pudieron abrir los paneles", &why);
+                        false
+                    }
+                };
                 if !started {
                     match client.cmd(Cmd::NewPane {
                         workspace: ws.to_owned(),
@@ -4554,7 +4564,7 @@ fn do_after(
                 let reply = client.cmd(Cmd::OpenFolder {
                     path: path.to_string_lossy().into_owned(),
                 });
-                shown_in_a_pane(view, client, reply, "No se pudo abrir la carpeta", true);
+                shown_in_a_pane(view, client, reply, "No se pudo abrir la carpeta", None);
             }
         }
         After::CreateWorktree {
@@ -4562,6 +4572,7 @@ fn do_after(
             branch,
             from,
             folder,
+            open,
         } => {
             let reply = client.cmd_within(
                 Cmd::CreateWorktree {
@@ -4572,7 +4583,13 @@ fn do_after(
                 },
                 ASK_WAIT,
             );
-            shown_in_a_pane(view, client, reply, "No se pudo crear el worktree", true);
+            shown_in_a_pane(
+                view,
+                client,
+                reply,
+                "No se pudo crear el worktree",
+                Some(open),
+            );
         }
         After::Sync { workspace } => spawn_sync(workspace, sync_tx.clone()),
         After::Rename { target, name } => {
@@ -7581,7 +7598,7 @@ mod tests {
             "root": root,
             "branch": "feat/{name}",
             "setup": setup.unwrap_or(&[]),
-            "panes": if setup.is_some() { vec!["nvim", "claude"] } else { vec!["zsh"] },
+            "open": if setup.is_some() { "claude" } else { "shell" },
         }))))
     }
 
@@ -7601,8 +7618,13 @@ mod tests {
         let t = v.plain(120, 30);
         assert!(t.contains("setup     bun install"), "{t}");
         assert!(t.contains("          cp .env.example .env"), "{t}");
-        assert!(t.contains("paneles   nvim │ claude │ setup"), "{t}");
+        assert!(t.contains("[claude]") && t.contains("tras el setup"), "{t}");
+        assert!(!t.contains("[shell]"), "{t}");
         assert!(t.contains("según el .jw.toml de app"), "{t}");
+        // `tab` changes what this worktree opens with, and `↵` says it (REQ-510).
+        v.press_key(plain(KeyCode::Tab));
+        let t = v.plain(120, 30);
+        assert!(t.contains("[shell]") && !t.contains("[claude]"), "{t}");
         // An answer for another repository is not this box's.
         v.project_replied(
             &root.join("other"),
@@ -7611,13 +7633,13 @@ mod tests {
                 message: "x".into(),
             })),
         );
-        assert!(v.plain(120, 30).contains("paneles   nvim"));
+        assert!(v.plain(120, 30).contains("abre      "));
         // A repository with no file: its panes and a line that says so.
         let mut v = view_on(&root);
         tap(&mut v, 'w');
         v.project_replied(&root.join("app"), project_reply(&root.join("app-wt"), None));
         let t = v.plain(120, 30);
-        assert!(t.contains("paneles   zsh"), "{t}");
+        assert!(t.contains("[shell]"), "{t}");
         assert!(t.contains("sin configuración: como siempre"), "{t}");
         // The person's own file says so (REQ-488).
         let mut v = view_on(&root);
@@ -7631,7 +7653,7 @@ mod tests {
                 "root": root.join("app-wt"),
                 "branch": "feat/{name}",
                 "setup": [],
-                "panes": ["zsh"],
+                "open": "shell",
             })))),
         );
         assert!(v.plain(120, 30).contains("según tu configuración de app"));
@@ -7687,7 +7709,8 @@ mod tests {
                 repo: root.join("app"),
                 branch: "feat/fix".into(),
                 from: "feat/login".into(),
-                folder: "fix".into()
+                folder: "fix".into(),
+                open: contract::OpenKind::Shell,
             }
         );
         assert!(v.worktree.is_none());
@@ -7808,14 +7831,14 @@ mod tests {
         };
         let mut v = fixture_view();
 
-        // With a setup there is a shell and the setup's pane.
+        // With a setup the one panel runs it first (REQ-507).
         let reply = make(&mut c, "one");
         let ws = reply.as_ref().unwrap().as_ref().unwrap().as_ref().unwrap()["workspace"]
             .as_str()
             .unwrap()
             .to_owned();
-        shown_in_a_pane(&mut v, &mut c, reply, "x", true);
-        assert_eq!(panes_of(&mut c, &ws), 2);
+        shown_in_a_pane(&mut v, &mut c, reply, "x", None);
+        assert_eq!(panes_of(&mut c, &ws), 1);
         assert!(v.manage.is_none(), "nothing failed");
         assert!(v.goto.is_some(), "and the client goes there");
 
@@ -7826,7 +7849,7 @@ mod tests {
             .as_str()
             .unwrap()
             .to_owned();
-        shown_in_a_pane(&mut v, &mut c, reply, "x", true);
+        shown_in_a_pane(&mut v, &mut c, reply, "x", None);
         assert!(
             matches!(&v.manage, Some(Manage::Failed { text, .. }) if text.contains(".jw.toml")),
             "the message is shown"
@@ -7844,7 +7867,7 @@ mod tests {
             .as_str()
             .unwrap()
             .to_owned();
-        shown_in_a_pane(&mut v, &mut c, reply, "x", true);
+        shown_in_a_pane(&mut v, &mut c, reply, "x", None);
         assert_eq!(panes_of(&mut c, &ws), 1);
         assert!(v.manage.is_none(), "nothing failed");
 
@@ -7861,7 +7884,7 @@ mod tests {
             .as_str()
             .unwrap()
             .to_owned();
-        shown_in_a_pane(&mut v, &mut c, reply, "x", true);
+        shown_in_a_pane(&mut v, &mut c, reply, "x", None);
         assert!(
             matches!(&v.manage, Some(Manage::Failed { text, .. }) if text.contains(".jw.toml")),
             "the message is shown"
