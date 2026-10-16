@@ -14,6 +14,9 @@ use crate::procs::title_for;
 
 const FILE: &str = ".jw.toml";
 const MAX_PANES: usize = 8;
+/// The most a settings text may weigh to be written, and the most a file name is made of.
+const MAX_TEXT: usize = 64 * 1024;
+const MAX_KEY: usize = 180;
 /// What the layout keeps of a worktree's height when a setup pane goes under it, in thousandths.
 pub const SETUP_SHARE: u16 = 680;
 
@@ -118,6 +121,8 @@ fn origin_of(top: &Path) -> Option<String> {
 /// The name of the personal file of a repository, without its extension (REQ-483): its origin
 /// as `host_path`, whatever way it was written, or its path when it has none.
 pub fn key(origin: Option<&str>, top: &Path) -> String {
+    // No `/` and nothing that is not a letter, a digit, `.`, `-` or `_` is left in a name, so a
+    // hostile origin cannot name a file outside the personal folder; a long one is cut.
     let slug = |s: &str| -> String {
         s.chars()
             .map(|c| match c {
@@ -125,6 +130,7 @@ pub fn key(origin: Option<&str>, top: &Path) -> String {
                 '/' => '_',
                 _ => '-',
             })
+            .take(MAX_KEY)
             .collect()
     };
     match origin.map(str::trim).filter(|o| !o.is_empty()) {
@@ -199,6 +205,13 @@ pub fn write(
     to: ConfigFrom,
     text: &str,
 ) -> Result<(PathBuf, bool), String> {
+    if text.len() > MAX_TEXT {
+        return Err(format!(
+            "the settings weigh {} KiB: at most {} KiB are written",
+            text.len() / 1024,
+            MAX_TEXT / 1024
+        ));
+    }
     let personal = personal_of(top, personal_dir);
     let target = match to {
         ConfigFrom::Repo => top.join(FILE),
@@ -214,15 +227,27 @@ pub fn write(
     let dir = target.parent().ok_or("the file has no folder")?;
     let name = label_of(Some(&target));
     let private = to == ConfigFrom::Personal;
-    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let tmp = dir.join(format!(".{name}.tmp"));
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        // The personal folder is the person's: nobody else lists what projects there are.
+        let mut folder = std::fs::DirBuilder::new();
+        folder.recursive(true);
+        if private {
+            folder.mode(0o700);
+        }
+        folder
+            .create(dir)
+            .map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    let tmp = dir.join(format!("{name}.tmp"));
+    // A leftover, or a link a repository planted there, is removed and never written through.
+    let _ = std::fs::remove_file(&tmp);
     {
         use std::io::Write;
         use std::os::unix::fs::OpenOptionsExt;
         let mut file = std::fs::OpenOptions::new()
             .write(true)
-            .create(true)
-            .truncate(true)
+            .create_new(true)
             .mode(if private { 0o600 } else { 0o644 })
             .open(&tmp)
             .map_err(|e| format!("{}: {e}", tmp.display()))?;
@@ -853,5 +878,34 @@ mod tests {
             personal_file(Path::new("/c/projects"), Some("git@h:o/r.git"), top),
             Path::new("/c/projects/h_o_r.toml")
         );
+    }
+
+    #[test]
+    fn no_origin_can_name_a_file_outside_the_personal_folder_and_a_long_one_is_cut() {
+        let top = Path::new("/r");
+        for hostile in [
+            "../../etc/passwd",
+            "/etc/cron.d/x",
+            "https://h/..%2f..%2fx",
+            "..",
+            "a/../../b",
+        ] {
+            let name = key(Some(hostile), top);
+            assert!(
+                !name.contains('/') && !name.contains('\0'),
+                "{hostile}: {name}"
+            );
+            let file = personal_file(Path::new("/c/projects"), Some(hostile), top);
+            assert_eq!(
+                file.parent(),
+                Some(Path::new("/c/projects")),
+                "{hostile}: {file:?}"
+            );
+        }
+        assert_eq!(
+            key(Some(&format!("https://h/{}", "a".repeat(500))), top).len(),
+            MAX_KEY
+        );
+        assert!(key(None, Path::new(&format!("/{}", "d/".repeat(300)))).len() <= MAX_KEY + 6);
     }
 }

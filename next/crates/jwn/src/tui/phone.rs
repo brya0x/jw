@@ -499,7 +499,7 @@ mod tests {
                 gh: None,
                 github_every: Duration::from_millis(100),
                 conversation: false,
-                projects: std::env::temp_dir().join("jwn-projects-unused"),
+                projects: dir.join("projects"),
             };
             Pc {
                 dir,

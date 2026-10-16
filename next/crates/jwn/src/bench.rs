@@ -52,7 +52,7 @@ pub fn run() -> Result<(), String> {
         gh: None,
         github_every: std::time::Duration::from_secs(60),
         conversation: false,
-        projects: std::env::temp_dir().join("jwn-projects-unused"),
+        projects: dir.join("projects"),
     };
     let socket = config.socket.clone();
     let daemon =

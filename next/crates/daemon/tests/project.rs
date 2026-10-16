@@ -654,3 +654,42 @@ fn writing_the_settings_checks_them_first_keeps_the_personal_file_private_and_ne
     );
     d.stop();
 }
+
+#[test]
+fn writing_into_the_repository_never_goes_through_a_link_planted_where_the_temporary_file_goes() {
+    let sb = Sandbox::new();
+    let d = sb.start();
+    let app = repo(&sb, None);
+    let victim = sb.dir.join("victim.txt");
+    std::fs::write(&victim, "intacto").unwrap();
+    std::os::unix::fs::symlink(&victim, app.join(".jw.toml.tmp")).unwrap();
+    let mut c = sb.client();
+    write(
+        &mut c,
+        &app,
+        contract::ConfigFrom::Repo,
+        "branch = \"a/{name}\"\n",
+    )
+    .unwrap();
+    assert_eq!(std::fs::read_to_string(&victim).unwrap(), "intacto");
+    assert_eq!(
+        std::fs::read_to_string(app.join(".jw.toml")).unwrap(),
+        "branch = \"a/{name}\"\n"
+    );
+    assert!(!app.join(".jw.toml.tmp").exists());
+    // a text that is too big is refused whole
+    let big = "# ".repeat(40 * 1024);
+    let (code, why) = write(&mut c, &app, contract::ConfigFrom::Personal, &big).unwrap_err();
+    assert_eq!(code, ErrorCode::BadRequest);
+    assert!(why.contains("KiB"), "{why}");
+    // the personal folder is made for its owner only
+    use std::os::unix::fs::PermissionsExt;
+    write(&mut c, &app, contract::ConfigFrom::Personal, "").unwrap();
+    let mode = std::fs::metadata(sb.dir.join("projects"))
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o700);
+    d.stop();
+}

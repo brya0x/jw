@@ -7778,7 +7778,7 @@ mod tests {
             gh: None,
             github_every: Duration::from_millis(100),
             conversation: false,
-            projects: std::env::temp_dir().join("jwn-projects-unused"),
+            projects: dir.join("projects"),
         };
         let d = daemon::Daemon::start(config.clone()).unwrap();
         let c = Client::connect(&config.socket, "test").unwrap();
