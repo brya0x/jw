@@ -193,6 +193,10 @@ sealed interface Cmd {
     @Serializable @SerialName("read_markdown")
     data class ReadMarkdown(val workspace: Id, val path: String) : Cmd
 
+    /** Write the settings of the repository [repo] is in to its own `.jw.toml` or to the personal file, after checking them. */
+    @Serializable @SerialName("write_project_config")
+    data class WriteProjectConfig(val repo: String, val to: ConfigFrom, val text: String) : Cmd
+
     /** The plan that waits in a conversation, whole, as blocks. The result is a [MarkdownDoc]. */
     @Serializable @SerialName("read_plan")
     data class ReadPlan(val node: Id, val ask: String) : Cmd
@@ -413,6 +417,13 @@ data class FileEntry(
 @Serializable
 data class FileListing(val path: String, val entries: List<FileEntry>, val total: Int)
 
+/** Where a project's settings are written (REQ-482). */
+@Serializable
+enum class ConfigFrom {
+    @SerialName("repo") Repo,
+    @SerialName("personal") Personal,
+}
+
 /** The result of `project_config`: [panes] are the programs of the layout's panes, the `setup` pane not among them. */
 @Serializable
 data class ProjectInfo(
@@ -421,6 +432,10 @@ data class ProjectInfo(
     val branch: String,
     val setup: List<String>,
     val panes: List<String>,
+    /** Which file the settings are of: the repository's own or the personal one; none when the defaults are used. */
+    val from: ConfigFrom? = null,
+    /** Where the personal file is or would be. */
+    val personal: String = "",
 )
 
 /** The result of `list_dir`: [dirs] is cut to the first ones when [total] is more than they are. */

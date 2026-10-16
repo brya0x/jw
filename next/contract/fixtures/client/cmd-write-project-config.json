@@ -1,0 +1,10 @@
+{
+  "t": "cmd",
+  "id": "c53",
+  "cmd": {
+    "cmd": "write_project_config",
+    "repo": "/home/u/code/app",
+    "to": "personal",
+    "text": "branch = \"bryan/{name}\"\nsetup = [\"bun install\"]\n"
+  }
+}

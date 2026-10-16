@@ -7576,6 +7576,8 @@ mod tests {
     fn project_reply(root: &std::path::Path, setup: Option<&[&str]>) -> Reply {
         Ok(Ok(Some(serde_json::json!({
             "source": setup.map(|_| root.join(".jw.toml")),
+            "from": setup.map(|_| "repo"),
+            "personal": root.join("projects/app.toml"),
             "root": root,
             "branch": "feat/{name}",
             "setup": setup.unwrap_or(&[]),
@@ -7616,7 +7618,23 @@ mod tests {
         v.project_replied(&root.join("app"), project_reply(&root.join("app-wt"), None));
         let t = v.plain(120, 30);
         assert!(t.contains("paneles   zsh"), "{t}");
-        assert!(t.contains("sin .jw.toml: como siempre"), "{t}");
+        assert!(t.contains("sin configuración: como siempre"), "{t}");
+        // The person's own file says so (REQ-488).
+        let mut v = view_on(&root);
+        tap(&mut v, 'w');
+        v.project_replied(
+            &root.join("app"),
+            Ok(Ok(Some(serde_json::json!({
+                "source": root.join("projects/app.toml"),
+                "from": "personal",
+                "personal": root.join("projects/app.toml"),
+                "root": root.join("app-wt"),
+                "branch": "feat/{name}",
+                "setup": [],
+                "panes": ["zsh"],
+            })))),
+        );
+        assert!(v.plain(120, 30).contains("según tu configuración de app"));
         // The daemon's refusal is the box's whole content and ↵ does nothing.
         let mut v = view_on(&root);
         tap(&mut v, 'w');
@@ -7760,6 +7778,7 @@ mod tests {
             gh: None,
             github_every: Duration::from_millis(100),
             conversation: false,
+            projects: std::env::temp_dir().join("jwn-projects-unused"),
         };
         let d = daemon::Daemon::start(config.clone()).unwrap();
         let c = Client::connect(&config.socket, "test").unwrap();

@@ -4,6 +4,8 @@
   "ok": true,
   "result": {
     "source": "/home/u/code/app/.jw.toml",
+    "from": "repo",
+    "personal": "/home/u/.config/jwn/projects/github.com_acme_app.toml",
     "root": "/home/u/code/app-trees",
     "branch": "bryan/{name}",
     "setup": [

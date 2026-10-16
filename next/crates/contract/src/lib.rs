@@ -416,6 +416,13 @@ pub enum Cmd {
         node: Id,
         ask: String,
     },
+    /// Write the settings of the repository `repo` is in, to its own `.jw.toml` or to the
+    /// personal file, after checking them (REQ-486). The result is `{path, shadowed}`.
+    WriteProjectConfig {
+        repo: String,
+        to: ConfigFrom,
+        text: String,
+    },
 }
 
 /// A node: one document of the tree, opened on demand and cached by clients.
@@ -529,13 +536,27 @@ pub struct FileListing {
     pub total: usize,
 }
 
+/// Where a project's settings are written: its repository or the person's own folder (REQ-482).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigFrom {
+    Repo,
+    Personal,
+}
+
 /// The result of `project_config`: what a worktree of the repository will be. `panes` are the
 /// programs of the layout's panes (the `setup` pane is not among them).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectInfo {
-    /// The `.jw.toml` read; none when the repository has no file.
+    /// The file read; none when the repository has none and the defaults are used.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    /// Which file that is: the repository's own `.jw.toml` or the personal one (REQ-485).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<ConfigFrom>,
+    /// Where the personal file is or would be, whether it exists or not.
+    #[serde(default)]
+    pub personal: String,
     /// The folder worktrees go in.
     pub root: String,
     /// The template of a worktree's branch; clients replace `{name}`.

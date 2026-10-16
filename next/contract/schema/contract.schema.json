@@ -476,6 +476,7 @@
         { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "list_conversations" }, "workspace": { "$ref": "#/$defs/Id" } } },
         { "type": "object", "required": ["cmd", "workspace", "path"], "properties": { "cmd": { "const": "read_markdown" }, "workspace": { "$ref": "#/$defs/Id" }, "path": { "type": "string" } } },
         { "type": "object", "required": ["cmd", "node", "ask"], "properties": { "cmd": { "const": "read_plan" }, "node": { "$ref": "#/$defs/Id" }, "ask": { "type": "string" } } },
+        { "type": "object", "required": ["cmd", "repo", "to", "text"], "properties": { "cmd": { "const": "write_project_config" }, "repo": { "type": "string" }, "to": { "enum": ["repo", "personal"] }, "text": { "type": "string", "maxLength": 65536 } } },
         { "type": "object", "required": ["cmd", "workspace", "query"], "properties": { "cmd": { "const": "find_files" }, "workspace": { "$ref": "#/$defs/Id" }, "query": { "type": "string" } } },
         { "type": "object", "required": ["cmd", "workspace", "name"], "properties": { "cmd": { "const": "rename_workspace" }, "workspace": { "$ref": "#/$defs/Id" }, "name": { "type": "string", "maxLength": 80 } } },
         { "type": "object", "required": ["cmd", "pane", "name"], "properties": { "cmd": { "const": "rename_pane" }, "pane": { "$ref": "#/$defs/Id" }, "name": { "type": "string", "maxLength": 80 } } },

@@ -144,7 +144,7 @@ pub fn create_worktree(
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "repo".into());
-    let dest = crate::start::load(&top)?
+    let dest = crate::start::load(shared, &top)?
         .root
         .join(folder.map_or_else(|| git::slug(branch), str::to_owned));
     let dest_text = dest.to_string_lossy().into_owned();

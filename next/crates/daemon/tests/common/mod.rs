@@ -38,6 +38,7 @@ impl Sandbox {
             gh: None,
             github_every: Duration::from_millis(100),
             conversation: false,
+            projects: self.dir.join("projects"),
         }
     }
 

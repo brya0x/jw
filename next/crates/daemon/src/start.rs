@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use contract::{ErrorCode, Id, Layout, ProjectInfo, SplitDir, WorkspaceKind};
+use contract::{ConfigFrom, ErrorCode, Id, Layout, ProjectInfo, SplitDir, WorkspaceKind};
 use serde_json::json;
 
 use crate::commands::{Done, ErrorBody, err};
@@ -13,21 +13,24 @@ use crate::{git, panes, rename};
 
 /// The settings of the repository `top` is the top level of; a file that cannot be used is a
 /// `bad_request` that says why and the line.
-pub fn load(top: &Path) -> Result<Project, ErrorBody> {
-    project::read(top).map_err(|why| err(ErrorCode::BadRequest, why))
+pub fn load(shared: &Shared, top: &Path) -> Result<Project, ErrorBody> {
+    let personal = shared.lock().projects_dir.clone();
+    project::read(top, &personal).map_err(|why| err(ErrorCode::BadRequest, why))
 }
 
 /// `project_config`: what the settings of the repository `repo` is in come to.
 pub fn project_config(shared: &Shared, repo: &str) -> Done {
     let dir = crate::workspaces::absolute(repo)?;
     let top = git::toplevel(&dir).map_err(|m| err(ErrorCode::GitFailed, m))?;
-    let project = load(Path::new(&top))?;
+    let project = load(shared, Path::new(&top))?;
     let shell = shared.lock().shell.clone();
     let info = ProjectInfo {
         source: project
             .source
             .as_ref()
             .map(|s| s.to_string_lossy().into_owned()),
+        from: project.from,
+        personal: project.personal.to_string_lossy().into_owned(),
         root: project.root.to_string_lossy().into_owned(),
         branch: project.branch.clone(),
         setup: project.setup.clone(),
@@ -35,6 +38,19 @@ pub fn project_config(shared: &Shared, repo: &str) -> Done {
     };
     Ok(Some(
         serde_json::to_value(info).expect("a ProjectInfo is JSON"),
+    ))
+}
+
+/// `write_project_config`: the settings of the repository `repo` is in, checked and written to
+/// the file `to` says (REQ-486, REQ-487).
+pub fn write_project_config(shared: &Shared, repo: &str, to: ConfigFrom, text: &str) -> Done {
+    let dir = crate::workspaces::absolute(repo)?;
+    let top = git::toplevel(&dir).map_err(|m| err(ErrorCode::GitFailed, m))?;
+    let personal = shared.lock().projects_dir.clone();
+    let (path, shadowed) = project::write(Path::new(&top), &personal, to, text)
+        .map_err(|why| err(ErrorCode::BadRequest, why))?;
+    Ok(Some(
+        json!({ "path": path.to_string_lossy(), "shadowed": shadowed }),
     ))
 }
 
@@ -83,7 +99,7 @@ pub fn start_workspace(shared: &Shared, workspace: &Id) -> Done {
     let Some(top) = top else {
         return Ok(Some(json!({ "panes": [spawn(shared, workspace, None)?] })));
     };
-    let project = load(&PathBuf::from(top))?;
+    let project = load(shared, &PathBuf::from(top))?;
 
     let mut ids = Vec::new();
     match &project.layout {

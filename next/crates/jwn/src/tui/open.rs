@@ -592,10 +592,14 @@ pub fn draw_worktree(g: &mut Grid, (x, y, w, _): Rect, t: &Worktree) {
                         format!("paneles   {}{setup}", info.panes.join(" │ ")),
                         plain,
                     ));
-                    let source = if info.source.is_some() {
-                        format!("según el .jw.toml de {}", repo_name(&t.repo))
-                    } else {
-                        "sin .jw.toml: como siempre".to_owned()
+                    let source = match info.from {
+                        Some(contract::ConfigFrom::Repo) => {
+                            format!("según el .jw.toml de {}", repo_name(&t.repo))
+                        }
+                        Some(contract::ConfigFrom::Personal) => {
+                            format!("según tu configuración de {}", repo_name(&t.repo))
+                        }
+                        None => "sin configuración: como siempre".to_owned(),
                     };
                     v.push((source, Style::fg(look::dim())));
                 }
@@ -783,6 +787,8 @@ mod tests {
     fn defaults(root: &Path) -> ProjectInfo {
         ProjectInfo {
             source: None,
+            from: None,
+            personal: String::new(),
             root: root.join("app-wt").to_string_lossy().into_owned(),
             branch: "feat/{name}".into(),
             setup: Vec::new(),
@@ -910,6 +916,8 @@ mod tests {
         let app = repo(&root);
         let info = ProjectInfo {
             source: Some(app.join(".jw.toml").to_string_lossy().into_owned()),
+            from: Some(contract::ConfigFrom::Repo),
+            personal: String::new(),
             root: root.join("trees").to_string_lossy().into_owned(),
             branch: "bryan/{name}".into(),
             setup: vec!["bun install".into()],

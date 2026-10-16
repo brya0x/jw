@@ -263,6 +263,8 @@ class ConformanceTest {
         val info = ContractJson.decodeFromJsonElement(ProjectInfo.serializer(), result)
         assertEquals("bryan/{name}", info.branch)
         assertEquals(listOf("nvim", "claude"), info.panes)
+        assertEquals(ConfigFrom.Repo, info.from)
+        assertEquals("/home/u/.config/jwn/projects/github.com_acme_app.toml", info.personal)
         assertEquals(result, ContractJson.encodeToJsonElement(ProjectInfo.serializer(), info))
     }
 }

@@ -67,6 +67,9 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
             workspaces::create_worktree(shared, &repo, &branch, base.as_deref(), folder.as_deref())
         }
         Cmd::ProjectConfig { repo } => start::project_config(shared, &repo),
+        Cmd::WriteProjectConfig { repo, to, text } => {
+            start::write_project_config(shared, &repo, to, &text)
+        }
         Cmd::StartWorkspace { workspace } => start::start_workspace(shared, &workspace),
         Cmd::RemoveWorkspace {
             workspace,

@@ -436,3 +436,221 @@ fn without_a_file_or_for_a_folder_start_workspace_opens_one_shell_and_a_workspac
     assert_eq!(r["panes"].as_array().unwrap().len(), 1);
     d.stop();
 }
+
+fn config(c: &mut Client, repo: &Path) -> Value {
+    ok(c, Cmd::ProjectConfig { repo: text(repo) })
+}
+
+fn write(
+    c: &mut Client,
+    repo: &Path,
+    to: contract::ConfigFrom,
+    body: &str,
+) -> Result<Value, (ErrorCode, String)> {
+    c.cmd(Cmd::WriteProjectConfig {
+        repo: text(repo),
+        to,
+        text: body.to_owned(),
+    })
+    .unwrap()
+    .map(|r| r.unwrap())
+    .map_err(|e| (e.code, e.message))
+}
+
+/// N91: where the settings are (REQ-482 to REQ-487).
+#[test]
+fn the_settings_come_from_the_repository_then_from_the_personal_file_then_from_the_defaults() {
+    let sb = Sandbox::new();
+    let d = sb.start();
+    let app = repo(&sb, None);
+    let mut c = sb.client();
+
+    // neither file: the defaults, and where the personal one would be
+    let none = config(&mut c, &app);
+    assert_eq!(none["branch"], "feat/{name}");
+    assert!(none.get("source").is_none() && none.get("from").is_none());
+    let personal = PathBuf::from(none["personal"].as_str().unwrap());
+    assert!(
+        personal.starts_with(sb.dir.join("projects")),
+        "{personal:?}"
+    );
+    assert!(
+        personal
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("local_"),
+        "a repository with no origin is named by its path: {personal:?}"
+    );
+    assert!(!personal.exists(), "asking writes nothing");
+
+    // the personal file, read as a `.jw.toml` is
+    std::fs::create_dir_all(personal.parent().unwrap()).unwrap();
+    std::fs::write(&personal, "branch = \"mio/{name}\"\nsetup = [\"true\"]\n").unwrap();
+    let mine = config(&mut c, &app);
+    assert_eq!(mine["branch"], "mio/{name}");
+    assert_eq!(
+        (mine["from"].as_str(), mine["source"].as_str()),
+        (Some("personal"), personal.to_str())
+    );
+    assert_eq!(mine["setup"], serde_json::json!(["true"]));
+
+    // the repository's own file wins, and the personal one is not read
+    std::fs::write(app.join(".jw.toml"), "branch = \"equipo/{name}\"\n").unwrap();
+    let theirs = config(&mut c, &app);
+    assert_eq!(theirs["branch"], "equipo/{name}");
+    assert_eq!(theirs["from"], "repo");
+    assert_eq!(theirs["setup"], serde_json::json!([]));
+    assert_eq!(
+        theirs["personal"], mine["personal"],
+        "it still says where the personal one is"
+    );
+
+    // a worktree of the repository has the same personal file
+    std::fs::remove_file(app.join(".jw.toml")).unwrap();
+    let made = worktree(&mut c, &app, "ws-1").unwrap();
+    let wt = PathBuf::from(made["path"].as_str().unwrap());
+    let from_worktree = config(&mut c, &wt);
+    assert_eq!(from_worktree["personal"], mine["personal"], "REQ-483");
+    assert_eq!(from_worktree["from"], "personal");
+
+    // an error in the personal file names it and its line
+    std::fs::write(&personal, "branch = \"a\"\nsetup = nope\n").unwrap();
+    let (code, why) = refused(&mut c, Cmd::ProjectConfig { repo: text(&app) });
+    assert_eq!(code, ErrorCode::BadRequest);
+    let name = personal.file_name().unwrap().to_string_lossy().into_owned();
+    assert!(
+        why.starts_with(&format!("{name}, line 2")),
+        "REQ-484: {why}"
+    );
+    d.stop();
+}
+
+#[test]
+fn a_worktree_starts_with_the_personal_settings_and_a_project_that_needs_nothing_needs_no_file() {
+    let sb = Sandbox::new();
+    let d = sb.start();
+    let app = repo(&sb, None);
+    let mut c = sb.client();
+    // no file anywhere: one shell and no setup pane, and nothing is written
+    let plain = worktree(&mut c, &app, "ws-plain").unwrap();
+    let ws = plain["workspace"].as_str().unwrap().to_owned();
+    let started = ok(&mut c, Cmd::StartWorkspace { workspace: ws });
+    assert_eq!(started["panes"].as_array().unwrap().len(), 1);
+    assert!(!app.join(".jw.toml").exists());
+    assert!(
+        !sb.dir.join("projects").exists(),
+        "REQ-488: nothing is asked or made"
+    );
+    // a personal file with a setup gives the next worktree its setup pane
+    let personal = PathBuf::from(config(&mut c, &app)["personal"].as_str().unwrap());
+    std::fs::create_dir_all(personal.parent().unwrap()).unwrap();
+    std::fs::write(&personal, "setup = [\"true\"]\n").unwrap();
+    let with = worktree(&mut c, &app, "ws-setup").unwrap();
+    let started = ok(
+        &mut c,
+        Cmd::StartWorkspace {
+            workspace: with["workspace"].as_str().unwrap().to_owned(),
+        },
+    );
+    assert_eq!(
+        started["panes"].as_array().unwrap().len(),
+        2,
+        "a shell and the setup pane"
+    );
+    d.stop();
+}
+
+#[test]
+fn writing_the_settings_checks_them_first_keeps_the_personal_file_private_and_never_touches_the_repository_unasked()
+ {
+    use std::os::unix::fs::PermissionsExt;
+    let sb = Sandbox::new();
+    let d = sb.start();
+    let app = repo(&sb, None);
+    let mut c = sb.client();
+    let personal = PathBuf::from(config(&mut c, &app)["personal"].as_str().unwrap());
+
+    // REQ-486: it is written whole, to the personal file, readable by its owner only
+    let wrote = write(
+        &mut c,
+        &app,
+        contract::ConfigFrom::Personal,
+        "branch = \"x/{name}\"\n",
+    )
+    .unwrap();
+    assert_eq!(wrote["path"], text(&personal));
+    assert_eq!(wrote["shadowed"], false);
+    assert_eq!(
+        std::fs::read_to_string(&personal).unwrap(),
+        "branch = \"x/{name}\"\n"
+    );
+    assert_eq!(
+        std::fs::metadata(&personal).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert!(
+        !app.join(".jw.toml").exists(),
+        "REQ-487: the repository is not touched"
+    );
+    assert_eq!(
+        config(&mut c, &app)["branch"],
+        "x/{name}",
+        "and the next read has it"
+    );
+    // no temporary file is left behind
+    let left: Vec<_> = std::fs::read_dir(personal.parent().unwrap())
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name())
+        .collect();
+    assert_eq!(left.len(), 1, "{left:?}");
+
+    // a text that does not read is refused, says where, and changes nothing
+    let (code, why) = write(
+        &mut c,
+        &app,
+        contract::ConfigFrom::Personal,
+        "branch = \"{nombre}\"\n",
+    )
+    .unwrap_err();
+    assert_eq!(code, ErrorCode::BadRequest);
+    assert!(why.contains("line 1"), "{why}");
+    assert_eq!(
+        std::fs::read_to_string(&personal).unwrap(),
+        "branch = \"x/{name}\"\n"
+    );
+
+    // only when asked does it write into the repository, and then the personal one is hidden by it
+    let repo_file = write(
+        &mut c,
+        &app,
+        contract::ConfigFrom::Repo,
+        "branch = \"equipo/{name}\"\n",
+    )
+    .unwrap();
+    assert_eq!(repo_file["path"], text(&app.join(".jw.toml")));
+    assert_eq!(
+        std::fs::read_to_string(app.join(".jw.toml")).unwrap(),
+        "branch = \"equipo/{name}\"\n"
+    );
+    let shadowed = write(
+        &mut c,
+        &app,
+        contract::ConfigFrom::Personal,
+        "branch = \"y/{name}\"\n",
+    )
+    .unwrap();
+    assert_eq!(shadowed["shadowed"], true, "REQ-487");
+    assert_eq!(config(&mut c, &app)["branch"], "equipo/{name}");
+    // a folder that is not a repository has nothing to write for
+    let plain = sb.dir.join("plain");
+    std::fs::create_dir_all(&plain).unwrap();
+    assert_eq!(
+        write(&mut c, &plain, contract::ConfigFrom::Personal, "")
+            .unwrap_err()
+            .0,
+        ErrorCode::GitFailed
+    );
+    d.stop();
+}

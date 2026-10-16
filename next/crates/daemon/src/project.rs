@@ -1,10 +1,11 @@
 //! The settings of a repository: its `.jw.toml`, the file the old jw wrote and jwn reads as it
-//! is (spec REQ-330 to REQ-334, RAT-34). It is read afresh each time it is needed; a key jwn
-//! does not use is ignored, so an old file keeps `ports` and `env` for the part that reads them.
+//! is, or the person's own file of the same syntax outside the repository (spec REQ-330 to
+//! REQ-334, REQ-482 to REQ-487, RAT-34, RAT-46). It is read afresh each time it is needed; a key
+//! jwn does not use is ignored, so an old file keeps `ports` and `env` for the part that reads them.
 
 use std::path::{Component, Path, PathBuf};
 
-use contract::SplitDir;
+use contract::{ConfigFrom, SplitDir};
 use serde::Deserialize;
 use toml::{Spanned, Table, Value};
 
@@ -53,8 +54,12 @@ impl Node {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Project {
-    /// The `.jw.toml` that was read; none when the repository has no file.
+    /// The file that was read; none when there is none and the defaults are used.
     pub source: Option<PathBuf>,
+    /// Which of the two it is.
+    pub from: Option<ConfigFrom>,
+    /// Where the personal file is or would be.
+    pub personal: PathBuf,
     pub root: PathBuf,
     /// The template of a worktree's branch.
     pub branch: String,
@@ -73,22 +78,162 @@ struct Raw {
     layout: Option<Spanned<Table>>,
 }
 
-/// The settings of the repository whose top level is `top`.
-pub fn read(top: &Path) -> Result<Project, String> {
-    read_with(top, &|k| std::env::var(k).ok(), &crate::browse::home())
+/// The settings of the repository whose top level is `top`; `personal_dir` holds the personal
+/// files (REQ-482).
+pub fn read(top: &Path, personal_dir: &Path) -> Result<Project, String> {
+    read_with(
+        top,
+        &|k| std::env::var(k).ok(),
+        &crate::browse::home(),
+        personal_of(top, personal_dir),
+    )
+}
+
+/// The personal file of the repository `top` is the top level of, or of a worktree of it (REQ-483).
+fn personal_of(top: &Path, personal_dir: &Path) -> PathBuf {
+    personal_file(personal_dir, origin_of(top).as_deref(), &main_top(top))
+}
+
+/// The top level of the repository a worktree belongs to: `top` itself when it is the repository.
+fn main_top(top: &Path) -> PathBuf {
+    crate::git::run(
+        top,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )
+    .ok()
+    .map(PathBuf::from)
+    .filter(|d| d.file_name().is_some_and(|n| n == ".git"))
+    .and_then(|d| d.parent().map(Path::to_path_buf))
+    .unwrap_or_else(|| top.to_path_buf())
+}
+
+/// The URL the repository came from, when it has one.
+fn origin_of(top: &Path) -> Option<String> {
+    crate::git::run(top, &["remote", "get-url", "origin"])
+        .ok()
+        .map(|u| u.trim().to_owned())
+        .filter(|u| !u.is_empty())
+}
+
+/// The name of the personal file of a repository, without its extension (REQ-483): its origin
+/// as `host_path`, whatever way it was written, or its path when it has none.
+pub fn key(origin: Option<&str>, top: &Path) -> String {
+    let slug = |s: &str| -> String {
+        s.chars()
+            .map(|c| match c {
+                'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '-' => c,
+                '/' => '_',
+                _ => '-',
+            })
+            .collect()
+    };
+    match origin.map(str::trim).filter(|o| !o.is_empty()) {
+        Some(url) => {
+            let url = url.to_lowercase();
+            // `git@host:path` is `host/path`; a URL has its scheme and user dropped.
+            let (host, path) = match url.split_once("://") {
+                Some((_, rest)) => rest.split_once('/').unwrap_or((rest, "")),
+                None => url.split_once(':').unwrap_or((url.as_str(), "")),
+            };
+            let host = host.rsplit('@').next().unwrap_or(host);
+            let path = path.trim_matches('/');
+            let path = path.strip_suffix(".git").unwrap_or(path);
+            slug(&format!("{host}/{path}"))
+        }
+        None => format!(
+            "local_{}",
+            slug(top.to_string_lossy().trim_start_matches('/'))
+        ),
+    }
+}
+
+/// The personal file of the repository `top` (REQ-483).
+pub fn personal_file(personal_dir: &Path, origin: Option<&str>, top: &Path) -> PathBuf {
+    personal_dir.join(format!("{}.toml", key(origin, top)))
 }
 
 fn read_with(
     top: &Path,
     var: &dyn Fn(&str) -> Option<String>,
     home: &Path,
+    personal: PathBuf,
 ) -> Result<Project, String> {
-    let file = top.join(FILE);
-    match std::fs::read_to_string(&file) {
-        Ok(text) => parse(&text, Some(file), top, var, home),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => parse("", None, top, var, home),
-        Err(e) => Err(format!("{FILE}: {e}")),
+    let found = [
+        (top.join(FILE), ConfigFrom::Repo),
+        (personal.clone(), ConfigFrom::Personal),
+    ];
+    for (file, from) in found {
+        match std::fs::read_to_string(&file) {
+            Ok(text) => {
+                let project = parse(&text, Some(file), top, var, home)?;
+                return Ok(Project {
+                    from: Some(from),
+                    personal,
+                    ..project
+                });
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("{}: {e}", label_of(Some(&file)))),
+        }
     }
+    let project = parse("", None, top, var, home)?;
+    Ok(Project {
+        personal,
+        ..project
+    })
+}
+
+/// How a file is named in an error: `.jw.toml`, or the name of the personal file.
+fn label_of(source: Option<&PathBuf>) -> String {
+    source
+        .and_then(|s| s.file_name())
+        .map_or_else(|| FILE.to_owned(), |n| n.to_string_lossy().into_owned())
+}
+
+/// Write `text` as the settings of the repository `top`, to the file `to` says (REQ-486): after
+/// it reads as a file would, and whole, so that a reader never sees half of it. Says where it
+/// went and whether the personal file is hidden by the repository's own (REQ-487).
+pub fn write(
+    top: &Path,
+    personal_dir: &Path,
+    to: ConfigFrom,
+    text: &str,
+) -> Result<(PathBuf, bool), String> {
+    let personal = personal_of(top, personal_dir);
+    let target = match to {
+        ConfigFrom::Repo => top.join(FILE),
+        ConfigFrom::Personal => personal,
+    };
+    parse(
+        text,
+        Some(target.clone()),
+        top,
+        &|k| std::env::var(k).ok(),
+        &crate::browse::home(),
+    )?;
+    let dir = target.parent().ok_or("the file has no folder")?;
+    let name = label_of(Some(&target));
+    let private = to == ConfigFrom::Personal;
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let tmp = dir.join(format!(".{name}.tmp"));
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(if private { 0o600 } else { 0o644 })
+            .open(&tmp)
+            .map_err(|e| format!("{}: {e}", tmp.display()))?;
+        file.write_all(text.as_bytes())
+            .map_err(|e| format!("{}: {e}", tmp.display()))?;
+    }
+    std::fs::rename(&tmp, &target).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("{}: {e}", target.display())
+    })?;
+    Ok((target, private && top.join(FILE).exists()))
 }
 
 fn parse(
@@ -98,10 +243,11 @@ fn parse(
     var: &dyn Fn(&str) -> Option<String>,
     home: &Path,
 ) -> Result<Project, String> {
-    let fail = |at: usize, why: &str| format!("{FILE}, line {}: {why}", line_of(text, at));
+    let label = label_of(source.as_ref());
+    let fail = |at: usize, why: &str| format!("{label}, line {}: {why}", line_of(text, at));
     let raw: Raw = toml::from_str(text).map_err(|e| match e.span() {
         Some(span) => fail(span.start, e.message()),
-        None => format!("{FILE}: {}", e.message()),
+        None => format!("{label}: {}", e.message()),
     })?;
 
     let root = match raw.root.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
@@ -184,6 +330,8 @@ fn parse(
 
     Ok(Project {
         source,
+        from: None,
+        personal: PathBuf::new(),
         root,
         branch,
         setup,
@@ -667,5 +815,43 @@ mod tests {
             "❯ echo one\none\n❯ echo {name} # c\nws-1\n❯ false\n\x1b]133;D;1\x07"
         );
         assert_eq!(out.status.code(), Some(1));
+    }
+
+    #[test]
+    fn the_personal_file_is_named_by_the_origin_however_it_is_written_and_by_the_path_without_one()
+    {
+        let top = Path::new("/home/u/code/App");
+        for url in [
+            "git@github.com:Acme/App.git",
+            "https://github.com/acme/app.git",
+            "https://user:secret@GitHub.com/acme/app/",
+            "ssh://git@github.com/acme/app",
+            "  git@github.com:acme/app\n",
+        ] {
+            assert_eq!(key(Some(url), top), "github.com_acme_app", "{url}");
+        }
+        assert_eq!(
+            key(Some("ssh://git@host.example:2222/a/b.git"), top),
+            "host.example-2222_a_b"
+        );
+        assert_eq!(
+            key(None, top),
+            "local_home_u_code_App",
+            "a path keeps its case"
+        );
+        assert_eq!(
+            key(Some("  "), top),
+            key(None, top),
+            "an empty origin is none"
+        );
+        assert_ne!(
+            key(Some("https://github.com/acme-app"), top),
+            key(Some("https://github.com/acme/app"), top),
+            "a `-` and a `/` do not come to the same name"
+        );
+        assert_eq!(
+            personal_file(Path::new("/c/projects"), Some("git@h:o/r.git"), top),
+            Path::new("/c/projects/h_o_r.toml")
+        );
     }
 }

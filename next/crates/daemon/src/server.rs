@@ -58,6 +58,9 @@ pub struct Config {
     /// Swap the `claude` a person types in a pane for the binary's own, which talks to the
     /// engine headless and draws a conversation; on unless `$<PREFIX>_CONVERSATION` is `0`.
     pub conversation: bool,
+    /// The folder of the personal settings of projects; `<config dir>/projects` when from the
+    /// identity (REQ-483).
+    pub projects: PathBuf,
 }
 
 impl Config {
@@ -77,6 +80,7 @@ impl Config {
             github_every: Duration::from_secs(60),
             conversation: std::env::var(identity::env_var("CONVERSATION"))
                 .map_or(true, |v| v != "0"),
+            projects: identity::config_dir().join("projects"),
         }
     }
 
@@ -163,6 +167,7 @@ impl Daemon {
         ))));
         shared.lock().history_dir = Some(crate::history::dir(&config.state_dir));
         shared.lock().conv_dir = Some(config.state_dir.join("conversations"));
+        shared.lock().projects_dir = config.projects.clone();
         shared.lock().swap = config.conversation && config.hook_exe.is_some();
         shared.lock().mobile.clone().resume();
         if let Some(exe) = &config.hook_exe {

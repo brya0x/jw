@@ -128,6 +128,8 @@ pub struct Core {
     /// `claude` typed in a pane is the binary's own (a conversation), in a shell that has the
     /// integration; then its attention comes from the engine and it is given no hooks (REQ-374).
     pub swap: bool,
+    /// The folder of the personal settings of projects (REQ-483).
+    pub projects_dir: PathBuf,
     /// Where each pane's blocks are kept so they come back with the daemon; none keeps nothing.
     pub history_dir: Option<PathBuf>,
     /// The conversations of the panes that run `claude`, by pane id, and where they are kept.
@@ -181,6 +183,7 @@ impl Core {
             mobile,
             hooks: None,
             swap: false,
+            projects_dir: identity::config_dir().join("projects"),
         };
         core.refresh();
         core

@@ -52,6 +52,7 @@ import dev.jw.next.client.repoName
 import dev.jw.next.client.repos
 import dev.jw.next.client.tildePath
 import dev.jw.next.client.takenNames
+import dev.jw.next.contract.ConfigFrom
 import dev.jw.next.contract.DirListing
 import dev.jw.next.contract.Id
 import java.util.concurrent.atomic.AtomicInteger
@@ -278,7 +279,14 @@ internal fun BoxScope.WorktreeSheet(source: AppSource, repoAtStart: String, stat
                         Row { Mono(if (i == 0) "setup   " else "        ", Palette.dim, 12); Mono(line, Palette.yellow, 12, lines = 2) }
                     }
                     Row { Mono("paneles ", Palette.dim, 12); Mono(plan.info.programs.joinToString(" │ "), Palette.fg, 12, lines = 2) }
-                    Mono(if (plan.info.source != null) "según el .jw.toml del repositorio" else "sin .jw.toml: como siempre", Palette.dim, 12)
+                    Mono(
+                        when (plan.info.from) {
+                            ConfigFrom.Repo -> "según el .jw.toml del repositorio"
+                            ConfigFrom.Personal -> "según tu configuración del repositorio"
+                            null -> "sin configuración: como siempre"
+                        },
+                        Palette.dim, 12,
+                    )
                 }
             }
             if (error != null) Mono(error.orEmpty(), Palette.red, 12, lines = 5)
