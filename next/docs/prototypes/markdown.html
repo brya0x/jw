@@ -1,0 +1,480 @@
+<title>jwn Markdown</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Terminal-first, the same character grid as the other terminal prototypes. Every colour comes from the chosen theme. */
+:root{
+  --bg:#282c34; --panel:#21252b; --fg:#abb2bf; --dim:#5c6370; --line:#3e4451; --sel:#2c313a;
+  --blue:#61afef; --green:#98c379; --yellow:#e5c07b; --red:#e06c75; --magenta:#c678dd; --cyan:#56b6c2;
+  --page:#16181d; --ink:#c3c9d4; --mut:#7d8594;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}}
+:root[data-theme="light"]{--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.55 'IBM Plex Sans',system-ui,sans-serif;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px 40px}
+.wrap{max-width:1500px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
+h1{font:600 20px/1.2 var(--mono);margin:0}
+h2.s{font:600 12px var(--mono);margin:0;color:var(--mut)}
+p{margin:0;max-width:78ch;color:var(--mut)}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button{font:12px var(--mono);color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;min-height:32px;cursor:pointer}
+button:hover{border-color:var(--blue)}
+button[aria-pressed=true]{background:var(--blue);color:var(--panel);border-color:var(--blue);font-weight:700}
+:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto}
+.term pre{margin:0;font:13px/1.25 var(--mono);color:var(--fg);outline:none;width:max-content;cursor:default}
+.term pre:focus-visible{outline:none}
+.hint{font:12px var(--mono);color:var(--mut)}
+.stage{display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap}
+.col{flex:1 1 700px;min-width:0;display:flex;flex-direction:column;gap:8px}
+.side{flex:0 0 auto;width:100%;max-width:376px;margin-inline:auto;display:flex;flex-direction:column;gap:8px}
+.notes{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
+.notes div{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;color:var(--fg);font:12px/1.55 var(--mono)}
+.notes b{color:var(--yellow)}
+.notes kbd{font:inherit;color:var(--cyan)}
+/* cells */
+.b{font-weight:700}.i{font-style:italic}.u{text-decoration:underline}
+.dim{color:var(--dim)}.blue{color:var(--blue)}.green{color:var(--green)}.yellow{color:var(--yellow)}.red{color:var(--red)}.mag{color:var(--magenta)}.cyan{color:var(--cyan)}
+.code{color:var(--cyan)}
+.cb{background:var(--panel)}
+.hit{background:var(--yellow);color:var(--panel)}.cur{background:var(--magenta);color:var(--panel)}
+.bar1{background:var(--panel)}
+.act{background:var(--sel)}
+.lit{background:var(--sel)}
+.btn1{background:var(--green);color:var(--panel);font-weight:700}
+/* phone */
+.phone{width:100%;height:760px;background:var(--bg);border:1px solid var(--line);border-radius:28px;padding:10px;box-shadow:0 0 0 6px var(--panel);display:flex;flex-direction:column}
+.ph{flex:1;min-height:0;background:var(--bg);border-radius:20px;overflow:hidden;display:flex;flex-direction:column;font:13px/1.45 var(--mono);color:var(--fg);position:relative}
+.ph .hd{background:var(--panel);border-bottom:1px solid var(--line);padding:8px 12px;display:flex;align-items:center;gap:8px;min-height:52px}
+.ph .hd .t{flex:1;min-width:0}.ph .hd b{display:block;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ph .hd span{display:block;font-size:11px;color:var(--dim)}
+.ph .hd button{min-height:40px;min-width:40px;border-radius:8px}
+.ph .body{flex:1;min-height:0;overflow:auto;padding:10px 12px;display:flex;flex-direction:column;gap:8px}
+.ph .md h1{font:700 17px/1.3 var(--mono);color:var(--blue);margin:6px 0 4px;border-bottom:1px solid var(--line);padding-bottom:4px}
+.ph .md h2{font:700 15px/1.3 var(--mono);color:var(--cyan);margin:12px 0 4px}
+.ph .md h3{font:700 13px/1.3 var(--mono);color:var(--green);margin:10px 0 2px}
+.ph .md p{margin:4px 0;color:var(--fg);max-width:none}
+.ph .md ul,.ph .md ol{margin:4px 0;padding-left:20px}
+.ph .md li{margin:2px 0}
+.ph .md li.task{list-style:none;margin-left:-20px;padding-left:20px}
+.ph .md code{color:var(--cyan);font:inherit}
+.ph .md pre{margin:6px 0;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:8px 10px;overflow:auto;font:11.5px/1.4 var(--mono);color:var(--fg)}
+.ph .md blockquote{margin:6px 0;padding:2px 10px;border-left:3px solid var(--yellow);color:var(--dim);font-style:italic}
+.ph .md .tw{overflow:auto;margin:6px 0}
+.ph .md table{border-collapse:collapse;font-size:11.5px}
+.ph .md td,.ph .md th{border:1px solid var(--line);padding:3px 8px;text-align:left}
+.ph .md th{color:var(--cyan)}
+.ph .md a{color:var(--blue)}
+.ph .md hr{border:0;border-top:1px solid var(--line)}
+.ph .row{display:flex;gap:8px;align-items:baseline;padding:10px 12px;min-height:44px;border-bottom:1px solid var(--line);cursor:pointer}
+.ph .row .n{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ph .acts{border-top:2px solid var(--yellow);background:var(--panel);padding:8px 12px 10px;display:flex;flex-direction:column;gap:6px}
+.ph .acts small{color:var(--yellow);font-size:11px}
+.ph .acts button{min-height:48px;border-radius:8px;font-size:13px;background:var(--sel)}
+.ph .acts button.pri{background:var(--green);color:var(--panel);border-color:var(--green);font-weight:700}
+.ph .acts button.neg{color:var(--red)}
+.ph .sheet{position:absolute;left:0;right:0;bottom:0;max-height:70%;overflow:auto;border-top:2px solid var(--blue);background:var(--panel);padding:10px 12px 14px;display:flex;flex-direction:column;gap:2px;box-shadow:0 -10px 30px #0008}
+.ph .sheet .o{min-height:44px;display:flex;align-items:center;padding:0 6px;border-bottom:1px solid var(--line);cursor:pointer;background:none;border-left:0;border-right:0;border-top:0;border-radius:0;font:13px var(--mono);text-align:left;color:var(--fg)}
+.ph .sheet .o.l2{padding-left:20px;color:var(--cyan)}.ph .sheet .o.l3{padding-left:34px;color:var(--green)}
+.ph .toast{position:absolute;left:12px;right:12px;bottom:70px;background:var(--sel);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--green);font-size:12px}
+.ph .chat{color:var(--fg);white-space:pre-wrap}
+.ph .chat .dim{color:var(--dim)}
+</style>
+
+<div class="wrap">
+  <h1>jwn · el visor de Markdown</h1>
+  <p>Un panel de solo lectura que dibuja un documento Markdown: títulos, listas, casillas, tablas, citas y código con colores. Se abre desde dos sitios: el plan que pide aprobar Claude (<kbd>v</kbd> en la caja del plan) y un <code>.md</code> del árbol de archivos (<kbd>↵</kbd>). Los demás archivos siguen abriéndose en el editor. Pruébalo: el terminal acepta teclas y la rueda del mouse.</p>
+  <div class="bar" id="scen" role="group" aria-label="Qué se abre">
+    <button data-s="plan" aria-pressed="true">El plan de Claude</button>
+    <button data-s="file" aria-pressed="false">Un .md del árbol</button>
+    <button id="reset">Reiniciar</button>
+    <button id="theme" aria-label="Cambiar entre tema oscuro y claro">Tema claro/oscuro</button>
+  </div>
+  <div class="stage">
+    <div class="col">
+      <h2 class="s" id="tlabel">Terminal · panel de 110 columnas</h2>
+      <div class="term"><pre id="t" tabindex="0" aria-label="Terminal de jwn"></pre></div>
+      <div class="hint" id="keys"></div>
+      <div class="bar" id="mouse"></div>
+    </div>
+    <div class="side">
+      <h2 class="s">Teléfono</h2>
+      <div class="phone"><div class="ph" id="ph"></div></div>
+    </div>
+  </div>
+  <div class="notes">
+    <div><b>Qué dibuja</b><br>Títulos en tres colores, listas con sangría que cuelga, <kbd>☐</kbd>/<kbd>☑</kbd> para casillas, tablas con borde, citas con barra, código con fondo, su lenguaje y colores, <code>código en línea</code>, <b>negritas</b>, enlaces subrayados. Las imágenes se ven como <kbd>[imagen: texto]</kbd>.</div>
+    <div><b>Moverse</b><br><kbd>j k ↑ ↓</kbd> línea · <kbd>espacio b</kbd> página · <kbd>g G</kbd> principio y fin · <kbd>[ ]</kbd> título anterior y siguiente · <kbd>o</kbd> esquema a la izquierda (si el panel mide 100+ columnas) · <kbd>/</kbd> buscar, <kbd>n N</kbd> siguiente y anterior · rueda del mouse.</div>
+    <div><b>Copiar y editar</b><br>Arrastrar con el mouse copia lo que cubre, como en la conversación (N87). <kbd>y</kbd> copia el documento entero. <kbd>e</kbd> lo abre en el editor (el archivo, o el plan en su archivo de Claude). <kbd>esc</kbd> cierra y vuelve a donde estabas.</div>
+    <div><b>El plan</b><br>La caja del plan sigue igual (<kbd>1 2 3</kbd>). <kbd>v</kbd> abre el plan <i>completo</i> en el visor, sin el corte de 200 líneas de hoy, y desde ahí se responde con las mismas teclas: no hace falta volver a la caja.</div>
+  </div>
+</div>
+
+<script>
+/* ---------- the documents ---------- */
+const PLAN = `# Plan: pruebas del módulo auth
+
+## Contexto
+
+El token de sesión expira a los **30 minutos**, pero \`verify()\` no mira el reloj: acepta tokens vencidos mientras la firma sea válida. Hoy lo detecta el test \`auth::expired\`, que falla en CI desde el viernes. Ver [docs/auth.md](docs/auth.md) para el formato del token.
+
+> La corrección no debe cambiar la firma pública de \`verify()\`: la usan tres crates.
+
+## Cambios
+
+1. Leer el reloj a través de \`Clock\` (un trait pequeño) en vez de \`SystemTime::now()\`.
+2. Rechazar el token si \`exp <= ahora\`, con \`AuthError::Expired\`.
+3. Dar al test un reloj falso para que no dependa de la hora de la máquina:
+   - avanzar 29 min: sigue valiendo
+   - avanzar 31 min: se rechaza
+4. Documentar el error nuevo en \`docs/auth.md\`.
+
+## Archivos
+
+| archivo | cambio | líneas |
+|---|---|---|
+| src/auth.rs | \`Clock\`, \`verify()\` | ~40 |
+| src/error.rs | variante \`Expired\` | ~6 |
+| tests/auth.rs | reloj falso, dos casos | ~55 |
+| docs/auth.md | el error nuevo | ~10 |
+
+## Código
+
+\`\`\`rust
+pub trait Clock {
+    fn now(&self) -> u64;
+}
+
+pub fn verify(token: &Token, clock: &impl Clock) -> Result<(), AuthError> {
+    if token.exp <= clock.now() {
+        return Err(AuthError::Expired); // 401, el cliente renueva
+    }
+    check_signature(token)
+}
+\`\`\`
+
+## Verificación
+
+- [x] \`cargo test -p auth\` en verde
+- [x] \`cargo clippy -- -D warnings\`
+- [ ] probar a mano con un token de 31 minutos
+- [ ] avisar a quien usa \`verify()\` de que ahora recibe \`Expired\`
+
+---
+
+Riesgo: un reloj con la hora mal rechazaría tokens buenos. Se mitiga con 30 s de margen.
+`;
+
+const README = `# jwn
+
+Un terminal para correr agentes de código en paralelo: un daemon es dueño de cada terminal y la pantalla solo los muestra.
+
+## Empezar
+
+1. Instala el binario con \`cargo install --path crates/jwn --locked\`.
+2. Abre una carpeta con **o** y escribe \`claude\` en un panel.
+3. Para ver el teléfono: \`jwn mobile\`.
+
+## Comandos
+
+| comando | qué hace |
+|---|---|
+| \`jwn ls\` | lista los espacios de trabajo |
+| \`jwn prompt\` | da una tarea a otro agente |
+| \`jwn worktree\` | crea un worktree con su plan |
+
+## Notas
+
+> Todo corre en tu máquina; el teléfono solo se conecta a tu daemon.
+
+- [x] daemon y terminal
+- [x] conversación de Claude
+- [ ] visor de Markdown
+`;
+
+/* ---------- the Markdown reader ---------- */
+function inline(text){
+  const out=[]; const re=/(\`[^\`]+\`)|(\*\*[^*]+\*\*)|(\*[^*]+\*)|(!?\[[^\]]*\]\([^)]*\))/g; let last=0,m;
+  while((m=re.exec(text))){
+    if(m.index>last) out.push([text.slice(last,m.index),'']);
+    const s=m[0];
+    if(m[1]) out.push([s.slice(1,-1),'code']);
+    else if(m[2]) out.push([s.slice(2,-2),'b']);
+    else if(m[3]) out.push([s.slice(1,-1),'i']);
+    else { const mm=/^(!?)\[([^\]]*)\]\(([^)]*)\)$/.exec(s); out.push([mm[1]?'[imagen: '+mm[2]+']':mm[2], mm[1]?'dim':'blue u']); }
+    last=m.index+s.length;
+  }
+  if(last<text.length) out.push([text.slice(last),'']);
+  return out;
+}
+function parse(md){
+  const L=md.split('\n'), B=[]; let i=0;
+  while(i<L.length){
+    const l=L[i];
+    if(!l.trim()){i++;continue}
+    let m;
+    if((m=/^(#{1,6})\s+(.*)$/.exec(l))){B.push({t:'h',n:m[1].length,x:m[2]});i++;continue}
+    if(/^```/.test(l)){const lang=l.slice(3).trim(),c=[];i++;while(i<L.length&&!/^```/.test(L[i]))c.push(L[i++]);i++;B.push({t:'code',lang,c});continue}
+    if(/^---+$/.test(l.trim())){B.push({t:'hr'});i++;continue}
+    if(/^>/.test(l)){const q=[];while(i<L.length&&/^>/.test(L[i]))q.push(L[i++].replace(/^>\s?/,''));B.push({t:'q',x:q.join(' ')});continue}
+    if(/^\|/.test(l)){const r=[];while(i<L.length&&/^\|/.test(L[i])){if(!/^\|[\s|:-]+\|?$/.test(L[i]))r.push(L[i].replace(/^\||\|$/g,'').split('|').map(c=>c.trim()));i++}B.push({t:'table',r});continue}
+    if(/^(\s*)([-*]|\d+\.)\s/.test(l)){
+      const items=[];
+      while(i<L.length&&/^(\s*)([-*]|\d+\.)\s/.test(L[i])){
+        const mm=/^(\s*)([-*]|\d+\.)\s+(.*)$/.exec(L[i]); let x=mm[3],task=null;
+        const tk=/^\[([ x])\]\s+(.*)$/.exec(x); if(tk){task=tk[1]==='x';x=tk[2]}
+        items.push({d:Math.floor(mm[1].length/2),num:/\d/.test(mm[2])?parseInt(mm[2]):null,task,x});i++;
+      }
+      B.push({t:'list',items});continue;
+    }
+    const p=[];while(i<L.length&&L[i].trim()&&!/^(#|```|>|\||---|(\s*)([-*]|\d+\.)\s)/.test(L[i]))p.push(L[i++]);
+    B.push({t:'p',x:p.join(' ')});
+  }
+  return B;
+}
+/* wrap tagged segments into rows of at most w cells; the row after the first hangs by `hang` */
+function wrapSegs(segs,w,first,hang){
+  /* a word is what has no space inside it, whatever styles it is made of: «`x`.» stays together */
+  const words=[]; let cur=[];
+  for(const [t,c] of segs){ for(const p of t.split(/( +)/)){ if(p==='')continue;
+    if(/^ +$/.test(p)){ if(cur.length){words.push({a:cur});cur=[]} words.push({sp:p,c}); } else cur.push([p,c]); } }
+  if(cur.length)words.push({a:cur});
+  const rows=[], pad=hang?[[' '.repeat(hang),'']]:[];
+  let row=first.slice(), len=first.reduce((a,x)=>a+x[0].length,0), fresh=true;
+  for(const wd of words){
+    if(wd.sp){ if(!fresh&&len+wd.sp.length<=w){row.push([wd.sp,wd.c]);len+=wd.sp.length} continue; }
+    const n=wd.a.reduce((a,x)=>a+x[0].length,0);
+    if(len+n>w&&!fresh){ while(row.length&&/^ +$/.test(row[row.length-1][0]))row.pop(); rows.push(row); row=pad.slice(); len=hang; fresh=true; }
+    row.push(...wd.a); len+=n; fresh=false;
+  }
+  rows.push(row); return rows;
+}
+const KW=/\b(fn|let|pub|use|impl|mut|return|if|else|match|for|in|trait|struct|enum|const|self|Self|Err|Ok|crate)\b/;
+function hl(line){
+  const out=[]; let rest=line;
+  const cm=rest.indexOf('//'); let tail=null; if(cm>=0){tail=rest.slice(cm);rest=rest.slice(0,cm)}
+  const re=/("[^"]*")|\b(fn|let|pub|use|impl|mut|return|if|else|match|for|in|trait|struct|enum|const|crate)\b|\b([A-Z][A-Za-z]+)\b/g; let last=0,m;
+  while((m=re.exec(rest))){ if(m.index>last)out.push([rest.slice(last,m.index),'']);
+    out.push([m[0], m[1]?'green':m[2]?'mag':'yellow']); last=m.index+m[0].length; }
+  if(last<rest.length)out.push([rest.slice(last),'']); if(tail)out.push([tail,'dim']); return out;
+}
+/* the document as rows of tagged segments, `w` cells wide; `heads` are the titles with the row they are on */
+function layout(md,w){
+  const rows=[],heads=[]; const B=parse(md); let prev=null;
+  const gap=()=>{ if(rows.length&&rows[rows.length-1].segs.length) rows.push({segs:[]}); };
+  for(const b of B){
+    if(b.t!=='list'||prev!=='list') gap();
+    prev=b.t;
+    if(b.t==='h'){
+      heads.push({n:b.n,x:b.x,row:rows.length});
+      const col=b.n===1?'blue b':b.n===2?'cyan b':b.n===3?'green b':'b';
+      wrapSegs([['#'.repeat(b.n)+' ','dim'],...inline(b.x).map(([t,c])=>[t,col+(c&&c!=='b'?' '+c:'')])],w,[],0).forEach(r=>rows.push({segs:r,head:heads.length-1}));
+      if(b.n===1) rows.push({segs:[['─'.repeat(w),'dim']]});
+    } else if(b.t==='p'){
+      wrapSegs(inline(b.x),w,[],0).forEach(r=>rows.push({segs:r}));
+    } else if(b.t==='q'){
+      wrapSegs(inline(b.x).map(([t,c])=>[t,'yellow i '+c]),w-2,[],0).forEach(r=>rows.push({segs:[['▎ ','yellow'],...r]}));
+    } else if(b.t==='hr'){
+      rows.push({segs:[['─'.repeat(w),'dim']]});
+    } else if(b.t==='list'){
+      for(const it of b.items){
+        const ind=' '.repeat(it.d*3);
+        const mark=it.task===null?(it.num?it.num+'. ':'• '):(it.task?'☑ ':'☐ ');
+        const mc=it.task===true?'green':it.task===false?'dim':it.num?'dim':'cyan';
+        const body=inline(it.x).map(([t,c])=>[t,it.task===true?'dim '+c:c]);
+        wrapSegs(body,w,[[ind,''],[mark,mc]],ind.length+mark.length).forEach(r=>rows.push({segs:r}));
+      }
+    } else if(b.t==='code'){
+      const cw=w-2; rows.push({segs:[[' '+(b.lang||'código').padEnd(cw-1),'dim'],],cb:true});
+      for(const l of b.c){ const segs=hl(l.slice(0,cw-2)); const n=segs.reduce((a,s)=>a+s[0].length,0); rows.push({segs:[[' ',''],...segs,[' '.repeat(Math.max(0,cw-1-n)),'']],cb:true}); }
+      rows.push({segs:[[' '.repeat(cw),'']],cb:true});
+    } else if(b.t==='table'){
+      const cols=b.r[0].length, cw=Array.from({length:cols},(_,c)=>Math.max(...b.r.map(r=>(inline(r[c]||'').map(s=>s[0]).join('')).length)));
+      const tot=cw.reduce((a,x)=>a+x+3,1); if(tot>w){ const over=tot-w; cw[cw.indexOf(Math.max(...cw))]-=over; }
+      const line=(a,m,z)=>[[a+cw.map(x=>'─'.repeat(x+2)).join(m)+z,'dim']];
+      rows.push({segs:line('┌','┬','┐')});
+      b.r.forEach((r,ri)=>{
+        const segs=[['│','dim']];
+        r.forEach((cell,c)=>{ let s=inline(cell); let n=s.reduce((a,x)=>a+x[0].length,0);
+          if(n>cw[c]){ s=[[cell.slice(0,cw[c]-1)+'…','']]; n=cw[c]; }
+          segs.push([' ',''],...s.map(([t,k])=>[t,ri===0?'cyan b':k]),[' '.repeat(cw[c]-n+1),''],['│','dim']); });
+        rows.push({segs}); if(ri===0)rows.push({segs:line('├','┼','┤')});
+      });
+      rows.push({segs:line('└','┴','┘')});
+    }
+  }
+  while(rows.length&&!rows[rows.length-1].segs.length)rows.pop();
+  return {rows,heads};
+}
+
+/* ---------- the terminal ---------- */
+const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+const S={scen:'plan',view:'chat',scroll:0,outline:true,query:'',buf:'',typing:false,mi:0,flash:'',cur:0,answer:'',phoneView:'chat',sheet:false,toast:''};
+const T={plan:{cols:110,rows:34,title:'plan-auth-tests.md',kind:'plan',doc:PLAN},file:{cols:80,rows:30,title:'README.md',kind:'archivo',doc:README}};
+const FILES=[['▾ proj/',0,'dir'],['  ▸ crates/',0,'dir'],['  ▸ docs/',0,'dir'],['  · Cargo.toml',0,'toml'],['  · README.md',1,'md'],['  · justfile',0,'just']];
+function cells(segs,extra){ const out=[]; for(const [t,c] of segs) for(const ch of t) out.push([ch,c+(extra?' '+extra:'')]); return out; }
+function emit(cs){ let html='',run='',cls=null; const flush=()=>{ if(run){ html+=cls?'<span class="'+cls+'">'+esc(run)+'</span>':esc(run); run='' } };
+  for(const [ch,c] of cs){ const k=c.trim(); if(k!==cls){flush();cls=k} run+=ch } flush(); return html; }
+function fit(cs,w,padCls){ cs=cs.slice(0,w); while(cs.length<w)cs.push([' ',padCls||'']); return cs; }
+function lay(){ const t=T[S.scen]; const wide=t.cols>=100&&S.outline; const ow=wide?26:0; const bw=t.cols-ow-3; return {t,wide,ow,bw,...layout(t.doc,bw)}; }
+function bodyRows(L){ const extra=L.t.kind==='plan'?3:2; return L.t.rows-2-extra; }
+function clampScroll(L){ const max=Math.max(0,L.rows.length-bodyRows(L)); S.scroll=Math.max(0,Math.min(S.scroll,max)); return max; }
+function matches(L){ const q=S.query.toLowerCase(); if(!q)return []; const r=[]; L.rows.forEach((row,i)=>{ if(row.segs.map(s=>s[0]).join('').toLowerCase().includes(q))r.push(i) }); return r; }
+function viewer(){
+  const L=lay(), {t,wide,ow,bw}=L; const max=clampScroll(L); const h=bodyRows(L); const mt=matches(L);
+  const q=S.query.toLowerCase(); const curRow=mt.length?mt[S.mi%mt.length]:-1;
+  const out=[];
+  const pct=max?Math.round(S.scroll/max*100):100;
+  const left='▤ '+t.kind+' · '+t.title, right=(t.kind==='plan'?'plan listo · ':'')+pct+' %';
+  out.push(fit([...cells([[' '+left,'b']]),...Array(Math.max(1,t.cols-left.length-right.length-2)).fill([' ','']),...cells([[right+' ','dim']])],t.cols,'bar1').map(([ch,c])=>[ch,'bar1 '+c]));
+  const act=L.heads.reduce((a,hd,i)=>hd.row<=S.scroll+1?i:a,0);
+  for(let y=0;y<h;y++){
+    let oc=[]; if(wide){ const hd=L.heads[y]; oc=hd?cells([[' '.repeat((hd.n-1)*2)+(hd.n===1?'▤ ':'· ')+hd.x.replace(/`/g,''),y===act?'blue b':hd.n===1?'b':'dim']]):[]; oc=fit(oc,ow-1); if(y===act)oc=oc.map(([ch,c])=>[ch,c+' lit']); oc.push(['│','dim']); }
+    const r=L.rows[S.scroll+y]; let bc=[];
+    if(r){ bc=cells(r.segs); if(q){ const txt=bc.map(c=>c[0]).join('').toLowerCase(); let from=0,k; while((k=txt.indexOf(q,from))>=0){ for(let j=k;j<k+q.length;j++)bc[j][1]+=(S.scroll+y===curRow?' cur':' hit'); from=k+q.length } } }
+    bc=[[' ',''],...bc]; bc=fit(bc,bw+1,r&&r.cb?'cb':''); if(r&&r.cb)bc=bc.map(([ch,c])=>[ch,c+' cb']);
+    out.push([...oc,...bc,[' ',''],[(max&&Math.round(S.scroll/max*(h-1))===y)?'▐':' ','dim']]);
+  }
+  out.push(fit(cells([['─'.repeat(t.cols),'dim']]),t.cols));
+  if(S.typing) out.push(fit(cells([[' /'+S.buf+'▏','yellow']]),t.cols));
+  else out.push(fit(cells([[' '+(S.flash||'j k ↑↓ línea · ␣ b página · g G · [ ] título · / buscar · o esquema · y copiar · e editar · esc cerrar'),S.flash?'green':'dim']]),t.cols));
+  if(t.kind==='plan'){
+    const a=cells([[' 1 ','btn1'],[' aprobar y editar sin preguntar ','act'],['  ',''],[' 2 ','btn1'],[' aprobar, preguntando cada edición ','act'],['  ',''],[' 3 ','btn1'],[' seguir planeando ','act']]);
+    out.push(fit(a,t.cols));
+  } else out.push(fit(cells([[' '+t.title+' · '+L.rows.length+' líneas · '+L.heads.length+' títulos'+(mt.length?' · '+(S.mi%mt.length+1)+'/'+mt.length+' coincidencias':''),'dim']]),t.cols));
+  const fill=t.rows-out.length; for(let i=0;i<fill;i++)out.push(fit([],t.cols));
+  return out.map(emit).join('\n');
+}
+function box(t,w,rows){ return rows; }
+function chat(){
+  const t=T.plan,W=t.cols; const L=[];
+  const line=(s,c)=>fit(cells([[s,c||'']]),W);
+  /* a row of the plan's box: two spaces, the border, the content, the border */
+  const inbox=(cs)=>[...cells([['  ','']]),['│','yellow'],[' ',''],...fit(cs,W-7),[' ',''],['│','yellow'],[' ','']];
+  L.push(line(' ╭─ claude · pruebas del módulo auth '+'─'.repeat(W-60)+' ✓ agente listo ─╮','dim'));
+  L.push(fit(cells([['  ❯ arregla el test que falla en auth::expired','lit']]),W).map(([ch,c])=>[ch,c+' lit']));
+  L.push(line(''));
+  L.push(line('  ● Voy a leer el módulo y proponer un plan.'));
+  L.push(line('  ● Read(src/auth.rs)','green'));
+  L.push(line('    ⎿  118 líneas','dim'));
+  L.push(line('  ● ExitPlanMode','yellow'));
+  const done=S.answer;
+  if(!done){
+    L.push(line(''));
+    L.push(line('  ┌─ plan · Plan listo '+'─'.repeat(W-27)+'┐','yellow'));
+    for(const r of layout(PLAN,W-8).rows.slice(0,8)) L.push(inbox(cells(r.segs)));
+    L.push(inbox(cells([['… 34 líneas más · v para verlas','dim']])));
+    L.push(inbox([]));
+    for(const [k,x] of [['1','Aprobar y editar sin preguntar'],['2','Aprobar, preguntando cada edición'],['3','Seguir planeando']]) L.push(inbox(cells([[k+') ','dim'],[x,'']])));
+    L.push(line('  └ v ver el plan completo · 1 2 3 responde '+'─'.repeat(W-45)+'┘','yellow'));
+  } else {
+    L.push(line('    ⎿  '+done,'green'));
+    L.push(line('  ● Empiezo por el reloj falso…'));
+  }
+  while(L.length<t.rows-4)L.push(line(''));
+  L.push(line(' ╰'+'─'.repeat(W-4)+'╯','dim'));
+  L.push(line('  ❯ escribe un mensaje · / comandos','dim'));
+  L.push(line('  manual'+' '.repeat(W-28)+'sonnet-5.5','dim'));
+  L.push(line(S.flash||'  ^␣ salir  ·  v ver el plan','dim'));
+  return L.slice(0,t.rows).map(emit).join('\n');
+}
+function tree(){
+  const t=T.file,W=t.cols; const L=[]; const line=(s,c)=>fit(cells([[s,c||'']]),W);
+  L.push(line(' ╭─ archivos · proj '+'─'.repeat(W-24)+'╮','dim'));
+  const inbox=(cs)=>[[' ',''],['│','dim'],...fit(cs,W-4),['│','dim'],[' ','']];
+  FILES.forEach((f,i)=>{ const on=i===S.cur; L.push(inbox(cells([[' '+(on?'▸ ':'  ')+f[0].trimStart(),on?'blue b':f[2]==='dir'?'blue':'']]).map(([ch,c])=>[ch,on?c+' lit':c]))); });
+  while(L.length<t.rows-4)L.push(inbox([]));
+  L.push(line(' ╰'+'─'.repeat(W-4)+'╯','dim'));
+  L.push(line(' ↑ ↓ moverse · ↵ abrir (.md en el visor, lo demás en el editor)','dim'));
+  L.push(line(S.flash||'','green'));
+  L.push(line(''));
+  return L.slice(0,t.rows).map(emit).join('\n');
+}
+function paint(){
+  const el=document.getElementById('t');
+  el.innerHTML = S.view==='viewer' ? viewer() : (S.scen==='plan'?chat():tree());
+  document.getElementById('tlabel').textContent='Terminal · panel de '+T[S.scen].cols+' columnas'+(T[S.scen].cols<100?' (sin esquema: es angosto)':'');
+  document.getElementById('keys').textContent = S.view==='viewer' ? 'Teclas del visor: j k ↑ ↓ · ␣ b · g G · [ ] · / n N · o · y · e · esc'+(S.scen==='plan'?' · 1 2 3 responde':'') : (S.scen==='plan'?'Teclas: v abre el plan en el visor · 1 2 3 responde':'Teclas: ↑ ↓ · ↵ abre');
+  const m=document.getElementById('mouse'); m.innerHTML='';
+  const add=(l,f)=>{const b=document.createElement('button');b.textContent=l;b.onclick=()=>{f();paint();phone();el.focus()};m.appendChild(b)};
+  if(S.view==='viewer'){ add('↑',()=>S.scroll-=3); add('↓',()=>S.scroll+=3); add('página ↓',()=>S.scroll+=bodyRows(lay())); add('esquema',()=>S.outline=!S.outline); add('buscar «plan»',()=>{S.query='plan';S.mi=0;S.scroll=0}); add('copiar',()=>copy()); add('cerrar',()=>close()); }
+  else if(S.scen==='plan'&&!S.answer) add('v · ver el plan',()=>open());
+  else if(S.scen==='file') add('↵ abrir',()=>enter());
+}
+function copy(){ S.flash='copiado · '+T[S.scen].doc.split('\n').length+' líneas · '+T[S.scen].doc.length+' caracteres'; }
+function open(){ S.view='viewer'; S.scroll=0; S.query=''; S.flash=''; }
+function close(){ S.view='chat'; S.typing=false; S.flash=''; }
+function respond(n){ S.answer=['aprobado: se edita sin preguntar','aprobado: se pregunta en cada edición','seguir planeando: Claude revisa el plan'][n-1]; S.view='chat'; S.flash=''; S.phoneView='chat'; S.toast='Respondido desde el visor'; }
+function enter(){ const f=FILES[S.cur]; if(f[2]==='md'){open();S.phoneView='viewer'} else S.flash='  '+f[0].trim()+' se abre en nvim (sin visor)'; }
+function key(e){
+  const k=e.key; const L=S.view==='viewer'?lay():null;
+  if(S.view==='viewer'){
+    if(S.typing){ if(k==='Enter'){S.query=S.buf;S.typing=false;S.mi=0;const mt=matches(L);if(mt.length)S.scroll=mt[0];S.flash=''}
+      else if(k==='Escape'){S.typing=false;S.buf=''} else if(k==='Backspace')S.buf=S.buf.slice(0,-1); else if(k.length===1)S.buf+=k; else return; e.preventDefault(); paint(); return; }
+    const h=bodyRows(L), mt=matches(L);
+    const go=true;
+    if(k==='j'||k==='ArrowDown')S.scroll++; else if(k==='k'||k==='ArrowUp')S.scroll--;
+    else if(k===' '||k==='PageDown')S.scroll+=h; else if(k==='b'||k==='PageUp')S.scroll-=h;
+    else if(k==='g')S.scroll=0; else if(k==='G')S.scroll=1e9;
+    else if(k===']'){ const n=L.heads.find(x=>x.row>S.scroll); if(n)S.scroll=n.row } else if(k==='['){ const p=[...L.heads].reverse().find(x=>x.row<S.scroll); S.scroll=p?p.row:0 }
+    else if(k==='o')S.outline=!S.outline;
+    else if(k==='/'){S.typing=true;S.buf=''}
+    else if(k==='n'&&mt.length){S.mi=(S.mi+1)%mt.length;S.scroll=mt[S.mi]} else if(k==='N'&&mt.length){S.mi=(S.mi-1+mt.length)%mt.length;S.scroll=mt[S.mi]}
+    else if(k==='y')copy(); else if(k==='e')S.flash=S.scen==='plan'?'se abre el plan en nvim (~/.claude/plans/plan-auth-tests.md)':'se abre README.md en nvim';
+    else if(k==='Escape')close();
+    else if(S.scen==='plan'&&'123'.includes(k)&&k.length===1)respond(+k); else return;
+  } else if(S.scen==='plan'){ if(k==='v'&&!S.answer)open(); else if(!S.answer&&'123'.includes(k)&&k.length===1)respond(+k); else return; }
+  else { if(k==='ArrowDown')S.cur=Math.min(FILES.length-1,S.cur+1); else if(k==='ArrowUp')S.cur=Math.max(0,S.cur-1); else if(k==='Enter')enter(); else return; }
+  e.preventDefault(); paint(); phone();
+}
+function wheel(e){ if(S.view!=='viewer')return; S.scroll+=e.deltaY>0?3:-3; e.preventDefault(); paint(); }
+
+/* ---------- the phone ---------- */
+function mdHTML(md){
+  const B=parse(md); const inl=t=>inline(t).map(([x,c])=>{ x=esc(x); return c==='code'?'<code>'+x+'</code>':c==='b'?'<b>'+x+'</b>':c==='i'?'<i>'+x+'</i>':c.startsWith('blue')?'<a>'+x+'</a>':c==='dim'?'<span class="dim">'+x+'</span>':x }).join('');
+  let h='',hi=0; for(const b of B){
+    if(b.t==='h'){ h+='<h'+Math.min(b.n,3)+' id="h'+(hi++)+'">'+inl(b.x)+'</h'+Math.min(b.n,3)+'>' }
+    else if(b.t==='p')h+='<p>'+inl(b.x)+'</p>';
+    else if(b.t==='q')h+='<blockquote>'+inl(b.x)+'</blockquote>';
+    else if(b.t==='hr')h+='<hr>';
+    else if(b.t==='list'){ const ord=b.items[0].num!==null; h+=(ord?'<ol>':'<ul>')+b.items.map(i=>i.task===null?'<li>'+inl(i.x)+'</li>':'<li class="task">'+(i.task?'<span class="green">☑</span> ':'<span class="dim">☐</span> ')+inl(i.x)+'</li>').join('')+(ord?'</ol>':'</ul>') }
+    else if(b.t==='code')h+='<pre>'+b.c.map(l=>hl(l).map(([t,c])=>c?'<span class="'+c+'">'+esc(t)+'</span>':esc(t)).join('')).join('\n')+'</pre>';
+    else if(b.t==='table')h+='<div class="tw"><table>'+b.r.map((r,ri)=>'<tr>'+r.map(c=>ri?'<td>'+inl(c)+'</td>':'<th>'+inl(c)+'</th>').join('')+'</tr>').join('')+'</table></div>';
+  } return h;
+}
+function phone(){
+  const el=document.getElementById('ph'); const plan=S.scen==='plan'; const t=T[S.scen]; let h='';
+  if(S.phoneView==='viewer'){
+    const heads=parse(t.doc).filter(b=>b.t==='h');
+    h+='<div class="hd"><button id="pb" aria-label="Volver">←</button><div class="t"><b>'+esc(t.title)+'</b><span>'+(plan?'plan listo · ':'proj · ')+heads.length+' títulos</span></div><button id="po" aria-label="Esquema">☰</button></div>';
+    h+='<div class="body md" id="pbody">'+mdHTML(t.doc)+'</div>';
+    if(plan&&!S.answer) h+='<div class="acts"><small>plan listo</small><button class="pri" data-a="1">Aprobar y editar sin preguntar</button><button data-a="2">Aprobar, preguntando cada edición</button><button class="neg" data-a="3">Seguir planeando</button></div>';
+    if(S.sheet) h+='<div class="sheet">'+heads.map((x,i)=>'<button class="o l'+Math.min(x.n,3)+'" data-h="'+i+'">'+esc(x.x.replace(/`/g,''))+'</button>').join('')+'</div>';
+  } else if(plan){
+    h+='<div class="hd"><div class="t"><b>claude · pruebas del módulo auth</b><span>↳ main  ~/ws/proj</span></div></div>';
+    h+='<div class="body chat"><div>❯ arregla el test que falla en auth::expired</div><div><span class="dim">● Read(src/auth.rs)</span></div>'+(S.answer?'<div class="green">⎿ '+esc(S.answer)+'</div><div>● Empiezo por el reloj falso…</div>':'<div class="yellow">● ExitPlanMode</div>')+'</div>';
+    if(!S.answer) h+='<div class="acts"><small>plan listo</small><div style="white-space:pre-wrap">'+esc('Plan: pruebas del módulo auth\n\nEl token de sesión expira a los 30 minutos, pero verify() no mira el reloj…')+'</div><button id="pv">Ver el plan completo</button><button class="pri" data-a="1">Aprobar y editar sin preguntar</button><button data-a="2">Aprobar, preguntando cada edición</button><button class="neg" data-a="3">Seguir planeando</button></div>';
+  } else {
+    h+='<div class="hd"><div class="t"><b>archivos</b><span>proj</span></div></div><div class="body" style="padding:0">'+FILES.map((f,i)=>'<div class="row" data-f="'+i+'"><span class="'+(f[2]==='dir'?'blue':'dim')+'">'+(f[2]==='dir'?'▸':'·')+'</span><span class="n">'+esc(f[0].replace(/^[ ▾▸·]+/,''))+'</span>'+(f[2]==='md'?'<span class="dim">ver</span>':'')+'</div>').join('')+'</div>';
+  }
+  if(S.toast) h+='<div class="toast">'+esc(S.toast)+'</div>';
+  el.innerHTML=h;
+  const on=(s,f)=>{const x=el.querySelector(s); if(x)x.onclick=f};
+  on('#pb',()=>{S.phoneView='chat';S.sheet=false;if(S.scen==='file')S.view='chat';phone()});
+  on('#po',()=>{S.sheet=!S.sheet;phone()}); on('#pv',()=>{S.phoneView='viewer';phone()});
+  el.querySelectorAll('[data-a]').forEach(b=>b.onclick=()=>{respond(+b.dataset.a);paint();phone();setTimeout(()=>{S.toast='';phone()},2200)});
+  el.querySelectorAll('[data-h]').forEach(b=>b.onclick=()=>{S.sheet=false;phone();const x=document.getElementById('h'+b.dataset.h);if(x)x.scrollIntoView({block:'start'})});
+  el.querySelectorAll('[data-f]').forEach(b=>b.onclick=()=>{ const f=FILES[+b.dataset.f]; if(f[2]==='md'){S.phoneView='viewer';phone()} else {S.toast=f[0].trim()+': el teléfono no lo abre';phone();setTimeout(()=>{S.toast='';phone()},1800)} });
+}
+
+/* ---------- wiring ---------- */
+function reset(){ Object.assign(S,{view:'chat',scroll:0,outline:true,query:'',buf:'',typing:false,mi:0,flash:'',cur:4,answer:'',phoneView:'chat',sheet:false,toast:''}); }
+document.getElementById('scen').addEventListener('click',e=>{ const b=e.target.closest('[data-s]'); if(!b)return; S.scen=b.dataset.s; reset(); document.querySelectorAll('#scen [data-s]').forEach(x=>x.setAttribute('aria-pressed',x===b)); paint(); phone(); });
+document.getElementById('reset').onclick=()=>{reset();paint();phone()};
+document.getElementById('theme').onclick=()=>{const r=document.documentElement;const dark=r.dataset.theme?r.dataset.theme==='dark':!matchMedia('(prefers-color-scheme: light)').matches;r.dataset.theme=dark?'light':'dark';
+  const v=r.dataset.theme==='light'?{'--bg':'#fafafa','--panel':'#f0f0f1','--fg':'#383a42','--dim':'#a0a1a7','--line':'#dbdbdc','--sel':'#e5e5e6','--blue':'#4078f2','--green':'#50a14f','--yellow':'#c18401','--red':'#e45649','--magenta':'#a626a4','--cyan':'#0184bc'}:{'--bg':'#282c34','--panel':'#21252b','--fg':'#abb2bf','--dim':'#5c6370','--line':'#3e4451','--sel':'#2c313a','--blue':'#61afef','--green':'#98c379','--yellow':'#e5c07b','--red':'#e06c75','--magenta':'#c678dd','--cyan':'#56b6c2'};
+  for(const k in v)r.style.setProperty(k,v[k]); };
+const term=document.getElementById('t'); term.addEventListener('keydown',key); term.addEventListener('wheel',wheel,{passive:false});
+reset(); paint(); phone(); term.focus({preventScroll:true});
+</script>

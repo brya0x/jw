@@ -17,6 +17,7 @@ mod history;
 mod integration;
 mod launch;
 mod layout;
+mod markdown;
 mod mobile;
 mod model;
 mod panes;

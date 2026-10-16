@@ -8,6 +8,7 @@
 
 pub mod conversation;
 pub mod link;
+pub mod markdown;
 pub use link::{BridgeMsg, Denied, PhoneMsg};
 pub mod patch;
 pub mod themes;
@@ -402,6 +403,18 @@ pub enum Cmd {
     /// The result is a `ConversationList`.
     ListConversations {
         workspace: Id,
+    },
+    /// A Markdown file of the workspace as blocks (REQ-465, REQ-466): `path` is relative to the
+    /// workspace's folder, or absolute and inside it. The result is a `markdown::MarkdownDoc`.
+    ReadMarkdown {
+        workspace: Id,
+        path: String,
+    },
+    /// The plan that waits in a conversation, whole, as blocks (REQ-467). The result is a
+    /// `markdown::MarkdownDoc`.
+    ReadPlan {
+        node: Id,
+        ask: String,
     },
 }
 

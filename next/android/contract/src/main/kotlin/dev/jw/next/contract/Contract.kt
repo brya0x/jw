@@ -189,6 +189,14 @@ sealed interface Cmd {
     @Serializable @SerialName("list_conversations")
     data class ListConversations(val workspace: Id) : Cmd
 
+    /** A Markdown file of the workspace as blocks: [path] is relative to its folder. The result is a [MarkdownDoc]. */
+    @Serializable @SerialName("read_markdown")
+    data class ReadMarkdown(val workspace: Id, val path: String) : Cmd
+
+    /** The plan that waits in a conversation, whole, as blocks. The result is a [MarkdownDoc]. */
+    @Serializable @SerialName("read_plan")
+    data class ReadPlan(val node: Id, val ask: String) : Cmd
+
     @Serializable @SerialName("find_files")
     data class FindFiles(val workspace: Id, val query: String) : Cmd
 

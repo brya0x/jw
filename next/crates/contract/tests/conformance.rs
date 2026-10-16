@@ -284,6 +284,38 @@ fn the_reply_of_list_conversations_is_a_list_of_saved_conversations() {
     assert_eq!(serde_json::to_value(&list).unwrap(), doc["result"]);
 }
 
+/// The result of `read_markdown` in the fixture is what `MarkdownDoc` writes and reads, and holds
+/// every kind of block and of text.
+#[test]
+fn the_reply_of_read_markdown_is_a_document_of_blocks() {
+    let docs = fixtures("daemon");
+    let (_, doc) = docs
+        .iter()
+        .find(|(n, _)| n == "reply-ok-read-markdown.json")
+        .expect("the fixture");
+    let md: contract::markdown::MarkdownDoc =
+        serde_json::from_value(doc["result"].clone()).unwrap();
+    assert_eq!(md.title, "Plan: pruebas del módulo auth");
+    let kinds: Vec<&str> = md
+        .blocks
+        .iter()
+        .map(|b| match b {
+            contract::markdown::MdBlock::Heading { .. } => "heading",
+            contract::markdown::MdBlock::Para { .. } => "para",
+            contract::markdown::MdBlock::Quote { .. } => "quote",
+            contract::markdown::MdBlock::List { .. } => "list",
+            contract::markdown::MdBlock::Code { .. } => "code",
+            contract::markdown::MdBlock::Table { .. } => "table",
+            contract::markdown::MdBlock::Rule => "rule",
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        ["heading", "para", "quote", "list", "code", "table", "rule"]
+    );
+    assert_eq!(serde_json::to_value(&md).unwrap(), doc["result"]);
+}
+
 /// The result of `project_config` in the fixture is what `ProjectInfo` writes and reads.
 #[test]
 fn the_reply_of_project_config_is_a_project_info() {

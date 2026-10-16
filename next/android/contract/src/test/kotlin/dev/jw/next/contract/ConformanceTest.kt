@@ -241,6 +241,20 @@ class ConformanceTest {
         assertEquals(result, ContractJson.encodeToJsonElement(ConversationList.serializer(), list))
     }
 
+    /** The result of `read_markdown` in the fixture is what [MarkdownDoc] reads, with every kind of block, and writes back as it was. */
+    @Test
+    fun theReplyOfReadMarkdownIsADocumentOfBlocks() {
+        val reply = fixtures("daemon").first { it.first == "reply-ok-read-markdown.json" }.second
+        val result = (ContractJson.decodeFromJsonElement(DaemonMsg.serializer(), reply) as DaemonMsg.Reply).result!!
+        val doc = ContractJson.decodeFromJsonElement(MarkdownDoc.serializer(), result)
+        assertEquals("Plan: pruebas del módulo auth", doc.title)
+        assertEquals(
+            listOf("Heading", "Para", "Quote", "ListOf", "Code", "Table", "Rule"),
+            doc.blocks.map { it::class.simpleName },
+        )
+        assertEquals(result, ContractJson.encodeToJsonElement(MarkdownDoc.serializer(), doc))
+    }
+
     /** The result of `project_config` in the fixture is what [ProjectInfo] reads, and writes back as it was. */
     @Test
     fun theReplyOfProjectConfigIsAProjectInfo() {

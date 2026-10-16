@@ -498,6 +498,16 @@ impl Core {
             .map(|w| PathBuf::from(&w.path))
     }
 
+    /// The plan that waits as `ask` in the conversation `node`: its text and the file the engine
+    /// says it is in (REQ-467).
+    pub fn plan_waiting(&self, node: &str, ask: &str) -> Option<(String, Option<String>)> {
+        self.convs
+            .values()
+            .find(|c| c.id == node)?
+            .st
+            .waiting_plan(ask)
+    }
+
     /// The `diff` node of a workspace and scope, if one is in use.
     pub fn find_diff(&mut self, workspace: &str, scope: &Scope) -> Option<Id> {
         self.diffs

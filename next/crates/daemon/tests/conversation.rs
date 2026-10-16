@@ -553,6 +553,73 @@ fn the_questions_claude_asks_come_one_at_a_time_and_the_engine_gets_all_the_answ
 }
 
 #[test]
+fn the_plan_that_waits_is_read_whole_as_blocks_with_its_file_and_is_refused_once_answered() {
+    let mut r = rig();
+    let (node, _) = r.open();
+    r.send(&node, "un plan");
+    let v = r.until(&node, "the plan", |v| v["status"] == "asking");
+    let ask = v["ask"]["id"].as_str().unwrap().to_owned();
+    let doc: contract::markdown::MarkdownDoc = serde_json::from_value(
+        r.cmd(Cmd::ReadPlan {
+            node: node.clone(),
+            ask: ask.clone(),
+        })
+        .unwrap()
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(doc.title, "Plan");
+    assert_eq!(doc.path.as_deref(), Some("/x/plan.md"), "REQ-467");
+    assert!(!doc.truncated);
+    assert!(matches!(
+        doc.blocks[0],
+        contract::markdown::MdBlock::Heading { level: 1, .. }
+    ));
+    assert!(matches!(
+        &doc.blocks[1],
+        contract::markdown::MdBlock::List { start: Some(1), items } if items.len() == 2
+    ));
+    // a question that is not this one waits for nothing
+    let err = r
+        .cmd(Cmd::ReadPlan {
+            node: node.clone(),
+            ask: "otra".into(),
+        })
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::BadRequest);
+    r.answer(&node, &ask, "no", None).unwrap();
+    r.idle_after(&node, 1);
+    let err = r.cmd(Cmd::ReadPlan { node, ask }).unwrap_err();
+    assert!(err.message.contains("not waiting"), "{}", err.message);
+}
+
+#[test]
+fn a_plan_longer_than_the_box_keeps_comes_whole_to_the_viewer() {
+    let mut r = rig();
+    let (node, _) = r.open();
+    r.send(&node, "un plan largo");
+    let v = r.until(&node, "the plan", |v| v["status"] == "asking");
+    assert_eq!(
+        v["ask"]["plan"].as_array().unwrap().len(),
+        200,
+        "the box keeps 200 lines"
+    );
+    let doc: contract::markdown::MarkdownDoc = serde_json::from_value(
+        r.cmd(Cmd::ReadPlan {
+            node,
+            ask: v["ask"]["id"].as_str().unwrap().to_owned(),
+        })
+        .unwrap()
+        .unwrap(),
+    )
+    .unwrap();
+    let contract::markdown::MdBlock::List { items, .. } = &doc.blocks[1] else {
+        panic!("a list: {:?}", doc.blocks[1]);
+    };
+    assert_eq!(items.len(), 300, "REQ-467: the whole plan");
+}
+
+#[test]
 fn a_plan_is_approved_with_edits_allowed_or_asking_or_refused_with_what_to_do_instead() {
     let mut r = rig();
     let (node, _) = r.open();

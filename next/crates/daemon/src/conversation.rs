@@ -1027,6 +1027,18 @@ impl State {
         });
     }
 
+    /// The plan that waits as `ask`: its text, whole, and the file the engine says it is in.
+    pub fn waiting_plan(&self, ask: &str) -> Option<(String, Option<String>)> {
+        let p = self
+            .pending
+            .as_ref()
+            .filter(|p| p.ask.id == ask && p.ask.kind == AskKind::Plan)?;
+        Some((
+            p.input["plan"].as_str()?.to_owned(),
+            p.input["planFilePath"].as_str().map(str::to_owned),
+        ))
+    }
+
     /// `/cost`: the conversation's own cost, not the subscription's use (REQ-419).
     pub fn answer_cost(&mut self) {
         let text = format!(

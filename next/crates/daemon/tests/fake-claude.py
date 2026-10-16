@@ -79,8 +79,10 @@ def questions():
         logline("question denied " + r.get("message", ""))
         out({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_q", "is_error": True, "content": r.get("message", "")}]}})
     result()
-def plan():
-    r = asking("ExitPlanMode", {"plan": "# Plan\n1. mirar\n2. editar", "planFilePath": "/x/plan.md"}, "req-p", "toolu_p")
+def plan(long=False):
+    # A plan of 300 lines, more than the box keeps, for the viewer that shows it whole.
+    body = "# Plan\n" + "\n".join("- paso %d de un plan largo" % n for n in range(300)) if long else "# Plan\n1. mirar\n2. editar"
+    r = asking("ExitPlanMode", {"plan": body, "planFilePath": "/x/plan.md"}, "req-p", "toolu_p")
     if r["behavior"] == "allow":
         logline("plan allowed")
         out({"type": "system", "subtype": "status", "status": None, "permissionMode": "default"})
@@ -183,7 +185,7 @@ for line in sys.stdin:
     elif "pregunta" in text:
         questions()
     elif "plan" in text:
-        plan()
+        plan("largo" in text)
     elif "agente" in text:
         agent()
     elif "fondo" in text:

@@ -10,6 +10,7 @@ use crate::browse;
 use crate::changes;
 use crate::engine;
 use crate::files;
+use crate::markdown;
 use crate::panes;
 use crate::rename;
 use crate::saved;
@@ -55,6 +56,8 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
         Cmd::ListFiles { workspace, path } => files::list(shared, &workspace, path.as_deref()),
         Cmd::FindFiles { workspace, query } => files::find(shared, &workspace, &query),
         Cmd::ListConversations { workspace } => saved::list(shared, &workspace),
+        Cmd::ReadMarkdown { workspace, path } => markdown::read(shared, &workspace, &path),
+        Cmd::ReadPlan { node, ask } => markdown::read_plan(shared, &node, &ask),
         Cmd::CreateWorktree {
             repo,
             branch,
