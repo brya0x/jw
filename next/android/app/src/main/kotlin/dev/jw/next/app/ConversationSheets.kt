@@ -33,6 +33,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -52,7 +54,6 @@ import dev.jw.next.client.tag
 import dev.jw.next.contract.Accent
 import dev.jw.next.contract.Ask
 import dev.jw.next.contract.ConvMode
-import dev.jw.next.contract.DiffSign
 import dev.jw.next.contract.Node
 
 /** A sheet from the bottom over the conversation: a tap outside it or Back closes it. */
@@ -84,12 +85,7 @@ internal fun AskSheet(ask: Ask, busy: Boolean, dismiss: () -> Unit, answer: (Str
             Mono(ask.kind.tag(), Palette.yellow, 11)
         }
         ask.command?.let { Mono(it, Palette.cyan, 12, lines = 8, modifier = Modifier.fillMaxWidth().background(Palette.bg, RoundedCornerShape(6.dp)).padding(8.dp)) }
-        if (ask.diff.isNotEmpty()) Column(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-            ask.diff.take(12).forEach { l ->
-                val tint = when (l.sign) { DiffSign.Add -> Palette.green.copy(alpha = 0.16f); DiffSign.Del -> Palette.red.copy(alpha = 0.16f); DiffSign.Same -> Color.Transparent }
-                androidx.compose.material3.Text("${l.sign.char()} ${l.text}", color = Palette.fg, fontFamily = MonoFont, fontSize = 11.5.sp, softWrap = false, modifier = Modifier.fillMaxWidth().background(tint).padding(horizontal = 6.dp))
-            }
-        }
+        if (ask.diff.isNotEmpty()) Diff(ask.diff.take(12))
         ask.plan.forEach { Mono(it, Palette.fg, 13, lines = 6) }
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             ask.options.forEachIndexed { i, o ->
@@ -149,7 +145,8 @@ internal fun SettingsSheet(node: Node.Conversation, dismiss: () -> Unit, set: (n
                 Box(
                     Modifier.size(36.dp).background(Palette.accent(a), CircleShape)
                         .border(2.dp, if (a == node.accent) Palette.fg else Color.Transparent, CircleShape)
-                        .clickable { set(null, a, null, null, null) },
+                        .clickable { set(null, a, null, null, null) }
+                        .semantics { contentDescription = word },
                 ) {}
             }
         }
@@ -176,15 +173,6 @@ internal fun PlusSheet(dismiss: () -> Unit, pick: (String) -> Unit) {
     }
 }
 
-private fun Tone?.color(): Color = when (this) {
-    Tone.Danger -> Palette.red
-    Tone.Warn -> Palette.yellow
-    Tone.Plan -> Palette.magenta
-    Tone.Good -> Palette.green
-    Tone.Merged -> Palette.cyan
-    Tone.Dim, null -> Palette.dim
-}
-
 /** One of jwn's lists as a sheet (REQ-450): rows with what they are, a tap does what the row says. */
 @Composable
 internal fun PanelSheet(view: PanelView?, now: Long, dismiss: () -> Unit, choose: (RowAct) -> Unit) {
@@ -209,7 +197,7 @@ private fun PanelRowView(r: PanelRow, now: Long, click: () -> Unit) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Mono(r.label, Palette.fg, 13, bold = true, lines = 2, modifier = Modifier.weight(1f, fill = false))
             r.at?.let { Mono(listAgo(now, it), Palette.dim, 11) }
-            r.tag?.let { Mono(it, r.tone.color(), 11) }
+            r.tag?.let { Mono(it, (r.tone ?: Tone.Dim).color(), 11) }
         }
         if (r.detail.isNotBlank()) Mono(r.detail, Palette.dim, 12, lines = 2)
     }

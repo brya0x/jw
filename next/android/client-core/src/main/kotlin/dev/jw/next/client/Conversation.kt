@@ -3,7 +3,6 @@ package dev.jw.next.client
 import dev.jw.next.contract.Accent
 import dev.jw.next.contract.Artifact
 import dev.jw.next.contract.AskKind
-import dev.jw.next.contract.CommandKind
 import dev.jw.next.contract.CommandSource
 import dev.jw.next.contract.ConvCommand
 import dev.jw.next.contract.ConvItem

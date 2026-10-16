@@ -148,6 +148,11 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
     LaunchedEffect(node.ask?.id) { answering = false }
 
     fun say(message: String, error: Boolean = false) { notice = Notice(message, error) }
+    fun copyText(what: String) {
+        scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("jwn", what))) }
+        val lines = what.lines().size
+        say("copiado · $lines ${if (lines == 1) "línea" else "líneas"} · ${what.length} caracteres")
+    }
     fun fail(result: Result<Unit>) { result.onFailure { say(it.message ?: "el PC no pudo hacerlo", error = true) } }
     val firstItem = node.first
 
@@ -165,11 +170,12 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
                 } else {
                     open = Open.Panel(null)
                     source.listConversations(workspace) { r ->
+                        // The sheet may have been closed while the PC answered: an answer for a list nobody waits for is dropped.
                         r.onSuccess { list ->
                             if (name == "continue") {
                                 open = null
                                 list.conversations.firstOrNull()?.let { source.resumeConversation(pane.id, it.id, ::fail) } ?: say("no hay conversaciones guardadas de esta carpeta")
-                            } else {
+                            } else if (open is Open.Panel) {
                                 open = Open.Panel(savedPanel(list.conversations))
                             }
                         }.onFailure { open = null; say(it.message ?: "el PC no pudo listar las conversaciones", error = true) }
@@ -202,23 +208,26 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
         text = TextFieldValue(next, TextRange(at + piece.length))
     }
 
-    fun addPicture(from: Uri) {
-        if (pictures.size >= IMAGES_MAX) { say("como mucho $IMAGES_MAX imágenes en un mensaje", error = true); return }
+    // [temporary] is the photo the camera wrote: it goes once it has been read, so no photo is left in the cache.
+    fun addPicture(from: Uri, temporary: File? = null) {
+        if (pictures.size >= IMAGES_MAX) { temporary?.delete(); say("como mucho $IMAGES_MAX imágenes en un mensaje", error = true); return }
         val n = pasted + 1
         scope.launch {
-            val made = withContext(Dispatchers.IO) { readPicture(context, from, n) }
+            val made = withContext(Dispatchers.IO) { readPicture(context, from, n).also { temporary?.delete() } }
             made.onSuccess { p -> pasted = n; pictures += p; insert("[Imagen#$n] ") }.onFailure { say(it.message ?: "no se pudo leer la imagen", error = true) }
         }
     }
 
     val gallery = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { it?.let(::addPicture) }
-    var shot by remember { mutableStateOf<Uri?>(null) }
-    val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok -> if (ok) shot?.let(::addPicture) }
+    var shot by remember { mutableStateOf<File?>(null) }
+    val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+        val file = shot
+        if (ok && file != null) addPicture(FileProvider.getUriForFile(context, "${context.packageName}.files", file), temporary = file) else file?.delete()
+    }
     fun takePhoto() {
         val file = File(File(context.cacheDir, "images").apply { mkdirs() }, "foto-${System.currentTimeMillis()}.jpg")
-        val target = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
-        shot = target
-        camera.launch(target)
+        shot = file
+        camera.launch(FileProvider.getUriForFile(context, "${context.packageName}.files", file))
     }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> if (granted) takePhoto() else say("sin permiso de la cámara", error = true) }
 
@@ -272,15 +281,10 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
     notice?.let { Mono(it.text, if (it.error) Palette.yellow else Palette.green, 12, lines = 2, modifier = Modifier.fillMaxWidth().padding(horizontal = Pad, vertical = 4.dp)) }
     picked?.takeIf { it - firstItem in node.items.indices }?.let { abs ->
         val i = abs - firstItem
-        fun copy(what: String) {
-            scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("jwn", what))) }
-            val lines = what.lines().size
-            say("copiado · $lines ${if (lines == 1) "línea" else "líneas"} · ${what.length} caracteres")
-        }
         Row(Modifier.fillMaxWidth().background(Palette.panel).padding(horizontal = 10.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             listOf<Pair<String, () -> Unit>>(
-                "Copiar" to { copy(itemText(node.items[i])) },
-                "Copiar el turno" to { copy(turnText(node.items, i)) },
+                "Copiar" to { copyText(itemText(node.items[i])) },
+                "Copiar el turno" to { copyText(turnText(node.items, i)) },
                 "Soltar" to { picked = null },
             ).forEach { (label, act) ->
                 Box(
@@ -389,7 +393,7 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
                 RowAct.Nothing -> {}
                 is RowAct.Insert -> { open = null; text = TextFieldValue(act.text, TextRange(act.text.length)) }
                 is RowAct.Resume -> { open = null; source.resumeConversation(pane.id, act.id, ::fail) }
-                is RowAct.Copy -> { open = null; scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("jwn", act.text))) }; say("copiado") }
+                is RowAct.Copy -> { open = null; copyText(act.text) }
                 is RowAct.Open -> uri.openUri(act.url)
             }
         }

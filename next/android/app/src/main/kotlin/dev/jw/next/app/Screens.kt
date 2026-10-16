@@ -410,7 +410,8 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
         }
         // A pane that runs `claude` is named by its conversation, in its colour; a tap on its open tab is the settings (REQ-444).
         val tabPane = remember(version, screen.pane) { screen.pane?.let { source.node(it) as? Node.Pane } }
-        val tabConv = tabPane?.conversation?.let { c -> remember(version, c) { source.node(c) as? Node.Conversation } }
+        val convId = tabPane?.conversation
+        val tabConv = remember(version, convId) { convId?.let { source.node(it) as? Node.Conversation } }
         PaneTabs(
             ws.panes, screen.pane, state, adding = asking || waitingPane != null,
             select = { id -> if (id == screen.pane && tabConv != null) settingsAsked++ else set(nav.selectPane(state, id)) },
@@ -428,7 +429,6 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
         addError?.let { Mono(it, Palette.red, 12, lines = 3, modifier = Modifier.fillMaxWidth().background(Palette.panel).padding(horizontal = Gutter, vertical = 8.dp)) }
         val pane = tabPane
         // The conversation of a pane that runs `claude` takes the place of its blocks (REQ-440).
-        val convId = pane?.conversation
         LaunchedEffect(convId) { convId?.let { source.open(it) } }
         if (pane != null && convId != null) {
             when (val conv = tabConv) {

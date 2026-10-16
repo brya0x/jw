@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -31,14 +30,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -196,8 +193,9 @@ private fun ToolRow(t: ConvItem.Tool, spin: String, open: Boolean) {
 private const val DIFF_SHOWN = 8
 private const val OUTPUT_SHOWN = 40
 
+/** The lines of a diff, the added ones tinted green and the removed ones red from the theme (REQ-398, REQ-452); [more] counts those not shown. */
 @Composable
-private fun Diff(lines: List<DiffLine>, more: Int) {
+internal fun Diff(lines: List<DiffLine>, more: Int = 0) {
     Column(Modifier.padding(top = 2.dp).horizontalScroll(rememberScrollState())) {
         lines.forEach { l ->
             val tint = when (l.sign) {
