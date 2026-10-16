@@ -10,8 +10,8 @@ use std::collections::HashSet;
 
 use contract::PaneInput;
 use contract::conversation::{
-    Accent, Ask, AskKind, CommandKind, CommandSource, ConvCommand, ConvStatus, Conversation,
-    DiffLine, DiffSign, Image, Item, Mode, Tone, ToolState,
+    Accent, Ask, AskKind, CommandSource, ConvCommand, ConvStatus, Conversation, DiffLine, DiffSign,
+    Image, Item, Mode, Tone, ToolState,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -444,7 +444,7 @@ impl Ui {
             .filter_map(|c| {
                 let name = c.name.trim_start_matches('/').to_lowercase();
                 name.contains(&typed)
-                    .then(|| (!name.starts_with(&typed), source_look(c.source).0, c))
+                    .then(|| (!name.starts_with(&typed), source_look(c.source).rank, c))
             })
             .collect();
         hits.sort_by(|a, b| (a.0, a.1, &a.2.name).cmp(&(b.0, b.1, &b.2.name)));
@@ -463,7 +463,7 @@ impl Ui {
             .next()
             .filter(|w| w.starts_with('/'))?;
         let c = conv.commands.iter().find(|c| c.name == word)?;
-        Some((word.to_owned(), source_look(c.source).1))
+        Some((word.to_owned(), source_look(c.source).colour))
     }
 
     /// Whether a list or a field is open over the conversation.
@@ -1026,7 +1026,7 @@ impl Ui {
             let bg = if lit { look::sel() } else { look::panel() };
             let row = y + 1 + i;
             g.paint_bg(x + 1, row, iw - 2, bg);
-            let (_, colour, tag) = source_look(c.source);
+            let SourceLook { colour, tag, .. } = source_look(c.source);
             g.put(
                 x + 2,
                 row,
@@ -1311,18 +1311,10 @@ impl Ui {
         None
     }
 
-    /// Run a command chosen from the `/` list: it goes as the line, except one that needs
-    /// Claude's own screen, which is only said so (REQ-423).
+    /// Run a command chosen from the `/` list: it goes as the line, and the daemon refuses one
+    /// that needs Claude's own screen (REQ-423).
     fn run_command(&mut self, conv: &Conversation, c: &ConvCommand) -> Option<Act> {
         self.menu_at = 0;
-        if c.kind == CommandKind::Screen {
-            self.editor.take();
-            self.says = format!(
-                "{} necesita la pantalla de Claude: usa `command claude`",
-                c.name
-            );
-            return None;
-        }
         self.editor.set(&c.name);
         self.submit(conv)
     }
@@ -1587,16 +1579,23 @@ pub fn title(conv: &Conversation) -> String {
     format!("claude · {}", conv.name)
 }
 
-/// Where a command is defined, as its list orders it, the colour it is written in and the word
-/// that says it.
-fn source_look(s: CommandSource) -> (usize, Rgb, &'static str) {
-    match s {
+/// How a command's source is shown: its place in the list, the colour it is written in and the
+/// word that says it.
+struct SourceLook {
+    rank: usize,
+    colour: Rgb,
+    tag: &'static str,
+}
+
+fn source_look(s: CommandSource) -> SourceLook {
+    let (rank, colour, tag) = match s {
         CommandSource::Jwn => (0, look::blue(), "jwn"),
         CommandSource::Claude => (1, look::magenta(), "claude"),
         CommandSource::Project => (2, look::green(), "proyecto"),
         CommandSource::Skill => (3, look::yellow(), "skill"),
         CommandSource::Plugin => (4, look::cyan(), "plugin"),
-    }
+    };
+    SourceLook { rank, colour, tag }
 }
 
 pub fn accent_rgb(a: Accent) -> Rgb {
@@ -1984,6 +1983,8 @@ fn turn_text(conv: &Conversation, abs: u32) -> String {
 #[cfg(test)]
 mod tests {
     use std::path::Path;
+
+    use contract::conversation::CommandKind;
 
     use super::*;
 
@@ -2789,13 +2790,15 @@ mod tests {
     }
 
     #[test]
-    fn a_command_that_needs_claudes_screen_is_not_run_from_the_list_and_says_where_to_go() {
+    fn a_command_that_needs_claudes_screen_goes_to_the_daemon_which_refuses_it() {
         let conv = idle();
         let mut ui = Ui::default();
         type_in(&mut ui, &conv, "/doc");
-        assert_eq!(press(&mut ui, &conv, KeyCode::Enter), None);
+        assert!(
+            matches!(press(&mut ui, &conv, KeyCode::Enter), Some(Act::Send { text, .. }) if text == "/doctor"),
+            "the daemon says where to go (REQ-423), the same for every client"
+        );
         assert_eq!(ui.editor.text(), "");
-        assert!(ui.take_says().unwrap().contains("command claude"));
     }
 
     #[test]
