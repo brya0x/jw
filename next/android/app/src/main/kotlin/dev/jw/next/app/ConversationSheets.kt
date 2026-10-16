@@ -97,7 +97,9 @@ internal fun AskSheet(ask: Ask, busy: Boolean, dismiss: () -> Unit, answer: (Str
                 Box(
                     Modifier.fillMaxWidth().defaultMinSize(minHeight = 48.dp)
                         .background(if (primary) Palette.green else Palette.sel, RoundedCornerShape(8.dp))
-                        .clickable(enabled = !busy) { if (ask.multi) marked = if (on) marked - i else marked + i else answer(o.key) }
+                        .clickable(enabled = !busy) {
+                            if (!ask.multi) answer(o.key) else marked = if (on) marked - i else marked + i
+                        }
                         .padding(horizontal = 12.dp, vertical = 10.dp),
                     contentAlignment = Alignment.CenterStart,
                 ) {
@@ -215,7 +217,9 @@ private fun PanelRowView(r: PanelRow, now: Long, click: () -> Unit) {
             if (r.detail.isNotBlank()) Mono(r.detail, Palette.dim, 12, lines = 2)
         }
         // A task that runs is stopped from its row (REQ-448).
-        if (r.act is RowAct.Stop) Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) { Mono("■", Palette.red, 16, bold = true) }
+        if (r.act is RowAct.Stop) Box(Modifier.size(44.dp).semantics { contentDescription = "Detener la tarea" }, contentAlignment = Alignment.Center) {
+            Mono("■", Palette.red, 16, bold = true)
+        }
     }
     Hairline()
 }

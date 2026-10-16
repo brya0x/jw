@@ -85,6 +85,16 @@ fun AskKind.tag(): String = when (this) {
     AskKind.Plan -> "plan listo"
 }
 
+/**
+ * Where the answer to a tool's permission came from, written after its line: «permitido desde el móvil»; what Claude
+ * asks (a choice, a plan) is answered and not allowed. Empty when nobody answered (REQ-405).
+ */
+fun ConvItem.Tool.answeredNote(): String {
+    val by = by ?: return ""
+    val did = if (name == "AskUserQuestion" || name == "ExitPlanMode") "respondida" else "permitido"
+    return " · $did ${if (by.startsWith("modo")) "por" else "desde"} $by"
+}
+
 // ---- what is copied (REQ-449) ----
 
 /** An item as the text that is copied from it. */

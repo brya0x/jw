@@ -83,6 +83,16 @@ class ConversationTest {
     }
 
     @Test
+    fun whatAToolWasAnsweredByIsWrittenAsAllowedOrAsAnsweredAndNothingWhenNobodyDid() {
+        fun tool(name: String, by: String?) = ConvItem.Tool("t", name, "x", dev.jw.next.contract.ToolState.Ok, by = by)
+        assertEquals(" · permitido desde el móvil", tool("Edit", "el móvil").answeredNote())
+        assertEquals(" · permitido por modo accept edits", tool("Edit", "modo accept edits").answeredNote())
+        assertEquals(" · respondida desde el móvil", tool("AskUserQuestion", "el móvil").answeredNote())
+        assertEquals(" · respondida desde el terminal", tool("ExitPlanMode", "el terminal").answeredNote())
+        assertEquals("", tool("Edit", null).answeredNote())
+    }
+
+    @Test
     fun theSlashListHoldsTheCommandsWithTheLettersTheOnesThatBeginWithThemFirst() {
         val c = conversation()
         val names = { line: String -> slashMenu(c.commands, line).map { it.name } }

@@ -391,7 +391,9 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
                 "shell" -> text = TextFieldValue("!", TextRange(1))
             }
         }
-        Open.Tasks -> PanelSheet(tasksPanel(node), now, dismiss = { open = null }) { act -> if (act is RowAct.Stop) stopTask(act.task) }
+        Open.Tasks -> PanelSheet(tasksPanel(node), now, dismiss = { open = null }) { act ->
+            if (act is RowAct.Stop) { open = null; stopTask(act.task) }
+        }
         Open.Files -> FilesSheet(source, workspace, filesPath, setPath = { filesPath = it }, dismiss = { open = null }) { path -> open = null; insert("@$path ") }
         is Open.Panel -> PanelSheet(o.view, now, dismiss = { open = null }) { act ->
             when (act) {
@@ -400,7 +402,7 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
                 is RowAct.Resume -> { open = null; source.resumeConversation(pane.id, act.id, ::fail) }
                 is RowAct.Copy -> { open = null; copyText(act.text) }
                 is RowAct.Open -> uri.openUri(act.url)
-                is RowAct.Stop -> stopTask(act.task)
+                is RowAct.Stop -> { open = null; stopTask(act.task) }
             }
         }
     }
