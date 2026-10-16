@@ -18,6 +18,10 @@
     "copy": [
       ".env",
       "apps/web/.env.local"
-    ]
+    ],
+    "ports": {
+      "web": 0,
+      "api": 1
+    }
   }
 }

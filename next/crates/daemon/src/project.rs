@@ -1,7 +1,7 @@
 //! The settings of a repository: its `.jw.toml`, the file the old jw wrote and jwn reads as it
 //! is, or the person's own file of the same syntax outside the repository (spec REQ-330 to
 //! REQ-334, REQ-482 to REQ-487, RAT-34, RAT-46). It is read afresh each time it is needed; a key
-//! jwn does not use is ignored, so an old file keeps `ports` and `env` for the part that reads them.
+//! jwn does not use is ignored, so an old file keeps `env` and `dev` for the part that reads them.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -69,6 +69,8 @@ pub struct Project {
     pub setup: Vec<String>,
     /// The files of the checkout a new worktree gets a copy of (REQ-489).
     pub copy: Vec<String>,
+    /// The names of the ports and their offsets in a worktree's block (REQ-494).
+    pub ports: std::collections::BTreeMap<String, u32>,
     pub agent: Vec<String>,
     pub editor: Vec<String>,
     pub layout: Option<Node>,
@@ -80,6 +82,7 @@ struct Raw {
     branch: Option<Spanned<String>>,
     setup: Option<Vec<Spanned<String>>>,
     copy: Option<Vec<Spanned<String>>>,
+    ports: Option<Spanned<Table>>,
     agent: Option<Spanned<Table>>,
     layout: Option<Spanned<Table>>,
 }
@@ -330,6 +333,30 @@ fn parse(
         copy.push(path.to_owned());
     }
 
+    let mut ports = std::collections::BTreeMap::new();
+    if let Some(t) = raw.ports {
+        let at = t.span().start;
+        for (name, offset) in t.get_ref() {
+            let valid = !name.is_empty()
+                && name
+                    .chars()
+                    .all(|c| matches!(c, 'a'..='z' | '0'..='9' | '_'));
+            if !valid {
+                return Err(fail(
+                    at,
+                    &format!("`ports` names {name:?}: use lowercase letters, digits and `_`"),
+                ));
+            }
+            let Some(n) = offset.as_integer().filter(|n| (0..=99).contains(n)) else {
+                return Err(fail(
+                    at,
+                    &format!("`ports.{name}` must be a whole number from 0 to 99"),
+                ));
+            };
+            ports.insert(name.clone(), n as u32);
+        }
+    }
+
     let agent = match raw.agent {
         Some(t) => {
             let at = t.span().start;
@@ -376,6 +403,7 @@ fn parse(
         branch,
         setup,
         copy,
+        ports,
         agent,
         editor,
         layout,
@@ -923,5 +951,43 @@ mod tests {
             MAX_KEY
         );
         assert!(key(None, Path::new(&format!("/{}", "d/".repeat(300)))).len() <= MAX_KEY + 6);
+    }
+
+    #[test]
+    fn ports_are_names_with_offsets_from_0_to_99_and_what_is_not_says_where() {
+        let p = read_text("ports = { web = 0, api = 1, db_main = 99 }\n").unwrap();
+        assert_eq!(
+            p.ports.into_iter().collect::<Vec<_>>(),
+            [
+                ("api".to_owned(), 1),
+                ("db_main".to_owned(), 99),
+                ("web".to_owned(), 0)
+            ]
+        );
+        assert!(read_text("").unwrap().ports.is_empty());
+        for (text, why) in [
+            ("ports = { Web = 1 }\n", "`ports` names \"Web\""),
+            ("ports = { \"a b\" = 1 }\n", "`ports` names \"a b\""),
+            (
+                "ports = { web = 100 }\n",
+                "`ports.web` must be a whole number from 0 to 99",
+            ),
+            (
+                "ports = { web = -1 }\n",
+                "`ports.web` must be a whole number from 0 to 99",
+            ),
+            (
+                "ports = { web = \"1\" }\n",
+                "`ports.web` must be a whole number from 0 to 99",
+            ),
+            (
+                "ports = { web = 1.5 }\n",
+                "`ports.web` must be a whole number from 0 to 99",
+            ),
+        ] {
+            let err = read_text(text).unwrap_err();
+            assert!(err.starts_with(".jw.toml, line 1"), "{text}: {err}");
+            assert!(err.contains(why), "{text}: {err}");
+        }
     }
 }

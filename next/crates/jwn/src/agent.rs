@@ -897,6 +897,13 @@ fn say_copies(made: &Value) {
     if !copied.is_empty() {
         eprintln!("{} worktree: copied {}", bin(), copied.join(", "));
     }
+    if let Some(ports) = made["ports"].as_object().filter(|p| !p.is_empty()) {
+        let list: Vec<String> = ports
+            .iter()
+            .filter_map(|(name, port)| port.as_u64().map(|p| format!("{name}={p}")))
+            .collect();
+        eprintln!("{} worktree: ports {}", bin(), list.join(" "));
+    }
     for skipped in made["skipped"].as_array().into_iter().flatten() {
         if let (Some(path), Some(why)) = (skipped["path"].as_str(), skipped["why"].as_str()) {
             eprintln!("{} worktree: did not copy {path}: {why}", bin());

@@ -776,3 +776,109 @@ fn a_copy_that_leaves_the_repository_is_refused_naming_the_path_and_the_line() {
     }
     d.stop();
 }
+
+/// N93: ports per worktree (REQ-494 to REQ-498).
+#[test]
+fn a_worktree_gets_a_block_of_ports_its_panes_see_them_and_a_removed_one_gives_its_block_back() {
+    let sb = Sandbox::new();
+    let d = sb.start();
+    let base = identity::env_var("PORT_BASE");
+    let web = identity::env_var("PORT_WEB");
+    let app = repo(
+        &sb,
+        Some(&format!(
+            "ports = {{ web = 0, api = 5 }}\nsetup = [\"echo seen-${base}-${web}-end\"]\n"
+        )),
+    );
+    let mut c = sb.client();
+    assert_eq!(
+        config(&mut c, &app)["ports"],
+        serde_json::json!({ "api": 5, "web": 0 }),
+        "REQ-494"
+    );
+
+    let one = worktree(&mut c, &app, "ws-1").unwrap();
+    assert_eq!(
+        one["ports"],
+        serde_json::json!({ "api": 20005, "web": 20000 }),
+        "REQ-497"
+    );
+    let two = worktree(&mut c, &app, "ws-2").unwrap();
+    assert_eq!(
+        two["ports"],
+        serde_json::json!({ "api": 20105, "web": 20100 }),
+        "the next slot"
+    );
+
+    // the panes of the worktree start with its ports, the setup pane among them (REQ-496)
+    let ws = two["workspace"].as_str().unwrap().to_owned();
+    let started = ok(&mut c, Cmd::StartWorkspace { workspace: ws });
+    let setup = started["panes"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_owned();
+    open(&mut c, &setup);
+    wait_for("the setup to say its ports", || {
+        let _ = c.poll(Duration::from_millis(20));
+        screen(&c, &setup).contains("seen-20100-20100-end")
+    });
+
+    // a change of the settings is for the next worktree, not for this one (REQ-498)
+    std::fs::write(app.join(".jw.toml"), "ports = { web = 9 }\n").unwrap();
+    let three = worktree(&mut c, &app, "ws-3").unwrap();
+    assert_eq!(three["ports"], serde_json::json!({ "web": 20209 }));
+
+    // a removed worktree gives its block back, and the lowest free one is the next to be given (REQ-495)
+    c.cmd(Cmd::RemoveWorkspace {
+        workspace: one["workspace"].as_str().unwrap().to_owned(),
+        remove_worktree: false,
+        force: false,
+    })
+    .unwrap()
+    .unwrap();
+    let four = worktree(&mut c, &app, "ws-4").unwrap();
+    assert_eq!(
+        four["ports"],
+        serde_json::json!({ "web": 20009 }),
+        "the first block again"
+    );
+    d.stop();
+}
+
+#[test]
+fn a_project_without_ports_gives_none_and_the_blocks_survive_a_restart_of_the_daemon() {
+    let sb = Sandbox::new();
+    let d = sb.start();
+    let app = repo(&sb, Some("ports = { web = 0 }\n"));
+    let mut c = sb.client();
+    let plain = repo_two(&sb);
+    let none = worktree(&mut c, &plain, "ws-n").unwrap();
+    assert!(none.get("ports").is_none(), "{none}");
+    let one = worktree(&mut c, &app, "ws-1").unwrap();
+    assert_eq!(one["ports"], serde_json::json!({ "web": 20000 }));
+    d.stop();
+    let d = sb.start();
+    let mut c = sb.client();
+    let two = worktree(&mut c, &app, "ws-2").unwrap();
+    assert_eq!(
+        two["ports"],
+        serde_json::json!({ "web": 20100 }),
+        "the first block is still held"
+    );
+    d.stop();
+}
+
+/// A second repository, at `<sandbox>/work/other`, with no settings.
+fn repo_two(sb: &Sandbox) -> PathBuf {
+    let dir = sb.dir.join("work/other");
+    std::fs::create_dir_all(&dir).unwrap();
+    git(&dir, &["init", "-q", "-b", "main"]);
+    std::fs::write(dir.join("f.txt"), "x").unwrap();
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-q", "-m", "init"]);
+    std::fs::canonicalize(dir).unwrap()
+}

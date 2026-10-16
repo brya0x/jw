@@ -56,7 +56,12 @@ pub fn new_pane(
             ws.path.clone(),
             core.events.clone(),
             core.shell.clone(),
-            core.env.clone(),
+            // What the pane's workspace was given besides what every pane has (REQ-496).
+            core.env
+                .iter()
+                .cloned()
+                .chain(ws.ports.iter().flat_map(crate::model::PortBlock::env))
+                .collect::<Vec<_>>(),
             core.integration_for(&core.shell),
             core.agent_hooks(),
         )

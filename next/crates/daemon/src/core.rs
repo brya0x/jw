@@ -1308,6 +1308,7 @@ mod tests {
             }],
             layout: None,
             attention: vec![],
+            ports: None,
             github: None,
         });
         (model, ws, pane)

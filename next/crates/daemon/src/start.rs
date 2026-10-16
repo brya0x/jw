@@ -36,6 +36,7 @@ pub fn project_config(shared: &Shared, repo: &str) -> Done {
         setup: project.setup.clone(),
         panes: project.pane_names(&shell),
         copy: project.copy.clone(),
+        ports: project.ports.clone(),
     };
     Ok(Some(
         serde_json::to_value(info).expect("a ProjectInfo is JSON"),

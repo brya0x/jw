@@ -265,6 +265,7 @@ class ConformanceTest {
         assertEquals(listOf("nvim", "claude"), info.panes)
         assertEquals(ConfigFrom.Repo, info.from)
         assertEquals(listOf(".env", "apps/web/.env.local"), info.copy)
+        assertEquals(mapOf("web" to 0, "api" to 1), info.ports)
         assertEquals("/home/u/.config/jwn/projects/github.com_acme_app.toml", info.personal)
         assertEquals(result, ContractJson.encodeToJsonElement(ProjectInfo.serializer(), info))
     }

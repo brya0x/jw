@@ -438,6 +438,8 @@ data class ProjectInfo(
     val personal: String = "",
     /** The files of the checkout a new worktree gets a copy of. */
     val copy: List<String> = emptyList(),
+    /** The names of the ports a worktree gets and their offsets in its block. */
+    val ports: Map<String, Int> = emptyMap(),
 )
 
 /** The result of `list_dir`: [dirs] is cut to the first ones when [total] is more than they are. */

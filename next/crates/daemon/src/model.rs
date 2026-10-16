@@ -37,10 +37,60 @@ pub struct Workspace {
     pub layout: Option<contract::Layout>,
     #[serde(skip)]
     pub attention: Vec<Own>,
+    /// The ports a worktree was given when it was made (REQ-495).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ports: Option<PortBlock>,
     /// What was last seen of the branch's pull request, so an attention is raised when it
     /// changes and not again while it does not. Not saved: a restart sees it afresh.
     #[serde(skip)]
     pub github: Option<crate::github::Pr>,
+}
+
+/// A worktree's block of 100 ports: its slot and the names the settings gave to offsets in it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PortBlock {
+    pub slot: u32,
+    pub names: std::collections::BTreeMap<String, u32>,
+}
+
+/// Where the blocks start, how many ports each has, and the last port there is.
+const FIRST_PORT: u32 = 20_000;
+const BLOCK: u32 = 100;
+const LAST_PORT: u32 = 65_535;
+
+impl PortBlock {
+    /// The first port of the block.
+    pub fn base(&self) -> u32 {
+        FIRST_PORT + BLOCK * self.slot
+    }
+
+    /// Each name's port.
+    pub fn ports(&self) -> std::collections::BTreeMap<String, u32> {
+        let base = self.base();
+        self.names
+            .iter()
+            .map(|(n, o)| (n.clone(), base + o))
+            .collect()
+    }
+
+    /// What every pane of the workspace starts with (REQ-496).
+    pub fn env(&self) -> Vec<(String, String)> {
+        let mut env = vec![(identity::env_var("PORT_BASE"), self.base().to_string())];
+        env.extend(self.ports().into_iter().map(|(name, port)| {
+            (
+                identity::env_var(&format!("PORT_{}", name.to_uppercase())),
+                port.to_string(),
+            )
+        }));
+        env
+    }
+}
+
+/// The lowest slot of `used` that is free, if its block fits below the last port (REQ-495).
+pub fn free_slot(used: &[u32]) -> Option<u32> {
+    (0..)
+        .find(|s| !used.contains(s))
+        .filter(|s| FIRST_PORT + BLOCK * s + (BLOCK - 1) <= LAST_PORT)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,5 +136,57 @@ impl Model {
             workspaces: Vec::new(),
             viewed: BTreeMap::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod port_tests {
+    use super::*;
+
+    fn block(slot: u32) -> PortBlock {
+        PortBlock {
+            slot,
+            names: [("web".to_owned(), 0), ("api".to_owned(), 7)].into(),
+        }
+    }
+
+    #[test]
+    fn a_block_starts_at_20000_plus_100_a_slot_and_each_name_is_an_offset_in_it() {
+        let b = block(3);
+        assert_eq!(b.base(), 20_300);
+        assert_eq!(
+            b.ports().into_iter().collect::<Vec<_>>(),
+            [("api".to_owned(), 20_307), ("web".to_owned(), 20_300)]
+        );
+        let env: Vec<(String, String)> = b.env();
+        assert_eq!(env[0], (identity::env_var("PORT_BASE"), "20300".to_owned()));
+        assert!(env.contains(&(identity::env_var("PORT_WEB"), "20300".to_owned())));
+        assert!(env.contains(&(identity::env_var("PORT_API"), "20307".to_owned())));
+    }
+
+    #[test]
+    fn the_lowest_free_slot_is_given_and_none_when_the_block_would_pass_the_last_port() {
+        assert_eq!(free_slot(&[]), Some(0));
+        assert_eq!(free_slot(&[0, 1, 3]), Some(2), "a hole is filled first");
+        assert_eq!(free_slot(&[1]), Some(0));
+        let all: Vec<u32> = (0..454).collect();
+        assert_eq!(
+            free_slot(&all),
+            Some(454),
+            "20000 + 454 × 100 + 99 is 65499"
+        );
+        let all: Vec<u32> = (0..=454).collect();
+        assert_eq!(free_slot(&all), None, "the next block would end at 65599");
+    }
+
+    #[test]
+    fn the_block_is_saved_with_the_workspace_and_an_old_session_without_one_still_loads() {
+        let b = block(2);
+        let json = serde_json::to_string(&b).unwrap();
+        assert_eq!(serde_json::from_str::<PortBlock>(&json).unwrap(), b);
+        let ws: Workspace =
+            serde_json::from_str(r#"{"id":"w","name":"n","kind":"folder","path":"/p","panes":[]}"#)
+                .unwrap();
+        assert!(ws.ports.is_none());
     }
 }

@@ -279,6 +279,7 @@ internal fun BoxScope.WorktreeSheet(source: AppSource, repoAtStart: String, stat
                         Row { Mono(if (i == 0) "setup   " else "        ", Palette.dim, 12); Mono(line, Palette.yellow, 12, lines = 2) }
                     }
                     Row { Mono("paneles ", Palette.dim, 12); Mono(plan.info.programs.joinToString(" │ "), Palette.fg, 12, lines = 2) }
+                    if (plan.info.ports.isNotEmpty()) Row { Mono("puertos ", Palette.dim, 12); Mono(plan.info.ports.keys.joinToString(" · "), Palette.fg, 12, lines = 2) }
                     if (plan.info.copy.isNotEmpty()) Row { Mono("copia   ", Palette.dim, 12); Mono(plan.info.copy.joinToString(" · "), Palette.fg, 12, lines = 2) }
                     Mono(
                         when (plan.info.from) {

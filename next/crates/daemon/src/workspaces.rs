@@ -65,9 +65,26 @@ fn added(shared: &Shared, ws: Workspace) -> Done {
     if core.model.workspaces.iter().any(|w| w.path == path) {
         return Err(err(ErrorCode::Conflict, format!("{path} is already open")));
     }
+    // The ports are the lowest block no other workspace holds, chosen here where nobody else can
+    // take it first (REQ-495).
+    let mut ws = ws;
+    if let Some(block) = ws.ports.as_mut() {
+        let used: Vec<u32> = core
+            .model
+            .workspaces
+            .iter()
+            .filter_map(|w| w.ports.as_ref().map(|p| p.slot))
+            .collect();
+        block.slot = crate::model::free_slot(&used)
+            .ok_or_else(|| err(ErrorCode::Conflict, "no block of ports is free"))?;
+    }
+    let mut reply = json!({ "workspace": id, "path": path });
+    if let Some(block) = &ws.ports {
+        reply["ports"] = json!(block.ports());
+    }
     core.model.workspaces.push(ws);
     core.refresh();
-    Ok(Some(json!({ "workspace": id, "path": path })))
+    Ok(Some(reply))
 }
 
 pub fn open_folder(shared: &Shared, path: &str) -> Done {
@@ -89,6 +106,7 @@ pub fn open_folder(shared: &Shared, path: &str) -> Done {
             panes: Vec::new(),
             layout: None,
             attention: Vec::new(),
+            ports: None,
             github: None,
         },
     )
@@ -156,6 +174,18 @@ pub fn create_worktree(
             format!("{dest_text} already exists"),
         ));
     }
+    if !project.ports.is_empty() {
+        let used: Vec<u32> = shared
+            .lock()
+            .model
+            .workspaces
+            .iter()
+            .filter_map(|w| w.ports.as_ref().map(|p| p.slot))
+            .collect();
+        if crate::model::free_slot(&used).is_none() {
+            return Err(err(ErrorCode::Conflict, "no block of ports is free"));
+        }
+    }
     let existing = git::branch_exists(&top, branch);
     let mut args = vec!["worktree", "add"];
     match (existing, base) {
@@ -185,6 +215,10 @@ pub fn create_worktree(
             panes: Vec::new(),
             layout: None,
             attention: Vec::new(),
+            ports: (!project.ports.is_empty()).then(|| crate::model::PortBlock {
+                slot: 0,
+                names: project.ports.clone(),
+            }),
             github: None,
         },
     )?;

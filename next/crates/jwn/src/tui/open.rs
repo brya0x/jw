@@ -595,6 +595,10 @@ pub fn draw_worktree(g: &mut Grid, (x, y, w, _): Rect, t: &Worktree) {
                     if !info.copy.is_empty() {
                         v.push((format!("copia     {}", info.copy.join(" · ")), plain));
                     }
+                    if !info.ports.is_empty() {
+                        let names: Vec<&str> = info.ports.keys().map(String::as_str).collect();
+                        v.push((format!("puertos   {}", names.join(" · ")), plain));
+                    }
                     let source = match info.from {
                         Some(contract::ConfigFrom::Repo) => {
                             format!("según el .jw.toml de {}", repo_name(&t.repo))
@@ -793,6 +797,7 @@ mod tests {
             from: None,
             personal: String::new(),
             copy: Vec::new(),
+            ports: Default::default(),
             root: root.join("app-wt").to_string_lossy().into_owned(),
             branch: "feat/{name}".into(),
             setup: Vec::new(),
@@ -923,6 +928,7 @@ mod tests {
             from: Some(contract::ConfigFrom::Repo),
             personal: String::new(),
             copy: vec![".env".into()],
+            ports: [("web".to_owned(), 0), ("api".to_owned(), 1)].into(),
             root: root.join("trees").to_string_lossy().into_owned(),
             branch: "bryan/{name}".into(),
             setup: vec!["bun install".into()],

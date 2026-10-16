@@ -491,7 +491,11 @@ fn skill_prints_the_skill_and_installs_it_under_the_claude_configuration() {
 fn worktree_says_on_its_error_output_what_it_copied_and_what_it_did_not_and_prints_as_before() {
     let w = World::new("ag-copy");
     w.open_repo();
-    std::fs::write(w.repo.join(".jw.toml"), "copy = [\".env\", \"nada\"]\n").unwrap();
+    std::fs::write(
+        w.repo.join(".jw.toml"),
+        "copy = [\".env\", \"nada\"]\nports = { web = 0, api = 3 }\n",
+    )
+    .unwrap();
     std::fs::write(w.repo.join(".env"), "A=1\n").unwrap();
     let out = w.run(None, &["worktree", "ws-1", "--in", "app"]);
     assert!(
@@ -507,6 +511,10 @@ fn worktree_says_on_its_error_output_what_it_copied_and_what_it_did_not_and_prin
     );
     let stderr = String::from_utf8(out.stderr).unwrap();
     assert!(stderr.contains("worktree: copied .env"), "{stderr}");
+    assert!(
+        stderr.contains("worktree: ports api=20003 web=20000"),
+        "{stderr}"
+    );
     assert!(
         stderr.contains("did not copy nada: it is not in the checkout"),
         "{stderr}"

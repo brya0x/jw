@@ -567,6 +567,9 @@ pub struct ProjectInfo {
     /// The files of the checkout a new worktree gets a copy of (REQ-489).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub copy: Vec<String>,
+    /// The names of the ports a worktree gets and their offsets in its block (REQ-494).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub ports: std::collections::BTreeMap<String, u32>,
 }
 
 /// The result of `find_files`: paths relative to the workspace's folder, cut when `cut`.
