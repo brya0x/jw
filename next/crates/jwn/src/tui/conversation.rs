@@ -60,6 +60,11 @@ pub enum Act {
         node: String,
         command: String,
     },
+    /// Stop a task the engine runs in the background.
+    StopTask {
+        node: String,
+        task: String,
+    },
     /// Retake a saved conversation in this pane.
     Resume {
         pane: String,
@@ -347,6 +352,11 @@ pub struct Ui {
     /// The command lit in the `/` list, and the line the person closed it on.
     menu_at: usize,
     menu_off: String,
+    /// The options of a choice of several that are marked, and the ask they are for.
+    picks: Vec<usize>,
+    ask_id: String,
+    /// The checklist is open: its lines, and not only how many are done.
+    todos_open: bool,
     /// The folder the pane is in, for the lists that read the machine.
     cwd: String,
     /// The list of saved conversations waits for the daemon: the client asks once.
@@ -363,6 +373,8 @@ pub struct Ui {
 
 /// Rows the parts of a conversation pane take.
 struct Geo {
+    /// The rows of the strip of the checklist, at the top (none when there is no checklist).
+    todo_rows: usize,
     /// Where the list goes, and how many rows it has.
     list: (usize, usize),
     /// The working line, when there is one.
@@ -384,8 +396,12 @@ impl Ui {
         if !matches!(conv.status, ConvStatus::Dead | ConvStatus::Resuming) {
             self.retaking = false;
         }
-        if conv.ask.is_none() {
+        // Each question is its own: what was lit or marked in the last one does not carry over.
+        let id = conv.ask.as_ref().map_or("", |a| a.id.as_str());
+        if self.ask_id != id {
+            id.clone_into(&mut self.ask_id);
             self.ask_at = 0;
+            self.picks.clear();
         }
     }
 
@@ -602,6 +618,13 @@ impl Ui {
                 Some(Act::Copy(text))
             }
             RowAct::Edit(path) => Some(Act::Edit(path)),
+            RowAct::Stop(task) => {
+                self.says = "deteniendo la tarea…".into();
+                Some(Act::StopTask {
+                    node: conv.head.id.clone(),
+                    task,
+                })
+            }
         }
     }
 
@@ -715,7 +738,13 @@ impl Ui {
                     } else {
                         "desde"
                     };
-                    head.push((format!(" · permitido {how} {by}"), Style::fg(look::green())));
+                    // What Claude asks is answered; what it does is allowed (REQ-405).
+                    let did = if matches!(name.as_str(), "AskUserQuestion" | "ExitPlanMode") {
+                        "respondida"
+                    } else {
+                        "permitido"
+                    };
+                    head.push((format!(" · {did} {how} {by}"), Style::fg(look::green())));
                 }
                 push(head, None);
                 if let Some(s) = summary {
@@ -911,8 +940,20 @@ impl Ui {
         let band_y = foot.saturating_sub(band_rows);
         let work = self.working(conv).then(|| band_y.saturating_sub(1));
         let list_end = work.unwrap_or(band_y);
+        // The checklist's strip is one row, and its lines when it is open, as many as there is room for.
+        let todo_rows = if conv.todos.is_empty() {
+            0
+        } else {
+            1 + if self.todos_open {
+                conv.todos.len().min(6)
+            } else {
+                0
+            }
+        }
+        .min(list_end.saturating_sub(iy + 2));
         Geo {
-            list: (iy, list_end.saturating_sub(iy)),
+            todo_rows,
+            list: (iy + todo_rows, list_end.saturating_sub(iy + todo_rows)),
             work,
             band: (band_y, band_rows),
             foot,
@@ -971,6 +1012,7 @@ impl Ui {
                 x += text.chars().count();
             }
         }
+        self.draw_todos(g, conv, (ix, iy, iw), geo.todo_rows);
         if let Some(y) = geo.work {
             let spin = ['✻', '✶', '✷', '✸'][(now_ms / 250 % 4) as usize];
             let text = self.work_text(conv, now_ms);
@@ -1082,7 +1124,12 @@ impl Ui {
             let lit = i == self.ask_at;
             let bg = if lit { look::sel() } else { ground };
             g.paint_bg(ix + 1, at, iw - 2, bg);
-            let n = format!("{}{} ", if lit { "❯ " } else { "  " }, i + 1);
+            let mark = match (ask.multi, self.picks.contains(&i)) {
+                (true, true) => "[x] ",
+                (true, false) => "[ ] ",
+                _ => "",
+            };
+            let n = format!("{}{} {mark}", if lit { "❯ " } else { "  " }, i + 1);
             g.put(tx, at, &n, Style::fg(look::yellow()).bold().on(bg));
             let label = clip(&o.label, tw.saturating_sub(n.chars().count() + 4));
             g.put(
@@ -1103,9 +1150,54 @@ impl Ui {
         g.put(
             tx,
             y + h - 2,
-            &clip("1 2 3 · y a n · ↑↓ ↵", tw),
+            &clip(ask_hint(ask), tw),
             Style::fg(look::dim()).on(ground),
         );
+    }
+
+    /// The checklist Claude keeps, over the conversation: how many lines are done, and the lines when it is open (REQ-434).
+    fn draw_todos(
+        &self,
+        g: &mut Grid,
+        conv: &Conversation,
+        (ix, y, iw): (usize, usize, usize),
+        rows: usize,
+    ) {
+        if rows == 0 {
+            return;
+        }
+        let done = conv.todos.iter().filter(|t| t.done).count();
+        let mark = if done == conv.todos.len() {
+            "☑"
+        } else {
+            "☐"
+        };
+        g.paint_bg(ix, y, iw, look::panel());
+        g.put(
+            ix + 1,
+            y,
+            &format!("{mark} {done}/{} tareas", conv.todos.len()),
+            Style::fg(look::fg()).on(look::panel()),
+        );
+        g.put(
+            (ix + iw).saturating_sub(5),
+            y,
+            "^T",
+            Style::fg(look::dim()).on(look::panel()),
+        );
+        for (i, t) in conv.todos.iter().take(rows - 1).enumerate() {
+            g.paint_bg(ix, y + 1 + i, iw, look::panel());
+            let style = Style::fg(if t.done { look::dim() } else { look::fg() }).on(look::panel());
+            g.put(
+                ix + 3,
+                y + 1 + i,
+                &clip(
+                    &format!("{} {}", if t.done { "☑" } else { "☐" }, t.text),
+                    iw.saturating_sub(5),
+                ),
+                style,
+            );
+        }
     }
 
     fn draw_foot(&self, g: &mut Grid, conv: &Conversation, (ix, y, iw): (usize, usize, usize)) {
@@ -1388,6 +1480,10 @@ impl Ui {
 
     pub fn key(&mut self, conv: &Conversation, ev: &KeyEvent) -> Option<Act> {
         let node = conv.head.id.clone();
+        // A list opened over the box that asks (the whole plan) has the keys until it is closed.
+        if matches!(self.pop, Some(Pop::List(_))) {
+            return self.pop_key(conv, ev);
+        }
         if let Some(ask) = &conv.ask {
             return self.ask_key(&node, ask, ev);
         }
@@ -1478,6 +1574,11 @@ impl Ui {
                 self.toggle_open(conv);
                 None
             }
+            KeyCode::Char('t') if ctrl => {
+                self.todos_open = !self.todos_open;
+                None
+            }
+            KeyCode::Char('b') if ctrl => self.open_panel(conv, "tasks", ""),
             KeyCode::Esc if self.working(conv) => Some(Act::Interrupt { node }),
             KeyCode::BackTab => Some(Act::Mode {
                 node,
@@ -1508,11 +1609,70 @@ impl Ui {
         }
     }
 
+    fn toggle_pick(&mut self, i: usize) {
+        match self.picks.iter().position(|p| *p == i) {
+            Some(at) => {
+                self.picks.remove(at);
+            }
+            None => self.picks.push(i),
+        }
+    }
+
+    /// The marked options as the daemon's answer to a choice of several: their numbers, with commas.
+    fn pick_key(&self) -> String {
+        let mut marked = self.picks.clone();
+        marked.sort_unstable();
+        marked
+            .iter()
+            .map(usize::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
     fn ask_key(&mut self, node: &str, ask: &Ask, ev: &KeyEvent) -> Option<Act> {
         let n = ask.options.len();
         let by_key = |k: &str| ask.options.iter().position(|o| o.key == k);
+        // The whole plan, when the box has room for a few lines of it only.
+        if ask.kind == AskKind::Plan && ev.code == KeyCode::Char('v') {
+            let rows = ask.plan.iter().map(|l| panels::line(l.clone())).collect();
+            self.pop = Some(Pop::List(ListState {
+                panel: Panel {
+                    title: "plan".into(),
+                    rows,
+                    empty: "El plan está vacío.".into(),
+                },
+                at: 0,
+                filter: String::new(),
+                loading: false,
+                first: false,
+            }));
+            return None;
+        }
+        // A choice of several: a number marks or clears an option and `↵` sends the marked ones.
+        if ask.multi {
+            match ev.code {
+                KeyCode::Char(c @ '1'..='9') if (c as usize - '1' as usize) < n => {
+                    self.toggle_pick(c as usize - '1' as usize);
+                    return None;
+                }
+                KeyCode::Char(' ') => {
+                    self.toggle_pick(self.ask_at.min(n.saturating_sub(1)));
+                    return None;
+                }
+                KeyCode::Enter if !self.picks.is_empty() => {
+                    return Some(Act::Answer {
+                        node: node.to_owned(),
+                        ask: ask.id.clone(),
+                        key: self.pick_key(),
+                    });
+                }
+                _ => {}
+            }
+        }
         let at = match ev.code {
-            KeyCode::Char(c @ '1'..='9') => Some(c as usize - '1' as usize).filter(|i| *i < n),
+            KeyCode::Char(c @ '1'..='9') if !ask.multi => {
+                Some(c as usize - '1' as usize).filter(|i| *i < n)
+            }
             KeyCode::Char('y') => by_key("yes"),
             KeyCode::Char('a') => by_key("session"),
             KeyCode::Char('n') => by_key("no"),
@@ -1524,7 +1684,7 @@ impl Ui {
                 self.ask_at = (self.ask_at + 1).min(n.saturating_sub(1));
                 None
             }
-            KeyCode::Enter => Some(self.ask_at).filter(|i| *i < n),
+            KeyCode::Enter if !ask.multi => Some(self.ask_at).filter(|i| *i < n),
             _ => None,
         }?;
         Some(Act::Answer {
@@ -1557,6 +1717,19 @@ impl Ui {
                     KeyCode::PageUp => l.at = l.at.saturating_sub(PAGE),
                     KeyCode::PageDown => l.at = (l.at + PAGE).min(n.saturating_sub(1)),
                     KeyCode::Enter => {
+                        let act = visible(l).get(l.at).map(|r| r.act.clone());
+                        if let Some(act) = act {
+                            self.pop = None;
+                            return self.row_act(conv, act);
+                        }
+                    }
+                    // `x` stops the task the row is on (REQ-433), and only where nothing is typed to narrow the list.
+                    KeyCode::Char('x')
+                        if l.filter.is_empty()
+                            && visible(l)
+                                .get(l.at)
+                                .is_some_and(|r| matches!(r.act, RowAct::Stop(_))) =>
+                    {
                         let act = visible(l).get(l.at).map(|r| r.act.clone());
                         if let Some(act) = act {
                             self.pop = None;
@@ -1755,6 +1928,11 @@ impl Ui {
         let node = conv.head.id.clone();
         let field = self.field(iw);
         let geo = self.geo(conv, (iy, ih), field.band_rows());
+        // The strip of the checklist opens and closes with a click.
+        if self.pop.is_none() && geo.todo_rows > 0 && y == iy {
+            self.todos_open = !self.todos_open;
+            return None;
+        }
         if self.pop.is_none() && conv.ask.is_none() && self.files_open() {
             let h = self.files.len() + 2;
             let top = geo.band.0.saturating_sub(h);
@@ -1813,8 +1991,17 @@ impl Ui {
             let (label, _) = mode_look(conv.mode);
             let left = ix + 1..ix + 1 + label.chars().count();
             let right = (ix + iw).saturating_sub(conv.model.chars().count() + 1)..ix + iw;
+            let running = conv
+                .tasks
+                .iter()
+                .filter(|t| t.state == contract::conversation::TaskState::Run)
+                .count();
+            let gear_at = ix + 2 + label.chars().count();
             if left.contains(&x) {
                 self.open_pick(conv, Of::Mode);
+            } else if running > 0 && (gear_at..gear_at + 3 + running.to_string().len()).contains(&x)
+            {
+                return self.open_panel(conv, "tasks", "");
             } else if right.contains(&x) {
                 self.open_pick(conv, Of::Model);
             }
@@ -1825,6 +2012,10 @@ impl Ui {
             let first = (geo.band.0 + geo.band.1).saturating_sub(2 + n);
             if y >= first && y < first + n {
                 self.ask_at = y - first;
+                if ask.multi {
+                    self.toggle_pick(y - first);
+                    return None;
+                }
                 return Some(Act::Answer {
                     node,
                     ask: ask.id.clone(),
@@ -2038,6 +2229,16 @@ fn keys_of(ask: &Ask) -> Vec<Option<char>> {
             _ => None,
         })
         .collect()
+}
+
+/// What keys answer the box that asks.
+fn ask_hint(ask: &Ask) -> &'static str {
+    match (ask.kind, ask.multi) {
+        (AskKind::Plan, _) => "1 2 3 · v ver el plan · ↑↓ ↵",
+        (_, true) => "1 2 3 marcan · ↵ envía lo marcado · ↑↓",
+        (AskKind::Question, false) => "1 2 3 · ↑↓ ↵",
+        _ => "1 2 3 · y a n · ↑↓ ↵",
+    }
 }
 
 /// Rows the box that asks takes: its borders, its title, what it is about, the options and the hint.
@@ -3421,6 +3622,258 @@ mod tests {
         type_in(&mut ui, &conv, "/tas");
         assert_eq!(press(&mut ui, &conv, KeyCode::Enter), None);
         assert!(ui.has_pop(), "the list, and nothing is sent to the engine");
+    }
+
+    /// The fixture's conversation asking a choice of several, or of one.
+    fn asking(multi: bool) -> Conversation {
+        let mut c = fixture();
+        c.ask = Some(Ask {
+            id: "req-9:0".into(),
+            kind: AskKind::Question,
+            tool: "AskUserQuestion".into(),
+            title: "¿Qué lenguajes?".into(),
+            command: None,
+            diff: vec![],
+            plan: vec!["Rust: sistemas".into()],
+            options: ["Rust", "Kotlin", "Go"]
+                .iter()
+                .enumerate()
+                .map(|(i, l)| contract::conversation::AskOption {
+                    key: i.to_string(),
+                    label: (*l).into(),
+                })
+                .collect(),
+            multi,
+        });
+        c
+    }
+
+    #[test]
+    fn a_choice_of_one_is_answered_by_its_number_and_one_of_several_is_marked_and_sent_with_enter()
+    {
+        let node = fixture().head.id.clone();
+        let one = asking(false);
+        let mut ui = Ui::default();
+        let (_, rows) = frame(&ui, &one);
+        row_of(&rows, "pregunta");
+        row_of(&rows, "¿Qué lenguajes?");
+        row_of(&rows, "Rust: sistemas");
+        row_of(&rows, "1 2 3 · ↑↓ ↵");
+        assert_eq!(
+            press(&mut ui, &one, KeyCode::Char('2')),
+            Some(Act::Answer {
+                node: node.clone(),
+                ask: "req-9:0".into(),
+                key: "1".into()
+            })
+        );
+        // several: numbers mark, ↵ sends the marked ones as their numbers with commas
+        let many = asking(true);
+        let mut ui = Ui::default();
+        let (_, rows) = frame(&ui, &many);
+        row_of(&rows, "[ ] Rust");
+        row_of(&rows, "1 2 3 marcan · ↵ envía lo marcado");
+        assert_eq!(
+            press(&mut ui, &many, KeyCode::Enter),
+            None,
+            "nothing marked: nothing to send"
+        );
+        assert_eq!(press(&mut ui, &many, KeyCode::Char('3')), None);
+        assert_eq!(press(&mut ui, &many, KeyCode::Char('1')), None);
+        let (_, rows) = frame(&ui, &many);
+        row_of(&rows, "[x] Rust");
+        row_of(&rows, "[x] Go");
+        row_of(&rows, "[ ] Kotlin");
+        press(&mut ui, &many, KeyCode::Char('3'));
+        press(&mut ui, &many, KeyCode::Char('2'));
+        assert_eq!(
+            press(&mut ui, &many, KeyCode::Enter),
+            Some(Act::Answer {
+                node: node.clone(),
+                ask: "req-9:0".into(),
+                key: "0,1".into()
+            }),
+            "3 was cleared, 2 marked: Rust and Kotlin"
+        );
+        // space marks the one that is lit, a click marks a row and a number that is no option does nothing
+        let mut ui = Ui::default();
+        press(&mut ui, &many, KeyCode::Down);
+        press(&mut ui, &many, KeyCode::Char(' '));
+        assert_eq!(press(&mut ui, &many, KeyCode::Char('9')), None);
+        let (_, rows) = frame(&ui, &many);
+        row_of(&rows, "[x] Kotlin");
+        let y = row_of(&rows, "[ ] Go");
+        assert_eq!(ui.click(&many, INNER, 20, y), None, "a click marks");
+        assert_eq!(ui.picks, vec![1, 2]);
+    }
+
+    #[test]
+    fn the_next_question_starts_with_nothing_lit_or_marked() {
+        let many = asking(true);
+        let mut ui = Ui::default();
+        ui.sync(&many);
+        press(&mut ui, &many, KeyCode::Char('1'));
+        press(&mut ui, &many, KeyCode::Down);
+        let mut next = asking(true);
+        next.ask.as_mut().unwrap().id = "req-9:1".into();
+        ui.sync(&next);
+        assert_eq!((ui.picks.len(), ui.ask_at), (0, 0));
+        ui.sync(&next);
+        press(&mut ui, &next, KeyCode::Char('2'));
+        ui.sync(&next);
+        assert_eq!(
+            ui.picks,
+            vec![1],
+            "the same question again keeps what is marked"
+        );
+    }
+
+    #[test]
+    fn a_plan_shows_its_first_lines_and_v_shows_all_of_it_over_the_question() {
+        let node = fixture().head.id.clone();
+        let mut c = fixture();
+        c.ask = Some(Ask {
+            id: "req-p".into(),
+            kind: AskKind::Plan,
+            tool: "ExitPlanMode".into(),
+            title: "Plan listo".into(),
+            command: None,
+            diff: vec![],
+            plan: (1..=20).map(|n| format!("paso {n}")).collect(),
+            options: vec![
+                contract::conversation::AskOption {
+                    key: "accept".into(),
+                    label: "Aprobar y editar sin preguntar".into(),
+                },
+                contract::conversation::AskOption {
+                    key: "manual".into(),
+                    label: "Aprobar, preguntando cada edición".into(),
+                },
+                contract::conversation::AskOption {
+                    key: "no".into(),
+                    label: "Seguir planeando".into(),
+                },
+            ],
+            multi: false,
+        });
+        let mut ui = Ui::default();
+        let (_, rows) = frame(&ui, &c);
+        row_of(&rows, "plan · ");
+        row_of(&rows, "paso 1");
+        assert!(
+            !rows.iter().any(|r| r.contains("paso 12")),
+            "only the first lines fit the box"
+        );
+        row_of(&rows, "v ver el plan");
+        assert_eq!(press(&mut ui, &c, KeyCode::Char('v')), None);
+        let (_, rows) = frame(&ui, &c);
+        row_of(&rows, "paso 12");
+        row_of(&rows, "20");
+        press(&mut ui, &c, KeyCode::PageDown);
+        row_of(&frame(&ui, &c).1, "paso 20");
+        // esc gives the keys back to the question, and 2 approves asking for each edit
+        press(&mut ui, &c, KeyCode::Esc);
+        assert!(!ui.has_pop());
+        assert_eq!(
+            press(&mut ui, &c, KeyCode::Char('2')),
+            Some(Act::Answer {
+                node: node.clone(),
+                ask: "req-p".into(),
+                key: "manual".into()
+            })
+        );
+        assert_eq!(
+            press(&mut ui, &c, KeyCode::Char('n')),
+            Some(Act::Answer {
+                node,
+                ask: "req-p".into(),
+                key: "no".into()
+            })
+        );
+    }
+
+    #[test]
+    fn the_checklist_is_a_strip_that_ctrl_t_and_a_click_open() {
+        let c = idle();
+        let mut ui = Ui::default();
+        let (_, rows) = frame(&ui, &c);
+        let y = row_of(&rows, "☐ 1/2 tareas");
+        assert_eq!(y, INNER.1, "at the top of the conversation");
+        assert!(!rows.iter().any(|r| r.contains("Compilar")));
+        let ctrl_t = KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL);
+        ui.key(&c, &ctrl_t);
+        let (_, rows) = frame(&ui, &c);
+        row_of(&rows, "☑ Buscar los usos de verify");
+        row_of(&rows, "☐ Compilar");
+        assert_eq!(ui.click(&c, INNER, 10, y), None);
+        assert!(
+            !frame(&ui, &c).1.iter().any(|r| r.contains("Compilar")),
+            "a click closes it"
+        );
+        ui.click(&c, INNER, 10, y);
+        row_of(&frame(&ui, &c).1, "☐ Compilar");
+        // all done: ticked; none: no strip at all
+        let mut done = idle();
+        done.todos.iter_mut().for_each(|t| t.done = true);
+        row_of(&frame(&Ui::default(), &done).1, "☑ 2/2 tareas");
+        let mut none = idle();
+        none.todos.clear();
+        assert!(
+            !frame(&Ui::default(), &none)
+                .1
+                .iter()
+                .any(|r| r.contains("tareas"))
+        );
+    }
+
+    #[test]
+    fn the_tasks_list_has_the_newest_first_and_x_stops_the_one_that_runs() {
+        let c = idle();
+        let node = c.head.id.clone();
+        let ctrl_b = KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL);
+        let mut ui = Ui::default();
+        ui.key(&c, &ctrl_b);
+        let (_, rows) = frame(&ui, &c);
+        row_of(&rows, "segundo plano · x detiene");
+        let first = row_of(&rows, "cargo build --release");
+        let second = row_of(&rows, "revisar el CI cada 5 min");
+        assert!(first < second, "the newest first");
+        row_of(&rows, "en curso");
+        assert_eq!(
+            press(&mut ui, &c, KeyCode::Char('x')),
+            Some(Act::StopTask {
+                node: node.clone(),
+                task: "bs02u3".into()
+            })
+        );
+        assert!(!ui.has_pop());
+        assert!(ui.take_says().unwrap().contains("deteniendo"));
+        // the one that ended has nothing to stop, and what is typed narrows the list
+        let mut ui = Ui::default();
+        ui.key(&c, &ctrl_b);
+        press(&mut ui, &c, KeyCode::Down);
+        assert_eq!(press(&mut ui, &c, KeyCode::Char('x')), None);
+        assert_eq!(press(&mut ui, &c, KeyCode::Enter), None);
+        assert!(ui.has_pop(), "x on that row went to the filter");
+        // ↵ stops the one that runs too, and a click on the footer's gear opens the list
+        let mut ui = Ui::default();
+        ui.key(&c, &ctrl_b);
+        assert!(matches!(
+            press(&mut ui, &c, KeyCode::Enter),
+            Some(Act::StopTask { .. })
+        ));
+        let mut ui = Ui::default();
+        let (_, rows) = frame(&ui, &c);
+        let y = rows
+            .iter()
+            .position(|r| r.contains("⚙ 1"))
+            .expect("the gear in the footer");
+        let x = rows[y]
+            .find("⚙")
+            .map(|b| rows[y][..b].chars().count())
+            .unwrap();
+        assert_eq!(ui.click(&c, INNER, x, y), None);
+        assert!(ui.has_pop());
     }
 
     #[test]

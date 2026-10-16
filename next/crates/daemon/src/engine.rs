@@ -804,6 +804,21 @@ pub fn answer(
     Ok(None)
 }
 
+pub fn stop_task(shared: &Shared, node: &str, task: &str) -> Done {
+    let mut core = shared.lock();
+    let pane = pane_of(&core, node)?;
+    let fx = core
+        .convs
+        .get_mut(&pane)
+        .ok_or_else(|| no_conversation(node))?
+        .st
+        .stop_task(task)
+        .map_err(|m| err(ErrorCode::BadRequest, m))?;
+    run_effects(&mut core, &pane, fx);
+    core.refresh();
+    Ok(None)
+}
+
 pub fn interrupt(shared: &Shared, node: &str) -> Done {
     let mut core = shared.lock();
     let pane = pane_of(&core, node)?;

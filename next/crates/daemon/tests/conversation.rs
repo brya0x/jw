@@ -467,6 +467,289 @@ fn the_conversations_claude_saved_for_the_folder_are_listed_newest_first() {
     r.stop();
 }
 
+impl Rig {
+    fn answer(
+        &mut self,
+        node: &str,
+        ask: &str,
+        key: &str,
+        text: Option<&str>,
+    ) -> Result<Option<Value>, contract::ErrorBody> {
+        self.cmd(Cmd::ConversationAnswer {
+            node: node.into(),
+            ask: ask.into(),
+            key: key.into(),
+            text: text.map(str::to_owned),
+            by: Some("el móvil".into()),
+        })
+    }
+}
+
+#[test]
+fn the_questions_claude_asks_come_one_at_a_time_and_the_engine_gets_all_the_answers_at_the_end() {
+    let mut r = rig();
+    let (node, _) = r.open();
+    r.send(&node, "una pregunta");
+    let v = r.until(&node, "the first question", |v| v["status"] == "asking");
+    let ask = &v["ask"];
+    assert_eq!(ask["kind"], "question");
+    assert_eq!(ask["title"], "¿Qué lenguajes?");
+    assert_eq!(ask["multi"], true);
+    let labels: Vec<&str> = ask["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| o["label"].as_str().unwrap())
+        .collect();
+    assert_eq!(labels, ["Rust", "Kotlin", "Go"]);
+    let keys: Vec<&str> = ask["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| o["key"].as_str().unwrap())
+        .collect();
+    assert_eq!(keys, ["0", "1", "2"]);
+    assert_eq!(
+        ask["plan"],
+        serde_json::json!(["Rust: sistemas", "Kotlin: JVM"]),
+        "what an option means, for those that say it"
+    );
+    let first = ask["id"].as_str().unwrap().to_owned();
+    wait_for("the question mark", || {
+        let _ = r.client.poll(Duration::from_millis(20));
+        kinds(&r.client, &r.pane) == ["question"]
+    });
+    // a key that is no option of it is refused and it stays
+    assert!(r.answer(&node, &first, "7", None).is_err());
+    assert!(r.answer(&node, &first, "0,x", None).is_err());
+    r.answer(&node, &first, "0,1", None).unwrap();
+    let v = r.until(&node, "the second question", |v| {
+        v["ask"]["title"] == "¿Qué framework?"
+    });
+    assert!(v["ask"]["multi"].is_null(), "a choice of one: no `multi`");
+    let second = v["ask"]["id"].as_str().unwrap().to_owned();
+    assert_ne!(first, second);
+    // the answer for the first, late, is refused: it is not what waits
+    assert!(r.answer(&node, &first, "0", None).is_err());
+    // two choices for a question of one is refused
+    assert!(r.answer(&node, &second, "0,1", None).is_err());
+    r.answer(&node, &second, "1", None).unwrap();
+    let v = r.idle_after(&node, 1);
+    let tool = items(&v, "tool")[0];
+    assert_eq!(tool["name"], "AskUserQuestion");
+    assert_eq!(tool["summary"], "Respondida: Rust, Kotlin · B");
+    assert_eq!(tool["by"], "el móvil");
+    assert!(v.get("ask").is_none());
+    wait_for("the engine to have the answers", || {
+        log_lines(&r.log).iter().any(|l| {
+            l.strip_prefix("answers ")
+                .and_then(|j| serde_json::from_str::<Value>(j).ok())
+                .is_some_and(|a| {
+                    a == serde_json::json!({"¿Qué lenguajes?": "Rust, Kotlin", "¿Qué framework?": "B"})
+                })
+        })
+    });
+    r.stop();
+}
+
+#[test]
+fn a_plan_is_approved_with_edits_allowed_or_asking_or_refused_with_what_to_do_instead() {
+    let mut r = rig();
+    let (node, _) = r.open();
+    r.send(&node, "un plan");
+    let v = r.until(&node, "the plan", |v| v["status"] == "asking");
+    assert_eq!(v["ask"]["kind"], "plan");
+    assert_eq!(
+        v["ask"]["plan"],
+        serde_json::json!(["# Plan", "1. mirar", "2. editar"])
+    );
+    let keys: Vec<&str> = v["ask"]["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| o["key"].as_str().unwrap())
+        .collect();
+    assert_eq!(keys, ["accept", "manual", "no"]);
+    wait_for("the plan mark", || {
+        let _ = r.client.poll(Duration::from_millis(20));
+        kinds(&r.client, &r.pane) == ["plan"]
+    });
+    let ask = v["ask"]["id"].as_str().unwrap().to_owned();
+    r.answer(&node, &ask, "accept", None).unwrap();
+    r.idle_after(&node, 1);
+    let v = r.until(&node, "the mode the engine says it runs with", |v| {
+        v["mode"] == "acceptEdits"
+    });
+    assert_eq!(items(&v, "tool")[0]["summary"], "Plan aprobado");
+    assert!(log_lines(&r.log).iter().any(|l| l == "plan allowed"));
+    assert!(
+        log_lines(&r.log)
+            .iter()
+            .any(|l| l == "control set_permission_mode acceptEdits")
+    );
+    // approved asking for each edit: the mode is the engine's own, and no mode is asked of it
+    r.send(&node, "otro plan");
+    let v = r.until(&node, "the second plan", |v| v["status"] == "asking");
+    let asked_before = log_lines(&r.log)
+        .iter()
+        .filter(|l| l.starts_with("control set_permission_mode"))
+        .count();
+    r.answer(&node, v["ask"]["id"].as_str().unwrap(), "manual", None)
+        .unwrap();
+    let v = r.idle_after(&node, 2);
+    assert_eq!(v["mode"], "manual");
+    assert_eq!(
+        log_lines(&r.log)
+            .iter()
+            .filter(|l| l.starts_with("control set_permission_mode"))
+            .count(),
+        asked_before
+    );
+    // refused, with what to do instead
+    r.send(&node, "un plan más");
+    let v = r.until(&node, "the third plan", |v| v["status"] == "asking");
+    r.answer(
+        &node,
+        v["ask"]["id"].as_str().unwrap(),
+        "no",
+        Some("añade una verificación"),
+    )
+    .unwrap();
+    let v = r.idle_after(&node, 3);
+    assert_eq!(items(&v, "tool")[2]["state"], "denied");
+    assert!(
+        log_lines(&r.log).iter().any(|l| l == "plan denied El usuario no aprobó el plan y dice: añade una verificación"),
+        "{:?}",
+        log_lines(&r.log)
+    );
+    r.stop();
+}
+
+#[test]
+fn a_subagent_is_a_card_with_its_steps_progress_and_totals_and_a_task_that_ran_in_front_leaves_no_note()
+ {
+    let mut r = rig();
+    let (node, _) = r.open();
+    r.send(&node, "usa un agente");
+    let v = r.idle_after(&node, 1);
+    let agent = items(&v, "agent")[0];
+    assert_eq!(agent["name"], "Explore");
+    assert_eq!(agent["description"], "buscar los usos");
+    assert_eq!(agent["state"], "ok");
+    assert_eq!(
+        (
+            agent["tools"].as_u64(),
+            agent["tokens"].as_u64(),
+            agent["ms"].as_u64()
+        ),
+        (Some(3), Some(22024), Some(6000))
+    );
+    assert_eq!(agent["last"], "Read");
+    assert_eq!(
+        agent["steps"],
+        serde_json::json!(["Grep verify"]),
+        "what it did with its own tools"
+    );
+    assert!(items(&v, "tool").is_empty(), "the agent is not a tool line");
+    let tasks = v["tasks"].as_array().unwrap();
+    assert_eq!(
+        (
+            tasks[0]["id"].as_str(),
+            tasks[0]["kind"].as_str(),
+            tasks[0]["state"].as_str()
+        ),
+        (Some("tsk1"), Some("agent"), Some("done"))
+    );
+    assert!(
+        items(&v, "note").is_empty(),
+        "it ran in front and its card says it"
+    );
+    r.stop();
+}
+
+#[test]
+fn a_task_in_the_background_is_listed_leaves_a_note_when_it_ends_and_can_be_stopped() {
+    let mut r = rig();
+    let (node, _) = r.open();
+    r.send(&node, "algo de fondo");
+    let v = r.idle_after(&node, 1);
+    let task = &v["tasks"].as_array().unwrap()[0];
+    assert_eq!(
+        (
+            task["id"].as_str(),
+            task["kind"].as_str(),
+            task["state"].as_str(),
+            task["label"].as_str()
+        ),
+        (Some("bg1"), Some("bash"), Some("run"), Some("dormir 45 s"))
+    );
+    // the tool's own answer is only that it started
+    assert_eq!(items(&v, "tool")[0]["state"], "ok");
+    let e = r
+        .cmd(Cmd::ConversationStopTask {
+            node: node.clone(),
+            task: "nope".into(),
+        })
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::BadRequest);
+    r.cmd(Cmd::ConversationStopTask {
+        node: node.clone(),
+        task: "bg1".into(),
+    })
+    .unwrap();
+    let v = r.until(&node, "the task stopped and told", |v| {
+        v["tasks"][0]["state"] == "stopped" && !items(v, "note").is_empty()
+    });
+    assert!(
+        log_lines(&r.log)
+            .iter()
+            .any(|l| l == "control stop_task bg1")
+    );
+    let notes: Vec<&str> = items(&v, "note")
+        .iter()
+        .map(|n| n["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        notes,
+        ["Tarea se detuvo: dormir 45 s"],
+        "told once, without repeating what it was called: {v:#}"
+    );
+    // one that is not running cannot be stopped again
+    assert!(
+        r.cmd(Cmd::ConversationStopTask {
+            node,
+            task: "bg1".into()
+        })
+        .is_err()
+    );
+    r.stop();
+}
+
+#[test]
+fn the_checklist_is_the_nodes_and_a_notification_of_claudes_is_a_note_that_asks_for_attention() {
+    let mut r = rig();
+    let (node, _) = r.open();
+    r.send(&node, "haz una lista de todo");
+    let v = r.idle_after(&node, 1);
+    assert_eq!(
+        v["todos"],
+        serde_json::json!([{"text": "Buscar", "done": true}, {"text": "Compilar", "done": false}])
+    );
+    assert!(
+        items(&v, "tool").is_empty(),
+        "the checklist is not a line of the conversation"
+    );
+    r.send(&node, "avisa con un push");
+    let v = r.idle_after(&node, 2);
+    assert!(
+        items(&v, "note")
+            .iter()
+            .any(|n| n["text"] == "tests listos"),
+        "{v:#}"
+    );
+    r.stop();
+}
+
 #[test]
 fn a_permission_waits_for_whoever_answers_first_and_says_where_it_came_from() {
     let mut r = rig();

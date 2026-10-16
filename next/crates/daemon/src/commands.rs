@@ -144,6 +144,7 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
             by,
         } => engine::answer(shared, &node, &ask, &key, text.as_deref(), by.as_deref()),
         Cmd::ConversationInterrupt { node } => engine::interrupt(shared, &node),
+        Cmd::ConversationStopTask { node, task } => engine::stop_task(shared, &node, &task),
         Cmd::ConversationSet {
             node,
             name,

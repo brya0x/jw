@@ -21,6 +21,8 @@ pub enum RowAct {
     Copy(String),
     /// Open this file in an editor, in a new panel.
     Edit(PathBuf),
+    /// Stop this task of the engine's (REQ-433).
+    Stop(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,6 +56,11 @@ impl Row {
         self.act = act;
         self
     }
+}
+
+/// A row that only says something: a line of a plan.
+pub fn line(text: String) -> Row {
+    Row::new(text, "")
 }
 
 /// A list: its title, its rows and what it says when it has none.
@@ -170,9 +177,11 @@ pub fn skills(conv: &Conversation) -> Panel {
 }
 
 pub fn tasks(conv: &Conversation) -> Panel {
-    let rows = conv
-        .tasks
-        .iter()
+    // Newest first, each with how long ago it began; `x` stops the one that runs (REQ-433).
+    let mut newest: Vec<_> = conv.tasks.iter().collect();
+    newest.sort_by_key(|t| std::cmp::Reverse(t.started));
+    let rows = newest
+        .into_iter()
         .map(|t| {
             let (state, colour) = match t.state {
                 TaskState::Run => ("en curso", look::yellow()),
@@ -180,11 +189,21 @@ pub fn tasks(conv: &Conversation) -> Panel {
                 TaskState::Stopped => ("detenido", look::dim()),
                 TaskState::Failed => ("falló", look::red()),
             };
-            Row::new(t.label.clone(), t.info.clone().unwrap_or_default()).tagged(state, colour)
+            let row =
+                Row::new(t.label.clone(), t.info.clone().unwrap_or_default()).tagged(state, colour);
+            Row {
+                at: Some(t.started),
+                act: if t.state == TaskState::Run {
+                    RowAct::Stop(t.id.clone())
+                } else {
+                    RowAct::Nothing
+                },
+                ..row
+            }
         })
         .collect();
     Panel {
-        title: "segundo plano".into(),
+        title: "segundo plano · x detiene".into(),
         rows,
         empty: "Nada corre en segundo plano.".into(),
     }

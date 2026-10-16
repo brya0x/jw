@@ -4210,6 +4210,7 @@ fn conversation_cmd(view: &mut View, client: &mut Client, act: ConvAct) {
             by: Some("el terminal".into()),
         },
         ConvAct::Interrupt { node } => Cmd::ConversationInterrupt { node },
+        ConvAct::StopTask { node, task } => Cmd::ConversationStopTask { node, task },
         ConvAct::Name { node, name } => set(node, Some(name), None, None, None, None),
         ConvAct::Color { node, accent } => set(node, None, Some(accent), None, None, None),
         ConvAct::Model { node, model } => set(node, None, None, Some(model), None, None),

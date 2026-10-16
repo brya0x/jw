@@ -122,6 +122,11 @@ interface NodeSource {
     /** Stop the turn that runs. */
     fun conversationInterrupt(node: Id) {}
 
+    /** Stop a task the engine runs in the background (a shell, a monitor, a subagent); [task] is its id in the node's tasks. */
+    fun conversationStopTask(node: Id, task: String, reply: (Result<Unit>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
     /** Change one thing of a conversation: its name, colour, model, effort or mode (what is null stays). */
     fun conversationSet(node: Id, name: String? = null, accent: Accent? = null, model: String? = null, effort: String? = null, mode: ConvMode? = null, reply: (Result<Unit>) -> Unit = {}) {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))

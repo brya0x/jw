@@ -535,6 +535,7 @@
           "properties": { "cmd": { "const": "conversation_answer" }, "node": { "$ref": "#/$defs/Id" }, "ask": { "type": "string" }, "key": { "type": "string" }, "text": { "type": "string" }, "by": { "type": "string", "maxLength": 40 } }
         },
         { "type": "object", "required": ["cmd", "node"], "properties": { "cmd": { "const": "conversation_interrupt" }, "node": { "$ref": "#/$defs/Id" } } },
+        { "type": "object", "required": ["cmd", "node", "task"], "properties": { "cmd": { "const": "conversation_stop_task" }, "node": { "$ref": "#/$defs/Id" }, "task": { "type": "string", "minLength": 1 } } },
         {
           "type": "object",
           "required": ["cmd", "node"],

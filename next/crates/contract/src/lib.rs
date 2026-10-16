@@ -369,6 +369,12 @@ pub enum Cmd {
     ConversationInterrupt {
         node: Id,
     },
+    /// Stop a task the engine runs in the background (a shell, a monitor, a subagent); `task` is the
+    /// id in the node's `tasks`. The engine says when it ended; an error says so when it cannot (REQ-432).
+    ConversationStopTask {
+        node: Id,
+        task: String,
+    },
     /// Change what the conversation is called, its colour, the model, the effort or the mode.
     ConversationSet {
         node: Id,

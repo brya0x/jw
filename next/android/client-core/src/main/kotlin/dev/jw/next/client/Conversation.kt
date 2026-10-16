@@ -184,6 +184,9 @@ sealed interface RowAct {
     data class Resume(val id: String) : RowAct
     data class Copy(val text: String) : RowAct
     data class Open(val url: String) : RowAct
+
+    /** Stop this task of the engine's (REQ-448). */
+    data class Stop(val task: String) : RowAct
 }
 
 data class PanelRow(
@@ -243,14 +246,15 @@ fun skillsPanel(conv: Node.Conversation) = PanelView(
 
 fun tasksPanel(conv: Node.Conversation) = PanelView(
     "segundo plano",
-    conv.tasks.map {
+    // Newest first, each with how long ago it began; the one that runs can be stopped.
+    conv.tasks.sortedByDescending { it.started }.map {
         val (word, tone) = when (it.state) {
             TaskState.Run -> "en curso" to Tone.Warn
             TaskState.Done -> "terminó" to Tone.Good
             TaskState.Stopped -> "detenido" to Tone.Dim
             TaskState.Failed -> "falló" to Tone.Danger
         }
-        PanelRow(it.label, it.info.orEmpty(), word, tone)
+        PanelRow(it.label, it.info.orEmpty(), word, tone, at = it.started, act = if (it.state == TaskState.Run) RowAct.Stop(it.id) else RowAct.Nothing)
     },
     "Nada corre en segundo plano.",
 )

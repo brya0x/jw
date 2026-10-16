@@ -176,7 +176,7 @@ private fun ToolRow(t: ConvItem.Tool, spin: String, open: Boolean) {
             t.state == ToolState.Ask -> "Esperando tu permiso"
             t.state == ToolState.Run -> "Ejecutando…"
             t.state == ToolState.Denied -> "negado"
-            else -> (t.summary ?: "") + (t.by?.let { " · permitido ${if (it.startsWith("modo")) "por" else "desde"} $it" } ?: "")
+            else -> (t.summary ?: "") + (t.by?.let { " · ${if (t.name == "AskUserQuestion" || t.name == "ExitPlanMode") "respondida" else "permitido"} ${if (it.startsWith("modo")) "por" else "desde"} $it" } ?: "")
         }
         if (summary.isNotBlank()) Mono("⎿ $summary", if (t.state == ToolState.Denied) Palette.red else Palette.dim, 12, lines = 3, modifier = Modifier.padding(start = 30.dp, end = Pad))
         t.url?.let { url ->

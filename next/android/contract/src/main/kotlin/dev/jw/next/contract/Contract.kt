@@ -279,6 +279,10 @@ sealed interface Cmd {
     @Serializable @SerialName("conversation_interrupt")
     data class ConversationInterrupt(val node: Id) : Cmd
 
+    /** Stop a task the engine runs in the background; [task] is the id in the node's tasks. */
+    @Serializable @SerialName("conversation_stop_task")
+    data class ConversationStopTask(val node: Id, val task: String) : Cmd
+
     /** Change what the conversation is called, its colour, the model, the effort or the mode. */
     @Serializable @SerialName("conversation_set")
     data class ConversationSet(

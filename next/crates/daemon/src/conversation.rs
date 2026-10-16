@@ -9,8 +9,8 @@ use std::collections::VecDeque;
 
 use contract::conversation::{
     Accent, Artifact, Ask, AskKind, AskOption, CommandKind, CommandSource, ConvCommand, ConvStatus,
-    Conversation, DiffLine, DiffSign, DividerKind, Image, Item, Limits, Mode, Task, Todo, Tone,
-    ToolState,
+    Conversation, DiffLine, DiffSign, DividerKind, Image, Item, Limits, Mode, Task, TaskKind,
+    TaskState, Todo, Tone, ToolState,
 };
 use contract::{AttentionKind, Head, Id};
 use serde::{Deserialize, Serialize};
@@ -23,6 +23,11 @@ pub const MAX_SAVED: usize = 2 * 1024 * 1024;
 const OUTPUT_LINES: usize = 40;
 const ARG_CHARS: usize = 200;
 const LINE_CHARS: usize = 300;
+/// The lines of a plan the node keeps.
+const PLAN_LINES: usize = 200;
+/// The tasks of the engine the node keeps, and the steps of a subagent.
+const TASKS_KEPT: usize = 50;
+const STEPS_KEPT: usize = 60;
 
 /// What `claude` was typed with, as the engine serves it (REQ-372). Anything else is not served
 /// and the original runs (REQ-373).
@@ -340,6 +345,15 @@ enum Change {
     None,
 }
 
+#[derive(Debug, Clone)]
+struct TaskLink {
+    task: String,
+    tool_use_id: Option<String>,
+    background: bool,
+    /// Its end was already told in a note.
+    noted: bool,
+}
+
 /// What is in flight to the engine: one line at a time, so a `result` always answers something.
 #[derive(Debug, Clone, PartialEq)]
 enum Inflight {
@@ -362,10 +376,36 @@ impl Queued {
     }
 }
 
+/// What a waiting question is: a permission, the questions Claude asks (one at a time) or a plan.
+#[derive(Debug, Clone)]
+enum Kind {
+    Permission,
+    Question(Box<Questions>),
+    Plan,
+}
+
+/// The questions of one `AskUserQuestion`, and what was answered so far (REQ-435).
+#[derive(Debug, Clone)]
+struct Questions {
+    all: Vec<Q>,
+    answered: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone)]
+struct Q {
+    question: String,
+    /// (label, description) of each option.
+    options: Vec<(String, String)>,
+    multi: bool,
+}
+
 /// The question that waits, with what it needs to be answered.
 #[derive(Debug, Clone)]
 struct Pending {
     ask: Ask,
+    /// The engine's own id of the request, which the reply names (the `ask`'s id is longer for the second question of a call).
+    request: String,
+    kind: Kind,
     input: Value,
     tool_use_id: Option<String>,
     session_rule: Option<String>,
@@ -418,6 +458,8 @@ pub struct State {
     shell_context: Vec<String>,
     pending_mode: Option<Mode>,
     next_request: u64,
+    /// Each task the engine started: its id, the tool call that made it (a subagent's card) and whether it runs in the background.
+    task_links: Vec<TaskLink>,
     /// Tool ids the person refused, so their results say so.
     refused: Vec<String>,
 }
@@ -487,6 +529,7 @@ impl State {
             shell_context: Vec::new(),
             pending_mode: None,
             next_request: 1,
+            task_links: Vec::new(),
             refused: Vec::new(),
         }
     }
@@ -692,10 +735,16 @@ impl State {
         let Some(p) = self.pending.as_ref().filter(|p| p.ask.id == ask) else {
             return Err("that question is not waiting".into());
         };
-        if !p.ask.options.iter().any(|o| o.key == key) {
+        // The keys of a question are the numbers of its options, many at once for a choice of several.
+        if !matches!(p.kind, Kind::Question(_)) && !p.ask.options.iter().any(|o| o.key == key) {
             return Err(format!("{key} is not one of its answers"));
         }
         let p = self.pending.take().expect("checked above");
+        match p.kind {
+            Kind::Question(_) => return self.answer_question(p, key, by),
+            Kind::Plan => return Ok(self.answer_plan(&p, key, text, by)),
+            Kind::Permission => {}
+        }
         let mut out = vec![Effect::ClearAsk];
         let tool_id = p.tool_use_id.clone();
         let by = by.map(str::to_owned);
@@ -707,7 +756,7 @@ impl State {
                     None => "El usuario rechazó esta acción.".to_owned(),
                 };
                 out.push(Effect::Write(permission_reply(
-                    &p.ask.id, false, &p.input, &message,
+                    &p.request, false, &p.input, &message,
                 )));
                 if let Some(id) = &tool_id {
                     self.refused.push(id.clone());
@@ -725,7 +774,7 @@ impl State {
                     self.allowed.push(rule);
                 }
                 out.push(Effect::Write(permission_reply(
-                    &p.ask.id, true, &p.input, "",
+                    &p.request, true, &p.input, "",
                 )));
                 if let Some(id) = &tool_id {
                     self.set_tool(id, |t| {
@@ -739,6 +788,130 @@ impl State {
         Ok(out)
     }
 
+    /// The answer to one of the questions Claude asks: the number of the option (several, with commas, for a
+    /// choice of several). The engine is answered when the last one is, with `answers` (REQ-435).
+    fn answer_question(
+        &mut self,
+        mut p: Pending,
+        key: &str,
+        by: Option<&str>,
+    ) -> Result<Vec<Effect>, String> {
+        let Kind::Question(mut qs) = p.kind.clone() else {
+            return Err("that is not a question".into());
+        };
+        let q = &qs.all[qs.answered.len()];
+        let picks: Vec<usize> = key
+            .split(',')
+            .map(|k| k.trim().parse().unwrap_or(usize::MAX))
+            .collect();
+        if picks.iter().any(|i| *i >= q.options.len()) || (!q.multi && picks.len() != 1) {
+            self.pending = Some(p);
+            return Err(format!("{key} is not one of its answers"));
+        }
+        let label = picks
+            .iter()
+            .map(|i| q.options[*i].0.clone())
+            .collect::<Vec<_>>()
+            .join(", ");
+        qs.answered.push((q.question.clone(), label));
+        if qs.answered.len() < qs.all.len() {
+            p.ask = question_ask(&p.request, qs.answered.len(), &qs.all[qs.answered.len()]);
+            p.kind = Kind::Question(qs);
+            self.pending = Some(p);
+            return Ok(Vec::new());
+        }
+        let mut input = p.input.clone();
+        input["answers"] = Value::Object(
+            qs.answered
+                .iter()
+                .map(|(q, a)| (q.clone(), json!(a)))
+                .collect(),
+        );
+        let said = qs
+            .answered
+            .iter()
+            .map(|(_, a)| a.clone())
+            .collect::<Vec<_>>()
+            .join(" · ");
+        if let Some(id) = &p.tool_use_id {
+            let by = by.map(str::to_owned);
+            self.set_tool(id, |t| {
+                t.0 = ToolState::Run;
+                t.1 = Some(clip(&format!("Respondida: {said}"), LINE_CHARS));
+                t.2 = by;
+            });
+        }
+        self.status = ConvStatus::Tool;
+        Ok(vec![
+            Effect::ClearAsk,
+            Effect::Write(permission_reply(&p.request, true, &input, "")),
+        ])
+    }
+
+    /// The approval of a plan: with edits allowed (the engine is asked to change its mode at once, so the
+    /// next edit is not asked), asking for each edit, or the plan refused with what to do instead (REQ-436).
+    fn answer_plan(
+        &mut self,
+        p: &Pending,
+        key: &str,
+        text: Option<&str>,
+        by: Option<&str>,
+    ) -> Vec<Effect> {
+        let mut out = vec![Effect::ClearAsk];
+        let by = by.map(str::to_owned);
+        if key == "no" {
+            let message = match text.map(str::trim).filter(|t| !t.is_empty()) {
+                Some(t) => format!("El usuario no aprobó el plan y dice: {t}"),
+                None => "El usuario no aprobó el plan: sigue planeando.".to_owned(),
+            };
+            out.push(Effect::Write(permission_reply(
+                &p.request, false, &p.input, &message,
+            )));
+            if let Some(id) = &p.tool_use_id {
+                self.refused.push(id.clone());
+                self.set_tool(id, |t| {
+                    t.0 = ToolState::Denied;
+                    t.1 = Some("Plan rechazado".into());
+                    t.2 = by;
+                });
+            }
+        } else {
+            out.push(Effect::Write(permission_reply(
+                &p.request, true, &p.input, "",
+            )));
+            if key == "accept" {
+                out.push(self.mode_request(Mode::AcceptEdits));
+            }
+            if let Some(id) = &p.tool_use_id {
+                self.set_tool(id, |t| {
+                    t.0 = ToolState::Run;
+                    t.1 = Some("Plan aprobado".into());
+                    t.2 = by;
+                });
+            }
+        }
+        self.status = ConvStatus::Tool;
+        out
+    }
+
+    /// Stop a task the engine runs in the background (REQ-432); the engine says when it ended.
+    pub fn stop_task(&mut self, task: &str) -> Result<Vec<Effect>, String> {
+        if !self
+            .tasks
+            .iter()
+            .any(|t| t.id == task && t.state == TaskState::Run)
+        {
+            return Err("that task is not running".into());
+        }
+        let id = self.next_request;
+        self.next_request += 1;
+        Ok(vec![Effect::Write(json!({
+            "type": "control_request",
+            "request_id": format!("jwn-{id}"),
+            "request": {"subtype": "stop_task", "task_id": task},
+        }))])
+    }
+
     /// Stop what runs: a waiting question is refused first, so the engine is not left asking.
     pub fn interrupt(&mut self) -> Vec<Effect> {
         if !self.busy() || self.interrupting {
@@ -749,7 +922,7 @@ impl State {
         if let Some(p) = self.pending.take() {
             out.push(Effect::ClearAsk);
             out.push(Effect::Write(permission_reply(
-                &p.ask.id,
+                &p.request,
                 false,
                 &p.input,
                 "El usuario interrumpió.",
@@ -873,6 +1046,10 @@ impl State {
             "system" => self.system(msg, now),
             "stream_event" if !nested => self.stream(&msg["event"], now),
             "assistant" if !nested => self.assistant(msg, now),
+            "assistant" => {
+                self.nested(msg);
+                Vec::new()
+            }
             "user" if !nested => self.user(msg),
             "control_request" => self.control_request(msg),
             "control_response" => {
@@ -938,6 +1115,32 @@ impl State {
                     self.mode = m;
                 }
             }
+            kind @ ("task_started" | "task_progress" | "task_updated" | "task_notification") => {
+                self.task_event(kind, msg, now);
+            }
+            // What the engine says runs in the background, whole: nothing in the list is something that ended.
+            "background_tasks_changed" => {
+                let running: Vec<&str> = msg["tasks"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|t| t["task_id"].as_str())
+                    .collect();
+                let gone: Vec<String> = self
+                    .tasks
+                    .iter()
+                    .filter(|t| t.state == TaskState::Run && !running.contains(&t.id.as_str()))
+                    .filter(|t| {
+                        self.task_links
+                            .iter()
+                            .any(|l| l.task == t.id && l.background)
+                    })
+                    .map(|t| t.id.clone())
+                    .collect();
+                for id in gone {
+                    self.end_task(&id, "completed", None, true);
+                }
+            }
             "permission_denied" => {
                 if let Some(id) = msg["tool_use_id"].as_str() {
                     let why = msg["message"].as_str().unwrap_or("Sin permiso").to_owned();
@@ -994,6 +1197,7 @@ impl State {
     }
 
     fn assistant(&mut self, msg: &Value, now: u64) -> Vec<Effect> {
+        let mut fx = Vec::new();
         self.begin_auto(now);
         let blocks = msg["message"]["content"]
             .as_array()
@@ -1028,10 +1232,46 @@ impl State {
                 }
                 "tool_use" => {
                     let name = b["name"].as_str().unwrap_or("").to_owned();
-                    if name == "ToolSearch" {
-                        continue;
-                    }
                     let id = b["id"].as_str().unwrap_or("").to_owned();
+                    match name.as_str() {
+                        "ToolSearch" => continue,
+                        // The checklist is the node's, not a line of the conversation (REQ-434).
+                        "TodoWrite" => {
+                            self.todos = parse_todos(&b["input"]);
+                            continue;
+                        }
+                        // Claude's own notice to the person: a note, and the pane asks for attention (REQ-438).
+                        "PushNotification" => {
+                            if let Some(m) = b["input"]["message"].as_str() {
+                                self.note(clip(m, LINE_CHARS), None);
+                            }
+                            fx.push(Effect::Raise(AttentionKind::AgentDone));
+                            continue;
+                        }
+                        "Agent" | "Task" => {
+                            self.tools_in_turn += 1;
+                            self.status = ConvStatus::Tool;
+                            self.push(Item::Agent {
+                                id,
+                                name: b["input"]["subagent_type"]
+                                    .as_str()
+                                    .unwrap_or("agent")
+                                    .to_owned(),
+                                description: clip(
+                                    b["input"]["description"].as_str().unwrap_or(""),
+                                    LINE_CHARS,
+                                ),
+                                state: ToolState::Run,
+                                tools: 0,
+                                tokens: 0,
+                                ms: 0,
+                                last: None,
+                                steps: Vec::new(),
+                            });
+                            continue;
+                        }
+                        _ => {}
+                    }
                     self.tools_in_turn += 1;
                     self.status = ConvStatus::Tool;
                     self.push(Item::Tool {
@@ -1055,7 +1295,210 @@ impl State {
                 *live = false;
             }
         }
-        Vec::new()
+        fx
+    }
+
+    /// What a subagent does with its own tools: the steps of its card.
+    fn nested(&mut self, msg: &Value) {
+        let Some(parent) = msg["parent_tool_use_id"].as_str() else {
+            return;
+        };
+        let steps: Vec<String> = msg["message"]["content"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|b| b["type"] == "tool_use")
+            .map(|b| {
+                let name = b["name"].as_str().unwrap_or("");
+                clip(
+                    format!("{name} {}", tool_arg(name, &b["input"])).trim(),
+                    120,
+                )
+            })
+            .collect();
+        if let Some(Item::Agent { steps: have, .. }) = self
+            .items
+            .iter_mut()
+            .rev()
+            .find(|i| matches!(i, Item::Agent { id, .. } if id == parent))
+        {
+            have.extend(steps);
+            have.truncate(STEPS_KEPT);
+        }
+    }
+
+    /// The agent's tool call came back: it ended, unless it runs in the background and the engine
+    /// has still to say so. True when the call was an agent's.
+    fn finish_agent(&mut self, id: &str, failed: bool, result: &Value) -> bool {
+        let background = self
+            .task_links
+            .iter()
+            .any(|l| l.background && l.tool_use_id.as_deref() == Some(id));
+        let Some(Item::Agent {
+            state,
+            tools,
+            tokens,
+            ms,
+            ..
+        }) = self
+            .items
+            .iter_mut()
+            .rev()
+            .find(|i| matches!(i, Item::Agent { id: a, .. } if a == id))
+        else {
+            return false;
+        };
+        if background {
+            return true;
+        }
+        *state = if failed {
+            ToolState::Failed
+        } else {
+            ToolState::Ok
+        };
+        if let Some(n) = result["totalToolUseCount"].as_u64() {
+            *tools = n as u32;
+        }
+        if let Some(n) = result["totalTokens"].as_u64() {
+            *tokens = n;
+        }
+        if let Some(n) = result["totalDurationMs"].as_u64() {
+            *ms = n;
+        }
+        true
+    }
+
+    /// A task of the engine started, moved or ended (REQ-428, REQ-429, REQ-431).
+    fn task_event(&mut self, kind: &str, msg: &Value, now: u64) {
+        let Some(task) = msg["task_id"].as_str() else {
+            return;
+        };
+        let tool_use_id = msg["tool_use_id"].as_str().map(str::to_owned);
+        match kind {
+            "task_started" => {
+                let label = clip(msg["description"].as_str().unwrap_or("tarea"), LINE_CHARS);
+                let kind = match msg["task_type"].as_str().unwrap_or("") {
+                    "local_agent" => TaskKind::Agent,
+                    "local_bash" => TaskKind::Bash,
+                    t if t.contains("monitor") => TaskKind::Monitor,
+                    _ => TaskKind::Other,
+                };
+                self.tasks.retain(|t| t.id != task);
+                self.tasks.push(Task {
+                    id: task.to_owned(),
+                    kind,
+                    label,
+                    state: TaskState::Run,
+                    started: now,
+                    info: None,
+                });
+                if self.tasks.len() > TASKS_KEPT {
+                    self.tasks.remove(0);
+                }
+                self.task_links.push(TaskLink {
+                    task: task.to_owned(),
+                    tool_use_id,
+                    background: msg["is_backgrounded"].as_bool().unwrap_or(false),
+                    noted: false,
+                });
+            }
+            "task_progress" => {
+                let usage = &msg["usage"];
+                if let Some(t) = self.tasks.iter_mut().find(|t| t.id == task) {
+                    t.info = msg["description"].as_str().map(|d| clip(d, LINE_CHARS));
+                }
+                let tool = tool_use_id.or_else(|| self.link_of(task));
+                if let Some(Item::Agent {
+                    tools,
+                    tokens,
+                    ms,
+                    last,
+                    ..
+                }) = self
+                    .items
+                    .iter_mut()
+                    .rev()
+                    .find(|i| matches!(i, Item::Agent { id, .. } if Some(id) == tool.as_ref()))
+                {
+                    *tools = usage["tool_uses"].as_u64().unwrap_or(0) as u32;
+                    *tokens = usage["total_tokens"].as_u64().unwrap_or(0);
+                    *ms = usage["duration_ms"].as_u64().unwrap_or(0);
+                    *last = msg["last_tool_name"].as_str().map(str::to_owned);
+                }
+            }
+            "task_updated" => {
+                let status = msg["patch"]["status"].as_str().unwrap_or("");
+                if !status.is_empty() {
+                    self.end_task(task, status, None, false);
+                }
+            }
+            "task_notification" => {
+                let status = msg["status"].as_str().unwrap_or("");
+                self.end_task(task, status, msg["summary"].as_str(), true);
+            }
+            _ => {}
+        }
+    }
+
+    fn link_of(&self, task: &str) -> Option<String> {
+        self.task_links
+            .iter()
+            .find(|l| l.task == task)?
+            .tool_use_id
+            .clone()
+    }
+
+    /// The engine says a task ended: `completed`, `stopped` (or `killed`) or a failure. What ran in the
+    /// background leaves a note, told once, when the engine's notification comes (it carries the summary);
+    /// a subagent that ran in front already has its card.
+    fn end_task(&mut self, task: &str, status: &str, summary: Option<&str>, notifies: bool) {
+        let state = match status {
+            "completed" => TaskState::Done,
+            "stopped" | "killed" => TaskState::Stopped,
+            "failed" | "error" => TaskState::Failed,
+            _ => return,
+        };
+        let Some(t) = self.tasks.iter_mut().find(|t| t.id == task) else {
+            return;
+        };
+        if t.state == TaskState::Run {
+            t.state = state;
+        }
+        let (state, label) = (t.state, t.label.clone());
+        if let Some(tool) = self.link_of(task)
+            && let Some(Item::Agent { state: card, .. }) = self
+                .items
+                .iter_mut()
+                .rev()
+                .find(|i| matches!(i, Item::Agent { id, .. } if *id == tool))
+            && *card == ToolState::Run
+        {
+            *card = if state == TaskState::Done {
+                ToolState::Ok
+            } else {
+                ToolState::Failed
+            };
+        }
+        let Some(link) = self.task_links.iter_mut().find(|l| l.task == task) else {
+            return;
+        };
+        if !notifies || !link.background || link.noted {
+            return;
+        }
+        link.noted = true;
+        let word = match state {
+            TaskState::Done => "terminó",
+            TaskState::Stopped => "se detuvo",
+            _ => "falló",
+        };
+        let what = summary
+            .and_then(|s| s.lines().next())
+            .filter(|s| !s.is_empty() && *s != label)
+            .map_or(String::new(), |s| format!(" · {s}"));
+        self.note(
+            clip(&format!("Tarea {word}: {label}{what}"), LINE_CHARS),
+            (state == TaskState::Failed).then_some(Tone::Error),
+        );
     }
 
     fn user(&mut self, msg: &Value) -> Vec<Effect> {
@@ -1071,6 +1514,9 @@ impl State {
             };
             let text = content_text(&b["content"]);
             let failed = b["is_error"].as_bool().unwrap_or(false);
+            if self.finish_agent(id, failed, &msg["tool_use_result"]) {
+                continue;
+            }
             let refused = self.refused.iter().any(|r| r == id);
             let lines: Vec<String> = text
                 .lines()
@@ -1103,6 +1549,40 @@ impl State {
         let id = msg["request_id"].as_str().unwrap_or("").to_owned();
         let tool = req["tool_name"].as_str().unwrap_or("").to_owned();
         let input = req["input"].clone();
+        let tool_use_id = req["tool_use_id"].as_str().map(str::to_owned);
+        // What Claude asks the person (a choice, a plan) is not a permission: it has its own box (REQ-435, REQ-436).
+        let questions = parse_questions(&input);
+        if tool == "AskUserQuestion" && !questions.is_empty() {
+            let ask = question_ask(&id, 0, &questions[0]);
+            return self.wait(
+                Pending {
+                    ask,
+                    request: id,
+                    kind: Kind::Question(Box::new(Questions {
+                        all: questions,
+                        answered: Vec::new(),
+                    })),
+                    input,
+                    tool_use_id,
+                    session_rule: None,
+                },
+                AttentionKind::Question,
+            );
+        }
+        if tool == "ExitPlanMode" {
+            let ask = plan_ask(&id, &input);
+            return self.wait(
+                Pending {
+                    ask,
+                    request: id,
+                    kind: Kind::Plan,
+                    input,
+                    tool_use_id,
+                    session_rule: None,
+                },
+                AttentionKind::Plan,
+            );
+        }
         let rule = rule_key(&tool, &input);
         // «Allow for this session» said yes to this once already.
         if self.allowed.contains(&rule) {
@@ -1140,17 +1620,27 @@ impl State {
             options,
             multi: false,
         };
-        if let Some(tid) = req["tool_use_id"].as_str() {
+        self.wait(
+            Pending {
+                ask,
+                request: id,
+                kind: Kind::Permission,
+                input,
+                tool_use_id,
+                session_rule: suggested.then_some(rule),
+            },
+            AttentionKind::Permission,
+        )
+    }
+
+    /// Something waits for the person: the tool says it is asking, the node shows the box and the pane asks for attention.
+    fn wait(&mut self, p: Pending, attention: AttentionKind) -> Vec<Effect> {
+        if let Some(tid) = &p.tool_use_id {
             self.set_tool(tid, |t| t.0 = ToolState::Ask);
         }
-        self.pending = Some(Pending {
-            ask,
-            input,
-            tool_use_id: req["tool_use_id"].as_str().map(str::to_owned),
-            session_rule: suggested.then_some(rule),
-        });
+        self.pending = Some(p);
         self.status = ConvStatus::Asking;
-        vec![Effect::Raise(AttentionKind::Permission)]
+        vec![Effect::Raise(attention)]
     }
 
     fn result(&mut self, msg: &Value, now: u64) -> Vec<Effect> {
@@ -1511,6 +2001,113 @@ fn content_text(c: &Value) -> String {
 }
 
 /// The path or the command a tool is about, cut short.
+/// The checklist `TodoWrite` holds: what each line says and whether it is done.
+fn parse_todos(input: &Value) -> Vec<Todo> {
+    input["todos"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|t| {
+            Some(Todo {
+                text: clip(t["content"].as_str()?, LINE_CHARS),
+                done: t["status"] == "completed",
+            })
+        })
+        .take(30)
+        .collect()
+}
+
+/// The questions of an `AskUserQuestion`'s input.
+fn parse_questions(input: &Value) -> Vec<Q> {
+    input["questions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|q| {
+            let question = q["question"].as_str()?.to_owned();
+            let options: Vec<(String, String)> = q["options"]
+                .as_array()?
+                .iter()
+                .filter_map(|o| {
+                    Some((
+                        o["label"].as_str()?.to_owned(),
+                        o["description"].as_str().unwrap_or("").to_owned(),
+                    ))
+                })
+                .collect();
+            (!options.is_empty()).then(|| Q {
+                question,
+                options,
+                multi: q["multiSelect"].as_bool().unwrap_or(false),
+            })
+        })
+        .take(4)
+        .collect()
+}
+
+/// The ask for the `at`-th question of a call: its id says which, so an answer for another is refused.
+fn question_ask(request: &str, at: usize, q: &Q) -> Ask {
+    Ask {
+        id: format!("{request}:{at}"),
+        kind: AskKind::Question,
+        tool: "AskUserQuestion".into(),
+        title: clip(&q.question, LINE_CHARS),
+        command: None,
+        diff: Vec::new(),
+        // What each option means, for those that say it.
+        plan: q
+            .options
+            .iter()
+            .filter(|(_, d)| !d.is_empty())
+            .map(|(l, d)| clip(&format!("{l}: {d}"), LINE_CHARS))
+            .collect(),
+        options: q
+            .options
+            .iter()
+            .enumerate()
+            .map(|(i, (l, _))| AskOption {
+                key: i.to_string(),
+                label: clip(l, LINE_CHARS),
+            })
+            .collect(),
+        multi: q.multi,
+    }
+}
+
+/// The ask for a plan: its lines and the three ways to answer it.
+fn plan_ask(request: &str, input: &Value) -> Ask {
+    Ask {
+        id: request.to_owned(),
+        kind: AskKind::Plan,
+        tool: "ExitPlanMode".into(),
+        title: "Plan listo".into(),
+        command: None,
+        diff: Vec::new(),
+        plan: input["plan"]
+            .as_str()
+            .unwrap_or("")
+            .lines()
+            .take(PLAN_LINES)
+            .map(|l| clip(l, LINE_CHARS))
+            .collect(),
+        options: vec![
+            AskOption {
+                key: "accept".into(),
+                label: "Aprobar y editar sin preguntar".into(),
+            },
+            AskOption {
+                key: "manual".into(),
+                label: "Aprobar, preguntando cada edición".into(),
+            },
+            AskOption {
+                key: "no".into(),
+                label: "Seguir planeando".into(),
+            },
+        ],
+        multi: false,
+    }
+}
+
 pub fn tool_arg(name: &str, input: &Value) -> String {
     let pick = |keys: &[&str]| {
         keys.iter()
@@ -1527,6 +2124,10 @@ pub fn tool_arg(name: &str, input: &Value) -> String {
         "WebSearch" => pick(&["query"]),
         "Agent" | "Task" => pick(&["description"]),
         "Skill" => pick(&["skill"]),
+        "ExitPlanMode" => Some("plan".to_owned()),
+        "AskUserQuestion" => input["questions"][0]["question"]
+            .as_str()
+            .map(str::to_owned),
         _ => None,
     }
     .or_else(|| {
@@ -2284,6 +2885,97 @@ mod tests {
             State::restored(none, "20:00").commands.len(),
             own_commands().len(),
             "an older file has none: jwn's own"
+        );
+    }
+
+    #[test]
+    fn an_interrupt_refuses_a_question_waiting_with_the_engines_own_request_id() {
+        let mut s = st();
+        s.send("hola", vec![], 1);
+        s.apply(&json!({"type": "control_request", "request_id": "r9", "request": {"subtype": "can_use_tool", "tool_name": "AskUserQuestion",
+            "input": {"questions": [{"question": "¿A?", "options": [{"label": "x"}, {"label": "y"}], "multiSelect": false},
+                                     {"question": "¿B?", "options": [{"label": "z"}], "multiSelect": false}]}, "tool_use_id": "t"}}), 2);
+        assert_eq!(s.pending.as_ref().unwrap().ask.id, "r9:0");
+        // the second question's id is longer, the engine's request is the same
+        let fx = s.answer("r9:0", "1", None, None).unwrap();
+        assert!(
+            fx.is_empty(),
+            "nothing goes to the engine until the last answer"
+        );
+        assert_eq!(s.pending.as_ref().unwrap().ask.id, "r9:1");
+        let e = s.interrupt();
+        assert_eq!(
+            writes(&e)[0]["response"]["request_id"],
+            "r9",
+            "{:?}",
+            writes(&e)
+        );
+        assert_eq!(writes(&e)[0]["response"]["response"]["behavior"], "deny");
+        assert!(s.pending.is_none());
+    }
+
+    #[test]
+    fn tasks_the_engine_lists_no_more_have_ended_and_the_list_is_kept_short() {
+        let mut s = st();
+        s.apply(&json!({"type": "system", "subtype": "task_started", "task_id": "a", "description": "uno", "is_backgrounded": true, "task_type": "local_bash"}), 1);
+        s.apply(&json!({"type": "system", "subtype": "task_started", "task_id": "b", "description": "dos", "is_backgrounded": false, "task_type": "local_agent"}), 2);
+        s.apply(
+            &json!({"type": "system", "subtype": "background_tasks_changed", "tasks": []}),
+            3,
+        );
+        let state = |id: &str| s.tasks.iter().find(|t| t.id == id).unwrap().state;
+        assert_eq!(
+            state("a"),
+            TaskState::Done,
+            "it ran in the background and the engine lists it no more"
+        );
+        assert_eq!(
+            state("b"),
+            TaskState::Run,
+            "a subagent in front is not in that list"
+        );
+        assert!(
+            s.items
+                .iter()
+                .any(|i| matches!(i, Item::Note { text, .. } if text == "Tarea terminó: uno"))
+        );
+        for n in 0..60 {
+            s.apply(&json!({"type": "system", "subtype": "task_started", "task_id": format!("t{n}"), "description": "x", "task_type": "other"}), 4);
+        }
+        assert_eq!(s.tasks.len(), TASKS_KEPT);
+    }
+
+    #[test]
+    fn the_checklist_holds_what_todowrite_says_and_a_subagents_steps_are_kept_short() {
+        let mut s = st();
+        s.send("go", vec![], 1);
+        s.apply(&json!({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "w", "name": "TodoWrite",
+            "input": {"todos": [{"content": "a", "status": "pending"}, {"content": "b", "status": "completed"}, {"nope": 1}]}}]}}), 2);
+        assert_eq!(
+            s.todos,
+            vec![
+                Todo {
+                    text: "a".into(),
+                    done: false
+                },
+                Todo {
+                    text: "b".into(),
+                    done: true
+                }
+            ]
+        );
+        s.apply(&json!({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "ag", "name": "Agent", "input": {"description": "d", "subagent_type": "Explore"}}]}}), 3);
+        for n in 0..80 {
+            s.apply(&json!({"type": "assistant", "parent_tool_use_id": "ag", "message": {"content": [{"type": "tool_use", "id": format!("n{n}"), "name": "Read", "input": {"file_path": format!("f{n}")}}]}}), 4);
+        }
+        let Some(Item::Agent { steps, name, .. }) =
+            s.items.iter().find(|i| matches!(i, Item::Agent { .. }))
+        else {
+            panic!("no card");
+        };
+        assert_eq!(
+            (steps.len(), name.as_str(), steps[0].as_str()),
+            (STEPS_KEPT, "Explore", "Read f0")
         );
     }
 }

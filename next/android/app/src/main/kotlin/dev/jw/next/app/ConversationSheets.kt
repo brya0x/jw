@@ -79,6 +79,8 @@ internal fun ConvSheet(dismiss: () -> Unit, content: @Composable ColumnScope.() 
 /** What the question needs from the person (REQ-441): what the tool is about to do, and a button of at least 48 dp for each option, the first one primary. */
 @Composable
 internal fun AskSheet(ask: Ask, busy: Boolean, dismiss: () -> Unit, answer: (String) -> Unit) {
+    // A choice of several: the options marked, sent together as their numbers with commas (REQ-435).
+    var marked by remember(ask.id) { mutableStateOf(setOf<Int>()) }
     ConvSheet(dismiss) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Mono(ask.title, Palette.fg, 14, bold = true, lines = 3, modifier = Modifier.weight(1f))
@@ -89,15 +91,25 @@ internal fun AskSheet(ask: Ask, busy: Boolean, dismiss: () -> Unit, answer: (Str
         ask.plan.forEach { Mono(it, Palette.fg, 13, lines = 6) }
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             ask.options.forEachIndexed { i, o ->
-                val primary = i == 0
+                val primary = i == 0 && !ask.multi
                 val refuse = o.key == "no"
+                val on = i in marked
                 Box(
                     Modifier.fillMaxWidth().defaultMinSize(minHeight = 48.dp)
                         .background(if (primary) Palette.green else Palette.sel, RoundedCornerShape(8.dp))
-                        .clickable(enabled = !busy) { answer(o.key) }.padding(horizontal = 12.dp, vertical = 10.dp),
+                        .clickable(enabled = !busy) { if (ask.multi) marked = if (on) marked - i else marked + i else answer(o.key) }
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
                     contentAlignment = Alignment.CenterStart,
-                ) { Mono(o.label, if (primary) Palette.panel else if (refuse) Palette.red else Palette.fg, 13, bold = primary, lines = 3) }
+                ) {
+                    Mono((if (ask.multi) (if (on) "☑ " else "☐ ") else "") + o.label, if (primary) Palette.panel else if (refuse) Palette.red else Palette.fg, 13, bold = primary || on, lines = 3)
+                }
             }
+            if (ask.multi) Box(
+                Modifier.fillMaxWidth().defaultMinSize(minHeight = 48.dp)
+                    .background(if (marked.isEmpty()) Palette.sel else Palette.green, RoundedCornerShape(8.dp))
+                    .clickable(enabled = !busy && marked.isNotEmpty()) { answer(marked.sorted().joinToString(",")) },
+                contentAlignment = Alignment.Center,
+            ) { Mono(if (marked.isEmpty()) "marca una o más" else "Enviar (${marked.size})", if (marked.isEmpty()) Palette.dim else Palette.panel, 13, bold = true) }
         }
     }
 }
@@ -193,13 +205,17 @@ internal fun PanelSheet(view: PanelView?, now: Long, dismiss: () -> Unit, choose
 
 @Composable
 private fun PanelRowView(r: PanelRow, now: Long, click: () -> Unit) {
-    Column(Modifier.fillMaxWidth().defaultMinSize(minHeight = 44.dp).clickable(enabled = r.act != RowAct.Nothing, onClick = click).padding(vertical = 8.dp, horizontal = 4.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Mono(r.label, Palette.fg, 13, bold = true, lines = 2, modifier = Modifier.weight(1f, fill = false))
-            r.at?.let { Mono(listAgo(now, it), Palette.dim, 11) }
-            r.tag?.let { Mono(it, (r.tone ?: Tone.Dim).color(), 11) }
+    Row(Modifier.fillMaxWidth().defaultMinSize(minHeight = 44.dp).clickable(enabled = r.act != RowAct.Nothing, onClick = click).padding(vertical = 8.dp, horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Mono(r.label, Palette.fg, 13, bold = true, lines = 2, modifier = Modifier.weight(1f, fill = false))
+                r.at?.let { Mono(listAgo(now, it), Palette.dim, 11) }
+                r.tag?.let { Mono(it, (r.tone ?: Tone.Dim).color(), 11) }
+            }
+            if (r.detail.isNotBlank()) Mono(r.detail, Palette.dim, 12, lines = 2)
         }
-        if (r.detail.isNotBlank()) Mono(r.detail, Palette.dim, 12, lines = 2)
+        // A task that runs is stopped from its row (REQ-448).
+        if (r.act is RowAct.Stop) Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) { Mono("■", Palette.red, 16, bold = true) }
     }
     Hairline()
 }

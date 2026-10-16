@@ -214,6 +214,10 @@ abstract class ProtocolSource : AppSource() {
         command(Cmd.ConversationInterrupt(node))
     }
 
+    override fun conversationStopTask(node: Id, task: String, reply: (Result<Unit>) -> Unit) {
+        command(Cmd.ConversationStopTask(node, task)) { reply(it.done("el PC no pudo detener la tarea")) }
+    }
+
     override fun conversationSet(node: Id, name: String?, accent: Accent?, model: String?, effort: String?, mode: ConvMode?, reply: (Result<Unit>) -> Unit) {
         command(Cmd.ConversationSet(node, name, accent, model, effort, mode)) { reply(it.done("el PC no pudo cambiarlo")) }
     }
