@@ -67,10 +67,29 @@ impl Field {
     pub fn draw(
         &self,
         g: &mut Grid,
-        (ix, y, iw): (usize, usize, usize),
+        at: (usize, usize, usize),
         chips: &[(String, Rgb)],
         running: bool,
         focused: bool,
+    ) {
+        let ask = if running {
+            "va al programa"
+        } else {
+            "escribe un comando"
+        };
+        self.draw_with(g, at, chips, running.then_some(STOP), focused, ask);
+    }
+
+    /// The same band with its own stop mark (`stop` is drawn when it is given) and the words
+    /// of the empty line.
+    pub fn draw_with(
+        &self,
+        g: &mut Grid,
+        (ix, y, iw): (usize, usize, usize),
+        chips: &[(String, Rgb)],
+        stop: Option<&str>,
+        focused: bool,
+        ask: &str,
     ) {
         for r in 0..self.band_rows() {
             g.paint_bg(ix.saturating_sub(1), y + r, iw + 2, look::panel());
@@ -103,11 +122,6 @@ impl Field {
             );
         }
         if self.is_empty() {
-            let ask = if running {
-                "va al programa"
-            } else {
-                "escribe un comando"
-            };
             g.put(
                 tx,
                 first,
@@ -115,11 +129,11 @@ impl Field {
                 Style::fg(look::dim()).on(ground),
             );
         }
-        if running {
+        if let Some(stop) = stop {
             g.put(
                 stop_at(ix, iw),
                 first,
-                STOP,
+                stop,
                 Style::fg(look::red()).bold().on(ground),
             );
         }

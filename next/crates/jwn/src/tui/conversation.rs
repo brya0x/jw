@@ -1,0 +1,2525 @@
+//! A pane that runs `claude` as the conversation the daemon holds (spec REQ-397 to REQ-415;
+//! prototype `docs/prototypes/conversation.html`): the items from the oldest, the working line,
+//! the field (or the box that asks), and the footer with the mode and the model. The node is
+//! what the daemon says; what lives here is only how this terminal looks at it: the line being
+//! typed, the scroll, the item picked, what is open, the list that is being chosen from.
+//! Every colour is the theme's (REQ-415); the accent is one of its six.
+
+use std::cell::Cell;
+use std::collections::HashSet;
+
+use contract::PaneInput;
+use contract::conversation::{
+    Accent, Ask, AskKind, ConvStatus, Conversation, DiffLine, DiffSign, Image, Item, Mode, Tone,
+    ToolState,
+};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+use super::field::{self, Field};
+use super::{Grid, Rgb, Style, clip, look};
+
+/// What the keyboard or the mouse asks the daemon for: the client maps each to its command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Act {
+    Send {
+        node: String,
+        text: String,
+        images: Vec<Image>,
+    },
+    Answer {
+        node: String,
+        ask: String,
+        key: String,
+    },
+    Interrupt {
+        node: String,
+    },
+    Name {
+        node: String,
+        name: String,
+    },
+    Color {
+        node: String,
+        accent: Accent,
+    },
+    Model {
+        node: String,
+        model: String,
+    },
+    Effort {
+        node: String,
+        effort: String,
+    },
+    Mode {
+        node: String,
+        mode: Mode,
+    },
+    Shell {
+        node: String,
+        command: String,
+    },
+    /// Text for the clipboard.
+    Copy(String),
+}
+
+/// What the footer lists to choose from, in the order it shows them: the value sent and the
+/// words shown.
+type Choices = &'static [(&'static str, &'static str)];
+
+const MODELS: Choices = &[
+    ("fable", "fable"),
+    ("opus", "opus"),
+    ("sonnet", "sonnet"),
+    ("haiku", "haiku"),
+];
+const EFFORTS: Choices = &[
+    ("low", "low"),
+    ("medium", "medium"),
+    ("high", "high"),
+    ("xhigh", "xhigh"),
+    ("max", "max"),
+];
+const MODES: Choices = &[
+    ("manual", "manual"),
+    ("acceptEdits", "accept edits"),
+    ("plan", "plan"),
+    ("auto", "auto"),
+];
+const COLORS: Choices = &[
+    ("blue", "azul"),
+    ("green", "verde"),
+    ("yellow", "amarillo"),
+    ("red", "rojo"),
+    ("magenta", "magenta"),
+    ("cyan", "cian"),
+];
+
+/// The most diff lines an edit shows before it is opened, and the most lines of output an opened item shows.
+const DIFF_SHOWN: usize = 14;
+const OPEN_SHOWN: usize = 60;
+const SHELL_SHOWN: usize = 12;
+/// Lines one page key moves the list.
+const PAGE: usize = 10;
+/// Files the `@` list shows at most.
+const FILES_SHOWN: usize = 8;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Of {
+    Model,
+    Effort,
+    Mode,
+    Color,
+}
+
+impl Of {
+    fn title(self) -> &'static str {
+        match self {
+            Of::Model => "modelo",
+            Of::Effort => "esfuerzo",
+            Of::Mode => "modo",
+            Of::Color => "color",
+        }
+    }
+
+    fn choices(self) -> Choices {
+        match self {
+            Of::Model => MODELS,
+            Of::Effort => EFFORTS,
+            Of::Mode => MODES,
+            Of::Color => COLORS,
+        }
+    }
+}
+
+enum Pop {
+    Pick { of: Of, at: usize },
+    Name(Editor),
+}
+
+/// The line being typed: characters, and where the cursor is among them.
+#[derive(Default, Debug, Clone)]
+pub struct Editor {
+    chars: Vec<char>,
+    cursor: usize,
+}
+
+impl Editor {
+    pub fn text(&self) -> String {
+        self.chars.iter().collect()
+    }
+
+    pub fn cursor(&self) -> usize {
+        self.cursor
+    }
+
+    pub fn set(&mut self, text: &str) {
+        self.chars = text.chars().collect();
+        self.cursor = self.chars.len();
+    }
+
+    pub fn take(&mut self) -> String {
+        self.cursor = 0;
+        std::mem::take(&mut self.chars).into_iter().collect()
+    }
+
+    pub fn insert(&mut self, text: &str) {
+        for c in text.chars() {
+            self.chars.insert(self.cursor, c);
+            self.cursor += 1;
+        }
+    }
+
+    /// The `@fragment` the cursor ends: what follows an `@` that starts the line or a word.
+    fn mention(&self) -> Option<String> {
+        let before = &self.chars[..self.cursor];
+        let at = before
+            .iter()
+            .rposition(|c| c.is_whitespace() || *c == '@')?;
+        if before[at] != '@' || (at > 0 && !before[at - 1].is_whitespace()) {
+            return None;
+        }
+        Some(before[at + 1..].iter().collect())
+    }
+
+    /// Put `text` in place of the `n` characters before the cursor.
+    fn replace_before(&mut self, n: usize, text: &str) {
+        let from = self.cursor.saturating_sub(n);
+        self.chars.drain(from..self.cursor);
+        self.cursor = from;
+        self.insert(text);
+    }
+
+    fn backspace(&mut self) {
+        if self.cursor > 0 {
+            self.cursor -= 1;
+            self.chars.remove(self.cursor);
+        }
+    }
+
+    fn delete(&mut self) {
+        if self.cursor < self.chars.len() {
+            self.chars.remove(self.cursor);
+        }
+    }
+
+    fn line_start(&self, at: usize) -> usize {
+        self.chars[..at]
+            .iter()
+            .rposition(|c| *c == '\n')
+            .map_or(0, |i| i + 1)
+    }
+
+    fn line_end(&self, at: usize) -> usize {
+        self.chars[at..]
+            .iter()
+            .position(|c| *c == '\n')
+            .map_or(self.chars.len(), |i| at + i)
+    }
+
+    fn home(&mut self) {
+        self.cursor = self.line_start(self.cursor);
+    }
+
+    fn end(&mut self) {
+        self.cursor = self.line_end(self.cursor);
+    }
+
+    /// One line up, keeping the column; false when this is the first line.
+    fn up(&mut self) -> bool {
+        let start = self.line_start(self.cursor);
+        if start == 0 {
+            return false;
+        }
+        let col = self.cursor - start;
+        let (prev_end, prev_start) = (start - 1, self.line_start(start - 1));
+        self.cursor = prev_start + col.min(prev_end - prev_start);
+        true
+    }
+
+    fn down(&mut self) -> bool {
+        let end = self.line_end(self.cursor);
+        if end == self.chars.len() {
+            return false;
+        }
+        let col = self.cursor - self.line_start(self.cursor);
+        let next = end + 1;
+        self.cursor = next + col.min(self.line_end(next) - next);
+        true
+    }
+
+    fn word_back(&mut self) {
+        let mut at = self.cursor;
+        while at > 0 && self.chars[at - 1].is_whitespace() {
+            at -= 1;
+        }
+        while at > 0 && !self.chars[at - 1].is_whitespace() {
+            at -= 1;
+        }
+        self.chars.drain(at..self.cursor);
+        self.cursor = at;
+    }
+
+    fn kill_to_start(&mut self) {
+        let start = self.line_start(self.cursor);
+        self.chars.drain(start..self.cursor);
+        self.cursor = start;
+    }
+
+    fn kill_to_end(&mut self) {
+        let end = self.line_end(self.cursor);
+        self.chars.drain(self.cursor..end);
+    }
+
+    /// The editing keys the line and the name field share.
+    fn edit(&mut self, ev: &KeyEvent) -> bool {
+        let ctrl = ev.modifiers.contains(KeyModifiers::CONTROL);
+        match ev.code {
+            KeyCode::Char('a') if ctrl => self.home(),
+            KeyCode::Char('e') if ctrl => self.end(),
+            KeyCode::Char('w') if ctrl => self.word_back(),
+            KeyCode::Char('u') if ctrl => self.kill_to_start(),
+            KeyCode::Char('k') if ctrl => self.kill_to_end(),
+            KeyCode::Char(c) if !ctrl && !ev.modifiers.contains(KeyModifiers::ALT) => {
+                self.insert(&c.to_string());
+            }
+            KeyCode::Backspace => self.backspace(),
+            KeyCode::Delete => self.delete(),
+            KeyCode::Left => self.cursor = self.cursor.saturating_sub(1),
+            KeyCode::Right => self.cursor = (self.cursor + 1).min(self.chars.len()),
+            KeyCode::Home => self.home(),
+            KeyCode::End => self.end(),
+            _ => return false,
+        }
+        true
+    }
+}
+
+/// What this terminal holds about one conversation.
+#[derive(Default)]
+pub struct Ui {
+    pub editor: Editor,
+    /// Lines the list is scrolled up from the newest; `most` is what the last frame could scroll.
+    scroll: usize,
+    most: Cell<usize>,
+    /// The item picked (its number from the start of the conversation) and the items opened.
+    picked: Option<u32>,
+    open: HashSet<u32>,
+    /// The option of the question that is lit.
+    ask_at: usize,
+    pop: Option<Pop>,
+    images: Vec<(u32, Image)>,
+    /// How many pictures were pasted, which is the `n` of the next `[Imagen#n]`.
+    pasted: u32,
+    /// The files that hold what follows the `@` the line ends with, for which fragment, the
+    /// one lit, the fragment last asked for and the one the person closed the list on.
+    files: Vec<String>,
+    files_for: String,
+    file_at: usize,
+    asked: String,
+    dismissed: String,
+    /// A message was sent while the engine was dead: «retomando conversación…» until it answers.
+    retaking: bool,
+    says: String,
+}
+
+/// Rows the parts of a conversation pane take.
+struct Geo {
+    /// Where the list goes, and how many rows it has.
+    list: (usize, usize),
+    /// The working line, when there is one.
+    work: Option<usize>,
+    /// Where the field (or the box that asks) starts, and its rows.
+    band: (usize, usize),
+    foot: usize,
+}
+
+struct Line {
+    spans: Vec<(String, Style)>,
+    bg: Option<Rgb>,
+    item: u32,
+}
+
+impl Ui {
+    /// The conversation changed: what only a dead engine needed is forgotten.
+    pub fn sync(&mut self, conv: &Conversation) {
+        if !matches!(conv.status, ConvStatus::Dead | ConvStatus::Resuming) {
+            self.retaking = false;
+        }
+        if conv.ask.is_none() {
+            self.ask_at = 0;
+        }
+    }
+
+    /// A message for the status bar (a copy, a picture that was not there), once.
+    pub fn take_says(&mut self) -> Option<String> {
+        (!self.says.is_empty()).then(|| std::mem::take(&mut self.says))
+    }
+
+    /// The line was pasted: the text goes in where the cursor is.
+    pub fn paste(&mut self, text: &str) {
+        if matches!(self.pop, Some(Pop::Name(_))) {
+            return;
+        }
+        self.editor
+            .insert(&text.replace("\r\n", "\n").replace('\r', "\n"));
+    }
+
+    /// A picture the clipboard held, now small: it goes with the next message.
+    pub fn attach(&mut self, image: Image) {
+        self.pasted += 1;
+        self.editor.insert(&format!("[Imagen#{}]", self.pasted));
+        self.images.push((self.pasted, image));
+    }
+
+    /// The fragment after an `@` that the files have not been asked for yet (REQ-408).
+    pub fn want_files(&mut self) -> Option<String> {
+        let Some(fragment) = self.editor.mention().filter(|f| !f.is_empty()) else {
+            self.files.clear();
+            self.asked.clear();
+            self.dismissed.clear();
+            return None;
+        };
+        if fragment == self.asked {
+            return None;
+        }
+        self.asked.clone_from(&fragment);
+        Some(fragment)
+    }
+
+    /// The daemon found these files for `fragment`; they count only while it is still what the line ends with.
+    pub fn found(&mut self, fragment: &str, paths: Vec<String>) {
+        if self.editor.mention().as_deref() == Some(fragment) {
+            self.files = paths.into_iter().take(FILES_SHOWN).collect();
+            self.files_for = fragment.to_owned();
+            self.file_at = 0;
+        }
+    }
+
+    fn files_open(&self) -> bool {
+        !self.files.is_empty()
+            && self.editor.mention().as_deref() == Some(self.files_for.as_str())
+            && self.dismissed != self.files_for
+    }
+
+    /// Put the file lit in the line, where the `@fragment` was.
+    fn take_file(&mut self, at: usize) {
+        let Some(path) = self.files.get(at).cloned() else {
+            return;
+        };
+        let n = self.files_for.chars().count() + 1;
+        self.editor.replace_before(n, &format!("@{path} "));
+        self.files.clear();
+        self.asked.clear();
+    }
+
+    /// Whether a list or a field is open over the conversation.
+    pub fn has_pop(&self) -> bool {
+        self.pop.is_some()
+    }
+
+    /// Lines of the list, from the oldest, `w` columns wide.
+    fn lines(&self, conv: &Conversation, w: usize) -> Vec<Line> {
+        let mut out = Vec::new();
+        for (i, item) in conv.items.iter().enumerate() {
+            let abs = conv.first + i as u32;
+            let before = out.len();
+            self.item_lines(conv, item, abs, w, &mut out);
+            let grouped = i > 0
+                && matches!(
+                    item,
+                    Item::Tool { .. } | Item::Agent { .. } | Item::Note { .. }
+                )
+                && matches!(
+                    conv.items[i - 1],
+                    Item::Tool { .. } | Item::Agent { .. } | Item::Note { .. }
+                );
+            if before > 0 && !grouped && out.len() > before {
+                out.insert(
+                    before,
+                    Line {
+                        spans: vec![],
+                        bg: None,
+                        item: abs,
+                    },
+                );
+            }
+        }
+        out
+    }
+
+    fn item_lines(
+        &self,
+        conv: &Conversation,
+        item: &Item,
+        abs: u32,
+        w: usize,
+        out: &mut Vec<Line>,
+    ) {
+        let accent = accent_rgb(conv.accent);
+        let dim = Style::fg(look::dim());
+        let plain = Style::fg(look::fg());
+        let mut push = |spans: Vec<(String, Style)>, bg: Option<Rgb>| {
+            out.push(Line {
+                spans,
+                bg,
+                item: abs,
+            });
+        };
+        let open = self.open.contains(&abs);
+        match item {
+            Item::User { text, images } => {
+                let rows = wrap(text, w.saturating_sub(2), plain, Style::fg(look::cyan()));
+                for (k, row) in rows.into_iter().enumerate() {
+                    let mark = if k == 0 { "❯ " } else { "  " };
+                    let mut spans = vec![(mark.to_owned(), Style::fg(accent).bold())];
+                    spans.extend(row);
+                    push(spans, Some(look::sel()));
+                }
+                if *images > 0 {
+                    push(
+                        vec![(format!("  ▣ {images} imagen(es)"), dim)],
+                        Some(look::sel()),
+                    );
+                }
+            }
+            Item::Text { text, live } => {
+                let mut rows = wrap(text, w.saturating_sub(2), plain, Style::fg(look::cyan()));
+                if *live && let Some(last) = rows.last_mut() {
+                    last.push(("▍".to_owned(), Style::fg(accent)));
+                }
+                for (k, row) in rows.into_iter().enumerate() {
+                    let mark = if k == 0 { "● " } else { "  " };
+                    let mut spans = vec![(mark.to_owned(), plain)];
+                    spans.extend(row);
+                    push(spans, None);
+                }
+            }
+            Item::Tool {
+                name,
+                arg,
+                state,
+                summary,
+                output,
+                diff,
+                url,
+                by,
+                ..
+            } => {
+                let mut head = vec![
+                    ("● ".to_owned(), Style::fg(state_colour(*state))),
+                    (name.clone(), plain.bold()),
+                    (
+                        format!(
+                            "({})",
+                            clip(arg, w.saturating_sub(name.chars().count() + 6))
+                        ),
+                        dim,
+                    ),
+                ];
+                if let Some(by) = by {
+                    let how = if by.starts_with("modo") {
+                        "por"
+                    } else {
+                        "desde"
+                    };
+                    head.push((format!(" · permitido {how} {by}"), Style::fg(look::green())));
+                }
+                push(head, None);
+                if let Some(s) = summary {
+                    push(
+                        vec![
+                            ("  ⎿  ".to_owned(), dim),
+                            (clip(s, w.saturating_sub(5)), dim),
+                        ],
+                        None,
+                    );
+                } else if *state == ToolState::Denied {
+                    push(
+                        vec![
+                            ("  ⎿  ".to_owned(), dim),
+                            ("negado".to_owned(), Style::fg(look::red())),
+                        ],
+                        None,
+                    );
+                }
+                if let Some(u) = url {
+                    push(
+                        vec![
+                            ("  ⎿  ".to_owned(), dim),
+                            (clip(u, w.saturating_sub(5)), {
+                                let mut s = Style::fg(look::cyan());
+                                s.underline = true;
+                                s
+                            }),
+                        ],
+                        None,
+                    );
+                }
+                diff_lines(diff, open, w, &mut push);
+                if open {
+                    for line in output.iter().take(OPEN_SHOWN) {
+                        push(
+                            vec![
+                                ("     ".to_owned(), dim),
+                                (clip(line, w.saturating_sub(5)), dim),
+                            ],
+                            None,
+                        );
+                    }
+                }
+            }
+            Item::Agent {
+                name,
+                description,
+                state,
+                tools,
+                tokens,
+                ms,
+                last,
+                steps,
+                ..
+            } => {
+                push(
+                    vec![
+                        ("● ".to_owned(), Style::fg(state_colour(*state))),
+                        ("Agent".to_owned(), plain.bold()),
+                        (format!("({name}) "), dim),
+                        (
+                            clip(description, w.saturating_sub(name.chars().count() + 12)),
+                            plain,
+                        ),
+                    ],
+                    None,
+                );
+                let totals = format!(
+                    "{tools} herramientas · {} tokens · {}",
+                    kilo(*tokens),
+                    secs(*ms)
+                );
+                let line = match (state, last) {
+                    (ToolState::Run | ToolState::Ask, Some(l)) => format!("… {l} · {totals}"),
+                    (ToolState::Run | ToolState::Ask, None) => format!("… {totals}"),
+                    _ => totals,
+                };
+                push(
+                    vec![
+                        ("  ⎿  ".to_owned(), dim),
+                        (clip(&line, w.saturating_sub(5)), dim),
+                    ],
+                    None,
+                );
+                if open {
+                    for step in steps.iter().take(OPEN_SHOWN) {
+                        push(
+                            vec![
+                                ("     · ".to_owned(), dim),
+                                (clip(step, w.saturating_sub(7)), dim),
+                            ],
+                            None,
+                        );
+                    }
+                }
+            }
+            Item::Shell {
+                command,
+                state,
+                output,
+            } => {
+                push(
+                    vec![
+                        ("! ".to_owned(), Style::fg(state_colour(*state)).bold()),
+                        (clip(command, w.saturating_sub(2)), Style::fg(look::green())),
+                    ],
+                    None,
+                );
+                let shown = if open { OPEN_SHOWN } else { SHELL_SHOWN };
+                for line in output.iter().take(shown) {
+                    push(
+                        vec![
+                            ("  ".to_owned(), dim),
+                            (clip(line, w.saturating_sub(2)), plain),
+                        ],
+                        None,
+                    );
+                }
+                if output.len() > shown {
+                    push(
+                        vec![(format!("  … {} líneas más · ^O", output.len() - shown), dim)],
+                        None,
+                    );
+                }
+            }
+            Item::Out { lines } => {
+                for (k, line) in lines.iter().enumerate() {
+                    let mark = if k == 0 { "  ⎿  " } else { "     " };
+                    push(
+                        vec![
+                            (mark.to_owned(), dim),
+                            (clip(line, w.saturating_sub(5)), plain),
+                        ],
+                        None,
+                    );
+                }
+            }
+            Item::Note { text, tone } => {
+                let colour = match tone {
+                    Some(Tone::Error) => look::red(),
+                    Some(Tone::Warn) => look::yellow(),
+                    None => look::dim(),
+                };
+                push(
+                    vec![
+                        ("  ⎿  ".to_owned(), dim),
+                        (clip(text, w.saturating_sub(5)), Style::fg(colour)),
+                    ],
+                    None,
+                );
+            }
+            Item::Result { ms, tools, cost } => {
+                push(
+                    vec![(
+                        format!(
+                            "✻ Listo en {} · {tools} herramientas · {}",
+                            secs(*ms),
+                            usd(*cost)
+                        ),
+                        dim,
+                    )],
+                    None,
+                );
+            }
+            Item::Divider { text, .. } => {
+                let label = format!(" {text} ");
+                let bar = w.saturating_sub(label.chars().count()) / 2;
+                push(
+                    vec![(
+                        format!("{}{label}{}", "─".repeat(bar), "─".repeat(bar)),
+                        dim,
+                    )],
+                    None,
+                );
+            }
+        }
+    }
+
+    fn working(&self, conv: &Conversation) -> bool {
+        conv.status != ConvStatus::Idle && !(conv.status == ConvStatus::Dead && !self.retaking)
+    }
+
+    fn geo(&self, conv: &Conversation, (iy, ih): (usize, usize), field_rows: usize) -> Geo {
+        let foot = iy + ih.saturating_sub(1);
+        let band_rows = conv
+            .ask
+            .as_ref()
+            .map_or(field_rows, ask_rows)
+            .min(ih.saturating_sub(2));
+        let band_y = foot.saturating_sub(band_rows);
+        let work = self.working(conv).then(|| band_y.saturating_sub(1));
+        let list_end = work.unwrap_or(band_y);
+        Geo {
+            list: (iy, list_end.saturating_sub(iy)),
+            work,
+            band: (band_y, band_rows),
+            foot,
+        }
+    }
+
+    fn field(&self, iw: usize) -> Field {
+        Field::new(
+            Some(&PaneInput {
+                text: self.editor.text(),
+                cursor: self.editor.cursor() as u32,
+            }),
+            None,
+            iw,
+        )
+    }
+
+    /// Draw the conversation in the pane whose inner box is `(ix, iy, iw, ih)`. `chips` are the
+    /// pane's folder and branch; the messages that wait and the pictures go after them.
+    pub fn draw(
+        &self,
+        g: &mut Grid,
+        conv: &Conversation,
+        (ix, iy, iw, ih): (usize, usize, usize, usize),
+        chips: &[(String, Rgb)],
+        focused: bool,
+        now_ms: u64,
+    ) {
+        if iw < 12 || ih < 8 {
+            return;
+        }
+        let field = self.field(iw);
+        let geo = self.geo(conv, (iy, ih), field.band_rows());
+        let lines = self.lines(conv, iw - 2);
+        let (ly, lh) = geo.list;
+        let most = lines.len().saturating_sub(lh);
+        self.most.set(most);
+        let start = most - self.scroll.min(most);
+        let top = ly + lh.saturating_sub(lines.len());
+        let accent = accent_rgb(conv.accent);
+        for (r, line) in lines.iter().skip(start).take(lh).enumerate() {
+            let y = top + r;
+            let picked = self.picked == Some(line.item);
+            if let Some(bg) = line.bg {
+                g.paint_bg(ix, y, iw, bg);
+            } else if picked {
+                g.paint_bg(ix, y, iw, look::sel());
+            }
+            if picked {
+                g.put_over(ix, y, "▌", Style::fg(accent));
+            }
+            let mut x = ix + 2;
+            for (text, style) in &line.spans {
+                let text = clip(text, (ix + iw).saturating_sub(x));
+                g.put_over(x, y, &text, *style);
+                x += text.chars().count();
+            }
+        }
+        if let Some(y) = geo.work {
+            let spin = ['✻', '✶', '✷', '✸'][(now_ms / 250 % 4) as usize];
+            let text = self.work_text(conv, now_ms);
+            g.put(ix + 1, y, &format!("{spin} "), Style::fg(accent).bold());
+            g.put(
+                ix + 3,
+                y,
+                &clip(&text, iw.saturating_sub(4)),
+                Style::fg(look::dim()),
+            );
+        }
+        let (by, brows) = geo.band;
+        if let Some(ask) = &conv.ask {
+            self.draw_ask(g, ask, (ix, by, iw, brows));
+        } else {
+            let mut chips = chips.to_vec();
+            if !conv.queue.is_empty() {
+                chips.push((format!("en cola {}", conv.queue.len()), look::yellow()));
+            }
+            if !self.images.is_empty() {
+                chips.push((format!("▣ {}", self.images.len()), look::cyan()));
+            }
+            field.draw_with(
+                g,
+                (ix, by, iw),
+                &chips,
+                self.working(conv).then_some("■ esc"),
+                focused,
+                "escribe un mensaje",
+            );
+        }
+        self.draw_foot(g, conv, (ix, geo.foot, iw));
+        if let Some(pop) = &self.pop {
+            self.draw_pop(g, conv, pop, (ix, by, iw));
+        } else if conv.ask.is_none() && self.files_open() {
+            self.draw_files(g, conv, (ix, by, iw));
+        }
+    }
+
+    fn work_text(&self, conv: &Conversation, now_ms: u64) -> String {
+        let what = match conv.status {
+            ConvStatus::Resuming | ConvStatus::Dead => return "retomando conversación…".into(),
+            ConvStatus::Thinking => "Pensando…",
+            ConvStatus::Streaming => "Escribiendo…",
+            ConvStatus::Tool => "Trabajando…",
+            ConvStatus::Asking => "Espera tu respuesta",
+            ConvStatus::Compacting => "Compactando…",
+            ConvStatus::Idle => "",
+        };
+        let since = conv
+            .since
+            .map(|s| format!("{} · ", secs(now_ms.saturating_sub(s))))
+            .unwrap_or_default();
+        format!("{what} ({since}esc interrumpe)")
+    }
+
+    fn draw_ask(&self, g: &mut Grid, ask: &Ask, (ix, y, iw, h): (usize, usize, usize, usize)) {
+        let rect = (ix, y, iw, h);
+        g.clear_box(rect);
+        let title = match ask.kind {
+            AskKind::Permission => format!("permiso · {}", ask.tool),
+            AskKind::Question => "pregunta".to_owned(),
+            AskKind::Plan => "plan".to_owned(),
+        };
+        g.boxed(
+            rect,
+            &title,
+            look::yellow(),
+            Style::fg(look::fg()).bold(),
+            None,
+        );
+        let ground = look::panel();
+        let (tx, tw) = (ix + 2, iw.saturating_sub(4));
+        // rows under the title and over the options
+        let mut row = y + 1;
+        let mut text_row = |g: &mut Grid, text: &str, style: Style| {
+            if let Some(bg) = style.bg {
+                g.paint_bg(tx, row, tw, bg);
+            }
+            g.put(tx, row, &clip(text, tw), style);
+            row += 1;
+        };
+        text_row(g, &ask.title, Style::fg(look::fg()).bold().on(ground));
+        if let Some(c) = &ask.command {
+            text_row(g, &format!("$ {c}"), Style::fg(look::green()).on(ground));
+        }
+        for line in ask.plan.iter().take(8) {
+            text_row(g, line, Style::fg(look::fg()).on(ground));
+        }
+        for d in ask.diff.iter().take(DIFF_SHOWN) {
+            let (tint, fg) = tint_of(d.sign);
+            text_row(
+                g,
+                &format!("{} {}", sign_char(d.sign), d.text),
+                Style::fg(fg).on(tint),
+            );
+        }
+        let keys = keys_of(ask);
+        for (i, o) in ask.options.iter().enumerate() {
+            let at = row + i;
+            let lit = i == self.ask_at;
+            let bg = if lit { look::sel() } else { ground };
+            g.paint_bg(ix + 1, at, iw - 2, bg);
+            let n = format!("{}{} ", if lit { "❯ " } else { "  " }, i + 1);
+            g.put(tx, at, &n, Style::fg(look::yellow()).bold().on(bg));
+            let label = clip(&o.label, tw.saturating_sub(n.chars().count() + 4));
+            g.put(
+                tx + n.chars().count(),
+                at,
+                &label,
+                Style::fg(look::fg()).on(bg),
+            );
+            if let Some(k) = keys[i] {
+                g.put(
+                    (ix + iw).saturating_sub(3),
+                    at,
+                    &k.to_string(),
+                    Style::fg(look::dim()).on(bg),
+                );
+            }
+        }
+        g.put(
+            tx,
+            y + h - 2,
+            &clip("1 2 3 · y a n · ↑↓ ↵", tw),
+            Style::fg(look::dim()).on(ground),
+        );
+    }
+
+    fn draw_foot(&self, g: &mut Grid, conv: &Conversation, (ix, y, iw): (usize, usize, usize)) {
+        let (label, colour) = mode_look(conv.mode);
+        g.put(ix + 1, y, label, Style::fg(colour));
+        let running = conv
+            .tasks
+            .iter()
+            .filter(|t| t.state == contract::conversation::TaskState::Run)
+            .count();
+        if running > 0 {
+            g.put(
+                ix + 2 + label.chars().count(),
+                y,
+                &format!("⚙ {running}"),
+                Style::fg(look::dim()),
+            );
+        }
+        let model = clip(&conv.model, iw.saturating_sub(label.chars().count() + 8));
+        g.put(
+            (ix + iw).saturating_sub(model.chars().count() + 1),
+            y,
+            &model,
+            Style::fg(look::dim()),
+        );
+    }
+
+    fn draw_files(
+        &self,
+        g: &mut Grid,
+        conv: &Conversation,
+        (ix, band_y, iw): (usize, usize, usize),
+    ) {
+        let h = self.files.len() + 2;
+        let (x, y) = (ix, band_y.saturating_sub(h));
+        let w = iw;
+        g.clear_box((x, y, w, h));
+        g.boxed(
+            (x, y, w, h),
+            "archivos",
+            accent_rgb(conv.accent),
+            Style::fg(look::fg()).bold(),
+            None,
+        );
+        for (i, path) in self.files.iter().enumerate() {
+            let bg = if i == self.file_at {
+                look::sel()
+            } else {
+                look::panel()
+            };
+            g.paint_bg(x + 1, y + 1 + i, w - 2, bg);
+            g.put(
+                x + 3,
+                y + 1 + i,
+                &clip(path, w.saturating_sub(6)),
+                Style::fg(look::fg()).on(bg),
+            );
+        }
+    }
+
+    fn draw_pop(
+        &self,
+        g: &mut Grid,
+        conv: &Conversation,
+        pop: &Pop,
+        (ix, band_y, iw): (usize, usize, usize),
+    ) {
+        let (title, rows): (&str, Vec<String>) = match pop {
+            Pop::Pick { of, .. } => (
+                of.title(),
+                of.choices().iter().map(|(_, l)| (*l).to_owned()).collect(),
+            ),
+            Pop::Name(_) => ("nombre", vec![String::new()]),
+        };
+        let h = rows.len() + 2;
+        let w = 34.min(iw);
+        let (x, y) = (ix, band_y.saturating_sub(h));
+        g.clear_box((x, y, w, h));
+        g.boxed(
+            (x, y, w, h),
+            title,
+            accent_rgb(conv.accent),
+            Style::fg(look::fg()).bold(),
+            None,
+        );
+        match pop {
+            Pop::Pick { of, at } => {
+                let current = current_of(conv, *of);
+                for (i, (value, label)) in of.choices().iter().enumerate() {
+                    let bg = if i == *at { look::sel() } else { look::panel() };
+                    g.paint_bg(x + 1, y + 1 + i, w - 2, bg);
+                    let mark = if *value == current { "●" } else { " " };
+                    g.put(x + 2, y + 1 + i, mark, Style::fg(look::green()).on(bg));
+                    g.put(x + 4, y + 1 + i, label, Style::fg(look::fg()).on(bg));
+                }
+            }
+            Pop::Name(e) => {
+                let text = e.text();
+                g.put(
+                    x + 2,
+                    y + 1,
+                    &clip(&text, w.saturating_sub(4)),
+                    Style::fg(look::fg()).on(look::panel()),
+                );
+                let at = (x + 2 + e.cursor()).min(x + w - 3);
+                if y + 1 < g.rows && at < g.cols {
+                    g.cells[(y + 1) * g.cols + at].1.reverse = true;
+                }
+            }
+        }
+    }
+
+    // ---- keys ----
+
+    pub fn key(&mut self, conv: &Conversation, ev: &KeyEvent) -> Option<Act> {
+        let node = conv.head.id.clone();
+        if let Some(ask) = &conv.ask {
+            return self.ask_key(&node, ask, ev);
+        }
+        if self.pop.is_some() {
+            return self.pop_key(conv, ev);
+        }
+        let ctrl = ev.modifiers.contains(KeyModifiers::CONTROL);
+        if self.files_open() {
+            match ev.code {
+                KeyCode::Up => {
+                    self.file_at = self.file_at.saturating_sub(1);
+                    return None;
+                }
+                KeyCode::Down => {
+                    self.file_at = (self.file_at + 1).min(self.files.len() - 1);
+                    return None;
+                }
+                KeyCode::Tab | KeyCode::Enter => {
+                    self.take_file(self.file_at);
+                    return None;
+                }
+                KeyCode::Esc => {
+                    self.dismissed.clone_from(&self.files_for);
+                    return None;
+                }
+                _ => {}
+            }
+        }
+        if let Some(item) = self.picked {
+            match ev.code {
+                KeyCode::Char('c') if !ctrl => return self.copy(conv, item, false),
+                KeyCode::Char('t') if !ctrl => return self.copy(conv, item, true),
+                KeyCode::Esc => {
+                    self.picked = None;
+                    return None;
+                }
+                KeyCode::Up | KeyCode::Down => {
+                    self.step_item(conv, item, ev.code == KeyCode::Down);
+                    return None;
+                }
+                _ => self.picked = None,
+            }
+        }
+        match ev.code {
+            KeyCode::Enter if ev.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.editor.insert("\n");
+                None
+            }
+            KeyCode::Enter => self.submit(conv),
+            KeyCode::Char('j') if ctrl => {
+                self.editor.insert("\n");
+                None
+            }
+            KeyCode::Char('c') if ctrl => {
+                if self.working(conv) {
+                    Some(Act::Interrupt { node })
+                } else {
+                    self.editor.take();
+                    None
+                }
+            }
+            KeyCode::Char('o') if ctrl => {
+                self.toggle_open(conv);
+                None
+            }
+            KeyCode::Esc if self.working(conv) => Some(Act::Interrupt { node }),
+            KeyCode::BackTab => Some(Act::Mode {
+                node,
+                mode: next_mode(conv.mode),
+            }),
+            KeyCode::PageUp => {
+                self.scroll_by(true, PAGE);
+                None
+            }
+            KeyCode::PageDown => {
+                self.scroll_by(false, PAGE);
+                None
+            }
+            KeyCode::Up if !self.editor.up() => {
+                self.scroll_by(true, 1);
+                None
+            }
+            KeyCode::Down if !self.editor.down() => {
+                self.scroll_by(false, 1);
+                None
+            }
+            KeyCode::Up | KeyCode::Down => None,
+            _ => {
+                self.editor.edit(ev);
+                None
+            }
+        }
+    }
+
+    fn ask_key(&mut self, node: &str, ask: &Ask, ev: &KeyEvent) -> Option<Act> {
+        let n = ask.options.len();
+        let by_key = |k: &str| ask.options.iter().position(|o| o.key == k);
+        let at = match ev.code {
+            KeyCode::Char(c @ '1'..='9') => Some(c as usize - '1' as usize).filter(|i| *i < n),
+            KeyCode::Char('y') => by_key("yes"),
+            KeyCode::Char('a') => by_key("session"),
+            KeyCode::Char('n') => by_key("no"),
+            KeyCode::Up => {
+                self.ask_at = self.ask_at.saturating_sub(1);
+                None
+            }
+            KeyCode::Down => {
+                self.ask_at = (self.ask_at + 1).min(n.saturating_sub(1));
+                None
+            }
+            KeyCode::Enter => Some(self.ask_at).filter(|i| *i < n),
+            _ => None,
+        }?;
+        Some(Act::Answer {
+            node: node.to_owned(),
+            ask: ask.id.clone(),
+            key: ask.options[at].key.clone(),
+        })
+    }
+
+    fn pop_key(&mut self, conv: &Conversation, ev: &KeyEvent) -> Option<Act> {
+        let node = conv.head.id.clone();
+        match self.pop.as_mut()? {
+            Pop::Name(e) => match ev.code {
+                KeyCode::Esc => self.pop = None,
+                KeyCode::Enter => {
+                    let name = e.text().trim().to_owned();
+                    self.pop = None;
+                    return (!name.is_empty()).then_some(Act::Name { node, name });
+                }
+                _ => {
+                    e.edit(ev);
+                }
+            },
+            Pop::Pick { of, at } => {
+                let n = of.choices().len();
+                match ev.code {
+                    KeyCode::Esc => self.pop = None,
+                    KeyCode::Up | KeyCode::Char('k') => *at = at.saturating_sub(1),
+                    KeyCode::Down | KeyCode::Char('j') => *at = (*at + 1).min(n - 1),
+                    KeyCode::Enter => {
+                        let act = choose(&node, *of, *at);
+                        self.pop = None;
+                        return act;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        None
+    }
+
+    /// `↵`: send the line, or open the list a bare command stands for.
+    fn submit(&mut self, conv: &Conversation) -> Option<Act> {
+        let node = conv.head.id.clone();
+        let text = self.editor.text();
+        let line = text.trim();
+        if line.is_empty() {
+            return None;
+        }
+        let bare = match line {
+            "/model" => Some(Of::Model),
+            "/effort" => Some(Of::Effort),
+            "/mode" => Some(Of::Mode),
+            "/color" => Some(Of::Color),
+            _ => None,
+        };
+        if let Some(of) = bare {
+            self.editor.take();
+            self.open_pick(conv, of);
+            return None;
+        }
+        if line == "/rename" {
+            self.editor.take();
+            let mut e = Editor::default();
+            e.set(&conv.name);
+            self.pop = Some(Pop::Name(e));
+            return None;
+        }
+        let line = line.to_owned();
+        self.editor.take();
+        self.scroll = 0;
+        if let Some(command) = line
+            .strip_prefix('!')
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+        {
+            return Some(Act::Shell {
+                node,
+                command: command.to_owned(),
+            });
+        }
+        if matches!(conv.status, ConvStatus::Dead | ConvStatus::Resuming) {
+            self.retaking = true;
+        }
+        // Only the pictures whose mark is still in the line go.
+        let images = std::mem::take(&mut self.images)
+            .into_iter()
+            .filter(|(n, _)| line.contains(&format!("[Imagen#{n}]")))
+            .map(|(_, image)| image)
+            .collect();
+        Some(Act::Send {
+            node,
+            text: line,
+            images,
+        })
+    }
+
+    fn open_pick(&mut self, conv: &Conversation, of: Of) {
+        let current = current_of(conv, of);
+        let at = of
+            .choices()
+            .iter()
+            .position(|(v, _)| *v == current)
+            .unwrap_or(0);
+        self.pop = Some(Pop::Pick { of, at });
+    }
+
+    fn copy(&mut self, conv: &Conversation, item: u32, turn: bool) -> Option<Act> {
+        let text = if turn {
+            turn_text(conv, item)
+        } else {
+            item_text(conv, item)
+        };
+        if text.is_empty() {
+            return None;
+        }
+        let lines = text.lines().count();
+        self.says = format!(
+            "copiado · {lines} {} · {} caracteres",
+            if lines == 1 { "línea" } else { "líneas" },
+            text.chars().count()
+        );
+        Some(Act::Copy(text))
+    }
+
+    /// The item before or after the one picked.
+    fn step_item(&mut self, conv: &Conversation, item: u32, down: bool) {
+        let last = conv.first + conv.items.len() as u32;
+        let next = if down {
+            (item + 1).min(last.saturating_sub(1))
+        } else {
+            item.saturating_sub(1).max(conv.first)
+        };
+        self.picked = Some(next);
+    }
+
+    /// `^O`: open or close the output of the item picked, or of the last tool or agent.
+    fn toggle_open(&mut self, conv: &Conversation) {
+        let target = self.picked.or_else(|| {
+            conv.items
+                .iter()
+                .rposition(|i| {
+                    matches!(
+                        i,
+                        Item::Tool { .. } | Item::Agent { .. } | Item::Shell { .. }
+                    )
+                })
+                .map(|i| conv.first + i as u32)
+        });
+        if let Some(t) = target
+            && !self.open.remove(&t)
+        {
+            self.open.insert(t);
+        }
+    }
+
+    pub fn scroll_by(&mut self, up: bool, n: usize) {
+        self.scroll = if up {
+            (self.scroll + n).min(self.most.get())
+        } else {
+            self.scroll.saturating_sub(n)
+        };
+    }
+
+    // ---- the mouse ----
+
+    /// A click at (`x`, `y`) in a pane whose box is `rect` (`(ix, iy, iw, ih)` its inner part).
+    pub fn click(
+        &mut self,
+        conv: &Conversation,
+        (ix, iy, iw, ih): (usize, usize, usize, usize),
+        x: usize,
+        y: usize,
+    ) -> Option<Act> {
+        if iw < 12 || ih < 8 {
+            return None;
+        }
+        let node = conv.head.id.clone();
+        let field = self.field(iw);
+        let geo = self.geo(conv, (iy, ih), field.band_rows());
+        if self.pop.is_none() && conv.ask.is_none() && self.files_open() {
+            let h = self.files.len() + 2;
+            let top = geo.band.0.saturating_sub(h);
+            if y > top && y + 1 < top + h {
+                self.take_file(y - top - 1);
+            } else {
+                self.dismissed.clone_from(&self.files_for);
+            }
+            return None;
+        }
+        if let Some(Pop::Pick { of, .. }) = &self.pop {
+            let of = *of;
+            let h = of.choices().len() + 2;
+            let (px, py) = (ix, geo.band.0.saturating_sub(h));
+            if (px..px + 34.min(iw)).contains(&x) && y > py && y + 1 < py + h {
+                let act = choose(&node, of, y - py - 1);
+                self.pop = None;
+                return act;
+            }
+            self.pop = None;
+            return None;
+        }
+        if self.pop.is_some() {
+            return None;
+        }
+        if y == geo.foot {
+            let (label, _) = mode_look(conv.mode);
+            let left = ix + 1..ix + 1 + label.chars().count();
+            let right = (ix + iw).saturating_sub(conv.model.chars().count() + 1)..ix + iw;
+            if left.contains(&x) {
+                self.open_pick(conv, Of::Mode);
+            } else if right.contains(&x) {
+                self.open_pick(conv, Of::Model);
+            }
+            return None;
+        }
+        if let Some(ask) = &conv.ask {
+            let n = ask.options.len();
+            let first = (geo.band.0 + geo.band.1).saturating_sub(2 + n);
+            if y >= first && y < first + n {
+                self.ask_at = y - first;
+                return Some(Act::Answer {
+                    node,
+                    ask: ask.id.clone(),
+                    key: ask.options[y - first].key.clone(),
+                });
+            }
+            return None;
+        }
+        let first_text = geo.band.0 + Field::FIRST_TEXT;
+        if y == first_text && x == field::send_at(ix, iw) {
+            return self.submit(conv);
+        }
+        if y == first_text
+            && self.working(conv)
+            && (field::stop_at(ix, iw)..field::stop_at(ix, iw) + 5).contains(&x)
+        {
+            return Some(Act::Interrupt { node });
+        }
+        let (ly, lh) = geo.list;
+        if (ly..ly + lh).contains(&y) {
+            let lines = self.lines(conv, iw - 2);
+            let most = lines.len().saturating_sub(lh);
+            let start = most - self.scroll.min(most);
+            let top = ly + lh.saturating_sub(lines.len());
+            let hit = y
+                .checked_sub(top)
+                .and_then(|r| lines.get(start + r))
+                .map(|l| l.item);
+            self.picked = hit;
+            if let Some(i) = hit
+                && let Some(item) = conv.items.get((i - conv.first) as usize)
+                && matches!(
+                    item,
+                    Item::Tool { .. } | Item::Agent { .. } | Item::Shell { .. }
+                )
+                && !self.open.remove(&i)
+            {
+                self.open.insert(i);
+            }
+        }
+        None
+    }
+
+    /// A click on the pane's title (`rect` is the pane's whole box): the name can be changed.
+    pub fn click_title(
+        &mut self,
+        conv: &Conversation,
+        (x, y, w, _): (usize, usize, usize, usize),
+        cx: usize,
+        cy: usize,
+    ) -> bool {
+        let len = title(conv).chars().count().min(w.saturating_sub(6)) + 2;
+        if cy == y && cx >= x + 2 && cx < x + 2 + len {
+            let mut e = Editor::default();
+            e.set(&conv.name);
+            self.pop = Some(Pop::Name(e));
+            return true;
+        }
+        false
+    }
+}
+
+/// The pane's title: what it runs and the conversation's name.
+pub fn title(conv: &Conversation) -> String {
+    format!("claude · {}", conv.name)
+}
+
+pub fn accent_rgb(a: Accent) -> Rgb {
+    match a {
+        Accent::Blue => look::blue(),
+        Accent::Green => look::green(),
+        Accent::Yellow => look::yellow(),
+        Accent::Red => look::red(),
+        Accent::Magenta => look::magenta(),
+        Accent::Cyan => look::cyan(),
+    }
+}
+
+/// How a mode is written in the footer: dim for manual, magenta for accept edits, cyan for plan and yellow for auto (REQ-402).
+fn mode_look(m: Mode) -> (&'static str, Rgb) {
+    match m {
+        Mode::Manual => ("manual", look::dim()),
+        Mode::AcceptEdits => ("accept edits", look::magenta()),
+        Mode::Plan => ("plan", look::cyan()),
+        Mode::Auto => ("auto", look::yellow()),
+    }
+}
+
+fn next_mode(m: Mode) -> Mode {
+    match m {
+        Mode::Manual => Mode::AcceptEdits,
+        Mode::AcceptEdits => Mode::Plan,
+        Mode::Plan => Mode::Auto,
+        Mode::Auto => Mode::Manual,
+    }
+}
+
+/// The value the conversation has now, as the list names it.
+fn current_of(conv: &Conversation, of: Of) -> String {
+    match of {
+        Of::Model => MODELS
+            .iter()
+            .find(|(v, _)| conv.model.contains(v))
+            .map_or(conv.model.clone(), |(v, _)| (*v).to_owned()),
+        Of::Effort => conv.effort.clone(),
+        Of::Mode => conv.mode.flag().to_owned(),
+        Of::Color => format!("{:?}", conv.accent).to_lowercase(),
+    }
+}
+
+fn choose(node: &str, of: Of, at: usize) -> Option<Act> {
+    let (value, _) = *of.choices().get(at)?;
+    let node = node.to_owned();
+    Some(match of {
+        Of::Model => Act::Model {
+            node,
+            model: value.to_owned(),
+        },
+        Of::Effort => Act::Effort {
+            node,
+            effort: value.to_owned(),
+        },
+        Of::Mode => Act::Mode {
+            node,
+            mode: Mode::from_flag(value)?,
+        },
+        Of::Color => Act::Color {
+            node,
+            accent: match value {
+                "blue" => Accent::Blue,
+                "green" => Accent::Green,
+                "yellow" => Accent::Yellow,
+                "red" => Accent::Red,
+                "magenta" => Accent::Magenta,
+                _ => Accent::Cyan,
+            },
+        },
+    })
+}
+
+fn state_colour(s: ToolState) -> Rgb {
+    match s {
+        ToolState::Run | ToolState::Ask => look::yellow(),
+        ToolState::Ok => look::green(),
+        ToolState::Denied | ToolState::Failed => look::red(),
+    }
+}
+
+fn sign_char(s: DiffSign) -> char {
+    match s {
+        DiffSign::Add => '+',
+        DiffSign::Del => '-',
+        DiffSign::Same => ' ',
+    }
+}
+
+/// A diff line's background and text colour, from the theme.
+fn tint_of(s: DiffSign) -> (Rgb, Rgb) {
+    match s {
+        DiffSign::Add => (look::add_bg(), look::fg()),
+        DiffSign::Del => (look::del_bg(), look::fg()),
+        DiffSign::Same => (look::panel(), look::dim()),
+    }
+}
+
+/// The shortcut letter each option of a permission has.
+fn keys_of(ask: &Ask) -> Vec<Option<char>> {
+    ask.options
+        .iter()
+        .map(|o| match o.key.as_str() {
+            "yes" => Some('y'),
+            "session" => Some('a'),
+            "no" => Some('n'),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Rows the box that asks takes: its borders, its title, what it is about, the options and the hint.
+fn ask_rows(a: &Ask) -> usize {
+    3 + usize::from(a.command.is_some())
+        + a.plan.len().min(8)
+        + a.diff.len().min(DIFF_SHOWN)
+        + a.options.len()
+        + 1
+}
+
+fn diff_lines(
+    diff: &[DiffLine],
+    open: bool,
+    w: usize,
+    push: &mut impl FnMut(Vec<(String, Style)>, Option<Rgb>),
+) {
+    let shown = if open { OPEN_SHOWN } else { DIFF_SHOWN };
+    for d in diff.iter().take(shown) {
+        let (tint, fg) = tint_of(d.sign);
+        let n = d.n.map_or("    ".to_owned(), |n| format!("{n:>4}"));
+        let text = format!("{n} {} {}", sign_char(d.sign), d.text);
+        push(
+            vec![
+                ("     ".to_owned(), Style::fg(fg).on(tint)),
+                (clip(&text, w.saturating_sub(5)), Style::fg(fg).on(tint)),
+            ],
+            (d.sign != DiffSign::Same).then_some(tint),
+        );
+    }
+    if diff.len() > shown {
+        push(
+            vec![(
+                format!("     … {} líneas más · ^O", diff.len() - shown),
+                Style::fg(look::dim()),
+            )],
+            None,
+        );
+    }
+}
+
+pub fn secs(ms: u64) -> String {
+    let s = ms / 1000;
+    if s < 60 {
+        format!("{s} s")
+    } else {
+        format!("{} min {} s", s / 60, s % 60)
+    }
+}
+
+fn kilo(n: u64) -> String {
+    if n >= 1000 {
+        format!("{:.1} k", n as f64 / 1000.0)
+    } else {
+        n.to_string()
+    }
+}
+
+fn usd(micro: u64) -> String {
+    format!("${},{:02}", micro / 1_000_000, (micro % 1_000_000) / 10_000)
+}
+
+// ---- text ----
+
+const CODE: u8 = 1;
+const BOLD: u8 = 2;
+
+/// `text` broken into rows of at most `width` columns, with `` `code` `` in `code` and `**bold**`
+/// bold; a fenced block is code as it is. A row that continues a list item hangs under its text.
+fn wrap(text: &str, width: usize, plain: Style, code: Style) -> Vec<Vec<(String, Style)>> {
+    let width = width.max(4);
+    let mut rows = Vec::new();
+    let mut fenced = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+            rows.push(vec![(clip(line, width), Style::fg(look::dim()))]);
+            continue;
+        }
+        if fenced {
+            rows.push(vec![(clip(line, width), code)]);
+            continue;
+        }
+        let tagged = tag(line);
+        let hang = hang_of(line);
+        for row in break_words(&tagged, width, hang) {
+            rows.push(spans_of(&row, plain, code));
+        }
+    }
+    if rows.is_empty() {
+        rows.push(vec![]);
+    }
+    rows
+}
+
+/// The characters of a line with what they are: code or bold, the marks themselves dropped.
+fn tag(line: &str) -> Vec<(char, u8)> {
+    let heading = line.starts_with('#');
+    let chars: Vec<char> = line.chars().collect();
+    let mut out = Vec::new();
+    let (mut code, mut bold) = (false, heading);
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '`' => code = !code,
+            '*' if !code && chars.get(i + 1) == Some(&'*') => {
+                bold = !bold;
+                i += 1;
+            }
+            c => out.push((c, if code { CODE } else { 0 } | if bold { BOLD } else { 0 })),
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Columns a wrapped row of a list item hangs by: the indent and the bullet.
+fn hang_of(line: &str) -> usize {
+    let indent = line.len() - line.trim_start().len();
+    let rest = line.trim_start();
+    let bullet = if rest.starts_with("- ") || rest.starts_with("* ") {
+        2
+    } else {
+        let digits = rest.chars().take_while(char::is_ascii_digit).count();
+        if digits > 0 && rest[digits..].starts_with(". ") {
+            digits + 2
+        } else {
+            0
+        }
+    };
+    indent + bullet
+}
+
+fn break_words(cells: &[(char, u8)], width: usize, hang: usize) -> Vec<Vec<(char, u8)>> {
+    let hang = hang.min(width / 2);
+    let fresh = || vec![(' ', 0); hang];
+    let mut rows: Vec<Vec<(char, u8)>> = vec![vec![]];
+    let mut i = 0;
+    while i < cells.len() {
+        let mut end = i;
+        while end < cells.len() && cells[end].0 != ' ' {
+            end += 1;
+        }
+        let word_end = end;
+        while end < cells.len() && cells[end].0 == ' ' {
+            end += 1;
+        }
+        let (mut word, spaces) = (&cells[i..word_end], &cells[word_end..end]);
+        i = end;
+        let has_text = |r: &Vec<(char, u8)>| r.iter().any(|(c, _)| *c != ' ');
+        if rows
+            .last()
+            .is_some_and(|r| r.len() + word.len() > width && has_text(r))
+        {
+            rows.push(fresh());
+        }
+        while let Some(row) = rows.last_mut() {
+            let room = width.saturating_sub(row.len());
+            if word.len() <= room || room == 0 {
+                break;
+            }
+            row.extend_from_slice(&word[..room]);
+            word = &word[room..];
+            rows.push(fresh());
+        }
+        if let Some(row) = rows.last_mut() {
+            row.extend_from_slice(word);
+            row.extend_from_slice(spaces);
+        }
+    }
+    for row in &mut rows {
+        while row.last().is_some_and(|(c, _)| *c == ' ') {
+            row.pop();
+        }
+    }
+    rows
+}
+
+fn spans_of(row: &[(char, u8)], plain: Style, code: Style) -> Vec<(String, Style)> {
+    let mut out: Vec<(String, Style)> = Vec::new();
+    let mut last = None;
+    for (c, flags) in row {
+        if last == Some(*flags) {
+            if let Some((s, _)) = out.last_mut() {
+                s.push(*c);
+            }
+            continue;
+        }
+        let mut style = if flags & CODE != 0 { code } else { plain };
+        if flags & BOLD != 0 {
+            style = style.bold();
+        }
+        out.push((c.to_string(), style));
+        last = Some(*flags);
+    }
+    out
+}
+
+// ---- what is copied ----
+
+/// An item as the text that is copied from it.
+fn plain_of(item: &Item) -> String {
+    match item {
+        Item::User { text, .. } | Item::Text { text, .. } | Item::Note { text, .. } => text.clone(),
+        Item::Tool {
+            name,
+            arg,
+            summary,
+            output,
+            diff,
+            ..
+        } => {
+            let mut v = vec![format!("{name}({arg})")];
+            v.extend(summary.iter().cloned());
+            v.extend(
+                diff.iter()
+                    .map(|d| format!("{} {}", sign_char(d.sign), d.text)),
+            );
+            v.extend(output.iter().cloned());
+            v.join("\n")
+        }
+        Item::Agent {
+            name,
+            description,
+            steps,
+            ..
+        } => std::iter::once(format!("Agent({name}) {description}"))
+            .chain(steps.iter().cloned())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Item::Shell {
+            command, output, ..
+        } => std::iter::once(format!("! {command}"))
+            .chain(output.iter().cloned())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Item::Out { lines } => lines.join("\n"),
+        Item::Result { ms, tools, cost } => {
+            format!(
+                "Listo en {} · {tools} herramientas · {}",
+                secs(*ms),
+                usd(*cost)
+            )
+        }
+        Item::Divider { text, .. } => text.clone(),
+    }
+}
+
+fn item_text(conv: &Conversation, abs: u32) -> String {
+    conv.items
+        .get(abs.wrapping_sub(conv.first) as usize)
+        .map(plain_of)
+        .unwrap_or_default()
+}
+
+/// The whole turn the item belongs to: from the person's message to the next one.
+fn turn_text(conv: &Conversation, abs: u32) -> String {
+    let at = abs.wrapping_sub(conv.first) as usize;
+    if at >= conv.items.len() {
+        return String::new();
+    }
+    let start = conv.items[..=at]
+        .iter()
+        .rposition(|i| matches!(i, Item::User { .. }))
+        .unwrap_or(0);
+    let end = conv.items[at + 1..]
+        .iter()
+        .position(|i| matches!(i, Item::User { .. }))
+        .map_or(conv.items.len(), |p| at + 1 + p);
+    conv.items[start..end]
+        .iter()
+        .filter(|i| !matches!(i, Item::Divider { .. }))
+        .map(plain_of)
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::*;
+
+    /// The conversation of the shared fixture: a permission waits for an edit.
+    fn fixture() -> Conversation {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../contract/fixtures/daemon");
+        let doc: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("snapshot-conversation.json")).unwrap(),
+        )
+        .unwrap();
+        serde_json::from_value(doc["node"].clone()).unwrap()
+    }
+
+    /// The same with nothing waiting and nothing running.
+    fn idle() -> Conversation {
+        let mut c = fixture();
+        c.ask = None;
+        c.status = ConvStatus::Idle;
+        c.since = None;
+        c
+    }
+
+    const INNER: (usize, usize, usize, usize) = (2, 1, 96, 58);
+
+    fn frame(ui: &Ui, conv: &Conversation) -> (Grid, Vec<String>) {
+        let mut g = Grid::new(100, 60);
+        let chips = [("…/proj".to_owned(), look::dim())];
+        ui.draw(&mut g, conv, INNER, &chips, true, 1_792_110_012_000);
+        let rows = g.rows_plain();
+        (g, rows)
+    }
+
+    fn row_of(rows: &[String], text: &str) -> usize {
+        rows.iter()
+            .position(|r| r.contains(text))
+            .unwrap_or_else(|| panic!("{text:?} is not drawn:\n{}", rows.join("\n")))
+    }
+
+    fn press(ui: &mut Ui, conv: &Conversation, code: KeyCode) -> Option<Act> {
+        ui.key(conv, &KeyEvent::new(code, KeyModifiers::NONE))
+    }
+
+    fn type_in(ui: &mut Ui, conv: &Conversation, text: &str) {
+        for c in text.chars() {
+            assert_eq!(press(ui, conv, KeyCode::Char(c)), None);
+        }
+    }
+
+    #[test]
+    fn each_item_is_drawn_as_the_prototype_has_it() {
+        let conv = idle();
+        let (_, rows) = frame(&Ui::default(), &conv);
+        for text in [
+            "❯ arregla el test que falla en auth::expired",
+            "▣ 1 imagen(es)",
+            "● Voy a mirar el test y el código que prueba.▍",
+            "● Read(src/auth.rs)",
+            "⎿  Leídas 142 líneas",
+            "● Edit(src/auth.rs)",
+            "  41 - ",
+            "  41 + ",
+            "● Artifact(Informe de pruebas)",
+            "permitido desde el móvil",
+            "https://claude.ai/artifact/6HbvGgivzfNgDnkzpDjf4Y",
+            "● Agent(Explore) buscar los usos de verify",
+            "3 herramientas · 22.0 k tokens · 6 s",
+            "! git status",
+            "nothing to commit, working tree clean",
+            "⎿  contexto 12 % · 24k de 200k",
+            "⎿  Interrumpido por ti",
+            "✻ Listo en 11 s · 3 herramientas · $0,06",
+            "el daemon se reinició · 20:10",
+        ] {
+            row_of(&rows, text);
+        }
+        assert!(
+            !rows.iter().any(|r| r.contains("pub fn verify")),
+            "the output of a tool is under a click"
+        );
+    }
+
+    #[test]
+    fn a_message_has_its_band_and_the_accent_marks_it() {
+        let conv = idle();
+        let (g, rows) = frame(&Ui::default(), &conv);
+        let y = row_of(&rows, "❯ arregla");
+        let mark = g.cells[y * g.cols + 4].1;
+        assert_eq!(mark.fg, Some(look::magenta()), "the conversation's colour");
+        assert_eq!(g.cells[y * g.cols + 30].1.bg, Some(look::sel()), "the band");
+        let mut other = idle();
+        other.accent = Accent::Cyan;
+        let (g, _) = frame(&Ui::default(), &other);
+        assert_eq!(g.cells[y * g.cols + 4].1.fg, Some(look::cyan()));
+    }
+
+    #[test]
+    fn a_tool_is_yellow_while_it_runs_green_when_it_worked_and_red_when_denied() {
+        let mut conv = idle();
+        conv.items = ["run", "ok", "denied", "failed"]
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                serde_json::from_value(serde_json::json!({
+                    "t": "tool", "id": format!("t{i}"), "name": "Bash", "arg": s, "state": s
+                }))
+                .unwrap()
+            })
+            .collect();
+        conv.first = 0;
+        let (g, rows) = frame(&Ui::default(), &conv);
+        let dot = |arg: &str| {
+            let y = row_of(&rows, &format!("Bash({arg})"));
+            g.cells[y * g.cols + 4].1.fg
+        };
+        assert_eq!(dot("run"), Some(look::yellow()));
+        assert_eq!(dot("ok"), Some(look::green()));
+        assert_eq!(dot("denied"), Some(look::red()));
+        assert_eq!(dot("failed"), Some(look::red()));
+    }
+
+    #[test]
+    fn an_edit_shows_its_lines_tinted_from_the_theme() {
+        let conv = idle();
+        let (g, rows) = frame(&Ui::default(), &conv);
+        let add = row_of(&rows, "claims.exp <= now");
+        let del = row_of(&rows, "claims.exp < now");
+        assert_eq!(g.cells[add * g.cols + 40].1.bg, Some(look::add_bg()));
+        assert_eq!(g.cells[del * g.cols + 40].1.bg, Some(look::del_bg()));
+    }
+
+    #[test]
+    fn the_footer_has_the_mode_at_the_left_and_the_model_at_the_right_and_nothing_else() {
+        let mut conv = idle();
+        let (g, rows) = frame(&Ui::default(), &conv);
+        let foot = &rows[INNER.1 + INNER.3 - 1];
+        assert!(foot.trim_start().starts_with("manual"), "{foot:?}");
+        assert!(foot.trim_end().ends_with("sonnet-5.5"), "{foot:?}");
+        let y = INNER.1 + INNER.3 - 1;
+        assert_eq!(g.cells[y * g.cols + 3].1.fg, Some(look::dim()));
+        assert!(foot.contains("⚙ 1"), "one task runs: {foot:?}");
+        for (mode, text, colour) in [
+            (Mode::AcceptEdits, "accept edits", look::magenta()),
+            (Mode::Plan, "plan", look::cyan()),
+            (Mode::Auto, "auto", look::yellow()),
+        ] {
+            conv.mode = mode;
+            let (g, rows) = frame(&Ui::default(), &conv);
+            assert!(rows[y].contains(text), "{mode:?}");
+            assert_eq!(g.cells[y * g.cols + 3].1.fg, Some(colour), "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn the_working_line_says_what_claude_does_for_how_long_and_how_to_stop() {
+        let mut conv = idle();
+        conv.status = ConvStatus::Thinking;
+        conv.since = Some(1_792_110_000_000);
+        let (_, rows) = frame(&Ui::default(), &conv);
+        row_of(&rows, "Pensando… (12 s · esc interrumpe)");
+        row_of(&rows, "■ esc");
+        conv.status = ConvStatus::Idle;
+        let (_, rows) = frame(&Ui::default(), &conv);
+        assert!(!rows.iter().any(|r| r.contains("esc interrumpe")));
+    }
+
+    #[test]
+    fn a_dead_engine_says_it_resumes_only_once_a_message_is_sent() {
+        let mut conv = idle();
+        conv.status = ConvStatus::Dead;
+        let mut ui = Ui::default();
+        let (_, rows) = frame(&ui, &conv);
+        assert!(!rows.iter().any(|r| r.contains("retomando")));
+        type_in(&mut ui, &conv, "sigue");
+        assert!(matches!(
+            press(&mut ui, &conv, KeyCode::Enter),
+            Some(Act::Send { .. })
+        ));
+        let (_, rows) = frame(&ui, &conv);
+        row_of(&rows, "retomando conversación…");
+        conv.status = ConvStatus::Idle;
+        ui.sync(&conv);
+        let (_, rows) = frame(&ui, &conv);
+        assert!(!rows.iter().any(|r| r.contains("retomando")));
+    }
+
+    #[test]
+    fn the_field_has_the_chips_the_line_and_what_waits() {
+        let mut conv = idle();
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "hola");
+        let (_, rows) = frame(&ui, &conv);
+        row_of(&rows, "…/proj");
+        row_of(&rows, "en cola 1");
+        row_of(&rows, "❯ hola");
+        assert!(rows.iter().any(|r| r.contains('➤')));
+        conv.queue.clear();
+        let (_, rows) = frame(&Ui::default(), &conv);
+        row_of(&rows, "escribe un mensaje");
+    }
+
+    #[test]
+    fn enter_sends_the_line_and_a_line_of_many_rows_goes_as_one_message() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "hola");
+        ui.key(
+            &conv,
+            &KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL),
+        );
+        type_in(&mut ui, &conv, "adiós");
+        assert_eq!(
+            press(&mut ui, &conv, KeyCode::Enter),
+            Some(Act::Send {
+                node: conv.head.id.clone(),
+                text: "hola\nadiós".into(),
+                images: vec![]
+            })
+        );
+        assert_eq!(ui.editor.text(), "");
+        assert_eq!(
+            press(&mut ui, &conv, KeyCode::Enter),
+            None,
+            "nothing to send"
+        );
+        ui.paste("uno\r\ndos\ntres");
+        assert_eq!(
+            ui.editor.text(),
+            "uno\ndos\ntres",
+            "a paste is not three Enters"
+        );
+    }
+
+    #[test]
+    fn esc_interrupts_only_what_runs_and_shift_tab_goes_round_the_modes() {
+        let mut conv = idle();
+        let mut ui = Ui::default();
+        assert_eq!(press(&mut ui, &conv, KeyCode::Esc), None);
+        conv.status = ConvStatus::Streaming;
+        assert_eq!(
+            press(&mut ui, &conv, KeyCode::Esc),
+            Some(Act::Interrupt {
+                node: conv.head.id.clone()
+            })
+        );
+        let mut seen = vec![];
+        for mode in [Mode::Manual, Mode::AcceptEdits, Mode::Plan, Mode::Auto] {
+            conv.mode = mode;
+            match press(&mut ui, &conv, KeyCode::BackTab) {
+                Some(Act::Mode { mode, .. }) => seen.push(mode),
+                other => panic!("{other:?}"),
+            }
+        }
+        assert_eq!(
+            seen,
+            [Mode::AcceptEdits, Mode::Plan, Mode::Auto, Mode::Manual]
+        );
+    }
+
+    #[test]
+    fn a_bare_command_opens_its_list_and_one_with_a_value_goes_to_the_daemon() {
+        let conv = idle();
+        let node = conv.head.id.clone();
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "/model");
+        assert_eq!(press(&mut ui, &conv, KeyCode::Enter), None);
+        assert!(ui.has_pop());
+        let (_, rows) = frame(&ui, &conv);
+        for m in ["modelo", "fable", "opus", "sonnet", "haiku"] {
+            row_of(&rows, m);
+        }
+        // the one in force is lit, and ↓ ↵ chooses the next
+        press(&mut ui, &conv, KeyCode::Down);
+        assert_eq!(
+            press(&mut ui, &conv, KeyCode::Enter),
+            Some(Act::Model {
+                node: node.clone(),
+                model: "haiku".into()
+            })
+        );
+        assert!(!ui.has_pop());
+        type_in(&mut ui, &conv, "/effort");
+        press(&mut ui, &conv, KeyCode::Enter);
+        press(&mut ui, &conv, KeyCode::Down);
+        assert_eq!(
+            press(&mut ui, &conv, KeyCode::Enter),
+            Some(Act::Effort {
+                node: node.clone(),
+                effort: "xhigh".into()
+            })
+        );
+        type_in(&mut ui, &conv, "/mode");
+        press(&mut ui, &conv, KeyCode::Enter);
+        press(&mut ui, &conv, KeyCode::Down);
+        press(&mut ui, &conv, KeyCode::Down);
+        assert_eq!(
+            press(&mut ui, &conv, KeyCode::Enter),
+            Some(Act::Mode {
+                node: node.clone(),
+                mode: Mode::Plan
+            })
+        );
+        type_in(&mut ui, &conv, "/color");
+        press(&mut ui, &conv, KeyCode::Enter);
+        let (_, rows) = frame(&ui, &conv);
+        for c in ["azul", "verde", "amarillo", "rojo", "magenta", "cian"] {
+            row_of(&rows, c);
+        }
+        press(&mut ui, &conv, KeyCode::Down);
+        assert_eq!(
+            press(&mut ui, &conv, KeyCode::Enter),
+            Some(Act::Color {
+                node: node.clone(),
+                accent: Accent::Cyan
+            })
+        );
+        type_in(&mut ui, &conv, "/effort low");
+        assert_eq!(
+            press(&mut ui, &conv, KeyCode::Enter),
+            Some(Act::Send {
+                node,
+                text: "/effort low".into(),
+                images: vec![]
+            })
+        );
+        type_in(&mut ui, &conv, "/model");
+        press(&mut ui, &conv, KeyCode::Enter);
+        assert_eq!(press(&mut ui, &conv, KeyCode::Esc), None);
+        assert!(!ui.has_pop(), "esc lets the list go");
+    }
+
+    #[test]
+    fn a_name_is_asked_for_in_a_field_and_the_title_opens_it() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "/rename");
+        press(&mut ui, &conv, KeyCode::Enter);
+        let (_, rows) = frame(&ui, &conv);
+        row_of(&rows, "nombre");
+        row_of(&rows, "arregla el test que falla e…");
+        for _ in 0..conv.name.chars().count() {
+            press(&mut ui, &conv, KeyCode::Backspace);
+        }
+        type_in(&mut ui, &conv, "auth");
+        assert_eq!(
+            press(&mut ui, &conv, KeyCode::Enter),
+            Some(Act::Name {
+                node: conv.head.id.clone(),
+                name: "auth".into()
+            })
+        );
+        let mut ui = Ui::default();
+        assert!(ui.click_title(&conv, (1, 0, 100, 60), 5, 0));
+        assert!(ui.has_pop());
+        assert!(!Ui::default().click_title(&conv, (1, 0, 100, 60), 5, 3));
+    }
+
+    #[test]
+    fn a_line_that_starts_with_a_bang_is_a_shell_line() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "!git status");
+        assert_eq!(
+            press(&mut ui, &conv, KeyCode::Enter),
+            Some(Act::Shell {
+                node: conv.head.id.clone(),
+                command: "git status".into()
+            })
+        );
+    }
+
+    #[test]
+    fn while_a_permission_waits_only_its_keys_do_anything() {
+        let conv = fixture();
+        let node = conv.head.id.clone();
+        let answer = |key: &str| {
+            Some(Act::Answer {
+                node: node.clone(),
+                ask: "req-1".into(),
+                key: key.into(),
+            })
+        };
+        let mut ui = Ui::default();
+        let (g, rows) = frame(&ui, &conv);
+        row_of(&rows, "permiso · Edit");
+        row_of(&rows, "Editar src/auth.rs");
+        row_of(&rows, "1 Sí");
+        row_of(&rows, "2 Sí, y no volver a preguntar por ediciones");
+        row_of(&rows, "3 No, y decirle a Claude qué hacer distinto");
+        row_of(&rows, "1 2 3 · y a n · ↑↓ ↵");
+        let add = row_of(&rows, "+ ");
+        assert_eq!(
+            g.cells[add * g.cols + 20].1.bg,
+            Some(look::add_bg()),
+            "the diff is tinted in the box too"
+        );
+        assert!(
+            !rows.iter().any(|r| r.contains("escribe un mensaje")),
+            "the box is where the field was"
+        );
+        for c in "hol x".chars() {
+            assert_eq!(press(&mut ui, &conv, KeyCode::Char(c)), None);
+        }
+        assert_eq!(ui.editor.text(), "", "no other key reaches the field");
+        assert_eq!(press(&mut ui, &conv, KeyCode::Char('y')), answer("yes"));
+        assert_eq!(press(&mut ui, &conv, KeyCode::Char('a')), answer("session"));
+        assert_eq!(press(&mut ui, &conv, KeyCode::Char('n')), answer("no"));
+        assert_eq!(press(&mut ui, &conv, KeyCode::Char('1')), answer("yes"));
+        assert_eq!(press(&mut ui, &conv, KeyCode::Char('2')), answer("session"));
+        assert_eq!(press(&mut ui, &conv, KeyCode::Char('3')), answer("no"));
+        assert_eq!(press(&mut ui, &conv, KeyCode::Char('4')), None);
+        press(&mut ui, &conv, KeyCode::Down);
+        press(&mut ui, &conv, KeyCode::Down);
+        press(&mut ui, &conv, KeyCode::Down);
+        assert_eq!(
+            press(&mut ui, &conv, KeyCode::Enter),
+            answer("no"),
+            "↓ stops at the last"
+        );
+        press(&mut ui, &conv, KeyCode::Up);
+        assert_eq!(press(&mut ui, &conv, KeyCode::Enter), answer("session"));
+        // a click on a row answers with it
+        let y = row_of(&rows, "2 Sí, y no volver");
+        assert_eq!(ui.click(&conv, INNER, 20, y), answer("session"));
+    }
+
+    #[test]
+    fn a_click_picks_an_item_and_c_copies_it_t_the_turn_and_esc_lets_it_go() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        let (_, rows) = frame(&ui, &conv);
+        let y = row_of(&rows, "Voy a mirar el test");
+        assert_eq!(ui.click(&conv, INNER, 20, y), None);
+        let (g, rows) = frame(&ui, &conv);
+        let y = row_of(&rows, "Voy a mirar el test");
+        assert_eq!(g.cells[y * g.cols + 2].0, '▌', "a bar lights it");
+        assert_eq!(
+            press(&mut ui, &conv, KeyCode::Char('c')),
+            Some(Act::Copy(
+                "Voy a mirar el test y el código que prueba.".into()
+            ))
+        );
+        assert_eq!(
+            ui.take_says().as_deref(),
+            Some("copiado · 1 línea · 43 caracteres")
+        );
+        match press(&mut ui, &conv, KeyCode::Char('t')) {
+            Some(Act::Copy(t)) => {
+                assert!(
+                    t.starts_with("arregla el test que falla en auth::expired"),
+                    "{t}"
+                );
+                assert!(
+                    t.contains("Edit(src/auth.rs)") && t.contains("git status"),
+                    "{t}"
+                );
+                assert!(
+                    !t.contains("el daemon se reinició"),
+                    "a divider is not the turn"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(ui.take_says().unwrap().starts_with("copiado · "));
+        assert_eq!(press(&mut ui, &conv, KeyCode::Esc), None);
+        let (g, rows) = frame(&ui, &conv);
+        let y = row_of(&rows, "Voy a mirar el test");
+        assert_ne!(g.cells[y * g.cols + 2].0, '▌');
+        // c is a letter again
+        type_in(&mut ui, &conv, "c");
+        assert_eq!(ui.editor.text(), "c");
+    }
+
+    #[test]
+    fn a_click_on_a_tool_opens_its_output_and_ctrl_o_does_too() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        let (_, rows) = frame(&ui, &conv);
+        let y = row_of(&rows, "● Read(src/auth.rs)");
+        ui.click(&conv, INNER, 10, y);
+        let (_, rows) = frame(&ui, &conv);
+        row_of(&rows, "pub fn verify(token: &str) -> bool {");
+        ui.click(&conv, INNER, 10, y);
+        let (_, rows) = frame(&ui, &conv);
+        assert!(
+            !rows.iter().any(|r| r.contains("pub fn verify")),
+            "again closes it"
+        );
+        // the agent's steps
+        let y = row_of(&rows, "● Agent(Explore)");
+        ui.click(&conv, INNER, 10, y);
+        let (_, rows) = frame(&ui, &conv);
+        row_of(&rows, "· Grep verify");
+        row_of(&rows, "· Read src/session.rs");
+        ui.click(&conv, INNER, 10, y);
+        // ^O opens the last tool, and closes it
+        let ctrl_o = KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL);
+        let mut lots = idle();
+        if let Some(Item::Shell { output, .. }) = lots
+            .items
+            .iter_mut()
+            .find(|i| matches!(i, Item::Shell { .. }))
+        {
+            *output = (0..30).map(|n| format!("línea {n}")).collect();
+        }
+        let mut ui = Ui::default();
+        let (_, rows) = frame(&ui, &lots);
+        assert!(!rows.iter().any(|r| r.contains("línea 20")));
+        row_of(&rows, "líneas más");
+        ui.key(&lots, &ctrl_o);
+        let (_, rows) = frame(&ui, &lots);
+        row_of(&rows, "línea 29");
+        ui.key(&lots, &ctrl_o);
+        let (_, rows) = frame(&ui, &lots);
+        assert!(!rows.iter().any(|r| r.contains("línea 29")));
+    }
+
+    #[test]
+    fn the_list_scrolls_with_the_page_keys_and_keeps_the_newest_at_the_bottom() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        let mut g = Grid::new(100, 22);
+        let draw = |ui: &Ui, g: &mut Grid| {
+            *g = Grid::new(100, 22);
+            ui.draw(g, &conv, (2, 1, 96, 20), &[], true, 0);
+            g.rows_plain()
+        };
+        let rows = draw(&ui, &mut g);
+        assert!(
+            rows.iter().any(|r| r.contains("el daemon se reinició")),
+            "the newest is shown"
+        );
+        assert!(!rows.iter().any(|r| r.contains("arregla el test")));
+        for _ in 0..8 {
+            press(&mut ui, &conv, KeyCode::PageUp);
+        }
+        let rows = draw(&ui, &mut g);
+        assert!(
+            rows.iter().any(|r| r.contains("arregla el test")),
+            "the oldest is reached"
+        );
+        ui.scroll_by(true, 1000);
+        assert!(
+            draw(&ui, &mut g)
+                .iter()
+                .any(|r| r.contains("arregla el test")),
+            "it does not go past it"
+        );
+        for _ in 0..8 {
+            press(&mut ui, &conv, KeyCode::PageDown);
+        }
+        assert!(
+            draw(&ui, &mut g)
+                .iter()
+                .any(|r| r.contains("el daemon se reinició"))
+        );
+        // sending goes back to the newest
+        ui.scroll_by(true, 5);
+        type_in(&mut ui, &conv, "x");
+        press(&mut ui, &conv, KeyCode::Enter);
+        assert_eq!(ui.scroll, 0);
+    }
+
+    #[test]
+    fn a_picture_goes_with_the_message_only_while_its_mark_is_in_the_line() {
+        let conv = idle();
+        let image = |d: &str| Image {
+            media_type: "image/jpeg".into(),
+            data: d.into(),
+        };
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "mira ");
+        ui.attach(image("AAAA"));
+        type_in(&mut ui, &conv, " y ");
+        ui.attach(image("BBBB"));
+        assert_eq!(ui.editor.text(), "mira [Imagen#1] y [Imagen#2]");
+        let (_, rows) = frame(&ui, &conv);
+        row_of(&rows, "▣ 2");
+        // the first mark is taken out
+        for _ in 0..13 {
+            press(&mut ui, &conv, KeyCode::Left);
+        }
+        ui.key(
+            &conv,
+            &KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL),
+        );
+        match press(&mut ui, &conv, KeyCode::Enter) {
+            Some(Act::Send { images, text, .. }) => {
+                assert_eq!(images, vec![image("BBBB")], "{text}");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_line_is_edited_with_the_cursor() {
+        let mut e = Editor::default();
+        e.insert("uno dos\ntres");
+        assert_eq!(e.cursor(), 12);
+        assert!(e.up());
+        assert_eq!(e.cursor(), 4, "the column is kept, as far as the line goes");
+        assert!(!e.up(), "the first line has nothing above");
+        assert!(e.down());
+        assert!(!e.down());
+        e.home();
+        e.insert(">");
+        e.end();
+        e.insert("<");
+        assert_eq!(e.text(), "uno dos\n>tres<");
+        e.word_back();
+        assert_eq!(e.text(), "uno dos\n", "^W takes the word before the cursor");
+        let mut e = Editor::default();
+        e.set("abc def");
+        e.kill_to_start();
+        assert_eq!(e.text(), "");
+        e.set("abc def");
+        e.cursor = 3;
+        e.kill_to_end();
+        assert_eq!(e.text(), "abc");
+        assert_eq!(e.take(), "abc");
+        assert_eq!(e.cursor(), 0);
+    }
+
+    #[test]
+    fn text_wraps_by_words_keeps_code_apart_and_hangs_a_list() {
+        let plain = Style::fg(look::fg());
+        let code = Style::fg(look::cyan());
+        let rows = |t: &str, w: usize| -> Vec<String> {
+            wrap(t, w, plain, code)
+                .into_iter()
+                .map(|r| r.into_iter().map(|(s, _)| s).collect())
+                .collect()
+        };
+        assert_eq!(
+            rows("uno dos tres cuatro", 9),
+            ["uno dos", "tres", "cuatro"]
+        );
+        assert_eq!(
+            rows("abcdefghij", 4),
+            ["abcd", "efgh", "ij"],
+            "a word longer than a row is cut"
+        );
+        assert_eq!(rows("a\n\nb", 10), ["a", "", "b"], "a blank line stays");
+        assert_eq!(
+            rows("- uno dos tres cuatro", 12),
+            ["- uno dos", "  tres", "  cuatro"]
+        );
+        let styled = wrap("usa `cargo test` ya", 40, plain, code);
+        assert_eq!(
+            styled[0],
+            [
+                ("usa ".to_owned(), plain),
+                ("cargo test".to_owned(), code),
+                (" ya".to_owned(), plain)
+            ]
+        );
+        let fenced = wrap("```rust\nlet x = 1;\n```", 40, plain, code);
+        assert_eq!(fenced[1], [("let x = 1;".to_owned(), code)]);
+        let bold = wrap("**ojo** aquí", 40, plain, code);
+        assert_eq!(bold[0][0], ("ojo".to_owned(), plain.bold()));
+    }
+
+    #[test]
+    fn an_at_asks_for_files_and_tab_puts_the_path_in_the_line() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "mira @s");
+        assert_eq!(ui.want_files().as_deref(), Some("s"));
+        assert_eq!(ui.want_files(), None, "asked once for each fragment");
+        type_in(&mut ui, &conv, "rc");
+        assert_eq!(ui.want_files().as_deref(), Some("src"));
+        ui.found("s", vec!["stale.rs".into()]);
+        let (_, rows) = frame(&ui, &conv);
+        assert!(
+            !rows.iter().any(|r| r.contains("stale.rs")),
+            "an answer for what is no longer typed is dropped"
+        );
+        ui.found("src", vec!["src/auth.rs".into(), "src/session.rs".into()]);
+        let (_, rows) = frame(&ui, &conv);
+        row_of(&rows, "archivos");
+        row_of(&rows, "src/auth.rs");
+        press(&mut ui, &conv, KeyCode::Down);
+        assert_eq!(press(&mut ui, &conv, KeyCode::Tab), None);
+        assert_eq!(ui.editor.text(), "mira @src/session.rs ");
+        let (_, rows) = frame(&ui, &conv);
+        assert!(!rows.iter().any(|r| r.contains("archivos")));
+        assert_eq!(ui.want_files(), None);
+        // Enter takes the one lit and sends nothing; esc closes the list and the line stays
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "@au");
+        ui.want_files();
+        ui.found("au", vec!["src/auth.rs".into()]);
+        assert_eq!(press(&mut ui, &conv, KeyCode::Enter), None);
+        assert_eq!(ui.editor.text(), "@src/auth.rs ");
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "@au");
+        ui.want_files();
+        ui.found("au", vec!["src/auth.rs".into()]);
+        press(&mut ui, &conv, KeyCode::Esc);
+        assert_eq!(ui.editor.text(), "@au");
+        assert!(!frame(&ui, &conv).1.iter().any(|r| r.contains("archivos")));
+        // an address is not a mention, nor is a bare @
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "yo@correo @");
+        assert_eq!(ui.want_files(), None);
+    }
+
+    #[test]
+    fn a_pane_too_small_draws_nothing_and_a_click_in_it_does_nothing() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        let mut g = Grid::new(20, 6);
+        ui.draw(&mut g, &conv, (1, 1, 10, 4), &[], true, 0);
+        assert!(g.rows_plain().iter().all(String::is_empty));
+        assert_eq!(ui.click(&conv, (1, 1, 10, 4), 3, 3), None);
+    }
+}

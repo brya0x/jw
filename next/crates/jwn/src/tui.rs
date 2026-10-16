@@ -16,14 +16,16 @@ use contract::{
     FoundFiles, GitMark, Node, Pane, Program, Session, SplitDir, Workspace, WorkspaceKind,
 };
 use crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
-    KeyModifiers, MouseButton, MouseEventKind,
+    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{cursor, execute};
 use wire::Client;
 
 mod changes;
+mod clip;
+mod conversation;
 mod diff_lines;
 mod field;
 mod look;
@@ -41,6 +43,7 @@ mod tree;
 pub use changes::Ask;
 use changes::{Changes, Docs, Outcome, Src};
 use contract::ErrorBody;
+use conversation::{Act as ConvAct, Ui as ConvUi};
 use field::Field;
 use manage::{Act, Manage, Named, Target};
 use programs::{Launcher, Pick, Programs};
@@ -350,8 +353,20 @@ const FILES_WAIT: Duration = Duration::from_secs(30);
 /// What the file tree asks the daemon for, with the workspace it is for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FileAsk {
-    List { workspace: String, path: String },
-    Find { workspace: String, query: String },
+    List {
+        workspace: String,
+        path: String,
+    },
+    Find {
+        workspace: String,
+        query: String,
+    },
+    /// The files that hold what follows an `@` in a conversation's line.
+    Mention {
+        workspace: String,
+        query: String,
+        node: String,
+    },
 }
 
 /// The daemon's answer to a `FileAsk`.
@@ -434,6 +449,8 @@ pub enum After {
     },
     /// Text for the clipboard (OSC 52).
     Copy(String),
+    /// Something the person asked of a conversation.
+    Conv(ConvAct),
     /// Close a pane.
     ClosePane(String),
     /// Name a workspace or a panel (empty: the automatic name).
@@ -494,6 +511,9 @@ pub struct View {
     last_size: Option<(String, u16, u16)>,
     /// The blocks nodes, by node id.
     blocks: HashMap<String, Blocks>,
+    /// The conversation nodes by node id, and what this terminal holds about each.
+    convs: HashMap<String, contract::conversation::Conversation>,
+    conv_ui: HashMap<String, ConvUi>,
     /// The epoch and revision each document held here was read at: what the client holds, and what
     /// the seen record counts from.
     read: HashMap<String, (String, u64)>,
@@ -584,6 +604,8 @@ impl View {
             typing: false,
             last_size: None,
             blocks: HashMap::new(),
+            convs: HashMap::new(),
+            conv_ui: HashMap::new(),
             read: HashMap::new(),
             painted: HashMap::new(),
             left_alt: HashMap::new(),
@@ -811,8 +833,10 @@ impl View {
                 Node::Commits(c) => {
                     self.commit_lists.insert(id, c);
                 }
-                // Drawn by the conversation view (N82); nothing opens it yet.
-                Node::Conversation(_) => {}
+                Node::Conversation(c) => {
+                    self.conv_ui.entry(id.clone()).or_default().sync(&c);
+                    self.convs.insert(id, *c);
+                }
             }
         }
         let gone: Vec<String> = self
@@ -826,6 +850,8 @@ impl View {
             self.workspaces.remove(id);
             self.panes.remove(id);
             self.blocks.remove(id);
+            self.convs.remove(id);
+            self.conv_ui.remove(id);
             self.diffs.remove(id);
             self.commit_lists.remove(id);
             if self.session.as_ref().is_some_and(|s| s.head.id == *id) {
@@ -886,6 +912,12 @@ impl View {
                 .iter()
                 .flat_map(|w| w.panes.iter())
                 .filter_map(|p| self.panes.get(&p.id)?.blocks.clone()),
+        );
+        ids.extend(
+            self.shown()
+                .iter()
+                .flat_map(|w| w.panes.iter())
+                .filter_map(|p| self.panes.get(&p.id)?.conversation.clone()),
         );
         ids.retain(|id| !self.read.contains_key(id));
         ids
@@ -1190,6 +1222,13 @@ impl View {
             self.focus.saturating_sub(1)
         };
         self.open(&id, next);
+    }
+
+    /// The accent of the conversation the keyboard is in, and whether it asks something.
+    fn focused_conversation(&self) -> Option<(Rgb, bool)> {
+        let pane = self.typing_pane()?;
+        let conv = self.conv_of(self.panes.get(&pane)?)?;
+        Some((conversation::accent_rgb(conv.accent), conv.ask.is_some()))
     }
 
     /// The pane the keyboard goes to: the focused pane of the opened workspace, while typing.
@@ -1786,9 +1825,101 @@ impl View {
             self.typing = false;
             return After::Continue;
         }
+        if let Some(conv) = self.panes.get(&pane).and_then(|p| p.conversation.clone()) {
+            return self.conv_key(&conv, &ev);
+        }
         match bytes_of(&ev) {
             Some(data) => After::Write { pane, data },
             None => After::Continue,
+        }
+    }
+
+    /// A key for the conversation of the pane the keyboard is in: `^V` reads a picture here, the
+    /// rest is the conversation's own.
+    fn conv_key(&mut self, node: &str, ev: &KeyEvent) -> After {
+        let Some(conv) = self.convs.get(node) else {
+            return After::Continue;
+        };
+        let ui = self.conv_ui.entry(node.to_owned()).or_default();
+        if ev.modifiers.contains(KeyModifiers::CONTROL)
+            && ev.code == KeyCode::Char('v')
+            && conv.ask.is_none()
+            && !ui.has_pop()
+        {
+            match clip::image() {
+                Ok(image) => ui.attach(image),
+                Err(e) => self.flash = e,
+            }
+            return After::Continue;
+        }
+        let act = ui.key(conv, ev);
+        if let Some(says) = ui.take_says() {
+            self.flash = says;
+        }
+        self.ask_mentions(node);
+        Self::conv_after(act)
+    }
+
+    /// The files an `@` in the conversation's line calls for, asked once for each fragment.
+    fn ask_mentions(&mut self, node: &str) {
+        let Some(workspace) = self.opened.clone() else {
+            return;
+        };
+        if let Some(query) = self.conv_ui.get_mut(node).and_then(ConvUi::want_files) {
+            self.file_asks.push(FileAsk::Mention {
+                workspace,
+                query,
+                node: node.to_owned(),
+            });
+        }
+    }
+
+    fn conv_after(act: Option<ConvAct>) -> After {
+        match act {
+            Some(ConvAct::Copy(text)) => After::Copy(text),
+            Some(act) => After::Conv(act),
+            None => After::Continue,
+        }
+    }
+
+    /// Whether a box of the client is open over the panes, so that what is typed goes to it.
+    fn modal(&self) -> bool {
+        self.help
+            || self.picker.is_some()
+            || self.worktree.is_some()
+            || self.launcher.is_some()
+            || self.phone_open
+            || self.manage.is_some()
+            || self.changes.is_some()
+            || (self.tree_focus && self.tree_on)
+    }
+
+    /// Text pasted (the terminal says it is a paste and not keys): into the conversation's line,
+    /// or typed into whatever has the keyboard, a line break being Enter.
+    pub fn paste(&mut self, text: &str) -> After {
+        self.flash.clear();
+        if self.modal() {
+            for c in text.chars().filter(|c| *c != '\r') {
+                let code = if c == '\n' {
+                    KeyCode::Enter
+                } else {
+                    KeyCode::Char(c)
+                };
+                self.press_key(KeyEvent::new(code, KeyModifiers::NONE));
+            }
+            return After::Continue;
+        }
+        let Some(pane) = self.typing_pane() else {
+            return After::Continue;
+        };
+        if let Some(node) = self.panes.get(&pane).and_then(|p| p.conversation.clone()) {
+            self.conv_ui.entry(node.clone()).or_default().paste(text);
+            self.ask_mentions(&node);
+            return After::Continue;
+        }
+        After::Write {
+            pane,
+            data: text.replace("\r\n", "\r").replace('\n', "\r"),
         }
     }
 
@@ -2013,6 +2144,9 @@ impl View {
 
     /// A click inside a pane's box: a block selects, `■ ^C` stops the running command.
     fn click_pane(&mut self, pane: &str, rect: Rect, x: usize, y: usize) -> After {
+        if let Some(node) = self.panes.get(pane).and_then(|p| p.conversation.clone()) {
+            return self.conv_click(&node, rect, x, y);
+        }
         let Some(b) = self.blocks_of(pane) else {
             return After::Continue;
         };
@@ -2043,6 +2177,22 @@ impl View {
             };
         }
         After::Continue
+    }
+
+    /// A click in the conversation of a pane: its title, an item, the field, the footer, the box that asks.
+    fn conv_click(&mut self, node: &str, rect: Rect, x: usize, y: usize) -> After {
+        let Some(conv) = self.convs.get(node) else {
+            return After::Continue;
+        };
+        let ui = self.conv_ui.entry(node.to_owned()).or_default();
+        if ui.click_title(conv, rect, x, y) {
+            return After::Continue;
+        }
+        let act = ui.click(conv, inner(rect), x, y);
+        if let Some(says) = ui.take_says() {
+            self.flash = says;
+        }
+        Self::conv_after(act)
     }
 
     /// A left click at cell (`x`, `y`) of a `cols` × `rows` screen. A workspace row opens it,
@@ -2245,7 +2395,17 @@ impl View {
     /// The daemon answered a folder or a search.
     pub fn files_replied(&mut self, r: FilesReply) {
         let FilesReply { ask, reply } = r;
-        let (FileAsk::List { workspace, .. } | FileAsk::Find { workspace, .. }) = &ask;
+        if let FileAsk::Mention { query, node, .. } = &ask {
+            let found = reply_value(reply)
+                .and_then(|v| serde_json::from_value::<FoundFiles>(v).map_err(|e| e.to_string()));
+            if let (Some(ui), Ok(f)) = (self.conv_ui.get_mut(node), found) {
+                ui.found(query, f.paths);
+            }
+            return;
+        }
+        let (FileAsk::List { workspace, .. }
+        | FileAsk::Find { workspace, .. }
+        | FileAsk::Mention { workspace, .. }) = &ask;
         let Some(t) = self.trees.get_mut(workspace) else {
             return;
         };
@@ -2279,6 +2439,8 @@ impl View {
                     t.scroll = 0;
                 }
             }
+            // Answered above.
+            FileAsk::Mention { .. } => {}
         }
     }
 
@@ -2756,6 +2918,12 @@ impl View {
 
     /// Move a pane's list `by` lines up (`true`) or down, within what there is to see.
     fn scroll_pane(&mut self, pane: &str, rect: Rect, up: bool, by: usize) {
+        if let Some(node) = self.panes.get(pane).and_then(|p| p.conversation.clone()) {
+            if let Some(ui) = self.conv_ui.get_mut(&node) {
+                ui.scroll_by(up, by);
+            }
+            return;
+        }
         let Some(b) = self.blocks_of(pane) else {
             return;
         };
@@ -2939,6 +3107,7 @@ impl View {
             g.cells[(rows - 1) * cols + x] = (' ', Style::default().on(look::panel()));
         }
         let level = self.level();
+        let conv_focus = self.focused_conversation();
         let diff_status = self.changes.as_ref().map(|c| c.status(&self.docs()));
         let (chip, bg, hint) = match (&self.manage, &diff_status) {
             (None, _) if self.launcher.is_some() => (
@@ -2967,6 +3136,19 @@ impl View {
             (None, Some((hint, _))) => (" DIFF ", look::cyan(), hint.as_str()),
             (None, None) => match (self.mode, level) {
                 (Mode::Avisos, _) => (" AVISOS ", look::yellow(), "j/k mover · ↵ ir · esc volver"),
+                (_, Level::Terminal) if conv_focus.is_some() => match conv_focus {
+                    Some((accent, true)) => (
+                        " PERMISO ",
+                        accent,
+                        "1 2 3 · y a n · ↑↓ ↵ responden · ^␣ salir",
+                    ),
+                    Some((accent, false)) => (
+                        " CLAUDE ",
+                        accent,
+                        "↵ envía · esc interrumpe · ⇧tab modo · ^O abre · ^V imagen · clic en un ítem y c copia · ^␣ salir",
+                    ),
+                    None => unreachable!(),
+                },
                 (_, Level::Terminal) => (
                     " TERMINAL ",
                     look::green(),
@@ -3113,15 +3295,22 @@ impl View {
                     Style::fg(tone(a)).bold(),
                 )
             });
-            let title_style = if focused {
-                Style::fg(look::blue()).bold()
-            } else {
-                Style::fg(look::fg()).bold()
+            let conv = self.panes.get(&summary.id).and_then(|p| self.conv_of(p));
+            let accent = conv.map(|c| conversation::accent_rgb(c.accent));
+            let title_style = match (accent, focused) {
+                (Some(a), _) => Style::fg(a).bold(),
+                (None, true) => Style::fg(look::blue()).bold(),
+                (None, false) => Style::fg(look::fg()).bold(),
+            };
+            let border = match (accent, focused) {
+                (Some(a), true) => a,
+                (None, true) => look::blue(),
+                _ => look::line(),
             };
             g.boxed(
                 rect,
-                &summary.title,
-                if focused { look::blue() } else { look::line() },
+                &conv.map_or_else(|| summary.title.clone(), conversation::title),
+                border,
                 title_style,
                 badge,
             );
@@ -3130,6 +3319,13 @@ impl View {
                 skeleton(g, rect);
                 continue;
             };
+            if p.conversation.is_some() {
+                match conv {
+                    Some(c) => self.conv_view(g, c, p, rect, focused, branch),
+                    None => skeleton(g, rect),
+                }
+                continue;
+            }
             if let Some(b) = self.blocks_of(&summary.id) {
                 self.blocks_view(g, b, p, rect, focused, branch);
                 continue;
@@ -3172,6 +3368,30 @@ impl View {
                 g.cells[at].1.reverse = true;
             }
         }
+    }
+
+    /// The conversation of a pane, once its node has arrived.
+    fn conv_of(&self, pane: &Pane) -> Option<&contract::conversation::Conversation> {
+        self.convs.get(pane.conversation.as_ref()?)
+    }
+
+    /// A pane that runs `claude`: the conversation, with the pane's folder and branch as chips.
+    fn conv_view(
+        &self,
+        g: &mut Grid,
+        conv: &contract::conversation::Conversation,
+        p: &Pane,
+        rect: Rect,
+        focused: bool,
+        branch: Option<&str>,
+    ) {
+        let Some(ui) = self.conv_ui.get(&conv.head.id) else {
+            return;
+        };
+        let chips: Vec<(String, Rgb)> = std::iter::once((shell::short(&p.cwd), look::dim()))
+            .chain(branch.map(|br| (format!("⎇ {br}"), look::magenta())))
+            .collect();
+        ui.draw(g, conv, inner(rect), &chips, focused, self.now_ms);
     }
 
     /// A shell pane as blocks: the list, newest at the bottom, and the field under it (the chips
@@ -3524,7 +3744,8 @@ impl Terminal {
             stdout(),
             EnterAlternateScreen,
             cursor::Hide,
-            EnableMouseCapture
+            EnableMouseCapture,
+            EnableBracketedPaste
         )?;
         Ok(Terminal)
     }
@@ -3534,6 +3755,7 @@ impl Drop for Terminal {
     fn drop(&mut self) {
         let _ = execute!(
             stdout(),
+            DisableBracketedPaste,
             DisableMouseCapture,
             cursor::Show,
             LeaveAlternateScreen
@@ -3685,7 +3907,10 @@ fn spawn_files(ask: FileAsk, tx: std::sync::mpsc::Sender<FilesReply>) {
                 workspace: workspace.clone(),
                 path: Some(path.clone()),
             },
-            FileAsk::Find { workspace, query } => Cmd::FindFiles {
+            FileAsk::Find { workspace, query }
+            | FileAsk::Mention {
+                workspace, query, ..
+            } => Cmd::FindFiles {
                 workspace: workspace.clone(),
                 query: query.clone(),
             },
@@ -3856,6 +4081,53 @@ fn told(view: &mut View, failed: &str, done: &str, reply: Reply) {
     }
 }
 
+/// `conversation_set` of one thing.
+fn set(
+    node: String,
+    name: Option<String>,
+    accent: Option<contract::conversation::Accent>,
+    model: Option<String>,
+    effort: Option<String>,
+    mode: Option<contract::conversation::Mode>,
+) -> Cmd {
+    Cmd::ConversationSet {
+        node,
+        name,
+        accent,
+        model,
+        effort,
+        mode,
+    }
+}
+
+/// What the person asked of a conversation, as the command the daemon takes; a refusal (an
+/// unknown command, an engine that is gone) goes to the status bar.
+fn conversation_cmd(view: &mut View, client: &mut Client, act: ConvAct) {
+    let cmd = match act {
+        ConvAct::Send { node, text, images } => Cmd::ConversationSend { node, text, images },
+        ConvAct::Answer { node, ask, key } => Cmd::ConversationAnswer {
+            node,
+            ask,
+            key,
+            text: None,
+            by: Some("el terminal".into()),
+        },
+        ConvAct::Interrupt { node } => Cmd::ConversationInterrupt { node },
+        ConvAct::Name { node, name } => set(node, Some(name), None, None, None, None),
+        ConvAct::Color { node, accent } => set(node, None, Some(accent), None, None, None),
+        ConvAct::Model { node, model } => set(node, None, None, Some(model), None, None),
+        ConvAct::Effort { node, effort } => set(node, None, None, None, Some(effort), None),
+        ConvAct::Mode { node, mode } => set(node, None, None, None, None, Some(mode)),
+        ConvAct::Shell { node, command } => Cmd::ConversationShell { node, command },
+        ConvAct::Copy(_) => return,
+    };
+    match client.cmd(cmd) {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => view.flash(&e.message),
+        Err(e) => view.flash(&e.to_string()),
+    }
+}
+
 pub fn run() -> Result<(), String> {
     let mut view = View::new("conectando");
     let mut client = connect(&mut view)?;
@@ -3988,6 +4260,7 @@ pub fn run() -> Result<(), String> {
         while event::poll(Duration::ZERO).map_err(|e| e.to_string())? {
             let after = match event::read().map_err(|e| e.to_string())? {
                 Event::Key(ev) if ev.kind == KeyEventKind::Press => view.press_key(ev),
+                Event::Paste(text) => view.paste(&text),
                 Event::Mouse(m) => {
                     let (cols, rows) = (cols as usize, rows as usize);
                     let (x, y) = (m.column as usize, m.row as usize);
@@ -4148,6 +4421,7 @@ pub fn run() -> Result<(), String> {
                     }
                 }
                 After::Check(workspace) => check_changes(&mut view, &mut client, workspace),
+                After::Conv(act) => conversation_cmd(&mut view, &mut client, act),
                 After::Copy(text) => {
                     let mut out = stdout();
                     let _ = write!(out, "{}", shell::osc52(&text));
@@ -7162,5 +7436,197 @@ mod tests {
         assert_eq!(panes_of(&mut c, &ws), 1);
         d.stop();
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    const CONV_PANE: &str = "00000000-0000-4000-8000-0000000000c1";
+    const CONV: &str = "00000000-0000-4000-8000-0000000000e1";
+
+    /// The shared fixtures with the first pane running a conversation; `idle` takes away the
+    /// permission that waits in the fixture. The keyboard is in the conversation.
+    fn conv_view(idle: bool) -> View {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../contract/fixtures/daemon");
+        let load = |n: &str| {
+            serde_json::from_str::<serde_json::Value>(
+                &std::fs::read_to_string(dir.join(n)).unwrap(),
+            )
+            .unwrap()["node"]
+                .clone()
+        };
+        let mut docs = fixture_docs();
+        docs.retain(|d| d["id"] != CONV_PANE);
+        docs.push(load("snapshot-pane-conversation.json"));
+        let mut conv = load("snapshot-conversation.json");
+        if idle {
+            conv["ask"] = serde_json::Value::Null;
+            conv["status"] = "idle".into();
+        }
+        docs.push(conv);
+        let mut v = View::new("fixtures");
+        v.set_size(120, 40);
+        v.sync(docs.iter());
+        v.press(Key::Enter);
+        v.press(Key::Enter);
+        assert_eq!(v.typing_pane().as_deref(), Some(CONV_PANE));
+        v
+    }
+
+    #[test]
+    fn a_pane_with_a_conversation_draws_it_with_its_name_and_asks_for_its_node() {
+        let mut v = fixture_view();
+        let mut docs = fixture_docs();
+        docs.retain(|d| d["id"] != CONV_PANE);
+        let pane: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../contract/fixtures/daemon/snapshot-pane-conversation.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let mut node = pane["node"].clone();
+        node["rev"] = 99.into();
+        docs.push(node);
+        v.sync(docs.iter());
+        v.press(Key::Enter);
+        assert_eq!(
+            v.wants(),
+            [CONV],
+            "the node of the conversation is asked for"
+        );
+        assert!(
+            !v.plain(120, 40).contains("permiso · Edit"),
+            "until it arrives nothing of it is drawn"
+        );
+        let v = conv_view(false);
+        let screen = v.plain(120, 40);
+        assert!(
+            screen.contains("claude · arregla el test que falla e…"),
+            "{screen}"
+        );
+        assert!(screen.contains("● Read(src/auth.rs)"), "{screen}");
+        assert!(screen.contains("permiso · Edit"), "{screen}");
+        assert!(v.wants().is_empty());
+    }
+
+    #[test]
+    fn typed_in_a_conversation_goes_to_it_and_never_to_the_shell() {
+        let mut v = conv_view(true);
+        for c in "hola".chars() {
+            assert_eq!(v.press_key(plain(KeyCode::Char(c))), After::Continue);
+        }
+        assert!(v.plain(120, 40).contains("❯ hola"));
+        assert_eq!(
+            v.press_key(plain(KeyCode::Enter)),
+            After::Conv(ConvAct::Send {
+                node: CONV.into(),
+                text: "hola".into(),
+                images: vec![]
+            })
+        );
+        // the leader gives the keyboard back
+        assert_eq!(
+            v.press_key(key(KeyCode::Char(' '), KeyModifiers::CONTROL)),
+            After::Continue
+        );
+        assert!(v.typing_pane().is_none());
+    }
+
+    #[test]
+    fn a_permission_is_answered_from_the_keyboard_and_says_where_it_came_from() {
+        let mut v = conv_view(false);
+        assert_eq!(
+            v.press_key(plain(KeyCode::Char('x'))),
+            After::Continue,
+            "no other key reaches the shell"
+        );
+        assert_eq!(
+            v.press_key(plain(KeyCode::Char('y'))),
+            After::Conv(ConvAct::Answer {
+                node: CONV.into(),
+                ask: "req-1".into(),
+                key: "yes".into()
+            })
+        );
+        let bar = v.plain(120, 40);
+        assert!(bar.contains(" PERMISO "), "{bar}");
+        let v = conv_view(true);
+        assert!(v.plain(120, 40).contains(" CLAUDE "));
+    }
+
+    #[test]
+    fn a_paste_goes_into_the_conversations_line_and_a_shell_gets_its_lines_as_enters() {
+        let mut v = conv_view(true);
+        assert_eq!(v.paste("uno\r\ndos"), After::Continue);
+        assert_eq!(v.conv_ui[CONV].editor.text(), "uno\ndos");
+        // the second pane is a shell
+        v.press_key(key(KeyCode::Char(' '), KeyModifiers::CONTROL));
+        v.press(Key::Right);
+        v.press(Key::Enter);
+        let pane = v.typing_pane().unwrap();
+        assert_ne!(pane, CONV_PANE);
+        assert_eq!(
+            v.paste("ls\nls -la"),
+            After::Write {
+                pane,
+                data: "ls\rls -la".into()
+            }
+        );
+    }
+
+    #[test]
+    fn the_wheel_scrolls_a_conversation_and_a_click_in_its_footer_opens_the_list() {
+        let mut v = conv_view(true);
+        v.set_size(120, 24);
+        v.grid(120, 24);
+        let (x, y) = find_in(&v, "sonnet-5.5", 24);
+        assert_eq!(v.click(x + 1, y, 120, 24), After::Continue);
+        assert!(v.conv_ui[CONV].has_pop());
+        assert!(v.plain(120, 24).contains("fable"), "{}", v.plain(120, 24));
+        v.press_key(plain(KeyCode::Esc));
+        let (x, y) = find_in(&v, "Listo en 11 s", 24);
+        v.scroll(false, x, y, 120, 24);
+        v.scroll(true, x, y, 120, 24);
+    }
+
+    fn find_in(v: &View, text: &str, rows: usize) -> (usize, usize) {
+        for (y, row) in v.grid(120, rows).rows_plain().iter().enumerate() {
+            if let Some(i) = row.find(text) {
+                return (row[..i].chars().count(), y);
+            }
+        }
+        panic!("{text} is not on the screen:\n{}", v.plain(120, rows));
+    }
+
+    #[test]
+    fn an_at_in_the_conversation_asks_for_files_and_the_answer_lists_them() {
+        let mut v = conv_view(true);
+        for c in "ver @au".chars() {
+            v.press_key(plain(KeyCode::Char(c)));
+        }
+        let asks = v.take_file_asks();
+        assert_eq!(asks.len(), 2, "each fragment is asked once: a, au");
+        assert_eq!(
+            asks[1],
+            FileAsk::Mention {
+                workspace: v.opened.clone().unwrap(),
+                query: "au".into(),
+                node: CONV.into()
+            }
+        );
+        v.files_replied(FilesReply {
+            ask: asks[1].clone(),
+            reply: Ok(Ok(Some(serde_json::json!({"paths": ["src/auth.rs"]})))),
+        });
+        assert!(v.plain(120, 40).contains("src/auth.rs"));
+        v.press_key(plain(KeyCode::Tab));
+        assert_eq!(v.conv_ui[CONV].editor.text(), "ver @src/auth.rs ");
+    }
+
+    #[test]
+    fn a_closed_conversation_leaves_nothing_of_it_behind() {
+        let mut v = conv_view(false);
+        let docs: Vec<_> = fixture_docs();
+        v.sync(docs.iter());
+        assert!(!v.convs.contains_key(CONV) && !v.conv_ui.contains_key(CONV));
     }
 }
