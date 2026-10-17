@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.jw.next.client.answeredNote
 import dev.jw.next.client.convKilo
+import dev.jw.next.client.convDone
 import dev.jw.next.client.convSecs
 import dev.jw.next.client.convTools
 import dev.jw.next.client.convUsd
@@ -112,7 +113,7 @@ private fun ItemView(item: ConvItem, accent: Color, spin: String, picked: Boolea
                 item.lines.forEachIndexed { k, l -> Mono((if (k == 0) "⎿ " else "  ") + l, Palette.dim, 12, lines = 6) }
             }
             is ConvItem.Note -> Mono("⎿ ${item.text}", item.tone.color(), 12, lines = 4, modifier = Modifier.padding(horizontal = Pad))
-            is ConvItem.Result -> Mono("✻ Listo en ${convSecs(item.ms)} · ${convTools(item.tools)} · ${convUsd(item.cost)}", Palette.dim, 12, modifier = Modifier.padding(horizontal = Pad))
+            is ConvItem.Result -> Mono("✻ ${convDone(item)}", Palette.dim, 12, modifier = Modifier.padding(horizontal = Pad))
             is ConvItem.Divider -> Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Box(Modifier.weight(1f).height(1.dp).background(Palette.line))
                 Mono(item.text, Palette.dim, 11)

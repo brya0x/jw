@@ -9,11 +9,11 @@ use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-use contract::conversation::{DividerKind, Item, Mode, ToolState};
+use contract::conversation::{DividerKind, Item, Mode, Tone, ToolState};
 use serde_json::Value;
 
 use crate::conversation::{
-    KEEP, LINE_CHARS, OUTPUT_LINES, clip, content_text, summary_of, tool_arg,
+    KEEP, LINE_CHARS, OUTPUT_LINES, clip, content_text, edit_diff, summary_of, tool_arg,
 };
 
 /// How much of the end of a transcript is read to begin with, and how much more is tried while it
@@ -25,6 +25,10 @@ const WINDOWS: [u64; 3] = [4 << 20, 16 << 20, 64 << 20];
 /// one (a pasted picture is a line of megabytes) is skipped to its end. Small in the tests.
 const MOST_ADDED: u64 = if cfg!(test) { 1 << 10 } else { 8 << 20 };
 const MAX_LINE: u64 = if cfg!(test) { 8 << 10 } else { 64 << 20 };
+
+/// The longest thinking that is shown: Claude's summaries are a few sentences, and a model that
+/// gives its whole thinking would give pages.
+const SUMMARY_CHARS: usize = 1200;
 
 /// The efforts `--effort` takes; anything else in a transcript is not passed on.
 const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
@@ -51,6 +55,8 @@ pub struct Parser {
     last_at: u64,
     /// Counts up whenever what the lines say changes: an item, the mode, the model, the effort or what waits.
     rev: u64,
+    /// How many tools the turn that runs has used, for the line that ends it.
+    tools_in_turn: u32,
     /// The messages typed while a turn ran, not taken in yet, oldest first, and whether each is
     /// the person's (a task's notice waits too, and is not shown).
     queue: Vec<(String, bool)>,
@@ -79,14 +85,77 @@ impl Parser {
                     }
                 }
                 "queue-operation" => self.queued(&entry),
+                "attachment" => self.attached(&entry),
                 "assistant" => self.assistant(&entry),
-                "user" if entry["isMeta"] != true => self.user(&entry),
+                // The summary Claude Code writes when it compacts is not something the person said.
+                "user"
+                    if entry["isMeta"] != true
+                        && entry["isCompactSummary"] != true
+                        && entry["isVisibleInTranscriptOnly"] != true =>
+                {
+                    self.user(&entry)
+                }
+                "system" if entry["subtype"] == "informational" => {
+                    if let Some(text) = entry["content"].as_str().filter(|t| !t.trim().is_empty()) {
+                        self.note(clip(text.trim(), LINE_CHARS), None);
+                    }
+                }
+                "system" if entry["subtype"] == "local_command" => {
+                    self.command_output(entry["content"].as_str().unwrap_or(""));
+                }
                 "system" if entry["subtype"] == "compact_boundary" => self.push(Item::Divider {
                     text: "conversación compactada".into(),
                     kind: DividerKind::Compact,
                 }),
+                "system" if entry["subtype"] == "turn_duration" => {
+                    let ms = entry["durationMs"].as_u64().unwrap_or(0);
+                    let tools = std::mem::take(&mut self.tools_in_turn);
+                    self.push(Item::Result { ms, tools, cost: 0 });
+                }
                 _ => {}
             }
+        }
+    }
+
+    fn note(&mut self, text: String, tone: Option<Tone>) {
+        self.push(Item::Note { text, tone });
+    }
+
+    /// What a command of Claude's own printed (`<local-command-stdout>…`), as lines.
+    fn command_output(&mut self, text: &str) {
+        let inner = tag(text, "local-command-stdout").unwrap_or(text);
+        let lines: Vec<String> = strip_ansi(inner)
+            .lines()
+            .map(|l| clip(l.trim_end(), LINE_CHARS))
+            .filter(|l| !l.is_empty())
+            .take(OUTPUT_LINES)
+            .collect();
+        if !lines.is_empty() {
+            self.push(Item::Out { lines });
+        }
+    }
+
+    /// A message the person typed while a turn ran and Claude took in during it: it is a line of
+    /// its own in the transcript (an attachment), not a message of the person's.
+    fn attached(&mut self, entry: &Value) {
+        let a = &entry["attachment"];
+        let human = a["origin"]["kind"].as_str().is_none_or(|k| k == "human");
+        if a["type"] != "queued_command" || !human {
+            return;
+        }
+        // A message with a picture has its prompt as blocks.
+        let (text, images) = match &a["prompt"] {
+            Value::String(s) => (s.clone(), 0),
+            Value::Array(blocks) => blocks_text(blocks.iter().collect()),
+            _ => return,
+        };
+        if is_the_persons(&text) || (text.trim().is_empty() && images > 0) {
+            // It does not begin a turn: the one that runs takes it in, and its tools go on counting.
+            self.unqueue(&text);
+            self.push(Item::User {
+                text: text.trim().to_owned(),
+                images,
+            });
         }
     }
 
@@ -137,6 +206,14 @@ impl Parser {
         let message = &entry["message"];
         // What Claude Code writes itself (an interrupted turn, «no response requested») is not Claude.
         if message["model"] == "<synthetic>" {
+            // An error of the API is shown; «no response requested» and the like are not.
+            if entry["isApiErrorMessage"] == true {
+                for block in message["content"].as_array().into_iter().flatten() {
+                    if let Some(text) = block["text"].as_str().filter(|t| !t.trim().is_empty()) {
+                        self.note(clip(text.trim(), LINE_CHARS), Some(Tone::Error));
+                    }
+                }
+            }
             return;
         }
         if let Some(model) = message["model"].as_str().filter(|m| !m.is_empty())
@@ -169,6 +246,7 @@ impl Parser {
                         continue;
                     }
                     let id = block["id"].as_str().unwrap_or("").to_owned();
+                    self.tools_in_turn += 1;
                     self.tools.insert(id.clone(), self.items.len());
                     self.push(Item::Tool {
                         id,
@@ -178,10 +256,21 @@ impl Parser {
                         state: ToolState::Failed,
                         summary: Some("sin resultado".into()),
                         output: Vec::new(),
-                        diff: Vec::new(),
+                        diff: edit_diff(name, &block["input"]),
                         url: None,
                         by: None,
                     });
+                }
+                // What Claude says between its tools is a summary of its thinking: the lines that
+                // are short are shown as the narration they are, and the whole thinking is not.
+                "thinking" => {
+                    let text = block["thinking"].as_str().unwrap_or("").trim();
+                    if !text.is_empty() && text.chars().count() <= SUMMARY_CHARS {
+                        self.push(Item::Text {
+                            text: text.to_owned(),
+                            live: false,
+                        });
+                    }
                 }
                 _ => {}
             }
@@ -201,21 +290,39 @@ impl Parser {
         }
         let (text, images) = match content {
             Value::String(s) => (s.clone(), 0),
-            _ => (
+            _ => blocks_text(
                 blocks
                     .iter()
-                    .filter(|b| b["type"] == "text")
-                    .filter_map(|b| b["text"].as_str())
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-                u32::try_from(blocks.iter().filter(|b| b["type"] == "image").count())
-                    .unwrap_or(u32::MAX),
+                    .copied()
+                    .filter(|b| b["type"] != "tool_result")
+                    .collect(),
             ),
         };
-        if is_the_persons(&text) || (text.trim().is_empty() && images > 0) {
+        let t = text.trim();
+        if t.starts_with("[Request interrupted") {
+            self.note("Interrumpido".into(), Some(Tone::Warn));
+        } else if t.starts_with("<task-notification") {
+            // A background task ended: the line that says what it was.
+            if let Some(summary) = tag(t, "summary").filter(|s| !s.trim().is_empty()) {
+                self.note(clip(summary.trim(), LINE_CHARS), None);
+            }
+        } else if t.starts_with("<command-") && t.contains("<command-name>") {
+            let name = tag(t, "command-name").unwrap_or("").trim();
+            let args = tag(t, "command-args").unwrap_or("").trim();
+            if !name.is_empty() {
+                self.tools_in_turn = 0;
+                self.push(Item::User {
+                    text: format!("{name} {args}").trim().to_owned(),
+                    images: 0,
+                });
+            }
+        } else if t.starts_with("<local-command-stdout>") {
+            self.command_output(t);
+        } else if is_the_persons(&text) || (t.is_empty() && images > 0) {
             self.unqueue(&text);
+            self.tools_in_turn = 0;
             self.push(Item::User {
-                text: text.trim().to_owned(),
+                text: t.to_owned(),
                 images,
             });
         }
@@ -277,6 +384,45 @@ fn is_the_persons(text: &str) -> bool {
     !t.is_empty()
         && !WRAPPERS.iter().any(|w| t.starts_with(w))
         && !t.starts_with("[Request interrupted")
+}
+
+/// The text of a message made of blocks, and how many pictures it has.
+fn blocks_text(blocks: Vec<&Value>) -> (String, u32) {
+    let text = blocks
+        .iter()
+        .filter(|b| b["type"] == "text")
+        .filter_map(|b| b["text"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let images = blocks.iter().filter(|b| b["type"] == "image").count();
+    (text, u32::try_from(images).unwrap_or(u32::MAX))
+}
+
+/// What is between `<name>` and `</name>`.
+fn tag<'a>(text: &'a str, name: &str) -> Option<&'a str> {
+    let open = format!("<{name}>");
+    let from = text.find(&open)? + open.len();
+    let to = text[from..].find(&format!("</{name}>"))? + from;
+    Some(&text[from..to])
+}
+
+/// A text without the colour codes of a terminal.
+fn strip_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            // `ESC [` and what follows up to a letter.
+            for n in chars.by_ref() {
+                if n.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// The lines of `text`, whole, as a conversation.
@@ -491,7 +637,7 @@ mod tests {
             line(serde_json::json!({"type":"permission-mode","permissionMode":"acceptEdits"})),
             line(serde_json::json!({"type":"user","message":{"role":"user","content":"arregla el login"}})),
             line(serde_json::json!({"type":"user","isMeta":true,"message":{"role":"user","content":"<system-reminder>x</system-reminder>"}})),
-            line(serde_json::json!({"type":"assistant","effort":"high","message":{"model":"claude-opus-5-5","content":[{"type":"thinking","thinking":"hm"}]}})),
+            line(serde_json::json!({"type":"assistant","effort":"high","message":{"model":"claude-opus-5-5","content":[{"type":"thinking","thinking":""}]}})),
             line(serde_json::json!({"type":"assistant","effort":"high","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"Voy a leerlo."}]}})),
             line(serde_json::json!({"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/a/login.rs"}}]}})),
             line(serde_json::json!({"type":"user","toolUseResult":{"file":{"numLines":42}},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"fn login() {}\nfn out() {}"}]}})),
@@ -523,11 +669,11 @@ mod tests {
             .collect();
         assert_eq!(
             kinds,
-            ["user", "text", "tool", "tool", "divider", "user"],
-            "no reminder, thinking, checklist, subagent line, synthetic text or command wrapper"
+            ["user", "text", "tool", "tool", "user", "divider", "user"],
+            "no reminder, redacted thinking, checklist, subagent line or synthetic text; the command `/clear` is a line of the person's"
         );
         assert!(matches!(&it(&t)[0], Item::User { text, images: 0 } if text == "arregla el login"));
-        assert!(matches!(&it(&t)[5], Item::User { text, .. } if text == "gracias"));
+        assert!(matches!(&it(&t)[6], Item::User { text, .. } if text == "gracias"));
     }
 
     #[test]
@@ -587,8 +733,11 @@ mod tests {
             ]
             .concat(),
         );
-        assert_eq!(it(&t).len(), 1);
+        // The command and what it printed are shown; the line of a shell is not.
+        assert_eq!(it(&t).len(), 3);
         assert!(matches!(&it(&t)[0], Item::User { text, .. } if text == "<div> no se ve"));
+        assert!(matches!(&it(&t)[1], Item::User { text, .. } if text == "/x"));
+        assert!(matches!(&it(&t)[2], Item::Out { lines } if lines == &["ok"]));
     }
 
     #[test]
@@ -809,6 +958,122 @@ mod tests {
         let before = t.rev;
         t.feed(&op("enqueue", Some("cuatro")));
         assert_ne!(t.rev, before);
+    }
+
+    /// What the other `claude` shows that the plain lines do not carry: the narration between its tools,
+    /// a message typed while it worked and the end of a turn.
+    #[test]
+    fn the_narration_a_message_typed_mid_turn_and_the_end_of_a_turn_are_read() {
+        let t = parse(
+            &[
+                line(serde_json::json!({"type":"user","timestamp":"2026-10-17T11:55:00.000Z","message":{"role":"user","content":"haz esto"}})),
+                line(serde_json::json!({"type":"assistant","timestamp":"2026-10-17T11:55:01.000Z","message":{"model":"m","content":[{"type":"thinking","thinking":"Voy a leer el archivo primero."}]}})),
+                line(serde_json::json!({"type":"assistant","timestamp":"2026-10-17T11:55:02.000Z","message":{"model":"m","content":[{"type":"thinking","thinking":""}]}})),
+                line(serde_json::json!({"type":"assistant","timestamp":"2026-10-17T11:55:03.000Z","message":{"model":"m","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}})),
+                line(serde_json::json!({"type":"queue-operation","operation":"enqueue","timestamp":"2026-10-17T11:55:04.000Z","content":"y también esto"})),
+                line(serde_json::json!({"type":"attachment","timestamp":"2026-10-17T11:55:05.000Z","attachment":{"type":"queued_command","prompt":"y también esto","origin":{"kind":"human"}}})),
+                line(serde_json::json!({"type":"attachment","timestamp":"2026-10-17T11:55:05.500Z","attachment":{"type":"queued_command","prompt":"<task-notification>x</task-notification>","origin":{"kind":"task"}}})),
+                line(serde_json::json!({"type":"attachment","timestamp":"2026-10-17T11:55:06.000Z","attachment":{"type":"deferred_tools_record"}})),
+                line(serde_json::json!({"type":"system","subtype":"turn_duration","timestamp":"2026-10-17T11:55:09.000Z","durationMs":9000})),
+            ]
+            .concat(),
+        );
+        let kinds: Vec<String> = it(&t)
+            .iter()
+            .map(|i| match i {
+                Item::User { text, .. } => format!("user:{text}"),
+                Item::Text { text, .. } => format!("text:{text}"),
+                Item::Tool { name, .. } => format!("tool:{name}"),
+                Item::Result { ms, tools, cost } => format!("result:{ms}:{tools}:{cost}"),
+                _ => "other".into(),
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                "user:haz esto",
+                "text:Voy a leer el archivo primero.",
+                "tool:Bash",
+                "user:y también esto",
+                "result:9000:1:0"
+            ],
+            "the summary of the thinking is the narration; a message absorbed in the turn is the person's; the end of a turn says how long and how many tools"
+        );
+        assert!(
+            t.waiting().is_empty(),
+            "the message that was absorbed is not waiting"
+        );
+        // The whole thinking of a model that gives it is not shown.
+        let long = parse(&line(
+            serde_json::json!({"type":"assistant","message":{"model":"m","content":[{"type":"thinking","thinking":"x".repeat(5000)}]}}),
+        ));
+        assert!(long.items.is_empty());
+    }
+
+    /// REQ-553 to REQ-556: what Claude Code shows of its own, that the reader dropped.
+    #[test]
+    fn what_claude_code_writes_of_its_own_is_hidden_or_shown_as_the_note_it_is() {
+        let t = parse(
+            &[
+                line(serde_json::json!({"type":"user","isCompactSummary":true,"isVisibleInTranscriptOnly":true,"message":{"role":"user","content":"This session is being continued from a previous conversation that ran out of context…"}})),
+                line(serde_json::json!({"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"API Error: Your computer went to sleep mid-response."}]}})),
+                line(serde_json::json!({"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"No response requested."}]}})),
+                line(serde_json::json!({"type":"user","message":{"role":"user","content":"[Request interrupted by user for tool use]"}})),
+                line(serde_json::json!({"type":"user","message":{"role":"user","content":"<task-notification>\n<task-id>a1</task-id>\n<status>completed</status>\n<summary>Background command \"cargo test\" completed (exit code 0)</summary>\n</task-notification>"}})),
+                line(serde_json::json!({"type":"user","message":{"role":"user","content":"<command-message>commit</command-message>\n<command-name>/commit</command-name>"}})),
+                line(serde_json::json!({"type":"user","message":{"role":"user","content":"<command-name>/model</command-name>\n   <command-message>model</command-message>\n   <command-args>sonnet</command-args>"}})),
+                line(serde_json::json!({"type":"user","message":{"role":"user","content":"<local-command-caveat>Caveat: the messages below…</local-command-caveat>"}})),
+                line(serde_json::json!({"type":"user","message":{"role":"user","content":"<local-command-stdout>\u{1b}[2mCompacted (ctrl+o to see full summary)\u{1b}[22m</local-command-stdout>"}})),
+                line(serde_json::json!({"type":"system","subtype":"informational","content":"Automatic replies were not resumed for an artifact.","level":"notice"})),
+                line(serde_json::json!({"type":"system","subtype":"local_command","content":"<local-command-stdout>Set model to `Sonnet 5.5` for this session only</local-command-stdout>"})),
+            ]
+            .concat(),
+        );
+        let shown: Vec<String> = it(&t)
+            .iter()
+            .map(|i| match i {
+                Item::Note { text, tone } => format!("note[{tone:?}]:{text}"),
+                Item::User { text, .. } => format!("user:{text}"),
+                Item::Out { lines } => format!("out:{}", lines.join("/")),
+                other => format!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                "note[Some(Error)]:API Error: Your computer went to sleep mid-response.",
+                "note[Some(Warn)]:Interrumpido",
+                "note[None]:Background command \"cargo test\" completed (exit code 0)",
+                "user:/commit",
+                "user:/model sonnet",
+                "out:Compacted (ctrl+o to see full summary)",
+                "note[None]:Automatic replies were not resumed for an artifact.",
+                "out:Set model to `Sonnet 5.5` for this session only",
+            ],
+            "no compaction summary, no «no response requested», no caveat; the rest as the notes and lines they are"
+        );
+    }
+
+    #[test]
+    fn a_message_with_a_picture_typed_mid_turn_and_the_diff_of_an_edit_are_read() {
+        let t = parse(
+            &[
+                line(serde_json::json!({"type":"attachment","attachment":{"type":"queued_command","prompt":[{"type":"text","text":"[Image #6] mira esto"},{"type":"image","source":{}}],"origin":{"kind":"human"}}})),
+                line(serde_json::json!({"type":"assistant","message":{"model":"m","content":[{"type":"tool_use","id":"e1","name":"Edit","input":{"file_path":"/a.rs","old_string":"uno\ndos","new_string":"tres"}}]}})),
+            ]
+            .concat(),
+        );
+        assert!(
+            matches!(&it(&t)[0], Item::User { text, images: 1 } if text == "[Image #6] mira esto")
+        );
+        let Item::Tool { diff, .. } = &it(&t)[1] else {
+            panic!("the edit");
+        };
+        assert_eq!(
+            diff.len(),
+            3,
+            "two lines out and one in, as the engine shows an edit: {diff:?}"
+        );
     }
 
     #[test]

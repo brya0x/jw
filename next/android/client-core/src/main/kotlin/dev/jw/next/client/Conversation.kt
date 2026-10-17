@@ -107,7 +107,7 @@ fun itemText(item: ConvItem): String = when (item) {
     is ConvItem.Agent -> (listOf("Agent(${item.name}) ${item.description}") + item.steps).joinToString("\n")
     is ConvItem.Shell -> (listOf("! ${item.command}") + item.output).joinToString("\n")
     is ConvItem.Out -> item.lines.joinToString("\n")
-    is ConvItem.Result -> "Listo en ${convSecs(item.ms)} · ${convTools(item.tools)} · ${convUsd(item.cost)}"
+    is ConvItem.Result -> convDone(item)
     is ConvItem.Divider -> item.text
 }
 
@@ -308,3 +308,7 @@ fun fitSize(w: Int, h: Int): Pair<Int, Int> {
 
 /** What the pill of an attached picture says: its mark, its long side and its weight. */
 fun pictureLabel(n: Int, w: Int, h: Int, bytes: Int) = "Imagen#$n · ${maxOf(w, h)} px · ${formatSize(bytes.toLong())}"
+
+/** What ends a turn says: how long, how many tools and, when it is known, what it cost (a turn read from a transcript has no cost, REQ-552). */
+fun convDone(item: ConvItem.Result): String =
+    "Listo en ${convSecs(item.ms)} · ${convTools(item.tools)}" + if (item.cost > 0) " · ${convUsd(item.cost)}" else ""

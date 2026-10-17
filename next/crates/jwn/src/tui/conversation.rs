@@ -995,15 +995,7 @@ impl Ui {
             }
             Item::Result { ms, tools, cost } => {
                 push(
-                    vec![(
-                        format!(
-                            "✻ Listo en {} · {} · {}",
-                            secs(*ms),
-                            tools_word(*tools),
-                            usd(*cost)
-                        ),
-                        dim,
-                    )],
+                    vec![(format!("✻ {}", done_line(*ms, *tools, *cost)), dim)],
                     None,
                 );
             }
@@ -2770,16 +2762,19 @@ fn plain_of(item: &Item) -> String {
             .collect::<Vec<_>>()
             .join("\n"),
         Item::Out { lines } => lines.join("\n"),
-        Item::Result { ms, tools, cost } => {
-            format!(
-                "Listo en {} · {} · {}",
-                secs(*ms),
-                tools_word(*tools),
-                usd(*cost)
-            )
-        }
+        Item::Result { ms, tools, cost } => done_line(*ms, *tools, *cost),
         Item::Divider { text, .. } => text.clone(),
     }
+}
+
+/// What ends a turn says: how long, how many tools and, when it is known, what it cost (a turn read
+/// from a transcript has no cost, REQ-552).
+fn done_line(ms: u64, tools: u32, cost: u64) -> String {
+    let mut line = format!("Listo en {} · {}", secs(ms), tools_word(tools));
+    if cost > 0 {
+        line.push_str(&format!(" · {}", usd(cost)));
+    }
+    line
 }
 
 fn item_text(conv: &Conversation, abs: u32) -> String {
@@ -2925,7 +2920,7 @@ mod tests {
         conv.first = 0;
         let (_, rows) = frame(&Ui::default(), &conv);
         row_of(&rows, "Listo en 3 s · 1 herramienta · $0,08");
-        row_of(&rows, "Listo en 1 s · 0 herramientas · $0,00");
+        row_of(&rows, "Listo en 1 s · 0 herramientas");
         assert!(!rows.iter().any(|r| r.contains("1 herramientas")));
     }
 

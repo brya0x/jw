@@ -426,9 +426,10 @@ pub struct State {
     /// The engine has written its transcript, so `--resume` can read it.
     pub has_transcript: bool,
     pub first: u32,
-    /// When each item was made, in milliseconds since 1970: what places the items that are jwn's own
-    /// among the lines of the transcript (REQ-544). Always as long as `items`.
-    stamps: Vec<u64>,
+    /// When each item was made, in milliseconds since 1970, and whether jwn made it (and did not read
+    /// it from the transcript): what places the items that are jwn's own among the lines of the
+    /// transcript (REQ-544). Always as long as `items`.
+    stamps: Vec<(u64, bool)>,
     /// What was saved of the items that are jwn's own, until they are put among the transcript's.
     kept_saved: Vec<Kept>,
     /// It was saved with its own items, before the transcript was read (REQ-544): it keeps them.
@@ -536,7 +537,7 @@ fn stamp() -> u64 {
 /// The lines of a transcript with the items that are jwn's own among them, each after the last
 /// line that was made no later than it. A card of a subagent takes the place of the tool that
 /// started it, which is also a line of the transcript.
-fn merge(base: &[crate::transcript::Stamped], kept: &[Kept]) -> (Vec<Item>, Vec<u64>) {
+fn merge(base: &[crate::transcript::Stamped], kept: &[Kept]) -> (Vec<Item>, Vec<(u64, bool)>) {
     let mut kept: Vec<&Kept> = kept.iter().collect();
     kept.sort_by_key(|k| k.at);
     let cards: Vec<&Kept> = kept
@@ -553,7 +554,7 @@ fn merge(base: &[crate::transcript::Stamped], kept: &[Kept]) -> (Vec<Item>, Vec<
     for line in base {
         while let Some(k) = next.next_if(|k| k.at < line.at) {
             items.push(k.item.clone());
-            stamps.push(k.at);
+            stamps.push((k.at, true));
         }
         let card = match &line.item {
             Item::Tool { id, .. } => cards
@@ -564,25 +565,28 @@ fn merge(base: &[crate::transcript::Stamped], kept: &[Kept]) -> (Vec<Item>, Vec<
         match card {
             Some(k) => {
                 items.push(k.item.clone());
-                stamps.push(k.at);
+                stamps.push((k.at, true));
             }
             None => {
                 items.push(line.item.clone());
-                stamps.push(line.at);
+                stamps.push((line.at, false));
             }
         }
     }
     for k in next {
         items.push(k.item.clone());
-        stamps.push(k.at);
+        stamps.push((k.at, true));
     }
     // A card whose tool is not among the lines read stays, where its time puts it.
     for k in cards {
         let placed = items.contains(&k.item);
         if !placed {
-            let at = stamps.iter().position(|t| *t > k.at).unwrap_or(items.len());
+            let at = stamps
+                .iter()
+                .position(|(t, _)| *t > k.at)
+                .unwrap_or(items.len());
             items.insert(at, k.item.clone());
-            stamps.insert(at, k.at);
+            stamps.insert(at, (k.at, true));
         }
     }
     (items, stamps)
@@ -645,7 +649,7 @@ impl State {
         st.has_transcript = saved.has_transcript;
         st.first = saved.first;
         st.legacy = !saved.items.is_empty();
-        st.stamps = vec![saved.saved_at; saved.items.len()];
+        st.stamps = vec![(saved.saved_at, true); saved.items.len()];
         st.items = saved.items;
         st.kept_saved = saved.kept;
         st.cost = saved.cost;
@@ -727,8 +731,8 @@ impl State {
         self.items
             .iter()
             .zip(&self.stamps)
-            .filter(|(item, _)| is_ours(item))
-            .map(|(item, at)| Kept {
+            .filter(|(item, (_, here))| *here && is_ours(item))
+            .map(|(item, (at, _))| Kept {
                 at: *at,
                 item: item.clone(),
             })
@@ -809,7 +813,7 @@ impl State {
 
     fn push(&mut self, item: Item) {
         self.items.push(item);
-        self.stamps.push(stamp());
+        self.stamps.push((stamp(), true));
         self.trim();
     }
 
@@ -2353,7 +2357,7 @@ pub fn tool_arg(name: &str, input: &Value) -> String {
 
 /// The lines an edit changes, from what it is asked to do (the engine gives the strings, not
 /// the numbers of the lines).
-fn edit_diff(name: &str, input: &Value) -> Vec<DiffLine> {
+pub(crate) fn edit_diff(name: &str, input: &Value) -> Vec<DiffLine> {
     let mut out = Vec::new();
     let add = |sign: DiffSign, text: &str, out: &mut Vec<DiffLine>| {
         for l in text.lines().take(OUTPUT_LINES) {
