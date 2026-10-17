@@ -473,7 +473,7 @@ data class WorktreeInfo(
     val head: String,
     /** Its folder is not there any more. */
     val missing: Boolean = false,
-    /** How many files it has changed; none when it could not be read. */
+    /** How many entries `git status --porcelain` lists; none when it could not be read or the folder is missing. */
     val changes: Int? = null,
     /** The workspace that has it open. */
     val workspace: Id? = null,

@@ -1395,7 +1395,6 @@ impl View {
             return;
         };
         self.project_asks.push(repo.clone());
-        self.worktree_asks.push(repo.clone());
         self.worktree = Some(open::Worktree::new(
             repo,
             from.unwrap_or_else(|| "HEAD".into()),
@@ -1546,7 +1545,11 @@ impl View {
         let Some(t) = self.worktree.as_mut() else {
             return After::Continue;
         };
-        match t.press(ev.code, ev.modifiers.contains(KeyModifiers::CONTROL)) {
+        let made = t.press(ev.code, ev.modifiers.contains(KeyModifiers::CONTROL));
+        if t.wants_list() {
+            self.worktree_asks.push(t.repo.clone());
+        }
+        match made {
             open::Make::Stay => After::Continue,
             open::Make::Close => {
                 self.worktree = None;
@@ -7915,13 +7918,20 @@ mod tests {
         let mut v = view_on(&root);
         let app = root.join("app");
         tap(&mut v, 'w');
-        assert_eq!(
-            v.take_worktree_asks(),
-            std::slice::from_ref(&app),
-            "the box asks for the list"
+        assert!(
+            v.take_worktree_asks().is_empty(),
+            "git reads the status of each worktree: the list waits for its side"
         );
         assert!(v.plain(120, 30).contains("existentes"));
         v.press_key(plain(KeyCode::Right));
+        assert_eq!(
+            v.take_worktree_asks(),
+            std::slice::from_ref(&app),
+            "the first time the side is shown the box asks for the list"
+        );
+        v.press_key(plain(KeyCode::Left));
+        v.press_key(plain(KeyCode::Right));
+        assert!(v.take_worktree_asks().is_empty(), "and only that time");
         assert!(v.plain(120, 30).contains("leyendo los worktrees…"));
         v.worktrees_replied(&app, Ok(Ok(Some(worktree_infos(&root)))));
         let t = v.plain(120, 30);

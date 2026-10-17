@@ -203,5 +203,13 @@ mod port_tests {
             serde_json::from_str(r#"{"id":"w","name":"n","kind":"folder","path":"/p","panes":[]}"#)
                 .unwrap();
         assert!(ws.ports.is_none());
+        assert!(!ws.adopted, "an old session has no worktree that existed");
+        let mut ws = ws;
+        ws.adopted = true;
+        let back: Workspace = serde_json::from_str(&serde_json::to_string(&ws).unwrap()).unwrap();
+        assert!(
+            back.adopted,
+            "REQ-536: it is saved, so a restart does not run its setup"
+        );
     }
 }

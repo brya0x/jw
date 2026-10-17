@@ -471,6 +471,8 @@ pub struct Worktree {
     pub opens: OpenKind,
     pub side: Side,
     pub existing: Existing,
+    /// The list of the worktrees that exist has been asked for.
+    listed_once: bool,
     /// The row of the list of existing worktrees the keys are on.
     sel: usize,
     /// The paths marked with `espacio` to open together.
@@ -525,6 +527,7 @@ impl Worktree {
             opens: OpenKind::Shell,
             side: Side::New,
             existing: Existing::Reading,
+            listed_once: false,
             sel: 0,
             marked: Vec::new(),
             note: None,
@@ -542,6 +545,14 @@ impl Worktree {
             }
             Err(why) => Existing::Refused(why),
         };
+    }
+
+    /// Whether the list of the worktrees that exist must be asked for now: the first time the
+    /// side is shown, and not when the box opens, because git reads the status of each one.
+    pub fn wants_list(&mut self) -> bool {
+        let wants = self.side == Side::Existing && !self.listed_once;
+        self.listed_once |= wants;
+        wants
     }
 
     /// What opening did: said in the box.

@@ -632,7 +632,7 @@ pub struct WorktreeInfo {
     /// Its folder is not there any more.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub missing: bool,
-    /// How many files it has changed; none when it could not be read (or the folder is missing).
+    /// How many entries `git status --porcelain` lists; none when it could not be read or the folder is missing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub changes: Option<u32>,
     /// The workspace that has it open, when one has.

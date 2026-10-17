@@ -18,7 +18,6 @@ struct Entry {
     path: String,
     head: String,
     branch: Option<String>,
-    bare: bool,
 }
 
 /// The entries of `git worktree list --porcelain`: blocks of `key value` lines apart by a blank
@@ -30,7 +29,6 @@ fn parse(text: &str) -> Vec<Entry> {
                 path: String::new(),
                 head: String::new(),
                 branch: None,
-                bare: false,
             };
             for line in block.lines() {
                 let (key, value) = line.split_once(' ').unwrap_or((line, ""));
@@ -45,7 +43,6 @@ fn parse(text: &str) -> Vec<Entry> {
                                 .to_owned(),
                         );
                     }
-                    "bare" => entry.bare = true,
                     _ => {}
                 }
             }
@@ -68,23 +65,63 @@ fn read(repo: &str) -> Result<(PathBuf, Vec<Entry>), ErrorBody> {
         ));
     }
     let main = PathBuf::from(entries.remove(0).path);
-    entries.retain(|e| !e.bare);
     Ok((main, entries))
 }
 
-/// How many files a worktree has changed, when git says.
+/// How many entries `git status` lists for a worktree, when git says.
 fn changes(dir: &Path) -> Option<u32> {
     let out = git::read(dir, &["status", "--porcelain"], 1 << 20).ok()?;
-    Some(
-        out.bytes
-            .split(|b| *b == b'\n')
-            .filter(|l| !l.is_empty())
-            .count() as u32,
-    )
+    let lines = out
+        .bytes
+        .split(|b| *b == b'\n')
+        .filter(|l| !l.is_empty())
+        .count();
+    Some(u32::try_from(lines).unwrap_or(u32::MAX))
 }
 
-fn same(a: &Path, b: &Path) -> bool {
-    a == b || matches!((a.canonicalize(), b.canonicalize()), (Ok(a), Ok(b)) if a == b)
+/// A path as the disk spells it, or as it was given when the disk cannot say.
+fn canon(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// The workspaces' folders and ids, copied so the paths are compared with the lock dropped.
+fn open_folders(shared: &Shared) -> Vec<(PathBuf, Id, String)> {
+    shared
+        .lock()
+        .model
+        .workspaces
+        .iter()
+        .map(|w| (PathBuf::from(&w.path), w.id.clone(), w.name.clone()))
+        .collect()
+}
+
+/// Worktrees whose status is read together: git is slow in a big checkout, and a repository can
+/// have tens of them.
+const AT_ONCE: usize = 8;
+
+/// Whether each worktree's folder is missing and, when it is not, how many files it has changed.
+fn statuses(entries: &[Entry]) -> Vec<(bool, Option<u32>)> {
+    let mut out = Vec::with_capacity(entries.len());
+    for group in entries.chunks(AT_ONCE) {
+        std::thread::scope(|scope| {
+            let jobs: Vec<_> = group
+                .iter()
+                .map(|e| {
+                    let path = Path::new(&e.path);
+                    let missing = !path.is_dir();
+                    (
+                        missing,
+                        scope.spawn(move || if missing { None } else { changes(path) }),
+                    )
+                })
+                .collect();
+            out.extend(
+                jobs.into_iter()
+                    .map(|(missing, job)| (missing, job.join().ok().flatten())),
+            );
+        });
+    }
+    out
 }
 
 /// `list_worktrees`: the worktrees of the repository `repo` is in, but its main one, each with
@@ -92,39 +129,28 @@ fn same(a: &Path, b: &Path) -> bool {
 /// has it open (REQ-533).
 pub fn list(shared: &Shared, repo: &str) -> Done {
     let (_, entries) = read(repo)?;
-    let open: Vec<(PathBuf, Id)> = shared
-        .lock()
-        .model
-        .workspaces
-        .iter()
-        .map(|w| (PathBuf::from(&w.path), w.id.clone()))
+    let open: Vec<(PathBuf, Id)> = open_folders(shared)
+        .into_iter()
+        .map(|(path, id, _)| (canon(&path), id))
         .collect();
-    // The status of each is read on a thread of its own: git is slow in a big checkout and the
-    // worktrees are many.
-    let worktrees: Vec<WorktreeInfo> = std::thread::scope(|scope| {
-        let jobs: Vec<_> = entries
-            .iter()
-            .map(|e| {
-                let path = Path::new(&e.path);
-                let missing = !path.is_dir();
-                let changed = scope.spawn(move || if missing { None } else { changes(path) });
-                (e, missing, changed)
-            })
-            .collect();
-        jobs.into_iter()
-            .map(|(e, missing, changed)| WorktreeInfo {
+    let worktrees: Vec<WorktreeInfo> = entries
+        .iter()
+        .zip(statuses(&entries))
+        .map(|(e, (missing, changes))| {
+            let at = canon(Path::new(&e.path));
+            WorktreeInfo {
                 path: e.path.clone(),
                 branch: e.branch.clone(),
                 head: e.head.clone(),
                 missing,
-                changes: changed.join().ok().flatten(),
+                changes,
                 workspace: open
                     .iter()
-                    .find(|(p, _)| same(p, Path::new(&e.path)))
+                    .find(|(p, _)| *p == at)
                     .map(|(_, id)| id.clone()),
-            })
-            .collect()
-    });
+            }
+        })
+        .collect();
     Ok(Some(json!({ "worktrees": worktrees })))
 }
 
@@ -132,10 +158,8 @@ pub fn list(shared: &Shared, repo: &str) -> Done {
 /// nothing made, copied or run (REQ-534, REQ-536). Its ports are given as any worktree's are.
 pub fn open(shared: &Shared, repo: &str, path: &str) -> Done {
     let (main, entries) = read(repo)?;
-    let Some(entry) = entries
-        .iter()
-        .find(|e| same(Path::new(&e.path), Path::new(path)))
-    else {
+    let wanted = canon(Path::new(path));
+    let Some(entry) = entries.iter().find(|e| canon(Path::new(&e.path)) == wanted) else {
         return Err(err(
             ErrorCode::NotFound,
             format!("{path} is not a worktree of {repo}"),
@@ -152,16 +176,13 @@ pub fn open(shared: &Shared, repo: &str, path: &str) -> Done {
     let dir_text = dir.to_string_lossy().into_owned();
     // The workspace of a worktree made by jwn keeps the path as it was joined, not as the disk
     // spells it, so the paths are compared as the disk does.
-    if let Some(w) = shared
-        .lock()
-        .model
-        .workspaces
-        .iter()
-        .find(|w| same(Path::new(&w.path), &dir))
+    if let Some((_, _, name)) = open_folders(shared)
+        .into_iter()
+        .find(|(p, _, _)| canon(p) == dir)
     {
         return Err(err(
             ErrorCode::Conflict,
-            format!("{dir_text} is already open as {:?}", w.name),
+            format!("{dir_text} is already open as {name:?}"),
         ));
     }
     let project = crate::start::load(shared, &main)?;
@@ -204,10 +225,10 @@ mod tests {
     const LISTED: &str = "worktree /code/app\nHEAD 4f2a9c1d00000000000000000000000000000000\nbranch refs/heads/main\n\n\
         worktree /code/app-wt/login\nHEAD 9a8b7c6e00000000000000000000000000000000\nbranch refs/heads/fix/login\n\n\
         worktree /code/app-wt/bisect\nHEAD 1d2e3f4a00000000000000000000000000000000\ndetached\nlocked testing\n\n\
-        worktree /code/app.git\nbare\n";
+        worktree /code/my worktrees/old\nHEAD aa00bb1100000000000000000000000000000000\nbranch refs/heads/old\nprunable gitdir file points to non-existent location\n";
 
     #[test]
-    fn what_git_lists_is_read_with_its_branches_detached_heads_and_bare_repositories() {
+    fn what_git_lists_is_read_with_its_branches_detached_heads_spaces_and_the_notes_it_adds() {
         let list = parse(LISTED);
         assert_eq!(list.len(), 4);
         assert_eq!(list[0].path, "/code/app");
@@ -218,7 +239,12 @@ mod tests {
         );
         assert_eq!(list[1].head, "9a8b7c6", "the first seven digits");
         assert_eq!(list[2].branch, None, "a detached head has no branch");
-        assert!(list[3].bare);
+        assert_eq!(list[3].path, "/code/my worktrees/old", "a path with spaces");
+        assert_eq!(
+            list[3].branch.as_deref(),
+            Some("old"),
+            "a prunable note is ignored"
+        );
     }
 
     #[test]
