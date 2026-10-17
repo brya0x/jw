@@ -281,8 +281,9 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
         }
     }
 
-    // What waits for the turn that runs is shown as messages not sent yet (REQ-549).
-    node.queue.forEach { Mono("⧖ $it", Palette.dim, 12, lines = 3, modifier = Modifier.fillMaxWidth().padding(horizontal = Pad, vertical = 2.dp)) }
+    // What waits for the turn that runs is shown as messages not sent yet, the first few: the chip says how many there are (REQ-549).
+    node.queue.take(QueueShown).forEach { Mono("⧖ $it", Palette.dim, 12, lines = 2, modifier = Modifier.fillMaxWidth().padding(horizontal = Pad, vertical = 2.dp)) }
+    if (node.queue.size > QueueShown) Mono("⧖ y ${node.queue.size - QueueShown} más", Palette.dim, 12, modifier = Modifier.fillMaxWidth().padding(horizontal = Pad, vertical = 2.dp))
 
     // ---- the line over the field, the notice and the copy bar ----
     node.workLine(retaking, now)?.let { line ->
@@ -430,6 +431,9 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
 }
 
 private val Pad = 12.dp
+
+/** How many of the messages that wait are drawn under the list. */
+private const val QueueShown = 3
 
 /** The mode in the colour the terminal client gives it: dim for manual, magenta for accept edits, cyan for plan, yellow for auto. */
 @Composable

@@ -1969,6 +1969,8 @@ impl State {
     /// REQ-458); `wanted` is the model it was told to run with.
     pub fn engine_started(&mut self, wanted: Option<&str>) -> Vec<Effect> {
         self.last_total_micro = 0;
+        // What waits is the engine's own from now on, not what another `claude` queued (REQ-549).
+        self.followed_queue.clear();
         self.wanted_model = wanted.map(str::to_owned);
         if self.status == ConvStatus::Resuming || self.status == ConvStatus::Dead {
             self.status = ConvStatus::Idle;
@@ -3460,5 +3462,19 @@ mod tests {
             "{:?}",
             started.elapsed()
         );
+    }
+
+    /// REQ-549: what another `claude` queued is shown while its session is followed, and goes when
+    /// this conversation's own engine starts.
+    #[test]
+    fn what_another_claude_queued_is_shown_until_the_own_engine_starts() {
+        let t = crate::transcript::parse(
+            r#"{"type":"queue-operation","operation":"enqueue","content":"y esto"}"#,
+        );
+        let mut s = st();
+        s.follow(&t);
+        assert_eq!(s.followed_queue, ["y esto"]);
+        let _ = s.engine_started(None);
+        assert!(s.followed_queue.is_empty());
     }
 }

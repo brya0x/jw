@@ -44,7 +44,6 @@ import dev.jw.next.client.convKilo
 import dev.jw.next.client.convDone
 import dev.jw.next.client.convSecs
 import dev.jw.next.client.convTools
-import dev.jw.next.client.convUsd
 import dev.jw.next.client.char
 import dev.jw.next.contract.ConvItem
 import dev.jw.next.contract.DiffLine

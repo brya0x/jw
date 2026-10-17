@@ -80,6 +80,10 @@ class ConversationTest {
         assertFalse(turn.contains("el daemon se reinició"), "a divider is not the turn")
         assertEquals("", turnText(c.items, 99))
         assertTrue(itemText(ConvItem.Result(11_000, 3, 60_000)).startsWith("Listo en 11 s"))
+        // REQ-552: a turn read from a transcript has no cost, and the line leaves it out; the words are the terminal client's `done_line`.
+        assertEquals("Listo en 9 s · 1 herramienta", convDone(ConvItem.Result(9_000, 1, 0)))
+        assertEquals("Listo en 11 s · 3 herramientas · \$0,06", convDone(ConvItem.Result(11_000, 3, 60_000)))
+        assertEquals("Listo en 9 s · 1 herramienta", itemText(ConvItem.Result(9_000, 1, 0)))
     }
 
     @Test

@@ -2281,6 +2281,8 @@ impl Ui {
                 .checked_sub(top)
                 .and_then(|r| lines.get(start + r))
                 .map(|l| l.item);
+            // A message that waits is not an item: there is nothing of it to pick or copy.
+            let hit = hit.filter(|i| ((i - conv.first) as usize) < conv.items.len());
             self.picked = hit;
             if let Some(i) = hit
                 && let Some(item) = conv.items.get((i - conv.first) as usize)

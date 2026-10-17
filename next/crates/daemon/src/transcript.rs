@@ -1,5 +1,5 @@
 //! A conversation the engine already has, read from its own transcript instead of copied
-//! (spec REQ-540 to REQ-546): what was said, with the time of each line, and the mode, the model and
+//! (spec REQ-540 to REQ-557): what was said, with the time of each line, and the mode, the model and
 //! the effort it ended with. The transcript is `~/.claude/projects/<folder>/<session>.jsonl`, one
 //! JSON line for each message or note, and it only grows: a `Source` reads the end of it when a
 //! conversation is opened and then the lines that are added, so a session another `claude` is
@@ -169,13 +169,14 @@ impl Parser {
         let content = entry["content"].as_str();
         match (entry["operation"].as_str().unwrap_or(""), content) {
             ("enqueue", Some(text)) => {
-                self.queue.push((text.to_owned(), is_the_persons(text)));
-                self.rev += 1;
+                let shown = is_the_persons(text);
+                self.queue.push((text.to_owned(), shown));
+                self.rev += u64::from(shown);
             }
             // The first one was taken in, whatever it said.
             ("dequeue", _) if !self.queue.is_empty() => {
-                self.queue.remove(0);
-                self.rev += 1;
+                let (_, shown) = self.queue.remove(0);
+                self.rev += u64::from(shown);
             }
             ("remove", Some(text)) => self.unqueue(text),
             _ => {}
@@ -185,8 +186,8 @@ impl Parser {
     /// The first message that waits with this text is not waiting any more.
     fn unqueue(&mut self, text: &str) {
         if let Some(at) = self.queue.iter().position(|(t, _)| t.trim() == text.trim()) {
-            self.queue.remove(at);
-            self.rev += 1;
+            let (_, shown) = self.queue.remove(at);
+            self.rev += u64::from(shown);
         }
     }
 
@@ -270,7 +271,7 @@ impl Parser {
                 // are short are shown as the narration they are, and the whole thinking is not.
                 "thinking" => {
                     let text = block["thinking"].as_str().unwrap_or("").trim();
-                    if !text.is_empty() && text.chars().count() <= SUMMARY_CHARS {
+                    if !text.is_empty() && text.chars().nth(SUMMARY_CHARS).is_none() {
                         self.push(Item::Text {
                             text: text.to_owned(),
                             live: false,
@@ -420,17 +421,34 @@ fn tag<'a>(text: &'a str, name: &str) -> Option<&'a str> {
 /// A text without the colour codes of a terminal.
 fn strip_ansi(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars();
+    let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
-        if c == '\u{1b}' {
-            // `ESC [` and what follows up to a letter.
-            for n in chars.by_ref() {
-                if n.is_ascii_alphabetic() {
-                    break;
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            // A control sequence ends at a byte from `@` to `~`.
+            Some('[') => {
+                for n in chars.by_ref() {
+                    if ('@'..='~').contains(&n) {
+                        break;
+                    }
                 }
             }
-        } else {
-            out.push(c);
+            // A command of the operating system ends at a bell or at `ESC \`.
+            Some(']') => {
+                while let Some(n) = chars.next() {
+                    if n == '\u{7}' {
+                        break;
+                    }
+                    if n == '\u{1b}' {
+                        chars.next_if_eq(&'\\');
+                        break;
+                    }
+                }
+            }
+            _ => {}
         }
     }
     out
@@ -1113,6 +1131,30 @@ mod tests {
             "jwn's engine wrote them: only what the person said is read: {own:?}"
         );
         assert!(matches!(&own[0], Item::User { text, .. } if text == "hola"));
+    }
+
+    #[test]
+    fn the_colour_codes_and_the_commands_of_a_terminal_are_taken_out_of_what_a_command_printed() {
+        assert_eq!(
+            strip_ansi("\u{1b}[2mCompacted\u{1b}[22m ok"),
+            "Compacted ok"
+        );
+        assert_eq!(
+            strip_ansi("a\u{1b}[3~b"),
+            "ab",
+            "a sequence that ends with `~` ends there"
+        );
+        assert_eq!(
+            strip_ansi("a\u{1b}]0;titulo\u{7}b"),
+            "ab",
+            "a command of the system, ended by a bell"
+        );
+        assert_eq!(
+            strip_ansi("a\u{1b}]8;;http://x\u{1b}\\b"),
+            "ab",
+            "or by ESC and a backslash"
+        );
+        assert_eq!(strip_ansi("fin\u{1b}"), "fin", "a lone ESC at the end");
     }
 
     #[test]
