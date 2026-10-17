@@ -246,7 +246,18 @@ pub fn edit(
         .parse()
         .map_err(|e| format!("{}: {e}", label_of(Some(&target))))?;
     change(&mut doc, &now, set);
-    write(top, personal_dir, to, &doc.to_string())
+    write(top, personal_dir, to, &render(&doc, &text))
+}
+
+/// The document as text; `toml_edit` reads CRLF as LF, so a file that had CRLF gets it back whole
+/// and not half of its lines.
+fn render(doc: &toml_edit::DocumentMut, original: &str) -> String {
+    let out = doc.to_string();
+    if original.contains("\r\n") {
+        out.replace("\r\n", "\n").replace('\n', "\r\n")
+    } else {
+        out
+    }
 }
 
 /// Sets `key` to `new`, keeping the comment after the value it replaces.
@@ -541,6 +552,68 @@ mod tests {
         )
         .unwrap();
         assert_eq!(p.root, Path::new("/code/app-trees"));
+    }
+
+    /// What `change` makes of `text`, checked to read as a file does.
+    fn changed(text: &str, set: &ProjectEdit) -> (String, Project) {
+        let now = read_text(text).unwrap();
+        let mut doc: toml_edit::DocumentMut = text.parse().unwrap();
+        change(&mut doc, &now, set);
+        let out = render(&doc, text);
+        let project = read_text(&out).unwrap_or_else(|e| panic!("{e}\n{out}"));
+        (out, project)
+    }
+
+    #[test]
+    fn a_change_keeps_a_file_that_is_written_in_other_ways_and_reads_back() {
+        let ports = |p: &[(&str, u32)]| ProjectEdit {
+            ports: Some(p.iter().map(|(n, o)| ((*n).to_owned(), *o)).collect()),
+            ..Default::default()
+        };
+        // `[ports]` as a table becomes the inline one, and the tables around it stay
+        let (out, p) = changed(
+            "# c\nopen = \"claude\"\n[env]\nfile = \".env\"\n[ports]\nweb = 1\n[tui]\nleader = \"x\"\n",
+            &ports(&[("web", 1), ("api", 2)]),
+        );
+        assert_eq!(p.ports.len(), 2);
+        assert!(
+            out.contains("[env]") && out.contains("[tui]") && out.contains("# c"),
+            "{out}"
+        );
+        // dotted keys
+        let (_, p) = changed("ports.web = 1\n", &ports(&[("web", 5)]));
+        assert_eq!(p.ports["web"], 5);
+        // no newline at the end, and a file written with CRLF
+        let set = ProjectEdit {
+            open: Some(OpenKind::Claude),
+            copy: Some(vec![".env".into()]),
+            ..Default::default()
+        };
+        let (_, p) = changed("root = \"../x\"", &set);
+        assert_eq!(
+            (p.open, p.copy.as_slice()),
+            (OpenKind::Claude, [".env".to_owned()].as_slice())
+        );
+        let (out, p) = changed("root = \"../x\"\r\n[env]\r\nfile = \".env\"\r\n", &set);
+        assert_eq!(p.open, OpenKind::Claude);
+        assert!(out.starts_with("root = \"../x\"\r\n"), "{out:?}");
+        // taking out what is not there, or putting what is there, is no change at all
+        let same =
+            "# team\nroot = \"../x\" # beside\nsetup = [\"a\"]\n[agent]\ndefault = \"claude\"\n";
+        let none = ProjectEdit {
+            root: Some("../x".into()),
+            setup: Some(vec!["a".into()]),
+            copy: Some(vec![]),
+            ports: Some(Default::default()),
+            open: Some(OpenKind::Shell),
+        };
+        assert_eq!(changed(same, &none).0, same);
+        // a replaced value keeps the comment after it
+        let root = ProjectEdit {
+            root: Some("../y".into()),
+            ..Default::default()
+        };
+        assert!(changed(same, &root).0.contains("root = \"../y\" # beside"));
     }
 
     #[test]

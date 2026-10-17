@@ -117,19 +117,30 @@ impl Project {
     /// The daemon's answer to `project_config`: the screen shows it, whatever was there, with the
     /// person's note kept.
     pub fn set_info(&mut self, info: Result<ProjectInfo, String>) {
+        // Reading again after a save keeps the field and the file the person was on.
+        let before = match &self.load {
+            Load::Ready(f) => Some((f.sel, f.to)),
+            _ => None,
+        };
         self.load = match info {
             Ok(info) => {
                 let values = Values::of(&info);
-                Load::Ready(Box::new(Form {
-                    to: if info.from == Some(ConfigFrom::Repo) {
-                        ConfigFrom::Repo
-                    } else {
-                        ConfigFrom::Personal
+                let to = before.map_or_else(
+                    || {
+                        if info.from == Some(ConfigFrom::Repo) {
+                            ConfigFrom::Repo
+                        } else {
+                            ConfigFrom::Personal
+                        }
                     },
+                    |(_, to)| to,
+                );
+                Load::Ready(Box::new(Form {
+                    to,
                     info,
                     orig: values.clone(),
                     cur: values,
-                    sel: 0,
+                    sel: before.map_or(0, |(sel, _)| sel),
                     sub: None,
                     edit: None,
                     adding: false,
@@ -273,19 +284,24 @@ impl Form {
     /// The item of the list as it is typed: a port is `name=offset`.
     fn item(&self, at: usize) -> String {
         match self.field() {
-            Field::Setup => self.cur.setup[at].clone(),
-            Field::Copy => self.cur.copy[at].clone(),
-            Field::Ports => format!("{}={}", self.cur.ports[at].0, self.cur.ports[at].1),
+            Field::Setup => self.cur.setup.get(at).cloned().unwrap_or_default(),
+            Field::Copy => self.cur.copy.get(at).cloned().unwrap_or_default(),
+            Field::Ports => self
+                .cur
+                .ports
+                .get(at)
+                .map(|(n, o)| format!("{n}={o}"))
+                .unwrap_or_default(),
             Field::Root | Field::Open => String::new(),
         }
     }
 
     fn remove(&mut self, at: usize) {
         match self.field() {
-            Field::Setup => drop(self.cur.setup.remove(at)),
-            Field::Copy => drop(self.cur.copy.remove(at)),
-            Field::Ports => drop(self.cur.ports.remove(at)),
-            Field::Root | Field::Open => {}
+            Field::Setup if at < self.cur.setup.len() => drop(self.cur.setup.remove(at)),
+            Field::Copy if at < self.cur.copy.len() => drop(self.cur.copy.remove(at)),
+            Field::Ports if at < self.cur.ports.len() => drop(self.cur.ports.remove(at)),
+            _ => {}
         }
     }
 
@@ -370,10 +386,10 @@ impl Form {
                 } else {
                     &mut self.cur.copy
                 };
-                if text.is_empty() {
-                    list.remove(at);
-                } else {
-                    list[at] = text.to_owned();
+                match list.get_mut(at) {
+                    Some(_) if text.is_empty() => drop(list.remove(at)),
+                    Some(item) => *item = text.to_owned(),
+                    None => {}
                 }
                 let len = list.len();
                 self.sub = (len > 0).then(|| at.min(len - 1));
@@ -401,7 +417,9 @@ impl Form {
                 {
                     return Err(format!("el puerto {name} ya está"));
                 }
-                self.cur.ports[at] = (name.to_owned(), offset);
+                if let Some(port) = self.cur.ports.get_mut(at) {
+                    *port = (name.to_owned(), offset);
+                }
             }
             _ => {}
         }

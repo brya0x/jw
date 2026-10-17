@@ -1435,13 +1435,17 @@ impl View {
         let Some(p) = self.project.as_mut().filter(|p| p.repo == repo) else {
             return;
         };
-        p.saved(reply_value(reply).map(|v| {
+        let saved = reply_value(reply).map(|v| {
             (
                 v["path"].as_str().unwrap_or_default().to_owned(),
                 v["shadowed"].as_bool().unwrap_or(false),
             )
-        }));
-        self.project_asks.push(repo.to_path_buf());
+        });
+        // A save that failed keeps what was typed; one that worked reads the settings again.
+        if saved.is_ok() {
+            self.project_asks.push(repo.to_path_buf());
+        }
+        p.saved(saved);
     }
 
     /// A key in the project screen.
@@ -7872,6 +7876,20 @@ mod tests {
             &root.join("app"),
             project_reply(&root.join("app-wt"), Some(&["make deps"])),
         );
+        // A save the daemon refused is told and keeps what was typed: nothing is read again.
+        v.press_key(plain(KeyCode::Right));
+        v.project_saved(
+            &root.join("app"),
+            Ok(Err(contract::ErrorBody {
+                code: contract::ErrorCode::BadRequest,
+                message: ".jw.toml, line 2: bad".into(),
+            })),
+        );
+        assert!(v.take_project_asks().is_empty());
+        let t = v.plain(120, 40);
+        assert!(t.contains("no se pudo guardar: .jw.toml, line 2"), "{t}");
+        assert!(t.contains("hay cambios sin guardar"), "{t}");
+        v.press_key(plain(KeyCode::Right));
         assert_eq!(v.press_key(plain(KeyCode::Esc)), After::Continue);
         assert!(v.project.is_none());
         // A folder that is no repository has no settings of its own.
