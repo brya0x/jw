@@ -9,7 +9,7 @@ use std::thread;
 use crate::blocks::{self, BlockStore, Scanner};
 use crate::integration::Setup;
 use crate::replies::Queries;
-use contract::{Block, BlocksMode, Cursor, Id, PaneInput, Screen};
+use contract::{Block, BlocksMode, Cursor, Id, PaneInput, Screen, Span};
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 pub const ROWS: u16 = 24;
@@ -273,6 +273,7 @@ impl Term {
 pub fn screen_of(screen: &vt100::Screen) -> Screen {
     let (rows, cols) = screen.size();
     let (row, col) = screen.cursor_position();
+    let alt = screen.alternate_screen();
     Screen {
         rows,
         cols,
@@ -285,8 +286,17 @@ pub fn screen_of(screen: &vt100::Screen) -> Screen {
             col,
             visible: !screen.hide_cursor(),
         },
-        alt: screen.alternate_screen(),
+        alt,
+        spans: if alt { styled_rows(screen) } else { Vec::new() },
     }
+}
+
+/// The rows of the screen with their colours, one for each row of the terminal: the ones the
+/// program left blank, at the end, are empty.
+fn styled_rows(screen: &vt100::Screen) -> Vec<Vec<Span>> {
+    let mut rows = crate::blocks::rows_of(screen);
+    rows.resize(screen.size().0 as usize, Vec::new());
+    rows
 }
 
 /// The line the shell holds: from `start_col` of the first row of the wrapped line the cursor is
@@ -338,6 +348,7 @@ pub fn blank_screen() -> Screen {
             visible: true,
         },
         alt: false,
+        spans: Vec::new(),
     }
 }
 
@@ -396,6 +407,37 @@ mod tests {
         assert!(
             !screen_of(p.screen()).alt,
             "left: the shell's own screen is back"
+        );
+    }
+
+    #[test]
+    fn on_the_alternate_screen_the_rows_come_with_their_colours_and_off_it_they_do_not() {
+        use contract::Color;
+        let mut p = vt100::Parser::new(6, 20, 0);
+        p.process(b"\x1b[31m$ ls\x1b[0m");
+        let shell = screen_of(p.screen());
+        assert!(shell.spans.is_empty(), "the shell's own screen is text");
+        assert_eq!(shell.lines[0], "$ ls");
+
+        p.process(b"\x1b[?1049h\x1b[38;5;208mlocal\x1b[0m x \x1b[48;2;1;2;3m\x1b[1mTODO\x1b[0m");
+        p.process(b"\x1b[6;1H\x1b[7m NORMAL \x1b[0m");
+        let alt = screen_of(p.screen());
+        assert_eq!(alt.spans.len(), 6, "one row for each row of the terminal");
+        let first = &alt.spans[0];
+        assert_eq!(first[0].t, "local");
+        assert_eq!(first[0].fg, Some(Color::Index(208)));
+        assert_eq!(first[1].t, " x ");
+        assert_eq!(first[1].fg, None, "the default colour is not named");
+        assert_eq!(first[2].t, "TODO");
+        assert_eq!(first[2].bg, Some(Color::Rgb("#010203".into())));
+        assert!(first[2].b);
+        assert!(alt.spans[1].is_empty() && alt.spans[4].is_empty());
+        let bar = &alt.spans[5][0];
+        assert_eq!(bar.t, " NORMAL ");
+        assert_eq!(
+            (bar.fg.clone(), bar.bg.clone()),
+            (Some(Color::Index(0)), Some(Color::Index(7))),
+            "a reversed cell with the default colours swaps them"
         );
     }
 

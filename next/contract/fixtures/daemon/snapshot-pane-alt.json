@@ -1,0 +1,94 @@
+{
+  "t": "snapshot",
+  "node": {
+    "id": "00000000-0000-4000-8000-0000000000c1",
+    "type": "pane",
+    "v": 1,
+    "epoch": "00000000-0000-4000-8000-000000000001",
+    "rev": 11,
+    "attention": [],
+    "workspace": "00000000-0000-4000-8000-0000000000b1",
+    "title": "nvim",
+    "shell": "/bin/zsh",
+    "cwd": "/home/u/code/app-login",
+    "running": {
+      "argv": [
+        "nvim",
+        "src/main.rs"
+      ]
+    },
+    "last_program": {
+      "argv": [
+        "cargo",
+        "test"
+      ],
+      "exit_code": 101
+    },
+    "screen": {
+      "rows": 4,
+      "cols": 40,
+      "lines": [
+        "local MAX = 64",
+        "-- TODO borrar",
+        "~",
+        " NORMAL  main.rs"
+      ],
+      "cursor": {
+        "row": 0,
+        "col": 6,
+        "visible": true
+      },
+      "alt": true,
+      "spans": [
+        [
+          {
+            "t": "local",
+            "fg": 5
+          },
+          {
+            "t": " MAX = "
+          },
+          {
+            "t": "64",
+            "fg": 3
+          }
+        ],
+        [
+          {
+            "t": "-- ",
+            "fg": 8
+          },
+          {
+            "t": "TODO",
+            "fg": "#590008",
+            "bg": 3,
+            "b": true
+          },
+          {
+            "t": " borrar",
+            "fg": 8
+          }
+        ],
+        [
+          {
+            "t": "~",
+            "fg": 4
+          }
+        ],
+        [
+          {
+            "t": " NORMAL ",
+            "fg": 0,
+            "bg": 2,
+            "b": true
+          },
+          {
+            "t": " main.rs",
+            "fg": 7,
+            "bg": 8
+          }
+        ]
+      ]
+    }
+  }
+}

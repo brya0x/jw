@@ -3774,13 +3774,28 @@ impl View {
                 skeleton(g, rect);
                 continue;
             }
-            for (r, line) in p.screen.lines.iter().take(bh.saturating_sub(2)).enumerate() {
-                g.put(
-                    bx + 2,
-                    by + 1 + r,
-                    &clip(line, bw.saturating_sub(4)),
-                    Style::fg(look::fg()),
-                );
+            let (width, height) = (bw.saturating_sub(4), bh.saturating_sub(2));
+            if p.screen.spans.is_empty() {
+                for (r, line) in p.screen.lines.iter().take(height).enumerate() {
+                    g.put(
+                        bx + 2,
+                        by + 1 + r,
+                        &clip(line, width),
+                        Style::fg(look::fg()),
+                    );
+                }
+            } else {
+                for (r, row) in p.screen.spans.iter().take(height).enumerate() {
+                    let mut x = 0;
+                    for span in row {
+                        if x >= width {
+                            break;
+                        }
+                        let text = clip(&span.t, width - x);
+                        g.put(bx + 2 + x, by + 1 + r, &text, shell::span_style(span));
+                        x += text.chars().count();
+                    }
+                }
             }
             let c = p.screen.cursor;
             if focused
@@ -5717,6 +5732,49 @@ mod tests {
         v.blocks.get_mut(BLOCKS).unwrap().mode = BlocksMode::Full;
         let t = v.plain(120, 30);
         assert!(!t.contains("❯ git status") && !t.contains("■ ^C"), "{t}");
+    }
+
+    #[test]
+    fn a_screen_with_colours_is_drawn_with_them_and_one_without_in_the_text_colour() {
+        let span = |t: &str, fg, bg| contract::Span {
+            t: t.into(),
+            fg,
+            bg,
+            b: false,
+            i: false,
+            u: false,
+        };
+        let mut v = open_blocks();
+        v.blocks.get_mut(BLOCKS).unwrap().mode = BlocksMode::Full;
+        let pane = v.panes.get_mut(SHELL).unwrap();
+        pane.screen.lines[0] = "local x".into();
+        let plain = v.grid(120, 30);
+        let (x, y) = find(&v, "local x");
+        let at = |g: &Grid, dx: usize| g.cells[y * g.cols + x + dx].1;
+        assert_eq!(at(&plain, 0).fg, Some(look::fg()), "text, as before");
+        assert_eq!(at(&plain, 0).bg, None);
+
+        let pane = v.panes.get_mut(SHELL).unwrap();
+        pane.screen.alt = true;
+        pane.screen.spans = vec![vec![
+            span("local", Some(contract::Color::Index(1)), None),
+            span(" ", None, None),
+            span("x", None, Some(contract::Color::Rgb("#010203".into()))),
+        ]];
+        let g = v.grid(120, 30);
+        assert!(g.rows_plain()[y].contains("local x"));
+        assert_eq!(
+            at(&g, 0).fg,
+            Some(look::red()),
+            "index 1 is the theme's red"
+        );
+        assert_eq!(at(&g, 5).fg, None, "no colour is the theme's own");
+        assert_eq!(
+            at(&g, 6).bg,
+            Some((1, 2, 3)),
+            "an RGB colour as it is asked"
+        );
+        assert_eq!(at(&g, 7).bg, None, "nothing spills past the row's spans");
     }
 
     #[test]

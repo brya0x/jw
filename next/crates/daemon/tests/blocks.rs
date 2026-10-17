@@ -680,12 +680,14 @@ fn the_pane_says_when_its_program_is_on_the_alternate_screen_and_when_it_left_it
     let stub = r.dir.join("altprog");
     std::fs::write(
         &stub,
-        "#!/bin/sh\nprintf '\\033[?1049h'\nsleep 1\nprintf '\\033[?1049l'\nsleep 1.5\n",
+        "#!/bin/sh\nprintf '\\033[?1049h\\033[31mred\\033[0m plain'\nsleep 1\nprintf '\\033[?1049l'\nsleep 1.5\n",
     )
     .unwrap();
     std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
     let (pane, blocks) = (r.pane.clone(), r.blocks.clone());
     let alt = move |c: &Client| c.nodes[&pane]["screen"]["alt"] == true;
+    let pane = r.pane.clone();
+    let coloured = move |c: &Client| c.nodes[&pane]["screen"]["spans"][0][0]["t"] == "red";
     let pane = r.pane.clone();
     let left = move |c: &Client| {
         c.nodes[&pane]["screen"].get("alt").is_none()
@@ -705,10 +707,27 @@ fn the_pane_says_when_its_program_is_on_the_alternate_screen_and_when_it_left_it
         "{}",
         r.c.nodes[&r.pane]
     );
+    // REQ-527: on the alternate screen the rows come with their colours, one for each row.
+    assert!(
+        r.c.wait_until(Duration::from_secs(10), coloured).unwrap(),
+        "{}",
+        r.c.nodes[&r.pane]
+    );
+    let screen = &r.c.nodes[&r.pane]["screen"];
+    assert_eq!(
+        screen["spans"].as_array().map(Vec::len),
+        screen["rows"].as_u64().map(|n| n as usize)
+    );
+    assert_eq!(screen["spans"][0][0]["fg"], 1);
+    assert!(screen["spans"][0][1].get("fg").is_none());
     assert!(
         r.c.wait_until(Duration::from_secs(10), left).unwrap(),
         "it left the alternate screen and is still the running block, full: {}",
         r.c.nodes[&r.blocks]
+    );
+    assert!(
+        r.c.nodes[&r.pane]["screen"].get("spans").is_none(),
+        "off the alternate screen the screen is text again"
     );
     assert_eq!(
         r.c.nodes[&r.blocks]["mode"], "full",

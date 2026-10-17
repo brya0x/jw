@@ -920,6 +920,10 @@ pub struct Screen {
     /// The program is on the alternate screen (nvim, htop, claude…); absent otherwise.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub alt: bool,
+    /// While `alt`: the same rows with their colours, exactly `rows` of them (REQ-527); absent
+    /// otherwise, and a client that does not read it draws `lines`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spans: Vec<Vec<Span>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

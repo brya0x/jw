@@ -240,6 +240,9 @@ pub fn rows_of(screen: &vt100::Screen) -> Vec<Vec<Span>> {
     let mut out: Vec<Vec<Span>> = Vec::new();
     for r in 0..rows {
         let mut spans: Vec<Span> = Vec::new();
+        // The style of the span being built, as the terminal has it: cells are compared on it, and
+        // the colours are turned into the contract's only when a span starts.
+        let mut open = None;
         for c in 0..cols {
             let Some(cell) = screen.cell(r, c) else {
                 continue;
@@ -251,34 +254,36 @@ pub fn rows_of(screen: &vt100::Screen) -> Vec<Vec<Span>> {
                 cell.contents()
             } else {
                 " "
-            }
-            .to_owned();
-            let (mut fg, mut bg) = (to_color(cell.fgcolor()), to_color(cell.bgcolor()));
-            if cell.inverse() {
-                std::mem::swap(&mut fg, &mut bg);
-                fg = fg.or(Some(Color::Index(0)));
-                bg = bg.or(Some(Color::Index(7)));
-            }
+            };
             let style = (
-                fg.clone(),
-                bg.clone(),
+                cell.fgcolor(),
+                cell.bgcolor(),
+                cell.inverse(),
                 cell.bold(),
                 cell.italic(),
                 cell.underline(),
             );
-            match spans.last_mut() {
-                Some(s) if (s.fg.clone(), s.bg.clone(), s.b, s.i, s.u) == style => {
-                    s.t.push_str(&text)
-                }
-                _ => spans.push(Span {
-                    t: text,
-                    fg,
-                    bg,
-                    b: style.2,
-                    i: style.3,
-                    u: style.4,
-                }),
+            if open == Some(style)
+                && let Some(s) = spans.last_mut()
+            {
+                s.t.push_str(text);
+                continue;
             }
+            open = Some(style);
+            let (mut fg, mut bg) = (to_color(style.0), to_color(style.1));
+            if style.2 {
+                std::mem::swap(&mut fg, &mut bg);
+                fg = fg.or(Some(Color::Index(0)));
+                bg = bg.or(Some(Color::Index(7)));
+            }
+            spans.push(Span {
+                t: text.to_owned(),
+                fg,
+                bg,
+                b: style.3,
+                i: style.4,
+                u: style.5,
+            });
         }
         while spans
             .last()
