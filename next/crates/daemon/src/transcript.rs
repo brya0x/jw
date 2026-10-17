@@ -240,6 +240,7 @@ impl Parser {
                     let text = block["text"].as_str().unwrap_or("");
                     if !text.trim().is_empty() {
                         self.push(Item::Text {
+                            blocks: crate::markdown::conversation_blocks(text),
                             text: text.to_owned(),
                             live: false,
                         });
@@ -275,6 +276,7 @@ impl Parser {
                         self.push(Item::Text {
                             text: text.to_owned(),
                             live: false,
+                            blocks: None,
                         });
                     }
                 }
@@ -681,6 +683,25 @@ mod tests {
             line(serde_json::json!({"type":"permission-mode","permissionMode":"plan"})),
         ]
         .concat()
+    }
+
+    #[test]
+    fn the_text_of_claude_in_the_transcript_carries_its_blocks_when_it_is_more_than_paragraphs() {
+        let t = parse(
+            &[
+                line(serde_json::json!({"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"Plano."}]}})),
+                line(serde_json::json!({"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"| a | b |\n|---|---|\n| 1 | 2 |"}]}})),
+            ]
+            .concat(),
+        );
+        let got: Vec<bool> = it(&t)
+            .iter()
+            .filter_map(|i| match i {
+                Item::Text { blocks, .. } => Some(blocks.is_some()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(got, [false, true]);
     }
 
     #[test]

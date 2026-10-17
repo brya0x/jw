@@ -86,9 +86,9 @@ sealed interface ConvItem {
     @Serializable @SerialName("user")
     data class User(val text: String, val images: Int = 0) : ConvItem
 
-    /** What Claude wrote; [live] while it is still arriving. */
+    /** What Claude wrote; [live] while it is still arriving, and [blocks] its Markdown once it is finished (REQ-560). */
     @Serializable @SerialName("text")
-    data class Text(val text: String, val live: Boolean = false) : ConvItem
+    data class Text(val text: String, val live: Boolean = false, val blocks: List<MdBlock>? = null) : ConvItem
 
     @Serializable @SerialName("tool")
     data class Tool(

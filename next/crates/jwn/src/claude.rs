@@ -453,6 +453,7 @@ mod tests {
         let text = Item::Text {
             text: "uno\ndos".into(),
             live: false,
+            blocks: None,
         };
         assert_eq!(item_lines(&text), ["● uno", "  dos"]);
         let tool = Item::Tool {
@@ -490,11 +491,13 @@ mod tests {
     fn a_live_text_and_a_running_tool_wait_to_be_printed() {
         assert!(!settled(&Item::Text {
             text: "x".into(),
-            live: true
+            live: true,
+            blocks: None,
         }));
         assert!(settled(&Item::Text {
             text: "x".into(),
-            live: false
+            live: false,
+            blocks: None,
         }));
         let running = Item::Tool {
             id: "t".into(),

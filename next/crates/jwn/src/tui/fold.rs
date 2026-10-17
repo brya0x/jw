@@ -130,6 +130,7 @@ mod tests {
         Item::Text {
             text: "x".into(),
             live: false,
+            blocks: None,
         }
     }
 

@@ -316,6 +316,42 @@ fn the_reply_of_read_markdown_is_a_document_of_blocks() {
     assert_eq!(serde_json::to_value(&md).unwrap(), doc["result"]);
 }
 
+/// The blocks of `read_markdown` and of a finished text of a conversation are checked against the
+/// schema's `MdBlock`, and the text of the conversation fixture keeps its blocks as written.
+#[test]
+fn markdown_blocks_validate_and_a_finished_text_keeps_them() {
+    let block = validator("MdBlock");
+    let docs = fixtures("daemon");
+    let (_, reply) = docs
+        .iter()
+        .find(|(n, _)| n == "reply-ok-read-markdown.json")
+        .expect("the fixture");
+    for b in reply["result"]["blocks"].as_array().unwrap() {
+        assert!(block.is_valid(b), "the schema accepts {b}");
+    }
+    assert!(!block.is_valid(&serde_json::json!({ "t": "table", "head": [] })));
+    let (_, snap) = docs
+        .iter()
+        .find(|(n, _)| n == "snapshot-conversation-markdown.json")
+        .expect("the fixture");
+    let items: Vec<contract::conversation::Item> =
+        serde_json::from_value(snap["node"]["items"].clone()).unwrap();
+    let with = items
+        .iter()
+        .find_map(|i| match i {
+            contract::conversation::Item::Text {
+                blocks: Some(b), ..
+            } => Some(b),
+            _ => None,
+        })
+        .expect("a text with blocks");
+    assert!(
+        with.iter()
+            .any(|b| matches!(b, contract::markdown::MdBlock::Table { .. }))
+    );
+    assert_eq!(serde_json::to_value(&items).unwrap(), snap["node"]["items"]);
+}
+
 /// The result of `project_config` in the fixture is what `ProjectInfo` writes and reads.
 #[test]
 fn the_reply_of_project_config_is_a_project_info() {

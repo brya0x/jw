@@ -813,11 +813,14 @@ impl Ui {
         let plain = Style::fg(look::fg());
         // Set before a push: the row it makes goes on from the one above (see `Line::soft`).
         let soft = Cell::new(false);
+        // Set before a push: how many characters past its mark the row is only how it is set.
+        let set = Cell::new(0);
         let mut push = |spans: Vec<(String, Style)>, bg: Option<Rgb>| {
             let lead = spans
                 .first()
                 .filter(|(t, _)| MARKS.contains(&t.as_str()))
-                .map_or(0, |(t, _)| t.chars().count());
+                .map_or(0, |(t, _)| t.chars().count())
+                + set.replace(0);
             out.push(Line {
                 spans,
                 bg,
@@ -845,7 +848,23 @@ impl Ui {
                     );
                 }
             }
-            Item::Text { text, live } => {
+            Item::Text {
+                blocks: Some(blocks),
+                ..
+            } => {
+                for (k, row) in super::markdown::rows(blocks, w.saturating_sub(2))
+                    .into_iter()
+                    .enumerate()
+                {
+                    let mark = if k == 0 { "● " } else { "  " };
+                    let mut spans = vec![(mark.to_owned(), plain)];
+                    spans.extend(row.spans);
+                    soft.set(row.soft);
+                    set.set(row.lead);
+                    push(spans, row.bg);
+                }
+            }
+            Item::Text { text, live, .. } => {
                 let mut rows = wrap(text, w.saturating_sub(2), plain, Style::fg(look::cyan()));
                 if *live && let Some((_, last)) = rows.last_mut() {
                     last.push(("▍".to_owned(), Style::fg(accent)));
@@ -3531,6 +3550,7 @@ mod tests {
         conv.items.push(Item::Text {
             text: long.trim().to_owned(),
             live: false,
+            blocks: None,
         });
         let mut ui = Ui::default();
         let (_, rows) = frame(&ui, &conv);
@@ -3551,6 +3571,48 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn a_text_with_blocks_is_drawn_as_blocks_and_its_marks_are_only_how_it_is_set() {
+        use contract::markdown::{Inline, MdBlock};
+        let t = |s: &str| {
+            vec![Inline {
+                t: s.into(),
+                b: false,
+                i: false,
+                code: false,
+                href: None,
+            }]
+        };
+        let mut conv = idle();
+        conv.items = vec![Item::Text {
+            text: "x".into(),
+            live: false,
+            blocks: Some(vec![
+                MdBlock::Para {
+                    text: t("Ver el caso:"),
+                },
+                MdBlock::Quote {
+                    blocks: vec![MdBlock::Para { text: t("citado") }],
+                },
+                MdBlock::Table {
+                    head: vec![t("caso"), t("fin")],
+                    rows: vec![vec![t("29"), t("vale")]],
+                },
+            ]),
+        }];
+        let ui = Ui::default();
+        let (_, rows) = frame(&ui, &conv);
+        let joined = rows.join("\n");
+        assert!(joined.contains("● Ver el caso:"), "{joined}");
+        assert!(joined.contains("▎ citado") && joined.contains("┌") && joined.contains("│ 29"));
+        let lines = ui.lines(&conv, INNER.2);
+        let quote = lines
+            .iter()
+            .find(|l| l.spans.iter().any(|(t, _)| t == "citado"))
+            .expect("the quote row");
+        assert_eq!(quote.lead, 4, "the mark and the bar are only how it is set");
     }
 
     #[test]
@@ -4483,6 +4545,7 @@ mod tests {
             Item::Text {
                 text: "Voy a mirar.".into(),
                 live: false,
+                blocks: None,
             },
             tool("a", "Grep", "verify", "ok"),
             tool("b", "Bash", "cargo test", "ok"),
@@ -4543,6 +4606,7 @@ mod tests {
             Item::Text {
                 text: "a".into(),
                 live: false,
+                blocks: None,
             },
             tool("x", "Bash"),
             tool("y", "Bash"),

@@ -135,12 +135,65 @@ fn plain(text: &[Inline]) -> String {
     text.iter().map(|i| i.t.as_str()).collect()
 }
 
-/// The blocks of Markdown `text`.
+/// How deep quotes and lists may nest before the text is not read as blocks: the reader
+/// recurses once for each level, and a crash here takes down the daemon.
+const MAX_DEPTH: usize = 32;
+
+/// The longest text of a conversation that is read as blocks (REQ-560).
+const MAX_CONVERSATION_TEXT: usize = 64 * 1024;
+
+fn options() -> Options {
+    Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS | Options::ENABLE_STRIKETHROUGH
+}
+
+/// Whether quotes and lists nest deeper than the reader follows. It walks the events with a
+/// counter, so it does not recurse itself.
+fn too_deep(text: &str) -> bool {
+    let mut depth = 0usize;
+    for event in Parser::new_ext(text, options()) {
+        match event {
+            Event::Start(Tag::BlockQuote(_) | Tag::List(_)) => {
+                depth += 1;
+                if depth > MAX_DEPTH {
+                    return true;
+                }
+            }
+            Event::End(TagEnd::BlockQuote(_) | TagEnd::List(_)) => {
+                depth = depth.saturating_sub(1);
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// The blocks of Markdown `text`. Text nested deeper than `MAX_DEPTH` is one block of code, as
+/// it was written.
 pub fn parse(text: &str) -> Vec<MdBlock> {
-    let options =
-        Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS | Options::ENABLE_STRIKETHROUGH;
-    let mut events = Parser::new_ext(text, options).peekable();
+    if too_deep(text) {
+        return vec![MdBlock::Code {
+            lang: String::new(),
+            text: text.to_owned(),
+        }];
+    }
+    let mut events = Parser::new_ext(text, options()).peekable();
     blocks_until(&mut events, None)
+}
+
+/// The blocks of a finished text of a conversation, or `None` when it is plain paragraphs (the
+/// client draws `text` as it is), too long, or nested too deep (REQ-560).
+pub fn conversation_blocks(text: &str) -> Option<Vec<MdBlock>> {
+    if text.len() > MAX_CONVERSATION_TEXT || too_deep(text) {
+        return None;
+    }
+    let blocks = parse(text);
+    let plain = blocks.iter().all(|b| match b {
+        MdBlock::Para { text } => text
+            .iter()
+            .all(|i| !i.b && !i.i && !i.code && i.href.is_none()),
+        _ => false,
+    });
+    (!plain).then_some(blocks)
 }
 
 type Events<'a> = Peekable<Parser<'a>>;
@@ -467,5 +520,52 @@ mod tests {
             panic!("a list");
         };
         assert_eq!(items.len(), 5000);
+    }
+
+    #[test]
+    fn a_text_of_a_conversation_is_blocks_only_when_it_is_more_than_plain_paragraphs() {
+        assert_eq!(
+            conversation_blocks("Listo.\n\nSigo con el siguiente."),
+            None
+        );
+        assert_eq!(conversation_blocks("una línea\notra línea"), None);
+        let rich = conversation_blocks("Ver `x` y **y**.").expect("styled text");
+        assert!(matches!(&rich[..], [MdBlock::Para { .. }]));
+        let table = conversation_blocks("a\n\n| c | d |\n|---|---|\n| 1 | 2 |").expect("a table");
+        assert!(matches!(
+            &table[..],
+            [MdBlock::Para { .. }, MdBlock::Table { .. }]
+        ));
+        assert!(conversation_blocks("[la guía](docs/a.md)").is_some());
+        assert!(conversation_blocks("- uno\n- dos").is_some());
+    }
+
+    #[test]
+    fn a_text_that_is_too_long_or_nested_too_deep_is_not_read_as_blocks() {
+        let long = format!("**b** {}", "x".repeat(MAX_CONVERSATION_TEXT));
+        assert_eq!(conversation_blocks(&long), None);
+        let quote = format!("{} x", ">".repeat(10_000));
+        assert_eq!(conversation_blocks(&quote), None);
+        let nested: String = (0..5_000)
+            .map(|n| format!("{}- x\n", "  ".repeat(n)))
+            .collect();
+        assert_eq!(conversation_blocks(&nested), None);
+        let near = format!("{} x", ">".repeat(MAX_DEPTH));
+        assert!(
+            conversation_blocks(&near).is_some(),
+            "the limit itself is read"
+        );
+    }
+
+    #[test]
+    fn a_document_nested_too_deep_is_one_block_of_code_and_does_not_overflow() {
+        let quote = format!("{} x", ">".repeat(10_000));
+        let blocks = std::thread::Builder::new()
+            .stack_size(512 * 1024)
+            .spawn(move || parse(&quote))
+            .unwrap()
+            .join()
+            .expect("no overflow");
+        assert!(matches!(&blocks[..], [MdBlock::Code { .. }]));
     }
 }

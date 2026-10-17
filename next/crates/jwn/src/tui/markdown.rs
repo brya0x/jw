@@ -127,6 +127,11 @@ pub fn text_of(rows: &[Row], from: (usize, usize), to: (usize, usize)) -> String
     out.join("\n")
 }
 
+/// The rows of `blocks` as wide as `w` (a finished text of a conversation, REQ-560).
+pub(crate) fn rows(blocks_of: &[MdBlock], w: usize) -> Vec<Row> {
+    blocks(blocks_of, w.max(8), true)
+}
+
 /// Blocks one under another; `gap` puts a blank row between them.
 fn blocks(blocks: &[MdBlock], w: usize, gap: bool) -> Vec<Row> {
     let mut out = Vec::new();

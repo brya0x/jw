@@ -230,6 +230,15 @@ class ConformanceTest {
         assertEquals(result, ContractJson.encodeToJsonElement(Opened.serializer(), opened))
     }
 
+    /** A finished text of the conversation fixture carries its Markdown blocks, a table among them (REQ-560). */
+    @Test
+    fun aFinishedTextCarriesItsMarkdownBlocks() {
+        val snapshot = fixtures("daemon").first { it.first == "snapshot-conversation-markdown.json" }.second
+        val node = (ContractJson.decodeFromJsonElement(DaemonMsg.serializer(), snapshot) as DaemonMsg.Snapshot).node
+        val blocks = (node as Node.Conversation).items.filterIsInstance<ConvItem.Text>().firstNotNullOf { it.blocks }
+        assertTrue(blocks.any { it is MdBlock.Table })
+    }
+
     /** The result of `list_conversations` in the fixture is what [ConversationList] reads, and writes back as it was. */
     @Test
     fun theReplyOfListConversationsIsTheSavedConversationsNewestFirst() {

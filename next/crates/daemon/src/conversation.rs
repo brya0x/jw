@@ -651,6 +651,11 @@ impl State {
         st.legacy = !saved.items.is_empty();
         st.stamps = vec![(saved.saved_at, true); saved.items.len()];
         st.items = saved.items;
+        for item in &mut st.items {
+            if let Item::Text { text, blocks, .. } = item {
+                *blocks = crate::markdown::conversation_blocks(text);
+            }
+        }
         st.kept_saved = saved.kept;
         st.cost = saved.cost;
         // The list the engine gave, with jwn's own in case the file is older than they are.
@@ -752,7 +757,20 @@ impl State {
             session: self.session.clone(),
             has_transcript: self.has_transcript,
             first: self.first,
-            items: self.items.clone(),
+            // The blocks are made again from the text when the file is read, so they are not kept
+            // twice (REQ-560).
+            items: self
+                .items
+                .iter()
+                .map(|item| match item {
+                    Item::Text { text, live, .. } => Item::Text {
+                        text: text.clone(),
+                        live: *live,
+                        blocks: None,
+                    },
+                    other => other.clone(),
+                })
+                .collect(),
             kept: if self.legacy { Vec::new() } else { self.kept() },
             cost: self.cost,
             model_arg: None,
@@ -1349,6 +1367,7 @@ impl State {
                     self.push(Item::Text {
                         text: String::new(),
                         live: true,
+                        blocks: None,
                     });
                     self.live_texts.push_back(self.items.len() - 1);
                 }
@@ -1362,6 +1381,7 @@ impl State {
                         self.push(Item::Text {
                             text: String::new(),
                             live: true,
+                            blocks: None,
                         });
                         self.live_texts.push_back(self.items.len() - 1);
                     }
@@ -1400,12 +1420,15 @@ impl State {
                     }
                     match self.live_texts.pop_front() {
                         Some(at) => {
-                            if let Some(Item::Text { text, live }) = self.items.get_mut(at) {
+                            if let Some(Item::Text { text, live, blocks }) = self.items.get_mut(at)
+                            {
+                                *blocks = crate::markdown::conversation_blocks(&full);
                                 *text = full;
                                 *live = false;
                             }
                         }
                         None => self.push(Item::Text {
+                            blocks: crate::markdown::conversation_blocks(&full),
                             text: full,
                             live: false,
                         }),
@@ -2555,7 +2578,7 @@ mod tests {
         }
         assert_eq!(s.status, ConvStatus::Streaming);
         assert!(
-            matches!(s.items.last(), Some(Item::Text { text, live: true }) if text == "Voy a mirar el test.")
+            matches!(s.items.last(), Some(Item::Text { text, live: true, .. }) if text == "Voy a mirar el test.")
         );
         s.apply(&json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "Voy a mirar el test."}]}}), 4);
         let texts: Vec<&Item> = s
@@ -2565,6 +2588,46 @@ mod tests {
             .collect();
         assert_eq!(texts.len(), 1);
         assert!(matches!(texts[0], Item::Text { live: false, .. }));
+    }
+
+    #[test]
+    fn a_text_that_settles_with_a_table_carries_its_blocks_and_one_that_is_plain_does_not() {
+        let mut s = st();
+        s.send("hola", vec![], 0);
+        s.apply(&json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "Listo."}]}}), 1);
+        s.apply(&json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "a\n\n| c | d |\n|---|---|\n| 1 | 2 |"}]}}), 2);
+        let got: Vec<bool> = s
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Text { blocks, .. } => Some(blocks.is_some()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(got, [false, true]);
+    }
+
+    #[test]
+    fn the_blocks_of_a_text_are_not_saved_and_come_back_from_its_text() {
+        let mut s = st();
+        s.send("hola", vec![], 0);
+        s.apply(&json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "a **b**"}]}}), 1);
+        let saved = s.saved(2);
+        assert!(saved.items.iter().all(|i| !matches!(
+            i,
+            Item::Text {
+                blocks: Some(_),
+                ..
+            }
+        )));
+        let back = State::restored(saved, "20:00");
+        assert!(back.items.iter().any(|i| matches!(
+            i,
+            Item::Text {
+                blocks: Some(_),
+                ..
+            }
+        )));
     }
 
     #[test]
@@ -3242,6 +3305,7 @@ mod tests {
         Item::Text {
             text: text.into(),
             live: false,
+            blocks: None,
         }
     }
 

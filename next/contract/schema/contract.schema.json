@@ -33,11 +33,40 @@
         "text": { "type": "string" }
       }
     },
+    "Inline": {
+      "description": "A run of text with one style.",
+      "type": "object",
+      "required": ["t"],
+      "properties": {
+        "t": { "type": "string" },
+        "b": { "const": true },
+        "i": { "const": true },
+        "code": { "const": true },
+        "href": { "type": "string" }
+      }
+    },
+    "MdItem": {
+      "type": "object",
+      "required": ["blocks"],
+      "properties": { "task": { "type": "boolean" }, "blocks": { "type": "array", "items": { "$ref": "#/$defs/MdBlock" } } }
+    },
+    "MdBlock": {
+      "description": "A piece of a Markdown document, as read_markdown replies and a finished text of a conversation carries.",
+      "oneOf": [
+        { "type": "object", "required": ["t", "level", "text"], "properties": { "t": { "const": "heading" }, "level": { "type": "integer", "minimum": 1, "maximum": 6 }, "text": { "type": "array", "items": { "$ref": "#/$defs/Inline" } } } },
+        { "type": "object", "required": ["t", "text"], "properties": { "t": { "const": "para" }, "text": { "type": "array", "items": { "$ref": "#/$defs/Inline" } } } },
+        { "type": "object", "required": ["t", "blocks"], "properties": { "t": { "const": "quote" }, "blocks": { "type": "array", "items": { "$ref": "#/$defs/MdBlock" } } } },
+        { "type": "object", "required": ["t", "items"], "properties": { "t": { "const": "list" }, "start": { "type": "integer", "minimum": 0 }, "items": { "type": "array", "items": { "$ref": "#/$defs/MdItem" } } } },
+        { "type": "object", "required": ["t", "lang", "text"], "properties": { "t": { "const": "code" }, "lang": { "type": "string" }, "text": { "type": "string" } } },
+        { "type": "object", "required": ["t", "head", "rows"], "properties": { "t": { "const": "table" }, "head": { "type": "array", "items": { "type": "array", "items": { "$ref": "#/$defs/Inline" } } }, "rows": { "type": "array", "items": { "type": "array", "items": { "type": "array", "items": { "$ref": "#/$defs/Inline" } } } } } },
+        { "type": "object", "required": ["t"], "properties": { "t": { "const": "rule" } } }
+      ]
+    },
     "Item": {
       "description": "One thing in a conversation, oldest first.",
       "oneOf": [
         { "type": "object", "required": ["t", "text"], "properties": { "t": { "const": "user" }, "text": { "type": "string" }, "images": { "type": "integer", "minimum": 1 } } },
-        { "type": "object", "required": ["t", "text"], "properties": { "t": { "const": "text" }, "text": { "type": "string" }, "live": { "const": true } } },
+        { "type": "object", "required": ["t", "text"], "properties": { "t": { "const": "text" }, "text": { "type": "string" }, "live": { "const": true }, "blocks": { "type": "array", "items": { "$ref": "#/$defs/MdBlock" } } } },
         {
           "type": "object",
           "required": ["t", "id", "name", "arg", "state"],

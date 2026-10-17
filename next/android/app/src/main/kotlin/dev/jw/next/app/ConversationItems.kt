@@ -128,7 +128,9 @@ private fun ItemView(item: ConvItem, accent: Color, spin: String, picked: Boolea
         when (item) {
             is ConvItem.User -> UserRow(item, accent)
             is ConvItem.Text -> SelectionContainer {
-                Text(inline(item.text + if (item.live) " ▍" else ""), color = Palette.fg, fontFamily = MonoFont, fontSize = 13.sp, lineHeight = 19.sp, modifier = Modifier.padding(horizontal = Pad))
+                val blocks = item.blocks
+                if (blocks != null) MdBlocks(blocks, Modifier.padding(horizontal = Pad))
+                else Text(inline(item.text + if (item.live) " ▍" else ""), color = Palette.fg, fontFamily = MonoFont, fontSize = 13.sp, lineHeight = 19.sp, modifier = Modifier.padding(horizontal = Pad))
             }
             is ConvItem.Tool -> ToolRow(item, spin, open)
             is ConvItem.Agent -> AgentRow(item, spin, open)

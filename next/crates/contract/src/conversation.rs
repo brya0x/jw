@@ -119,6 +119,10 @@ pub enum Item {
         text: String,
         #[serde(default, skip_serializing_if = "is_false")]
         live: bool,
+        /// `text` as Markdown blocks, once it is finished and holds more than plain paragraphs
+        /// (REQ-560): the daemon parses and the clients draw. A client without it draws `text`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        blocks: Option<Vec<crate::markdown::MdBlock>>,
     },
     Tool {
         id: String,
