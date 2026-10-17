@@ -34,6 +34,16 @@ fun Block.outputText(): String = out.joinToString("\n") { row -> row.joinToStrin
 /** The rows of a pane's screen to draw: its colours while it has them (REQ-527), else each line as plain text. */
 fun Screen.styledRows(): List<List<Span>> = spans.ifEmpty { lines.map { listOf(Span(it)) } }
 
+/** The cell the cursor is drawn on: [col] of [row], after [padding] spaces when the row's text ends before it. */
+data class CursorCell(val row: Int, val col: Int, val padding: Int)
+
+/** Where the cursor is on [styledRows]; null while it is hidden or is not on a row. */
+fun Screen.cursorCell(): CursorCell? {
+    if (!cursor.visible || cursor.row < 0 || cursor.col < 0) return null
+    val row = styledRows().getOrNull(cursor.row) ?: return null
+    return CursorCell(cursor.row, cursor.col, maxOf(0, cursor.col + 1 - row.sumOf { it.t.length }))
+}
+
 /** The last two folders of a path, so it fits a block's header. */
 fun shortPath(path: String): String {
     val parts = path.split('/').filter { it.isNotEmpty() }

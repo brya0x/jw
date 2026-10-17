@@ -23,4 +23,23 @@ class ScreenColoursTest {
         val screen = Screen(2, 10, listOf("local x", ""), cursor, alt = true, spans = listOf(listOf(red, Span(" x")), emptyList()))
         assertEquals(listOf(listOf(red, Span(" x")), emptyList()), screen.styledRows())
     }
+
+    @Test
+    fun the_cursor_is_on_its_row_and_needs_spaces_only_when_the_text_ends_before_it() {
+        val spans = listOf(listOf(Span("local"), Span(" x")), emptyList())
+        fun at(row: Int, col: Int, visible: Boolean = true) =
+            Screen(2, 10, listOf("local x", ""), Cursor(row, col, visible), alt = true, spans = spans).cursorCell()
+        assertEquals(CursorCell(0, 3, 0), at(0, 3), "on a cell of the text")
+        assertEquals(CursorCell(0, 6, 0), at(0, 6), "on the last character")
+        assertEquals(CursorCell(0, 7, 1), at(0, 7), "just after the text")
+        assertEquals(CursorCell(1, 4, 5), at(1, 4), "on an empty row")
+        assertEquals(null, at(0, 3, visible = false), "hidden")
+        assertEquals(null, at(2, 0), "below the rows")
+    }
+
+    @Test
+    fun the_cursor_of_a_screen_without_spans_is_read_on_its_lines() {
+        val screen = Screen(2, 10, listOf("$ ls", ""), Cursor(0, 4, true))
+        assertEquals(CursorCell(0, 4, 1), screen.cursorCell())
+    }
 }

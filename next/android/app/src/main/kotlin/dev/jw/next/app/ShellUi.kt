@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.jw.next.client.BlockState
 import dev.jw.next.client.SpanColor
+import dev.jw.next.client.cursorCell
 import dev.jw.next.client.shortPath
 import dev.jw.next.client.spanColor
 import dev.jw.next.client.styledRows
@@ -51,11 +52,15 @@ import dev.jw.next.contract.Screen
 import dev.jw.next.contract.Span
 import kotlinx.coroutines.delay
 
-/** The sixteen named colours are the theme's; the rest come resolved from the contract. */
+/**
+ * The sixteen named colours are the theme's, as the terminal client draws them: black and bright white
+ * are the text colour on a light theme, where a literal one would vanish; the rest come resolved from the contract.
+ */
 private fun SpanColor.color(): Color = when (this) {
     is SpanColor.Rgb -> Color(argb)
     is SpanColor.Named -> when (index) {
-        0 -> Color(0xFF3F4451)
+        0 -> if (Palette.dark) Palette.line else Palette.fg
+        15 -> if (Palette.dark) Color.White else Palette.fg
         1, 9 -> Palette.red
         2, 10 -> Palette.green
         3, 11 -> Palette.yellow
@@ -63,8 +68,7 @@ private fun SpanColor.color(): Color = when (this) {
         5, 13 -> Palette.magenta
         6, 14 -> Palette.cyan
         7 -> Palette.fg
-        8 -> Palette.dim
-        else -> Color.White
+        else -> Palette.dim
     }
 }
 
@@ -86,13 +90,13 @@ private fun output(rows: List<List<Span>>, base: Color): AnnotatedString = build
 
 /** A pane's screen with its colours and the cursor cell drawn as a block, as a terminal would. */
 internal fun screenText(screen: Screen): AnnotatedString = buildAnnotatedString {
-    val cursor = screen.cursor
+    val cursor = screen.cursorCell()
     val rows = screen.styledRows()
     rows.forEachIndexed { i, row ->
         val start = length
         row.forEach { s -> withStyle(s.style(Palette.fg)) { append(s.t) } }
-        if (screen.cursor.visible && i == cursor.row) {
-            if (length - start <= cursor.col) append(" ".repeat(cursor.col + 1 - (length - start)))
+        if (cursor?.row == i) {
+            append(" ".repeat(cursor.padding))
             addStyle(SpanStyle(background = Palette.fg, color = Palette.bg), start + cursor.col, start + cursor.col + 1)
         }
         if (i < rows.lastIndex) append('\n')

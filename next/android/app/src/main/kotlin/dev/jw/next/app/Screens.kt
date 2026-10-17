@@ -479,7 +479,7 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
                 if (pane == null || waitingBlocks) PaneSkeleton()
                 else if (booting != null) Booting(programName(booting.cmd))
                 else Text(
-                    screenText(pane.screen),
+                    remember(pane.screen) { screenText(pane.screen) },
                     fontFamily = MonoFont, fontSize = 12.sp, lineHeight = 18.sp, color = Palette.fg, softWrap = false,
                 )
             }

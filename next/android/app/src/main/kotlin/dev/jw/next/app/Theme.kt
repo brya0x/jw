@@ -39,6 +39,9 @@ object Palette {
     val magenta get() = Color(theme.magenta)
     val cyan get() = Color(theme.cyan)
 
+    /** Whether the theme in force is a dark one. */
+    val dark get() = theme.dark
+
     /** A conversation's accent: one of the theme's six (REQ-452). */
     fun accent(a: Accent) = Color(theme.accentOf(a))
 }
