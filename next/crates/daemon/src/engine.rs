@@ -587,9 +587,12 @@ pub fn open_conversation(
                     effort_arg = effort_arg.or_else(|| s.effort_arg.clone());
                     let mut st = State::restored(s, &clock());
                     // A file of before the transcript was read keeps its own items.
-                    match source.as_ref().filter(|_| !st.legacy()) {
-                        Some(src) => st.follow(&src.parser),
-                        None => source = None,
+                    if st.legacy() {
+                        source = None;
+                    } else {
+                        // Without a transcript what jwn kept is still shown.
+                        let parser = source.as_ref().map(|s| &s.parser);
+                        st.follow(parser.unwrap_or(&crate::transcript::Parser::default()));
                     }
                     st
                 }
@@ -1031,28 +1034,33 @@ fn run_shell(
 /// Read what was added to the transcripts of the conversations that have no engine, and show it
 /// (REQ-545). What is read is outside the lock; what changes the node is inside.
 pub fn follow_due(shared: &Shared) {
-    let taken: Vec<(Id, crate::transcript::Source)> = shared
+    let taken: Vec<(Id, Id, crate::transcript::Source)> = shared
         .lock()
         .convs
         .iter_mut()
         .filter(|(_, c)| c.engine.is_none())
-        .filter_map(|(pane, c)| c.source.take().map(|s| (pane.clone(), s)))
+        .filter_map(|(pane, c)| c.source.take().map(|s| (pane.clone(), c.id.clone(), s)))
         .collect();
     if taken.is_empty() {
         return;
     }
     let polled: Vec<_> = taken
         .into_iter()
-        .map(|(pane, mut src)| {
+        .map(|(pane, node, mut src)| {
             let changed = src.poll();
-            (pane, src, changed)
+            (pane, node, src, changed)
         })
         .collect();
     let mut core = shared.lock();
     let mut shown = false;
-    for (pane, src, changed) in polled {
-        // A conversation that started its engine meanwhile, or is gone, is not followed.
-        let Some(c) = core.convs.get_mut(&pane).filter(|c| c.engine.is_none()) else {
+    for (pane, node, src, changed) in polled {
+        // A conversation that started its engine meanwhile, was opened again (another session in
+        // the pane has another node) or is gone is not followed with this.
+        let Some(c) = core
+            .convs
+            .get_mut(&pane)
+            .filter(|c| c.engine.is_none() && c.id == node)
+        else {
             continue;
         };
         if changed {
@@ -1146,16 +1154,24 @@ pub fn save_due(shared: &Shared, force: bool) {
     }
 }
 
-/// The saved document, with the oldest items dropped until it takes at most 2 MiB (REQ-392).
+/// The saved document, with the oldest items dropped until it takes at most 2 MiB (REQ-392): the
+/// chat's while it has one, else the oldest of what is jwn's own.
 fn encode(mut saved: Saved) -> Option<String> {
     loop {
         let text = serde_json::to_string(&saved).ok()?;
-        if text.len() <= crate::conversation::MAX_SAVED || saved.items.len() <= 1 {
+        if text.len() <= crate::conversation::MAX_SAVED
+            || (saved.items.len() <= 1 && saved.kept.len() <= 1)
+        {
             return Some(text);
         }
-        let drop = (saved.items.len() / 4).max(1);
-        saved.items.drain(..drop);
-        saved.first += drop as u32;
+        if saved.items.len() > 1 {
+            let drop = (saved.items.len() / 4).max(1);
+            saved.items.drain(..drop);
+            saved.first += drop as u32;
+        } else {
+            let drop = (saved.kept.len() / 4).max(1);
+            saved.kept.drain(..drop);
+        }
     }
 }
 

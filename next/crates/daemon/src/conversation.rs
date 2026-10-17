@@ -686,12 +686,15 @@ impl State {
     pub fn follow(&mut self, t: &crate::transcript::Parser) {
         let mut kept = std::mem::take(&mut self.kept_saved);
         kept.extend(self.kept());
-        let (items, stamps) = merge(&t.items, &kept);
-        let total = items.len();
-        let from = total.saturating_sub(KEEP);
-        self.items = items[from..].to_vec();
-        self.stamps = stamps[from..].to_vec();
-        self.first = u32::try_from(from).unwrap_or(u32::MAX);
+        // Only the end of the lines can be among the items a node keeps; the rest is counted.
+        let skip = t.items.len().saturating_sub(KEEP + kept.len());
+        let (mut items, mut stamps) = merge(&t.items[skip..], &kept);
+        let from = items.len().saturating_sub(KEEP);
+        items.drain(..from);
+        stamps.drain(..from);
+        self.items = items;
+        self.stamps = stamps;
+        self.first = u32::try_from(skip + from).unwrap_or(u32::MAX);
         self.live_texts.clear();
         if let Some(mode) = t.mode {
             self.mode = mode;
@@ -3397,5 +3400,52 @@ mod tests {
         }];
         let s = State::restored(fresh, "20:00");
         assert!(!s.legacy() && s.leaves_chat_to_transcript());
+    }
+
+    #[test]
+    fn what_jwn_kept_is_shown_when_the_transcript_is_not_there() {
+        let mut saved = st().saved(5);
+        saved.has_transcript = true;
+        saved.kept = vec![
+            Kept {
+                at: 20,
+                item: note("segunda"),
+            },
+            Kept {
+                at: 10,
+                item: note("primera"),
+            },
+        ];
+        let mut s = State::restored(saved, "20:00");
+        assert!(
+            texts(&s.items).iter().all(|t| t != "primera"),
+            "kept items wait for the follow"
+        );
+        s.follow(&crate::transcript::Parser::default());
+        let shown = texts(&s.items);
+        assert_eq!(&shown[..2], ["primera", "segunda"], "{shown:?}");
+        assert!(
+            s.saved(6).kept.len() >= 2,
+            "and they are saved again, not lost"
+        );
+    }
+
+    /// Following a long transcript re-places only the end of it.
+    #[test]
+    fn following_a_long_transcript_takes_the_end_of_it_only() {
+        let mut t = crate::transcript::Parser::default();
+        t.items = (0..50_000).map(|i| line_at(i, said("x"))).collect();
+        let mut s = st();
+        let started = std::time::Instant::now();
+        for _ in 0..20 {
+            s.follow(&t);
+        }
+        assert_eq!(s.items.len(), KEEP);
+        assert_eq!(s.first as usize, 50_000 - KEEP);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
     }
 }

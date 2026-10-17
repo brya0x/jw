@@ -21,8 +21,10 @@ use crate::conversation::{
 /// megabytes of lines, with few messages in them).
 const WINDOWS: [u64; 3] = [4 << 20, 16 << 20, 64 << 20];
 
-/// The most that is read at once of what has been added.
-const MOST_ADDED: u64 = 8 << 20;
+/// The most that is read at once of what has been added, and the longest line that is read: a longer
+/// one (a pasted picture is a line of megabytes) is skipped to its end. Small in the tests.
+const MOST_ADDED: u64 = if cfg!(test) { 1 << 10 } else { 8 << 20 };
+const MAX_LINE: u64 = if cfg!(test) { 8 << 10 } else { 64 << 20 };
 
 /// The efforts `--effort` takes; anything else in a transcript is not passed on.
 const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
@@ -47,6 +49,8 @@ pub struct Parser {
     tools: HashMap<String, usize>,
     /// The time of the last line that had one: a line without it is as late as that.
     last_at: u64,
+    /// Counts up whenever what the lines say changes: an item, the mode, the model or the effort.
+    rev: u64,
 }
 
 impl Parser {
@@ -65,8 +69,10 @@ impl Parser {
             }
             match entry["type"].as_str().unwrap_or("") {
                 "permission-mode" => {
-                    if let Some(mode) = entry["permissionMode"].as_str().and_then(Mode::from_flag) {
-                        self.mode = Some(mode);
+                    let mode = entry["permissionMode"].as_str().and_then(Mode::from_flag);
+                    if mode.is_some() && mode != self.mode {
+                        self.mode = mode;
+                        self.rev += 1;
                     }
                 }
                 "assistant" => self.assistant(&entry),
@@ -81,6 +87,7 @@ impl Parser {
     }
 
     fn push(&mut self, item: Item) {
+        self.rev += 1;
         self.items.push(Stamped {
             at: self.last_at,
             item,
@@ -93,11 +100,17 @@ impl Parser {
         if message["model"] == "<synthetic>" {
             return;
         }
-        if let Some(model) = message["model"].as_str().filter(|m| !m.is_empty()) {
+        if let Some(model) = message["model"].as_str().filter(|m| !m.is_empty())
+            && self.model.as_deref() != Some(model)
+        {
             self.model = Some(model.to_owned());
+            self.rev += 1;
         }
-        if let Some(effort) = entry["effort"].as_str().filter(|e| EFFORTS.contains(e)) {
+        if let Some(effort) = entry["effort"].as_str().filter(|e| EFFORTS.contains(e))
+            && self.effort.as_deref() != Some(effort)
+        {
             self.effort = Some(effort.to_owned());
+            self.rev += 1;
         }
         for block in message["content"].as_array().into_iter().flatten() {
             match block["type"].as_str().unwrap_or("") {
@@ -202,6 +215,7 @@ impl Parser {
             };
             *summary = Some(summary_of(name, &lines, detail, failed));
             *output = lines;
+            self.rev += 1;
         }
     }
 }
@@ -225,7 +239,7 @@ fn is_the_persons(text: &str) -> bool {
         && !t.starts_with("[Request interrupted")
 }
 
-/// A line of a transcript as a conversation: for the tests, and for text already in memory.
+/// The lines of `text`, whole, as a conversation.
 pub fn parse(text: &str) -> Parser {
     let mut p = Parser::default();
     p.feed(text);
@@ -269,6 +283,8 @@ pub struct Source {
     path: PathBuf,
     /// The bytes before this have been read: it is the end of the last whole line.
     offset: u64,
+    /// A line that was too long is being skipped: what is read is dropped up to its end.
+    skipping: bool,
     pub parser: Parser,
 }
 
@@ -313,6 +329,7 @@ impl Source {
             last = Some(Source {
                 path: path.clone(),
                 offset: end,
+                skipping: false,
                 parser,
             });
             if enough {
@@ -322,7 +339,7 @@ impl Source {
         last
     }
 
-    /// Read what has been added since: whether anything was.
+    /// Read what has been added since: whether what the lines say changed.
     pub fn poll(&mut self) -> bool {
         let Ok(mut file) = std::fs::File::open(&self.path) else {
             return false;
@@ -341,25 +358,51 @@ impl Source {
         if size == self.offset {
             return false;
         }
-        let to = size.min(self.offset + MOST_ADDED);
-        let Some((text, end)) = read_lines(&mut file, self.offset, to, false) else {
+        if self.skipping {
+            let to = size.min(self.offset + MOST_ADDED);
+            if let Some((next, found)) = skip_line(&mut file, self.offset, to) {
+                self.offset = next;
+                self.skipping = !found;
+            }
             return false;
-        };
-        self.offset = end;
-        let before = (
-            self.parser.items.len(),
-            self.parser.mode,
-            self.parser.model.clone(),
-        );
-        self.parser.feed(&text);
-        let after = (
-            self.parser.items.len(),
-            self.parser.mode,
-            self.parser.model.clone(),
-        );
-        // A result can change a tool without adding an item.
-        !text.trim().is_empty() || before != after
+        }
+        // A line that does not end in what is read is read further, until it does or it is too long.
+        let mut window = MOST_ADDED;
+        loop {
+            let to = size.min(self.offset + window);
+            let Some((text, end)) = read_lines(&mut file, self.offset, to, false) else {
+                return false;
+            };
+            if end > self.offset {
+                self.offset = end;
+                let before = self.parser.rev;
+                self.parser.feed(&text);
+                return self.parser.rev != before;
+            }
+            // The line is still being written.
+            if to == size {
+                return false;
+            }
+            if window >= MAX_LINE {
+                self.offset = to;
+                self.skipping = true;
+                return false;
+            }
+            window *= 2;
+        }
     }
+}
+
+/// Where the line that began before `from` ends: the offset after its newline when it is in
+/// `from..to`, else `to`, and whether it ended.
+fn skip_line(file: &mut std::fs::File, from: u64, to: u64) -> Option<(u64, bool)> {
+    file.seek(SeekFrom::Start(from)).ok()?;
+    let mut bytes = Vec::new();
+    file.take(to - from).read_to_end(&mut bytes).ok()?;
+    Some(match bytes.iter().position(|b| *b == b'\n') {
+        Some(i) => (from + i as u64 + 1, true),
+        None => (from + bytes.len() as u64, false),
+    })
 }
 
 /// The whole lines of `file` from `from` to `to`, and the offset where the next one starts. A read
@@ -643,6 +686,64 @@ mod tests {
         std::fs::write(&path, say("assistant", "otra")).unwrap();
         assert!(src.poll());
         assert_eq!(src.parser.items.len(), 1);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// REQ-546: a line longer than what is read at once is read when it ends, and one that is too long is skipped.
+    #[test]
+    fn a_line_longer_than_what_is_read_at_once_is_read_whole_and_one_too_long_is_skipped() {
+        let path = temp("long");
+        std::fs::write(&path, say("assistant", "uno")).unwrap();
+        let mut src = Source::load(path.clone()).unwrap();
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        // Two kibibytes: more than the 1 KiB read at once in the tests, less than what is too long.
+        let long = say("assistant", &"x".repeat(2 << 10));
+        std::io::Write::write_all(&mut file, long.as_bytes()).unwrap();
+        assert!(src.poll(), "the line was read whole, in a longer read");
+        assert_eq!(src.parser.items.len(), 2);
+        // Twenty kibibytes: it is skipped, and the line after it is read.
+        let huge = say("assistant", &"y".repeat(20 << 10));
+        std::io::Write::write_all(&mut file, huge.as_bytes()).unwrap();
+        std::io::Write::write_all(&mut file, say("assistant", "después").as_bytes()).unwrap();
+        let mut changed = false;
+        for _ in 0..40 {
+            changed |= src.poll();
+        }
+        assert!(changed);
+        let texts: Vec<String> = src
+            .parser
+            .items
+            .iter()
+            .map(|i| match &i.item {
+                Item::Text { text, .. } => text.chars().take(7).collect(),
+                _ => String::new(),
+            })
+            .collect();
+        assert_eq!(
+            texts,
+            ["uno", "xxxxxxx", "después"],
+            "the long line is not there and the next one is"
+        );
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn lines_that_say_nothing_new_do_not_count_as_a_change() {
+        let path = temp("quiet");
+        std::fs::write(&path, say("assistant", "uno")).unwrap();
+        let mut src = Source::load(path.clone()).unwrap();
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        let blob = line(serde_json::json!({"type":"api-request","blob":"x"}));
+        std::io::Write::write_all(&mut file, blob.as_bytes()).unwrap();
+        assert!(!src.poll(), "a line that makes no item is no change");
+        std::io::Write::write_all(&mut file, say("assistant", "dos").as_bytes()).unwrap();
+        assert!(src.poll());
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
