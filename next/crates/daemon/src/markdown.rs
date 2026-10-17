@@ -167,6 +167,20 @@ fn too_deep(text: &str) -> bool {
     false
 }
 
+/// The events of `text`; `lines` makes each line break of a paragraph a break of the line, as
+/// Claude writes them, and not the space CommonMark makes of it.
+fn events(text: &str, lines: bool) -> Events<'_> {
+    let parser: Box<dyn Iterator<Item = Event<'_>> + '_> = if lines {
+        Box::new(Parser::new_ext(text, options()).map(|e| match e {
+            Event::SoftBreak => Event::HardBreak,
+            other => other,
+        }))
+    } else {
+        Box::new(Parser::new_ext(text, options()))
+    };
+    parser.peekable()
+}
+
 /// The blocks of Markdown `text`. Text nested deeper than `MAX_DEPTH` is one block of code, as
 /// it was written.
 pub fn parse(text: &str) -> Vec<MdBlock> {
@@ -176,8 +190,7 @@ pub fn parse(text: &str) -> Vec<MdBlock> {
             text: text.to_owned(),
         }];
     }
-    let mut events = Parser::new_ext(text, options()).peekable();
-    blocks_until(&mut events, None)
+    blocks_until(&mut events(text, false), None)
 }
 
 /// The blocks of a finished text of a conversation, or `None` when it is plain paragraphs (the
@@ -186,7 +199,7 @@ pub fn conversation_blocks(text: &str) -> Option<Vec<MdBlock>> {
     if text.len() > MAX_CONVERSATION_TEXT || too_deep(text) {
         return None;
     }
-    let blocks = parse(text);
+    let blocks = blocks_until(&mut events(text, true), None);
     let plain = blocks.iter().all(|b| match b {
         MdBlock::Para { text } => text
             .iter()
@@ -196,7 +209,7 @@ pub fn conversation_blocks(text: &str) -> Option<Vec<MdBlock>> {
     (!plain).then_some(blocks)
 }
 
-type Events<'a> = Peekable<Parser<'a>>;
+type Events<'a> = Peekable<Box<dyn Iterator<Item = Event<'a>> + 'a>>;
 
 /// The style the text being read has.
 #[derive(Default, Clone)]
@@ -538,6 +551,19 @@ mod tests {
         ));
         assert!(conversation_blocks("[la guía](docs/a.md)").is_some());
         assert!(conversation_blocks("- uno\n- dos").is_some());
+    }
+
+    #[test]
+    fn the_lines_of_a_text_of_a_conversation_stay_lines_and_those_of_a_document_join() {
+        let text = "**Causa:** el reloj\n**Arreglo:** leerlo de `Clock`";
+        let [MdBlock::Para { text: runs }] = &conversation_blocks(text).expect("styled")[..] else {
+            panic!("one paragraph");
+        };
+        assert!(runs.iter().any(|i| i.t.contains('\n')), "{runs:?}");
+        let [MdBlock::Para { text: runs }] = &parse(text)[..] else {
+            panic!("one paragraph");
+        };
+        assert!(runs.iter().all(|i| !i.t.contains('\n')), "{runs:?}");
     }
 
     #[test]
