@@ -56,4 +56,15 @@ class WorktreesTest {
         pc.openWorktrees("/c/app", emptyList()) { none = it }
         assertEquals(OpenedWorktrees(0, emptyList()), none)
     }
+
+    @Test
+    fun onlyTheAnswerToTheNewestAskIsUsed() {
+        val latest = Latest()
+        val first = latest.ask()
+        assertEquals(true, latest.isLatest(first))
+        val second = latest.ask()
+        assertEquals(false, latest.isLatest(first), "a slow answer to an earlier ask is dropped")
+        assertEquals(true, latest.isLatest(second))
+    }
 }
+

@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.jw.next.client.ClientState
 import dev.jw.next.client.FolderView
+import dev.jw.next.client.Latest
 import dev.jw.next.client.Navigator
 import dev.jw.next.client.Screen
 import dev.jw.next.client.WorktreePlan
@@ -63,7 +64,6 @@ import dev.jw.next.contract.OpenKind
 import dev.jw.next.contract.DirListing
 import dev.jw.next.contract.Id
 import dev.jw.next.contract.WorktreeInfo
-import java.util.concurrent.atomic.AtomicInteger
 
 private val Gutter = 16.dp
 
@@ -80,7 +80,7 @@ internal fun BoxScope.NewWorkspaceSheet(dismiss: () -> Unit, folders: () -> Unit
     Sheet(dismiss) {
         Mono("workspace nuevo", Palette.fg, 14, bold = true)
         SheetAction("o", "abrir una carpeta del PC", click = folders)
-        Mono("Un worktree se hace con una pulsación larga sobre un workspace.", Palette.dim, 12, lines = 2)
+        Mono("Un worktree se hace, o se abren los que ya existen, con una pulsación larga sobre un workspace.", Palette.dim, 12, lines = 3)
     }
 }
 
@@ -96,7 +96,7 @@ fun FoldersScreen(source: AppSource, state: ClientState, nav: Navigator, set: (C
     var error by remember { mutableStateOf<String?>(null) }
     var refusal by remember { mutableStateOf<String?>(null) }
     var opening by remember { mutableStateOf(false) }
-    val asks = remember { AtomicInteger() }
+    val asks = remember { Latest() }
     var waiting by remember { mutableStateOf<Id?>(null) }
     val version = source.tick.intValue
     val session = remember(version) { source.session() }
@@ -105,10 +105,10 @@ fun FoldersScreen(source: AppSource, state: ClientState, nav: Navigator, set: (C
     LaunchedEffect(path, hidden) {
         error = null
         refusal = null
-        val asked = asks.incrementAndGet()
+        val asked = asks.ask()
         source.listDir(path, hidden) { result ->
             // A slower answer to an earlier tap must not replace the folder asked for last.
-            if (asked == asks.get()) result.onSuccess { listing = it }.onFailure { error = it.message ?: "el PC no pudo leer la carpeta" }
+            if (asks.isLatest(asked)) result.onSuccess { listing = it }.onFailure { error = it.message ?: "el PC no pudo leer la carpeta" }
         }
     }
     OpenWhenShown(source, waiting, state, nav, set)
@@ -233,8 +233,10 @@ internal fun BoxScope.WorktreeSheet(source: AppSource, at: WorktreeAt, state: Cl
     var said by remember(repoAtStart) { mutableStateOf<Pair<String, Boolean>?>(null) }
     var opening by remember(repoAtStart) { mutableStateOf(false) }
     var reload by remember(repoAtStart) { mutableIntStateOf(0) }
+    val lists = remember(repoAtStart) { Latest() }
     val focus = remember { FocusRequester() }
-    LaunchedEffect(repoAtStart) { focus.requestFocus() }
+    // The name's field is there only on the side of a new worktree: a sheet that opens on the other has none to focus.
+    LaunchedEffect(repoAtStart, existingSide) { if (!existingSide) focus.requestFocus() }
     var settings by remember(repoAtStart) { mutableStateOf<WorktreeSettings>(WorktreeSettings.Reading) }
     LaunchedEffect(repo) {
         val asked = repo
@@ -246,9 +248,10 @@ internal fun BoxScope.WorktreeSheet(source: AppSource, at: WorktreeAt, state: Cl
     // The list waits until its side is shown: git reads the status of every worktree (REQ-539).
     LaunchedEffect(repo, existingSide, reload) {
         if (!existingSide) return@LaunchedEffect
-        val asked = repo
-        source.listWorktrees(asked) { result ->
-            if (repo == asked) result.onSuccess { listed = it; listError = null }.onFailure { listError = it.message ?: "el PC no pudo listar los worktrees" }
+        val asked = lists.ask()
+        source.listWorktrees(repo) { result ->
+            // The answer to a list asked before the last opening, or for another repository, is not the list now.
+            if (lists.isLatest(asked)) result.onSuccess { listed = it; listError = null }.onFailure { listError = it.message ?: "el PC no pudo listar los worktrees" }
         }
     }
     val root = (settings as? WorktreeSettings.Ready)?.info?.root
@@ -278,7 +281,7 @@ internal fun BoxScope.WorktreeSheet(source: AppSource, at: WorktreeAt, state: Cl
             if (all.size > 1) Mono("▾", Palette.dim, 11)
         }
         if (choosing) all.forEach { r ->
-            SheetAction(if (r == repo) "●" else " ", repoName(r)) { repo = r; typed = null; choosing = false; listed = null; said = null }
+            SheetAction(if (r == repo) "●" else " ", repoName(r)) { repo = r; typed = null; choosing = false; listed = null; listError = null; said = null }
         }
         else {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {

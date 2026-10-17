@@ -30,3 +30,17 @@ data class OpenedWorktrees(val opened: Int, val failed: List<String>) {
         else -> "abiertos $opened, sin setup ni copiar archivos" to true
     }
 }
+
+/**
+ * Tells the newest of several asks of one thing from the older ones: an answer is used only while [isLatest],
+ * so a slow answer to an earlier ask never replaces the one asked for last.
+ */
+class Latest {
+    private val count = java.util.concurrent.atomic.AtomicInteger()
+
+    /** Starts an ask; the token it gives is the newest until the next [ask]. */
+    fun ask(): Int = count.incrementAndGet()
+
+    fun isLatest(token: Int): Boolean = token == count.get()
+}
+
