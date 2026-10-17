@@ -41,8 +41,8 @@ pub fn class_of(name: &str) -> Option<Class> {
     }
 }
 
-/// Whether an item folds: a tool of a class that has ended (one that runs, or waits for an answer,
-/// is drawn by itself).
+/// The class of an item that folds: a tool of a class that has ended (one that runs, or waits for
+/// an answer, is drawn by itself).
 fn class_of_item(item: &Item) -> Option<Class> {
     match item {
         Item::Tool { name, state, .. } if !matches!(state, ToolState::Run | ToolState::Ask) => {

@@ -469,6 +469,12 @@ impl Ui {
         if !matches!(conv.status, ConvStatus::Dead | ConvStatus::Resuming) {
             self.retaking = false;
         }
+        // A run that is gone (its tools were trimmed or joined another run) is not open any more.
+        let firsts: Vec<u32> = fold::runs(&conv.items)
+            .iter()
+            .map(|r| conv.first + r.first as u32)
+            .collect();
+        self.unfolded.retain(|k| firsts.contains(k));
         // Each question is its own: what was lit or marked in the last one does not carry over.
         let id = conv.ask.as_ref().map_or("", |a| a.id.as_str());
         if self.ask_id != id {
@@ -697,12 +703,12 @@ impl Ui {
     /// Lines of the list, from the oldest, `w` columns wide.
     fn lines(&self, conv: &Conversation, w: usize) -> Vec<Line> {
         let mut out = Vec::new();
-        let runs = fold::runs(&conv.items);
+        let mut runs = fold::runs(&conv.items).into_iter().peekable();
         let mut i = 0;
         while i < conv.items.len() {
             let abs = conv.first + i as u32;
             let before = out.len();
-            if let Some(run) = runs.iter().find(|r| r.first == i) {
+            if let Some(run) = runs.next_if(|r| r.first == i) {
                 let open = self.unfolded.contains(&abs);
                 out.push(Line {
                     spans: vec![
@@ -1133,7 +1139,7 @@ impl Ui {
             .enumerate()
         {
             let y = top + r;
-            let picked = self.picked == Some(line.item);
+            let picked = self.picked == Some(line.item) && !line.fold;
             if let Some(bg) = line.bg {
                 g.paint_bg(ix, y, iw, bg);
             } else if picked {
@@ -1994,6 +2000,7 @@ impl Ui {
     /// The item before or after the one picked.
     fn step_item(&mut self, conv: &Conversation, item: u32, down: bool) {
         let last = conv.first + conv.items.len() as u32;
+        let runs = fold::runs(&conv.items);
         let mut next = item;
         loop {
             let stepped = if down {
@@ -2001,20 +2008,24 @@ impl Ui {
             } else {
                 next.saturating_sub(1).max(conv.first)
             };
-            // An item inside a run that is folded has no row to be picked at.
-            if stepped == next || !self.hidden(conv, stepped) {
-                next = stepped;
+            if stepped == next {
                 break;
             }
             next = stepped;
+            // An item inside a run that is folded has no row to be picked at.
+            if !self.hidden(conv, &runs, next) {
+                self.picked = Some(next);
+                return;
+            }
         }
-        self.picked = Some(next);
+        // The end was reached inside a folded run: nothing to pick that way, so it stays.
+        self.picked = Some(item);
     }
 
     /// Whether an item is in a run of tools that is folded, so no row of its own is drawn.
-    fn hidden(&self, conv: &Conversation, abs: u32) -> bool {
+    fn hidden(&self, conv: &Conversation, runs: &[fold::Run], abs: u32) -> bool {
         let at = abs.wrapping_sub(conv.first) as usize;
-        fold::runs(&conv.items).iter().any(|r| {
+        runs.iter().any(|r| {
             (r.first..=r.last).contains(&at)
                 && !self.unfolded.contains(&(conv.first + r.first as u32))
         })
@@ -2358,6 +2369,12 @@ impl Ui {
             if let Some(l) = line.filter(|l| l.fold) {
                 if !self.unfolded.remove(&l.item) {
                     self.unfolded.insert(l.item);
+                }
+                // What was picked may have just lost its row.
+                if let Some(p) = self.picked
+                    && self.hidden(conv, &fold::runs(&conv.items), p)
+                {
+                    self.picked = None;
                 }
                 return None;
             }
@@ -4509,5 +4526,51 @@ mod tests {
             Some(4),
             "from the text to the edit: the folded tools have no row"
         );
+    }
+
+    /// REQ-558: what was picked loses its pick when its run is folded, the fold row is not lit by a
+    /// pick, the arrows do not stop inside a folded run, and a run that is gone is forgotten.
+    #[test]
+    fn folding_a_run_drops_a_pick_that_has_no_row_and_a_run_that_is_gone_is_forgotten() {
+        let tool = |id: &str, name: &str| -> Item {
+            serde_json::from_value(serde_json::json!({
+                "t": "tool", "id": id, "name": name, "arg": id, "state": "ok"
+            }))
+            .unwrap()
+        };
+        let mut conv = idle();
+        conv.items = vec![
+            Item::Text {
+                text: "a".into(),
+                live: false,
+            },
+            tool("x", "Bash"),
+            tool("y", "Bash"),
+            tool("z", "Edit"),
+            tool("w", "Bash"),
+            tool("v", "Bash"),
+        ];
+        conv.first = 10;
+        let mut ui = unfolded(&conv);
+        ui.picked = Some(12);
+        let (_, rows) = frame(&ui, &conv);
+        let at = row_of(&rows, "▾ Ejecutó 2 comandos");
+        // Folding the first run takes the row away from the item that was picked in it.
+        ui.click(&conv, INNER, 10, at);
+        assert_eq!(ui.picked, None);
+        // Down from the text over a folded run goes to the edit, and at the end inside a folded run it stays.
+        ui.step_item(&conv, 10, true);
+        assert_eq!(ui.picked, Some(13));
+        ui.unfolded.remove(&14);
+        ui.step_item(&conv, 13, true);
+        assert_eq!(
+            ui.picked,
+            Some(13),
+            "the rest is a folded run: nothing to pick down there"
+        );
+        // The runs that were opened and are not a run any more are forgotten when the node arrives.
+        ui.unfolded.insert(99);
+        ui.sync(&conv);
+        assert!(ui.unfolded.iter().all(|k| *k != 99));
     }
 }

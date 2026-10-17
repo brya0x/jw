@@ -61,6 +61,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import dev.jw.next.client.IMAGES_MAX
+import dev.jw.next.client.foldRuns
 import dev.jw.next.client.RowAct
 import dev.jw.next.client.PanelView
 import dev.jw.next.client.Submit
@@ -268,17 +269,24 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
     }
 
     // ---- the items ----
+    // The runs that are open, from the start of the window; one that is not a run any more (its tools were trimmed) is forgotten.
+    val relativeUnfolded = remember(unfolded, firstItem) { unfolded.map { it - firstItem }.toSet() }
+    val runStarts = remember(node.items, firstItem) { foldRuns(node.items).map { it.first + firstItem }.toSet() }
+    LaunchedEffect(runStarts) { if (!runStarts.containsAll(unfolded)) unfolded = unfolded intersect runStarts }
     ConversationItems(
         items = node.items,
         accent = accent,
         picked = picked?.minus(firstItem),
         opened = opened.map { it - firstItem }.toSet(),
-        unfolded = unfolded.map { it - firstItem }.toSet(),
+        unfolded = relativeUnfolded,
         state = rememberLazyListState(),
         modifier = Modifier.weight(1f).fillMaxWidth().padding(vertical = 8.dp),
         toggleFold = { first ->
             val n = firstItem + first
             unfolded = if (n in unfolded) unfolded - n else unfolded + n
+            // What was picked inside a run that closes has no row to be picked at.
+            val run = foldRuns(node.items).firstOrNull { it.first == first }
+            if (run != null && n !in unfolded && picked?.minus(firstItem) in run.first..run.last) picked = null
         },
     ) { i ->
         val abs = firstItem + i

@@ -26,13 +26,11 @@ class FoldTest {
 
     @Test
     fun theClassesAreSaidInAFixedOrderWithThePluralAndOnlyTheFirstHasACapital() {
-        val ok = ToolState.Ok
         val items = listOf(tool("Bash"), tool("Bash"), tool("Bash"), tool("LS"), tool("Read"), tool("Read"), tool("Glob"), tool("Grep"))
         assertEquals("Buscó 2 patrones, leyó 2 archivos, listó 1 carpeta, ejecutó 3 comandos", foldTitle(items))
         assertEquals(emptyList(), foldRuns(emptyList()))
         assertNull(toolClass("Edit"))
         assertNull(toolClass("Agent"))
-        check(ok == ToolState.Ok)
     }
 
     @Test

@@ -9,7 +9,7 @@ import dev.jw.next.contract.ToolState
  * its row says. The terminal client has the same rule in `fold.rs`; no fixture shares the words.
  */
 
-/** What a tool does, for the words of the row. */
+/** What a tool does, for the words of the row; the order they are declared in is the order a row says them. */
 enum class ToolClass(val verb: String, val one: String, val many: String) {
     Search("Buscó", "patrón", "patrones"),
     Read("Leyó", "archivo", "archivos"),

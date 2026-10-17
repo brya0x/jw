@@ -27,6 +27,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -92,7 +96,7 @@ internal fun ConversationItems(
     val spin = spinner(running)
     // Reversed, so the newest is at the bottom and stays there as it grows.
     // The tools of a run are one row (REQ-558); the key of a run is below zero, so it is not that of an item.
-    val rows = foldRows(items, unfolded).asReversed()
+    val rows = remember(items, unfolded) { foldRows(items, unfolded).asReversed() }
     LazyColumn(modifier, state = state, reverseLayout = true, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         items(rows, key = { if (it is FoldRow.Item) it.index else -1 - (it as FoldRow.Run).run.first }) { row ->
             when (row) {
@@ -107,7 +111,8 @@ internal fun ConversationItems(
 @Composable
 private fun FoldView(row: FoldRow.Run, click: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().defaultMinSize(minHeight = 48.dp).clickable(onClick = click).padding(horizontal = Pad),
+        Modifier.fillMaxWidth().defaultMinSize(minHeight = 48.dp).clickable(onClick = click).padding(horizontal = Pad)
+            .semantics(mergeDescendants = true) { role = Role.Button; contentDescription = (if (row.open) "Cerrar: " else "Abrir: ") + row.run.title },
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
