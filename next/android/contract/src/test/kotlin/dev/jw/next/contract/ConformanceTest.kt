@@ -269,4 +269,17 @@ class ConformanceTest {
         assertEquals("/home/u/.config/jwn/projects/github.com_acme_app.toml", info.personal)
         assertEquals(result, ContractJson.encodeToJsonElement(ProjectInfo.serializer(), info))
     }
+
+    /** The result of `list_worktrees` in the fixture is what [WorktreeInfo] reads, and writes back as it was. */
+    @Test
+    fun theReplyOfListWorktreesIsAListOfWorktreeInfos() {
+        val reply = fixtures("daemon").first { it.first == "reply-ok-worktrees.json" }.second
+        val result = (ContractJson.decodeFromJsonElement(DaemonMsg.serializer(), reply) as DaemonMsg.Reply).result!!
+        val list = ContractJson.decodeFromJsonElement(ListSerializer(WorktreeInfo.serializer()), result.jsonObject.getValue("worktrees"))
+        assertEquals(4, list.size)
+        assertEquals(3, list[1].changes)
+        assertEquals(null, list[2].branch)
+        assertEquals(true, list[3].missing)
+        assertEquals(result.jsonObject.getValue("worktrees"), ContractJson.encodeToJsonElement(ListSerializer(WorktreeInfo.serializer()), list))
+    }
 }

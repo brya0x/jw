@@ -329,3 +329,23 @@ fn the_reply_of_project_config_is_a_project_info() {
     assert_eq!(info.root_text.as_deref(), Some("../app-trees"));
     assert_eq!(serde_json::to_value(&info).unwrap(), doc["result"]);
 }
+
+/// The result of `list_worktrees` in the fixture is what `WorktreeInfo` writes and reads.
+#[test]
+fn the_reply_of_list_worktrees_is_a_list_of_worktree_infos() {
+    let docs = fixtures("daemon");
+    let (_, doc) = docs
+        .iter()
+        .find(|(n, _)| n == "reply-ok-worktrees.json")
+        .expect("the fixture");
+    let list: Vec<contract::WorktreeInfo> =
+        serde_json::from_value(doc["result"]["worktrees"].clone()).unwrap();
+    assert_eq!(list.len(), 4);
+    assert!(list[0].workspace.is_some() && list[1].changes == Some(3));
+    assert!(list[2].branch.is_none(), "a detached head has no branch");
+    assert!(list[3].missing && list[3].changes.is_none());
+    assert_eq!(
+        serde_json::to_value(&list).unwrap(),
+        doc["result"]["worktrees"]
+    );
+}

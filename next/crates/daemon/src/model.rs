@@ -37,6 +37,9 @@ pub struct Workspace {
     pub layout: Option<contract::Layout>,
     #[serde(skip)]
     pub attention: Vec<Own>,
+    /// The worktree was there before jwn knew of it (N99): its setup is not run (REQ-536).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub adopted: bool,
     /// The ports a worktree was given when it was made (REQ-495).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ports: Option<PortBlock>,

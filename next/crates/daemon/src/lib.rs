@@ -33,6 +33,7 @@ mod server;
 mod start;
 mod sync;
 mod workspaces;
+mod worktrees;
 
 pub use engine::served as conversation_served;
 pub use launch::agent_name;

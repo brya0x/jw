@@ -18,6 +18,7 @@ use crate::server::Shared;
 use crate::start;
 use crate::sync;
 use crate::workspaces;
+use crate::worktrees;
 
 pub type Done = Result<Option<Value>, ErrorBody>;
 
@@ -66,6 +67,8 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
         } => {
             workspaces::create_worktree(shared, &repo, &branch, base.as_deref(), folder.as_deref())
         }
+        Cmd::ListWorktrees { repo } => worktrees::list(shared, &repo),
+        Cmd::OpenWorktree { repo, path } => worktrees::open(shared, &repo, &path),
         Cmd::ProjectConfig { repo } => start::project_config(shared, &repo),
         Cmd::WriteProjectConfig { repo, to, text } => {
             start::write_project_config(shared, &repo, to, &text)

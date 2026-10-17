@@ -180,6 +180,17 @@ pub enum Cmd {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         folder: Option<String>,
     },
+    /// The worktrees git knows of the repository `repo` is in, except its main one (N99). The
+    /// result is `{worktrees: [WorktreeInfo]}`.
+    ListWorktrees {
+        repo: String,
+    },
+    /// Open a worktree that exists as a workspace with no panel: nothing is made, copied or run
+    /// (N99). `path` is one `list_worktrees` listed. The result is the one of `create_worktree`.
+    OpenWorktree {
+        repo: String,
+        path: String,
+    },
     /// Close a workspace (a worktree is removed from disk only when `remove_worktree`).
     RemoveWorkspace {
         workspace: Id,
@@ -607,6 +618,26 @@ pub struct ProjectInfo {
     /// The names of the ports a worktree gets and their offsets in its block (REQ-494).
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub ports: std::collections::BTreeMap<String, u32>,
+}
+
+/// A worktree git knows of, as `list_worktrees` lists it (REQ-533).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorktreeInfo {
+    pub path: String,
+    /// The branch it is on; none when its head is detached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// The commit its head is at, the first seven digits.
+    pub head: String,
+    /// Its folder is not there any more.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub missing: bool,
+    /// How many files it has changed; none when it could not be read (or the folder is missing).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changes: Option<u32>,
+    /// The workspace that has it open, when one has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<Id>,
 }
 
 /// The result of `find_files`: paths relative to the workspace's folder, cut when `cut`.

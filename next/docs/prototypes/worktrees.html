@@ -84,11 +84,11 @@ button[aria-pressed=true]{background:var(--blue);color:var(--panel);border-color
     </div>
   </div>
   <div class="notes">
-    <div><b>Dónde está</b><br>En la caja del worktree que ya existe (<kbd>w</kbd>): arriba hay dos fichas, <b>nuevo</b> y <b>existentes</b>, y <kbd>tab</kbd> cambia. En el teléfono es la ficha «existentes» de la hoja «worktree nuevo», y el menú de un repositorio o de un worktree la abre directamente.</div>
+    <div><b>Dónde está</b><br>En la caja del worktree que ya existe (<kbd>w</kbd>): arriba hay dos fichas, <b>nuevo</b> y <b>existentes</b>, y <kbd>←</kbd> <kbd>→</kbd> cambian (<kbd>tab</kbd> sigue eligiendo shell o claude en «nuevo»). En el teléfono es la ficha «existentes» de la hoja «worktree nuevo», y el menú de un repositorio o de un worktree la abre directamente.</div>
     <div><b>Qué lista</b><br>Todos los worktrees del repositorio vengan de donde vengan, también los que están fuera de <code>../app-wt</code>. Cada fila dice su rama, su carpeta y si ya está abierto. Uno desprendido (sin rama) se muestra con su commit. Uno cuya carpeta se borró a mano se marca «carpeta no existe» y no se puede abrir.</div>
-    <div><b>Qué hace abrir</b><br>Crea un workspace como los demás: aparece en el panel lateral, <i>sin paneles</i> hasta que entras. No corre el setup, no copia archivos ni cambia la rama: ese worktree ya está hecho. Si el proyecto declara puertos, recibe su bloque como cualquier otro. Se abre con lo que dice «al abrir» del proyecto al entrar.</div>
+    <div><b>Qué hace abrir</b><br>Crea un workspace como los demás: aparece en el panel lateral, <i>sin paneles</i> hasta que entras con <kbd>n</kbd>. No corre el setup, no copia archivos ni cambia la rama: ese worktree ya está hecho. Si el proyecto declara puertos, recibe su bloque como cualquier otro. Se queda <i>sin panel</i>, para que abrir cinco no arranque cinco shells: al entrar, <kbd>n</kbd> abre el primero.</div>
     <div><b>Qué no hace</b><br>No borra ni «arregla» nada: no hay botón de quitar aquí (se hace desde el workspace, como siempre) ni <code>git worktree prune</code>. El worktree principal ya es el workspace del repositorio, así que no se lista dos veces.</div>
-    <div><b>Teclas</b><br><kbd>tab</kbd> nuevo/existentes · <kbd>↑ ↓</kbd> mover · <kbd>↵</kbd> abrir el resaltado y quedarse · <kbd>espacio</kbd> marcar · <kbd>a</kbd> abrir todos los cerrados · <kbd>esc</kbd> cerrar.</div>
+    <div><b>Teclas</b><br><kbd>←</kbd> <kbd>→</kbd> nuevo/existentes · <kbd>↑ ↓</kbd> mover · <kbd>↵</kbd> abrir el resaltado y quedarse · <kbd>espacio</kbd> marcar · <kbd>a</kbd> abrir todos los cerrados · <kbd>esc</kbd> cerrar.</div>
   </div>
 </div>
 
@@ -147,7 +147,7 @@ function term(){
   const n=S.list.length;
   const closed=S.list.filter(w=>openable(w)).length;
   bput('╭─ worktrees de jw '+'─'.repeat(52)+'╮','dim');
-  bput('│  '+(S.tab==='new'?'[nuevo]':' nuevo ')+'  '+(S.tab==='existing'?'[existentes '+n+']':' existentes '+n+' ')+'   tab cambia','');
+  bput('│  '+(S.tab==='new'?'[nuevo]':' nuevo ')+'  '+(S.tab==='existing'?'[existentes '+n+']':' existentes '+n+' ')+'   ← → cambia','');
   bput('│','dim');
   if(S.tab==='new'){
     bput('│  nombre   ws-3▏','');
@@ -175,7 +175,7 @@ function term(){
     const bx=box[r-1];
     L.push({s:sd+(bx?' '+bx.s:''),c:bx?bx.c:''});
   }
-  L.push({s:' ↑↓ mover · ↵ abrir · espacio marcar · a abrir todos · tab nuevo/existentes · esc cerrar',c:'dim'});
+  L.push({s:' ↑↓ mover · ↵ abrir · espacio marcar · a abrir todos · ← → nuevo/existentes · esc cerrar',c:'dim'});
   return L.slice(0,H);
 }
 function drawTerm(){
@@ -187,7 +187,7 @@ function drawTerm(){
     const m=l.s;
     return '<span class="'+(lit?'lit ':'')+cls+'">'+esc(m)+'</span>';
   }).join('\n');
-  document.getElementById('keys').textContent='↑↓ mover · ↵ abrir el resaltado · espacio marcar · a abrir todos · tab cambia de ficha · esc cierra la caja';
+  document.getElementById('keys').textContent='↑↓ mover · ↵ abrir el resaltado · espacio marcar · a abrir todos · ← → cambia de ficha · esc cierra la caja';
 }
 
 /* ---------- the phone ---------- */
@@ -220,7 +220,7 @@ document.getElementById('scen').onclick=e=>{
 };
 document.getElementById('t').addEventListener('keydown',e=>{
   const n=S.list.length;
-  if(e.key==='Tab'){e.preventDefault();S.tab=S.tab==='new'?'existing':'new';S.toast='';}
+  if(e.key==='ArrowLeft'||e.key==='ArrowRight'){S.tab=S.tab==='new'?'existing':'new';S.toast='';}
   else if(S.tab==='existing'&&n){
     if(e.key==='j'||e.key==='ArrowDown'){S.sel=Math.min(n-1,S.sel+1);S.toast='';}
     else if(e.key==='k'||e.key==='ArrowUp'){S.sel=Math.max(0,S.sel-1);S.toast='';}

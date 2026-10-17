@@ -1,0 +1,9 @@
+{
+  "t": "cmd",
+  "id": "c21",
+  "cmd": {
+    "cmd": "open_worktree",
+    "repo": "/home/u/code/app",
+    "path": "/home/u/code/app-wt/fix-login"
+  }
+}

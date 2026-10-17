@@ -1308,6 +1308,7 @@ mod tests {
             }],
             layout: None,
             attention: vec![],
+            adopted: false,
             ports: None,
             github: None,
         });

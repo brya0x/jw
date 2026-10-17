@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use contract::{OpenKind, ProjectInfo};
+use contract::{OpenKind, ProjectInfo, WorktreeInfo};
 use crossterm::event::KeyCode;
 use daemon::browse::{home, is_git, subdirs};
 
@@ -423,6 +423,36 @@ pub enum Make {
         /// What the worktree opens with, as the person left it (REQ-510).
         open: OpenKind,
     },
+    /// Open these worktrees that exist (REQ-534); the box stays.
+    OpenExisting {
+        repo: PathBuf,
+        paths: Vec<String>,
+    },
+}
+
+/// The two sides of the worktree box: a new worktree, or the ones git already has (REQ-533).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Side {
+    New,
+    Existing,
+}
+
+/// What the box knows of the worktrees that exist: the daemon's answer to `list_worktrees`.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Existing {
+    Reading,
+    Ready(Vec<WorktreeInfo>),
+    Refused(String),
+}
+
+/// A worktree that can be opened: its folder is there and no workspace has it.
+fn openable(w: &WorktreeInfo) -> bool {
+    !w.missing && w.workspace.is_none()
+}
+
+/// A worktree's name in a list: its branch, or its commit when the head is detached.
+fn shown(w: &WorktreeInfo) -> String {
+    w.branch.clone().unwrap_or_else(|| format!("({})", w.head))
 }
 
 pub struct Worktree {
@@ -439,6 +469,14 @@ pub struct Worktree {
     plan: Plan,
     /// What this worktree opens with: the settings' choice until `tab` changes it.
     pub opens: OpenKind,
+    pub side: Side,
+    pub existing: Existing,
+    /// The row of the list of existing worktrees the keys are on.
+    sel: usize,
+    /// The paths marked with `espacio` to open together.
+    marked: Vec<String>,
+    /// What the last opening did, or why it could not.
+    pub note: Option<(String, bool)>,
 }
 
 /// What `git` prints for `args` run in `dir`, when it succeeds.
@@ -485,6 +523,100 @@ impl Worktree {
             config: Config::Reading,
             plan: Plan::Reading,
             opens: OpenKind::Shell,
+            side: Side::New,
+            existing: Existing::Reading,
+            sel: 0,
+            marked: Vec::new(),
+            note: None,
+        }
+    }
+
+    /// The daemon's answer to `list_worktrees`: the row and the marks stay where they can.
+    pub fn set_existing(&mut self, reply: Result<Vec<WorktreeInfo>, String>) {
+        self.existing = match reply {
+            Ok(list) => {
+                self.sel = self.sel.min(list.len().saturating_sub(1));
+                self.marked
+                    .retain(|p| list.iter().any(|w| &w.path == p && openable(w)));
+                Existing::Ready(list)
+            }
+            Err(why) => Existing::Refused(why),
+        };
+    }
+
+    /// What opening did: said in the box.
+    pub fn say(&mut self, text: String, good: bool) {
+        self.note = Some((text, good));
+    }
+
+    fn listed(&self) -> &[WorktreeInfo] {
+        match &self.existing {
+            Existing::Ready(list) => list,
+            _ => &[],
+        }
+    }
+
+    /// A key on the side of the worktrees that exist.
+    fn press_existing(&mut self, code: KeyCode, ctrl: bool) -> Make {
+        let n = self.listed().len();
+        match code {
+            KeyCode::Esc => return Make::Close,
+            KeyCode::Down | KeyCode::Char('j') if !ctrl => {
+                self.sel = (self.sel + 1).min(n.saturating_sub(1));
+            }
+            KeyCode::Up | KeyCode::Char('k') if !ctrl => self.sel = self.sel.saturating_sub(1),
+            KeyCode::Char(' ') => {
+                if let Some(w) = self.listed().get(self.sel).filter(|w| openable(w)) {
+                    let path = w.path.clone();
+                    match self.marked.iter().position(|p| *p == path) {
+                        Some(at) => {
+                            self.marked.remove(at);
+                        }
+                        None => self.marked.push(path),
+                    }
+                }
+            }
+            KeyCode::Char('a') if !ctrl => {
+                let all: Vec<String> = self
+                    .listed()
+                    .iter()
+                    .filter(|w| openable(w))
+                    .map(|w| w.path.clone())
+                    .collect();
+                return self.open_these(all);
+            }
+            KeyCode::Enter => {
+                if !self.marked.is_empty() {
+                    let marked = std::mem::take(&mut self.marked);
+                    return self.open_these(marked);
+                }
+                let here = self.listed().get(self.sel).cloned();
+                match here {
+                    Some(w) if openable(&w) => return self.open_these(vec![w.path]),
+                    Some(w) if w.missing => {
+                        self.say(
+                            "esa carpeta ya no existe: no hay nada que abrir".into(),
+                            false,
+                        );
+                    }
+                    Some(_) => self.say("ya está abierto".into(), false),
+                    None => {}
+                }
+            }
+            _ => {}
+        }
+        Make::Stay
+    }
+
+    fn open_these(&mut self, paths: Vec<String>) -> Make {
+        if paths.is_empty() {
+            self.say("no hay más cerrados".into(), false);
+            return Make::Stay;
+        }
+        self.note = None;
+        Make::OpenExisting {
+            repo: self.repo.clone(),
+            paths,
         }
     }
 
@@ -544,6 +676,17 @@ impl Worktree {
     }
 
     pub fn press(&mut self, code: KeyCode, ctrl: bool) -> Make {
+        if matches!(code, KeyCode::Left | KeyCode::Right) {
+            self.side = match self.side {
+                Side::New => Side::Existing,
+                Side::Existing => Side::New,
+            };
+            self.note = None;
+            return Make::Stay;
+        }
+        if self.side == Side::Existing {
+            return self.press_existing(code, ctrl);
+        }
         match code {
             KeyCode::Esc => return Make::Close,
             KeyCode::Enter => {
@@ -586,9 +729,132 @@ impl Worktree {
     }
 }
 
+/// The tabs of the box: the side in force is in brackets.
+fn tabs(t: &Worktree) -> Vec<(String, Style)> {
+    let mark = |side: Side, name: String| {
+        if t.side == side {
+            format!("[{name}]")
+        } else {
+            format!(" {name} ")
+        }
+    };
+    let count = match &t.existing {
+        Existing::Ready(list) => format!("existentes {}", list.len()),
+        _ => "existentes".to_owned(),
+    };
+    vec![
+        (
+            format!(
+                "{}  {}   ← → cambia",
+                mark(Side::New, "nuevo".into()),
+                mark(Side::Existing, count)
+            ),
+            Style::fg(look::fg()),
+        ),
+        (String::new(), Style::fg(look::fg())),
+    ]
+}
+
+/// The lines of the side of the worktrees that exist.
+fn existing_lines(t: &Worktree) -> Vec<(String, Style)> {
+    let (plain, dim) = (Style::fg(look::fg()), Style::fg(look::dim()));
+    let list = match &t.existing {
+        Existing::Reading => return vec![("leyendo los worktrees…".to_owned(), dim)],
+        Existing::Refused(why) => return vec![(why.clone(), Style::fg(look::red()))],
+        Existing::Ready(list) => list,
+    };
+    if list.is_empty() {
+        return vec![
+            ("Este repositorio no tiene otros worktrees.".to_owned(), dim),
+            (
+                format!(
+                    "El principal ya es el workspace de {}. Haz uno en «nuevo».",
+                    repo_name(&t.repo)
+                ),
+                dim,
+            ),
+        ];
+    }
+    let mut v: Vec<(String, Style)> = list
+        .iter()
+        .enumerate()
+        .map(|(i, w)| {
+            let glyph = if t.marked.contains(&w.path) {
+                '■'
+            } else if w.missing {
+                '✕'
+            } else if w.workspace.is_some() {
+                '●'
+            } else {
+                '○'
+            };
+            let note = if w.workspace.is_some() {
+                "abierto".to_owned()
+            } else if w.missing {
+                "carpeta no existe".to_owned()
+            } else if w.branch.is_none() {
+                "sin rama".to_owned()
+            } else {
+                match w.changes {
+                    Some(n) if n > 0 => format!("{n} cambios"),
+                    _ => String::new(),
+                }
+            };
+            let style = if w.missing {
+                Style::fg(look::red())
+            } else if w.workspace.is_some() {
+                dim
+            } else if w.changes.unwrap_or(0) > 0 {
+                Style::fg(look::yellow())
+            } else {
+                plain
+            };
+            // The note comes before the folder, which is the long one and the one that can be cut.
+            let text = format!(
+                "{} {glyph} {:<24} {note:<18} {}",
+                if i == t.sel { '▸' } else { ' ' },
+                clip(&shown(w), 24),
+                short(Path::new(&w.path)),
+            );
+            (text, if i == t.sel { style.bold() } else { style })
+        })
+        .collect();
+    let closed = list.iter().filter(|w| openable(w)).count();
+    v.push((String::new(), plain));
+    let marked = if t.marked.is_empty() {
+        String::new()
+    } else {
+        format!("{} marcados · ", t.marked.len())
+    };
+    v.push((format!("{marked}{closed} cerrados"), dim));
+    v
+}
+
 /// Draw the box of a worktree over `area`.
 pub fn draw_worktree(g: &mut Grid, (x, y, w, _): Rect, t: &Worktree) {
-    let lines: Vec<(String, Style)> = {
+    let mut lines = tabs(t);
+    if t.side == Side::Existing {
+        lines.extend(existing_lines(t));
+        lines.push((String::new(), Style::fg(look::fg())));
+        if let Some((text, good)) = &t.note {
+            lines.push((
+                text.clone(),
+                Style::fg(if *good { look::green() } else { look::red() }),
+            ));
+        }
+        lines.push((
+            "↵ abrir · espacio marca · a abre todos · ← → nuevo · esc cierra".to_owned(),
+            Style::fg(look::dim()),
+        ));
+    } else {
+        lines.extend(new_lines(t));
+    }
+    draw_box(g, (x, y, w), t, &lines);
+}
+
+/// The lines of the side of a new worktree.
+fn new_lines(t: &Worktree) -> Vec<(String, Style)> {
+    {
         let plain = Style::fg(look::fg());
         let mut v = vec![
             (format!("nombre    {}▏", t.name), plain.bold()),
@@ -666,13 +932,24 @@ pub fn draw_worktree(g: &mut Grid, (x, y, w, _): Rect, t: &Worktree) {
             Style::fg(look::dim()),
         ));
         v
-    };
+    }
+}
+
+fn draw_box(
+    g: &mut Grid,
+    (x, y, w): (usize, usize, usize),
+    t: &Worktree,
+    lines: &[(String, Style)],
+) {
     let widest = lines
         .iter()
         .map(|(l, _)| l.chars().count())
         .max()
         .unwrap_or(0);
-    let title = format!("worktree nuevo de {}", repo_name(&t.repo));
+    let title = match t.side {
+        Side::New => format!("worktree nuevo de {}", repo_name(&t.repo)),
+        Side::Existing => format!("worktrees de {}", repo_name(&t.repo)),
+    };
     let bw = (widest + 8)
         .max(title.chars().count() + 8)
         .min(w.saturating_sub(2))

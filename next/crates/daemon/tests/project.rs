@@ -352,6 +352,54 @@ fn the_setup_runs_in_the_one_panel_and_then_the_shell_stays_or_claude_starts() {
     d.stop();
 }
 
+/// REQ-536: a worktree that was there before jwn is started with its panel and no setup, while the
+/// one jwn makes runs it.
+#[test]
+fn a_worktree_that_existed_is_started_without_its_setup_and_one_that_was_made_runs_it() {
+    let sb = Sandbox::new();
+    let d = sb.start();
+    let top = repo(&sb, Some("setup = [\"touch ../setup-ran-{name}\"]\n"));
+    let existing = top.parent().unwrap().join("old-wt/had");
+    git(
+        &top,
+        &["worktree", "add", "-q", "-b", "had", &text(&existing)],
+    );
+    let mut c = sb.client();
+    let start = |c: &mut Client, ws: &str| {
+        ok(
+            c,
+            Cmd::StartWorkspace {
+                workspace: ws.to_owned(),
+                open: None,
+            },
+        )
+    };
+    let adopted = ok(
+        &mut c,
+        Cmd::OpenWorktree {
+            repo: text(&top),
+            path: text(&existing),
+        },
+    )["workspace"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    start(&mut c, &adopted);
+
+    let made = worktree(&mut c, &top, "made").unwrap()["workspace"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    start(&mut c, &made);
+    let ran = top.parent().unwrap().join("app-wt/setup-ran-made");
+    wait_for("the setup of the worktree jwn made", || ran.exists());
+    assert!(
+        !top.parent().unwrap().join("old-wt/setup-ran-had").exists(),
+        "the setup does not run in a worktree that existed"
+    );
+    d.stop();
+}
+
 #[test]
 fn a_setup_that_fails_leaves_the_shell_with_the_error_and_claude_does_not_start() {
     let sb = Sandbox::new();

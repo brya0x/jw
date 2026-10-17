@@ -517,6 +517,11 @@ pub enum After {
         folder: String,
         open: contract::OpenKind,
     },
+    /// Open these worktrees of `repo` that exist as workspaces, with no panel.
+    OpenWorktrees {
+        repo: std::path::PathBuf,
+        paths: Vec<String>,
+    },
     /// Close a workspace, and with `remove_worktree` remove its worktree. The daemon never
     /// forces: git refuses a worktree with changes.
     RemoveWorkspace {
@@ -621,6 +626,8 @@ pub struct View {
     project: Option<project::Project>,
     /// Repositories whose `.jw.toml` the worktree box and the project screen wait to hear of.
     project_asks: Vec<std::path::PathBuf>,
+    /// The repositories whose worktrees the box asks the daemon to list.
+    worktree_asks: Vec<std::path::PathBuf>,
     /// A workspace made by the client's own request, to open when it shows up in the session
     /// (or at the time given, in `now_ms`, if it does not).
     goto: Option<(String, u64)>,
@@ -693,6 +700,7 @@ impl View {
             worktree: None,
             project: None,
             project_asks: Vec::new(),
+            worktree_asks: Vec::new(),
             goto: None,
             full: false,
             new_pane: None,
@@ -1387,6 +1395,7 @@ impl View {
             return;
         };
         self.project_asks.push(repo.clone());
+        self.worktree_asks.push(repo.clone());
         self.worktree = Some(open::Worktree::new(
             repo,
             from.unwrap_or_else(|| "HEAD".into()),
@@ -1397,6 +1406,41 @@ impl View {
     /// The repositories whose settings the worktree box asks the daemon for, once.
     pub fn take_project_asks(&mut self) -> Vec<std::path::PathBuf> {
         std::mem::take(&mut self.project_asks)
+    }
+
+    /// The repositories whose worktrees the box wants listed.
+    pub fn take_worktree_asks(&mut self) -> Vec<std::path::PathBuf> {
+        std::mem::take(&mut self.worktree_asks)
+    }
+
+    /// The daemon's answer to `list_worktrees` for `repo`, for the box if it is still open on it.
+    pub fn worktrees_replied(&mut self, repo: &std::path::Path, reply: Reply) {
+        let list = reply_value(reply).and_then(|v| {
+            serde_json::from_value::<Vec<contract::WorktreeInfo>>(v["worktrees"].clone())
+                .map_err(|e| e.to_string())
+        });
+        if let Some(t) = self.worktree.as_mut().filter(|t| t.repo == repo) {
+            t.set_existing(list);
+        }
+    }
+
+    /// What opening worktrees did: `opened` of them, and why the others did not. The box says it
+    /// and lists them again, to show which are open now.
+    pub fn worktrees_opened(&mut self, repo: &std::path::Path, opened: usize, failed: &[String]) {
+        let Some(t) = self.worktree.as_mut().filter(|t| t.repo == repo) else {
+            return;
+        };
+        let said = match (opened, failed.first()) {
+            (0, Some(why)) => (why.clone(), false),
+            (_, Some(why)) => (
+                format!("abiertos {opened}; {} no: {why}", failed.len()),
+                false,
+            ),
+            (1, None) => ("abierto, sin setup ni copiar archivos".to_owned(), true),
+            (n, None) => (format!("abiertos {n}, sin setup ni copiar archivos"), true),
+        };
+        t.say(said.0, said.1);
+        self.worktree_asks.push(repo.to_path_buf());
     }
 
     /// The daemon's answer to `project_config` for `repo`: it goes to the worktree box if that
@@ -1508,6 +1552,7 @@ impl View {
                 self.worktree = None;
                 After::Continue
             }
+            open::Make::OpenExisting { repo, paths } => After::OpenWorktrees { repo, paths },
             open::Make::Create {
                 repo,
                 branch,
@@ -4001,7 +4046,7 @@ const WORKSPACE_KEYS: &[(&str, &str)] = &[
     ("r", "renombrar el worktree"),
     ("o", "abrir una carpeta"),
     ("t", "archivos del workspace"),
-    ("w", "worktree nuevo del proyecto"),
+    ("w", "worktrees del proyecto: nuevo o los que ya existen"),
     ("p", "la configuración del proyecto"),
     ("s", "subir el worktree a origin"),
     ("x", "cerrar el workspace (y quitar su worktree)"),
@@ -4689,6 +4734,24 @@ fn do_after(
                 Some(open),
             );
         }
+        After::OpenWorktrees { repo, paths } => {
+            let mut failed = Vec::new();
+            let mut opened = 0;
+            for path in paths {
+                let reply = client.cmd_within(
+                    Cmd::OpenWorktree {
+                        repo: repo.to_string_lossy().into_owned(),
+                        path,
+                    },
+                    ASK_WAIT,
+                );
+                match reply_value(reply) {
+                    Ok(_) => opened += 1,
+                    Err(why) => failed.push(why),
+                }
+            }
+            view.worktrees_opened(&repo, opened, &failed);
+        }
         After::SaveProject { repo, to, set } => {
             let reply = client.cmd_within(
                 Cmd::EditProjectConfig {
@@ -4858,6 +4921,15 @@ pub fn run() -> Result<(), String> {
             let _ = client.cmd(Cmd::MarkSeen { node, rev });
         }
         serve_asks(&mut view, &mut client);
+        for repo in view.take_worktree_asks() {
+            let reply = client.cmd_within(
+                Cmd::ListWorktrees {
+                    repo: repo.to_string_lossy().into_owned(),
+                },
+                ASK_WAIT,
+            );
+            view.worktrees_replied(&repo, reply);
+        }
         for repo in view.take_project_asks() {
             let reply = client.cmd_within(
                 Cmd::ProjectConfig {
@@ -7822,6 +7894,111 @@ mod tests {
         assert!(!t.contains("y abrir"), "{t}");
         assert_eq!(v.press_key(plain(KeyCode::Enter)), After::Continue);
         assert!(v.worktree.is_some());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn worktree_infos(root: &std::path::Path) -> serde_json::Value {
+        let at = |name: &str| root.join("app-wt").join(name).display().to_string();
+        serde_json::json!({ "worktrees": [
+            { "path": at("login"), "branch": "feat/login", "head": "4f2a9c1", "workspace": "w1" },
+            { "path": at("fix-login"), "branch": "fix/login", "head": "9a8b7c6", "changes": 3 },
+            { "path": at("bisect"), "head": "1d2e3f4", "changes": 0 },
+            { "path": at("old"), "branch": "old", "head": "aa00bb1", "missing": true },
+        ]})
+    }
+
+    /// REQ-533 to REQ-535: the box lists the worktrees git has on its second side, opens the
+    /// highlighted one, the marked ones or every closed one, and says what it did.
+    #[test]
+    fn the_box_lists_the_worktrees_that_exist_and_opens_them_one_marked_or_all() {
+        let root = disk("existing");
+        let mut v = view_on(&root);
+        let app = root.join("app");
+        tap(&mut v, 'w');
+        assert_eq!(
+            v.take_worktree_asks(),
+            std::slice::from_ref(&app),
+            "the box asks for the list"
+        );
+        assert!(v.plain(120, 30).contains("existentes"));
+        v.press_key(plain(KeyCode::Right));
+        assert!(v.plain(120, 30).contains("leyendo los worktrees…"));
+        v.worktrees_replied(&app, Ok(Ok(Some(worktree_infos(&root)))));
+        let t = v.plain(120, 30);
+        assert!(
+            t.contains("worktrees de app") && t.contains("[existentes 4]"),
+            "{t}"
+        );
+        for want in [
+            "feat/login",
+            "abierto",
+            "3 cambios",
+            "(1d2e3f4)",
+            "sin rama",
+            "carpeta no existe",
+            "2 cerrados",
+        ] {
+            assert!(t.contains(want), "{want}: {t}");
+        }
+        // The first row is open: ↵ says so and opens nothing; so does the one whose folder is gone.
+        assert_eq!(v.press_key(plain(KeyCode::Enter)), After::Continue);
+        assert!(v.plain(120, 30).contains("ya está abierto"));
+        let path = |name: &str| root.join("app-wt").join(name).display().to_string();
+        // ↵ opens the highlighted one and the box stays.
+        v.press_key(plain(KeyCode::Down));
+        assert_eq!(
+            v.press_key(plain(KeyCode::Enter)),
+            After::OpenWorktrees {
+                repo: app.clone(),
+                paths: vec![path("fix-login")]
+            }
+        );
+        assert!(v.worktree.is_some());
+        // Marking two and ↵ opens both; marking what cannot be opened does nothing.
+        tap(&mut v, ' ');
+        v.press_key(plain(KeyCode::Down));
+        tap(&mut v, ' ');
+        v.press_key(plain(KeyCode::Down));
+        tap(&mut v, ' ');
+        assert!(v.plain(120, 30).contains("2 marcados"));
+        assert_eq!(
+            v.press_key(plain(KeyCode::Enter)),
+            After::OpenWorktrees {
+                repo: app.clone(),
+                paths: vec![path("fix-login"), path("bisect")]
+            }
+        );
+        // `a` opens every closed one, but never a missing one or one that is open.
+        assert_eq!(
+            tap(&mut v, 'a'),
+            After::OpenWorktrees {
+                repo: app.clone(),
+                paths: vec![path("fix-login"), path("bisect")]
+            }
+        );
+        // What opening did is said, and the list is asked for again.
+        let _ = v.take_worktree_asks();
+        v.worktrees_opened(&app, 2, &[]);
+        assert!(
+            v.plain(120, 30)
+                .contains("abiertos 2, sin setup ni copiar archivos")
+        );
+        assert_eq!(v.take_worktree_asks(), std::slice::from_ref(&app));
+        v.worktrees_opened(&app, 1, &["no se pudo".to_owned()]);
+        assert!(v.plain(120, 30).contains("abiertos 1; 1 no: no se pudo"));
+        // ← goes back to the new worktree, with its own keys.
+        v.press_key(plain(KeyCode::Left));
+        assert!(v.plain(120, 30).contains("worktree nuevo de app"));
+        // A refusal of the daemon is the whole content of the list.
+        v.press_key(plain(KeyCode::Right));
+        v.worktrees_replied(
+            &app,
+            Ok(Err(contract::ErrorBody {
+                code: contract::ErrorCode::GitFailed,
+                message: "not a git repository".into(),
+            })),
+        );
+        assert!(v.plain(120, 30).contains("not a git repository"));
         let _ = std::fs::remove_dir_all(root);
     }
 

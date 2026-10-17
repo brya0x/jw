@@ -783,3 +783,171 @@ fn a_worktree_with_changes_goes_only_by_force_and_its_branch_stays() {
     );
     d.stop();
 }
+
+/// The worktrees git has that jwn did not make: a branch, a detached head, one with a change and
+/// one whose folder is gone.
+fn existing(app: &Path) -> (PathBuf, PathBuf, PathBuf) {
+    let wt = app.parent().unwrap().join("app-wt");
+    std::fs::create_dir_all(&wt).unwrap();
+    let (login, bisect, gone) = (wt.join("fix-login"), wt.join("bisect"), wt.join("old"));
+    git(
+        app,
+        &["worktree", "add", "-q", "-b", "fix/login", &text(&login)],
+    );
+    git(app, &["worktree", "add", "-q", "--detach", &text(&bisect)]);
+    git(app, &["worktree", "add", "-q", "-b", "old", &text(&gone)]);
+    std::fs::remove_dir_all(&gone).unwrap();
+    std::fs::write(login.join("new.txt"), "x").unwrap();
+    std::fs::write(login.join("f.txt"), "changed").unwrap();
+    (
+        std::fs::canonicalize(login).unwrap(),
+        std::fs::canonicalize(bisect).unwrap(),
+        gone,
+    )
+}
+
+fn listed(c: &mut wire::Client, repo: &Path) -> Vec<Value> {
+    let r = c
+        .cmd(Cmd::ListWorktrees { repo: text(repo) })
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    r["worktrees"].as_array().unwrap().clone()
+}
+
+/// REQ-533: the worktrees git lists but the main one, from the repository or from one of them.
+#[test]
+fn the_worktrees_git_has_are_listed_with_their_branch_changes_and_whether_their_folder_is_there() {
+    let sb = Sandbox::new();
+    let d = sb.start();
+    let app = repo(&sb);
+    let mut c = sb.client();
+    assert!(
+        listed(&mut c, &app).is_empty(),
+        "the main worktree is the repository's own"
+    );
+    let (login, bisect, gone) = existing(&app);
+
+    let list = listed(&mut c, &app);
+    assert_eq!(list.len(), 3, "{list:?}");
+    let by = |path: &Path| {
+        list.iter()
+            .find(|w| Path::new(w["path"].as_str().unwrap()).ends_with(path.file_name().unwrap()))
+            .unwrap_or_else(|| panic!("{} is not listed: {list:?}", path.display()))
+    };
+    let (l, b, g) = (by(&login), by(&bisect), by(&gone));
+    assert_eq!(l["branch"], "fix/login", "the prefix is kept");
+    assert_eq!(l["changes"], 2, "a changed file and a new one");
+    assert_eq!(l["head"].as_str().unwrap().len(), 7);
+    assert!(l.get("missing").is_none() && l.get("workspace").is_none());
+    assert!(b.get("branch").is_none(), "a detached head has no branch");
+    assert_eq!(b["changes"], 0);
+    assert_eq!(g["missing"], true);
+    assert!(
+        g.get("changes").is_none(),
+        "nothing to read in a folder that is not there"
+    );
+
+    assert_eq!(
+        listed(&mut c, &login).len(),
+        3,
+        "from a worktree it is the same list, and the main one is still left out"
+    );
+    let plain = std::fs::canonicalize(&sb.dir).unwrap();
+    let e = c
+        .cmd(Cmd::ListWorktrees { repo: text(&plain) })
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::GitFailed, "not a repository");
+    d.stop();
+}
+
+/// REQ-534 and REQ-535: opening makes a workspace with no panel, says it is open in the list,
+/// and refuses what is not a worktree of the repository, is not there or is open already.
+#[test]
+fn an_existing_worktree_opens_as_a_workspace_with_no_panel_and_the_list_then_says_so() {
+    let sb = Sandbox::new();
+    let d = sb.start();
+    let app = repo(&sb);
+    let (login, bisect, gone) = existing(&app);
+    let mut c = sb.client();
+
+    let reply = c
+        .cmd(Cmd::OpenWorktree {
+            repo: text(&app),
+            path: text(&login),
+        })
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let ws = reply["workspace"].as_str().unwrap().to_owned();
+    c.open(&ws).unwrap();
+    assert!(c.wait_until(WAIT, |c| c.nodes.contains_key(&ws)).unwrap());
+    let n = &c.nodes[&ws];
+    assert_eq!(
+        (n["kind"].as_str(), n["branch"].as_str(), n["name"].as_str()),
+        (Some("worktree"), Some("fix/login"), Some("app: fix/login"))
+    );
+    assert_eq!(n["project"], text(&app));
+    assert_eq!(n["path"], text(&login));
+    assert_eq!(
+        n["panes"].as_array().map(Vec::len),
+        Some(0),
+        "no panel until it is started"
+    );
+    assert!(
+        listed(&mut c, &app)
+            .iter()
+            .any(|w| w["workspace"] == ws.as_str()),
+        "the list says which workspace has it"
+    );
+
+    let refused = |c: &mut wire::Client, path: &Path| {
+        c.cmd(Cmd::OpenWorktree {
+            repo: text(&app),
+            path: text(path),
+        })
+        .unwrap()
+        .unwrap_err()
+        .code
+    };
+    assert_eq!(refused(&mut c, &login), ErrorCode::Conflict, "open already");
+    assert_eq!(
+        refused(&mut c, &gone),
+        ErrorCode::NotFound,
+        "its folder is gone"
+    );
+    assert_eq!(
+        refused(&mut c, &app),
+        ErrorCode::NotFound,
+        "the main worktree is the repository's workspace"
+    );
+    assert_eq!(
+        refused(&mut c, &sb.dir.join("work")),
+        ErrorCode::NotFound,
+        "a folder git does not list"
+    );
+    // A detached head opens too, named by its commit.
+    let reply = c
+        .cmd(Cmd::OpenWorktree {
+            repo: text(&login),
+            path: text(&bisect),
+        })
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let detached = reply["workspace"].as_str().unwrap().to_owned();
+    c.open(&detached).unwrap();
+    assert!(
+        c.wait_until(WAIT, |c| c.nodes.contains_key(&detached))
+            .unwrap()
+    );
+    assert!(c.nodes[&detached]["branch"].is_null());
+    assert!(
+        c.nodes[&detached]["name"]
+            .as_str()
+            .unwrap()
+            .starts_with("app: (")
+    );
+    d.stop();
+}

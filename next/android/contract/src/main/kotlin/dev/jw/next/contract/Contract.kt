@@ -165,6 +165,14 @@ sealed interface Cmd {
     @Serializable @SerialName("project_config")
     data class ProjectConfig(val repo: String) : Cmd
 
+    /** The worktrees git knows of the repository [repo] is in, except its main one; the result is `{worktrees: [WorktreeInfo]}`. */
+    @Serializable @SerialName("list_worktrees")
+    data class ListWorktrees(val repo: String) : Cmd
+
+    /** Open a worktree [ListWorktrees] listed as a workspace with no panel; the result is the one of [CreateWorktree]. */
+    @Serializable @SerialName("open_worktree")
+    data class OpenWorktree(val repo: String, val path: String) : Cmd
+
     /** Start the one panel of a workspace that has none, as [open] says or, when it is null, as its settings do; the result is `{panes: [id]}`. */
     @Serializable @SerialName("start_workspace")
     data class StartWorkspace(val workspace: Id, val open: OpenKind? = null) : Cmd
@@ -453,6 +461,22 @@ data class ProjectInfo(
     val ports: Map<String, Int> = emptyMap(),
     /** The `root` key as the file wrote it; none when the file has none. */
     @SerialName("root_text") val rootText: String? = null,
+)
+
+/** A worktree git knows of, as `list_worktrees` lists it. */
+@Serializable
+data class WorktreeInfo(
+    val path: String,
+    /** The branch it is on; none when its head is detached. */
+    val branch: String? = null,
+    /** The commit its head is at, the first seven digits. */
+    val head: String,
+    /** Its folder is not there any more. */
+    val missing: Boolean = false,
+    /** How many files it has changed; none when it could not be read. */
+    val changes: Int? = null,
+    /** The workspace that has it open. */
+    val workspace: Id? = null,
 )
 
 /** What `edit_project_config` changes: each field that is there is the new value of its key; an empty one takes its key out. */

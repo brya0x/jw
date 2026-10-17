@@ -96,9 +96,9 @@ fn spawn(
 
 /// `start_workspace`: the one panel of a workspace that has none (REQ-506): a shell or `claude`
 /// as `open` says or, without it, as the settings do. A worktree's setup runs in that panel first
-/// (REQ-507); a folder has no setup (REQ-500).
+/// (REQ-507), unless it was there before jwn (REQ-536); a folder has no setup (REQ-500).
 pub fn start_workspace(shared: &Shared, workspace: &Id, open: Option<OpenKind>) -> Done {
-    let (kind, path, top, branch) = {
+    let (kind, path, top, branch, adopted) = {
         let core = shared.lock();
         let ws = core.workspace(workspace)?;
         if !ws.panes.is_empty() {
@@ -112,6 +112,7 @@ pub fn start_workspace(shared: &Shared, workspace: &Id, open: Option<OpenKind>) 
             ws.path.clone(),
             ws.project.clone(),
             ws.branch.clone().unwrap_or_default(),
+            ws.adopted,
         )
     };
     let worktree_of = top.filter(|_| kind == WorkspaceKind::Worktree);
@@ -121,7 +122,7 @@ pub fn start_workspace(shared: &Shared, workspace: &Id, open: Option<OpenKind>) 
     };
     let claude = vec!["claude".to_owned()];
     let agent = open.unwrap_or(project.open) == OpenKind::Claude;
-    let id = if worktree_of.is_some() && !project.setup.is_empty() {
+    let id = if worktree_of.is_some() && !adopted && !project.setup.is_empty() {
         let name = Path::new(&path)
             .file_name()
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());

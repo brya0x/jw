@@ -57,7 +57,7 @@ fn already_open(shared: &Shared, path: &str) -> Result<(), crate::commands::Erro
     }
 }
 
-fn added(shared: &Shared, ws: Workspace) -> Done {
+pub(crate) fn added(shared: &Shared, ws: Workspace) -> Done {
     let id = ws.id.clone();
     let path = ws.path.clone();
     let mut core = shared.lock();
@@ -102,6 +102,7 @@ pub fn open_folder(shared: &Shared, path: &str) -> Done {
             panes: Vec::new(),
             layout: None,
             attention: Vec::new(),
+            adopted: false,
             ports: None,
             github: None,
         },
@@ -202,6 +203,7 @@ pub fn create_worktree(
             panes: Vec::new(),
             layout: None,
             attention: Vec::new(),
+            adopted: false,
             ports: (!project.ports.is_empty()).then(|| crate::model::PortBlock {
                 slot: 0,
                 names: project.ports.clone(),
