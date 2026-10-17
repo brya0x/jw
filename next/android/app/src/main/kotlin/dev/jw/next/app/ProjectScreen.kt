@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
@@ -68,6 +67,7 @@ internal fun ProjectDialog(source: AppSource, repo: String, close: () -> Unit) {
 private fun BoxScope.ProjectBody(source: AppSource, repo: String, close: () -> Unit) {
     var state by remember(repo) { mutableStateOf<ProjectState>(ProjectState.Reading) }
     var note by remember(repo) { mutableStateOf<String?>(null) }
+    var saved by remember(repo) { mutableStateOf(false) }
     var busy by remember(repo) { mutableStateOf(false) }
     var editing by remember(repo) { mutableStateOf<ProjectField?>(null) }
     var warned by remember(repo) { mutableStateOf(false) }
@@ -81,6 +81,7 @@ private fun BoxScope.ProjectBody(source: AppSource, repo: String, close: () -> U
     val leave = {
         if (draft?.dirty == true && !warned) {
             warned = true
+            saved = false
             note = "hay cambios sin guardar: guarda, o vuelve otra vez para descartarlos"
         } else {
             close()
@@ -98,6 +99,7 @@ private fun BoxScope.ProjectBody(source: AppSource, repo: String, close: () -> U
             note = null
             source.editProjectConfig(repo, draft.to, draft.edit()) { result ->
                 busy = false
+                saved = result.isSuccess
                 note = savedNote(result)
                 if (result.isSuccess) read()
             }
@@ -133,17 +135,12 @@ private fun BoxScope.ProjectBody(source: AppSource, repo: String, close: () -> U
                 ) {
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.semantics { contentDescription = "Dónde se guarda" }) {
                         listOf(ConfigFrom.Personal to "Personal", ConfigFrom.Repo to "Repositorio").forEach { (to, label) ->
-                            Box(
-                                Modifier.weight(1f).defaultMinSize(minHeight = 48.dp)
-                                    .background(if (d.to == to) Palette.blue else Palette.sel, CircleShape)
-                                    .clickable { update(d.withTarget(to)) },
-                                contentAlignment = Alignment.Center,
-                            ) { Mono(label, if (d.to == to) Palette.panel else Palette.fg, 12, bold = d.to == to) }
+                            Pill(label, d.to == to, Modifier.weight(1f)) { update(d.withTarget(to)) }
                         }
                     }
                     Mono(d.target(repo), Palette.dim, 11, lines = 2)
                     if (d.warning().isNotEmpty()) Mono("⚠ ${d.warning()}", Palette.yellow, 11, lines = 2)
-                    if (note != null) Mono(note.orEmpty(), if (note?.startsWith("guardado") == true) Palette.green else Palette.yellow, 12, lines = 4)
+                    if (note != null) Mono(note.orEmpty(), if (saved) Palette.green else Palette.yellow, 12, lines = 4)
                     val enabled = !busy && !d.nothingToSave
                     Box(
                         Modifier.fillMaxWidth().defaultMinSize(minHeight = 48.dp)
@@ -220,12 +217,7 @@ private fun BoxScope.ProjectSheet(field: ProjectField, d: ProjectDraft, update: 
             ProjectField.Open -> {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.semantics { contentDescription = "Al abrir" }) {
                     listOf(OpenKind.Shell to "Shell", OpenKind.Claude to "Claude").forEach { (kind, label) ->
-                        Box(
-                            Modifier.weight(1f).defaultMinSize(minHeight = 48.dp)
-                                .background(if (d.cur.open == kind) Palette.blue else Palette.sel, CircleShape)
-                                .clickable { update(d.withOpen(kind)) },
-                            contentAlignment = Alignment.Center,
-                        ) { Mono(label, if (d.cur.open == kind) Palette.panel else Palette.fg, 12, bold = d.cur.open == kind) }
+                        Pill(label, d.cur.open == kind, Modifier.weight(1f)) { update(d.withOpen(kind)) }
                     }
                 }
                 Mono("Un solo panel. Si hay setup, corre primero ahí; si falla, queda la shell con el error. Al crear un worktree se puede elegir otra cosa solo para ese.", Palette.dim, 11, lines = 4)

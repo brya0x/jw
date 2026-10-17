@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -284,12 +283,7 @@ internal fun BoxScope.WorktreeSheet(source: AppSource, repoAtStart: String, stat
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Mono("abre    ", Palette.dim, 12)
                         listOf(OpenKind.Shell to "shell", OpenKind.Claude to "claude").forEach { (kind, label) ->
-                            Box(
-                                Modifier.defaultMinSize(minWidth = 64.dp, minHeight = 40.dp)
-                                    .background(if (chosen == kind) Palette.blue else Palette.sel, CircleShape)
-                                    .clickable(enabled = !busy) { opens = kind },
-                                contentAlignment = Alignment.Center,
-                            ) { Mono(label, if (chosen == kind) Palette.panel else Palette.fg, 12, bold = chosen == kind) }
+                            Pill(label, chosen == kind, enabled = !busy) { opens = kind }
                         }
                     }
                     if (plan.info.setup.isNotEmpty()) Mono("el setup corre primero en ese panel", Palette.dim, 11)

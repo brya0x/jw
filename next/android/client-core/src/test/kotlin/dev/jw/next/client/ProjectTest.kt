@@ -65,6 +65,30 @@ class ProjectTest {
     }
 
     @Test
+    fun aRootTypedAsTheFileHasItIsNotSentAgainAndAnotherOneIs() {
+        val d = info(ConfigFrom.Personal, "../old").draft()
+        assertEquals(null, d.withRoot("../old").edit().root, "REQ-519 on the other side: nothing different is nothing")
+        assertEquals("../new", d.withRoot("../new").edit().root)
+        assertEquals("../old", d.withTarget(ConfigFrom.Repo).edit().root, "another file says it whole")
+    }
+
+    @Test
+    fun aProjectWithNoFileSavedInTheRepositoryCreatesItWithEverythingTheScreenShows() {
+        val d = info(null).draft().withTarget(ConfigFrom.Repo)
+        assertEquals("crea un .jw.toml en el repositorio", d.warning())
+        assertEquals(ProjectEdit(setup = listOf("make deps"), copy = emptyList(), ports = mapOf("web" to 0), open = OpenKind.Shell), d.edit())
+        assertFalse(d.nothingToSave)
+    }
+
+    @Test
+    fun thePortsKeepTheirOrderOnTheScreenAndGoToThePcAsAMap() {
+        val d = info(ConfigFrom.Personal).draft().withPorts(listOf("b" to 1, "a" to 0))
+        assertEquals(listOf("b", "a"), d.cur.ports.map { it.first })
+        assertEquals(mapOf("a" to 0, "b" to 1), d.edit().ports)
+        assertEquals(null, info(ConfigFrom.Personal).draft().withPorts(listOf("web" to 0)).edit().ports, "the same ports are not sent")
+    }
+
+    @Test
     fun portsAreCheckedWhenTypedAndTheFirstBadLineIsNamed() {
         assertEquals(listOf("web" to 0, "api" to 1), parsePorts(listOf("web=0", " api = 1 ", "")).getOrThrow())
         for (bad in listOf("=5", "base=1", "Api=3", "api=100", "api", "api=-1", "a b=1")) {

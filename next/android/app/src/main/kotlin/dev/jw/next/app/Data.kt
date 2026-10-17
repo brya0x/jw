@@ -34,6 +34,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 
 /** A source the UI can watch: [tick] changes whenever a node arrives. */
@@ -179,7 +180,7 @@ abstract class ProtocolSource : AppSource() {
     override fun editProjectConfig(repo: String, to: ConfigFrom, set: ProjectEdit, reply: (Result<Pair<String, Boolean>>) -> Unit) {
         command(Cmd.EditProjectConfig(repo, to, set)) { r ->
             val path = (r.result?.get("path") as? JsonPrimitive)?.contentOrNull
-            val shadowed = (r.result?.get("shadowed") as? JsonPrimitive)?.contentOrNull == "true"
+            val shadowed = (r.result?.get("shadowed") as? JsonPrimitive)?.booleanOrNull == true
             reply(
                 when {
                     !r.ok -> Result.failure(Exception(r.error?.message ?: "el PC no pudo guardar la configuración"))

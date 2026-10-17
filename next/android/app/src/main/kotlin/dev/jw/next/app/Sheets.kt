@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -67,6 +68,17 @@ internal fun SheetAction(glyph: String, text: String, color: Color = Palette.fg,
         Mono(glyph, color, 14, bold = true, modifier = Modifier.width(24.dp))
         Mono(text, color, 14, bold = color != Palette.fg)
     }
+}
+
+/** One of a few choices as a pill, the [selected] one filled; as high as a touch target must be. */
+@Composable
+internal fun Pill(label: String, selected: Boolean, modifier: Modifier = Modifier, enabled: Boolean = true, click: () -> Unit) {
+    Box(
+        modifier.defaultMinSize(minWidth = 64.dp, minHeight = 48.dp)
+            .background(if (selected) Palette.blue else Palette.sel, CircleShape)
+            .clickable(enabled = enabled, onClick = click),
+        contentAlignment = Alignment.Center,
+    ) { Mono(label, if (selected) Palette.panel else Palette.fg, 12, bold = selected) }
 }
 
 /** What a sheet gives a name to: a workspace or a pane, with the name as it is shown. */
