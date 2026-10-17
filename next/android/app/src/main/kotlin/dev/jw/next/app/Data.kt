@@ -10,6 +10,7 @@ import dev.jw.next.client.worktreeStarted
 import dev.jw.next.contract.Accent
 import dev.jw.next.contract.ClientMsg
 import dev.jw.next.contract.Cmd
+import dev.jw.next.contract.ConfigFrom
 import dev.jw.next.contract.ConvMode
 import dev.jw.next.contract.ContractJson
 import dev.jw.next.contract.ConversationList
@@ -26,6 +27,7 @@ import dev.jw.next.contract.MarkdownDoc
 import dev.jw.next.contract.OpenKind
 import dev.jw.next.contract.Node
 import dev.jw.next.contract.Peer
+import dev.jw.next.contract.ProjectEdit
 import dev.jw.next.contract.ProjectInfo
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
@@ -172,6 +174,20 @@ abstract class ProtocolSource : AppSource() {
 
     override fun projectConfig(repo: String, reply: (Result<ProjectInfo>) -> Unit) {
         command(Cmd.ProjectConfig(repo)) { r -> reply(r.read(ProjectInfo.serializer())) }
+    }
+
+    override fun editProjectConfig(repo: String, to: ConfigFrom, set: ProjectEdit, reply: (Result<Pair<String, Boolean>>) -> Unit) {
+        command(Cmd.EditProjectConfig(repo, to, set)) { r ->
+            val path = (r.result?.get("path") as? JsonPrimitive)?.contentOrNull
+            val shadowed = (r.result?.get("shadowed") as? JsonPrimitive)?.contentOrNull == "true"
+            reply(
+                when {
+                    !r.ok -> Result.failure(Exception(r.error?.message ?: "el PC no pudo guardar la configuración"))
+                    path == null -> Result.failure(Exception("el PC no dijo dónde la guardó"))
+                    else -> Result.success(path to shadowed)
+                },
+            )
+        }
     }
 
     override fun startWorkspace(workspace: Id, open: OpenKind?, reply: (Result<Unit>) -> Unit) {

@@ -14,7 +14,7 @@ fun Node.Workspace.target() = WorkspaceTarget(
 )
 
 /** What a choice of the sheet does. */
-enum class WsAction { NewWorktree, Rename, RemoveWorkspace, CloseWorkspace, RemoveWorktree }
+enum class WsAction { NewWorktree, Project, Rename, RemoveWorkspace, CloseWorkspace, RemoveWorktree }
 
 data class MenuItem(val action: WsAction, val glyph: String, val label: String, val note: String?, val danger: Boolean)
 
@@ -22,13 +22,15 @@ data class MenuItem(val action: WsAction, val glyph: String, val label: String, 
 fun workspaceMenu(kind: HomeKind, repo: String?): List<MenuItem> = when (kind) {
     HomeKind.Root -> listOfNotNull(
         repo?.let { MenuItem(WsAction.NewWorktree, "w", "worktree nuevo", "de «${repoName(it)}»", false) },
+        repo?.let { MenuItem(WsAction.Project, "p", "configuración del proyecto", "«${repoName(it)}»", false) },
         MenuItem(WsAction.RemoveWorkspace, "×", "quitar el workspace", "la carpeta no se toca", true),
     )
     HomeKind.Folder -> listOf(
         MenuItem(WsAction.RemoveWorkspace, "×", "quitar la carpeta", "la carpeta no se toca", true),
     )
-    HomeKind.Worktree -> listOf(
+    HomeKind.Worktree -> listOfNotNull(
         MenuItem(WsAction.Rename, "✎", "renombrar el worktree", null, false),
+        repo?.let { MenuItem(WsAction.Project, "p", "configuración del proyecto", "«${repoName(it)}»", false) },
         MenuItem(WsAction.CloseWorkspace, "×", "cerrar el workspace", "deja la carpeta y la rama", true),
         MenuItem(WsAction.RemoveWorktree, "×", "quitar el worktree", "borra su carpeta", true),
     )

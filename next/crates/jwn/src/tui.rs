@@ -35,6 +35,7 @@ mod open;
 mod panels;
 mod phone;
 mod programs;
+mod project;
 mod select;
 mod settings;
 mod shell;
@@ -343,6 +344,8 @@ pub enum Key {
     Settings,
     /// A worktree of the project the person is in.
     Worktree,
+    /// The settings of the project the person is in.
+    Project,
     /// Push the highlighted worktree's branch.
     Sync,
     /// A new panel beside the focused one, to its right (`|`) or below it (`-`).
@@ -499,6 +502,12 @@ pub enum After {
         path: std::path::PathBuf,
         create: bool,
     },
+    /// Put `set` in the file `to` of the settings of `repo` and read them again.
+    SaveProject {
+        repo: std::path::PathBuf,
+        to: contract::ConfigFrom,
+        set: contract::ProjectEdit,
+    },
     /// Make a worktree of `repo` on a new `branch` from `from`, in the folder `folder` of
     /// `<repo>-wt`, and open it with a shell or `claude` as `open` says.
     CreateWorktree {
@@ -608,7 +617,9 @@ pub struct View {
     /// The folder browser and the worktree box, while one is open.
     picker: Option<open::Picker>,
     worktree: Option<open::Worktree>,
-    /// Repositories whose `.jw.toml` the worktree box waits to hear of.
+    /// The project screen, while it is open (REQ-520).
+    project: Option<project::Project>,
+    /// Repositories whose `.jw.toml` the worktree box and the project screen wait to hear of.
     project_asks: Vec<std::path::PathBuf>,
     /// A workspace made by the client's own request, to open when it shows up in the session
     /// (or at the time given, in `now_ms`, if it does not).
@@ -680,6 +691,7 @@ impl View {
             launcher: None,
             picker: None,
             worktree: None,
+            project: None,
             project_asks: Vec::new(),
             goto: None,
             full: false,
@@ -1390,12 +1402,61 @@ impl View {
     /// The daemon's answer to `project_config` for `repo`: it goes to the worktree box if that
     /// is still open and for the same repository.
     pub fn project_replied(&mut self, repo: &std::path::Path, reply: Reply) {
-        let Some(t) = self.worktree.as_mut().filter(|t| t.repo == repo) else {
+        let info = reply_value(reply).and_then(|v| {
+            serde_json::from_value::<contract::ProjectInfo>(v).map_err(|e| e.to_string())
+        });
+        if let Some(p) = self.project.as_mut().filter(|p| p.repo == repo) {
+            p.set_info(info);
+        } else if let Some(t) = self.worktree.as_mut().filter(|t| t.repo == repo) {
+            t.set_config(info);
+        }
+    }
+
+    /// `p`: the settings of the project the person is in; only a repository has them.
+    fn open_project_box(&mut self) {
+        let Some((name, project, kind, _)) = self.project_of_selected() else {
             return;
         };
-        t.set_config(reply_value(reply).and_then(|v| {
-            serde_json::from_value::<contract::ProjectInfo>(v).map_err(|e| e.to_string())
+        let top = match kind {
+            WorkspaceKind::Worktree => Some(project),
+            _ => open::git_out(&project, &["rev-parse", "--show-toplevel"])
+                .map(std::path::PathBuf::from),
+        };
+        let Some(repo) = top else {
+            self.flash = format!("«{name}» no es un repositorio git: p necesita uno");
+            return;
+        };
+        self.project_asks.push(repo.clone());
+        self.project = Some(project::Project::new(repo));
+    }
+
+    /// What saving the settings answered: it is told on the screen, which reads them again.
+    pub fn project_saved(&mut self, repo: &std::path::Path, reply: Reply) {
+        let Some(p) = self.project.as_mut().filter(|p| p.repo == repo) else {
+            return;
+        };
+        p.saved(reply_value(reply).map(|v| {
+            (
+                v["path"].as_str().unwrap_or_default().to_owned(),
+                v["shadowed"].as_bool().unwrap_or(false),
+            )
         }));
+        self.project_asks.push(repo.to_path_buf());
+    }
+
+    /// A key in the project screen.
+    fn project_key(&mut self, ev: KeyEvent) -> After {
+        let Some(p) = self.project.as_mut() else {
+            return After::Continue;
+        };
+        match p.press(ev.code) {
+            project::Act::Stay => After::Continue,
+            project::Act::Close => {
+                self.project = None;
+                After::Continue
+            }
+            project::Act::Save { repo, to, set } => After::SaveProject { repo, to, set },
+        }
     }
 
     /// A key in the folder browser.
@@ -1852,6 +1913,9 @@ impl View {
         if self.picker.is_some() {
             return self.picker_key(ev);
         }
+        if self.project.is_some() {
+            return self.project_key(ev);
+        }
         if self.worktree.is_some() {
             return self.worktree_key(ev);
         }
@@ -1975,6 +2039,7 @@ impl View {
         self.help
             || self.picker.is_some()
             || self.worktree.is_some()
+            || self.project.is_some()
             || self.launcher.is_some()
             || self.phone_open
             || self.manage.is_some()
@@ -2118,6 +2183,7 @@ impl View {
             (Mode::Workspaces, Key::Worktree) if level != Level::Terminal => {
                 self.open_worktree_box()
             }
+            (Mode::Workspaces, Key::Project) if level != Level::Terminal => self.open_project_box(),
             (Mode::Workspaces, Key::Close) => match level {
                 Level::Workspaces => self.ask_close_workspace(),
                 Level::Panels => return self.ask_close_pane(),
@@ -2452,6 +2518,7 @@ impl View {
             || self.phone_open
             || self.picker.is_some()
             || self.worktree.is_some()
+            || self.project.is_some()
         {
             return After::Continue;
         }
@@ -2535,6 +2602,7 @@ impl View {
             || self.phone_open
             || self.picker.is_some()
             || self.worktree.is_some()
+            || self.project.is_some()
         {
             return After::Continue;
         }
@@ -3039,6 +3107,7 @@ impl View {
             || self.phone_open
             || self.picker.is_some()
             || self.worktree.is_some()
+            || self.project.is_some()
             || self.changes.is_some()
             || self.mode != Mode::Workspaces
         {
@@ -3464,6 +3533,11 @@ impl View {
             (None, _) if self.worktree.is_some() => {
                 (" WORKTREE ", look::cyan(), "↵ crear · esc cancelar")
             }
+            (None, _) if self.project.is_some() => (
+                " PROYECTO ",
+                look::cyan(),
+                "↑↓ campo · ↵ editar · g dónde guarda · s guardar · esc cerrar",
+            ),
             (Some(Manage::Failed { .. }), _) => (" ERROR ", look::red(), self.manage_hint()),
             (Some(Manage::Settings { .. }), _) => (" AJUSTES ", look::blue(), self.manage_hint()),
             (None, _) if self.phone_open => match &self.phone {
@@ -3515,7 +3589,7 @@ impl View {
                 (_, Level::Workspaces) => (
                     " WORKSPACE ",
                     look::blue(),
-                    "j/k mover · ↵ entrar · r renombrar · o carpeta · w worktree · s subir · x cerrar · d cambios · m teléfono · ? teclas · q salir",
+                    "j/k mover · ↵ entrar · r renombrar · o carpeta · w worktree · p proyecto · s subir · x cerrar · d cambios · m teléfono · ? teclas · q salir",
                 ),
             },
         };
@@ -3577,6 +3651,9 @@ impl View {
         }
         if let Some(t) = &self.worktree {
             open::draw_worktree(&mut g, (px, 1, pw, rows.saturating_sub(2)), t);
+        }
+        if let Some(p) = &self.project {
+            project::draw(&mut g, (px, 1, pw, rows.saturating_sub(2)), p);
         }
         if self.help {
             self.help_box(&mut g, (px, 1, pw, rows.saturating_sub(2)));
@@ -3906,6 +3983,7 @@ const WORKSPACE_KEYS: &[(&str, &str)] = &[
     ("o", "abrir una carpeta"),
     ("t", "archivos del workspace"),
     ("w", "worktree nuevo del proyecto"),
+    ("p", "la configuración del proyecto"),
     ("s", "subir el worktree a origin"),
     ("x", "cerrar el workspace (y quitar su worktree)"),
     ("d", "ver sus cambios"),
@@ -4170,6 +4248,7 @@ fn key_of(code: KeyCode) -> Option<Key> {
         KeyCode::Char(',') => Key::Settings,
         KeyCode::Char('m') => Key::Phone,
         KeyCode::Char('w') => Key::Worktree,
+        KeyCode::Char('p') => Key::Project,
         KeyCode::Char('s') => Key::Sync,
         KeyCode::Char('c') => Key::CopyCmd,
         KeyCode::Char('o') => Key::CopyOut,
@@ -4590,6 +4669,17 @@ fn do_after(
                 "No se pudo crear el worktree",
                 Some(open),
             );
+        }
+        After::SaveProject { repo, to, set } => {
+            let reply = client.cmd_within(
+                Cmd::EditProjectConfig {
+                    repo: repo.to_string_lossy().into_owned(),
+                    to,
+                    set,
+                },
+                ASK_WAIT,
+            );
+            view.project_saved(&repo, reply);
         }
         After::Sync { workspace } => spawn_sync(workspace, sync_tx.clone()),
         After::Rename { target, name } => {
@@ -7717,6 +7807,78 @@ mod tests {
         v.press(Key::Down);
         tap(&mut v, 'w');
         assert!(v.worktree.is_none());
+        assert!(v.flash.contains("no es un repositorio git"), "{}", v.flash);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn p_opens_the_settings_of_the_project_and_saves_what_changed_to_the_daemon() {
+        let root = disk("p");
+        let mut v = view_on(&root);
+        assert_eq!(tap(&mut v, 'p'), After::Continue);
+        assert_eq!(v.take_project_asks(), [root.join("app")]);
+        let t = v.plain(120, 40);
+        assert!(t.contains("proyecto · app"), "{t}");
+        assert!(t.contains("leyendo la configuración"), "{t}");
+        v.project_replied(
+            &root.join("app"),
+            project_reply(&root.join("app-wt"), Some(&["make deps"])),
+        );
+        let t = v.plain(120, 40);
+        for shown in [
+            "carpeta de worktrees",
+            "make deps",
+            "al abrir",
+            "[claude]",
+            "[repositorio]",
+            "cambia el .jw.toml que ve el equipo",
+            "sin cambios",
+        ] {
+            assert!(t.contains(shown), "{shown}\n{t}");
+        }
+        // The keys go to the screen while it is open: `al abrir` changes with →, and `s` saves.
+        for _ in 0..4 {
+            v.press_key(plain(KeyCode::Down));
+        }
+        v.press_key(plain(KeyCode::Right));
+        assert!(v.plain(120, 40).contains("hay cambios sin guardar"));
+        assert_eq!(
+            v.press_key(plain(KeyCode::Char('s'))),
+            After::SaveProject {
+                repo: root.join("app"),
+                to: contract::ConfigFrom::Repo,
+                set: contract::ProjectEdit {
+                    open: Some(contract::OpenKind::Shell),
+                    ..Default::default()
+                },
+            }
+        );
+        // What the daemon answers is told, and the settings are read again.
+        v.project_saved(
+            &root.join("app"),
+            Ok(Ok(Some(serde_json::json!({
+                "path": root.join("app/.jw.toml"),
+                "shadowed": false,
+            })))),
+        );
+        assert_eq!(v.take_project_asks(), [root.join("app")]);
+        assert!(
+            v.plain(120, 40).contains("guardado en"),
+            "{}",
+            v.plain(120, 40)
+        );
+        // The new answer replaces the screen's values, so there is nothing left to lose: esc closes it.
+        v.project_replied(
+            &root.join("app"),
+            project_reply(&root.join("app-wt"), Some(&["make deps"])),
+        );
+        assert_eq!(v.press_key(plain(KeyCode::Esc)), After::Continue);
+        assert!(v.project.is_none());
+        // A folder that is no repository has no settings of its own.
+        v.press(Key::Back);
+        v.press(Key::Down);
+        tap(&mut v, 'p');
+        assert!(v.project.is_none());
         assert!(v.flash.contains("no es un repositorio git"), "{}", v.flash);
         let _ = std::fs::remove_dir_all(root);
     }

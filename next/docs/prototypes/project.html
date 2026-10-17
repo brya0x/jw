@@ -86,7 +86,7 @@ button[aria-pressed=true]{background:var(--blue);color:var(--panel);border-color
     <div><b>Del repositorio</b><br>Manda sobre el personal. Guardar cambia el <code>.jw.toml</code> que ve el equipo, y la pantalla lo dice antes. Guardar en el personal queda tapado, y también lo dice.</div>
     <div><b>La rama</b><br>No es parte de la configuración: es lo que escribes al crear el worktree. <kbd>fix/login</kbd> hace la rama <kbd>fix/login</kbd> en la carpeta <kbd>login</kbd>; <kbd>login</kbd> a secas, la rama <kbd>login</kbd>.</div>
     <div><b>Al abrir</b><br>Un workspace abre un solo panel, con tu shell o con <code>claude</code>. Aquí se fija lo de siempre del proyecto; al crear un worktree (<kbd>tab</kbd> en la terminal, fichas en el teléfono) se puede cambiar solo para ese. Las claves viejas <code>[layout]</code>, <code>[agent]</code> y <code>editor</code> de un archivo se ignoran.</div>
-    <div><b>Teclas</b><br><kbd>↑ ↓</kbd> campo · <kbd>↵</kbd> editar (en «al abrir», cambia entre shell y claude) · en una lista <kbd>a</kbd> añade, <kbd>d</kbd> quita · <kbd>g</kbd> dónde se guarda · <kbd>s</kbd> guarda · <kbd>e</kbd> abre el archivo en el editor · <kbd>esc</kbd> cierra (y avisa si hay cambios sin guardar).</div>
+    <div><b>Teclas</b><br><kbd>↑ ↓</kbd> campo · <kbd>↵</kbd> editar (en «al abrir», cambia entre shell y claude) · en una lista <kbd>a</kbd> añade, <kbd>d</kbd> quita · <kbd>g</kbd> dónde se guarda · <kbd>s</kbd> guarda · <kbd>esc</kbd> cierra (y avisa si hay cambios sin guardar).</div>
   </div>
 </div>
 
@@ -135,13 +135,13 @@ function term(){
   put(' │ '+(S.saved?'✓ '+S.saved:dirty()?'● hay cambios sin guardar':'sin cambios'),S.saved?'green':dirty()?'yellow':'dim');
   while(L.length<H-3)put(' │','dim');
   put(' ╰'+'─'.repeat(W-4)+'╯','dim');
-  put(' ↑↓ campo · ↵ editar · g dónde guarda · s guardar · e abrir el archivo · esc cerrar','dim');
+  put(' ↑↓ campo · ↵ editar · g dónde guarda · s guardar · esc cerrar','dim');
   return L.slice(0,H);
 }
 function paintTerm(){
   const L=term(); const out=L.map(l=>{ let s=esc(l.s); if(l.c==='lit'){ s=s.replace(/ │ ▸/,' │ <span class="blue b">▸</span>'); } return '<span class="'+l.c+'">'+s+'</span>'; });
   document.getElementById('t').innerHTML=out.join('\n');
-  document.getElementById('keys').textContent=S.editing!==null?'Escribes el valor · ↵ lo acepta · esc lo deja como estaba':S.sub!==null?'Lista: ↑↓ elegir · ↵ editar · a añadir · d quitar · esc volver':S.sel===FIELDS.length-1?'Al abrir: ← → o ↵ cambia entre shell y claude · s guarda':'Teclas: ↑ ↓ campo · ↵ editar · g · s · e · esc';
+  document.getElementById('keys').textContent=S.editing!==null?'Escribes el valor · ↵ lo acepta · esc lo deja como estaba':S.sub!==null?'Lista: ↑↓ elegir · ↵ editar · a añadir · d quitar · esc volver':S.sel===FIELDS.length-1?'Al abrir: ← → o ↵ cambia entre shell y claude · s guarda':'Teclas: ↑ ↓ campo · ↵ editar · g · s · esc';
 }
 function key(e){
   const k=e.key, f=FIELDS[S.sel];
@@ -163,7 +163,6 @@ function key(e){
   else if(k==='Enter'){ if(f[2]==='text'){ S.editing=S.sel; S.buf=S.cfg[f[0]]; } else if(f[2]==='list'||f[2]==='map'){ if(!S.cfg[f[0]].length){ S.cfg[f[0]].push(f[2]==='map'?['web',0]:''); } S.sub=0; } }
   else if(k==='g'){ S.to=S.to==='repo'?'personal':'repo'; S.saved=''; }
   else if(k==='s'){ save(); }
-  else if(k==='e'){ S.saved='se abre '+(S.cfg.file||target())+' en nvim'; }
   else if(k==='Escape'){ S.saved=dirty()?'hay cambios sin guardar: s guarda, esc otra vez descarta':'(la pantalla se cierra)'; if(S._esc){ reset(); } S._esc=dirty(); }
   else return;
   e.preventDefault(); paintAll();

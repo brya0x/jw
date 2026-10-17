@@ -425,6 +425,30 @@ pub enum Cmd {
         to: ConfigFrom,
         text: String,
     },
+    /// Change some settings of the repository `repo` is in in the file `to` says, leaving the rest
+    /// of the file, its comments and its order, as it was (REQ-518). The result is `{path, shadowed}`.
+    EditProjectConfig {
+        repo: String,
+        to: ConfigFrom,
+        set: ProjectEdit,
+    },
+}
+
+/// What `edit_project_config` changes: each field that is there is the new value of its key, and
+/// one that equals what the file already says is left as written. An empty `root`, `setup`, `copy`
+/// or `ports` takes its key out of the file.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ProjectEdit {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copy: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ports: Option<std::collections::BTreeMap<String, u32>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open: Option<OpenKind>,
 }
 
 /// A node: one document of the tree, opened on demand and cached by clients.
@@ -555,8 +579,8 @@ pub enum ConfigFrom {
     Personal,
 }
 
-/// The result of `project_config`: what a worktree of the repository will be. `panes` are the
-/// programs of the layout's panes (the `setup` pane is not among them).
+/// The result of `project_config`: what a worktree of the repository will be and what a workspace
+/// opens with.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectInfo {
     /// The file read; none when the repository has none and the defaults are used.
@@ -570,6 +594,9 @@ pub struct ProjectInfo {
     pub personal: String,
     /// The folder worktrees go in.
     pub root: String,
+    /// The `root` key as the file wrote it; none when the file has none (REQ-516).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_text: Option<String>,
     /// The setup commands as written.
     pub setup: Vec<String>,
     /// What a workspace opens with: the one panel's program (REQ-504).

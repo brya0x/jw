@@ -197,6 +197,10 @@ sealed interface Cmd {
     @Serializable @SerialName("write_project_config")
     data class WriteProjectConfig(val repo: String, val to: ConfigFrom, val text: String) : Cmd
 
+    /** Change some settings in the file [to] says, leaving the rest of the file as it was. */
+    @Serializable @SerialName("edit_project_config")
+    data class EditProjectConfig(val repo: String, val to: ConfigFrom, val set: ProjectEdit) : Cmd
+
     /** The plan that waits in a conversation, whole, as blocks. The result is a [MarkdownDoc]. */
     @Serializable @SerialName("read_plan")
     data class ReadPlan(val node: Id, val ask: String) : Cmd
@@ -447,6 +451,18 @@ data class ProjectInfo(
     val copy: List<String> = emptyList(),
     /** The names of the ports a worktree gets and their offsets in its block. */
     val ports: Map<String, Int> = emptyMap(),
+    /** The `root` key as the file wrote it; none when the file has none. */
+    @SerialName("root_text") val rootText: String? = null,
+)
+
+/** What `edit_project_config` changes: each field that is there is the new value of its key; an empty one takes its key out. */
+@Serializable
+data class ProjectEdit(
+    val root: String? = null,
+    val setup: List<String>? = null,
+    val copy: List<String>? = null,
+    val ports: Map<String, Int>? = null,
+    val open: OpenKind? = null,
 )
 
 /** The result of `list_dir`: [dirs] is cut to the first ones when [total] is more than they are. */

@@ -70,6 +70,9 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
         Cmd::WriteProjectConfig { repo, to, text } => {
             start::write_project_config(shared, &repo, to, &text)
         }
+        Cmd::EditProjectConfig { repo, to, set } => {
+            start::edit_project_config(shared, &repo, to, &set)
+        }
         Cmd::StartWorkspace { workspace, open } => start::start_workspace(shared, &workspace, open),
         Cmd::RemoveWorkspace {
             workspace,

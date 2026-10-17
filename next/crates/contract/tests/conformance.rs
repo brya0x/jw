@@ -326,5 +326,6 @@ fn the_reply_of_project_config_is_a_project_info() {
         .expect("the fixture");
     let info: contract::ProjectInfo = serde_json::from_value(doc["result"].clone()).unwrap();
     assert_eq!(info.open, contract::OpenKind::Claude);
+    assert_eq!(info.root_text.as_deref(), Some("../app-trees"));
     assert_eq!(serde_json::to_value(&info).unwrap(), doc["result"]);
 }

@@ -5,7 +5,7 @@
 
 use std::path::{Component, Path, PathBuf};
 
-use contract::{ConfigFrom, OpenKind};
+use contract::{ConfigFrom, OpenKind, ProjectEdit};
 use serde::Deserialize;
 use toml::{Spanned, Table};
 
@@ -22,6 +22,8 @@ pub struct Project {
     /// Where the personal file is or would be.
     pub personal: PathBuf,
     pub root: PathBuf,
+    /// The `root` key as the file wrote it, when it did (REQ-516).
+    pub root_text: Option<String>,
     pub setup: Vec<String>,
     /// The files of the checkout a new worktree gets a copy of (REQ-489).
     pub copy: Vec<String>,
@@ -221,6 +223,92 @@ pub fn write(
     Ok((target, private && top.join(FILE).exists()))
 }
 
+/// Change some settings of the repository `top` in the file `to` says and keep what the file
+/// holds besides them as it is, comments and order included (REQ-518): what the file says of
+/// each field is compared with what is asked, and only a different one is written.
+pub fn edit(
+    top: &Path,
+    personal_dir: &Path,
+    to: ConfigFrom,
+    set: &ProjectEdit,
+) -> Result<(PathBuf, bool), String> {
+    let target = match to {
+        ConfigFrom::Repo => top.join(FILE),
+        ConfigFrom::Personal => personal_of(top, personal_dir),
+    };
+    let text = match std::fs::read_to_string(&target) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(format!("{}: {e}", target.display())),
+    };
+    let now = parse(&text, Some(target.clone()), top, &crate::browse::home())?;
+    let mut doc: toml_edit::DocumentMut = text
+        .parse()
+        .map_err(|e| format!("{}: {e}", label_of(Some(&target))))?;
+    change(&mut doc, &now, set);
+    write(top, personal_dir, to, &doc.to_string())
+}
+
+/// Sets `key` to `new`, keeping the comment after the value it replaces.
+fn put(doc: &mut toml_edit::DocumentMut, key: &str, mut new: toml_edit::Value) {
+    if let Some(old) = doc.get(key).and_then(toml_edit::Item::as_value) {
+        *new.decor_mut() = old.decor().clone();
+    }
+    doc[key] = toml_edit::Item::Value(new);
+}
+
+/// Puts into `doc` what `set` asks and `now` (what the document says) does not already say.
+fn change(doc: &mut toml_edit::DocumentMut, now: &Project, set: &ProjectEdit) {
+    use toml_edit::{Array, InlineTable};
+    let lines = |v: &[String]| -> Vec<String> {
+        v.iter()
+            .map(|l| l.trim().to_owned())
+            .filter(|l| !l.is_empty())
+            .collect()
+    };
+    let list = |v: &[String]| toml_edit::Value::from(v.iter().collect::<Array>());
+    if let Some(root) = &set.root {
+        let root = root.trim();
+        if root.is_empty() {
+            doc.remove("root");
+        } else if now.root_text.as_deref() != Some(root) {
+            put(doc, "root", root.into());
+        }
+    }
+    for (key, asked, now) in [
+        ("setup", &set.setup, &now.setup),
+        ("copy", &set.copy, &now.copy),
+    ] {
+        let Some(asked) = asked else { continue };
+        let asked = lines(asked);
+        if asked.is_empty() {
+            doc.remove(key);
+        } else if asked != lines(now) {
+            put(doc, key, list(&asked));
+        }
+    }
+    if let Some(ports) = &set.ports {
+        if ports.is_empty() {
+            doc.remove("ports");
+        } else if *ports != now.ports {
+            let table: InlineTable = ports
+                .iter()
+                .map(|(n, o)| (n.as_str(), i64::from(*o)))
+                .collect();
+            put(doc, "ports", table.into());
+        }
+    }
+    if let Some(open) = set.open
+        && open != now.open
+    {
+        let open = match open {
+            OpenKind::Shell => "shell",
+            OpenKind::Claude => "claude",
+        };
+        put(doc, "open", open.into());
+    }
+}
+
 fn parse(text: &str, source: Option<PathBuf>, top: &Path, home: &Path) -> Result<Project, String> {
     let label = label_of(source.as_ref());
     let fail = |at: usize, why: &str| format!("{label}, line {}: {why}", line_of(text, at));
@@ -229,7 +317,13 @@ fn parse(text: &str, source: Option<PathBuf>, top: &Path, home: &Path) -> Result
         None => format!("{label}: {}", e.message()),
     })?;
 
-    let root = match raw.root.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
+    let root_text = raw
+        .root
+        .as_deref()
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .map(str::to_owned);
+    let root = match root_text.as_deref() {
         Some(root) => {
             let path = match root.strip_prefix('~') {
                 Some("") => home.to_path_buf(),
@@ -319,6 +413,7 @@ fn parse(text: &str, source: Option<PathBuf>, top: &Path, home: &Path) -> Result
         from: None,
         personal: PathBuf::new(),
         root,
+        root_text,
         setup,
         copy,
         ports,

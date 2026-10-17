@@ -7,6 +7,7 @@
     "from": "repo",
     "personal": "/home/u/.config/jwn/projects/github.com_acme_app.toml",
     "root": "/home/u/code/app-trees",
+    "root_text": "../app-trees",
     "setup": [
       "bun install --frozen-lockfile"
     ],

@@ -454,7 +454,7 @@ pub fn git_out(dir: &Path, args: &[&str]) -> Option<String> {
         .then(|| String::from_utf8_lossy(&out.stdout).trim().to_owned())
 }
 
-fn repo_name(repo: &Path) -> String {
+pub(super) fn repo_name(repo: &Path) -> String {
     repo.file_name()
         .map_or_else(|| "repo".into(), |n| n.to_string_lossy().into_owned())
 }
@@ -846,6 +846,7 @@ mod tests {
             copy: Vec::new(),
             ports: Default::default(),
             root: root.join("app-wt").to_string_lossy().into_owned(),
+            root_text: None,
             setup: Vec::new(),
             open: OpenKind::Shell,
         }
@@ -1003,6 +1004,7 @@ mod tests {
             copy: vec![".env".into()],
             ports: [("web".to_owned(), 0), ("api".to_owned(), 1)].into(),
             root: root.join("trees").to_string_lossy().into_owned(),
+            root_text: Some("../trees".into()),
             setup: vec!["bun install".into()],
             open: OpenKind::Claude,
         };

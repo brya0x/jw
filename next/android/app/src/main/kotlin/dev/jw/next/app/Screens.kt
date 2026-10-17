@@ -235,6 +235,7 @@ fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, set: (Clie
     var newMenu by remember { mutableStateOf(false) }
     var finding by remember { mutableStateOf(false) }
     var worktree by remember { mutableStateOf<String?>(null) }
+    var project by remember { mutableStateOf<String?>(null) }
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
             if (onAvisos) Header("avisos", "lo que espera algo de ti", onBack = { set(nav.back(state)) }) else Header("jwn · ${session.name}", source.status, action = {
@@ -252,7 +253,7 @@ fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, set: (Clie
         menu?.let { target ->
             WorkspaceMenuSheet(target, dismiss = { menu = null }) { action ->
                 menu = null
-                choose(target, action, rename = { naming = Naming.Workspace(target.id, target.shown) }, newWorktree = { worktree = it }, remove = { removing = it })
+                choose(target, action, rename = { naming = Naming.Workspace(target.id, target.shown) }, newWorktree = { worktree = it }, project = { project = it }, remove = { removing = it })
             }
         }
         naming?.let { RenameSheet(source, it) { naming = null } }
@@ -260,6 +261,7 @@ fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, set: (Clie
         if (finding) FindSheet(source, state, nav, dismiss = { finding = false }) { finding = false; set(it) }
         if (newMenu) NewWorkspaceSheet(dismiss = { newMenu = false }) { newMenu = false; set(nav.show(state, Screen.Folders)) }
         worktree?.let { WorktreeSheet(source, it, state, nav, set) { worktree = null } }
+        project?.let { ProjectDialog(source, it) { project = null } }
     }
 }
 
@@ -386,6 +388,7 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
     // A shell that ends at once takes its pane with it before the workspace lists it: the `+` must not wait for ever.
     LaunchedEffect(waitingPane) { if (waitingPane != null) { delay(PANE_WAIT_MS); waitingPane = null } }
     var worktree by remember(screen.id) { mutableStateOf<String?>(null) }
+    var project by remember(screen.id) { mutableStateOf<String?>(null) }
     var naming by remember(screen.id) { mutableStateOf<Naming?>(null) }
     var closing by remember(screen.id) { mutableStateOf<CloseSheet?>(null) }
     var closeError by remember(screen.id) { mutableStateOf<String?>(null) }
@@ -514,10 +517,11 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
         val target = ws.target()
         WorkspaceMenuSheet(target, dismiss = { wsMenu = false }) { action ->
             wsMenu = false
-            choose(target, action, rename = { naming = Naming.Workspace(target.id, target.shown) }, newWorktree = { worktree = it }, remove = { removing = it })
+            choose(target, action, rename = { naming = Naming.Workspace(target.id, target.shown) }, newWorktree = { worktree = it }, project = { project = it }, remove = { removing = it })
         }
     }
     worktree?.let { WorktreeSheet(source, it, state, nav, set) { worktree = null } }
+    project?.let { ProjectDialog(source, it) { project = null } }
     removing?.let { RemoveWorkspaceSheet(source, it, cancel = { removing = null }) { removing = null; set(nav.back(state)) } }
     naming?.let { RenameSheet(source, it) { naming = null } }
     closing?.let { sheet ->
@@ -568,10 +572,11 @@ internal fun BoxScope.WorkspaceMenuSheet(target: WorkspaceTarget, dismiss: () ->
 }
 
 /** What a choice of the sheet of a workspace leads to: the field of its name, a worktree to make, or the question before a removal. */
-private fun choose(target: WorkspaceTarget, action: WsAction, rename: () -> Unit, newWorktree: (String) -> Unit, remove: (RemoveSheet) -> Unit) {
+private fun choose(target: WorkspaceTarget, action: WsAction, rename: () -> Unit, newWorktree: (String) -> Unit, project: (String) -> Unit, remove: (RemoveSheet) -> Unit) {
     when (action) {
         WsAction.Rename -> rename()
         WsAction.NewWorktree -> target.repo?.let(newWorktree)
+        WsAction.Project -> target.repo?.let(project)
         else -> removeSheet(target, action)?.let(remove)
     }
 }

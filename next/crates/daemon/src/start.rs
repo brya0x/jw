@@ -37,6 +37,7 @@ pub fn project_config(shared: &Shared, repo: &str) -> Done {
         from: project.from,
         personal: project.personal.to_string_lossy().into_owned(),
         root: project.root.to_string_lossy().into_owned(),
+        root_text: project.root_text.clone(),
         setup: project.setup.clone(),
         open: project.open,
         copy: project.copy.clone(),
@@ -54,6 +55,24 @@ pub fn write_project_config(shared: &Shared, repo: &str, to: ConfigFrom, text: &
     let top = git::toplevel(&dir).map_err(|m| err(ErrorCode::GitFailed, m))?;
     let personal = shared.lock().projects_dir.clone();
     let (path, shadowed) = project::write(Path::new(&top), &personal, to, text)
+        .map_err(|why| err(ErrorCode::BadRequest, why))?;
+    Ok(Some(
+        json!({ "path": path.to_string_lossy(), "shadowed": shadowed }),
+    ))
+}
+
+/// `edit_project_config`: some of the settings of the repository `repo` is in, put in the file
+/// `to` says with the rest of the file left as it was (REQ-518).
+pub fn edit_project_config(
+    shared: &Shared,
+    repo: &str,
+    to: ConfigFrom,
+    set: &contract::ProjectEdit,
+) -> Done {
+    let dir = crate::workspaces::absolute(repo)?;
+    let top = git::toplevel(&dir).map_err(|m| err(ErrorCode::GitFailed, m))?;
+    let personal = shared.lock().projects_dir.clone();
+    let (path, shadowed) = project::edit(Path::new(&top), &personal, to, set)
         .map_err(|why| err(ErrorCode::BadRequest, why))?;
     Ok(Some(
         json!({ "path": path.to_string_lossy(), "shadowed": shadowed }),

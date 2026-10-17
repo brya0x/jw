@@ -2,6 +2,7 @@ package dev.jw.next.client
 
 import dev.jw.next.contract.Accent
 import dev.jw.next.contract.Attention
+import dev.jw.next.contract.ConfigFrom
 import dev.jw.next.contract.ConvMode
 import dev.jw.next.contract.ConversationList
 import dev.jw.next.contract.Image
@@ -12,6 +13,7 @@ import dev.jw.next.contract.Id
 import dev.jw.next.contract.MarkdownDoc
 import dev.jw.next.contract.OpenKind
 import dev.jw.next.contract.Node
+import dev.jw.next.contract.ProjectEdit
 import dev.jw.next.contract.ProjectInfo
 
 /** Where the nodes come from: fixtures now, a live daemon later. */
@@ -83,6 +85,11 @@ interface NodeSource {
 
     /** Read the settings of the repository [repo] is in (its `.jw.toml`); [reply] gets the PC's message when it cannot be used. */
     fun projectConfig(repo: String, reply: (Result<ProjectInfo>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** Put [set] in the file [to] says of the settings of the repository [repo] is in, leaving the rest of the file as it was; [reply] gets where it went and whether the repository's own file hides it, or the PC's message (REQ-525). */
+    fun editProjectConfig(repo: String, to: ConfigFrom, set: ProjectEdit, reply: (Result<Pair<String, Boolean>>) -> Unit) {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
     }
 

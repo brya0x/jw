@@ -1115,3 +1115,175 @@ fn the_top_of_a_repository_has_its_settings_and_a_folder_inside_it_does_not() {
     assert!(s.contains("setup-ran"), "{s}");
     d.stop();
 }
+
+fn edit(
+    c: &mut Client,
+    repo: &Path,
+    to: contract::ConfigFrom,
+    set: contract::ProjectEdit,
+) -> Result<Value, (ErrorCode, String)> {
+    c.cmd(Cmd::EditProjectConfig {
+        repo: text(repo),
+        to,
+        set,
+    })
+    .unwrap()
+    .map(|r| r.unwrap())
+    .map_err(|e| (e.code, e.message))
+}
+
+/// N97: a change touches only the keys it changes (REQ-516 to REQ-519).
+#[test]
+fn an_edit_changes_only_what_it_says_and_keeps_the_comments_and_the_order_of_the_file() {
+    use contract::{ConfigFrom, OpenKind, ProjectEdit};
+    let sb = Sandbox::new();
+    let d = sb.start();
+    let old = "# the team's file\nroot = \"../app-trees\" # beside\n\n# what runs first\nsetup = [\"make deps\"]\n\n[agent]\ndefault = \"claude\"\n";
+    let app = repo(&sb, Some(old));
+    let mut c = sb.client();
+
+    // `root_text` is what the file wrote, and there is none when the file does not say
+    assert_eq!(config(&mut c, &app)["root_text"], "../app-trees");
+
+    // nothing different, nothing written: the file is the same byte for byte
+    let same = ProjectEdit {
+        root: Some("../app-trees".into()),
+        setup: Some(vec!["make deps".into()]),
+        open: Some(OpenKind::Shell),
+        ..Default::default()
+    };
+    let r = edit(&mut c, &app, ConfigFrom::Repo, same).unwrap();
+    assert_eq!(r["path"], text(&app.join(".jw.toml")));
+    assert_eq!(std::fs::read_to_string(app.join(".jw.toml")).unwrap(), old);
+
+    // a change: the comments, the old `[agent]` and the order stay; a new key is a top-level one
+    let set = ProjectEdit {
+        setup: Some(vec!["make deps".into(), "make seed".into()]),
+        copy: Some(vec![".env".into()]),
+        ports: Some([("web".to_owned(), 0), ("api".to_owned(), 1)].into()),
+        open: Some(OpenKind::Claude),
+        ..Default::default()
+    };
+    edit(&mut c, &app, ConfigFrom::Repo, set).unwrap();
+    let after = std::fs::read_to_string(app.join(".jw.toml")).unwrap();
+    for kept in [
+        "# the team's file",
+        "# beside",
+        "# what runs first",
+        "[agent]",
+        "default = \"claude\"",
+    ] {
+        assert!(after.contains(kept), "{kept} lost:\n{after}");
+    }
+    assert!(
+        after.find("root").unwrap() < after.find("[agent]").unwrap(),
+        "{after}"
+    );
+    let r = config(&mut c, &app);
+    assert_eq!(r["setup"], serde_json::json!(["make deps", "make seed"]));
+    assert_eq!(r["copy"], serde_json::json!([".env"]));
+    assert_eq!(r["ports"], serde_json::json!({"web": 0, "api": 1}));
+    assert_eq!(r["open"], "claude");
+    assert_eq!(r["root_text"], "../app-trees", "REQ-519: untouched");
+
+    // empty takes the key out, and a root changed is the new text
+    let set = ProjectEdit {
+        root: Some("../otra".into()),
+        setup: Some(vec![]),
+        ports: Some(Default::default()),
+        ..Default::default()
+    };
+    edit(&mut c, &app, ConfigFrom::Repo, set).unwrap();
+    let r = config(&mut c, &app);
+    assert_eq!(r["root_text"], "../otra");
+    assert_eq!(r["setup"], serde_json::json!([]));
+    assert!(r.get("ports").is_none());
+    let after = std::fs::read_to_string(app.join(".jw.toml")).unwrap();
+    assert!(!after.contains("setup ="), "{after}");
+    assert!(
+        after.contains("# beside") && after.contains("[agent]"),
+        "{after}"
+    );
+    d.stop();
+}
+
+#[test]
+fn an_edit_of_the_personal_file_makes_it_private_and_says_when_the_repositorys_hides_it() {
+    use contract::{ConfigFrom, OpenKind, ProjectEdit};
+    use std::os::unix::fs::PermissionsExt;
+    let sb = Sandbox::new();
+    let d = sb.start();
+    let app = repo(&sb, None);
+    let mut c = sb.client();
+    let personal = PathBuf::from(config(&mut c, &app)["personal"].as_str().unwrap());
+    assert!(!personal.exists());
+
+    // no file yet: it is made with the changed keys only (REQ-517), readable by its owner only
+    let set = ProjectEdit {
+        open: Some(OpenKind::Claude),
+        copy: Some(vec![".env".into()]),
+        ..Default::default()
+    };
+    let r = edit(&mut c, &app, ConfigFrom::Personal, set).unwrap();
+    assert_eq!(r["path"], text(&personal));
+    assert_eq!(r["shadowed"], false);
+    assert_eq!(
+        std::fs::read_to_string(&personal).unwrap(),
+        "copy = [\".env\"]\nopen = \"claude\"\n"
+    );
+    assert_eq!(
+        std::fs::metadata(&personal).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert!(
+        !app.join(".jw.toml").exists(),
+        "the repository is not touched"
+    );
+
+    // a refused value names the file and the line, and nothing changes
+    let before = std::fs::read_to_string(&personal).unwrap();
+    for set in [
+        ProjectEdit {
+            ports: Some([("base".to_owned(), 1)].into()),
+            ..Default::default()
+        },
+        ProjectEdit {
+            ports: Some([("web".to_owned(), 100)].into()),
+            ..Default::default()
+        },
+        ProjectEdit {
+            copy: Some(vec!["../fuera".into()]),
+            ..Default::default()
+        },
+        ProjectEdit {
+            setup: Some(vec!["cd {nme}".into()]),
+            ..Default::default()
+        },
+    ] {
+        let (code, why) = edit(&mut c, &app, ConfigFrom::Personal, set).unwrap_err();
+        assert_eq!(code, ErrorCode::BadRequest);
+        assert!(why.contains(".toml"), "{why}");
+    }
+    assert_eq!(std::fs::read_to_string(&personal).unwrap(), before);
+
+    // the repository's own file hides the personal one, and the reply says so
+    std::fs::write(app.join(".jw.toml"), "").unwrap();
+    let set = ProjectEdit {
+        open: Some(OpenKind::Shell),
+        ..Default::default()
+    };
+    assert_eq!(
+        edit(&mut c, &app, ConfigFrom::Personal, set).unwrap()["shadowed"],
+        true
+    );
+    // a folder that is no repository has nothing to edit
+    let plain = sb.dir.join("plain2");
+    std::fs::create_dir_all(&plain).unwrap();
+    assert_eq!(
+        edit(&mut c, &plain, ConfigFrom::Personal, ProjectEdit::default())
+            .unwrap_err()
+            .0,
+        ErrorCode::GitFailed
+    );
+    d.stop();
+}
