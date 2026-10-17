@@ -46,7 +46,7 @@ class ConversationTest {
         assertEquals("manual", ConvMode.Manual.label())
         assertEquals("11 s", convSecs(11_000))
         assertEquals("1 min 5 s", convSecs(65_000))
-        assertEquals("22.0 k", convKilo(22_024))
+        assertEquals("22,0 k", convKilo(22_024))
         assertEquals("1 herramienta", convTools(1))
         assertEquals("0 herramientas", convTools(0))
         assertEquals("3 herramientas", convTools(3))
@@ -60,7 +60,7 @@ class ConversationTest {
     @Test
     fun theWorkingLineSaysTheTokensAndARunningToolItsTime() {
         val c = conversation().copy(status = ConvStatus.Tool, tokens = 1250)
-        assertEquals("Trabajando… (12 s · ↓ 1.3 k tokens · ■ interrumpe)", c.workLine(false, 1_792_110_012_000))
+        assertEquals("Trabajando… (12 s · ↓ 1,3 k tokens · ■ interrumpe)", c.workLine(false, 1_792_110_012_000))
         val run = listOf(Running("t1", 1_792_110_004_000))
         assertEquals("8 s", run.ranFor("t1", 1_792_110_012_000))
         assertEquals("0 s", run.ranFor("t1", 1_792_110_000_000))

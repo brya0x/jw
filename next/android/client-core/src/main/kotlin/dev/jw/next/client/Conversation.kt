@@ -55,8 +55,8 @@ fun convSecs(ms: Long): String {
 /** «1 herramienta», «3 herramientas». */
 fun convTools(n: Int): String = "$n ${if (n == 1) "herramienta" else "herramientas"}"
 
-/** Thousands in whole tenths, rounded up from the half, as the terminal client's `kilo` does. */
-fun convKilo(n: Long): String = if (n >= 1000) ((n + 50) / 100).let { "${it / 10}.${it % 10} k" } else "$n"
+/** Thousands in whole tenths with a comma, rounded up from the half, as the terminal client's `kilo` does. */
+fun convKilo(n: Long): String = if (n >= 1000) ((n + 50) / 100).let { "${it / 10},${it % 10} k" } else "$n"
 
 fun convUsd(micro: Long): String = "\$${micro / 1_000_000},%02d".format(java.util.Locale.ROOT, (micro % 1_000_000) / 10_000)
 

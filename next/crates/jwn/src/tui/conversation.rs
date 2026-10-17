@@ -362,7 +362,7 @@ impl Editor {
 #[derive(Default)]
 pub struct Ui {
     pub editor: Editor,
-    /// The time of the frame being drawn, for what counts up (a tool that runs); 0 outside a draw.
+    /// The time of the last frame drawn, for what counts up (a tool that runs); 0 before the first.
     now: Cell<u64>,
     /// Lines the list is scrolled up from the newest; `most` is what the last frame could scroll.
     scroll: usize,
@@ -2675,9 +2675,9 @@ pub fn secs(ms: u64) -> String {
 
 fn kilo(n: u64) -> String {
     if n >= 1000 {
-        // Whole tenths, rounded up from the half, as the phone's `convKilo` does.
+        // Whole tenths with a comma, rounded up from the half, as the phone's `convKilo` does.
         let tenths = (n + 50) / 100;
-        format!("{}.{} k", tenths / 10, tenths % 10)
+        format!("{},{} k", tenths / 10, tenths % 10)
     } else {
         n.to_string()
     }
@@ -3032,7 +3032,7 @@ mod tests {
             "permitido desde el móvil",
             "https://claude.ai/artifact/6HbvGgivzfNgDnkzpDjf4Y",
             "● Agent(Explore) buscar los usos de verify",
-            "3 herramientas · 22.0 k tokens · 6 s",
+            "3 herramientas · 22,0 k tokens · 6 s",
             "! git status",
             "nothing to commit, working tree clean",
             "⎿  contexto 12 % · 24k de 200k",
@@ -3152,7 +3152,7 @@ mod tests {
         row_of(&rows, "⎿  ejecutando…");
         row_of(
             &rows,
-            "Trabajando… (12 s · ↓ 1.3 k tokens · esc interrumpe)",
+            "Trabajando… (12 s · ↓ 1,3 k tokens · esc interrumpe)",
         );
         let mut done = conv.clone();
         done.running.clear();

@@ -819,10 +819,12 @@ impl State {
             commands: self.commands.clone(),
             cost: self.cost,
             limits: self.limits.clone(),
+            // Only while a turn runs: a conversation that is dead or only followed runs nothing.
             running: self
                 .items
                 .iter()
                 .zip(&self.stamps)
+                .filter(|_| self.since.is_some())
                 .filter_map(|(item, (at, _))| match item {
                     Item::Tool {
                         id,
@@ -1394,10 +1396,9 @@ impl State {
         match ev["type"].as_str().unwrap_or("") {
             "message_start" => {
                 self.begin_auto(now);
-                if let Some(id) = ev["message"]["id"].as_str() {
-                    self.msg_id = id.to_owned();
-                    self.count_tokens(id.to_owned(), &ev["message"]["usage"]);
-                }
+                // A message with no id is counted by nothing, and not by the one before it.
+                self.msg_id = ev["message"]["id"].as_str().unwrap_or_default().to_owned();
+                self.count_tokens(self.msg_id.clone(), &ev["message"]["usage"]);
             }
             "message_delta" => {
                 let id = self.msg_id.clone();
@@ -2000,6 +2001,7 @@ impl State {
         self.first = 0;
         self.live_texts.clear();
         self.has_transcript = false;
+        self.resume_divider = false;
         self.push(Item::Divider {
             text: "conversación vacía".into(),
             kind: DividerKind::Clear,
@@ -2725,6 +2727,16 @@ mod tests {
         assert_eq!(run[0].id, "t1");
         assert!(run[0].since > 0);
         s.apply(&json!({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]}}), 3);
+        assert!(node_of(&s).running.is_empty());
+    }
+
+    #[test]
+    fn a_conversation_that_runs_no_turn_lists_no_tool_as_running() {
+        let mut s = st();
+        s.send("go", vec![], 0);
+        s.apply(&json!({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "sleep 9"}}]}}), 1);
+        assert_eq!(node_of(&s).running.len(), 1);
+        s.since = None;
         assert!(node_of(&s).running.is_empty());
     }
 

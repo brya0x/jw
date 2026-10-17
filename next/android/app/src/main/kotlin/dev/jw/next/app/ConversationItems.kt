@@ -43,20 +43,20 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.jw.next.client.answeredNote
-import dev.jw.next.client.convKilo
 import dev.jw.next.client.FoldRow
+import dev.jw.next.client.answeredNote
+import dev.jw.next.client.char
 import dev.jw.next.client.convDone
-import dev.jw.next.client.foldRows
+import dev.jw.next.client.convKilo
 import dev.jw.next.client.convSecs
 import dev.jw.next.client.convTools
+import dev.jw.next.client.foldRows
 import dev.jw.next.client.ranFor
-import dev.jw.next.client.char
 import dev.jw.next.contract.ConvItem
 import dev.jw.next.contract.DiffLine
 import dev.jw.next.contract.DiffSign
-import dev.jw.next.contract.Running
 import dev.jw.next.contract.NoteTone
+import dev.jw.next.contract.Running
 import dev.jw.next.contract.ToolState
 import kotlinx.coroutines.delay
 
