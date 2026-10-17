@@ -1234,6 +1234,92 @@ fn the_engine_runs_with_the_environment_and_the_folder_it_was_typed_in() {
     r.stop();
 }
 
+/// REQ-540 to REQ-542: a session that Claude itself wrote is resumed with what was said, and with
+/// the mode, the model and the effort it ended with, which the engine is started with.
+#[test]
+fn resuming_a_session_of_claudes_own_brings_what_was_said_and_the_state_it_ended_with() {
+    let mut r = rig();
+    let here = std::fs::canonicalize(&r.sb.dir).unwrap();
+    let proj = here.join("proj");
+    let config = here.join("claude-config");
+    let encoded: String = proj
+        .to_string_lossy()
+        .chars()
+        .map(|c| if c == '/' || c == '.' { '-' } else { c })
+        .collect();
+    let dir = config.join("projects").join(encoded);
+    std::fs::create_dir_all(&dir).unwrap();
+    let lines = [
+        r#"{"type":"permission-mode","permissionMode":"acceptEdits"}"#,
+        r#"{"type":"user","message":{"role":"user","content":"arregla el login"}}"#,
+        r#"{"type":"assistant","effort":"xhigh","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"Lo miro."},{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/a/login.rs"}}]}}"#,
+        r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"fn login() {}"}]}}"#,
+        r#"{"type":"assistant","effort":"xhigh","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"Ya está."}]}}"#,
+    ];
+    std::fs::write(dir.join("old-session.jsonl"), lines.join("\n") + "\n").unwrap();
+    let env: BTreeMap<String, String> = [
+        (
+            "PATH".to_owned(),
+            format!(
+                "{}:{}",
+                here.join("bin").display(),
+                std::env::var("PATH").unwrap()
+            ),
+        ),
+        ("FAKE_LOG".to_owned(), r.log.to_string_lossy().into_owned()),
+        ("PWD".to_owned(), proj.to_string_lossy().into_owned()),
+        (
+            "CLAUDE_CONFIG_DIR".to_owned(),
+            config.to_string_lossy().into_owned(),
+        ),
+    ]
+    .into();
+
+    let (node, session) = r.open_with(None, vec!["--resume", "old-session"], Some(env));
+    assert_eq!(session, "old-session");
+    let v = r.conv(&node);
+    let kinds: Vec<&str> = v["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["t"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["user", "text", "tool", "text", "divider"], "{v}");
+    assert_eq!(v["items"][0]["text"], "arregla el login");
+    assert_eq!(v["items"][2]["state"], "ok");
+    assert_eq!(
+        v["items"][4]["kind"], "resume",
+        "what was said, then the line that says it was resumed"
+    );
+    assert_eq!(
+        (
+            v["mode"].as_str(),
+            v["model"].as_str(),
+            v["effort"].as_str()
+        ),
+        (Some("acceptEdits"), Some("opus-5.5"), Some("xhigh")),
+        "the node shows the state the session ended with: {v}"
+    );
+    // The engine is started with them when the next message comes.
+    r.send(&node, "sigue");
+    wait_for("the engine to start", || {
+        log_lines(&r.log).iter().any(|l| l.starts_with("start"))
+    });
+    let start = log_lines(&r.log)
+        .into_iter()
+        .find(|l| l.starts_with("start"))
+        .unwrap();
+    for want in [
+        "\"--resume\", \"old-session\"",
+        "\"--permission-mode\", \"acceptEdits\"",
+        "\"--model\", \"claude-opus-5-5\"",
+        "\"--effort\", \"xhigh\"",
+    ] {
+        assert!(start.contains(want), "{want}: {start}");
+    }
+    r.stop();
+}
+
 #[test]
 fn a_command_the_engine_does_not_serve_is_refused_so_the_original_runs() {
     let mut r = rig();

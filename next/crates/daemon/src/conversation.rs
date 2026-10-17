@@ -20,9 +20,9 @@ use serde_json::{Value, json};
 pub const KEEP: usize = 300;
 /// The most a saved conversation takes on disk.
 pub const MAX_SAVED: usize = 2 * 1024 * 1024;
-const OUTPUT_LINES: usize = 40;
+pub(crate) const OUTPUT_LINES: usize = 40;
 const ARG_CHARS: usize = 200;
-const LINE_CHARS: usize = 300;
+pub(crate) const LINE_CHARS: usize = 300;
 /// The lines of a plan the node keeps.
 const PLAN_LINES: usize = 200;
 /// The tasks of the engine the node keeps, and the steps of a subagent.
@@ -565,12 +565,27 @@ impl State {
         st
     }
 
-    /// A conversation the person resumes by its id, with nothing of ours saved: the engine's own
-    /// transcript is what it comes back to.
-    pub fn resumed(session: String) -> State {
+    /// A conversation the person resumes by its id, with nothing of ours saved: what it said, and
+    /// the mode, the model and the effort it ended with, come from the engine's own transcript
+    /// (REQ-540).
+    pub fn resumed(session: String, history: Option<crate::transcript::Transcript>) -> State {
         let mut st = State::new(session);
         st.has_transcript = true;
         st.status = ConvStatus::Dead;
+        if let Some(h) = history {
+            for item in h.items {
+                st.push(item);
+            }
+            if let Some(mode) = h.mode {
+                st.mode = mode;
+            }
+            if let Some(model) = &h.model {
+                st.model = short_model(model);
+            }
+            if let Some(effort) = h.effort {
+                st.effort = effort;
+            }
+        }
         st.push(Item::Divider {
             text: "conversación retomada".into(),
             kind: DividerKind::Resume,
@@ -2006,7 +2021,7 @@ pub fn short_model(full: &str) -> String {
     }
 }
 
-fn clip(s: &str, n: usize) -> String {
+pub(crate) fn clip(s: &str, n: usize) -> String {
     let mut chars = s.chars();
     let head: String = chars.by_ref().take(n).collect();
     if chars.next().is_some() {
@@ -2031,7 +2046,7 @@ fn dollars(micro: u64) -> String {
 }
 
 /// What a tool result says as text: a string, or the text blocks of an array.
-fn content_text(c: &Value) -> String {
+pub(crate) fn content_text(c: &Value) -> String {
     match c {
         Value::String(s) => s.clone(),
         Value::Array(a) => a
@@ -2290,7 +2305,7 @@ fn session_label(tool: &str, input: &Value) -> String {
     }
 }
 
-fn summary_of(tool: &str, lines: &[String], result: &Value, failed: bool) -> String {
+pub(crate) fn summary_of(tool: &str, lines: &[String], result: &Value, failed: bool) -> String {
     if failed {
         return lines.first().cloned().unwrap_or_else(|| "falló".into());
     }

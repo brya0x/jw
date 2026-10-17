@@ -563,7 +563,15 @@ pub fn open_conversation(
                     effort_arg = effort_arg.or_else(|| s.effort_arg.clone());
                     State::restored(s, &clock())
                 }
-                None => State::resumed(id.clone()),
+                None => {
+                    // What the engine said before, and the mode, model and effort it ended with (REQ-540).
+                    let before = crate::transcript::read(&cwd, env.as_ref(), id);
+                    if let Some(t) = &before {
+                        model_arg = model_arg.or_else(|| t.model.clone());
+                        effort_arg = effort_arg.or_else(|| t.effort.clone());
+                    }
+                    State::resumed(id.clone(), before)
+                }
             };
             (st, true)
         }

@@ -32,6 +32,7 @@ mod saved;
 mod server;
 mod start;
 mod sync;
+mod transcript;
 mod workspaces;
 mod worktrees;
 
