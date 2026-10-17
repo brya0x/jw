@@ -504,12 +504,25 @@ pub(crate) fn projects_dir(cwd: &Path, env: Option<&BTreeMap<String, String>>) -
                 .or_else(|| std::env::var("HOME").ok())
                 .map(|h| PathBuf::from(h).join(".claude"))
         })?;
-    let encoded: String = cwd
-        .to_string_lossy()
-        .chars()
-        .map(|c| if c == '/' || c == '.' { '-' } else { c })
-        .collect();
-    Some(base.join("projects").join(encoded))
+    // The folder is Claude's own naming of the path: `/` and `.` become `-`, and a `_` or a space may
+    // too (it is not documented which), so the one that exists is used.
+    let named = |keep: fn(char) -> bool| -> PathBuf {
+        let encoded: String = cwd
+            .to_string_lossy()
+            .chars()
+            .map(|c| if keep(c) { c } else { '-' })
+            .collect();
+        base.join("projects").join(encoded)
+    };
+    let (dots, letters) = (
+        named(|c| c != '/' && c != '.'),
+        named(|c| c.is_ascii_alphanumeric()),
+    );
+    Some(if letters.is_dir() && !dots.is_dir() {
+        letters
+    } else {
+        dots
+    })
 }
 
 fn latest_session(cwd: &Path, env: Option<&BTreeMap<String, String>>) -> Option<String> {

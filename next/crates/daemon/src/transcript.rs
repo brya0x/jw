@@ -1,10 +1,10 @@
 //! A conversation the engine already had, read from its own transcript when the person resumes it
 //! (`claude --resume <id>`, `-c`, `/resume`): what was said and the mode, the model and the effort
-//! it ended with (spec REQ-540 to REQ-542). The transcript is
+//! it ended with (spec REQ-540 to REQ-543). The transcript is
 //! `~/.claude/projects/<folder>/<session>.jsonl`, one JSON line for each message or note; the
 //! engine does not send any of it again when it resumes.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
@@ -63,6 +63,8 @@ pub fn read(
 /// with what they answered, the compactions, and the last mode, model and effort.
 pub fn parse(text: &str) -> Transcript {
     let mut out = Transcript::default();
+    // Where each tool is in `items`, so a result finds its tool without a search for each one.
+    let mut tools: HashMap<String, usize> = HashMap::new();
     for line in text.lines() {
         let Ok(entry) = serde_json::from_str::<Value>(line) else {
             continue;
@@ -77,8 +79,8 @@ pub fn parse(text: &str) -> Transcript {
                     out.mode = Some(mode);
                 }
             }
-            "assistant" => assistant(&entry, &mut out),
-            "user" if entry["isMeta"] != true => user(&entry, &mut out),
+            "assistant" => assistant(&entry, &mut out, &mut tools),
+            "user" if entry["isMeta"] != true => user(&entry, &mut out, &tools),
             "system" if entry["subtype"] == "compact_boundary" => out.items.push(Item::Divider {
                 text: "conversación compactada".into(),
                 kind: DividerKind::Compact,
@@ -89,7 +91,7 @@ pub fn parse(text: &str) -> Transcript {
     out
 }
 
-fn assistant(entry: &Value, out: &mut Transcript) {
+fn assistant(entry: &Value, out: &mut Transcript, tools: &mut HashMap<String, usize>) {
     let message = &entry["message"];
     // What Claude Code writes itself (an interrupted turn, «no response requested») is not Claude.
     if message["model"] == "<synthetic>" {
@@ -118,8 +120,10 @@ fn assistant(entry: &Value, out: &mut Transcript) {
                 if matches!(name, "TodoWrite" | "ToolSearch") {
                     continue;
                 }
+                let id = block["id"].as_str().unwrap_or("").to_owned();
+                tools.insert(id.clone(), out.items.len());
                 out.items.push(Item::Tool {
-                    id: block["id"].as_str().unwrap_or("").to_owned(),
+                    id,
                     name: name.to_owned(),
                     arg: tool_arg(name, &block["input"]),
                     // Until its result is read: a tool with none was interrupted.
@@ -136,7 +140,7 @@ fn assistant(entry: &Value, out: &mut Transcript) {
     }
 }
 
-fn user(entry: &Value, out: &mut Transcript) {
+fn user(entry: &Value, out: &mut Transcript, tools: &HashMap<String, usize>) {
     let content = &entry["message"]["content"];
     let blocks: Vec<&Value> = match content {
         Value::Array(a) => a.iter().collect(),
@@ -144,7 +148,7 @@ fn user(entry: &Value, out: &mut Transcript) {
     };
     for block in &blocks {
         if block["type"] == "tool_result" {
-            result(block, &entry["toolUseResult"], out);
+            result(block, &entry["toolUseResult"], out, tools);
         }
     }
     let (text, images) = match content {
@@ -156,7 +160,8 @@ fn user(entry: &Value, out: &mut Transcript) {
                 .filter_map(|b| b["text"].as_str())
                 .collect::<Vec<_>>()
                 .join("\n"),
-            blocks.iter().filter(|b| b["type"] == "image").count() as u32,
+            u32::try_from(blocks.iter().filter(|b| b["type"] == "image").count())
+                .unwrap_or(u32::MAX),
         ),
     };
     if is_the_persons(&text) || (text.trim().is_empty() && images > 0) {
@@ -167,16 +172,32 @@ fn user(entry: &Value, out: &mut Transcript) {
     }
 }
 
-/// Whether a text of a `user` line is something the person typed: Claude Code also writes there
-/// the reminders it adds, the output of a command and a note that a turn was interrupted.
+/// What Claude Code writes in a `user` line that is not the person's: the wrapper of a command and
+/// of its output, of a shell line and of the notice of a background task. A message that merely
+/// starts with `<` (a question about `<div>`) is the person's.
+const WRAPPERS: [&str; 5] = [
+    "<command-",
+    "<local-command-",
+    "<bash-",
+    "<task-notification",
+    "<system-reminder",
+];
+
+/// Whether a text of a `user` line is something the person typed.
 fn is_the_persons(text: &str) -> bool {
     let t = text.trim();
-    !t.is_empty() && !t.starts_with('<') && !t.starts_with("[Request interrupted")
+    !t.is_empty()
+        && !WRAPPERS.iter().any(|w| t.starts_with(w))
+        && !t.starts_with("[Request interrupted")
 }
 
 /// What a tool answered: its state, a line that says it and the first lines of its output.
-fn result(block: &Value, detail: &Value, out: &mut Transcript) {
-    let Some(id) = block["tool_use_id"].as_str() else {
+fn result(block: &Value, detail: &Value, out: &mut Transcript, tools: &HashMap<String, usize>) {
+    let Some(at) = block["tool_use_id"]
+        .as_str()
+        .and_then(|id| tools.get(id))
+        .copied()
+    else {
         return;
     };
     let failed = block["is_error"].as_bool().unwrap_or(false);
@@ -185,18 +206,13 @@ fn result(block: &Value, detail: &Value, out: &mut Transcript) {
         .take(OUTPUT_LINES)
         .map(|l| clip(l, LINE_CHARS))
         .collect();
-    let found = out
-        .items
-        .iter_mut()
-        .rev()
-        .find(|i| matches!(i, Item::Tool { id: t, .. } if t == id));
     if let Some(Item::Tool {
         name,
         state,
         summary,
         output,
         ..
-    }) = found
+    }) = out.items.get_mut(at)
     {
         *state = if failed {
             ToolState::Failed
@@ -305,6 +321,102 @@ mod tests {
             "an effort that --effort does not take is not passed on"
         );
         assert_eq!(parse("").mode, None);
+    }
+
+    #[test]
+    fn a_message_that_starts_with_an_angle_bracket_is_the_persons_unless_it_is_a_wrapper() {
+        let user = |text: &str| {
+            line(serde_json::json!({"type":"user","message":{"role":"user","content":text}}))
+        };
+        let t = parse(
+            &[
+                user("<div> no se ve"),
+                user("<command-name>/x</command-name>"),
+                user("<local-command-stdout>ok</local-command-stdout>"),
+                user("<bash-input>ls</bash-input>"),
+            ]
+            .concat(),
+        );
+        assert_eq!(t.items.len(), 1);
+        assert!(matches!(&t.items[0], Item::User { text, .. } if text == "<div> no se ve"));
+    }
+
+    #[test]
+    fn a_result_finds_its_tool_wherever_it_is_and_one_that_arrives_first_is_dropped() {
+        let before = line(
+            serde_json::json!({"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"late","content":"x"}]}}),
+        );
+        let tool = line(
+            serde_json::json!({"type":"assistant","message":{"model":"m","content":[{"type":"tool_use","id":"late","name":"Bash","input":{"command":"ls"}}]}}),
+        );
+        let t = parse(&(before + &tool));
+        assert!(
+            matches!(
+                &t.items[0],
+                Item::Tool {
+                    state: ToolState::Failed,
+                    ..
+                }
+            ),
+            "a result before its tool says nothing of it"
+        );
+    }
+
+    /// A transcript as long as what is read, with thousands of tools: it is read at once.
+    #[test]
+    fn a_transcript_of_four_mebibytes_is_read_in_a_blink() {
+        let mut text = String::new();
+        let mut n = 0;
+        while text.len() < TAIL as usize {
+            n += 1;
+            text += &line(
+                serde_json::json!({"type":"assistant","message":{"model":"m","content":[{"type":"tool_use","id":format!("t{n}"),"name":"Bash","input":{"command":"echo hola"}}]}}),
+            );
+            text += &line(
+                serde_json::json!({"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":format!("t{n}"),"content":"hola"}]}}),
+            );
+        }
+        let started = std::time::Instant::now();
+        let t = parse(&text);
+        assert_eq!(t.items.len(), n);
+        assert!(matches!(
+            &t.items[n - 1],
+            Item::Tool {
+                state: ToolState::Ok,
+                ..
+            }
+        ));
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn a_folder_with_an_underscore_or_a_space_finds_its_transcripts_by_either_naming() {
+        let config = std::env::temp_dir().join(format!("jwn-transcript-{}", std::process::id()));
+        let env: BTreeMap<String, String> = [(
+            "CLAUDE_CONFIG_DIR".to_owned(),
+            config.to_string_lossy().into_owned(),
+        )]
+        .into();
+        for (cwd, folder) in [
+            ("/tmp/jwn_x y", "-tmp-jwn-x-y"),
+            ("/tmp/jwn_x y", "-tmp-jwn_x y"),
+        ] {
+            let dir = config.join("projects").join(folder);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("abc.jsonl"),
+                line(serde_json::json!({"type":"permission-mode","permissionMode":"plan"})),
+            )
+            .unwrap();
+            let t = read(Path::new(cwd), Some(&env), "abc").unwrap_or_else(|| panic!("{folder}"));
+            assert_eq!(t.mode, Some(Mode::Plan));
+            std::fs::remove_dir_all(config.join("projects")).unwrap();
+        }
+        let _ = std::fs::remove_dir_all(config);
     }
 
     #[test]
