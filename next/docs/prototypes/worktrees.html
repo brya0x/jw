@@ -1,0 +1,235 @@
+<title>jwn Worktrees existentes</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Terminal-first, the same character grid as the other terminal prototypes. Every colour comes from the chosen theme. */
+:root{
+  --bg:#282c34; --panel:#21252b; --fg:#abb2bf; --dim:#5c6370; --line:#3e4451; --sel:#2c313a;
+  --blue:#61afef; --green:#98c379; --yellow:#e5c07b; --red:#e06c75; --magenta:#c678dd; --cyan:#56b6c2;
+  --page:#16181d; --ink:#c3c9d4; --mut:#7d8594;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}}
+:root[data-theme="light"]{--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.55 'IBM Plex Sans',system-ui,sans-serif;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px 40px}
+.wrap{max-width:1500px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
+h1{font:600 20px/1.2 var(--mono);margin:0}
+h2.s{font:600 12px var(--mono);margin:0;color:var(--mut)}
+p{margin:0;max-width:78ch;color:var(--mut)}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button{font:12px var(--mono);color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;min-height:32px;cursor:pointer}
+button:hover{border-color:var(--blue)}
+button[aria-pressed=true]{background:var(--blue);color:var(--panel);border-color:var(--blue);font-weight:700}
+:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto}
+.term pre{margin:0;font:13px/1.25 var(--mono);color:var(--fg);outline:none;width:max-content;cursor:default}
+.hint{font:12px var(--mono);color:var(--mut)}
+.stage{display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap}
+.col{flex:1 1 700px;min-width:0;display:flex;flex-direction:column;gap:8px}
+.side{flex:0 0 auto;width:100%;max-width:376px;margin-inline:auto;display:flex;flex-direction:column;gap:8px}
+.notes{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
+.notes div{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;color:var(--fg);font:12px/1.55 var(--mono)}
+.notes b{color:var(--yellow)}.notes kbd{font:inherit;color:var(--cyan)}
+.b{font-weight:700}.dim{color:var(--dim)}.blue{color:var(--blue)}.green{color:var(--green)}.yellow{color:var(--yellow)}.red{color:var(--red)}.mag{color:var(--magenta)}.cyan{color:var(--cyan)}
+.lit{background:var(--sel)}.inv{background:var(--blue);color:var(--panel)}.btn1{background:var(--green);color:var(--panel);font-weight:700}.pan{background:var(--panel)}
+/* phone */
+.phone{width:100%;height:760px;background:var(--bg);border:1px solid var(--line);border-radius:28px;padding:10px;box-shadow:0 0 0 6px var(--panel);display:flex;flex-direction:column}
+.ph{flex:1;min-height:0;background:var(--bg);border-radius:20px;overflow:hidden;display:flex;flex-direction:column;font:13px/1.45 var(--mono);color:var(--fg);position:relative}
+.ph .hd{background:var(--panel);border-bottom:1px solid var(--line);padding:8px 12px;display:flex;align-items:center;gap:8px;min-height:52px}
+.ph .hd .t{flex:1;min-width:0}.ph .hd b{display:block;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ph .hd span{display:block;font-size:11px;color:var(--dim)}
+.ph .hd button{min-height:44px;min-width:44px;border-radius:8px}
+.ph .body{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column}
+.ph .src{padding:10px 12px;background:var(--panel);border-bottom:1px solid var(--line);font-size:12px}
+.ph .src b{color:var(--yellow)}
+.ph .row{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;min-height:56px;border-bottom:1px solid var(--line);cursor:pointer;background:none;border-left:0;border-right:0;border-top:0;border-radius:0;text-align:left;font:13px var(--mono);color:var(--fg);width:100%}
+.ph .row .k{width:92px;flex:none;color:var(--dim);font-size:11px;padding-top:2px}
+.ph .row .v{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;word-break:break-word}
+.ph .foot{border-top:2px solid var(--line);background:var(--panel);padding:8px 12px 10px;display:flex;flex-direction:column;gap:8px}
+.ph .seg{display:flex;gap:6px}.ph .seg button{flex:1;min-height:40px;border-radius:999px;font-size:12px;background:var(--sel)}
+.ph .seg button[aria-pressed=true]{background:var(--blue);color:var(--panel);font-weight:700}
+.ph .save{min-height:48px;border-radius:8px;background:var(--green);color:var(--panel);font-weight:700;border-color:var(--green);font-size:13px}
+.ph .save:disabled{background:var(--sel);color:var(--dim);border-color:var(--line)}
+.ph .warn{color:var(--yellow);font-size:11px}
+.ph .sheet{position:absolute;left:0;right:0;bottom:0;max-height:78%;overflow:auto;border-top:2px solid var(--blue);background:var(--panel);padding:12px;display:flex;flex-direction:column;gap:8px;box-shadow:0 -10px 30px #0008}
+.ph .sheet input{width:100%;min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:0 10px;font:13px var(--mono)}
+.ph .sheet .li{display:flex;gap:6px;align-items:center}.ph .sheet .li input{flex:1}
+.ph .sheet .li button{min-height:44px;min-width:44px;border-radius:6px}
+.ph .toast{position:absolute;left:12px;right:12px;bottom:140px;background:var(--sel);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--green);font-size:12px}
+
+.ph .row.sub{min-height:48px}
+.ph .pill{min-height:48px;min-width:48px;border-radius:999px;padding:0 14px;font:12px var(--mono);border:1px solid var(--line);background:var(--sel);color:var(--fg)}
+.ph .pill.go{background:var(--blue);color:var(--panel);border-color:var(--blue);font-weight:700}
+.ph .tabs{display:flex;gap:6px;padding:8px 12px;border-bottom:1px solid var(--line)}
+</style>
+<div class="wrap">
+  <h1>jwn · worktrees que ya existen</h1>
+  <p>Hoy jwn solo conoce los worktrees que él mismo creó. Los que hizo git a mano, el jw anterior o un agente no aparecen. Aquí se listan los de un repositorio (lo que dice <code>git worktree list</code>), se ve cuáles ya están abiertos y se abren los que quieras, uno por uno o todos. Pruébalo: abre un worktree y mira cómo entra al panel lateral.</p>
+  <div class="bar" id="scen" role="group" aria-label="Ejemplo">
+    <button data-s="many" aria-pressed="true">Un repositorio con varios</button>
+    <button data-s="none" aria-pressed="false">Sin otros worktrees</button>
+    <button id="reset">Reiniciar</button>
+    <button id="theme" aria-label="Cambiar entre tema oscuro y claro">Tema claro/oscuro</button>
+  </div>
+  <div class="stage">
+    <div class="col">
+      <h2 class="s">Terminal · <kbd>w</kbd> abre la caja de worktrees</h2>
+      <div class="term"><pre id="t" tabindex="0" aria-label="Terminal de jwn"></pre></div>
+      <div class="hint" id="keys"></div>
+    </div>
+    <div class="side">
+      <h2 class="s">Teléfono</h2>
+      <div class="phone"><div class="ph" id="ph"></div></div>
+    </div>
+  </div>
+  <div class="notes">
+    <div><b>Dónde está</b><br>En la caja del worktree que ya existe (<kbd>w</kbd>): arriba hay dos fichas, <b>nuevo</b> y <b>existentes</b>, y <kbd>tab</kbd> cambia. En el teléfono es la ficha «existentes» de la hoja «worktree nuevo», y el menú de un repositorio o de un worktree la abre directamente.</div>
+    <div><b>Qué lista</b><br>Todos los worktrees del repositorio vengan de donde vengan, también los que están fuera de <code>../app-wt</code>. Cada fila dice su rama, su carpeta y si ya está abierto. Uno desprendido (sin rama) se muestra con su commit. Uno cuya carpeta se borró a mano se marca «carpeta no existe» y no se puede abrir.</div>
+    <div><b>Qué hace abrir</b><br>Crea un workspace como los demás: aparece en el panel lateral, <i>sin paneles</i> hasta que entras. No corre el setup, no copia archivos ni cambia la rama: ese worktree ya está hecho. Si el proyecto declara puertos, recibe su bloque como cualquier otro. Se abre con lo que dice «al abrir» del proyecto al entrar.</div>
+    <div><b>Qué no hace</b><br>No borra ni «arregla» nada: no hay botón de quitar aquí (se hace desde el workspace, como siempre) ni <code>git worktree prune</code>. El worktree principal ya es el workspace del repositorio, así que no se lista dos veces.</div>
+    <div><b>Teclas</b><br><kbd>tab</kbd> nuevo/existentes · <kbd>↑ ↓</kbd> mover · <kbd>↵</kbd> abrir el resaltado y quedarse · <kbd>espacio</kbd> marcar · <kbd>a</kbd> abrir todos los cerrados · <kbd>esc</kbd> cerrar.</div>
+  </div>
+</div>
+
+<script>
+const REPO='~/ws/jw';
+const BASE={
+  many:[
+    {b:'feat/next-bootstrap',p:'~/ws/jw-wt/next-bootstrap',open:true},
+    {b:'fix/login',p:'~/ws/jw-wt/fix-login',dirty:3},
+    {b:'design-review',p:'~/ws/jw-wt/design-review'},
+    {b:null,sha:'4f2a9c1',p:'~/ws/jw-wt/bisect',detached:true},
+    {b:'agent-7',p:'~/ws/jw/.claude/worktrees/agent-7'},
+    {b:'old-thing',p:'~/ws/jw-wt/old-thing',gone:true}
+  ],
+  none:[]
+};
+const S={scen:'many',list:null,tab:'existing',sel:0,marks:new Set(),boxOpen:true,toast:'',sheet:true,phoneSel:null};
+const clone=o=>JSON.parse(JSON.stringify(o));
+function reset(){S.list=clone(BASE[S.scen]);S.tab='existing';S.sel=0;S.marks=new Set();S.boxOpen=true;S.toast='';S.sheet=true;}
+const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;');
+const pad=(s,n)=>{s=String(s);return s.length>=n?s.slice(0,n):s+' '.repeat(n-s.length)};
+const name=w=>w.b||('('+w.sha+')');
+const openable=w=>!w.open&&!w.gone;
+function note(w){
+  if(w.open)return 'abierto';
+  if(w.gone)return 'carpeta no existe';
+  if(w.detached)return 'sin rama';
+  if(w.dirty)return w.dirty+' cambios';
+  return '';
+}
+function open(i,quiet){
+  const w=S.list[i]; if(!w||!openable(w))return false;
+  w.open=true; S.marks.delete(i);
+  if(!quiet)S.toast='abierto '+name(w)+' · sin setup, sin copiar archivos';
+  return true;
+}
+function openAll(){
+  let n=0; S.list.forEach((w,i)=>{if(open(i,true))n++});
+  S.toast=n?('abiertos '+n+' · sin setup, sin copiar archivos'):'no hay más cerrados';
+}
+function openMarked(){
+  const ms=[...S.marks]; if(!ms.length)return false;
+  let n=0; ms.forEach(i=>{if(open(i,true))n++}); S.toast='abiertos '+n; return true;
+}
+
+/* ---------- the terminal ---------- */
+const W=100,H=30;
+function term(){
+  const L=[]; const put=(s,c)=>L.push({s,c:c||''});
+  const openWs=S.list.filter(w=>w.open);
+  const side=[' 1 ● jw','     main'];
+  openWs.forEach((w,i)=>side.push('   ↳ '+(i+2)+' ○ '+(w.b||w.sha)));
+  const SW=30;
+  const box=[];
+  const bput=(s,c)=>box.push({s,c:c||''});
+  const n=S.list.length;
+  const closed=S.list.filter(w=>openable(w)).length;
+  bput('╭─ worktrees de jw '+'─'.repeat(52)+'╮','dim');
+  bput('│  '+(S.tab==='new'?'[nuevo]':' nuevo ')+'  '+(S.tab==='existing'?'[existentes '+n+']':' existentes '+n+' ')+'   tab cambia','');
+  bput('│','dim');
+  if(S.tab==='new'){
+    bput('│  nombre   ws-3▏','');
+    bput('│  base     main','dim');
+    bput('│  (la caja de siempre: ↵ crea la rama y su carpeta)','dim');
+  } else if(!n){
+    bput('│  Este repositorio no tiene otros worktrees.','dim');
+    bput('│  El principal ya es el workspace «jw». Crea uno en la ficha nuevo.','dim');
+  } else {
+    S.list.forEach((w,i)=>{
+      const on=i===S.sel, mk=S.marks.has(i)?'■':w.open?'●':w.gone?'✕':'○';
+      const line='│ '+(on?'▸':' ')+' '+mk+' '+pad(name(w),24)+pad(w.p,40)+note(w);
+      bput(line,(on?'lit ':'')+(w.open?'dim':w.gone?'red':''));
+    });
+    bput('│','dim');
+    bput('│  '+(S.marks.size?S.marks.size+' marcados · ':'')+closed+' cerrados'+(S.list.some(w=>w.gone)?' · 1 con la carpeta borrada (no se puede abrir)':''),'dim');
+  }
+  bput('│','dim');
+  bput('│  '+(S.toast?'✓ '+S.toast:' '),S.toast?'green':'dim');
+  while(box.length<H-6)bput('│','dim');
+  bput('╰'+'─'.repeat(W-SW-5)+'╯','dim');
+  const rows=H-2;
+  for(let r=0;r<rows;r++){
+    const sd=pad(side[r]||'',SW-1)+'│';
+    const bx=box[r-1];
+    L.push({s:sd+(bx?' '+bx.s:''),c:bx?bx.c:''});
+  }
+  L.push({s:' ↑↓ mover · ↵ abrir · espacio marcar · a abrir todos · tab nuevo/existentes · esc cerrar',c:'dim'});
+  return L.slice(0,H);
+}
+function drawTerm(){
+  const L=term();
+  document.getElementById('t').innerHTML=L.map(l=>{
+    const c=l.c.split(' ').filter(Boolean);
+    const lit=c.includes('lit');
+    const cls=c.filter(x=>x!=='lit').join(' ');
+    const m=l.s;
+    return '<span class="'+(lit?'lit ':'')+cls+'">'+esc(m)+'</span>';
+  }).join('\n');
+  document.getElementById('keys').textContent='↑↓ mover · ↵ abrir el resaltado · espacio marcar · a abrir todos · tab cambia de ficha · esc cierra la caja';
+}
+
+/* ---------- the phone ---------- */
+function drawPhone(){
+  const ph=document.getElementById('ph'); const n=S.list.length;
+  const rows=S.list.map((w,i)=>{
+    const tag=w.open?'<span class="dim">abierto</span>':w.gone?'<span class="red">carpeta no existe</span>':'';
+    const go=openable(w)?'<button class="pill go" data-o="'+i+'" aria-label="Abrir '+esc(name(w))+'">abrir</button>':'';
+    return '<div class="row sub"><div class="v"><b>'+esc(name(w))+'</b><span class="dim">'+esc(w.p)+(w.dirty?' · '+w.dirty+' cambios':'')+(w.detached?' · sin rama':'')+'</span>'+tag+'</div>'+go+'</div>';
+  }).join('');
+  const closed=S.list.filter(openable).length;
+  ph.innerHTML='<div class="hd"><button aria-label="Atrás">‹</button><div class="t"><b>jw</b><span>worktree nuevo</span></div></div>'+
+   '<div class="tabs"><button class="pill">nuevo</button><button class="pill go">existentes '+n+'</button></div>'+
+   '<div class="body">'+(n?rows:'<div class="src dim">Este repositorio no tiene otros worktrees. El principal ya es el workspace «jw».</div>')+'</div>'+
+   (n?'<div class="foot"><button class="pill go" id="all" style="min-height:48px"'+(closed?'':' disabled')+'>abrir los '+closed+' cerrados</button><div class="warn">Abrir no corre el setup ni copia archivos.</div></div>':'')+
+   (S.toast?'<div class="toast">'+esc(S.toast)+'</div>':'');
+  ph.querySelectorAll('[data-o]').forEach(b=>b.onclick=()=>{open(+b.dataset.o);draw()});
+  const all=document.getElementById('all'); if(all)all.onclick=()=>{openAll();draw()};
+}
+function draw(){drawTerm();drawPhone();document.querySelectorAll('#scen [data-s]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.s===S.scen)));}
+
+document.getElementById('scen').onclick=e=>{
+  const b=e.target.closest('button'); if(!b)return;
+  if(b.dataset.s){S.scen=b.dataset.s;reset();draw();}
+  else if(b.id==='reset'){reset();draw();}
+  else if(b.id==='theme'){
+    const d=document.documentElement; const dark=(d.dataset.theme||(matchMedia('(prefers-color-scheme: light)').matches?'light':'dark'))==='dark';
+    d.dataset.theme=dark?'light':'dark';
+  }
+};
+document.getElementById('t').addEventListener('keydown',e=>{
+  const n=S.list.length;
+  if(e.key==='Tab'){e.preventDefault();S.tab=S.tab==='new'?'existing':'new';S.toast='';}
+  else if(S.tab==='existing'&&n){
+    if(e.key==='j'||e.key==='ArrowDown'){S.sel=Math.min(n-1,S.sel+1);S.toast='';}
+    else if(e.key==='k'||e.key==='ArrowUp'){S.sel=Math.max(0,S.sel-1);S.toast='';}
+    else if(e.key==='Enter'){ if(!openMarked()){ const w=S.list[S.sel]; if(w&&w.gone)S.toast='esa carpeta ya no existe: no hay nada que abrir'; else if(w&&w.open)S.toast='ya está abierto'; else open(S.sel); } }
+    else if(e.key===' '){e.preventDefault();const w=S.list[S.sel]; if(openable(w)){S.marks.has(S.sel)?S.marks.delete(S.sel):S.marks.add(S.sel);} S.toast='';}
+    else if(e.key==='a'){openAll();}
+    else return;
+  } else return;
+  e.preventDefault(); draw();
+});
+reset(); draw();
+</script>
