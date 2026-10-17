@@ -5,12 +5,12 @@
 //! do about it (`Effect`), so it is tested with recorded messages and no process. The processes,
 //! the threads and the lock are `engine.rs`'s.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 
 use contract::conversation::{
     Accent, Artifact, Ask, AskKind, AskOption, CommandKind, CommandSource, ConvCommand, ConvStatus,
-    Conversation, DiffLine, DiffSign, DividerKind, Image, Item, Limits, Mode, Task, TaskKind,
-    TaskState, Todo, Tone, ToolState,
+    Conversation, DiffLine, DiffSign, DividerKind, Image, Item, Limits, Mode, Running, Task,
+    TaskKind, TaskState, Todo, Tone, ToolState,
 };
 use contract::{AttentionKind, Head, Id};
 use serde::{Deserialize, Serialize};
@@ -461,6 +461,14 @@ pub struct State {
     interrupting: bool,
     tools_in_turn: u32,
     turn_started: u64,
+    /// What the turn that runs has written, for each message of the engine: a message comes
+    /// more than once with the same count, so each counts once, by its id (REQ-563).
+    turn_tokens: BTreeMap<String, u64>,
+    /// The id of the message the engine is writing.
+    msg_id: String,
+    /// A conversation resumed by its id says so before the first message sent in it, and not
+    /// while it is only followed (REQ-564).
+    resume_divider: bool,
     /// The engine's total cost so far (its process), to know what one turn cost.
     last_total_micro: u64,
     live_texts: VecDeque<usize>,
@@ -627,6 +635,9 @@ impl State {
             interrupting: false,
             tools_in_turn: 0,
             turn_started: 0,
+            turn_tokens: BTreeMap::new(),
+            msg_id: String::new(),
+            resume_divider: false,
             last_total_micro: 0,
             live_texts: VecDeque::new(),
             shell_context: Vec::new(),
@@ -686,10 +697,7 @@ impl State {
         if let Some(t) = source {
             st.follow(t);
         }
-        st.push(Item::Divider {
-            text: "conversación retomada".into(),
-            kind: DividerKind::Resume,
-        });
+        st.resume_divider = true;
         st
     }
 
@@ -811,6 +819,27 @@ impl State {
             commands: self.commands.clone(),
             cost: self.cost,
             limits: self.limits.clone(),
+            running: self
+                .items
+                .iter()
+                .zip(&self.stamps)
+                .filter_map(|(item, (at, _))| match item {
+                    Item::Tool {
+                        id,
+                        state: ToolState::Run,
+                        ..
+                    } => Some(Running {
+                        id: id.clone(),
+                        since: *at,
+                    }),
+                    _ => None,
+                })
+                .collect(),
+            tokens: if self.since.is_some() {
+                self.turn_tokens.values().sum()
+            } else {
+                0
+            },
         }
     }
 
@@ -878,6 +907,12 @@ impl State {
             self.named = true;
         }
         let count = images.len() as u32;
+        if std::mem::take(&mut self.resume_divider) {
+            self.push(Item::Divider {
+                text: "conversación retomada".into(),
+                kind: DividerKind::Resume,
+            });
+        }
         self.push(Item::User {
             text: text.to_owned(),
             images: count,
@@ -897,6 +932,7 @@ impl State {
         self.status = ConvStatus::Thinking;
         self.since = Some(now);
         self.turn_started = now;
+        self.turn_tokens.clear();
         self.tools_in_turn = 0;
         self.interrupting = false;
     }
@@ -1358,6 +1394,14 @@ impl State {
         match ev["type"].as_str().unwrap_or("") {
             "message_start" => {
                 self.begin_auto(now);
+                if let Some(id) = ev["message"]["id"].as_str() {
+                    self.msg_id = id.to_owned();
+                    self.count_tokens(id.to_owned(), &ev["message"]["usage"]);
+                }
+            }
+            "message_delta" => {
+                let id = self.msg_id.clone();
+                self.count_tokens(id, &ev["usage"]);
             }
             "content_block_start" => {
                 if ev["content_block"]["type"] == "text"
@@ -1397,9 +1441,23 @@ impl State {
         Vec::new()
     }
 
+    /// Take the tokens a message says it has written: the most it ever says.
+    fn count_tokens(&mut self, id: String, usage: &Value) {
+        if id.is_empty() {
+            return;
+        }
+        if let Some(n) = usage["output_tokens"].as_u64() {
+            let at = self.turn_tokens.entry(id).or_insert(0);
+            *at = (*at).max(n);
+        }
+    }
+
     fn assistant(&mut self, msg: &Value, now: u64) -> Vec<Effect> {
         let mut fx = Vec::new();
         self.begin_auto(now);
+        if let Some(id) = msg["message"]["id"].as_str() {
+            self.count_tokens(id.to_owned(), &msg["message"]["usage"]);
+        }
         let blocks = msg["message"]["content"]
             .as_array()
             .cloned()
@@ -2643,6 +2701,80 @@ mod tests {
             s.live_len(),
             0,
             "nothing arrives any more, so nothing is held back"
+        );
+    }
+
+    fn node_of(s: &State) -> Conversation {
+        let head = Head {
+            id: Id::new(),
+            v: 1,
+            epoch: "e".into(),
+            rev: 1,
+            attention: Vec::new(),
+        };
+        s.node(head, &Id::new())
+    }
+
+    #[test]
+    fn a_tool_that_runs_is_listed_with_when_it_began_and_is_not_once_it_ends() {
+        let mut s = st();
+        s.send("go", vec![], 0);
+        s.apply(&json!({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "cargo test"}}]}}), 1);
+        let run = node_of(&s).running;
+        assert_eq!(run.len(), 1);
+        assert_eq!(run[0].id, "t1");
+        assert!(run[0].since > 0);
+        s.apply(&json!({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]}}), 3);
+        assert!(node_of(&s).running.is_empty());
+    }
+
+    #[test]
+    fn the_tokens_of_a_turn_count_each_message_once_and_start_again_with_the_next_turn() {
+        let mut s = st();
+        s.send("go", vec![], 0);
+        assert_eq!(node_of(&s).tokens, 0, "nothing said yet");
+        s.apply(&json!({"type": "stream_event", "event": {"type": "message_start", "message": {"id": "m1", "usage": {"output_tokens": 1}}}}), 1);
+        s.apply(&json!({"type": "stream_event", "event": {"type": "message_delta", "usage": {"output_tokens": 40}}}), 2);
+        // the same message comes again with the same count, and a second one adds its own
+        s.apply(&json!({"type": "assistant", "message": {"id": "m1", "usage": {"output_tokens": 40}, "content": [{"type": "text", "text": "a"}]}}), 3);
+        s.apply(&json!({"type": "assistant", "message": {"id": "m1", "usage": {"output_tokens": 40}, "content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {}}]}}), 3);
+        s.apply(&json!({"type": "assistant", "message": {"id": "m2", "usage": {"output_tokens": 25}, "content": [{"type": "text", "text": "b"}]}}), 4);
+        assert_eq!(node_of(&s).tokens, 65);
+        s.apply(&json!({"type": "result", "subtype": "success", "is_error": false, "duration_ms": 10, "total_cost_usd": 0.0}), 5);
+        assert_eq!(node_of(&s).tokens, 0, "nothing runs, so nothing is counted");
+        s.send("otra", vec![], 6);
+        assert_eq!(node_of(&s).tokens, 0, "a new turn starts at nothing");
+    }
+
+    #[test]
+    fn a_resumed_conversation_says_so_before_the_first_message_sent_and_only_once() {
+        let mut s = State::resumed("2cab1f5a-3d20-4cd2-9d13-485b39b26147".into(), None);
+        assert!(
+            !s.items.iter().any(|i| matches!(i, Item::Divider { .. })),
+            "a session that is only followed has no divider"
+        );
+        s.send("sigue", vec![], 0);
+        let kinds: Vec<&str> = s
+            .items
+            .iter()
+            .map(|i| match i {
+                Item::Divider {
+                    kind: DividerKind::Resume,
+                    ..
+                } => "resume",
+                Item::User { .. } => "user",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(kinds, ["resume", "user"]);
+        s.after_end(&mut Vec::new(), 1);
+        s.send("más", vec![], 2);
+        assert_eq!(
+            s.items
+                .iter()
+                .filter(|i| matches!(i, Item::Divider { .. }))
+                .count(),
+            1
         );
     }
 

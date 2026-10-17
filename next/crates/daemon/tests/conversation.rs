@@ -1284,13 +1284,10 @@ fn resuming_a_session_of_claudes_own_brings_what_was_said_and_the_state_it_ended
         .iter()
         .map(|i| i["t"].as_str().unwrap())
         .collect();
-    assert_eq!(kinds, ["user", "text", "tool", "text", "divider"], "{v}");
+    assert_eq!(kinds, ["user", "text", "tool", "text"], "{v}");
     assert_eq!(v["items"][0]["text"], "arregla el login");
     assert_eq!(v["items"][2]["state"], "ok");
-    assert_eq!(
-        v["items"][4]["kind"], "resume",
-        "what was said, then the line that says it was resumed"
-    );
+    // The line that says it was resumed waits for the first message sent (REQ-564).
     assert_eq!(
         (
             v["mode"].as_str(),
@@ -1389,7 +1386,7 @@ fn a_session_another_claude_is_writing_is_followed_while_the_conversation_has_no
         .iter()
         .map(|i| i["t"].as_str().unwrap())
         .collect();
-    assert_eq!(kinds, ["user", "text", "text", "divider"], "{v}");
+    assert_eq!(kinds, ["user", "text", "text"], "{v}");
     assert_eq!(v["mode"], "plan", "the mode it ends with follows too");
     // REQ-549: a message typed in the other `claude` while it works waits, and stops waiting when it is taken in.
     writeln!(open, r#"{{"type":"queue-operation","operation":"enqueue","timestamp":"2026-10-13T19:00:10.000Z","content":"y luego corre los tests"}}"#).unwrap();
@@ -1438,9 +1435,10 @@ fn what_is_jwns_own_is_kept_beside_the_transcript_and_the_chat_is_not_copied() {
         .iter()
         .map(|k| k["item"]["t"].as_str().unwrap())
         .collect();
-    assert!(
-        kept.contains(&"out") && kept.contains(&"divider"),
-        "{kept:?}"
+    assert_eq!(
+        kept,
+        ["out"],
+        "a command is jwn's, and no message was sent yet"
     );
 
     let daemon = Daemon::start(Config {
@@ -1485,7 +1483,7 @@ fn what_is_jwns_own_is_kept_beside_the_transcript_and_the_chat_is_not_copied() {
         .collect();
     assert_eq!(
         kinds,
-        ["user", "text", "divider", "out", "divider"],
+        ["user", "text", "out", "divider"],
         "the lines of the transcript, then what is jwn's: {v}"
     );
     daemon.stop();

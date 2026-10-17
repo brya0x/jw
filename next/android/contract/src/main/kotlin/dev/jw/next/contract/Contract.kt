@@ -661,6 +661,10 @@ sealed interface Node {
         /** Millionths of a dollar. */
         val cost: Long,
         val limits: Limits? = null,
+        /** The tools that run, and when each began (REQ-562). */
+        val running: List<Running> = emptyList(),
+        /** What the turn that runs has written, in tokens; 0 when the engine has not said (REQ-563). */
+        val tokens: Long = 0,
     ) : Node
 
     /** A workspace's changes: its files, hunk by hunk, against a scope. */

@@ -12,6 +12,7 @@ import dev.jw.next.contract.ConvStatus
 import dev.jw.next.contract.DaemonMsg
 import dev.jw.next.contract.Image
 import dev.jw.next.contract.Node
+import dev.jw.next.contract.Running
 import dev.jw.next.contract.SavedConversation
 import java.io.File
 import kotlin.test.Test
@@ -53,6 +54,17 @@ class ConversationTest {
         assertEquals("pide permiso", AskKind.Permission.tag())
         assertEquals("pregunta", AskKind.Question.tag())
         assertEquals("plan listo", AskKind.Plan.tag())
+    }
+
+    /** What the turn has written is said on the working line, and a tool that runs says for how long (REQ-562, REQ-563). */
+    @Test
+    fun theWorkingLineSaysTheTokensAndARunningToolItsTime() {
+        val c = conversation().copy(status = ConvStatus.Tool, tokens = 1250)
+        assertEquals("Trabajando… (12 s · ↓ 1.3 k tokens · ■ interrumpe)", c.workLine(false, 1_792_110_012_000))
+        val run = listOf(Running("t1", 1_792_110_004_000))
+        assertEquals("8 s", run.ranFor("t1", 1_792_110_012_000))
+        assertEquals("0 s", run.ranFor("t1", 1_792_110_000_000))
+        assertNull(run.ranFor("t2", 1_792_110_012_000))
     }
 
     @Test

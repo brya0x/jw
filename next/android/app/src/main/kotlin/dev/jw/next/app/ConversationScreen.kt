@@ -279,6 +279,8 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
         picked = picked?.minus(firstItem),
         opened = opened.map { it - firstItem }.toSet(),
         unfolded = relativeUnfolded,
+        began = node.running,
+        now = now,
         state = rememberLazyListState(),
         modifier = Modifier.weight(1f).fillMaxWidth().padding(vertical = 8.dp),
         toggleFold = { first ->

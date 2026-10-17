@@ -1,0 +1,153 @@
+{
+  "t": "snapshot",
+  "node": {
+    "id": "00000000-0000-4000-8000-0000000000e1",
+    "type": "conversation",
+    "v": 1,
+    "epoch": "00000000-0000-4000-8000-000000000001",
+    "rev": 14,
+    "attention": [],
+    "pane": "00000000-0000-4000-8000-0000000000c1",
+    "session": "2cab1f5a-3d20-4cd2-9d13-485b39b26147",
+    "name": "arregla el test que falla e…",
+    "accent": "magenta",
+    "model": "sonnet-5.5",
+    "effort": "high",
+    "mode": "manual",
+    "status": "tool",
+    "since": 1792110000000,
+    "first": 0,
+    "items": [
+      {
+        "t": "user",
+        "text": "corre los tests"
+      },
+      {
+        "t": "tool",
+        "id": "toolu_10",
+        "name": "Bash",
+        "arg": "cargo test",
+        "state": "run"
+      }
+    ],
+    "ask": {
+      "id": "req-1",
+      "kind": "permission",
+      "tool": "Edit",
+      "title": "Editar src/auth.rs",
+      "diff": [
+        {
+          "n": 41,
+          "sign": "-",
+          "text": "    if claims.exp < now {"
+        },
+        {
+          "n": 41,
+          "sign": "+",
+          "text": "    if claims.exp <= now {"
+        }
+      ],
+      "options": [
+        {
+          "key": "yes",
+          "label": "Sí"
+        },
+        {
+          "key": "session",
+          "label": "Sí, y no volver a preguntar por ediciones en esta sesión"
+        },
+        {
+          "key": "no",
+          "label": "No, y decirle a Claude qué hacer distinto"
+        }
+      ]
+    },
+    "queue": [
+      "y luego corre los tests"
+    ],
+    "tasks": [
+      {
+        "id": "bs02u3",
+        "kind": "bash",
+        "label": "cargo build --release",
+        "state": "run",
+        "started": 1792110001000,
+        "info": "en curso"
+      },
+      {
+        "id": "w1c9",
+        "kind": "loop",
+        "label": "revisar el CI cada 5 min",
+        "state": "stopped",
+        "started": 1792110000000
+      }
+    ],
+    "todos": [
+      {
+        "text": "Buscar los usos de verify",
+        "done": true
+      },
+      {
+        "text": "Compilar",
+        "done": false
+      }
+    ],
+    "artifacts": [
+      {
+        "title": "Informe de pruebas",
+        "url": "https://claude.ai/artifact/6HbvGgivzfNgDnkzpDjf4Y"
+      }
+    ],
+    "commands": [
+      {
+        "name": "/exit",
+        "source": "jwn",
+        "kind": "local",
+        "description": "salir de la conversación"
+      },
+      {
+        "name": "/context",
+        "source": "claude",
+        "kind": "text"
+      },
+      {
+        "name": "/deploy",
+        "source": "project",
+        "kind": "prompt",
+        "description": "publicar la rama en staging"
+      },
+      {
+        "name": "/doctor",
+        "source": "claude",
+        "kind": "screen"
+      },
+      {
+        "name": "/tasks",
+        "source": "jwn",
+        "kind": "panel"
+      },
+      {
+        "name": "/vercel:deploy",
+        "source": "plugin",
+        "kind": "prompt"
+      },
+      {
+        "name": "/jwn",
+        "source": "skill",
+        "kind": "prompt"
+      }
+    ],
+    "cost": 60000,
+    "limits": {
+      "five_hour": 62,
+      "seven_day": 31
+    },
+    "running": [
+      {
+        "id": "toolu_10",
+        "since": 1792110004000
+      }
+    ],
+    "tokens": 1250
+  }
+}

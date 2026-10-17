@@ -230,3 +230,7 @@ data class SavedConversation(val id: String, val name: String, val at: Long)
 /** What `list_conversations` answers, newest first. */
 @Serializable
 data class ConversationList(val conversations: List<SavedConversation>)
+
+/** A tool that runs: its item's id and the milliseconds since the epoch at which it began (REQ-562). */
+@Serializable
+data class Running(val id: String, val since: Long)

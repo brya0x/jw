@@ -465,7 +465,12 @@
             "artifacts": { "type": "array", "items": { "$ref": "#/$defs/Artifact" } },
             "commands": { "type": "array", "items": { "$ref": "#/$defs/ConvCommand" } },
             "cost": { "type": "integer", "minimum": 0, "description": "Millionths of a dollar." },
-            "limits": { "$ref": "#/$defs/Limits" }
+            "limits": { "$ref": "#/$defs/Limits" },
+            "running": {
+              "type": "array",
+              "items": { "type": "object", "required": ["id", "since"], "properties": { "id": { "type": "string" }, "since": { "type": "integer", "minimum": 0 } } }
+            },
+            "tokens": { "type": "integer", "minimum": 1, "description": "What the turn that runs has written." }
           }
         }
       ]

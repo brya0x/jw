@@ -50,10 +50,12 @@ import dev.jw.next.client.convDone
 import dev.jw.next.client.foldRows
 import dev.jw.next.client.convSecs
 import dev.jw.next.client.convTools
+import dev.jw.next.client.ranFor
 import dev.jw.next.client.char
 import dev.jw.next.contract.ConvItem
 import dev.jw.next.contract.DiffLine
 import dev.jw.next.contract.DiffSign
+import dev.jw.next.contract.Running
 import dev.jw.next.contract.NoteTone
 import dev.jw.next.contract.ToolState
 import kotlinx.coroutines.delay
@@ -87,6 +89,8 @@ internal fun ConversationItems(
     picked: Int?,
     opened: Set<Int>,
     unfolded: Set<Int>,
+    began: List<Running>,
+    now: Long,
     state: LazyListState,
     modifier: Modifier,
     toggleFold: (Int) -> Unit,
@@ -100,7 +104,7 @@ internal fun ConversationItems(
     LazyColumn(modifier, state = state, reverseLayout = true, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         items(rows, key = { if (it is FoldRow.Item) it.index else -1 - (it as FoldRow.Run).run.first }) { row ->
             when (row) {
-                is FoldRow.Item -> ItemView(items[row.index], accent, spin, picked == row.index, row.index in opened) { pick(row.index) }
+                is FoldRow.Item -> ItemView(items[row.index], accent, spin, picked == row.index, row.index in opened, began, now) { pick(row.index) }
                 is FoldRow.Run -> FoldView(row) { toggleFold(row.run.first) }
             }
         }
@@ -122,7 +126,7 @@ private fun FoldView(row: FoldRow.Run, click: () -> Unit) {
 }
 
 @Composable
-private fun ItemView(item: ConvItem, accent: Color, spin: String, picked: Boolean, open: Boolean, click: () -> Unit) {
+private fun ItemView(item: ConvItem, accent: Color, spin: String, picked: Boolean, open: Boolean, began: List<Running>, now: Long, click: () -> Unit) {
     val bar = if (picked) Modifier.drawBehind { drawRect(accent, size = Size(3.dp.toPx(), size.height)) } else Modifier
     Box(Modifier.fillMaxWidth().then(bar).clickable(onClick = click)) {
         when (item) {
@@ -132,7 +136,7 @@ private fun ItemView(item: ConvItem, accent: Color, spin: String, picked: Boolea
                 if (blocks != null) MdBlocks(blocks, Modifier.padding(horizontal = Pad))
                 else Text(inline(item.text + if (item.live) " ▍" else ""), color = Palette.fg, fontFamily = MonoFont, fontSize = 13.sp, lineHeight = 19.sp, modifier = Modifier.padding(horizontal = Pad))
             }
-            is ConvItem.Tool -> ToolRow(item, spin, open)
+            is ConvItem.Tool -> ToolRow(item, spin, open, began.ranFor(item.id, now))
             is ConvItem.Agent -> AgentRow(item, spin, open)
             is ConvItem.Shell -> ShellRow(item, open)
             is ConvItem.Out -> Column(Modifier.padding(horizontal = Pad)) {
@@ -192,7 +196,7 @@ private fun UserRow(item: ConvItem.User, accent: Color) {
 }
 
 @Composable
-private fun ToolRow(t: ConvItem.Tool, spin: String, open: Boolean) {
+private fun ToolRow(t: ConvItem.Tool, spin: String, open: Boolean, ranFor: String?) {
     val uri = LocalUriHandler.current
     Column {
         Row(Modifier.defaultMinSize(minHeight = 40.dp).padding(horizontal = Pad, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -202,7 +206,7 @@ private fun ToolRow(t: ConvItem.Tool, spin: String, open: Boolean) {
         }
         val summary = when {
             t.state == ToolState.Ask -> "Esperando tu permiso"
-            t.state == ToolState.Run -> "Ejecutando…"
+            t.state == ToolState.Run -> "Ejecutando…" + ranFor?.let { " · $it" }.orEmpty()
             t.state == ToolState.Denied -> "negado"
             else -> (t.summary ?: "") + t.answeredNote()
         }
@@ -215,7 +219,7 @@ private fun ToolRow(t: ConvItem.Tool, spin: String, open: Boolean) {
             ) { Mono("↗ Abrir", Palette.cyan, 12, bold = true) }
         }
         if (t.diff.isNotEmpty()) Diff(if (open) t.diff else t.diff.take(DIFF_SHOWN), t.diff.size - DIFF_SHOWN)
-        if (open && t.output.isNotEmpty()) Lines(t.output.take(OUTPUT_SHOWN))
+        if ((open || t.state == ToolState.Run) && t.output.isNotEmpty()) Lines(t.output.take(OUTPUT_SHOWN))
     }
 }
 

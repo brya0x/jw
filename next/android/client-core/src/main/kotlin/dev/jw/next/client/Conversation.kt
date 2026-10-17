@@ -4,6 +4,7 @@ import dev.jw.next.contract.Accent
 import dev.jw.next.contract.Artifact
 import dev.jw.next.contract.AskKind
 import dev.jw.next.contract.CommandSource
+import dev.jw.next.contract.Running
 import dev.jw.next.contract.ConvCommand
 import dev.jw.next.contract.ConvItem
 import dev.jw.next.contract.ConvMode
@@ -54,7 +55,8 @@ fun convSecs(ms: Long): String {
 /** «1 herramienta», «3 herramientas». */
 fun convTools(n: Int): String = "$n ${if (n == 1) "herramienta" else "herramientas"}"
 
-fun convKilo(n: Long): String = if (n >= 1000) "%.1f k".format(java.util.Locale.ROOT, n / 1000.0) else "$n"
+/** Thousands in whole tenths, rounded up from the half, as the terminal client's `kilo` does. */
+fun convKilo(n: Long): String = if (n >= 1000) ((n + 50) / 100).let { "${it / 10}.${it % 10} k" } else "$n"
 
 fun convUsd(micro: Long): String = "\$${micro / 1_000_000},%02d".format(java.util.Locale.ROOT, (micro % 1_000_000) / 10_000)
 
@@ -75,8 +77,13 @@ fun Node.Conversation.workLine(retaking: Boolean, nowMs: Long): String? {
         ConvStatus.Idle -> return null
     }
     val elapsed = since?.let { "${convSecs(maxOf(0, nowMs - it))} · " }.orEmpty()
-    return "$what (${elapsed}■ interrumpe)"
+    val written = if (tokens > 0) "↓ ${convKilo(tokens)} tokens · " else ""
+    return "$what (${elapsed}${written}■ interrumpe)"
 }
+
+/** How long the tool [id] has run, or null when it is not one that runs (REQ-562). */
+fun List<Running>.ranFor(id: String, nowMs: Long): String? =
+    firstOrNull { it.id == id }?.let { convSecs(maxOf(0, nowMs - it.since)) }
 
 /** The word on the sheet that asks (REQ-441). */
 fun AskKind.tag(): String = when (this) {

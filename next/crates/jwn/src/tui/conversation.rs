@@ -362,6 +362,8 @@ impl Editor {
 #[derive(Default)]
 pub struct Ui {
     pub editor: Editor,
+    /// The time of the frame being drawn, for what counts up (a tool that runs); 0 outside a draw.
+    now: Cell<u64>,
     /// Lines the list is scrolled up from the newest; `most` is what the last frame could scroll.
     scroll: usize,
     most: Cell<usize>,
@@ -830,7 +832,15 @@ impl Ui {
                 fold: false,
             });
         };
-        let open = self.open.contains(&abs);
+        // A tool that runs is drawn open: what it does and for how long (REQ-562).
+        let running = matches!(
+            item,
+            Item::Tool {
+                state: ToolState::Run,
+                ..
+            }
+        );
+        let open = running || self.open.contains(&abs);
         match item {
             Item::User { text, images } => {
                 let rows = wrap(text, w.saturating_sub(2), plain, Style::fg(look::cyan()));
@@ -878,6 +888,7 @@ impl Ui {
                 }
             }
             Item::Tool {
+                id,
                 name,
                 arg,
                 state,
@@ -886,7 +897,6 @@ impl Ui {
                 diff,
                 url,
                 by,
-                ..
             } => {
                 let mut head = vec![
                     ("● ".to_owned(), Style::fg(state_colour(*state))),
@@ -913,6 +923,13 @@ impl Ui {
                     };
                     head.push((format!(" · {did} {how} {by}"), Style::fg(look::green())));
                 }
+                if *state == ToolState::Run
+                    && let Some(r) = conv.running.iter().find(|r| &r.id == id)
+                    && self.now.get() > 0
+                {
+                    let took = secs(self.now.get().saturating_sub(r.since));
+                    head.push((format!(" · {took}"), dim));
+                }
                 push(head, None);
                 if let Some(s) = summary {
                     push(
@@ -928,6 +945,11 @@ impl Ui {
                             ("  ⎿  ".to_owned(), dim),
                             ("negado".to_owned(), Style::fg(look::red())),
                         ],
+                        None,
+                    );
+                } else if running {
+                    push(
+                        vec![("  ⎿  ".to_owned(), dim), ("ejecutando…".to_owned(), dim)],
                         None,
                     );
                 }
@@ -1144,6 +1166,7 @@ impl Ui {
         if iw < 12 || ih < 8 {
             return;
         }
+        self.now.set(now_ms);
         let field = self.field(iw);
         let geo = self.geo(conv, (iy, ih), field.band_rows());
         let lines = self.lines(conv, iw - 2);
@@ -1239,7 +1262,12 @@ impl Ui {
             .since
             .map(|s| format!("{} · ", secs(now_ms.saturating_sub(s))))
             .unwrap_or_default();
-        format!("{what} ({since}esc interrumpe)")
+        let tokens = if conv.tokens > 0 {
+            format!("↓ {} tokens · ", kilo(conv.tokens))
+        } else {
+            String::new()
+        };
+        format!("{what} ({since}{tokens}esc interrumpe)")
     }
 
     fn draw_ask(&self, g: &mut Grid, ask: &Ask, (ix, y, iw, h): (usize, usize, usize, usize)) {
@@ -2647,7 +2675,9 @@ pub fn secs(ms: u64) -> String {
 
 fn kilo(n: u64) -> String {
     if n >= 1000 {
-        format!("{:.1} k", n as f64 / 1000.0)
+        // Whole tenths, rounded up from the half, as the phone's `convKilo` does.
+        let tenths = (n + 50) / 100;
+        format!("{}.{} k", tenths / 10, tenths % 10)
     } else {
         n.to_string()
     }
@@ -3107,6 +3137,31 @@ mod tests {
             assert!(rows[y].contains(text), "{mode:?}");
             assert_eq!(g.cells[y * g.cols + 3].1.fg, Some(colour), "{mode:?}");
         }
+    }
+
+    #[test]
+    fn a_tool_that_runs_is_drawn_open_with_its_time_and_the_working_line_says_the_tokens() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../contract/fixtures/daemon");
+        let doc: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("snapshot-conversation-running.json")).unwrap(),
+        )
+        .unwrap();
+        let conv: Conversation = serde_json::from_value(doc["node"].clone()).unwrap();
+        let (_, rows) = frame(&Ui::default(), &conv);
+        row_of(&rows, "● Bash(cargo test) · 8 s");
+        row_of(&rows, "⎿  ejecutando…");
+        row_of(
+            &rows,
+            "Trabajando… (12 s · ↓ 1.3 k tokens · esc interrumpe)",
+        );
+        let mut done = conv.clone();
+        done.running.clear();
+        if let Item::Tool { state, summary, .. } = &mut done.items[1] {
+            *state = ToolState::Ok;
+            *summary = Some("Listo".into());
+        }
+        let (_, rows) = frame(&Ui::default(), &done);
+        assert!(!rows.join("\n").contains("ejecutando"), "{rows:?}");
     }
 
     #[test]

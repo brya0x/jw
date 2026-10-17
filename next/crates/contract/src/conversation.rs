@@ -41,6 +41,24 @@ pub struct Conversation {
     pub cost: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limits: Option<Limits>,
+    /// The tools that run, and when each began (REQ-562): a client counts the time itself.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub running: Vec<Running>,
+    /// What Claude has written in the turn that runs, in tokens; 0 when the engine has not said
+    /// (REQ-563).
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub tokens: u64,
+}
+
+/// A tool that runs: its item's id and the milliseconds since the epoch at which it began.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Running {
+    pub id: String,
+    pub since: u64,
+}
+
+fn is_zero_u64(n: &u64) -> bool {
+    *n == 0
 }
 
 /// The conversation's colour: one of the theme's six accents, never a free colour.

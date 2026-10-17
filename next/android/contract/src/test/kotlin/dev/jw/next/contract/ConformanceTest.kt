@@ -230,6 +230,15 @@ class ConformanceTest {
         assertEquals(result, ContractJson.encodeToJsonElement(Opened.serializer(), opened))
     }
 
+    /** The conversation fixture with a tool that runs says when it began and what the turn has written (REQ-562, REQ-563). */
+    @Test
+    fun aToolThatRunsSaysWhenItBeganAndTheTurnHowManyTokens() {
+        val snapshot = fixtures("daemon").first { it.first == "snapshot-conversation-running.json" }.second
+        val node = (ContractJson.decodeFromJsonElement(DaemonMsg.serializer(), snapshot) as DaemonMsg.Snapshot).node as Node.Conversation
+        assertEquals(listOf(Running("toolu_10", 1_792_110_004_000)), node.running)
+        assertEquals(1250L, node.tokens)
+    }
+
     /** A finished text of the conversation fixture carries its Markdown blocks, a table among them (REQ-560). */
     @Test
     fun aFinishedTextCarriesItsMarkdownBlocks() {
