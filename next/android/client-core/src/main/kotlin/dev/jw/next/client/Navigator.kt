@@ -15,6 +15,7 @@ import dev.jw.next.contract.OpenKind
 import dev.jw.next.contract.Node
 import dev.jw.next.contract.ProjectEdit
 import dev.jw.next.contract.ProjectInfo
+import dev.jw.next.contract.WorktreeInfo
 
 /** Where the nodes come from: fixtures now, a live daemon later. */
 interface NodeSource {
@@ -91,6 +92,27 @@ interface NodeSource {
     /** Put [set] in the file [to] says of the settings of the repository [repo] is in, leaving the rest of the file as it was; [reply] gets where it went and whether the repository's own file hides it, or the PC's message (REQ-525). */
     fun editProjectConfig(repo: String, to: ConfigFrom, set: ProjectEdit, reply: (Result<Pair<String, Boolean>>) -> Unit) {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** The worktrees git knows of the repository [repo] is in, but its main one; [reply] gets the PC's message when it cannot list them (REQ-533). */
+    fun listWorktrees(repo: String, reply: (Result<List<WorktreeInfo>>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** Open the worktree at [path] that [listWorktrees] listed as a workspace with no panel; [reply] gets its id, or the PC's message (REQ-534). */
+    fun openWorktree(repo: String, path: String, reply: (Result<Id>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** Open each of [paths] with [openWorktree], one after the other; [reply] gets how many opened and why the others did not. */
+    fun openWorktrees(repo: String, paths: List<String>, reply: (OpenedWorktrees) -> Unit) {
+        fun next(i: Int, opened: Int, failed: List<String>) {
+            if (i == paths.size) return reply(OpenedWorktrees(opened, failed))
+            openWorktree(repo, paths[i]) { r ->
+                r.fold({ next(i + 1, opened + 1, failed) }, { next(i + 1, opened, failed + (it.message ?: "el PC no pudo abrir el worktree")) })
+            }
+        }
+        next(0, 0, emptyList())
     }
 
     /** Start the one panel of a workspace that has none, a shell or `claude` as [open] says or, when it is null, as its settings do; a worktree's setup runs in it first. */

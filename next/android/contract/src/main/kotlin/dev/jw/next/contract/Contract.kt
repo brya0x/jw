@@ -479,6 +479,10 @@ data class WorktreeInfo(
     val workspace: Id? = null,
 )
 
+/** The result of `list_worktrees`. */
+@Serializable
+data class WorktreeList(val worktrees: List<WorktreeInfo>)
+
 /** What `edit_project_config` changes: each field that is there is the new value of its key; an empty one takes its key out. */
 @Serializable
 data class ProjectEdit(

@@ -29,6 +29,8 @@ import dev.jw.next.contract.Node
 import dev.jw.next.contract.Peer
 import dev.jw.next.contract.ProjectEdit
 import dev.jw.next.contract.ProjectInfo
+import dev.jw.next.contract.WorktreeInfo
+import dev.jw.next.contract.WorktreeList
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.serialization.DeserializationStrategy
@@ -189,6 +191,14 @@ abstract class ProtocolSource : AppSource() {
                 },
             )
         }
+    }
+
+    override fun listWorktrees(repo: String, reply: (Result<List<WorktreeInfo>>) -> Unit) {
+        command(Cmd.ListWorktrees(repo)) { r -> reply(r.read(WorktreeList.serializer(), "los worktrees").map { it.worktrees }) }
+    }
+
+    override fun openWorktree(repo: String, path: String, reply: (Result<Id>) -> Unit) {
+        command(Cmd.OpenWorktree(repo, path)) { r -> reply(r.workspaceId("el PC no pudo abrir el worktree")) }
     }
 
     override fun startWorkspace(workspace: Id, open: OpenKind?, reply: (Result<Unit>) -> Unit) {

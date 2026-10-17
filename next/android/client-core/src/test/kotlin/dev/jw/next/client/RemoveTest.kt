@@ -20,7 +20,7 @@ class RemoveTest {
         assertEquals(HomeKind.Worktree, worktree.kind)
         assertEquals(HomeKind.Folder, folder.kind)
         assertEquals(
-            listOf(WsAction.Rename, WsAction.Project, WsAction.CloseWorkspace, WsAction.RemoveWorktree),
+            listOf(WsAction.Rename, WsAction.ExistingWorktrees, WsAction.Project, WsAction.CloseWorkspace, WsAction.RemoveWorktree),
             workspaceMenu(worktree.kind, worktree.repo).map { it.action },
             "a worktree knows its repository, so it offers the project's settings (REQ-526)",
         )
@@ -28,7 +28,7 @@ class RemoveTest {
         assertEquals(listOf(WsAction.RemoveWorkspace), workspaceMenu(HomeKind.Folder, null).map { it.action })
         // Only a repository's root offers a worktree, and only when it knows the repository.
         assertEquals(
-            listOf(WsAction.NewWorktree, WsAction.Project, WsAction.RemoveWorkspace),
+            listOf(WsAction.NewWorktree, WsAction.ExistingWorktrees, WsAction.Project, WsAction.RemoveWorkspace),
             workspaceMenu(HomeKind.Root, "/home/u/code/app").map { it.action },
         )
         assertEquals("de «app»", workspaceMenu(HomeKind.Root, "/home/u/code/app").first().note)

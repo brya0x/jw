@@ -13,10 +13,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -24,6 +26,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -48,13 +51,18 @@ import dev.jw.next.client.folderView
 import dev.jw.next.client.freeName
 import dev.jw.next.client.planWorktree
 import dev.jw.next.client.repoName
+import dev.jw.next.client.note
+import dev.jw.next.client.openable
 import dev.jw.next.client.repos
+import dev.jw.next.client.shortPath
+import dev.jw.next.client.shown
 import dev.jw.next.client.tildePath
 import dev.jw.next.client.takenNames
 import dev.jw.next.contract.ConfigFrom
 import dev.jw.next.contract.OpenKind
 import dev.jw.next.contract.DirListing
 import dev.jw.next.contract.Id
+import dev.jw.next.contract.WorktreeInfo
 import java.util.concurrent.atomic.AtomicInteger
 
 private val Gutter = 16.dp
@@ -198,12 +206,17 @@ private fun Dock(view: FolderView, busy: Boolean, click: () -> Unit) {
     }
 }
 
+/** The repository a worktree sheet is of, and whether it opens on the worktrees that exist (REQ-539). */
+internal data class WorktreeAt(val repo: String, val existing: Boolean)
+
 /**
- * A worktree of a repository (REQ-206 to REQ-209, REQ-347 to REQ-352), as `w` in the terminal client: the name,
- * what the repository's `.jw.toml` makes of it and why it cannot be made, and what the PC says when git refuses.
+ * The worktrees of a repository, as `w` in the terminal client: a new one (REQ-206 to REQ-209, REQ-347 to REQ-352), with
+ * the name, what the repository's `.jw.toml` makes of it and why it cannot be made, and what the PC says when git refuses;
+ * or the ones that exist (REQ-539), to open.
  */
 @Composable
-internal fun BoxScope.WorktreeSheet(source: AppSource, repoAtStart: String, state: ClientState, nav: Navigator, set: (ClientState) -> Unit, dismiss: () -> Unit) {
+internal fun BoxScope.WorktreeSheet(source: AppSource, at: WorktreeAt, state: ClientState, nav: Navigator, set: (ClientState) -> Unit, dismiss: () -> Unit) {
+    val repoAtStart = at.repo
     val version = source.tick.intValue
     val session = remember(version) { source.session() }
     var repo by remember(repoAtStart) { mutableStateOf(repoAtStart) }
@@ -214,6 +227,12 @@ internal fun BoxScope.WorktreeSheet(source: AppSource, repoAtStart: String, stat
     var busy by remember(repoAtStart) { mutableStateOf(false) }
     var opens by remember(repoAtStart) { mutableStateOf<OpenKind?>(null) }
     var waiting by remember(repoAtStart) { mutableStateOf<Id?>(null) }
+    var existingSide by remember(at) { mutableStateOf(at.existing) }
+    var listed by remember(repoAtStart) { mutableStateOf<List<WorktreeInfo>?>(null) }
+    var listError by remember(repoAtStart) { mutableStateOf<String?>(null) }
+    var said by remember(repoAtStart) { mutableStateOf<Pair<String, Boolean>?>(null) }
+    var opening by remember(repoAtStart) { mutableStateOf(false) }
+    var reload by remember(repoAtStart) { mutableIntStateOf(0) }
     val focus = remember { FocusRequester() }
     LaunchedEffect(repoAtStart) { focus.requestFocus() }
     var settings by remember(repoAtStart) { mutableStateOf<WorktreeSettings>(WorktreeSettings.Reading) }
@@ -222,6 +241,14 @@ internal fun BoxScope.WorktreeSheet(source: AppSource, repoAtStart: String, stat
         settings = WorktreeSettings.Reading
         source.projectConfig(asked) { result ->
             if (repo == asked) settings = result.fold({ WorktreeSettings.Ready(it) }, { WorktreeSettings.Refused(it.message ?: "el PC no pudo leer el .jw.toml") })
+        }
+    }
+    // The list waits until its side is shown: git reads the status of every worktree (REQ-539).
+    LaunchedEffect(repo, existingSide, reload) {
+        if (!existingSide) return@LaunchedEffect
+        val asked = repo
+        source.listWorktrees(asked) { result ->
+            if (repo == asked) result.onSuccess { listed = it; listError = null }.onFailure { listError = it.message ?: "el PC no pudo listar los worktrees" }
         }
     }
     val root = (settings as? WorktreeSettings.Ready)?.info?.root
@@ -243,7 +270,7 @@ internal fun BoxScope.WorktreeSheet(source: AppSource, repoAtStart: String, stat
         }
     }
     Sheet(dismiss) {
-        Mono("worktree nuevo", Palette.fg, 14, bold = true)
+        Mono(if (existingSide) "worktrees existentes" else "worktree nuevo", Palette.fg, 14, bold = true)
         val all = repos(session)
         Row(Modifier.fillMaxWidth().defaultMinSize(minHeight = 48.dp).border(1.dp, Palette.line, RoundedCornerShape(6.dp)).clickable(enabled = !busy && all.size > 1) { choosing = !choosing }.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Mono("proyecto ", Palette.dim, 11)
@@ -251,9 +278,24 @@ internal fun BoxScope.WorktreeSheet(source: AppSource, repoAtStart: String, stat
             if (all.size > 1) Mono("▾", Palette.dim, 11)
         }
         if (choosing) all.forEach { r ->
-            SheetAction(if (r == repo) "●" else " ", repoName(r)) { repo = r; typed = null; choosing = false }
+            SheetAction(if (r == repo) "●" else " ", repoName(r)) { repo = r; typed = null; choosing = false; listed = null; said = null }
         }
         else {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Pill("nuevo", !existingSide) { existingSide = false }
+                Pill("existentes" + (listed?.let { " ${it.size}" } ?: ""), existingSide) { existingSide = true }
+            }
+        }
+        if (!choosing && existingSide) ExistingWorktrees(listed, listError, said, opening) { paths ->
+            opening = true
+            said = null
+            source.openWorktrees(repo, paths) { done ->
+                said = done.said()
+                opening = false
+                reload++
+            }
+        }
+        else if (!choosing) {
             Mono("nombre", Palette.dim, 11)
             BasicTextField(
                 value = name,
@@ -302,6 +344,37 @@ internal fun BoxScope.WorktreeSheet(source: AppSource, repoAtStart: String, stat
             if (error != null) Mono(error.orEmpty(), Palette.red, 12, lines = 5)
             SheetAction("↵", if (busy) "creando…" else "crear y abrir", Palette.blue, enabled = !busy && plan is WorktreePlan.Ok, click = make)
             Mono("Crea el worktree y abre los paneles del proyecto, como w en el PC.", Palette.dim, 12, lines = 2)
+        }
+    }
+}
+
+/**
+ * The worktrees that exist, to open one or all the closed ones (REQ-539): a row says its branch, its folder and what is
+ * worth knowing of it; [open] gets the paths to open, and what opening said stays below.
+ */
+@Composable
+private fun ExistingWorktrees(list: List<WorktreeInfo>?, error: String?, said: Pair<String, Boolean>?, opening: Boolean, open: (List<String>) -> Unit) {
+    when {
+        error != null -> Mono(error, Palette.red, 12, lines = 4)
+        list == null -> Mono("leyendo los worktrees…", Palette.dim, 12)
+        list.isEmpty() -> Mono("Este repositorio no tiene otros worktrees. El principal ya es su workspace.", Palette.dim, 12, lines = 3)
+        else -> {
+            Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
+                list.forEach { w ->
+                    Row(Modifier.fillMaxWidth().defaultMinSize(minHeight = 56.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Column(Modifier.weight(1f)) {
+                            Mono(w.shown(), if (w.workspace != null) Palette.dim else Palette.fg, 14, bold = true)
+                            val note = w.note()
+                            Mono(shortPath(w.path) + if (note.isEmpty()) "" else " · $note", if (w.missing) Palette.red else Palette.dim, 11, lines = 2)
+                        }
+                        if (w.openable()) Pill("abrir", false, enabled = !opening) { open(listOf(w.path)) }
+                    }
+                }
+            }
+            val closed = list.filter { it.openable() }
+            SheetAction("a", if (opening) "abriendo…" else "abrir los ${closed.size} cerrados", Palette.blue, enabled = !opening && closed.isNotEmpty()) { open(closed.map { it.path }) }
+            said?.let { (text, good) -> Mono(text, if (good) Palette.green else Palette.red, 12, lines = 3) }
+            Mono("Abrir no corre el setup ni copia archivos, y deja el workspace sin panel: entra y abre uno.", Palette.dim, 12, lines = 3)
         }
     }
 }
