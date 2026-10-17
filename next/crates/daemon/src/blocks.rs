@@ -774,6 +774,47 @@ mod tests {
     }
 
     #[test]
+    fn rows_are_spans_by_style_with_the_blanks_of_the_end_left_out() {
+        let mut p = vt100::Parser::new(6, 12, 0);
+        // A red run that ends the first row and starts the second: each row has its own span.
+        p.process(b"ab\x1b[31mcdefghij\x1b[mkl");
+        p.process(b"\x1b[31mxy\x1b[0m   ");
+        // A row painted to its edge keeps the blanks that carry a background, a reversed cell with
+        // the default colours is index 0 on 7, and a wide character is one cell of text.
+        p.process(b"\x1b[3;1H\x1b[44mbar\x1b[0m\x1b[3;12H\x1b[44m \x1b[0m");
+        p.process("\x1b[4;1H\x1b[7m NORMAL \x1b[0m\x1b[5;1H日a".as_bytes());
+        let rows = rows_of(p.screen());
+        let first: Vec<_> = rows[0].iter().map(|s| s.t.as_str()).collect();
+        assert_eq!(first, ["ab", "cdefghij", "kl"]);
+        assert_eq!(rows[0][1].fg, Some(Color::Index(1)));
+        assert_eq!(
+            rows[1][0].t, "xy",
+            "the style of the end of a row is not carried to the next"
+        );
+        assert_eq!(rows[1][0].fg, Some(Color::Index(1)));
+        assert_eq!(rows[1].len(), 1, "blanks with the default look are dropped");
+        let painted: Vec<_> = rows[2]
+            .iter()
+            .map(|s| (s.t.as_str(), s.bg.clone()))
+            .collect();
+        assert_eq!(
+            painted,
+            [
+                ("bar", Some(Color::Index(4))),
+                ("        ", None),
+                (" ", Some(Color::Index(4)))
+            ]
+        );
+        assert_eq!(rows[3][0].t, " NORMAL ");
+        assert_eq!(
+            (rows[3][0].fg.clone(), rows[3][0].bg.clone()),
+            (Some(Color::Index(0)), Some(Color::Index(7)))
+        );
+        assert_eq!(rows[4][0].t, "日a");
+        assert_eq!(rows.len(), 5, "the blank row at the end is dropped");
+    }
+
+    #[test]
     fn a_running_block_has_no_status_yet() {
         let mut s = BlockStore::new(40);
         s.mark(Mark::Prompt);

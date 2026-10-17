@@ -641,7 +641,7 @@ Where a project's settings live (N91, RAT-46): `project_config {repo}` replies `
 - REQ-524 WHEN saving, THE client SHALL send the fields that changed, and every field when the file saved to is not the one the settings came from, and nothing when nothing changed and the file is that one.
 - REQ-525 WHEN the daemon answers a save, THE client SHALL say where it went and, when `shadowed`, that the repository's own file hides it, or say why it did not, and SHALL read the settings again.
 - REQ-526 THE phone SHALL offer «configuración del proyecto» in the sheet of a repository's workspace and of a worktree, and show the same fields, the choice of file and the save, with every touch target at least 48 dp.
-- REQ-527 WHILE the program in a pane's terminal is on the alternate screen, THE pane's `screen` SHALL carry `spans`: exactly `rows` rows, each the row's cells as `Span` (as in the `blocks` node: text, `fg`, `bg`, `b`, `i`, `u`) with neighbouring cells of one style joined, the colours as the terminal has them (a palette index or `#rrggbb`, none for the default) and the blank cells at the end of a row left out.
+- REQ-527 WHILE the program in a pane's terminal is on the alternate screen, THE pane's `screen` SHALL carry `spans`: exactly `rows` rows, each the row's cells as `Span` (as in the `blocks` node: text, `fg`, `bg`, `b`, `i`, `u`) with neighbouring cells of one style joined, the colours as the terminal has them (a palette index or `#rrggbb`, none for the default) and the blank cells at the end of a row left out unless they carry a background or an underline.
 - REQ-528 WHEN a cell is drawn reversed, THE daemon SHALL put its colours swapped in the span, a default colour becoming index 0 as text and index 7 as ground.
 - REQ-529 WHILE the program is not on the alternate screen, THE pane's `screen` SHALL have no `spans`, and `lines` SHALL be there in every case.
 - REQ-530 WHEN the terminal client draws a pane's screen that has `spans`, IT SHALL draw each span with its colours: indexes 0 to 15 as the theme's, as in the blocks, the rest of the 256 as always, an RGB colour as it is asked and no colour as the theme's own text and ground; WHEN it has none, IT SHALL draw `lines` in the theme's text colour as before.
@@ -798,7 +798,7 @@ Corrections to the model: the level 0 document is smaller than assumed (3.9 KB, 
 - OPEN-6 Mirroring the shell's line buffer into the clients' editors (what you type at a terminal shows in the phone's editor) and the other way round.
 - OPEN-7 History and completion in the editors: from the shell, or kept by the client.
 - OPEN-5 Where the special keys (`esc`, `tab`, arrows, `^C` beyond the stop button, `^D`, `^R`, …) go on the phone now that the key row is removed (the user: think about it later; it is among the last things to do).
-- OPEN-2 (closed) Whether a `pane` screen needs styled cells: it stays text; styled output lives in the `blocks` node (RAT-8).
+- OPEN-2 (closed) Whether a `pane` screen needs styled cells: it stayed text and styled output lived in the `blocks` node (RAT-8); N98 gave the alternate screen its colours (RAT-49).
 
 ## Corrections
 - A client that resumed with the connection's epoch instead of its cached document's epoch would keep a dead daemon's data (found by test in N2); the client now uses the document's.
