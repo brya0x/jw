@@ -31,6 +31,8 @@ use crate::server::Shared;
 
 /// How often a conversation is written to disk at most (REQ-392).
 const SAVE_EVERY: Duration = Duration::from_secs(2);
+/// How often the transcripts of the conversations with no engine are looked at (REQ-545).
+const FOLLOW_EVERY: Duration = Duration::from_secs(1);
 /// How often the text that streams is shown at most (REQ-378).
 const SHOW_EVERY: Duration = Duration::from_millis(50);
 /// A patch of a text that grows carries the whole text (the patches only replace), so the longer
@@ -67,6 +69,9 @@ pub struct Conv {
     pub effort_arg: Option<String>,
     pub dirty: bool,
     pub last_saved: Option<Instant>,
+    /// The transcript this conversation is read from while it has no engine (REQ-545): what is added
+    /// to it, by another `claude` that has the session open, shows here.
+    pub source: Option<crate::transcript::Source>,
     /// The binary's `claude` was seen in the pane's foreground: when it leaves, so does this.
     pub stub_seen: bool,
 }
@@ -462,6 +467,8 @@ fn start_engine(shared: &Shared, pane: &Id) -> Result<(), crate::commands::Error
     {
         Some(c) => {
             c.engine = Some(engine);
+            // Its own engine writes the transcript now: what it says is live.
+            c.source = None;
             let wanted = c.model_arg.clone();
             let fx = c.st.engine_started(wanted.as_deref());
             run_effects(&mut core, pane, fx);
@@ -563,6 +570,10 @@ pub fn open_conversation(
     });
     let mut model_arg = parsed.model.clone();
     let mut effort_arg = parsed.effort.clone();
+    // What the engine said before is read from its own transcript, not copied (REQ-544).
+    let mut source = resume
+        .as_deref()
+        .and_then(|id| crate::transcript::Source::open(&cwd, env.as_ref(), id));
     let (mut st, lazy) = match &resume {
         Some(id) => {
             let saved = dir
@@ -574,16 +585,20 @@ pub fn open_conversation(
                     // What it was asked to run with comes back with it, unless typed again.
                     model_arg = model_arg.or_else(|| s.model_arg.clone());
                     effort_arg = effort_arg.or_else(|| s.effort_arg.clone());
-                    State::restored(s, &clock())
+                    let mut st = State::restored(s, &clock());
+                    // A file of before the transcript was read keeps its own items.
+                    match source.as_ref().filter(|_| !st.legacy()) {
+                        Some(src) => st.follow(&src.parser),
+                        None => source = None,
+                    }
+                    st
                 }
                 None => {
-                    // What the engine said before, and the mode, model and effort it ended with (REQ-540).
-                    let before = crate::transcript::read(&cwd, env.as_ref(), id);
-                    if let Some(t) = &before {
-                        model_arg = model_arg.or_else(|| t.model.clone());
-                        effort_arg = effort_arg.or_else(|| t.effort.clone());
+                    if let Some(src) = &source {
+                        model_arg = model_arg.or_else(|| src.parser.model.clone());
+                        effort_arg = effort_arg.or_else(|| src.parser.effort.clone());
                     }
-                    State::resumed(id.clone(), before)
+                    State::resumed(id.clone(), source.as_ref().map(|s| &s.parser))
                 }
             };
             (st, true)
@@ -640,6 +655,7 @@ pub fn open_conversation(
                 effort_arg,
                 dirty: true,
                 last_saved: None,
+                source,
                 stub_seen: false,
             },
         );
@@ -1012,6 +1028,55 @@ fn run_shell(
     (ok, lines)
 }
 
+/// Read what was added to the transcripts of the conversations that have no engine, and show it
+/// (REQ-545). What is read is outside the lock; what changes the node is inside.
+pub fn follow_due(shared: &Shared) {
+    let taken: Vec<(Id, crate::transcript::Source)> = shared
+        .lock()
+        .convs
+        .iter_mut()
+        .filter(|(_, c)| c.engine.is_none())
+        .filter_map(|(pane, c)| c.source.take().map(|s| (pane.clone(), s)))
+        .collect();
+    if taken.is_empty() {
+        return;
+    }
+    let polled: Vec<_> = taken
+        .into_iter()
+        .map(|(pane, mut src)| {
+            let changed = src.poll();
+            (pane, src, changed)
+        })
+        .collect();
+    let mut core = shared.lock();
+    let mut shown = false;
+    for (pane, src, changed) in polled {
+        // A conversation that started its engine meanwhile, or is gone, is not followed.
+        let Some(c) = core.convs.get_mut(&pane).filter(|c| c.engine.is_none()) else {
+            continue;
+        };
+        if changed {
+            c.st.follow(&src.parser);
+            shown = true;
+        }
+        c.source = Some(src);
+    }
+    if shown {
+        core.refresh();
+    }
+}
+
+/// Follow the transcripts until the daemon stops.
+pub fn follow_run(shared: Shared, stop: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+    while !stop.load(Ordering::SeqCst) {
+        follow_due(&shared);
+        let end = Instant::now() + FOLLOW_EVERY;
+        while Instant::now() < end && !stop.load(Ordering::SeqCst) {
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+}
+
 // ---- saved conversations ----
 
 fn file_of(dir: &Path, pane: &str) -> PathBuf {
@@ -1024,10 +1089,13 @@ fn load(dir: &Path, pane: &str) -> Option<Saved> {
     (saved.v == crate::conversation::SAVED_VERSION).then_some(saved)
 }
 
+/// Where to look for a conversation's transcript: its folder, its environment and its session.
+type Probe = (PathBuf, Option<BTreeMap<String, String>>, String);
+
 /// The conversations that changed and are due are written without the lock: only what is
 /// to be written is copied under it.
 pub fn save_due(shared: &Shared, force: bool) {
-    let due: Vec<(PathBuf, Saved)> = {
+    let due: Vec<(PathBuf, Saved, Option<Probe>)> = {
         let mut core = shared.lock();
         let Some(dir) = core.conv_dir.clone() else {
             return;
@@ -1044,11 +1112,24 @@ pub fn save_due(shared: &Shared, force: bool) {
                 let mut saved = c.st.saved(now);
                 saved.model_arg.clone_from(&c.model_arg);
                 saved.effort_arg.clone_from(&c.effort_arg);
-                (file_of(&dir, pane), saved)
+                let probe =
+                    c.st.leaves_chat_to_transcript()
+                        .then(|| (c.cwd.clone(), c.env.clone(), c.st.session.clone()));
+                (file_of(&dir, pane), saved, probe)
             })
             .collect()
     };
-    for (path, saved) in due {
+    for (path, mut saved, probe) in due {
+        // The chat is not copied when the engine's transcript is there to read it from (REQ-544).
+        match probe {
+            Some((cwd, env, session))
+                if crate::transcript::Source::exists(&cwd, env.as_ref(), &session) =>
+            {
+                saved.items.clear();
+                saved.first = 0;
+            }
+            _ => saved.kept.clear(),
+        }
         let Some(text) = encode(saved) else {
             continue;
         };

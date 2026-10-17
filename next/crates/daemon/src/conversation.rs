@@ -426,6 +426,13 @@ pub struct State {
     /// The engine has written its transcript, so `--resume` can read it.
     pub has_transcript: bool,
     pub first: u32,
+    /// When each item was made, in milliseconds since 1970: what places the items that are jwn's own
+    /// among the lines of the transcript (REQ-544). Always as long as `items`.
+    stamps: Vec<u64>,
+    /// What was saved of the items that are jwn's own, until they are put among the transcript's.
+    kept_saved: Vec<Kept>,
+    /// It was saved with its own items, before the transcript was read (REQ-544): it keeps them.
+    legacy: bool,
     pub items: Vec<Item>,
     /// Millionths of a dollar.
     pub cost: u64,
@@ -478,7 +485,11 @@ pub struct Saved {
     pub session: String,
     pub has_transcript: bool,
     pub first: u32,
+    /// The items of a conversation that has no transcript to read them from (REQ-544); none when it has one.
     pub items: Vec<Item>,
+    /// What the transcript does not hold: the items that are jwn's own, each with its time.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kept: Vec<Kept>,
     pub cost: u64,
     /// What the person asked for with `--model` and `--effort` (or `conversation_set`): the
     /// engine that comes back runs with it, and the short names above are not flags.
@@ -493,6 +504,88 @@ pub struct Saved {
 
 pub const SAVED_VERSION: u32 = 1;
 
+/// An item that the transcript of the engine does not hold, and the time it was made at.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Kept {
+    pub at: u64,
+    pub item: Item,
+}
+
+/// Whether an item is jwn's own: what the engine's transcript never says. The person's messages,
+/// Claude's text, its tools and the compactions are the transcript's.
+fn is_ours(item: &Item) -> bool {
+    match item {
+        Item::User { .. } | Item::Text { .. } | Item::Tool { .. } => false,
+        Item::Divider { kind, .. } => *kind != DividerKind::Compact,
+        Item::Agent { .. }
+        | Item::Shell { .. }
+        | Item::Out { .. }
+        | Item::Note { .. }
+        | Item::Result { .. } => true,
+    }
+}
+
+fn stamp() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+}
+
+/// The lines of a transcript with the items that are jwn's own among them, each after the last
+/// line that was made no later than it. A card of a subagent takes the place of the tool that
+/// started it, which is also a line of the transcript.
+fn merge(base: &[crate::transcript::Stamped], kept: &[Kept]) -> (Vec<Item>, Vec<u64>) {
+    let mut kept: Vec<&Kept> = kept.iter().collect();
+    kept.sort_by_key(|k| k.at);
+    let cards: Vec<&Kept> = kept
+        .iter()
+        .copied()
+        .filter(|k| matches!(k.item, Item::Agent { .. }))
+        .collect();
+    let (mut items, mut stamps) = (Vec::new(), Vec::new());
+    let mut next = kept
+        .iter()
+        .copied()
+        .filter(|k| !matches!(k.item, Item::Agent { .. }))
+        .peekable();
+    for line in base {
+        while let Some(k) = next.next_if(|k| k.at < line.at) {
+            items.push(k.item.clone());
+            stamps.push(k.at);
+        }
+        let card = match &line.item {
+            Item::Tool { id, .. } => cards
+                .iter()
+                .find(|k| matches!(&k.item, Item::Agent { id: a, .. } if a == id)),
+            _ => None,
+        };
+        match card {
+            Some(k) => {
+                items.push(k.item.clone());
+                stamps.push(k.at);
+            }
+            None => {
+                items.push(line.item.clone());
+                stamps.push(line.at);
+            }
+        }
+    }
+    for k in next {
+        items.push(k.item.clone());
+        stamps.push(k.at);
+    }
+    // A card whose tool is not among the lines read stays, where its time puts it.
+    for k in cards {
+        let placed = items.contains(&k.item);
+        if !placed {
+            let at = stamps.iter().position(|t| *t > k.at).unwrap_or(items.len());
+            items.insert(at, k.item.clone());
+            stamps.insert(at, k.at);
+        }
+    }
+    (items, stamps)
+}
+
 impl State {
     pub fn new(session: String) -> State {
         State {
@@ -505,6 +598,9 @@ impl State {
             session,
             has_transcript: false,
             first: 0,
+            stamps: Vec::new(),
+            kept_saved: Vec::new(),
+            legacy: false,
             items: Vec::new(),
             cost: 0,
             status: ConvStatus::Idle,
@@ -545,7 +641,10 @@ impl State {
         st.mode = saved.mode;
         st.has_transcript = saved.has_transcript;
         st.first = saved.first;
+        st.legacy = !saved.items.is_empty();
+        st.stamps = vec![saved.saved_at; saved.items.len()];
         st.items = saved.items;
+        st.kept_saved = saved.kept;
         st.cost = saved.cost;
         // The list the engine gave, with jwn's own in case the file is older than they are.
         if !saved.commands.is_empty() {
@@ -568,29 +667,65 @@ impl State {
     /// A conversation the person resumes by its id, with nothing of ours saved: what it said, and
     /// the mode, the model and the effort it ended with, come from the engine's own transcript
     /// (REQ-540).
-    pub fn resumed(session: String, history: Option<crate::transcript::Transcript>) -> State {
+    pub fn resumed(session: String, source: Option<&crate::transcript::Parser>) -> State {
         let mut st = State::new(session);
         st.has_transcript = true;
         st.status = ConvStatus::Dead;
-        if let Some(h) = history {
-            for item in h.items {
-                st.push(item);
-            }
-            if let Some(mode) = h.mode {
-                st.mode = mode;
-            }
-            if let Some(model) = &h.model {
-                st.model = short_model(model);
-            }
-            if let Some(effort) = h.effort {
-                st.effort = effort;
-            }
+        if let Some(t) = source {
+            st.follow(t);
         }
         st.push(Item::Divider {
             text: "conversación retomada".into(),
             kind: DividerKind::Resume,
         });
         st
+    }
+
+    /// Make the items from what the transcript says, with the items that are jwn's own put among
+    /// them, and take the mode, the model and the effort it ended with (REQ-542, REQ-544).
+    pub fn follow(&mut self, t: &crate::transcript::Parser) {
+        let mut kept = std::mem::take(&mut self.kept_saved);
+        kept.extend(self.kept());
+        let (items, stamps) = merge(&t.items, &kept);
+        let total = items.len();
+        let from = total.saturating_sub(KEEP);
+        self.items = items[from..].to_vec();
+        self.stamps = stamps[from..].to_vec();
+        self.first = u32::try_from(from).unwrap_or(u32::MAX);
+        self.live_texts.clear();
+        if let Some(mode) = t.mode {
+            self.mode = mode;
+        }
+        if let Some(model) = &t.model {
+            self.model = short_model(model);
+        }
+        if let Some(effort) = &t.effort {
+            self.effort.clone_from(effort);
+        }
+    }
+
+    /// The conversation was saved with its own items: its chat is not read from the transcript.
+    pub fn legacy(&self) -> bool {
+        self.legacy
+    }
+
+    /// Whether its chat can be left out of what is saved, to be read from the transcript instead
+    /// (REQ-544): the engine has written one, and the conversation is not of before it was read.
+    pub fn leaves_chat_to_transcript(&self) -> bool {
+        self.has_transcript && !self.legacy
+    }
+
+    /// The items that are jwn's own, with their times.
+    pub fn kept(&self) -> Vec<Kept> {
+        self.items
+            .iter()
+            .zip(&self.stamps)
+            .filter(|(item, _)| is_ours(item))
+            .map(|(item, at)| Kept {
+                at: *at,
+                item: item.clone(),
+            })
+            .collect()
     }
 
     pub fn saved(&self, now: u64) -> Saved {
@@ -607,6 +742,7 @@ impl State {
             has_transcript: self.has_transcript,
             first: self.first,
             items: self.items.clone(),
+            kept: if self.legacy { Vec::new() } else { self.kept() },
             cost: self.cost,
             model_arg: None,
             effort_arg: None,
@@ -661,6 +797,7 @@ impl State {
 
     fn push(&mut self, item: Item) {
         self.items.push(item);
+        self.stamps.push(stamp());
         self.trim();
     }
 
@@ -671,6 +808,7 @@ impl State {
         }
         let drop = self.items.len() - KEEP;
         self.items.drain(..drop);
+        self.stamps.drain(..drop);
         self.first += drop as u32;
         self.live_texts = self
             .live_texts
@@ -1761,6 +1899,7 @@ impl State {
             self.session = s.to_owned();
         }
         self.items.clear();
+        self.stamps.clear();
         self.first = 0;
         self.live_texts.clear();
         self.has_transcript = false;
@@ -3075,5 +3214,188 @@ mod tests {
             "the engine that ran it is gone"
         );
         assert!(s.task_links.is_empty());
+    }
+
+    fn line_at(at: u64, item: Item) -> crate::transcript::Stamped {
+        crate::transcript::Stamped { at, item }
+    }
+
+    fn said(text: &str) -> Item {
+        Item::Text {
+            text: text.into(),
+            live: false,
+        }
+    }
+
+    fn note(text: &str) -> Item {
+        Item::Note {
+            text: text.into(),
+            tone: None,
+        }
+    }
+
+    fn texts(items: &[Item]) -> Vec<String> {
+        items
+            .iter()
+            .map(|i| match i {
+                Item::Text { text, .. } | Item::Note { text, .. } => text.clone(),
+                Item::User { text, .. } => format!("user:{text}"),
+                Item::Out { .. } => "out".into(),
+                Item::Result { .. } => "result".into(),
+                Item::Agent { id, .. } => format!("card:{id}"),
+                Item::Tool { id, .. } => format!("tool:{id}"),
+                other => format!("{other:?}"),
+            })
+            .collect()
+    }
+
+    fn tool(id: &str) -> Item {
+        Item::Tool {
+            id: id.into(),
+            name: "Task".into(),
+            arg: String::new(),
+            state: ToolState::Ok,
+            summary: None,
+            output: Vec::new(),
+            diff: Vec::new(),
+            url: None,
+            by: None,
+        }
+    }
+
+    fn card(id: &str) -> Item {
+        Item::Agent {
+            id: id.into(),
+            name: "Explore".into(),
+            description: String::new(),
+            state: ToolState::Ok,
+            tools: 0,
+            tokens: 0,
+            ms: 0,
+            last: None,
+            steps: Vec::new(),
+        }
+    }
+
+    /// REQ-544: the items that are jwn's own go among the transcript's lines by their time, and a
+    /// subagent's card takes the place of the tool that started it.
+    #[test]
+    fn the_items_of_jwn_go_among_the_lines_of_the_transcript_by_their_time() {
+        let base = [
+            line_at(
+                100,
+                Item::User {
+                    text: "hola".into(),
+                    images: 0,
+                },
+            ),
+            line_at(200, said("uno")),
+            line_at(300, tool("a")),
+            line_at(400, said("dos")),
+        ];
+        let kept = [
+            Kept {
+                at: 450,
+                item: Item::Result {
+                    ms: 1,
+                    tools: 1,
+                    cost: 2,
+                },
+            },
+            Kept {
+                at: 150,
+                item: note("nota"),
+            },
+            Kept {
+                at: 310,
+                item: card("a"),
+            },
+            Kept {
+                at: 50,
+                item: Item::Out {
+                    lines: vec!["x".into()],
+                },
+            },
+        ];
+        let (items, stamps) = merge(&base, &kept);
+        assert_eq!(
+            texts(&items),
+            ["out", "user:hola", "nota", "uno", "card:a", "dos", "result"]
+        );
+        assert_eq!(stamps.len(), items.len());
+        // Nothing of the transcript's own is lost when there is nothing of jwn's.
+        assert_eq!(merge(&base, &[]).0.len(), 4);
+        // A card whose tool was not read stays where its time puts it.
+        let (items, _) = merge(
+            &base[..2],
+            &[Kept {
+                at: 150,
+                item: card("zz"),
+            }],
+        );
+        assert_eq!(texts(&items), ["user:hola", "card:zz", "uno"]);
+    }
+
+    #[test]
+    fn a_conversation_that_follows_a_transcript_takes_its_items_state_and_keeps_what_is_its_own() {
+        let mut t = crate::transcript::Parser::default();
+        t.items = vec![line_at(100, said("uno")), line_at(300, said("dos"))];
+        t.mode = Some(Mode::Plan);
+        t.model = Some("claude-opus-5-5".into());
+        t.effort = Some("xhigh".into());
+        let mut s = st();
+        s.has_transcript = true;
+        s.push(note("mía"));
+        s.follow(&t);
+        // The note was made now, after the lines, so it is last; the mode, model and effort are the transcript's.
+        assert_eq!(texts(&s.items), ["uno", "dos", "mía"]);
+        assert_eq!(
+            (s.mode, s.model.as_str(), s.effort.as_str()),
+            (Mode::Plan, "opus-5.5", "xhigh")
+        );
+        // What is added later is placed again and the note stays.
+        t.items.push(line_at(u64::MAX, said("tres")));
+        s.follow(&t);
+        assert_eq!(texts(&s.items), ["uno", "dos", "mía", "tres"]);
+        // Only what the transcript does not hold is saved of it, and the chat when there is none.
+        let saved = s.saved(1);
+        assert_eq!(saved.kept.len(), 1);
+        assert!(s.leaves_chat_to_transcript());
+        assert_eq!(
+            saved.items.len(),
+            4,
+            "the caller leaves the chat out when the transcript is there"
+        );
+        // Many lines: the node keeps the last ones and counts the rest in `first`.
+        t.items = (0..KEEP + 5)
+            .map(|i| line_at(i as u64, said(&i.to_string())))
+            .collect();
+        s.follow(&t);
+        assert_eq!(
+            (s.items.len(), s.first),
+            (KEEP, 6),
+            "5 lines and the note beyond what it keeps, plus none lost"
+        );
+    }
+
+    #[test]
+    fn a_conversation_saved_with_its_own_items_keeps_them_and_does_not_follow() {
+        let mut old = st().saved(5);
+        old.items = vec![said("vieja")];
+        old.has_transcript = true;
+        let s = State::restored(old, "20:00");
+        assert!(s.legacy() && !s.leaves_chat_to_transcript());
+        assert!(
+            s.saved(6).kept.is_empty(),
+            "nothing of its is split from its items"
+        );
+        let mut fresh = st().saved(5);
+        fresh.has_transcript = true;
+        fresh.kept = vec![Kept {
+            at: 9,
+            item: note("n"),
+        }];
+        let s = State::restored(fresh, "20:00");
+        assert!(!s.legacy() && s.leaves_chat_to_transcript());
     }
 }

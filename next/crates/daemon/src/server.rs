@@ -193,6 +193,12 @@ impl Daemon {
                 .name("changes".into())
                 .spawn(move || crate::diff::run(shared, stop))?;
         }
+        {
+            let (shared, stop) = (shared.clone(), stop.clone());
+            thread::Builder::new()
+                .name("follow".into())
+                .spawn(move || crate::engine::follow_run(shared, stop))?;
+        }
         if let Some(program) = config.gh.clone() {
             let (shared, stop, every) = (shared.clone(), stop.clone(), config.github_every);
             thread::Builder::new()

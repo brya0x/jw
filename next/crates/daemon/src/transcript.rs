@@ -1,174 +1,208 @@
-//! A conversation the engine already had, read from its own transcript when the person resumes it
-//! (`claude --resume <id>`, `-c`, `/resume`): what was said and the mode, the model and the effort
-//! it ended with (spec REQ-540 to REQ-543). The transcript is
-//! `~/.claude/projects/<folder>/<session>.jsonl`, one JSON line for each message or note; the
-//! engine does not send any of it again when it resumes.
+//! A conversation the engine already has, read from its own transcript instead of copied
+//! (spec REQ-540 to REQ-546): what was said, with the time of each line, and the mode, the model and
+//! the effort it ended with. The transcript is `~/.claude/projects/<folder>/<session>.jsonl`, one
+//! JSON line for each message or note, and it only grows: a `Source` reads the end of it when a
+//! conversation is opened and then the lines that are added, so a session another `claude` is
+//! writing is followed. The engine does not send any of it again when it resumes.
 
 use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Seek, SeekFrom};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use contract::conversation::{DividerKind, Item, Mode, ToolState};
 use serde_json::Value;
 
-use crate::conversation::{LINE_CHARS, OUTPUT_LINES, clip, content_text, summary_of, tool_arg};
+use crate::conversation::{
+    KEEP, LINE_CHARS, OUTPUT_LINES, clip, content_text, summary_of, tool_arg,
+};
 
-/// The most of the end of a transcript that is read: a long session is megabytes of lines, and the
-/// node keeps its last items only (REQ-392).
-const TAIL: u64 = 4 * 1024 * 1024;
+/// How much of the end of a transcript is read to begin with, and how much more is tried while it
+/// holds fewer items than a node keeps (a long session is mostly requests and attachments, tens of
+/// megabytes of lines, with few messages in them).
+const WINDOWS: [u64; 3] = [4 << 20, 16 << 20, 64 << 20];
+
+/// The most that is read at once of what has been added.
+const MOST_ADDED: u64 = 8 << 20;
 
 /// The efforts `--effort` takes; anything else in a transcript is not passed on.
 const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 
-/// What a transcript says of a conversation.
-#[derive(Debug, Default, PartialEq)]
-pub struct Transcript {
-    pub items: Vec<Item>,
+/// An item and the time of the line it comes from, in milliseconds since 1970.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Stamped {
+    pub at: u64,
+    pub item: Item,
+}
+
+/// What the lines read so far say of a conversation.
+#[derive(Debug, Default)]
+pub struct Parser {
+    pub items: Vec<Stamped>,
     /// The mode it was in last.
     pub mode: Option<Mode>,
     /// The model of Claude's last message, as the engine names it.
     pub model: Option<String>,
     pub effort: Option<String>,
+    /// Where each tool is in `items`, so a result finds its tool without a search for each one.
+    tools: HashMap<String, usize>,
+    /// The time of the last line that had one: a line without it is as late as that.
+    last_at: u64,
 }
 
-/// The transcript of `session` for the folder `cwd`, when it is there and can be read.
-pub fn read(
-    cwd: &Path,
-    env: Option<&BTreeMap<String, String>>,
-    session: &str,
-) -> Option<Transcript> {
-    // A session id is a name of a file: nothing that leaves the folder of transcripts.
-    if session.is_empty() || session.contains(['/', '\\', '.']) {
-        return None;
-    }
-    let path = crate::engine::projects_dir(cwd, env)?.join(format!("{session}.jsonl"));
-    let mut file = std::fs::File::open(path).ok()?;
-    let size = file.metadata().ok()?.len();
-    let cut = size > TAIL;
-    if cut {
-        file.seek(SeekFrom::Start(size - TAIL)).ok()?;
-    }
-    let mut bytes = Vec::new();
-    file.take(TAIL).read_to_end(&mut bytes).ok()?;
-    let text = String::from_utf8_lossy(&bytes);
-    // A read that began in the middle of a line starts at the next one.
-    let text = match (cut, text.split_once('\n')) {
-        (true, Some((_, rest))) => rest,
-        _ => &text,
-    };
-    Some(parse(text))
-}
-
-/// The lines of a transcript as a conversation: the person's messages, Claude's text, its tools
-/// with what they answered, the compactions, and the last mode, model and effort.
-pub fn parse(text: &str) -> Transcript {
-    let mut out = Transcript::default();
-    // Where each tool is in `items`, so a result finds its tool without a search for each one.
-    let mut tools: HashMap<String, usize> = HashMap::new();
-    for line in text.lines() {
-        let Ok(entry) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        // What a subagent said inside a tool is not a line of the conversation.
-        if entry["isSidechain"] == true {
-            continue;
-        }
-        match entry["type"].as_str().unwrap_or("") {
-            "permission-mode" => {
-                if let Some(mode) = entry["permissionMode"].as_str().and_then(Mode::from_flag) {
-                    out.mode = Some(mode);
-                }
+impl Parser {
+    /// Read lines of a transcript, each whole.
+    pub fn feed(&mut self, text: &str) {
+        for line in text.lines() {
+            let Ok(entry) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            if let Some(at) = entry["timestamp"].as_str().and_then(iso_ms) {
+                self.last_at = at;
             }
-            "assistant" => assistant(&entry, &mut out, &mut tools),
-            "user" if entry["isMeta"] != true => user(&entry, &mut out, &tools),
-            "system" if entry["subtype"] == "compact_boundary" => out.items.push(Item::Divider {
-                text: "conversación compactada".into(),
-                kind: DividerKind::Compact,
-            }),
-            _ => {}
+            // What a subagent said inside a tool is not a line of the conversation.
+            if entry["isSidechain"] == true {
+                continue;
+            }
+            match entry["type"].as_str().unwrap_or("") {
+                "permission-mode" => {
+                    if let Some(mode) = entry["permissionMode"].as_str().and_then(Mode::from_flag) {
+                        self.mode = Some(mode);
+                    }
+                }
+                "assistant" => self.assistant(&entry),
+                "user" if entry["isMeta"] != true => self.user(&entry),
+                "system" if entry["subtype"] == "compact_boundary" => self.push(Item::Divider {
+                    text: "conversación compactada".into(),
+                    kind: DividerKind::Compact,
+                }),
+                _ => {}
+            }
         }
     }
-    out
-}
 
-fn assistant(entry: &Value, out: &mut Transcript, tools: &mut HashMap<String, usize>) {
-    let message = &entry["message"];
-    // What Claude Code writes itself (an interrupted turn, «no response requested») is not Claude.
-    if message["model"] == "<synthetic>" {
-        return;
+    fn push(&mut self, item: Item) {
+        self.items.push(Stamped {
+            at: self.last_at,
+            item,
+        });
     }
-    if let Some(model) = message["model"].as_str().filter(|m| !m.is_empty()) {
-        out.model = Some(model.to_owned());
-    }
-    if let Some(effort) = entry["effort"].as_str().filter(|e| EFFORTS.contains(e)) {
-        out.effort = Some(effort.to_owned());
-    }
-    for block in message["content"].as_array().into_iter().flatten() {
-        match block["type"].as_str().unwrap_or("") {
-            "text" => {
-                let text = block["text"].as_str().unwrap_or("");
-                if !text.trim().is_empty() {
-                    out.items.push(Item::Text {
-                        text: text.to_owned(),
-                        live: false,
+
+    fn assistant(&mut self, entry: &Value) {
+        let message = &entry["message"];
+        // What Claude Code writes itself (an interrupted turn, «no response requested») is not Claude.
+        if message["model"] == "<synthetic>" {
+            return;
+        }
+        if let Some(model) = message["model"].as_str().filter(|m| !m.is_empty()) {
+            self.model = Some(model.to_owned());
+        }
+        if let Some(effort) = entry["effort"].as_str().filter(|e| EFFORTS.contains(e)) {
+            self.effort = Some(effort.to_owned());
+        }
+        for block in message["content"].as_array().into_iter().flatten() {
+            match block["type"].as_str().unwrap_or("") {
+                "text" => {
+                    let text = block["text"].as_str().unwrap_or("");
+                    if !text.trim().is_empty() {
+                        self.push(Item::Text {
+                            text: text.to_owned(),
+                            live: false,
+                        });
+                    }
+                }
+                "tool_use" => {
+                    let name = block["name"].as_str().unwrap_or("");
+                    // The checklist and the tool search are the node's, not lines of the conversation.
+                    if matches!(name, "TodoWrite" | "ToolSearch") {
+                        continue;
+                    }
+                    let id = block["id"].as_str().unwrap_or("").to_owned();
+                    self.tools.insert(id.clone(), self.items.len());
+                    self.push(Item::Tool {
+                        id,
+                        name: name.to_owned(),
+                        arg: tool_arg(name, &block["input"]),
+                        // Until its result is read: a tool with none was interrupted.
+                        state: ToolState::Failed,
+                        summary: Some("sin resultado".into()),
+                        output: Vec::new(),
+                        diff: Vec::new(),
+                        url: None,
+                        by: None,
                     });
                 }
+                _ => {}
             }
-            "tool_use" => {
-                let name = block["name"].as_str().unwrap_or("");
-                // The checklist and the tool search are the node's, not lines of the conversation.
-                if matches!(name, "TodoWrite" | "ToolSearch") {
-                    continue;
-                }
-                let id = block["id"].as_str().unwrap_or("").to_owned();
-                tools.insert(id.clone(), out.items.len());
-                out.items.push(Item::Tool {
-                    id,
-                    name: name.to_owned(),
-                    arg: tool_arg(name, &block["input"]),
-                    // Until its result is read: a tool with none was interrupted.
-                    state: ToolState::Failed,
-                    summary: Some("sin resultado".into()),
-                    output: Vec::new(),
-                    diff: Vec::new(),
-                    url: None,
-                    by: None,
-                });
-            }
-            _ => {}
         }
     }
-}
 
-fn user(entry: &Value, out: &mut Transcript, tools: &HashMap<String, usize>) {
-    let content = &entry["message"]["content"];
-    let blocks: Vec<&Value> = match content {
-        Value::Array(a) => a.iter().collect(),
-        _ => Vec::new(),
-    };
-    for block in &blocks {
-        if block["type"] == "tool_result" {
-            result(block, &entry["toolUseResult"], out, tools);
+    fn user(&mut self, entry: &Value) {
+        let content = &entry["message"]["content"];
+        let blocks: Vec<&Value> = match content {
+            Value::Array(a) => a.iter().collect(),
+            _ => Vec::new(),
+        };
+        for block in &blocks {
+            if block["type"] == "tool_result" {
+                self.result(block, &entry["toolUseResult"]);
+            }
+        }
+        let (text, images) = match content {
+            Value::String(s) => (s.clone(), 0),
+            _ => (
+                blocks
+                    .iter()
+                    .filter(|b| b["type"] == "text")
+                    .filter_map(|b| b["text"].as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                u32::try_from(blocks.iter().filter(|b| b["type"] == "image").count())
+                    .unwrap_or(u32::MAX),
+            ),
+        };
+        if is_the_persons(&text) || (text.trim().is_empty() && images > 0) {
+            self.push(Item::User {
+                text: text.trim().to_owned(),
+                images,
+            });
         }
     }
-    let (text, images) = match content {
-        Value::String(s) => (s.clone(), 0),
-        _ => (
-            blocks
-                .iter()
-                .filter(|b| b["type"] == "text")
-                .filter_map(|b| b["text"].as_str())
-                .collect::<Vec<_>>()
-                .join("\n"),
-            u32::try_from(blocks.iter().filter(|b| b["type"] == "image").count())
-                .unwrap_or(u32::MAX),
-        ),
-    };
-    if is_the_persons(&text) || (text.trim().is_empty() && images > 0) {
-        out.items.push(Item::User {
-            text: text.trim().to_owned(),
-            images,
-        });
+
+    /// What a tool answered: its state, a line that says it and the first lines of its output.
+    fn result(&mut self, block: &Value, detail: &Value) {
+        let Some(at) = block["tool_use_id"]
+            .as_str()
+            .and_then(|id| self.tools.get(id))
+            .copied()
+        else {
+            return;
+        };
+        let failed = block["is_error"].as_bool().unwrap_or(false);
+        let lines: Vec<String> = content_text(&block["content"])
+            .lines()
+            .take(OUTPUT_LINES)
+            .map(|l| clip(l, LINE_CHARS))
+            .collect();
+        if let Some(Stamped {
+            item:
+                Item::Tool {
+                    name,
+                    state,
+                    summary,
+                    output,
+                    ..
+                },
+            ..
+        }) = self.items.get_mut(at)
+        {
+            *state = if failed {
+                ToolState::Failed
+            } else {
+                ToolState::Ok
+            };
+            *summary = Some(summary_of(name, &lines, detail, failed));
+            *output = lines;
+        }
     }
 }
 
@@ -191,42 +225,179 @@ fn is_the_persons(text: &str) -> bool {
         && !t.starts_with("[Request interrupted")
 }
 
-/// What a tool answered: its state, a line that says it and the first lines of its output.
-fn result(block: &Value, detail: &Value, out: &mut Transcript, tools: &HashMap<String, usize>) {
-    let Some(at) = block["tool_use_id"]
-        .as_str()
-        .and_then(|id| tools.get(id))
-        .copied()
-    else {
-        return;
-    };
-    let failed = block["is_error"].as_bool().unwrap_or(false);
-    let lines: Vec<String> = content_text(&block["content"])
-        .lines()
-        .take(OUTPUT_LINES)
-        .map(|l| clip(l, LINE_CHARS))
-        .collect();
-    if let Some(Item::Tool {
-        name,
-        state,
-        summary,
-        output,
-        ..
-    }) = out.items.get_mut(at)
-    {
-        *state = if failed {
-            ToolState::Failed
-        } else {
-            ToolState::Ok
-        };
-        *summary = Some(summary_of(name, &lines, detail, failed));
-        *output = lines;
+/// A line of a transcript as a conversation: for the tests, and for text already in memory.
+pub fn parse(text: &str) -> Parser {
+    let mut p = Parser::default();
+    p.feed(text);
+    p
+}
+
+/// `2026-10-13T19:52:42.093Z` as milliseconds since 1970.
+fn iso_ms(s: &str) -> Option<u64> {
+    let n = |r: std::ops::Range<usize>| s.get(r)?.parse::<i64>().ok();
+    if s.len() < 19 || s.as_bytes()[10] != b'T' {
+        return None;
     }
+    let (y, m, d) = (n(0..4)?, n(5..7)?, n(8..10)?);
+    let (h, mi, sec) = (n(11..13)?, n(14..16)?, n(17..19)?);
+    let millis = s
+        .get(19..)
+        .and_then(|r| r.strip_prefix('.'))
+        .map(|r| {
+            r.chars()
+                .take_while(char::is_ascii_digit)
+                .take(3)
+                .collect::<String>()
+        })
+        .filter(|f| !f.is_empty())
+        .and_then(|f| format!("{f:0<3}").parse::<i64>().ok())
+        .unwrap_or(0);
+    // The days since 1970 of a civil date (Howard Hinnant's algorithm).
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * ((m + 9) % 12) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    let ms = ((days * 24 + h) * 60 + mi) * 60 + sec;
+    u64::try_from(ms * 1000 + millis).ok()
+}
+
+/// A transcript being read: where it is, how far, and what its lines say.
+#[derive(Debug)]
+pub struct Source {
+    path: PathBuf,
+    /// The bytes before this have been read: it is the end of the last whole line.
+    offset: u64,
+    pub parser: Parser,
+}
+
+impl Source {
+    /// The transcript of `session` for the folder `cwd`, when it is there and can be read.
+    pub fn open(
+        cwd: &Path,
+        env: Option<&BTreeMap<String, String>>,
+        session: &str,
+    ) -> Option<Source> {
+        Source::load(Source::path_of(cwd, env, session)?)
+    }
+
+    /// Whether the transcript of `session` is there to be read.
+    pub fn exists(cwd: &Path, env: Option<&BTreeMap<String, String>>, session: &str) -> bool {
+        Source::path_of(cwd, env, session).is_some_and(|p| p.is_file())
+    }
+
+    /// The file of the transcript of `session`, for a session id that is a file name.
+    fn path_of(
+        cwd: &Path,
+        env: Option<&BTreeMap<String, String>>,
+        session: &str,
+    ) -> Option<PathBuf> {
+        // A session id is a name of a file: nothing that leaves the folder of transcripts.
+        if session.is_empty() || session.contains(['/', '\\', '.']) {
+            return None;
+        }
+        Some(crate::engine::projects_dir(cwd, env)?.join(format!("{session}.jsonl")))
+    }
+
+    /// Read the end of the file, as much as it takes for a node's items.
+    fn load(path: PathBuf) -> Option<Source> {
+        let mut file = std::fs::File::open(&path).ok()?;
+        let size = file.metadata().ok()?.len();
+        let mut last = None;
+        for window in WINDOWS {
+            let from = size.saturating_sub(window);
+            let (text, end) = read_lines(&mut file, from, size, from > 0)?;
+            let parser = parse(&text);
+            let enough = from == 0 || parser.items.len() >= KEEP;
+            last = Some(Source {
+                path: path.clone(),
+                offset: end,
+                parser,
+            });
+            if enough {
+                break;
+            }
+        }
+        last
+    }
+
+    /// Read what has been added since: whether anything was.
+    pub fn poll(&mut self) -> bool {
+        let Ok(mut file) = std::fs::File::open(&self.path) else {
+            return false;
+        };
+        let Ok(size) = file.metadata().map(|m| m.len()) else {
+            return false;
+        };
+        // A file that is shorter was written again: read it as new.
+        if size < self.offset {
+            if let Some(fresh) = Source::load(self.path.clone()) {
+                *self = fresh;
+                return true;
+            }
+            return false;
+        }
+        if size == self.offset {
+            return false;
+        }
+        let to = size.min(self.offset + MOST_ADDED);
+        let Some((text, end)) = read_lines(&mut file, self.offset, to, false) else {
+            return false;
+        };
+        self.offset = end;
+        let before = (
+            self.parser.items.len(),
+            self.parser.mode,
+            self.parser.model.clone(),
+        );
+        self.parser.feed(&text);
+        let after = (
+            self.parser.items.len(),
+            self.parser.mode,
+            self.parser.model.clone(),
+        );
+        // A result can change a tool without adding an item.
+        !text.trim().is_empty() || before != after
+    }
+}
+
+/// The whole lines of `file` from `from` to `to`, and the offset where the next one starts. A read
+/// that begins in the middle of a line (`skip_first`) starts at the next one, and a last line that
+/// is not finished is left for the next read.
+fn read_lines(
+    file: &mut std::fs::File,
+    from: u64,
+    to: u64,
+    skip_first: bool,
+) -> Option<(String, u64)> {
+    file.seek(SeekFrom::Start(from)).ok()?;
+    let mut bytes = Vec::new();
+    file.take(to - from).read_to_end(&mut bytes).ok()?;
+    let start = if skip_first {
+        bytes
+            .iter()
+            .position(|b| *b == b'\n')
+            .map_or(bytes.len(), |i| i + 1)
+    } else {
+        0
+    };
+    let end = bytes
+        .iter()
+        .rposition(|b| *b == b'\n')
+        .map_or(start, |i| (i + 1).max(start));
+    let text = String::from_utf8_lossy(&bytes[start..end]).into_owned();
+    Some((text, from + end as u64))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The items of what was read, without their times.
+    fn it(p: &Parser) -> Vec<Item> {
+        p.items.iter().map(|s| s.item.clone()).collect()
+    }
 
     fn line(v: Value) -> String {
         v.to_string() + "\n"
@@ -257,8 +428,7 @@ mod tests {
     #[test]
     fn the_person_claude_and_its_tools_come_back_in_order_and_what_is_not_theirs_does_not() {
         let t = parse(&sample());
-        let kinds: Vec<&str> = t
-            .items
+        let kinds: Vec<&str> = it(&t)
             .iter()
             .map(|i| match i {
                 Item::User { .. } => "user",
@@ -273,24 +443,21 @@ mod tests {
             ["user", "text", "tool", "tool", "divider", "user"],
             "no reminder, thinking, checklist, subagent line, synthetic text or command wrapper"
         );
-        assert!(
-            matches!(&t.items[0], Item::User { text, images: 0 } if text == "arregla el login")
-        );
-        assert!(matches!(&t.items[5], Item::User { text, .. } if text == "gracias"));
+        assert!(matches!(&it(&t)[0], Item::User { text, images: 0 } if text == "arregla el login"));
+        assert!(matches!(&it(&t)[5], Item::User { text, .. } if text == "gracias"));
     }
 
     #[test]
     fn a_tool_takes_the_state_and_the_summary_of_its_result_and_one_without_is_interrupted() {
-        let mut t = parse(&sample());
-        let read = t.items.remove(2);
+        let t = parse(&sample());
         assert!(matches!(
-            read,
-            Item::Tool { ref name, state: ToolState::Ok, ref summary, ref output, ref arg, .. }
+            &it(&t)[2],
+            Item::Tool { name, state: ToolState::Ok, summary, output, arg, .. }
                 if name == "Read" && summary.as_deref() == Some("Leídas 42 líneas")
                     && output.len() == 2 && arg.contains("login.rs")
         ));
         assert!(matches!(
-            &t.items[2],
+            &it(&t)[3],
             Item::Tool { name, state: ToolState::Failed, summary, .. }
                 if name == "Bash" && summary.as_deref() == Some("error: boom")
         ));
@@ -298,7 +465,7 @@ mod tests {
             serde_json::json!({"type":"assistant","message":{"model":"m","content":[{"type":"tool_use","id":"x","name":"Bash","input":{"command":"sleep 9"}}]}}),
         ));
         assert!(matches!(
-            &lone.items[0],
+            &it(&lone)[0],
             Item::Tool { state: ToolState::Failed, summary, .. } if summary.as_deref() == Some("sin resultado")
         ));
     }
@@ -337,8 +504,8 @@ mod tests {
             ]
             .concat(),
         );
-        assert_eq!(t.items.len(), 1);
-        assert!(matches!(&t.items[0], Item::User { text, .. } if text == "<div> no se ve"));
+        assert_eq!(it(&t).len(), 1);
+        assert!(matches!(&it(&t)[0], Item::User { text, .. } if text == "<div> no se ve"));
     }
 
     #[test]
@@ -352,7 +519,7 @@ mod tests {
         let t = parse(&(before + &tool));
         assert!(
             matches!(
-                &t.items[0],
+                &it(&t)[0],
                 Item::Tool {
                     state: ToolState::Failed,
                     ..
@@ -367,7 +534,7 @@ mod tests {
     fn a_transcript_of_four_mebibytes_is_read_in_a_blink() {
         let mut text = String::new();
         let mut n = 0;
-        while text.len() < TAIL as usize {
+        while text.len() < WINDOWS[0] as usize {
             n += 1;
             text += &line(
                 serde_json::json!({"type":"assistant","message":{"model":"m","content":[{"type":"tool_use","id":format!("t{n}"),"name":"Bash","input":{"command":"echo hola"}}]}}),
@@ -378,9 +545,9 @@ mod tests {
         }
         let started = std::time::Instant::now();
         let t = parse(&text);
-        assert_eq!(t.items.len(), n);
+        assert_eq!(it(&t).len(), n);
         assert!(matches!(
-            &t.items[n - 1],
+            &it(&t)[n - 1],
             Item::Tool {
                 state: ToolState::Ok,
                 ..
@@ -412,17 +579,100 @@ mod tests {
                 line(serde_json::json!({"type":"permission-mode","permissionMode":"plan"})),
             )
             .unwrap();
-            let t = read(Path::new(cwd), Some(&env), "abc").unwrap_or_else(|| panic!("{folder}"));
-            assert_eq!(t.mode, Some(Mode::Plan));
+            let t = Source::open(Path::new(cwd), Some(&env), "abc")
+                .unwrap_or_else(|| panic!("{folder}"));
+            assert_eq!(t.parser.mode, Some(Mode::Plan));
             std::fs::remove_dir_all(config.join("projects")).unwrap();
         }
         let _ = std::fs::remove_dir_all(config);
     }
 
     #[test]
+    fn a_line_has_the_time_it_was_written_at_and_one_without_is_as_late_as_the_last() {
+        assert_eq!(iso_ms("2026-10-13T19:52:42.093Z"), Some(1_791_921_162_093));
+        assert_eq!(iso_ms("2026-10-13T19:52:42Z"), Some(1_791_921_162_000));
+        assert_eq!(iso_ms("1970-01-01T00:00:00.5Z"), Some(500));
+        assert_eq!(iso_ms("not a time"), None);
+        let t = parse(
+            &[
+                line(serde_json::json!({"type":"user","timestamp":"2026-10-13T19:52:42.093Z","message":{"role":"user","content":"uno"}})),
+                line(serde_json::json!({"type":"assistant","message":{"model":"m","content":[{"type":"text","text":"dos"}]}})),
+            ]
+            .concat(),
+        );
+        assert_eq!(
+            t.items.iter().map(|i| i.at).collect::<Vec<_>>(),
+            [1_791_921_162_093; 2]
+        );
+    }
+
+    fn temp(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("jwn-source-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("s.jsonl")
+    }
+
+    fn say(who: &str, text: &str) -> String {
+        line(
+            serde_json::json!({"type":who,"timestamp":"2026-10-13T19:52:42.093Z","message":{"role":who,"content":[{"type":"text","text":text}],"model":"m"}}),
+        )
+    }
+
+    /// REQ-545: what is added to the transcript is read when it is whole, and only that.
+    #[test]
+    fn what_is_added_to_a_transcript_is_read_when_the_line_is_whole() {
+        let path = temp("grow");
+        std::fs::write(&path, say("assistant", "uno")).unwrap();
+        let mut src = Source::load(path.clone()).unwrap();
+        assert_eq!(src.parser.items.len(), 1);
+        assert!(!src.poll(), "nothing was added");
+        // A line that is being written is left until it ends.
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        let next = say("assistant", "dos");
+        std::io::Write::write_all(&mut file, &next.as_bytes()[..20]).unwrap();
+        assert!(!src.poll() && src.parser.items.len() == 1);
+        std::io::Write::write_all(&mut file, &next.as_bytes()[20..]).unwrap();
+        assert!(src.poll());
+        assert_eq!(src.parser.items.len(), 2);
+        assert!(matches!(&src.parser.items[1].item, Item::Text { text, .. } if text == "dos"));
+        // A file that was written again from the start is read again.
+        std::fs::write(&path, say("assistant", "otra")).unwrap();
+        assert!(src.poll());
+        assert_eq!(src.parser.items.len(), 1);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn a_transcript_with_few_messages_in_much_text_is_read_further_back_until_the_node_has_its_items()
+     {
+        let path = temp("window");
+        // 100 messages, 5 MiB of lines that say nothing, 100 more: the first window of 4 MiB holds
+        // only the last hundred, which are fewer than a node keeps, so the read goes further back.
+        let said = |from: usize| -> String {
+            (from..from + 100)
+                .map(|i| say("assistant", &format!("m{i}")))
+                .collect()
+        };
+        let filler =
+            line(serde_json::json!({"type":"api-request","blob":"x".repeat(1 << 20)})).repeat(5);
+        std::fs::write(&path, said(0) + &filler + &said(100)).unwrap();
+        let src = Source::load(path.clone()).unwrap();
+        assert_eq!(src.parser.items.len(), 200);
+        assert!(matches!(&src.parser.items[0].item, Item::Text { text, .. } if text == "m0"));
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
     fn a_session_id_cannot_name_a_file_outside_the_folder_of_transcripts() {
         for bad in ["", "../x", "a/b", "a\\b", "..", "x.jsonl"] {
-            assert!(read(Path::new("/tmp"), None, bad).is_none(), "{bad:?}");
+            assert!(
+                Source::open(Path::new("/tmp"), None, bad).is_none(),
+                "{bad:?}"
+            );
         }
     }
 }

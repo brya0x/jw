@@ -1320,6 +1320,167 @@ fn resuming_a_session_of_claudes_own_brings_what_was_said_and_the_state_it_ended
     r.stop();
 }
 
+/// A transcript of Claude's own for the folder of the rig's pane, and the environment that finds it.
+fn old_session(r: &Rig, lines: &[&str]) -> (PathBuf, BTreeMap<String, String>) {
+    let here = std::fs::canonicalize(&r.sb.dir).unwrap();
+    let proj = here.join("proj");
+    let config = here.join("claude-config");
+    let encoded: String = proj
+        .to_string_lossy()
+        .chars()
+        .map(|c| if c == '/' || c == '.' { '-' } else { c })
+        .collect();
+    let dir = config.join("projects").join(encoded);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("old-session.jsonl");
+    std::fs::write(&file, lines.join("\n") + "\n").unwrap();
+    let env = [
+        (
+            "PATH".to_owned(),
+            format!(
+                "{}:{}",
+                here.join("bin").display(),
+                std::env::var("PATH").unwrap()
+            ),
+        ),
+        ("FAKE_LOG".to_owned(), r.log.to_string_lossy().into_owned()),
+        ("PWD".to_owned(), proj.to_string_lossy().into_owned()),
+        (
+            "CLAUDE_CONFIG_DIR".to_owned(),
+            config.to_string_lossy().into_owned(),
+        ),
+    ]
+    .into();
+    (file, env)
+}
+
+const FIRST: &str = r#"{"type":"user","timestamp":"2026-10-13T19:00:00.000Z","message":{"role":"user","content":"hola"}}"#;
+const REPLY: &str = r#"{"type":"assistant","timestamp":"2026-10-13T19:00:01.000Z","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"buenas"}]}}"#;
+
+/// REQ-545: while the conversation has no engine of its own, what another `claude` writes to the
+/// session shows in it.
+#[test]
+fn a_session_another_claude_is_writing_is_followed_while_the_conversation_has_no_engine() {
+    let mut r = rig();
+    let (file, env) = old_session(&r, &[FIRST, REPLY]);
+    let (node, _) = r.open_with(None, vec!["--resume", "old-session"], Some(env));
+    let v = r.conv(&node);
+    assert_eq!(items(&v, "text").len(), 1, "{v}");
+    let mut open = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&file)
+        .unwrap();
+    use std::io::Write;
+    writeln!(open, r#"{{"type":"assistant","timestamp":"2026-10-13T19:00:09.000Z","message":{{"model":"claude-opus-5-5","content":[{{"type":"text","text":"desde otro claude"}}]}}}}"#).unwrap();
+    writeln!(
+        open,
+        r#"{{"type":"permission-mode","permissionMode":"plan"}}"#
+    )
+    .unwrap();
+    let v = r.until(&node, "the line another claude wrote", |v| {
+        items(v, "text")
+            .iter()
+            .any(|t| t["text"] == "desde otro claude")
+    });
+    // The note of the resume is jwn's own: it was made later than the lines, and stays after them.
+    let kinds: Vec<&str> = v["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["t"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["user", "text", "text", "divider"], "{v}");
+    assert_eq!(v["mode"], "plan", "the mode it ends with follows too");
+    r.stop();
+}
+
+/// REQ-544: what is jwn's own is saved beside the transcript, with its time, and the chat is not
+/// copied: it is read again from the transcript when the daemon comes back.
+#[test]
+fn what_is_jwns_own_is_kept_beside_the_transcript_and_the_chat_is_not_copied() {
+    let sb = Sandbox::new();
+    let mut r = rig_with(sb, Vec::new());
+    let (_file, env) = old_session(&r, &[FIRST, REPLY]);
+    let (node, session) = r.open_with(None, vec!["--resume", "old-session"], Some(env.clone()));
+    r.send(&node, "/cost");
+    r.until(&node, "the answer to /cost", |v| {
+        !items(v, "out").is_empty()
+    });
+    let (dir, log) = (r.sb.dir.clone(), r.log.clone());
+    let config = r.sb.config();
+    r.daemon.take().unwrap().stop();
+    std::mem::forget(r.sb);
+    let saved = std::fs::read_dir(dir.join("state/conversations"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let saved: Value = serde_json::from_str(&std::fs::read_to_string(saved).unwrap()).unwrap();
+    assert_eq!(
+        saved["items"].as_array().map(Vec::len),
+        Some(0),
+        "the chat is not copied: {saved}"
+    );
+    let kept: Vec<&str> = saved["kept"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|k| k["item"]["t"].as_str().unwrap())
+        .collect();
+    assert!(
+        kept.contains(&"out") && kept.contains(&"divider"),
+        "{kept:?}"
+    );
+
+    let daemon = Daemon::start(Config {
+        env: vec![
+            (
+                "PATH".into(),
+                format!(
+                    "{}:{}",
+                    dir.join("bin").display(),
+                    std::env::var("PATH").unwrap()
+                ),
+            ),
+            ("FAKE_LOG".into(), log.to_string_lossy().into_owned()),
+        ],
+        ..config.clone()
+    })
+    .unwrap();
+    let mut c = Client::connect(&config.socket, "test").unwrap();
+    let node2 = c
+        .cmd(Cmd::OpenConversation {
+            pane: r.pane.clone(),
+            resume: Some(session),
+            args: Vec::new(),
+            env: Some(env),
+        })
+        .unwrap()
+        .unwrap()
+        .unwrap()["node"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    c.open(&node2).unwrap();
+    wait_for("the node", || {
+        c.poll(Duration::from_millis(20)).is_ok() && c.nodes.contains_key(&node2)
+    });
+    let v = c.nodes[&node2].clone();
+    let kinds: Vec<&str> = v["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["t"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        kinds,
+        ["user", "text", "divider", "out", "divider"],
+        "the lines of the transcript, then what is jwn's: {v}"
+    );
+    daemon.stop();
+}
+
 #[test]
 fn a_command_the_engine_does_not_serve_is_refused_so_the_original_runs() {
     let mut r = rig();
