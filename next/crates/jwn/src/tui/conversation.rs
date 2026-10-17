@@ -16,6 +16,7 @@ use contract::conversation::{
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::field::{self, Field, Look};
+use super::fold;
 use super::panels::{self, Panel, RowAct};
 use super::{Grid, Rgb, Style, clip, look, select};
 use crate::claude::tools_word;
@@ -371,6 +372,8 @@ pub struct Ui {
     /// The item picked (its number from the start of the conversation) and the items opened.
     picked: Option<u32>,
     open: HashSet<u32>,
+    /// The runs of tools that are opened, by the number of their first item (REQ-558).
+    unfolded: HashSet<u32>,
     /// The option of the question that is lit.
     ask_at: usize,
     pop: Option<Pop>,
@@ -423,6 +426,8 @@ struct Line {
     lead: usize,
     /// The row goes on from the one above it, which the width broke: copied, they are one line.
     soft: bool,
+    /// The row says a run of tools folded (REQ-558): a click opens or closes it.
+    fold: bool,
 }
 
 /// What a button let go of comes to.
@@ -692,31 +697,40 @@ impl Ui {
     /// Lines of the list, from the oldest, `w` columns wide.
     fn lines(&self, conv: &Conversation, w: usize) -> Vec<Line> {
         let mut out = Vec::new();
-        for (i, item) in conv.items.iter().enumerate() {
+        let runs = fold::runs(&conv.items);
+        let mut i = 0;
+        while i < conv.items.len() {
             let abs = conv.first + i as u32;
             let before = out.len();
-            self.item_lines(conv, item, abs, w, &mut out);
-            let grouped = i > 0
-                && matches!(
-                    item,
-                    Item::Tool { .. } | Item::Agent { .. } | Item::Note { .. }
-                )
-                && matches!(
-                    conv.items[i - 1],
-                    Item::Tool { .. } | Item::Agent { .. } | Item::Note { .. }
-                );
-            if before > 0 && !grouped && out.len() > before {
-                out.insert(
-                    before,
-                    Line {
-                        spans: vec![],
-                        bg: None,
-                        item: abs,
-                        lead: 0,
-                        soft: false,
-                    },
-                );
+            if let Some(run) = runs.iter().find(|r| r.first == i) {
+                let open = self.unfolded.contains(&abs);
+                out.push(Line {
+                    spans: vec![
+                        (
+                            format!("  {} ", if open { "▾" } else { "▸" }),
+                            Style::fg(look::dim()),
+                        ),
+                        (run.title.clone(), Style::fg(look::dim())),
+                    ],
+                    bg: None,
+                    item: abs,
+                    lead: 4,
+                    soft: false,
+                    fold: true,
+                });
+                self.separate(conv, i, before, &mut out);
+                if open {
+                    for k in run.first..=run.last {
+                        let at = conv.first + k as u32;
+                        self.item_lines(conv, &conv.items[k], at, w, &mut out);
+                    }
+                }
+                i = run.last + 1;
+                continue;
             }
+            self.item_lines(conv, &conv.items[i], abs, w, &mut out);
+            self.separate(conv, i, before, &mut out);
+            i += 1;
         }
         // What waits for the turn that runs comes after what was said, as a message not sent yet.
         let end = conv.first + conv.items.len() as u32;
@@ -728,6 +742,7 @@ impl Ui {
                 item: end,
                 lead: 0,
                 soft: false,
+                fold: false,
             });
             for (k, (continues, row)) in wrap(text, w.saturating_sub(2), dim, dim)
                 .into_iter()
@@ -742,10 +757,41 @@ impl Ui {
                     item: end,
                     lead: 2,
                     soft: continues,
+                    fold: false,
                 });
             }
         }
         out
+    }
+
+    /// A blank row before what was drawn from `before` on, unless it goes on from a tool, an agent or
+    /// a note that the one above it is too (`i` is the item, or the first of a run).
+    fn separate(&self, conv: &Conversation, i: usize, before: usize, out: &mut Vec<Line>) {
+        let Some(item) = conv.items.get(i) else {
+            return;
+        };
+        let grouped = i > 0
+            && matches!(
+                item,
+                Item::Tool { .. } | Item::Agent { .. } | Item::Note { .. }
+            )
+            && matches!(
+                conv.items[i - 1],
+                Item::Tool { .. } | Item::Agent { .. } | Item::Note { .. }
+            );
+        if before > 0 && !grouped && out.len() > before {
+            out.insert(
+                before,
+                Line {
+                    spans: vec![],
+                    bg: None,
+                    item: conv.first + i as u32,
+                    lead: 0,
+                    soft: false,
+                    fold: false,
+                },
+            );
+        }
     }
 
     fn item_lines(
@@ -772,6 +818,7 @@ impl Ui {
                 item: abs,
                 lead,
                 soft: soft.replace(false),
+                fold: false,
             });
         };
         let open = self.open.contains(&abs);
@@ -1947,12 +1994,30 @@ impl Ui {
     /// The item before or after the one picked.
     fn step_item(&mut self, conv: &Conversation, item: u32, down: bool) {
         let last = conv.first + conv.items.len() as u32;
-        let next = if down {
-            (item + 1).min(last.saturating_sub(1))
-        } else {
-            item.saturating_sub(1).max(conv.first)
-        };
+        let mut next = item;
+        loop {
+            let stepped = if down {
+                (next + 1).min(last.saturating_sub(1))
+            } else {
+                next.saturating_sub(1).max(conv.first)
+            };
+            // An item inside a run that is folded has no row to be picked at.
+            if stepped == next || !self.hidden(conv, stepped) {
+                next = stepped;
+                break;
+            }
+            next = stepped;
+        }
         self.picked = Some(next);
+    }
+
+    /// Whether an item is in a run of tools that is folded, so no row of its own is drawn.
+    fn hidden(&self, conv: &Conversation, abs: u32) -> bool {
+        let at = abs.wrapping_sub(conv.first) as usize;
+        fold::runs(&conv.items).iter().any(|r| {
+            (r.first..=r.last).contains(&at)
+                && !self.unfolded.contains(&(conv.first + r.first as u32))
+        })
     }
 
     /// `^O`: open or close the output of the item picked, or of the last tool or agent.
@@ -1968,9 +2033,20 @@ impl Ui {
                 })
                 .map(|i| conv.first + i as u32)
         });
-        if let Some(t) = target
-            && !self.open.remove(&t)
+        let Some(t) = target else {
+            return;
+        };
+        // What is in a run that is folded opens by opening the run: the output comes after (REQ-558).
+        let at = t.wrapping_sub(conv.first) as usize;
+        if let Some(run) = fold::runs(&conv.items)
+            .iter()
+            .find(|r| (r.first..=r.last).contains(&at))
+            .filter(|r| !self.unfolded.contains(&(conv.first + r.first as u32)))
         {
+            self.unfolded.insert(conv.first + run.first as u32);
+            return;
+        }
+        if !self.open.remove(&t) {
             self.open.insert(t);
         }
     }
@@ -2277,10 +2353,15 @@ impl Ui {
             let most = lines.len().saturating_sub(lh);
             let start = most - self.scroll.min(most);
             let top = ly + lh.saturating_sub(lines.len());
-            let hit = y
-                .checked_sub(top)
-                .and_then(|r| lines.get(start + r))
-                .map(|l| l.item);
+            let line = y.checked_sub(top).and_then(|r| lines.get(start + r));
+            // A row that says a run of tools opens or closes it, and picks nothing (REQ-558).
+            if let Some(l) = line.filter(|l| l.fold) {
+                if !self.unfolded.remove(&l.item) {
+                    self.unfolded.insert(l.item);
+                }
+                return None;
+            }
+            let hit = line.map(|l| l.item);
             // A message that waits is not an item: there is nothing of it to pick or copy.
             let hit = hit.filter(|i| ((i - conv.first) as usize) < conv.items.len());
             self.picked = hit;
@@ -2843,6 +2924,15 @@ mod tests {
         (g, rows)
     }
 
+    /// A `Ui` with every run of tools open, to see the tools one by one.
+    fn unfolded(conv: &Conversation) -> Ui {
+        let mut ui = Ui::default();
+        for run in fold::runs(&conv.items) {
+            ui.unfolded.insert(conv.first + run.first as u32);
+        }
+        ui
+    }
+
     fn row_of(rows: &[String], text: &str) -> usize {
         rows.iter()
             .position(|r| r.contains(text))
@@ -2862,7 +2952,7 @@ mod tests {
     #[test]
     fn each_item_is_drawn_as_the_prototype_has_it() {
         let conv = idle();
-        let (_, rows) = frame(&Ui::default(), &conv);
+        let (_, rows) = frame(&unfolded(&conv), &conv);
         for text in [
             "❯ arregla el test que falla en auth::expired",
             "▣ 1 imagen(es)",
@@ -2940,7 +3030,7 @@ mod tests {
             })
             .collect();
         conv.first = 0;
-        let (g, rows) = frame(&Ui::default(), &conv);
+        let (g, rows) = frame(&unfolded(&conv), &conv);
         let dot = |arg: &str| {
             let y = row_of(&rows, &format!("Bash({arg})"));
             g.cells[y * g.cols + 4].1.fg
@@ -3476,6 +3566,10 @@ mod tests {
     fn a_click_on_a_tool_opens_its_output_and_ctrl_o_does_too() {
         let conv = idle();
         let mut ui = Ui::default();
+        let (_, rows) = frame(&ui, &conv);
+        // The tool is in a run that is folded: the row of the run opens it first (REQ-558).
+        let fold_row = row_of(&rows, "▸ Leyó 1 archivo");
+        ui.click(&conv, INNER, 10, fold_row);
         let (_, rows) = frame(&ui, &conv);
         let y = row_of(&rows, "● Read(src/auth.rs)");
         ui.click(&conv, INNER, 10, y);
@@ -4356,5 +4450,64 @@ mod tests {
         ui.draw(&mut g, &conv, (1, 1, 10, 4), &[], true, 0);
         assert!(g.rows_plain().iter().all(String::is_empty));
         assert_eq!(ui.click(&conv, (1, 1, 10, 4), 3, 3), None);
+    }
+
+    /// REQ-558: consecutive tools are one row, and a click on it opens the tools one by one.
+    #[test]
+    fn consecutive_tools_are_one_row_that_a_click_opens_and_closes() {
+        let mut conv = idle();
+        let tool = |id: &str, name: &str, arg: &str, state: &str| -> Item {
+            serde_json::from_value(serde_json::json!({
+                "t": "tool", "id": id, "name": name, "arg": arg, "state": state
+            }))
+            .unwrap()
+        };
+        conv.items = vec![
+            Item::Text {
+                text: "Voy a mirar.".into(),
+                live: false,
+            },
+            tool("a", "Grep", "verify", "ok"),
+            tool("b", "Bash", "cargo test", "ok"),
+            tool("c", "Bash", "git status", "failed"),
+            tool("d", "Edit", "src/a.rs", "ok"),
+            tool("e", "Bash", "sleep 9", "run"),
+        ];
+        conv.first = 0;
+        let mut ui = Ui::default();
+        let (_, rows) = frame(&ui, &conv);
+        let at = row_of(&rows, "▸ Buscó 1 patrón, ejecutó 2 comandos");
+        assert!(
+            !rows.iter().any(|r| r.contains("Bash(cargo test)")),
+            "folded: no row of its own"
+        );
+        row_of(&rows, "● Edit(src/a.rs)");
+        row_of(&rows, "● Bash(sleep 9)");
+        assert!(ui.click(&conv, INNER, 10, at).is_none());
+        assert_eq!(ui.picked, None, "a row of a run picks nothing");
+        let (_, rows) = frame(&ui, &conv);
+        row_of(&rows, "▾ Buscó 1 patrón, ejecutó 2 comandos");
+        row_of(&rows, "● Grep(verify)");
+        row_of(&rows, "● Bash(git status)");
+        let at = row_of(&rows, "▾ Buscó");
+        ui.click(&conv, INNER, 10, at);
+        let (_, rows) = frame(&ui, &conv);
+        row_of(&rows, "▸ Buscó");
+        // ^O on a tool that is folded opens the run: the last tool is in it.
+        let ctrl_o = KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL);
+        let mut short = conv.clone();
+        short.items.truncate(3);
+        let mut ui2 = Ui::default();
+        ui2.key(&short, &ctrl_o);
+        let (_, rows) = frame(&ui2, &short);
+        row_of(&rows, "● Bash(cargo test)");
+        // The arrows skip what has no row.
+        ui.unfolded.clear();
+        ui.step_item(&conv, 0, true);
+        assert_eq!(
+            ui.picked,
+            Some(4),
+            "from the text to the edit: the folded tools have no row"
+        );
     }
 }

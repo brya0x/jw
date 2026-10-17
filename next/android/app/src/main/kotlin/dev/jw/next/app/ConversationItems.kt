@@ -16,7 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -41,7 +41,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.jw.next.client.answeredNote
 import dev.jw.next.client.convKilo
+import dev.jw.next.client.FoldRow
 import dev.jw.next.client.convDone
+import dev.jw.next.client.foldRows
 import dev.jw.next.client.convSecs
 import dev.jw.next.client.convTools
 import dev.jw.next.client.char
@@ -80,19 +82,37 @@ internal fun ConversationItems(
     accent: Color,
     picked: Int?,
     opened: Set<Int>,
+    unfolded: Set<Int>,
     state: LazyListState,
     modifier: Modifier,
+    toggleFold: (Int) -> Unit,
     pick: (Int) -> Unit,
 ) {
     val running = items.any { (it is ConvItem.Tool && it.state == ToolState.Run) || (it is ConvItem.Agent && it.state == ToolState.Run) || (it is ConvItem.Shell && it.state == ToolState.Run) }
     val spin = spinner(running)
     // Reversed, so the newest is at the bottom and stays there as it grows.
+    // The tools of a run are one row (REQ-558); the key of a run is below zero, so it is not that of an item.
+    val rows = foldRows(items, unfolded).asReversed()
     LazyColumn(modifier, state = state, reverseLayout = true, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        val last = items.lastIndex
-        itemsIndexed(items.asReversed(), key = { i, _ -> last - i }) { r, item ->
-            val i = last - r
-            ItemView(item, accent, spin, picked == i, i in opened) { pick(i) }
+        items(rows, key = { if (it is FoldRow.Item) it.index else -1 - (it as FoldRow.Run).run.first }) { row ->
+            when (row) {
+                is FoldRow.Item -> ItemView(items[row.index], accent, spin, picked == row.index, row.index in opened) { pick(row.index) }
+                is FoldRow.Run -> FoldView(row) { toggleFold(row.run.first) }
+            }
         }
+    }
+}
+
+/** The row of a run of tools: what they did, and a tap opens or closes it (REQ-558). */
+@Composable
+private fun FoldView(row: FoldRow.Run, click: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().defaultMinSize(minHeight = 48.dp).clickable(onClick = click).padding(horizontal = Pad),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Mono(if (row.open) "▾" else "▸", Palette.dim, 12)
+        Mono(row.run.title, Palette.dim, 12)
     }
 }
 

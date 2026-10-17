@@ -28,6 +28,7 @@ mod clip;
 mod conversation;
 mod diff_lines;
 mod field;
+mod fold;
 mod look;
 mod manage;
 mod markdown;
@@ -8383,7 +8384,7 @@ mod tests {
             screen.contains("claude · arregla el test que falla e…"),
             "{screen}"
         );
-        assert!(screen.contains("● Read(src/auth.rs)"), "{screen}");
+        assert!(screen.contains("▸ Leyó 1 archivo"), "{screen}");
         assert!(screen.contains("permiso · Edit"), "{screen}");
         assert!(v.wants().is_empty());
     }

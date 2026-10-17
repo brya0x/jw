@@ -131,6 +131,8 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
     var retaking by remember(nodeId) { mutableStateOf(false) }
     var picked by remember(nodeId) { mutableStateOf<Int?>(null) }
     var opened by remember(nodeId) { mutableStateOf(setOf<Int>()) }
+    // The runs of tools that are open, by the number of their first item (REQ-558).
+    var unfolded by remember(nodeId) { mutableStateOf(setOf<Int>()) }
     var open by remember(nodeId) { mutableStateOf<Open?>(null) }
     var notice by remember(nodeId) { mutableStateOf<Notice?>(null) }
     var answering by remember(nodeId) { mutableStateOf(false) }
@@ -271,8 +273,13 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
         accent = accent,
         picked = picked?.minus(firstItem),
         opened = opened.map { it - firstItem }.toSet(),
+        unfolded = unfolded.map { it - firstItem }.toSet(),
         state = rememberLazyListState(),
         modifier = Modifier.weight(1f).fillMaxWidth().padding(vertical = 8.dp),
+        toggleFold = { first ->
+            val n = firstItem + first
+            unfolded = if (n in unfolded) unfolded - n else unfolded + n
+        },
     ) { i ->
         val abs = firstItem + i
         picked = abs
