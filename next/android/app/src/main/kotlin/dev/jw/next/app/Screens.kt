@@ -59,12 +59,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.jw.next.client.Aviso
@@ -483,7 +479,7 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
                 if (pane == null || waitingBlocks) PaneSkeleton()
                 else if (booting != null) Booting(programName(booting.cmd))
                 else Text(
-                    terminalText(pane.screen.lines, pane.screen.cursor.row, pane.screen.cursor.col, pane.screen.cursor.visible),
+                    screenText(pane.screen),
                     fontFamily = MonoFont, fontSize = 12.sp, lineHeight = 18.sp, color = Palette.fg, softWrap = false,
                 )
             }
@@ -699,21 +695,6 @@ private fun Composer(
                 GlyphIcon(Glyph.Send, if (enabled) Palette.blue else Palette.dim)
             }
         }
-    }
-}
-
-/** The screen's lines with the cursor cell drawn as a block, as a terminal would. */
-private fun terminalText(lines: List<String>, row: Int, col: Int, visible: Boolean): AnnotatedString = buildAnnotatedString {
-    lines.forEachIndexed { i, line ->
-        if (visible && i == row) {
-            val padded = line.padEnd(col + 1)
-            append(padded.substring(0, col))
-            withStyle(SpanStyle(background = Palette.fg, color = Palette.bg)) { append(padded[col]) }
-            append(padded.substring(col + 1))
-        } else {
-            append(line)
-        }
-        if (i < lines.lastIndex) append('\n')
     }
 }
 

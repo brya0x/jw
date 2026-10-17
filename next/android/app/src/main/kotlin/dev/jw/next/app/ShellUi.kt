@@ -42,10 +42,12 @@ import dev.jw.next.client.BlockState
 import dev.jw.next.client.SpanColor
 import dev.jw.next.client.shortPath
 import dev.jw.next.client.spanColor
+import dev.jw.next.client.styledRows
 import dev.jw.next.client.state
 import dev.jw.next.client.restartLabel
 import dev.jw.next.client.timeLabel
 import dev.jw.next.contract.Block
+import dev.jw.next.contract.Screen
 import dev.jw.next.contract.Span
 import kotlinx.coroutines.delay
 
@@ -66,19 +68,32 @@ private fun SpanColor.color(): Color = when (this) {
     }
 }
 
+private fun Span.style(base: Color) = SpanStyle(
+    color = fg?.spanColor()?.color() ?: base,
+    background = bg?.spanColor()?.color() ?: Color.Unspecified,
+    fontWeight = if (b) FontWeight.Bold else null,
+    fontStyle = if (i) FontStyle.Italic else null,
+    textDecoration = if (u) TextDecoration.Underline else null,
+)
+
 /** A block's output rows as styled text; [base] colours what the spans leave unset. */
 private fun output(rows: List<List<Span>>, base: Color): AnnotatedString = buildAnnotatedString {
     rows.forEachIndexed { i, row ->
-        row.forEach { s ->
-            withStyle(
-                SpanStyle(
-                    color = s.fg?.spanColor()?.color() ?: base,
-                    background = s.bg?.spanColor()?.color() ?: Color.Unspecified,
-                    fontWeight = if (s.b) FontWeight.Bold else null,
-                    fontStyle = if (s.i) FontStyle.Italic else null,
-                    textDecoration = if (s.u) TextDecoration.Underline else null,
-                ),
-            ) { append(s.t) }
+        row.forEach { s -> withStyle(s.style(base)) { append(s.t) } }
+        if (i < rows.lastIndex) append('\n')
+    }
+}
+
+/** A pane's screen with its colours and the cursor cell drawn as a block, as a terminal would. */
+internal fun screenText(screen: Screen): AnnotatedString = buildAnnotatedString {
+    val cursor = screen.cursor
+    val rows = screen.styledRows()
+    rows.forEachIndexed { i, row ->
+        val start = length
+        row.forEach { s -> withStyle(s.style(Palette.fg)) { append(s.t) } }
+        if (screen.cursor.visible && i == cursor.row) {
+            if (length - start <= cursor.col) append(" ".repeat(cursor.col + 1 - (length - start)))
+            addStyle(SpanStyle(background = Palette.fg, color = Palette.bg), start + cursor.col, start + cursor.col + 1)
         }
         if (i < rows.lastIndex) append('\n')
     }

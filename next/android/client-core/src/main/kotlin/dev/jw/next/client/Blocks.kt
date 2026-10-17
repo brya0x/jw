@@ -1,6 +1,8 @@
 package dev.jw.next.client
 
 import dev.jw.next.contract.Block
+import dev.jw.next.contract.Screen
+import dev.jw.next.contract.Span
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.intOrNull
 
@@ -28,6 +30,9 @@ fun Block.restartLabel(nowMs: Long): String = "el daemon se reinició · ${ago(n
 
 /** What a block printed, as text (the "Salida" action). */
 fun Block.outputText(): String = out.joinToString("\n") { row -> row.joinToString("") { it.t } }
+
+/** The rows of a pane's screen to draw: its colours while it has them (REQ-527), else each line as plain text. */
+fun Screen.styledRows(): List<List<Span>> = spans.ifEmpty { lines.map { listOf(Span(it)) } }
 
 /** The last two folders of a path, so it fits a block's header. */
 fun shortPath(path: String): String {
