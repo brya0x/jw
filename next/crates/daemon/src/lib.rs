@@ -41,4 +41,6 @@ pub use launch::agent_name;
 pub use mobile::{LinkConfig, devices_file};
 /// Where the personal settings of a repository or a folder are (REQ-483), for what has to say it.
 pub use project::personal_file;
+/// The conversations saved for a folder, newest first: what `/resume` lists.
+pub use saved::saved_conversations;
 pub use server::{Config, Daemon};

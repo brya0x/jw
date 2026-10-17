@@ -20,9 +20,27 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal;
 use wire::Client;
 
+mod pick;
+
 pub fn run(args: &[&str]) -> ExitCode {
-    let argv: Vec<String> = args.iter().map(|s| (*s).to_owned()).collect();
+    let typed: Vec<String> = args.iter().map(|s| (*s).to_owned()).collect();
+    let mut argv = typed.clone();
     let tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    // `claude --resume` with no session, or with a search term, is a choice among the conversations
+    // of the folder; it is made here and the conversation is opened with the one chosen (REQ-547).
+    if tty
+        && std::env::var_os(identity::env_var("PANE_ID")).is_some()
+        && let Some(term) = pick::take_search(&mut argv)
+    {
+        match pick::choose(term.as_deref()) {
+            Ok(Some(id)) => argv.extend(["--resume".to_owned(), id]),
+            Ok(None) => return ExitCode::SUCCESS,
+            Err(why) => {
+                eprintln!("{} claude: {why}; running claude", identity::get().name);
+                return original(&typed);
+            }
+        }
+    }
     if let Some(pane) = std::env::var(identity::env_var("PANE_ID"))
         .ok()
         .filter(|_| tty && daemon::conversation_served(&argv))
