@@ -79,6 +79,7 @@ import dev.jw.next.client.tag
 import dev.jw.next.client.tasksPanel
 import dev.jw.next.client.turnText
 import dev.jw.next.client.word
+import dev.jw.next.client.followedWork
 import dev.jw.next.client.workLine
 import dev.jw.next.client.working
 import dev.jw.next.contract.CommandKind
@@ -148,7 +149,8 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
     LaunchedEffect(node.status) { if (node.status != ConvStatus.Dead && node.status != ConvStatus.Resuming) retaking = false }
     LaunchedEffect(settingsAsked) { if (settingsAsked > 0) open = Open.Settings }
     val working = node.working(retaking)
-    LaunchedEffect(working, open) { while (working || open is Open.Panel) { now = System.currentTimeMillis(); delay(1000) } }
+    val followed = node.followedWork(retaking)
+    LaunchedEffect(working, followed, open) { while (working || followed || open is Open.Panel) { now = System.currentTimeMillis(); delay(1000) } }
     LaunchedEffect(notice) { if (notice != null) { delay(3500); notice = null } }
     LaunchedEffect(node.ask?.id) { answering = false }
 

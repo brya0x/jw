@@ -44,6 +44,10 @@ pub struct Conversation {
     /// The tools that run, and when each began (REQ-562): a client counts the time itself.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub running: Vec<Running>,
+    /// When the turn began that another `claude` is running in the transcript this conversation
+    /// follows, while its lines say one is open (REQ-565).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub following: Option<u64>,
     /// What Claude has written in the turn that runs, in tokens; 0 when the engine has not said
     /// (REQ-563).
     #[serde(default, skip_serializing_if = "is_zero_u64")]

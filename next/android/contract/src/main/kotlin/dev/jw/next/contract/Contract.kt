@@ -663,6 +663,8 @@ sealed interface Node {
         val limits: Limits? = null,
         /** The tools that run, and when each began (REQ-562). */
         val running: List<Running> = emptyList(),
+        /** When the turn began that another `claude` runs in the transcript this conversation follows (REQ-565). */
+        val following: Long? = null,
         /** What the turn that runs has written, in tokens; 0 when the engine has not said (REQ-563). */
         val tokens: Long = 0,
     ) : Node

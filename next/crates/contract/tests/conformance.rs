@@ -371,6 +371,26 @@ fn a_tool_that_runs_says_when_it_began_and_the_turn_how_many_tokens() {
     assert_eq!(back["tokens"], snap["node"]["tokens"]);
 }
 
+/// The conversation fixture of a followed turn says when it began, with its tool running and no
+/// turn of the conversation's own (REQ-565).
+#[test]
+fn a_followed_turn_says_when_it_began() {
+    let docs = fixtures("daemon");
+    let (_, snap) = docs
+        .iter()
+        .find(|(n, _)| n == "snapshot-conversation-following.json")
+        .expect("the fixture");
+    let conv: contract::conversation::Conversation =
+        serde_json::from_value(snap["node"].clone()).unwrap();
+    assert_eq!(conv.following, Some(1_792_110_000_000));
+    assert_eq!(conv.since, None);
+    assert_eq!(conv.running.len(), 1);
+    assert_eq!(
+        serde_json::to_value(&conv).unwrap()["following"],
+        snap["node"]["following"]
+    );
+}
+
 /// The result of `project_config` in the fixture is what `ProjectInfo` writes and reads.
 #[test]
 fn the_reply_of_project_config_is_a_project_info() {

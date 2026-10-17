@@ -67,6 +67,17 @@ class ConversationTest {
         assertNull(run.ranFor("t2", 1_792_110_012_000))
     }
 
+    /** A turn of another `claude` that is followed has a line of work with no way to stop it (REQ-565). */
+    @Test
+    fun aFollowedTurnShowsItsTimeAndTokensAndNoStop() {
+        val c = conversation().copy(status = ConvStatus.Dead, since = null, following = 1_792_110_000_000, tokens = 1250)
+        assertEquals("Pensando… (12 s · ↓ 1,3 k tokens)", c.workLine(false, 1_792_110_012_000))
+        assertEquals("Trabajando… (12 s · ↓ 1,3 k tokens)", c.copy(running = listOf(Running("t1", 1_792_110_003_000))).workLine(false, 1_792_110_012_000))
+        assertNull(c.copy(following = null).workLine(false, 1_792_110_012_000))
+        // a turn of the conversation's own engine is the one that is told
+        assertEquals("Pensando… (12 s · ■ interrumpe)", conversation().copy(status = ConvStatus.Thinking, following = 1_792_110_000_000, tokens = 0).workLine(false, 1_792_110_012_000))
+    }
+
     @Test
     fun theWorkingLineSaysWhatClaudeDoesForHowLongAndHowToStopIt() {
         val c = conversation()

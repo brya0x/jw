@@ -470,6 +470,7 @@
               "type": "array",
               "items": { "type": "object", "required": ["id", "since"], "properties": { "id": { "type": "string" }, "since": { "type": "integer", "minimum": 0 } } }
             },
+            "following": { "type": "integer", "minimum": 0, "description": "When the turn began that another claude runs in the transcript this conversation follows." },
             "tokens": { "type": "integer", "minimum": 1, "description": "What the turn that runs has written." }
           }
         }

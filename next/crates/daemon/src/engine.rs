@@ -1066,6 +1066,8 @@ pub fn follow_due(shared: &Shared) {
         if changed {
             c.st.follow(&src.parser);
             shown = true;
+        } else if c.st.expire_follow(crate::conversation::stamp()) {
+            shown = true;
         }
         c.source = Some(src);
     }

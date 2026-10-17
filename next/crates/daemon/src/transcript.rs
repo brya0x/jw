@@ -63,9 +63,58 @@ pub struct Parser {
     /// The messages typed while a turn ran, not taken in yet, oldest first, and whether each is
     /// the person's (a task's notice waits too, and is not shown).
     queue: Vec<(String, bool)>,
+    /// When the turn that is open began (the time of the person's message that began it): a turn
+    /// is open from that message until the line that ends it or an interruption (REQ-565).
+    turn: Option<u64>,
+    /// What the open turn has written, for each message of Claude, counted once by its id.
+    turn_tokens: std::collections::BTreeMap<String, u64>,
+    /// The tools of the open turn that wait for a result, in `items`.
+    open_tools: Vec<usize>,
 }
 
 impl Parser {
+    /// The start of the turn that is open, when the last lines say one is.
+    pub fn turn_since(&self) -> Option<u64> {
+        self.turn
+    }
+
+    /// What the open turn has written, in tokens.
+    pub fn turn_written(&self) -> u64 {
+        self.turn_tokens.values().sum()
+    }
+
+    /// The time of the last line that had one.
+    pub fn last_at(&self) -> u64 {
+        self.last_at
+    }
+
+    /// A turn begins with the person's message.
+    fn open_turn(&mut self) {
+        self.turn = (self.last_at > 0).then_some(self.last_at);
+        self.turn_tokens.clear();
+        self.open_tools.clear();
+        self.rev += 1;
+    }
+
+    /// The turn ends: a tool that never answered was interrupted.
+    fn close_turn(&mut self) {
+        if self.turn.take().is_none() {
+            return;
+        }
+        for at in self.open_tools.drain(..) {
+            if let Some(Stamped {
+                item: Item::Tool { state, summary, .. },
+                ..
+            }) = self.items.get_mut(at)
+                && *state == ToolState::Run
+            {
+                *state = ToolState::Failed;
+                *summary = Some("sin resultado".into());
+            }
+        }
+        self.rev += 1;
+    }
+
     /// Read lines of a transcript, each whole.
     pub fn feed(&mut self, text: &str) {
         for line in text.lines() {
@@ -99,6 +148,7 @@ impl Parser {
                 {
                     self.user(&entry)
                 }
+                "system" if self.own && entry["subtype"] == "turn_duration" => self.close_turn(),
                 "system" if self.own && entry["subtype"] != "compact_boundary" => {}
                 "system" if entry["subtype"] == "informational" => {
                     if let Some(text) = entry["content"].as_str().filter(|t| !t.trim().is_empty()) {
@@ -115,6 +165,7 @@ impl Parser {
                 "system" if entry["subtype"] == "turn_duration" => {
                     let ms = entry["durationMs"].as_u64().unwrap_or(0);
                     let tools = std::mem::take(&mut self.tools_in_turn);
+                    self.close_turn();
                     self.push(Item::Result { ms, tools, cost: 0 });
                 }
                 _ => {}
@@ -222,6 +273,17 @@ impl Parser {
             }
             return;
         }
+        if let (Some(id), Some(n)) = (
+            message["id"].as_str(),
+            message["usage"]["output_tokens"].as_u64(),
+        ) && self.turn.is_some()
+        {
+            let at = self.turn_tokens.entry(id.to_owned()).or_insert(0);
+            if n > *at {
+                *at = n;
+                self.rev += 1;
+            }
+        }
         if let Some(model) = message["model"].as_str().filter(|m| !m.is_empty())
             && self.model.as_deref() != Some(model)
         {
@@ -255,13 +317,22 @@ impl Parser {
                     let id = block["id"].as_str().unwrap_or("").to_owned();
                     self.tools_in_turn += 1;
                     self.tools.insert(id.clone(), self.items.len());
+                    // In an open turn a tool with no result yet runs; in one that ended, a tool
+                    // with none was interrupted.
+                    let runs = self.turn.is_some();
+                    if runs {
+                        self.open_tools.push(self.items.len());
+                    }
                     self.push(Item::Tool {
                         id,
                         name: name.to_owned(),
                         arg: tool_arg(name, &block["input"]),
-                        // Until its result is read: a tool with none was interrupted.
-                        state: ToolState::Failed,
-                        summary: Some("sin resultado".into()),
+                        state: if runs {
+                            ToolState::Run
+                        } else {
+                            ToolState::Failed
+                        },
+                        summary: (!runs).then(|| "sin resultado".to_owned()),
                         output: Vec::new(),
                         diff: edit_diff(name, &block["input"]),
                         url: None,
@@ -313,7 +384,11 @@ impl Parser {
                 || t.starts_with("<local-command-"))
         {
             // jwn's engine ran it and jwn made its own item of it.
+            if t.starts_with("[Request interrupted") {
+                self.close_turn();
+            }
         } else if t.starts_with("[Request interrupted") {
+            self.close_turn();
             self.note("Interrumpido".into(), Some(Tone::Warn));
         } else if t.starts_with("<task-notification") {
             // A background task ended: the line that says what it was.
@@ -325,6 +400,7 @@ impl Parser {
             let args = tag(t, "command-args").unwrap_or("").trim();
             if !name.is_empty() {
                 self.tools_in_turn = 0;
+                self.open_turn();
                 self.push(Item::User {
                     text: format!("{name} {args}").trim().to_owned(),
                     images: 0,
@@ -335,6 +411,7 @@ impl Parser {
         } else if is_the_persons(&text) || (t.is_empty() && images > 0) {
             self.unqueue(&text);
             self.tools_in_turn = 0;
+            self.open_turn();
             self.push(Item::User {
                 text: t.to_owned(),
                 images,
@@ -1223,5 +1300,77 @@ mod tests {
                 "{bad:?}"
             );
         }
+    }
+
+    fn turn_lines() -> Vec<String> {
+        vec![
+            line(
+                serde_json::json!({"type":"user","timestamp":"2026-10-17T11:55:00.000Z","message":{"role":"user","content":"corre los tests"}}),
+            ),
+            line(
+                serde_json::json!({"type":"assistant","timestamp":"2026-10-17T11:55:02.000Z","message":{"id":"m1","model":"claude-opus-5-5","usage":{"output_tokens":30},"content":[{"type":"text","text":"Voy."}]}}),
+            ),
+            line(
+                serde_json::json!({"type":"assistant","timestamp":"2026-10-17T11:55:03.000Z","message":{"id":"m1","model":"claude-opus-5-5","usage":{"output_tokens":30},"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"cargo test"}}]}}),
+            ),
+            line(
+                serde_json::json!({"type":"assistant","timestamp":"2026-10-17T11:55:04.000Z","message":{"id":"m2","model":"claude-opus-5-5","usage":{"output_tokens":12},"content":[{"type":"tool_use","id":"t2","name":"Read","input":{"file_path":"/a"}}]}}),
+            ),
+        ]
+    }
+
+    fn states(p: &Parser) -> Vec<(ToolState, Option<String>)> {
+        it(p)
+            .iter()
+            .filter_map(|i| match i {
+                Item::Tool { state, summary, .. } => Some((*state, summary.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_turn_that_is_open_runs_its_tools_and_counts_its_tokens_once_for_each_message() {
+        let mut p = Parser::default();
+        p.feed(&turn_lines().concat());
+        assert_eq!(p.turn_since(), iso_ms("2026-10-17T11:55:00.000Z"));
+        assert_eq!(p.turn_written(), 42, "m1 once, m2 once");
+        assert_eq!(states(&p), [(ToolState::Run, None), (ToolState::Run, None)]);
+        p.feed(&line(serde_json::json!({"type":"user","timestamp":"2026-10-17T11:55:09.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}})));
+        assert_eq!(states(&p)[0].0, ToolState::Ok);
+        assert_eq!(states(&p)[1].0, ToolState::Run);
+    }
+
+    #[test]
+    fn the_end_of_the_turn_or_an_interruption_closes_it_and_a_tool_without_result_was_interrupted()
+    {
+        for end in [
+            serde_json::json!({"type":"system","subtype":"turn_duration","timestamp":"2026-10-17T11:56:00.000Z","durationMs":60000}),
+            serde_json::json!({"type":"user","timestamp":"2026-10-17T11:56:00.000Z","message":{"role":"user","content":"[Request interrupted by user]"}}),
+            serde_json::json!({"type":"system","entrypoint":"sdk-cli","subtype":"turn_duration","timestamp":"2026-10-17T11:56:00.000Z","durationMs":60000}),
+        ] {
+            let mut p = Parser::default();
+            p.feed(&turn_lines().concat());
+            p.feed(&line(end));
+            assert_eq!(p.turn_since(), None);
+            assert_eq!(
+                states(&p),
+                [
+                    (ToolState::Failed, Some("sin resultado".into())),
+                    (ToolState::Failed, Some("sin resultado".into()))
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn a_tool_of_a_turn_that_is_not_open_has_no_result_and_was_interrupted() {
+        let mut p = Parser::default();
+        p.feed(&turn_lines()[2..].concat());
+        assert_eq!(p.turn_since(), None);
+        assert_eq!(
+            states(&p)[0],
+            (ToolState::Failed, Some("sin resultado".into()))
+        );
     }
 }

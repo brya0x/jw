@@ -239,6 +239,15 @@ class ConformanceTest {
         assertEquals(1250L, node.tokens)
     }
 
+    /** The conversation fixture of a followed turn says when it began and has its tool running (REQ-565). */
+    @Test
+    fun aFollowedTurnSaysWhenItBegan() {
+        val snapshot = fixtures("daemon").first { it.first == "snapshot-conversation-following.json" }.second
+        val node = (ContractJson.decodeFromJsonElement(DaemonMsg.serializer(), snapshot) as DaemonMsg.Snapshot).node as Node.Conversation
+        assertEquals(1_792_110_000_000L, node.following)
+        assertEquals(1, node.running.size)
+    }
+
     /** A finished text of the conversation fixture carries its Markdown blocks, a table among them (REQ-560). */
     @Test
     fun aFinishedTextCarriesItsMarkdownBlocks() {

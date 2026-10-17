@@ -466,6 +466,9 @@ pub struct State {
     turn_tokens: BTreeMap<String, u64>,
     /// The id of the message the engine is writing.
     msg_id: String,
+    /// The turn that another `claude` runs in the transcript this conversation follows, while the
+    /// lines say one is open (REQ-565).
+    followed: Option<Followed>,
     /// A conversation resumed by its id says so before the first message sent in it, and not
     /// while it is only followed (REQ-564).
     resume_divider: bool,
@@ -515,6 +518,20 @@ pub struct Saved {
 
 pub const SAVED_VERSION: u32 = 1;
 
+/// How long a turn that another `claude` runs may write nothing before it is taken as left
+/// behind (it crashed or was closed): a tool or a subagent can be silent for minutes, and the
+/// lines of a subagent count.
+const FOLLOW_SILENCE_MS: u64 = 15 * 60 * 1000;
+
+/// A turn of another `claude` that is open: when it began, the time of its last line and what it
+/// has written.
+#[derive(Debug, Clone, Copy)]
+struct Followed {
+    since: u64,
+    at: u64,
+    tokens: u64,
+}
+
 /// An item that the transcript of the engine does not hold, and the time it was made at.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Kept {
@@ -536,7 +553,7 @@ fn is_ours(item: &Item) -> bool {
     }
 }
 
-fn stamp() -> u64 {
+pub(crate) fn stamp() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
@@ -637,6 +654,7 @@ impl State {
             turn_started: 0,
             turn_tokens: BTreeMap::new(),
             msg_id: String::new(),
+            followed: None,
             resume_divider: false,
             last_total_micro: 0,
             live_texts: VecDeque::new(),
@@ -704,6 +722,11 @@ impl State {
     /// Make the items from what the transcript says, with the items that are jwn's own put among
     /// them, and take the mode, the model and the effort it ended with (REQ-542, REQ-544).
     pub fn follow(&mut self, t: &crate::transcript::Parser) {
+        self.follow_at(t, stamp());
+    }
+
+    /// `follow` at the time `now`, which says whether the turn that is open was left behind.
+    fn follow_at(&mut self, t: &crate::transcript::Parser, now: u64) {
         let mut kept = std::mem::take(&mut self.kept_saved);
         kept.extend(self.kept());
         // Only the end of the lines can be among the items a node keeps; the rest is counted.
@@ -726,6 +749,33 @@ impl State {
         if let Some(effort) = &t.effort {
             self.effort.clone_from(effort);
         }
+        self.followed = t.turn_since().map(|since| Followed {
+            since,
+            at: t.last_at(),
+            tokens: t.turn_written(),
+        });
+        self.expire_follow(now);
+    }
+
+    /// A turn that nothing has written to for `FOLLOW_SILENCE_MS` is left behind: the line of
+    /// work goes, and the tools that waited for a result were interrupted. Whether it changed.
+    pub fn expire_follow(&mut self, now: u64) -> bool {
+        let Some(f) = self.followed else {
+            return false;
+        };
+        if now.saturating_sub(f.at) <= FOLLOW_SILENCE_MS {
+            return false;
+        }
+        self.followed = None;
+        for item in &mut self.items {
+            if let Item::Tool { state, summary, .. } = item
+                && *state == ToolState::Run
+            {
+                *state = ToolState::Failed;
+                *summary = Some("sin resultado".into());
+            }
+        }
+        true
     }
 
     /// The conversation was saved with its own items: its chat is not read from the transcript.
@@ -819,12 +869,12 @@ impl State {
             commands: self.commands.clone(),
             cost: self.cost,
             limits: self.limits.clone(),
-            // Only while a turn runs: a conversation that is dead or only followed runs nothing.
+            // Only while a turn runs, its own or the one of another `claude` that is followed.
             running: self
                 .items
                 .iter()
                 .zip(&self.stamps)
-                .filter(|_| self.since.is_some())
+                .filter(|_| self.since.is_some() || self.followed.is_some())
                 .filter_map(|(item, (at, _))| match item {
                     Item::Tool {
                         id,
@@ -837,11 +887,12 @@ impl State {
                     _ => None,
                 })
                 .collect(),
-            tokens: if self.since.is_some() {
-                self.turn_tokens.values().sum()
-            } else {
-                0
+            tokens: match (self.since, self.followed) {
+                (Some(_), _) => self.turn_tokens.values().sum(),
+                (None, Some(f)) => f.tokens,
+                (None, None) => 0,
             },
+            following: self.followed.map(|f| f.since),
         }
     }
 
@@ -932,6 +983,7 @@ impl State {
 
     fn begin_turn(&mut self, now: u64) {
         self.status = ConvStatus::Thinking;
+        self.followed = None;
         self.since = Some(now);
         self.turn_started = now;
         self.turn_tokens.clear();
@@ -2715,6 +2767,68 @@ mod tests {
             attention: Vec::new(),
         };
         s.node(head, &Id::new())
+    }
+
+    fn followed_turn() -> crate::transcript::Parser {
+        let mut t = crate::transcript::Parser::default();
+        t.feed(&format!(
+            "{}\n{}\n",
+            json!({"type":"user","timestamp":"2026-10-17T11:55:00.000Z","message":{"role":"user","content":"corre los tests"}}),
+            json!({"type":"assistant","timestamp":"2026-10-17T11:55:03.000Z","message":{"id":"m1","usage":{"output_tokens":30},"model":"claude-opus-5-5","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"cargo test"}}]}}),
+        ));
+        t
+    }
+
+    #[test]
+    fn a_turn_of_another_claude_that_is_open_is_followed_with_its_tool_and_its_tokens() {
+        let t = followed_turn();
+        let mut s = st();
+        s.follow_at(&t, t.last_at() + 1_000);
+        let node = node_of(&s);
+        assert_eq!(
+            (node.following, node.tokens),
+            (t.turn_since(), 30),
+            "since the message of the person, and what it has written"
+        );
+        assert_eq!(node.running.len(), 1);
+        assert_eq!(node.running[0].since, t.last_at());
+        assert_eq!(
+            node.since, None,
+            "a turn that is not jwn's gives no `since`, and so nothing to interrupt"
+        );
+        // read long after its last line, it is already left behind
+        let mut late = st();
+        late.follow_at(&t, t.last_at() + FOLLOW_SILENCE_MS + 1);
+        assert_eq!(node_of(&late).following, None);
+        assert!(node_of(&late).running.is_empty());
+    }
+
+    #[test]
+    fn a_followed_turn_that_nothing_writes_to_is_left_behind_and_its_tool_was_interrupted() {
+        let mut s = st();
+        s.follow(&followed_turn());
+        s.followed = Some(Followed {
+            since: 1,
+            at: 1_000,
+            tokens: 0,
+        });
+        assert!(!s.expire_follow(1_000 + FOLLOW_SILENCE_MS));
+        assert!(s.expire_follow(1_001 + FOLLOW_SILENCE_MS));
+        assert!(!s.expire_follow(2_000 + FOLLOW_SILENCE_MS), "once");
+        assert_eq!(node_of(&s).following, None);
+        assert!(s.items.iter().any(|i| matches!(i, Item::Tool { state: ToolState::Failed, summary: Some(x), .. } if x == "sin resultado")));
+    }
+
+    #[test]
+    fn a_message_sent_ends_the_following_of_a_turn() {
+        let mut s = st();
+        s.followed = Some(Followed {
+            since: 1,
+            at: stamp(),
+            tokens: 5,
+        });
+        s.send("sigue", vec![], stamp());
+        assert_eq!(node_of(&s).following, None);
     }
 
     #[test]

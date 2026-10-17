@@ -1111,6 +1111,12 @@ impl Ui {
         conv.status != ConvStatus::Idle && !(conv.status == ConvStatus::Dead && !self.retaking)
     }
 
+    /// Another `claude` runs a turn in the transcript this conversation follows (REQ-565): the line
+    /// of work is drawn, and there is nothing to interrupt.
+    fn followed_work(&self, conv: &Conversation) -> bool {
+        conv.following.is_some() && !self.working(conv)
+    }
+
     fn geo(&self, conv: &Conversation, (iy, ih): (usize, usize), field_rows: usize) -> Geo {
         let foot = iy + ih.saturating_sub(1);
         let band_rows = conv
@@ -1119,7 +1125,8 @@ impl Ui {
             .map_or(field_rows, ask_rows)
             .min(ih.saturating_sub(2));
         let band_y = foot.saturating_sub(band_rows);
-        let work = self.working(conv).then(|| band_y.saturating_sub(1));
+        let work =
+            (self.working(conv) || self.followed_work(conv)).then(|| band_y.saturating_sub(1));
         let list_end = work.unwrap_or(band_y);
         // The checklist's strip is one row, and its lines when it is open, as many as there is room for.
         let todo_rows = if conv.todos.is_empty() {
@@ -1249,6 +1256,18 @@ impl Ui {
     }
 
     fn work_text(&self, conv: &Conversation, now_ms: u64) -> String {
+        if let (true, Some(began)) = (self.followed_work(conv), conv.following) {
+            let what = if conv.running.is_empty() {
+                "Pensando…"
+            } else {
+                "Trabajando…"
+            };
+            let mut parts = vec![secs(now_ms.saturating_sub(began))];
+            if conv.tokens > 0 {
+                parts.push(format!("↓ {} tokens", kilo(conv.tokens)));
+            }
+            return format!("{what} ({})", parts.join(" · "));
+        }
         let what = match conv.status {
             ConvStatus::Resuming | ConvStatus::Dead => return "retomando conversación…".into(),
             ConvStatus::Thinking => "Pensando…",
@@ -3162,6 +3181,30 @@ mod tests {
         }
         let (_, rows) = frame(&Ui::default(), &done);
         assert!(!rows.join("\n").contains("ejecutando"), "{rows:?}");
+    }
+
+    #[test]
+    fn a_session_that_is_followed_shows_the_turn_of_the_other_claude_with_no_way_to_stop_it() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../contract/fixtures/daemon");
+        let doc: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("snapshot-conversation-following.json")).unwrap(),
+        )
+        .unwrap();
+        let conv: Conversation = serde_json::from_value(doc["node"].clone()).unwrap();
+        assert_eq!(conv.status, ConvStatus::Dead);
+        let (_, rows) = frame(&Ui::default(), &conv);
+        row_of(&rows, "Trabajando… (12 s · ↓ 1,3 k tokens)");
+        row_of(&rows, "● Bash(cargo test) · 9 s");
+        let joined = rows.join("\n");
+        assert!(
+            !joined.contains("esc interrumpe") && !joined.contains("■ esc"),
+            "{joined}"
+        );
+        let mut done = conv.clone();
+        done.following = None;
+        done.running.clear();
+        let (_, rows) = frame(&Ui::default(), &done);
+        assert!(!rows.join("\n").contains("Trabajando…"));
     }
 
     #[test]
