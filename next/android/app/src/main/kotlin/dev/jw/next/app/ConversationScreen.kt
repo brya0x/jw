@@ -281,6 +281,9 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
         }
     }
 
+    // What waits for the turn that runs is shown as messages not sent yet (REQ-549).
+    node.queue.forEach { Mono("⧖ $it", Palette.dim, 12, lines = 3, modifier = Modifier.fillMaxWidth().padding(horizontal = Pad, vertical = 2.dp)) }
+
     // ---- the line over the field, the notice and the copy bar ----
     node.workLine(retaking, now)?.let { line ->
         Mono("${spinner(true)} $line", Palette.dim, 12, lines = 1, modifier = Modifier.fillMaxWidth().padding(horizontal = Pad, vertical = 4.dp))

@@ -433,6 +433,8 @@ pub struct State {
     kept_saved: Vec<Kept>,
     /// It was saved with its own items, before the transcript was read (REQ-544): it keeps them.
     legacy: bool,
+    /// The messages another `claude` has typed and not been taken in yet, read from the transcript (REQ-549).
+    followed_queue: Vec<String>,
     pub items: Vec<Item>,
     /// Millionths of a dollar.
     pub cost: u64,
@@ -601,6 +603,7 @@ impl State {
             stamps: Vec::new(),
             kept_saved: Vec::new(),
             legacy: false,
+            followed_queue: Vec::new(),
             items: Vec::new(),
             cost: 0,
             status: ConvStatus::Idle,
@@ -696,6 +699,7 @@ impl State {
         self.stamps = stamps;
         self.first = u32::try_from(skip + from).unwrap_or(u32::MAX);
         self.live_texts.clear();
+        self.followed_queue = t.waiting();
         if let Some(mode) = t.mode {
             self.mode = mode;
         }
@@ -773,7 +777,12 @@ impl State {
             first: self.first,
             items: self.items.clone(),
             ask: self.pending.as_ref().map(|p| p.ask.clone()),
-            queue: self.queue.iter().map(Queued::shown).collect(),
+            queue: self
+                .queue
+                .iter()
+                .map(Queued::shown)
+                .chain(self.followed_queue.iter().cloned())
+                .collect(),
             tasks: self.tasks.clone(),
             todos: self.todos.clone(),
             artifacts: self.artifacts.clone(),

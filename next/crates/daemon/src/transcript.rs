@@ -49,8 +49,11 @@ pub struct Parser {
     tools: HashMap<String, usize>,
     /// The time of the last line that had one: a line without it is as late as that.
     last_at: u64,
-    /// Counts up whenever what the lines say changes: an item, the mode, the model or the effort.
+    /// Counts up whenever what the lines say changes: an item, the mode, the model, the effort or what waits.
     rev: u64,
+    /// The messages typed while a turn ran, not taken in yet, oldest first, and whether each is
+    /// the person's (a task's notice waits too, and is not shown).
+    queue: Vec<(String, bool)>,
 }
 
 impl Parser {
@@ -75,6 +78,7 @@ impl Parser {
                         self.rev += 1;
                     }
                 }
+                "queue-operation" => self.queued(&entry),
                 "assistant" => self.assistant(&entry),
                 "user" if entry["isMeta"] != true => self.user(&entry),
                 "system" if entry["subtype"] == "compact_boundary" => self.push(Item::Divider {
@@ -84,6 +88,41 @@ impl Parser {
                 _ => {}
             }
         }
+    }
+
+    /// A message that waits for the turn that runs, and the line that says it was taken in (REQ-549).
+    fn queued(&mut self, entry: &Value) {
+        let content = entry["content"].as_str();
+        match (entry["operation"].as_str().unwrap_or(""), content) {
+            ("enqueue", Some(text)) => {
+                self.queue.push((text.to_owned(), is_the_persons(text)));
+                self.rev += 1;
+            }
+            // The first one was taken in, whatever it said.
+            ("dequeue", _) if !self.queue.is_empty() => {
+                self.queue.remove(0);
+                self.rev += 1;
+            }
+            ("remove", Some(text)) => self.unqueue(text),
+            _ => {}
+        }
+    }
+
+    /// The first message that waits with this text is not waiting any more.
+    fn unqueue(&mut self, text: &str) {
+        if let Some(at) = self.queue.iter().position(|(t, _)| t.trim() == text.trim()) {
+            self.queue.remove(at);
+            self.rev += 1;
+        }
+    }
+
+    /// The messages that wait, as the person typed them.
+    pub fn waiting(&self) -> Vec<String> {
+        self.queue
+            .iter()
+            .filter(|(_, shown)| *shown)
+            .map(|(t, _)| t.trim().to_owned())
+            .collect()
     }
 
     fn push(&mut self, item: Item) {
@@ -174,6 +213,7 @@ impl Parser {
             ),
         };
         if is_the_persons(&text) || (text.trim().is_empty() && images > 0) {
+            self.unqueue(&text);
             self.push(Item::User {
                 text: text.trim().to_owned(),
                 images,
@@ -728,6 +768,47 @@ mod tests {
             "the long line is not there and the next one is"
         );
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// REQ-549: what another `claude` has typed and not taken in yet is what waits.
+    #[test]
+    fn a_message_typed_while_a_turn_runs_waits_until_it_is_taken_in() {
+        let op = |op: &str, text: Option<&str>| {
+            line(serde_json::json!({"type":"queue-operation","operation":op,"content":text}))
+        };
+        let mut t = parse(
+            &[
+                op("enqueue", Some("uno")),
+                op("enqueue", Some("<task-notification>x</task-notification>")),
+                op("enqueue", Some("dos")),
+            ]
+            .concat(),
+        );
+        assert_eq!(
+            t.waiting(),
+            ["uno", "dos"],
+            "a task's notice waits and is not shown"
+        );
+        t.feed(&op("remove", Some("dos")));
+        assert_eq!(t.waiting(), ["uno"], "absorbed in the turn that ran");
+        t.feed(&op("dequeue", None));
+        assert_eq!(
+            t.waiting(),
+            Vec::<String>::new(),
+            "`uno` was first in line and was taken in; the notice that stays is not shown"
+        );
+        t.feed(&op("dequeue", None));
+        assert!(t.waiting().is_empty());
+        // The message arriving as a line of the person's is not waiting any more.
+        t.feed(&op("enqueue", Some("tres")));
+        t.feed(&line(
+            serde_json::json!({"type":"user","message":{"role":"user","content":"tres"}}),
+        ));
+        assert!(t.waiting().is_empty());
+        // Nothing waits is a change worth showing.
+        let before = t.rev;
+        t.feed(&op("enqueue", Some("cuatro")));
+        assert_ne!(t.rev, before);
     }
 
     #[test]

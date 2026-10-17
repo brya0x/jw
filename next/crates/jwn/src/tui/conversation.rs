@@ -718,6 +718,33 @@ impl Ui {
                 );
             }
         }
+        // What waits for the turn that runs comes after what was said, as a message not sent yet.
+        let end = conv.first + conv.items.len() as u32;
+        let dim = Style::fg(look::dim());
+        for text in &conv.queue {
+            out.push(Line {
+                spans: vec![],
+                bg: None,
+                item: end,
+                lead: 0,
+                soft: false,
+            });
+            for (k, (continues, row)) in wrap(text, w.saturating_sub(2), dim, dim)
+                .into_iter()
+                .enumerate()
+            {
+                let mark = if k == 0 { "⧖ " } else { "  " };
+                let mut spans = vec![(mark.to_owned(), Style::fg(look::yellow()))];
+                spans.extend(row);
+                out.push(Line {
+                    spans,
+                    bg: None,
+                    item: end,
+                    lead: 2,
+                    soft: continues,
+                });
+            }
+        }
         out
     }
 
@@ -3000,6 +3027,8 @@ mod tests {
         let (_, rows) = frame(&ui, &conv);
         row_of(&rows, "…/proj");
         row_of(&rows, "en cola 1");
+        // The message that waits is in the list as one not sent yet (REQ-549).
+        row_of(&rows, "⧖ y luego corre los tests");
         row_of(&rows, "❯ hola");
         assert!(rows.iter().any(|r| r.contains('➤')));
         conv.queue.clear();

@@ -8377,7 +8377,8 @@ mod tests {
             "until it arrives nothing of it is drawn"
         );
         let v = conv_view(false);
-        let screen = v.plain(120, 40);
+        // Two rows taller than the conversation was: the message that waits is drawn too (REQ-549).
+        let screen = v.plain(120, 42);
         assert!(
             screen.contains("claude · arregla el test que falla e…"),
             "{screen}"

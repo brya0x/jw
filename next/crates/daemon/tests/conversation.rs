@@ -1391,6 +1391,16 @@ fn a_session_another_claude_is_writing_is_followed_while_the_conversation_has_no
         .collect();
     assert_eq!(kinds, ["user", "text", "text", "divider"], "{v}");
     assert_eq!(v["mode"], "plan", "the mode it ends with follows too");
+    // REQ-549: a message typed in the other `claude` while it works waits, and stops waiting when it is taken in.
+    writeln!(open, r#"{{"type":"queue-operation","operation":"enqueue","timestamp":"2026-10-13T19:00:10.000Z","content":"y luego corre los tests"}}"#).unwrap();
+    let v = r.until(&node, "the message that waits", |v| {
+        v["queue"] == serde_json::json!(["y luego corre los tests"])
+    });
+    writeln!(open, r#"{{"type":"queue-operation","operation":"remove","timestamp":"2026-10-13T19:00:11.000Z","content":"y luego corre los tests","reason":"absorbed_mid_turn"}}"#).unwrap();
+    r.until(&node, "the queue to empty", |v| {
+        v["queue"] == serde_json::json!([])
+    });
+    let _ = v;
     r.stop();
 }
 
