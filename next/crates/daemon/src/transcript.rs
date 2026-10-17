@@ -57,6 +57,9 @@ pub struct Parser {
     rev: u64,
     /// How many tools the turn that runs has used, for the line that ends it.
     tools_in_turn: u32,
+    /// The line being read was written by jwn's own engine (`sdk-cli`): the notes, answers and ends
+    /// of turn it makes are already jwn's own items (REQ-544), so they are not made again.
+    own: bool,
     /// The messages typed while a turn ran, not taken in yet, oldest first, and whether each is
     /// the person's (a task's notice waits too, and is not shown).
     queue: Vec<(String, bool)>,
@@ -76,6 +79,7 @@ impl Parser {
             if entry["isSidechain"] == true {
                 continue;
             }
+            self.own = entry["entrypoint"] == "sdk-cli";
             match entry["type"].as_str().unwrap_or("") {
                 "permission-mode" => {
                     let mode = entry["permissionMode"].as_str().and_then(Mode::from_flag);
@@ -95,6 +99,7 @@ impl Parser {
                 {
                     self.user(&entry)
                 }
+                "system" if self.own && entry["subtype"] != "compact_boundary" => {}
                 "system" if entry["subtype"] == "informational" => {
                     if let Some(text) = entry["content"].as_str().filter(|t| !t.trim().is_empty()) {
                         self.note(clip(text.trim(), LINE_CHARS), None);
@@ -207,7 +212,7 @@ impl Parser {
         // What Claude Code writes itself (an interrupted turn, «no response requested») is not Claude.
         if message["model"] == "<synthetic>" {
             // An error of the API is shown; «no response requested» and the like are not.
-            if entry["isApiErrorMessage"] == true {
+            if entry["isApiErrorMessage"] == true && !self.own {
                 for block in message["content"].as_array().into_iter().flatten() {
                     if let Some(text) = block["text"].as_str().filter(|t| !t.trim().is_empty()) {
                         self.note(clip(text.trim(), LINE_CHARS), Some(Tone::Error));
@@ -299,7 +304,13 @@ impl Parser {
             ),
         };
         let t = text.trim();
-        if t.starts_with("[Request interrupted") {
+        if self.own
+            && (t.starts_with("[Request interrupted")
+                || t.starts_with("<command-")
+                || t.starts_with("<local-command-"))
+        {
+            // jwn's engine ran it and jwn made its own item of it.
+        } else if t.starts_with("[Request interrupted") {
             self.note("Interrumpido".into(), Some(Tone::Warn));
         } else if t.starts_with("<task-notification") {
             // A background task ended: the line that says what it was.
@@ -1074,6 +1085,34 @@ mod tests {
             3,
             "two lines out and one in, as the engine shows an edit: {diff:?}"
         );
+    }
+
+    /// REQ-557: what jwn's own engine writes is not made again from the transcript.
+    #[test]
+    fn what_jwns_own_engine_wrote_is_not_made_again_as_an_item_of_the_transcript() {
+        let lines = |entry: &str| {
+            [
+                line(serde_json::json!({"type":"user","entrypoint":entry,"message":{"role":"user","content":"[Request interrupted by user]"}})),
+                line(serde_json::json!({"type":"user","entrypoint":entry,"message":{"role":"user","content":"<command-name>/model</command-name>"}})),
+                line(serde_json::json!({"type":"user","entrypoint":entry,"message":{"role":"user","content":"<local-command-stdout>ok</local-command-stdout>"}})),
+                line(serde_json::json!({"type":"system","entrypoint":entry,"subtype":"turn_duration","durationMs":5})),
+                line(serde_json::json!({"type":"assistant","entrypoint":entry,"isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"API Error: x"}]}})),
+                line(serde_json::json!({"type":"user","entrypoint":entry,"message":{"role":"user","content":"hola"}})),
+            ]
+            .concat()
+        };
+        assert_eq!(
+            it(&parse(&lines("cli"))).len(),
+            6,
+            "Claude Code's own screen wrote them: all are shown"
+        );
+        let own = it(&parse(&lines("sdk-cli")));
+        assert_eq!(
+            own.len(),
+            1,
+            "jwn's engine wrote them: only what the person said is read: {own:?}"
+        );
+        assert!(matches!(&own[0], Item::User { text, .. } if text == "hola"));
     }
 
     #[test]
