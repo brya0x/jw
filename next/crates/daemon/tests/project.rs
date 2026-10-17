@@ -76,6 +76,7 @@ fn wait_for(what: &str, mut f: impl FnMut() -> bool) {
 
 const FULL: &str = r#"
 root = "../app-trees"
+# The template of branches that N78 read and N96 ignores.
 branch = "bryan/{name}"
 setup = ["echo installing {name}", "echo done-{branch}"]
 ports = { web = 1 }
@@ -132,7 +133,10 @@ fn project_config_tells_the_defaults_and_what_the_file_says() {
     let r = ok(&mut c, Cmd::ProjectConfig { repo: text(&top) });
     assert!(r.get("source").is_none());
     assert_eq!(r["root"], text(&top.parent().unwrap().join("app-wt")));
-    assert_eq!(r["branch"], "feat/{name}");
+    assert!(
+        r.get("branch").is_none(),
+        "REQ-512: no template of branches"
+    );
     assert_eq!(r["setup"], serde_json::json!([]));
     assert_eq!(r["open"], "shell", "REQ-509");
     assert!(r.get("panes").is_none());
@@ -149,7 +153,6 @@ fn project_config_tells_the_defaults_and_what_the_file_says() {
     );
     assert_eq!(r["source"], text(&top.join(".jw.toml")));
     assert_eq!(r["root"], text(&top.parent().unwrap().join("app-trees")));
-    assert_eq!(r["branch"], "bryan/{name}");
     assert_eq!(r["setup"].as_array().unwrap().len(), 2);
     assert_eq!(r["open"], "claude");
     d.stop();
@@ -159,7 +162,7 @@ fn project_config_tells_the_defaults_and_what_the_file_says() {
 fn a_file_that_cannot_be_used_is_refused_by_the_three_commands_and_nothing_is_made() {
     let sb = Sandbox::new();
     let d = sb.start();
-    let top = repo(&sb, Some("branch = \"x\"\nsetup = [\"cd {nme}\"]\n"));
+    let top = repo(&sb, Some("open = \"shell\"\nsetup = [\"cd {nme}\"]\n"));
     let mut c = sb.client();
 
     let (code, why) = refused(&mut c, Cmd::ProjectConfig { repo: text(&top) });
@@ -529,7 +532,6 @@ fn the_settings_come_from_the_repository_then_from_the_personal_file_then_from_t
 
     // neither file: the defaults, and where the personal one would be
     let none = config(&mut c, &app);
-    assert_eq!(none["branch"], "feat/{name}");
     assert!(none.get("source").is_none() && none.get("from").is_none());
     let personal = PathBuf::from(none["personal"].as_str().unwrap());
     assert!(
@@ -548,9 +550,9 @@ fn the_settings_come_from_the_repository_then_from_the_personal_file_then_from_t
 
     // the personal file, read as a `.jw.toml` is
     std::fs::create_dir_all(personal.parent().unwrap()).unwrap();
-    std::fs::write(&personal, "branch = \"mio/{name}\"\nsetup = [\"true\"]\n").unwrap();
+    std::fs::write(&personal, "copy = [\"mio\"]\nsetup = [\"true\"]\n").unwrap();
     let mine = config(&mut c, &app);
-    assert_eq!(mine["branch"], "mio/{name}");
+    assert_eq!(mine["copy"], serde_json::json!(["mio"]));
     assert_eq!(
         (mine["from"].as_str(), mine["source"].as_str()),
         (Some("personal"), personal.to_str())
@@ -558,9 +560,9 @@ fn the_settings_come_from_the_repository_then_from_the_personal_file_then_from_t
     assert_eq!(mine["setup"], serde_json::json!(["true"]));
 
     // the repository's own file wins, and the personal one is not read
-    std::fs::write(app.join(".jw.toml"), "branch = \"equipo/{name}\"\n").unwrap();
+    std::fs::write(app.join(".jw.toml"), "copy = [\"equipo\"]\n").unwrap();
     let theirs = config(&mut c, &app);
-    assert_eq!(theirs["branch"], "equipo/{name}");
+    assert_eq!(theirs["copy"], serde_json::json!(["equipo"]));
     assert_eq!(theirs["from"], "repo");
     assert_eq!(theirs["setup"], serde_json::json!([]));
     assert_eq!(
@@ -577,7 +579,7 @@ fn the_settings_come_from_the_repository_then_from_the_personal_file_then_from_t
     assert_eq!(from_worktree["from"], "personal");
 
     // an error in the personal file names it and its line
-    std::fs::write(&personal, "branch = \"a\"\nsetup = nope\n").unwrap();
+    std::fs::write(&personal, "open = \"shell\"\nsetup = nope\n").unwrap();
     let (code, why) = refused(&mut c, Cmd::ProjectConfig { repo: text(&app) });
     assert_eq!(code, ErrorCode::BadRequest);
     let name = personal.file_name().unwrap().to_string_lossy().into_owned();
@@ -645,14 +647,14 @@ fn writing_the_settings_checks_them_first_keeps_the_personal_file_private_and_ne
         &mut c,
         &app,
         contract::ConfigFrom::Personal,
-        "branch = \"x/{name}\"\n",
+        "copy = [\"x\"]\n",
     )
     .unwrap();
     assert_eq!(wrote["path"], text(&personal));
     assert_eq!(wrote["shadowed"], false);
     assert_eq!(
         std::fs::read_to_string(&personal).unwrap(),
-        "branch = \"x/{name}\"\n"
+        "copy = [\"x\"]\n"
     );
     assert_eq!(
         std::fs::metadata(&personal).unwrap().permissions().mode() & 0o777,
@@ -663,8 +665,8 @@ fn writing_the_settings_checks_them_first_keeps_the_personal_file_private_and_ne
         "REQ-487: the repository is not touched"
     );
     assert_eq!(
-        config(&mut c, &app)["branch"],
-        "x/{name}",
+        config(&mut c, &app)["copy"],
+        serde_json::json!(["x"]),
         "and the next read has it"
     );
     // no temporary file is left behind
@@ -680,14 +682,14 @@ fn writing_the_settings_checks_them_first_keeps_the_personal_file_private_and_ne
         &mut c,
         &app,
         contract::ConfigFrom::Personal,
-        "branch = \"{nombre}\"\n",
+        "setup = [\"cd {nombre}\"]\n",
     )
     .unwrap_err();
     assert_eq!(code, ErrorCode::BadRequest);
     assert!(why.contains("line 1"), "{why}");
     assert_eq!(
         std::fs::read_to_string(&personal).unwrap(),
-        "branch = \"x/{name}\"\n"
+        "copy = [\"x\"]\n"
     );
 
     // only when asked does it write into the repository, and then the personal one is hidden by it
@@ -695,23 +697,23 @@ fn writing_the_settings_checks_them_first_keeps_the_personal_file_private_and_ne
         &mut c,
         &app,
         contract::ConfigFrom::Repo,
-        "branch = \"equipo/{name}\"\n",
+        "copy = [\"equipo\"]\n",
     )
     .unwrap();
     assert_eq!(repo_file["path"], text(&app.join(".jw.toml")));
     assert_eq!(
         std::fs::read_to_string(app.join(".jw.toml")).unwrap(),
-        "branch = \"equipo/{name}\"\n"
+        "copy = [\"equipo\"]\n"
     );
     let shadowed = write(
         &mut c,
         &app,
         contract::ConfigFrom::Personal,
-        "branch = \"y/{name}\"\n",
+        "copy = [\"y\"]\n",
     )
     .unwrap();
     assert_eq!(shadowed["shadowed"], true, "REQ-487");
-    assert_eq!(config(&mut c, &app)["branch"], "equipo/{name}");
+    assert_eq!(config(&mut c, &app)["copy"], serde_json::json!(["equipo"]));
     // a folder that is not a repository has nothing to write for
     let plain = sb.dir.join("plain");
     std::fs::create_dir_all(&plain).unwrap();
@@ -733,17 +735,11 @@ fn writing_into_the_repository_never_goes_through_a_link_planted_where_the_tempo
     std::fs::write(&victim, "intacto").unwrap();
     std::os::unix::fs::symlink(&victim, app.join(".jw.toml.tmp")).unwrap();
     let mut c = sb.client();
-    write(
-        &mut c,
-        &app,
-        contract::ConfigFrom::Repo,
-        "branch = \"a/{name}\"\n",
-    )
-    .unwrap();
+    write(&mut c, &app, contract::ConfigFrom::Repo, "copy = [\"a\"]\n").unwrap();
     assert_eq!(std::fs::read_to_string(&victim).unwrap(), "intacto");
     assert_eq!(
         std::fs::read_to_string(app.join(".jw.toml")).unwrap(),
-        "branch = \"a/{name}\"\n"
+        "copy = [\"a\"]\n"
     );
     assert!(!app.join(".jw.toml.tmp").exists());
     // a text that is too big is refused whole

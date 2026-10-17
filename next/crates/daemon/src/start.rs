@@ -37,7 +37,6 @@ pub fn project_config(shared: &Shared, repo: &str) -> Done {
         from: project.from,
         personal: project.personal.to_string_lossy().into_owned(),
         root: project.root.to_string_lossy().into_owned(),
-        branch: project.branch.clone(),
         setup: project.setup.clone(),
         open: project.open,
         copy: project.copy.clone(),

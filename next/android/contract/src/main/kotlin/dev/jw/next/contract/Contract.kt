@@ -431,12 +431,11 @@ enum class ConfigFrom {
     @SerialName("personal") Personal,
 }
 
-/** The result of `project_config`: [panes] are the programs of the layout's panes, the `setup` pane not among them. */
+/** The result of `project_config`: what a worktree will be made with and what a workspace opens with. */
 @Serializable
 data class ProjectInfo(
     val source: String? = null,
     val root: String,
-    val branch: String,
     val setup: List<String>,
     /** What a workspace opens with: the one panel's program. */
     val open: OpenKind,

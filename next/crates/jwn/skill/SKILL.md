@@ -46,8 +46,9 @@ A workspace whose mark is `permission`, `question` or `plan` has an agent waitin
   "sent to pane". If the turn stops because Claude asks something, it prints the question with
   its numbered options and exits 3: the person has to answer it.
 - `{bin} worktree <name> [--in repo] [--branch B] [--from REF] [--open shell|claude] [--task TEXT]` makes a git worktree
-  of the repository you are in (or `--in`: a folder or a workspace), the way the person would, with
-  what the repository's `.jw.toml` says (its folder, its branch template, its setup, the files it
+  of the repository you are in (or `--in`: a folder or a workspace), the way the person would. `<name>` is
+  the branch as written (`fix/login` makes the branch `fix/login` in the folder `login`; `--branch`
+  sets another one), and `.jw.toml` says the rest (the folder they go in, the setup, the files it
   copies and its ports). It opens one panel, a shell or `claude` (`--open`, else what the settings
   say); its setup runs there first. It prints the workspace's id and path, and on stderr what it
   copied and the ports it gave. With `--task` it opens `claude` and hands it the text, as `prompt`

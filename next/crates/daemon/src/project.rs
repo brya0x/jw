@@ -22,8 +22,6 @@ pub struct Project {
     /// Where the personal file is or would be.
     pub personal: PathBuf,
     pub root: PathBuf,
-    /// The template of a worktree's branch.
-    pub branch: String,
     pub setup: Vec<String>,
     /// The files of the checkout a new worktree gets a copy of (REQ-489).
     pub copy: Vec<String>,
@@ -36,7 +34,6 @@ pub struct Project {
 #[derive(Deserialize, Default)]
 struct Raw {
     root: Option<String>,
-    branch: Option<Spanned<String>>,
     setup: Option<Vec<Spanned<String>>>,
     copy: Option<Vec<Spanned<String>>>,
     ports: Option<Spanned<Table>>,
@@ -251,18 +248,6 @@ fn parse(text: &str, source: Option<PathBuf>, top: &Path, home: &Path) -> Result
         }
     };
 
-    let branch = match raw.branch {
-        Some(b) => {
-            markers(b.get_ref(), &["name"]).map_err(|why| fail(b.span().start, &why))?;
-            let t = b.get_ref().trim();
-            if t.is_empty() {
-                return Err(fail(b.span().start, "`branch` is empty"));
-            }
-            t.to_owned()
-        }
-        None => "feat/{name}".to_owned(),
-    };
-
     let mut setup = Vec::new();
     for line in raw.setup.unwrap_or_default() {
         markers(line.get_ref(), &["name", "branch"])
@@ -334,7 +319,6 @@ fn parse(text: &str, source: Option<PathBuf>, top: &Path, home: &Path) -> Result
         from: None,
         personal: PathBuf::new(),
         root,
-        branch,
         setup,
         copy,
         ports,
@@ -426,7 +410,6 @@ mod tests {
         let p = parse("", None, Path::new("/code/app"), Path::new("/h")).unwrap();
         assert_eq!(p.source, None);
         assert_eq!(p.root, Path::new("/code/app-wt"));
-        assert_eq!(p.branch, "feat/{name}");
         assert!(p.setup.is_empty());
         assert_eq!(p.open, OpenKind::Shell, "REQ-504");
     }
@@ -436,7 +419,7 @@ mod tests {
         let open = |t: &str| read_text(t).map(|p| p.open);
         assert_eq!(open("open = \"claude\"\n"), Ok(OpenKind::Claude));
         assert_eq!(open("open = \" shell \"\n"), Ok(OpenKind::Shell));
-        let m = open("branch = \"a/{name}\"\nopen = \"nvim\"\n").unwrap_err();
+        let m = open("setup = []\nopen = \"nvim\"\n").unwrap_err();
         assert!(
             m.starts_with(".jw.toml, line 2:") && m.contains("\"shell\" or \"claude\""),
             "{m}"
@@ -463,7 +446,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(p.root, Path::new("/code/app-trees"));
-        assert_eq!(p.branch, "bryan/{name}");
     }
 
     #[test]
@@ -480,22 +462,15 @@ mod tests {
     #[test]
     fn each_kind_of_error_names_the_file_and_the_line() {
         let bad = |text: &str| read_text(text).unwrap_err();
-        let m = bad("branch = \"feat/{name}\"\nsetup = [\"ok\", \"cd {nme}\"]\n");
+        let m = bad("root = \"x\"\nsetup = [\"ok\", \"cd {nme}\"]\n");
         assert!(
             m.starts_with(".jw.toml, line 2: «{nme}» is no marker (use {name} or {branch})"),
-            "{m}"
-        );
-        let m = bad("\n\nbranch = \"x/{branch}\"");
-        assert!(
-            m.starts_with(".jw.toml, line 3: «{branch}» is no marker (use {name})"),
             "{m}"
         );
         let m = bad("setup = [1]");
         assert!(m.starts_with(".jw.toml, line 1:"), "{m}");
         let m = bad("root = \nx");
         assert!(m.starts_with(".jw.toml, line"), "{m}");
-        let m = bad("branch = \" \"");
-        assert!(m.contains("`branch` is empty"), "{m}");
     }
 
     #[test]

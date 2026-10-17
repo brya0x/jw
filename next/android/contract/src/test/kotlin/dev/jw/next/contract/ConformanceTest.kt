@@ -261,7 +261,6 @@ class ConformanceTest {
         val reply = fixtures("daemon").first { it.first == "reply-ok-project-config.json" }.second
         val result = (ContractJson.decodeFromJsonElement(DaemonMsg.serializer(), reply) as DaemonMsg.Reply).result!!
         val info = ContractJson.decodeFromJsonElement(ProjectInfo.serializer(), result)
-        assertEquals("bryan/{name}", info.branch)
         assertEquals(OpenKind.Claude, info.open)
         assertEquals(ConfigFrom.Repo, info.from)
         assertEquals(listOf(".env", "apps/web/.env.local"), info.copy)

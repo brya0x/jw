@@ -570,8 +570,6 @@ pub struct ProjectInfo {
     pub personal: String,
     /// The folder worktrees go in.
     pub root: String,
-    /// The template of a worktree's branch; clients replace `{name}`.
-    pub branch: String,
     /// The setup commands as written.
     pub setup: Vec<String>,
     /// What a workspace opens with: the one panel's program (REQ-504).

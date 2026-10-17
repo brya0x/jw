@@ -334,11 +334,7 @@ fn worktree_makes_it_with_the_repositorys_settings_and_hands_its_agent_a_task() 
     let w = World::new("ag-wt");
     let (_, shell) = w.open_repo();
     let got = w.agent_on_path();
-    std::fs::write(
-        w.repo.join(".jw.toml"),
-        "branch = \"bryan/{name}\"\nsetup = [\"true\"]\n",
-    )
-    .unwrap();
+    std::fs::write(w.repo.join(".jw.toml"), "setup = [\"true\"]\n").unwrap();
 
     // From the pane of the repository's own workspace: no `--in`.
     let made = w.ok(Some(&shell), &["worktree", "ws-1", "--task", "build it"]);
@@ -348,10 +344,13 @@ fn worktree_makes_it_with_the_repositorys_settings_and_hands_its_agent_a_task() 
     let branches = std::process::Command::new("git")
         .arg("-C")
         .arg(&w.repo)
-        .args(["branch", "--list", "bryan/ws-1"])
+        .args(["branch", "--list", "ws-1"])
         .output()
         .unwrap();
-    assert!(String::from_utf8_lossy(&branches.stdout).contains("bryan/ws-1"));
+    assert!(
+        String::from_utf8_lossy(&branches.stdout).contains("ws-1"),
+        "REQ-512"
+    );
     // Its one panel: the setup ran in it and then the agent started (`--task` opens `claude`).
     let panes = w.json(&["pane", "ls", id, "--json"]);
     assert_eq!(panes.as_array().unwrap().len(), 1);
@@ -373,6 +372,16 @@ fn worktree_makes_it_with_the_repositorys_settings_and_hands_its_agent_a_task() 
     assert!(made.contains("app-wt/ws-2"), "{made}");
     let made = w.ok(None, &["worktree", "ws-3", "--in", &text(&w.repo)]);
     assert!(made.contains("app-wt/ws-3"), "{made}");
+    // A prefix in the name is part of the branch and the folder is its last part (REQ-512).
+    let made = w.ok(None, &["worktree", "fix/login", "--in", &text(&w.repo)]);
+    assert!(made.contains("app-wt/login"), "{made}");
+    let branches = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&w.repo)
+        .args(["branch", "--list", "fix/login"])
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&branches.stdout).contains("fix/login"));
     // What the daemon refuses is said, and a worktree that already exists is not made twice.
     assert!(
         w.fails(None, &["worktree", "ws-3", "--in", &text(&w.repo)], 1)

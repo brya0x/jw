@@ -71,16 +71,23 @@ class FoldersTest {
         assertEquals(emptySet(), takenNames("/home/u/code/app-trees", null, open), "the folder of the settings' root, not <repo>-wt")
     }
 
-    private val defaults = ProjectInfo(null, "/home/u/code/app-wt", "feat/{name}", emptyList(), OpenKind.Shell)
+    private val defaults = ProjectInfo(null, "/home/u/code/app-wt", emptyList(), OpenKind.Shell)
     private val ready = WorktreeSettings.Ready(defaults)
 
     @Test
     fun aNameSaysWhatItMakesOrWhyItCannotBeUsed() {
-        assertEquals(WorktreePlan.Ok("feat/ws-1", "ws-1", "app-wt/ws-1", defaults), planWorktree(ready, "ws-1", emptySet()))
-        for (bad in listOf("", "Mi Rama", "-x", "a/b", "a".repeat(41))) {
+        assertEquals(WorktreePlan.Ok("ws-1", "ws-1", "app-wt/ws-1", defaults), planWorktree(ready, "ws-1", emptySet()), "the branch is what was typed (REQ-512)")
+        for (bad in listOf("", "Mi Rama", "-x", "a/", "/a", "a//b", "a/-b", "A/b", "a".repeat(41), "a/" + "b".repeat(41))) {
             assertIs<WorktreePlan.Wrong>(planWorktree(ready, bad, emptySet()), bad)
         }
         assertEquals(WorktreePlan.Wrong("app-wt/ws-1 ya existe"), planWorktree(ready, "ws-1", setOf("ws-1")))
+    }
+
+    @Test
+    fun aPrefixInTheNameIsPartOfTheBranchAndTheFolderIsItsLastPart() {
+        assertEquals(WorktreePlan.Ok("fix/login", "login", "app-wt/login", defaults), planWorktree(ready, "fix/login", emptySet()))
+        assertEquals(WorktreePlan.Ok("a/b/c", "c", "app-wt/c", defaults), planWorktree(ready, "a/b/c", emptySet()))
+        assertEquals(WorktreePlan.Wrong("app-wt/login ya existe"), planWorktree(ready, "fix/login", setOf("login")), "the folder is the one that is taken")
     }
 
     @Test
@@ -92,11 +99,11 @@ class FoldersTest {
     }
 
     @Test
-    fun theBranchTheFolderTheSetupAndThePanesComeFromTheSettings() {
-        val info = ProjectInfo("/home/u/code/app/.jw.toml", "/home/u/code/app-trees", "bryan/{name}", listOf("bun install", "cp .env.example .env"), OpenKind.Claude)
+    fun theFolderTheSetupAndTheOpenComeFromTheSettings() {
+        val info = ProjectInfo("/home/u/code/app/.jw.toml", "/home/u/code/app-trees", listOf("bun install", "cp .env.example .env"), OpenKind.Claude)
         val plan = planWorktree(WorktreeSettings.Ready(info), "ws-3", setOf("ws-1"))
         assertIs<WorktreePlan.Ok>(plan)
-        assertEquals("bryan/ws-3", plan.branch)
+        assertEquals("ws-3", plan.branch)
         assertEquals("ws-3", plan.folder)
         assertEquals("app-trees/ws-3", plan.place)
         assertEquals(listOf("bun install", "cp .env.example .env"), plan.info.setup)

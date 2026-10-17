@@ -69,7 +69,7 @@ sealed interface WorktreeSettings {
 
 /** What a name will make, or why it cannot be used (REQ-210, REQ-211, REQ-347 to REQ-349). */
 sealed interface WorktreePlan {
-    /** [place] is the last folder of the settings' `root` and the name; [info] says the setup and the panes. */
+    /** [branch] is the name as typed, [folder] its last part and [place] the last folder of the settings' `root` and [folder]. */
     data class Ok(val branch: String, val folder: String, val place: String, val info: ProjectInfo) : WorktreePlan
     data object Reading : WorktreePlan
     data class Wrong(val why: String) : WorktreePlan
@@ -81,13 +81,18 @@ fun planWorktree(settings: WorktreeSettings, name: String, taken: Set<String>): 
         is WorktreeSettings.Refused -> return WorktreePlan.Wrong(settings.why)
         is WorktreeSettings.Ready -> settings.info
     }
-    val valid = name.isNotEmpty() && name.length <= 40 && name.all { it in 'a'..'z' || it in '0'..'9' || it == '-' } && !name.startsWith('-')
-    val place = "${repoName(info.root)}/$name"
+    val folder = name.substringAfterLast('/')
+    val place = "${repoName(info.root)}/$folder"
     return when {
-        !valid -> WorktreePlan.Wrong("nombre no válido: usa minúsculas, números y guiones")
-        name in taken -> WorktreePlan.Wrong("$place ya existe")
-        else -> WorktreePlan.Ok(info.branch.replace("{name}", name), name, place, info)
+        !validBranch(name) -> WorktreePlan.Wrong("nombre no válido: minúsculas, números y guiones, con / para un prefijo")
+        folder in taken -> WorktreePlan.Wrong("$place ya existe")
+        else -> WorktreePlan.Ok(name, folder, place, info)
     }
+}
+
+/** The text typed for a new worktree is its branch as written (REQ-512): words, digits and hyphens, `/` between the parts of a prefix. */
+fun validBranch(name: String): Boolean = name.length <= 60 && name.split('/').all { part ->
+    part.isNotEmpty() && part.length <= 40 && !part.startsWith('-') && part.all { it in 'a'..'z' || it in '0'..'9' || it == '-' }
 }
 
 /**

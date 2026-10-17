@@ -7596,7 +7596,6 @@ mod tests {
             "from": setup.map(|_| "repo"),
             "personal": root.join("projects/app.toml"),
             "root": root,
-            "branch": "feat/{name}",
             "setup": setup.unwrap_or(&[]),
             "open": if setup.is_some() { "claude" } else { "shell" },
         }))))
@@ -7651,7 +7650,6 @@ mod tests {
                 "from": "personal",
                 "personal": root.join("projects/app.toml"),
                 "root": root.join("app-wt"),
-                "branch": "feat/{name}",
                 "setup": [],
                 "open": "shell",
             })))),
@@ -7691,7 +7689,7 @@ mod tests {
         v.project_replied(&root.join("app"), project_reply(&root.join("app-wt"), None));
         let t = v.plain(120, 30);
         assert!(t.contains("nombre    ws-1▏"), "{t}");
-        assert!(t.contains("rama      feat/ws-1"), "{t}");
+        assert!(t.contains("rama      ws-1"), "{t}");
         assert!(t.contains("desde     feat/login"), "{t}");
         assert!(t.contains("app-wt/ws-1"), "{t}");
         assert!(t.contains(" WORKTREE "), "{t}");
@@ -7707,7 +7705,7 @@ mod tests {
             v.press_key(plain(KeyCode::Enter)),
             After::CreateWorktree {
                 repo: root.join("app"),
-                branch: "feat/fix".into(),
+                branch: "fix".into(),
                 from: "feat/login".into(),
                 folder: "fix".into(),
                 open: contract::OpenKind::Shell,

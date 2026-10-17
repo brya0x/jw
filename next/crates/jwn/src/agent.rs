@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use contract::conversation::{ConvStatus, Conversation, Item};
 use contract::{
-    Attention, AttentionKind, Block, Blocks, Cmd, Pane, ProjectInfo, Session, SplitDir, Workspace,
+    Attention, AttentionKind, Block, Blocks, Cmd, Pane, Session, SplitDir, Workspace,
     WorkspaceSummary,
 };
 use serde::de::DeserializeOwned;
@@ -810,17 +810,14 @@ fn worktree(args: &[&str]) -> Out {
     };
     let mut s = Link::connect()?;
     let repo = repo_of(&mut s, a.value("in"))?;
-    let info: ProjectInfo =
-        serde_json::from_value(s.cmd(Cmd::ProjectConfig { repo: repo.clone() })?)
-            .map_err(|e| Fail::Error(e.to_string()))?;
-    let branch = a
-        .value("branch")
-        .map_or_else(|| info.branch.replace("{name}", name), str::to_owned);
+    // The name is the branch, as typed; the folder is its last part (REQ-512).
+    let branch = a.value("branch").unwrap_or(name).to_owned();
+    let folder = name.rsplit('/').next().unwrap_or(name).to_owned();
     let made = s.cmd(Cmd::CreateWorktree {
         repo,
         branch,
         base: a.value("from").map(str::to_owned),
-        folder: Some(name.to_owned()),
+        folder: Some(folder),
     })?;
     let (Some(id), Some(path)) = (made["workspace"].as_str(), made["path"].as_str()) else {
         return fail("the daemon did not say what it made");

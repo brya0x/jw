@@ -72,6 +72,25 @@ fn valid_new(name: &str) -> bool {
         && name.len() <= 80
 }
 
+/// The text typed for a new worktree is its branch, as typed (REQ-512): lowercase words, digits and
+/// hyphens, with `/` between the parts of a prefix (`fix/login`).
+fn valid_branch(name: &str) -> bool {
+    name.len() <= 60
+        && name.split('/').all(|part| {
+            !part.is_empty()
+                && part.len() <= 40
+                && !part.starts_with('-')
+                && part
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        })
+}
+
+/// The worktree's folder is the last part of its branch: `login` for `fix/login`.
+fn folder_of(branch: &str) -> &str {
+    branch.rsplit('/').next().unwrap_or(branch)
+}
+
 impl Picker {
     /// Starts in `dir`, the folder beside the project the person is in.
     pub fn new(dir: PathBuf) -> Picker {
@@ -383,7 +402,7 @@ pub enum Plan {
 }
 
 /// What the box knows of the repository's settings (`.jw.toml`): the daemon's answer to
-/// `project_config`, which says where the worktree goes, its branch and what opens with it.
+/// `project_config`, which says where the worktree goes and what opens with it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Config {
     Reading,
@@ -501,28 +520,27 @@ impl Worktree {
             Config::Refused(why) => return Plan::Wrong(why.clone()),
             Config::Ready(info) => info,
         };
-        let name = &self.name;
-        let valid = !name.is_empty()
-            && name.len() <= 40
-            && name
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-            && !name.starts_with('-');
-        if !valid {
-            return Plan::Wrong("nombre no válido: usa minúsculas, números y guiones".into());
+        let branch = &self.name;
+        if !valid_branch(branch) {
+            return Plan::Wrong(
+                "nombre no válido: minúsculas, números y guiones, con / para un prefijo".into(),
+            );
         }
+        let name = folder_of(branch);
         let folder = Path::new(&info.root).join(name);
-        let branch = info.branch.replace("{name}", name);
         if self.open.contains(&folder) {
             return Plan::Wrong(format!("{}/{name} ya existe", repo_name(&self.repo)));
         }
         if folder.exists() {
             return Plan::Wrong(format!("{} ya existe", short(&folder)));
         }
-        if branch_exists(&self.repo, &branch) {
+        if branch_exists(&self.repo, branch) {
             return Plan::Wrong(format!("la rama {branch} ya existe"));
         }
-        Plan::Ok { branch, folder }
+        Plan::Ok {
+            branch: branch.clone(),
+            folder,
+        }
     }
 
     pub fn press(&mut self, code: KeyCode, ctrl: bool) -> Make {
@@ -534,7 +552,7 @@ impl Worktree {
                         repo: self.repo.clone(),
                         branch: branch.clone(),
                         from: self.from.clone(),
-                        folder: self.name.clone(),
+                        folder: folder_of(&self.name).to_owned(),
                         open: self.opens,
                     };
                 }
@@ -828,7 +846,6 @@ mod tests {
             copy: Vec::new(),
             ports: Default::default(),
             root: root.join("app-wt").to_string_lossy().into_owned(),
-            branch: "feat/{name}".into(),
             setup: Vec::new(),
             open: OpenKind::Shell,
         }
@@ -850,13 +867,13 @@ mod tests {
         let Plan::Ok { branch, folder } = t.plan() else {
             panic!("{:?}", t.plan())
         };
-        assert_eq!(branch, "feat/ws-1");
+        assert_eq!(branch, "ws-1", "REQ-512: the branch is what is typed");
         assert_eq!(*folder, root.join("app-wt").join("ws-1"));
         // The first one is taken (open, on disk, or as a branch): the suggestion moves on.
         let t = ready(&app, vec![root.join("app-wt/ws-1")], defaults(&root));
         assert_eq!(t.name, "ws-2");
         std::fs::create_dir_all(root.join("app-wt/ws-2")).unwrap();
-        assert!(git_out(&app, &["branch", "feat/ws-3"]).is_some());
+        assert!(git_out(&app, &["branch", "ws-3"]).is_some());
         let t = ready(&app, vec![root.join("app-wt/ws-1")], defaults(&root));
         assert_eq!(t.name, "ws-4");
         let _ = std::fs::remove_dir_all(root);
@@ -886,8 +903,12 @@ mod tests {
         type_name(&mut t, "Bad Name");
         assert_eq!(
             why(&t),
-            "nombre no válido: usa minúsculas, números y guiones"
+            "nombre no válido: minúsculas, números y guiones, con / para un prefijo"
         );
+        for bad in ["fix/", "/fix", "fix//x", "fix/-x", "FIX/x"] {
+            type_name(&mut t, bad);
+            assert!(why(&t).starts_with("nombre no válido"), "{bad}");
+        }
         type_name(&mut t, "");
         assert!(
             why(&t).starts_with("nombre no válido"),
@@ -897,16 +918,38 @@ mod tests {
         assert_eq!(why(&t), "app/there ya existe");
         type_name(&mut t, "taken");
         assert!(why(&t).ends_with("app-wt/taken ya existe"), "{}", why(&t));
-        type_name(&mut t, "old");
+        type_name(&mut t, "feat/old");
         assert_eq!(why(&t), "la rama feat/old ya existe");
+        type_name(&mut t, "old");
+        assert!(
+            matches!(t.plan(), Plan::Ok { .. }),
+            "`old` is not `feat/old`"
+        );
+        type_name(&mut t, "fix/there");
+        assert_eq!(
+            why(&t),
+            "app/there ya existe",
+            "the folder is the last part"
+        );
         // Enter does nothing while it cannot be made, and asks for what the plan says when it can.
         assert_eq!(t.press(KeyCode::Enter, false), Make::Stay);
         type_name(&mut t, "fresh");
         assert_eq!(
             t.press(KeyCode::Enter, false),
             Make::Create {
+                repo: app.clone(),
+                branch: "fresh".into(),
+                from: "main".into(),
+                folder: "fresh".into(),
+                open: OpenKind::Shell,
+            }
+        );
+        type_name(&mut t, "fix/fresh");
+        assert_eq!(
+            t.press(KeyCode::Enter, false),
+            Make::Create {
                 repo: app,
-                branch: "feat/fresh".into(),
+                branch: "fix/fresh".into(),
                 from: "main".into(),
                 folder: "fresh".into(),
                 open: OpenKind::Shell,
@@ -950,7 +993,7 @@ mod tests {
     }
 
     #[test]
-    fn the_branch_and_the_folder_come_from_the_settings_and_the_names_are_checked_on_them() {
+    fn the_folder_comes_from_the_settings_and_the_branch_is_what_is_typed_and_both_are_checked() {
         let root = tree("wt5");
         let app = repo(&root);
         let info = ProjectInfo {
@@ -960,7 +1003,6 @@ mod tests {
             copy: vec![".env".into()],
             ports: [("web".to_owned(), 0), ("api".to_owned(), 1)].into(),
             root: root.join("trees").to_string_lossy().into_owned(),
-            branch: "bryan/{name}".into(),
             setup: vec!["bun install".into()],
             open: OpenKind::Claude,
         };
@@ -968,11 +1010,11 @@ mod tests {
         let Plan::Ok { branch, folder } = t.plan() else {
             panic!("{:?}", t.plan())
         };
-        assert_eq!(branch, "bryan/ws-1");
+        assert_eq!(branch, "ws-1");
         assert_eq!(*folder, root.join("trees/ws-1"));
-        // The branch of the template is the one that counts: `feat/ws-1` does not stop it.
+        // A branch of that name stops it, and one with a prefix does not.
         assert!(git_out(&app, &["branch", "feat/ws-1"]).is_some());
-        assert!(git_out(&app, &["branch", "bryan/ws-1"]).is_some());
+        assert!(git_out(&app, &["branch", "ws-1"]).is_some());
         std::fs::create_dir_all(root.join("trees/ws-2")).unwrap();
         let mut t = ready(&app, vec![], info);
         assert_eq!(
@@ -984,7 +1026,7 @@ mod tests {
             t.press(KeyCode::Enter, false),
             Make::Create {
                 repo: app,
-                branch: "bryan/x".into(),
+                branch: "x".into(),
                 from: "main".into(),
                 folder: "x".into(),
                 open: OpenKind::Claude,
