@@ -669,6 +669,8 @@ sealed interface Node {
         val running: List<Running> = emptyList(),
         /** The time of the first item of [items] when the conversation has a transcript that may hold older ones: the `before` of `read_older` (REQ-567). */
         val older: Long? = null,
+        /** What Claude proposes the person writes next, while the engine is stopped and nothing waits (REQ-572). */
+        val suggestion: String? = null,
         /** When the turn began that another `claude` runs in the transcript this conversation follows (REQ-565). */
         val following: Long? = null,
         /** What the turn that runs has written, in tokens; 0 when the engine has not said (REQ-563). */

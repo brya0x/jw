@@ -352,6 +352,26 @@ fn markdown_blocks_validate_and_a_finished_text_keeps_them() {
     assert_eq!(serde_json::to_value(&items).unwrap(), snap["node"]["items"]);
 }
 
+/// The conversation fixture that is idle carries what Claude proposes next (REQ-572).
+#[test]
+fn an_idle_conversation_carries_what_claude_proposes_next() {
+    let docs = fixtures("daemon");
+    let (_, snap) = docs
+        .iter()
+        .find(|(n, _)| n == "snapshot-conversation-markdown.json")
+        .expect("the fixture");
+    let conv: contract::conversation::Conversation =
+        serde_json::from_value(snap["node"].clone()).unwrap();
+    assert_eq!(
+        conv.suggestion.as_deref(),
+        Some("corre los tests del módulo auth y dime cuáles fallan")
+    );
+    assert_eq!(
+        serde_json::to_value(&conv).unwrap()["suggestion"],
+        snap["node"]["suggestion"]
+    );
+}
+
 /// The conversation fixture with a tool that runs says when it began and what the turn has
 /// written, and writes both back as they were (REQ-562, REQ-563).
 #[test]

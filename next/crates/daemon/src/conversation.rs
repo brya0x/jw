@@ -19,6 +19,9 @@ use serde_json::{Value, json};
 /// How many items a node keeps (REQ-392).
 pub const KEEP: usize = 300;
 
+/// The longest suggestion that is kept (REQ-572).
+const SUGGESTION_CHARS: usize = 400;
+
 /// The row of a consultation of the advisor (REQ-570): the name Claude Code gives it, and what it
 /// says when the advisor has answered.
 pub(crate) const ADVISING: &str = "Advising";
@@ -504,6 +507,8 @@ pub struct State {
     /// A conversation resumed by its id says so before the first message sent in it, and not
     /// while it is only followed (REQ-564).
     resume_divider: bool,
+    /// What the engine proposed the person writes next, after the last turn (REQ-572).
+    suggestion: Option<String>,
     /// The engine's total cost so far (its process), to know what one turn cost.
     last_total_micro: u64,
     live_texts: VecDeque<usize>,
@@ -691,6 +696,7 @@ impl State {
             msg_id: String::new(),
             followed: None,
             resume_divider: false,
+            suggestion: None,
             last_total_micro: 0,
             live_texts: VecDeque::new(),
             shell_context: Vec::new(),
@@ -819,6 +825,16 @@ impl State {
                 *summary = Some("sin resultado".into());
             }
         }
+    }
+
+    /// What is proposed, while it can be taken: the engine is stopped and nothing waits.
+    fn shown_suggestion(&self) -> Option<String> {
+        (self.status == ConvStatus::Idle
+            && !self.busy()
+            && self.pending.is_none()
+            && self.queue.is_empty())
+        .then(|| self.suggestion.clone())
+        .flatten()
     }
 
     /// The time of the first item the node holds, when the transcript may hold older ones: the
@@ -952,6 +968,7 @@ impl State {
                 (None, None) => 0,
             },
             following: self.followed.map(|f| f.since),
+            suggestion: self.shown_suggestion(),
             older: self.older_cursor(),
         }
     }
@@ -1042,6 +1059,7 @@ impl State {
     }
 
     fn begin_turn(&mut self, now: u64) {
+        self.suggestion = None;
         self.status = ConvStatus::Thinking;
         // The turn of another `claude` that was followed is not this one's: what it ran is over.
         if self.followed.take().is_some() {
@@ -1060,6 +1078,7 @@ impl State {
             self.queue.push_back(Queued::Local { line, change });
             return Vec::new();
         }
+        self.suggestion = None;
         self.inflight = Some(Inflight::Local(change));
         vec![Effect::Write(user_line(&line, &[]))]
     }
@@ -1419,6 +1438,15 @@ impl State {
                 Vec::new()
             }
             "result" => self.result(msg, now),
+            // After a turn, the engine proposes what the person writes next (REQ-572).
+            "prompt_suggestion" => {
+                self.suggestion = msg["suggestion"]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty())
+                    .map(|t| clip(t, SUGGESTION_CHARS));
+                Vec::new()
+            }
             "conversation_reset" => self.reset(msg),
             _ => Vec::new(),
         }
@@ -2148,6 +2176,7 @@ impl State {
     /// The engine's process ended while the conversation was open.
     pub fn engine_gone(&mut self, reason: &str) -> Vec<Effect> {
         let had_ask = self.pending.take().is_some();
+        self.suggestion = None;
         self.inflight = None;
         self.auto = false;
         self.interrupting = false;
@@ -2961,6 +2990,44 @@ mod tests {
         ));
         s.apply(&json!({"type": "assistant", "message": {"content": [{"type": "advisor_tool_result", "tool_use_id": "srv1", "content": {"type": "advisor_result", "text": "x"}}]}}), 2);
         assert!(s.items.iter().any(|i| matches!(i, Item::Tool { state: ToolState::Ok, summary: Some(x), .. } if x == ADVISED)));
+    }
+
+    /// REQ-572: what the engine proposes after a turn is in the node while nothing runs or waits,
+    /// and goes when a turn begins, a question waits or a message is queued.
+    #[test]
+    fn what_the_engine_proposes_is_in_the_node_only_while_nothing_runs_or_waits() {
+        let mut s = st();
+        s.send("go", vec![], 0);
+        s.apply(&json!({"type": "result", "subtype": "success", "is_error": false, "duration_ms": 10, "total_cost_usd": 0.0}), 1);
+        assert_eq!(node_of(&s).suggestion, None, "none yet");
+        s.apply(&json!({"type": "prompt_suggestion", "suggestion": "  corre los tests  ", "uuid": "u", "session_id": "s"}), 2);
+        assert_eq!(node_of(&s).suggestion.as_deref(), Some("corre los tests"));
+        s.apply(
+            &json!({"type": "prompt_suggestion", "suggestion": "   "}),
+            3,
+        );
+        assert_eq!(node_of(&s).suggestion, None, "an empty one is none");
+        s.apply(
+            &json!({"type": "prompt_suggestion", "suggestion": "otra"}),
+            4,
+        );
+        s.send("sigue", vec![], 5);
+        assert_eq!(node_of(&s).suggestion, None, "a turn began");
+        s.apply(&json!({"type": "result", "subtype": "success", "is_error": false, "duration_ms": 10, "total_cost_usd": 0.0}), 6);
+        assert_eq!(
+            node_of(&s).suggestion,
+            None,
+            "the old one went with the turn"
+        );
+        s.apply(
+            &json!({"type": "prompt_suggestion", "suggestion": "y esto"}),
+            7,
+        );
+        s.queue.push_back(Queued::Text {
+            text: "x".into(),
+            images: Vec::new(),
+        });
+        assert_eq!(node_of(&s).suggestion, None, "a message waits");
     }
 
     #[test]

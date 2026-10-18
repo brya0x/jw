@@ -78,6 +78,7 @@ import dev.jw.next.client.savedPanel
 import dev.jw.next.client.skillsPanel
 import dev.jw.next.client.slashMenu
 import dev.jw.next.client.statusPanel
+import dev.jw.next.client.suggestionShown
 import dev.jw.next.client.submitOf
 import dev.jw.next.client.tag
 import dev.jw.next.client.tasksPanel
@@ -385,7 +386,25 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
     if (menu.isNotEmpty()) CommandList(menu, accent) { c -> send(c.name) }
 
     // ---- the field ----
+    // What Claude proposes next: a tap puts it in the field, the ✕ puts it aside; writing puts it aside too (REQ-572).
+    var asideSuggestion by remember(nodeId) { mutableStateOf<String?>(null) }
+    val proposed = node.suggestionShown(text.text, asideSuggestion, retaking)
+    LaunchedEffect(text.text, node.suggestion) { if (text.text.isNotBlank() && node.suggestion != null) asideSuggestion = node.suggestion }
     Column(Modifier.fillMaxWidth().background(Palette.panel).navigationBarsUnlessKeyboard().keepsKeyboard().padding(top = 8.dp)) {
+        proposed?.let { p ->
+            Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Box(
+                    Modifier.weight(1f).defaultMinSize(minHeight = 48.dp).background(Palette.sel, RoundedCornerShape(8.dp))
+                        .clickable { text = TextFieldValue(p, TextRange(p.length)); asideSuggestion = p }
+                        .semantics { contentDescription = "Usar la sugerencia: $p" }.padding(horizontal = 10.dp, vertical = 6.dp),
+                    contentAlignment = Alignment.CenterStart,
+                ) { Mono("↳ $p", Palette.dim, 12, lines = 3) }
+                Box(
+                    Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp).clickable { asideSuggestion = p }.semantics { contentDescription = "Descartar la sugerencia" },
+                    contentAlignment = Alignment.Center,
+                ) { Mono("✕", Palette.dim, 14) }
+            }
+        }
         if (pictures.isNotEmpty()) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 10.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             pictures.toList().forEach { p ->
                 Row(Modifier.background(Palette.sel, RoundedCornerShape(8.dp)).padding(start = 10.dp), verticalAlignment = Alignment.CenterVertically) {

@@ -67,6 +67,18 @@ class ConversationTest {
         assertNull(run.ranFor("t2", 1_792_110_012_000))
     }
 
+    /** REQ-572: what Claude proposes shows while the field is empty and nothing runs, waits or was put aside. */
+    @Test
+    fun whatClaudeProposesShowsOnlyWhileItCanBeTaken() {
+        val c = conversation().copy(ask = null, status = ConvStatus.Idle, since = null, suggestion = "revisa el diff")
+        assertEquals("revisa el diff", c.suggestionShown("", null, false))
+        assertNull(c.suggestionShown("hola", null, false), "the field is the person's")
+        assertNull(c.suggestionShown("", "revisa el diff", false), "put aside")
+        assertEquals("revisa el diff", c.suggestionShown("  ", "otra", false))
+        assertNull(c.copy(status = ConvStatus.Thinking).suggestionShown("", null, false), "Claude works")
+        assertNull(c.copy(suggestion = null).suggestionShown("", null, false))
+    }
+
     /** A turn of another `claude` that is followed has a line of work with no way to stop it (REQ-565). */
     @Test
     fun aFollowedTurnShowsItsTimeAndTokensAndNoStop() {

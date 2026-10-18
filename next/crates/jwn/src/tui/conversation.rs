@@ -363,6 +363,8 @@ impl Editor {
 #[derive(Default)]
 pub struct Ui {
     pub editor: Editor,
+    /// The suggestion that was put aside: the person wrote, took or dismissed it (REQ-572).
+    ghost_off: String,
     /// The older items of the conversation, which `View::sync` keeps beside the node's (REQ-567).
     pub(super) older: Older,
     /// The time of the last frame drawn, for what counts up (a tool that runs); 0 before the first.
@@ -1160,6 +1162,18 @@ impl Ui {
         }
     }
 
+    /// What Claude proposes, when it can be taken: the field is empty, nothing runs, waits or is
+    /// open over it, and the person did not put it aside (REQ-572).
+    fn ghost<'a>(&self, conv: &'a Conversation) -> Option<&'a str> {
+        conv.suggestion.as_deref().filter(|s| {
+            self.editor.text().is_empty()
+                && conv.ask.is_none()
+                && self.pop.is_none()
+                && !self.working(conv)
+                && self.ghost_off != *s
+        })
+    }
+
     fn working(&self, conv: &Conversation) -> bool {
         conv.status != ConvStatus::Idle && !(conv.status == ConvStatus::Dead && !self.retaking)
     }
@@ -1289,9 +1303,12 @@ impl Ui {
             if !self.images.is_empty() {
                 chips.push((format!("▣ {}", self.images.len()), look::cyan()));
             }
+            let proposed = self.ghost(conv).map(|s| format!("{s}  tab"));
             let look = Look {
                 stop: self.working(conv).then_some("■ esc"),
-                ask: "escribe un mensaje · / comandos",
+                ask: proposed
+                    .as_deref()
+                    .unwrap_or("escribe un mensaje · / comandos"),
                 lead: self.lead(conv),
             };
             field.draw_with(g, (ix, by, iw), &chips, focused, &look);
@@ -1820,6 +1837,18 @@ impl Ui {
             }
         }
         match ev.code {
+            // What Claude proposes goes into the field to be edited or sent (REQ-572).
+            KeyCode::Tab | KeyCode::Right if self.ghost(conv).is_some() => {
+                if let Some(s) = self.ghost(conv).map(str::to_owned) {
+                    self.editor.set(&s);
+                    self.ghost_off = s;
+                }
+                None
+            }
+            KeyCode::Esc if self.ghost(conv).is_some() => {
+                self.ghost_off = self.ghost(conv).map(str::to_owned).unwrap_or_default();
+                None
+            }
             KeyCode::Enter if ev.modifiers.contains(KeyModifiers::SHIFT) => {
                 self.editor.insert("\n");
                 None
@@ -1871,6 +1900,12 @@ impl Ui {
             _ => {
                 self.menu_at = 0;
                 self.editor.edit(ev);
+                // Whoever writes has put the proposal aside, for when the field is empty again.
+                if !self.editor.text().is_empty()
+                    && let Some(s) = &conv.suggestion
+                {
+                    self.ghost_off.clone_from(s);
+                }
                 None
             }
         }
@@ -3770,6 +3805,61 @@ mod tests {
         assert_eq!(ui.picked, Some(104));
         assert_eq!(ui.open.iter().copied().collect::<Vec<_>>(), [105]);
         assert_eq!(ui.unfolded.iter().copied().collect::<Vec<_>>(), [107]);
+    }
+
+    /// REQ-572: what Claude proposes is grey in the empty field, Tab or → puts it in the field to be
+    /// edited, Enter with the field empty sends nothing, and Esc, writing or taking it put it aside.
+    #[test]
+    fn what_claude_proposes_is_taken_with_tab_and_put_aside_by_esc_or_by_writing() {
+        let mut conv = idle();
+        conv.suggestion = Some("revisa el diff antes de subirlo".into());
+        let mut ui = Ui::default();
+        let (_, rows) = frame(&ui, &conv);
+        row_of(&rows, "revisa el diff antes de subirlo  tab");
+        assert!(
+            press(&mut ui, &conv, KeyCode::Enter).is_none(),
+            "Enter with an empty field sends nothing"
+        );
+        assert!(press(&mut ui, &conv, KeyCode::Tab).is_none());
+        assert_eq!(ui.editor.text(), "revisa el diff antes de subirlo");
+        let (_, rows) = frame(&ui, &conv);
+        assert!(
+            !rows.join("\n").contains("  tab"),
+            "it is the person's text now"
+        );
+        assert!(matches!(
+            press(&mut ui, &conv, KeyCode::Enter),
+            Some(Act::Send { .. })
+        ));
+        // Esc puts it aside; the same text does not come back, another one does
+        let mut ui = Ui::default();
+        press(&mut ui, &conv, KeyCode::Esc);
+        assert!(
+            !frame(&ui, &conv)
+                .1
+                .join("\n")
+                .contains("revisa el diff antes de subirlo")
+        );
+        conv.suggestion = Some("otra cosa".into());
+        row_of(&frame(&ui, &conv).1, "otra cosa  tab");
+        // writing puts it aside, and so does →
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "x");
+        press(&mut ui, &conv, KeyCode::Backspace);
+        assert!(!frame(&ui, &conv).1.join("\n").contains("otra cosa"));
+        let mut ui = Ui::default();
+        press(&mut ui, &conv, KeyCode::Right);
+        assert_eq!(ui.editor.text(), "otra cosa");
+        // nothing is proposed while Claude works or asks
+        let mut busy = idle();
+        busy.suggestion = Some("no".into());
+        busy.status = ConvStatus::Thinking;
+        assert!(
+            !frame(&Ui::default(), &busy)
+                .1
+                .join("\n")
+                .contains("no  tab")
+        );
     }
 
     #[test]

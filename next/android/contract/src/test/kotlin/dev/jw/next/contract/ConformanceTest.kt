@@ -239,6 +239,14 @@ class ConformanceTest {
         assertEquals(1250L, node.tokens)
     }
 
+    /** The idle conversation fixture carries what Claude proposes next (REQ-572). */
+    @Test
+    fun anIdleConversationCarriesWhatClaudeProposesNext() {
+        val snapshot = fixtures("daemon").first { it.first == "snapshot-conversation-markdown.json" }.second
+        val node = (ContractJson.decodeFromJsonElement(DaemonMsg.serializer(), snapshot) as DaemonMsg.Snapshot).node as Node.Conversation
+        assertEquals("corre los tests del módulo auth y dime cuáles fallan", node.suggestion)
+    }
+
     /** The conversation fixture of a followed turn says when it began and has its tool running (REQ-565). */
     @Test
     fun aFollowedTurnSaysWhenItBegan() {

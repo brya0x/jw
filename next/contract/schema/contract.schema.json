@@ -471,6 +471,7 @@
               "items": { "type": "object", "required": ["id", "since"], "properties": { "id": { "type": "string" }, "since": { "type": "integer", "minimum": 0 } } }
             },
             "older": { "type": "integer", "minimum": 0, "description": "The time of the first item: the before of read_older." },
+            "suggestion": { "type": "string", "minLength": 1, "maxLength": 400, "description": "What Claude proposes the person writes next." },
             "following": { "type": "integer", "minimum": 0, "description": "When the turn began that another claude runs in the transcript this conversation follows." },
             "tokens": { "type": "integer", "minimum": 1, "description": "What the turn that runs has written." }
           }

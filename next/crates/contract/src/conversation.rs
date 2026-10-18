@@ -48,6 +48,10 @@ pub struct Conversation {
     /// older ones: the `before` of `read_older` (REQ-567).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub older: Option<u64>,
+    /// What Claude proposes the person writes next, while the engine is stopped and nothing waits
+    /// (REQ-572): the clients draw it grey in the empty field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggestion: Option<String>,
     /// When the turn began that another `claude` is running in the transcript this conversation
     /// follows, while its lines say one is open (REQ-565).
     #[serde(default, skip_serializing_if = "Option::is_none")]

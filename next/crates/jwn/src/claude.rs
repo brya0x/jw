@@ -45,12 +45,33 @@ pub fn run(args: &[&str]) -> ExitCode {
         .ok()
         .filter(|_| tty && daemon::conversation_served(&argv))
     {
-        match converse(&pane, &argv) {
+        // The engine proposes what to write next unless `config.toml` says not to (REQ-572); an
+        // argument of the person's own, if there is one, is kept before it and so is overridden.
+        let mut with = argv.clone();
+        if !suggestions_on(&config_text()) {
+            with.extend(["--prompt-suggestions".to_owned(), "false".to_owned()]);
+        }
+        match converse(&pane, &with) {
             Ok(code) => return code,
             Err(why) => eprintln!("{} claude: {why}; running claude", identity::get().name),
         }
     }
     original(&argv)
+}
+
+/// What `config.toml` says, or nothing when it cannot be read.
+fn config_text() -> String {
+    std::fs::read_to_string(identity::config_dir().join("config.toml")).unwrap_or_default()
+}
+
+/// Whether the engine is asked to propose what to write next: `suggestions = false` in `config.toml`
+/// turns it off, and anything else, a file with no such key or one that is not TOML, leaves it on.
+fn suggestions_on(config: &str) -> bool {
+    config
+        .parse::<toml::Table>()
+        .ok()
+        .and_then(|t| t.get("suggestions").and_then(toml::Value::as_bool))
+        .unwrap_or(true)
 }
 
 /// The original `claude`, in place of this process.
@@ -511,5 +532,24 @@ mod tests {
             by: None,
         };
         assert!(!settled(&running));
+    }
+
+    /// REQ-572: the suggestion is on unless `config.toml` says `suggestions = false`.
+    #[test]
+    fn the_suggestion_is_on_unless_the_config_turns_it_off() {
+        assert!(suggestions_on(""));
+        assert!(suggestions_on(
+            "[[program]]\nname = \"x\"\ncommand = [\"claude\"]\n"
+        ));
+        assert!(suggestions_on("suggestions = true\n"));
+        assert!(!suggestions_on("suggestions = false\n"));
+        assert!(
+            suggestions_on("suggestions = \"no\"\n"),
+            "not a boolean: it stays on"
+        );
+        assert!(
+            suggestions_on("esto no es toml ["),
+            "a file that cannot be read leaves it on"
+        );
     }
 }

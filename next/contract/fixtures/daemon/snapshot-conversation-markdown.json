@@ -205,6 +205,7 @@
     "limits": {
       "five_hour": 62,
       "seven_day": 31
-    }
+    },
+    "suggestion": "corre los tests del módulo auth y dime cuáles fallan"
   }
 }

@@ -186,6 +186,10 @@ fn launch_of(c: &Conv) -> Launch {
         "--include-partial-messages",
         "--permission-prompt-tool",
         "stdio",
+        // The engine proposes what the person writes next, after a turn (REQ-572); `jwn claude`
+        // turns it off with its own argument, which comes last, when `config.toml` says so.
+        "--prompt-suggestions",
+        "true",
     ]
     .map(str::to_owned)
     .into();
