@@ -35,6 +35,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -61,6 +62,8 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import dev.jw.next.client.IMAGES_MAX
+import dev.jw.next.client.OLDER_PAGE
+import dev.jw.next.client.OlderHeld
 import dev.jw.next.client.foldRuns
 import dev.jw.next.client.RowAct
 import dev.jw.next.client.PanelView
@@ -161,7 +164,12 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
         say("copiado · $lines ${if (lines == 1) "línea" else "líneas"} · ${what.length} caracteres")
     }
     fun fail(result: Result<Unit>) { result.onFailure { say(it.message ?: "el PC no pudo hacerlo", error = true) } }
-    val firstItem = node.first
+    // The items that came before the node's window are held beside it, and the number of an item stays when more are loaded (REQ-569).
+    val held = remember(nodeId) { OlderHeld() }
+    var olderVersion by remember(nodeId) { mutableIntStateOf(0) }
+    held.sync(node)
+    val items = remember(node, olderVersion) { held.all(node) }
+    val firstItem = held.first(node)
 
     // ---- what a send does ----
     fun openPanel(name: String, arg: String) {
@@ -273,29 +281,40 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
     // ---- the items ----
     // The runs that are open, from the start of the window; one that is not a run any more (its tools were trimmed) is forgotten.
     val relativeUnfolded = remember(unfolded, firstItem) { unfolded.map { it - firstItem }.toSet() }
-    val runStarts = remember(node.items, firstItem) { foldRuns(node.items).map { it.first + firstItem }.toSet() }
+    val runStarts = remember(items, firstItem) { foldRuns(items).map { it.first + firstItem }.toSet() }
     LaunchedEffect(runStarts) { if (!runStarts.containsAll(unfolded)) unfolded = unfolded intersect runStarts }
+    // In a list that grows upward the oldest end is where it cannot scroll forward: older items are asked for there, one request at a time.
+    val listState = rememberLazyListState()
+    val atEnd by remember { derivedStateOf { !listState.canScrollForward } }
+    LaunchedEffect(atEnd, olderVersion, node.older, node.first) {
+        val before = held.ask(node, atEnd) ?: return@LaunchedEffect
+        olderVersion++
+        source.readOlder(nodeId, before, OLDER_PAGE) { result -> if (held.replied(before, result)) olderVersion++ }
+    }
     ConversationItems(
-        items = node.items,
+        items = items,
         accent = accent,
         picked = picked?.minus(firstItem),
         opened = opened.map { it - firstItem }.toSet(),
         unfolded = relativeUnfolded,
         began = node.running,
         now = now,
-        state = rememberLazyListState(),
+        state = listState,
+        firstItem = firstItem,
+        oldest = held.row(node),
+        retryOlder = { held.retry(); olderVersion++ },
         modifier = Modifier.weight(1f).fillMaxWidth().padding(vertical = 8.dp),
         toggleFold = { first ->
             val n = firstItem + first
             unfolded = if (n in unfolded) unfolded - n else unfolded + n
             // What was picked inside a run that closes has no row to be picked at.
-            val run = foldRuns(node.items).firstOrNull { it.first == first }
+            val run = foldRuns(items).firstOrNull { it.first == first }
             if (run != null && n !in unfolded && picked?.minus(firstItem) in run.first..run.last) picked = null
         },
     ) { i ->
         val abs = firstItem + i
         picked = abs
-        if (node.items[i].let { it is dev.jw.next.contract.ConvItem.Tool || it is dev.jw.next.contract.ConvItem.Agent || it is dev.jw.next.contract.ConvItem.Shell }) {
+        if (items[i].let { it is dev.jw.next.contract.ConvItem.Tool || it is dev.jw.next.contract.ConvItem.Agent || it is dev.jw.next.contract.ConvItem.Shell }) {
             opened = if (abs in opened) opened - abs else opened + abs
         }
     }
@@ -309,12 +328,12 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
         Mono("${spinner(true)} $line", Palette.dim, 12, lines = 1, modifier = Modifier.fillMaxWidth().padding(horizontal = Pad, vertical = 4.dp))
     }
     notice?.let { Mono(it.text, if (it.error) Palette.yellow else Palette.green, 12, lines = 2, modifier = Modifier.fillMaxWidth().padding(horizontal = Pad, vertical = 4.dp)) }
-    picked?.takeIf { it - firstItem in node.items.indices }?.let { abs ->
+    picked?.takeIf { it - firstItem in items.indices }?.let { abs ->
         val i = abs - firstItem
         Row(Modifier.fillMaxWidth().background(Palette.panel).padding(horizontal = 10.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             listOf<Pair<String, () -> Unit>>(
-                "Copiar" to { copyText(itemText(node.items[i])) },
-                "Copiar el turno" to { copyText(turnText(node.items, i)) },
+                "Copiar" to { copyText(itemText(items[i])) },
+                "Copiar el turno" to { copyText(turnText(items, i)) },
                 "Soltar" to { picked = null },
             ).forEach { (label, act) ->
                 Box(

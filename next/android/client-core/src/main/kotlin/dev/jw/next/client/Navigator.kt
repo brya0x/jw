@@ -11,6 +11,7 @@ import dev.jw.next.contract.DirListing
 import dev.jw.next.contract.FileListing
 import dev.jw.next.contract.Id
 import dev.jw.next.contract.MarkdownDoc
+import dev.jw.next.contract.OlderItems
 import dev.jw.next.contract.OpenKind
 import dev.jw.next.contract.Node
 import dev.jw.next.contract.ProjectEdit
@@ -175,6 +176,11 @@ interface NodeSource {
 
     /** A Markdown file of [workspace] ([path] relative to its folder) as blocks, or the PC's message when it refuses (REQ-466). */
     fun readMarkdown(workspace: Id, path: String, reply: (Result<MarkdownDoc>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** Up to [count] of the items of the conversation [node] that came before the time [before] (REQ-567). */
+    fun readOlder(node: Id, before: Long, count: Int, reply: (Result<OlderItems>) -> Unit) {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
     }
 

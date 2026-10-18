@@ -44,6 +44,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.jw.next.client.FoldRow
+import dev.jw.next.client.OlderRow
 import dev.jw.next.client.answeredNote
 import dev.jw.next.client.char
 import dev.jw.next.client.convDone
@@ -89,6 +90,9 @@ internal fun ConversationItems(
     picked: Int?,
     opened: Set<Int>,
     unfolded: Set<Int>,
+    firstItem: Int,
+    oldest: OlderRow?,
+    retryOlder: () -> Unit,
     began: List<Running>,
     now: Long,
     state: LazyListState,
@@ -102,13 +106,29 @@ internal fun ConversationItems(
     // The tools of a run are one row (REQ-558); the key of a run is below zero, so it is not that of an item.
     val rows = remember(items, unfolded) { foldRows(items, unfolded).asReversed() }
     LazyColumn(modifier, state = state, reverseLayout = true, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        items(rows, key = { if (it is FoldRow.Item) it.index else -1 - (it as FoldRow.Run).run.first }) { row ->
+        // Keyed by the number of the item and not by its place in the list, so the list stays where it was when older items come before (REQ-569).
+        items(rows, key = { if (it is FoldRow.Item) 2L * (firstItem + it.index) else 2L * (firstItem + (it as FoldRow.Run).run.first) + 1 }) { row ->
             when (row) {
                 is FoldRow.Item -> ItemView(items[row.index], accent, spin, picked == row.index, row.index in opened, began, now) { pick(row.index) }
                 is FoldRow.Run -> FoldView(row) { toggleFold(row.run.first) }
             }
         }
+        if (oldest != null) item(key = "oldest") { OldestRow(oldest, retryOlder) }
     }
+}
+
+/** What is above the first item: older ones to load, that they are loading, that it failed (a tap tries again), or where the conversation starts (REQ-569). */
+@Composable
+private fun OldestRow(row: OlderRow, retry: () -> Unit) {
+    val tone = when (row) {
+        OlderRow.Failed -> Palette.red
+        OlderRow.Loading -> Palette.yellow
+        else -> Palette.dim
+    }
+    Box(
+        Modifier.fillMaxWidth().defaultMinSize(minHeight = 48.dp).then(if (row == OlderRow.Failed) Modifier.clickable(onClick = retry) else Modifier).padding(horizontal = Pad),
+        contentAlignment = Alignment.CenterStart,
+    ) { Mono(row.text, tone, 12, lines = 2) }
 }
 
 /** The row of a run of tools: what they did, and a tap opens or closes it (REQ-558). */

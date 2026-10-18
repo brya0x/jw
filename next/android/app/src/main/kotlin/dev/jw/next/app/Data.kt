@@ -24,6 +24,7 @@ import dev.jw.next.contract.FileListing
 import dev.jw.next.contract.Id
 import dev.jw.next.contract.Image
 import dev.jw.next.contract.MarkdownDoc
+import dev.jw.next.contract.OlderItems
 import dev.jw.next.contract.OpenKind
 import dev.jw.next.contract.Node
 import dev.jw.next.contract.Peer
@@ -265,6 +266,10 @@ abstract class ProtocolSource : AppSource() {
 
     override fun readMarkdown(workspace: Id, path: String, reply: (Result<MarkdownDoc>) -> Unit) {
         command(Cmd.ReadMarkdown(workspace, path)) { r -> reply(r.read(MarkdownDoc.serializer(), "el documento")) }
+    }
+
+    override fun readOlder(node: Id, before: Long, count: Int, reply: (Result<OlderItems>) -> Unit) {
+        command(Cmd.ReadOlder(node, before, count)) { r -> reply(r.read(OlderItems.serializer(), "los items anteriores")) }
     }
 
     override fun readPlan(node: Id, ask: String, reply: (Result<MarkdownDoc>) -> Unit) {
