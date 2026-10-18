@@ -70,6 +70,10 @@ pub struct Parser {
     turn_tokens: std::collections::BTreeMap<String, u64>,
     /// The tools of the open turn that wait for a result, in `items`.
     open_tools: Vec<usize>,
+    /// The time of the last line of the person's side (a message, a notice of a task, a message of
+    /// another agent, a result): what began a turn that Claude takes up with no message of the
+    /// person's.
+    last_user_at: u64,
 }
 
 impl Parser {
@@ -89,8 +93,10 @@ impl Parser {
     }
 
     /// A turn begins with the person's message.
-    fn open_turn(&mut self) {
-        self.turn = (self.last_at > 0).then_some(self.last_at);
+    fn open_turn(&mut self, since: u64) {
+        // A turn that nothing ended is over when the person writes again.
+        self.close_turn();
+        self.turn = (since > 0).then_some(since);
         self.turn_tokens.clear();
         self.open_tools.clear();
         self.rev += 1;
@@ -129,6 +135,9 @@ impl Parser {
                 continue;
             }
             self.own = entry["entrypoint"] == "sdk-cli";
+            if entry["type"] == "user" {
+                self.last_user_at = self.last_at;
+            }
             match entry["type"].as_str().unwrap_or("") {
                 "permission-mode" => {
                     let mode = entry["permissionMode"].as_str().and_then(Mode::from_flag);
@@ -158,10 +167,13 @@ impl Parser {
                 "system" if entry["subtype"] == "local_command" => {
                     self.command_output(entry["content"].as_str().unwrap_or(""));
                 }
-                "system" if entry["subtype"] == "compact_boundary" => self.push(Item::Divider {
-                    text: "conversación compactada".into(),
-                    kind: DividerKind::Compact,
-                }),
+                "system" if entry["subtype"] == "compact_boundary" => {
+                    self.close_turn();
+                    self.push(Item::Divider {
+                        text: "conversación compactada".into(),
+                        kind: DividerKind::Compact,
+                    });
+                }
                 "system" if entry["subtype"] == "turn_duration" => {
                     let ms = entry["durationMs"].as_u64().unwrap_or(0);
                     let tools = std::mem::take(&mut self.tools_in_turn);
@@ -264,6 +276,9 @@ impl Parser {
         // What Claude Code writes itself (an interrupted turn, «no response requested») is not Claude.
         if message["model"] == "<synthetic>" {
             // An error of the API is shown; «no response requested» and the like are not.
+            if entry["isApiErrorMessage"] == true {
+                self.close_turn();
+            }
             if entry["isApiErrorMessage"] == true && !self.own {
                 for block in message["content"].as_array().into_iter().flatten() {
                     if let Some(text) = block["text"].as_str().filter(|t| !t.trim().is_empty()) {
@@ -272,6 +287,16 @@ impl Parser {
                 }
             }
             return;
+        }
+        // Claude takes up a turn with no message of the person's (a task ended, another agent
+        // wrote): it began with the line that made it.
+        if self.turn.is_none() {
+            let began = if self.last_user_at > 0 {
+                self.last_user_at
+            } else {
+                self.last_at
+            };
+            self.open_turn(began);
         }
         if let (Some(id), Some(n)) = (
             message["id"].as_str(),
@@ -400,7 +425,6 @@ impl Parser {
             let args = tag(t, "command-args").unwrap_or("").trim();
             if !name.is_empty() {
                 self.tools_in_turn = 0;
-                self.open_turn();
                 self.push(Item::User {
                     text: format!("{name} {args}").trim().to_owned(),
                     images: 0,
@@ -411,7 +435,7 @@ impl Parser {
         } else if is_the_persons(&text) || (t.is_empty() && images > 0) {
             self.unqueue(&text);
             self.tools_in_turn = 0;
-            self.open_turn();
+            self.open_turn(self.last_at);
             self.push(Item::User {
                 text: t.to_owned(),
                 images,
@@ -1364,13 +1388,45 @@ mod tests {
     }
 
     #[test]
-    fn a_tool_of_a_turn_that_is_not_open_has_no_result_and_was_interrupted() {
+    fn a_new_message_a_compaction_and_an_error_of_the_api_end_a_turn_that_was_left_open() {
+        for end in [
+            serde_json::json!({"type":"user","timestamp":"2026-10-17T12:00:00.000Z","message":{"role":"user","content":"otra cosa"}}),
+            serde_json::json!({"type":"system","subtype":"compact_boundary","timestamp":"2026-10-17T12:00:00.000Z"}),
+            serde_json::json!({"type":"assistant","isApiErrorMessage":true,"timestamp":"2026-10-17T12:00:00.000Z","message":{"model":"<synthetic>","content":[{"type":"text","text":"API Error: x"}]}}),
+        ] {
+            let mut p = Parser::default();
+            p.feed(&turn_lines().concat());
+            p.feed(&line(end));
+            assert!(
+                states(&p).iter().all(|(s, _)| *s == ToolState::Failed),
+                "{:?}",
+                states(&p)
+            );
+        }
+    }
+
+    #[test]
+    fn a_command_of_claude_does_not_open_a_turn() {
         let mut p = Parser::default();
-        p.feed(&turn_lines()[2..].concat());
+        p.feed(&line(serde_json::json!({"type":"user","timestamp":"2026-10-17T12:00:00.000Z","message":{"role":"user","content":"<command-name>/clear</command-name>"}})));
         assert_eq!(p.turn_since(), None);
-        assert_eq!(
-            states(&p)[0],
-            (ToolState::Failed, Some("sin resultado".into()))
+    }
+
+    #[test]
+    fn a_turn_that_claude_takes_up_with_no_message_of_the_person_begins_with_the_line_that_made_it()
+    {
+        let mut p = Parser::default();
+        p.feed(&line(serde_json::json!({"type":"user","isMeta":true,"timestamp":"2026-10-17T12:00:00.000Z","origin":{"kind":"peer"},"message":{"role":"user","content":"Another Claude session sent a message: <agent-message from=\"a1\">hola</agent-message>"}})));
+        assert!(
+            it(&p).iter().all(|i| !matches!(i, Item::User { .. })),
+            "a message of another agent is not the person's"
         );
+        assert_eq!(p.turn_since(), None, "nothing answered yet");
+        p.feed(&line(serde_json::json!({"type":"assistant","timestamp":"2026-10-17T12:00:05.000Z","message":{"id":"m1","model":"claude-opus-5-5","usage":{"output_tokens":9},"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}})));
+        assert_eq!(p.turn_since(), iso_ms("2026-10-17T12:00:00.000Z"));
+        assert_eq!(states(&p), [(ToolState::Run, None)]);
+        assert_eq!(p.turn_written(), 9);
+        p.feed(&line(serde_json::json!({"type":"system","subtype":"turn_duration","timestamp":"2026-10-17T12:00:09.000Z","durationMs":9000})));
+        assert_eq!(p.turn_since(), None);
     }
 }

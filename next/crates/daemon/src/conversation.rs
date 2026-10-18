@@ -680,6 +680,8 @@ impl State {
         st.legacy = !saved.items.is_empty();
         st.stamps = vec![(saved.saved_at, true); saved.items.len()];
         st.items = saved.items;
+        // What ran when the daemon stopped does not any more.
+        st.settle_running();
         for item in &mut st.items {
             if let Item::Text { text, blocks, .. } = item {
                 *blocks = crate::markdown::conversation_blocks(text);
@@ -767,6 +769,13 @@ impl State {
             return false;
         }
         self.followed = None;
+        self.settle_running();
+        true
+    }
+
+    /// The tools that the transcript said run, when what ran them is not there any more: they
+    /// were interrupted.
+    fn settle_running(&mut self) {
         for item in &mut self.items {
             if let Item::Tool { state, summary, .. } = item
                 && *state == ToolState::Run
@@ -775,7 +784,6 @@ impl State {
                 *summary = Some("sin resultado".into());
             }
         }
-        true
     }
 
     /// The conversation was saved with its own items: its chat is not read from the transcript.
@@ -983,7 +991,10 @@ impl State {
 
     fn begin_turn(&mut self, now: u64) {
         self.status = ConvStatus::Thinking;
-        self.followed = None;
+        // The turn of another `claude` that was followed is not this one's: what it ran is over.
+        if self.followed.take().is_some() {
+            self.settle_running();
+        }
         self.since = Some(now);
         self.turn_started = now;
         self.turn_tokens.clear();
@@ -2817,6 +2828,49 @@ mod tests {
         assert!(!s.expire_follow(2_000 + FOLLOW_SILENCE_MS), "once");
         assert_eq!(node_of(&s).following, None);
         assert!(s.items.iter().any(|i| matches!(i, Item::Tool { state: ToolState::Failed, summary: Some(x), .. } if x == "sin resultado")));
+    }
+
+    #[test]
+    fn the_tools_of_a_followed_turn_are_interrupted_when_a_message_is_sent_and_when_it_is_restored()
+    {
+        let t = followed_turn();
+        let mut s = st();
+        s.follow_at(&t, t.last_at() + 1_000);
+        assert!(s.items.iter().any(|i| matches!(
+            i,
+            Item::Tool {
+                state: ToolState::Run,
+                ..
+            }
+        )));
+        s.send("sigue", vec![], stamp());
+        assert!(!s.items.iter().any(|i| matches!(
+            i,
+            Item::Tool {
+                state: ToolState::Run,
+                ..
+            }
+        )));
+        let mut saved = st().saved(1);
+        saved.items = vec![Item::Tool {
+            id: "t".into(),
+            name: "Bash".into(),
+            arg: "sleep".into(),
+            state: ToolState::Run,
+            summary: None,
+            output: Vec::new(),
+            diff: Vec::new(),
+            url: None,
+            by: None,
+        }];
+        let back = State::restored(saved, "20:00");
+        assert!(matches!(
+            back.items[0],
+            Item::Tool {
+                state: ToolState::Failed,
+                ..
+            }
+        ));
     }
 
     #[test]

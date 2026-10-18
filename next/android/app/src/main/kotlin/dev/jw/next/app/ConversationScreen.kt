@@ -67,6 +67,7 @@ import dev.jw.next.client.PanelView
 import dev.jw.next.client.Submit
 import dev.jw.next.client.artifactsPanel
 import dev.jw.next.client.filesView
+import dev.jw.next.client.followedWork
 import dev.jw.next.client.helpPanel
 import dev.jw.next.client.itemText
 import dev.jw.next.client.label
@@ -79,7 +80,6 @@ import dev.jw.next.client.tag
 import dev.jw.next.client.tasksPanel
 import dev.jw.next.client.turnText
 import dev.jw.next.client.word
-import dev.jw.next.client.followedWork
 import dev.jw.next.client.workLine
 import dev.jw.next.client.working
 import dev.jw.next.contract.CommandKind

@@ -70,10 +70,10 @@ fun Node.Conversation.followedWork(retaking: Boolean): Boolean = following != nu
 /** What Claude is doing and for how long, for the line over the field (REQ-400, REQ-413); null when nothing runs. */
 fun Node.Conversation.workLine(retaking: Boolean, nowMs: Long): String? {
     // Another `claude` runs a turn in the transcript that is followed: what it does and for how long, and nothing to interrupt (REQ-565).
-    if (followedWork(retaking)) {
+    following?.takeIf { followedWork(retaking) }?.let { began ->
         val what = if (running.isEmpty()) "Pensando…" else "Trabajando…"
         val written = if (tokens > 0) " · ↓ ${convKilo(tokens)} tokens" else ""
-        return "$what (${convSecs(maxOf(0, nowMs - following!!))}$written)"
+        return "$what (${convSecs(maxOf(0, nowMs - began))}$written)"
     }
     if (!working(retaking)) return null
     val what = when (status) {
