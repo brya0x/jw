@@ -77,7 +77,9 @@ fn same(a: &Item, b: &Item) -> bool {
     match (a, b) {
         (Item::Tool { id: x, .. }, Item::Tool { id: y, .. })
         | (Item::Agent { id: x, .. }, Item::Agent { id: y, .. }) => x == y,
-        _ => std::mem::discriminant(a) == std::mem::discriminant(b),
+        // What is not a tool cannot change once it is there, but a text that arrives grows.
+        (Item::Text { .. }, Item::Text { .. }) => true,
+        _ => a == b,
     }
 }
 

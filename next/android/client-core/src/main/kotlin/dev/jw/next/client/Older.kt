@@ -13,6 +13,9 @@ enum class OlderRow(val text: String) {
     Capped("── más antiguo en el archivo de Claude ──"),
 }
 
+/** A request for older items: the time it asks from, and which try it is, so that an answer that comes after the list started again is not taken. */
+class OlderAsk(val before: Long, internal val ticket: Int)
+
 /** How many items one request asks for, and the most that are kept. */
 const val OLDER_PAGE = 100
 private const val OLDER_CAP = 3000
@@ -35,7 +38,8 @@ class OlderHeld {
     private var next: Long? = null
     private var loaded = false
     private var exhausted = false
-    private var busy: Long? = null
+    private var busy: OlderAsk? = null
+    private var tickets = 0
     private var failed = false
 
     /** The older items, oldest first. */
@@ -79,16 +83,16 @@ class OlderHeld {
     }
 
     /** The time to ask with now, when the list is at its oldest end, the node has a transcript, nothing is asked and the last try did not fail. */
-    @Synchronized fun ask(node: Node.Conversation, atEnd: Boolean): Long? {
+    @Synchronized fun ask(node: Node.Conversation, atEnd: Boolean): OlderAsk? {
         if (!atEnd || busy != null || failed || exhausted || older.size >= OLDER_CAP) return null
         val before = (if (loaded) next else node.older) ?: return null
-        busy = before
-        return before
+        return OlderAsk(before, ++tickets).also { busy = it }
     }
 
-    /** The answer to the request with [before]; whether it was taken. One that is not the last request is not. */
-    @Synchronized fun replied(before: Long, result: Result<OlderItems>): Boolean {
-        if (busy != before) return false
+    /** The answer to the request [ask]; whether it was taken. One that is not the last request, or that comes after the list started again, is not. */
+    @Synchronized fun replied(ask: OlderAsk, result: Result<OlderItems>): Boolean {
+        if (busy !== ask) return false
+        val before = ask.before
         busy = null
         val page = result.getOrElse {
             failed = true
@@ -124,6 +128,8 @@ class OlderHeld {
         a == null || b == null -> a == null && b == null
         a is ConvItem.Tool && b is ConvItem.Tool -> a.id == b.id
         a is ConvItem.Agent && b is ConvItem.Agent -> a.id == b.id
-        else -> a::class == b::class
+        // What cannot change once it is there must be the same; a text that arrives can grow.
+        a is ConvItem.Text && b is ConvItem.Text -> true
+        else -> a == b
     }
 }

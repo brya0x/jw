@@ -474,12 +474,22 @@ impl Ui {
         if !matches!(conv.status, ConvStatus::Dead | ConvStatus::Resuming) {
             self.retaking = false;
         }
-        // A run that is gone (its tools were trimmed or joined another run) is not open any more.
-        let firsts: Vec<u32> = fold::runs(&conv.items)
+        // A run that is gone (its tools were trimmed) is not open any more; one that older items
+        // made longer starts earlier, and stays open under its new first.
+        let spans: Vec<(u32, u32)> = fold::runs(&conv.items)
             .iter()
-            .map(|r| conv.first + r.first as u32)
+            .map(|r| (conv.first + r.first as u32, conv.first + r.last as u32))
             .collect();
-        self.unfolded.retain(|k| firsts.contains(k));
+        self.unfolded = self
+            .unfolded
+            .iter()
+            .filter_map(|k| {
+                spans
+                    .iter()
+                    .find(|(a, b)| (a..=b).contains(&k))
+                    .map(|(a, _)| *a)
+            })
+            .collect();
         // Each question is its own: what was lit or marked in the last one does not carry over.
         let id = conv.ask.as_ref().map_or("", |a| a.id.as_str());
         if self.ask_id != id {
@@ -941,14 +951,17 @@ impl Ui {
                 let mut head = vec![
                     ("● ".to_owned(), Style::fg(state_colour(*state))),
                     (name.clone(), plain.bold()),
-                    (
+                ];
+                // A tool with nothing to say of its argument (the advisor) has no parentheses.
+                if !arg.is_empty() {
+                    head.push((
                         format!(
                             "({})",
                             clip(arg, w.saturating_sub(name.chars().count() + 6))
                         ),
                         dim,
-                    ),
-                ];
+                    ));
+                }
                 if let Some(by) = by {
                     let how = if by.starts_with("modo") {
                         "por"
@@ -3202,6 +3215,32 @@ mod tests {
             assert!(rows[y].contains(text), "{mode:?}");
             assert_eq!(g.cells[y * g.cols + 3].1.fg, Some(colour), "{mode:?}");
         }
+    }
+
+    /// REQ-570: a consultation of the advisor is drawn as Claude Code draws it: `● Advising`, and
+    /// under it what the advisor did.
+    #[test]
+    fn a_consultation_of_the_advisor_is_drawn_with_its_name_and_its_answer() {
+        let mut conv = idle();
+        conv.items = vec![Item::Tool {
+            id: "srv1".into(),
+            name: "Advising".into(),
+            arg: String::new(),
+            state: ToolState::Ok,
+            summary: Some("✔ El asesor revisó la conversación y aplicará sus comentarios".into()),
+            output: Vec::new(),
+            diff: Vec::new(),
+            url: None,
+            by: None,
+        }];
+        let (_, rows) = frame(&Ui::default(), &conv);
+        let joined = rows.join("\n");
+        assert!(joined.contains("● Advising"), "{joined}");
+        assert!(!joined.contains("Advising("), "{joined}");
+        assert!(
+            joined.contains("⎿  ✔ El asesor revisó la conversación"),
+            "{joined}"
+        );
     }
 
     #[test]

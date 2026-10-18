@@ -281,15 +281,21 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
     // ---- the items ----
     // The runs that are open, from the start of the window; one that is not a run any more (its tools were trimmed) is forgotten.
     val relativeUnfolded = remember(unfolded, firstItem) { unfolded.map { it - firstItem }.toSet() }
-    val runStarts = remember(items, firstItem) { foldRuns(items).map { it.first + firstItem }.toSet() }
-    LaunchedEffect(runStarts) { if (!runStarts.containsAll(unfolded)) unfolded = unfolded intersect runStarts }
+    // A run that older items made longer starts earlier: what was open stays open, under its new first (REQ-558, REQ-569).
+    LaunchedEffect(items, firstItem) {
+        val runs = foldRuns(items)
+        val kept = unfolded.mapNotNull { k -> runs.firstOrNull { k in (it.first + firstItem)..(it.last + firstItem) }?.let { it.first + firstItem } }.toSet()
+        if (kept != unfolded) unfolded = kept
+    }
     // In a list that grows upward the oldest end is where it cannot scroll forward: older items are asked for there, one request at a time.
     val listState = rememberLazyListState()
-    val atEnd by remember { derivedStateOf { !listState.canScrollForward } }
+    // Not before the list is laid out: until then it cannot say which end it is at.
+    val atEnd by remember { derivedStateOf { listState.layoutInfo.totalItemsCount > 0 && !listState.canScrollForward } }
     LaunchedEffect(atEnd, olderVersion, node.older, node.first) {
-        val before = held.ask(node, atEnd) ?: return@LaunchedEffect
+        val ask = held.ask(node, atEnd) ?: return@LaunchedEffect
         olderVersion++
-        source.readOlder(nodeId, before, OLDER_PAGE) { result -> if (held.replied(before, result)) olderVersion++ }
+        // The answer comes on the reader thread; the list is changed from the main one.
+        source.readOlder(nodeId, ask.before, OLDER_PAGE) { result -> scope.launch { if (held.replied(ask, result)) olderVersion++ } }
     }
     ConversationItems(
         items = items,

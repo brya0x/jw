@@ -18,6 +18,11 @@ use serde_json::{Value, json};
 
 /// How many items a node keeps (REQ-392).
 pub const KEEP: usize = 300;
+
+/// The row of a consultation of the advisor (REQ-570): the name Claude Code gives it, and what it
+/// says when the advisor has answered.
+pub(crate) const ADVISING: &str = "Advising";
+pub(crate) const ADVISED: &str = "✔ El asesor revisó la conversación y aplicará sus comentarios";
 /// The most a saved conversation takes on disk.
 pub const MAX_SAVED: usize = 2 * 1024 * 1024;
 pub(crate) const OUTPUT_LINES: usize = 40;
@@ -1632,6 +1637,40 @@ impl State {
                         by: None,
                     });
                 }
+                // The advisor is consulted by the API itself: the call and its answer are blocks
+                // of Claude's own message (REQ-570).
+                "server_tool_use" if b["name"] == "advisor" => {
+                    self.status = ConvStatus::Tool;
+                    self.push(Item::Tool {
+                        id: b["id"].as_str().unwrap_or("").to_owned(),
+                        name: ADVISING.into(),
+                        arg: String::new(),
+                        state: ToolState::Run,
+                        summary: None,
+                        output: Vec::new(),
+                        diff: Vec::new(),
+                        url: None,
+                        by: None,
+                    });
+                }
+                "advisor_tool_result" => {
+                    let id = b["tool_use_id"].as_str().unwrap_or("").to_owned();
+                    let error = b["content"]["type"]
+                        .as_str()
+                        .is_some_and(|t| t.contains("error"));
+                    self.set_tool(&id, |t| {
+                        t.0 = if error {
+                            ToolState::Failed
+                        } else {
+                            ToolState::Ok
+                        };
+                        t.1 = Some(if error {
+                            "el asesor no pudo responder".into()
+                        } else {
+                            ADVISED.into()
+                        });
+                    });
+                }
                 _ => {}
             }
         }
@@ -2903,6 +2942,19 @@ mod tests {
         });
         s.send("sigue", vec![], stamp());
         assert_eq!(node_of(&s).following, None);
+    }
+
+    /// REQ-570: the advisor of jwn's own engine is a row too, with the same words.
+    #[test]
+    fn a_consultation_of_the_advisor_in_the_own_engine_is_a_row_with_its_answer() {
+        let mut s = st();
+        s.send("go", vec![], 0);
+        s.apply(&json!({"type": "assistant", "message": {"content": [{"type": "server_tool_use", "id": "srv1", "name": "advisor", "input": {}}]}}), 1);
+        assert!(s.items.iter().any(
+            |i| matches!(i, Item::Tool { name, state: ToolState::Run, .. } if name == ADVISING)
+        ));
+        s.apply(&json!({"type": "assistant", "message": {"content": [{"type": "advisor_tool_result", "tool_use_id": "srv1", "content": {"type": "advisor_result", "text": "x"}}]}}), 2);
+        assert!(s.items.iter().any(|i| matches!(i, Item::Tool { state: ToolState::Ok, summary: Some(x), .. } if x == ADVISED)));
     }
 
     #[test]

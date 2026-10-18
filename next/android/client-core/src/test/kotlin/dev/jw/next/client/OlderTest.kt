@@ -31,8 +31,9 @@ class OlderTest {
         val h = OlderHeld()
         val n1 = node(10, "d", "e", "f")
         h.sync(n1)
-        assertEquals(5L, h.ask(n1, true))
-        assertTrue(h.replied(5, page("a", "b", "c", older = 3)))
+        val ask1 = h.ask(n1, true)
+        assertEquals(5L, ask1?.before)
+        assertTrue(h.replied(ask1!!, page("a", "b", "c", older = 3)))
         assertEquals(listOf("a", "b", "c", "d", "e", "f"), names(h.all(n1)))
         assertEquals(7, h.first(n1), "the number of `a`; `d` is still 10")
         // two items come and two leave the window
@@ -51,18 +52,21 @@ class OlderTest {
     fun aWindowThatDoesNotJoinOrAnotherEpochStartsAgain() {
         val h = OlderHeld()
         h.sync(node(10, "d"))
-        h.ask(node(10, "d"), true)
-        h.replied(5, page("c"))
+        h.replied(h.ask(node(10, "d"), true)!!, page("c"))
         val gap = node(40, "z")
         h.sync(gap)
         assertEquals(listOf("z"), names(h.all(gap)))
         val h2 = OlderHeld()
         h2.sync(node(10, "d"))
-        h2.ask(node(10, "d"), true)
-        h2.replied(5, page("c"))
+        val inFlight = h2.ask(node(10, "d"), true)!!
         val other = node(10, "d", epoch = "e2")
         h2.sync(other)
         assertEquals(listOf("d"), names(h2.all(other)))
+        // the answer to a request of before the epoch changed is not taken, though the next one asks from the same time
+        val again = h2.ask(other, true)!!
+        assertFalse(h2.replied(inFlight, page("viejo")))
+        assertTrue(h2.replied(again, page("c")))
+        assertEquals(listOf("c", "d"), names(h2.all(other)))
     }
 
     @Test
@@ -71,14 +75,15 @@ class OlderTest {
         val n = node(10, "d")
         h.sync(n)
         assertNull(h.ask(n, false), "not at the oldest end")
-        assertEquals(5L, h.ask(n, true))
+        val ask = h.ask(n, true)!!
+        assertEquals(5L, ask.before)
         assertNull(h.ask(n, true), "one is out")
-        assertFalse(h.replied(4, page("x")), "not the one asked")
-        assertTrue(h.replied(5, Result.failure(IllegalStateException("no"))))
+        assertFalse(h.replied(OlderAsk(4, 99), page("x")), "not the one asked")
+        assertTrue(h.replied(ask, Result.failure(IllegalStateException("no"))))
         assertEquals(OlderRow.Failed, h.row(n))
         assertNull(h.ask(n, true), "a failure waits")
         h.retry()
-        assertEquals(5L, h.ask(n, true))
+        assertEquals(5L, h.ask(n, true)?.before)
     }
 
     @Test
@@ -86,9 +91,9 @@ class OlderTest {
         val h = OlderHeld()
         val n = node(10, "d")
         h.sync(n)
-        h.ask(n, true)
+        val ask = h.ask(n, true)!!
         // an answer that points forward is taken as the end: asking again would not stop
-        h.replied(5, page("c", older = 9))
+        h.replied(ask, page("c", older = 9))
         assertNull(h.ask(n, true))
         assertEquals(OlderRow.Start, h.row(n))
         assertNull(h.row(n.copy(older = null)), "no transcript, no row")

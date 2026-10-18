@@ -370,6 +370,57 @@ impl Parser {
                         by: None,
                     });
                 }
+                // The advisor is consulted by the API itself: the call and its answer are blocks
+                // of Claude's own message, the answer a line later (REQ-570).
+                "server_tool_use" if block["name"] == "advisor" => {
+                    let id = block["id"].as_str().unwrap_or("").to_owned();
+                    self.tools.insert(id.clone(), self.items.len());
+                    let runs = self.turn.is_some();
+                    if runs {
+                        self.open_tools.push(self.items.len());
+                    }
+                    self.push(Item::Tool {
+                        id,
+                        name: crate::conversation::ADVISING.into(),
+                        arg: String::new(),
+                        state: if runs {
+                            ToolState::Run
+                        } else {
+                            ToolState::Failed
+                        },
+                        summary: (!runs).then(|| "sin resultado".to_owned()),
+                        output: Vec::new(),
+                        diff: Vec::new(),
+                        url: None,
+                        by: None,
+                    });
+                }
+                "advisor_tool_result" => {
+                    let error = block["content"]["type"]
+                        .as_str()
+                        .is_some_and(|t| t.contains("error"));
+                    let found = block["tool_use_id"]
+                        .as_str()
+                        .and_then(|id| self.tools.get(id))
+                        .copied();
+                    if let Some(Stamped {
+                        item: Item::Tool { state, summary, .. },
+                        ..
+                    }) = found.and_then(|at| self.items.get_mut(at))
+                    {
+                        *state = if error {
+                            ToolState::Failed
+                        } else {
+                            ToolState::Ok
+                        };
+                        *summary = Some(if error {
+                            "el asesor no pudo responder".into()
+                        } else {
+                            crate::conversation::ADVISED.into()
+                        });
+                        self.rev += 1;
+                    }
+                }
                 // What Claude says between its tools is a summary of its thinking: the lines that
                 // are short are shown as the narration they are, and the whole thinking is not.
                 "thinking" => {
@@ -1679,5 +1730,30 @@ mod tests {
         assert!(page.is_empty() && cursor.is_none());
         assert!(older_page(Path::new("/no/such/file.jsonl"), 10, 10).is_none());
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    /// REQ-570: a consultation of the advisor is a row that runs until its answer, which is a line
+    /// of its own a while later, and then says what the advisor did.
+    #[test]
+    fn a_consultation_of_the_advisor_is_a_row_that_runs_until_the_answer() {
+        let mut p = Parser::default();
+        p.feed(&line(serde_json::json!({"type":"user","timestamp":"2026-10-17T13:16:00.000Z","message":{"role":"user","content":"revisa esto"}})));
+        p.feed(&line(serde_json::json!({"type":"assistant","timestamp":"2026-10-17T13:16:49.000Z","message":{"id":"m1","model":"claude-opus-5-5","content":[{"type":"server_tool_use","id":"srvtoolu_1","name":"advisor","input":{}}]}})));
+        assert_eq!(states(&p), [(ToolState::Run, None)]);
+        p.feed(&line(serde_json::json!({"type":"assistant","timestamp":"2026-10-17T13:18:17.000Z","message":{"id":"m1","model":"claude-opus-5-5","content":[{"type":"advisor_tool_result","tool_use_id":"srvtoolu_1","content":{"type":"advisor_redacted_result","encrypted_content":"x"}}]}})));
+        assert_eq!(
+            states(&p),
+            [(ToolState::Ok, Some(crate::conversation::ADVISED.to_owned()))]
+        );
+        let Item::Tool { name, arg, .. } = &it(&p)[1] else {
+            panic!("a row");
+        };
+        assert_eq!((name.as_str(), arg.as_str()), ("Advising", ""));
+        // an advisor that ran when the turn ended and never answered was interrupted
+        let mut q = Parser::default();
+        q.feed(&line(serde_json::json!({"type":"user","timestamp":"2026-10-17T13:16:00.000Z","message":{"role":"user","content":"revisa"}})));
+        q.feed(&line(serde_json::json!({"type":"assistant","timestamp":"2026-10-17T13:16:49.000Z","message":{"id":"m1","model":"claude-opus-5-5","content":[{"type":"server_tool_use","id":"srvtoolu_2","name":"advisor","input":{}}]}})));
+        q.feed(&line(serde_json::json!({"type":"system","subtype":"turn_duration","timestamp":"2026-10-17T13:17:00.000Z","durationMs":1000})));
+        assert_eq!(states(&q)[0].0, ToolState::Failed);
     }
 }
