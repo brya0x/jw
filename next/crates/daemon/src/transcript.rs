@@ -519,14 +519,17 @@ impl Parser {
 }
 
 /// What Claude Code writes in a `user` line that is not the person's: the wrapper of a command and
-/// of its output, of a shell line and of the notice of a background task. A message that merely
-/// starts with `<` (a question about `<div>`) is the person's.
-const WRAPPERS: [&str; 5] = [
+/// of its output, of a shell line, of the notice of a background task and of a message that
+/// another agent sent (a subagent's whole report, REQ-571). A message that merely starts with
+/// `<` (a question about `<div>`) is the person's.
+const WRAPPERS: [&str; 7] = [
     "<command-",
     "<local-command-",
     "<bash-",
     "<task-notification",
     "<system-reminder",
+    "<agent-message",
+    "Another Claude session sent a message",
 ];
 
 /// Whether a text of a `user` line is something the person typed.
@@ -1734,5 +1737,35 @@ mod tests {
         q.feed(&line(serde_json::json!({"type":"assistant","timestamp":"2026-10-17T13:16:49.000Z","message":{"id":"m1","model":"claude-opus-5-5","content":[{"type":"server_tool_use","id":"srvtoolu_2","name":"advisor","input":{}}]}})));
         q.feed(&line(serde_json::json!({"type":"system","subtype":"turn_duration","timestamp":"2026-10-17T13:17:00.000Z","durationMs":1000})));
         assert_eq!(states(&q)[0].0, ToolState::Failed);
+    }
+
+    /// REQ-571: what another agent sent is neither an item of the conversation nor a message that
+    /// waits, in the queue or taken in during a turn; what the person pastes of it is theirs.
+    #[test]
+    fn a_message_of_another_agent_is_not_shown_and_what_the_person_pastes_of_it_is() {
+        let report =
+            r#"<agent-message from="a1">[Subagent hand-back] ## Findings …</agent-message>"#;
+        let mut p = Parser::default();
+        p.feed(&line(serde_json::json!({"type":"queue-operation","operation":"enqueue","timestamp":"2026-10-17T12:00:00.000Z","content":report})));
+        assert!(
+            p.waiting().is_empty(),
+            "it does not wait in the queue the person sees"
+        );
+        p.feed(&line(serde_json::json!({"type":"attachment","timestamp":"2026-10-17T12:00:01.000Z","attachment":{"type":"queued_command","prompt":report}})));
+        p.feed(&line(serde_json::json!({"type":"user","timestamp":"2026-10-17T12:00:02.000Z","message":{"role":"user","content":format!("Another Claude session sent a message: {report}")}})));
+        assert!(
+            it(&p).iter().all(|i| !matches!(i, Item::User { .. })),
+            "{:?}",
+            it(&p)
+        );
+        let pasted = format!(
+            "<pasted_content id=\"1\">{report}</pasted_content> más texto que no debería salir"
+        );
+        p.feed(&line(serde_json::json!({"type":"attachment","timestamp":"2026-10-17T12:00:03.000Z","attachment":{"type":"queued_command","prompt":pasted,"origin":{"kind":"human"}}})));
+        assert!(
+            it(&p)
+                .iter()
+                .any(|i| matches!(i, Item::User { text, .. } if text.contains("más texto")))
+        );
     }
 }
