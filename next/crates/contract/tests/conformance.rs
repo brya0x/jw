@@ -403,6 +403,8 @@ fn a_followed_turn_says_when_it_began() {
     let conv: contract::conversation::Conversation =
         serde_json::from_value(snap["node"].clone()).unwrap();
     assert_eq!(conv.following, Some(1_792_110_000_000));
+    let held = conv.held.as_ref().expect("another claude has the session");
+    assert_eq!((held.pid, held.busy), (93269, true));
     assert_eq!(conv.since, None);
     assert_eq!(conv.running.len(), 1);
     assert_eq!(

@@ -74,6 +74,7 @@ import dev.jw.next.client.artifactsPanel
 import dev.jw.next.client.filesView
 import dev.jw.next.client.followedWork
 import dev.jw.next.client.helpPanel
+import dev.jw.next.client.heldText
 import dev.jw.next.client.itemText
 import dev.jw.next.client.label
 import dev.jw.next.client.savedPanel
@@ -391,7 +392,16 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
     // What Claude proposes next: a tap puts it in the field, the ✕ puts it aside; it is shown whenever the field is empty (REQ-573).
     var asideSuggestion by remember(nodeId) { mutableStateOf<String?>(null) }
     val proposed = node.suggestionShown(text.text, asideSuggestion, retaking)
+    // Another `claude` has the session open: it is read and not written (REQ-576).
+    val heldText = node.heldText()
     Column(Modifier.fillMaxWidth().background(Palette.panel).navigationBarsUnlessKeyboard().keepsKeyboard().padding(top = 8.dp)) {
+        heldText?.let { why ->
+            Box(
+                Modifier.fillMaxWidth().padding(horizontal = 10.dp).defaultMinSize(minHeight = 48.dp).background(Palette.sel, RoundedCornerShape(8.dp))
+                    .padding(horizontal = 10.dp, vertical = 6.dp).semantics { contentDescription = why },
+                contentAlignment = Alignment.CenterStart,
+            ) { Mono(why, Palette.yellow, 12, lines = 4) }
+        }
         proposed?.let { p ->
             Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Box(
@@ -434,6 +444,7 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
             BasicTextField(
                 value = text,
                 onValueChange = { text = it },
+                enabled = heldText == null,
                 maxLines = LINE_ROWS,
                 textStyle = TextStyle(color = Palette.fg, fontFamily = MonoFont, fontSize = 13.sp),
                 cursorBrush = SolidColor(Palette.blue),
@@ -443,6 +454,7 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
                     if (text.text.isEmpty()) Mono(
                         when {
                             !source.writable -> "solo lectura: datos de ejemplo"
+                            heldText != null -> "solo lectura"
                             node.ask != null -> "responde arriba"
                             working -> "escribe: se envía al terminar"
                             else -> "escribe a claude"
@@ -456,8 +468,9 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
             if (working && text.text.isBlank()) {
                 Box(Modifier.size(48.dp).clickable { source.conversationInterrupt(nodeId) }.semantics { contentDescription = "Interrumpir" }, contentAlignment = Alignment.Center) { Mono("■", Palette.red, 18, bold = true) }
             } else {
-                Box(Modifier.size(48.dp).clickable(enabled = source.writable) { send(text.text) }.semantics { contentDescription = "Enviar" }, contentAlignment = Alignment.Center) {
-                    GlyphIcon(Glyph.Send, if (source.writable) Palette.blue else Palette.dim)
+                val canSend = source.writable && heldText == null
+                Box(Modifier.size(48.dp).clickable(enabled = canSend) { send(text.text) }.semantics { contentDescription = "Enviar" }, contentAlignment = Alignment.Center) {
+                    GlyphIcon(Glyph.Send, if (canSend) Palette.blue else Palette.dim)
                 }
             }
         }

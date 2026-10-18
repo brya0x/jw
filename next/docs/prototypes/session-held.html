@@ -1,0 +1,161 @@
+<title>jwn Sesión ocupada</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Terminal-first, the same character grid and colours as suggestion.html. */
+:root{
+  --bg:#282c34; --panel:#21252b; --fg:#abb2bf; --dim:#5c6370; --line:#3e4451; --sel:#2c313a;
+  --blue:#61afef; --green:#98c379; --yellow:#e5c07b; --red:#e06c75; --magenta:#c678dd; --cyan:#56b6c2;
+  --page:#16181d; --ink:#c3c9d4; --mut:#7d8594;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}}
+:root[data-theme="light"]{--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.55 'IBM Plex Sans',system-ui,sans-serif;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px}
+.wrap{max-width:1300px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
+h1{font:600 20px/1.2 var(--mono);margin:0}
+h2{font:600 12px var(--mono);margin:0;color:var(--mut)}
+p{margin:0;max-width:80ch;color:var(--mut)}
+.bar{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center}
+.grp{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.grp>span{font:12px var(--mono);color:var(--mut)}
+button{font:12px var(--mono);color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;min-height:32px;cursor:pointer}
+button:hover{border-color:var(--blue)}
+button[aria-pressed=true]{background:var(--blue);color:var(--panel);border-color:var(--blue);font-weight:700}
+:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.stage{display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap}
+.col{flex:1 1 560px;min-width:0;display:flex;flex-direction:column;gap:8px}
+.side{flex:0 0 auto;width:100%;max-width:376px;margin-inline:auto;display:flex;flex-direction:column;gap:8px}
+.hint{font:12px var(--mono);color:var(--mut)}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:8px;overflow:hidden;display:flex;flex-direction:column;height:400px;font:13px/1.35 var(--mono);color:var(--fg)}
+.term .list{flex:1;min-height:0;overflow:auto;padding:8px 10px;display:flex;flex-direction:column;justify-content:flex-end;gap:2px;white-space:pre-wrap;word-break:break-word}
+.term .work{padding:0 10px 4px;color:var(--dim)}
+.term .field{border-top:1px solid var(--line);background:var(--panel);padding:8px 10px;outline:none;min-height:56px;display:flex;flex-direction:column;gap:4px}
+.term .field:focus-within{box-shadow:inset 0 0 0 1px var(--blue)}
+.term .foot{border-top:1px solid var(--line);padding:3px 10px;font-size:12px;color:var(--dim);display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.row{display:flex;gap:8px;align-items:baseline}
+.cur{display:inline-block;width:.6em;background:var(--fg);height:1.1em;vertical-align:text-bottom;animation:b 1s steps(2) infinite}
+@keyframes b{50%{opacity:0}}
+@media (prefers-reduced-motion:reduce){.cur{animation:none}}
+.u{background:var(--sel);padding:0 4px}
+.b{font-weight:700}.dim{color:var(--dim)}.blue{color:var(--blue)}.yellow{color:var(--yellow)}.red{color:var(--red)}.green{color:var(--green)}
+.phone{width:100%;height:560px;background:var(--bg);border:1px solid var(--line);border-radius:28px;padding:10px;box-shadow:0 0 0 6px var(--panel);display:flex;flex-direction:column}
+.ph{flex:1;min-height:0;background:var(--bg);border-radius:20px;overflow:hidden;display:flex;flex-direction:column;font:13px/1.45 var(--mono);color:var(--fg)}
+.ph .hd{background:var(--panel);border-bottom:1px solid var(--line);padding:8px 12px;min-height:52px;display:flex;flex-direction:column;justify-content:center}
+.ph .hd b{font-size:14px}.ph .hd span{font-size:11px;color:var(--dim)}
+.ph .list{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;justify-content:flex-end;gap:8px;padding:8px 12px;word-break:break-word}
+.ph .held{margin:0 12px 6px;padding:8px 10px;min-height:48px;border-radius:8px;background:var(--sel);border:1px solid var(--line);color:var(--yellow)}
+.ph .compose{border-top:1px solid var(--line);background:var(--panel);padding:8px 12px;display:flex;gap:8px;align-items:center}
+.ph .compose input{flex:1;min-width:0;min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:0 10px;font:13px var(--mono)}
+.ph .compose input:disabled{opacity:.55}
+.ph .compose button{min-height:44px;min-width:44px;border-radius:8px;background:var(--green);color:var(--panel);border-color:var(--green);font-weight:700}
+.ph .compose button:disabled{background:var(--sel);color:var(--dim);border-color:var(--line)}
+.notes{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
+.notes div{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;color:var(--fg);font:12px/1.55 var(--mono)}
+.notes b{color:var(--yellow)}
+.rec{color:var(--green)}
+kbd{font:inherit;color:var(--cyan)}
+</style>
+
+<div class="wrap">
+  <h1>jwn · Sesión ocupada</h1>
+  <p>Cuando otro <kbd>claude</kbd> (el normal, de una terminal) tiene abierta la misma sesión, jwn no escribe en ella: la lee, y el campo queda cerrado hasta que el otro se cierre. Así no hay dos procesos escribiendo la misma conversación. Cambia el estado del otro <kbd>claude</kbd> y prueba a escribir.</p>
+
+  <div class="bar" role="group" aria-label="Opciones del prototipo">
+    <div class="grp"><span>el otro claude</span>
+      <button id="s-busy" aria-pressed="true">trabaja</button>
+      <button id="s-idle" aria-pressed="false">parado, esperando</button>
+      <button id="s-none" aria-pressed="false">cerrado</button></div>
+    <button id="reset">reiniciar</button>
+  </div>
+
+  <div class="stage">
+    <div class="col">
+      <h2>TERMINAL · haz clic en el campo y escribe o pulsa Enter</h2>
+      <div class="term">
+        <div class="list" id="t-list"></div>
+        <div class="work" id="t-work"></div>
+        <div class="field" id="t-field" tabindex="0" role="textbox" aria-label="Campo del mensaje"></div>
+        <div class="foot"><span id="t-keys"></span><span>sonnet-5.5 · manual</span></div>
+      </div>
+      <div class="hint" id="t-note"></div>
+    </div>
+    <div class="side">
+      <h2>TELÉFONO · el campo no se puede usar</h2>
+      <div class="phone"><div class="ph">
+        <div class="hd"><b>arregla el test que falla</b><span id="p-sub"></span></div>
+        <div class="list" id="p-list"></div>
+        <div class="held" id="p-held" role="status"></div>
+        <div class="compose"><input id="p-in" aria-label="Mensaje"><button id="p-send" aria-label="Enviar">➤</button></div>
+      </div></div>
+    </div>
+  </div>
+
+  <h2>LO QUE CAMBIA</h2>
+  <div class="notes">
+    <div><b>Cómo se sabe.</b> Claude Code apunta cada proceso vivo en <kbd>~/.claude/sessions/&lt;pid&gt;.json</kbd> con la sesión que tiene abierta, su carpeta y si trabaja o espera. El daemon lo mira: si hay un proceso vivo, que no es el motor propio de jwn, con el id de esta conversación, la sesión está ocupada. Vale también para un <kbd>claude</kbd> parado esperando tu mensaje.</div>
+    <div><b>Qué se bloquea.</b> Escribir y enviar en esa conversación, en la terminal y en el teléfono. Se puede seguir leyendo, desplazar, copiar y abrir lo anterior. No se bloquea nada si la conversación es nueva o la tiene solo jwn.</div>
+    <div><b>Qué dice.</b> «solo lectura: otro claude (pid 93269, en jw-wt/next-bootstrap) tiene esta sesión abierta · ciérralo para escribir aquí». Se levanta solo, en unos 2 s, cuando ese proceso termina.</div>
+    <div><b>Lo que no cubre.</b> Si jwn ya escribe una sesión y después alguien abre <kbd>claude --resume</kbd> con ella en una terminal, jwn no puede impedirlo: eso lo decide el otro <kbd>claude</kbd>. Y un registro de un proceso que murió sin borrarlo no cuenta: se comprueba que el pid siga vivo.</div>
+  </div>
+  <h2>PARA DECIDIR</h2>
+  <div class="notes">
+    <div><b>1 · también con el otro parado.</b> <span class="rec">Recomiendo que sí</span>: un <kbd>claude</kbd> parado en una terminal escribirá en cuanto le hables y bifurcaría la conversación. Pruébalo con «parado, esperando».</div>
+    <div><b>2 · el mensaje.</b> <span class="rec">Con el pid y la carpeta</span>, para que sepas qué cerrar. En el teléfono es una fila sobre el campo, no un aviso que se va.</div>
+    <div><b>3 · si el otro es un motor de jwn.</b> <span class="rec">También se bloquea</span>: dos paneles de jwn con la misma sesión tienen el mismo problema.</div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+let other = 'busy', typed = '', flash = '', sent = [];
+const base = [
+  ['u','arregla el test que falla en auth::expired'],
+  ['t','Voy a mirar el test y el código que prueba.'],
+  ['d','▸ Leyó 2 archivos, ejecutó 1 comando'],
+  ['t','El fallo es el reloj: verify() no mira la hora. Cambio la comparación y los 14 tests pasan.'],
+  ['d','✻ Listo en 41 s · 5 herramientas · $0,06'],
+];
+const held = () => other !== 'none';
+const why = () => 'solo lectura: otro claude (pid 93269, en jw-wt/next-bootstrap) ' + (other === 'busy' ? 'trabaja en esta sesión' : 'tiene esta sesión abierta') + ' · ciérralo para escribir aquí';
+function lines(){ return base.concat(sent.flatMap(m => [['u',m],['t','Hecho.']])); }
+function drawList(el){
+  el.innerHTML = '';
+  for (const [k,t] of lines()) {
+    const d = document.createElement('div');
+    if (k === 'u') { d.className = 'u'; d.innerHTML = '<span class="b blue">❯ </span>' + esc(t); }
+    else if (k === 't') d.innerHTML = '<span class="b">● </span>' + esc(t);
+    else d.innerHTML = '<span class="dim">' + esc(t) + '</span>';
+    el.appendChild(d);
+  }
+  el.scrollTop = el.scrollHeight;
+}
+function draw(){
+  drawList($('t-list')); drawList($('p-list'));
+  $('t-work').innerHTML = other === 'busy' ? '<span class="yellow">✻ </span>Trabajando… (otro claude, 12 s · ↓ 1,3 k tokens)' : '';
+  const f = $('t-field');
+  if (held()) f.innerHTML = '<div class="row"><span class="dim">❯</span><span class="dim">' + esc(why()) + '</span></div>';
+  else f.innerHTML = '<div class="row"><span class="b blue">❯</span><span>' + esc(typed) + '<span class="cur"></span>' + (typed ? '' : '<span class="dim">escribe un mensaje · / comandos</span>') + '</span></div>';
+  $('t-keys').textContent = flash || (held() ? 'esta sesión la tiene otro claude · se puede leer y copiar' : '↵ envía · / comandos · ⇧tab modo');
+  $('t-note').textContent = held() ? 'Escribir y Enter no hacen nada: el pie recuerda por qué.' : 'El otro claude se cerró: el campo vuelve solo.';
+  $('p-sub').textContent = held() ? 'solo lectura' : 'idle';
+  $('p-held').hidden = !held();
+  $('p-held').textContent = why();
+  $('p-in').disabled = held(); $('p-send').disabled = held();
+  $('p-in').placeholder = held() ? 'solo lectura' : 'escribe a claude';
+}
+function status(s){ other = s; flash = ''; ['busy','idle','none'].forEach(k => $('s-'+k).setAttribute('aria-pressed', k === s)); draw(); }
+$('s-busy').onclick = () => status('busy'); $('s-idle').onclick = () => status('idle'); $('s-none').onclick = () => status('none');
+$('reset').onclick = () => { typed = ''; sent = []; status('busy'); };
+$('t-field').addEventListener('keydown', e => {
+  if (held()) { if (e.key.length === 1 || e.key === 'Enter') { flash = 'no se escribe: ' + why().replace('solo lectura: ',''); draw(); } return; }
+  if (e.key === 'Enter') { e.preventDefault(); if (typed.trim()) { sent.push(typed); typed = ''; draw(); } }
+  else if (e.key === 'Backspace') { typed = typed.slice(0, -1); draw(); }
+  else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) { typed += e.key; draw(); }
+});
+$('p-in').onkeydown = e => { if (e.key === 'Enter' && $('p-in').value.trim()) { sent.push($('p-in').value); $('p-in').value = ''; draw(); } };
+$('p-send').onclick = () => { if ($('p-in').value.trim()) { sent.push($('p-in').value); $('p-in').value = ''; draw(); } };
+status('busy');
+</script>

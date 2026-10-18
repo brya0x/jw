@@ -10,6 +10,7 @@ import dev.jw.next.contract.ConvItem
 import dev.jw.next.contract.ConvMode
 import dev.jw.next.contract.ConvStatus
 import dev.jw.next.contract.DaemonMsg
+import dev.jw.next.contract.Held
 import dev.jw.next.contract.Image
 import dev.jw.next.contract.Node
 import dev.jw.next.contract.Running
@@ -79,6 +80,17 @@ class ConversationTest {
         assertNull(c.copy(suggestion = null).suggestionShown("", null, false))
         assertNull(conversation().copy(status = ConvStatus.Idle, since = null, suggestion = "revisa el diff").suggestionShown("", null, false), "a question waits")
         assertNull(c.copy(status = ConvStatus.Dead).suggestionShown("", null, true), "the engine is taken up again")
+    }
+
+    /** REQ-576: a session that another `claude` has open says who has it, and proposes nothing. */
+    @Test
+    fun aSessionThatAnotherClaudeHasOpenSaysWhoHasIt() {
+        val c = conversation().copy(ask = null, status = ConvStatus.Idle, since = null, suggestion = "revisa el diff")
+        assertNull(c.heldText())
+        val held = c.copy(held = Held(93269, "/work/jw-wt/next-bootstrap", false))
+        assertEquals("solo lectura: otro claude (pid 93269, en jw-wt/next-bootstrap) la tiene abierta · ciérralo para escribir aquí", held.heldText())
+        assertTrue(held.copy(held = Held(1, "/a", true)).heldText()!!.contains("trabaja en ella"))
+        assertNull(held.suggestionShown("", null, false), "no suggestion while it is held")
     }
 
     /** A turn of another `claude` that is followed has a line of work with no way to stop it (REQ-565). */

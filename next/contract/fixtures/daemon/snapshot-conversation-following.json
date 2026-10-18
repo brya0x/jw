@@ -148,6 +148,11 @@
       }
     ],
     "tokens": 1250,
-    "following": 1792110000000
+    "following": 1792110000000,
+    "held": {
+      "pid": 93269,
+      "cwd": "/work/jw-wt/next-bootstrap",
+      "busy": true
+    }
   }
 }

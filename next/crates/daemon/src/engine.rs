@@ -454,6 +454,27 @@ fn run_effects(core: &mut crate::core::Core, pane: &Id, fx: Vec<Effect>) {
 
 /// Start the engine of a conversation that has none (it is new, or its daemon restarted).
 fn start_engine(shared: &Shared, pane: &Id) -> Result<(), crate::commands::ErrorBody> {
+    // A session that another `claude` has open is not written to by a second one (REQ-575).
+    let (env, session) = {
+        let core = shared.lock();
+        let c = core
+            .convs
+            .get(pane)
+            .ok_or_else(|| err(ErrorCode::NotFound, "no conversation in this pane"))?;
+        (c.env.clone(), c.st.session.clone())
+    };
+    if let Some(h) = crate::sessions::holder(env.as_ref(), &session) {
+        if let Some(c) = shared.lock().convs.get_mut(pane) {
+            c.st.set_held(Some(h.clone()));
+        }
+        return Err(err(
+            ErrorCode::Conflict,
+            format!(
+                "otro claude (pid {}, en {}) tiene esta sesión abierta: ciérralo para escribir aquí",
+                h.pid, h.cwd
+            ),
+        ));
+    }
     let (launch, cfg_env, generation) = {
         let mut core = shared.lock();
         let cfg_env = core.env.clone();
@@ -462,6 +483,7 @@ fn start_engine(shared: &Shared, pane: &Id) -> Result<(), crate::commands::Error
             .get_mut(pane)
             .ok_or_else(|| err(ErrorCode::NotFound, "no conversation in this pane"))?;
         c.generation += 1;
+        c.st.set_held(None);
         (launch_of(c), cfg_env, c.generation)
     };
     let exe = resolve_claude(launch.env.as_ref(), &cfg_env)
@@ -632,6 +654,9 @@ pub fn open_conversation(
         st.effort = e.clone();
     }
     st.set_advisor(crate::settings::advisor_label(env.as_ref(), &cwd));
+    if lazy {
+        st.set_held(crate::sessions::holder(env.as_ref(), &st.session));
+    }
     let mut extra: Vec<String> = Vec::new();
     for d in &parsed.add_dirs {
         extra.extend(["--add-dir".into(), d.clone()]);
@@ -1042,26 +1067,40 @@ fn run_shell(
 /// Read what was added to the transcripts of the conversations that have no engine, and show it
 /// (REQ-545). What is read is outside the lock; what changes the node is inside.
 pub fn follow_due(shared: &Shared) {
-    let taken: Vec<(Id, Id, crate::transcript::Source)> = shared
+    type Taken = (
+        Id,
+        Id,
+        crate::transcript::Source,
+        Option<BTreeMap<String, String>>,
+        String,
+    );
+    let taken: Vec<Taken> = shared
         .lock()
         .convs
         .iter_mut()
         .filter(|(_, c)| c.engine.is_none())
-        .filter_map(|(pane, c)| c.source.take().map(|s| (pane.clone(), c.id.clone(), s)))
+        .filter_map(|(pane, c)| {
+            let (env, session) = (c.env.clone(), c.st.session.clone());
+            c.source
+                .take()
+                .map(|s| (pane.clone(), c.id.clone(), s, env, session))
+        })
         .collect();
     if taken.is_empty() {
         return;
     }
     let polled: Vec<_> = taken
         .into_iter()
-        .map(|(pane, node, mut src)| {
+        .map(|(pane, node, mut src, env, session)| {
             let changed = src.poll();
-            (pane, node, src, changed)
+            // Whether another `claude` has the session open is looked at with the transcript.
+            let held = crate::sessions::holder(env.as_ref(), &session);
+            (pane, node, src, changed, held)
         })
         .collect();
     let mut core = shared.lock();
     let mut shown = false;
-    for (pane, node, src, changed) in polled {
+    for (pane, node, src, changed, held) in polled {
         // A conversation that started its engine meanwhile, was opened again (another session in
         // the pane has another node) or is gone is not followed with this.
         let Some(c) = core
@@ -1077,6 +1116,7 @@ pub fn follow_due(shared: &Shared) {
         } else if c.st.expire_follow(crate::conversation::stamp()) {
             shown = true;
         }
+        shown |= c.st.set_held(held);
         c.source = Some(src);
     }
     if shown {

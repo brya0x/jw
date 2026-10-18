@@ -238,3 +238,7 @@ data class Running(val id: String, val since: Long)
 /** What `read_older` answers: the items, oldest first, and the `before` that asks for the ones before them; null when there are no more (REQ-567). */
 @Serializable
 data class OlderItems(val items: List<ConvItem>, val older: Long? = null)
+
+/** A process of Claude that has the session open: its [pid], the folder it runs in and whether it works now or waits for a message (REQ-575). */
+@Serializable
+data class Held(val pid: Int, val cwd: String, val busy: Boolean)

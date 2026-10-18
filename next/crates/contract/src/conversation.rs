@@ -48,6 +48,10 @@ pub struct Conversation {
     /// older ones: the `before` of `read_older` (REQ-567).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub older: Option<u64>,
+    /// Another `claude` that has this session open, while the conversation has no engine of its
+    /// own (REQ-575): the clients read it and do not write in it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held: Option<Held>,
     /// What Claude proposes the person writes next, while the engine is stopped and nothing waits
     /// (REQ-572): the clients draw it grey in the empty field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -60,6 +64,15 @@ pub struct Conversation {
     /// (REQ-563).
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub tokens: u64,
+}
+
+/// A process of Claude that has the session open: its pid, the folder it runs in and whether it
+/// works now or waits for a message.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Held {
+    pub pid: u32,
+    pub cwd: String,
+    pub busy: bool,
 }
 
 /// A tool that runs: its item's id and the milliseconds since the epoch at which it began.

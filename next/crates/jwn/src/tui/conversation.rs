@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use contract::PaneInput;
 use contract::conversation::{
     Accent, Ask, AskKind, CommandKind, CommandSource, ConvCommand, ConvStatus, Conversation,
-    DiffLine, DiffSign, Image, Item, Mode, SavedConversation, Tone, ToolState,
+    DiffLine, DiffSign, Held, Image, Item, Mode, SavedConversation, Tone, ToolState,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -365,6 +365,8 @@ pub struct Ui {
     pub editor: Editor,
     /// The suggestion that the person dismissed with esc (REQ-573).
     ghost_off: String,
+    /// Another `claude` has the session open: nothing is written here (REQ-575).
+    held: Option<Held>,
     /// The older items of the conversation, which `View::sync` keeps beside the node's (REQ-567).
     pub(super) older: Older,
     /// The time of the last frame drawn, for what counts up (a tool that runs); 0 before the first.
@@ -476,6 +478,7 @@ impl Ui {
         if !matches!(conv.status, ConvStatus::Dead | ConvStatus::Resuming) {
             self.retaking = false;
         }
+        self.held.clone_from(&conv.held);
         // A run that is gone (its tools were trimmed) is not open any more; one that older items
         // made longer starts earlier, and stays open under its new first.
         let spans: Vec<(u32, u32)> = fold::runs(&conv.items)
@@ -520,7 +523,7 @@ impl Ui {
 
     /// The line was pasted: the text goes in where the cursor is.
     pub fn paste(&mut self, text: &str) {
-        if matches!(self.pop, Some(Pop::Name(_))) {
+        if matches!(self.pop, Some(Pop::Name(_))) || self.held.is_some() {
             return;
         }
         self.menu_at = 0;
@@ -530,6 +533,9 @@ impl Ui {
 
     /// A picture the clipboard held, now small: it goes with the next message.
     pub fn attach(&mut self, image: Image) {
+        if self.held.is_some() {
+            return;
+        }
         self.pasted += 1;
         self.editor.insert(&format!("[Imagen#{}]", self.pasted));
         self.images.push((self.pasted, image));
@@ -1165,11 +1171,34 @@ impl Ui {
         }
     }
 
+    /// Why nothing is written here, when another `claude` has the session open (REQ-575): what
+    /// the field says, short, and what the status bar says when something is typed, with its folder.
+    fn held_why(held: &Held) -> (String, String) {
+        let state = if held.busy {
+            "trabaja en ella"
+        } else {
+            "la tiene abierta"
+        };
+        let place: Vec<&str> = held.cwd.rsplit('/').take(2).collect();
+        let place = place.into_iter().rev().collect::<Vec<_>>().join("/");
+        (
+            format!(
+                "solo lectura · otro claude (pid {}) {state} · ciérralo",
+                held.pid
+            ),
+            format!(
+                "otro claude (pid {}, en {place}) {state}: ciérralo para escribir en esta sesión",
+                held.pid
+            ),
+        )
+    }
+
     /// What Claude proposes, when it can be taken: the field is empty, nothing runs, waits or is
     /// open over it, and the person did not put it aside (REQ-572).
     fn ghost<'a>(&self, conv: &'a Conversation) -> Option<&'a str> {
         conv.suggestion.as_deref().filter(|s| {
-            self.editor.text().is_empty()
+            conv.held.is_none()
+                && self.editor.text().is_empty()
                 && conv.ask.is_none()
                 && self.pop.is_none()
                 && !self.working(conv)
@@ -1306,7 +1335,10 @@ impl Ui {
             if !self.images.is_empty() {
                 chips.push((format!("▣ {}", self.images.len()), look::cyan()));
             }
-            let proposed = self.ghost(conv).map(|s| format!("{s}  tab"));
+            let proposed = match &conv.held {
+                Some(h) => Some(Ui::held_why(h).0),
+                None => self.ghost(conv).map(|s| format!("{s}  tab")),
+            };
             let look = Look {
                 stop: self.working(conv).then_some("■ esc"),
                 ask: proposed
@@ -1839,6 +1871,25 @@ impl Ui {
                 _ => self.picked = None,
             }
         }
+        // Another `claude` has the session: it is read, not written (REQ-575).
+        if let Some(h) = &conv.held
+            && !ctrl
+            && matches!(
+                ev.code,
+                KeyCode::Char(_)
+                    | KeyCode::Enter
+                    | KeyCode::Backspace
+                    | KeyCode::Delete
+                    | KeyCode::Tab
+                    | KeyCode::Left
+                    | KeyCode::Right
+                    | KeyCode::Home
+                    | KeyCode::End
+            )
+        {
+            self.says = Ui::held_why(h).1;
+            return None;
+        }
         match ev.code {
             // What Claude proposes goes into the field to be edited or sent (REQ-572).
             KeyCode::Tab | KeyCode::Right if self.ghost(conv).is_some() => {
@@ -2064,6 +2115,10 @@ impl Ui {
 
     /// `↵`: send the line, or open the list a bare command stands for.
     fn submit(&mut self, conv: &Conversation) -> Option<Act> {
+        if let Some(h) = &conv.held {
+            self.says = Ui::held_why(h).1;
+            return None;
+        }
         let node = conv.head.id.clone();
         let text = self.editor.text();
         let line = text.trim();
@@ -3874,6 +3929,60 @@ mod tests {
                 .1
                 .join("\n")
                 .contains("no  tab")
+        );
+    }
+
+    /// REQ-576: a session that another `claude` has open is read and not written: the field says
+    /// who has it, what is typed, pasted or sent does nothing and says why, and what is read,
+    /// scrolled and copied goes on.
+    #[test]
+    fn a_session_that_another_claude_has_open_is_read_and_not_written_in_the_terminal() {
+        let mut conv = idle();
+        conv.suggestion = Some("revisa el diff antes de subirlo".into());
+        conv.held = Some(Held {
+            pid: 93269,
+            cwd: "/work/jw-wt/next-bootstrap".into(),
+            busy: false,
+        });
+        let mut ui = Ui::default();
+        ui.sync(&conv);
+        let (_, rows) = frame(&ui, &conv);
+        let joined = rows.join("\n");
+        assert!(
+            joined.contains("solo lectura · otro claude (pid 93269) la tiene abierta · ciérralo"),
+            "{joined}"
+        );
+        assert!(
+            !joined.contains("revisa el diff"),
+            "no suggestion while it is held"
+        );
+        type_in(&mut ui, &conv, "hola");
+        assert_eq!(ui.editor.text(), "", "nothing is written");
+        assert!(
+            ui.take_says()
+                .is_some_and(|s| s.contains("pid 93269, en jw-wt/next-bootstrap"))
+        );
+        ui.paste("pegado");
+        assert_eq!(ui.editor.text(), "");
+        assert!(press(&mut ui, &conv, KeyCode::Enter).is_none());
+        // it is read: the list scrolls
+        press(&mut ui, &conv, KeyCode::PageUp);
+        // and when the other ends the field is the person's again
+        conv.held = None;
+        ui.sync(&conv);
+        type_in(&mut ui, &conv, "hola");
+        assert_eq!(ui.editor.text(), "hola");
+        let mut busy = conv.clone();
+        busy.held = Some(Held {
+            pid: 1,
+            cwd: "/a".into(),
+            busy: true,
+        });
+        assert!(
+            frame(&Ui::default(), &busy)
+                .1
+                .join("\n")
+                .contains("trabaja en ella")
         );
     }
 

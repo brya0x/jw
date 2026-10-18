@@ -67,9 +67,15 @@ fun Node.Conversation.working(retaking: Boolean): Boolean =
 /** Whether the line of work is for a turn of another `claude` that is followed, and not one of this conversation's engine (REQ-565). */
 fun Node.Conversation.followedWork(retaking: Boolean): Boolean = following != null && !working(retaking)
 
+/** Why nothing is written when another `claude` has the session open: its pid, the folder it runs in and what it does (REQ-575, REQ-576); null when none has. */
+fun Node.Conversation.heldText(): String? = held?.let { h ->
+    val place = h.cwd.trimEnd('/').split('/').takeLast(2).joinToString("/")
+    "solo lectura: otro claude (pid ${h.pid}, en $place) ${if (h.busy) "trabaja en ella" else "la tiene abierta"} · ciérralo para escribir aquí"
+}
+
 /** What Claude proposes the person writes next, when it can be taken: the field is empty, nothing runs or waits and it was not put aside (REQ-572). */
 fun Node.Conversation.suggestionShown(text: String, dismissed: String?, retaking: Boolean): String? =
-    suggestion?.takeIf { text.isBlank() && it != dismissed && ask == null && !working(retaking) }
+    suggestion?.takeIf { held == null && text.isBlank() && it != dismissed && ask == null && !working(retaking) }
 
 /** What Claude is doing and for how long, for the line over the field (REQ-400, REQ-413); null when nothing runs. */
 fun Node.Conversation.workLine(retaking: Boolean, nowMs: Long): String? {

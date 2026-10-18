@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, VecDeque};
 
 use contract::conversation::{
     Accent, Artifact, Ask, AskKind, AskOption, CommandKind, CommandSource, ConvCommand, ConvStatus,
-    Conversation, DiffLine, DiffSign, DividerKind, Image, Item, Limits, Mode, Running, Task,
+    Conversation, DiffLine, DiffSign, DividerKind, Held, Image, Item, Limits, Mode, Running, Task,
     TaskKind, TaskState, Todo, Tone, ToolState,
 };
 use contract::{AttentionKind, Head, Id};
@@ -511,6 +511,8 @@ pub struct State {
     suggestion: Option<String>,
     /// The model the advisor runs on, as Claude Code names it, from Claude's settings (REQ-574).
     advisor: Option<String>,
+    /// Another `claude` that has this session open, while the conversation has no engine (REQ-575).
+    held: Option<Held>,
     /// The engine's total cost so far (its process), to know what one turn cost.
     last_total_micro: u64,
     live_texts: VecDeque<usize>,
@@ -700,6 +702,7 @@ impl State {
             resume_divider: false,
             suggestion: None,
             advisor: None,
+            held: None,
             last_total_micro: 0,
             live_texts: VecDeque::new(),
             shell_context: Vec::new(),
@@ -859,6 +862,13 @@ impl State {
         .flatten()
     }
 
+    /// Another `claude` that has the session open, or none: whether it changed.
+    pub fn set_held(&mut self, held: Option<Held>) -> bool {
+        let changed = self.held != held;
+        self.held = held;
+        changed
+    }
+
     /// The model of the advisor, for its rows (REQ-574).
     pub fn set_advisor(&mut self, model: Option<String>) {
         self.advisor = model;
@@ -995,6 +1005,7 @@ impl State {
                 (None, None) => 0,
             },
             following: self.followed.map(|f| f.since),
+            held: self.held.clone(),
             suggestion: self.shown_suggestion(),
             older: self.older_cursor(),
         }

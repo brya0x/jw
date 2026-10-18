@@ -1408,7 +1408,66 @@ fn read_older_pages_back_from_the_node_to_the_start_of_the_transcript() {
     r.stop();
 }
 
-/// REQ-545: while the conversation has no engine of its own, what another `claude` writes to the/// REQ-545: while the conversation has no engine of its own, what another `claude` writes to the
+/// A process whose command says `claude`, which is nobody's child but init's: how a `claude` of
+/// another terminal looks to the daemon. Its pid.
+fn stray_claude() -> u32 {
+    let out = std::process::Command::new("sh")
+        .args(["-c", "sh -c 'sleep 60; :' claude >/dev/null 2>&1 & echo $!"])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().parse().unwrap()
+}
+
+/// REQ-575: a session that another `claude` has open is read and not written: the node says who
+/// has it, a message is refused while that process is alive, and the node is free again within a
+/// moment of its end.
+#[test]
+fn a_session_that_another_claude_has_open_is_read_and_not_written() {
+    let sb = Sandbox::new();
+    let mut r = rig_with(sb, Vec::new());
+    let (_file, env) = old_session(&r, &[FIRST, REPLY]);
+    let pid = stray_claude();
+    let sessions = std::path::Path::new(&env["CLAUDE_CONFIG_DIR"]).join("sessions");
+    std::fs::create_dir_all(&sessions).unwrap();
+    std::fs::write(
+        sessions.join(format!("{pid}.json")),
+        format!(
+            r#"{{"pid":{pid},"sessionId":"old-session","cwd":"/otra/carpeta","status":"idle"}}"#
+        ),
+    )
+    .unwrap();
+    let (node, _) = r.open_with(None, vec!["--resume", "old-session"], Some(env));
+    let v = r.conv(&node);
+    assert_eq!(v["held"]["pid"], pid, "{v}");
+    assert_eq!(v["held"]["busy"], false);
+    let refused = r
+        .cmd(Cmd::ConversationSend {
+            node: node.clone(),
+            text: "hola".into(),
+            images: Vec::new(),
+        })
+        .unwrap_err();
+    assert_eq!(refused.code, contract::ErrorCode::Conflict);
+    assert!(
+        refused.message.contains(&pid.to_string()),
+        "{}",
+        refused.message
+    );
+    // it ends: the node is free again and a message goes
+    let _ = std::process::Command::new("/bin/kill")
+        .arg(pid.to_string())
+        .status();
+    r.until(&node, "the session to be free", |v| v.get("held").is_none());
+    r.cmd(Cmd::ConversationSend {
+        node: node.clone(),
+        text: "hola".into(),
+        images: Vec::new(),
+    })
+    .unwrap();
+    r.stop();
+}
+
+/// REQ-545: while the conversation has no engine of its own, what another `claude` writes to the/// REQ-545: while the conversation has no engine of its own, what another `claude` writes to the/// REQ-545: while the conversation has no engine of its own, what another `claude` writes to the
 /// session shows in it.
 #[test]
 fn a_session_another_claude_is_writing_is_followed_while_the_conversation_has_no_engine() {

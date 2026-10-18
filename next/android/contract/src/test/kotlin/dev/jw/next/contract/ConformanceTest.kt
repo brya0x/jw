@@ -253,6 +253,7 @@ class ConformanceTest {
         val snapshot = fixtures("daemon").first { it.first == "snapshot-conversation-following.json" }.second
         val node = (ContractJson.decodeFromJsonElement(DaemonMsg.serializer(), snapshot) as DaemonMsg.Snapshot).node as Node.Conversation
         assertEquals(1_792_110_000_000L, node.following)
+        assertEquals(Held(93269, "/work/jw-wt/next-bootstrap", true), node.held)
         assertEquals(1, node.running.size)
     }
 
