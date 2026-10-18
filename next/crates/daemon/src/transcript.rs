@@ -738,7 +738,8 @@ const PAGE_LOOKAHEAD: u64 = 1 << 20;
 /// The longest line whose time is looked for when a file is searched by time, and how many lines
 /// are tried from one place before it is taken as having none.
 const PROBE_LINE: usize = 1 << 20;
-const PROBE_LINES: usize = 256;
+const PROBE_LINES: usize = 100_000;
+const PROBE_BYTES: u64 = 64 << 20;
 
 /// The bytes of the next line of `r` (at most `max` of them are kept) and how long it was.
 fn read_line_capped<R: BufRead>(r: &mut R, max: usize) -> std::io::Result<(Vec<u8>, u64)> {
@@ -778,7 +779,7 @@ fn probe(file: &mut std::fs::File, size: u64, mid: u64) -> Option<(u64, u64)> {
         start = mid - 1 + n;
     }
     for _ in 0..PROBE_LINES {
-        if start >= size {
+        if start >= size || start - mid > PROBE_BYTES {
             return None;
         }
         let (bytes, total) = read_line_capped(&mut r, PROBE_LINE).ok()?;
@@ -837,10 +838,16 @@ pub(crate) fn older_page(
             let more = !whole || items.len() > count;
             let skip = items.len().saturating_sub(count);
             let page: Vec<Stamped> = items.drain(skip..).collect();
-            let cursor = if more {
-                page.first().map(|s| s.at)
-            } else {
+            let cursor = if !more {
                 None
+            } else if let Some(first) = page.first() {
+                Some(first.at)
+            } else {
+                // Nothing in all that was read, and the file goes on back: the next try starts
+                // from what was read, which is earlier than `before` since it was read from.
+                probe(&mut file, size, from)
+                    .map(|(_, at)| at)
+                    .filter(|at| *at < before)
             };
             return Some((page, cursor));
         }
@@ -1576,6 +1583,10 @@ mod tests {
             );
             if t == turns / 2 && fat > 0 {
                 out += &line(serde_json::json!({"type":"api-request-blob","blob":"x".repeat(fat)}));
+                // a long run of lines that have no time
+                for k in 0..400 {
+                    out += &line(serde_json::json!({"type":"progress","n":k}));
+                }
             }
             out += &line(
                 serde_json::json!({"type":"user","timestamp":at(b + 3),"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":format!("t{t}"),"content":"ok"}]}}),

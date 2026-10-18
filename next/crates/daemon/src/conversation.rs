@@ -792,8 +792,16 @@ impl State {
     /// The time of the first item the node holds, when the transcript may hold older ones: the
     /// `before` that `read_older` asks with (REQ-567).
     fn older_cursor(&self) -> Option<u64> {
+        // The first item of the transcript: jwn's own items that come before it do not say where
+        // in the file the window starts.
         self.leaves_chat_to_transcript()
-            .then(|| self.stamps.first().map(|(at, _)| *at))
+            .then(|| {
+                self.stamps
+                    .iter()
+                    .find(|(_, own)| !*own)
+                    .or(self.stamps.first())
+                    .map(|(at, _)| *at)
+            })
             .flatten()
     }
 
@@ -3918,6 +3926,32 @@ mod tests {
                 "the window starts with the item that came after the ones that left"
             );
         }
+    }
+
+    /// REQ-567: the node says where its first line of the transcript is, and not the time of an
+    /// item of jwn's own that is older than that.
+    #[test]
+    fn the_time_older_asks_from_is_the_first_item_of_the_transcript_and_not_an_own_one() {
+        let mut t = crate::transcript::Parser::default();
+        t.items = vec![line_at(5_000, said("a")), line_at(6_000, said("b"))];
+        let mut s = st();
+        s.has_transcript = true;
+        s.kept_saved = vec![Kept {
+            at: 1_000,
+            item: note("mía, de antes"),
+        }];
+        s.follow(&t);
+        assert!(
+            matches!(s.items[0], Item::Note { .. }),
+            "the own item heads the window"
+        );
+        assert_eq!(s.older_cursor(), Some(5_000));
+        s.has_transcript = false;
+        assert_eq!(
+            s.older_cursor(),
+            None,
+            "no transcript, nothing older to read"
+        );
     }
 
     /// REQ-549: what another `claude` queued is shown while its session is followed, and goes when
