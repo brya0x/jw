@@ -517,15 +517,7 @@ fn pwd_of(env: Option<&BTreeMap<String, String>>) -> Option<PathBuf> {
 
 /// Claude's own folder of transcripts for a working folder: where `--continue` looks.
 pub(crate) fn projects_dir(cwd: &Path, env: Option<&BTreeMap<String, String>>) -> Option<PathBuf> {
-    let base = env
-        .and_then(|e| e.get("CLAUDE_CONFIG_DIR").cloned())
-        .or_else(|| std::env::var("CLAUDE_CONFIG_DIR").ok())
-        .map(PathBuf::from)
-        .or_else(|| {
-            env.and_then(|e| e.get("HOME").cloned())
-                .or_else(|| std::env::var("HOME").ok())
-                .map(|h| PathBuf::from(h).join(".claude"))
-        })?;
+    let base = crate::settings::claude_dir(env)?;
     // The folder is Claude's own naming of the path: `/` and `.` become `-`, and a `_` or a space may
     // too (it is not documented which), so the one that exists is used.
     let named = |keep: fn(char) -> bool| -> PathBuf {
@@ -639,6 +631,7 @@ pub fn open_conversation(
     if let Some(e) = &parsed.effort {
         st.effort = e.clone();
     }
+    st.set_advisor(crate::settings::advisor_label(env.as_ref(), &cwd));
     let mut extra: Vec<String> = Vec::new();
     for d in &parsed.add_dirs {
         extra.extend(["--add-dir".into(), d.clone()]);

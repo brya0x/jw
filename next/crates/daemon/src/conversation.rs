@@ -509,6 +509,8 @@ pub struct State {
     resume_divider: bool,
     /// What the engine proposed the person writes next, after the last turn (REQ-572).
     suggestion: Option<String>,
+    /// The model the advisor runs on, as Claude Code names it, from Claude's settings (REQ-574).
+    advisor: Option<String>,
     /// The engine's total cost so far (its process), to know what one turn cost.
     last_total_micro: u64,
     live_texts: VecDeque<usize>,
@@ -697,6 +699,7 @@ impl State {
             followed: None,
             resume_divider: false,
             suggestion: None,
+            advisor: None,
             last_total_micro: 0,
             live_texts: VecDeque::new(),
             shell_context: Vec::new(),
@@ -827,6 +830,23 @@ impl State {
         }
     }
 
+    /// The items for the node: the rows of the advisor say which model it is (REQ-574), which
+    /// the transcript does not.
+    fn shown_items(&self) -> Vec<Item> {
+        let mut items = self.items.clone();
+        if let Some(model) = &self.advisor {
+            for item in &mut items {
+                if let Item::Tool { name, arg, .. } = item
+                    && name == ADVISING
+                    && arg.is_empty()
+                {
+                    *arg = format!("using {model}");
+                }
+            }
+        }
+        items
+    }
+
     /// What is proposed, while it can be taken: the engine is stopped, nothing waits and no turn
     /// of another `claude` is being followed.
     fn shown_suggestion(&self) -> Option<String> {
@@ -837,6 +857,11 @@ impl State {
             && self.queue.is_empty())
         .then(|| self.suggestion.clone())
         .flatten()
+    }
+
+    /// The model of the advisor, for its rows (REQ-574).
+    pub fn set_advisor(&mut self, model: Option<String>) {
+        self.advisor = model;
     }
 
     /// The time of the first item the node holds, when the transcript may hold older ones: the
@@ -932,7 +957,7 @@ impl State {
             status: self.status,
             since: self.since,
             first: self.first,
-            items: self.items.clone(),
+            items: self.shown_items(),
             ask: self.pending.as_ref().map(|p| p.ask.clone()),
             queue: self
                 .queue
@@ -3056,6 +3081,23 @@ mod tests {
             None,
             "another claude runs a turn in the transcript that is followed"
         );
+    }
+
+    /// REQ-574: the rows of the advisor in the node say which model it is, when the settings do.
+    #[test]
+    fn the_rows_of_the_advisor_say_its_model_when_the_settings_name_it() {
+        let mut s = st();
+        s.send("go", vec![], 0);
+        s.apply(&json!({"type": "assistant", "message": {"content": [{"type": "server_tool_use", "id": "srv1", "name": "advisor", "input": {}}]}}), 1);
+        let arg = |s: &State| {
+            node_of(s).items.iter().find_map(|i| match i {
+                Item::Tool { name, arg, .. } if name == ADVISING => Some(arg.clone()),
+                _ => None,
+            })
+        };
+        assert_eq!(arg(&s).as_deref(), Some(""));
+        s.set_advisor(Some("Opus 5.5".into()));
+        assert_eq!(arg(&s).as_deref(), Some("using Opus 5.5"));
     }
 
     #[test]

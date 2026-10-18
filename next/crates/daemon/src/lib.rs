@@ -30,6 +30,7 @@ mod rename;
 mod replies;
 mod saved;
 mod server;
+mod settings;
 mod start;
 mod sync;
 mod transcript;

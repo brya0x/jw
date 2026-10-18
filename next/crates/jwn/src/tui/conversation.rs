@@ -363,10 +363,8 @@ impl Editor {
 #[derive(Default)]
 pub struct Ui {
     pub editor: Editor,
-    /// The suggestion that was put aside: the person wrote, took or dismissed it (REQ-572).
+    /// The suggestion that the person dismissed with esc (REQ-573).
     ghost_off: String,
-    /// What the node proposed last, for what is written without the node at hand (a paste).
-    proposed: String,
     /// The older items of the conversation, which `View::sync` keeps beside the node's (REQ-567).
     pub(super) older: Older,
     /// The time of the last frame drawn, for what counts up (a tool that runs); 0 before the first.
@@ -478,7 +476,6 @@ impl Ui {
         if !matches!(conv.status, ConvStatus::Dead | ConvStatus::Resuming) {
             self.retaking = false;
         }
-        self.proposed = conv.suggestion.clone().unwrap_or_default();
         // A run that is gone (its tools were trimmed) is not open any more; one that older items
         // made longer starts earlier, and stays open under its new first.
         let spans: Vec<(u32, u32)> = fold::runs(&conv.items)
@@ -529,8 +526,6 @@ impl Ui {
         self.menu_at = 0;
         self.editor
             .insert(&text.replace("\r\n", "\n").replace('\r', "\n"));
-        // Whoever pastes has put the proposal aside, as whoever types.
-        self.ghost_off.clone_from(&self.proposed);
     }
 
     /// A picture the clipboard held, now small: it goes with the next message.
@@ -538,7 +533,6 @@ impl Ui {
         self.pasted += 1;
         self.editor.insert(&format!("[Imagen#{}]", self.pasted));
         self.images.push((self.pasted, image));
-        self.ghost_off.clone_from(&self.proposed);
     }
 
     /// The fragment after an `@` that the files have not been asked for yet (REQ-408).
@@ -960,8 +954,11 @@ impl Ui {
                     ("● ".to_owned(), Style::fg(state_colour(*state))),
                     (name.clone(), plain.bold()),
                 ];
-                // A tool with nothing to say of its argument (the advisor) has no parentheses.
-                if !arg.is_empty() {
+                // A tool with nothing to say of its argument has no parentheses, and the advisor
+                // says its model as Claude Code does: `Advising using Opus 5.5`.
+                if name == "Advising" && !arg.is_empty() {
+                    head.push((format!(" {arg}"), dim));
+                } else if !arg.is_empty() {
                     head.push((
                         format!(
                             "({})",
@@ -1847,7 +1844,6 @@ impl Ui {
             KeyCode::Tab | KeyCode::Right if self.ghost(conv).is_some() => {
                 if let Some(s) = self.ghost(conv).map(str::to_owned) {
                     self.editor.set(&s);
-                    self.ghost_off = s;
                 }
                 None
             }
@@ -1906,12 +1902,6 @@ impl Ui {
             _ => {
                 self.menu_at = 0;
                 self.editor.edit(ev);
-                // Whoever writes has put the proposal aside, for when the field is empty again.
-                if !self.editor.text().is_empty()
-                    && let Some(s) = &conv.suggestion
-                {
-                    self.ghost_off.clone_from(s);
-                }
                 None
             }
         }
@@ -3278,6 +3268,15 @@ mod tests {
         let joined = rows.join("\n");
         assert!(joined.contains("● Advising"), "{joined}");
         assert!(!joined.contains("Advising("), "{joined}");
+        if let Item::Tool { arg, .. } = &mut conv.items[0] {
+            *arg = "using Opus 5.5".into();
+        }
+        let (_, rows) = frame(&Ui::default(), &conv);
+        assert!(
+            rows.join("\n").contains("● Advising using Opus 5.5"),
+            "{rows:?}"
+        );
+        assert!(!rows.join("\n").contains("Advising(using"), "{rows:?}");
         assert!(
             joined.contains("⎿  ✔ El asesor revisó la conversación"),
             "{joined}"
@@ -3813,10 +3812,11 @@ mod tests {
         assert_eq!(ui.unfolded.iter().copied().collect::<Vec<_>>(), [107]);
     }
 
-    /// REQ-572: what Claude proposes is grey in the empty field, Tab or → puts it in the field to be
-    /// edited, Enter with the field empty sends nothing, and Esc, writing or taking it put it aside.
+    /// REQ-573: what Claude proposes is grey in the empty field and comes back whenever the field is
+    /// empty again, Tab or → puts it in the field to be edited, Enter with the field empty sends
+    /// nothing, and only Esc puts it aside.
     #[test]
-    fn what_claude_proposes_is_taken_with_tab_and_put_aside_by_esc_or_by_writing() {
+    fn what_claude_proposes_is_taken_with_tab_put_aside_by_esc_and_back_when_the_field_is_empty() {
         let mut conv = idle();
         conv.suggestion = Some("revisa el diff antes de subirlo".into());
         let mut ui = Ui::default();
@@ -3848,20 +3848,23 @@ mod tests {
         );
         conv.suggestion = Some("otra cosa".into());
         row_of(&frame(&ui, &conv).1, "otra cosa  tab");
-        // writing puts it aside, and so does →
+        // writing hides it, and it comes back when the field is empty again
         let mut ui = Ui::default();
         type_in(&mut ui, &conv, "x");
-        press(&mut ui, &conv, KeyCode::Backspace);
         assert!(!frame(&ui, &conv).1.join("\n").contains("otra cosa"));
+        press(&mut ui, &conv, KeyCode::Backspace);
+        row_of(&frame(&ui, &conv).1, "otra cosa  tab");
+        // so does taking it and deleting it, or pasting and deleting
+        press(&mut ui, &conv, KeyCode::Tab);
+        assert_eq!(ui.editor.text(), "otra cosa");
+        ui.editor.take();
+        row_of(&frame(&ui, &conv).1, "otra cosa  tab");
+        ui.paste("y");
+        ui.editor.take();
+        row_of(&frame(&ui, &conv).1, "otra cosa  tab");
         let mut ui = Ui::default();
         press(&mut ui, &conv, KeyCode::Right);
         assert_eq!(ui.editor.text(), "otra cosa");
-        // pasting puts it aside too, with the text deleted again
-        let mut ui = Ui::default();
-        ui.sync(&conv);
-        ui.paste("x");
-        press(&mut ui, &conv, KeyCode::Backspace);
-        assert!(!frame(&ui, &conv).1.join("\n").contains("otra cosa  tab"));
         // nothing is proposed while Claude works or asks
         let mut busy = idle();
         busy.suggestion = Some("no".into());
