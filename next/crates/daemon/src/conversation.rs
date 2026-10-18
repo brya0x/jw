@@ -827,9 +827,11 @@ impl State {
         }
     }
 
-    /// What is proposed, while it can be taken: the engine is stopped and nothing waits.
+    /// What is proposed, while it can be taken: the engine is stopped, nothing waits and no turn
+    /// of another `claude` is being followed.
     fn shown_suggestion(&self) -> Option<String> {
         (self.status == ConvStatus::Idle
+            && self.followed.is_none()
             && !self.busy()
             && self.pending.is_none()
             && self.queue.is_empty())
@@ -1440,6 +1442,11 @@ impl State {
             "result" => self.result(msg, now),
             // After a turn, the engine proposes what the person writes next (REQ-572).
             "prompt_suggestion" => {
+                // One that comes while another turn runs or a message waits is for a turn that is
+                // over: it would show, stale, after this one if it brings none.
+                if self.busy() || self.status != ConvStatus::Idle || !self.queue.is_empty() {
+                    return Vec::new();
+                }
                 self.suggestion = msg["suggestion"]
                     .as_str()
                     .map(str::trim)
@@ -2158,6 +2165,7 @@ impl State {
         self.live_texts.clear();
         self.has_transcript = false;
         self.resume_divider = false;
+        self.suggestion = None;
         self.push(Item::Divider {
             text: "conversación vacía".into(),
             kind: DividerKind::Clear,
@@ -3013,6 +3021,14 @@ mod tests {
         );
         s.send("sigue", vec![], 5);
         assert_eq!(node_of(&s).suggestion, None, "a turn began");
+        s.apply(
+            &json!({"type": "prompt_suggestion", "suggestion": "tarde"}),
+            5,
+        );
+        assert_eq!(
+            s.suggestion, None,
+            "one that comes during a turn is not kept"
+        );
         s.apply(&json!({"type": "result", "subtype": "success", "is_error": false, "duration_ms": 10, "total_cost_usd": 0.0}), 6);
         assert_eq!(
             node_of(&s).suggestion,
@@ -3028,6 +3044,18 @@ mod tests {
             images: Vec::new(),
         });
         assert_eq!(node_of(&s).suggestion, None, "a message waits");
+        s.queue.clear();
+        assert!(node_of(&s).suggestion.is_some());
+        s.followed = Some(Followed {
+            since: 1,
+            at: stamp(),
+            tokens: 0,
+        });
+        assert_eq!(
+            node_of(&s).suggestion,
+            None,
+            "another claude runs a turn in the transcript that is followed"
+        );
     }
 
     #[test]

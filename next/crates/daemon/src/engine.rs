@@ -175,6 +175,20 @@ struct Launch {
     cwd: PathBuf,
 }
 
+/// The engine proposes what the person writes next, after a turn (REQ-572), unless the arguments
+/// it was opened with say otherwise (`jwn claude` adds `--prompt-suggestions false` when
+/// `config.toml` says so): then only that one is passed, whatever order `claude` reads them in.
+fn suggestions_args(extra: &[String]) -> Vec<String> {
+    if extra
+        .iter()
+        .any(|a| a == "--prompt-suggestions" || a.starts_with("--prompt-suggestions="))
+    {
+        Vec::new()
+    } else {
+        vec!["--prompt-suggestions".to_owned(), "true".to_owned()]
+    }
+}
+
 fn launch_of(c: &Conv) -> Launch {
     let mut args: Vec<String> = [
         "-p",
@@ -186,10 +200,6 @@ fn launch_of(c: &Conv) -> Launch {
         "--include-partial-messages",
         "--permission-prompt-tool",
         "stdio",
-        // The engine proposes what the person writes next, after a turn (REQ-572); `jwn claude`
-        // turns it off with its own argument, which comes last, when `config.toml` says so.
-        "--prompt-suggestions",
-        "true",
     ]
     .map(str::to_owned)
     .into();
@@ -214,6 +224,7 @@ fn launch_of(c: &Conv) -> Launch {
     if c.st.named {
         args.extend(["--name".into(), c.st.name.clone()]);
     }
+    args.extend(suggestions_args(&c.extra));
     args.extend(c.extra.iter().cloned());
     Launch {
         args,
@@ -1247,5 +1258,19 @@ mod tests {
         assert_eq!(show_pause(48 * 1024), SHOW_EVERY * 13);
         // never slower than a second, however long it is
         assert_eq!(show_pause(10 * 1024 * 1024), SHOW_EVERY * SHOW_SLOWEST);
+    }
+
+    /// REQ-572: the engine is asked for suggestions once, and `false` from the arguments it was
+    /// opened with is the only one passed when there is one.
+    #[test]
+    fn the_engine_is_asked_for_suggestions_once_and_the_opening_arguments_can_turn_them_off() {
+        assert_eq!(suggestions_args(&[]), ["--prompt-suggestions", "true"]);
+        assert_eq!(
+            suggestions_args(&["--model".into(), "opus".into()]),
+            ["--prompt-suggestions", "true"]
+        );
+        let off = ["--prompt-suggestions".to_owned(), "false".to_owned()];
+        assert!(suggestions_args(&off).is_empty());
+        assert!(suggestions_args(&["--prompt-suggestions=false".to_owned()]).is_empty());
     }
 }

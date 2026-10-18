@@ -77,6 +77,8 @@ class ConversationTest {
         assertEquals("revisa el diff", c.suggestionShown("  ", "otra", false))
         assertNull(c.copy(status = ConvStatus.Thinking).suggestionShown("", null, false), "Claude works")
         assertNull(c.copy(suggestion = null).suggestionShown("", null, false))
+        assertNull(conversation().copy(status = ConvStatus.Idle, since = null, suggestion = "revisa el diff").suggestionShown("", null, false), "a question waits")
+        assertNull(c.copy(status = ConvStatus.Dead).suggestionShown("", null, true), "the engine is taken up again")
     }
 
     /** A turn of another `claude` that is followed has a line of work with no way to stop it (REQ-565). */

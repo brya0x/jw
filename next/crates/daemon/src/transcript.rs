@@ -223,9 +223,10 @@ impl Parser {
             Value::Array(blocks) => blocks_text(blocks.iter().collect()),
             _ => return,
         };
+        // Whatever it was, it is not waiting any more.
+        self.unqueue(&text);
         if is_the_persons(&text) || (text.trim().is_empty() && images > 0) {
             // It does not begin a turn: the one that runs takes it in, and its tools go on counting.
-            self.unqueue(&text);
             self.push(Item::User {
                 text: text.trim().to_owned(),
                 images,
@@ -1752,6 +1753,7 @@ mod tests {
             "it does not wait in the queue the person sees"
         );
         p.feed(&line(serde_json::json!({"type":"attachment","timestamp":"2026-10-17T12:00:01.000Z","attachment":{"type":"queued_command","prompt":report}})));
+        assert!(p.queue.is_empty(), "taken in, it does not wait any more");
         p.feed(&line(serde_json::json!({"type":"user","timestamp":"2026-10-17T12:00:02.000Z","message":{"role":"user","content":format!("Another Claude session sent a message: {report}")}})));
         assert!(
             it(&p).iter().all(|i| !matches!(i, Item::User { .. })),

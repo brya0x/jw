@@ -365,6 +365,8 @@ pub struct Ui {
     pub editor: Editor,
     /// The suggestion that was put aside: the person wrote, took or dismissed it (REQ-572).
     ghost_off: String,
+    /// What the node proposed last, for what is written without the node at hand (a paste).
+    proposed: String,
     /// The older items of the conversation, which `View::sync` keeps beside the node's (REQ-567).
     pub(super) older: Older,
     /// The time of the last frame drawn, for what counts up (a tool that runs); 0 before the first.
@@ -476,6 +478,7 @@ impl Ui {
         if !matches!(conv.status, ConvStatus::Dead | ConvStatus::Resuming) {
             self.retaking = false;
         }
+        self.proposed = conv.suggestion.clone().unwrap_or_default();
         // A run that is gone (its tools were trimmed) is not open any more; one that older items
         // made longer starts earlier, and stays open under its new first.
         let spans: Vec<(u32, u32)> = fold::runs(&conv.items)
@@ -526,6 +529,8 @@ impl Ui {
         self.menu_at = 0;
         self.editor
             .insert(&text.replace("\r\n", "\n").replace('\r', "\n"));
+        // Whoever pastes has put the proposal aside, as whoever types.
+        self.ghost_off.clone_from(&self.proposed);
     }
 
     /// A picture the clipboard held, now small: it goes with the next message.
@@ -533,6 +538,7 @@ impl Ui {
         self.pasted += 1;
         self.editor.insert(&format!("[Imagen#{}]", self.pasted));
         self.images.push((self.pasted, image));
+        self.ghost_off.clone_from(&self.proposed);
     }
 
     /// The fragment after an `@` that the files have not been asked for yet (REQ-408).
@@ -3850,6 +3856,12 @@ mod tests {
         let mut ui = Ui::default();
         press(&mut ui, &conv, KeyCode::Right);
         assert_eq!(ui.editor.text(), "otra cosa");
+        // pasting puts it aside too, with the text deleted again
+        let mut ui = Ui::default();
+        ui.sync(&conv);
+        ui.paste("x");
+        press(&mut ui, &conv, KeyCode::Backspace);
+        assert!(!frame(&ui, &conv).1.join("\n").contains("otra cosa  tab"));
         // nothing is proposed while Claude works or asks
         let mut busy = idle();
         busy.suggestion = Some("no".into());

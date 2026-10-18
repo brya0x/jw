@@ -46,9 +46,10 @@ pub fn run(args: &[&str]) -> ExitCode {
         .filter(|_| tty && daemon::conversation_served(&argv))
     {
         // The engine proposes what to write next unless `config.toml` says not to (REQ-572); an
-        // argument of the person's own, if there is one, is kept before it and so is overridden.
+        // argument of the person's own about it is the only one that goes.
         let mut with = argv.clone();
-        if !suggestions_on(&config_text()) {
+        let own = argv.iter().any(|a| a.starts_with("--prompt-suggestions"));
+        if !own && !suggestions_on(&config_text()) {
             with.extend(["--prompt-suggestions".to_owned(), "false".to_owned()]);
         }
         match converse(&pane, &with) {

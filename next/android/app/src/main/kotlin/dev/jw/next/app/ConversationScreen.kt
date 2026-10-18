@@ -50,7 +50,9 @@ import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
@@ -78,8 +80,8 @@ import dev.jw.next.client.savedPanel
 import dev.jw.next.client.skillsPanel
 import dev.jw.next.client.slashMenu
 import dev.jw.next.client.statusPanel
-import dev.jw.next.client.suggestionShown
 import dev.jw.next.client.submitOf
+import dev.jw.next.client.suggestionShown
 import dev.jw.next.client.tag
 import dev.jw.next.client.tasksPanel
 import dev.jw.next.client.turnText
@@ -396,11 +398,11 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
                 Box(
                     Modifier.weight(1f).defaultMinSize(minHeight = 48.dp).background(Palette.sel, RoundedCornerShape(8.dp))
                         .clickable { text = TextFieldValue(p, TextRange(p.length)); asideSuggestion = p }
-                        .semantics { contentDescription = "Usar la sugerencia: $p" }.padding(horizontal = 10.dp, vertical = 6.dp),
+                        .semantics { role = Role.Button; contentDescription = "Usar la sugerencia: $p" }.padding(horizontal = 10.dp, vertical = 6.dp),
                     contentAlignment = Alignment.CenterStart,
                 ) { Mono("↳ $p", Palette.dim, 12, lines = 3) }
                 Box(
-                    Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp).clickable { asideSuggestion = p }.semantics { contentDescription = "Descartar la sugerencia" },
+                    Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp).clickable { asideSuggestion = p }.semantics { role = Role.Button; contentDescription = "Descartar la sugerencia" },
                     contentAlignment = Alignment.Center,
                 ) { Mono("✕", Palette.dim, 14) }
             }
