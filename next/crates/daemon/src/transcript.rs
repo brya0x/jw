@@ -94,7 +94,7 @@ impl Parser {
 
     /// The lines have been read to the end of what was wanted: a turn that is still open is
     /// over, and a tool that waited for a result was interrupted.
-    pub fn finish(&mut self) {
+    fn finish(&mut self) {
         self.close_turn();
     }
 
@@ -373,32 +373,18 @@ impl Parser {
                 // The advisor is consulted by the API itself: the call and its answer are blocks
                 // of Claude's own message, the answer a line later (REQ-570).
                 "server_tool_use" if block["name"] == "advisor" => {
-                    let id = block["id"].as_str().unwrap_or("").to_owned();
-                    self.tools.insert(id.clone(), self.items.len());
-                    let runs = self.turn.is_some();
-                    if runs {
+                    let id = block["id"].as_str().unwrap_or("");
+                    self.tools.insert(id.to_owned(), self.items.len());
+                    let mut row = crate::conversation::advisor_row(id);
+                    if self.turn.is_some() {
                         self.open_tools.push(self.items.len());
+                    } else if let Item::Tool { state, summary, .. } = &mut row {
+                        *state = ToolState::Failed;
+                        *summary = Some("sin resultado".into());
                     }
-                    self.push(Item::Tool {
-                        id,
-                        name: crate::conversation::ADVISING.into(),
-                        arg: String::new(),
-                        state: if runs {
-                            ToolState::Run
-                        } else {
-                            ToolState::Failed
-                        },
-                        summary: (!runs).then(|| "sin resultado".to_owned()),
-                        output: Vec::new(),
-                        diff: Vec::new(),
-                        url: None,
-                        by: None,
-                    });
+                    self.push(row);
                 }
                 "advisor_tool_result" => {
-                    let error = block["content"]["type"]
-                        .as_str()
-                        .is_some_and(|t| t.contains("error"));
                     let found = block["tool_use_id"]
                         .as_str()
                         .and_then(|id| self.tools.get(id))
@@ -408,16 +394,9 @@ impl Parser {
                         ..
                     }) = found.and_then(|at| self.items.get_mut(at))
                     {
-                        *state = if error {
-                            ToolState::Failed
-                        } else {
-                            ToolState::Ok
-                        };
-                        *summary = Some(if error {
-                            "el asesor no pudo responder".into()
-                        } else {
-                            crate::conversation::ADVISED.into()
-                        });
+                        let (now, says) = crate::conversation::advisor_answer(block);
+                        *state = now;
+                        *summary = Some(says);
                         self.rev += 1;
                     }
                 }

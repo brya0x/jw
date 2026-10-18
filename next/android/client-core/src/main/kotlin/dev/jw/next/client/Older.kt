@@ -42,9 +42,6 @@ class OlderHeld {
     private var tickets = 0
     private var failed = false
 
-    /** The older items, oldest first. */
-    val items: List<ConvItem> get() = older
-
     /** The number of the first item of [items] and then [node]'s: negative when the conversation had fewer before the window than were loaded. */
     @Synchronized fun first(node: Node.Conversation): Int = node.first - older.size
 
@@ -100,7 +97,7 @@ class OlderHeld {
         }
         older = page.items + older
         loaded = true
-        // The cursor must go back: an answer that does not would be asked for for ever.
+        // The cursor must go back: an answer that does not would be asked again for ever.
         next = page.older?.takeIf { it < before }
         exhausted = next == null
         return true

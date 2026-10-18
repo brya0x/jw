@@ -14,13 +14,13 @@ use std::cell::Cell;
 use contract::conversation::{Conversation, Item, OlderItems};
 
 /// How many items one request asks for.
-pub const PAGE: u32 = 100;
+pub(super) const PAGE: u32 = 100;
 
 /// The most older items a conversation keeps here: what is older is left in Claude's file.
 const CAP: usize = 3000;
 
 /// The `item` of the row that says what is above the first item: not the number of any.
-pub const TOP: u32 = u32::MAX;
+pub(super) const TOP: u32 = u32::MAX;
 
 /// Where to ask for what comes before the ones held.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -33,7 +33,7 @@ enum Next {
 }
 
 #[derive(Default)]
-pub struct Older {
+pub(super) struct Older {
     /// The older items, oldest first, and the number of the first.
     items: Vec<Item>,
     base: u32,
@@ -52,7 +52,7 @@ pub struct Older {
 }
 
 /// What the row above the first item says.
-pub enum Row {
+pub(super) enum Row {
     Hint,
     Loading,
     Failed,
@@ -61,7 +61,7 @@ pub enum Row {
 }
 
 impl Row {
-    pub fn text(&self) -> &'static str {
+    pub(super) fn text(&self) -> &'static str {
         match self {
             Row::Hint => "▲ hay anteriores · sube para cargar",
             Row::Loading => "✻ cargando anteriores…",
@@ -86,7 +86,7 @@ fn same(a: &Item, b: &Item) -> bool {
 impl Older {
     /// How many older items are held.
     #[cfg(test)]
-    pub fn len(&self) -> usize {
+    pub(super) fn len(&self) -> usize {
         self.items.len()
     }
 
@@ -97,18 +97,23 @@ impl Older {
         };
     }
 
+    /// The numbers start from `first`: nothing older is held.
+    fn start_at(&mut self, first: u32) {
+        self.base = first;
+        self.anchor = first;
+    }
+
     /// The older items are dropped and the node is drawn as it comes.
     fn start_again(&mut self, c: Conversation, epoch: &str) -> Conversation {
         self.reset();
         epoch.clone_into(&mut self.epoch);
-        self.base = c.first;
-        self.anchor = c.first;
+        self.start_at(c.first);
         c
     }
 
     /// The conversation as the client draws it: the node `c` with the older items before its
     /// own. `prev` is what was drawn before, to take what left the head of the window.
-    pub fn merged(
+    pub(super) fn merged(
         &mut self,
         prev: Option<&Conversation>,
         mut c: Conversation,
@@ -119,8 +124,7 @@ impl Older {
             epoch.clone_into(&mut self.epoch);
         }
         if self.items.is_empty() {
-            self.base = c.first;
-            self.anchor = c.first;
+            self.start_at(c.first);
             return c;
         }
         let expected = self.anchor;
@@ -151,7 +155,7 @@ impl Older {
 
     /// Whether the list wants older items now, and the time to ask with: it is at its top, the
     /// conversation has a transcript, nothing is being asked and the last try did not fail.
-    pub fn ask(&mut self, conv: &Conversation) -> Option<u64> {
+    pub(super) fn ask(&mut self, conv: &Conversation) -> Option<u64> {
         if !self.at_top.get() || self.busy.is_some() || self.failed || self.items.len() >= CAP {
             return None;
         }
@@ -164,17 +168,17 @@ impl Older {
     }
 
     /// A tap on the row of a failed try asks again.
-    pub fn retry(&mut self) {
+    pub(super) fn retry(&mut self) {
         self.failed = false;
     }
 
     /// The answer to the request with `before`, put in `conv`: whether it was taken, and how many
     /// items it added before the others. An answer for a request that is not the last one is
     /// not.
-    pub fn replied(
+    pub(super) fn replied(
         &mut self,
         before: u64,
-        result: Result<OlderItems, String>,
+        page: Option<OlderItems>,
         conv: &mut Conversation,
     ) -> Option<usize> {
         if self.busy != Some(before) {
@@ -182,20 +186,20 @@ impl Older {
         }
         self.busy = None;
         self.at_top.set(false);
-        let page = match result {
-            Ok(page) => page,
-            Err(_) => {
-                self.failed = true;
-                return Some(0);
-            }
+        let Some(mut page) = page else {
+            self.failed = true;
+            return Some(0);
         };
         let held = self.items.len();
         if held == 0 {
-            self.base = conv.first;
-            self.anchor = conv.first;
+            self.start_at(conv.first);
         }
+        // What would go past the cap is the oldest of the page.
+        let room = CAP.saturating_sub(held);
+        let over = page.items.len().saturating_sub(room);
+        page.items.drain(..over);
         let m = page.items.len();
-        // The cursor must go back; an answer that does not would be asked for for ever.
+        // The cursor must go back; an answer that does not would be asked again for ever.
         self.next = Next::At(page.older.filter(|at| *at < before));
         let window = conv.items.split_off(held.min(conv.items.len()));
         let mut all = page.items;
@@ -209,7 +213,7 @@ impl Older {
     }
 
     /// The row above the first item, when the conversation has older ones to say something of.
-    pub fn row(&self, conv: &Conversation) -> Option<Row> {
+    pub(super) fn row(&self, conv: &Conversation) -> Option<Row> {
         conv.older?;
         Some(if self.busy.is_some() {
             Row::Loading
@@ -224,7 +228,7 @@ impl Older {
         })
     }
 
-    pub fn set_at_top(&self, at: bool) {
+    pub(super) fn set_at_top(&self, at: bool) {
         self.at_top.set(at);
     }
 }
@@ -281,7 +285,7 @@ mod tests {
         o.set_at_top(true);
         assert_eq!(o.ask(&eff), Some(5));
         assert_eq!(
-            o.replied(5, Ok(page(&["a", "b", "c"], Some(3))), &mut eff),
+            o.replied(5, Some(page(&["a", "b", "c"], Some(3))), &mut eff),
             Some(3)
         );
         assert_eq!(names(&eff), ["a", "b", "c", "d", "e", "f"]);
@@ -302,7 +306,7 @@ mod tests {
         let mut eff = o.merged(None, conv(10, &["d"]), "e1");
         o.set_at_top(true);
         o.ask(&eff);
-        o.replied(5, Ok(page(&["c"], None)), &mut eff);
+        o.replied(5, Some(page(&["c"], None)), &mut eff);
         // `first` jumped further than the window held: a gap
         let after = o.merged(Some(&eff), conv(40, &["z"]), "e1");
         assert_eq!(names(&after), ["z"]);
@@ -312,7 +316,7 @@ mod tests {
         let mut eff = o.merged(None, conv(10, &["d"]), "e1");
         o.set_at_top(true);
         o.ask(&eff);
-        o.replied(5, Ok(page(&["c"], None)), &mut eff);
+        o.replied(5, Some(page(&["c"], None)), &mut eff);
         let after = o.merged(Some(&eff), conv(10, &["d"]), "e2");
         assert_eq!(names(&after), ["d"]);
     }
@@ -326,11 +330,11 @@ mod tests {
         assert_eq!(o.ask(&eff), Some(5));
         assert_eq!(o.ask(&eff), None, "one is out");
         assert_eq!(
-            o.replied(4, Ok(page(&["x"], None)), &mut eff),
+            o.replied(4, Some(page(&["x"], None)), &mut eff),
             None,
             "not the one asked"
         );
-        assert_eq!(o.replied(5, Err("no".into()), &mut eff), Some(0));
+        assert_eq!(o.replied(5, None, &mut eff), Some(0));
         assert!(matches!(o.row(&eff), Some(Row::Failed)));
         o.set_at_top(true);
         assert_eq!(o.ask(&eff), None, "a failure waits");
@@ -345,11 +349,30 @@ mod tests {
         o.set_at_top(true);
         assert_eq!(o.ask(&eff), Some(5));
         // an answer that points forward is taken as the end: asking again would not stop
-        o.replied(5, Ok(page(&["c"], Some(9))), &mut eff);
+        o.replied(5, Some(page(&["c"], Some(9))), &mut eff);
         o.set_at_top(true);
         assert_eq!(o.ask(&eff), None);
         assert!(matches!(o.row(&eff), Some(Row::Start)));
         eff.older = None;
         assert!(o.row(&eff).is_none(), "no transcript, no row");
+    }
+
+    /// A page that would go past the cap is cut at its oldest end, and what is held stops there.
+    #[test]
+    fn a_page_that_would_pass_the_cap_is_cut_at_its_oldest_end() {
+        let mut o = Older::default();
+        let mut eff = o.merged(None, conv(10, &["d"]), "e1");
+        o.set_at_top(true);
+        o.ask(&eff);
+        let many: Vec<String> = (0..CAP + 50).map(|i| format!("n{i}")).collect();
+        let refs: Vec<&str> = many.iter().map(String::as_str).collect();
+        assert_eq!(
+            o.replied(5, Some(page(&refs, Some(3))), &mut eff),
+            Some(CAP)
+        );
+        assert_eq!(o.len(), CAP);
+        assert_eq!(names(&eff).last().map(String::as_str), Some("d"));
+        assert_eq!(names(&eff)[0], "n50", "the oldest of the page went");
+        assert!(matches!(o.row(&eff), Some(Row::Capped)));
     }
 }

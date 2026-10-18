@@ -2861,7 +2861,7 @@ impl View {
 
     /// The conversations that are at the top of their list and have older items to ask for ask
     /// for them (REQ-567).
-    pub fn ask_older(&mut self) {
+    fn ask_older(&mut self) {
         for (id, ui) in &mut self.conv_ui {
             if let Some(conv) = self.convs.get(id)
                 && let Some(before) = ui.older.ask(conv)
@@ -2877,10 +2877,9 @@ impl View {
     /// The daemon sent the older items asked for with `before`, or why not: they go before the
     /// others, and what is held by the number of an item moves with them.
     fn older_replied(&mut self, node: &str, before: u64, reply: Reply) {
-        let result = reply_value(reply).and_then(|v| {
-            serde_json::from_value::<contract::conversation::OlderItems>(v)
-                .map_err(|e| e.to_string())
-        });
+        let result = reply_value(reply)
+            .ok()
+            .and_then(|v| serde_json::from_value::<contract::conversation::OlderItems>(v).ok());
         let (Some(conv), Some(ui)) = (self.convs.get_mut(node), self.conv_ui.get_mut(node)) else {
             return;
         };

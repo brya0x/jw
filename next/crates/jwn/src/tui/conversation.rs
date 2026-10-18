@@ -364,7 +364,7 @@ impl Editor {
 pub struct Ui {
     pub editor: Editor,
     /// The older items of the conversation, which `View::sync` keeps beside the node's (REQ-567).
-    pub older: Older,
+    pub(super) older: Older,
     /// The time of the last frame drawn, for what counts up (a tool that runs); 0 before the first.
     now: Cell<u64>,
     /// Lines the list is scrolled up from the newest; `most` is what the last frame could scroll.
@@ -502,7 +502,7 @@ impl Ui {
     /// Older items were added before the others: what is held by the number of an item (the one
     /// picked, the tools opened, the runs unfolded) moves with them, and a selection, which is of
     /// rows, is let go.
-    pub fn shifted(&mut self, by: usize) {
+    pub(super) fn shifted(&mut self, by: usize) {
         let by = by as u32;
         self.picked = self.picked.map(|p| p + by);
         self.open = self.open.iter().map(|i| i + by).collect();

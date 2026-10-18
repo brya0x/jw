@@ -201,7 +201,7 @@ sealed interface Cmd {
     @Serializable @SerialName("read_markdown")
     data class ReadMarkdown(val workspace: Id, val path: String) : Cmd
 
-    /** The items of a conversation that came before the ones its node holds: up to [count] of those made before the time [before]. The result is an [OlderItems]. */
+    /** The items of a conversation that came before the ones its node holds: up to [count] of those made before the time [before]. The result is an [OlderItems] (REQ-567). */
     @Serializable @SerialName("read_older")
     data class ReadOlder(val node: Id, val before: Long, val count: Int) : Cmd
 

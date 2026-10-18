@@ -23,6 +23,33 @@ pub const KEEP: usize = 300;
 /// says when the advisor has answered.
 pub(crate) const ADVISING: &str = "Advising";
 pub(crate) const ADVISED: &str = "✔ El asesor revisó la conversación y aplicará sus comentarios";
+
+/// The row of a consultation of the advisor, while it runs.
+pub(crate) fn advisor_row(id: &str) -> Item {
+    Item::Tool {
+        id: id.to_owned(),
+        name: ADVISING.into(),
+        arg: String::new(),
+        state: ToolState::Run,
+        summary: None,
+        output: Vec::new(),
+        diff: Vec::new(),
+        url: None,
+        by: None,
+    }
+}
+
+/// What the `advisor_tool_result` block makes of its row: its state and what it says.
+pub(crate) fn advisor_answer(block: &Value) -> (ToolState, String) {
+    if block["content"]["type"]
+        .as_str()
+        .is_some_and(|t| t.contains("error"))
+    {
+        (ToolState::Failed, "el asesor no pudo responder".into())
+    } else {
+        (ToolState::Ok, ADVISED.into())
+    }
+}
 /// The most a saved conversation takes on disk.
 pub const MAX_SAVED: usize = 2 * 1024 * 1024;
 pub(crate) const OUTPUT_LINES: usize = 40;
@@ -1641,34 +1668,13 @@ impl State {
                 // of Claude's own message (REQ-570).
                 "server_tool_use" if b["name"] == "advisor" => {
                     self.status = ConvStatus::Tool;
-                    self.push(Item::Tool {
-                        id: b["id"].as_str().unwrap_or("").to_owned(),
-                        name: ADVISING.into(),
-                        arg: String::new(),
-                        state: ToolState::Run,
-                        summary: None,
-                        output: Vec::new(),
-                        diff: Vec::new(),
-                        url: None,
-                        by: None,
-                    });
+                    self.push(advisor_row(b["id"].as_str().unwrap_or("")));
                 }
                 "advisor_tool_result" => {
-                    let id = b["tool_use_id"].as_str().unwrap_or("").to_owned();
-                    let error = b["content"]["type"]
-                        .as_str()
-                        .is_some_and(|t| t.contains("error"));
-                    self.set_tool(&id, |t| {
-                        t.0 = if error {
-                            ToolState::Failed
-                        } else {
-                            ToolState::Ok
-                        };
-                        t.1 = Some(if error {
-                            "el asesor no pudo responder".into()
-                        } else {
-                            ADVISED.into()
-                        });
+                    let (state, says) = advisor_answer(b);
+                    self.set_tool(b["tool_use_id"].as_str().unwrap_or(""), |t| {
+                        t.0 = state;
+                        t.1 = Some(says);
                     });
                 }
                 _ => {}

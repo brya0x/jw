@@ -126,7 +126,9 @@ private fun OldestRow(row: OlderRow, retry: () -> Unit) {
         else -> Palette.dim
     }
     Box(
-        Modifier.fillMaxWidth().defaultMinSize(minHeight = 48.dp).then(if (row == OlderRow.Failed) Modifier.clickable(onClick = retry) else Modifier).padding(horizontal = Pad),
+        Modifier.fillMaxWidth().defaultMinSize(minHeight = 48.dp)
+            .then(if (row == OlderRow.Failed) Modifier.clickable(onClick = retry).semantics { role = Role.Button; contentDescription = "Reintentar cargar los anteriores" } else Modifier)
+            .padding(horizontal = Pad),
         contentAlignment = Alignment.CenterStart,
     ) { Mono(row.text, tone, 12, lines = 2) }
 }

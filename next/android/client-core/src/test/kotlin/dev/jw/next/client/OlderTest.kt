@@ -25,7 +25,7 @@ class OlderTest {
 
     private fun names(items: List<ConvItem>) = items.map { (it as ConvItem.Note).text }
 
-    /** The older items go before the node's, and what leaves the head of the window goes to the end of them: the number of an item does not change. */
+    /** REQ-569: the older items go before the node's, and what leaves the head of the window goes to the end of them. */
     @Test
     fun theOlderItemsAndWhatLeavesTheWindowStayInARow() {
         val h = OlderHeld()
@@ -48,6 +48,7 @@ class OlderTest {
         assertEquals(listOf("x"), names(h.all(n3)))
     }
 
+    /** REQ-569: a window that does not join the older items, or another epoch, starts them again. */
     @Test
     fun aWindowThatDoesNotJoinOrAnotherEpochStartsAgain() {
         val h = OlderHeld()
@@ -69,6 +70,7 @@ class OlderTest {
         assertEquals(listOf("c", "d"), names(h2.all(other)))
     }
 
+    /** REQ-567 and REQ-569: one request at a time, and an answer that is not the last one is dropped. */
     @Test
     fun oneRequestAtATimeAStaleAnswerIsDroppedAndAFailureWaitsForATap() {
         val h = OlderHeld()
@@ -86,6 +88,7 @@ class OlderTest {
         assertEquals(5L, h.ask(n, true)?.before)
     }
 
+    /** REQ-567: the cursor goes back, and the start of the file ends the asking. */
     @Test
     fun theCursorGoesBackAndTheStartOfTheFileEndsTheAsking() {
         val h = OlderHeld()
