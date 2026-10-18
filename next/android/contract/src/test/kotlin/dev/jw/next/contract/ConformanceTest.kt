@@ -248,6 +248,20 @@ class ConformanceTest {
         assertEquals(1, node.running.size)
     }
 
+    /** The reply of `read_older` is items and where to ask for the ones before them, and the running fixture's node says its `before` (REQ-567). */
+    @Test
+    fun theReplyOfReadOlderIsItemsAndWhereToAskForTheOnesBefore() {
+        val reply = fixtures("daemon").first { it.first == "reply-ok-read-older.json" }.second
+        val result = (ContractJson.decodeFromJsonElement(DaemonMsg.serializer(), reply) as DaemonMsg.Reply).result!!
+        val older = ContractJson.decodeFromJsonElement(OlderItems.serializer(), result)
+        assertEquals(3, older.items.size)
+        assertEquals(1_792_109_900_000L, older.older)
+        assertEquals(result, ContractJson.encodeToJsonElement(OlderItems.serializer(), older))
+        val snapshot = fixtures("daemon").first { it.first == "snapshot-conversation-running.json" }.second
+        val node = (ContractJson.decodeFromJsonElement(DaemonMsg.serializer(), snapshot) as DaemonMsg.Snapshot).node as Node.Conversation
+        assertEquals(1_792_109_990_000L, node.older)
+    }
+
     /** A finished text of the conversation fixture carries its Markdown blocks, a table among them (REQ-560). */
     @Test
     fun aFinishedTextCarriesItsMarkdownBlocks() {

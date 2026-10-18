@@ -429,6 +429,14 @@ pub enum Cmd {
         node: Id,
         ask: String,
     },
+    /// The items of a conversation that came before the ones its node holds (REQ-567): up to
+    /// `count` of those made before the time `before` (the `older` the node, or the last answer,
+    /// gave). The result is a `conversation::OlderItems`.
+    ReadOlder {
+        node: Id,
+        before: u64,
+        count: u32,
+    },
     /// Write the settings of the repository `repo` is in, to its own `.jw.toml` or to the
     /// personal file, after checking them (REQ-486). The result is `{path, shadowed}`.
     WriteProjectConfig {

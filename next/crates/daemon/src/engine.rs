@@ -1087,6 +1087,44 @@ pub fn follow_run(shared: Shared, stop: std::sync::Arc<std::sync::atomic::Atomic
     }
 }
 
+/// `read_older`: a page of the items of the conversation `node` that came before the time
+/// `before`, from its transcript, with the items of jwn's own among them (REQ-567).
+pub fn read_older(shared: &Shared, node: &str, before: u64, count: u32) -> Done {
+    let (cwd, env, session, kept) = {
+        let core = shared.lock();
+        let pane = pane_of(&core, node)?;
+        let c = core.convs.get(&pane).ok_or_else(|| no_conversation(node))?;
+        if !c.st.leaves_chat_to_transcript() {
+            return Err(err(
+                ErrorCode::NotFound,
+                "that conversation has no transcript to read",
+            ));
+        }
+        (
+            c.cwd.clone(),
+            c.env.clone(),
+            c.st.session.clone(),
+            c.st.kept(),
+        )
+    };
+    let path = crate::transcript::Source::path_of(&cwd, env.as_ref(), &session)
+        .ok_or_else(|| err(ErrorCode::NotFound, "no transcript"))?;
+    let count = count.clamp(1, 500) as usize;
+    let (page, older) = crate::transcript::older_page(&path, before, count)
+        .ok_or_else(|| err(ErrorCode::Io, "the transcript could not be read"))?;
+    // jwn's own items that were made inside the time the page covers.
+    let from = page.first().map_or(before, |s| s.at);
+    let kept: Vec<_> = kept
+        .into_iter()
+        .filter(|k| k.at >= from && k.at < before)
+        .collect();
+    let (items, _) = crate::conversation::merge(&page, &kept);
+    Ok(Some(
+        serde_json::to_value(contract::conversation::OlderItems { items, older })
+            .expect("items serialise"),
+    ))
+}
+
 // ---- saved conversations ----
 
 fn file_of(dir: &Path, pane: &str) -> PathBuf {

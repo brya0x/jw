@@ -391,6 +391,29 @@ fn a_followed_turn_says_when_it_began() {
     );
 }
 
+/// The result of `read_older` in the fixture is what `OlderItems` writes and reads, and the node
+/// of the running fixture says the `before` it asks with (REQ-567).
+#[test]
+fn the_reply_of_read_older_is_items_and_where_to_ask_for_the_ones_before() {
+    let docs = fixtures("daemon");
+    let (_, reply) = docs
+        .iter()
+        .find(|(n, _)| n == "reply-ok-read-older.json")
+        .expect("the fixture");
+    let older: contract::conversation::OlderItems =
+        serde_json::from_value(reply["result"].clone()).unwrap();
+    assert_eq!(older.items.len(), 3);
+    assert_eq!(older.older, Some(1_792_109_900_000));
+    assert_eq!(serde_json::to_value(&older).unwrap(), reply["result"]);
+    let (_, snap) = docs
+        .iter()
+        .find(|(n, _)| n == "snapshot-conversation-running.json")
+        .expect("the fixture");
+    let conv: contract::conversation::Conversation =
+        serde_json::from_value(snap["node"].clone()).unwrap();
+    assert_eq!(conv.older, Some(1_792_109_990_000));
+}
+
 /// The result of `project_config` in the fixture is what `ProjectInfo` writes and reads.
 #[test]
 fn the_reply_of_project_config_is_a_project_info() {

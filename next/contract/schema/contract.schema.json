@@ -470,6 +470,7 @@
               "type": "array",
               "items": { "type": "object", "required": ["id", "since"], "properties": { "id": { "type": "string" }, "since": { "type": "integer", "minimum": 0 } } }
             },
+            "older": { "type": "integer", "minimum": 0, "description": "The time of the first item: the before of read_older." },
             "following": { "type": "integer", "minimum": 0, "description": "When the turn began that another claude runs in the transcript this conversation follows." },
             "tokens": { "type": "integer", "minimum": 1, "description": "What the turn that runs has written." }
           }
@@ -511,6 +512,7 @@
         { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "list_files" }, "workspace": { "$ref": "#/$defs/Id" }, "path": { "type": "string" } } },
         { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "list_conversations" }, "workspace": { "$ref": "#/$defs/Id" } } },
         { "type": "object", "required": ["cmd", "workspace", "path"], "properties": { "cmd": { "const": "read_markdown" }, "workspace": { "$ref": "#/$defs/Id" }, "path": { "type": "string" } } },
+        { "type": "object", "required": ["cmd", "node", "before", "count"], "properties": { "cmd": { "const": "read_older" }, "node": { "$ref": "#/$defs/Id" }, "before": { "type": "integer", "minimum": 0 }, "count": { "type": "integer", "minimum": 1, "maximum": 500 } } },
         { "type": "object", "required": ["cmd", "node", "ask"], "properties": { "cmd": { "const": "read_plan" }, "node": { "$ref": "#/$defs/Id" }, "ask": { "type": "string" } } },
         { "type": "object", "required": ["cmd", "repo", "to", "text"], "properties": { "cmd": { "const": "write_project_config" }, "repo": { "type": "string" }, "to": { "enum": ["repo", "personal"] }, "text": { "type": "string", "maxLength": 65536 } } },
         { "type": "object", "required": ["cmd", "repo", "to", "set"], "properties": { "cmd": { "const": "edit_project_config" }, "repo": { "type": "string" }, "to": { "enum": ["repo", "personal"] }, "set": { "type": "object", "properties": { "root": { "type": "string" }, "setup": { "type": "array", "items": { "type": "string" } }, "copy": { "type": "array", "items": { "type": "string" } }, "ports": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0, "maximum": 99 } }, "open": { "enum": ["shell", "claude"] } }, "additionalProperties": false } } },

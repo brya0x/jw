@@ -201,6 +201,10 @@ sealed interface Cmd {
     @Serializable @SerialName("read_markdown")
     data class ReadMarkdown(val workspace: Id, val path: String) : Cmd
 
+    /** The items of a conversation that came before the ones its node holds: up to [count] of those made before the time [before]. The result is an [OlderItems]. */
+    @Serializable @SerialName("read_older")
+    data class ReadOlder(val node: Id, val before: Long, val count: Int) : Cmd
+
     /** Write the settings of the repository [repo] is in to its own `.jw.toml` or to the personal file, after checking them. */
     @Serializable @SerialName("write_project_config")
     data class WriteProjectConfig(val repo: String, val to: ConfigFrom, val text: String) : Cmd
@@ -663,6 +667,8 @@ sealed interface Node {
         val limits: Limits? = null,
         /** The tools that run, and when each began (REQ-562). */
         val running: List<Running> = emptyList(),
+        /** The time of the first item of [items] when the conversation has a transcript that may hold older ones: the `before` of `read_older` (REQ-567). */
+        val older: Long? = null,
         /** When the turn began that another `claude` runs in the transcript this conversation follows (REQ-565). */
         val following: Long? = null,
         /** What the turn that runs has written, in tokens; 0 when the engine has not said (REQ-563). */

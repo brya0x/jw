@@ -6,7 +6,7 @@
 //! writing is followed. The engine does not send any of it again when it resumes.
 
 use std::collections::{BTreeMap, HashMap};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use contract::conversation::{DividerKind, Item, Mode, Tone, ToolState};
@@ -90,6 +90,12 @@ impl Parser {
     /// The time of the last line that had one.
     pub fn last_at(&self) -> u64 {
         self.last_at
+    }
+
+    /// The lines have been read to the end of what was wanted: a turn that is still open is
+    /// over, and a tool that waited for a result was interrupted.
+    pub fn finish(&mut self) {
+        self.close_turn();
     }
 
     /// A turn begins with the person's message.
@@ -622,7 +628,7 @@ impl Source {
     }
 
     /// The file of the transcript of `session`, for a session id that is a file name.
-    fn path_of(
+    pub(crate) fn path_of(
         cwd: &Path,
         env: Option<&BTreeMap<String, String>>,
         session: &str,
@@ -721,6 +727,125 @@ fn skip_line(file: &mut std::fs::File, from: u64, to: u64) -> Option<(u64, bool)
         Some(i) => (from + i as u64 + 1, true),
         None => (from + bytes.len() as u64, false),
     })
+}
+
+/// How much is read at a time for a page of older items, the most it grows to, and how far past
+/// the cursor it reads so that the results of the page's last tools are found.
+const PAGE_CHUNK: u64 = 1 << 20;
+const PAGE_MOST: u64 = 64 << 20;
+const PAGE_LOOKAHEAD: u64 = 1 << 20;
+
+/// The longest line whose time is looked for when a file is searched by time, and how many lines
+/// are tried from one place before it is taken as having none.
+const PROBE_LINE: usize = 1 << 20;
+const PROBE_LINES: usize = 256;
+
+/// The bytes of the next line of `r` (at most `max` of them are kept) and how long it was.
+fn read_line_capped<R: BufRead>(r: &mut R, max: usize) -> std::io::Result<(Vec<u8>, u64)> {
+    let (mut kept, mut total) = (Vec::new(), 0u64);
+    loop {
+        let buf = r.fill_buf()?;
+        if buf.is_empty() {
+            return Ok((kept, total));
+        }
+        let (n, done) = match buf.iter().position(|b| *b == b'\n') {
+            Some(i) => (i + 1, true),
+            None => (buf.len(), false),
+        };
+        let room = max.saturating_sub(kept.len()).min(n);
+        kept.extend_from_slice(&buf[..room]);
+        total += n as u64;
+        r.consume(n);
+        if done {
+            return Ok((kept, total));
+        }
+    }
+}
+
+/// The start of the first line that begins at or after `mid`, and the time of the first line
+/// with one from there.
+fn probe(file: &mut std::fs::File, size: u64, mid: u64) -> Option<(u64, u64)> {
+    let mut start = mid;
+    if mid > 0 {
+        file.seek(SeekFrom::Start(mid - 1)).ok()?;
+    } else {
+        file.seek(SeekFrom::Start(0)).ok()?;
+    }
+    let mut r = BufReader::new(&mut *file);
+    if mid > 0 {
+        // Through the end of the line that holds the byte before `mid`.
+        let (_, n) = read_line_capped(&mut r, 0).ok()?;
+        start = mid - 1 + n;
+    }
+    for _ in 0..PROBE_LINES {
+        if start >= size {
+            return None;
+        }
+        let (bytes, total) = read_line_capped(&mut r, PROBE_LINE).ok()?;
+        if total == 0 {
+            return None;
+        }
+        let line_start = start;
+        start += total;
+        if bytes.len() as u64 == total
+            && let Some(at) = serde_json::from_slice::<Value>(&bytes)
+                .ok()
+                .and_then(|v| v["timestamp"].as_str().and_then(iso_ms))
+        {
+            return Some((line_start, at));
+        }
+    }
+    None
+}
+
+/// Where the first line made at or after the time `before` starts, or the end of the file: the
+/// lines are written in time order, so the file is searched by halves.
+fn start_of_time(file: &mut std::fs::File, size: u64, before: u64) -> u64 {
+    let (mut lo, mut hi) = (0, size);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        match probe(file, size, mid) {
+            Some((_, at)) if at < before => lo = mid + 1,
+            _ => hi = mid,
+        }
+    }
+    probe(file, size, lo).map_or(size, |(start, _)| start)
+}
+
+/// A page of the items made before the time `before`, oldest first, at most `count` of them, and
+/// the time to ask with for the page before it (always older than `before`; none when the file
+/// holds no more). The lines are read from a chunk of the file before that time and a little past
+/// it, so a tool of the page finds its result, and what the lines did not close is closed.
+pub(crate) fn older_page(
+    path: &Path,
+    before: u64,
+    count: usize,
+) -> Option<(Vec<Stamped>, Option<u64>)> {
+    let mut file = std::fs::File::open(path).ok()?;
+    let size = file.metadata().ok()?.len();
+    let end = start_of_time(&mut file, size, before);
+    let to = (end + PAGE_LOOKAHEAD).min(size);
+    let mut chunk = PAGE_CHUNK;
+    loop {
+        let from = end.saturating_sub(chunk);
+        let (text, _) = read_lines(&mut file, from, to, from > 0)?;
+        let mut p = parse(&text);
+        p.finish();
+        let mut items: Vec<Stamped> = p.items.into_iter().filter(|s| s.at < before).collect();
+        let whole = from == 0;
+        if items.len() >= count || whole || chunk >= PAGE_MOST {
+            let more = !whole || items.len() > count;
+            let skip = items.len().saturating_sub(count);
+            let page: Vec<Stamped> = items.drain(skip..).collect();
+            let cursor = if more {
+                page.first().map(|s| s.at)
+            } else {
+                None
+            };
+            return Some((page, cursor));
+        }
+        chunk *= 4;
+    }
 }
 
 /// The whole lines of `file` from `from` to `to`, and the offset where the next one starts. A read
@@ -1428,5 +1553,120 @@ mod tests {
         assert_eq!(p.turn_written(), 9);
         p.feed(&line(serde_json::json!({"type":"system","subtype":"turn_duration","timestamp":"2026-10-17T12:00:09.000Z","durationMs":9000})));
         assert_eq!(p.turn_since(), None);
+    }
+
+    /// A transcript of `turns` turns, each a message of the person, a text of Claude, a tool with
+    /// its result and a text, a second apart; with a line of `fat` bytes of no time in the middle.
+    fn paged_file(name: &str, turns: u64, fat: usize) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("jwn-older-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("s.jsonl");
+        let mut out = String::new();
+        let at = |n: u64| format!("2026-10-17T10:{:02}:{:02}.000Z", (n / 60) % 60, n % 60);
+        for t in 0..turns {
+            let b = t * 10;
+            out += &line(
+                serde_json::json!({"type":"user","timestamp":at(b),"message":{"role":"user","content":format!("pregunta {t}")}}),
+            );
+            out += &line(
+                serde_json::json!({"type":"assistant","timestamp":at(b + 1),"message":{"id":format!("m{t}a"),"model":"claude-opus-5-5","content":[{"type":"text","text":format!("respuesta {t}")}]}}),
+            );
+            out += &line(
+                serde_json::json!({"type":"assistant","timestamp":at(b + 2),"message":{"id":format!("m{t}b"),"model":"claude-opus-5-5","content":[{"type":"tool_use","id":format!("t{t}"),"name":"Bash","input":{"command":"ls"}}]}}),
+            );
+            if t == turns / 2 && fat > 0 {
+                out += &line(serde_json::json!({"type":"api-request-blob","blob":"x".repeat(fat)}));
+            }
+            out += &line(
+                serde_json::json!({"type":"user","timestamp":at(b + 3),"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":format!("t{t}"),"content":"ok"}]}}),
+            );
+            out += &line(
+                serde_json::json!({"type":"system","subtype":"turn_duration","timestamp":at(b + 4),"durationMs":4000}),
+            );
+        }
+        std::fs::write(&path, out).unwrap();
+        path
+    }
+
+    fn texts(items: &[Stamped]) -> Vec<String> {
+        items
+            .iter()
+            .filter_map(|s| match &s.item {
+                Item::User { text, .. } | Item::Text { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// REQ-567: the pages, asked for one after the other with the cursor each gave, add up to
+    /// the items of the file in order, with none twice and none missing, and the cursor always
+    /// goes back in time until the file is out.
+    #[test]
+    fn the_pages_of_older_items_add_up_to_the_file_and_the_cursor_always_goes_back() {
+        for fat in [0, 3 << 20] {
+            let path = paged_file(&format!("pages{fat}"), 40, fat);
+            let whole = {
+                let mut p = parse(&std::fs::read_to_string(&path).unwrap());
+                p.finish();
+                p.items
+            };
+            assert!(whole.len() > 100);
+            let mut before = u64::MAX;
+            let mut got: Vec<Stamped> = Vec::new();
+            for _ in 0..200 {
+                let (page, cursor) = older_page(&path, before, 17).expect("it reads");
+                assert!(page.len() <= 17);
+                let mut next = page.clone();
+                next.extend(std::mem::take(&mut got));
+                got = next;
+                match cursor {
+                    Some(at) => {
+                        assert!(at < before, "the cursor goes back: {at} < {before}");
+                        before = at;
+                    }
+                    None => break,
+                }
+            }
+            assert_eq!(
+                got.iter().map(|s| s.item.clone()).collect::<Vec<_>>(),
+                whole.iter().map(|s| s.item.clone()).collect::<Vec<_>>(),
+                "fat {fat}"
+            );
+            std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        }
+    }
+
+    /// A page cut between a tool and its result still has the tool answered, and a tool that
+    /// no line answers was interrupted and does not run.
+    #[test]
+    fn a_page_cut_inside_a_turn_finds_the_result_of_its_last_tool() {
+        let path = paged_file("cut", 6, 0);
+        // before the result of the tool of turn 3 (at 33 s): that tool is the last of the page
+        let before = iso_ms("2026-10-17T10:00:33.000Z").unwrap();
+        let (page, _) = older_page(&path, before, 100).unwrap();
+        let tool = page
+            .iter()
+            .rev()
+            .find_map(|s| match &s.item {
+                Item::Tool { state, .. } => Some(*state),
+                _ => None,
+            })
+            .expect("a tool");
+        assert_eq!(
+            tool,
+            ToolState::Ok,
+            "its result is a few lines past the cursor"
+        );
+        assert!(texts(&page).iter().all(|t| !t.contains("pregunta 4")));
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn nothing_older_than_the_first_line_or_in_a_file_that_is_not_there_is_empty_or_none() {
+        let path = paged_file("none", 3, 0);
+        let (page, cursor) = older_page(&path, 1, 10).unwrap();
+        assert!(page.is_empty() && cursor.is_none());
+        assert!(older_page(Path::new("/no/such/file.jsonl"), 10, 10).is_none());
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 }

@@ -234,3 +234,7 @@ data class ConversationList(val conversations: List<SavedConversation>)
 /** A tool that runs: its item's id and the milliseconds since the epoch at which it began (REQ-562). */
 @Serializable
 data class Running(val id: String, val since: Long)
+
+/** What `read_older` answers: the items, oldest first, and the `before` that asks for the ones before them; null when there are no more (REQ-567). */
+@Serializable
+data class OlderItems(val items: List<ConvItem>, val older: Long? = null)

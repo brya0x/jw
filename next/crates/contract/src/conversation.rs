@@ -44,6 +44,10 @@ pub struct Conversation {
     /// The tools that run, and when each began (REQ-562): a client counts the time itself.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub running: Vec<Running>,
+    /// The time of the first item of `items` when the conversation has a transcript that may hold
+    /// older ones: the `before` of `read_older` (REQ-567).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub older: Option<u64>,
     /// When the turn began that another `claude` is running in the transcript this conversation
     /// follows, while its lines say one is open (REQ-565).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -390,6 +394,15 @@ pub struct SavedConversation {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConversationList {
     pub conversations: Vec<SavedConversation>,
+}
+
+/// What `read_older` answers: the items, oldest first, and the `before` that asks for the ones
+/// before them (REQ-567); `older` is left out when there are no more.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OlderItems {
+    pub items: Vec<Item>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub older: Option<u64>,
 }
 
 /// A picture sent with a message: the client has already made it small (a JPEG of at most 1568

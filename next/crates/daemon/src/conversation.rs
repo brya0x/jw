@@ -562,7 +562,10 @@ pub(crate) fn stamp() -> u64 {
 /// The lines of a transcript with the items that are jwn's own among them, each after the last
 /// line that was made no later than it. A card of a subagent takes the place of the tool that
 /// started it, which is also a line of the transcript.
-fn merge(base: &[crate::transcript::Stamped], kept: &[Kept]) -> (Vec<Item>, Vec<(u64, bool)>) {
+pub(crate) fn merge(
+    base: &[crate::transcript::Stamped],
+    kept: &[Kept],
+) -> (Vec<Item>, Vec<(u64, bool)>) {
     let mut kept: Vec<&Kept> = kept.iter().collect();
     kept.sort_by_key(|k| k.at);
     let cards: Vec<&Kept> = kept
@@ -786,6 +789,14 @@ impl State {
         }
     }
 
+    /// The time of the first item the node holds, when the transcript may hold older ones: the
+    /// `before` that `read_older` asks with (REQ-567).
+    fn older_cursor(&self) -> Option<u64> {
+        self.leaves_chat_to_transcript()
+            .then(|| self.stamps.first().map(|(at, _)| *at))
+            .flatten()
+    }
+
     /// The conversation was saved with its own items: its chat is not read from the transcript.
     pub fn legacy(&self) -> bool {
         self.legacy
@@ -901,6 +912,7 @@ impl State {
                 (None, None) => 0,
             },
             following: self.followed.map(|f| f.since),
+            older: self.older_cursor(),
         }
     }
 
@@ -3838,6 +3850,74 @@ mod tests {
             "{:?}",
             started.elapsed()
         );
+    }
+
+    /// REQ-567: when the transcript grows, `first` grows by the items that leave the head of the
+    /// window, with the items of jwn's own and the card of a subagent among them, and the window
+    /// then starts with the item that was the one after those: what a client that holds the older
+    /// items relies on to keep them in a row.
+    #[test]
+    fn first_grows_by_what_leaves_the_head_of_the_window_with_own_items_and_cards_in_the_merge() {
+        let mut t = crate::transcript::Parser::default();
+        t.items = (0..350)
+            .map(|i| line_at(i * 10, said(&format!("t{i}"))))
+            .collect();
+        let mut s = st();
+        s.kept_saved = vec![
+            Kept {
+                at: 1_005,
+                item: note("mía en medio"),
+            },
+            Kept {
+                at: 2_005,
+                item: Item::Agent {
+                    id: "tool-id".into(),
+                    name: "Explore".into(),
+                    description: "x".into(),
+                    state: ToolState::Ok,
+                    tools: 1,
+                    tokens: 2,
+                    ms: 3,
+                    last: None,
+                    steps: Vec::new(),
+                },
+            },
+        ];
+        t.items[200] = line_at(
+            2_000,
+            Item::Tool {
+                id: "tool-id".into(),
+                name: "Task".into(),
+                arg: "x".into(),
+                state: ToolState::Ok,
+                summary: None,
+                output: Vec::new(),
+                diff: Vec::new(),
+                url: None,
+                by: None,
+            },
+        );
+        s.follow(&t);
+        assert!(
+            s.items.iter().any(|i| matches!(i, Item::Agent { .. })),
+            "the card took the place of its tool"
+        );
+        for step in [1, 7, 40, 3] {
+            let (before_first, before_items) = (s.first, s.items.clone());
+            let len = t.items.len();
+            t.items.extend(
+                (len..len + step).map(|i| line_at(i as u64 * 10 + 5_000, said(&format!("t{i}")))),
+            );
+            s.follow(&t);
+            let left = (s.first - before_first) as usize;
+            assert_eq!(s.items.len(), KEEP);
+            assert!(left <= before_items.len());
+            assert_eq!(left, step, "an item left for each one that came");
+            assert_eq!(
+                s.items[0], before_items[left],
+                "the window starts with the item that came after the ones that left"
+            );
+        }
     }
 
     /// REQ-549: what another `claude` queued is shown while its session is followed, and goes when

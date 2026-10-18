@@ -17,6 +17,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::field::{self, Field, Look};
 use super::fold;
+use super::older::{self, Older};
 use super::panels::{self, Panel, RowAct};
 use super::{Grid, Rgb, Style, clip, look, select};
 use crate::claude::tools_word;
@@ -362,6 +363,8 @@ impl Editor {
 #[derive(Default)]
 pub struct Ui {
     pub editor: Editor,
+    /// The older items of the conversation, which `View::sync` keeps beside the node's (REQ-567).
+    pub older: Older,
     /// The time of the last frame drawn, for what counts up (a tool that runs); 0 before the first.
     now: Cell<u64>,
     /// Lines the list is scrolled up from the newest; `most` is what the last frame could scroll.
@@ -484,6 +487,18 @@ impl Ui {
             self.ask_at = 0;
             self.picks.clear();
         }
+    }
+
+    /// Older items were added before the others: what is held by the number of an item (the one
+    /// picked, the tools opened, the runs unfolded) moves with them, and a selection, which is of
+    /// rows, is let go.
+    pub fn shifted(&mut self, by: usize) {
+        let by = by as u32;
+        self.picked = self.picked.map(|p| p + by);
+        self.open = self.open.iter().map(|i| i + by).collect();
+        self.unfolded = self.unfolded.iter().map(|i| i + by).collect();
+        self.sel = None;
+        self.pull = None;
     }
 
     /// A message for the status bar (a copy, a picture that was not there), once.
@@ -705,6 +720,31 @@ impl Ui {
     /// Lines of the list, from the oldest, `w` columns wide.
     fn lines(&self, conv: &Conversation, w: usize) -> Vec<Line> {
         let mut out = Vec::new();
+        // What is above the first item: older ones to load, or where the conversation starts.
+        if let Some(row) = self.older.row(conv) {
+            let text = row.text();
+            let tone = match row {
+                older::Row::Failed => look::red(),
+                older::Row::Loading => look::yellow(),
+                _ => look::dim(),
+            };
+            out.push(Line {
+                spans: vec![(text.to_owned(), Style::fg(tone))],
+                bg: None,
+                item: older::TOP,
+                lead: text.chars().count(),
+                soft: false,
+                fold: false,
+            });
+            out.push(Line {
+                spans: vec![],
+                bg: None,
+                item: older::TOP,
+                lead: 0,
+                soft: false,
+                fold: false,
+            });
+        }
         let mut runs = fold::runs(&conv.items).into_iter().peekable();
         let mut i = 0;
         while i < conv.items.len() {
@@ -1179,6 +1219,7 @@ impl Ui {
         let lines = self.lines(conv, iw - 2);
         let rows = self.list_rows(&geo, lines.len());
         self.most.set(rows.most);
+        self.older.set_at_top(self.scroll >= rows.most);
         let (start, top) = (rows.start, rows.top);
         let accent = accent_rgb(conv.accent);
         for (r, line) in lines
@@ -2431,6 +2472,11 @@ impl Ui {
             let start = most - self.scroll.min(most);
             let top = ly + lh.saturating_sub(lines.len());
             let line = y.checked_sub(top).and_then(|r| lines.get(start + r));
+            // The row above the first item: a tap asks again after a failure.
+            if line.is_some_and(|l| l.item == older::TOP) {
+                self.older.retry();
+                return None;
+            }
             // A row that says a run of tools opens or closes it, and picks nothing (REQ-558).
             if let Some(l) = line.filter(|l| l.fold) {
                 if !self.unfolded.remove(&l.item) {
@@ -3669,6 +3715,22 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    /// REQ-567: when older items are added before the others, what is held by the number of an
+    /// item moves with the items, and a selection is let go.
+    #[test]
+    fn what_is_held_by_the_number_of_an_item_moves_when_older_items_come_before() {
+        let mut ui = Ui {
+            picked: Some(4),
+            ..Ui::default()
+        };
+        ui.open.insert(5);
+        ui.unfolded.insert(7);
+        ui.shifted(100);
+        assert_eq!(ui.picked, Some(104));
+        assert_eq!(ui.open.iter().copied().collect::<Vec<_>>(), [105]);
+        assert_eq!(ui.unfolded.iter().copied().collect::<Vec<_>>(), [107]);
     }
 
     #[test]

@@ -58,6 +58,11 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
         Cmd::FindFiles { workspace, query } => files::find(shared, &workspace, &query),
         Cmd::ListConversations { workspace } => saved::list(shared, &workspace),
         Cmd::ReadMarkdown { workspace, path } => markdown::read(shared, &workspace, &path),
+        Cmd::ReadOlder {
+            node,
+            before,
+            count,
+        } => engine::read_older(shared, &node, before, count),
         Cmd::ReadPlan { node, ask } => markdown::read_plan(shared, &node, &ask),
         Cmd::CreateWorktree {
             repo,

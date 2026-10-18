@@ -32,6 +32,7 @@ mod fold;
 mod look;
 mod manage;
 mod markdown;
+mod older;
 mod open;
 mod panels;
 mod phone;
@@ -391,6 +392,11 @@ pub enum FileAsk {
         workspace: String,
         query: String,
         node: String,
+    },
+    /// The items of a conversation that came before the time `before` (REQ-567).
+    Older {
+        node: String,
+        before: u64,
     },
     /// The conversations Claude saved for the workspace's folder, for `/resume`.
     Saved {
@@ -902,8 +908,11 @@ impl View {
                     self.commit_lists.insert(id, c);
                 }
                 Node::Conversation(c) => {
-                    self.conv_ui.entry(id.clone()).or_default().sync(&c);
-                    self.convs.insert(id, *c);
+                    // The older items that were asked for stay before the node's (REQ-567).
+                    let ui = self.conv_ui.entry(id.clone()).or_default();
+                    let eff = ui.older.merged(self.convs.get(&id), *c, stamp.0);
+                    ui.sync(&eff);
+                    self.convs.insert(id, eff);
                 }
             }
         }
@@ -2801,10 +2810,17 @@ impl View {
             self.saved_replied(node, reply);
             return;
         }
+        if let FileAsk::Older { node, before } = &ask {
+            self.older_replied(node, *before, reply);
+            return;
+        }
         let (FileAsk::List { workspace, .. }
         | FileAsk::Find { workspace, .. }
         | FileAsk::Mention { workspace, .. }
-        | FileAsk::Saved { workspace, .. }) = &ask;
+        | FileAsk::Saved { workspace, .. }) = &ask
+        else {
+            return;
+        };
         let Some(t) = self.trees.get_mut(workspace) else {
             return;
         };
@@ -2839,7 +2855,39 @@ impl View {
                 }
             }
             // Answered above.
-            FileAsk::Mention { .. } | FileAsk::Saved { .. } => {}
+            FileAsk::Mention { .. } | FileAsk::Saved { .. } | FileAsk::Older { .. } => {}
+        }
+    }
+
+    /// The conversations that are at the top of their list and have older items to ask for ask
+    /// for them (REQ-567).
+    pub fn ask_older(&mut self) {
+        for (id, ui) in &mut self.conv_ui {
+            if let Some(conv) = self.convs.get(id)
+                && let Some(before) = ui.older.ask(conv)
+            {
+                self.file_asks.push(FileAsk::Older {
+                    node: id.clone(),
+                    before,
+                });
+            }
+        }
+    }
+
+    /// The daemon sent the older items asked for with `before`, or why not: they go before the
+    /// others, and what is held by the number of an item moves with them.
+    fn older_replied(&mut self, node: &str, before: u64, reply: Reply) {
+        let result = reply_value(reply).and_then(|v| {
+            serde_json::from_value::<contract::conversation::OlderItems>(v)
+                .map_err(|e| e.to_string())
+        });
+        let (Some(conv), Some(ui)) = (self.convs.get_mut(node), self.conv_ui.get_mut(node)) else {
+            return;
+        };
+        if let Some(added) = ui.older.replied(before, result, conv)
+            && added > 0
+        {
+            ui.shifted(added);
         }
     }
 
@@ -4404,6 +4452,11 @@ fn spawn_files(ask: FileAsk, tx: std::sync::mpsc::Sender<FilesReply>) {
             FileAsk::Saved { workspace, .. } => Cmd::ListConversations {
                 workspace: workspace.clone(),
             },
+            FileAsk::Older { node, before } => Cmd::ReadOlder {
+                node: node.clone(),
+                before: *before,
+                count: older::PAGE,
+            },
         };
         let reply = Client::connect(&identity::socket_path(), "jwn-tui-files")
             .and_then(|mut c| c.cmd_within(cmd, FILES_WAIT));
@@ -4949,6 +5002,7 @@ pub fn run() -> Result<(), String> {
         while let Ok(reply) = files_rx.try_recv() {
             view.files_replied(reply);
         }
+        view.ask_older();
         for ask in view.take_file_asks() {
             spawn_files(ask, files_tx.clone());
         }
@@ -8324,6 +8378,11 @@ mod tests {
     /// The shared fixtures with the first pane running a conversation; `idle` takes away the
     /// permission that waits in the fixture. The keyboard is in the conversation.
     fn conv_view(idle: bool) -> View {
+        conv_view_older(idle, None)
+    }
+
+    /// The same, with a conversation whose node says where to ask for older items from.
+    fn conv_view_older(idle: bool, older: Option<u64>) -> View {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../contract/fixtures/daemon");
         let load = |n: &str| {
             serde_json::from_str::<serde_json::Value>(
@@ -8340,6 +8399,9 @@ mod tests {
             conv["ask"] = serde_json::Value::Null;
             conv["status"] = "idle".into();
         }
+        if let Some(at) = older {
+            conv["older"] = at.into();
+        }
         docs.push(conv);
         let mut v = View::new("fixtures");
         v.set_size(120, 40);
@@ -8348,6 +8410,65 @@ mod tests {
         v.press(Key::Enter);
         assert_eq!(v.typing_pane().as_deref(), Some(CONV_PANE));
         v
+    }
+
+    /// REQ-567: a conversation scrolled to its top asks for the items before the first, once; the
+    /// answer goes before the others and the row above them says where the conversation starts.
+    #[test]
+    fn a_conversation_at_its_top_asks_for_older_items_once_and_draws_them_before_the_others() {
+        let mut v = conv_view_older(true, Some(1_792_109_990_000));
+        v.ask_older();
+        assert!(
+            v.take_file_asks().is_empty(),
+            "nothing was drawn, so nothing is at its top"
+        );
+        v.plain(120, 40);
+        v.ask_older();
+        assert!(
+            v.take_file_asks().is_empty(),
+            "the newest is in view, not the top"
+        );
+        for _ in 0..100 {
+            v.scroll(false, 50, 10, 120, 40);
+        }
+        let screen = v.plain(120, 40);
+        assert!(screen.contains("hay anteriores"), "{screen}");
+        v.ask_older();
+        let asks = v.take_file_asks();
+        let ask = FileAsk::Older {
+            node: CONV.into(),
+            before: 1_792_109_990_000,
+        };
+        assert_eq!(asks, std::slice::from_ref(&ask));
+        v.ask_older();
+        assert!(v.take_file_asks().is_empty(), "one is out");
+        let first_before = v.convs[CONV].first;
+        let len_before = v.convs[CONV].items.len();
+        v.files_replied(FilesReply {
+            ask,
+            reply: Ok(Ok(Some(serde_json::json!({"items": [
+                {"t": "user", "text": "pregunta de antes"},
+                {"t": "text", "text": "respuesta de antes"}
+            ]})))),
+        });
+        assert_eq!(v.convs[CONV].items.len(), len_before + 2);
+        assert_eq!(
+            v.convs[CONV].first, first_before,
+            "the number of the first item is the same"
+        );
+        // the list is longer now: it is drawn once to know by how much, and then scrolled
+        v.plain(120, 40);
+        for _ in 0..100 {
+            v.scroll(false, 50, 10, 120, 40);
+        }
+        let screen = v.plain(120, 40);
+        assert!(screen.contains("inicio de la conversación"), "{screen}");
+        assert!(screen.contains("respuesta de antes"), "{screen}");
+        v.ask_older();
+        assert!(
+            v.take_file_asks().is_empty(),
+            "the start of the file was reached"
+        );
     }
 
     #[test]

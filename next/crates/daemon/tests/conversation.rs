@@ -1354,7 +1354,61 @@ fn old_session(r: &Rig, lines: &[&str]) -> (PathBuf, BTreeMap<String, String>) {
 const FIRST: &str = r#"{"type":"user","timestamp":"2026-10-13T19:00:00.000Z","message":{"role":"user","content":"hola"}}"#;
 const REPLY: &str = r#"{"type":"assistant","timestamp":"2026-10-13T19:00:01.000Z","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"buenas"}]}}"#;
 
-/// REQ-545: while the conversation has no engine of its own, what another `claude` writes to the
+/// REQ-567: the node of a resumed conversation says the time of its first item, and `read_older`
+/// answers with the items before it, page by page, until the transcript is out; a conversation
+/// with no transcript has nothing to read.
+#[test]
+fn read_older_pages_back_from_the_node_to_the_start_of_the_transcript() {
+    let sb = Sandbox::new();
+    let mut r = rig_with(sb, Vec::new());
+    let mut lines: Vec<String> = Vec::new();
+    for i in 0..220u64 {
+        let (m, s) = (i / 60, i % 60);
+        lines.push(format!(r#"{{"type":"user","timestamp":"2026-10-13T19:{m:02}:{s:02}.000Z","message":{{"role":"user","content":"pregunta {i}"}}}}"#));
+        lines.push(format!(r#"{{"type":"assistant","timestamp":"2026-10-13T19:{m:02}:{s:02}.500Z","message":{{"model":"claude-opus-5-5","content":[{{"type":"text","text":"respuesta {i}"}}]}}}}"#));
+    }
+    let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+    let (_file, env) = old_session(&r, &refs);
+    let (node, _) = r.open_with(None, vec!["--resume", "old-session"], Some(env));
+    let v = r.conv(&node);
+    assert_eq!(v["items"].as_array().unwrap().len(), 300);
+    assert_eq!(v["first"], 140);
+    let mut before = v["older"]
+        .as_u64()
+        .expect("the node says where to ask from");
+    let mut older: Vec<Value> = Vec::new();
+    for _ in 0..20 {
+        let page = r
+            .cmd(Cmd::ReadOlder {
+                node: node.clone(),
+                before,
+                count: 100,
+            })
+            .unwrap()
+            .unwrap();
+        let items = page["items"].as_array().unwrap().clone();
+        assert!(items.len() <= 100);
+        older.splice(0..0, items);
+        match page["older"].as_u64() {
+            Some(at) => {
+                assert!(at < before);
+                before = at;
+            }
+            None => break,
+        }
+    }
+    assert_eq!(
+        older.len(),
+        140,
+        "what the node did not hold, and nothing twice"
+    );
+    assert_eq!(older[0]["text"], "pregunta 0");
+    assert_eq!(older[139]["text"], "respuesta 69");
+    assert_eq!(v["items"][0]["text"], "pregunta 70");
+    r.stop();
+}
+
+/// REQ-545: while the conversation has no engine of its own, what another `claude` writes to the/// REQ-545: while the conversation has no engine of its own, what another `claude` writes to the
 /// session shows in it.
 #[test]
 fn a_session_another_claude_is_writing_is_followed_while_the_conversation_has_no_engine() {
