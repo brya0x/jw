@@ -651,6 +651,10 @@ pub struct View {
     /// The diff of a review, beside its agent (REQ-589), and whether it has the focus.
     rv: Option<Changes>,
     rv_focus: bool,
+    /// `d` opened the diff beside the panels of every workspace, and `z` made it fill the area
+    /// (REQ-590).
+    diff_open: bool,
+    diff_zoom: bool,
     /// The project screen, while it is open (REQ-520).
     project: Option<project::Project>,
     /// Repositories whose `.jw.toml` the worktree box and the project screen wait to hear of.
@@ -731,6 +735,8 @@ impl View {
             prs_asks: Vec::new(),
             rv: None,
             rv_focus: false,
+            diff_open: false,
+            diff_zoom: false,
             project: None,
             project_asks: Vec::new(),
             worktree_asks: Vec::new(),
@@ -823,15 +829,28 @@ impl View {
         self.shown()?.review.as_ref().map(|r| r.pr)
     }
 
-    /// The columns the diff of a review takes at the right of its workspace: three fifths of the
-    /// area, and none when the area is too narrow to hold both (the diff is then the screen of `d`).
+    /// Whether the area has room for the diff beside the panels: the panels keep two fifths of it
+    /// (at least 40 columns) and the diff gets at least 30.
+    fn side_room(&self) -> bool {
+        let w = self.size.0.saturating_sub(SIDEBAR + 1);
+        w >= (w * 2 / 5).max(40) + 30
+    }
+
+    /// The columns the diff takes at the right of the open workspace, when it is beside the
+    /// panels: the workspace of a review always has it, any other when `d` opened it; three fifths
+    /// of the area, all of it when zoomed, and none when the area is too narrow (the diff is then
+    /// the screen of `d`).
     fn diff_w(&self) -> usize {
-        if self.review_pr().is_none() || self.mode != Mode::Workspaces {
+        let wanted = self.review_pr().is_some() || (self.diff_open && self.shown().is_some());
+        if !wanted || self.mode != Mode::Workspaces || !self.side_room() {
             return 0;
         }
         let w = self.size.0.saturating_sub(SIDEBAR + 1);
-        let agent = (w * 2 / 5).max(40);
-        if w < agent + 30 { 0 } else { w - agent }
+        if self.diff_zoom {
+            w
+        } else {
+            w - (w * 2 / 5).max(40)
+        }
     }
 
     /// Where the diff of a review is drawn.
@@ -853,7 +872,11 @@ impl View {
                     if let Some(old) = self.rv.take() {
                         self.asks.extend(old.close());
                     }
-                    self.rv = Some(Changes::open_general(&id));
+                    self.rv = Some(if self.review_pr().is_some() {
+                        Changes::open_general(&id)
+                    } else {
+                        Changes::open(&id)
+                    });
                     self.rv_focus = false;
                 }
                 let area = self.diff_rect();
@@ -943,6 +966,25 @@ impl View {
                 self.typing = false;
             }
             return After::Continue;
+        }
+        match ev.code {
+            // `d` closes the diff that `d` opened; in a review, where it stays, it gives the keys back.
+            KeyCode::Char('d') => {
+                self.typing = false;
+                if self.review_pr().is_none() {
+                    self.diff_open = false;
+                    self.diff_zoom = false;
+                    self.rv_focus = false;
+                }
+                self.sync_review_diff();
+                return After::Continue;
+            }
+            KeyCode::Char('z') => {
+                self.diff_zoom = !self.diff_zoom;
+                self.sync_review_diff();
+                return After::Continue;
+            }
+            _ => {}
         }
         let docs = Docs {
             diffs: &self.diffs,
@@ -2502,6 +2544,17 @@ impl View {
             // In a review the diff is already beside the agent: `d` gives it the keys.
             (Mode::Workspaces, Key::Changes) if self.rv.is_some() => {
                 self.opened = self.selected_id();
+                self.rv_focus = true;
+                self.typing = true;
+            }
+            // Elsewhere it opens beside the panels when there is room, and as a screen when not.
+            (Mode::Workspaces, Key::Changes)
+                if self.side_room() && self.selected_id().is_some() =>
+            {
+                self.opened = self.selected_id();
+                self.blk = None;
+                self.diff_open = true;
+                self.sync_review_diff();
                 self.rv_focus = true;
                 self.typing = true;
             }
@@ -5767,6 +5820,65 @@ mod tests {
         assert!(!v.tree_on && v.flash.contains("diff al lado"));
     }
 
+    /// REQ-590: `d` opens the diff beside the panels of any workspace, on the uncommitted changes,
+    /// `d` closes it, and `z` makes it fill the area.
+    #[test]
+    fn d_opens_the_diff_beside_the_panels_of_any_workspace_and_z_fills_the_area() {
+        let mut v = fixture_view();
+        assert!(v.rv.is_none());
+        v.press(Key::Changes);
+        assert!(v.changes.is_none(), "no screen of its own: there is room");
+        assert!(v.rv.is_some() && v.rv_focus && v.rv_typing());
+        let asks = v.take_asks();
+        assert!(
+            matches!(
+                &asks[..],
+                [Ask::OpenDiff {
+                    scope: DiffScope::Uncommitted,
+                    ..
+                }]
+            ),
+            "the uncommitted changes, the viewer's first view: {asks:?}"
+        );
+        v.changes_made(Src::Uncommitted, "n1");
+        let _ = v.take_asks();
+        let t = v.plain(120, 30);
+        assert!(
+            t.contains("╭─ zsh") && t.contains("diff · contra HEAD"),
+            "both are drawn:\n{t}"
+        );
+        // the keys are the viewer's: 3 is the general view, which asks for it
+        v.press_key(plain(KeyCode::Char('3')));
+        assert!(
+            v.take_asks().iter().any(|a| matches!(
+                a,
+                Ask::OpenDiff {
+                    scope: DiffScope::General,
+                    ..
+                }
+            )),
+            "1 2 3 change the view"
+        );
+        // z fills the area, z gives it back
+        let beside = v.diff_rect();
+        v.press_key(plain(KeyCode::Char('z')));
+        assert_eq!(v.diff_rect().0, SIDEBAR + 1, "all of the area");
+        v.press_key(plain(KeyCode::Char('z')));
+        assert_eq!(v.diff_rect(), beside);
+        // d closes it, and the panels have their width back
+        v.press_key(plain(KeyCode::Char('d')));
+        assert!(v.rv.is_none() && !v.diff_open && !v.rv_focus && !v.typing);
+        assert!(
+            v.take_asks().contains(&Ask::Close("n1".into())),
+            "its nodes are let go"
+        );
+        // in the workspace of a review d only gives the keys back
+        let mut r = review_view();
+        r.press(Key::Changes);
+        r.press_key(plain(KeyCode::Char('d')));
+        assert!(r.rv.is_some() && !r.typing, "the diff of a review stays");
+    }
+
     /// The diff is let go with its workspace, and a terminal too narrow for both has the screen of `d`.
     #[test]
     fn the_diff_of_a_review_goes_with_it_and_a_narrow_terminal_has_none() {
@@ -6718,10 +6830,11 @@ mod tests {
     }
 
     #[test]
-    fn d_opens_the_diff_over_the_panes_and_esc_closes_it_and_stops_watching() {
+    fn d_opens_the_diff_over_the_panes_when_there_is_no_room_beside_them_and_esc_closes_it_and_stops_watching()
+     {
         let mut v = fixture_view();
-        v.set_size(180, 44);
-        assert!(!v.plain(180, 44).contains(" vs HEAD"));
+        v.set_size(90, 44);
+        assert!(!v.plain(90, 44).contains(" vs HEAD"));
         v.press(Key::Changes);
         let asks = v.take_asks();
         assert!(
@@ -6734,7 +6847,7 @@ mod tests {
             ),
             "{asks:?}"
         );
-        let screen = v.plain(180, 44);
+        let screen = v.plain(90, 44);
         assert!(screen.contains(" vs HEAD"), "{screen}");
         assert!(screen.lines().last().unwrap().contains("DIFF"));
         assert!(screen.contains("leyendo los cambios"));
@@ -6745,9 +6858,9 @@ mod tests {
         assert_eq!(v.press_key(plain(KeyCode::Char('x'))), After::Continue);
         v.press_key(plain(KeyCode::Esc));
         assert_eq!(v.take_asks(), [Ask::Close("the-node".into())]);
-        assert!(!v.plain(180, 44).contains(" vs HEAD"));
+        assert!(!v.plain(90, 44).contains(" vs HEAD"));
         assert!(
-            v.plain(180, 44)
+            v.plain(90, 44)
                 .lines()
                 .last()
                 .unwrap()
@@ -6758,16 +6871,16 @@ mod tests {
     #[test]
     fn clicking_the_sidebar_leaves_the_diff_and_a_click_in_it_picks_a_tab() {
         let mut v = fixture_view();
-        v.set_size(180, 44);
+        v.set_size(90, 44);
         v.press(Key::Changes);
         v.take_asks();
         // The second tab starts after the first, which is ` 1 Sin commitear ` wide.
-        v.click(SIDEBAR + 4 + 20, 2, 180, 44);
+        v.click(SIDEBAR + 4 + 20, 2, 90, 44);
         let asks = v.take_asks();
         assert!(matches!(&asks[..], [Ask::OpenCommits { .. }]), "{asks:?}");
-        v.click(3, 2, 180, 44);
+        v.click(3, 2, 90, 44);
         assert!(
-            !v.plain(180, 44).contains(" vs HEAD"),
+            !v.plain(90, 44).contains(" vs HEAD"),
             "the sidebar closes it"
         );
     }
