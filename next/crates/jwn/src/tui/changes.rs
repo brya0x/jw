@@ -145,6 +145,8 @@ pub struct Changes {
     area: Option<Rect>,
     /// A line longer than the body goes on in the next row (`w`, REQ-591); in two columns it is cut.
     wrap: bool,
+    /// Lines picked to be referred to, while there are (REQ-592).
+    pick: Option<Pick>,
 }
 
 /// Whether the viewer stays open after a key.
@@ -152,6 +154,16 @@ pub struct Changes {
 pub enum Outcome {
     Stay,
     Close,
+    /// Lines were picked and `↵` asked for where they are, as `@file#L10-14`: the client puts it
+    /// in the agent's field (REQ-592).
+    Reference(String),
+}
+
+/// The lines picked with `V`: where it began and where the cursor is, as places in the body.
+#[derive(Clone, Copy)]
+struct Pick {
+    anchor: usize,
+    cursor: usize,
 }
 
 /// What an item of the left column is.
@@ -236,6 +248,7 @@ impl Changes {
             own_patch: false,
             area: None,
             wrap: true,
+            pick: None,
         };
         c.want(Src::Uncommitted);
         c
@@ -344,6 +357,7 @@ impl Changes {
     }
 
     fn set_tab(&mut self, tab: Tab) {
+        self.pick = None;
         self.tab = tab;
         self.commit = None;
         self.scroll = 0;
@@ -380,6 +394,8 @@ impl Changes {
         let room = (self.wrap && !g.split).then(|| g.bw.saturating_sub(1 + ONE_COLUMN_GUTTER));
         let key = (d.head.id.clone(), d.head.rev, g.split, room);
         if self.cache.as_ref().map(|c| &c.key) != Some(&key) {
+            // The places of a pick are places in the lines that were.
+            self.pick = None;
             let order = tree_order(d);
             let lines = build(d, &order, g.split);
             let lines = match room {
@@ -530,6 +546,116 @@ impl Changes {
         }
     }
 
+    /// Whether a line of the body is a row of code, which can be picked.
+    fn is_row(line: &Line) -> bool {
+        matches!(line, Line::One(..) | Line::Two(..) | Line::Cont(..))
+    }
+
+    /// `V`: begin picking at the first row of code at the top of the body.
+    fn start_pick(&mut self, docs: &Docs) {
+        let Some(cache) = self.diff(docs).and_then(|d| self.cache_for(d)) else {
+            return;
+        };
+        let from = self.scroll;
+        match (from..cache.lines.len()).find(|&i| Self::is_row(&cache.lines[i])) {
+            Some(at) => {
+                self.pick = Some(Pick {
+                    anchor: at,
+                    cursor: at,
+                });
+                self.msg = "j/k extienden · ↵ escribe la referencia · esc cancela".into();
+            }
+            None => self.msg = "no hay líneas de código a la vista".into(),
+        }
+    }
+
+    /// The keys while lines are picked: `j` and `k` move the end of the pick by a line, inside the
+    /// file it began in; `↵` asks for the reference and `esc` lets go.
+    fn pick_key(&mut self, code: KeyCode, docs: &Docs, g: Geom) -> Outcome {
+        let Some(pick) = self.pick else {
+            return Outcome::Stay;
+        };
+        match code {
+            KeyCode::Esc | KeyCode::Char('V') => self.pick = None,
+            KeyCode::Char('j') | KeyCode::Down | KeyCode::Char('k') | KeyCode::Up => {
+                let down = matches!(code, KeyCode::Char('j') | KeyCode::Down);
+                let Some(cache) = self.diff(docs).and_then(|d| self.cache_for(d)) else {
+                    return Outcome::Stay;
+                };
+                let file = cache.lines[pick.anchor].file();
+                let lines = &cache.lines;
+                let next = if down {
+                    (pick.cursor + 1..lines.len()).find(|&i| Self::is_row(&lines[i]))
+                } else {
+                    (0..pick.cursor).rev().find(|&i| Self::is_row(&lines[i]))
+                }
+                .filter(|&i| lines[i].file() == file);
+                if let Some(at) = next {
+                    self.pick = Some(Pick { cursor: at, ..pick });
+                    // keep the end in view
+                    if at < self.scroll {
+                        self.scroll = at;
+                    } else if at + 2 > self.scroll + g.rows {
+                        self.scroll = (at + 2).saturating_sub(g.rows);
+                    }
+                    self.clamp(g);
+                }
+                self.msg = "j/k extienden · ↵ escribe la referencia · esc cancela".into();
+            }
+            KeyCode::Enter => {
+                let text = self.reference(docs, pick);
+                self.pick = None;
+                return match text {
+                    Some(t) => Outcome::Reference(t),
+                    None => Outcome::Stay,
+                };
+            }
+            _ => self.msg = "j/k extienden · ↵ escribe la referencia · esc cancela".into(),
+        }
+        Outcome::Stay
+    }
+
+    /// Where the picked lines are: `@path#L10-14` over the lines of the new side (those that were
+    /// added or are as they were) and, when only deleted lines are picked, the old ones, said so.
+    fn reference(&self, docs: &Docs, pick: Pick) -> Option<String> {
+        let d = self.diff(docs)?;
+        let cache = self.cache_for(d)?;
+        let (lo, hi) = (pick.anchor.min(pick.cursor), pick.anchor.max(pick.cursor));
+        let path = &d.files[*cache.order.get(cache.lines.get(lo)?.file())?].path;
+        let (mut new, mut old) = (Vec::new(), Vec::new());
+        let mut row = |r: &Row| match r.kind {
+            Kind::Del => old.extend(r.old),
+            _ => new.extend(r.new),
+        };
+        for line in &cache.lines[lo..=hi] {
+            match line {
+                Line::One(_, r) => row(r),
+                Line::Two(_, l, r) => {
+                    // side by side, a pair is the old line and the new one
+                    if let Some(l) = l.as_ref().filter(|l| l.kind == Kind::Del) {
+                        row(l);
+                    }
+                    if let Some(r) = r {
+                        row(r);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let span = |n: &[u32]| match (n.iter().min(), n.iter().max()) {
+            (Some(a), Some(b)) if a == b => format!("L{a}"),
+            (Some(a), Some(b)) => format!("L{a}-{b}"),
+            _ => String::new(),
+        };
+        Some(if !new.is_empty() {
+            format!("@{path}#{} ", span(&new))
+        } else if !old.is_empty() {
+            format!("@{path}#{} (antes de los cambios) ", span(&old))
+        } else {
+            return None;
+        })
+    }
+
     /// Mark the file at the top as looked at (or not, when it already is) and go to the next.
     fn mark(&mut self, docs: &Docs) {
         let Some(d) = self.diff(docs) else { return };
@@ -569,6 +695,13 @@ impl Changes {
     pub fn press(&mut self, code: KeyCode, docs: &Docs, size: (usize, usize)) -> Outcome {
         let g = self.geom_of(size);
         self.msg.clear();
+        if self.pick.is_some() {
+            return self.pick_key(code, docs, g);
+        }
+        if code == KeyCode::Char('V') && self.focus == Focus::Body {
+            self.start_pick(docs);
+            return Outcome::Stay;
+        }
         match self.tree_or_body(code, docs, g) {
             Some(outcome) => outcome,
             None => self.global(code, docs),
@@ -829,7 +962,7 @@ impl Changes {
             "j/k archivo · ]/[ hunk · v visto · ( ) commit · h commits · tab árbol · esc cerrar"
                 .into()
         } else {
-            "j/k archivo · ]/[ hunk · v visto · tab árbol · 1 2 3 vistas · s lado a lado · w ajuste · r releer · esc cerrar".into()
+            "j/k archivo · ]/[ hunk · v visto · V elegir líneas · 1 2 3 vistas · s lado a lado · w ajuste · tab árbol · esc cerrar".into()
         };
         let seen = self.diff(docs).filter(|d| !d.too_large).map(|d| {
             (
@@ -1140,6 +1273,10 @@ impl Changes {
             .enumerate()
         {
             let y = m.top + pin + r;
+            let picked = self.pick.is_some_and(|p| {
+                let at = self.scroll + r;
+                at >= p.anchor.min(p.cursor) && at <= p.anchor.max(p.cursor) && Self::is_row(line)
+            });
             match line {
                 Line::File(pos) => file_head(g, m.bx, y, w, d, cache, *pos),
                 Line::Note(_, text) => g.put(
@@ -1161,6 +1298,9 @@ impl Changes {
                 Line::Cont(_, row) => one_column(g, m.bx, y, w, row, true),
                 Line::Two(_, left, right) => two_columns(g, m.bx, y, w, left, right),
                 Line::Gap(_) => {}
+            }
+            if picked {
+                g.light(m.bx, m.bx + w, y);
             }
         }
         if pin == 1
@@ -1472,6 +1612,48 @@ mod tests {
         assert!(r.changes.cache.as_ref().unwrap().lines.len() < rows_wrapped);
         r.key(KeyCode::Char('w'));
         assert!(r.text().contains('↪'), "w again wraps");
+    }
+
+    /// REQ-592: `V` picks lines, `j` and `k` move the end of the pick inside the file, `esc` lets
+    /// go and `↵` asks for where they are: `@file#L10-14`, with `(antes…)` for deleted lines only.
+    #[test]
+    fn picked_lines_become_a_reference_to_their_file_and_lines() {
+        let mut r = rig((140, 40));
+        assert_eq!(r.key(KeyCode::Char('V')), Outcome::Stay);
+        assert!(r.changes.pick.is_some());
+        assert!(
+            r.changes
+                .status(&r.docs())
+                .0
+                .contains("↵ escribe la referencia")
+        );
+        r.key(KeyCode::Char('j'));
+        r.key(KeyCode::Char('j'));
+        let picked = r.changes.pick.unwrap();
+        assert!(picked.cursor > picked.anchor, "the pick grew");
+        assert_eq!(
+            r.key(KeyCode::Esc),
+            Outcome::Stay,
+            "esc lets go and does not close"
+        );
+        assert!(r.changes.pick.is_none());
+        // the same again, to the end
+        r.key(KeyCode::Char('V'));
+        r.key(KeyCode::Char('j'));
+        let Outcome::Reference(text) = r.key(KeyCode::Enter) else {
+            panic!("↵ asks for the reference")
+        };
+        let re = text.trim_end();
+        let (path, lines) = re.strip_prefix('@').unwrap().split_once("#L").unwrap();
+        assert!(
+            r.diffs
+                .values()
+                .any(|d| d.files.iter().any(|f| f.path == path)),
+            "{text}"
+        );
+        assert!(lines.chars().next().unwrap().is_ascii_digit(), "{text}");
+        assert!(text.ends_with(' '), "the person goes on typing after it");
+        assert!(r.changes.pick.is_none());
     }
 
     impl Rig {

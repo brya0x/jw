@@ -994,30 +994,62 @@ impl View {
         let Some(c) = self.rv.as_mut() else {
             return After::Continue;
         };
-        if c.press(ev.code, &docs, size) == Outcome::Close {
-            self.typing = false;
-        }
+        let outcome = c.press(ev.code, &docs, size);
+        let after = match outcome {
+            Outcome::Close => {
+                self.typing = false;
+                After::Continue
+            }
+            Outcome::Reference(text) => self.refer(text),
+            Outcome::Stay => After::Continue,
+        };
         self.sync_review_diff();
+        after
+    }
+
+    /// Lines of the diff were picked: where they are goes in the field of the agent of the open
+    /// workspace, to be asked about, and the keyboard goes there; nothing is sent. With no agent
+    /// it is copied (REQ-592).
+    fn refer(&mut self, text: String) -> After {
+        let agent = self.shown().and_then(|d| {
+            let at = |i: usize| Some((i, self.conv_node(&d.panes.get(i)?.id)?));
+            at(self.focus).or_else(|| (0..d.panes.len()).find_map(at))
+        });
+        let Some((at, node)) = agent else {
+            self.flash = "no hay un agente aquí: la referencia quedó copiada".into();
+            return After::Copy(text);
+        };
+        self.conv_ui.entry(node).or_default().editor.insert(&text);
+        self.focus = at;
+        self.rv_focus = false;
+        self.typing = true;
+        self.flash = "referencia escrita en el campo del agente; nada se mandó".into();
         After::Continue
     }
 
     /// A key while the diff is open: it is the viewer's, never a pane's.
-    fn changes_key(&mut self, ev: KeyEvent) {
+    fn changes_key(&mut self, ev: KeyEvent) -> After {
         if ev.modifiers.contains(KeyModifiers::CONTROL) {
-            return;
+            return After::Continue;
         }
         let Some(c) = self.changes.as_mut() else {
-            return;
+            return After::Continue;
         };
         let docs = Docs {
             diffs: &self.diffs,
             commits: &self.commit_lists,
         };
-        if c.press(ev.code, &docs, self.size) == Outcome::Close {
-            self.close_changes();
-        } else {
-            self.update_changes();
+        match c.press(ev.code, &docs, self.size) {
+            Outcome::Close => self.close_changes(),
+            // The screen of `d` has no agent beside it: the reference is copied.
+            Outcome::Reference(text) => {
+                self.flash = "referencia copiada".into();
+                self.update_changes();
+                return After::Copy(text);
+            }
+            Outcome::Stay => self.update_changes(),
         }
+        After::Continue
     }
 
     pub fn set_status(&mut self, status: &str) {
@@ -2277,8 +2309,7 @@ impl View {
             return self.manage_key(ev);
         }
         if self.changes.is_some() {
-            self.changes_key(ev);
-            return After::Continue;
+            return self.changes_key(ev);
         }
         if self.rv_typing() {
             return self.rv_key(ev);
@@ -5877,6 +5908,37 @@ mod tests {
         r.press(Key::Changes);
         r.press_key(plain(KeyCode::Char('d')));
         assert!(r.rv.is_some() && !r.typing, "the diff of a review stays");
+    }
+
+    /// REQ-592: where picked lines are goes in the field of the agent of the workspace and the keys
+    /// go there; with no agent it is copied.
+    #[test]
+    fn a_reference_goes_in_the_agents_field_or_is_copied_when_there_is_none() {
+        let mut v = fixture_view();
+        v.press(Key::Enter);
+        v.press(Key::Changes);
+        assert_eq!(
+            v.refer("@a.rs#L3 ".into()),
+            After::Copy("@a.rs#L3 ".into()),
+            "no conversation in the fixtures' panes"
+        );
+        assert!(v.flash.contains("copiada"));
+        let mut docs = fixture_docs();
+        for d in docs
+            .iter_mut()
+            .filter(|d| d["id"] == "00000000-0000-4000-8000-0000000000c1")
+        {
+            d["conversation"] = serde_json::json!("conv-1");
+        }
+        let mut v = View::new("fixtures");
+        v.set_size(120, 30);
+        v.sync(docs.iter());
+        v.press(Key::Enter);
+        v.press(Key::Changes);
+        assert!(v.rv_typing());
+        assert_eq!(v.refer("@a.rs#L3-5 ".into()), After::Continue);
+        assert_eq!(v.conv_ui["conv-1"].editor.text(), "@a.rs#L3-5 ");
+        assert!(!v.rv_focus && v.typing, "the keys are the agent's now");
     }
 
     /// The diff is let go with its workspace, and a terminal too narrow for both has the screen of `d`.
