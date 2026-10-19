@@ -13,7 +13,7 @@ use crossterm::event::KeyCode;
 use super::diff_lines::{
     Kind, Line, Row, Tone, TreeRow, ago, build, clean, order as tree_order, tones, tree_rows,
 };
-use super::{Grid, SIDEBAR, Style, clip, look};
+use super::{Grid, Rect, SIDEBAR, Style, clip, look};
 
 /// Width of the tree column.
 const TREE: usize = 30;
@@ -139,6 +139,8 @@ pub struct Changes {
     live_until: u64,
     /// A mark was sent: the next patch is its echo, not a change of the files.
     own_patch: bool,
+    /// Where the viewer is when it is a pane beside others (a review, REQ-589) and not the screen.
+    area: Option<Rect>,
 }
 
 /// Whether the viewer stays open after a key.
@@ -171,9 +173,14 @@ struct Geom {
     split: bool,
 }
 
-fn geom((cols, rows): (usize, usize), mode: Split) -> Geom {
-    let (x, y) = (SIDEBAR + 1, 1);
-    let (w, h) = (cols.saturating_sub(x), rows.saturating_sub(2));
+/// The area the viewer has when it is a screen of its own: right of the sidebar, between the
+/// header and the status bar.
+fn overlay_area((cols, rows): (usize, usize)) -> Rect {
+    let x = SIDEBAR + 1;
+    (x, 1, cols.saturating_sub(x), rows.saturating_sub(2))
+}
+
+fn geom((x, y, w, h): Rect, mode: Split) -> Geom {
     let (ix, iw) = (x + 1, w.saturating_sub(2));
     let tree_on = w >= TREE_MIN_AREA;
     let (bx, bw) = if tree_on {
@@ -223,9 +230,30 @@ impl Changes {
             live_rev: None,
             live_until: 0,
             own_patch: false,
+            area: None,
         };
         c.want(Src::Uncommitted);
         c
+    }
+
+    /// Open the viewer as a pane on the changes of a review: what the pull request changes, against
+    /// its base.
+    pub fn open_general(workspace: &str) -> Changes {
+        let mut c = Changes::open(workspace);
+        // The uncommitted changes are not what a review is about: only the pull request's are asked for.
+        c.asks.clear();
+        c.slots.clear();
+        c.set_tab(Tab::General);
+        c
+    }
+
+    /// Put the viewer in `area`, as a pane beside others.
+    pub fn set_area(&mut self, area: Rect) {
+        self.area = Some(area);
+    }
+
+    fn geom_of(&self, size: (usize, usize)) -> Geom {
+        geom(self.area.unwrap_or_else(|| overlay_area(size)), self.split)
     }
 
     pub fn workspace(&self) -> &str {
@@ -329,7 +357,7 @@ impl Changes {
     /// The documents changed, or the terminal did: rebuild what is drawn, follow a mark to the
     /// next file, and keep the scroll inside the body.
     pub fn update(&mut self, docs: &Docs, size: (usize, usize), now_ms: u64) {
-        let g = geom(size, self.split);
+        let g = self.geom_of(size);
         let Some(d) = self.diff(docs) else {
             self.cache = None;
             self.scroll = 0;
@@ -529,7 +557,7 @@ impl Changes {
     }
 
     pub fn press(&mut self, code: KeyCode, docs: &Docs, size: (usize, usize)) -> Outcome {
-        let g = geom(size, self.split);
+        let g = self.geom_of(size);
         self.msg.clear();
         match self.tree_or_body(code, docs, g) {
             Some(outcome) => outcome,
@@ -675,7 +703,7 @@ impl Changes {
 
     /// A left click at cell (`x`, `y`): a tab, or a row of the left column.
     pub fn click(&mut self, x: usize, y: usize, docs: &Docs, size: (usize, usize)) {
-        let g = geom(size, self.split);
+        let g = self.geom_of(size);
         self.msg.clear();
         if y == g.y + 1 {
             let mut at = g.ix + 1;
@@ -705,7 +733,7 @@ impl Changes {
 
     /// The wheel over the body scrolls it.
     pub fn wheel(&mut self, down: bool, x: usize, size: (usize, usize)) {
-        let g = geom(size, self.split);
+        let g = self.geom_of(size);
         if x < g.bx {
             return;
         }
@@ -795,7 +823,12 @@ impl Changes {
 
     /// Draw the viewer over the panes' area.
     pub fn draw(&self, g: &mut Grid, docs: &Docs, label: &str, now_ms: u64) {
-        let m = geom((g.cols, g.rows), self.split);
+        self.draw_focused(g, docs, label, now_ms, true);
+    }
+
+    /// Draw the viewer; as a pane, with its border lit while it has the keys.
+    pub fn draw_focused(&self, g: &mut Grid, docs: &Docs, label: &str, now_ms: u64, focused: bool) {
+        let m = self.geom_of((g.cols, g.rows));
         for y in m.y..m.y + m.h {
             for x in m.x..m.x + m.w {
                 g.cells[y * g.cols + x] = (' ', Style::default());
@@ -818,10 +851,21 @@ impl Changes {
         } else {
             ("en vivo", look::green())
         });
+        let (title, border) = if self.area.is_some() {
+            (
+                format!("diff · contra {against}"),
+                if focused { look::blue() } else { look::line() },
+            )
+        } else {
+            (
+                format!("cambios · {} vs {against}", clean(label)),
+                look::line(),
+            )
+        };
         g.boxed(
             (m.x, m.y, m.w, m.h),
-            &format!("cambios · {} vs {against}", clean(label)),
-            look::line(),
+            &title,
+            border,
             Style::fg(look::cyan()).bold(),
             live.map(|(t, c)| (format!("● {t}"), Style::fg(c).bold())),
         );

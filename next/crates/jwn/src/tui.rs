@@ -648,6 +648,9 @@ pub struct View {
     /// The list of pull requests to review, while it is open, and what it waits to ask (REQ-587).
     prs: Option<prs::Prs>,
     prs_asks: Vec<PrsAsk>,
+    /// The diff of a review, beside its agent (REQ-589), and whether it has the focus.
+    rv: Option<Changes>,
+    rv_focus: bool,
     /// The project screen, while it is open (REQ-520).
     project: Option<project::Project>,
     /// Repositories whose `.jw.toml` the worktree box and the project screen wait to hear of.
@@ -726,6 +729,8 @@ impl View {
             worktree: None,
             prs: None,
             prs_asks: Vec::new(),
+            rv: None,
+            rv_focus: false,
             project: None,
             project_asks: Vec::new(),
             worktree_asks: Vec::new(),
@@ -808,6 +813,72 @@ impl View {
 
     pub fn set_size(&mut self, cols: usize, rows: usize) {
         self.size = (cols, rows);
+        self.sync_review_diff();
+    }
+
+    /// The pull request the open workspace reviews, when it does.
+    fn review_pr(&self) -> Option<u64> {
+        self.shown()?.review.as_ref().map(|r| r.pr)
+    }
+
+    /// The columns the diff of a review takes at the right of its workspace: three fifths of the
+    /// area, and none when the area is too narrow to hold both (the diff is then the screen of `d`).
+    fn diff_w(&self) -> usize {
+        if self.review_pr().is_none() || self.mode != Mode::Workspaces {
+            return 0;
+        }
+        let w = self.size.0.saturating_sub(SIDEBAR + 1);
+        let agent = (w * 2 / 5).max(40);
+        if w < agent + 30 { 0 } else { w - agent }
+    }
+
+    /// Where the diff of a review is drawn.
+    fn diff_rect(&self) -> Rect {
+        let (cols, rows) = self.size;
+        let w = self.diff_w();
+        (cols.saturating_sub(w), 1, w, rows.saturating_sub(2))
+    }
+
+    /// The diff of a review exists while its workspace is the one shown, in the place it has, and
+    /// is let go when another is (its nodes stop being read).
+    fn sync_review_diff(&mut self) {
+        let id = self.shown().map(|d| d.head.id.clone());
+        match id.filter(|_| self.diff_w() > 0) {
+            Some(id) => {
+                self.tree_on = false;
+                self.tree_focus = false;
+                if self.rv.as_ref().is_none_or(|c| c.workspace() != id) {
+                    if let Some(old) = self.rv.take() {
+                        self.asks.extend(old.close());
+                    }
+                    self.rv = Some(Changes::open_general(&id));
+                    self.rv_focus = false;
+                }
+                let area = self.diff_rect();
+                let docs = Docs {
+                    diffs: &self.diffs,
+                    commits: &self.commit_lists,
+                };
+                if let Some(c) = self.rv.as_mut() {
+                    c.set_area(area);
+                    c.update(&docs, self.size, self.now_ms);
+                }
+            }
+            None => {
+                if let Some(old) = self.rv.take() {
+                    self.asks.extend(old.close());
+                }
+                self.rv_focus = false;
+            }
+        }
+    }
+
+    /// The viewer that is open: the screen of `d`, or the diff of a review.
+    fn viewer_mut(&mut self) -> Option<&mut Changes> {
+        match self.changes.as_mut() {
+            Some(c) => Some(c),
+            None => self.rv.as_mut(),
+        }
     }
 
     fn docs(&self) -> Docs<'_> {
@@ -837,7 +908,7 @@ impl View {
     /// What the diff viewer wants the daemon to do, for the loop to send.
     pub fn take_asks(&mut self) -> Vec<Ask> {
         let mut asks = std::mem::take(&mut self.asks);
-        if let Some(c) = self.changes.as_mut() {
+        if let Some(c) = self.viewer_mut() {
             asks.extend(c.take_asks());
         }
         asks
@@ -845,21 +916,45 @@ impl View {
 
     /// The daemon made the node the viewer asked for.
     pub fn changes_made(&mut self, src: Src, node: &str) {
-        if let Some(c) = self.changes.as_mut() {
+        if let Some(c) = self.viewer_mut() {
             c.made(src, node);
         }
     }
 
     pub fn changes_failed(&mut self, src: Src, why: &str) {
-        if let Some(c) = self.changes.as_mut() {
+        if let Some(c) = self.viewer_mut() {
             c.failed(src, why);
         }
     }
 
     pub fn changes_flash(&mut self, text: &str) {
-        if let Some(c) = self.changes.as_mut() {
+        if let Some(c) = self.viewer_mut() {
             c.flash(text);
         }
+    }
+
+    /// A key while the diff of a review has the keyboard: it is the viewer's; the leader and `esc`
+    /// give the keyboard back to the client's commands.
+    fn rv_key(&mut self, ev: KeyEvent) -> After {
+        if is_leader(&ev) || ev.modifiers.contains(KeyModifiers::CONTROL) {
+            if is_leader(&ev) {
+                self.typing = false;
+            }
+            return After::Continue;
+        }
+        let docs = Docs {
+            diffs: &self.diffs,
+            commits: &self.commit_lists,
+        };
+        let size = self.size;
+        let Some(c) = self.rv.as_mut() else {
+            return After::Continue;
+        };
+        if c.press(ev.code, &docs, size) == Outcome::Close {
+            self.typing = false;
+        }
+        self.sync_review_diff();
+        After::Continue
     }
 
     /// A key while the diff is open: it is the viewer's, never a pane's.
@@ -959,6 +1054,7 @@ impl View {
         self.note_painted();
         self.note_left_alt();
         self.update_changes();
+        self.sync_review_diff();
         self.advance_manage();
         self.follow_goto();
         self.clamp();
@@ -1165,6 +1261,7 @@ impl View {
         }
         self.opened = Some(ws.to_owned());
         self.typing = false;
+        self.rv_focus = false;
         self.blk = None;
         self.mark_seen(ws);
         let pane = self
@@ -1184,7 +1281,7 @@ impl View {
 
     /// Where the person is.
     fn level(&self) -> Level {
-        if self.typing_pane().is_some() {
+        if self.typing_pane().is_some() || self.rv_typing() {
             Level::Terminal
         } else if self.opened.is_some() && self.opened == self.selected_id() {
             Level::Panels
@@ -1291,6 +1388,19 @@ impl View {
 
     /// Focus the panel on this side of the focused one, when there is one.
     fn focus_toward(&mut self, side: split::Side) {
+        // The diff of a review is the panel at the right of its agent.
+        if self.rv.is_some() {
+            if self.rv_focus {
+                if side == split::Side::Left {
+                    self.rv_focus = false;
+                }
+                return;
+            }
+            if side == split::Side::Right && self.neighbour_toward(side).is_none() {
+                self.rv_focus = true;
+                return;
+            }
+        }
         if self.shown().is_some_and(|d| d.layout.is_none()) {
             self.go_panel(matches!(side, split::Side::Right | split::Side::Down));
         } else if let Some(to) = self.neighbour_toward(side) {
@@ -1311,6 +1421,16 @@ impl View {
             return;
         };
         let panes = self.workspaces.get(&id).map_or(0, |d| d.panes.len());
+        if self.rv.is_some() {
+            if self.rv_focus {
+                self.rv_focus = self.rv_focus && forward;
+                return;
+            }
+            if forward && self.focus + 1 >= panes {
+                self.rv_focus = true;
+                return;
+            }
+        }
         if panes == 0 {
             return;
         }
@@ -1329,9 +1449,18 @@ impl View {
         Some((conversation::accent_rgb(conv.accent), conv.ask.is_some()))
     }
 
+    /// The keyboard is in the diff of a review.
+    fn rv_typing(&self) -> bool {
+        self.typing && self.rv_focus && self.rv.is_some() && self.mode == Mode::Workspaces
+    }
+
     /// The pane the keyboard goes to: the focused pane of the opened workspace, while typing.
     fn typing_pane(&self) -> Option<String> {
-        if !self.typing || self.mode != Mode::Workspaces || self.changes.is_some() {
+        if !self.typing
+            || self.mode != Mode::Workspaces
+            || self.changes.is_some()
+            || self.rv_focus && self.rv.is_some()
+        {
             return None;
         }
         let ws = self.workspaces.get(self.opened.as_deref()?)?;
@@ -2107,6 +2236,9 @@ impl View {
             self.changes_key(ev);
             return After::Continue;
         }
+        if self.rv_typing() {
+            return self.rv_key(ev);
+        }
         if self.tree_focus && self.tree_on {
             return self.tree_key(ev);
         }
@@ -2347,7 +2479,7 @@ impl View {
                         .as_ref()
                         .and_then(|id| self.workspaces.get(id))
                         .map_or(0, |d| d.panes.len());
-                    self.typing = panes > 0;
+                    self.typing = panes > 0 || self.rv.is_some();
                 }
                 Level::Terminal => {}
             },
@@ -2365,6 +2497,12 @@ impl View {
                 Level::Panels => return self.ask_close_pane(),
                 Level::Terminal => {}
             },
+            // In a review the diff is already beside the agent: `d` gives it the keys.
+            (Mode::Workspaces, Key::Changes) if self.rv.is_some() => {
+                self.opened = self.selected_id();
+                self.rv_focus = true;
+                self.typing = true;
+            }
             (Mode::Workspaces, Key::Changes) => {
                 if let Some(id) = self.selected_id() {
                     self.typing = false;
@@ -2698,6 +2836,24 @@ impl View {
         {
             return After::Continue;
         }
+        if self.rv.is_some() && self.changes.is_none() {
+            if x >= self.diff_rect().0 {
+                self.opened = self.selected_id();
+                self.rv_focus = true;
+                self.typing = true;
+                let docs = Docs {
+                    diffs: &self.diffs,
+                    commits: &self.commit_lists,
+                };
+                let size = self.size;
+                if let Some(c) = self.rv.as_mut() {
+                    c.click(x, y, &docs, size);
+                }
+                self.sync_review_diff();
+                return After::Continue;
+            }
+            self.rv_focus = false;
+        }
         if self.changes.is_none() {
             if self.tree_on && x + TREE_W >= cols {
                 return self.tree_click(y, rows);
@@ -2794,6 +2950,13 @@ impl View {
         if self.mode == Mode::Avisos {
             return self.press(if down { Key::Down } else { Key::Up });
         }
+        if self.rv.is_some() && x >= self.diff_rect().0 {
+            let size = self.size;
+            if let Some(c) = self.rv.as_mut() {
+                c.wheel(down, x, size);
+            }
+            return After::Continue;
+        }
         if self.tree_on && x + TREE_W >= cols {
             let room = Self::tree_room(rows);
             if let Some((_, t)) = self.tree_mut() {
@@ -2862,6 +3025,10 @@ impl View {
 
     /// `t`: show the file tree and give it the keys; with it shown, the keys; with them, close it.
     fn toggle_tree(&mut self) {
+        if self.rv.is_some() {
+            self.flash = "la review ya tiene su diff al lado".into();
+            return;
+        }
         if self.tree_on && self.tree_focus {
             self.tree_on = false;
             self.tree_focus = false;
@@ -3721,6 +3888,15 @@ impl View {
             if self.tree_on {
                 self.draw_tree(&mut g, cols, rows);
             }
+            if let Some(c) = &self.rv {
+                c.draw_focused(
+                    &mut g,
+                    &self.docs(),
+                    &self.label(c.workspace()),
+                    self.now_ms,
+                    self.rv_focus,
+                );
+            }
         }
 
         if let Some(c) = &self.changes {
@@ -3746,7 +3922,11 @@ impl View {
         }
         let level = self.level();
         let conv_focus = self.focused_conversation();
-        let diff_status = self.changes.as_ref().map(|c| c.status(&self.docs()));
+        let diff_status = self
+            .changes
+            .as_ref()
+            .or_else(|| self.rv.as_ref().filter(|_| self.rv_typing()))
+            .map(|c| c.status(&self.docs()));
         let viewer_hint = self.viewer.as_ref().map(viewer::Viewer::hint);
         let (chip, bg, hint) = match (&self.manage, &diff_status) {
             _ if viewer_hint.is_some() => (
@@ -5497,6 +5677,104 @@ mod tests {
             "the review is opened when it shows"
         );
         assert!(v.flash.contains("review lista"));
+    }
+
+    /// A view whose first workspace reviews pull request 142.
+    fn review_view() -> View {
+        let mut docs = fixture_docs();
+        for d in docs.iter_mut().filter(|d| d["type"] == "workspace") {
+            d["review"] = serde_json::json!({"pr": 142, "base": "main"});
+        }
+        let mut v = View::new("fixtures");
+        v.set_size(120, 30);
+        v.sync(docs.iter());
+        v
+    }
+
+    /// REQ-589: the workspace of a review is its agent and, beside it, the diff of the pull request
+    /// against its base, which has the keyboard when it is asked for (`d`, `l`, a click) and gives it
+    /// back to the commands with the leader.
+    #[test]
+    fn a_review_is_the_agent_and_the_diff_beside_it() {
+        let mut v = review_view();
+        assert!(v.rv.is_some(), "the diff is made with the workspace");
+        let asks = v.take_asks();
+        assert!(
+            asks.iter().any(|a| matches!(
+                a,
+                Ask::OpenDiff {
+                    scope: DiffScope::General,
+                    commit: None,
+                    ..
+                }
+            )),
+            "it asks for the pull request's changes, no more: {asks:?}"
+        );
+        assert!(
+            !asks.iter().any(|a| matches!(
+                a,
+                Ask::OpenDiff {
+                    scope: DiffScope::Uncommitted,
+                    ..
+                }
+            )),
+            "{asks:?}"
+        );
+        v.press(Key::Enter);
+        let t = v.plain(120, 30);
+        assert!(
+            t.contains("╭─ zsh") && t.contains("diff · contra"),
+            "both are drawn:\n{t}"
+        );
+        let diff_x = v.diff_rect().0;
+        assert!(diff_x > SIDEBAR + 30, "the agent keeps its share: {diff_x}");
+        // the keyboard moves between them with the keys of the panels: the diff is the panel at the
+        // right of the last one (the fixture's workspace has several)
+        assert!(!v.rv_focus);
+        for _ in 0..4 {
+            v.press(Key::Right);
+        }
+        assert!(v.rv_focus, "l goes to the diff");
+        v.press(Key::Left);
+        assert!(!v.rv_focus, "h comes back");
+        for _ in 0..4 {
+            v.press(Key::Next);
+        }
+        assert!(v.rv_focus, "tab after the last panel is the diff");
+        v.press(Key::Left);
+        assert!(!v.rv_focus);
+        // d gives the keys to the diff, and the leader gives them back
+        v.press(Key::Changes);
+        assert!(v.rv_focus && v.typing && v.rv_typing());
+        assert!(v.changes.is_none(), "no screen of its own opens");
+        v.press_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL));
+        assert!(!v.typing);
+        // a click in the diff takes the keys, one in the agent gives them back to it
+        let at = v.diff_rect();
+        v.click(at.0 + 5, at.1 + 4, 120, 30);
+        assert!(v.rv_focus && v.typing);
+        v.click(SIDEBAR + 6, 6, 120, 30);
+        assert!(!v.rv_focus);
+        // the tree is not here: the review has its diff
+        v.press_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL));
+        v.press(Key::Tree);
+        assert!(!v.tree_on && v.flash.contains("diff al lado"));
+    }
+
+    /// The diff is let go with its workspace, and a terminal too narrow for both has the screen of `d`.
+    #[test]
+    fn the_diff_of_a_review_goes_with_it_and_a_narrow_terminal_has_none() {
+        let mut v = review_view();
+        let _ = v.take_asks();
+        v.press(Key::Down);
+        v.sync(fixture_docs().iter());
+        v.set_size(120, 30);
+        let _ = v.take_asks();
+        v.set_size(70, 30);
+        assert_eq!(v.diff_w(), 0, "no room for both");
+        let mut w = review_view();
+        w.set_size(70, 30);
+        assert!(w.rv.is_none());
     }
 
     /// REQ-588: a workspace that reviews a pull request says which one, beside its marks.
