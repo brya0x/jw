@@ -1,0 +1,191 @@
+<title>jwn The diff beside the agent</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Terminal-first, the same character grid as the other terminal prototypes (pr-review.html). */
+:root{
+  --bg:#282c34; --panel:#21252b; --fg:#abb2bf; --dim:#5c6370; --line:#3e4451; --sel:#2c313a; --pick:#3b4a63;
+  --blue:#61afef; --green:#98c379; --yellow:#e5c07b; --red:#e06c75; --magenta:#c678dd; --cyan:#56b6c2;
+  --page:#16181d; --ink:#c3c9d4; --mut:#7d8594;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}}
+:root[data-theme="light"]{--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.55 'IBM Plex Sans',system-ui,sans-serif;padding:24px max(16px,env(safe-area-inset-right,0px)) 40px max(16px,env(safe-area-inset-left,0px))}
+.wrap{max-width:1300px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
+h1{font:600 20px/1.2 var(--mono);margin:0}
+p{margin:0;max-width:80ch;color:var(--mut)}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button{font:12px var(--mono);color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;min-height:32px;cursor:pointer}
+button:hover{border-color:var(--blue)}
+button[aria-pressed=true]{background:var(--blue);color:var(--panel);border-color:var(--blue);font-weight:700}
+:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto}
+.term pre{margin:0;font:13px/1.25 var(--mono);color:var(--fg);outline:none;width:max-content}
+.hint{font:12px var(--mono);color:var(--mut)}
+.decide{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px;color:var(--fg)}
+.decide h2{font:600 12px var(--mono);margin:0 0 8px;color:var(--mut)}
+.decide ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+.decide code{font:12px var(--mono)}
+.dim{color:var(--dim)}.blue{color:var(--blue)}.green{color:var(--green)}.yellow{color:var(--yellow)}.red{color:var(--red)}.mag{color:var(--magenta)}.cyan{color:var(--cyan)}.b{font-weight:700}
+.sel{background:var(--sel)}.pn{background:var(--panel)}.pick{background:var(--pick)}
+</style>
+
+<div class="wrap">
+  <div>
+    <h1>The diff beside the agent, in every workspace</h1>
+    <p>Click the terminal (or tab into it). <code>d</code> opens the diff at the right of the panels, not over them; <code>d</code> again closes it. Its keys are the diff's own (<code>j</code>/<code>k</code> change file, <code>1</code> <code>2</code> <code>3</code> the view: uncommitted, commits, general); pick lines with <code>V</code>, and <code>↵</code> writes where they are in the agent's field so you can ask about them. The buttons change what the screen shows.</p>
+  </div>
+  <div class="bar" aria-label="Simulate">
+    <button id="evReset" type="button">Reset</button>
+    <button id="evWrap" type="button" aria-pressed="true">wrap long lines (w)</button>
+    <button id="evZoom" type="button" aria-pressed="false">the diff fills the area (z)</button>
+  </div>
+  <div class="term"><pre id="scr" tabindex="0" aria-label="Terminal client. d opens the diff, v picks lines."></pre></div>
+  <div class="hint" id="keys"></div>
+
+  <div class="decide">
+    <h2>To approve</h2>
+    <ol>
+      <li><b>The diff is a panel, not a screen.</b> <code>d</code> in any workspace opens it at the right of the panels, as it already is in the workspace of a review (<code>|agent|diff|</code>), on «Sin commitear» (in a review, on General: the pull request). <code>d</code> again closes it and the panels get their width back. The keys to move between the agent and the diff are the panels': <code>l</code> / <code>h</code> and <code>tab</code>. <code>z</code> makes the diff fill the area for a moment (what <code>d</code> is today), <code>z</code> again puts it back.</li>
+      <li><b>Long lines wrap</b>, as in VS Code and nvim: the rest of the line goes on the next row, indented under the code, with <code>↪</code> in the gutter where the line number would be. <code>w</code> turns it off and a long line is cut with <code>…</code> as it is now. Wrapping is on by default.</li>
+      <li><b>Picking lines.</b> <code>V</code> (capital: <code>v</code> keeps marking the file as seen) starts a selection at the top of the file; then <code>j</code>/<code>k</code> move by line and extend it (the mouse dragging over the lines does too); <code>esc</code> cancels. It only picks lines of one file. <code>↵</code> with lines picked writes <code>@src/limit.rs#L10-14</code> in the field of the agent (the form Claude Code understands, the new side of the file; a removed line is <code>#L12</code> of the old side with <code>(antes)</code>) and gives the agent the keys. Nothing is sent: you add what you ask and press <code>↵</code> as always. Picking nothing and pressing <code>↵</code> opens the file at that line, as today.</li>
+      <li><b>The agent is the workspace's own conversation</b> (the focused <code>claude</code> panel). In a review it is the agent that only answers about the diff. If the workspace has no conversation, <code>↵</code> copies the reference instead (OSC 52) and says so.</li>
+      <li><b>Not here:</b> the phone's diff (its own part); the viewer of any file with the same picking (the next part reuses these keys); the diff of a commit or of the uncommitted changes of another workspace beside this one.</li>
+    </ol>
+  </div>
+</div>
+
+<script>
+(function(){
+const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const COLS = 118, ROWS = 28, SB = 26;
+const FILES = [
+  {p:'src/limit.rs', st:'M', a:12, d:3, lines:[
+    ['h','@@ -40,6 +40,15 @@ impl Bucket'],
+    ['c',40,40,'    pub fn take(&mut self, now: Instant) -> bool {'],
+    ['d',41,0,'        self.tokens > 0'],
+    ['a',0,41,'        self.refill(now);'],
+    ['a',0,42,'        if self.tokens >= 1.0 { self.tokens -= 1.0; true } else { false } // the token is taken here so that two threads that arrive together cannot both pass'],
+    ['c',42,43,'    }'],
+    ['h','@@ -88,3 +97,8 @@ fn retry_after'],
+    ['a',0,97,'    // seconds until the bucket holds one token again, rounded up so that a client that waits that long is let in'],
+    ['a',0,98,'    let missing = 1.0 - self.tokens;'],
+    ['a',0,99,'    (missing / self.rate).ceil() as u64'],
+  ]},
+  {p:'src/server.rs', st:'M', a:5, d:1, lines:[
+    ['h','@@ -41,7 +41,11 @@ async fn handle'],
+    ['c',41,41,'    let key = api_key(&req)?;'],
+    ['d',42,0,'    let resp = route(req).await;'],
+    ['a',0,42,'    if !limits.get(&key).take(Instant::now()) { return Ok(Response::too_many(retry_after(&key))); }'],
+    ['a',0,43,'    let resp = route(req).await;'],
+  ]},
+];
+let S, g;
+const reset = () => { S = {diff:false, zoom:false, wrap:true, focus:'agent', typing:false, fi:0, cur:1, anchor:null, field:'', note:''}; };
+reset();
+const wrapBtn = document.getElementById('evWrap'), zoomBtn = document.getElementById('evZoom');
+const pad = (s, n) => { s = String(s); return s.length > n ? s.slice(0, n - 1) + '…' : s + ' '.repeat(n - s.length); };
+function rowsOf(file, width){
+  // the screen rows of each line, and which line each row belongs to
+  const out = [];
+  file.lines.forEach((l, i) => {
+    if (l[0] === 'h'){ out.push({i, t:l[1], k:'h'}); return; }
+    const code = l[3], room = Math.max(10, width - 12);
+    if (!S.wrap || code.length <= room){ out.push({i, no:(l[0]==='d'?l[1]:l[2]), k:l[0], t:code.length > room ? code.slice(0, room - 1) + '…' : code}); return; }
+    let rest = code, first = true;
+    while (rest.length){ out.push({i, no:first ? (l[0]==='d'?l[1]:l[2]) : null, k:l[0], t:rest.slice(0, room), cont:!first}); rest = rest.slice(room); first = false; }
+  });
+  return out;
+}
+function draw(){
+  const grid = Array.from({length: ROWS}, () => Array.from({length: COLS}, () => [' ', '']));
+  const put = (x, y, s, cls) => { [...s].forEach((c, i) => { if (y >= 0 && y < ROWS && x + i < COLS && x + i >= 0) grid[y][x + i] = [c, cls || '']; }); };
+  const fill = (x, y, w, h, cls) => { for (let r = y; r < y + h; r++) for (let c = x; c < x + w; c++) if (r < ROWS && c < COLS) grid[r][c] = [' ', cls]; };
+  put(1, 0, 'api', 'dim b');
+  [['api','folder'],['feat/limit','wt']].forEach(([n,k], i) => { const y = 2 + i; if (i === 1) fill(0, y, SB - 1, 1, 'sel'); put(0, y, String(i+1), 'dim'); put(k==='wt'?6:2, y, '●', 'green'); put(k==='wt'?8:4, y, n, i===1?'blue b':''); });
+  for (let y = 0; y < ROWS - 1; y++) put(SB - 1, y, '│', 'dim');
+  put(SB + 2, 0, 'api/', 'dim'); put(SB + 6, 0, 'feat/limit', 'b');
+  const top = 1, hh = ROWS - 3;
+  const box = (x, w, title, on) => { for (let c = x; c < x + w; c++){ put(c, top, '─', on ? 'blue' : 'dim'); put(c, top + hh - 1, '─', on ? 'blue' : 'dim'); } for (let r = top; r < top + hh; r++){ put(x, r, '│', on ? 'blue' : 'dim'); put(x + w - 1, r, '│', on ? 'blue' : 'dim'); } put(x + 2, top, ' ' + title + ' ', on ? 'blue b' : 'dim b'); };
+  const ax = SB, total = COLS - SB - 1;
+  const dw = S.diff ? (S.zoom ? total : Math.floor(total * 0.58)) : 0, aw = total - dw;
+  if (aw > 0){
+    box(ax, aw, 'claude', S.focus === 'agent');
+    put(ax + 2, top + 2, '● Read(src/limit.rs)', ''); put(ax + 4, top + 3, '⎿ 188 líneas', 'dim');
+    put(ax + 2, top + 5, 'Listo: añadí el bucket de tokens.', '');
+    fill(ax + 1, top + hh - 4, aw - 2, 3, 'pn'); put(ax + 2, top + hh - 3, '❯ ', 'green b');
+    const text = S.field || 'escribe un mensaje';
+    put(ax + 4, top + hh - 3, text.slice(0, aw - 8), S.field ? '' : 'dim');
+    if (S.focus === 'agent' && S.typing && !S.zoom) put(ax + 4 + S.field.length, top + hh - 3, '▏', 'blue');
+    put(ax + 2, top + hh - 2, 'manual · opus 5.5', 'dim');
+  }
+  if (S.diff){
+    const dx = ax + aw, f = FILES[S.fi];
+    box(dx, dw, 'diff · sin commitear', S.focus === 'diff');
+    FILES.forEach((ff, i) => { const y = top + 2 + i, on = i === S.fi; if (on) fill(dx + 1, y, dw - 2, 1, 'sel'); put(dx + 2, y, ff.st + ' ' + pad(ff.p, 22), on && S.focus==='diff' ? 'blue b' : ''); put(dx + 28, y, '+' + ff.a, 'green'); put(dx + 33, y, '−' + ff.d, 'red'); });
+    const by = top + 3 + FILES.length;
+    for (let c = dx + 1; c < dx + dw - 1; c++) put(c, by - 1, '─', 'dim');
+    const rows = rowsOf(f, dw - 4);
+    const lo = S.anchor === null ? S.cur : Math.min(S.anchor, S.cur), hi = S.anchor === null ? S.cur : Math.max(S.anchor, S.cur);
+    let y = by;
+    for (const r of rows){
+      if (y >= top + hh - 1) break;
+      const picked = S.anchor !== null && r.i >= lo && r.i <= hi && r.k !== 'h';
+      const here = r.i === S.cur && S.focus === 'diff';
+      if (picked) fill(dx + 1, y, dw - 2, 1, 'pick'); else if (here) fill(dx + 1, y, dw - 2, 1, 'sel');
+      if (r.k === 'h') put(dx + 2, y, r.t.slice(0, dw - 4), 'cyan');
+      else {
+        put(dx + 2, y, r.cont ? '  ↪ ' : pad(r.no, 4), 'dim');
+        put(dx + 7, y, r.k === 'a' ? '+' : r.k === 'd' ? '−' : ' ', r.k === 'a' ? 'green' : r.k === 'd' ? 'red' : 'dim');
+        put(dx + 9, y, r.t, r.k === 'a' ? 'green' : r.k === 'd' ? 'red' : '');
+      }
+      y++;
+    }
+    put(dx + 2, top + hh, S.anchor !== null ? 'j k extender · ↵ escribe la referencia · esc cancela' : 'j k archivo · 1 2 3 vista · V elegir líneas · w ajuste · z ancho · d cierra', 'dim');
+  }
+  put(1, ROWS - 1, S.note, S.note ? 'yellow' : 'dim');
+  document.getElementById('scr').innerHTML = grid.map(r => { let o = '', c = null, b = '';
+    r.forEach(([ch, cls]) => { if (cls !== c){ if (b) o += c ? `<span class="${c}">${esc(b)}</span>` : esc(b); b = ''; c = cls; } b += ch; });
+    return o + (b ? (c ? `<span class="${c}">${esc(b)}</span>` : esc(b)) : ''); }).join('\n');
+  wrapBtn.setAttribute('aria-pressed', S.wrap); zoomBtn.setAttribute('aria-pressed', S.zoom);
+  document.getElementById('keys').textContent = S.diff ? (S.focus === 'diff' ? 'diff: j k file · 1 2 3 view · V pick lines · ↵ reference to the agent · w wrap · z width · tab agent · d close' : 'agent: tab/l to the diff · d close the diff') : 'd opens the diff beside the agent';
+}
+const refText = () => { const f = FILES[S.fi], lo = Math.min(S.anchor ?? S.cur, S.cur), hi = Math.max(S.anchor ?? S.cur, S.cur); const ls = f.lines.slice(lo, hi + 1).filter(l => l[0] !== 'h'); const nums = ls.map(l => l[0] === 'd' ? l[1] : l[2]); const a = Math.min(...nums), b = Math.max(...nums); return '@' + f.p + '#L' + (a === b ? a : a + '-' + b) + ' '; };
+document.getElementById('scr').addEventListener('keydown', e => {
+  S.note = '';
+  const f = FILES[S.fi], n = f.lines.length;
+  if (S.focus === 'agent' && S.typing && S.diff === false || (S.focus === 'agent' && S.typing)){
+    if (e.key === 'Escape') S.typing = false; else if (e.key === 'Backspace') S.field = S.field.slice(0, -1); else if (e.key.length === 1) S.field += e.key; else return;
+    draw(); e.preventDefault(); return;
+  }
+  if (e.key === 'd'){ S.diff = !S.diff; if (!S.diff){ S.focus = 'agent'; S.zoom = false; S.anchor = null; } else S.focus = 'diff'; }
+  else if (e.key === 'z' && S.diff) S.zoom = !S.zoom;
+  else if (e.key === 'w') S.wrap = !S.wrap;
+  else if (e.key === 'Tab' || e.key === 'l' && S.focus === 'agent' && S.diff) { if (S.diff) S.focus = S.focus === 'agent' ? 'diff' : 'agent'; }
+  else if (e.key === 'h' && S.focus === 'diff') S.focus = 'agent';
+  else if (e.key === 'Enter' && S.focus === 'agent') S.typing = true;
+  else if (S.focus === 'diff'){
+    // as in the diff today: j/k change file, 1 2 3 the view; V starts picking lines, and then j/k move by line
+    if (S.anchor !== null && e.key === 'j'){ do { S.cur = Math.min(S.cur + 1, n - 1); } while (f.lines[S.cur][0] === 'h' && S.cur < n - 1); }
+    else if (S.anchor !== null && e.key === 'k'){ do { S.cur = Math.max(S.cur - 1, 1); } while (f.lines[S.cur][0] === 'h' && S.cur > 1); }
+    else if (e.key === 'j' && S.fi < FILES.length - 1){ S.fi++; S.cur = 1; }
+    else if (e.key === 'k' && S.fi > 0){ S.fi--; S.cur = 1; }
+    else if (e.key === 'V'){ S.cur = 1; S.anchor = S.anchor === null ? 1 : null; }
+    else if (e.key === 'v') S.note = 'v marca el archivo como visto, como hoy';
+    else if (e.key === 'Escape') S.anchor = null;
+    else if (e.key === '1' || e.key === '2' || e.key === '3') S.note = 'las vistas: 1 sin commitear · 2 commits · 3 general';
+    else if (e.key === 'Enter'){
+      if (S.anchor !== null){ S.field = (S.field + refText()); S.anchor = null; S.focus = 'agent'; S.typing = true; S.note = 'escrito en el campo del agente; nada se mandó'; }
+      else S.note = 'abre ' + f.p + ' en el editor en esa línea';
+    } else return;
+  } else return;
+  draw(); e.preventDefault();
+});
+document.getElementById('evReset').onclick = () => { reset(); draw(); };
+wrapBtn.onclick = () => { S.wrap = !S.wrap; draw(); };
+zoomBtn.onclick = () => { if (S.diff) S.zoom = !S.zoom; draw(); };
+draw();
+})();
+</script>
