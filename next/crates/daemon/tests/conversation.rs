@@ -383,6 +383,59 @@ fn a_command_that_needs_claudes_screen_is_not_sent_and_says_where_to_go() {
     r.stop();
 }
 
+/// REQ-578: a new conversation starts in the mode the person last worked in, and a typed
+/// `--permission-mode` still wins.
+#[test]
+fn a_new_conversation_starts_in_the_mode_the_last_one_was_left_in() {
+    let mut r = rig();
+    let (node, _) = r.open();
+    assert_eq!(r.until(&node, "the first node", |_| true)["mode"], "manual");
+    r.send(&node, "/mode acceptEdits");
+    r.until(&node, "accept edits", |v| v["mode"] == "acceptEdits");
+    let file = r.sb.dir.join("state").join("last-mode");
+    wait_for("the mode to be remembered", || {
+        std::fs::read_to_string(&file).is_ok_and(|t| t == "acceptEdits")
+    });
+    let pane = r
+        .cmd(Cmd::NewPane {
+            workspace: r.ws.clone(),
+            program: None,
+            beside: None,
+            dir: None,
+        })
+        .unwrap()
+        .unwrap()["pane"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    r.pane = pane;
+    let (second, _) = r.open();
+    assert_eq!(
+        r.until(&second, "the new conversation", |_| true)["mode"],
+        "acceptEdits"
+    );
+    let pane = r
+        .cmd(Cmd::NewPane {
+            workspace: r.ws.clone(),
+            program: None,
+            beside: None,
+            dir: None,
+        })
+        .unwrap()
+        .unwrap()["pane"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    r.pane = pane;
+    let (third, _) = r.open_with(None, vec!["--permission-mode", "plan"], None);
+    assert_eq!(
+        r.until(&third, "a typed mode", |_| true)["mode"],
+        "plan",
+        "what is typed wins over what was left"
+    );
+    r.stop();
+}
+
 #[test]
 fn plan_enters_plan_mode_and_sends_what_follows_as_the_first_message_of_the_plan() {
     let mut r = rig();

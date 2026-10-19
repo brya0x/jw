@@ -643,10 +643,14 @@ pub fn open_conversation(
             };
             (st, true)
         }
-        None => (
-            State::new(parsed.session_id.clone().unwrap_or_else(new_id)),
-            false,
-        ),
+        None => {
+            let mut st = State::new(parsed.session_id.clone().unwrap_or_else(new_id));
+            // A new conversation starts in the mode the person last worked in (REQ-578).
+            if let Some(mode) = dir.as_deref().and_then(last_mode) {
+                st.mode = mode;
+            }
+            (st, false)
+        }
     };
     if let Some(n) = parsed.name.clone().filter(|n| !n.trim().is_empty()) {
         st.name = n;
@@ -1198,20 +1202,52 @@ fn load(dir: &Path, pane: &str) -> Option<Saved> {
 /// Where to look for a conversation's transcript: its folder, its environment and its session.
 type Probe = (PathBuf, Option<BTreeMap<String, String>>, String);
 
+/// The file that says the mode a new conversation starts in, beside the folder of the saved
+/// ones (a file inside it would be taken for a conversation).
+fn last_mode_file(dir: &Path) -> Option<PathBuf> {
+    Some(dir.parent()?.join("last-mode"))
+}
+
+fn last_mode(dir: &Path) -> Option<Mode> {
+    let text = std::fs::read_to_string(last_mode_file(dir)?).ok()?;
+    Mode::from_flag(text.trim())
+}
+
+fn write_last_mode(dir: &Path, mode: Mode) {
+    let Some(file) = last_mode_file(dir) else {
+        return;
+    };
+    if last_mode(dir) != Some(mode) {
+        let _ = std::fs::write(file, mode.flag());
+    }
+}
+
+/// What is written of a conversation: its file, what it saves and where its transcript is.
+type Due = (PathBuf, Saved, Option<Probe>);
+
 /// The conversations that changed and are due are written without the lock: only what is
 /// to be written is copied under it.
 pub fn save_due(shared: &Shared, force: bool) {
-    let due: Vec<(PathBuf, Saved, Option<Probe>)> = {
+    let (due, chosen): (Vec<Due>, Option<(PathBuf, Mode)>) = {
         let mut core = shared.lock();
         let Some(dir) = core.conv_dir.clone() else {
             return;
         };
         let now = now_ms();
-        core.convs
+        let is_due =
+            |c: &Conv| c.dirty && (force || c.last_saved.is_none_or(|t| t.elapsed() >= SAVE_EVERY));
+        // The mode of a conversation that has an engine is the person's choice (or Claude's,
+        // when a plan is approved); one that only follows a transcript says nothing of it.
+        let chosen = core
+            .convs
+            .values()
+            .filter(|c| c.engine.is_some() && is_due(c))
+            .map(|c| (dir.clone(), c.st.mode))
+            .last();
+        let due = core
+            .convs
             .iter_mut()
-            .filter(|(_, c)| {
-                c.dirty && (force || c.last_saved.is_none_or(|t| t.elapsed() >= SAVE_EVERY))
-            })
+            .filter(|(_, c)| is_due(c))
             .map(|(pane, c)| {
                 c.dirty = false;
                 c.last_saved = Some(Instant::now());
@@ -1223,8 +1259,12 @@ pub fn save_due(shared: &Shared, force: bool) {
                         .then(|| (c.cwd.clone(), c.env.clone(), c.st.session.clone()));
                 (file_of(&dir, pane), saved, probe)
             })
-            .collect()
+            .collect();
+        (due, chosen)
     };
+    if let Some((dir, mode)) = chosen {
+        write_last_mode(&dir, mode);
+    }
     for (path, mut saved, probe) in due {
         // The chat is not copied when the engine's transcript is there to read it from (REQ-544).
         match probe {
