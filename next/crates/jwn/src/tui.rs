@@ -39,6 +39,7 @@ mod panels;
 mod phone;
 mod programs;
 mod project;
+mod prs;
 mod select;
 mod settings;
 mod shell;
@@ -335,6 +336,8 @@ pub enum Key {
     NewPane,
     /// The menu of programs a new panel can start (`N`).
     NewProgram,
+    /// The open pull requests of the project, to review one (`R`).
+    Review,
     /// Open the diff of the highlighted workspace.
     Changes,
     /// Close what the level is about: the highlighted workspace, or the focused panel.
@@ -404,6 +407,18 @@ pub enum FileAsk {
         workspace: String,
         node: String,
     },
+}
+
+/// What the list of pull requests asks the daemon: its content, or the review of one.
+pub enum PrsAsk {
+    List { workspace: String, requested: bool },
+    Review { workspace: String, pr: u64 },
+}
+
+/// The daemon's answer to a `PrsAsk`.
+pub struct PrsReply {
+    ask: PrsAsk,
+    reply: Reply,
 }
 
 /// The daemon's answer to a `FileAsk`.
@@ -630,6 +645,9 @@ pub struct View {
     /// The folder browser and the worktree box, while one is open.
     picker: Option<open::Picker>,
     worktree: Option<open::Worktree>,
+    /// The list of pull requests to review, while it is open, and what it waits to ask (REQ-587).
+    prs: Option<prs::Prs>,
+    prs_asks: Vec<PrsAsk>,
     /// The project screen, while it is open (REQ-520).
     project: Option<project::Project>,
     /// Repositories whose `.jw.toml` the worktree box and the project screen wait to hear of.
@@ -706,6 +724,8 @@ impl View {
             launcher: None,
             picker: None,
             worktree: None,
+            prs: None,
+            prs_asks: Vec::new(),
             project: None,
             project_asks: Vec::new(),
             worktree_asks: Vec::new(),
@@ -1388,6 +1408,95 @@ impl View {
         self.picker = Some(open::Picker::new(dir));
     }
 
+    /// `R`: the open pull requests of the project the person is in.
+    fn open_prs(&mut self) {
+        let Some(id) = self.selected_id() else {
+            return;
+        };
+        self.typing = false;
+        self.prs = Some(prs::Prs::new(id.clone()));
+        self.prs_asks.push(PrsAsk::List {
+            workspace: id,
+            requested: false,
+        });
+    }
+
+    fn prs_key(&mut self, ev: &KeyEvent) -> After {
+        let Some(p) = self.prs.as_mut() else {
+            return After::Continue;
+        };
+        let workspace = p.workspace.clone();
+        match p.press(ev) {
+            prs::Act::Nothing => {}
+            prs::Act::Close => self.prs = None,
+            prs::Act::Reload { requested } => {
+                p.loading();
+                self.prs_asks.push(PrsAsk::List {
+                    workspace,
+                    requested,
+                });
+            }
+            prs::Act::Review(pr) => {
+                p.making(pr, "trayendo la rama y haciendo el worktree…");
+                self.prs_asks.push(PrsAsk::Review { workspace, pr });
+            }
+            prs::Act::Browse(url) => {
+                self.flash = match open_url(&url) {
+                    Ok(()) => format!("abriendo {url} en el navegador"),
+                    Err(why) => format!("no se pudo abrir el navegador: {why}"),
+                };
+            }
+        }
+        After::Continue
+    }
+
+    /// What the list of pull requests waits to ask, once.
+    pub fn take_prs_asks(&mut self) -> Vec<PrsAsk> {
+        std::mem::take(&mut self.prs_asks)
+    }
+
+    /// The daemon's answer to the list or to the review: the list shows the pull requests, or is
+    /// closed and the status bar says why `gh` could not; a review that was made is opened.
+    pub fn prs_replied(&mut self, answer: PrsReply) {
+        match (answer.ask, reply_value(answer.reply)) {
+            (PrsAsk::List { workspace, .. }, reply) => {
+                let Some(p) = self.prs.as_mut().filter(|p| p.workspace == workspace) else {
+                    return;
+                };
+                match reply.and_then(|v| {
+                    serde_json::from_value::<contract::PrList>(v).map_err(|e| e.to_string())
+                }) {
+                    Ok(list) => p.set_list(Ok(list.prs)),
+                    Err(why) => {
+                        self.prs = None;
+                        self.flash = format!("no se pudo listar los PR: {why}");
+                    }
+                }
+            }
+            (PrsAsk::Review { workspace, .. }, Ok(made)) => {
+                if self.prs.as_ref().is_some_and(|p| p.workspace == workspace) {
+                    self.prs = None;
+                }
+                if let Some(id) = made["workspace"].as_str() {
+                    self.goto(id);
+                }
+                self.flash = if made["dirty"].as_bool() == Some(true) {
+                    "esa review tiene cambios tuyos: se dejó como estaba".into()
+                } else if made["existed"].as_bool() == Some(true) {
+                    "la review ya existía: traje la última versión del PR".into()
+                } else {
+                    "review lista: el agente espera tus preguntas".into()
+                };
+            }
+            (PrsAsk::Review { .. }, Err(why)) => {
+                if let Some(p) = self.prs.as_mut() {
+                    p.stop_making();
+                }
+                self.flash = format!("no se hizo nada: {why}");
+            }
+        }
+    }
+
     /// `w`: the box of a worktree of the project the person is in.
     fn open_worktree_box(&mut self) {
         let Some((name, project, kind, branch)) = self.project_of_selected() else {
@@ -1973,6 +2082,9 @@ impl View {
         if self.viewer.is_some() {
             return self.viewer_key(ev);
         }
+        if self.prs.is_some() {
+            return self.prs_key(&ev);
+        }
         if self.picker.is_some() {
             return self.picker_key(ev);
         }
@@ -2247,6 +2359,7 @@ impl View {
                 self.open_worktree_box()
             }
             (Mode::Workspaces, Key::Project) if level != Level::Terminal => self.open_project_box(),
+            (Mode::Workspaces, Key::Review) if level != Level::Terminal => self.open_prs(),
             (Mode::Workspaces, Key::Close) => match level {
                 Level::Workspaces => self.ask_close_workspace(),
                 Level::Panels => return self.ask_close_pane(),
@@ -3515,7 +3628,18 @@ impl View {
                     dim
                 },
             );
-            g.put_over(text, y, &clip(&name, SIDEBAR - text - 6), name_style);
+            // A review says which pull request it is, beside the marks (REQ-588).
+            let tag = w.review.as_ref().map(|r| format!("⎇#{}", r.pr));
+            let tag_w = tag.as_ref().map_or(0, |t| t.chars().count() + 1);
+            g.put_over(
+                text,
+                y,
+                &clip(&name, (SIDEBAR - text - 6).saturating_sub(tag_w)),
+                name_style,
+            );
+            if let Some(t) = &tag {
+                g.put_over(SIDEBAR - 6 - tag_w + 1, y, t, Style::fg(look::cyan()));
+            }
             if let Some(a) = un.first() {
                 let (glyph, colour) = mark(a);
                 g.put_over(SIDEBAR - 5, y, glyph, Style::fg(colour).bold());
@@ -3761,6 +3885,9 @@ impl View {
         }
         if let Some(t) = &self.worktree {
             open::draw_worktree(&mut g, (px, 1, pw, rows.saturating_sub(2)), t);
+        }
+        if let Some(p) = &self.prs {
+            p.draw(&mut g, (px, 1, pw, rows.saturating_sub(2)), self.now_ms);
         }
         if let Some(p) = &self.project {
             project::draw(&mut g, (px, 1, pw, rows.saturating_sub(2)), p);
@@ -4108,6 +4235,7 @@ const WORKSPACE_KEYS: &[(&str, &str)] = &[
     ("o", "abrir una carpeta"),
     ("t", "archivos del workspace"),
     ("w", "worktrees del proyecto: nuevo o los que ya existen"),
+    ("R", "revisar un pull request del proyecto"),
     ("p", "la configuración del proyecto"),
     ("s", "subir el worktree a origin"),
     ("x", "cerrar el workspace (y quitar su worktree)"),
@@ -4388,6 +4516,7 @@ fn key_of(code: KeyCode) -> Option<Key> {
         KeyCode::Char(',') => Key::Settings,
         KeyCode::Char('m') => Key::Phone,
         KeyCode::Char('w') => Key::Worktree,
+        KeyCode::Char('R') => Key::Review,
         KeyCode::Char('p') => Key::Project,
         KeyCode::Char('s') => Key::Sync,
         KeyCode::Char('c') => Key::CopyCmd,
@@ -4486,6 +4615,57 @@ fn spawn_files(ask: FileAsk, tx: std::sync::mpsc::Sender<FilesReply>) {
             .and_then(|mut c| c.cmd_within(cmd, FILES_WAIT));
         let _ = tx.send(FilesReply { ask, reply });
     });
+}
+
+/// How long the list of pull requests is waited for, and the making of a review: `gh` and a fetch
+/// take what the network takes.
+const PRS_WAIT: Duration = Duration::from_secs(60);
+const REVIEW_WAIT: Duration = Duration::from_secs(300);
+
+/// Ask `gh`, through the daemon, in a thread of its own with a connection of its own: the screen
+/// goes on (the spinner moves) while the network answers.
+fn spawn_prs(ask: PrsAsk, tx: std::sync::mpsc::Sender<PrsReply>) {
+    std::thread::spawn(move || {
+        let (cmd, wait) = match &ask {
+            PrsAsk::List {
+                workspace,
+                requested,
+            } => (
+                Cmd::ListPrs {
+                    workspace: workspace.clone(),
+                    requested: *requested,
+                },
+                PRS_WAIT,
+            ),
+            PrsAsk::Review { workspace, pr } => (
+                Cmd::ReviewPr {
+                    workspace: workspace.clone(),
+                    pr: *pr,
+                },
+                REVIEW_WAIT,
+            ),
+        };
+        let reply = Client::connect(&identity::socket_path(), "jwn-tui-prs")
+            .and_then(|mut c| c.cmd_within(cmd, wait));
+        let _ = tx.send(PrsReply { ask, reply });
+    });
+}
+
+/// The browser, asked to open a pull request's address (only `http` and `https`).
+fn open_url(url: &str) -> Result<(), String> {
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err("no es una dirección web".into());
+    }
+    let program = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    std::process::Command::new(program)
+        .arg(url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 /// How long a push is waited for.
@@ -4924,6 +5104,7 @@ pub fn run() -> Result<(), String> {
     let mut phone_worker: Option<phone::Worker> = None;
     let (sync_tx, sync_rx) = std::sync::mpsc::channel::<Reply>();
     let (files_tx, files_rx) = std::sync::mpsc::channel::<FilesReply>();
+    let (prs_tx, prs_rx) = std::sync::mpsc::channel::<PrsReply>();
     let (mut settings_read, mut appearance_read) = (Instant::now(), Instant::now());
     let mut programs_read = Instant::now();
     loop {
@@ -5025,6 +5206,12 @@ pub fn run() -> Result<(), String> {
         }
         while let Ok(reply) = files_rx.try_recv() {
             view.files_replied(reply);
+        }
+        while let Ok(answer) = prs_rx.try_recv() {
+            view.prs_replied(answer);
+        }
+        for ask in view.take_prs_asks() {
+            spawn_prs(ask, prs_tx.clone());
         }
         view.ask_older();
         for ask in view.take_file_asks() {
@@ -5221,6 +5408,150 @@ mod tests {
         assert!(!notes.contains('⠋'), "the other one does not work: {notes}");
         v.set_now(110);
         assert!(spin(&v).0.contains('⠙'), "it turns");
+    }
+
+    fn prs_list() -> serde_json::Value {
+        serde_json::json!({"prs": [
+            {"number": 142, "title": "Add rate limiting", "author": "maria", "branch": "maria/rl",
+             "base": "main", "updated": "2026-10-19T10:00:00Z", "decision": "REVIEW_REQUIRED",
+             "additions": 312, "deletions": 41, "body": "Adds a bucket.", "url": "https://x/pull/142",
+             "files": [{"path": "src/limit.rs", "additions": 188, "deletions": 0}]},
+            {"number": 139, "title": "Fix cursor", "author": "luis", "branch": "luis/c",
+             "base": "main", "updated": "2026-10-18T10:00:00Z",
+             "additions": 9, "deletions": 4}
+        ]})
+    }
+
+    /// REQ-587 to REQ-589: `R` opens the list of pull requests, which is asked of the daemon and
+    /// drawn; `↵` asks for the review and the workspace it makes is opened; a failure of `gh`
+    /// closes the list and says why.
+    #[test]
+    fn r_lists_the_pull_requests_and_enter_makes_the_review_and_opens_it() {
+        let mut v = fixture_view();
+        let key = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+        assert_eq!(key_of(KeyCode::Char('R')), Some(Key::Review));
+        v.press(Key::Review);
+        assert!(v.plain(120, 30).contains("cargando los PR abiertos"));
+        let asks = v.take_prs_asks();
+        assert!(
+            matches!(
+                &asks[..],
+                [PrsAsk::List {
+                    requested: false,
+                    ..
+                }]
+            ),
+            "asks the daemon"
+        );
+        let ws = match &asks[0] {
+            PrsAsk::List { workspace, .. } => workspace.clone(),
+            PrsAsk::Review { .. } => unreachable!(),
+        };
+        v.prs_replied(PrsReply {
+            ask: PrsAsk::List {
+                workspace: ws.clone(),
+                requested: false,
+            },
+            reply: Ok(Ok(Some(prs_list()))),
+        });
+        let t = v.plain(120, 30);
+        for want in [
+            "#142",
+            "Add rate limiting",
+            "maria",
+            "+312",
+            "sin revisar",
+            "#139",
+            "src/limit.rs",
+        ] {
+            assert!(t.contains(want), "{want:?} is not drawn:\n{t}");
+        }
+        // the filter, then the review
+        v.press_key(key('l'));
+        v.press_key(key('u'));
+        let t = v.plain(120, 30);
+        assert!(
+            t.contains("Fix cursor") && !t.contains("Add rate limiting"),
+            "the filter keeps luis's:\n{t}"
+        );
+        v.press_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let asks = v.take_prs_asks();
+        assert!(
+            matches!(&asks[..], [PrsAsk::Review { pr: 139, .. }]),
+            "{}",
+            asks.len()
+        );
+        assert!(v.plain(120, 30).contains("#139 · trayendo la rama"));
+        v.prs_replied(PrsReply {
+            ask: PrsAsk::Review {
+                workspace: ws.clone(),
+                pr: 139,
+            },
+            reply: Ok(Ok(Some(
+                serde_json::json!({"workspace": "w9", "existed": false, "dirty": false}),
+            ))),
+        });
+        assert!(v.prs.is_none(), "the list is closed");
+        assert!(
+            v.goto.as_ref().is_some_and(|(id, _)| id == "w9"),
+            "the review is opened when it shows"
+        );
+        assert!(v.flash.contains("review lista"));
+    }
+
+    /// REQ-588: a workspace that reviews a pull request says which one, beside its marks.
+    #[test]
+    fn a_review_says_its_pull_request_in_the_sidebar() {
+        let t = fixture_view().plain(110, 30);
+        let row = |n: usize| -> String { t.lines().nth(n).unwrap().chars().take(28).collect() };
+        assert!(row(4).contains("⎇#142"), "{}", row(4));
+        assert!(!row(2).contains('⎇'), "{}", row(2));
+    }
+
+    #[test]
+    fn a_gh_that_fails_closes_the_list_and_a_review_that_fails_keeps_it() {
+        let mut v = fixture_view();
+        v.press(Key::Review);
+        let ws = match &v.take_prs_asks()[0] {
+            PrsAsk::List { workspace, .. } => workspace.clone(),
+            PrsAsk::Review { .. } => unreachable!(),
+        };
+        v.prs_replied(PrsReply {
+            ask: PrsAsk::List {
+                workspace: ws.clone(),
+                requested: false,
+            },
+            reply: Ok(Err(ErrorBody {
+                code: contract::ErrorCode::GitFailed,
+                message: "gh: not logged in".into(),
+            })),
+        });
+        assert!(v.prs.is_none());
+        assert!(v.flash.contains("not logged in"), "{}", v.flash);
+        // a list that is there and a review that fails
+        v.press(Key::Review);
+        let _ = v.take_prs_asks();
+        v.prs_replied(PrsReply {
+            ask: PrsAsk::List {
+                workspace: ws.clone(),
+                requested: false,
+            },
+            reply: Ok(Ok(Some(prs_list()))),
+        });
+        v.press_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let _ = v.take_prs_asks();
+        v.prs_replied(PrsReply {
+            ask: PrsAsk::Review {
+                workspace: ws,
+                pr: 142,
+            },
+            reply: Ok(Err(ErrorBody {
+                code: contract::ErrorCode::GitFailed,
+                message: "fetch failed".into(),
+            })),
+        });
+        assert!(v.prs.is_some(), "the list stays");
+        assert!(v.flash.contains("no se hizo nada: fetch failed"));
     }
 
     #[test]
