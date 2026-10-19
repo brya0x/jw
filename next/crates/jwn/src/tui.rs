@@ -17,7 +17,8 @@ use contract::{
 };
 use crossterm::event::{
     self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags, MouseButton,
+    MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{cursor, execute};
@@ -4267,8 +4268,11 @@ fn base(path: &str) -> &str {
     path.rsplit('/').find(|s| !s.is_empty()).unwrap_or(path)
 }
 
-/// Leave the alternate screen and raw mode even when drawing panics.
-struct Terminal;
+/// Leave the alternate screen and raw mode even when drawing panics. `enhanced` is whether the
+/// terminal was asked for the keyboard protocol that gives every key its modifiers (shift-enter).
+struct Terminal {
+    enhanced: bool,
+}
 
 impl Terminal {
     fn enter() -> std::io::Result<Terminal> {
@@ -4280,12 +4284,24 @@ impl Terminal {
             EnableMouseCapture,
             EnableBracketedPaste
         )?;
-        Ok(Terminal)
+        // Without it shift-enter arrives as enter. A terminal that does not speak the protocol
+        // (kitty's, which Ghostty has) is left as it is.
+        let enhanced = terminal::supports_keyboard_enhancement().unwrap_or(false);
+        if enhanced {
+            execute!(
+                stdout(),
+                PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+            )?;
+        }
+        Ok(Terminal { enhanced })
     }
 }
 
 impl Drop for Terminal {
     fn drop(&mut self) {
+        if self.enhanced {
+            let _ = execute!(stdout(), PopKeyboardEnhancementFlags);
+        }
         let _ = execute!(
             stdout(),
             DisableBracketedPaste,

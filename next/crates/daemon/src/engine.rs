@@ -57,6 +57,9 @@ pub struct Conv {
     pub id: Id,
     pub st: State,
     pub engine: Option<Engine>,
+    /// The process of the engine started last, kept when it ends: it is not another `claude` on
+    /// the session while it is still ending (REQ-575).
+    engine_pid: Option<u32>,
     /// Counts up at each start, so a thread of an engine that was replaced is ignored.
     pub generation: u64,
     pub cwd: PathBuf,
@@ -455,17 +458,21 @@ fn run_effects(core: &mut crate::core::Core, pane: &Id, fx: Vec<Effect>) {
 /// Start the engine of a conversation that has none (it is new, or its daemon restarted).
 fn start_engine(shared: &Shared, pane: &Id) -> Result<(), crate::commands::ErrorBody> {
     // A session that another `claude` has open is not written to by a second one (REQ-575).
-    let (env, session) = {
+    let (env, session, own) = {
         let core = shared.lock();
         let c = core
             .convs
             .get(pane)
             .ok_or_else(|| err(ErrorCode::NotFound, "no conversation in this pane"))?;
-        (c.env.clone(), c.st.session.clone())
+        (c.env.clone(), c.st.session.clone(), c.engine_pid)
     };
-    if let Some(h) = crate::sessions::holder(env.as_ref(), &session) {
-        if let Some(c) = shared.lock().convs.get_mut(pane) {
-            c.st.set_held(Some(h.clone()));
+    if let Some(h) = crate::sessions::holder(env.as_ref(), &session, own) {
+        {
+            let mut core = shared.lock();
+            if let Some(c) = core.convs.get_mut(pane) {
+                c.st.set_held(Some(h.clone()));
+            }
+            core.refresh();
         }
         return Err(err(
             ErrorCode::Conflict,
@@ -503,6 +510,7 @@ fn start_engine(shared: &Shared, pane: &Id) -> Result<(), crate::commands::Error
         .filter(|c| c.generation == generation)
     {
         Some(c) => {
+            c.engine_pid = Some(engine.pid);
             c.engine = Some(engine);
             // Its own engine writes the transcript now: what it says is live.
             c.source = None;
@@ -655,7 +663,7 @@ pub fn open_conversation(
     }
     st.set_advisor(crate::settings::advisor_label(env.as_ref(), &cwd));
     if lazy {
-        st.set_held(crate::sessions::holder(env.as_ref(), &st.session));
+        st.set_held(crate::sessions::holder(env.as_ref(), &st.session, None));
     }
     let mut extra: Vec<String> = Vec::new();
     for d in &parsed.add_dirs {
@@ -683,6 +691,7 @@ pub fn open_conversation(
                 id: node.clone(),
                 st,
                 engine: None,
+                engine_pid: None,
                 generation: 0,
                 cwd,
                 env,
@@ -1073,6 +1082,7 @@ pub fn follow_due(shared: &Shared) {
         crate::transcript::Source,
         Option<BTreeMap<String, String>>,
         String,
+        Option<u32>,
     );
     let taken: Vec<Taken> = shared
         .lock()
@@ -1080,10 +1090,10 @@ pub fn follow_due(shared: &Shared) {
         .iter_mut()
         .filter(|(_, c)| c.engine.is_none())
         .filter_map(|(pane, c)| {
-            let (env, session) = (c.env.clone(), c.st.session.clone());
+            let (env, session, own) = (c.env.clone(), c.st.session.clone(), c.engine_pid);
             c.source
                 .take()
-                .map(|s| (pane.clone(), c.id.clone(), s, env, session))
+                .map(|s| (pane.clone(), c.id.clone(), s, env, session, own))
         })
         .collect();
     if taken.is_empty() {
@@ -1091,10 +1101,10 @@ pub fn follow_due(shared: &Shared) {
     }
     let polled: Vec<_> = taken
         .into_iter()
-        .map(|(pane, node, mut src, env, session)| {
+        .map(|(pane, node, mut src, env, session, own)| {
             let changed = src.poll();
             // Whether another `claude` has the session open is looked at with the transcript.
-            let held = crate::sessions::holder(env.as_ref(), &session);
+            let held = crate::sessions::holder(env.as_ref(), &session, own);
             (pane, node, src, changed, held)
         })
         .collect();

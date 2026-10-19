@@ -50,8 +50,10 @@ import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
@@ -73,8 +75,8 @@ import dev.jw.next.client.Submit
 import dev.jw.next.client.artifactsPanel
 import dev.jw.next.client.filesView
 import dev.jw.next.client.followedWork
-import dev.jw.next.client.helpPanel
 import dev.jw.next.client.heldText
+import dev.jw.next.client.helpPanel
 import dev.jw.next.client.itemText
 import dev.jw.next.client.label
 import dev.jw.next.client.savedPanel
@@ -172,6 +174,8 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
     val held = remember(nodeId) { OlderHeld() }
     var olderVersion by remember(nodeId) { mutableIntStateOf(0) }
     held.sync(node)
+    // Another `claude` has the session open: it is read and not written, so nothing below sends or writes (REQ-576).
+    val heldText = node.heldText()
     val items = remember(node, olderVersion) { held.all(node) }
     val firstItem = held.first(node)
 
@@ -211,6 +215,7 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
     }
 
     fun send(line: String) {
+        if (heldText != null) return
         when (val s = submitOf(line, pictures.map { it.n to it.image })) {
             Submit.Nothing -> {}
             is Submit.Say -> {
@@ -227,6 +232,7 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
     }
 
     fun insert(piece: String) {
+        if (heldText != null) return
         val at = text.selection.end.coerceIn(0, text.text.length)
         val next = text.text.substring(0, at) + piece + text.text.substring(at)
         text = TextFieldValue(next, TextRange(at + piece.length))
@@ -385,20 +391,18 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
     }
 
     // ---- the `/` list above the field (REQ-446) ----
-    val menu = slashMenu(node.commands, text.text)
+    val menu = if (heldText == null) slashMenu(node.commands, text.text) else emptyList()
     if (menu.isNotEmpty()) CommandList(menu, accent) { c -> send(c.name) }
 
     // ---- the field ----
-    // What Claude proposes next: a tap puts it in the field, the ✕ puts it aside; it is shown whenever the field is empty (REQ-573).
+    // What Claude proposes next: a tap puts it in the field, the ✕ puts it aside; it is shown whenever the field is empty and nothing runs, asks or holds the session (REQ-573).
     var asideSuggestion by remember(nodeId) { mutableStateOf<String?>(null) }
     val proposed = node.suggestionShown(text.text, asideSuggestion, retaking)
-    // Another `claude` has the session open: it is read and not written (REQ-576).
-    val heldText = node.heldText()
     Column(Modifier.fillMaxWidth().background(Palette.panel).navigationBarsUnlessKeyboard().keepsKeyboard().padding(top = 8.dp)) {
         heldText?.let { why ->
             Box(
                 Modifier.fillMaxWidth().padding(horizontal = 10.dp).defaultMinSize(minHeight = 48.dp).background(Palette.sel, RoundedCornerShape(8.dp))
-                    .padding(horizontal = 10.dp, vertical = 6.dp).semantics { contentDescription = why },
+                    .padding(horizontal = 10.dp, vertical = 6.dp).semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite; contentDescription = why },
                 contentAlignment = Alignment.CenterStart,
             ) { Mono(why, Palette.yellow, 12, lines = 4) }
         }
@@ -435,7 +439,7 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
                 if (node.queue.isNotEmpty()) Chip("${node.queue.size} en cola", Palette.yellow)
                 if (text.text.startsWith("!")) Chip("! shell", Palette.yellow)
             }
-            Box(Modifier.defaultMinSize(minWidth = 40.dp, minHeight = 36.dp).clickable { open = Open.Plus }.semantics { contentDescription = "Adjuntar" }, contentAlignment = Alignment.Center) { Mono("+", Palette.blue, 20, bold = true) }
+            Box(Modifier.defaultMinSize(minWidth = 40.dp, minHeight = 36.dp).clickable(enabled = heldText == null) { open = Open.Plus }.semantics { contentDescription = "Adjuntar" }, contentAlignment = Alignment.Center) { Mono("+", if (heldText == null) Palette.blue else Palette.dim, 20, bold = true) }
         }
         val shell = text.text.startsWith("!")
         Row(Modifier.fillMaxWidth().padding(start = Gutter, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {

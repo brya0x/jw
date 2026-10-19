@@ -206,6 +206,8 @@ enum Pop {
 pub struct Editor {
     chars: Vec<char>,
     cursor: usize,
+    /// Where a selection began, when there is one: it covers what lies between this and the cursor.
+    anchor: Option<usize>,
 }
 
 impl Editor {
@@ -217,17 +219,28 @@ impl Editor {
         self.cursor
     }
 
+    /// The characters that are selected, from and to, when some are.
+    pub fn selection(&self) -> Option<(usize, usize)> {
+        self.anchor
+            .filter(|a| *a != self.cursor)
+            .map(|a| (a.min(self.cursor), a.max(self.cursor)))
+    }
+
     pub fn set(&mut self, text: &str) {
         self.chars = text.chars().collect();
         self.cursor = self.chars.len();
+        self.anchor = None;
     }
 
     pub fn take(&mut self) -> String {
         self.cursor = 0;
+        self.anchor = None;
         std::mem::take(&mut self.chars).into_iter().collect()
     }
 
+    /// Write `text` at the cursor, in place of what is selected.
     pub fn insert(&mut self, text: &str) {
+        self.delete_selection();
         for c in text.chars() {
             self.chars.insert(self.cursor, c);
             self.cursor += 1;
@@ -248,13 +261,29 @@ impl Editor {
 
     /// Put `text` in place of the `n` characters before the cursor.
     fn replace_before(&mut self, n: usize, text: &str) {
+        self.anchor = None;
         let from = self.cursor.saturating_sub(n);
         self.chars.drain(from..self.cursor);
         self.cursor = from;
         self.insert(text);
     }
 
+    /// Take out what is selected: whether something was.
+    fn delete_selection(&mut self) -> bool {
+        let sel = self.selection();
+        self.anchor = None;
+        let Some((from, to)) = sel else {
+            return false;
+        };
+        self.chars.drain(from..to);
+        self.cursor = from;
+        true
+    }
+
     fn backspace(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
         if self.cursor > 0 {
             self.cursor -= 1;
             self.chars.remove(self.cursor);
@@ -262,6 +291,9 @@ impl Editor {
     }
 
     fn delete(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
         if self.cursor < self.chars.len() {
             self.chars.remove(self.cursor);
         }
@@ -281,16 +313,9 @@ impl Editor {
             .map_or(self.chars.len(), |i| at + i)
     }
 
-    fn home(&mut self) {
-        self.cursor = self.line_start(self.cursor);
-    }
-
-    fn end(&mut self) {
-        self.cursor = self.line_end(self.cursor);
-    }
-
     /// One line up, keeping the column; false when this is the first line.
     fn up(&mut self) -> bool {
+        self.anchor = None;
         let start = self.line_start(self.cursor);
         if start == 0 {
             return false;
@@ -302,6 +327,7 @@ impl Editor {
     }
 
     fn down(&mut self) -> bool {
+        self.anchor = None;
         let end = self.line_end(self.cursor);
         if end == self.chars.len() {
             return false;
@@ -312,25 +338,79 @@ impl Editor {
         true
     }
 
-    fn word_back(&mut self) {
-        let mut at = self.cursor;
+    /// Where the word before `at` starts: spaces are skipped, then the word.
+    fn word_start(&self, mut at: usize) -> usize {
         while at > 0 && self.chars[at - 1].is_whitespace() {
             at -= 1;
         }
         while at > 0 && !self.chars[at - 1].is_whitespace() {
             at -= 1;
         }
+        at
+    }
+
+    /// Where the word after `at` ends.
+    fn word_end(&self, mut at: usize) -> usize {
+        while at < self.chars.len() && self.chars[at].is_whitespace() {
+            at += 1;
+        }
+        while at < self.chars.len() && !self.chars[at].is_whitespace() {
+            at += 1;
+        }
+        at
+    }
+
+    /// The word before the cursor, or what is selected.
+    fn word_back(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
+        let at = self.word_start(self.cursor);
         self.chars.drain(at..self.cursor);
         self.cursor = at;
     }
 
+    /// Put the cursor at `to`, the selection growing from where it was when `select`, gone when
+    /// not.
+    fn go(&mut self, to: usize, select: bool) {
+        if select {
+            self.anchor.get_or_insert(self.cursor);
+        } else {
+            self.anchor = None;
+        }
+        self.cursor = to;
+    }
+
+    /// A key that moves one character, one word (with alt) or to the end of the line (home and end);
+    /// with shift it selects what it crosses. A move with no shift over a selection goes to its edge.
+    fn step(&mut self, ev: &KeyEvent) {
+        let (alt, shift) = (
+            ev.modifiers.contains(KeyModifiers::ALT),
+            ev.modifiers.contains(KeyModifiers::SHIFT),
+        );
+        let edge = self.selection().filter(|_| !shift);
+        let to = match (ev.code, alt, edge) {
+            (KeyCode::Left, false, Some((from, _))) => from,
+            (KeyCode::Right, false, Some((_, to))) => to,
+            (KeyCode::Left, true, _) => self.word_start(self.cursor),
+            (KeyCode::Right, true, _) => self.word_end(self.cursor),
+            (KeyCode::Left, false, None) => self.cursor.saturating_sub(1),
+            (KeyCode::Right, false, None) => (self.cursor + 1).min(self.chars.len()),
+            (KeyCode::Home, ..) => self.line_start(self.cursor),
+            _ => self.line_end(self.cursor),
+        };
+        self.go(to, shift);
+    }
+
     fn kill_to_start(&mut self) {
+        self.anchor = None;
         let start = self.line_start(self.cursor);
         self.chars.drain(start..self.cursor);
         self.cursor = start;
     }
 
     fn kill_to_end(&mut self) {
+        self.anchor = None;
         let end = self.line_end(self.cursor);
         self.chars.drain(self.cursor..end);
     }
@@ -338,21 +418,21 @@ impl Editor {
     /// The editing keys the line and the name field share.
     fn edit(&mut self, ev: &KeyEvent) -> bool {
         let ctrl = ev.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = ev.modifiers.contains(KeyModifiers::ALT);
         match ev.code {
-            KeyCode::Char('a') if ctrl => self.home(),
-            KeyCode::Char('e') if ctrl => self.end(),
+            KeyCode::Char('a') if ctrl => self.go(self.line_start(self.cursor), false),
+            KeyCode::Char('e') if ctrl => self.go(self.line_end(self.cursor), false),
             KeyCode::Char('w') if ctrl => self.word_back(),
             KeyCode::Char('u') if ctrl => self.kill_to_start(),
             KeyCode::Char('k') if ctrl => self.kill_to_end(),
-            KeyCode::Char(c) if !ctrl && !ev.modifiers.contains(KeyModifiers::ALT) => {
-                self.insert(&c.to_string());
-            }
+            KeyCode::Char(c) if !ctrl && !alt => self.insert(&c.to_string()),
+            // Many terminals send option+arrow as `esc b` and `esc f`, as readline has it.
+            KeyCode::Char('b') if alt && !ctrl => self.go(self.word_start(self.cursor), false),
+            KeyCode::Char('f') if alt && !ctrl => self.go(self.word_end(self.cursor), false),
+            KeyCode::Backspace if alt => self.word_back(),
             KeyCode::Backspace => self.backspace(),
             KeyCode::Delete => self.delete(),
-            KeyCode::Left => self.cursor = self.cursor.saturating_sub(1),
-            KeyCode::Right => self.cursor = (self.cursor + 1).min(self.chars.len()),
-            KeyCode::Home => self.home(),
-            KeyCode::End => self.end(),
+            KeyCode::Left | KeyCode::Right | KeyCode::Home | KeyCode::End => self.step(ev),
             _ => return false,
         }
         true
@@ -1248,12 +1328,12 @@ impl Ui {
     }
 
     fn field(&self, iw: usize) -> Field {
-        Field::new(
-            Some(&PaneInput {
+        Field::selecting(
+            &PaneInput {
                 text: self.editor.text(),
                 cursor: self.editor.cursor() as u32,
-            }),
-            None,
+            },
+            self.editor.selection(),
             iw,
         )
     }
@@ -1810,6 +1890,28 @@ impl Ui {
             return self.pop_key(conv, ev);
         }
         let ctrl = ev.modifiers.contains(KeyModifiers::CONTROL);
+        // Another `claude` has the session: it is read, not written (REQ-575). What changes the
+        // field does nothing, whatever is open over it; what reads (the keys of a picked item that
+        // copy, scrolling, opening what a tool printed) goes on.
+        if let Some(h) = &conv.held {
+            let edits = match ev.code {
+                KeyCode::Char('c' | 't') if !ctrl && self.picked.is_some() => false,
+                KeyCode::Char(c) => !ctrl || !matches!(c, 'o' | 't' | 'b' | 'c'),
+                KeyCode::Enter
+                | KeyCode::Backspace
+                | KeyCode::Delete
+                | KeyCode::Tab
+                | KeyCode::Left
+                | KeyCode::Right
+                | KeyCode::Home
+                | KeyCode::End => true,
+                _ => false,
+            };
+            if edits {
+                self.says = Ui::held_why(h).1;
+                return None;
+            }
+        }
         let menu = self.menu(conv);
         if !menu.is_empty() {
             let at = self.menu_at.min(menu.len() - 1);
@@ -1870,25 +1972,6 @@ impl Ui {
                 }
                 _ => self.picked = None,
             }
-        }
-        // Another `claude` has the session: it is read, not written (REQ-575).
-        if let Some(h) = &conv.held
-            && !ctrl
-            && matches!(
-                ev.code,
-                KeyCode::Char(_)
-                    | KeyCode::Enter
-                    | KeyCode::Backspace
-                    | KeyCode::Delete
-                    | KeyCode::Tab
-                    | KeyCode::Left
-                    | KeyCode::Right
-                    | KeyCode::Home
-                    | KeyCode::End
-            )
-        {
-            self.says = Ui::held_why(h).1;
-            return None;
         }
         match ev.code {
             // What Claude proposes goes into the field to be edited or sent (REQ-572).
@@ -3964,6 +4047,11 @@ mod tests {
         );
         ui.paste("pegado");
         assert_eq!(ui.editor.text(), "");
+        ui.key(
+            &conv,
+            &KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(ui.editor.text(), "", "ctrl-j writes nothing either");
         assert!(press(&mut ui, &conv, KeyCode::Enter).is_none());
         // it is read: the list scrolls
         press(&mut ui, &conv, KeyCode::PageUp);
@@ -4189,9 +4277,9 @@ mod tests {
         assert!(!e.up(), "the first line has nothing above");
         assert!(e.down());
         assert!(!e.down());
-        e.home();
+        e.edit(&KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
         e.insert(">");
-        e.end();
+        e.edit(&KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
         e.insert("<");
         assert_eq!(e.text(), "uno dos\n>tres<");
         e.word_back();
@@ -4206,6 +4294,65 @@ mod tests {
         assert_eq!(e.text(), "abc");
         assert_eq!(e.take(), "abc");
         assert_eq!(e.cursor(), 0);
+    }
+
+    fn key(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
+        KeyEvent::new(code, mods)
+    }
+
+    /// The keys of a text field that the terminal sends for option and shift: a word at a time,
+    /// selected with shift, and gone with option-backspace.
+    #[test]
+    fn option_arrows_jump_a_word_with_shift_they_select_and_option_backspace_takes_it() {
+        let (alt, both) = (KeyModifiers::ALT, KeyModifiers::ALT | KeyModifiers::SHIFT);
+        let mut e = Editor::default();
+        e.set("uno dos tres");
+        e.edit(&key(KeyCode::Left, alt));
+        assert_eq!(e.cursor(), 8, "to the start of the word before");
+        e.edit(&key(KeyCode::Left, alt));
+        assert_eq!(e.cursor(), 4);
+        e.edit(&key(KeyCode::Right, alt));
+        assert_eq!(e.cursor(), 7, "to the end of the word after");
+        e.edit(&key(KeyCode::Char('b'), alt));
+        assert_eq!(e.cursor(), 4, "esc b is the same key");
+        e.edit(&key(KeyCode::Char('f'), alt));
+        assert_eq!(e.cursor(), 7, "esc f too");
+        assert_eq!(e.selection(), None);
+
+        e.edit(&key(KeyCode::Right, both));
+        assert_eq!(e.selection(), Some((7, 12)), "a word selected");
+        e.edit(&key(KeyCode::Left, both));
+        e.edit(&key(KeyCode::Left, both));
+        assert_eq!(
+            e.selection(),
+            Some((4, 7)),
+            "and taken back, and the one before it"
+        );
+        e.edit(&key(KeyCode::Left, KeyModifiers::NONE));
+        assert_eq!(
+            (e.cursor(), e.selection()),
+            (4, None),
+            "a plain arrow goes to the edge"
+        );
+
+        e.edit(&key(KeyCode::Right, both));
+        e.edit(&key(KeyCode::Char('X'), KeyModifiers::SHIFT));
+        assert_eq!(e.text(), "uno X tres", "writing replaces the selection");
+        e.edit(&key(KeyCode::Left, both));
+        e.edit(&key(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(e.text(), "uno  tres", "a selection goes with backspace");
+
+        let mut e = Editor::default();
+        e.set("uno dos tres");
+        e.edit(&key(KeyCode::Backspace, alt));
+        assert_eq!(
+            e.text(),
+            "uno dos ",
+            "option-backspace takes the word before"
+        );
+        e.edit(&key(KeyCode::Left, both));
+        e.edit(&key(KeyCode::Backspace, alt));
+        assert_eq!(e.text(), "uno ", "a selection is what goes first");
     }
 
     #[test]

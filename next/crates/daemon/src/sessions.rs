@@ -9,30 +9,24 @@ use std::process::Command;
 use contract::conversation::Held;
 use serde_json::Value;
 
-/// Whether the process `pid` is alive, is a `claude` (a number may be given to another program
-/// after one ends) and is not one this daemon started: its own engines, one that is ending
-/// while another begins, are not another `claude`.
-fn is_another_claude(pid: u32, ours: u32) -> bool {
-    let out = Command::new("ps")
-        .args(["-p", &pid.to_string(), "-o", "ppid=,command="])
-        .output();
-    let Ok(out) = out else {
-        return false;
-    };
-    let text = String::from_utf8_lossy(&out.stdout);
-    let text = text.trim();
-    let (parent, command) = text.split_once(' ').unwrap_or((text, ""));
-    parent.trim() != ours.to_string() && command.contains("claude")
+/// Whether the process `pid` is alive and is a `claude` (a number may be given to another
+/// program after one ends).
+fn is_claude(pid: u32) -> bool {
+    Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "command="])
+        .output()
+        .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("claude"))
 }
 
 /// Another process of Claude that has `session` open, when there is one: the one that works if
-/// more than one does.
-pub(crate) fn holder(env: Option<&BTreeMap<String, String>>, session: &str) -> Option<Held> {
-    holder_except(env, session, std::process::id())
-}
-
-/// `holder`, not counting the processes that `ours` started.
-fn holder_except(env: Option<&BTreeMap<String, String>>, session: &str, ours: u32) -> Option<Held> {
+/// more than one does. `own` is the engine this conversation started last, which may still be
+/// ending when another begins: it is not another `claude`, and the engine of another
+/// conversation of this daemon on the same session is.
+pub(crate) fn holder(
+    env: Option<&BTreeMap<String, String>>,
+    session: &str,
+    own: Option<u32>,
+) -> Option<Held> {
     let dir = crate::settings::claude_dir(env)?.join("sessions");
     let mut found: Vec<Held> = std::fs::read_dir(dir)
         .ok()?
@@ -44,7 +38,7 @@ fn holder_except(env: Option<&BTreeMap<String, String>>, session: &str, ours: u3
         })
         .filter_map(|v| {
             let pid = u32::try_from(v["pid"].as_u64()?).ok()?;
-            is_another_claude(pid, ours).then(|| Held {
+            (Some(pid) != own && is_claude(pid)).then(|| Held {
                 pid,
                 cwd: v["cwd"].as_str().unwrap_or_default().to_owned(),
                 busy: v["status"] == "busy",
@@ -59,8 +53,35 @@ fn holder_except(env: Option<&BTreeMap<String, String>>, session: &str, ours: u3
 mod tests {
     use super::*;
 
-    /// REQ-575: a live process with the session is the holder, one with another session or that
-    /// is not alive is not, and the one that works is named when there are two.
+    /// A process that is killed when the test ends, however it ends.
+    struct Proc(std::process::Child);
+
+    impl Proc {
+        /// A live process whose command says `name`.
+        fn named(name: &str) -> Proc {
+            Proc(
+                Command::new("bash")
+                    .args(["-c", &format!("exec -a {name} sleep 30")])
+                    .spawn()
+                    .unwrap(),
+            )
+        }
+
+        fn pid(&self) -> u32 {
+            self.0.id()
+        }
+    }
+
+    impl Drop for Proc {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    /// REQ-575: a live process with the session is the holder, one with another session, one
+    /// that is not a claude, one that is not alive and the engine the conversation started are
+    /// not, and the one that works is named when there are two.
     #[test]
     fn a_live_claude_with_the_session_is_the_holder_and_nothing_else_is() {
         let dir = std::env::temp_dir().join(format!("jwn-sessions-{}", std::process::id()));
@@ -80,42 +101,28 @@ mod tests {
             )
             .unwrap();
         };
-        assert_eq!(holder_except(Some(&env), "s1", 1), None, "nothing is open");
-        // a live process that is not a `claude`
-        let mut other = Command::new("sh")
-            .args(["-c", "sleep 30; :", "otro"])
-            .spawn()
-            .unwrap();
-        write(other.id(), "s1", "idle");
-        assert_eq!(holder_except(Some(&env), "s1", 1), None, "not a claude");
-        let _ = other.kill();
-        let _ = other.wait();
-        std::fs::remove_file(sessions.join(format!("{}.json", other.id()))).unwrap();
-        // a process that is not there
+        let held = |session: &str, own: Option<u32>| holder(Some(&env), session, own);
+        assert_eq!(held("s1", None), None, "nothing is open");
+        let other = Proc::named("otro");
+        write(other.pid(), "s1", "idle");
+        assert_eq!(held("s1", None), None, "not a claude");
         write(4_000_000, "s1", "busy");
-        assert_eq!(holder_except(Some(&env), "s1", 1), None, "not alive");
-        // a live process whose command says `claude`, with the session, and one with another
-        let mut live = Command::new("sh")
-            .args(["-c", "sleep 30; :", "claude"])
-            .spawn()
-            .unwrap();
-        write(live.id(), "s1", "idle");
-        let h = holder_except(Some(&env), "s1", 1).expect("the holder");
-        assert_eq!((h.pid, h.cwd.as_str(), h.busy), (live.id(), "/work", false));
+        assert_eq!(held("s1", None), None, "not alive");
+        let live = Proc::named("claude");
+        write(live.pid(), "s1", "idle");
+        let h = held("s1", None).expect("the holder");
         assert_eq!(
-            holder_except(Some(&env), "otra", 1),
-            None,
-            "another session"
+            (h.pid, h.cwd.as_str(), h.busy),
+            (live.pid(), "/work", false)
         );
-        write(live.id(), "s1", "busy");
-        assert!(holder_except(Some(&env), "s1", 1).unwrap().busy);
+        assert_eq!(held("otra", None), None, "another session");
+        write(live.pid(), "s1", "busy");
+        assert!(held("s1", None).unwrap().busy);
         assert_eq!(
-            holder_except(Some(&env), "s1", std::process::id()),
+            held("s1", Some(live.pid())),
             None,
-            "one that the daemon started is not another claude"
+            "the engine the conversation started is not another claude"
         );
-        let _ = live.kill();
-        let _ = live.wait();
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

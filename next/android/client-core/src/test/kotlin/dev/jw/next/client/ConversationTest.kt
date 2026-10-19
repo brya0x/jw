@@ -91,6 +91,7 @@ class ConversationTest {
         assertEquals("solo lectura: otro claude (pid 93269, en jw-wt/next-bootstrap) la tiene abierta · ciérralo para escribir aquí", held.heldText())
         assertTrue(held.copy(held = Held(1, "/a", true)).heldText()!!.contains("trabaja en ella"))
         assertNull(held.suggestionShown("", null, false), "no suggestion while it is held")
+        assertEquals("jw", held.copy(held = Held(2, "/jw/", false)).heldText()!!.substringAfter("en ").substringBefore(")"), "a folder at the root")
     }
 
     /** A turn of another `claude` that is followed has a line of work with no way to stop it (REQ-565). */

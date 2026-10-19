@@ -862,11 +862,19 @@ impl State {
         .flatten()
     }
 
-    /// Another `claude` that has the session open, or none: whether it changed.
+    /// Another `claude` that has the session open, or none: whether the node changed. A turn
+    /// that the transcript leaves open is followed only while a `claude` that is busy has the
+    /// session: with none, or one that waits for a message, nothing runs it (a turn that was
+    /// cut off, or one whose process was ended, never writes the line that closes it).
     pub fn set_held(&mut self, held: Option<Held>) -> bool {
+        let over = self.followed.is_some() && !held.as_ref().is_some_and(|h| h.busy);
+        if over {
+            self.followed = None;
+            self.settle_running();
+        }
         let changed = self.held != held;
         self.held = held;
-        changed
+        changed || over
     }
 
     /// The model of the advisor, for its rows (REQ-574).
@@ -3009,6 +3017,29 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// REQ-565: the registry of Claude's processes says whether a turn that the file leaves open
+    /// is run: «Pensando…» is not drawn for a turn that no `claude` that is busy has.
+    #[test]
+    fn a_followed_turn_is_left_when_no_claude_that_is_busy_has_the_session() {
+        let t = followed_turn();
+        let held = |busy| {
+            Some(Held {
+                pid: 7,
+                cwd: "/x".into(),
+                busy,
+            })
+        };
+        for (held, kept) in [(held(true), true), (held(false), false), (None, false)] {
+            let mut s = st();
+            s.follow_at(&t, t.last_at() + 1_000);
+            assert!(node_of(&s).following.is_some());
+            let changed = s.set_held(held);
+            assert_eq!(node_of(&s).following.is_some(), kept);
+            assert_eq!(node_of(&s).running.is_empty(), !kept);
+            assert!(changed);
+        }
     }
 
     #[test]

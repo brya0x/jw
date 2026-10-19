@@ -69,11 +69,11 @@ fun Node.Conversation.followedWork(retaking: Boolean): Boolean = following != nu
 
 /** Why nothing is written when another `claude` has the session open: its pid, the folder it runs in and what it does (REQ-575, REQ-576); null when none has. */
 fun Node.Conversation.heldText(): String? = held?.let { h ->
-    val place = h.cwd.trimEnd('/').split('/').takeLast(2).joinToString("/")
+    val place = h.cwd.split('/').filter { it.isNotEmpty() }.takeLast(2).joinToString("/")
     "solo lectura: otro claude (pid ${h.pid}, en $place) ${if (h.busy) "trabaja en ella" else "la tiene abierta"} · ciérralo para escribir aquí"
 }
 
-/** What Claude proposes the person writes next, when it can be taken: the field is empty, nothing runs or waits and it was not put aside (REQ-572). */
+/** What Claude proposes the person writes next, when it can be taken: the field is empty, nothing runs, waits or holds the session, and it was not put aside (REQ-572, REQ-573). */
 fun Node.Conversation.suggestionShown(text: String, dismissed: String?, retaking: Boolean): String? =
     suggestion?.takeIf { held == null && text.isBlank() && it != dismissed && ask == null && !working(retaking) }
 

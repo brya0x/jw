@@ -31,6 +31,8 @@ pub struct Look<'a> {
 pub struct Field {
     rows: Vec<String>,
     cursor: (usize, usize),
+    /// The cells (row, column) that a selection covers.
+    selected: Vec<(usize, usize)>,
 }
 
 /// Columns of text a pane `iw` wide holds in a row of the field.
@@ -48,16 +50,23 @@ impl Field {
     pub fn new(input: Option<&PaneInput>, screen: Option<(&str, usize)>, iw: usize) -> Field {
         let width = text_width(iw);
         match (input, screen) {
-            (Some(i), _) => wrap(&i.text, i.cursor as usize, width),
+            (Some(i), _) => wrap(&i.text, i.cursor as usize, width, None),
             (None, Some((line, col))) => Field {
                 rows: vec![line.to_owned()],
                 cursor: (0, col),
+                selected: Vec::new(),
             },
             (None, None) => Field {
                 rows: vec![String::new()],
                 cursor: (0, 0),
+                selected: Vec::new(),
             },
         }
+    }
+
+    /// The field of a line the person edits here, with the characters `sel` (from, to) selected.
+    pub fn selecting(input: &PaneInput, sel: Option<(usize, usize)>, iw: usize) -> Field {
+        wrap(&input.text, input.cursor as usize, text_width(iw), sel)
     }
 
     /// Nothing is typed (or nothing can be shown), so the row says what to type.
@@ -170,6 +179,12 @@ impl Field {
             SEND,
             Style::fg(look::blue()).bold().on(ground),
         );
+        for &(row, col) in &self.selected {
+            let (x, y) = (tx + col, first + row);
+            if x < send_at(ix, iw) && y < g.rows && x < g.cols {
+                g.cells[y * g.cols + x].1.bg = Some(look::sel());
+            }
+        }
         let (row, col) = self.cursor;
         let at = (tx + col, first + row);
         if focused && at.0 < send_at(ix, iw) && at.1 < g.rows && at.0 < g.cols {
@@ -191,8 +206,9 @@ pub fn stop_at(ix: usize, iw: usize) -> usize {
 /// `text` broken into rows of `width` characters (and at its own line breaks), the cursor
 /// placed at its offset, and at most `MAX_TEXT_ROWS` rows kept: the last ones, or those that
 /// hold the cursor when it is further up.
-fn wrap(text: &str, cursor: usize, width: usize) -> Field {
+fn wrap(text: &str, cursor: usize, width: usize, sel: Option<(usize, usize)>) -> Field {
     let mut rows = vec![String::new()];
+    let mut selected = Vec::new();
     let mut at = (0, 0);
     let mut placed = false;
     for (i, c) in text.chars().enumerate() {
@@ -205,8 +221,13 @@ fn wrap(text: &str, cursor: usize, width: usize) -> Field {
         }
         if c == '\n' {
             rows.push(String::new());
-        } else if let Some(row) = rows.last_mut() {
-            row.push(c);
+        } else {
+            let at = rows.len() - 1;
+            let col = rows[at].chars().count();
+            if sel.is_some_and(|(from, to)| (from..to).contains(&i)) {
+                selected.push((at, col));
+            }
+            rows[at].push(c);
         }
     }
     if !placed {
@@ -220,6 +241,11 @@ fn wrap(text: &str, cursor: usize, width: usize) -> Field {
     Field {
         rows: kept,
         cursor: (at.0 - start, at.1),
+        selected: selected
+            .into_iter()
+            .filter_map(|(r, c)| r.checked_sub(start).map(|r| (r, c)))
+            .filter(|(r, _)| *r < MAX_TEXT_ROWS)
+            .collect(),
     }
 }
 
@@ -300,6 +326,15 @@ mod tests {
         );
         let top = Field::new(Some(&input(&text, 1)), None, 30);
         assert_eq!((top.rows.len(), top.cursor), (MAX_TEXT_ROWS, (0, 1)));
+    }
+
+    #[test]
+    fn a_selection_is_the_cells_of_its_characters_across_rows_and_line_breaks() {
+        let w = text_width(30);
+        let text = format!("{}ab\ncd", "x".repeat(w));
+        let from = w;
+        let f = Field::selecting(&input(&text, 0), Some((from, from + 4)), 30);
+        assert_eq!(f.selected, [(1, 0), (1, 1), (2, 0)]);
     }
 
     #[test]
