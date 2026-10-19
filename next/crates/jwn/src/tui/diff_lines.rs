@@ -32,6 +32,9 @@ pub enum Line {
     Hunk(usize, String),
     One(usize, Row),
     Two(usize, Option<Row>, Option<Row>),
+    /// The rest of a line of one column that did not fit: it goes on in the rows that follow, with
+    /// no number of its own (REQ-591).
+    Cont(usize, Row),
     Gap(usize),
 }
 
@@ -43,6 +46,7 @@ impl Line {
             | Line::Hunk(f, _)
             | Line::One(f, _)
             | Line::Two(f, _, _)
+            | Line::Cont(f, _)
             | Line::Gap(f) => *f,
         }
     }
@@ -176,6 +180,48 @@ fn one_sided(file: &DiffFile) -> bool {
         file.status,
         FileStatus::Added | FileStatus::Untracked | FileStatus::Deleted
     )
+}
+
+/// The changed words of a row that fall in the `len` characters from `start`, counted from there.
+fn words_in(words: Option<(usize, usize)>, start: usize, len: usize) -> Option<(usize, usize)> {
+    let (a, b) = words?;
+    let (from, to) = (a.max(start), b.min(start + len));
+    (from < to).then(|| (from - start, to - start))
+}
+
+/// Lines of one column whose text is longer than `room` characters, broken into rows of `room`:
+/// the first stays the line and the rest follow as `Line::Cont`, as an editor wraps (REQ-591).
+pub fn wrap(lines: Vec<Line>, room: usize) -> Vec<Line> {
+    if room == 0 {
+        return lines;
+    }
+    let mut out = Vec::with_capacity(lines.len());
+    for line in lines {
+        let Line::One(file, row) = line else {
+            out.push(line);
+            continue;
+        };
+        let chars: Vec<char> = row.text.chars().collect();
+        if chars.len() <= room {
+            out.push(Line::One(file, row));
+            continue;
+        }
+        for (k, piece) in chars.chunks(room).enumerate() {
+            let part = Row {
+                text: piece.iter().collect(),
+                words: words_in(row.words, k * room, piece.len()),
+                kind: row.kind,
+                old: if k == 0 { row.old } else { None },
+                new: if k == 0 { row.new } else { None },
+            };
+            out.push(if k == 0 {
+                Line::One(file, part)
+            } else {
+                Line::Cont(file, part)
+            });
+        }
+    }
+    out
 }
 
 /// The body: every file of the diff in tree order, a seen file folded to its header.
@@ -595,6 +641,56 @@ mod tests {
             })
             .collect();
         assert!(!text.contains('\x1b') && !text.contains('\x07'), "{text:?}");
+    }
+
+    fn row(kind: Kind, text: &str, old: Option<u32>, new: Option<u32>) -> Row {
+        Row {
+            kind,
+            text: text.into(),
+            old,
+            new,
+            words: None,
+        }
+    }
+
+    /// REQ-591: a line longer than the room goes on in rows of its own, with no numbers, and the
+    /// words that changed follow the characters they are in.
+    #[test]
+    fn a_long_line_goes_on_in_the_rows_after_it() {
+        let mut long = row(Kind::Add, "abcdefghijklmnopqrstuvwxyz", None, Some(7));
+        long.words = Some((3, 12));
+        let lines = wrap(
+            vec![
+                Line::One(0, row(Kind::Ctx, "short", Some(1), Some(1))),
+                Line::One(0, long),
+                Line::Gap(0),
+            ],
+            10,
+        );
+        assert_eq!(lines.len(), 5, "one short, three parts, one gap: {lines:?}");
+        let Line::One(_, first) = &lines[1] else {
+            panic!("{lines:?}")
+        };
+        assert_eq!(
+            (first.text.as_str(), first.new, first.words),
+            ("abcdefghij", Some(7), Some((3, 10)))
+        );
+        let Line::Cont(_, second) = &lines[2] else {
+            panic!("{lines:?}")
+        };
+        assert_eq!(
+            (second.text.as_str(), second.new, second.words, second.kind),
+            ("klmnopqrst", None, Some((0, 2)), Kind::Add)
+        );
+        let Line::Cont(_, third) = &lines[3] else {
+            panic!("{lines:?}")
+        };
+        assert_eq!((third.text.as_str(), third.words), ("uvwxyz", None));
+        assert_eq!(
+            lines[0],
+            Line::One(0, row(Kind::Ctx, "short", Some(1), Some(1)))
+        );
+        assert_eq!(wrap(lines.clone(), 0), lines, "no room is no wrapping");
     }
 
     #[test]

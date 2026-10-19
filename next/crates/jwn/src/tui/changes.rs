@@ -11,7 +11,7 @@ use contract::{Commits, Diff, DiffScope, DiffState, FileStatus, Seen};
 use crossterm::event::KeyCode;
 
 use super::diff_lines::{
-    Kind, Line, Row, Tone, TreeRow, ago, build, clean, order as tree_order, tones, tree_rows,
+    Kind, Line, Row, Tone, TreeRow, ago, build, clean, order as tree_order, tones, tree_rows, wrap,
 };
 use super::{Grid, Rect, SIDEBAR, Style, clip, look};
 
@@ -105,7 +105,9 @@ struct Slot {
 
 /// The lines of the diff being shown, rebuilt only when its document or the layout changes.
 struct Cache {
-    key: (String, u64, bool),
+    /// The document, its revision, whether it is in two columns and the room a line has before it
+    /// wraps (none when it does not).
+    key: (String, u64, bool, Option<usize>),
     order: Vec<usize>,
     lines: Vec<Line>,
 }
@@ -141,6 +143,8 @@ pub struct Changes {
     own_patch: bool,
     /// Where the viewer is when it is a pane beside others (a review, REQ-589) and not the screen.
     area: Option<Rect>,
+    /// A line longer than the body goes on in the next row (`w`, REQ-591); in two columns it is cut.
+    wrap: bool,
 }
 
 /// Whether the viewer stays open after a key.
@@ -231,6 +235,7 @@ impl Changes {
             live_until: 0,
             own_patch: false,
             area: None,
+            wrap: true,
         };
         c.want(Src::Uncommitted);
         c
@@ -372,10 +377,15 @@ impl Changes {
             }
             self.live_rev = Some(d.head.rev);
         }
-        let key = (d.head.id.clone(), d.head.rev, g.split);
+        let room = (self.wrap && !g.split).then(|| g.bw.saturating_sub(1 + ONE_COLUMN_GUTTER));
+        let key = (d.head.id.clone(), d.head.rev, g.split, room);
         if self.cache.as_ref().map(|c| &c.key) != Some(&key) {
             let order = tree_order(d);
             let lines = build(d, &order, g.split);
+            let lines = match room {
+                Some(room) => wrap(lines, room),
+                None => lines,
+            };
             self.cache = Some(Cache { key, order, lines });
             if let Some(j) = self.jump.take_if(|j| d.head.rev > j.after_rev) {
                 self.go_to_path(d, &j.path, g);
@@ -656,6 +666,15 @@ impl Changes {
                 .into();
                 self.cache = None;
             }
+            KeyCode::Char('w') => {
+                self.wrap = !self.wrap;
+                self.msg = if self.wrap {
+                    "ajuste de línea".into()
+                } else {
+                    "líneas largas cortadas".into()
+                };
+                self.cache = None;
+            }
             KeyCode::Char('r') => self.reread(),
             KeyCode::Esc | KeyCode::Char('q') => return Outcome::Close,
             _ => {}
@@ -810,7 +829,7 @@ impl Changes {
             "j/k archivo · ]/[ hunk · v visto · ( ) commit · h commits · tab árbol · esc cerrar"
                 .into()
         } else {
-            "j/k archivo · ]/[ hunk · v visto · tab árbol · 1 2 3 vistas · s lado a lado · r releer · esc cerrar".into()
+            "j/k archivo · ]/[ hunk · v visto · tab árbol · 1 2 3 vistas · s lado a lado · w ajuste · r releer · esc cerrar".into()
         };
         let seen = self.diff(docs).filter(|d| !d.too_large).map(|d| {
             (
@@ -1138,7 +1157,8 @@ impl Changes {
                         Style::fg(look::cyan()).on(look::sel()),
                     );
                 }
-                Line::One(_, row) => one_column(g, m.bx, y, w, row),
+                Line::One(_, row) => one_column(g, m.bx, y, w, row, false),
+                Line::Cont(_, row) => one_column(g, m.bx, y, w, row, true),
                 Line::Two(_, left, right) => two_columns(g, m.bx, y, w, left, right),
                 Line::Gap(_) => {}
             }
@@ -1323,19 +1343,30 @@ fn number(n: Option<u32>) -> String {
     n.map_or("    ".into(), |n| format!("{n:>4}"))
 }
 
-fn one_column(g: &mut Grid, x: usize, y: usize, w: usize, row: &Row) {
+/// The columns of a line of one column before its code: the two numbers, the marker and a space.
+const ONE_COLUMN_GUTTER: usize = 11;
+
+/// A line of one column; `cont` for the rows a long line goes on in, which have `↪` for numbers.
+fn one_column(g: &mut Grid, x: usize, y: usize, w: usize, row: &Row, cont: bool) {
     let bg = row_bg(row);
     let tint = |s: Style| Style { bg, ..s };
-    g.put(
-        x,
-        y,
-        &format!("{} {} ", number(row.old), number(row.new)),
-        tint(Style::fg(look::dim())),
-    );
-    let (m, style) = marker(row.kind);
+    let numbers = if cont {
+        format!("{:>8} ", "↪")
+    } else {
+        format!("{} {} ", number(row.old), number(row.new))
+    };
+    g.put(x, y, &numbers, tint(Style::fg(look::dim())));
+    let (m, style) = marker(if cont { Kind::Ctx } else { row.kind });
     g.put(x + 9, y, m, tint(style));
     g.put(x + 10, y, " ", tint(Style::default()));
-    code(g, x + 11, y, w.saturating_sub(11), row, bg);
+    code(
+        g,
+        x + ONE_COLUMN_GUTTER,
+        y,
+        w.saturating_sub(ONE_COLUMN_GUTTER),
+        row,
+        bg,
+    );
 }
 
 fn two_columns(
@@ -1414,6 +1445,33 @@ mod tests {
             0,
         );
         r
+    }
+
+    /// REQ-591: a line that does not fit goes on in the next row with `↪`, `w` cuts it instead, and
+    /// the lines it makes are lines to scroll.
+    #[test]
+    fn a_long_line_wraps_and_w_turns_it_off() {
+        let mut r = rig((140, 40));
+        let long = "x".repeat(150);
+        for d in r.diffs.values_mut() {
+            d.head.rev += 1;
+            d.files[0].hunks[0].lines.push(format!("+{long}"));
+        }
+        let size = r.size;
+        let docs = Docs {
+            diffs: &r.diffs,
+            commits: &r.commits,
+        };
+        r.changes.update(&docs, size, 0);
+        let wrapped = r.text();
+        assert!(wrapped.contains('↪'), "{wrapped}");
+        let rows_wrapped = r.changes.cache.as_ref().unwrap().lines.len();
+        r.key(KeyCode::Char('w'));
+        let cut = r.text();
+        assert!(!cut.contains('↪'), "{cut}");
+        assert!(r.changes.cache.as_ref().unwrap().lines.len() < rows_wrapped);
+        r.key(KeyCode::Char('w'));
+        assert!(r.text().contains('↪'), "w again wraps");
     }
 
     impl Rig {
