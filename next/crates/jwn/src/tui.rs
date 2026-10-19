@@ -877,7 +877,7 @@ impl View {
                     } else {
                         Changes::open(&id)
                     });
-                    self.rv_focus = false;
+                    self.leave_review_diff();
                 }
                 let area = self.diff_rect();
                 let docs = Docs {
@@ -893,9 +893,17 @@ impl View {
                 if let Some(old) = self.rv.take() {
                     self.asks.extend(old.close());
                 }
-                self.rv_focus = false;
+                self.leave_review_diff();
             }
         }
+    }
+
+    /// The diff no longer has the keyboard: not as typing that would go to a panel by surprise.
+    fn leave_review_diff(&mut self) {
+        if self.rv_focus {
+            self.typing = false;
+        }
+        self.rv_focus = false;
     }
 
     /// The viewer that is open: the screen of `d`, or the diff of a review.

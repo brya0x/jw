@@ -379,6 +379,7 @@ impl Changes {
         let g = self.geom_of(size);
         let Some(d) = self.diff(docs) else {
             self.cache = None;
+            self.pick = None;
             self.scroll = 0;
             return;
         };
@@ -582,8 +583,11 @@ impl Changes {
                 let Some(cache) = self.diff(docs).and_then(|d| self.cache_for(d)) else {
                     return Outcome::Stay;
                 };
-                let file = cache.lines[pick.anchor].file();
                 let lines = &cache.lines;
+                let Some(file) = lines.get(pick.anchor).map(Line::file) else {
+                    self.pick = None;
+                    return Outcome::Stay;
+                };
                 let next = if down {
                     (pick.cursor + 1..lines.len()).find(|&i| Self::is_row(&lines[i]))
                 } else {
@@ -621,13 +625,14 @@ impl Changes {
         let d = self.diff(docs)?;
         let cache = self.cache_for(d)?;
         let (lo, hi) = (pick.anchor.min(pick.cursor), pick.anchor.max(pick.cursor));
-        let path = &d.files[*cache.order.get(cache.lines.get(lo)?.file())?].path;
+        let picked = cache.lines.get(lo..=hi)?;
+        let path = &d.files[*cache.order.get(picked.first()?.file())?].path;
         let (mut new, mut old) = (Vec::new(), Vec::new());
         let mut row = |r: &Row| match r.kind {
             Kind::Del => old.extend(r.old),
             _ => new.extend(r.new),
         };
-        for line in &cache.lines[lo..=hi] {
+        for line in picked {
             match line {
                 Line::One(_, r) => row(r),
                 Line::Two(_, l, r) => {
@@ -1640,19 +1645,35 @@ mod tests {
         // the same again, to the end
         r.key(KeyCode::Char('V'));
         r.key(KeyCode::Char('j'));
-        let Outcome::Reference(text) = r.key(KeyCode::Enter) else {
-            panic!("↵ asks for the reference")
-        };
-        let re = text.trim_end();
-        let (path, lines) = re.strip_prefix('@').unwrap().split_once("#L").unwrap();
+        let picked = r.changes.pick.unwrap();
+        // what the two rows picked say of the new side, read from the lines themselves
+        let cache = r.changes.cache.as_ref().unwrap();
+        let new: Vec<u32> = cache.lines[picked.anchor..=picked.cursor]
+            .iter()
+            .filter_map(|l| match l {
+                Line::One(_, row) if row.kind != Kind::Del => row.new,
+                _ => None,
+            })
+            .collect();
+        let path = r.diffs.values().next().unwrap().files
+            [cache.order[cache.lines[picked.anchor].file()]]
+        .path
+        .clone();
         assert!(
-            r.diffs
-                .values()
-                .any(|d| d.files.iter().any(|f| f.path == path)),
-            "{text}"
+            !new.is_empty(),
+            "the first rows of the fixture are not deleted lines"
         );
-        assert!(lines.chars().next().unwrap().is_ascii_digit(), "{text}");
-        assert!(text.ends_with(' '), "the person goes on typing after it");
+        let (a, b) = (new.iter().min().unwrap(), new.iter().max().unwrap());
+        let span = if a == b {
+            format!("L{a}")
+        } else {
+            format!("L{a}-{b}")
+        };
+        assert_eq!(
+            r.key(KeyCode::Enter),
+            Outcome::Reference(format!("@{path}#{span} ")),
+            "the file, the lines and a space to go on typing after"
+        );
         assert!(r.changes.pick.is_none());
     }
 
