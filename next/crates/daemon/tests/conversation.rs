@@ -413,6 +413,50 @@ fn a_workspace_says_it_works_while_its_conversation_runs_a_turn() {
     r.stop();
 }
 
+/// REQ-593: a conversation that is resumed before its engine starts has the `/` list that an engine
+/// gave last, so the person can complete and see the colour of a skill from the first key.
+#[test]
+fn a_resumed_conversation_has_the_commands_an_engine_gave_before_its_own_starts() {
+    let mut r = rig();
+    let (node, _) = r.open();
+    // the first engine has said its commands; they are kept for the others
+    let file = r.sb.dir.join("state").join("commands.json");
+    wait_for("the commands to be kept", || file.exists());
+    r.until(&node, "the engine's commands", |v| {
+        v["commands"]
+            .as_array()
+            .is_some_and(|c| c.iter().any(|c| c["name"] == "/deploy"))
+    });
+    let pane = r
+        .cmd(Cmd::NewPane {
+            workspace: r.ws.clone(),
+            program: None,
+            beside: None,
+            dir: None,
+        })
+        .unwrap()
+        .unwrap()["pane"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    r.pane = pane;
+    let (_file, env) = old_session(&r, &[FIRST, REPLY]);
+    let (second, _) = r.open_with(None, vec!["--resume", "old-session"], Some(env));
+    let v = r.conv(&second);
+    assert_eq!(v["status"], "dead", "its engine has not started");
+    let names: Vec<&str> = v["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|c| c["name"].as_str())
+        .collect();
+    assert!(
+        names.contains(&"/deploy") && names.contains(&"/mode"),
+        "{names:?}"
+    );
+    r.stop();
+}
+
 /// REQ-578: a new conversation starts in the mode the person last worked in, and a typed
 /// `--permission-mode` still wins.
 #[test]

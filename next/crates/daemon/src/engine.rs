@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use contract::conversation::{Accent, Image, Mode};
+use contract::conversation::{Accent, ConvCommand, Image, Mode};
 use contract::{ErrorCode, Id};
 use serde_json::{Value, json};
 
@@ -670,6 +670,11 @@ pub fn open_conversation(
         st.effort = e.clone();
     }
     st.set_advisor(crate::settings::advisor_label(env.as_ref(), &cwd));
+    if !st.has_engine_commands()
+        && let Some(d) = dir.as_deref()
+    {
+        st.use_cached_commands(cached_commands(d));
+    }
     // The agent of a review is not briefed: it is offered a first question and waits (REQ-585).
     if let (Some((pr, file)), None) = (&review, &resume) {
         st.suggest(format!(
@@ -1225,6 +1230,28 @@ fn last_mode(dir: &Path) -> Option<Mode> {
     Mode::from_flag(text.trim())
 }
 
+/// The `/` list that an engine gave last, beside the folder of the saved conversations: a
+/// conversation that is opened again has it before its engine starts (REQ-593).
+fn commands_file(dir: &Path) -> Option<PathBuf> {
+    Some(dir.parent()?.join("commands.json"))
+}
+
+fn cached_commands(dir: &Path) -> Vec<ConvCommand> {
+    commands_file(dir)
+        .and_then(|f| std::fs::read_to_string(f).ok())
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+fn write_cached_commands(dir: &Path, commands: &[ConvCommand]) {
+    let (Some(file), Ok(text)) = (commands_file(dir), serde_json::to_string(commands)) else {
+        return;
+    };
+    if std::fs::read_to_string(&file).ok().as_deref() != Some(text.as_str()) {
+        let _ = std::fs::write(file, text);
+    }
+}
+
 fn write_last_mode(dir: &Path, mode: Mode) {
     let Some(file) = last_mode_file(dir) else {
         return;
@@ -1240,7 +1267,8 @@ type Due = (PathBuf, Saved, Option<Probe>);
 /// The conversations that changed and are due are written without the lock: only what is
 /// to be written is copied under it.
 pub fn save_due(shared: &Shared, force: bool) {
-    let (due, chosen): (Vec<Due>, Option<(PathBuf, Mode)>) = {
+    type Cached = Option<(PathBuf, Vec<ConvCommand>)>;
+    let (due, chosen, cached): (Vec<Due>, Option<(PathBuf, Mode)>, Cached) = {
         let mut core = shared.lock();
         let Some(dir) = core.conv_dir.clone() else {
             return;
@@ -1272,10 +1300,19 @@ pub fn save_due(shared: &Shared, force: bool) {
                 (file_of(&dir, pane), saved, probe)
             })
             .collect();
-        (due, chosen)
+        // What an engine said of its commands is kept for the conversations that open without one.
+        let cached = core
+            .convs
+            .values()
+            .find(|c| c.engine.is_some() && c.st.has_engine_commands())
+            .map(|c| (dir.clone(), c.st.commands.clone()));
+        (due, chosen, cached)
     };
     if let Some((dir, mode)) = chosen {
         write_last_mode(&dir, mode);
+    }
+    if let Some((dir, commands)) = cached {
+        write_cached_commands(&dir, &commands);
     }
     for (path, mut saved, probe) in due {
         // The chat is not copied when the engine's transcript is there to read it from (REQ-544).

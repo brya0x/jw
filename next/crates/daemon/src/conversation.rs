@@ -894,6 +894,29 @@ impl State {
         self.suggestion = Some(text);
     }
 
+    /// The engine has said its commands (those of Claude, skills, plugins and the project's),
+    /// and not only jwn's own are known.
+    pub fn has_engine_commands(&self) -> bool {
+        self.commands
+            .iter()
+            .any(|c| matches!(c.kind, CommandKind::Text | CommandKind::Prompt))
+    }
+
+    /// The list the engine gave to another conversation, for one whose engine has not started:
+    /// the person types `/` before the first message (REQ-593). jwn's own stay.
+    pub fn use_cached_commands(&mut self, cached: Vec<ConvCommand>) {
+        if self.has_engine_commands() || cached.is_empty() {
+            return;
+        }
+        let known: Vec<String> = cached.iter().map(|c| c.name.clone()).collect();
+        self.commands = cached;
+        self.commands.extend(
+            own_commands()
+                .into_iter()
+                .filter(|c| !known.contains(&c.name)),
+        );
+    }
+
     /// The model of the advisor, for its rows (REQ-574).
     pub fn set_advisor(&mut self, model: Option<String>) {
         self.advisor = model;

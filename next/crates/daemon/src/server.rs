@@ -253,6 +253,9 @@ impl Daemon {
 
     pub fn stop(mut self) {
         self.stop.store(true, Ordering::SeqCst);
+        // From here the shells that end are the daemon's doing, not a program that ended: the
+        // agents that were running come back after a restart (REQ-391).
+        self.shared.lock().stopping = true;
         // Wake the accept loop; if the socket file is already gone nothing can, so leave
         // the thread rather than wait for it forever.
         let woken = UnixStream::connect(&self.config.socket).is_ok();

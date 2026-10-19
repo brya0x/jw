@@ -139,6 +139,9 @@ pub struct Core {
     /// that brief a review are written (REQ-584).
     pub gh: Option<PathBuf>,
     pub state_dir: Option<PathBuf>,
+    /// The daemon is being stopped: the shells that end then are not programs that ended, and
+    /// what a restart brings back stays as it was.
+    pub stopping: bool,
     /// The panes whose blocks changed since they were saved, and when each was last saved.
     history_dirty: HashSet<Id>,
     history_written: HashMap<Id, Instant>,
@@ -177,6 +180,7 @@ impl Core {
             conv_dir: None,
             gh: None,
             state_dir: None,
+            stopping: false,
             history_dirty: HashSet::new(),
             history_written: HashMap::new(),
             history_shape: HashMap::new(),
@@ -293,6 +297,9 @@ impl Core {
     /// Record the programs found in the panes; true when any changed. A program that ended
     /// becomes the pane's `last_program`, and the title follows what runs.
     pub fn set_running(&mut self, updates: &HashMap<Id, Option<Vec<String>>>) -> bool {
+        if self.stopping {
+            return false;
+        }
         let mut changed = false;
         let mut ended: Vec<Id> = Vec::new();
         for p in self
@@ -1388,6 +1395,31 @@ mod tests {
         core.refresh();
         assert!(attention_of(&core, &session).is_empty());
         assert_eq!(core.docs[&session].rev, 3);
+    }
+
+    /// REQ-391: while the daemon stops, the programs that end are not recorded as ended, so the
+    /// agent that ran in a pane is still the one a restart brings back.
+    #[test]
+    fn a_program_that_ends_because_the_daemon_stops_is_not_forgotten() {
+        let (mut model, _, pane) = model_with_pane();
+        model.workspaces[0].panes[0].running = Some(vec!["claude".into()]);
+        model.workspaces[0].panes[0].resume =
+            Some(vec!["claude".into(), "--resume".into(), "abc".into()]);
+        let gone: HashMap<Id, Option<Vec<String>>> = HashMap::from([(pane.clone(), None)]);
+        let mut live = test_core(model.clone());
+        assert!(live.set_running(&gone));
+        assert_eq!(
+            live.model.workspaces[0].panes[0].resume, None,
+            "a program that ended is over"
+        );
+        let mut stopping = test_core(model);
+        stopping.stopping = true;
+        assert!(!stopping.set_running(&gone));
+        let p = &stopping.model.workspaces[0].panes[0];
+        assert!(
+            p.resume.is_some() && p.running.is_some(),
+            "stopping forgets nothing"
+        );
     }
 
     #[test]

@@ -430,12 +430,14 @@ fn apply(shared: &Shared, batch: Vec<Event>) {
                     }
                 }
             }
-            // A shell that ends takes its pane with it, like closing a terminal.
-            Event::Exited { pane } => {
+            // A shell that ends takes its pane with it, like closing a terminal; not when it is the
+            // daemon that ends them, which the restart brings back.
+            Event::Exited { pane } if !core.stopping => {
                 for ws in &mut core.model.workspaces {
                     ws.panes.retain(|p| p.id != pane);
                 }
             }
+            Event::Exited { .. } => {}
             Event::Stop => {}
         }
     }
