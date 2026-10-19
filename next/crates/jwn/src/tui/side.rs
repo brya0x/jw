@@ -69,6 +69,7 @@ mod tests {
             branch: None,
             pane_count: 0,
             attention: Vec::new(),
+            review: None,
             working: false,
         }
     }

@@ -36,7 +36,18 @@ fn ahead(dir: &Path) -> Result<(bool, u64), ErrorBody> {
     .ok();
     let count = match &upstream {
         Some(up) => git::run(dir, &["rev-list", "--count", &format!("{up}..HEAD")]),
-        None => git::run(dir, &["rev-list", "--count", "HEAD", "--not", "--remotes"]),
+        // The head of a pull request that is being reviewed was fetched, not made here: it is no work to lose.
+        None => git::run(
+            dir,
+            &[
+                "rev-list",
+                "--count",
+                "HEAD",
+                "--not",
+                "--remotes",
+                &format!("--glob=refs/{}/*", identity::get().name),
+            ],
+        ),
     }
     .map_err(|m| err(ErrorCode::GitFailed, m))?;
     Ok((upstream.is_some(), count.parse().unwrap_or(0)))

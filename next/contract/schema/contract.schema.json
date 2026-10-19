@@ -300,8 +300,14 @@
         "branch": { "type": "string" },
         "pane_count": { "type": "integer", "minimum": 0 },
         "attention": { "type": "array", "items": { "$ref": "#/$defs/Attention" } },
+        "review": { "$ref": "#/$defs/Review" },
         "working": { "type": "boolean" }
       }
+    },
+    "Review": {
+      "type": "object",
+      "required": ["pr", "base"],
+      "properties": { "pr": { "type": "integer", "minimum": 1 }, "base": { "type": "string" } }
     },
     "SplitDir": { "enum": ["row", "col"] },
     "Layout": {
@@ -387,7 +393,8 @@
             "project": { "type": "string" },
             "branch": { "type": "string" },
             "panes": { "type": "array", "items": { "$ref": "#/$defs/PaneSummary" } },
-            "layout": { "$ref": "#/$defs/Layout" }
+            "layout": { "$ref": "#/$defs/Layout" },
+            "review": { "$ref": "#/$defs/Review" }
           }
         },
         {
@@ -525,6 +532,8 @@
         { "type": "object", "required": ["cmd", "repo", "to", "text"], "properties": { "cmd": { "const": "write_project_config" }, "repo": { "type": "string" }, "to": { "enum": ["repo", "personal"] }, "text": { "type": "string", "maxLength": 65536 } } },
         { "type": "object", "required": ["cmd", "repo", "to", "set"], "properties": { "cmd": { "const": "edit_project_config" }, "repo": { "type": "string" }, "to": { "enum": ["repo", "personal"] }, "set": { "type": "object", "properties": { "root": { "type": "string" }, "setup": { "type": "array", "items": { "type": "string" } }, "copy": { "type": "array", "items": { "type": "string" } }, "ports": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0, "maximum": 99 } }, "open": { "enum": ["shell", "claude"] } }, "additionalProperties": false } } },
         { "type": "object", "required": ["cmd", "repo"], "properties": { "cmd": { "const": "list_worktrees" }, "repo": { "type": "string" } } },
+        { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "list_prs" }, "workspace": { "$ref": "#/$defs/Id" }, "requested": { "type": "boolean" } } },
+        { "type": "object", "required": ["cmd", "workspace", "pr"], "properties": { "cmd": { "const": "review_pr" }, "workspace": { "$ref": "#/$defs/Id" }, "pr": { "type": "integer", "minimum": 1 } } },
         { "type": "object", "required": ["cmd", "repo", "path"], "properties": { "cmd": { "const": "open_worktree" }, "repo": { "type": "string" }, "path": { "type": "string" } } },
         { "type": "object", "required": ["cmd", "workspace", "query"], "properties": { "cmd": { "const": "find_files" }, "workspace": { "$ref": "#/$defs/Id" }, "query": { "type": "string" } } },
         { "type": "object", "required": ["cmd", "workspace", "name"], "properties": { "cmd": { "const": "rename_workspace" }, "workspace": { "$ref": "#/$defs/Id" }, "name": { "type": "string", "maxLength": 80 } } },

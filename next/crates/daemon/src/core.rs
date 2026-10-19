@@ -135,6 +135,10 @@ pub struct Core {
     /// The conversations of the panes that run `claude`, by pane id, and where they are kept.
     pub convs: HashMap<Id, crate::engine::Conv>,
     pub conv_dir: Option<PathBuf>,
+    /// `gh`, for what the person asks of GitHub; and the daemon's state folder, where the files
+    /// that brief a review are written (REQ-584).
+    pub gh: Option<PathBuf>,
+    pub state_dir: Option<PathBuf>,
     /// The panes whose blocks changed since they were saved, and when each was last saved.
     history_dirty: HashSet<Id>,
     history_written: HashMap<Id, Instant>,
@@ -171,6 +175,8 @@ impl Core {
             history_dir: None,
             convs: HashMap::new(),
             conv_dir: None,
+            gh: None,
+            state_dir: None,
             history_dirty: HashSet::new(),
             history_written: HashMap::new(),
             history_shape: HashMap::new(),
@@ -217,6 +223,24 @@ impl Core {
             .flat_map(|w| &w.panes)
             .find(|p| p.id == pane)
             .map(|p| PathBuf::from(&p.cwd))
+    }
+
+    /// The pull request that the workspace of `pane` reviews, the repository's folder and the file
+    /// that briefs it (REQ-585).
+    pub fn review_of_pane(&self, pane: &str) -> Option<(u64, PathBuf)> {
+        let ws = self
+            .model
+            .workspaces
+            .iter()
+            .find(|w| w.panes.iter().any(|p| p.id == pane))?;
+        let review = ws.review.as_ref()?;
+        let repo = Path::new(ws.project.as_deref()?)
+            .file_name()?
+            .to_string_lossy();
+        Some((
+            review.pr,
+            crate::review::context_path(self.state_dir.as_deref()?, &repo, review.pr),
+        ))
     }
 
     fn pane_mut(&mut self, pane: &str) -> Option<&mut crate::model::Pane> {
@@ -1163,6 +1187,7 @@ impl Core {
                 branch: ws.branch.clone(),
                 pane_count: ws.panes.len() as u32,
                 attention: attention.clone(),
+                review: ws.review.clone(),
                 working: ws
                     .panes
                     .iter()
@@ -1177,6 +1202,7 @@ impl Core {
                 branch: ws.branch.clone(),
                 panes,
                 layout: ws.layout.clone(),
+                review: ws.review.clone(),
             }));
         }
         nodes.push(Node::Session(Session {
@@ -1314,6 +1340,7 @@ mod tests {
             attention: vec![],
             adopted: false,
             ports: None,
+            review: None,
             github: None,
         });
         (model, ws, pane)

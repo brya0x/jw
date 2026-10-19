@@ -185,6 +185,20 @@ pub enum Cmd {
     ListWorktrees {
         repo: String,
     },
+    /// The open pull requests of the repository the workspace is in, most recently updated first
+    /// (REQ-581); with `requested`, only those that ask for the person's review. The result is a
+    /// `PrList`.
+    ListPrs {
+        workspace: Id,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        requested: bool,
+    },
+    /// Make, or bring up to date, the worktree that reviews pull request `pr` of the repository the
+    /// workspace is in, and open it (REQ-582). The result is `{workspace, existed, dirty}`.
+    ReviewPr {
+        workspace: Id,
+        pr: u64,
+    },
     /// Open a worktree that exists as a workspace with no panel: nothing is made, copied or run
     /// (N99). `path` is one `list_worktrees` listed. The result is the one of `create_worktree`.
     OpenWorktree {
@@ -524,6 +538,58 @@ pub struct Workspace {
     /// daemon that does not keep one: the client lays them out itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<Layout>,
+    /// The workspace reviews a pull request (REQ-583).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<Review>,
+}
+
+/// What makes a workspace the review of a pull request: its number and the branch the pull
+/// request is to be merged into, which the workspace's diff compares against.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Review {
+    pub pr: u64,
+    pub base: String,
+}
+
+/// A file a pull request changes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrFile {
+    pub path: String,
+    pub additions: u32,
+    pub deletions: u32,
+}
+
+/// An open pull request, as `list_prs` lists it (REQ-581).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrInfo {
+    pub number: u64,
+    pub title: String,
+    pub author: String,
+    /// The branch the pull request comes from.
+    pub branch: String,
+    /// The branch it is to be merged into.
+    pub base: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub draft: bool,
+    /// When it was last updated, as GitHub says it (ISO 8601).
+    pub updated: String,
+    /// GitHub's review decision: `APPROVED`, `CHANGES_REQUESTED` or `REVIEW_REQUIRED`; none when it has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<String>,
+    pub additions: u32,
+    pub deletions: u32,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub body: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<PrFile>,
+}
+
+/// The result of `list_prs`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrList {
+    pub prs: Vec<PrInfo>,
 }
 
 /// Which way a split puts its two sides.
@@ -933,6 +999,9 @@ pub struct WorkspaceSummary {
     pub branch: Option<String>,
     pub pane_count: u32,
     pub attention: Vec<Attention>,
+    /// The workspace reviews a pull request (REQ-583).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<Review>,
     /// A conversation of the workspace works: it thinks, writes, runs a tool or compacts.
     #[serde(default, skip_serializing_if = "is_false")]
     pub working: bool,

@@ -57,6 +57,16 @@ pub fn parse(json: &str) -> Result<Option<Pr>, String> {
 
 /// Run `gh` in `dir` and read its answer, or give up after `WITHIN`.
 fn gh(program: &Path, dir: &Path, args: &[&str]) -> Result<String, String> {
+    run_gh(program, dir, args, WITHIN)
+}
+
+/// Run `gh` in `dir` and read its answer, or give up after `within`.
+pub(crate) fn run_gh(
+    program: &Path,
+    dir: &Path,
+    args: &[&str],
+    within: Duration,
+) -> Result<String, String> {
     let mut child = Command::new(program)
         .args(args)
         .current_dir(dir)
@@ -81,7 +91,7 @@ fn gh(program: &Path, dir: &Path, args: &[&str]) -> Result<String, String> {
         let _ = err.take(4096).read_to_string(&mut text);
         text.trim().to_owned()
     });
-    let end = Instant::now() + WITHIN;
+    let end = Instant::now() + within;
     let status = loop {
         if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
             break status;

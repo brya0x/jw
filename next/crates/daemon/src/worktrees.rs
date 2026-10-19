@@ -213,6 +213,7 @@ pub fn open(shared: &Shared, repo: &str, path: &str) -> Done {
                 slot: 0,
                 names: project.ports.clone(),
             }),
+            review: None,
             github: None,
         },
     )

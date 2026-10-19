@@ -57,6 +57,9 @@ pub struct Conv {
     pub id: Id,
     pub st: State,
     pub engine: Option<Engine>,
+    /// Its mode is the person's choice, so a new conversation starts in it (REQ-578): not so for
+    /// the agent of a review, which is opened in the mode that its workspace needs (REQ-585).
+    remember: bool,
     /// The process of the engine started last, kept when it ends: it is not another `claude` on
     /// the session while it is still ending (REQ-575).
     engine_pid: Option<u32>,
@@ -588,12 +591,13 @@ pub fn open_conversation(
     env: Option<BTreeMap<String, String>>,
 ) -> Done {
     let parsed: OpenArgs = parse_args(&args).map_err(|m| err(ErrorCode::Unsupported, m))?;
-    let (pane_cwd, dir, old) = {
+    let (pane_cwd, dir, old, review) = {
         let mut core = shared.lock();
         let cwd = core
             .pane_cwd(pane)
             .ok_or_else(|| err(ErrorCode::NotFound, format!("no pane {pane}")))?;
-        (cwd, core.conv_dir.clone(), core.convs.remove(pane))
+        let review = core.review_of_pane(pane);
+        (cwd, core.conv_dir.clone(), core.convs.remove(pane), review)
     };
     if let Some(en) = old.and_then(|o| o.engine) {
         en.stop();
@@ -666,6 +670,13 @@ pub fn open_conversation(
         st.effort = e.clone();
     }
     st.set_advisor(crate::settings::advisor_label(env.as_ref(), &cwd));
+    // The agent of a review is not briefed: it is offered a first question and waits (REQ-585).
+    if let (Some((pr, file)), None) = (&review, &resume) {
+        st.suggest(format!(
+            "Lee {} y dime los riesgos del PR #{pr}",
+            file.display()
+        ));
+    }
     if lazy {
         st.set_held(crate::sessions::holder(env.as_ref(), &st.session, None));
     }
@@ -695,6 +706,7 @@ pub fn open_conversation(
                 id: node.clone(),
                 st,
                 engine: None,
+                remember: review.is_none(),
                 engine_pid: None,
                 generation: 0,
                 cwd,
@@ -1241,7 +1253,7 @@ pub fn save_due(shared: &Shared, force: bool) {
         let chosen = core
             .convs
             .values()
-            .filter(|c| c.engine.is_some() && is_due(c))
+            .filter(|c| c.engine.is_some() && c.remember && is_due(c))
             .map(|c| (dir.clone(), c.st.mode))
             .last();
         let due = core

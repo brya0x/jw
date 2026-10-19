@@ -168,6 +168,8 @@ impl Daemon {
         shared.lock().history_dir = Some(crate::history::dir(&config.state_dir));
         shared.lock().conv_dir = Some(config.state_dir.join("conversations"));
         shared.lock().projects_dir = config.projects.clone();
+        shared.lock().gh = config.gh.clone();
+        shared.lock().state_dir = Some(config.state_dir.clone());
         shared.lock().swap = config.conversation && config.hook_exe.is_some();
         shared.lock().mobile.clone().resume();
         if let Some(exe) = &config.hook_exe {

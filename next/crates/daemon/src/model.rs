@@ -43,6 +43,9 @@ pub struct Workspace {
     /// The ports a worktree was given when it was made (REQ-495).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ports: Option<PortBlock>,
+    /// The workspace reviews a pull request (REQ-583).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<contract::Review>,
     /// What was last seen of the branch's pull request, so an attention is raised when it
     /// changes and not again while it does not. Not saved: a restart sees it afresh.
     #[serde(skip)]

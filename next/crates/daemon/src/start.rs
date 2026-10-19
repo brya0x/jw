@@ -98,7 +98,7 @@ fn spawn(
 /// as `open` says or, without it, as the settings do. A worktree's setup runs in that panel first
 /// (REQ-507), unless it was there before jwn (REQ-536); a folder has no setup (REQ-500).
 pub fn start_workspace(shared: &Shared, workspace: &Id, open: Option<OpenKind>) -> Done {
-    let (kind, path, top, branch, adopted) = {
+    let (kind, path, top, branch, adopted, review) = {
         let core = shared.lock();
         let ws = core.workspace(workspace)?;
         if !ws.panes.is_empty() {
@@ -113,6 +113,7 @@ pub fn start_workspace(shared: &Shared, workspace: &Id, open: Option<OpenKind>) 
             ws.project.clone(),
             ws.branch.clone().unwrap_or_default(),
             ws.adopted,
+            ws.review.is_some(),
         )
     };
     let worktree_of = top.filter(|_| kind == WorkspaceKind::Worktree);
@@ -120,7 +121,11 @@ pub fn start_workspace(shared: &Shared, workspace: &Id, open: Option<OpenKind>) 
         Some(top) => load(shared, &PathBuf::from(top))?,
         None => load_folder(shared, Path::new(&path))?,
     };
-    let claude = vec!["claude".to_owned()];
+    // The agent of a review is there to answer questions about the diff: it asks before it edits (REQ-585).
+    let mut claude = vec!["claude".to_owned()];
+    if review {
+        claude.extend(["--permission-mode".to_owned(), "manual".to_owned()]);
+    }
     let agent = open.unwrap_or(project.open) == OpenKind::Claude;
     let id = if worktree_of.is_some() && !adopted && !project.setup.is_empty() {
         let name = Path::new(&path)

@@ -13,6 +13,7 @@ use crate::files;
 use crate::markdown;
 use crate::panes;
 use crate::rename;
+use crate::review;
 use crate::saved;
 use crate::server::Shared;
 use crate::start;
@@ -73,6 +74,11 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
             workspaces::create_worktree(shared, &repo, &branch, base.as_deref(), folder.as_deref())
         }
         Cmd::ListWorktrees { repo } => worktrees::list(shared, &repo),
+        Cmd::ListPrs {
+            workspace,
+            requested,
+        } => review::list(shared, &workspace, requested),
+        Cmd::ReviewPr { workspace, pr } => review::review(shared, &workspace, pr),
         Cmd::OpenWorktree { repo, path } => worktrees::open(shared, &repo, &path),
         Cmd::ProjectConfig { repo } => start::project_config(shared, &repo),
         Cmd::WriteProjectConfig { repo, to, text } => {

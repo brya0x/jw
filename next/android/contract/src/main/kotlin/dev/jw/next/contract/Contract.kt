@@ -169,6 +169,14 @@ sealed interface Cmd {
     @Serializable @SerialName("list_worktrees")
     data class ListWorktrees(val repo: String) : Cmd
 
+    /** The open pull requests of the repository the workspace is in; with [requested], those that ask for the person's review. The result is a [PrList]. */
+    @Serializable @SerialName("list_prs")
+    data class ListPrs(val workspace: Id, val requested: Boolean = false) : Cmd
+
+    /** Make, or bring up to date, the worktree that reviews pull request [pr]; the result is `{workspace, existed, dirty}`. */
+    @Serializable @SerialName("review_pr")
+    data class ReviewPr(val workspace: Id, val pr: Long) : Cmd
+
     /** Open a worktree [ListWorktrees] listed as a workspace with no panel; the result is the one of [CreateWorktree]. */
     @Serializable @SerialName("open_worktree")
     data class OpenWorktree(val repo: String, val path: String) : Cmd
@@ -483,6 +491,37 @@ data class WorktreeInfo(
     val workspace: Id? = null,
 )
 
+/** What makes a workspace the review of a pull request: its number and the branch it is to be merged into. */
+@Serializable
+data class Review(val pr: Long, val base: String)
+
+/** A file a pull request changes. */
+@Serializable
+data class PrFile(val path: String, val additions: Int, val deletions: Int)
+
+/** An open pull request, as `list_prs` lists it. */
+@Serializable
+data class PrInfo(
+    val number: Long,
+    val title: String,
+    val author: String,
+    val branch: String,
+    val base: String,
+    val draft: Boolean = false,
+    val updated: String,
+    /** GitHub's review decision: `APPROVED`, `CHANGES_REQUESTED` or `REVIEW_REQUIRED`. */
+    val decision: String? = null,
+    val additions: Int,
+    val deletions: Int,
+    val body: String = "",
+    val url: String = "",
+    val files: List<PrFile> = emptyList(),
+)
+
+/** The result of `list_prs`. */
+@Serializable
+data class PrList(val prs: List<PrInfo>)
+
 /** The result of `list_worktrees`. */
 @Serializable
 data class WorktreeList(val worktrees: List<WorktreeInfo>)
@@ -511,6 +550,8 @@ data class WorkspaceSummary(
     val branch: String? = null,
     @SerialName("pane_count") val paneCount: Int,
     val attention: List<Attention>,
+    /** The workspace reviews a pull request. */
+    val review: Review? = null,
     /** A conversation of the workspace works: it thinks, writes, runs a tool or compacts. */
     val working: Boolean = false,
 )
@@ -597,6 +638,8 @@ sealed interface Node {
         val branch: String? = null,
         val panes: List<PaneSummary>,
         val layout: Layout? = null,
+        /** The workspace reviews a pull request. */
+        val review: Review? = null,
     ) : Node
 
     /** Level 2: one pane, a terminal. */

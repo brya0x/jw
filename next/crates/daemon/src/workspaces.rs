@@ -104,6 +104,7 @@ pub fn open_folder(shared: &Shared, path: &str) -> Done {
             attention: Vec::new(),
             adopted: false,
             ports: None,
+            review: None,
             github: None,
         },
     )
@@ -208,6 +209,7 @@ pub fn create_worktree(
                 slot: 0,
                 names: project.ports.clone(),
             }),
+            review: None,
             github: None,
         },
     )?;

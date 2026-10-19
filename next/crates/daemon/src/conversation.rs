@@ -889,6 +889,11 @@ impl State {
         changed || over
     }
 
+    /// A first message that the field offers before Claude proposes any (REQ-585).
+    pub fn suggest(&mut self, text: String) {
+        self.suggestion = Some(text);
+    }
+
     /// The model of the advisor, for its rows (REQ-574).
     pub fn set_advisor(&mut self, model: Option<String>) {
         self.advisor = model;

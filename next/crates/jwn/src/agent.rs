@@ -1025,6 +1025,7 @@ mod tests {
             branch: branch.map(str::to_owned),
             pane_count: 1,
             attention: Vec::new(),
+            review: None,
             working: false,
         }
     }

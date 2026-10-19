@@ -103,8 +103,32 @@ fn has_head(top: &Path) -> bool {
     git::run(top, &["rev-parse", "--verify", "--quiet", "HEAD"]).is_ok()
 }
 
+/// The file in a worktree's own git folder that says what its review compares against (REQ-586).
+fn review_base_file(top: &Path) -> Option<PathBuf> {
+    let dir = git::run(top, &["rev-parse", "--absolute-git-dir"]).ok()?;
+    Some(PathBuf::from(dir).join(format!("{}-review-base", identity::get().name)))
+}
+
+/// Make `base` (`origin/<branch>`) what the changes of the worktree at `top` compare against, in
+/// place of the repository's default branch: a review is the pull request's change, not the
+/// branch's.
+pub fn set_review_base(top: &Path, base: &str) -> Result<(), String> {
+    let file = review_base_file(top).ok_or("not a git worktree")?;
+    std::fs::write(&file, base).map_err(|e| format!("{}: {e}", file.display()))
+}
+
+/// What a review compares against, when the worktree is one.
+fn review_base(top: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(review_base_file(top)?).ok()?;
+    Some(text.trim().to_owned()).filter(|b| !b.is_empty())
+}
+
+/// What the changes of a worktree are compared with: the base of its review, or else
 /// `origin/<default branch>`, when origin says what its default branch is.
 fn base_of(top: &Path) -> Option<String> {
+    if let Some(base) = review_base(top) {
+        return Some(base);
+    }
     git::run(
         top,
         &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],

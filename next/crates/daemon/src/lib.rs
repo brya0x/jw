@@ -28,6 +28,7 @@ mod provision;
 mod pty;
 mod rename;
 mod replies;
+mod review;
 mod saved;
 mod server;
 mod sessions;
