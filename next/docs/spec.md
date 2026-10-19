@@ -1208,6 +1208,7 @@ REQ-453 to REQ-457 by N86: `crates/jwn/src/agent.rs` tests (when a turn is over 
 | N113 ✓ | a new conversation starts in the mode the person last worked in | 578 | `crates/daemon/src/engine.rs` |
 | N114 ✓ | the row of a workspace says when its Claude works: `working` in the summary, a spinner beside the marks in the terminal and on the phone | 579 | `crates/{contract,daemon}/`, `crates/jwn/src/tui.rs`, `android/{contract,client-core,app}/`, `docs/prototypes/working-mark.html` |
 | N115 ✓ | a blank row between the list and the line of work and after a folded run of tools | 580 | `crates/jwn/src/tui/conversation.rs` |
+| N116 ✓ | the test path of Claude: the inventory of the real engine in three columns (`docs/test-path.md`), a script that runs 13 stages and a survey against the real `claude` in a private daemon (`scripts/claude-path.py`, opt-in, not in `just ci`) and the manual list | (the user's point 1 of done) | `docs/test-path.md`, `scripts/claude-path.py` |
 | N109c ✓ | the row of the advisor says its model, from `advisorModel` in Claude's settings (`Advising using Opus 5.5`) | 574 | `crates/daemon/src/{settings,engine,conversation}.rs`, `crates/jwn/src/tui/conversation.rs` |
 
 ## What is left

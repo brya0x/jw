@@ -126,8 +126,8 @@ with no model call except `/context`, `/recap`, `/usage` and `/skill-doctor`:
 
 ### 2.3 What still needs eyes (the manual list)
 
-Each step is typed in a pane of a `scripts/jwt`-style private client (`jwn` with its own state dir)
-against a throwaway repo, and looked at in the terminal client and, when connected, on the phone.
+Each step is typed in a pane of the terminal client run on its own state dir (`JWN_STATE_DIR` and
+`JWN_SOCKET` set, as the script does) against a throwaway repo, and looked at in the terminal client and, when connected, on the phone.
 
 | Look at | Do | Expect |
 |---|---|---|
