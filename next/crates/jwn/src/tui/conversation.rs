@@ -845,6 +845,7 @@ impl Ui {
         }
         let mut runs = fold::runs(&conv.items).into_iter().peekable();
         let mut i = 0;
+        let mut after_run = false;
         while i < conv.items.len() {
             let abs = conv.first + i as u32;
             let before = out.len();
@@ -864,7 +865,7 @@ impl Ui {
                     soft: false,
                     fold: true,
                 });
-                self.separate(conv, i, before, &mut out);
+                self.separate(conv, i, before, false, &mut out);
                 if open {
                     for k in run.first..=run.last {
                         let at = conv.first + k as u32;
@@ -872,10 +873,12 @@ impl Ui {
                     }
                 }
                 i = run.last + 1;
+                after_run = true;
                 continue;
             }
             self.item_lines(conv, &conv.items[i], abs, w, &mut out);
-            self.separate(conv, i, before, &mut out);
+            self.separate(conv, i, before, after_run, &mut out);
+            after_run = false;
             i += 1;
         }
         // What waits for the turn that runs comes after what was said, as a message not sent yet.
@@ -911,12 +914,21 @@ impl Ui {
     }
 
     /// A blank row before what was drawn from `before` on, unless it goes on from a tool, an agent or
-    /// a note that the one above it is too (`i` is the item, or the first of a run).
-    fn separate(&self, conv: &Conversation, i: usize, before: usize, out: &mut Vec<Line>) {
+    /// a note that the one above it is too (`i` is the item, or the first of a run). What comes
+    /// after a run of folded tools (`after_run`) is not part of it, so it has its blank row.
+    fn separate(
+        &self,
+        conv: &Conversation,
+        i: usize,
+        before: usize,
+        after_run: bool,
+        out: &mut Vec<Line>,
+    ) {
         let Some(item) = conv.items.get(i) else {
             return;
         };
         let grouped = i > 0
+            && !after_run
             && matches!(
                 item,
                 Item::Tool { .. } | Item::Agent { .. } | Item::Note { .. }
@@ -1306,7 +1318,8 @@ impl Ui {
         let band_y = foot.saturating_sub(band_rows);
         let work =
             (self.working(conv) || self.followed_work(conv)).then(|| band_y.saturating_sub(1));
-        let list_end = work.unwrap_or(band_y);
+        // A blank row between the list and the line of work.
+        let list_end = work.map_or(band_y, |w| w.saturating_sub(1));
         // The checklist's strip is one row, and its lines when it is open, as many as there is room for.
         let todo_rows = if conv.todos.is_empty() {
             0
@@ -3473,11 +3486,25 @@ mod tests {
     #[test]
     fn the_working_line_says_what_claude_does_for_how_long_and_how_to_stop() {
         let mut conv = idle();
+        conv.items = (0..60)
+            .map(|n| Item::Text {
+                text: format!("hola {n}"),
+                live: false,
+                blocks: None,
+            })
+            .collect();
+        conv.first = 0;
+        conv.queue.clear();
         conv.status = ConvStatus::Thinking;
         conv.since = Some(1_792_110_000_000);
         let (_, rows) = frame(&Ui::default(), &conv);
-        row_of(&rows, "Pensando… (12 s · esc interrumpe)");
+        let work = row_of(&rows, "Pensando… (12 s · esc interrumpe)");
         row_of(&rows, "■ esc");
+        assert!(
+            rows[work - 1].trim().is_empty(),
+            "a blank row between the list and the line of work: {rows:#?}"
+        );
+        assert!(rows[work - 2].contains("hola 59"), "{rows:#?}");
         conv.status = ConvStatus::Idle;
         let (_, rows) = frame(&Ui::default(), &conv);
         assert!(!rows.iter().any(|r| r.contains("esc interrumpe")));
@@ -5121,8 +5148,14 @@ mod tests {
             !rows.iter().any(|r| r.contains("Bash(cargo test)")),
             "folded: no row of its own"
         );
-        row_of(&rows, "● Edit(src/a.rs)");
+        let edit = row_of(&rows, "● Edit(src/a.rs)");
         row_of(&rows, "● Bash(sleep 9)");
+        assert_eq!(
+            edit,
+            at + 2,
+            "a blank row between the run and what follows it"
+        );
+        assert!(rows[at + 1].trim().is_empty(), "{rows:#?}");
         assert!(ui.click(&conv, INNER, 10, at).is_none());
         assert_eq!(ui.picked, None, "a row of a run picks nothing");
         let (_, rows) = frame(&ui, &conv);
