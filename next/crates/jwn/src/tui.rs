@@ -812,8 +812,10 @@ impl View {
     }
 
     pub fn set_size(&mut self, cols: usize, rows: usize) {
-        self.size = (cols, rows);
-        self.sync_review_diff();
+        if self.size != (cols, rows) {
+            self.size = (cols, rows);
+            self.sync_review_diff();
+        }
     }
 
     /// The pull request the open workspace reviews, when it does.
@@ -4841,11 +4843,15 @@ fn open_url(url: &str) -> Result<(), String> {
     } else {
         "xdg-open"
     };
-    std::process::Command::new(program)
+    let mut child = std::process::Command::new(program)
         .arg(url)
         .spawn()
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    // Reaped in a thread of its own: some openers stay as long as the browser does.
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
 }
 
 /// How long a push is waited for.

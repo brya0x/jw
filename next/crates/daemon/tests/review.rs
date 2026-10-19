@@ -328,6 +328,20 @@ fn a_review_that_is_there_is_brought_to_the_new_head_unless_it_has_changes() {
         .unwrap();
     assert_eq!(again["dirty"], false);
     assert_eq!(git_out(&dest, &["rev-parse", "HEAD"]), newer);
+    // a commit of the person's is work too: the review is not moved over it
+    std::fs::write(dest.join("mio.txt"), "mi nota\n").unwrap();
+    git(&dest, &["add", "."]);
+    git(&dest, &["commit", "-q", "-m", "mine"]);
+    let mine = git_out(&dest, &["rev-parse", "HEAD"]);
+    let again = r
+        .cmd(Cmd::ReviewPr {
+            workspace: r.ws.clone(),
+            pr: 7,
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(again["dirty"], true);
+    assert_eq!(git_out(&dest, &["rev-parse", "HEAD"]), mine);
 }
 
 #[test]

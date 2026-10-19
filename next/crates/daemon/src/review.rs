@@ -205,6 +205,31 @@ pub fn context(pr: u64, view: &Value, inline: &Value) -> String {
     out
 }
 
+/// The file in a review worktree's own git folder that says the commit it was last put at.
+fn put_file(dir: &Path) -> Option<PathBuf> {
+    let git_dir = git::run(dir, &["rev-parse", "--absolute-git-dir"]).ok()?;
+    Some(PathBuf::from(git_dir).join(format!("{}-review-head", identity::get().name)))
+}
+
+fn put(dir: &Path, sha: &str) {
+    if let Some(file) = put_file(dir) {
+        let _ = std::fs::write(file, sha);
+    }
+}
+
+fn put_at(dir: &Path) -> Option<String> {
+    Some(
+        std::fs::read_to_string(put_file(dir)?)
+            .ok()?
+            .trim()
+            .to_owned(),
+    )
+}
+
+fn head_sha(dir: &Path) -> Option<String> {
+    git::run(dir, &["rev-parse", "HEAD"]).ok()
+}
+
 /// What the review needs of the workspace it starts from.
 struct Origin {
     program: PathBuf,
@@ -296,21 +321,31 @@ pub fn review(shared: &Shared, workspace: &str, pr: u64) -> Done {
         .workspaces
         .iter()
         .find(|w| w.path == dest_text)
-        .map(|w| w.id.clone());
-    if let Some(id) = open {
-        // A review that is there is brought to the new head, unless it has changes of the person's.
+        .map(|w| (w.id.clone(), w.panes.is_empty()));
+    if let Some((id, no_panel)) = open {
+        // A review that is there is brought to the new head, unless it has work of the person's:
+        // changes in the folder, or commits on top of the head it was last put at.
+        let at = git::run(&dest, &["rev-parse", "HEAD"]).map_err(git_err)?;
         let dirty = !git::run(&dest, &["status", "--porcelain"])
             .map_err(git_err)?
-            .is_empty();
+            .is_empty()
+            || put_at(&dest).as_deref() != Some(at.as_str());
         if !dirty {
             git::run(&dest, &["reset", "--hard", &head]).map_err(git_err)?;
+            put(&dest, &head_sha(&dest).unwrap_or_default());
         }
         crate::diff::set_review_base(&dest, &format!("origin/{base}")).map_err(git_err)?;
-        let mut core = shared.lock();
-        if let Some(ws) = core.model.workspaces.iter_mut().find(|w| w.id == id) {
-            ws.review = Some(review);
+        {
+            let mut core = shared.lock();
+            if let Some(ws) = core.model.workspaces.iter_mut().find(|w| w.id == id) {
+                ws.review = Some(review);
+            }
+            core.refresh();
         }
-        core.refresh();
+        // A review whose panel could not be started before gets it now.
+        if no_panel {
+            crate::start::start_workspace(shared, &id, Some(OpenKind::Claude))?;
+        }
         return Ok(Some(
             json!({ "workspace": id, "existed": true, "dirty": dirty }),
         ));
@@ -327,15 +362,24 @@ pub fn review(shared: &Shared, workspace: &str, pr: u64) -> Done {
     )
     .map_err(git_err)?;
     crate::provision::copy_files(&from.top, &dest, &project.copy);
-    crate::diff::set_review_base(&dest, &format!("origin/{base}")).map_err(git_err)?;
+    put(&dest, &head_sha(&dest).unwrap_or_default());
+    // What is made from here on that fails takes the worktree away again: left on disk with no
+    // workspace it would make the next try answer that the folder exists.
+    let unmake = || {
+        let _ = git::run(&from.top, &["worktree", "remove", "--force", &dest_text]);
+    };
+    if let Err(why) = crate::diff::set_review_base(&dest, &format!("origin/{base}")) {
+        unmake();
+        return Err(git_err(why));
+    }
     let id = new_id();
-    crate::workspaces::added(
+    let made = crate::workspaces::added(
         shared,
         Workspace {
             id: id.clone(),
             name: format!("{repo}: {branch}"),
             kind: WorkspaceKind::Worktree,
-            path: dest_text,
+            path: dest_text.clone(),
             project: Some(from.top.to_string_lossy().into_owned()),
             branch: Some(branch),
             panes: Vec::new(),
@@ -346,7 +390,11 @@ pub fn review(shared: &Shared, workspace: &str, pr: u64) -> Done {
             review: Some(review),
             github: None,
         },
-    )?;
+    );
+    if let Err(e) = made {
+        unmake();
+        return Err(e);
+    }
     crate::start::start_workspace(shared, &id, Some(OpenKind::Claude))?;
     Ok(Some(
         json!({ "workspace": id, "existed": false, "dirty": false }),
