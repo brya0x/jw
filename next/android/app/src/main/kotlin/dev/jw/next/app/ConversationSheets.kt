@@ -25,12 +25,15 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.contentDescription
@@ -79,9 +82,11 @@ internal fun ConvSheet(dismiss: () -> Unit, content: @Composable ColumnScope.() 
 
 /** What the question needs from the person (REQ-441): what the tool is about to do, and a button of at least 48 dp for each option, the first one primary. */
 @Composable
-internal fun AskSheet(ask: Ask, busy: Boolean, dismiss: () -> Unit, viewPlan: () -> Unit, answer: (String) -> Unit) {
+internal fun AskSheet(ask: Ask, busy: Boolean, dismiss: () -> Unit, viewPlan: () -> Unit, answer: (String, String?) -> Unit) {
     // A choice of several: the options marked, sent together as their numbers with commas (REQ-435).
     var marked by remember(ask.id) { mutableStateOf(setOf<Int>()) }
+    // «Seguir planeando» of a plan asks what to do next before it answers (REQ-595).
+    var writing by remember(ask.id) { mutableStateOf(false) }
     ConvSheet(dismiss) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Mono(ask.title, Palette.fg, 14, bold = true, lines = 3, modifier = Modifier.weight(1f))
@@ -97,11 +102,17 @@ internal fun AskSheet(ask: Ask, busy: Boolean, dismiss: () -> Unit, viewPlan: ()
                 val primary = i == 0 && !ask.multi
                 val refuse = o.key == "no"
                 val on = i in marked
+                val keepPlanning = ask.kind == AskKind.Plan && refuse
+                if (keepPlanning && writing) {
+                    InstructionBox(busy, back = { writing = false }) { text -> answer(o.key, text) }
+                    return@forEachIndexed
+                }
                 Box(
                     Modifier.fillMaxWidth().defaultMinSize(minHeight = 48.dp)
                         .background(if (primary) Palette.green else Palette.sel, RoundedCornerShape(8.dp))
                         .clickable(enabled = !busy) {
-                            if (!ask.multi) answer(o.key) else marked = if (on) marked - i else marked + i
+                            if (keepPlanning) writing = true
+                            else if (!ask.multi) answer(o.key, null) else marked = if (on) marked - i else marked + i
                         }
                         .padding(horizontal = 12.dp, vertical = 10.dp),
                     contentAlignment = Alignment.CenterStart,
@@ -112,9 +123,44 @@ internal fun AskSheet(ask: Ask, busy: Boolean, dismiss: () -> Unit, viewPlan: ()
             if (ask.multi) Box(
                 Modifier.fillMaxWidth().defaultMinSize(minHeight = 48.dp)
                     .background(if (marked.isEmpty()) Palette.sel else Palette.green, RoundedCornerShape(8.dp))
-                    .clickable(enabled = !busy && marked.isNotEmpty()) { answer(marked.sorted().joinToString(",")) },
+                    .clickable(enabled = !busy && marked.isNotEmpty()) { answer(marked.sorted().joinToString(","), null) },
                 contentAlignment = Alignment.Center,
             ) { Mono(if (marked.isEmpty()) "marca una o más" else "Enviar (${marked.size})", if (marked.isEmpty()) Palette.dim else Palette.panel, 13, bold = true) }
+        }
+    }
+}
+
+/** The line where what to do next is written when a plan is not approved: «Volver» goes back to the options, the button sends the text (or none when it is empty) with the refusal (REQ-595). */
+@Composable
+internal fun InstructionBox(busy: Boolean, back: () -> Unit, send: (String?) -> Unit) {
+    var text by remember { mutableStateOf("") }
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focus.requestFocus() }
+    Column(Modifier.fillMaxWidth().background(Palette.sel, RoundedCornerShape(8.dp)).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Mono("Seguir planeando", Palette.red, 13, bold = true)
+        BasicTextField(
+            value = text,
+            onValueChange = { text = it },
+            textStyle = TextStyle(color = Palette.fg, fontFamily = MonoFont, fontSize = 13.sp),
+            cursorBrush = SolidColor(Palette.blue),
+            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+            modifier = Modifier.fillMaxWidth().focusRequester(focus),
+            decorationBox = { inner ->
+                Box(Modifier.fillMaxWidth().defaultMinSize(minHeight = 84.dp).border(1.dp, Palette.blue, RoundedCornerShape(6.dp)).background(Palette.bg, RoundedCornerShape(6.dp)).padding(10.dp)) {
+                    if (text.isEmpty()) Mono("¿qué sigue? (opcional)", Palette.dim, 13)
+                    inner()
+                }
+            },
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(
+                Modifier.weight(1f).defaultMinSize(minHeight = 48.dp).background(Palette.panel, RoundedCornerShape(8.dp)).clickable(onClick = back),
+                contentAlignment = Alignment.Center,
+            ) { Mono("Volver", Palette.fg, 13) }
+            Box(
+                Modifier.weight(1f).defaultMinSize(minHeight = 48.dp).background(Palette.green, RoundedCornerShape(8.dp)).clickable(enabled = !busy) { send(text.trim().ifEmpty { null }) },
+                contentAlignment = Alignment.Center,
+            ) { Mono("Seguir planeando", Palette.panel, 13, bold = true) }
         }
     }
 }

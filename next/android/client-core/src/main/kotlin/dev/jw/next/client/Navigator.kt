@@ -146,8 +146,8 @@ interface NodeSource {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
     }
 
-    /** Answer the question that waits in a conversation with the option [key]; the PC writes that it came from the phone. */
-    fun conversationAnswer(node: Id, ask: String, key: String, reply: (Result<Unit>) -> Unit) {
+    /** Answer the question that waits in a conversation with the option [key]; the PC writes that it came from the phone. [text] goes with the refusal of a plan: what to do next (REQ-595). */
+    fun conversationAnswer(node: Id, ask: String, key: String, text: String? = null, reply: (Result<Unit>) -> Unit) {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
     }
 

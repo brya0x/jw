@@ -34,6 +34,8 @@ pub enum Act {
         node: String,
         ask: String,
         key: String,
+        /// What to do instead, written with the refusal of a plan (REQ-595).
+        text: Option<String>,
     },
     Interrupt {
         node: String,
@@ -465,6 +467,9 @@ pub struct Ui {
     unfolded: HashSet<u32>,
     /// The option of the question that is lit.
     ask_at: usize,
+    /// «Seguir planeando» was chosen on the plan that waits (its id) and the instruction that goes
+    /// with it is being written (REQ-595).
+    refusing: Option<(String, Editor)>,
     pop: Option<Pop>,
     images: Vec<(u32, Image)>,
     /// How many pictures were pasted, which is the `n` of the next `[Imagen#n]`.
@@ -581,6 +586,7 @@ impl Ui {
             id.clone_into(&mut self.ask_id);
             self.ask_at = 0;
             self.picks.clear();
+            self.refusing = None;
         }
     }
 
@@ -1534,6 +1540,35 @@ impl Ui {
                 Style::fg(fg).on(tint),
             );
         }
+        // «Seguir planeando»: the options give way to the line where the instruction is written.
+        if let Some((_, editor)) = self.refusing.as_ref().filter(|(id, _)| *id == ask.id) {
+            let (hint, written) = (
+                "↵ envía (vacío: sigue planeando) · esc vuelve",
+                editor.text(),
+            );
+            let lines = [
+                (
+                    "Seguir planeando · ¿qué sigue?  (opcional)".to_owned(),
+                    look::yellow(),
+                ),
+                (format!("▸ {written}▏"), look::fg()),
+            ];
+            for (i, (text, colour)) in lines.iter().enumerate() {
+                g.put(
+                    tx,
+                    opts_at + i,
+                    &clip(text, tw),
+                    Style::fg(*colour).on(ground),
+                );
+            }
+            g.put(
+                tx,
+                y + h - 2,
+                &clip(hint, tw),
+                Style::fg(look::dim()).on(ground),
+            );
+            return;
+        }
         let keys = keys_of(ask);
         for (i, o) in ask.options.iter().enumerate() {
             let at = opts_at + i;
@@ -2074,7 +2109,53 @@ impl Ui {
             .join(",")
     }
 
+    /// An option of the question was chosen: it answers, except «Seguir planeando» of a plan, which
+    /// first asks what to do next (REQ-595).
+    fn choose(&mut self, node: &str, ask: &Ask, at: usize) -> Option<Act> {
+        let key = ask.options.get(at)?.key.clone();
+        if ask.kind == AskKind::Plan && key == "no" {
+            self.refusing = Some((ask.id.clone(), Editor::default()));
+            return None;
+        }
+        Some(Act::Answer {
+            node: node.to_owned(),
+            ask: ask.id.clone(),
+            key,
+            text: None,
+        })
+    }
+
+    /// The viewer of the plan asked to keep planning: the box takes the instruction.
+    pub fn refuse(&mut self, ask: &str) {
+        self.refusing = Some((ask.to_owned(), Editor::default()));
+    }
+
+    /// The keys while the instruction for «seguir planeando» is written.
+    fn refusing_key(&mut self, node: &str, ask: &Ask, ev: &KeyEvent) -> Option<Act> {
+        let (_, editor) = self.refusing.as_mut()?;
+        match ev.code {
+            KeyCode::Esc => self.refusing = None,
+            KeyCode::Enter => {
+                let text = editor.text().trim().to_owned();
+                self.refusing = None;
+                return Some(Act::Answer {
+                    node: node.to_owned(),
+                    ask: ask.id.clone(),
+                    key: "no".into(),
+                    text: Some(text).filter(|t| !t.is_empty()),
+                });
+            }
+            _ => {
+                editor.edit(ev);
+            }
+        }
+        None
+    }
+
     fn ask_key(&mut self, node: &str, ask: &Ask, ev: &KeyEvent) -> Option<Act> {
+        if self.refusing.as_ref().is_some_and(|(id, _)| *id == ask.id) {
+            return self.refusing_key(node, ask, ev);
+        }
         let n = ask.options.len();
         let by_key = |k: &str| ask.options.iter().position(|o| o.key == k);
         // The whole plan, when the box has room for a few lines of it only.
@@ -2100,6 +2181,7 @@ impl Ui {
                         node: node.to_owned(),
                         ask: ask.id.clone(),
                         key: self.pick_key(),
+                        text: None,
                     });
                 }
                 _ => {}
@@ -2123,11 +2205,7 @@ impl Ui {
             KeyCode::Enter if !ask.multi => Some(self.ask_at).filter(|i| *i < n),
             _ => None,
         }?;
-        Some(Act::Answer {
-            node: node.to_owned(),
-            ask: ask.id.clone(),
-            key: ask.options[at].key.clone(),
-        })
+        self.choose(node, ask, at)
     }
 
     fn pop_key(&mut self, conv: &Conversation, ev: &KeyEvent) -> Option<Act> {
@@ -2635,11 +2713,7 @@ impl Ui {
                     self.toggle_pick(y - first);
                     return None;
                 }
-                return Some(Act::Answer {
-                    node,
-                    ask: ask.id.clone(),
-                    key: ask.options[y - first].key.clone(),
-                });
+                return self.choose(&node, ask, y - first);
             }
             // A click on what a plan says opens it whole.
             if ask.kind == AskKind::Plan && y > geo.band.0 && y < first {
@@ -3726,6 +3800,7 @@ mod tests {
                 node: node.clone(),
                 ask: "req-1".into(),
                 key: key.into(),
+                text: None,
             })
         };
         let mut ui = Ui::default();
@@ -3812,7 +3887,8 @@ mod tests {
                 Some(Act::Answer {
                     node: node.clone(),
                     ask: "req-1".into(),
-                    key: key.into()
+                    key: key.into(),
+                    text: None,
                 }),
                 "{n}"
             );
@@ -4837,7 +4913,8 @@ mod tests {
             Some(Act::Answer {
                 node: node.clone(),
                 ask: "req-9:0".into(),
-                key: "1".into()
+                key: "1".into(),
+                text: None,
             })
         );
         // several: numbers mark, ↵ sends the marked ones as their numbers with commas
@@ -4864,7 +4941,8 @@ mod tests {
             Some(Act::Answer {
                 node: node.clone(),
                 ask: "req-9:0".into(),
-                key: "0,1".into()
+                key: "0,1".into(),
+                text: None,
             }),
             "3 was cleared, 2 marked: Rust and Kotlin"
         );
@@ -4966,17 +5044,53 @@ mod tests {
             Some(Act::Answer {
                 node: node.clone(),
                 ask: "req-p".into(),
-                key: "manual".into()
+                key: "manual".into(),
+                text: None,
             })
         );
+        // «Seguir planeando» asks what to do next before it answers (REQ-595): nothing is sent yet
+        assert_eq!(press(&mut ui, &c, KeyCode::Char('n')), None);
+        let (_, rows) = frame(&ui, &c);
+        row_of(&rows, "¿qué sigue?");
+        row_of(&rows, "↵ envía (vacío: sigue planeando) · esc vuelve");
+        // what is typed is the instruction, including the letters that are keys of the options
+        for ch in "añade tests".chars() {
+            assert_eq!(press(&mut ui, &c, KeyCode::Char(ch)), None);
+        }
+        let (_, rows) = frame(&ui, &c);
+        row_of(&rows, "▸ añade tests");
         assert_eq!(
-            press(&mut ui, &c, KeyCode::Char('n')),
+            press(&mut ui, &c, KeyCode::Enter),
             Some(Act::Answer {
-                node,
+                node: node.clone(),
                 ask: "req-p".into(),
-                key: "no".into()
+                key: "no".into(),
+                text: Some("añade tests".into()),
             })
         );
+        // an empty line is the plain «seguir planeando», and esc goes back to the options
+        press(&mut ui, &c, KeyCode::Char('3'));
+        assert_eq!(
+            press(&mut ui, &c, KeyCode::Enter),
+            Some(Act::Answer {
+                node: node.clone(),
+                ask: "req-p".into(),
+                key: "no".into(),
+                text: None,
+            })
+        );
+        press(&mut ui, &c, KeyCode::Down);
+        press(&mut ui, &c, KeyCode::Down);
+        press(&mut ui, &c, KeyCode::Enter);
+        press(&mut ui, &c, KeyCode::Char('x'));
+        assert_eq!(press(&mut ui, &c, KeyCode::Esc), None);
+        let (_, rows) = frame(&ui, &c);
+        row_of(&rows, "Aprobar y editar sin preguntar");
+        assert!(!rows.iter().any(|r| r.contains("¿qué sigue?")));
+        // the viewer's own «seguir planeando» leaves the box on that line
+        ui.refuse("req-p");
+        let (_, rows) = frame(&ui, &c);
+        row_of(&rows, "¿qué sigue?");
     }
 
     #[test]

@@ -368,9 +368,9 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
                 r.onSuccess { plan = ask.id to it; askClosed = ask.id }.onFailure { say(it.message ?: "el PC no pudo leer el plan", error = true) }
             }
         }
-        AskSheet(ask, answering, dismiss = { askClosed = ask.id }, viewPlan = viewPlan) { key ->
+        AskSheet(ask, answering, dismiss = { askClosed = ask.id }, viewPlan = viewPlan) { key, text ->
             answering = true
-            source.conversationAnswer(nodeId, ask.id, key) { r -> answering = false; fail(r) }
+            source.conversationAnswer(nodeId, ask.id, key, text) { r -> answering = false; fail(r) }
         }
     } else if (ask != null) {
         Mono(
@@ -382,10 +382,10 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
     // ---- the plan that was asked for whole, over everything (REQ-480) ----
     plan?.let { (askId, doc) ->
         val waiting = ask?.takeIf { it.id == askId }
-        val answers = PlanAnswers(waiting?.options.orEmpty(), waiting != null) { key ->
+        val answers = PlanAnswers(waiting?.options.orEmpty(), waiting != null) { key, text ->
             plan = null
             answering = true
-            source.conversationAnswer(nodeId, askId, key) { r -> answering = false; fail(r) }
+            source.conversationAnswer(nodeId, askId, key, text) { r -> answering = false; fail(r) }
         }
         ViewerDialog(doc, answers) { plan = null }
     }

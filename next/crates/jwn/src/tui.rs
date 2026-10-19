@@ -2844,7 +2844,17 @@ impl View {
                     return After::Continue;
                 }
                 self.viewer = None;
-                After::Conv(ConvAct::Answer { node, ask, key })
+                // Keeping planning takes an instruction: the box asks for it (REQ-595).
+                if key == "no" {
+                    self.conv_ui.entry(node).or_default().refuse(&ask);
+                    return After::Continue;
+                }
+                After::Conv(ConvAct::Answer {
+                    node,
+                    ask,
+                    key,
+                    text: None,
+                })
             }
         }
     }
@@ -5137,11 +5147,16 @@ fn set(
 fn conversation_cmd(view: &mut View, client: &mut Client, act: ConvAct) {
     let cmd = match act {
         ConvAct::Send { node, text, images } => Cmd::ConversationSend { node, text, images },
-        ConvAct::Answer { node, ask, key } => Cmd::ConversationAnswer {
+        ConvAct::Answer {
             node,
             ask,
             key,
-            text: None,
+            text,
+        } => Cmd::ConversationAnswer {
+            node,
+            ask,
+            key,
+            text,
             by: Some("el terminal".into()),
         },
         ConvAct::Interrupt { node } => Cmd::ConversationInterrupt { node },
@@ -9386,7 +9401,8 @@ mod tests {
             After::Conv(ConvAct::Answer {
                 node: CONV.into(),
                 ask: "req-1".into(),
-                key: "yes".into()
+                key: "yes".into(),
+                text: None,
             })
         );
         let bar = v.plain(120, 40);
@@ -9530,7 +9546,8 @@ mod tests {
             After::Conv(ConvAct::Answer {
                 node: CONV.into(),
                 ask: "req-p".into(),
-                key: "accept".into()
+                key: "accept".into(),
+                text: None,
             }),
             "REQ-475"
         );
@@ -9579,7 +9596,8 @@ mod tests {
             After::Conv(ConvAct::Answer {
                 node: CONV.into(),
                 ask: "req-p".into(),
-                key: "manual".into()
+                key: "manual".into(),
+                text: None,
             })
         );
         // a drag copies, and a key lets go

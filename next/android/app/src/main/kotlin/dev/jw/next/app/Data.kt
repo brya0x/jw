@@ -240,8 +240,8 @@ abstract class ProtocolSource : AppSource() {
         command(Cmd.ConversationSend(node, text, images)) { reply(it.done("el PC no pudo enviarlo")) }
     }
 
-    override fun conversationAnswer(node: Id, ask: String, key: String, reply: (Result<Unit>) -> Unit) {
-        command(Cmd.ConversationAnswer(node, ask, key, by = "el móvil")) { reply(it.done("el PC no pudo registrar la respuesta")) }
+    override fun conversationAnswer(node: Id, ask: String, key: String, text: String?, reply: (Result<Unit>) -> Unit) {
+        command(Cmd.ConversationAnswer(node, ask, key, text = text, by = "el móvil")) { reply(it.done("el PC no pudo registrar la respuesta")) }
     }
 
     override fun conversationInterrupt(node: Id) {
