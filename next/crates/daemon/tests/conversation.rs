@@ -383,6 +383,36 @@ fn a_command_that_needs_claudes_screen_is_not_sent_and_says_where_to_go() {
     r.stop();
 }
 
+/// REQ-579: the workspace's row says `working` while a conversation of it thinks, writes or
+/// runs a tool, and stops saying it when the turn ends.
+#[test]
+fn a_workspace_says_it_works_while_its_conversation_runs_a_turn() {
+    let mut r = rig();
+    let (node, _) = r.open();
+    let root = r.client.root.clone();
+    r.client.open(&root).unwrap();
+    let working = |r: &mut Rig| {
+        let _ = r.client.poll(Duration::from_millis(20));
+        r.client
+            .nodes
+            .get(&root)
+            .map(|n| n["workspaces"][0]["working"] == true)
+    };
+    wait_for("the session", || working(&mut r).is_some());
+    assert_eq!(
+        working(&mut r),
+        Some(false),
+        "a quiet conversation does not work"
+    );
+    r.send(&node, "slow one");
+    wait_for("the workspace to work", || working(&mut r) == Some(true));
+    r.cmd(Cmd::ConversationInterrupt { node: node.clone() })
+        .unwrap();
+    r.idle_after(&node, 1);
+    wait_for("the workspace to rest", || working(&mut r) == Some(false));
+    r.stop();
+}
+
 /// REQ-578: a new conversation starts in the mode the person last worked in, and a typed
 /// `--permission-mode` still wins.
 #[test]

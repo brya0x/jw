@@ -862,6 +862,18 @@ impl State {
         .flatten()
     }
 
+    /// The engine thinks, writes, runs a tool or compacts: what a workspace's row says it does
+    /// (REQ-579). Waiting for an answer is not working: that is a mark of its own.
+    pub fn works(&self) -> bool {
+        matches!(
+            self.status,
+            ConvStatus::Thinking
+                | ConvStatus::Streaming
+                | ConvStatus::Tool
+                | ConvStatus::Compacting
+        )
+    }
+
     /// Another `claude` that has the session open, or none: whether the node changed. A turn
     /// that the transcript leaves open is followed only while a `claude` that is busy has the
     /// session: with none, or one that waits for a message, nothing runs it (a turn that was

@@ -299,7 +299,8 @@
         "project": { "type": "string" },
         "branch": { "type": "string" },
         "pane_count": { "type": "integer", "minimum": 0 },
-        "attention": { "type": "array", "items": { "$ref": "#/$defs/Attention" } }
+        "attention": { "type": "array", "items": { "$ref": "#/$defs/Attention" } },
+        "working": { "type": "boolean" }
       }
     },
     "SplitDir": { "enum": ["row", "col"] },

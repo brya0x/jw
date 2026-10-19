@@ -72,6 +72,8 @@ data class HomeRow(
     /** The line under the row's detail and the attention a tap on it opens. */
     val line: String?,
     val go: Attention?,
+    /** A conversation of the workspace works: a spinner beside the mark and a line that says so (REQ-579). */
+    val working: Boolean = false,
 )
 
 /** An item of Avisos: one unseen attention and the workspace it belongs to. */
@@ -115,6 +117,7 @@ fun homeRows(session: Node.Session, seen: Seen): List<HomeRow> = session.workspa
         unseen = unseen.size,
         line = top?.what(),
         go = top,
+        working = w.working,
     )
 }
 

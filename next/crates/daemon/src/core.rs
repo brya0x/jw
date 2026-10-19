@@ -1163,6 +1163,10 @@ impl Core {
                 branch: ws.branch.clone(),
                 pane_count: ws.panes.len() as u32,
                 attention: attention.clone(),
+                working: ws
+                    .panes
+                    .iter()
+                    .any(|p| self.convs.get(&p.id).is_some_and(|c| c.st.works())),
             });
             nodes.push(Node::Workspace(Workspace {
                 head: head(&ws.id, attention),

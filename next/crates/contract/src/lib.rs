@@ -933,6 +933,13 @@ pub struct WorkspaceSummary {
     pub branch: Option<String>,
     pub pane_count: u32,
     pub attention: Vec<Attention>,
+    /// A conversation of the workspace works: it thinks, writes, runs a tool or compacts.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub working: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

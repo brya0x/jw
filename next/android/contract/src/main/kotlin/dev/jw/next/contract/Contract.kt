@@ -511,6 +511,8 @@ data class WorkspaceSummary(
     val branch: String? = null,
     @SerialName("pane_count") val paneCount: Int,
     val attention: List<Attention>,
+    /** A conversation of the workspace works: it thinks, writes, runs a tool or compacts. */
+    val working: Boolean = false,
 )
 
 /** Which way a split puts its two sides: a row is side by side, a col one over the other. */

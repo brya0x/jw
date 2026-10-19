@@ -34,6 +34,14 @@ class ClientCoreTest {
         assertEquals("comando terminó · salió 2", rows[1].line)
     }
 
+    /** REQ-579: a workspace says it works while a conversation of it does, beside any mark. */
+    @Test
+    fun aRowSaysItWorksWhenTheDaemonSaysSo() {
+        val rows = homeRows(session("snapshot-session-attention.json"), Seen())
+        assertEquals(listOf(true, false), rows.map { it.working })
+        assertEquals("!", rows[0].mark?.glyph, "its marks stay")
+    }
+
     @Test
     fun aRowWithNothingWaitingShowsNothing() {
         val rows = homeRows(session("snapshot-session.json"), Seen())

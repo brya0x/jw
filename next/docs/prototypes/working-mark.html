@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>jwn Trabajando en la lista</title>
+<style>
+/* The sidebar as the terminal draws it (tui-levels.html) and the phone's workspace list. */
+:root{
+  --bg:#282c34; --panel:#21252b; --fg:#abb2bf; --dim:#5c6370; --line:#3e4451; --sel:#2c313a;
+  --blue:#61afef; --green:#98c379; --yellow:#e5c07b; --red:#e06c75; --magenta:#c678dd; --cyan:#56b6c2;
+  --page:#16181d; --ink:#c3c9d4; --mut:#7d8594;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}}
+:root[data-theme="light"]{--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.55 'IBM Plex Sans',system-ui,sans-serif;padding:24px max(16px,env(safe-area-inset-right,0px)) 40px max(16px,env(safe-area-inset-left,0px))}
+.wrap{max-width:1200px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
+h1{font:600 20px/1.2 var(--mono);margin:0}
+h2{font:600 12px var(--mono);margin:0;color:var(--mut)}
+p{margin:0;max-width:80ch;color:var(--mut)}
+.bar{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center}
+.grp{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.grp>span{font:12px var(--mono);color:var(--mut)}
+button{font:12px var(--mono);color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;min-height:32px;cursor:pointer}
+button:hover{border-color:var(--blue)}
+button[aria-pressed=true]{background:var(--blue);color:var(--panel);border-color:var(--blue);font-weight:700}
+:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.stage{display:flex;gap:28px;align-items:flex-start;flex-wrap:wrap}
+.col{flex:1 1 420px;min-width:0;display:flex;flex-direction:column;gap:8px}
+.hint{font:12px var(--mono);color:var(--mut)}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:8px;overflow:hidden;font:13px/1.5 var(--mono);color:var(--fg);width:300px;max-width:100%}
+.term .name{padding:6px 10px 2px;color:var(--dim);font-weight:700}
+.term .r{display:flex;white-space:pre;padding:0 10px 0 0;height:20px;align-items:center}
+.term .r.on{background:var(--sel)}
+.term .n{width:2ch;color:var(--dim);text-align:right;padding-right:1ch}
+.term .d{width:2ch}
+.term .t{flex:1;overflow:hidden;text-overflow:ellipsis}
+.term .m{width:4ch;text-align:right;font-weight:700}
+.term .leg{border-top:1px solid var(--line);padding:6px 10px;color:var(--dim);font-size:12px;line-height:1.4}
+.term .head{padding:2px 10px;color:var(--dim)}
+.b{font-weight:700}.dim{color:var(--dim)}.blue{color:var(--blue)}.yellow{color:var(--yellow)}.red{color:var(--red)}.green{color:var(--green)}.magenta{color:var(--magenta)}.cyan{color:var(--cyan)}
+.spin::before{content:"⠋";animation:sp .8s steps(1) infinite;color:var(--blue)}
+@keyframes sp{0%{content:"⠋"}12%{content:"⠙"}25%{content:"⠹"}37%{content:"⠸"}50%{content:"⠼"}62%{content:"⠴"}75%{content:"⠦"}87%{content:"⠧"}}
+@media (prefers-reduced-motion:reduce){.spin::before{animation:none;content:"⠿"}}
+.phone{width:376px;max-width:100%;background:var(--bg);border:1px solid var(--line);border-radius:28px;padding:10px;box-shadow:0 0 0 6px var(--panel)}
+.ph{background:var(--bg);border-radius:20px;overflow:hidden;font:13px/1.45 var(--mono);color:var(--fg)}
+.ph .hd{background:var(--panel);border-bottom:1px solid var(--line);padding:10px 12px;font-weight:700}
+.ph .wr{display:flex;gap:10px;align-items:center;min-height:56px;padding:8px 12px;border-bottom:1px solid var(--line)}
+.ph .dot{width:20px;display:flex;justify-content:center;align-items:center}
+.ph .dot i{width:9px;height:9px;border-radius:50%;background:var(--green);display:block}
+.ph .dot i.off{background:none;border:1.5px solid var(--dim)}
+.ph .ring{width:14px;height:14px;border-radius:50%;border:2px solid var(--line);border-top-color:var(--blue);animation:rot .9s linear infinite;display:block}
+@keyframes rot{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.ph .ring{animation:none;border-color:var(--blue)}}
+.ph .tx{flex:1;min-width:0;display:flex;flex-direction:column}
+.ph .tx small{font-size:11px;color:var(--dim)}
+.ph .mk{width:20px;text-align:center;font-weight:700}
+.notes{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
+.notes div{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;color:var(--fg);font:12px/1.55 var(--mono)}
+.notes b{color:var(--yellow)}
+.rec{color:var(--green)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>jwn · «trabajando» en la lista</h1>
+  <p>Un workspace cuyo Claude piensa, escribe o corre herramientas se ve distinto de uno quieto. Hoy la fila solo marca lo que espera algo de ti (<span class="b">!</span> <span class="b">?</span> <span class="b">◆</span> <span class="b">✓</span> <span class="b">⚑</span> <span class="b">✗</span>); mientras trabaja no dice nada.</p>
+
+  <div class="bar">
+    <div class="grp" role="group" aria-label="Dónde va">
+      <span>dónde</span>
+      <button data-where="dot" aria-pressed="true">A · el punto se vuelve spinner (recomendado)</button>
+      <button data-where="tail" aria-pressed="false">B · spinner junto a la marca</button>
+    </div>
+    <div class="grp" role="group" aria-label="Estado de «api»">
+      <span>estado de la fila 2</span>
+      <button data-st="idle" aria-pressed="false">quieto</button>
+      <button data-st="work" aria-pressed="true">trabaja</button>
+      <button data-st="perm" aria-pressed="false">pide permiso</button>
+      <button data-st="work+done" aria-pressed="false">trabaja y otro terminó</button>
+      <button data-st="done" aria-pressed="false">listo</button>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="col">
+      <h2>TERMINAL · la lista</h2>
+      <div class="term" id="term" aria-label="Lista de workspaces en la terminal"></div>
+      <p class="hint" id="termHint"></p>
+    </div>
+    <div class="col">
+      <h2>TELÉFONO · la lista</h2>
+      <div class="phone"><div class="ph" id="ph" aria-label="Lista de workspaces en el teléfono"></div></div>
+      <p class="hint" id="phHint"></p>
+    </div>
+  </div>
+
+  <div class="notes">
+    <div><b>Qué cuenta como «trabajando»</b><br>
+    Claude piensa, escribe, corre una herramienta o compacta, en cualquier panel del workspace. No cuenta: esperar un permiso o una pregunta (eso ya es una marca), ni un shell con un comando largo.</div>
+    <div><b>Qué pasa con las marcas</b><br>
+    No cambian. Una marca sin ver sigue a la derecha. En A el spinner ocupa el punto de la izquierda (el que ya dice «tiene paneles»), así que nunca compite con ella.</div>
+    <div><b>Por qué <span class="rec">A</span></b><br>
+    El punto ya es el estado de la fila y la columna de la marca es de «te toca a ti»; separar «corre solo» de «te necesita» mantiene la lectura de un vistazo. B junta ambos y obliga a elegir cuál gana.</div>
+    <div><b>Teléfono</b><br>
+    El punto verde se vuelve un anillo que gira, y la segunda línea dice «Claude trabaja» (la línea de lo que se te pide sigue mandando si hay algo que decidir). Con «reducir movimiento» el anillo queda quieto.</div>
+  </div>
+</div>
+
+<script>
+const S = {where:'dot', st:'work'};
+const rows = [
+  {n:1, name:'jw', kind:'folder', panes:1},
+  {n:2, name:'feat/api', kind:'worktree', panes:2, live:true},
+  {n:3, name:'fix/layout', kind:'worktree', panes:1},
+  {n:4, name:'jitsubai', kind:'folder', panes:0},
+];
+function marks(row){
+  if(row.live){
+    if(S.st==='perm') return {g:'!',c:'red',line:'pide permiso',lc:'yellow'};
+    if(S.st==='done'||S.st==='work+done') return null;
+  }
+  if(row.n===3 && S.st==='work+done') return {g:'✓',c:'green',line:'agente listo',lc:'cyan'};
+  if(row.n===3 && S.st==='done') return null;
+  if(row.live && S.st==='done') return {g:'✓',c:'green',line:'agente listo',lc:'cyan'};
+  return null;
+}
+function working(row){
+  return row.live && (S.st==='work'||S.st==='work+done'||false);
+}
+function render(){
+  const t=document.getElementById('term');
+  let h='<div class="name">jw</div>';
+  rows.forEach((r,i)=>{
+    let mk=marks(r);
+    if(r.live&&S.st==='done') mk={g:'✓',c:'green'};
+    if(r.n===3&&S.st==='work+done') mk={g:'✓',c:'green'};
+    const w=working(r);
+    let dot = r.panes>0?'●':'○';
+    let dotc = r.panes>0?'green':'dim';
+    let dotHtml=`<span class="d ${dotc}">${dot}</span>`;
+    let tail=`<span class="m ${mk?mk.c:''}">${mk?mk.g:''}</span>`;
+    if(w&&S.where==='dot') dotHtml=`<span class="d spin" aria-label="trabaja"></span>`;
+    if(w&&S.where==='tail') tail=`<span class="m ${mk?mk.c:''}">${mk?mk.g:''}<span class="spin"></span></span>`;
+    h+=`<div class="r ${i===1?'on':''}"><span class="n">${r.n}</span>${r.kind==='worktree'?'<span class="dim">↳ </span>':''}${dotHtml}<span class="t ${i===1?'blue b':''}">${r.name}</span>${tail}</div>`;
+  });
+  h+='<div class="leg">! permiso  ? pregunta<br>◆ plan   ❯ comando<br>✓ listo  ⚑ merge  ✗ falló<br><span class="blue">⠋</span> trabaja</div>';
+  t.innerHTML=h;
+  document.getElementById('termHint').textContent = S.where==='dot'
+    ? 'A: el punto de «tiene paneles» gira mientras Claude trabaja; la marca queda libre.'
+    : 'B: el spinner va pegado a la marca de la derecha; con una marca sin ver hay dos signos juntos.';
+  const p=document.getElementById('ph');
+  let ph='<div class="hd">jw</div>';
+  rows.forEach(r=>{
+    let mk=marks(r);
+    if(r.live&&S.st==='done') mk={g:'✓',c:'green',line:'agente listo',lc:'cyan'};
+    if(r.n===3&&S.st==='work+done') mk={g:'✓',c:'green',line:'agente listo',lc:'cyan'};
+    const w=working(r);
+    const dot = w?'<span class="ring" aria-label="trabaja"></span>':`<i class="${r.panes>0?'':'off'}"></i>`;
+    const line = mk&&mk.line ? `<small class="${mk.lc}">${mk.line}</small>` : (w?'<small class="blue">Claude trabaja</small>':`<small>${r.kind==='worktree'?r.name:'carpeta'}</small>`);
+    ph+=`<div class="wr"><span class="dot">${dot}</span><span class="tx"><b>${r.name}</b>${line}</span><span class="mk ${mk?mk.c:''}">${mk?mk.g:''}</span></div>`;
+  });
+  p.innerHTML=ph;
+  document.getElementById('phHint').textContent='La fila es el botón de siempre; solo cambia el punto y la línea pequeña.';
+}
+document.querySelectorAll('button[data-where]').forEach(b=>b.onclick=()=>{S.where=b.dataset.where;document.querySelectorAll('button[data-where]').forEach(x=>x.setAttribute('aria-pressed',x===b));render()});
+document.querySelectorAll('button[data-st]').forEach(b=>b.onclick=()=>{S.st=b.dataset.st;document.querySelectorAll('button[data-st]').forEach(x=>x.setAttribute('aria-pressed',x===b));render()});
+render();
+</script>
+</body>
+</html>

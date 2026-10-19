@@ -32,6 +32,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -313,6 +314,8 @@ private fun WorkspaceRow(row: HomeRow, current: Boolean, open: () -> Unit, hold:
                 val line = row.line
                 if (attention != null && line != null) {
                     Mono(line, attention.need().color(), 12, modifier = Modifier.combinedClickable(onClick = { go(attention) }, onLongClick = hold).padding(vertical = 3.dp))
+                } else if (row.working) {
+                    Mono("Claude trabaja", Palette.blue, 12, modifier = Modifier.padding(vertical = 3.dp))
                 }
             }
             if (row.kind != HomeKind.Worktree) Tag(row.kind.label, Palette.dim)
@@ -320,6 +323,7 @@ private fun WorkspaceRow(row: HomeRow, current: Boolean, open: () -> Unit, hold:
                 Mono(m.glyph, m.tone.color(), 14, bold = true)
                 if (row.unseen > 1) Mono("${row.unseen}", Palette.dim, 11)
             }
+            if (row.working) CircularProgressIndicator(Modifier.size(14.dp), color = Palette.blue, strokeWidth = 2.dp)
         }
     }
 }

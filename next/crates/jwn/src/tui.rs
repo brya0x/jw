@@ -3523,13 +3523,22 @@ impl View {
                     g.put_over(SIDEBAR - 4, y, &un.len().to_string(), dim);
                 }
             }
+            // Claude works in it: a spinner beside the marks (REQ-579).
+            if w.working {
+                g.put_over(
+                    SIDEBAR - 3,
+                    y,
+                    shell::spin(self.now_ms),
+                    Style::fg(look::blue()),
+                );
+            }
         }
         if session.workspaces.is_empty() {
             g.put(1, 2, "^␣ o abre una carpeta", dim);
         }
         for (i, line) in [
             "! permiso  ? pregunta",
-            "◆ plan   ❯ comando",
+            "◆ plan ❯ comando ⠋ trabaja",
             "✓ listo  ⚑ merge  ✗ falló",
         ]
         .iter()
@@ -5194,6 +5203,24 @@ mod tests {
             !t.contains("sessions"),
             "the sessions of the old jw are not here: {t}"
         );
+    }
+
+    /// REQ-579: a workspace whose Claude works has a spinner beside its marks, which turns, and
+    /// one that does not work has none.
+    #[test]
+    fn a_workspace_that_works_has_a_spinner_beside_its_marks() {
+        let mut v = fixture_view();
+        let spin = |v: &View| {
+            let t = v.plain(110, 30);
+            let rows: Vec<String> = t.lines().map(|l| l.chars().take(28).collect()).collect();
+            (rows[2].clone(), rows[4].clone())
+        };
+        v.set_now(0);
+        let (first, notes) = spin(&v);
+        assert!(first.contains('!') && first.contains('⠋'), "{first}");
+        assert!(!notes.contains('⠋'), "the other one does not work: {notes}");
+        v.set_now(110);
+        assert!(spin(&v).0.contains('⠙'), "it turns");
     }
 
     #[test]
