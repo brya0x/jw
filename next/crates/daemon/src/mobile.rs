@@ -18,6 +18,8 @@ const ANSWER_WITHIN: Duration = Duration::from_secs(60);
 const TOKEN_LIFE: Duration = Duration::from_secs(120);
 /// How long the tunnel may take to come up (the name can resolve about a minute late).
 const TUNNEL_WAIT: Duration = Duration::from_secs(90);
+/// How often the tunnel is looked at: `cloudflared` can end (the network went, it crashed).
+const WATCH_EVERY: Duration = Duration::from_secs(5);
 /// A `jwn pair` between two waits still counts as present for this long.
 const PRESENT_GRACE: Duration = Duration::from_secs(5);
 
@@ -150,6 +152,8 @@ pub struct Hub {
     tunnel_lock: Mutex<()>,
     /// A tunnel is being brought up in the background: what `pending` says.
     tunnel_busy: AtomicBool,
+    /// A thread watches the tunnel and opens another when it ends (REQ-606).
+    tunnel_watch: AtomicBool,
 }
 
 /// The paired devices: a file `jwn devices` reads with no daemon running.
@@ -193,6 +197,7 @@ impl Hub {
             running: Mutex::new(None),
             tunnel_lock: Mutex::new(()),
             tunnel_busy: AtomicBool::new(false),
+            tunnel_watch: AtomicBool::new(false),
         }
     }
 
@@ -209,6 +214,7 @@ impl Hub {
             self.open_tunnel_in_background();
         } else {
             self.ensure_tunnel();
+            self.watch_tunnel();
         }
         let token = {
             let slot = guard(&self.running);
@@ -274,9 +280,51 @@ impl Hub {
             .spawn(move || {
                 hub.ensure_tunnel();
                 hub.tunnel_busy.store(false, Ordering::SeqCst);
+                hub.watch_tunnel();
             });
         if spawned.is_err() {
             self.tunnel_busy.store(false, Ordering::SeqCst);
+        }
+    }
+
+    /// Look at the tunnel while the link is on: when `cloudflared` has ended, say so, forget it
+    /// (the phones are told it is gone) and open another, which has another host name and is told
+    /// to the connected phones as the first was (REQ-606). It is one thread, and it ends with the
+    /// link.
+    fn watch_tunnel(self: &Arc<Self>) {
+        if self.config.tunnel.is_none() || self.tunnel_watch.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let hub = self.clone();
+        let spawned = std::thread::Builder::new()
+            .name("mobile-tunnel-watch".into())
+            .spawn(move || {
+                loop {
+                    std::thread::sleep(WATCH_EVERY);
+                    let lost = {
+                        let mut slot = guard(&hub.running);
+                        let Some(run) = slot.as_mut() else { break };
+                        let ended = run.tunnel.as_mut().is_some_and(|t| !t.alive());
+                        if ended {
+                            eprintln!("the tunnel ended: opening another");
+                            run.tunnel = None;
+                            run.bridge.set_endpoints(Endpoints {
+                                lan: run.bridge.lan.as_ref().map(|(a, _)| a.to_string()),
+                                tunnel: None,
+                            });
+                        }
+                        // None came up, or it just ended: try, unless one is being opened.
+                        run.tunnel.is_none()
+                    };
+                    if lost && !hub.tunnel_busy.swap(true, Ordering::SeqCst) {
+                        hub.ensure_tunnel();
+                        hub.tunnel_busy.store(false, Ordering::SeqCst);
+                    }
+                }
+                hub.tunnel_watch.store(false, Ordering::SeqCst);
+            });
+        if spawned.is_err() {
+            self.tunnel_watch.store(false, Ordering::SeqCst);
         }
     }
 

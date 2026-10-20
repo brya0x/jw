@@ -294,6 +294,81 @@ fn token_of(uri: &str) -> String {
         .to_owned()
 }
 
+/// REQ-606: a tunnel that ends (the real one died four minutes after it started) is noticed, and
+/// another with another host name is opened, with the same pairing token in the link.
+#[test]
+fn a_tunnel_that_ends_is_replaced_by_another_with_the_same_token() {
+    let sb = Sandbox::new();
+    let counter = sb.dir.join("runs");
+    let script = sb.dir.join("cloudflared");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\nn=$(cat {c} 2>/dev/null || echo 0)\nn=$((n+1))\necho $n > {c}\necho \"INF https://again-$n.trycloudflare.com\" >&2\nsleep 2\n",
+            c = counter.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut config = sb.config();
+    config.link = LinkConfig {
+        tunnel: Some(script.to_string_lossy().into()),
+        resolve: false,
+        lan: true,
+        lan_ip: Some(std::net::Ipv4Addr::LOCALHOST),
+    };
+    let d = Daemon::start(config).unwrap();
+    let mut pc = sb.client();
+    let first = pc.cmd(Cmd::MobileStart {}).unwrap().unwrap().unwrap();
+    let token = token_of(first["uri"].as_str().unwrap());
+    let tunnel_of = |pc: &mut wire::Client| {
+        pc.cmd(Cmd::MobileLink {})
+            .unwrap()
+            .unwrap()
+            .unwrap()
+            .get("tunnel")
+            .and_then(|t| t.as_str().map(str::to_owned))
+    };
+    let wait_for = |pc: &mut wire::Client, want: &dyn Fn(Option<&str>) -> bool| {
+        let end = std::time::Instant::now() + Duration::from_secs(25);
+        loop {
+            let now = tunnel_of(pc);
+            if want(now.as_deref()) || std::time::Instant::now() > end {
+                return now;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+    let one = wait_for(&mut pc, &|t| t.is_some());
+    assert_eq!(one.as_deref(), Some("again-1.trycloudflare.com"));
+    // it ends after two seconds; the watcher looks every five and opens another
+    let two = wait_for(&mut pc, &|t| {
+        t.is_some_and(|t| t != "again-1.trycloudflare.com")
+    });
+    assert_eq!(
+        two.as_deref(),
+        Some("again-2.trycloudflare.com"),
+        "no second tunnel came"
+    );
+    let link = pc.cmd(Cmd::MobileLink {}).unwrap().unwrap().unwrap();
+    let uri = link["uri"].as_str().unwrap();
+    assert!(uri.ends_with("&t=again-2.trycloudflare.com"), "{uri}");
+    assert_eq!(
+        token_of(uri),
+        token,
+        "the QR a phone is scanning stays good"
+    );
+    // turned off, it is not opened again
+    pc.cmd(Cmd::MobileStop {}).unwrap().unwrap();
+    std::thread::sleep(Duration::from_secs(7));
+    assert_eq!(
+        std::fs::read_to_string(&counter).unwrap().trim(),
+        "2",
+        "a link that is off opens no tunnel"
+    );
+    d.stop();
+}
+
 #[test]
 fn the_private_address_answers_at_once_and_the_tunnel_comes_later_and_stays() {
     let sb = Sandbox::new();

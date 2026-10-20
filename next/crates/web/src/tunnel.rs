@@ -17,6 +17,13 @@ pub struct Tunnel {
     pidfile: Option<PathBuf>,
 }
 
+impl Tunnel {
+    /// Whether the process is still running.
+    pub fn alive(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
+    }
+}
+
 impl Drop for Tunnel {
     fn drop(&mut self) {
         let _ = self.child.kill();
@@ -111,11 +118,12 @@ impl Tunnel {
         }
         let stderr = child.stderr.take().expect("stderr was piped");
         let (tx, rx) = mpsc::channel::<(Option<String>, String)>();
+        // It reads for as long as the tunnel lives, also after the host is known and nobody listens:
+        // a program that writes to a pipe nobody reads any more is killed by SIGPIPE (Go's does
+        // this on stderr), and the tunnel would end at its next line of log.
         thread::spawn(move || {
             for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                if tx.send((find_host(&line), line)).is_err() {
-                    break;
-                }
+                let _ = tx.send((find_host(&line), line));
             }
         });
         let started = Instant::now();
@@ -210,6 +218,41 @@ mod tests {
             .unwrap()
             .success();
         assert!(!alive, "the tunnel process ended with its value");
+    }
+
+    /// What it logs once the host is known is read and dropped: a program that writes to a pipe nobody
+    /// reads is killed (the real one died four minutes after it started because of this).
+    #[test]
+    fn a_tunnel_that_goes_on_logging_after_its_host_is_known_lives() {
+        let dir = tempfile::tempdir().unwrap();
+        let mark = dir.path().join("lived");
+        let program = script(
+            dir.path(),
+            &format!(
+                "echo 'INF https://fake-log-3.trycloudflare.com' >&2\nsleep 1\nfor i in 1 2 3 4 5; do echo \"INF line $i\" >&2; done\ntouch {}\nexec sleep 30",
+                mark.display()
+            ),
+        );
+        let mut t = Tunnel::up(&program, 7000, false, Duration::from_secs(5), None).unwrap();
+        let end = Instant::now() + Duration::from_secs(5);
+        while !mark.exists() && Instant::now() < end {
+            thread::sleep(Duration::from_millis(50));
+        }
+        assert!(mark.exists(), "it died writing its log");
+        assert!(t.alive());
+    }
+
+    #[test]
+    fn a_tunnel_that_ended_says_it_is_not_alive() {
+        let dir = tempfile::tempdir().unwrap();
+        let program = script(
+            dir.path(),
+            "echo 'INF https://fake-end-4.trycloudflare.com' >&2\nsleep 1",
+        );
+        let mut t = Tunnel::up(&program, 7000, false, Duration::from_secs(5), None).unwrap();
+        assert!(t.alive());
+        thread::sleep(Duration::from_millis(1600));
+        assert!(!t.alive());
     }
 
     #[test]
