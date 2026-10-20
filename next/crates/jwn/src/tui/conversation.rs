@@ -184,7 +184,7 @@ enum Hit {
 /// the word «agentes» (REQ-598).
 fn foot(conv: &Conversation, iw: usize) -> Vec<(usize, String, Rgb, Hit)> {
     let (mode, mode_colour) = mode_look(conv.mode);
-    let running = running_tasks(conv);
+    let running = agents::running(conv);
     let steps: [(bool, bool, &str); 4] = [
         (true, true, "^/ teclas"),
         (true, true, "^/"),
@@ -247,13 +247,6 @@ fn foot_left(
     dot(&mut out);
     out.push((conv.model.clone(), Some(look::dim()), Hit::Model));
     out
-}
-
-fn running_tasks(conv: &Conversation) -> usize {
-    conv.tasks
-        .iter()
-        .filter(|t| t.state == contract::conversation::TaskState::Run)
-        .count()
 }
 
 /// A list of jwn's (`panels.rs`): the rows, the one lit, what is typed to narrow them, and, for
@@ -3502,6 +3495,21 @@ mod tests {
         serde_json::from_value(doc["node"].clone()).unwrap()
     }
 
+    /// `idle()` with a subagent that runs, so that the footer has its agents (REQ-598).
+    fn with_agent() -> Conversation {
+        let mut c = idle();
+        c.tasks.push(contract::conversation::Task {
+            id: "ag1".into(),
+            kind: contract::conversation::TaskKind::Agent,
+            label: "mapear el puente".into(),
+            state: contract::conversation::TaskState::Run,
+            started: 0,
+            info: None,
+            item: None,
+        });
+        c
+    }
+
     /// The same with nothing waiting and nothing running.
     fn idle() -> Conversation {
         let mut c = fixture();
@@ -3650,7 +3658,7 @@ mod tests {
 
     #[test]
     fn the_footer_says_the_agents_the_mode_and_the_model_and_has_the_key_of_the_keys() {
-        let mut conv = idle();
+        let mut conv = with_agent();
         let y = INNER.1 + INNER.3 - 1;
         let (g, rows) = frame(&Ui::default(), &conv);
         let foot = &rows[y];
@@ -3697,7 +3705,7 @@ mod tests {
     /// the tasks over the conversation as before.
     #[test]
     fn ctrl_b_opens_the_area_of_the_agents_when_there_is_room_and_its_keys_work_there() {
-        let mut conv = idle();
+        let mut conv = with_agent();
         let node = conv.head.id.clone();
         let mut ui = Ui::default();
         let ctrl_b = KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL);
@@ -3750,7 +3758,7 @@ mod tests {
     /// REQ-598: a narrow pane gives way from the right, and the mode and the model are the last to go.
     #[test]
     fn a_narrow_footer_drops_the_word_of_the_keys_then_the_hint_of_the_mode_then_the_word_agents() {
-        let conv = idle();
+        let conv = with_agent();
         let line = |iw: usize| -> String {
             let mut s = String::new();
             let mut col = 0;
@@ -3795,7 +3803,7 @@ mod tests {
     #[test]
     fn a_click_on_a_piece_of_the_footer_opens_what_it_names_and_ctrl_slash_and_a_question_mark_open_the_keys()
      {
-        let conv = idle();
+        let conv = with_agent();
         let y = INNER.1 + INNER.3 - 1;
         let (_, rows) = frame(&Ui::default(), &conv);
         let col = |s: &str| {
@@ -5705,6 +5713,7 @@ mod tests {
             press(&mut ui, &c, KeyCode::Enter),
             Some(Act::StopTask { .. })
         ));
+        let c = with_agent();
         let mut ui = Ui::default();
         let (_, rows) = frame(&ui, &c);
         let y = rows

@@ -200,6 +200,9 @@ pub enum Item {
         /// What the subagent was asked, clipped (REQ-600).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         prompt: Option<String>,
+        /// The model the subagent runs with, as its own messages say it (short, `haiku-5.5`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
     },
     /// A shell line of the person's (`!command`) and what it printed.
     Shell {

@@ -117,6 +117,7 @@ sealed interface ConvItem {
         val last: String? = null,
         val steps: List<String>,
         val prompt: String? = null,
+        val model: String? = null,
     ) : ConvItem
 
     /** A shell line of the person's (`!command`) and what it printed. */

@@ -1767,6 +1767,10 @@ impl State {
                                     .as_str()
                                     .filter(|p| !p.trim().is_empty())
                                     .map(|p| clip(p, PROMPT_CHARS)),
+                                model: b["input"]["model"]
+                                    .as_str()
+                                    .filter(|m| !m.trim().is_empty())
+                                    .map(short_model),
                             });
                             continue;
                         }
@@ -1829,7 +1833,10 @@ impl State {
                 )
             })
             .collect();
-        if let Some(Item::Agent { steps: have, .. }) = self
+        let ran_with = msg["message"]["model"].as_str().map(short_model);
+        if let Some(Item::Agent {
+            steps: have, model, ..
+        }) = self
             .items
             .iter_mut()
             .rev()
@@ -1837,6 +1844,10 @@ impl State {
         {
             have.extend(steps);
             have.truncate(STEPS_KEPT);
+            // The model its own messages say it runs with is the one it does run with.
+            if ran_with.is_some() {
+                *model = ran_with;
+            }
         }
     }
 
@@ -4011,6 +4022,7 @@ mod tests {
             last: None,
             steps: Vec::new(),
             prompt: None,
+            model: None,
         }
     }
 
@@ -4212,6 +4224,7 @@ mod tests {
                     last: None,
                     steps: Vec::new(),
                     prompt: None,
+                    model: None,
                 },
             },
         ];

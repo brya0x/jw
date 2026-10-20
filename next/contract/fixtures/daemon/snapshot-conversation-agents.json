@@ -30,7 +30,8 @@
           "Glob crates/**/bridge*.rs",
           "Grep fn pair"
         ],
-        "prompt": "Busca cómo el daemon habla con el teléfono. No edites nada."
+        "prompt": "Busca cómo el daemon habla con el teléfono. No edites nada.",
+      "model": "haiku-5.5"
       }
     ],
     "queue": [],

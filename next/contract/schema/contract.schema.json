@@ -97,7 +97,8 @@
             "ms": { "type": "integer", "minimum": 0 },
             "last": { "type": "string" },
             "steps": { "type": "array", "items": { "type": "string" } },
-            "prompt": { "type": "string" }
+            "prompt": { "type": "string" },
+            "model": { "type": "string" }
           }
         },
         {

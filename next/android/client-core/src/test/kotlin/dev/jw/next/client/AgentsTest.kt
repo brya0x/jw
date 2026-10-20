@@ -23,9 +23,9 @@ class AgentsTest {
     fun aSubagentTaskTakesItsNumbersItsPromptAndItsStepsFromItsCardAndTheTimeRuns() {
         val conv = withAgent()
         val row = agentRows(conv, now = 1_792_110_002_000 + 90_000).single()
-        assertEquals("Explore", row.name)
-        assertEquals("2 tools · 38.4k · 1:30", row.stats, "the clock of a task that runs is the phone's")
-        assertEquals("Buscando el puerto del puente", row.now)
+        assertEquals("Explore (haiku-5.5)", row.name, "the kind of subagent and the model it runs with")
+        assertEquals("1:30 · 38.4k", row.stats, "the clock of a task that runs is the phone's")
+        assertEquals("Buscando el puerto del puente", row.doing)
         assertEquals("Busca cómo el daemon habla con el teléfono. No edites nada.", row.prompt)
         assertEquals(listOf("Glob crates/**/bridge*.rs", "Grep fn pair"), row.steps)
         assertNull(row.said, "it has not said anything yet")
@@ -43,19 +43,21 @@ class AgentsTest {
             )
         }
         val rows = agentRows(conv, now = 1_792_110_100_000 + 5_000)
-        assertEquals(listOf("b1", "aa8348e2"), rows.map { it.id }, "newest first")
-        assertEquals("shell", rows[0].name)
-        assertEquals("0:05", rows[0].stats)
-        assertNull(rows[0].prompt)
-        assertEquals(emptyList(), rows[0].steps)
-        assertEquals("El puente está en crates/web.", rows[1].said)
-        assertNull(rows[1].now, "what ended does nothing now")
+        assertEquals(listOf("aa8348e2"), rows.map { it.id }, "a shell is not a subagent")
+        assertEquals("listo", rows[0].doing, "what ended says how")
+        assertEquals("El puente está en crates/web.", rows[0].said)
+        // a subagent with no card has only its time
+        val bare = conv.copy(tasks = listOf(Task("a2", TaskKind.Agent, "x", TaskState.Run, 1_792_110_100_000)))
+        val r = agentRows(bare, now = 1_792_110_100_000 + 5_000).single()
+        assertEquals(listOf("agente", "0:05", "empezando"), listOf(r.name, r.stats, r.doing))
+        assertNull(r.prompt)
     }
 
     @Test
     fun theChipShowsWhileSomeRunAndWhileThePanelIsOpenSoThatItCanBeClosed() {
         val conv = withAgent()
         assertEquals(1, agentsChip(conv, open = false))
+        assertNull(agentsChip(conv.copy(tasks = listOf(Task("b1", TaskKind.Bash, "cargo", TaskState.Run, 1))), open = false), "a shell is not a subagent")
         val idle = conv.copy(tasks = emptyList())
         assertNull(agentsChip(idle, open = false))
         assertEquals(0, agentsChip(idle, open = true))

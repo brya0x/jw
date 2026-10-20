@@ -50,9 +50,9 @@ internal fun AgentsChip(running: Int, open: Boolean, toggle: () -> Unit) {
 internal fun AgentsPanel(rows: List<AgentRow>, lit: Set<String>, tick: Long, toggle: (String) -> Unit, stop: (String) -> Unit) {
     val running = rows.count { it.running }
     Column(Modifier.fillMaxWidth().background(Palette.panel)) {
-        Mono("agentes · " + if (running > 0) "$running corriendo" else "ninguno", Palette.dim, 12, modifier = Modifier.padding(horizontal = Pad, vertical = 6.dp))
+        Mono("subagentes · " + if (running > 0) "$running corriendo" else "ninguno", Palette.dim, 12, modifier = Modifier.padding(horizontal = Pad, vertical = 6.dp))
         Column(Modifier.heightIn(max = 280.dp).verticalScroll(rememberScrollState()).padding(horizontal = Pad), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            if (rows.isEmpty()) Mono("nada corre ahora", Palette.dim, 12, modifier = Modifier.padding(bottom = 8.dp))
+            if (rows.isEmpty()) Mono("ninguno ahora", Palette.dim, 12, modifier = Modifier.padding(bottom = 8.dp))
             rows.forEach { r -> AgentRowView(r, r.id in lit, tick, { toggle(r.id) }, { stop(r.id) }) }
         }
         Hairline()
@@ -69,18 +69,20 @@ private fun AgentRowView(r: AgentRow, open: Boolean, tick: Long, toggle: () -> U
     Column(Modifier.fillMaxWidth().background(Palette.sel, RoundedCornerShape(8.dp))) {
         Column(
             Modifier.fillMaxWidth().defaultMinSize(minHeight = 48.dp).clickable(onClick = toggle).padding(horizontal = 12.dp, vertical = 6.dp)
-                .semantics { role = Role.Button; contentDescription = "${r.name}, ${r.label}, ${if (r.running) "trabajando" else "terminó"}. ${r.stats}" },
+                .semantics { role = Role.Button; contentDescription = "${r.name}, ${r.label}, ${r.doing}. ${r.stats}" },
             verticalArrangement = Arrangement.Center,
         ) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Mono(mark, color, 13, bold = true)
-                Mono(r.name, Palette.fg, 13, bold = true)
-                Mono(r.label, Palette.dim, 12, lines = 1, modifier = Modifier.weight(1f))
+                Mono(r.name, Palette.fg, 13, bold = true, modifier = Modifier.weight(1f))
+                Mono(r.stats, Palette.dim, 11)
             }
-            if (r.stats.isNotEmpty() || r.now != null) Mono(listOfNotNull(r.stats.ifEmpty { null }, r.now).joinToString(" · "), Palette.dim, 11, lines = 2)
+            Mono("→ ${r.doing}", Palette.dim, 12, lines = 2)
         }
         if (open) Column(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            r.prompt?.let { Mono("prompt  $it", Palette.dim, 12, lines = 5) }
+            Mono(r.label, Palette.fg, 12, bold = true, lines = 2)
+            r.prompt?.let { Mono("prompt", Palette.dim, 11); Mono(it, Palette.fg, 12, lines = 5) }
+            if (r.steps.isNotEmpty()) Mono("pasos", Palette.dim, 11)
             r.steps.forEachIndexed { i, s ->
                 val last = i == r.steps.lastIndex && r.running
                 val tool = s.substringBefore(' ')
@@ -90,7 +92,7 @@ private fun AgentRowView(r: AgentRow, open: Boolean, tick: Long, toggle: () -> U
                     Mono(s.removePrefix(tool).trim(), Palette.fg, 12, lines = 1, modifier = Modifier.weight(1f))
                 }
             }
-            r.said?.let { Mono("dijo  $it", Palette.fg, 12, lines = 6) }
+            r.said?.let { Mono("dijo", Palette.dim, 11); Mono(it, Palette.fg, 12, lines = 6) }
             if (r.running) Box(
                 Modifier.fillMaxWidth().defaultMinSize(minHeight = 48.dp).background(Palette.panel, RoundedCornerShape(8.dp)).clickable(onClick = stop),
                 contentAlignment = Alignment.Center,
