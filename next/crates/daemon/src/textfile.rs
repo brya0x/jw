@@ -2,7 +2,7 @@
 //! at most a MiB of it, and handed to every client as the same `TextDoc`. Nothing here changes a
 //! file.
 
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::Read;
 use std::path::Path;
 
@@ -48,10 +48,15 @@ pub fn read(shared: &Shared, workspace: &str, path: &str) -> Done {
 /// read is the one that was checked, so a file swapped for a link in between is not followed.
 fn load(file: &Path, path: &str) -> Result<(Vec<u8>, u64, bool), ErrorBody> {
     let io = |e: std::io::Error| err(ErrorCode::Io, format!("cannot read {path}: {e}"));
+    let not_file = || err(ErrorCode::BadRequest, format!("{path} is not a file"));
+    // open(2) blocks on a FIFO until a writer appears, so the type is checked before opening.
+    if !fs::metadata(file).map_err(io)?.is_file() {
+        return Err(not_file());
+    }
     let handle = File::open(file).map_err(io)?;
     let meta = handle.metadata().map_err(io)?;
     if !meta.is_file() {
-        return Err(err(ErrorCode::BadRequest, format!("{path} is not a file")));
+        return Err(not_file());
     }
     let mut bytes = Vec::new();
     handle
@@ -84,7 +89,7 @@ fn utf8(mut bytes: Vec<u8>, truncated: bool, path: &str) -> Result<String, Error
             let end = e.utf8_error().valid_up_to();
             let mut bytes = e.into_bytes();
             bytes.truncate(end);
-            Ok(String::from_utf8(bytes).expect("up to the last whole character"))
+            String::from_utf8(bytes).map_err(|_| binary(path))
         }
         Err(_) => Err(binary(path)),
     }

@@ -122,6 +122,16 @@ fn a_text_file_comes_as_lines_and_what_leaves_the_workspace_or_is_not_text_is_re
         read(&mut c, &ws, "no-hay.txt").unwrap_err().0,
         ErrorCode::NotFound
     );
+    // a FIFO is refused by its type, before open(2) would wait for a writer that never comes
+    let fifo = std::process::Command::new("mkfifo")
+        .arg(dir.join("cola"))
+        .status()
+        .unwrap();
+    assert!(fifo.success());
+    assert_eq!(
+        read(&mut c, &ws, "cola").unwrap_err().0,
+        ErrorCode::BadRequest
+    );
     d.stop();
 }
 

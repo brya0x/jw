@@ -305,7 +305,7 @@ class ConformanceTest {
         assertEquals(result, ContractJson.encodeToJsonElement(MarkdownDoc.serializer(), doc))
     }
 
-    /** The result of `read_file` in the fixture is what [TextDoc] reads, keeps an unknown class as it came, and writes back as it was. */
+    /** The result of `read_file` in the fixture is what [TextDoc] reads, keeps an unknown class as it came, and writes back as it was (REQ-610 to REQ-614, REQ-622). */
     @Test
     fun theReplyOfReadFileIsADocumentOfLinesOfRuns() {
         val reply = fixtures("daemon").first { it.first == "reply-ok-read-file.json" }.second

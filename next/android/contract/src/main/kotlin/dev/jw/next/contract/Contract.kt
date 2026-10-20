@@ -214,7 +214,7 @@ sealed interface Cmd {
     @Serializable @SerialName("read_markdown")
     data class ReadMarkdown(val workspace: Id, val path: String) : Cmd
 
-    /** A text file of the workspace as lines: [path] is relative to its folder. The result is a [TextDoc]; a file that is not text is refused with [ErrorCode.Binary]. */
+    /** A text file of the workspace as lines: [path] is relative to its folder. The result is a [TextDoc]; a file that is not text is refused with [ErrorCode.Binary] (REQ-610 to REQ-614). */
     @Serializable @SerialName("read_file")
     data class ReadFile(val workspace: Id, val path: String) : Cmd
 
