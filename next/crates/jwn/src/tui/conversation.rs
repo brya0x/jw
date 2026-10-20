@@ -313,6 +313,16 @@ impl Editor {
             .map(|a| (a.min(self.cursor), a.max(self.cursor)))
     }
 
+    /// Select the word that has the character `at` (REQ-637); `true` when there is one.
+    pub fn select_word_at(&mut self, at: usize) -> bool {
+        let Some((from, to)) = select::word_at(&self.text(), at) else {
+            return false;
+        };
+        self.anchor = Some(from);
+        self.cursor = to + 1;
+        true
+    }
+
     pub fn set(&mut self, text: &str) {
         self.chars = text.chars().collect();
         self.cursor = self.chars.len();
@@ -2707,6 +2717,71 @@ impl Ui {
         };
         self.pull = Some(select::Pull::new((x, y), anchor));
         true
+    }
+
+    /// The press that began a drag was the second of a double click: the drag covers the word
+    /// it is on, and what the button's release copies is that word (REQ-637).
+    pub fn widen_to_word(
+        &mut self,
+        conv: &Conversation,
+        (_, _, iw, ih): (usize, usize, usize, usize),
+    ) {
+        if iw < 12 || ih < 8 {
+            return;
+        }
+        let Some(anchor) = self.pull.as_ref().map(|p| p.anchor) else {
+            return;
+        };
+        let lines = self.lines(conv, iw - 2);
+        let Some((from, to)) = lines
+            .get(anchor.line)
+            .and_then(|l| select::word_at(&l.text(), anchor.col))
+        else {
+            return;
+        };
+        let (a, b) = (
+            select::Point {
+                line: anchor.line,
+                col: from,
+            },
+            select::Point {
+                line: anchor.line,
+                col: to,
+            },
+        );
+        if let Some(pull) = self.pull.as_mut() {
+            pull.anchor = a;
+            pull.moved = true;
+        }
+        self.sel = Some(select::Selection {
+            pane: conv.head.id.clone(),
+            anchor: a,
+            head: b,
+        });
+    }
+
+    /// A double click at (`x`, `y`) on the text of the field selects the word it is on (REQ-637);
+    /// `true` when there was one.
+    pub fn select_word_in_field(
+        &mut self,
+        conv: &Conversation,
+        (ix, iy, iw, ih): (usize, usize, usize, usize),
+        x: usize,
+        y: usize,
+    ) -> bool {
+        if self.pop.is_some() || conv.ask.is_some() || iw < 12 || ih < 8 {
+            return false;
+        }
+        let field = self.field(conv, iw);
+        let geo = self.geo(conv, (iy, ih), field.band_rows());
+        let first = geo.band.0 + Field::FIRST_TEXT;
+        let text_x = ix + 1 + field::PROMPT;
+        let (Some(row), Some(col)) = (y.checked_sub(first), x.checked_sub(text_x)) else {
+            return false;
+        };
+        field
+            .index_at(row, col)
+            .is_some_and(|at| self.editor.select_word_at(at))
     }
 
     /// The pointer moved with the button down: the drag covers from where it began to the line

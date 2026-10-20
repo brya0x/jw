@@ -323,6 +323,42 @@ impl Viewer {
         true
     }
 
+    /// The press that began a drag was the second of a double click: it covers the word it is on
+    /// (REQ-637).
+    pub fn widen_to_word(&mut self, rect: (usize, usize, usize, usize)) {
+        let Some(anchor) = self.pull.as_ref().map(|p| p.anchor) else {
+            return;
+        };
+        let geo = self.geo(rect);
+        let layout = self.layout(geo.text_w);
+        let Some((from, to)) = layout
+            .rows
+            .get(anchor.line)
+            .and_then(|r| select::word_at(&r.text(), anchor.col))
+        else {
+            return;
+        };
+        let (a, b) = (
+            select::Point {
+                line: anchor.line,
+                col: from,
+            },
+            select::Point {
+                line: anchor.line,
+                col: to,
+            },
+        );
+        if let Some(pull) = self.pull.as_mut() {
+            pull.anchor = a;
+            pull.moved = true;
+        }
+        self.sel = Some(select::Selection {
+            pane: String::new(),
+            anchor: a,
+            head: b,
+        });
+    }
+
     /// The pointer moved with the button down (REQ-462's way of selecting).
     pub fn drag_to(
         &mut self,

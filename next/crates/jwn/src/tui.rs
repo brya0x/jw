@@ -504,6 +504,8 @@ struct ListGeom {
 
 /// How often a drag past the edge of a list scrolls it.
 const DRAG_SCROLL_MS: u64 = 60;
+/// Two presses of the left button on one cell this close (ms) are a double click (REQ-637).
+const DOUBLE_CLICK_MS: u64 = 400;
 
 /// Where a new panel goes: it splits this one, along this way.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -657,6 +659,8 @@ pub struct View {
     /// What a drag of the mouse covers in a pane's list, and the drag while the button is down.
     selection: Option<select::Selection>,
     drag: Option<Drag>,
+    /// Where and when the last press of the left button was, to tell a double click (REQ-637).
+    last_press: Option<(usize, usize, u64)>,
     /// The pane whose conversation a drag began in, with the button still down (the drag itself
     /// and what it covers are the conversation's own: `conversation::Ui`).
     conv_drag: Option<String>,
@@ -760,6 +764,7 @@ impl View {
             scroll: HashMap::new(),
             selection: None,
             drag: None,
+            last_press: None,
             conv_drag: None,
             viewer: None,
             tree_on: false,
@@ -3802,6 +3807,93 @@ impl View {
         })
     }
 
+    /// A press of the left button at (`x`, `y`): `true` when it is the second on the same cell within
+    /// `DOUBLE_CLICK_MS` of the first (REQ-637). A third press begins a count again.
+    pub fn double_press(&mut self, x: usize, y: usize) -> bool {
+        let double = self.last_press.is_some_and(|(lx, ly, at)| {
+            (lx, ly) == (x, y) && self.now_ms.saturating_sub(at) <= DOUBLE_CLICK_MS
+        });
+        self.last_press = (!double).then_some((x, y, self.now_ms));
+        double
+    }
+
+    /// The press that began a drag was the second of a double click: the drag covers the word it
+    /// is on, so the release copies it (REQ-637).
+    pub fn widen_to_word(&mut self) {
+        if self.viewer.is_some() {
+            let (cols, rows) = self.size;
+            let rect = self.panes_space(cols, rows);
+            if let Some(v) = self.viewer.as_mut().and_then(Viewing::doc_mut) {
+                v.widen_to_word(rect);
+            }
+            return;
+        }
+        if let Some((node, rect)) = self.conv_drag_at() {
+            let room = self.conv_inner(&node, rect);
+            if let (Some(conv), Some(ui)) = (self.convs.get(&node), self.conv_ui.get_mut(&node)) {
+                ui.widen_to_word(conv, room);
+            }
+            return;
+        }
+        let Some(d) = self.drag.as_mut() else {
+            return;
+        };
+        let (pane, anchor, width) = (d.pane.clone(), d.anchor, d.width);
+        let Some(text) = self.blocks_of(&pane).and_then(|b| {
+            shell::window_lines(&b.blocks, self.now_ms, width, anchor.line, 1)
+                .first()
+                .map(select::text_of)
+        }) else {
+            return;
+        };
+        let Some((from, to)) = select::word_at(&text, anchor.col) else {
+            return;
+        };
+        let (a, b) = (
+            select::Point {
+                line: anchor.line,
+                col: from,
+            },
+            select::Point {
+                line: anchor.line,
+                col: to,
+            },
+        );
+        if let Some(d) = self.drag.as_mut() {
+            d.anchor = a;
+            d.moved = true;
+        }
+        self.selection = Some(select::Selection {
+            pane,
+            anchor: a,
+            head: b,
+        });
+    }
+
+    /// A double click on the text of a conversation's field selects the word it is on (REQ-637);
+    /// `true` when it did.
+    pub fn select_word_in_field(&mut self, x: usize, y: usize, cols: usize, rows: usize) -> bool {
+        if self.mode != Mode::Workspaces || self.viewer.is_some() {
+            return false;
+        }
+        let Some(doc) = self.shown() else {
+            return false;
+        };
+        let rects = self.layout(doc, self.panes_space(cols, rows));
+        let Some(i) = rects.iter().position(|r| inside(*r, x, y)) else {
+            return false;
+        };
+        let pane = doc.panes[i].id.clone();
+        let Some(node) = self.conv_node(&pane) else {
+            return false;
+        };
+        let room = self.conv_inner(&node, rects[i]);
+        match (self.convs.get(&node), self.conv_ui.get_mut(&node)) {
+            (Some(conv), Some(ui)) => ui.select_word_in_field(conv, room, x, y),
+            _ => false,
+        }
+    }
+
     /// A press on a command or an output line of a pane's list begins a drag (REQ-304); any other
     /// press is a click. Either way, what was selected is let go of. `true` when a drag began.
     pub fn press_select(&mut self, x: usize, y: usize, cols: usize, rows: usize) -> bool {
@@ -5862,7 +5954,13 @@ pub fn run() -> Result<(), String> {
                     let (x, y) = (m.column as usize, m.row as usize);
                     match m.kind {
                         MouseEventKind::Down(MouseButton::Left) => {
+                            let double = view.double_press(x, y);
                             if view.press_select(x, y, cols, rows) {
+                                if double {
+                                    view.widen_to_word();
+                                }
+                                After::Continue
+                            } else if double && view.select_word_in_field(x, y, cols, rows) {
                                 After::Continue
                             } else {
                                 view.click(x, y, cols, rows)
@@ -9930,6 +10028,83 @@ mod tests {
         );
         // and a press outside the list is the click it always was
         assert!(!v.press_select(x, 39, 120, 40));
+    }
+
+    /// REQ-637: two presses on one cell, close in time, are a double click; a third begins again.
+    #[test]
+    fn two_presses_on_one_cell_within_the_time_are_a_double_click() {
+        let mut v = conv_view(true);
+        assert!(!v.double_press(5, 5), "the first");
+        assert!(v.double_press(5, 5), "the second");
+        assert!(!v.double_press(5, 5), "a third is the first of the next");
+        assert!(!v.double_press(6, 5), "another cell");
+        v.now_ms += DOUBLE_CLICK_MS + 1;
+        assert!(!v.double_press(6, 5), "too late");
+        v.now_ms += 10;
+        assert!(v.double_press(6, 5));
+    }
+
+    /// REQ-637: a double click in a conversation's list copies the word.
+    #[test]
+    fn a_double_click_in_a_conversation_selects_the_word_and_copies_it() {
+        let mut v = conv_view(true);
+        let (x, y) = find_in(&v, "mirar el test", 40);
+        let at = x + 10;
+        assert!(!v.double_press(at, y));
+        assert!(v.press_select(at, y, 120, 40));
+        assert_eq!(
+            v.release(120, 40),
+            After::Continue,
+            "the first press is a click"
+        );
+        assert!(v.double_press(at, y));
+        assert!(v.press_select(at, y, 120, 40));
+        v.widen_to_word();
+        assert_eq!(v.release(120, 40), After::Copy("test".into()));
+        assert!(v.flash.starts_with("copiado"), "{}", v.flash);
+        let g = v.grid(120, 40);
+        assert_eq!(
+            g.cells[y * g.cols + x + 10].1.bg,
+            Some(look::selection().0),
+            "it is lit"
+        );
+    }
+
+    /// REQ-637: the same in a terminal's list of blocks.
+    #[test]
+    fn a_double_click_on_the_output_of_a_terminal_copies_the_word() {
+        let mut v = open_blocks();
+        let (x, y) = find(&v, "On branch feat/login");
+        assert!(!v.double_press(x + 5, y));
+        assert!(v.press_select(x + 5, y, 120, 30));
+        v.release(120, 30);
+        assert!(v.double_press(x + 5, y));
+        assert!(v.press_select(x + 5, y, 120, 30));
+        v.widen_to_word();
+        assert_eq!(v.release(120, 30), After::Copy("branch".into()));
+    }
+
+    /// REQ-637: a double click on a word of the field selects it, and what is typed next takes its place.
+    #[test]
+    fn a_double_click_in_the_field_selects_the_word_under_it() {
+        let mut v = conv_view(true);
+        for c in "hola ñandú mundo".chars() {
+            v.press_key(plain(KeyCode::Char(c)));
+        }
+        let (x, y) = find_in(&v, "hola ñandú mundo", 40);
+        let at = x + 7;
+        assert!(
+            !v.select_word_in_field(x + 4, y, 120, 40),
+            "a space has no word"
+        );
+        assert!(v.select_word_in_field(at, y, 120, 40));
+        v.press_key(plain(KeyCode::Char('X')));
+        let screen = v.plain(120, 40);
+        assert!(screen.contains("hola X mundo"), "{screen}");
+        assert!(
+            !v.select_word_in_field(x, 0, 120, 40),
+            "above the field is not in it"
+        );
     }
 
     fn plan_ask() -> contract::conversation::Ask {

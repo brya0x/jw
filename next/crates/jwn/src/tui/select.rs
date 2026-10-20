@@ -100,6 +100,36 @@ impl Pull {
     }
 }
 
+/// What a double click takes as part of a word: letters and digits of any alphabet (`ñ`, `é`) and
+/// what a path, an option or a name holds (REQ-637).
+fn is_word(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | '~')
+}
+
+/// The word under column `col` of `text`: where it begins and where it ends, both included. A
+/// space or a mark that no word holds is none, and a full stop or a dash that ends a word is not
+/// part of it (`palabra.` is `palabra`).
+pub fn word_at(text: &str, col: usize) -> Option<(usize, usize)> {
+    let chars: Vec<char> = text.chars().collect();
+    if !chars.get(col).copied().is_some_and(is_word) {
+        return None;
+    }
+    let from = chars[..col]
+        .iter()
+        .rposition(|c| !is_word(*c))
+        .map_or(0, |i| i + 1);
+    let mut to = col
+        + chars[col..]
+            .iter()
+            .position(|c| !is_word(*c))
+            .unwrap_or(chars.len() - col)
+        - 1;
+    while to > from && matches!(chars[to], '.' | '-') {
+        to -= 1;
+    }
+    (col <= to).then_some((from, to))
+}
+
 /// The text of a line of the list: what its spans say.
 pub fn text_of(line: &Line) -> String {
     line.spans.iter().map(|(t, _)| t.as_str()).collect()
@@ -275,5 +305,29 @@ mod tests {
             ""
         );
         assert_eq!(selected_text(&[], 0, 40, &sel(at(0, 0), at(3, 5))), "");
+    }
+
+    /// REQ-637: what a double click takes.
+    #[test]
+    fn a_word_has_letters_of_any_alphabet_and_what_a_path_or_an_option_holds() {
+        assert_eq!(
+            word_at("hola ñandú", 6),
+            Some((5, 9)),
+            "the accents are letters"
+        );
+        assert_eq!(
+            word_at("ver src/main.rs.", 6),
+            Some((4, 14)),
+            "a path, without its full stop"
+        );
+        assert_eq!(word_at("a-b -v", 5), Some((4, 5)), "an option");
+        assert_eq!(word_at("hola ñandú", 4), None, "a space is no word");
+        assert_eq!(
+            word_at("palabra.", 7),
+            None,
+            "the full stop that ends it is not part of it"
+        );
+        assert_eq!(word_at("hola", 9), None, "past the end of the line");
+        assert_eq!(word_at("", 0), None);
     }
 }

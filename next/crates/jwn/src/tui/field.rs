@@ -15,7 +15,7 @@ const AROUND: usize = 4;
 /// The send mark, at the right of the first row of text.
 pub const SEND: &str = "➤";
 /// Columns the prompt takes before the text, and those kept at its right for the marks.
-const PROMPT: usize = 2;
+pub const PROMPT: usize = 2;
 const MARKS: usize = 4;
 
 /// How a field is drawn besides its text: the stop mark when something runs and the words of the
@@ -38,6 +38,8 @@ pub struct Field {
     selected: Vec<(usize, usize)>,
     /// The cells (row, column) of the marks, with their colour.
     lit: Vec<(usize, usize, Rgb)>,
+    /// The character of the text each row begins with, for a click to say which one it is on.
+    starts: Vec<usize>,
 }
 
 /// Columns of text a pane `iw` wide holds in a row of the field.
@@ -61,12 +63,14 @@ impl Field {
                 cursor: (0, col),
                 selected: Vec::new(),
                 lit: Vec::new(),
+                starts: Vec::new(),
             },
             (None, None) => Field {
                 rows: vec![String::new()],
                 cursor: (0, 0),
                 selected: Vec::new(),
                 lit: Vec::new(),
+                starts: Vec::new(),
             },
         }
     }
@@ -86,6 +90,12 @@ impl Field {
             sel,
             marks,
         )
+    }
+
+    /// The character of the text that is at `col` of the shown row `row`: none past the end of the row.
+    pub fn index_at(&self, row: usize, col: usize) -> Option<usize> {
+        let text = self.rows.get(row)?;
+        (col < text.chars().count()).then(|| self.starts.get(row).map(|s| s + col))?
     }
 
     /// Nothing is typed (or nothing can be shown), so the row says what to type.
@@ -225,6 +235,7 @@ fn wrap(
     marks: &[Mark],
 ) -> Field {
     let mut rows = vec![String::new()];
+    let mut starts = vec![0];
     let mut selected = Vec::new();
     let mut lit = Vec::new();
     let mut at = (0, 0);
@@ -232,6 +243,7 @@ fn wrap(
     for (i, c) in text.chars().enumerate() {
         if c != '\n' && rows.last().is_some_and(|r| r.chars().count() >= width) {
             rows.push(String::new());
+            starts.push(i);
         }
         if i == cursor {
             at = (rows.len() - 1, rows.last().map_or(0, |r| r.chars().count()));
@@ -239,6 +251,7 @@ fn wrap(
         }
         if c == '\n' {
             rows.push(String::new());
+            starts.push(i + 1);
         } else {
             let at = rows.len() - 1;
             let col = rows[at].chars().count();
@@ -256,6 +269,7 @@ fn wrap(
     if !placed {
         if rows.last().is_some_and(|r| r.chars().count() >= width) {
             rows.push(String::new());
+            starts.push(text.chars().count());
         }
         at = (rows.len() - 1, rows.last().map_or(0, |r| r.chars().count()));
     }
@@ -274,6 +288,7 @@ fn wrap(
             .filter_map(|(r, c, k)| r.checked_sub(start).map(|r| (r, c, k)))
             .filter(|(r, ..)| *r < MAX_TEXT_ROWS)
             .collect(),
+        starts: starts.into_iter().skip(start).take(MAX_TEXT_ROWS).collect(),
     }
 }
 
