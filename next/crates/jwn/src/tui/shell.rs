@@ -97,6 +97,28 @@ pub fn short(path: &str) -> String {
     }
 }
 
+/// The path of `rel`, a file of the workspace at `workspace`, as written from the folder `cwd`:
+/// what the engine, which runs in `cwd`, resolves an `@` against (REQ-631). `../` where it climbs.
+pub fn from_folder(workspace: &str, cwd: &str, rel: &str) -> String {
+    let parts = |p: &str| -> Vec<String> {
+        p.split('/')
+            .filter(|c| !c.is_empty() && *c != ".")
+            .map(str::to_owned)
+            .collect()
+    };
+    let from = parts(cwd);
+    let to: Vec<String> = parts(workspace).into_iter().chain(parts(rel)).collect();
+    let same = from.iter().zip(&to).take_while(|(a, b)| a == b).count();
+    let path: Vec<String> = std::iter::repeat_n("..".to_owned(), from.len() - same)
+        .chain(to[same..].iter().cloned())
+        .collect();
+    if path.is_empty() {
+        ".".to_owned()
+    } else {
+        path.join("/")
+    }
+}
+
 /// Whether a block's output has anything to see: a program that draws on the normal screen (claude)
 /// has painted once a row of its own has more than blanks in it.
 pub fn has_ink(out: &[Vec<Span>]) -> bool {
@@ -341,6 +363,25 @@ mod tests {
     use contract::Color;
 
     use super::*;
+
+    /// REQ-631: the path of a file as written from the folder the engine runs in.
+    #[test]
+    fn a_path_is_written_from_the_folder_the_engine_runs_in() {
+        let w = "/w/app";
+        // the workspace itself: as it is
+        assert_eq!(from_folder(w, "/w/app", "src/a.rs"), "src/a.rs");
+        // below the folder, beside it, above it, and the folder itself
+        assert_eq!(from_folder(w, "/w/app/crates", "crates/x.rs"), "x.rs");
+        assert_eq!(from_folder(w, "/w/app/crates/d", "crates/x.rs"), "../x.rs");
+        assert_eq!(from_folder(w, "/w/app/crates", "docs/a.md"), "../docs/a.md");
+        assert_eq!(from_folder(w, "/w/app/crates", "crates"), ".");
+        // outside the workspace, with a trailing slash and a `.`
+        assert_eq!(
+            from_folder(w, "/home/me/", "docs/a.md"),
+            "../../w/app/docs/a.md"
+        );
+        assert_eq!(from_folder(w, "/w/app/./crates/", "crates/x.rs"), "x.rs");
+    }
 
     #[test]
     fn colours_are_the_themes_for_the_named_ones_and_the_usual_ramp_for_the_rest() {

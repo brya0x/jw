@@ -2450,6 +2450,28 @@ impl View {
         }
     }
 
+    /// Paths of the workspace as the conversation's engine reads them: from the folder it runs in
+    /// (REQ-631). Unchanged while the node does not say where it runs.
+    fn written_from_the_conversations_folder(
+        &self,
+        workspace: &str,
+        node: &str,
+        paths: Vec<String>,
+    ) -> Vec<String> {
+        let root = self
+            .session
+            .as_ref()
+            .and_then(|s| s.workspaces.iter().find(|w| w.id == workspace))
+            .map(|w| w.path.as_str());
+        match (root, self.convs.get(node).and_then(|c| c.cwd.as_deref())) {
+            (Some(root), Some(cwd)) => paths
+                .iter()
+                .map(|p| shell::from_folder(root, cwd, p))
+                .collect(),
+            _ => paths,
+        }
+    }
+
     /// The files an `@` in the conversation's line calls for, asked once for each fragment.
     fn ask_mentions(&mut self, node: &str) {
         let Some(workspace) = self.opened.clone() else {
@@ -3333,11 +3355,19 @@ impl View {
     /// The daemon answered a folder or a search.
     pub fn files_replied(&mut self, r: FilesReply) {
         let FilesReply { ask, reply } = r;
-        if let FileAsk::Mention { query, node, .. } = &ask {
+        if let FileAsk::Mention {
+            workspace,
+            query,
+            node,
+        } = &ask
+        {
             let found = reply_value(reply)
                 .and_then(|v| serde_json::from_value::<FoundFiles>(v).map_err(|e| e.to_string()));
-            if let (Some(ui), Ok(f)) = (self.conv_ui.get_mut(node), found) {
-                ui.found(query, f.paths);
+            if let Ok(f) = found {
+                let paths = self.written_from_the_conversations_folder(workspace, node, f.paths);
+                if let Some(ui) = self.conv_ui.get_mut(node) {
+                    ui.found(query, paths);
+                }
             }
             return;
         }
@@ -4538,7 +4568,9 @@ impl View {
         let Some(ui) = self.conv_ui.get(&conv.head.id) else {
             return;
         };
-        let chips: Vec<(String, Rgb)> = std::iter::once((shell::short(&p.cwd), look::dim()))
+        // The folder the engine runs in; the pane's own moves with the shell (REQ-630).
+        let folder = conv.cwd.as_deref().unwrap_or(&p.cwd);
+        let chips: Vec<(String, Rgb)> = std::iter::once((shell::short(folder), look::dim()))
             .chain(branch.map(|br| (format!("⎇ {br}"), look::magenta())))
             .collect();
         let full = inner(rect);
@@ -4624,9 +4656,13 @@ impl View {
         let running = running_block(b);
         let chips: Vec<(String, Rgb)> = match running {
             Some(k) => vec![(format!("◌ {}", k.cmd), look::yellow())],
-            None => std::iter::once((shell::short(&p.cwd), look::dim()))
-                .chain(branch.map(|br| (format!("⎇ {br}"), look::magenta())))
-                .collect(),
+            // The folder the shell is in, and that a Claude opened here starts in it (REQ-633).
+            None => std::iter::once((
+                format!("{} · claude abre aquí", shell::short(&p.cwd)),
+                look::dim(),
+            ))
+            .chain(branch.map(|br| (format!("⎇ {br}"), look::magenta())))
+            .collect(),
         };
         field.draw(g, (ix, iy + lh, iw), &chips, running.is_some(), focused);
     }
@@ -10230,6 +10266,34 @@ mod tests {
         assert!(v.plain(120, 40).contains("src/auth.rs"));
         v.press_key(plain(KeyCode::Tab));
         assert_eq!(v.conv_ui[CONV].editor.text(), "ver @src/auth.rs ");
+    }
+
+    /// REQ-631: the files `@` finds are written from the folder the engine runs in, `../` where
+    /// they are above it.
+    #[test]
+    fn the_files_an_at_finds_are_written_from_the_folder_the_engine_runs_in() {
+        let mut v = conv_view(true);
+        let root = v.session.as_ref().unwrap().workspaces[0].path.clone();
+        let id = v.session.as_ref().unwrap().workspaces[0].id.clone();
+        v.opened = Some(id);
+        v.convs.get_mut(CONV).unwrap().cwd = Some(format!("{root}/src"));
+        for c in "ver @au".chars() {
+            v.press_key(plain(KeyCode::Char(c)));
+        }
+        let asks = v.take_file_asks();
+        v.files_replied(FilesReply {
+            ask: asks[1].clone(),
+            reply: Ok(Ok(Some(
+                serde_json::json!({"paths": ["src/auth.rs", "docs/auth.md"]}),
+            ))),
+        });
+        let screen = v.plain(120, 40);
+        assert!(
+            screen.contains("auth.rs") && screen.contains("../docs/auth.md"),
+            "{screen}"
+        );
+        v.press_key(plain(KeyCode::Tab));
+        assert_eq!(v.conv_ui[CONV].editor.text(), "ver @auth.rs ");
     }
 
     fn type_line(v: &mut View, text: &str) {
