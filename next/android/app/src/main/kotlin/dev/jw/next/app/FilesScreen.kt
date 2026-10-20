@@ -48,6 +48,24 @@ import java.util.concurrent.atomic.AtomicInteger
 
 private val Gutter = 16.dp
 
+/** The last listing of each folder, so a folder opens with what it held and the new answer replaces it (REQ-636). */
+internal object FileListings {
+    private const val MAX = 64
+    private val kept = object : LinkedHashMap<String, FileListing>(MAX, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, FileListing>) = size > MAX
+    }
+
+    fun get(workspace: String, path: String): FileListing? = synchronized(kept) { kept["$workspace\u0000$path"] }
+
+    fun put(workspace: String, path: String, listing: FileListing) {
+        synchronized(kept) { kept["$workspace\u0000$path"] = listing }
+    }
+
+    fun preload(source: AppSource, workspace: String) {
+        source.listFiles(workspace, null) { r -> r.onSuccess { put(workspace, "", it) } }
+    }
+}
+
 /**
  * The files of a workspace, folder by folder and no higher than its own (REQ-323 to REQ-328): the
  * PC lists one folder at a time with what git says of each entry. Back goes up a folder, and
@@ -87,11 +105,15 @@ fun FilesScreen(source: AppSource, state: ClientState, screen: Screen.Files, nav
     }
     LaunchedEffect(screen.workspace, path, again) {
         error = null
-        listing = null
+        // What the folder held last time is shown while the new answer comes.
+        listing = FileListings.get(screen.workspace, path)
         val asked = asks.incrementAndGet()
         source.listFiles(screen.workspace, path.ifEmpty { null }) { result ->
             // A slower answer to an earlier tap must not replace the folder asked for last.
-            if (asked == asks.get()) result.onSuccess { listing = it }.onFailure { error = it.message ?: "el PC no pudo leer la carpeta" }
+            if (asked == asks.get()) {
+                result.onSuccess { FileListings.put(screen.workspace, path, it); listing = it }
+                    .onFailure { if (listing == null) error = it.message ?: "el PC no pudo leer la carpeta" }
+            }
         }
     }
     Column(Modifier.fillMaxSize()) {

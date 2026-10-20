@@ -372,6 +372,8 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
     val version = source.tick.intValue
     val ws = remember(version, screen.id) { source.node(screen.id) as? Node.Workspace }
     LaunchedEffect(screen.id) { source.open(screen.id) }
+    // The root folder is asked for as the workspace opens, so the files screen has it when it is tapped (REQ-636).
+    LaunchedEffect(screen.id) { FileListings.preload(source, screen.id) }
     LaunchedEffect(ws?.panes?.map { it.id }) {
         ws?.panes?.forEach { source.open(it.id) }
         set(nav.settle(state))

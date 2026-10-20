@@ -73,6 +73,15 @@ impl Tree {
         want
     }
 
+    /// The root and the open folders already listed, to be asked for again without forgetting what
+    /// they hold: the rows stay as they are until the new answer replaces them.
+    pub fn stale(&mut self) -> Vec<String> {
+        let mut want = vec![String::new()];
+        want.extend(self.open.iter().cloned());
+        want.retain(|p| matches!(self.dirs.get(p), Some(Dir::Ready { .. } | Dir::Failed(_))));
+        want
+    }
+
     pub fn listed(&mut self, path: &str, dir: Dir) {
         self.dirs.insert(path.to_owned(), dir);
     }

@@ -1193,10 +1193,8 @@ impl View {
         self.advance_manage();
         self.follow_goto();
         self.clamp();
-        // A tree that is shown over another workspace than it was asked for needs its folders.
-        if self.tree_on {
-            self.ask_folders();
-        }
+        // The folders of the open workspace's tree are asked for before the tree is shown (REQ-636).
+        self.ask_folders();
         let gone = self.blk.as_ref().is_some_and(|(pane, id)| {
             !self
                 .blocks_of(pane)
@@ -3299,6 +3297,23 @@ impl View {
         self.file_asks.extend(asks);
     }
 
+    /// Ask again for what the tree already holds, as it was left: what is listed stays on the screen
+    /// until the answer arrives.
+    fn refresh_folders(&mut self) {
+        let Some((workspace, t)) = self.tree_mut() else {
+            return;
+        };
+        let asks: Vec<FileAsk> = t
+            .stale()
+            .into_iter()
+            .map(|path| FileAsk::List {
+                workspace: workspace.clone(),
+                path,
+            })
+            .collect();
+        self.file_asks.extend(asks);
+    }
+
     /// `t`: show the file tree and give it the keys; with it shown, the keys; with them, close it.
     fn toggle_tree(&mut self) {
         if self.rv.is_some() {
@@ -3313,6 +3328,7 @@ impl View {
             self.tree_focus = true;
             self.typing = false;
             self.ask_folders();
+            self.refresh_folders();
         }
     }
 
@@ -6515,13 +6531,18 @@ mod tests {
     fn tree_view() -> (View, String) {
         let mut v = fixture_view();
         let ws = v.selected_id().unwrap();
-        v.press(Key::Tree);
         assert_eq!(
             v.take_file_asks(),
             [FileAsk::List {
                 workspace: ws.clone(),
                 path: String::new()
-            }]
+            }],
+            "the root was asked for before the tree was shown"
+        );
+        v.press(Key::Tree);
+        assert!(
+            v.take_file_asks().is_empty(),
+            "showing it asks for nothing that is already on its way"
         );
         v.files_replied(listing(
             &ws,
@@ -6571,6 +6592,34 @@ mod tests {
             .unwrap();
         let mark = g.cells[y * 120 + 117];
         assert_eq!((mark.0, mark.1.fg), ('M', Some(look::yellow())));
+    }
+
+    /// REQ-636: the folder of the selected workspace is asked for before `t`, once, and showing the
+    /// tree again asks once more without emptying what it shows.
+    #[test]
+    fn the_tree_is_preloaded_and_showing_it_again_refreshes_it_with_the_old_rows_on_screen() {
+        let mut v = fixture_view();
+        let ws = v.selected_id().unwrap();
+        let root = FileAsk::List {
+            workspace: ws.clone(),
+            path: String::new(),
+        };
+        assert_eq!(v.take_file_asks(), std::slice::from_ref(&root));
+        v.sync(fixture_docs().iter());
+        assert!(v.take_file_asks().is_empty(), "once");
+        v.files_replied(listing(
+            &ws,
+            "",
+            vec![file("src", FileKind::Dir, None, false)],
+        ));
+        assert!(!v.tree_on, "nothing is shown yet");
+        v.press(Key::Tree);
+        assert_eq!(v.take_file_asks(), [root], "what was listed is asked again");
+        let text = v.plain(120, 30);
+        assert!(
+            text.contains("▸ src/") && !text.contains("leyendo…"),
+            "the rows of the earlier answer stay until the new one comes\n{text}"
+        );
     }
 
     #[test]
@@ -9671,6 +9720,9 @@ mod tests {
         v.press(Key::Enter);
         v.press(Key::Enter);
         assert_eq!(v.typing_pane().as_deref(), Some(CONV_PANE));
+        // The tree's folder was asked for as the workspace was selected (REQ-636); the tests below
+        // count what the conversation asks.
+        v.take_file_asks();
         v
     }
 
