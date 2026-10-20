@@ -166,6 +166,85 @@ impl Of {
 }
 
 /// How many tasks the engine runs in the background: what the footer's gear counts.
+/// What a click on a piece of the footer opens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Hit {
+    None,
+    Agents,
+    Mode,
+    Model,
+    Keys,
+}
+
+/// The pieces of the footer of a conversation `iw` wide, each with its column from the left of
+/// the pane, its text, its colour and what a click on it opens: the agents that run, the mode
+/// with the key that changes it, the model, and at the right edge the key of the list of keys.
+/// A narrow pane gives way from the right: the word «teclas», then the hint of the mode, then
+/// the word «agentes» (REQ-598).
+fn foot(conv: &Conversation, iw: usize) -> Vec<(usize, String, Rgb, Hit)> {
+    let (mode, mode_colour) = mode_look(conv.mode);
+    let running = running_tasks(conv);
+    let steps: [(bool, bool, &str); 4] = [
+        (true, true, "^/ teclas"),
+        (true, true, "^/"),
+        (true, false, "^/"),
+        (false, false, "^/"),
+    ];
+    let (word, hint, keys) = steps
+        .iter()
+        .find(|(word, hint, keys)| {
+            let left = foot_left(conv, mode, running, *word, *hint);
+            left.iter().map(|p| p.0.chars().count()).sum::<usize>() + keys.chars().count() + 3 <= iw
+        })
+        .copied()
+        .unwrap_or((false, false, ""));
+    let mut out = Vec::new();
+    let mut col = 1;
+    for (text, colour, hit) in foot_left(conv, mode, running, word, hint) {
+        let width = text.chars().count();
+        out.push((col, text, colour.unwrap_or(mode_colour), hit));
+        col += width;
+    }
+    if !keys.is_empty() {
+        let at = iw.saturating_sub(keys.chars().count() + 1);
+        let (key, rest) = keys.split_at(2);
+        out.push((at, key.to_owned(), look::blue(), Hit::Keys));
+        if !rest.is_empty() {
+            out.push((at + 2, rest.to_owned(), look::dim(), Hit::Keys));
+        }
+    }
+    out
+}
+
+/// The left of the footer: the agents, the mode and the model, with the dim `·` between them.
+/// A piece that has no colour of its own takes the mode's.
+fn foot_left(
+    conv: &Conversation,
+    mode: &str,
+    running: usize,
+    word: bool,
+    hint: bool,
+) -> Vec<(String, Option<Rgb>, Hit)> {
+    let mut out = Vec::new();
+    let dot = |out: &mut Vec<_>| out.push((" · ".to_owned(), Some(look::dim()), Hit::None));
+    if running > 0 {
+        let agents = if word {
+            format!("⚙ {running} agentes")
+        } else {
+            format!("⚙ {running}")
+        };
+        out.push((agents, Some(look::yellow()), Hit::Agents));
+        dot(&mut out);
+    }
+    out.push((mode.to_owned(), None, Hit::Mode));
+    if hint {
+        out.push((" ⇧tab".to_owned(), Some(look::dim()), Hit::Mode));
+    }
+    dot(&mut out);
+    out.push((conv.model.clone(), Some(look::dim()), Hit::Model));
+    out
+}
+
 fn running_tasks(conv: &Conversation) -> usize {
     conv.tasks
         .iter()
@@ -820,6 +899,7 @@ impl Ui {
             "status" => panels::status(conv, &self.cwd),
             "skills" => panels::skills(conv),
             "tasks" => panels::tasks(conv),
+            "keys" => panels::keys(),
             "artifacts" => panels::artifacts(conv),
             "permissions" => panels::permissions(&cwd, home.as_deref()),
             "memory" => panels::memory(&cwd, home.as_deref()),
@@ -1711,24 +1791,9 @@ impl Ui {
     }
 
     fn draw_foot(&self, g: &mut Grid, conv: &Conversation, (ix, y, iw): (usize, usize, usize)) {
-        let (label, colour) = mode_look(conv.mode);
-        g.put(ix + 1, y, label, Style::fg(colour));
-        let running = running_tasks(conv);
-        if running > 0 {
-            g.put(
-                ix + 2 + label.chars().count(),
-                y,
-                &format!("⚙ {running}"),
-                Style::fg(look::dim()),
-            );
+        for (col, text, colour, _) in foot(conv, iw) {
+            g.put(ix + col, y, &text, Style::fg(colour));
         }
-        let model = clip(&conv.model, iw.saturating_sub(label.chars().count() + 8));
-        g.put(
-            (ix + iw).saturating_sub(model.chars().count() + 1),
-            y,
-            &model,
-            Style::fg(look::dim()),
-        );
     }
 
     fn draw_menu(
@@ -2122,6 +2187,12 @@ impl Ui {
                 None
             }
             KeyCode::Char('b') if ctrl => self.open_panel(conv, "tasks", ""),
+            // The terminal sends the same byte for ^/ and ^? (crossterm reads it as ^7 or ^_
+            // when it does not know the key).
+            KeyCode::Char('/' | '?' | '_' | '7') if ctrl => self.open_panel(conv, "keys", ""),
+            KeyCode::Char('?') if self.editor.text().is_empty() => {
+                self.open_panel(conv, "keys", "")
+            }
             KeyCode::Esc if self.working(conv) => Some(Act::Interrupt { node }),
             KeyCode::BackTab => Some(Act::Mode {
                 node,
@@ -2752,20 +2823,25 @@ impl Ui {
             return None;
         }
         if y == geo.foot {
-            let (label, _) = mode_look(conv.mode);
-            let left = ix + 1..ix + 1 + label.chars().count();
-            let right = (ix + iw).saturating_sub(conv.model.chars().count() + 1)..ix + iw;
-            let running = running_tasks(conv);
-            let gear_at = ix + 2 + label.chars().count();
-            if left.contains(&x) {
-                self.open_pick(conv, Of::Mode);
-            } else if running > 0 && (gear_at..gear_at + 3 + running.to_string().len()).contains(&x)
-            {
-                return self.open_panel(conv, "tasks", "");
-            } else if right.contains(&x) {
-                self.open_pick(conv, Of::Model);
-            }
-            return None;
+            let hit = foot(conv, iw)
+                .into_iter()
+                .find(|(col, text, _, hit)| {
+                    *hit != Hit::None && (ix + col..ix + col + text.chars().count()).contains(&x)
+                })
+                .map(|(.., hit)| hit);
+            return match hit {
+                Some(Hit::Mode) => {
+                    self.open_pick(conv, Of::Mode);
+                    None
+                }
+                Some(Hit::Model) => {
+                    self.open_pick(conv, Of::Model);
+                    None
+                }
+                Some(Hit::Agents) => self.open_panel(conv, "tasks", ""),
+                Some(Hit::Keys) => self.open_panel(conv, "keys", ""),
+                _ => None,
+            };
         }
         if let Some(ask) = &conv.ask {
             // While the reason for a refusal is being written, a click on the question is not an answer.
@@ -3519,15 +3595,26 @@ mod tests {
     }
 
     #[test]
-    fn the_footer_has_the_mode_at_the_left_and_the_model_at_the_right_and_nothing_else() {
+    fn the_footer_says_the_agents_the_mode_and_the_model_and_has_the_key_of_the_keys() {
         let mut conv = idle();
-        let (g, rows) = frame(&Ui::default(), &conv);
-        let foot = &rows[INNER.1 + INNER.3 - 1];
-        assert!(foot.trim_start().starts_with("manual"), "{foot:?}");
-        assert!(foot.trim_end().ends_with("sonnet-5.5"), "{foot:?}");
         let y = INNER.1 + INNER.3 - 1;
-        assert_eq!(g.cells[y * g.cols + 3].1.fg, Some(look::dim()));
-        assert!(foot.contains("⚙ 1"), "one task runs: {foot:?}");
+        let (g, rows) = frame(&Ui::default(), &conv);
+        let foot = &rows[y];
+        let at = |s: &str| {
+            foot.find(s)
+                .unwrap_or_else(|| panic!("{s:?} is not in {foot:?}"))
+        };
+        assert!(
+            at("⚙ 1 agentes") < at("manual")
+                && at("manual") < at("⇧tab")
+                && at("⇧tab") < at("sonnet-5.5"),
+            "agents · mode · model: {foot:?}"
+        );
+        assert!(foot.trim_end().ends_with("^/ teclas"), "{foot:?}");
+        let col = |s: &str| foot[..at(s)].chars().count();
+        assert_eq!(g.cells[y * g.cols + col("⚙")].1.fg, Some(look::yellow()));
+        assert_eq!(g.cells[y * g.cols + col("manual")].1.fg, Some(look::dim()));
+        assert_eq!(g.cells[y * g.cols + col("^/")].1.fg, Some(look::blue()));
         for (mode, text, colour) in [
             (Mode::AcceptEdits, "accept edits", look::magenta()),
             (Mode::Plan, "plan", look::cyan()),
@@ -3535,9 +3622,113 @@ mod tests {
         ] {
             conv.mode = mode;
             let (g, rows) = frame(&Ui::default(), &conv);
-            assert!(rows[y].contains(text), "{mode:?}");
-            assert_eq!(g.cells[y * g.cols + 3].1.fg, Some(colour), "{mode:?}");
+            let x = rows[y]
+                .find(text)
+                .map(|b| rows[y][..b].chars().count())
+                .unwrap();
+            assert_eq!(g.cells[y * g.cols + x].1.fg, Some(colour), "{mode:?}");
         }
+        // no agent runs: no word about them
+        conv.tasks.clear();
+        let (_, rows) = frame(&Ui::default(), &conv);
+        assert!(
+            !rows[y].contains("⚙") && !rows[y].contains("agentes"),
+            "{:?}",
+            rows[y]
+        );
+    }
+
+    /// REQ-598: a narrow pane gives way from the right, and the mode and the model are the last to go.
+    #[test]
+    fn a_narrow_footer_drops_the_word_of_the_keys_then_the_hint_of_the_mode_then_the_word_agents() {
+        let conv = idle();
+        let line = |iw: usize| -> String {
+            let mut s = String::new();
+            let mut col = 0;
+            for (c, text, ..) in foot(&conv, iw) {
+                s.push_str(&" ".repeat(c.saturating_sub(col)));
+                s.push_str(&text);
+                col = c + text.chars().count();
+            }
+            s
+        };
+        let wide = line(80);
+        assert!(
+            wide.contains("⚙ 1 agentes") && wide.contains("⇧tab") && wide.ends_with("^/ teclas"),
+            "{wide:?}"
+        );
+        let no_word = line(46);
+        assert!(
+            no_word.ends_with("^/") && no_word.contains("⇧tab") && no_word.contains("⚙ 1 agentes"),
+            "{no_word:?}"
+        );
+        let no_hint = line(40);
+        assert!(
+            !no_hint.contains("⇧tab") && no_hint.contains("⚙ 1 agentes") && no_hint.ends_with("^/"),
+            "{no_hint:?}"
+        );
+        let short = line(32);
+        assert!(
+            short.contains("⚙ 1 ")
+                && !short.contains("agentes")
+                && short.contains("manual")
+                && short.contains("sonnet-5.5"),
+            "{short:?}"
+        );
+        let tiny = line(20);
+        assert!(
+            tiny.contains("manual") && tiny.contains("sonnet-5.5"),
+            "{tiny:?}"
+        );
+    }
+
+    /// REQ-598, REQ-599: each piece of the footer opens what it names.
+    #[test]
+    fn a_click_on_a_piece_of_the_footer_opens_what_it_names_and_ctrl_slash_and_a_question_mark_open_the_keys()
+     {
+        let conv = idle();
+        let y = INNER.1 + INNER.3 - 1;
+        let (_, rows) = frame(&Ui::default(), &conv);
+        let col = |s: &str| {
+            rows[y]
+                .find(s)
+                .map(|b| rows[y][..b].chars().count())
+                .unwrap()
+        };
+        let mut ui = Ui::default();
+        ui.click(&conv, INNER, col("manual"), y);
+        assert!(ui.has_pop(), "the mode opens its list");
+        let mut ui = Ui::default();
+        ui.click(&conv, INNER, col("sonnet-5.5"), y);
+        assert!(ui.has_pop(), "the model opens its list");
+        let mut ui = Ui::default();
+        ui.click(&conv, INNER, col("⚙"), y);
+        assert!(
+            frame(&ui, &conv).1.iter().any(|r| r.contains("tareas")),
+            "the agents open the tasks"
+        );
+        let mut ui = Ui::default();
+        ui.click(&conv, INNER, col("^/"), y);
+        assert!(
+            frame(&ui, &conv)
+                .1
+                .iter()
+                .any(|r| r.contains("teclas") && r.contains("╭"))
+        );
+        for key in [
+            KeyEvent::new(KeyCode::Char('/'), KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::Char('7'), KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE),
+        ] {
+            let mut ui = Ui::default();
+            assert_eq!(ui.key(&conv, &key), None);
+            let rows = frame(&ui, &conv).1;
+            row_of(&rows, "cambiar el modo, también mientras trabaja");
+        }
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "a");
+        type_in(&mut ui, &conv, "?");
+        assert_eq!(ui.editor.text(), "a?", "a question mark in a line is text");
     }
 
     /// REQ-570: a consultation of the advisor is drawn as Claude Code draws it: `● Advising`, and
@@ -4970,7 +5161,7 @@ mod tests {
         type_in(&mut ui, &conv, "/resume");
         press(&mut ui, &conv, KeyCode::Enter);
         ui.listed(&saved(5), &conv);
-        assert_eq!(ui.click(&conv, INNER, 20, INNER.1 + INNER.3 - 1), None);
+        assert_eq!(ui.click(&conv, INNER, 60, INNER.1 + INNER.3 - 1), None);
         assert!(!ui.has_pop());
     }
 

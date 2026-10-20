@@ -79,26 +79,66 @@ pub fn is_panel(name: &str) -> bool {
             | "artifacts"
             | "permissions"
             | "memory"
+            | "keys"
     )
 }
 
-const KEYS: [(&str, &str); 10] = [
-    ("↵", "enviar; en cola mientras Claude trabaja"),
-    ("esc", "interrumpir lo que Claude hace"),
-    ("⇧tab", "cambiar el modo: manual, accept edits, plan, auto"),
-    ("^J", "un salto de línea"),
-    ("^O", "abrir o cerrar la salida de una herramienta"),
-    ("^V", "pegar una imagen del portapapeles"),
-    ("@", "los archivos del workspace"),
-    ("!", "una línea de shell"),
-    ("/", "los comandos"),
-    ("^␣", "salir al terminal"),
+/// The keys of the conversation, by what they are for (REQ-599): `/help` lists them before the
+/// commands and `^/` lists only them.
+const KEYS: [(&str, &str, &str); 19] = [
+    ("↵", "enviar; en cola mientras Claude trabaja", "escribir"),
+    ("⇧↵ · ^J", "un salto de línea", "escribir"),
+    ("⇥", "completar lo que se propone o la lista", "escribir"),
+    (
+        "/",
+        "los comandos, en cualquier parte del mensaje",
+        "escribir",
+    ),
+    ("@", "los archivos del workspace", "escribir"),
+    ("!", "una línea de shell", "escribir"),
+    ("^V", "pegar una imagen del portapapeles", "escribir"),
+    ("esc · ^C", "interrumpir lo que Claude hace", "Claude"),
+    (
+        "⇧tab",
+        "cambiar el modo, también mientras trabaja",
+        "Claude",
+    ),
+    ("^B", "los agentes y las tareas", "Claude"),
+    ("^T", "la lista de pendientes", "Claude"),
+    (
+        "^O",
+        "abrir o cerrar la salida de las herramientas",
+        "Claude",
+    ),
+    ("↑ ↓", "con el campo vacío: elegir un mensaje", "ver"),
+    ("c · t", "copiar el mensaje elegido o solo su texto", "ver"),
+    ("PgUp · PgDn", "recorrer la conversación", "ver"),
+    ("v", "abrir el plan completo", "ver"),
+    ("^/ · ?", "esta lista", "jwn"),
+    (
+        "^␣",
+        "el líder: salir al terminal, espacios, paneles, diff",
+        "jwn",
+    ),
+    ("^␣ ?", "las teclas del líder", "jwn"),
 ];
+
+/// The keys as a list (REQ-599).
+pub fn keys() -> Panel {
+    Panel {
+        title: "teclas".into(),
+        rows: KEYS
+            .iter()
+            .map(|(k, d, group)| Row::new(*k, *d).tagged(group, look::dim()))
+            .collect(),
+        empty: String::new(),
+    }
+}
 
 pub fn help(conv: &Conversation) -> Panel {
     let keys = KEYS
         .iter()
-        .map(|(k, d)| Row::new(*k, *d).tagged("tecla", look::dim()));
+        .map(|(k, d, _)| Row::new(*k, *d).tagged("tecla", look::dim()));
     let commands = conv
         .commands
         .iter()
