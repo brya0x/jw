@@ -877,12 +877,14 @@ impl Core {
         self.ops.get(workspace).map(|t| t.cancel()).is_some()
     }
 
-    /// End every shell (the daemon is stopping).
-    pub fn shutdown(&mut self) {
-        crate::engine::stop_all(&mut self.convs);
+    /// End every shell and close the input of every engine (the daemon is stopping); the engines
+    /// that were closed are returned for `engine::finish` to wait for.
+    pub fn shutdown(&mut self) -> Vec<crate::engine::Leaving> {
+        let leaving = crate::engine::stop_all(&mut self.convs);
         for term in self.terms.drain().map(|(_, t)| t) {
             term.kill();
         }
+        leaving
     }
 
     pub fn add_client(&mut self, tx: SyncSender<DaemonMsg>, stream: wire::Stream) -> u64 {

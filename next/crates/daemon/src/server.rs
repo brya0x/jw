@@ -200,6 +200,7 @@ impl Daemon {
                 .name("engine".into())
                 .spawn(move || panes::engine(shared, event_rx))?
         };
+        crate::engine::reap_leftovers(&config.state_dir.join("conversations"));
         panes::restore(&shared);
         let stop = Arc::new(AtomicBool::new(false));
         {
@@ -291,11 +292,12 @@ impl Daemon {
         let hub = self.shared.lock().mobile.clone();
         hub.stop();
         crate::engine::save_due(&self.shared, true);
-        let events = {
+        let (events, leaving) = {
             let mut core = self.shared.lock();
-            core.shutdown();
-            core.events.clone()
+            let leaving = core.shutdown();
+            (core.events.clone(), leaving)
         };
+        crate::engine::finish(leaving);
         let _ = events.send(crate::pty::Event::Stop);
         if let Some(h) = self.engine.take() {
             let _ = h.join();

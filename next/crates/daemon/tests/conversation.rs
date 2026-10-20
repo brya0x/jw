@@ -2033,3 +2033,116 @@ fn a_daemon_that_restarts_brings_the_conversation_back_and_the_next_message_resu
     daemon.stop();
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Whether the process `pid` is there (a zombie that nobody has waited for is not).
+fn alive(pid: u32) -> bool {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()
+        .unwrap();
+    let stat = String::from_utf8_lossy(&out.stdout);
+    !stat.trim().is_empty() && !stat.trim().starts_with('Z')
+}
+
+fn wait_gone(pid: u32, within: Duration, what: &str) {
+    let end = Instant::now() + within;
+    while alive(pid) {
+        assert!(Instant::now() < end, "{what}: process {pid} is still there");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// REQ-638: a daemon that stops does not leave an engine that ignores the end of its input.
+#[test]
+fn a_daemon_that_stops_leaves_no_engine_that_ignores_the_end_of_its_input() {
+    let sb = Sandbox::new();
+    let pidfile = sb.dir.join("engine.pid");
+    let mut r = rig_with(
+        sb,
+        vec![
+            ("FAKE_STUBBORN".into(), "1".into()),
+            (
+                "FAKE_PIDFILE".into(),
+                pidfile.to_string_lossy().into_owned(),
+            ),
+        ],
+    );
+    r.open();
+    wait_for("the engine's pid", || pidfile.exists());
+    let pid: u32 = std::fs::read_to_string(&pidfile)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(alive(pid));
+    let group = r.sb.dir.join("state/conversations");
+    assert!(
+        std::fs::read_dir(&group).unwrap().flatten().any(|f| f
+            .file_name()
+            .to_string_lossy()
+            .ends_with(&format!(".{pid}.pgid"))),
+        "its group is written down while it runs"
+    );
+    r.stop();
+    // Not later: the daemon's process may be gone by then, and the engine with nobody to end it.
+    wait_gone(pid, Duration::from_secs(1), "as the daemon stopped");
+}
+
+/// REQ-638: a daemon that starts ends the engines a daemon before it left, by the groups it wrote
+/// down, and only if the number still is an engine.
+#[test]
+fn a_daemon_that_starts_ends_the_engines_an_earlier_one_left_and_nothing_else() {
+    use std::os::unix::process::CommandExt;
+    let sb = Sandbox::new();
+    let dir = sb.dir.join("state/conversations");
+    std::fs::create_dir_all(&dir).unwrap();
+    // looks like an engine to `ps`: `claude`, `--input-format`, `stream-json`
+    let engine = std::process::Command::new("sh")
+        .args([
+            "-c",
+            "sleep 300; true",
+            "claude",
+            "--input-format",
+            "stream-json",
+        ])
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    // a number that is somebody else's now
+    let other = std::process::Command::new("sleep")
+        .arg("300")
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let (engine_pid, other_pid) = (engine.id(), other.id());
+    std::fs::write(
+        dir.join(format!("p1.{engine_pid}.pgid")),
+        engine_pid.to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join(format!("p2.{other_pid}.pgid")),
+        other_pid.to_string(),
+    )
+    .unwrap();
+    let mut engine = engine;
+    let mut other = other;
+    let d = Daemon::start(sb.config()).unwrap();
+    wait_for("the leftover engine to end", || {
+        engine.try_wait().unwrap().is_some()
+    });
+    assert!(
+        other.try_wait().unwrap().is_none(),
+        "what is not an engine is left alone"
+    );
+    assert!(
+        std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .all(|f| f.path().extension().is_none_or(|e| e != "pgid")),
+        "the notes are gone"
+    );
+    let _ = other.kill();
+    let _ = other.wait();
+    d.stop();
+}

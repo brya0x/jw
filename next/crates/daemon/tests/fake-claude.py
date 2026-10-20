@@ -12,6 +12,9 @@ for i, a in enumerate(argv):
 def logline(s):
     with open(LOG, "a", encoding="utf-8") as f:
         f.write(s + "\n")
+if os.environ.get("FAKE_PIDFILE"):
+    with open(os.environ["FAKE_PIDFILE"], "w", encoding="utf-8") as f:
+        f.write(str(os.getpid()))
 logline("start " + json.dumps(argv) + " cwd=" + os.getcwd() + " var=" + os.environ.get("MY_VAR", ""))
 lock = threading.Lock()
 mode = ["default"]
@@ -228,3 +231,6 @@ for line in sys.stdin:
         result()
     if "monitor" in text:
         threading.Thread(target=auto).start()
+# A stubborn engine does not end when its input does (a turn or a background task still runs).
+if os.environ.get("FAKE_STUBBORN"):
+    time.sleep(600)

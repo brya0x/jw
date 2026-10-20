@@ -109,11 +109,59 @@ impl Engine {
         let _ = self.tx.send(Out::Close);
         let (pid, exited) = (self.pid, self.exited.clone());
         thread::spawn(move || {
-            thread::sleep(Duration::from_secs(3));
+            thread::sleep(STOP_GRACE);
             if !exited.load(Ordering::Relaxed) {
                 kill_group(pid);
             }
         });
+    }
+}
+
+/// How long an engine has, once its input is closed, to end by itself before its group is ended.
+const STOP_GRACE: Duration = Duration::from_secs(3);
+
+/// The file that says which process group an engine of the pane `pane` runs in, beside the saved
+/// conversations: a daemon that dies without ending it leaves the number for the next one (REQ-638).
+fn group_file(dir: &Path, pane: &str, pgid: u32) -> PathBuf {
+    dir.join(format!("{pane}.{pgid}.pgid"))
+}
+
+/// Whether the process `pid` is a `claude` that the daemon started: it has the arguments the
+/// daemon gives it. A number that was reused by anything else is not.
+fn is_engine(pid: u32) -> bool {
+    Command::new("ps")
+        .args(["-o", "command=", "-p", &pid.to_string()])
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .is_some_and(|o| {
+            let line = String::from_utf8_lossy(&o.stdout);
+            line.contains("claude")
+                && line.contains("--input-format")
+                && line.contains("stream-json")
+        })
+}
+
+/// End the engines that a daemon before this one left running, by the groups it recorded in `dir`
+/// (REQ-638): such an engine holds its session, and the conversation would be refused (REQ-575).
+pub fn reap_leftovers(dir: &Path) {
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for item in read.flatten() {
+        let path = item.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("pgid") {
+            continue;
+        }
+        let pgid = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|t| t.trim().parse::<u32>().ok());
+        if let Some(pgid) = pgid
+            && is_engine(pgid)
+        {
+            kill_group(pgid);
+        }
+        let _ = std::fs::remove_file(&path);
     }
 }
 
@@ -279,6 +327,12 @@ fn start(shared: &Shared, pane: &Id, generation: u64, plan: Plan) -> Result<Engi
         .spawn()
         .map_err(|e| format!("cannot start {}: {e}", plan.exe.display()))?;
     let pid = child.id();
+    // Its group is written down until the engine ends, so a daemon that is killed leaves it for the next.
+    let dir = shared.lock().conv_dir.clone();
+    if let Some(dir) = &dir {
+        let _ = std::fs::create_dir_all(dir);
+        let _ = std::fs::write(group_file(dir, pane, pid), pid.to_string());
+    }
     let stdin = child.stdin.take().ok_or("no input")?;
     let stdout = child.stdout.take().ok_or("no output")?;
     let stderr = child.stderr.take().ok_or("no error output")?;
@@ -403,6 +457,9 @@ fn read_loop(feed: &Feed, mut child: Child, stdout: ChildStdout) {
     // What its tools left behind goes with it; the number is not signalled again afterwards.
     kill_group(feed.pid);
     feed.exited.store(true, Ordering::Relaxed);
+    if let Some(dir) = shared.lock().conv_dir.clone() {
+        let _ = std::fs::remove_file(group_file(&dir, &feed.pane, feed.pid));
+    }
     let how = match status.and_then(|s| s.code()) {
         Some(0) => "el motor terminó".to_owned(),
         Some(c) => format!("el motor terminó con código {c}"),
@@ -1431,13 +1488,38 @@ pub fn forget(dir: &Path, pane: &str) {
     let _ = std::fs::remove_file(file_of(dir, pane));
 }
 
-/// End every engine (the daemon is stopping).
-pub fn stop_all(convs: &mut std::collections::HashMap<Id, Conv>) {
+/// An engine whose input was closed because the daemon is stopping: its group and whether it ended.
+pub type Leaving = (u32, Arc<AtomicBool>);
+
+/// Close the input of every engine (the daemon is stopping); `finish` waits for them.
+pub fn stop_all(convs: &mut std::collections::HashMap<Id, Conv>) -> Vec<Leaving> {
+    let mut leaving = Vec::new();
     for c in convs.values_mut() {
         if let Some(en) = c.engine.take() {
             // Its threads ignore what follows: a daemon that stops is not an engine that died.
             c.generation += 1;
-            en.stop();
+            let _ = en.tx.send(Out::Close);
+            leaving.push((en.pid, en.exited.clone()));
+        }
+    }
+    leaving
+}
+
+/// Give the engines that `stop_all` closed up to `STOP_GRACE` to end by themselves, all together,
+/// and end the group of each that has not: a daemon that exits must not leave a `claude` that
+/// holds its session (REQ-638). Called without the lock held, since the readers need it to finish.
+pub fn finish(leaving: Vec<Leaving>) {
+    let end = Instant::now() + STOP_GRACE;
+    while Instant::now() < end
+        && leaving
+            .iter()
+            .any(|(_, ended)| !ended.load(Ordering::Relaxed))
+    {
+        thread::sleep(Duration::from_millis(25));
+    }
+    for (pid, ended) in leaving {
+        if !ended.load(Ordering::Relaxed) {
+            kill_group(pid);
         }
     }
 }
