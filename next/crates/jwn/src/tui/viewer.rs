@@ -33,6 +33,8 @@ pub enum Act {
     Copy(String),
     /// Open the document's file in the editor.
     Edit(String),
+    /// Show the file of this path as text, as it is written (REQ-617).
+    Source(String),
 }
 
 /// What a button let go of comes to.
@@ -58,6 +60,8 @@ struct Search {
 pub struct Viewer {
     doc: MarkdownDoc,
     pub source: Source,
+    /// The workspace the file was asked of, for the switch to its source.
+    pub workspace: String,
     scroll: usize,
     outline: bool,
     search: Search,
@@ -85,10 +89,16 @@ struct Geo {
 }
 
 impl Viewer {
-    pub fn new(doc: MarkdownDoc, source: Source, answers: Vec<(String, String)>) -> Viewer {
+    pub fn new(
+        doc: MarkdownDoc,
+        source: Source,
+        answers: Vec<(String, String)>,
+        workspace: String,
+    ) -> Viewer {
         Viewer {
             doc,
             source,
+            workspace,
             scroll: 0,
             outline: true,
             search: Search::default(),
@@ -226,6 +236,10 @@ impl Viewer {
                 self.says = super::conversation::copied(&text);
                 return Act::Copy(text);
             }
+            KeyCode::Char('s') if self.source == Source::File => match &self.doc.path {
+                Some(path) => return Act::Source(path.clone()),
+                None => self.says = "este documento no tiene un archivo que abrir".into(),
+            },
             KeyCode::Char('e') => match &self.doc.path {
                 Some(path) => return Act::Edit(path.clone()),
                 None => self.says = "este documento no tiene un archivo que abrir".into(),
@@ -608,8 +622,13 @@ impl Viewer {
         } else {
             ""
         };
+        let source = if self.source == Source::File {
+            " · s fuente"
+        } else {
+            ""
+        };
         format!(
-            "esc cerrar · j k ␣ b g G mover · [ ] título · / n N buscar · o esquema · y copiar · e editar{answers}"
+            "esc cerrar · j k ␣ b g G mover · [ ] título · / n N buscar · o esquema · y copiar · e editar{source}{answers}"
         )
     }
 }
@@ -660,7 +679,7 @@ mod tests {
         } else {
             Vec::new()
         };
-        Viewer::new(long(), source, answers)
+        Viewer::new(long(), source, answers, String::new())
     }
 
     fn key(v: &mut Viewer, rect: (usize, usize, usize, usize), code: KeyCode) -> Act {
@@ -878,7 +897,7 @@ mod tests {
         assert!(v.take_says().unwrap().contains("no tiene un archivo"));
         let mut d = long();
         d.path = Some("/w/plan.md".into());
-        let mut v = Viewer::new(d, Source::File, Vec::new());
+        let mut v = Viewer::new(d, Source::File, Vec::new(), String::new());
         assert_eq!(
             key(&mut v, NARROW, KeyCode::Char('e')),
             Act::Edit("/w/plan.md".into())
@@ -906,6 +925,7 @@ mod tests {
             ]),
             Source::File,
             Vec::new(),
+            String::new(),
         );
         let rect = (0, 0, 30, 12);
         let rows = screen(&v, rect, false);

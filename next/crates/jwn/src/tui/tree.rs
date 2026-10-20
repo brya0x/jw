@@ -40,6 +40,8 @@ pub struct Row {
     /// Git ignores it, or a folder above it.
     pub ignored: bool,
     pub open: bool,
+    /// The weight of a file, in bytes.
+    pub size: Option<u64>,
     /// Not an entry but a note under a folder: `leyendo…`, why it could not be read, how many are
     /// not shown.
     pub note: bool,
@@ -102,6 +104,7 @@ impl Tree {
                     git: None,
                     ignored: false,
                     open: false,
+                    size: None,
                     note: false,
                 })
                 .collect();
@@ -121,6 +124,7 @@ impl Tree {
                 git: None,
                 ignored: true,
                 open: false,
+                size: None,
                 note: true,
             });
         };
@@ -151,6 +155,7 @@ impl Tree {
                         git: e.git,
                         ignored,
                         open,
+                        size: e.size,
                         note: false,
                     });
                     if open {

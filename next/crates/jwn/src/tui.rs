@@ -30,6 +30,7 @@ mod clip;
 mod conversation;
 mod diff_lines;
 mod field;
+mod fileview;
 mod fold;
 mod look;
 mod manage;
@@ -62,6 +63,42 @@ use wire::ClientError;
 type Rgb = contract::themes::Rgb;
 
 const SIDEBAR: usize = 28;
+
+/// What the viewer over the panes shows: a document as blocks, or a text file as lines.
+enum Viewing {
+    Doc(viewer::Viewer),
+    Text(fileview::FileView),
+}
+
+impl Viewing {
+    fn doc(&self) -> Option<&viewer::Viewer> {
+        match self {
+            Viewing::Doc(v) => Some(v),
+            Viewing::Text(_) => None,
+        }
+    }
+
+    fn doc_mut(&mut self) -> Option<&mut viewer::Viewer> {
+        match self {
+            Viewing::Doc(v) => Some(v),
+            Viewing::Text(_) => None,
+        }
+    }
+
+    fn scroll_by(&mut self, up: bool, n: usize) {
+        match self {
+            Viewing::Doc(v) => v.scroll_by(up, n),
+            Viewing::Text(v) => v.scroll_by(up, n),
+        }
+    }
+
+    fn hint(&self) -> String {
+        match self {
+            Viewing::Doc(v) => v.hint(),
+            Viewing::Text(v) => v.hint(),
+        }
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Default, Debug)]
 struct Style {
@@ -509,6 +546,15 @@ pub enum After {
         workspace: String,
         path: String,
     },
+    /// Read the text file `path` of a workspace and show it in the viewer of text (REQ-615);
+    /// `size` is what the tree knows of its weight, for the notice of a binary file, and `keep`
+    /// reads it again where the person was.
+    ReadFile {
+        workspace: String,
+        path: String,
+        size: Option<u64>,
+        keep: bool,
+    },
     /// Read the plan that waits as `ask` in the conversation `node` and show it in the viewer.
     ReadPlan {
         node: String,
@@ -614,8 +660,8 @@ pub struct View {
     /// The pane whose conversation a drag began in, with the button still down (the drag itself
     /// and what it covers are the conversation's own: `conversation::Ui`).
     conv_drag: Option<String>,
-    /// The Markdown viewer over the panes, when one is open.
-    viewer: Option<viewer::Viewer>,
+    /// The read-only screen over the panes, when one is open: a Markdown document or a text file.
+    viewer: Option<Viewing>,
     /// The file tree: whether its column is shown, whether the keys are in it, and what each
     /// workspace's holds.
     tree_on: bool,
@@ -2806,7 +2852,12 @@ impl View {
     // ---- the Markdown viewer (REQ-469 to REQ-478) ----
 
     /// Show a document in the viewer; the keys and the mouse are its until it closes.
-    pub fn open_viewer(&mut self, doc: contract::markdown::MarkdownDoc, source: viewer::Source) {
+    pub fn open_viewer(
+        &mut self,
+        doc: contract::markdown::MarkdownDoc,
+        source: viewer::Source,
+        workspace: String,
+    ) {
         // A plan is answered the ways the question's box has.
         let answers = match &source {
             viewer::Source::Plan { node, ask } => self
@@ -2823,12 +2874,39 @@ impl View {
                 .unwrap_or_default(),
             viewer::Source::File => Vec::new(),
         };
-        self.viewer = Some(viewer::Viewer::new(doc, source, answers));
+        self.viewer = Some(Viewing::Doc(viewer::Viewer::new(
+            doc, source, answers, workspace,
+        )));
+    }
+
+    /// Show a text file in the viewer of text; `keep` leaves the person where they were reading
+    /// when it is the same file read again (REQ-616).
+    pub fn open_text(&mut self, workspace: String, doc: contract::text::TextDoc, keep: bool) {
+        let mut view = fileview::FileView::new(workspace, doc);
+        if keep && let Some(Viewing::Text(old)) = &self.viewer {
+            view.keep_place(old);
+        }
+        self.viewer = Some(Viewing::Text(view));
+    }
+
+    /// Show why the daemon would not read a file: it is binary (REQ-613).
+    pub fn open_refused(&mut self, workspace: String, path: String, size: Option<u64>) {
+        let name = path.rsplit('/').next().unwrap_or(&path).to_owned();
+        let weight = size.map_or_else(String::new, |n| format!(" · {}", fileview::size_text(n)));
+        let why = format!("binario{weight} · no se puede mostrar");
+        self.viewer = Some(Viewing::Text(fileview::FileView::refused(
+            workspace, path, name, why,
+        )));
     }
 
     /// Whether the plan the viewer shows still waits for an answer.
     fn viewer_plan_waits(&self) -> bool {
-        match self.viewer.as_ref().map(|v| &v.source) {
+        match self
+            .viewer
+            .as_ref()
+            .and_then(Viewing::doc)
+            .map(|v| &v.source)
+        {
             Some(viewer::Source::Plan { node, ask }) => self
                 .convs
                 .get(node)
@@ -2850,9 +2928,26 @@ impl View {
                 self.viewer = None;
                 self.conv_after(Some(ConvAct::Edit(path.into())))
             }
+            viewer::Act::Source(path) => {
+                let workspace = self
+                    .viewer
+                    .as_ref()
+                    .and_then(Viewing::doc)
+                    .map(|v| v.workspace.clone())
+                    .unwrap_or_default();
+                After::ReadFile {
+                    workspace,
+                    path,
+                    size: None,
+                    keep: false,
+                }
+            }
             viewer::Act::Answer(key) => {
-                let Some(viewer::Source::Plan { node, ask }) =
-                    self.viewer.as_ref().map(|v| v.source.clone())
+                let Some(viewer::Source::Plan { node, ask }) = self
+                    .viewer
+                    .as_ref()
+                    .and_then(Viewing::doc)
+                    .map(|v| v.source.clone())
                 else {
                     return After::Continue;
                 };
@@ -2879,20 +2974,57 @@ impl View {
     fn viewer_key(&mut self, ev: KeyEvent) -> After {
         let (cols, rows) = self.size;
         let rect = self.panes_space(cols, rows);
-        let Some(v) = self.viewer.as_mut() else {
+        match self.viewer.as_mut() {
+            Some(Viewing::Doc(v)) => {
+                let act = v.key(&ev, rect);
+                if let Some(says) = v.take_says() {
+                    self.flash = says;
+                }
+                self.viewer_act(act)
+            }
+            Some(Viewing::Text(v)) => {
+                let act = v.key(&ev, rect);
+                if let Some(says) = v.take_says() {
+                    self.flash = says;
+                }
+                self.text_act(act)
+            }
+            None => After::Continue,
+        }
+    }
+
+    /// What a key of the viewer of text asked of the client.
+    fn text_act(&mut self, act: fileview::Act) -> After {
+        let Some(Viewing::Text(v)) = self.viewer.as_ref() else {
             return After::Continue;
         };
-        let act = v.key(&ev, rect);
-        if let Some(says) = v.take_says() {
-            self.flash = says;
+        let workspace = v.workspace.clone();
+        let path = v.path().to_owned();
+        match act {
+            fileview::Act::Nothing => After::Continue,
+            fileview::Act::Close => {
+                self.viewer = None;
+                After::Continue
+            }
+            fileview::Act::Copy(text) => After::Copy(text),
+            fileview::Act::Edit(path) => {
+                self.viewer = None;
+                self.editor(workspace, &path)
+            }
+            fileview::Act::Reread => After::ReadFile {
+                workspace,
+                path,
+                size: None,
+                keep: true,
+            },
+            fileview::Act::Rendered => After::ReadMarkdown { workspace, path },
         }
-        self.viewer_act(act)
     }
 
     /// The button was let go over the viewer: the click it was, or the text a drag covered.
     fn viewer_release(&mut self, cols: usize, rows: usize) -> After {
         let rect = self.panes_space(cols, rows);
-        let Some(v) = self.viewer.as_mut() else {
+        let Some(v) = self.viewer.as_mut().and_then(Viewing::doc_mut) else {
             return After::Continue;
         };
         let released = v.release(rect);
@@ -2948,6 +3080,7 @@ impl View {
             let act = self
                 .viewer
                 .as_mut()
+                .and_then(Viewing::doc_mut)
                 .map_or(viewer::Act::Nothing, |v| v.click(rect, x, y));
             return self.viewer_act(act);
         }
@@ -3301,25 +3434,50 @@ impl View {
         }
     }
 
-    /// Open a file of the tree in the editor, in a new panel.
-    fn open_file(&mut self, path: &str) -> After {
-        let Some(workspace) = self.selected_id() else {
-            return After::Continue;
-        };
-        let mut program = editor_from(std::env::var("VISUAL").ok(), std::env::var("EDITOR").ok());
-        program.push(path.to_owned());
+    /// Leave the tree's keys, as opening a file does.
+    fn leave_tree(&mut self) {
         self.tree_focus = false;
         self.typing = false;
         if let Some((_, t)) = self.tree_mut() {
             t.filter = None;
             t.found = None;
         }
+    }
+
+    /// Open a file of the tree: a `.md` in the Markdown viewer, any other in the viewer of text
+    /// (REQ-615); the editor is `e`.
+    fn open_file(&mut self, path: &str, size: Option<u64>) -> After {
+        let Some(workspace) = self.selected_id() else {
+            return After::Continue;
+        };
+        self.leave_tree();
         if is_markdown(path) {
             return After::ReadMarkdown {
                 workspace,
                 path: path.to_owned(),
             };
         }
+        After::ReadFile {
+            workspace,
+            path: path.to_owned(),
+            size,
+            keep: false,
+        }
+    }
+
+    /// Open a file of the tree in the editor, in a new panel (REQ-316).
+    fn edit_file(&mut self, path: &str) -> After {
+        let Some(workspace) = self.selected_id() else {
+            return After::Continue;
+        };
+        self.leave_tree();
+        self.editor(workspace, path)
+    }
+
+    /// The editor on `path`, in a new panel of `workspace`.
+    fn editor(&self, workspace: String, path: &str) -> After {
+        let mut program = editor_from(std::env::var("VISUAL").ok(), std::env::var("EDITOR").ok());
+        program.push(path.to_owned());
         After::NewProgram {
             workspace,
             program,
@@ -3351,7 +3509,7 @@ impl View {
                 }
                 KeyCode::Enter => {
                     if let Some(r) = at {
-                        return self.open_file(&r.path);
+                        return self.open_file(&r.path, r.size);
                     }
                 }
                 KeyCode::Down => t.sel += 1,
@@ -3378,7 +3536,7 @@ impl View {
                         if r.kind == FileKind::Dir {
                             t.toggle(&r.path);
                         } else {
-                            return self.open_file(&r.path);
+                            return self.open_file(&r.path, r.size);
                         }
                     }
                 }
@@ -3407,6 +3565,11 @@ impl View {
                     t.filter = Some(String::new());
                     t.found = None;
                     t.sel = 0;
+                }
+                KeyCode::Char('e') => {
+                    if let Some(r) = at.filter(|r| r.kind != FileKind::Dir) {
+                        return self.edit_file(&r.path);
+                    }
                 }
                 KeyCode::Char('y') => {
                     if let Some(r) = at {
@@ -3469,7 +3632,7 @@ impl View {
             self.ask_folders();
             After::Continue
         } else {
-            self.open_file(&r.path)
+            self.open_file(&r.path, r.size)
         }
     }
 
@@ -3610,7 +3773,11 @@ impl View {
         self.unlight_conversations();
         if self.viewer.is_some() {
             let rect = self.panes_space(cols, rows);
-            return self.viewer.as_mut().is_some_and(|v| v.press(rect, x, y));
+            return self
+                .viewer
+                .as_mut()
+                .and_then(Viewing::doc_mut)
+                .is_some_and(|v| v.press(rect, x, y));
         }
         if self.help
             || self.manage.is_some()
@@ -3680,7 +3847,7 @@ impl View {
         if self.viewer.is_some() {
             let (cols, rows) = self.size;
             let (rect, now) = (self.panes_space(cols, rows), self.now_ms);
-            if let Some(v) = self.viewer.as_mut() {
+            if let Some(v) = self.viewer.as_mut().and_then(Viewing::doc_mut) {
                 v.drag_to(rect, (x, y), now);
             }
             return;
@@ -3751,7 +3918,7 @@ impl View {
         if self.viewer.is_some() {
             let (cols, rows) = self.size;
             let (rect, now) = (self.panes_space(cols, rows), self.now_ms);
-            if let Some(v) = self.viewer.as_mut() {
+            if let Some(v) = self.viewer.as_mut().and_then(Viewing::doc_mut) {
                 v.drag_tick(rect, now);
             }
             return;
@@ -4041,12 +4208,14 @@ impl View {
             );
         }
 
-        if let Some(v) = &self.viewer {
-            v.draw(
+        match &self.viewer {
+            Some(Viewing::Doc(v)) => v.draw(
                 &mut g,
                 self.panes_space(cols, rows),
                 self.viewer_plan_waits(),
-            );
+            ),
+            Some(Viewing::Text(v)) => v.draw(&mut g, self.panes_space(cols, rows)),
+            None => {}
         }
 
         // The status bar.
@@ -4060,7 +4229,7 @@ impl View {
             .as_ref()
             .or_else(|| self.rv.as_ref().filter(|_| self.rv_typing()))
             .map(|c| c.status(&self.docs()));
-        let viewer_hint = self.viewer.as_ref().map(viewer::Viewer::hint);
+        let viewer_hint = self.viewer.as_ref().map(Viewing::hint);
         let (chip, bg, hint) = match (&self.manage, &diff_status) {
             _ if viewer_hint.is_some() => (
                 " LEER ",
@@ -5253,6 +5422,40 @@ fn read_doc(client: &mut Client, cmd: Cmd) -> Result<contract::markdown::Markdow
     }
 }
 
+/// How long a text file is waited for: an older daemon does not know the command and never
+/// answers it (REQ-619).
+const FILE_WAIT: Duration = Duration::from_secs(10);
+
+/// A text file asked of the daemon, and shown in the viewer of text, or why it is not.
+fn read_file(
+    view: &mut View,
+    client: &mut Client,
+    workspace: String,
+    path: String,
+    size: Option<u64>,
+    keep: bool,
+) {
+    let cmd = Cmd::ReadFile {
+        workspace: workspace.clone(),
+        path: path.clone(),
+    };
+    match client.cmd_within(cmd, FILE_WAIT) {
+        Ok(Ok(Some(doc))) => match serde_json::from_value(doc) {
+            Ok(doc) => view.open_text(workspace, doc, keep),
+            Err(e) => view.flash(&e.to_string()),
+        },
+        Ok(Ok(None)) => view.flash("el daemon no respondió con un archivo"),
+        Ok(Err(e)) if e.code == contract::ErrorCode::Binary => {
+            view.open_refused(workspace, path, size);
+        }
+        Ok(Err(e)) => view.flash(&e.message),
+        Err(ClientError::Protocol(_)) => {
+            view.flash("el daemon no responde a read_file: quizá haga falta actualizarlo");
+        }
+        Err(e) => view.flash(&e.to_string()),
+    }
+}
+
 /// Whether the viewer reads the file: `.md` and `.markdown`, whatever the case (REQ-470).
 fn is_markdown(path: &str) -> bool {
     path.rsplit_once('.')
@@ -5421,18 +5624,28 @@ fn do_after(
         After::Check(workspace) => check_changes(view, client, workspace),
         After::Conv(act) => conversation_cmd(view, client, act),
         After::ReadMarkdown { workspace, path } => {
-            match read_doc(client, Cmd::ReadMarkdown { workspace, path }) {
-                Ok(doc) => view.open_viewer(doc, viewer::Source::File),
+            let cmd = Cmd::ReadMarkdown {
+                workspace: workspace.clone(),
+                path,
+            };
+            match read_doc(client, cmd) {
+                Ok(doc) => view.open_viewer(doc, viewer::Source::File, workspace),
                 Err(why) => view.flash(&why),
             }
         }
+        After::ReadFile {
+            workspace,
+            path,
+            size,
+            keep,
+        } => read_file(view, client, workspace, path, size, keep),
         After::ReadPlan { node, ask } => {
             let cmd = Cmd::ReadPlan {
                 node: node.clone(),
                 ask: ask.clone(),
             };
             match read_doc(client, cmd) {
-                Ok(doc) => view.open_viewer(doc, viewer::Source::Plan { node, ask }),
+                Ok(doc) => view.open_viewer(doc, viewer::Source::Plan { node, ask }, String::new()),
                 Err(why) => view.flash(&why),
             }
         }
@@ -6354,7 +6567,7 @@ mod tests {
     }
 
     #[test]
-    fn j_k_move_enter_opens_a_folder_and_asks_for_it_and_a_file_opens_in_the_editor() {
+    fn j_k_move_enter_opens_a_folder_and_asks_for_it_and_e_opens_a_file_in_the_editor() {
         let (mut v, ws) = tree_view();
         v.press_key(plain(KeyCode::Enter));
         assert_eq!(
@@ -6376,7 +6589,7 @@ mod tests {
         assert!(v.take_file_asks().is_empty(), "closing asks for nothing");
         v.press_key(plain(KeyCode::Char('j')));
         v.press_key(plain(KeyCode::Char('j')));
-        let after = v.press_key(plain(KeyCode::Enter));
+        let after = v.press_key(plain(KeyCode::Char('e')));
         let After::NewProgram {
             workspace,
             program,
@@ -6467,7 +6680,8 @@ mod tests {
         assert!(text.contains("1 coincidencia"), "{text}");
         let after = v.press_key(plain(KeyCode::Enter));
         assert!(
-            matches!(&after, After::NewProgram { program, .. } if program.last().map(String::as_str) == Some("src/auth/token.rs"))
+            matches!(&after, After::ReadFile { path, keep: false, .. } if path == "src/auth/token.rs"),
+            "{after:?}"
         );
         assert!(v.trees[&ws].filter.is_none(), "opening ends the search");
         // esc ends it too, and a second one gives the keys back.
@@ -6499,8 +6713,8 @@ mod tests {
         // src, its note, target and then Cargo.toml.
         let after = v.click(110, 5, 120, 30);
         assert!(
-            matches!(after, After::NewProgram { .. }),
-            "a file opens: {after:?}"
+            matches!(&after, After::ReadFile { path, .. } if path == "Cargo.toml"),
+            "a file opens in the viewer: {after:?}"
         );
         v.press(Key::Tree);
         assert!(v.tree_focus);
@@ -9254,6 +9468,67 @@ mod tests {
         c.nodes[ws]["panes"].as_array().unwrap().len()
     }
 
+    /// REQ-610, REQ-613, REQ-621: through a real daemon, a text file opens in the viewer with its
+    /// text, a binary one shows its refusal with the weight the tree knew, and a missing one says so.
+    #[test]
+    fn read_file_through_a_real_daemon_opens_the_viewer_the_refusal_or_the_daemons_reason() {
+        let (dir, d, mut c) = daemon_with_repo("readfile", "");
+        let repo = dir.join("app");
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        std::fs::write(
+            repo.join("src/main.rs"),
+            "fn main() {\n    println!(\"hola\");\n}\n",
+        )
+        .unwrap();
+        std::fs::write(repo.join("logo.png"), b"\x89PNG\0\0\0IHDR").unwrap();
+        let reply = c.cmd(Cmd::OpenFolder {
+            path: repo.to_string_lossy().into_owned(),
+        });
+        let ws = reply.unwrap().unwrap().unwrap()["workspace"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let mut v = fixture_view();
+
+        read_file(
+            &mut v,
+            &mut c,
+            ws.clone(),
+            "src/main.rs".into(),
+            None,
+            false,
+        );
+        let screen = v.plain(120, 30);
+        assert!(
+            screen.contains("▤ main.rs · 3 líneas") && screen.contains("println!(\"hola\");"),
+            "{screen}"
+        );
+        assert!(
+            matches!(&v.viewer, Some(Viewing::Text(t)) if t.workspace == ws && t.path().ends_with("src/main.rs"))
+        );
+
+        read_file(
+            &mut v,
+            &mut c,
+            ws.clone(),
+            "logo.png".into(),
+            Some(48 * 1024),
+            false,
+        );
+        assert!(
+            v.plain(120, 30)
+                .contains("binario · 48.0 KB · no se puede mostrar"),
+            "{}",
+            v.plain(120, 30)
+        );
+
+        v.viewer = None;
+        read_file(&mut v, &mut c, ws, "no-hay.rs".into(), None, false);
+        assert!(v.viewer.is_none());
+        assert!(v.flash.contains("no file no-hay.rs"), "{}", v.flash);
+        d.stop();
+    }
+
     #[test]
     fn a_new_worktree_gets_the_panes_of_its_repository_and_when_that_fails_one_shell() {
         let (dir, d, mut c) = daemon_with_repo("start", "setup = [\"true\"]\n");
@@ -9610,6 +9885,115 @@ mod tests {
         d
     }
 
+    fn text_doc(lines: usize) -> contract::text::TextDoc {
+        contract::text::TextDoc {
+            title: "main.rs".into(),
+            path: "/x/src/main.rs".into(),
+            size: 900,
+            truncated: false,
+            lines: (1..=lines)
+                .map(|n| {
+                    vec![contract::text::Run {
+                        t: format!("let n = {n};"),
+                        k: None,
+                    }]
+                })
+                .collect(),
+        }
+    }
+
+    /// REQ-615, REQ-616, REQ-620: a text file in the viewer has every key, the paste and the
+    /// wheel, so none reaches the panel under it; `e` edits, `r` reads it again where it was, `esc`
+    /// closes it and nothing is written.
+    #[test]
+    fn a_text_file_in_the_viewer_has_the_keys_the_paste_and_the_wheel_and_none_reaches_a_pane() {
+        let (mut v, ws) = tree_view();
+        v.open_text(ws.clone(), text_doc(80), false);
+        assert!(v.viewer.is_some());
+        assert!(v.plain(120, 30).contains("▤ main.rs · 80 líneas"));
+        assert!(
+            v.plain(120, 30).contains("/ n N buscar"),
+            "the status bar tells the keys"
+        );
+        for code in [KeyCode::Char('j'), KeyCode::Char('w'), KeyCode::Char('x')] {
+            assert_eq!(v.press_key(plain(code)), After::Continue);
+        }
+        assert_eq!(
+            v.paste("echo hola"),
+            After::Continue,
+            "a paste is swallowed"
+        );
+        v.scroll(true, 40, 10, 120, 30);
+        v.click(40, 10, 120, 30);
+        assert!(v.viewer.is_some(), "a click leaves it open");
+        assert_eq!(
+            v.press_key(plain(KeyCode::Char('r'))),
+            After::ReadFile {
+                workspace: ws.clone(),
+                path: "/x/src/main.rs".into(),
+                size: None,
+                keep: true
+            }
+        );
+        assert!(matches!(
+            v.press_key(plain(KeyCode::Char('y'))),
+            After::Copy(t) if t.starts_with("let n = 1;\nlet n = 2;")
+        ));
+        let after = v.press_key(plain(KeyCode::Char('e')));
+        let After::NewProgram { program, .. } = after else {
+            panic!("{after:?}");
+        };
+        assert_eq!(program.last().map(String::as_str), Some("/x/src/main.rs"));
+        assert!(v.viewer.is_none(), "the editor closes it");
+        v.open_text(ws, text_doc(5), false);
+        assert_eq!(v.press_key(plain(KeyCode::Esc)), After::Continue);
+        assert!(v.viewer.is_none());
+    }
+
+    /// REQ-617: `s` flips a `.md` between its rendered view and its source, both ways.
+    #[test]
+    fn s_flips_a_markdown_between_its_view_and_its_source() {
+        let (mut v, ws) = tree_view();
+        v.open_viewer(plan_doc(), viewer::Source::File, ws.clone());
+        assert_eq!(
+            v.press_key(plain(KeyCode::Char('s'))),
+            After::ReadFile {
+                workspace: ws.clone(),
+                path: "/x/plan.md".into(),
+                size: None,
+                keep: false
+            }
+        );
+        let mut doc = text_doc(3);
+        doc.title = "plan.md".into();
+        doc.path = "/x/plan.md".into();
+        v.open_text(ws.clone(), doc, false);
+        assert_eq!(
+            v.press_key(plain(KeyCode::Char('s'))),
+            After::ReadMarkdown {
+                workspace: ws,
+                path: "/x/plan.md".into()
+            }
+        );
+    }
+
+    /// REQ-613: a binary file shows its refusal with the weight the tree knew.
+    #[test]
+    fn a_binary_file_shows_its_refusal_with_its_weight_and_only_e_and_esc_work() {
+        let (mut v, ws) = tree_view();
+        v.open_refused(ws, "assets/logo.png".into(), Some(48 * 1024));
+        assert!(
+            v.plain(120, 30)
+                .contains("binario · 48.0 KB · no se puede mostrar"),
+            "{}",
+            v.plain(120, 30)
+        );
+        assert_eq!(v.press_key(plain(KeyCode::Char('j'))), After::Continue);
+        assert!(v.viewer.is_some());
+        assert_eq!(v.press_key(plain(KeyCode::Esc)), After::Continue);
+        assert!(v.viewer.is_none());
+    }
+
     #[test]
     fn v_on_a_plan_asks_for_it_whole_and_the_viewer_answers_it_and_closes() {
         let mut v = conv_view(true);
@@ -9626,7 +10010,7 @@ mod tests {
             node: CONV.into(),
             ask: "req-p".into(),
         };
-        v.open_viewer(plan_doc(), source.clone());
+        v.open_viewer(plan_doc(), source.clone(), String::new());
         let screen = v.plain(120, 30);
         assert!(
             screen.contains("▤ plan · Plan: pruebas") && screen.contains("plan listo"),
@@ -9643,7 +10027,10 @@ mod tests {
         // every key is the viewer's, the conversation's line gets none
         v.press_key(plain(KeyCode::Char('j')));
         assert_eq!(v.conv_ui[CONV].editor.text(), "");
-        assert_eq!(v.viewer.as_ref().unwrap().source, source);
+        assert_eq!(
+            v.viewer.as_ref().and_then(Viewing::doc).unwrap().source,
+            source
+        );
         // 1 answers it as the box does, and the viewer closes
         assert_eq!(
             v.press_key(plain(KeyCode::Char('1'))),
@@ -9657,7 +10044,7 @@ mod tests {
         );
         assert!(v.viewer.is_none());
         // answered elsewhere: it says so and keeps the document
-        v.open_viewer(plan_doc(), source);
+        v.open_viewer(plan_doc(), source, String::new());
         v.convs.get_mut(CONV).unwrap().ask = None;
         assert_eq!(v.press_key(plain(KeyCode::Char('2'))), After::Continue);
         assert!(v.viewer.is_some());
@@ -9685,6 +10072,7 @@ mod tests {
                 node: CONV.into(),
                 ask: "req-p".into(),
             },
+            String::new(),
         );
         assert!(v.plain(120, 30).contains("paso número 0 del plan"));
         v.scroll(true, 60, 10, 120, 30);
@@ -9705,7 +10093,7 @@ mod tests {
             })
         );
         // a drag copies, and a key lets go
-        v.open_viewer(plan_doc(), viewer::Source::File);
+        v.open_viewer(plan_doc(), viewer::Source::File, String::new());
         let (x, y) = find_in(&v, "paso número 2", 30);
         assert!(v.press_select(x + 5, y, 120, 30));
         v.drag_to(x + 10, y);
@@ -9728,7 +10116,8 @@ mod tests {
     }
 
     #[test]
-    fn a_markdown_file_of_the_tree_is_read_into_the_viewer_and_any_other_opens_the_editor() {
+    fn a_markdown_file_of_the_tree_is_read_into_the_viewer_and_any_other_text_into_the_viewer_of_text()
+     {
         let (mut v, ws) = tree_view();
         v.press_key(plain(KeyCode::Enter));
         v.take_file_asks();
@@ -9752,10 +10141,24 @@ mod tests {
         assert!(!v.tree_focus, "the keys go back to the panels");
         v.tree_focus = true;
         v.press_key(plain(KeyCode::Char('j')));
-        assert!(matches!(
+        assert!(
+            matches!(
+                v.press_key(plain(KeyCode::Char('e'))),
+                After::NewProgram { .. }
+            ),
+            "e opens the editor"
+        );
+        v.tree_focus = true;
+        assert_eq!(
             v.press_key(plain(KeyCode::Enter)),
-            After::NewProgram { .. }
-        ));
+            After::ReadFile {
+                workspace: ws,
+                path: "src/main.rs".into(),
+                size: None,
+                keep: false
+            },
+            "REQ-615: any other file is read as text"
+        );
         assert!(is_markdown("a/b.markdown") && is_markdown("README.md"));
         assert!(!is_markdown("md") && !is_markdown("a.mdx") && !is_markdown("Makefile"));
     }
@@ -9763,7 +10166,7 @@ mod tests {
     #[test]
     fn a_paste_while_the_viewer_is_open_goes_nowhere() {
         let mut v = conv_view(true);
-        v.open_viewer(plan_doc(), viewer::Source::File);
+        v.open_viewer(plan_doc(), viewer::Source::File, String::new());
         assert_eq!(v.paste("q hola"), After::Continue);
         assert!(
             v.viewer.is_some(),
@@ -9788,6 +10191,7 @@ mod tests {
                 node: CONV.into(),
                 ask: "req-p".into(),
             },
+            String::new(),
         );
         let screen = v.plain(120, 30);
         assert!(
@@ -9799,7 +10203,7 @@ mod tests {
             "the box had two answers"
         );
         assert_eq!(v.press_key(plain(KeyCode::Char('3'))), After::Continue);
-        v.open_viewer(plan_doc(), viewer::Source::File);
+        v.open_viewer(plan_doc(), viewer::Source::File, String::new());
         assert!(!v.plain(120, 30).contains("Aprobar"));
     }
 
