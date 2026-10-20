@@ -384,6 +384,13 @@ enum Change {
     None,
 }
 
+/// A task whose output is read (REQ-607).
+pub struct TailTarget {
+    pub task: String,
+    pub ended: bool,
+    pub path: Option<std::path::PathBuf>,
+}
+
 #[derive(Debug, Clone)]
 struct TaskLink {
     task: String,
@@ -391,6 +398,8 @@ struct TaskLink {
     background: bool,
     /// Its end was already told in a note.
     noted: bool,
+    /// The tail of its output was read once after it ended (REQ-607).
+    final_read: bool,
 }
 
 /// What is in flight to the engine: one line at a time, so a `result` always answers something.
@@ -529,6 +538,9 @@ pub struct State {
     next_request: u64,
     /// Each task the engine started: its id, the tool call that made it (a subagent's card) and whether it runs in the background.
     task_links: Vec<TaskLink>,
+    /// The file of a task's output that the engine told of; the files of the others of the session
+    /// are beside it (REQ-607).
+    known_output: Option<std::path::PathBuf>,
     /// Tool ids the person refused, so their results say so.
     refused: Vec<String>,
 }
@@ -716,6 +728,7 @@ impl State {
             shell_context: Vec::new(),
             next_request: 1,
             task_links: Vec::new(),
+            known_output: None,
             refused: Vec::new(),
         }
     }
@@ -1919,12 +1932,18 @@ impl State {
         match kind {
             "task_started" => {
                 let label = clip(msg["description"].as_str().unwrap_or("tarea"), LINE_CHARS);
-                let kind = match msg["task_type"].as_str().unwrap_or("") {
+                let mut kind = match msg["task_type"].as_str().unwrap_or("") {
                     "local_agent" => TaskKind::Agent,
                     "local_bash" => TaskKind::Bash,
                     t if t.contains("monitor") => TaskKind::Monitor,
                     _ => TaskKind::Other,
                 };
+                // The engine calls a monitor `local_bash` as well: what tells them apart is the tool.
+                if kind == TaskKind::Bash
+                    && self.tool_named(tool_use_id.as_deref()) == Some("Monitor")
+                {
+                    kind = TaskKind::Monitor;
+                }
                 self.tasks.retain(|t| t.id != task);
                 self.task_links.retain(|l| l.task != task);
                 self.tasks.push(Task {
@@ -1935,6 +1954,7 @@ impl State {
                     started: now,
                     info: None,
                     item: tool_use_id.clone(),
+                    tail: Vec::new(),
                 });
                 if self.tasks.len() > TASKS_KEPT {
                     let gone = self.tasks.remove(0);
@@ -1945,6 +1965,7 @@ impl State {
                     tool_use_id,
                     background: msg["is_backgrounded"].as_bool().unwrap_or(false),
                     noted: false,
+                    final_read: false,
                 });
             }
             "task_progress" => {
@@ -1961,6 +1982,9 @@ impl State {
                 }
             }
             "task_notification" => {
+                if let Some(file) = msg["output_file"].as_str().filter(|f| !f.is_empty()) {
+                    self.known_output = Some(file.into());
+                }
                 // The totals at the end: the last progress was before its last tool finished.
                 let tool = tool_use_id.or_else(|| self.link_of(task));
                 self.card_usage(tool, &msg["usage"], None);
@@ -2002,6 +2026,56 @@ impl State {
                 *last_tool = Some(l.to_owned());
             }
         }
+    }
+
+    /// The name of the tool whose call has the id `id`.
+    fn tool_named(&self, id: Option<&str>) -> Option<&str> {
+        let id = id?;
+        self.items.iter().rev().find_map(|i| match i {
+            Item::Tool { id: t, name, .. } if t == id => Some(name.as_str()),
+            _ => None,
+        })
+    }
+
+    /// The tasks whose output is to be looked at: the shells and monitors that run and the ones
+    /// that ended and were not read since (REQ-607). Each with where its file is, when it is known.
+    pub fn tail_targets(&self) -> Vec<TailTarget> {
+        self.tasks
+            .iter()
+            .filter(|t| matches!(t.kind, TaskKind::Bash | TaskKind::Monitor))
+            .filter_map(|t| {
+                let link = self.task_links.iter().find(|l| l.task == t.id)?;
+                (t.state == TaskState::Run || !link.final_read).then(|| TailTarget {
+                    task: t.id.clone(),
+                    ended: t.state != TaskState::Run,
+                    path: self
+                        .known_output
+                        .as_deref()
+                        .and_then(|k| crate::tail::sibling(k, &self.session, &t.id)),
+                })
+            })
+            .collect()
+    }
+
+    /// What was read from the file of `task`: `None` is a file that is not there. `ended` is whether
+    /// the task was over when it was read; a read of one that ends meanwhile is made again.
+    /// Whether the lines changed.
+    pub fn set_tail(&mut self, task: &str, lines: Option<Vec<String>>, ended: bool) -> bool {
+        let Some(t) = self.tasks.iter_mut().find(|t| t.id == task) else {
+            return false;
+        };
+        let over = t.state != TaskState::Run;
+        let changed = lines.as_ref().is_some_and(|l| t.tail != *l);
+        if let Some(l) = lines {
+            t.tail = l;
+        }
+        if over
+            && ended
+            && let Some(link) = self.task_links.iter_mut().find(|l| l.task == task)
+        {
+            link.final_read = true;
+        }
+        changed
     }
 
     fn link_of(&self, task: &str) -> Option<String> {
@@ -2084,6 +2158,9 @@ impl State {
                 continue;
             };
             let text = content_text(&b["content"]);
+            if let Some(file) = crate::tail::named_in(&text) {
+                self.known_output = Some(file);
+            }
             let failed = b["is_error"].as_bool().unwrap_or(false);
             if self.finish_agent(id, failed, &msg["tool_use_result"]) {
                 continue;
@@ -2880,6 +2957,47 @@ pub(crate) fn summary_of(tool: &str, lines: &[String], result: &Value, failed: b
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The real messages of Claude 2.1.304 for a background shell and for a monitor, replayed
+    /// (REQ-607, REQ-609): the monitor is `local_bash` for the engine too, and a Bash result says
+    /// where the output is.
+    fn replay(capture: &str, session: &str) -> State {
+        let mut s = st();
+        s.session = session.to_owned();
+        for line in capture.lines() {
+            s.apply(&serde_json::from_str::<Value>(line).unwrap(), 1);
+        }
+        s
+    }
+
+    #[test]
+    fn the_captures_of_the_real_engine_say_a_monitor_is_a_monitor_and_where_the_output_is() {
+        let bash = replay(
+            include_str!("../tests/captures/local-bash-2.1.304.jsonl"),
+            "dda07519-fc54-41e6-a13f-f1ec558a3ee4",
+        );
+        assert_eq!(bash.tasks[0].kind, TaskKind::Bash);
+        let want = std::path::PathBuf::from(
+            "/private/tmp/claude-501/-private-tmp-cap-n135/dda07519-fc54-41e6-a13f-f1ec558a3ee4/tasks/b3n42ka0g.output",
+        );
+        assert_eq!(bash.known_output.as_deref(), Some(want.as_path()));
+        let targets = bash.tail_targets();
+        assert_eq!(targets.len(), 1, "it ended and was not read yet");
+        assert_eq!(targets[0].path.as_deref(), Some(want.as_path()));
+        // the files of another session are not beside this one
+        let mut other = replay(
+            include_str!("../tests/captures/local-bash-2.1.304.jsonl"),
+            "dda07519-fc54-41e6-a13f-f1ec558a3ee4",
+        );
+        other.session = "another".into();
+        assert!(other.tail_targets()[0].path.is_none());
+
+        let monitor = replay(
+            include_str!("../tests/captures/monitor-2.1.304.jsonl"),
+            "082f2384-a6e1-4533-b324-c60b5b2e2025",
+        );
+        assert_eq!(monitor.tasks[0].kind, TaskKind::Monitor);
+    }
 
     fn st() -> State {
         State::new("2cab1f5a-3d20-4cd2-9d13-485b39b26147".into())

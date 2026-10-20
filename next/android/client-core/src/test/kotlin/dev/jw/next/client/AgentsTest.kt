@@ -24,7 +24,7 @@ class AgentsTest {
     @Test
     fun aSubagentTaskTakesItsNumbersItsPromptAndItsStepsFromItsCardAndTheTimeRuns() {
         val conv = withAgent()
-        val row = agentRows(conv, now = 1_792_110_002_000 + 90_000).single()
+        val row = agentRows(conv, now = 1_792_110_002_000 + 90_000).first { it.section == AgentSection.Agents }
         assertEquals("Explore (haiku-5.5)", row.name, "the kind of subagent and the model it runs with")
         assertEquals("1:30 · 38.4k", row.stats, "the clock of a task that runs is the phone's")
         assertEquals("Buscando el puerto del puente", row.doing)
@@ -77,10 +77,30 @@ class AgentsTest {
         assertEquals(AgentSection.Monitors, rows.last().section)
     }
 
+    /** REQ-607: the last lines of a shell or a monitor travel in its row; a subagent and a loop show none. */
+    @Test
+    fun aShellAndAMonitorCarryTheLastLinesTheyPrintedAndASubagentAndALoopCarryNone() {
+        val conv = withAgent()
+        val shell = agentRows(conv, now = 1_792_110_100_000).single { it.section == AgentSection.Shells }
+        assertEquals(listOf("   Compiling jwn v0.1.0", "test tui::agents::a_shell_shows_its_tail ... ok"), shell.tail)
+        val lines = listOf("a", "b", "c")
+        val more = conv.copy(
+            tasks = listOf(
+                Task("m1", TaskKind.Monitor, "tail", TaskState.Run, 2, tail = lines),
+                Task("l1", TaskKind.Loop, "ci", TaskState.Run, 3, tail = lines),
+                Task("g1", TaskKind.Agent, "x", TaskState.Run, 4, tail = lines),
+            ),
+        )
+        val rows = agentRows(more, now = 100).associateBy { it.id }
+        assertEquals(lines, rows.getValue("m1").tail)
+        assertTrue(rows.getValue("l1").tail.isEmpty() && rows.getValue("g1").tail.isEmpty())
+        assertEquals(emptyList(), agentRows(conv.copy(tasks = listOf(Task("b", TaskKind.Bash, "x", TaskState.Run, 1))), now = 100).single().tail, "nothing printed yet")
+    }
+
     @Test
     fun theChipCountsEverythingThatRunsAndShowsWhileThePanelIsOpenSoThatItCanBeClosed() {
         val conv = withAgent()
-        assertEquals(1, agentsChip(conv, open = false))
+        assertEquals(2, agentsChip(conv, open = false), "the subagent and the shell of the fixture")
         val shell = conv.copy(tasks = listOf(Task("b1", TaskKind.Bash, "cargo", TaskState.Run, 1), Task("m1", TaskKind.Monitor, "tail", TaskState.Run, 2), Task("b2", TaskKind.Bash, "ls", TaskState.Done, 3)))
         assertEquals(2, agentsChip(shell, open = false), "a shell and a monitor count; what ended does not")
         val idle = conv.copy(tasks = emptyList())

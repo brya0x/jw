@@ -155,7 +155,8 @@
         "state": { "$ref": "#/$defs/TaskState" },
         "started": { "type": "integer", "minimum": 0 },
         "info": { "type": "string" },
-        "item": { "type": "string" }
+        "item": { "type": "string" },
+        "tail": { "type": "array", "items": { "type": "string" } }
       }
     },
     "Todo": { "type": "object", "required": ["text", "done"], "properties": { "text": { "type": "string" }, "done": { "type": "boolean" } } },

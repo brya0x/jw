@@ -33,6 +33,8 @@ use crate::server::Shared;
 const SAVE_EVERY: Duration = Duration::from_secs(2);
 /// How often the transcripts of the conversations with no engine are looked at (REQ-545).
 const FOLLOW_EVERY: Duration = Duration::from_secs(1);
+/// How often the output of the shells and monitors that run is looked at (REQ-607).
+const TAIL_EVERY: Duration = Duration::from_secs(2);
 /// How often the text that streams is shown at most (REQ-378).
 const SHOW_EVERY: Duration = Duration::from_millis(50);
 /// A patch of a text that grows carries the whole text (the patches only replace), so the longer
@@ -1155,10 +1157,61 @@ pub fn follow_due(shared: &Shared) {
     }
 }
 
+/// Read the end of the output of the shells and monitors that run, and of the ones that ended since
+/// the last read, and show it in their rows (REQ-607). The files are read outside the lock.
+pub fn tail_due(shared: &Shared) {
+    let wanted: Vec<_> = shared
+        .lock()
+        .convs
+        .iter()
+        .filter_map(|(pane, c)| {
+            let targets = c.st.tail_targets();
+            (!targets.is_empty())
+                .then(|| (pane.clone(), c.id.clone(), c.st.session.clone(), targets))
+        })
+        .collect();
+    if wanted.is_empty() {
+        return;
+    }
+    let read: Vec<_> = wanted
+        .into_iter()
+        .map(|(pane, node, session, targets)| {
+            let lines: Vec<_> = targets
+                .into_iter()
+                .map(|t| {
+                    let path = t.path.or_else(|| crate::tail::discover(&session, &t.task));
+                    let lines =
+                        path.and_then(|p| crate::tail::read(&p, &session, &t.task, t.ended));
+                    (t.task, lines, t.ended)
+                })
+                .collect();
+            (pane, node, lines)
+        })
+        .collect();
+    let mut core = shared.lock();
+    let mut shown = false;
+    for (pane, node, lines) in read {
+        let Some(c) = core.convs.get_mut(&pane).filter(|c| c.id == node) else {
+            continue;
+        };
+        for (task, lines, ended) in lines {
+            shown |= c.st.set_tail(&task, lines, ended);
+        }
+    }
+    if shown {
+        core.refresh();
+    }
+}
+
 /// Follow the transcripts until the daemon stops.
 pub fn follow_run(shared: Shared, stop: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+    let mut tailed = Instant::now();
     while !stop.load(Ordering::SeqCst) {
         follow_due(&shared);
+        if tailed.elapsed() >= TAIL_EVERY {
+            tail_due(&shared);
+            tailed = Instant::now();
+        }
         let end = Instant::now() + FOLLOW_EVERY;
         while Instant::now() < end && !stop.load(Ordering::SeqCst) {
             thread::sleep(Duration::from_millis(50));

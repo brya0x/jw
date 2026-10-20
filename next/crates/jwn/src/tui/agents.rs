@@ -25,6 +25,8 @@ pub fn width(iw: usize) -> usize {
 /// Rows of the prompt and of what a task said, at most.
 const PROMPT_ROWS: usize = 3;
 const SAID_ROWS: usize = 4;
+/// Lines of what a shell or a monitor printed, at most (REQ-607).
+const TAIL_ROWS: usize = 6;
 /// Lines of one section, at most: the newest.
 const SECTION_ROWS: usize = 6;
 
@@ -600,6 +602,17 @@ pub fn draw(
             for l in wrap(&said, tw.saturating_sub(2), SAID_ROWS) {
                 put(g, &mut row, 2, &l, plain);
             }
+            // What it printed last (REQ-607): when the room is short the oldest lines go first.
+            if t.kind != TaskKind::Loop && row + 1 < hint {
+                put(g, &mut row, 0, "salida", dim);
+                if t.tail.is_empty() {
+                    put(g, &mut row, 2, "sin salida todavía", dim);
+                }
+                let room = hint.saturating_sub(row).min(TAIL_ROWS);
+                for l in &t.tail[t.tail.len().saturating_sub(room)..] {
+                    put(g, &mut row, 2, l, dim);
+                }
+            }
         }
     }
     g.put(
@@ -625,6 +638,7 @@ mod tests {
             started,
             info: None,
             item: None,
+            tail: Vec::new(),
         }
     }
 
@@ -902,6 +916,83 @@ mod tests {
         let (_, rows) = frame(&conv, &state, 60, 30);
         assert!(rows.join("\n").contains("repite"), "a loop repeats");
         assert!(rows.iter().all(|r| r.chars().count() <= 70));
+    }
+
+    /// What a shell or a monitor printed last is under what it does, the newest line last; a loop
+    /// has none, and a short room loses the oldest lines first (REQ-607).
+    #[test]
+    fn a_shell_and_a_monitor_show_the_tail_of_their_output() {
+        let mut conv = mixed();
+        for t in &mut conv.tasks {
+            match t.id.as_str() {
+                "sh1" => {
+                    t.tail = (1..=8).map(|i| format!("línea {i}")).collect::<Vec<_>>()[2..].to_vec()
+                }
+                "mo1" => t.tail = vec!["ERROR timeout en /sync".into()],
+                _ => {}
+            }
+        }
+        let mut state = State {
+            open: true,
+            focus: true,
+            ..State::default()
+        };
+        // the shell with output: the three steps from the lit subagent reach `cargo test`
+        for _ in 0..3 {
+            state.step(&conv, true);
+        }
+        let (_, rows) = frame(&conv, &state, 60, 30);
+        let text = rows.join("\n");
+        let at = |s: &str| {
+            rows.iter()
+                .position(|r| r.contains(s))
+                .unwrap_or_else(|| panic!("{s:?}:\n{text}"))
+        };
+        assert!(
+            at("ahora") < at("salida")
+                && at("salida") < at("  línea 3")
+                && at("  línea 3") < at("  línea 8"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("línea 2"),
+            "six lines at most, the newest:\n{text}"
+        );
+        // the one that printed nothing says so
+        state.step(&conv, false);
+        let (_, rows) = frame(&conv, &state, 60, 30);
+        assert!(
+            rows.join("\n").contains("  sin salida todavía"),
+            "{}",
+            rows.join("\n")
+        );
+        // a monitor
+        state.edge(&conv, true);
+        let (_, rows) = frame(&conv, &state, 60, 30);
+        assert!(
+            rows.join("\n").contains("  ERROR timeout en /sync"),
+            "{}",
+            rows.join("\n")
+        );
+        // a loop has no output of its own
+        state.step(&conv, false);
+        let (_, rows) = frame(&conv, &state, 60, 30);
+        assert!(!rows.join("\n").contains("salida"), "{}", rows.join("\n"));
+        // a short room keeps the newest lines
+        let mut state = State {
+            open: true,
+            focus: true,
+            ..State::default()
+        };
+        for _ in 0..3 {
+            state.step(&conv, true);
+        }
+        let (_, rows) = frame(&conv, &state, 60, 21);
+        let text = rows.join("\n");
+        assert!(
+            text.contains("línea 8") && !text.contains("línea 3"),
+            "{text}"
+        );
     }
 
     /// A shell is its command, which the item of its tool call has; the engine's words for it are

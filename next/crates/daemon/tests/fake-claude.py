@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import json, os, sys, threading, time
+import json, os, sys, tempfile, threading, time
 LOG = os.environ.get("FAKE_LOG", "/tmp/fake-engine.log")
 argv = sys.argv[1:]
 if "--version" in argv:
@@ -15,6 +15,7 @@ def logline(s):
 logline("start " + json.dumps(argv) + " cwd=" + os.getcwd() + " var=" + os.environ.get("MY_VAR", ""))
 lock = threading.Lock()
 mode = ["default"]
+outputs = {}
 total = [0.0]
 def out(o):
     with lock:
@@ -103,13 +104,32 @@ def agent():
     out({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": tid, "content": "3 usos"}]}, "tool_use_result": {"totalDurationMs": 6000, "totalTokens": 22024, "totalToolUseCount": 3}})
     say("El subagente terminó.")
     result()
+def task_file(task, body):
+    """The file the engine writes the output of a background task to, shaped as the real one."""
+    d = os.path.join(os.environ.get("FAKE_TASKS_DIR", tempfile.gettempdir()), "claude-fake", "proj", session, "tasks")
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, task + ".output")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(body)
+    outputs[task] = path
+    return path
 def background():
     tid = "toolu_b1"
+    path = task_file("bg1", "uno\n\x1b[32mdos\x1b[0m\n")
     out({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": tid, "name": "Bash", "input": {"command": "sleep 45", "run_in_background": True}}]}})
     out({"type": "system", "subtype": "background_tasks_changed", "tasks": [{"task_id": "bg1", "task_type": "local_bash", "description": "dormir 45 s"}]})
     out({"type": "system", "subtype": "task_started", "task_id": "bg1", "tool_use_id": tid, "description": "dormir 45 s", "is_backgrounded": True, "task_type": "local_bash"})
-    out({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": tid, "content": "Command running in background with ID: bg1"}]}})
+    out({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": tid, "content": "Command running in background with ID: bg1. Output is being written to: " + path + ". You will be notified when it completes. To check interim output, use Read on that file path."}]}})
     say("Corre en segundo plano.")
+    result()
+def monitor():
+    """A monitor is `local_bash` for the engine too, and its result does not say where its output is."""
+    tid = "toolu_m1"
+    task_file("mon1", "ERROR uno\n")
+    out({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": tid, "name": "Monitor", "input": {"command": "tail -f app.log | grep ERROR", "description": "errores del log", "timeout_ms": 60000}}]}})
+    out({"type": "system", "subtype": "task_started", "task_id": "mon1", "tool_use_id": tid, "description": "errores del log", "is_backgrounded": True, "task_type": "local_bash"})
+    out({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": tid, "content": "Monitor started (task mon1, expires in 1m unless the source ends first). You will be notified on each event."}]}})
+    say("Vigilo el log.")
     result()
 def todo():
     out({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "toolu_t1", "name": "TodoWrite", "input": {"todos": [
@@ -153,6 +173,9 @@ for line in sys.stdin:
         if m["request"]["subtype"] == "stop_task":
             logline("control stop_task " + m["request"]["task_id"])
             out({"type": "control_response", "response": {"subtype": "success", "request_id": m["request_id"], "response": {}}})
+            if m["request"]["task_id"] in outputs:
+                with open(outputs[m["request"]["task_id"]], "a", encoding="utf-8") as f:
+                    f.write("tres\n\n[exited with code 137]\n")
             out({"type": "system", "subtype": "task_updated", "task_id": m["request"]["task_id"], "patch": {"status": "killed", "end_time": 2}})
             out({"type": "system", "subtype": "task_notification", "task_id": m["request"]["task_id"], "status": "stopped", "summary": "dormir 45 s"})
             out({"type": "system", "subtype": "background_tasks_changed", "tasks": []})
@@ -190,6 +213,8 @@ for line in sys.stdin:
         agent()
     elif "fondo" in text:
         background()
+    elif "vigila" in text:
+        monitor()
     elif "todo" in text:
         todo()
     elif "push" in text:

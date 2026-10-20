@@ -46,12 +46,17 @@ data class AgentRow(
     val steps: List<String>,
     /** What it says: when a subagent ended, what it said; for a shell or a monitor what it does or last said, never the command again. */
     val said: String?,
+    /** The last lines a shell or a monitor printed, newest last, as plain text (REQ-607); empty for a subagent, a loop, and until it prints. */
+    val tail: List<String> = emptyList(),
 ) {
     val running get() = state == TaskState.Run
 }
 
 /** The most lines of one section. */
 const val AGENT_ROWS = 6
+
+/** The lines of the output of a shell or a monitor that a row shows before it is opened wide. */
+const val AGENT_TAIL_PREVIEW = 4
 
 /** The steps of one subagent that the panel keeps. */
 const val AGENT_STEPS = 5
@@ -112,6 +117,7 @@ private fun agentRow(conv: Node.Conversation, t: Task, now: Long): AgentRow {
             section == AgentSection.Agents -> if (t.state == TaskState.Run) null else t.info
             else -> t.info?.takeIf { it.isNotBlank() && it != shown } ?: t.label.takeIf { it != shown && t.state == TaskState.Run } ?: ended
         },
+        tail = if (section == AgentSection.Agents || t.kind == TaskKind.Loop) emptyList() else t.tail,
     )
 }
 

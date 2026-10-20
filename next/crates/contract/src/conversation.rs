@@ -326,6 +326,11 @@ pub struct Task {
     /// the `Bash` or `Monitor` call, whose `arg` is the command (REQ-600).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub item: Option<String>,
+    /// The last lines a shell or a monitor printed, newest last, as plain text (REQ-607): the
+    /// daemon reads them from the file the engine writes for the task. Empty for the rest and
+    /// until it prints.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tail: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

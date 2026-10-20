@@ -3535,6 +3535,7 @@ mod tests {
             started: 0,
             info: None,
             item: None,
+            tail: Vec::new(),
         });
         c
     }

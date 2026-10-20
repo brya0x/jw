@@ -15,7 +15,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
@@ -24,6 +28,7 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import dev.jw.next.client.AgentRow
+import dev.jw.next.client.AGENT_TAIL_PREVIEW
 import dev.jw.next.client.AgentSection
 import dev.jw.next.contract.TaskKind
 import dev.jw.next.contract.TaskState
@@ -111,10 +116,12 @@ private fun AgentRowView(r: AgentRow, open: Boolean, tick: Long, toggle: () -> U
                 AgentSection.Shells -> {
                     Mono("comando", Palette.dim, 11); Mono(r.name, Palette.fg, 12, lines = 4)
                     r.said?.let { Mono(if (r.running) "ahora" else "terminó", Palette.dim, 11); Mono(it, Palette.fg, 12, lines = 4) }
+                    OutputView(r.tail)
                 }
                 AgentSection.Monitors -> {
                     Mono(if (r.kind == TaskKind.Loop) "repite" else "vigila", Palette.dim, 11); Mono(r.name, Palette.fg, 12, lines = 4)
                     r.said?.let { Mono("último", Palette.dim, 11); Mono(it, Palette.fg, 12, lines = 4) }
+                    if (r.kind != TaskKind.Loop) OutputView(r.tail)
                 }
             }
             if (r.running) Box(
@@ -123,4 +130,23 @@ private fun AgentRowView(r: AgentRow, open: Boolean, tick: Long, toggle: () -> U
             ) { Mono("■ Detener", Palette.red, 13, bold = true) }
         }
     }
+}
+
+/** What a shell or a monitor printed last (REQ-607): the last lines in a dark box, one each, and a button of 48 dp that opens all of them wrapped. */
+@Composable
+private fun OutputView(tail: List<String>) {
+    var all by remember { mutableStateOf(false) }
+    Mono("salida", Palette.dim, 11)
+    if (tail.isEmpty()) {
+        Mono("sin salida todavía", Palette.dim, 12)
+        return
+    }
+    Column(Modifier.fillMaxWidth().background(Palette.bg, RoundedCornerShape(6.dp)).padding(horizontal = 8.dp, vertical = 6.dp)) {
+        (if (all) tail else tail.takeLast(AGENT_TAIL_PREVIEW)).forEach { Mono(it, Palette.fg, 11, lines = if (all) Int.MAX_VALUE else 1) }
+    }
+    Box(
+        Modifier.fillMaxWidth().defaultMinSize(minHeight = 48.dp).clickable { all = !all }
+            .semantics { role = Role.Button; contentDescription = if (all) "Cerrar la salida" else "Ver la salida" },
+        contentAlignment = Alignment.CenterStart,
+    ) { Mono(if (all) "▤ Cerrar salida" else "▤ Ver salida", Palette.blue, 13) }
 }

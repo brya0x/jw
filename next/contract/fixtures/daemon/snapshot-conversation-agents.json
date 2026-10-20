@@ -44,6 +44,14 @@
         "started": 1792110002000,
         "info": "Buscando el puerto del puente",
         "item": "toolu_ag1"
+      },
+      {
+        "id": "bk1c9d2",
+        "kind": "bash",
+        "label": "cargo test -p jwn",
+        "state": "run",
+        "started": 1792110004000,
+        "tail": ["   Compiling jwn v0.1.0", "test tui::agents::a_shell_shows_its_tail ... ok"]
       }
     ],
     "todos": [],

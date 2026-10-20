@@ -43,6 +43,10 @@ fn rig_with(sb: Sandbox, extra_env: Vec<(String, String)>) -> Rig {
             format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
         ),
         ("FAKE_LOG".into(), log.to_string_lossy().into_owned()),
+        (
+            "FAKE_TASKS_DIR".into(),
+            sb.dir.join("tasks").to_string_lossy().into_owned(),
+        ),
     ];
     config.env.extend(extra_env);
     let daemon = Daemon::start(config.clone()).unwrap();
@@ -916,6 +920,45 @@ fn a_task_in_the_background_is_listed_leaves_a_note_when_it_ends_and_can_be_stop
         })
         .is_err()
     );
+    r.stop();
+}
+
+#[test]
+fn a_shell_and_a_monitor_show_the_last_lines_they_print_and_keep_them_when_they_end() {
+    let mut r = rig();
+    let (node, _) = r.open();
+    r.send(&node, "algo de fondo");
+    // The plain lines of the file the engine wrote: the colour codes are gone.
+    let v = r.until(&node, "the tail of the shell", |v| {
+        v["tasks"][0]["tail"] == serde_json::json!(["uno", "dos"])
+    });
+    assert_eq!(v["tasks"][0]["kind"], "bash");
+    // A monitor is `local_bash` for the engine too; the tool says what it is, and its result does
+    // not say where its output is: it is beside the one of the shell.
+    r.send(&node, "vigila el log");
+    let v = r.until(&node, "the tail of the monitor", |v| {
+        v["tasks"].as_array().is_some_and(|t| {
+            t.iter()
+                .any(|t| t["id"] == "mon1" && t["tail"] == serde_json::json!(["ERROR uno"]))
+        })
+    });
+    let kinds: Vec<_> = v["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| (t["id"].as_str().unwrap(), t["kind"].as_str().unwrap()))
+        .collect();
+    assert_eq!(kinds, [("bg1", "bash"), ("mon1", "monitor")]);
+    // What it printed as it ended is read once more, without the line the engine adds.
+    r.cmd(Cmd::ConversationStopTask {
+        node: node.clone(),
+        task: "bg1".into(),
+    })
+    .unwrap();
+    r.until(&node, "the last read of the shell that ended", |v| {
+        v["tasks"][0]["state"] == "stopped"
+            && v["tasks"][0]["tail"] == serde_json::json!(["uno", "dos", "tres"])
+    });
     r.stop();
 }
 
