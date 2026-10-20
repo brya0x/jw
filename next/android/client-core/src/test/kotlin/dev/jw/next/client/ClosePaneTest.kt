@@ -15,6 +15,8 @@ class ClosePaneTest {
     private class Pc : NodeSource {
         private val dir = File(System.getProperty("contract.dir"), "fixtures/daemon")
         val nodes: MutableMap<String, Node> = dir.listFiles { f -> f.name.startsWith("snapshot-") && "blocks-full" !in f.name }.orEmpty()
+            // Several fixtures share a node id: the directory's order decides which one a test sees, and it is the file system's, so it is sorted.
+            .sortedBy { it.name }
             .map { (ContractJson.decodeFromString(DaemonMsg.serializer(), it.readText()) as DaemonMsg.Snapshot).node }
             .associateBy { it.id }.toMutableMap()
         private val sessionNode = (ContractJson.decodeFromString(DaemonMsg.serializer(), File(dir, "snapshot-session-attention.json").readText()) as DaemonMsg.Snapshot).node as Node.Session

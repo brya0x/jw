@@ -129,7 +129,7 @@ class ClientCoreTest {
 /** A source that reads the daemon fixtures, for the navigator tests. */
 private class FixtureSource : NodeSource {
     private val dir = File(System.getProperty("contract.dir"), "fixtures/daemon")
-    private val nodes: Map<String, Node> = dir.listFiles { f -> f.name.startsWith("snapshot-") }.orEmpty()
+    private val nodes: Map<String, Node> = dir.listFiles { f -> f.name.startsWith("snapshot-") }.orEmpty().sortedBy { it.name }
         .mapNotNull { (ContractJson.decodeFromString(DaemonMsg.serializer(), it.readText()) as DaemonMsg.Snapshot).node }
         .associateBy { it.id }
     private val sessionNode =
