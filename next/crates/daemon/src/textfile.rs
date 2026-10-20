@@ -7,18 +7,17 @@ use std::io::Read;
 use std::path::Path;
 
 use contract::ErrorCode;
-use contract::text::{Run, TextDoc};
+use contract::text::TextDoc;
 
 use crate::commands::{Done, ErrorBody, err};
 use crate::files;
+use crate::highlight;
 use crate::server::Shared;
 
 /// The most of a file that is read: a document is one reply.
 const MAX_FILE: usize = 1024 * 1024;
 /// How much of the head is looked at for a NUL byte, as the diff does.
 const SNIFF: usize = 8000;
-/// The most characters a line keeps; the rest is `…`.
-const MAX_LINE: usize = 2000;
 
 /// `read_file`: the lines of a text file of the workspace (REQ-610).
 pub fn read(shared: &Shared, workspace: &str, path: &str) -> Done {
@@ -32,12 +31,13 @@ pub fn read(shared: &Shared, workspace: &str, path: &str) -> Done {
     let title = file
         .file_name()
         .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    let lines = highlight::runs(&text, &title);
     let doc = TextDoc {
         title,
         path: file.to_string_lossy().into_owned(),
         size,
         truncated,
-        lines: lines(&text),
+        lines,
     };
     Ok(Some(
         serde_json::to_value(doc).expect("a document serialises"),
@@ -87,33 +87,5 @@ fn utf8(mut bytes: Vec<u8>, truncated: bool, path: &str) -> Result<String, Error
             Ok(String::from_utf8(bytes).expect("up to the last whole character"))
         }
         Err(_) => Err(binary(path)),
-    }
-}
-
-/// The lines of `text` as runs, each cut at `MAX_LINE` characters, without `\n` or `\r\n`.
-fn lines(text: &str) -> Vec<Vec<Run>> {
-    text.split_inclusive('\n')
-        .map(|l| {
-            let l = l.strip_suffix('\n').unwrap_or(l);
-            let l = l.strip_suffix('\r').unwrap_or(l);
-            plain(l)
-        })
-        .collect()
-}
-
-fn plain(line: &str) -> Vec<Run> {
-    if line.is_empty() {
-        return Vec::new();
-    }
-    vec![Run {
-        t: cut(line),
-        k: None,
-    }]
-}
-
-fn cut(line: &str) -> String {
-    match line.char_indices().nth(MAX_LINE) {
-        Some((end, _)) => format!("{}…", &line[..end]),
-        None => line.to_owned(),
     }
 }

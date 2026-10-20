@@ -131,6 +131,7 @@ fn ensure_daemon() -> Result<(), String> {
 fn run_daemon() -> Res {
     let daemon =
         Daemon::start(Config::from_identity()).map_err(|e| format!("cannot start: {e}"))?;
+    daemon::warm_highlighting();
     daemon.wait();
     Ok(ExitCode::SUCCESS)
 }

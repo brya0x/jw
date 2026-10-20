@@ -14,6 +14,7 @@ mod files;
 mod git;
 mod github;
 mod grouping;
+mod highlight;
 mod history;
 mod integration;
 mod launch;
@@ -43,6 +44,7 @@ mod workspaces;
 mod worktrees;
 
 pub use engine::served as conversation_served;
+pub use highlight::warm as warm_highlighting;
 pub use launch::agent_name;
 pub use mobile::{LinkConfig, devices_file};
 /// Where the personal settings of a repository or a folder are (REQ-483), for what has to say it.

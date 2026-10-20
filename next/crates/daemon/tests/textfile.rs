@@ -168,3 +168,52 @@ fn a_big_file_is_cut_at_a_line_end_a_long_line_is_cut_and_nothing_is_written() {
     assert_eq!(std::fs::read(dir.join("ancha.txt")).unwrap(), before);
     d.stop();
 }
+
+#[test]
+fn a_file_of_a_known_language_comes_coloured_its_head_only_when_it_is_big_and_plain_when_unknown() {
+    let sb = Sandbox::new();
+    let d = sb.start();
+    let dir = app(&sb);
+    std::fs::write(
+        dir.join("src/lib.rs"),
+        "// uno\nfn dos() { let t = \"tres\"; }\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("src/lib.zzz"), "fn dos() { let t = \"tres\"; }\n").unwrap();
+    let big = "let valor = 12345; // x\n".repeat(200 * 1024 / 23);
+    std::fs::write(dir.join("src/grande.rs"), &big).unwrap();
+    let mut c = sb.client();
+    let ws = open(&mut c, &dir);
+
+    let doc = read(&mut c, &ws, "src/lib.rs").unwrap();
+    let classes: Vec<(&str, &str)> = doc
+        .lines
+        .iter()
+        .flatten()
+        .filter_map(|r| r.k.as_deref().map(|k| (r.t.as_str(), k)))
+        .collect();
+    assert!(classes.contains(&("// uno", "cm")), "{classes:?}");
+    assert!(classes.contains(&("fn", "kw")), "{classes:?}");
+    assert!(
+        classes
+            .iter()
+            .any(|(t, k)| t.contains("tres") && *k == "str")
+    );
+    assert_eq!(plain(&doc), ["// uno", "fn dos() { let t = \"tres\"; }"]);
+
+    let unknown = read(&mut c, &ws, "src/lib.zzz").unwrap();
+    assert!(unknown.lines.iter().flatten().all(|r| r.k.is_none()));
+
+    let started = std::time::Instant::now();
+    let doc = read(&mut c, &ws, "src/grande.rs").unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    assert!(
+        doc.lines[0].iter().any(|r| r.k.is_some()),
+        "the head is coloured"
+    );
+    assert!(
+        doc.lines.last().unwrap().iter().all(|r| r.k.is_none()),
+        "the tail past 64 KiB is plain"
+    );
+    d.stop();
+}
