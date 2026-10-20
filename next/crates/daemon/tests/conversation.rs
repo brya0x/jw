@@ -30,6 +30,10 @@ struct Rig {
 }
 
 fn rig_with(sb: Sandbox, extra_env: Vec<(String, String)>) -> Rig {
+    rig_with_chrome(sb, extra_env, false)
+}
+
+fn rig_with_chrome(sb: Sandbox, extra_env: Vec<(String, String)>, chrome: bool) -> Rig {
     let bin = sb.dir.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     let engine = bin.join("claude");
@@ -37,6 +41,7 @@ fn rig_with(sb: Sandbox, extra_env: Vec<(String, String)>) -> Rig {
     std::fs::set_permissions(&engine, std::fs::Permissions::from_mode(0o755)).unwrap();
     let log = sb.dir.join("engine.log");
     let mut config: Config = sb.config();
+    config.chrome = chrome;
     config.env = vec![
         (
             "PATH".into(),
@@ -1354,6 +1359,91 @@ fn what_the_daemon_answers_itself_never_reaches_the_engine() {
         .collect();
     assert_eq!(sent.len(), 1, "only the message went: {sent:?}");
     r.stop();
+}
+
+/// REQ-630, OPEN-20: a conversation opened from a pane with no environment (what the phone's
+/// button and a resume send) starts in the pane's folder, which is the workspace's here, and the
+/// node says so.
+#[test]
+fn a_conversation_opened_with_no_environment_starts_in_the_panes_folder() {
+    let mut r = rig();
+    let (node, _) = r.open_with(None, vec!["hola"], None);
+    let cwd = r.conv(&node)["cwd"].as_str().unwrap().to_owned();
+    assert!(std::path::Path::new(&cwd).is_absolute(), "{cwd}");
+    wait_for("the engine to start", || {
+        log_lines(&r.log).iter().any(|l| l.starts_with("start"))
+    });
+    let start = log_lines(&r.log)
+        .into_iter()
+        .find(|l| l.starts_with("start"))
+        .unwrap();
+    assert!(
+        start.contains(&format!("cwd={cwd}")),
+        "{start} (node says {cwd})"
+    );
+}
+
+/// REQ-634: the engine gets the Claude in Chrome tools when `config.toml` leaves them on, and not
+/// when it turns them off, and what the person typed wins; a conversation opened with no
+/// arguments (a resume, the phone's button) gets the default.
+#[test]
+fn the_engine_is_given_chrome_when_the_config_says_so_and_what_is_typed_wins() {
+    let start_of = |r: &Rig| {
+        wait_for("the engine to start", || {
+            log_lines(&r.log).iter().any(|l| l.starts_with("start"))
+        });
+        log_lines(&r.log)
+            .into_iter()
+            .find(|l| l.starts_with("start"))
+            .unwrap()
+    };
+    // on by default: a plain open has `--chrome`
+    let mut on = rig_with_chrome(Sandbox::new(), Vec::new(), true);
+    on.open_with(None, vec!["hola"], None);
+    let s = start_of(&on);
+    assert!(
+        s.contains("\"--chrome\"") && !s.contains("--no-chrome"),
+        "{s}"
+    );
+    on.daemon.take().unwrap().stop();
+    // typed `--no-chrome` wins over the config
+    let mut off_typed = rig_with_chrome(Sandbox::new(), Vec::new(), true);
+    off_typed.open_with(None, vec!["--no-chrome", "hola"], None);
+    let s = start_of(&off_typed);
+    assert!(
+        s.contains("--no-chrome") && !s.contains("\"--chrome\""),
+        "{s}"
+    );
+    off_typed.daemon.take().unwrap().stop();
+    // off in the config: nothing is passed, and a typed `--chrome` wins
+    let mut off = rig_with_chrome(Sandbox::new(), Vec::new(), false);
+    off.open_with(None, vec!["hola"], None);
+    let s = start_of(&off);
+    assert!(!s.contains("chrome"), "{s}");
+    off.daemon.take().unwrap().stop();
+    let mut typed = rig_with_chrome(Sandbox::new(), Vec::new(), false);
+    typed.open_with(None, vec!["--chrome", "hola"], None);
+    assert!(start_of(&typed).contains("\"--chrome\""));
+    typed.daemon.take().unwrap().stop();
+}
+
+/// REQ-572: `jwn claude` adds `--prompt-suggestions false` when `config.toml` turns the
+/// suggestions off, and the daemon must serve it, or the person would silently get the original claude.
+#[test]
+fn a_prompt_suggestions_argument_is_served_and_reaches_the_engine() {
+    let mut r = rig();
+    r.open_with(None, vec!["--prompt-suggestions", "false", "hola"], None);
+    wait_for("the engine to start", || {
+        log_lines(&r.log).iter().any(|l| l.starts_with("start"))
+    });
+    let start = log_lines(&r.log)
+        .into_iter()
+        .find(|l| l.starts_with("start"))
+        .unwrap();
+    assert!(
+        start.contains("\"--prompt-suggestions\", \"false\"") && !start.contains("\"true\""),
+        "{start}"
+    );
 }
 
 #[test]

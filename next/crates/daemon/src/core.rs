@@ -135,6 +135,8 @@ pub struct Core {
     /// The conversations of the panes that run `claude`, by pane id, and where they are kept.
     pub convs: HashMap<Id, crate::engine::Conv>,
     pub conv_dir: Option<PathBuf>,
+    /// The conversations get the Claude in Chrome tools unless they say otherwise (REQ-634).
+    pub chrome: bool,
     /// `gh`, for what the person asks of GitHub; and the daemon's state folder, where the files
     /// that brief a review are written (REQ-584).
     pub gh: Option<PathBuf>,
@@ -181,6 +183,7 @@ impl Core {
             history_dir: None,
             convs: HashMap::new(),
             conv_dir: None,
+            chrome: false,
             gh: None,
             state_dir: None,
             stopping: false,

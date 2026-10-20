@@ -500,6 +500,7 @@ mod tests {
                 github_every: Duration::from_millis(100),
                 conversation: false,
                 projects: dir.join("projects"),
+                chrome: false,
             };
             Pc {
                 dir,

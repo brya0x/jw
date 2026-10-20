@@ -39,6 +39,7 @@ impl Sandbox {
             github_every: Duration::from_millis(100),
             conversation: false,
             projects: self.dir.join("projects"),
+            chrome: false,
         }
     }
 

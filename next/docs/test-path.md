@@ -52,8 +52,8 @@ doc says a few answered locally with no model call; the rest are unknown. Also h
 a loop row, RISK-50).
 
 **C. Not in jwn at all** (so a person who needs one still types `command claude`):
-- Flags. `parse_args` serves 10 (`--resume`/`-r`, `--session-id`, `--name`/`-n`, `--model`, `--effort`,
-  `--permission-mode`, `--add-dir`, `--settings`, `--agent`, `--continue`/`-c`) and refuses every other flag, and the binary then runs the
+- Flags. `parse_args` serves 13 (`--resume`/`-r`, `--session-id`, `--name`/`-n`, `--model`, `--effort`,
+  `--permission-mode`, `--add-dir`, `--settings`, `--agent`, `--continue`/`-c`, `--chrome`, `--no-chrome`, `--prompt-suggestions`) and refuses every other flag, and the binary then runs the
   original: `--dangerously-skip-permissions`, `--permission-mode bypassPermissions`,
   `--allowedTools` and `--disallowedTools`, `--tools`, `--mcp-config` and `--strict-mcp-config`,
   `--append-system-prompt` and `--system-prompt`, `--agents`, `--worktree`, `--fork-session`,

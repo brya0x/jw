@@ -697,6 +697,16 @@ pub fn open_conversation(
     if let Some(a) = &parsed.agent {
         extra.extend(["--agent".into(), a.clone()]);
     }
+    if let Some(v) = &parsed.prompt_suggestions {
+        extra.extend(["--prompt-suggestions".into(), v.clone()]);
+    }
+    // The Claude in Chrome tools: what the person typed, else what `config.toml` says (REQ-634).
+    let chrome_default = shared.lock().chrome;
+    match parsed.chrome.unwrap_or(chrome_default) {
+        true => extra.push("--chrome".into()),
+        false if parsed.chrome.is_some() => extra.push("--no-chrome".into()),
+        false => {}
+    }
     let node = new_id();
     let session = st.session.clone();
     st.cwd = Some(cwd.to_string_lossy().into_owned());

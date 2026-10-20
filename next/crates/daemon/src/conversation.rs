@@ -82,6 +82,11 @@ pub struct OpenArgs {
     pub add_dirs: Vec<String>,
     pub settings: Option<String>,
     pub agent: Option<String>,
+    /// `--chrome` or `--no-chrome`, when the person typed one (REQ-634).
+    pub chrome: Option<bool>,
+    /// `--prompt-suggestions <true|false>`, which `jwn claude` adds when `config.toml` turns the
+    /// suggestions off (REQ-572).
+    pub prompt_suggestions: Option<String>,
     pub message: Option<String>,
 }
 
@@ -325,8 +330,12 @@ pub fn parse_args(args: &[String]) -> Result<OpenArgs, String> {
             out.continue_latest = true;
             continue;
         }
+        if flag == "--chrome" || flag == "--no-chrome" {
+            out.chrome = Some(flag == "--chrome");
+            continue;
+        }
         let long = match flag {
-            "--settings" | "--agent" => flag,
+            "--settings" | "--agent" | "--prompt-suggestions" => flag,
             other => match VALUED.iter().find(|(f, _)| *f == other) {
                 Some((_, long)) => long,
                 None => return Err(format!("{flag} is not served")),
@@ -354,6 +363,7 @@ pub fn parse_args(args: &[String]) -> Result<OpenArgs, String> {
             "--add-dir" => out.add_dirs.push(value),
             "--settings" => out.settings = Some(value),
             "--agent" => out.agent = Some(value),
+            "--prompt-suggestions" => out.prompt_suggestions = Some(value),
             _ => unreachable!("every long flag is handled"),
         }
     }
@@ -3938,6 +3948,19 @@ mod tests {
         assert_eq!(a.message.as_deref(), Some("arregla esto"));
         assert!(args(&["-c"]).unwrap().continue_latest);
         assert_eq!(args(&["-r", "abc"]).unwrap().resume.as_deref(), Some("abc"));
+        // REQ-634, REQ-572: Claude in Chrome and the suggestions are served
+        assert_eq!(args(&["--chrome"]).unwrap().chrome, Some(true));
+        assert_eq!(args(&["--no-chrome", "hola"]).unwrap().chrome, Some(false));
+        assert_eq!(args(&["hola"]).unwrap().chrome, None);
+        let q = args(&["--prompt-suggestions", "false"]).unwrap();
+        assert_eq!(q.prompt_suggestions.as_deref(), Some("false"));
+        assert_eq!(
+            args(&["--prompt-suggestions=true"])
+                .unwrap()
+                .prompt_suggestions
+                .as_deref(),
+            Some("true")
+        );
         assert_eq!(args(&[]).unwrap(), OpenArgs::default());
         // what the engine cannot serve runs the original (REQ-373)
         for bad in [

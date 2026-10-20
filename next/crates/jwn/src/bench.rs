@@ -53,6 +53,7 @@ pub fn run() -> Result<(), String> {
         github_every: std::time::Duration::from_secs(60),
         conversation: false,
         projects: dir.join("projects"),
+        chrome: false,
     };
     let socket = config.socket.clone();
     let daemon =

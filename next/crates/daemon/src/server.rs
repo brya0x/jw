@@ -61,6 +61,20 @@ pub struct Config {
     /// The folder of the personal settings of projects; `<config dir>/projects` when from the
     /// identity (REQ-483).
     pub projects: PathBuf,
+    /// Every conversation is given the Claude in Chrome tools (`--chrome`); on unless
+    /// `config.toml` says `chrome = false`, and a conversation's own `--chrome` or `--no-chrome`
+    /// wins (REQ-634).
+    pub chrome: bool,
+}
+
+/// Whether `config.toml` leaves Claude in Chrome on for the conversations: `chrome = false` turns it
+/// off, and anything else, a file with no such key or one that is not TOML, leaves it on.
+pub fn chrome_in(config: &str) -> bool {
+    config
+        .parse::<toml::Table>()
+        .ok()
+        .and_then(|t| t.get("chrome").and_then(toml::Value::as_bool))
+        .unwrap_or(true)
 }
 
 impl Config {
@@ -81,6 +95,10 @@ impl Config {
             conversation: std::env::var(identity::env_var("CONVERSATION"))
                 .map_or(true, |v| v != "0"),
             projects: identity::config_dir().join("projects"),
+            chrome: chrome_in(
+                &std::fs::read_to_string(identity::config_dir().join("config.toml"))
+                    .unwrap_or_default(),
+            ),
         }
     }
 
@@ -171,6 +189,7 @@ impl Daemon {
         shared.lock().gh = config.gh.clone();
         shared.lock().state_dir = Some(config.state_dir.clone());
         shared.lock().swap = config.conversation && config.hook_exe.is_some();
+        shared.lock().chrome = config.chrome;
         shared.lock().mobile.clone().resume();
         if let Some(exe) = &config.hook_exe {
             shared.lock().hooks = Some(crate::launch::write_hooks(&config.state_dir, exe)?);
@@ -401,5 +420,22 @@ fn handle(shared: &Shared, id: u64, msg: ClientMsg) {
                 },
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod chrome_tests {
+    use super::chrome_in;
+
+    /// REQ-634: on unless `config.toml` says `chrome = false`.
+    #[test]
+    fn chrome_is_on_unless_the_config_says_false() {
+        assert!(chrome_in(""));
+        assert!(chrome_in("suggestions = false\n"));
+        assert!(chrome_in("chrome = true\n"));
+        assert!(!chrome_in("chrome = false\n"));
+        // not a boolean, or not TOML: on
+        assert!(chrome_in("chrome = \"no\"\n"));
+        assert!(chrome_in("this is = = not toml"));
     }
 }
