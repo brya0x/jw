@@ -178,13 +178,13 @@ enum Hit {
 }
 
 /// The pieces of the footer of a conversation `iw` wide, each with its column from the left of
-/// the pane, its text, its colour and what a click on it opens: the agents that run, the mode
+/// the pane, its text, its colour and what a click on it opens: what runs (agents, shells and monitors), the mode
 /// with the key that changes it, the model, and at the right edge the key of the list of keys.
 /// A narrow pane gives way from the right: the word «teclas», then the hint of the mode, then
-/// the word «agentes» (REQ-598).
+/// the words of what runs, which fall back to their total (REQ-598).
 fn foot(conv: &Conversation, iw: usize) -> Vec<(usize, String, Rgb, Hit)> {
     let (mode, mode_colour) = mode_look(conv.mode);
-    let running = agents::running(conv);
+    let running = agents::counts(conv);
     let steps: [(bool, bool, &str); 4] = [
         (true, true, "^/ teclas"),
         (true, true, "^/"),
@@ -222,20 +222,29 @@ fn foot(conv: &Conversation, iw: usize) -> Vec<(usize, String, Rgb, Hit)> {
 fn foot_left(
     conv: &Conversation,
     mode: &str,
-    running: usize,
+    running: agents::Counts,
     word: bool,
     hint: bool,
 ) -> Vec<(String, Option<Rgb>, Hit)> {
     let mut out = Vec::new();
     let dot = |out: &mut Vec<_>| out.push((" · ".to_owned(), Some(look::dim()), Hit::None));
-    if running > 0 {
+    if running.total() > 0 {
+        // Each kind that runs, in words while the pane has the room, else the number of all.
         let agents = if word {
-            format!(
-                "⚙ {running} {}",
-                if running == 1 { "agente" } else { "agentes" }
-            )
+            let one = |n: usize, one: &str, many: &str| {
+                (n > 0).then(|| format!("{n} {}", if n == 1 { one } else { many }))
+            };
+            let parts: Vec<String> = [
+                one(running.agents, "agente", "agentes"),
+                one(running.shells, "shell", "shells"),
+                one(running.monitors, "monitor", "monitores"),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            format!("⚙ {}", parts.join(" · "))
         } else {
-            format!("⚙ {running}")
+            format!("⚙ {}", running.total())
         };
         out.push((agents, Some(look::yellow()), Hit::Agents));
         dot(&mut out);
@@ -801,7 +810,8 @@ impl Ui {
             return self.open_panel(conv, "tasks", "");
         }
         self.agents.open = !self.agents.open;
-        self.agents.focus = false;
+        // It opens with the keys in it; closed, they are the field's.
+        self.agents.focus = self.agents.open;
         None
     }
 
@@ -2077,32 +2087,37 @@ impl Ui {
             return self.pop_key(conv, ev);
         }
         let ctrl = ev.modifiers.contains(KeyModifiers::CONTROL);
-        // The keys go to the area of the agents until one is pressed that is not its own.
+        // While the area of what runs is open and has the keys, they are its own: the lines, the
+        // sections, `x`, `⇥` to the field and `esc` to close it (REQ-601). What has `^` falls through
+        // (`^B`, `^C`, `^O`…), and so do the keys that scroll the conversation.
         if self.agents.focus && self.agents.open {
-            match ev.code {
-                KeyCode::Up | KeyCode::Char('k') if !ctrl => {
-                    self.agents.step(conv, false);
-                    return None;
+            let ctrl_key = ctrl || matches!(ev.code, KeyCode::PageUp | KeyCode::PageDown);
+            if !ctrl_key {
+                match ev.code {
+                    KeyCode::Up | KeyCode::Char('k') => self.agents.step(conv, false),
+                    KeyCode::Down | KeyCode::Char('j') => self.agents.step(conv, true),
+                    KeyCode::Left | KeyCode::Char('h') => self.agents.jump(conv, false),
+                    KeyCode::Right | KeyCode::Char('l') => self.agents.jump(conv, true),
+                    KeyCode::Char('g') | KeyCode::Home => self.agents.edge(conv, false),
+                    KeyCode::Char('G') | KeyCode::End => self.agents.edge(conv, true),
+                    KeyCode::Char('x') => {
+                        return self
+                            .agents
+                            .lit(conv)
+                            .filter(|t| t.state == contract::conversation::TaskState::Run)
+                            .map(|t| Act::StopTask {
+                                node,
+                                task: t.id.clone(),
+                            });
+                    }
+                    KeyCode::Tab => self.agents.focus = false,
+                    KeyCode::Esc => {
+                        self.agents.open = false;
+                        self.agents.focus = false;
+                    }
+                    _ => {}
                 }
-                KeyCode::Down | KeyCode::Char('j') if !ctrl => {
-                    self.agents.step(conv, true);
-                    return None;
-                }
-                KeyCode::Char('x') if !ctrl => {
-                    return self
-                        .agents
-                        .lit(conv)
-                        .filter(|t| t.state == contract::conversation::TaskState::Run)
-                        .map(|t| Act::StopTask {
-                            node,
-                            task: t.id.clone(),
-                        });
-                }
-                KeyCode::Esc | KeyCode::Tab => {
-                    self.agents.focus = false;
-                    return None;
-                }
-                _ => self.agents.focus = false,
+                return None;
             }
         }
         // Another `claude` has the session: it is read, not written (REQ-575). What changes the
@@ -3672,7 +3687,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("{s:?} is not in {foot:?}"))
         };
         assert!(
-            at("⚙ 1 agente") < at("manual")
+            at("⚙ 1 agente · 1 shell") < at("manual")
                 && at("manual") < at("⇧tab")
                 && at("⇧tab") < at("sonnet-5.5"),
             "agents · mode · model: {foot:?}"
@@ -3705,11 +3720,12 @@ mod tests {
         );
     }
 
-    /// REQ-601: with room for it `^B` opens the area, `⇥` gives it the keys, `j` `k` light a
-    /// task, `x` stops the one that runs and `esc` takes the keys back; with no room `^B` lists
-    /// the tasks over the conversation as before.
+    /// REQ-601: with room for it `^B` opens the area with the keys in it: `↑` `↓` `j` `k` walk
+    /// the lines, `←` `→` jump a section, `x` stops the one that runs, `⇥` gives the keys to the
+    /// field and brings them back, `esc` closes; with no room `^B` lists the tasks over the
+    /// conversation as before.
     #[test]
-    fn ctrl_b_opens_the_area_of_the_agents_when_there_is_room_and_its_keys_work_there() {
+    fn ctrl_b_opens_the_area_with_the_keys_in_it_and_they_walk_the_sections() {
         let mut conv = with_agent();
         let node = conv.head.id.clone();
         let mut ui = Ui::default();
@@ -3723,41 +3739,62 @@ mod tests {
         press(&mut ui, &conv, KeyCode::Esc);
         ui.agents.fits(140);
         assert_eq!(ui.key(&conv, &ctrl_b), None);
-        assert!(ui.agents.open && !ui.has_pop(), "room: the area opens");
-        assert_eq!(press(&mut ui, &conv, KeyCode::Tab), None);
-        assert!(ui.agents.focus, "the keys go to the area");
-        let running: Vec<String> = conv
-            .tasks
-            .iter()
-            .filter(|t| t.state == contract::conversation::TaskState::Run)
-            .map(|t| t.id.clone())
-            .collect();
-        assert!(!running.is_empty());
-        let lit = ui.agents.lit(&conv).unwrap().id.clone();
+        assert!(
+            ui.agents.open && ui.agents.focus && !ui.has_pop(),
+            "room: the area opens with the keys in it"
+        );
+        // the lit line is the subagent that runs; ↓ goes on into the shells, ← → jump sections
+        let lit = |ui: &Ui, conv: &Conversation| ui.agents.lit(conv).unwrap().id.clone();
+        assert_eq!(lit(&ui, &conv), "ag1");
+        press(&mut ui, &conv, KeyCode::Down);
+        assert_eq!(lit(&ui, &conv), "bs02u3", "across into the shells");
+        press(&mut ui, &conv, KeyCode::Up);
+        press(&mut ui, &conv, KeyCode::Right);
+        assert_eq!(lit(&ui, &conv), "bs02u3", "→ the first of the next section");
+        press(&mut ui, &conv, KeyCode::Left);
+        assert_eq!(
+            lit(&ui, &conv),
+            "ag1",
+            "← from the first of a section goes to the section before"
+        );
+        press(&mut ui, &conv, KeyCode::Char('h'));
+        assert_eq!(lit(&ui, &conv), "ag1", "and there is none before the first");
+        // x stops the one that runs
         assert_eq!(
             press(&mut ui, &conv, KeyCode::Char('x')),
             Some(Act::StopTask {
                 node: node.clone(),
-                task: lit
+                task: "ag1".into()
             })
         );
-        press(&mut ui, &conv, KeyCode::Char('j'));
-        press(&mut ui, &conv, KeyCode::Char('k'));
-        assert_eq!(
-            ui.editor.text(),
-            "",
-            "j and k moved the light: they are not typed"
+        // what is typed is not typed while the area has the keys, nor sent
+        type_in(&mut ui, &conv, "abc");
+        assert_eq!(ui.editor.text(), "", "the area has the keys");
+        assert_eq!(press(&mut ui, &conv, KeyCode::Enter), None);
+        // ⇥ gives the keys to the field and leaves the area open; ⇥ brings them back
+        assert_eq!(press(&mut ui, &conv, KeyCode::Tab), None);
+        assert!(ui.agents.open && !ui.agents.focus);
+        type_in(&mut ui, &conv, "hola");
+        assert_eq!(ui.editor.text(), "hola", "typing is the field's");
+        assert_eq!(press(&mut ui, &conv, KeyCode::Tab), None);
+        assert!(ui.agents.focus, "⇥ again: the keys are the area's");
+        // ^C is not the area's: it falls through (here nothing runs, so it clears the line)
+        ui.key(
+            &conv,
+            &KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
         );
+        assert_eq!(ui.editor.text(), "");
+        // esc closes it and gives the keys back
         assert_eq!(press(&mut ui, &conv, KeyCode::Esc), None);
-        assert!(
-            !ui.agents.focus && ui.agents.open,
-            "esc gives the keys back and leaves the area"
-        );
+        assert!(!ui.agents.open && !ui.agents.focus);
         type_in(&mut ui, &conv, "x");
         assert_eq!(ui.editor.text(), "x", "and typing is the field's again");
+        // ^B opens it again and closes it
+        assert_eq!(ui.key(&conv, &ctrl_b), None);
+        assert!(ui.agents.open && ui.agents.focus);
         conv.tasks.clear();
         assert_eq!(ui.key(&conv, &ctrl_b), None);
-        assert!(!ui.agents.open, "^B closes it");
+        assert!(!ui.agents.open && !ui.agents.focus, "^B closes it");
     }
 
     /// REQ-598: a narrow pane gives way from the right, and the mode and the model are the last to go.
@@ -3776,23 +3813,29 @@ mod tests {
         };
         let wide = line(80);
         assert!(
-            wide.contains("⚙ 1 agente") && wide.contains("⇧tab") && wide.ends_with("^/ teclas"),
+            wide.contains("⚙ 1 agente · 1 shell")
+                && wide.contains("⇧tab")
+                && wide.ends_with("^/ teclas"),
             "{wide:?}"
         );
-        let no_word = line(46);
+        let no_word = line(54);
         assert!(
-            no_word.ends_with("^/") && no_word.contains("⇧tab") && no_word.contains("⚙ 1 agente"),
+            no_word.ends_with("^/")
+                && no_word.contains("⇧tab")
+                && no_word.contains("⚙ 1 agente · 1 shell"),
             "{no_word:?}"
         );
-        let no_hint = line(40);
+        let no_hint = line(48);
         assert!(
-            !no_hint.contains("⇧tab") && no_hint.contains("⚙ 1 agente") && no_hint.ends_with("^/"),
+            !no_hint.contains("⇧tab")
+                && no_hint.contains("⚙ 1 agente · 1 shell")
+                && no_hint.ends_with("^/"),
             "{no_hint:?}"
         );
         let short = line(32);
         assert!(
-            short.contains("⚙ 1 ")
-                && !short.contains("agentes")
+            short.contains("⚙ 2")
+                && !short.contains("agente")
                 && short.contains("manual")
                 && short.contains("sonnet-5.5"),
             "{short:?}"

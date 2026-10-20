@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use contract::conversation::{CommandSource, Conversation, SavedConversation, TaskState};
 
+use super::agents::Section;
 use super::{Rgb, look};
 
 /// What choosing a row does.
@@ -212,9 +213,10 @@ pub fn skills(conv: &Conversation) -> Panel {
 }
 
 pub fn tasks(conv: &Conversation) -> Panel {
-    // Newest first, each with how long ago it began; `x` stops the one that runs (REQ-433).
+    // By section (subagents, shells, monitors), the newest first in each, each with how long ago it
+    // began and the kind it is; `x` stops the one that runs (REQ-433, REQ-601).
     let mut newest: Vec<_> = conv.tasks.iter().collect();
-    newest.sort_by_key(|t| std::cmp::Reverse(t.started));
+    newest.sort_by_key(|t| (Section::of(t.kind) as usize, std::cmp::Reverse(t.started)));
     let rows = newest
         .into_iter()
         .map(|t| {
@@ -224,8 +226,9 @@ pub fn tasks(conv: &Conversation) -> Panel {
                 TaskState::Stopped => ("detenido", look::dim()),
                 TaskState::Failed => ("falló", look::red()),
             };
+            let tag = format!("{} · {state}", Section::of(t.kind).word());
             let row =
-                Row::new(t.label.clone(), t.info.clone().unwrap_or_default()).tagged(state, colour);
+                Row::new(t.label.clone(), t.info.clone().unwrap_or_default()).tagged(&tag, colour);
             Row {
                 at: Some(t.started),
                 act: if t.state == TaskState::Run {
@@ -442,8 +445,8 @@ mod tests {
         let c = fixture();
         let t = tasks(&c);
         assert_eq!(t.rows.len(), 2);
-        assert_eq!(t.rows[0].tag.as_ref().unwrap().0, "en curso");
-        assert_eq!(t.rows[1].tag.as_ref().unwrap().0, "detenido");
+        assert_eq!(t.rows[0].tag.as_ref().unwrap().0, "shell · en curso");
+        assert_eq!(t.rows[1].tag.as_ref().unwrap().0, "monitor · detenido");
         let a = artifacts(&c);
         assert_eq!(
             a.rows[0].act,

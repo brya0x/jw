@@ -321,8 +321,9 @@ pub struct Task {
     pub started: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub info: Option<String>,
-    /// The `id` of the card in the items that shows this task, when it has one (a subagent):
-    /// its tools, tokens, steps and prompt are there (REQ-600).
+    /// The `id` of the item of the tool call that started it, when there is one: for a subagent
+    /// that is its card (its tools, tokens, steps and prompt are there), for a shell or a monitor
+    /// the `Bash` or `Monitor` call, whose `arg` is the command (REQ-600).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub item: Option<String>,
 }

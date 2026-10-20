@@ -1,9 +1,11 @@
-//! The area of the agents (spec REQ-601): at the right of a conversation wide enough for it, the
-//! subagents of the engine, newest first, one line for each (`name (model) → what it does`, and its
-//! time and tokens at the right), and under them, in sections, what the one that is lit was asked,
-//! the steps it took and what it does or said. It is open until it is closed (`^B`, or a click on
-//! the agents of the footer), with agents or without them. What runs in the background and is
-//! not a subagent (a shell, a monitor) is in `/tasks`.
+//! The area of what runs (spec REQ-601): at the right of a conversation wide enough for it, what
+//! the engine runs while the person works, in three sections: the subagents (a line for each,
+//! `name (model) → what it does`, and its time and tokens at the right), the shells Claude runs in
+//! the background and the monitors (and the loops that repeat). Under them, in sections, what the
+//! one that is lit is: what a subagent was asked and its steps, what a shell or a monitor runs. It
+//! is open until it is closed (`^B`, or a click on the agents of the footer) and has the keys
+//! while it is open: `↑` `↓` walk every line, `←` `→` jump a section, `x` stops, `⇥` gives the keys
+//! to the field and `esc` closes it.
 
 use std::cell::Cell;
 
@@ -15,16 +17,83 @@ use super::{Grid, Rgb, Style, clip, look};
 /// over the conversation instead (`/tasks`).
 pub const MIN_ROOM: usize = 100;
 /// Columns of the area, the line that separates it included, in a panel `iw` wide inside: more
-/// room for what each agent does when the panel has it.
+/// room for what each one does when the panel has it.
 pub fn width(iw: usize) -> usize {
     if iw >= 150 { 60 } else { 46 }
 }
 
-/// Rows of the prompt and of what an agent said, at most.
+/// Rows of the prompt and of what a task said, at most.
 const PROMPT_ROWS: usize = 3;
 const SAID_ROWS: usize = 4;
+/// Lines of one section, at most: the newest.
+const SECTION_ROWS: usize = 6;
 
 type Rect = (usize, usize, usize, usize);
+
+/// The three kinds of what runs, in the order they are drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Section {
+    Agents,
+    Shells,
+    Monitors,
+}
+
+impl Section {
+    pub const ALL: [Section; 3] = [Section::Agents, Section::Shells, Section::Monitors];
+
+    /// The section a task is in: what the engine calls a monitor, a loop and what it does not
+    /// name are watching or repeating; a `Bash` is a shell.
+    pub fn of(kind: TaskKind) -> Section {
+        match kind {
+            TaskKind::Agent => Section::Agents,
+            TaskKind::Bash => Section::Shells,
+            TaskKind::Monitor | TaskKind::Loop | TaskKind::Other => Section::Monitors,
+        }
+    }
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Section::Agents => "subagentes",
+            Section::Shells => "shells",
+            Section::Monitors => "monitores",
+        }
+    }
+
+    /// How a task of this section is called in a list that mixes them.
+    pub fn word(self) -> &'static str {
+        match self {
+            Section::Agents => "subagente",
+            Section::Shells => "shell",
+            Section::Monitors => "monitor",
+        }
+    }
+}
+
+/// How many run of each kind: what the footer says.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Counts {
+    pub agents: usize,
+    pub shells: usize,
+    pub monitors: usize,
+}
+
+impl Counts {
+    pub fn total(self) -> usize {
+        self.agents + self.shells + self.monitors
+    }
+}
+
+pub fn counts(conv: &Conversation) -> Counts {
+    let mut c = Counts::default();
+    for t in conv.tasks.iter().filter(|t| t.state == TaskState::Run) {
+        match Section::of(t.kind) {
+            Section::Agents => c.agents += 1,
+            Section::Shells => c.shells += 1,
+            Section::Monitors => c.monitors += 1,
+        }
+    }
+    c
+}
 
 /// What the area remembers: whether it is open, whether the keys go to it and which task is lit.
 #[derive(Debug, Default, Clone)]
@@ -34,6 +103,49 @@ pub struct State {
     sel: Option<String>,
     /// Whether the pane is wide enough for the area, as the last frame found it.
     room: Cell<bool>,
+}
+
+/// A line of the list: the heading of a section, or a task.
+#[derive(Debug, Clone, Copy)]
+enum Line<'a> {
+    Head(Section, usize),
+    Row(&'a Task),
+}
+
+/// The tasks as the area lists them: by section, the newest first in each.
+pub fn rows(conv: &Conversation) -> Vec<&Task> {
+    Section::ALL
+        .iter()
+        .flat_map(|s| {
+            conv.tasks
+                .iter()
+                .rev()
+                .filter(move |t| Section::of(t.kind) == *s)
+                .take(SECTION_ROWS)
+        })
+        .collect()
+}
+
+/// The lines of the list: a heading for each section that has tasks, then them.
+fn lines(conv: &Conversation) -> Vec<Line<'_>> {
+    let mut out = Vec::new();
+    for s in Section::ALL {
+        let of: Vec<&Task> = rows(conv)
+            .into_iter()
+            .filter(|t| Section::of(t.kind) == s)
+            .collect();
+        if of.is_empty() {
+            continue;
+        }
+        let all = conv
+            .tasks
+            .iter()
+            .filter(|t| Section::of(t.kind) == s)
+            .count();
+        out.push(Line::Head(s, all));
+        out.extend(of.into_iter().map(Line::Row));
+    }
+    out
 }
 
 impl State {
@@ -49,7 +161,7 @@ impl State {
     }
 
     /// The task lit: the one chosen if it is still there, else the first that runs, else the
-    /// newest.
+    /// first of the list.
     pub fn lit<'a>(&self, conv: &'a Conversation) -> Option<&'a Task> {
         let tasks = rows(conv);
         self.sel
@@ -59,19 +171,63 @@ impl State {
             .or_else(|| tasks.first().copied())
     }
 
-    /// Light the task above or below the lit one.
-    pub fn step(&mut self, conv: &Conversation, down: bool) {
+    fn light(&mut self, conv: &Conversation, at: usize) {
+        self.sel = rows(conv).get(at).map(|t| t.id.clone());
+    }
+
+    fn at(&self, conv: &Conversation) -> usize {
         let tasks = rows(conv);
-        let at = self
-            .lit(conv)
+        self.lit(conv)
             .and_then(|l| tasks.iter().position(|t| t.id == l.id))
-            .unwrap_or(0);
-        let next = if down {
-            (at + 1).min(tasks.len().saturating_sub(1))
-        } else {
-            at.saturating_sub(1)
+            .unwrap_or(0)
+    }
+
+    /// Light the task above or below the lit one, across the sections.
+    pub fn step(&mut self, conv: &Conversation, down: bool) {
+        let at = self.at(conv);
+        let last = rows(conv).len().saturating_sub(1);
+        self.light(
+            conv,
+            if down {
+                (at + 1).min(last)
+            } else {
+                at.saturating_sub(1)
+            },
+        );
+    }
+
+    /// Light the first task, or the last.
+    pub fn edge(&mut self, conv: &Conversation, last: bool) {
+        let n = rows(conv).len();
+        self.light(conv, if last { n.saturating_sub(1) } else { 0 });
+    }
+
+    /// Light the first task of the next section or, going back, of this one if the lit is not
+    /// its first, else of the previous.
+    pub fn jump(&mut self, conv: &Conversation, forward: bool) {
+        let tasks = rows(conv);
+        let Some(here) = self.lit(conv).map(|t| Section::of(t.kind)) else {
+            return;
         };
-        self.sel = tasks.get(next).map(|t| t.id.clone());
+        let first_of = |s: Section| tasks.iter().position(|t| Section::of(t.kind) == s);
+        let order: Vec<Section> = Section::ALL
+            .into_iter()
+            .filter(|s| first_of(*s).is_some())
+            .collect();
+        let Some(i) = order.iter().position(|s| *s == here) else {
+            return;
+        };
+        let at = self.at(conv);
+        let target = if forward {
+            order.get(i + 1).copied()
+        } else if first_of(here) != Some(at) {
+            Some(here)
+        } else {
+            i.checked_sub(1).map(|j| order[j])
+        };
+        if let Some(at) = target.and_then(first_of) {
+            self.light(conv, at);
+        }
     }
 
     /// A click at row `y` of the area whose top is `top`: light the task there, if it is one.
@@ -79,37 +235,16 @@ impl State {
         let Some(row) = y.checked_sub(top + 1) else {
             return false;
         };
-        match rows(conv).get(row) {
-            Some(t) => {
+        match lines(conv).get(row) {
+            Some(Line::Row(t)) => {
                 self.sel = Some(t.id.clone());
                 self.focus = true;
                 true
             }
-            None => false,
+            _ => false,
         }
     }
 }
-
-/// The subagents as the area lists them: the newest first.
-pub fn rows(conv: &Conversation) -> Vec<&Task> {
-    conv.tasks
-        .iter()
-        .rev()
-        .filter(|t| t.kind == TaskKind::Agent)
-        .take(LIST_ROWS)
-        .collect()
-}
-
-/// How many subagents run.
-pub fn running(conv: &Conversation) -> usize {
-    conv.tasks
-        .iter()
-        .filter(|t| t.kind == TaskKind::Agent && t.state == TaskState::Run)
-        .count()
-}
-
-/// Rows of the list, at most.
-const LIST_ROWS: usize = 8;
 
 /// The conversation's rectangle and the area's, when the area is shown.
 pub fn split((ix, iy, iw, ih): Rect, shown: bool) -> (Rect, Option<Rect>) {
@@ -122,13 +257,23 @@ pub fn split((ix, iy, iw, ih): Rect, shown: bool) -> (Rect, Option<Rect>) {
 }
 
 fn mark(t: &Task, now_ms: u64) -> (char, Rgb) {
-    match t.state {
-        TaskState::Run => (
+    match (t.state, Section::of(t.kind)) {
+        // A monitor that runs does not turn: it watches.
+        (TaskState::Run, Section::Monitors) => (
+            if t.kind == TaskKind::Loop {
+                '↻'
+            } else {
+                '◉'
+            },
+            look::yellow(),
+        ),
+        (TaskState::Run, _) => (
             ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'][(now_ms / 100 % 10) as usize],
             look::yellow(),
         ),
-        TaskState::Done => ('✓', look::green()),
-        TaskState::Stopped | TaskState::Failed => ('■', look::red()),
+        (TaskState::Done, _) => ('✓', look::green()),
+        (TaskState::Failed, _) => ('✗', look::red()),
+        (TaskState::Stopped, _) => ('■', look::dim()),
     }
 }
 
@@ -153,6 +298,9 @@ fn kilo(n: u64) -> String {
 
 /// The card of a task, when it is a subagent shown in the items.
 fn card<'a>(conv: &'a Conversation, t: &Task) -> Option<&'a Item> {
+    if t.kind != TaskKind::Agent {
+        return None;
+    }
     let id = t.item.as_deref()?;
     conv.items
         .iter()
@@ -160,7 +308,18 @@ fn card<'a>(conv: &'a Conversation, t: &Task) -> Option<&'a Item> {
         .find(|i| matches!(i, Item::Agent { id: a, .. } if a == id))
 }
 
-/// The kind of subagent and the model it runs with: `Explore (haiku-5.5)`.
+/// The command of a shell or a monitor: what its tool call was given, when the item of that call
+/// is still in the conversation. The engine's own words for the task (`label`) are a description.
+fn command<'a>(conv: &'a Conversation, t: &Task) -> Option<&'a str> {
+    let id = t.item.as_deref()?;
+    conv.items.iter().rev().find_map(|i| match i {
+        Item::Tool { id: i, arg, .. } if i == id && !arg.trim().is_empty() => Some(arg.as_str()),
+        _ => None,
+    })
+}
+
+/// What a line is called: the kind of subagent and the model it runs with (`Explore (haiku-5.5)`),
+/// or the command a shell runs and what a monitor watches.
 fn name(conv: &Conversation, t: &Task) -> String {
     match card(conv, t) {
         Some(Item::Agent {
@@ -169,11 +328,12 @@ fn name(conv: &Conversation, t: &Task) -> String {
             ..
         }) => format!("{name} ({m})"),
         Some(Item::Agent { name, .. }) => name.clone(),
-        _ => "agente".to_owned(),
+        _ if t.kind == TaskKind::Agent => "agente".to_owned(),
+        _ => command(conv, t).unwrap_or(&t.label).to_owned(),
     }
 }
 
-/// What it does: what the engine says it is doing, else its last step; when it ended, how.
+/// What a subagent does: what the engine says it is doing, else its last step; when it ended, how.
 fn doing(conv: &Conversation, t: &Task) -> String {
     match t.state {
         TaskState::Run => t
@@ -190,7 +350,7 @@ fn doing(conv: &Conversation, t: &Task) -> String {
     }
 }
 
-/// Its time and tokens: `1:12 · 38k`.
+/// Its time and tokens: `1:12 · 38k`; a shell and a monitor have only the time.
 fn numbers(conv: &Conversation, t: &Task, now_ms: u64) -> String {
     let elapsed = now_ms.saturating_sub(t.started);
     match card(conv, t) {
@@ -233,8 +393,8 @@ fn wrap(text: &str, width: usize, rows: usize) -> Vec<String> {
     out.iter().map(|l| clip(l, width)).collect()
 }
 
-/// Draw the area in `(x, y, w, h)`: a line at its left, the title, a line for each subagent and
-/// the detail of the one that is lit in sections (REQ-601).
+/// Draw the area in `(x, y, w, h)`: a line at its left, the title, the sections with a line for
+/// each task and the detail of the one that is lit (REQ-601).
 pub fn draw(
     g: &mut Grid,
     conv: &Conversation,
@@ -254,124 +414,200 @@ pub fn draw(
     let tx = x + 2;
     let tw = w.saturating_sub(3);
     let bottom = y + h;
-    let running = running(conv);
-    g.put(tx, y, "subagentes", Style::fg(accent).bold());
+    let hint = bottom.saturating_sub(1);
+    let running = counts(conv).total();
+    // Bold when it has the keys, dim when the field has them.
+    let title = if state.focus {
+        Style::fg(accent).bold()
+    } else {
+        Style::fg(look::dim())
+    };
+    g.put(tx, y, "en marcha", title);
     let how_many = if running > 0 {
         format!(" · {running} corriendo")
     } else {
-        " · ninguno".to_owned()
+        " · nada".to_owned()
     };
-    g.put(tx + 10, y, &how_many, Style::fg(look::dim()));
-    let tasks = rows(conv);
+    g.put(tx + 9, y, &how_many, Style::fg(look::dim()));
+    let list = lines(conv);
     let lit = state.lit(conv).map(|t| t.id.clone());
     let mut row = y + 1;
-    if tasks.is_empty() {
-        g.put(tx, row, "ninguno ahora", Style::fg(look::dim()));
+    if list.is_empty() {
+        g.put(tx, row, "nada corre ahora", Style::fg(look::dim()));
         row += 1;
     }
-    for t in &tasks {
-        let on = lit.as_deref() == Some(t.id.as_str());
-        let (m, colour) = mark(t, now_ms);
-        let right = numbers(conv, t, now_ms);
-        let left_room = tw.saturating_sub(right.chars().count() + 1);
-        let head = format!("{} {} {}", if on { '▸' } else { ' ' }, m, name(conv, t));
-        let head = clip(&head, left_room);
-        let used = head.chars().count();
-        let arrow = format!(" → {}", doing(conv, t));
-        let arrow = clip(&arrow, left_room.saturating_sub(used));
-        if on {
-            g.paint_bg(tx - 1, row, tw + 1, look::sel());
+    for line in &list {
+        if row >= hint {
+            break;
         }
-        let on_bg = |st: Style| if on { st.on(look::sel()) } else { st };
-        g.put(tx, row, &head, on_bg(Style::fg(look::fg()).bold()));
-        g.put(tx + 2, row, &m.to_string(), on_bg(Style::fg(colour).bold()));
-        g.put(tx + used, row, &arrow, on_bg(Style::fg(look::dim())));
-        let at = tx + tw - right.chars().count();
-        g.put(at, row, &right, on_bg(Style::fg(look::dim())));
+        match line {
+            Line::Head(s, n) => {
+                g.put(
+                    tx,
+                    row,
+                    &format!("{} · {n}", s.title()),
+                    Style::fg(look::dim()),
+                );
+            }
+            Line::Row(t) => {
+                let on = lit.as_deref() == Some(t.id.as_str());
+                let (m, colour) = mark(t, now_ms);
+                let right = numbers(conv, t, now_ms);
+                let left_room = tw.saturating_sub(right.chars().count() + 1);
+                let head = format!("{} {} {}", if on { '▸' } else { ' ' }, m, name(conv, t));
+                let head = clip(&head, left_room);
+                let used = head.chars().count();
+                // Only a subagent says what it does in its line; a shell is its command.
+                let arrow = if t.kind == TaskKind::Agent {
+                    clip(
+                        &format!(" → {}", doing(conv, t)),
+                        left_room.saturating_sub(used),
+                    )
+                } else {
+                    String::new()
+                };
+                if on {
+                    g.paint_bg(tx - 1, row, tw + 1, look::sel());
+                }
+                let on_bg = |st: Style| if on { st.on(look::sel()) } else { st };
+                let name_style = if on && state.focus {
+                    Style::fg(look::fg()).bold()
+                } else {
+                    Style::fg(look::fg())
+                };
+                g.put(tx, row, &head, on_bg(name_style));
+                g.put(tx + 2, row, &m.to_string(), on_bg(Style::fg(colour).bold()));
+                g.put(tx + used, row, &arrow, on_bg(Style::fg(look::dim())));
+                let at = tx + tw - right.chars().count();
+                g.put(at, row, &right, on_bg(Style::fg(look::dim())));
+            }
+        }
         row += 1;
     }
     let Some(t) = state.lit(conv) else {
         return;
     };
+    if row + 1 >= hint {
+        return;
+    }
     g.put(tx, row, &"─".repeat(tw), Style::fg(look::dim()));
     row += 1;
-    let hint = row_hint(bottom);
-    let card = card(conv, t);
-    let (prompt, description, steps) = match card {
+    let put = |g: &mut Grid, row: &mut usize, dx: usize, text: &str, st: Style| {
+        if *row < hint {
+            g.put(tx + dx, *row, &clip(text, tw.saturating_sub(dx)), st);
+            *row += 1;
+        }
+    };
+    let dim = Style::fg(look::dim());
+    let plain = Style::fg(look::fg());
+    match card(conv, t) {
         Some(Item::Agent {
             prompt,
             description,
             steps,
             ..
-        }) => (prompt.as_deref(), description.as_str(), steps.as_slice()),
-        _ => (None, t.label.as_str(), &[][..]),
-    };
-    let prompt_rows = prompt.map_or(Vec::new(), |p| wrap(p, tw.saturating_sub(2), PROMPT_ROWS));
-    let said_rows = t
-        .info
-        .as_deref()
-        .map_or(Vec::new(), |i| wrap(i, tw.saturating_sub(2), SAID_ROWS));
-    let section = |n: usize| if n == 0 { 0 } else { n + 1 };
-    let reserved = 1 + section(prompt_rows.len()) + section(said_rows.len());
-    let room = hint.saturating_sub(row).saturating_sub(reserved);
-    let shown = steps.len().min(room.saturating_sub(1));
-    let put = |g: &mut Grid, row: &mut usize, dx: usize, text: &str, st: Style| {
-        if *row < hint {
-            g.put(tx + dx, *row, &clip(text, tw.saturating_sub(dx)), st);
+        }) => {
+            put(g, &mut row, 0, description, plain.bold());
+            let prompt_rows = prompt
+                .as_deref()
+                .map_or(Vec::new(), |p| wrap(p, tw.saturating_sub(2), PROMPT_ROWS));
+            let said_rows = t
+                .info
+                .as_deref()
+                .map_or(Vec::new(), |i| wrap(i, tw.saturating_sub(2), SAID_ROWS));
+            let section = |n: usize| if n == 0 { 0 } else { n + 1 };
+            let reserved = section(prompt_rows.len()) + section(said_rows.len());
+            let room = hint.saturating_sub(row).saturating_sub(reserved);
+            let shown = steps.len().min(room.saturating_sub(1));
+            if !prompt_rows.is_empty() {
+                put(g, &mut row, 0, "prompt", dim);
+                for l in &prompt_rows {
+                    put(g, &mut row, 2, l, plain);
+                }
+            }
+            if shown > 0 {
+                put(g, &mut row, 0, "pasos", dim);
+                for (i, s) in steps[steps.len() - shown..].iter().enumerate() {
+                    let last = steps.len() - shown + i + 1 == steps.len();
+                    let (m, c) = if last && t.state == TaskState::Run {
+                        (mark(t, now_ms).0, look::yellow())
+                    } else {
+                        ('✓', look::green())
+                    };
+                    let (tool, rest) = s.split_once(' ').unwrap_or((s.as_str(), ""));
+                    if row < hint {
+                        g.put(tx + 2, row, &m.to_string(), Style::fg(c));
+                        g.put(tx + 4, row, tool, Style::fg(look::cyan()));
+                        let at = 5 + tool.chars().count();
+                        g.put(tx + at, row, &clip(rest, tw.saturating_sub(at)), plain);
+                        row += 1;
+                    }
+                }
+            }
+            if !said_rows.is_empty() {
+                put(
+                    g,
+                    &mut row,
+                    0,
+                    if t.state == TaskState::Run {
+                        "ahora"
+                    } else {
+                        "dijo"
+                    },
+                    dim,
+                );
+                for l in &said_rows {
+                    put(g, &mut row, 2, l, plain);
+                }
+            }
         }
-    };
-    put(g, &mut row, 0, description, Style::fg(look::fg()).bold());
-    row += 1;
-    if !prompt_rows.is_empty() {
-        put(g, &mut row, 0, "prompt", Style::fg(look::dim()));
-        row += 1;
-        for l in &prompt_rows {
-            put(g, &mut row, 2, l, Style::fg(look::fg()));
-            row += 1;
-        }
-    }
-    if shown > 0 {
-        put(g, &mut row, 0, "pasos", Style::fg(look::dim()));
-        row += 1;
-        for (i, s) in steps[steps.len() - shown..].iter().enumerate() {
-            let last = steps.len() - shown + i + 1 == steps.len();
-            let (m, c) = if last && t.state == TaskState::Run {
-                (mark(t, now_ms).0, look::yellow())
-            } else {
-                ('✓', look::green())
+        _ => {
+            // A shell: its command whole, what it does now or how it ended. A monitor: what it
+            // watches or repeats and what it last said.
+            let (what, last) = match (Section::of(t.kind), t.kind) {
+                (Section::Shells, _) => (
+                    "comando",
+                    if t.state == TaskState::Run {
+                        "ahora"
+                    } else {
+                        "terminó"
+                    },
+                ),
+                (_, TaskKind::Loop) => ("repite", "último"),
+                _ => ("vigila", "último"),
             };
-            let (tool, rest) = s.split_once(' ').unwrap_or((s.as_str(), ""));
-            put(g, &mut row, 2, &m.to_string(), Style::fg(c));
-            put(g, &mut row, 4, tool, Style::fg(look::cyan()));
-            let at = 5 + tool.chars().count();
-            put(g, &mut row, at, rest, Style::fg(look::fg()));
-            row += 1;
-        }
-    }
-    if !said_rows.is_empty() {
-        let title = if t.state == TaskState::Run {
-            "ahora"
-        } else {
-            "dijo"
-        };
-        put(g, &mut row, 0, title, Style::fg(look::dim()));
-        row += 1;
-        for l in &said_rows {
-            put(g, &mut row, 2, l, Style::fg(look::fg()));
-            row += 1;
+            let shown = command(conv, t).unwrap_or(&t.label);
+            put(g, &mut row, 0, what, dim);
+            for l in wrap(shown, tw.saturating_sub(2), PROMPT_ROWS) {
+                put(g, &mut row, 2, &l, plain);
+            }
+            // What the engine says it does, when that is more than the command again; else how it is.
+            let said = t
+                .info
+                .as_deref()
+                .filter(|i| !i.trim().is_empty() && *i != shown)
+                .or(Some(t.label.as_str()).filter(|l| *l != shown && t.state == TaskState::Run))
+                .map_or_else(
+                    || match t.state {
+                        TaskState::Run => "en marcha".to_owned(),
+                        TaskState::Done => "listo".to_owned(),
+                        TaskState::Stopped => "detenido".to_owned(),
+                        TaskState::Failed => "falló".to_owned(),
+                    },
+                    str::to_owned,
+                );
+            put(g, &mut row, 0, last, dim);
+            for l in wrap(&said, tw.saturating_sub(2), SAID_ROWS) {
+                put(g, &mut row, 2, &l, plain);
+            }
         }
     }
     g.put(
         tx,
         hint,
-        &clip("^B cierra · ⇥ elegir · x detener", tw),
-        Style::fg(look::dim()),
+        &clip("↑↓ ←→ · x detener · ⇥ campo · esc cierra", tw),
+        dim,
     );
-}
-
-/// The row of the keys at the foot of the area.
-fn row_hint(bottom: usize) -> usize {
-    bottom.saturating_sub(1)
 }
 
 #[cfg(test)]
@@ -380,16 +616,69 @@ mod tests {
 
     use super::*;
 
-    fn task(id: &str, state: TaskState, item: Option<&str>) -> Task {
+    fn task(id: &str, kind: TaskKind, state: TaskState, started: u64) -> Task {
         Task {
             id: id.into(),
-            kind: TaskKind::Agent,
+            kind,
             label: format!("label {id}"),
             state,
-            started: 0,
+            started,
             info: None,
-            item: item.map(str::to_owned),
+            item: None,
         }
+    }
+
+    /// One of each kind, two shells and a loop, oldest first as the node keeps them.
+    fn mixed() -> Conversation {
+        let mut conv = crate::tui::conversation::tests_fixture();
+        conv.items = vec![agent_card(
+            "c1",
+            &["Glob crates/**", "Read lib.rs", "Grep fn pair"],
+        )];
+        let mut agent = task("ag", TaskKind::Agent, TaskState::Run, 1);
+        agent.item = Some("c1".into());
+        agent.info = Some("Buscando el puerto del puente".into());
+        let mut done = task("ag0", TaskKind::Agent, TaskState::Done, 0);
+        done.label = "revisar N123".into();
+        let mut cargo = task("sh1", TaskKind::Bash, TaskState::Run, 2);
+        cargo.label = "cargo test -p jwn".into();
+        cargo.info = Some("compilando jwn".into());
+        let mut build = task("sh2", TaskKind::Bash, TaskState::Failed, 3);
+        build.label = "npm run build".into();
+        let mut tail = task("mo1", TaskKind::Monitor, TaskState::Run, 4);
+        tail.label = "tail -f app.log | grep ERROR".into();
+        tail.info = Some("último aviso hace 2 min".into());
+        let mut ci = task("mo2", TaskKind::Loop, TaskState::Run, 5);
+        ci.label = "revisar el CI cada 5 min".into();
+        conv.tasks = vec![done, agent, cargo, build, tail, ci];
+        conv
+    }
+
+    fn agent_card(id: &str, steps: &[&str]) -> Item {
+        Item::Agent {
+            id: id.into(),
+            name: "Explore".into(),
+            description: "mapear el puente".into(),
+            state: ToolState::Run,
+            tools: 14,
+            tokens: 38_400,
+            ms: 72_000,
+            last: Some("Grep".into()),
+            steps: steps.iter().map(|s| (*s).to_owned()).collect(),
+            prompt: Some("Busca cómo el daemon habla con el teléfono y no edites nada".into()),
+            model: Some("haiku-5.5".into()),
+        }
+    }
+
+    fn ids(conv: &Conversation) -> Vec<&str> {
+        rows(conv).iter().map(|t| t.id.as_str()).collect()
+    }
+
+    fn frame(conv: &Conversation, state: &State, w: usize, h: usize) -> (Grid, Vec<String>) {
+        let mut g = Grid::new(w + 10, h + 2);
+        draw(&mut g, conv, state, (10, 1, w, h), 1_000_000, look::blue());
+        let rows = g.rows_plain();
+        (g, rows)
     }
 
     #[test]
@@ -412,121 +701,171 @@ mod tests {
         assert_eq!(conv, (2, 1, 120 - width(120), 40));
         assert_eq!(area, Some((2 + 120 - width(120), 1, width(120), 40)));
         assert_eq!(split((2, 1, 120, 40), false), ((2, 1, 120, 40), None));
+        assert_eq!(
+            (width(120), width(150)),
+            (46, 60),
+            "wider when there is room"
+        );
     }
 
+    /// REQ-601: three sections, in this order, the newest first in each; a loop is a monitor.
     #[test]
-    fn the_lit_task_is_the_one_chosen_else_the_first_that_runs_else_the_newest() {
-        let mut conv = crate::tui::conversation::tests_fixture();
-        conv.tasks = vec![
-            task("old", TaskState::Done, None),
-            task("run", TaskState::Run, None),
-            task("new", TaskState::Done, None),
-        ];
+    fn the_tasks_are_listed_by_section_the_newest_first_in_each() {
+        let conv = mixed();
+        assert_eq!(ids(&conv), ["ag", "ag0", "sh2", "sh1", "mo2", "mo1"]);
+        assert_eq!(
+            counts(&conv),
+            Counts {
+                agents: 1,
+                shells: 1,
+                monitors: 2
+            },
+            "only what runs counts"
+        );
+        assert_eq!(counts(&conv).total(), 4);
+        // a section keeps its newest few
+        let mut many = mixed();
+        many.tasks = (0..9)
+            .map(|n| task(&format!("s{n}"), TaskKind::Bash, TaskState::Done, n))
+            .collect();
+        assert_eq!(ids(&many).len(), SECTION_ROWS);
+        assert_eq!(ids(&many)[0], "s8");
+        // what the engine does not name is a monitor
+        many.tasks = vec![task("o", TaskKind::Other, TaskState::Run, 1)];
+        assert_eq!(Section::of(many.tasks[0].kind), Section::Monitors);
+    }
+
+    /// REQ-601: the lit line is the one chosen, else the first that runs, else the first; `↑` `↓`
+    /// walk all the lines across the sections, `←` `→` jump a section, `g` `G` go to the ends.
+    #[test]
+    fn the_keys_walk_the_lines_across_the_sections_and_jump_from_one_to_the_next() {
+        let conv = mixed();
         let mut s = State::default();
+        assert_eq!(s.lit(&conv).unwrap().id, "ag", "the first that runs");
+        s.step(&conv, true);
+        assert_eq!(s.lit(&conv).unwrap().id, "ag0");
+        s.step(&conv, true);
+        assert_eq!(s.lit(&conv).unwrap().id, "sh2", "across into the shells");
+        s.jump(&conv, true);
         assert_eq!(
             s.lit(&conv).unwrap().id,
-            "run",
-            "the first that runs: the list is new, run, old"
+            "mo2",
+            "→ the first of the next section"
+        );
+        s.jump(&conv, true);
+        assert_eq!(
+            s.lit(&conv).unwrap().id,
+            "mo2",
+            "there is no section after the last"
         );
         s.step(&conv, true);
-        assert_eq!(s.lit(&conv).unwrap().id, "old");
-        s.step(&conv, true);
-        assert_eq!(s.lit(&conv).unwrap().id, "old", "it stops at the last");
+        assert_eq!(s.lit(&conv).unwrap().id, "mo1");
+        s.jump(&conv, false);
+        assert_eq!(
+            s.lit(&conv).unwrap().id,
+            "mo2",
+            "← goes to the start of this section first"
+        );
+        s.jump(&conv, false);
+        assert_eq!(
+            s.lit(&conv).unwrap().id,
+            "sh2",
+            "and then to the section before"
+        );
+        s.edge(&conv, true);
+        assert_eq!(s.lit(&conv).unwrap().id, "mo1");
+        s.edge(&conv, false);
+        assert_eq!(s.lit(&conv).unwrap().id, "ag");
         s.step(&conv, false);
-        s.step(&conv, false);
-        s.step(&conv, false);
-        assert_eq!(s.lit(&conv).unwrap().id, "new", "and at the first");
-        conv.tasks.retain(|t| t.id != "new");
-        assert_eq!(s.lit(&conv).unwrap().id, "run", "the chosen one is gone");
-        conv.tasks.clear();
-        assert!(s.lit(&conv).is_none());
-    }
-
-    #[test]
-    fn a_click_on_a_row_lights_it_and_gives_the_keys_to_the_area() {
-        let mut conv = crate::tui::conversation::tests_fixture();
-        conv.tasks = vec![
-            task("a", TaskState::Done, None),
-            task("b", TaskState::Done, None),
-        ];
+        assert_eq!(s.lit(&conv).unwrap().id, "ag", "it stops at the first");
+        // a section with nothing is skipped, and with nothing at all nothing moves
+        let mut no_shells = mixed();
+        no_shells.tasks.retain(|t| t.kind != TaskKind::Bash);
         let mut s = State::default();
-        assert!(!s.click(&conv, 5, 5), "the title is not a row");
-        assert!(
-            s.click(&conv, 5, 7),
-            "the second row of the list: the older one"
+        s.jump(&no_shells, true);
+        assert_eq!(
+            s.lit(&no_shells).unwrap().id,
+            "mo2",
+            "the shells have none: on to the monitors"
         );
-        assert_eq!((s.lit(&conv).unwrap().id.as_str(), s.focus), ("a", true));
-        assert!(!s.click(&conv, 5, 9), "past the list");
+        no_shells.tasks.clear();
+        s.jump(&no_shells, true);
+        s.step(&no_shells, true);
+        s.edge(&no_shells, true);
+        assert!(s.lit(&no_shells).is_none());
+        // the one chosen is gone: the first that runs again
+        let mut gone = mixed();
+        let mut s = State::default();
+        s.edge(&gone, true);
+        gone.tasks.retain(|t| t.id != "mo1");
+        assert_eq!(s.lit(&gone).unwrap().id, "ag");
     }
 
-    fn agent_card(id: &str, steps: &[&str]) -> Item {
-        Item::Agent {
-            id: id.into(),
-            name: "Explore".into(),
-            description: "mapear el puente".into(),
-            state: ToolState::Run,
-            tools: 14,
-            tokens: 38_400,
-            ms: 72_000,
-            last: Some("Grep".into()),
-            steps: steps.iter().map(|s| (*s).to_owned()).collect(),
-            prompt: Some("Busca cómo el daemon habla con el teléfono y no edites nada".into()),
-            model: Some("haiku-5.5".into()),
-        }
-    }
-
-    /// REQ-601: a line for each subagent, `name (model) → what it does` and its time and tokens at
-    /// the right; what is not a subagent is not there; the detail of the lit one is in sections.
+    /// A click counts the headings of the sections, which are not tasks.
     #[test]
-    fn the_area_has_a_line_for_each_subagent_and_the_detail_of_the_lit_one_in_sections() {
-        let mut conv = crate::tui::conversation::tests_fixture();
-        conv.items = vec![agent_card(
-            "c1",
-            &["Glob crates/**", "Read lib.rs", "Grep fn pair"],
-        )];
-        let mut run = task("t1", TaskState::Run, Some("c1"));
-        run.info = Some("Buscando el puerto del puente".into());
-        let mut done = task("t0", TaskState::Done, None);
-        done.started = 0;
-        let mut bash = task("t2", TaskState::Run, None);
-        bash.kind = TaskKind::Bash;
-        bash.label = "cargo test -p jwn".into();
-        conv.tasks = vec![done, run, bash];
-        let state = State {
+    fn a_click_on_a_line_lights_it_and_gives_the_keys_to_the_area() {
+        let conv = mixed();
+        // y 5 is the title; 6 `subagentes`, 7 ag, 8 ag0, 9 `shells`, 10 sh2, 11 sh1
+        let mut s = State::default();
+        assert!(!s.click(&conv, 5, 5), "the title is not a line");
+        assert!(!s.click(&conv, 5, 6), "nor is the heading of a section");
+        assert!(s.click(&conv, 5, 8));
+        assert_eq!((s.lit(&conv).unwrap().id.as_str(), s.focus), ("ag0", true));
+        assert!(!s.click(&conv, 5, 9), "the heading of the shells");
+        assert!(s.click(&conv, 5, 11));
+        assert_eq!(s.lit(&conv).unwrap().id, "sh1");
+        assert!(!s.click(&conv, 5, 40), "past the list");
+    }
+
+    /// REQ-601: the three sections with a line for each, and the detail of the lit one by kind.
+    #[test]
+    fn the_area_draws_the_sections_and_the_detail_of_the_lit_line_by_kind() {
+        let conv = mixed();
+        let mut state = State {
             open: true,
+            focus: true,
             ..State::default()
         };
-        let mut g = Grid::new(80, 24);
-        draw(
-            &mut g,
-            &conv,
-            &state,
-            (10, 1, 60, 22),
-            1_000_000,
-            look::blue(),
-        );
-        let rows = g.rows_plain();
+        let (_, rows) = frame(&conv, &state, 60, 30);
         let text = rows.join("\n");
-        assert!(rows[1].contains("subagentes · 1 corriendo"), "{text}");
-        assert!(
-            !text.contains("cargo test") && !text.contains("shell"),
-            "a shell is not a subagent:\n{text}"
-        );
-        let line = rows
-            .iter()
-            .find(|r| r.contains("Explore (haiku-5.5)"))
-            .unwrap_or_else(|| panic!("{text}"));
-        assert!(line.contains("→ Buscando el pue"), "{line:?}");
-        assert!(
-            line.trim_end().ends_with("16:40 · 38.4k"),
-            "time and tokens at the right: {line:?}"
-        );
-        assert!(line.contains('▸'), "the one that runs is lit");
-        assert!(
+        assert!(rows[1].contains("en marcha · 4 corriendo"), "{text}");
+        for want in ["subagentes · 2", "shells · 2", "monitores · 2"] {
+            assert!(text.contains(want), "{want:?} not drawn:\n{text}");
+        }
+        let line = |s: &str| {
             rows.iter()
-                .any(|r| r.contains("agente") && r.contains("→ listo")),
-            "the one that ended says so:\n{text}"
+                .find(|r| r.contains(s))
+                .unwrap_or_else(|| panic!("{s:?}:\n{text}"))
+        };
+        assert!(
+            line("Explore (haiku-5.5)").contains("→ Buscando el pue"),
+            "{}",
+            line("Explore")
         );
+        assert!(
+            line("Explore").trim_end().ends_with("16:39 · 38.4k"),
+            "time and tokens at the right"
+        );
+        assert!(line("Explore").contains('▸'), "the first that runs is lit");
+        assert!(
+            line("✓ agente").contains("→ listo"),
+            "a subagent that ended says so"
+        );
+        assert!(
+            line("cargo test -p jwn").trim_end().ends_with("16:39")
+                && !line("cargo test").contains('→'),
+            "a shell is its command and its time"
+        );
+        assert!(line("npm run build").contains('✗'), "one that failed");
+        assert!(
+            line("tail -f app.log").contains('◉') && line("revisar el CI").contains('↻'),
+            "a monitor watches and a loop repeats"
+        );
+        assert!(
+            text.find("subagentes").unwrap() < text.find("shells").unwrap()
+                && text.find("shells").unwrap() < text.find("monitores").unwrap()
+        );
+        // the detail of the subagent that is lit
         for want in [
             "mapear el puente",
             "prompt",
@@ -536,35 +875,101 @@ mod tests {
             "Grep",
             "ahora",
             "  Buscando el puerto",
-            "^B cierra",
         ] {
             assert!(text.contains(want), "{want:?} not drawn:\n{text}");
         }
+        // of a shell
+        state.step(&conv, true);
+        state.step(&conv, true);
+        let (_, rows) = frame(&conv, &state, 60, 30);
+        let text = rows.join("\n");
+        for want in ["comando", "  npm run build", "terminó", "  falló"] {
+            assert!(text.contains(want), "shell: {want:?} not drawn:\n{text}");
+        }
+        // of a monitor and of a loop
+        state.edge(&conv, true);
+        let (_, rows) = frame(&conv, &state, 60, 30);
+        let text = rows.join("\n");
+        for want in [
+            "vigila",
+            "  tail -f app.log | grep ERROR",
+            "último",
+            "  último aviso hace 2 min",
+        ] {
+            assert!(text.contains(want), "monitor: {want:?} not drawn:\n{text}");
+        }
+        state.step(&conv, false);
+        let (_, rows) = frame(&conv, &state, 60, 30);
+        assert!(rows.join("\n").contains("repite"), "a loop repeats");
+        assert!(rows.iter().all(|r| r.chars().count() <= 70));
+    }
+
+    /// A shell is its command, which the item of its tool call has; the engine's words for it are
+    /// a description, shown as what it does while it runs, and not again when it ended.
+    #[test]
+    fn a_shell_is_its_command_from_its_tool_call_and_the_description_is_what_it_does() {
+        let mut conv = crate::tui::conversation::tests_fixture();
+        conv.items = vec![
+            serde_json::from_value(serde_json::json!({
+                "t": "tool", "id": "toolu_b", "name": "Bash", "arg": "sleep 25; echo listo", "state": "run"
+            }))
+            .unwrap(),
+        ];
+        let mut sh = task("sh", TaskKind::Bash, TaskState::Run, 1);
+        sh.label = "Sleep 25 seconds then echo listo".into();
+        sh.item = Some("toolu_b".into());
+        conv.tasks = vec![sh];
+        let state = State {
+            open: true,
+            ..State::default()
+        };
+        let (_, rows) = frame(&conv, &state, 60, 20);
+        let text = rows.join("\n");
         assert!(
-            text.find("prompt").unwrap() < text.find("pasos").unwrap()
-                && text.find("pasos").unwrap() < text.find("ahora").unwrap(),
-            "in that order:\n{text}"
+            rows.iter()
+                .any(|r| r.contains("sleep 25; echo listo") && r.contains('⠋')),
+            "{text}"
         );
-        assert!(rows.iter().all(|r| r.chars().count() <= 80));
-        // a narrower line gives the end of what it does up before the numbers
-        let mut g = Grid::new(60, 24);
-        draw(
-            &mut g,
-            &conv,
-            &state,
-            (10, 1, 46, 22),
-            1_000_000,
-            look::blue(),
-        );
-        let line = g
-            .rows_plain()
-            .into_iter()
-            .find(|r| r.contains("Explore"))
-            .unwrap();
         assert!(
-            line.contains('…') && line.trim_end().ends_with("38.4k"),
-            "{line:?}"
+            text.contains("comando")
+                && text.contains("ahora")
+                && text.contains("  Sleep 25 seconds then echo listo"),
+            "{text}"
         );
+        // ended: the description is not said again as if it were news
+        conv.tasks[0].state = TaskState::Done;
+        let (_, rows) = frame(&conv, &state, 60, 20);
+        let text = rows.join("\n");
+        assert!(
+            text.contains("terminó") && text.contains("  listo"),
+            "{text}"
+        );
+        assert!(!text.contains("Sleep 25 seconds"), "{text}");
+        // with no tool call in the conversation, the description is all there is
+        conv.items.clear();
+        let (_, rows) = frame(&conv, &state, 60, 20);
+        assert!(
+            rows.iter()
+                .any(|r| r.contains("Sleep 25 seconds then echo listo"))
+        );
+    }
+
+    /// The title is bold when the area has the keys and dim when the field has them.
+    #[test]
+    fn the_title_says_who_has_the_keys() {
+        let conv = mixed();
+        let mut state = State {
+            open: true,
+            focus: true,
+            ..State::default()
+        };
+        let (g, _) = frame(&conv, &state, 60, 20);
+        let at = |g: &Grid| g.cells[g.cols + 12].1;
+        assert_eq!(at(&g).fg, Some(look::blue()));
+        assert!(at(&g).bold);
+        state.focus = false;
+        let (g, _) = frame(&conv, &state, 60, 20);
+        assert_eq!(at(&g).fg, Some(look::dim()));
     }
 
     /// REQ-601: nothing runs, and the area says so and keeps its place.
@@ -572,21 +977,18 @@ mod tests {
     fn with_no_task_the_area_says_nothing_runs() {
         let mut conv = crate::tui::conversation::tests_fixture();
         conv.tasks.clear();
-        let mut g = Grid::new(60, 12);
-        draw(
-            &mut g,
+        let (_, rows) = frame(
             &conv,
             &State {
                 open: true,
                 ..State::default()
             },
-            (10, 1, width(120), 10),
-            0,
-            look::blue(),
+            46,
+            10,
         );
-        let text = g.rows_plain().join("\n");
+        let text = rows.join("\n");
         assert!(
-            text.contains("subagentes · ninguno") && text.contains("ninguno ahora"),
+            text.contains("en marcha · nada") && text.contains("nada corre ahora"),
             "{text}"
         );
     }

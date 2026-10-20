@@ -1,11 +1,13 @@
 package dev.jw.next.client
 
 import dev.jw.next.contract.ContractJson
+import dev.jw.next.contract.ConvItem
 import dev.jw.next.contract.DaemonMsg
 import dev.jw.next.contract.Node
 import dev.jw.next.contract.Task
 import dev.jw.next.contract.TaskKind
 import dev.jw.next.contract.TaskState
+import dev.jw.next.contract.ToolState
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -33,18 +35,31 @@ class AgentsTest {
     }
 
     @Test
-    fun aTaskThatEndedSaysWhatItSaidAndOneWithNoCardHasOnlyItsTime() {
-        val conv = withAgent().let { c ->
-            c.copy(
-                tasks = listOf(
-                    c.tasks[0].copy(state = TaskState.Done, info = "El puente está en crates/web."),
-                    Task("b1", TaskKind.Bash, "cargo test", TaskState.Run, 1_792_110_100_000, info = "compilando"),
-                ),
-            )
-        }
+    fun theTasksAreInThreeSectionsTheNewestFirstAndAShellIsItsCommand() {
+        val base = withAgent()
+        val tool = ConvItem.Tool(id = "toolu_b", name = "Bash", arg = "sleep 25; echo listo", state = ToolState.Run)
+        val conv = base.copy(
+            items = base.items + tool,
+            tasks = listOf(
+                base.tasks[0].copy(state = TaskState.Done, info = "El puente está en crates/web."),
+                Task("m1", TaskKind.Monitor, "tail -f app.log | grep ERROR", TaskState.Run, 1_792_110_050_000, info = "último aviso hace 2 min"),
+                Task("b1", TaskKind.Bash, "Sleep 25 seconds then echo listo", TaskState.Run, 1_792_110_100_000, info = "compilando", item = "toolu_b"),
+                Task("b0", TaskKind.Bash, "npm run build", TaskState.Failed, 1_792_110_090_000),
+                Task("l1", TaskKind.Loop, "revisar el CI cada 5 min", TaskState.Run, 1_792_110_060_000),
+            ),
+        )
         val rows = agentRows(conv, now = 1_792_110_100_000 + 5_000)
-        assertEquals(listOf("aa8348e2"), rows.map { it.id }, "a shell is not a subagent")
-        assertEquals("listo", rows[0].doing, "what ended says how")
+        assertEquals(listOf("aa8348e2", "b1", "b0", "l1", "m1"), rows.map { it.id }, "subagents, shells, then monitors and loops, the newest first in each")
+        assertEquals(listOf(AgentSection.Agents, AgentSection.Shells, AgentSection.Shells, AgentSection.Monitors, AgentSection.Monitors), rows.map { it.section })
+        val shell = rows[1]
+        assertEquals("sleep 25; echo listo", shell.name, "the command of its tool call, not the engine's description")
+        assertEquals("0:05", shell.stats)
+        assertEquals("", shell.doing, "a shell has no arrow: it is its command")
+        assertEquals("compilando", shell.said)
+        assertEquals("falló", rows[2].said, "one that ended says how, and its description is not news")
+        assertEquals("npm run build", rows[2].name, "no tool call in the items: the description is all there is")
+        // a subagent that ended says how and what it said
+        assertEquals("listo", rows[0].doing)
         assertEquals("El puente está en crates/web.", rows[0].said)
         // a subagent with no card has only its time
         val bare = conv.copy(tasks = listOf(Task("a2", TaskKind.Agent, "x", TaskState.Run, 1_792_110_100_000)))
@@ -54,10 +69,20 @@ class AgentsTest {
     }
 
     @Test
-    fun theChipShowsWhileSomeRunAndWhileThePanelIsOpenSoThatItCanBeClosed() {
+    fun aSectionKeepsItsNewestFewAndWhatTheEngineDoesNotNameIsAMonitor() {
+        val many = withAgent().copy(tasks = (0L..8L).map { Task("s$it", TaskKind.Bash, "c$it", TaskState.Done, it) } + Task("o", TaskKind.Other, "x", TaskState.Run, 1))
+        val rows = agentRows(many, now = 100)
+        assertEquals(AGENT_ROWS, rows.count { it.section == AgentSection.Shells })
+        assertEquals("s8", rows.first().id)
+        assertEquals(AgentSection.Monitors, rows.last().section)
+    }
+
+    @Test
+    fun theChipCountsEverythingThatRunsAndShowsWhileThePanelIsOpenSoThatItCanBeClosed() {
         val conv = withAgent()
         assertEquals(1, agentsChip(conv, open = false))
-        assertNull(agentsChip(conv.copy(tasks = listOf(Task("b1", TaskKind.Bash, "cargo", TaskState.Run, 1))), open = false), "a shell is not a subagent")
+        val shell = conv.copy(tasks = listOf(Task("b1", TaskKind.Bash, "cargo", TaskState.Run, 1), Task("m1", TaskKind.Monitor, "tail", TaskState.Run, 2), Task("b2", TaskKind.Bash, "ls", TaskState.Done, 3)))
+        assertEquals(2, agentsChip(shell, open = false), "a shell and a monitor count; what ended does not")
         val idle = conv.copy(tasks = emptyList())
         assertNull(agentsChip(idle, open = false))
         assertEquals(0, agentsChip(idle, open = true))
