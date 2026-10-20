@@ -99,6 +99,18 @@ fn rig(shell: &str) -> Rig {
         c.nodes.contains_key(&blocks),
         "{shell}: no blocks node {blocks}; got {seen_msgs:#?}"
     );
+    // Typed before the shell has drawn its first prompt, a line loses its first characters
+    // (`echo` arrives as `cho`, and a mangled command ends with 127): a slow runner showed it.
+    // The pane says the shell is at its prompt when it carries what the line holds (`input`).
+    assert!(
+        c.wait_until(Duration::from_secs(20), |c| c
+            .nodes
+            .get(&pane)
+            .is_some_and(|n| n.get("input").is_some()))
+            .unwrap(),
+        "{shell}: the shell did not reach its first prompt: {:?}",
+        c.nodes.get(&pane)
+    );
     Rig {
         _sb: sb,
         config,
