@@ -469,9 +469,9 @@ pub struct State {
     pub model: String,
     pub effort: String,
     pub mode: Mode,
-    /// The mode the engine was in just before it said it is in `plan`, so that approving the plan
-    /// can go back to it (REQ-605). None when the conversation began in plan or has left it, and
-    /// after a restart: a new engine is given the mode, not its past.
+    /// The mode the conversation was in just before it was in `plan`, so that approving the plan
+    /// can go back to it (REQ-605). None when it began in plan or has left it. It is kept on
+    /// disk: a conversation that was in plan when the daemon stopped still knows where it came from.
     before_plan: Option<Mode>,
     /// The engine's id for the conversation; always known, since the daemon chooses it.
     pub session: String,
@@ -556,6 +556,9 @@ pub struct Saved {
     pub model: String,
     pub effort: String,
     pub mode: Mode,
+    /// Where a conversation that is in `plan` came from (REQ-605).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_plan: Option<Mode>,
     pub session: String,
     pub has_transcript: bool,
     pub first: u32,
@@ -742,6 +745,7 @@ impl State {
         st.model = saved.model;
         st.effort = saved.effort;
         st.mode = saved.mode;
+        st.before_plan = saved.before_plan.filter(|_| saved.mode == Mode::Plan);
         st.has_transcript = saved.has_transcript;
         st.first = saved.first;
         st.legacy = !saved.items.is_empty();
@@ -810,7 +814,7 @@ impl State {
         self.live_texts.clear();
         self.followed_queue = t.waiting();
         if let Some(mode) = t.mode {
-            self.mode = mode;
+            self.change_mode(mode);
         }
         if let Some(model) = &t.model {
             self.model = short_model(model);
@@ -992,6 +996,7 @@ impl State {
             model: self.model.clone(),
             effort: self.effort.clone(),
             mode: self.mode,
+            before_plan: self.before_plan,
             session: self.session.clone(),
             has_transcript: self.has_transcript,
             first: self.first,
@@ -1572,6 +1577,18 @@ impl State {
         }
     }
 
+    /// The conversation is in `mode` now, whoever said it first: the engine's own message or the
+    /// line it wrote in its transcript (which a follow can read a moment before the message
+    /// arrives). Into plan, the mode left is the one a plan goes back to (REQ-605); any other change
+    /// forgets it. The footer shows the mode; a line for each change was noise.
+    fn change_mode(&mut self, mode: Mode) {
+        if mode == self.mode {
+            return;
+        }
+        self.before_plan = (mode == Mode::Plan).then_some(self.mode);
+        self.mode = mode;
+    }
+
     fn system(&mut self, msg: &Value, now: u64) -> Vec<Effect> {
         match msg["subtype"].as_str().unwrap_or("") {
             "init" => {
@@ -1579,8 +1596,12 @@ impl State {
                     self.model = short_model(m);
                 }
                 if let Some(m) = msg["permissionMode"].as_str().and_then(Mode::from_flag) {
+                    // A new engine that starts in plan is the one the conversation was in when it
+                    // stopped: where it came from is still what a plan goes back to.
+                    if m != Mode::Plan {
+                        self.before_plan = None;
+                    }
                     self.mode = m;
-                    self.before_plan = None;
                 }
                 if msg["skills"].is_array() {
                     self.learn_skills(&msg["skills"]);
@@ -1602,14 +1623,8 @@ impl State {
                 });
             }
             "status" => {
-                if let Some(m) = msg["permissionMode"].as_str().and_then(Mode::from_flag)
-                    && m != self.mode
-                {
-                    // Into plan, the mode left is the one a plan goes back to; any other change
-                    // forgets it.
-                    self.before_plan = (m == Mode::Plan).then_some(self.mode);
-                    // The footer shows the mode; a line for each change was noise.
-                    self.mode = m;
+                if let Some(m) = msg["permissionMode"].as_str().and_then(Mode::from_flag) {
+                    self.change_mode(m);
                 }
             }
             kind @ ("task_started" | "task_progress" | "task_updated" | "task_notification") => {
@@ -2970,6 +2985,35 @@ mod tests {
         s
     }
 
+    /// REQ-605: what the real engine (2.1.304, started with `--permission-mode auto`) sent when
+    /// Claude entered plan mode with its own tool and the plan was approved: `status plan` with no
+    /// permission asked, then the plan's ask, and, once allowed, `status auto` of its own.
+    #[test]
+    fn the_capture_of_the_real_engine_entering_plan_from_auto_offers_to_go_back_to_auto() {
+        let capture = include_str!("../tests/captures/plan-from-auto-2.1.304.jsonl");
+        let mut s = st();
+        s.send("entra a plan", vec![], 0);
+        let mut offered = None;
+        let mut after = None;
+        for line in capture.lines() {
+            s.apply(&serde_json::from_str::<Value>(line).unwrap(), 1);
+            if offered.is_none()
+                && let Some(p) = &s.pending
+            {
+                offered = Some(p.ask.options[0].key.clone());
+            }
+            if offered.is_some() && after.is_none() && s.mode != Mode::Plan {
+                after = Some(s.mode);
+            }
+        }
+        assert_eq!(offered.as_deref(), Some("auto"));
+        assert_eq!(
+            after,
+            Some(Mode::Auto),
+            "the engine goes back to the mode it came from"
+        );
+    }
+
     #[test]
     fn the_captures_of_the_real_engine_say_a_monitor_is_a_monitor_and_where_the_output_is() {
         let bash = replay(
@@ -3554,6 +3598,25 @@ mod tests {
                 .iter()
                 .any(|w| w["request"]["subtype"] == "set_permission_mode")
         );
+        // the transcript the engine writes can say `plan` a moment before its message does: the
+        // mode it left is remembered all the same
+        let mut s = st();
+        s.apply(&status("auto"), 0);
+        let mut t = crate::transcript::Parser::default();
+        t.mode = Some(Mode::Plan);
+        s.follow(&t);
+        s.apply(&status("plan"), 0);
+        assert_eq!(first(&plan_asks(&mut s)).0, "auto");
+        // a conversation saved in plan comes back, and its engine starts in plan, knowing where it came from
+        let saved = s.saved(9);
+        assert_eq!(saved.before_plan, Some(Mode::Auto));
+        let mut back = State::restored(saved, "");
+        back.apply(&json!({"type": "system", "subtype": "init", "permissionMode": "plan", "model": "claude-sonnet-5-5"}), 0);
+        assert_eq!(first(&plan_asks(&mut back)).0, "auto");
+        // saved in any other mode, it keeps nothing
+        let mut s = st();
+        s.apply(&status("auto"), 0);
+        assert_eq!(s.saved(9).before_plan, None);
     }
 
     #[test]
