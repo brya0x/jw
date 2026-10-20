@@ -1,0 +1,130 @@
+<title>jwn · the footer of the conversation and the list of keys</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+:root{
+  --bg:#282c34; --panel:#21252b; --fg:#abb2bf; --dim:#5c6370; --line:#3e4451; --sel:#2c313a;
+  --blue:#61afef; --green:#98c379; --yellow:#e5c07b; --red:#e06c75; --magenta:#c678dd; --cyan:#56b6c2;
+  --page:#16181d; --ink:#c3c9d4; --mut:#7d8594;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}}
+:root[data-theme="light"]{--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.55 'IBM Plex Sans',system-ui,sans-serif;padding:24px max(16px,env(safe-area-inset-right,0px)) 40px max(16px,env(safe-area-inset-left,0px))}
+.wrap{max-width:1100px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
+h1{font:600 20px/1.2 var(--mono);margin:0}
+h2{font:600 12px var(--mono);margin:0;color:var(--mut)}
+p{margin:0;max-width:86ch;color:var(--mut)}
+code,kbd{font:12px var(--mono)}
+button{font:12px var(--mono);color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;min-height:32px;cursor:pointer}
+button:hover{border-color:var(--blue)}
+button[aria-pressed="true"]{border-color:var(--blue);color:var(--blue)}
+:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto}
+.term pre{margin:0;font:13px/1.35 var(--mono);color:var(--fg);outline:none;width:max-content;min-width:100%}
+.hint{font:12px var(--mono);color:var(--mut)}
+.dim{color:var(--dim)}.blue{color:var(--blue)}.green{color:var(--green)}.yellow{color:var(--yellow)}.red{color:var(--red)}.cyan{color:var(--cyan)}.magenta{color:var(--magenta)}.b{font-weight:700}.sel{background:var(--sel)}
+.decide{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px;color:var(--fg)}
+.decide h2{margin:0 0 8px}
+.decide ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+</style>
+
+<div class="wrap">
+  <div>
+    <h1>The footer, and the list of keys</h1>
+    <p>The footer of the conversation says three things in this order, <b>agents · mode · model</b>, and a button for the keys: <kbd>^/</kbd> (a terminal cannot tell <kbd>^?</kbd> from <kbd>^/</kbd>: both are one key, the one with the slash, so the footer writes it as <code>^/</code>). Click the terminal and press <kbd>^/</kbd> (or <kbd>?</kbd> with the field empty), <kbd>⇧tab</kbd> to change the mode (it works while Claude works), <kbd>^B</kbd> to toggle the agents, <kbd>esc</kbd> to close. Pick the width to see how it gives way.</p>
+  </div>
+  <div class="bar" role="group" aria-label="Width of the panel">
+    <button id="w100" type="button" aria-pressed="true">100 columns</button>
+    <button id="w80" type="button" aria-pressed="false">80</button>
+    <button id="w60" type="button" aria-pressed="false">60</button>
+    <button id="ag" type="button" aria-pressed="true">agents running</button>
+    <button id="wk" type="button" aria-pressed="true">Claude is working</button>
+  </div>
+  <div class="term"><pre id="scr" tabindex="0" aria-label="Conversation footer. Press control slash for the keys, shift tab for the mode."></pre></div>
+  <div class="hint" id="msg"></div>
+  <div class="decide">
+    <h2>To approve</h2>
+    <ol>
+      <li><b>The footer</b> (REQ-402 says «mode at the left, model at the right, nothing else»; this replaces it): at the left <code>⚙ n agentes</code> (dim; yellow while some run; nothing when none and the area is closed, so the line is not noise), then the <b>mode</b> in its colour with <code>⇧tab</code> dim after it, then the <b>model</b>; at the right edge <code>^/ teclas</code>. A click on each opens what it names: the agents area, the mode list, the model list, the keys.</li>
+      <li><b>Narrow panels give way from the right:</b> first <code>teclas</code> (leaving <code>^/</code>), then the <code>⇧tab</code> hint, then the word «agentes» (leaving <code>⚙ 2</code>); the mode and the model are the last to go.</li>
+      <li><b>The list of keys</b> opens over the conversation (<kbd>^/</kbd>, or <kbd>?</kbd> when the field is empty, or <code>/keys</code>) in groups: writing, Claude, what is seen, the leader. <kbd>esc</kbd>, <kbd>^/</kbd> or any click closes it. It lists what the conversation binds; the leader <kbd>^␣</kbd> and what follows it is listed too, from the same table the code uses, so a new key cannot be missing.</li>
+      <li><b>⇧tab while Claude works</b> changes the mode at once: the engine accepts it in the middle of a turn (tried against the real one) and the footer shows the new mode as soon as it says so.</li>
+    </ol>
+  </div>
+</div>
+
+<script>
+(function(){
+const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const c = (cls, s) => `<span class="${cls}">${esc(s)}</span>`;
+const MODES = [['manual','dim'],['accept edits','magenta'],['plan','cyan'],['auto','yellow']];
+let W = 100, agents = true, working = true, mode = 0, keys = false;
+const bar = (n, ch) => ch.repeat(Math.max(0, n));
+function footer(w){
+  // pieces by priority; each says its text and how it shrinks
+  const model = 'sonnet-5.5', n = agents ? 2 : 0;
+  const m = MODES[mode];
+  const variants = [
+    {ag: n ? `⚙ ${n} agentes` : '', hint: ' ⇧tab', keys: '^/ teclas'},
+    {ag: n ? `⚙ ${n} agentes` : '', hint: ' ⇧tab', keys: '^/'},
+    {ag: n ? `⚙ ${n} agentes` : '', hint: '', keys: '^/'},
+    {ag: n ? `⚙ ${n}` : '', hint: '', keys: '^/'},
+  ];
+  for (const v of variants){
+    const left = (v.ag ? v.ag + ' · ' : '') + m[0] + v.hint + ' · ' + model;
+    if (left.length + 2 + v.keys.length + 1 <= w) {
+      const gap = w - 1 - left.length - v.keys.length - 1;
+      return ' ' + (v.ag ? c(n ? 'yellow' : 'dim', v.ag) + c('dim', ' · ') : '') + c(m[1], m[0]) + c('dim', v.hint) + c('dim', ' · ') + c('dim', model) + ' '.repeat(Math.max(1, gap)) + c('blue', v.keys.split(' ')[0]) + (v.keys.includes(' ') ? c('dim', ' teclas') : '') + ' ';
+    }
+  }
+  return ' ' + c(m[1], m[0]) + c('dim', ' · ' + model);
+}
+const KEYS = [
+  ['escribir', [['↵','enviar'],['⇧↵ · ^J','nueva línea'],['⇥','completar la propuesta o la lista'],['/','comandos (en cualquier parte del mensaje)'],['@','archivos'],['!','una línea de shell'],['^V','pegar una imagen']]],
+  ['Claude', [['esc · ^C','interrumpir lo que corre'],['⇧tab','cambiar el modo, también mientras trabaja'],['^B','el área de los agentes'],['^T','la lista de pendientes'],['^O','abrir o cerrar las herramientas']]],
+  ['lo que se ve', [['↑ ↓','con el campo vacío: elegir un mensaje'],['c · t','copiar el mensaje o su texto'],['PgUp · PgDn','recorrer la conversación'],['v','abrir el plan completo']]],
+  ['jwn', [['^␣','el líder: espacios, paneles, diff, PRs…'],['^␣ ?','las teclas del líder']]],
+];
+function overlay(w){
+  const L = [], iw = Math.min(w - 2, 74);
+  L.push(c('dim', '╭─ teclas ' + bar(iw - 11, '─') + '╮'));
+  KEYS.forEach(([g, rows], gi) => {
+    if (gi) L.push(c('dim', '│') + ' '.repeat(iw - 2) + c('dim', '│'));
+    L.push(c('dim', '│ ') + c('b blue', g) + ' '.repeat(iw - 3 - g.length) + c('dim', '│'));
+    rows.forEach(([k, t]) => { const line = k.padEnd(14) + t; L.push(c('dim', '│ ') + '  ' + c('cyan', k.padEnd(14)) + esc(t.slice(0, iw - 22)) + ' '.repeat(Math.max(0, iw - 22 - t.slice(0, iw - 22).length)) + c('dim', '│')); });
+  });
+  L.push(c('dim', '╰' + bar(iw - 2, '─') + '╯'));
+  return L;
+}
+function draw(){
+  const L = [];
+  const iw = W;
+  L.push(c('dim', '╭' + bar(iw - 2, '─') + '╮'));
+  const line = (html, len) => c('dim', '│') + html + ' '.repeat(Math.max(0, iw - 2 - len)) + c('dim', '│');
+  L.push(line(' ' + c('green', '❯ ') + esc('revisa N123 y mapea el puente, en paralelo'), 46));
+  L.push(line(' ' + c('blue', '● ') + 'Lanzo dos agentes y sigo contigo.', 36));
+  if (working) L.push(line(' ' + c('yellow', '⠹ Trabajando… · 1 min 12 s · ↓ 38 k tokens · esc para interrumpir'), 70));
+  if (keys){ overlay(W).forEach(r => L.push(line('  ' + r, Math.min(W - 2, 74) + 2))); }
+  L.push(c('dim', '├' + bar(iw - 2, '─') + '┤'));
+  L.push(line(' ' + c('green', '❯ ') + c('dim', 'escribe un mensaje · / comandos'), 34));
+  L.push(c('dim', '╰' + bar(iw - 2, '─') + '╯'));
+  L.push(footer(iw));
+  document.getElementById('scr').innerHTML = L.join('\n');
+  document.getElementById('msg').textContent = keys ? 'esc, ^/ or ? closes the list' : `mode: ${MODES[mode][0]} (⇧tab changes it${working ? ', also now, while Claude works' : ''}) · width ${W}`;
+}
+document.getElementById('scr').addEventListener('keydown', e => {
+  if (e.key === 'Tab' && e.shiftKey){ mode = (mode + 1) % 4; draw(); e.preventDefault(); }
+  else if ((e.ctrlKey && (e.key === '/' || e.key === '?')) || (!keys && e.key === '?')){ keys = !keys; draw(); e.preventDefault(); }
+  else if (e.key === 'Escape' && keys){ keys = false; draw(); e.preventDefault(); }
+  else if (e.ctrlKey && e.key === 'b'){ agents = !agents; document.getElementById('ag').setAttribute('aria-pressed', agents); draw(); e.preventDefault(); }
+});
+const widths = {w100: 100, w80: 80, w60: 60};
+Object.keys(widths).forEach(k => document.getElementById(k).onclick = () => { W = widths[k]; Object.keys(widths).forEach(j => document.getElementById(j).setAttribute('aria-pressed', j === k)); draw(); });
+document.getElementById('ag').onclick = e => { agents = !agents; e.target.setAttribute('aria-pressed', agents); draw(); };
+document.getElementById('wk').onclick = e => { working = !working; e.target.setAttribute('aria-pressed', working); draw(); };
+draw();
+})();
+</script>
