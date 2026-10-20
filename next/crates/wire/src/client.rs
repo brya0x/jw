@@ -121,7 +121,9 @@ impl Client {
         self.cmd_within(cmd, Duration::from_secs(30))
     }
 
-    /// Like `cmd`, for one the daemon may take longer than 30 seconds to answer.
+    /// Like `cmd`, for one the daemon may take longer than 30 seconds to answer. `wait` is for the
+    /// whole call: messages that are not the reply do not start it again, so a daemon that keeps
+    /// patching and never answers (an older one that does not know the command) ends it too.
     pub fn cmd_within(
         &mut self,
         cmd: Cmd,
@@ -133,8 +135,15 @@ impl Client {
             id: id.clone(),
             cmd,
         })?;
+        let deadline = Instant::now() + wait;
         loop {
-            let Some(msg) = self.poll(wait)? else {
+            let left = deadline.saturating_duration_since(Instant::now());
+            let msg = if left.is_zero() {
+                None
+            } else {
+                self.poll(left)?
+            };
+            let Some(msg) = msg else {
                 return Err(ClientError::Protocol("no reply".into()));
             };
             if let DaemonMsg::Reply { id: got, outcome } = msg
@@ -226,5 +235,75 @@ impl Client {
             DaemonMsg::Hello { .. } | DaemonMsg::Reply { .. } | DaemonMsg::Error { .. } => {}
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixListener;
+
+    /// A daemon that says hello, hears the command, and then keeps sending messages that are not
+    /// its reply (what an older daemon that does not know a command does, with live nodes open).
+    fn chatty_daemon(path: &Path) -> std::thread::JoinHandle<()> {
+        let listener = UnixListener::bind(path).unwrap();
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut out = stream;
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let hello = DaemonMsg::Hello {
+                daemon: Peer {
+                    name: "test".into(),
+                    version: "0".into(),
+                },
+                epoch: "e".into(),
+                root: "root".into(),
+                accepted: BTreeMap::new(),
+            };
+            writeln!(out, "{}", serde_json::to_string(&hello).unwrap()).unwrap();
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            let chatter =
+                r#"{"t":"error","code":"bad_request","message":"not a contract message"}"#;
+            while writeln!(out, "{chatter}").is_ok() {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        })
+    }
+
+    /// REQ-619: the wait of `cmd_within` is a deadline for the whole call, not for each message.
+    #[test]
+    fn a_command_that_is_never_answered_ends_at_its_deadline_whatever_else_the_daemon_sends() {
+        let dir = std::env::temp_dir().join(format!("jwn-wire-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("s.sock");
+        let _ = std::fs::remove_file(&path);
+        let daemon = chatty_daemon(&path);
+        let mut c = Client::connect(&path, "test").unwrap();
+        let started = Instant::now();
+        let err = c
+            .cmd_within(
+                Cmd::ReadFile {
+                    workspace: "w".into(),
+                    path: "a.rs".into(),
+                },
+                Duration::from_millis(400),
+            )
+            .unwrap_err();
+        let took = started.elapsed();
+        assert!(
+            matches!(&err, ClientError::Protocol(m) if m == "no reply"),
+            "{err}"
+        );
+        assert!(
+            took >= Duration::from_millis(400) && took < Duration::from_millis(1500),
+            "{took:?}"
+        );
+        drop(c);
+        daemon.join().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -15,7 +15,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
@@ -114,6 +114,7 @@ private fun TextLine(n: Int, digits: Int, runs: List<Run>, wrap: Boolean, across
                 fontFamily = MonoFont,
                 fontSize = CodeSize,
                 lineHeight = CodeLine,
+                letterSpacing = 0.sp,
                 softWrap = false,
                 modifier = Modifier.background(Palette.panel).padding(horizontal = 8.dp),
             )
@@ -124,8 +125,9 @@ private fun TextLine(n: Int, digits: Int, runs: List<Run>, wrap: Boolean, across
                 fontFamily = MonoFont,
                 fontSize = CodeSize,
                 lineHeight = CodeLine,
+                letterSpacing = 0.sp,
                 softWrap = wrap,
-                modifier = Modifier.padding(horizontal = 8.dp).then(if (wrap) Modifier else Modifier.width(block)),
+                modifier = Modifier.padding(horizontal = 8.dp).then(if (wrap) Modifier else Modifier.widthIn(min = block)),
             )
         }
     }
