@@ -63,6 +63,34 @@ fn entry<'a>(l: &'a FileListing, name: &str) -> &'a contract::FileEntry {
     l.entries.iter().find(|e| e.name == name).unwrap()
 }
 
+/// REQ-311, N147: an ignored name with a space, a quote or an accent is found as it is written, and
+/// a folder where nothing is ignored says so for none.
+#[test]
+fn an_ignored_entry_is_found_whatever_characters_its_name_has() {
+    let sb = Sandbox::new();
+    let d = sb.start();
+    let dir = std::fs::canonicalize(&sb.dir).unwrap().join("odd");
+    std::fs::create_dir_all(&dir).unwrap();
+    git(&dir, &["init", "-q", "-b", "main"]);
+    std::fs::write(dir.join(".gitignore"), "*.log\n").unwrap();
+    for name in [
+        "my build.log",
+        "say \"hi\".log",
+        "caf\u{e9}.log",
+        "keep.txt",
+    ] {
+        std::fs::write(dir.join(name), "x").unwrap();
+    }
+    let mut c = sb.client();
+    let ws = open(&mut c, &dir);
+    let top = list(&mut c, &ws, None).unwrap();
+    for name in ["my build.log", "say \"hi\".log", "caf\u{e9}.log"] {
+        assert!(entry(&top, name).ignored, "{name} is ignored");
+    }
+    assert!(!entry(&top, "keep.txt").ignored);
+    drop(d);
+}
+
 /// REQ-309 to REQ-312.
 #[test]
 fn a_folder_is_listed_with_folders_first_what_git_says_of_each_and_no_dot_git() {

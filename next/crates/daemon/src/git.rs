@@ -1,7 +1,8 @@
 //! Git, by running `git`: no library, so behaviour matches what the user's own git does.
 
+use std::collections::HashSet;
 use std::ffi::OsStr;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -103,6 +104,45 @@ pub fn read<S: AsRef<OsStr>>(dir: &Path, args: &[S], cap: usize) -> Result<Outpu
     } else {
         message
     })
+}
+
+/// Which of `names` (entries of the folder `dir`) git ignores. Their names go in on stdin, so
+/// any character a name holds is safe; nothing ignored, or not a repository, is the empty set.
+pub fn ignored_among(dir: &Path, names: &[&str]) -> HashSet<String> {
+    let Ok(mut child) = Command::new("git")
+        .arg("--no-pager")
+        .arg("-C")
+        .arg(dir)
+        .args(["check-ignore", "-z", "--stdin"])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return HashSet::new();
+    };
+    let mut stdin = child.stdin.take().expect("stdin is piped");
+    let mut input = Vec::new();
+    for name in names {
+        input.extend_from_slice(name.as_bytes());
+        input.push(0);
+    }
+    // Written on its own thread so git's answer cannot fill the pipe while the names are still going in.
+    let writer = std::thread::spawn(move || {
+        let _ = stdin.write_all(&input);
+    });
+    let out = child.wait_with_output();
+    let _ = writer.join();
+    let Ok(out) = out else {
+        return HashSet::new();
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .split('\0')
+        .filter(|n| !n.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 /// The top of the working tree `dir` is in.

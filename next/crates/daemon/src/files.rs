@@ -159,7 +159,15 @@ pub fn marks(base: &str, status: &[u8]) -> HashMap<String, (Option<GitMark>, boo
 }
 
 /// The marks of the entries of `rel` in the workspace folder `root`, when it is in a repository.
-fn git_marks(root: &Path, rel: &str) -> HashMap<String, (Option<GitMark>, bool)> {
+/// `names` are the entries of the folder `dir`: whether git ignores each is asked of
+/// `check-ignore`, because `status --ignored` walks every ignored folder (`node_modules`, `target`)
+/// and takes seconds in a big repository.
+fn git_marks(
+    root: &Path,
+    dir: &Path,
+    rel: &str,
+    names: &[&str],
+) -> HashMap<String, (Option<GitMark>, bool)> {
     let Ok(prefix) = git::run(root, &["rev-parse", "--show-prefix"]) else {
         return HashMap::new();
     };
@@ -168,7 +176,6 @@ fn git_marks(root: &Path, rel: &str) -> HashMap<String, (Option<GitMark>, bool)>
         "status",
         "--porcelain=v1",
         "-z",
-        "--ignored=traditional",
         "--untracked-files=normal",
         "--",
         spec,
@@ -181,7 +188,11 @@ fn git_marks(root: &Path, rel: &str) -> HashMap<String, (Option<GitMark>, bool)>
     } else {
         format!("{prefix}{rel}/")
     };
-    marks(&base, &out.bytes)
+    let mut marks = marks(&base, &out.bytes);
+    for name in git::ignored_among(dir, names) {
+        marks.entry(name).or_default().1 = true;
+    }
+    marks
 }
 
 /// `list_files`: the entries of one folder, folders first and then the rest, each by name.
@@ -189,7 +200,6 @@ pub fn list(shared: &Shared, workspace: &str, path: Option<&str>) -> Done {
     let root = root_of(shared, workspace)?;
     let rel = clean_rel(path)?;
     let dir = folder(&root, &rel)?;
-    let marks = git_marks(&root, &rel);
     let read =
         fs::read_dir(&dir).map_err(|e| err(ErrorCode::Io, format!("cannot read {rel}: {e}")))?;
     let mut entries: Vec<FileEntry> = Vec::new();
@@ -208,14 +218,18 @@ pub fn list(shared: &Shared, workspace: &str, path: Option<&str>) -> Done {
         } else {
             (FileKind::File, item.metadata().ok().map(|m| m.len()))
         };
-        let (git, ignored) = marks.get(&name).copied().unwrap_or_default();
         entries.push(FileEntry {
             name,
             kind,
             size,
-            git,
-            ignored,
+            git: None,
+            ignored: false,
         });
+    }
+    let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+    let marks = git_marks(&root, &dir, &rel, &names);
+    for e in &mut entries {
+        (e.git, e.ignored) = marks.get(&e.name).copied().unwrap_or_default();
     }
     entries.sort_by_key(|e| (e.kind != FileKind::Dir, e.name.to_lowercase()));
     let total = entries.len();
