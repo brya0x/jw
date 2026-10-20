@@ -58,6 +58,9 @@ private val CodeLine = 16.sp
 /** A character of [MonoFont] is this many of its sizes wide. */
 private const val Advance = 0.6f
 
+/** Over the whole screen: the platform's own width is not used and a tap outside does not close it. */
+private val FullScreen = DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = false)
+
 /**
  * A text file over the whole screen (REQ-618): a bar with Back, the name, how many lines and
  * what it weighs, and `⏎` to wrap the lines; the lines in monospace with their numbers, coloured by
@@ -66,7 +69,7 @@ private const val Advance = 0.6f
  */
 @Composable
 internal fun TextViewerDialog(doc: TextDoc, close: () -> Unit) {
-    Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = false)) {
+    Dialog(onDismissRequest = close, properties = FullScreen) {
         Column(Modifier.fillMaxSize().background(Palette.bg)) { TextViewer(doc, close) }
     }
 }
@@ -101,7 +104,7 @@ private fun ColumnScope.TextViewer(doc: TextDoc, close: () -> Unit) {
 /** One line: its number, which a selection leaves out, and its text; the lines that are cut scroll sideways by the same [side], and are as wide as the widest so they agree on how far. */
 @Composable
 private fun TextLine(n: Int, digits: Int, runs: List<Run>, wrap: Boolean, across: Int, side: ScrollState) {
-    val text = codeText(runs)
+    val text = remember(runs, Palette.fg) { codeText(runs) }
     val block = with(LocalDensity.current) { (across * CodeSize.value * Advance).sp.toDp() }
     Row(Modifier.fillMaxWidth().heightIn(min = 16.dp)) {
         DisableSelection {
@@ -147,7 +150,7 @@ private fun codeText(runs: List<Run>): AnnotatedString = buildAnnotatedString {
 /** A file the PC would not show as text (REQ-613): its name, and that it is binary with the weight the listing knew. */
 @Composable
 internal fun RefusalDialog(name: String, note: String, close: () -> Unit) {
-    Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = false)) {
+    Dialog(onDismissRequest = close, properties = FullScreen) {
         Column(Modifier.fillMaxSize().background(Palette.bg)) {
             Header(name, null, onBack = close)
             Column(

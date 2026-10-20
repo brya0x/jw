@@ -2467,19 +2467,10 @@ impl View {
     fn conv_after(&self, act: Option<ConvAct>) -> After {
         match act {
             Some(ConvAct::Copy(text)) => After::Copy(text),
-            Some(ConvAct::Edit(path)) => {
-                let Some(workspace) = self.opened.clone() else {
-                    return After::Continue;
-                };
-                let mut program =
-                    editor_from(std::env::var("VISUAL").ok(), std::env::var("EDITOR").ok());
-                program.push(path.to_string_lossy().into_owned());
-                After::NewProgram {
-                    workspace,
-                    program,
-                    place: self.place(None),
-                }
-            }
+            Some(ConvAct::Edit(path)) => match self.opened.clone() {
+                Some(workspace) => self.editor(workspace, &path.to_string_lossy()),
+                None => After::Continue,
+            },
             Some(ConvAct::ViewPlan { node, ask }) => After::ReadPlan { node, ask },
             Some(act) => After::Conv(act),
             None => After::Continue,

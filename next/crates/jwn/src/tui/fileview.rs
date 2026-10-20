@@ -10,7 +10,8 @@ use std::rc::Rc;
 use contract::text::{Run, TextDoc};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use super::{Grid, Style, clip, look};
+use super::viewer::fold;
+use super::{Grid, Style, clip, is_markdown, look};
 
 /// What the person asked of the client by a key.
 #[derive(Debug, PartialEq, Eq)]
@@ -144,7 +145,7 @@ impl FileView {
         self.side = old.side;
     }
 
-    fn geo(&self, (x, y, w, h): (usize, usize, usize, usize)) -> Geo {
+    fn geo(&self, (_, y, w, h): (usize, usize, usize, usize)) -> Geo {
         let digits = self.doc.lines.len().max(1).to_string().len();
         let gutter = digits + 3;
         let last = (y + h).saturating_sub(1);
@@ -157,7 +158,6 @@ impl FileView {
             foot = foot.saturating_sub(1);
             last.saturating_sub(usize::from(search_y.is_some()))
         });
-        let _ = x;
         Geo {
             gutter,
             cw: w.saturating_sub(gutter + 2).max(1),
@@ -263,7 +263,10 @@ impl FileView {
             KeyCode::Char('g') | KeyCode::Home => self.scroll = 0,
             KeyCode::Char('G') | KeyCode::End => self.scroll = self.most.get(),
             KeyCode::Char('w') => self.toggle_wrap(geo.cw),
-            KeyCode::Char('l') if !self.wrap => self.side += SIDE,
+            KeyCode::Char('l') if !self.wrap => {
+                let widest = self.len.iter().copied().max().unwrap_or(0);
+                self.side = (self.side + SIDE).min(widest.saturating_sub(geo.cw));
+            }
             KeyCode::Char('h') if !self.wrap => self.side = self.side.saturating_sub(SIDE),
             KeyCode::Char('/') => {
                 self.search.typing = true;
@@ -272,8 +275,9 @@ impl FileView {
             KeyCode::Char('n') => self.next_match(true, geo.cw),
             KeyCode::Char('N') => self.next_match(false, geo.cw),
             KeyCode::Char('y') => {
-                self.says = super::conversation::copied(&self.plain.join("\n"));
-                return Act::Copy(self.plain.join("\n"));
+                let text = self.plain.join("\n");
+                self.says = super::conversation::copied(&text);
+                return Act::Copy(text);
             }
             KeyCode::Char('e') => return Act::Edit(self.doc.path.clone()),
             KeyCode::Char('r') => return Act::Reread,
@@ -551,17 +555,6 @@ fn pieces(line: &[Run], from: usize, to: usize) -> Vec<(String, Option<&str>)> {
     out
 }
 
-fn fold(s: &str) -> String {
-    s.chars()
-        .map(|c| c.to_lowercase().next().unwrap_or(c))
-        .collect()
-}
-
-fn is_markdown(name: &str) -> bool {
-    name.rsplit_once('.')
-        .is_some_and(|(_, e)| ["md", "markdown"].contains(&e.to_lowercase().as_str()))
-}
-
 /// A weight in bytes as a person reads it.
 pub fn size_text(bytes: u64) -> String {
     const KB: f64 = 1024.0;
@@ -688,6 +681,12 @@ mod tests {
         assert!(rows[1].contains("abcdefghij"));
         key(&mut v, KeyCode::Char('l'));
         assert_eq!(v.side, SIDE);
+        for _ in 0..30 {
+            key(&mut v, KeyCode::Char('l'));
+        }
+        assert_eq!(v.side, 100 - 54, "not past the end of the widest line");
+        key(&mut v, KeyCode::Char('g'));
+        v.side = SIDE;
         let rows = screen(&v);
         assert!(rows[1].contains("│ ijabcdefghij"), "{}", rows[1]);
         key(&mut v, KeyCode::Char('h'));

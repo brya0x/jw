@@ -38,6 +38,7 @@ import dev.jw.next.contract.TextDoc
 import dev.jw.next.contract.WorktreeInfo
 import dev.jw.next.contract.WorktreeList
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -316,8 +317,11 @@ abstract class ProtocolSource : AppSource() {
         return id
     }
 
-    /** The one thread that takes a command to be unanswered when its time is up. */
-    private val waits = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "command-waits").apply { isDaemon = true } }
+    /** The thread that takes a command to be unanswered when its time is up; it ends when it has nothing to wait for, so a source that is dropped leaves none behind. */
+    private val waits = ScheduledThreadPoolExecutor(1) { r -> Thread(r, "command-waits").apply { isDaemon = true } }.apply {
+        setKeepAliveTime(5, TimeUnit.SECONDS)
+        allowCoreThreadTimeOut(true)
+    }
 
     /** What a command read, as a [T]: the PC's message when it refused, else what is wrong with its answer. */
     private fun <T> DaemonMsg.Reply.read(serializer: DeserializationStrategy<T>, what: String = "la carpeta"): Result<T> {

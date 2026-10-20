@@ -639,7 +639,8 @@ fn whole(l: &Layout) -> String {
     markdown::text_of(&l.rows, (0, 0), (last, usize::MAX - 1))
 }
 
-fn fold(s: &str) -> String {
+/// The text with each character lowercased, one for one, so a column in it is the column in `s`.
+pub(super) fn fold(s: &str) -> String {
     s.chars()
         .map(|c| c.to_lowercase().next().unwrap_or(c))
         .collect()
