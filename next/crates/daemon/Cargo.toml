@@ -16,6 +16,7 @@ portable-pty = "0.9.0"
 vt100 = "0.16.2"
 pulldown-cmark = { version = "0.13", default-features = false }
 toml_edit = "0.25.17"
+two-face = { version = "0.5.2", default-features = false, features = ["syntect-fancy"] }
 
 [dev-dependencies]
 tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
