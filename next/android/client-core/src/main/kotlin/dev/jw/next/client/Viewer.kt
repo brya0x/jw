@@ -25,5 +25,8 @@ fun viewerSub(doc: MarkdownDoc, plan: Boolean, waits: Boolean): String {
     return listOfNotNull(if (plan && waits) "plan listo" else null, titles, if (doc.truncated) "cortado" else null).joinToString(" · ")
 }
 
+/** The reason typed to keep planning (REQ-595): trimmed, and none when it is blank, so the answer goes without one. */
+fun keepPlanningNote(text: String): String? = text.trim().ifEmpty { null }
+
 /** Whether the phone opens [name] in the viewer: a `.md` or a `.markdown`, whatever the case (REQ-479). */
 fun isMarkdown(name: String): Boolean = name.substringAfterLast('.', "").lowercase() in setOf("md", "markdown")

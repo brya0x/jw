@@ -38,7 +38,7 @@ import kotlinx.coroutines.launch
 private val Gutter = 16.dp
 
 /** The ways to answer the plan the viewer shows: the question's own [options], whether it still [waits] and what [answer] does with a key (REQ-480). */
-internal class PlanAnswers(val options: List<AskOption>, val waits: Boolean, val answer: (String, String?) -> Unit)
+internal class PlanAnswers(val options: List<AskOption>, val waits: Boolean, val busy: Boolean, val answer: (String, String?) -> Unit)
 
 /**
  * A Markdown document over the whole screen (REQ-481): a bar with Back, the title and `☰` for the
@@ -97,13 +97,13 @@ private fun PlanBar(plan: PlanAnswers) {
         plan.options.forEachIndexed { i, o ->
             // «Seguir planeando» asks what to do next first (REQ-595).
             if (o.key == "no" && writing) {
-                InstructionBox(busy = false, back = { writing = false }) { text -> plan.answer(o.key, text) }
+                InstructionBox(busy = plan.busy, back = { writing = false }) { text -> plan.answer(o.key, text) }
                 return@forEachIndexed
             }
             Box(
                 Modifier.fillMaxWidth().defaultMinSize(minHeight = 48.dp)
                     .background(if (i == 0) Palette.green else Palette.sel, RoundedCornerShape(8.dp))
-                    .clickable { if (o.key == "no") writing = true else plan.answer(o.key, null) }
+                    .clickable(enabled = !plan.busy) { if (o.key == "no") writing = true else plan.answer(o.key, null) }
                     .padding(horizontal = 12.dp, vertical = 10.dp),
                 contentAlignment = Alignment.CenterStart,
             ) { Mono(o.label, if (i == 0) Palette.panel else if (o.key == "no") Palette.red else Palette.fg, 13, bold = i == 0, lines = 3) }

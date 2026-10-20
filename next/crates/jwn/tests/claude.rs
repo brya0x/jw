@@ -53,8 +53,11 @@ impl World {
         std::fs::create_dir_all(&home).unwrap();
         let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
         let mut cmd = env.jwn();
+        // ZDOTDIR too: the pane's zsh reads the dotfiles of ZDOTDIR, and the user's own (which
+        // put ~/.local/bin, where the real claude is, first) must not reach this test.
         cmd.env("SHELL", shell)
             .env("HOME", &home)
+            .env("ZDOTDIR", &home)
             .env("PATH", &path)
             .env("FAKE_LOG", &log)
             .env_remove("JWN_PANE_ID")

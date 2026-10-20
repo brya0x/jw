@@ -42,6 +42,13 @@ class ViewerTest {
     }
 
     @Test
+    fun aBlankReasonToKeepPlanningGoesWithoutANoteAndAnyOtherIsTrimmed() {
+        assertEquals(null, keepPlanningNote(""))
+        assertEquals(null, keepPlanningNote(" \n\t "))
+        assertEquals("revisa el módulo auth", keepPlanningNote("  revisa el módulo auth \n"))
+    }
+
+    @Test
     fun theLineUnderTheTitleSaysWhatItIsHowManyTitlesItHasAndWhetherItWasCut() {
         assertEquals("1 título", viewerSub(doc, plan = false, waits = false))
         assertEquals("plan listo · 1 título", viewerSub(doc, plan = true, waits = true))
