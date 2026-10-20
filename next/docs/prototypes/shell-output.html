@@ -1,0 +1,215 @@
+<title>jwn · the tail of what a shell or monitor prints, in the area of ^B and on the phone</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+:root{
+  --bg:#282c34; --panel:#21252b; --fg:#abb2bf; --dim:#5c6370; --line:#3e4451; --sel:#2c313a;
+  --blue:#61afef; --green:#98c379; --yellow:#e5c07b; --red:#e06c75; --magenta:#c678dd; --cyan:#56b6c2;
+  --page:#16181d; --ink:#c3c9d4; --mut:#7d8594;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}}
+:root[data-theme="light"]{--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.55 'IBM Plex Sans',system-ui,sans-serif;padding:24px max(16px,env(safe-area-inset-right,0px)) 40px max(16px,env(safe-area-inset-left,0px))}
+.wrap{max-width:1240px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
+h1{font:600 20px/1.2 var(--mono);margin:0}
+h2{font:600 12px var(--mono);margin:0;color:var(--mut)}
+p{margin:0;max-width:88ch;color:var(--mut)}
+code,kbd{font:12px var(--mono)}
+button{font:12px var(--mono);color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;min-height:32px;cursor:pointer}
+button:hover{border-color:var(--blue)}
+button[aria-pressed="true"]{border-color:var(--blue);color:var(--blue)}
+:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.stage{display:flex;gap:28px;align-items:flex-start;flex-wrap:wrap}
+.col{flex:1 1 640px;min-width:0;display:flex;flex-direction:column;gap:8px}
+.col.ph{flex:0 0 auto}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto}
+.term pre{margin:0;font:13px/1.35 var(--mono);color:var(--fg);outline:none;width:max-content;min-width:100%}
+.hint{font:12px var(--mono);color:var(--mut)}
+.phone{width:376px;max-width:100%;background:var(--bg);border:1px solid var(--line);border-radius:28px;padding:10px;box-shadow:0 0 0 6px var(--panel)}
+.scr{background:var(--panel);border-radius:20px;overflow:hidden;font:13px/1.45 var(--mono);color:var(--fg);display:flex;flex-direction:column;min-height:600px;position:relative}
+.scr .hd{padding:12px 14px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:8px}
+.scr .bd{padding:10px 14px;display:flex;flex-direction:column;gap:8px;flex:1;overflow:auto}
+.row{min-height:48px;border-radius:8px;background:var(--sel);padding:8px 12px;display:flex;flex-direction:column;justify-content:center;gap:2px;cursor:pointer;border:0;color:var(--fg);font:13px var(--mono);text-align:left;width:100%}
+.row .sub{color:var(--dim);font-size:12px}
+.pnl{padding:6px 14px;display:flex;flex-direction:column;gap:4px;border-bottom:1px solid var(--line);max-height:430px;overflow:auto}
+.out{background:var(--bg);border-radius:6px;padding:6px 8px;font:11.5px/1.4 var(--mono);color:var(--fg);overflow:hidden}
+.out div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dim{color:var(--dim)}.blue{color:var(--blue)}.green{color:var(--green)}.yellow{color:var(--yellow)}.red{color:var(--red)}.cyan{color:var(--cyan)}.b{font-weight:700}.sel{background:var(--sel)}
+.decide{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px;color:var(--fg)}
+.decide h2{margin:0 0 8px}
+.decide ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+</style>
+
+<div class="wrap">
+  <div>
+    <h1>The tail of what a shell or a monitor prints</h1>
+    <p>In the area of <kbd>^B</kbd> the lit shell (or monitor) gets a <b>salida</b> section under <b>comando</b> and <b>ahora</b>: the last six lines it printed, newest at the bottom, dim. The daemon reads them from the file the engine writes for that task and sends them with the task; nothing else changes in the layout. Click the terminal and walk the lines with <kbd>↑</kbd><kbd>↓</kbd>; the first shell prints a new line every two seconds. The buttons below show the odd cases.</p>
+  </div>
+  <div class="bar" role="group" aria-label="Cases">
+    <button id="silent" type="button" aria-pressed="false">a shell that prints nothing yet</button>
+    <button id="long" type="button" aria-pressed="false">a very long line</button>
+    <button id="colour" type="button" aria-pressed="false">a line with colour codes</button>
+    <button id="narrow" type="button" aria-pressed="false">narrow area (46 columns)</button>
+    <button id="rs" type="button">Reset</button>
+  </div>
+  <div class="stage">
+    <div class="col"><h2>TERMINAL</h2><div class="term"><pre id="scr" tabindex="0" aria-label="Area of what runs. Arrows move, x stops, escape closes."></pre></div><div class="hint" id="keys"></div></div>
+    <div class="col ph"><h2>PHONE</h2><div class="phone"><div class="scr" id="ph"></div></div></div>
+  </div>
+  <div class="decide">
+    <h2>To approve</h2>
+    <ol>
+      <li><b>Terminal.</b> The detail of a lit shell or monitor ends with <code>salida</code> and up to <b>6 lines</b>, each clipped with <code>…</code> at the width of the area, dim, newest last. They sit below <code>comando</code> and <code>ahora</code>; when the room is short the <b>top</b> lines of the tail go first (the newest stay), and <code>comando</code> keeps its 3 rows. Nothing printed yet says <code>sin salida todavía</code>. A subagent keeps <code>ahora</code> / <code>dijo</code> as now.</li>
+      <li><b>Finished ones keep the last lines.</b> A shell that ended (<code>✓ listo</code>, <code>✗ salió 1</code>) shows its final six lines, which is what you want when a build fails. The daemon reads once more when the task ends.</li>
+      <li><b>Phone.</b> A tapped shell or monitor opens in place with the command, then a dark monospace box with the <b>last 4 lines</b> (one line each, cut with <code>…</code>), then <code>▤ Ver salida</code> (≥ 48 dp) which opens the six lines with the long ones <b>wrapped</b>, and <code>■ Detener</code> while it runs.</li>
+      <li><b>What is shown is plain text.</b> Colour codes and other control sequences a program prints are removed; a carriage return (progress bars) keeps only the last state of its line; a line is cut at 200 characters before it travels.</li>
+      <li><b>Cost.</b> While a shell or monitor runs, the daemon looks at the end of its file (last 16 KB) every 2 seconds and sends the lines only when they changed. A file that is not where the engine says, is a link, or is not a regular file is not read.</li>
+    </ol>
+  </div>
+</div>
+
+<script>
+(function(){
+const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const c = (cls, s) => `<span class="${cls}">${esc(s)}</span>`;
+const pad = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s.padEnd(n));
+const fmt = t => `${Math.floor(t/60)}:${String(t%60).padStart(2,'0')}`;
+const SPIN = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
+const SECS = [['agent','subagentes'],['shell','shells'],['monitor','monitores']];
+const TAIL = 6;
+const flag = id => document.getElementById(id).getAttribute('aria-pressed') === 'true';
+let S, tick = 0, sel = 0, areaOpen = true, wide = false;
+const CRATES = ['jw-contract','jw-daemon','jw-web','jwn','serde','serde_json','vt100','portable-pty','toml_edit','tokio-util'];
+function reset(){
+  tick = 0; sel = 0; areaOpen = true;
+  S = [
+    {k:'agent', name:'Explore (haiku-5.5)', label:'mapear el puente del teléfono', state:'run', t:72, tok:38400, doing:'Grep fn pair', prompt:'Busca cómo el daemon habla con el teléfono y no edites nada.', steps:[['Glob','bridge*.rs'],['Read','web/src/lib.rs']], said:''},
+    {k:'shell', name:'cargo test -p jwn', label:'cargo test -p jwn', state:'run', t:35, doing:'compilando jwn (bin "jwn" test)', out:['   Compiling jw-contract v0.1.0','   Compiling jw-daemon v0.1.0','   Compiling jwn v0.1.0']},
+    {k:'shell', name:'npm run build', label:'npm run build', state:'fail', t:61, exit:1, doing:'salió 1', out:['> app@1.0.0 build','> vite build','vite v5.4.2 building for production...','✓ 112 modules transformed.','src/main.ts:14:7 - error TS2322: Type string is not assignable to number','error during build: Build failed with 1 error']},
+    {k:'shell', name:'sleep 300 && curl -s localhost:8080/health', label:'sleep 300 && curl -s localhost:8080/health', state:'run', t:140, doing:'esperando', out:[]},
+    {k:'monitor', name:'tail -f app.log | grep ERROR', label:'tail -f app.log | grep ERROR', state:'run', t:900, doing:'último aviso hace 2 min', glyph:'◉', out:['ERROR timeout en /sync (3 s)','ERROR timeout en /sync (3 s)','ERROR pool agotado: 10/10']},
+  ];
+}
+const live = () => areaOpen;
+function items(){ const out = []; SECS.forEach(([k]) => S.filter(a => a.k === k).forEach(a => out.push(a))); return out; }
+const mark = a => a.state === 'run' ? SPIN[tick % SPIN.length] : a.state === 'done' ? '✓' : '✗';
+const markc = a => a.state === 'run' ? 'yellow' : a.state === 'done' ? 'green' : 'red';
+const how = a => a.state === 'run' ? a.doing : a.state === 'done' ? 'listo' : a.doing;
+function tailOf(a){
+  let o = (a.out || []).slice(-TAIL);
+  if (a.name.startsWith('cargo') && flag('silent')) o = [];
+  if (a.name.startsWith('cargo') && flag('long') && o.length) o = o.slice(0, -1).concat(['warning: unused variable `very_long_variable_name_that_keeps_going` in crates/daemon/src/conversation.rs:1914 which is far wider than the area']);
+  if (a.name.startsWith('cargo') && flag('colour') && o.length) o = o.slice(0, -1).concat(['\u001b[32m   Compiling\u001b[0m jwn v0.1.0 (/Users/me/ws/jw/next/crates/jwn)']);
+  return o.map(l => l.replace(/\u001b\[[0-9;]*m/g, ''));
+}
+function W(){ return flag('narrow') ? 46 : 62; }
+function area(){
+  const w = W(), L = [], it = items(), n = it.filter(a => a.state === 'run').length;
+  L.push(c('b blue', 'en marcha') + c('dim', n ? ` · ${n} corriendo` : ' · nada'));
+  SECS.forEach(([k, title]) => {
+    const rows = it.filter(a => a.k === k); if (!rows.length) return;
+    L.push(c('dim', `${title} · ${rows.length}`));
+    rows.forEach(a => {
+      const on = it[sel] === a, r = fmt(a.t);
+      const lead = (on ? '▸ ' : '  ') + (a.glyph && a.state === 'run' ? a.glyph : mark(a)) + ' ';
+      const room = w - 2 - lead.length - r.length - 1;
+      const text = a.k === 'agent' ? pad(a.name + ' → ' + how(a), room) : pad(a.name, room);
+      L.push((on ? '<span class="sel b">' : '<span>') + c(markc(a), lead) + esc(text.padEnd(room)) + ' ' + c('dim', r) + '</span>');
+    });
+  });
+  const a = it[sel];
+  if (a){
+    L.push(c('dim', '─'.repeat(w - 2)));
+    if (a.k === 'agent'){
+      L.push(c('b', a.label)); L.push(c('dim', 'prompt')); L.push('  ' + esc(pad(a.prompt, w - 4)));
+      L.push(c('dim', a.state === 'run' ? 'ahora' : 'dijo')); L.push('  ' + esc(pad(a.state === 'run' ? a.doing : a.said, w - 4)));
+    } else {
+      L.push(c('dim', a.k === 'monitor' ? 'vigila' : 'comando')); L.push('  ' + esc(pad(a.label, w - 4)));
+      L.push(c('dim', a.state === 'run' ? 'ahora' : 'terminó')); L.push('  ' + esc(pad(a.state === 'run' ? a.doing : 'salió ' + a.exit, w - 4)));
+      const o = tailOf(a);
+      L.push(c('dim', 'salida'));
+      if (!o.length) L.push('  ' + c('dim', 'sin salida todavía'));
+      else o.forEach(l => L.push('  ' + c('dim', pad(l, w - 4))));
+    }
+  }
+  return L;
+}
+function draw(){
+  const it = items(); if (sel >= it.length) sel = Math.max(0, it.length - 1);
+  const w = W(), ar = live() ? area() : [];
+  const lw = 44, conv = [
+    c('green', '❯ ') + esc(pad('lanza el build y vigila los errores', lw - 4)),
+    '', c('blue', '● ') + 'Arranco tres cosas y sigo contigo.',
+    c('dim', '  ● Bash(cargo test -p jwn) en segundo plano'), c('dim', '  ● Monitor(tail -f app.log | grep ERROR)'),
+    '', c('yellow', '⠹ Trabajando… · 1 min 12 s'),
+  ];
+  const rows = Math.max(conv.length + 3, ar.length);
+  const strip = s => s.replace(/<[^>]+>/g, '').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>');
+  const out = [c('dim', '╭' + '─'.repeat(lw + (ar.length ? w + 3 : 0) + 1) + '╮')];
+  for (let i = 0; i < rows; i++){
+    const l = i < conv.length ? conv[i] : (i === rows - 1 ? c('green', '❯ ') + c('dim', 'escribe un mensaje') : '');
+    out.push(c('dim', '│ ') + l + ' '.repeat(Math.max(0, lw - 1 - strip(l).length)) + (ar.length ? c('dim', '│ ') + (ar[i] || '') + ' '.repeat(Math.max(0, w - 1 - strip(ar[i] || '').length)) : '') + c('dim', '│'));
+  }
+  out.push(c('dim', '╰' + '─'.repeat(lw + (ar.length ? w + 3 : 0) + 1) + '╯'));
+  const sh = S.filter(a => a.k === 'shell' && a.state === 'run').length, mo = S.filter(a => a.k === 'monitor' && a.state === 'run').length;
+  out.push(' ' + c('yellow', `⚙ 1 agente · ${sh} shells · ${mo} monitor`) + c('dim', ' · manual ⇧tab · sonnet-5.5') + ' '.repeat(6) + c('blue', '^/') + c('dim', ' teclas'));
+  document.getElementById('scr').innerHTML = out.join('\n');
+  document.getElementById('keys').textContent = live() ? '↑↓ jk líneas · x detener · esc cierra' : '^B abre el área';
+  phone();
+}
+let full = -1;
+function phone(){
+  const p = document.getElementById('ph'), it = items();
+  let h = `<div class="hd"><b>feat/next-bootstrap</b><span class="yellow">⚙ ${it.filter(a => a.state === 'run').length}</span></div><div class="pnl">`;
+  SECS.forEach(([k, title]) => {
+    const rows = it.filter(a => a.k === k); if (!rows.length) return;
+    h += `<div class="dim" style="font-size:11px;margin-top:4px">${title} · ${rows.length}</div>`;
+    rows.forEach(a => {
+      const i = it.indexOf(a);
+      h += `<button class="row" data-i="${i}" type="button"><span>${c(markc(a), a.glyph && a.state === 'run' ? a.glyph : mark(a))} <b>${esc(a.name.slice(0, 28))}</b></span><span class="sub">${esc(fmt(a.t))}</span></button>`;
+      if (i === sel && a.k !== 'agent'){
+        const o = tailOf(a), last = o.slice(-4);
+        h += `<div style="padding:0 4px 6px;display:flex;flex-direction:column;gap:6px"><div class="dim" style="font-size:12px">${esc(a.label)}</div>`;
+        h += `<div class="out" aria-label="Últimas líneas">` + (last.length ? last.map(l => `<div>${esc(l)}</div>`).join('') : '<div class="dim">sin salida todavía</div>') + '</div>';
+        if (full === i) h += `<div class="out" style="max-height:200px;overflow:auto">` + o.map(l => `<div style="white-space:normal;word-break:break-word">${esc(l)}</div>`).join('') + '</div>';
+        h += `<button class="row" data-full="${i}" style="min-height:48px;color:var(--blue)" type="button">▤ ${full === i ? 'Cerrar salida' : 'Ver salida'}</button>`;
+        if (a.state === 'run') h += `<button class="row" data-stop="${i}" style="min-height:48px;color:var(--red)" type="button">■ Detener</button>`;
+        h += '</div>';
+      }
+    });
+  });
+  h += '</div><div class="bd"><div class="dim">❯ lanza el build y vigila los errores</div><div>Arranco tres cosas y sigo contigo.</div><div class="dim">⠹ Trabajando…</div></div>';
+  p.innerHTML = h;
+  p.querySelectorAll('[data-i]').forEach(b => b.onclick = () => { sel = +b.dataset.i; full = -1; draw(); });
+  p.querySelectorAll('[data-full]').forEach(b => b.onclick = () => { full = full === +b.dataset.full ? -1 : +b.dataset.full; draw(); });
+  p.querySelectorAll('[data-stop]').forEach(b => b.onclick = () => { const a = items()[+b.dataset.stop]; a.state = 'stop'; a.doing = 'detenido'; draw(); });
+}
+document.getElementById('scr').addEventListener('keydown', e => {
+  const it = items(), k = e.key;
+  if (k === 'ArrowDown' || k === 'j') sel = Math.min(it.length - 1, sel + 1);
+  else if (k === 'ArrowUp' || k === 'k') sel = Math.max(0, sel - 1);
+  else if (k === 'x'){ const a = it[sel]; if (a && a.state === 'run'){ a.state = 'stop'; a.doing = 'detenido'; } }
+  else if (k === 'Escape') areaOpen = false;
+  else if (e.ctrlKey && k.toLowerCase() === 'b') areaOpen = !areaOpen;
+  else return;
+  draw(); e.preventDefault();
+});
+['silent','long','colour','narrow'].forEach(id => document.getElementById(id).onclick = e => { e.target.setAttribute('aria-pressed', e.target.getAttribute('aria-pressed') !== 'true'); draw(); });
+document.getElementById('rs').onclick = () => { reset(); ['silent','long','colour','narrow'].forEach(i => document.getElementById(i).setAttribute('aria-pressed', false)); full = -1; draw(); };
+setInterval(() => {
+  tick++;
+  S.forEach(a => { if (a.state === 'run') a.t++; });
+  const b = S.find(a => a.name.startsWith('cargo'));
+  if (b && b.state === 'run' && tick % 2 === 0){
+    const n = b.out.length;
+    b.out.push(n < 8 ? `   Compiling ${CRATES[n % CRATES.length]} v0.${n}.0` : `test tui::agents::case_${n - 7} ... ok`);
+    if (b.out.length > 40) b.out.shift();
+  }
+  draw();
+}, 1000);
+reset(); draw();
+})();
+</script>
