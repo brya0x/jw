@@ -518,7 +518,6 @@ pub struct State {
     live_texts: VecDeque<usize>,
     /// What `!command` lines printed, sent with the next message.
     shell_context: Vec<String>,
-    pending_mode: Option<Mode>,
     next_request: u64,
     /// Each task the engine started: its id, the tool call that made it (a subagent's card) and whether it runs in the background.
     task_links: Vec<TaskLink>,
@@ -706,7 +705,6 @@ impl State {
             last_total_micro: 0,
             live_texts: VecDeque::new(),
             shell_context: Vec::new(),
-            pending_mode: None,
             next_request: 1,
             task_links: Vec::new(),
             refused: Vec::new(),
@@ -1107,7 +1105,7 @@ impl State {
 
     /// A message from the person: sent now, or queued when the engine is busy.
     pub fn send(&mut self, text: &str, images: Vec<Image>, now: u64) -> Vec<Effect> {
-        if self.busy() || self.pending.is_some() || self.pending_mode.is_some() {
+        if self.busy() || self.pending.is_some() {
             self.queue.push_back(Queued::Text {
                 text: text.to_owned(),
                 images,
@@ -1423,12 +1421,9 @@ impl State {
                 Change::Effort(e.trim().to_owned()),
             ));
         }
+        // The engine takes the change at once, also in the middle of a turn (REQ-389).
         if let Some(m) = mode.filter(|m| *m != self.mode) {
-            if self.busy() || self.pending.is_some() {
-                self.pending_mode = Some(m);
-            } else {
-                out.push(self.mode_request(m));
-            }
+            out.push(self.mode_request(m));
         }
         out
     }
@@ -2220,10 +2215,6 @@ impl State {
     fn after_end(&mut self, out: &mut Vec<Effect>, now: u64) {
         self.status = ConvStatus::Idle;
         self.since = None;
-        if let Some(mode) = self.pending_mode.take() {
-            let request = self.mode_request(mode);
-            out.push(request);
-        }
         out.extend(self.drain(now));
     }
 
@@ -3460,11 +3451,18 @@ mod tests {
             !s.items.iter().any(|i| matches!(i, Item::Note { .. })),
             "a change of mode is in the footer and not a line of the conversation"
         );
-        // while a turn runs the change waits for it to end
+        // while a turn runs it is asked at once, and the turn goes on
         s.send("go", vec![], 2);
-        assert!(s.set(None, None, None, None, Some(Mode::Auto)).is_empty());
-        let e = s.apply(&result(0.0), 3);
+        let e = s.set(None, None, None, None, Some(Mode::Auto));
         assert_eq!(writes(&e)[0]["request"]["mode"], "auto");
+        assert_eq!(
+            s.mode,
+            Mode::Plan,
+            "shown when the engine says so, as always"
+        );
+        s.apply(&json!({"type": "system", "subtype": "status", "status": null, "permissionMode": "auto"}), 3);
+        assert_eq!(s.mode, Mode::Auto);
+        s.apply(&result(0.0), 3);
         // a refusal of the engine is told
         s.apply(&json!({"type": "control_response", "response": {"subtype": "error", "request_id": "jwn-1", "error": "no se puede"}}), 4);
         assert!(s.items.iter().any(
