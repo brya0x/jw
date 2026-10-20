@@ -1930,28 +1930,11 @@ impl State {
                 });
             }
             "task_progress" => {
-                let usage = &msg["usage"];
                 if let Some(t) = self.tasks.iter_mut().find(|t| t.id == task) {
                     t.info = msg["description"].as_str().map(|d| clip(d, LINE_CHARS));
                 }
                 let tool = tool_use_id.or_else(|| self.link_of(task));
-                if let Some(Item::Agent {
-                    tools,
-                    tokens,
-                    ms,
-                    last,
-                    ..
-                }) = self
-                    .items
-                    .iter_mut()
-                    .rev()
-                    .find(|i| matches!(i, Item::Agent { id, .. } if Some(id) == tool.as_ref()))
-                {
-                    *tools = usage["tool_uses"].as_u64().unwrap_or(0) as u32;
-                    *tokens = usage["total_tokens"].as_u64().unwrap_or(0);
-                    *ms = usage["duration_ms"].as_u64().unwrap_or(0);
-                    *last = msg["last_tool_name"].as_str().map(str::to_owned);
-                }
+                self.card_usage(tool, &msg["usage"], msg["last_tool_name"].as_str());
             }
             "task_updated" => {
                 let status = msg["patch"]["status"].as_str().unwrap_or("");
@@ -1960,10 +1943,39 @@ impl State {
                 }
             }
             "task_notification" => {
+                // The totals at the end: the last progress was before its last tool finished.
+                let tool = tool_use_id.or_else(|| self.link_of(task));
+                self.card_usage(tool, &msg["usage"], None);
                 let status = msg["status"].as_str().unwrap_or("");
                 self.end_task(task, status, msg["summary"].as_str(), true);
             }
             _ => {}
+        }
+    }
+
+    /// The numbers of a subagent's card, as the engine counts them (its tools, its tokens and its time).
+    fn card_usage(&mut self, tool: Option<String>, usage: &Value, last: Option<&str>) {
+        if usage.is_null() {
+            return;
+        }
+        if let Some(Item::Agent {
+            tools,
+            tokens,
+            ms,
+            last: last_tool,
+            ..
+        }) = self
+            .items
+            .iter_mut()
+            .rev()
+            .find(|i| matches!(i, Item::Agent { id, .. } if Some(id) == tool.as_ref()))
+        {
+            *tools = usage["tool_uses"].as_u64().unwrap_or(0) as u32;
+            *tokens = usage["total_tokens"].as_u64().unwrap_or(0);
+            *ms = usage["duration_ms"].as_u64().unwrap_or(0);
+            if let Some(l) = last {
+                *last_tool = Some(l.to_owned());
+            }
         }
     }
 
