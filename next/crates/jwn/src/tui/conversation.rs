@@ -2354,6 +2354,15 @@ impl Ui {
         }
         let n = ask.options.len();
         let by_key = |k: &str| ask.options.iter().position(|o| o.key == k);
+        // `esc` and `^C` stop what Claude was doing, the question that waits included: the daemon
+        // refuses it first so that the engine is not left asking (REQ-603).
+        if ev.code == KeyCode::Esc
+            || (ev.code == KeyCode::Char('c') && ev.modifiers.contains(KeyModifiers::CONTROL))
+        {
+            return Some(Act::Interrupt {
+                node: node.to_owned(),
+            });
+        }
         // The whole plan, when the box has room for a few lines of it only.
         if ask.kind == AskKind::Plan && ev.code == KeyCode::Char('v') {
             return Some(Act::ViewPlan {
@@ -3157,10 +3166,10 @@ fn keys_of(ask: &Ask) -> Vec<Option<char>> {
 /// What keys answer the box that asks.
 fn ask_hint(ask: &Ask) -> &'static str {
     match (ask.kind, ask.multi) {
-        (AskKind::Plan, _) => "1 2 3 · v ver el plan · ↑↓ ↵",
-        (_, true) => "1 2 3 marcan · ↵ envía lo marcado · ↑↓",
-        (AskKind::Question, false) => "1 2 3 · ↑↓ ↵",
-        _ => "1 2 3 · y a n · ↑↓ ↵",
+        (AskKind::Plan, _) => "1 2 3 · v ver el plan · ↑↓ ↵ · esc interrumpe",
+        (_, true) => "1 2 3 marcan · ↵ envía lo marcado · ↑↓ · esc interrumpe",
+        (AskKind::Question, false) => "1 2 3 · ↑↓ ↵ · esc interrumpe",
+        _ => "1 2 3 · y a n · ↑↓ ↵ · esc interrumpe",
     }
 }
 
@@ -3963,8 +3972,10 @@ mod tests {
             &std::fs::read_to_string(dir.join("snapshot-conversation-following.json")).unwrap(),
         )
         .unwrap();
-        let conv: Conversation = serde_json::from_value(doc["node"].clone()).unwrap();
+        let mut conv: Conversation = serde_json::from_value(doc["node"].clone()).unwrap();
         assert_eq!(conv.status, ConvStatus::Dead);
+        // The fixture keeps the question of the node it was cut from; a dead one asks nothing.
+        conv.ask = None;
         let (_, rows) = frame(&Ui::default(), &conv);
         row_of(&rows, "Trabajando… (12 s · ↓ 1,3 k tokens)");
         row_of(&rows, "● Bash(cargo test) · 9 s");
@@ -4211,6 +4222,53 @@ mod tests {
                 node: conv.head.id.clone(),
                 command: "git status".into()
             })
+        );
+    }
+
+    /// REQ-603: `esc` and `^C` interrupt while a question, a permission or a plan waits, and the
+    /// box says so; the reason of a refusal being written keeps `esc` as «vuelve».
+    #[test]
+    fn esc_and_ctrl_c_interrupt_what_waits_whatever_it_is() {
+        let c = fixture();
+        let node = c.head.id.clone();
+        assert!(c.ask.is_some());
+        let interrupt = Some(Act::Interrupt { node: node.clone() });
+        let kinds = [AskKind::Permission, AskKind::Question, AskKind::Plan];
+        for kind in kinds {
+            for multi in [false, true] {
+                let mut c = fixture();
+                let ask = c.ask.as_mut().unwrap();
+                ask.kind = kind;
+                ask.multi = multi;
+                let mut ui = Ui::default();
+                let (_, rows) = frame(&ui, &c);
+                row_of(&rows, "esc interrumpe");
+                assert_eq!(
+                    press(&mut ui, &c, KeyCode::Esc),
+                    interrupt,
+                    "{kind:?} multi {multi}"
+                );
+                assert_eq!(
+                    ui.key(
+                        &c,
+                        &KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)
+                    ),
+                    interrupt,
+                    "{kind:?} multi {multi}: ^C"
+                );
+            }
+        }
+        // writing the reason of «seguir planeando»: esc goes back to the options and does not stop
+        let mut c = fixture();
+        c.ask.as_mut().unwrap().kind = AskKind::Plan;
+        let ask = c.ask.clone().unwrap();
+        let mut ui = Ui::default();
+        ui.refuse(&ask.id);
+        assert_eq!(press(&mut ui, &c, KeyCode::Esc), None);
+        assert_eq!(
+            press(&mut ui, &c, KeyCode::Esc),
+            interrupt,
+            "back at the options, esc stops"
         );
     }
 
