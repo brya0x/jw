@@ -50,7 +50,7 @@ fun agentTokens(n: Long): String = if (n < 1000) n.toString() else {
 /** The tasks of [conv], newest first, with the card of each that has one; [now] is the clock of the phone, in milliseconds. */
 fun agentRows(conv: Node.Conversation, now: Long): List<AgentRow> =
     conv.tasks.filter { it.kind == TaskKind.Agent }.sortedByDescending { it.started }.take(AGENT_ROWS).map { t ->
-        val card = t.item?.let { id -> conv.items.lastOrNull { it is ConvItem.Agent && it.id == id } as ConvItem.Agent? }
+        val card = t.item?.let { id -> conv.items.filterIsInstance<ConvItem.Agent>().lastOrNull { it.id == id } }
         val elapsed = if (t.state == TaskState.Run) maxOf(0, now - t.started) else 0
         AgentRow(
             id = t.id,

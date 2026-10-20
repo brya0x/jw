@@ -113,7 +113,6 @@ import dev.jw.next.contract.ConvStatus
 import dev.jw.next.contract.Id
 import dev.jw.next.contract.MarkdownDoc
 import dev.jw.next.contract.Node
-import dev.jw.next.contract.TaskState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -285,7 +284,6 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
     }
 
     // ---- the tasks and the checklist (REQ-448) ----
-    val running = node.tasks.count { it.state == TaskState.Run }
     if (node.todos.isNotEmpty()) {
         Column(Modifier.fillMaxWidth().background(Palette.panel)) {
             val done = node.todos.count { it.done }

@@ -159,7 +159,7 @@ private fun ItemView(item: ConvItem, accent: Color, spin: String, picked: Boolea
                 else Text(inline(item.text + if (item.live) " ▍" else ""), color = Palette.fg, fontFamily = MonoFont, fontSize = 13.sp, lineHeight = 19.sp, modifier = Modifier.padding(horizontal = Pad))
             }
             is ConvItem.Tool -> ToolRow(item, spin, open, began.ranFor(item.id, now))
-            is ConvItem.Agent -> AgentRow(item, spin, open)
+            is ConvItem.Agent -> AgentCard(item, spin, open)
             is ConvItem.Shell -> ShellRow(item, open)
             is ConvItem.Out -> Column(Modifier.padding(horizontal = Pad)) {
                 item.lines.forEachIndexed { k, l -> Mono((if (k == 0) "⎿ " else "  ") + l, Palette.dim, 12, lines = 6) }
@@ -276,7 +276,7 @@ private fun Lines(lines: List<String>) {
 }
 
 @Composable
-private fun AgentRow(a: ConvItem.Agent, spin: String, open: Boolean) {
+private fun AgentCard(a: ConvItem.Agent, spin: String, open: Boolean) {
     val totals = "${convTools(a.tools)} · ${convKilo(a.tokens)} tokens · ${convSecs(a.ms)}"
     val running = a.state == ToolState.Run || a.state == ToolState.Ask
     Column(Modifier.padding(horizontal = Pad, vertical = 6.dp)) {
