@@ -170,12 +170,49 @@ fun CommandSource.word(): String = when (this) {
     CommandSource.Plugin -> "plugin"
 }
 
-/** The commands whose names hold the letters after the `/` the line is, the ones that begin with them first. */
-fun slashMenu(commands: List<ConvCommand>, line: String): List<ConvCommand> {
-    val typed = line.removePrefix("/").takeIf { line.startsWith("/") && it.none(Char::isWhitespace) }?.lowercase() ?: return emptyList()
+/** The `/word` the cursor ends: where it begins in the line and the letters after its slash (REQ-596). */
+data class SlashAt(val start: Int, val typed: String)
+
+/** The `/word` that ends at [cursor], at the start of the line or after a space or a new line; a path (a second `/`) is not one. */
+fun slashAt(line: String, cursor: Int = line.length): SlashAt? {
+    val before = line.take(cursor.coerceIn(0, line.length))
+    val start = before.lastIndexOfAny(charArrayOf(' ', '\n', '\t')) + 1
+    val word = before.substring(start)
+    if (!word.startsWith("/") || word.indexOf('/', 1) >= 0) return null
+    return SlashAt(start, word.drop(1))
+}
+
+/** The commands whose names hold the letters after the `/` being written, the ones that begin with them first (REQ-446, REQ-596). */
+fun slashMenu(commands: List<ConvCommand>, line: String, cursor: Int = line.length): List<ConvCommand> {
+    val typed = slashAt(line, cursor)?.typed?.lowercase() ?: return emptyList()
     return commands
         .filter { it.name.removePrefix("/").lowercase().contains(typed) }
         .sortedWith(compareBy({ !it.name.removePrefix("/").lowercase().startsWith(typed) }, { it.source.rank() }, { it.name }))
+}
+
+/** Whether the `/word` being written is the whole line: only then does choosing a command run it; anywhere else it is written in place (REQ-596). */
+fun slashIsWholeLine(line: String, cursor: Int): Boolean = slashAt(line, cursor)?.let { it.start == 0 && cursor >= line.length } == true
+
+/** The line with the `/word` that ends at [cursor] replaced by [command] and a space, and where the cursor goes. */
+fun takeCommand(line: String, cursor: Int, command: ConvCommand): Pair<String, Int> {
+    val at = slashAt(line, cursor) ?: return line to cursor
+    val text = line.substring(0, at.start) + command.name + " " + line.substring(cursor)
+    return text to at.start + command.name.length + 1
+}
+
+/** The words of [line] that are a command that exists, anywhere in it: from, to and where it is defined (REQ-596). */
+fun commandWords(commands: List<ConvCommand>, line: String): List<Triple<Int, Int, CommandSource>> {
+    val bySource = commands.associate { it.name to it.source }
+    val out = mutableListOf<Triple<Int, Int, CommandSource>>()
+    var i = 0
+    while (i < line.length) {
+        if (line[i].isWhitespace()) { i++; continue }
+        val end = (i until line.length).firstOrNull { line[it].isWhitespace() } ?: line.length
+        val source = if (line[i] == '/') bySource[line.substring(i, end)] else null
+        if (source != null) out += Triple(i, end, source)
+        i = end
+    }
+    return out
 }
 
 /** What the person typed, and so what the phone does with it when they send it. */

@@ -36,6 +36,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -56,10 +57,17 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.TransformedText
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -81,7 +89,10 @@ import dev.jw.next.client.itemText
 import dev.jw.next.client.label
 import dev.jw.next.client.savedPanel
 import dev.jw.next.client.skillsPanel
+import dev.jw.next.client.slashIsWholeLine
 import dev.jw.next.client.slashMenu
+import dev.jw.next.client.takeCommand
+import dev.jw.next.client.commandWords
 import dev.jw.next.client.statusPanel
 import dev.jw.next.client.submitOf
 import dev.jw.next.client.suggestionShown
@@ -91,7 +102,9 @@ import dev.jw.next.client.turnText
 import dev.jw.next.client.word
 import dev.jw.next.client.workLine
 import dev.jw.next.client.working
+import dev.jw.next.contract.AskKind
 import dev.jw.next.contract.CommandKind
+import dev.jw.next.contract.CommandSource
 import dev.jw.next.contract.ConvCommand
 import dev.jw.next.contract.ConvMode
 import dev.jw.next.contract.ConvStatus
@@ -363,12 +376,17 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
     // ---- what asks ----
     val ask = node.ask
     if (ask != null && askClosed != ask.id) {
+        // The plan is read once when it asks: its beginning is drawn formatted in the sheet and the same document opens in the viewer (REQ-597).
+        var preview by remember(ask.id) { mutableStateOf<MarkdownDoc?>(null) }
+        if (ask.kind == AskKind.Plan) LaunchedEffect(ask.id) { source.readPlan(nodeId, ask.id) { r -> r.onSuccess { preview = it } } }
         val viewPlan = {
-            source.readPlan(nodeId, ask.id) { r ->
+            val read = preview
+            if (read != null) { plan = ask.id to read; askClosed = ask.id }
+            else source.readPlan(nodeId, ask.id) { r ->
                 r.onSuccess { plan = ask.id to it; askClosed = ask.id }.onFailure { say(it.message ?: "el PC no pudo leer el plan", error = true) }
             }
         }
-        AskSheet(ask, answering, dismiss = { askClosed = ask.id }, viewPlan = viewPlan) { key, text ->
+        AskSheet(ask, answering, dismiss = { askClosed = ask.id }, viewPlan = viewPlan, preview = preview) { key, text ->
             answering = true
             source.conversationAnswer(nodeId, ask.id, key, text) { r -> answering = false; fail(r) }
         }
@@ -380,19 +398,26 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
     }
 
     // ---- the plan that was asked for whole, over everything (REQ-480) ----
+    // Keyed by the ask, so a plan that replaces another starts with no text typed and no «Seguir planeando» open (REQ-595).
     plan?.let { (askId, doc) ->
-        val waiting = ask?.takeIf { it.id == askId }
-        val answers = PlanAnswers(waiting?.options.orEmpty(), waiting != null) { key, text ->
-            plan = null
-            answering = true
-            source.conversationAnswer(nodeId, askId, key, text) { r -> answering = false; fail(r) }
+        key(askId) {
+            val waiting = ask?.takeIf { it.id == askId }
+            val answers = PlanAnswers(waiting?.options.orEmpty(), waiting != null, busy = answering) { key, text ->
+                plan = null
+                answering = true
+                source.conversationAnswer(nodeId, askId, key, text) { r -> answering = false; fail(r) }
+            }
+            ViewerDialog(doc, answers) { plan = null }
         }
-        ViewerDialog(doc, answers) { plan = null }
     }
 
     // ---- the `/` list above the field (REQ-446) ----
-    val menu = if (heldText == null) slashMenu(node.commands, text.text) else emptyList()
-    if (menu.isNotEmpty()) CommandList(menu, accent) { c -> send(c.name) }
+    // The word being written, wherever it is in the line; a command alone in the line runs, anywhere else it is written in place (REQ-596).
+    val menu = if (heldText == null) slashMenu(node.commands, text.text, text.selection.end) else emptyList()
+    if (menu.isNotEmpty()) CommandList(menu, accent) { c ->
+        if (slashIsWholeLine(text.text, text.selection.end)) send(c.name)
+        else takeCommand(text.text, text.selection.end, c).let { (line, at) -> text = TextFieldValue(line, TextRange(at)) }
+    }
 
     // ---- the field ----
     // What Claude proposes next: a tap puts it in the field, the ✕ puts it aside; it is shown whenever the field is empty and nothing runs, asks or holds the session (REQ-573).
@@ -452,6 +477,7 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
                 maxLines = LINE_ROWS,
                 textStyle = TextStyle(color = Palette.fg, fontFamily = MonoFont, fontSize = 13.sp),
                 cursorBrush = SolidColor(Palette.blue),
+                visualTransformation = remember(node.commands) { CommandColours(node.commands) },
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, imeAction = ImeAction.Default),
                 modifier = Modifier.weight(1f).heightIn(min = 48.dp).wrapContentHeight(Alignment.CenterVertically),
                 decorationBox = { inner ->
@@ -523,6 +549,26 @@ private fun ConvMode.color() = when (this) {
     ConvMode.AcceptEdits -> Palette.magenta
     ConvMode.Plan -> Palette.cyan
     ConvMode.Auto -> Palette.yellow
+}
+
+/** The colour a command is written in where the line is edited: where it is defined, as in the terminal (REQ-596). */
+private fun CommandSource.colour() = when (this) {
+    CommandSource.Jwn -> Palette.blue
+    CommandSource.Claude -> Palette.magenta
+    CommandSource.Project -> Palette.green
+    CommandSource.Skill -> Palette.yellow
+    CommandSource.Plugin -> Palette.cyan
+}
+
+/** The line as it is written, with each word that is a command in its colour, wherever it is; no character moves. */
+private class CommandColours(private val commands: List<ConvCommand>) : VisualTransformation {
+    override fun filter(text: AnnotatedString): TransformedText {
+        val styled = buildAnnotatedString {
+            append(text.text)
+            commandWords(commands, text.text).forEach { (from, to, source) -> addStyle(SpanStyle(color = source.colour(), fontWeight = FontWeight.Bold), from, to) }
+        }
+        return TransformedText(styled, OffsetMapping.Identity)
+    }
 }
 
 /** The commands whose names hold what is typed, above the keyboard; a tap runs one (REQ-446). A command that needs Claude's screen is marked `↗`. */

@@ -160,6 +160,40 @@ class ConversationTest {
     }
 
     @Test
+    fun aSlashAfterOtherWordsOpensTheSameListAndAPathDoesNot() {
+        val c = conversation()
+        val names = { line: String, at: Int -> slashMenu(c.commands, line, at).map { it.name } }
+        val line = "mira esto y /de"
+        assertEquals(listOf("/deploy", "/vercel:deploy"), names(line, line.length))
+        assertEquals(listOf("/deploy", "/vercel:deploy"), names("uno\n/de", 7), "after a new line")
+        assertEquals(emptyList(), names("mira /usr/b", 11), "a path is not a command")
+        assertEquals(emptyList(), names("a/de", 4), "a slash inside a word is not one")
+        assertEquals(emptyList(), names("mira /de y mas", 14), "the cursor is past the word")
+        assertEquals(listOf("/deploy", "/vercel:deploy"), names("mira /de y mas", 8), "the cursor ends the word")
+    }
+
+    @Test
+    fun aCommandIsRunOnlyWhenItIsTheWholeLineAndWrittenInPlaceAnywhereElse() {
+        val c = conversation()
+        val deploy = c.commands.first { it.name == "/deploy" }
+        assertTrue(slashIsWholeLine("/de", 3))
+        assertTrue(!slashIsWholeLine("mira /de", 8))
+        assertTrue(!slashIsWholeLine("/de y mas", 3), "text after it is not thrown away")
+        assertEquals("mira /deploy " to 13, takeCommand("mira /de", 8, deploy))
+        assertEquals("/deploy  y mas" to 8, takeCommand("/de y mas", 3, deploy))
+        assertEquals("a" to 1, takeCommand("a", 1, deploy), "no word, no change")
+    }
+
+    @Test
+    fun aCommandThatExistsIsFoundAnywhereInTheLineAndNothingElseIs() {
+        val c = conversation()
+        val line = "mira /deploy y /nope o /jwn, /exit"
+        val words = commandWords(c.commands, line).map { (a, b, s) -> line.substring(a, b) to s }
+        assertEquals(listOf("/deploy" to CommandSource.Project, "/exit" to c.commands.first { it.name == "/exit" }.source), words)
+        assertEquals(emptyList(), commandWords(c.commands, "no/deploy"))
+    }
+
+    @Test
     fun whatIsSentDependsOnHowTheLineStarts() {
         val c = conversation()
         assertEquals(Submit.Nothing, submitOf("   ", emptyList()))

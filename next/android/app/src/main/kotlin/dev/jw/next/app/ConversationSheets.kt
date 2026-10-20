@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -34,6 +36,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.contentDescription
@@ -52,10 +56,13 @@ import dev.jw.next.client.RowAct
 import dev.jw.next.client.Tone
 import dev.jw.next.client.char
 import dev.jw.next.client.label
+import dev.jw.next.client.keepPlanningNote
 import dev.jw.next.client.listAgo
+import dev.jw.next.client.outline
 import dev.jw.next.client.tag
 import dev.jw.next.contract.Accent
 import dev.jw.next.contract.Ask
+import dev.jw.next.contract.MarkdownDoc
 import dev.jw.next.contract.AskKind
 import dev.jw.next.contract.ConvMode
 import dev.jw.next.contract.Node
@@ -82,7 +89,7 @@ internal fun ConvSheet(dismiss: () -> Unit, content: @Composable ColumnScope.() 
 
 /** What the question needs from the person (REQ-441): what the tool is about to do, and a button of at least 48 dp for each option, the first one primary. */
 @Composable
-internal fun AskSheet(ask: Ask, busy: Boolean, dismiss: () -> Unit, viewPlan: () -> Unit, answer: (String, String?) -> Unit) {
+internal fun AskSheet(ask: Ask, busy: Boolean, dismiss: () -> Unit, viewPlan: () -> Unit, preview: MarkdownDoc? = null, answer: (String, String?) -> Unit) {
     // A choice of several: the options marked, sent together as their numbers with commas (REQ-435).
     var marked by remember(ask.id) { mutableStateOf(setOf<Int>()) }
     // «Seguir planeando» of a plan asks what to do next before it answers (REQ-595).
@@ -94,9 +101,10 @@ internal fun AskSheet(ask: Ask, busy: Boolean, dismiss: () -> Unit, viewPlan: ()
         }
         ask.command?.let { Mono(it, Palette.cyan, 12, lines = 8, modifier = Modifier.fillMaxWidth().background(Palette.bg, RoundedCornerShape(6.dp)).padding(8.dp)) }
         if (ask.diff.isNotEmpty()) Diff(ask.diff.take(12))
-        ask.plan.forEach { Mono(it, Palette.fg, 13, lines = 6) }
-        // The box keeps a few lines of a plan; the viewer has all of it (REQ-480).
-        if (ask.kind == AskKind.Plan) SheetAction("▤", "Ver el plan completo", Palette.blue, click = viewPlan)
+        // The sheet keeps the beginning of a plan, formatted once the PC has read it, and the viewer has all of it (REQ-480, REQ-597).
+        if (ask.kind == AskKind.Plan) PlanPreview(ask, preview)
+        if (ask.kind == AskKind.Plan) SheetAction("▤", "Ver el plan completo" + preview?.let { d -> outline(d).size.takeIf { it > 0 }?.let { " · $it títulos" }.orEmpty() }.orEmpty(), Palette.blue, click = viewPlan)
+        else ask.plan.forEach { Mono(it, Palette.fg, 13, lines = 6) }
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             ask.options.forEachIndexed { i, o ->
                 val primary = i == 0 && !ask.multi
@@ -130,6 +138,22 @@ internal fun AskSheet(ask: Ask, busy: Boolean, dismiss: () -> Unit, viewPlan: ()
     }
 }
 
+/** The beginning of a plan that waits: its first blocks formatted and cut with a fade (the lines as they are while the PC has not read the document), never more than [PREVIEW_HEIGHT] (REQ-597). */
+@Composable
+private fun PlanPreview(ask: Ask, doc: MarkdownDoc?) {
+    Box(Modifier.fillMaxWidth().heightIn(max = PREVIEW_HEIGHT).clipToBounds()) {
+        Column(Modifier.fillMaxWidth().wrapContentHeight(align = Alignment.Top, unbounded = true), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (doc != null) doc.blocks.take(PREVIEW_BLOCKS).forEach { BlockView(it) }
+            else ask.plan.take(PREVIEW_LINES).forEach { Mono(it, Palette.fg, 13, lines = 3) }
+        }
+        Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(40.dp).background(Brush.verticalGradient(listOf(Color.Transparent, Palette.panel))))
+    }
+}
+
+private val PREVIEW_HEIGHT = 150.dp
+private const val PREVIEW_BLOCKS = 6
+private const val PREVIEW_LINES = 8
+
 /** The line where what to do next is written when a plan is not approved: «Volver» goes back to the options, the button sends the text (or none when it is empty) with the refusal (REQ-595). */
 @Composable
 internal fun InstructionBox(busy: Boolean, back: () -> Unit, send: (String?) -> Unit) {
@@ -158,7 +182,7 @@ internal fun InstructionBox(busy: Boolean, back: () -> Unit, send: (String?) -> 
                 contentAlignment = Alignment.Center,
             ) { Mono("Volver", Palette.fg, 13) }
             Box(
-                Modifier.weight(1f).defaultMinSize(minHeight = 48.dp).background(Palette.green, RoundedCornerShape(8.dp)).clickable(enabled = !busy) { send(text.trim().ifEmpty { null }) },
+                Modifier.weight(1f).defaultMinSize(minHeight = 48.dp).background(Palette.green, RoundedCornerShape(8.dp)).clickable(enabled = !busy) { send(keepPlanningNote(text)) },
                 contentAlignment = Alignment.Center,
             ) { Mono("Seguir planeando", Palette.panel, 13, bold = true) }
         }

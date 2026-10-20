@@ -18,13 +18,16 @@ pub const SEND: &str = "➤";
 const PROMPT: usize = 2;
 const MARKS: usize = 4;
 
-/// How a field is drawn besides its text: the stop mark when something runs, the words of the
-/// empty line, and the word the line starts with that has a colour of its own (a command).
+/// How a field is drawn besides its text: the stop mark when something runs and the words of the
+/// empty line.
 pub struct Look<'a> {
     pub stop: Option<&'a str>,
     pub ask: &'a str,
-    pub lead: Option<(String, Rgb)>,
 }
+
+/// A run of characters of the text, `from` to `to`, that has a colour of its own: a command, or
+/// the `!` of a shell line.
+pub type Mark = (usize, usize, Rgb);
 
 /// The text of the field wrapped to its rows, and where the cursor is in them.
 #[derive(Debug, PartialEq, Eq)]
@@ -33,6 +36,8 @@ pub struct Field {
     cursor: (usize, usize),
     /// The cells (row, column) that a selection covers.
     selected: Vec<(usize, usize)>,
+    /// The cells (row, column) of the marks, with their colour.
+    lit: Vec<(usize, usize, Rgb)>,
 }
 
 /// Columns of text a pane `iw` wide holds in a row of the field.
@@ -50,23 +55,37 @@ impl Field {
     pub fn new(input: Option<&PaneInput>, screen: Option<(&str, usize)>, iw: usize) -> Field {
         let width = text_width(iw);
         match (input, screen) {
-            (Some(i), _) => wrap(&i.text, i.cursor as usize, width, None),
+            (Some(i), _) => wrap(&i.text, i.cursor as usize, width, None, &[]),
             (None, Some((line, col))) => Field {
                 rows: vec![line.to_owned()],
                 cursor: (0, col),
                 selected: Vec::new(),
+                lit: Vec::new(),
             },
             (None, None) => Field {
                 rows: vec![String::new()],
                 cursor: (0, 0),
                 selected: Vec::new(),
+                lit: Vec::new(),
             },
         }
     }
 
-    /// The field of a line the person edits here, with the characters `sel` (from, to) selected.
-    pub fn selecting(input: &PaneInput, sel: Option<(usize, usize)>, iw: usize) -> Field {
-        wrap(&input.text, input.cursor as usize, text_width(iw), sel)
+    /// The field of a line the person edits here, with the characters `sel` (from, to) selected
+    /// and the `marks` in their colours.
+    pub fn selecting(
+        input: &PaneInput,
+        sel: Option<(usize, usize)>,
+        marks: &[Mark],
+        iw: usize,
+    ) -> Field {
+        wrap(
+            &input.text,
+            input.cursor as usize,
+            text_width(iw),
+            sel,
+            marks,
+        )
     }
 
     /// Nothing is typed (or nothing can be shown), so the row says what to type.
@@ -97,7 +116,6 @@ impl Field {
         let look = Look {
             stop: running.then_some(STOP),
             ask,
-            lead: None,
         };
         self.draw_with(g, at, chips, focused, &look);
     }
@@ -111,7 +129,7 @@ impl Field {
         focused: bool,
         look: &Look,
     ) {
-        let Look { stop, ask, lead } = look;
+        let Look { stop, ask } = look;
         for r in 0..self.band_rows() {
             g.paint_bg(ix.saturating_sub(1), y + r, iw + 2, look::panel());
         }
@@ -142,19 +160,12 @@ impl Field {
                 Style::fg(look::fg()).on(ground),
             );
         }
-        if let Some((word, colour)) = lead
-            && self
-                .rows
-                .first()
-                .is_some_and(|r| r.starts_with(word.as_str()))
-        {
-            let width = word.chars().count().min(text_width(iw));
-            for x in tx..tx + width {
-                if first < g.rows && x < g.cols {
-                    let st = &mut g.cells[first * g.cols + x].1;
-                    st.fg = Some(*colour);
-                    st.bold = true;
-                }
+        for &(row, col, colour) in &self.lit {
+            let (x, y) = (tx + col, first + row);
+            if x < send_at(ix, iw) && y < g.rows && x < g.cols {
+                let st = &mut g.cells[y * g.cols + x].1;
+                st.fg = Some(colour);
+                st.bold = true;
             }
         }
         if self.is_empty() {
@@ -206,9 +217,16 @@ pub fn stop_at(ix: usize, iw: usize) -> usize {
 /// `text` broken into rows of `width` characters (and at its own line breaks), the cursor
 /// placed at its offset, and at most `MAX_TEXT_ROWS` rows kept: the last ones, or those that
 /// hold the cursor when it is further up.
-fn wrap(text: &str, cursor: usize, width: usize, sel: Option<(usize, usize)>) -> Field {
+fn wrap(
+    text: &str,
+    cursor: usize,
+    width: usize,
+    sel: Option<(usize, usize)>,
+    marks: &[Mark],
+) -> Field {
     let mut rows = vec![String::new()];
     let mut selected = Vec::new();
+    let mut lit = Vec::new();
     let mut at = (0, 0);
     let mut placed = false;
     for (i, c) in text.chars().enumerate() {
@@ -226,6 +244,11 @@ fn wrap(text: &str, cursor: usize, width: usize, sel: Option<(usize, usize)>) ->
             let col = rows[at].chars().count();
             if sel.is_some_and(|(from, to)| (from..to).contains(&i)) {
                 selected.push((at, col));
+            }
+            if let Some(&(_, _, colour)) =
+                marks.iter().find(|(from, to, _)| (*from..*to).contains(&i))
+            {
+                lit.push((at, col, colour));
             }
             rows[at].push(c);
         }
@@ -245,6 +268,11 @@ fn wrap(text: &str, cursor: usize, width: usize, sel: Option<(usize, usize)>) ->
             .into_iter()
             .filter_map(|(r, c)| r.checked_sub(start).map(|r| (r, c)))
             .filter(|(r, _)| *r < MAX_TEXT_ROWS)
+            .collect(),
+        lit: lit
+            .into_iter()
+            .filter_map(|(r, c, k)| r.checked_sub(start).map(|r| (r, c, k)))
+            .filter(|(r, ..)| *r < MAX_TEXT_ROWS)
             .collect(),
     }
 }
@@ -333,7 +361,7 @@ mod tests {
         let w = text_width(30);
         let text = format!("{}ab\ncd", "x".repeat(w));
         let from = w;
-        let f = Field::selecting(&input(&text, 0), Some((from, from + 4)), 30);
+        let f = Field::selecting(&input(&text, 0), Some((from, from + 4)), &[], 30);
         assert_eq!(f.selected, [(1, 0), (1, 1), (2, 0)]);
     }
 

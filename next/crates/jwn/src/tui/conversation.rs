@@ -15,7 +15,7 @@ use contract::conversation::{
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use super::field::{self, Field, Look};
+use super::field::{self, Field, Look, Mark};
 use super::fold;
 use super::older::{self, Older};
 use super::panels::{self, Panel, RowAct};
@@ -259,6 +259,28 @@ impl Editor {
             return None;
         }
         Some(before[at + 1..].iter().collect())
+    }
+
+    /// The `/word` the cursor ends: where it begins and the letters after its slash. It begins
+    /// the line or follows a space or a new line, and a word with a second `/` is a path
+    /// (REQ-596).
+    fn slash(&self) -> Option<(usize, String)> {
+        let before = &self.chars[..self.cursor];
+        let start = before
+            .iter()
+            .rposition(|c| c.is_whitespace())
+            .map_or(0, |i| i + 1);
+        let word = &before[start..];
+        if word.first() != Some(&'/') || word[1..].contains(&'/') {
+            return None;
+        }
+        Some((start, word[1..].iter().collect()))
+    }
+
+    /// Whether the `/word` at the cursor is the whole line: only then does choosing a command run
+    /// it (REQ-596).
+    fn slash_is_whole(&self) -> bool {
+        self.slash().is_some_and(|(start, _)| start == 0) && self.cursor == self.chars.len()
     }
 
     /// Put `text` in place of the `n` characters before the cursor.
@@ -612,6 +634,11 @@ impl Ui {
         if matches!(self.pop, Some(Pop::Name(_))) || self.held.is_some() {
             return;
         }
+        // The reason of a refusal is one line: a line break in it becomes a space.
+        if let Some((_, editor)) = self.refusing.as_mut() {
+            editor.insert(&text.replace("\r\n", " ").replace(['\r', '\n'], " "));
+            return;
+        }
         self.menu_at = 0;
         self.editor
             .insert(&text.replace("\r\n", "\n").replace('\r', "\n"));
@@ -672,10 +699,7 @@ impl Ui {
     /// with them first (REQ-416).
     fn menu<'a>(&self, conv: &'a Conversation) -> Vec<&'a ConvCommand> {
         let text = self.editor.text();
-        let Some(typed) = text
-            .strip_prefix('/')
-            .filter(|t| !t.contains(char::is_whitespace) && self.menu_off != text)
-        else {
+        let Some((_, typed)) = self.editor.slash().filter(|_| self.menu_off != text) else {
             return Vec::new();
         };
         let typed = typed.to_lowercase();
@@ -692,19 +716,54 @@ impl Ui {
         hits.into_iter().map(|(_, _, c)| c).collect()
     }
 
-    /// What the line starts with that has a colour of its own: a command that exists, in the
-    /// colour of where it is defined, or the `!` of a shell line.
-    fn lead(&self, conv: &Conversation) -> Option<(String, Rgb)> {
-        let text = self.editor.text();
-        if text.starts_with('!') && text.len() > 1 {
-            return Some(("!".into(), look::green()));
+    /// Choose a command of the list: a command that is the whole line runs; anywhere else it is
+    /// written in place of the word and nothing is sent (REQ-596).
+    fn choose_command(&mut self, conv: &Conversation, c: &ConvCommand) -> Option<Act> {
+        if self.editor.slash_is_whole() {
+            return self.run_command(conv, c);
         }
-        let word = text
-            .split_whitespace()
-            .next()
-            .filter(|w| w.starts_with('/'))?;
-        let c = conv.commands.iter().find(|c| c.name == word)?;
-        Some((word.to_owned(), source_look(c.source).colour))
+        self.write_command(c);
+        None
+    }
+
+    /// Put `/name ` in place of the `/word` at the cursor.
+    fn write_command(&mut self, c: &ConvCommand) {
+        let typed = self
+            .editor
+            .slash()
+            .map_or(0, |(_, t)| t.chars().count() + 1);
+        self.editor.replace_before(typed, &format!("{} ", c.name));
+        self.menu_at = 0;
+    }
+
+    /// What the line holds that has a colour of its own: the `!` of a shell line and each word
+    /// that is a command that exists, wherever it is, in the colour of where it is defined
+    /// (REQ-596).
+    fn marks(&self, conv: &Conversation) -> Vec<Mark> {
+        let text = self.editor.text();
+        let mut out = Vec::new();
+        if text.starts_with('!') && text.len() > 1 {
+            out.push((0, 1, look::green()));
+        }
+        let chars: Vec<char> = text.chars().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            if chars[i].is_whitespace() {
+                i += 1;
+                continue;
+            }
+            let end = (i..chars.len())
+                .find(|&k| chars[k].is_whitespace())
+                .unwrap_or(chars.len());
+            if chars[i] == '/' {
+                let word: String = chars[i..end].iter().collect();
+                if let Some(c) = conv.commands.iter().find(|c| c.name == word) {
+                    out.push((i, end, source_look(c.source).colour));
+                }
+            }
+            i = end;
+        }
+        out
     }
 
     /// The folder the pane is in.
@@ -1346,13 +1405,14 @@ impl Ui {
         }
     }
 
-    fn field(&self, iw: usize) -> Field {
+    fn field(&self, conv: &Conversation, iw: usize) -> Field {
         Field::selecting(
             &PaneInput {
                 text: self.editor.text(),
                 cursor: self.editor.cursor() as u32,
             },
             self.editor.selection(),
+            &self.marks(conv),
             iw,
         )
     }
@@ -1372,7 +1432,7 @@ impl Ui {
             return;
         }
         self.now.set(now_ms);
-        let field = self.field(iw);
+        let field = self.field(conv, iw);
         let geo = self.geo(conv, (iy, ih), field.band_rows());
         let lines = self.lines(conv, iw - 2);
         let rows = self.list_rows(&geo, lines.len());
@@ -1443,7 +1503,6 @@ impl Ui {
                 ask: proposed
                     .as_deref()
                     .unwrap_or("escribe un mensaje · / comandos"),
-                lead: self.lead(conv),
             };
             field.draw_with(g, (ix, by, iw), &chips, focused, &look);
         }
@@ -1973,11 +2032,15 @@ impl Ui {
                     return None;
                 }
                 KeyCode::Tab => {
-                    self.editor.set(&format!("{} ", menu[at].name));
-                    self.menu_at = 0;
+                    if self.editor.slash_is_whole() {
+                        self.editor.set(&format!("{} ", menu[at].name));
+                        self.menu_at = 0;
+                    } else {
+                        self.write_command(menu[at]);
+                    }
                     return None;
                 }
-                KeyCode::Enter => return self.run_command(conv, menu[at]),
+                KeyCode::Enter => return self.choose_command(conv, menu[at]),
                 KeyCode::Esc => {
                     self.menu_off = self.editor.text();
                     return None;
@@ -2491,7 +2554,7 @@ impl Ui {
         if self.pop.is_some() || iw < 12 || ih < 8 {
             return false;
         }
-        let geo = self.geo(conv, (iy, ih), self.field(iw).band_rows());
+        let geo = self.geo(conv, (iy, ih), self.field(conv, iw).band_rows());
         let rows = self.list_rows(&geo, self.lines(conv, iw - 2).len());
         if !(rows.top..rows.bottom).contains(&y) || !(ix..ix + iw).contains(&x) {
             return false;
@@ -2517,7 +2580,7 @@ impl Ui {
         if self.pull.is_none() || iw < 12 || ih < 8 {
             return;
         }
-        let geo = self.geo(conv, (iy, ih), self.field(iw).band_rows());
+        let geo = self.geo(conv, (iy, ih), self.field(conv, iw).band_rows());
         let rows = self.list_rows(&geo, self.lines(conv, iw - 2).len());
         let (head, edge) = if y < rows.top {
             (
@@ -2570,7 +2633,7 @@ impl Ui {
             return;
         }
         self.scroll_by(up, 1);
-        let geo = self.geo(conv, (iy, ih), self.field(iw).band_rows());
+        let geo = self.geo(conv, (iy, ih), self.field(conv, iw).band_rows());
         let rows = self.list_rows(&geo, self.lines(conv, iw - 2).len());
         let (line, col) = if up {
             (rows.start, 0)
@@ -2627,7 +2690,7 @@ impl Ui {
             return None;
         }
         let node = conv.head.id.clone();
-        let field = self.field(iw);
+        let field = self.field(conv, iw);
         let geo = self.geo(conv, (iy, ih), field.band_rows());
         // The strip of the checklist opens and closes with a click.
         if self.pop.is_none() && geo.todo_rows > 0 && y == iy {
@@ -2670,7 +2733,7 @@ impl Ui {
             let h = shown + 2;
             let top = geo.band.0.saturating_sub(h);
             if y > top && y + 1 < top + h {
-                return self.run_command(conv, menu[first + y - top - 1]);
+                return self.choose_command(conv, menu[first + y - top - 1]);
             }
         }
         if let Some(Pop::Pick { of, .. }) = &self.pop {
@@ -2705,6 +2768,10 @@ impl Ui {
             return None;
         }
         if let Some(ask) = &conv.ask {
+            // While the reason for a refusal is being written, a click on the question is not an answer.
+            if self.refusing.as_ref().is_some_and(|(id, _)| *id == ask.id) {
+                return None;
+            }
             let n = ask.options.len();
             let first = (geo.band.0 + geo.band.1).saturating_sub(2 + n);
             if y >= first && y < first + n {
@@ -4538,6 +4605,128 @@ mod tests {
         assert!(ui.menu(&conv).is_empty());
     }
 
+    /// REQ-596
+    #[test]
+    fn a_slash_after_other_words_opens_the_same_list_and_a_path_does_not() {
+        let conv = idle();
+        let names =
+            |ui: &Ui| -> Vec<String> { ui.menu(&conv).iter().map(|c| c.name.clone()).collect() };
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "mira esto y /de");
+        assert_eq!(names(&ui), ["/deploy", "/vercel:deploy"]);
+        let (_, rows) = frame(&ui, &conv);
+        row_of(&rows, "publicar la rama en staging");
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "uno");
+        ui.editor.insert("\n");
+        type_in(&mut ui, &conv, "/de");
+        assert_eq!(
+            names(&ui),
+            ["/deploy", "/vercel:deploy"],
+            "after a new line"
+        );
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "mira /usr/b");
+        assert!(names(&ui).is_empty(), "a path is not a command");
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "a/de");
+        assert!(names(&ui).is_empty(), "a slash inside a word is not one");
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "mira /de y mas");
+        assert!(names(&ui).is_empty(), "the cursor is past the word");
+        for _ in 0..6 {
+            press(&mut ui, &conv, KeyCode::Left);
+        }
+        assert_eq!(
+            names(&ui),
+            ["/deploy", "/vercel:deploy"],
+            "the cursor ends the word"
+        );
+    }
+
+    /// REQ-596
+    #[test]
+    fn a_command_in_the_middle_is_written_in_place_and_sends_nothing_while_one_alone_runs() {
+        let conv = idle();
+        for key in [KeyCode::Tab, KeyCode::Enter] {
+            let mut ui = Ui::default();
+            type_in(&mut ui, &conv, "mira /de");
+            assert_eq!(
+                press(&mut ui, &conv, key),
+                None,
+                "{key:?} sends nothing in the middle"
+            );
+            assert_eq!(ui.editor.text(), "mira /deploy ");
+            assert!(ui.menu(&conv).is_empty());
+        }
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "/de y mas");
+        for _ in 0..6 {
+            press(&mut ui, &conv, KeyCode::Left);
+        }
+        assert_eq!(press(&mut ui, &conv, KeyCode::Enter), None);
+        assert_eq!(
+            ui.editor.text(),
+            "/deploy  y mas",
+            "what follows the word is not thrown away, and the command is not run"
+        );
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "/de");
+        assert!(
+            matches!(
+                press(&mut ui, &conv, KeyCode::Enter),
+                Some(Act::Send { .. })
+            ),
+            "alone in the line it runs, as before"
+        );
+    }
+
+    /// REQ-596
+    #[test]
+    fn a_command_that_exists_is_lit_in_its_colour_wherever_it_is_and_on_the_rows_a_long_line_goes_on_in()
+     {
+        let conv = idle();
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "mira /deploy y /nope o /jwn, /exit");
+        let marks = ui.marks(&conv);
+        let text: Vec<char> = ui.editor.text().chars().collect();
+        let words: Vec<(String, Rgb)> = marks
+            .iter()
+            .map(|&(a, b, c)| (text[a..b].iter().collect(), c))
+            .collect();
+        assert_eq!(
+            words,
+            [
+                ("/deploy".to_owned(), look::green()),
+                ("/exit".to_owned(), look::blue()),
+            ],
+            "only words that are a command, each in the colour of its source"
+        );
+        let (g, rows) = frame(&ui, &conv);
+        let r = row_of(&rows, "mira /deploy");
+        let x = rows[r].chars().position(|c| c == '/').unwrap();
+        assert_eq!(g.cells[r * g.cols + x].1.fg, Some(look::green()));
+        assert_eq!(
+            g.cells[r * g.cols + x - 2].1.fg,
+            Some(look::fg()),
+            "the words around it keep the text's colour"
+        );
+        let mut ui = Ui::default();
+        type_in(
+            &mut ui,
+            &conv,
+            &format!("{} /deploy", "palabra ".repeat(12)),
+        );
+        let (g, rows) = frame(&ui, &conv);
+        let r = row_of(&rows, "/deploy");
+        let x = rows[r].chars().position(|c| c == '/').unwrap();
+        assert_eq!(
+            g.cells[r * g.cols + x].1.fg,
+            Some(look::green()),
+            "on a row of its own"
+        );
+    }
+
     #[test]
     fn the_list_moves_with_the_arrows_completes_with_tab_runs_with_enter_and_closes_with_esc() {
         let conv = idle();
@@ -5091,6 +5280,59 @@ mod tests {
         ui.refuse("req-p");
         let (_, rows) = frame(&ui, &c);
         row_of(&rows, "¿qué sigue?");
+    }
+
+    #[test]
+    fn while_the_reason_of_a_refusal_is_written_a_click_does_not_answer_and_a_paste_goes_into_it() {
+        let node = fixture().head.id.clone();
+        let mut c = fixture();
+        c.ask = Some(Ask {
+            id: "req-p".into(),
+            kind: AskKind::Plan,
+            tool: "ExitPlanMode".into(),
+            title: "Plan listo".into(),
+            command: None,
+            diff: vec![],
+            plan: (1..=5).map(|n| format!("paso {n}")).collect(),
+            options: vec![
+                contract::conversation::AskOption {
+                    key: "accept".into(),
+                    label: "Aprobar y editar sin preguntar".into(),
+                },
+                contract::conversation::AskOption {
+                    key: "no".into(),
+                    label: "Seguir planeando".into(),
+                },
+            ],
+            multi: false,
+        });
+        let mut ui = Ui::default();
+        let (_, rows) = frame(&ui, &c);
+        let accept = row_of(&rows, "Aprobar y editar sin preguntar");
+        let no = row_of(&rows, "Seguir planeando");
+        let step = row_of(&rows, "paso 3");
+        ui.refuse("req-p");
+        for ch in "uno".chars() {
+            assert_eq!(press(&mut ui, &c, KeyCode::Char(ch)), None);
+        }
+        // a click on an answer, or on what the plan says, is not an answer while the reason is written
+        for y in [accept, no, step] {
+            assert_eq!(ui.click(&c, INNER, 12, y), None);
+        }
+        let (_, rows) = frame(&ui, &c);
+        row_of(&rows, "▸ uno");
+        // a paste goes into the reason, in one line, and not into the composer
+        ui.paste(" tres\r\ndos\rcuatro");
+        assert_eq!(ui.editor.text(), "", "the composer keeps nothing");
+        assert_eq!(
+            press(&mut ui, &c, KeyCode::Enter),
+            Some(Act::Answer {
+                node,
+                ask: "req-p".into(),
+                key: "no".into(),
+                text: Some("uno tres dos cuatro".into()),
+            })
+        );
     }
 
     #[test]
