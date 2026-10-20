@@ -230,7 +230,10 @@ fn foot_left(
     let dot = |out: &mut Vec<_>| out.push((" · ".to_owned(), Some(look::dim()), Hit::None));
     if running > 0 {
         let agents = if word {
-            format!("⚙ {running} agentes")
+            format!(
+                "⚙ {running} {}",
+                if running == 1 { "agente" } else { "agentes" }
+            )
         } else {
             format!("⚙ {running}")
         };
@@ -3656,7 +3659,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("{s:?} is not in {foot:?}"))
         };
         assert!(
-            at("⚙ 1 agentes") < at("manual")
+            at("⚙ 1 agente") < at("manual")
                 && at("manual") < at("⇧tab")
                 && at("⇧tab") < at("sonnet-5.5"),
             "agents · mode · model: {foot:?}"
@@ -3760,17 +3763,17 @@ mod tests {
         };
         let wide = line(80);
         assert!(
-            wide.contains("⚙ 1 agentes") && wide.contains("⇧tab") && wide.ends_with("^/ teclas"),
+            wide.contains("⚙ 1 agente") && wide.contains("⇧tab") && wide.ends_with("^/ teclas"),
             "{wide:?}"
         );
         let no_word = line(46);
         assert!(
-            no_word.ends_with("^/") && no_word.contains("⇧tab") && no_word.contains("⚙ 1 agentes"),
+            no_word.ends_with("^/") && no_word.contains("⇧tab") && no_word.contains("⚙ 1 agente"),
             "{no_word:?}"
         );
         let no_hint = line(40);
         assert!(
-            !no_hint.contains("⇧tab") && no_hint.contains("⚙ 1 agentes") && no_hint.ends_with("^/"),
+            !no_hint.contains("⇧tab") && no_hint.contains("⚙ 1 agente") && no_hint.ends_with("^/"),
             "{no_hint:?}"
         );
         let short = line(32);

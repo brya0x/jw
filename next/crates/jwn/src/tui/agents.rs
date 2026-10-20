@@ -317,7 +317,7 @@ pub fn draw(
         } else {
             "dijo"
         };
-        for (i, l) in wrap(info, tw.saturating_sub(6), 2).iter().enumerate() {
+        for (i, l) in wrap(info, tw.saturating_sub(6), 4).iter().enumerate() {
             let head = if i == 0 {
                 format!("{label:<6}")
             } else {

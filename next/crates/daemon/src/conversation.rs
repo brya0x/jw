@@ -65,6 +65,8 @@ const TASKS_KEPT: usize = 50;
 const STEPS_KEPT: usize = 60;
 /// The most of a subagent's prompt the node keeps.
 const PROMPT_CHARS: usize = 600;
+/// The most of what a task said at its end the node keeps.
+const SAID_CHARS: usize = 400;
 
 /// What `claude` was typed with, as the engine serves it (REQ-372). Anything else is not served
 /// and the original runs (REQ-373).
@@ -1977,6 +1979,13 @@ impl State {
         };
         if t.state == TaskState::Run {
             t.state = state;
+        }
+        // What it said at the end replaces what it was doing: the clients show it as what it said (REQ-600).
+        if let Some(said) = summary
+            .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" "))
+            .filter(|s| !s.is_empty())
+        {
+            t.info = Some(clip(&said, SAID_CHARS));
         }
         let (state, label) = (t.state, t.label.clone());
         if let Some(tool) = self.link_of(task)
