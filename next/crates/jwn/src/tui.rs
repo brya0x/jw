@@ -24,6 +24,7 @@ use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{cursor, execute};
 use wire::Client;
 
+mod agents;
 mod changes;
 mod clip;
 mod conversation;
@@ -2772,8 +2773,9 @@ impl View {
         let Some((node, rect)) = self.conv_node(pane).zip(self.pane_rect(pane, cols, rows)) else {
             return After::Continue;
         };
+        let room = self.conv_inner(&node, rect);
         let released = match (self.convs.get(&node), self.conv_ui.get_mut(&node)) {
-            (Some(conv), Some(ui)) => ui.release(conv, inner(rect)),
+            (Some(conv), Some(ui)) => ui.release(conv, room),
             _ => return After::Continue,
         };
         if let Some(says) = self.conv_ui.get_mut(&node).and_then(ConvUi::take_says) {
@@ -2901,7 +2903,16 @@ impl View {
         if ui.click_title(conv, rect, x, y) {
             return After::Continue;
         }
-        let act = ui.click(conv, inner(rect), x, y);
+        let full = inner(rect);
+        let (room, area) = agents::split(full, ui.agents.fits(full.2));
+        // A click in the area of the agents lights a task; it is not the conversation's.
+        if let Some((ax, ay, ..)) = area
+            && x >= ax
+        {
+            ui.agents.click(conv, ay, y);
+            return After::Continue;
+        }
+        let act = ui.click(conv, room, x, y);
         if let Some(says) = ui.take_says() {
             self.flash = says;
         }
@@ -3607,8 +3618,9 @@ impl View {
         };
         let pane = doc.panes[i].id.clone();
         if let Some(node) = self.conv_node(&pane) {
+            let room = self.conv_inner(&node, rects[i]);
             let began = match (self.convs.get(&node), self.conv_ui.get_mut(&node)) {
-                (Some(conv), Some(ui)) => ui.press(conv, inner(rects[i]), x, y),
+                (Some(conv), Some(ui)) => ui.press(conv, room, x, y),
                 _ => false,
             };
             if began {
@@ -3660,8 +3672,9 @@ impl View {
         }
         if let Some((node, rect)) = self.conv_drag_at() {
             let now = self.now_ms;
+            let room = self.conv_inner(&node, rect);
             if let (Some(conv), Some(ui)) = (self.convs.get(&node), self.conv_ui.get_mut(&node)) {
-                ui.drag_to(conv, inner(rect), (x, y), now);
+                ui.drag_to(conv, room, (x, y), now);
             }
             return;
         }
@@ -3730,8 +3743,9 @@ impl View {
         }
         if let Some((node, rect)) = self.conv_drag_at() {
             let now = self.now_ms;
+            let room = self.conv_inner(&node, rect);
             if let (Some(conv), Some(ui)) = (self.convs.get(&node), self.conv_ui.get_mut(&node)) {
-                ui.drag_tick(conv, inner(rect), now);
+                ui.drag_tick(conv, room, now);
             }
             return;
         }
@@ -4352,7 +4366,30 @@ impl View {
         let chips: Vec<(String, Rgb)> = std::iter::once((shell::short(&p.cwd), look::dim()))
             .chain(branch.map(|br| (format!("⎇ {br}"), look::magenta())))
             .collect();
-        ui.draw(g, conv, inner(rect), &chips, focused, self.now_ms);
+        let full = inner(rect);
+        let (room, area) = agents::split(full, ui.agents.fits(full.2));
+        ui.draw(g, conv, room, &chips, focused, self.now_ms);
+        if let Some(area) = area {
+            agents::draw(
+                g,
+                conv,
+                &ui.agents,
+                area,
+                self.now_ms,
+                conversation::accent_rgb(conv.accent),
+            );
+        }
+    }
+
+    /// The rectangle a conversation takes in its pane's: all of it, or what is left when the
+    /// area of the agents is open at its right (REQ-601).
+    fn conv_inner(&self, node: &str, rect: Rect) -> Rect {
+        let full = inner(rect);
+        let shown = self
+            .conv_ui
+            .get(node)
+            .is_some_and(|ui| ui.agents.fits(full.2));
+        agents::split(full, shown).0
     }
 
     /// A shell pane as blocks: the list, newest at the bottom, and the field under it (the chips

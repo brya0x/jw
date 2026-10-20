@@ -96,7 +96,8 @@
             "tokens": { "type": "integer", "minimum": 0 },
             "ms": { "type": "integer", "minimum": 0 },
             "last": { "type": "string" },
-            "steps": { "type": "array", "items": { "type": "string" } }
+            "steps": { "type": "array", "items": { "type": "string" } },
+            "prompt": { "type": "string" }
           }
         },
         {
@@ -152,7 +153,8 @@
         "label": { "type": "string" },
         "state": { "$ref": "#/$defs/TaskState" },
         "started": { "type": "integer", "minimum": 0 },
-        "info": { "type": "string" }
+        "info": { "type": "string" },
+        "item": { "type": "string" }
       }
     },
     "Todo": { "type": "object", "required": ["text", "done"], "properties": { "text": { "type": "string" }, "done": { "type": "boolean" } } },

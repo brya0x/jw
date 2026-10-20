@@ -63,6 +63,8 @@ const PLAN_LINES: usize = 200;
 /// The tasks of the engine the node keeps, and the steps of a subagent.
 const TASKS_KEPT: usize = 50;
 const STEPS_KEPT: usize = 60;
+/// The most of a subagent's prompt the node keeps.
+const PROMPT_CHARS: usize = 600;
 
 /// What `claude` was typed with, as the engine serves it (REQ-372). Anything else is not served
 /// and the original runs (REQ-373).
@@ -1759,6 +1761,10 @@ impl State {
                                 ms: 0,
                                 last: None,
                                 steps: Vec::new(),
+                                prompt: b["input"]["prompt"]
+                                    .as_str()
+                                    .filter(|p| !p.trim().is_empty())
+                                    .map(|p| clip(p, PROMPT_CHARS)),
                             });
                             continue;
                         }
@@ -1897,6 +1903,7 @@ impl State {
                     state: TaskState::Run,
                     started: now,
                     info: None,
+                    item: tool_use_id.clone(),
                 });
                 if self.tasks.len() > TASKS_KEPT {
                     let gone = self.tasks.remove(0);
@@ -3864,6 +3871,37 @@ mod tests {
         );
     }
 
+    /// REQ-600: a subagent's card keeps what it was asked (clipped), and its task says which card
+    /// shows it, so a client can put the two together.
+    #[test]
+    fn a_subagents_card_keeps_its_prompt_and_its_task_names_the_card() {
+        let mut s = st();
+        s.send("go", vec![], 1);
+        let long = "x".repeat(PROMPT_CHARS * 2);
+        s.apply(&json!({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": "ag", "name": "Agent", "input": {"description": "d", "subagent_type": "Explore", "prompt": "busca verify"}},
+            {"type": "tool_use", "id": "ag2", "name": "Agent", "input": {"description": "d2", "subagent_type": "Explore", "prompt": long}},
+            {"type": "tool_use", "id": "ag3", "name": "Agent", "input": {"description": "d3", "subagent_type": "Explore", "prompt": "  "}}]}}), 2);
+        s.apply(&json!({"type": "system", "subtype": "task_started", "task_id": "t1", "tool_use_id": "ag", "description": "d", "is_backgrounded": false, "task_type": "local_agent"}), 3);
+        s.apply(&json!({"type": "system", "subtype": "task_started", "task_id": "t2", "description": "sleep", "is_backgrounded": true, "task_type": "local_bash"}), 3);
+        let prompt = |id: &str| {
+            s.items.iter().find_map(|i| match i {
+                Item::Agent { id: a, prompt, .. } if a == id => Some(prompt.clone()),
+                _ => None,
+            })
+        };
+        assert_eq!(prompt("ag"), Some(Some("busca verify".to_owned())));
+        assert!(prompt("ag2").unwrap().unwrap().chars().count() <= PROMPT_CHARS);
+        assert_eq!(prompt("ag3"), Some(None), "a blank prompt is none");
+        let item = |id: &str| s.tasks.iter().find(|t| t.id == id).unwrap().item.clone();
+        assert_eq!(item("t1").as_deref(), Some("ag"));
+        assert_eq!(
+            item("t2"),
+            None,
+            "a task with no tool that started it has no card"
+        );
+    }
+
     #[test]
     fn a_turn_that_ends_cuts_the_subagent_that_ran_in_front_but_not_the_task_in_the_background_and_a_dead_engine_cuts_both()
      {
@@ -3963,6 +4001,7 @@ mod tests {
             ms: 0,
             last: None,
             steps: Vec::new(),
+            prompt: None,
         }
     }
 
@@ -4163,6 +4202,7 @@ mod tests {
                     ms: 3,
                     last: None,
                     steps: Vec::new(),
+                    prompt: None,
                 },
             },
         ];

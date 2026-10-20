@@ -116,6 +116,7 @@ sealed interface ConvItem {
         val ms: Long,
         val last: String? = null,
         val steps: List<String>,
+        val prompt: String? = null,
     ) : ConvItem
 
     /** A shell line of the person's (`!command`) and what it printed. */
@@ -181,7 +182,7 @@ enum class TaskState {
 
 /** What the engine runs in the background. */
 @Serializable
-data class Task(val id: String, val kind: TaskKind, val label: String, val state: TaskState, val started: Long, val info: String? = null)
+data class Task(val id: String, val kind: TaskKind, val label: String, val state: TaskState, val started: Long, val info: String? = null, val item: String? = null)
 
 @Serializable
 data class Todo(val text: String, val done: Boolean)

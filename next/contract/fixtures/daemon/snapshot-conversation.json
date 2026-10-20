@@ -93,7 +93,8 @@
           "Grep verify",
           "Read src/auth.rs",
           "Read src/session.rs"
-        ]
+        ],
+        "prompt": "Busca todos los usos de verify y di qué módulos dependen de él. No edites nada."
       },
       {
         "t": "shell",

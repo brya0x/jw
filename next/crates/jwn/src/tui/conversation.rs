@@ -15,6 +15,7 @@ use contract::conversation::{
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+use super::agents;
 use super::field::{self, Field, Look, Mark};
 use super::fold;
 use super::older::{self, Older};
@@ -546,6 +547,8 @@ impl Editor {
 #[derive(Default)]
 pub struct Ui {
     pub editor: Editor,
+    /// The area of the agents at the right (REQ-601).
+    pub agents: agents::State,
     /// The suggestion that the person dismissed with esc (REQ-573).
     ghost_off: String,
     /// Another `claude` has the session open: nothing is written here (REQ-575).
@@ -793,6 +796,17 @@ impl Ui {
             .collect();
         hits.sort_by(|a, b| (a.0, a.1, &a.2.name).cmp(&(b.0, b.1, &b.2.name)));
         hits.into_iter().map(|(_, _, c)| c).collect()
+    }
+
+    /// `^B`, or a click on the agents of the footer: open or close the area of the agents when
+    /// the pane has room for it, else list the tasks over the conversation (REQ-601).
+    fn toggle_agents(&mut self, conv: &Conversation) -> Option<Act> {
+        if !self.agents.has_room() {
+            return self.open_panel(conv, "tasks", "");
+        }
+        self.agents.open = !self.agents.open;
+        self.agents.focus = false;
+        None
     }
 
     /// Choose a command of the list: a command that is the whole line runs; anywhere else it is
@@ -2062,6 +2076,34 @@ impl Ui {
             return self.pop_key(conv, ev);
         }
         let ctrl = ev.modifiers.contains(KeyModifiers::CONTROL);
+        // The keys go to the area of the agents until one is pressed that is not its own.
+        if self.agents.focus && self.agents.open {
+            match ev.code {
+                KeyCode::Up | KeyCode::Char('k') if !ctrl => {
+                    self.agents.step(conv, false);
+                    return None;
+                }
+                KeyCode::Down | KeyCode::Char('j') if !ctrl => {
+                    self.agents.step(conv, true);
+                    return None;
+                }
+                KeyCode::Char('x') if !ctrl => {
+                    return self
+                        .agents
+                        .lit(conv)
+                        .filter(|t| t.state == contract::conversation::TaskState::Run)
+                        .map(|t| Act::StopTask {
+                            node,
+                            task: t.id.clone(),
+                        });
+                }
+                KeyCode::Esc | KeyCode::Tab => {
+                    self.agents.focus = false;
+                    return None;
+                }
+                _ => self.agents.focus = false,
+            }
+        }
         // Another `claude` has the session: it is read, not written (REQ-575). What changes the
         // field does nothing, whatever is open over it; what reads (the keys of a picked item that
         // copy, scrolling, opening what a tool printed) goes on.
@@ -2186,7 +2228,11 @@ impl Ui {
                 self.todos_open = !self.todos_open;
                 None
             }
-            KeyCode::Char('b') if ctrl => self.open_panel(conv, "tasks", ""),
+            KeyCode::Char('b') if ctrl => self.toggle_agents(conv),
+            KeyCode::Tab if self.agents.open && self.agents.has_room() => {
+                self.agents.focus = true;
+                None
+            }
             // The terminal sends the same byte for ^/ and ^? (crossterm reads it as ^7 or ^_
             // when it does not know the key).
             KeyCode::Char('/' | '?' | '_' | '7') if ctrl => self.open_panel(conv, "keys", ""),
@@ -2838,7 +2884,7 @@ impl Ui {
                     self.open_pick(conv, Of::Model);
                     None
                 }
-                Some(Hit::Agents) => self.open_panel(conv, "tasks", ""),
+                Some(Hit::Agents) => self.toggle_agents(conv),
                 Some(Hit::Keys) => self.open_panel(conv, "keys", ""),
                 _ => None,
             };
@@ -3433,13 +3479,18 @@ fn turn_text(conv: &Conversation, abs: u32) -> String {
 }
 
 #[cfg(test)]
+pub(super) fn tests_fixture() -> Conversation {
+    tests::fixture()
+}
+
+#[cfg(test)]
 mod tests {
     use std::path::Path;
 
     use super::*;
 
     /// The conversation of the shared fixture: a permission waits for an edit.
-    fn fixture() -> Conversation {
+    pub(super) fn fixture() -> Conversation {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../contract/fixtures/daemon");
         let doc: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(dir.join("snapshot-conversation.json")).unwrap(),
@@ -3636,6 +3687,61 @@ mod tests {
             "{:?}",
             rows[y]
         );
+    }
+
+    /// REQ-601: with room for it `^B` opens the area, `⇥` gives it the keys, `j` `k` light a
+    /// task, `x` stops the one that runs and `esc` takes the keys back; with no room `^B` lists
+    /// the tasks over the conversation as before.
+    #[test]
+    fn ctrl_b_opens_the_area_of_the_agents_when_there_is_room_and_its_keys_work_there() {
+        let mut conv = idle();
+        let node = conv.head.id.clone();
+        let mut ui = Ui::default();
+        let ctrl_b = KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL);
+        ui.agents.fits(96);
+        assert_eq!(ui.key(&conv, &ctrl_b), None);
+        assert!(
+            ui.has_pop() && !ui.agents.open,
+            "no room: the list of tasks, as before"
+        );
+        press(&mut ui, &conv, KeyCode::Esc);
+        ui.agents.fits(140);
+        assert_eq!(ui.key(&conv, &ctrl_b), None);
+        assert!(ui.agents.open && !ui.has_pop(), "room: the area opens");
+        assert_eq!(press(&mut ui, &conv, KeyCode::Tab), None);
+        assert!(ui.agents.focus, "the keys go to the area");
+        let running: Vec<String> = conv
+            .tasks
+            .iter()
+            .filter(|t| t.state == contract::conversation::TaskState::Run)
+            .map(|t| t.id.clone())
+            .collect();
+        assert!(!running.is_empty());
+        let lit = ui.agents.lit(&conv).unwrap().id.clone();
+        assert_eq!(
+            press(&mut ui, &conv, KeyCode::Char('x')),
+            Some(Act::StopTask {
+                node: node.clone(),
+                task: lit
+            })
+        );
+        press(&mut ui, &conv, KeyCode::Char('j'));
+        press(&mut ui, &conv, KeyCode::Char('k'));
+        assert_eq!(
+            ui.editor.text(),
+            "",
+            "j and k moved the light: they are not typed"
+        );
+        assert_eq!(press(&mut ui, &conv, KeyCode::Esc), None);
+        assert!(
+            !ui.agents.focus && ui.agents.open,
+            "esc gives the keys back and leaves the area"
+        );
+        type_in(&mut ui, &conv, "x");
+        assert_eq!(ui.editor.text(), "x", "and typing is the field's again");
+        conv.tasks.clear();
+        assert_eq!(ui.key(&conv, &ctrl_b), None);
+        assert!(!ui.agents.open, "^B closes it");
     }
 
     /// REQ-598: a narrow pane gives way from the right, and the mode and the model are the last to go.

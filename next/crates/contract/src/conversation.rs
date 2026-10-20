@@ -197,6 +197,9 @@ pub enum Item {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         last: Option<String>,
         steps: Vec<String>,
+        /// What the subagent was asked, clipped (REQ-600).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prompt: Option<String>,
     },
     /// A shell line of the person's (`!command`) and what it printed.
     Shell {
@@ -315,6 +318,10 @@ pub struct Task {
     pub started: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub info: Option<String>,
+    /// The `id` of the card in the items that shows this task, when it has one (a subagent):
+    /// its tools, tokens, steps and prompt are there (REQ-600).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
