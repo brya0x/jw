@@ -305,6 +305,19 @@ class ConformanceTest {
         assertEquals(result, ContractJson.encodeToJsonElement(MarkdownDoc.serializer(), doc))
     }
 
+    /** The result of `read_file` in the fixture is what [TextDoc] reads, keeps an unknown class as it came, and writes back as it was. */
+    @Test
+    fun theReplyOfReadFileIsADocumentOfLinesOfRuns() {
+        val reply = fixtures("daemon").first { it.first == "reply-ok-read-file.json" }.second
+        val result = (ContractJson.decodeFromJsonElement(DaemonMsg.serializer(), reply) as DaemonMsg.Reply).result!!
+        val doc = ContractJson.decodeFromJsonElement(TextDoc.serializer(), result)
+        assertEquals("files.rs", doc.title)
+        assertEquals(true, doc.truncated)
+        assertEquals(true, doc.lines[3].isEmpty())
+        assertEquals("from-the-future", doc.lines[2].last().k)
+        assertEquals(result, ContractJson.encodeToJsonElement(TextDoc.serializer(), doc))
+    }
+
     /** The result of `project_config` in the fixture is what [ProjectInfo] reads, and writes back as it was. */
     @Test
     fun theReplyOfProjectConfigIsAProjectInfo() {

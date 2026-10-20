@@ -37,6 +37,7 @@ mod settings;
 mod start;
 mod sync;
 mod tail;
+mod textfile;
 mod transcript;
 mod workspaces;
 mod worktrees;

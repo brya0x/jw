@@ -49,6 +49,26 @@ pub(crate) fn clean_rel(path: Option<&str>) -> Result<String, ErrorBody> {
     Ok(names.join("/"))
 }
 
+/// The file `path` names, canonical: it must exist and be inside `root` once links are followed.
+/// `path` is relative to `root`, or absolute and inside it.
+pub(crate) fn inside(root: &Path, path: &str) -> Result<PathBuf, ErrorBody> {
+    let root = fs::canonicalize(root).map_err(|e| {
+        err(
+            ErrorCode::Io,
+            format!("cannot read {}: {e}", root.display()),
+        )
+    })?;
+    let file = fs::canonicalize(root.join(path))
+        .map_err(|_| err(ErrorCode::NotFound, format!("no file {path}")))?;
+    if !file.starts_with(&root) {
+        return Err(err(
+            ErrorCode::BadRequest,
+            "that file is outside the workspace",
+        ));
+    }
+    Ok(file)
+}
+
 /// The folder `rel` of `root`, which must exist, be a folder and be inside `root` once links are
 /// followed.
 fn folder(root: &Path, rel: &str) -> Result<PathBuf, ErrorBody> {

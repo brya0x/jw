@@ -316,6 +316,37 @@ fn the_reply_of_read_markdown_is_a_document_of_blocks() {
     assert_eq!(serde_json::to_value(&md).unwrap(), doc["result"]);
 }
 
+/// The result of `read_file` in the fixture is what `TextDoc` writes and reads, validates against
+/// the schema, and keeps a run's unknown class as it came (REQ-610, REQ-622).
+#[test]
+fn the_reply_of_read_file_is_a_document_of_lines_of_runs() {
+    let docs = fixtures("daemon");
+    let (_, doc) = docs
+        .iter()
+        .find(|(n, _)| n == "reply-ok-read-file.json")
+        .expect("the fixture");
+    assert!(validator("TextDoc").is_valid(&doc["result"]));
+    let text: contract::text::TextDoc = serde_json::from_value(doc["result"].clone()).unwrap();
+    assert_eq!(text.title, "files.rs");
+    assert!(text.truncated);
+    assert!(text.lines[3].is_empty(), "an empty line has no runs");
+    let unknown = text.lines[2].last().expect("a run");
+    assert_eq!(unknown.k.as_deref(), Some("from-the-future"));
+    assert_eq!(serde_json::to_value(&text).unwrap(), doc["result"]);
+    let (_, refusal) = docs
+        .iter()
+        .find(|(n, _)| n == "reply-err-binary.json")
+        .expect("the fixture");
+    let msg: contract::DaemonMsg = serde_json::from_value(refusal.clone()).unwrap();
+    assert!(matches!(
+        msg,
+        contract::DaemonMsg::Reply {
+            outcome: contract::Outcome::Err { error, .. },
+            ..
+        } if error.code == contract::ErrorCode::Binary
+    ));
+}
+
 /// The blocks of `read_markdown` and of a finished text of a conversation are checked against the
 /// schema's `MdBlock`, and the text of the conversation fixture keeps its blocks as written.
 #[test]

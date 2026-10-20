@@ -11,6 +11,7 @@ use contract::markdown::{Inline, MarkdownDoc, MdBlock, MdItem};
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
 use crate::commands::{Done, ErrorBody, err};
+use crate::files;
 use crate::server::Shared;
 
 /// The most a file may weigh to be read: a document is one reply.
@@ -69,20 +70,7 @@ fn reply(doc: MarkdownDoc) -> Done {
 /// The file `path` names, which must be a Markdown file inside `root` once links are followed,
 /// small enough to be read.
 fn file_in(root: &Path, path: &str) -> Result<PathBuf, ErrorBody> {
-    let root = fs::canonicalize(root).map_err(|e| {
-        err(
-            ErrorCode::Io,
-            format!("cannot read {}: {e}", root.display()),
-        )
-    })?;
-    let file = fs::canonicalize(root.join(path))
-        .map_err(|_| err(ErrorCode::NotFound, format!("no file {path}")))?;
-    if !file.starts_with(&root) {
-        return Err(err(
-            ErrorCode::BadRequest,
-            "that file is outside the workspace",
-        ));
-    }
+    let file = files::inside(root, path)?;
     let markdown = file
         .extension()
         .and_then(|e| e.to_str())

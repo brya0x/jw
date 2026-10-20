@@ -18,6 +18,7 @@ use crate::saved;
 use crate::server::Shared;
 use crate::start;
 use crate::sync;
+use crate::textfile;
 use crate::workspaces;
 use crate::worktrees;
 
@@ -60,6 +61,7 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
         Cmd::FindFiles { workspace, query } => files::find(shared, &workspace, &query),
         Cmd::ListConversations { workspace } => saved::list(shared, &workspace),
         Cmd::ReadMarkdown { workspace, path } => markdown::read(shared, &workspace, &path),
+        Cmd::ReadFile { workspace, path } => textfile::read(shared, &workspace, &path),
         Cmd::ReadOlder {
             node,
             before,

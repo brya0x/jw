@@ -36,6 +36,7 @@ enum class ErrorCode {
     @SerialName("conflict") Conflict,
     @SerialName("git_failed") GitFailed,
     @SerialName("io") Io,
+    @SerialName("binary") Binary,
 }
 
 @Serializable
@@ -212,6 +213,10 @@ sealed interface Cmd {
     /** A Markdown file of the workspace as blocks: [path] is relative to its folder. The result is a [MarkdownDoc]. */
     @Serializable @SerialName("read_markdown")
     data class ReadMarkdown(val workspace: Id, val path: String) : Cmd
+
+    /** A text file of the workspace as lines: [path] is relative to its folder. The result is a [TextDoc]; a file that is not text is refused with [ErrorCode.Binary]. */
+    @Serializable @SerialName("read_file")
+    data class ReadFile(val workspace: Id, val path: String) : Cmd
 
     /** The items of a conversation that came before the ones its node holds: up to [count] of those made before the time [before]. The result is an [OlderItems] (REQ-567). */
     @Serializable @SerialName("read_older")

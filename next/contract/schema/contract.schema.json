@@ -11,7 +11,7 @@
       "required": ["name", "version"],
       "properties": { "name": { "type": "string" }, "version": { "type": "string" } }
     },
-    "ErrorCode": { "enum": ["bad_request", "not_found", "unsupported", "conflict", "git_failed", "io"] },
+    "ErrorCode": { "enum": ["bad_request", "not_found", "unsupported", "conflict", "git_failed", "io", "binary"] },
     "AttentionKind": {
       "enum": ["question", "plan", "permission", "shell_done", "agent_done", "screen", "merged", "ci_failed"]
     },
@@ -515,6 +515,18 @@
         }
       ]
     },
+    "TextDoc": {
+      "description": "What read_file replies: a text file as lines of runs; k is the syntax class (kw, str, num, ty, fn, cm, attr) and a reader shows an unknown or missing one as plain text.",
+      "type": "object",
+      "required": ["title", "path", "size", "lines"],
+      "properties": {
+        "title": { "type": "string" },
+        "path": { "type": "string" },
+        "size": { "type": "integer", "minimum": 0 },
+        "truncated": { "const": true },
+        "lines": { "type": "array", "items": { "type": "array", "items": { "type": "object", "required": ["t"], "properties": { "t": { "type": "string" }, "k": { "type": "string" } } } } }
+      }
+    },
     "Cmd": {
       "oneOf": [
         { "type": "object", "required": ["cmd", "name"], "properties": { "cmd": { "const": "rename_session" }, "name": { "type": "string", "minLength": 1 } } },
@@ -532,6 +544,7 @@
         { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "list_files" }, "workspace": { "$ref": "#/$defs/Id" }, "path": { "type": "string" } } },
         { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "list_conversations" }, "workspace": { "$ref": "#/$defs/Id" } } },
         { "type": "object", "required": ["cmd", "workspace", "path"], "properties": { "cmd": { "const": "read_markdown" }, "workspace": { "$ref": "#/$defs/Id" }, "path": { "type": "string" } } },
+        { "type": "object", "required": ["cmd", "workspace", "path"], "properties": { "cmd": { "const": "read_file" }, "workspace": { "$ref": "#/$defs/Id" }, "path": { "type": "string" } } },
         { "type": "object", "required": ["cmd", "node", "before", "count"], "properties": { "cmd": { "const": "read_older" }, "node": { "$ref": "#/$defs/Id" }, "before": { "type": "integer", "minimum": 0 }, "count": { "type": "integer", "minimum": 1, "maximum": 500 } } },
         { "type": "object", "required": ["cmd", "node", "ask"], "properties": { "cmd": { "const": "read_plan" }, "node": { "$ref": "#/$defs/Id" }, "ask": { "type": "string" } } },
         { "type": "object", "required": ["cmd", "repo", "to", "text"], "properties": { "cmd": { "const": "write_project_config" }, "repo": { "type": "string" }, "to": { "enum": ["repo", "personal"] }, "text": { "type": "string", "maxLength": 65536 } } },

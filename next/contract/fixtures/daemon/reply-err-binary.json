@@ -1,0 +1,9 @@
+{
+  "t": "reply",
+  "id": "c52",
+  "ok": false,
+  "error": {
+    "code": "binary",
+    "message": "assets/logo.png is not text: the viewer reads UTF-8 without NUL bytes"
+  }
+}

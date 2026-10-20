@@ -11,6 +11,7 @@ pub mod link;
 pub mod markdown;
 pub use link::{BridgeMsg, Denied, PhoneMsg};
 pub mod patch;
+pub mod text;
 pub mod themes;
 
 use serde::{Deserialize, Serialize};
@@ -146,6 +147,8 @@ pub enum ErrorCode {
     Conflict,
     GitFailed,
     Io,
+    /// The file is not text: it has a NUL byte or is not UTF-8 (`read_file`, REQ-613).
+    Binary,
 }
 
 /// A client action. The daemon answers with a `reply` carrying the same `id`.
@@ -440,6 +443,12 @@ pub enum Cmd {
     /// A Markdown file of the workspace as blocks (REQ-465, REQ-466): `path` is relative to the
     /// workspace's folder, or absolute and inside it. The result is a `markdown::MarkdownDoc`.
     ReadMarkdown {
+        workspace: Id,
+        path: String,
+    },
+    /// A text file of the workspace as lines (REQ-610 to REQ-614): `path` is relative to the
+    /// workspace's folder, or absolute and inside it. The result is a `text::TextDoc`.
+    ReadFile {
         workspace: Id,
         path: String,
     },
