@@ -1,0 +1,267 @@
+<title>jwn · the general file viewer: any text file of the workspace, read only, in the terminal and on the phone</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+:root{
+  --bg:#282c34; --panel:#21252b; --fg:#abb2bf; --dim:#5c6370; --line:#3e4451; --sel:#2c313a;
+  --blue:#61afef; --green:#98c379; --yellow:#e5c07b; --red:#e06c75; --magenta:#c678dd; --cyan:#56b6c2;
+  --page:#16181d; --ink:#c3c9d4; --mut:#7d8594;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}}
+:root[data-theme="light"]{--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.55 'IBM Plex Sans',system-ui,sans-serif;padding:24px max(16px,env(safe-area-inset-right,0px)) 40px max(16px,env(safe-area-inset-left,0px))}
+.wrap{max-width:1240px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
+h1{font:600 20px/1.2 var(--mono);margin:0}
+h2{font:600 12px var(--mono);margin:0;color:var(--mut)}
+p{margin:0;max-width:88ch;color:var(--mut)}
+code,kbd{font:12px var(--mono)}
+button{font:12px var(--mono);color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;min-height:32px;cursor:pointer}
+button:hover{border-color:var(--blue)}
+button[aria-pressed="true"]{border-color:var(--blue);color:var(--blue)}
+:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.stage{display:flex;gap:28px;align-items:flex-start;flex-wrap:wrap}
+.col{flex:1 1 640px;min-width:0;display:flex;flex-direction:column;gap:8px}
+.col.ph{flex:0 0 auto}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto}
+.term pre{margin:0;font:13px/1.35 var(--mono);color:var(--fg);outline:none;width:max-content;min-width:100%}
+.hint{font:12px var(--mono);color:var(--mut)}
+.phone{width:376px;max-width:100%;background:var(--bg);border:1px solid var(--line);border-radius:28px;padding:10px;box-shadow:0 0 0 6px var(--panel)}
+.scr{background:var(--panel);border-radius:20px;overflow:hidden;font:13px/1.45 var(--mono);color:var(--fg);display:flex;flex-direction:column;height:640px;position:relative}
+.scr .hd{padding:10px 12px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;min-height:56px}
+.scr .hd .t{flex:1;min-width:0}
+.scr .hd .t b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.scr .hd .t span{display:block;font-size:11px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.scr .hd button{min-width:48px;min-height:48px;border-radius:8px;font-size:15px}
+.scr .bd{flex:1;overflow:auto;background:var(--bg);font:11.5px/1.5 var(--mono);user-select:text;-webkit-user-select:text}
+.scr .bd .ln{display:flex;min-width:max-content}
+.scr .bd.wrapped .ln{min-width:0}
+.scr .bd .g{flex:0 0 auto;color:var(--dim);text-align:right;padding:0 8px 0 8px;border-right:1px solid var(--line);margin-right:8px;position:sticky;left:0;background:var(--bg);user-select:none;-webkit-user-select:none}
+.scr .bd .x{white-space:pre}
+.scr .bd.wrapped .x{white-space:pre-wrap;word-break:break-all}
+.scr .note{padding:8px 12px;border-top:1px solid var(--line);color:var(--yellow);font-size:12px}
+.scr .refuse{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:20px;text-align:center;background:var(--bg)}
+.row{min-height:48px;border-radius:8px;background:var(--sel);padding:8px 12px;display:flex;justify-content:space-between;align-items:center;gap:8px;cursor:pointer;border:0;color:var(--fg);font:13px var(--mono);text-align:left;width:100%}
+.row .sub{color:var(--dim);font-size:12px;white-space:nowrap}
+.list{flex:1;overflow:auto;padding:10px 12px;display:flex;flex-direction:column;gap:6px}
+.dim{color:var(--dim)}.blue{color:var(--blue)}.green{color:var(--green)}.yellow{color:var(--yellow)}.red{color:var(--red)}.cyan{color:var(--cyan)}.mag{color:var(--magenta)}.b{font-weight:700}
+.K{color:var(--magenta)}.S{color:var(--green)}.N{color:var(--yellow)}.T{color:var(--cyan)}.F{color:var(--blue)}.A{color:var(--cyan)}.C{color:var(--dim);font-style:italic}
+.sel{background:var(--sel)}.hit{background:var(--yellow);color:var(--panel)}.cur{background:var(--magenta);color:var(--panel)}
+.decide{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px;color:var(--fg)}
+.decide h2{margin:0 0 8px}
+.decide ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+</style>
+
+<div class="wrap">
+  <div>
+    <h1>The general file viewer</h1>
+    <p>Today <kbd>↵</kbd> on a file of the tree that is not Markdown opens the editor, and the phone says «el teléfono no abre». Here it opens a <b>read-only viewer</b>: line numbers, search, wrapping on demand. A <code>.md</code> keeps its rendered viewer and can show its source. Click the terminal and use the keys on the last row; the phone is at the right, with its own list of files. The buttons pick the case.</p>
+  </div>
+  <div class="bar" role="group" aria-label="Files">
+    <button data-f="rs" type="button" aria-pressed="true">files.rs (Rust)</button>
+    <button data-f="ts" type="button" aria-pressed="false">session.ts (TypeScript)</button>
+    <button data-f="log" type="button" aria-pressed="false">app.log (3.2 MiB, cut at 1 MiB)</button>
+    <button data-f="min" type="button" aria-pressed="false">bundle.min.js (one very long line)</button>
+    <button data-f="md" type="button" aria-pressed="false">NOTES.md (rendered / source)</button>
+    <button data-f="bin" type="button" aria-pressed="false">logo.png (binary)</button>
+  </div>
+  <div class="bar" role="group" aria-label="Colour"><button id="col" type="button" aria-pressed="true">colores de sintaxis</button><span class="hint">keyword · string · number · type · function · comment, with the theme's own palette (no new colour in the themes)</span></div>
+  <div class="stage">
+    <div class="col"><h2>TERMINAL</h2><div class="term"><pre id="scr" tabindex="0" aria-label="File viewer. j and k scroll, slash searches, w wraps, escape closes."></pre></div><div class="hint" id="keys"></div></div>
+    <div class="col ph"><h2>PHONE</h2><div class="phone"><div class="scr" id="ph"></div></div></div>
+  </div>
+  <div class="decide">
+    <h2>To approve</h2>
+    <ol>
+      <li><b>Open.</b> <kbd>↵</kbd> / <kbd>l</kbd> on a file of the tree opens it here; <kbd>e</kbd> (in the tree or in the viewer) opens the editor as <kbd>↵</kbd> does today. A <code>.md</code> still opens rendered; <kbd>s</kbd> flips it to its source and back.</li>
+      <li><b>Terminal viewer.</b> Header with the path, lines and size; line numbers in a gutter; the same keys as the Markdown viewer (<kbd>j k space b g G</kbd>, <kbd>/</kbd> <kbd>n</kbd> <kbd>N</kbd>, <kbd>y</kbd> copies all, <kbd>esc</kbd>/<kbd>q</kbd> closes). New: <kbd>w</kbd> wraps; with wrapping off a long line is cut with <code>›</code> and <kbd>h</kbd> <kbd>l</kbd> move 8 columns; <kbd>r</kbd> rereads. Tabs are 4 columns.</li>
+      <li><b>Colour.</b> A file of a known language (by extension, or name like <code>Makefile</code>, or a <code>#!</code> line) is coloured by its <b>syntax</b>, the same on both screens: keywords magenta, strings green, numbers and constants yellow, types and attributes cyan, functions blue, comments dim and italic. They are the theme's own six accents, so no theme gets a new colour and a light theme stays readable. The head of the file is coloured (up to 64 KiB, and for at most 0.3 s); the lines past that point show plain, so a big file never waits on its colours. An unknown extension shows plain too. The button above turns it off to compare. <i>Here the colours are a rough imitation; the real ones come from a real grammar in the daemon.</i></li>
+      <li><b>Too big.</b> Over 1 MiB the first MiB is shown, cut at a line end, and the last row says so in yellow. Nothing is paged in this part.</li>
+      <li><b>Binary.</b> A binary or not-UTF-8 file shows the refusal with its size (from the listing) instead of a document; nothing is read into the viewer.</li>
+      <li><b>Phone.</b> Tapping any file in <b>Archivos</b> opens it full-screen: monospace, line numbers that stay while you scroll sideways, text you can select, wrapping <b>off</b> by default with the <code>⏎</code> button (48 dp) to turn it on. <b>No search on the phone</b> in this part; select and copy only.</li>
+      <li><b>Read only.</b> Neither side can change the file, and an open viewer does not follow the file when it changes on disk (<kbd>r</kbd> rereads in the terminal; the phone reopens it).</li>
+    </ol>
+  </div>
+</div>
+
+<script>
+(function(){
+const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const c = (cls, s) => `<span class="${cls}">${esc(s)}</span>`;
+const strip = s => s.replace(/<[^>]+>/g, '').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>');
+const RS = [
+'use std::fs;','use std::path::{Component, Path, PathBuf};','',
+'const MAX_ENTRIES: usize = 2000;','',
+'/// A path the client sent, as a relative one with nothing that climbs.',
+'pub fn clean_rel(rel: &str) -> Result<PathBuf, Refusal> {',
+'    let path = Path::new(rel);',
+'    if path.is_absolute() {','        return Err(Refusal::Path);','    }',
+'    let mut out = PathBuf::new();',
+'    for part in path.components() {','        match part {',
+'            Component::Normal(p) => out.push(p),',
+'            Component::CurDir => {}',
+'            _ => return Err(Refusal::Path),','        }','    }','    Ok(out)','}','',
+'/// The folder, canonical and inside the root: a link that leaves it is refused.',
+'pub fn folder(root: &Path, rel: &str) -> Result<PathBuf, Refusal> {',
+'    let want = root.join(clean_rel(rel)?);',
+'    let real = fs::canonicalize(&want).map_err(|_| Refusal::NotFound)?;',
+'    if !real.starts_with(root) {','        return Err(Refusal::Path);','    }',
+'    Ok(real)','}'];
+const LOG = []; for (let i = 0; i < 70; i++){ const lv = i % 17 === 5 ? 'ERROR' : i % 7 === 3 ? 'WARN ' : 'INFO '; LOG.push(`2026-10-20T11:${String(10 + Math.floor(i / 6)).padStart(2, '0')}:${String((i * 9) % 60).padStart(2, '0')}Z ${lv} sync: batch ${1000 + i} took ${20 + (i * 37) % 400} ms`); }
+const MIN = ['(function(){"use strict";var a=[];for(var i=0;i<400;i++){a.push("item-"+i+"-with-a-long-name-that-keeps-going-"+(i*i));}window.__data=a.join(",");var s=document.createElement("script");s.src="https://cdn.example.com/lib.js?v=" + Date.now() + "&token=0123456789abcdef0123456789abcdef";document.head.appendChild(s);})();','//# sourceMappingURL=bundle.min.js.map'];
+const TS = [
+'import { createServer } from "node:http";','import type { Session } from "./types";','',
+'const MAX_CLIENTS = 8; // one phone, one terminal, a few spares','',
+'export interface Pairing {','  token: string;','  expires: number;','}','',
+'export class Bridge {','  private clients = new Map<string, Session>();','',
+'  constructor(private readonly port: number = 8080) {}','',
+'  async pair(code: string): Promise<Pairing | null> {','    if (this.clients.size >= MAX_CLIENTS) {','      return null;','    }',
+'    const token = await sign(`pair:${code}`);','    return { token, expires: Date.now() + 60_000 };','  }','}'];
+const MDSRC = ['# Notas del puente','','El **daemon** habla con el teléfono por un socket.','','- el túnel cambia de nombre en cada arranque','- el QR nuevo sale con `^␣ m`','','## Pendiente','','Ver `docs/spec.md` y la parte N134.'];
+const F = {
+  rs:  {path:'crates/daemon/src/files.rs', size:'9.4 KB', lines:RS, lang:'rs'},
+  ts:  {path:'src/bridge/pairing.ts', size:'6.1 KB', lines:TS, lang:'ts'},
+  log: {path:'var/log/app.log', size:'3.2 MiB', lines:LOG, cut:true},
+  min: {path:'dist/bundle.min.js', size:'412 KB', lines:MIN, lang:'ts'},
+  md:  {path:'NOTES.md', size:'1.1 KB', lines:MDSRC, md:true, lang:'md'},
+  bin: {path:'assets/logo.png', size:'48 KB', bin:true},
+};
+const NAMES = ['rs','ts','log','min','md','bin'];
+const KW = {rs:'use|pub|fn|let|mut|const|struct|enum|impl|match|if|else|for|in|while|loop|return|mod|crate|self|Self|as|ref|move|where|trait|type|Err|Ok|Some|None|true|false', ts:'import|export|from|const|let|var|function|class|interface|type|extends|implements|new|return|if|else|for|while|async|await|private|readonly|public|static|null|undefined|true|false|this|typeof|void'};
+function classes(line, lang){
+  const k = new Array(line.length).fill('');
+  if (!lang || lang === 'log') return k;
+  const mark = (re, c) => { let m; re.lastIndex = 0; while ((m = re.exec(line))){ if (!m[0].length){ re.lastIndex++; continue; } for (let i = m.index; i < m.index + m[0].length; i++) if (!k[i]) k[i] = c; } };
+  if (lang === 'md'){ if (/^#/.test(line)) mark(/.+/g, 'F'); mark(/`[^`]*`/g, 'S'); mark(/\*\*[^*]+\*\*/g, 'T'); return k; }
+  mark(lang === 'rs' ? /\/\/.*$/g : /\/\/.*$/g, 'C');
+  mark(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`[^`]*`/g, 'S');
+  if (lang === 'rs') mark(/#!?\[[^\]]*\]/g, 'A');
+  mark(/\b\d[\d_]*(?:\.\d+)?\b/g, 'N');
+  mark(new RegExp('\\b(?:' + KW[lang] + ')\\b', 'g'), 'K');
+  mark(/\b[A-Za-z_]\w*(?=\()/g, 'F');
+  mark(/\b[A-Z][A-Za-z0-9_]*\b/g, 'T');
+  return k;
+}
+function paint(t, k, hits){
+  let h = '', i = 0;
+  while (i < t.length){
+    const cls = hits && hits[i] ? hits[i] : (k && k[i]) || '';
+    let j = i + 1; while (j < t.length && ((hits && hits[j] ? hits[j] : (k && k[j]) || '') === cls)) j++;
+    h += cls ? `<span class="${cls}">${esc(t.slice(i, j))}</span>` : esc(t.slice(i, j)); i = j;
+  }
+  return h;
+}
+const colourOn = () => document.getElementById('col').getAttribute('aria-pressed') === 'true';
+const W = 80, H = 16;
+let cur = 'rs', scroll = 0, wrap = false, hx = 0, source = false, S = {typing:false, buf:'', q:'', n:0}, phoneList = false, phWrap = false;
+const doc = () => F[cur];
+const tabs = s => s.replace(/\t/g, '    ');
+function rowsOf(){
+  const d = doc(), gw = String(d.lines.length).length, tw = W - gw - 3, out = [];
+  d.lines.forEach((l, i) => {
+    const t = tabs(l), cl = colourOn() ? classes(t, d.lang) : [];
+    if (wrap){ for (let k = 0; k === 0 || k < t.length; k += tw) out.push({n:k === 0 ? i + 1 : '', t:t.slice(k, k + tw), k:cl.slice(k, k + tw)}); }
+    else { const s = t.slice(hx, hx + tw); out.push({n:i + 1, t:s, k:cl.slice(hx, hx + tw), more:t.length > hx + tw, back:hx > 0}); }
+  });
+  return {rows:out, gw, tw};
+}
+function matches(rows){ const m = []; if (!S.q) return m; const q = S.q.toLowerCase(); rows.forEach((r, i) => { let k = 0, t = r.t.toLowerCase(); while ((k = t.indexOf(q, k)) >= 0){ m.push({r:i, c:k}); k += q.length; } }); return m; }
+function hl(r, i, m, idx){
+  const hits = []; if (S.q) m.forEach((x, j) => { if (x.r === i) for (let q = x.c; q < x.c + S.q.length; q++) hits[q] = j === idx ? 'cur' : 'hit'; });
+  return paint(r.t, r.k, hits);
+}
+function term(){
+  const d = doc(), L = [];
+  const bar = '─'.repeat(W);
+  if (d.bin){
+    L.push(c('b', '▤ ' + d.path) + c('dim', ' · ' + d.size));
+    L.push(c('dim', bar));
+    for (let i = 0; i < H - 2; i++) L.push(i === 6 ? ' '.repeat(18) + c('yellow', 'binario · ' + d.size + ' · no se puede mostrar') : '');
+    L.push(c('dim', bar)); L.push(c('dim', 'e editor · esc cierra'));
+    return L;
+  }
+  const showMd = d.md && !source;
+  const {rows, gw, tw} = rowsOf();
+  const m = matches(rows), idx = m.length ? ((S.n % m.length) + m.length) % m.length : -1;
+  L.push(c('b', '▤ ' + d.path) + c('dim', ` · ${d.lines.length} líneas · ${d.size}`) + (d.md ? c('cyan', source ? ' · fuente' : ' · vista') : ''));
+  L.push(c('dim', bar));
+  const body = [];
+  if (showMd){
+    d.lines.forEach(l => { if (l.startsWith('# ')) body.push(c('b blue', l.slice(2))); else if (l.startsWith('## ')) body.push(c('b cyan', l.slice(3))); else if (l.startsWith('- ')) body.push(c('green', '• ') + esc(l.slice(2).replace(/[`*]/g, ''))); else body.push(esc(l.replace(/[`*]/g, ''))); });
+  } else rows.forEach((r, i) => body.push(c('dim', String(r.n).padStart(gw) + ' │ ') + hl(r, i, m, idx) + (r.more ? c('yellow', '›') : '')));
+  const most = Math.max(0, body.length - (H - 3 - (d.cut ? 1 : 0)));
+  scroll = Math.min(Math.max(0, scroll), most);
+  const room = H - 3 - (d.cut ? 1 : 0);
+  for (let i = 0; i < room; i++) L.push(body[scroll + i] || '');
+  if (d.cut) L.push(c('yellow', 'se muestra el primer 1 MiB de ' + d.size + ' · cortado en el final de una línea'));
+  L.push(c('dim', bar));
+  const pct = most ? Math.round(scroll / most * 100) : 100;
+  if (S.typing) L.push(c('yellow', '/') + esc(S.buf) + c('dim', '▏'));
+  else if (S.q) L.push(c('yellow', '/' + S.q) + c('dim', m.length ? `  ${idx + 1}/${m.length} · n/N` : '  sin resultados'));
+  else L.push(c('dim', (showMd ? 's fuente · ' : d.md ? 's vista · ' : '') + `/ buscar · w ${wrap ? 'cortar' : 'ajustar'} · ` + (wrap ? '' : 'h l lado · ') + 'y copiar · e editor · esc') + ' '.repeat(2) + c('dim', pct + '%'));
+  S.m = m; S.idx = idx; S.rows = rows;
+  return L;
+}
+function draw(){
+  document.getElementById('scr').innerHTML = term().join('\n');
+  document.getElementById('keys').textContent = doc().bin ? 'e editor · esc cierra' : 'j k ↑↓ · space b · g G · / n N · w · h l · s (.md) · r · y · e · esc';
+  phone();
+}
+function phone(){
+  const p = document.getElementById('ph'), d = doc();
+  if (phoneList){
+    p.innerHTML = `<div class="hd"><div class="t"><b>Archivos</b><span>feat/next-bootstrap</span></div></div><div class="list">` +
+      NAMES.map(k => `<button class="row" data-k="${k}" type="button"><span>${esc(F[k].path.split('/').pop())}</span><span class="sub">${F[k].size}</span></button>`).join('') + '</div>';
+    p.querySelectorAll('[data-k]').forEach(b => b.onclick = () => { pick(b.dataset.k, false); });
+    return;
+  }
+  const name = d.path.split('/').pop(), dir = d.path.split('/').slice(0, -1).join('/') || '.';
+  let h = `<div class="hd"><button data-back type="button" aria-label="Volver a Archivos">←</button><div class="t"><b>${esc(name)}</b><span>${esc(dir)}${d.bin ? '' : ' · ' + d.lines.length + ' líneas'} · ${d.size}</span></div>` + (d.bin ? '' : `<button data-wrap type="button" aria-pressed="${phWrap}" aria-label="Ajustar líneas">⏎</button>`) + '</div>';
+  if (d.bin) h += `<div class="refuse"><b class="yellow">binario</b><span class="dim">${esc(name)} · ${d.size}</span><span class="dim">no se puede mostrar</span></div>`;
+  else {
+    const gw = String(d.lines.length).length;
+    h += `<div class="bd ${phWrap ? 'wrapped' : ''}">` + d.lines.map((l, i) => `<div class="ln"><span class="g" style="min-width:${gw + 2}ch">${i + 1}</span><span class="x">${paint(tabs(l), colourOn() ? classes(tabs(l), d.lang) : [], null) || ' '}</span></div>`).join('') + '</div>';
+    if (d.cut) h += `<div class="note">Se muestra el primer 1 MiB de ${d.size}.</div>`;
+  }
+  p.innerHTML = h;
+  const b = p.querySelector('[data-back]'); if (b) b.onclick = () => { phoneList = true; phone(); };
+  const w = p.querySelector('[data-wrap]'); if (w) w.onclick = () => { phWrap = !phWrap; phone(); };
+}
+function pick(k, listToo){
+  cur = k; scroll = 0; hx = 0; source = false; S = {typing:false, buf:'', q:'', n:0}; phoneList = !!listToo; wrap = false; phWrap = false;
+  document.querySelectorAll('[data-f]').forEach(b => b.setAttribute('aria-pressed', b.dataset.f === k));
+  draw();
+}
+document.querySelectorAll('[data-f]').forEach(b => b.onclick = () => pick(b.dataset.f, false));
+document.getElementById('col').onclick = e => { e.target.setAttribute('aria-pressed', !colourOn()); draw(); };
+document.getElementById('scr').addEventListener('keydown', e => {
+  const k = e.key, d = doc(), page = H - 4;
+  if (S.typing){
+    if (k === 'Enter'){ S.typing = false; S.q = S.buf; S.n = 0; const m = (matches(rowsOf().rows)); if (m.length) scroll = Math.max(0, m[0].r - 2); }
+    else if (k === 'Escape'){ S.typing = false; S.buf = ''; }
+    else if (k === 'Backspace') S.buf = S.buf.slice(0, -1);
+    else if (k.length === 1) S.buf += k; else return;
+    draw(); e.preventDefault(); return;
+  }
+  if (d.bin){ if (k !== 'Escape' && k !== 'q') return; }
+  else if (k === 'j' || k === 'ArrowDown') scroll++;
+  else if (k === 'k' || k === 'ArrowUp') scroll--;
+  else if (k === ' ' || k === 'PageDown') scroll += page;
+  else if (k === 'b' || k === 'PageUp') scroll -= page;
+  else if (k === 'g' || k === 'Home') scroll = 0;
+  else if (k === 'G' || k === 'End') scroll = 1e9;
+  else if (k === 'w'){ wrap = !wrap; hx = 0; scroll = 0; }
+  else if (k === 'l' && !wrap) hx += 8;
+  else if (k === 'h' && !wrap) hx = Math.max(0, hx - 8);
+  else if (k === 's' && d.md) source = !source;
+  else if (k === '/'){ S.typing = true; S.buf = ''; }
+  else if ((k === 'n' || k === 'N') && S.q && S.m && S.m.length){ S.n += k === 'n' ? 1 : -1; const i = ((S.n % S.m.length) + S.m.length) % S.m.length; scroll = Math.max(0, S.m[i].r - 2); }
+  else if (k === 'Escape' || k === 'q'){ if (S.q){ S.q = ''; } else { pick('rs', false); } }
+  else return;
+  draw(); e.preventDefault();
+});
+draw();
+})();
+</script>
