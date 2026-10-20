@@ -460,6 +460,10 @@ pub struct State {
     pub model: String,
     pub effort: String,
     pub mode: Mode,
+    /// The mode the engine was in just before it said it is in `plan`, so that approving the plan
+    /// can go back to it (REQ-605). None when the conversation began in plan or has left it, and
+    /// after a restart: a new engine is given the mode, not its past.
+    before_plan: Option<Mode>,
     /// The engine's id for the conversation; always known, since the daemon chooses it.
     pub session: String,
     /// The engine has written its transcript, so `--resume` can read it.
@@ -703,6 +707,7 @@ impl State {
             msg_id: String::new(),
             followed: None,
             resume_divider: false,
+            before_plan: None,
             suggestion: None,
             advisor: None,
             held: None,
@@ -1295,7 +1300,7 @@ impl State {
         ])
     }
 
-    /// The approval of a plan: with edits allowed (the engine is asked to change its mode at once, so the
+    /// The approval of a plan: with edits allowed or back in `auto` (the engine is asked to change its mode at once, so the
     /// next edit is not asked), asking for each edit, or the plan refused with what to do instead (REQ-436).
     fn answer_plan(
         &mut self,
@@ -1326,8 +1331,11 @@ impl State {
             out.push(Effect::Write(permission_reply(
                 &p.request, true, &p.input, "",
             )));
-            if key == "accept" {
-                out.push(self.mode_request(Mode::AcceptEdits));
+            match key {
+                "accept" => out.push(self.mode_request(Mode::AcceptEdits)),
+                // Back to the mode the plan was entered from (REQ-605).
+                "auto" => out.push(self.mode_request(Mode::Auto)),
+                _ => {}
             }
             if let Some(id) = &p.tool_use_id {
                 self.set_tool(id, |t| {
@@ -1559,6 +1567,7 @@ impl State {
                 }
                 if let Some(m) = msg["permissionMode"].as_str().and_then(Mode::from_flag) {
                     self.mode = m;
+                    self.before_plan = None;
                 }
                 if msg["skills"].is_array() {
                     self.learn_skills(&msg["skills"]);
@@ -1583,6 +1592,9 @@ impl State {
                 if let Some(m) = msg["permissionMode"].as_str().and_then(Mode::from_flag)
                     && m != self.mode
                 {
+                    // Into plan, the mode left is the one a plan goes back to; any other change
+                    // forgets it.
+                    self.before_plan = (m == Mode::Plan).then_some(self.mode);
                     // The footer shows the mode; a line for each change was noise.
                     self.mode = m;
                 }
@@ -2129,7 +2141,7 @@ impl State {
             );
         }
         if tool == "ExitPlanMode" {
-            let ask = plan_ask(&id, &input);
+            let ask = plan_ask(&id, &input, self.before_plan);
             return self.wait(
                 Pending {
                     ask,
@@ -2664,8 +2676,20 @@ fn question_ask(request: &str, at: usize, q: &Q) -> Ask {
     }
 }
 
-/// The ask for a plan: its lines and the three ways to answer it.
-fn plan_ask(request: &str, input: &Value) -> Ask {
+/// The ask for a plan: its lines and the three ways to answer it. The first goes back to `auto`
+/// when that is the mode the plan was entered from, else it allows edits (REQ-605).
+fn plan_ask(request: &str, input: &Value, back: Option<Mode>) -> Ask {
+    let first = if back == Some(Mode::Auto) {
+        AskOption {
+            key: "auto".into(),
+            label: "Aprobar y volver a auto".into(),
+        }
+    } else {
+        AskOption {
+            key: "accept".into(),
+            label: "Aprobar y editar sin preguntar".into(),
+        }
+    };
     Ask {
         id: request.to_owned(),
         kind: AskKind::Plan,
@@ -2681,10 +2705,7 @@ fn plan_ask(request: &str, input: &Value) -> Ask {
             .map(|l| clip(l, LINE_CHARS))
             .collect(),
         options: vec![
-            AskOption {
-                key: "accept".into(),
-                label: "Aprobar y editar sin preguntar".into(),
-            },
+            first,
             AskOption {
                 key: "manual".into(),
                 label: "Aprobar, preguntando cada edición".into(),
@@ -3339,6 +3360,82 @@ mod tests {
     fn can_use(id: &str, tool: &str, input: Value, suggested: bool) -> Value {
         json!({"type": "control_request", "request_id": id, "request": {"subtype": "can_use_tool", "tool_name": tool, "input": input, "tool_use_id": "toolu_x",
             "permission_suggestions": if suggested { json!([{"type": "addRules"}]) } else { json!([]) }}})
+    }
+
+    /// REQ-605: a plan entered from `auto` offers to go back to it; from any other mode, or when the
+    /// conversation began in plan or left it another way, it allows edits as before.
+    #[test]
+    fn a_plan_entered_from_auto_goes_back_to_auto_and_from_any_other_mode_allows_edits() {
+        let status = |m: &str| json!({"type": "system", "subtype": "status", "status": null, "permissionMode": m});
+        let plan_asks = |s: &mut State| {
+            s.send("go", vec![], 0);
+            s.apply(
+                &can_use(
+                    "rp",
+                    "ExitPlanMode",
+                    json!({"plan": "# Plan\n1. algo"}),
+                    false,
+                ),
+                1,
+            );
+            s.pending.as_ref().unwrap().ask.options.clone()
+        };
+        let first = |o: &[AskOption]| (o[0].key.clone(), o[0].label.clone());
+        // from auto
+        let mut s = st();
+        s.apply(&status("auto"), 0);
+        s.apply(&status("plan"), 0);
+        assert_eq!(s.mode, Mode::Plan);
+        let options = plan_asks(&mut s);
+        assert_eq!(
+            options.iter().map(|o| o.key.as_str()).collect::<Vec<_>>(),
+            ["auto", "manual", "no"],
+            "still three, in the same places"
+        );
+        assert_eq!(
+            first(&options),
+            ("auto".into(), "Aprobar y volver a auto".into())
+        );
+        // an answer that is not one of them is refused; «auto» approves and asks the engine for auto at once
+        assert!(s.answer("rp", "accept", None, None).is_err());
+        let e = s.answer("rp", "auto", None, None).unwrap();
+        let w = writes(&e);
+        assert_eq!(w[0]["response"]["response"]["behavior"], "allow");
+        assert_eq!(w[1]["request"]["subtype"], "set_permission_mode");
+        assert_eq!(w[1]["request"]["mode"], "auto");
+        // the engine says it left plan: what was remembered is forgotten
+        s.apply(&status("auto"), 2);
+        assert_eq!(s.before_plan, None);
+        // from manual, and from accept edits: the first allows edits
+        for from in ["default", "acceptEdits"] {
+            let mut s = st();
+            s.apply(&status(from), 0);
+            s.apply(&status("plan"), 0);
+            let options = plan_asks(&mut s);
+            assert_eq!(
+                first(&options),
+                ("accept".into(), "Aprobar y editar sin preguntar".into()),
+                "from {from}"
+            );
+        }
+        // began in plan: nothing to go back to
+        let mut s = st();
+        s.apply(&json!({"type": "system", "subtype": "init", "permissionMode": "plan", "model": "claude-sonnet-5-5"}), 0);
+        assert_eq!(first(&plan_asks(&mut s)).0, "accept");
+        // left plan with ⇧tab and entered again from manual: the first plan's past is not kept
+        let mut s = st();
+        s.apply(&status("auto"), 0);
+        s.apply(&status("plan"), 0);
+        s.apply(&status("default"), 0);
+        s.apply(&status("plan"), 0);
+        assert_eq!(first(&plan_asks(&mut s)).0, "accept");
+        // «manual» and «no» are as they were
+        let e = s.answer("rp", "manual", None, None).unwrap();
+        assert!(
+            !writes(&e)
+                .iter()
+                .any(|w| w["request"]["subtype"] == "set_permission_mode")
+        );
     }
 
     #[test]
