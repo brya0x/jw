@@ -195,6 +195,11 @@ interface NodeSource {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
     }
 
+    /** Open a new conversation in [pane], in the folder its shell is in (REQ-630, REQ-633). */
+    fun openConversation(pane: Id, reply: (Result<Unit>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
     /** Retake the saved conversation [id] in [pane]. */
     fun resumeConversation(pane: Id, id: String, reply: (Result<Unit>) -> Unit) {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))

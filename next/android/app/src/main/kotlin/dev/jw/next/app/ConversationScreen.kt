@@ -77,6 +77,8 @@ import dev.jw.next.client.IMAGES_MAX
 import dev.jw.next.client.OLDER_PAGE
 import dev.jw.next.client.OlderHeld
 import dev.jw.next.client.foldRuns
+import dev.jw.next.client.folderInWorkspace
+import dev.jw.next.client.fromFolder
 import dev.jw.next.client.RowAct
 import dev.jw.next.client.PanelView
 import dev.jw.next.client.Submit
@@ -144,7 +146,7 @@ private sealed interface Open {
  * [settingsAsked] counts the taps on the pane's tab, each of which opens the settings.
  */
 @Composable
-internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversation, pane: Node.Pane, workspace: Id, branch: String?, settingsAsked: Int) {
+internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversation, pane: Node.Pane, workspace: Id, workspacePath: String?, branch: String?, settingsAsked: Int) {
     val nodeId = node.id
     val accent = Palette.accent(node.accent)
     val context = LocalContext.current
@@ -170,7 +172,9 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val pictures = remember(nodeId) { mutableStateListOf<Picture>() }
     var pasted by remember(nodeId) { mutableIntStateOf(0) }
-    var filesPath by remember(nodeId) { mutableStateOf("") }
+    // The list of files starts in the folder the engine runs in when that is inside the workspace, and at its root when not (REQ-631).
+    val filesStart = folderInWorkspace(workspacePath, node.cwd)
+    var filesPath by remember(nodeId) { mutableStateOf(filesStart) }
 
     LaunchedEffect(node.status) { if (node.status != ConvStatus.Dead && node.status != ConvStatus.Resuming) retaking = false }
     LaunchedEffect(settingsAsked) { if (settingsAsked > 0) open = Open.Settings }
@@ -280,7 +284,7 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
 
     // Typing `@` first opens the files, as `+` does (REQ-445).
     LaunchedEffect(text.text) {
-        if (text.text == "@") { text = TextFieldValue(""); open = Open.Files; filesPath = "" }
+        if (text.text == "@") { text = TextFieldValue(""); open = Open.Files; filesPath = filesStart }
     }
 
     // ---- the tasks and the checklist (REQ-448) ----
@@ -510,7 +514,7 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
         Open.Plus -> PlusSheet(dismiss = { open = null }) { which ->
             open = null
             when (which) {
-                "file" -> { open = Open.Files; filesPath = "" }
+                "file" -> { open = Open.Files; filesPath = filesStart }
                 "photo" -> if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) takePhoto() else permission.launch(Manifest.permission.CAMERA)
                 "gallery" -> gallery.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                 "commands" -> text = TextFieldValue("/", TextRange(1))
@@ -520,7 +524,12 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
         Open.Tasks -> PanelSheet(tasksPanel(node), now, dismiss = { open = null }) { act ->
             if (act is RowAct.Stop) { open = null; stopTask(act.task) }
         }
-        Open.Files -> FilesSheet(source, workspace, filesPath, setPath = { filesPath = it }, dismiss = { open = null }) { path -> open = null; insert("@$path ") }
+        Open.Files -> FilesSheet(source, workspace, filesPath, setPath = { filesPath = it }, dismiss = { open = null }) { path ->
+            open = null
+            // Written from the folder the engine runs in, which resolves it (REQ-631).
+            val from = node.cwd
+            insert("@${if (workspacePath != null && from != null) fromFolder(workspacePath, from, path) else path} ")
+        }
         is Open.Panel -> PanelSheet(o.view, now, dismiss = { open = null }) { act ->
             when (act) {
                 RowAct.Nothing -> {}

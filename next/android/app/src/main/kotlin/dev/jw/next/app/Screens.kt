@@ -436,7 +436,7 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
         if (pane != null && convId != null) {
             when (val conv = tabConv) {
                 null -> Box(Modifier.weight(1f).padding(Gutter)) { PaneSkeleton() }
-                else -> ConversationPane(source, conv, pane, screen.id, ws.branch, settingsAsked)
+                else -> ConversationPane(source, conv, pane, screen.id, ws.path, ws.branch, settingsAsked)
             }
             return@Column
         }
@@ -486,6 +486,18 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
                     remember(pane.screen) { screenText(pane.screen) },
                     fontFamily = MonoFont, fontSize = 12.sp, lineHeight = 18.sp, color = Palette.fg, softWrap = false,
                 )
+            }
+        }
+        // A Claude opens where the shell is, not at the workspace's folder (REQ-633).
+        if (source.writable && pane != null && shown != null && running == null) {
+            Hairline()
+            Row(
+                Modifier.fillMaxWidth().background(Palette.panel).defaultMinSize(minHeight = 48.dp).clickable { source.openConversation(pane.id) { r -> r.onFailure { addError = it.message ?: "el PC no pudo abrir Claude" } } }
+                    .padding(horizontal = Gutter),
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Mono("claude aquí ›", Palette.green, 13, bold = true)
+                Mono(shortPath(pane.cwd), Palette.dim, 12)
             }
         }
         val last = shown?.blocks?.lastOrNull()

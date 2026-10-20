@@ -300,6 +300,10 @@ abstract class ProtocolSource : AppSource() {
         command(Cmd.ReadPlan(node, ask)) { r -> reply(r.read(MarkdownDoc.serializer(), "el plan")) }
     }
 
+    override fun openConversation(pane: Id, reply: (Result<Unit>) -> Unit) {
+        command(Cmd.OpenConversation(pane)) { reply(it.done("el PC no pudo abrir Claude")) }
+    }
+
     override fun resumeConversation(pane: Id, id: String, reply: (Result<Unit>) -> Unit) {
         command(Cmd.OpenConversation(pane, resume = id)) { reply(it.done("el PC no pudo retomar la conversación")) }
     }
