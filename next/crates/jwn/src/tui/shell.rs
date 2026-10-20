@@ -100,11 +100,18 @@ pub fn short(path: &str) -> String {
 /// The path of `rel`, a file of the workspace at `workspace`, as written from the folder `cwd`:
 /// what the engine, which runs in `cwd`, resolves an `@` against (REQ-631). `../` where it climbs.
 pub fn from_folder(workspace: &str, cwd: &str, rel: &str) -> String {
+    // `..` climbs lexically; a `..` at the root stays there, as it does for the shell.
     let parts = |p: &str| -> Vec<String> {
-        p.split('/')
-            .filter(|c| !c.is_empty() && *c != ".")
-            .map(str::to_owned)
-            .collect()
+        p.split('/').fold(Vec::new(), |mut out, c| {
+            match c {
+                "" | "." => {}
+                ".." => {
+                    out.pop();
+                }
+                c => out.push(c.to_owned()),
+            }
+            out
+        })
     };
     let from = parts(cwd);
     let to: Vec<String> = parts(workspace).into_iter().chain(parts(rel)).collect();
@@ -381,6 +388,12 @@ mod tests {
             "../../w/app/docs/a.md"
         );
         assert_eq!(from_folder(w, "/w/app/./crates/", "crates/x.rs"), "x.rs");
+        // a `..` in the folder climbs from the folder it names, and stops at the root
+        assert_eq!(
+            from_folder(w, "/w/app/crates/..", "crates/x.rs"),
+            "crates/x.rs"
+        );
+        assert_eq!(from_folder(w, "/../w/app", "docs/a.md"), "docs/a.md");
     }
 
     #[test]

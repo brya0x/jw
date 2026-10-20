@@ -19,6 +19,9 @@ class ReferenceTest {
         // outside the workspace, with a trailing slash and a `.`
         assertEquals("../../w/app/docs/a.md", fromFolder(w, "/home/me/", "docs/a.md"))
         assertEquals("x.rs", fromFolder(w, "/w/app/./crates/", "crates/x.rs"))
+        // a `..` in the folder climbs from the folder it names, and stops at the root
+        assertEquals("crates/x.rs", fromFolder(w, "/w/app/crates/..", "crates/x.rs"))
+        assertEquals("docs/a.md", fromFolder(w, "/../w/app", "docs/a.md"))
     }
 
     @Test

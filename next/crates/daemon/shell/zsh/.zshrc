@@ -22,7 +22,7 @@ __jwn_precmd_first() {
   local c=$?
   if (( __jwn_ran )); then printf '\e]133;D;%d\a' "$c"; __jwn_ran=0; fi
   # The folder the shell is in, when it changed: what the pane points at follows a `cd`.
-  if [[ $PWD != $__jwn_pwd ]]; then __jwn_pwd=$PWD; printf '\e]633;P;Pwd=%s\a' "$(__jwn_b64 "$PWD")"; fi
+  if [[ $PWD != "$__jwn_pwd" ]]; then __jwn_pwd=$PWD; printf '\e]633;P;Pwd=%s\a' "$(__jwn_b64 "$PWD")"; fi
 }
 # Last, so a prompt theme that rebuilds PS1 has already done so.
 __jwn_precmd_last() {

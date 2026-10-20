@@ -6,7 +6,16 @@ package dev.jw.next.client
  * client has the same table (`tui/shell.rs`, `from_folder`).
  */
 
-private fun parts(path: String) = path.split('/').filter { it.isNotEmpty() && it != "." }
+/** The names of a path, `..` climbing lexically and staying at the root, as the shell does. */
+private fun parts(path: String): List<String> {
+    val out = ArrayList<String>()
+    for (c in path.split('/')) when (c) {
+        "", "." -> {}
+        ".." -> if (out.isNotEmpty()) out.removeAt(out.lastIndex)
+        else -> out.add(c)
+    }
+    return out
+}
 
 /** The path of [rel], a file of the workspace at [workspace], as written from the folder [cwd]. */
 fun fromFolder(workspace: String, cwd: String, rel: String): String {

@@ -208,10 +208,10 @@ impl Term {
     /// The folder the shell said it is in at its last prompt, when it is an absolute folder that
     /// exists (a program can print the mark too, REQ-625).
     pub fn folder(&self) -> Option<String> {
-        let blocks = lock(&self.blocks);
-        let folder = blocks.folder()?;
-        let path = Path::new(folder);
-        (path.is_absolute() && path.is_dir()).then(|| folder.to_owned())
+        // The stat runs without the `blocks` lock: the PTY reader needs it, and a slow mount must not stall it.
+        let folder = lock(&self.blocks).folder()?.to_owned();
+        let path = Path::new(&folder);
+        (path.is_absolute() && path.is_dir()).then_some(folder)
     }
 
     /// Changes whenever the blocks a client would see change.

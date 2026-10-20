@@ -55,6 +55,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -492,7 +493,10 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
         if (source.writable && pane != null && shown != null && running == null) {
             Hairline()
             Row(
-                Modifier.fillMaxWidth().background(Palette.panel).defaultMinSize(minHeight = 48.dp).clickable { source.openConversation(pane.id) { r -> r.onFailure { addError = it.message ?: "el PC no pudo abrir Claude" } } }
+                Modifier.fillMaxWidth().background(Palette.panel).defaultMinSize(minHeight = 48.dp)
+                    .clickable(role = Role.Button, onClickLabel = "abrir Claude en ${shortPath(pane.cwd)}") {
+                        source.openConversation(pane.id) { r -> r.onFailure { addError = it.message ?: "el PC no pudo abrir Claude" } }
+                    }
                     .padding(horizontal = Gutter),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween,
             ) {
