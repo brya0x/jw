@@ -1802,7 +1802,12 @@ impl Ui {
 
     fn draw_foot(&self, g: &mut Grid, conv: &Conversation, (ix, y, iw): (usize, usize, usize)) {
         for (col, text, colour, _) in foot(conv, iw) {
-            g.put(ix + col, y, &text, Style::fg(colour));
+            g.put(
+                ix + col,
+                y,
+                &clip(&text, iw.saturating_sub(col)),
+                Style::fg(colour),
+            );
         }
     }
 

@@ -243,6 +243,11 @@ pub fn draw(
     now_ms: u64,
     accent: Rgb,
 ) {
+    // The rows below the title and the hint do not fit a pane this short; `Grid::put` clips only to
+    // the screen, so they would be written over the border and the rows around it.
+    if h < 4 {
+        return;
+    }
     for r in 0..h {
         g.put(x, y + r, "│", Style::fg(look::dim()));
     }

@@ -1425,8 +1425,10 @@ impl State {
                 Change::Effort(e.trim().to_owned()),
             ));
         }
-        // The engine takes the change at once, also in the middle of a turn (REQ-389).
-        if let Some(m) = mode.filter(|m| *m != self.mode) {
+        // The engine takes the change at once, also in the middle of a turn (REQ-389). It is asked
+        // every time: the mode shown lags until it answers, so two changes before its reply would
+        // otherwise look like one and the second (back to the shown mode) would never reach it.
+        if let Some(m) = mode {
             out.push(self.mode_request(m));
         }
         out
@@ -1833,7 +1835,11 @@ impl State {
                 )
             })
             .collect();
-        let ran_with = msg["message"]["model"].as_str().map(short_model);
+        // What Claude Code writes itself (an API error, «no response requested») is not what ran.
+        let ran_with = msg["message"]["model"]
+            .as_str()
+            .filter(|m| *m != "<synthetic>")
+            .map(short_model);
         if let Some(Item::Agent {
             steps: have, model, ..
         }) = self
@@ -1970,9 +1976,16 @@ impl State {
             .rev()
             .find(|i| matches!(i, Item::Agent { id, .. } if Some(id) == tool.as_ref()))
         {
-            *tools = usage["tool_uses"].as_u64().unwrap_or(0) as u32;
-            *tokens = usage["total_tokens"].as_u64().unwrap_or(0);
-            *ms = usage["duration_ms"].as_u64().unwrap_or(0);
+            // A figure the engine leaves out keeps the one it said before, not a zero.
+            if let Some(n) = usage["tool_uses"].as_u64() {
+                *tools = n as u32;
+            }
+            if let Some(n) = usage["total_tokens"].as_u64() {
+                *tokens = n;
+            }
+            if let Some(n) = usage["duration_ms"].as_u64() {
+                *ms = n;
+            }
             if let Some(l) = last {
                 *last_tool = Some(l.to_owned());
             }
@@ -3510,6 +3523,19 @@ mod tests {
     }
 
     #[test]
+    fn a_second_mode_change_before_the_first_answer_still_reaches_the_engine() {
+        let mut s = st();
+        let first = writes(&s.set(None, None, None, None, Some(Mode::Plan)));
+        let second = writes(&s.set(None, None, None, None, Some(Mode::Manual)));
+        assert_eq!(first[0]["request"]["mode"], "plan");
+        assert_eq!(
+            second[0]["request"]["mode"], "manual",
+            "the engine ends where the last change said, though the shown mode never left manual"
+        );
+        assert_eq!(s.mode, Mode::Manual);
+    }
+
+    #[test]
     fn what_a_local_command_answers_is_its_output_and_not_a_message_of_claudes() {
         let mut s = st();
         s.set(None, None, None, Some("low".into()), None);
@@ -3932,6 +3958,52 @@ mod tests {
             None,
             "a task with no tool that started it has no card"
         );
+    }
+
+    #[test]
+    fn a_subagents_model_is_not_replaced_by_the_synthetic_one_claude_code_writes_itself() {
+        let mut s = st();
+        s.send("go", vec![], 1);
+        s.apply(&json!({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "ag", "name": "Agent", "input": {"description": "d", "subagent_type": "Explore", "prompt": "p"}}]}}), 2);
+        s.apply(&json!({"type": "system", "subtype": "task_started", "task_id": "t1", "tool_use_id": "ag", "description": "d", "is_backgrounded": false, "task_type": "local_agent"}), 3);
+        let model = |s: &State| {
+            s.items
+                .iter()
+                .find_map(|i| match i {
+                    Item::Agent { id, model, .. } if id == "ag" => Some(model.clone()),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        s.apply(&json!({"type": "assistant", "parent_tool_use_id": "ag", "message": {"model": "claude-haiku-5-5", "content": [{"type": "text", "text": "mirando"}]}}), 4);
+        assert_eq!(model(&s), Some("haiku-5.5".to_owned()));
+        s.apply(&json!({"type": "assistant", "parent_tool_use_id": "ag", "message": {"model": "<synthetic>", "content": [{"type": "text", "text": "No response requested."}]}}), 5);
+        assert_eq!(model(&s), Some("haiku-5.5".to_owned()));
+    }
+
+    #[test]
+    fn a_usage_the_engine_leaves_out_keeps_the_figure_it_said_before() {
+        let mut s = st();
+        s.send("go", vec![], 1);
+        s.apply(&json!({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "ag", "name": "Agent", "input": {"description": "d", "subagent_type": "Explore", "prompt": "p"}}]}}), 2);
+        s.apply(&json!({"type": "system", "subtype": "task_started", "task_id": "t1", "tool_use_id": "ag", "description": "d", "is_backgrounded": false, "task_type": "local_agent"}), 3);
+        s.apply(&json!({"type": "system", "subtype": "task_progress", "task_id": "t1", "tool_use_id": "ag", "description": "d", "usage": {"tool_uses": 3, "total_tokens": 100, "duration_ms": 500}, "last_tool_name": "Read"}), 4);
+        s.apply(&json!({"type": "system", "subtype": "task_notification", "task_id": "t1", "tool_use_id": "ag", "status": "completed", "summary": "ok", "usage": {"total_tokens": 150}}), 5);
+        let card = s
+            .items
+            .iter()
+            .find_map(|i| match i {
+                Item::Agent {
+                    id,
+                    tools,
+                    tokens,
+                    ms,
+                    ..
+                } if id == "ag" => Some((*tools, *tokens, *ms)),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(card, (3, 150, 500));
     }
 
     #[test]
