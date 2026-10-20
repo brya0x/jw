@@ -298,6 +298,28 @@ impl Core {
         }
     }
 
+    /// Record the folders the shells are in; true when any changed (REQ-626).
+    pub fn set_folders(&mut self, folders: &HashMap<Id, String>) -> bool {
+        if self.stopping {
+            return false;
+        }
+        let mut changed = false;
+        for p in self
+            .model
+            .workspaces
+            .iter_mut()
+            .flat_map(|w| w.panes.iter_mut())
+        {
+            if let Some(folder) = folders.get(&p.id)
+                && p.cwd != *folder
+            {
+                p.cwd.clone_from(folder);
+                changed = true;
+            }
+        }
+        changed
+    }
+
     /// Record the programs found in the panes; true when any changed. A program that ended
     /// becomes the pane's `last_program`, and the title follows what runs.
     pub fn set_running(&mut self, updates: &HashMap<Id, Option<Vec<String>>>) -> bool {

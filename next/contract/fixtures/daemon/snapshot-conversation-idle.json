@@ -21,6 +21,7 @@
     "todos": [],
     "artifacts": [],
     "commands": [],
-    "cost": 0
+    "cost": 0,
+    "cwd": "/work/app/crates"
   }
 }

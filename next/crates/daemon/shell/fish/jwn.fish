@@ -1,6 +1,7 @@
 # jwn shell integration for fish: report each prompt and each command to the daemon
 # (OSC 133 and 633).
 set -g __jwn_ran 0
+set -g __jwn_pwd ''
 function __jwn_b64
     printf %s $argv[1] | base64 | tr -d '\n'
 end
@@ -14,6 +15,11 @@ function fish_prompt
     if test $__jwn_ran = 1
         printf '\e]133;D;%d\a' $c
         set -g __jwn_ran 0
+    end
+    # The folder the shell is in, when it changed: what the pane points at follows a `cd`.
+    if test "$PWD" != "$__jwn_pwd"
+        set -g __jwn_pwd $PWD
+        printf '\e]633;P;Pwd=%s\a' (__jwn_b64 "$PWD")
     end
     printf '\e]133;A\a'
     __jwn_orig_prompt

@@ -489,6 +489,7 @@
               "properties": { "pid": { "type": "integer", "minimum": 1 }, "cwd": { "type": "string" }, "busy": { "type": "boolean" } },
               "description": "Another claude that has this session open."
             },
+            "cwd": { "type": "string", "minLength": 1, "description": "The folder the engine runs in: the folder its @ references are written from." },
             "suggestion": { "type": "string", "minLength": 1, "maxLength": 400, "description": "What Claude proposes the person writes next." },
             "following": { "type": "integer", "minimum": 0, "description": "When the turn began that another claude runs in the transcript this conversation follows." },
             "tokens": { "type": "integer", "minimum": 1, "description": "What the turn that runs has written." }

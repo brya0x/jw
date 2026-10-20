@@ -27,6 +27,16 @@ pub(crate) fn basename(shell: &str) -> String {
         .map_or_else(|| shell.to_owned(), |n| n.to_string_lossy().into_owned())
 }
 
+/// Where a shell starts when it is made from a pane that is in `from`: there while that is still
+/// a folder, in the workspace's own when it is not (REQ-628, REQ-629).
+fn start_folder(from: &str, workspace: &str) -> String {
+    if Path::new(from).is_dir() {
+        from.to_owned()
+    } else {
+        workspace.to_owned()
+    }
+}
+
 /// Open a pane; with `program`, the shell starts it and stays when it ends. An agent gets
 /// its conversation id here, so a restart can resume it.
 pub fn new_pane(
@@ -58,6 +68,11 @@ pub fn new_pane_then(
     let (path, events, shell, env, setup, hooks) = {
         let core = shared.lock();
         let ws = core.workspace(workspace)?;
+        // Beside another pane, in the folder that pane is in now (REQ-629).
+        let from = beside
+            .as_ref()
+            .and_then(|b| ws.panes.iter().find(|p| p.id == *b))
+            .map_or_else(|| ws.path.clone(), |p| start_folder(&p.cwd, &ws.path));
         if beside
             .as_ref()
             .is_some_and(|b| !ws.panes.iter().any(|p| p.id == *b))
@@ -68,7 +83,7 @@ pub fn new_pane_then(
             ));
         }
         (
-            ws.path.clone(),
+            from,
             core.events.clone(),
             core.shell.clone(),
             // What the pane's workspace was given besides what every pane has (REQ-496).
@@ -243,12 +258,8 @@ pub fn restore(shared: &Shared) {
             .iter()
             .flat_map(|w| {
                 w.panes.iter().map(|p| {
-                    (
-                        p.id.clone(),
-                        p.shell.clone(),
-                        p.cwd.clone(),
-                        p.resume.clone(),
-                    )
+                    let cwd = start_folder(&p.cwd, &w.path);
+                    (p.id.clone(), p.shell.clone(), cwd, p.resume.clone())
                 })
             })
             .collect();
@@ -453,6 +464,20 @@ mod tests {
             pane: pane.into(),
             marks: Vec::new(),
         }
+    }
+
+    /// REQ-628, REQ-629: a shell starts in the folder the pane is in, and in the workspace's own
+    /// when that folder is gone (or is not one).
+    #[test]
+    fn a_shell_starts_where_the_pane_is_and_in_the_workspace_when_that_is_gone() {
+        let dir = std::env::temp_dir().join(format!("jwn-start-{}", std::process::id()));
+        let here = dir.join("here");
+        std::fs::create_dir_all(&here).unwrap();
+        let here = here.to_string_lossy().into_owned();
+        assert_eq!(start_folder(&here, "/ws"), here);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(start_folder(&here, "/ws"), "/ws");
+        assert_eq!(start_folder("", "/ws"), "/ws");
     }
 
     #[test]

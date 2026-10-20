@@ -181,6 +181,7 @@ pub fn spawn(
                                     marks.push(Mark::CommandDone(*code));
                                 }
                                 blocks::Mark::Prompt => *lock(&input_col) = None,
+                                blocks::Mark::Folder(_) => {}
                             }
                             lock(&store).mark(m);
                         }
@@ -204,6 +205,15 @@ pub fn spawn(
 }
 
 impl Term {
+    /// The folder the shell said it is in at its last prompt, when it is an absolute folder that
+    /// exists (a program can print the mark too, REQ-625).
+    pub fn folder(&self) -> Option<String> {
+        let blocks = lock(&self.blocks);
+        let folder = blocks.folder()?;
+        let path = Path::new(folder);
+        (path.is_absolute() && path.is_dir()).then(|| folder.to_owned())
+    }
+
     /// Changes whenever the blocks a client would see change.
     pub fn blocks_version(&self) -> u64 {
         lock(&self.blocks).version()

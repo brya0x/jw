@@ -4,6 +4,7 @@
 
 __jwn_started=
 __jwn_ready=
+__jwn_pwd=
 __jwn_b64() { printf %s "$1" | base64 | tr -d '\n'; }
 __jwn_debug() {
   [ -z "$__jwn_ready" ] && return
@@ -18,6 +19,8 @@ __jwn_precmd() {
   local c=$?
   __jwn_ready=
   if [ -n "$__jwn_started" ]; then printf '\e]133;D;%d\a' "$c"; __jwn_started=; fi
+  # The folder the shell is in, when it changed: what the pane points at follows a `cd`.
+  if [ "$PWD" != "$__jwn_pwd" ]; then __jwn_pwd=$PWD; printf '\e]633;P;Pwd=%s\a' "$(__jwn_b64 "$PWD")"; fi
 }
 __jwn_arm() { __jwn_ready=1; }
 trap '__jwn_debug' DEBUG

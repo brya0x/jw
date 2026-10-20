@@ -28,6 +28,8 @@ pub enum Mark {
     Command { cmd: String, cwd: String },
     /// OSC 133;D: the command ended.
     Done(Option<i32>),
+    /// OSC 633;P;Pwd: the folder the shell is in, at a prompt.
+    Folder(String),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -178,6 +180,8 @@ impl Scanner {
                 } else if let Some(p) = rest.strip_prefix("P;Cwd=") {
                     self.cwd = unb64(p);
                     Finished::Remembered
+                } else if let Some(p) = rest.strip_prefix("P;Pwd=") {
+                    Finished::Mark(Mark::Folder(unb64(p)))
                 } else {
                     Finished::Passthrough
                 }
@@ -223,6 +227,8 @@ pub struct BlockStore {
     cols: u16,
     /// Changes whenever what a client would see changes.
     version: u64,
+    /// The folder the shell said it is in at its last prompt.
+    folder: Option<String>,
 }
 
 fn to_color(c: vt100::Color) -> Option<Color> {
@@ -326,6 +332,7 @@ impl BlockStore {
             done: VecDeque::new(),
             running: None,
             integrated: false,
+            folder: None,
             cols,
             version: 0,
         }
@@ -432,7 +439,13 @@ impl BlockStore {
                 self.version += 1;
             }
             Mark::Done(code) => self.finish(code),
+            Mark::Folder(folder) => self.folder = Some(folder),
         }
+    }
+
+    /// The folder the shell said it is in at its last prompt.
+    pub fn folder(&self) -> Option<&str> {
+        self.folder.as_deref()
     }
 
     /// Bytes a command printed. Output outside a command (the prompt, typing) is not a block's.
@@ -899,6 +912,39 @@ mod tests {
         let blocks = s.view().unwrap().2;
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].out.len(), 1);
+    }
+
+    /// REQ-625: the folder a shell says at its prompt is taken out of the stream, whole or split
+    /// between reads, and the store keeps the last one; it is not a block and not screen text.
+    #[test]
+    fn the_folder_a_shell_says_at_its_prompt_is_taken_out_and_the_last_one_is_kept() {
+        let mut sc = Scanner::default();
+        let mut s = BlockStore::new(80);
+        // `/Users/me/ws` in base64, in two reads and with the string terminator ESC \
+        let pieces: Vec<Piece> = [
+            &b"~ $ \x1b]633;P;Pwd=L1VzZXJz"[..],
+            &b"L21lL3dz\x1b\\rest"[..],
+        ]
+        .into_iter()
+        .flat_map(|chunk| sc.feed(chunk))
+        .collect();
+        let mut text = Vec::new();
+        for piece in pieces {
+            match piece {
+                Piece::Data(d) => text.extend(d),
+                Piece::Mark(m) => s.mark(m),
+            }
+        }
+        assert_eq!(String::from_utf8_lossy(&text), "~ $ rest");
+        assert_eq!(s.folder(), Some("/Users/me/ws"));
+        assert_eq!(s.view().map(|v| v.2.len()), None, "no block was made");
+        // a later one replaces it
+        for piece in sc.feed(b"\x1b]633;P;Pwd=Lw==\x07") {
+            if let Piece::Mark(m) = piece {
+                s.mark(m);
+            }
+        }
+        assert_eq!(s.folder(), Some("/"));
     }
 
     #[test]

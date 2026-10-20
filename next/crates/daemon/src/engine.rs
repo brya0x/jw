@@ -699,6 +699,7 @@ pub fn open_conversation(
     }
     let node = new_id();
     let session = st.session.clone();
+    st.cwd = Some(cwd.to_string_lossy().into_owned());
     {
         let mut core = shared.lock();
         if st.has_transcript {

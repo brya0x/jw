@@ -248,6 +248,14 @@ fn check_shell(shell: &str) {
         "/",
         "{shell}: the next one starts where the cd left it"
     );
+    // REQ-625, REQ-626: the folder the shell says at its prompt is the pane's `cwd` as well.
+    let pane = r.pane.clone();
+    assert!(
+        r.c.wait_until(Duration::from_secs(10), |c| c.nodes[&pane]["cwd"] == "/")
+            .unwrap(),
+        "{shell}: the pane stayed at {}",
+        r.c.nodes[&pane]["cwd"]
+    );
 
     // A program that takes the whole screen is a block with no output, and the node says so.
     r.run(r"printf '\033[?1049hhello\033[?1049l'");
@@ -286,6 +294,65 @@ fn fish_reports_its_commands_as_blocks() {
         Some(p) => check_shell(&p),
         None => eprintln!("fish is not installed; skipped"),
     }
+}
+
+/// REQ-628, REQ-629: a pane made beside one starts where that shell is, and the daemon brings a
+/// shell back where it was.
+#[test]
+fn a_pane_beside_and_a_restart_start_where_the_shell_is() {
+    let Some(shell) = find("bash").or_else(|| find("zsh")) else {
+        return;
+    };
+    let mut r = rig(&shell);
+    let sub = r.dir.join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    let sub = sub.to_string_lossy().into_owned();
+    r.run("cd sub");
+    r.finished(1);
+    let pane = r.pane.clone();
+    assert!(
+        r.c.wait_until(Duration::from_secs(10), |c| c.nodes[&pane]["cwd"]
+            == sub.as_str())
+            .unwrap(),
+        "the pane stayed at {}",
+        r.c.nodes[&pane]["cwd"]
+    );
+    let ws = r.c.nodes[&pane]["workspace"].as_str().unwrap().to_owned();
+    let beside =
+        r.c.cmd(Cmd::NewPane {
+            workspace: ws,
+            program: None,
+            beside: Some(pane.clone()),
+            dir: None,
+        })
+        .unwrap()
+        .unwrap()
+        .unwrap()["pane"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+    r.c.open(&beside).unwrap();
+    assert!(
+        r.c.wait_until(Duration::from_secs(10), |c| c
+            .nodes
+            .get(&beside)
+            .is_some_and(|n| n["cwd"] == sub.as_str()))
+            .unwrap(),
+        "the pane beside did not start in {sub}: {:?}",
+        r.c.nodes.get(&beside)
+    );
+    // A restart: the shell comes back in the folder it was in.
+    let config = r.config.clone();
+    r.d.take().unwrap().stop();
+    let d = Daemon::start(config.clone()).unwrap();
+    let mut c = Client::connect(&config.socket, "test").unwrap();
+    c.open(&pane).unwrap();
+    assert!(
+        c.wait_until(Duration::from_secs(10), |c| c.nodes.contains_key(&pane))
+            .unwrap()
+    );
+    assert_eq!(c.nodes[&pane]["cwd"], sub.as_str());
+    d.stop();
 }
 
 /// REQ-273: `clear` empties the pane's blocks, its own one included, and the next command is a block.

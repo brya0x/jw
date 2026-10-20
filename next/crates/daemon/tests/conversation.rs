@@ -1374,11 +1374,13 @@ fn the_engine_runs_with_the_environment_and_the_folder_it_was_typed_in() {
         ("PWD".to_owned(), here.to_string_lossy().into_owned()),
     ]
     .into();
-    r.open_with(
+    let (node, _) = r.open_with(
         None,
         vec!["--model", "opus", "--name", "login", "hola"],
         Some(env),
     );
+    // REQ-630: the node says the folder the engine runs in.
+    assert_eq!(r.conv(&node)["cwd"], here.to_string_lossy().as_ref());
     wait_for("the engine to start", || {
         log_lines(&r.log).iter().any(|l| l.starts_with("start"))
     });

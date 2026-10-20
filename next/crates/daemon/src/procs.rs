@@ -115,6 +115,10 @@ fn look(shared: &Shared) {
             )
         })
         .collect();
+    let folders: HashMap<Id, String> = terms
+        .iter()
+        .filter_map(|(id, term)| Some((id.clone(), term.folder()?)))
+        .collect();
     let pids: HashSet<u32> = foreground.iter().filter_map(|(_, p)| *p).collect();
     let args = args_of(&pids);
     let updates: HashMap<Id, Option<Vec<String>>> = foreground
@@ -122,7 +126,9 @@ fn look(shared: &Shared) {
         .map(|(id, pid)| (id, pid.and_then(|p| args.get(&p).cloned())))
         .collect();
     let mut core = shared.lock();
-    if core.set_running(&updates) {
+    // Both are done, whichever changed: `||` would skip the second.
+    let (ran, moved) = (core.set_running(&updates), core.set_folders(&folders));
+    if ran || moved {
         core.refresh();
     }
 }

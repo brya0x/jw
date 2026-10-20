@@ -762,6 +762,7 @@ pub struct Pane {
     pub title: String,
     /// The user's shell, always the pane's process.
     pub shell: String,
+    /// The folder the shell is in: where it started, then where it says it is at each prompt (REQ-625, REQ-626).
     pub cwd: String,
     /// The program running inside the shell now, if any.
     #[serde(skip_serializing_if = "Option::is_none")]

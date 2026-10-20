@@ -121,7 +121,7 @@ pub struct Pane {
     pub name: Option<String>,
     /// The user's shell, always the pane's process.
     pub shell: String,
-    /// Where the shell was started.
+    /// Where the shell is: the folder it started in, then the one it says at each prompt (REQ-626).
     pub cwd: String,
     #[serde(skip)]
     pub attention: Vec<Own>,

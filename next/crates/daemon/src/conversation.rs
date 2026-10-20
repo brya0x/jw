@@ -526,6 +526,8 @@ pub struct State {
     resume_divider: bool,
     /// What the engine proposed the person writes next, after the last turn (REQ-572).
     suggestion: Option<String>,
+    /// The folder the engine runs in (REQ-630), known once the conversation is opened from a pane.
+    pub cwd: Option<String>,
     /// The model the advisor runs on, as Claude Code names it, from Claude's settings (REQ-574).
     advisor: Option<String>,
     /// Another `claude` that has this session open, while the conversation has no engine (REQ-575).
@@ -724,6 +726,7 @@ impl State {
             resume_divider: false,
             before_plan: None,
             suggestion: None,
+            cwd: None,
             advisor: None,
             held: None,
             last_total_micro: 0,
@@ -1079,6 +1082,7 @@ impl State {
             },
             following: self.followed.map(|f| f.since),
             held: self.held.clone(),
+            cwd: self.cwd.clone(),
             suggestion: self.shown_suggestion(),
             older: self.older_cursor(),
         }

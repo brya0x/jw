@@ -725,6 +725,8 @@ sealed interface Node {
         val older: Long? = null,
         /** Another `claude` that has this session open, while the conversation has no engine of its own (REQ-575). */
         val held: Held? = null,
+        /** The folder the engine runs in, the one its `@` references are written from (REQ-630, REQ-631). */
+        val cwd: String? = null,
         /** What Claude proposes the person writes next, while the engine is stopped and nothing waits (REQ-572). */
         val suggestion: String? = null,
         /** When the turn began that another `claude` runs in the transcript this conversation follows (REQ-565). */

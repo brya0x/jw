@@ -52,6 +52,10 @@ pub struct Conversation {
     /// own (REQ-575): the clients read it and do not write in it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub held: Option<Held>,
+    /// The folder the engine runs in, the one its `@` references are written from (REQ-630,
+    /// REQ-631); absent while the conversation has not been opened from a pane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
     /// What Claude proposes the person writes next, while the engine is stopped and nothing waits
     /// (REQ-572): the clients draw it grey in the empty field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
