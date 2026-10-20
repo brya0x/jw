@@ -89,6 +89,8 @@ import dev.jw.next.client.itemText
 import dev.jw.next.client.label
 import dev.jw.next.client.savedPanel
 import dev.jw.next.client.skillsPanel
+import dev.jw.next.client.agentRows
+import dev.jw.next.client.agentsChip
 import dev.jw.next.client.slashIsWholeLine
 import dev.jw.next.client.slashMenu
 import dev.jw.next.client.takeCommand
@@ -163,6 +165,9 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
     var askClosed by remember(nodeId) { mutableStateOf<String?>(null) }
     var plan by remember(nodeId) { mutableStateOf<Pair<String, MarkdownDoc>?>(null) }
     var todosOpen by remember(nodeId) { mutableStateOf(false) }
+    // The panel of the agents, opened by the chip by the model, and the rows that are open in it (REQ-602).
+    var agentsOpen by remember(nodeId) { mutableStateOf(false) }
+    var agentsLit by remember(nodeId) { mutableStateOf(setOf<String>()) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val pictures = remember(nodeId) { mutableStateListOf<Picture>() }
     var pasted by remember(nodeId) { mutableIntStateOf(0) }
@@ -172,7 +177,7 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
     LaunchedEffect(settingsAsked) { if (settingsAsked > 0) open = Open.Settings }
     val working = node.working(retaking)
     val followed = node.followedWork(retaking)
-    LaunchedEffect(working, followed, open) { while (working || followed || open is Open.Panel) { now = System.currentTimeMillis(); delay(1000) } }
+    LaunchedEffect(working, followed, open, agentsOpen) { while (working || followed || open is Open.Panel || agentsOpen) { now = System.currentTimeMillis(); delay(1000) } }
     LaunchedEffect(notice) { if (notice != null) { delay(3500); notice = null } }
     LaunchedEffect(node.ask?.id) { answering = false }
 
@@ -281,25 +286,18 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
 
     // ---- the tasks and the checklist (REQ-448) ----
     val running = node.tasks.count { it.state == TaskState.Run }
-    if (node.todos.isNotEmpty() || running > 0) {
+    if (node.todos.isNotEmpty()) {
         Column(Modifier.fillMaxWidth().background(Palette.panel)) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = Pad), verticalAlignment = Alignment.CenterVertically) {
-                if (node.todos.isNotEmpty()) {
-                    val done = node.todos.count { it.done }
-                    Mono(
-                        "${if (done == node.todos.size) "☑" else "☐"} $done/${node.todos.size} tareas", Palette.fg, 12,
-                        modifier = Modifier.weight(1f).defaultMinSize(minHeight = 36.dp).clickable { todosOpen = !todosOpen }.padding(vertical = 8.dp),
-                    )
-                } else Spacer(Modifier.weight(1f))
-                if (running > 0) Box(
-                    Modifier.defaultMinSize(minHeight = 34.dp).background(Palette.sel, CircleShape).clickable { open = Open.Tasks }.padding(horizontal = 12.dp),
-                    contentAlignment = Alignment.Center,
-                ) { Mono("⚙ $running", Palette.yellow, 12, bold = true) }
-            }
+            val done = node.todos.count { it.done }
+            Mono(
+                "${if (done == node.todos.size) "☑" else "☐"} $done/${node.todos.size} tareas", Palette.fg, 12,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = Pad).defaultMinSize(minHeight = 36.dp).clickable { todosOpen = !todosOpen }.padding(vertical = 8.dp),
+            )
             if (todosOpen) node.todos.forEach { Mono((if (it.done) "☑ " else "☐ ") + it.text, if (it.done) Palette.dim else Palette.fg, 12, lines = 2, modifier = Modifier.padding(start = 30.dp, end = Pad, bottom = 4.dp)) }
             Hairline()
         }
     }
+    if (agentsOpen) AgentsPanel(agentRows(node, now), agentsLit, now / 1000, { id -> agentsLit = if (id in agentsLit) agentsLit - id else agentsLit + id }, { id -> stopTask(id) })
 
     // ---- the items ----
     // The runs that are open, from the start of the window; one that is not a run any more (its tools were trimmed) is forgotten.
@@ -460,6 +458,7 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
                     Mono(node.model, Palette.fg, 11)
                     Mono("· ${node.mode.label()}", node.mode.color(), 11)
                 }
+                agentsChip(node, agentsOpen)?.let { AgentsChip(it, agentsOpen) { agentsOpen = !agentsOpen } }
                 branch?.let { Chip("⎇ $it", Palette.magenta) }
                 if (node.queue.isNotEmpty()) Chip("${node.queue.size} en cola", Palette.yellow)
                 if (text.text.startsWith("!")) Chip("! shell", Palette.yellow)
