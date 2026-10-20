@@ -2,10 +2,14 @@ package dev.jw.next.app
 
 import android.content.Context
 import androidx.compose.runtime.mutableIntStateOf
+import dev.jw.next.client.BinaryFile
 import dev.jw.next.client.CacheResult
+import dev.jw.next.client.FILE_WAIT_MS
 import dev.jw.next.client.NodeCache
+import dev.jw.next.client.NO_FILE_ANSWER
 import dev.jw.next.client.NodeSource
 import dev.jw.next.client.Seen
+import dev.jw.next.client.binaryNote
 import dev.jw.next.client.worktreeStarted
 import dev.jw.next.contract.Accent
 import dev.jw.next.contract.ClientMsg
@@ -30,9 +34,12 @@ import dev.jw.next.contract.Node
 import dev.jw.next.contract.Peer
 import dev.jw.next.contract.ProjectEdit
 import dev.jw.next.contract.ProjectInfo
+import dev.jw.next.contract.TextDoc
 import dev.jw.next.contract.WorktreeInfo
 import dev.jw.next.contract.WorktreeList
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.SerializationException
@@ -268,6 +275,22 @@ abstract class ProtocolSource : AppSource() {
         command(Cmd.ReadMarkdown(workspace, path)) { r -> reply(r.read(MarkdownDoc.serializer(), "el documento")) }
     }
 
+    /** A text file as lines; when the PC says nothing in [FILE_WAIT_MS], as an older one that does not know the command (REQ-619). */
+    override fun readFile(workspace: Id, path: String, reply: (Result<TextDoc>) -> Unit) {
+        val answered = AtomicBoolean(false)
+        val id = command(Cmd.ReadFile(workspace, path)) { r ->
+            if (answered.compareAndSet(false, true)) {
+                reply(if (!r.ok && r.error?.code == ErrorCode.Binary) Result.failure(BinaryFile(binaryNote(null))) else r.read(TextDoc.serializer(), "el archivo"))
+            }
+        }
+        waits.schedule({
+            if (answered.compareAndSet(false, true)) {
+                synchronized(lock) { replies.remove(id) }
+                reply(Result.failure(Exception(NO_FILE_ANSWER)))
+            }
+        }, FILE_WAIT_MS, TimeUnit.MILLISECONDS)
+    }
+
     override fun readOlder(node: Id, before: Long, count: Int, reply: (Result<OlderItems>) -> Unit) {
         command(Cmd.ReadOlder(node, before, count)) { r -> reply(r.read(OlderItems.serializer(), "los items anteriores")) }
     }
@@ -286,11 +309,15 @@ abstract class ProtocolSource : AppSource() {
     }
 
     /** Send a command; [reply] runs on the thread that reads the answer, or with a failure if the link drops first. */
-    private fun command(cmd: Cmd, reply: ((DaemonMsg.Reply) -> Unit)? = null) {
+    private fun command(cmd: Cmd, reply: ((DaemonMsg.Reply) -> Unit)? = null): String {
         val id = "c${commands.incrementAndGet()}"
         if (reply != null) synchronized(lock) { replies[id] = reply }
         send(ClientMsg.Command(id, cmd))
+        return id
     }
+
+    /** The one thread that takes a command to be unanswered when its time is up. */
+    private val waits = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "command-waits").apply { isDaemon = true } }
 
     /** What a command read, as a [T]: the PC's message when it refused, else what is wrong with its answer. */
     private fun <T> DaemonMsg.Reply.read(serializer: DeserializationStrategy<T>, what: String = "la carpeta"): Result<T> {

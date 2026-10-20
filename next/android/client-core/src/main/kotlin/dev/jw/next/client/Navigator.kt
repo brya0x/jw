@@ -11,6 +11,7 @@ import dev.jw.next.contract.DirListing
 import dev.jw.next.contract.FileListing
 import dev.jw.next.contract.Id
 import dev.jw.next.contract.MarkdownDoc
+import dev.jw.next.contract.TextDoc
 import dev.jw.next.contract.OlderItems
 import dev.jw.next.contract.OpenKind
 import dev.jw.next.contract.Node
@@ -176,6 +177,11 @@ interface NodeSource {
 
     /** A Markdown file of [workspace] ([path] relative to its folder) as blocks, or the PC's message when it refuses (REQ-466). */
     fun readMarkdown(workspace: Id, path: String, reply: (Result<MarkdownDoc>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** A text file of [workspace] ([path] relative to its folder) as lines, or the PC's message when it refuses; a file that is not text fails with [BinaryFile] (REQ-610, REQ-613). */
+    fun readFile(workspace: Id, path: String, reply: (Result<TextDoc>) -> Unit) {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
     }
 

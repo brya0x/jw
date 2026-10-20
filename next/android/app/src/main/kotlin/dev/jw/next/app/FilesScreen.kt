@@ -27,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import dev.jw.next.client.BinaryFile
 import dev.jw.next.client.ClientState
 import dev.jw.next.client.FileMark
 import dev.jw.next.client.FileRow
@@ -34,12 +35,14 @@ import dev.jw.next.client.FilesView
 import dev.jw.next.client.MarkTone
 import dev.jw.next.client.Navigator
 import dev.jw.next.client.Screen
+import dev.jw.next.client.binaryNote
 import dev.jw.next.client.crumbsOf
 import dev.jw.next.client.filesView
 import dev.jw.next.client.isMarkdown
 import dev.jw.next.contract.FileKind
 import dev.jw.next.contract.FileListing
 import dev.jw.next.contract.MarkdownDoc
+import dev.jw.next.contract.TextDoc
 import kotlinx.coroutines.delay
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -49,7 +52,7 @@ private val Gutter = 16.dp
  * The files of a workspace, folder by folder and no higher than its own (REQ-323 to REQ-328): the
  * PC lists one folder at a time with what git says of each entry. Back goes up a folder, and
  * out of the screen at the workspace's own. A `.md` opens in the viewer (REQ-479); any other file
- * is listed and says that the phone does not open it.
+ * opens as text, coloured, over the whole screen (REQ-618), or says that it is binary (REQ-613).
  */
 @Composable
 fun FilesScreen(source: AppSource, state: ClientState, screen: Screen.Files, nav: Navigator, set: (ClientState) -> Unit) {
@@ -61,6 +64,8 @@ fun FilesScreen(source: AppSource, state: ClientState, screen: Screen.Files, nav
     var error by remember(screen.workspace) { mutableStateOf<String?>(null) }
     var again by remember(screen.workspace) { mutableIntStateOf(0) }
     var viewing by remember(screen.workspace) { mutableStateOf<MarkdownDoc?>(null) }
+    var reading by remember(screen.workspace) { mutableStateOf<TextDoc?>(null) }
+    var refused by remember(screen.workspace) { mutableStateOf<Pair<String, String>?>(null) }
     var note by remember(screen.workspace) { mutableStateOf<String?>(null) }
     val asks = remember(screen.workspace) { AtomicInteger() }
     val view = listing?.let { filesView(name, it, hidden) }
@@ -73,7 +78,11 @@ fun FilesScreen(source: AppSource, state: ClientState, screen: Screen.Files, nav
                 result.onSuccess { viewing = it }.onFailure { note = it.message ?: "el PC no pudo leer ${row.name}" }
             }
         } else {
-            note = "el teléfono no abre ${row.name}"
+            source.readFile(screen.workspace, row.path) { result ->
+                result.onSuccess { reading = it }.onFailure {
+                    if (it is BinaryFile) refused = row.name to binaryNote(row.size) else note = it.message ?: "el PC no pudo leer ${row.name}"
+                }
+            }
         }
     }
     LaunchedEffect(screen.workspace, path, again) {
@@ -110,6 +119,8 @@ fun FilesScreen(source: AppSource, state: ClientState, screen: Screen.Files, nav
         }
     }
     viewing?.let { doc -> ViewerDialog(doc, null) { viewing = null } }
+    reading?.let { doc -> TextViewerDialog(doc) { reading = null } }
+    refused?.let { (file, why) -> RefusalDialog(file, why) { refused = null } }
 }
 
 @Composable
@@ -135,7 +146,7 @@ private fun FileList(view: FilesView, go: (String) -> Unit, open: (FileRow) -> U
     }
 }
 
-/** A folder goes in when it is tapped and a file is opened (REQ-479); a link is listed and does nothing (REQ-325). */
+/** A folder goes in when it is tapped and a file is opened (REQ-479, REQ-618); a link is listed and does nothing (REQ-325). */
 @Composable
 private fun FileLine(row: FileRow, go: (String) -> Unit, open: (FileRow) -> Unit) {
     val (glyph, tone) = when (row.kind) {
