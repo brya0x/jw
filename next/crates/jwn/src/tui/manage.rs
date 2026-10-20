@@ -72,8 +72,13 @@ pub enum Manage {
         title: String,
         text: String,
     },
-    /// `s`: the branch is being pushed; every key waits.
-    Syncing { branch: String },
+    /// `s`: the branch is being pushed; `esc` asks the daemon to stop it (`cancelling` once it did)
+    /// and every other key waits (REQ-604).
+    Syncing {
+        workspace: String,
+        branch: String,
+        cancelling: bool,
+    },
     /// The daemon refused, or could not be asked.
     Failed { title: String, text: String },
     /// `,`: the mode and the themes of the kind in force; `cursor` is the one the keys are on
@@ -104,6 +109,8 @@ pub enum Act {
         target: Named,
         name: String,
     },
+    /// Stop what the daemon runs for this workspace: the push (REQ-604).
+    Cancel(String),
     /// Use the theme at this place in the list of the kind in force.
     Theme(usize),
     /// The next mode, or the one before it.
@@ -200,6 +207,18 @@ impl Manage {
                 (None, Some(act))
             }
             Manage::Failed { .. } => (None, None),
+            Manage::Syncing {
+                workspace,
+                branch,
+                cancelling: false,
+            } if esc => (
+                Some(Manage::Syncing {
+                    workspace: workspace.clone(),
+                    branch,
+                    cancelling: true,
+                }),
+                Some(Act::Cancel(workspace)),
+            ),
             other => (Some(other), None),
         }
     }
@@ -227,7 +246,10 @@ impl Manage {
             Manage::Dirty { .. } => "↵ espera a que el nombre coincida · esc volver",
             Manage::Clean(_) => "y quitar · esc cancelar",
             Manage::Failed { .. } => "cualquier tecla para seguir",
-            Manage::Syncing { .. } => "subiendo… espera",
+            Manage::Syncing {
+                cancelling: true, ..
+            } => "cancelando…",
+            Manage::Syncing { .. } => "subiendo… esc cancela",
             Manage::Settings { .. } => "j/k tema · m modo · ↵ elegir · esc cerrar",
             Manage::Rename { .. } => "↵ aceptar · esc cancelar (vacío: el nombre automático)",
         }
@@ -415,16 +437,28 @@ impl Manage {
                     dim(self.hint()),
                 ],
             ),
-            Manage::Syncing { branch } => (
+            Manage::Syncing {
+                branch, cancelling, ..
+            } => (
                 "subir el worktree".to_owned(),
                 look::blue(),
                 vec![
                     dim(&format!("git push origin {branch}")),
                     blank(),
                     (
-                        format!("{} subiendo {branch}…", super::shell::spin(now_ms)),
+                        format!(
+                            "{} {} {branch}…",
+                            super::shell::spin(now_ms),
+                            if *cancelling {
+                                "cancelando"
+                            } else {
+                                "subiendo"
+                            }
+                        ),
                         Look::Warn,
                     ),
+                    blank(),
+                    dim(self.hint()),
                 ],
             ),
             Manage::Failed { title, text } => {

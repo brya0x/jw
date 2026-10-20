@@ -559,6 +559,10 @@ pub enum After {
     Sync {
         workspace: String,
     },
+    /// Stop what the daemon runs for this workspace (REQ-604).
+    CancelOp {
+        workspace: String,
+    },
 }
 
 pub struct View {
@@ -1654,6 +1658,7 @@ impl View {
                 p.making(pr, "trayendo la rama y haciendo el worktree…");
                 self.prs_asks.push(PrsAsk::Review { workspace, pr });
             }
+            prs::Act::Cancel => return After::CancelOp { workspace },
             prs::Act::Browse(url) => {
                 self.flash = match open_url(&url) {
                     Ok(()) => format!("abriendo {url} en el navegador"),
@@ -1984,18 +1989,27 @@ impl View {
             self.flash(&format!("«{name}» es una carpeta: s sube un worktree"));
             return After::Continue;
         };
-        self.manage = Some(Manage::Syncing { branch });
+        self.manage = Some(Manage::Syncing {
+            workspace: id.clone(),
+            branch,
+            cancelling: false,
+        });
         After::Sync { workspace: id }
     }
 
     /// The daemon answered the push: say what went up, or why it did not.
     pub fn sync_done(&mut self, reply: Reply) {
-        let Some(Manage::Syncing { branch }) =
-            self.manage.take_if(|m| matches!(m, Manage::Syncing { .. }))
+        let Some(Manage::Syncing {
+            branch, cancelling, ..
+        }) = self.manage.take_if(|m| matches!(m, Manage::Syncing { .. }))
         else {
             return;
         };
         match reply {
+            // It was stopped because the person said so: not a failure to explain.
+            Ok(Err(e)) if cancelling && e.message == "cancelado" => {
+                self.flash(&format!("subida de {branch} cancelada"));
+            }
             Ok(Ok(result)) => self.flash(&sync_said(&branch, result.as_ref())),
             Ok(Err(e)) => self.manage_failed(&format!("No se pudo subir {branch}"), &e.message),
             Err(e) => self.manage_failed(&format!("No se pudo subir {branch}"), &e.to_string()),
@@ -2051,6 +2065,7 @@ impl View {
             None => After::Continue,
             Some(Act::ClosePane(pane)) => After::ClosePane(pane),
             Some(Act::Check(workspace)) => After::Check(workspace),
+            Some(Act::Cancel(workspace)) => After::CancelOp { workspace },
             Some(Act::Rename { target, name }) => After::Rename { target, name },
             Some(Act::Theme(at)) => {
                 let kind = self.settings.is_dark(self.os_dark);
@@ -5006,6 +5021,15 @@ fn spawn_sync(workspace: String, tx: std::sync::mpsc::Sender<Reply>) {
     });
 }
 
+/// Ask the daemon to stop what it runs for `workspace`, with a connection of its own: the push or
+/// the review that waits has its reply coming on another (REQ-604). The reply says nothing new.
+fn spawn_cancel(workspace: String) {
+    std::thread::spawn(move || {
+        let _ = Client::connect(&identity::socket_path(), "jwn-tui-cancel")
+            .and_then(|mut c| c.cmd_within(Cmd::Cancel { workspace }, ASK_WAIT));
+    });
+}
+
 /// Tell the viewer how the daemon answered a request for a node.
 fn answer(view: &mut View, src: Src, reply: Reply) {
     match reply {
@@ -5355,6 +5379,7 @@ fn do_after(
             view.project_saved(&repo, reply);
         }
         After::Sync { workspace } => spawn_sync(workspace, sync_tx.clone()),
+        After::CancelOp { workspace } => spawn_cancel(workspace),
         After::Rename { target, name } => {
             let cmd = match target {
                 Named::Workspace(workspace) => Cmd::RenameWorkspace { workspace, name },
@@ -8479,6 +8504,48 @@ mod tests {
             assert_eq!(tap(&mut v, c), After::Continue);
         }
         assert!(matches!(v.manage, Some(Manage::Syncing { .. })));
+    }
+
+    /// REQ-604: `esc` while the push waits asks the daemon to stop it (once), the box says so, and
+    /// the answer «cancelado» is said as a line and not explained as a failure.
+    #[test]
+    fn esc_stops_the_push_that_waits_and_what_it_answers_is_not_a_failure() {
+        let mut v = fixture_view();
+        let ws = v.selected_id().unwrap();
+        assert_eq!(
+            tap(&mut v, 's'),
+            After::Sync {
+                workspace: ws.clone()
+            }
+        );
+        assert!(v.plain(120, 30).contains("esc cancela"));
+        assert_eq!(
+            v.press_key(plain(KeyCode::Esc)),
+            After::CancelOp {
+                workspace: ws.clone()
+            }
+        );
+        let t = v.plain(120, 30);
+        assert!(t.contains("cancelando feat/login…"), "{t}");
+        assert_eq!(
+            v.press_key(plain(KeyCode::Esc)),
+            After::Continue,
+            "asked once: the reply gives the screen back"
+        );
+        v.sync_done(Ok(Err(ErrorBody {
+            code: contract::ErrorCode::GitFailed,
+            message: "cancelado".into(),
+        })));
+        assert!(v.manage.is_none(), "no box of a failure");
+        assert_eq!(v.flash, "subida de feat/login cancelada");
+        // a push that failed for another reason is explained as before, whether or not esc was pressed
+        tap(&mut v, 's');
+        v.press_key(plain(KeyCode::Esc));
+        v.sync_done(Ok(Err(ErrorBody {
+            code: contract::ErrorCode::GitFailed,
+            message: "rejected".into(),
+        })));
+        assert!(matches!(v.manage, Some(Manage::Failed { .. })));
     }
 
     #[test]

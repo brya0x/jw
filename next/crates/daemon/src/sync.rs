@@ -61,8 +61,10 @@ pub fn check(shared: &Shared, workspace: &str) -> Done {
 }
 
 pub fn workspace(shared: &Shared, workspace: &str) -> Done {
-    // The lock is let go before git runs: a push may take as long as the network does.
+    // The lock is let go before git runs: a push may take as long as the network does, and the
+    // person can stop it (REQ-604).
     let (path, branch) = worktree_of(shared, workspace)?;
+    let (cancel, _op) = crate::cancel::begin(shared, workspace)?;
     let dir = Path::new(&path);
     let (has_upstream, ahead) = ahead(dir)?;
     let new_branch = !has_upstream;
@@ -76,7 +78,7 @@ pub fn workspace(shared: &Shared, workspace: &str) -> Done {
     } else {
         vec!["push"]
     };
-    git::run(dir, &args).map_err(|m| err(ErrorCode::GitFailed, m))?;
+    git::run_cancel(dir, &args, &cancel).map_err(|m| err(ErrorCode::GitFailed, m))?;
     Ok(Some(
         json!({"branch": branch, "pushed": ahead, "new_branch": new_branch}),
     ))

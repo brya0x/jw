@@ -161,6 +161,10 @@ sealed interface Cmd {
     @Serializable @SerialName("sync_workspace")
     data class SyncWorkspace(val workspace: Id) : Cmd
 
+    /** Stop what runs for the workspace and can be stopped: a push or a review being made. */
+    @Serializable @SerialName("cancel")
+    data class Cancel(val workspace: Id) : Cmd
+
     /** Read the settings of the repository [repo] is in (its `.jw.toml`); the result is a [ProjectInfo]. */
     @Serializable @SerialName("project_config")
     data class ProjectConfig(val repo: String) : Cmd

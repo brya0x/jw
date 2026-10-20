@@ -27,6 +27,27 @@ pub fn run(dir: &Path, args: &[&str]) -> Result<String, String> {
     }
 }
 
+/// `run`, stopped when `cancel` is set (REQ-604): for what takes as long as the network does.
+pub fn run_cancel(
+    dir: &Path,
+    args: &[&str],
+    cancel: &crate::cancel::Cancel,
+) -> Result<String, String> {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0");
+    crate::cancel::run_child(
+        cmd,
+        &format!("git {}", args.first().unwrap_or(&"")),
+        None,
+        cancel,
+        1024 * 1024,
+    )
+    .map(|s| s.trim().to_owned())
+}
+
 /// What a bounded read printed.
 pub struct Output {
     pub bytes: Vec<u8>,

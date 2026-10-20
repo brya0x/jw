@@ -3,6 +3,7 @@
 mod agents;
 mod blocks;
 pub mod browse;
+mod cancel;
 mod changes;
 mod commands;
 mod conversation;

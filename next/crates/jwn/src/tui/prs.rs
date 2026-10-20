@@ -25,6 +25,8 @@ pub enum Act {
     },
     /// Make the review of this pull request.
     Review(u64),
+    /// Stop the review that is being made (REQ-604).
+    Cancel,
     /// Open this address in the browser.
     Browse(String),
 }
@@ -38,6 +40,8 @@ pub struct Prs {
     load: Load,
     /// The pull request whose review is being made, and what that is doing.
     making: Option<(u64, String)>,
+    /// `esc` was pressed while it was made: the daemon was asked to stop it.
+    cancelling: bool,
 }
 
 /// Rows of the list that are drawn at once.
@@ -52,6 +56,7 @@ impl Prs {
             mine: false,
             load: Load::Loading,
             making: None,
+            cancelling: false,
         }
     }
 
@@ -75,6 +80,7 @@ impl Prs {
     /// The review could not be made: the list is the person's again.
     pub fn stop_making(&mut self) {
         self.making = None;
+        self.cancelling = false;
     }
 
     /// The pull requests that the filter lets through, in the order they were listed.
@@ -95,6 +101,11 @@ impl Prs {
 
     pub fn press(&mut self, ev: &KeyEvent) -> Act {
         if self.making.is_some() {
+            // `esc` asks the daemon to stop it, once; the reply gives the list back.
+            if ev.code == KeyCode::Esc && !self.cancelling {
+                self.cancelling = true;
+                return Act::Cancel;
+            }
             return Act::Nothing;
         }
         let rows = self.rows();
@@ -179,7 +190,11 @@ impl Prs {
             );
         }
         let footer = if self.making.is_some() {
-            ""
+            if self.cancelling {
+                "cancelando…"
+            } else {
+                "esc cancela"
+            }
         } else {
             "↵ revisar · m mis revisiones · o abrir en el navegador · esc"
         };
@@ -425,8 +440,15 @@ mod tests {
         assert_eq!(p.press(&key(KeyCode::Enter)), Act::Nothing);
         assert_eq!(
             p.press(&key(KeyCode::Esc)),
-            Act::Nothing,
-            "the review is being made"
+            Act::Cancel,
+            "esc stops the review that is being made"
         );
+        assert_eq!(
+            p.press(&key(KeyCode::Esc)),
+            Act::Nothing,
+            "once: the reply gives the list back"
+        );
+        p.stop_making();
+        assert_eq!(p.press(&key(KeyCode::Esc)), Act::Close);
     }
 }

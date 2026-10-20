@@ -266,9 +266,13 @@ pub fn review(shared: &Shared, workspace: &str, pr: u64) -> Done {
         return Err(err(ErrorCode::BadRequest, "a pull request has a number"));
     }
     let from = origin(shared, workspace)?;
+    // What the network takes the time of can be stopped (REQ-604).
+    let (cancel, _op) = crate::cancel::begin(shared, workspace)?;
     let git_err = |m: String| err(ErrorCode::GitFailed, m);
     let n = pr.to_string();
-    let gh = |args: &[&str]| run_gh(&from.program, &from.dir, args, WITHIN);
+    let gh = |args: &[&str]| {
+        crate::github::run_gh_cancel(&from.program, &from.dir, args, WITHIN, &cancel)
+    };
     let view: Value =
         serde_json::from_str(&gh(&["pr", "view", &n, "--json", VIEW_FIELDS]).map_err(git_err)?)
             .map_err(|e| err(ErrorCode::GitFailed, format!("gh: not JSON: {e}")))?;
@@ -288,12 +292,13 @@ pub fn review(shared: &Shared, workspace: &str, pr: u64) -> Done {
     .and_then(|t| serde_json::from_str::<Value>(&t).ok())
     .unwrap_or(Value::Null);
     let head = head_ref(pr);
-    git::run(
+    git::run_cancel(
         &from.top,
         &["fetch", "origin", &format!("+pull/{n}/head:{head}")],
+        &cancel,
     )
     .map_err(git_err)?;
-    git::run(&from.top, &["fetch", "origin", &base]).map_err(git_err)?;
+    git::run_cancel(&from.top, &["fetch", "origin", &base], &cancel).map_err(git_err)?;
 
     let repo = from
         .top
@@ -356,11 +361,20 @@ pub fn review(shared: &Shared, workspace: &str, pr: u64) -> Done {
             format!("{dest_text} already exists"),
         ));
     }
-    git::run(
+    if let Err(why) = git::run_cancel(
         &from.top,
         &["worktree", "add", "-B", &branch, &dest_text, &head],
-    )
-    .map_err(git_err)?;
+        &cancel,
+    ) {
+        // Stopped or failed half way, the folder is not left behind: the next try would answer
+        // that it exists.
+        let _ = git::run(&from.top, &["worktree", "remove", "--force", &dest_text]);
+        let _ = git::run(&from.top, &["worktree", "prune"]);
+        if dest.exists() {
+            let _ = std::fs::remove_dir_all(&dest);
+        }
+        return Err(git_err(why));
+    }
     crate::provision::copy_files(&from.top, &dest, &project.copy);
     put(&dest, &head_sha(&dest).unwrap_or_default());
     // What is made from here on that fails takes the worktree away again: left on disk with no

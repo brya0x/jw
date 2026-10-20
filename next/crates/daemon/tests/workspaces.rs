@@ -727,6 +727,100 @@ fn sync_without_a_remote_says_what_git_says() {
     d.stop();
 }
 
+/// REQ-604: a push that waits (here a `pre-push` hook that sleeps) is stopped by `cancel` from another
+/// connection: the sync answers `cancelado` at once and the daemon does not keep the operation.
+#[test]
+fn a_push_that_waits_is_stopped_by_cancel_and_can_be_tried_again() {
+    let sb = Sandbox::new();
+    let d = sb.start();
+    let app = repo(&sb);
+    let origin = sb.dir.join("origin.git");
+    git(&sb.dir, &["init", "-q", "--bare", &text(&origin)]);
+    git(&app, &["remote", "add", "origin", &text(&origin)]);
+    git(&app, &["push", "-q", "origin", "main"]);
+    let mut c = sb.client();
+    session(&mut c);
+    let ws = id_of(
+        c.cmd(Cmd::CreateWorktree {
+            repo: text(&app),
+            branch: "feat/slow".into(),
+            base: None,
+            folder: None,
+        })
+        .unwrap()
+        .unwrap(),
+    );
+    let wt = app.parent().unwrap().join("app-wt/feat-slow");
+    std::fs::write(wt.join("a"), "a").unwrap();
+    git(&wt, &["add", "."]);
+    git(&wt, &["commit", "-q", "-m", "a"]);
+    // the hook of the repository the worktree belongs to runs on every push, and waits
+    let hooks = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&wt)
+        .args(["rev-parse", "--git-common-dir"])
+        .output()
+        .unwrap();
+    let hooks = Path::new(String::from_utf8_lossy(&hooks.stdout).trim()).join("hooks");
+    let hooks = if hooks.is_absolute() {
+        hooks
+    } else {
+        wt.join(hooks)
+    };
+    std::fs::create_dir_all(&hooks).unwrap();
+    let hook = hooks.join("pre-push");
+    std::fs::write(&hook, "#!/bin/sh\nsleep 60\n").unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let began = std::time::Instant::now();
+    let socket = sb.client();
+    let waiting = ws.clone();
+    let push = std::thread::spawn(move || {
+        let mut c = socket;
+        c.cmd(Cmd::SyncWorkspace { workspace: waiting })
+    });
+    // asked twice while it runs: the second is refused, and cancel reaches the first
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+    let mut other = sb.client();
+    let again = other
+        .cmd(Cmd::SyncWorkspace {
+            workspace: ws.clone(),
+        })
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(again.code, ErrorCode::Conflict, "{}", again.message);
+    other
+        .cmd(Cmd::Cancel {
+            workspace: ws.clone(),
+        })
+        .unwrap()
+        .unwrap();
+    let stopped = push.join().unwrap().unwrap().unwrap_err();
+    assert_eq!(stopped.code, ErrorCode::GitFailed);
+    assert_eq!(stopped.message, "cancelado");
+    assert!(
+        began.elapsed() < std::time::Duration::from_secs(30),
+        "the hook was not waited for"
+    );
+    // nothing runs now: cancel answers the same, and a new push is not refused
+    other
+        .cmd(Cmd::Cancel {
+            workspace: ws.clone(),
+        })
+        .unwrap()
+        .unwrap();
+    std::fs::remove_file(&hook).unwrap();
+    let pushed = other
+        .cmd(Cmd::SyncWorkspace { workspace: ws })
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(pushed["pushed"].as_u64(), Some(1), "{pushed}");
+    d.stop();
+}
+
 /// REQ-281 to REQ-285: a worktree with changes is removed only by force, and its branch stays.
 #[test]
 fn a_worktree_with_changes_goes_only_by_force_and_its_branch_stays() {

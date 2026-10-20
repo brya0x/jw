@@ -142,6 +142,9 @@ pub struct Core {
     /// The daemon is being stopped: the shells that end then are not programs that ended, and
     /// what a restart brings back stays as it was.
     pub stopping: bool,
+    /// The operation that runs for each workspace and can be stopped: a push, a review being made
+    /// (REQ-604).
+    ops: HashMap<Id, crate::cancel::Cancel>,
     /// The panes whose blocks changed since they were saved, and when each was last saved.
     history_dirty: HashSet<Id>,
     history_written: HashMap<Id, Instant>,
@@ -181,6 +184,7 @@ impl Core {
             gh: None,
             state_dir: None,
             stopping: false,
+            ops: HashMap::new(),
             history_dirty: HashSet::new(),
             history_written: HashMap::new(),
             history_shape: HashMap::new(),
@@ -820,6 +824,32 @@ impl Core {
             }
         }
         dead.iter().filter_map(|k| self.terms.remove(k)).collect()
+    }
+
+    /// Note that an operation that can be stopped begins for `workspace`: its token, or the refusal
+    /// when one already runs there.
+    pub fn begin_op(
+        &mut self,
+        workspace: &str,
+    ) -> Result<crate::cancel::Cancel, (ErrorCode, String)> {
+        if self.ops.contains_key(workspace) {
+            return Err((
+                ErrorCode::Conflict,
+                "ya hay una operación en curso para este workspace".into(),
+            ));
+        }
+        let token = crate::cancel::Cancel::default();
+        self.ops.insert(workspace.to_owned(), token.clone());
+        Ok(token)
+    }
+
+    pub fn end_op(&mut self, workspace: &str) {
+        self.ops.remove(workspace);
+    }
+
+    /// Stop what runs for `workspace`, if anything does: true when something was running.
+    pub fn cancel_op(&self, workspace: &str) -> bool {
+        self.ops.get(workspace).map(|t| t.cancel()).is_some()
     }
 
     /// End every shell (the daemon is stopping).

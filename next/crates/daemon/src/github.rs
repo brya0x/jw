@@ -3,15 +3,15 @@
 //! login and host are used; the daemon holds no token.
 
 use std::collections::HashSet;
-use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
+use crate::cancel::Cancel;
 use crate::server::Shared;
 
 /// How long `gh` has to answer before it is given up on.
@@ -67,51 +67,25 @@ pub(crate) fn run_gh(
     args: &[&str],
     within: Duration,
 ) -> Result<String, String> {
-    let mut child = Command::new(program)
-        .args(args)
+    run_gh_cancel(program, dir, args, within, &Cancel::default())
+}
+
+/// The same, and stopped when `cancel` is set (REQ-604).
+pub(crate) fn run_gh_cancel(
+    program: &Path,
+    dir: &Path,
+    args: &[&str],
+    within: Duration,
+    cancel: &Cancel,
+) -> Result<String, String> {
+    let mut cmd = Command::new(program);
+    cmd.args(args)
         .current_dir(dir)
         .env("GH_PROMPT_DISABLED", "1")
         .env("GH_NO_UPDATE_NOTIFIER", "1")
         .env("GH_PAGER", "cat")
-        .env("NO_COLOR", "1")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("cannot run {}: {e}", program.display()))?;
-    let mut out = child.stdout.take().expect("stdout is piped");
-    let err = child.stderr.take().expect("stderr is piped");
-    let reader = std::thread::spawn(move || {
-        let mut text = String::new();
-        let _ = out.by_ref().take(CAP).read_to_string(&mut text);
-        text
-    });
-    let message = std::thread::spawn(move || {
-        let mut text = String::new();
-        let _ = err.take(4096).read_to_string(&mut text);
-        text.trim().to_owned()
-    });
-    let end = Instant::now() + within;
-    let status = loop {
-        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
-            break status;
-        }
-        if Instant::now() >= end {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err("gh did not answer in time".into());
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    };
-    let text = reader.join().unwrap_or_default();
-    let why = message.join().unwrap_or_default();
-    if status.success() {
-        Ok(text)
-    } else if why.is_empty() {
-        Err("gh failed".into())
-    } else {
-        Err(why)
-    }
+        .env("NO_COLOR", "1");
+    crate::cancel::run_child(cmd, "gh", Some(within), cancel, CAP)
 }
 
 /// The newest pull request of `branch`, looked up from `dir`.

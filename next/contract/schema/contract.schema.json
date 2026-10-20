@@ -525,6 +525,7 @@
         { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "start_workspace" }, "workspace": { "$ref": "#/$defs/Id" }, "open": { "enum": ["shell", "claude"] } } },
         { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "check_workspace" }, "workspace": { "$ref": "#/$defs/Id" } } },
         { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "sync_workspace" }, "workspace": { "$ref": "#/$defs/Id" } } },
+        { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "cancel" }, "workspace": { "$ref": "#/$defs/Id" } } },
         { "type": "object", "required": ["cmd", "a", "b"], "properties": { "cmd": { "const": "swap_panes" }, "a": { "$ref": "#/$defs/Id" }, "b": { "$ref": "#/$defs/Id" } } },
         { "type": "object", "required": ["cmd", "pane", "dir", "by"], "properties": { "cmd": { "const": "grow_pane" }, "pane": { "$ref": "#/$defs/Id" }, "dir": { "$ref": "#/$defs/SplitDir" }, "by": { "type": "integer", "minimum": -800, "maximum": 800 } } },
         { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "list_files" }, "workspace": { "$ref": "#/$defs/Id" }, "path": { "type": "string" } } },

@@ -344,6 +344,59 @@ fn a_review_that_is_there_is_brought_to_the_new_head_unless_it_has_changes() {
     assert_eq!(git_out(&dest, &["rev-parse", "HEAD"]), mine);
 }
 
+/// REQ-604: a review that waits for GitHub (a `gh` that sleeps) is stopped by `cancel` from another
+/// connection: it answers `cancelado`, makes nothing, and the review can be made after.
+#[test]
+fn a_review_that_waits_for_github_is_stopped_by_cancel_and_makes_nothing() {
+    let mut r = rig();
+    let slow = r.gh_dir.join("gh");
+    let fast = std::fs::read_to_string(&slow).unwrap();
+    std::fs::write(
+        &slow,
+        fast.replace("'pr view') cat", "'pr view') sleep 30; cat"),
+    )
+    .unwrap();
+    let socket = r.sb.config().socket;
+    let (ws, began) = (r.ws.clone(), std::time::Instant::now());
+    let asking = std::thread::spawn({
+        let ws = ws.clone();
+        move || {
+            let mut c = Client::connect(&socket, "test-review").unwrap();
+            c.cmd(Cmd::ReviewPr {
+                workspace: ws,
+                pr: 7,
+            })
+            .unwrap()
+        }
+    });
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+    r.cmd(Cmd::Cancel {
+        workspace: ws.clone(),
+    })
+    .unwrap();
+    let e = asking.join().unwrap().unwrap_err();
+    assert_eq!(e.code, ErrorCode::GitFailed);
+    assert_eq!(e.message, "cancelado");
+    assert!(
+        began.elapsed() < std::time::Duration::from_secs(20),
+        "gh was not waited for"
+    );
+    assert!(
+        !r.work.parent().unwrap().join("app-wt/review-7").exists(),
+        "nothing was made"
+    );
+    // GitHub answers now: the review is made, as if nothing had happened
+    std::fs::write(&slow, fast).unwrap();
+    let made = r
+        .cmd(Cmd::ReviewPr {
+            workspace: ws,
+            pr: 7,
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(made["existed"], false, "{made}");
+}
+
 #[test]
 fn a_fetch_that_fails_makes_nothing_and_gh_that_is_missing_says_so() {
     let mut r = rig();

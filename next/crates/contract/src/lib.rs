@@ -231,6 +231,12 @@ pub enum Cmd {
     SyncWorkspace {
         workspace: Id,
     },
+    /// Stop what runs for the workspace and can be stopped: a push (`sync_workspace`) or a review
+    /// being made (`review_pr`) (REQ-604). What it stops answers with its error; this answers
+    /// the same when nothing runs.
+    Cancel {
+        workspace: Id,
+    },
     /// Swap the places of two panes of a workspace in its layout.
     SwapPanes {
         a: Id,
