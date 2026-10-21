@@ -66,8 +66,8 @@ const SIDEBAR: usize = 28;
 
 /// What the viewer over the panes shows: a document as blocks, or a text file as lines.
 enum Viewing {
-    Doc(viewer::Viewer),
-    Text(fileview::FileView),
+    Doc(Box<viewer::Viewer>),
+    Text(fileview::FileTabs),
 }
 
 impl Viewing {
@@ -465,16 +465,6 @@ pub struct FilesReply {
     reply: Reply,
 }
 
-/// The program that opens a file: `$VISUAL`, else `$EDITOR`, else `nvim`, with its arguments.
-fn editor_from(visual: Option<String>, editor: Option<String>) -> Vec<String> {
-    [visual, editor]
-        .into_iter()
-        .flatten()
-        .map(|v| v.split_whitespace().map(str::to_owned).collect::<Vec<_>>())
-        .find(|v| !v.is_empty())
-        .unwrap_or_else(|| vec!["nvim".to_owned()])
-}
-
 /// A drag that began in a pane's list of blocks, with the button still down.
 #[derive(Debug)]
 struct Drag {
@@ -666,6 +656,9 @@ pub struct View {
     conv_drag: Option<String>,
     /// The read-only screen over the panes, when one is open: a Markdown document or a text file.
     viewer: Option<Viewing>,
+    /// The tabs of text files that a Markdown view opened from the viewer is over: they come back
+    /// when it closes (REQ-640).
+    tabs_behind: Option<fileview::FileTabs>,
     /// The file tree: whether its column is shown, whether the keys are in it, and what each
     /// workspace's holds.
     tree_on: bool,
@@ -767,6 +760,7 @@ impl View {
             last_press: None,
             conv_drag: None,
             viewer: None,
+            tabs_behind: None,
             tree_on: false,
             tree_focus: false,
             trees: HashMap::new(),
@@ -1075,20 +1069,50 @@ impl View {
     /// workspace, to be asked about, and the keyboard goes there; nothing is sent. With no agent
     /// it is copied (REQ-592).
     fn refer(&mut self, text: String) -> After {
-        let agent = self.shown().and_then(|d| {
-            let at = |i: usize| Some((i, self.conv_node(&d.panes.get(i)?.id)?));
-            at(self.focus).or_else(|| (0..d.panes.len()).find_map(at))
-        });
-        let Some((at, node)) = agent else {
+        let Some((at, node)) = self.agent() else {
             self.flash = "no hay un agente aquí: la referencia quedó copiada".into();
             return After::Copy(text);
         };
-        self.conv_ui.entry(node).or_default().editor.insert(&text);
+        self.write_reference(at, node, &text)
+    }
+
+    /// The pane of the agent a reference goes to, and its conversation: the focused one of the
+    /// open workspace, else the first (REQ-592).
+    fn agent(&self) -> Option<(usize, String)> {
+        let d = self.shown()?;
+        let at = |i: usize| Some((i, self.conv_node(&d.panes.get(i)?.id)?));
+        at(self.focus).or_else(|| (0..d.panes.len()).find_map(at))
+    }
+
+    /// Put `text` in the field of the agent at pane `at` and give the keyboard to it; nothing is sent.
+    fn write_reference(&mut self, at: usize, node: String, text: &str) -> After {
+        self.conv_ui.entry(node).or_default().editor.insert(text);
         self.focus = at;
         self.rv_focus = false;
         self.typing = true;
         self.flash = "referencia escrita en el campo del agente; nada se mandó".into();
         After::Continue
+    }
+
+    /// Lines `from` to `to` (from 1) of the file `path` of `workspace` were picked in the viewer of
+    /// text: the reference is written as the `@` picker writes a path, from the folder the agent
+    /// runs in (REQ-631, REQ-639); with no agent it is copied.
+    fn refer_lines(&mut self, workspace: &str, path: String, from: usize, to: usize) -> After {
+        let range = if to > from {
+            format!("#L{from}-{to} ")
+        } else {
+            format!("#L{from} ")
+        };
+        let Some((at, node)) = self.agent() else {
+            self.flash = "no hay un agente aquí: la referencia quedó copiada".into();
+            return After::Copy(format!("@{path}{range}"));
+        };
+        let path = self
+            .written_from_the_conversations_folder(workspace, &node, vec![path])
+            .remove(0);
+        let after = self.write_reference(at, node, &format!("@{path}{range}"));
+        self.flash.push_str(" · esc cierra el visor");
+        after
     }
 
     /// A key while the diff is open: it is the viewer's, never a pane's.
@@ -2358,6 +2382,9 @@ impl View {
             return After::Continue;
         }
         if self.viewer.is_some() {
+            if self.tree_on && self.tree_focus {
+                return self.tree_key(ev);
+            }
             return self.viewer_key(ev);
         }
         if self.prs.is_some() {
@@ -2489,11 +2516,11 @@ impl View {
         }
     }
 
-    fn conv_after(&self, act: Option<ConvAct>) -> After {
+    fn conv_after(&mut self, act: Option<ConvAct>) -> After {
         match act {
             Some(ConvAct::Copy(text)) => After::Copy(text),
-            Some(ConvAct::Edit(path)) => match self.opened.clone() {
-                Some(workspace) => self.editor(workspace, &path.to_string_lossy()),
+            Some(ConvAct::Open(path)) => match self.opened.clone() {
+                Some(workspace) => self.open_memory_file(workspace, &path.to_string_lossy()),
                 None => After::Continue,
             },
             Some(ConvAct::ViewPlan { node, ask }) => After::ReadPlan { node, ask },
@@ -2890,19 +2917,50 @@ impl View {
                 .unwrap_or_default(),
             viewer::Source::File => Vec::new(),
         };
-        self.viewer = Some(Viewing::Doc(viewer::Viewer::new(
+        if let Some(Viewing::Text(tabs)) = self.viewer.take() {
+            self.tabs_behind = Some(tabs);
+        }
+        self.tree_focus = false;
+        self.viewer = Some(Viewing::Doc(Box::new(viewer::Viewer::new(
             doc, source, answers, workspace,
-        )));
+        ))));
+    }
+
+    /// Close the viewer: the tabs of text files a Markdown view was over come back, or nothing is
+    /// shown (REQ-640).
+    fn close_viewer(&mut self) {
+        self.viewer = self.tabs_behind.take().map(Viewing::Text);
+    }
+
+    /// Put `view` in the tabs of the viewer: the ones that show, the ones a Markdown view is over,
+    /// or new ones.
+    fn open_tab(&mut self, view: fileview::FileView, keep: bool) {
+        let tabs = match self.viewer.take() {
+            Some(Viewing::Text(tabs)) => Some(tabs),
+            Some(Viewing::Doc(_)) | None => self.tabs_behind.take(),
+        };
+        let tabs = match tabs {
+            Some(mut tabs) => {
+                tabs.open(view, keep);
+                tabs
+            }
+            None => fileview::FileTabs::new(view),
+        };
+        self.viewer = Some(Viewing::Text(tabs));
+        // The keys are the viewer's, whoever had them when the file came.
+        self.tree_focus = false;
     }
 
     /// Show a text file in the viewer of text; `keep` leaves the person where they were reading
     /// when it is the same file read again (REQ-616).
-    pub fn open_text(&mut self, workspace: String, doc: contract::text::TextDoc, keep: bool) {
-        let mut view = fileview::FileView::new(workspace, doc);
-        if keep && let Some(Viewing::Text(old)) = &self.viewer {
-            view.keep_place(old);
-        }
-        self.viewer = Some(Viewing::Text(view));
+    pub fn open_text(
+        &mut self,
+        workspace: String,
+        rel: String,
+        doc: contract::text::TextDoc,
+        keep: bool,
+    ) {
+        self.open_tab(fileview::FileView::new(workspace, doc).at(rel), keep);
     }
 
     /// Show why the daemon would not read a file: it is binary (REQ-613).
@@ -2910,9 +2968,10 @@ impl View {
         let name = path.rsplit('/').next().unwrap_or(&path).to_owned();
         let weight = size.map_or_else(String::new, |n| format!(" · {}", fileview::size_text(n)));
         let why = format!("binario{weight} · no se puede mostrar");
-        self.viewer = Some(Viewing::Text(fileview::FileView::refused(
-            workspace, path, name, why,
-        )));
+        self.open_tab(
+            fileview::FileView::refused(workspace, path, name, why),
+            false,
+        );
     }
 
     /// Whether the plan the viewer shows still waits for an answer.
@@ -2936,7 +2995,7 @@ impl View {
         match act {
             viewer::Act::Nothing => After::Continue,
             viewer::Act::Close => {
-                self.viewer = None;
+                self.close_viewer();
                 After::Continue
             }
             viewer::Act::Copy(text) => After::Copy(text),
@@ -2967,7 +3026,7 @@ impl View {
                     self.flash("ese plan ya no espera respuesta");
                     return After::Continue;
                 }
-                self.viewer = None;
+                self.close_viewer();
                 // Keeping planning takes an instruction: the box asks for it (REQ-595).
                 if key == "no" {
                     self.conv_ui.entry(node).or_default().refuse(&ask);
@@ -3007,21 +3066,31 @@ impl View {
 
     /// What a key of the viewer of text asked of the client.
     fn text_act(&mut self, act: fileview::Act) -> After {
-        let Some(Viewing::Text(v)) = self.viewer.as_ref() else {
+        let Some(Viewing::Text(tabs)) = self.viewer.as_ref() else {
             return After::Continue;
         };
+        let v = tabs.current();
         let workspace = v.workspace.clone();
         let path = v.path().to_owned();
+        let rel = v.rel().to_owned();
         match act {
             fileview::Act::Nothing => After::Continue,
+            fileview::Act::Refer { path, from, to } => self.refer_lines(&workspace, path, from, to),
             fileview::Act::Close => {
-                self.viewer = None;
+                self.close_viewer();
+                After::Continue
+            }
+            fileview::Act::Tree => {
+                self.tree_on = true;
+                self.tree_focus = true;
+                self.typing = false;
+                self.ask_folders();
                 After::Continue
             }
             fileview::Act::Copy(text) => After::Copy(text),
             fileview::Act::Reread => After::ReadFile {
                 workspace,
-                path,
+                path: rel,
                 size: None,
                 keep: true,
             },
@@ -3032,6 +3101,13 @@ impl View {
     /// The button was let go over the viewer: the click it was, or the text a drag covered.
     fn viewer_release(&mut self, cols: usize, rows: usize) -> After {
         let rect = self.panes_space(cols, rows);
+        if let Some(Viewing::Text(t)) = self.viewer.as_mut() {
+            let copy = t.release();
+            if let Some(says) = t.take_says() {
+                self.flash = says;
+            }
+            return copy.map_or(After::Continue, After::Copy);
+        }
         let Some(v) = self.viewer.as_mut().and_then(Viewing::doc_mut) else {
             return After::Continue;
         };
@@ -3499,15 +3575,30 @@ impl View {
         }
     }
 
-    /// The editor on `path`, in a new panel of `workspace`: what a `/memory` row opens (REQ-316
-    /// no longer has a key for it).
-    fn editor(&self, workspace: String, path: &str) -> After {
-        let mut program = editor_from(std::env::var("VISUAL").ok(), std::env::var("EDITOR").ok());
-        program.push(path.to_owned());
-        After::NewProgram {
+    /// A file of a `/memory` row: in the viewer when it is in the workspace, a `.md` as Markdown;
+    /// outside it the daemon does not read it (OPEN-17), so its path is copied (REQ-641).
+    fn open_memory_file(&mut self, workspace: String, path: &str) -> After {
+        let root = self
+            .session
+            .as_ref()
+            .and_then(|s| s.workspaces.iter().find(|w| w.id == workspace))
+            .map(|w| w.path.trim_end_matches('/').to_owned());
+        let inside = root.is_some_and(|r| path.starts_with(&format!("{r}/")));
+        if !inside {
+            self.flash = "ese archivo está fuera del workspace: su ruta quedó copiada".into();
+            return After::Copy(path.to_owned());
+        }
+        if is_markdown(path) {
+            return After::ReadMarkdown {
+                workspace,
+                path: path.to_owned(),
+            };
+        }
+        After::ReadFile {
             workspace,
-            program,
-            place: self.place(None),
+            path: path.to_owned(),
+            size: None,
+            keep: false,
         }
     }
 
@@ -3871,11 +3962,11 @@ impl View {
         self.unlight_conversations();
         if self.viewer.is_some() {
             let rect = self.panes_space(cols, rows);
-            return self
-                .viewer
-                .as_mut()
-                .and_then(Viewing::doc_mut)
-                .is_some_and(|v| v.press(rect, x, y));
+            return match self.viewer.as_mut() {
+                Some(Viewing::Doc(v)) => v.press(rect, x, y),
+                Some(Viewing::Text(t)) => t.press(rect, x, y),
+                None => false,
+            };
         }
         if self.help
             || self.manage.is_some()
@@ -3945,8 +4036,10 @@ impl View {
         if self.viewer.is_some() {
             let (cols, rows) = self.size;
             let (rect, now) = (self.panes_space(cols, rows), self.now_ms);
-            if let Some(v) = self.viewer.as_mut().and_then(Viewing::doc_mut) {
-                v.drag_to(rect, (x, y), now);
+            match self.viewer.as_mut() {
+                Some(Viewing::Doc(v)) => v.drag_to(rect, (x, y), now),
+                Some(Viewing::Text(t)) => t.drag_to(rect, x, y),
+                None => {}
             }
             return;
         }
@@ -5507,7 +5600,7 @@ fn conversation_cmd(view: &mut View, client: &mut Client, act: ConvAct) {
             args: Vec::new(),
             env: None,
         },
-        ConvAct::Copy(_) | ConvAct::Edit(_) | ConvAct::ViewPlan { .. } => return,
+        ConvAct::Copy(_) | ConvAct::Open(_) | ConvAct::ViewPlan { .. } => return,
     };
     match client.cmd(cmd) {
         Ok(Ok(_)) => {}
@@ -5545,7 +5638,7 @@ fn read_file(
     };
     match client.cmd_within(cmd, FILE_WAIT) {
         Ok(Ok(Some(doc))) => match serde_json::from_value(doc) {
-            Ok(doc) => view.open_text(workspace, doc, keep),
+            Ok(doc) => view.open_text(workspace, path, doc, keep),
             Err(e) => view.flash(&e.to_string()),
         },
         Ok(Ok(None)) => view.flash("el daemon no respondió con un archivo"),
@@ -6856,19 +6949,6 @@ mod tests {
         // The wheel scrolls the tree and not the panels.
         v.scroll(true, 110, 5, 120, 30);
         assert_eq!(v.trees[&ws].scroll, 0, "nothing to scroll in so few rows");
-    }
-
-    #[test]
-    fn the_program_that_opens_a_file_is_visual_then_editor_then_nvim() {
-        let s = |t: &str| Some(t.to_owned());
-        assert_eq!(editor_from(s("hx"), s("vim")), ["hx"]);
-        assert_eq!(editor_from(None, s("code -w")), ["code", "-w"]);
-        assert_eq!(
-            editor_from(s("  "), s("vim")),
-            ["vim"],
-            "an empty one is none"
-        );
-        assert_eq!(editor_from(None, None), ["nvim"]);
     }
 
     #[test]
@@ -9638,7 +9718,7 @@ mod tests {
             "{screen}"
         );
         assert!(
-            matches!(&v.viewer, Some(Viewing::Text(t)) if t.workspace == ws && t.path().ends_with("src/main.rs"))
+            matches!(&v.viewer, Some(Viewing::Text(t)) if t.current().workspace == ws && t.current().path().ends_with("src/main.rs"))
         );
 
         read_file(
@@ -10122,7 +10202,7 @@ mod tests {
     #[test]
     fn a_text_file_in_the_viewer_has_the_keys_the_paste_and_the_wheel_and_none_reaches_a_pane() {
         let (mut v, ws) = tree_view();
-        v.open_text(ws.clone(), text_doc(80), false);
+        v.open_text(ws.clone(), String::new(), text_doc(80), false);
         assert!(v.viewer.is_some());
         assert!(v.plain(120, 30).contains("▤ main.rs · 80 líneas"));
         assert!(
@@ -10159,7 +10239,7 @@ mod tests {
             "no editor opens from the viewer (N151)"
         );
         assert!(v.viewer.is_some(), "and it stays open");
-        v.open_text(ws, text_doc(5), false);
+        v.open_text(ws, String::new(), text_doc(5), false);
         assert_eq!(v.press_key(plain(KeyCode::Esc)), After::Continue);
         assert!(v.viewer.is_none());
     }
@@ -10181,7 +10261,7 @@ mod tests {
         let mut doc = text_doc(3);
         doc.title = "plan.md".into();
         doc.path = "/x/plan.md".into();
-        v.open_text(ws.clone(), doc, false);
+        v.open_text(ws.clone(), String::new(), doc, false);
         assert_eq!(
             v.press_key(plain(KeyCode::Char('s'))),
             After::ReadMarkdown {
@@ -10193,7 +10273,7 @@ mod tests {
 
     /// REQ-613: a binary file shows its refusal with the weight the tree knew.
     #[test]
-    fn a_binary_file_shows_its_refusal_with_its_weight_and_only_e_and_esc_work() {
+    fn a_binary_file_shows_its_refusal_with_its_weight_and_only_esc_works() {
         let (mut v, ws) = tree_view();
         v.open_refused(ws, "assets/logo.png".into(), Some(48 * 1024));
         assert!(
@@ -10477,6 +10557,182 @@ mod tests {
         assert_eq!(v.conv_ui[CONV].editor.text(), "ver @auth.rs ");
     }
 
+    /// REQ-639: `↵` in the viewer of text writes the reference of the lines picked in the field of
+    /// the agent of the workspace, from the folder the agent runs in, and sends nothing.
+    #[test]
+    fn enter_in_the_viewer_of_text_writes_the_reference_in_the_field_of_the_agent_and_sends_nothing()
+     {
+        let mut v = conv_view(true);
+        let root = v.session.as_ref().unwrap().workspaces[0].path.clone();
+        let ws = v.session.as_ref().unwrap().workspaces[0].id.clone();
+        v.open_text(ws, "src/auth.rs".into(), text_doc(10), false);
+        v.press_key(plain(KeyCode::Char('j')));
+        v.press_key(plain(KeyCode::Char('v')));
+        v.press_key(plain(KeyCode::Char('j')));
+        assert_eq!(v.press_key(plain(KeyCode::Enter)), After::Continue);
+        assert_eq!(v.conv_ui[CONV].editor.text(), "@src/auth.rs#L2-3 ");
+        assert!(v.flash.contains("nada se mandó"), "{}", v.flash);
+        assert!(v.viewer.is_some(), "the viewer stays where it was");
+        assert!(v.typing, "the keyboard is the agent's");
+        // with nothing picked, the line of the cursor; written from the folder the agent runs in
+        v.convs.get_mut(CONV).unwrap().cwd = Some(format!("{root}/docs"));
+        assert_eq!(v.press_key(plain(KeyCode::Enter)), After::Continue);
+        assert_eq!(
+            v.conv_ui[CONV].editor.text(),
+            "@src/auth.rs#L2-3 @../src/auth.rs#L3 "
+        );
+        assert_eq!(v.press_key(plain(KeyCode::Esc)), After::Continue);
+        assert!(v.viewer.is_none(), "esc closes it and the field is there");
+    }
+
+    /// REQ-639: a workspace with no agent has the reference copied.
+    #[test]
+    fn a_reference_from_the_viewer_of_text_is_copied_when_the_workspace_has_no_agent() {
+        let mut v = fixture_view();
+        let ws = v.selected_id().unwrap();
+        v.open_text(ws, "src/auth.rs".into(), text_doc(10), false);
+        assert_eq!(
+            v.press_key(plain(KeyCode::Enter)),
+            After::Copy("@src/auth.rs#L1 ".into())
+        );
+        assert!(v.flash.contains("no hay un agente"), "{}", v.flash);
+    }
+
+    /// REQ-639: the file is read again by the path it was asked by, and not by the canonical one, so
+    /// that the reference of the new reading is the same.
+    #[test]
+    fn a_reread_asks_for_the_path_the_file_was_opened_by() {
+        let mut v = conv_view(true);
+        let ws = v.session.as_ref().unwrap().workspaces[0].id.clone();
+        v.open_text(ws.clone(), "src/auth.rs".into(), text_doc(3), false);
+        assert_eq!(
+            v.press_key(plain(KeyCode::Char('r'))),
+            After::ReadFile {
+                workspace: ws,
+                path: "src/auth.rs".into(),
+                size: None,
+                keep: true
+            }
+        );
+    }
+
+    fn doc_at(path: &str, lines: usize) -> contract::text::TextDoc {
+        let mut d = text_doc(lines);
+        d.path = path.into();
+        d.title = path.rsplit('/').next().unwrap().into();
+        d
+    }
+
+    fn tabs_of(v: &View) -> &fileview::FileTabs {
+        match &v.viewer {
+            Some(Viewing::Text(t)) => t,
+            _ => panic!("the viewer of text is not open"),
+        }
+    }
+
+    /// REQ-640: `t` in the viewer gives the keys to the tree beside it, and `↵` on a file of the tree
+    /// is a new tab; `esc` gives the keys back.
+    #[test]
+    fn t_gives_the_keys_to_the_tree_beside_the_viewer_and_a_file_of_it_is_a_new_tab() {
+        let (mut v, ws) = tree_view();
+        v.open_text(
+            ws.clone(),
+            "src/a.rs".into(),
+            doc_at("/x/src/a.rs", 20),
+            false,
+        );
+        assert!(!v.tree_focus, "the keys are the viewer's");
+        assert_eq!(v.press_key(plain(KeyCode::Char('t'))), After::Continue);
+        assert!(v.tree_on && v.tree_focus, "and now the tree's");
+        v.press_key(plain(KeyCode::Char('j')));
+        assert_eq!(
+            tabs_of(&v).current().cursor(),
+            (0, 0),
+            "j moved the tree, not the cursor"
+        );
+        v.press_key(plain(KeyCode::Char('j')));
+        assert!(matches!(
+            v.press_key(plain(KeyCode::Enter)),
+            After::ReadFile { ref path, keep: false, .. } if path == "Cargo.toml"
+        ));
+        v.open_text(ws, "Cargo.toml".into(), doc_at("/x/Cargo.toml", 5), false);
+        assert_eq!(tabs_of(&v).count(), 2);
+        assert_eq!(tabs_of(&v).current().doc_title(), "Cargo.toml");
+        assert!(!v.tree_focus, "the keys are the viewer's again");
+        v.press_key(plain(KeyCode::Char('t')));
+        assert!(v.tree_focus);
+        v.press_key(plain(KeyCode::Esc));
+        assert!(
+            !v.tree_focus && v.viewer.is_some(),
+            "esc gives the keys back and closes nothing"
+        );
+    }
+
+    /// REQ-640: a Markdown view opened over the tabs gives them back when it closes.
+    #[test]
+    fn a_markdown_over_the_tabs_gives_them_back_when_it_closes() {
+        let (mut v, ws) = tree_view();
+        v.open_text(ws.clone(), "a.rs".into(), doc_at("/x/a.rs", 5), false);
+        v.open_text(ws.clone(), "b.rs".into(), doc_at("/x/b.rs", 5), false);
+        v.open_viewer(plan_doc(), viewer::Source::File, ws.clone());
+        assert!(matches!(v.viewer, Some(Viewing::Doc(_))));
+        assert!(v.tabs_behind.is_some());
+        assert_eq!(v.press_key(plain(KeyCode::Esc)), After::Continue);
+        assert_eq!(tabs_of(&v).count(), 2, "the tabs are back");
+        assert!(v.tabs_behind.is_none());
+        // a file read while the Markdown view is open (its `s`) joins them
+        v.open_viewer(plan_doc(), viewer::Source::File, ws.clone());
+        v.open_text(ws, "c.rs".into(), doc_at("/x/c.rs", 5), false);
+        assert_eq!(tabs_of(&v).count(), 3);
+        assert!(v.tabs_behind.is_none());
+    }
+
+    /// REQ-640: the reference is of the file of the tab that shows.
+    #[test]
+    fn the_reference_is_of_the_file_of_the_tab_that_shows() {
+        let mut v = conv_view(true);
+        let ws = v.session.as_ref().unwrap().workspaces[0].id.clone();
+        v.open_text(
+            ws.clone(),
+            "src/a.rs".into(),
+            doc_at("/x/src/a.rs", 9),
+            false,
+        );
+        v.open_text(ws, "src/b.rs".into(), doc_at("/x/src/b.rs", 9), false);
+        v.press_key(plain(KeyCode::Tab));
+        assert_eq!(v.press_key(plain(KeyCode::Enter)), After::Continue);
+        assert_eq!(v.conv_ui[CONV].editor.text(), "@src/a.rs#L1 ");
+    }
+
+    /// REQ-640: a click puts the cursor on a character of the text, a drag selects and copies, and a
+    /// click on a name of the bar is that tab.
+    #[test]
+    fn the_mouse_moves_the_cursor_selects_and_changes_tab_in_the_viewer_of_text() {
+        let (mut v, ws) = tree_view();
+        v.open_text(ws.clone(), "a.rs".into(), doc_at("/x/a.rs", 6), false);
+        v.open_text(ws, "b.rs".into(), doc_at("/x/b.rs", 6), false);
+        let (x, y) = find(&v, "let n = 3;");
+        assert!(
+            v.press_select(x + 4, y, 120, 30),
+            "a press on the text begins a drag"
+        );
+        assert_eq!(tabs_of(&v).current().cursor(), (2, 4));
+        assert_eq!(
+            v.release(120, 30),
+            After::Continue,
+            "a click copies nothing"
+        );
+        assert!(v.press_select(x + 4, y, 120, 30));
+        v.drag_to(x + 8, y);
+        assert_eq!(v.release(120, 30), After::Copy("n = 3".into()));
+        let (bx, by) = find(&v, "a.rs");
+        assert!(
+            !v.press_select(bx + 1, by, 120, 30),
+            "a name of the bar is no drag"
+        );
+        assert_eq!(tabs_of(&v).current().doc_title(), "a.rs");
+    }
+
     fn type_line(v: &mut View, text: &str) {
         for c in text.chars() {
             v.press_key(plain(KeyCode::Char(c)));
@@ -10566,8 +10822,9 @@ mod tests {
         assert!(v.flash.contains("no se pudo listar"), "{}", v.flash);
     }
 
+    /// REQ-641: a memory file of the workspace opens in the viewer, and one outside it is copied.
     #[test]
-    fn a_memory_file_chosen_opens_in_an_editor_in_a_new_panel() {
+    fn a_memory_file_chosen_opens_in_the_viewer_or_is_copied_when_it_is_outside_the_workspace() {
         let mut v = conv_view(true);
         let dir = std::env::temp_dir().join(format!(
             "{}-mem-{}",
@@ -10576,20 +10833,34 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("AGENTS.md"), "x").unwrap();
+        std::fs::write(dir.join("CLAUDE.local.md"), "y").unwrap();
         v.panes.get_mut(CONV_PANE).unwrap().cwd = dir.to_string_lossy().into_owned();
+        let ws = v.session.as_ref().unwrap().workspaces[0].id.clone();
+        v.opened = Some(ws.clone());
         type_line(&mut v, "/memory");
         v.press_key(plain(KeyCode::Enter));
         // the person's own files may be there too: narrow it to this one
         type_line(&mut v, "AGENTS");
-        match v.press_key(plain(KeyCode::Enter)) {
-            After::NewProgram { program, .. } => {
-                assert_eq!(
-                    program.last().unwrap(),
-                    &dir.join("AGENTS.md").to_string_lossy().into_owned()
-                );
+        let file = dir.join("AGENTS.md").to_string_lossy().into_owned();
+        // the workspace is somewhere else: the daemon would refuse it, so the path is copied
+        assert_eq!(
+            v.press_key(plain(KeyCode::Enter)),
+            After::Copy(file.clone())
+        );
+        assert!(v.flash.contains("fuera del workspace"), "{}", v.flash);
+        // the workspace is the folder: a `.md` opens as Markdown
+        v.session.as_mut().unwrap().workspaces[0].path = dir.to_string_lossy().into_owned();
+        v.press_key(plain(KeyCode::Esc));
+        type_line(&mut v, "/memory");
+        v.press_key(plain(KeyCode::Enter));
+        type_line(&mut v, "AGENTS");
+        assert_eq!(
+            v.press_key(plain(KeyCode::Enter)),
+            After::ReadMarkdown {
+                workspace: ws,
+                path: file
             }
-            other => panic!("{other:?}"),
-        }
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 

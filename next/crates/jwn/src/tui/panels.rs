@@ -20,8 +20,8 @@ pub enum RowAct {
     Resume(String),
     /// Copy this (a page's address).
     Copy(String),
-    /// Open this file in an editor, in a new panel.
-    Edit(PathBuf),
+    /// Open this file in the viewer (REQ-641).
+    Open(PathBuf),
     /// Stop this task of the engine's (REQ-433).
     Stop(String),
 }
@@ -338,7 +338,7 @@ pub fn memory(cwd: &Path, home: Option<&Path>) -> Panel {
             Some(
                 Row::new(shown, format!("{size} bytes"))
                     .tagged(whose, look::dim())
-                    .doing(RowAct::Edit(path)),
+                    .doing(RowAct::Open(path)),
             )
         })
         .collect();
@@ -504,7 +504,7 @@ mod tests {
         let p = memory(&cwd, None);
         assert_eq!(p.rows.len(), 1, "{:?}", p.rows);
         assert_eq!(p.rows[0].detail, "6 bytes");
-        assert_eq!(p.rows[0].act, RowAct::Edit(cwd.join("AGENTS.md")));
+        assert_eq!(p.rows[0].act, RowAct::Open(cwd.join("AGENTS.md")));
         let _ = std::fs::remove_dir_all(cwd);
     }
 

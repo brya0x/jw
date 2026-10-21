@@ -1,0 +1,300 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>jwn · the file viewer with a cursor and tabs: hjkl moves, v selects, and the reference goes to Claude (terminal and phone)</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+:root{
+  --bg:#282c34; --panel:#21252b; --fg:#abb2bf; --dim:#5c6370; --line:#3e4451; --sel:#2c313a; --pick:#3d4f6b;
+  --blue:#61afef; --green:#98c379; --yellow:#e5c07b; --red:#e06c75; --magenta:#c678dd; --cyan:#56b6c2;
+  --page:#16181d; --ink:#c3c9d4; --mut:#7d8594;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.55 'IBM Plex Sans',system-ui,sans-serif;padding:24px 16px 40px}
+.wrap{max-width:1240px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
+h1{font:600 20px/1.2 var(--mono);margin:0}
+h2{font:600 12px var(--mono);margin:0;color:var(--mut)}
+p{margin:0;max-width:88ch;color:var(--mut)}
+code,kbd{font:12px var(--mono)}
+kbd{background:var(--panel);border:1px solid var(--line);border-radius:3px;padding:0 5px;color:var(--fg)}
+button{font:12px var(--mono);color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;min-height:32px;cursor:pointer}
+button:hover{border-color:var(--blue)}
+:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.stage{display:flex;gap:28px;align-items:flex-start;flex-wrap:wrap}
+.col{flex:1 1 640px;min-width:0;display:flex;flex-direction:column;gap:8px}
+.col.ph{flex:0 0 auto}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto}
+.term pre{margin:0;font:13px/1.35 var(--mono);color:var(--fg);outline:none;width:max-content;min-width:100%;cursor:text;user-select:none}
+.hint{font:12px var(--mono);color:var(--mut)}
+.phone{width:376px;max-width:100%;background:var(--bg);border:1px solid var(--line);border-radius:28px;padding:10px;box-shadow:0 0 0 6px var(--panel)}
+.scr{background:var(--panel);border-radius:20px;overflow:hidden;font:13px/1.45 var(--mono);color:var(--fg);display:flex;flex-direction:column;height:640px;position:relative}
+.hd{padding:10px 12px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;min-height:56px}
+.hd .t{flex:1;min-width:0}
+.hd .t b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hd .t span{display:block;font-size:11px;color:var(--dim)}
+.hd button{min-width:48px;min-height:48px;border-radius:8px;font-size:15px}
+.bd{flex:1;overflow-y:auto;overflow-x:hidden;background:var(--bg);font:11.5px/1.5 var(--mono)}
+.ln{display:flex;align-items:flex-start;min-width:0}
+.ln .g{flex:0 0 auto;min-width:46px;min-height:28px;color:var(--dim);text-align:right;padding:2px 8px;border-right:1px solid var(--line);margin-right:8px;background:var(--bg);cursor:pointer;user-select:none;align-self:stretch}
+.ln .x{white-space:pre-wrap;word-break:break-all;min-width:0;flex:1;padding:2px 8px 2px 0}
+.ln.on{background:var(--pick)}
+.ln.on .g{background:var(--pick);color:var(--blue)}
+.K{color:var(--magenta)}.S{color:var(--green)}.N{color:var(--yellow)}.T{color:var(--cyan)}.F{color:var(--blue)}.C{color:var(--dim);font-style:italic}
+.dim{color:var(--dim)}.blue{color:var(--blue)}.green{color:var(--green)}.yellow{color:var(--yellow)}.b{font-weight:700}
+.cur{background:var(--fg);color:var(--bg)}
+.vis{background:var(--pick)}
+.pickbar{border-top:1px solid var(--line);background:var(--panel);padding:8px 12px;display:flex;align-items:center;gap:8px}
+.pickbar .what{flex:1;min-width:0;font-size:12px}
+.pickbar .what b{color:var(--blue)}
+.pickbar button{min-height:48px;min-width:48px;border-radius:8px;font-size:12px}
+.pickbar button.go{border-color:var(--blue);color:var(--blue)}
+.conv{flex:1;background:var(--bg);padding:12px;display:flex;flex-direction:column;gap:8px;overflow:auto}
+.conv .msg{border-left:2px solid var(--line);padding-left:8px;color:var(--fg)}
+.field{border-top:1px solid var(--line);background:var(--panel);padding:10px 12px;min-height:72px}
+.field .in{border:1px solid var(--line);border-radius:8px;background:var(--bg);padding:8px 10px;min-height:44px;word-break:break-all}
+.field .in i{color:var(--blue);font-style:normal}
+.toast{position:absolute;left:12px;right:12px;bottom:84px;background:var(--sel);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--yellow);font-size:12px}
+.decide{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px;color:var(--fg)}
+.decide h2{margin:0 0 8px}
+.decide ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+.decide li{max-width:110ch}
+table.k{border-collapse:collapse;font:12px var(--mono);color:var(--fg)}
+table.k td{padding:2px 14px 2px 0;vertical-align:top}
+table.k td:first-child{color:var(--blue);white-space:nowrap}
+</style>
+
+<div class="wrap">
+  <div>
+    <h1>The file viewer with a cursor and tabs</h1>
+    <p>Today the viewer only scrolls and shows one file. Here it has a <b>cursor</b> you move with <kbd>h</kbd> <kbd>j</kbd> <kbd>k</kbd> <kbd>l</kbd>, <kbd>v</kbd> opens a <b>selection</b>, and several files stay open in <b>tabs</b>. What is selected can be copied, or written as a <b>reference</b> in the field of the workspace's Claude (<code>@src/auth.rs#L12-15</code>), which sends nothing: you read it and press enter. Both screens work: click the terminal and press the keys.</p>
+  </div>
+
+  <div class="stage">
+    <div class="col">
+      <h2>TERMINAL · the viewer with two tabs, the agent's field below</h2>
+      <div class="term"><pre id="scr" tabindex="0" aria-label="File viewer with tabs. h j k l move, v selects, enter writes the reference, tab changes tab, escape cancels."></pre></div>
+      <div class="hint" id="keys"></div>
+    </div>
+    <div class="col ph"><h2>PHONE</h2><div class="phone"><div class="scr" id="ph"></div></div></div>
+  </div>
+
+  <div class="decide">
+    <h2>Keys of the terminal viewer (what is new in blue)</h2>
+    <table class="k">
+      <tr><td>h j k l  ← ↓ ↑ →</td><td><b>new:</b> the cursor moves one character or one line; the view follows it (two lines of margin). <kbd>h</kbd> <kbd>l</kbd> no longer only scroll sideways: with wrapping off the view goes sideways to keep the cursor in sight</td></tr>
+      <tr><td>v</td><td><b>new:</b> opens a selection at the cursor; <kbd>h</kbd> <kbd>j</kbd> <kbd>k</kbd> <kbd>l</kbd> grow it by characters; <kbd>v</kbd> or <kbd>esc</kbd> let go</td></tr>
+      <tr><td>↵</td><td><b>new:</b> writes the <b>reference</b> in the field of Claude: <code>@src/auth.rs#L12-15 </code> for what is selected, <code>#L12</code> for the line of the cursor when nothing is. Nothing is sent</td></tr>
+      <tr><td>y</td><td>with a selection it copies it; with none it copies the whole file, as today</td></tr>
+      <tr><td>e</td><td>nothing: no key opens an editor any more (N151)</td></tr>
+      <tr><td>Tab  ⇧Tab</td><td><b>new:</b> next and previous tab; a click on a tab goes to it. Each tab keeps its own cursor, selection and place</td></tr>
+      <tr><td>q  esc</td><td>with a selection <kbd>esc</kbd> lets go of it; otherwise <kbd>esc</kbd> or <kbd>q</kbd> close the tab, and the last one closes the viewer</td></tr>
+      <tr><td>↵ on a file of the tree</td><td><b>new:</b> with the viewer open it opens the file in a new tab (or goes to its tab if it is open); with it closed it opens the viewer, as today</td></tr>
+      <tr><td>j k space b g G / n N w r s</td><td>unchanged where they do not collide: <kbd>j</kbd> <kbd>k</kbd> are now the cursor (the view follows it); space and <kbd>b</kbd> page, <kbd>g</kbd> <kbd>G</kbd> go to the top and the bottom (the cursor too), <kbd>/</kbd> <kbd>n</kbd> <kbd>N</kbd> search (the cursor goes to the match), <kbd>w</kbd> wraps, <kbd>r</kbd> rereads, <kbd>s</kbd> shows a Markdown's source</td></tr>
+      <tr><td>click · drag</td><td>click puts the cursor there; dragging selects, and on release it is copied, as a drag does in the conversation</td></tr>
+    </table>
+  </div>
+
+  <div class="decide">
+    <h2>To approve</h2>
+    <ol>
+      <li><b>The cursor</b> is a block on the character (the theme's inverse). The status line says <code>L12:5</code> and the percentage, and <code>SELECCIÓN</code> while a selection is open. The selection is lit with the theme's selection colour.</li>
+      <li><b>The reference</b> is the diff's (REQ-592): <code>@src/auth.rs#L12-15 </code> with a space after it, written the way the <code>@</code> picker writes a path (from the folder the agent runs in, with <code>../</code> where it climbs, REQ-631), at the cursor of the field of the workspace's agent (the focused conversation, else the first). If the workspace has only shells it is copied, and the status says «referencia copiada». A selection by characters sends its lines: the reference has no columns. After <kbd>↵</kbd> the viewer stays as it is; <kbd>esc</kbd> closes the tab and the field is there with the reference in it.</li>
+      <li><b>Tabs:</b> a bar at the top of the viewer with the name of each file, the current one lit, a <code>●</code> on a tab whose file changed on disk since it was read (<kbd>r</kbd> rereads it). At most 8 tabs; opening a ninth closes the oldest one that is not the current. They are not kept when the viewer closes.</li>
+      <li><b>Phone, no sideways overflow:</b> the viewer always wraps: a long line takes as many rows as it needs, under one line number (try line 5 on the phone), a word with no space breaks at the edge, and the <b>⏎</b> button of the header goes. The same for what scrolls sideways by accident today: the <b>diff and the output of a tool inside the conversation</b> (the diff's own screen already wraps), and the <b>code blocks of a Markdown</b>. What keeps scrolling sideways on purpose: the <b>tables</b> (their columns), the <b>screen of a terminal</b> (it has its own columns), and the strips of chips, tabs and breadcrumbs, which are controls and not content.</li>
+      <li><b>Phone:</b> one file at a time, no keyboard cursor. A tap on a <b>line number</b> picks that line, a second tap on another number picks everything between, a tap on a picked number lets go; a 48 dp bar appears with <b>@ al agente</b> (back to that workspace's conversation with the reference in its field), <b>copiar</b> and <b>×</b>. Long-pressing the code still selects text the system's way. (The phone does not render Neovim, and none of this needs it.)</li>
+      <li><b>Not in this part:</b> the viewer as a movable panel, any editing (no key opens an editor), other Neovim motions (<kbd>w</kbd> stays as wrap), and the diff on the phone.</li>
+    </ol>
+  </div>
+</div>
+
+<script>
+const FILE = 'src/auth.rs';
+const SRC = [
+  'use std::time::Duration;',
+  '',
+  '/// How long a session lasts before it must be renewed.',
+  'const TTL: Duration = Duration::from_secs(3600);',
+  'const ISSUER: &str = "https://accounts.example.com/oauth2/authorize?client_id=jwn&redirect_uri=http%3A%2F%2F127.0.0.1%3A7871%2Fcallback&scope=openid+profile";',
+  'pub struct Session {',
+  '    pub user: String,',
+  '    pub issued: u64,',
+  '}',
+  '',
+  'impl Session {',
+  '    pub fn new(user: &str, now: u64) -> Session {',
+  '        Session { user: user.to_owned(), issued: now }',
+  '    }',
+  '',
+  '    /// A session is valid until its TTL ends.',
+  '    pub fn valid(&self, now: u64) -> bool {',
+  '        now.saturating_sub(self.issued) < TTL.as_secs()',
+  '    }',
+  '',
+  '    pub fn renew(&mut self, now: u64) {',
+  '        self.issued = now;',
+  '    }',
+  '}',
+];
+const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+const KW = /\b(use|const|pub|struct|impl|fn|let|mut|bool|u64|String|Session|Self)\b/g;
+/* one class per character: K keyword, S string, N number, C comment, '' plain */
+function classes(s){
+  const c = new Array(s.length).fill('');
+  if (/^\s*\/\/\//.test(s)) return c.fill('C');
+  for (const m of s.matchAll(/"[^"]*"/g)) c.fill('S', m.index, m.index + m[0].length);
+  for (const m of s.matchAll(/\b\d+\b/g)) c.fill('N', m.index, m.index + m[0].length);
+  for (const m of s.matchAll(KW)) c.fill('K', m.index, m.index + m[0].length);
+  return c;
+}
+function colour(s){ // a line for the phone
+  const c = classes(s); let out = '', run = '', cls = null;
+  for (let i = 0; i < s.length; i++) { if (c[i] !== cls) { if (run) out += cls ? '<span class="'+cls+'">'+esc(run)+'</span>' : esc(run); run = ''; cls = c[i]; } run += s[i]; }
+  if (run) out += cls ? '<span class="'+cls+'">'+esc(run)+'</span>' : esc(run);
+  return out;
+}
+const ref = (a,b) => '@'+FILE+'#L'+(a===b?a:a+'-'+b)+' ';
+const isW = ch => /[A-Za-z0-9_]/.test(ch||'');
+
+/* ---------------- terminal ---------------- */
+const TOML = [
+  '[package]',
+  'name = "auth"',
+  'version = "0.3.1"',
+  'edition = "2021"',
+  '',
+  '# the session store is in this crate',
+  '[dependencies]',
+  'serde = { version = "1", features = ["derive"] }',
+  'thiserror = "1"',
+];
+function classesToml(s){
+  const c = new Array(s.length).fill('');
+  if (/^\s*#/.test(s)) return c.fill('C');
+  if (/^\[/.test(s)) return c.fill('T');
+  for (const m of s.matchAll(/"[^"]*"/g)) c.fill('S', m.index, m.index + m[0].length);
+  for (const m of s.matchAll(/^[a-z_]+(?= =)/g)) c.fill('F', m.index, m.index + m[0].length);
+  return c;
+}
+const mk = (file, lines, cls, lang) => ({file, lines, cls, lang, line:0, col:0, top:0, anchor:null, changed:false});
+const TABS = [mk('src/auth.rs', SRC, classes, 'Rust'), mk('Cargo.toml', TOML, classesToml, 'TOML')];
+TABS[1].changed = true;
+const T = {cur:0, rows:12, pending:'', field:'', flash:'', hasAgent:true, drag:false};
+const scr = document.getElementById('scr'), keys = document.getElementById('keys');
+const W = 88;
+const tab = () => TABS[T.cur];
+const lenOf = (t, i) => t.lines[i].length;
+const clampCol = t => { t.col = Math.max(0, Math.min(t.col, Math.max(0, lenOf(t, t.line) - 1))); };
+function follow(t){ const m = 2; if (t.line < t.top + m) t.top = Math.max(0, t.line - m); if (t.line > t.top + T.rows - 1 - m) t.top = Math.min(Math.max(0, t.lines.length - T.rows), t.line - (T.rows - 1 - m)); }
+function sel(t){ if (t.anchor === null) return null; const a = t.anchor, b = {line:t.line, col:t.col};
+  return (a.line < b.line || (a.line === b.line && a.col <= b.col)) ? [a, b] : [b, a]; }
+function inSel(t, i, c){ const s = sel(t); if (!s) return false; const [a, b] = s;
+  if (i < a.line || i > b.line) return false; if (i === a.line && c < a.col) return false; if (i === b.line && c > b.col) return false; return true; }
+const pad = (s, n) => s.length >= n ? s : s + ' '.repeat(n - s.length);
+function drawT(){
+  const t = tab(), s = sel(t);
+  let bar = ' ';
+  TABS.forEach((x, i) => { const name = (x.changed ? '● ' : '') + x.file.split('/').pop();
+    bar += '<span data-tab="'+i+'" style="cursor:pointer;'+(i === T.cur ? 'background:var(--sel);color:var(--blue);font-weight:700' : 'color:var(--dim)')+'">'+esc(' '+name+' ')+'</span> '; });
+  let out = bar + '\n';
+  out += '<span class="blue b">'+esc(pad(' '+t.file+'   ·   '+t.lang+'   ·   '+t.lines.length+' líneas', W))+'</span>\n';
+  for (let i = t.top; i < t.top + T.rows; i++){
+    if (i >= t.lines.length){ out += '<span class="dim">~</span>\n'; continue; }
+    const line = t.lines[i], cls = t.cls(line);
+    out += '<span class="dim" data-n="'+i+'">'+String(i + 1).padStart(3)+' │ </span>';
+    for (let c = 0; c < Math.max(line.length, 1); c++){
+      const ch = line[c] === undefined ? ' ' : line[c];
+      const k = (cls[c] || '') + (i === t.line && c === t.col ? ' cur' : (inSel(t, i, c) ? ' vis' : ''));
+      out += '<span data-n="'+i+'" data-c="'+c+'"'+(k.trim() ? ' class="'+k.trim()+'"' : '')+'>'+esc(ch)+'</span>';
+    }
+    out += '\n';
+  }
+  let status = ' '+(s ? 'SELECCIÓN' : 'VISOR')+'  L'+(t.line + 1)+':'+(t.col + 1)+'  '+Math.round(100 * (t.line + 1) / t.lines.length)+'%';
+  if (s) status += '  · '+(s[1].line - s[0].line + 1)+(s[1].line > s[0].line ? ' líneas' : ' línea')+' · ↵ escribe la referencia · y copia · esc suelta';
+  else if (T.flash) status += '  · '+T.flash;
+  else status += '  · hjkl cursor · v elegir · ↵ referencia · Tab pestañas · esc cierra la pestaña';
+  out += '<span style="background:var(--sel);color:var(--yellow)">'+esc(pad(status, W))+'</span>\n';
+  out += '<span class="dim">'+'─'.repeat(W)+'</span>\n';
+  out += '<span style="color:var(--magenta)"> ● claude</span> <span class="dim">· src/ · sonnet-5.5</span>\n';
+  out += '  Listo. ¿Qué miro en la sesión?\n';
+  out += '<span style="background:var(--panel)"> <span class="green">❯</span>  '+esc(T.field)+'<span style="background:var(--fg)"> </span>'+' '.repeat(Math.max(0, W - 5 - T.field.length))+'</span>\n';
+  scr.innerHTML = out;
+  keys.textContent = 'try: j j l l v j j ↵  ·  Tab  ·  v l l l y  ·  click a tab  ·  click, then drag  ·  ↵ alone writes the line of the cursor';
+}
+function move(dl, dc){ const t = tab(); t.line = Math.max(0, Math.min(t.lines.length - 1, t.line + dl)); t.col += dc; clampCol(t); follow(t); }
+function selectedText(t){ const s = sel(t); if (!s) return ''; const [a, b] = s; const out = [];
+  for (let i = a.line; i <= b.line; i++) out.push(t.lines[i].slice(i === a.line ? a.col : 0, i === b.line ? b.col + 1 : t.lines[i].length)); return out.join('\n'); }
+function closeTab(){ if (TABS.length === 1){ T.flash = 'era la última pestaña: el visor se cierra'; return; } TABS.splice(T.cur, 1); T.cur = Math.min(T.cur, TABS.length - 1); T.flash = 'pestaña cerrada'; }
+function tKey(e){
+  if (e.metaKey || e.altKey || e.ctrlKey) return;
+  const t = tab(), k = e.key, s = sel(t); T.flash = '';
+  if (k === 'h' || k === 'ArrowLeft') move(0, -1);
+  else if (k === 'l' || k === 'ArrowRight') move(0, 1);
+  else if (k === 'j' || k === 'ArrowDown') move(1, 0);
+  else if (k === 'k' || k === 'ArrowUp') move(-1, 0);
+  else if (k === 'g'){ t.line = 0; t.col = 0; follow(t); }
+  else if (k === 'G'){ t.line = t.lines.length - 1; t.col = 0; follow(t); }
+  else if (k === ' '){ move(T.rows - 1, 0); }
+  else if (k === 'v'){ t.anchor = s ? null : {line:t.line, col:t.col}; }
+  else if (k === 'Tab'){ T.cur = (T.cur + (e.shiftKey ? TABS.length - 1 : 1)) % TABS.length; }
+  else if (k === 'y'){ if (s){ T.flash = 'copiado · '+(s[1].line - s[0].line + 1)+' línea(s) · '+selectedText(t).length+' caracteres'; t.anchor = null; } else T.flash = 'copiado · el archivo entero'; }
+  else if (k === 'r'){ t.changed = false; T.flash = 'releído'; }
+  else if (k === 'Enter'){ const [a, b] = s ? [s[0].line, s[1].line] : [t.line, t.line];
+    const r = '@'+t.file+'#L'+(a === b ? a + 1 : (a + 1)+'-'+(b + 1))+' ';
+    if (T.hasAgent){ T.field += r; T.flash = 'referencia escrita en el campo de Claude · nada se mandó'; } else T.flash = 'no hay un agente aquí · referencia copiada';
+    t.anchor = null; }
+  else if (k === 'Escape' || k === 'q'){ if (s) t.anchor = null; else closeTab(); }
+  else return;
+  e.preventDefault(); clampCol(tab()); drawT();
+}
+scr.addEventListener('keydown', tKey);
+function cellAt(ev){ const c = ev.target.closest('[data-n]'); if (!c) return null; return {line:+c.dataset.n, col: c.dataset.c === undefined ? 0 : +c.dataset.c}; }
+scr.addEventListener('mousedown', ev => {
+  const tb = ev.target.closest('[data-tab]'); if (tb){ T.cur = +tb.dataset.tab; scr.focus(); drawT(); return; }
+  const c = cellAt(ev); if (!c) return; const t = tab(); scr.focus();
+  t.line = c.line; t.col = c.col; t.anchor = null; T.drag = true; T.start = c; clampCol(t); drawT(); });
+scr.addEventListener('mousemove', ev => { if (!T.drag) return; const c = cellAt(ev), t = tab(); if (!c || (c.line === t.line && c.col === t.col)) return;
+  if (t.anchor === null) t.anchor = {line:T.start.line, col:T.start.col}; t.line = c.line; t.col = c.col; drawT(); });
+addEventListener('mouseup', () => { if (!T.drag) return; T.drag = false; const t = tab(), s = sel(t);
+  if (s){ T.flash = 'copiado · '+(s[1].line - s[0].line + 1)+' línea(s)'; t.anchor = null; drawT(); } });
+drawT();
+
+/* ---------------- phone ---------------- */
+const P = {anchor:null, cursor:null, view:'viewer', field:'', toast:''};
+const ph = document.getElementById('ph');
+function drawP(){
+  if (P.view === 'conv'){
+    ph.innerHTML =
+      '<div class="hd"><button id="pb" aria-label="Volver al archivo">‹</button><div class="t"><b>jwn · src</b><span>claude · sonnet-5.5 · auto</span></div></div>'+
+      '<div class="conv"><div class="msg dim">Listo. ¿Qué miro en la sesión?</div></div>'+
+      (P.toast ? '<div class="toast">'+esc(P.toast)+'</div>' : '')+
+      '<div class="field"><div class="in">'+(P.field ? '<i>'+esc(P.field)+'</i>' : '<span class="dim">Escribe un mensaje</span>')+'</div></div>';
+    document.getElementById('pb').onclick = () => { P.view = 'viewer'; drawP(); };
+    return;
+  }
+  const lo = P.anchor === null ? null : Math.min(P.anchor, P.cursor), hi = P.anchor === null ? null : Math.max(P.anchor, P.cursor);
+  let body = '';
+  SRC.forEach((s, i) => {
+    const on = lo !== null && i >= lo && i <= hi;
+    body += '<div class="ln'+(on ? ' on' : '')+'"><span class="g" role="button" aria-label="Elegir la línea '+(i+1)+'" aria-pressed="'+on+'" data-n="'+i+'">'+(i+1)+'</span><span class="x">'+colour(s)+'</span></div>';
+  });
+  ph.innerHTML =
+    '<div class="hd"><button id="pc" aria-label="Cerrar">‹</button><div class="t"><b>'+FILE+'</b><span>Rust · '+SRC.length+' líneas</span></div></div>'+
+    '<div class="bd">'+body+'</div>'+
+    (lo !== null ? '<div class="pickbar"><div class="what"><b>L'+(lo+1)+(hi > lo ? '–'+(hi+1) : '')+'</b><br><span class="dim">'+(hi - lo + 1)+(hi > lo ? ' líneas' : ' línea')+'</span></div><button class="go" id="pg">@ al agente</button><button id="pk">copiar</button><button id="px" aria-label="Soltar">×</button></div>' : '');
+  ph.querySelectorAll('.g').forEach(g => g.onclick = () => {
+    const n = +g.dataset.n;
+    if (P.anchor === null) P.anchor = P.cursor = n;
+    else if (lo === hi && n === lo) P.anchor = P.cursor = null;
+    else P.cursor = n;
+    drawP();
+  });
+  const px = document.getElementById('px'); if (px) px.onclick = () => { P.anchor = P.cursor = null; drawP(); };
+  const pk = document.getElementById('pk'); if (pk) pk.onclick = () => { P.toast = 'copiado · L'+(lo+1)+(hi > lo ? '–'+(hi+1) : ''); P.anchor = P.cursor = null; drawP(); flash(); };
+  const pg = document.getElementById('pg'); if (pg) pg.onclick = () => { P.field += ref(lo + 1, hi + 1); P.toast = 'nada se mandó · la referencia está en el campo'; P.anchor = P.cursor = null; P.view = 'conv'; drawP(); };
+  const pc = document.getElementById('pc'); if (pc) pc.onclick = () => { P.anchor = P.cursor = null; drawP(); };
+}
+function flash(){ const t = document.createElement('div'); t.className = 'toast'; t.textContent = P.toast; ph.appendChild(t); setTimeout(() => t.remove(), 2200); P.toast = ''; }
+drawP();
+</script>

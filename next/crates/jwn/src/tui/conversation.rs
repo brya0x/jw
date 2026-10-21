@@ -75,8 +75,8 @@ pub enum Act {
         pane: String,
         id: String,
     },
-    /// Open a file in an editor, in a new panel.
-    Edit(std::path::PathBuf),
+    /// Open a file in the viewer, or copy its path when it is outside the workspace (REQ-641).
+    Open(std::path::PathBuf),
     /// Show the plan that waits, whole, in the Markdown viewer (REQ-469).
     ViewPlan {
         node: String,
@@ -974,7 +974,7 @@ impl Ui {
                 self.says = copied(&text);
                 Some(Act::Copy(text))
             }
-            RowAct::Edit(path) => Some(Act::Edit(path)),
+            RowAct::Open(path) => Some(Act::Open(path)),
             RowAct::Stop(task) => {
                 self.says = "deteniendo la tarea…".into();
                 Some(Act::StopTask {
