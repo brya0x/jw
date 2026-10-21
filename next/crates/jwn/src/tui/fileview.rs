@@ -19,8 +19,6 @@ pub enum Act {
     Nothing,
     Close,
     Copy(String),
-    /// Open the file in the editor.
-    Edit(String),
     /// Read the file again.
     Reread,
     /// Show the `.md` rendered, as the Markdown viewer does.
@@ -241,7 +239,6 @@ impl FileView {
         if self.refusal.is_some() {
             return match ev.code {
                 KeyCode::Esc | KeyCode::Char('q') => Act::Close,
-                KeyCode::Char('e') => Act::Edit(self.doc.path.clone()),
                 _ => Act::Nothing,
             };
         }
@@ -279,7 +276,6 @@ impl FileView {
                 self.says = super::conversation::copied(&text);
                 return Act::Copy(text);
             }
-            KeyCode::Char('e') => return Act::Edit(self.doc.path.clone()),
             KeyCode::Char('r') => return Act::Reread,
             KeyCode::Char('s') if self.markdown => return Act::Rendered,
             _ => {}
@@ -507,12 +503,12 @@ impl FileView {
     /// What the status bar says the keys are.
     pub fn hint(&self) -> String {
         if self.refusal.is_some() {
-            return "esc cerrar · e editar".into();
+            return "esc cerrar".into();
         }
         let md = if self.markdown { " · s vista" } else { "" };
         let side = if self.wrap { "" } else { " · h l lado" };
         format!(
-            "esc cerrar · j k ␣ b g G mover · / n N buscar · w ajustar{side} · r releer · y copiar · e editar{md}"
+            "esc cerrar · j k ␣ b g G mover · / n N buscar · w ajustar{side} · r releer · y copiar{md}"
         )
     }
 }
@@ -793,19 +789,17 @@ mod tests {
         assert_eq!(key(&mut v, KeyCode::Char('j')), Act::Nothing);
         assert_eq!(
             key(&mut v, KeyCode::Char('e')),
-            Act::Edit("/work/logo.png".into())
+            Act::Nothing,
+            "no editor opens from here (N151)"
         );
         assert_eq!(key(&mut v, KeyCode::Esc), Act::Close);
-        assert_eq!(v.hint(), "esc cerrar · e editar");
+        assert_eq!(v.hint(), "esc cerrar");
     }
 
     #[test]
-    fn e_r_and_s_ask_the_client_and_s_is_only_for_a_markdown() {
+    fn r_and_s_ask_the_client_s_is_only_for_a_markdown_and_e_asks_nothing() {
         let mut v = view(numbered(3));
-        assert_eq!(
-            key(&mut v, KeyCode::Char('e')),
-            Act::Edit("/work/main.rs".into())
-        );
+        assert_eq!(key(&mut v, KeyCode::Char('e')), Act::Nothing);
         assert_eq!(key(&mut v, KeyCode::Char('r')), Act::Reread);
         assert_eq!(key(&mut v, KeyCode::Char('s')), Act::Nothing);
         let mut md = FileView::new("ws".into(), doc("NOTES.md", numbered(3)));

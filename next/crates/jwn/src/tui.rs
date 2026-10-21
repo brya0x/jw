@@ -2940,10 +2940,6 @@ impl View {
                 After::Continue
             }
             viewer::Act::Copy(text) => After::Copy(text),
-            viewer::Act::Edit(path) => {
-                self.viewer = None;
-                self.conv_after(Some(ConvAct::Edit(path.into())))
-            }
             viewer::Act::Source(path) => {
                 let workspace = self
                     .viewer
@@ -3023,10 +3019,6 @@ impl View {
                 After::Continue
             }
             fileview::Act::Copy(text) => After::Copy(text),
-            fileview::Act::Edit(path) => {
-                self.viewer = None;
-                self.editor(workspace, &path)
-            }
             fileview::Act::Reread => After::ReadFile {
                 workspace,
                 path,
@@ -3487,7 +3479,7 @@ impl View {
     }
 
     /// Open a file of the tree: a `.md` in the Markdown viewer, any other in the viewer of text
-    /// (REQ-615); the editor is `e`.
+    /// (REQ-615).
     fn open_file(&mut self, path: &str, size: Option<u64>) -> After {
         let Some(workspace) = self.selected_id() else {
             return After::Continue;
@@ -3507,16 +3499,8 @@ impl View {
         }
     }
 
-    /// Open a file of the tree in the editor, in a new panel (REQ-316).
-    fn edit_file(&mut self, path: &str) -> After {
-        let Some(workspace) = self.selected_id() else {
-            return After::Continue;
-        };
-        self.leave_tree();
-        self.editor(workspace, path)
-    }
-
-    /// The editor on `path`, in a new panel of `workspace`.
+    /// The editor on `path`, in a new panel of `workspace`: what a `/memory` row opens (REQ-316
+    /// no longer has a key for it).
     fn editor(&self, workspace: String, path: &str) -> After {
         let mut program = editor_from(std::env::var("VISUAL").ok(), std::env::var("EDITOR").ok());
         program.push(path.to_owned());
@@ -3607,11 +3591,6 @@ impl View {
                     t.filter = Some(String::new());
                     t.found = None;
                     t.sel = 0;
-                }
-                KeyCode::Char('e') => {
-                    if let Some(r) = at.filter(|r| r.kind != FileKind::Dir) {
-                        return self.edit_file(&r.path);
-                    }
                 }
                 KeyCode::Char('y') => {
                     if let Some(r) = at {
@@ -6731,7 +6710,7 @@ mod tests {
     }
 
     #[test]
-    fn j_k_move_enter_opens_a_folder_and_asks_for_it_and_e_opens_a_file_in_the_editor() {
+    fn j_k_move_enter_opens_a_folder_and_asks_for_it_and_e_opens_nothing() {
         let (mut v, ws) = tree_view();
         v.press_key(plain(KeyCode::Enter));
         assert_eq!(
@@ -6753,22 +6732,12 @@ mod tests {
         assert!(v.take_file_asks().is_empty(), "closing asks for nothing");
         v.press_key(plain(KeyCode::Char('j')));
         v.press_key(plain(KeyCode::Char('j')));
-        let after = v.press_key(plain(KeyCode::Char('e')));
-        let After::NewProgram {
-            workspace,
-            program,
-            place,
-        } = after
-        else {
-            panic!("{after:?}");
-        };
-        assert_eq!(workspace, ws);
-        assert_eq!(program.last().map(String::as_str), Some("Cargo.toml"));
-        assert!(place.beside.is_some());
-        assert!(
-            !v.tree_focus && v.tree_on,
-            "the keys go back to the panels, the tree stays"
+        assert_eq!(
+            v.press_key(plain(KeyCode::Char('e'))),
+            After::Continue,
+            "no editor opens from the tree (N151)"
         );
+        assert!(v.tree_focus && v.tree_on, "the keys stay in the tree");
     }
 
     #[test]
@@ -10184,12 +10153,12 @@ mod tests {
             v.press_key(plain(KeyCode::Char('y'))),
             After::Copy(t) if t.starts_with("let n = 1;\nlet n = 2;")
         ));
-        let after = v.press_key(plain(KeyCode::Char('e')));
-        let After::NewProgram { program, .. } = after else {
-            panic!("{after:?}");
-        };
-        assert_eq!(program.last().map(String::as_str), Some("/x/src/main.rs"));
-        assert!(v.viewer.is_none(), "the editor closes it");
+        assert_eq!(
+            v.press_key(plain(KeyCode::Char('e'))),
+            After::Continue,
+            "no editor opens from the viewer (N151)"
+        );
+        assert!(v.viewer.is_some(), "and it stays open");
         v.open_text(ws, text_doc(5), false);
         assert_eq!(v.press_key(plain(KeyCode::Esc)), After::Continue);
         assert!(v.viewer.is_none());
@@ -10308,7 +10277,7 @@ mod tests {
     }
 
     #[test]
-    fn the_viewer_has_the_wheel_the_clicks_the_drag_and_the_editor() {
+    fn the_viewer_has_the_wheel_the_clicks_and_the_drag() {
         let mut v = conv_view(true);
         v.convs.get_mut(CONV).unwrap().ask = Some(plan_ask());
         v.open_viewer(
@@ -10344,7 +10313,7 @@ mod tests {
         v.drag_to(x + 10, y);
         assert_eq!(v.release(120, 30), After::Copy("número".into()));
         assert!(v.flash.starts_with("copiado · 1 línea"), "{}", v.flash);
-        // y copies it all, e opens its file in the editor and closes the viewer
+        // y copies it all, and e opens nothing (N151)
         let After::Copy(all) = v.press_key(plain(KeyCode::Char('y'))) else {
             panic!("a copy");
         };
@@ -10352,12 +10321,8 @@ mod tests {
             all.starts_with("# Plan: pruebas\n\npaso número 0 del plan"),
             "{all}"
         );
-        let after = v.press_key(plain(KeyCode::Char('e')));
-        let After::NewProgram { program, .. } = after else {
-            panic!("{after:?}");
-        };
-        assert_eq!(program.last().map(String::as_str), Some("/x/plan.md"));
-        assert!(v.viewer.is_none());
+        assert_eq!(v.press_key(plain(KeyCode::Char('e'))), After::Continue);
+        assert!(v.viewer.is_some(), "the viewer stays open");
     }
 
     #[test]
@@ -10386,14 +10351,12 @@ mod tests {
         assert!(!v.tree_focus, "the keys go back to the panels");
         v.tree_focus = true;
         v.press_key(plain(KeyCode::Char('j')));
-        assert!(
-            matches!(
-                v.press_key(plain(KeyCode::Char('e'))),
-                After::NewProgram { .. }
-            ),
-            "e opens the editor"
+        assert_eq!(
+            v.press_key(plain(KeyCode::Char('e'))),
+            After::Continue,
+            "e opens nothing (N151)"
         );
-        v.tree_focus = true;
+        assert!(v.tree_focus, "the keys stay in the tree");
         assert_eq!(
             v.press_key(plain(KeyCode::Enter)),
             After::ReadFile {

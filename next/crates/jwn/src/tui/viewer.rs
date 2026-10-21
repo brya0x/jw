@@ -31,8 +31,6 @@ pub enum Act {
     /// Answer the plan with this key (`accept`, `manual` or `no`).
     Answer(String),
     Copy(String),
-    /// Open the document's file in the editor.
-    Edit(String),
     /// Show the file of this path as text, as it is written (REQ-617).
     Source(String),
 }
@@ -238,10 +236,6 @@ impl Viewer {
             }
             KeyCode::Char('s') if self.source == Source::File => match &self.doc.path {
                 Some(path) => return Act::Source(path.clone()),
-                None => self.says = "este documento no tiene un archivo que abrir".into(),
-            },
-            KeyCode::Char('e') => match &self.doc.path {
-                Some(path) => return Act::Edit(path.clone()),
                 None => self.says = "este documento no tiene un archivo que abrir".into(),
             },
             KeyCode::Char(c @ '1'..='9') if self.is_plan() => {
@@ -654,7 +648,7 @@ impl Viewer {
             ""
         };
         format!(
-            "esc cerrar · j k ␣ b g G mover · [ ] título · / n N buscar · o esquema · y copiar · e editar{source}{answers}"
+            "esc cerrar · j k ␣ b g G mover · [ ] título · / n N buscar · o esquema · y copiar{source}{answers}"
         )
     }
 }
@@ -919,16 +913,12 @@ mod tests {
             "every block and the blank rows between"
         );
         assert!(v.take_says().unwrap().starts_with("copiado · "));
-        // no file: it is said; with one it is opened
+        // no editor opens from the viewer, with a file or without (N151)
         assert_eq!(key(&mut v, NARROW, KeyCode::Char('e')), Act::Nothing);
-        assert!(v.take_says().unwrap().contains("no tiene un archivo"));
         let mut d = long();
         d.path = Some("/w/plan.md".into());
         let mut v = Viewer::new(d, Source::File, Vec::new(), String::new());
-        assert_eq!(
-            key(&mut v, NARROW, KeyCode::Char('e')),
-            Act::Edit("/w/plan.md".into())
-        );
+        assert_eq!(key(&mut v, NARROW, KeyCode::Char('e')), Act::Nothing);
         assert_eq!(key(&mut v, NARROW, KeyCode::Esc), Act::Close);
         assert_eq!(key(&mut v, NARROW, KeyCode::Char('q')), Act::Close);
         // a control key is not a command of the viewer
