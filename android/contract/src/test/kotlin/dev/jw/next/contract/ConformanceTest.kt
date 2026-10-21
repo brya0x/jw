@@ -28,7 +28,7 @@ import kotlin.test.fail
 /**
  * Keeps the Kotlin types and the shared fixtures from drifting apart. This is the same
  * suite as `crates/contract/tests/conformance.rs`, reading the same files (REQ-31, REQ-32 in
- * `next/docs/spec.md`).
+ * `docs/spec.md`).
  */
 class ConformanceTest {
     private val contractDir = File(System.getProperty("contract.dir") ?: error("contract.dir is not set"))

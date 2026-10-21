@@ -1,4 +1,4 @@
-# `just ci` for next/. Green before every commit.
+# `just ci`: the same recipes CI runs. Green before every commit.
 default: ci
 
 ci: fmt-check clippy test android

@@ -1,4 +1,4 @@
-//! The product identity, read from `next/identity.toml`. Nothing else in the
+//! The product identity, read from `identity.toml` at the root. Nothing else in the
 //! workspace spells a product name, env prefix, directory or socket by hand.
 
 use std::path::PathBuf;

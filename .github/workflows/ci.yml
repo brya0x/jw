@@ -1,24 +1,18 @@
-name: next
+name: ci
 
-# next/ is a workspace of its own, so ci.yml (the old jw) never builds it. This runs the
-# recipes of next/justfile, the same ones `just ci` runs there, whenever next/ changes.
+# The recipes of the justfile, the same ones `just ci` runs locally.
 on:
   pull_request:
-    paths:
-      - 'next/**'
-      - '.github/workflows/next.yml'
+  push:
+    branches: [main]
 
 permissions:
   contents: read
 
 # A new push to the same PR cancels the run still going for the old one.
 concurrency:
-  group: next-${{ github.ref }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
-
-defaults:
-  run:
-    working-directory: next
 
 jobs:
   # The daemon owns PTYs and a unix socket, so both flavours run: the tests start real zsh,
@@ -36,8 +30,6 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: next
       - uses: extractions/setup-just@v3
 
       - name: shells for the tests (Linux)

@@ -1,4 +1,4 @@
-# Third-party material in next/
+# Third-party material
 
 | What | Where | License |
 |---|---|---|

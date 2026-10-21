@@ -1,6 +1,6 @@
 ---
 status: agreed
-scope: [next/contract, next/crates, next/android, next/docs/prototypes]
+scope: [contract, crates, android, docs/prototypes]
 depends_on: []
 supersedes: []
 ---
@@ -256,7 +256,7 @@ Where a project's settings live (N91, RAT-46): `project_config {repo}` replies `
 - REQ-125 THE daemon SHALL keep at most 4 MiB of block output per pane, by dropping the oldest blocks.
 - REQ-126 WHERE a pane's shell is not zsh, bash or fish, the daemon SHALL start it unchanged.
 - REQ-127 WHEN a client's editor stops a running program, it SHALL send `write` of `\u0003`.
-- REQ-128 WHEN a pull request changes `next/`, CI SHALL run `just fmt-check` (Linux), `just clippy` and `just test` on Linux and macOS with zsh and fish installed, and `just android` (`.github/workflows/next.yml`).
+- REQ-128 WHEN a pull request is opened or `main` is pushed, CI SHALL run `just fmt-check` (Linux), `just clippy` and `just test` on Linux and macOS with zsh and fish installed, and `just android` (`.github/workflows/next.yml`).
 - REQ-129 WHEN the daemon starts an agent (`claude`, by `new_pane` or by resuming it), it SHALL pass it `--settings <state>/claude-hooks.json`, a file it writes at start whose hooks run `<jwn> hook <event>`; an agent started with `--settings` of its own SHALL keep them and get no second set.
 - REQ-130 WHEN `agent_event` arrives for a pane, the daemon SHALL raise on it: `permission` for a `notification` of `permission_prompt`; `question` for a `notification` of `elicitation_dialog` or `agent_needs_input`, and for a `pre_tool_use` of `AskUserQuestion`; `plan` for a `pre_tool_use` of `ExitPlanMode`; `agent_done` for `stop`; and nothing for any other notification or tool; an unknown pane SHALL be `not_found`.
 - REQ-131 WHEN `agent_event` of any kind but `notification` arrives, the daemon SHALL first end the pane's `permission`, `question`, `plan` and `agent_done` attentions.
@@ -1086,6 +1086,7 @@ Corrections to the model: the level 0 document is smaller than assumed (3.9 KB, 
 - REQ-618 said `⏎` wraps the lines and that they scroll sideways until then; N153 wraps them always (REQ-642), takes `⏎` away, and `widestLine`, which sized the block of a scrolled line, with it.
 - The diff and the output of a tool inside the conversation (REQ-398, REQ-452) and the code blocks of a Markdown scrolled sideways, with no toggle and no line of the spec saying so; N154 wraps them (REQ-644).
 - N152 gave `b` the job of a page up in the viewer of text and let go of a selection made with the mouse when it was copied; N155 makes `b` Neovim's «back a word» (the page up is `PgUp`), adds `e`, and keeps the selection after a drag so that `↵` can write its reference (the user, 2026-10-21: «no tenemos los botones e y b de neovim»). `w` is still the wrapping.
+- The code lived in `next/` beside the old jw, which was frozen (REQ-128 said CI ran when `next/` changed). N157 removed the old jw and moved `next/` to the root (the user, 2026-10-21: «vamos a remover jw viejo y cambiarlo por jwn que será el nuevo jw ya que lo estoy usando para trabajar»); CI runs on every pull request and on `main`. The rename of `jwn` to `jw` (`identity.toml`) is not part of it: the binary would take the old jw's state directories and leave the person's `~/.local/state/jwn` behind.
 
 ## Tests
 `cargo test -p contract` (`crates/contract/tests/conformance.rs`): fixtures round-trip and validate, invalid fixtures are rejected, every schema variant has a fixture, unknown fields are ignored, Rust enums match the schema. Mutating a fixture or a Rust field turns it red.
@@ -1252,6 +1253,7 @@ REQ-642, REQ-643 by N153: `android/client-core` `ReferenceTest` (`lineReference`
 REQ-644 by N154: `just android` builds and lints the Compose screens, which have no UI tests: not seen on a phone.
 REQ-639 (`e` `b`) and REQ-640b by N155: `crates/jwn/src/tui/fileview.rs` tests (`e` and `b` across words, marks, an empty line and the ends, and growing a selection; a drag whose selection stays; a double click on a word and on a blank); also run by hand: the real `jwn` in a pty moved with `e` `e` `b` (`L1:3`, `L1:7`, `L1:5`), dragged with SGR mouse events and `↵` wrote the reference. Not run: Ghostty itself with the mouse.
 REQ-645 by N156: `crates/daemon/tests/blocks.rs` `zsh_goes_to_the_workspace_folder_with_cd_at` and `bash_goes_to_the_workspace_folder_with_cd_at` against the real shells (`cd sub`, `cd @`, `cd -` and `cd ..` and the pane's `cwd` after each); `fish_goes_to_the_workspace_folder_with_cd_at` is skipped where fish is not installed, as here: the fish script was not run.
+N157: the move is checked by `just ci` from the new root (960 tests and the Android build) and by git, which sees 443 files as renames of the files of `next/`; the Linux job of CI was not run by me (the tests of `daemon/tests/blocks.rs` that failed on the runner since 2026-10-18 pass on Debian and on Ubuntu 24.04 in Docker).
 
 ## Parts
 | Part | What | REQs | Main files |
@@ -1416,6 +1418,7 @@ REQ-645 by N156: `crates/daemon/tests/blocks.rs` `zsh_goes_to_the_workspace_fold
 | N154 | on the phone, the diff and the output of a tool inside a conversation and the code blocks of a Markdown wrap their lines and do not scroll sideways | 644 | `android/app/.../{ConversationItems,MdBlocks}.kt` |
 | N155 | the viewer of text has Neovim's `e` and `b`, keeps the selection a mouse drag made (it is copied and stays for `↵` and `y`) and selects a word with a double click | 639, 640b, 616 (amended) | `crates/jwn/src/{tui.rs,tui/fileview.rs}` |
 | N156 | `cd @` in the shell of a pane goes to the folder of its workspace (zsh, bash, fish): the daemon gives each shell `JWN_WORKSPACE_DIR`, the integration defines `cd` | 645 | `crates/daemon/src/panes.rs`, `crates/daemon/shell/{zsh/.zshrc,bash/rc.sh,fish/jwn.fish}`, `crates/daemon/tests/blocks.rs` |
+| N157 | the old jw is removed (its crates, Android app, docs, scripts, justfile, workspace, README, AGENTS.md and workflow) and `next/` is moved to the root, so the repository is jw: `crates/`, `android/`, `contract/`, `docs/`, `identity.toml`, a new `README.md` and `AGENTS.md`, and `.github/workflows/ci.yml` (it was `next.yml`, with no path filter and no working directory); the binary and the state are still called `jwn` until the identity is renamed | 128 (amended) | the whole repository |
 | N134 | the tunnel is read for as long as it lives and watched: one that ends is replaced | 606 | `crates/web/src/tunnel.rs`, `crates/daemon/src/mobile.rs` |
 | N116 ✓ | the test path of Claude: the inventory of the real engine in three columns (`docs/test-path.md`), a script that runs 13 stages and a survey against the real `claude` in a private daemon (`scripts/claude-path.py`, opt-in, not in `just ci`) and the manual list | (the user's point 1 of done) | `docs/test-path.md`, `scripts/claude-path.py` |
 | N109c ✓ | the row of the advisor says its model, from `advisorModel` in Claude's settings (`Advising using Opus 5.5`) | 574 | `crates/daemon/src/{settings,engine,conversation}.rs`, `crates/jwn/src/tui/conversation.rs` |

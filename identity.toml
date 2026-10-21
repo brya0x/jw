@@ -1,5 +1,5 @@
 # The ONE place the product's identity is defined. Every name, path, socket and
-# env var in next/ is derived from this file through the `identity` crate.
+# env var in this repository is derived from this file through the `identity` crate.
 # Swap day: change `name` from "jwn" to "jw" (and the Android ids) and nothing else.
 name = "jwn"            # binary, state dir, config dir, socket file stem
 env_prefix = "JWN"      # JWN_SOCKET, JWN_PANE_ID, ...

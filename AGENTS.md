@@ -1,10 +1,8 @@
-# next/ — the new jw, written from scratch
+# jw — a terminal for working with coding agents in parallel
 
-## CODE FREEZE on the old jw
-Everything outside `next/` (the `crates/`, `android/`, root manifests, old specs) is
-**frozen: only security and blocking fixes.** New work goes in `next/`.
-Nothing from jw 0.0.26 files is copied into `next/`; the old code and specs are read for
-what they do and why, never pasted.
+This repository is the jw that was written from scratch under `next/` (jwn) and took the place of
+the old jw (0.0.26 and before) in N157. The old code and its specs are in the git history before the
+commit that removed them; they are read for what they did and why, never pasted.
 
 ## Rules
 - **Identity lives in `identity.toml` only.** Names, dirs, socket, env prefix, applicationId
@@ -14,10 +12,10 @@ what they do and why, never pasted.
 - **A pane is a terminal first**: always the user's `$SHELL`; a program runs inside it.
 - **Spec before code** (`docs/spec.md`: Contract, Interfaces, REQ-n, RISK-n, parts table).
   UI parts need an approved interactive HTML prototype before spec or code.
-- **`just ci` (in `next/`) green before every commit.** One local commit per part.
+- **`just ci` green before every commit.** One local commit per part.
 - **Never push or open a PR** unless asked. **Never `pkill jw`/`jwn`**: tests use their own
   socket dir and kill only the pid they recorded.
-- **CI** is `.github/workflows/next.yml` (it lives outside `next/` because GitHub reads workflows only there, and does not touch the old jw's `ci.yml`): it runs the recipes of `next/justfile` on pull requests that change `next/`.
+- **CI** is `.github/workflows/ci.yml`: it runs the recipes of the `justfile` on pull requests and on pushes to `main`.
 - Never bind a key with Alt (AeroSpace owns it).
 
 ## Map
