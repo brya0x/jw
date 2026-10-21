@@ -58,6 +58,9 @@ impl World {
         cmd.env("SHELL", shell)
             .env("HOME", &home)
             .env("ZDOTDIR", &home)
+            // Ubuntu's /etc/zsh/zshrc runs compinit, which on the CI runner asks about insecure
+            // directories at the prompt and the shell never reaches it.
+            .env("skip_global_compinit", "1")
             .env("PATH", &path)
             .env("FAKE_LOG", &log)
             .env_remove("JWN_PANE_ID")
