@@ -18,7 +18,7 @@ jobs:
   # The daemon owns PTYs and a unix socket, so both flavours run: the tests start real zsh,
   # bash and fish, and a shell that is not installed is skipped, so they are installed.
   rust:
-    name: rust (${{ matrix.os }})
+    name: test (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:

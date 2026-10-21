@@ -40,10 +40,13 @@ fn rig(shell: &str) -> Rig {
     let mut config = sb.config();
     config.shell = Some(shell.to_owned());
     // ZDOTDIR too: a pane's zsh reads the dotfiles of ZDOTDIR, and the user's own would
-    // otherwise be inherited from the test runner's environment.
+    // otherwise be inherited from the test runner's environment. `skip_global_compinit`: Ubuntu's
+    // /etc/zsh/zshrc runs compinit, which on the GitHub runner finds insecure directories and asks
+    // «continue [y] or abort [n]?» at the prompt, so the shell never reaches it.
     config.env = vec![
         ("HOME".into(), home.to_string_lossy().into()),
         ("ZDOTDIR".into(), home.to_string_lossy().into()),
+        ("skip_global_compinit".into(), "1".into()),
         (
             "XDG_CONFIG_HOME".into(),
             home.join(".config").to_string_lossy().into(),
@@ -643,6 +646,7 @@ fn a_program_started_by_the_wrapper_leaves_a_shell_with_blocks() {
     config.env = vec![
         ("HOME".into(), home.to_string_lossy().into()),
         ("ZDOTDIR".into(), home.to_string_lossy().into()),
+        ("skip_global_compinit".into(), "1".into()),
     ];
     let d = Daemon::start(config.clone()).unwrap();
     let dir = std::fs::canonicalize(&sb.dir).unwrap().join("proj");
