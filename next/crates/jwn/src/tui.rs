@@ -3893,8 +3893,10 @@ impl View {
         if self.viewer.is_some() {
             let (cols, rows) = self.size;
             let rect = self.panes_space(cols, rows);
-            if let Some(v) = self.viewer.as_mut().and_then(Viewing::doc_mut) {
-                v.widen_to_word(rect);
+            match self.viewer.as_mut() {
+                Some(Viewing::Doc(v)) => v.widen_to_word(rect),
+                Some(Viewing::Text(t)) => t.widen_to_word(),
+                None => {}
             }
             return;
         }
@@ -10206,8 +10208,10 @@ mod tests {
         assert!(v.viewer.is_some());
         assert!(v.plain(120, 30).contains("▤ main.rs · 80 líneas"));
         assert!(
-            v.plain(120, 30).contains("/ n N buscar"),
-            "the status bar tells the keys"
+            v.plain(120, 30)
+                .contains("h j k l e b cursor · v elegir · ↵ referencia"),
+            "the status bar tells the keys: {}",
+            v.plain(120, 30).lines().last().unwrap_or("")
         );
         for code in [KeyCode::Char('j'), KeyCode::Char('w'), KeyCode::Char('x')] {
             assert_eq!(v.press_key(plain(code)), After::Continue);

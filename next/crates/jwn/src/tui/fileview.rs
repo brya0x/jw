@@ -11,7 +11,7 @@ use contract::text::{Run, TextDoc};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::viewer::fold;
-use super::{Grid, Style, clip, is_markdown, look};
+use super::{Grid, Style, clip, is_markdown, look, select};
 
 /// What the person asked of the client by a key.
 #[derive(Debug, PartialEq, Eq)]
@@ -320,7 +320,9 @@ impl FileView {
             KeyCode::Char('l') | KeyCode::Right => self.go_col(self.col + 1),
             KeyCode::Char('h') | KeyCode::Left => self.go_col(self.col.saturating_sub(1)),
             KeyCode::Char(' ') | KeyCode::PageDown => self.go_line(self.line + page),
-            KeyCode::Char('b') | KeyCode::PageUp => self.go_line(self.line.saturating_sub(page)),
+            KeyCode::PageUp => self.go_line(self.line.saturating_sub(page)),
+            KeyCode::Char('e') => self.word_end(),
+            KeyCode::Char('b') => self.word_back(),
             KeyCode::Char('g') | KeyCode::Home => self.go_line(0),
             KeyCode::Char('G') | KeyCode::End => self.go_line(usize::MAX),
             KeyCode::Char('w') => self.toggle_wrap(geo.cw),
@@ -384,6 +386,86 @@ impl FileView {
         let n = self.len.get(self.line).copied().unwrap_or(0);
         self.col = to.min(n.saturating_sub(1));
         self.want = self.col;
+    }
+
+    /// The characters of line `n`, for a motion by words.
+    fn chars_of(&self, n: usize) -> Vec<char> {
+        self.line_text(n).chars().collect()
+    }
+
+    /// The cursor goes to the end of the word it is on, or of the next one when it is already there
+    /// (Neovim's `e`, REQ-639): a word is letters, digits and `_`, or a run of other marks, and a
+    /// blank or a line break is the space between them.
+    fn word_end(&mut self) {
+        let last = self.last_line();
+        let (mut l, mut c) = (self.line, self.col + 1);
+        let mut chars = self.chars_of(l);
+        // forward over the blanks and the line breaks
+        loop {
+            while c < chars.len() && chars[c].is_whitespace() {
+                c += 1;
+            }
+            if c < chars.len() {
+                break;
+            }
+            if l >= last {
+                return;
+            }
+            l += 1;
+            c = 0;
+            chars = self.chars_of(l);
+        }
+        let class = word_class(chars[c]);
+        while c + 1 < chars.len() && word_class(chars[c + 1]) == class {
+            c += 1;
+        }
+        self.go_to(l, c);
+    }
+
+    /// The cursor goes to the start of the word it is on, or of the one before when it is already there (Neovim's `b`).
+    fn word_back(&mut self) {
+        let (mut l, mut c) = (self.line, self.col);
+        let mut chars = self.chars_of(l);
+        // back over the blanks and the line breaks
+        loop {
+            while c > 0 && chars.get(c - 1).is_some_and(|ch| ch.is_whitespace()) {
+                c -= 1;
+            }
+            if c > 0 {
+                break;
+            }
+            if l == 0 {
+                return;
+            }
+            l -= 1;
+            chars = self.chars_of(l);
+            c = chars.len();
+        }
+        let class = word_class(chars[c - 1]);
+        while c > 1 && word_class(chars[c - 2]) == class {
+            c -= 1;
+        }
+        self.go_to(l, c - 1);
+    }
+
+    /// The cursor goes to character `col` of line `line`, and wants to stay at that column.
+    fn go_to(&mut self, line: usize, col: usize) {
+        self.line = line;
+        self.col = col;
+        self.want = col;
+    }
+
+    /// The press that began a drag was the second of a double click: the word under the cursor is
+    /// selected, and the release copies it (REQ-637, REQ-640b).
+    pub fn widen_to_word(&mut self) {
+        let Some((from, to)) = select::word_at(&self.line_text(self.line), self.col) else {
+            return;
+        };
+        self.anchor = Some((self.line, from));
+        self.go_to(self.line, to);
+        if let Some((start, _)) = self.pull {
+            self.pull = Some((start, true));
+        }
     }
 
     /// The row of the screen the cursor is on, counted from the first of the file.
@@ -506,14 +588,13 @@ impl FileView {
         self.pull = Some((start, true));
     }
 
-    /// The button was let go: what a drag covered, to copy, and the selection lets go of it.
+    /// The button was let go: what a drag covered, to copy; the selection stays, so `↵` writes its reference.
     pub fn release(&mut self) -> Option<String> {
         let (_, moved) = self.pull.take()?;
         if !moved {
             return None;
         }
         let text = self.selected_text()?;
-        self.anchor = None;
         self.says = super::conversation::copied(&text);
         Some(text)
     }
@@ -774,7 +855,7 @@ impl FileView {
         }
         let md = if self.markdown { " · s vista" } else { "" };
         format!(
-            "esc cerrar · h j k l cursor · v elegir · ↵ referencia · t archivos · ␣ b g G página · / n N buscar · w ajustar · r releer · y copiar{md}"
+            "esc cerrar · h j k l e b cursor · v elegir · ↵ referencia · t archivos · ␣ g G página · / n N buscar · w ajustar · r releer · y copiar{md}"
         )
     }
 }
@@ -944,6 +1025,11 @@ impl FileTabs {
         self.tabs[self.cur].drag_to(inner, x, y);
     }
 
+    /// The press was the second of a double click: the word under the cursor.
+    pub fn widen_to_word(&mut self) {
+        self.tabs[self.cur].widen_to_word();
+    }
+
     pub fn release(&mut self) -> Option<String> {
         self.tabs[self.cur].release()
     }
@@ -1011,6 +1097,17 @@ fn pieces(line: &[Run], from: usize, to: usize) -> Vec<(String, Option<&str>)> {
         }
     }
     out
+}
+
+/// What a motion by words takes a character for: a blank (0), a letter, a digit or `_` (1), or another mark (2).
+fn word_class(c: char) -> u8 {
+    if c.is_whitespace() {
+        0
+    } else if c.is_alphanumeric() || c == '_' {
+        1
+    } else {
+        2
+    }
 }
 
 /// A weight in bytes as a person reads it.
@@ -1113,7 +1210,7 @@ mod tests {
         );
         key(&mut v, KeyCode::Char(' '));
         assert_eq!(v.line, 19, "a page is the rows of the text less one");
-        key(&mut v, KeyCode::Char('b'));
+        key(&mut v, KeyCode::PageUp);
         assert_eq!(v.line, 9);
         key(&mut v, KeyCode::Char('G'));
         let rows = screen(&v);
@@ -1615,7 +1712,11 @@ mod tests {
         v.drag_to(R, 4 + 5, 1 + 2);
         assert_eq!(v.selection(), Some(((1, 2), (2, 5))));
         assert_eq!(v.release(), Some("nea 2\nlínea ".into()));
-        assert_eq!(v.selection(), None, "copying lets go");
+        assert_eq!(
+            v.selection(),
+            Some(((1, 2), (2, 5))),
+            "the selection stays, for `↵` and `y`"
+        );
         assert!(v.take_says().unwrap().starts_with("copiado"));
         assert!(!v.press(R, 4 + 2, 1 + 7), "below the last line is not text");
     }
@@ -1632,5 +1733,71 @@ mod tests {
             "under the bar the text is one row lower"
         );
         assert_eq!(t.current().cursor(), (0, 1));
+    }
+
+    /// REQ-639: `e` goes to the end of the word and `b` to the start of one, as Neovim's do, across
+    /// marks and lines, and with a selection open they grow it.
+    #[test]
+    fn e_and_b_walk_the_words_as_neovims_do_across_marks_and_lines() {
+        let mut v = view(vec![
+            vec![run("let n = foo_bar(1);", None)],
+            vec![],
+            vec![run("  x", None)],
+        ]);
+        let at = |v: &FileView| v.cursor();
+        key(&mut v, KeyCode::Char('e'));
+        assert_eq!(at(&v), (0, 2), "the end of `let`");
+        key(&mut v, KeyCode::Char('e'));
+        assert_eq!(at(&v), (0, 4), "the next word, `n`");
+        key(&mut v, KeyCode::Char('e'));
+        assert_eq!(at(&v), (0, 6), "the `=` is a word of marks");
+        key(&mut v, KeyCode::Char('e'));
+        assert_eq!(at(&v), (0, 14), "`foo_bar`: the underscore is a letter");
+        key(&mut v, KeyCode::Char('e'));
+        assert_eq!(at(&v), (0, 15), "the `(`");
+        key(&mut v, KeyCode::Char('e'));
+        assert_eq!(at(&v), (0, 16), "the `1`");
+        key(&mut v, KeyCode::Char('e'));
+        assert_eq!(at(&v), (0, 18), "`);` is a word of marks");
+        key(&mut v, KeyCode::Char('e'));
+        assert_eq!(at(&v), (2, 2), "past the empty line to the end of `x`");
+        key(&mut v, KeyCode::Char('e'));
+        assert_eq!(at(&v), (2, 2), "nothing after the last word");
+        key(&mut v, KeyCode::Char('b'));
+        assert_eq!(at(&v), (0, 17), "`);` begins on the `)`");
+        key(&mut v, KeyCode::Char('b'));
+        assert_eq!(at(&v), (0, 16), "the `1`");
+        key(&mut v, KeyCode::Char('b'));
+        assert_eq!(at(&v), (0, 15), "the `(`");
+        key(&mut v, KeyCode::Char('b'));
+        assert_eq!(at(&v), (0, 8), "the start of `foo_bar`");
+        key(&mut v, KeyCode::Char('b'));
+        assert_eq!(at(&v), (0, 6), "the `=`");
+        for _ in 0..4 {
+            key(&mut v, KeyCode::Char('b'));
+        }
+        assert_eq!(at(&v), (0, 0), "not before the start");
+        // a selection grows with them
+        key(&mut v, KeyCode::Char('v'));
+        key(&mut v, KeyCode::Char('e'));
+        key(&mut v, KeyCode::Char('e'));
+        assert_eq!(v.selection(), Some(((0, 0), (0, 4))));
+    }
+
+    /// REQ-637, REQ-640b: a double click selects the word under the cursor, and the release copies it.
+    #[test]
+    fn a_double_click_selects_the_word_and_the_release_copies_it_and_keeps_it() {
+        let mut v = view(vec![vec![run("use std::time;", None)]]);
+        screen(&v);
+        assert!(v.press(R, 4 + 6, 1));
+        v.widen_to_word();
+        assert_eq!(v.selection(), Some(((0, 4), (0, 6))), "`std`");
+        assert_eq!(v.release(), Some("std".into()));
+        assert!(v.selection().is_some(), "and it stays");
+        let mut none = view(vec![vec![run("a  b", None)]]);
+        screen(&none);
+        assert!(none.press(R, 4 + 1, 1));
+        none.widen_to_word();
+        assert_eq!(none.release(), None, "a blank is no word");
     }
 }
