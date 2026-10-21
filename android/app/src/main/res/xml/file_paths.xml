@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Where the camera app may write the photo a conversation attaches: the cache folder, nothing else. -->
+<paths>
+    <cache-path name="images" path="images/" />
+</paths>

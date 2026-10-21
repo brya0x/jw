@@ -1,3 +1,4 @@
+target/
+__pycache__/
 .jw.env
-/target/
 kls_database.db

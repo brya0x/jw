@@ -4,55 +4,54 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+// The product identity lives in ../identity.toml; read it here instead of repeating it.
+fun identity(key: String): String {
+    val line = file("../../identity.toml").readLines().first { it.trim().startsWith("$key =") }
+    return line.substringAfter("=").substringBefore("#").trim().trim('"')
+}
+
 android {
-    namespace = "dev.jw.mobile"
+    namespace = "dev.jw.next.app"
     compileSdk = 36
-    buildToolsVersion = "36.0.0"
 
     defaultConfig {
-        applicationId = "dev.jw.mobile"
+        applicationId = identity("android_application_id")
         minSdk = 26
         targetSdk = 36
         versionCode = 1
         versionName = "0.0.1"
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        manifestPlaceholders["appLabel"] = identity("label")
+        buildConfigField("String", "LINK_SCHEME", "\"${identity("name")}\"")
     }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    buildFeatures { compose = true }
+
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
+
+    // The shared fixtures ship in the app until it talks to a daemon: assets/fixtures/**.
+    sourceSets["main"].assets.srcDir(rootDir.resolve("../contract"))
 }
 
-kotlin { jvmToolchain(17) }
+kotlin {
+    jvmToolchain(17)
+}
 
 dependencies {
-    implementation(project(":proto"))
-    implementation(project(":term"))
+    implementation(project(":client-core"))
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
     implementation(libs.compose.foundation)
     implementation(libs.compose.material3)
     implementation(libs.activity.compose)
+    implementation(libs.okhttp)
     implementation(libs.camera.core)
     implementation(libs.camera.camera2)
     implementation(libs.camera.lifecycle)
     implementation(libs.camera.view)
-    implementation(libs.listenablefuture)
-    implementation(libs.okhttp)
-    implementation(libs.zxing.core)
-    implementation(libs.coroutines.android)
-
-    testImplementation(libs.junit)
-    testImplementation(libs.okhttp.mockwebserver)
-    testImplementation(libs.okhttp.tls)
-    testImplementation(libs.coroutines.test)
-    androidTestImplementation(platform(libs.compose.bom))
-    androidTestImplementation(libs.compose.ui.test)
-    androidTestImplementation(libs.okhttp.mockwebserver)
-    androidTestImplementation(libs.okhttp.tls)
-    androidTestImplementation(libs.coroutines.test)
-    debugImplementation(libs.compose.ui.test.manifest)
-    androidTestImplementation(libs.test.runner)
-    androidTestImplementation(libs.test.ext.junit)
 }

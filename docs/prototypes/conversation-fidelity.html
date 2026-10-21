@@ -1,0 +1,310 @@
+<title>jwn Conversación fiel</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Terminal-first, the same character grid as the other terminal prototypes. Every colour comes from the chosen theme. */
+:root{
+  --bg:#282c34; --panel:#21252b; --fg:#abb2bf; --dim:#5c6370; --line:#3e4451; --sel:#2c313a;
+  --blue:#61afef; --green:#98c379; --yellow:#e5c07b; --red:#e06c75; --magenta:#c678dd; --cyan:#56b6c2;
+  --page:#16181d; --ink:#c3c9d4; --mut:#7d8594;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}}
+:root[data-theme="light"]{--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.55 'IBM Plex Sans',system-ui,sans-serif;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px 40px}
+.wrap{max-width:1500px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
+h1{font:600 20px/1.2 var(--mono);margin:0}
+h2.s{font:600 12px var(--mono);margin:0;color:var(--mut)}
+p{margin:0;max-width:78ch;color:var(--mut)}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button{font:12px var(--mono);color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;min-height:32px;cursor:pointer}
+button:hover{border-color:var(--blue)}
+button[aria-pressed=true]{background:var(--blue);color:var(--panel);border-color:var(--blue);font-weight:700}
+:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto}
+.term pre{margin:0;font:13px/1.25 var(--mono);color:var(--fg);outline:none;width:max-content;cursor:default}
+.hint{font:12px var(--mono);color:var(--mut)}
+.stage{display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap}
+.col{flex:1 1 700px;min-width:0;display:flex;flex-direction:column;gap:8px}
+.side{flex:0 0 auto;width:100%;max-width:376px;margin-inline:auto;display:flex;flex-direction:column;gap:8px}
+.notes{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
+.notes div{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;color:var(--fg);font:12px/1.55 var(--mono)}
+.notes b{color:var(--yellow)}.notes kbd{font:inherit;color:var(--cyan)}
+.b{font-weight:700}.dim{color:var(--dim)}.blue{color:var(--blue)}.green{color:var(--green)}.yellow{color:var(--yellow)}.red{color:var(--red)}.mag{color:var(--magenta)}.cyan{color:var(--cyan)}
+.lit{background:var(--sel)}.inv{background:var(--blue);color:var(--panel)}.btn1{background:var(--green);color:var(--panel);font-weight:700}.pan{background:var(--panel)}
+/* phone */
+.phone{width:100%;height:760px;background:var(--bg);border:1px solid var(--line);border-radius:28px;padding:10px;box-shadow:0 0 0 6px var(--panel);display:flex;flex-direction:column}
+.ph{flex:1;min-height:0;background:var(--bg);border-radius:20px;overflow:hidden;display:flex;flex-direction:column;font:13px/1.45 var(--mono);color:var(--fg);position:relative}
+.ph .hd{background:var(--panel);border-bottom:1px solid var(--line);padding:8px 12px;display:flex;align-items:center;gap:8px;min-height:52px}
+.ph .hd .t{flex:1;min-width:0}.ph .hd b{display:block;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ph .hd span{display:block;font-size:11px;color:var(--dim)}
+.ph .hd button{min-height:44px;min-width:44px;border-radius:8px}
+.ph .body{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column}
+.ph .src{padding:10px 12px;background:var(--panel);border-bottom:1px solid var(--line);font-size:12px}
+.ph .src b{color:var(--yellow)}
+.ph .row{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;min-height:56px;border-bottom:1px solid var(--line);cursor:pointer;background:none;border-left:0;border-right:0;border-top:0;border-radius:0;text-align:left;font:13px var(--mono);color:var(--fg);width:100%}
+.ph .row .k{width:92px;flex:none;color:var(--dim);font-size:11px;padding-top:2px}
+.ph .row .v{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;word-break:break-word}
+.ph .foot{border-top:2px solid var(--line);background:var(--panel);padding:8px 12px 10px;display:flex;flex-direction:column;gap:8px}
+.ph .seg{display:flex;gap:6px}.ph .seg button{flex:1;min-height:40px;border-radius:999px;font-size:12px;background:var(--sel)}
+.ph .seg button[aria-pressed=true]{background:var(--blue);color:var(--panel);font-weight:700}
+.ph .save{min-height:48px;border-radius:8px;background:var(--green);color:var(--panel);font-weight:700;border-color:var(--green);font-size:13px}
+.ph .save:disabled{background:var(--sel);color:var(--dim);border-color:var(--line)}
+.ph .warn{color:var(--yellow);font-size:11px}
+.ph .sheet{position:absolute;left:0;right:0;bottom:0;max-height:78%;overflow:auto;border-top:2px solid var(--blue);background:var(--panel);padding:12px;display:flex;flex-direction:column;gap:8px;box-shadow:0 -10px 30px #0008}
+.ph .sheet input{width:100%;min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:0 10px;font:13px var(--mono)}
+.ph .sheet .li{display:flex;gap:6px;align-items:center}.ph .sheet .li input{flex:1}
+.ph .sheet .li button{min-height:44px;min-width:44px;border-radius:6px}
+.ph .toast{position:absolute;left:12px;right:12px;bottom:140px;background:var(--sel);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--green);font-size:12px}
+
+.ph .row.sub{min-height:48px}
+.ph .pill{min-height:48px;min-width:48px;border-radius:999px;padding:0 14px;font:12px var(--mono);border:1px solid var(--line);background:var(--sel);color:var(--fg)}
+.ph .pill.go{background:var(--blue);color:var(--panel);border-color:var(--blue);font-weight:700}
+.ph .tabs{display:flex;gap:6px;padding:8px 12px;border-bottom:1px solid var(--line)}
+
+.tgl{display:flex;gap:6px;flex-wrap:wrap}
+.ph .msg{padding:6px 12px;display:flex;flex-direction:column;gap:6px}
+.ph .u{background:var(--sel);border-radius:6px;padding:6px 10px}
+.ph .dimrow{color:var(--dim);font-size:12px;padding:4px 12px;cursor:pointer}
+.ph .dimrow:hover{color:var(--fg)}
+.ph .sub{padding:2px 12px 2px 28px;color:var(--dim);font-size:12px}
+.ph .run{margin:4px 12px;border:1px solid var(--line);border-radius:6px;padding:6px 10px;background:var(--panel);font-size:12px}
+.ph .work{padding:4px 12px;color:var(--yellow);font-size:12px}
+.ph table{border-collapse:collapse;font-size:12px;min-width:100%}
+.ph th,.ph td{border:1px solid var(--line);padding:3px 8px;text-align:left;white-space:nowrap}
+.ph th{background:var(--panel);color:var(--cyan)}
+.ph .scroll{overflow-x:auto}
+.ph blockquote{margin:0;border-left:3px solid var(--line);padding-left:10px;color:var(--dim)}
+.ph code{color:var(--cyan)}
+.ph h4{margin:4px 0;font-size:13px}
+.bold{font-weight:700}.user{background:var(--sel);display:inline-block;min-width:100%}.sum{color:inherit}.dim{color:var(--dim)}
+.cardrow{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
+.u{background:var(--sel)}
+</style>
+<div class="wrap">
+  <h1>jwn · la conversación como la de Claude Code</h1>
+  <p>Lo que se ve distinto en una conversación de jwn y en la de Claude Code, y cómo se propone dibujarlo en la terminal y en el teléfono. Cada escena enseña una cosa. En «Herramientas» compara <b>ahora</b> (una fila por herramienta) con <b>propuesta</b> (agrupadas por clase, como Claude Code); toca una fila agrupada para abrirla.</p>
+  <div class="bar" id="scenes" role="group" aria-label="Escena">
+    <button data-s="tools" aria-pressed="true">Herramientas</button>
+    <button data-s="md" aria-pressed="false">Markdown</button>
+    <button data-s="live" aria-pressed="false">En curso</button>
+    <button data-s="follow" aria-pressed="false">Sesión seguida</button>
+    <button id="theme" aria-label="Cambiar entre tema oscuro y claro">Tema claro/oscuro</button>
+  </div>
+  <div class="bar" id="foldbar" role="group" aria-label="Plegado">
+    <span class="hint">herramientas:</span>
+    <button data-f="now" aria-pressed="false">ahora: una fila cada una</button>
+    <button data-f="new" aria-pressed="true">propuesta: agrupadas</button>
+  </div>
+  <div class="stage">
+    <div class="col">
+      <h2 class="s">Terminal · panel de 100 columnas</h2>
+      <div class="term"><pre id="t" tabindex="0" aria-label="Conversación en la terminal"></pre></div>
+      <div class="hint" id="hint"></div>
+    </div>
+    <div class="side">
+      <h2 class="s">Teléfono</h2>
+      <div class="phone"><div class="ph" id="ph"></div></div>
+    </div>
+  </div>
+  <div class="cardrow" id="notes"></div>
+</div>
+<script>
+const $=s=>document.querySelector(s);
+const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;');
+const S={scene:'tools',fold:'new',open:new Set(),tick:0};
+
+/* ---- the model: what the daemon would say, as items ---- */
+const KIND={Bash:'shell',Grep:'search',Glob:'search',Read:'read',LS:'list'};
+const tool=(name,arg,out,extra={})=>({t:'tool',name,arg,out:out||[],kind:KIND[name]||'other',state:'ok',...extra});
+const CONV={
+ tools:[
+  {t:'user',text:'no, cargó el claude original no el ui que tenemos desarrollado por qué?'},
+  {t:'text',summary:true,text:'Voy a revisar dónde está la lista de conversaciones y cómo decide esto el binario para arreglarlo ahora mismo.'},
+  tool('Bash','sed -n 1,40p crates/jwn/src/claude.rs; ps -axo pid,lstart,command | grep …',['//! `jwn claude`: what typing `claude` in a pane of the daemon runs when…']),
+  tool('Grep','conversation_served',['crates/daemon/src/lib.rs:39']),
+  tool('Bash','grep -n \'pub fn conversation_served\' -A12 crates/daemon/src/*.rs',['/// How many conversations the list holds.']),
+  tool('Bash','mkdir -p crates/jwn/src/claude && cat > crates/jwn/src/claude/pick.rs <<\'EOF\'',['(Bash completed with no output)']),
+  tool('Bash','cargo test -p jwn --bins -- claude::pick',['test claude::pick::tests::the_keys_move_choose_and_leave ... ok']),
+  {t:'text',summary:true,text:'Veo que `item` se usa con `.get(...)`, así que indexar más allá de los items es seguro. Voy a agregarlo en el cliente de terminal.'},
+  tool('Edit','crates/jwn/src/tui/conversation.rs',['Editado'],{diff:['-            self.picked = hit;','+            let hit = hit.filter(|i| ((i - conv.first) as usize) < conv.items.len());','+            self.picked = hit;']}),
+  {t:'result',text:'Listo en 18 s · 6 herramientas'}
+ ],
+ live:[
+  {t:'user',text:'sí, lanza rust-review y reinstala jwn'},
+  tool('Bash','cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings',['Finished `dev` profile in 24.6 s']),
+  tool('Grep','follow_due',['crates/daemon/src/engine.rs:1301']),
+  {t:'text',summary:true,text:'Corro el CI completo con los arreglos de la revisión antes de reinstalar.'},
+  tool('Bash','env -u JWN_STATE_DIR just ci > ci.log 2>&1; echo exit=$?',[],{state:'run',ms:39000}),
+  {t:'queue',text:'también los mensajes que se ponen en queue no están visibles'}
+ ],
+ follow:[
+  {t:'divider',text:'conversación compactada'},
+  {t:'user',text:'okay antes de avanzar una cosa que veo que falta'},
+  {t:'text',summary:true,text:'Voy a ver cómo se dibuja el texto de Claude y si hay soporte de tablas.'},
+  tool('Read','crates/jwn/src/tui/conversation.rs',['Leídas 140 líneas']),
+  tool('Grep','table',['crates/jwn/src/tui/markdown.rs:396']),
+  {t:'text',text:'Hoy el texto solo entiende **código** y negrita; las tablas salen crudas.'},
+  {t:'note',tone:'warn',text:'Interrumpido'},
+  {t:'divider',text:'conversación retomada'},
+  {t:'user',text:'sí, hazlo con la opción A'},
+  {t:'note',tone:'err',text:'API Error: Tu computador se durmió a mitad de la respuesta.'},
+  {t:'result',text:'Listo en 2 min 4 s · 12 herramientas'}
+ ]
+};
+
+/* ---- folding: consecutive tools of a class become one row ---- */
+const WORD={shell:['Ejecutó','comando','comandos'],search:['Buscó','patrón','patrones'],read:['Leyó','archivo','archivos'],list:['Listó','carpeta','carpetas']};
+const ORDER=['search','read','list','shell'];
+function foldable(i){return i.t==='tool'&&WORD[i.kind]&&i.state!=='run'}
+function rows(items){
+  if(S.fold==='now')return items.map(i=>({i}));
+  const out=[];
+  for(let k=0;k<items.length;){
+    if(!foldable(items[k])){out.push({i:items[k]});k++;continue}
+    const g=[];while(k<items.length&&foldable(items[k])){g.push(items[k]);k++}
+    out.push({group:g});
+  }
+  return out;
+}
+function groupTitle(g){
+  const c={};g.forEach(t=>c[t.kind]=(c[t.kind]||0)+1);
+  const parts=ORDER.filter(k=>c[k]).map((k,n)=>{const w=WORD[k];const t=w[0]+' '+c[k]+' '+(c[k]==1?w[1]:w[2]);return n?t.charAt(0).toLowerCase()+t.slice(1):t});
+  return parts.join(', ');
+}
+const gid=(i)=>'g'+i;
+
+/* ---- terminal ---- */
+function termLines(){
+  const L=[],put=(s,c)=>L.push({s,c:c||''});
+  const items=CONV[S.scene]||[];
+  if(S.scene==='md'){return mdTerm()}
+  rows(items).forEach((r,n)=>{
+    if(r.group){
+      const open=S.open.has(gid(n));
+      put('  '+(open?'▾ ':'▸ ')+groupTitle(r.group),'dim g:'+gid(n));
+      if(open)r.group.forEach(t=>{put('    ● '+t.name+'('+clip(t.arg,70)+')','');(t.out||[]).slice(0,1).forEach(o=>put('      ⎿  '+clip(o,70),'dim'))});
+      return;
+    }
+    const i=r.i;
+    if(L.length&&i.t!=='tool'&&i.t!=='note')put('');
+    if(i.t==='user')put('❯ '+i.text,'user');
+    else if(i.t==='text'){wrap(i.text,92).forEach((l,k)=>put((k?'  ':'● ')+l+(i.summary&&k===0&&false?'':'')));if(i.summary)L[L.length-1].s+='  · resumen',L[L.length-1].c+=' sum'}
+    else if(i.t==='tool'){
+      if(i.state==='run'){put('  ● Ejecutando '+clip(i.arg,60)+' · '+Math.floor((i.ms+S.tick*1000)/1000)+' s','yellow');put('    ⎿  $ '+clip(i.arg,80),'dim');put('       (ctrl+b para dejarlo en segundo plano)','dim')}
+      else{put('  ● '+i.name+'('+clip(i.arg,76)+')','');(i.out||[]).slice(0,1).forEach(o=>put('    ⎿  '+clip(o,80),'dim'));(i.diff||[]).forEach(d=>put('       '+d,d[0]==='-'?'red':'green'))}
+    }
+    else if(i.t==='result')put('✻ '+i.text,'dim');
+    else if(i.t==='note')put('  ⚠ '+i.text,i.tone==='err'?'red':'yellow');
+    else if(i.t==='divider')put('──────────────── '+i.text+' ────────────────','dim');
+    else if(i.t==='queue'){put('');put('⧖ '+i.text,'dim')}
+  });
+  if(S.scene==='live'){put('');put('✻ Pensando… ('+fmt(694+S.tick)+' · ↓ 28,7 k tokens)','yellow');}
+  put('');put('╭'+'─'.repeat(96)+'╮','dim');put('│ escribe un mensaje · / comandos'+' '.repeat(63)+'│','dim');put('╰'+'─'.repeat(96)+'╯','dim');
+  return L;
+}
+function mdTerm(){
+  const L=[],put=(s,c)=>L.push({s,c:c||''});
+  put('❯ ¿cómo se comparan las opciones?','user');put('');
+  put('● Hay tres caminos. Esta es la comparación:');put('');
+  put('  Diferencias entre Claude Code y jwn','bold');put('');
+  put('  ┌─────────────────────────┬──────────────────────┬──────────────┐','dim');
+  put('  │ Claude Code muestra     │ jwn muestra          │ Tipo         │','cyan');
+  put('  ├─────────────────────────┼──────────────────────┼──────────────┤','dim');
+  put('  │ Narración entre tools   │ no                   │ datos        │');
+  put('  │ «Ran 2 shell commands»  │ una fila cada una    │ dibujo       │');
+  put('  │ Línea de trabajo        │ nada                 │ ambos        │');
+  put('  └─────────────────────────┴──────────────────────┴──────────────┘','dim');put('');
+  put('  1. El daemon analiza el texto (`pulldown-cmark`) una vez','');
+  put('  2. Los clientes dibujan los bloques','');
+  put('     • negrita, _itálica_ y [enlaces](https://claude.ai) con su url en gris','');
+  put('');put('  ▎ Un resumen no es algo que dijo la persona.','dim');put('');
+  put('  ┃ let hit = hit.filter(|i| i < n);','cyan');put('');
+  return L;
+}
+const clip=(s,n)=>s.length>n?s.slice(0,n-1)+'…':s;
+const fmt=s=>Math.floor(s/60)+' m '+String(s%60).padStart(2,'0')+' s';
+function wrap(t,w){const out=[];let line='';t.replace(/\*\*/g,'').split(' ').forEach(wd=>{if((line+' '+wd).trim().length>w){out.push(line);line=wd}else line=(line+' '+wd).trim()});if(line)out.push(line);return out}
+function drawTerm(){
+  const L=termLines();
+  $('#t').innerHTML=L.map(l=>{const c=l.c.split(' ').filter(Boolean);const g=c.find(x=>x.startsWith('g:'));const cls=c.filter(x=>!x.startsWith('g:')).join(' ');
+    return '<span class="'+cls+'"'+(g?' data-g="'+g.slice(2)+'" style="cursor:pointer"':'')+'>'+esc(l.s)+'</span>'}).join('\n');
+  document.querySelectorAll('#t [data-g]').forEach(e=>e.onclick=()=>{const k=e.dataset.g;S.open.has(k)?S.open.delete(k):S.open.add(k);draw()});
+}
+
+/* ---- phone ---- */
+function phoneHtml(){
+  const items=CONV[S.scene]||[];let h='<div class="hd"><div class="t"><b>jw</b><span>claude · conversación</span></div></div><div class="body" style="gap:2px;padding:6px 0">';
+  if(S.scene==='md')return h+mdPhone()+'</div>'+foot();
+  rows(items).forEach((r,n)=>{
+    if(r.group){
+      const open=S.open.has(gid(n));
+      h+='<div class="dimrow" data-g="'+gid(n)+'">'+(open?'▾ ':'▸ ')+esc(groupTitle(r.group))+'</div>';
+      if(open)r.group.forEach(t=>{h+='<div class="sub">● '+esc(t.name)+'('+esc(clip(t.arg,38))+')'+((t.out||[])[0]?'<br>⎿ '+esc(clip(t.out[0],40)):'')+'</div>'});
+      return;
+    }
+    const i=r.i;
+    if(i.t==='user')h+='<div class="msg"><div class="u">'+esc(i.text)+'</div></div>';
+    else if(i.t==='text')h+='<div class="msg">'+inl(i.text)+(i.summary?' <span class="dim">· resumen</span>':'')+'</div>';
+    else if(i.t==='tool'){
+      if(i.state==='run')h+='<div class="run"><span class="yellow">● Ejecutando · '+Math.floor((i.ms+S.tick*1000)/1000)+' s</span><br><span class="dim">$ '+esc(clip(i.arg,60))+'</span></div>';
+      else h+='<div class="sub" style="padding-left:12px">● '+esc(i.name)+'('+esc(clip(i.arg,38))+')'+((i.out||[])[0]?'<br>⎿ '+esc(clip(i.out[0],40)):'')+'</div>'+(i.diff||[]).map(d=>'<div class="sub '+(d[0]==='-'?'red':'green')+'" style="padding-left:24px">'+esc(clip(d,44))+'</div>').join('');
+    }
+    else if(i.t==='result')h+='<div class="dimrow" style="cursor:default">✻ '+esc(i.text)+'</div>';
+    else if(i.t==='note')h+='<div class="dimrow '+(i.tone==='err'?'red':'yellow')+'" style="cursor:default">⚠ '+esc(i.text)+'</div>';
+    else if(i.t==='divider')h+='<div class="dimrow" style="text-align:center;cursor:default">— '+esc(i.text)+' —</div>';
+    else if(i.t==='queue')h+='<div class="dimrow" style="cursor:default">⧖ '+esc(i.text)+'</div>';
+  });
+  if(S.scene==='live')h+='<div class="work">✻ Pensando… ('+fmt(694+S.tick)+' · ↓ 28,7 k)</div>';
+  return h+'</div>'+foot();
+}
+const inl=t=>esc(t).replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>');
+const foot=()=>'<div class="foot"><div class="dimrow" style="cursor:default;padding:0">escribe un mensaje · / comandos</div></div>';
+function mdPhone(){
+  return '<div class="msg"><div class="u">¿cómo se comparan las opciones?</div></div><div class="msg"><h4>Diferencias entre Claude Code y jwn</h4><div class="scroll"><table><tr><th>Claude Code muestra</th><th>jwn muestra</th><th>Tipo</th></tr><tr><td>Narración entre tools</td><td>no</td><td>datos</td></tr><tr><td>«Ran 2 shell commands»</td><td>una fila cada una</td><td>dibujo</td></tr><tr><td>Línea de trabajo</td><td>nada</td><td>ambos</td></tr></table></div><ol style="margin:4px 0;padding-left:20px"><li>El daemon analiza el texto una vez</li><li>Los clientes dibujan los bloques<ul style="padding-left:16px"><li><b>negrita</b>, <i>itálica</i> y <u>enlaces</u></li></ul></li></ol><blockquote>Un resumen no es algo que dijo la persona.</blockquote><div class="run"><code>let hit = hit.filter(|i| i &lt; n);</code></div></div>';
+}
+function drawPhone(){
+  $('#ph').innerHTML=phoneHtml();
+  document.querySelectorAll('#ph [data-g]').forEach(e=>e.onclick=()=>{const k=e.dataset.g;S.open.has(k)?S.open.delete(k):S.open.add(k);draw()});
+}
+
+/* ---- notes per scene ---- */
+const NOTES={
+ tools:[
+  ['Agrupar como Claude Code','Las herramientas seguidas de una misma racha se pliegan en una fila por clase: <b>Buscó 1 patrón, ejecutó 3 comandos</b> (buscar, leer, listar y ejecutar). Una racha de una sola también se pliega. Un toque (o <kbd>↵</kbd>) la abre y lista cada herramienta con la primera línea de su salida.'],
+  ['Lo que no se pliega','Una edición se queda sola, con su diff. Un subagente (<code>Agent</code>) se queda como tarjeta. Y la herramienta que <b>corre</b> sale aparte, desplegada y con su tiempo (escena «En curso»); cuando termina, entra en la racha.'],
+  ['Dónde se decide','Es solo dibujo: los items no cambian, el cliente agrupa lo que ya recibe. Por eso vale igual para una conversación de jwn y para una sesión que solo se sigue.']
+ ],
+ md:[
+  ['Opción A: el daemon analiza','Cuando un mensaje de Claude termina de llegar, el daemon lo analiza <b>una vez</b> (<code>pulldown-cmark</code>, el mismo del visor) y guarda los bloques en el item de texto, en un campo nuevo opcional. La terminal y el teléfono dibujan los mismos bloques. En una sesión seguida se analiza al leerla, una vez por item, no en cada seguimiento.'],
+  ['Qué se dibuja','Títulos, listas (también numeradas y anidadas), negrita e itálica, enlaces con su dirección en gris, citas, bloques de código y <b>tablas</b>: con bordes en la terminal y con desplazamiento horizontal en el teléfono (como el visor de Markdown).'],
+  ['Mientras llega','Un mensaje que se está escribiendo se ve como texto plano y pasa a Markdown cuando termina: no se re-analiza en cada trozo.']
+ ],
+ live:[
+  ['La herramienta que corre','Se dibuja desplegada: el comando, su tiempo y <kbd>ctrl+b</kbd> para dejarla en segundo plano. El cuarto de arriba (las ya terminadas) sigue plegado.'],
+  ['La línea de trabajo','<b>✻ Pensando… (11 m 34 s · ↓ 28,7 k tokens)</b> mientras hay un turno. En una conversación de jwn el motor da el tiempo y los tokens. En una sesión que solo se sigue, el tiempo sale de la hora del último mensaje tuyo y los tokens se omiten (la transcripción no dice cuántos lleva el turno).'],
+  ['Mensajes en cola','Los que escribes mientras trabaja se dibujan debajo con ⧖ (ya hecho en N103).']
+ ],
+ follow:[
+  ['«conversación retomada»','Hoy queda en medio del flujo, donde se retomó. Propuesta: no mostrarla en una sesión que se sigue en vivo (el divisor sigue en las conversaciones de jwn, que sí tienen un reinicio que contar).'],
+  ['Notas de lo que Claude Code escribe','Interrupciones (⚠ Interrumpido), errores de la API en rojo, avisos de tareas y la compactación, como ya lee N104.'],
+  ['Pregunta tuya: el límite de 300','El nodo guarda los últimos 300 items; esta sesión tiene unos 633 en una hora. Opciones: <b>a)</b> dejarlo en 300; <b>b)</b> subirlo a 2.000 solo para sesiones seguidas (más peso por parche); <b>c)</b> 300 y cargar más al subir con el scroll. Mi recomendación: <b>c</b>.']
+ ]
+};
+function drawNotes(){
+  $('#notes').innerHTML=NOTES[S.scene].map(([h,t])=>'<div><b>'+h+'</b><br>'+t+'</div>').join('');
+  $('#hint').textContent=S.scene==='tools'?'Toca una fila agrupada (▸) para abrirla. «ahora» muestra lo de hoy.':S.scene==='live'?'El tiempo corre solo.':'';
+  $('#foldbar').style.display=(S.scene==='md')?'none':'flex';
+}
+function draw(){drawTerm();drawPhone();drawNotes();
+  document.querySelectorAll('#scenes [data-s]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.s===S.scene)));
+  document.querySelectorAll('#foldbar [data-f]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.f===S.fold)));
+}
+$('#scenes').onclick=e=>{const b=e.target.closest('button');if(!b)return;
+  if(b.dataset.s){S.scene=b.dataset.s;S.open.clear();draw()}
+  else if(b.id==='theme'){const d=document.documentElement;const dark=(d.dataset.theme||(matchMedia('(prefers-color-scheme: light)').matches?'light':'dark'))==='dark';d.dataset.theme=dark?'light':'dark'}};
+$('#foldbar').onclick=e=>{const b=e.target.closest('button');if(b&&b.dataset.f){S.fold=b.dataset.f;S.open.clear();draw()}};
+setInterval(()=>{if(S.scene==='live'){S.tick++;drawTerm();drawPhone()}},1000);
+draw();
+</script>

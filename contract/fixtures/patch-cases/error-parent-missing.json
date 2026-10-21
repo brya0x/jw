@@ -1,0 +1,14 @@
+{
+  "before": {
+    "rev": 1
+  },
+  "ops": [
+    {
+      "op": "add",
+      "path": "/a/b",
+      "value": 1
+    }
+  ],
+  "to": 2,
+  "error": true
+}

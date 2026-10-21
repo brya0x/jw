@@ -1,0 +1,44 @@
+{
+  "t": "snapshot",
+  "node": {
+    "id": "00000000-0000-4000-8000-0000000000c3",
+    "type": "pane",
+    "v": 1,
+    "epoch": "00000000-0000-4000-8000-000000000001",
+    "rev": 12,
+    "attention": [
+      {
+        "kind": "shell_done",
+        "node": "00000000-0000-4000-8000-0000000000c3",
+        "rev": 12,
+        "exit_code": 2
+      }
+    ],
+    "workspace": "00000000-0000-4000-8000-0000000000b2",
+    "title": "claude",
+    "shell": "/bin/zsh",
+    "cwd": "/home/u/notes",
+    "running": {
+      "argv": [
+        "claude",
+        "--resume"
+      ]
+    },
+    "screen": {
+      "rows": 4,
+      "cols": 40,
+      "lines": [
+        "> fix the failing test",
+        "",
+        "  Reading src/main.rs ...",
+        ""
+      ],
+      "cursor": {
+        "row": 3,
+        "col": 2,
+        "visible": true
+      },
+      "alt": true
+    }
+  }
+}

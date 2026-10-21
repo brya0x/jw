@@ -1,0 +1,179 @@
+<title>jwn Phone Link</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Terminal-first, the same character grid as the other terminal prototypes. The colours come from the chosen theme, so the whole screen changes with it. */
+:root{
+  --bg:#282c34; --panel:#21252b; --fg:#abb2bf; --dim:#5c6370; --line:#3e4451; --sel:#2c313a;
+  --blue:#61afef; --green:#98c379; --yellow:#e5c07b; --red:#e06c75; --magenta:#c678dd; --cyan:#56b6c2;
+  --page:#16181d; --ink:#c3c9d4; --mut:#7d8594;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}}
+:root[data-theme="light"]{--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.55 'IBM Plex Sans',system-ui,sans-serif;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px 40px}
+.wrap{max-width:1500px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
+h1{font:600 20px/1.2 var(--mono);margin:0}
+p{margin:0;max-width:72ch;color:var(--mut)}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button,select{font:12px var(--mono);color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;min-height:32px;cursor:pointer}
+button:hover{border-color:var(--blue)}
+:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto}
+.term pre{margin:0;font:13px/1.25 var(--mono);color:var(--fg);outline:none;width:max-content}
+.term pre:focus-visible{outline:none}
+.hint{font:12px var(--mono);color:var(--mut)}
+.decide{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px;color:var(--fg)}
+.decide h2{font:600 12px var(--mono);margin:0 0 8px;color:var(--mut)}
+.decide ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+.decide code{font:12px var(--mono)}
+.b{font-weight:700}.d{color:var(--dim)}.c-blue{color:var(--blue)}.c-green{color:var(--green)}.c-yellow{color:var(--yellow)}
+.c-red{color:var(--red)}.c-mag{color:var(--magenta)}.c-cyan{color:var(--cyan)}.c-line{color:var(--line)}
+.bg-sel{background:var(--sel)}.bg-panel{background:var(--panel)}
+.chip-green{background:var(--green);color:var(--panel)}.chip-blue{background:var(--blue);color:var(--panel)}.chip-yellow{background:var(--yellow);color:var(--panel)}.chip-red{background:var(--red);color:var(--panel)}.chip-mag{background:var(--magenta);color:var(--panel)}
+.cur{background:var(--fg);color:var(--bg)}
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&family=JetBrains+Mono:wght@400;700&display=swap">
+
+<div class="wrap">
+  <div>
+    <h1>Pairing the phone, from inside jwn</h1>
+    <p>Today pairing is a separate command (<code>jwn pair</code>) in another terminal. Here it is a box of the terminal client: press <code>m</code> (after <code>^␣</code> when a pane has the keyboard, like every command of the client). Click the terminal or tab into it; the keys are on its status bar. The buttons simulate what the PC and the phone do.</p>
+  </div>
+  <div class="bar" aria-label="Simulate">
+    <button id="evAsk" type="button">El teléfono pide emparejarse</button>
+    <button id="evNoTunnel" type="button">No hay cloudflared (solo red local)</button>
+    <button id="evSlow" type="button">El túnel tarda en abrir</button>
+    <button id="evFail" type="button">Falla al encender</button>
+    <button id="evReset" type="button">Reset</button>
+  </div>
+  <div class="term"><pre id="scr" tabindex="0" aria-label="Terminal client. m opens the phone box."></pre></div>
+  <div class="hint" id="keys">j/k workspace · h/l panel · m teléfono · q salir</div>
+
+  <div class="decide">
+    <h2>To approve</h2>
+    <ol>
+      <li><b>Open: <code>m</code>.</b> It turns the phone link on (the same as <code>jwn pair</code>) and shows a box: the QR, the link, the local address and the tunnel when there is one. While it opens (a tunnel can take up to a minute) the box says so and the client keeps working. <code>esc</code> closes the box and leaves the link on; <code>m</code> shows it again; <code>s</code> turns the link off; <code>c</code> copies the link.</li>
+      <li><b>The pairing question comes to you.</b> When a phone scans and asks to pair, the box opens by itself, even if you had closed it: «¿Emparejar «Pixel 8»? El teléfono muestra el código 482 913», and only <code>y</code> accepts, any other key refuses. Then the box shows the link again, with how many phones are paired.</li>
+      <li><b>No tunnel is not an error.</b> Without <code>cloudflared</code> the box says «sin túnel: solo desde tu red» and the local address and the QR still work. A failure to turn the link on is a red box with the reason.</li>
+      <li><b>The command <code>jwn pair</code> stays</b> for use without the terminal client (and <code>jwn devices</code>, <code>jwn revoke</code>).</li>
+      <li><b>Not here:</b> listing or revoking phones from the box (<code>jwn devices</code> and <code>jwn revoke</code> do that).</li>
+    </ol>
+  </div>
+</div>
+
+<script>
+(function(){
+const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const COLS = 112, ROWS = 28, SB = 28;
+let S, g;
+function reset(){
+  S = { sel:2, focus:0, link:'off', box:false, paired:0, tunnel:true, slow:false, fail:false, ask:null, msg:'', tick:0, timer:null,
+        ws:[ {name:'notes', kind:'folder', path:'~/notes', panes:1}, {name:'api', kind:'folder', path:'~/ws/api', panes:1},
+             {name:'feat/login', kind:'worktree', project:'api', path:'~/ws/api-wt/feat-login', panes:2} ] };
+}
+const URI = 'jwn://192.168.1.20:7871/q4Zt8mWk2Rn0pXvB?fp=9f2c41d07ab35e81c6d4a0f7b2e93d58a1c07f64be12d9835c0a4e7f61b8d203&t=quiet-river-4821.trycloudflare.com';
+/* a fake but stable QR pattern: 25 x 25 modules, drawn two rows to a line with half blocks */
+const N = 25;
+const finder = (r, c) => { const at = (a, b) => r >= a && r < a + 7 && c >= b && c < b + 7;
+  const o = at(0, 0) ? [0, 0] : at(0, N - 7) ? [0, N - 7] : at(N - 7, 0) ? [N - 7, 0] : null; if (!o) return null;
+  const ar = r - o[0], ac = c - o[1]; return ar === 0 || ar === 6 || ac === 0 || ac === 6 || (ar >= 2 && ar <= 4 && ac >= 2 && ac <= 4); };
+const mod = (r, c) => finder(r, c) ?? (((r * 7 + c * 13 + r * c) % 5) < 2);
+const qrRows = () => { const out = []; for (let r = 0; r < N; r += 2){ let line = ''; for (let c = 0; c < N; c++){ const a = mod(r, c), b = r + 1 < N ? mod(r + 1, c) : false; line += a && b ? '█' : a ? '▀' : b ? '▄' : ' '; } out.push(line); } return out; };
+
+const grid = () => ({cells:Array.from({length:ROWS}, () => Array.from({length:COLS}, () => [' ', '']))});
+const put = (x, y, text, cls = '') => { if (y < 0 || y >= ROWS) return; [...text].forEach((ch, i) => { const cx = x + i; if (cx >= 0 && cx < COLS) g.cells[y][cx] = [ch, cls]; }); };
+const tint = (x, y, w, cls) => { for (let i = 0; i < w; i++) if (x + i < COLS && y < ROWS) g.cells[y][x + i] = [g.cells[y][x + i][0], (g.cells[y][x + i][1] + ' ' + cls).trim()]; };
+const clip = (t, n) => { const a = [...t]; return a.length <= n ? t : a.slice(0, Math.max(0, n - 1)).join('') + '…'; };
+function box(x, y, w, h, title, cls){
+  put(x, y, '╭' + '─'.repeat(w - 2) + '╮', cls); put(x, y + h - 1, '╰' + '─'.repeat(w - 2) + '╯', cls);
+  for (let i = 1; i < h - 1; i++){ put(x, y + i, '│', cls); put(x + w - 1, y + i, '│', cls); }
+  if (title) put(x + 2, y, ' ' + title + ' ', 'b');
+}
+function paint(){
+  document.getElementById('scr').innerHTML = g.cells.map(r => { let out = '', cur = null, buf = '';
+    for (const [ch, cls] of r){ if (cls !== cur){ if (buf) out += cur ? `<span class="${cur}">${buf}</span>` : buf; buf = ''; cur = cls; } buf += esc(ch); }
+    if (buf) out += cur ? `<span class="${cur}">${buf}</span>` : buf; return out; }).join('\n');
+}
+const hint = () => !S.box ? 'j/k workspace · h/l panel · m teléfono · q salir'
+  : S.ask ? 'y emparejar · cualquier otra tecla rechaza'
+  : S.link === 'starting' ? 'esc cerrar (el enlace sigue abriéndose)' : S.link === 'error' ? 'cualquier tecla para seguir'
+  : 'c copiar enlace · s apagar el enlace · esc cerrar';
+function modal(){
+  const w = 78, bx = SB + 1 + Math.floor((COLS - SB - 1 - w) / 2), by = 3;
+  let lines = [], h, cls = 'c-mag', title = 'teléfono';
+  if (S.ask){
+    h = 9; lines = [[`¿Emparejar «${S.ask.name}»?`, 'b'], ['', ''], [`El teléfono muestra el código  ${S.ask.code}`, ''], ['Solo si es el mismo que ves en la pantalla del teléfono.', 'd'], ['', ''], ['y emparejar · cualquier otra tecla rechaza', 'd']];
+    cls = 'c-yellow'; title = 'emparejar un teléfono';
+  } else if (S.link === 'starting'){
+    h = 8; lines = [['Encendiendo el enlace' + '.'.repeat(1 + S.tick % 3), ''], [S.slow ? 'El túnel de Cloudflare puede tardar hasta un minuto en abrir.' : 'Un momento…', 'd'], ['', ''], ['esc cerrar (el enlace sigue abriéndose)', 'd']];
+  } else if (S.link === 'error'){
+    h = 8; lines = [['No se pudo encender el enlace con el teléfono:', ''], ['cannot bind the private listener: address in use', 'c-red'], ['', ''], ['cualquier tecla para seguir', 'd']]; cls = 'c-red';
+  } else {
+    const qr = qrRows(); h = qr.length + 6;
+    for (let i = 0; i < Math.max(qr.length, 9); i++) lines.push([ '', '']);
+    lines.push(['', ''], ['c copiar enlace · s apagar el enlace · esc cerrar', 'd']);
+  }
+  for (let r = 0; r < h; r++) put(bx, by + r, ' '.repeat(w), 'bg-panel');
+  box(bx, by, w, h, title, cls);
+  if (!(S.link === 'ready' && !S.ask)) { lines.forEach(([t, c], i) => put(bx + 3, by + 2 + i, clip(t, w - 6), (c || '') + ' bg-panel')); return; }
+  qrRows().forEach((l, i) => put(bx + 3, by + 2 + i, l, 'bg-panel'));
+  const tx = bx + 3 + N + 4;
+  const t = [['Escanea el código con la app', 'b'], ['o pega este enlace en «+ emparejar otro PC»:', 'd'], [clip(URI, w - (tx - bx) - 3), 'c-cyan'], ['', ''],
+    ['red local   192.168.1.20:7871', ''], [S.tunnel ? 'túnel       quiet-river-4821.trycloudflare.com' : 'túnel       sin túnel: solo desde tu red', S.tunnel ? '' : 'c-yellow'], ['', ''],
+    [S.paired ? `${S.paired} ${S.paired === 1 ? 'teléfono emparejado' : 'teléfonos emparejados'}` : 'ningún teléfono emparejado todavía', 'd'], ['Esperando al teléfono…', 'd']];
+  t.forEach(([s, c], i) => put(tx, by + 2 + i, clip(s, w - (tx - bx) - 3), (c || '') + ' bg-panel'));
+  put(bx + 3, by + h - 2, 'c copiar enlace · s apagar el enlace · esc cerrar', 'd bg-panel');
+}
+function draw(){
+  g = grid();
+  for (let y = 0; y < ROWS - 1; y++) put(SB - 1, y, '│', 'c-line');
+  put(1, 0, 'demo', 'b d'); put(SB - 14, 0, '^␣ s sessions', 'd');
+  S.ws.forEach((w, i) => { const y = 2 + i, on = i === S.sel, name = w.kind === 'worktree' ? '↳ ' + w.name : w.name;
+    put(0, y, String(i + 1), 'd'); put(2, y, '●', 'c-green'); put(4, y, clip(name, SB - 10), on ? 'b c-blue' : ''); if (on) tint(0, y, SB - 1, 'bg-sel'); });
+  put(1, ROWS - 3, '! permiso  ? pregunta', 'd'); put(1, ROWS - 2, S.link === 'ready' ? '● teléfono · m' : 'm teléfono', S.link === 'ready' ? 'c-mag' : 'd');
+  const w = S.ws[S.sel], px = SB + 1, pw = COLS - px;
+  put(px + 1, 0, w.name, 'b c-blue'); put(COLS - 1 - w.path.length, 0, w.path, 'd');
+  const half = Math.floor(pw / 2), rects = w.panes === 1 ? [[0, pw]] : [[0, half], [half, pw - half]];
+  rects.forEach(([dx, bw], i) => { box(px + dx, 1, bw, ROWS - 2, 'zsh', i === S.focus && !S.box ? 'c-blue' : 'c-line'); put(px + dx + 2, 2, '▌ ' + w.path, 'c-green'); put(px + dx + 4, 3, '❯ git status', 'b'); put(px + dx + 4, 4, 'On branch main · nada por commitear', 'd'); });
+  for (let x = 0; x < COLS; x++) g.cells[ROWS - 1][x] = [' ', 'bg-panel'];
+  const chip = S.box ? (S.ask ? [' PREGUNTA ', 'chip-yellow b'] : S.link === 'error' ? [' ERROR ', 'chip-red b'] : [' TELÉFONO ', 'chip-mag b']) : [' MOVE ', 'chip-blue b'];
+  put(0, ROWS - 1, chip[0], chip[1]);
+  put(chip[0].length + 1, ROWS - 1, clip(S.msg || hint(), COLS - 14), (S.msg ? 'c-green' : 'd') + ' bg-panel');
+  if (S.box) modal();
+  paint(); document.getElementById('keys').textContent = hint();
+}
+const flash = t => { S.msg = t; draw(); clearTimeout(flash.t); flash.t = setTimeout(() => { S.msg = ''; draw(); }, 1800); };
+function turnOn(){
+  S.link = 'starting'; S.box = true; draw();
+  clearInterval(S.timer); S.timer = setInterval(() => { S.tick++; if (S.link === 'starting') draw(); }, 400);
+  setTimeout(() => { clearInterval(S.timer); if (S.fail){ S.link = 'error'; S.box = true; } else { S.link = 'ready'; if (!S.box) S.msg = 'enlace listo · m'; } draw(); }, S.slow ? 3500 : 900);
+}
+function key(e){
+  const k = e.key;
+  if (S.box){
+    if (S.ask){ const yes = k === 'y'; if (['Shift','Control','Alt','Meta'].includes(k)) return true; S.paired += yes ? 1 : 0; const n = S.ask.name; S.ask = null; S.box = true; flash(yes ? `emparejado «${n}»` : `rechazado «${n}»`); return true; }
+    if (S.link === 'error'){ S.box = false; S.link = 'off'; draw(); return true; }
+    if (k === 'Escape'){ S.box = false; draw(); return true; }
+    if (S.link === 'ready' && k === 's'){ S.link = 'off'; S.box = false; flash('el enlace con el teléfono está apagado'); return true; }
+    if (S.link === 'ready' && k === 'c'){ flash('enlace copiado'); return true; }
+    return ['s','c','j','k','h','l','m'].includes(k);
+  }
+  if (k === 'j'){ S.sel = Math.min(S.sel + 1, S.ws.length - 1); S.focus = 0; }
+  else if (k === 'k'){ S.sel = Math.max(S.sel - 1, 0); S.focus = 0; }
+  else if (k === 'm'){ if (S.link === 'ready'){ S.box = true; draw(); } else if (S.link === 'starting'){ S.box = true; draw(); } else turnOn(); return true; }
+  else return false;
+  draw(); return true;
+}
+const scr = document.getElementById('scr');
+scr.addEventListener('keydown', e => { if (e.ctrlKey || e.metaKey) return; if (key(e)) e.preventDefault(); });
+scr.addEventListener('click', () => scr.focus());
+document.getElementById('evAsk').onclick = () => { if (S.link === 'off') turnOn(); const go = () => { if (S.link !== 'ready'){ setTimeout(go, 400); return; } S.ask = {name:'Pixel 8 de Bryan', code:'482 913'}; S.box = true; draw(); }; go(); scr.focus(); };
+document.getElementById('evNoTunnel').onclick = () => { S.tunnel = !S.tunnel; flash(S.tunnel ? 'hay túnel' : 'sin cloudflared: solo red local'); scr.focus(); };
+document.getElementById('evSlow').onclick = () => { S.slow = !S.slow; flash(S.slow ? 'el túnel tardará en abrir' : 'el túnel abre rápido'); scr.focus(); };
+document.getElementById('evFail').onclick = () => { S.fail = !S.fail; flash(S.fail ? 'el próximo encendido falla' : 'el encendido funciona'); scr.focus(); };
+document.getElementById('evReset').onclick = () => { clearInterval(S.timer); reset(); draw(); scr.focus(); };
+reset(); draw();
+})();
+</script>

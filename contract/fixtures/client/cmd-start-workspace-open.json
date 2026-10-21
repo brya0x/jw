@@ -1,0 +1,9 @@
+{
+  "t": "cmd",
+  "id": "c54",
+  "cmd": {
+    "cmd": "start_workspace",
+    "workspace": "00000000-0000-4000-8000-0000000000b1",
+    "open": "claude"
+  }
+}

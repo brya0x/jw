@@ -1,0 +1,18 @@
+{
+  "t": "reply",
+  "id": "c52",
+  "ok": true,
+  "result": {
+    "title": "files.rs",
+    "path": "/work/proj/crates/daemon/src/files.rs",
+    "size": 214,
+    "truncated": true,
+    "lines": [
+      [{ "t": "pub", "k": "kw" }, { "t": " " }, { "t": "fn", "k": "kw" }, { "t": " " }, { "t": "clean_rel", "k": "fn" }, { "t": "(path: " }, { "t": "Option", "k": "ty" }, { "t": "<&" }, { "t": "str", "k": "ty" }, { "t": ">) {" }],
+      [{ "t": "    " }, { "t": "// a path that goes no higher", "k": "cm" }],
+      [{ "t": "    let name = " }, { "t": "\"añadir\"", "k": "str" }, { "t": "; " }, { "t": "42", "k": "num" }, { "t": " " }, { "t": "#[inline]", "k": "attr" }, { "t": " " }, { "t": "x", "k": "from-the-future" }],
+      [],
+      [{ "t": "}" }]
+    ]
+  }
+}

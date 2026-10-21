@@ -1,0 +1,244 @@
+{
+  "t": "snapshot",
+  "node": {
+    "id": "00000000-0000-4000-8000-0000000000e1",
+    "type": "conversation",
+    "v": 1,
+    "epoch": "00000000-0000-4000-8000-000000000001",
+    "rev": 12,
+    "attention": [
+      {
+        "kind": "permission",
+        "node": "00000000-0000-4000-8000-0000000000c1",
+        "rev": 12
+      }
+    ],
+    "pane": "00000000-0000-4000-8000-0000000000c1",
+    "session": "2cab1f5a-3d20-4cd2-9d13-485b39b26147",
+    "name": "arregla el test que falla e…",
+    "accent": "magenta",
+    "model": "sonnet-5.5",
+    "effort": "high",
+    "mode": "manual",
+    "status": "asking",
+    "since": 1792110000000,
+    "first": 3,
+    "items": [
+      {
+        "t": "user",
+        "text": "arregla el test que falla en auth::expired",
+        "images": 1
+      },
+      {
+        "t": "text",
+        "text": "Voy a mirar el test y el código que prueba.",
+        "live": true
+      },
+      {
+        "t": "tool",
+        "id": "toolu_01",
+        "name": "Read",
+        "arg": "src/auth.rs",
+        "state": "ok",
+        "summary": "Leídas 142 líneas",
+        "output": [
+          "pub fn verify(token: &str) -> bool {",
+          "    …"
+        ]
+      },
+      {
+        "t": "tool",
+        "id": "toolu_02",
+        "name": "Edit",
+        "arg": "src/auth.rs",
+        "state": "ask",
+        "diff": [
+          {
+            "n": 41,
+            "sign": "-",
+            "text": "    if claims.exp < now {"
+          },
+          {
+            "n": 41,
+            "sign": "+",
+            "text": "    if claims.exp <= now {"
+          },
+          {
+            "sign": " ",
+            "text": "        return false;"
+          }
+        ]
+      },
+      {
+        "t": "tool",
+        "id": "toolu_03",
+        "name": "Artifact",
+        "arg": "Informe de pruebas",
+        "state": "ok",
+        "summary": "Publicado",
+        "url": "https://claude.ai/artifact/6HbvGgivzfNgDnkzpDjf4Y",
+        "by": "el móvil"
+      },
+      {
+        "t": "agent",
+        "id": "a3865d",
+        "name": "Explore",
+        "description": "buscar los usos de verify",
+        "state": "ok",
+        "tools": 3,
+        "tokens": 22024,
+        "ms": 6000,
+        "last": "Read",
+        "steps": [
+          "Grep verify",
+          "Read src/auth.rs",
+          "Read src/session.rs"
+        ],
+        "prompt": "Busca todos los usos de verify y di qué módulos dependen de él. No edites nada."
+      },
+      {
+        "t": "shell",
+        "command": "git status",
+        "state": "ok",
+        "output": [
+          "On branch feat/login",
+          "nothing to commit, working tree clean"
+        ]
+      },
+      {
+        "t": "out",
+        "lines": [
+          "contexto 12 % · 24k de 200k"
+        ]
+      },
+      {
+        "t": "note",
+        "text": "Interrumpido por ti",
+        "tone": "warn"
+      },
+      {
+        "t": "result",
+        "ms": 11000,
+        "tools": 3,
+        "cost": 60000
+      },
+      {
+        "t": "divider",
+        "text": "el daemon se reinició · 20:10",
+        "kind": "restart"
+      }
+    ],
+    "ask": {
+      "id": "req-1",
+      "kind": "permission",
+      "tool": "Edit",
+      "title": "Editar src/auth.rs",
+      "diff": [
+        {
+          "n": 41,
+          "sign": "-",
+          "text": "    if claims.exp < now {"
+        },
+        {
+          "n": 41,
+          "sign": "+",
+          "text": "    if claims.exp <= now {"
+        }
+      ],
+      "options": [
+        {
+          "key": "yes",
+          "label": "Sí"
+        },
+        {
+          "key": "session",
+          "label": "Sí, y no volver a preguntar por ediciones en esta sesión"
+        },
+        {
+          "key": "no",
+          "label": "No, y decirle a Claude qué hacer distinto"
+        }
+      ]
+    },
+    "queue": [
+      "y luego corre los tests"
+    ],
+    "tasks": [
+      {
+        "id": "bs02u3",
+        "kind": "bash",
+        "label": "cargo build --release",
+        "state": "run",
+        "started": 1792110001000,
+        "info": "en curso"
+      },
+      {
+        "id": "w1c9",
+        "kind": "loop",
+        "label": "revisar el CI cada 5 min",
+        "state": "stopped",
+        "started": 1792110000000
+      }
+    ],
+    "todos": [
+      {
+        "text": "Buscar los usos de verify",
+        "done": true
+      },
+      {
+        "text": "Compilar",
+        "done": false
+      }
+    ],
+    "artifacts": [
+      {
+        "title": "Informe de pruebas",
+        "url": "https://claude.ai/artifact/6HbvGgivzfNgDnkzpDjf4Y"
+      }
+    ],
+    "commands": [
+      {
+        "name": "/exit",
+        "source": "jwn",
+        "kind": "local",
+        "description": "salir de la conversación"
+      },
+      {
+        "name": "/context",
+        "source": "claude",
+        "kind": "text"
+      },
+      {
+        "name": "/deploy",
+        "source": "project",
+        "kind": "prompt",
+        "description": "publicar la rama en staging"
+      },
+      {
+        "name": "/doctor",
+        "source": "claude",
+        "kind": "screen"
+      },
+      {
+        "name": "/tasks",
+        "source": "jwn",
+        "kind": "panel"
+      },
+      {
+        "name": "/vercel:deploy",
+        "source": "plugin",
+        "kind": "prompt"
+      },
+      {
+        "name": "/jwn",
+        "source": "skill",
+        "kind": "prompt"
+      }
+    ],
+    "cost": 60000,
+    "limits": {
+      "five_hour": 62,
+      "seven_day": 31
+    }
+  }
+}

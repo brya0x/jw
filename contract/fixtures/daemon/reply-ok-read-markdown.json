@@ -1,0 +1,51 @@
+{
+  "t": "reply",
+  "id": "c51",
+  "ok": true,
+  "result": {
+    "title": "Plan: pruebas del módulo auth",
+    "path": "/work/proj/docs/plan.md",
+    "blocks": [
+      { "t": "heading", "level": 1, "text": [{ "t": "Plan: pruebas del módulo auth" }] },
+      {
+        "t": "para",
+        "text": [
+          { "t": "El token expira a los " },
+          { "t": "30 minutos", "b": true },
+          { "t": ", pero " },
+          { "t": "verify()", "code": true },
+          { "t": " no mira el reloj. Ver " },
+          { "t": "docs/auth.md", "href": "docs/auth.md" },
+          { "t": "." }
+        ]
+      },
+      { "t": "quote", "blocks": [{ "t": "para", "text": [{ "t": "No cambiar la firma pública.", "i": true }] }] },
+      {
+        "t": "list",
+        "start": 1,
+        "items": [
+          { "blocks": [{ "t": "para", "text": [{ "t": "Leer el reloj a través de " }, { "t": "Clock", "code": true }] }] },
+          {
+            "blocks": [
+              { "t": "para", "text": [{ "t": "Probar:" }] },
+              {
+                "t": "list",
+                "items": [
+                  { "task": true, "blocks": [{ "t": "para", "text": [{ "t": "29 min: vale" }] }] },
+                  { "task": false, "blocks": [{ "t": "para", "text": [{ "t": "31 min: se rechaza" }] }] }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      { "t": "code", "lang": "rust", "text": "pub trait Clock {\n    fn now(&self) -> u64;\n}\n" },
+      {
+        "t": "table",
+        "head": [[{ "t": "archivo" }], [{ "t": "cambio" }]],
+        "rows": [[[{ "t": "src/auth.rs" }], [{ "t": "Clock", "code": true }]]]
+      },
+      { "t": "rule" }
+    ]
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "t": "cmd",
+  "id": "c2",
+  "cmd": {
+    "cmd": "open_folder",
+    "path": "/home/u/notes"
+  }
+}

@@ -1,8 +1,0 @@
-size 5 20
-cursor 2 4 hidden=0
-modes alt=1 appcursor=0 appkeypad=0 paste=0 mouse=none/default
-row 0 |inside alt|
-row 1 ||
-row 2 |  zz|
-row 3 ||
-row 4 ||

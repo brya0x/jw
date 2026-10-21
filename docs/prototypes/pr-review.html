@@ -1,0 +1,256 @@
+<title>jwn Review a pull request</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Terminal-first, the same character grid as the other terminal prototypes (tui-open.html). */
+:root{
+  --bg:#282c34; --panel:#21252b; --fg:#abb2bf; --dim:#5c6370; --line:#3e4451; --sel:#2c313a;
+  --blue:#61afef; --green:#98c379; --yellow:#e5c07b; --red:#e06c75; --magenta:#c678dd; --cyan:#56b6c2;
+  --page:#16181d; --ink:#c3c9d4; --mut:#7d8594;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}}
+:root[data-theme="light"]{--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.55 'IBM Plex Sans',system-ui,sans-serif;padding:24px max(16px,env(safe-area-inset-right,0px)) 40px max(16px,env(safe-area-inset-left,0px))}
+.wrap{max-width:1300px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
+h1{font:600 20px/1.2 var(--mono);margin:0}
+p{margin:0;max-width:78ch;color:var(--mut)}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.lbl{font:12px var(--mono);color:var(--mut);display:flex;gap:6px;align-items:center}
+button,select{font:12px var(--mono);color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;min-height:32px;cursor:pointer}
+button:hover{border-color:var(--blue)}
+:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto}
+.term pre{margin:0;font:13px/1.25 var(--mono);color:var(--fg);outline:none;width:max-content}
+.hint{font:12px var(--mono);color:var(--mut)}
+.decide{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px;color:var(--fg)}
+.decide h2{font:600 12px var(--mono);margin:0 0 8px;color:var(--mut)}
+.decide ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+.decide code{font:12px var(--mono)}
+.dim{color:var(--dim)}.blue{color:var(--blue)}.green{color:var(--green)}.yellow{color:var(--yellow)}.red{color:var(--red)}.mag{color:var(--magenta)}.cyan{color:var(--cyan)}.b{font-weight:700}
+.sel{background:var(--sel)}.pn{background:var(--panel)}
+</style>
+
+<div class="wrap">
+  <div>
+    <h1>Reviewing a pull request: <code>^␣ R</code></h1>
+    <p>Click the terminal (or tab into it). Press <code>^␣</code> (here: <code>Ctrl+Space</code>, or just <code>R</code> from the workspace list) to open the list of the project's open pull requests; <code>↵</code> makes a worktree of the PR, opened as the agent beside the diff. The simulation bar changes what <code>gh</code> answers.</p>
+  </div>
+  <div class="bar" aria-label="Simulate">
+    <button id="evReset" type="button">Reset</button>
+    <label class="lbl">gh <select id="evGh" aria-label="What gh answers">
+      <option value="ok">works</option>
+      <option value="slow">is slow (a loading row)</option>
+      <option value="missing">is not installed</option>
+      <option value="auth">is not logged in</option>
+      <option value="empty">no open pull requests</option>
+    </select></label>
+    <label class="lbl"><input type="checkbox" id="evFetch"> the fetch fails</label>
+  </div>
+  <div class="term"><pre id="scr" tabindex="0" aria-label="Terminal client. R opens the pull request list."></pre></div>
+  <div class="hint" id="keys"></div>
+
+  <div class="decide">
+    <h2>To approve</h2>
+    <ol>
+      <li><b>The list: <code>^␣ R</code>.</b> Open PRs of this project (the one you are in), most recently updated first, with number, title, author, size and review state. Type to filter (number, title, author, branch). <code>↑</code>/<code>↓</code> move; under the list, the selected PR's description and changed files. <code>m</code> with nothing typed shows only the PRs that ask for <b>your</b> review (again: all). <code>o</code> opens the PR in the browser. <code>esc</code> closes. If <code>gh</code> is missing, not logged in, or the project has no GitHub remote, the list does not open and the status bar says gh's reason.</li>
+      <li><b>What <code>↵</code> makes.</b> It fetches the PR's head and its base branch, makes the worktree <code>review-&lt;n&gt;</code> (branch <code>review/pr-&lt;n&gt;</code>) at the head, runs the project's <code>setup</code> as <code>w</code> does, and opens it as <b><code>|agent|diff|</code></b>: the agent on the left and the diff of the PR on the right, both at once (try <code>tab</code> to move between them, <code>↑</code>/<code>↓</code> in the diff to change file). The sidebar shows <code>⎇ #142</code> beside the name. A fetch that fails makes nothing and says why.</li>
+      <li><b>The diff is a pane here, not a full screen.</b> It compares against the PR's base (<code>origin/&lt;base&gt;</code>), General scope: that is the PR. This is the point-5 change («the diff view is not full size») shown first in the review workspace; the diff screen of <code>d</code> stays for every other workspace.</li>
+      <li><b>The agent only answers questions about the diff, and nothing is sent for it.</b> It opens idle, as Claude's conversation always does. jwn does <b>not</b> brief it automatically: the field shows a suggested first question in grey (<code>→</code> or <code>tab</code> takes it, as the suggestion Claude proposes does) and <code>↵</code> with the field empty sends nothing. The PR's description, comments and reviews are written to a file in jwn's state folder so the agent can read them when you ask; the agent has no instruction to edit, commit or push. jwn calls <code>gh</code> only to read.</li>
+      <li><b>Picking a PR that already has a review:</b> the head is fetched again and you are taken to it; nothing is sent. A review worktree with changes of yours is left as it is and says so.</li>
+      <li><b>Removing it</b> goes through the same checks as any worktree; a review branch with no commits beyond the fetched head counts as having no unpushed work.</li>
+      <li><b>Not here:</b> the phone (the list of PRs and the review on the phone are a part of their own); commenting on the PR from jwn; sending selected lines of the diff to the agent as a reference (asked for on 2026-10-19, its own part); line wrapping in the diff.</li>
+    </ol>
+  </div>
+</div>
+
+<script>
+(function(){
+const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const COLS = 112, ROWS = 28, SB = 28;
+const PRS = [
+  {n:142, t:'Add rate limiting to the public API', a:'maria', br:'maria/rate-limit', base:'main', add:312, del:41, st:'review', me:true, upd:'hace 2 h',
+   d:['Adds a token bucket per API key (100 req/min by default).','Returns 429 with Retry-After. Configurable in api.toml.','Closes #98.'],
+   f:[['src/limit.rs','+188 -0'],['src/server.rs','+54 -12'],['src/config.rs','+31 -9'],['tests/limit.rs','+39 -0'],['api.toml','+0 -20']]},
+  {n:139, t:'Fix off-by-one in pagination cursor', a:'luis', br:'luis/cursor', base:'main', add:9, del:4, st:'approved', me:false, upd:'hace 5 h',
+   d:['The last page repeated its final item when the total was a multiple of the page size.'],
+   f:[['src/page.rs','+7 -3'],['tests/page.rs','+2 -1']]},
+  {n:137, t:'WIP: move jobs to the queue crate', a:'bryan', br:'bryan/queue', base:'main', add:1204, del:733, st:'draft', me:false, upd:'ayer',
+   d:['Draft. Do not review yet.'], f:[['src/jobs.rs','+640 -402'],['Cargo.toml','+8 -2']]},
+  {n:131, t:'Update dependencies', a:'dependabot', br:'dependabot/cargo/serde-1.0.230', base:'main', add:42, del:42, st:'changes', me:true, upd:'hace 3 días',
+   d:['Bumps serde from 1.0.219 to 1.0.230.'], f:[['Cargo.lock','+40 -40'],['Cargo.toml','+2 -2']]},
+];
+const DIFFS = {
+  'src/limit.rs': ['@@ -0,0 +1,188 @@','+pub struct Bucket {','+    tokens: f64,','+    last: Instant,','+}','+','+impl Bucket {','+    pub fn take(&mut self, now: Instant) -> bool {','+        self.refill(now);','+        if self.tokens >= 1.0 { self.tokens -= 1.0; true } else { false }','+    }','+}'],
+  'src/server.rs': ['@@ -41,7 +41,12 @@ async fn handle(req: Request)','     let key = api_key(&req)?;','-    let resp = route(req).await;','+    if !limits.get(&key).take(Instant::now()) {','+        return Response::too_many(retry_after(&key));','+    }','+    let resp = route(req).await;','     Ok(resp)'],
+  'src/config.rs': ['@@ -12,6 +12,10 @@ pub struct Config','     pub port: u16,','+    /// Requests per minute for each key.','+    #[serde(default = "default_limit")]','+    pub limit: u32,'],
+  'tests/limit.rs': ['@@ -0,0 +1,39 @@','+#[test]','+fn a_bucket_refills_over_time() {','+    let mut b = Bucket::new(2, 60);','+    assert!(b.take(t0()) && b.take(t0()) && !b.take(t0()));','+}'],
+  'api.toml': ['@@ -3,20 +3,0 @@','-[limits]','-# old fixed window, replaced by the bucket','-window = 60'],
+};
+const STATE = {approved:['✓ aprobado','green'], review:['● pide tu revisión','yellow'], changes:['✗ cambios pedidos','red'], draft:['◌ borrador','dim']};
+let S, g, T = [];
+const ghSel = document.getElementById('evGh'), fetchFail = document.getElementById('evFetch');
+const reset = () => { T.forEach(clearTimeout); T = []; S = {focus:'agent', fsel:0, pick:null, ws:[['jw','folder'],['feat/next','wt'],['fix/layout','wt']], at:1, review:null, status:'', ask:null, chat:null}; };
+reset();
+const rows = () => { const q = S.pick.q.toLowerCase(); return PRS.filter(p => (!S.pick.mine || p.me) && (!q || `${p.n} ${p.t} ${p.a} ${p.br}`.toLowerCase().includes(q))); };
+const pad = (s, n) => { s = String(s); return s.length > n ? s.slice(0, n - 1) + '…' : s + ' '.repeat(n - s.length); };
+const C = (cls, s) => `<span class="${cls}">${esc(s)}</span>`;
+
+function draw(){
+  const grid = Array.from({length: ROWS}, () => Array.from({length: COLS}, () => [' ', '']));
+  const put = (x, y, s, cls) => { [...s].forEach((c, i) => { if (y >= 0 && y < ROWS && x + i < COLS) grid[y][x + i] = [c, cls || '']; }); };
+  const fill = (x, y, w, h, cls) => { for (let r = y; r < y + h; r++) for (let c = x; c < x + w; c++) if (r < ROWS && c < COLS) grid[r][c] = [' ', cls]; };
+  // sidebar
+  put(1, 0, 'jw', 'dim b');
+  S.ws.forEach(([name, kind], i) => {
+    const y = 2 + i, on = i === S.at;
+    if (on) fill(0, y, SB - 1, 1, 'sel');
+    put(0, y, String(i + 1), 'dim'); if (kind === 'wt') put(4, y, '↳', 'dim');
+    put(kind === 'wt' ? 6 : 2, y, '●', 'green');
+    const isRev = name.startsWith('review-');
+    put(kind === 'wt' ? 8 : 4, y, name, on ? 'blue b' : '');
+    if (isRev) put(SB - 9, y, '⎇ #' + name.slice(7), 'cyan');
+  });
+  for (let y = 0; y < ROWS - 1; y++) put(SB - 1, y, '│', 'dim');
+  ['! permiso  ? pregunta', '◆ plan   ❯ comando', '✓ listo  ⚑ merge  ✗ falló'].forEach((l, i) => put(1, ROWS - 5 + i, l, 'dim'));
+  // main area: the conversation of the workspace
+  const [wname] = S.ws[S.at];
+  put(SB + 2, 0, 'jw/', 'dim'); put(SB + 5, 0, wname, 'b');
+  const rv = S.review;
+  if (rv && S.ws[S.at][0].startsWith('review-')) {
+    // |agent|diff|: the agent for questions about the diff, the diff of the PR against its base
+    const ax = SB + 1, aw = 38, dx = ax + aw, dw = COLS - dx - 1, top = 1, hh = ROWS - 3;
+    const box = (x, w, title, on) => { for (let c = x; c < x + w; c++){ put(c, top, '─', on ? 'blue' : 'dim'); put(c, top + hh - 1, '─', on ? 'blue' : 'dim'); } for (let r = top; r < top + hh; r++){ put(x, r, '│', on ? 'blue' : 'dim'); put(x + w - 1, r, '│', on ? 'blue' : 'dim'); } put(x + 2, top, ' ' + title + ' ', on ? 'blue b' : 'dim b'); };
+    box(ax, aw, 'claude · pregunta sobre el diff', S.focus === 'agent');
+    put(ax + 2, top + 2, 'Estoy aquí para ayudarte con', 'dim'); put(ax + 2, top + 3, 'preguntas sobre el diff de #' + rv.n + '.', 'dim');
+    put(ax + 2, top + 4, 'Solo leo: no edito ni hago push.', 'dim');
+    fill(ax + 1, top + hh - 4, aw - 2, 3, 'pn');
+    put(ax + 2, top + hh - 3, '❯ ', 'green b');
+    if (S.sugg) put(ax + 4, top + hh - 3, 'Revisa el PR #' + rv.n + ' y dime los riesgos', 'dim'); else put(ax + 4, top + hh - 3, S.typed || 'pregunta sobre el diff', S.typed ? '' : 'dim');
+    put(ax + 2, top + hh - 2, S.sugg ? '→ toma la sugerencia · ↵ no manda nada' : 'manual · haiku 5.5', 'dim');
+    box(dx, dw, 'diff · #' + rv.n + ' contra origin/' + rv.base + ' · General', S.focus === 'diff');
+    const files = rv.f;
+    files.forEach(([fn, st], i) => { const y = top + 2 + i, on = i === S.fsel; if (on) fill(dx + 1, y, dw - 2, 1, 'sel'); put(dx + 2, y, pad(fn, 22), on && S.focus === 'diff' ? 'blue b' : ''); put(dx + 25, y, st.split(' ')[0], 'green'); put(dx + 31, y, st.split(' ')[1], 'red'); });
+    const dy = top + 3 + files.length;
+    for (let c = dx + 1; c < dx + dw - 1; c++) put(c, dy - 1, '─', 'dim');
+    (DIFFS[files[S.fsel][0]] || ['(el diff de este archivo)']).forEach((l, i) => { if (dy + i < top + hh - 1) put(dx + 2, dy + i, l.slice(0, dw - 4), l[0] === '+' ? 'green' : l[0] === '-' ? 'red' : l[0] === '@' ? 'cyan' : 'dim'); });
+    put(dx + 2, top + hh, S.focus === 'diff' ? '↑↓ archivos · tab agente' : 'tab diff', 'dim');
+  } else {
+    put(SB + 3, 2, 'conversación de ' + wname, 'dim');
+    fill(SB, ROWS - 4, COLS - SB, 3, 'pn');
+    put(SB + 3, ROWS - 3, '❯ ', 'green b'); put(SB + 5, ROWS - 3, 'escribe un mensaje', 'dim');
+    put(SB + 3, ROWS - 2, 'manual · haiku 5.5', 'dim');
+  }
+  // picker
+  const P = S.pick;
+  if (P) {
+    const x0 = SB + 1, y0 = 1, w = COLS - x0 - 1, h = ROWS - 4;
+    fill(x0, y0, w, h, 'pn');
+    for (let c = x0; c < x0 + w; c++) { put(c, y0, '─', 'dim'); put(c, y0 + h - 1, '─', 'dim'); }
+    put(x0 + 2, y0, ' Revisar un PR · github.com/acme/jw ', 'b');
+    if (P.mine) put(x0 + w - 24, y0, ' solo mis revisiones ', 'yellow');
+    put(x0 + 2, y0 + 1, '▸ ', 'blue'); put(x0 + 4, y0 + 1, P.q || 'filtra por número, título, autor o rama', P.q ? '' : 'dim');
+    if (P.state === 'loading') put(x0 + 4, y0 + 3, '⠋ cargando los PR abiertos…', 'yellow');
+    else if (P.state === 'err') { put(x0 + 4, y0 + 3, P.err, 'red'); }
+    else {
+      const rs = rows();
+      if (!rs.length) put(x0 + 4, y0 + 3, P.empty || 'ningún PR coincide', 'dim');
+      rs.forEach((p, i) => {
+        const y = y0 + 3 + i, on = i === P.sel;
+        if (on) fill(x0 + 1, y, w - 2, 1, 'sel');
+        const [stl, stc] = STATE[p.st];
+        put(x0 + 2, y, pad('#' + p.n, 6), on ? 'blue b' : 'blue');
+        put(x0 + 8, y, pad(p.t, 38), on ? 'b' : '');
+        put(x0 + 47, y, pad(p.a, 11), 'dim');
+        put(x0 + 59, y, pad('+' + p.add, 6), 'green'); put(x0 + 65, y, pad('−' + p.del, 5), 'red');
+        put(x0 + 71, y, stl, stc);
+      });
+      const cur = rs[Math.min(P.sel, rs.length - 1)];
+      if (cur) {
+        const py = y0 + 3 + Math.max(rs.length, 4) + 1;
+        for (let c = x0 + 1; c < x0 + w - 1; c++) put(c, py, '─', 'dim');
+        put(x0 + 2, py + 1, `#${cur.n} ${cur.br} → ${cur.base} · ${cur.upd}`, 'cyan');
+        cur.d.forEach((l, i) => put(x0 + 2, py + 2 + i, l, ''));
+        const fy = py + 3 + cur.d.length;
+        put(x0 + 2, fy, `Archivos (${cur.f.length})`, 'dim');
+        cur.f.forEach(([fn, st], i) => { if (fy + 1 + i < y0 + h - 1) { put(x0 + 4, fy + 1 + i, pad(fn, 34)); put(x0 + 39, fy + 1 + i, st, 'dim'); } });
+      }
+    }
+    put(x0 + 2, y0 + h - 1, ' ↵ revisar · m mis revisiones · o abrir en el navegador · esc ', 'dim');
+  }
+  if (S.ask) {
+    const x0 = SB + 12, y0 = 9, w = 70;
+    fill(x0, y0, w, 6, 'pn');
+    put(x0 + 2, y0 + 1, S.ask.title, 'b');
+    put(x0 + 2, y0 + 2, S.ask.l1, ''); put(x0 + 2, y0 + 3, S.ask.l2, 'dim');
+    put(x0 + 2, y0 + 5, S.ask.keys, 'dim');
+  }
+  put(1, ROWS - 1, S.status, S.statusCls || 'dim');
+  document.getElementById('scr').innerHTML = grid.map(r => { let out = '', cur = null, buf = '';
+    r.forEach(([c, cls]) => { if (cls !== cur) { if (buf) out += cur ? `<span class="${cur}">${esc(buf)}</span>` : esc(buf); buf = ''; cur = cls; } buf += c; });
+    return out + (buf ? (cur ? `<span class="${cur}">${esc(buf)}</span>` : esc(buf)) : ''); }).join('\n');
+  document.getElementById('keys').textContent = S.ask ? '↵ send the briefing again · n keep the conversation as it is'
+    : S.pick ? '↑↓ move · type to filter · m mine · o browser · ↵ review · esc close'
+    : 'R (or ^␣ R) review a pull request · ↑↓ workspaces';
+}
+
+function openPicker(){
+  const m = ghSel.value;
+  const bad = {missing: 'gh no está instalado: instálalo con «brew install gh»', auth: 'gh no tiene sesión: corre «gh auth login»'};
+  if (bad[m]){ S.status = bad[m]; S.statusCls = 'red'; return; }
+  S.status = ''; S.pick = {q: '', sel: 0, mine: false, state: 'loading'};
+  const done = () => { if (!S.pick) return; S.pick.state = 'ok'; if (m === 'empty') S.pick.empty = 'no hay PR abiertos en acme/jw'; };
+  if (m === 'slow') T.push(setTimeout(() => { done(); draw(); }, 2500)); else done();
+}
+
+function review(p){
+  const ex = S.ws.findIndex(([n]) => n === 'review-' + p.n);
+  S.pick = null;
+  if (ex >= 0){
+    S.at = ex;
+    S.review = p; S.status = 'review-' + p.n + ' ya existía: traje la última versión de #' + p.n + ' (head 9f3c1a2)'; S.statusCls = 'green';
+    draw(); return;
+  }
+  const steps = ['git fetch origin pull/' + p.n + '/head', 'git fetch origin ' + p.base, 'git worktree add review-' + p.n + '  (rama review/pr-' + p.n + ')', 'setup: bun install --frozen-lockfile'];
+  let i = 0; S.statusCls = 'yellow';
+  const next = () => {
+    if (i === 1 && fetchFail.checked){ S.status = 'no se hizo nada: git fetch origin pull/' + p.n + '/head falló (repository not found)'; S.statusCls = 'red'; draw(); return; }
+    if (i < steps.length){ S.status = '⠋ ' + steps[i++]; draw(); T.push(setTimeout(next, 600)); return; }
+    S.ws.push(['review-' + p.n, 'wt']); S.at = S.ws.length - 1; S.status = 'review-' + p.n + ' listo · el agente espera tus preguntas'; S.statusCls = 'green';
+    S.review = p; S.focus = 'agent'; S.fsel = 0; S.sugg = true; S.typed = '';
+    draw();
+  };
+  next();
+}
+
+document.getElementById('scr').addEventListener('keydown', e => {
+  const P = S.pick;
+  if (S.review && S.ws[S.at][0].startsWith('review-') && !S.pick){
+    if (e.key === 'Tab'){ S.focus = S.focus === 'agent' ? 'diff' : 'agent'; draw(); e.preventDefault(); return; }
+    if (S.focus === 'diff' && (e.key === 'ArrowDown' || e.key === 'ArrowUp')){ S.fsel = Math.max(0, Math.min(S.review.f.length - 1, S.fsel + (e.key === 'ArrowDown' ? 1 : -1))); draw(); e.preventDefault(); return; }
+    if (S.focus === 'agent' && S.sugg && e.key === 'ArrowRight'){ S.sugg = false; S.typed = 'Revisa el PR #' + S.review.n + ' y dime los riesgos'; draw(); e.preventDefault(); return; }
+  }
+  if (S.ask){ if (e.key === 'Enter' || e.key === 'n'){ S.status = e.key === 'n' ? 'la conversación sigue como estaba' : 'el resumen se mandó otra vez'; S.statusCls = 'dim'; S.ask = null; } draw(); e.preventDefault(); return; }
+  if (P){
+    const rs = P.state === 'ok' ? rows() : [];
+    if (e.key === 'Escape') S.pick = null;
+    else if (e.key === 'ArrowDown') P.sel = Math.min(P.sel + 1, Math.max(rs.length - 1, 0));
+    else if (e.key === 'ArrowUp') P.sel = Math.max(P.sel - 1, 0);
+    else if (e.key === 'Enter' && rs[P.sel]) review(rs[P.sel]);
+    else if (e.key === 'Backspace') { P.q = P.q.slice(0, -1); P.sel = 0; }
+    else if (e.key === 'm' && !P.q) { P.mine = !P.mine; P.sel = 0; }
+    else if (e.key === 'o' && !P.q && rs[P.sel]) { S.status = 'abriendo https://github.com/acme/jw/pull/' + rs[P.sel].n + ' en el navegador'; S.statusCls = 'dim'; }
+    else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) { P.q += e.key; P.sel = 0; }
+    draw(); e.preventDefault(); return;
+  }
+  if (e.key === 'R' || (e.ctrlKey && e.code === 'Space')) openPicker();
+  else if (e.key === 'ArrowDown') S.at = Math.min(S.at + 1, S.ws.length - 1);
+  else if (e.key === 'ArrowUp') S.at = Math.max(S.at - 1, 0);
+  else return;
+  draw(); e.preventDefault();
+});
+document.getElementById('evReset').onclick = () => { reset(); draw(); };
+draw();
+})();
+</script>

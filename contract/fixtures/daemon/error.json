@@ -1,0 +1,5 @@
+{
+  "t": "error",
+  "code": "bad_request",
+  "message": "not a JSON object"
+}

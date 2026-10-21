@@ -1,0 +1,34 @@
+{
+  "t": "patch",
+  "node": "00000000-0000-4000-8000-0000000000d1",
+  "epoch": "00000000-0000-4000-8000-000000000001",
+  "from": 4,
+  "to": 5,
+  "ops": [
+    {
+      "op": "add",
+      "path": "/blocks/2/out/-",
+      "value": [
+        {
+          "t": "test result: ok. 14 passed",
+          "fg": 2
+        }
+      ]
+    },
+    {
+      "op": "replace",
+      "path": "/blocks/2/running",
+      "value": false
+    },
+    {
+      "op": "add",
+      "path": "/blocks/2/code",
+      "value": 0
+    },
+    {
+      "op": "add",
+      "path": "/blocks/2/ms",
+      "value": 12400
+    }
+  ]
+}

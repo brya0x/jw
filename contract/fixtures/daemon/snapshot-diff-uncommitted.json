@@ -1,0 +1,66 @@
+{
+  "t": "snapshot",
+  "node": {
+    "id": "00000000-0000-4000-8000-0000000000d3",
+    "type": "diff",
+    "v": 1,
+    "epoch": "00000000-0000-4000-8000-000000000001",
+    "rev": 1,
+    "attention": [],
+    "workspace": "00000000-0000-4000-8000-0000000000b1",
+    "scope": "uncommitted",
+    "state": "ok",
+    "files": [
+      {
+        "path": "notes/todo.md",
+        "status": "untracked",
+        "added": 2,
+        "deleted": 0,
+        "hash": "1122334455667788",
+        "seen": "yes",
+        "hunks": [
+          {
+            "context": "",
+            "old_start": 0,
+            "old_lines": 0,
+            "new_start": 1,
+            "new_lines": 2,
+            "lines": [
+              "+- probar el diff en el terminal",
+              "+- revisar el límite de 200 commits"
+            ]
+          }
+        ]
+      },
+      {
+        "path": "old/gone.txt",
+        "status": "deleted",
+        "added": 0,
+        "deleted": 2,
+        "hash": "8877665544332211",
+        "hunks": [
+          {
+            "context": "",
+            "old_start": 1,
+            "old_lines": 2,
+            "new_start": 0,
+            "new_lines": 0,
+            "lines": [
+              "-adiós",
+              "-mundo"
+            ]
+          }
+        ]
+      },
+      {
+        "path": "scratch/current",
+        "status": "untracked",
+        "unreadable": "symlink",
+        "added": 0,
+        "deleted": 0,
+        "hash": "00ff00ff00ff00ff",
+        "hunks": []
+      }
+    ]
+  }
+}

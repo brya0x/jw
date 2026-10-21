@@ -1,0 +1,15 @@
+{
+  "t": "cmd",
+  "id": "c43",
+  "cmd": {
+    "cmd": "conversation_send",
+    "node": "00000000-0000-4000-8000-0000000000e1",
+    "text": "mira esto [Imagen#1]",
+    "images": [
+      {
+        "media_type": "image/jpeg",
+        "data": "/9j/4AAQSkZJRgABAQ=="
+      }
+    ]
+  }
+}

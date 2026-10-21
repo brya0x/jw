@@ -1,0 +1,9 @@
+{
+  "t": "reply",
+  "id": "c13",
+  "ok": false,
+  "error": {
+    "code": "io",
+    "message": "cannot read /home/u/gone"
+  }
+}

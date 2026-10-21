@@ -1,0 +1,12 @@
+{
+  "t": "hello",
+  "client": {
+    "name": "x",
+    "version": "1"
+  },
+  "accepts": {
+    "galaxy": [
+      1
+    ]
+  }
+}

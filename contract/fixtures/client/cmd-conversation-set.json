@@ -1,0 +1,13 @@
+{
+  "t": "cmd",
+  "id": "c47",
+  "cmd": {
+    "cmd": "conversation_set",
+    "node": "00000000-0000-4000-8000-0000000000e1",
+    "name": "login",
+    "accent": "magenta",
+    "model": "opus",
+    "effort": "high",
+    "mode": "acceptEdits"
+  }
+}

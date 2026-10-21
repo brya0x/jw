@@ -1,0 +1,18 @@
+{
+  "before": {
+    "rev": 1,
+    "name": "a"
+  },
+  "ops": [
+    {
+      "op": "replace",
+      "path": "/name",
+      "value": "b"
+    }
+  ],
+  "to": 2,
+  "after": {
+    "rev": 2,
+    "name": "b"
+  }
+}

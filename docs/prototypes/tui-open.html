@@ -1,0 +1,425 @@
+<title>jwn Open and Create</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Terminal-first, the same character grid as the other terminal prototypes. The colours come from the chosen theme, so the whole screen changes with it. */
+:root{
+  --bg:#282c34; --panel:#21252b; --fg:#abb2bf; --dim:#5c6370; --line:#3e4451; --sel:#2c313a;
+  --blue:#61afef; --green:#98c379; --yellow:#e5c07b; --red:#e06c75; --magenta:#c678dd; --cyan:#56b6c2;
+  --page:#16181d; --ink:#c3c9d4; --mut:#7d8594;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}}
+:root[data-theme="light"]{--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.55 'IBM Plex Sans',system-ui,sans-serif;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px 40px}
+.wrap{max-width:1500px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
+h1{font:600 20px/1.2 var(--mono);margin:0}
+p{margin:0;max-width:72ch;color:var(--mut)}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button,select{font:12px var(--mono);color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;min-height:32px;cursor:pointer}
+button:hover{border-color:var(--blue)}
+:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto}
+.term pre{margin:0;font:13px/1.25 var(--mono);color:var(--fg);outline:none;width:max-content}
+.term pre:focus-visible{outline:none}
+.hint{font:12px var(--mono);color:var(--mut)}
+.decide{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px;color:var(--fg)}
+.decide h2{font:600 12px var(--mono);margin:0 0 8px;color:var(--mut)}
+.decide ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+.decide code{font:12px var(--mono)}
+.b{font-weight:700}.d{color:var(--dim)}.c-blue{color:var(--blue)}.c-green{color:var(--green)}.c-yellow{color:var(--yellow)}
+.c-red{color:var(--red)}.c-mag{color:var(--magenta)}.c-cyan{color:var(--cyan)}.c-line{color:var(--line)}
+.bg-sel{background:var(--sel)}.bg-panel{background:var(--panel)}
+.chip-green{background:var(--green);color:var(--panel)}.chip-blue{background:var(--blue);color:var(--panel)}.chip-yellow{background:var(--yellow);color:var(--panel)}.chip-red{background:var(--red);color:var(--panel)}.chip-mag{background:var(--magenta);color:var(--panel)}.chip-cyan{background:var(--cyan);color:var(--panel)}
+.cur{background:var(--fg);color:var(--bg)}
+.file{margin:0;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:12px 14px;font:12px/1.5 var(--mono);color:var(--fg);overflow:auto;max-width:100%}
+label.lbl{font:12px var(--mono);color:var(--mut);display:flex;gap:6px;align-items:center}
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&family=JetBrains+Mono:wght@400;700&display=swap">
+
+<div class="wrap">
+  <div>
+    <h1>Opening a folder and making a worktree</h1>
+    <p>Two commands of the workspace level (they work at the panel level too): <code>o</code> opens a folder as a workspace and <code>w</code> makes a worktree of the project you are in. Click the terminal or tab into it. The workspaces here are <code>notes</code>, <code>api</code> (a git project) and its worktree <code>feat/login</code>. In the real client the folders are the ones of your disk.</p>
+  </div>
+  <div class="bar" aria-label="Simulate">
+    <button id="evReset" type="button">Reset</button>
+    <label class="lbl">the repository <code>api</code> has <select id="evCfg" aria-label=".jw.toml of api">
+      <option value="full">a full .jw.toml</option>
+      <option value="studio">only setup and agent (the design-studio one)</option>
+      <option value="none">no .jw.toml</option>
+      <option value="bad">a .jw.toml with an error</option>
+    </select></label>
+    <label class="lbl"><input type="checkbox" id="evFail"> the setup fails</label>
+  </div>
+  <div class="term"><pre id="scr" tabindex="0" aria-label="Terminal client. o opens a folder, w makes a worktree."></pre></div>
+  <div class="hint" id="keys"></div>
+
+  <div class="decide">
+    <h2>.jw.toml of <code>api</code>, at the root of the repository, versioned with the code</h2>
+    <pre class="file" id="cfgfile"></pre>
+  </div>
+
+  <div class="decide">
+    <h2>To approve</h2>
+    <ol>
+      <li><b>Open a folder: <code>o</code>.</b> A browser that starts beside the project you are in (its parent folder). <code>↑</code>/<code>↓</code> move; <code>→</code> or <code>tab</code> goes into a folder, <code>←</code> (or <code>⌫</code> with nothing typed) goes up, <code>~</code> goes home. Typing filters the folders of the one you are in, by letters in order, not by prefix. Folders already open show <code>●</code>, git repositories say <code>git</code>. The first row opens the folder you are in. When what you typed is not a folder there is a row to create it. <code>↵</code> opens the folder as a workspace with one shell, or goes to it if it is already open. On the right, a look at the highlighted folder: its path, whether it is a repository, and what it holds.</li>
+      <li><b>Make a worktree: <code>w</code>.</b> A box with the name (the next free <code>ws-N</code>, replaced when you type), and under it, what will be made: the branch (<code>feat/&lt;name&gt;</code>), where it starts from (the branch of the workspace you are in) and the folder (<code>&lt;project&gt;-wt/&lt;name&gt;</code>). It says why when the name cannot be used (not a valid name, the worktree, the folder or the branch already exists). <code>↵</code> makes it and opens it; <code>esc</code> cancels. On a folder that is not a git repository it says so.</li>
+      <li><b>The project's settings: <code>.jw.toml</code>.</b> A file at the root of the repository, versioned with the code, in the format the old jw already writes (an old <code>.jw.toml</code> works as it is; keys jwn does not know yet, like <code>ports</code>, <code>env</code> and <code>dev</code>, are ignored). Pick what <code>api</code> has in the bar above, press <code>w</code> and then <code>↵</code>:
+        <ul>
+          <li><code>root</code> says where worktrees go (default <code>&lt;repo&gt;-wt</code> beside the repository, relative paths from the repository's root) and <code>branch</code> the branch's template (default <code>feat/{name}</code>; the one marker is <code>{name}</code>, and the lines of <code>setup</code> may use <code>{name}</code> and <code>{branch}</code>). The box shows the branch and folder that result.</li>
+          <li><code>setup</code> is a list of commands run in the new worktree, one after the other, stopping at the first that fails. They run in a pane named <code>setup</code> at the bottom, so the output is there to read; the pane stays as an ordinary shell when they end (also when one fails) and its <code>✔</code> shows in the sidebar until you look. Tick «the setup fails» to see that.</li>
+          <li><code>[layout]</code> and <code>[agent]</code> say which panes the worktree opens with, in the tree the old jw wrote (<code>split</code> <code>right</code> or <code>down</code>, <code>ratio</code>, <code>a</code>, <code>b</code>, and <code>run</code> on a leaf): <code>run</code> is <code>agent</code> (the <code>[agent] default</code>, <code>claude</code>), <code>editor</code>, <code>shell</code> or a command. Without <code>[layout]</code> it is one shell, as today. All the panes start at once; the agent does not wait for the setup.</li>
+          <li>A <code>.jw.toml</code> with an error: the box says which line and <code>↵</code> does nothing.</li>
+        </ul></li>
+      <li><b>Not here yet:</b> ports per worktree and <code>.env</code> files (a part of their own); the phone's worktree sheet reading the same settings (the next part); the layout of a folder you open with <code>o</code>.</li>
+    </ol>
+  </div>
+</div>
+
+<script>
+(function(){
+const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const COLS = 112, ROWS = 28, SB = 28;
+let S, g;
+const LV = {1:['WORKSPACE','chip-blue'], 2:['PANEL','chip-mag'], 3:['TERMINAL','chip-green']};
+const PRESETS = {
+  full: { file: `# what a worktree of api needs
+root = "../api-trees"
+branch = "bryan/{name}"
+
+setup = [
+  "bun install --frozen-lockfile",
+  "cp .env.example .env",
+]
+
+[agent]
+default = "claude"
+
+[layout]
+split = "right"
+ratio = 0.6
+a = { run = "editor" }
+b = { run = "agent" }`,
+    root: '~/ws/api-trees', branch: 'bryan/{name}', setup: ['bun install --frozen-lockfile', 'cp .env.example .env'],
+    layout: {split: 'right', ratio: 0.6, a: {run: 'editor'}, b: {run: 'agent'}} },
+  studio: { file: `# jw config for sa-design-studio, written by jw on its first worktree.
+setup = [
+  "bun install --frozen-lockfile",
+]
+
+[agent]
+default = "claude"
+
+[layout]
+editor = "nvim"
+run = "agent"`,
+    root: '~/ws/api-wt', branch: 'feat/{name}', setup: ['bun install --frozen-lockfile'], layout: {run: 'agent'} },
+  none: { file: null, root: '~/ws/api-wt', branch: 'feat/{name}', setup: [], layout: null },
+  bad: { file: `branch = "feat/{nme}"
+setup = ["bun install"]`, err: '.jw.toml, line 1: «{nme}» is no marker (use {name})' }
+};
+const cfgSel = document.getElementById('evCfg'), cfg = () => PRESETS[S.cfg];
+let T = [];
+const clearTimers = () => { T.forEach(clearTimeout); T = []; };
+const showFile = () => { document.getElementById('cfgfile').textContent = cfg().file || '(api has no .jw.toml: a worktree is made as before, <repo>-wt/<name>, branch feat/<name>, one shell)'; };
+const leaves = n => !n ? [] : n.run ? [n.run] : [...leaves(n.a), ...leaves(n.b)];
+const KINDS = {agent: {t: 'claude', prog: 'claude', kind: 'agent'}, editor: {t: 'nvim', kind: 'editor'}, shell: {t: 'zsh', kind: 'shell'}};
+const kindOf = run => KINDS[run] || {t: run.split(' ')[0], kind: 'shell', prog: run};
+const describe = c => !c.layout ? 'one shell' : leaves(c.layout).map(r => kindOf(r).t).join(' │ ');
+const stack = (from, to) => from === to ? {pane: from} : {split: 'down', ratio: 1 / (to - from + 1), a: {pane: from}, b: stack(from + 1, to)};
+const defaultTree = n => n === 1 ? {pane: 0} : n === 2 ? {split: 'right', ratio: 0.5, a: {pane: 0}, b: {pane: 1}} : {split: 'right', ratio: 0.5, a: {pane: 0}, b: stack(1, n - 1)};
+function build(node, panes){
+  if (node.run){ panes.push({...kindOf(node.run)}); return {pane: panes.length - 1}; }
+  return {split: node.split, ratio: node.ratio ?? 0.5, a: build(node.a, panes), b: build(node.b, panes)};
+}
+function paneRects(w, x, y, cw, ch){
+  const out = [];
+  (function walk(t, x, y, cw, ch){
+    if (t.pane !== undefined){ out[t.pane] = [x, y, cw, ch]; return; }
+    if (t.split === 'right'){ const a = Math.round(cw * t.ratio); walk(t.a, x, y, a, ch); walk(t.b, x + a, y, cw - a, ch); }
+    else { const a = Math.round(ch * t.ratio); walk(t.a, x, y, cw, a); walk(t.b, x, y + a, cw, ch - a); }
+  })(w.layout || defaultTree(w.panes.length), x, y, cw, ch);
+  return out;
+}
+function reset(){
+  clearTimers();
+  S = { level:1, sel:2, focus:0, full:false, ask:null, input:null, help:false, leader:false, msg:'', prog:false, typed:'', pick:null, wt:null,
+    ws:[ {name:'notes', kind:'folder', path:'~/notes', panes:[{t:'zsh'}]},
+         {name:'api', kind:'folder', path:'~/ws/api', panes:[{t:'zsh'}]},
+         {name:'feat/login', kind:'worktree', project:'api', path:'~/ws/api-wt/feat-login', panes:[{t:'zsh'},{t:'claude',prog:'claude'}]},
+         {name:'infra', kind:'folder', path:'~/ws/infra', panes:[]} ] };
+  S.cfg = cfgSel.value; FS = fsInit(); showFile();
+}
+let FS;
+const dir = (kids, git) => ({kids: kids || {}, git: !!git});
+function fsInit(){ return { '~': dir({ws:dir(),code:dir(),Documents:dir(),'.config':dir(),Downloads:dir()}),
+  '~/ws': dir({jw:dir(0,1),api:dir(0,1),notes:dir(),infra:dir(0,1),'api-wt':dir(),'.cache':dir()}),
+  '~/ws/jw': dir({src:dir(),docs:dir(),scripts:dir(),'Cargo.toml':null,'README.md':null}),
+  '~/ws/api': dir({src:dir(),tests:dir(),'package.json':null}),
+  '~/ws/api-wt': dir({'feat-login':dir(0,1)}), '~/ws/notes': dir({'ideas.md':null}), '~/ws/infra': dir({terraform:dir()}),
+  '~/code': dir({demo:dir(0,1),playground:dir()}) }; }
+const subdirs = p => Object.entries((FS[p] || {kids:{}}).kids).filter(([n, v]) => v && !n.startsWith('.')).map(([n, v]) => [n, v]);
+const isOpen = p => S.ws.some(w => w.path === p);
+const fuzzy = (q, t) => { let i = 0; for (const c of t.toLowerCase()) if (c === q[i]) i++; return i === q.length; };
+const parent = p => p === '~' ? '~' : p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '~';
+const base = p => p.slice(p.lastIndexOf('/') + 1);
+const startDir = () => { const w = W(); return parent(w.kind === 'worktree' ? '~/ws/api' : w.path); };
+const grid = () => ({cells:Array.from({length:ROWS}, () => Array.from({length:COLS}, () => [' ', '']))});
+const put = (x, y, text, cls = '') => { if (y < 0 || y >= ROWS) return; [...text].forEach((ch, i) => { const cx = x + i; if (cx >= 0 && cx < COLS) g.cells[y][cx] = [ch, cls]; }); };
+const tint = (x, y, w, cls) => { for (let i = 0; i < w; i++) if (x + i < COLS && y < ROWS) g.cells[y][x + i] = [g.cells[y][x + i][0], (g.cells[y][x + i][1] + ' ' + cls).trim()]; };
+const clip = (t, n) => { const a = [...t]; return a.length <= n ? t : a.slice(0, Math.max(0, n - 1)).join('') + '…'; };
+function box(x, y, w, h, title, cls, tcls){
+  put(x, y, '╭' + '─'.repeat(w - 2) + '╮', cls); put(x, y + h - 1, '╰' + '─'.repeat(w - 2) + '╯', cls);
+  for (let i = 1; i < h - 1; i++){ put(x, y + i, '│', cls); put(x + w - 1, y + i, '│', cls); }
+  if (title) put(x + 2, y, ' ' + title + ' ', tcls || 'b');
+}
+function paint(){
+  document.getElementById('scr').innerHTML = g.cells.map(r => { let out = '', cur = null, buf = '';
+    for (const [ch, cls] of r){ if (cls !== cur){ if (buf) out += cur ? `<span class="${cur}">${buf}</span>` : buf; buf = ''; cur = cls; } buf += esc(ch); }
+    if (buf) out += cur ? `<span class="${cur}">${buf}</span>` : buf; return out; }).join('\n');
+}
+const W = () => S.ws[S.sel];
+const running = p => p && p.prog;
+const KEYS = {
+  1: [['j k','mover'],['↵','entrar al workspace'],['r','renombrar el worktree'],['x','cerrar'],['o','abrir una carpeta'],['w','worktree nuevo (del proyecto)'],['s','sincronizar'],['d','ver cambios'],['a','avisos'],['m','teléfono'],[',','ajustes'],['q','salir']],
+  2: [['h j k l','cambiar de panel'],['↵','escribir en el panel'],['n','panel nuevo'],['r','nombrar el panel'],['f','pantalla completa'],['x','cerrar el panel'],['o w s d','como en workspaces'],['a m ,','avisos · teléfono · ajustes'],['esc','volver a workspaces']],
+  3: [['todo','va al programa (esc y ctrl incluidos)'],['^␣','salir al nivel de paneles']]
+};
+const hint = () => S.pick ? '↑↓ mover · → entrar · ← subir · ~ casa · ↵ abrir · esc cerrar' : S.wt ? '↵ crear · esc cancelar' : S.input ? '↵ aceptar · esc cancelar' : S.ask ? 'y sí · esc cancelar' : S.help ? 'cualquier tecla para cerrar'
+  : S.level === 1 ? 'j/k mover · ↵ entrar · r renombrar · x cerrar · o carpeta · w worktree · ? teclas · q salir'
+  : S.level === 2 ? 'h/l panel · ↵ escribir · n nuevo · r nombrar · f completa · x cerrar · esc volver · ? teclas'
+  : 'escribes en el panel · ^␣ para salir';
+function modalBox(w, lines, title, cls){
+  const h = lines.length + 4, bx = SB + 1 + Math.floor((COLS - SB - 1 - w) / 2), by = 4;
+  for (let r = 0; r < h; r++) put(bx, by + r, ' '.repeat(w), 'bg-panel');
+  box(bx, by, w, h, title, cls || 'c-yellow', 'b');
+  lines.forEach(([t, c], i) => put(bx + 3, by + 2 + i, clip(t, w - 6), (c || '') + ' bg-panel'));
+}
+function draw(){
+  g = grid();
+  const active1 = S.level === 1;
+  for (let y = 0; y < ROWS - 1; y++) put(SB - 1, y, '│', active1 ? 'c-blue' : 'c-line');
+  put(1, 0, 'demo', 'b d'); put(SB - 14, 0, '^␣ s sessions', 'd');
+  S.ws.forEach((w, i) => { const y = 2 + i, on = i === S.sel, name = w.kind === 'worktree' ? '↳ ' + w.name : w.name;
+    put(0, y, String(i + 1), 'd'); put(2, y, w.panes.length ? '●' : '○', w.panes.length ? 'c-green' : 'd');
+    put(4, y, clip(name, SB - 10), on ? (active1 ? 'b c-blue' : 'b') : (w.panes.length ? '' : 'd')); if (w.mark && !(on && S.level >= 2)) put(SB - 3, y, '✔', 'c-green'); if (on) tint(0, y, SB - 1, active1 ? 'bg-sel' : 'bg-sel'); });
+  const w = W(), px = SB + 1, pw = COLS - px;
+  put(px + 1, 0, w.kind === 'worktree' ? w.project + '/' : '', 'd'); put(px + 1 + (w.kind === 'worktree' ? w.project.length + 1 : 0), 0, w.name, 'b c-blue'); put(COLS - 1 - w.path.length, 0, w.path, 'd');
+  const n = w.panes.length;
+  if (!n) put(px + 2, 3, 'este workspace no tiene paneles · ↵ y luego n abre uno', 'd');
+  else {
+    const R = paneRects(w, px, 1, pw, ROWS - 2);
+    (S.full ? [S.focus] : w.panes.map((_, i) => i)).forEach(pi => {
+      const [bx, by, bw, bh] = S.full ? [px, 1, pw, ROWS - 2] : R[pi], focused = pi === S.focus && S.level >= 2;
+      drawPane(w, w.panes[pi], bx, by, bw, bh, focused, focused && S.level === 3);
+    });
+  }
+  put(1, ROWS - 3, '! permiso  ? pregunta', 'd'); put(1, ROWS - 2, '◆ plan   ❯ comando', 'd');
+  for (let x = 0; x < COLS; x++) g.cells[ROWS - 1][x] = [' ', 'bg-panel'];
+  const chip = S.pick ? [' ABRIR ', 'chip-cyan b'] : S.wt ? [' WORKTREE ', 'chip-cyan b'] : S.leader ? [' LÍDER ', 'chip-yellow b'] : [' ' + LV[S.level][0] + ' ', LV[S.level][1] + ' b'];
+  put(0, ROWS - 1, chip[0], chip[1]);
+  put(chip[0].length + 1, ROWS - 1, clip(S.msg || (S.leader ? 'tecla del nivel de paneles · esc cancelar' : hint()), COLS - 14), (S.msg ? 'c-green' : 'd') + ' bg-panel');
+  if (S.pick) drawPicker();
+  if (S.wt) drawWorktree();
+  if (S.help){ const lines = KEYS[S.level].map(([k, d]) => [k.padEnd(10) + d, '']); modalBox(60, lines, 'teclas · ' + LV[S.level][0].toLowerCase(), 'c-blue'); }
+  if (S.ask) modalBox(62, [[S.ask.text, ''], [S.ask.sub, 'd'], ['', ''], ['y sí · esc cancelar', 'd']], S.ask.title, 'c-yellow');
+  if (S.input) modalBox(52, [[S.input.label, 'd'], ['❯ ' + S.input.text + '▏', 'b'], ['', ''], ['↵ aceptar · esc cancelar', 'd']], S.input.title, 'c-blue');
+  paint();
+  document.getElementById('keys').textContent = S.leader ? 'tecla del nivel de paneles · esc cancelar' : hint();
+}
+function drawPane(w, p, bx, by, bw, bh, focused, typing){
+  const title = p.t + (p.kind === 'setup' ? (p.done ? ' · terminó' : ' · corriendo') : '') + (S.full ? ' · completa' : '');
+  box(bx, by, bw, bh, title, focused ? 'c-blue' : 'c-line', focused ? 'b c-blue' : 'b');
+  const ix = bx + 2, iw = bw - 4, last = by + bh - 2;
+  const ln = (k, x0, t, c) => { if (by + 1 + k <= last) put(ix + x0, by + 1 + k, clip(t, iw - x0), c); };
+  if (p.kind === 'setup'){ p.out.slice(-(bh - 2)).forEach((l, i) => ln(i, 0, l.t, l.c)); }
+  else if (p.kind === 'editor'){ ln(0, 0, w.path + '/', 'c-blue'); ['▸ src/', '▸ tests/', '  package.json', '  .jw.toml'].forEach((t, i) => ln(2 + i, 0, t, i < 2 ? '' : 'd')); if (bh > 8) put(ix, last, ' NORMAL ', 'chip-green b'); }
+  else if (p.prog){ ln(0, 0, '▌ ' + w.path + ' ⎇ ' + (w.kind === 'worktree' ? w.name : 'main'), 'c-yellow'); ln(1, 2, '❯ ' + p.prog, 'b'); ln(2, 2, '✻ Pensando…', 'c-mag'); }
+  else { ln(0, 0, '▌ ' + w.path, 'c-green'); ln(1, 2, '❯ git status', 'b'); ln(2, 2, 'On branch main · nada por commitear', 'd');
+    if (bh > 6){ put(ix, last, '❯ ' + (typing ? S.typed : ''), 'c-green b'); if (typing){ const cx = ix + 2 + S.typed.length; if (cx < COLS) g.cells[last][cx] = [' ', 'cur']; } } }
+}
+function runSetup(w, p, cmds){
+  const fail = document.getElementById('evFail').checked, steps = [];
+  for (const [i, c] of cmds.entries()){
+    steps.push({t: '❯ ' + c, c: 'b'});
+    if (fail && i === 0){ steps.push({t: 'error: lockfile had changes, but lockfile is frozen', c: 'c-red'}, {t: 'note: try re-running without --frozen-lockfile', c: 'd'}); break; }
+    if (/install/.test(c)) steps.push({t: 'bun install v1.1.38', c: 'd'}, {t: ' + typescript@5.6.3', c: 'c-green'}, {t: ' + @types/node@22.9.0', c: 'c-green'}, {t: ' 214 packages installed [2.31s]', c: ''});
+  }
+  steps.push({t: '❯ ', c: 'c-green b'});
+  const run = i => { if (i >= steps.length){ p.done = true; w.mark = true; draw(); return; } p.out.push(steps[i]); draw(); T.push(setTimeout(() => run(i + 1), 420)); };
+  T.push(setTimeout(() => run(0), 300));
+}
+const flash = t => { S.msg = t; draw(); clearTimeout(flash.t); flash.t = setTimeout(() => { S.msg = ''; draw(); }, 2200); };
+const later = n => flash(n + ' · llega en una parte siguiente');
+function closeWs(){ const nm = W().name; S.ws.splice(S.sel, 1); S.sel = Math.max(0, Math.min(S.sel, S.ws.length - 1)); S.level = 1; S.focus = 0; S.ask = null; flash('workspace «' + nm + '» cerrado · la carpeta se queda'); }
+function closePane(){ const w = W(), p = w.panes[S.focus]; w.panes.splice(S.focus, 1); w.layout = null; S.focus = Math.max(0, Math.min(S.focus, w.panes.length - 1)); S.full = false; S.ask = null; flash('panel «' + p.t + '» cerrado'); }
+function global(k){
+  if (k === 'a'){ later('avisos'); return true; } if (k === 'm'){ later('teléfono'); return true; } if (k === ','){ later('ajustes'); return true; }
+  if (k === '?'){ S.help = true; draw(); return true; } return false;
+}
+const BRANCHES = ['main', 'feat/login'];
+function openPicker(){ S.pick = {dir: startDir(), q: '', sel: 0}; draw(); }
+function projectOf(w){ return w.kind === 'worktree' ? S.ws.find(x => x.name === 'api') : (FS[w.path] && FS[w.path].git) || w.path === '~/ws/api' ? w : null; }
+function openWorktreeBox(){
+  const w = W(), proj = projectOf(w);
+  if (!proj){ flash('«' + w.name + '» no es un repositorio git: w necesita uno'); return; }
+  const root = cfg().root || '~/ws/api-wt', taken = S.ws.filter(x => x.kind === 'worktree').map(x => x.path);
+  let n = 1; while (taken.includes(root + '/ws-' + n) || (FS[root] && FS[root].kids['ws-' + n])) n++;
+  S.wt = {proj, name: 'ws-' + n, picked: true, from: w.kind === 'worktree' ? w.name : 'main'}; draw();
+}
+function wtPlan(){
+  const t = S.wt, c = cfg(), name = t.name;
+  if (c.err) return {err: c.err};
+  const branch = c.branch.replace(/\{name\}/g, name), root = c.root, folder = root + '/' + name;
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) return {err: 'nombre no válido: usa minúsculas, números y guiones'};
+  if (S.ws.some(x => x.kind === 'worktree' && x.path === folder)) return {err: 'api/' + name + ' ya existe'};
+  if (FS[root] && FS[root].kids[name]) return {err: folder + ' ya existe'};
+  if (BRANCHES.includes(branch)) return {err: 'la rama ' + branch + ' ya existe'};
+  return {name, branch, folder, root};
+}
+function createWorktree(){
+  const plan = wtPlan(); if (plan.err) return;
+  const c = cfg(), panes = [];
+  let tree = c.layout ? build(c.layout, panes) : (panes.push({t: 'zsh', kind: 'shell'}), {pane: 0}), setup = null;
+  if (c.setup.length){ setup = {t: 'setup', kind: 'setup', out: [], done: false}; panes.push(setup); tree = {split: 'down', ratio: 0.68, a: tree, b: {pane: panes.length - 1}}; }
+  if (!FS[plan.root]){ FS[plan.root] = dir(); FS['~/ws'].kids[base(plan.root)] = dir(); }
+  FS[plan.root].kids[plan.name] = dir(0, 1); BRANCHES.push(plan.branch);
+  const w = {name: plan.branch, kind: 'worktree', project: 'api', path: plan.folder, panes, layout: tree};
+  S.ws.push(w); S.sel = S.ws.length - 1; S.focus = 0; S.level = 2; S.wt = null; S.full = false; flash('creado ' + plan.name + ' en ' + plan.branch);
+  if (setup) runSetup(w, setup, c.setup);
+}
+function openFolder(path, create){
+  if (create){ const par = parent(path); FS[par].kids[base(path)] = dir(); FS[path] = dir(); }
+  const at = S.ws.findIndex(w => w.path === path);
+  if (at >= 0){ S.sel = at; S.level = 2; S.focus = 0; S.pick = null; flash('«' + S.ws[at].name + '» ya estaba abierto: voy a él'); return; }
+  S.ws.push({name: base(path), kind: 'folder', path, panes: [{t: 'zsh'}]}); S.sel = S.ws.length - 1; S.focus = 0; S.level = 2; S.pick = null;
+  flash('abierto «' + base(path) + '»' + (create ? ' · carpeta creada' : ''));
+}
+function pickRows(){
+  const p = S.pick, q = p.q.toLowerCase(), subs = subdirs(p.dir);
+  const rows = [{k: 'here', name: 'abrir esta carpeta', path: p.dir, open: isOpen(p.dir), git: !!(FS[p.dir] && FS[p.dir].git)}];
+  subs.filter(([n]) => !q || fuzzy(q, n)).forEach(([n, v]) => rows.push({k: 'dir', name: n + '/', path: p.dir + '/' + n, git: v.git, open: isOpen(p.dir + '/' + n)}));
+  if (p.q && /^[a-z0-9][a-z0-9._-]*$/i.test(p.q) && !subs.some(([n]) => n === p.q)) rows.push({k: 'new', name: 'crear «' + p.q + '»/', path: p.dir + '/' + p.q, isNew: true});
+  return rows;
+}
+function pickKey(e){
+  const k = e.key, p = S.pick, rows = pickRows(), r = rows[Math.min(p.sel, rows.length - 1)];
+  if (k === 'Escape'){ S.pick = null; draw(); return true; }
+  if (k === 'ArrowDown' || (e.ctrlKey && k === 'n')){ p.sel = Math.min(p.sel + 1, rows.length - 1); draw(); return true; }
+  if (k === 'ArrowUp' || (e.ctrlKey && k === 'p')){ p.sel = Math.max(p.sel - 1, 0); draw(); return true; }
+  if (k === 'ArrowRight' || k === 'Tab'){ if (r && r.k === 'dir'){ p.dir = r.path; p.q = ''; p.sel = 0; } draw(); return true; }
+  if (k === 'ArrowLeft' || (k === 'Backspace' && !p.q)){ p.dir = parent(p.dir); p.q = ''; p.sel = 0; draw(); return true; }
+  if (k === '~' && !p.q){ p.dir = '~'; p.sel = 0; draw(); return true; }
+  if (k === 'Backspace'){ p.q = [...p.q].slice(0, -1).join(''); p.sel = 0; draw(); return true; }
+  if (e.ctrlKey && k === 'u'){ p.q = ''; p.sel = 0; draw(); return true; }
+  if (k === 'Enter'){ if (r) openFolder(r.path, r.isNew); draw(); return true; }
+  if (k.length === 1 && !e.ctrlKey){ p.q += k; p.sel = 0; draw(); return true; }
+  return true;
+}
+function wtKey(e){
+  const k = e.key, t = S.wt;
+  if (k === 'Escape'){ S.wt = null; draw(); return true; }
+  if (k === 'Enter'){ if (!wtPlan().err){ createWorktree(); } draw(); return true; }
+  if (k === 'Backspace'){ t.name = t.picked ? '' : [...t.name].slice(0, -1).join(''); t.picked = false; draw(); return true; }
+  if (k.length === 1 && !e.ctrlKey){ t.name = t.picked ? k : t.name + k; t.picked = false; draw(); return true; }
+  return true;
+}
+function drawPicker(){
+  const p = S.pick, rows = pickRows(), sel = Math.min(p.sel, rows.length - 1), w = 82, h = 22, bx = SB + 1 + Math.floor((COLS - SB - 1 - w) / 2), by = 2, lw = 36;
+  for (let r = 0; r < h; r++) put(bx, by + r, ' '.repeat(w), 'bg-panel');
+  box(bx, by, w, h, 'abrir una carpeta', 'c-blue', 'b');
+  put(bx + 3, by + 1, clip(p.dir, lw - 2), 'd bg-panel');
+  put(bx + 3, by + 2, '❯ ' + (p.q ? p.q + '▏' : 'escribe para filtrar esta carpeta…'), (p.q ? 'b' : 'd') + ' bg-panel');
+  const visible = rows.slice(0, h - 7);
+  visible.forEach((r, i) => { const y = by + 4 + i, on = i === sel;
+    const mark = r.k === 'here' ? '.' : r.k === 'new' ? '+' : r.open ? '●' : '▸';
+    put(bx + 2, y, ' '.repeat(lw), 'bg-panel' + (on ? ' bg-sel' : ''));
+    put(bx + 3, y, mark, r.open ? 'c-green' : r.k === 'new' ? 'c-yellow' : 'd');
+    put(bx + 5, y, clip(r.name, lw - 14), on ? 'b c-blue' : '');
+    const tag = r.k === 'new' ? 'nueva' : r.git ? 'git' : r.open ? 'abierta' : '';
+    if (tag) put(bx + 2 + lw - tag.length - 1, y, tag, 'd'); });
+  if (rows.length === 1 && p.q) put(bx + 5, by + 5, 'Nada coincide.', 'd bg-panel');
+  for (let r = 1; r < h - 1; r++) put(bx + lw + 3, by + r, '│', 'c-line bg-panel');
+  const r = rows[sel], px = bx + lw + 6;
+  put(px, by + 2, clip(r.path, w - lw - 10), 'b bg-panel');
+  put(px, by + 3, r.isNew ? 'carpeta nueva: se crea al abrirla' : r.git ? 'repositorio git' : 'no es un repositorio git', (r.git ? 'c-green' : 'd') + ' bg-panel');
+  if (r.open) put(px, by + 4, '● abierta: ↵ va ahí', 'c-green bg-panel');
+  const kids = r.isNew ? [] : Object.keys((FS[r.path] || {kids: {}}).kids).filter(n => !n.startsWith('.')).slice(0, 12);
+  if (!r.isNew && !kids.length) put(px, by + 6, 'vacía', 'd bg-panel');
+  kids.forEach((n, i) => put(px, by + 6 + i, ((FS[r.path].kids[n] ? '▸ ' + n + '/' : '  ' + n)), (FS[r.path].kids[n] ? '' : 'd') + ' bg-panel'));
+  put(bx + 3, by + h - 2, '↑↓ mover · → entrar · ← subir · ~ casa · ↵ abrir · esc cerrar', 'd bg-panel');
+}
+function drawWorktree(){
+  const t = S.wt, plan = wtPlan(), c = cfg(), w = 70;
+  const lines = [['nombre    ' + t.name + '▏', 'b'], ['', '']];
+  if (plan.err) lines.push([plan.err, 'c-red']);
+  else {
+    lines.push(['rama      ' + plan.branch, 'c-green'], ['desde     ' + t.from, ''], ['carpeta   ' + plan.folder, '']);
+    c.setup.forEach((cmd, i) => lines.push([(i ? '          ' : 'setup     ') + cmd, 'c-yellow']));
+    lines.push(['paneles   ' + describe(c) + (c.setup.length ? ' · setup' : ''), ''], [c.file ? 'según el .jw.toml de ' + t.proj.name : 'sin .jw.toml: un shell, como siempre', 'd']);
+  }
+  lines.push(['', ''], ['↵ crear' + (plan.err ? '' : ' y abrir') + ' · esc cancelar', 'd']);
+  modalBox(w, lines, 'worktree nuevo de ' + t.proj.name, plan.err ? 'c-red' : 'c-blue');
+}
+function workspaceKeys(k){
+  if (k === 'o'){ openPicker(); return true; } if (k === 'w'){ openWorktreeBox(); return true; }
+  if (k === 's'){ later('sincronizar con la base'); return true; } if (k === 'd'){ later('ver cambios'); return true; } return false;
+}
+function key(e){
+  const k = e.key;
+  if (S.help){ S.help = false; draw(); return true; }
+  if (S.pick) return pickKey(e);
+  if (S.wt) return wtKey(e);
+  if (S.input){
+    if (k === 'Escape'){ S.input = null; draw(); return true; }
+    if (k === 'Enter'){ const v = S.input.text.trim(); if (v){ if (S.input.what === 'ws') W().name = v; else W().panes[S.focus].t = v; flash('renombrado a «' + v + '»'); } S.input = null; draw(); return true; }
+    if (k === 'Backspace'){ S.input.text = [...S.input.text].slice(0, -1).join(''); draw(); return true; }
+    if (k.length === 1){ S.input.text += k; draw(); return true; } return true;
+  }
+  if (S.ask){ if (k === 'y'){ S.ask.yes(); return true; } if (k === 'Escape'){ S.ask = null; draw(); return true; } return true; }
+  if (S.level === 3){
+    if (e.ctrlKey && (k === ' ' || k === '@')){ S.level = 2; S.typed = ''; draw(); return true; }
+    if (k === 'Escape'){ flash('esc llega al programa (nvim, claude…)'); return true; }
+    if (e.ctrlKey){ flash('ctrl-' + k + ' llega al programa'); return true; }
+    if (k === 'Enter'){ S.typed = ''; draw(); return true; } if (k === 'Backspace'){ S.typed = S.typed.slice(0, -1); draw(); return true; }
+    if (k.length === 1){ S.typed += k; draw(); return true; } return false;
+  }
+  if (S.leader){ S.leader = false; if (k === 'Escape'){ draw(); return true; } S.level = 2; draw(); return key(e); }
+  if (S.level === 1){
+    const w = W();
+    if (k === 'j'){ S.sel = Math.min(S.sel + 1, S.ws.length - 1); S.focus = 0; }
+    else if (k === 'k'){ S.sel = Math.max(S.sel - 1, 0); S.focus = 0; }
+    else if (k === 'Enter'){ if (!S.ws.length) return true; S.level = 2; S.focus = Math.min(S.focus, Math.max(0, w.panes.length - 1)); }
+    else if (k === 'r'){ if (w.kind === 'worktree') S.input = {what:'ws', title:'renombrar el worktree', label:'nombre nuevo', text:w.name}; }
+    else if (k === 'x'){ S.ask = {title:'Cerrar ' + w.name + '?', text: w.panes.length ? 'Se terminan sus ' + w.panes.length + ' paneles.' : 'No tiene paneles abiertos.', sub: w.kind === 'worktree' ? 'El worktree y su carpeta se quedan en el disco.' : 'La carpeta se queda en el disco.', yes: closeWs}; }
+    else if (k === 'q'){ flash('salir: el daemon y los paneles siguen corriendo'); return true; }
+    else if (workspaceKeys(k) || global(k)) return true;
+    else return false;
+    draw(); return true;
+  }
+  const w = W();
+  if (k === 'Escape'){ S.level = 1; S.full = false; }
+  else if (k === 'h' || k === 'k'){ S.focus = Math.max(0, S.focus - 1); }
+  else if (k === 'l' || k === 'j'){ S.focus = Math.min(w.panes.length - 1, S.focus + 1); }
+  else if (k === 'Enter'){ if (!w.panes.length) return true; S.level = 3; S.typed = ''; }
+  else if (k === 'n'){ if (w.panes.length >= 6){ flash('este prototipo muestra hasta 6 paneles'); return true; } w.panes.push({t:'zsh', kind:'shell'}); w.layout = null; S.focus = w.panes.length - 1; flash('panel nuevo'); return true; }
+  else if (k === 'f'){ if (!w.panes.length) return true; S.full = !S.full; }
+  else if (k === 'r'){ if (!w.panes.length) return true; S.input = {what:'pane', title:'nombrar el panel', label:'nombre', text:w.panes[S.focus].t}; }
+  else if (k === 'x'){ if (!w.panes.length) return true; const p = w.panes[S.focus]; if (running(p)) S.ask = {title:'Cerrar ' + p.t + '?', text: p.prog + ' sigue corriendo en este panel.', sub:'Cerrarlo lo detiene.', yes: closePane}; else { closePane(); return true; } }
+  else if (workspaceKeys(k) || global(k)) return true;
+  else return false;
+  draw(); return true;
+}
+const scr = document.getElementById('scr');
+scr.addEventListener('keydown', e => { if (e.metaKey) return; if (e.ctrlKey && !(e.key === ' ' || S.level === 3 || S.pick)) return; if (key(e)) e.preventDefault(); });
+scr.addEventListener('click', e => { scr.focus(); const r = scr.getBoundingClientRect(), cw = r.width / COLS, ch = r.height / ROWS, x = Math.floor((e.clientX - r.left) / cw), y = Math.floor((e.clientY - r.top) / ch);
+  if (S.input || S.ask || S.help || S.pick || S.wt) return;
+  if (x < SB - 1 && y >= 2 && y - 2 < S.ws.length){ S.sel = y - 2; S.focus = 0; S.level = 2; S.full = false; draw(); }
+  else if (x >= SB && y >= 1 && y < ROWS - 1 && W().panes.length){ const w = W(), R = paneRects(w, SB + 1, 1, COLS - SB - 1, ROWS - 2), hit = S.full ? S.focus : R.findIndex(([bx, by, bw, bh]) => x >= bx && x < bx + bw && y >= by && y < by + bh); if (hit >= 0){ S.focus = hit; S.level = 3; S.typed = ''; draw(); } } });
+document.getElementById('evReset').onclick = () => { reset(); draw(); scr.focus(); };
+cfgSel.onchange = () => { S.cfg = cfgSel.value; showFile(); draw(); scr.focus(); };
+reset(); draw();
+})();
+</script>

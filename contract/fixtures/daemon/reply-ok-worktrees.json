@@ -1,0 +1,32 @@
+{
+  "t": "reply",
+  "id": "c20",
+  "ok": true,
+  "result": {
+    "worktrees": [
+      {
+        "path": "/home/u/code/app-wt/login",
+        "branch": "feat/login",
+        "head": "4f2a9c1",
+        "workspace": "00000000-0000-4000-8000-0000000000b1"
+      },
+      {
+        "path": "/home/u/code/app-wt/fix-login",
+        "branch": "fix/login",
+        "head": "9a8b7c6",
+        "changes": 3
+      },
+      {
+        "path": "/home/u/code/app-wt/bisect",
+        "head": "1d2e3f4",
+        "changes": 0
+      },
+      {
+        "path": "/home/u/code/app-wt/old-thing",
+        "branch": "old-thing",
+        "head": "aa00bb1",
+        "missing": true
+      }
+    ]
+  }
+}

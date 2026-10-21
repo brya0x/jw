@@ -1,0 +1,120 @@
+<title>jwn · approving a plan goes back to the mode you had</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+:root{
+  --bg:#282c34; --panel:#21252b; --fg:#abb2bf; --dim:#5c6370; --line:#3e4451; --sel:#2c313a;
+  --blue:#61afef; --green:#98c379; --yellow:#e5c07b; --red:#e06c75; --magenta:#c678dd; --cyan:#56b6c2;
+  --page:#16181d; --ink:#c3c9d4; --mut:#7d8594;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}}
+:root[data-theme="light"]{--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.55 'IBM Plex Sans',system-ui,sans-serif;padding:24px max(16px,env(safe-area-inset-right,0px)) 40px max(16px,env(safe-area-inset-left,0px))}
+.wrap{max-width:1200px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
+h1{font:600 20px/1.2 var(--mono);margin:0}
+h2{font:600 12px var(--mono);margin:0;color:var(--mut)}
+p{margin:0;max-width:86ch;color:var(--mut)}
+code,kbd{font:12px var(--mono)}
+button{font:12px var(--mono);color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;min-height:32px;cursor:pointer}
+button:hover{border-color:var(--blue)}
+button[aria-pressed="true"]{border-color:var(--blue);color:var(--blue)}
+:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.stage{display:flex;gap:28px;align-items:flex-start;flex-wrap:wrap}
+.col{flex:1 1 480px;min-width:0;display:flex;flex-direction:column;gap:8px}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto}
+.term pre{margin:0;font:13px/1.35 var(--mono);color:var(--fg);outline:none;width:max-content}
+.hint{font:12px var(--mono);color:var(--mut)}
+.phone{width:376px;max-width:100%;background:var(--bg);border:1px solid var(--line);border-radius:28px;padding:10px;box-shadow:0 0 0 6px var(--panel)}
+.ph{background:var(--panel);border-radius:20px;overflow:hidden;font:13px/1.45 var(--mono);color:var(--fg);padding:14px;display:flex;flex-direction:column;gap:10px;min-height:420px}
+.ph .t{display:flex;justify-content:space-between}
+.ph .opt{min-height:48px;border-radius:8px;background:var(--sel);padding:10px 12px;display:flex;align-items:center;border:0;color:var(--fg);font:13px var(--mono);text-align:left;width:100%}
+.ph .opt.p{background:var(--green);color:var(--panel);font-weight:700}
+.ph .opt.n{color:var(--red)}
+.dim{color:var(--dim)}.blue{color:var(--blue)}.green{color:var(--green)}.yellow{color:var(--yellow)}.red{color:var(--red)}.magenta{color:var(--magenta)}.cyan{color:var(--cyan)}.b{font-weight:700}.sel{background:var(--sel)}
+.decide{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px;color:var(--fg)}
+.decide h2{margin:0 0 8px}
+.decide ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+</style>
+
+<div class="wrap">
+  <div>
+    <h1>Approving a plan goes back to the mode you had</h1>
+    <p>Today the first answer of a plan always says «Aprobar y editar sin preguntar» and moves the engine to <code>accept edits</code>, even when you came into plan from <code>auto</code>. The daemon would remember the mode you were in <b>before</b> the plan, and the first answer would take you back to it when it was <code>auto</code>. Pick the mode you came from, then use the keys in the terminal (click it) or tap the phone.</p>
+  </div>
+  <div class="bar" role="group" aria-label="The mode before the plan">
+    <span class="hint">you came into plan from:</span>
+    <button id="m-manual" type="button" aria-pressed="false">manual</button>
+    <button id="m-accept" type="button" aria-pressed="false">accept edits</button>
+    <button id="m-auto" type="button" aria-pressed="true">auto</button>
+    <button id="m-none" type="button" aria-pressed="false">none (it began in plan)</button>
+    <button id="reset" type="button">Reset</button>
+  </div>
+  <div class="stage">
+    <div class="col"><h2>TERMINAL · the box of the plan</h2><div class="term"><pre id="scr" tabindex="0" aria-label="Plan box. 1 2 3, arrows and enter."></pre></div><div class="hint" id="keys"></div></div>
+    <div class="col"><h2>PHONE · the sheet</h2><div class="phone"><div class="ph" id="ph"></div></div></div>
+  </div>
+  <div class="decide">
+    <h2>To approve</h2>
+    <ol>
+      <li><b>The first answer follows where you came from.</b> From <code>auto</code>: «<b>Aprobar y volver a auto</b>», and the footer says <code>auto</code> again once the engine confirms. From <code>manual</code>, <code>accept edits</code> or no mode before (the conversation began in plan): «Aprobar y editar sin preguntar» as it is now. The three answers stay three, in the same places, and <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> keep their meaning.</li>
+      <li><b>The second one does not change:</b> «Aprobar, preguntando cada edición» (manual). The third neither: «Seguir planeando» (and its text field, REQ-595).</li>
+      <li><b>What the daemon does.</b> It keeps the mode the engine reports just before it reports <code>plan</code>; it forgets it when the conversation leaves plan another way (<kbd>⇧tab</kbd>, <code>/mode</code>) and when it restarts (a new engine starts with the mode it is given, so none is remembered). The answer key becomes <code>auto</code> and the daemon asks the engine for <code>auto</code> at once, as it asks for <code>acceptEdits</code> today.</li>
+      <li><b>On the wire.</b> The plan's question gets an optional label on its first option and the key <code>auto</code> is one more it accepts; a client that does not know it shows the label it is given and sends the key it is given, so an older phone keeps working. The phone and the terminal draw the same three buttons.</li>
+    </ol>
+  </div>
+</div>
+
+<script>
+(function(){
+const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const c = (cls, s) => `<span class="${cls}">${esc(s)}</span>`;
+let before = 'auto', at = 0, done = null, now = 'plan';
+const first = () => before === 'auto' ? 'Aprobar y volver a auto' : 'Aprobar y editar sin preguntar';
+const OPTS = () => [first(), 'Aprobar, preguntando cada edición', 'Seguir planeando'];
+const LABEL = {auto:['auto','yellow'], accept:['accept edits','magenta'], manual:['manual','dim'], plan:['plan','cyan']};
+function decide(i){
+  if (i === 2){ done = 'seguir planeando'; now = 'plan'; }
+  else if (i === 1){ done = 'preguntando cada edición'; now = 'manual'; }
+  else { done = first(); now = before === 'auto' ? 'auto' : 'accept'; }
+}
+function foot(){ const [l, k] = LABEL[now]; return ' ' + c(k, l) + c('dim', ' · sonnet-5.5'); }
+function term(){
+  const L = [], w = 74;
+  const box = s => c('dim', '│ ') + s.html + ' '.repeat(Math.max(0, w - 3 - s.len)) + c('dim', '│');
+  L.push(c('dim', '╭─ Plan listo ' + '─'.repeat(w - 15) + '╮'));
+  ['# Plan: añadir `suma` a math.py', '## Pasos', '1. Crear math.py con `suma(a, b)`', '2. Añadir tests en tests/test_math.py'].forEach(l => L.push(box({html: esc(l), len: l.length})));
+  L.push(box({html: c('blue', 'v abre el plan completo'), len: 23}));
+  L.push(c('dim', '├' + '─'.repeat(w - 2) + '┤'));
+  if (!done) OPTS().forEach((o, i) => { const on = i === at, t = `${on ? '▸' : ' '} ${i + 1}  ${o}`; L.push(box({html: (on ? '<span class="sel b">' : '<span>') + esc(t.padEnd(w - 4)) + '</span>', len: w - 4})); });
+  else L.push(box({html: c('green', '✔ ' + done), len: done.length + 2}));
+  L.push(c('dim', '╰' + '─'.repeat(w - 2) + '╯'));
+  L.push(foot());
+  document.getElementById('scr').innerHTML = L.join('\n');
+  document.getElementById('keys').textContent = done ? 'Reset to try again' : '1 2 3 · ↑↓ ↵ · v plan completo · esc interrumpe';
+}
+function phone(){
+  const p = document.getElementById('ph');
+  let h = `<div class="t"><b>Plan listo</b><span class="yellow">plan</span></div><div class="dim"># Plan: añadir suma a math.py ## Pasos 1. Crear math.py…</div><button class="opt" style="color:var(--blue)" type="button">▤ Ver el plan completo</button>`;
+  if (done) h += `<div class="green">✔ ${esc(done)}</div><div class="dim">modo ahora: ${esc(LABEL[now][0])}</div>`;
+  else OPTS().forEach((o, i) => { h += `<button class="opt ${i === 0 ? 'p' : i === 2 ? 'n' : ''}" data-k="${i}" type="button">${esc(o)}</button>`; });
+  p.innerHTML = h;
+  p.querySelectorAll('[data-k]').forEach(b => b.onclick = () => { decide(+b.dataset.k); draw(); });
+}
+function draw(){ term(); phone(); }
+document.getElementById('scr').addEventListener('keydown', e => {
+  if (done) return;
+  if (e.key === 'ArrowDown') at = Math.min(2, at + 1); else if (e.key === 'ArrowUp') at = Math.max(0, at - 1);
+  else if (['1','2','3'].includes(e.key)) decide(+e.key - 1);
+  else if (e.key === 'Enter') decide(at);
+  else if (e.key === 'n') decide(2);
+  else return;
+  draw(); e.preventDefault();
+});
+['manual','accept','auto','none'].forEach(k => document.getElementById('m-' + k).onclick = () => { before = k; done = null; now = 'plan'; at = 0; ['manual','accept','auto','none'].forEach(j => document.getElementById('m-' + j).setAttribute('aria-pressed', j === k)); draw(); });
+document.getElementById('reset').onclick = () => { done = null; now = 'plan'; at = 0; draw(); };
+draw();
+})();
+</script>

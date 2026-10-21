@@ -1,0 +1,62 @@
+{
+  "t": "snapshot",
+  "node": {
+    "id": "00000000-0000-4000-8000-0000000000d2",
+    "type": "blocks",
+    "v": 1,
+    "epoch": "00000000-0000-4000-8000-000000000001",
+    "rev": 4,
+    "attention": [],
+    "pane": "00000000-0000-4000-8000-0000000000c2",
+    "mode": "blocks",
+    "blocks": [
+      {
+        "id": 1,
+        "cmd": "git status",
+        "cwd": "/home/u/code/app-login",
+        "started": 1791932000000,
+        "running": false,
+        "code": 0,
+        "ms": 120,
+        "out": [
+          [
+            {
+              "t": "On branch feat/login"
+            }
+          ],
+          [
+            {
+              "t": "nothing to commit, working tree clean"
+            }
+          ]
+        ]
+      },
+      {
+        "id": 2,
+        "cmd": "cargo watch -x test",
+        "cwd": "/home/u/code/app-login",
+        "started": 1791932100000,
+        "running": false,
+        "code": 0,
+        "ms": 12400,
+        "interrupted": true,
+        "out": [
+          [
+            {
+              "t": "[Running cargo test]"
+            }
+          ]
+        ]
+      },
+      {
+        "id": 3,
+        "cmd": "",
+        "cwd": "",
+        "started": 1791932200000,
+        "running": false,
+        "restart": true,
+        "out": []
+      }
+    ]
+  }
+}

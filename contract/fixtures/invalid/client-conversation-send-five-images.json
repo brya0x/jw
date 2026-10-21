@@ -1,0 +1,31 @@
+{
+  "t": "cmd",
+  "id": "c43",
+  "cmd": {
+    "cmd": "conversation_send",
+    "node": "00000000-0000-4000-8000-0000000000e1",
+    "text": "x",
+    "images": [
+      {
+        "media_type": "image/png",
+        "data": "AA=="
+      },
+      {
+        "media_type": "image/png",
+        "data": "AA=="
+      },
+      {
+        "media_type": "image/png",
+        "data": "AA=="
+      },
+      {
+        "media_type": "image/png",
+        "data": "AA=="
+      },
+      {
+        "media_type": "image/png",
+        "data": "AA=="
+      }
+    ]
+  }
+}

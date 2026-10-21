@@ -1,0 +1,124 @@
+{
+  "t": "snapshot",
+  "node": {
+    "id": "00000000-0000-4000-8000-0000000000d2",
+    "type": "diff",
+    "v": 1,
+    "epoch": "00000000-0000-4000-8000-000000000001",
+    "rev": 3,
+    "attention": [],
+    "workspace": "00000000-0000-4000-8000-0000000000b1",
+    "scope": "general",
+    "base": "origin/main",
+    "state": "ok",
+    "files": [
+      {
+        "path": "crates/web/src/auth.rs",
+        "status": "modified",
+        "added": 11,
+        "deleted": 6,
+        "hash": "3f9a1c0e7b2d4a58",
+        "seen": "changed",
+        "hunks": [
+          {
+            "context": "impl Auth {",
+            "old_start": 41,
+            "old_lines": 9,
+            "new_start": 41,
+            "new_lines": 10,
+            "lines": [
+              " impl Auth {",
+              "-    pub fn check(&self, secret: &str) -> Result<Device, AuthError> {",
+              "+    pub fn check(&self, addr: IpAddr, secret: &str) -> Result<Device, AuthError> {",
+              "         let hash = sha256(secret.as_bytes());",
+              "-        let found = self.store.find(&hash);",
+              "-        match found {",
+              "-            Some(d) => Ok(d),",
+              "-            None => Err(AuthError::Unknown),",
+              "-        }",
+              "+        let Some(device) = self.store.find(&hash) else {",
+              "+            self.limiter.fail(addr);",
+              "+            return Err(AuthError::Unknown);",
+              "+        };",
+              "+        self.limiter.clear(addr);",
+              "+        Ok(device)",
+              "     }"
+            ]
+          },
+          {
+            "context": "impl Auth {",
+            "old_start": 88,
+            "old_lines": 4,
+            "new_start": 90,
+            "new_lines": 8,
+            "lines": [
+              "     }",
+              " ",
+              "+    pub fn revoke(&self, id: &str) -> bool {",
+              "+        self.store.remove(id)",
+              "+    }",
+              "+",
+              "     fn token() -> String {",
+              "         random_hex(32)"
+            ]
+          }
+        ]
+      },
+      {
+        "path": "crates/web/src/login.rs",
+        "status": "added",
+        "added": 3,
+        "deleted": 0,
+        "hash": "a1b2c3d4e5f60718",
+        "hunks": [
+          {
+            "context": "",
+            "old_start": 0,
+            "old_lines": 0,
+            "new_start": 1,
+            "new_lines": 3,
+            "lines": [
+              "+use crate::auth::Auth;",
+              "+",
+              "+pub const MAX_FAILS: u32 = 5;"
+            ]
+          }
+        ]
+      },
+      {
+        "path": "crates/web/src/session.rs",
+        "old_path": "crates/web/src/sess.rs",
+        "status": "renamed",
+        "added": 1,
+        "deleted": 1,
+        "hash": "0123456789abcdef",
+        "seen": "yes",
+        "hunks": [
+          {
+            "context": "pub struct Session {",
+            "old_start": 12,
+            "old_lines": 4,
+            "new_start": 12,
+            "new_lines": 4,
+            "lines": [
+              " pub struct Session {",
+              "-    pub born: u64,",
+              "+    pub born_ms: u64,",
+              "     pub device: String,",
+              " }"
+            ]
+          }
+        ]
+      },
+      {
+        "path": "assets/logo.png",
+        "status": "modified",
+        "binary": true,
+        "added": 0,
+        "deleted": 0,
+        "hash": "fedcba9876543210",
+        "hunks": []
+      }
+    ]
+  }
+}

@@ -1,0 +1,307 @@
+<title>jwn · seeing the subagents that run</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+:root{
+  --bg:#282c34; --panel:#21252b; --fg:#abb2bf; --dim:#5c6370; --line:#3e4451; --sel:#2c313a;
+  --blue:#61afef; --green:#98c379; --yellow:#e5c07b; --red:#e06c75; --magenta:#c678dd; --cyan:#56b6c2;
+  --page:#16181d; --ink:#c3c9d4; --mut:#7d8594;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}}
+:root[data-theme="light"]{--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.55 'IBM Plex Sans',system-ui,sans-serif;padding:24px max(16px,env(safe-area-inset-right,0px)) 40px max(16px,env(safe-area-inset-left,0px))}
+.wrap{max-width:1240px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
+h1{font:600 20px/1.2 var(--mono);margin:0}
+h2{font:600 12px var(--mono);margin:0;color:var(--mut)}
+p{margin:0;max-width:86ch;color:var(--mut)}
+code,kbd{font:12px var(--mono)}
+button{font:12px var(--mono);color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;min-height:32px;cursor:pointer}
+button:hover{border-color:var(--blue)}
+button[aria-pressed="true"]{border-color:var(--blue);color:var(--blue)}
+:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.stage{display:flex;gap:28px;align-items:flex-start;flex-wrap:wrap}
+.col{flex:1 1 560px;min-width:0;display:flex;flex-direction:column;gap:8px}
+.col.ph{flex:0 0 auto}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto}
+.term pre{margin:0;font:13px/1.35 var(--mono);color:var(--fg);outline:none;width:max-content;min-width:100%}
+.hint{font:12px var(--mono);color:var(--mut)}
+.phone{width:376px;max-width:100%;background:var(--bg);border:1px solid var(--line);border-radius:28px;padding:10px;box-shadow:0 0 0 6px var(--panel)}
+.scr{background:var(--panel);border-radius:20px;overflow:hidden;font:13px/1.45 var(--mono);color:var(--fg);display:flex;flex-direction:column;min-height:560px;position:relative}
+.scr .hd{padding:12px 14px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:8px}
+.scr .bd{padding:10px 14px;display:flex;flex-direction:column;gap:8px;flex:1;overflow:auto}
+.scr .ft{padding:10px 14px;border-top:1px solid var(--line);color:var(--dim)}
+.row{min-height:48px;border-radius:8px;background:var(--sel);padding:8px 12px;display:flex;flex-direction:column;justify-content:center;gap:2px;cursor:pointer;border:0;color:var(--fg);font:13px var(--mono);text-align:left;width:100%}
+.row .sub{color:var(--dim);font-size:12px}
+.chips{display:flex;gap:6px;overflow-x:auto;padding:8px 14px;border-bottom:1px solid var(--line)}
+.chip{white-space:nowrap;border-radius:99px;background:var(--sel);padding:4px 10px;min-height:32px;display:flex;align-items:center;border:0;color:var(--fg);font:12px var(--mono);cursor:pointer}
+.sheet{position:absolute;left:0;right:0;bottom:0;background:var(--panel);border-top:1px solid var(--line);border-radius:16px 16px 0 0;padding:12px 14px;display:flex;flex-direction:column;gap:8px;box-shadow:0 -8px 24px #0006;max-height:78%;overflow:auto}
+.dim{color:var(--dim)}.blue{color:var(--blue)}.green{color:var(--green)}.yellow{color:var(--yellow)}.red{color:var(--red)}.cyan{color:var(--cyan)}.magenta{color:var(--magenta)}.b{font-weight:700}.sel{background:var(--sel)}
+.decide{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px;color:var(--fg)}
+.decide h2{margin:0 0 8px}
+.decide ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+</style>
+
+<div class="wrap">
+  <div>
+    <h1>Seeing the subagents that run</h1>
+    <p>Claude Code lists the agents working in the background and lets you open one to see what it is doing. jwn already has the list (<code>⚙ n</code>, <code>^B</code>, <code>/tasks</code>: what it is, its time, <code>x</code> to stop) and draws the agent's card inside the chat. What it lacks is <b>looking inside one while it works</b>. Four ways, all with the clock running: pick a version, then use the keys in the terminal (click it first) or tap in the phone.</p>
+  </div>
+  <div class="bar" role="group" aria-label="Version">
+    <button id="va" type="button" aria-pressed="true">A · the list opens a row</button>
+    <button id="vb" type="button" aria-pressed="false">B · list and live detail</button>
+    <button id="vc" type="button" aria-pressed="false">C · a strip that is always there</button>
+    <button id="vd" type="button" aria-pressed="false">D · an area that is always there</button>
+    <button id="tg" type="button" title="the same as ^B in the terminal or the ⚙ pill on the phone">D: open or close the area (^B)</button>
+    <button id="rs" type="button">Reset</button>
+  </div>
+  <div class="stage">
+    <div class="col"><h2 id="th">TERMINAL</h2><div class="term"><pre id="scr" tabindex="0" aria-label="Terminal client"></pre></div><div class="hint" id="keys"></div></div>
+    <div class="col ph"><h2>PHONE</h2><div class="bar" role="group" aria-label="Phone button (version D)"><button id="bb" type="button" aria-pressed="true">pill in the tab bar</button><button id="bc" type="button" aria-pressed="false">chip by the model</button><button id="bf" type="button" aria-pressed="false">floating ⚙</button></div><div class="phone"><div class="scr" id="ph"></div></div></div>
+  </div>
+  <div class="decide">
+    <h2>To approve</h2>
+    <ol>
+      <li><b>What the daemon already knows</b> (it comes from the engine's own task messages): what each one is, the last tool it ran, the number of tools, tokens and time, and how it ended. <b>What is new for the detail</b>: the steps it took (tool and argument, one line each), what it said last, and the prompt it was given. The daemon would read them from the subagent's own transcript file (the engine writes one for each) and put them in the task, additive, same as the items; a task that is not a subagent (a shell, a monitor) shows its description and its output tail instead.</li>
+      <li><b>A</b> is the smallest: the list you already have, where <kbd>↵</kbd> (a tap on the phone) opens the row under itself with the prompt and the last steps. Nothing new on screen when you do not look.</li>
+      <li><b>B</b> adds a place: the list at the left and, for the row lit, its detail at the right (steps scrolling live, what it said, <kbd>x</kbd> stops it). On the phone, a tap on a row opens the detail as a whole screen with a back. Needs width: under 100 columns the detail replaces the list, as the diff does.</li>
+      <li><b>C</b> is about not having to look: below the working line, one row for each subagent that runs (name, what it does now, tools, time; three rows and «+n»). <kbd>^B</kbd> or a click opens A or B. On the phone, chips under the tab; a tap opens the sheet of that one. Costs two to four rows of the conversation while agents run.</li>
+      <li><b>D</b> (asked for after the first three) is an <b>area you open from anywhere with a key</b>: <kbd>^B</kbd> works in the field, while you type, and from the panels; it opens at the right of the conversation, like the diff beside the panels (REQ-589), the list of the agents on top and, under it, the detail of the one lit, with its steps moving. It is closed until you ask, the footer says how many run (<code>⚙ n</code>, as now), it stays open until you close it (also with nothing running, with one dim line, so nothing jumps), and <kbd>Tab</kbd> moves between the field and the area. Needs about 100 columns; under that it is the whole panel, as the diff is. On the phone the <code>⚙ n</code> pill of the header toggles a <b>panel under it</b>: one row for each agent with its step now, a tap opens that row in place (prompt, steps, said, ■), and it never takes more than a third of the screen. Try it: it starts closed.</li>
+      <li><b>The button on the phone</b> (version D; the three are on the phone's side, try them): <b>pill in the tab bar</b> is where the <code>⚙ n</code> of REQ-448 already is (it shows only while something runs; a tap now toggles the panel under the bar instead of the sheet); <b>chip by the model</b> puts it in the row of the field, under the thumb, next to the model and the branch; <b>floating ⚙</b> is a round 48 dp button over the chat, always reachable, but it covers the last line. Two more that need no button: a swipe from the right edge opens the panel, and <code>/tasks</code> still opens it. <b>I would take the chip by the model</b> (under the thumb, no cover over the chat, and the field's row is where the phone already keeps what runs: model, mode, branch, queue), shown from the first agent and hidden with none.</li>
+      <li><b>My recommendation, now:</b> D, with C as what it becomes when the area is narrow, and A's row opening as the phone's. The first build would be D on the daemon's data (what each one is, its last tool, tools, tokens, time); the steps from the transcript follow.</li>
+    </ol>
+  </div>
+</div>
+
+<script>
+(function(){
+const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const c = (cls, s) => `<span class="${cls}">${esc(s)}</span>`;
+const pad = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s.padEnd(n));
+const fmt = t => `${Math.floor(t/60)}:${String(t%60).padStart(2,'0')}`;
+const kt = n => n >= 1000 ? (n/1000).toFixed(1).replace('.0','') + 'k' : String(n);
+const SPIN = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
+const POOL = [['Grep','"ConvTask" crates/'],['Read','crates/daemon/src/engine.rs'],['Glob','android/**/Navigator.kt'],['Read','crates/contract/src/lib.rs'],['Grep','"stub_seen" -n'],['Bash','git log --oneline -5'],['Read','docs/spec.md'],['Grep','"fn set_running"']];
+let V, S, tickN, sel, open, view, sheet, dock = false, btn = 'bar';
+function reset(){
+  V = V || 'a'; dock = false; tickN = 0; sel = 0; open = new Set([0]); view = 'list'; sheet = null;
+  S = [
+    {k:'agent', name:'Explore', desc:'mapear el puente del teléfono', state:'run', t:72, tools:5, tok:38400, said:'Encontré el servidor en crates/web; sigo con el cliente.',
+     prompt:'Busca cómo el daemon habla con el teléfono: dónde se abre el puerto, qué mensajes pasan y quién los valida. No edites nada.',
+     steps:[['Glob','crates/**/bridge*.rs',1],['Read','crates/web/src/lib.rs',1],['Grep','"fn pair" -n',1],['Read','crates/daemon/src/mobile.rs',1],['Grep','"ws://" android/',1]]},
+    {k:'agent', name:'general-purpose', desc:'revisar N123 (rust-review)', state:'run', t:243, tools:31, tok:92100, said:'La carrera al apagar parece cerrada; reviso las pruebas.',
+     prompt:'Corre /rust-review sobre N123 y N124 sin hacer commit. Escribe el informe en /tmp.',
+     steps:[['Bash','git show 63fe93e --stat',1],['Read','crates/daemon/src/core.rs',1],['Grep','"stopping" crates/daemon',1],['Bash','cargo clippy -p jw-daemon',1],['Edit','crates/daemon/src/panes.rs',1]]},
+    {k:'shell', name:'Bash', desc:'cargo test -p jwn', state:'run', t:35, tools:0, tok:0, said:'test tui::field::tests::a_line… ok',
+     prompt:'cargo test -p jwn', steps:[]},
+    {k:'agent', name:'general-purpose', desc:'revisar N124 en Android', state:'done', t:462, tools:59, tok:52400, said:'3 hallazgos, todos corregidos; informe en /tmp/review-android-n124.md',
+     prompt:'Corre /android-review sobre N124.', steps:[['Bash','./gradlew lint',1],['Edit','ConversationSheets.kt',1],['Bash','./gradlew testDebugUnitTest',1]]},
+  ];
+}
+function tick(){
+  tickN++;
+  S.forEach((a, i) => { if (a.state !== 'run') return; a.t++; if (a.k === 'agent' && tickN % (3 + i) === 0){
+    const [t, g] = POOL[(tickN + i * 3) % POOL.length]; if (a.steps.length) a.steps[a.steps.length - 1][2] = 1; a.steps.push([t, g, 0]); a.tools++; a.tok += 700 + (tickN * 37) % 600; a.said = 'Siguiendo con ' + g.split(' ')[0] + '…'; } });
+  draw();
+}
+const run = () => S.filter(a => a.state === 'run');
+const mark = a => a.state === 'run' ? SPIN[tickN % SPIN.length] : a.state === 'done' ? '✓' : '■';
+const markc = a => a.state === 'run' ? 'yellow' : a.state === 'done' ? 'green' : 'red';
+const kind = a => a.k === 'agent' ? `${a.name}` : 'shell';
+const stats = a => a.k === 'agent' ? `${a.tools} tools · ${kt(a.tok)} · ${fmt(a.t)}` : fmt(a.t);
+const W = 78;
+const box = (title, lines, w = W) => [c('dim', '╭─ ' + title + ' ' + '─'.repeat(Math.max(0, w - title.length - 5)) + '╮')].concat(lines.map(l => c('dim', '│ ') + l.html + ' '.repeat(Math.max(0, w - 3 - l.len)) + c('dim', '│')), [c('dim', '╰' + '─'.repeat(w - 2) + '╯')]);
+const ln = (html, len) => ({html, len});
+const plain = (cls, s) => ln(c(cls, s), s.length);
+
+// ----- terminal ---------------------------------------------------------
+function chat(){
+  const L = [];
+  L.push(c('dim','  ') + c('green','❯ ') + 'lanza una revisión de N123 y mapea el puente, en paralelo');
+  L.push('');
+  L.push(c('blue','● ') + 'Lanzo dos agentes en paralelo y sigo contigo.');
+  L.push(c('dim','  ') + c('blue','● Agent(') + 'Explore) mapear el puente del teléfono');
+  L.push(c('dim','  ') + c('blue','● Agent(') + 'general-purpose) revisar N123 (rust-review)');
+  L.push('');
+  return L;
+}
+function stripRows(){
+  const r = run(), L = [];
+  r.slice(0, 3).forEach(a => {
+    const last = a.steps.length ? a.steps[a.steps.length - 1] : null;
+    const what = a.k === 'agent' ? (last ? `${last[0]} ${last[1]}` : 'empezando') : a.desc;
+    L.push(c(markc(a), '  ' + mark(a) + ' ') + c('b', pad(kind(a), 15)) + ' ' + c('dim', pad(what, 38)) + ' ' + c('dim', stats(a)));
+  });
+  if (r.length > 3) L.push(c('dim', `  +${r.length - 3} más`));
+  return L;
+}
+function listLines(w, withDetail){
+  const out = [];
+  S.forEach((a, i) => {
+    const on = i === sel, line = (on ? '▸ ' : '  ') + mark(a) + ' ' + pad(kind(a), 15) + ' ' + pad(a.desc, withDetail ? 12 : 30) + ' ' + (withDetail ? '' : stats(a));
+    out.push(ln((on ? `<span class="sel b">` : '<span>') + c(markc(a), line.slice(0, 4)) + esc(line.slice(4)) + '</span>', line.length));
+    if (!withDetail && open.has(i)) out.push(...detailLines(a, w - 6).map(d => ln(c('dim', '   │ ') + d.html, 6 + d.len)));
+  });
+  return out;
+}
+function detailLines(a, w){
+  const out = [];
+  out.push(plain('dim', 'prompt  ') && ln(c('dim', 'prompt  ') + esc(pad(a.prompt, w - 8)), w));
+  const steps = a.steps.slice(-5);
+  steps.forEach(s => out.push(ln(c(s[2] ? 'green' : 'yellow', (s[2] ? '✓ ' : SPIN[tickN % SPIN.length] + ' ')) + c('cyan', s[0].padEnd(5)) + ' ' + esc(pad(s[1], w - 10)), w)));
+  if (!steps.length && a.k === 'shell') out.push(plain('dim', '… ' + a.said));
+  out.push(ln(c('dim', 'dijo    ') + esc(pad(a.said, w - 8)), w));
+  return out;
+}
+function termA(){
+  const L = chat().concat(stripRows().length ? [] : []);
+  L.push(c('yellow', '  ⠹ Trabajando… · ') + c('dim', '⚙ ' + run().length));
+  L.push('');
+  const body = listLines(W - 4, false);
+  L.push(...box('tareas · ' + S.length + ' · newest first', body));
+  keys('↑↓ mover · ↵ abrir o cerrar la fila · x detener · esc cerrar');
+  return L;
+}
+function termB(){
+  const L = [];
+  const a = S[sel], left = 34, right = 60;
+  const lh = [], rh = [];
+  S.forEach((t, i) => { const on = i === sel; const l = (on ? '▸ ' : '  ') + mark(t) + ' ' + pad(t.desc, left - 6); lh.push(ln((on ? '<span class="sel b">' : '<span>') + c(markc(t), l.slice(0, 4)) + esc(l.slice(4)) + '</span>', l.length)); });
+  rh.push(ln(c('b', esc(kind(a))) + c('dim', ' · ' + stats(a)) + c(markc(a), a.state === 'run' ? ' · trabajando' : a.state === 'done' ? ' · terminó' : ' · detenido'), kind(a).length + stats(a).length + 16));
+  rh.push(ln(c('dim', 'prompt  ') + esc(pad(a.prompt, right - 8)), right));
+  rh.push(plain('dim', '─'.repeat(right)));
+  a.steps.slice(-8).forEach(s => rh.push(ln(c(s[2] ? 'green' : 'yellow', s[2] ? '✓ ' : SPIN[tickN % SPIN.length] + ' ') + c('cyan', s[0].padEnd(5)) + ' ' + esc(pad(s[1], right - 9)), right)));
+  rh.push(plain('dim', '─'.repeat(right)));
+  rh.push(ln(c('dim', 'dijo    ') + esc(pad(a.said, right - 8)), right));
+  const n = Math.max(lh.length, rh.length);
+  const rows = [];
+  for (let i = 0; i < n; i++){
+    const l = lh[i] || ln('', 0), r = rh[i] || ln('', 0);
+    rows.push(ln(l.html + ' '.repeat(left - l.len) + c('dim', '│ ') + r.html, left + 2 + r.len));
+  }
+  L.push(...chat());
+  L.push(...box('tareas', rows, left + right + 6));
+  keys('↑↓ elegir · x detener · y copiar lo que dijo · esc cerrar · (por debajo de 100 columnas el detalle ocupa el lugar de la lista)');
+  return L;
+}
+function termC(){
+  const L = chat();
+  L.push(c('yellow', '  ⠹ Trabajando… · 1 min 12 s · ↓ 38 k tokens'));
+  L.push(...stripRows());
+  L.push(c('dim', '  ^B abre la lista · ⚙ ' + run().length));
+  L.push('');
+  L.push(c('dim', '╭' + '─'.repeat(W - 2) + '╮'));
+  L.push(c('dim', '│ ') + c('green', '❯ ') + c('dim', 'escribe un mensaje · / comandos'.padEnd(W - 6)) + c('dim', '│'));
+  L.push(c('dim', '╰' + '─'.repeat(W - 2) + '╯'));
+  keys('^B (o un clic en una fila) abre A o B · x detiene la fila elegida · la tira se va sola cuando no queda ninguno');
+  return L;
+}
+function termD(){
+  if (!dock){
+    const L0 = chat();
+    L0.push(c('yellow', '  ⠹ Trabajando… · 1 min 12 s'));
+    L0.push('');
+    L0.push(c('dim', '╭' + '─'.repeat(W - 2) + '╮'));
+    L0.push(c('dim', '│ ') + c('green', '❯ ') + c('dim', 'escribe un mensaje · / comandos'.padEnd(W - 6)) + c('dim', '│'));
+    L0.push(c('dim', '╰' + '─'.repeat(W - 2) + '╯'));
+    L0.push(c('dim', '  ') + c('yellow', '⚙ ' + run().length) + c('dim', ' agentes · ') + c('blue', '^B') + c('dim', ' abre el área · ') + c('dim', 'modo auto · sonnet-5.5'));
+    keys('^B abre el área de los agentes desde donde estés, también escribiendo · el pie dice cuántos corren (⚙ n)');
+    return L0;
+  }
+  const left = 46, right = 52, L = [];
+  const chatL = [
+    ln(c('green','❯ ') + esc(pad('lanza una revisión de N123 y mapea el puente', left - 4)), left - 2),
+    ln('', 0),
+    ln(c('blue','● ') + esc(pad('Lanzo dos agentes en paralelo y sigo contigo.', left - 4)), left - 2),
+    ln(c('blue','  ● Agent(') + esc(pad('Explore) mapear el puente', left - 14)), left - 4),
+    ln(c('blue','  ● Agent(') + esc(pad('general-purpose) revisar N123', left - 14)), left - 4),
+    ln('', 0),
+    ln(c('yellow','⠹ Trabajando… · 1 min 12 s'), 27),
+  ];
+  const d = [], r = run();
+  d.push(ln(c('b', 'agentes') + c('dim', r.length ? ' · ' + r.length + ' corriendo' : ' · ninguno'), 10 + (r.length ? 14 : 10)));
+  if (!S.length) d.push(plain('dim', 'nada corre ahora'));
+  S.forEach((a, i) => { const on = i === sel, l = (on ? '▸ ' : '  ') + mark(a) + ' ' + pad(kind(a), 15) + ' ' + stats(a); d.push(ln((on ? '<span class="sel b">' : '<span>') + c(markc(a), l.slice(0, 4)) + esc(pad(l.slice(4), right - 6)) + '</span>', Math.min(l.length, right - 2))); });
+  const a = S[sel];
+  d.push(plain('dim', '─'.repeat(right - 4)));
+  if (a){
+    d.push(ln(c('dim', 'prompt ') + esc(pad(a.prompt, right - 11)), right - 4));
+    a.steps.slice(-6).forEach(t => d.push(ln(c(t[2] ? 'green' : 'yellow', t[2] ? '✓ ' : SPIN[tickN % SPIN.length] + ' ') + c('cyan', t[0].padEnd(5)) + ' ' + esc(pad(t[1], right - 12)), right - 4)));
+    d.push(ln(c('dim', 'dijo   ') + esc(pad(a.said, right - 11)), right - 4));
+  }
+  const n = Math.max(chatL.length + 3, d.length), rows = [];
+  for (let i = 0; i < n; i++){
+    const l = i < chatL.length ? chatL[i] : ln('', 0), dr = d[i] || ln('', 0);
+    rows.push(ln(l.html + ' '.repeat(Math.max(0, left - 2 - l.len)) + c('dim', ' │ ') + dr.html, left + 1 + dr.len));
+  }
+  rows.push(ln(c('dim', '─'.repeat(left - 2)) + c('dim', '─┴─') + c('dim', '─'.repeat(right - 4)), left + right - 3));
+  rows.push(ln(c('green', '❯ ') + c('dim', 'escribe un mensaje · / comandos'), 34));
+  L.push(...box('feat/next-bootstrap', rows, left + right + 4));
+  keys('^B cierra el área (y la devuelve al ancho de la conversación) · Tab pasa del campo al área · ↑↓ elegir · x detener · queda abierta hasta que la cierres, también sin agentes');
+  return L;
+}
+function keys(t){ document.getElementById('keys').textContent = t; }
+
+// ----- phone -------------------------------------------------------------
+function phoneList(){
+  return S.map((a, i) => `<button class="row" data-i="${i}" type="button"><span>${c(markc(a), mark(a))} <b>${esc(kind(a))}</b> <span class="dim">${esc(a.desc)}</span></span><span class="sub">${esc(stats(a))}${a.k === 'agent' && a.steps.length ? ' · ' + esc(a.steps[a.steps.length - 1][0] + ' ' + a.steps[a.steps.length - 1][1]) : ''}</span></button>` + (V === 'a' && open.has(i) ? `<div class="sub" style="padding:0 12px 6px;color:var(--dim);font-size:12px">${a.steps.slice(-4).map(s => c(s[2] ? 'green' : 'yellow', s[2] ? '✓ ' : '⠹ ') + c('cyan', s[0]) + ' ' + esc(s[1])).join('<br>')}<br>${c('dim', 'dijo ')}${esc(a.said)}</div>` : '')).join('');
+}
+function phoneDetail(a){
+  return `<div class="hd"><button id="back" type="button">‹ tareas</button><span>${c(markc(a), mark(a))} <b>${esc(kind(a))}</b></span></div><div class="bd"><div class="dim">${esc(stats(a))}</div><div class="dim">prompt</div><div>${esc(a.prompt)}</div><div class="dim">pasos</div>${a.steps.slice(-8).map(s => `<div>${c(s[2] ? 'green' : 'yellow', s[2] ? '✓ ' : '⠹ ')}${c('cyan', s[0])} ${esc(s[1])}</div>`).join('') || '<div class="dim">sin pasos (no es un subagente)</div>'}<div class="dim">dijo</div><div>${esc(a.said)}</div></div><div class="ft">${a.state === 'run' ? `<button class="row" style="color:var(--red);min-height:48px" id="stop" type="button">■ Detener</button>` : 'terminó'}</div>`;
+}
+function phone(){
+  const p = document.getElementById('ph');
+  const pillB = (extra = '') => `<button id="pill" class="chip" type="button" aria-pressed="${dock}" aria-label="Agentes: ${run().length} corriendo" style="color:var(--yellow);${extra}">⚙ ${run().length}</button>`;
+  const head = V === 'd'
+    ? `<div class="hd"><b>feat/next-bootstrap</b><span class="dim">±</span></div><div style="display:flex;justify-content:space-between;align-items:center;padding:4px 14px;border-bottom:1px solid var(--line);font-size:12px"><span class="dim">claude · lanza una revisión de N123…</span>${btn === 'bar' ? pillB() : '<span class="blue">+</span>'}</div>`
+    : `<div class="hd"><b>feat/next-bootstrap</b><span class="yellow">⚙ ${run().length}</span></div>`;
+  const fieldD = V === 'd' ? `<div style="position:relative;border-top:1px solid var(--line);padding:8px 14px;display:flex;flex-direction:column;gap:6px"><div style="display:flex;gap:6px;align-items:center;overflow:auto"><span class="chip" style="min-height:26px"><span class="blue">●</span>&nbsp;sonnet-5.5 · <span class="yellow">auto</span></span><span class="chip magenta" style="min-height:26px">⎇ feat/next-bootstrap</span>${btn === 'chip' ? pillB('min-height:26px') : ''}</div><div><span class="green">❯</span> <span class="dim">escribe a claude</span></div>${btn === 'fab' ? `<button id="pill" type="button" aria-pressed="${dock}" aria-label="Agentes: ${run().length} corriendo" style="position:absolute;right:12px;top:-58px;width:48px;height:48px;border-radius:50%;background:var(--sel);color:var(--yellow);border:1px solid var(--line);font-size:16px;box-shadow:0 4px 12px #0006">⚙${run().length}</button>` : ''}</div>` : '';
+  const chatBody = `<div class="bd"><div class="dim">❯ lanza una revisión de N123 y mapea el puente, en paralelo</div><div>Lanzo dos agentes en paralelo y sigo contigo.</div><div class="blue">● Agent(Explore) mapear el puente del teléfono</div><div class="blue">● Agent(general-purpose) revisar N123</div><div class="dim">⠹ Trabajando…</div></div>`;
+  if (V === 'a'){
+    p.innerHTML = head + chatBody + `<div class="sheet"><div class="b">Tareas</div>${phoneList()}</div>`;
+  } else if (V === 'b'){
+    if (view === 'detail') p.innerHTML = phoneDetail(S[sel]);
+    else p.innerHTML = head + chatBody + `<div class="sheet"><div class="b">Tareas</div>${phoneList()}</div>`;
+  } else if (V === 'd'){
+    const rowsD = S.map((a, i) => { const last = a.steps.length ? a.steps[a.steps.length - 1] : null; return `<button class="row" data-i="${i}" type="button" style="min-height:48px"><span>${c(markc(a), mark(a))} <b>${esc(kind(a))}</b> <span class="dim">${esc(fmt(a.t))}</span></span><span class="sub">${esc(a.k === 'agent' ? (last ? last[0] + ' ' + last[1] : 'empezando') : a.desc)}</span></button>` + (open.has(i) ? `<div style="padding:2px 12px 8px;font-size:12px;color:var(--dim)">${c('dim', 'prompt ')}${esc(a.prompt)}<br>${a.steps.slice(-4).map(t => c(t[2] ? 'green' : 'yellow', t[2] ? '✓ ' : '⠹ ') + c('cyan', t[0]) + ' ' + esc(t[1])).join('<br>')}<br>${c('dim', 'dijo ')}${esc(a.said)}${a.state === 'run' ? `<br><button class="chip" data-stop="${i}" type="button" style="color:var(--red);margin-top:6px">■ Detener</button>` : ''}</div>` : ''); }).join('');
+    p.innerHTML = head + (!dock ? '' : `<div style="border-bottom:1px solid var(--line);padding:6px 14px;max-height:34%;overflow:auto;display:flex;flex-direction:column;gap:4px"><div class="dim" style="font-size:12px">agentes · ${run().length ? run().length + ' corriendo' : 'ninguno'}</div>${rowsD || '<div class="dim">nada corre ahora</div>'}</div>`) + chatBody + fieldD;
+    p.querySelectorAll('[data-stop]').forEach(b => b.onclick = e => { e.stopPropagation(); S[+b.dataset.stop].state = 'stop'; draw(); });
+  } else {
+    p.innerHTML = head + `<div class="chips">${run().map((a, i) => `<button class="chip" data-i="${S.indexOf(a)}" type="button">${c(markc(a), mark(a))}&nbsp;${esc(kind(a))} · ${fmt(a.t)}</button>`).join('')}</div>` + chatBody + (sheet !== null ? `<div class="sheet">${phoneDetail(S[sheet]).replace(/<div class="hd">.*?<\/div><div class="bd">/, '<div class="bd">').replace(/<div class="ft">.*$/, '')}<button class="row" id="close" type="button">Cerrar</button></div>` : '');
+  }
+  p.querySelectorAll('[data-i]').forEach(b => b.onclick = () => {
+    const i = +b.dataset.i; sel = i;
+    if (V === 'a' || V === 'd') { open.has(i) ? open.delete(i) : open.add(i); }
+    else if (V === 'b') view = 'detail'; else sheet = i;
+    draw();
+  });
+  const pill = p.querySelector('#pill'); if (pill) pill.onclick = () => { dock = !dock; draw(); };
+  const back = p.querySelector('#back'); if (back) back.onclick = () => { view = 'list'; draw(); };
+  const close = p.querySelector('#close'); if (close) close.onclick = () => { sheet = null; draw(); };
+  const stop = p.querySelector('#stop'); if (stop) stop.onclick = () => { S[sel].state = 'stop'; draw(); };
+}
+function draw(){
+  const L = V === 'a' ? termA() : V === 'b' ? termB() : V === 'd' ? termD() : termC();
+  document.getElementById('scr').innerHTML = L.join('\n');
+  phone();
+}
+document.getElementById('scr').addEventListener('keydown', e => {
+  if (V === 'd' && e.ctrlKey && e.key === 'b'){ dock = !dock; draw(); e.preventDefault(); return; }
+  if (V === 'c'){ if (e.key === '^' ) return; if (e.key === 'b' && e.ctrlKey){ V = 'b'; setBtns(); draw(); e.preventDefault(); } return; }
+  if (e.key === 'ArrowDown') sel = Math.min(S.length - 1, sel + 1);
+  else if (e.key === 'ArrowUp') sel = Math.max(0, sel - 1);
+  else if (e.key === 'Enter' && (V === 'a' || V === 'd')) open.has(sel) ? open.delete(sel) : open.add(sel);
+  else if (e.key === 'x' && S[sel].state === 'run') S[sel].state = 'stop';
+  else return;
+  draw(); e.preventDefault();
+});
+['b','c','f'].forEach(k => document.getElementById('b' + k).onclick = () => { btn = {b:'bar',c:'chip',f:'fab'}[k]; V = 'd'; setBtns(); draw(); });
+function setBtns(){ [['b','bar'],['c','chip'],['f','fab']].forEach(([k, v]) => document.getElementById('b' + k).setAttribute('aria-pressed', btn === v));  ['a','b','c','d'].forEach(k => document.getElementById('v' + k).setAttribute('aria-pressed', V === k)); }
+['a','b','c','d'].forEach(k => document.getElementById('v' + k).onclick = () => { V = k; view = 'list'; sheet = null; setBtns(); draw(); });
+document.getElementById('tg').onclick = () => { V = 'd'; setBtns(); dock = !dock; draw(); };
+document.getElementById('rs').onclick = () => { reset(); setBtns(); draw(); };
+reset(); setBtns(); draw(); setInterval(tick, 1000);
+})();
+</script>

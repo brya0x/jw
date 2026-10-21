@@ -1,283 +1,211 @@
-//! What a phone can type after `/` in a Claude conversation (mobile REQ-101): Claude's own commands, the ones in
-//! `<config>/commands` and in the folder's `.claude/commands`, and the skills in `<config>/skills` and the folder's
-//! `.claude/skills`. The files are Claude's and the user's, not jw's: every shape is read leniently and a file that
-//! cannot be read is left out, never an error. Commands that plugins or MCP servers add are not listed.
+//! What a client's `cmd` does. Runs without the hub lock held for anything slow.
 
-use std::collections::BTreeMap;
-use std::fs;
-use std::path::{Path, PathBuf};
+pub use contract::ErrorBody;
+use contract::{Cmd, ErrorCode, Outcome};
+use contract::{False, True};
+use serde_json::Value;
 
-use crate::chat::config_dir;
-use crate::proto::CommandInfo;
+use crate::agents;
+use crate::browse;
+use crate::changes;
+use crate::engine;
+use crate::files;
+use crate::markdown;
+use crate::panes;
+use crate::rename;
+use crate::review;
+use crate::saved;
+use crate::server::Shared;
+use crate::start;
+use crate::sync;
+use crate::textfile;
+use crate::workspaces;
+use crate::worktrees;
 
-/// Claude's own commands. The phone has their words.
-const BUILTIN: &[&str] = &[
-    "add-dir",
-    "agents",
-    "clear",
-    "compact",
-    "config",
-    "context",
-    "cost",
-    "doctor",
-    "export",
-    "help",
-    "hooks",
-    "init",
-    "login",
-    "logout",
-    "mcp",
-    "memory",
-    "model",
-    "permissions",
-    "plan",
-    "release-notes",
-    "resume",
-    "review",
-    "rewind",
-    "status",
-    "theme",
-    "usage",
-    "vim",
-];
-/// The most things listed, and the most characters of a description.
-const MAX_ITEMS: usize = 400;
-const DESC_MAX: usize = 200;
-/// The most folders walked, for a folder far from any `.claude`.
-const MAX_DEPTH: usize = 6;
+pub type Done = Result<Option<Value>, ErrorBody>;
 
-/// Everything offered after `/` for a Claude that runs in `cwd`, by name: a project's own wins over a user's, and over Claude's.
-pub fn list(cwd: Option<&Path>) -> Vec<CommandInfo> {
-    let mut found: BTreeMap<String, CommandInfo> = BTreeMap::new();
-    let mut put = |name: String, desc: String, kind: &str| {
-        found.insert(
-            name.clone(),
-            CommandInfo {
-                name: format!("/{name}"),
-                desc,
-                kind: kind.into(),
-            },
-        );
-    };
-    for b in BUILTIN {
-        put((*b).into(), String::new(), "claude");
+pub fn err(code: ErrorCode, message: impl Into<String>) -> ErrorBody {
+    ErrorBody {
+        code,
+        message: message.into(),
     }
-    if let Some(cfg) = config_dir() {
-        for (n, d) in commands_in(&cfg.join("commands")) {
-            put(n, d, "user");
-        }
-        for (n, d) in skills_in(&cfg.join("skills")) {
-            put(n, d, "skill");
-        }
-    }
-    // The folder and the ones above it, the nearest last so that it wins.
-    let mut folders: Vec<PathBuf> = cwd
-        .map(|c| {
-            c.ancestors()
-                .take(MAX_DEPTH)
-                .map(Path::to_path_buf)
-                .collect()
-        })
-        .unwrap_or_default();
-    folders.reverse();
-    for f in folders {
-        for (n, d) in commands_in(&f.join(".claude/commands")) {
-            put(n, d, "project");
-        }
-        for (n, d) in skills_in(&f.join(".claude/skills")) {
-            put(n, d, "skill");
-        }
-    }
-    found.into_values().take(MAX_ITEMS).collect()
 }
 
-/// The `.md` files under `dir` as commands: `a/b.md` is `a:b`.
-fn commands_in(dir: &Path) -> Vec<(String, String)> {
-    let mut out = Vec::new();
-    walk(dir, dir, 0, &mut out);
-    out
+pub fn outcome(done: Done) -> Outcome {
+    match done {
+        Ok(result) => Outcome::Ok { ok: True, result },
+        Err(error) => Outcome::Err { ok: False, error },
+    }
 }
 
-fn walk(root: &Path, dir: &Path, depth: usize, out: &mut Vec<(String, String)>) {
-    let Ok(rd) = fs::read_dir(dir) else { return };
-    let mut entries: Vec<_> = rd.flatten().collect();
-    entries.sort_by_key(|e| e.file_name());
-    for e in entries {
-        let path = e.path();
-        if path.is_dir() {
-            if depth < 3 {
-                walk(root, &path, depth + 1, out);
+pub fn run(shared: &Shared, cmd: Cmd) -> Done {
+    match cmd {
+        Cmd::RenameSession { name } => {
+            let name = name.trim();
+            if name.is_empty() {
+                return Err(err(ErrorCode::BadRequest, "the session name is empty"));
             }
-        } else if path.extension().is_some_and(|x| x == "md") {
-            let Ok(rel) = path
-                .with_extension("")
-                .strip_prefix(root)
-                .map(Path::to_path_buf)
-            else {
-                continue;
-            };
-            let name = rel
-                .iter()
-                .map(|p| p.to_string_lossy())
-                .collect::<Vec<_>>()
-                .join(":");
-            let text = fs::read_to_string(&path).unwrap_or_default();
-            let (front, body) = split_front(&text);
-            let desc = front_value(front, "description").unwrap_or_else(|| first_line(body));
-            if !name.is_empty() {
-                out.push((name, cut(&desc)));
+            let mut core = shared.lock();
+            core.model.name = name.to_owned();
+            core.refresh();
+            Ok(None)
+        }
+        Cmd::RenameWorkspace { workspace, name } => rename::workspace(shared, &workspace, &name),
+        Cmd::RenamePane { pane, name } => rename::pane(shared, &pane, &name),
+        Cmd::SyncWorkspace { workspace } => sync::workspace(shared, &workspace),
+        Cmd::Cancel { workspace } => crate::cancel::cancel(shared, &workspace),
+        Cmd::CheckWorkspace { workspace } => sync::check(shared, &workspace),
+        Cmd::OpenFolder { path } => workspaces::open_folder(shared, &path),
+        Cmd::ListDir { path, hidden } => browse::list_dir(path.as_deref(), hidden),
+        Cmd::ListFiles { workspace, path } => files::list(shared, &workspace, path.as_deref()),
+        Cmd::FindFiles { workspace, query } => files::find(shared, &workspace, &query),
+        Cmd::ListConversations { workspace } => saved::list(shared, &workspace),
+        Cmd::ReadMarkdown { workspace, path } => markdown::read(shared, &workspace, &path),
+        Cmd::ReadFile { workspace, path } => textfile::read(shared, &workspace, &path),
+        Cmd::ReadOlder {
+            node,
+            before,
+            count,
+        } => engine::read_older(shared, &node, before, count),
+        Cmd::ReadPlan { node, ask } => markdown::read_plan(shared, &node, &ask),
+        Cmd::CreateWorktree {
+            repo,
+            branch,
+            base,
+            folder,
+        } => {
+            workspaces::create_worktree(shared, &repo, &branch, base.as_deref(), folder.as_deref())
+        }
+        Cmd::ListWorktrees { repo } => worktrees::list(shared, &repo),
+        Cmd::ListPrs {
+            workspace,
+            requested,
+        } => review::list(shared, &workspace, requested),
+        Cmd::ReviewPr { workspace, pr } => review::review(shared, &workspace, pr),
+        Cmd::OpenWorktree { repo, path } => worktrees::open(shared, &repo, &path),
+        Cmd::ProjectConfig { repo } => start::project_config(shared, &repo),
+        Cmd::WriteProjectConfig { repo, to, text } => {
+            start::write_project_config(shared, &repo, to, &text)
+        }
+        Cmd::EditProjectConfig { repo, to, set } => {
+            start::edit_project_config(shared, &repo, to, &set)
+        }
+        Cmd::StartWorkspace { workspace, open } => start::start_workspace(shared, &workspace, open),
+        Cmd::RemoveWorkspace {
+            workspace,
+            remove_worktree,
+            force,
+        } => workspaces::remove_workspace(shared, &workspace, remove_worktree, force),
+        Cmd::MarkSeen { node, rev } => mark_seen(shared, &node, rev),
+        Cmd::NewPane {
+            workspace,
+            program,
+            beside,
+            dir,
+        } => panes::new_pane(shared, &workspace, program, beside, dir),
+        Cmd::ClosePane { pane } => panes::close_pane(shared, &pane),
+        Cmd::SwapPanes { a, b } => panes::swap_panes(shared, &a, &b),
+        Cmd::GrowPane { pane, dir, by } => panes::grow_pane(shared, &pane, dir, by),
+        Cmd::Write { pane, data } => panes::write(shared, &pane, &data),
+        Cmd::Resize { pane, rows, cols } => panes::resize(shared, &pane, rows, cols),
+        Cmd::OpenDiff {
+            workspace,
+            scope,
+            commit,
+        } => changes::open_diff(shared, &workspace, scope, commit.as_deref()),
+        Cmd::OpenCommits { workspace } => changes::open_commits(shared, &workspace),
+        Cmd::RefreshDiff { node } => changes::refresh(shared, &node),
+        Cmd::SetViewed { node, path, viewed } => changes::set_viewed(shared, &node, &path, viewed),
+        Cmd::AgentEvent {
+            pane,
+            event,
+            notification_type,
+            tool,
+        } => agents::event(
+            shared,
+            &pane,
+            event,
+            notification_type.as_deref(),
+            tool.as_deref(),
+        ),
+        Cmd::MobileStart {} => {
+            let hub = shared.lock().mobile.clone();
+            hub.start().map(Some).map_err(|why| err(ErrorCode::Io, why))
+        }
+        Cmd::MobileLink {} => {
+            let hub = shared.lock().mobile.clone();
+            hub.link().map(Some).map_err(|why| err(ErrorCode::Io, why))
+        }
+        Cmd::MobileWait { seconds } => {
+            let hub = shared.lock().mobile.clone();
+            Ok(hub
+                .wait(seconds)
+                .map(|ask| serde_json::json!({"name": ask.name, "code": ask.code})))
+        }
+        Cmd::MobileAnswer { yes } => {
+            let hub = shared.lock().mobile.clone();
+            if hub.answer(yes) {
+                Ok(None)
+            } else {
+                Err(err(ErrorCode::NotFound, "no phone is asking to pair"))
             }
         }
-    }
-}
-
-/// The folders under `dir` that hold a `SKILL.md`, by the name it gives or by the folder's.
-fn skills_in(dir: &Path) -> Vec<(String, String)> {
-    let Ok(rd) = fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    for e in rd.flatten() {
-        let path = e.path().join("SKILL.md");
-        let Ok(text) = fs::read_to_string(&path) else {
-            continue;
-        };
-        let (front, _) = split_front(&text);
-        let Some(name) =
-            front_value(front, "name").or_else(|| e.file_name().to_str().map(str::to_string))
-        else {
-            continue;
-        };
-        out.push((
+        Cmd::MobileStop {} => {
+            let hub = shared.lock().mobile.clone();
+            hub.stop();
+            Ok(None)
+        }
+        Cmd::OpenConversation {
+            pane,
+            resume,
+            args,
+            env,
+        } => engine::open_conversation(shared, &pane, resume, args, env),
+        Cmd::ConversationSend { node, text, images } => engine::send(shared, &node, &text, images),
+        Cmd::ConversationAnswer {
+            node,
+            ask,
+            key,
+            text,
+            by,
+        } => engine::answer(shared, &node, &ask, &key, text.as_deref(), by.as_deref()),
+        Cmd::ConversationInterrupt { node } => engine::interrupt(shared, &node),
+        Cmd::ConversationStopTask { node, task } => engine::stop_task(shared, &node, &task),
+        Cmd::ConversationSet {
+            node,
             name,
-            cut(&front_value(front, "description").unwrap_or_default()),
-        ));
+            accent,
+            model,
+            effort,
+            mode,
+        } => engine::set(shared, &node, name, accent, model, effort, mode),
+        Cmd::ConversationShell { node, command } => engine::shell(shared, &node, &command),
+        Cmd::ConversationClose { node } => engine::close(shared, &node),
     }
-    out
 }
 
-/// A file as its front matter (between the `---` lines it starts with) and the rest.
-fn split_front(text: &str) -> (&str, &str) {
-    let Some(rest) = text.strip_prefix("---\n") else {
-        return ("", text);
+/// End the attentions a node raised up to `rev`, so every client stops showing them.
+fn mark_seen(shared: &Shared, node: &str, rev: u64) -> Done {
+    let mut core = shared.lock();
+    let ended = |own: &mut Vec<crate::model::Own>| {
+        let before = own.len();
+        own.retain(|o| !o.rev.is_some_and(|r| r <= rev));
+        before != own.len()
     };
-    match rest.find("\n---") {
-        Some(end) => (&rest[..end], rest[end + 4..].trim_start_matches('\n')),
-        None => ("", text),
-    }
-}
-
-/// The value of `key:` in a front matter: on its line, or (when the line holds only `>` or `|`) the indented lines under it.
-fn front_value(front: &str, key: &str) -> Option<String> {
-    let mut lines = front.lines();
-    while let Some(l) = lines.next() {
-        let Some(v) = l.strip_prefix(key).and_then(|r| r.strip_prefix(':')) else {
-            continue;
-        };
-        let v = v.trim();
-        if v.is_empty() || v == ">" || v == "|" || v == ">-" || v == "|-" {
-            let rest: Vec<&str> = lines
-                .clone()
-                .take_while(|l| l.starts_with(' ') || l.starts_with('\t'))
-                .map(str::trim)
-                .collect();
-            let joined = rest.join(" ");
-            return (!joined.is_empty()).then_some(joined);
+    let mut found = false;
+    for ws in &mut core.model.workspaces {
+        if ws.id == node {
+            found = true;
+            ended(&mut ws.attention);
         }
-        return Some(v.trim_matches(|c| c == '"' || c == '\'').to_string());
+        for p in ws.panes.iter_mut().filter(|p| p.id == node) {
+            found = true;
+            ended(&mut p.attention);
+        }
     }
-    None
-}
-
-fn first_line(body: &str) -> String {
-    body.lines()
-        .map(|l| l.trim().trim_start_matches('#').trim())
-        .find(|l| !l.is_empty())
-        .unwrap_or("")
-        .to_string()
-}
-
-fn cut(s: &str) -> String {
-    let one: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
-    if one.chars().count() <= DESC_MAX {
-        return one;
+    if !found {
+        return Err(err(ErrorCode::NotFound, format!("no node {node}")));
     }
-    one.chars().take(DESC_MAX - 1).collect::<String>() + "…"
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    use crate::chat::CONFIG_ENV as CONFIG;
-
-    fn write(path: &Path, text: &str) {
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, text).unwrap();
-    }
-
-    #[test]
-    fn the_commands_and_skills_of_the_user_and_the_folder_are_listed_with_their_words() {
-        let _g = CONFIG.lock().unwrap_or_else(|e| e.into_inner());
-        let cfg = tempfile::tempdir().unwrap();
-        let proj = tempfile::tempdir().unwrap();
-        write(
-            &cfg.path().join("commands/commit.md"),
-            "---\ndescription: Commits it all\n---\nRun git status",
-        );
-        write(
-            &cfg.path().join("commands/team/ship.md"),
-            "# Ship it\n\nSteps",
-        );
-        write(
-            &cfg.path().join("skills/jw/SKILL.md"),
-            "---\nname: jw\ndescription: >\n  How to work\n  in a jw workspace\n---\nBody",
-        );
-        write(
-            &proj.path().join(".claude/commands/commit.md"),
-            "---\ndescription: \"The project's own\"\n---\n",
-        );
-        write(
-            &proj.path().join(".claude/skills/local/SKILL.md"),
-            "---\ndescription: A local one\n---\n",
-        );
-        write(
-            &proj.path().join(".claude/commands/notes.txt"),
-            "not a command",
-        );
-        // SAFETY: the tests that set this variable take turns on CONFIG.
-        unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", cfg.path()) };
-        let items = list(Some(proj.path()));
-        unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") };
-        let by = |n: &str| {
-            items
-                .iter()
-                .find(|c| c.name == n)
-                .map(|c| (c.desc.as_str(), c.kind.as_str()))
-        };
-        // The project's own wins over the user's of the same name.
-        assert_eq!(by("/commit"), Some(("The project's own", "project")));
-        assert_eq!(by("/team:ship"), Some(("Ship it", "user")));
-        assert_eq!(by("/jw"), Some(("How to work in a jw workspace", "skill")));
-        assert_eq!(by("/local"), Some(("A local one", "skill")));
-        assert_eq!(by("/model"), Some(("", "claude")));
-        assert_eq!(by("/notes"), None);
-        // By name.
-        let names: Vec<&str> = items.iter().map(|c| c.name.as_str()).collect();
-        let mut sorted = names.clone();
-        sorted.sort();
-        assert_eq!(names, sorted);
-    }
-
-    #[test]
-    fn a_folder_with_nothing_still_has_claudes_own_commands() {
-        let _g = CONFIG.lock().unwrap_or_else(|e| e.into_inner());
-        let cfg = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", cfg.path()) };
-        let items = list(None);
-        unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") };
-        assert!(
-            items.iter().all(|c| c.kind == "claude") && items.iter().any(|c| c.name == "/help")
-        );
-    }
+    core.refresh();
+    Ok(None)
 }

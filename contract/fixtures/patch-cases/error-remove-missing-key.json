@@ -1,0 +1,13 @@
+{
+  "before": {
+    "rev": 1
+  },
+  "ops": [
+    {
+      "op": "remove",
+      "path": "/nope"
+    }
+  ],
+  "to": 2,
+  "error": true
+}

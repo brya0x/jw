@@ -1,0 +1,767 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schema.jwn.invalid/contract.schema.json",
+  "title": "jwn contract",
+  "description": "Every document the daemon and a client exchange. Entry points: ClientMsg, DaemonMsg. Unknown properties are allowed everywhere on purpose (additive changes never break an old peer).",
+  "$defs": {
+    "Id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+    "Rev": { "type": "integer", "minimum": 0 },
+    "Peer": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": { "name": { "type": "string" }, "version": { "type": "string" } }
+    },
+    "ErrorCode": { "enum": ["bad_request", "not_found", "unsupported", "conflict", "git_failed", "io", "binary"] },
+    "AttentionKind": {
+      "enum": ["question", "plan", "permission", "shell_done", "agent_done", "screen", "merged", "ci_failed"]
+    },
+    "NodeType": { "enum": ["session", "workspace", "pane", "blocks", "diff", "commits", "conversation"] },
+    "BlocksMode": { "enum": ["blocks", "full"] },
+    "Accent": { "enum": ["blue", "green", "yellow", "red", "magenta", "cyan"] },
+    "ConvMode": { "enum": ["manual", "acceptEdits", "plan", "auto"] },
+    "ConvStatus": { "enum": ["idle", "resuming", "thinking", "streaming", "tool", "asking", "compacting", "dead"] },
+    "ToolState": { "enum": ["run", "ask", "ok", "denied", "failed"] },
+    "Tone": { "enum": ["warn", "error"] },
+    "DividerKind": { "enum": ["restart", "compact", "clear", "resume"] },
+    "DiffSign": { "enum": ["+", "-", " "] },
+    "DiffLine": {
+      "type": "object",
+      "required": ["sign", "text"],
+      "properties": {
+        "n": { "type": "integer", "minimum": 0 },
+        "sign": { "$ref": "#/$defs/DiffSign" },
+        "text": { "type": "string" }
+      }
+    },
+    "Inline": {
+      "description": "A run of text with one style.",
+      "type": "object",
+      "required": ["t"],
+      "properties": {
+        "t": { "type": "string" },
+        "b": { "const": true },
+        "i": { "const": true },
+        "code": { "const": true },
+        "href": { "type": "string" }
+      }
+    },
+    "MdItem": {
+      "type": "object",
+      "required": ["blocks"],
+      "properties": { "task": { "type": "boolean" }, "blocks": { "type": "array", "items": { "$ref": "#/$defs/MdBlock" } } }
+    },
+    "MdBlock": {
+      "description": "A piece of a Markdown document, as read_markdown replies and a finished text of a conversation carries.",
+      "oneOf": [
+        { "type": "object", "required": ["t", "level", "text"], "properties": { "t": { "const": "heading" }, "level": { "type": "integer", "minimum": 1, "maximum": 6 }, "text": { "type": "array", "items": { "$ref": "#/$defs/Inline" } } } },
+        { "type": "object", "required": ["t", "text"], "properties": { "t": { "const": "para" }, "text": { "type": "array", "items": { "$ref": "#/$defs/Inline" } } } },
+        { "type": "object", "required": ["t", "blocks"], "properties": { "t": { "const": "quote" }, "blocks": { "type": "array", "items": { "$ref": "#/$defs/MdBlock" } } } },
+        { "type": "object", "required": ["t", "items"], "properties": { "t": { "const": "list" }, "start": { "type": "integer", "minimum": 0 }, "items": { "type": "array", "items": { "$ref": "#/$defs/MdItem" } } } },
+        { "type": "object", "required": ["t", "lang", "text"], "properties": { "t": { "const": "code" }, "lang": { "type": "string" }, "text": { "type": "string" } } },
+        { "type": "object", "required": ["t", "head", "rows"], "properties": { "t": { "const": "table" }, "head": { "type": "array", "items": { "type": "array", "items": { "$ref": "#/$defs/Inline" } } }, "rows": { "type": "array", "items": { "type": "array", "items": { "type": "array", "items": { "$ref": "#/$defs/Inline" } } } } } },
+        { "type": "object", "required": ["t"], "properties": { "t": { "const": "rule" } } }
+      ]
+    },
+    "Item": {
+      "description": "One thing in a conversation, oldest first.",
+      "oneOf": [
+        { "type": "object", "required": ["t", "text"], "properties": { "t": { "const": "user" }, "text": { "type": "string" }, "images": { "type": "integer", "minimum": 1 } } },
+        { "type": "object", "required": ["t", "text"], "properties": { "t": { "const": "text" }, "text": { "type": "string" }, "live": { "const": true }, "blocks": { "type": "array", "items": { "$ref": "#/$defs/MdBlock" } } } },
+        {
+          "type": "object",
+          "required": ["t", "id", "name", "arg", "state"],
+          "properties": {
+            "t": { "const": "tool" },
+            "id": { "type": "string" },
+            "name": { "type": "string" },
+            "arg": { "type": "string" },
+            "state": { "$ref": "#/$defs/ToolState" },
+            "summary": { "type": "string" },
+            "output": { "type": "array", "items": { "type": "string" } },
+            "diff": { "type": "array", "items": { "$ref": "#/$defs/DiffLine" } },
+            "url": { "type": "string" },
+            "by": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["t", "id", "name", "description", "state", "tools", "tokens", "ms", "steps"],
+          "properties": {
+            "t": { "const": "agent" },
+            "id": { "type": "string" },
+            "name": { "type": "string" },
+            "description": { "type": "string" },
+            "state": { "$ref": "#/$defs/ToolState" },
+            "tools": { "type": "integer", "minimum": 0 },
+            "tokens": { "type": "integer", "minimum": 0 },
+            "ms": { "type": "integer", "minimum": 0 },
+            "last": { "type": "string" },
+            "steps": { "type": "array", "items": { "type": "string" } },
+            "prompt": { "type": "string" },
+            "model": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["t", "command", "state", "output"],
+          "properties": {
+            "t": { "const": "shell" },
+            "command": { "type": "string" },
+            "state": { "$ref": "#/$defs/ToolState" },
+            "output": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        { "type": "object", "required": ["t", "lines"], "properties": { "t": { "const": "out" }, "lines": { "type": "array", "items": { "type": "string" } } } },
+        { "type": "object", "required": ["t", "text"], "properties": { "t": { "const": "note" }, "text": { "type": "string" }, "tone": { "$ref": "#/$defs/Tone" } } },
+        {
+          "type": "object",
+          "required": ["t", "ms", "tools", "cost"],
+          "properties": {
+            "t": { "const": "result" },
+            "ms": { "type": "integer", "minimum": 0 },
+            "tools": { "type": "integer", "minimum": 0 },
+            "cost": { "type": "integer", "minimum": 0, "description": "Millionths of a dollar." }
+          }
+        },
+        { "type": "object", "required": ["t", "text", "kind"], "properties": { "t": { "const": "divider" }, "text": { "type": "string" }, "kind": { "$ref": "#/$defs/DividerKind" } } }
+      ]
+    },
+    "AskKind": { "enum": ["permission", "question", "plan"] },
+    "AskOption": { "type": "object", "required": ["key", "label"], "properties": { "key": { "type": "string" }, "label": { "type": "string" } } },
+    "Ask": {
+      "type": "object",
+      "required": ["id", "kind", "tool", "title", "options"],
+      "properties": {
+        "id": { "type": "string" },
+        "kind": { "$ref": "#/$defs/AskKind" },
+        "tool": { "type": "string" },
+        "title": { "type": "string" },
+        "command": { "type": "string" },
+        "diff": { "type": "array", "items": { "$ref": "#/$defs/DiffLine" } },
+        "plan": { "type": "array", "items": { "type": "string" } },
+        "options": { "type": "array", "items": { "$ref": "#/$defs/AskOption" }, "minItems": 1 },
+        "multi": { "const": true }
+      }
+    },
+    "TaskKind": { "enum": ["agent", "bash", "monitor", "loop", "other"] },
+    "TaskState": { "enum": ["run", "done", "stopped", "failed"] },
+    "Task": {
+      "type": "object",
+      "required": ["id", "kind", "label", "state", "started"],
+      "properties": {
+        "id": { "type": "string" },
+        "kind": { "$ref": "#/$defs/TaskKind" },
+        "label": { "type": "string" },
+        "state": { "$ref": "#/$defs/TaskState" },
+        "started": { "type": "integer", "minimum": 0 },
+        "info": { "type": "string" },
+        "item": { "type": "string" },
+        "tail": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "Todo": { "type": "object", "required": ["text", "done"], "properties": { "text": { "type": "string" }, "done": { "type": "boolean" } } },
+    "Artifact": { "type": "object", "required": ["title", "url"], "properties": { "title": { "type": "string" }, "url": { "type": "string" } } },
+    "CommandSource": { "enum": ["jwn", "claude", "project", "skill", "plugin"] },
+    "CommandKind": { "enum": ["local", "panel", "text", "prompt", "screen"] },
+    "ConvCommand": {
+      "type": "object",
+      "required": ["name", "source", "kind"],
+      "properties": {
+        "name": { "type": "string" },
+        "source": { "$ref": "#/$defs/CommandSource" },
+        "kind": { "$ref": "#/$defs/CommandKind" },
+        "description": { "type": "string" }
+      }
+    },
+    "Limits": {
+      "type": "object",
+      "properties": {
+        "five_hour": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "seven_day": { "type": "integer", "minimum": 0, "maximum": 100 }
+      }
+    },
+    "Image": {
+      "type": "object",
+      "required": ["media_type", "data"],
+      "properties": {
+        "media_type": { "enum": ["image/jpeg", "image/png", "image/webp", "image/gif"] },
+        "data": { "type": "string", "description": "Base64." }
+      }
+    },
+    "Color": {
+      "description": "A palette index (0 to 255) or a #rrggbb string.",
+      "oneOf": [
+        { "type": "integer", "minimum": 0, "maximum": 255 },
+        { "type": "string", "pattern": "^#[0-9a-f]{6}$" }
+      ]
+    },
+    "Span": {
+      "type": "object",
+      "required": ["t"],
+      "properties": {
+        "t": { "type": "string" },
+        "fg": { "$ref": "#/$defs/Color" },
+        "bg": { "$ref": "#/$defs/Color" },
+        "b": { "const": true },
+        "i": { "const": true },
+        "u": { "const": true }
+      }
+    },
+    "Block": {
+      "type": "object",
+      "required": ["id", "cmd", "cwd", "started", "running", "out"],
+      "properties": {
+        "id": { "type": "integer", "minimum": 0 },
+        "cmd": { "type": "string" },
+        "cwd": { "type": "string" },
+        "started": { "type": "integer", "minimum": 0 },
+        "running": { "type": "boolean" },
+        "code": { "type": "integer" },
+        "ms": { "type": "integer", "minimum": 0 },
+        "truncated": { "const": true },
+        "full": { "const": true },
+        "interrupted": { "const": true },
+        "restart": { "const": true },
+        "out": { "type": "array", "items": { "type": "array", "items": { "$ref": "#/$defs/Span" } } }
+      }
+    },
+    "AgentEvent": { "description": "The hooks of an agent the daemon listens to.", "enum": ["notification", "pre_tool_use", "post_tool_use", "user_prompt_submit", "stop", "session_end"] },
+    "Sha": { "type": "string", "pattern": "^[0-9a-f]{4,40}$" },
+    "DiffScope": { "description": "What a diff compares: the working tree with HEAD, this branch with its merge base with origin's default branch, or one commit with its first parent.", "enum": ["uncommitted", "general", "commit"] },
+    "DiffState": { "description": "no_base: origin has no default branch, so a general diff has nothing to compare with.", "enum": ["ok", "no_base"] },
+    "FileStatus": { "enum": ["added", "modified", "deleted", "renamed", "untracked"] },
+    "Seen": { "description": "yes: looked at and unchanged since; changed: looked at, but the file differs now.", "enum": ["yes", "changed"] },
+    "Hunk": {
+      "type": "object",
+      "required": ["context", "old_start", "old_lines", "new_start", "new_lines", "lines"],
+      "properties": {
+        "context": { "type": "string", "description": "The text git prints after the second @@ (usually the enclosing function)." },
+        "old_start": { "type": "integer", "minimum": 0 },
+        "old_lines": { "type": "integer", "minimum": 0 },
+        "new_start": { "type": "integer", "minimum": 0 },
+        "new_lines": { "type": "integer", "minimum": 0 },
+        "lines": { "type": "array", "items": { "type": "string", "pattern": "^[-+ ]" }, "description": "Each line prefixed with + (added), - (deleted) or a space (unchanged)." }
+      }
+    },
+    "DiffFile": {
+      "type": "object",
+      "required": ["path", "status", "added", "deleted", "hash", "hunks"],
+      "properties": {
+        "path": { "type": "string" },
+        "old_path": { "type": "string" },
+        "status": { "$ref": "#/$defs/FileStatus" },
+        "binary": { "const": true },
+        "unreadable": { "type": "string", "minLength": 1, "description": "Why the daemon did not read the file: symlink, too_big." },
+        "added": { "type": "integer", "minimum": 0 },
+        "deleted": { "type": "integer", "minimum": 0 },
+        "hash": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
+        "seen": { "$ref": "#/$defs/Seen" },
+        "hunks": { "type": "array", "items": { "$ref": "#/$defs/Hunk" } }
+      }
+    },
+    "CommitInfo": {
+      "type": "object",
+      "required": ["sha", "short", "subject", "time"],
+      "properties": {
+        "sha": { "$ref": "#/$defs/Sha" },
+        "short": { "$ref": "#/$defs/Sha" },
+        "subject": { "type": "string" },
+        "time": { "type": "integer", "minimum": 0, "description": "Commit time in Unix seconds." }
+      }
+    },
+    "WorkspaceKind": { "enum": ["worktree", "folder"] },
+    "Attention": {
+      "type": "object",
+      "required": ["kind", "node", "rev"],
+      "properties": {
+        "kind": { "$ref": "#/$defs/AttentionKind" },
+        "node": { "$ref": "#/$defs/Id" },
+        "rev": { "$ref": "#/$defs/Rev" },
+        "exit_code": { "type": "integer" }
+      }
+    },
+    "Head": {
+      "type": "object",
+      "required": ["id", "type", "v", "epoch", "rev", "attention"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "type": { "$ref": "#/$defs/NodeType" },
+        "v": { "type": "integer", "minimum": 1 },
+        "epoch": { "$ref": "#/$defs/Id" },
+        "rev": { "$ref": "#/$defs/Rev" },
+        "attention": { "type": "array", "items": { "$ref": "#/$defs/Attention" } }
+      }
+    },
+    "WorkspaceSummary": {
+      "type": "object",
+      "required": ["id", "name", "kind", "path", "pane_count", "attention"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "name": { "type": "string" },
+        "kind": { "$ref": "#/$defs/WorkspaceKind" },
+        "path": { "type": "string" },
+        "project": { "type": "string" },
+        "branch": { "type": "string" },
+        "pane_count": { "type": "integer", "minimum": 0 },
+        "attention": { "type": "array", "items": { "$ref": "#/$defs/Attention" } },
+        "review": { "$ref": "#/$defs/Review" },
+        "working": { "type": "boolean" }
+      }
+    },
+    "Review": {
+      "type": "object",
+      "required": ["pr", "base"],
+      "properties": { "pr": { "type": "integer", "minimum": 1 }, "base": { "type": "string" } }
+    },
+    "SplitDir": { "enum": ["row", "col"] },
+    "Layout": {
+      "oneOf": [
+        { "type": "object", "required": ["t", "pane"], "properties": { "t": { "const": "pane" }, "pane": { "$ref": "#/$defs/Id" } } },
+        {
+          "type": "object",
+          "required": ["t", "dir", "ratio", "a", "b"],
+          "properties": {
+            "t": { "const": "split" },
+            "dir": { "$ref": "#/$defs/SplitDir" },
+            "ratio": { "type": "integer", "minimum": 100, "maximum": 900 },
+            "a": { "$ref": "#/$defs/Layout" },
+            "b": { "$ref": "#/$defs/Layout" }
+          }
+        }
+      ]
+    },
+    "PaneSummary": {
+      "type": "object",
+      "required": ["id", "title", "attention"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "title": { "type": "string" },
+        "attention": { "type": "array", "items": { "$ref": "#/$defs/Attention" } }
+      }
+    },
+    "Program": {
+      "type": "object",
+      "required": ["argv"],
+      "properties": {
+        "argv": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "exit_code": { "type": "integer" }
+      }
+    },
+    "PaneInput": {
+      "type": "object",
+      "required": ["text", "cursor"],
+      "properties": {
+        "text": { "type": "string" },
+        "cursor": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "Screen": {
+      "type": "object",
+      "required": ["rows", "cols", "lines", "cursor"],
+      "properties": {
+        "rows": { "type": "integer", "minimum": 1 },
+        "cols": { "type": "integer", "minimum": 1 },
+        "lines": { "type": "array", "items": { "type": "string" } },
+        "alt": { "type": "boolean" },
+        "spans": { "type": "array", "items": { "type": "array", "items": { "$ref": "#/$defs/Span" } } },
+        "cursor": {
+          "type": "object",
+          "required": ["row", "col", "visible"],
+          "properties": {
+            "row": { "type": "integer", "minimum": 0 },
+            "col": { "type": "integer", "minimum": 0 },
+            "visible": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "Node": {
+      "oneOf": [
+        {
+          "allOf": [{ "$ref": "#/$defs/Head" }],
+          "required": ["name", "workspaces"],
+          "properties": {
+            "type": { "const": "session" },
+            "name": { "type": "string" },
+            "workspaces": { "type": "array", "items": { "$ref": "#/$defs/WorkspaceSummary" } }
+          }
+        },
+        {
+          "allOf": [{ "$ref": "#/$defs/Head" }],
+          "required": ["name", "kind", "path", "panes"],
+          "properties": {
+            "type": { "const": "workspace" },
+            "name": { "type": "string" },
+            "kind": { "$ref": "#/$defs/WorkspaceKind" },
+            "path": { "type": "string" },
+            "project": { "type": "string" },
+            "branch": { "type": "string" },
+            "panes": { "type": "array", "items": { "$ref": "#/$defs/PaneSummary" } },
+            "layout": { "$ref": "#/$defs/Layout" },
+            "review": { "$ref": "#/$defs/Review" }
+          }
+        },
+        {
+          "allOf": [{ "$ref": "#/$defs/Head" }],
+          "required": ["workspace", "title", "shell", "cwd", "screen"],
+          "properties": {
+            "type": { "const": "pane" },
+            "workspace": { "$ref": "#/$defs/Id" },
+            "title": { "type": "string" },
+            "shell": { "type": "string" },
+            "cwd": { "type": "string" },
+            "running": { "$ref": "#/$defs/Program" },
+            "last_program": { "$ref": "#/$defs/Program" },
+            "screen": { "$ref": "#/$defs/Screen" },
+            "blocks": { "$ref": "#/$defs/Id" },
+            "input": { "$ref": "#/$defs/PaneInput" },
+            "conversation": { "$ref": "#/$defs/Id" }
+          }
+        },
+        {
+          "allOf": [{ "$ref": "#/$defs/Head" }],
+          "required": ["pane", "mode", "blocks"],
+          "properties": {
+            "type": { "const": "blocks" },
+            "pane": { "$ref": "#/$defs/Id" },
+            "mode": { "$ref": "#/$defs/BlocksMode" },
+            "blocks": { "type": "array", "items": { "$ref": "#/$defs/Block" } }
+          }
+        },
+        {
+          "allOf": [{ "$ref": "#/$defs/Head" }],
+          "required": ["workspace", "scope", "state", "files"],
+          "properties": {
+            "type": { "const": "diff" },
+            "workspace": { "$ref": "#/$defs/Id" },
+            "scope": { "$ref": "#/$defs/DiffScope" },
+            "commit": { "$ref": "#/$defs/Sha" },
+            "base": { "type": "string", "description": "What general compares with, such as origin/main." },
+            "state": { "$ref": "#/$defs/DiffState" },
+            "too_large": { "const": true },
+            "omitted": { "type": "integer", "minimum": 1, "description": "Files left out of a too large diff." },
+            "files": { "type": "array", "items": { "$ref": "#/$defs/DiffFile" } }
+          }
+        },
+        {
+          "allOf": [{ "$ref": "#/$defs/Head" }],
+          "required": ["workspace", "commits"],
+          "properties": {
+            "type": { "const": "commits" },
+            "workspace": { "$ref": "#/$defs/Id" },
+            "base": { "type": "string" },
+            "more": { "const": true },
+            "commits": { "type": "array", "items": { "$ref": "#/$defs/CommitInfo" } }
+          }
+        },
+        {
+          "allOf": [{ "$ref": "#/$defs/Head" }],
+          "required": ["pane", "name", "accent", "model", "effort", "mode", "status", "first", "items", "queue", "tasks", "todos", "artifacts", "commands", "cost"],
+          "properties": {
+            "type": { "const": "conversation" },
+            "pane": { "$ref": "#/$defs/Id" },
+            "session": { "type": "string" },
+            "name": { "type": "string" },
+            "accent": { "$ref": "#/$defs/Accent" },
+            "model": { "type": "string" },
+            "effort": { "type": "string" },
+            "mode": { "$ref": "#/$defs/ConvMode" },
+            "status": { "$ref": "#/$defs/ConvStatus" },
+            "since": { "type": "integer", "minimum": 0 },
+            "first": { "type": "integer", "minimum": 0 },
+            "items": { "type": "array", "items": { "$ref": "#/$defs/Item" } },
+            "ask": { "$ref": "#/$defs/Ask" },
+            "queue": { "type": "array", "items": { "type": "string" } },
+            "tasks": { "type": "array", "items": { "$ref": "#/$defs/Task" } },
+            "todos": { "type": "array", "items": { "$ref": "#/$defs/Todo" } },
+            "artifacts": { "type": "array", "items": { "$ref": "#/$defs/Artifact" } },
+            "commands": { "type": "array", "items": { "$ref": "#/$defs/ConvCommand" } },
+            "cost": { "type": "integer", "minimum": 0, "description": "Millionths of a dollar." },
+            "limits": { "$ref": "#/$defs/Limits" },
+            "running": {
+              "type": "array",
+              "items": { "type": "object", "required": ["id", "since"], "properties": { "id": { "type": "string" }, "since": { "type": "integer", "minimum": 0 } } }
+            },
+            "older": { "type": "integer", "minimum": 0, "description": "The time of the first item: the before of read_older." },
+            "held": {
+              "type": "object",
+              "required": ["pid", "cwd", "busy"],
+              "properties": { "pid": { "type": "integer", "minimum": 1 }, "cwd": { "type": "string" }, "busy": { "type": "boolean" } },
+              "description": "Another claude that has this session open."
+            },
+            "cwd": { "type": "string", "minLength": 1, "description": "The folder the engine runs in: the folder its @ references are written from." },
+            "suggestion": { "type": "string", "minLength": 1, "maxLength": 400, "description": "What Claude proposes the person writes next." },
+            "following": { "type": "integer", "minimum": 0, "description": "When the turn began that another claude runs in the transcript this conversation follows." },
+            "tokens": { "type": "integer", "minimum": 1, "description": "What the turn that runs has written." }
+          }
+        }
+      ]
+    },
+    "PatchOp": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["op", "path", "value"],
+          "properties": { "op": { "const": "add" }, "path": { "type": "string" } }
+        },
+        {
+          "type": "object",
+          "required": ["op", "path"],
+          "properties": { "op": { "const": "remove" }, "path": { "type": "string" } }
+        },
+        {
+          "type": "object",
+          "required": ["op", "path", "value"],
+          "properties": { "op": { "const": "replace" }, "path": { "type": "string" } }
+        }
+      ]
+    },
+    "TextDoc": {
+      "description": "What read_file replies: a text file as lines of runs; k is the syntax class (kw, str, num, ty, fn, cm, attr) and a reader shows an unknown or missing one as plain text.",
+      "type": "object",
+      "required": ["title", "path", "size", "lines"],
+      "properties": {
+        "title": { "type": "string" },
+        "path": { "type": "string" },
+        "size": { "type": "integer", "minimum": 0 },
+        "truncated": { "const": true },
+        "lines": { "type": "array", "items": { "type": "array", "items": { "type": "object", "required": ["t"], "properties": { "t": { "type": "string" }, "k": { "type": "string" } } } } }
+      }
+    },
+    "Cmd": {
+      "oneOf": [
+        { "type": "object", "required": ["cmd", "name"], "properties": { "cmd": { "const": "rename_session" }, "name": { "type": "string", "minLength": 1 } } },
+        { "type": "object", "required": ["cmd", "path"], "properties": { "cmd": { "const": "open_folder" }, "path": { "type": "string" } } },
+        { "type": "object", "required": ["cmd"], "properties": { "cmd": { "const": "list_dir" }, "path": { "type": "string" }, "hidden": { "type": "boolean" } } },
+        { "type": "object", "required": ["cmd", "repo", "branch"], "properties": { "cmd": { "const": "create_worktree" }, "repo": { "type": "string" }, "branch": { "type": "string", "minLength": 1 }, "base": { "type": "string" }, "folder": { "type": "string", "minLength": 1, "maxLength": 80 } } },
+        { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "remove_workspace" }, "workspace": { "$ref": "#/$defs/Id" }, "remove_worktree": { "type": "boolean" }, "force": { "type": "boolean" } } },
+        { "type": "object", "required": ["cmd", "repo"], "properties": { "cmd": { "const": "project_config" }, "repo": { "type": "string" } } },
+        { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "start_workspace" }, "workspace": { "$ref": "#/$defs/Id" }, "open": { "enum": ["shell", "claude"] } } },
+        { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "check_workspace" }, "workspace": { "$ref": "#/$defs/Id" } } },
+        { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "sync_workspace" }, "workspace": { "$ref": "#/$defs/Id" } } },
+        { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "cancel" }, "workspace": { "$ref": "#/$defs/Id" } } },
+        { "type": "object", "required": ["cmd", "a", "b"], "properties": { "cmd": { "const": "swap_panes" }, "a": { "$ref": "#/$defs/Id" }, "b": { "$ref": "#/$defs/Id" } } },
+        { "type": "object", "required": ["cmd", "pane", "dir", "by"], "properties": { "cmd": { "const": "grow_pane" }, "pane": { "$ref": "#/$defs/Id" }, "dir": { "$ref": "#/$defs/SplitDir" }, "by": { "type": "integer", "minimum": -800, "maximum": 800 } } },
+        { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "list_files" }, "workspace": { "$ref": "#/$defs/Id" }, "path": { "type": "string" } } },
+        { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "list_conversations" }, "workspace": { "$ref": "#/$defs/Id" } } },
+        { "type": "object", "required": ["cmd", "workspace", "path"], "properties": { "cmd": { "const": "read_markdown" }, "workspace": { "$ref": "#/$defs/Id" }, "path": { "type": "string" } } },
+        { "type": "object", "required": ["cmd", "workspace", "path"], "properties": { "cmd": { "const": "read_file" }, "workspace": { "$ref": "#/$defs/Id" }, "path": { "type": "string" } } },
+        { "type": "object", "required": ["cmd", "node", "before", "count"], "properties": { "cmd": { "const": "read_older" }, "node": { "$ref": "#/$defs/Id" }, "before": { "type": "integer", "minimum": 0 }, "count": { "type": "integer", "minimum": 1, "maximum": 500 } } },
+        { "type": "object", "required": ["cmd", "node", "ask"], "properties": { "cmd": { "const": "read_plan" }, "node": { "$ref": "#/$defs/Id" }, "ask": { "type": "string" } } },
+        { "type": "object", "required": ["cmd", "repo", "to", "text"], "properties": { "cmd": { "const": "write_project_config" }, "repo": { "type": "string" }, "to": { "enum": ["repo", "personal"] }, "text": { "type": "string", "maxLength": 65536 } } },
+        { "type": "object", "required": ["cmd", "repo", "to", "set"], "properties": { "cmd": { "const": "edit_project_config" }, "repo": { "type": "string" }, "to": { "enum": ["repo", "personal"] }, "set": { "type": "object", "properties": { "root": { "type": "string" }, "setup": { "type": "array", "items": { "type": "string" } }, "copy": { "type": "array", "items": { "type": "string" } }, "ports": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0, "maximum": 99 } }, "open": { "enum": ["shell", "claude"] } }, "additionalProperties": false } } },
+        { "type": "object", "required": ["cmd", "repo"], "properties": { "cmd": { "const": "list_worktrees" }, "repo": { "type": "string" } } },
+        { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "list_prs" }, "workspace": { "$ref": "#/$defs/Id" }, "requested": { "type": "boolean" } } },
+        { "type": "object", "required": ["cmd", "workspace", "pr"], "properties": { "cmd": { "const": "review_pr" }, "workspace": { "$ref": "#/$defs/Id" }, "pr": { "type": "integer", "minimum": 1 } } },
+        { "type": "object", "required": ["cmd", "repo", "path"], "properties": { "cmd": { "const": "open_worktree" }, "repo": { "type": "string" }, "path": { "type": "string" } } },
+        { "type": "object", "required": ["cmd", "workspace", "query"], "properties": { "cmd": { "const": "find_files" }, "workspace": { "$ref": "#/$defs/Id" }, "query": { "type": "string" } } },
+        { "type": "object", "required": ["cmd", "workspace", "name"], "properties": { "cmd": { "const": "rename_workspace" }, "workspace": { "$ref": "#/$defs/Id" }, "name": { "type": "string", "maxLength": 80 } } },
+        { "type": "object", "required": ["cmd", "pane", "name"], "properties": { "cmd": { "const": "rename_pane" }, "pane": { "$ref": "#/$defs/Id" }, "name": { "type": "string", "maxLength": 80 } } },
+        { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "new_pane" }, "workspace": { "$ref": "#/$defs/Id" }, "program": { "type": "array", "items": { "type": "string" }, "minItems": 1 }, "beside": { "$ref": "#/$defs/Id" }, "dir": { "$ref": "#/$defs/SplitDir" } } },
+        { "type": "object", "required": ["cmd", "pane"], "properties": { "cmd": { "const": "close_pane" }, "pane": { "$ref": "#/$defs/Id" } } },
+        { "type": "object", "required": ["cmd", "pane", "data"], "properties": { "cmd": { "const": "write" }, "pane": { "$ref": "#/$defs/Id" }, "data": { "type": "string" } } },
+        { "type": "object", "required": ["cmd", "pane", "rows", "cols"], "properties": { "cmd": { "const": "resize" }, "pane": { "$ref": "#/$defs/Id" }, "rows": { "type": "integer", "minimum": 1 }, "cols": { "type": "integer", "minimum": 1 } } },
+        { "type": "object", "required": ["cmd", "node", "rev"], "properties": { "cmd": { "const": "mark_seen" }, "node": { "$ref": "#/$defs/Id" }, "rev": { "$ref": "#/$defs/Rev" } } },
+        {
+          "type": "object",
+          "required": ["cmd", "workspace", "scope"],
+          "properties": { "cmd": { "const": "open_diff" }, "workspace": { "$ref": "#/$defs/Id" }, "scope": { "$ref": "#/$defs/DiffScope" }, "commit": { "$ref": "#/$defs/Sha" } },
+          "if": { "properties": { "scope": { "const": "commit" } } },
+          "then": { "required": ["commit"] }
+        },
+        { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "open_commits" }, "workspace": { "$ref": "#/$defs/Id" } } },
+        { "type": "object", "required": ["cmd", "node"], "properties": { "cmd": { "const": "refresh_diff" }, "node": { "$ref": "#/$defs/Id" } } },
+        { "type": "object", "required": ["cmd", "node", "path", "viewed"], "properties": { "cmd": { "const": "set_viewed" }, "node": { "$ref": "#/$defs/Id" }, "path": { "type": "string", "minLength": 1 }, "viewed": { "type": "boolean" } } },
+        {
+          "type": "object",
+          "required": ["cmd", "pane", "event"],
+          "properties": {
+            "cmd": { "const": "agent_event" },
+            "pane": { "$ref": "#/$defs/Id" },
+            "event": { "$ref": "#/$defs/AgentEvent" },
+            "notification_type": { "type": "string" },
+            "tool": { "type": "string" }
+          }
+        },
+        { "type": "object", "required": ["cmd"], "properties": { "cmd": { "const": "mobile_start" } } },
+        { "type": "object", "required": ["cmd"], "properties": { "cmd": { "const": "mobile_link" } } },
+        { "type": "object", "required": ["cmd", "seconds"], "properties": { "cmd": { "const": "mobile_wait" }, "seconds": { "type": "integer", "minimum": 0, "maximum": 300 } } },
+        { "type": "object", "required": ["cmd", "yes"], "properties": { "cmd": { "const": "mobile_answer" }, "yes": { "type": "boolean" } } },
+        { "type": "object", "required": ["cmd"], "properties": { "cmd": { "const": "mobile_stop" } } },
+        {
+          "type": "object",
+          "required": ["cmd", "pane"],
+          "properties": {
+            "cmd": { "const": "open_conversation" },
+            "pane": { "$ref": "#/$defs/Id" },
+            "resume": { "type": "string", "minLength": 1 },
+            "args": { "type": "array", "items": { "type": "string" } },
+            "env": { "type": "object", "additionalProperties": { "type": "string" } }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["cmd", "node", "text"],
+          "properties": {
+            "cmd": { "const": "conversation_send" },
+            "node": { "$ref": "#/$defs/Id" },
+            "text": { "type": "string" },
+            "images": { "type": "array", "items": { "$ref": "#/$defs/Image" }, "maxItems": 4 }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["cmd", "node", "ask", "key"],
+          "properties": { "cmd": { "const": "conversation_answer" }, "node": { "$ref": "#/$defs/Id" }, "ask": { "type": "string" }, "key": { "type": "string" }, "text": { "type": "string" }, "by": { "type": "string", "maxLength": 40 } }
+        },
+        { "type": "object", "required": ["cmd", "node"], "properties": { "cmd": { "const": "conversation_interrupt" }, "node": { "$ref": "#/$defs/Id" } } },
+        { "type": "object", "required": ["cmd", "node", "task"], "properties": { "cmd": { "const": "conversation_stop_task" }, "node": { "$ref": "#/$defs/Id" }, "task": { "type": "string", "minLength": 1 } } },
+        {
+          "type": "object",
+          "required": ["cmd", "node"],
+          "properties": {
+            "cmd": { "const": "conversation_set" },
+            "node": { "$ref": "#/$defs/Id" },
+            "name": { "type": "string", "maxLength": 80 },
+            "accent": { "$ref": "#/$defs/Accent" },
+            "model": { "type": "string", "minLength": 1 },
+            "effort": { "type": "string", "minLength": 1 },
+            "mode": { "$ref": "#/$defs/ConvMode" }
+          }
+        },
+        { "type": "object", "required": ["cmd", "node", "command"], "properties": { "cmd": { "const": "conversation_shell" }, "node": { "$ref": "#/$defs/Id" }, "command": { "type": "string", "minLength": 1 } } },
+        { "type": "object", "required": ["cmd", "node"], "properties": { "cmd": { "const": "conversation_close" }, "node": { "$ref": "#/$defs/Id" } } }
+      ]
+    },
+    "ClientMsg": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["t", "client", "accepts"],
+          "properties": {
+            "t": { "const": "hello" },
+            "client": { "$ref": "#/$defs/Peer" },
+            "accepts": { "type": "object", "propertyNames": { "$ref": "#/$defs/NodeType" }, "additionalProperties": { "type": "array", "items": { "type": "integer", "minimum": 1 } } }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["t", "node"],
+          "properties": {
+            "t": { "const": "open" },
+            "node": { "$ref": "#/$defs/Id" },
+            "epoch": { "$ref": "#/$defs/Id" },
+            "since": { "$ref": "#/$defs/Rev" }
+          }
+        },
+        { "type": "object", "required": ["t", "node"], "properties": { "t": { "const": "close" }, "node": { "$ref": "#/$defs/Id" } } },
+        { "type": "object", "required": ["t", "id", "cmd"], "properties": { "t": { "const": "cmd" }, "id": { "type": "string" }, "cmd": { "$ref": "#/$defs/Cmd" } } }
+      ]
+    },
+    "DaemonMsg": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["t", "daemon", "epoch", "root", "accepted"],
+          "properties": {
+            "t": { "const": "hello" },
+            "daemon": { "$ref": "#/$defs/Peer" },
+            "epoch": { "$ref": "#/$defs/Id" },
+            "root": { "$ref": "#/$defs/Id" },
+            "accepted": { "type": "object", "propertyNames": { "$ref": "#/$defs/NodeType" }, "additionalProperties": { "type": "integer", "minimum": 1 } }
+          }
+        },
+        { "type": "object", "required": ["t", "node"], "properties": { "t": { "const": "snapshot" }, "node": { "$ref": "#/$defs/Node" } } },
+        {
+          "type": "object",
+          "required": ["t", "node", "epoch", "from", "to", "ops"],
+          "properties": {
+            "t": { "const": "patch" },
+            "node": { "$ref": "#/$defs/Id" },
+            "epoch": { "$ref": "#/$defs/Id" },
+            "from": { "$ref": "#/$defs/Rev" },
+            "to": { "$ref": "#/$defs/Rev" },
+            "ops": { "type": "array", "items": { "$ref": "#/$defs/PatchOp" } }
+          }
+        },
+        { "type": "object", "required": ["t", "node"], "properties": { "t": { "const": "gone" }, "node": { "$ref": "#/$defs/Id" } } },
+        {
+          "type": "object",
+          "required": ["t", "id", "ok"],
+          "properties": { "t": { "const": "reply" }, "id": { "type": "string" } },
+          "oneOf": [
+            { "required": ["ok"], "not": { "required": ["error"] }, "properties": { "ok": { "const": true }, "result": { "type": "object" } } },
+            { "required": ["ok", "error"], "properties": { "ok": { "const": false }, "error": { "$ref": "#/$defs/ErrorBody" } } }
+          ]
+        },
+        {
+          "type": "object",
+          "required": ["t", "code", "message"],
+          "properties": { "t": { "const": "error" }, "code": { "$ref": "#/$defs/ErrorCode" }, "message": { "type": "string" } }
+        }
+      ]
+    },
+    "ErrorBody": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": { "code": { "$ref": "#/$defs/ErrorCode" }, "message": { "type": "string" } }
+    },
+    "Denied": {
+      "description": "Why the bridge refused a phone: the pairing token was wrong, expired or spent; the person at the PC said no or did not answer; the device secret is unknown or revoked; too many failures from this address.",
+      "enum": ["bad_token", "declined", "timeout", "bad_secret", "revoked", "locked_out"]
+    },
+    "PhoneMsg": {
+      "description": "What a phone sends the bridge before the daemon's protocol starts: it either spends a pairing token or proves a paired device. After `ready` the stream carries ClientMsg.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["t", "token", "name", "code"],
+          "properties": {
+            "t": { "const": "pair" },
+            "token": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+            "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "code": { "type": "string", "pattern": "^[0-9]{4,12}$" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["t", "device", "secret"],
+          "properties": {
+            "t": { "const": "auth" },
+            "device": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
+            "secret": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          }
+        }
+      ]
+    },
+    "BridgeMsg": {
+      "description": "What the bridge sends a phone: the answer to pair or auth, then (after `ready`) the addresses the PC can be reached at. After `ready` the stream also carries DaemonMsg.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["t", "device", "secret"],
+          "properties": {
+            "t": { "const": "paired" },
+            "device": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
+            "secret": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["t", "reason"],
+          "properties": { "t": { "const": "denied" }, "reason": { "$ref": "#/$defs/Denied" } }
+        },
+        { "type": "object", "required": ["t"], "properties": { "t": { "const": "ready" }, "host": { "type": "string", "minLength": 1, "maxLength": 64 } } },
+        {
+          "type": "object",
+          "required": ["t"],
+          "properties": {
+            "t": { "const": "endpoints" },
+            "lan": { "type": "string", "description": "host:port of the TLS listener on the PC's private address" },
+            "tunnel": { "type": "string", "description": "host name of the Cloudflare tunnel" }
+          }
+        }
+      ]
+    }
+  }
+}

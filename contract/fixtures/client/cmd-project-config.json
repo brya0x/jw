@@ -1,0 +1,8 @@
+{
+  "t": "cmd",
+  "id": "c14",
+  "cmd": {
+    "cmd": "project_config",
+    "repo": "/home/u/code/app"
+  }
+}

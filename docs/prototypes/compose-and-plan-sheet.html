@@ -1,0 +1,182 @@
+<title>jwn A / command anywhere in the message · B / the plan in the phone's sheet</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+:root{
+  --bg:#282c34; --panel:#21252b; --fg:#abb2bf; --dim:#5c6370; --line:#3e4451; --sel:#2c313a;
+  --blue:#61afef; --green:#98c379; --yellow:#e5c07b; --red:#e06c75; --magenta:#c678dd; --cyan:#56b6c2;
+  --page:#16181d; --ink:#c3c9d4; --mut:#7d8594;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}}
+:root[data-theme="light"]{--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.55 'IBM Plex Sans',system-ui,sans-serif;padding:24px max(16px,env(safe-area-inset-right,0px)) 40px max(16px,env(safe-area-inset-left,0px))}
+.wrap{max-width:1200px;margin-inline:auto;display:flex;flex-direction:column;gap:22px}
+h1{font:600 20px/1.2 var(--mono);margin:0}
+h2{font:600 12px var(--mono);margin:0;color:var(--mut)}
+p{margin:0;max-width:84ch;color:var(--mut)}
+code{font:12px var(--mono)}
+button{font:12px var(--mono);color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;min-height:32px;cursor:pointer}
+button:hover{border-color:var(--blue)}
+:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.stage{display:flex;gap:28px;align-items:flex-start;flex-wrap:wrap}
+.col{flex:1 1 440px;min-width:0;display:flex;flex-direction:column;gap:8px}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:12px;font:13px/1.45 var(--mono);color:var(--fg)}
+.hint{font:12px var(--mono);color:var(--mut)}
+.field{position:relative;border:1px solid var(--line);border-radius:6px;background:var(--panel);min-height:76px}
+.field pre,.field textarea{margin:0;padding:8px 10px 8px 26px;font:13px/1.45 var(--mono);white-space:pre-wrap;word-break:break-word;width:100%;min-height:76px;border:0;background:transparent;letter-spacing:0}
+.field pre{position:absolute;inset:0;pointer-events:none;color:var(--fg)}
+.field textarea{position:relative;color:transparent;caret-color:var(--fg);resize:none;outline:none;display:block;height:92px}
+.field .pr{position:absolute;left:10px;top:8px;color:var(--green);font:13px/1.45 var(--mono);z-index:1}
+.menu{margin-top:4px;border:1px solid var(--line);border-radius:6px;background:var(--panel);overflow:hidden}
+.menu div{display:flex;gap:10px;padding:3px 10px}
+.menu .on{background:var(--sel)}
+.menu .d{color:var(--dim);margin-left:auto;text-align:right}
+.tag{font-size:11px;color:var(--dim)}
+.blue{color:var(--blue)}.green{color:var(--green)}.yellow{color:var(--yellow)}.red{color:var(--red)}.cyan{color:var(--cyan)}.magenta{color:var(--magenta)}.dim{color:var(--dim)}.b{font-weight:700}
+.phone{width:376px;max-width:100%;background:var(--bg);border:1px solid var(--line);border-radius:28px;padding:10px;box-shadow:0 0 0 6px var(--panel)}
+.ph{background:var(--panel);border-radius:20px;overflow:hidden;font:13px/1.45 var(--mono);color:var(--fg);padding:14px;display:flex;flex-direction:column;gap:10px;min-height:520px}
+.ph .t{display:flex;justify-content:space-between}
+.ph .opt{min-height:48px;border-radius:8px;background:var(--sel);padding:10px 12px;display:flex;align-items:center;border:0;color:var(--fg);font:13px var(--mono);text-align:left;width:100%}
+.ph .opt.p{background:var(--green);color:var(--panel);font-weight:700}
+.ph .opt.n{color:var(--red)}
+.ph .act{color:var(--blue);background:transparent;padding:6px 0;min-height:48px}
+.prev{position:relative;max-height:150px;overflow:hidden;display:flex;flex-direction:column;gap:6px}
+.prev:after{content:"";position:absolute;left:0;right:0;bottom:0;height:46px;background:linear-gradient(transparent,var(--panel))}
+.prev .h1{color:var(--blue);font-weight:700;font-size:15px}
+.prev .h2{color:var(--cyan);font-weight:700}
+.prev .c{color:var(--cyan)}
+.old{max-height:360px;overflow:auto;display:flex;flex-direction:column;gap:0;white-space:pre-wrap;color:var(--fg);border:1px dashed var(--line);border-radius:8px;padding:8px}
+.seg{display:flex;gap:6px;flex-wrap:wrap}
+.seg button[aria-pressed="true"]{border-color:var(--blue);color:var(--blue)}
+.decide{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px;color:var(--fg)}
+.decide h2{margin:0 0 8px}
+.decide ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+</style>
+
+<div class="wrap">
+  <div>
+    <h1>A · A command anywhere in the message &nbsp;·&nbsp; B · The plan in the phone's sheet</h1>
+    <p>Two fixes from what you saw. <b>A</b>: the <code>/something</code> you typed after other words had no colour and no list, because jwn only looked at the very first word of the message (terminal and phone alike). <b>B</b>: on the phone, a plan that waits printed all of its text, raw (<code>#</code>, <code>`</code>, <code>|</code>), and the button to the formatted viewer was three screens down. Both are drawn below; the first is live: type in it.</p>
+  </div>
+
+  <div class="stage">
+    <div class="col">
+      <h2>A · THE FIELD (terminal; the phone's field and its list above the keyboard follow the same rule)</h2>
+      <div class="term">
+        <div class="field"><span class="pr">❯</span><pre id="mirror" aria-hidden="true"></pre><textarea id="ta" aria-label="Message field. Type a / after some words." spellcheck="false">Vamos a revisar la mejor opción para esto y mira /pla</textarea></div>
+        <div id="menu"></div>
+      </div>
+      <div class="hint" id="hint"></div>
+      <div class="seg" role="group" aria-label="What the list offers in the middle of a message">
+        <button type="button" id="m-all" aria-pressed="true">in the middle: every command</button>
+        <button type="button" id="m-skill" aria-pressed="false">in the middle: only skills and plugins</button>
+      </div>
+      <p>Try: put the caret after <code>/pla</code> and press <kbd>Tab</kbd> or <kbd>↵</kbd> to take the lit one; <kbd>esc</kbd> closes the list; <kbd>↑</kbd><kbd>↓</kbd> move. A <code>/word</code> that is a command lights up in the colour of where it lives, wherever it is in the message.</p>
+    </div>
+
+    <div class="col">
+      <h2>B · PHONE · the sheet of a plan that waits</h2>
+      <div class="seg" role="group" aria-label="Which sheet">
+        <button type="button" id="b-new" aria-pressed="true">after (proposed)</button>
+        <button type="button" id="b-old" aria-pressed="false">now</button>
+      </div>
+      <div class="phone"><div class="ph" id="ph"></div></div>
+    </div>
+  </div>
+
+  <div class="decide">
+    <h2>To approve</h2>
+    <ol>
+      <li><b>A · where it applies.</b> The <code>/word</code> being written (caret at its end, at the start of the message or after a space or a new line) opens the same list as at the start, in the terminal and on the phone. A word that is a known command is coloured by its source anywhere in the message. Picking one writes <code>/name </code> in place of what was typed. Nothing changes at the start of the message.</li>
+      <li><b>A · what a command does in the middle.</b> Only at the start of the message does a jwn or Claude command <i>act</i> (<code>/plan</code>, <code>/model</code>…); in the middle it is plain text for Claude, which is how a skill gets named. So I propose the list in the middle offers <b>every command</b> (what you asked for) and the sent message is untouched; the other button shows the stricter option: only skills and plugins in the middle.</li>
+      <li><b>B · the sheet.</b> The plan stops printing in full. The sheet shows the title and the beginning of the plan <b>formatted</b> (headings, code, lists) clipped with a fade, then <b>▤ Ver el plan completo</b> right under it, then the three answers; everything fits without scrolling. The viewer itself does not change (I tried it on your phone: it draws the Markdown well).</li>
+      <li><b>B · the terminal</b> already keeps 8 lines of the plan and <code>v</code> opens it; it does not change.</li>
+    </ol>
+  </div>
+</div>
+
+<script>
+(function(){
+const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const CMDS = [
+  ['/plan','jwn','blue','entrar en modo plan'],
+  ['/model','jwn','blue','elegir el modelo'],
+  ['/compact','claude','magenta','compactar la conversación'],
+  ['/review-pr','skill','yellow','revisar un PR'],
+  ['/deploy','proyecto','green','desplegar este repo'],
+  ['/pdf','plugin','cyan','trabajar con PDF'],
+  ['/plan-feature','skill','yellow','planear una funcionalidad']
+];
+let mode = 'all', at = 0, closed = '';
+const ta = document.getElementById('ta'), mirror = document.getElementById('mirror'), menu = document.getElementById('menu'), hint = document.getElementById('hint');
+function fragment(){
+  const c = ta.selectionStart, before = ta.value.slice(0, c);
+  const m = /(^|\s)(\/[^\s\/]*)$/.exec(before);
+  if (!m) return null;
+  const start = c - m[2].length;
+  return {start, end: c, typed: m[2].slice(1).toLowerCase(), atStart: start === 0};
+}
+function pool(f){
+  let l = CMDS.filter(c => c[0].slice(1).includes(f.typed));
+  if (!f.atStart && mode === 'skill') l = l.filter(c => c[1] === 'skill' || c[1] === 'plugin');
+  return l.sort((a, b) => (!a[0].slice(1).startsWith(f.typed)) - (!b[0].slice(1).startsWith(f.typed)));
+}
+function paint(){
+  let h = '', v = ta.value, i = 0;
+  const re = /(^|\s)(\/[^\s]+)/g; let m;
+  while ((m = re.exec(v))){
+    const w = m[2], st = m.index + m[1].length, c = CMDS.find(x => x[0] === w);
+    h += esc(v.slice(i, st)) + (c ? `<span class="${c[2]} b">${esc(w)}</span>` : esc(w)); i = st + w.length;
+  }
+  mirror.innerHTML = h + esc(v.slice(i)) + '\n';
+}
+function draw(){
+  paint();
+  const f = fragment(), l = f && closed !== ta.value + '|' + ta.selectionStart ? pool(f) : [];
+  if (at >= l.length) at = 0;
+  menu.innerHTML = l.length ? '<div class="menu">' + l.map((c, i) => `<div class="${i === at ? 'on' : ''}"><span class="${c[2]} b">${c[0]}</span><span class="tag ${c[2]}">${c[1]}</span><span class="d">${c[3]}</span></div>`).join('') + '</div>' : '';
+  hint.textContent = !f ? 'type a / after a space to see the list' : l.length ? (f.atStart ? 'at the start: it will act when sent' : 'in the middle: it goes as text; Claude reads it') + ' · Tab/↵ take · ↑↓ move · esc close' : 'no command holds «' + f.typed + '»';
+}
+function take(){
+  const f = fragment(); if (!f) return false;
+  const l = pool(f); if (!l.length) return false;
+  const c = l[at], v = ta.value;
+  ta.value = v.slice(0, f.start) + c[0] + ' ' + v.slice(f.end);
+  ta.selectionStart = ta.selectionEnd = f.start + c[0].length + 1; at = 0; return true;
+}
+ta.addEventListener('input', () => { closed = ''; draw(); });
+ta.addEventListener('click', () => { closed = ''; draw(); });
+ta.addEventListener('keyup', e => { if (!['ArrowUp','ArrowDown','Tab','Enter','Escape'].includes(e.key)) draw(); });
+ta.addEventListener('keydown', e => {
+  const f = fragment(), l = f && closed !== ta.value + '|' + ta.selectionStart ? pool(f) : [];
+  if (!l.length) return;
+  if (e.key === 'ArrowDown'){ at = (at + 1) % l.length; e.preventDefault(); }
+  else if (e.key === 'ArrowUp'){ at = (at + l.length - 1) % l.length; e.preventDefault(); }
+  else if (e.key === 'Tab' || e.key === 'Enter'){ take(); e.preventDefault(); }
+  else if (e.key === 'Escape'){ closed = ta.value + '|' + ta.selectionStart; e.preventDefault(); }
+  else return;
+  draw();
+});
+const setMode = m => { mode = m; document.getElementById('m-all').setAttribute('aria-pressed', m === 'all'); document.getElementById('m-skill').setAttribute('aria-pressed', m === 'skill'); at = 0; draw(); };
+document.getElementById('m-all').onclick = () => setMode('all');
+document.getElementById('m-skill').onclick = () => setMode('skill');
+
+let after = true;
+const RAW = '# Plan: añadir `suma(a, b)` en `math.py` con tests\n\n## Contexto\n\nEl repo (`/private/tmp/jwn-plan-probe`) solo tiene un `README.md` sin seguimiento; no existe `math.py`.\n\n## Pasos\n\n1. Crear `math.py` con `suma(a, b)` que devuelve `a + b`.\n2. Crear `test_math.py` con tests de pytest.\n3. Ejecutar `pytest -q` y confirmar que pasan.\n\n## Notas\n\n- Nombre `math.py` sombrea el módulo `math` de la stdlib…\n- Sin dependencias nuevas, solo `pytest`.\n\n## Archivos\n\n| Archivo | Acción | Contenido |\n|---|---|---|\n| math.py | crear | suma |\n\n## Verificación\n- `pytest -q` → 3 tests en verde.';
+function phone(){
+  const p = document.getElementById('ph');
+  const head = '<div class="t"><b>Plan listo</b><span class="yellow">plan listo</span></div>';
+  const opts = '<button class="opt p" type="button">Aprobar y editar sin preguntar</button><button class="opt" type="button">Aprobar, preguntando cada edición</button><button class="opt n" type="button">Seguir planeando</button>';
+  if (after){
+    p.innerHTML = head + '<div class="prev"><div class="h1">Plan: añadir suma(a, b) en math.py con tests</div><div class="h2">Contexto</div><div>El repo (<span class="c">/private/tmp/jwn-plan-probe</span>) solo tiene un <span class="c">README.md</span> sin seguimiento; no existe <span class="c">math.py</span>.</div><div class="h2">Pasos</div><div>1. Crear <span class="c">math.py</span> con <span class="c">suma(a, b)</span>…</div></div><button class="opt act" type="button">▤ Ver el plan completo · 7 títulos</button>' + opts;
+  } else {
+    p.innerHTML = head + '<div class="old">' + esc(RAW) + '</div><div class="dim">… (three screens of this, then:)</div><button class="opt act" type="button">▤ Ver el plan completo</button>' + opts;
+  }
+}
+document.getElementById('b-new').onclick = () => { after = true; document.getElementById('b-new').setAttribute('aria-pressed', true); document.getElementById('b-old').setAttribute('aria-pressed', false); phone(); };
+document.getElementById('b-old').onclick = () => { after = false; document.getElementById('b-old').setAttribute('aria-pressed', true); document.getElementById('b-new').setAttribute('aria-pressed', false); phone(); };
+ta.focus(); ta.selectionStart = ta.selectionEnd = ta.value.length; draw(); phone();
+})();
+</script>

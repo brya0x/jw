@@ -1,0 +1,9 @@
+{
+  "t": "reply",
+  "id": "c3",
+  "ok": false,
+  "error": {
+    "code": "git_failed",
+    "message": "branch feat/login already exists"
+  }
+}

@@ -1,0 +1,132 @@
+<title>jwn Keep planning with an instruction</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+:root{
+  --bg:#282c34; --panel:#21252b; --fg:#abb2bf; --dim:#5c6370; --line:#3e4451; --sel:#2c313a;
+  --blue:#61afef; --green:#98c379; --yellow:#e5c07b; --red:#e06c75; --magenta:#c678dd; --cyan:#56b6c2;
+  --page:#16181d; --ink:#c3c9d4; --mut:#7d8594;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}}
+:root[data-theme="light"]{--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.55 'IBM Plex Sans',system-ui,sans-serif;padding:24px max(16px,env(safe-area-inset-right,0px)) 40px max(16px,env(safe-area-inset-left,0px))}
+.wrap{max-width:1200px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
+h1{font:600 20px/1.2 var(--mono);margin:0}
+h2{font:600 12px var(--mono);margin:0;color:var(--mut)}
+p{margin:0;max-width:80ch;color:var(--mut)}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button{font:12px var(--mono);color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;min-height:32px;cursor:pointer}
+button:hover{border-color:var(--blue)}
+:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.stage{display:flex;gap:28px;align-items:flex-start;flex-wrap:wrap}
+.col{flex:1 1 480px;min-width:0;display:flex;flex-direction:column;gap:8px}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto}
+.term pre{margin:0;font:13px/1.35 var(--mono);color:var(--fg);outline:none;width:max-content}
+.hint{font:12px var(--mono);color:var(--mut)}
+.phone{width:376px;max-width:100%;background:var(--bg);border:1px solid var(--line);border-radius:28px;padding:10px;box-shadow:0 0 0 6px var(--panel)}
+.ph{background:var(--panel);border-radius:20px;overflow:hidden;font:13px/1.45 var(--mono);color:var(--fg);padding:14px;display:flex;flex-direction:column;gap:10px;min-height:440px}
+.ph .t{display:flex;justify-content:space-between}
+.ph .opt{min-height:48px;border-radius:8px;background:var(--sel);padding:10px 12px;display:flex;align-items:center;cursor:pointer;border:0;color:var(--fg);font:13px var(--mono);text-align:left;width:100%}
+.ph .opt.p{background:var(--green);color:var(--panel);font-weight:700}
+.ph .opt.n{color:var(--red)}
+.ph textarea{width:100%;min-height:84px;background:var(--bg);color:var(--fg);border:1px solid var(--blue);border-radius:8px;padding:10px;font:13px var(--mono);resize:vertical}
+.ph .row{display:flex;gap:8px}
+.ph .row .opt{flex:1}
+.decide{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px;color:var(--fg)}
+.decide h2{margin:0 0 8px}
+.decide ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+.decide code{font:12px var(--mono)}
+.dim{color:var(--dim)}.blue{color:var(--blue)}.green{color:var(--green)}.yellow{color:var(--yellow)}.red{color:var(--red)}.b{font-weight:700}.sel{background:var(--sel)}
+</style>
+
+<div class="wrap">
+  <div>
+    <h1>Keep planning, with the next instruction</h1>
+    <p>When Claude asks to approve a plan, «Seguir planeando» no longer answers at once: it asks what to do next, so the instruction goes with the refusal in one step. An empty answer is the old «seguir planeando». Click the terminal and press <code>3</code> (or <code>n</code>, or move to the option and <code>↵</code>); on the phone tap «Seguir planeando».</p>
+  </div>
+  <div class="bar"><button id="reset" type="button">Reset</button></div>
+  <div class="stage">
+    <div class="col">
+      <h2>TERMINAL · the box of the plan</h2>
+      <div class="term"><pre id="scr" tabindex="0" aria-label="Plan box. 3 keeps planning with a text."></pre></div>
+      <div class="hint" id="keys"></div>
+    </div>
+    <div class="col">
+      <h2>PHONE · the question sheet (and the same under the plan in the viewer)</h2>
+      <div class="phone"><div class="ph" id="ph"></div></div>
+    </div>
+  </div>
+
+  <div class="decide">
+    <h2>To approve</h2>
+    <ol>
+      <li><b>Terminal.</b> <code>3</code> (<code>n</code>, or <code>↵</code> on the third option, or a click on it) on a plan turns the options into a line to write: «¿qué sigue?». <code>↵</code> sends the refusal with what you wrote; <code>↵</code> with nothing written sends the plain «seguir planeando» as before; <code>esc</code> goes back to the three options. The same from the plan viewer: <code>3</code> closes it and leaves the box on that line.</li>
+      <li><b>Phone.</b> Tapping «Seguir planeando» (in the sheet, and under the plan in the viewer) opens a text field under the option with the button «Seguir planeando» (it sends the text, or none if the field is empty) and «Volver». The keyboard opens on the field.</li>
+      <li><b>What Claude gets.</b> «El usuario no aprobó el plan y dice: &lt;your text&gt;», which the daemon already says; nothing new on the wire (the answer already carries a text). Only the plan's «Seguir planeando» asks for it: a permission's «No» (and its `n`) keeps answering at once.</li>
+      <li><b>Not here:</b> a text with the two approvals; a text field for the questions of <code>AskUserQuestion</code> (it already takes an «otra» answer).</li>
+    </ol>
+  </div>
+</div>
+
+<script>
+(function(){
+const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+let S;
+const reset = () => { S = {mode:'options', at:0, text:'', sent:null}; };
+reset();
+const OPTS = ['Aprobar y editar sin preguntar','Aprobar, preguntando cada edición','Seguir planeando'];
+function term(){
+  const L = [];
+  const c = (cls, s) => `<span class="${cls}">${esc(s)}</span>`;
+  L.push(c('dim','╭─ Plan listo ─────────────────────────────────────────────────────────────╮'));
+  ['# Plan: añadir `suma` a math.py','## Contexto','El repo solo contiene README.md; math.py no existe.','## Pasos','1. Crear math.py con `suma(a, b)`','2. Añadir tests en tests/test_math.py'].forEach(l => L.push(c('dim','│ ') + esc(l.padEnd(72)) + c('dim','│')));
+  L.push(c('dim','│ ') + c('blue','v abre el plan completo').padEnd(72) + c('dim','│'));
+  L.push(c('dim','├──────────────────────────────────────────────────────────────────────────┤'));
+  if (S.mode === 'options'){
+    OPTS.forEach((o, i) => { const on = i === S.at; L.push(c('dim','│ ') + (on ? '<span class="sel b">' : '<span>') + esc(`${on ? '▸' : ' '} ${i+1}  ${o}`.padEnd(72)) + '</span>' + c('dim','│')); });
+  } else if (S.mode === 'typing'){
+    L.push(c('dim','│ ') + c('yellow','Seguir planeando · ¿qué sigue?  (opcional)'.padEnd(72)) + c('dim','│'));
+    L.push(c('dim','│ ') + c('blue','▸ ') + esc(S.text) + c('blue','▏') + ' '.repeat(Math.max(0, 70 - S.text.length)) + c('dim','│'));
+    L.push(c('dim','│ ') + c('dim','↵ envía (vacío: sigue planeando) · esc vuelve'.padEnd(72)) + c('dim','│'));
+  } else {
+    L.push(c('dim','│ ') + c('green',('✔ enviado: ' + (S.sent || 'seguir planeando')).padEnd(72).slice(0,72)) + c('dim','│'));
+    L.push(c('dim','│ ') + c('dim','Claude recibe: «El usuario no aprobó el plan' + (S.sent ? ' y dice: ' + S.sent : ': sigue planeando') + '»').slice(0,300) + '');
+  }
+  L.push(c('dim','╰──────────────────────────────────────────────────────────────────────────╯'));
+  document.getElementById('scr').innerHTML = L.join('\n');
+  document.getElementById('keys').textContent = S.mode === 'options' ? '1 2 3 · ↑↓ ↵ · v plan completo' : S.mode === 'typing' ? 'type · ↵ send · esc back' : 'reset to try again';
+}
+function phone(){
+  const p = document.getElementById('ph');
+  let h = `<div class="t"><b>Plan listo</b><span class="yellow">plan</span></div><div class="dim"># Plan: añadir suma a math.py ## Contexto El repo solo contiene…</div><button class="opt" style="color:var(--blue)" type="button">▤ Ver el plan completo</button>`;
+  if (S.mode === 'sent') h += `<div class="green">✔ enviado: ${esc(S.sent || 'seguir planeando')}</div>`;
+  else {
+    h += `<button class="opt p" data-k="0" type="button">${OPTS[0]}</button><button class="opt" data-k="1" type="button">${OPTS[1]}</button>`;
+    if (S.mode === 'typing') h += `<div class="opt n" style="flex-direction:column;align-items:stretch;gap:8px;background:var(--sel)"><span>Seguir planeando</span><textarea id="ta" placeholder="¿qué sigue? (opcional)">${esc(S.text)}</textarea><div class="row"><button class="opt" id="back" type="button">Volver</button><button class="opt p" id="go" type="button">Seguir planeando</button></div></div>`;
+    else h += `<button class="opt n" data-k="2" type="button">${OPTS[2]}</button>`;
+  }
+  p.innerHTML = h;
+  p.querySelectorAll('[data-k="2"]').forEach(b => b.onclick = () => { S.mode = 'typing'; draw(); setTimeout(() => document.getElementById('ta')?.focus(), 0); });
+  const ta = document.getElementById('ta'); if (ta) ta.oninput = () => { S.text = ta.value; term(); };
+  const back = document.getElementById('back'); if (back) back.onclick = () => { S.mode = 'options'; draw(); };
+  const go = document.getElementById('go'); if (go) go.onclick = () => { S.sent = S.text.trim(); S.mode = 'sent'; draw(); };
+}
+function draw(){ term(); phone(); }
+document.getElementById('scr').addEventListener('keydown', e => {
+  if (S.mode === 'options'){
+    if (e.key === 'ArrowDown') S.at = Math.min(2, S.at + 1); else if (e.key === 'ArrowUp') S.at = Math.max(0, S.at - 1);
+    else if (e.key === '3' || e.key === 'n' || (e.key === 'Enter' && S.at === 2)) S.mode = 'typing';
+    else if (e.key === '1' || e.key === '2' || (e.key === 'Enter' && S.at < 2)) { S.sent = null; S.mode = 'sent'; S.approved = true; }
+    else return;
+  } else if (S.mode === 'typing'){
+    if (e.key === 'Escape') S.mode = 'options'; else if (e.key === 'Enter'){ S.sent = S.text.trim(); S.mode = 'sent'; }
+    else if (e.key === 'Backspace') S.text = S.text.slice(0, -1); else if (e.key.length === 1) S.text += e.key; else return;
+  } else return;
+  draw(); e.preventDefault();
+});
+document.getElementById('reset').onclick = () => { reset(); draw(); };
+draw();
+})();
+</script>

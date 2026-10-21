@@ -1,0 +1,173 @@
+<title>jwn Sugerencia de mensaje</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Terminal-first, the same character grid and colours as conversation-fidelity.html and older-items.html. */
+:root{
+  --bg:#282c34; --panel:#21252b; --fg:#abb2bf; --dim:#5c6370; --line:#3e4451; --sel:#2c313a;
+  --blue:#61afef; --green:#98c379; --yellow:#e5c07b; --red:#e06c75; --magenta:#c678dd; --cyan:#56b6c2;
+  --page:#16181d; --ink:#c3c9d4; --mut:#7d8594;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}}
+:root[data-theme="light"]{--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.55 'IBM Plex Sans',system-ui,sans-serif;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px}
+.wrap{max-width:1300px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
+h1{font:600 20px/1.2 var(--mono);margin:0}
+h2{font:600 12px var(--mono);margin:0;color:var(--mut)}
+p{margin:0;max-width:80ch;color:var(--mut)}
+.bar{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center}
+.grp{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.grp>span{font:12px var(--mono);color:var(--mut)}
+button{font:12px var(--mono);color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;min-height:32px;cursor:pointer}
+button:hover{border-color:var(--blue)}
+button[aria-pressed=true]{background:var(--blue);color:var(--panel);border-color:var(--blue);font-weight:700}
+:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.stage{display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap}
+.col{flex:1 1 560px;min-width:0;display:flex;flex-direction:column;gap:8px}
+.side{flex:0 0 auto;width:100%;max-width:376px;margin-inline:auto;display:flex;flex-direction:column;gap:8px}
+.hint{font:12px var(--mono);color:var(--mut)}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:8px;overflow:hidden;display:flex;flex-direction:column;height:430px;font:13px/1.35 var(--mono);color:var(--fg)}
+.term .list{flex:1;min-height:0;overflow:auto;padding:8px 10px;display:flex;flex-direction:column;justify-content:flex-end;gap:2px;white-space:pre-wrap;word-break:break-word}
+.term .field{border-top:1px solid var(--line);background:var(--panel);padding:8px 10px;outline:none;min-height:56px;display:flex;flex-direction:column;gap:4px}
+.term .field:focus-within{box-shadow:inset 0 0 0 1px var(--blue)}
+.term .foot{border-top:1px solid var(--line);padding:3px 10px;font-size:12px;color:var(--dim);display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.row{display:flex;gap:8px;align-items:baseline}
+.row .ph{color:var(--dim)}
+.cur{display:inline-block;width:.6em;background:var(--fg);height:1.1em;vertical-align:text-bottom;animation:b 1s steps(2) infinite}
+@keyframes b{50%{opacity:0}}
+@media (prefers-reduced-motion:reduce){.cur{animation:none}}
+.sug{color:var(--dim)}
+.tag{color:var(--dim);font-size:11px;border:1px solid var(--line);border-radius:3px;padding:0 5px;margin-left:8px}
+.u{background:var(--sel);padding:0 4px}
+.b{font-weight:700}.dim{color:var(--dim)}.blue{color:var(--blue)}.green{color:var(--green)}.yellow{color:var(--yellow)}
+.phone{width:100%;height:600px;background:var(--bg);border:1px solid var(--line);border-radius:28px;padding:10px;box-shadow:0 0 0 6px var(--panel);display:flex;flex-direction:column}
+.ph{flex:1;min-height:0;background:var(--bg);border-radius:20px;overflow:hidden;display:flex;flex-direction:column;font:13px/1.45 var(--mono);color:var(--fg)}
+.ph .hd{background:var(--panel);border-bottom:1px solid var(--line);padding:8px 12px;min-height:52px;display:flex;flex-direction:column;justify-content:center}
+.ph .hd b{font-size:14px}.ph .hd span{font-size:11px;color:var(--dim)}
+.ph .list{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;justify-content:flex-end;gap:8px;padding:8px 12px;word-break:break-word}
+.ph .chip{margin:0 12px 6px;display:flex;align-items:center;gap:6px}
+.ph .chip .go{flex:1;min-width:0;min-height:48px;text-align:left;border-radius:8px;background:var(--sel);color:var(--fg);border:1px solid var(--line);padding:6px 10px;white-space:normal}
+.ph .chip .x{min-width:48px;min-height:48px;border-radius:8px}
+.ph .compose{border-top:1px solid var(--line);background:var(--panel);padding:8px 12px;display:flex;gap:8px;align-items:center}
+.ph .compose input{flex:1;min-width:0;min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:0 10px;font:13px var(--mono)}
+.ph .compose button{min-height:44px;min-width:44px;border-radius:8px;background:var(--green);color:var(--panel);border-color:var(--green);font-weight:700}
+.notes{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
+.notes div{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;color:var(--fg);font:12px/1.55 var(--mono)}
+.notes b{color:var(--yellow)}
+.rec{color:var(--green)}
+kbd{font:inherit;color:var(--cyan)}
+</style>
+
+<div class="wrap">
+  <h1>jwn · Sugerencia de mensaje</h1>
+  <p>Claude Code propone, al acabar un turno, lo que probablemente vas a pedir después, en gris dentro del campo. Aquí se prueba cómo sería en jwn. Pulsa <b>Claude termina un turno</b> y mira el campo.</p>
+
+  <div class="bar" role="group" aria-label="Opciones del prototipo">
+    <button id="turn">Claude termina un turno</button>
+    <div class="grp"><span>con la sugerencia y el campo vacío, Enter</span>
+      <button id="e-no" aria-pressed="true">no hace nada</button>
+      <button id="e-yes" aria-pressed="false">la envía</button></div>
+    <button id="reset">reiniciar</button>
+  </div>
+
+  <div class="stage">
+    <div class="col">
+      <h2>TERMINAL · haz clic en el campo y pulsa Tab, → , Enter, Esc o escribe</h2>
+      <div class="term">
+        <div class="list" id="t-list"></div>
+        <div class="field" id="t-field" tabindex="0" role="textbox" aria-label="Campo del mensaje"></div>
+        <div class="foot"><span id="t-keys"></span><span>sonnet-5.5 · manual</span></div>
+      </div>
+      <div class="hint" id="t-note"></div>
+    </div>
+    <div class="side">
+      <h2>TELÉFONO · toca la sugerencia</h2>
+      <div class="phone"><div class="ph">
+        <div class="hd"><b>arregla el test que falla</b><span id="p-sub">idle</span></div>
+        <div class="list" id="p-list"></div>
+        <div class="chip" id="p-chip" hidden><button class="go" id="p-go"></button><button class="x" id="p-x" aria-label="Descartar la sugerencia">✕</button></div>
+        <div class="compose"><input id="p-in" placeholder="escribe un mensaje" aria-label="Mensaje"><button id="p-send" aria-label="Enviar">➤</button></div>
+      </div></div>
+    </div>
+  </div>
+
+  <h2>LO QUE CAMBIA</h2>
+  <div class="notes">
+    <div><b>De dónde sale.</b> El motor de Claude la genera: se arranca con <kbd>--prompt-suggestions</kbd> y manda un mensaje <kbd>prompt_suggestion</kbd> después de cada turno. jwn no inventa nada ni llama a otro modelo.</div>
+    <div><b>Cuándo no sale.</b> Claude no la da en los primeros turnos de una conversación, ni después de un error, ni cuando lo que diría es «gracias» o «déjame ver…»; y vale una llamada más al modelo por turno (con la caché caliente cuesta poco). Lo he comprobado: una conversación de un turno no trae ninguna.</div>
+    <div><b>Cuándo se ve.</b> Solo con el motor parado, el campo vacío y sin una pregunta esperando. Se va al escribir, al enviar algo, al empezar un turno o con <kbd>esc</kbd>. No se guarda: al reabrir la conversación no está.</div>
+    <div><b>En una sesión que solo se sigue</b> (otro <kbd>claude</kbd> escribe) no hay sugerencia: la transcripción no la guarda y no hay motor.</div>
+  </div>
+  <h2>PARA DECIDIR</h2>
+  <div class="notes">
+    <div><b>1 · cómo se acepta.</b> <span class="rec">Recomiendo Tab o → para ponerla en el campo</span> (se puede editar y luego Enter envía), como Claude Code. En el teléfono, un toque en la sugerencia la pone en el campo.</div>
+    <div><b>2 · Enter con el campo vacío.</b> <span class="rec">Recomiendo que no haga nada</span>: enviar sin querer algo que no escribiste cuesta un turno. Pruébalo con el botón de arriba.</div>
+    <div><b>3 · encendida por defecto.</b> <span class="rec">Sí</span>, con una línea en <kbd>config.toml</kbd> (<kbd>suggestions = false</kbd>) para apagarla y ahorrar la llamada.</div>
+  </div>
+</div>
+
+<script>
+const SUG = 'corre los tests del módulo auth y dime cuáles fallan';
+let sug = null, typed = '', enterSends = false, turns = 0, sent = [];
+const $ = id => document.getElementById(id);
+const base = [
+  ['u','arregla el test que falla en auth::expired'],
+  ['t','Voy a mirar el test y el código que prueba.'],
+  ['d','▸ Leyó 2 archivos, ejecutó 1 comando'],
+  ['t','El fallo es el reloj: verify() no mira la hora. Cambio la comparación y los 14 tests pasan.'],
+  ['d','✻ Listo en 41 s · 5 herramientas · $0,06'],
+];
+function lines(){ return base.concat(sent.flatMap(m => [['u',m],['t','Hecho.']])); }
+function drawList(el, phone){
+  el.innerHTML = '';
+  for (const [k,t] of lines()) {
+    const d = document.createElement('div');
+    if (k === 'u') d.innerHTML = '<span class="b blue">❯ </span>' + esc(t); else if (k === 't') d.innerHTML = '<span class="b">● </span>' + esc(t); else d.innerHTML = '<span class="dim">' + esc(t) + '</span>';
+    if (k === 'u') d.className = 'u';
+    el.appendChild(d);
+  }
+  el.scrollTop = el.scrollHeight;
+}
+const esc = s => s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+function drawTerm(){
+  drawList($('t-list'), false);
+  const f = $('t-field');
+  const shown = sug && !typed;
+  f.innerHTML = '<div class="row"><span class="b blue">❯</span><span>' + esc(typed) + (shown ? '<span class="cur"></span><span class="sug">' + esc(sug) + '</span><span class="tag">tab</span>' : '<span class="cur"></span>') + '</span></div>' +
+    (!typed && !sug ? '<div class="row"><span class="ph">escribe un mensaje · / comandos</span></div>' : '');
+  $('t-keys').textContent = shown ? 'tab o → acepta · esc descarta · ↵ ' + (enterSends ? 'la envía' : 'no la envía') : '↵ envía · / comandos · ⇧tab modo';
+  $('t-note').textContent = typed ? 'Escribir descarta la sugerencia: el campo es tuyo.' : (sug ? 'La sugerencia sale gris y no cuenta como texto: no se copia ni se envía sola.' : (turns ? 'Sin sugerencia: el campo está como siempre.' : 'Todavía no hay sugerencia.'));
+}
+function drawPhone(){
+  drawList($('p-list'), true);
+  const shown = sug && !$('p-in').value;
+  $('p-chip').hidden = !shown;
+  $('p-go').textContent = '💡 ' + (sug || '');
+  $('p-sub').textContent = shown ? 'idle · sugerencia' : 'idle';
+}
+function draw(){ drawTerm(); drawPhone(); }
+function accept(){ if (sug) { typed = sug; sug = null; } draw(); }
+function send(text){ if (!text.trim()) return; sent.push(text); typed = ''; sug = null; $('p-in').value = ''; draw(); }
+$('turn').onclick = () => { turns++; sug = SUG; if (!typed) {} draw(); };
+$('t-field').addEventListener('keydown', e => {
+  if (e.key === 'Tab' && sug && !typed) { e.preventDefault(); accept(); }
+  else if (e.key === 'ArrowRight' && sug && !typed) { e.preventDefault(); accept(); }
+  else if (e.key === 'Escape') { sug = null; draw(); }
+  else if (e.key === 'Enter') { e.preventDefault(); if (typed) send(typed); else if (sug && enterSends) send(sug); }
+  else if (e.key === 'Backspace') { typed = typed.slice(0, -1); draw(); }
+  else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) { typed += e.key; sug = null; draw(); }
+});
+$('t-field').onclick = () => { if (sug && !typed) { /* a click on the grey text accepts it */ accept(); } };
+$('p-go').onclick = () => { $('p-in').value = sug; sug = null; draw(); $('p-in').focus(); };
+$('p-x').onclick = () => { sug = null; draw(); };
+$('p-in').oninput = () => { if ($('p-in').value) sug = null; draw(); };
+$('p-send').onclick = () => send($('p-in').value);
+$('p-in').onkeydown = e => { if (e.key === 'Enter') send($('p-in').value); };
+function mode(){ $('e-no').setAttribute('aria-pressed', !enterSends); $('e-yes').setAttribute('aria-pressed', enterSends); draw(); }
+$('e-no').onclick = () => { enterSends = false; mode(); };
+$('e-yes').onclick = () => { enterSends = true; mode(); };
+$('reset').onclick = () => { sug = null; typed = ''; turns = 0; sent = []; $('p-in').value = ''; draw(); };
+draw();
+</script>

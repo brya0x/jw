@@ -1,9 +1,0 @@
-size 6 12
-cursor 0 0 hidden=0
-modes alt=0 appcursor=0 appkeypad=0 paste=0 mouse=none/default
-row 0 |r1|
-row 1 |orig|
-row 2 ||
-row 3 ||
-row 4 |r5|
-row 5 |r6|

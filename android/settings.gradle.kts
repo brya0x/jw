@@ -1,16 +1,26 @@
+// The product identity lives in ../identity.toml; read it here instead of repeating it.
+fun identity(key: String): String {
+    val line = file("../identity.toml").readLines().first { it.trim().startsWith("$key =") }
+    return line.substringAfter("=").substringBefore("#").trim().trim('"')
+}
+
+rootProject.name = "${identity("name")}-android"
+
 pluginManagement {
     repositories {
         google()
-        mavenCentral()
         gradlePluginPortal()
+        mavenCentral()
     }
 }
+
 dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
         google()
         mavenCentral()
     }
 }
-rootProject.name = "jw-mobile"
-include(":proto", ":term", ":app")
+
+include(":contract")
+include(":client-core")
+include(":app")

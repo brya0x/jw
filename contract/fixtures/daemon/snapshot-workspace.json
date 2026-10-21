@@ -1,0 +1,53 @@
+{
+  "t": "snapshot",
+  "node": {
+    "id": "00000000-0000-4000-8000-0000000000b1",
+    "type": "workspace",
+    "v": 1,
+    "epoch": "00000000-0000-4000-8000-000000000001",
+    "rev": 8,
+    "attention": [
+      {
+        "kind": "question",
+        "node": "00000000-0000-4000-8000-0000000000c1",
+        "rev": 9
+      }
+    ],
+    "name": "app: feat/login",
+    "kind": "worktree",
+    "path": "/home/u/code/app-login",
+    "project": "/home/u/code/app",
+    "branch": "feat/login",
+    "panes": [
+      {
+        "id": "00000000-0000-4000-8000-0000000000c1",
+        "title": "zsh",
+        "attention": [
+          {
+            "kind": "question",
+            "node": "00000000-0000-4000-8000-0000000000c1",
+            "rev": 9
+          }
+        ]
+      },
+      {
+        "id": "00000000-0000-4000-8000-0000000000c2",
+        "title": "zsh",
+        "attention": []
+      }
+    ],
+    "layout": {
+      "t": "split",
+      "dir": "row",
+      "ratio": 500,
+      "a": {
+        "t": "pane",
+        "pane": "00000000-0000-4000-8000-0000000000c1"
+      },
+      "b": {
+        "t": "pane",
+        "pane": "00000000-0000-4000-8000-0000000000c2"
+      }
+    }
+  }
+}

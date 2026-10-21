@@ -1,0 +1,38 @@
+{
+  "t": "snapshot",
+  "node": {
+    "id": "00000000-0000-4000-8000-0000000000d4",
+    "type": "diff",
+    "v": 1,
+    "epoch": "00000000-0000-4000-8000-000000000001",
+    "rev": 1,
+    "attention": [],
+    "workspace": "00000000-0000-4000-8000-0000000000b1",
+    "scope": "commit",
+    "commit": "89abcde0123456789abcdef0123456789abcdef0",
+    "state": "ok",
+    "files": [
+      {
+        "path": "crates/web/src/login.rs",
+        "status": "added",
+        "added": 3,
+        "deleted": 0,
+        "hash": "a1b2c3d4e5f60718",
+        "hunks": [
+          {
+            "context": "",
+            "old_start": 0,
+            "old_lines": 0,
+            "new_start": 1,
+            "new_lines": 3,
+            "lines": [
+              "+use crate::auth::Auth;",
+              "+",
+              "+pub const MAX_FAILS: u32 = 5;"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,283 @@
+package dev.jw.next.client
+
+import dev.jw.next.contract.Accent
+import dev.jw.next.contract.AskKind
+import dev.jw.next.contract.CommandKind
+import dev.jw.next.contract.CommandSource
+import dev.jw.next.contract.ContractJson
+import dev.jw.next.contract.ConvCommand
+import dev.jw.next.contract.ConvItem
+import dev.jw.next.contract.ConvMode
+import dev.jw.next.contract.ConvStatus
+import dev.jw.next.contract.DaemonMsg
+import dev.jw.next.contract.Held
+import dev.jw.next.contract.Image
+import dev.jw.next.contract.Node
+import dev.jw.next.contract.Running
+import dev.jw.next.contract.SavedConversation
+import java.io.File
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertIs
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+/** REQ-440 to REQ-452: what the phone does with a conversation node, against the shared fixture. */
+class ConversationTest {
+    private val dir = File(System.getProperty("contract.dir") ?: error("contract.dir is not set"), "fixtures/daemon")
+
+    private fun conversation(): Node.Conversation =
+        (ContractJson.decodeFromString(DaemonMsg.serializer(), File(dir, "snapshot-conversation.json").readText()) as DaemonMsg.Snapshot).node as Node.Conversation
+
+    private val pic = Image("image/jpeg", "AAAA")
+
+    @Test
+    fun anAccentIsAlwaysOneOfTheThemesSixColours() {
+        val theme = Themes.get(null, dark = true)
+        val six = setOf(theme.blue, theme.green, theme.yellow, theme.red, theme.magenta, theme.cyan)
+        assertEquals(six, ACCENTS.map { theme.accentOf(it.first) }.toSet())
+        assertEquals(theme.magenta, theme.accentOf(Accent.Magenta))
+        assertEquals(listOf("azul", "verde", "amarillo", "rojo", "magenta", "cian"), ACCENTS.map { it.second })
+    }
+
+    @Test
+    fun theWordsAreTheTerminalClientsAndTheModeIsWrittenWithASpace() {
+        assertEquals("accept edits", ConvMode.AcceptEdits.label())
+        assertEquals("manual", ConvMode.Manual.label())
+        assertEquals("11 s", convSecs(11_000))
+        assertEquals("1 min 5 s", convSecs(65_000))
+        assertEquals("22,0 k", convKilo(22_024))
+        assertEquals("1 herramienta", convTools(1))
+        assertEquals("0 herramientas", convTools(0))
+        assertEquals("3 herramientas", convTools(3))
+        assertEquals("$0,06", convUsd(60_000))
+        assertEquals("pide permiso", AskKind.Permission.tag())
+        assertEquals("pregunta", AskKind.Question.tag())
+        assertEquals("plan listo", AskKind.Plan.tag())
+    }
+
+    /** What the turn has written is said on the working line, and a tool that runs says for how long (REQ-562, REQ-563). */
+    @Test
+    fun theWorkingLineSaysTheTokensAndARunningToolItsTime() {
+        val c = conversation().copy(status = ConvStatus.Tool, tokens = 1250)
+        assertEquals("Trabajando… (12 s · ↓ 1,3 k tokens · ■ interrumpe)", c.workLine(false, 1_792_110_012_000))
+        val run = listOf(Running("t1", 1_792_110_004_000))
+        assertEquals("8 s", run.ranFor("t1", 1_792_110_012_000))
+        assertEquals("0 s", run.ranFor("t1", 1_792_110_000_000))
+        assertNull(run.ranFor("t2", 1_792_110_012_000))
+    }
+
+    /** REQ-572: what Claude proposes shows while the field is empty and nothing runs, waits or was put aside. */
+    @Test
+    fun whatClaudeProposesShowsOnlyWhileItCanBeTaken() {
+        val c = conversation().copy(ask = null, status = ConvStatus.Idle, since = null, suggestion = "revisa el diff")
+        assertEquals("revisa el diff", c.suggestionShown("", null, false))
+        assertNull(c.suggestionShown("hola", null, false), "the field is the person's")
+        assertNull(c.suggestionShown("", "revisa el diff", false), "put aside")
+        assertEquals("revisa el diff", c.suggestionShown("  ", "otra", false))
+        assertNull(c.copy(status = ConvStatus.Thinking).suggestionShown("", null, false), "Claude works")
+        assertNull(c.copy(suggestion = null).suggestionShown("", null, false))
+        assertNull(conversation().copy(status = ConvStatus.Idle, since = null, suggestion = "revisa el diff").suggestionShown("", null, false), "a question waits")
+        assertNull(c.copy(status = ConvStatus.Dead).suggestionShown("", null, true), "the engine is taken up again")
+    }
+
+    /** REQ-576: a session that another `claude` has open says who has it, and proposes nothing. */
+    @Test
+    fun aSessionThatAnotherClaudeHasOpenSaysWhoHasIt() {
+        val c = conversation().copy(ask = null, status = ConvStatus.Idle, since = null, suggestion = "revisa el diff")
+        assertNull(c.heldText())
+        val held = c.copy(held = Held(93269, "/work/jw-wt/next-bootstrap", false))
+        assertEquals("solo lectura: otro claude (pid 93269, en jw-wt/next-bootstrap) la tiene abierta · ciérralo para escribir aquí", held.heldText())
+        assertTrue(held.copy(held = Held(1, "/a", true)).heldText()!!.contains("trabaja en ella"))
+        assertNull(held.suggestionShown("", null, false), "no suggestion while it is held")
+        assertEquals("jw", held.copy(held = Held(2, "/jw/", false)).heldText()!!.substringAfter("en ").substringBefore(")"), "a folder at the root")
+    }
+
+    /** A turn of another `claude` that is followed has a line of work with no way to stop it (REQ-565). */
+    @Test
+    fun aFollowedTurnShowsItsTimeAndTokensAndNoStop() {
+        val c = conversation().copy(status = ConvStatus.Dead, since = null, following = 1_792_110_000_000, tokens = 1250)
+        assertEquals("Pensando… (12 s · ↓ 1,3 k tokens)", c.workLine(false, 1_792_110_012_000))
+        assertEquals("Trabajando… (12 s · ↓ 1,3 k tokens)", c.copy(running = listOf(Running("t1", 1_792_110_003_000))).workLine(false, 1_792_110_012_000))
+        assertNull(c.copy(following = null).workLine(false, 1_792_110_012_000))
+        // a turn of the conversation's own engine is the one that is told
+        assertEquals("Pensando… (12 s · ■ interrumpe)", conversation().copy(status = ConvStatus.Thinking, following = 1_792_110_000_000, tokens = 0).workLine(false, 1_792_110_012_000))
+    }
+
+    @Test
+    fun theWorkingLineSaysWhatClaudeDoesForHowLongAndHowToStopIt() {
+        val c = conversation()
+        assertNull(c.copy(status = ConvStatus.Idle).workLine(false, 1_792_110_012_000))
+        assertEquals("Pensando… (12 s · ■ interrumpe)", c.copy(status = ConvStatus.Thinking).workLine(false, 1_792_110_012_000))
+        assertEquals("Escribiendo… (■ interrumpe)", c.copy(status = ConvStatus.Streaming, since = null).workLine(false, 5))
+        // a dead engine is told only once a message was sent to it (REQ-413)
+        assertNull(c.copy(status = ConvStatus.Dead).workLine(false, 0))
+        assertEquals("retomando conversación…", c.copy(status = ConvStatus.Dead).workLine(true, 0))
+        assertEquals("retomando conversación…", c.copy(status = ConvStatus.Resuming).workLine(false, 0))
+        assertTrue(c.copy(status = ConvStatus.Tool).working(false))
+    }
+
+    @Test
+    fun anItemIsCopiedAsItsTextAndATurnAsEverythingFromTheMessageToTheNext() {
+        val c = conversation()
+        val read = c.items.first { it is ConvItem.Tool } as ConvItem.Tool
+        assertEquals("Read(src/auth.rs)\nLeídas 142 líneas\npub fn verify(token: &str) -> bool {\n    …", itemText(read))
+        val at = c.items.indexOfFirst { it is ConvItem.Text }
+        val turn = turnText(c.items, at)
+        assertTrue(turn.startsWith("arregla el test que falla en auth::expired"), turn)
+        assertTrue(turn.contains("Edit(src/auth.rs)") && turn.contains("! git status"), turn)
+        assertFalse(turn.contains("el daemon se reinició"), "a divider is not the turn")
+        assertEquals("", turnText(c.items, 99))
+        assertTrue(itemText(ConvItem.Result(11_000, 3, 60_000)).startsWith("Listo en 11 s"))
+        // REQ-552: a turn read from a transcript has no cost, and the line leaves it out; the words are the terminal client's `done_line`.
+        assertEquals("Listo en 9 s · 1 herramienta", convDone(ConvItem.Result(9_000, 1, 0)))
+        assertEquals("Listo en 11 s · 3 herramientas · \$0,06", convDone(ConvItem.Result(11_000, 3, 60_000)))
+        assertEquals("Listo en 9 s · 1 herramienta", itemText(ConvItem.Result(9_000, 1, 0)))
+    }
+
+    @Test
+    fun whatAToolWasAnsweredByIsWrittenAsAllowedOrAsAnsweredAndNothingWhenNobodyDid() {
+        fun tool(name: String, by: String?) = ConvItem.Tool("t", name, "x", dev.jw.next.contract.ToolState.Ok, by = by)
+        assertEquals(" · permitido desde el móvil", tool("Edit", "el móvil").answeredNote())
+        assertEquals(" · permitido por modo accept edits", tool("Edit", "modo accept edits").answeredNote())
+        assertEquals(" · respondida desde el móvil", tool("AskUserQuestion", "el móvil").answeredNote())
+        assertEquals(" · respondida desde el terminal", tool("ExitPlanMode", "el terminal").answeredNote())
+        assertEquals("", tool("Edit", null).answeredNote())
+    }
+
+    @Test
+    fun theSlashListHoldsTheCommandsWithTheLettersTheOnesThatBeginWithThemFirst() {
+        val c = conversation()
+        val names = { line: String -> slashMenu(c.commands, line).map { it.name } }
+        assertEquals(listOf("/exit", "/tasks", "/context", "/doctor", "/deploy", "/jwn", "/vercel:deploy"), names("/"))
+        assertEquals(listOf("/deploy", "/vercel:deploy"), names("/de"))
+        assertEquals(emptyList(), names("/dex"))
+        assertEquals(emptyList(), names("/model "), "a space ends the word")
+        assertEquals(emptyList(), names("hola"))
+        assertEquals("jwn", CommandSource.Jwn.word())
+        assertEquals("proyecto", CommandSource.Project.word())
+    }
+
+    @Test
+    fun aSlashAfterOtherWordsOpensTheSameListAndAPathDoesNot() {
+        val c = conversation()
+        val names = { line: String, at: Int -> slashMenu(c.commands, line, at).map { it.name } }
+        val line = "mira esto y /de"
+        assertEquals(listOf("/deploy", "/vercel:deploy"), names(line, line.length))
+        assertEquals(listOf("/deploy", "/vercel:deploy"), names("uno\n/de", 7), "after a new line")
+        assertEquals(emptyList(), names("mira /usr/b", 11), "a path is not a command")
+        assertEquals(emptyList(), names("a/de", 4), "a slash inside a word is not one")
+        assertEquals(emptyList(), names("mira /de y mas", 14), "the cursor is past the word")
+        assertEquals(listOf("/deploy", "/vercel:deploy"), names("mira /de y mas", 8), "the cursor ends the word")
+    }
+
+    @Test
+    fun aCommandIsRunOnlyWhenItIsTheWholeLineAndWrittenInPlaceAnywhereElse() {
+        val c = conversation()
+        val deploy = c.commands.first { it.name == "/deploy" }
+        assertTrue(slashIsWholeLine("/de", 3))
+        assertTrue(!slashIsWholeLine("mira /de", 8))
+        assertTrue(!slashIsWholeLine("/de y mas", 3), "text after it is not thrown away")
+        assertEquals("mira /deploy " to 13, takeCommand("mira /de", 8, deploy))
+        assertEquals("/deploy  y mas" to 8, takeCommand("/de y mas", 3, deploy))
+        assertEquals("a" to 1, takeCommand("a", 1, deploy), "no word, no change")
+    }
+
+    @Test
+    fun aCommandThatExistsIsFoundAnywhereInTheLineAndNothingElseIs() {
+        val c = conversation()
+        val line = "mira /deploy y /nope o /jwn, /exit"
+        val words = commandWords(c.commands, line).map { (a, b, s) -> line.substring(a, b) to s }
+        assertEquals(listOf("/deploy" to CommandSource.Project, "/exit" to c.commands.first { it.name == "/exit" }.source), words)
+        assertEquals(emptyList(), commandWords(c.commands, "no/deploy"))
+    }
+
+    @Test
+    fun whatIsSentDependsOnHowTheLineStarts() {
+        val c = conversation()
+        assertEquals(Submit.Nothing, submitOf("   ", emptyList()))
+        assertEquals(Submit.Say("hola", emptyList()), submitOf("  hola ", emptyList()))
+        assertEquals(Submit.Shell("git status"), submitOf("!git status", emptyList()))
+        assertEquals(Submit.Say("!", emptyList()), submitOf("!", emptyList()), "a bare bang is a message")
+        assertEquals(Submit.Panel("resume", ""), submitOf("/resume", emptyList()))
+        assertEquals(Submit.Panel("resume", "abc"), submitOf("/resume abc", emptyList()))
+        assertEquals(Submit.Panel("help", ""), submitOf("/help", emptyList()))
+        for (w in listOf("model", "effort", "mode", "color", "rename")) assertEquals(Submit.Setting(w), submitOf("/$w", emptyList()), w)
+        assertEquals(Submit.Say("/model opus", emptyList()), submitOf("/model opus", emptyList()), "with a value it goes to the daemon")
+        assertEquals(Submit.Say("/deploy ahora", emptyList()), submitOf("/deploy ahora", emptyList()))
+        assertTrue(c.commands.isNotEmpty())
+    }
+
+    @Test
+    fun aPictureGoesWithTheMessageOnlyWhileItsMarkIsInTheLine() {
+        val a = Image("image/jpeg", "A")
+        val b = Image("image/jpeg", "B")
+        val sent = submitOf("mira [Imagen#2] aquí", listOf(1 to a, 2 to b))
+        assertEquals(Submit.Say("mira [Imagen#2] aquí", listOf(b)), sent)
+        assertEquals(Submit.Say("sin ellas", emptyList()), submitOf("sin ellas", listOf(1 to a)))
+        assertIs<Submit.Say>(submitOf("[Imagen#1]", listOf(1 to pic)))
+    }
+
+    @Test
+    fun aPictureIsMadeNoLargerThan1568PixelsOnItsLongSideKeepingItsShape() {
+        assertEquals(1000 to 800, fitSize(1000, 800))
+        assertEquals(1568 to 1176, fitSize(4032, 3024))
+        assertEquals(882 to 1568, fitSize(1764, 3136))
+        assertEquals(1568 to 1, fitSize(100_000, 40))
+        assertEquals("Imagen#2 · 1568 px · 240 KB", pictureLabel(2, 1568, 1176, 240 * 1024))
+        assertEquals(4, IMAGES_MAX)
+        assertEquals(5 * 1024 * 1024, IMAGE_MAX_BYTES)
+    }
+
+    @Test
+    fun theListsOfJwnComeFromTheNode() {
+        val c = conversation()
+        val help = helpPanel(c)
+        assertTrue(help.rows.any { it.label == "+" } && help.rows.any { it.label == "/exit" })
+        assertFalse(help.rows.any { it.label == "/context" }, "Claude's are not jwn's")
+        val status = statusPanel(c, "/work/app")
+        fun at(k: String) = status.rows.first { it.label == k }.detail
+        assertEquals("sonnet-5.5", at("modelo"))
+        assertEquals("manual", at("modo"))
+        assertEquals("/work/app", at("carpeta"))
+        assertEquals("$0,06", at("costo"))
+        assertEquals("62 %", at("límite de 5 horas"))
+        assertEquals("31 %", at("límite de 7 días"))
+        val skills = skillsPanel(c)
+        assertEquals(listOf("/deploy", "/vercel:deploy", "/jwn"), skills.rows.map { it.label })
+        assertEquals(RowAct.Insert("/deploy "), skills.rows[0].act)
+        val tasks = tasksPanel(c)
+        assertEquals(listOf("en curso", "detenido"), tasks.rows.map { it.tag })
+        assertEquals(Tone.Warn, tasks.rows[0].tone)
+        assertEquals(RowAct.Stop("bs02u3"), tasks.rows[0].act, "the one that runs can be stopped")
+        assertEquals(RowAct.Nothing, tasks.rows[1].act)
+        assertEquals(1_792_110_001_000, tasks.rows[0].at)
+        assertEquals(listOf("cargo build --release", "revisar el CI cada 5 min"), tasks.rows.map { it.label }, "the newest first")
+        assertTrue(tasksPanel(c.copy(tasks = emptyList())).rows.isEmpty())
+        val pages = artifactsPanel(c.artifacts)
+        assertEquals(RowAct.Open("https://claude.ai/artifact/6HbvGgivzfNgDnkzpDjf4Y"), pages.rows[0].act)
+        for (n in listOf("help", "status", "resume", "continue", "skills", "tasks", "artifacts", "permissions", "memory")) assertTrue(isPanel(n), n)
+        assertFalse(isPanel("model"))
+    }
+
+    @Test
+    fun theSavedConversationsResumeByTheirIdAndSayHowLongAgo() {
+        val list = listOf(SavedConversation("2cab1f5a-3d20-4cd2-9d13-485b39b26147", "arregla el login", 1_792_110_000_000))
+        val p = savedPanel(list)
+        assertEquals(RowAct.Resume("2cab1f5a-3d20-4cd2-9d13-485b39b26147"), p.rows[0].act)
+        assertEquals("2cab1f5a", p.rows[0].tag)
+        assertEquals("ahora", listAgo(10_000, 5_000))
+        assertEquals("hace 5 min", listAgo(1_000_000_000, 1_000_000_000 - 5 * 60_000))
+        assertEquals("hace 3 h", listAgo(1_000_000_000, 1_000_000_000 - 3 * 3_600_000))
+        assertEquals("hace 2 d", listAgo(1_000_000_000, 1_000_000_000 - 2 * 86_400_000))
+        assertTrue(savedPanel(emptyList()).rows.isEmpty())
+    }
+
+    @Test
+    fun aCommandThatNeedsClaudesScreenIsAScreenCommandInTheList() {
+        val c = ConvCommand("/rewind", CommandSource.Claude, CommandKind.Screen, "volver a un punto anterior")
+        assertEquals(CommandKind.Screen, c.kind)
+        assertEquals(listOf("/rewind"), slashMenu(listOf(c), "/re").map { it.name })
+    }
+}

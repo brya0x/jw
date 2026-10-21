@@ -1,0 +1,19 @@
+{
+  "t": "patch",
+  "node": "00000000-0000-4000-8000-0000000000d2",
+  "epoch": "00000000-0000-4000-8000-000000000001",
+  "from": 3,
+  "to": 4,
+  "ops": [
+    {
+      "op": "replace",
+      "path": "/files/0/seen",
+      "value": "yes"
+    },
+    {
+      "op": "add",
+      "path": "/files/1/seen",
+      "value": "yes"
+    }
+  ]
+}

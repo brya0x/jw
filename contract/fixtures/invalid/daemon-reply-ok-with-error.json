@@ -1,0 +1,9 @@
+{
+  "t": "reply",
+  "id": "c1",
+  "ok": true,
+  "error": {
+    "code": "io",
+    "message": "x"
+  }
+}

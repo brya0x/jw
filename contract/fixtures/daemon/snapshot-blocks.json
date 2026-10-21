@@ -1,0 +1,111 @@
+{
+  "t": "snapshot",
+  "node": {
+    "id": "00000000-0000-4000-8000-0000000000d1",
+    "type": "blocks",
+    "v": 1,
+    "epoch": "00000000-0000-4000-8000-000000000001",
+    "rev": 4,
+    "attention": [],
+    "pane": "00000000-0000-4000-8000-0000000000c2",
+    "mode": "blocks",
+    "blocks": [
+      {
+        "id": 1,
+        "cmd": "git status",
+        "cwd": "/home/u/code/app-login",
+        "started": 1791932000000,
+        "running": false,
+        "code": 0,
+        "ms": 120,
+        "out": [
+          [
+            {
+              "t": "On branch feat/login"
+            }
+          ],
+          [
+            {
+              "t": "nothing to commit, working tree clean"
+            }
+          ]
+        ]
+      },
+      {
+        "id": 2,
+        "cmd": "cargo test",
+        "cwd": "/home/u/code/app-login",
+        "started": 1791932010000,
+        "running": false,
+        "code": 101,
+        "ms": 4200,
+        "truncated": true,
+        "out": [
+          [
+            {
+              "t": "   Compiling app v0.3.1",
+              "fg": 8
+            }
+          ],
+          [
+            {
+              "t": "test auth::login_ok ... "
+            },
+            {
+              "t": "ok",
+              "fg": 2
+            }
+          ],
+          [
+            {
+              "t": "test auth::expired ... "
+            },
+            {
+              "t": "FAILED",
+              "fg": 1,
+              "b": true
+            }
+          ],
+          [
+            {
+              "t": "warning",
+              "fg": "#e5c07b",
+              "u": true
+            },
+            {
+              "t": ": unused import",
+              "i": true
+            }
+          ],
+          [
+            {
+              "t": " 13 passed ",
+              "fg": 0,
+              "bg": 2
+            },
+            {
+              "t": " 1 failed",
+              "fg": "#e06c75",
+              "bg": "#282c34"
+            }
+          ]
+        ]
+      },
+      {
+        "id": 3,
+        "cmd": "cargo watch -x test",
+        "cwd": "/home/u/code/app-login",
+        "started": 1791932100000,
+        "running": true,
+        "out": [
+          [
+            {
+              "t": "[Running 'cargo test']",
+              "fg": 8
+            }
+          ]
+        ]
+      }
+    ]
+  }
+}

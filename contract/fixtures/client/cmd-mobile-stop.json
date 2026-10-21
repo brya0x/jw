@@ -1,0 +1,7 @@
+{
+  "t": "cmd",
+  "id": "c9",
+  "cmd": {
+    "cmd": "mobile_stop"
+  }
+}

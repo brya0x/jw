@@ -1,0 +1,10 @@
+{
+  "t": "cmd",
+  "id": "c53",
+  "cmd": {
+    "cmd": "write_project_config",
+    "repo": "/home/u/code/app",
+    "to": "personal",
+    "text": "root = \"../app-trees\"\nsetup = [\"bun install\"]\n"
+  }
+}

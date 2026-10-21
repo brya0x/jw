@@ -1,0 +1,31 @@
+{
+  "t": "reply",
+  "id": "c13",
+  "ok": true,
+  "result": {
+    "path": "src",
+    "entries": [
+      {
+        "name": "auth",
+        "kind": "dir",
+        "git": "modified"
+      },
+      {
+        "name": "target",
+        "kind": "dir",
+        "ignored": true
+      },
+      {
+        "name": "main.rs",
+        "kind": "file",
+        "size": 1536,
+        "git": "untracked"
+      },
+      {
+        "name": "link-a-etc",
+        "kind": "link"
+      }
+    ],
+    "total": 4
+  }
+}

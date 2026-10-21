@@ -1,0 +1,183 @@
+<title>jwn Colores de pantalla</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* One terminal grid, 80 columns. The theme picker repaints everything from the ten palettes of contract/themes.json; the page around it follows the system theme. */
+:root{
+  --page:#16181d; --ink:#c3c9d4; --mut:#7d8594; --box:#1e2127; --edge:#333843; --pick:#61afef; --pickfg:#16181d;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  --bg:#282c34; --panel:#21252b; --fg:#abb2bf; --dim:#5c6370; --line:#3e4451; --sel:#2c313a;
+  --blue:#61afef; --green:#98c379; --yellow:#e5c07b; --red:#e06c75; --magenta:#c678dd; --cyan:#56b6c2;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--page:#ecebe8;--ink:#2c313a;--mut:#5f6673;--box:#f6f5f2;--edge:#cfccc5;--pick:#2f6fbf;--pickfg:#ffffff;color-scheme:light}}
+:root[data-theme="light"]{--page:#ecebe8;--ink:#2c313a;--mut:#5f6673;--box:#f6f5f2;--edge:#cfccc5;--pick:#2f6fbf;--pickfg:#ffffff;color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.55 'IBM Plex Sans',system-ui,sans-serif;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px 40px}
+.wrap{max-width:1180px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
+h1{font:600 20px/1.2 var(--mono);margin:0}
+h2{font:600 12px var(--mono);margin:0;color:var(--mut)}
+p{margin:0;max-width:78ch;color:var(--mut)}
+.controls{display:flex;flex-wrap:wrap;gap:14px 24px;align-items:flex-end}
+.group{display:flex;flex-direction:column;gap:6px}
+.group>span{font:12px var(--mono);color:var(--mut)}
+.seg{display:flex;gap:6px;flex-wrap:wrap}
+button,select{font:12px var(--mono);color:var(--ink);background:var(--box);border:1px solid var(--edge);border-radius:4px;padding:6px 10px;min-height:34px;cursor:pointer}
+button:hover,select:hover{border-color:var(--pick)}
+button[aria-pressed=true]{background:var(--pick);color:var(--pickfg);border-color:var(--pick);font-weight:700}
+:focus-visible{outline:2px solid var(--pick);outline-offset:1px}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto}
+.term pre{margin:0;font:13px/1.25 var(--mono);color:var(--fg);width:max-content}
+.frame{display:flex;flex-direction:column;gap:6px}
+.cap{font:12px var(--mono);color:var(--mut)}
+.notes{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
+.notes div{background:var(--box);border:1px solid var(--edge);border-radius:8px;padding:12px 14px;font:12px/1.55 var(--mono);color:var(--ink)}
+.notes b{color:var(--pick)}
+.tag{display:inline-block;font:11px var(--mono);padding:1px 6px;border-radius:3px;background:var(--box);border:1px solid var(--edge);color:var(--mut)}
+</style>
+<div class="wrap">
+  <header class="group" style="gap:8px">
+    <h1>Colores de la pantalla completa</h1>
+    <p>Hoy un programa que ocupa toda la pantalla (nvim, htop, lazygit) se dibuja como texto de un solo color. Aquí se ve cómo quedaría con sus colores, con los 16 colores ANSI tomados del tema, y lo que cambia según lo que le contestemos a nvim sobre el fondo.</p>
+  </header>
+
+  <div class="controls">
+    <div class="group"><span>tema de jwn</span><select id="theme" aria-label="Tema"></select></div>
+    <div class="group"><span>pantalla</span><div class="seg" id="mode">
+      <button data-v="now" aria-pressed="false">hoy: sin colores</button>
+      <button data-v="new" aria-pressed="true">propuesta: con colores</button></div></div>
+    <div class="group"><span>programa</span><div class="seg" id="prog">
+      <button data-v="ansi" aria-pressed="true">colores ANSI (nvim sin termguicolors, htop)</button>
+      <button data-v="rgb" aria-pressed="false">colores RGB propios (nvim con termguicolors)</button></div></div>
+    <div class="group" id="bgctl"><span>qué se le contesta a nvim sobre el fondo</span><div class="seg" id="ask">
+      <button data-v="none" aria-pressed="true">nada (como hoy)</button>
+      <button data-v="theme" aria-pressed="false">el del tema (claro u oscuro)</button></div></div>
+  </div>
+
+  <div class="frame">
+    <div class="cap" id="cap"></div>
+    <div class="term"><pre id="screen" aria-label="Pantalla de nvim"></pre></div>
+  </div>
+
+  <div class="notes">
+    <div><b>Qué viaja.</b> El nodo <code>screen</code> del panel gana un campo <code>spans</code> (filas de <code>Span</code>, el mismo tipo que usan los bloques). <code>lines</code> no se quita, así un cliente viejo sigue dibujando texto. Es un cambio aditivo: sin subir la versión del nodo.</div>
+    <div><b>Qué colores son del tema.</b> Sin color (fondo y texto por defecto) es el fondo y el texto del tema. Los índices 0 a 15 son los del tema, como en los bloques. De 16 a 255 es la paleta de siempre. Un color RGB se dibuja tal cual lo pide el programa.</div>
+    <div><b>Lo que no seguirá el tema.</b> Un nvim con <code>termguicolors</code> pinta su propio fondo y sus propios colores: se ve con su esquema, no con el del tema. Para que sea el mismo hay que cambiar el esquema de nvim; jwn no lo toca.</div>
+    <div><b>Decisión tuya: el fondo.</b> Hoy el daemon no contesta a nvim de qué color es el fondo (RAT-25), así que nvim supone oscuro. Con tema claro eso da un nvim oscuro dentro de una pantalla clara. Si el daemon contestara con el tema del cliente que mira, nvim elegiría su variante clara. Contra: un panel no tiene tema propio y puede haber dos clientes con temas distintos.</div>
+  </div>
+</div>
+
+<script>
+const THEMES=[
+ ["One Dark","dark","#282c34","#21252b","#abb2bf","#5c6370","#3e4451","#2c313a","#61afef","#98c379","#e5c07b","#e06c75","#c678dd","#56b6c2"],
+ ["One Light","light","#fafafa","#f0f0f1","#383a42","#a0a1a7","#dbdbdc","#e5e5e6","#4078f2","#50a14f","#c18401","#e45649","#a626a4","#0184bc"],
+ ["Catppuccin Mocha","dark","#1e1e2e","#181825","#cdd6f4","#6c7086","#313244","#45475a","#89b4fa","#a6e3a1","#f9e2af","#f38ba8","#cba6f7","#94e2d5"],
+ ["Catppuccin Latte","light","#eff1f5","#e6e9ef","#4c4f69","#9ca0b0","#ccd0da","#dce0e8","#1e66f5","#40a02b","#df8e1d","#d20f39","#8839ef","#179299"],
+ ["Tokyo Night","dark","#1a1b26","#16161e","#c0caf5","#565f89","#292e42","#283457","#7aa2f7","#9ece6a","#e0af68","#f7768e","#bb9af7","#7dcfff"],
+ ["Tokyo Day","light","#e1e2e7","#d5d6db","#3760bf","#848cb5","#c4c8da","#d0d5e3","#2e7de9","#587539","#8c6c3e","#f52a65","#9854f1","#007197"],
+ ["Gruvbox Dark","dark","#282828","#1d2021","#ebdbb2","#928374","#3c3836","#32302f","#83a598","#b8bb26","#fabd2f","#fb4934","#d3869b","#8ec07c"],
+ ["Gruvbox Light","light","#fbf1c7","#f2e5bc","#3c3836","#7c6f64","#d5c4a1","#ebdbb2","#076678","#79740e","#b57614","#9d0006","#8f3f71","#427b58"],
+ ["Solarized Dark","dark","#002b36","#00212b","#93a1a1","#586e75","#0f4350","#073642","#268bd2","#859900","#b58900","#dc322f","#d33682","#2aa198"],
+ ["Solarized Light","light","#fdf6e3","#eee8d5","#586e75","#93a1a1","#e0dac3","#e6dfc8","#268bd2","#859900","#b58900","#dc322f","#d33682","#2aa198"]
+].map(a=>({name:a[0],kind:a[1],bg:a[2],panel:a[3],fg:a[4],dim:a[5],line:a[6],sel:a[7],blue:a[8],green:a[9],yellow:a[10],red:a[11],magenta:a[12],cyan:a[13]}));
+
+const S={theme:0,mode:"new",prog:"ansi",ask:"none"};
+const T=()=>THEMES[S.theme];
+// The same mapping as tui/shell.rs `palette`.
+function palette(i){
+  const t=T(),dark=t.kind==="dark";
+  if(i===0) return dark?t.line:t.fg;
+  if(i===15) return dark?"#ffffff":t.fg;
+  const m={1:"red",9:"red",2:"green",10:"green",3:"yellow",11:"yellow",4:"blue",12:"blue",5:"magenta",13:"magenta",6:"cyan",14:"cyan",7:"fg",8:"dim"};
+  if(m[i]) return t[m[i]];
+  if(i<=231){const n=i-16,l=v=>v?55+40*v:0;return rgb(l(Math.floor(n/36)),l(Math.floor(n%36/6)),l(n%6));}
+  const v=8+10*(i-232);return rgb(v,v,v);
+}
+const rgb=(r,g,b)=>"#"+[r,g,b].map(x=>x.toString(16).padStart(2,"0")).join("");
+const col=c=>c==null?null:typeof c==="number"?palette(c):c;
+
+// A row is a list of [text, fg, bg, flags]; fg and bg are null (the theme's), an index 0..255 or "#rrggbb".
+const COLS=80;
+function pad(row,bg){const n=row.reduce((a,s)=>a+[...s[0]].length,0);return n<COLS?row.concat([[" ".repeat(COLS-n),null,bg??null,""]]):row;}
+
+function ansiScreen(){
+  const R=(...s)=>pad(s,null);
+  const num=n=>["  "+String(n).padStart(2)+" ",8,null,""];
+  return [
+    R(num(1),["-- jwn: lee el registro de espacios y avisa de los cambios",8,null,"i"]),
+    R(num(2),["local",5,null,""],[" ",null,null,""],["registry",null,null,""],[" = ",null,null,""],["require",4,null,""],["(",null,null,""],['"jwn.registry"',2,null,""],[")",null,null,""]),
+    R(num(3),["local",5,null,""],[" ",null,null,""],["MAX",null,null,""],[" = ",null,null,""],["64",3,null,""]),
+    R(num(4)),
+    R(num(5),["local function",5,null,""],[" ",null,null,""],["changed",4,null,"b"],["(",null,null,""],["old",null,null,""],[", ",null,null,""],["new",null,null,""],[")",null,null,""]),
+    R(num(6),["  if",5,null,""],[" old.rev ",null,null,""],["==",6,null,""],[" new.rev ",null,null,""],["then",5,null,""]),
+    R(num(7),["    return",5,null,""],[" ",null,null,""],["false",3,null,""]),
+    R(num(8),["  end",5,null,""]),
+    R(num(9),["  for",5,null,""],[" i, ws ",null,null,""],["in",5,null,""],[" ipairs(new.workspaces) ",null,null,""],["do",5,null,""]),
+    R(num(10),["    if",5,null,""],[" i > MAX ",null,null,""],["then",5,null,""],[" ",null,null,""],["break",5,null,""],[" ",null,null,""],["end",5,null,""]),
+    R(num(11),["    registry.note(ws.id, ",null,null,""],['"seen"',2,null,""],[")",null,null,""]),
+    R(num(12),["  end",5,null,""]),
+    R(num(13),["  return",5,null,""],[" ",null,null,""],["true",3,null,""]),
+    R(num(14),["end",5,null,""]),
+    R(num(15)),
+    R(num(16),["-- ",8,null,""],["TODO",0,3,"b"],[" borrar los avisos que ya se vieron",8,null,""]),
+    R(["~",4,null,""]),R(["~",4,null,""]),R(["~",4,null,""]),R(["~",4,null,""]),
+    pad([[" NORMAL ",0,2,"b"],[" registry.lua ",7,8,""],["                                          ",null,8,""],[" 7:14 ",0,4,"b"]],8),
+    R([":",null,null,""]),
+  ];
+}
+function rgbScreen(){
+  // nvim's own default colours, approximate. It paints its own background on every cell.
+  const dk=(S.ask==="none")?true:T().kind==="dark";
+  const P=dk?{bg:"#14161b",fg:"#eef1f8",cm:"#9b9ea4",kw:"#a6dbff",st:"#b3f6c0",fn:"#8cf8f7",nu:"#fce094",ln:"#4f5258",sb:"#2c2e33",sf:"#c4c6cd",er:"#ffc0b9",mode:"#14161b",modebg:"#b3f6c0"}
+            :{bg:"#e0e2ea",fg:"#14161b",cm:"#4f5258",kw:"#004c73",st:"#005523",fn:"#007373",nu:"#6b5300",ln:"#9b9ea4",sb:"#c4c6cd",sf:"#2c2e33",er:"#590008",mode:"#e0e2ea",modebg:"#005523"};
+  const B=P.bg,R=(...s)=>pad(s.map(x=>[x[0],x[1],x[2]??B,x[3]||""]),B);
+  const num=n=>["  "+String(n).padStart(2)+" ",P.ln,B,""];
+  return [
+    R(num(1),["-- jwn: lee el registro de espacios y avisa de los cambios",P.cm]),
+    R(num(2),["local",P.kw],[" registry = ",P.fg],["require",P.fn],["(",P.fg],['"jwn.registry"',P.st],[")",P.fg]),
+    R(num(3),["local",P.kw],[" MAX = ",P.fg],["64",P.nu]),
+    R(num(4)),
+    R(num(5),["local function",P.kw],[" ",P.fg],["changed",P.fn,null,"b"],["(old, new)",P.fg]),
+    R(num(6),["  if",P.kw],[" old.rev == new.rev ",P.fg],["then",P.kw]),
+    R(num(7),["    return",P.kw],[" ",P.fg],["false",P.nu]),
+    R(num(8),["  end",P.kw]),
+    R(num(9),["  for",P.kw],[" i, ws ",P.fg],["in",P.kw],[" ipairs(new.workspaces) ",P.fg],["do",P.kw]),
+    R(num(10),["    if",P.kw],[" i > MAX ",P.fg],["then",P.kw],[" ",P.fg],["break",P.kw],[" ",P.fg],["end",P.kw]),
+    R(num(11),["    registry.note(ws.id, ",P.fg],['"seen"',P.st],[")",P.fg]),
+    R(num(12),["  end",P.kw]),
+    R(num(13),["  return",P.kw],[" ",P.fg],["true",P.nu]),
+    R(num(14),["end",P.kw]),
+    R(num(15)),
+    R(num(16),["-- ",P.cm],["TODO",P.er,null,"b"],[" borrar los avisos que ya se vieron",P.cm]),
+    R(["~",P.ln]),R(["~",P.ln]),R(["~",P.ln]),R(["~",P.ln]),
+    pad([[" NORMAL ",P.mode,P.modebg,"b"],[" registry.lua ",P.sf,P.sb,""],["                                          ",P.sf,P.sb,""],[" 7:14 ",P.mode,P.modebg,"b"]],P.sb),
+    R([":",P.fg]),
+  ];
+}
+function plainScreen(rows){
+  // What is drawn today: the text of each cell, one colour.
+  return rows.map(r=>[[r.map(s=>s[0]).join(""),null,null,""]]);
+}
+const esc=s=>s.replace(/&/g,"&amp;").replace(/</g,"&lt;");
+function draw(){
+  const t=T(),r=document.documentElement.style;
+  ["bg","panel","fg","dim","line","sel","blue","green","yellow","red","magenta","cyan"].forEach(k=>r.setProperty("--"+k,t[k]));
+  let rows=S.prog==="ansi"?ansiScreen():rgbScreen();
+  if(S.mode==="now") rows=plainScreen(rows);
+  document.getElementById("screen").innerHTML=rows.map(row=>row.map(([tx,fg,bg,f])=>{
+    const st=[];const c=col(fg),b=col(bg);
+    if(c)st.push("color:"+c);if(b)st.push("background:"+b);
+    if(f.includes("b"))st.push("font-weight:700");if(f.includes("i"))st.push("font-style:italic");
+    return st.length?`<span style="${st.join(";")}">${esc(tx)}</span>`:esc(tx);
+  }).join("")).join("\n");
+  const cap=document.getElementById("cap");
+  cap.textContent=(S.mode==="now"?"Hoy: ":"Propuesta: ")+(S.prog==="ansi"?"programa con colores ANSI":"programa con colores RGB propios")
+    +" · tema "+t.name+(S.prog==="rgb"&&S.mode==="new"?" · nvim cree que el fondo es "+((S.ask==="none"||t.kind==="dark")?"oscuro":"claro"):"");
+  document.getElementById("bgctl").style.opacity=S.prog==="rgb"&&S.mode==="new"?"1":".45";
+  for(const id of ["mode","prog","ask"])document.querySelectorAll("#"+id+" button").forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.v===S[id])));
+}
+const sel=document.getElementById("theme");
+THEMES.forEach((t,i)=>{const o=document.createElement("option");o.value=i;o.textContent=t.name+" ("+(t.kind==="dark"?"oscuro":"claro")+")";sel.appendChild(o)});
+sel.onchange=()=>{S.theme=+sel.value;draw()};
+for(const id of ["mode","prog","ask"])document.getElementById(id).onclick=e=>{const b=e.target.closest("button");if(b){S[id]=b.dataset.v;draw()}};
+draw();
+</script>

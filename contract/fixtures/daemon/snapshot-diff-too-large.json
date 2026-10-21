@@ -1,0 +1,35 @@
+{
+  "t": "snapshot",
+  "node": {
+    "id": "00000000-0000-4000-8000-0000000000d5",
+    "type": "diff",
+    "v": 1,
+    "epoch": "00000000-0000-4000-8000-000000000001",
+    "rev": 1,
+    "attention": [],
+    "workspace": "00000000-0000-4000-8000-0000000000b1",
+    "scope": "general",
+    "base": "origin/main",
+    "state": "ok",
+    "too_large": true,
+    "omitted": 1034,
+    "files": [
+      {
+        "path": "vendor/big/a.rs",
+        "status": "added",
+        "added": 0,
+        "deleted": 0,
+        "hash": "aaaaaaaaaaaaaaaa",
+        "hunks": []
+      },
+      {
+        "path": "vendor/big/b.rs",
+        "status": "modified",
+        "added": 0,
+        "deleted": 0,
+        "hash": "bbbbbbbbbbbbbbbb",
+        "hunks": []
+      }
+    ]
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "t": "cmd",
+  "id": "c54",
+  "cmd": {
+    "cmd": "edit_project_config",
+    "repo": "/home/u/code/app",
+    "to": "personal",
+    "set": {
+      "root": "../app-trees",
+      "setup": [
+        "bun install"
+      ],
+      "ports": {
+        "web": 0
+      },
+      "open": "claude"
+    }
+  }
+}

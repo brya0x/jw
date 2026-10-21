@@ -1,21 +1,23 @@
 [package]
-name = "jw-daemon"
-description = "jw's daemon: every terminal (PTY + vt100), each workspace's pane tree, session.json and scrollback"
+name = "daemon"
 version.workspace = true
 edition.workspace = true
-license-file.workspace = true
-publish.workspace = true
 
 [dependencies]
-jw-core.workspace = true
-jw-proto.workspace = true
-jw-web.workspace = true
-anyhow.workspace = true
-libc.workspace = true
-portable-pty.workspace = true
+contract = { path = "../contract" }
+identity = { path = "../identity" }
+wire = { path = "../wire" }
+web = { path = "../web" }
 serde.workspace = true
-serde_json.workspace = true
-vt100.workspace = true
+toml.workspace = true
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+portable-pty = "0.9.0"
+vt100 = "0.16.2"
+pulldown-cmark = { version = "0.13", default-features = false }
+toml_edit = "0.25.17"
+two-face = { version = "0.5.2", default-features = false, features = ["syntect-fancy"] }
 
 [dev-dependencies]
-tempfile.workspace = true
+tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
+rustls = { version = "=0.23.45", default-features = false, features = ["ring", "std", "tls12"] }

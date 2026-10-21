@@ -1,0 +1,18 @@
+{
+  "t": "hello",
+  "client": {
+    "name": "jwn-tui",
+    "version": "0.0.1"
+  },
+  "accepts": {
+    "session": [
+      1
+    ],
+    "workspace": [
+      1
+    ],
+    "pane": [
+      1
+    ]
+  }
+}

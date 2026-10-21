@@ -1,300 +1,251 @@
-//! What lets a phone in: a pairing token, the devices that paired, and the
-//! limit on failed attempts (mobile spec, REQ-2, 3, 5, 6).
-//!
-//! Secrets are 128 or 256 random bits, so a plain SHA-256 is enough to store
-//! them: there is nothing to guess and no reason to be slow.
+//! Pairing tokens, the paired devices and the limit on failed attempts.
 
 use std::collections::{HashMap, VecDeque};
-use std::fs::{self, File, OpenOptions};
+use std::fs;
 use std::io::{self, Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
-use std::os::unix::io::AsRawFd;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-/// `bytes` random bytes from the system, as lowercase hex.
+/// `bytes` random bytes from the operating system, as lowercase hex.
 pub fn random_hex(bytes: usize) -> io::Result<String> {
     let mut buf = vec![0u8; bytes];
-    File::open("/dev/urandom")?.read_exact(&mut buf)?;
-    Ok(hex(&buf))
+    fs::File::open("/dev/urandom")?.read_exact(&mut buf)?;
+    Ok(hex_bytes(&buf))
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub fn hex_bytes(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// What the store keeps of a secret.
-pub fn hash(secret: &str) -> String {
-    hex(&Sha256::digest(secret.as_bytes()))
+pub fn sha256_hex(text: &str) -> String {
+    sha256_bytes_hex(text.as_bytes())
 }
 
-/// Equal without stopping at the first difference.
-fn same(a: &str, b: &str) -> bool {
-    a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0, |d, (x, y)| d | (x ^ y)) == 0
+pub fn sha256_bytes_hex(bytes: &[u8]) -> String {
+    hex_bytes(&Sha256::digest(bytes))
 }
 
-fn now_secs() -> u64 {
+/// Equality that takes the same time wherever the texts differ.
+pub fn same(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    let mut diff = (a.len() ^ b.len()) as u8;
+    for i in 0..a.len().max(b.len()) {
+        diff |= a.get(i).copied().unwrap_or(0) ^ b.get(i).copied().unwrap_or(0);
+    }
+    diff == 0
+}
+
+fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
 }
 
-/// The one-time token a QR carries (REQ-2).
+/// The one pairing token on offer: 128 random bits, spent the first time it is presented.
 pub struct Pairing {
-    token: String,
-    born: Instant,
-    used: bool,
-}
-
-/// Why a pairing token was not taken.
-#[derive(Debug, PartialEq, Eq)]
-pub enum Refused {
-    /// Not the token the bridge handed out.
-    Unknown,
-    /// It was used, or it is older than its lifetime.
-    Expired,
+    ttl: Duration,
+    token: Mutex<Option<(String, Instant)>>,
 }
 
 impl Pairing {
-    pub fn new(now: Instant) -> io::Result<Self> {
-        Ok(Self {
-            token: random_hex(16)?,
-            born: now,
-            used: false,
-        })
+    pub fn new(ttl: Duration) -> Pairing {
+        Pairing {
+            ttl,
+            token: Mutex::new(None),
+        }
     }
 
-    pub fn token(&self) -> &str {
-        &self.token
+    /// A new token; any earlier one stops working.
+    pub fn issue(&self) -> io::Result<String> {
+        let token = random_hex(16)?;
+        *lock(&self.token) = Some((token.clone(), Instant::now()));
+        Ok(token)
     }
 
-    /// How long the token still has, or `None` when it was used or is too old.
-    pub fn left(&self, ttl: Duration, now: Instant) -> Option<Duration> {
-        if self.used {
-            return None;
-        }
-        ttl.checked_sub(now.duration_since(self.born))
-            .filter(|d| !d.is_zero())
+    /// The token on offer, while it can still be spent.
+    pub fn current(&self) -> Option<String> {
+        lock(&self.token)
+            .as_ref()
+            .filter(|(_, at)| at.elapsed() <= self.ttl)
+            .map(|(t, _)| t.clone())
     }
 
-    /// Spends the token. It is spent the moment a right one arrives, before
-    /// anyone is asked anything, so only one request can ever be pending.
-    pub fn take(&mut self, presented: &str, ttl: Duration, now: Instant) -> Result<(), Refused> {
-        if !same(&self.token, presented) {
-            return Err(Refused::Unknown);
+    /// Whether `presented` is the live token. A match spends it, whatever comes next.
+    pub fn take(&self, presented: &str) -> bool {
+        let mut slot = lock(&self.token);
+        let live = slot
+            .as_ref()
+            .is_some_and(|(t, at)| same(t, presented) && at.elapsed() <= self.ttl);
+        if live {
+            *slot = None;
         }
-        if self.used || now.duration_since(self.born) > ttl {
-            return Err(Refused::Expired);
-        }
-        self.used = true;
-        Ok(())
+        live
     }
 }
 
-/// A phone that paired. Only the hash of its token is kept.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Device {
     pub id: String,
     pub name: String,
+    /// SHA-256 of the secret; the secret itself is never kept.
     pub hash: String,
     pub created: u64,
     pub last_seen: u64,
 }
 
-#[derive(Serialize, Deserialize, Default)]
-struct Devices {
-    devices: Vec<Device>,
-}
-
-/// `mobile.json`, written by the bridge (a device pairs, one is seen) and by
-/// `jw mobile revoke` in another process, so every change takes a lock on a
-/// file next to it and reads the file again under it.
+/// The paired devices, in a file (`devices.json`, mode 0600) that is read afresh each time,
+/// so `jwn revoke` works with the bridge running or not.
 pub struct Store {
     path: PathBuf,
+    write: Mutex<()>,
 }
 
 impl Store {
-    pub fn open(path: PathBuf) -> Self {
-        Self { path }
+    pub fn new(path: PathBuf) -> Store {
+        Store {
+            path,
+            write: Mutex::new(()),
+        }
     }
 
-    pub fn devices(&self) -> io::Result<Vec<Device>> {
-        Ok(self.read()?.devices)
-    }
-
-    pub fn find(&self, token_hash: &str) -> io::Result<Option<Device>> {
-        Ok(self
-            .read()?
-            .devices
-            .into_iter()
-            .find(|d| same(&d.hash, token_hash)))
-    }
-
-    pub fn add(&self, name: &str, token_hash: &str) -> io::Result<Device> {
-        let id = random_hex(4)?;
-        let device = Device {
-            id,
-            name: name.to_string(),
-            hash: token_hash.to_string(),
-            created: now_secs(),
-            last_seen: now_secs(),
-        };
-        self.update(|ds| ds.push(device.clone()))?;
-        Ok(device)
-    }
-
-    /// Removes the device with this id, or the one with this name. `None`
-    /// when there is none; an error when a name is shared.
-    pub fn revoke(&self, id_or_name: &str) -> io::Result<Option<Device>> {
-        self.update(|ds| {
-            let at = match ds.iter().position(|d| d.id == id_or_name) {
-                Some(i) => i,
-                None => {
-                    let named: Vec<usize> = (0..ds.len())
-                        .filter(|&i| ds[i].name == id_or_name)
-                        .collect();
-                    match named.as_slice() {
-                        [] => return Ok(None),
-                        [i] => *i,
-                        _ => {
-                            return Err(io::Error::new(
-                                io::ErrorKind::InvalidInput,
-                                format!(
-                                    "{} devices are called {id_or_name:?}; use an id",
-                                    named.len()
-                                ),
-                            ));
-                        }
-                    }
-                }
-            };
-            Ok(Some(ds.remove(at)))
-        })?
-    }
-
-    pub fn touch(&self, id: &str) -> io::Result<()> {
-        self.update(|ds| {
-            if let Some(d) = ds.iter_mut().find(|d| d.id == id) {
-                d.last_seen = now_secs();
-            }
-        })
-    }
-
-    /// A file next to the store with `suffix` after its whole name.
-    fn beside(&self, suffix: &str) -> PathBuf {
-        let mut name = self.path.as_os_str().to_owned();
-        name.push(suffix);
-        PathBuf::from(name)
-    }
-
-    fn read(&self) -> io::Result<Devices> {
-        match fs::read(&self.path) {
-            Ok(data) => Ok(serde_json::from_slice(&data)?),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Devices::default()),
+    pub fn list(&self) -> io::Result<Vec<Device>> {
+        match fs::read_to_string(&self.path) {
+            Ok(text) => serde_json::from_str(&text).map_err(|e| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("{}: {e}", self.path.display()),
+                )
+            }),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
             Err(e) => Err(e),
         }
     }
 
-    /// Read, change, write, all under the lock. The file is written whole
-    /// beside itself with mode 0600 and renamed over, so a reader never sees
-    /// half of it.
-    fn update<T>(&self, change: impl FnOnce(&mut Vec<Device>) -> T) -> io::Result<T> {
-        if let Some(dir) = self.path.parent() {
-            fs::create_dir_all(dir)?;
-        }
-        let lock = OpenOptions::new()
-            .create(true)
-            .truncate(false)
+    fn save(&self, devices: &[Device]) -> io::Result<()> {
+        let tmp = self.path.with_extension("json.tmp");
+        let mut file = fs::OpenOptions::new()
             .write(true)
+            .create(true)
+            .truncate(true)
             .mode(0o600)
-            .open(self.beside(".lock"))?;
-        // SAFETY: `lock` is an open file; the lock goes when it is dropped.
-        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
-            return Err(io::Error::last_os_error());
+            .open(&tmp)?;
+        file.write_all(serde_json::to_string_pretty(devices)?.as_bytes())?;
+        file.sync_all()?;
+        fs::rename(&tmp, &self.path)
+    }
+
+    /// A new device: its id and the secret, which is returned here and nowhere else.
+    pub fn add(&self, name: &str) -> io::Result<(String, String)> {
+        let _guard = lock(&self.write);
+        let mut devices = self.list()?;
+        let (id, secret) = (random_hex(8)?, random_hex(32)?);
+        devices.push(Device {
+            id: id.clone(),
+            name: name.to_owned(),
+            hash: sha256_hex(&secret),
+            created: now(),
+            last_seen: now(),
+        });
+        self.save(&devices)?;
+        Ok((id, secret))
+    }
+
+    /// The device `id` when `secret` is its secret.
+    pub fn find(&self, id: &str, secret: &str) -> Option<Device> {
+        let hash = sha256_hex(secret);
+        self.list()
+            .ok()?
+            .into_iter()
+            .find(|d| d.id == id && same(&d.hash, &hash))
+    }
+
+    pub fn is_paired(&self, id: &str) -> bool {
+        self.list().is_ok_and(|l| l.iter().any(|d| d.id == id))
+    }
+
+    pub fn touch(&self, id: &str) -> io::Result<()> {
+        let _guard = lock(&self.write);
+        let mut devices = self.list()?;
+        if let Some(d) = devices.iter_mut().find(|d| d.id == id) {
+            d.last_seen = now();
+            self.save(&devices)?;
         }
-        let mut file = self.read()?;
-        let out = change(&mut file.devices);
-        let tmp = self.beside(&format!(".tmp.{}", std::process::id()));
-        write_private(&tmp, &serde_json::to_vec_pretty(&file)?)?;
-        fs::rename(&tmp, &self.path)?;
-        Ok(out)
+        Ok(())
+    }
+
+    /// Remove the device whose id or name is `which`; false when there is none.
+    pub fn revoke(&self, which: &str) -> io::Result<bool> {
+        let _guard = lock(&self.write);
+        let mut devices = self.list()?;
+        let before = devices.len();
+        devices.retain(|d| d.id != which && d.name != which);
+        if devices.len() == before {
+            return Ok(false);
+        }
+        self.save(&devices)?;
+        Ok(true)
     }
 }
 
-fn write_private(path: &Path, data: &[u8]) -> io::Result<()> {
-    let _ = fs::remove_file(path);
-    let mut f = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)?;
-    f.write_all(data)?;
-    f.sync_all()
+const FAILS: usize = 5;
+const WINDOW: Duration = Duration::from_secs(60);
+
+#[derive(Default)]
+struct Tries {
+    failures: VecDeque<Instant>,
+    locked_until: Option<Instant>,
 }
 
-/// Failed attempts per address (REQ-5): `max` inside `window` locks the
-/// address out for `lockout`.
+/// Five failures from one address in a minute lock it out for the next minute.
+#[derive(Default)]
 pub struct Limiter {
-    max: usize,
-    window: Duration,
-    lockout: Duration,
-    fails: HashMap<String, VecDeque<Instant>>,
-    locked: HashMap<String, Instant>,
+    seen: Mutex<HashMap<String, Tries>>,
 }
-
-/// More addresses than this are kept only while they are locked or recent.
-const TRACKED: usize = 4096;
 
 impl Limiter {
-    pub fn new(max: usize, window: Duration, lockout: Duration) -> Self {
-        Self {
-            max,
-            window,
-            lockout,
-            fails: HashMap::new(),
-            locked: HashMap::new(),
-        }
-    }
-
-    /// Whether `key` is locked out right now.
-    pub fn locked(&mut self, key: &str, now: Instant) -> bool {
-        match self.locked.get(key) {
-            Some(&until) if now < until => true,
-            Some(_) => {
-                self.locked.remove(key);
-                false
+    pub fn allowed(&self, key: &str) -> bool {
+        let mut seen = lock(&self.seen);
+        let Some(tries) = seen.get_mut(key) else {
+            return true;
+        };
+        match tries.locked_until {
+            Some(t) if t > Instant::now() => false,
+            _ => {
+                tries.locked_until = None;
+                true
             }
-            None => false,
         }
     }
 
-    pub fn failed(&mut self, key: &str, now: Instant) {
-        if self.fails.len() >= TRACKED {
-            let window = self.window;
-            self.fails
-                .retain(|_, v| v.back().is_some_and(|&t| now.duration_since(t) < window));
-            self.locked.retain(|_, &mut until| now < until);
-        }
-        let recent = self.fails.entry(key.to_string()).or_default();
-        while recent
+    pub fn failed(&self, key: &str) {
+        let mut seen = lock(&self.seen);
+        let tries = seen.entry(key.to_owned()).or_default();
+        let now = Instant::now();
+        tries.failures.push_back(now);
+        while tries
+            .failures
             .front()
-            .is_some_and(|&t| now.duration_since(t) >= self.window)
+            .is_some_and(|t| now.duration_since(*t) > WINDOW)
         {
-            recent.pop_front();
+            tries.failures.pop_front();
         }
-        recent.push_back(now);
-        if recent.len() >= self.max {
-            recent.clear();
-            self.locked.insert(key.to_string(), now + self.lockout);
+        if tries.failures.len() >= FAILS {
+            tries.locked_until = Some(now + WINDOW);
+            tries.failures.clear();
         }
     }
 
-    /// A good attempt forgets the bad ones before it.
-    pub fn succeeded(&mut self, key: &str) {
-        self.fails.remove(key);
+    pub fn cleared(&self, key: &str) {
+        lock(&self.seen).remove(key);
     }
 }
 
@@ -302,134 +253,76 @@ impl Limiter {
 mod tests {
     use super::*;
 
-    fn secs(n: u64) -> Duration {
-        Duration::from_secs(n)
-    }
-
     #[test]
-    fn secrets_are_random_hex_of_the_right_size() {
-        let a = random_hex(16).unwrap();
-        assert_eq!(a.len(), 32);
-        assert!(a.bytes().all(|b| b.is_ascii_hexdigit()));
-        assert_ne!(a, random_hex(16).unwrap());
-        assert_eq!(hash("a").len(), 64);
-        assert_ne!(hash("a"), hash("b"));
-    }
-
-    #[test]
-    fn a_pairing_token_works_once() {
-        let t0 = Instant::now();
-        let mut p = Pairing::new(t0).unwrap();
-        let token = p.token().to_string();
-        assert_eq!(p.take("nope", secs(120), t0), Err(Refused::Unknown));
-        assert_eq!(p.take(&token, secs(120), t0), Ok(()));
-        assert_eq!(p.take(&token, secs(120), t0), Err(Refused::Expired));
-    }
-
-    #[test]
-    fn a_pairing_token_expires() {
-        let t0 = Instant::now();
-        let mut p = Pairing::new(t0).unwrap();
-        let token = p.token().to_string();
-        assert_eq!(
-            p.take(&token, secs(120), t0 + secs(121)),
-            Err(Refused::Expired)
-        );
-        let mut p = Pairing::new(t0).unwrap();
-        let token = p.token().to_string();
-        assert_eq!(p.take(&token, secs(120), t0 + secs(119)), Ok(()));
-    }
-
-    #[test]
-    fn the_store_keeps_hashes_and_finds_by_them() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path().join("mobile.json"));
-        assert!(store.devices().unwrap().is_empty());
-        let secret = random_hex(32).unwrap();
-        let d = store.add("Pixel 8", &hash(&secret)).unwrap();
-        assert_eq!(store.find(&hash(&secret)).unwrap(), Some(d));
-        assert_eq!(store.find(&hash("other")).unwrap(), None);
-        let text = fs::read_to_string(dir.path().join("mobile.json")).unwrap();
-        assert!(!text.contains(&secret), "the secret itself was written");
-    }
-
-    #[test]
-    fn the_store_file_is_private() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("mobile.json");
-        Store::open(path.clone()).add("a", &hash("x")).unwrap();
-        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600);
-    }
-
-    #[test]
-    fn revoke_by_id_by_name_and_when_a_name_is_shared() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path().join("mobile.json"));
-        let a = store.add("Pixel 8", &hash("a")).unwrap();
-        store.add("Tablet", &hash("b")).unwrap();
-        assert_eq!(store.revoke(&a.id).unwrap(), Some(a));
-        assert_eq!(store.revoke("Tablet").unwrap().unwrap().name, "Tablet");
-        assert_eq!(store.revoke("Tablet").unwrap(), None);
-        store.add("Same", &hash("c")).unwrap();
-        store.add("Same", &hash("d")).unwrap();
-        assert!(store.revoke("Same").is_err());
-        assert_eq!(store.devices().unwrap().len(), 2);
-    }
-
-    #[test]
-    fn two_writers_do_not_lose_each_others_changes() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("mobile.json");
-        let threads: Vec<_> = (0..8)
-            .map(|i| {
-                let store = Store::open(path.clone());
-                std::thread::spawn(move || {
-                    for j in 0..10 {
-                        store
-                            .add(&format!("d{i}-{j}"), &hash(&format!("{i}-{j}")))
-                            .unwrap();
-                    }
-                })
-            })
-            .collect();
-        for t in threads {
-            t.join().unwrap();
-        }
-        assert_eq!(Store::open(path).devices().unwrap().len(), 80);
-    }
-
-    #[test]
-    fn five_failures_in_a_minute_lock_an_address_for_five() {
-        let t0 = Instant::now();
-        let mut l = Limiter::new(5, secs(60), secs(300));
-        for i in 0..4 {
-            l.failed("1.2.3.4", t0 + secs(i));
-            assert!(!l.locked("1.2.3.4", t0 + secs(i)));
-        }
-        l.failed("1.2.3.4", t0 + secs(4));
-        assert!(l.locked("1.2.3.4", t0 + secs(5)));
+    fn a_token_is_spent_the_first_time_it_is_presented() {
+        let p = Pairing::new(Duration::from_secs(120));
+        let t = p.issue().unwrap();
+        assert_eq!(t.len(), 32);
         assert!(
-            !l.locked("5.6.7.8", t0 + secs(5)),
-            "another address is free"
+            !p.take("00000000000000000000000000000000"),
+            "a wrong token spends nothing"
         );
-        assert!(l.locked("1.2.3.4", t0 + secs(300)));
-        assert!(!l.locked("1.2.3.4", t0 + secs(305)));
+        assert!(p.take(&t));
+        assert!(!p.take(&t), "one use");
     }
 
     #[test]
-    fn slow_failures_and_a_success_do_not_lock() {
-        let t0 = Instant::now();
-        let mut l = Limiter::new(3, secs(60), secs(300));
-        for i in 0..10 {
-            l.failed("a", t0 + secs(i * 61));
-            assert!(!l.locked("a", t0 + secs(i * 61)));
+    fn a_token_expires_and_a_new_one_replaces_the_old() {
+        let p = Pairing::new(Duration::from_millis(30));
+        let t = p.issue().unwrap();
+        std::thread::sleep(Duration::from_millis(60));
+        assert!(!p.take(&t), "expired");
+        let a = p.issue().unwrap();
+        let b = p.issue().unwrap();
+        assert!(!p.take(&a));
+        assert!(p.take(&b));
+    }
+
+    #[test]
+    fn the_store_keeps_a_hash_and_revokes_by_id_or_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = Store::new(dir.path().join("devices.json"));
+        let (id, secret) = s.add("Pixel").unwrap();
+        let text = fs::read_to_string(dir.path().join("devices.json")).unwrap();
+        assert!(!text.contains(&secret), "the secret is not stored");
+        assert!(text.contains(&sha256_hex(&secret)));
+        assert_eq!(
+            fs::metadata(dir.path().join("devices.json"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        assert!(s.find(&id, &secret).is_some());
+        assert!(s.find(&id, &"0".repeat(64)).is_none());
+        assert!(s.find("ffffffffffffffff", &secret).is_none());
+        assert!(s.revoke("Pixel").unwrap());
+        assert!(!s.is_paired(&id));
+        assert!(!s.revoke("Pixel").unwrap());
+    }
+
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn five_failures_lock_an_address_out_and_success_forgets_them() {
+        let l = Limiter::default();
+        for _ in 0..4 {
+            l.failed("a");
         }
-        l.failed("b", t0);
-        l.failed("b", t0);
-        l.succeeded("b");
-        l.failed("b", t0);
-        assert!(!l.locked("b", t0));
+        assert!(l.allowed("a"));
+        l.failed("a");
+        assert!(!l.allowed("a"));
+        assert!(l.allowed("b"), "other addresses are not affected");
+        l.cleared("a");
+        assert!(l.allowed("a"));
+    }
+
+    #[test]
+    fn the_comparison_looks_at_every_byte_and_the_length() {
+        assert!(same("abc", "abc"));
+        assert!(!same("abc", "abd"));
+        assert!(!same("abc", "abcd"));
+        assert!(same("", ""));
     }
 }

@@ -1,0 +1,208 @@
+<title>jwn · the area of ^B: subagents, shells and monitors apart, and the keyboard</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+:root{
+  --bg:#282c34; --panel:#21252b; --fg:#abb2bf; --dim:#5c6370; --line:#3e4451; --sel:#2c313a;
+  --blue:#61afef; --green:#98c379; --yellow:#e5c07b; --red:#e06c75; --magenta:#c678dd; --cyan:#56b6c2;
+  --page:#16181d; --ink:#c3c9d4; --mut:#7d8594;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}}
+:root[data-theme="light"]{--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.55 'IBM Plex Sans',system-ui,sans-serif;padding:24px max(16px,env(safe-area-inset-right,0px)) 40px max(16px,env(safe-area-inset-left,0px))}
+.wrap{max-width:1240px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
+h1{font:600 20px/1.2 var(--mono);margin:0}
+h2{font:600 12px var(--mono);margin:0;color:var(--mut)}
+p{margin:0;max-width:88ch;color:var(--mut)}
+code,kbd{font:12px var(--mono)}
+button{font:12px var(--mono);color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;min-height:32px;cursor:pointer}
+button:hover{border-color:var(--blue)}
+button[aria-pressed="true"]{border-color:var(--blue);color:var(--blue)}
+:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.stage{display:flex;gap:28px;align-items:flex-start;flex-wrap:wrap}
+.col{flex:1 1 640px;min-width:0;display:flex;flex-direction:column;gap:8px}
+.col.ph{flex:0 0 auto}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto}
+.term pre{margin:0;font:13px/1.35 var(--mono);color:var(--fg);outline:none;width:max-content;min-width:100%}
+.hint{font:12px var(--mono);color:var(--mut)}
+.phone{width:376px;max-width:100%;background:var(--bg);border:1px solid var(--line);border-radius:28px;padding:10px;box-shadow:0 0 0 6px var(--panel)}
+.scr{background:var(--panel);border-radius:20px;overflow:hidden;font:13px/1.45 var(--mono);color:var(--fg);display:flex;flex-direction:column;min-height:600px;position:relative}
+.scr .hd{padding:12px 14px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:8px}
+.scr .bd{padding:10px 14px;display:flex;flex-direction:column;gap:8px;flex:1;overflow:auto}
+.sec{font-size:11px;color:var(--dim);padding:4px 14px 0}
+.row{min-height:48px;border-radius:8px;background:var(--sel);padding:8px 12px;display:flex;flex-direction:column;justify-content:center;gap:2px;cursor:pointer;border:0;color:var(--fg);font:13px var(--mono);text-align:left;width:100%}
+.row .sub{color:var(--dim);font-size:12px}
+.pnl{padding:6px 14px;display:flex;flex-direction:column;gap:4px;border-bottom:1px solid var(--line);max-height:300px;overflow:auto}
+.dim{color:var(--dim)}.blue{color:var(--blue)}.green{color:var(--green)}.yellow{color:var(--yellow)}.red{color:var(--red)}.cyan{color:var(--cyan)}.magenta{color:var(--magenta)}.b{font-weight:700}.sel{background:var(--sel)}
+.decide{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px;color:var(--fg)}
+.decide h2{margin:0 0 8px}
+.decide ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+</style>
+
+<div class="wrap">
+  <div>
+    <h1>^B: subagents, shells and monitors, each apart, and the keyboard</h1>
+    <p>The area of the agents becomes the screen of everything Claude runs while you work, in <b>three sections</b>: <b>subagentes</b>, <b>shells</b> (what Claude runs in the background with <code>Bash</code>) and <b>monitores</b> (<code>Monitor</code> and the loops that watch or repeat). <kbd>^B</kbd> opens it <b>with the keys already in it</b>; <kbd>↑</kbd><kbd>↓</kbd> (or <kbd>j</kbd><kbd>k</kbd>) walk every line across the sections, <kbd>←</kbd><kbd>→</kbd> (or <kbd>h</kbd><kbd>l</kbd>) jump a section, <kbd>x</kbd> stops the lit one. Click the terminal below and try; the clock runs.</p>
+  </div>
+  <div class="bar" role="group" aria-label="State">
+    <button id="open" type="button" aria-pressed="true">area open</button>
+    <button id="none" type="button" aria-pressed="false">nothing runs</button>
+    <button id="rs" type="button">Reset</button>
+  </div>
+  <div class="stage">
+    <div class="col"><h2>TERMINAL</h2><div class="term"><pre id="scr" tabindex="0" aria-label="Terminal client with the area of what runs. Control B toggles it, arrows move, x stops, tab goes to the field, escape closes."></pre></div><div class="hint" id="keys"></div></div>
+    <div class="col ph"><h2>PHONE</h2><div class="phone"><div class="scr" id="ph"></div></div></div>
+  </div>
+  <div class="decide">
+    <h2>To approve</h2>
+    <ol>
+      <li><b>Three sections, in this order.</b> <b>subagentes</b> as built: <code>▸ ⠼ Explore (haiku-5.5) → what it does   time · tokens</code>. <b>shells</b>: <code>⠼ cargo test -p jwn   time</code> (the command is its name; ended ones say <code>✓ listo</code> or <code>✗ salió 1</code>). <b>monitores</b>: <code>◉ tail -f app.log | grep ERROR   time</code> and the loops as <code>↻ revisar el CI   cada 5 min</code>. A section with nothing in it is not drawn; with nothing at all the area says <code>nada corre ahora</code> and keeps its place.</li>
+      <li><b>Detail of the lit line</b>, under the lists, per kind. A subagent: what it is, <code>prompt</code>, <code>pasos</code>, <code>ahora</code> / <code>dijo</code> (as built). A shell: the command whole, its time and what the engine says it does now (what the daemon has today); <b>the tail of its output is the next build</b> (the engine writes each background shell's output to a file it names, and the daemon would read the last lines). A monitor: what it watches and when it last said something.</li>
+      <li><b>Keyboard.</b> <kbd>^B</kbd> opens the area <b>and gives it the keys</b> (the title is bold when it has them, dim when the field has them): <kbd>↑</kbd><kbd>↓</kbd><kbd>j</kbd><kbd>k</kbd> walk all the lines, <kbd>←</kbd><kbd>→</kbd><kbd>h</kbd><kbd>l</kbd> jump to the first line of the previous or next section, <kbd>g</kbd><kbd>G</kbd> first and last, <kbd>x</kbd> stops the lit one if it runs, <kbd>⇥</kbd> sends the keys to the field and leaves the area open (<kbd>⇥</kbd> again brings them back), <kbd>esc</kbd> or <kbd>^B</kbd> closes it and gives the keys back. A click on a line lights it. This replaces «⇥ to give it the keys» of the first build.</li>
+      <li><b>Footer</b> counts the three kinds, each only when there is one: <code>⚙ 1 agente · 2 shells · 1 monitor</code>; narrow, it falls back to <code>⚙ 4</code> before anything else gives way. A click on it is the same as <kbd>^B</kbd>.</li>
+      <li><b>Phone.</b> The chip <code>⚙ n</code> counts all of them and opens the panel under the bar with the same three sections (a small dim heading for each), each row ≥ 48 dp, a tap opens it in place, <code>■ Detener</code> on the ones that run. No keyboard there.</li>
+      <li><b>Where it falls back.</b> Under 100 columns the area does not fit: <kbd>^B</kbd> opens the list over the conversation (the <code>/tasks</code> one, with the same three headings) and the same keys walk it.</li>
+    </ol>
+  </div>
+</div>
+
+<script>
+(function(){
+const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const c = (cls, s) => `<span class="${cls}">${esc(s)}</span>`;
+const pad = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s.padEnd(n));
+const fmt = t => `${Math.floor(t/60)}:${String(t%60).padStart(2,'0')}`;
+const kt = n => n >= 1000 ? (n/1000).toFixed(1).replace('.0','') + 'k' : String(n);
+const SPIN = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
+const SECS = [['agent','subagentes'],['shell','shells'],['monitor','monitores']];
+let S, tick = 0, sel = 0, areaOpen = true, focus = true;
+function reset(){
+  tick = 0; sel = 0; areaOpen = true; focus = true;
+  S = [
+    {k:'agent', name:'Explore (haiku-5.5)', label:'mapear el puente del teléfono', state:'run', t:72, tok:38400, doing:'Grep fn pair', prompt:'Busca cómo el daemon habla con el teléfono y no edites nada.', steps:[['Glob','bridge*.rs'],['Read','web/src/lib.rs'],['Grep','fn pair']], said:''},
+    {k:'agent', name:'general-purpose (sonnet-5.5)', label:'revisar N123', state:'done', t:243, tok:92100, doing:'', prompt:'Corre /rust-review sobre N123.', steps:[['Bash','git show 63fe93e'],['Edit','panes.rs']], said:'13 hallazgos, 4 bugs corregidos.'},
+    {k:'shell', name:'cargo test -p jwn', label:'cargo test -p jwn', state:'run', t:35, doing:'compilando jwn (bin "jwn" test)'},
+    {k:'shell', name:'sleep 300 && curl -s localhost:8080/health', label:'sleep 300 && curl -s localhost:8080/health', state:'run', t:140, doing:'esperando'},
+    {k:'shell', name:'npm run build', label:'npm run build', state:'fail', t:61, exit:1, doing:'salió 1'},
+    {k:'monitor', name:'tail -f app.log | grep ERROR', label:'tail -f app.log | grep ERROR', state:'run', t:900, doing:'último aviso hace 2 min: ERROR timeout en /sync', glyph:'◉'},
+    {k:'monitor', name:'revisar el CI', label:'revisar el CI cada 5 min', state:'run', t:1500, doing:'próxima en 3:20', glyph:'↻', every:'cada 5 min'},
+  ];
+}
+const live = () => areaOpen && document.getElementById('open').getAttribute('aria-pressed') === 'true';
+function items(){ const out = []; SECS.forEach(([k]) => S.filter(a => a.k === k).forEach(a => out.push(a))); return out; }
+const mark = a => a.state === 'run' ? SPIN[tick % SPIN.length] : a.state === 'done' ? '✓' : '✗';
+const markc = a => a.state === 'run' ? 'yellow' : a.state === 'done' ? 'green' : 'red';
+function right(a){ return a.k === 'agent' ? `${fmt(a.t)} · ${kt(a.tok)}` : fmt(a.t); }
+function how(a){ return a.state === 'run' ? a.doing : a.state === 'done' ? 'listo' : a.doing; }
+function sectionStart(i){ const it = items(); const k = it[i].k; return it.findIndex(x => x.k === k); }
+const W = 62;
+function area(){
+  const L = [], it = items(), n = it.filter(a => a.state === 'run').length;
+  L.push(c(focus ? 'b blue' : 'dim', 'en marcha') + c('dim', n ? ` · ${n} corriendo` : ' · nada'));
+  if (!it.length) L.push(c('dim', 'nada corre ahora'));
+  SECS.forEach(([k, title]) => {
+    const rows = it.filter(a => a.k === k); if (!rows.length) return;
+    L.push(c('dim', `${title} · ${rows.length}`));
+    rows.forEach(a => {
+      const on = it[sel] === a, r = right(a);
+      const lead = (on ? '▸ ' : '  ') + (a.glyph && a.state === 'run' ? a.glyph : mark(a)) + ' ';
+      const room = W - 2 - lead.length - r.length - 1;
+      let name = a.name, doing = how(a);
+      let left = a.k === 'agent' ? name + ' → ' + doing : (a.k === 'monitor' && a.every ? name + '  ' + c('', '') : name);
+      const text = a.k === 'agent' ? pad(name + ' → ' + doing, room) : pad(name, room);
+      const html = (on && focus ? '<span class="sel b">' : on ? '<span class="sel">' : '<span>') + c(markc(a), lead) + esc(text.padEnd(room)) + ' ' + c('dim', r) + '</span>';
+      L.push(html);
+    });
+  });
+  const a = it[sel];
+  if (a){
+    L.push(c('dim', '─'.repeat(W - 2)));
+    if (a.k === 'agent'){
+      L.push(c('b', a.label)); L.push(c('dim', 'prompt')); L.push('  ' + esc(pad(a.prompt, W - 4)));
+      L.push(c('dim', 'pasos')); a.steps.forEach((s, i) => L.push('  ' + c(i === a.steps.length - 1 && a.state === 'run' ? 'yellow' : 'green', i === a.steps.length - 1 && a.state === 'run' ? SPIN[tick % 10] : '✓') + ' ' + c('cyan', s[0]) + ' ' + esc(pad(s[1], W - 12))));
+      L.push(c('dim', a.state === 'run' ? 'ahora' : 'dijo')); L.push('  ' + esc(pad(a.state === 'run' ? a.doing : a.said, W - 4)));
+    } else if (a.k === 'shell'){
+      L.push(c('dim', 'comando')); L.push('  ' + esc(pad(a.label, W - 4)));
+      L.push(c('dim', a.state === 'run' ? 'ahora' : 'terminó')); L.push('  ' + esc(pad(a.state === 'run' ? a.doing : 'salió ' + a.exit, W - 4)));
+      L.push(c('dim', 'salida')); L.push('  ' + c('dim', '(la cola de su salida: la siguiente entrega)'));
+    } else {
+      L.push(c('dim', a.every ? 'repite' : 'vigila')); L.push('  ' + esc(pad(a.label, W - 4)));
+      L.push(c('dim', 'último')); L.push('  ' + esc(pad(a.doing, W - 4)));
+    }
+  }
+  return L;
+}
+function draw(){
+  const it = items(); if (sel >= it.length) sel = Math.max(0, it.length - 1);
+  const ar = live() ? area() : [];
+  const lw = 60, conv = [
+    c('green', '❯ ') + esc(pad('lanza el build y vigila los errores', lw - 4)),
+    '', c('blue', '● ') + 'Arranco tres cosas y sigo contigo.',
+    c('dim', '  ● Agent(Explore) mapear el puente'), c('dim', '  ● Bash(cargo test -p jwn) en segundo plano'), c('dim', '  ● Monitor(tail -f app.log | grep ERROR)'),
+    '', c('yellow', '⠹ Trabajando… · 1 min 12 s'),
+  ];
+  const rows = Math.max(conv.length + 3, ar.length);
+  const out = [c('dim', '╭' + '─'.repeat(lw + (ar.length ? W + 3 : 0) + 1) + '╮')];
+  const strip = s => s.replace(/<[^>]+>/g, '').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>');
+  for (let i = 0; i < rows; i++){
+    const l = i < conv.length ? conv[i] : (i === rows - 1 ? c('green', '❯ ') + c('dim', focus ? 'escribe un mensaje' : 'escribes aquí · ⇥ vuelve al área') : '');
+    const lt = strip(l).length;
+    out.push(c('dim', '│ ') + l + ' '.repeat(Math.max(0, lw - 1 - lt)) + (ar.length ? c('dim', '│ ') + (ar[i] || '') + ' '.repeat(Math.max(0, W - 1 - strip(ar[i] || '').length)) : '') + c('dim', '│'));
+  }
+  out.push(c('dim', '╰' + '─'.repeat(lw + (ar.length ? W + 3 : 0) + 1) + '╯'));
+  const ag = S.filter(a => a.k === 'agent' && a.state === 'run').length, sh = S.filter(a => a.k === 'shell' && a.state === 'run').length, mo = S.filter(a => a.k === 'monitor' && a.state === 'run').length;
+  const parts = [ag && `${ag} ${ag === 1 ? 'agente' : 'agentes'}`, sh && `${sh} ${sh === 1 ? 'shell' : 'shells'}`, mo && `${mo} ${mo === 1 ? 'monitor' : 'monitores'}`].filter(Boolean);
+  out.push(' ' + (parts.length ? c('yellow', '⚙ ' + parts.join(' · ')) + c('dim', ' · ') : '') + c('dim', 'manual ⇧tab · sonnet-5.5') + ' '.repeat(18) + c('blue', '^/') + c('dim', ' teclas'));
+  document.getElementById('scr').innerHTML = out.join('\n');
+  document.getElementById('keys').textContent = live() ? (focus ? 'área: ↑↓ jk líneas · ←→ hl secciones · g G extremos · x detener · ⇥ al campo · esc cierra' : 'campo: escribes · ⇥ vuelve al área · ^B cierra') : '^B abre el área';
+  phone();
+}
+function phone(){
+  const p = document.getElementById('ph'), it = items();
+  const run = it.filter(a => a.state === 'run').length;
+  let h = `<div class="hd"><b>feat/next-bootstrap</b><span class="yellow">⚙ ${run}</span></div>`;
+  if (live()){
+    h += '<div class="pnl">' + (it.length ? '' : '<div class="dim">nada corre ahora</div>');
+    SECS.forEach(([k, title]) => {
+      const rows = it.filter(a => a.k === k); if (!rows.length) return;
+      h += `<div class="dim" style="font-size:11px;margin-top:4px">${title} · ${rows.length}</div>`;
+      rows.forEach(a => {
+        const i = it.indexOf(a);
+        h += `<button class="row" data-i="${i}" type="button"><span>${c(markc(a), a.glyph && a.state === 'run' ? a.glyph : mark(a))} <b>${esc(a.k === 'agent' ? a.name : a.name.slice(0, 28))}</b></span><span class="sub">${a.k === 'agent' ? '→ ' + esc(how(a)) + ' · ' : ''}${esc(right(a))}</span></button>`;
+        if (i === sel) h += `<div class="sub" style="padding:0 12px 6px;font-size:12px;color:var(--dim)">${a.k === 'agent' ? 'prompt ' + esc(a.prompt) : esc(a.label)}${a.state === 'run' ? '<br><button class="row" data-stop="' + i + '" style="min-height:48px;color:var(--red);margin-top:6px" type="button">■ Detener</button>' : ''}</div>`;
+      });
+    });
+    h += '</div>';
+  }
+  h += '<div class="bd"><div class="dim">❯ lanza el build y vigila los errores</div><div>Arranco tres cosas y sigo contigo.</div><div class="dim">⠹ Trabajando…</div></div>';
+  p.innerHTML = h;
+  p.querySelectorAll('[data-i]').forEach(b => b.onclick = () => { sel = +b.dataset.i; draw(); });
+  p.querySelectorAll('[data-stop]').forEach(b => b.onclick = e => { e.stopPropagation(); items()[+b.dataset.stop].state = 'stop'; items()[+b.dataset.stop].doing = 'detenido'; draw(); });
+}
+document.getElementById('scr').addEventListener('keydown', e => {
+  const it = items();
+  if (e.ctrlKey && e.key.toLowerCase() === 'b'){ areaOpen = !areaOpen; focus = areaOpen; document.getElementById('open').setAttribute('aria-pressed', areaOpen); draw(); e.preventDefault(); return; }
+  if (!live()) return;
+  if (e.key === 'Tab'){ focus = !focus; draw(); e.preventDefault(); return; }
+  if (!focus) return;
+  const k = e.key;
+  if (k === 'ArrowDown' || k === 'j') sel = Math.min(it.length - 1, sel + 1);
+  else if (k === 'ArrowUp' || k === 'k') sel = Math.max(0, sel - 1);
+  else if (k === 'g') sel = 0; else if (k === 'G') sel = it.length - 1;
+  else if (k === 'ArrowRight' || k === 'l'){ const k0 = it[sel].k; const nx = it.findIndex(a => SECS.findIndex(s => s[0] === a.k) > SECS.findIndex(s => s[0] === k0)); if (nx >= 0) sel = nx; }
+  else if (k === 'ArrowLeft' || k === 'h'){ const ks = SECS.map(s => s[0]), cur = ks.indexOf(it[sel].k); const here = sectionStart(sel); if (sel !== here) sel = here; else { for (let j = cur - 1; j >= 0; j--){ const ix = it.findIndex(a => a.k === ks[j]); if (ix >= 0){ sel = ix; break; } } } }
+  else if (k === 'x'){ const a = it[sel]; if (a && a.state === 'run'){ a.state = 'stop'; a.doing = 'detenido'; } }
+  else if (k === 'Escape'){ areaOpen = false; focus = true; document.getElementById('open').setAttribute('aria-pressed', false); }
+  else return;
+  draw(); e.preventDefault();
+});
+document.getElementById('open').onclick = e => { areaOpen = !areaOpen; focus = areaOpen; e.target.setAttribute('aria-pressed', areaOpen); draw(); };
+document.getElementById('none').onclick = e => { const on = e.target.getAttribute('aria-pressed') !== 'true'; e.target.setAttribute('aria-pressed', on); if (on){ window.__saved = S; S = []; } else if (window.__saved){ S = window.__saved; } draw(); };
+document.getElementById('rs').onclick = () => { reset(); document.getElementById('open').setAttribute('aria-pressed', true); document.getElementById('none').setAttribute('aria-pressed', false); draw(); };
+setInterval(() => { tick++; S.forEach(a => { if (a.state === 'run') a.t++; }); draw(); }, 1000);
+reset(); draw();
+})();
+</script>

@@ -1,0 +1,492 @@
+<title>jwn Shell Blocks</title>
+<style>
+/* Terminal-first: a character grid on One Dark, like the jw TUI it replaces. */
+:root{
+  --bg:#282c34; --panel:#21252b; --fg:#abb2bf; --dim:#5c6370; --line:#3e4451; --sel:#2c313a;
+  --blue:#61afef; --green:#98c379; --yellow:#e5c07b; --red:#e06c75; --magenta:#c678dd; --cyan:#56b6c2;
+  --hl:#e5c07b; --hlfg:#21252b;
+  --page:#16181d; --ink:#c3c9d4; --mut:#7d8594;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}}
+:root[data-theme="light"]{--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.55 'IBM Plex Sans',system-ui,sans-serif;padding-inline:16px;padding-block:20px 40px}
+.wrap{max-width:1500px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
+h1{font:600 20px/1.2 var(--mono);margin:0}
+p{margin:0;max-width:72ch;color:var(--mut)}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button,select{font:12px var(--mono);color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;min-height:32px;cursor:pointer}
+button:hover{border-color:var(--blue)}
+:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto}
+.term pre{margin:0;font:13px/1.25 var(--mono);color:var(--fg);outline:none;width:max-content}
+.term pre:focus-visible{outline:none}
+.hint{font:12px var(--mono);color:var(--mut)}
+.stage{display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap}
+.col{flex:1 1 700px;min-width:0;display:flex;flex-direction:column;gap:8px}
+.side{flex:0 0 auto;width:100%;max-width:376px;margin-inline:auto;display:flex;flex-direction:column;gap:8px}
+.side h2{font:600 12px var(--mono);margin:0;color:var(--mut)}
+.phone{width:100%;height:700px;background:var(--bg);border:1px solid var(--line);border-radius:28px;padding:10px;box-shadow:0 0 0 6px var(--panel);display:flex;flex-direction:column}
+.ph{flex:1;min-height:0;background:var(--bg);border-radius:20px;overflow:hidden;display:flex;flex-direction:column;font:13px/1.45 var(--mono);color:var(--fg)}
+.ph .hd{background:var(--panel);border-bottom:1px solid var(--line);padding:8px 12px;display:flex;align-items:center;min-height:52px}
+.ph .hd .t{flex:1;min-width:0}.ph .hd b{display:block;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ph .hd span{display:block;font-size:11px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ph .tabs{display:flex;background:var(--panel);border-bottom:1px solid var(--line);overflow:auto}
+.ph .tab{padding:0 14px;min-height:40px;display:flex;align-items:center;gap:6px;border:0;border-bottom:2px solid transparent;border-radius:0;background:none;color:var(--dim);cursor:pointer}
+.ph .tab.on{color:var(--fg);font-weight:700;border-bottom-color:var(--blue)}
+.ph .bl{flex:1;min-height:0;overflow:auto;padding:6px 0;display:flex;flex-direction:column;justify-content:flex-end}
+.ph .blk{padding:6px 12px 6px 10px;border-left:3px solid var(--line);margin:3px 0;cursor:pointer}
+.ph .blk.ok{border-left-color:var(--green)}.ph .blk.bad{border-left-color:var(--red)}.ph .blk.run{border-left-color:var(--yellow)}
+.ph .blk.on{background:var(--sel)}
+.ph .blk.int{border-left-color:var(--dim)}.ph .bm .int{color:var(--yellow)}
+.ph .rs{display:flex;align-items:center;gap:8px;margin:8px 10px;font-size:11px;color:var(--dim)}.ph .rs::before,.ph .rs::after{content:'';flex:1;height:1px;background:var(--line)}
+.ph .bm{display:flex;justify-content:space-between;gap:8px;font-size:11px;color:var(--dim)}
+.ph .bm i{font-style:normal}.ph .bm .bad{color:var(--red)}
+.ph .bc{font-weight:700;margin:1px 0 3px}
+.ph .bo{white-space:pre-wrap;word-break:break-word;font-size:12px}
+.ph .acts{display:flex;gap:6px;padding:6px 10px;border-top:1px solid var(--line);background:var(--panel)}
+.ph .acts button{flex:1;min-height:36px;font-size:12px}
+.ph .edit{border-top:1px solid var(--line);background:var(--panel);padding:8px 10px 6px;display:flex;flex-direction:column;gap:6px}
+.ph .chips{display:flex;gap:6px;font-size:11px;white-space:nowrap;overflow:hidden}
+.ph .chips span{background:var(--sel);border-radius:999px;padding:5px 12px}
+.ph .ed{display:flex;align-items:center;gap:8px;padding:0 4px}
+.ph .ed input{flex:1;min-width:0;height:40px;border:0;background:none;color:var(--fg);font:13px var(--mono);outline:none}
+.ph .ed button{min-width:40px;height:36px;border:0;background:none;color:var(--blue);font-size:15px}
+.ph .ed button.stop{color:var(--red)}
+.ph .none{padding:24px 16px;color:var(--dim)}
+.ph .boot{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;font-size:13px}
+.ph .boot small{color:var(--dim);font-size:11px}
+.ph .raw{margin:0;padding:8px 10px;font:12px/1.35 var(--mono);color:var(--fg);white-space:pre;overflow:hidden}
+.decide{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px;color:var(--fg)}
+.decide h2{font:600 12px var(--mono);margin:0 0 8px;color:var(--mut)}
+.decide ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+.decide code{font:12px var(--mono)}
+.b{font-weight:700}.d{color:var(--dim)}.c-blue{color:var(--blue)}.c-green{color:var(--green)}.c-yellow{color:var(--yellow)}
+.c-red{color:var(--red)}.c-mag{color:var(--magenta)}.c-cyan{color:var(--cyan)}.c-line{color:var(--line)}
+.bg-sel{background:var(--sel)}.bg-panel{background:var(--panel)}
+.chip-green{background:var(--green);color:var(--panel)}.chip-blue{background:var(--blue);color:var(--panel)}.chip-yellow{background:var(--yellow);color:var(--panel)}
+.cur{background:var(--fg);color:var(--bg)}
+.hl{background:var(--hl)!important;color:var(--hlfg)!important}
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&family=JetBrains+Mono:wght@400;700&display=swap">
+
+<div class="wrap">
+  <div>
+    <h1>The shell as blocks, in the terminal and on the phone</h1>
+    <p>One model, two screens. The terminal draws today's jw layout with each shell pane as a rounded box of command blocks; the phone draws the same blocks flat, with the pane tabs and an editor. Both read the same data: run a command in one and it appears in the other, and what you look at clears on both. Click the terminal or tab into it; the keys are on its status bar.</p>
+  </div>
+  <div class="bar" aria-label="Simulate">
+    <button id="evFail" type="button">A command fails in the focused pane</button>
+    <button id="evOk" type="button">A command finishes</button>
+    <button id="evPerm" type="button">An agent asks permission</button>
+    <button id="evPane" type="button">New pane here</button>
+    <button id="evRun" type="button">Start a long command</button>
+    <button id="evEnd" type="button">It finishes</button>
+    <select id="progName" aria-label="Program"><option>claude</option><option>nvim</option><option>mole</option><option>htop</option><option>lazygit</option><option>fzf</option></select>
+    <button id="evClaude" type="button">Start the program (takes the screen)</button>
+    <button id="evClaudeEnd" type="button">The program exits (takes a second)</button>
+    <button id="evRestart" type="button">The daemon restarts (history kept)</button>
+    <label class="hint" for="theme">Theme</label>
+    <select id="theme" aria-label="Theme"></select>
+    <span class="hint" id="hlinfo"></span>
+    <button id="evReset" type="button">Reset</button>
+    <select id="size" aria-label="Terminal size"><option value="120x32">120 × 32</option><option value="96x28">96 × 28</option></select>
+  </div>
+  <div class="stage">
+  <div class="col">
+  <div class="term"><pre id="scr" tabindex="0" aria-label="Terminal client. j and k move, h and l change pane, Enter opens, a lists what waits."></pre></div>
+  <div class="hint" id="keys">j/k workspace · h/l pane · ↵ open · a avisos · esc back</div>
+  </div>
+  <div class="side">
+    <h2>Phone</h2>
+    <div class="phone"><div class="ph" id="ph">
+      <div class="hd"><div class="t"><b id="phTitle"></b><span id="phSub"></span></div></div>
+      <div class="tabs" id="phTabs"></div>
+      <div class="bl" id="phBlocks"></div>
+      <div class="acts" id="phActs" hidden></div>
+      <div class="edit" id="phEdit">
+        <div class="chips" id="phChips"></div>
+        <form class="ed" id="phForm" autocomplete="off"><span class="c-green b">❯</span><input id="phIn" placeholder="escribe un comando" aria-label="Command"><button id="phGo" type="submit" aria-label="Enviar">➤</button></form>
+      </div>
+    </div></div>
+  </div>
+  </div>
+
+  <div class="decide">
+    <h2>To approve</h2>
+    <ol>
+      <li><b>The mouse selects text</b>: press in the output of a pane, drag, and what the drag covers is lit and copied when the button is let go («copiado · 3 líneas · 120 caracteres» on the status bar). The selection goes from where the drag began to where it ended, line after line, over the commands and the output of the blocks (not the folder and time lines, not the editor). A drag past the top or the bottom of the pane scrolls it while the button is held. The highlight is the colour of the theme that shows best against its ground, with the text in the ground colour or the text colour, whichever reads better on it: try the themes above. It stays lit until the next press, a key or <code>esc</code>. A press with no drag is the click it was (a panel, a block). The wheel scrolls the pane under it.</li>
+      <li><b>When the daemon restarts the history stays</b> (button «The daemon restarts»). Each shell pane's blocks are saved on disk by the daemon and come back with it: the last 100 blocks and no more than 4 MiB of them for each pane, the oldest going first. A line across the pane says <i>el daemon se reinició</i> and the time: what is above it was kept, what is below it is new, in the terminal and on the phone. A command that was running is kept as <i>interrumpido</i> with the time it had run, in grey, because its end was never seen; a program that had the whole screen (claude, nvim) is gone and the pane is the shell again, as today. The prompt starts empty. <code>clear</code> empties the saved history too.</li>
+      <li><b>The frame is today's jw:</b> a 28-column sidebar with a right border, numbered rows with <code>●</code> open and <code>○</code> closed, <code>↳</code> for a worktree under its project, one header row with project, branch and path, a status bar with a mode chip.</li>
+      <li><b>Panes are rounded boxes</b> sharing the area (side by side, two columns from three panes), the focused one with a blue border. The title carries what runs there, and what waits on that pane (<code>✗ salió 3</code>) sits at the right end of its top border.</li>
+      <li><b>Marks sit at the right of a sidebar row</b> (most urgent unseen, with a count when there are several). No extra line under the row: the sentence lives in the pane's title and in <code>a</code>.</li>
+      <li><b>Avisos</b> opens as a box over the pane area: one row per unseen attention, <code>↵</code> goes to that pane, focus and seen both change.</li>
+      <li><b>The shell as blocks</b> (the terminal's version of what the phone prototype already does): inside a shell pane's box, each command is a block with its folder, branch and time, a bar at the left (green done, red failed, yellow running), bold command and its coloured output; newest at the bottom. A click selects a block and the status bar offers copy command, copy output, repeat. The editor sits at the foot of the box with the folder and branch chips; while a program runs it shows the program and <code>■ ^C</code>. (Only the shell for now: no agents, no full-screen programs.) Open a shell pane, press Enter, type, press Enter.</li>
+      <li><b>The field at the foot (changed)</b> is drawn as the phone's today, which is flat: no box, a band of its own colour under the blocks. On it, a row of chips (the folder and, when there is one, <code>⎇ branch</code>, each a pill; while a command runs, <code>◌</code> and the command in yellow), and under it the line: the green <code>❯</code>, the text you type, and the blue send mark <code>➤</code> at the right. With nothing typed it says «escribe un comando»; while something runs it says «va al programa» (the phone's longer «lo que escribas va al programa» does not fit a narrow pane) and a red <code>■ ^C</code> sits beside the send mark (the phone's red stop beside its send). The band has room around it, as the phone's has: a free row over the chips, one between the chips and the line, one under the line, and a column of margin at each side (five rows in all, where the old editor took three). A line longer than the line wraps under it and the band grows, up to five rows of text. The shell still owns the line (history, tab and its key bindings work as today): the client draws what the shell has typed, after its prompt. For that the daemon has to say where the typed text starts: one optional field in the <code>blocks</code> node (the cursor at the shell's prompt-end mark), which is also what mirroring the line on the phone (OPEN-6) needs. Without it, only the band, the chips and the marks could change, not the text or the placeholder.</li>
+      <li><b>A program that takes the screen (new)</b>: when a command that draws its own screen starts (claude), the pane no longer shows the shell's screen as it was while the program has not painted anything. The box says «iniciando claude…» with a spinner (and the phone the same, with «toca ■ para cancelar»), and the moment the program paints, the screen is drawn as it is. When the program ends the blocks come back. <b>It is the same for any program</b> that takes the screen (claude, nvim, mole, htop, lazygit, fzf…): the name in «iniciando …» and «cerrando …» is the command's own, and pick one in the list above to see it. <b>On the way out (new)</b>: a program that leaves its screen and takes a moment to finish (claude, about a second; nvim or htop, a moment) no longer shows the shell's own screen under it (the terminal as it was, with your prompt): the same spinner says «cerrando claude…» until the blocks return. Press <i>claude exits</i> to see it: the screen goes, the loading shows for about a second, then the blocks. Try <i>Start claude</i> and <i>claude exits</i> above; in the terminal <code>^C</code> still cancels. The daemon says when the program has painted: its running block has output (<code>out</code>) from then on, which is also what keeps the loading from showing for a program that paints at once (nvim: a screen of its own, no loading).</li>
+      <li><b>On the phone</b> the same blocks are drawn flat, newest at the bottom: folder and time dim on top, the command in bold, the coloured output below, and the bar at the left (green, red, yellow). The shell's panes are tabs (the phone's way; the terminal uses boxes). Tapping a block selects it and shows <code>Comando</code>, <code>Salida</code> and <code>Repetir</code>. The editor sits at the foot with the folder and branch chips; while a program runs the chip is the program, the border turns dashed and the send button becomes a red stop (<code>^C</code>). The special keys (esc, tab, arrows) have no buttons for now; where they go is still to be decided. The phone shows the workspace highlighted in the terminal; on the real phone Home picks it.</li>
+      <li><b>Seen</b> is shared: looking at a pane here clears its aviso on the phone too. Moving the highlight previews a workspace; <code>↵</code> or focusing a pane marks it seen.</li>
+    </ol>
+  </div>
+</div>
+
+<script>
+(() => {
+'use strict';
+const E = 'e1', esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+let COLS = 120, ROWS = 32;
+const KINDS = { permission:['!','c-red',0,'pide permiso'], question:['?','c-yellow',1,'hace una pregunta'], plan:['◆','c-mag',2,'plan listo'],
+  ci_failed:['✗','c-red',3,'CI falló'], shell_done:['❯','c-green',4,'comando terminó'], screen:['…','d',5,'espera en pantalla'], agent_done:['✓','c-green',6,'agente listo'], merged:['⚑','c-cyan',7,'mergeado'] };
+const markOf = a => a.kind === 'shell_done' && a.exit ? ['✗','c-red'] : [KINDS[a.kind][0], KINDS[a.kind][1]];
+const whatOf = a => a.kind === 'shell_done' ? `salió ${a.exit}` : KINDS[a.kind][3];
+
+let model, rev, seen, ui;
+function reset(){
+  rev = 10; seen = {};
+  const att = (kind, pane, exit) => ({kind, pane, exit, rev:++rev});
+  const blk = (cmd, dur, code, out) => ({cmd, dur, code, out: out.map(t => typeof t === 'string' ? {t} : t)});
+  const shell = (id, cwd, branch, blocks, extra = {}) => ({id, title:'zsh', lines:[], att:[], shell:true, input:'', cwd, branch, blocks, ...extra});
+  model = { name:'demo', ws:[
+    { id:'w1', name:'notes', kind:'folder', path:'~/notes', att:[], panes:[
+      shell('p1', '~/notes', null, [blk('git status', '0.1s', 0, ['On branch main', 'nothing to commit, working tree clean']), blk('ls', '0.0s', 0, ['ideas.md  todo.md  weekly/'])], {att:[att('shell_done','p1',0)]}) ] },
+    { id:'w2', name:'api', kind:'folder', path:'~/ws/api', att:[], panes:[
+      shell('p2', '~/ws/api', 'main', [blk('pnpm test', '6.4s', 1, [{t:'FAIL  src/auth.test.ts', c:'c-red'}, {t:'  expected 2, received 3', c:'c-red'}, {t:'Tests: 1 failed, 11 passed', c:'c-red'}])], {att:[att('shell_done','p2',2)]}) ] },
+    { id:'w3', name:'feat/login', kind:'worktree', project:'api', branch:'feat/login', path:'~/ws/api-wt/feat-login', att:[], panes:[
+      shell('p3', '~/ws/api-wt/feat-login', 'feat/login', [
+        blk('git status', '0.1s', 0, ['On branch feat/login', 'nothing to commit, working tree clean']),
+        blk('cargo test', '4.2s', 101, [{t:'   Compiling app v0.3.1', c:'d'}, 'running 14 tests', {t:'test auth::login_ok ... ok', c:'c-green'}, {t:'test auth::expired ... FAILED', c:'c-red'}, {t:'test result: FAILED. 13 passed; 1 failed', c:'c-red'}]),
+        blk('cargo test auth::expired', '1.8s', 0, [{t:'test auth::expired ... ok', c:'c-green'}, {t:'test result: ok. 1 passed', c:'c-green'}]) ], {att:[att('shell_done','p3',0)]}),
+      shell('p4', '~/ws/api-wt/feat-login', 'feat/login', [blk('git log --oneline -3', '0.0s', 0, ['a1b2c3d feat: login form', '9f8e7d6 fix: token refresh', '4c5d6e7 chore: deps'])]) ] },
+    { id:'w4', name:'infra', kind:'folder', path:'~/ws/infra', att:[], panes:[] },
+  ]};
+  ui = { sel:2, open:null, focus:0, avisos:false, av:0, blk:null, hits:[], rows:[], hl:null, msg:'' };
+}
+const wsAtt = w => [...w.att.map(a => ({...a, node:w.id})), ...w.panes.flatMap(p => p.att.map(a => ({...a, node:p.id})))];
+const unseen = (list) => list.filter(a => !seen[a.kind + a.rev]).sort((a, b) => KINDS[a.kind][2] - KINDS[b.kind][2]);
+const paneUnseen = p => unseen(p.att.map(a => ({...a, node:p.id})));
+
+/* ---- the character grid ---- */
+function grid(){ return { cells: Array.from({length:ROWS}, () => Array.from({length:COLS}, () => [' ', ''])) }; }
+function put(g, x, y, text, cls = ''){ if (y < 0 || y >= ROWS) return; [...text].forEach((ch, i) => { const cx = x + i; if (cx >= 0 && cx < COLS) g.cells[y][cx] = [ch, cls]; }); }
+function fill(g, x, y, w, cls){ for (let i = 0; i < w; i++) if (x + i < COLS && y < ROWS) g.cells[y][x + i] = [g.cells[y][x + i][0], (g.cells[y][x + i][1] + ' ' + cls).trim()]; }
+function box(g, x, y, w, h, title, cls, right, rightCls){
+  put(g, x, y, '╭' + '─'.repeat(w - 2) + '╮', cls); put(g, x, y + h - 1, '╰' + '─'.repeat(w - 2) + '╯', cls);
+  for (let i = 1; i < h - 1; i++){ put(g, x, y + i, '│', cls); put(g, x + w - 1, y + i, '│', cls); }
+  if (title) put(g, x + 2, y, ' ' + title + ' ', cls.includes('blue') ? 'b c-blue' : 'b');
+  if (right) put(g, x + w - 3 - [...right].length, y, ' ' + right + ' ', rightCls);
+}
+function paint(g){
+  const rows = g.cells.map(r => { let out = '', cur = null, buf = '';
+    for (const [ch, cls] of r){ if (cls !== cur){ if (buf) out += cur ? `<span class="${cur}">${buf}</span>` : buf; buf = ''; cur = cls; } buf += esc(ch); }
+    if (buf) out += cur ? `<span class="${cur}">${buf}</span>` : buf; return out; });
+  document.getElementById('scr').innerHTML = rows.join('\n');
+}
+
+function draw(){
+  const g = grid(), SB = 28;
+  ui.hits = []; ui.rows = [];
+  // sidebar
+  for (let y = 0; y < ROWS - 1; y++) put(g, SB - 1, y, '│', 'c-line');
+  put(g, 1, 0, model.name, 'b d'); put(g, SB - 1 - 13, 0, '^␣ s sessions', 'd');
+  let y = 2, n = 0; const rowsMap = [];
+  const rowFor = (w, child) => {
+    const sel = rowsMap.length === ui.sel, open = ui.open === w.id, un = unseen(wsAtt(w));
+    n++; rowsMap.push(w.id);
+    const label = child ? '↳ ' + w.name : w.name;
+    put(g, 0, y, n < 10 ? String(n) : ' ', 'd');
+    put(g, 2, y, open || w.panes.length ? '●' : '○', w.panes.length ? 'c-green' : 'd');
+    put(g, 4, y, label.length > 16 ? label.slice(0, 15) + '…' : label, sel ? 'b c-blue' : (w.panes.length ? '' : 'd'));
+    if (un.length){ const [gl, cl] = markOf(un[0]); put(g, SB - 4, y, gl, cl + ' b'); if (un.length > 1) put(g, SB - 3, y, String(un.length), 'd'); }
+    if (sel) for (let i = 0; i < SB - 1; i++){ g.cells[y][i] = [g.cells[y][i][0], (g.cells[y][i][1] + ' bg-sel').trim()]; }
+    y++;
+  };
+  const seenProj = new Set();
+  model.ws.forEach(w => {
+    if (w.kind === 'worktree' && !seenProj.has(w.project)){ /* its project row is the folder named like it */ }
+    rowFor(w, w.kind === 'worktree');
+  });
+  // legend
+  put(g, 1, ROWS - 5, '! permiso  ? pregunta', 'd'); put(g, 1, ROWS - 4, '◆ plan   ❯ comando', 'd'); put(g, 1, ROWS - 3, '✓ listo  ⚑ merge  ✗ falló', 'd');
+
+  // header + panes
+  const w = model.ws[ui.sel]; const px = SB + 1, pw = COLS - px;
+  if (w){
+    const head = w.kind === 'worktree' ? [' ' + w.project + '/', 'd', w.name, 'b c-blue', '  ⎇ ' + w.branch, 'c-mag'] : [' ', '', w.name, 'b c-blue', '', ''];
+    let x = px; for (let i = 0; i < head.length; i += 2){ put(g, x, 0, head[i], head[i + 1]); x += [...head[i]].length; }
+    put(g, COLS - 1 - [...w.path].length, 0, w.path, 'd');
+    const n = w.panes.length, top = 1, h = ROWS - 2;
+    if (!n){ put(g, px + 2, 3, 'este workspace no tiene paneles · n abre uno', 'd'); }
+    else {
+      // One pane fills the area; two sit side by side; from three, the first takes the left
+      // half and the rest stack on the right.
+      const rects = n === 1 ? [[0, 0, pw, h]] : n === 2 ? [[0, 0, Math.floor(pw / 2), h], [Math.floor(pw / 2), 0, pw - Math.floor(pw / 2), h]]
+        : [[0, 0, Math.floor(pw / 2), h], ...Array.from({length: n - 1}, (_, i) => { const rh = Math.floor(h / (n - 1)); return [Math.floor(pw / 2), i * rh, pw - Math.floor(pw / 2), i === n - 2 ? h - i * rh : rh]; })];
+      w.panes.forEach((p, i) => {
+        const [dx, dy, bw, bh] = rects[i], x0 = px + dx, y0 = top + dy;
+        const focused = ui.open === w.id && ui.focus === i;
+        const un = paneUnseen(p)[0];
+        box(g, x0, y0, bw, bh, p.title, focused ? 'c-blue' : 'c-line', un ? (markOf(un)[0] + ' ' + whatOf(un)) : '', un ? markOf(un)[1] + ' b' : '');
+        if (p.shell && p.prog) drawProgram(g, p, x0, y0, bw, bh);
+        else if (p.shell && !p.full) drawShell(g, p, x0, y0, bw, bh, focused);
+        else {
+          const top0 = 1;
+          p.lines.slice(0, bh - 1 - top0).forEach((l, k) => put(g, x0 + 2, y0 + top0 + k, clipTo(l, bw - 4)));
+          if (focused && p.lines.length){ const k = Math.min(p.lines.length - 1, bh - 2 - top0); const l = p.lines[k] || ''; g.cells[y0 + top0 + k][x0 + 2 + [...l].length] = [' ', 'cur']; }
+        }
+      });
+    }
+  }
+  // status bar
+  for (let x = 0; x < COLS; x++) g.cells[ROWS - 1][x] = [' ', 'bg-panel'];
+  const typing = termShell();
+  const mode = ui.avisos ? [' AVISOS ', 'chip-yellow b'] : ui.blk ? [' BLOQUE ', 'chip-yellow b'] : ui.open ? [' TERM ', 'chip-green b'] : [' MOVE ', 'chip-blue b'];
+  put(g, 0, ROWS - 1, mode[0], mode[1]);
+  put(g, mode[0].length + 1, ROWS - 1, ui.msg ? ui.msg : ui.avisos ? 'j/k mover · ↵ ir · esc volver' : ui.blk ? 'c comando · o salida · r repetir · esc soltar' : typing ? 'escribe · ↵ ejecuta · tab otro panel · esc salir' : 'j/k workspace · h/l panel · ↵ abrir · a avisos · q salir', ui.msg ? 'c-green bg-panel' : 'd bg-panel');
+  const all = model.ws.flatMap(x => unseen(wsAtt(x))).length;
+  if (all){ const t = `avisos ${all}`; put(g, COLS - t.length - 1, ROWS - 1, t, 'c-yellow b bg-panel'); }
+
+  // avisos
+  if (ui.avisos){
+    const items = model.ws.flatMap(x => unseen(wsAtt(x)).map(a => ({w:x, a}))); const bw = 56, bh = Math.max(5, items.length + 4), bx = SB + 1 + Math.floor((pw - bw) / 2), by = 4;
+    for (let i = 0; i < bh; i++) put(g, bx, by + i, ' '.repeat(bw), 'bg-panel');
+    box(g, bx, by, bw, bh, 'avisos', 'c-yellow');
+    if (!items.length) put(g, bx + 3, by + 2, 'Nada espera.', 'd');
+    items.forEach(({w:x, a}, i) => { const yy = by + 2 + i, [gl, cl] = markOf(a);
+      if (i === ui.av) for (let k = 1; k < bw - 1; k++) g.cells[yy][bx + k] = [g.cells[yy][bx + k][0], 'bg-sel'];
+      put(g, bx + 3, yy, gl, cl + ' b' + (i === ui.av ? ' bg-sel' : '')); put(g, bx + 6, yy, (x.kind === 'worktree' ? x.project + '/' : '') + x.name, 'b' + (i === ui.av ? ' bg-sel' : ''));
+      const t = whatOf(a); put(g, bx + bw - 3 - t.length, yy, t, (cl === 'c-red' ? cl : 'd') + (i === ui.av ? ' bg-sel' : '')); });
+  }
+  paint(g);
+  drawPhone();
+}
+
+const short = path => { const a = path.split('/').filter(Boolean); return a.length > 2 ? '…/' + a.slice(-2).join('/') : path; };
+const clipTo = (t, n) => { const a = [...t]; return a.length <= n ? t : a.slice(0, Math.max(0, n - 1)).join('') + '…'; };
+/* A shell pane in blocks: newest at the bottom, each command with its folder, time and output,
+   a bar at the left that says how it ended, and the editor at the foot of the box. */
+function drawShell(g, p, x0, y0, bw, bh, focused){
+  const ix = x0 + 2, iw = bw - 4, top = y0 + 1;
+  const running = p.blocks.at(-1) && p.blocks.at(-1).running;
+  // The field, as the phone's today: no box, a band of its own colour at the foot with room around it: a row of chips
+  // (the folder and branch as pills, or what runs), a free row, the line (the green prompt, the text or what to type, and
+  // the send mark at the right) and a free row under it. A text longer than the line wraps under it, up to five rows.
+  const fx = ix + 1, fw = iw - 2, tx = fx + 2, tw = Math.max(8, fw - 2 - 12), txt = [...p.input];
+  let rowsOf = []; for (let i = 0; i < txt.length; i += tw) rowsOf.push(txt.slice(i, i + tw).join(''));
+  if (!rowsOf.length || txt.length % tw === 0 && txt.length) rowsOf.push('');
+  const shownRows = rowsOf.slice(-5), n = shownRows.length, edTop = y0 + bh - 5 - n;
+  const lines = [];
+  p.blocks.forEach((b, bi) => {
+    // Where the daemon restarted: one line across the box. What is above it was kept, what is below it is new.
+    if (b.restart){ lines.push({bi, bar:null, divider:'el daemon se reinició · ' + b.restart, parts:[]}); return; }
+    const state = b.interrupted ? 'd' : b.running ? 'c-yellow' : b.code ? 'c-red' : 'c-green';
+    const head = b.interrupted ? `interrumpido · ${b.dur}` : b.running ? `corriendo ${b.dur}` : b.code ? `salió ${b.code} · ${b.dur}` : b.dur;
+    lines.push({bi, kind:'head', bar:state, parts:[[clipTo(short(p.cwd), Math.max(4, iw - 6 - [...head].length)), 'd']], right:[head, b.interrupted ? 'c-yellow' : b.code && !b.running ? 'c-red' : 'd']});
+    lines.push({bi, kind:'cmd', bar:state, parts:[['❯ ' + b.cmd, 'b']]});
+    b.out.forEach(o => lines.push({bi, kind:'out', bar:state, parts:[[o.t, o.c || '']]}));
+    lines.push({bi, kind:'gap', bar:null, parts:[]});
+  });
+  // The list is scrolled `p.scroll` lines up from the newest (the wheel, or a drag past the edge).
+  const room = edTop - top; p.scroll = Math.max(0, Math.min(p.scroll || 0, lines.length - room));
+  const end = lines.length - p.scroll, start = Math.max(0, end - room), shown = lines.slice(start, end);
+  const mark = ui.hl && ui.hl.pane === p.id ? (() => { const a = ui.hl.a, b = ui.hl.b, f = a.l < b.l || a.l === b.l && a.c <= b.c; return f ? [a, b] : [b, a]; })() : null;
+  shown.forEach((ln, k) => {
+    const y = top + (room - shown.length) + k, sel = ui.blk && ui.blk.pane === p.id && ui.blk.idx === ln.bi;
+    const li = start + k, text = ln.parts.map(q => q[0]).join('');
+    if (ln.kind === 'cmd' || ln.kind === 'out') ui.rows.push({pane:p.id, y, x:ix + 1, w:iw - 2, line:li, kind:ln.kind, text, top:top, bottom:top + room - 1});
+    if (mark && (ln.kind === 'cmd' || ln.kind === 'out') && li >= mark[0].l && li <= mark[1].l){ const n = [...text].length, from = li === mark[0].l ? mark[0].c : 0, to = li === mark[1].l ? Math.min(n, mark[1].c + 1) : n;
+      ln.hl = [from, Math.max(from, to)]; }
+    if (ln.divider){ const t = ' ' + ln.divider + ' ', n = iw - 2, pad = Math.max(0, Math.floor((n - [...t].length) / 2)); put(g, ix + 1, y, '─'.repeat(pad) + t + '─'.repeat(Math.max(0, n - pad - [...t].length)), 'd'); return; }
+    if (sel) for (let i = 1; i < bw - 1; i++) g.cells[y][x0 + i] = [g.cells[y][x0 + i][0], 'bg-sel'];
+    if (ln.bar) put(g, ix - 1, y, '▌', ln.bar + (sel ? ' bg-sel' : ''));
+    let x = ix + 1; ln.parts.forEach(([t, c]) => { put(g, x, y, clipTo(t, iw - 2), c + (sel ? ' bg-sel' : '')); x += [...t].length; });
+    if (ln.hl) for (let i = ln.hl[0]; i < ln.hl[1] && ix + 1 + i < ix + iw - 1; i++) g.cells[y][ix + 1 + i] = [g.cells[y][ix + 1 + i][0], 'hl'];
+    if (ln.right){ const t = ln.right[0]; put(g, ix + iw - [...t].length, y, t, ln.right[1] + (sel ? ' bg-sel' : '')); }
+    if (!ui.hits.some(h => h.blk === ln.bi && h.pane === p.id)) ui.hits.push({x:x0 + 1, y, w:bw - 2, h:1, pane:p.id, blk:ln.bi, rows:shown.filter(s => s.bi === ln.bi).length});
+  });
+  for (let y = edTop; y <= edTop + n + 3; y++) fill(g, x0 + 1, y, bw - 2, 'bg-panel');
+  const pp = (x, y, t, c = '') => put(g, x, y, t, (c + ' bg-panel').trim()), chip = (x, y, t, c = '') => { put(g, x, y, ' ' + t + ' ', (c + ' bg-sel').trim()); return x + [...t].length + 3; };
+  if (running) chip(fx, edTop + 1, '◌ ' + clipTo(p.blocks.at(-1).cmd, fw - 8), 'c-yellow');
+  else { const bw2 = p.branch ? [...p.branch].length + 5 : 0, nx = chip(fx, edTop + 1, clipTo(p.cwd, Math.max(6, fw - bw2 - 3)), 'd'); if (p.branch) chip(nx, edTop + 1, '⎇ ' + p.branch, 'c-mag'); }
+  shownRows.forEach((r, k) => { const y = edTop + 3 + k; if (k === 0) pp(fx, y, '❯', 'c-green b'); pp(tx, y, r); });
+  if (!p.input) pp(tx, edTop + 3, running ? 'va al programa' : 'escribe un comando', 'd');
+  if (running) pp(fx + fw - 9, edTop + 3, '■ ^C', 'c-red b');
+  pp(fx + fw - 2, edTop + 3, '➤', 'c-blue b');
+  if (focused){ const last = shownRows[n - 1], cx = tx + [...last].length, cy = edTop + 2 + n;
+    if (cx < fx + fw - 2){ const was = g.cells[cy][cx]; g.cells[cy][cx] = [was[0], 'cur']; } }
+}
+/* A program that draws its own screen (claude) has the pane. Until it has painted something the box says it is starting,
+   with a spinner, instead of showing the shell's screen as it was; once it paints, the screen is drawn as it is. */
+const SPIN = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
+const rawLines = p => [...p.blocks.filter(b => !b.restart).flatMap(b => [short(p.cwd), '❯ ' + b.cmd, ...b.out.map(o => o.t), '']), ...(p.prog.painted ? p.prog.ui : [])];
+function drawProgram(g, p, x0, y0, bw, bh){
+  if (!p.prog.painted || p.prog.closing){
+    const t = SPIN[Math.floor(Date.now() / 110) % SPIN.length] + (p.prog.closing ? ' cerrando ' : ' iniciando ') + p.prog.name + '…', h = p.prog.closing ? 'esperando a que termine' : '^C cancela';
+    const cy = y0 + Math.floor(bh / 2) - 1;
+    put(g, x0 + Math.floor((bw - [...t].length) / 2), cy, t, 'c-yellow'); put(g, x0 + Math.floor((bw - h.length) / 2), cy + 2, h, 'd');
+    return;
+  }
+  const lines = rawLines(p), room = bh - 2;
+  lines.slice(-room).forEach((l, k) => put(g, x0 + 2, y0 + 1 + k, clipTo(l, bw - 4), l.startsWith('❯') ? 'b' : ''));
+}
+const startClaude = p => { const name = document.getElementById('progName').value;
+  p.blocks.push({cmd:name, dur:'0.0s', code:0, running:true, out:[]}); p.prog = {name, painted:false, ui:['  ╭─ ' + name + ' ' + '─'.repeat(Math.max(2, 22 - name.length)) + '╮', '  │ (the program\'s own screen)'.padEnd(31) + '│', '  ╰' + '─'.repeat(28) + '╯']};
+  const spin = setInterval(() => { if (p.prog && !p.prog.painted) draw(); else clearInterval(spin); }, 110);
+  setTimeout(() => { if (p.prog) p.prog.painted = true; draw(); }, 2200); };
+const termShell = () => { const w = cur(); const p = ui.open === w.id ? w.panes[ui.focus] : null; return p && p.shell && !p.full && !p.prog && !ui.avisos ? p : null; };
+function typeKey(k){
+  const p = termShell(); if (!p) return;
+  if (k === 'Escape'){ if (ui.blk){ ui.blk = null; } else ui.open = null; }
+  else if (k === 'Tab'){ const w = cur(); openWs(w, (ui.focus + 1) % w.panes.length); }
+  else if (k === 'Backspace') p.input = [...p.input].slice(0, -1).join('');
+  else if (k === 'Enter'){ if (p.input.trim()) runCmd(p, p.input.trim()); p.input = ''; }
+  else if (k.length === 1) p.input += k;
+  draw();
+}
+function runCmd(p, cmd){
+  const b = {cmd, dur:'0.0s', code:0, running:true, out:[]}; p.blocks.push(b);
+  const fail = /fail|false|exit/.test(cmd);
+  setTimeout(() => { b.running = false; b.code = fail ? 1 : 0; b.dur = (0.4 + Math.random() * 2).toFixed(1) + 's'; b.out = fail ? [{t:'error: command failed', c:'c-red'}] : [{t:'ok', c:'c-green'}]; p.att = p.att.filter(a => a.kind !== 'shell_done'); p.att.push({kind:'shell_done', pane:p.id, exit:b.code, rev:++rev}); draw(); }, 700);
+}
+/* ---- the phone: the same model, drawn flat ---- */
+const $ = id => document.getElementById(id);
+const ph = { pane:0, blk:null };
+const phBars = b => b.interrupted ? 'int' : b.running ? 'run' : b.code ? 'bad' : 'ok';
+function drawPhone(){
+  const w = model.ws[ui.sel]; if (!w) return;
+  if (ph.pane >= w.panes.length) ph.pane = 0;
+  const p = w.panes[ph.pane];
+  $('phTitle').textContent = (w.kind === 'worktree' ? w.project + ' › ' : '') + w.name;
+  $('phSub').textContent = (w.kind === 'worktree' ? '↳ ' + w.branch + '  ' : '') + w.path;
+  $('phTabs').innerHTML = w.panes.map((q, i) => { const u = paneUnseen(q)[0]; return `<button class="tab ${i === ph.pane ? 'on' : ''}" data-tab="${i}" type="button">${esc(q.title)}${u ? ` <span class="${markOf(u)[1]} b">${markOf(u)[0]}</span>` : ''}</button>`; }).join('');
+  if (!p){ $('phBlocks').innerHTML = '<div class="none">Este workspace no tiene paneles.</div>'; $('phActs').hidden = true; $('phChips').innerHTML = ''; $('phIn').disabled = true; return; }
+  $('phIn').disabled = false;
+  const sel = ph.blk && ph.blk.pane === p.id ? ph.blk.idx : null;
+  if (p.prog){
+    $('phBlocks').innerHTML = p.prog.painted && !p.prog.closing ? `<pre class="raw">${esc(rawLines(p).join('\n'))}</pre>` : `<div class="boot"><span class="c-yellow">${SPIN[Math.floor(Date.now() / 110) % SPIN.length]}</span> ${p.prog.closing ? 'cerrando' : 'iniciando'} ${esc(p.prog.name)}…<small>${p.prog.closing ? 'esperando a que termine' : 'toca ■ para cancelar'}</small></div>`;
+    $('phChips').innerHTML = `<span class="c-yellow">◌ ${esc(p.blocks.at(-1).cmd)}</span>`;
+    $('phGo').outerHTML = '<button id="phGo" class="stop" type="button" aria-label="Stop (^C)">■</button>'; $('phActs').hidden = true; return;
+  }
+  $('phBlocks').innerHTML = p.blocks.map((b, i) => b.restart ? `<div class="rs">el daemon se reinició · ${esc(b.restart)}</div>` : `<div class="blk ${phBars(b)} ${sel === i ? 'on' : ''}" data-blk="${i}">
+      <div class="bm"><span>${esc(short(p.cwd))}</span><i class="${b.interrupted ? 'int' : b.code && !b.running ? 'bad' : ''}">${b.interrupted ? 'interrumpido · ' + b.dur : b.running ? 'corriendo ' + b.dur : b.code ? 'salió ' + b.code + ' · ' + b.dur : b.dur}</i></div>
+      <div class="bc">${esc(b.cmd)}</div>
+      <div class="bo">${b.out.map(o => `<span class="${o.c || ''}">${esc(o.t)}</span>`).join('\n')}</div></div>`).join('');
+  const last = p.blocks.at(-1), running = last && last.running;
+  $('phChips').innerHTML = running ? `<span class="c-yellow">◌ ${esc(last.cmd)}</span>` : `<span class="d">${esc(short(p.cwd))}</span>${p.branch ? `<span class="c-mag">⎇ ${esc(p.branch)}</span>` : ''}`;
+  $('phGo').outerHTML = running ? '<button id="phGo" class="stop" type="button" aria-label="Stop (^C)">■</button>' : '<button id="phGo" type="submit" aria-label="Enviar">➤</button>';
+  const acts = $('phActs'); acts.hidden = sel === null;
+  acts.innerHTML = ['Comando|c', 'Salida|o', 'Repetir|r'].map(x => `<button type="button" data-act="${x.split('|')[1]}">${x.split('|')[0]}</button>`).join('');
+  const bl = $('phBlocks'); bl.scrollTop = bl.scrollHeight;
+}
+$('ph').addEventListener('click', e => {
+  const w = model.ws[ui.sel], t = e.target.closest('[data-tab],[data-blk],[data-act],#phGo.stop'); if (!t) return;
+  const p = w.panes[ph.pane];
+  if (t.dataset.tab !== undefined){ ph.pane = +t.dataset.tab; ph.blk = null; w.panes[ph.pane].att.forEach(a => seen[a.kind + a.rev] = true); }
+  else if (t.dataset.blk !== undefined){ ph.blk = {pane:p.id, idx:+t.dataset.blk}; p.att.forEach(a => seen[a.kind + a.rev] = true); }
+  else if (t.dataset.act){ const b = p.blocks[ph.blk.idx]; if (t.dataset.act === 'r') runCmd(p, b.cmd); ui.msg = t.dataset.act === 'c' ? 'comando copiado' : t.dataset.act === 'o' ? 'salida copiada' : 'repetido: ' + b.cmd; setTimeout(() => { ui.msg = ''; draw(); }, 1500); ph.blk = null; }
+  else if (t.id === 'phGo'){ const b = p.blocks.at(-1); if (b && b.running){ b.running = false; b.code = 130; b.dur = '^C'; b.out.push({t:'^C', c:'d'}); } }
+  draw();
+});
+$('phForm').addEventListener('submit', e => { e.preventDefault(); const w = model.ws[ui.sel], p = w.panes[ph.pane], v = $('phIn').value.trim(); if (p && v){ runCmd(p, v); $('phIn').value = ''; p.att.forEach(a => seen[a.kind + a.rev] = true); draw(); } });
+/* ---- behaviour ---- */
+const openWs = (w, focus) => { ui.open = w.id; ui.focus = focus ?? 0; const p = w.panes[ui.focus]; if (p) p.att.forEach(a => seen[a.kind + a.rev] = true); w.att.forEach(a => seen[a.kind + a.rev] = true); };
+function key(k){
+  const w = model.ws[ui.sel];
+  if (ui.avisos){
+    const items = model.ws.flatMap(x => unseen(wsAtt(x)).map(a => ({w:x, a})));
+    if (k === 'j') ui.av = Math.min(ui.av + 1, items.length - 1); else if (k === 'k') ui.av = Math.max(ui.av - 1, 0);
+    else if (k === 'Escape' || k === 'a') ui.avisos = false;
+    else if (k === 'Enter' && items[ui.av]){ const {w:x, a} = items[ui.av]; ui.avisos = false; ui.sel = model.ws.indexOf(x); const i = x.panes.findIndex(p => p.id === a.node); openWs(x, i < 0 ? 0 : i); }
+  } else if (k === 'j'){ ui.sel = Math.min(ui.sel + 1, model.ws.length - 1); ui.open = null; }
+  else if (k === 'k'){ ui.sel = Math.max(ui.sel - 1, 0); ui.open = null; }
+  else if (k === 'Enter') openWs(w);
+  else if ((k === 'l' || k === 'Tab') && w.panes.length){ if (ui.open !== w.id) openWs(w); else openWs(w, Math.min(ui.focus + 1, w.panes.length - 1)); }
+  else if (k === 'h' && w.panes.length && ui.open === w.id) openWs(w, Math.max(ui.focus - 1, 0));
+  else if (k === 'a'){ ui.avisos = true; ui.av = 0; }
+  else if (k === 'n'){ document.getElementById('evPane').click(); return; }
+  draw();
+}
+const scr = document.getElementById('scr');
+scr.addEventListener('keydown', e => {
+  if (ui.hl){ ui.hl = null; if (e.key === 'Escape'){ e.preventDefault(); draw(); return; } }
+  if (ui.blk && ['c','o','r','Escape'].includes(e.key)){ e.preventDefault(); const p = cur().panes.find(x => x.id === ui.blk.pane), b = p.blocks[ui.blk.idx];
+    if (e.key === 'Escape') ui.blk = null; else { ui.msg = e.key === 'c' ? 'comando copiado' : e.key === 'o' ? 'salida copiada' : 'repetido: ' + b.cmd; if (e.key === 'r') runCmd(p, b.cmd); setTimeout(() => { ui.msg = ''; draw(); }, 1500); }
+    draw(); return; }
+  if (termShell() && !e.ctrlKey && !e.metaKey && (e.key.length === 1 || ['Backspace','Enter','Escape','Tab'].includes(e.key))){ e.preventDefault(); typeKey(e.key); return; }
+  if (['j','k','h','l','a','n','Enter','Escape','Tab'].includes(e.key)){ e.preventDefault(); key(e.key); } });
+/* The mouse selects text: press in the output of a pane, drag, and what the drag covers is lit with the colour that shows best on
+   the theme and copied when the button is let go. A drag past the top or bottom of the pane scrolls it. A press with no drag is
+   the click it was. The selection stays lit until the next press, a key or esc, so what was copied can be seen. */
+const cellOf = e => { const r = scr.getBoundingClientRect(); return {cx:Math.floor((e.clientX - r.left) / (r.width / COLS)), cy:Math.floor((e.clientY - r.top) / (r.height / ROWS))}; };
+const rowFor = (pane, cy) => ui.rows.find(r => r.pane === pane && r.y === cy);
+const pointOf = (r, cx) => ({l:r.line, c:Math.max(0, Math.min([...r.text].length - 1, cx - r.x))});
+let drag = null, scrollTimer = null;
+scr.addEventListener('mousedown', e => { if (e.button !== 0) return; const {cx, cy} = cellOf(e); ui.dragged = false; const had = ui.hl; ui.hl = null;
+  const r = ui.rows.find(r => cy === r.y && cx >= r.x && cx < r.x + r.w);
+  drag = r ? {pane:r.pane, a:pointOf(r, cx), moved:false} : null; if (had) draw(); });
+scr.addEventListener('mousemove', e => { if (!drag || !(e.buttons & 1)) return; const {cx, cy} = cellOf(e); const rows = ui.rows.filter(r => r.pane === drag.pane); if (!rows.length) return;
+  const first = rows[0], last = rows[rows.length - 1], p = cur().panes.find(q => q.id === drag.pane);
+  clearInterval(scrollTimer);
+  if (cy < first.top || cy > first.bottom){ const up = cy < first.top; // past the edge: scroll while the button is held
+    scrollTimer = setInterval(() => { p.scroll = Math.max(0, (p.scroll || 0) + (up ? 1 : -1)); const rs = ui.rows.filter(r => r.pane === drag.pane), edge = up ? rs[0] : rs[rs.length - 1]; if (edge){ ui.hl = {pane:drag.pane, a:drag.a, b:pointOf(edge, up ? edge.x : edge.x + edge.w)}; } draw(); }, 60); }
+  const r = rowFor(drag.pane, cy) || (cy < first.y ? first : last), pt = pointOf(r, cy < first.y ? r.x : cy > last.y ? r.x + r.w : cx);
+  if (pt.l !== drag.a.l || pt.c !== drag.a.c || drag.moved){ drag.moved = true; ui.hl = {pane:drag.pane, a:drag.a, b:pt}; draw(); } });
+window.addEventListener('mouseup', e => { clearInterval(scrollTimer); if (!drag) return; const d = drag; drag = null; if (!d.moved || !ui.hl) return; ui.dragged = true;
+  const p = cur().panes.find(q => q.id === d.pane), text = selectedText(p, ui.hl);
+  try { navigator.clipboard.writeText(text).catch(() => {}); } catch (_) {}
+  const n = text ? text.split('\n').length : 0; ui.msg = text ? 'copiado · ' + n + (n === 1 ? ' línea' : ' líneas') + ' · ' + [...text].length + ' caracteres' : '';
+  clearTimeout(ui.msgT); ui.msgT = setTimeout(() => { ui.msg = ''; draw(); }, 2200); draw(); });
+/* What the drag covered, as text: the command and output lines between its ends, the first from where it began and the last to where it ended. */
+function selectedText(p, hl){ const a = hl.a, b = hl.b, f = a.l < b.l || a.l === b.l && a.c <= b.c, from = f ? a : b, to = f ? b : a;
+  // the same lines as drawShell lists, a header before each command, so the indexes match
+  const lines = []; p.blocks.forEach(blk => { if (blk.restart){ lines.push({kind:'rs', t:''}); return; } lines.push({kind:'head', t:''}); lines.push({kind:'cmd', t:'❯ ' + blk.cmd}); blk.out.forEach(o => lines.push({kind:'out', t:o.t})); lines.push({kind:'gap', t:''}); });
+  const out = []; for (let l = from.l; l <= to.l && l < lines.length; l++){ const ln = lines[l]; if (ln.kind !== 'cmd' && ln.kind !== 'out') continue; const ch = [...ln.t], i0 = l === from.l ? from.c : 0, i1 = l === to.l ? to.c + 1 : ch.length;
+    let t = ch.slice(i0, i1).join(''); if (ln.kind === 'cmd' && i0 < 2) t = [...t].slice(Math.max(0, 2 - i0)).join(''); out.push(t); }
+  return out.join('\n'); }
+scr.addEventListener('click', e => { scr.focus(); if (ui.dragged){ ui.dragged = false; return; } const r = scr.getBoundingClientRect(), cw = r.width / COLS, ch = r.height / ROWS, cx = Math.floor((e.clientX - r.left) / cw), cy = Math.floor((e.clientY - r.top) / ch);
+  if (cx < 27 && cy >= 2 && cy - 2 < model.ws.length && !ui.avisos){ ui.sel = cy - 2; ui.open = null; ui.blk = null; draw(); return; }
+  const h = ui.hits.find(h => cx >= h.x && cx < h.x + h.w && cy >= h.y && cy < h.y + h.rows);
+  if (h){ const w = cur(), i = w.panes.findIndex(p => p.id === h.pane); openWs(w, i); ui.blk = {pane:h.pane, idx:h.blk}; draw(); } });
+scr.addEventListener('wheel', e => { const {cx, cy} = cellOf(e); const r = ui.rows.find(r => cy >= r.top && cy <= r.bottom && cx >= r.x && cx < r.x + r.w); if (!r) return; const p = cur().panes.find(q => q.id === r.pane); e.preventDefault(); p.scroll = Math.max(0, (p.scroll || 0) + (e.deltaY < 0 ? 3 : -3)); draw(); }, {passive:false});
+const cur = () => model.ws[ui.sel], paneOf = () => { const w = cur(); return ui.open === w.id ? w.panes[ui.focus] : w.panes[0]; };
+document.getElementById('evFail').onclick = () => { const p = paneOf(); if (p){ p.att = p.att.filter(a => a.kind !== 'shell_done'); p.att.push({kind:'shell_done', pane:p.id, exit:2, rev:++rev}); p.lines = [...p.lines.slice(0, -1), 'error: test failed', p.lines.at(-1)]; draw(); } };
+document.getElementById('evOk').onclick = () => { const p = paneOf(); if (p){ p.att = p.att.filter(a => a.kind !== 'shell_done'); p.att.push({kind:'shell_done', pane:p.id, exit:0, rev:++rev}); draw(); } };
+document.getElementById('evPerm').onclick = () => { const p = paneOf(); if (p){ p.att = p.att.filter(a => a.kind !== 'permission'); p.att.push({kind:'permission', pane:p.id, rev:++rev}); draw(); } };
+document.getElementById('evPane').onclick = () => { const w = cur(); w.panes.push({id:'p' + (++rev), title:'zsh', lines:['~ ❯ '], att:[]}); draw(); };
+document.getElementById('evClaude').onclick = () => { const p = shellPane(); if (p && !p.prog){ startClaude(p); draw(); } };
+document.getElementById('evClaudeEnd').onclick = () => { const p = shellPane(), b = p && p.blocks.at(-1); if (p && p.prog && !p.prog.closing){
+  // claude leaves its screen at once (the shell's own screen is back under it) and takes about a second to finish: that second says «cerrando».
+  const ui_ = p.prog.painted ? p.prog.ui : []; p.prog.closing = true;
+  const spin = setInterval(() => { if (p.prog && p.prog.closing) draw(); else clearInterval(spin); }, 110);
+  setTimeout(() => { p.prog = null; b.running = false; b.dur = '4.1s'; b.out = ui_.map(t => ({t})); draw(); }, 1400); draw(); } };
+const shellPane = () => { const w = cur(); return w.panes.find(p => p.shell); };
+document.getElementById('evRun').onclick = () => { const p = shellPane(); if (p){ p.blocks.push({cmd:'cargo watch -x test', dur:'12s', code:0, running:true, out:[{t:'[Running cargo test]', c:'d'}]}); draw(); } };
+document.getElementById('evEnd').onclick = () => { const p = shellPane(); const b = p && p.blocks.at(-1); if (b && b.running){ b.running = false; b.dur = '12.4s'; b.out = [{t:'test result: ok. 14 passed', c:'c-green'}]; draw(); } };
+document.getElementById('evRestart').onclick = () => {
+  // The daemon's blocks are saved on disk and come back with it; what was running was cut, and a program on the whole screen is gone.
+  const at = new Date().toTimeString().slice(0, 5);
+  model.ws.forEach(w => w.panes.forEach(p => { if (!p.shell) return; const b = p.blocks.at(-1);
+    if (b && b.running && !b.restart){ b.running = false; b.interrupted = true; }
+    p.prog = null; if (b && !b.restart || !b) p.blocks.push({restart:at}); }));
+  draw(); };
+const THEMES = [
+  {n:'Dark · One', bg:'#282c34', panel:'#21252b', fg:'#abb2bf', dim:'#5c6370', line:'#3e4451', sel:'#2c313a', blue:'#61afef', green:'#98c379', yellow:'#e5c07b', red:'#e06c75', magenta:'#c678dd', cyan:'#56b6c2'},
+  {n:'Dark · Gruvbox', bg:'#282828', panel:'#1d2021', fg:'#ebdbb2', dim:'#7c6f64', line:'#3c3836', sel:'#32302f', blue:'#83a598', green:'#b8bb26', yellow:'#fabd2f', red:'#fb4934', magenta:'#d3869b', cyan:'#8ec07c'},
+  {n:'Light · Paper', bg:'#fafafa', panel:'#f0f0f0', fg:'#383a42', dim:'#9a9ca3', line:'#d4d4d8', sel:'#e8e8ec', blue:'#4078f2', green:'#50a14f', yellow:'#c18401', red:'#e45649', magenta:'#a626a4', cyan:'#0184bc'},
+  {n:'Light · Solarized', bg:'#fdf6e3', panel:'#eee8d5', fg:'#586e75', dim:'#93a1a1', line:'#d6cfb7', sel:'#f2ebd3', blue:'#268bd2', green:'#859900', yellow:'#b58900', red:'#dc322f', magenta:'#d33682', cyan:'#2aa198'},
+];
+const lum = h => { const c = [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16) / 255).map(v => v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
+const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+/* The highlight is the colour of the theme that shows best against its ground, with the text in the ground or the text colour, whichever reads best on it. */
+function highlightOf(t){ const names = ['blue', 'green', 'yellow', 'red', 'magenta', 'cyan'], best = names.map(k => [k, t[k]]).sort((a, b) => contrast(b[1], t.bg) - contrast(a[1], t.bg))[0];
+  const text = contrast(t.bg, best[1]) >= contrast(t.fg, best[1]) ? t.bg : t.fg; return {name:best[0], bg:best[1], fg:text, ratio:contrast(best[1], t.bg)}; }
+function applyTheme(i){ const t = THEMES[i], root = document.documentElement.style; ['bg','panel','fg','dim','line','sel','blue','green','yellow','red','magenta','cyan'].forEach(k => root.setProperty('--' + k, t[k]));
+  const h = highlightOf(t); root.setProperty('--hl', h.bg); root.setProperty('--hlfg', h.fg); document.getElementById('hlinfo').textContent = 'highlight: ' + h.name + ' ' + h.bg + ' (' + h.ratio.toFixed(1) + ':1 on the ground)'; draw(); }
+document.getElementById('theme').innerHTML = THEMES.map((t, i) => `<option value="${i}">${t.n}</option>`).join('');
+document.getElementById('theme').onchange = e => applyTheme(+e.target.value);
+document.getElementById('evReset').onclick = () => { reset(); draw(); };
+document.getElementById('size').onchange = e => { [COLS, ROWS] = e.target.value.split('x').map(Number); draw(); };
+reset(); applyTheme(0);
+})();
+</script>

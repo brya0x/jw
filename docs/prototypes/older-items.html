@@ -1,0 +1,240 @@
+<title>jwn Items anteriores</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Terminal-first, the same character grid and colours as conversation-fidelity.html. Two clients (terminal, phone) each keep their own window of the conversation. */
+:root{
+  --bg:#282c34; --panel:#21252b; --fg:#abb2bf; --dim:#5c6370; --line:#3e4451; --sel:#2c313a;
+  --blue:#61afef; --green:#98c379; --yellow:#e5c07b; --red:#e06c75; --magenta:#c678dd; --cyan:#56b6c2;
+  --page:#16181d; --ink:#c3c9d4; --mut:#7d8594;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}}
+:root[data-theme="light"]{--page:#ecebe8;--ink:#2c313a;--mut:#6b7280;color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.55 'IBM Plex Sans',system-ui,sans-serif;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px}
+.wrap{max-width:1400px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
+h1{font:600 20px/1.2 var(--mono);margin:0}
+h2{font:600 12px var(--mono);margin:0;color:var(--mut)}
+p{margin:0;max-width:80ch;color:var(--mut)}
+.bar{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center}
+.grp{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.grp>span{font:12px var(--mono);color:var(--mut)}
+button{font:12px var(--mono);color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;min-height:32px;cursor:pointer}
+button:hover{border-color:var(--blue)}
+button[aria-pressed=true]{background:var(--blue);color:var(--panel);border-color:var(--blue);font-weight:700}
+label.chk{font:12px var(--mono);color:var(--ink);display:flex;gap:6px;align-items:center;min-height:32px}
+:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+.stage{display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap}
+.col{flex:1 1 640px;min-width:0;display:flex;flex-direction:column;gap:8px}
+.side{flex:0 0 auto;width:100%;max-width:376px;margin-inline:auto;display:flex;flex-direction:column;gap:8px}
+.hint{font:12px var(--mono);color:var(--mut)}
+/* terminal */
+.term{background:var(--bg);border:1px solid var(--line);border-radius:8px;overflow:hidden;display:flex;flex-direction:column;height:560px}
+.term .scroll{flex:1;min-height:0;overflow:auto;font:13px/1.25 var(--mono);color:var(--fg);padding:6px 0}
+.term .foot{border-top:1px solid var(--line);background:var(--panel);padding:4px 10px;font:12px var(--mono);color:var(--dim);display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.ln{display:flex;white-space:pre;min-height:1.25em}
+.ln .g{width:6ch;flex:none;text-align:right;color:var(--dim);padding-right:1ch;opacity:.7}
+.ln .t{flex:1;min-width:0;white-space:pre-wrap;word-break:break-word}
+.ln.user{background:var(--sel)}
+.ln.top,.ln.fold{cursor:pointer}
+.ln.top:hover .t,.ln.fold:hover .t{background:var(--sel)}
+.b{font-weight:700}.dim{color:var(--dim)}.blue{color:var(--blue)}.green{color:var(--green)}.yellow{color:var(--yellow)}.red{color:var(--red)}.cyan{color:var(--cyan)}
+/* phone */
+.phone{width:100%;height:700px;background:var(--bg);border:1px solid var(--line);border-radius:28px;padding:10px;box-shadow:0 0 0 6px var(--panel);display:flex;flex-direction:column}
+.ph{flex:1;min-height:0;background:var(--bg);border-radius:20px;overflow:hidden;display:flex;flex-direction:column;font:13px/1.45 var(--mono);color:var(--fg)}
+.ph .hd{background:var(--panel);border-bottom:1px solid var(--line);padding:8px 12px;min-height:52px;display:flex;flex-direction:column;justify-content:center}
+.ph .hd b{font-size:14px}.ph .hd span{font-size:11px;color:var(--dim)}
+.ph .scroll{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:8px;padding:8px 0}
+.ph .it{padding:0 12px;word-break:break-word}
+.ph .it.user{background:var(--sel);padding-block:6px}
+.ph .it.top,.ph .it.fold{min-height:48px;display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--dim)}
+.ph .foot{border-top:1px solid var(--line);background:var(--panel);padding:6px 12px;font-size:11px;color:var(--dim)}
+.notes{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
+.notes div{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;color:var(--fg);font:12px/1.55 var(--mono)}
+.notes b{color:var(--yellow)}
+.rec{color:var(--green)}
+</style>
+
+<div class="wrap">
+  <h1>jwn · Items anteriores</h1>
+  <p>Hoy cada cliente ve los últimos 300 items de una conversación y no puede ir más atrás. Aquí se prueba cómo subir y cargar lo anterior: <b>sube hasta arriba</b> en la terminal o en el teléfono. Cada cliente guarda su propia ventana; cargar en uno no cambia el otro.</p>
+
+  <div class="bar" role="group" aria-label="Opciones del prototipo">
+    <div class="grp"><span>cuándo carga</span>
+      <button id="m-auto" aria-pressed="true">al llegar arriba</button>
+      <button id="m-tap" aria-pressed="false">con un toque en la fila ▲</button></div>
+    <div class="grp"><span>por carga</span>
+      <button class="n" data-n="50" aria-pressed="false">50</button>
+      <button class="n" data-n="100" aria-pressed="true">100</button>
+      <button class="n" data-n="200" aria-pressed="false">200</button></div>
+    <label class="chk"><input type="checkbox" id="fail"> el archivo no se puede leer</label>
+    <label class="chk"><input type="checkbox" id="nums" checked> números de item</label>
+    <button id="reset">reiniciar</button>
+  </div>
+
+  <div class="stage">
+    <div class="col">
+      <h2>TERMINAL · rueda del ratón o PgUp</h2>
+      <div class="term"><div class="scroll" id="t-scroll" tabindex="0" aria-label="Conversación en la terminal"></div><div class="foot" id="t-foot"></div></div>
+      <div class="hint">La fila de arriba mide una línea. Al cargar, el item que mirabas se queda donde estaba.</div>
+    </div>
+    <div class="side">
+      <h2>TELÉFONO · desliza hacia abajo</h2>
+      <div class="phone"><div class="ph"><div class="hd"><b>arregla el test que falla</b><span id="p-sub">conversación con archivo</span></div><div class="scroll" id="p-scroll" aria-label="Conversación en el teléfono"></div><div class="foot" id="p-foot"></div></div></div>
+    </div>
+  </div>
+
+  <h2>LO QUE CAMBIA</h2>
+  <div class="notes">
+    <div><b>Cómo se pide.</b> Un comando <kbd>read_older</kbd> con el item desde el que se quiere y cuántos. El daemon lee ese tramo del archivo de Claude y lo contesta; el nodo no cambia ni crece. Los demás clientes no reciben nada: el teléfono por el túnel no paga lo que carga la terminal.</div>
+    <div><b>Cuánto pesa.</b> Unos 50 KB por cada 100 items. En un cliente que cargó 1.000 anteriores son unos 500 KB en memoria; no se guarda en disco. Tope propuesto: 3.000 items por cliente, y la fila de arriba dice «más antiguo en el archivo».</div>
+    <div><b>Una hilera de herramientas cortada.</b> Si el límite de la ventana cae en medio de una hilera plegada, al cargar la hilera crece («ejecutó 2 comandos» pasa a «ejecutó 3») y sigue abierta o cerrada como estaba. Pruébalo: la ventana empieza en medio de una.</div>
+    <div><b>Qué conversaciones.</b> Todas las que tienen archivo de Claude: las que jwn lleva y las que solo sigue. Una conversación guardada por jwn sin archivo no tiene nada anterior y no muestra la fila.</div>
+    <div><b>Copiar y elegir.</b> Los items cargados cuentan igual: copiar un turno, elegir un item y las teclas de ir de uno a otro funcionan con su número, que no cambia.</div>
+    <div><b>Si falla.</b> La fila dice «no se pudo leer el archivo» y un toque reintenta. No borra lo que ya estaba cargado. Marca la casilla de arriba para verlo.</div>
+  </div>
+  <h2>PARA DECIDIR</h2>
+  <div class="notes">
+    <div><b>1 · cuándo cargar.</b> <span class="rec">Recomiendo al llegar arriba</span>: es lo que hace Claude Code, y no hay que pensar en ello. Con un toque cuesta un gesto de más y el teléfono puede cargar sin querer si se desliza rápido hasta el final.</div>
+    <div><b>2 · cuánto por carga.</b> <span class="rec">100</span>: unos 0,1 s de lectura y un salto que se ve poco. 50 se queda corto; 200 tarda más en conversaciones con salidas largas.</div>
+    <div><b>3 · por el comando o por el nodo.</b> <span class="rec">Por el comando</span>: hacer crecer el nodo para todos mandaría esos 50 KB a cada cliente aunque no suba.</div>
+  </div>
+</div>
+
+<script>
+const TOTAL = 1240, START = 300, CAP = 3000;
+let mode = 'auto', per = 100, fail = false, nums = true;
+
+/* The conversation: nine items for each turn (the person, Claude, five tools, Claude, the end of the turn). */
+const ASKS = ['arregla el test que falla en auth::expired','por qué tarda tanto el login','añade un caso para el token vacío','revisa el diff antes de subirlo','renombra verify a check_token','corre los tests del módulo'];
+const SAYS = ['Voy a mirar el test y el código que prueba.','El fallo es el reloj: el token expira a los 30 minutos y verify() no lo mira.','Cambio la comparación y vuelvo a correr los tests.','Listo: pasan los 14 tests del módulo.'];
+const TOOLS = [['Read','src/auth.rs','r'],['Grep','expired','s'],['Bash','cargo test auth','c'],['Read','src/clock.rs','r'],['Bash','cargo clippy','c']];
+function item(i){
+  const turn = Math.floor((i - 1) / 9), k = (i - 1) % 9;
+  if (k === 0) return {i, kind:'user', text: ASKS[turn % ASKS.length]};
+  if (k === 1) return {i, kind:'text', text: SAYS[turn % 3]};
+  if (k >= 2 && k <= 6) { const t = TOOLS[k - 2]; return {i, kind:'tool', name:t[0], arg:t[1], cls:t[2]}; }
+  if (k === 7) return {i, kind:'text', text: SAYS[3]};
+  return {i, kind:'result', text: 'Listo en ' + (20 + turn % 40) + ' s · 5 herramientas'};
+}
+function fold(run){
+  const n = {s:0, r:0, c:0};
+  run.forEach(t => n[t.cls]++);
+  const parts = [];
+  if (n.s) parts.push((parts.length ? '' : 'Buscó ') + n.s + (n.s === 1 ? ' patrón' : ' patrones'));
+  if (n.r) parts.push((parts.length ? 'leyó ' : 'Leyó ') + n.r + (n.r === 1 ? ' archivo' : ' archivos'));
+  if (n.c) parts.push((parts.length ? 'ejecutó ' : 'Ejecutó ') + n.c + (n.c === 1 ? ' comando' : ' comandos'));
+  return parts.join(', ');
+}
+const fmt = n => n.toLocaleString('es');
+
+function makeView(sc, foot, phone){
+  const s = {lo: TOTAL - START + 1, loading: false, error: false, open: new Set(), timer: 0, sc, foot};
+  function rowsOf(){
+    const out = [];
+    let top;
+    if (s.lo <= 1) top = {k:'top', html:'── inicio de la conversación · ' + fmt(TOTAL) + ' items ──', cls:'dim', static:true};
+    else if (s.loading) top = {k:'top', html:'✻ cargando ' + Math.min(per, s.lo - 1) + ' anteriores…', cls:'yellow', static:true};
+    else if (s.error) top = {k:'top', html:'✗ no se pudo leer el archivo · pulsa para reintentar', cls:'red'};
+    else if (s.lo - 1 > CAP) top = {k:'top', html:'── más antiguo en el archivo de Claude ──', cls:'dim', static:true};
+    else top = {k:'top', html:'▲ ' + fmt(s.lo - 1) + ' anteriores · ' + (mode === 'auto' ? 'sube para cargar ' : 'pulsa para cargar ') + Math.min(per, s.lo - 1), cls:'dim'};
+    out.push(top);
+    let run = [];
+    const flush = () => {
+      if (!run.length) return;
+      const open = run.some(t => s.open.has(t.i));
+      out.push({k:'fold', i: run[0].i, run, open});
+      if (open) run.forEach(t => out.push({k:'tool', it:t}));
+      run = [];
+    };
+    for (let i = s.lo; i <= TOTAL; i++) {
+      const it = item(i);
+      if (it.kind === 'tool') { run.push(it); continue; }
+      flush();
+      out.push({k:it.kind, it});
+    }
+    flush();
+    return out;
+  }
+  function draw(){
+    const keep = anchor();
+    s.sc.innerHTML = '';
+    for (const r of rowsOf()) s.sc.appendChild(el(r));
+    restore(keep);
+    const n = TOTAL - s.lo + 1;
+    s.foot.innerHTML = '';
+    s.foot.append('items ' + fmt(s.lo) + '–' + fmt(TOTAL) + ' · ' + fmt(n) + ' de ' + fmt(TOTAL));
+    const kb = document.createElement('span'); kb.textContent = '≈ ' + fmt(Math.round(n / 2)) + ' KB aquí'; s.foot.append(kb);
+  }
+  function el(r){
+    const d = document.createElement('div');
+    if (r.k === 'top') {
+      d.className = (phone ? 'it ' : 'ln ') + 'top';
+      if (phone) d.innerHTML = '<span class="' + r.cls + '">' + r.html + '</span>';
+      else d.innerHTML = '<span class="g"></span><span class="t ' + r.cls + '">' + r.html + '</span>';
+      d.dataset.top = '1';
+      if (!r.static) { d.setAttribute('role','button'); d.tabIndex = 0; d.onclick = () => load(); d.onkeydown = e => { if (e.key === 'Enter') load(); }; }
+      return d;
+    }
+    if (r.k === 'fold') {
+      d.className = (phone ? 'it ' : 'ln ') + 'fold';
+      const txt = (r.open ? '▾ ' : '▸ ') + fold(r.run);
+      d.dataset.i = r.i;
+      if (phone) d.innerHTML = '<span class="dim">' + txt + '</span>';
+      else d.innerHTML = '<span class="g">' + (nums ? r.i : '') + '</span><span class="t dim">  ' + txt + '</span>';
+      d.setAttribute('role','button'); d.tabIndex = 0;
+      const tog = () => { const on = r.run.some(t => s.open.has(t.i)); r.run.forEach(t => on ? s.open.delete(t.i) : s.open.add(t.i)); draw(); };
+      d.onclick = tog; d.onkeydown = e => { if (e.key === 'Enter') tog(); };
+      return d;
+    }
+    const it = r.it; let html = '';
+    d.dataset.i = it.i;
+    if (it.kind === 'user') html = '<span class="b blue">❯ </span>' + it.text;
+    else if (it.kind === 'text') html = '<span class="b">● </span>' + it.text;
+    else if (it.kind === 'tool') html = '<span class="green">  ● </span><span class="b">' + it.name + '</span><span class="dim">(' + it.arg + ')</span>';
+    else html = '<span class="dim">✻ ' + it.text + '</span>';
+    d.className = (phone ? 'it ' : 'ln ') + (it.kind === 'user' ? 'user' : '');
+    if (phone) d.innerHTML = html;
+    else d.innerHTML = '<span class="g">' + (nums ? it.i : '') + '</span><span class="t">' + html + '</span>';
+    return d;
+  }
+  /* the first item in view stays where it was */
+  function anchor(){
+    const box = s.sc.getBoundingClientRect();
+    for (const c of s.sc.children) {
+      if (c.dataset.i && c.getBoundingClientRect().bottom > box.top + 1) return {i: c.dataset.i, off: c.getBoundingClientRect().top - box.top};
+    }
+    return null;
+  }
+  function restore(a){
+    if (!a) { s.sc.scrollTop = s.sc.scrollHeight; return; }
+    const c = [...s.sc.children].find(x => x.dataset.i === a.i);
+    if (c) { const box = s.sc.getBoundingClientRect(); s.sc.scrollTop += (c.getBoundingClientRect().top - box.top) - a.off; }
+  }
+  function load(){
+    if (s.loading || s.lo <= 1 || s.lo - 1 > CAP) return;
+    s.loading = true; s.error = false; draw();
+    s.timer = setTimeout(() => {
+      s.loading = false;
+      if (fail) s.error = true; else s.lo = Math.max(1, s.lo - per);
+      draw();
+    }, 650);
+  }
+  s.sc.addEventListener('scroll', () => { if (mode === 'auto' && s.sc.scrollTop < 40 && !s.loading && !s.error) load(); });
+  s.reset = () => { clearTimeout(s.timer); s.lo = TOTAL - START + 1; s.loading = false; s.error = false; s.open = new Set(); draw(); s.sc.scrollTop = s.sc.scrollHeight; };
+  s.draw = draw;
+  return s;
+}
+
+const views = [makeView(document.getElementById('t-scroll'), document.getElementById('t-foot'), false), makeView(document.getElementById('p-scroll'), document.getElementById('p-foot'), true)];
+function all(f){ views.forEach(f); }
+all(v => { v.reset(); });
+document.getElementById('m-auto').onclick = e => { mode = 'auto'; pressed(); all(v => v.draw()); };
+document.getElementById('m-tap').onclick = e => { mode = 'tap'; pressed(); all(v => v.draw()); };
+function pressed(){ document.getElementById('m-auto').setAttribute('aria-pressed', mode === 'auto'); document.getElementById('m-tap').setAttribute('aria-pressed', mode === 'tap'); }
+document.querySelectorAll('.n').forEach(b => b.onclick = () => { per = +b.dataset.n; document.querySelectorAll('.n').forEach(x => x.setAttribute('aria-pressed', x === b)); all(v => v.draw()); });
+document.getElementById('fail').onchange = e => { fail = e.target.checked; };
+document.getElementById('nums').onchange = e => { nums = e.target.checked; all(v => v.draw()); };
+document.getElementById('reset').onclick = () => all(v => v.reset());
+</script>

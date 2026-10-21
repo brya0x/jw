@@ -1,8 +1,10 @@
-name: CI
+name: ci
 
-# Tests run on the PR, before it can be merged; main isn't tested again.
+# The recipes of the justfile, the same ones `just ci` runs locally.
 on:
   pull_request:
+  push:
+    branches: [main]
 
 permissions:
   contents: read
@@ -13,10 +15,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # jw is unix only, like its runtime: PTYs and a unix socket. Both
-  # flavours: the git tests behave slightly differently on macOS
-  # (/var → /private/var, BSD tools).
-  test:
+  # The daemon owns PTYs and a unix socket, so both flavours run: the tests start real zsh,
+  # bash and fish, and a shell that is not installed is skipped, so they are installed.
+  rust:
     name: test (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -31,6 +32,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: extractions/setup-just@v3
 
+      - name: shells for the tests (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y zsh fish
+
+      - name: shells for the tests (macOS)
+        if: runner.os == 'macOS'
+        run: brew install fish
+
       - name: just fmt-check
         if: runner.os == 'Linux'
         run: just fmt-check
@@ -41,30 +50,10 @@ jobs:
       - name: just test
         run: just test
 
-  # The Android app. Runs only when something it builds from changed (the app,
-  # the wire protocol it mirrors, the recipes, this file); a skipped job counts
-  # as passing for a required check.
-  changes:
-    name: changes
-    runs-on: ubuntu-latest
-    outputs:
-      android: ${{ steps.filter.outputs.android }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          filters: |
-            android:
-              - 'android/**'
-              - 'crates/proto/**'
-              - 'justfile'
-              - '.github/workflows/ci.yml'
-
+  # The Kotlin side: the contract suite on the shared fixtures, the client logic, and the
+  # Compose app built and linted.
   android:
     name: android
-    needs: changes
-    if: needs.changes.outputs.android == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

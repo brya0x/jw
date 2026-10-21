@@ -1,0 +1,8 @@
+{
+  "t": "cmd",
+  "id": "c20",
+  "cmd": {
+    "cmd": "list_worktrees",
+    "repo": "/home/u/code/app"
+  }
+}
