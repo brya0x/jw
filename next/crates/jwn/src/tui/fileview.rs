@@ -502,9 +502,13 @@ impl FileView {
         Some(if a <= b { (a, b) } else { (b, a) })
     }
 
-    /// The text of line `n` as it is shown, its tabs being spaces.
+    /// The text of line `n` as it is shown, its tabs being spaces. An empty file has no line 0.
     fn line_text(&self, n: usize) -> String {
-        self.doc.lines[n].iter().map(|r| r.t.as_str()).collect()
+        self.doc
+            .lines
+            .get(n)
+            .map(|runs| runs.iter().map(|r| r.t.as_str()).collect())
+            .unwrap_or_default()
     }
 
     /// The text the selection covers, line by line, when one is open.
@@ -998,10 +1002,15 @@ impl FileTabs {
         out
     }
 
+    /// The bar is drawn when there are several tabs and the area is big enough for it.
+    fn bar_shown(&self, w: usize, h: usize) -> bool {
+        self.tabs.len() > 1 && w >= 20 && h >= 7
+    }
+
     /// The tab whose name is at (`x`, `y`), when the bar is there.
     pub fn tab_at(&self, rect: (usize, usize, usize, usize), x: usize, y: usize) -> Option<usize> {
-        let (rx, ry, w, _) = rect;
-        if self.tabs.len() < 2 || y != ry || x < rx {
+        let (rx, ry, w, h) = rect;
+        if !self.bar_shown(w, h) || y != ry || x < rx {
             return None;
         }
         self.bar(w)
@@ -1044,7 +1053,7 @@ impl FileTabs {
     /// Draw the bar of tabs, when there are several, and the file that shows under it.
     pub fn draw(&self, g: &mut Grid, rect: (usize, usize, usize, usize)) {
         let (x, y, w, h) = rect;
-        if self.tabs.len() > 1 && w >= 20 && h >= 7 {
+        if self.bar_shown(w, h) {
             g.put(x, y, &" ".repeat(w), Style::default());
             g.paint_bg(x, y, w, look::panel());
             for (at, n, i) in self.bar(w) {
@@ -1799,5 +1808,32 @@ mod tests {
         assert!(none.press(R, 4 + 1, 1));
         none.widen_to_word();
         assert_eq!(none.release(), None, "a blank is no word");
+    }
+
+    /// An empty file has no lines at all (the daemon sends zero for it): the word motions, the
+    /// selection and the double click must not index into them.
+    #[test]
+    fn an_empty_file_stays_at_its_start_under_the_word_motions_and_selection() {
+        let mut v = view(vec![]);
+        screen(&v);
+        for code in [KeyCode::Char('e'), KeyCode::Char('b'), KeyCode::Char('G')] {
+            key(&mut v, code);
+            assert_eq!((v.line, v.col), (0, 0));
+        }
+        key(&mut v, KeyCode::Char('v'));
+        assert!(matches!(key(&mut v, KeyCode::Char('y')), Act::Copy(t) if t.is_empty()));
+        assert!(!v.press(R, 4, 1), "no line to press on");
+        v.widen_to_word();
+        assert_eq!(v.release(), None);
+    }
+
+    /// A bar that is too small to draw is not a bar to click: its row is the file's.
+    #[test]
+    fn a_bar_too_small_to_draw_takes_no_click() {
+        let mut t = FileTabs::new(FileView::new("ws".into(), doc("a.rs", numbered(3))));
+        t.open(FileView::new("ws".into(), doc("b.rs", numbered(3))), false);
+        assert_eq!(t.tab_at((0, 0, 19, 12), 1, 0), None);
+        assert_eq!(t.tab_at((0, 0, 19, 6), 1, 0), None);
+        assert_eq!(t.tab_at((0, 0, 60, 12), 1, 0), Some(0), "the bar is there");
     }
 }
