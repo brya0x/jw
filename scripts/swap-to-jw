@@ -6,12 +6,15 @@
 #
 #   scripts/swap-to-jw           # the plan
 #   scripts/swap-to-jw --run     # do it
+#   scripts/swap-to-jw --run --purge-old   # and delete the old jw's directories instead of keeping them
 #
 # What it does, in this order, and what each step leaves if it stops there:
 #   1. builds jw (a failed build touches nothing)
 #   2. stops the jwn daemon with `jwn stop` (it signals only the pid the daemon recorded, and
 #      the script never kills anything by name or with -9)
-#   3. moves the old jw's state and config to a dated backup (never deletes them)
+#   3. carries the old jw's project files (`match = "<url>"`) to jw/projects under the name the
+#      daemon looks for, then moves the old jw's state and config to a dated backup (with
+#      --purge-old: deletes them; the dated backups made before are never touched)
 #   4. copies the state and config of jwn to the names of jw, without the sockets and pid files
 #   5. installs jw (the old ~/.cargo/bin/jw is kept as jw.old-<stamp>)
 #   6. starts the jw daemon, which restores session.json: every workspace and pane comes back
@@ -29,7 +32,14 @@ home=${SWAP_HOME:-$HOME}
 skip=",${SWAP_SKIP:-},"
 stamp=$(date +%Y%m%d-%H%M%S)
 run=0
-[ "${1:-}" = "--run" ] && run=1
+purge=0
+for arg in "$@"; do
+    case "$arg" in
+        --run) run=1 ;;
+        --purge-old) purge=1 ;;
+        *) echo "unknown argument $arg" >&2; exit 2 ;;
+    esac
+done
 
 old_state=$home/.local/state/jwn
 new_state=$home/.local/state/jw
@@ -78,9 +88,40 @@ else
     echo "would: jwn stop, then wait for the recorded pid to end"
 fi
 
-step "3. keep what is in the way"
+# The name of the personal file of a repository, as `key` in crates/daemon/src/project.rs does.
+project_key() {
+    local url rest host path
+    url=$(printf '%s' "$1" | tr 'A-Z' 'a-z')
+    case "$url" in
+        *://*) rest=${url#*://} ;;
+        *) rest=${url/://} ;;
+    esac
+    host=${rest%%/*}
+    path=${rest#*/}
+    host=${host##*@}
+    path=${path%/}
+    path=${path%.git}
+    printf '%s' "$host/$path" | sed -e 's#[^a-z0-9./-]#-#g' -e 's#/#_#g'
+}
+
+step "3. what is in the way: the old jw's project files, its state and its config"
+if [ -d "$new_config" ]; then
+    for f in "$new_config"/*.toml; do
+        [ -f "$f" ] || continue
+        url=$(sed -nE 's/^match[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$f" | head -1)
+        [ -n "$url" ] || continue
+        key=$(project_key "$url")
+        echo "project file $(basename "$f") -> projects/$key.toml"
+        if [ "$run" = 1 ]; then
+            mkdir -p "$home/.jw-swap-projects.$stamp"
+            cp -p "$f" "$home/.jw-swap-projects.$stamp/$key.toml"
+        fi
+    done
+fi
 for dir in "$new_state" "$new_config"; do
-    if [ -e "$dir" ]; then doing mv "$dir" "$dir.backup-$stamp"; else echo "nothing at $dir"; fi
+    if [ ! -e "$dir" ]; then echo "nothing at $dir"
+    elif [ "$purge" = 1 ]; then doing rm -rf "$dir"
+    else doing mv "$dir" "$dir.backup-$stamp"; fi
 done
 
 step "4. carry jwn's state and config over to jw's"
@@ -89,10 +130,17 @@ for f in jwn.sock jwn.pid tunnel.pid link-port; do doing rm -f "$new_state/$f"; 
 # The scripts of the shell integration are written again by the daemon that starts.
 doing rm -rf "$new_state/shell"
 if [ -d "$old_config" ]; then doing cp -a "$old_config" "$new_config"; else echo "no $old_config"; fi
+if [ -d "$home/.jw-swap-projects.$stamp" ]; then
+    doing mkdir -p "$new_config/projects"
+    for f in "$home/.jw-swap-projects.$stamp"/*.toml; do
+        [ -e "$new_config/projects/$(basename "$f")" ] || doing cp -p "$f" "$new_config/projects/"
+    done
+    doing rm -rf "$home/.jw-swap-projects.$stamp"
+fi
 
 step "5. install jw"
 if skipped install; then echo "skipped"; else
-    if [ -e "$cargo_bin/jw" ]; then doing cp -p "$cargo_bin/jw" "$cargo_bin/jw.old-$stamp"; fi
+    if [ -e "$cargo_bin/jw" ] && [ "$purge" = 0 ]; then doing cp -p "$cargo_bin/jw" "$cargo_bin/jw.old-$stamp"; fi
     (cd "$root" && doing cargo install --path crates/jw --locked)
 fi
 
