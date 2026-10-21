@@ -165,8 +165,18 @@ pub fn reap_leftovers(dir: &Path) {
     }
 }
 
+/// Whether `pgid` may be ended by `kill -- -pgid`: not 0 (the caller's own group), not 1 (init's),
+/// not the daemon's own group, and not a number that a signed pid cannot hold, since `-pgid` would
+/// name another group or every process.
+fn may_end(pgid: u32, own: u32) -> bool {
+    pgid > 1 && pgid <= i32::MAX as u32 && pgid != own
+}
+
 /// End a process group by the number the daemon recorded when it started it, and nothing else.
 fn kill_group(pgid: u32) {
+    if !may_end(pgid, std::process::id()) {
+        return;
+    }
     let _ = Command::new("/bin/kill")
         .args(["-s", "KILL", "--", &format!("-{pgid}")])
         .stdout(Stdio::null())
@@ -329,63 +339,89 @@ fn start(shared: &Shared, pane: &Id, generation: u64, plan: Plan) -> Result<Engi
     let pid = child.id();
     // Its group is written down until the engine ends, so a daemon that is killed leaves it for the next.
     let dir = shared.lock().conv_dir.clone();
-    if let Some(dir) = &dir {
-        let _ = std::fs::create_dir_all(dir);
-        let _ = std::fs::write(group_file(dir, pane, pid), pid.to_string());
-    }
-    let stdin = child.stdin.take().ok_or("no input")?;
-    let stdout = child.stdout.take().ok_or("no output")?;
-    let stderr = child.stderr.take().ok_or("no error output")?;
+    let note = dir.map(|dir| {
+        let _ = std::fs::create_dir_all(&dir);
+        let path = group_file(&dir, pane, pid);
+        let _ = std::fs::write(&path, pid.to_string());
+        path
+    });
+    let (Some(stdin), Some(stdout), Some(stderr)) =
+        (child.stdin.take(), child.stdout.take(), child.stderr.take())
+    else {
+        abandon(&mut child, pid, note.as_deref());
+        return Err("the engine has no pipes".into());
+    };
 
-    let (tx, rx) = mpsc::channel::<Out>();
-    thread::Builder::new()
-        .name("engine-in".into())
-        .spawn(move || {
-            let mut stdin = stdin;
-            for out in rx {
-                match out {
-                    Out::Line(l) => {
-                        if writeln!(stdin, "{l}").and_then(|()| stdin.flush()).is_err() {
-                            break;
+    // Until `read_loop` owns the child, a step that fails ends the engine and its note here.
+    let attached = (move || -> Result<(Sender<Out>, Feed), String> {
+        let (tx, rx) = mpsc::channel::<Out>();
+        thread::Builder::new()
+            .name("engine-in".into())
+            .spawn(move || {
+                let mut stdin = stdin;
+                for out in rx {
+                    match out {
+                        Out::Line(l) => {
+                            if writeln!(stdin, "{l}").and_then(|()| stdin.flush()).is_err() {
+                                break;
+                            }
                         }
+                        Out::Close => break,
                     }
-                    Out::Close => break,
                 }
-            }
-        })
-        .map_err(|e| e.to_string())?;
+            })
+            .map_err(|e| e.to_string())?;
 
-    let feed = Feed {
-        shared: shared.clone(),
-        pane: pane.clone(),
-        generation,
-        pid,
-        tail: Arc::default(),
-        dirty: Arc::new(AtomicBool::new(false)),
-        alive: Arc::new(AtomicBool::new(true)),
-        exited: Arc::new(AtomicBool::new(false)),
-        live_len: Arc::new(AtomicUsize::new(0)),
+        let feed = Feed {
+            shared: shared.clone(),
+            pane: pane.clone(),
+            generation,
+            pid,
+            tail: Arc::default(),
+            dirty: Arc::new(AtomicBool::new(false)),
+            alive: Arc::new(AtomicBool::new(true)),
+            exited: Arc::new(AtomicBool::new(false)),
+            live_len: Arc::new(AtomicUsize::new(0)),
+        };
+        let tail = feed.tail.clone();
+        thread::Builder::new()
+            .name("engine-err".into())
+            .spawn(move || {
+                for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                    let mut q = tail.lock().unwrap_or_else(|p| p.into_inner());
+                    q.push_back(line);
+                    if q.len() > 20 {
+                        q.pop_front();
+                    }
+                }
+            })
+            .map_err(|e| e.to_string())?;
+        show_loop(&feed)?;
+        Ok((tx, feed))
+    })();
+    let (tx, feed) = match attached {
+        Ok(attached) => attached,
+        Err(e) => {
+            abandon(&mut child, pid, note.as_deref());
+            return Err(e);
+        }
     };
     let exited = feed.exited.clone();
-    let tail = feed.tail.clone();
-    thread::Builder::new()
-        .name("engine-err".into())
-        .spawn(move || {
-            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                let mut q = tail.lock().unwrap_or_else(|p| p.into_inner());
-                q.push_back(line);
-                if q.len() > 20 {
-                    q.pop_front();
-                }
-            }
-        })
-        .map_err(|e| e.to_string())?;
-    show_loop(&feed)?;
     thread::Builder::new()
         .name("engine-out".into())
         .spawn(move || read_loop(&feed, child, stdout))
         .map_err(|e| e.to_string())?;
     Ok(Engine { tx, pid, exited })
+}
+
+/// End an engine that `start` could not hand to its readers: its group, then the child itself, which
+/// is still unreaped (so its number is not reused yet), and the note that names its group.
+fn abandon(child: &mut Child, pid: u32, note: Option<&Path>) {
+    kill_group(pid);
+    let _ = child.wait();
+    if let Some(note) = note {
+        let _ = std::fs::remove_file(note);
+    }
 }
 
 /// Show the text that streams at most every `SHOW_EVERY`: the reader marks it and this refreshes.
@@ -1550,5 +1586,19 @@ mod tests {
         let off = ["--prompt-suggestions".to_owned(), "false".to_owned()];
         assert!(suggestions_args(&off).is_empty());
         assert!(suggestions_args(&["--prompt-suggestions=false".to_owned()]).is_empty());
+    }
+
+    /// REQ-638: only a group of another process that a signed pid can name is ended; 0 and 1 and the
+    /// daemon's own group are not, and neither is a number that `-pgid` would read as another group.
+    #[test]
+    fn only_a_group_of_another_process_that_a_pid_can_name_is_ended() {
+        let own = 4242;
+        assert!(may_end(9001, own));
+        assert!(may_end(i32::MAX as u32, own));
+        assert!(!may_end(0, own));
+        assert!(!may_end(1, own));
+        assert!(!may_end(own, own));
+        assert!(!may_end(i32::MAX as u32 + 1, own));
+        assert!(!may_end(u32::MAX, own));
     }
 }

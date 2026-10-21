@@ -331,23 +331,13 @@ impl Viewer {
         };
         let geo = self.geo(rect);
         let layout = self.layout(geo.text_w);
-        let Some((from, to)) = layout
+        let Some((a, b)) = layout
             .rows
             .get(anchor.line)
-            .and_then(|r| select::word_at(&r.text(), anchor.col))
+            .and_then(|r| select::word_span(anchor.line, &r.text(), anchor.col))
         else {
             return;
         };
-        let (a, b) = (
-            select::Point {
-                line: anchor.line,
-                col: from,
-            },
-            select::Point {
-                line: anchor.line,
-                col: to,
-            },
-        );
         if let Some(pull) = self.pull.as_mut() {
             pull.anchor = a;
             pull.moved = true;

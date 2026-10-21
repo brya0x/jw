@@ -2733,22 +2733,12 @@ impl Ui {
             return;
         };
         let lines = self.lines(conv, iw - 2);
-        let Some((from, to)) = lines
+        let Some((a, b)) = lines
             .get(anchor.line)
-            .and_then(|l| select::word_at(&l.text(), anchor.col))
+            .and_then(|l| select::word_span(anchor.line, &l.text(), anchor.col))
         else {
             return;
         };
-        let (a, b) = (
-            select::Point {
-                line: anchor.line,
-                col: from,
-            },
-            select::Point {
-                line: anchor.line,
-                col: to,
-            },
-        );
         if let Some(pull) = self.pull.as_mut() {
             pull.anchor = a;
             pull.moved = true;

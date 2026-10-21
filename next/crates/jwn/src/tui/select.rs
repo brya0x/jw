@@ -130,6 +130,13 @@ pub fn word_at(text: &str, col: usize) -> Option<(usize, usize)> {
     (col <= to).then_some((from, to))
 }
 
+/// The word under column `col` of `text`, a line `line` of the list, as the two points that select
+/// it (REQ-637).
+pub fn word_span(line: usize, text: &str, col: usize) -> Option<(Point, Point)> {
+    let (from, to) = word_at(text, col)?;
+    Some((Point { line, col: from }, Point { line, col: to }))
+}
+
 /// The text of a line of the list: what its spans say.
 pub fn text_of(line: &Line) -> String {
     line.spans.iter().map(|(t, _)| t.as_str()).collect()

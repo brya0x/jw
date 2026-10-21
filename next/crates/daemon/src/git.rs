@@ -109,6 +109,9 @@ pub fn read<S: AsRef<OsStr>>(dir: &Path, args: &[S], cap: usize) -> Result<Outpu
 /// Which of `names` (entries of the folder `dir`) git ignores. Their names go in on stdin, so
 /// any character a name holds is safe; nothing ignored, or not a repository, is the empty set.
 pub fn ignored_among(dir: &Path, names: &[&str]) -> HashSet<String> {
+    if names.is_empty() {
+        return HashSet::new();
+    }
     let Ok(mut child) = Command::new("git")
         .arg("--no-pager")
         .arg("-C")

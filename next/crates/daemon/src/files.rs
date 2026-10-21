@@ -226,14 +226,14 @@ pub fn list(shared: &Shared, workspace: &str, path: Option<&str>) -> Done {
             ignored: false,
         });
     }
+    entries.sort_by_key(|e| (e.kind != FileKind::Dir, e.name.to_lowercase()));
+    let total = entries.len();
+    entries.truncate(MAX_ENTRIES);
     let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
     let marks = git_marks(&root, &dir, &rel, &names);
     for e in &mut entries {
         (e.git, e.ignored) = marks.get(&e.name).copied().unwrap_or_default();
     }
-    entries.sort_by_key(|e| (e.kind != FileKind::Dir, e.name.to_lowercase()));
-    let total = entries.len();
-    entries.truncate(MAX_ENTRIES);
     let listing = FileListing {
         path: rel,
         entries,

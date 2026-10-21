@@ -3846,19 +3846,9 @@ impl View {
         }) else {
             return;
         };
-        let Some((from, to)) = select::word_at(&text, anchor.col) else {
+        let Some((a, b)) = select::word_span(anchor.line, &text, anchor.col) else {
             return;
         };
-        let (a, b) = (
-            select::Point {
-                line: anchor.line,
-                col: from,
-            },
-            select::Point {
-                line: anchor.line,
-                col: to,
-            },
-        );
         if let Some(d) = self.drag.as_mut() {
             d.anchor = a;
             d.moved = true;
