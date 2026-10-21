@@ -1,4 +1,4 @@
-//! Shared by the end-to-end tests of the binary: a private socket and state dir, and a `jwn`
+//! Shared by the end-to-end tests of the binary: a private socket and state dir, and a `jw`
 //! command that uses them. Only the pid it started is ever signalled.
 
 #![allow(dead_code)]
@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-pub const JWN: &str = env!("CARGO_BIN_EXE_jwn");
+pub const JW: &str = env!("CARGO_BIN_EXE_jw");
 
 pub struct Env {
     pub dir: PathBuf,
@@ -22,10 +22,10 @@ impl Env {
         Env { dir }
     }
 
-    pub fn jwn(&self) -> Command {
-        let mut c = Command::new(JWN);
-        c.env("JWN_STATE_DIR", self.dir.join("state"))
-            .env("JWN_SOCKET", self.dir.join("s.sock"))
+    pub fn jw(&self) -> Command {
+        let mut c = Command::new(JW);
+        c.env(identity::env_var("STATE_DIR"), self.dir.join("state"))
+            .env(identity::env_var("SOCKET"), self.dir.join("s.sock"))
             .env("SHELL", "/bin/sh")
             .stdin(Stdio::null());
         c
@@ -37,7 +37,7 @@ impl Env {
 
     /// The daemon, with `env` added to its own environment (what its panes run with).
     pub fn start_with(&self, env: &[(&str, String)]) -> Child {
-        let mut cmd = self.jwn();
+        let mut cmd = self.jw();
         cmd.arg("daemon");
         for (k, v) in env {
             cmd.env(k, v);
@@ -57,7 +57,7 @@ impl Env {
 
     /// `jwn cmd '<json>'`: its reply line as JSON.
     pub fn cmd(&self, json: &str) -> Value {
-        let out = self.jwn().args(["cmd", json]).output().unwrap();
+        let out = self.jw().args(["cmd", json]).output().unwrap();
         let line = String::from_utf8(out.stdout).unwrap();
         assert!(
             out.status.success(),
@@ -68,7 +68,7 @@ impl Env {
     }
 
     pub fn stop(&self, mut child: Child) {
-        assert!(self.jwn().arg("stop").status().unwrap().success());
+        assert!(self.jw().arg("stop").status().unwrap().success());
         let end = Instant::now() + Duration::from_secs(5);
         while Instant::now() < end {
             if child.try_wait().unwrap().is_some() {

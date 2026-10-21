@@ -2725,7 +2725,10 @@ impl View {
                             .shown()
                             .is_some_and(|d| !d.panes.is_empty() && d.layout.is_none())
                     {
-                        self.flash("el daemon es anterior al layout: jwn stop y abre jwn otra vez");
+                        let n = &identity::get().name;
+                        self.flash(&format!(
+                            "el daemon es anterior al layout: {n} stop y abre {n} otra vez"
+                        ));
                         return After::Continue;
                     }
                     return After::NewPane(id, self.place(dir));
@@ -5234,7 +5237,7 @@ fn key_of(code: KeyCode) -> Option<Key> {
 
 fn connect(view: &mut View) -> Result<Client, String> {
     let socket = identity::socket_path();
-    let mut client = Client::connect(&socket, "jwn-tui")
+    let mut client = Client::connect(&socket, &identity::peer("tui"))
         .map_err(|e| format!("cannot reach {}: {e}", socket.display()))?;
     let root = client.root.clone();
     client.open(&root).map_err(|e| e.to_string())?;
@@ -5315,7 +5318,7 @@ fn spawn_files(ask: FileAsk, tx: std::sync::mpsc::Sender<FilesReply>) {
                 count: older::PAGE,
             },
         };
-        let reply = Client::connect(&identity::socket_path(), "jwn-tui-files")
+        let reply = Client::connect(&identity::socket_path(), &identity::peer("tui-files"))
             .and_then(|mut c| c.cmd_within(cmd, FILES_WAIT));
         let _ = tx.send(FilesReply { ask, reply });
     });
@@ -5349,7 +5352,7 @@ fn spawn_prs(ask: PrsAsk, tx: std::sync::mpsc::Sender<PrsReply>) {
                 REVIEW_WAIT,
             ),
         };
-        let reply = Client::connect(&identity::socket_path(), "jwn-tui-prs")
+        let reply = Client::connect(&identity::socket_path(), &identity::peer("tui-prs"))
             .and_then(|mut c| c.cmd_within(cmd, wait));
         let _ = tx.send(PrsReply { ask, reply });
     });
@@ -5383,7 +5386,7 @@ const SYNC_WAIT: Duration = Duration::from_secs(120);
 /// moves, the other keys wait) while git runs. The reply comes back through the channel.
 fn spawn_sync(workspace: String, tx: std::sync::mpsc::Sender<Reply>) {
     std::thread::spawn(move || {
-        let reply = Client::connect(&identity::socket_path(), "jwn-tui-sync")
+        let reply = Client::connect(&identity::socket_path(), &identity::peer("tui-sync"))
             .and_then(|mut c| c.cmd_within(Cmd::SyncWorkspace { workspace }, SYNC_WAIT));
         let _ = tx.send(reply);
     });
@@ -5393,7 +5396,7 @@ fn spawn_sync(workspace: String, tx: std::sync::mpsc::Sender<Reply>) {
 /// the review that waits has its reply coming on another (REQ-604). The reply says nothing new.
 fn spawn_cancel(workspace: String) {
     std::thread::spawn(move || {
-        let _ = Client::connect(&identity::socket_path(), "jwn-tui-cancel")
+        let _ = Client::connect(&identity::socket_path(), &identity::peer("tui-cancel"))
             .and_then(|mut c| c.cmd_within(Cmd::Cancel { workspace }, ASK_WAIT));
     });
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The Claude test path: jwn's conversation against the REAL `claude`, stage by stage.
+"""The Claude test path: jw's conversation against the REAL `claude`, stage by stage.
 
     scripts/claude-path.py --list
     scripts/claude-path.py            # every stage that is checked (about 15 turns of haiku, a dollar or so)
@@ -8,19 +8,19 @@
 
 Not part of `just ci`: it costs tokens, needs the person's own `claude` login, and what a model
 says is not the same twice, so it checks structure (an ask of this kind, a tool item of this name,
-the status back to idle), never wording. It runs in a private daemon (/tmp/jwn-path: own socket, own
+the status back to idle), never wording. It runs in a private daemon (/tmp/jw-path: own socket, own
 state) on a throwaway git repo in /tmp, with the person's own `~/.claude` (the transcripts land in
-`~/.claude/projects/-private-tmp-jwn-path-repo`). It stops only the daemon it started, by the pid it
+`~/.claude/projects/-private-tmp-jw-path-repo`). It stops only the daemon it started, by the pid it
 recorded. Never pkill. Spec: docs/test-path.md, part 2.
 """
 import json, os, shutil, signal, subprocess, sys, time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-JWN = os.environ.get("JWN", shutil.which("jwn") or os.path.join(ROOT, "target/release/jwn"))
-DIR = "/tmp/jwn-path"
+JW = os.environ.get("JW", shutil.which("jw") or os.path.join(ROOT, "target/release/jw"))
+DIR = "/tmp/jw-path"
 REPO = os.path.join(DIR, "repo")
-ENV = dict(os.environ, JWN_STATE_DIR=DIR + "/state", JWN_SOCKET=DIR + "/s.sock")
-for k in ("JWN_TCP", "JWN_TUI_DUMP", "JWN_PANE", "JWN_WORKSPACE", "JWN_SESSION"):
+ENV = dict(os.environ, JW_STATE_DIR=DIR + "/state", JW_SOCKET=DIR + "/s.sock")
+for k in ("JW_TCP", "JW_TUI_DUMP", "JW_PANE", "JW_WORKSPACE", "JW_SESSION"):
     ENV.pop(k, None)
 MODEL = os.environ.get("PATH_MODEL", "haiku")
 results = []  # (stage, check, status, detail)  status: ok | FAIL | seen
@@ -37,12 +37,12 @@ def start_daemon():
     open(os.path.join(REPO, "README.md"), "w").write("# path\n")
     subprocess.run(["git", "-C", REPO, "add", "."], check=True)
     subprocess.run(["git", "-C", REPO, "commit", "-q", "-m", "init"], check=True)
-    daemon = subprocess.Popen([JWN, "daemon"], env=ENV, stdout=open(DIR + "/daemon.log", "w"), stderr=subprocess.STDOUT)
+    daemon = subprocess.Popen([JW, "daemon"], env=ENV, stdout=open(DIR + "/daemon.log", "w"), stderr=subprocess.STDOUT)
     open(DIR + "/daemon.pid", "w").write(str(daemon.pid))
     end = time.time() + 15
-    while time.time() < end and not os.path.exists(ENV["JWN_SOCKET"]):
+    while time.time() < end and not os.path.exists(ENV["JW_SOCKET"]):
         time.sleep(0.1)
-    assert os.path.exists(ENV["JWN_SOCKET"]), "the daemon did not start: " + open(DIR + "/daemon.log").read()
+    assert os.path.exists(ENV["JW_SOCKET"]), "the daemon did not start: " + open(DIR + "/daemon.log").read()
 
 
 def stop_daemon():
@@ -57,7 +57,7 @@ def stop_daemon():
 
 
 def cmd(obj):
-    out = subprocess.run([JWN, "cmd", json.dumps(obj)], env=ENV, capture_output=True, text=True)
+    out = subprocess.run([JW, "cmd", json.dumps(obj)], env=ENV, capture_output=True, text=True)
     try:
         r = json.loads(out.stdout)
     except ValueError:
@@ -71,8 +71,8 @@ def result(r):
 
 
 def snap(node):
-    """The node as the daemon holds it now: the first line of `jwn watch`."""
-    p = subprocess.Popen([JWN, "watch", node], env=ENV, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    """The node as the daemon holds it now: the first line of `jw watch`."""
+    p = subprocess.Popen([JW, "watch", node], env=ENV, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
     try:
         line = p.stdout.readline()
     finally:
@@ -257,7 +257,7 @@ def s_interrupt():
     c.close()
 
 
-@stage("local", "the commands jwn answers itself or the engine answers with no model call (REQ-418 to 421)")
+@stage("local", "the commands jw answers itself or the engine answers with no model call (REQ-418 to 421)")
 def s_local():
     c = Conv()
     c.turn("responde solo con la palabra ok")
@@ -376,10 +376,10 @@ def s_resume():
 
 def start_keep_state():
     global daemon
-    daemon = subprocess.Popen([JWN, "daemon"], env=ENV, stdout=open(DIR + "/daemon.log", "a"), stderr=subprocess.STDOUT)
+    daemon = subprocess.Popen([JW, "daemon"], env=ENV, stdout=open(DIR + "/daemon.log", "a"), stderr=subprocess.STDOUT)
     open(DIR + "/daemon.pid", "w").write(str(daemon.pid))
     end = time.time() + 15
-    while time.time() < end and not os.path.exists(ENV["JWN_SOCKET"]):
+    while time.time() < end and not os.path.exists(ENV["JW_SOCKET"]):
         time.sleep(0.1)
     time.sleep(0.5)
 
@@ -393,7 +393,7 @@ SKIP = {"__remote-workflow", "workflow-launch-exec", "heapdump", "design-consent
         "autocompact", "clear", "compact", "context", "fast", "focus", "output-style", "recap", "usage", "skill-doctor", "auto-mode-setup"}
 
 
-@stage("survey", "what each command that jwn sends as typed answers from the real engine (not a pass or fail)")
+@stage("survey", "what each command that jw sends as typed answers from the real engine (not a pass or fail)")
 def s_survey():
     c = Conv()
     c.turn("responde solo con la palabra ok")

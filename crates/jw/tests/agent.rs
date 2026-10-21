@@ -36,9 +36,9 @@ impl World {
         World { env, daemon, repo }
     }
 
-    /// `jwn <args>` as a command running in the pane `pane`, when it names one.
+    /// `jw <args>` as a command running in the pane `pane`, when it names one.
     fn run(&self, pane: Option<&str>, args: &[&str]) -> Output {
-        let mut c = self.env.jwn();
+        let mut c = self.env.jw();
         c.args(args)
             .env(identity::env_var("AGENT_WAIT_MS"), "3000")
             .current_dir(&self.repo);
@@ -173,17 +173,17 @@ fn ls_and_pane_ls_say_what_there_is_in_text_and_in_json_and_bad_uses_exit_2() {
     );
     let usage = w.fails(None, &["ls", "--bogus"], 2);
     assert!(
-        usage.contains("unknown flag --bogus") && usage.contains("usage: jwn ls [--json]"),
+        usage.contains("unknown flag --bogus") && usage.contains("usage: jw ls [--json]"),
         "{usage}"
     );
-    assert!(w.fails(None, &["pane"], 2).contains("usage: jwn pane ls"));
+    assert!(w.fails(None, &["pane"], 2).contains("usage: jw pane ls"));
     w.stop();
 }
 
 #[test]
 fn without_a_daemon_every_command_but_skill_says_so_and_exits_1() {
     let env = Env::new("ag-none");
-    let run = |args: &[&str]| env.jwn().args(args).output().unwrap();
+    let run = |args: &[&str]| env.jw().args(args).output().unwrap();
     for args in [
         &["ls"][..],
         &["read", "x"],
@@ -288,7 +288,10 @@ fn prompt_pastes_into_the_agent_with_enter_after_and_refuses_what_it_should() {
     let sent = std::fs::read_to_string(&got).unwrap();
     assert_eq!(
         sent,
-        format!("\x1b[200~[jwn: app, pane {shell}] -do the thing\x1b[201~")
+        format!(
+            "\x1b[200~[{}: app, pane {shell}] -do the thing\x1b[201~",
+            identity::get().name
+        )
     );
     w.stop();
 }
@@ -476,20 +479,24 @@ fn pane_open_splits_and_close_refuses_its_own_pane_and_the_last_one() {
 #[test]
 fn skill_prints_the_skill_and_installs_it_under_the_claude_configuration() {
     let env = Env::new("ag-skill");
-    let out = env.jwn().arg("skill").output().unwrap();
+    let out = env.jw().arg("skill").output().unwrap();
     let text_out = String::from_utf8(out.stdout).unwrap();
-    assert!(text_out.starts_with("---\nname: jwn\n"), "{text_out}");
+    let name = &identity::get().name;
+    assert!(
+        text_out.starts_with(&format!("---\nname: {name}\n")),
+        "{text_out}"
+    );
     assert!(text_out.contains(&identity::env_var("PANE_ID")) && !text_out.contains("{bin}"));
 
     let config = env.dir.join("claude-config");
     let out = env
-        .jwn()
+        .jw()
         .args(["skill", "install"])
         .env("CLAUDE_CONFIG_DIR", &config)
         .output()
         .unwrap();
     assert!(out.status.success());
-    let path = config.join("skills/jwn/SKILL.md");
+    let path = config.join(format!("skills/{name}/SKILL.md"));
     assert_eq!(
         String::from_utf8_lossy(&out.stdout),
         format!("installed {}\n", path.display())
@@ -497,7 +504,7 @@ fn skill_prints_the_skill_and_installs_it_under_the_claude_configuration() {
     assert_eq!(std::fs::read_to_string(&path).unwrap(), text_out);
     // Again: it is written over, whole.
     assert!(
-        env.jwn()
+        env.jw()
             .args(["skill", "install"])
             .env("CLAUDE_CONFIG_DIR", &config)
             .status()
@@ -505,7 +512,7 @@ fn skill_prints_the_skill_and_installs_it_under_the_claude_configuration() {
             .success()
     );
     assert_eq!(
-        env.jwn()
+        env.jw()
             .args(["skill", "nope"])
             .output()
             .unwrap()

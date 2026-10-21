@@ -219,7 +219,7 @@ const INTERACTIVE: &[(&str, &str)] = &[
 /// The lists jwn draws itself (REQ-424): a client opens them from its own state and sends
 /// nothing to the engine. `continue` is `resume`'s other name.
 const PANELS: [(&str, &str); 9] = [
-    ("help", "las teclas y los comandos de jwn"),
+    ("help", "las teclas y los comandos propios"),
     ("status", "modelo, esfuerzo, modo, sesión y límites"),
     ("resume", "retomar una conversación de esta carpeta"),
     ("continue", "retomar una conversación de esta carpeta"),

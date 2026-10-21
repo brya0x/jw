@@ -356,7 +356,7 @@ struct Link {
 impl Link {
     fn connect() -> Out<Link> {
         let socket = identity::socket_path();
-        let c = Client::connect(&socket, "jwn-agent")
+        let c = Client::connect(&socket, &identity::peer("agent"))
             .map_err(|e| Fail::Error(format!("no daemon answers on {} ({e})", socket.display())))?;
         Ok(Link {
             c,

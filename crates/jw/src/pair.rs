@@ -15,10 +15,11 @@ type Res = Result<ExitCode, String>;
 
 fn connect() -> Result<Client, String> {
     let socket = identity::socket_path();
-    let mut client = Client::connect(&socket, "jwn-pair").map_err(|e| {
+    let mut client = Client::connect(&socket, &identity::peer("pair")).map_err(|e| {
         format!(
-            "cannot reach the daemon on {}: {e} (is `jwn daemon` running?)",
-            socket.display()
+            "cannot reach the daemon on {}: {e} (is `{} daemon` running?)",
+            socket.display(),
+            identity::get().name
         )
     })?;
     let root = client.root.clone();
@@ -154,6 +155,9 @@ pub fn revoke(which: &str) -> Res {
         println!("«{which}» ya no puede conectarse.");
         Ok(ExitCode::SUCCESS)
     } else {
-        Err(format!("no hay un teléfono «{which}» (mira `jwn devices`)"))
+        Err(format!(
+            "no hay un teléfono «{which}» (mira `{} devices`)",
+            identity::get().name
+        ))
     }
 }

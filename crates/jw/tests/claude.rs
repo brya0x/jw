@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use common::{Env, JWN};
+use common::{Env, JW};
 use wire::Client;
 
 const ENGINE: &str = include_str!("../../daemon/tests/fake-claude.py");
@@ -52,7 +52,7 @@ impl World {
         let home = env.dir.join("home");
         std::fs::create_dir_all(&home).unwrap();
         let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
-        let mut cmd = env.jwn();
+        let mut cmd = env.jw();
         // ZDOTDIR too: the pane's zsh reads the dotfiles of ZDOTDIR, and the user's own (which
         // put ~/.local/bin, where the real claude is, first) must not reach this test.
         cmd.env("SHELL", shell)
@@ -63,10 +63,10 @@ impl World {
             .env("skip_global_compinit", "1")
             .env("PATH", &path)
             .env("FAKE_LOG", &log)
-            .env_remove("JWN_PANE_ID")
+            .env_remove(identity::env_var("PANE_ID"))
             .arg("daemon");
         if !swap {
-            cmd.env("JWN_CONVERSATION", "0");
+            cmd.env(identity::env_var("CONVERSATION"), "0");
         }
         let child = cmd.spawn().unwrap();
         wait_for("the daemon", || {
@@ -265,10 +265,10 @@ fn outside_a_pane_or_a_terminal_the_binary_runs_the_original() {
     std::fs::set_permissions(&engine, std::fs::Permissions::from_mode(0o755)).unwrap();
     let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
     // no pane, no terminal: not a conversation
-    let out = Command::new(JWN)
+    let out = Command::new(JW)
         .args(["claude", "--version"])
         .env("PATH", &path)
-        .env_remove("JWN_PANE_ID")
+        .env_remove(identity::env_var("PANE_ID"))
         .stdin(Stdio::null())
         .output()
         .unwrap();
@@ -277,11 +277,14 @@ fn outside_a_pane_or_a_terminal_the_binary_runs_the_original() {
         "fake-claude 1.0"
     );
     // in a pane's environment but with its output piped (`claude … | tee`): still the original
-    let out = Command::new(JWN)
+    let out = Command::new(JW)
         .args(["claude", "--version"])
         .env("PATH", &path)
-        .env("JWN_PANE_ID", "00000000-0000-4000-8000-0000000000c1")
-        .env("JWN_SOCKET", env.dir.join("none.sock"))
+        .env(
+            identity::env_var("PANE_ID"),
+            "00000000-0000-4000-8000-0000000000c1",
+        )
+        .env(identity::env_var("SOCKET"), env.dir.join("none.sock"))
         .stdin(Stdio::null())
         .output()
         .unwrap();
@@ -290,10 +293,10 @@ fn outside_a_pane_or_a_terminal_the_binary_runs_the_original() {
         "fake-claude 1.0"
     );
     // and when there is no claude at all it says so as a shell does
-    let out = Command::new(JWN)
+    let out = Command::new(JW)
         .args(["claude"])
         .env("PATH", "/nonexistent")
-        .env_remove("JWN_PANE_ID")
+        .env_remove(identity::env_var("PANE_ID"))
         .stdin(Stdio::null())
         .output()
         .unwrap();
@@ -310,7 +313,7 @@ impl World {
     /// `jwn <args>` the way an agent runs it: from outside a pane, with a short wait for agents.
     fn agent_cmd(&self, args: &[&str]) -> std::process::Output {
         self.env
-            .jwn()
+            .jw()
             .args(args)
             .env(identity::env_var("AGENT_WAIT_MS"), "6000")
             .output()

@@ -1,4 +1,4 @@
-//! `jwn`: the daemon and a few JSON-speaking commands to drive and watch it.
+//! `jw`: the daemon and a few JSON-speaking commands to drive and watch it.
 
 mod agent;
 mod bench;
@@ -15,21 +15,21 @@ use daemon::{Config, Daemon};
 use wire::Conn;
 
 const USAGE: &str = "usage:
-  jwn                     the terminal client; starts the daemon in the background when none runs
-  jwn daemon              run the daemon (foreground)
-  jwn stop                stop the daemon recorded in the pid file
-  jwn watch [NODE]        print every JSON line for NODE (default: the session)
-  jwn cmd '<json cmd>'    send one command, print its reply (exit 1 if it failed)
-  jwn tui                 the same as jwn with no arguments
-  jwn pair                turn the phone link on, show the QR and answer the pairing question
-  jwn pair stop           turn the phone link off (paired phones are kept)
-  jwn devices             list the paired phones
-  jwn revoke <id|name>    unpair a phone and drop its connection
-  jwn bench               measure sizes and latency on a private daemon
-  jwn hook <event>        an agent's hook (claude runs it): tell the daemon what the agent does
-  jwn claude [args]       what `claude` typed in a pane runs (the shell integration's function): a conversation
-  jwn ls | read | prompt | worktree | pane | skill
-                          what an agent in a pane uses: jwn <command> shows each one's usage";
+  {n}                     the terminal client; starts the daemon in the background when none runs
+  {n} daemon              run the daemon (foreground)
+  {n} stop                stop the daemon recorded in the pid file
+  {n} watch [NODE]        print every JSON line for NODE (default: the session)
+  {n} cmd '<json cmd>'    send one command, print its reply (exit 1 if it failed)
+  {n} tui                 the same as {n} with no arguments
+  {n} pair                turn the phone link on, show the QR and answer the pairing question
+  {n} pair stop           turn the phone link off (paired phones are kept)
+  {n} devices             list the paired phones
+  {n} revoke <id|name>    unpair a phone and drop its connection
+  {n} bench               measure sizes and latency on a private daemon
+  {n} hook <event>        an agent's hook (claude runs it): tell the daemon what the agent does
+  {n} claude [args]       what `claude` typed in a pane runs (the shell integration's function): a conversation
+  {n} ls | read | prompt | worktree | pane | skill
+                          what an agent in a pane uses: {n} <command> shows each one's usage";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -56,7 +56,7 @@ fn main() -> ExitCode {
             rest @ ..,
         ] => Ok(agent::run(c, rest)),
         [] | ["tui"] => enter().map(|()| ExitCode::SUCCESS),
-        _ => Err(USAGE.into()),
+        _ => Err(USAGE.replace("{n}", &identity::get().name)),
     };
     match result {
         Ok(code) => code,
@@ -105,7 +105,11 @@ fn ensure_daemon() -> Result<(), String> {
     let mut child = daemon
         .spawn()
         .map_err(|e| format!("cannot start the daemon: {e}"))?;
-    eprintln!("jwn: starting the daemon (log: {})", log_path.display());
+    eprintln!(
+        "{}: starting the daemon (log: {})",
+        identity::get().name,
+        log_path.display()
+    );
     let end = std::time::Instant::now() + DAEMON_WAIT;
     while std::time::Instant::now() < end {
         if Conn::connect(&config.socket).is_ok() {
@@ -148,7 +152,7 @@ fn stop() -> Res {
     }
     // Turn the phone link off first: its tunnel is a process of its own, and a signal does
     // not let the daemon stop it.
-    if let Ok(mut client) = wire::Client::connect(&config.socket, "jwn-stop") {
+    if let Ok(mut client) = wire::Client::connect(&config.socket, &identity::peer("stop")) {
         let _ = client.cmd(contract::Cmd::MobileStop {});
     }
     let pid_file = config.pid_file();
@@ -175,7 +179,7 @@ fn connect() -> Result<(Conn, String), String> {
     let mut conn =
         Conn::connect(&socket).map_err(|e| format!("cannot reach {}: {e}", socket.display()))?;
     let client = Peer {
-        name: "jwn-cli".into(),
+        name: identity::peer("cli"),
         version: env!("CARGO_PKG_VERSION").into(),
     };
     conn.send(&ClientMsg::Hello {
@@ -231,4 +235,13 @@ fn cmd(json: &str) -> Res {
         }
     }
     Err("the daemon closed the connection before replying".into())
+}
+
+#[cfg(test)]
+mod tests {
+    /// The binary's name is the one name `identity.toml` cannot derive: Cargo spells it.
+    #[test]
+    fn the_binary_is_named_as_the_identity_says() {
+        assert_eq!(env!("CARGO_BIN_NAME"), identity::get().name);
+    }
 }

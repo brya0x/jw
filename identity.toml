@@ -1,9 +1,12 @@
-# The ONE place the product's identity is defined. Every name, path, socket and
-# env var in this repository is derived from this file through the `identity` crate.
-# Swap day: change `name` from "jwn" to "jw" (and the Android ids) and nothing else.
-name = "jwn"            # binary, state dir, config dir, socket file stem
-env_prefix = "JWN"      # JWN_SOCKET, JWN_PANE_ID, ...
-label = "jw next"       # human-facing name
-android_application_id = "dev.jw.next"  # unused until the Android phase
+# The ONE place the product's identity is defined. The name, the env prefix, the paths, the
+# socket, the phone's pairing scheme and the peer names on the wire are derived from this file
+# through the `identity` crate. Four things are literal and must follow it by hand, and a test
+# for each stops them from drifting: the binary name in `crates/jw/Cargo.toml`, the env names
+# the shell integration reads (`crates/daemon/shell`), the file name `fish/jw.fish`, and
+# `android_application_id` here (changing it installs a different app on the phone).
+name = "jw"             # binary, state dir, config dir, socket file stem
+env_prefix = "JW"       # JW_SOCKET, JW_PANE_ID, ...
+label = "jw"            # human-facing name
+android_application_id = "dev.jw.next"  # unchanged by the swap: a new id is a different app on the phone
 tunnel_program = "cloudflared"
-pairing_store = "mobile.json"           # file in the config dir
+pairing_store = "mobile.json"           # file in the state dir

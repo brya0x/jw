@@ -86,6 +86,9 @@ pub fn is_panel(name: &str) -> bool {
 
 /// The keys of the conversation, by what they are for (REQ-599): `/help` lists them before the
 /// commands and `^/` lists only them.
+/// The group of the keys that are the program's own: its tag is the product name.
+const OWN: &str = "\0";
+
 const KEYS: [(&str, &str, &str); 19] = [
     ("↵", "enviar; en cola mientras Claude trabaja", "escribir"),
     ("⇧↵ · ^J", "un salto de línea", "escribir"),
@@ -115,13 +118,13 @@ const KEYS: [(&str, &str, &str); 19] = [
     ("c · t", "copiar el mensaje elegido o solo su texto", "ver"),
     ("PgUp · PgDn", "recorrer la conversación", "ver"),
     ("v", "abrir el plan completo", "ver"),
-    ("^/ · ?", "esta lista", "jwn"),
+    ("^/ · ?", "esta lista", OWN),
     (
         "^␣",
         "el líder: salir al terminal, espacios, paneles, diff",
-        "jwn",
+        OWN,
     ),
-    ("^␣ ?", "las teclas del líder", "jwn"),
+    ("^␣ ?", "las teclas del líder", OWN),
 ];
 
 /// The keys as a list (REQ-599).
@@ -130,7 +133,14 @@ pub fn keys() -> Panel {
         title: "teclas".into(),
         rows: KEYS
             .iter()
-            .map(|(k, d, group)| Row::new(*k, *d).tagged(group, look::dim()))
+            .map(|(k, d, group)| {
+                let tag = if *group == OWN {
+                    identity::get().name.as_str()
+                } else {
+                    group
+                };
+                Row::new(*k, *d).tagged(tag, look::dim())
+            })
             .collect(),
         empty: String::new(),
     }
@@ -146,7 +156,7 @@ pub fn help(conv: &Conversation) -> Panel {
         .filter(|c| c.source == CommandSource::Jwn)
         .map(|c| {
             Row::new(c.name.clone(), c.description.clone().unwrap_or_default())
-                .tagged("jwn", look::blue())
+                .tagged(&identity::get().name, look::blue())
                 .doing(RowAct::Insert(format!("{} ", c.name)))
         });
     Panel {
