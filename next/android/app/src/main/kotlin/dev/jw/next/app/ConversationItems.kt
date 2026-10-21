@@ -2,7 +2,6 @@ package dev.jw.next.app
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,7 +16,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Text
@@ -248,10 +246,10 @@ private fun ToolRow(t: ConvItem.Tool, spin: String, open: Boolean, ranFor: Strin
 private const val DIFF_SHOWN = 8
 private const val OUTPUT_SHOWN = 40
 
-/** The lines of a diff, the added ones tinted green and the removed ones red from the theme (REQ-398, REQ-452); [more] counts those not shown. */
+/** The lines of a diff, the added ones tinted green and the removed ones red from the theme (REQ-398, REQ-452); [more] counts those not shown. A long line goes on in the next row: nothing scrolls sideways (REQ-644). */
 @Composable
 internal fun Diff(lines: List<DiffLine>, more: Int = 0) {
-    Column(Modifier.padding(top = 2.dp).horizontalScroll(rememberScrollState())) {
+    Column(Modifier.padding(top = 2.dp)) {
         lines.forEach { l ->
             val tint = when (l.sign) {
                 DiffSign.Add -> Palette.green.copy(alpha = 0.16f)
@@ -260,7 +258,7 @@ internal fun Diff(lines: List<DiffLine>, more: Int = 0) {
             }
             Text(
                 "${l.n?.toString()?.padStart(4) ?: "    "} ${l.sign.char()} ${l.text}",
-                color = if (l.sign == DiffSign.Same) Palette.dim else Palette.fg, fontFamily = MonoFont, fontSize = 11.5.sp, lineHeight = 16.sp, softWrap = false,
+                color = if (l.sign == DiffSign.Same) Palette.dim else Palette.fg, fontFamily = MonoFont, fontSize = 11.5.sp, lineHeight = 16.sp,
                 modifier = Modifier.fillMaxWidth().background(tint).padding(horizontal = Pad),
             )
         }
@@ -270,8 +268,8 @@ internal fun Diff(lines: List<DiffLine>, more: Int = 0) {
 
 @Composable
 private fun Lines(lines: List<String>) {
-    Column(Modifier.padding(top = 2.dp, start = 30.dp, end = Pad).horizontalScroll(rememberScrollState())) {
-        lines.forEach { Text(it, color = Palette.dim, fontFamily = MonoFont, fontSize = 11.5.sp, lineHeight = 16.sp, softWrap = false) }
+    Column(Modifier.padding(top = 2.dp, start = 30.dp, end = Pad)) {
+        lines.forEach { Text(it, color = Palette.dim, fontFamily = MonoFont, fontSize = 11.5.sp, lineHeight = 16.sp) }
     }
 }
 

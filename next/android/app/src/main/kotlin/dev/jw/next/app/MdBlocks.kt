@@ -104,8 +104,6 @@ internal fun BlockView(block: MdBlock) {
                 color = Palette.fg,
                 fontFamily = MonoFont,
                 fontSize = 11.5.sp,
-                softWrap = false,
-                modifier = Modifier.horizontalScroll(rememberScrollState()),
             )
         }
         is MdBlock.Table -> TableView(block)
