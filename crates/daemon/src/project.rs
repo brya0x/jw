@@ -1,7 +1,7 @@
-//! The settings of a repository: its `.jw.toml`, the file the old jw wrote and jwn reads as it
+//! The settings of a repository: its `.jw.toml`, the file the old jw wrote and this one reads as it
 //! is, or the person's own file of the same syntax outside the repository (spec REQ-330 to
 //! REQ-334, REQ-482 to REQ-487, RAT-34, RAT-46). It is read afresh each time it is needed; a key
-//! jwn does not use is ignored, so an old file keeps `env` and `dev` for the part that reads them.
+//! this one does not use is ignored, so an old file keeps `env` and `dev` for the part that reads them.
 
 use std::path::{Component, Path, PathBuf};
 

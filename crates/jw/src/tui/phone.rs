@@ -114,7 +114,7 @@ fn ask(client: &mut Client, cmd: Cmd, wait: Duration) -> Result<Option<serde_jso
 /// daemon cannot be reached.
 fn work(socket: &Path, events: &Sender<Event>, says: &Receiver<Say>) {
     let tell = |e: Event| events.send(e).is_ok();
-    let started = Client::connect(socket, "jwn-tui-phone")
+    let started = Client::connect(socket, &identity::peer("tui-phone"))
         .map_err(|e| format!("cannot reach {}: {e}", socket.display()))
         .and_then(|mut client| {
             let link = ask(&mut client, Cmd::MobileStart {}, START_WAIT)?

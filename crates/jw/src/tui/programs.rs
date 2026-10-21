@@ -313,7 +313,10 @@ impl Launcher {
         g.put(
             bx + 3,
             y + 1,
-            &clip("se edita en ~/.config/jwn/config.toml", inner),
+            &clip(
+                &format!("se edita en ~/.config/{}/config.toml", identity::get().name),
+                inner,
+            ),
             dim,
         );
     }

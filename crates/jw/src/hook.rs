@@ -32,7 +32,8 @@ pub fn run(event: &str) -> ExitCode {
     };
     let body = payload();
     let field = |name: &str| body[name].as_str().map(str::to_owned);
-    let Ok(mut client) = wire::Client::connect(&identity::socket_path(), "jwn-hook") else {
+    let Ok(mut client) = wire::Client::connect(&identity::socket_path(), &identity::peer("hook"))
+    else {
         return ExitCode::SUCCESS;
     };
     let _ = client.cmd_within(

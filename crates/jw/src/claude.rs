@@ -107,8 +107,8 @@ impl Drop for Raw {
 }
 
 fn converse(pane: &str, argv: &[String]) -> Result<ExitCode, String> {
-    let mut client =
-        Client::connect(&identity::socket_path(), "jwn-claude").map_err(|e| e.to_string())?;
+    let mut client = Client::connect(&identity::socket_path(), &identity::peer("claude"))
+        .map_err(|e| e.to_string())?;
     let env: BTreeMap<String, String> = std::env::vars().collect();
     let reply = client
         .cmd(Cmd::OpenConversation {

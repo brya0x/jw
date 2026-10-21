@@ -23,9 +23,14 @@ pub fn get() -> &'static Identity {
     ID.get_or_init(|| toml::from_str(SOURCE).expect("identity.toml is valid"))
 }
 
-/// `JWN_<suffix>` for the current identity.
+/// `<PREFIX>_<suffix>` for the current identity.
 pub fn env_var(suffix: &str) -> String {
     format!("{}_{suffix}", get().env_prefix)
+}
+
+/// What a client calls itself on the wire: `<name>-<role>`.
+pub fn peer(role: &str) -> String {
+    format!("{}-{role}", get().name)
 }
 
 fn home() -> PathBuf {

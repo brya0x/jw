@@ -10,7 +10,7 @@ const ZSHENV: &str = include_str!("../shell/zsh/.zshenv");
 const ZPROFILE: &str = include_str!("../shell/zsh/.zprofile");
 const ZSHRC: &str = include_str!("../shell/zsh/.zshrc");
 const BASH_RC: &str = include_str!("../shell/bash/rc.sh");
-const FISH: &str = include_str!("../shell/fish/jwn.fish");
+const FISH: &str = include_str!("../shell/fish/jw.fish");
 
 /// What a shell needs to start with the integration.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -28,7 +28,7 @@ pub fn install(dir: &Path) -> io::Result<()> {
         ("zsh/.zprofile", ZPROFILE),
         ("zsh/.zshrc", ZSHRC),
         ("bash/rc.sh", BASH_RC),
-        ("fish/jwn.fish", FISH),
+        ("fish/jw.fish", FISH),
     ] {
         let path = dir.join(rel);
         fs::create_dir_all(path.parent().expect("a file has a parent"))?;
@@ -56,7 +56,7 @@ pub fn setup(shell: &str, dir: &Path, lookup: &dyn Fn(&str) -> Option<String>) -
                 args: vec![],
                 env: vec![
                     ("ZDOTDIR".into(), path("zsh").to_string_lossy().into_owned()),
-                    ("JWN_USER_ZDOTDIR".into(), user),
+                    (identity::env_var("USER_ZDOTDIR"), user),
                 ],
             }
         }
@@ -70,7 +70,7 @@ pub fn setup(shell: &str, dir: &Path, lookup: &dyn Fn(&str) -> Option<String>) -
         "fish" => Setup {
             args: vec![
                 "--init-command".into(),
-                format!("source {}", path("fish/jwn.fish").display()),
+                format!("source {}", path("fish/jw.fish").display()),
             ],
             env: vec![],
         },
@@ -83,12 +83,42 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_scripts_read_the_env_names_of_the_identity_and_no_others() {
+        for (name, text) in [
+            ("zsh/.zshenv", ZSHENV),
+            ("zsh/.zprofile", ZPROFILE),
+            ("zsh/.zshrc", ZSHRC),
+            ("bash/rc.sh", BASH_RC),
+            ("fish/jw.fish", FISH),
+        ] {
+            let prefix = format!("{}_", identity::get().env_prefix);
+            let own: Vec<&str> = text
+                .split(|c: char| !(c.is_ascii_uppercase() || c == '_'))
+                .filter(|w| w.starts_with("JW") || w.starts_with("JWN"))
+                .collect();
+            assert!(
+                own.iter().all(|w| w.starts_with(&prefix)),
+                "{name} reads {own:?}, not {prefix}*"
+            );
+        }
+        for suffix in ["BIN", "PANE_ID", "CONVERSATION", "WORKSPACE_DIR"] {
+            for text in [BASH_RC, ZSHRC, FISH] {
+                assert!(text.contains(&identity::env_var(suffix)), "{suffix}");
+            }
+        }
+        assert!(ZSHRC.contains(&identity::env_var("USER_ZDOTDIR")));
+    }
+
+    #[test]
     fn each_shell_is_started_its_own_way_and_others_not_at_all() {
         let dir = Path::new("/state/shell");
         let env = |k: &str| (k == "HOME").then(|| "/home/u".to_owned());
         let zsh = setup("/bin/zsh", dir, &env);
         assert_eq!(zsh.env[0], ("ZDOTDIR".into(), "/state/shell/zsh".into()));
-        assert_eq!(zsh.env[1], ("JWN_USER_ZDOTDIR".into(), "/home/u".into()));
+        assert_eq!(
+            zsh.env[1],
+            (identity::env_var("USER_ZDOTDIR"), "/home/u".into())
+        );
         assert_eq!(
             setup("/bin/bash", dir, &env).args,
             ["--rcfile", "/state/shell/bash/rc.sh"]
@@ -110,7 +140,7 @@ mod tests {
         assert!(
             dir.join("zsh/.zshrc").exists()
                 && dir.join("bash/rc.sh").exists()
-                && dir.join("fish/jwn.fish").exists()
+                && dir.join("fish/jw.fish").exists()
         );
         fs::write(dir.join("bash/rc.sh"), "old").unwrap();
         install(&dir).unwrap();

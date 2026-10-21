@@ -13,10 +13,10 @@ use wire::Client;
 
 /// Run `jwn hook <event>` the way an agent's hook would.
 fn hook(env: &Env, pane: Option<&str>, event: &str, stdin: &str) -> std::process::ExitStatus {
-    let mut cmd = env.jwn();
+    let mut cmd = env.jw();
     cmd.args(["hook", event]).stdin(Stdio::piped());
     if let Some(p) = pane {
-        cmd.env("JWN_PANE_ID", p);
+        cmd.env(identity::env_var("PANE_ID"), p);
     }
     let mut child = cmd.spawn().unwrap();
     child

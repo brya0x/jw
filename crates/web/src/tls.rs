@@ -46,7 +46,8 @@ impl Identity {
             Err(_) => {}
         }
         let made =
-            rcgen::generate_simple_self_signed(vec!["jwn.local".to_owned()]).map_err(invalid)?;
+            rcgen::generate_simple_self_signed(vec![format!("{}.local", identity::get().name)])
+                .map_err(invalid)?;
         let pem = format!("{}{}", made.cert.pem(), made.signing_key.serialize_pem());
         let mut file = fs::OpenOptions::new()
             .write(true)

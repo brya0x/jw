@@ -1,10 +1,10 @@
 [package]
-name = "jwn"
+name = "jw"
 version.workspace = true
 edition.workspace = true
 
 [[bin]]
-name = "jwn"
+name = "jw"
 path = "src/main.rs"
 
 [dependencies]

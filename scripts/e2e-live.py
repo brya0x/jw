@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Do the daemon, the terminal client and the phone agree? Drives all three.
 
-    cargo build --release -p jwn && (cd android && ./gradlew :app:assembleDebug)
+    cargo build --release -p jw && (cd android && ./gradlew :app:assembleDebug)
     scripts/e2e-live.py            # a phone on a cable, USB debugging on, screen unlocked
 
-It starts its own daemon in /tmp/jwn-e2e (own socket, own state, loopback port 7871), runs
-the real `jwn tui` in a pty with a keyboard, and reads the phone through `uiautomator`. It
+It starts its own daemon in /tmp/jw-e2e (own socket, own state, loopback port 7871), runs
+the real `jw tui` in a pty with a keyboard, and reads the phone through `uiautomator`. It
 touches only the app dev.jw.next (reinstalls it so its data starts empty) and stops only the daemon it
 started, by the pid it recorded. Never pkill.
 """
@@ -13,19 +13,19 @@ import fcntl, json, os, pty, re, shutil, signal, struct, subprocess, sys, termio
 import xml.etree.ElementTree as ET
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-JWN = os.path.join(ROOT, "target/release/jwn")
+JW = os.path.join(ROOT, "target/release/jw")
 APK = os.path.join(ROOT, "android/app/build/outputs/apk/debug/app-debug.apk")
 ADB = os.path.expanduser("~/Library/Android/sdk/platform-tools/adb")
-PKG, PORT, DIR = "dev.jw.next", 7871, "/tmp/jwn-e2e"
-ENV = dict(os.environ, JWN_STATE_DIR=DIR + "/state", JWN_SOCKET=DIR + "/s.sock", JWN_TCP=f"127.0.0.1:{PORT}",
-           JWN_TUI_DUMP=DIR + "/tui.txt", SHELL="/bin/sh", TERM="xterm-256color")
+PKG, PORT, DIR = "dev.jw.next", 7871, "/tmp/jw-e2e"
+ENV = dict(os.environ, JW_STATE_DIR=DIR + "/state", JW_SOCKET=DIR + "/s.sock", JW_TCP=f"127.0.0.1:{PORT}",
+           JW_TUI_DUMP=DIR + "/tui.txt", SHELL="/bin/sh", TERM="xterm-256color")
 results = []
 
 def adb(*a, check=True):
     return subprocess.run([ADB, *a], capture_output=True, text=True, check=check).stdout
 
 def cmd(obj):
-    out = subprocess.run([JWN, "cmd", json.dumps(obj)], env=ENV, capture_output=True, text=True)
+    out = subprocess.run([JW, "cmd", json.dumps(obj)], env=ENV, capture_output=True, text=True)
     return json.loads(out.stdout) if out.stdout.strip() else {"ok": False, "error": out.stderr}
 
 def write(pane, data):
@@ -39,8 +39,8 @@ def started():  # a command starts: the mark that ends a shell_done
 
 # ---- the phone, read through the accessibility tree ----
 def phone_nodes():
-    adb("shell", "uiautomator", "dump", "/sdcard/jwn-e2e.xml")
-    xml = adb("exec-out", "cat", "/sdcard/jwn-e2e.xml")
+    adb("shell", "uiautomator", "dump", "/sdcard/jw-e2e.xml")
+    xml = adb("exec-out", "cat", "/sdcard/jw-e2e.xml")
     nodes = []
     for n in ET.fromstring(xml[xml.index("<"):]).iter("node"):
         t = n.get("text") or ""
@@ -51,8 +51,8 @@ def phone_nodes():
 
 def phone_edit():
     """The centre of the phone's input field, if one is on screen."""
-    adb("shell", "uiautomator", "dump", "/sdcard/jwn-e2e.xml")
-    xml = adb("exec-out", "cat", "/sdcard/jwn-e2e.xml")
+    adb("shell", "uiautomator", "dump", "/sdcard/jw-e2e.xml")
+    xml = adb("exec-out", "cat", "/sdcard/jw-e2e.xml")
     for n in ET.fromstring(xml[xml.index("<"):]).iter("node"):
         if n.get("class") == "android.widget.EditText":
             x1, y1, x2, y2 = map(int, re.findall(r"\d+", n.get("bounds")))
@@ -78,7 +78,7 @@ class Tui:
     def __init__(self):
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
-            os.execve(JWN, [JWN, "tui"], ENV)
+            os.execve(JW, [JW, "tui"], ENV)
         fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack("HHHH", 32, 120, 0, 0))
         # Read what the client draws all the time: a full pty buffer would stall it.
         threading.Thread(target=self.drain, daemon=True).start()
@@ -151,7 +151,7 @@ def main():
         sys.exit("no phone attached")
     shutil.rmtree(DIR, ignore_errors=True)
     os.makedirs(DIR + "/work")
-    daemon = subprocess.Popen([JWN, "daemon"], env=ENV, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    daemon = subprocess.Popen([JW, "daemon"], env=ENV, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     tui = None
     try:
         assert until(lambda: os.path.exists(DIR + "/s.sock"), "daemon"), "the daemon did not start"
@@ -271,9 +271,9 @@ def main():
               until(lambda: "1 panel" in phone_text() and phone_text().count("1 panel") >= 2, "phone"), phone_text())
 
         print("\n-- the daemon restarts")
-        subprocess.run([JWN, "stop"], env=ENV)
+        subprocess.run([JW, "stop"], env=ENV)
         daemon.wait(timeout=10)
-        daemon = subprocess.Popen([JWN, "daemon"], env=ENV, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        daemon = subprocess.Popen([JW, "daemon"], env=ENV, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         check("phone reconnects by itself and shows the same workspaces",
               until(lambda: "workspaces · 2" in phone_text() and "conectado" in phone_text(), "phone", 20), phone_text())
         alive = tui.text() != "" and os.waitpid(tui.pid, os.WNOHANG) == (0, 0)
@@ -282,7 +282,7 @@ def main():
         if tui:
             tui.stop()
         try:
-            subprocess.run([JWN, "stop"], env=ENV, capture_output=True)
+            subprocess.run([JW, "stop"], env=ENV, capture_output=True)
         except Exception:
             pass
         adb("reverse", "--remove", f"tcp:{PORT}", check=False)

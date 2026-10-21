@@ -3112,7 +3112,7 @@ struct SourceLook {
 
 fn source_look(s: CommandSource) -> SourceLook {
     let (rank, colour, tag) = match s {
-        CommandSource::Jwn => (0, look::blue(), "jwn"),
+        CommandSource::Jwn => (0, look::blue(), identity::get().name.as_str()),
         CommandSource::Claude => (1, look::magenta(), "claude"),
         CommandSource::Project => (2, look::green(), "proyecto"),
         CommandSource::Skill => (3, look::yellow(), "skill"),

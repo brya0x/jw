@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# The cutover of N158: the person's jwn session becomes their jw session.
+#
+# Run it from a plain terminal, NOT from a pane of jwn: it stops the jwn daemon, and a pane
+# of that daemon would be stopped under it. Without --run it only prints what it would do.
+#
+#   scripts/swap-to-jw           # the plan
+#   scripts/swap-to-jw --run     # do it
+#
+# What it does, in this order, and what each step leaves if it stops there:
+#   1. builds jw (a failed build touches nothing)
+#   2. stops the jwn daemon with `jwn stop` (it signals only the pid the daemon recorded, and
+#      the script never kills anything by name or with -9)
+#   3. moves the old jw's state and config to a dated backup (never deletes them)
+#   4. copies the state and config of jwn to the names of jw, without the sockets and pid files
+#   5. installs jw (the old ~/.cargo/bin/jw is kept as jw.old-<stamp>)
+#   6. starts the jw daemon, which restores session.json: every workspace and pane comes back
+#      with a new shell, and each agent with `claude --resume` when its transcript exists
+#
+# The jwn binary and the jwn directories stay where they are. To go back: `jw stop`, move the
+# jw directories aside, and start `jwn`.
+#
+# SWAP_HOME (default $HOME) and SWAP_SKIP (a comma list of build, stop, install, start) exist
+# so the file steps can be tried on a copy.
+set -euo pipefail
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+home=${SWAP_HOME:-$HOME}
+skip=",${SWAP_SKIP:-},"
+stamp=$(date +%Y%m%d-%H%M%S)
+run=0
+[ "${1:-}" = "--run" ] && run=1
+
+old_state=$home/.local/state/jwn
+new_state=$home/.local/state/jw
+old_config=$home/.config/jwn
+new_config=$home/.config/jw
+cargo_bin=$home/.cargo/bin
+
+step() { printf '\n== %s\n' "$*"; }
+doing() {
+    if [ "$run" = 1 ]; then printf '+ %s\n' "$*"; "$@"; else printf 'would: %s\n' "$*"; fi
+}
+skipped() { [[ "$skip" == *",$1,"* ]]; }
+
+if [ -n "${JWN_PANE_ID:-}" ] && [ "$run" = 1 ]; then
+    echo "this terminal is a pane of jwn: run the script from a plain terminal window" >&2
+    exit 1
+fi
+[ -d "$old_state" ] || { echo "no $old_state: nothing to carry over" >&2; exit 1; }
+# A private state dir of a test must not point at the real one.
+unset JWN_STATE_DIR JWN_SOCKET JW_STATE_DIR JW_SOCKET
+
+step "1. build"
+if skipped build; then echo "skipped"; else
+    (cd "$root" && doing cargo build --release --locked -p jw)
+fi
+
+step "2. stop the jwn daemon"
+pid_file=$old_state/jwn.pid
+if skipped stop; then echo "skipped"; elif [ "$run" = 1 ]; then
+    if [ -S "$old_state/jwn.sock" ]; then
+        "$cargo_bin/jwn" stop || { echo "jwn stop failed; nothing was moved" >&2; exit 1; }
+        pid=$(cat "$pid_file" 2>/dev/null || true)
+        for _ in $(seq 1 60); do
+            { [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; } && break
+            sleep 0.5
+        done
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            echo "the daemon $pid is still stopping after 30 s; nothing was moved. Try again later." >&2
+            exit 1
+        fi
+        echo "stopped"
+    else
+        echo "no daemon answers on $old_state/jwn.sock"
+    fi
+else
+    echo "would: jwn stop, then wait for the recorded pid to end"
+fi
+
+step "3. keep what is in the way"
+for dir in "$new_state" "$new_config"; do
+    if [ -e "$dir" ]; then doing mv "$dir" "$dir.backup-$stamp"; else echo "nothing at $dir"; fi
+done
+
+step "4. carry jwn's state and config over to jw's"
+doing cp -a "$old_state" "$new_state"
+for f in jwn.sock jwn.pid tunnel.pid link-port; do doing rm -f "$new_state/$f"; done
+# The scripts of the shell integration are written again by the daemon that starts.
+doing rm -rf "$new_state/shell"
+if [ -d "$old_config" ]; then doing cp -a "$old_config" "$new_config"; else echo "no $old_config"; fi
+
+step "5. install jw"
+if skipped install; then echo "skipped"; else
+    if [ -e "$cargo_bin/jw" ]; then doing cp -p "$cargo_bin/jw" "$cargo_bin/jw.old-$stamp"; fi
+    (cd "$root" && doing cargo install --path crates/jw --locked)
+fi
+
+step "6. start the jw daemon"
+if skipped start; then echo "skipped"; elif [ "$run" = 1 ]; then
+    nohup "$cargo_bin/jw" daemon >>"$new_state/daemon.log" 2>&1 &
+    disown
+    for _ in $(seq 1 40); do [ -S "$new_state/jw.sock" ] && break; sleep 0.25; done
+    if [ -S "$new_state/jw.sock" ]; then echo "the daemon answers on $new_state/jw.sock"; else
+        echo "the daemon did not start: see $new_state/daemon.log" >&2
+        exit 1
+    fi
+else
+    echo "would: start jw daemon and wait for its socket"
+fi
+
+if [ "$run" = 1 ]; then
+    cat <<EOF
+
+Done. Open \`jw\`: your workspaces are there, with new shells, and the agents resume.
+To go back: jw stop; mv $new_state $new_state.swapped-$stamp; then start jwn (its directories were not touched).
+EOF
+fi

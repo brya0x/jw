@@ -1,4 +1,4 @@
-//! The whole thing through the real `jwn` binary, JSON only: start a daemon in a private
+//! The whole thing through the real `jw` binary, JSON only: start a daemon in a private
 //! socket dir, make a session's worth of state with `jwn cmd`, stop it with `jwn stop`
 //! (only its own pid), start it again and find the state back.
 
