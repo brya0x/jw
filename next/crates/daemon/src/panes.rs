@@ -91,6 +91,7 @@ pub fn new_pane_then(
                 .iter()
                 .cloned()
                 .chain(ws.ports.iter().flat_map(crate::model::PortBlock::env))
+                .chain(workspace_dir(&ws.path))
                 .collect::<Vec<_>>(),
             core.integration_for(&core.shell),
             core.agent_hooks(),
@@ -247,19 +248,40 @@ pub fn resize(shared: &Shared, pane: &Id, rows: u16, cols: u16) -> Done {
     Ok(None)
 }
 
+/// The variable that tells a pane's shell the folder of its workspace, which `cd @` goes to (REQ-645).
+fn workspace_dir(path: &str) -> Option<(String, String)> {
+    (!path.is_empty()).then(|| (identity::env_var("WORKSPACE_DIR"), path.to_owned()))
+}
+
+/// A pane a restored session remembers: its shell, the folder to start it in, what it ran and the
+/// folder of its workspace.
+struct Wanted {
+    id: Id,
+    shell: String,
+    cwd: String,
+    resume: Option<Vec<String>>,
+    root: String,
+}
+
 /// Start the shells of the panes a restored session remembers; a pane whose shell cannot
 /// start is dropped (its workspace stays).
 pub fn restore(shared: &Shared) {
     let (events, shell, env, hooks, history_dir, wanted) = {
         let core = shared.lock();
-        let wanted: Vec<(Id, String, String, Option<Vec<String>>)> = core
+        let wanted: Vec<Wanted> = core
             .model
             .workspaces
             .iter()
             .flat_map(|w| {
                 w.panes.iter().map(|p| {
                     let cwd = start_folder(&p.cwd, &w.path);
-                    (p.id.clone(), p.shell.clone(), cwd, p.resume.clone())
+                    Wanted {
+                        id: p.id.clone(),
+                        shell: p.shell.clone(),
+                        cwd,
+                        resume: p.resume.clone(),
+                        root: w.path.clone(),
+                    }
                 })
             })
             .collect();
@@ -274,7 +296,14 @@ pub fn restore(shared: &Shared) {
     };
     let mut failed = Vec::new();
     let mut resumed = Vec::new();
-    for (id, saved_shell, cwd, resume) in wanted {
+    for Wanted {
+        id,
+        shell: saved_shell,
+        cwd,
+        resume,
+        root,
+    } in wanted
+    {
         let shell = if saved_shell.is_empty() {
             shell.clone()
         } else {
@@ -291,6 +320,7 @@ pub fn restore(shared: &Shared) {
         }
         let setup = shared.lock().integration_for(&shell);
         let launched = with_agent_hooks(resume.as_deref(), hooks.as_deref());
+        let pane_env: Vec<_> = env.iter().cloned().chain(workspace_dir(&root)).collect();
         match pty::spawn(
             &id,
             &shell,
@@ -299,7 +329,7 @@ pub fn restore(shared: &Shared) {
                 argv: launched.as_deref(),
                 then: None,
             },
-            &env,
+            &pane_env,
             &setup,
             events.clone(),
         ) {

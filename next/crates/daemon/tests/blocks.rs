@@ -296,6 +296,63 @@ fn fish_reports_its_commands_as_blocks() {
     }
 }
 
+/// REQ-645: `cd @` takes the shell to the folder of the workspace, and the other `cd`s are as they were.
+fn check_cd_at(shell: &str) {
+    let mut r = rig(shell);
+    let sub = r.dir.join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    let (sub, root) = (
+        sub.to_string_lossy().into_owned(),
+        r.dir.to_string_lossy().into_owned(),
+    );
+    let pane = r.pane.clone();
+    let at = |r: &mut Rig, want: &str| {
+        r.c.wait_until(Duration::from_secs(10), |c| c.nodes[&pane]["cwd"] == want)
+            .unwrap()
+    };
+    r.run("cd sub");
+    r.finished(1);
+    assert!(at(&mut r, &sub), "a plain cd is a cd");
+    r.run("cd @");
+    r.finished(2);
+    assert!(
+        at(&mut r, &root),
+        "cd @ went to {root}: {}",
+        r.c.nodes[&pane]["cwd"]
+    );
+    r.run("cd -");
+    r.finished(3);
+    assert!(at(&mut r, &sub), "cd - is still the folder before");
+    r.run("cd ..");
+    r.finished(4);
+    assert!(at(&mut r, &root), "cd .. is still the folder above");
+    r.d.take().unwrap().stop();
+}
+
+#[test]
+fn zsh_goes_to_the_workspace_folder_with_cd_at() {
+    match find("zsh") {
+        Some(p) => check_cd_at(&p),
+        None => eprintln!("zsh is not installed; skipped"),
+    }
+}
+
+#[test]
+fn bash_goes_to_the_workspace_folder_with_cd_at() {
+    match find("bash") {
+        Some(p) => check_cd_at(&p),
+        None => eprintln!("bash is not installed; skipped"),
+    }
+}
+
+#[test]
+fn fish_goes_to_the_workspace_folder_with_cd_at() {
+    match find("fish") {
+        Some(p) => check_cd_at(&p),
+        None => eprintln!("fish is not installed; skipped"),
+    }
+}
+
 /// REQ-628, REQ-629: a pane made beside one starts where that shell is, and the daemon brings a
 /// shell back where it was.
 #[test]

@@ -41,3 +41,16 @@ if [[ -n "$JWN_CONVERSATION" && "$JWN_CONVERSATION" != 0 && -n "$JWN_BIN" && -n 
   && (( ! $+functions[claude] )) && (( ! $+aliases[claude] )); then
   claude() { "$JWN_BIN" claude "$@"; }
 fi
+
+# `cd @` goes to the folder of the pane's workspace (spec REQ-645); any other `cd` is as it was. Not
+# defined where the person already has a function or an alias named `cd`. A folder that is named `@`
+# is `cd ./@`.
+if [[ -n "$JWN_WORKSPACE_DIR" ]] && (( ! $+functions[cd] )) && (( ! $+aliases[cd] )); then
+  cd() {
+    if (( $# == 1 )) && [[ $1 == @ ]]; then
+      builtin cd -- "$JWN_WORKSPACE_DIR"
+    else
+      builtin cd "$@"
+    fi
+  }
+fi

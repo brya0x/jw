@@ -35,3 +35,16 @@ if test -n "$JWN_CONVERSATION"; and test "$JWN_CONVERSATION" != 0; and set -q JW
         $JWN_BIN claude $argv
     end
 end
+
+# `cd @` goes to the folder of the pane's workspace (spec REQ-645); any other `cd` is as it was. fish
+# runs this before the person's config, so a function of theirs named `cd` wins.
+if set -q JWN_WORKSPACE_DIR; and test -n "$JWN_WORKSPACE_DIR"
+    functions -c cd __jwn_orig_cd
+    function cd --wraps cd --description 'cd, and cd @ to the workspace folder'
+        if test (count $argv) -eq 1; and test "$argv[1]" = @
+            __jwn_orig_cd $JWN_WORKSPACE_DIR
+        else
+            __jwn_orig_cd $argv
+        end
+    end
+end
