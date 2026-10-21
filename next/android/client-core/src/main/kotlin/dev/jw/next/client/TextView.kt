@@ -26,9 +26,6 @@ fun syntaxOf(k: String?): Syntax? = when (k) {
 /** A tab is four columns (REQ-614). */
 fun expandTabs(text: String): String = text.replace("\t", "    ")
 
-/** The characters of the longest line once its tabs are spaces; at least one, so a block as wide as the file can be made. */
-fun widestLine(doc: TextDoc): Int = maxOf(1, doc.lines.maxOfOrNull { line -> line.sumOf { expandTabs(it.t).length } } ?: 0)
-
 /** The line under the title: how many lines the file has, what it weighs and whether it was cut. */
 fun textSub(doc: TextDoc): String =
     listOfNotNull("${doc.lines.size} líneas", formatSize(doc.size), if (doc.truncated) "cortado" else null).joinToString(" · ")

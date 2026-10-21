@@ -68,6 +68,7 @@ import androidx.compose.ui.unit.sp
 import dev.jw.next.client.Aviso
 import dev.jw.next.client.CloseSheet
 import dev.jw.next.client.ClientState
+import dev.jw.next.client.lineReference
 import dev.jw.next.client.HomeItem
 import dev.jw.next.client.HomeKind
 import dev.jw.next.client.HomeRow
@@ -397,6 +398,26 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
     var closeError by remember(screen.id) { mutableStateOf<String?>(null) }
     var closeBusy by remember(screen.id) { mutableStateOf(false) }
     var settingsAsked by remember(screen.id) { mutableIntStateOf(0) }
+    // Lines picked in the viewer of a file (REQ-639): the pane of the workspace that runs a `claude` shows and writes them in
+    // its field; a workspace with none has them copied.
+    val draft = state.draft
+    var referenceNote by remember(screen.id) { mutableStateOf<String?>(null) }
+    val draftScope = rememberCoroutineScope()
+    val draftClipboard = LocalClipboard.current
+    LaunchedEffect(draft, version, ws?.panes?.map { it.id }) {
+        if (draft == null || ws == null) return@LaunchedEffect
+        val nodes = ws.panes.map { source.node(it.id) as? Node.Pane }
+        val agent = nodes.indexOfFirst { it?.conversation != null }
+        if (agent >= 0) {
+            if (ws.panes[agent].id != screen.pane) set(nav.selectPane(state, ws.panes[agent].id))
+        } else if (nodes.all { it != null }) {
+            val text = lineReference(null, null, draft.path, draft.from, draft.to)
+            draftScope.launch { draftClipboard.setClipEntry(ClipEntry(ClipData.newPlainText("jwn", text))) }
+            referenceNote = "no hay un agente aquí: la referencia quedó copiada"
+            set(nav.spendDraft(state))
+        }
+    }
+    LaunchedEffect(referenceNote) { if (referenceNote != null) { delay(3500); referenceNote = null } }
     Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize()) {
         val title = ws?.let { shownName(it.name, it.kind, it.branch) } ?: "workspace"
@@ -433,13 +454,14 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
             }
         }
         addError?.let { Mono(it, Palette.red, 12, lines = 3, modifier = Modifier.fillMaxWidth().background(Palette.panel).padding(horizontal = Gutter, vertical = 8.dp)) }
+        referenceNote?.let { Mono(it, Palette.yellow, 12, lines = 2, modifier = Modifier.fillMaxWidth().background(Palette.panel).padding(horizontal = Gutter, vertical = 8.dp)) }
         val pane = tabPane
         // The conversation of a pane that runs `claude` takes the place of its blocks (REQ-440).
         LaunchedEffect(convId) { convId?.let { source.open(it) } }
         if (pane != null && convId != null) {
             when (val conv = tabConv) {
                 null -> Box(Modifier.weight(1f).padding(Gutter)) { PaneSkeleton() }
-                else -> ConversationPane(source, conv, pane, screen.id, ws.path, ws.branch, settingsAsked)
+                else -> ConversationPane(source, conv, pane, screen.id, ws.path, ws.branch, settingsAsked, draft) { set(nav.spendDraft(state)) }
             }
             return@Column
         }

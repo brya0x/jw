@@ -26,13 +26,10 @@ class TextViewTest {
         assertNull(syntaxOf("from-the-future"))
     }
 
-    /** REQ-614, REQ-618: a tab is four columns and the block of a line is as wide as the widest. */
+    /** REQ-614: a tab is four columns. */
     @Test
-    fun aTabIsFourColumnsAndTheWidestLineIsKnown() {
+    fun aTabIsFourColumns() {
         assertEquals("    a", expandTabs("\ta"))
-        val doc = fixture()
-        assertEquals(doc.lines.maxOf { l -> l.sumOf { it.t.length } }, widestLine(doc))
-        assertEquals(1, widestLine(doc.copy(lines = emptyList())))
     }
 
     /** REQ-618: under the title, the lines, the weight and that it was cut. */

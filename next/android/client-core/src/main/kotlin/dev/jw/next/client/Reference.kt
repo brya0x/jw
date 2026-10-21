@@ -26,6 +26,16 @@ fun fromFolder(workspace: String, cwd: String, rel: String): String {
     return if (path.isEmpty()) "." else path.joinToString("/")
 }
 
+/**
+ * The reference of lines [from] to [to] (from 1, both included) of the file [rel] of the workspace: `@path#L10-14 `, one
+ * line as `#L10`, the path written as the `@` picker writes it from the folder [cwd] the engine runs in when both the
+ * workspace's folder and it are known, and as it is when not (REQ-639).
+ */
+fun lineReference(workspace: String?, cwd: String?, rel: String, from: Int, to: Int): String {
+    val path = if (workspace != null && cwd != null) fromFolder(workspace, cwd, rel) else rel
+    return "@$path#L$from" + (if (to > from) "-$to" else "") + " "
+}
+
 /** The folder [cwd] as a path relative to the [workspace], for the list to start in; "" (its root) when it is the workspace, is outside it or is not known. */
 fun folderInWorkspace(workspace: String?, cwd: String?): String {
     if (workspace == null || cwd == null) return ""

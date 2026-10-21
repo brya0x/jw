@@ -82,7 +82,7 @@ fun FilesScreen(source: AppSource, state: ClientState, screen: Screen.Files, nav
     var error by remember(screen.workspace) { mutableStateOf<String?>(null) }
     var again by remember(screen.workspace) { mutableIntStateOf(0) }
     var viewing by remember(screen.workspace) { mutableStateOf<MarkdownDoc?>(null) }
-    var reading by remember(screen.workspace) { mutableStateOf<TextDoc?>(null) }
+    var reading by remember(screen.workspace) { mutableStateOf<Pair<TextDoc, String>?>(null) }
     var refused by remember(screen.workspace) { mutableStateOf<Pair<String, String>?>(null) }
     var note by remember(screen.workspace) { mutableStateOf<String?>(null) }
     val asks = remember(screen.workspace) { AtomicInteger() }
@@ -97,7 +97,7 @@ fun FilesScreen(source: AppSource, state: ClientState, screen: Screen.Files, nav
             }
         } else {
             source.readFile(screen.workspace, row.path) { result ->
-                result.onSuccess { reading = it }.onFailure {
+                result.onSuccess { reading = it to row.path }.onFailure {
                     if (it is BinaryFile) refused = row.name to binaryNote(row.size) else note = it.message ?: "el PC no pudo leer ${row.name}"
                 }
             }
@@ -141,7 +141,9 @@ fun FilesScreen(source: AppSource, state: ClientState, screen: Screen.Files, nav
         }
     }
     viewing?.let { doc -> ViewerDialog(doc, null) { viewing = null } }
-    reading?.let { doc -> TextViewerDialog(doc) { reading = null } }
+    reading?.let { (doc, rel) ->
+        TextViewerDialog(doc, rel, refer = { draft -> reading = null; set(nav.refer(state, screen.workspace, draft)) }) { reading = null }
+    }
     refused?.let { (file, why) -> RefusalDialog(file, why) { refused = null } }
 }
 

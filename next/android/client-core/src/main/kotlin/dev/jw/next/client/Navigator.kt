@@ -233,7 +233,12 @@ data class ClientState(
     val seen: Seen = Seen(),
     val last: Id? = null,
     val recent: List<Id> = emptyList(),
+    /** Lines picked in the viewer of a file, waiting to be written in the field of the workspace's agent (REQ-639). */
+    val draft: Draft? = null,
 )
+
+/** Lines [from] to [to] (from 1) of the file [path] of a workspace, as a reference for the agent (REQ-639). */
+data class Draft(val path: String, val from: Int, val to: Int)
 
 /**
  * Moves between screens and keeps the seen record: opening the node an attention names is
@@ -298,6 +303,12 @@ class Navigator(private val source: NodeSource) {
 
     /** The files of [workspace]. */
     fun files(s: ClientState, workspace: Id): ClientState = s.copy(screen = Screen.Files(workspace), last = workspace)
+
+    /** The lines of [draft] go to the agent of [workspace]: its screen opens, and writes them in the agent's field (REQ-639). */
+    fun refer(s: ClientState, workspace: Id, draft: Draft): ClientState = openWorkspace(s, workspace).copy(draft = draft)
+
+    /** The draft was written, or could not be: it is not asked for again. */
+    fun spendDraft(s: ClientState): ClientState = s.copy(draft = null)
 
     /** Leaves the files of a workspace for the workspace itself; anywhere else it is [back]. */
     fun leaveFiles(s: ClientState): ClientState {

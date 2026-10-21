@@ -143,6 +143,19 @@ class NavigatorTest {
     private val source = FixtureSource()
     private val nav = Navigator(source)
 
+    /** REQ-639: the lines picked in a file go to the workspace's screen as a draft that is spent once. */
+    @Test
+    fun linesPickedInAFileOpenTheWorkspaceWithADraftThatIsSpentOnce() {
+        val ws = source.session().workspaces.first().id
+        val s = nav.refer(nav.files(ClientState(), ws), ws, Draft("src/a.rs", 3, 5))
+        assertEquals(Screen.Workspace::class, s.screen::class)
+        assertEquals(Draft("src/a.rs", 3, 5), s.draft)
+        assertEquals(ws, s.last)
+        assertEquals(null, nav.spendDraft(s).draft)
+        assertEquals(s.screen, nav.spendDraft(s).screen, "spending it changes nothing else")
+        assertEquals(null, nav.openWorkspace(s, ws).draft, "a plain open has none")
+    }
+
     @Test
     fun goOpensThePaneAnAttentionNamesAndClearsItOnThisPhone() {
         val s0 = ClientState()

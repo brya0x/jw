@@ -73,7 +73,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import dev.jw.next.client.Draft
 import dev.jw.next.client.IMAGES_MAX
+import dev.jw.next.client.lineReference
 import dev.jw.next.client.OLDER_PAGE
 import dev.jw.next.client.OlderHeld
 import dev.jw.next.client.foldRuns
@@ -143,10 +145,11 @@ private sealed interface Open {
 /**
  * A pane that runs `claude`, drawn from its `conversation` node in place of the pane's blocks (REQ-440 to REQ-452;
  * prototype `docs/prototypes/conversation.html`): the items, the sheet that asks, the line with `+` above it, the lists.
- * [settingsAsked] counts the taps on the pane's tab, each of which opens the settings.
+ * [settingsAsked] counts the taps on the pane's tab, each of which opens the settings. [draft] is a reference to lines of a file
+ * picked in the viewer: it is written in the field once and then [spendDraft] says it was (REQ-639).
  */
 @Composable
-internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversation, pane: Node.Pane, workspace: Id, workspacePath: String?, branch: String?, settingsAsked: Int) {
+internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversation, pane: Node.Pane, workspace: Id, workspacePath: String?, branch: String?, settingsAsked: Int, draft: Draft?, spendDraft: () -> Unit) {
     val nodeId = node.id
     val accent = Palette.accent(node.accent)
     val context = LocalContext.current
@@ -257,6 +260,13 @@ internal fun ColumnScope.ConversationPane(source: AppSource, node: Node.Conversa
         val at = text.selection.end.coerceIn(0, text.text.length)
         val next = text.text.substring(0, at) + piece + text.text.substring(at)
         text = TextFieldValue(next, TextRange(at + piece.length))
+    }
+    // Lines picked in a file arrive as a reference in the field; with the session held by another `claude` nothing is written.
+    LaunchedEffect(draft) {
+        if (draft == null) return@LaunchedEffect
+        if (heldText == null) insert(lineReference(workspacePath, node.cwd, draft.path, draft.from, draft.to))
+        else say("otro claude tiene esta sesión: la referencia no se escribió", error = true)
+        spendDraft()
     }
 
     // [temporary] is the photo the camera wrote: it goes once it has been read, so no photo is left in the cache.
