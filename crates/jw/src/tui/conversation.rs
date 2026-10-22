@@ -3957,14 +3957,13 @@ mod tests {
     /// REQ-707, RISK-85: a double click after the wheel moved the window picks the word that is drawn.
     #[test]
     fn a_double_click_after_the_wheel_picks_the_word_that_is_drawn() {
-        let (ui, conv) = fourteen_lines();
+        let (mut ui, conv) = fourteen_lines();
         for _ in 0..4 {
             ui.wheel(&conv, SMALL, SMALL_FIRST_TEXT, true);
         }
         let rows = frame_in(&ui, &conv, SMALL);
         let y = row_of(&rows, "l04");
         let x = rows[y].chars().position(|c| c == 'l').unwrap();
-        let mut ui = ui;
         assert!(ui.select_word_in_field(&conv, SMALL, x + 1, y));
         let (from, to) = ui.editor.selection().expect("a word is selected");
         assert_eq!(&ui.editor.text()[from..to], "l04");
@@ -3973,10 +3972,7 @@ mod tests {
     /// REQ-703: the limit does not change when a turn starts, so the band does not jump.
     #[test]
     fn the_band_has_the_same_rows_whether_or_not_a_turn_runs() {
-        let mut ui = Ui::default();
-        let text: Vec<String> = (1..=14).map(|n| format!("l{n:02}")).collect();
-        ui.editor.set(&text.join("\n"));
-        let idle = idle();
+        let (ui, idle) = fourteen_lines();
         let mut working = idle.clone();
         working.status = ConvStatus::Streaming;
         let band = |c: &Conversation| {
