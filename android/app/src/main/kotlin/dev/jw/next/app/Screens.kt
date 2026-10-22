@@ -323,6 +323,8 @@ private fun WorkspaceList(items: List<HomeItem>, nav: Navigator, state: ClientSt
                     hold = { if (item.row.removing) removing() else hold(item.row.id) },
                     go = { a -> set(nav.go(state, a)) },
                 )
+                // the rows of the groups are drawn by N161d2
+                is HomeItem.Group, is HomeItem.Empty, HomeItem.Ungrouped -> {}
             }
         }
         item { Legend(create) }

@@ -20,19 +20,19 @@ class RemoveTest {
         assertEquals(HomeKind.Worktree, worktree.kind)
         assertEquals(HomeKind.Folder, folder.kind)
         assertEquals(
-            listOf(WsAction.Rename, WsAction.ExistingWorktrees, WsAction.Project, WsAction.CloseWorkspace, WsAction.RemoveWorktree),
+            listOf(WsAction.MoveToGroup, WsAction.Rename, WsAction.ExistingWorktrees, WsAction.Project, WsAction.CloseWorkspace, WsAction.RemoveWorktree),
             workspaceMenu(worktree.kind, worktree.repo).map { it.action },
             "a worktree knows its repository, so it offers the project's settings (REQ-526)",
         )
-        assertEquals(listOf(WsAction.Rename, WsAction.CloseWorkspace, WsAction.RemoveWorktree), workspaceMenu(HomeKind.Worktree, null).map { it.action })
-        assertEquals(listOf(WsAction.RemoveWorkspace), workspaceMenu(HomeKind.Folder, null).map { it.action })
+        assertEquals(listOf(WsAction.MoveToGroup, WsAction.Rename, WsAction.CloseWorkspace, WsAction.RemoveWorktree), workspaceMenu(HomeKind.Worktree, null).map { it.action })
+        assertEquals(listOf(WsAction.MoveToGroup, WsAction.RemoveWorkspace), workspaceMenu(HomeKind.Folder, null).map { it.action }, "REQ-676: every kind can be moved to a group")
         // Only a repository's root offers a worktree, and only when it knows the repository.
         assertEquals(
-            listOf(WsAction.NewWorktree, WsAction.ExistingWorktrees, WsAction.Project, WsAction.RemoveWorkspace),
+            listOf(WsAction.MoveToGroup, WsAction.NewWorktree, WsAction.ExistingWorktrees, WsAction.Project, WsAction.RemoveWorkspace),
             workspaceMenu(HomeKind.Root, "/home/u/code/app").map { it.action },
         )
-        assertEquals("de «app»", workspaceMenu(HomeKind.Root, "/home/u/code/app").first().note)
-        assertEquals(listOf(WsAction.RemoveWorkspace), workspaceMenu(HomeKind.Root, null).map { it.action })
+        assertEquals("de «app»", workspaceMenu(HomeKind.Root, "/home/u/code/app")[1].note)
+        assertEquals(listOf(WsAction.MoveToGroup, WsAction.RemoveWorkspace), workspaceMenu(HomeKind.Root, null).map { it.action })
     }
 
     @Test

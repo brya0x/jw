@@ -119,6 +119,21 @@ class SeenStore(context: Context) {
 }
 
 /**
+ * The groups that are folded on this phone, for each PC it is connected to (REQ-678): they are the
+ * phone's own, in private preferences, apart from the seen record, which is emptied when a daemon
+ * starts again and these are not.
+ */
+class FoldedStore(context: Context) {
+    private val prefs = context.getSharedPreferences("folded", Context.MODE_PRIVATE)
+
+    fun load(pc: String): Set<Id> = prefs.getStringSet(pc, null).orEmpty().toSet()
+
+    fun save(pc: String, folded: Set<Id>) {
+        prefs.edit().putStringSet(pc, folded.toSet()).apply()
+    }
+}
+
+/**
  * The daemon's protocol over any transport that carries its lines: nodes are opened on demand
  * and kept in a [NodeCache], and when the transport comes back every opened node is opened again.
  */
@@ -178,6 +193,26 @@ abstract class ProtocolSource : AppSource() {
 
     override fun renameWorkspace(workspace: Id, name: String, reply: (Result<Unit>) -> Unit) {
         command(Cmd.RenameWorkspace(workspace, name)) { reply(it.done("el PC no pudo renombrar el workspace")) }
+    }
+
+    override fun createGroup(name: String, reply: (Result<Id>) -> Unit) {
+        command(Cmd.CreateGroup(name)) { reply(it.made("group", "el grupo", "el PC no pudo crear el grupo")) }
+    }
+
+    override fun renameGroup(group: Id, name: String, reply: (Result<Unit>) -> Unit) {
+        command(Cmd.RenameGroup(group, name)) { reply(it.done("el PC no pudo renombrar el grupo")) }
+    }
+
+    override fun deleteGroup(group: Id, reply: (Result<Unit>) -> Unit) {
+        command(Cmd.DeleteGroup(group)) { reply(it.done("el PC no pudo borrar el grupo")) }
+    }
+
+    override fun moveToGroup(workspace: Id, group: Id?, reply: (Result<Unit>) -> Unit) {
+        command(Cmd.MoveToGroup(workspace, group)) { reply(it.done("el PC no pudo mover el workspace")) }
+    }
+
+    override fun moveGroup(group: Id, delta: Int, reply: (Result<Unit>) -> Unit) {
+        command(Cmd.MoveGroup(group, delta)) { reply(it.done("el PC no pudo mover el grupo")) }
     }
 
     override fun renamePane(pane: Id, name: String, reply: (Result<Unit>) -> Unit) {

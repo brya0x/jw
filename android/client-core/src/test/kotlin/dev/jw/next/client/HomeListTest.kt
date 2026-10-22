@@ -18,6 +18,8 @@ class HomeListTest {
         when (it) {
             is HomeItem.Heading -> "# ${it.text}"
             is HomeItem.Row -> "${it.row.kind}:${it.row.id.takeLast(2)}"
+            // the groups have their own tests, GroupsHomeTest
+            is HomeItem.Group, is HomeItem.Empty, HomeItem.Ungrouped -> error("no groups here: $it")
         }
     }
 

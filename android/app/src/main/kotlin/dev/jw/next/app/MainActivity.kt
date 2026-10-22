@@ -66,6 +66,7 @@ class MainActivity : ComponentActivity() {
             else -> links.load().lastUsed()?.let { Mode.Running(WsLinkSource(links, it, null)) } ?: Mode.Welcome
         }
         val store = SeenStore(this)
+        val folds = FoldedStore(this)
         val looks = LookStore(this)
         // Drawn in the chosen theme from the first frame, not after one in the default.
         Palette.use(looks.load().theme(isNight()))
@@ -96,7 +97,7 @@ class MainActivity : ComponentActivity() {
                         PasteScreen(m.error, { mode = open(it, m.back) }) { mode = m.back }
                     }
                     is Mode.Pcs -> Pcs(m) { mode = it }
-                    is Mode.Running -> Running(m.source, m.start, store, look, osDark, setLook) { mode = it }
+                    is Mode.Running -> Running(m.source, m.start, store, folds, look, osDark, setLook) { mode = it }
                 }
             }
         }
@@ -144,7 +145,7 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun Running(source: AppSource, start: Screen, store: SeenStore, look: Look, osDark: Boolean, setLook: (Look) -> Unit, go: (Mode) -> Unit) {
+    private fun Running(source: AppSource, start: Screen, store: SeenStore, folds: FoldedStore, look: Look, osDark: Boolean, setLook: (Look) -> Unit, go: (Mode) -> Unit) {
         val link = source as? WsLinkSource
         val ui = link?.ui?.value
         when (ui) {
@@ -163,10 +164,15 @@ class MainActivity : ComponentActivity() {
         if (link?.offline?.value == true) return OfflineScreen(link.name, link::retryNow) { go(Mode.Pcs(link)) }
         val nav = remember(source) { Navigator(source) }
         // A record from another epoch is not trusted: it is emptied before first use.
-        var state by remember(source) { mutableStateOf(ClientState(screen = start, seen = store.load())) }
+        // What is folded is kept for the PC it is folded on, by its device.
+        val pc = link?.device ?: "fixture"
+        var state by remember(source) { mutableStateOf(ClientState(screen = start, seen = store.load(), folded = folds.load(pc))) }
         val epoch = source.epoch
         LaunchedEffect(epoch) { if (epoch.isNotEmpty()) state = state.copy(seen = state.seen.forEpoch(epoch)) }
         LaunchedEffect(state.seen) { store.save(state.seen) }
+        LaunchedEffect(state.folded) { folds.save(pc, state.folded) }
+        // A group the PC no longer lists is forgotten once it has said so.
+        LaunchedEffect(epoch, source.session().groups) { state = nav.pruneFolded(state) }
         BackHandler(enabled = state.screen is Screen.Workspace || state.screen is Screen.Settings || state.screen is Screen.Avisos) { state = nav.back(state) }
         when (val screen = state.screen) {
             is Screen.Workspace -> WorkspaceScreen(source, state, screen, nav) { state = it }

@@ -80,8 +80,14 @@ data class HomeRow(
     val removalFailed: Boolean = false,
 )
 
-/** An item of Avisos: one unseen attention and the workspace it belongs to. */
-data class Aviso(val workspaceId: Id, val workspace: String, val attention: Attention)
+/** An item of Avisos: one unseen attention and the workspace it belongs to, and its group when it has one (REQ-677). */
+data class Aviso(
+    val workspaceId: Id,
+    val workspace: String,
+    val attention: Attention,
+    val group: Id? = null,
+    val groupName: String? = null,
+)
 
 /**
  * What a workspace is called on the screen (REQ-185): a worktree that has the name it got when
@@ -127,49 +133,107 @@ fun homeRows(session: Node.Session, seen: Seen): List<HomeRow> = session.workspa
     )
 }
 
-/** A line of Home's list: a heading, or a workspace's row. */
+/** A line of Home's list: a heading, the row of a group, or a workspace's row. */
 sealed interface HomeItem {
     /** What keeps the line in place in a list. */
     val key: String
 
-    data class Heading(val text: String) : HomeItem {
+    /** [grouped]: it is drawn under a group's row or under «sin grupo», two steps in (REQ-675). */
+    data class Heading(val text: String, val grouped: Boolean = false) : HomeItem {
         override val key get() = "heading:$text"
     }
 
-    data class Row(val row: HomeRow) : HomeItem {
+    data class Row(val row: HomeRow, val grouped: Boolean = false) : HomeItem {
         override val key get() = row.id
+    }
+
+    /** The row of a group (REQ-675): [count] workspaces and, folded, what they say ([running], [marks]). */
+    data class Group(
+        val id: Id,
+        val name: String,
+        val open: Boolean,
+        val count: Int,
+        val running: Int,
+        val marks: List<GroupMark>,
+    ) : HomeItem {
+        override val key get() = "group:$id"
+
+        /** The marks a folded row draws: three kinds (REQ-670)… */
+        val shownMarks: List<GroupMark> get() = marks.take(SHOWN_MARKS)
+
+        /** …and how many attentions the others hold. */
+        val moreMarks: Int get() = marks.drop(SHOWN_MARKS).sumOf { it.count }
+    }
+
+    /** What an open group with no workspace says. */
+    data class Empty(val group: Id) : HomeItem {
+        override val key get() = "empty:$group"
+    }
+
+    /** The heading of the workspaces that are in no group, WHERE a group exists. */
+    data object Ungrouped : HomeItem {
+        override val key get() = "ungrouped"
     }
 }
 
+/** How many kinds of attention a folded group draws before it says how many more (REQ-670). */
+private const val SHOWN_MARKS = 3
+
 /**
- * Home's list as it is drawn (REQ-219 to REQ-221): the daemon sends each repository's root and
- * worktrees together and the folders that are not repositories last. A worktree whose root is
- * not what comes before it gets the repository's name above it, and the first folder gets
- * `carpetas` when something comes before it.
+ * Home's list as it is drawn (REQ-219 to REQ-221, REQ-669, REQ-675): the daemon sends each group's
+ * workspaces together, in each group each repository's root and worktrees together, and the folders
+ * that are not repositories last. A worktree whose root is not what comes before it gets the
+ * repository's name above it, and, with no group at all, the first folder gets `carpetas` when
+ * something comes before it. With groups, each has its row (and under it, unless it is in [folded],
+ * its workspaces or «vacío»), and what is in none comes last under «sin grupo».
  */
-fun homeItems(session: Node.Session, seen: Seen): List<HomeItem> {
+fun homeItems(session: Node.Session, seen: Seen, folded: Set<Id> = emptySet()): List<HomeItem> {
     val rows = homeRows(session, seen)
+    val all = session.workspaces.indices.toList()
+    if (session.groups.isEmpty()) return itemsOf(session, rows, all, carpetas = true, grouped = false)
+    val items = mutableListOf<HomeItem>()
+    for (g in session.groups) {
+        val mine = all.filter { session.workspaces[it].group == g.id }
+        val open = g.id !in folded
+        val (running, marks) = groupSays(session, seen, g.id)
+        items += HomeItem.Group(g.id, g.name, open, mine.size, running, marks)
+        if (!open) continue
+        if (mine.isEmpty()) items += HomeItem.Empty(g.id) else items += itemsOf(session, rows, mine, carpetas = false, grouped = true)
+    }
+    val listed = session.groups.map { it.id }.toSet()
+    val rest = all.filter { session.workspaces[it].group.let { g -> g == null || g !in listed } }
+    if (rest.isNotEmpty()) {
+        items += HomeItem.Ungrouped
+        items += itemsOf(session, rows, rest, carpetas = false, grouped = true)
+    }
+    return items
+}
+
+/** The workspaces at [at], in that order, as the lines of a list: the headings of REQ-220 and, with [carpetas], REQ-221. */
+private fun itemsOf(session: Node.Session, rows: List<HomeRow>, at: List<Int>, carpetas: Boolean, grouped: Boolean): List<HomeItem> {
     val items = mutableListOf<HomeItem>()
     var folders = false
-    session.workspaces.forEachIndexed { i, w ->
-        val before = session.workspaces.getOrNull(i - 1)
+    at.forEachIndexed { k, i ->
+        val w = session.workspaces[i]
+        val before = at.getOrNull(k - 1)?.let { session.workspaces[it] }
         val project = w.project
         // What comes before is this worktree's root or another worktree of its repository.
         val follows = before != null && (before.project == project || before.path == project)
         when {
             rows[i].kind == HomeKind.Folder && !folders -> {
                 folders = true
-                if (before != null) items += HomeItem.Heading("carpetas")
+                if (carpetas && before != null) items += HomeItem.Heading("carpetas")
             }
-            rows[i].kind == HomeKind.Worktree && project != null && !follows -> items += HomeItem.Heading(repoName(project))
+            rows[i].kind == HomeKind.Worktree && project != null && !follows -> items += HomeItem.Heading(repoName(project), grouped)
         }
-        items += HomeItem.Row(rows[i])
+        items += HomeItem.Row(rows[i], grouped)
     }
     return items
 }
 
 fun avisos(session: Node.Session, seen: Seen): List<Aviso> = session.workspaces.flatMap { w ->
-    w.attention.filterNot(seen::isSeen).byUrgency().map { Aviso(w.id, w.shown(), it) }
+    val group = session.groups.firstOrNull { it.id == w.group }
+    w.attention.filterNot(seen::isSeen).byUrgency().map { Aviso(w.id, w.shown(), it, group?.id, group?.name) }
 }
 
 /** Where tapping an attention goes: the workspace, and the pane when the attention names one. */
