@@ -109,7 +109,7 @@ label{font-size:12px;color:var(--mut);display:flex;gap:6px;align-items:center}
 <div class="row">
   <div>
     <div class="term" tabindex="0" id="term"><pre id="scr"></pre></div>
-    <p class="note" style="max-width:800px">Teclas (el sidebar tiene el foco al abrir la página): <kbd>j</kbd><kbd>k</kbd> mover · <kbd>1</kbd>…<kbd>9</kbd> ir al workspace con ese número · <kbd>h</kbd> pliega el grupo (o sube al grupo desde un hijo) · <kbd>l</kbd> abre · <kbd>↵</kbd> pliega o abre un grupo, entra a un workspace · <kbd>z</kbd> pliega o abre todos · <kbd>g</kbd> mueve el workspace a un grupo · <kbd>G</kbd> grupo nuevo · <kbd>r</kbd> renombra el grupo · <kbd>x</kbd> borra el grupo · <kbd>J</kbd><kbd>K</kbd> baja y sube el grupo (o el repo dentro de su grupo) · <kbd>a</kbd> avisos. Ninguna lleva Alt.</p>
+    <p class="note" style="max-width:800px">Teclas (el sidebar tiene el foco al abrir la página): <kbd>j</kbd><kbd>k</kbd> mover · el número a la izquierda de cada workspace es solo una etiqueta (hoy tampoco salta) · <kbd>h</kbd> pliega el grupo (o sube al grupo desde un hijo) · <kbd>l</kbd> abre · <kbd>↵</kbd> pliega o abre un grupo, entra a un workspace · <kbd>z</kbd> pliega o abre todos · <kbd>g</kbd> mueve el workspace a un grupo · <kbd>G</kbd> grupo nuevo · <kbd>r</kbd> renombra el grupo · <kbd>x</kbd> borra el grupo · <kbd>J</kbd><kbd>K</kbd> baja y sube el grupo (o el repo dentro de su grupo) · <kbd>a</kbd> avisos. Ninguna lleva Alt.</p>
   </div>
   <div>
     <div class="phone" id="phone">
@@ -132,7 +132,7 @@ label{font-size:12px;color:var(--mut);display:flex;gap:6px;align-items:center}
   <li><b>Un workspace está en un solo grupo, o en ninguno.</b> El sidebar es un árbol: una fila, un cursor, una selección; con varios grupos la misma fila saldría dos veces y sus avisos se contarían dos veces. Si hace falta cruzar, se hace con otro grupo, no con etiquetas.</li>
   <li><b>La pertenencia es del repositorio</b> (por defecto): al mover una raíz o un worktree se mueve el repositorio entero, y un worktree nuevo nace en el grupo de su repositorio. Una carpeta que no es un repo se mueve sola. El grupo se guarda con la ruta del proyecto, así que cerrar y reabrir un workspace lo devuelve a su grupo (prueba «cerrar y reabrir la fila»). Con la otra opción cada workspace tiene el suyo, y un repo puede quedar partido: en cada grupo sale con su nombre encima, como un repo sin raíz abierta.</li>
   <li><b>El sidebar:</b> los grupos en su orden, cada uno con sus repos (raíz y worktrees, como hoy) dos columnas más adentro que hoy; los workspaces sin grupo al final bajo <code>sin grupo</code>. <b>Sin ningún grupo no cambia nada</b>: el sidebar es el de hoy, con <code>carpetas</code>. Los encabezados de repo no se resaltan; la fila de un grupo sí, y lleva su cursor.</li>
-  <li><b>Plegar:</b> <kbd>↵</kbd> en el grupo, <kbd>h</kbd> pliega, <kbd>l</kbd> abre, <kbd>z</kbd> todos. Con el cursor en un hijo, <kbd>h</kbd> sube al grupo. Plegar un grupo con el cursor dentro lleva el cursor a su fila. Ir a un workspace por un aviso o por su número abre su grupo. Los números siguen lo que se dibuja: los hijos de un grupo plegado no tienen número.</li>
+  <li><b>Plegar:</b> <kbd>↵</kbd> en el grupo, <kbd>h</kbd> pliega, <kbd>l</kbd> abre, <kbd>z</kbd> todos. Con el cursor en un hijo, <kbd>h</kbd> sube al grupo. Plegar un grupo con el cursor dentro lleva el cursor a su fila. Ir a un workspace por un aviso abre su grupo. Los números dibujados siguen lo que se ve (los hijos de un grupo plegado no tienen número) y no son teclas.</li>
   <li><b>La fila de un grupo plegado resume a sus hijos:</b> <span class="c-blue">⠋2</span> es lo que corre (agentes trabajando y trabajos, como el spinner del workspace), y después un símbolo por tipo de aviso, del más urgente al menos, con su cuenta si pasa de uno: <span class="c-red">!</span> permiso, <span class="c-yellow">?</span> pregunta, <span class="c-mag">◆</span> plan, <span class="c-red">✗</span> CI. Abierto, el grupo solo lleva el número de sus workspaces: los avisos están en cada fila.</li>
   <li><b>Crear:</b> <kbd>G</kbd> pide el nombre y crea un grupo vacío; <kbd>g</kbd> en un workspace abre la lista de grupos (con <kbd>1</kbd>…<kbd>9</kbd>, <kbd>0</kbd> sin grupo y <kbd>n</kbd> para uno nuevo que ya lo contiene). El nombre no puede estar vacío ni repetido (sin distinguir mayúsculas) ni pasar de 40 letras; si es largo, se corta con <code>…</code>.</li>
   <li><b>Renombrar</b> es <kbd>r</kbd> sobre la fila del grupo (sobre un worktree sigue siendo renombrar el worktree). <b>Reordenar</b> con <kbd>J</kbd> y <kbd>K</kbd>: sobre un grupo lo sube o baja entre los grupos; sobre un workspace mueve su repositorio dentro de su grupo (para cambiar de grupo, <kbd>g</kbd>).</li>
@@ -151,7 +151,7 @@ label{font-size:12px;color:var(--mut);display:flex;gap:6px;align-items:center}
   <li><b>Borrar un grupo con workspaces.</b> Recomiendo <b>soltarlos</b> a «sin grupo», con la pregunta diciendo cuántos son: el grupo es solo organización y nada se pierde. Exigir vaciarlo es más seguro y más pesado.</li>
   <li><b>La fila de un grupo plegado.</b> Recomiendo <b>un símbolo por tipo</b> (hasta tres tipos y <code>+n</code>): dice qué espera sin abrir. «El más urgente y el total» ocupa menos y sirve en 28 columnas con nombres largos.</li>
   <li><b>Dónde vive el plegado.</b> Recomiendo <b>en cada cliente</b>, como el registro de lo visto: plegar en el teléfono no debe plegar la terminal ante la que estás sentado. En el daemon sería un campo más y un cambio que llega a todos.</li>
-  <li><b>Los números y el plegado.</b> Recomiendo que los números <b>sigan lo que se dibuja</b> (REQ-223: «the numbers follow what is drawn»), así que plegar renumera lo que queda debajo. La alternativa, números fijos que se saltan lo plegado, deja huecos y cambia lo que <kbd>3</kbd> significa de un día a otro.</li>
+  <li><b>Los números.</b> Los números dibujados siguen lo que se ve (REQ-223): plegar un grupo renumera lo que queda debajo, y no son teclas, como hoy. Recomiendo no añadir un salto por número.</li>
   <li><b>Las teclas.</b> <kbd>g</kbd> y <kbd>G</kbd> (grupo), <kbd>r</kbd>/<kbd>x</kbd> sobre la fila del grupo, <kbd>h</kbd>/<kbd>l</kbd> para plegar, <kbd>J</kbd>/<kbd>K</kbd> para ordenar: están libres en el sidebar, pero <kbd>J</kbd> <kbd>K</kbd> son «intercambiar panel» en el nivel de paneles (es la misma idea: mover hacia abajo o arriba) y <kbd>z</kbd> se eligió para «todos» porque <kbd>H</kbd>/<kbd>L</kbd> también son de paneles. Si prefieres no repetir letras, la alternativa es <kbd>[</kbd> y <kbd>]</kbd> para ordenar.</li>
   <li><b>Sin grupo.</b> Recomiendo <b>al final y solo con encabezado cuando existe algún grupo</b>: quien no use grupos no ve nada nuevo.</li>
   <li><b>La fábrica (idea).</b> Recomiendo <b>dejarla para después</b> de los grupos: no necesita nada del daemon, y se decide mejor cuando haya grupos de verdad con agentes en cada uno. Si sí, es solo lectura: responder sigue siendo entrar al workspace.</li>
@@ -577,10 +577,6 @@ function onTermKey(e){
   const w=selWs(),g=selGroup();
   if(k==='j'||k==='ArrowDown')move(1);
   else if(k==='k'||k==='ArrowUp')move(-1);
-  else if(/^[1-9]$/.test(k)){
-    let n=0;const r=sideRows().find(r=>r.t==='ws'&&++n===+k);
-    if(r)ui.sel=toSel(r);
-  }
   else if(k==='h'||k==='ArrowLeft'){
     if(g)toggle(g.id,'tui',false);
     else if(w&&w.group)ui.sel={t:'g',id:w.group};
