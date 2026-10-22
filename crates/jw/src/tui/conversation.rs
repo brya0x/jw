@@ -21,6 +21,7 @@ use super::field::{self, Field, Look, Mark, Window};
 use super::fold;
 use super::older::{self, Older};
 use super::panels::{self, Panel, RowAct};
+use super::paste::{self, Fold};
 use super::{Grid, Rgb, Style, clip, look, select};
 use crate::claude::tools_word;
 
@@ -292,15 +293,80 @@ enum Pop {
 /// The line being typed: characters, and where the cursor is among them.
 #[derive(Default, Debug, Clone)]
 pub struct Composer {
+    /// The characters, a fold of a long paste being one of the private-use block (REQ-710).
     chars: Vec<char>,
     cursor: usize,
+    /// What each fold stands for, in the order of its character (`paste::char_of`), and how many
+    /// folds the message has numbered so far (REQ-709).
+    folds: Vec<Fold>,
+    made: usize,
     /// Where a selection began, when there is one: it covers what lies between this and the cursor.
     anchor: Option<usize>,
 }
 
 impl Composer {
+    /// What the line says: a fold is the text that was pasted (REQ-712).
     pub fn text(&self) -> String {
+        self.chars
+            .iter()
+            .map(
+                |&c| match paste::index_of(c).and_then(|k| self.folds.get(k)) {
+                    Some(f) => f.body.clone(),
+                    None => c.to_string(),
+                },
+            )
+            .collect()
+    }
+
+    /// The line as it is kept, a fold being its character: what `cursor` and the marks count in.
+    pub fn raw(&self) -> String {
         self.chars.iter().collect()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.chars.is_empty()
+    }
+
+    /// The folds of the line, for the field to draw their labels.
+    pub fn folds(&self) -> &[Fold] {
+        &self.folds
+    }
+
+    /// Put a long paste in the line as a fold, in place of what is selected (REQ-709); with no
+    /// room left in the block of folds it goes in as the text.
+    pub fn fold(&mut self, text: &str) {
+        let Some(c) = paste::char_of(self.folds.len()) else {
+            return self.insert(text);
+        };
+        self.delete_selection();
+        self.made += 1;
+        self.folds.push(Fold::new(self.made, paste::clean(text)));
+        self.chars.insert(self.cursor, c);
+        self.cursor += 1;
+    }
+
+    fn fold_at(&self) -> Option<usize> {
+        let is_fold = |i: usize| self.chars.get(i).is_some_and(|c| paste::is_fold(*c));
+        if is_fold(self.cursor) {
+            Some(self.cursor)
+        } else {
+            self.cursor.checked_sub(1).filter(|i| is_fold(*i))
+        }
+    }
+
+    /// Turn the fold at the cursor (or just before it) into its text, the cursor after it
+    /// (REQ-710); whether there was one.
+    pub fn unfold(&mut self) -> bool {
+        let Some(i) = self.fold_at() else {
+            return false;
+        };
+        let body: Vec<char> = paste::index_of(self.chars[i])
+            .and_then(|k| self.folds.get(k))
+            .map_or_else(Vec::new, |f| f.body.chars().collect());
+        self.anchor = None;
+        self.cursor = i + body.len();
+        self.chars.splice(i..=i, body);
+        true
     }
 
     pub fn cursor(&self) -> usize {
@@ -316,7 +382,13 @@ impl Composer {
 
     /// Select the word that has the character `at` (REQ-637); `true` when there is one.
     pub fn select_word_at(&mut self, at: usize) -> bool {
-        let Some((from, to)) = select::word_at(&self.text(), at) else {
+        // A fold is a word by itself (REQ-710).
+        if self.chars.get(at).is_some_and(|c| paste::is_fold(*c)) {
+            self.anchor = Some(at);
+            self.cursor = at + 1;
+            return true;
+        }
+        let Some((from, to)) = select::word_at(&self.raw(), at) else {
             return false;
         };
         self.anchor = Some(from);
@@ -325,21 +397,28 @@ impl Composer {
     }
 
     pub fn set(&mut self, text: &str) {
-        self.chars = text.chars().collect();
+        self.chars = paste::clean(text).chars().collect();
         self.cursor = self.chars.len();
         self.anchor = None;
+        self.folds.clear();
+        self.made = 0;
     }
 
     pub fn take(&mut self) -> String {
+        let text = self.text();
+        self.chars.clear();
         self.cursor = 0;
         self.anchor = None;
-        std::mem::take(&mut self.chars).into_iter().collect()
+        self.folds.clear();
+        self.made = 0;
+        text
     }
 
-    /// Write `text` at the cursor, in place of what is selected.
+    /// Write `text` at the cursor, in place of what is selected; a character that would pass for a
+    /// fold's is written as U+FFFD (REQ-712).
     pub fn insert(&mut self, text: &str) {
         self.delete_selection();
-        for c in text.chars() {
+        for c in paste::clean(text).chars() {
             self.chars.insert(self.cursor, c);
             self.cursor += 1;
         }
@@ -438,7 +517,7 @@ impl Composer {
     /// last row it grows to the start or the end of the text, and the key is always taken;
     /// without, false says there was no row to go to (and the selection is gone all the same).
     fn vertical(&mut self, down: bool, select: bool, width: usize) -> bool {
-        let starts = field::row_starts(&self.chars, width, self.cursor);
+        let starts = field::row_starts(&self.chars, width, self.cursor, &self.folds);
         let row = starts.partition_point(|s| *s <= self.cursor) - 1;
         let to = if down {
             Some(row + 1).filter(|r| *r < starts.len())
@@ -455,8 +534,15 @@ impl Composer {
         };
         // A row ends at its last character, or at the one before the next row begins.
         let end = starts.get(to + 1).map_or(self.chars.len(), |next| next - 1);
-        let col = self.cursor - starts[row];
-        self.go(starts[to] + col.min(end - starts[to]), select);
+        // The column is counted in cells, a fold taking those of its label (REQ-710).
+        let cells = |c: &char| field::cell_width(*c, width, &self.folds);
+        let col: usize = self.chars[starts[row]..self.cursor].iter().map(cells).sum();
+        let (mut at, mut seen) = (starts[to], 0);
+        while at < end && seen + cells(&self.chars[at]) <= col {
+            seen += cells(&self.chars[at]);
+            at += 1;
+        }
+        self.go(at, select);
         true
     }
 
@@ -742,8 +828,12 @@ impl Ui {
             return;
         }
         self.menu_at = 0;
-        self.editor
-            .insert(&text.replace("\r\n", "\n").replace('\r', "\n"));
+        let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        if paste::folds(&text) {
+            self.editor.fold(&text);
+        } else {
+            self.editor.insert(&text);
+        }
     }
 
     /// A picture the clipboard held, now small: it goes with the next message.
@@ -800,7 +890,7 @@ impl Ui {
     /// The commands whose names hold the letters after the `/` the line is, the ones that begin
     /// with them first (REQ-416).
     fn menu<'a>(&self, conv: &'a Conversation) -> Vec<&'a ConvCommand> {
-        let text = self.editor.text();
+        let text = self.editor.raw();
         let Some((_, typed)) = self.editor.slash().filter(|_| self.menu_off != text) else {
             return Vec::new();
         };
@@ -854,7 +944,7 @@ impl Ui {
     /// that is a command that exists, wherever it is, in the colour of where it is defined
     /// (REQ-596).
     fn marks(&self, conv: &Conversation) -> Vec<Mark> {
-        let text = self.editor.text();
+        let text = self.editor.raw();
         let mut out = Vec::new();
         if text.starts_with('!') && text.len() > 1 {
             out.push((0, 1, look::green()));
@@ -1470,7 +1560,7 @@ impl Ui {
     fn ghost<'a>(&self, conv: &'a Conversation) -> Option<&'a str> {
         conv.suggestion.as_deref().filter(|s| {
             conv.held.is_none()
-                && self.editor.text().is_empty()
+                && self.editor.is_empty()
                 && conv.ask.is_none()
                 && self.pop.is_none()
                 && !self.working(conv)
@@ -1543,7 +1633,7 @@ impl Ui {
         self.text_width.set(field::text_width(iw));
         Field::selecting(
             &PaneInput {
-                text: self.editor.text(),
+                text: self.editor.raw(),
                 cursor: self.editor.cursor() as u32,
             },
             self.editor.selection(),
@@ -1555,6 +1645,7 @@ impl Ui {
                 bar: true,
                 pin: self.peeked(),
             },
+            self.editor.folds(),
         )
     }
 
@@ -2211,7 +2302,7 @@ impl Ui {
                 }
                 KeyCode::Enter => return self.choose_command(conv, menu[at]),
                 KeyCode::Esc => {
-                    self.menu_off = self.editor.text();
+                    self.menu_off = self.editor.raw();
                     return None;
                 }
                 _ => {}
@@ -2295,12 +2386,13 @@ impl Ui {
                 self.agents.focus = true;
                 None
             }
+            // A fold turns into the text that was pasted, to edit it (REQ-710); the agents' area
+            // keeps the Tab it has (REQ-601).
+            KeyCode::Tab if self.editor.unfold() => None,
             // The terminal sends the same byte for ^/ and ^? (crossterm reads it as ^7 or ^_
             // when it does not know the key).
             KeyCode::Char('/' | '?' | '_' | '7') if ctrl => self.open_panel(conv, "keys", ""),
-            KeyCode::Char('?') if self.editor.text().is_empty() => {
-                self.open_panel(conv, "keys", "")
-            }
+            KeyCode::Char('?') if self.editor.is_empty() => self.open_panel(conv, "keys", ""),
             KeyCode::Esc if self.working(conv) => Some(Act::Interrupt { node }),
             KeyCode::BackTab => Some(Act::Mode {
                 node,
@@ -5243,6 +5335,219 @@ mod tests {
         type_in(&mut ui, &conv, "x");
         press(&mut ui, &conv, KeyCode::Enter);
         assert_eq!(ui.scroll, 0);
+    }
+
+    fn pasted_lines(n: usize) -> String {
+        (1..=n)
+            .map(|i| format!("línea {i}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// REQ-709: a paste of five rows is one fold in the line and the text is what is sent.
+    #[test]
+    fn a_long_paste_is_one_label_in_the_line_and_the_whole_text_in_the_message() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "mira ");
+        ui.paste(&pasted_lines(12));
+        assert_eq!(ui.editor.text(), format!("mira {}", pasted_lines(12)));
+        assert_eq!(
+            ui.editor.raw().chars().count(),
+            6,
+            "five letters and one fold"
+        );
+        let (_, rows) = frame(&ui, &conv);
+        row_of(&rows, "mira [Texto pegado #1 +12 líneas «línea 1»]");
+        match press(&mut ui, &conv, KeyCode::Enter) {
+            Some(Act::Send { text, .. }) => assert_eq!(text, format!("mira {}", pasted_lines(12))),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(ui.editor.raw(), "");
+    }
+
+    /// REQ-709: below the limit the paste goes in as it did; one line of 300 characters folds.
+    #[test]
+    fn a_short_paste_goes_in_as_typed_and_a_long_line_folds_by_its_characters() {
+        let mut ui = Ui::default();
+        ui.paste("git status\ngit diff --stat");
+        assert_eq!(ui.editor.raw(), "git status\ngit diff --stat");
+        ui.editor.take();
+        ui.paste(&pasted_lines(4));
+        assert_eq!(ui.editor.raw(), pasted_lines(4), "four rows");
+        ui.editor.take();
+        ui.paste(&"y".repeat(700));
+        assert_eq!(ui.editor.raw().chars().count(), 1);
+        assert_eq!(ui.editor.text(), "y".repeat(700));
+        let conv = idle();
+        let (_, rows) = frame(&ui, &conv);
+        row_of(
+            &rows,
+            "[Texto pegado #1 700 caracteres «yyyyyyyyyyyyyyyy…»]",
+        );
+    }
+
+    /// REQ-710: the arrows cross a fold in one step and backspace and delete erase it whole.
+    #[test]
+    fn a_fold_is_one_step_and_one_erase() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "a");
+        ui.paste(&pasted_lines(6));
+        type_in(&mut ui, &conv, "b");
+        press(&mut ui, &conv, KeyCode::Left);
+        press(&mut ui, &conv, KeyCode::Left);
+        assert_eq!(ui.editor.cursor(), 1, "one step over the fold");
+        press(&mut ui, &conv, KeyCode::Right);
+        assert_eq!(ui.editor.cursor(), 2);
+        press(&mut ui, &conv, KeyCode::Backspace);
+        assert_eq!(ui.editor.text(), "ab", "backspace takes it whole");
+        ui.editor.take();
+        ui.paste(&pasted_lines(6));
+        press(&mut ui, &conv, KeyCode::Left);
+        press(&mut ui, &conv, KeyCode::Delete);
+        assert_eq!(ui.editor.text(), "");
+    }
+
+    /// REQ-710: tab on a fold, or just after it, gives the text back to be edited.
+    #[test]
+    fn tab_turns_a_fold_into_its_text_and_leaves_the_others() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        ui.paste(&pasted_lines(6));
+        type_in(&mut ui, &conv, " ");
+        ui.paste(&"z".repeat(400));
+        press(&mut ui, &conv, KeyCode::Left);
+        press(&mut ui, &conv, KeyCode::Left);
+        press(&mut ui, &conv, KeyCode::Left);
+        assert_eq!(ui.editor.cursor(), 0);
+        assert_eq!(press(&mut ui, &conv, KeyCode::Tab), None);
+        assert_eq!(ui.editor.cursor(), pasted_lines(6).chars().count());
+        let (_, rows) = frame(&ui, &conv);
+        row_of(&rows, "línea 6");
+        row_of(&rows, "[Texto pegado #2 400 caracteres");
+        assert_eq!(
+            ui.editor.text(),
+            format!("{} {}", pasted_lines(6), "z".repeat(400))
+        );
+    }
+
+    /// REQ-711, REQ-712: the number counts the folds of a message and starts again with the next.
+    #[test]
+    fn the_folds_of_a_message_are_numbered_from_one() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        ui.paste(&pasted_lines(6));
+        type_in(&mut ui, &conv, " ");
+        ui.paste(&pasted_lines(7));
+        let (_, rows) = frame(&ui, &conv);
+        row_of(
+            &rows,
+            "[Texto pegado #1 +6 líneas «línea 1»] [Texto pegado #2 +7 líneas",
+        );
+        assert!(matches!(
+            press(&mut ui, &conv, KeyCode::Enter),
+            Some(Act::Send { .. })
+        ));
+        ui.paste(&pasted_lines(8));
+        let (_, rows) = frame(&ui, &conv);
+        row_of(&rows, "[Texto pegado #1 +8 líneas");
+    }
+
+    /// REQ-712, RISK-87: the message has the whole text of each fold, whatever lies between them.
+    #[test]
+    fn a_message_with_two_folds_and_text_between_them_is_sent_whole() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        ui.paste(&pasted_lines(6));
+        type_in(&mut ui, &conv, " y ");
+        ui.paste(&"z".repeat(350));
+        type_in(&mut ui, &conv, "!");
+        match press(&mut ui, &conv, KeyCode::Enter) {
+            Some(Act::Send { text, .. }) => {
+                assert_eq!(text, format!("{} y {}!", pasted_lines(6), "z".repeat(350)));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// REQ-710, RISK-87, RISK-88: a double click on a label selects the fold and `text()` is not
+    /// what the cursor counts in.
+    #[test]
+    fn a_double_click_on_a_label_selects_the_fold() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "x ");
+        ui.paste(&pasted_lines(6));
+        type_in(&mut ui, &conv, " y");
+        let rows = frame(&ui, &conv).1;
+        let y = row_of(&rows, "[Texto pegado #1");
+        let x = rows[y]
+            .find("[Texto")
+            .map(|b| rows[y][..b].chars().count())
+            .unwrap();
+        assert!(ui.select_word_in_field(&conv, INNER, x + 5, y));
+        assert_eq!(
+            ui.editor.selection(),
+            Some((2, 3)),
+            "one character: the fold"
+        );
+        assert_ne!(
+            ui.editor.text().chars().count(),
+            ui.editor.raw().chars().count()
+        );
+    }
+
+    /// REQ-710: ↑ and ↓ keep the column in cells, a label counting as wide as it is drawn.
+    #[test]
+    fn up_and_down_count_a_label_by_its_width() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "ab");
+        ui.paste(&pasted_lines(6));
+        type_in(&mut ui, &conv, "cd");
+        ui.key(
+            &conv,
+            &KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL),
+        );
+        type_in(&mut ui, &conv, &"m".repeat(80));
+        frame(&ui, &conv);
+        // from the end of the first row (a fold wide) down to the long one and back up
+        for _ in 0..4 {
+            press(&mut ui, &conv, KeyCode::Up);
+        }
+        let label = Fold::new(1, pasted_lines(6))
+            .label(ui.row_width())
+            .chars()
+            .count();
+        press(&mut ui, &conv, KeyCode::End);
+        assert_eq!(
+            ui.editor.cursor(),
+            5,
+            "the end of the line that holds the fold"
+        );
+        press(&mut ui, &conv, KeyCode::Down);
+        let cursor = ui.editor.cursor();
+        let first = 6;
+        assert_eq!(
+            cursor - first,
+            2 + label + 2,
+            "the column is {} cells",
+            2 + label + 2
+        );
+    }
+
+    /// REQ-712: what is typed or pasted cannot be taken for a fold.
+    #[test]
+    fn a_character_that_would_pass_for_a_fold_is_written_as_the_replacement_one() {
+        let mut ui = Ui::default();
+        ui.paste(&pasted_lines(6));
+        ui.paste("a\u{E000}b");
+        ui.editor.insert("\u{E001}");
+        assert_eq!(
+            ui.editor.text(),
+            format!("{}a\u{FFFD}b\u{FFFD}", pasted_lines(6))
+        );
     }
 
     #[test]

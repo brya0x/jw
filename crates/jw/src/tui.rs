@@ -41,6 +41,7 @@ mod markdown;
 mod older;
 mod open;
 mod panels;
+mod paste;
 mod phone;
 mod programs;
 mod project;
