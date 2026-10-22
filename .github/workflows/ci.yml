@@ -72,5 +72,5 @@ jobs:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
       - uses: extractions/setup-just@v3
 
-      - name: just android
-        run: just android
+      - name: just android-check
+        run: just android-check
