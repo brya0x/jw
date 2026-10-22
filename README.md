@@ -21,4 +21,4 @@ jw claude            # a conversation with Claude in this pane
 just ci              # fmt, clippy, tests and the Android build, as CI runs them
 ```
 
-The Android app is in `android/` (`just android` builds and lints it).
+The Android app is in `android/` (`just android-check` builds and lints it, `just android` installs it on the phone adb sees, and `just install` installs jw).

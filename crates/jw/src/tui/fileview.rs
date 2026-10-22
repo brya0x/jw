@@ -11,7 +11,7 @@ use contract::text::{Run, TextDoc};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::viewer::fold;
-use super::{Grid, Style, clip, is_markdown, look, select};
+use super::{Grid, Style, clip, erase, is_markdown, look, select};
 
 /// What the person asked of the client by a key.
 #[derive(Debug, PartialEq, Eq)]
@@ -632,7 +632,7 @@ impl FileView {
                 }
             }
             KeyCode::Backspace => {
-                self.search.buf.pop();
+                erase::back(&mut self.search.buf, ev);
             }
             KeyCode::Char(c) if !ev.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.search.buf.push(c);

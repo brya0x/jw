@@ -9,7 +9,7 @@ use contract::{Diff, FileStatus};
 use crossterm::event::KeyCode;
 
 use super::settings::{Mode, Settings};
-use super::{Grid, Rect, Rgb, Style, clip, look};
+use super::{Grid, Rect, Rgb, Style, clip, erase, look};
 
 /// The workspace a question is about, with what the question says of it.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -118,6 +118,17 @@ pub enum Act {
 }
 
 impl Manage {
+    /// Option-backspace: the word before the cursor in the name being typed (a rename, the
+    /// branch that confirms a removal); any other question is left as it is.
+    pub fn erase_word(mut self) -> Manage {
+        match &mut self {
+            Manage::Rename { text, .. } => erase::pop_word(text),
+            Manage::Dirty { typed, .. } => erase::pop_word(typed),
+            _ => {}
+        }
+        self
+    }
+
     /// The question after `code`, and what to send. `None` closes it.
     pub fn press(self, code: KeyCode) -> (Option<Manage>, Option<Act>) {
         let esc = code == KeyCode::Esc;
@@ -752,5 +763,21 @@ mod tests {
         );
         assert_eq!(at(1).press(KeyCode::Esc), (None, None));
         assert_eq!(at(1).press(KeyCode::Char('z')), (Some(at(1)), None));
+    }
+
+    #[test]
+    fn option_backspace_takes_a_word_of_the_name_typed_and_changes_no_other_question() {
+        assert_eq!(dirty("feat login").erase_word(), dirty("feat "));
+        let rename = Manage::Rename {
+            target: Named::Pane("p".into()),
+            title: "t".into(),
+            text: "uno dos".into(),
+        };
+        let Manage::Rename { text, .. } = rename.erase_word() else {
+            panic!()
+        };
+        assert_eq!(text, "uno ");
+        let q = Manage::Workspace(target(true));
+        assert_eq!(q.clone().erase_word(), q);
     }
 }

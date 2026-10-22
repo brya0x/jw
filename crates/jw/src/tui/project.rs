@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use contract::{ConfigFrom, OpenKind, ProjectEdit, ProjectInfo};
 use crossterm::event::KeyCode;
 
-use super::{Grid, Rect, Style, clip, look};
+use super::{Grid, Rect, Style, clip, erase, look};
 
 /// What a key in the screen asks for.
 #[derive(Debug, PartialEq, Eq)]
@@ -167,6 +167,15 @@ impl Project {
     #[cfg(test)]
     fn dirty(&self) -> bool {
         matches!(&self.load, Load::Ready(f) if f.cur != f.orig)
+    }
+
+    /// Option-backspace: the word before the cursor of the line that is being typed.
+    pub fn erase_word(&mut self) {
+        if let Load::Ready(form) = &mut self.load
+            && let Some(buf) = form.edit.as_mut()
+        {
+            erase::pop_word(buf);
+        }
     }
 
     pub fn press(&mut self, code: KeyCode) -> Act {
@@ -870,5 +879,25 @@ mod tests {
         after.open = OpenKind::Claude;
         p.set_info(Ok(after));
         assert!(!p.dirty(), "what was saved is what the file says now");
+    }
+
+    #[test]
+    fn option_backspace_takes_a_word_of_the_line_being_typed() {
+        let mut p = ready(Some(ConfigFrom::Personal));
+        p.press(KeyCode::Enter);
+        for _ in 0..40 {
+            p.press(KeyCode::Backspace);
+        }
+        keys(&mut p, "../a b");
+        p.erase_word();
+        p.press(KeyCode::Enter);
+        let Act::Save { set, .. } = p.press(KeyCode::Char('s')) else {
+            panic!()
+        };
+        assert_eq!(
+            set.root.as_deref(),
+            Some("../a"),
+            "the line is trimmed when it is kept"
+        );
     }
 }
