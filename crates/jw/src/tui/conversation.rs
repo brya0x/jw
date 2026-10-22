@@ -323,6 +323,55 @@ impl Composer {
             .collect()
     }
 
+    /// The text of the line and the characters of it that each fold covers, in order (REQ-712).
+    pub fn sendable(&self) -> (String, Vec<(usize, usize)>) {
+        let (mut text, mut folds, mut at) = (String::new(), Vec::new(), 0);
+        for &c in &self.chars {
+            match paste::index_of(c).and_then(|k| self.folds.get(k)) {
+                Some(f) => {
+                    let len = f.body.chars().count();
+                    folds.push((at, at + len));
+                    text.push_str(&f.body);
+                    at += len;
+                }
+                None => {
+                    text.push(c);
+                    at += 1;
+                }
+            }
+        }
+        (text, folds)
+    }
+
+    /// Put `sent` in the line, its folds folded again and numbered from 1, the cursor at the start
+    /// or at the end (REQ-714).
+    pub fn set_folded(&mut self, sent: &paste::Sent, start: bool) {
+        self.set("");
+        let text: Vec<char> = sent.text.chars().collect();
+        let mut at = 0;
+        for &(from, to) in &sent.folds {
+            let Some(body) = text.get(from..to).filter(|_| from >= at) else {
+                continue;
+            };
+            let Some(c) = paste::char_of(self.folds.len()) else {
+                break;
+            };
+            self.insert(&text[at..from].iter().collect::<String>());
+            self.made += 1;
+            self.folds.push(Fold::new(
+                self.made,
+                paste::clean(&body.iter().collect::<String>()),
+            ));
+            self.chars.push(c);
+            self.cursor = self.chars.len();
+            at = to;
+        }
+        self.insert(&text[at..].iter().collect::<String>());
+        if start {
+            self.cursor = 0;
+        }
+    }
+
     /// The line as it is kept, a fold being its character: what `cursor` and the marks count in.
     pub fn raw(&self) -> String {
         self.chars.iter().collect()
@@ -689,6 +738,12 @@ pub struct Ui {
     images: Vec<(u32, Image)>,
     /// How many pictures were pasted, which is the `n` of the next `[Imagen#n]`.
     pasted: u32,
+    /// The messages sent, oldest first, for ↑ (REQ-714); the message recalled and the draft that was
+    /// being written when the first one was.
+    sent: Vec<paste::Sent>,
+    recalling: Option<usize>,
+    /// With the draft, the pictures it had: they are not the message that is shown.
+    draft: Option<(Composer, Vec<(u32, Image)>)>,
     /// The files that hold what follows the `@` the line ends with, for which fragment, the
     /// one lit, the fragment last asked for and the one the person closed the list on.
     /// The command lit in the `/` list, and the line the person closed it on.
@@ -1749,6 +1804,9 @@ impl Ui {
             if !self.images.is_empty() {
                 chips.push((format!("▣ {}", self.images.len()), look::cyan()));
             }
+            if let Some(at) = self.recalling {
+                chips.push((format!("↑ {}/{}", at + 1, self.sent.len()), look::yellow()));
+            }
             let proposed = match &conv.held {
                 Some(h) => Some(Ui::held_why(h).0),
                 None => self.ghost(conv).map(|s| format!("{s}  tab")),
@@ -2389,6 +2447,7 @@ impl Ui {
                     Some(Act::Interrupt { node })
                 } else {
                     self.editor.take();
+                    self.forget_recall();
                     None
                 }
             }
@@ -2430,7 +2489,9 @@ impl Ui {
             KeyCode::Up | KeyCode::Down => {
                 let down = ev.code == KeyCode::Down;
                 let shift = ev.modifiers.contains(KeyModifiers::SHIFT);
-                if !self.editor.vertical(down, shift, self.row_width()) {
+                if !self.editor.vertical(down, shift, self.row_width())
+                    && (shift || !self.recall(down))
+                {
                     self.scroll_by(!down, 1);
                 }
                 None
@@ -2657,11 +2718,12 @@ impl Ui {
             return None;
         }
         let node = conv.head.id.clone();
-        let text = self.editor.text();
+        let (text, folds) = self.editor.sendable();
         let line = text.trim();
         if line.is_empty() {
             return None;
         }
+        self.forget_recall();
         if let Some(rest) = line.strip_prefix('/') {
             let (word, arg) = rest
                 .split_once(char::is_whitespace)
@@ -2689,6 +2751,7 @@ impl Ui {
             return None;
         }
         let line = line.to_owned();
+        let kept = paste::keeps(&text).then(|| paste::trimmed(&text, &folds));
         self.editor.take();
         self.scroll = 0;
         if let Some(command) = line
@@ -2704,6 +2767,9 @@ impl Ui {
         if matches!(conv.status, ConvStatus::Dead | ConvStatus::Resuming) {
             self.retaking = true;
         }
+        if let Some(sent) = kept {
+            self.remember(sent);
+        }
         // Only the pictures whose mark is still in the line go.
         let images = std::mem::take(&mut self.images)
             .into_iter()
@@ -2715,6 +2781,61 @@ impl Ui {
             text: line,
             images,
         })
+    }
+
+    fn forget_recall(&mut self) {
+        self.recalling = None;
+        self.draft = None;
+    }
+
+    /// A message that was sent goes to the end of the history (REQ-716), unless it is the same as
+    /// the last.
+    fn remember(&mut self, sent: paste::Sent) {
+        if self.sent.last().is_some_and(|last| last.text == sent.text) {
+            return;
+        }
+        self.sent.push(sent);
+        if self.sent.len() > paste::KEEP_LAST {
+            self.sent.remove(0);
+        }
+    }
+
+    /// ↑ or ↓ on the first or last row of the field: the previous message or the next one is put in
+    /// it, and past the newest the draft comes back (REQ-714). Whether there was one to put.
+    fn recall(&mut self, down: bool) -> bool {
+        let to = match (self.recalling, down) {
+            (None, true) => return false,
+            (None, false) => self.sent.len().checked_sub(1),
+            // At the oldest there is nothing further back, and what was edited stays.
+            (Some(0), false) => return true,
+            (Some(at), false) => Some(at - 1),
+            (Some(at), true) => Some(at + 1),
+        };
+        let Some(to) = to else {
+            return false;
+        };
+        if self.recalling.is_none() {
+            self.draft = Some((self.editor.clone(), std::mem::take(&mut self.images)));
+        }
+        if to >= self.sent.len() {
+            self.recalling = None;
+            if let Some((draft, images)) = self.draft.take() {
+                self.editor = draft;
+                self.images = images;
+            }
+        } else {
+            self.recalling = Some(to);
+            self.editor.set_folded(&self.sent[to].clone(), !down);
+        }
+        // What was put in the line does not open the lists of the `/` or the `@` it may end in.
+        self.menu_at = 0;
+        self.menu_off = self.editor.raw();
+        self.files.clear();
+        if let Some(fragment) = self.editor.mention() {
+            self.asked.clone_from(&fragment);
+            self.dismissed = fragment;
+        }
+        true
     }
 
     fn open_pick(&mut self, conv: &Conversation, of: Of) {
@@ -5600,6 +5721,208 @@ mod tests {
             .find(|l| l.text().contains("filas más"))
             .unwrap();
         assert!(!marker.soft);
+    }
+
+    fn send(ui: &mut Ui, conv: &Conversation, text: &str) {
+        ui.editor.set(text);
+        assert!(matches!(
+            press(ui, conv, KeyCode::Enter),
+            Some(Act::Send { .. })
+        ));
+    }
+
+    /// REQ-714, REQ-715: ↑ on the first row brings back the messages sent, ↓ on the last goes
+    /// forward and past the newest the draft comes back; a chip says which one it is.
+    #[test]
+    fn up_recalls_the_messages_sent_and_down_brings_the_draft_back() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        for t in ["uno", "dos", "tres"] {
+            send(&mut ui, &conv, t);
+        }
+        type_in(&mut ui, &conv, "borrador");
+        press(&mut ui, &conv, KeyCode::Up);
+        assert_eq!((ui.editor.text(), ui.editor.cursor()), ("tres".into(), 0));
+        row_of(&frame(&ui, &conv).1, "↑ 3/3");
+        press(&mut ui, &conv, KeyCode::Up);
+        assert_eq!(ui.editor.text(), "dos");
+        press(&mut ui, &conv, KeyCode::Up);
+        press(&mut ui, &conv, KeyCode::Up);
+        assert_eq!(
+            ui.editor.text(),
+            "uno",
+            "at the oldest there is nothing further back"
+        );
+        row_of(&frame(&ui, &conv).1, "↑ 1/3");
+        press(&mut ui, &conv, KeyCode::Down);
+        assert_eq!((ui.editor.text(), ui.editor.cursor()), ("dos".into(), 3));
+        press(&mut ui, &conv, KeyCode::Down);
+        press(&mut ui, &conv, KeyCode::Down);
+        assert_eq!(
+            ui.editor.text(),
+            "borrador",
+            "past the newest the draft is back"
+        );
+        assert!(!frame(&ui, &conv).1.iter().any(|r| r.contains("↑ 3/3")));
+    }
+
+    /// REQ-714: with nothing recalled ↓ on the last row scrolls the list one line, as it did.
+    #[test]
+    fn down_with_nothing_recalled_scrolls_the_list_one_line() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        send(&mut ui, &conv, "uno");
+        let mut g = Grid::new(100, 22);
+        ui.draw(&mut g, &conv, (2, 1, 96, 20), &[], true, 0);
+        press(&mut ui, &conv, KeyCode::PageUp);
+        let up = ui.scroll;
+        assert!(up > 1);
+        press(&mut ui, &conv, KeyCode::Down);
+        assert_eq!(ui.scroll, up - 1);
+    }
+
+    /// REQ-714: a message put in the line does not open the `/` list, which would take the next ↓.
+    #[test]
+    fn a_command_that_is_recalled_does_not_open_the_list_of_commands() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        for t in ["a", "/compact", "b"] {
+            send(&mut ui, &conv, t);
+        }
+        for _ in 0..3 {
+            press(&mut ui, &conv, KeyCode::Up);
+        }
+        assert_eq!(ui.editor.text(), "a");
+        press(&mut ui, &conv, KeyCode::Down);
+        assert_eq!(ui.editor.text(), "/compact");
+        assert!(ui.menu(&conv).is_empty(), "the list of commands stays shut");
+        press(&mut ui, &conv, KeyCode::Down);
+        assert_eq!(ui.editor.text(), "b");
+    }
+
+    /// REQ-714, REQ-716: the pictures belong to the draft, not to the message that is shown.
+    #[test]
+    fn the_pictures_of_the_draft_wait_while_a_message_is_recalled() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        send(&mut ui, &conv, "[Imagen#1] viejo");
+        ui.attach(Image {
+            media_type: "image/png".into(),
+            data: "AAAA".into(),
+        });
+        press(&mut ui, &conv, KeyCode::Up);
+        assert_eq!(ui.editor.text(), "[Imagen#1] viejo");
+        assert!(ui.images.is_empty(), "the pictures wait with the draft");
+        press(&mut ui, &conv, KeyCode::Down);
+        assert_eq!(ui.images.len(), 1);
+        assert_eq!(
+            ui.editor.text(),
+            "[Imagen#1]",
+            "the draft is back with its mark"
+        );
+    }
+
+    /// REQ-714: with nothing to recall ↑ scrolls the list one line, as it did (REQ-682).
+    #[test]
+    fn up_with_no_messages_to_recall_scrolls_the_list() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        let mut g = Grid::new(100, 22);
+        ui.draw(&mut g, &conv, (2, 1, 96, 20), &[], true, 0);
+        press(&mut ui, &conv, KeyCode::Up);
+        assert_eq!(ui.scroll, 1);
+    }
+
+    /// REQ-714: a message that had folds comes back folded; and sending ends the recall.
+    #[test]
+    fn a_message_with_a_fold_comes_back_folded() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "mira ");
+        ui.paste(&pasted_lines(7));
+        type_in(&mut ui, &conv, " ya");
+        press(&mut ui, &conv, KeyCode::Enter);
+        press(&mut ui, &conv, KeyCode::Up);
+        assert_eq!(ui.editor.text(), format!("mira {} ya", pasted_lines(7)));
+        assert_eq!(
+            ui.editor.raw().chars().count(),
+            9,
+            "five, the fold and three"
+        );
+        row_of(
+            &frame(&ui, &conv).1,
+            "mira [Texto pegado #1 +7 líneas «línea 1»] ya",
+        );
+        press(&mut ui, &conv, KeyCode::Enter);
+        assert_eq!(
+            (ui.recalling, ui.sent.len()),
+            (None, 1),
+            "the same message is not kept twice"
+        );
+    }
+
+    /// REQ-716: what goes in the history is what is sent as a message, not blank, private or twice.
+    #[test]
+    fn the_history_keeps_what_is_sent_as_a_message() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        send(&mut ui, &conv, "uno");
+        send(&mut ui, &conv, " con espacio");
+        send(&mut ui, &conv, "uno");
+        ui.editor.set("!ls");
+        assert!(matches!(
+            press(&mut ui, &conv, KeyCode::Enter),
+            Some(Act::Shell { .. })
+        ));
+        ui.editor.set("/model");
+        press(&mut ui, &conv, KeyCode::Enter);
+        ui.pop = None;
+        let texts: Vec<&str> = ui.sent.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(texts, ["uno"]);
+        send(&mut ui, &conv, &"x".repeat(20 * 1024 + 1));
+        assert_eq!(ui.sent.len(), 1, "over 20 KB");
+    }
+
+    /// REQ-712: the trim of the sent text moves the folds with it.
+    #[test]
+    fn a_fold_at_the_edge_of_the_line_loses_the_blanks_the_trim_takes() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        ui.paste(&format!("\n\n{}\n\n", pasted_lines(6)));
+        type_in(&mut ui, &conv, " fin");
+        press(&mut ui, &conv, KeyCode::Enter);
+        press(&mut ui, &conv, KeyCode::Up);
+        assert_eq!(ui.editor.text(), format!("{}\n\n fin", pasted_lines(6)));
+        assert_eq!(
+            ui.editor.raw().chars().count(),
+            5,
+            "the fold, and ` fin`... less the lead"
+        );
+    }
+
+    /// RISK-86: the chip of the recall is cut before the count of the rows above and below.
+    #[test]
+    fn the_recall_chip_stops_short_of_the_count_of_rows() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        let long: Vec<String> = (1..=14).map(|n| format!("l{n:02}")).collect();
+        send(&mut ui, &conv, &long.join("\n"));
+        press(&mut ui, &conv, KeyCode::Up);
+        let drawn = |chip: String| {
+            let mut g = Grid::new(100, 60);
+            ui.draw(&mut g, &conv, SMALL, &[(chip, look::dim())], true, 0);
+            g.rows_plain()
+        };
+        let rows = drawn("rama".into());
+        let row = &rows[row_of(&rows, "↑0 ↓6")];
+        assert!(row.contains("↑ 1/1"), "{row}");
+        let rows = drawn("rama-larga".repeat(7));
+        let row = &rows[row_of(&rows, "↑0 ↓6")];
+        assert!(
+            row.contains("rama-larga") && !row.contains("↑ 1/1"),
+            "{row}"
+        );
+        assert!(row.trim_end().ends_with("↑0 ↓6"), "{row}");
     }
 
     /// REQ-712: what is typed or pasted cannot be taken for a fold.

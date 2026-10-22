@@ -60,6 +60,41 @@ pub fn clean(text: &str) -> String {
         .collect()
 }
 
+/// A message that was sent, as the history keeps it: its text and the characters of the text that
+/// were each one fold (REQ-712, REQ-716), so it comes back folded.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Sent {
+    pub text: String,
+    pub folds: Vec<(usize, usize)>,
+}
+
+/// The most messages the history keeps and the most bytes of one (REQ-716).
+pub const KEEP_LAST: usize = 100;
+const KEEP_BYTES: usize = 20 * 1024;
+
+/// Whether a message goes in the history: not blank, not one that begins with a space or a tab
+/// (the shell's way to say a line is not kept) and not over 20 KB (REQ-716).
+pub fn keeps(text: &str) -> bool {
+    !text.trim().is_empty() && !text.starts_with([' ', '\t']) && text.len() <= KEEP_BYTES
+}
+
+/// `text` with the blanks at its ends taken off, as it is sent, and the characters `folds` cover
+/// moved with it: one that the trim cut is cut with it, and dropped when nothing is left.
+pub fn trimmed(text: &str, folds: &[(usize, usize)]) -> Sent {
+    let chars: Vec<char> = text.chars().collect();
+    let lead = chars.iter().take_while(|c| c.is_whitespace()).count();
+    let end = chars.len() - chars.iter().rev().take_while(|c| c.is_whitespace()).count();
+    let end = end.max(lead);
+    Sent {
+        text: chars[lead..end].iter().collect(),
+        folds: folds
+            .iter()
+            .map(|&(from, to)| (from.max(lead) - lead, to.min(end).max(lead) - lead))
+            .filter(|(from, to)| from < to)
+            .collect(),
+    }
+}
+
 impl Fold {
     pub fn new(n: usize, body: String) -> Fold {
         let size = match rows(&body) {
@@ -178,5 +213,27 @@ mod tests {
     fn what_is_typed_cannot_be_taken_for_a_fold() {
         assert_eq!(clean("a\u{E000}b\u{F8FF}"), "a\u{FFFD}b\u{FFFD}");
         assert_eq!(clean("hola"), "hola");
+    }
+
+    #[test]
+    fn a_message_is_kept_unless_blank_private_or_big() {
+        assert!(keeps("haz un commit"));
+        assert!(!keeps("   "));
+        assert!(!keeps(" secreto"));
+        assert!(!keeps("\tsecreto"));
+        assert!(keeps(&"x".repeat(20 * 1024)));
+        assert!(!keeps(&"x".repeat(20 * 1024 + 1)));
+    }
+
+    #[test]
+    fn the_trim_moves_the_folds_and_cuts_the_one_it_reaches() {
+        let sent = trimmed("  ab\n\n\ncd  ", &[(2, 10)]);
+        assert_eq!(sent.text, "ab\n\n\ncd");
+        assert_eq!(sent.folds, vec![(0, 7)]);
+        let sent = trimmed("ab \n\n", &[(3, 6)]);
+        assert_eq!((sent.text.as_str(), sent.folds.as_slice()), ("ab", &[][..]));
+        let sent = trimmed("x", &[(0, 1)]);
+        assert_eq!(sent.folds, vec![(0, 1)]);
+        assert_eq!(trimmed("   ", &[(0, 3)]).text, "");
     }
 }
