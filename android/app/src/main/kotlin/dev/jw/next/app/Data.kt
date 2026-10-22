@@ -2,6 +2,7 @@ package dev.jw.next.app
 
 import android.content.Context
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import dev.jw.next.client.BinaryFile
 import dev.jw.next.client.CacheResult
 import dev.jw.next.client.FILE_WAIT_MS
@@ -27,6 +28,7 @@ import dev.jw.next.contract.ErrorCode
 import dev.jw.next.contract.FileListing
 import dev.jw.next.contract.Id
 import dev.jw.next.contract.Image
+import dev.jw.next.contract.JobState
 import dev.jw.next.contract.MarkdownDoc
 import dev.jw.next.contract.OlderItems
 import dev.jw.next.contract.OpenKind
@@ -57,6 +59,16 @@ abstract class AppSource : NodeSource {
 
     /** Whether typing reaches a shell: not with the fixtures. */
     open val writable: Boolean = false
+
+    /** A line Home says for a few seconds: a removal that began, ended or was refused (REQ-661). */
+    val notice = mutableStateOf<String?>(null)
+
+    fun say(text: String) {
+        notice.value = text
+    }
+
+    /** The state each job had when Home last looked, to say when a removal ends; null until it has looked. */
+    var jobStates: Map<Id, JobState>? = null
 }
 
 /** The nodes the shared fixtures hold: what the app draws when no daemon is given. */
@@ -238,6 +250,18 @@ abstract class ProtocolSource : AppSource() {
 
     override fun removeWorkspace(workspace: Id, removeWorktree: Boolean, reply: (Result<Unit>) -> Unit) {
         command(Cmd.RemoveWorkspace(workspace, removeWorktree)) { reply(it.done("el PC no pudo quitar el workspace")) }
+    }
+
+    override fun dismissJob(job: Id, reply: (Result<Unit>) -> Unit) {
+        command(Cmd.DismissJob(job)) { reply(it.done("el PC no pudo descartar el trabajo")) }
+    }
+
+    override fun dismissJobs(reply: (Result<Unit>) -> Unit) {
+        command(Cmd.DismissJobs) { reply(it.done("el PC no pudo descartar los trabajos")) }
+    }
+
+    override fun cancel(workspace: Id, reply: (Result<Unit>) -> Unit) {
+        command(Cmd.Cancel(workspace)) { reply(it.done("el PC no pudo cancelar el trabajo")) }
     }
 
     override fun closePane(pane: Id, reply: (Result<Unit>) -> Unit) {

@@ -11,8 +11,14 @@ import kotlinx.serialization.Serializable
  * Revisions only mean something inside one daemon epoch, so a different epoch empties it.
  */
 @Serializable
-data class Seen(val epoch: String? = null, val nodes: Map<Id, Long> = emptyMap()) {
+data class Seen(val epoch: String? = null, val nodes: Map<Id, Long> = emptyMap(), val jobs: Set<Id> = emptySet()) {
     fun isSeen(a: Attention): Boolean = a.rev <= (nodes[a.node] ?: 0L)
+
+    /** A job that ended is seen once its tab has been shown with it in it (REQ-659); the daemon never hears of it either. */
+    fun isJobSeen(job: Id): Boolean = job in jobs
+
+    /** The jobs of [ended] were shown: only those the daemon still lists are kept, so the record does not grow. */
+    fun seeJobs(ended: Collection<Id>, epoch: String): Seen = forEpoch(epoch).let { it.copy(jobs = ended.toSet()) }
 
     fun mark(node: Id, rev: Long, epoch: String): Seen {
         val base = forEpoch(epoch)
