@@ -1131,6 +1131,10 @@ impl Ui {
                 self.editor.set(&text);
                 None
             }
+            RowAct::Recall(at) => {
+                self.recall_at(at, false);
+                None
+            }
             RowAct::Resume(id) => Some(Act::Resume {
                 pane: conv.pane.clone(),
                 id,
@@ -2452,6 +2456,10 @@ impl Ui {
                 self.editor.insert("\n");
                 None
             }
+            KeyCode::Char('r') if ctrl && conv.ask.is_none() => {
+                self.open_history();
+                None
+            }
             KeyCode::Char('c') if ctrl => {
                 if self.working(conv) {
                     Some(Act::Interrupt { node })
@@ -2839,7 +2847,8 @@ impl Ui {
         let from = all.len().saturating_sub(paste::KEEP_LAST);
         all.drain(..from);
         self.pending = Some(all);
-        if self.recalling.is_none() {
+        // While a message is recalled or the list of ^R is open its numbers must not move.
+        if self.recalling.is_none() && !matches!(self.pop, Some(Pop::List(_))) {
             self.take_pending();
         }
     }
@@ -2868,6 +2877,9 @@ impl Ui {
     /// ↑ or ↓ on the first or last row of the field: the previous message or the next one is put in
     /// it, and past the newest the draft comes back (REQ-714). Whether there was one to put.
     fn recall(&mut self, down: bool) -> bool {
+        if self.recalling.is_none() {
+            self.take_pending();
+        }
         let to = match (self.recalling, down) {
             (None, true) => return false,
             (None, false) => self.sent.len().checked_sub(1),
@@ -2879,6 +2891,13 @@ impl Ui {
         let Some(to) = to else {
             return false;
         };
+        self.recall_at(to, down);
+        true
+    }
+
+    /// Put the message `to` of the history in the line, the cursor at its start when it was reached
+    /// going back and at its end going forward; past the newest, the draft (REQ-714).
+    fn recall_at(&mut self, to: usize, down: bool) {
         if self.recalling.is_none() {
             self.draft = Some((self.editor.clone(), std::mem::take(&mut self.images)));
         }
@@ -2901,7 +2920,18 @@ impl Ui {
             self.asked.clone_from(&fragment);
             self.dismissed = fragment;
         }
-        true
+    }
+
+    /// `^R`: the messages sent, newest first, to filter and choose from (REQ-717).
+    fn open_history(&mut self) {
+        if self.recalling.is_none() {
+            self.take_pending();
+        }
+        if self.sent.is_empty() {
+            self.says = "no se ha enviado nada todavía".into();
+            return;
+        }
+        self.pop = Some(Pop::List(ListState::of(panels::sent(&self.sent))));
     }
 
     fn open_pick(&mut self, conv: &Conversation, of: Of) {
@@ -6073,6 +6103,116 @@ mod tests {
         send(&mut ui, &conv, "uno");
         ui.history(None);
         assert_eq!(texts_of(&ui), ["uno"]);
+    }
+
+    fn ctrl_r(ui: &mut Ui, conv: &Conversation) -> Option<Act> {
+        ui.key(
+            conv,
+            &KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+        )
+    }
+
+    /// REQ-717: ^R lists the messages sent, newest first, narrows them as letters are typed and
+    /// puts the chosen one in the field as ↑ would, the draft kept.
+    #[test]
+    fn ctrl_r_lists_the_messages_filters_them_and_puts_the_chosen_one_as_up_would() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        for t in ["arregla el login", "corre cargo test", "haz un commit"] {
+            send(&mut ui, &conv, t);
+        }
+        send(&mut ui, &conv, &pasted_lines(6));
+        type_in(&mut ui, &conv, "borrador");
+        assert_eq!(ctrl_r(&mut ui, &conv), None);
+        let rows = frame(&ui, &conv).1;
+        row_of(&rows, "mensajes enviados");
+        let (newest, oldest) = (
+            row_of(&rows, "línea 1 ⏎ línea 2"),
+            row_of(&rows, "arregla el login"),
+        );
+        assert!(newest < oldest, "newest first");
+        row_of(&rows, "6 líneas");
+        assert_eq!(ui.editor.text(), "borrador", "the field is as it was");
+        type_in(&mut ui, &conv, "CARGO");
+        let rows = frame(&ui, &conv).1;
+        row_of(&rows, "corre cargo test");
+        assert!(
+            !rows.iter().any(|r| r.contains("arregla el login")),
+            "the filter narrows"
+        );
+        assert_eq!(press(&mut ui, &conv, KeyCode::Enter), None);
+        assert_eq!(ui.editor.text(), "corre cargo test");
+        assert!(ui.pop.is_none());
+        row_of(&frame(&ui, &conv).1, "↑ 2/4");
+        press(&mut ui, &conv, KeyCode::Down);
+        assert_eq!(
+            ui.editor.text(),
+            "haz un commit",
+            "↓ goes on from where it was put"
+        );
+        press(&mut ui, &conv, KeyCode::Down);
+        press(&mut ui, &conv, KeyCode::Down);
+        assert_eq!(
+            ui.editor.text(),
+            "borrador",
+            "and past the newest the draft is back"
+        );
+    }
+
+    /// REQ-717: esc closes the list and leaves the field; a message with folds comes back folded.
+    #[test]
+    fn esc_closes_the_list_and_a_chosen_message_with_a_fold_comes_back_folded() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        ui.paste(&pasted_lines(8));
+        press(&mut ui, &conv, KeyCode::Enter);
+        type_in(&mut ui, &conv, "x");
+        ctrl_r(&mut ui, &conv);
+        press(&mut ui, &conv, KeyCode::Esc);
+        assert!(ui.pop.is_none());
+        assert_eq!((ui.editor.text(), ui.recalling), ("x".into(), None));
+        ctrl_r(&mut ui, &conv);
+        press(&mut ui, &conv, KeyCode::Enter);
+        assert_eq!(ui.editor.text(), pasted_lines(8));
+        assert_eq!(ui.editor.raw().chars().count(), 1);
+        row_of(
+            &frame(&ui, &conv).1,
+            "[Texto pegado #1 +8 líneas «línea 1»]",
+        );
+    }
+
+    /// REQ-716, REQ-717: an answer that comes while the list is open does not change which message a row is.
+    #[test]
+    fn an_answer_that_comes_while_the_list_is_open_waits_for_it_to_close() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        ui.want_sent();
+        send(&mut ui, &conv, "uno");
+        ctrl_r(&mut ui, &conv);
+        ui.history(listed(&["viejo", "uno"]));
+        assert_eq!(press(&mut ui, &conv, KeyCode::Enter), None);
+        assert_eq!(
+            ui.editor.text(),
+            "uno",
+            "the row chosen is the one that was drawn"
+        );
+        press(&mut ui, &conv, KeyCode::Down);
+        press(&mut ui, &conv, KeyCode::Up);
+        assert_eq!(
+            texts_of(&ui),
+            ["viejo", "uno"],
+            "and the list is the daemon's after"
+        );
+    }
+
+    /// REQ-717: with nothing sent there is no list.
+    #[test]
+    fn ctrl_r_with_nothing_sent_opens_no_list() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        assert_eq!(ctrl_r(&mut ui, &conv), None);
+        assert!(ui.pop.is_none());
+        assert!(ui.take_says().is_some_and(|s| s.contains("nada")));
     }
 
     /// REQ-712: what is typed or pasted cannot be taken for a fold.
