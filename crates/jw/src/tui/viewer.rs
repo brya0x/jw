@@ -12,7 +12,7 @@ use contract::markdown::MarkdownDoc;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::markdown::{self, Layout};
-use super::{Grid, Style, clip, look, select};
+use super::{Grid, Style, clip, erase, look, select};
 
 /// Where a document came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -265,7 +265,7 @@ impl Viewer {
                 }
             }
             KeyCode::Backspace => {
-                self.search.buf.pop();
+                erase::back(&mut self.search.buf, ev);
             }
             KeyCode::Char(c) if !ev.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.search.buf.push(c);
