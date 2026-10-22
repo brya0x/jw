@@ -258,7 +258,7 @@ Where a project's settings live (N91, RAT-46): `project_config {repo}` replies `
 - REQ-125 THE daemon SHALL keep at most 4 MiB of block output per pane, by dropping the oldest blocks.
 - REQ-126 WHERE a pane's shell is not zsh, bash or fish, the daemon SHALL start it unchanged.
 - REQ-127 WHEN a client's editor stops a running program, it SHALL send `write` of `\u0003`.
-- REQ-128 WHEN a pull request is opened or `main` is pushed, CI SHALL run `just fmt-check` (Linux), `just clippy` and `just test` on Linux and macOS with zsh and fish installed, and `just android` (`.github/workflows/next.yml`).
+- REQ-128 WHEN a pull request is opened or `main` is pushed, CI SHALL run `just fmt-check` (Linux), `just clippy` and `just test` on Linux and macOS with zsh and fish installed, and `just android-check` (`.github/workflows/ci.yml`).
 - REQ-129 WHEN the daemon starts an agent (`claude`, by `new_pane` or by resuming it), it SHALL pass it `--settings <state>/claude-hooks.json`, a file it writes at start whose hooks run `<jwn> hook <event>`; an agent started with `--settings` of its own SHALL keep them and get no second set.
 - REQ-130 WHEN `agent_event` arrives for a pane, the daemon SHALL raise on it: `permission` for a `notification` of `permission_prompt`; `question` for a `notification` of `elicitation_dialog` or `agent_needs_input`, and for a `pre_tool_use` of `AskUserQuestion`; `plan` for a `pre_tool_use` of `ExitPlanMode`; `agent_done` for `stop`; and nothing for any other notification or tool; an unknown pane SHALL be `not_found`.
 - REQ-131 WHEN `agent_event` of any kind but `notification` arrives, the daemon SHALL first end the pane's `permission`, `question`, `plan` and `agent_done` attentions.
