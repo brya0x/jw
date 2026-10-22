@@ -5,6 +5,7 @@
 //! record. `View` is pure (documents in, a character grid out) so it is tested without a
 //! terminal; `run` only moves bytes between the socket, the keyboard and the screen.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use serde::Deserialize;
@@ -57,7 +58,7 @@ pub use changes::Ask;
 use changes::{Changes, Docs, Outcome, Src};
 use contract::ErrorBody;
 use conversation::{Act as ConvAct, Ui as ConvUi};
-use field::Field;
+use field::{Field, Peek, Window};
 use manage::{Act, Dest, Manage, Named, Naming, Target};
 use programs::{Launcher, Pick, Programs};
 use settings::Settings;
@@ -734,6 +735,9 @@ pub struct View {
     blk: Option<(String, u64)>,
     /// How many lines each pane's blocks are scrolled up from the newest.
     scroll: HashMap<String, usize>,
+    /// Each shell pane's field window: where it began in the last frame and where the wheel put
+    /// it (REQ-704, REQ-707); `blocks_view` draws with `&self` and is the only one that stores the offset.
+    shell_win: RefCell<HashMap<String, ShellWin>>,
     /// What a drag of the mouse covers in a pane's list, and the drag while the button is down.
     selection: Option<select::Selection>,
     drag: Option<Drag>,
@@ -856,6 +860,7 @@ impl View {
             left_alt: HashMap::new(),
             blk: None,
             scroll: HashMap::new(),
+            shell_win: RefCell::new(HashMap::new()),
             selection: None,
             drag: None,
             last_press: None,
@@ -3218,6 +3223,7 @@ impl View {
         if let Some(node) = self.conv_node(&pane) {
             return self.conv_key(&node, &ev);
         }
+        self.end_shell_peek(&pane);
         match bytes_of(&ev) {
             Some(data) => After::Write { pane, data },
             None => After::Continue,
@@ -3363,6 +3369,7 @@ impl View {
             self.ask_mentions(&node);
             return After::Continue;
         }
+        self.end_shell_peek(&pane);
         After::Write {
             pane,
             data: text.replace("\r\n", "\r").replace('\n', "\r"),
@@ -3764,6 +3771,9 @@ impl View {
         let Some(g) = self.list_geom(pane, rect) else {
             return After::Continue;
         };
+        if y >= g.bottom {
+            self.end_shell_peek(pane);
+        }
         let on_marks = y == g.bottom + Field::FIRST_TEXT;
         let running = running_block(b).is_some();
         if (g.top..g.bottom).contains(&y) && (ix..ix + iw).contains(&x) {
@@ -4070,8 +4080,7 @@ impl View {
         if ui.click_title(conv, rect, x, y) {
             return After::Continue;
         }
-        let full = inner(rect);
-        let (room, area) = agents::split(full, ui.agents.fits(full.2));
+        let (room, area) = conv_split(ui, rect);
         // A click in the area of the agents lights a task; it is not the conversation's.
         if let Some((ax, ay, ..)) = area
             && x >= ax
@@ -4307,8 +4316,85 @@ impl View {
             return After::Continue;
         };
         let pane = doc.panes[i].id.clone();
+        if self.conv_wheel(&pane, rects[i], x, y, !down)
+            || self.shell_wheel(&pane, rects[i], y, !down)
+        {
+            return After::Continue;
+        }
         self.scroll_pane(&pane, rects[i], !down, SCROLL_STEP);
         After::Continue
+    }
+
+    /// The field of a shell pane in the window its pane keeps.
+    fn shell_field(&self, p: &Pane, b: &Blocks, iw: usize, ih: usize) -> Field {
+        let win = self
+            .shell_win
+            .borrow()
+            .get(&p.head.id)
+            .copied()
+            .unwrap_or_default();
+        field_of(p, b, iw, ih, win)
+    }
+
+    /// The frame that drew `field` is where the window moves from next, unless the wheel has it
+    /// elsewhere; a pane whose text has always fit keeps no entry.
+    fn store_shell_offset(&self, p: &Pane, field: &Field) {
+        let offset = field.first_row();
+        let mut wins = self.shell_win.borrow_mut();
+        match wins.get_mut(&p.head.id) {
+            Some(win) if win.pin(shell_stamp(p)).is_none() => win.offset = offset,
+            Some(_) => {}
+            None if offset > 0 => {
+                wins.insert(p.head.id.clone(), ShellWin { offset, peek: None });
+            }
+            None => {}
+        }
+    }
+
+    /// Whatever is typed or clicked in a shell pane's field brings its window back to the cursor (REQ-707).
+    fn end_shell_peek(&self, pane: &str) {
+        if let Some(win) = self.shell_win.borrow_mut().get_mut(pane) {
+            win.peek = None;
+        }
+    }
+
+    /// The wheel over a row of text of a shell pane's field moves its window and not the blocks
+    /// (REQ-707); `true` when it did.
+    fn shell_wheel(&self, pane: &str, rect: Rect, y: usize, up: bool) -> bool {
+        let (Some(b), Some(p)) = (self.blocks_of(pane), self.panes.get(pane)) else {
+            return false;
+        };
+        let (_, iy, iw, ih) = inner(rect);
+        if iw < 8 || ih < 4 {
+            return false;
+        }
+        let field = self.shell_field(p, b, iw, ih);
+        let first = iy + list_h(ih, field.band_rows()) + Field::FIRST_TEXT;
+        let Some(row) = field.wheeled(first, y, up) else {
+            return false;
+        };
+        self.shell_win
+            .borrow_mut()
+            .entry(pane.to_owned())
+            .or_default()
+            .peek = Some(Peek::new(row, shell_stamp(p)));
+        true
+    }
+
+    /// The wheel over a row of text of a conversation's field moves the field's window and not the
+    /// list (REQ-707); `true` when it did.
+    fn conv_wheel(&mut self, pane: &str, rect: Rect, x: usize, y: usize, up: bool) -> bool {
+        let Some(node) = self.conv_node(pane) else {
+            return false;
+        };
+        let (Some(conv), Some(ui)) = (self.convs.get(&node), self.conv_ui.get(&node)) else {
+            return false;
+        };
+        let (room, area) = conv_split(ui, rect);
+        if area.is_some_and(|(ax, ..)| x >= ax) {
+            return false;
+        }
+        ui.wheel(conv, room, y, up)
     }
 
     /// How many columns the file tree takes from the panels' area.
@@ -4844,7 +4930,7 @@ impl View {
         let b = self.blocks_of(pane)?;
         let (ix, iy, iw, ih) = inner(rect);
         let doc = self.panes.get(pane)?;
-        let lh = list_h(ih, field_of(doc, b, iw).band_rows());
+        let lh = list_h(ih, self.shell_field(doc, b, iw, ih).band_rows());
         let total = shell::total_lines(&b.blocks);
         Some(ListGeom {
             left: ix,
@@ -5181,7 +5267,7 @@ impl View {
             return;
         };
         let total = shell::total_lines(&b.blocks);
-        let most = total.saturating_sub(list_h(ih, field_of(doc, b, iw).band_rows()));
+        let most = total.saturating_sub(list_h(ih, self.shell_field(doc, b, iw, ih).band_rows()));
         let at = self.scroll.entry(pane.to_owned()).or_insert(0);
         *at = if up {
             (*at + by).min(most)
@@ -5935,8 +6021,7 @@ impl View {
         let chips: Vec<(String, Rgb)> = std::iter::once((shell::short(folder), look::dim()))
             .chain(branch.map(|br| (format!("⎇ {br}"), look::magenta())))
             .collect();
-        let full = inner(rect);
-        let (room, area) = agents::split(full, ui.agents.fits(full.2));
+        let (room, area) = conv_split(ui, rect);
         ui.draw(g, conv, room, &chips, focused, self.now_ms);
         if let Some(area) = area {
             agents::draw(
@@ -5976,7 +6061,8 @@ impl View {
         if iw < 8 || ih < 4 {
             return;
         }
-        let field = field_of(p, b, iw);
+        let field = self.shell_field(p, b, iw, ih);
+        self.store_shell_offset(p, &field);
         let lh = list_h(ih, field.band_rows());
         let total = shell::total_lines(&b.blocks);
         let scrolled = self.scroll.get(&p.head.id).copied().unwrap_or(0);
@@ -6281,6 +6367,12 @@ const TERMINAL_KEYS: &[(&str, &str)] = &[
 
 /// How long a pairing question is on the screen before `y` answers it.
 const ANSWER_DELAY_MS: u64 = 800;
+/// A conversation pane's inner box split into the conversation's and the area of the agents', when shown.
+fn conv_split(ui: &ConvUi, rect: Rect) -> (Rect, Option<Rect>) {
+    let full = inner(rect);
+    agents::split(full, ui.agents.fits(full.2))
+}
+
 /// What a pane's box holds: inside the border and its padding.
 fn inner((x, y, w, h): Rect) -> Rect {
     (x + 2, y + 1, w.saturating_sub(4), h.saturating_sub(2))
@@ -6311,11 +6403,39 @@ fn running_block(b: &Blocks) -> Option<&contract::Block> {
     b.blocks.last().filter(|k| k.running)
 }
 
+/// A shell pane's field window kept by the client (REQ-708).
+#[derive(Clone, Copy, Default)]
+struct ShellWin {
+    /// The row of the text the window began at in the last frame.
+    offset: usize,
+    /// Where the wheel put the window.
+    peek: Option<Peek>,
+}
+
+impl ShellWin {
+    /// The row the wheel put the window at, while the text and the cursor are what it was put over.
+    fn pin(&self, stamp: (usize, usize)) -> Option<usize> {
+        self.peek.and_then(|p| p.row(stamp))
+    }
+}
+
+/// What a peek of a shell pane's field is put over: the length of the text `input` holds and the cursor in it.
+fn shell_stamp(p: &Pane) -> (usize, usize) {
+    p.input
+        .as_deref()
+        .map_or((0, 0), |i| (i.text.chars().count(), i.cursor as usize))
+}
+
 /// The field of a shell pane drawn as blocks: what its shell holds at the prompt, the line of its
-/// screen when the daemon does not say, or nothing while a command runs.
-fn field_of(p: &Pane, b: &Blocks, iw: usize) -> Field {
+/// screen when the daemon does not say, or nothing while a command runs; in the `win` its pane keeps.
+fn field_of(p: &Pane, b: &Blocks, iw: usize, ih: usize, win: ShellWin) -> Field {
+    let window = Window {
+        limit: field::limit(ih),
+        offset: win.offset,
+        pin: win.pin(shell_stamp(p)),
+    };
     if running_block(b).is_some() {
-        return Field::new(None, None, iw);
+        return Field::new(None, None, iw, window);
     }
     let c = p.screen.cursor;
     let line = p
@@ -6323,7 +6443,7 @@ fn field_of(p: &Pane, b: &Blocks, iw: usize) -> Field {
         .lines
         .get(c.row as usize)
         .map(|l| (l.as_str(), c.col as usize));
-    Field::new(p.input.as_deref(), line, iw)
+    Field::new(p.input.as_deref(), line, iw, window)
 }
 
 /// Empty rows above a list of `total` lines in `rows`: the list sits at the bottom, next to
@@ -9234,6 +9354,143 @@ mod tests {
             t.contains("app-login"),
             "the folder is a chip over the field: {t}"
         );
+    }
+
+    /// The `w01` to `wNN` lines a shell holds, each of which is a row of the field.
+    fn shell_lines(n: usize) -> String {
+        (1..=n)
+            .map(|k| format!("w{k:02}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The rows `w01`..`w30` that a frame of `rows` rows shows, and the frame.
+    fn shown_lines(v: &View, rows: usize) -> (Vec<usize>, Vec<String>) {
+        let frame = v.grid(120, rows).rows_plain();
+        let text = frame.join("\n");
+        let lines = (1..=30)
+            .filter(|k| text.contains(&format!("w{k:02}")))
+            .collect();
+        (lines, frame)
+    }
+
+    /// REQ-703, REQ-704, REQ-706, REQ-708: the shell's field grows to the same limit as the composer and says there is more.
+    #[test]
+    fn the_shells_field_grows_to_the_limit_and_scrolls_with_a_bar_and_a_count() {
+        let text = shell_lines(30);
+        let v = idle(Some((&text, text.len() as u32)));
+        let (lines, frame) = shown_lines(&v, 40);
+        let limit = field::limit(38);
+        assert!(limit > 5, "a taller pane gives more than five rows");
+        assert_eq!(lines.len(), limit, "the field shows the limit and no more");
+        assert_eq!(
+            lines.last(),
+            Some(&30),
+            "the end of the text, where the cursor is"
+        );
+        let up = 30 - limit;
+        assert!(
+            frame.iter().any(|r| r.contains(&format!("↑{up} ↓0"))),
+            "{}",
+            frame.join("\n")
+        );
+        assert!(frame.iter().any(|r| r.contains('┃')));
+        // a short text has neither
+        let v = idle(Some(("ls", 2)));
+        let frame = v.grid(120, 40).rows_plain().join("\n");
+        assert!(!frame.contains('↑') && !frame.contains('┃'));
+    }
+
+    /// REQ-704: the cursor walks inside the window of a shell's field and the text slides only at its edge.
+    #[test]
+    fn the_shells_window_keeps_its_place_while_the_cursor_moves_inside_it() {
+        let text = shell_lines(30);
+        let mut v = idle(Some((&text, 0)));
+        let (lines, _) = shown_lines(&v, 40);
+        assert_eq!(
+            lines.first(),
+            Some(&1),
+            "the cursor at the start: the window at the top"
+        );
+        let limit = lines.len();
+        for row in 0..limit {
+            v.panes
+                .get_mut(SHELL)
+                .unwrap()
+                .input
+                .as_mut()
+                .unwrap()
+                .cursor = (row * 4) as u32;
+            assert_eq!(
+                shown_lines(&v, 40).0.first(),
+                Some(&1),
+                "row {row} is in the window"
+            );
+        }
+        v.panes
+            .get_mut(SHELL)
+            .unwrap()
+            .input
+            .as_mut()
+            .unwrap()
+            .cursor = (limit * 4) as u32;
+        assert_eq!(
+            shown_lines(&v, 40).0.first(),
+            Some(&2),
+            "one past the edge: one row"
+        );
+    }
+
+    /// REQ-707, REQ-708: the wheel over a row of the shell's field moves its window and not the cursor; over the blocks it scrolls them; a key brings the window back.
+    #[test]
+    fn the_wheel_over_the_shells_text_moves_its_window_and_a_key_brings_it_back() {
+        let text = shell_lines(30);
+        let mut v = idle(Some((&text, text.len() as u32)));
+        let (before, frame) = shown_lines(&v, 40);
+        assert_eq!(before.last(), Some(&30));
+        let y = frame.iter().position(|r| r.contains("w30")).unwrap();
+        let x = frame[y].find("w30").unwrap();
+        v.scroll(false, x, y, 120, 40);
+        let (moved, _) = shown_lines(&v, 40);
+        assert_eq!(moved.last(), Some(&29), "a notch up moved the window a row");
+        assert_eq!(
+            v.panes[SHELL].input.as_ref().unwrap().cursor as usize,
+            text.len(),
+            "and not the cursor"
+        );
+        // over the blocks the wheel is theirs: the window stays
+        let by = frame
+            .iter()
+            .position(|r| r.contains("On branch feat/login"));
+        let by = by.unwrap_or(3);
+        v.scroll(false, x, by, 120, 40);
+        assert_eq!(shown_lines(&v, 40).0.last(), Some(&29));
+        // a key sent to the pane brings the window back to the cursor
+        let ws = v.workspaces.get(v.opened.as_deref().unwrap()).unwrap();
+        v.focus = ws.panes.iter().position(|p| p.id == SHELL).unwrap();
+        v.typing = true;
+        assert!(matches!(
+            v.press_key(plain(KeyCode::Left)),
+            After::Write { .. }
+        ));
+        assert_eq!(shown_lines(&v, 40).0.last(), Some(&30));
+        // so does a change of what the shell holds
+        v.scroll(false, x, y, 120, 40);
+        assert_eq!(shown_lines(&v, 40).0.last(), Some(&29));
+        v.panes
+            .get_mut(SHELL)
+            .unwrap()
+            .input
+            .as_mut()
+            .unwrap()
+            .text
+            .push('x');
+        assert_eq!(shown_lines(&v, 40).0.last(), Some(&30));
+        // and a click in the field
+        v.scroll(false, x, y, 120, 40);
+        assert_eq!(shown_lines(&v, 40).0.last(), Some(&29));
+        v.click(x, y, 120, 40);
+        assert_eq!(shown_lines(&v, 40).0.last(), Some(&30));
     }
 
     #[test]
@@ -12896,6 +13153,50 @@ mod tests {
         let (x, y) = find_in(&v, "Listo en 11 s", 24);
         v.scroll(false, x, y, 120, 24);
         v.scroll(true, x, y, 120, 24);
+    }
+
+    /// REQ-707: the wheel over a row of text of a conversation's field moves the field's window; over the list it scrolls the list.
+    #[test]
+    fn the_wheel_over_the_composers_text_moves_its_window_and_over_the_list_scrolls_the_list() {
+        let mut v = conv_view(true);
+        let text: Vec<String> = (1..=30).map(|n| format!("w{n:02}")).collect();
+        v.conv_ui
+            .get_mut(CONV)
+            .unwrap()
+            .editor
+            .set(&text.join("\n"));
+        let (cols, rows) = (120, 40);
+        v.set_size(cols, rows);
+        let before = v.plain(cols, rows);
+        let shown = |p: &str| -> Vec<usize> {
+            (1..=30)
+                .filter(|n| p.contains(&format!("w{n:02}")))
+                .collect()
+        };
+        let at_end = shown(&before);
+        assert_eq!(
+            at_end.last(),
+            Some(&30),
+            "the window shows the end of the text"
+        );
+        assert!(at_end.len() < 30, "and the text does not fit");
+        let cursor = v.conv_ui[CONV].editor.cursor();
+        let (x, y) = find_in(&v, "w30", rows);
+        assert_eq!(v.scroll(false, x, y, cols, rows), After::Continue);
+        let moved = shown(&v.plain(cols, rows));
+        assert_eq!(moved.last(), Some(&29), "a notch up moved the window a row");
+        assert_eq!(
+            v.conv_ui[CONV].editor.cursor(),
+            cursor,
+            "and not the cursor"
+        );
+        // over the list the wheel is the list's: the window stays
+        let (lx, ly) = find_in(&v, "Publicado", rows);
+        v.scroll(false, lx, ly, cols, rows);
+        assert_eq!(shown(&v.plain(cols, rows)).last(), Some(&29));
+        // a key brings the window back to the cursor
+        v.press_key(plain(KeyCode::Left));
+        assert_eq!(shown(&v.plain(cols, rows)).last(), Some(&30));
     }
 
     #[test]
