@@ -5527,12 +5527,12 @@ impl View {
                 (_, Level::Workspaces) if self.on_group.is_some() => (
                     " GRUPO ",
                     look::blue(),
-                    "j/k mover · ↵ plegar · h l · z todos · r renombrar · x borrar · J K orden · G nuevo · ? teclas",
+                    "j/k mover · ↵ plegar · h l · z todos · r renombrar · x borrar · J K orden · G nuevo · m teléfono · ? teclas",
                 ),
                 (_, Level::Workspaces) => (
                     " WORKSPACE ",
                     look::blue(),
-                    "j/k mover · ↵ entrar · r renombrar · o carpeta · w worktree · g grupo · p proyecto · s subir · x cerrar · d cambios · ? teclas · q salir",
+                    "j/k mover · ↵ entrar · r renombrar · o carpeta · w worktree · p proyecto · s subir · x cerrar · d cambios · m teléfono · ? teclas · q salir",
                 ),
             },
         };
