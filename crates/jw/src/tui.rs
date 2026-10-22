@@ -1224,7 +1224,22 @@ impl View {
             let id = contract::node_id(&node).clone();
             self.read.insert(id.clone(), (stamp.0.to_owned(), stamp.1));
             match node {
-                Node::Session(s) => self.session = Some(s),
+                Node::Session(s) => {
+                    // The list can change order under the highlight (a group moved, a workspace
+                    // made or closed elsewhere): it stays on the workspace it was on (REQ-671).
+                    let was = self.selected_id();
+                    self.session = Some(s);
+                    let at = was.and_then(|id| {
+                        self.session
+                            .as_ref()?
+                            .workspaces
+                            .iter()
+                            .position(|w| w.id == id)
+                    });
+                    if let Some(at) = at {
+                        self.selected = at;
+                    }
+                }
                 Node::Workspace(w) => {
                     self.workspaces.insert(id, w);
                 }
@@ -7444,6 +7459,42 @@ mod tests {
         doc["groups"] = serde_json::json!([{"id": "00000000-0000-4000-8000-0000000000f1", "name": "salesassist"}]);
         doc["rev"] = 99.into();
         v.sync([doc].iter());
+        assert!(v.folded.is_empty() && v.on_group.is_none());
+    }
+
+    /// REQ-671: a list that changes order under the highlight (a group moved from the phone, a
+    /// workspace made elsewhere) leaves the highlight, the open workspace and the level where
+    /// they were.
+    #[test]
+    fn the_highlight_stays_on_its_workspace_when_the_session_is_reordered() {
+        let mut v = fixture_view();
+        v.press(Key::Enter); // the first workspace is open
+        let id = v.selected_id().unwrap();
+        assert_eq!(v.level(), Level::Panels);
+        let mut docs = fixture_docs();
+        docs[0]["workspaces"].as_array_mut().unwrap().reverse();
+        docs[0]["rev"] = 99.into();
+        v.sync(docs.iter());
+        assert_eq!(v.selected, 1, "it moved with its workspace");
+        assert_eq!(v.selected_id().as_deref(), Some(id.as_str()));
+        assert!(v.shown().is_some());
+        assert_eq!(
+            v.level(),
+            Level::Panels,
+            "the workspace is still the open one"
+        );
+    }
+
+    /// A letter that a key of the workspace level uses is a letter in a field that takes text.
+    #[test]
+    fn the_letters_of_the_group_keys_are_text_in_a_field() {
+        let mut v = fixture_view();
+        v.press(Key::Repeat); // asks the new name of the worktree
+        assert!(v.manage.is_some());
+        for c in ['z', 'g', 'G', 'h', 'J'] {
+            tap(&mut v, c);
+        }
+        assert!(v.plain(120, 30).contains("zgGhJ"), "{}", v.plain(120, 30));
         assert!(v.folded.is_empty() && v.on_group.is_none());
     }
 
