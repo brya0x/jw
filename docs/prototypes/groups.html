@@ -218,7 +218,7 @@ function blocksOf(list){
     else out.push([w]);
   });
   out.forEach(b=>b.sort((a,c)=>(c.kind==='root')-(a.kind==='root')));
-  return out;
+  return out.filter(b=>b[0].repo).concat(out.filter(b=>!b[0].repo));   // loose folders last, as REQ-219
 }
 const members=gid=>M.ws.filter(w=>w.group===gid);
 // the rows of a list of workspaces, as side.rs: a heading before a worktree whose root is not just before it,
@@ -610,6 +610,7 @@ function onTermKey(e){
   else if(k==='J'||k==='K'){
     const d=k==='J'?1:-1;
     if(g){if(!moveGroup(g.id,d))say(d>0?'ya es el último grupo':'ya es el primero','c-yellow')}
+    else if(w&&!w.repo)say('una carpeta va al final y no se ordena','c-yellow');
     else if(w){if(!moveBlock(w,d))say(d>0?'ya es el último de su grupo':'ya es el primero de su grupo','c-yellow')}
   }
   else if(k==='a'){ui.mode='avisos';ui.avi=0;ui.tab=alertsAll().length?'alertas':jobs.length?'trabajos':'alertas'}
