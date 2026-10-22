@@ -4070,8 +4070,7 @@ impl View {
         if ui.click_title(conv, rect, x, y) {
             return After::Continue;
         }
-        let full = inner(rect);
-        let (room, area) = agents::split(full, ui.agents.fits(full.2));
+        let (room, area) = conv_split(ui, rect);
         // A click in the area of the agents lights a task; it is not the conversation's.
         if let Some((ax, ay, ..)) = area
             && x >= ax
@@ -4323,8 +4322,7 @@ impl View {
         let (Some(conv), Some(ui)) = (self.convs.get(&node), self.conv_ui.get(&node)) else {
             return false;
         };
-        let full = inner(rect);
-        let (room, area) = agents::split(full, ui.agents.fits(full.2));
+        let (room, area) = conv_split(ui, rect);
         if area.is_some_and(|(ax, ..)| x >= ax) {
             return false;
         }
@@ -5955,8 +5953,7 @@ impl View {
         let chips: Vec<(String, Rgb)> = std::iter::once((shell::short(folder), look::dim()))
             .chain(branch.map(|br| (format!("⎇ {br}"), look::magenta())))
             .collect();
-        let full = inner(rect);
-        let (room, area) = agents::split(full, ui.agents.fits(full.2));
+        let (room, area) = conv_split(ui, rect);
         ui.draw(g, conv, room, &chips, focused, self.now_ms);
         if let Some(area) = area {
             agents::draw(
@@ -6301,6 +6298,12 @@ const TERMINAL_KEYS: &[(&str, &str)] = &[
 
 /// How long a pairing question is on the screen before `y` answers it.
 const ANSWER_DELAY_MS: u64 = 800;
+/// A conversation pane's inner box split into the conversation's and the area of the agents', when shown.
+fn conv_split(ui: &ConvUi, rect: Rect) -> (Rect, Option<Rect>) {
+    let full = inner(rect);
+    agents::split(full, ui.agents.fits(full.2))
+}
+
 /// What a pane's box holds: inside the border and its padding.
 fn inner((x, y, w, h): Rect) -> Rect {
     (x + 2, y + 1, w.saturating_sub(4), h.saturating_sub(2))

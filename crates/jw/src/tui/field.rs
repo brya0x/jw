@@ -10,9 +10,9 @@ use super::{Grid, Rgb, STOP, Style, clip, look};
 
 /// Rows of text a shell pane's field grows to before it shows a window of them that follows the cursor.
 pub const MAX_TEXT_ROWS: usize = 5;
-/// The composer's limit never goes below this (REQ-703)...
+/// The composer's limit is never below this (REQ-703).
 const MIN_LIMIT: usize = 5;
-/// ...and leaves the list this many rows.
+/// The rows the list keeps whatever the composer holds (REQ-703).
 const LIST_KEEPS: usize = 4;
 /// The foot row and the line of work with the blank row over it, which the limit counts whether or not a turn runs.
 const FOOT_AND_WORK: usize = 3;
@@ -205,11 +205,12 @@ impl Field {
         )
     }
 
-    /// How many rows of text are shown, and how many the whole text has.
+    /// How many rows of text are shown.
     pub fn shown_rows(&self) -> usize {
         self.rows.len()
     }
 
+    /// How many rows the whole text has.
     pub fn total_rows(&self) -> usize {
         self.total
     }
@@ -272,18 +273,18 @@ impl Field {
             g.paint_bg(ix.saturating_sub(1), y + r, iw + 2, look::panel());
         }
         let more = self.bar && self.total > self.rows.len();
-        let count = format!(
-            "↑{} ↓{}",
-            self.first,
-            self.total - self.first - self.rows.len()
-        );
         // The bar is in the last column of the box and the count ends before it; the chips stop short of the count.
-        let count_at = (ix + iw).saturating_sub(1 + count.chars().count());
-        let chips_end = if more {
-            count_at.saturating_sub(1)
-        } else {
-            ix + iw
-        };
+        let count = more.then(|| {
+            let text = format!(
+                "↑{} ↓{}",
+                self.first,
+                self.total - self.first - self.rows.len()
+            );
+            ((ix + iw).saturating_sub(1 + text.chars().count()), text)
+        });
+        let chips_end = count
+            .as_ref()
+            .map_or(ix + iw, |(at, _)| at.saturating_sub(1));
         let mut x = ix + 1;
         for (text, colour) in chips {
             let room = chips_end.saturating_sub(x + 2);
@@ -295,13 +296,8 @@ impl Field {
             x += pill.chars().count() + 1;
         }
         let ground = look::panel();
-        if more {
-            g.put(
-                count_at,
-                y + 1,
-                &count,
-                Style::fg(look::yellow()).on(ground),
-            );
+        if let Some((at, text)) = &count {
+            g.put(*at, y + 1, text, Style::fg(look::yellow()).on(ground));
         }
         let tx = ix + 1 + PROMPT;
         let first = y + Self::FIRST_TEXT;

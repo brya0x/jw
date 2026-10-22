@@ -1529,13 +1529,16 @@ impl Ui {
         }
     }
 
+    /// What a peek is put over: the length of the text and the cursor in it.
+    fn stamp(&self) -> (usize, usize) {
+        (self.editor.chars.len(), self.editor.cursor)
+    }
+
     /// The row the window was put at with the wheel, while it still holds (REQ-707).
     fn peeked(&self) -> Option<usize> {
         self.peek
             .get()
-            .filter(|&(_, len, cursor)| {
-                (len, cursor) == (self.editor.chars.len(), self.editor.cursor)
-            })
+            .filter(|&(_, len, cursor)| (len, cursor) == self.stamp())
             .map(|(row, ..)| row)
     }
 
@@ -2721,8 +2724,8 @@ impl Ui {
         } else {
             (field.first_row() + 1).min(field.total_rows() - shown)
         };
-        let ed = &self.editor;
-        self.peek.set(Some((row, ed.chars.len(), ed.cursor)));
+        let (len, cursor) = self.stamp();
+        self.peek.set(Some((row, len, cursor)));
         true
     }
 
