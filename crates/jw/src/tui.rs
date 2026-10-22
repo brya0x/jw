@@ -3324,7 +3324,7 @@ impl View {
         let level = self.level();
         // A worktree that is being removed is not acted on: say so (REQ-657).
         if self.mode == Mode::Workspaces
-            && matches!(
+            && (matches!(
                 key,
                 Key::Close
                     | Key::Changes
@@ -3335,7 +3335,8 @@ impl View {
                     | Key::Enter
                     | Key::SplitRow
                     | Key::SplitCol
-            )
+                    | Key::Group
+            ) || (matches!(key, Key::Swap(_)) && level == Level::Workspaces))
             && self.target_is_removing(level)
         {
             self.flash("ya se está quitando");
@@ -7978,7 +7979,7 @@ mod tests {
     }
 
     /// REQ-672: `J` and `K` on a group's row move the group, and say when it is at the end; on a
-    /// workspace's row they wait for the repositories (N161e).
+    /// folder that is not a repository they say there is no place (the repositories: REQ-680).
     #[test]
     fn j_and_k_on_a_group_row_move_the_group_and_say_when_it_is_at_an_end() {
         let mut v = groups_view();
@@ -8008,6 +8009,24 @@ mod tests {
         v.press(Key::Down);
         assert!(v.on_group.is_none());
         assert_eq!(v.press(Key::Swap(split::Side::Down)), After::Continue);
+    }
+
+    /// REQ-657: `g`, `J` and `K` on a workspace whose worktree is being removed say so, like the keys
+    /// that act on it, and the daemon is not asked.
+    #[test]
+    fn g_j_and_k_on_a_workspace_being_removed_say_so_and_ask_nothing() {
+        let mut v = groups_view_with(|doc| doc["workspaces"][0]["removing"] = true.into());
+        assert_eq!(v.selected, 0);
+        for key in [
+            Key::Group,
+            Key::Swap(split::Side::Up),
+            Key::Swap(split::Side::Down),
+        ] {
+            v.flash.clear();
+            assert_eq!(v.press(key), After::Continue, "{key:?}");
+            assert_eq!(v.flash, "ya se está quitando", "{key:?}");
+            assert!(v.manage.is_none() && v.take_asks().is_empty());
+        }
     }
 
     /// REQ-680: `J` and `K` on a workspace's row move its repository inside its group, say when it is at an
