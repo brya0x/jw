@@ -189,9 +189,9 @@ struct Geom {
     split: bool,
 }
 
-/// The area the viewer has when it is a screen of its own: right of the sidebar, between the
-/// header and the status bar.
-fn overlay_area((cols, rows): (usize, usize)) -> Rect {
+/// The area the viewer has until a panel places it (it always is, but the tests): right of the
+/// sidebar, between the header and the status bar.
+fn default_area((cols, rows): (usize, usize)) -> Rect {
     let x = SIDEBAR + 1;
     (x, 1, cols.saturating_sub(x), rows.saturating_sub(2))
 }
@@ -271,7 +271,7 @@ impl Changes {
     }
 
     fn geom_of(&self, size: (usize, usize)) -> Geom {
-        geom(self.area.unwrap_or_else(|| overlay_area(size)), self.split)
+        geom(self.area.unwrap_or_else(|| default_area(size)), self.split)
     }
 
     pub fn workspace(&self) -> &str {
@@ -962,12 +962,12 @@ impl Changes {
         let hint = if !self.msg.is_empty() {
             self.msg.clone()
         } else if self.focus == Focus::Tree {
-            "j/k mover · h/l plegar · ↵ ir · tab cuerpo · esc cerrar".into()
+            "j/k mover · h/l plegar · ↵ ir · tab cuerpo · esc volver · q cerrar".into()
         } else if self.tab == Tab::Commits && self.commit.is_some() {
-            "j/k archivo · ]/[ hunk · v visto · ( ) commit · h commits · tab árbol · esc cerrar"
+            "j/k archivo · ]/[ hunk · v visto · ( ) commit · h commits · tab árbol · esc volver · q cerrar"
                 .into()
         } else {
-            "j/k archivo · ]/[ hunk · v visto · V elegir líneas · 1 2 3 vistas · s lado a lado · w ajuste · tab árbol · esc cerrar".into()
+            "j/k archivo · ]/[ hunk · v visto · V elegir líneas · 1 2 3 vistas · s lado a lado · w ajuste · tab árbol · esc volver · q cerrar".into()
         };
         let seen = self.diff(docs).filter(|d| !d.too_large).map(|d| {
             (
@@ -978,7 +978,8 @@ impl Changes {
         (hint, seen)
     }
 
-    /// Draw the viewer over the panes' area.
+    /// Draw the viewer in the area it has (tests place none and get the default).
+    #[cfg(test)]
     pub fn draw(&self, g: &mut Grid, docs: &Docs, label: &str, now_ms: u64) {
         self.draw_focused(g, docs, label, now_ms, true);
     }
