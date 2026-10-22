@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use contract::{ErrorCode, WorkspaceKind};
+use contract::{ErrorCode, JobKind, WorkspaceKind};
 use serde_json::json;
 
 use crate::commands::{Done, ErrorBody, err};
@@ -78,7 +78,13 @@ pub fn workspace(shared: &Shared, workspace: &str) -> Done {
     } else {
         vec!["push"]
     };
-    git::run_cancel(dir, &args, &cancel).map_err(|m| err(ErrorCode::GitFailed, m))?;
+    // From here the push is a job that every client sees, and that `cancel` can stop (REQ-652).
+    let job = shared
+        .lock()
+        .begin_job(JobKind::SyncWorkspace, workspace, branch.clone(), true);
+    let pushed = git::run_cancel(dir, &args, &cancel);
+    shared.lock().end_job(&job, pushed.clone().map(|_| ()));
+    pushed.map_err(|m| err(ErrorCode::GitFailed, m))?;
     Ok(Some(
         json!({"branch": branch, "pushed": ahead, "new_branch": new_branch}),
     ))

@@ -162,6 +162,14 @@ sealed interface Cmd {
     @Serializable @SerialName("sync_workspace")
     data class SyncWorkspace(val workspace: Id) : Cmd
 
+    /** Forget a job that ended; one that runs is a `conflict`. */
+    @Serializable @SerialName("dismiss_job")
+    data class DismissJob(val job: Id) : Cmd
+
+    /** Forget every job that ended. */
+    @Serializable @SerialName("dismiss_jobs")
+    data object DismissJobs : Cmd
+
     /** Stop what runs for the workspace and can be stopped: a push or a review being made. */
     @Serializable @SerialName("cancel")
     data class Cancel(val workspace: Id) : Cmd
@@ -563,6 +571,40 @@ data class WorkspaceSummary(
     val review: Review? = null,
     /** A conversation of the workspace works: it thinks, writes, runs a tool or compacts. */
     val working: Boolean = false,
+    /** A worktree is being removed: nothing can be done with the workspace. */
+    val removing: Boolean = false,
+)
+
+@Serializable
+enum class JobKind {
+    @SerialName("remove_workspace") RemoveWorkspace,
+    @SerialName("sync_workspace") SyncWorkspace,
+}
+
+@Serializable
+enum class JobState {
+    @SerialName("running") Running,
+    @SerialName("done") Done,
+    @SerialName("failed") Failed,
+}
+
+/** One slow thing the daemon does, in the session node. */
+@Serializable
+data class Job(
+    val id: Id,
+    val kind: JobKind,
+    /** The workspace it is about; it is gone from the session when a removal ended well. */
+    val workspace: Id,
+    /** The workspace's name for a removal, the branch for a push. */
+    val name: String,
+    val state: JobState,
+    /** Milliseconds since the epoch of the daemon's machine. */
+    @SerialName("started_at") val startedAt: Long,
+    @SerialName("duration_ms") val durationMs: Long? = null,
+    /** Why it failed, as the tool that failed said it. */
+    val detail: String? = null,
+    /** It can be stopped with `cancel`. */
+    val cancellable: Boolean = false,
 )
 
 /** Which way a split puts its two sides: a row is side by side, a col one over the other. */
@@ -630,6 +672,8 @@ sealed interface Node {
         override val attention: List<Attention>,
         val name: String,
         val workspaces: List<WorkspaceSummary>,
+        /** The slow things the daemon does or did, newest first. */
+        val jobs: List<Job> = emptyList(),
     ) : Node
 
     /** Level 1: one workspace and its panes. */
@@ -649,6 +693,8 @@ sealed interface Node {
         val layout: Layout? = null,
         /** The workspace reviews a pull request. */
         val review: Review? = null,
+        /** A worktree is being removed: nothing can be done with the workspace. */
+        val removing: Boolean = false,
     ) : Node
 
     /** Level 2: one pane, a terminal. */

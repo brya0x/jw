@@ -219,6 +219,9 @@ pub fn create_worktree(
     }))
 }
 
+/// `remove_workspace`. Closing a workspace is at once. Removing its worktree takes as long as the
+/// disk does (a build folder is gigabytes), so it is a job: the request is checked, the reply is
+/// `{job}` and git runs in a thread of its own, with no lock held (REQ-648, REQ-649).
 pub fn remove_workspace(
     shared: &Shared,
     workspace: &Id,
@@ -231,14 +234,18 @@ pub fn remove_workspace(
             "force is for removing a worktree",
         ));
     }
-    let (kind, path, project) = {
-        let core = shared.lock();
+    if !remove_worktree {
+        let mut core = shared.lock();
+        core.workspace(workspace)?;
+        core.model.workspaces.retain(|w| w.id != *workspace);
+        core.refresh();
+        return Ok(None);
+    }
+    let (path, project, job) = {
+        let mut core = shared.lock();
         let ws = core.workspace(workspace)?;
-        (ws.kind, ws.path.clone(), ws.project.clone())
-    };
-    if remove_worktree {
-        let project = match (kind, project) {
-            (WorkspaceKind::Worktree, Some(p)) => p,
+        let (path, project) = match (ws.kind, ws.project.clone()) {
+            (WorkspaceKind::Worktree, Some(p)) => (ws.path.clone(), p),
             _ => {
                 return Err(err(
                     ErrorCode::BadRequest,
@@ -246,17 +253,60 @@ pub fn remove_workspace(
                 ));
             }
         };
-        // Without `force` a worktree with changes stays, and so does its workspace; the client asks
-        // for it only after the person has typed the branch's name.
-        let mut args = vec!["worktree", "remove"];
-        if force {
-            args.push("--force");
-        }
-        args.push(&path);
-        git::run(Path::new(&project), &args).map_err(|m| err(ErrorCode::GitFailed, m))?;
+        (path, project, core.begin_removal(workspace)?)
+    };
+    let removal = Removal {
+        shared: shared.clone(),
+        workspace: workspace.clone(),
+        job: job.clone(),
+        done: false,
+    };
+    // Without `force` a worktree with changes stays, and so does its workspace; the client asks
+    // for it only after the person has typed the branch's name.
+    let spawned = std::thread::Builder::new()
+        .name("remove-worktree".into())
+        .spawn(move || {
+            let mut args = vec!["worktree", "remove"];
+            if force {
+                args.push("--force");
+            }
+            args.push(&path);
+            let result = git::run(Path::new(&project), &args).map(|_| ());
+            removal.end(result);
+        });
+    if let Err(e) = spawned {
+        // The closure went with the error, and its `Removal` ended the job as failed.
+        return Err(err(ErrorCode::Io, e.to_string()));
     }
-    let mut core = shared.lock();
-    core.model.workspaces.retain(|w| w.id != *workspace);
-    core.refresh();
-    Ok(None)
+    Ok(Some(serde_json::json!({ "job": job })))
+}
+
+/// The end of a removal: whatever happens to the thread, the job ends and the workspace is
+/// unmarked.
+struct Removal {
+    shared: Shared,
+    workspace: Id,
+    job: Id,
+    done: bool,
+}
+
+impl Removal {
+    fn end(mut self, result: Result<(), String>) {
+        self.done = true;
+        self.shared
+            .lock()
+            .end_removal(&self.workspace, &self.job, result);
+    }
+}
+
+impl Drop for Removal {
+    fn drop(&mut self) {
+        if !self.done {
+            self.shared.lock().end_removal(
+                &self.workspace,
+                &self.job,
+                Err("se interrumpió antes de terminar".into()),
+            );
+        }
+    }
 }

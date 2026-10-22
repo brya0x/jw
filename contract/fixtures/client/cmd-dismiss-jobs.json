@@ -1,0 +1,7 @@
+{
+  "t": "cmd",
+  "id": "c41",
+  "cmd": {
+    "cmd": "dismiss_jobs"
+  }
+}

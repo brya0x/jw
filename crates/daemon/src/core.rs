@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 
 use contract::patch::diff;
 use contract::{
-    Attention, AttentionKind, DaemonMsg, ErrorCode, Head, Id, Node, PaneInput, PaneSummary,
-    PatchOp, Screen, Session, Workspace, WorkspaceKind, WorkspaceSummary,
+    Attention, AttentionKind, DaemonMsg, ErrorCode, Head, Id, Job, JobKind, JobState, Node,
+    PaneInput, PaneSummary, PatchOp, Screen, Session, Workspace, WorkspaceKind, WorkspaceSummary,
 };
 use serde_json::Value;
 
@@ -147,12 +147,20 @@ pub struct Core {
     /// The operation that runs for each workspace and can be stopped: a push, a review being made
     /// (REQ-604).
     ops: HashMap<Id, crate::cancel::Cancel>,
+    /// The slow things the daemon does or did, newest first, when each began, and the workspaces
+    /// whose worktree is being removed. None is saved: a restart loses them (REQ-653).
+    jobs: Vec<Job>,
+    job_clock: HashMap<Id, Instant>,
+    removing: HashSet<Id>,
     /// The panes whose blocks changed since they were saved, and when each was last saved.
     history_dirty: HashSet<Id>,
     history_written: HashMap<Id, Instant>,
     /// How many blocks a pane had, and whether the last was running, when it was last saved.
     history_shape: HashMap<Id, (usize, bool)>,
 }
+
+/// How many jobs that ended are kept for the clients to show (REQ-653).
+const FINISHED_JOBS: usize = 20;
 
 /// The most often the blocks of a pane are written to disk.
 const HISTORY_EVERY: Duration = Duration::from_secs(2);
@@ -188,6 +196,9 @@ impl Core {
             state_dir: None,
             stopping: false,
             ops: HashMap::new(),
+            jobs: Vec::new(),
+            job_clock: HashMap::new(),
+            removing: HashSet::new(),
             history_dirty: HashSet::new(),
             history_written: HashMap::new(),
             history_shape: HashMap::new(),
@@ -541,16 +552,131 @@ impl Core {
         }
     }
 
-    /// The workspace with this id, or the `not_found` a command answers with.
+    /// The workspace with this id, or the `not_found` a command answers with; one whose worktree
+    /// is being removed is `conflict`, for nothing can be done with it (REQ-651).
     pub fn workspace(
         &self,
         id: &str,
     ) -> Result<&crate::model::Workspace, crate::commands::ErrorBody> {
+        if self.removing.contains(id) {
+            return Err(crate::commands::err(
+                ErrorCode::Conflict,
+                "ya se está quitando",
+            ));
+        }
         self.model
             .workspaces
             .iter()
             .find(|w| w.id == id)
             .ok_or_else(|| crate::commands::err(ErrorCode::NotFound, format!("no workspace {id}")))
+    }
+
+    /// A job begins: it is the newest, and the clients are told.
+    pub fn begin_job(
+        &mut self,
+        kind: JobKind,
+        workspace: &str,
+        name: String,
+        cancellable: bool,
+    ) -> Id {
+        let id = crate::model::new_id();
+        self.jobs.insert(
+            0,
+            Job {
+                id: id.clone(),
+                kind,
+                workspace: workspace.to_owned(),
+                name,
+                state: JobState::Running,
+                started_at: crate::blocks::now_ms(),
+                duration_ms: None,
+                detail: None,
+                cancellable,
+            },
+        );
+        self.job_clock.insert(id.clone(), Instant::now());
+        self.refresh();
+        id
+    }
+
+    /// A job ends, well or with the reason it failed. Nothing is published: the caller does, once,
+    /// with whatever else changed with it.
+    fn finish_job(&mut self, job: &str, result: Result<(), String>) {
+        let took = self.job_clock.remove(job).map(|t| t.elapsed());
+        if let Some(j) = self
+            .jobs
+            .iter_mut()
+            .find(|j| j.id == job && j.state == JobState::Running)
+        {
+            j.duration_ms = took.map(|t| t.as_millis() as u64);
+            match result {
+                Ok(()) => j.state = JobState::Done,
+                Err(why) => {
+                    j.state = JobState::Failed;
+                    j.detail = Some(why);
+                }
+            }
+        }
+        let mut kept = 0;
+        self.jobs.retain(|j| {
+            if j.state == JobState::Running {
+                return true;
+            }
+            kept += 1;
+            kept <= FINISHED_JOBS
+        });
+    }
+
+    pub fn end_job(&mut self, job: &str, result: Result<(), String>) {
+        self.finish_job(job, result);
+        self.refresh();
+    }
+
+    /// The worktree of `workspace` begins to be removed: it is marked and its job begins, in one
+    /// step, so a second removal finds it marked (REQ-648).
+    pub fn begin_removal(&mut self, workspace: &str) -> Result<Id, crate::commands::ErrorBody> {
+        let name = self.workspace(workspace)?.name.clone();
+        self.removing.insert(workspace.to_owned());
+        Ok(self.begin_job(JobKind::RemoveWorkspace, workspace, name, false))
+    }
+
+    /// The removal ended: the workspace goes when git took its folder, and is as it was when it did
+    /// not; the job says which, and the clients are told once (REQ-649).
+    pub fn end_removal(&mut self, workspace: &str, job: &str, result: Result<(), String>) {
+        self.removing.remove(workspace);
+        if result.is_ok() {
+            self.model.workspaces.retain(|w| w.id != workspace);
+        }
+        self.finish_job(job, result);
+        self.refresh();
+    }
+
+    /// Forget a job that ended (REQ-653).
+    pub fn dismiss_job(&mut self, job: &str) -> Result<(), crate::commands::ErrorBody> {
+        let Some(at) = self.jobs.iter().position(|j| j.id == job) else {
+            return Err(crate::commands::err(
+                ErrorCode::NotFound,
+                format!("no job {job}"),
+            ));
+        };
+        if self.jobs[at].state == JobState::Running {
+            return Err(crate::commands::err(
+                ErrorCode::Conflict,
+                "el trabajo sigue corriendo",
+            ));
+        }
+        self.jobs.remove(at);
+        self.refresh();
+        Ok(())
+    }
+
+    /// Forget every job that ended (REQ-653).
+    pub fn dismiss_finished_jobs(&mut self) {
+        let before = self.jobs.len();
+        self.jobs.retain(|j| j.state == JobState::Running);
+        if self.jobs.len() != before {
+            self.refresh();
+        }
     }
 
     pub fn workspace_dir(&self, workspace: &str) -> Option<PathBuf> {
@@ -1256,6 +1382,7 @@ impl Core {
                     .panes
                     .iter()
                     .any(|p| self.convs.get(&p.id).is_some_and(|c| c.st.works())),
+                removing: self.removing.contains(&ws.id),
             });
             nodes.push(Node::Workspace(Workspace {
                 head: head(&ws.id, attention),
@@ -1267,12 +1394,14 @@ impl Core {
                 panes,
                 layout: ws.layout.clone(),
                 review: ws.review.clone(),
+                removing: self.removing.contains(&ws.id),
             }));
         }
         nodes.push(Node::Session(Session {
             head: head(&self.model.session_id, session_attention),
             name: self.model.name.clone(),
             workspaces: crate::grouping::group(summaries),
+            jobs: self.jobs.clone(),
         }));
         let mut kept = Vec::new();
         for (id, e) in &self.diffs {
@@ -1555,6 +1684,134 @@ mod tests {
         changed.base = Some("origin/main".into());
         core.diff_update(&node, changed);
         assert_eq!(core.docs[&node].rev, rev + 1);
+    }
+
+    fn jobs_of(core: &Core) -> Vec<Value> {
+        let session = core.model.session_id.clone();
+        core.docs[&session].value["jobs"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// REQ-648, REQ-651: a workspace whose worktree is being removed is marked in both documents,
+    /// a second removal and any command that looks the workspace up are refused, and its job runs.
+    #[test]
+    fn a_workspace_being_removed_is_marked_and_nothing_acts_on_it() {
+        let (model, ws, _) = model_with_pane();
+        let mut core = test_core(model);
+        let session = core.model.session_id.clone();
+        assert!(jobs_of(&core).is_empty());
+        assert!(core.docs[&session].value.get("jobs").is_none());
+
+        let job = core.begin_removal(&ws).unwrap();
+        assert_eq!(core.docs[&ws].value["removing"], true);
+        assert_eq!(core.docs[&session].value["workspaces"][0]["removing"], true);
+        let jobs = jobs_of(&core);
+        assert_eq!(
+            (
+                jobs[0]["id"].as_str(),
+                jobs[0]["kind"].as_str(),
+                jobs[0]["state"].as_str(),
+                jobs[0]["name"].as_str()
+            ),
+            (
+                Some(job.as_str()),
+                Some("remove_workspace"),
+                Some("running"),
+                Some("w")
+            )
+        );
+        assert!(jobs[0]["started_at"].as_u64().unwrap() > 0);
+        assert!(jobs[0].get("duration_ms").is_none());
+        for refused in [
+            core.begin_removal(&ws),
+            core.workspace(&ws).map(|_| String::new()),
+        ] {
+            assert_eq!(refused.unwrap_err().code, ErrorCode::Conflict);
+        }
+        assert_eq!(
+            core.dismiss_job(&job).unwrap_err().code,
+            ErrorCode::Conflict,
+            "a job that runs is not dismissed"
+        );
+    }
+
+    /// REQ-649: a removal that ends well takes the workspace and a one that fails gives it back,
+    /// each in the one revision that ends the job.
+    #[test]
+    fn a_removal_ends_in_one_revision_gone_or_as_it_was() {
+        let (model, ws, _) = model_with_pane();
+        let mut core = test_core(model);
+        let session = core.model.session_id.clone();
+
+        let job = core.begin_removal(&ws).unwrap();
+        let rev = core.docs[&session].rev;
+        core.end_removal(&ws, &job, Err("fatal: it has changes".into()));
+        assert_eq!(core.docs[&session].rev, rev + 1, "one patch");
+        let jobs = jobs_of(&core);
+        assert_eq!(
+            (jobs[0]["state"].as_str(), jobs[0]["detail"].as_str()),
+            (Some("failed"), Some("fatal: it has changes"))
+        );
+        assert!(jobs[0]["duration_ms"].is_u64());
+        assert!(core.docs[&ws].value.get("removing").is_none());
+        assert!(core.workspace(&ws).is_ok(), "the workspace is as it was");
+
+        let job = core.begin_removal(&ws).unwrap();
+        let rev = core.docs[&session].rev;
+        core.end_removal(&ws, &job, Ok(()));
+        assert_eq!(core.docs[&session].rev, rev + 1, "one patch");
+        let jobs = jobs_of(&core);
+        assert_eq!(
+            (jobs[0]["id"].as_str(), jobs[0]["state"].as_str()),
+            (Some(job.as_str()), Some("done"))
+        );
+        assert_eq!(jobs.len(), 2, "the failed one is still there");
+        assert!(!core.docs.contains_key(&ws), "its document is gone");
+        assert!(core.model.workspaces.is_empty());
+    }
+
+    /// REQ-653: twenty finished jobs are kept, the oldest go first and the ones that run never;
+    /// they are dismissed one by one or all at once, and a job that is not there is `not_found`.
+    #[test]
+    fn finished_jobs_are_capped_and_dismissed() {
+        let (model, ws, _) = model_with_pane();
+        let mut core = test_core(model);
+        let running = core.begin_job(JobKind::SyncWorkspace, &ws, "b".into(), true);
+        let mut ended = Vec::new();
+        for n in 0..FINISHED_JOBS + 3 {
+            let job = core.begin_job(JobKind::SyncWorkspace, &ws, format!("b{n}"), true);
+            core.end_job(&job, Ok(()));
+            ended.push(job);
+        }
+        let jobs = jobs_of(&core);
+        assert_eq!(jobs.len(), FINISHED_JOBS + 1);
+        assert_eq!(
+            jobs[0]["id"],
+            ended[ended.len() - 1].as_str(),
+            "newest first"
+        );
+        assert!(
+            jobs.iter().any(|j| j["id"] == running.as_str()),
+            "a job that runs is never dropped"
+        );
+        assert!(jobs.iter().all(|j| j["id"] != ended[0].as_str()));
+
+        core.dismiss_job(&ended[ended.len() - 1]).unwrap();
+        assert_eq!(jobs_of(&core).len(), FINISHED_JOBS);
+        assert_eq!(
+            core.dismiss_job(&ended[ended.len() - 1]).unwrap_err().code,
+            ErrorCode::NotFound
+        );
+        core.dismiss_finished_jobs();
+        let left = jobs_of(&core);
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0]["id"], running.as_str());
+        // nothing to dismiss changes nothing
+        let rev = core.docs[&core.model.session_id].rev;
+        core.dismiss_finished_jobs();
+        assert_eq!(core.docs[&core.model.session_id].rev, rev);
     }
 
     #[test]

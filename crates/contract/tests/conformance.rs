@@ -161,7 +161,7 @@ fn found(dir: &str, key: &str) -> BTreeSet<String> {
 /// valid fixture is an untested corner: fail until one is added.
 #[test]
 fn every_schema_variant_has_a_fixture() {
-    let cases: [(&str, &str, &str, &str); 10] = [
+    let cases: [(&str, &str, &str, &str); 12] = [
         ("ClientMsg", "t", "client", "t"),
         ("DaemonMsg", "t", "daemon", "t"),
         ("Cmd", "cmd", "client", "cmd"),
@@ -172,6 +172,8 @@ fn every_schema_variant_has_a_fixture() {
         ("PhoneMsg", "t", "phone", "t"),
         ("BridgeMsg", "t", "bridge", "t"),
         ("Denied", "", "bridge", "reason"),
+        ("JobKind", "", "daemon", "kind"),
+        ("JobState", "", "daemon", "state"),
     ];
     for (def, prop, dir, key) in cases {
         let want = schema_values(def, prop);
@@ -199,6 +201,14 @@ fn rust_enums_match_the_schema() {
         let parsed: Result<contract::ErrorCode, _> =
             serde_json::from_value(Value::from(c.as_str()));
         assert!(parsed.is_ok(), "Rust does not know error code {c}");
+    }
+    for k in schema_values("JobKind", "") {
+        let parsed: Result<contract::JobKind, _> = serde_json::from_value(Value::from(k.as_str()));
+        assert!(parsed.is_ok(), "Rust does not know job kind {k}");
+    }
+    for s in schema_values("JobState", "") {
+        let parsed: Result<contract::JobState, _> = serde_json::from_value(Value::from(s.as_str()));
+        assert!(parsed.is_ok(), "Rust does not know job state {s}");
     }
 }
 
