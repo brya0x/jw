@@ -17,7 +17,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::agents;
 use super::erase;
-use super::field::{self, Field, Look, Mark, Window};
+use super::field::{self, Field, Look, Mark, Peek, Window};
 use super::fold;
 use super::older::{self, Older};
 use super::panels::{self, Panel, RowAct};
@@ -579,7 +579,7 @@ pub struct Ui {
     offset: Cell<usize>,
     /// Where the wheel put the window while the cursor stayed (REQ-707), with the length of the text
     /// and the cursor it was put over: the peek is over when either changes, and with any key.
-    peek: Cell<Option<(usize, usize, usize)>>,
+    peek: Cell<Option<Peek>>,
     /// What a drag of the mouse covers in the list, and the drag while the button is down
     /// (REQ-461).
     sel: Option<select::Selection>,
@@ -1536,10 +1536,7 @@ impl Ui {
 
     /// The row the window was put at with the wheel, while it still holds (REQ-707).
     fn peeked(&self) -> Option<usize> {
-        self.peek
-            .get()
-            .filter(|&(_, len, cursor)| (len, cursor) == self.stamp())
-            .map(|(row, ..)| row)
+        self.peek.get().and_then(|p| p.row(self.stamp()))
     }
 
     fn field(&self, conv: &Conversation, (iw, ih): (usize, usize)) -> Field {
@@ -2710,21 +2707,11 @@ impl Ui {
             return false;
         }
         let field = self.field(conv, (iw, ih));
-        let shown = field.shown_rows();
-        if field.total_rows() <= shown {
-            return false;
-        }
         let first = self.geo(conv, (iy, ih), field.band_rows()).band.0 + Field::FIRST_TEXT;
-        if !(first..first + shown).contains(&y) {
+        let Some(row) = field.wheeled(first, y, up) else {
             return false;
-        }
-        let row = if up {
-            field.first_row().saturating_sub(1)
-        } else {
-            (field.first_row() + 1).min(field.total_rows() - shown)
         };
-        let (len, cursor) = self.stamp();
-        self.peek.set(Some((row, len, cursor)));
+        self.peek.set(Some(Peek::new(row, self.stamp())));
         true
     }
 

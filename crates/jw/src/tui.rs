@@ -58,7 +58,7 @@ pub use changes::Ask;
 use changes::{Changes, Docs, Outcome, Src};
 use contract::ErrorBody;
 use conversation::{Act as ConvAct, Ui as ConvUi};
-use field::{Field, Window};
+use field::{Field, Peek, Window};
 use manage::{Act, Dest, Manage, Named, Naming, Target};
 use programs::{Launcher, Pick, Programs};
 use settings::Settings;
@@ -4336,12 +4336,18 @@ impl View {
         field_of(p, b, iw, ih, win)
     }
 
-    /// The frame that drew `field` is where the window moves from next, unless the wheel has it elsewhere.
+    /// The frame that drew `field` is where the window moves from next, unless the wheel has it
+    /// elsewhere; a pane whose text has always fit keeps no entry.
     fn store_shell_offset(&self, p: &Pane, field: &Field) {
+        let offset = field.first_row();
         let mut wins = self.shell_win.borrow_mut();
-        let win = wins.entry(p.head.id.clone()).or_default();
-        if win.pin(shell_stamp(p)).is_none() {
-            win.offset = field.first_row();
+        match wins.get_mut(&p.head.id) {
+            Some(win) if win.pin(shell_stamp(p)).is_none() => win.offset = offset,
+            Some(_) => {}
+            None if offset > 0 => {
+                wins.insert(p.head.id.clone(), ShellWin { offset, peek: None });
+            }
+            None => {}
         }
     }
 
@@ -4363,25 +4369,15 @@ impl View {
             return false;
         }
         let field = self.shell_field(p, b, iw, ih);
-        let shown = field.shown_rows();
-        if field.total_rows() <= shown {
-            return false;
-        }
         let first = iy + list_h(ih, field.band_rows()) + Field::FIRST_TEXT;
-        if !(first..first + shown).contains(&y) {
+        let Some(row) = field.wheeled(first, y, up) else {
             return false;
-        }
-        let row = if up {
-            field.first_row().saturating_sub(1)
-        } else {
-            (field.first_row() + 1).min(field.total_rows() - shown)
         };
-        let (len, cursor) = shell_stamp(p);
         self.shell_win
             .borrow_mut()
             .entry(pane.to_owned())
             .or_default()
-            .peek = Some((row, len, cursor));
+            .peek = Some(Peek::new(row, shell_stamp(p)));
         true
     }
 
@@ -6412,16 +6408,14 @@ fn running_block(b: &Blocks) -> Option<&contract::Block> {
 struct ShellWin {
     /// The row of the text the window began at in the last frame.
     offset: usize,
-    /// Where the wheel put the window, with the length of the text and the cursor it was put over.
-    peek: Option<(usize, usize, usize)>,
+    /// Where the wheel put the window.
+    peek: Option<Peek>,
 }
 
 impl ShellWin {
     /// The row the wheel put the window at, while the text and the cursor are what it was put over.
     fn pin(&self, stamp: (usize, usize)) -> Option<usize> {
-        self.peek
-            .filter(|&(_, len, cursor)| (len, cursor) == stamp)
-            .map(|(row, ..)| row)
+        self.peek.and_then(|p| p.row(stamp))
     }
 }
 

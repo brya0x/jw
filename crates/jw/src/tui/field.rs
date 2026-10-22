@@ -98,6 +98,26 @@ pub fn thumb(n: usize, v: usize, offset: usize) -> (usize, usize) {
     (at, len)
 }
 
+/// Where the wheel put a field's window, and what the text and the cursor were then: it holds
+/// while they are the same (REQ-707).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Peek {
+    row: usize,
+    over: (usize, usize),
+}
+
+impl Peek {
+    /// `row` put over a text of `over.0` characters with the cursor at `over.1`.
+    pub fn new(row: usize, over: (usize, usize)) -> Peek {
+        Peek { row, over }
+    }
+
+    /// The row, while the text and the cursor are `now`, what it was put over.
+    pub fn row(self, now: (usize, usize)) -> Option<usize> {
+        (self.over == now).then_some(self.row)
+    }
+}
+
 /// The rows of the text a field shows when the text has more than fit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Window {
@@ -191,14 +211,18 @@ impl Field {
         )
     }
 
-    /// How many rows of text are shown.
-    pub fn shown_rows(&self) -> usize {
-        self.rows.len()
-    }
-
-    /// How many rows the whole text has.
-    pub fn total_rows(&self) -> usize {
-        self.total
+    /// The row a notch of the wheel at `y` takes the window to (REQ-707), `up` or down, for a field
+    /// whose first row of text is at `first_text`; none when the text fits or `y` is not one of its rows.
+    pub fn wheeled(&self, first_text: usize, y: usize, up: bool) -> Option<usize> {
+        let shown = self.rows.len();
+        if self.total <= shown || !(first_text..first_text + shown).contains(&y) {
+            return None;
+        }
+        Some(if up {
+            self.first.saturating_sub(1)
+        } else {
+            (self.first + 1).min(self.total - shown)
+        })
     }
 
     /// The row of the whole text that the first row shown is: the offset a window that
@@ -696,6 +720,41 @@ mod tests {
                 pin: None,
             },
         )
+    }
+
+    /// REQ-707: a notch takes the window a row, within the text, and only over a row of the window.
+    #[test]
+    fn a_notch_of_the_wheel_takes_the_window_a_row_over_its_text_rows_only() {
+        let f = long_text(14, 13, 6);
+        assert_eq!(f.wheeled(3, 3, true), Some(5));
+        assert_eq!(
+            f.wheeled(3, 10, true),
+            Some(5),
+            "the last row of the window"
+        );
+        assert_eq!(f.wheeled(3, 11, true), None, "past its rows");
+        assert_eq!(f.wheeled(3, 2, true), None, "above its rows");
+        assert_eq!(
+            f.wheeled(3, 3, false),
+            Some(6),
+            "at the end of the text it stays"
+        );
+        assert_eq!(
+            long_text(14, 0, 0).wheeled(3, 3, true),
+            Some(0),
+            "and at the start"
+        );
+        assert_eq!(long_text(14, 0, 0).wheeled(3, 3, false), Some(1));
+        assert_eq!(
+            long_text(8, 3, 0).wheeled(3, 3, true),
+            None,
+            "a text that fits"
+        );
+        let p = Peek::new(4, (10, 2));
+        assert_eq!(
+            (p.row((10, 2)), p.row((11, 2)), p.row((10, 3))),
+            (Some(4), None, None)
+        );
     }
 
     /// REQ-706: a bar at the right of the window's rows and the count at the end of the chips' row, one column before it.
