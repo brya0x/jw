@@ -8,8 +8,6 @@ use contract::PaneInput;
 
 use super::{Grid, Rgb, STOP, Style, clip, look};
 
-/// Rows of text a shell pane's field grows to before it shows a window of them that follows the cursor.
-pub const MAX_TEXT_ROWS: usize = 5;
 /// The composer's limit is never below this (REQ-703).
 const MIN_LIMIT: usize = 5;
 /// The rows the list keeps whatever the composer holds (REQ-703).
@@ -105,24 +103,11 @@ pub fn thumb(n: usize, v: usize, offset: usize) -> (usize, usize) {
 pub struct Window {
     /// How many rows it shows at most.
     pub limit: usize,
-    /// Where it was: with it the window moves the least that shows the cursor (the composer's,
-    /// which remembers it); without, it begins as far down as the cursor allows (a shell pane's).
-    pub offset: Option<usize>,
-    /// Whether a text that has more rows than the window says so: the bar and the count (REQ-706).
-    pub bar: bool,
+    /// Where it was in the last frame: the window moves the least that shows the cursor (REQ-704).
+    pub offset: usize,
     /// The row the window begins at when the person looked elsewhere with the wheel (REQ-707):
     /// it wins over the cursor, which may then be out of view.
     pub pin: Option<usize>,
-}
-
-impl Window {
-    /// The shell pane's: five rows, following the cursor (REQ-256).
-    pub const FOLLOW: Window = Window {
-        limit: MAX_TEXT_ROWS,
-        offset: None,
-        bar: false,
-        pin: None,
-    };
 }
 
 /// The text of the field wrapped to its rows, and where the cursor is in them.
@@ -132,8 +117,6 @@ pub struct Field {
     /// The row of the whole text the first of `rows` is, and how many rows the whole text has.
     first: usize,
     total: usize,
-    /// The bar and the count are drawn when the text has more rows than are shown.
-    bar: bool,
     /// The cursor is in one of the rows shown.
     seen: bool,
     cursor: (usize, usize),
@@ -157,15 +140,19 @@ impl Field {
     /// The field of a pane `iw` wide. `input` is what the shell holds at its prompt; without it
     /// (an older daemon, a shell that does not say where its prompt ends) `screen` is the line
     /// of the pane's screen the cursor is on, with its column; with neither, nothing is shown.
-    pub fn new(input: Option<&PaneInput>, screen: Option<(&str, usize)>, iw: usize) -> Field {
+    pub fn new(
+        input: Option<&PaneInput>,
+        screen: Option<(&str, usize)>,
+        iw: usize,
+        window: Window,
+    ) -> Field {
         let width = text_width(iw);
         match (input, screen) {
-            (Some(i), _) => wrap(&i.text, i.cursor as usize, width, None, &[], Window::FOLLOW),
+            (Some(i), _) => wrap(&i.text, i.cursor as usize, width, None, &[], window),
             (None, Some((line, col))) => Field {
                 rows: vec![line.to_owned()],
                 first: 0,
                 total: 1,
-                bar: false,
                 seen: true,
                 cursor: (0, col),
                 selected: Vec::new(),
@@ -176,7 +163,6 @@ impl Field {
                 rows: vec![String::new()],
                 first: 0,
                 total: 1,
-                bar: false,
                 seen: true,
                 cursor: (0, 0),
                 selected: Vec::new(),
@@ -272,7 +258,7 @@ impl Field {
         for r in 0..self.band_rows() {
             g.paint_bg(ix.saturating_sub(1), y + r, iw + 2, look::panel());
         }
-        let more = self.bar && self.total > self.rows.len();
+        let more = self.total > self.rows.len();
         // The bar is in the last column of the box and the count ends before it; the chips stop short of the count.
         let count = more.then(|| {
             let text = format!(
@@ -381,8 +367,7 @@ pub fn stop_at(ix: usize, iw: usize) -> usize {
 }
 
 /// `text` broken into rows of `width` characters (and at its own line breaks), the cursor
-/// placed at its offset, and at most `window.limit` rows kept: those the window says, or, with no
-/// offset, the last ones, or those that hold the cursor when it is further up.
+/// placed at its offset, and at most `window.limit` rows kept: those the window says.
 fn wrap(
     text: &str,
     cursor: usize,
@@ -432,17 +417,15 @@ fn wrap(
     }
     let total = rows.len();
     let limit = window.limit;
-    let start = match (window.pin, window.offset) {
-        (Some(pin), _) => pin.min(total.saturating_sub(limit)),
-        (None, Some(offset)) => window_start(total, limit, at.0, offset),
-        (None, None) => total.saturating_sub(limit).min(at.0),
+    let start = match window.pin {
+        Some(pin) => pin.min(total.saturating_sub(limit)),
+        None => window_start(total, limit, at.0, window.offset),
     };
     let kept: Vec<String> = rows.into_iter().skip(start).take(limit).collect();
     Field {
         rows: kept,
         first: start,
         total,
-        bar: window.bar,
         seen: (start..start + limit).contains(&at.0),
         cursor: (at.0.saturating_sub(start), at.1),
         selected: selected
@@ -463,6 +446,17 @@ fn wrap(
 mod tests {
     use super::*;
 
+    /// Rows a window of a field in these tests shows.
+    const ROWS: usize = 5;
+
+    fn five() -> Window {
+        Window {
+            limit: ROWS,
+            offset: 0,
+            pin: None,
+        }
+    }
+
     fn input(text: &str, cursor: u32) -> PaneInput {
         PaneInput {
             text: text.into(),
@@ -472,17 +466,17 @@ mod tests {
 
     #[test]
     fn a_short_line_is_one_row_with_the_cursor_after_it() {
-        let f = Field::new(Some(&input("git status", 10)), None, 60);
+        let f = Field::new(Some(&input("git status", 10)), None, 60, five());
         assert_eq!(f.rows, ["git status"]);
         assert_eq!((f.cursor, f.is_empty(), f.band_rows()), ((0, 10), false, 5));
     }
 
     #[test]
     fn nothing_typed_is_empty_and_says_what_to_type() {
-        let f = Field::new(Some(&input("", 0)), None, 60);
+        let f = Field::new(Some(&input("", 0)), None, 60, five());
         assert_eq!((f.rows.len(), f.cursor, f.is_empty()), (1, (0, 0), true));
         assert!(
-            Field::new(None, None, 60).is_empty(),
+            Field::new(None, None, 60, five()).is_empty(),
             "a running command shows no line"
         );
     }
@@ -491,7 +485,7 @@ mod tests {
     fn a_line_longer_than_the_row_wraps_and_the_band_grows() {
         let w = text_width(30);
         let text = "x".repeat(w * 2 + 3);
-        let f = Field::new(Some(&input(&text, (w * 2 + 3) as u32)), None, 30);
+        let f = Field::new(Some(&input(&text, (w * 2 + 3) as u32)), None, 30, five());
         assert_eq!(
             f.rows.iter().map(|r| r.chars().count()).collect::<Vec<_>>(),
             [w, w, 3]
@@ -503,22 +497,27 @@ mod tests {
     #[test]
     fn a_line_that_fills_its_last_row_puts_the_cursor_on_a_new_one() {
         let w = text_width(30);
-        let f = Field::new(Some(&input(&"x".repeat(w), w as u32)), None, 30);
+        let f = Field::new(Some(&input(&"x".repeat(w), w as u32)), None, 30, five());
         assert_eq!((f.rows.len(), f.cursor), (2, (1, 0)));
     }
 
     #[test]
     fn the_cursor_in_the_middle_of_a_wrapped_line_is_where_it_is() {
         let w = text_width(30);
-        let f = Field::new(Some(&input(&"x".repeat(w + 4), 2)), None, 30);
+        let f = Field::new(Some(&input(&"x".repeat(w + 4), 2)), None, 30, five());
         assert_eq!(f.cursor, (0, 2));
-        let f = Field::new(Some(&input(&"x".repeat(w + 4), (w + 1) as u32)), None, 30);
+        let f = Field::new(
+            Some(&input(&"x".repeat(w + 4), (w + 1) as u32)),
+            None,
+            30,
+            five(),
+        );
         assert_eq!(f.cursor, (1, 1));
     }
 
     #[test]
     fn a_line_break_of_the_text_starts_a_row() {
-        let f = Field::new(Some(&input("ab\ncd", 5)), None, 60);
+        let f = Field::new(Some(&input("ab\ncd", 5)), None, 60, five());
         assert_eq!(f.rows, ["ab", "cd"]);
         assert_eq!(f.cursor, (1, 2));
     }
@@ -527,15 +526,11 @@ mod tests {
     fn more_than_five_rows_keep_the_last_ones_or_those_with_the_cursor() {
         let w = text_width(30);
         let text = "x".repeat(w * 8);
-        let end = Field::new(Some(&input(&text, (w * 8) as u32)), None, 30);
-        assert_eq!(end.rows.len(), MAX_TEXT_ROWS);
-        assert_eq!(
-            end.cursor.0,
-            MAX_TEXT_ROWS - 1,
-            "the cursor is on the last row kept"
-        );
-        let top = Field::new(Some(&input(&text, 1)), None, 30);
-        assert_eq!((top.rows.len(), top.cursor), (MAX_TEXT_ROWS, (0, 1)));
+        let end = Field::new(Some(&input(&text, (w * 8) as u32)), None, 30, five());
+        assert_eq!(end.rows.len(), ROWS);
+        assert_eq!(end.cursor.0, ROWS - 1, "the cursor is on the last row kept");
+        let top = Field::new(Some(&input(&text, 1)), None, 30, five());
+        assert_eq!((top.rows.len(), top.cursor), (ROWS, (0, 1)));
     }
 
     /// REQ-703: a third of the pane, at least five, and what leaves the list four rows.
@@ -615,8 +610,7 @@ mod tests {
                 30,
                 Window {
                     limit: 8,
-                    offset: Some(offset),
-                    bar: true,
+                    offset,
                     pin: None,
                 },
             )
@@ -651,16 +645,6 @@ mod tests {
         assert_eq!((back.first_row(), back.cursor), (3, (0, 0)));
     }
 
-    /// REQ-708: the shell's field keeps five rows and follows the cursor, the same text with no offset.
-    #[test]
-    fn a_field_with_no_offset_follows_the_cursor_as_the_shells_does() {
-        let w = text_width(30);
-        let text = "x".repeat(w * 14);
-        let mid = Field::selecting(&input(&text, (w * 7) as u32), None, &[], 30, Window::FOLLOW);
-        assert_eq!((mid.rows.len(), mid.first_row(), mid.cursor.0), (5, 7, 0));
-    }
-
-    /// REQ-706: the thumb's length, and its place that touches an end of the bar only at the end of the text.
     #[test]
     fn the_thumb_is_as_long_as_the_window_is_of_the_text_and_touches_an_end_only_at_the_end() {
         // 14 rows, a window of 8: the thumb is 5 of 8 and travels 3
@@ -698,7 +682,7 @@ mod tests {
         g.rows_plain()
     }
 
-    fn long_text(rows: usize, cursor: usize, offset: usize, bar: bool) -> Field {
+    fn long_text(rows: usize, cursor: usize, offset: usize) -> Field {
         let w = text_width(44);
         let text = "x".repeat(w * rows);
         Field::selecting(
@@ -708,8 +692,7 @@ mod tests {
             44,
             Window {
                 limit: 8,
-                offset: Some(offset),
-                bar,
+                offset,
                 pin: None,
             },
         )
@@ -718,7 +701,7 @@ mod tests {
     /// REQ-706: a bar at the right of the window's rows and the count at the end of the chips' row, one column before it.
     #[test]
     fn a_text_with_more_rows_than_the_window_draws_a_bar_and_a_count() {
-        let rows = drawn(&long_text(14, 3, 0, true), &[]);
+        let rows = drawn(&long_text(14, 3, 0), &[]);
         let bar: Vec<char> = (3..11).map(|y| rows[y].chars().nth(45).unwrap()).collect();
         assert_eq!(
             bar,
@@ -735,7 +718,7 @@ mod tests {
             45,
             "and nothing is at the bar's column on that row"
         );
-        let rows = drawn(&long_text(14, 13, 6, true), &[]);
+        let rows = drawn(&long_text(14, 13, 6), &[]);
         let bar: Vec<char> = (3..11).map(|y| rows[y].chars().nth(45).unwrap()).collect();
         assert_eq!(
             bar,
@@ -745,10 +728,14 @@ mod tests {
         assert!(rows[1].contains("↑6 ↓0"), "{:?}", rows[1]);
     }
 
-    /// REQ-706, REQ-708: nothing is drawn when everything fits, and a field with no bar says nothing.
+    /// REQ-706, REQ-708: nothing is drawn when everything fits, nor on a field of one row.
     #[test]
-    fn nothing_is_drawn_when_the_text_fits_or_the_field_is_a_shells() {
-        for f in [long_text(8, 3, 0, true), long_text(14, 3, 0, false)] {
+    fn nothing_is_drawn_when_the_text_fits_or_the_field_is_one_row() {
+        for f in [
+            long_text(8, 3, 0),
+            Field::new(None, Some(("❯ ls", 4)), 44, five()),
+            Field::new(None, None, 44, five()),
+        ] {
             let rows = drawn(&f, &[]);
             assert!(
                 rows.iter()
@@ -766,7 +753,7 @@ mod tests {
         )];
         let cells = |f: &Field| drawn(f, &chips)[1].chars().collect::<Vec<_>>();
         // the box is at 2 and 44 wide: the bar is in column 45, the count in 40 to 44
-        let with = cells(&long_text(14, 3, 0, true));
+        let with = cells(&long_text(14, 3, 0));
         assert_eq!(with[40..45].iter().collect::<String>(), "↑0 ↓6");
         assert_eq!(
             (with[38], with[39]),
@@ -774,7 +761,7 @@ mod tests {
             "the pill's own space and one more between it and the count"
         );
         assert_ne!(with[37], ' ', "the chip has all the room that is left");
-        let without = cells(&long_text(3, 1, 0, true));
+        let without = cells(&long_text(3, 1, 0));
         assert_ne!(
             without[41], ' ',
             "with no count the chip goes on under where it was"
@@ -786,19 +773,13 @@ mod tests {
         let w = text_width(30);
         let text = format!("{}ab\ncd", "x".repeat(w));
         let from = w;
-        let f = Field::selecting(
-            &input(&text, 0),
-            Some((from, from + 4)),
-            &[],
-            30,
-            Window::FOLLOW,
-        );
+        let f = Field::selecting(&input(&text, 0), Some((from, from + 4)), &[], 30, five());
         assert_eq!(f.selected, [(1, 0), (1, 1), (2, 0)]);
     }
 
     #[test]
     fn without_the_daemons_input_the_screens_line_is_shown_as_it_is() {
-        let f = Field::new(None, Some(("❯ ls -la", 8)), 60);
+        let f = Field::new(None, Some(("❯ ls -la", 8)), 60, five());
         assert_eq!(
             (f.rows.as_slice(), f.cursor, f.is_empty()),
             (&["❯ ls -la".to_owned()][..], (0, 8), false)
@@ -829,8 +810,7 @@ mod tests {
                     &[],
                     Window {
                         limit: usize::MAX,
-                        offset: None,
-                        bar: false,
+                        offset: 0,
                         pin: None,
                     },
                 );

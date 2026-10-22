@@ -1554,8 +1554,7 @@ impl Ui {
             iw,
             Window {
                 limit: field::limit(ih),
-                offset: Some(self.offset.get()),
-                bar: true,
+                offset: self.offset.get(),
                 pin: self.peeked(),
             },
         )
