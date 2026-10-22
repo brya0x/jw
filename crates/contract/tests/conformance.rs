@@ -276,6 +276,23 @@ fn the_reply_of_open_conversation_is_a_node_and_a_session() {
     assert_eq!(serde_json::to_value(&opened).unwrap(), doc["result"]);
 }
 
+/// The result of `conversation_history` in the fixture is what `SentList` writes and reads, folds
+/// of a message that had them included.
+#[test]
+fn the_reply_of_conversation_history_is_the_messages_sent_oldest_first() {
+    let docs = fixtures("daemon");
+    let (_, doc) = docs
+        .iter()
+        .find(|(n, _)| n == "reply-ok-conversation-history.json")
+        .expect("the fixture");
+    let list: contract::conversation::SentList =
+        serde_json::from_value(doc["result"].clone()).unwrap();
+    assert_eq!(list.messages.len(), 2);
+    assert!(list.messages[0].folds.is_empty());
+    assert_eq!(list.messages[1].folds, vec![[5, 40]]);
+    assert_eq!(serde_json::to_value(&list).unwrap(), doc["result"]);
+}
+
 /// The result of `list_conversations` in the fixture is what `ConversationList` writes and reads.
 #[test]
 fn the_reply_of_list_conversations_is_a_list_of_saved_conversations() {

@@ -285,6 +285,8 @@ fn handle_key(
                         node: node.to_owned(),
                         text: line,
                         images: Vec::new(),
+                        folds: Vec::new(),
+                        private: false,
                     });
                 }
             }

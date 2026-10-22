@@ -16,6 +16,7 @@ use crate::panes;
 use crate::rename;
 use crate::review;
 use crate::saved;
+use crate::sent;
 use crate::server::Shared;
 use crate::start;
 use crate::sync;
@@ -178,7 +179,18 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
             args,
             env,
         } => engine::open_conversation(shared, &pane, resume, args, env),
-        Cmd::ConversationSend { node, text, images } => engine::send(shared, &node, &text, images),
+        Cmd::ConversationSend {
+            node,
+            text,
+            images,
+            folds,
+            private,
+        } => {
+            // What the person sent is kept for ↑ before the daemon answers any of it itself.
+            sent::record(shared, &node, &text, &folds, private);
+            engine::send(shared, &node, &text, images)
+        }
+        Cmd::ConversationHistory { node } => sent::history(shared, &node),
         Cmd::ConversationAnswer {
             node,
             ask,

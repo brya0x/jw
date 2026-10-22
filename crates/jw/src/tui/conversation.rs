@@ -32,6 +32,10 @@ pub enum Act {
         node: String,
         text: String,
         images: Vec<Image>,
+        /// The characters of `text` that were each a fold, and whether the line began with a blank:
+        /// what the daemon's history needs (REQ-716).
+        folds: Vec<[usize; 2]>,
+        private: bool,
     },
     Answer {
         node: String,
@@ -741,6 +745,12 @@ pub struct Ui {
     /// The messages sent, oldest first, for ↑ (REQ-714); the message recalled and the draft that was
     /// being written when the first one was.
     sent: Vec<paste::Sent>,
+    /// The daemon was asked for the messages of the repository and has not answered: what is
+    /// sent meanwhile, to go after them; and the answer that came while one was recalled.
+    asking: bool,
+    sent_asked: bool,
+    since: Vec<paste::Sent>,
+    pending: Option<Vec<paste::Sent>>,
     recalling: Option<usize>,
     /// With the draft, the pictures it had: they are not the message that is shown.
     draft: Option<(Composer, Vec<(u32, Image)>)>,
@@ -2751,7 +2761,9 @@ impl Ui {
             return None;
         }
         let line = line.to_owned();
-        let kept = paste::keeps(&text).then(|| paste::trimmed(&text, &folds));
+        let sent = paste::trimmed(&text, &folds);
+        let private = text.starts_with([' ', '\t']);
+        let kept = paste::keeps(&text);
         self.editor.take();
         self.scroll = 0;
         if let Some(command) = line
@@ -2767,8 +2779,8 @@ impl Ui {
         if matches!(conv.status, ConvStatus::Dead | ConvStatus::Resuming) {
             self.retaking = true;
         }
-        if let Some(sent) = kept {
-            self.remember(sent);
+        if kept {
+            self.remember(sent.clone());
         }
         // Only the pictures whose mark is still in the line go.
         let images = std::mem::take(&mut self.images)
@@ -2780,12 +2792,62 @@ impl Ui {
             node,
             text: line,
             images,
+            folds: sent.folds.iter().map(|&(from, to)| [from, to]).collect(),
+            private,
         })
     }
 
     fn forget_recall(&mut self) {
         self.recalling = None;
         self.draft = None;
+        self.take_pending();
+    }
+
+    /// Whether the daemon has to be asked for the messages sent from the repository: once.
+    pub fn want_sent(&mut self) -> bool {
+        !std::mem::replace(&mut self.sent_asked, true) && {
+            self.asking = true;
+            true
+        }
+    }
+
+    /// The daemon's answer, oldest first, or none when it could not give it: the messages sent
+    /// while it was awaited go after them, and one that is already there is not twice (REQ-716).
+    /// While a message is recalled the list waits, so that its numbers do not move.
+    pub fn history(&mut self, list: Option<contract::conversation::SentList>) {
+        self.asking = false;
+        let since = std::mem::take(&mut self.since);
+        let Some(list) = list else {
+            return;
+        };
+        let mut all: Vec<paste::Sent> = list
+            .messages
+            .into_iter()
+            .map(|m| paste::Sent {
+                text: m.text,
+                folds: m.folds.iter().map(|&[from, to]| (from, to)).collect(),
+            })
+            .collect();
+        // What the file already had is looked for among its last ones, not among those added here.
+        let theirs = all.len();
+        let tail = theirs.saturating_sub(since.len() + 1);
+        for s in since {
+            if !all[tail..theirs].iter().any(|a| a.text == s.text) {
+                all.push(s);
+            }
+        }
+        let from = all.len().saturating_sub(paste::KEEP_LAST);
+        all.drain(..from);
+        self.pending = Some(all);
+        if self.recalling.is_none() {
+            self.take_pending();
+        }
+    }
+
+    fn take_pending(&mut self) {
+        if let Some(all) = self.pending.take() {
+            self.sent = all;
+        }
     }
 
     /// A message that was sent goes to the end of the history (REQ-716), unless it is the same as
@@ -2793,6 +2855,9 @@ impl Ui {
     fn remember(&mut self, sent: paste::Sent) {
         if self.sent.last().is_some_and(|last| last.text == sent.text) {
             return;
+        }
+        if self.asking {
+            self.since.push(sent.clone());
         }
         self.sent.push(sent);
         if self.sent.len() > paste::KEEP_LAST {
@@ -2823,6 +2888,7 @@ impl Ui {
                 self.editor = draft;
                 self.images = images;
             }
+            self.take_pending();
         } else {
             self.recalling = Some(to);
             self.editor.set_folded(&self.sent[to].clone(), !down);
@@ -4727,7 +4793,9 @@ mod tests {
             Some(Act::Send {
                 node: conv.head.id.clone(),
                 text: "hola\nadiós".into(),
-                images: vec![]
+                images: vec![],
+                folds: vec![],
+                private: false,
             })
         );
         assert_eq!(ui.editor.text(), "");
@@ -4833,7 +4901,9 @@ mod tests {
             Some(Act::Send {
                 node,
                 text: "/effort low".into(),
-                images: vec![]
+                images: vec![],
+                folds: vec![],
+                private: false,
             })
         );
         type_in(&mut ui, &conv, "/model");
@@ -5925,6 +5995,86 @@ mod tests {
         assert!(row.trim_end().ends_with("↑0 ↓6"), "{row}");
     }
 
+    fn listed(texts: &[&str]) -> Option<contract::conversation::SentList> {
+        Some(contract::conversation::SentList {
+            messages: texts
+                .iter()
+                .map(|t| contract::conversation::SentMessage {
+                    text: (*t).into(),
+                    folds: Vec::new(),
+                })
+                .collect(),
+        })
+    }
+
+    fn texts_of(ui: &Ui) -> Vec<&str> {
+        ui.sent.iter().map(|s| s.text.as_str()).collect()
+    }
+
+    /// REQ-716: the daemon's list goes first, what was sent while it was awaited goes after it, and a
+    /// message that the daemon already had is not twice.
+    #[test]
+    fn the_list_of_the_daemon_goes_before_what_was_sent_while_it_was_awaited() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        assert!(ui.want_sent());
+        assert!(!ui.want_sent(), "once");
+        send(&mut ui, &conv, "nuevo");
+        send(&mut ui, &conv, "otro");
+        ui.history(listed(&["a", "b", "nuevo"]));
+        assert_eq!(texts_of(&ui), ["a", "b", "nuevo", "otro"]);
+        send(&mut ui, &conv, "ya no se espera");
+        assert_eq!(ui.since.len(), 0, "nothing is held once it has answered");
+    }
+
+    /// REQ-716: a message that the person sends twice while the answer is awaited is twice.
+    #[test]
+    fn a_message_sent_twice_while_the_list_is_awaited_is_kept_twice() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        ui.want_sent();
+        for t in ["uno", "dos", "uno"] {
+            send(&mut ui, &conv, t);
+        }
+        ui.history(listed(&[]));
+        assert_eq!(texts_of(&ui), ["uno", "dos", "uno"]);
+    }
+
+    /// REQ-716: an answer that comes while a message is recalled waits for the recall to end.
+    #[test]
+    fn an_answer_that_comes_while_a_message_is_recalled_waits_for_the_recall_to_end() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        ui.want_sent();
+        send(&mut ui, &conv, "uno");
+        press(&mut ui, &conv, KeyCode::Up);
+        assert_eq!(ui.editor.text(), "uno");
+        ui.history(listed(&["viejo", "uno"]));
+        assert_eq!(
+            texts_of(&ui),
+            ["uno"],
+            "the numbers do not move under the recall"
+        );
+        row_of(&frame(&ui, &conv).1, "↑ 1/1");
+        press(&mut ui, &conv, KeyCode::Down);
+        assert_eq!(texts_of(&ui), ["viejo", "uno"]);
+        press(&mut ui, &conv, KeyCode::Up);
+        assert_eq!(ui.editor.text(), "uno");
+        press(&mut ui, &conv, KeyCode::Up);
+        assert_eq!(ui.editor.text(), "viejo");
+    }
+
+    /// REQ-716: an answer that is an error leaves what was sent here as it is.
+    #[test]
+    fn no_answer_leaves_the_messages_sent_here_as_they_are() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        ui.want_sent();
+        send(&mut ui, &conv, "uno");
+        ui.history(None);
+        assert_eq!(texts_of(&ui), ["uno"]);
+    }
+
     /// REQ-712: what is typed or pasted cannot be taken for a fold.
     #[test]
     fn a_character_that_would_pass_for_a_fold_is_written_as_the_replacement_one() {
@@ -6283,7 +6433,9 @@ mod tests {
             Some(Act::Send {
                 node: node.clone(),
                 text: "/deploy".into(),
-                images: vec![]
+                images: vec![],
+                folds: vec![],
+                private: false,
             }),
             "enter runs it"
         );
@@ -6342,7 +6494,9 @@ mod tests {
             Some(Act::Send {
                 node,
                 text: "/vercel:deploy".into(),
-                images: vec![]
+                images: vec![],
+                folds: vec![],
+                private: false,
             })
         );
         conv.commands = (0..20)

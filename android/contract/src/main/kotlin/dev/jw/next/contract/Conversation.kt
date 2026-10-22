@@ -229,6 +229,14 @@ data class Image(@SerialName("media_type") val mediaType: String, val data: Stri
 @Serializable
 data class SavedConversation(val id: String, val name: String, val at: Long)
 
+/** A message that was sent, as the history keeps it: its text and the characters of it that were each one folded paste. */
+@Serializable
+data class SentMessage(val text: String, val folds: List<List<Int>> = emptyList())
+
+/** What `conversation_history` answers, oldest first. */
+@Serializable
+data class SentList(val messages: List<SentMessage>)
+
 /** What `list_conversations` answers, newest first. */
 @Serializable
 data class ConversationList(val conversations: List<SavedConversation>)

@@ -153,6 +153,8 @@ impl Rig {
             node: node.into(),
             text: text.into(),
             images: Vec::new(),
+            folds: Vec::new(),
+            private: false,
         })
         .unwrap();
     }
@@ -353,6 +355,44 @@ fn the_model_asked_for_with_the_flag_is_the_one_shown() {
     r.stop();
 }
 
+/// REQ-716: what is sent is kept by repository, with its folds, and comes back with the command;
+/// what begins with a blank is not kept, and the file is private.
+#[test]
+fn the_messages_sent_are_kept_for_the_repository_and_come_back_with_their_folds() {
+    let mut r = rig();
+    let (node, _) = r.open();
+    let send = |r: &mut Rig, text: &str, folds: Vec<[usize; 2]>, private: bool| {
+        r.cmd(Cmd::ConversationSend {
+            node: node.clone(),
+            text: text.into(),
+            images: Vec::new(),
+            folds,
+            private,
+        })
+        .unwrap();
+    };
+    send(&mut r, "uno", vec![], false);
+    send(&mut r, "mira\nl1\nl2\nl3\nl4 y ya", vec![[5, 17]], false);
+    send(&mut r, "secreto", vec![], true);
+    let reply = r
+        .cmd(Cmd::ConversationHistory { node: node.clone() })
+        .unwrap()
+        .unwrap();
+    let list: contract::conversation::SentList = serde_json::from_value(reply).unwrap();
+    let texts: Vec<&str> = list.messages.iter().map(|m| m.text.as_str()).collect();
+    assert_eq!(texts, ["uno", "mira\nl1\nl2\nl3\nl4 y ya"]);
+    assert_eq!(list.messages[1].folds, vec![[5, 17]]);
+    let files: Vec<_> = std::fs::read_dir(r.sb.dir.join("state/sent"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    assert_eq!(files.len(), 1, "one file for the one repository: {files:?}");
+    let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&files[0]), 0o600);
+    assert_eq!(mode(&r.sb.dir.join("state/sent")), 0o700);
+    r.stop();
+}
+
 #[test]
 fn a_command_that_needs_claudes_screen_is_not_sent_and_says_where_to_go() {
     let mut r = rig();
@@ -362,6 +402,8 @@ fn a_command_that_needs_claudes_screen_is_not_sent_and_says_where_to_go() {
             node: node.clone(),
             text: "/doctor".into(),
             images: vec![],
+            folds: Vec::new(),
+            private: false,
         })
         .unwrap_err();
     assert_eq!(e.code, ErrorCode::BadRequest);
@@ -377,6 +419,8 @@ fn a_command_that_needs_claudes_screen_is_not_sent_and_says_where_to_go() {
             node: node.clone(),
             text: "/rewind".into(),
             images: vec![],
+            folds: Vec::new(),
+            private: false,
         })
         .unwrap_err();
     assert!(e.message.contains("command claude"), "{}", e.message);
@@ -386,6 +430,8 @@ fn a_command_that_needs_claudes_screen_is_not_sent_and_says_where_to_go() {
             node: node.clone(),
             text: "/resume".into(),
             images: vec![],
+            folds: Vec::new(),
+            private: false,
         })
         .unwrap_err();
     assert!(e.message.contains("lista"), "{}", e.message);
@@ -1728,6 +1774,8 @@ fn a_session_that_another_claude_has_open_is_read_and_not_written() {
             node: node.clone(),
             text: "hola".into(),
             images: Vec::new(),
+            folds: Vec::new(),
+            private: false,
         })
         .unwrap_err();
     assert_eq!(refused.code, contract::ErrorCode::Conflict);
@@ -1743,6 +1791,8 @@ fn a_session_that_another_claude_has_open_is_read_and_not_written() {
         node: node.clone(),
         text: "hola".into(),
         images: Vec::new(),
+        folds: Vec::new(),
+        private: false,
     })
     .unwrap();
     r.stop();
@@ -1930,6 +1980,8 @@ fn closing_ends_the_engine_and_the_pane_stops_naming_the_conversation() {
             node: node.clone(),
             text: "x".into(),
             images: Vec::new(),
+            folds: Vec::new(),
+            private: false,
         })
         .unwrap_err();
     assert_eq!(e.code, ErrorCode::NotFound);
@@ -2003,6 +2055,8 @@ fn a_daemon_that_restarts_brings_the_conversation_back_and_the_next_message_resu
         node: node2.clone(),
         text: "sigo".into(),
         images: Vec::new(),
+        folds: Vec::new(),
+        private: false,
     })
     .unwrap()
     .unwrap();

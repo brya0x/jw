@@ -804,6 +804,9 @@ fn converse(s: &mut Link, node: &str, text: &str, wait: Option<Duration>) -> Out
         node: node.to_owned(),
         text: text.to_owned(),
         images: Vec::new(),
+        folds: Vec::new(),
+        // What an agent sends is not what the person typed: it stays out of their ↑ (REQ-716).
+        private: true,
     })?;
     let Some(limit) = wait else {
         return Ok(None);
