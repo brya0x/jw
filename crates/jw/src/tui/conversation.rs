@@ -129,6 +129,11 @@ const COLORS: Choices = &[
     ("cyan", "cian"),
 ];
 
+/// A message of the person that wraps to more rows than `USER_FOLDS_PAST` is drawn with its first
+/// `USER_SHOWN` and a line that says how many it leaves out (REQ-713).
+const USER_SHOWN: usize = 3;
+const USER_FOLDS_PAST: usize = 4;
+
 /// The most diff lines an edit shows before it is opened, and the most lines of output an opened item shows.
 const DIFF_SHOWN: usize = 14;
 const OPEN_SHOWN: usize = 60;
@@ -1263,13 +1268,27 @@ impl Ui {
         let open = running || self.open.contains(&abs);
         match item {
             Item::User { text, images } => {
-                let rows = wrap(text, w.saturating_sub(2), plain, Style::fg(look::cyan()));
+                let mut rows = wrap(text, w.saturating_sub(2), plain, Style::fg(look::cyan()));
+                // A long message shows its first rows and says how many it leaves out (REQ-713).
+                let left = rows.len().saturating_sub(USER_SHOWN);
+                let left = if rows.len() > USER_FOLDS_PAST {
+                    left
+                } else {
+                    0
+                };
+                rows.truncate(rows.len() - left);
                 for (k, (continues, row)) in rows.into_iter().enumerate() {
                     let mark = if k == 0 { "❯ " } else { "  " };
                     let mut spans = vec![(mark.to_owned(), Style::fg(accent).bold())];
                     spans.extend(row);
                     soft.set(continues);
                     push(spans, Some(look::sel()));
+                }
+                if left > 0 {
+                    push(
+                        vec![(format!("  … +{left} filas más"), dim)],
+                        Some(look::sel()),
+                    );
                 }
                 if *images > 0 {
                     push(
@@ -5535,6 +5554,52 @@ mod tests {
             "the column is {} cells",
             2 + label + 2
         );
+    }
+
+    /// REQ-713: a long message of the person shows three rows and how many it leaves out.
+    #[test]
+    fn a_long_message_of_the_person_is_drawn_folded_to_three_rows() {
+        let mut conv = idle();
+        let user = |text: String| Item::User { text, images: 0 };
+        conv.items = vec![user(pasted_lines(12))];
+        let ui = Ui::default();
+        let rows = frame(&ui, &conv).1;
+        row_of(&rows, "❯ línea 1");
+        row_of(&rows, "línea 3");
+        row_of(&rows, "… +9 filas más");
+        assert!(
+            !rows.iter().any(|r| r.contains("línea 4")),
+            "{}",
+            rows.join("\n")
+        );
+        conv.items = vec![user(pasted_lines(5))];
+        let rows = frame(&ui, &conv).1;
+        row_of(&rows, "… +2 filas más");
+        // four rows are drawn whole: a fold of one would take the room of the row it hides
+        conv.items = vec![user(pasted_lines(4))];
+        let rows = frame(&ui, &conv).1;
+        row_of(&rows, "línea 4");
+        assert!(!rows.iter().any(|r| r.contains("filas más")));
+    }
+
+    /// REQ-713: the rows are those the width makes, and the item's own copy still has it all.
+    #[test]
+    fn the_rows_of_a_folded_message_are_counted_as_drawn_and_its_copy_is_whole() {
+        let mut conv = idle();
+        conv.items = vec![Item::User {
+            text: "palabra ".repeat(60),
+            images: 0,
+        }];
+        let rows = frame(&Ui::default(), &conv).1;
+        row_of(&rows, "filas más");
+        assert_eq!(plain_of(&conv.items[0]), "palabra ".repeat(60));
+        // the line that says it is not glued to the row above when a drag copies
+        let lines = Ui::default().lines(&conv, 94);
+        let marker = lines
+            .iter()
+            .find(|l| l.text().contains("filas más"))
+            .unwrap();
+        assert!(!marker.soft);
     }
 
     /// REQ-712: what is typed or pasted cannot be taken for a fold.
