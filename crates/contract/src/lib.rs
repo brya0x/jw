@@ -622,11 +622,11 @@ pub struct Workspace {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
     pub panes: Vec<PaneSummary>,
-    /// How the panes are laid out: a tree whose leaves are exactly `panes` and `views` (N163).
+    /// How the panes are laid out: a tree whose leaves are exactly `panes` and `views` (N165).
     /// Absent from a daemon that does not keep one: the client lays them out itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<Layout>,
-    /// The diff and the viewer that are leaves of `layout` beside the panes (REQ-684); absent
+    /// The diff and the viewer that are leaves of `layout` beside the panes (REQ-703); absent
     /// when there are none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub views: Vec<ViewSummary>,
@@ -1118,7 +1118,7 @@ pub enum ViewKind {
     Viewer,
 }
 
-/// A leaf of a workspace's layout that is not a terminal (N163, REQ-684): it has no process, so
+/// A leaf of a workspace's layout that is not a terminal (N165, REQ-703): it has no process, so
 /// «a pane is a terminal» holds. What a view draws a client reads for itself (`open_diff`,
 /// `read_file`); the daemon keeps that it is there, where, and the files a viewer has open.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

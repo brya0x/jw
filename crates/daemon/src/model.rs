@@ -38,7 +38,7 @@ pub struct Workspace {
     #[serde(skip)]
     pub attention: Vec<Own>,
     /// The diff and the viewers that are leaves of `layout` beside the panes. Not saved: a
-    /// restart drops them (REQ-692).
+    /// restart drops them (REQ-711).
     #[serde(skip)]
     pub views: Vec<View>,
     /// Where each kind of view was last closed, to put the next one back. Not saved.
@@ -59,7 +59,7 @@ pub struct Workspace {
     pub github: Option<crate::github::Pr>,
 }
 
-/// A leaf of a workspace's layout that is not a terminal (N163).
+/// A leaf of a workspace's layout that is not a terminal (N165).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct View {
     pub id: Id,

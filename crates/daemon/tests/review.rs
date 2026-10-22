@@ -224,7 +224,7 @@ fn a_pull_request_is_a_worktree_at_its_head_that_compares_against_its_base() {
     // it is a workspace that says it is a review, with the one panel
     let w = r.summary(&id, |w| w["pane_count"] == 1);
     assert_eq!(w["review"], json!({"pr": 7, "base": "main"}));
-    // its diff is a view at the right of the agent's panel (REQ-691)
+    // its diff is a view at the right of the agent's panel (REQ-710)
     r.client.open(&id).unwrap();
     assert!(
         r.client
