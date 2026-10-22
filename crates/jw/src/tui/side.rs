@@ -71,6 +71,7 @@ mod tests {
             attention: Vec::new(),
             review: None,
             working: false,
+            removing: false,
         }
     }
 

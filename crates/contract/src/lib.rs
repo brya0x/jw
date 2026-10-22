@@ -208,7 +208,9 @@ pub enum Cmd {
         repo: String,
         path: String,
     },
-    /// Close a workspace (a worktree is removed from disk only when `remove_worktree`).
+    /// Close a workspace (a worktree is removed from disk only when `remove_worktree`). Closing is
+    /// at once; removing the worktree is a job (REQ-648): the reply is `{job}` and how it ended is
+    /// in the session's `jobs`.
     RemoveWorkspace {
         workspace: Id,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -234,6 +236,12 @@ pub enum Cmd {
     SyncWorkspace {
         workspace: Id,
     },
+    /// Forget a job that ended (REQ-653); one that runs is `conflict`.
+    DismissJob {
+        job: Id,
+    },
+    /// Forget every job that ended (REQ-653).
+    DismissJobs {},
     /// Stop what runs for the workspace and can be stopped: a push (`sync_workspace`) or a review
     /// being made (`review_pr`) (REQ-604). What it stops answers with its error; this answers
     /// the same when nothing runs.
@@ -533,6 +541,50 @@ pub struct Session {
     pub head: Head,
     pub name: String,
     pub workspaces: Vec<WorkspaceSummary>,
+    /// The slow things the daemon does or did, newest first; absent when there are none (REQ-647).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub jobs: Vec<Job>,
+}
+
+/// What a job is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JobKind {
+    /// A worktree is being taken off the disk (`remove_workspace` with `remove_worktree`).
+    RemoveWorkspace,
+    /// A branch is being pushed (`sync_workspace`).
+    SyncWorkspace,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JobState {
+    Running,
+    Done,
+    Failed,
+}
+
+/// One slow thing the daemon does, in the `session` node (REQ-647).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Job {
+    pub id: Id,
+    pub kind: JobKind,
+    /// The workspace it is about; it is gone from the session when a removal ended well.
+    pub workspace: Id,
+    /// What to call it: the workspace's name for a removal, the branch for a push.
+    pub name: String,
+    pub state: JobState,
+    /// When it began, in milliseconds since the epoch of the daemon's machine.
+    pub started_at: u64,
+    /// How long it took, once it ended.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    /// Why it failed, as the tool that failed said it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    /// It can be stopped with `cancel`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub cancellable: bool,
 }
 
 /// Level 1: one workspace and its panes.
@@ -556,6 +608,9 @@ pub struct Workspace {
     /// The workspace reviews a pull request (REQ-583).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review: Option<Review>,
+    /// A worktree is being removed: nothing can be done with the workspace (REQ-651).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub removing: bool,
 }
 
 /// What makes a workspace the review of a pull request: its number and the branch the pull
@@ -1021,6 +1076,9 @@ pub struct WorkspaceSummary {
     /// A conversation of the workspace works: it thinks, writes, runs a tool or compacts.
     #[serde(default, skip_serializing_if = "is_false")]
     pub working: bool,
+    /// A worktree is being removed: nothing can be done with the workspace (REQ-651).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub removing: bool,
 }
 
 fn is_false(b: &bool) -> bool {

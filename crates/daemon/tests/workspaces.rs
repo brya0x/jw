@@ -26,6 +26,28 @@ fn session(c: &mut wire::Client) -> Value {
     c.nodes[&root].clone()
 }
 
+/// The jobs of the session as `c` holds them, once `done` holds of them (the session is open).
+fn wait_jobs(c: &mut wire::Client, done: impl Fn(&[Value]) -> bool) -> Vec<Value> {
+    let root = c.root.clone();
+    let jobs = |c: &wire::Client| {
+        c.nodes[&root]["jobs"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+    };
+    let ok = c.wait_until(WAIT, |c| done(&jobs(c))).unwrap();
+    assert!(
+        ok,
+        "the jobs never were what the test waits for: {:?}",
+        jobs(c)
+    );
+    jobs(c)
+}
+
+fn job_of(reply: Option<Value>) -> String {
+    reply.unwrap()["job"].as_str().unwrap().to_owned()
+}
+
 fn id_of(reply: Option<Value>) -> String {
     reply.unwrap()["workspace"].as_str().unwrap().to_owned()
 }
@@ -233,27 +255,67 @@ fn removing_a_workspace_keeps_the_folder_and_can_remove_a_clean_worktree() {
         .unwrap()
         .unwrap_err();
     assert_eq!(e.code, ErrorCode::BadRequest);
-    // A dirty worktree is kept, with its workspace.
+    // A dirty worktree is kept, with its workspace: the request is answered at once with the job,
+    // and the job is what fails, with what git said (REQ-648, REQ-649).
     std::fs::write(wt_dir.join("dirty"), "x").unwrap();
-    let e = c
-        .cmd(Cmd::RemoveWorkspace {
+    let mut seen = sb.client();
+    session(&mut seen);
+    let job = job_of(
+        c.cmd(Cmd::RemoveWorkspace {
             workspace: wt.clone(),
             remove_worktree: true,
             force: false,
         })
         .unwrap()
-        .unwrap_err();
-    assert_eq!(e.code, ErrorCode::GitFailed);
+        .unwrap(),
+    );
+    let jobs = wait_jobs(&mut seen, |j| {
+        j.iter()
+            .any(|j| j["id"] == job.as_str() && j["state"] != "running")
+    });
+    assert_eq!(jobs[0]["state"], "failed");
+    assert_eq!(jobs[0]["kind"], "remove_workspace");
+    assert_eq!(jobs[0]["name"], "app: b1");
+    assert!(
+        jobs[0]["detail"]
+            .as_str()
+            .is_some_and(|d| d.contains("--force")),
+        "git's own message: {}",
+        jobs[0]["detail"]
+    );
+    assert!(jobs[0]["duration_ms"].is_u64());
     assert!(wt_dir.exists());
+    let root = seen.root.clone();
+    let row = |c: &wire::Client, id: &str| {
+        c.nodes[&root]["workspaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|w| w["id"] == id)
+            .cloned()
+    };
+    let kept = row(&seen, &wt).expect("the workspace stays");
+    assert!(
+        kept.get("removing").is_none(),
+        "a failed removal leaves the workspace as it was"
+    );
     std::fs::remove_file(wt_dir.join("dirty")).unwrap();
 
-    c.cmd(Cmd::RemoveWorkspace {
-        workspace: wt.clone(),
-        remove_worktree: true,
-        force: false,
-    })
-    .unwrap()
-    .unwrap();
+    // The clean one goes: the workspace with it, in the same patch that ends the job.
+    let job = job_of(
+        c.cmd(Cmd::RemoveWorkspace {
+            workspace: wt.clone(),
+            remove_worktree: true,
+            force: false,
+        })
+        .unwrap()
+        .unwrap(),
+    );
+    let jobs = wait_jobs(&mut seen, |j| {
+        j.iter()
+            .any(|j| j["id"] == job.as_str() && j["state"] == "done")
+    });
+    assert_eq!(jobs[0]["id"], job.as_str(), "the newest job is first");
     assert!(!wt_dir.exists());
     // The folder goes and the branch stays, with whatever commits it held (REQ-147).
     let branches = std::process::Command::new("git")
@@ -266,8 +328,12 @@ fn removing_a_workspace_keeps_the_folder_and_can_remove_a_clean_worktree() {
         String::from_utf8_lossy(&branches.stdout).contains("b1"),
         "the branch was deleted"
     );
-    // The `gone` arrives before the reply, so the cache has already dropped the node.
-    assert!(!c.nodes.contains_key(&wt));
+    assert!(row(&seen, &wt).is_none());
+    assert!(
+        seen.wait_until(WAIT, |s| !s.nodes.contains_key(&wt))
+            .unwrap()
+    );
+    assert!(c.wait_until(WAIT, |c| !c.nodes.contains_key(&wt)).unwrap());
 
     // A folder workspace goes without touching the directory.
     c.cmd(Cmd::RemoveWorkspace {
@@ -791,6 +857,23 @@ fn a_push_that_waits_is_stopped_by_cancel_and_can_be_tried_again() {
         .unwrap()
         .unwrap_err();
     assert_eq!(again.code, ErrorCode::Conflict, "{}", again.message);
+    // everybody sees the push as a job that can be stopped (REQ-652)
+    session(&mut other);
+    let jobs = wait_jobs(&mut other, |j| !j.is_empty());
+    assert_eq!(
+        (
+            jobs[0]["kind"].as_str(),
+            jobs[0]["state"].as_str(),
+            jobs[0]["name"].as_str(),
+            jobs[0]["cancellable"].as_bool()
+        ),
+        (
+            Some("sync_workspace"),
+            Some("running"),
+            Some("feat/slow"),
+            Some(true)
+        )
+    );
     other
         .cmd(Cmd::Cancel {
             workspace: ws.clone(),
@@ -800,6 +883,11 @@ fn a_push_that_waits_is_stopped_by_cancel_and_can_be_tried_again() {
     let stopped = push.join().unwrap().unwrap().unwrap_err();
     assert_eq!(stopped.code, ErrorCode::GitFailed);
     assert_eq!(stopped.message, "cancelado");
+    let jobs = wait_jobs(&mut other, |j| j.iter().all(|j| j["state"] != "running"));
+    assert_eq!(
+        (jobs[0]["state"].as_str(), jobs[0]["detail"].as_str()),
+        (Some("failed"), Some("cancelado"))
+    );
     assert!(
         began.elapsed() < std::time::Duration::from_secs(30),
         "the hook was not waited for"
@@ -849,12 +937,23 @@ fn a_worktree_with_changes_goes_only_by_force_and_its_branch_stays() {
         })
         .unwrap()
     };
-    // Without force git refuses and the workspace stays.
-    assert_eq!(
-        remove(&mut c, true, false).unwrap_err().code,
-        ErrorCode::GitFailed
-    );
+    // Without force git refuses, as a job that fails, and the workspace stays.
+    let job = job_of(remove(&mut c, true, false).unwrap());
+    wait_jobs(&mut c, |j| {
+        j.iter()
+            .any(|j| j["id"] == job.as_str() && j["state"] == "failed")
+    });
     assert!(wt.exists());
+    // A job that ended is forgotten by the person: one, then all (REQ-653).
+    c.cmd(Cmd::DismissJob { job: job.clone() })
+        .unwrap()
+        .unwrap();
+    wait_jobs(&mut c, |j| j.is_empty());
+    assert_eq!(
+        c.cmd(Cmd::DismissJob { job }).unwrap().unwrap_err().code,
+        ErrorCode::NotFound
+    );
+    c.cmd(Cmd::DismissJobs {}).unwrap().unwrap();
     // Force is for removing a worktree: on its own it is a bad request and nothing happens.
     assert_eq!(
         remove(&mut c, false, true).unwrap_err().code,
@@ -862,7 +961,11 @@ fn a_worktree_with_changes_goes_only_by_force_and_its_branch_stays() {
     );
     assert!(wt.exists());
     // By force the folder goes with its changes, the workspace goes, the branch stays.
-    remove(&mut c, true, true).unwrap();
+    let job = job_of(remove(&mut c, true, true).unwrap());
+    wait_jobs(&mut c, |j| {
+        j.iter()
+            .any(|j| j["id"] == job.as_str() && j["state"] == "done")
+    });
     assert!(!wt.exists());
     let branches = std::process::Command::new("git")
         .arg("-C")

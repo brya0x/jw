@@ -74,6 +74,10 @@ data class HomeRow(
     val go: Attention?,
     /** A conversation of the workspace works: a spinner beside the mark and a line that says so (REQ-579). */
     val working: Boolean = false,
+    /** Its worktree is being removed: a spinner, the name dim, and nothing acts on it (REQ-660). */
+    val removing: Boolean = false,
+    /** Its removal failed and the job was not dismissed: a red cross; the cause is in the jobs (REQ-660). */
+    val removalFailed: Boolean = false,
 )
 
 /** An item of Avisos: one unseen attention and the workspace it belongs to. */
@@ -118,6 +122,8 @@ fun homeRows(session: Node.Session, seen: Seen): List<HomeRow> = session.workspa
         line = top?.what(),
         go = top,
         working = w.working,
+        removing = w.removing,
+        removalFailed = !w.removing && removalFailed(session, w.id),
     )
 }
 

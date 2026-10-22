@@ -66,6 +66,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.jw.next.client.Aviso
+import dev.jw.next.client.AvisosTab
+import dev.jw.next.client.JobsMark
+import dev.jw.next.client.endNotice
+import dev.jw.next.client.endedRemovals
+import dev.jw.next.client.jobStates
+import dev.jw.next.client.jobsMark
+import dev.jw.next.client.jobsOf
 import dev.jw.next.client.CloseSheet
 import dev.jw.next.client.ClientState
 import dev.jw.next.client.lineReference
@@ -100,6 +107,7 @@ import dev.jw.next.client.what
 import dev.jw.next.contract.Attention
 import dev.jw.next.contract.BlocksMode
 import dev.jw.next.contract.Id
+import dev.jw.next.contract.JobState
 import dev.jw.next.contract.Node
 import dev.jw.next.contract.PaneSummary
 import kotlinx.coroutines.delay
@@ -190,12 +198,13 @@ private fun PlusButton(open: () -> Unit) {
     }
 }
 
-/** Opens the avisos; the count is what waits for the person and has not been seen on this phone (REQ-215). */
+/** Opens the avisos; the count is what waits for the person and has not been seen on this phone (REQ-215), and the jobs have a mark of their own (REQ-659). */
 @Composable
-private fun BellButton(waiting: Int, open: () -> Unit) {
-    val said = if (waiting > 0) "Avisos: $waiting esperando" else "Avisos"
+private fun BellButton(waiting: Int, jobs: JobsMark, now: Long, open: () -> Unit) {
+    val said = (if (waiting > 0) "Avisos: $waiting esperando" else "Avisos") + jobs.said()
     Box(Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp).clickable(onClick = open).semantics { contentDescription = said }, contentAlignment = Alignment.Center) {
         GlyphIcon(Glyph.Bell, Palette.fg)
+        JobsDot(jobs, now)
         if (waiting > 0) {
             Box(Modifier.align(Alignment.TopEnd).padding(top = 6.dp, end = 4.dp).defaultMinSize(minWidth = 16.dp).background(Palette.yellow, RoundedCornerShape(8.dp)).padding(horizontal = 4.dp), contentAlignment = Alignment.Center) {
                 Mono("$waiting", Palette.bg, 10, bold = true)
@@ -226,6 +235,18 @@ fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, set: (Clie
     val session = remember(version) { source.session() }
     val waiting = avisos(session, state.seen)
     val onAvisos = state.screen == Screen.Avisos
+    // The jobs: the clock moves while one runs; the tab that shows is seen; a removal that ends is said (REQ-659 to REQ-661).
+    val jobsMark = jobsMark(session, state.seen)
+    val now = rememberClock(session.jobs.any { it.state == JobState.Running })
+    var jobOpen by remember { mutableStateOf<Id?>(null) }
+    LaunchedEffect(version, state.screen, state.avisosTab, state.seen) {
+        val seen = nav.seeJobs(state)
+        if (seen != state) set(seen)
+    }
+    LaunchedEffect(version) {
+        source.jobStates?.let { before -> endedRemovals(before, session).firstOrNull()?.let { source.say(it.endNotice()) } }
+        source.jobStates = jobStates(session)
+    }
     // A long press on a workspace: its sheet, then the field of its name or the question before it is let go of (REQ-183, REQ-184, REQ-227).
     var menu by remember { mutableStateOf<WorkspaceTarget?>(null) }
     var naming by remember { mutableStateOf<Naming?>(null) }
@@ -237,14 +258,25 @@ fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, set: (Clie
     var project by remember { mutableStateOf<String?>(null) }
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
-            if (onAvisos) Header("avisos", "lo que espera algo de ti", onBack = { set(nav.back(state)) }) else Header("jwn · ${session.name}", source.status, action = {
+            if (onAvisos) {
+                val ended = jobsOf(session).ended
+                Header("avisos", "lo que espera algo de ti · lo que corre", onBack = { set(nav.back(state)) }, action = {
+                    if (state.avisosTab == AvisosTab.Trabajos && ended.isNotEmpty()) {
+                        Mono(
+                            "limpiar", Palette.dim, 12,
+                            modifier = Modifier.clickable { source.dismissJobs { r -> r.onFailure { source.say("✗ ${it.message ?: "el PC no pudo descartar los trabajos"}") } } }
+                                .defaultMinSize(minHeight = 48.dp).padding(horizontal = 12.dp, vertical = 14.dp),
+                        )
+                    }
+                })
+            } else Header("jwn · ${session.name}", source.status, action = {
                 SearchButton { finding = true }
                 PlusButton { newMenu = true }
-                BellButton(waiting.size) { set(nav.show(state, Screen.Avisos)) }
+                BellButton(waiting.size, jobsMark, now) { set(nav.openAvisos(state)) }
                 GearButton { set(nav.show(state, Screen.Settings)) }
             })
             Box(Modifier.weight(1f)) {
-                if (onAvisos) AvisosList(waiting, nav, state, set) else WorkspaceList(homeItems(session, state.seen), nav, state, set, create = { newMenu = true }) { id ->
+                if (onAvisos) AvisosBody(session, waiting, state, nav, set, now) { jobOpen = it.id } else WorkspaceList(homeItems(session, state.seen), nav, state, set, now, removing = { source.say("ya se está quitando") }, create = { newMenu = true }) { id ->
                     session.workspaces.firstOrNull { it.id == id }?.let { menu = session.target(it) }
                 }
             }
@@ -257,6 +289,8 @@ fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, set: (Clie
         }
         naming?.let { RenameSheet(source, it) { naming = null } }
         removing?.let { RemoveWorkspaceSheet(source, it, cancel = { removing = null }) { removing = null } }
+        session.jobs.firstOrNull { it.id == jobOpen }?.let { JobSheet(source, session, it, state, nav, set, now) { jobOpen = null } }
+        Notice(source)
         if (finding) FindSheet(source, state, nav, dismiss = { finding = false }) { finding = false; set(it) }
         if (newMenu) NewWorkspaceSheet(dismiss = { newMenu = false }) { newMenu = false; set(nav.show(state, Screen.Folders)) }
         worktree?.let { WorktreeSheet(source, it, state, nav, set) { worktree = null } }
@@ -277,13 +311,18 @@ internal fun Section(text: String, onLongClick: (() -> Unit)? = null) {
 }
 
 @Composable
-private fun WorkspaceList(items: List<HomeItem>, nav: Navigator, state: ClientState, set: (ClientState) -> Unit, create: () -> Unit, hold: (Id) -> Unit) {
+private fun WorkspaceList(items: List<HomeItem>, nav: Navigator, state: ClientState, set: (ClientState) -> Unit, now: Long, removing: () -> Unit, create: () -> Unit, hold: (Id) -> Unit) {
     LazyColumn(Modifier.fillMaxSize()) {
         item { Section("workspaces · ${items.count { it is HomeItem.Row }}", create) }
         items(items, key = { it.key }) { item ->
             when (item) {
                 is HomeItem.Heading -> Section(item.text)
-                is HomeItem.Row -> WorkspaceRow(item.row, current = item.row.id == state.last, open = { set(nav.openWorkspace(state, item.row.id)) }, hold = { hold(item.row.id) }, go = { a -> set(nav.go(state, a)) })
+                is HomeItem.Row -> WorkspaceRow(
+                    item.row, current = item.row.id == state.last, now = now,
+                    open = { if (item.row.removing) removing() else set(nav.openWorkspace(state, item.row.id)) },
+                    hold = { if (item.row.removing) removing() else hold(item.row.id) },
+                    go = { a -> set(nav.go(state, a)) },
+                )
             }
         }
         item { Legend(create) }
@@ -298,7 +337,7 @@ private fun WorkspaceList(items: List<HomeItem>, nav: Navigator, state: ClientSt
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun WorkspaceRow(row: HomeRow, current: Boolean, open: () -> Unit, hold: () -> Unit, go: (Attention) -> Unit) {
+private fun WorkspaceRow(row: HomeRow, current: Boolean, now: Long, open: () -> Unit, hold: () -> Unit, go: (Attention) -> Unit) {
     val indent = if (row.kind == HomeKind.Worktree) 20.dp else 0.dp
     val bar = Palette.blue
     Column(Modifier.fillMaxWidth().background(if (current) Palette.sel else Color.Transparent).drawBehind { if (current) drawRect(bar, size = Size(3.dp.toPx(), size.height)) }) {
@@ -310,11 +349,15 @@ private fun WorkspaceRow(row: HomeRow, current: Boolean, open: () -> Unit, hold:
             Mono("${row.number}", Palette.dim, 11, modifier = Modifier.width(14.dp))
             Mono(if (row.kind == HomeKind.Worktree) "↳" else "●", if (row.paneCount > 0) Palette.green else Palette.dim, 14, modifier = Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Mono(row.name, bold = true, size = 14)
+                Mono(row.name, if (row.removing) Palette.dim else Palette.fg, bold = true, size = 14)
                 Mono(row.detail, Palette.dim, 11)
                 val attention = row.go
                 val line = row.line
-                if (attention != null && line != null) {
+                if (row.removing) {
+                    Mono("${spinOf(now)} quitando…", Palette.blue, 12, modifier = Modifier.padding(vertical = 3.dp))
+                } else if (row.removalFailed) {
+                    Mono("✗ no se pudo quitar", Palette.red, 12, modifier = Modifier.padding(vertical = 3.dp))
+                } else if (attention != null && line != null) {
                     Mono(line, attention.need().color(), 12, modifier = Modifier.combinedClickable(onClick = { go(attention) }, onLongClick = hold).padding(vertical = 3.dp))
                 } else if (row.working) {
                     Mono("Claude trabaja", Palette.blue, 12, modifier = Modifier.padding(vertical = 3.dp))
@@ -331,7 +374,7 @@ private fun WorkspaceRow(row: HomeRow, current: Boolean, open: () -> Unit, hold:
 }
 
 @Composable
-private fun AvisosList(items: List<Aviso>, nav: Navigator, state: ClientState, set: (ClientState) -> Unit) {
+internal fun AvisosList(items: List<Aviso>, nav: Navigator, state: ClientState, set: (ClientState) -> Unit) {
     if (items.isEmpty()) {
         Box(Modifier.fillMaxSize().padding(Gutter), contentAlignment = Alignment.Center) {
             Mono("Nada espera. Cuando algo termine o pregunte, aparece aquí.", Palette.dim, 13, lines = 4)
@@ -622,22 +665,22 @@ private fun choose(target: WorkspaceTarget, action: WsAction, rename: () -> Unit
     }
 }
 
-/** The question before a workspace is let go of (REQ-228): what it does, what the PC says when it refuses, and whether it is answering. */
+/**
+ * The question before a workspace is let go of (REQ-228): what it does and its button. Confirming closes it
+ * at once: the PC does the work as a job and the jobs say how it went (REQ-661); what it refuses at the
+ * start (it is being removed already) is said as a notice.
+ */
 @Composable
 private fun BoxScope.RemoveWorkspaceSheet(source: AppSource, sheet: RemoveSheet, cancel: () -> Unit, done: () -> Unit) {
-    var busy by remember(sheet) { mutableStateOf(false) }
-    var error by remember(sheet) { mutableStateOf<String?>(null) }
     Sheet(cancel) {
         Mono(sheet.heading, Palette.fg, 14, bold = true, lines = 3)
         Mono(sheet.body, Palette.dim, 12, lines = 8)
-        if (error != null) Mono(error.orEmpty(), Palette.red, 12, lines = 5)
-        SheetAction("×", if (busy) "quitando…" else sheet.action, Palette.red, enabled = !busy) {
-            busy = true
-            error = null
+        SheetAction("×", sheet.action, Palette.red) {
+            if (sheet.mode.removesWorktree) source.say("quitando ${sheet.name}… míralo en avisos › trabajos")
             source.removeWorkspace(sheet.workspace, sheet.mode.removesWorktree) { result ->
-                busy = false
-                result.onSuccess { done() }.onFailure { error = it.message ?: "el PC no pudo quitar el workspace" }
+                result.onFailure { source.say("✗ ${it.message ?: "el PC no pudo quitar el workspace"}") }
             }
+            done()
         }
         Mono("cancelar", Palette.fg, 14, modifier = Modifier.fillMaxWidth().clickable(onClick = cancel).padding(vertical = 12.dp))
     }

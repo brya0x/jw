@@ -153,6 +153,8 @@ class ConformanceTest {
             listOf("PhoneMsg", "t", "phone", "t"),
             listOf("BridgeMsg", "t", "bridge", "t"),
             listOf("Denied", "", "bridge", "reason"),
+            listOf("JobKind", "", "daemon", "kind"),
+            listOf("JobState", "", "daemon", "state"),
         )
         for ((def, prop, dir, key) in cases) {
             val want = schemaValues(def, prop)
@@ -170,6 +172,8 @@ class ConformanceTest {
         assertEquals(kinds.size, AttentionKind.entries.size, "Kotlin has an attention kind the schema lacks")
         assertEquals(schemaValues("ErrorCode", "").size, ErrorCode.entries.size, "Kotlin has an error code the schema lacks")
         assertEquals(schemaValues("WorkspaceKind", "").size, WorkspaceKind.entries.size)
+        assertEquals(schemaValues("JobKind", "").size, JobKind.entries.size)
+        assertEquals(schemaValues("JobState", "").size, JobState.entries.size)
         assertEquals(schemaValues("Denied", "").size, Denied.entries.size, "Kotlin has a denial the schema lacks")
     }
 

@@ -53,6 +53,14 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
         Cmd::RenameWorkspace { workspace, name } => rename::workspace(shared, &workspace, &name),
         Cmd::RenamePane { pane, name } => rename::pane(shared, &pane, &name),
         Cmd::SyncWorkspace { workspace } => sync::workspace(shared, &workspace),
+        Cmd::DismissJob { job } => {
+            shared.lock().dismiss_job(&job)?;
+            Ok(None)
+        }
+        Cmd::DismissJobs {} => {
+            shared.lock().dismiss_finished_jobs();
+            Ok(None)
+        }
         Cmd::Cancel { workspace } => crate::cancel::cancel(shared, &workspace),
         Cmd::CheckWorkspace { workspace } => sync::check(shared, &workspace),
         Cmd::OpenFolder { path } => workspaces::open_folder(shared, &path),

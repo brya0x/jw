@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<title>jw · trabajos (jobs)</title>
+<style>
+:root{--bg:#282c34;--panel:#21252b;--fg:#abb2bf;--dim:#5c6370;--line:#3e4451;--sel:#2c313a;--blue:#61afef;--green:#98c379;--yellow:#e5c07b;--red:#e06c75;--magenta:#c678dd;--cyan:#56b6c2;
+--page:#16181d;--ink:#c3c9d4;--mut:#7d8594;--mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.45 system-ui,sans-serif;padding:18px 22px}
+h1{font-size:16px;margin:0 0 4px}h2{font-size:13px;margin:18px 0 6px;color:var(--ink)}
+p,li{color:var(--mut);margin:4px 0}code,kbd{font-family:var(--mono);font-size:12px;background:#222630;border:1px solid #2f3440;border-radius:4px;padding:0 4px;color:var(--ink)}
+.row{display:flex;gap:22px;align-items:flex-start;flex-wrap:wrap}
+.term{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px;outline:none}
+.term:focus{border-color:var(--blue)}
+.term pre{margin:0;font:13px/1.25 var(--mono);color:var(--fg);white-space:pre}
+.c-dim{color:var(--dim)}.c-blue{color:var(--blue)}.c-green{color:var(--green)}.c-yellow{color:var(--yellow)}.c-red{color:var(--red)}.c-mag{color:var(--magenta)}.c-cyan{color:var(--cyan)}
+.c-sel{background:var(--sel)}.c-chip{background:var(--blue);color:var(--bg);font-weight:700}.c-chipy{background:var(--yellow);color:var(--bg);font-weight:700}.c-chipm{background:var(--magenta);color:var(--bg);font-weight:700}
+.c-bold{font-weight:700;color:#e6e9ef}.c-box{background:var(--panel)}
+.ctl{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+button{font:12px var(--mono);background:#222630;color:var(--ink);border:1px solid #2f3440;border-radius:5px;padding:4px 9px;cursor:pointer}
+button:hover{border-color:var(--blue)}label{font-size:12px;color:var(--mut);display:flex;gap:6px;align-items:center}
+.phone{width:340px;background:#12151b;border:1px solid #2a2f3a;border-radius:18px;padding:12px 12px 16px;font:13px/1.4 var(--mono)}
+.phone h3{margin:2px 0 8px;font-size:13px;color:var(--ink)}
+.phone .ph-row{display:flex;justify-content:space-between;gap:8px;padding:6px 8px;border-radius:8px;background:#1a1e26;margin:4px 0}
+.phone .sub{color:var(--mut);font-size:11px}
+.note{max-width:900px}
+</style></head><body>
+<h1>jw · trabajos (jobs): lo que corre y cuándo termina</h1>
+<p class="note">Prototipo para aprobar antes del spec. Un <b>trabajo</b> es una operación lenta que el daemon corre por su cuenta (hoy: quitar un worktree; después: subir una rama, el setup). La pantalla nunca espera: el trabajo aparece en la barra de estado, en la fila de su workspace y en <b>avisos</b>, que reúne todo lo que es asíncrono o importante en dos pestañas: <b>alertas</b> (lo que espera algo de ti) y <b>trabajos</b>. Un trabajo queda ahí hasta que lo descartas.</p>
+
+<div class="ctl" id="ctl">
+  <button data-act="rm-fast">quitar worktree (rápido, 1,5 s)</button>
+  <button data-act="rm-slow">quitar worktree (lento, 1,2 GB, 9 s)</button>
+  <button data-act="rm-fail">quitar con cambios sin guardar (falla)</button>
+  <button data-act="push">subir una rama (4 s)</button>
+  <button data-act="reset">reiniciar</button>
+  <label><input type="checkbox" id="freeze"> como hoy: la pantalla se congela mientras quita</label>
+</div>
+
+<div class="row">
+  <div>
+    <div class="term" tabindex="0" id="term"><pre id="scr"></pre></div>
+    <p>Teclas: <kbd>j</kbd><kbd>k</kbd> mover · <kbd>x</kbd> quitar worktree · <kbd>s</kbd> subir rama · <kbd>^␣</kbd> luego <kbd>a</kbd> avisos (es la tecla de hoy; en el prototipo vale <kbd>a</kbd> directo). En avisos: <kbd>Tab</kbd> cambia entre alertas y trabajos · <kbd>↑</kbd><kbd>↓</kbd> · <kbd>↵</kbd> ir al workspace · <kbd>x</kbd> descartar · <kbd>X</kbd> descartar los terminados · <kbd>esc</kbd> cerrar.</p>
+  </div>
+  <div>
+    <div class="phone" id="phone"></div>
+    <p class="note" style="max-width:340px">La app del teléfono lee el mismo estado: otra parte del trabajo, con su propio prototipo; aquí solo se ve que el modelo sirve a los dos.</p>
+  </div>
+</div>
+
+<h2>Cómo se comporta (lo que se aprobaría)</h2>
+<ul class="note">
+  <li><b>Una sola pantalla, «avisos», para todo lo asíncrono o importante,</b> con dos pestañas: <b>alertas</b> (permiso, pregunta, plan, CI: lo que espera algo de ti, como hoy) y <b>trabajos</b> (lo que corre y lo que terminó). Igual que en el teléfono.</li>
+  <li><b>Estados de un trabajo:</b> <span class="c-blue">corriendo</span> → <span class="c-green">terminado</span> o <span class="c-red">falló</span>, con cuándo empezó, cuánto duró y el mensaje de lo que pasó.</li>
+  <li><b>Barra de estado, a la derecha:</b> <code>avisos N</code> cuenta solo alertas, como hoy. Los trabajos tienen su marca al lado: <code>⠋ 2 trabajos</code> mientras corren; luego <code>✓ 1</code> (verde) o <code>✗ 1</code> (rojo) por lo que no has visto; desaparece al abrir la pestaña.</li>
+  <li><b>Fila del workspace:</b> mientras se quita, el spinner azul y el nombre atenuado; no se puede actuar sobre él. Si falla, vuelve a la normalidad con <code>✗</code> en rojo, y la causa está en la pestaña de trabajos (no suma a <code>avisos N</code>).</li>
+  <li><b>Al terminar:</b> un mensaje en la barra («quitado mobile-qa · 4,2 s»).</li>
+  <li><b>Pestaña de trabajos:</b> los que corren arriba con el tiempo vivo, debajo los terminados (los últimos 20, hasta que los descartes); una línea de detalle muestra el resultado o el error del seleccionado.</li>
+  <li><b>No se cancela un borrado</b> (dejaría el worktree a medias); sí se cancela subir una rama, como hoy con <kbd>esc</kbd>.</li>
+  <li><b>Si el daemon se reinicia:</b> los que corrían se pierden y los terminados no se guardan; un worktree a medias lo vuelve a mostrar git.</li>
+</ul>
+
+<script>
+const COLS=100, ROWS=26, SB=30;
+const SPIN='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
+const now=()=>performance.now();
+const spin=()=>SPIN[Math.floor(now()/110)%SPIN.length];
+const fmt=ms=>{const s=ms/1000;return s<10?s.toFixed(1).replace('.',',')+' s':Math.round(s)+' s'};
+
+let ws, jobs, ui, nextId, frozen, alerts;
+function reset(){
+  ws=[
+    {name:'jw',kind:'folder',branch:'main',att:0,removing:false},
+    {name:'jw · feat/jobs',kind:'worktree',branch:'feat/jobs',att:0,removing:false},
+    {name:'jw · mobile-qa',kind:'worktree',branch:'feat/mobile-qa',att:0,removing:false,dirty:false},
+    {name:'jitsubai-api',kind:'worktree',branch:'feat/api',att:0,removing:false,dirty:true},
+    {name:'sales-assist',kind:'folder',branch:'main',att:0,removing:false},
+  ];
+  jobs=[];nextId=1;frozen=false;
+  alerts=[{ws:1,g:'!',t:'Claude pide permiso · cargo test --workspace',w:'jw · feat/jobs'},{ws:3,g:'?',t:'Claude pregunta: ¿sigo con la migración?',w:'jitsubai-api'}];
+  ui={sel:2,mode:'move',ask:null,flash:'',flashCls:'',panel:0,tab:'alertas',leader:false};
+  draw();
+}
+const running=()=>jobs.filter(j=>j.state==='running');
+const finished=()=>jobs.filter(j=>j.state!=='running');
+const unseen=()=>jobs.filter(j=>j.state!=='running'&&!j.seen);
+
+function say(t,cls){ui.flash=t;ui.flashCls=cls||'c-green'}
+function startJob(kind,target,opts){
+  const w=ws[target];w.failed=false;
+  const j={id:nextId++,kind,target,name:w.name,state:'running',start:now(),end:0,dur:opts.dur,fail:opts.fail||'',cancellable:kind==='push',seen:false,msg:''};
+  j.title=kind==='remove'?'quitar worktree '+w.name:'subir '+w.branch;
+  jobs.unshift(j);
+  if(kind==='remove')w.removing=true;
+  if(kind==='remove'&&document.getElementById('freeze').checked)frozen=true;
+  setTimeout(()=>finish(j),opts.dur);
+  say(j.title+'…','c-blue');draw();
+}
+function finish(j){
+  if(j.state!=='running')return;
+  const w=ws[j.target];
+  j.end=now();j.dur=j.end-j.start;
+  if(j.fail){
+    j.state='failed';j.msg=j.fail;if(j.kind==='remove'){w.removing=false;w.failed=true}
+    say('✗ no se pudo: '+j.title,'c-red');
+  }else{
+    j.state='done';
+    if(j.kind==='remove'){j.msg='quitado · la rama se queda · '+fmt(j.dur);w.gone=true;
+      if(ws[ui.sel]===w){const v=visible().map(x=>x.i);ui.sel=v.filter(i=>i<ws.indexOf(w)).pop()??v[0]}
+    }else j.msg='subido '+w.branch+' · '+fmt(j.dur);
+    say('✓ '+j.msg,'c-green');
+  }
+  frozen=false;draw();
+}
+function visible(){return ws.map((w,i)=>({w,i})).filter(x=>!x.w.gone)}
+
+// ---- cell grid
+let G;
+function grid(){G=Array.from({length:ROWS},()=>Array.from({length:COLS},()=>[' ','']))}
+function put(r,c,t,cls){for(const ch of [...t]){if(r<0||r>=ROWS||c<0||c>=COLS)return;G[r][c]=[ch,cls||''];c++}}
+function fill(r,c,w,cls){for(let i=0;i<w;i++)if(c+i<COLS)G[r][c+i]=[' ',cls||'']}
+function paint(){
+  const out=G.map(row=>{let s='',cur=null,buf='';
+    for(const [ch,cl] of row){if(cl!==cur){if(buf)s+=cur?`<span class="${cur}">${esc(buf)}</span>`:esc(buf);buf='';cur=cl}buf+=ch}
+    if(buf)s+=cur?`<span class="${cur}">${esc(buf)}</span>`:esc(buf);return s});
+  document.getElementById('scr').innerHTML=out.join('\n');
+}
+const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+
+function draw(){
+  renderPhone();
+  if(frozen)return;
+  grid();
+  // header
+  const cur=ws[ui.sel];
+  put(0,1,'jw','c-bold');put(0,4,'· '+(cur&&!cur.gone?cur.branch:'—'),'c-dim');
+  for(let r=1;r<ROWS-1;r++)put(r,SB-1,'│','c-dim');
+  // sidebar
+  put(1,1,'WORKSPACES','c-dim');
+  let r=2;
+  for(const {w,i} of visible()){
+    const sel=i===ui.sel;
+    if(sel)fill(r,0,SB-1,'c-sel');
+    const nm=(w.kind==='worktree'?'⎇ ':'▸ ')+w.name;
+    put(r,1,nm.slice(0,SB-9),sel?'c-sel '+(w.removing?'c-dim':'c-bold'):(w.removing?'c-dim':''));
+    if(w.removing)put(r,SB-4,spin(),'c-blue'+(sel?' c-sel':''));
+    else if(w.failed)put(r,SB-4,'✗','c-red'+(sel?' c-sel':''));
+    r++;
+  }
+  // legend
+  put(ROWS-5,1,'x quitar worktree','c-dim');put(ROWS-4,1,'s subir la rama','c-dim');put(ROWS-3,1,'^␣ a avisos','c-dim');
+  // main pane
+  const c0=SB+1;
+  if(cur&&!cur.gone){
+    put(1,c0,cur.name,'c-bold');put(1,c0+cur.name.length+2,cur.kind==='worktree'?'worktree':'carpeta','c-dim');
+    put(3,c0,'$ git status','c-green');
+    put(4,c0,cur.dirty?'  modified:   src/lib.rs':'  nothing to commit, working tree clean','c-dim');
+    put(5,c0,'$ ','c-green');put(5,c0+2,'█','c-blue');
+    const mine=jobs.filter(j=>j.target===ui.sel&&j.state==='running');
+    mine.forEach((j,k)=>{put(8+k,c0,spin()+' '+j.title+'…','c-blue');put(8+k,c0+j.title.length+6,fmt(now()-j.start),'c-dim')});
+    if(cur.removing&&!mine.length)put(8,c0,'quitando…','c-blue');
+  }
+  // ask
+  if(ui.mode==='ask'){
+    const w=ws[ui.ask];
+    const t=`¿quitar el worktree «${w.name}»? la rama se queda · y quitar · n no`;
+    fill(ROWS-3,c0,COLS-c0-1,'c-box');put(ROWS-3,c0+1,t,'c-yellow c-box');
+  }
+  // panel
+  if(ui.mode==='panel')drawPanel();
+  // status bar
+  const sbr=ROWS-1;fill(sbr,0,COLS,'c-sel');
+  const chip=ui.mode==='ask'?' PREGUNTA ':ui.mode==='panel'?' AVISOS ':' WORKSPACE ';
+  put(sbr,0,chip,ui.mode==='ask'?'c-chipy':ui.mode==='panel'?'c-chipm':'c-chip');
+  let hint=ui.mode==='panel'?'Tab alertas/trabajos · ↵ ir · x descartar · X los terminados · esc cerrar':ui.leader?'^␣ …  a avisos':'j k mover · x quitar · s subir · ^␣ a avisos';
+  if(ui.flash&&ui.mode!=='panel')put(sbr,chip.length+1,ui.flash.slice(0,COLS-chip.length-34),ui.flashCls+' c-sel');
+  else put(sbr,chip.length+1,hint,'c-dim c-sel');
+  // right side
+  let right=[];
+  const n=running().length;
+  if(n)right.push([`${spin()} ${n} trabajo${n>1?'s':''}`,'c-blue']);
+  else{const f=unseen().filter(j=>j.state==='failed').length,d=unseen().filter(j=>j.state==='done').length;
+    if(f)right.push([`✗ ${f}`,'c-red']);else if(d)right.push([`✓ ${d}`,'c-green'])}
+  const av=alerts.filter(a=>!a.seen).length;
+  if(av)right.push([`avisos ${av}`,'c-yellow']);
+  let c=COLS-1;for(const [t,cl] of right.reverse()){c-=[...t].length+1;put(sbr,c,t,cl+' c-sel')}
+  paint();
+}
+function drawPanel(){
+  const W=66,H=18,c0=SB+3,r0=2;
+  for(let r=0;r<H;r++){fill(r0+r,c0,W,'c-box');}
+  put(r0,c0,'┌'+'─'.repeat(W-2)+'┐','c-dim c-box');
+  for(let r=1;r<H-1;r++){put(r0+r,c0,'│','c-dim c-box');put(r0+r,c0+W-1,'│','c-dim c-box')}
+  put(r0+H-1,c0,'└'+'─'.repeat(W-2)+'┘','c-dim c-box');
+  put(r0,c0+2,' avisos ','c-bold c-box');
+  const run=running(),fin=finished(),al=alerts.filter(a=>!a.seen);
+  const t1=` alertas${al.length?' '+al.length:''} `,t2=` trabajos${run.length?' ⠋'+run.length:fin.length?' '+fin.length:''} `;
+  put(r0+1,c0+2,t1,ui.tab==='alertas'?'c-chip':'c-dim c-box');
+  put(r0+1,c0+3+t1.length,t2,ui.tab==='trabajos'?'c-chip':'c-dim c-box');
+  put(r0+2,c0+1,'─'.repeat(W-2),'c-dim c-box');
+  if(ui.tab==='alertas'){
+    if(!al.length)put(r0+4,c0+3,'nada espera algo de ti','c-dim c-box');
+    if(ui.panel>=al.length)ui.panel=Math.max(0,al.length-1);
+    al.forEach((a,k)=>{const y=r0+3+k,sel=k===ui.panel,bg=sel?'c-sel':'c-box';fill(y,c0+1,W-2,bg);
+      put(y,c0+2,a.g,'c-yellow '+bg);put(y,c0+4,a.t.slice(0,W-24),(sel?'c-bold ':'')+bg);
+      const wn=a.w;put(y,c0+W-2-[...wn].length,wn,'c-dim '+bg)});
+    return;
+  }
+  const list=[...run,...fin];
+  if(ui.panel>=list.length)ui.panel=Math.max(0,list.length-1);
+  if(!list.length)put(r0+4,c0+3,'nada corre ni ha corrido: aquí aparecerán','c-dim c-box');
+  list.slice(0,H-8).forEach((j,k)=>{
+    const y=r0+3+k,sel=k===ui.panel,bg=sel?'c-sel':'c-box';
+    fill(y,c0+1,W-2,bg);
+    const g=j.state==='running'?[spin(),'c-blue']:j.state==='done'?['✓','c-green']:['✗','c-red'];
+    put(y,c0+2,g[0],g[1]+' '+bg);
+    put(y,c0+4,j.title.slice(0,W-26),(sel?'c-bold ':'')+bg);
+    const t=j.state==='running'?fmt(now()-j.start):fmt(j.dur)+' · hace '+fmt(now()-j.end);
+    put(y,c0+W-2-[...t].length,t,'c-dim '+bg);
+  });
+  const sel=list[ui.panel];
+  put(r0+H-4,c0+1,'─'.repeat(W-2),'c-dim c-box');
+  if(sel){
+    const m=sel.state==='running'?(sel.cancellable?'esc cancela este trabajo':'corriendo · no se cancela'):sel.msg;
+    put(r0+H-3,c0+3,m.slice(0,W-6),(sel.state==='failed'?'c-red':'c-dim')+' c-box');
+    if(sel.state==='failed')put(r0+H-2,c0+3,'vuelve a intentarlo con x en el workspace, o con force desde ^␣ d','c-dim c-box');
+  }
+}
+
+// ---- phone
+function renderPhone(){
+  const p=document.getElementById('phone');
+  const run=running(),fin=finished();
+  let h='<h3>jw</h3>';
+  h+='<div class="sub">AVISOS · trabajos</div>';
+  const list=[...run,...fin].slice(0,5);
+  if(!list.length)h+='<div class="ph-row"><span class="sub">nada corre</span></div>';
+  list.forEach(j=>{
+    const g=j.state==='running'?`<span class="c-blue">${spin()}</span>`:j.state==='done'?'<span class="c-green">✓</span>':'<span class="c-red">✗</span>';
+    const t=j.state==='running'?fmt(now()-j.start):fmt(j.dur);
+    h+=`<div class="ph-row"><span>${g} ${esc(j.title)}</span><span class="sub">${t}</span></div>`;
+  });
+  h+='<div class="sub" style="margin-top:10px">WORKSPACES</div>';
+  visible().forEach(({w})=>{
+    h+=`<div class="ph-row"><span class="${w.removing?'c-dim':''}">${esc(w.name)}</span><span class="sub">${w.removing?`<span class="c-blue">${spin()}</span> quitando…`:w.failed?`<span class="c-red">✗</span>`:''}</span></div>`;
+  });
+  p.innerHTML=h;
+}
+
+// ---- input
+document.getElementById('term').addEventListener('keydown',e=>{
+  if(frozen){e.preventDefault();return}
+  const k=e.key;
+  if(e.ctrlKey&&(e.code==='Space'||k===' ')){ui.leader=true;draw();e.preventDefault();return}
+  const vis=visible().map(x=>x.i);
+  if(ui.mode==='panel'){
+    const al=alerts.filter(a=>!a.seen);
+    const list=ui.tab==='alertas'?al:[...running(),...finished()];
+    if(k==='Tab'||k==='ArrowRight'||k==='ArrowLeft'){ui.tab=ui.tab==='alertas'?'trabajos':'alertas';ui.panel=0;if(ui.tab==='trabajos')jobs.forEach(j=>{if(j.state!=='running')j.seen=true})}
+    else if(k==='Escape'){ui.mode='move';ui.flash='';}
+    else if(k==='ArrowDown'||k==='j')ui.panel=Math.min(list.length-1,ui.panel+1);
+    else if(k==='ArrowUp'||k==='k')ui.panel=Math.max(0,ui.panel-1);
+    else if(k==='Enter'){const j=list[ui.panel];if(j){const t=ui.tab==='alertas'?j.ws:j.target;if(!ws[t].gone){ui.sel=t;ui.mode='move'}}}
+    else if(k==='x'){const j=list[ui.panel];if(j&&ui.tab==='alertas')j.seen=true;else if(j&&j.state!=='running')jobs=jobs.filter(y=>y!==j)}
+    else if(k==='X'&&ui.tab==='trabajos')jobs=jobs.filter(y=>y.state==='running');
+    draw();e.preventDefault();return;
+  }
+  if(ui.mode==='ask'){
+    if(k==='y'){const t=ui.ask;ui.mode='move';startJob('remove',t,{dur:ws[t].dirty?2500:(window.__slow?9000:1500),fail:ws[t].dirty?'git: el worktree tiene cambios sin guardar (src/lib.rs); usa force para quitarlo':''});window.__slow=false}
+    else if(k==='n'||k==='Escape'){ui.mode='move';say('')}
+    draw();e.preventDefault();return;
+  }
+  if(ui.leader){ui.leader=false;if(k==='a')openPanel();draw();e.preventDefault();return}
+  const pos=vis.indexOf(ui.sel);
+  if(k==='j'||k==='ArrowDown'){ui.sel=vis[Math.min(vis.length-1,pos+1)];ui.flash=''}
+  else if(k==='k'||k==='ArrowUp'){ui.sel=vis[Math.max(0,pos-1)];ui.flash=''}
+  else if(k==='a')openPanel();
+  else if(k==='x'){
+    const w=ws[ui.sel];
+    if(w.kind!=='worktree')say('una carpeta no se quita aquí','c-yellow');
+    else if(w.removing)say('ya se está quitando','c-yellow');
+    else{ui.mode='ask';ui.ask=ui.sel}
+  }else if(k==='s'){const w=ws[ui.sel];if(w.removing)say('se está quitando','c-yellow');else startJob('push',ui.sel,{dur:4000})}
+  draw();e.preventDefault();
+});
+function openPanel(){ui.mode='panel';ui.panel=0;ui.tab=alerts.some(a=>!a.seen)?'alertas':(running().length||unseen().length)?'trabajos':'alertas';if(ui.tab==='trabajos')jobs.forEach(j=>{if(j.state!=='running')j.seen=true})}
+
+document.getElementById('ctl').addEventListener('click',e=>{
+  const a=e.target.dataset.act;if(!a)return;
+  if(a==='reset'){reset();return}
+  if(a==='rm-fast'){ws[2].dirty=false;ui.sel=2;window.__slow=false;ui.mode='ask';ui.ask=2}
+  if(a==='rm-slow'){ws[2].dirty=false;ui.sel=2;window.__slow=true;ui.mode='ask';ui.ask=2}
+  if(a==='rm-fail'){ui.sel=3;ui.mode='ask';ui.ask=3}
+  if(a==='push'){startJob('push',1,{dur:4000});return}
+  document.getElementById('term').focus();draw();
+});
+setInterval(()=>{if(!frozen)draw();else renderPhone()},100);
+reset();document.getElementById('term').focus();
+</script></body></html>

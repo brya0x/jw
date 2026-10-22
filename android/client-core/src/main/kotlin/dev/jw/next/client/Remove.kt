@@ -71,7 +71,7 @@ data class RemoveSheet(val workspace: Id, val name: String, val kind: HomeKind, 
                 RemoveMode.KeepWorktree -> "El worktree, su carpeta y su rama se quedan en el PC."
                 RemoveMode.Worktree ->
                     "Git borra la carpeta del worktree (git worktree remove, sin forzar). La rama no se borra. " +
-                        "Si tiene cambios sin commitear, git lo rechaza y no se quita nada."
+                        "Si tiene cambios sin commitear, git lo rechaza: no se quita nada y la causa queda en avisos › trabajos."
             }
             return "$closes $rest"
         }

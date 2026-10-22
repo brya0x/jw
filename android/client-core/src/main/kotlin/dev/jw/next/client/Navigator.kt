@@ -132,6 +132,21 @@ interface NodeSource {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
     }
 
+    /** Forget a job that ended, for every client; [reply] gets the PC's message when it refuses. */
+    fun dismissJob(job: Id, reply: (Result<Unit>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** Forget every job that ended, for every client. */
+    fun dismissJobs(reply: (Result<Unit>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
+    /** Stop what runs for [workspace] and can be stopped: a push (REQ-604). */
+    fun cancel(workspace: Id, reply: (Result<Unit>) -> Unit) {
+        reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
+    }
+
     /** Open a pane with a shell in [workspace]; [reply] gets the new pane's id, or the PC's message. */
     fun newPane(workspace: Id, reply: (Result<Id>) -> Unit) {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
@@ -235,6 +250,8 @@ data class ClientState(
     val recent: List<Id> = emptyList(),
     /** Lines picked in the viewer of a file, waiting to be written in the field of the workspace's agent (REQ-639). */
     val draft: Draft? = null,
+    /** The tab of Avisos that shows. */
+    val avisosTab: AvisosTab = AvisosTab.Alertas,
 )
 
 /** Lines [from] to [to] (from 1) of the file [path] of a workspace, as a reference for the agent (REQ-639). */
@@ -298,6 +315,25 @@ class Navigator(private val source: NodeSource) {
     }
 
     fun show(s: ClientState, screen: Screen): ClientState = s.copy(screen = screen)
+
+    /**
+     * Avisos on [tab], or on the one that has something when none is asked for: the alerts that wait,
+     * else the jobs when they run or ended unseen (REQ-659). Showing the jobs is seeing what ended.
+     */
+    fun openAvisos(s: ClientState, tab: AvisosTab? = null): ClientState {
+        val session = source.session()
+        val chosen = tab ?: if (avisos(session, s.seen).isEmpty() && jobsMark(session, s.seen) != JobsMark.None) AvisosTab.Trabajos else AvisosTab.Alertas
+        return seeJobs(s.copy(screen = Screen.Avisos, avisosTab = chosen))
+    }
+
+    /** What the jobs tab shows is seen, whenever it is on screen: a job that ends while it is open is seen too. */
+    fun seeJobs(s: ClientState): ClientState {
+        if (s.screen != Screen.Avisos || s.avisosTab != AvisosTab.Trabajos) return s
+        // Before the daemon has said hello there is no epoch, and a record is not emptied for it.
+        if (source.epoch.isEmpty()) return s
+        val ended = jobsOf(source.session()).ended.map { it.id }
+        return if (ended.toSet() == s.seen.jobs) s else s.copy(seen = s.seen.seeJobs(ended, source.epoch))
+    }
 
     fun back(s: ClientState): ClientState = s.copy(screen = Screen.Home)
 
