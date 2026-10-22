@@ -1539,6 +1539,7 @@ impl Ui {
             Window {
                 limit: field::limit(ih),
                 offset: Some(self.offset.get()),
+                bar: true,
             },
         )
     }
@@ -3760,6 +3761,36 @@ mod tests {
             "the cursor was on the window's first row, not the text's"
         );
         assert_eq!(cursor_line(&ui), 7);
+    }
+
+    /// REQ-706: the composer says there is more text out of sight, and says nothing when it all fits.
+    #[test]
+    fn the_composer_draws_its_bar_and_count_only_when_the_text_overflows() {
+        let (mut ui, conv) = fourteen_lines();
+        let rows = frame_in(&ui, &conv, SMALL);
+        let y = row_of(&rows, "↑6 ↓0");
+        let (iy, ih) = (SMALL.1, SMALL.3);
+        assert_eq!(
+            y,
+            iy + ih - 1 - (4 + 8) + 1,
+            "on the chips' row of the band"
+        );
+        assert_eq!(
+            rows.iter().filter(|r| r.contains('┃')).count(),
+            5,
+            "a thumb of five rows"
+        );
+        assert_eq!(
+            rows.iter().filter(|r| r.contains('│')).count(),
+            3,
+            "on a bar of eight"
+        );
+        ui.editor.set("l01\nl02\nl03");
+        let rows = frame_in(&ui, &conv, SMALL);
+        assert!(
+            rows.iter()
+                .all(|r| !r.contains('↑') && !r.contains('┃') && !r.contains('│'))
+        );
     }
 
     /// REQ-703: the limit does not change when a turn starts, so the band does not jump.

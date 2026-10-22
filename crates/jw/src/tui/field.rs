@@ -78,6 +78,28 @@ pub fn window_start(rows: usize, limit: usize, cursor: usize, offset: usize) -> 
     at.min(last)
 }
 
+/// The thumb of the bar, `(from, length)` in a bar `v` rows long, for a window of `v` rows at
+/// `offset` in a text of `n` rows (REQ-706). It touches the top only at offset 0 and the bottom
+/// only at the last offset, where the bar has two rows to spare.
+pub fn thumb(n: usize, v: usize, offset: usize) -> (usize, usize) {
+    let len = ((v * v) as f64 / n as f64).round().max(1.0) as usize;
+    let travel = v.saturating_sub(len);
+    let mut at = if n <= v {
+        0
+    } else {
+        (offset as f64 / (n - v) as f64 * travel as f64).round() as usize
+    };
+    if travel >= 2 {
+        if offset > 0 {
+            at = at.max(1);
+        }
+        if offset + v < n {
+            at = at.min(travel - 1);
+        }
+    }
+    (at, len)
+}
+
 /// The rows of the text a field shows when the text has more than fit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Window {
@@ -86,6 +108,8 @@ pub struct Window {
     /// Where it was: with it the window moves the least that shows the cursor (the composer's,
     /// which remembers it); without, it begins as far down as the cursor allows (a shell pane's).
     pub offset: Option<usize>,
+    /// Whether a text that has more rows than the window says so: the bar and the count (REQ-706).
+    pub bar: bool,
 }
 
 impl Window {
@@ -93,6 +117,7 @@ impl Window {
     pub const FOLLOW: Window = Window {
         limit: MAX_TEXT_ROWS,
         offset: None,
+        bar: false,
     };
 }
 
@@ -103,6 +128,8 @@ pub struct Field {
     /// The row of the whole text the first of `rows` is, and how many rows the whole text has.
     first: usize,
     total: usize,
+    /// The bar and the count are drawn when the text has more rows than are shown.
+    bar: bool,
     cursor: (usize, usize),
     /// The cells (row, column) that a selection covers.
     selected: Vec<(usize, usize)>,
@@ -132,6 +159,7 @@ impl Field {
                 rows: vec![line.to_owned()],
                 first: 0,
                 total: 1,
+                bar: false,
                 cursor: (0, col),
                 selected: Vec::new(),
                 lit: Vec::new(),
@@ -141,6 +169,7 @@ impl Field {
                 rows: vec![String::new()],
                 first: 0,
                 total: 1,
+                bar: false,
                 cursor: (0, 0),
                 selected: Vec::new(),
                 lit: Vec::new(),
@@ -225,9 +254,22 @@ impl Field {
         for r in 0..self.band_rows() {
             g.paint_bg(ix.saturating_sub(1), y + r, iw + 2, look::panel());
         }
+        let more = self.bar && self.total > self.rows.len();
+        let count = format!(
+            "↑{} ↓{}",
+            self.first,
+            self.total - self.first - self.rows.len()
+        );
+        // The bar is in the last column of the box and the count ends before it; the chips stop short of the count.
+        let count_at = (ix + iw).saturating_sub(1 + count.chars().count());
+        let chips_end = if more {
+            count_at.saturating_sub(1)
+        } else {
+            ix + iw
+        };
         let mut x = ix + 1;
         for (text, colour) in chips {
-            let room = (ix + iw).saturating_sub(x + 2);
+            let room = chips_end.saturating_sub(x + 2);
             if room < 3 {
                 break;
             }
@@ -236,6 +278,14 @@ impl Field {
             x += pill.chars().count() + 1;
         }
         let ground = look::panel();
+        if more {
+            g.put(
+                count_at,
+                y + 1,
+                &count,
+                Style::fg(look::yellow()).on(ground),
+            );
+        }
         let tx = ix + 1 + PROMPT;
         let first = y + Self::FIRST_TEXT;
         g.put(
@@ -251,6 +301,17 @@ impl Field {
                 &clip(row, text_width(iw)),
                 Style::fg(look::fg()).on(ground),
             );
+        }
+        if more {
+            let (from, len) = thumb(self.total, self.rows.len(), self.first);
+            for k in 0..self.rows.len() {
+                let (mark, colour) = if (from..from + len).contains(&k) {
+                    ("┃", look::blue())
+                } else {
+                    ("│", look::dim())
+                };
+                g.put(ix + iw - 1, first + k, mark, Style::fg(colour).on(ground));
+            }
         }
         for &(row, col, colour) in &self.lit {
             let (x, y) = (tx + col, first + row);
@@ -367,6 +428,7 @@ fn wrap(
         rows: kept,
         first: start,
         total,
+        bar: window.bar,
         cursor: (at.0 - start, at.1),
         selected: selected
             .into_iter()
@@ -539,6 +601,7 @@ mod tests {
                 Window {
                     limit: 8,
                     offset: Some(offset),
+                    bar: true,
                 },
             )
         };
@@ -579,6 +642,126 @@ mod tests {
         let text = "x".repeat(w * 14);
         let mid = Field::selecting(&input(&text, (w * 7) as u32), None, &[], 30, Window::FOLLOW);
         assert_eq!((mid.rows.len(), mid.first_row(), mid.cursor.0), (5, 7, 0));
+    }
+
+    /// REQ-706: the thumb's length, and its place that touches an end of the bar only at the end of the text.
+    #[test]
+    fn the_thumb_is_as_long_as_the_window_is_of_the_text_and_touches_an_end_only_at_the_end() {
+        // 14 rows, a window of 8: the thumb is 5 of 8 and travels 3
+        assert_eq!(thumb(14, 8, 0), (0, 5));
+        assert_eq!(thumb(14, 8, 1), (1, 5), "off the top as soon as it moves");
+        assert_eq!(
+            thumb(14, 8, 5),
+            (2, 5),
+            "and short of the bottom until the last offset"
+        );
+        assert_eq!(thumb(14, 8, 6), (3, 5));
+        // a long text: the thumb is one row and still shows which end it is at
+        assert_eq!(thumb(100, 8, 0), (0, 1));
+        assert_eq!(thumb(100, 8, 1), (1, 1));
+        assert_eq!(thumb(100, 8, 91), (6, 1));
+        assert_eq!(thumb(100, 8, 92), (7, 1));
+        // a bar with no room to spare has nothing to keep off the ends
+        assert_eq!(thumb(9, 2, 0), (0, 1));
+        assert_eq!(thumb(9, 2, 7), (1, 1));
+        assert_eq!(thumb(1, 1, 0), (0, 1));
+    }
+
+    fn drawn(f: &Field, chips: &[(String, Rgb)]) -> Vec<String> {
+        let mut g = Grid::new(50, 14);
+        f.draw_with(
+            &mut g,
+            (2, 0, 44),
+            chips,
+            true,
+            &Look {
+                stop: None,
+                ask: "",
+            },
+        );
+        g.rows_plain()
+    }
+
+    fn long_text(rows: usize, cursor: usize, offset: usize, bar: bool) -> Field {
+        let w = text_width(44);
+        let text = "x".repeat(w * rows);
+        Field::selecting(
+            &input(&text, (w * cursor) as u32),
+            None,
+            &[],
+            44,
+            Window {
+                limit: 8,
+                offset: Some(offset),
+                bar,
+            },
+        )
+    }
+
+    /// REQ-706: a bar at the right of the window's rows and the count at the end of the chips' row, one column before it.
+    #[test]
+    fn a_text_with_more_rows_than_the_window_draws_a_bar_and_a_count() {
+        let rows = drawn(&long_text(14, 3, 0, true), &[]);
+        let bar: Vec<char> = (3..11).map(|y| rows[y].chars().nth(45).unwrap()).collect();
+        assert_eq!(
+            bar,
+            ['┃', '┃', '┃', '┃', '┃', '│', '│', '│'],
+            "the thumb at the top"
+        );
+        assert!(
+            rows[1].ends_with("↑0 ↓6"),
+            "the count ends a column before the bar: {:?}",
+            rows[1]
+        );
+        assert_eq!(
+            rows[1].chars().count(),
+            45,
+            "and nothing is at the bar's column on that row"
+        );
+        let rows = drawn(&long_text(14, 13, 6, true), &[]);
+        let bar: Vec<char> = (3..11).map(|y| rows[y].chars().nth(45).unwrap()).collect();
+        assert_eq!(
+            bar,
+            ['│', '│', '│', '┃', '┃', '┃', '┃', '┃'],
+            "and at the bottom"
+        );
+        assert!(rows[1].contains("↑6 ↓0"), "{:?}", rows[1]);
+    }
+
+    /// REQ-706, REQ-708: nothing is drawn when everything fits, and a field with no bar says nothing.
+    #[test]
+    fn nothing_is_drawn_when_the_text_fits_or_the_field_is_a_shells() {
+        for f in [long_text(8, 3, 0, true), long_text(14, 3, 0, false)] {
+            let rows = drawn(&f, &[]);
+            assert!(
+                rows.iter()
+                    .all(|r| !r.contains('↑') && !r.contains('┃') && !r.contains('│'))
+            );
+        }
+    }
+
+    /// REQ-706, RISK-86: the chips are cut before the count and never drawn under it.
+    #[test]
+    fn the_chips_stop_short_of_the_count() {
+        let chips = [(
+            "⎇ a-branch-name-that-is-far-too-long-for-the-row-it-is-on".to_owned(),
+            (1, 2, 3),
+        )];
+        let cells = |f: &Field| drawn(f, &chips)[1].chars().collect::<Vec<_>>();
+        // the box is at 2 and 44 wide: the bar is in column 45, the count in 40 to 44
+        let with = cells(&long_text(14, 3, 0, true));
+        assert_eq!(with[40..45].iter().collect::<String>(), "↑0 ↓6");
+        assert_eq!(
+            (with[38], with[39]),
+            (' ', ' '),
+            "the pill's own space and one more between it and the count"
+        );
+        assert_ne!(with[37], ' ', "the chip has all the room that is left");
+        let without = cells(&long_text(3, 1, 0, true));
+        assert_ne!(
+            without[41], ' ',
+            "with no count the chip goes on under where it was"
+        );
     }
 
     #[test]
@@ -630,6 +813,7 @@ mod tests {
                     Window {
                         limit: usize::MAX,
                         offset: None,
+                        bar: false,
                     },
                 );
                 assert_eq!(
