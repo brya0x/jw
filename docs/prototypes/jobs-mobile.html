@@ -35,11 +35,14 @@ p,li{color:var(--mut);margin:4px 0}code,kbd{font-family:var(--mono);font-size:12
 .tag{font-size:10.5px;color:var(--dim);border:1px solid var(--line);border-radius:4px;padding:0 5px}
 .mk{font-size:12px;min-width:34px;text-align:right}
 .c-blue{color:var(--blue)}.c-green{color:var(--green)}.c-red{color:var(--red)}.c-yellow{color:var(--yellow)}.c-dim{color:var(--dim)}
-/* the strip of jobs under the header: new */
-.strip{display:flex;align-items:center;gap:8px;width:calc(100% - 20px);margin:4px 10px 2px;padding:9px 11px;border-radius:10px;border:1px solid var(--line);background:var(--panel);color:var(--fg);font:inherit;font-size:12.5px;cursor:pointer;text-align:left}
-.strip.run{border-color:#35506b}.strip.ok{border-color:#3f5a33}.strip.bad{border-color:#6b3a40}
-.strip .tx{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.strip i{color:var(--dim);font-style:normal}
-.strip .x{color:var(--dim);padding:0 4px}
+/* avisos: two sections, alertas and trabajos */
+.tabs{display:flex;gap:6px;padding:4px 14px 8px}
+.tab{flex:1;min-height:38px;background:#222630;border:1px solid var(--line);border-radius:10px;color:var(--dim);font:inherit;font-size:12.5px;cursor:pointer}
+.tab[aria-selected="true"]{color:#e6e9ef;border-color:var(--blue);background:var(--sel)}
+.tab .cnt{color:var(--yellow);margin-left:4px}.tab .run{color:var(--blue);margin-left:4px}
+.alr{display:flex;align-items:center;gap:10px;width:100%;min-height:56px;padding:8px 14px;background:none;border:0;border-bottom:1px solid #2d323c;color:var(--fg);font:inherit;text-align:left;cursor:pointer}
+.alr .g{width:16px;text-align:center;color:var(--yellow)}.alr .tt{flex:1;min-width:0}.alr .tt b{display:block;color:#e6e9ef;font-weight:500}.alr .tt span{color:var(--dim);font-size:11.5px}
+.ib .jd{position:absolute;bottom:-1px;right:-2px;font-size:10px}
 .legend{color:var(--dim);font-size:11px;padding:10px 14px}
 .jr{display:flex;align-items:center;gap:10px;width:100%;min-height:56px;padding:8px 14px;background:none;border:0;border-bottom:1px solid #2d323c;color:var(--fg);font:inherit;text-align:left;cursor:pointer}
 .jr .g{width:16px;text-align:center}.jr .tt{flex:1;min-width:0}.jr .tt b{display:block;color:#e6e9ef;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -81,16 +84,12 @@ p,li{color:var(--mut);margin:4px 0}code,kbd{font-family:var(--mono);font-size:12
     <h2>Lo que cambia respecto a hoy</h2>
     <ul>
       <li><b>La hoja de quitar ya no espera.</b> Hoy muestra «quitando…» y se queda hasta que el PC responde. Ahora se cierra al confirmar, sale un aviso («quitando mobile-qa…») y el trabajo sigue en su cuenta.</li>
-      <li><b>Una franja bajo el título del Home</b> dice qué corre (con el tiempo) y, al terminar, si salió bien o falló. Tocarla abre la pantalla de trabajos. Una <span class="c-dim">×</span> la descarta.</li>
-      <li><b>La fila del workspace</b> que se está quitando muestra el spinner azul y «quitando…», con el nombre atenuado; tocarla avisa que se está quitando. Si falla vuelve a la normalidad con la marca roja.</li>
-      <li><b>Pantalla «trabajos»</b> (como «avisos»: lleva un botón atrás): arriba lo que corre, debajo lo terminado. Tocar un trabajo abre una hoja con el resultado o el error completo, y las acciones que caben: ir al workspace, descartar, cancelar (solo subir una rama).</li>
-      <li><b>Barra de estado de abajo:</b> <code>⠋ 1</code> mientras algo corre; tocarlo abre la pantalla.</li>
-      <li>El teléfono no guarda nada: el PC es la fuente, así que un trabajo que empezaste desde el terminal también se ve aquí.</li>
-    </ul>
-    <h2>Para decidir</h2>
-    <ul>
-      <li>¿Una notificación del sistema cuando un trabajo termina con la app en segundo plano? (no la he puesto: el teléfono hoy no recibe nada con la app cerrada.)</li>
-      <li>¿La franja bajo el título es suficiente, o prefieres un punto en la campana de «avisos»? Propongo la franja y que solo los fallos sumen a la campana.</li>
+      <li><b>Todo en «avisos», separado en dos:</b> <b>alertas</b> (lo que espera algo de ti: un permiso, una pregunta, un plan) y <b>trabajos</b> (lo que corre y lo que terminó). Dos pestañas en la misma pantalla; la campana lleva a ella.</li>
+      <li><b>La campana</b> cuenta solo alertas. Los trabajos tienen su indicador al lado: <span class="c-blue">⠋</span> mientras algo corre, y luego un punto <span class="c-green">verde</span> o <span class="c-red">rojo</span> por lo que no has visto. Abre la pestaña que tiene algo nuevo.</li>
+      <li><b>La fila del workspace</b> que se está quitando muestra el spinner azul y «quitando…», con el nombre atenuado; tocarla avisa que se está quitando. Si falla, vuelve a la normalidad con «✗ no se pudo quitar», y la causa está en la pestaña de trabajos (no suma a la campana).</li>
+      <li><b>Pestaña «trabajos»:</b> arriba lo que corre, debajo lo terminado. Tocar un trabajo abre una hoja con el resultado o el error completo, y las acciones que caben: ir al workspace, descartar, cancelar (solo subir una rama).</li>
+      <li><b>Barra de estado de abajo:</b> <code>⠋ 1</code> mientras algo corre; tocarlo abre la pestaña de trabajos.</li>
+      <li>El teléfono no guarda nada y no avisa con la app cerrada: es una conexión rápida al PC, que es la fuente. Un trabajo que empezaste desde el terminal también se ve aquí.</li>
     </ul>
   </div>
 </div>
@@ -112,9 +111,10 @@ function reset(){
     {name:'jitsubai-api',kind:'worktree',branch:'feat/api',att:0,removing:false,dirty:true,panes:1},
     {name:'sales-assist',kind:'folder',branch:'',att:0,removing:false,panes:0},
   ];
-  jobs=[];nid=1;st={screen:'home',sheet:null,sel:2,job:null,ask:null};
+  jobs=[];nid=1;st={screen:'home',tab:'alertas',sheet:null,sel:2,job:null,ask:null};
   render();
 }
+const alerts=[{ws:1,g:'!',t:'Claude pide permiso',s:'jw · feat/jobs · cargo test --workspace',seen:false},{ws:3,g:'?',t:'Claude pregunta algo',s:'jitsubai-api · ¿sigo con la migración?',seen:false}];
 const running=()=>jobs.filter(j=>j.state==='running');
 const finished=()=>jobs.filter(j=>j.state!=='running');
 const unseen=()=>finished().filter(j=>!j.seen&&!j.dismissed);
@@ -123,40 +123,37 @@ const vis=()=>ws.map((w,i)=>({w,i})).filter(x=>!x.w.gone);
 function toast(m){const t=$('toast');t.textContent=m;t.classList.add('on');clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove('on'),2200)}
 
 function startJob(kind,i,o){
-  const w=ws[i];
+  const w=ws[i];w.failed=false;
   const j={id:nid++,kind,target:i,name:w.name,state:'running',start:now(),dur:o.dur,fail:o.fail||'',cancellable:kind==='push',seen:false,msg:'',
     title:kind==='remove'?'quitar worktree '+w.name:'subir '+w.branch};
   jobs.unshift(j);if(kind==='remove')w.removing=true;
   setTimeout(()=>finish(j),o.dur);
-  toast(kind==='remove'?`quitando ${w.name}… míralo en trabajos`:`subiendo ${w.branch}…`);
+  toast(kind==='remove'?`quitando ${w.name}… míralo en avisos › trabajos`:`subiendo ${w.branch}…`);
   render();
 }
 function finish(j){
   if(j.state!=='running')return;
   const w=ws[j.target];j.end=now();j.dur=j.end-j.start;
-  if(j.fail){j.state='failed';j.msg=j.fail;if(j.kind==='remove'){w.removing=false;w.att++}toast('✗ no se pudo: '+j.title)}
+  if(j.fail){j.state='failed';j.msg=j.fail;if(j.kind==='remove'){w.removing=false;w.failed=true}toast('✗ no se pudo: '+j.title)}
   else{j.state='done';j.msg=(j.kind==='remove'?'quitado · la rama se queda · ':'subido '+w.branch+' · ')+fmt(j.dur);if(j.kind==='remove')w.gone=true;toast('✓ '+j.msg)}
   render();
 }
 
 /* ---------- screens */
-function strip(){
-  const r=running();
-  if(r.length){const j=r[0];return `<button class="strip run" data-go="jobs"><span class="c-blue">${spin()}</span><span class="tx">${r.length>1?r.length+' trabajos · ':''}${esc(j.title)}… <i>${fmt(now()-j.start)}</i></span><span class="c-dim">›</span></button>`}
+function jobDot(){
+  if(running().length)return `<span class="jd c-blue">${spin()}</span>`;
   const u=unseen();if(!u.length)return'';
-  const bad=u.find(j=>j.state==='failed');const j=bad||u[0];
-  return `<button class="strip ${bad?'bad':'ok'}" data-go="jobs"><span class="${bad?'c-red':'c-green'}">${bad?'✗':'✓'}</span><span class="tx">${esc(bad?'falló: '+j.title:j.msg.split(' · ')[0]+' '+j.name)}${u.length>1?' <i>+'+(u.length-1)+'</i>':''}</span><span class="x" data-dismissall="1">×</span></button>`;
+  return `<span class="jd ${u.some(j=>j.state==='failed')?'c-red':'c-green'}">●</span>`;
 }
 function vHome(){
-  const av=ws.reduce((a,w)=>a+(w.gone?0:w.att),0);
-  let h=`<div class="hd"><b>jw</b><span class="sub">en el PC de casa</span><span class="sp1"></span><button class="ib" data-t="avisos">🔔${av?`<span class="bdg">${av}</span>`:''}</button><button class="ib" data-t="ajustes">⚙</button></div>`;
-  h+=strip();
+  const av=alerts.filter(a=>!a.seen).length;
+  let h=`<div class="hd"><b>jw</b><span class="sub">en el PC de casa</span><span class="sp1"></span><button class="ib" data-bell="1">🔔${av?`<span class="bdg">${av}</span>`:''}${jobDot()}</button><button class="ib" data-t="ajustes">⚙</button></div>`;
   h+=`<div class="list"><div class="sec">WORKSPACES · ${vis().length}</div>`;
   vis().forEach(({w,i},k)=>{
     const g=w.kind==='worktree'?'↳':'●';
     const det=(w.kind==='root'?'raíz':w.kind==='worktree'?'worktree':'carpeta')+(w.panes?` · ${w.panes} paneles`:'');
-    const at=w.removing?`<div class="at c-blue">${spin()} quitando…</div>`:w.att?`<div class="at c-red">✗ ${esc('no se pudo quitar')}</div>`:'';
-    h+=`<button class="row ${w.kind==='worktree'?'wt':''} ${w.removing?'dis':''}" ${i===st.sel?'aria-current="true"':''} data-ws="${i}"><span class="n">${k+1}</span><span class="o ${w.panes?'c-green':'c-dim'}">${g}</span><span class="nm"><b>${esc(w.name)}</b><span>${det}</span>${at}</span><span class="tag">${w.kind==='root'?'raíz':w.kind==='folder'?'carpeta':'wt'}</span><span class="mk">${w.removing?`<span class="c-blue">${spin()}</span>`:w.att?`<span class="c-red">● ${w.att}</span>`:''}</span></button>`;
+    const at=w.removing?`<div class="at c-blue">${spin()} quitando…</div>`:w.failed?`<div class="at c-red">✗ no se pudo quitar</div>`:'';
+    h+=`<button class="row ${w.kind==='worktree'?'wt':''} ${w.removing?'dis':''}" ${i===st.sel?'aria-current="true"':''} data-ws="${i}"><span class="n">${k+1}</span><span class="o ${w.panes?'c-green':'c-dim'}">${g}</span><span class="nm"><b>${esc(w.name)}</b><span>${det}</span>${at}</span><span class="tag">${w.kind==='root'?'raíz':w.kind==='folder'?'carpeta':'wt'}</span><span class="mk">${w.removing?`<span class="c-blue">${spin()}</span>`:w.failed?`<span class="c-red">✗</span>`:''}</span></button>`;
   });
   h+=`<div class="legend">toca para abrir · mantén pulsado para quitar</div></div>`;
   return h;
@@ -166,17 +163,22 @@ function jrow(j){
   const tm=j.state==='running'?fmt(now()-j.start):fmt(j.dur)+'<br>hace '+fmt(now()-j.end);
   return `<button class="jr" data-job="${j.id}"><span class="g">${g}</span><span class="tt"><b>${esc(j.title)}</b><span>${j.kind==='remove'?'quitar worktree':'subir rama'}${j.state==='failed'?' · falló':''}</span></span><span class="tm">${tm}</span></button>`;
 }
-function vJobs(){
-  const r=running(),f=finished().filter(j=>!j.dismissed);
-  let h=`<div class="hd"><button class="ib" data-go="home">‹</button><div><b>trabajos</b><br><span class="sub">lo que corre y lo que terminó</span></div><span class="sp1"></span>${f.length?'<button class="ib c-dim" data-clear="1">limpiar</button>':''}</div><div class="list">`;
-  h+=`<div class="sec">CORRIENDO · ${r.length}</div>`+(r.length?r.map(jrow).join(''):'<div class="empty">nada corre ahora</div>');
-  h+=`<div class="sec">TERMINADOS · ${f.length}</div>`+(f.length?f.map(jrow).join(''):'<div class="empty">lo que termine aparece aquí hasta que lo descartes</div>');
+function vAvisos(){
+  const r=running(),f=finished().filter(j=>!j.dismissed),al=alerts.filter(x=>!x.seen);
+  let h=`<div class="hd"><button class="ib" data-go="home">‹</button><div><b>avisos</b><br><span class="sub">lo que espera algo de ti · lo que corre</span></div><span class="sp1"></span>${st.tab==='trabajos'&&f.length?'<button class="ib c-dim" data-clear="1">limpiar</button>':''}</div>`;
+  h+=`<div class="tabs"><button class="tab" role="tab" aria-selected="${st.tab==='alertas'}" data-tab="alertas">alertas${al.length?`<span class="cnt">${al.length}</span>`:''}</button><button class="tab" role="tab" aria-selected="${st.tab==='trabajos'}" data-tab="trabajos">trabajos${r.length?`<span class="run">${spin()} ${r.length}</span>`:f.length?`<span class="c-dim"> ${f.length}</span>`:''}</button></div><div class="list">`;
+  if(st.tab==='alertas'){
+    h+=al.length?al.map((x,k)=>`<button class="alr" data-alert="${alerts.indexOf(x)}"><span class="g">${x.g}</span><span class="tt"><b>${esc(x.t)}</b><span>${esc(x.s)}</span></span><span class="c-dim">›</span></button>`).join(''):'<div class="empty">nada espera algo de ti</div>';
+  }else{
+    h+=`<div class="sec">CORRIENDO · ${r.length}</div>`+(r.length?r.map(jrow).join(''):'<div class="empty">nada corre ahora</div>');
+    h+=`<div class="sec">TERMINADOS · ${f.length}</div>`+(f.length?f.map(jrow).join(''):'<div class="empty">lo que termine aparece aquí hasta que lo descartes</div>');
+  }
   return h+'</div>';
 }
 function statusBar(){
   const n=running().length;
-  const chip=st.screen==='jobs'?'TRABAJOS':'WORKSPACES';
-  return `<div class="status"><span class="chip">${chip}</span><span>${st.screen==='jobs'?'toca uno para ver su resultado':'wifi · conectado'}</span><span class="sp1"></span>${n?`<button class="jb" data-go="jobs">${spin()} ${n}</button>`:''}</div>`;
+  const chip=st.screen==='avisos'?'AVISOS':'WORKSPACES';
+  return `<div class="status"><span class="chip">${chip}</span><span>${st.screen==='avisos'?(st.tab==='trabajos'?'toca uno para ver su resultado':'toca uno para abrir su workspace'):'wifi · conectado'}</span><span class="sp1"></span>${n?`<button class="jb" data-go="avisos" data-tabto="trabajos">${spin()} ${n}</button>`:''}</div>`;
 }
 function sheetHtml(){
   if(st.sheet==='rmask'){const w=ws[st.ask];return `<div class="grab"></div><h3>quitar el worktree</h3><p>«${esc(w.name)}» se borra del disco del PC. La rama se queda.</p><p class="c-dim">Seguirá en trabajos: puedes cerrar esto y la app.</p><button class="act red" data-act="rmdo">× quitar worktree</button><span class="cancel" data-act="close">cancelar</span>`}
@@ -193,7 +195,7 @@ function sheetHtml(){
   return'';
 }
 function render(){
-  $('screen').innerHTML=(st.screen==='jobs'?vJobs():vHome())+statusBar();
+  $('screen').innerHTML=(st.screen==='avisos'?vAvisos():vHome())+statusBar();
   const sh=sheetHtml();$('sheet').innerHTML=sh;$('back').classList.toggle('on',!!sh);
 }
 setInterval(render,120);
@@ -214,8 +216,10 @@ document.addEventListener('click',e=>{
     if(b==='reset')return reset();
     if(b==='push')return startJob('push',1,{dur:4000});
     const i=b==='rm-fail'?3:2;st.screen='home';st.ask=i;st.sheet='rmask';st.sel=i;window.__slow=b==='rm-slow';if(b!=='rm-fail')ws[2].dirty=false;return render()}
-  if(t.dataset.dismissall){e.stopPropagation();unseen().forEach(j=>j.seen=true);return render()}
-  const go=t.closest('[data-go]');if(go){st.screen=go.dataset.go;if(st.screen==='jobs')finished().forEach(j=>j.seen=true);return render()}
+  if(t.closest('[data-bell]')){st.screen='avisos';const al=alerts.some(x=>!x.seen);st.tab=al?'alertas':(running().length||unseen().length)?'trabajos':'alertas';if(st.tab==='trabajos')finished().forEach(j=>j.seen=true);return render()}
+  const tb=t.closest('[data-tab]');if(tb){st.tab=tb.dataset.tab;if(st.tab==='trabajos')finished().forEach(j=>j.seen=true);return render()}
+  const al=t.closest('[data-alert]');if(al){const x=alerts[+al.dataset.alert];x.seen=true;st.sel=x.ws;st.screen='home';toast('abre el workspace de la alerta');return render()}
+  const go=t.closest('[data-go]');if(go){st.screen=go.dataset.go;if(go.dataset.tabto)st.tab=go.dataset.tabto;if(st.screen==='avisos'&&st.tab==='trabajos')finished().forEach(j=>j.seen=true);return render()}
   if(t.closest('[data-clear]')){jobs.forEach(j=>{if(j.state!=='running')j.dismissed=true});return render()}
   const jr=t.closest('[data-job]');if(jr){st.job=+jr.dataset.job;st.sheet='job';return render()}
   const row=t.closest('[data-ws]');
