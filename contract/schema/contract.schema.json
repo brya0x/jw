@@ -576,6 +576,7 @@
         { "type": "object", "required": ["cmd", "group"], "properties": { "cmd": { "const": "delete_group" }, "group": { "$ref": "#/$defs/Id" } } },
         { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "move_to_group" }, "workspace": { "$ref": "#/$defs/Id" }, "group": { "$ref": "#/$defs/Id" } } },
         { "type": "object", "required": ["cmd", "group", "delta"], "properties": { "cmd": { "const": "move_group" }, "group": { "$ref": "#/$defs/Id" }, "delta": { "type": "integer" } } },
+        { "type": "object", "required": ["cmd", "workspace", "delta"], "properties": { "cmd": { "const": "move_repo" }, "workspace": { "$ref": "#/$defs/Id" }, "delta": { "type": "integer" } } },
         { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "cancel" }, "workspace": { "$ref": "#/$defs/Id" } } },
         { "type": "object", "required": ["cmd", "a", "b"], "properties": { "cmd": { "const": "swap_panes" }, "a": { "$ref": "#/$defs/Id" }, "b": { "$ref": "#/$defs/Id" } } },
         { "type": "object", "required": ["cmd", "pane", "dir", "by"], "properties": { "cmd": { "const": "grow_pane" }, "pane": { "$ref": "#/$defs/Id" }, "dir": { "$ref": "#/$defs/SplitDir" }, "by": { "type": "integer", "minimum": -800, "maximum": 800 } } },

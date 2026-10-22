@@ -248,6 +248,12 @@ pub enum Cmd {
         group: Id,
         delta: i32,
     },
+    /// Swap the repository of a workspace with its neighbour in the same group (or among those in
+    /// none): `delta` is -1 (up) or 1 (down) (REQ-680).
+    MoveRepo {
+        workspace: Id,
+        delta: i32,
+    },
     /// Give a workspace a name to be shown by; an empty name brings back the one it had
     /// (the folder's name, or `repo: branch` for a worktree). Its folder is not touched.
     RenameWorkspace {

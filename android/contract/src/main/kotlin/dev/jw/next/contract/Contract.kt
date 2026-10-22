@@ -267,6 +267,10 @@ sealed interface Cmd {
     @Serializable @SerialName("move_group")
     data class MoveGroup(val group: Id, val delta: Int) : Cmd
 
+    /** Swap the repository of [workspace] with its neighbour in its group (or among those in none): [delta] is -1 or 1. */
+    @Serializable @SerialName("move_repo")
+    data class MoveRepo(val workspace: Id, val delta: Int) : Cmd
+
     @Serializable @SerialName("rename_pane")
     data class RenamePane(val pane: Id, val name: String) : Cmd
 

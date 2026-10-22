@@ -123,6 +123,14 @@ impl PortBlock {
 }
 
 impl Model {
+    /// The group kept under `key` (see `Workspace::group_key`), when the session still lists it.
+    pub fn group_for(&self, key: &str) -> Option<Id> {
+        self.grouped
+            .get(key)
+            .filter(|g| self.groups.iter().any(|x| x.id == **g))
+            .cloned()
+    }
+
     /// The lowest slot no workspace holds, if its block fits below the last port (REQ-495).
     pub fn free_slot(&self) -> Option<u32> {
         let used: Vec<u32> = self

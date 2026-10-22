@@ -1366,10 +1366,7 @@ impl Core {
             let project = ws.project_path();
             let group = self
                 .model
-                .grouped
-                .get(&crate::model::key_from(project.clone(), &ws.path))
-                .filter(|g| self.model.groups.iter().any(|x| x.id == **g))
-                .cloned();
+                .group_for(&crate::model::key_from(project.clone(), &ws.path));
             summaries.push(WorkspaceSummary {
                 id: ws.id.clone(),
                 name: ws.name.clone(),

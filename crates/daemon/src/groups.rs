@@ -122,6 +122,71 @@ pub fn move_group(shared: &Shared, group: &str, delta: i32) -> Done {
     Ok(None)
 }
 
+/// Swap the repository of a workspace with its neighbour among those of the same group, or of no
+/// group (REQ-680): the later repository's workspaces move, in their order, to just before the
+/// earlier one's first, which is the order `grouping::group` reads and what `session.json` keeps.
+pub fn move_repo(shared: &Shared, workspace: &str, delta: i32) -> Done {
+    if delta != -1 && delta != 1 {
+        return Err(err(ErrorCode::BadRequest, "delta is -1 or 1"));
+    }
+    let mut core = shared.lock();
+    let ws = core.workspace(workspace)?;
+    let Some(project) = ws.project_path() else {
+        return Err(err(
+            ErrorCode::BadRequest,
+            "a folder that is not a repository goes last in its group and has no place to move to",
+        ));
+    };
+    let group = core.model.group_for(&ws.group_key());
+    // each workspace's project and group, read once (a folder's is a stat)
+    let kept: Vec<(Option<String>, Option<contract::Id>)> = core
+        .model
+        .workspaces
+        .iter()
+        .map(|w| (w.project_path(), core.model.group_for(&w.group_key())))
+        .collect();
+    let mut blocks: Vec<&str> = Vec::new();
+    for (p, g) in &kept {
+        if let Some(p) = p
+            && *g == group
+            && !blocks.contains(&p.as_str())
+        {
+            blocks.push(p);
+        }
+    }
+    let at = blocks.iter().position(|b| *b == project).unwrap_or(0);
+    let to = at as i64 + i64::from(delta);
+    if to < 0 || to >= blocks.len() as i64 {
+        return Ok(None);
+    }
+    let (earlier, later) = (
+        blocks[at.min(to as usize)].to_owned(),
+        blocks[at.max(to as usize)].to_owned(),
+    );
+    let mut moved = Vec::new();
+    let mut rest = Vec::new();
+    for (w, (p, _)) in core.model.workspaces.drain(..).zip(kept) {
+        if p.as_deref() == Some(later.as_str()) {
+            moved.push(w);
+        } else {
+            rest.push((w, p));
+        }
+    }
+    let first = rest
+        .iter()
+        .position(|(_, p)| p.as_deref() == Some(earlier.as_str()))
+        .unwrap_or(rest.len());
+    let tail = rest.split_off(first);
+    core.model.workspaces = rest
+        .into_iter()
+        .map(|(w, _)| w)
+        .chain(moved)
+        .chain(tail.into_iter().map(|(w, _)| w))
+        .collect();
+    core.refresh();
+    Ok(None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

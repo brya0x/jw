@@ -661,6 +661,11 @@ pub enum After {
         group: String,
         delta: i32,
     },
+    /// Swap the workspace's repository with its neighbour in its group (REQ-680).
+    MoveRepo {
+        workspace: String,
+        delta: i32,
+    },
     /// Forget a job that ended, or all of those that did (REQ-655).
     DismissJob(String),
     DismissJobs,
@@ -2535,6 +2540,54 @@ impl View {
         });
     }
 
+    /// `J` and `K` on a workspace's row: its repository swaps with the neighbour in its group, or
+    /// among those in none. A folder that is not a repository has no place, and at either end it
+    /// is said here and nothing is sent (REQ-680).
+    fn move_repo_key(&mut self, delta: i32) -> After {
+        let (Some(s), Some(w)) = (&self.session, self.selected_summary()) else {
+            return After::Continue;
+        };
+        let Some(project) = w.project.clone() else {
+            self.flash("una carpeta va al final y no se ordena");
+            return After::Continue;
+        };
+        let listed = |x: &WorkspaceSummary| {
+            x.group
+                .as_ref()
+                .filter(|g| s.groups.iter().any(|y| y.id == **g))
+                .cloned()
+        };
+        let mine = listed(w);
+        let mut blocks: Vec<&String> = Vec::new();
+        for x in s.workspaces.iter().filter(|x| listed(x) == mine) {
+            if let Some(p) = &x.project
+                && !blocks.contains(&p)
+            {
+                blocks.push(p);
+            }
+        }
+        let at = blocks.iter().position(|p| **p == project).unwrap_or(0);
+        let scope = if mine.is_some() {
+            "de su grupo"
+        } else {
+            "de los que no tienen grupo"
+        };
+        if delta < 0 && at == 0 {
+            let text = format!("ya es el primero {scope}");
+            self.flash(&text);
+            return After::Continue;
+        }
+        if delta > 0 && at + 1 >= blocks.len() {
+            let text = format!("ya es el último {scope}");
+            self.flash(&text);
+            return After::Continue;
+        }
+        After::MoveRepo {
+            workspace: w.id.clone(),
+            delta,
+        }
+    }
+
     /// The group or the workspace the cursor goes to once the session lists it (REQ-672).
     fn follow_to(&mut self, to: Follow) {
         self.follow = Some((to, self.now_ms + 8_000));
@@ -3325,7 +3378,15 @@ impl View {
             (Mode::Workspaces, Key::NewGroup) if level == Level::Workspaces => {
                 self.ask_group_name(Naming::New)
             }
-            // `J` and `K` move a group on its row; on a workspace's they wait for N161e.
+            // `J` and `K` move a workspace's repository inside its group (REQ-680)…
+            (Mode::Workspaces, Key::Swap(side))
+                if level == Level::Workspaces
+                    && self.on_group.is_none()
+                    && matches!(side, split::Side::Up | split::Side::Down) =>
+            {
+                return self.move_repo_key(if side == split::Side::Down { 1 } else { -1 });
+            }
+            // …and a group on its row.
             (Mode::Workspaces, Key::Swap(side))
                 if level == Level::Workspaces
                     && self.on_group.is_some()
@@ -6100,7 +6161,10 @@ const WORKSPACE_KEYS: &[(&str, &str)] = &[
     ),
     ("g", "el grupo del repositorio del workspace"),
     ("G", "un grupo nuevo"),
-    ("J K", "en un grupo, bajarlo o subirlo entre los grupos"),
+    (
+        "J K",
+        "bajar o subir el grupo, o el repositorio del workspace dentro de su grupo",
+    ),
     ("d", "ver sus cambios"),
     ("a", "avisos"),
     ("m", "enlace con el teléfono"),
@@ -7149,6 +7213,15 @@ fn do_after(
             let reply = client.cmd(Cmd::MoveGroup { group, delta });
             told(view, "No se pudo mover el grupo", "grupo movido", reply);
         }
+        After::MoveRepo { workspace, delta } => {
+            let reply = client.cmd(Cmd::MoveRepo { workspace, delta });
+            told(
+                view,
+                "No se pudo mover el repositorio",
+                "repositorio movido",
+                reply,
+            );
+        }
         After::ClosePane(pane) => {
             let reply = client.cmd(Cmd::ClosePane { pane });
             told(view, "No se pudo cerrar el panel", "panel cerrado", reply);
@@ -7472,13 +7545,16 @@ mod tests {
     /// A session with groups as the only document (`snapshot-session-groups.json`): `salesassist`
     /// with `app` and its worktree `feat/login`, `ideas` with nothing in it, and `notes` in none.
     /// `edit` changes the document before the view reads it.
-    fn groups_view_with(edit: impl FnOnce(&mut serde_json::Value)) -> View {
+    fn groups_doc() -> serde_json::Value {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../contract/fixtures/daemon/snapshot-session-groups.json");
-        let mut doc =
-            serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(path).unwrap())
-                .unwrap()["node"]
-                .clone();
+        serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(path).unwrap()).unwrap()
+            ["node"]
+            .clone()
+    }
+
+    fn groups_view_with(edit: impl FnOnce(&mut serde_json::Value)) -> View {
+        let mut doc = groups_doc();
         edit(&mut doc);
         let mut v = View::new("groups");
         v.set_size(120, 30);
@@ -7932,6 +8008,67 @@ mod tests {
         v.press(Key::Down);
         assert!(v.on_group.is_none());
         assert_eq!(v.press(Key::Swap(split::Side::Down)), After::Continue);
+    }
+
+    /// REQ-680: `J` and `K` on a workspace's row move its repository inside its group, say when it is at an
+    /// end or a folder and send nothing, and the cursor follows the workspace when the order changes.
+    #[test]
+    fn j_and_k_on_a_workspace_row_move_its_repository_and_the_cursor_follows_the_workspace() {
+        let tools = serde_json::json!({
+            "id": "00000000-0000-4000-8000-0000000000d1", "name": "tools", "kind": "folder",
+            "path": "/home/u/code/tools", "project": "/home/u/code/tools", "pane_count": 1,
+            "attention": [], "group": F1
+        });
+        let with_tools = |first: bool| {
+            let mut doc = groups_doc();
+            let list = doc["workspaces"].as_array_mut().unwrap();
+            list.insert(if first { 0 } else { 2 }, tools.clone());
+            doc
+        };
+        let mut v = View::new("groups");
+        v.set_size(120, 30);
+        v.sync([with_tools(false)].iter());
+        let app = v.selected_id().unwrap();
+        assert_eq!(v.press(Key::Swap(split::Side::Up)), After::Continue);
+        assert_eq!(v.flash, "ya es el primero de su grupo");
+        assert_eq!(
+            v.press(Key::Swap(split::Side::Down)),
+            After::MoveRepo {
+                workspace: app.clone(),
+                delta: 1
+            }
+        );
+        // the second repository: its worktree-less root is the third workspace
+        v.press(Key::Down);
+        v.press(Key::Down);
+        let tools_id = v.selected_id().unwrap();
+        assert!(tools_id.ends_with("d1"));
+        assert_eq!(v.press(Key::Swap(split::Side::Down)), After::Continue);
+        assert_eq!(v.flash, "ya es el último de su grupo");
+        assert_eq!(
+            v.press(Key::Swap(split::Side::Up)),
+            After::MoveRepo {
+                workspace: tools_id.clone(),
+                delta: -1
+            }
+        );
+        // the daemon moved it: the list has it first, and the cursor is still on it
+        let mut moved = with_tools(true);
+        moved["rev"] = 77.into();
+        v.sync([moved].iter());
+        assert_eq!(v.selected_id().as_deref(), Some(tools_id.as_str()));
+        assert_eq!(v.selected, 0);
+        // a folder that is not a repository has no place to go to: past `app`, its worktree and `ideas`
+        for _ in 0..4 {
+            v.press(Key::Down);
+        }
+        assert!(
+            v.selected_summary().is_some_and(|w| w.name == "notes"),
+            "{:?}",
+            v.selected_summary()
+        );
+        assert_eq!(v.press(Key::Swap(split::Side::Up)), After::Continue);
+        assert_eq!(v.flash, "una carpeta va al final y no se ordena");
     }
 
     /// With groups and no workspace the cursor is on the first group, so `r` and `x` reach it.

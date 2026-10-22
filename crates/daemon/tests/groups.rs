@@ -380,3 +380,143 @@ fn a_name_that_is_empty_long_or_taken_and_an_unknown_group_or_workspace_change_n
     assert_eq!(ws, [pair("a", "-")]);
     d.stop();
 }
+
+/// The workspaces of the session by the last part of their path, in the order it lists them.
+fn order(c: &mut wire::Client) -> Vec<String> {
+    shape(c).1.into_iter().map(|(name, _)| name).collect()
+}
+
+fn worktree(c: &mut wire::Client, repo: &Path, branch: &str) -> String {
+    c.cmd(Cmd::CreateWorktree {
+        repo: text(repo),
+        branch: branch.into(),
+        base: None,
+        folder: None,
+    })
+    .unwrap()
+    .unwrap()
+    .unwrap()["workspace"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+fn move_repo(c: &mut wire::Client, workspace: &str, delta: i32) {
+    c.cmd(Cmd::MoveRepo {
+        workspace: workspace.into(),
+        delta,
+    })
+    .unwrap()
+    .unwrap();
+}
+
+/// REQ-680: a repository's workspaces swap with the neighbouring repository's inside the group, a
+/// loose folder stays last, another group's order is not touched, and the ends change nothing.
+#[test]
+fn a_repository_swaps_with_its_neighbour_inside_its_group_and_nowhere_else() {
+    let sb = Sandbox::new();
+    let d = sb.start();
+    let (app, tools) = (repo(&sb, "app"), repo(&sb, "tools"));
+    let (x, y) = (repo(&sb, "x"), repo(&sb, "y"));
+    let notes = plain(&sb, "notes");
+    let mut c = sb.client();
+    let (app_ws, tools_ws, notes_ws) = (
+        open(&mut c, &app),
+        open(&mut c, &tools),
+        open(&mut c, &notes),
+    );
+    let (x_ws, y_ws) = (open(&mut c, &x), open(&mut c, &y));
+    let wt = worktree(&mut c, &app, "feat/x");
+    let (mine, other) = (make_group(&mut c, "mine"), make_group(&mut c, "other"));
+    for (ws, g) in [
+        (&app_ws, &mine),
+        (&tools_ws, &mine),
+        (&notes_ws, &mine),
+        (&x_ws, &other),
+        (&y_ws, &other),
+    ] {
+        c.cmd(Cmd::MoveToGroup {
+            workspace: ws.clone(),
+            group: Some(g.clone()),
+        })
+        .unwrap()
+        .unwrap();
+    }
+    assert_eq!(
+        order(&mut c),
+        ["app", "feat-x", "tools", "notes", "x", "y"],
+        "a group's repositories, its folders last"
+    );
+    move_repo(&mut c, &tools_ws, -1);
+    assert_eq!(
+        order(&mut c),
+        ["tools", "app", "feat-x", "notes", "x", "y"],
+        "the worktree goes with its repository, `other` is as it was"
+    );
+    // from either workspace of the repository, and at the end nothing changes
+    move_repo(&mut c, &wt, 1);
+    assert_eq!(order(&mut c)[..4], ["tools", "app", "feat-x", "notes"]);
+    move_repo(&mut c, &wt, -1);
+    assert_eq!(
+        order(&mut c),
+        ["app", "feat-x", "tools", "notes", "x", "y"],
+        "the worktree moved its repository up"
+    );
+    move_repo(&mut c, &app_ws, -1);
+    assert_eq!(
+        order(&mut c)[..3],
+        ["app", "feat-x", "tools"],
+        "the first stays first"
+    );
+    // another group is moved by its own workspaces
+    move_repo(&mut c, &y_ws, -1);
+    assert_eq!(order(&mut c), ["app", "feat-x", "tools", "notes", "y", "x"]);
+    // it is kept across a restart
+    drop(c);
+    d.stop();
+    let d = sb.start();
+    let mut c = sb.client();
+    assert_eq!(order(&mut c), ["app", "feat-x", "tools", "notes", "y", "x"]);
+    d.stop();
+}
+
+#[test]
+fn the_repositories_that_are_in_no_group_swap_among_themselves_and_a_folder_has_no_place() {
+    let sb = Sandbox::new();
+    let d = sb.start();
+    let (a, b) = (repo(&sb, "a"), repo(&sb, "b"));
+    let notes = plain(&sb, "notes");
+    let mut c = sb.client();
+    let (a_ws, b_ws, notes_ws) = (open(&mut c, &a), open(&mut c, &b), open(&mut c, &notes));
+    assert_eq!(order(&mut c), ["a", "b", "notes"]);
+    move_repo(&mut c, &b_ws, -1);
+    assert_eq!(order(&mut c), ["b", "a", "notes"]);
+    move_repo(&mut c, &b_ws, -1);
+    move_repo(&mut c, &a_ws, 1);
+    assert_eq!(
+        order(&mut c),
+        ["b", "a", "notes"],
+        "the ends change nothing"
+    );
+    let code = |c: &mut wire::Client, workspace: &str, delta: i32| {
+        c.cmd(Cmd::MoveRepo {
+            workspace: workspace.into(),
+            delta,
+        })
+        .unwrap()
+        .unwrap_err()
+        .code
+    };
+    assert_eq!(
+        code(&mut c, &notes_ws, 1),
+        ErrorCode::BadRequest,
+        "a folder is no repository"
+    );
+    assert_eq!(code(&mut c, &a_ws, 2), ErrorCode::BadRequest);
+    assert_eq!(
+        code(&mut c, "00000000-0000-4000-8000-0000000000ff", 1),
+        ErrorCode::NotFound
+    );
+    assert_eq!(order(&mut c), ["b", "a", "notes"]);
+    d.stop();
+}

@@ -60,6 +60,7 @@ pub fn run(shared: &Shared, cmd: Cmd) -> Done {
             groups::move_to(shared, &workspace, group.as_deref())
         }
         Cmd::MoveGroup { group, delta } => groups::move_group(shared, &group, delta),
+        Cmd::MoveRepo { workspace, delta } => groups::move_repo(shared, &workspace, delta),
         Cmd::SyncWorkspace { workspace } => sync::workspace(shared, &workspace),
         Cmd::DismissJob { job } => {
             shared.lock().dismiss_job(&job)?;
