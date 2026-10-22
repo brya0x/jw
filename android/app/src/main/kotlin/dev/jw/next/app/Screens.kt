@@ -63,6 +63,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.jw.next.client.Aviso
@@ -79,6 +80,7 @@ import dev.jw.next.client.lineReference
 import dev.jw.next.client.HomeItem
 import dev.jw.next.client.HomeKind
 import dev.jw.next.client.HomeRow
+import dev.jw.next.client.MoveTo
 import dev.jw.next.client.Navigator
 import dev.jw.next.client.Need
 import dev.jw.next.client.RemoveSheet
@@ -96,6 +98,7 @@ import dev.jw.next.client.shown
 import dev.jw.next.client.shownName
 import dev.jw.next.client.mark
 import dev.jw.next.client.menuTitle
+import dev.jw.next.client.moveTo
 import dev.jw.next.client.need
 import dev.jw.next.client.removeSheet
 import dev.jw.next.client.target
@@ -251,6 +254,10 @@ fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, set: (Clie
     var menu by remember { mutableStateOf<WorkspaceTarget?>(null) }
     var naming by remember { mutableStateOf<Naming?>(null) }
     var removing by remember { mutableStateOf<RemoveSheet?>(null) }
+    // «mover a un grupo…», the sheet of a group (a long press on its row) and a new group (REQ-676).
+    var moving by remember { mutableStateOf<MoveTo?>(null) }
+    var groupOpen by remember { mutableStateOf<Id?>(null) }
+    var newGroup by remember { mutableStateOf(false) }
     // A long press on the title, or the `+`: a folder to open (REQ-201); a worktree is made from a workspace (REQ-213).
     var newMenu by remember { mutableStateOf(false) }
     var finding by remember { mutableStateOf(false) }
@@ -276,17 +283,28 @@ fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, set: (Clie
                 GearButton { set(nav.show(state, Screen.Settings)) }
             })
             Box(Modifier.weight(1f)) {
-                if (onAvisos) AvisosBody(session, waiting, state, nav, set, now) { jobOpen = it.id } else WorkspaceList(homeItems(session, state.seen), nav, state, set, now, removing = { source.say("ya se está quitando") }, create = { newMenu = true }) { id ->
+                if (onAvisos) AvisosBody(session, waiting, state, nav, set, now) { jobOpen = it.id } else WorkspaceList(
+                    homeItems(session, state.seen, state.folded), nav, state, set, now,
+                    removing = { source.say("ya se está quitando") }, create = { newMenu = true },
+                    holdGroup = { groupOpen = it }, newGroup = { newGroup = true },
+                ) { id ->
                     session.workspaces.firstOrNull { it.id == id }?.let { menu = session.target(it) }
                 }
             }
         }
         menu?.let { target ->
-            WorkspaceMenuSheet(target, dismiss = { menu = null }) { action ->
+            WorkspaceMenuSheet(target, session.moveTo(target.id)?.note, dismiss = { menu = null }) { action ->
                 menu = null
-                choose(target, action, rename = { naming = Naming.Workspace(target.id, target.shown) }, newWorktree = { worktree = WorktreeAt(it, false) }, existing = { worktree = WorktreeAt(it, true) }, project = { project = it }, remove = { removing = it })
+                choose(
+                    target, action, rename = { naming = Naming.Workspace(target.id, target.shown) }, newWorktree = { worktree = WorktreeAt(it, false) },
+                    existing = { worktree = WorktreeAt(it, true) }, project = { project = it }, remove = { removing = it },
+                    move = { moving = session.moveTo(target.id) },
+                )
             }
         }
+        moving?.let { m -> MoveSheet(source, m, unfold = { set(state.copy(folded = state.folded - it)) }) { moving = null } }
+        session.groups.firstOrNull { it.id == groupOpen }?.let { GroupSheet(source, session, it) { groupOpen = null } }
+        if (newGroup) NewGroupSheet(source, session.groups) { newGroup = false }
         naming?.let { RenameSheet(source, it) { naming = null } }
         removing?.let { RemoveWorkspaceSheet(source, it, cancel = { removing = null }) { removing = null } }
         session.jobs.firstOrNull { it.id == jobOpen }?.let { JobSheet(source, session, it, state, nav, set, now) { jobOpen = null } }
@@ -301,9 +319,9 @@ fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, set: (Clie
 /** A dim section label with a hairline that fills the rest of the line. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-internal fun Section(text: String, onLongClick: (() -> Unit)? = null) {
+internal fun Section(text: String, onLongClick: (() -> Unit)? = null, indent: Dp = 0.dp) {
     val press = if (onLongClick != null) Modifier.combinedClickable(onClick = {}, onLongClick = onLongClick) else Modifier
-    Row(Modifier.fillMaxWidth().then(press).padding(start = Gutter, end = Gutter, top = 18.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().then(press).padding(start = Gutter + indent, end = Gutter, top = 18.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         Mono(text, Palette.dim, 11)
         Spacer(Modifier.width(10.dp))
         Box(Modifier.weight(1f).height(1.dp).background(Palette.line))
@@ -311,22 +329,29 @@ internal fun Section(text: String, onLongClick: (() -> Unit)? = null) {
 }
 
 @Composable
-private fun WorkspaceList(items: List<HomeItem>, nav: Navigator, state: ClientState, set: (ClientState) -> Unit, now: Long, removing: () -> Unit, create: () -> Unit, hold: (Id) -> Unit) {
+private fun WorkspaceList(
+    items: List<HomeItem>, nav: Navigator, state: ClientState, set: (ClientState) -> Unit, now: Long, removing: () -> Unit, create: () -> Unit,
+    holdGroup: (Id) -> Unit, newGroup: () -> Unit, hold: (Id) -> Unit,
+) {
+    // The number before a row is its place among the rows that are drawn (REQ-675): a folded group leaves no gap.
+    val numbers = remember(items) { items.filterIsInstance<HomeItem.Row>().mapIndexed { i, r -> r.row.id to i + 1 }.toMap() }
     LazyColumn(Modifier.fillMaxSize()) {
         item { Section("workspaces · ${items.count { it is HomeItem.Row }}", create) }
         items(items, key = { it.key }) { item ->
             when (item) {
-                is HomeItem.Heading -> Section(item.text)
+                is HomeItem.Heading -> Section(item.text, indent = if (item.grouped) 22.dp else 0.dp)
+                is HomeItem.Group -> GroupRow(item, toggle = { set(nav.toggleGroup(state, item.id)) }, hold = { holdGroup(item.id) })
+                is HomeItem.Empty -> EmptyGroup()
+                HomeItem.Ungrouped -> Section("sin grupo")
                 is HomeItem.Row -> WorkspaceRow(
-                    item.row, current = item.row.id == state.last, now = now,
+                    item.row, number = numbers[item.row.id] ?: item.row.number, grouped = item.grouped, current = item.row.id == state.last, now = now,
                     open = { if (item.row.removing) removing() else set(nav.openWorkspace(state, item.row.id)) },
                     hold = { if (item.row.removing) removing() else hold(item.row.id) },
                     go = { a -> set(nav.go(state, a)) },
                 )
-                // the rows of the groups are drawn by N161d2
-                is HomeItem.Group, is HomeItem.Empty, HomeItem.Ungrouped -> {}
             }
         }
+        item { NewGroupLine(newGroup) }
         item { Legend(create) }
     }
 }
@@ -339,8 +364,9 @@ private fun WorkspaceList(items: List<HomeItem>, nav: Navigator, state: ClientSt
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun WorkspaceRow(row: HomeRow, current: Boolean, now: Long, open: () -> Unit, hold: () -> Unit, go: (Attention) -> Unit) {
-    val indent = if (row.kind == HomeKind.Worktree) 20.dp else 0.dp
+private fun WorkspaceRow(row: HomeRow, number: Int, grouped: Boolean, current: Boolean, now: Long, open: () -> Unit, hold: () -> Unit, go: (Attention) -> Unit) {
+    // A worktree is further in than its root, and what is under a group's row further in than the group (REQ-224, REQ-675).
+    val indent = (if (row.kind == HomeKind.Worktree) 20.dp else 0.dp) + (if (grouped) 14.dp else 0.dp)
     val bar = Palette.blue
     Column(Modifier.fillMaxWidth().background(if (current) Palette.sel else Color.Transparent).drawBehind { if (current) drawRect(bar, size = Size(3.dp.toPx(), size.height)) }) {
         Row(
@@ -348,7 +374,7 @@ private fun WorkspaceRow(row: HomeRow, current: Boolean, now: Long, open: () -> 
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Mono("${row.number}", Palette.dim, 11, modifier = Modifier.width(14.dp))
+            Mono("$number", Palette.dim, 11, modifier = Modifier.width(14.dp))
             Mono(if (row.kind == HomeKind.Worktree) "↳" else "●", if (row.paneCount > 0) Palette.green else Palette.dim, 14, modifier = Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Mono(row.name, if (row.removing) Palette.dim else Palette.fg, bold = true, size = 14)
@@ -388,7 +414,11 @@ internal fun AvisosList(items: List<Aviso>, nav: Navigator, state: ClientState, 
             Row(Modifier.fillMaxWidth().clickable { set(nav.go(state, item.attention)) }.padding(start = Gutter - 4.dp, end = Gutter, top = 10.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 MarkColumn(item.attention, 1)
                 Column(Modifier.weight(1f).padding(start = 4.dp)) {
-                    Mono(item.workspace, bold = true, size = 14)
+                    // The group before the workspace, when it has one (REQ-677).
+                    Row {
+                        item.groupName?.let { Mono("$it › ", Palette.dim, 14) }
+                        Mono(item.workspace, bold = true, size = 14)
+                    }
                     Mono(item.attention.what(), item.attention.need().color(), 12, modifier = Modifier.padding(top = 2.dp))
                 }
             }
@@ -427,6 +457,7 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
     // A long press opens a sheet (REQ-182, REQ-183); its choices lead to the field of a name (REQ-184) or to asking
     // before a pane is closed (REQ-148 to REQ-150): the sheet, what the PC said, and whether it is answering.
     var paneMenu by remember(screen.id) { mutableStateOf<PaneSummary?>(null) }
+    var moving by remember { mutableStateOf<MoveTo?>(null) }
     var wsMenu by remember(screen.id) { mutableStateOf(false) }
     var removing by remember(screen.id) { mutableStateOf<RemoveSheet?>(null) }
     // A shell asked for: the answer, then the pane once the workspace shows it (REQ-234, REQ-235).
@@ -600,11 +631,16 @@ fun WorkspaceScreen(source: AppSource, state: ClientState, screen: Screen.Worksp
     }
     if (wsMenu && ws != null) {
         val target = ws.target()
-        WorkspaceMenuSheet(target, dismiss = { wsMenu = false }) { action ->
+        WorkspaceMenuSheet(target, source.session().moveTo(target.id)?.note, dismiss = { wsMenu = false }) { action ->
             wsMenu = false
-            choose(target, action, rename = { naming = Naming.Workspace(target.id, target.shown) }, newWorktree = { worktree = WorktreeAt(it, false) }, existing = { worktree = WorktreeAt(it, true) }, project = { project = it }, remove = { removing = it })
+            choose(
+                target, action, rename = { naming = Naming.Workspace(target.id, target.shown) }, newWorktree = { worktree = WorktreeAt(it, false) },
+                existing = { worktree = WorktreeAt(it, true) }, project = { project = it }, remove = { removing = it },
+                move = { moving = source.session().moveTo(target.id) },
+            )
         }
     }
+    moving?.let { m -> MoveSheet(source, m, unfold = { set(state.copy(folded = state.folded - it)) }) { moving = null } }
     worktree?.let { WorktreeSheet(source, it, state, nav, set) { worktree = null } }
     project?.let { ProjectDialog(source, it) { project = null } }
     removing?.let { RemoveWorkspaceSheet(source, it, cancel = { removing = null }) { removing = null; set(nav.back(state)) } }
@@ -646,19 +682,22 @@ private fun BoxScope.PaneMenuSheet(pane: PaneSummary, dismiss: () -> Unit, renam
 
 /** What a long press on a workspace offers, one sheet for each kind (REQ-183, REQ-227): [pick] gets the choice. */
 @Composable
-internal fun BoxScope.WorkspaceMenuSheet(target: WorkspaceTarget, dismiss: () -> Unit, pick: (WsAction) -> Unit) {
+internal fun BoxScope.WorkspaceMenuSheet(target: WorkspaceTarget, moveNote: String?, dismiss: () -> Unit, pick: (WsAction) -> Unit) {
     Sheet(dismiss) {
         Mono(menuTitle(target), Palette.fg, 14, bold = true, lines = 2)
         workspaceMenu(target.kind, target.repo).forEach { item ->
             val color = if (item.danger) Palette.red else Palette.fg
-            SheetAction(item.glyph, item.label + (item.note?.let { " · $it" } ?: ""), color) { pick(item.action) }
+            // «mover a un grupo…» says where the workspace is and what moving takes (REQ-676).
+            val note = if (item.action == WsAction.MoveToGroup) moveNote else item.note
+            SheetAction(item.glyph, item.label + (note?.let { " · $it" } ?: ""), color) { pick(item.action) }
         }
     }
 }
 
 /** What a choice of the sheet of a workspace leads to: the field of its name, a worktree to make, or the question before a removal. */
-private fun choose(target: WorkspaceTarget, action: WsAction, rename: () -> Unit, newWorktree: (String) -> Unit, existing: (String) -> Unit, project: (String) -> Unit, remove: (RemoveSheet) -> Unit) {
+private fun choose(target: WorkspaceTarget, action: WsAction, rename: () -> Unit, newWorktree: (String) -> Unit, existing: (String) -> Unit, project: (String) -> Unit, remove: (RemoveSheet) -> Unit, move: () -> Unit) {
     when (action) {
+        WsAction.MoveToGroup -> move()
         WsAction.Rename -> rename()
         WsAction.NewWorktree -> target.repo?.let(newWorktree)
         WsAction.ExistingWorktrees -> target.repo?.let(existing)
