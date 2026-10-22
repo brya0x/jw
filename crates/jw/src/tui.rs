@@ -34,6 +34,7 @@ pub(crate) mod erase;
 mod field;
 mod fileview;
 mod fold;
+mod last;
 mod look;
 mod manage;
 mod markdown;
@@ -737,6 +738,11 @@ pub struct View {
     /// A workspace made by the client's own request, to open when it shows up in the session
     /// (or at the time given, in `now_ms`, if it does not).
     goto: Option<(String, u64)>,
+    /// The workspace the person was in when the client last ran, to open when the session
+    /// shows it (REQ-663); it is dropped once the session has arrived, found or not.
+    restore: Option<last::Last>,
+    /// What `take_last` handed out last, so the file is written only when this changes.
+    recorded: Option<last::Last>,
     /// A panel this client asked for, to focus when it appears in its workspace, and when it was
     /// asked: one that never shows up is forgotten.
     new_pane: Option<(String, u64)>,
@@ -821,6 +827,8 @@ impl View {
             project_asks: Vec::new(),
             worktree_asks: Vec::new(),
             goto: None,
+            restore: None,
+            recorded: None,
             full: false,
             new_pane: None,
             help: false,
@@ -1251,6 +1259,7 @@ impl View {
         self.update_changes();
         self.sync_review_diff();
         self.advance_manage();
+        self.follow_restore();
         self.follow_goto();
         self.clamp();
         // The folders of the open workspace's tree are asked for before the tree is shown (REQ-636).
@@ -2204,6 +2213,56 @@ impl View {
     /// Open this workspace as soon as the daemon shows it: the client asked for it to be made.
     pub fn goto(&mut self, workspace: &str) {
         self.goto = Some((workspace.to_owned(), self.now_ms + 8_000));
+    }
+
+    /// The workspace the person was in, to be opened once the session shows it.
+    pub fn restore(&mut self, last: Option<last::Last>) {
+        self.recorded.clone_from(&last);
+        self.restore = last;
+    }
+
+    /// The recorded workspace, once the session has arrived: found by its id or else by its
+    /// folder, it is selected and opened; else the client starts as it always did. Either way
+    /// it is not looked for again. A workspace the client asked for (`goto`) is opened after
+    /// this and wins.
+    fn follow_restore(&mut self) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        let Some(last) = self.restore.take() else {
+            return;
+        };
+        let at = session
+            .workspaces
+            .iter()
+            .position(|w| w.id == last.workspace)
+            .or_else(|| session.workspaces.iter().position(|w| w.path == last.path));
+        if let Some(i) = at {
+            let id = session.workspaces[i].id.clone();
+            self.selected = i;
+            self.open(&id, 0);
+        }
+    }
+
+    /// The opened workspace when it is not the one handed out last: the one to record
+    /// (REQ-662). Closing a workspace records nothing.
+    pub fn take_last(&mut self) -> Option<last::Last> {
+        let id = self.opened.as_deref()?;
+        let path = &self
+            .session
+            .as_ref()?
+            .workspaces
+            .iter()
+            .find(|w| w.id == id)?
+            .path;
+        let now = last::Last {
+            workspace: id.to_owned(),
+            path: path.clone(),
+        };
+        (self.recorded.as_ref() != Some(&now)).then(|| {
+            self.recorded = Some(now.clone());
+            now
+        })
     }
 
     /// The workspace the client asked for, once it is in the session: selected and opened.
@@ -6548,6 +6607,8 @@ fn do_after(
 
 pub fn run() -> Result<(), String> {
     let mut view = View::new("conectando");
+    let last_file = last::path();
+    view.restore(last::read(&last_file));
     let mut client = connect(&mut view)?;
     // `JWN_TUI_DUMP`: also write each frame, without colours, to this file (for tests).
     let dump = std::env::var_os(identity::env_var("TUI_DUMP"));
@@ -6588,6 +6649,9 @@ pub fn run() -> Result<(), String> {
         let (cols, rows) = terminal::size().map_err(|e| e.to_string())?;
         view.set_size(cols as usize, rows as usize);
         view.sync(client.nodes.values());
+        if let Some(l) = view.take_last() {
+            last::write(&last_file, &l);
+        }
         view.drag_tick();
         for id in view.wants() {
             let _ = client.open(&id);
@@ -10851,6 +10915,112 @@ mod tests {
         v.set_now(20_000);
         v.follow_goto();
         assert!(v.goto.is_none());
+    }
+
+    /// A view that starts with `last` recorded, before the session has arrived.
+    fn restored(last: Option<last::Last>) -> View {
+        let mut v = View::new("fixtures");
+        v.set_size(120, 30);
+        v.restore(last);
+        v
+    }
+
+    fn the_second(v: &View) -> last::Last {
+        let w = &v.session.as_ref().unwrap().workspaces[1];
+        last::Last {
+            workspace: w.id.clone(),
+            path: w.path.clone(),
+        }
+    }
+
+    #[test]
+    fn the_workspace_the_person_was_in_is_opened_when_the_session_arrives() {
+        let want = the_second(&fixture_view());
+        let mut v = restored(Some(want.clone()));
+        // No session yet: nothing is opened and the record waits.
+        v.sync(std::iter::empty());
+        assert_eq!((v.selected, v.opened.clone()), (0, None));
+        assert!(v.restore.is_some());
+        v.sync(fixture_docs().iter());
+        assert_eq!((v.selected, v.level()), (1, Level::Panels));
+        assert_eq!(v.opened.as_deref(), Some(want.workspace.as_str()));
+        assert!(v.restore.is_none());
+        // What was just opened is what the file says: nothing to write.
+        assert_eq!(v.take_last(), None);
+    }
+
+    #[test]
+    fn a_workspace_whose_id_is_gone_is_found_by_its_folder() {
+        let want = the_second(&fixture_view());
+        let mut v = restored(Some(last::Last {
+            workspace: "gone".into(),
+            path: want.path.clone(),
+        }));
+        v.sync(fixture_docs().iter());
+        assert_eq!(v.opened.as_deref(), Some(want.workspace.as_str()));
+        assert_eq!(v.selected, 1);
+        // The file is brought up to date with the id it found.
+        assert_eq!(v.take_last(), Some(want));
+    }
+
+    #[test]
+    fn a_workspace_that_is_no_longer_there_starts_as_before_and_is_not_looked_for_again() {
+        let mut v = restored(Some(last::Last {
+            workspace: "gone".into(),
+            path: "/nowhere".into(),
+        }));
+        v.sync(fixture_docs().iter());
+        assert_eq!((v.selected, v.opened.clone()), (0, None));
+        assert!(v.restore.is_none());
+        assert_eq!(v.take_last(), None, "nothing opened, nothing to record");
+        assert!(v.flash.is_empty(), "no message: {}", v.flash);
+        // Not a restore of a later session either.
+        v.sync(std::iter::empty());
+        v.sync(fixture_docs().iter());
+        assert_eq!(v.opened, None);
+    }
+
+    #[test]
+    fn a_view_with_nothing_recorded_starts_as_before() {
+        let mut v = restored(None);
+        v.sync(fixture_docs().iter());
+        assert_eq!((v.selected, v.opened.clone()), (0, None));
+    }
+
+    #[test]
+    fn a_workspace_the_client_asked_for_wins_over_the_recorded_one() {
+        let fresh = fixture_view();
+        let want = the_second(&fresh);
+        let other = {
+            let w = &fresh.session.as_ref().unwrap().workspaces[0];
+            last::Last {
+                workspace: w.id.clone(),
+                path: w.path.clone(),
+            }
+        };
+        let mut v = restored(Some(other));
+        v.set_now(1_000);
+        v.goto(&want.workspace);
+        v.sync(fixture_docs().iter());
+        assert_eq!(v.opened.as_deref(), Some(want.workspace.as_str()));
+        assert_eq!(v.selected, 1);
+    }
+
+    #[test]
+    fn the_opened_workspace_is_recorded_once_and_closing_records_nothing() {
+        let mut v = fixture_view();
+        assert_eq!(v.take_last(), None, "nothing opened");
+        v.press(Key::Enter);
+        let first = v.take_last().expect("opening records");
+        assert_eq!(first.workspace, v.opened.clone().unwrap());
+        assert_eq!(v.take_last(), None, "not written again each tick");
+        // A way of opening that does not go through `open`, as the `d` key does.
+        let want = the_second(&v);
+        v.opened = Some(want.workspace.clone());
+        assert_eq!(v.take_last(), Some(want));
+        // Esc, or moving the highlight, leaves the last workspace as the recorded one.
+        v.opened = None;
+        assert_eq!(v.take_last(), None);
     }
 
     #[test]
