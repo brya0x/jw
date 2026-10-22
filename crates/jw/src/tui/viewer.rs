@@ -28,6 +28,9 @@ pub enum Source {
 pub enum Act {
     Nothing,
     Close,
+    /// `esc` with nothing to cancel: give the keys back to the client's commands (REQ-714); `q`
+    /// closes.
+    Leave,
     /// Answer the plan with this key (`accept`, `manual` or `no`).
     Answer(String),
     Copy(String),
@@ -107,6 +110,14 @@ impl Viewer {
             says: String::new(),
             answers,
         }
+    }
+
+    /// The file it shows, as it was asked of the daemon, or its title.
+    pub fn file(&self) -> String {
+        self.doc
+            .path
+            .clone()
+            .unwrap_or_else(|| self.doc.title.clone())
     }
 
     pub fn is_plan(&self) -> bool {
@@ -199,7 +210,11 @@ impl Viewer {
         match ev.code {
             KeyCode::Esc | KeyCode::Char('q') => {
                 if self.search.query.is_empty() {
-                    return Act::Close;
+                    return if ev.code == KeyCode::Esc {
+                        Act::Leave
+                    } else {
+                        Act::Close
+                    };
                 }
                 self.search = Search::default();
             }
@@ -647,8 +662,13 @@ impl Viewer {
         } else {
             ""
         };
+        let leave = if self.source == Source::File {
+            "esc volver · q cerrar"
+        } else {
+            "esc cerrar"
+        };
         format!(
-            "esc cerrar · j k ␣ b g G mover · [ ] título · / n N buscar · o esquema · y copiar{source}{answers}"
+            "{leave} · j k ␣ b g G mover · [ ] título · / n N buscar · o esquema · y copiar{source}{answers}"
         )
     }
 }
@@ -838,7 +858,7 @@ mod tests {
         // esc while there is a search lets it go, and the next one closes
         assert_eq!(key(&mut v, NARROW, KeyCode::Esc), Act::Nothing);
         assert!(v.search.query.is_empty());
-        assert_eq!(key(&mut v, NARROW, KeyCode::Esc), Act::Close);
+        assert_eq!(key(&mut v, NARROW, KeyCode::Esc), Act::Leave);
         // typing can be cancelled, and a word that is not there is said
         key(&mut v, NARROW, KeyCode::Char('/'));
         typed(&mut v, NARROW, "zzz");
@@ -919,7 +939,7 @@ mod tests {
         d.path = Some("/w/plan.md".into());
         let mut v = Viewer::new(d, Source::File, Vec::new(), String::new());
         assert_eq!(key(&mut v, NARROW, KeyCode::Char('e')), Act::Nothing);
-        assert_eq!(key(&mut v, NARROW, KeyCode::Esc), Act::Close);
+        assert_eq!(key(&mut v, NARROW, KeyCode::Esc), Act::Leave);
         assert_eq!(key(&mut v, NARROW, KeyCode::Char('q')), Act::Close);
         // a control key is not a command of the viewer
         assert_eq!(

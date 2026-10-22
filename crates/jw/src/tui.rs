@@ -101,6 +101,14 @@ impl Viewing {
             Viewing::Text(v) => v.hint(),
         }
     }
+
+    /// The workspace the file or document belongs to.
+    fn workspace(&self) -> &str {
+        match self {
+            Viewing::Doc(v) => &v.workspace,
+            Viewing::Text(t) => &t.current().workspace,
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Default, Debug)]
@@ -548,6 +556,16 @@ pub struct Place {
     pub dir: SplitDir,
 }
 
+/// A file the viewer shows, to be told to the daemon as a tab of the workspace's viewer view,
+/// beside `beside` along `dir` when the view is new (REQ-715, REQ-716).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ViewAsk {
+    pub workspace: String,
+    pub path: String,
+    pub beside: Option<String>,
+    pub dir: SplitDir,
+}
+
 #[derive(PartialEq, Eq, Debug)]
 pub enum After {
     Continue,
@@ -602,6 +620,11 @@ pub enum After {
     OpenDiff(String),
     /// Close a view: the diff or a viewer.
     CloseView(String),
+    /// Close one tab of a viewer view; the last closes the view.
+    CloseViewTab {
+        view: String,
+        path: String,
+    },
     /// Name a workspace or a panel (empty: the automatic name).
     Rename {
         target: Named,
@@ -812,6 +835,12 @@ pub struct View {
     full: bool,
     /// `S` was pressed: the panels show their digits and the next key picks one (REQ-719).
     pick_swap: bool,
+    /// The press that began a mouse selection was the viewer's, so the drag and the release are.
+    viewer_drag: bool,
+    /// Files the viewer shows that the daemon has yet to be told of, for the loop to send.
+    view_asks: Vec<ViewAsk>,
+    /// The viewer that is asked for takes the keys when it shows up (REQ-715).
+    keys_on_arrival: bool,
     help: bool,
     /// The phone link, and whether its box is open, how many phones are paired, whether the
     /// loop should start the thread that turns it on, and what to tell that thread.
@@ -845,6 +874,9 @@ impl View {
             opened: None,
             focus: 0,
             pick_swap: false,
+            viewer_drag: false,
+            view_asks: Vec::new(),
+            keys_on_arrival: false,
             status: status.to_owned(),
             epoch: None,
             outbox: Vec::new(),
@@ -1115,6 +1147,7 @@ impl View {
                 }
             }
             Outcome::Reference(text) => self.refer(text),
+            Outcome::Open(path) => self.open_file(&path, None),
             Outcome::Stay => After::Continue,
         };
         self.sync_diff();
@@ -1324,8 +1357,15 @@ impl View {
             if let Some(at) = at {
                 self.focus = at;
                 self.new_pane = None;
+                // A viewer that was asked for has the keys; the other panels only the focus.
+                if std::mem::take(&mut self.keys_on_arrival)
+                    && self.shown().is_some_and(|d| at >= d.panes.len())
+                {
+                    self.typing = true;
+                }
             } else if self.now_ms > asked + NEW_PANE_WAIT_MS {
                 self.new_pane = None;
+                self.keys_on_arrival = false;
             }
         }
         let workspaces = self.session.as_ref().map_or(0, |s| s.workspaces.len());
@@ -1735,7 +1775,7 @@ impl View {
 
     /// Where the person is.
     fn level(&self) -> Level {
-        if self.typing_pane().is_some() || self.diff_typing() {
+        if self.typing_pane().is_some() || self.diff_typing() || self.viewer_typing() {
             Level::Terminal
         } else if self.opened.is_some() && self.opened == self.selected_id() {
             Level::Panels
@@ -2078,12 +2118,20 @@ impl View {
 
     /// The panel the client just asked for takes the focus as soon as it shows up.
     pub fn focus_new(&mut self, reply: &Reply) {
+        self.keys_on_arrival = false;
         if let Ok(Ok(Some(r))) = reply {
             self.new_pane = r["pane"]
                 .as_str()
                 .or_else(|| r["view"].as_str())
                 .map(|id| (id.to_owned(), self.now_ms));
         }
+    }
+
+    /// The viewer the client asked for takes the focus and the keys as soon as it shows up
+    /// (REQ-715); a reply that is an error leaves nothing waiting.
+    pub fn focus_new_with_keys(&mut self, reply: &Reply) {
+        self.focus_new(reply);
+        self.keys_on_arrival = self.new_pane.is_some();
     }
 
     /// Focus the next or the previous panel of the open workspace.
@@ -3213,7 +3261,7 @@ impl View {
             self.help = false;
             return After::Continue;
         }
-        if self.viewer.is_some() {
+        if self.viewer_overlay() {
             if self.tree_on && self.tree_focus {
                 return self.tree_key(ev);
             }
@@ -3245,6 +3293,9 @@ impl View {
         }
         if self.diff_typing() {
             return self.diff_key(ev);
+        }
+        if self.viewer_typing() {
+            return self.viewer_key(ev);
         }
         if self.tree_focus && self.tree_on {
             return self.tree_key(ev);
@@ -3377,7 +3428,7 @@ impl View {
     /// or typed into whatever has the keyboard, a line break being Enter.
     pub fn paste(&mut self, text: &str) -> After {
         self.flash.clear();
-        if self.viewer.is_some() {
+        if self.viewer_overlay() || self.viewer_typing() {
             return After::Continue;
         }
         if self.modal() {
@@ -3566,12 +3617,28 @@ impl View {
                     }
                 }
                 Level::Panels => {
+                    // A viewer this terminal has not read: ↵ reads its last file.
+                    if self.viewer_focused()
+                        && self.viewing_here().is_none()
+                        && !self.viewer_overlay()
+                        && let Some(file) = self.shown().and_then(|d| {
+                            d.views
+                                .get(self.focus.checked_sub(d.panes.len())?)?
+                                .files
+                                .last()
+                                .cloned()
+                        })
+                    {
+                        return self.open_file(&file, None);
+                    }
                     let panes = self
                         .opened
                         .as_ref()
                         .and_then(|id| self.workspaces.get(id))
                         .map_or(0, |d| d.panes.len());
-                    self.typing = (panes > 0 && self.focus < panes) || self.diff_focused();
+                    self.typing = (panes > 0 && self.focus < panes)
+                        || self.diff_focused()
+                        || (self.viewer_focused() && self.viewing_here().is_some());
                 }
                 Level::Terminal => {}
             },
@@ -3859,6 +3926,118 @@ impl View {
         }
     }
 
+    // ---- the viewer as a panel (N165c) ----
+
+    /// A plan still covers the panels' area; a file is the panel of its workspace's viewer view.
+    fn viewer_overlay(&self) -> bool {
+        matches!(&self.viewer, Some(Viewing::Doc(v)) if matches!(v.source, viewer::Source::Plan { .. }))
+    }
+
+    /// The viewer view of the shown workspace: its place among the panels and its id.
+    fn viewer_panel(&self) -> Option<(usize, String)> {
+        let doc = self.shown()?;
+        let at = doc
+            .views
+            .iter()
+            .position(|v| v.kind == contract::ViewKind::Viewer)?;
+        Some((doc.panes.len() + at, doc.views[at].id.clone()))
+    }
+
+    /// The panel of the viewer view, border included.
+    fn viewer_outer_rect(&self) -> Rect {
+        let (cols, rows) = self.size;
+        let (Some(doc), Some((at, _))) = (self.shown(), self.viewer_panel()) else {
+            return (0, 0, 0, 0);
+        };
+        self.layout(doc, self.panes_space(cols, rows))
+            .get(at)
+            .copied()
+            .unwrap_or((0, 0, 0, 0))
+    }
+
+    /// Where the viewer draws: a plan has the panels' area, a file the inside of its panel.
+    fn viewer_rect(&self) -> Rect {
+        if self.viewer_overlay() {
+            let (cols, rows) = self.size;
+            return self.panes_space(cols, rows);
+        }
+        inner(self.viewer_outer_rect())
+    }
+
+    /// The file viewing of the shown workspace, when the client has it.
+    fn viewing_here(&self) -> Option<&Viewing> {
+        let id = self.shown()?.head.id.as_str();
+        self.viewer
+            .as_ref()
+            .filter(|v| !self.viewer_overlay() && v.workspace() == id)
+    }
+
+    /// The viewer is the focused panel of the open workspace.
+    fn viewer_focused(&self) -> bool {
+        self.opened.is_some()
+            && self.opened == self.selected_id()
+            && self.viewer_panel().is_some_and(|(at, _)| at == self.focus)
+    }
+
+    /// The keyboard is in the viewer's panel.
+    fn viewer_typing(&self) -> bool {
+        self.typing
+            && self.mode == Mode::Workspaces
+            && self.viewing_here().is_some()
+            && self.viewer_focused()
+    }
+
+    /// The mouse at (`x`, `y`) is the viewer's: a plan has all of it, a file its panel.
+    fn viewer_gets(&self, x: usize, y: usize) -> bool {
+        self.viewer.is_some()
+            && (self.viewer_overlay()
+                || (self.viewing_here().is_some() && inside(self.viewer_outer_rect(), x, y)))
+    }
+
+    /// The viewer takes what the mouse began in it, to its end.
+    fn viewer_held(&self) -> bool {
+        self.viewer.is_some() && (self.viewer_overlay() || self.viewer_drag)
+    }
+
+    /// A file the viewer shows is told to the daemon as a tab of the viewer view, beside the
+    /// focused panel (along its longer side when it is 80 columns or more, else below it), and
+    /// takes the keys when its panel shows up (REQ-715, REQ-716).
+    fn queue_view(&mut self, workspace: &str, path: &str) {
+        if workspace.is_empty() || path.is_empty() {
+            return;
+        }
+        let (cols, rows) = self.size;
+        let place = self
+            .shown()
+            .filter(|d| d.head.id == workspace)
+            .and_then(|d| {
+                let id = leaf_id(d, self.focus)?.to_owned();
+                let at = self.layout(d, self.panes_space(cols, rows));
+                let r = at.get(self.focus)?;
+                let dir = if r.2 >= WIDE_PANEL {
+                    SplitDir::Row
+                } else {
+                    SplitDir::Col
+                };
+                Some((id, dir))
+            });
+        let (beside, dir) = match place {
+            Some((id, dir)) => (Some(id), dir),
+            None => (None, SplitDir::Row),
+        };
+        self.view_asks.push(ViewAsk {
+            workspace: workspace.to_owned(),
+            path: path.to_owned(),
+            beside,
+            dir,
+        });
+    }
+
+    /// What the viewer asked of the daemon, for the loop to send.
+    pub fn take_view_asks(&mut self) -> Vec<ViewAsk> {
+        std::mem::take(&mut self.view_asks)
+    }
+
     // ---- the Markdown viewer (REQ-469 to REQ-478) ----
 
     /// Show a document in the viewer; the keys and the mouse are its until it closes.
@@ -3884,6 +4063,7 @@ impl View {
                 .unwrap_or_default(),
             viewer::Source::File => Vec::new(),
         };
+        self.forget_other_workspace(&workspace);
         if let Some(Viewing::Text(tabs)) = self.viewer.take() {
             self.tabs_behind = Some(tabs);
         }
@@ -3899,13 +4079,34 @@ impl View {
         self.viewer = self.tabs_behind.take().map(Viewing::Text);
     }
 
+    /// The viewer holds the files of one workspace: what it has of another goes when a file of
+    /// this one is opened (the daemon keeps each workspace's viewer apart).
+    fn forget_other_workspace(&mut self, workspace: &str) {
+        if self
+            .viewer
+            .as_ref()
+            .is_some_and(|v| v.workspace() != workspace)
+        {
+            self.viewer = None;
+        }
+        if self
+            .tabs_behind
+            .as_ref()
+            .is_some_and(|t| t.current().workspace != workspace)
+        {
+            self.tabs_behind = None;
+        }
+    }
+
     /// Put `view` in the tabs of the viewer: the ones that show, the ones a Markdown view is over,
     /// or new ones.
     fn open_tab(&mut self, view: fileview::FileView, keep: bool) {
+        self.forget_other_workspace(&view.workspace);
         let tabs = match self.viewer.take() {
             Some(Viewing::Text(tabs)) => Some(tabs),
             Some(Viewing::Doc(_)) | None => self.tabs_behind.take(),
         };
+        let (workspace, rel) = (view.workspace.clone(), view.rel().to_owned());
         let tabs = match tabs {
             Some(mut tabs) => {
                 tabs.open(view, keep);
@@ -3913,6 +4114,7 @@ impl View {
             }
             None => fileview::FileTabs::new(view),
         };
+        self.queue_view(&workspace, &rel);
         self.viewer = Some(Viewing::Text(tabs));
         // The keys are the viewer's, whoever had them when the file came.
         self.tree_focus = false;
@@ -3936,7 +4138,7 @@ impl View {
         let weight = size.map_or_else(String::new, |n| format!(" · {}", fileview::size_text(n)));
         let why = format!("binario{weight} · no se puede mostrar");
         self.open_tab(
-            fileview::FileView::refused(workspace, path, name, why),
+            fileview::FileView::refused(workspace, path.clone(), name, why).at(path),
             false,
         );
     }
@@ -3961,10 +4163,8 @@ impl View {
     fn viewer_act(&mut self, act: viewer::Act) -> After {
         match act {
             viewer::Act::Nothing => After::Continue,
-            viewer::Act::Close => {
-                self.close_viewer();
-                After::Continue
-            }
+            viewer::Act::Leave => self.leave_viewer(),
+            viewer::Act::Close => self.close_file_viewer(),
             viewer::Act::Copy(text) => After::Copy(text),
             viewer::Act::Source(path) => {
                 let workspace = self
@@ -4010,9 +4210,16 @@ impl View {
     }
 
     fn viewer_key(&mut self, ev: KeyEvent) -> After {
-        let (cols, rows) = self.size;
-        let rect = self.panes_space(cols, rows);
-        match self.viewer.as_mut() {
+        if !self.viewer_overlay() && is_leader(&ev) {
+            self.typing = false;
+            return After::Continue;
+        }
+        let rect = self.viewer_rect();
+        let before = match &self.viewer {
+            Some(Viewing::Text(t)) => t.rels(),
+            _ => Vec::new(),
+        };
+        let after = match self.viewer.as_mut() {
             Some(Viewing::Doc(v)) => {
                 let act = v.key(&ev, rect);
                 if let Some(says) = v.take_says() {
@@ -4028,6 +4235,51 @@ impl View {
                 self.text_act(act)
             }
             None => After::Continue,
+        };
+        // A tab the key closed is the daemon's to be told of.
+        let now = match &self.viewer {
+            Some(Viewing::Text(t)) => t.rels(),
+            _ => before.clone(),
+        };
+        let gone = before.iter().find(|r| !now.contains(r));
+        match (after, gone, self.viewer_panel()) {
+            (After::Continue, Some(path), Some((_, view))) => After::CloseViewTab {
+                view,
+                path: path.clone(),
+            },
+            (after, ..) => after,
+        }
+    }
+
+    /// `esc` with nothing to cancel: a plan over the panels closes, a file's viewer gives the keys
+    /// back to the client's commands (REQ-714).
+    fn leave_viewer(&mut self) -> After {
+        if self.viewer_overlay() {
+            self.close_viewer();
+        } else {
+            self.typing = false;
+        }
+        After::Continue
+    }
+
+    /// `q` on a file's viewer: the tab that shows goes, and with the last the view; a Markdown
+    /// view lets the text tabs under it come back (REQ-717).
+    fn close_file_viewer(&mut self) -> After {
+        if self.viewer_overlay() {
+            self.close_viewer();
+            return After::Continue;
+        }
+        let doc = match &self.viewer {
+            Some(Viewing::Doc(v)) => Some(v.file()),
+            _ => None,
+        };
+        let view = self.viewer_panel().map(|(_, id)| id);
+        self.close_viewer();
+        self.typing = self.typing && self.viewer.is_some();
+        match (view, self.viewer.is_some(), doc) {
+            (Some(view), false, _) => After::CloseView(view),
+            (Some(view), true, Some(path)) => After::CloseViewTab { view, path },
+            _ => After::Continue,
         }
     }
 
@@ -4042,11 +4294,9 @@ impl View {
         let rel = v.rel().to_owned();
         match act {
             fileview::Act::Nothing => After::Continue,
+            fileview::Act::Leave => self.leave_viewer(),
             fileview::Act::Refer { path, from, to } => self.refer_lines(&workspace, path, from, to),
-            fileview::Act::Close => {
-                self.close_viewer();
-                After::Continue
-            }
+            fileview::Act::Close => self.close_file_viewer(),
             fileview::Act::Tree => {
                 self.tree_on = true;
                 self.tree_focus = true;
@@ -4067,7 +4317,17 @@ impl View {
 
     /// The button was let go over the viewer: the click it was, or the text a drag covered.
     fn viewer_release(&mut self, cols: usize, rows: usize) -> After {
-        let rect = self.panes_space(cols, rows);
+        self.viewer_drag = false;
+        // A press in the panel of a viewer takes its keys.
+        if !self.viewer_overlay()
+            && !self.viewer_typing()
+            && let (Some(ws), Some((at, _))) = (self.selected_id(), self.viewer_panel())
+        {
+            self.open(&ws, at);
+            self.typing = true;
+        }
+        let rect = self.viewer_rect();
+        let _ = (cols, rows);
         if let Some(Viewing::Text(t)) = self.viewer.as_mut() {
             let copy = t.release();
             if let Some(says) = t.take_says() {
@@ -4126,8 +4386,14 @@ impl View {
             self.help = false;
             return After::Continue;
         }
-        if self.viewer.is_some() {
-            let rect = self.panes_space(cols, rows);
+        if self.viewer_gets(x, y) {
+            if !self.viewer_overlay()
+                && let (Some(ws), Some((at, _))) = (self.selected_id(), self.viewer_panel())
+            {
+                self.open(&ws, at);
+                self.typing = true;
+            }
+            let rect = self.viewer_rect();
             let act = self
                 .viewer
                 .as_mut()
@@ -4249,7 +4515,11 @@ impl View {
         if let Some(doc) = self.shown() {
             let id = doc.head.id.clone();
             let rects = self.layout(doc, self.panes_space(cols, rows));
-            if let Some(i) = rects.iter().position(|r| inside(*r, x, y)) {
+            if let Some(i) = rects
+                .iter()
+                .take(doc.panes.len())
+                .position(|r| inside(*r, x, y))
+            {
                 let pane = doc.panes[i].id.clone();
                 self.open(&id, i);
                 // A click in a panel starts typing in it, unless it picks a block.
@@ -4263,7 +4533,9 @@ impl View {
     /// The wheel over the sidebar (or the avisos list) moves the highlight; over a pane drawn
     /// as blocks it scrolls them.
     pub fn scroll(&mut self, down: bool, x: usize, y: usize, cols: usize, rows: usize) -> After {
-        if let Some(v) = self.viewer.as_mut() {
+        if self.viewer_gets(x, y)
+            && let Some(v) = self.viewer.as_mut()
+        {
             v.scroll_by(!down, 3);
             return After::Continue;
         }
@@ -4307,7 +4579,11 @@ impl View {
             return After::Continue;
         };
         let rects = self.layout(doc, self.panes_space(cols, rows));
-        let Some(i) = rects.iter().position(|r| inside(*r, x, y)) else {
+        let Some(i) = rects
+            .iter()
+            .take(doc.panes.len())
+            .position(|r| inside(*r, x, y))
+        else {
             return After::Continue;
         };
         let pane = doc.panes[i].id.clone();
@@ -4869,9 +5145,8 @@ impl View {
     /// The press that began a drag was the second of a double click: the drag covers the word it
     /// is on, so the release copies it (REQ-637).
     pub fn widen_to_word(&mut self) {
-        if self.viewer.is_some() {
-            let (cols, rows) = self.size;
-            let rect = self.panes_space(cols, rows);
+        if self.viewer_held() {
+            let rect = self.viewer_rect();
             match self.viewer.as_mut() {
                 Some(Viewing::Doc(v)) => v.widen_to_word(rect),
                 Some(Viewing::Text(t)) => t.widen_to_word(),
@@ -4914,14 +5189,18 @@ impl View {
     /// A double click on the text of a conversation's field selects the word it is on (REQ-637);
     /// `true` when it did.
     pub fn select_word_in_field(&mut self, x: usize, y: usize, cols: usize, rows: usize) -> bool {
-        if self.mode != Mode::Workspaces || self.viewer.is_some() {
+        if self.mode != Mode::Workspaces || self.viewer_overlay() {
             return false;
         }
         let Some(doc) = self.shown() else {
             return false;
         };
         let rects = self.layout(doc, self.panes_space(cols, rows));
-        let Some(i) = rects.iter().position(|r| inside(*r, x, y)) else {
+        let Some(i) = rects
+            .iter()
+            .take(doc.panes.len())
+            .position(|r| inside(*r, x, y))
+        else {
             return false;
         };
         let pane = doc.panes[i].id.clone();
@@ -4940,9 +5219,11 @@ impl View {
     pub fn press_select(&mut self, x: usize, y: usize, cols: usize, rows: usize) -> bool {
         self.selection = None;
         self.drag = None;
+        self.viewer_drag = false;
         self.unlight_conversations();
-        if self.viewer.is_some() {
-            let rect = self.panes_space(cols, rows);
+        if self.viewer_gets(x, y) {
+            self.viewer_drag = true;
+            let rect = self.viewer_rect();
             return match self.viewer.as_mut() {
                 Some(Viewing::Doc(v)) => v.press(rect, x, y),
                 Some(Viewing::Text(t)) => t.press(rect, x, y),
@@ -4964,7 +5245,11 @@ impl View {
             return false;
         };
         let rects = self.layout(doc, self.panes_space(cols, rows));
-        let Some(i) = rects.iter().position(|r| inside(*r, x, y)) else {
+        let Some(i) = rects
+            .iter()
+            .take(doc.panes.len())
+            .position(|r| inside(*r, x, y))
+        else {
             return false;
         };
         let pane = doc.panes[i].id.clone();
@@ -5013,9 +5298,8 @@ impl View {
     /// the line and column it is on, or, past the top or the bottom of the list, to its first or
     /// last line, which scrolls (REQ-305).
     pub fn drag_to(&mut self, x: usize, y: usize) {
-        if self.viewer.is_some() {
-            let (cols, rows) = self.size;
-            let (rect, now) = (self.panes_space(cols, rows), self.now_ms);
+        if self.viewer_held() {
+            let (rect, now) = (self.viewer_rect(), self.now_ms);
             match self.viewer.as_mut() {
                 Some(Viewing::Doc(v)) => v.drag_to(rect, (x, y), now),
                 Some(Viewing::Text(t)) => t.drag_to(rect, x, y),
@@ -5086,9 +5370,8 @@ impl View {
     /// While a drag is held past the edge of a list, scroll it a line every so often and keep the
     /// selection at its edge.
     pub fn drag_tick(&mut self) {
-        if self.viewer.is_some() {
-            let (cols, rows) = self.size;
-            let (rect, now) = (self.panes_space(cols, rows), self.now_ms);
+        if self.viewer_held() {
+            let (rect, now) = (self.viewer_rect(), self.now_ms);
             if let Some(v) = self.viewer.as_mut().and_then(Viewing::doc_mut) {
                 v.drag_tick(rect, now);
             }
@@ -5137,7 +5420,7 @@ impl View {
     /// The button was let go: a drag that never moved is the click it was; one that did copies what it
     /// covers (REQ-306) and leaves it lit until the next press or key.
     pub fn release(&mut self, cols: usize, rows: usize) -> After {
-        if self.viewer.is_some() {
+        if self.viewer_held() {
             return self.viewer_release(cols, rows);
         }
         if let Some(pane) = self.conv_drag.take() {
@@ -5558,14 +5841,14 @@ impl View {
             }
         }
 
-        match &self.viewer {
-            Some(Viewing::Doc(v)) => v.draw(
+        if self.viewer_overlay()
+            && let Some(Viewing::Doc(v)) = &self.viewer
+        {
+            v.draw(
                 &mut g,
                 self.panes_space(cols, rows),
                 self.viewer_plan_waits(),
-            ),
-            Some(Viewing::Text(v)) => v.draw(&mut g, self.panes_space(cols, rows)),
-            None => {}
+            );
         }
 
         // The status bar.
@@ -5579,7 +5862,11 @@ impl View {
             .as_ref()
             .filter(|_| self.diff_typing())
             .map(|c| c.status(&self.docs()));
-        let viewer_hint = self.viewer.as_ref().map(Viewing::hint);
+        let viewer_hint = self
+            .viewer
+            .as_ref()
+            .filter(|_| self.viewer_overlay() || self.viewer_typing())
+            .map(Viewing::hint);
         let (chip, bg, hint) = match (&self.manage, &diff_status) {
             _ if viewer_hint.is_some() => (
                 " LEER ",
@@ -5797,26 +6084,46 @@ impl View {
     /// A view of the layout drawn as a panel: the diff is the diff viewer in its rectangle, and a
     /// viewer is its box until it is drawn too (N165c).
     fn view_panel(&self, g: &mut Grid, view: &contract::ViewSummary, rect: Rect, focused: bool) {
-        match (view.kind, &self.diff) {
-            (contract::ViewKind::Diff, Some(c)) => c.draw_focused(
+        if let (contract::ViewKind::Diff, Some(c)) = (view.kind, &self.diff) {
+            c.draw_focused(
                 g,
                 &self.docs(),
                 &self.label(c.workspace()),
                 self.now_ms,
                 focused,
-            ),
+            );
+            return;
+        }
+        let (title, border) = if focused {
+            (Style::fg(look::blue()).bold(), look::blue())
+        } else {
+            (Style::fg(look::fg()).bold(), look::line())
+        };
+        let name = match view.kind {
+            contract::ViewKind::Diff => "± diff".to_owned(),
+            contract::ViewKind::Viewer => format!("▤ {}", view.title),
+        };
+        g.boxed(rect, &name, border, title, None);
+        if view.kind != contract::ViewKind::Viewer {
+            skeleton(g, rect);
+            return;
+        }
+        let room = inner(rect);
+        match (self.viewing_here(), &self.tabs_behind) {
+            (Some(Viewing::Text(t)), _) => t.draw(g, room),
+            (Some(Viewing::Doc(v)), _) => v.draw(g, room, false),
+            // A plan is over the panels: the tabs it covers stay drawn.
+            (None, Some(t)) if self.viewer_overlay() => t.draw(g, room),
+            // The daemon has the files, this terminal has not read them: they are named.
             _ => {
-                let (title, border) = if focused {
-                    (Style::fg(look::blue()).bold(), look::blue())
-                } else {
-                    (Style::fg(look::fg()).bold(), look::line())
-                };
-                let name = match view.kind {
-                    contract::ViewKind::Diff => "± diff".to_owned(),
-                    contract::ViewKind::Viewer => format!("▤ {}", view.title),
-                };
-                g.boxed(rect, &name, border, title, None);
-                skeleton(g, rect);
+                for (i, f) in view.files.iter().enumerate().take(room.3) {
+                    g.put(
+                        room.0 + 1,
+                        room.1 + i,
+                        &clip(f, room.2.saturating_sub(2)),
+                        Style::fg(look::dim()),
+                    );
+                }
             }
         }
     }
@@ -6773,6 +7080,8 @@ const RESIZE_STEP: i16 = 50;
 
 /// The least a panel is, in columns and rows: a split that would leave less is not made (REQ-720).
 const MIN_PANEL: (usize, usize) = (14, 5);
+/// A panel this wide has its viewer beside it; a narrower one has it below (REQ-715).
+const WIDE_PANEL: usize = 80;
 const NO_ROOM: &str = "no cabe: f amplía un panel o cierra otro";
 
 /// How long a panel the client asked for is waited for, to focus it.
@@ -6900,6 +7209,27 @@ fn answer(view: &mut View, src: Src, reply: Reply) {
 
 /// Send what the diff viewer asked for. A node it asked to be made is opened as soon as the
 /// reply names it.
+/// The files the viewer shows are told to the daemon as tabs of the workspace's viewer view; the
+/// panel that comes of it takes the focus (REQ-715).
+fn serve_views(view: &mut View, client: &mut Client) {
+    for ask in view.take_view_asks() {
+        let reply = client.cmd(Cmd::OpenView {
+            workspace: ask.workspace,
+            kind: contract::ViewKind::Viewer,
+            path: Some(ask.path),
+            beside: ask.beside,
+            dir: Some(ask.dir),
+        });
+        view.focus_new_with_keys(&reply);
+        if let Ok(Err(e)) = &reply {
+            view.flash(&format!(
+                "No se pudo abrir el panel del visor: {}",
+                e.message
+            ));
+        }
+    }
+}
+
 fn serve_asks(view: &mut View, client: &mut Client) {
     loop {
         let asks = view.take_asks();
@@ -7418,6 +7748,18 @@ fn do_after(
             });
             told(view, "No se pudo cerrar el panel", "panel cerrado", reply);
         }
+        After::CloseViewTab { view: id, path } => {
+            let reply = client.cmd(Cmd::CloseView {
+                view: id,
+                path: Some(path),
+            });
+            told(
+                view,
+                "No se pudo cerrar la pestaña",
+                "pestaña cerrada",
+                reply,
+            );
+        }
         After::RemoveWorkspace {
             workspace,
             remove_worktree,
@@ -7450,12 +7792,16 @@ fn do_after(
         }
         After::Conv(act) => conversation_cmd(view, client, act),
         After::ReadMarkdown { workspace, path } => {
+            let asked = path.clone();
             let cmd = Cmd::ReadMarkdown {
                 workspace: workspace.clone(),
                 path,
             };
             match read_doc(client, cmd) {
-                Ok(doc) => view.open_viewer(doc, viewer::Source::File, workspace),
+                Ok(doc) => {
+                    view.open_viewer(doc, viewer::Source::File, workspace.clone());
+                    view.queue_view(&workspace, &asked);
+                }
                 Err(why) => view.flash(&why),
             }
         }
@@ -7583,6 +7929,7 @@ pub fn run() -> Result<(), String> {
             let _ = client.cmd(Cmd::MarkSeen { node, rev });
         }
         serve_asks(&mut view, &mut client);
+        serve_views(&mut view, &mut client);
         for repo in view.take_worktree_asks() {
             let reply = client.cmd_within(
                 Cmd::ListWorktrees {
@@ -7703,6 +8050,35 @@ mod tests {
     use std::path::Path;
 
     use super::*;
+
+    /// What the daemon and the client do once a file is open (REQ-715): the workspace has a viewer
+    /// view at the right of its layout, and the client has the focus and the keys in it.
+    fn attach_viewer(v: &mut View) {
+        let ws = v.selected_id().unwrap();
+        if v.viewer_panel().is_none() {
+            let doc = v.workspaces.get_mut(&ws).unwrap();
+            let old = doc.layout.take().unwrap_or(contract::Layout::Pane {
+                pane: doc.panes[0].id.clone(),
+            });
+            doc.layout = Some(contract::Layout::Split {
+                dir: SplitDir::Row,
+                ratio: 150,
+                a: Box::new(old),
+                b: Box::new(contract::Layout::Pane {
+                    pane: "viewer-view".into(),
+                }),
+            });
+            doc.views.push(contract::ViewSummary {
+                id: "viewer-view".into(),
+                kind: contract::ViewKind::Viewer,
+                title: "visor".into(),
+                files: Vec::new(),
+            });
+        }
+        let (at, _) = v.viewer_panel().unwrap();
+        v.open(&ws, at);
+        v.typing = true;
+    }
 
     /// The shared fixtures as the documents a client holds: the same ones the phone draws.
     fn fixture_docs() -> Vec<serde_json::Value> {
@@ -8830,6 +9206,161 @@ mod tests {
         v.set_size(120, 40);
         v.press(Key::Down);
         assert!(matches!(v.press(Key::SplitCol), After::NewPane(..)));
+    }
+
+    /// REQ-715, REQ-716: a file the viewer shows is told to the daemon as a tab, beside the panel
+    /// the keys were in (to its right when that is 80 columns wide, else below it), and the
+    /// viewer that comes of it has the focus and the keys.
+    #[test]
+    fn a_file_is_asked_beside_the_panel_it_was_opened_from_and_the_viewer_takes_the_keys() {
+        let mut v = with_diff_view(false);
+        v.press(Key::Enter);
+        let ws = v.selected_id().unwrap();
+        let (at, diff) = v.diff_panel().unwrap();
+        v.open(&ws, at);
+        v.typing = true;
+        // the diff is narrower than 80 columns at 120: below it
+        v.open_text(
+            ws.clone(),
+            "src/a.rs".into(),
+            doc_at("/x/src/a.rs", 5),
+            false,
+        );
+        let asks = v.take_view_asks();
+        assert_eq!(
+            asks,
+            [ViewAsk {
+                workspace: ws.clone(),
+                path: "src/a.rs".into(),
+                beside: Some(diff.clone()),
+                dir: SplitDir::Col,
+            }]
+        );
+        // wide: beside it
+        v.set_size(240, 30);
+        v.open_text(
+            ws.clone(),
+            "src/b.rs".into(),
+            doc_at("/x/src/b.rs", 5),
+            false,
+        );
+        assert_eq!(v.take_view_asks()[0].dir, SplitDir::Row);
+        // the daemon makes the viewer and sends the workspace with it: it has the focus and the keys
+        v.focus_new_with_keys(&Ok(Ok(Some(serde_json::json!({ "view": "viewer-view" })))));
+        v.typing = false;
+        let doc = v.workspaces.get_mut(&ws).unwrap();
+        let old = doc.layout.take().unwrap();
+        doc.layout = Some(contract::Layout::Split {
+            dir: SplitDir::Col,
+            ratio: 500,
+            a: Box::new(old),
+            b: Box::new(contract::Layout::Pane {
+                pane: "viewer-view".into(),
+            }),
+        });
+        doc.views.push(contract::ViewSummary {
+            id: "viewer-view".into(),
+            kind: contract::ViewKind::Viewer,
+            title: "b.rs".into(),
+            files: vec!["src/a.rs".into(), "src/b.rs".into()],
+        });
+        v.clamp();
+        assert!(v.viewer_focused(), "the viewer has the focus");
+        assert!(v.viewer_typing(), "and the keys");
+    }
+
+    /// REQ-717: `q` closes the tab that shows and tells the daemon, and the last closes the view;
+    /// `esc` gives the keys back and closes nothing.
+    #[test]
+    fn q_closes_a_tab_and_the_last_one_closes_the_view_and_the_daemon_is_told() {
+        let mut v = fixture_view();
+        v.press(Key::Enter);
+        let ws = v.selected_id().unwrap();
+        v.open_text(ws.clone(), "a.rs".into(), doc_at("/x/a.rs", 5), false);
+        attach_viewer(&mut v);
+        v.open_text(ws.clone(), "b.rs".into(), doc_at("/x/b.rs", 5), false);
+        attach_viewer(&mut v);
+        let (_, view) = v.viewer_panel().unwrap();
+        assert_eq!(v.press_key(plain(KeyCode::Esc)), After::Continue);
+        assert!(!v.typing && v.viewer.is_some());
+        attach_viewer(&mut v);
+        assert_eq!(
+            v.press_key(plain(KeyCode::Char('q'))),
+            After::CloseViewTab {
+                view: view.clone(),
+                path: "b.rs".into()
+            },
+            "the tab that showed"
+        );
+        assert_eq!(
+            v.press_key(plain(KeyCode::Char('q'))),
+            After::CloseView(view),
+            "the last tab closes the view"
+        );
+        assert!(v.viewer.is_none());
+    }
+
+    /// A viewer that fails to open leaves no keys waiting, a refused file is told to the daemon by
+    /// the path it was asked by, and the viewer holds the files of one workspace.
+    #[test]
+    fn a_failed_viewer_leaves_no_keys_waiting_and_the_viewer_holds_one_workspace() {
+        let mut v = with_diff_view(false);
+        v.press(Key::Enter);
+        let ws = v.selected_id().unwrap();
+        v.open_refused(ws.clone(), "assets/logo.png".into(), Some(10));
+        assert_eq!(v.take_view_asks()[0].path, "assets/logo.png");
+        v.focus_new_with_keys(&Ok(Err(ErrorBody {
+            code: contract::ErrorCode::BadRequest,
+            message: "no".into(),
+        })));
+        assert!(!v.keys_on_arrival && v.new_pane.is_none());
+        // d after it focuses the diff and gives it no keys (REQ-713)
+        v.press(Key::Changes);
+        assert!(v.diff_focused() && !v.typing);
+        // a file of another workspace starts the viewer again
+        v.open_text(ws, "a.rs".into(), doc_at("/x/a.rs", 3), false);
+        v.open_text("other".into(), "b.rs".into(), doc_at("/x/b.rs", 3), false);
+        let Some(Viewing::Text(t)) = &v.viewer else {
+            panic!("a viewer of text");
+        };
+        assert_eq!(t.rels(), ["b.rs"], "a.rs was another workspace's");
+    }
+
+    /// A press that begins in a pane after a click in the viewer is the pane's.
+    #[test]
+    fn a_click_in_the_viewer_leaves_no_drag_for_the_pane_that_follows() {
+        let mut v = fixture_view();
+        v.press(Key::Enter);
+        let ws = v.selected_id().unwrap();
+        v.open_text(ws, "a.rs".into(), doc_at("/x/a.rs", 5), false);
+        attach_viewer(&mut v);
+        let at = v.viewer_outer_rect();
+        v.press_select(at.0 + 3, at.1 + 3, 120, 30);
+        assert!(v.viewer_drag);
+        v.press_select(SIDEBAR + 4, 6, 120, 30);
+        assert!(!v.viewer_drag, "the next press is not the viewer's");
+    }
+
+    /// ↵ on a viewer panel this terminal never read reads its last file.
+    #[test]
+    fn enter_on_a_viewer_panel_that_was_never_read_here_reads_its_last_file() {
+        let mut v = with_diff_view(false);
+        v.press(Key::Enter);
+        let ws = v.selected_id().unwrap();
+        attach_viewer(&mut v);
+        v.typing = false;
+        v.viewer = None;
+        let doc = v.workspaces.get_mut(&ws).unwrap();
+        doc.views[1].files = vec!["a.rs".into(), "docs/b.rs".into()];
+        assert_eq!(
+            v.press(Key::Enter),
+            After::ReadFile {
+                workspace: ws,
+                path: "docs/b.rs".into(),
+                size: None,
+                keep: false
+            }
+        );
     }
 
     /// A pane that is added moves the number of every view: the focus and the keys stay in the
@@ -12811,13 +13342,9 @@ mod tests {
             None,
             false,
         );
-        let screen = v.plain(120, 30);
         assert!(
-            screen.contains("▤ main.rs · 3 líneas") && screen.contains("println!(\"hola\");"),
-            "{screen}"
-        );
-        assert!(
-            matches!(&v.viewer, Some(Viewing::Text(t)) if t.current().workspace == ws && t.current().path().ends_with("src/main.rs"))
+            matches!(&v.viewer, Some(Viewing::Text(t)) if t.current().workspace == ws && t.current().path().ends_with("src/main.rs") && t.current().doc_title() == "main.rs"),
+            "the file is read into the viewer"
         );
 
         read_file(
@@ -12829,10 +13356,8 @@ mod tests {
             false,
         );
         assert!(
-            v.plain(120, 30)
-                .contains("binario · 48.0 KB · no se puede mostrar"),
-            "{}",
-            v.plain(120, 30)
+            matches!(&v.viewer, Some(Viewing::Text(t)) if t.current().hint() == "esc volver · q cerrar"),
+            "a refusal has only esc and q"
         );
 
         v.viewer = None;
@@ -13302,6 +13827,7 @@ mod tests {
     fn a_text_file_in_the_viewer_has_the_keys_the_paste_and_the_wheel_and_none_reaches_a_pane() {
         let (mut v, ws) = tree_view();
         v.open_text(ws.clone(), String::new(), text_doc(80), false);
+        attach_viewer(&mut v);
         assert!(v.viewer.is_some());
         assert!(v.plain(120, 30).contains("▤ main.rs · 80 líneas"));
         assert!(
@@ -13341,7 +13867,17 @@ mod tests {
         );
         assert!(v.viewer.is_some(), "and it stays open");
         v.open_text(ws, String::new(), text_doc(5), false);
+        attach_viewer(&mut v);
         assert_eq!(v.press_key(plain(KeyCode::Esc)), After::Continue);
+        assert!(
+            v.viewer.is_some() && !v.typing,
+            "esc gives the keys back and closes nothing"
+        );
+        attach_viewer(&mut v);
+        assert!(matches!(
+            v.press_key(plain(KeyCode::Char('q'))),
+            After::CloseView(_)
+        ));
         assert!(v.viewer.is_none());
     }
 
@@ -13350,6 +13886,7 @@ mod tests {
     fn s_flips_a_markdown_between_its_view_and_its_source() {
         let (mut v, ws) = tree_view();
         v.open_viewer(plan_doc(), viewer::Source::File, ws.clone());
+        attach_viewer(&mut v);
         assert_eq!(
             v.press_key(plain(KeyCode::Char('s'))),
             After::ReadFile {
@@ -13363,6 +13900,7 @@ mod tests {
         doc.title = "plan.md".into();
         doc.path = "/x/plan.md".into();
         v.open_text(ws.clone(), String::new(), doc, false);
+        attach_viewer(&mut v);
         assert_eq!(
             v.press_key(plain(KeyCode::Char('s'))),
             After::ReadMarkdown {
@@ -13377,6 +13915,7 @@ mod tests {
     fn a_binary_file_shows_its_refusal_with_its_weight_and_only_esc_works() {
         let (mut v, ws) = tree_view();
         v.open_refused(ws, "assets/logo.png".into(), Some(48 * 1024));
+        attach_viewer(&mut v);
         assert!(
             v.plain(120, 30)
                 .contains("binario · 48.0 KB · no se puede mostrar"),
@@ -13385,7 +13924,10 @@ mod tests {
         );
         assert_eq!(v.press_key(plain(KeyCode::Char('j'))), After::Continue);
         assert!(v.viewer.is_some());
-        assert_eq!(v.press_key(plain(KeyCode::Esc)), After::Continue);
+        assert!(matches!(
+            v.press_key(plain(KeyCode::Char('q'))),
+            After::CloseView(_)
+        ));
         assert!(v.viewer.is_none());
     }
 
@@ -13460,6 +14002,7 @@ mod tests {
     #[test]
     fn the_viewer_has_the_wheel_the_clicks_and_the_drag() {
         let mut v = conv_view(true);
+        v.set_size(120, 30);
         v.convs.get_mut(CONV).unwrap().ask = Some(plan_ask());
         v.open_viewer(
             plan_doc(),
@@ -13488,7 +14031,9 @@ mod tests {
             })
         );
         // a drag copies, and a key lets go
-        v.open_viewer(plan_doc(), viewer::Source::File, String::new());
+        let ws = v.selected_id().unwrap();
+        v.open_viewer(plan_doc(), viewer::Source::File, ws);
+        attach_viewer(&mut v);
         let (x, y) = find_in(&v, "paso número 2", 30);
         assert!(v.press_select(x + 5, y, 120, 30));
         v.drag_to(x + 10, y);
@@ -13556,6 +14101,7 @@ mod tests {
     fn a_paste_while_the_viewer_is_open_goes_nowhere() {
         let mut v = conv_view(true);
         v.open_viewer(plan_doc(), viewer::Source::File, String::new());
+        attach_viewer(&mut v);
         assert_eq!(v.paste("q hola"), After::Continue);
         assert!(
             v.viewer.is_some(),
@@ -13593,6 +14139,7 @@ mod tests {
         );
         assert_eq!(v.press_key(plain(KeyCode::Char('3'))), After::Continue);
         v.open_viewer(plan_doc(), viewer::Source::File, String::new());
+        attach_viewer(&mut v);
         assert!(!v.plain(120, 30).contains("Aprobar"));
     }
 
@@ -13667,6 +14214,7 @@ mod tests {
         let root = v.session.as_ref().unwrap().workspaces[0].path.clone();
         let ws = v.session.as_ref().unwrap().workspaces[0].id.clone();
         v.open_text(ws, "src/auth.rs".into(), text_doc(10), false);
+        attach_viewer(&mut v);
         v.press_key(plain(KeyCode::Char('j')));
         v.press_key(plain(KeyCode::Char('v')));
         v.press_key(plain(KeyCode::Char('j')));
@@ -13677,13 +14225,18 @@ mod tests {
         assert!(v.typing, "the keyboard is the agent's");
         // with nothing picked, the line of the cursor; written from the folder the agent runs in
         v.convs.get_mut(CONV).unwrap().cwd = Some(format!("{root}/docs"));
+        attach_viewer(&mut v);
         assert_eq!(v.press_key(plain(KeyCode::Enter)), After::Continue);
         assert_eq!(
             v.conv_ui[CONV].editor.text(),
             "@src/auth.rs#L2-3 @../src/auth.rs#L3 "
         );
-        assert_eq!(v.press_key(plain(KeyCode::Esc)), After::Continue);
-        assert!(v.viewer.is_none(), "esc closes it and the field is there");
+        attach_viewer(&mut v);
+        assert!(matches!(
+            v.press_key(plain(KeyCode::Char('q'))),
+            After::CloseView(_)
+        ));
+        assert!(v.viewer.is_none(), "q closes it");
     }
 
     /// REQ-639: a workspace with no agent has the reference copied.
@@ -13692,6 +14245,7 @@ mod tests {
         let mut v = fixture_view();
         let ws = v.selected_id().unwrap();
         v.open_text(ws, "src/auth.rs".into(), text_doc(10), false);
+        attach_viewer(&mut v);
         assert_eq!(
             v.press_key(plain(KeyCode::Enter)),
             After::Copy("@src/auth.rs#L1 ".into())
@@ -13706,6 +14260,7 @@ mod tests {
         let mut v = conv_view(true);
         let ws = v.session.as_ref().unwrap().workspaces[0].id.clone();
         v.open_text(ws.clone(), "src/auth.rs".into(), text_doc(3), false);
+        attach_viewer(&mut v);
         assert_eq!(
             v.press_key(plain(KeyCode::Char('r'))),
             After::ReadFile {
@@ -13742,6 +14297,7 @@ mod tests {
             doc_at("/x/src/a.rs", 20),
             false,
         );
+        attach_viewer(&mut v);
         assert!(!v.tree_focus, "the keys are the viewer's");
         assert_eq!(v.press_key(plain(KeyCode::Char('t'))), After::Continue);
         assert!(v.tree_on && v.tree_focus, "and now the tree's");
@@ -13757,6 +14313,7 @@ mod tests {
             After::ReadFile { ref path, keep: false, .. } if path == "Cargo.toml"
         ));
         v.open_text(ws, "Cargo.toml".into(), doc_at("/x/Cargo.toml", 5), false);
+        attach_viewer(&mut v);
         assert_eq!(tabs_of(&v).count(), 2);
         assert_eq!(tabs_of(&v).current().doc_title(), "Cargo.toml");
         assert!(!v.tree_focus, "the keys are the viewer's again");
@@ -13774,16 +14331,24 @@ mod tests {
     fn a_markdown_over_the_tabs_gives_them_back_when_it_closes() {
         let (mut v, ws) = tree_view();
         v.open_text(ws.clone(), "a.rs".into(), doc_at("/x/a.rs", 5), false);
+        attach_viewer(&mut v);
         v.open_text(ws.clone(), "b.rs".into(), doc_at("/x/b.rs", 5), false);
+        attach_viewer(&mut v);
         v.open_viewer(plan_doc(), viewer::Source::File, ws.clone());
+        attach_viewer(&mut v);
         assert!(matches!(v.viewer, Some(Viewing::Doc(_))));
         assert!(v.tabs_behind.is_some());
-        assert_eq!(v.press_key(plain(KeyCode::Esc)), After::Continue);
+        assert!(matches!(
+            v.press_key(plain(KeyCode::Char('q'))),
+            After::CloseViewTab { .. }
+        ));
         assert_eq!(tabs_of(&v).count(), 2, "the tabs are back");
         assert!(v.tabs_behind.is_none());
         // a file read while the Markdown view is open (its `s`) joins them
         v.open_viewer(plan_doc(), viewer::Source::File, ws.clone());
+        attach_viewer(&mut v);
         v.open_text(ws, "c.rs".into(), doc_at("/x/c.rs", 5), false);
+        attach_viewer(&mut v);
         assert_eq!(tabs_of(&v).count(), 3);
         assert!(v.tabs_behind.is_none());
     }
@@ -13799,7 +14364,9 @@ mod tests {
             doc_at("/x/src/a.rs", 9),
             false,
         );
+        attach_viewer(&mut v);
         v.open_text(ws, "src/b.rs".into(), doc_at("/x/src/b.rs", 9), false);
+        attach_viewer(&mut v);
         v.press_key(plain(KeyCode::Tab));
         assert_eq!(v.press_key(plain(KeyCode::Enter)), After::Continue);
         assert_eq!(v.conv_ui[CONV].editor.text(), "@src/a.rs#L1 ");
@@ -13811,7 +14378,9 @@ mod tests {
     fn the_mouse_moves_the_cursor_selects_and_changes_tab_in_the_viewer_of_text() {
         let (mut v, ws) = tree_view();
         v.open_text(ws.clone(), "a.rs".into(), doc_at("/x/a.rs", 6), false);
+        attach_viewer(&mut v);
         v.open_text(ws, "b.rs".into(), doc_at("/x/b.rs", 6), false);
+        attach_viewer(&mut v);
         let (x, y) = find(&v, "let n = 3;");
         assert!(
             v.press_select(x + 4, y, 120, 30),

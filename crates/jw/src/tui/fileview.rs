@@ -18,6 +18,9 @@ use super::{Grid, Style, clip, erase, is_markdown, look, select};
 pub enum Act {
     Nothing,
     Close,
+    /// `esc` with nothing to cancel: give the keys back to the client's commands (REQ-714); `q`
+    /// closes.
+    Leave,
     Copy(String),
     /// Read the file again.
     Reread,
@@ -297,7 +300,8 @@ impl FileView {
         }
         if self.refusal.is_some() {
             return match ev.code {
-                KeyCode::Esc | KeyCode::Char('q') => Act::Close,
+                KeyCode::Esc => Act::Leave,
+                KeyCode::Char('q') => Act::Close,
                 _ => Act::Nothing,
             };
         }
@@ -309,7 +313,11 @@ impl FileView {
                 if self.anchor.take().is_some() {
                     // the selection lets go first
                 } else if self.search.query.is_empty() {
-                    return Act::Close;
+                    return if ev.code == KeyCode::Esc {
+                        Act::Leave
+                    } else {
+                        Act::Close
+                    };
                 } else {
                     self.search = Search::default();
                     self.found.clear();
@@ -848,7 +856,7 @@ impl FileView {
     /// What the status bar says the keys are.
     pub fn hint(&self) -> String {
         if self.refusal.is_some() {
-            return "esc cerrar".into();
+            return "esc volver · q cerrar".into();
         }
         if let Some(((l0, _), (l1, _))) = self.selection() {
             let n = l1 - l0 + 1;
@@ -859,7 +867,7 @@ impl FileView {
         }
         let md = if self.markdown { " · s vista" } else { "" };
         format!(
-            "esc cerrar · h j k l e b cursor · v elegir · ↵ referencia · t archivos · ␣ g G página · / n N buscar · w ajustar · r releer · y copiar{md}"
+            "esc volver · q cerrar · h j k l e b cursor · v elegir · ↵ referencia · t archivos · ␣ g G página · / n N buscar · w ajustar · r releer · y copiar{md}"
         )
     }
 }
@@ -885,6 +893,11 @@ impl FileTabs {
     }
 
     /// The tab that shows.
+    /// The files the tabs show, as they were asked of the daemon, the oldest first.
+    pub fn rels(&self) -> Vec<String> {
+        self.tabs.iter().map(|t| t.rel().to_owned()).collect()
+    }
+
     pub fn current(&self) -> &FileView {
         &self.tabs[self.cur]
     }
@@ -1353,7 +1366,11 @@ mod tests {
             "esc lets go of the selection"
         );
         assert_eq!(v.anchor, None);
-        assert_eq!(key(&mut v, KeyCode::Esc), Act::Close, "and then it closes");
+        assert_eq!(
+            key(&mut v, KeyCode::Esc),
+            Act::Leave,
+            "and then it gives the keys back"
+        );
     }
 
     /// REQ-639: `↵` asks for a reference of the selected lines, or of the line of the cursor.
@@ -1467,7 +1484,11 @@ mod tests {
             "the first esc ends the search"
         );
         assert!(v.found.is_empty());
-        assert_eq!(key(&mut v, KeyCode::Esc), Act::Close, "the next closes");
+        assert_eq!(
+            key(&mut v, KeyCode::Esc),
+            Act::Leave,
+            "the next gives the keys back"
+        );
         // nothing found says so once
         key(&mut v, KeyCode::Char('/'));
         typed(&mut v, "zzz");
@@ -1526,8 +1547,9 @@ mod tests {
             Act::Nothing,
             "no editor opens from here (N151)"
         );
-        assert_eq!(key(&mut v, KeyCode::Esc), Act::Close);
-        assert_eq!(v.hint(), "esc cerrar");
+        assert_eq!(key(&mut v, KeyCode::Esc), Act::Leave);
+        assert_eq!(key(&mut v, KeyCode::Char('q')), Act::Close);
+        assert_eq!(v.hint(), "esc volver · q cerrar");
     }
 
     #[test]
@@ -1669,21 +1691,24 @@ mod tests {
         );
     }
 
-    /// REQ-640: `esc` closes the tab that shows, and the last one closes the viewer.
+    /// REQ-640, REQ-717: `q` closes the tab that shows, and the last one closes the viewer; `esc`
+    /// closes nothing: it gives the keys back.
     #[test]
-    fn esc_closes_a_tab_and_the_last_one_closes_the_viewer() {
+    fn q_closes_a_tab_and_the_last_one_closes_the_viewer_and_esc_leaves() {
         let mut t = FileTabs::new(file("a.rs", 3));
         t.open(file("b.rs", 3), false);
-        assert_eq!(tab_key(&mut t, KeyCode::Esc), Act::Nothing);
+        assert_eq!(tab_key(&mut t, KeyCode::Esc), Act::Leave);
+        assert_eq!(names(&t), ["a.rs", "b.rs"]);
+        assert_eq!(tab_key(&mut t, KeyCode::Char('q')), Act::Nothing);
         assert_eq!(names(&t), ["a.rs"]);
         assert_eq!(t.take_says().as_deref(), Some("pestaña cerrada"));
-        assert_eq!(tab_key(&mut t, KeyCode::Esc), Act::Close);
+        assert_eq!(tab_key(&mut t, KeyCode::Char('q')), Act::Close);
         // a selection lets go first, and `Tab` with one tab is nothing
         let mut t = FileTabs::new(file("a.rs", 3));
         tab_key(&mut t, KeyCode::Char('v'));
         assert_eq!(tab_key(&mut t, KeyCode::Esc), Act::Nothing);
         assert_eq!(tab_key(&mut t, KeyCode::Tab), Act::Nothing);
-        assert_eq!(tab_key(&mut t, KeyCode::Esc), Act::Close);
+        assert_eq!(tab_key(&mut t, KeyCode::Esc), Act::Leave);
     }
 
     /// REQ-640: a click on a name of the bar is that tab.

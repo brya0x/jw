@@ -157,6 +157,8 @@ pub enum Outcome {
     /// Lines were picked and `↵` asked for where they are, as `@file#L10-14`: the client puts it
     /// in the agent's field (REQ-592).
     Reference(String),
+    /// `↵` or `o` on a file: open it in a viewer, as a tab of the workspace's viewer (REQ-715).
+    Open(String),
 }
 
 /// The lines picked with `V`: where it began and where the cursor is, as places in the body.
@@ -707,10 +709,28 @@ impl Changes {
             self.start_pick(docs);
             return Outcome::Stay;
         }
+        if self.tab != Tab::Commits
+            && (code == KeyCode::Char('o') || (code == KeyCode::Enter && self.focus == Focus::Body))
+        {
+            return self.file_under(docs).map_or(Outcome::Stay, Outcome::Open);
+        }
         match self.tree_or_body(code, docs, g) {
             Some(outcome) => outcome,
             None => self.global(code, docs),
         }
+    }
+
+    /// The file `↵` and `o` open: the one the tree's row names while the tree has the keys, else
+    /// the one the body is on.
+    fn file_under(&self, docs: &Docs) -> Option<String> {
+        let d = self.diff(docs)?;
+        let cache = self.cache_for(d)?;
+        let pos = match (self.focus, self.items(docs).get(self.row)) {
+            (Focus::Tree, Some(Item::Tree(TreeRow::File { pos, .. }))) => *pos,
+            (Focus::Tree, _) => return None,
+            _ => self.cur,
+        };
+        d.files.get(*cache.order.get(pos)?).map(|f| f.path.clone())
     }
 
     /// Keys of the focused column; `None` for one that is not theirs.
@@ -1618,6 +1638,37 @@ mod tests {
         assert!(r.changes.cache.as_ref().unwrap().lines.len() < rows_wrapped);
         r.key(KeyCode::Char('w'));
         assert!(r.text().contains('↪'), "w again wraps");
+    }
+
+    /// REQ-715: `o`, and `↵` in the body, open the file the diff is on in a viewer; `↵` in the tree
+    /// still goes to the file, and the list of commits has none.
+    #[test]
+    fn o_and_enter_in_the_body_open_the_file_the_diff_is_on() {
+        let mut r = rig((140, 40));
+        let cache = r.changes.cache.as_ref().unwrap();
+        let first = r.diffs.values().next().unwrap().files[cache.order[r.changes.cur]]
+            .path
+            .clone();
+        assert_eq!(r.changes.focus, Focus::Body);
+        assert_eq!(r.key(KeyCode::Char('o')), Outcome::Open(first.clone()));
+        assert_eq!(r.key(KeyCode::Enter), Outcome::Open(first.clone()));
+        // in the tree `↵` goes to the file and `o` opens the row's
+        r.key(KeyCode::Tab);
+        assert_eq!(r.changes.focus, Focus::Tree);
+        assert_eq!(
+            r.key(KeyCode::Enter),
+            Outcome::Stay,
+            "↵ in the tree is not an open"
+        );
+        let mut opened = false;
+        for _ in 0..8 {
+            if matches!(r.key(KeyCode::Char('o')), Outcome::Open(_)) {
+                opened = true;
+                break;
+            }
+            r.key(KeyCode::Char('j'));
+        }
+        assert!(opened, "o opens the row of a file");
     }
 
     /// REQ-592: `V` picks lines, `j` and `k` move the end of the pick inside the file, `esc` lets
