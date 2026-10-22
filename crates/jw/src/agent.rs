@@ -1,5 +1,5 @@
 //! The commands an agent in a pane uses: what there is (`ls`, `pane ls`), what a pane shows
-//! (`read`), what to do (`prompt`, `worktree`, `pane open`, `pane close`) and the skill that
+//! (`read`), what to do (`prompt`, `worktree`, `pane open`, `pane close`, `group`) and the skill that
 //! teaches an agent all this (`skill`). They are clients of the daemon like the terminal
 //! client, over nodes and commands that exist (spec N80, REQ-353 to REQ-370).
 
@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use contract::conversation::{ConvStatus, Conversation, Item};
 use contract::{
-    Attention, AttentionKind, Block, Blocks, Cmd, Pane, Session, SplitDir, Workspace,
+    Attention, AttentionKind, Block, Blocks, Cmd, Group, Pane, Session, SplitDir, Workspace,
     WorkspaceSummary,
 };
 use serde::de::DeserializeOwned;
@@ -72,6 +72,9 @@ fn usage_of(cmd: &str) -> String {
         "worktree" => format!(
             "usage: {b} worktree <name> [--in <repo>] [--branch <branch>] [--from <ref>] [--open shell|claude] [--task <text>]"
         ),
+        "group" => format!(
+            "usage: {b} group ls [--json]\n       {b} group new <name>\n       {b} group rename <group> <name>\n       {b} group rm <group>\n       {b} group move <workspace> [<group>]"
+        ),
         "pane" => format!(
             "usage: {b} pane ls <workspace> [--json]\n       {b} pane open <workspace> [--split right|down] [--of <pane>] [--] [<program words>...]\n       {b} pane close <workspace> <pane> [--force]"
         ),
@@ -88,6 +91,11 @@ pub fn run(cmd: &str, args: &[&str]) -> ExitCode {
         ("read", rest) => read(rest),
         ("prompt", rest) => prompt(rest),
         ("worktree", rest) => worktree(rest),
+        ("group", ["ls", rest @ ..]) => group_ls(rest),
+        ("group", ["new", rest @ ..]) => group_new(rest),
+        ("group", ["rename", rest @ ..]) => group_rename(rest),
+        ("group", ["rm", rest @ ..]) => group_rm(rest),
+        ("group", ["move", rest @ ..]) => group_move(rest),
         ("pane", ["ls", rest @ ..]) => pane_ls(rest),
         ("pane", ["open", rest @ ..]) => pane_open(rest),
         ("pane", ["close", rest @ ..]) => pane_close(rest),
@@ -235,6 +243,29 @@ fn resolve_workspace<'a>(
     )
 }
 
+/// The group `word` names: its id, else exactly its name without regard to case (names are
+/// unique so, REQ-664).
+fn resolve_group<'a>(word: &str, all: &'a [Group]) -> Result<&'a Group, String> {
+    let lower = word.to_lowercase();
+    let stage = |fits: &dyn Fn(&Group) -> bool| all.iter().filter(|g| fits(g)).collect();
+    the_one(
+        word,
+        "group",
+        [
+            stage(&|g| g.id == word),
+            stage(&|g| g.name.to_lowercase() == lower),
+            Vec::new(),
+        ],
+        |g| &g.name,
+    )
+}
+
+/// The name of a workspace's group, when it has one.
+fn group_name<'a>(w: &WorkspaceSummary, groups: &'a [Group]) -> Option<&'a str> {
+    let id = w.group.as_deref()?;
+    groups.iter().find(|g| g.id == id).map(|g| g.name.as_str())
+}
+
 /// What is known of a pane of a workspace.
 #[derive(Debug, Clone, PartialEq)]
 struct PaneInfo {
@@ -380,9 +411,13 @@ impl Link {
             .map_err(|e| Fail::Error(format!("{node}: {e}")))
     }
 
-    fn workspaces(&mut self) -> Out<Vec<WorkspaceSummary>> {
+    fn session(&mut self) -> Out<Session> {
         let root = self.c.root.clone();
-        Ok(self.node::<Session>(&root)?.workspaces)
+        self.node::<Session>(&root)
+    }
+
+    fn workspaces(&mut self) -> Out<Vec<WorkspaceSummary>> {
+        Ok(self.session()?.workspaces)
     }
 
     fn workspace(&mut self, word: &str) -> Out<WorkspaceSummary> {
@@ -445,7 +480,8 @@ fn ls(args: &[&str]) -> Out {
     let a = Args::parse(args, &[], &["json"])?;
     a.words::<0>()?;
     let mut s = Link::connect()?;
-    let all = s.workspaces()?;
+    let session = s.session()?;
+    let (all, groups) = (session.workspaces, session.groups);
     if a.has("json") {
         let rows: Vec<Value> = all
             .iter()
@@ -461,6 +497,9 @@ fn ls(args: &[&str]) -> Out {
                 if let Some(b) = &w.branch {
                     row["branch"] = json!(b);
                 }
+                if let Some(g) = group_name(w, &groups) {
+                    row["group"] = json!(g);
+                }
                 row
             })
             .collect();
@@ -471,15 +510,106 @@ fn ls(args: &[&str]) -> Out {
     } else {
         for w in &all {
             println!(
-                "{}\t{}\t{}\t{} panes\t{}",
+                "{}\t{}\t{}\t{} panes\t{}\t{}",
                 w.name,
                 name_of(w.kind),
                 w.branch.as_deref().unwrap_or("-"),
                 w.pane_count,
                 most_urgent(&w.attention).map_or_else(|| "-".to_owned(), name_of),
+                group_name(w, &groups).unwrap_or("-"),
             );
         }
     }
+    Ok(())
+}
+
+fn group_ls(args: &[&str]) -> Out {
+    let a = Args::parse(args, &[], &["json"])?;
+    a.words::<0>()?;
+    let session = Link::connect()?.session()?;
+    let count = |g: &Group| {
+        session
+            .workspaces
+            .iter()
+            .filter(|w| w.group.as_deref() == Some(g.id.as_str()))
+            .count()
+    };
+    if a.has("json") {
+        let rows: Vec<Value> = session
+            .groups
+            .iter()
+            .map(|g| json!({"id": g.id, "name": g.name, "workspaces": count(g)}))
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&rows).unwrap_or_default()
+        );
+    } else {
+        for g in &session.groups {
+            println!("{}\t{} workspaces", g.name, count(g));
+        }
+    }
+    Ok(())
+}
+
+fn group_new(args: &[&str]) -> Out {
+    let a = Args::parse(args, &[], &[])?;
+    let [name] = a.words()?;
+    let reply = Link::connect()?.cmd(Cmd::CreateGroup { name: name.into() })?;
+    println!("{}", reply["group"].as_str().unwrap_or_default());
+    Ok(())
+}
+
+fn group_rename(args: &[&str]) -> Out {
+    let a = Args::parse(args, &[], &[])?;
+    let [word, name] = a.words()?;
+    let mut s = Link::connect()?;
+    let session = s.session()?;
+    let group = resolve_group(word, &session.groups).map_err(Fail::Error)?;
+    s.cmd(Cmd::RenameGroup {
+        group: group.id.clone(),
+        name: name.into(),
+    })?;
+    Ok(())
+}
+
+fn group_rm(args: &[&str]) -> Out {
+    let a = Args::parse(args, &[], &[])?;
+    let [word] = a.words()?;
+    let mut s = Link::connect()?;
+    let session = s.session()?;
+    let group = resolve_group(word, &session.groups).map_err(Fail::Error)?;
+    s.cmd(Cmd::DeleteGroup {
+        group: group.id.clone(),
+    })?;
+    Ok(())
+}
+
+/// `group move <workspace> [<group>]`: the workspace's repository goes to the group, or out of
+/// every group when none is named.
+fn group_move(args: &[&str]) -> Out {
+    let a = Args::parse(args, &[], &[])?;
+    let (word, to) = match a.pos.as_slice() {
+        [ws] => (ws.as_str(), None),
+        [ws, group] => (ws.as_str(), Some(group.as_str())),
+        _ => return Err(Fail::Usage("expected 1 or 2 arguments".into())),
+    };
+    let mut s = Link::connect()?;
+    let session = s.session()?;
+    let ws = resolve_workspace(word, &session.workspaces).map_err(Fail::Error)?;
+    let group = match to {
+        Some(g) => Some(
+            resolve_group(g, &session.groups)
+                .map_err(Fail::Error)?
+                .id
+                .clone(),
+        ),
+        None => None,
+    };
+    s.cmd(Cmd::MoveToGroup {
+        workspace: ws.id.clone(),
+        group,
+    })?;
     Ok(())
 }
 
@@ -1080,6 +1210,36 @@ mod tests {
             id("").unwrap_err().contains("several"),
             "an empty word fits all"
         );
+    }
+
+    #[test]
+    fn a_group_is_named_by_id_or_by_exactly_its_name_without_regard_to_case_and_a_workspace_says_its_group()
+     {
+        let groups = vec![
+            Group {
+                id: "g1".into(),
+                name: "Product".into(),
+            },
+            Group {
+                id: "g2".into(),
+                name: "product ideas".into(),
+            },
+        ];
+        let id = |w: &str| resolve_group(w, &groups).map(|g| g.id.as_str());
+        assert_eq!(id("g2"), Ok("g2"), "an id");
+        assert_eq!(id("PRODUCT"), Ok("g1"), "a name, whatever the case");
+        assert_eq!(
+            id("product i"),
+            Err("no group is named «product i»".into()),
+            "no starts"
+        );
+        assert_eq!(id("zzz"), Err("no group is named «zzz»".into()));
+        let mut w = ws("a1", "app", None, "/x/app");
+        assert_eq!(group_name(&w, &groups), None);
+        w.group = Some("g2".into());
+        assert_eq!(group_name(&w, &groups), Some("product ideas"));
+        w.group = Some("gone".into());
+        assert_eq!(group_name(&w, &groups), None, "a group that is not listed");
     }
 
     fn pane(id: &str, title: &str, agent: Option<&'static str>) -> PaneInfo {

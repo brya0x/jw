@@ -148,7 +148,10 @@ fn ls_and_pane_ls_say_what_there_is_in_text_and_in_json_and_bad_uses_exit_2() {
     let (_, pane) = w.open_repo();
 
     let rows = w.ok(None, &["ls"]);
-    assert_eq!(rows, "app\tfolder\t-\t1 panes\t-\n");
+    assert_eq!(
+        rows, "app\tfolder\t-\t1 panes\t-\t-\n",
+        "REQ-679: the group is the last column"
+    );
     let json = w.json(&["ls", "--json"]);
     assert_eq!(json[0]["name"], "app");
     assert_eq!(
@@ -181,6 +184,58 @@ fn ls_and_pane_ls_say_what_there_is_in_text_and_in_json_and_bad_uses_exit_2() {
 }
 
 #[test]
+fn group_makes_lists_renames_moves_and_deletes_groups_and_ls_says_the_group_of_each_workspace() {
+    let w = World::new("ag-group");
+    w.open_repo();
+    assert_eq!(w.ok(None, &["group", "ls"]), "");
+    let id = w.ok(None, &["group", "new", "Product"]).trim().to_owned();
+    assert_eq!(id.len(), 36, "it prints the id of the group");
+    assert_eq!(w.ok(None, &["group", "ls"]), "Product\t0 workspaces\n");
+    // a group is named without regard to case, or by its id
+    w.ok(None, &["group", "move", "app", "product"]);
+    assert_eq!(w.ok(None, &["ls"]), "app\tfolder\t-\t1 panes\t-\tProduct\n");
+    assert_eq!(w.json(&["ls", "--json"])[0]["group"], "Product");
+    let listed = w.json(&["group", "ls", "--json"]);
+    assert_eq!(
+        (
+            listed[0]["id"].as_str(),
+            listed[0]["name"].as_str(),
+            listed[0]["workspaces"].as_u64()
+        ),
+        (Some(id.as_str()), Some("Product"), Some(1))
+    );
+    w.ok(None, &["group", "rename", &id, "Sales assist"]);
+    assert_eq!(w.ok(None, &["group", "ls"]), "Sales assist\t1 workspaces\n");
+    // what the daemon refuses is said, and a bad use is exit 2
+    assert!(
+        w.fails(None, &["group", "new", "SALES ASSIST"], 1)
+            .contains("already")
+    );
+    assert!(
+        w.fails(None, &["group", "rm", "nope"], 1)
+            .contains("no group is named «nope»")
+    );
+    assert!(
+        w.fails(None, &["group", "move", "app", "nope"], 1)
+            .contains("no group is named «nope»")
+    );
+    assert!(
+        w.fails(None, &["group", "move"], 2)
+            .contains("usage: jw group")
+    );
+    assert!(w.fails(None, &["group"], 2).contains("usage: jw group ls"));
+    // out of every group, and deleted: the workspace stays
+    w.ok(None, &["group", "move", "app"]);
+    assert_eq!(w.ok(None, &["ls"]), "app\tfolder\t-\t1 panes\t-\t-\n");
+    w.ok(None, &["group", "move", "app", "sales assist"]);
+    w.ok(None, &["group", "rm", "Sales Assist"]);
+    assert_eq!(w.ok(None, &["group", "ls"]), "");
+    assert_eq!(w.ok(None, &["ls"]), "app\tfolder\t-\t1 panes\t-\t-\n");
+    assert!(w.json(&["ls", "--json"])[0].get("group").is_none());
+    w.stop();
+}
+
+#[test]
 fn without_a_daemon_every_command_but_skill_says_so_and_exits_1() {
     let env = Env::new("ag-none");
     let run = |args: &[&str]| env.jw().args(args).output().unwrap();
@@ -190,6 +245,7 @@ fn without_a_daemon_every_command_but_skill_says_so_and_exits_1() {
         &["prompt", "x", "hi"],
         &["worktree", "x"],
         &["pane", "ls", "x"],
+        &["group", "ls"],
     ] {
         let out = run(args);
         assert_eq!(out.status.code(), Some(1), "{args:?}");
