@@ -14,12 +14,17 @@ fun Node.Workspace.target() = WorkspaceTarget(
 )
 
 /** What a choice of the sheet does. */
-enum class WsAction { NewWorktree, ExistingWorktrees, Project, Rename, RemoveWorkspace, CloseWorkspace, RemoveWorktree }
+enum class WsAction { MoveToGroup, NewWorktree, ExistingWorktrees, Project, Rename, RemoveWorkspace, CloseWorkspace, RemoveWorktree }
 
 data class MenuItem(val action: WsAction, val glyph: String, val label: String, val note: String?, val danger: Boolean)
 
 /** The sheet of a workspace is one for each kind: a repository's root, a folder that is not one, a worktree (REQ-227). Only a worktree is renamed: a folder is a directory on disk. */
-fun workspaceMenu(kind: HomeKind, repo: String?): List<MenuItem> = when (kind) {
+fun workspaceMenu(kind: HomeKind, repo: String?): List<MenuItem> = listOf(MOVE_TO_GROUP) + kindMenu(kind, repo)
+
+/** «mover a un grupo…», on every kind's sheet (REQ-698); its note says where the workspace is and what moving takes ([MoveTo.note]). */
+private val MOVE_TO_GROUP = MenuItem(WsAction.MoveToGroup, "⇄", "mover a un grupo…", null, false)
+
+private fun kindMenu(kind: HomeKind, repo: String?): List<MenuItem> = when (kind) {
     HomeKind.Root -> listOfNotNull(
         repo?.let { MenuItem(WsAction.NewWorktree, "w", "worktree nuevo", "de «${repoName(it)}»", false) },
         repo?.let { MenuItem(WsAction.ExistingWorktrees, "e", "worktrees existentes", "de «${repoName(it)}»", false) },

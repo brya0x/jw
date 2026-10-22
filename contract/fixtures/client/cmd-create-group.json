@@ -1,0 +1,8 @@
+{
+  "t": "cmd",
+  "id": "c50",
+  "cmd": {
+    "cmd": "create_group",
+    "name": "salesassist"
+  }
+}

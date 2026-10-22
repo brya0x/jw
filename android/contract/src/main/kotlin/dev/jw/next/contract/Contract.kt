@@ -248,6 +248,29 @@ sealed interface Cmd {
     @Serializable @SerialName("rename_workspace")
     data class RenameWorkspace(val workspace: Id, val name: String) : Cmd
 
+    /** Make a group of workspaces; the reply is `{group}`. */
+    @Serializable @SerialName("create_group")
+    data class CreateGroup(val name: String) : Cmd
+
+    @Serializable @SerialName("rename_group")
+    data class RenameGroup(val group: Id, val name: String) : Cmd
+
+    /** The group's workspaces stay open and belong to none. */
+    @Serializable @SerialName("delete_group")
+    data class DeleteGroup(val group: Id) : Cmd
+
+    /** Put the workspace's repository in [group], or in none when it is null. */
+    @Serializable @SerialName("move_to_group")
+    data class MoveToGroup(val workspace: Id, val group: Id? = null) : Cmd
+
+    /** [delta] is -1 (up) or 1 (down). */
+    @Serializable @SerialName("move_group")
+    data class MoveGroup(val group: Id, val delta: Int) : Cmd
+
+    /** Swap the repository of [workspace] with its neighbour in its group (or among those in none): [delta] is -1 or 1. */
+    @Serializable @SerialName("move_repo")
+    data class MoveRepo(val workspace: Id, val delta: Int) : Cmd
+
     @Serializable @SerialName("rename_pane")
     data class RenamePane(val pane: Id, val name: String) : Cmd
 
@@ -573,7 +596,13 @@ data class WorkspaceSummary(
     val working: Boolean = false,
     /** A worktree is being removed: nothing can be done with the workspace. */
     val removing: Boolean = false,
+    /** The group of the workspace's repository, when it has one. */
+    val group: Id? = null,
 )
+
+/** A name that gathers workspaces; it holds nothing open. */
+@Serializable
+data class Group(val id: Id, val name: String)
 
 @Serializable
 enum class JobKind {
@@ -674,6 +703,8 @@ sealed interface Node {
         val workspaces: List<WorkspaceSummary>,
         /** The slow things the daemon does or did, newest first. */
         val jobs: List<Job> = emptyList(),
+        /** The groups of workspaces, in the order they are shown. */
+        val groups: List<Group> = emptyList(),
     ) : Node
 
     /** Level 1: one workspace and its panes. */

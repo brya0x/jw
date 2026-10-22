@@ -89,6 +89,27 @@ internal sealed interface Naming {
     data class Pane(val id: Id, override val shown: String) : Naming
 }
 
+/** The one-line field of a name: a blue outline, the [placeholder] while it is empty, and the keyboard's Done calls [done]. */
+@Composable
+internal fun NameField(value: TextFieldValue, onValue: (TextFieldValue) -> Unit, placeholder: String, focus: FocusRequester, done: () -> Unit) {
+    BasicTextField(
+        value = value,
+        onValueChange = onValue,
+        singleLine = true,
+        textStyle = TextStyle(color = Palette.fg, fontFamily = MonoFont, fontSize = 14.sp),
+        cursorBrush = SolidColor(Palette.blue),
+        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, imeAction = ImeAction.Done),
+        keyboardActions = KeyboardActions(onDone = { done() }),
+        modifier = Modifier.fillMaxWidth().focusRequester(focus).keepsKeyboard(),
+        decorationBox = { inner ->
+            Box(Modifier.fillMaxWidth().defaultMinSize(minHeight = 44.dp).border(1.dp, Palette.blue, RoundedCornerShape(6.dp)).padding(horizontal = 12.dp), contentAlignment = Alignment.CenterStart) {
+                if (value.text.isEmpty()) Mono(placeholder, Palette.dim, 14)
+                inner()
+            }
+        },
+    )
+}
+
 /**
  * The field of a name (REQ-184): the name as shown, `guardar` sends it (empty: the automatic
  * one), and what the PC refuses with stays on the sheet.
@@ -117,22 +138,7 @@ internal fun BoxScope.RenameSheet(source: NodeSource, naming: Naming, dismiss: (
     Sheet(dismiss) {
         val workspace = naming is Naming.Workspace
         Mono(if (workspace) "renombrar el workspace" else "nombrar el panel", Palette.fg, 14, bold = true)
-        BasicTextField(
-            value = text,
-            onValueChange = { text = it },
-            singleLine = true,
-            textStyle = TextStyle(color = Palette.fg, fontFamily = MonoFont, fontSize = 14.sp),
-            cursorBrush = SolidColor(Palette.blue),
-            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, imeAction = ImeAction.Done),
-            keyboardActions = KeyboardActions(onDone = { save() }),
-            modifier = Modifier.fillMaxWidth().focusRequester(focus).keepsKeyboard(),
-            decorationBox = { inner ->
-                Box(Modifier.fillMaxWidth().defaultMinSize(minHeight = 44.dp).border(1.dp, Palette.blue, RoundedCornerShape(6.dp)).padding(horizontal = 12.dp), contentAlignment = Alignment.CenterStart) {
-                    if (text.text.isEmpty()) Mono(if (workspace) "nombre del workspace" else "nombre del panel", Palette.dim, 14)
-                    inner()
-                }
-            },
-        )
+        NameField(text, { text = it }, if (workspace) "nombre del workspace" else "nombre del panel", focus) { save() }
         Mono(
             (if (workspace) "Cambia el nombre que se ve, aquí y en el PC. La carpeta y la rama no se tocan. " else "El panel conserva este nombre aunque cambie lo que corre en él. ") +
                 "Vacío: vuelve el nombre automático.",

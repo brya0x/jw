@@ -306,7 +306,16 @@
         "attention": { "type": "array", "items": { "$ref": "#/$defs/Attention" } },
         "review": { "$ref": "#/$defs/Review" },
         "working": { "type": "boolean" },
-        "removing": { "type": "boolean" }
+        "removing": { "type": "boolean" },
+        "group": { "$ref": "#/$defs/Id" }
+      }
+    },
+    "Group": {
+      "type": "object",
+      "required": ["id", "name"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "name": { "type": "string" }
       }
     },
     "JobKind": { "enum": ["remove_workspace", "sync_workspace"] },
@@ -402,7 +411,8 @@
             "type": { "const": "session" },
             "name": { "type": "string" },
             "workspaces": { "type": "array", "items": { "$ref": "#/$defs/WorkspaceSummary" } },
-            "jobs": { "type": "array", "items": { "$ref": "#/$defs/Job" } }
+            "jobs": { "type": "array", "items": { "$ref": "#/$defs/Job" } },
+            "groups": { "type": "array", "items": { "$ref": "#/$defs/Group" } }
           }
         },
         {
@@ -561,6 +571,12 @@
         { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "sync_workspace" }, "workspace": { "$ref": "#/$defs/Id" } } },
         { "type": "object", "required": ["cmd", "job"], "properties": { "cmd": { "const": "dismiss_job" }, "job": { "$ref": "#/$defs/Id" } } },
         { "type": "object", "required": ["cmd"], "properties": { "cmd": { "const": "dismiss_jobs" } } },
+        { "type": "object", "required": ["cmd", "name"], "properties": { "cmd": { "const": "create_group" }, "name": { "type": "string" } } },
+        { "type": "object", "required": ["cmd", "group", "name"], "properties": { "cmd": { "const": "rename_group" }, "group": { "$ref": "#/$defs/Id" }, "name": { "type": "string" } } },
+        { "type": "object", "required": ["cmd", "group"], "properties": { "cmd": { "const": "delete_group" }, "group": { "$ref": "#/$defs/Id" } } },
+        { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "move_to_group" }, "workspace": { "$ref": "#/$defs/Id" }, "group": { "$ref": "#/$defs/Id" } } },
+        { "type": "object", "required": ["cmd", "group", "delta"], "properties": { "cmd": { "const": "move_group" }, "group": { "$ref": "#/$defs/Id" }, "delta": { "type": "integer" } } },
+        { "type": "object", "required": ["cmd", "workspace", "delta"], "properties": { "cmd": { "const": "move_repo" }, "workspace": { "$ref": "#/$defs/Id" }, "delta": { "type": "integer" } } },
         { "type": "object", "required": ["cmd", "workspace"], "properties": { "cmd": { "const": "cancel" }, "workspace": { "$ref": "#/$defs/Id" } } },
         { "type": "object", "required": ["cmd", "a", "b"], "properties": { "cmd": { "const": "swap_panes" }, "a": { "$ref": "#/$defs/Id" }, "b": { "$ref": "#/$defs/Id" } } },
         { "type": "object", "required": ["cmd", "pane", "dir", "by"], "properties": { "cmd": { "const": "grow_pane" }, "pane": { "$ref": "#/$defs/Id" }, "dir": { "$ref": "#/$defs/SplitDir" }, "by": { "type": "integer", "minimum": -800, "maximum": 800 } } },
