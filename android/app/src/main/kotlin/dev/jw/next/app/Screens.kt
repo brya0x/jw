@@ -242,9 +242,10 @@ fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, set: (Clie
     val jobsMark = jobsMark(session, state.seen)
     val now = rememberClock(session.jobs.any { it.state == JobState.Running })
     var jobOpen by remember { mutableStateOf<Id?>(null) }
-    LaunchedEffect(version, state.screen, state.avisosTab, state.seen) {
-        val seen = nav.seeJobs(state)
-        if (seen != state) set(seen)
+    // What the session says settles the state: the jobs that are seen, and what is folded or chosen in Avisos that the PC no longer lists is forgotten (REQ-678).
+    LaunchedEffect(version, state.screen, state.avisosTab, state.seen, state.folded, state.avisosFilter) {
+        val next = nav.forgetUnlisted(nav.seeJobs(state))
+        if (next != state) set(next)
     }
     LaunchedEffect(version) {
         source.jobStates?.let { before -> endedRemovals(before, session).firstOrNull()?.let { source.say(it.endNotice()) } }

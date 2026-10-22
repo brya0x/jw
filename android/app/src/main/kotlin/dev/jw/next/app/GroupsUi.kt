@@ -123,20 +123,17 @@ internal fun BoxScope.MoveSheet(source: NodeSource, move: MoveTo, unfold: (Id) -
     var text by remember(move) { mutableStateOf(TextFieldValue("")) }
     var error by remember(move) { mutableStateOf<String?>(null) }
     var busy by remember(move) { mutableStateOf(false) }
-    val finish: (Id?) -> (Result<Unit>) -> Unit = { group ->
-        { result ->
-            busy = false
-            result.onSuccess {
-                group?.let(unfold)
-                dismiss()
-            }.onFailure { error = it.message ?: "el PC no pudo mover el workspace" }
-        }
+    val finish: (Result<Unit>) -> Unit = { result ->
+        busy = false
+        result.onSuccess { dismiss() }.onFailure { error = it.message ?: "el PC no pudo mover el workspace" }
     }
     val send: (Id?) -> Unit = { group ->
         if (!busy) {
             busy = true
             error = null
-            source.moveToGroup(move.workspace, group, finish(group))
+            // The group opens at the tap, so that the workspace is seen where it lands; a move that fails leaves it open (REQ-676).
+            group?.let(unfold)
+            source.moveToGroup(move.workspace, group, finish)
         }
     }
     val create = {
@@ -146,7 +143,7 @@ internal fun BoxScope.MoveSheet(source: NodeSource, move: MoveTo, unfold: (Id) -
         } else if (!busy) {
             busy = true
             error = null
-            source.createGroupWith(text.text.trim(), move.workspace, finish(null))
+            source.createGroupWith(text.text.trim(), move.workspace, finish)
         }
     }
     Sheet(dismiss) {

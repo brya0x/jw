@@ -171,8 +171,6 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(epoch) { if (epoch.isNotEmpty()) state = state.copy(seen = state.seen.forEpoch(epoch)) }
         LaunchedEffect(state.seen) { store.save(state.seen) }
         LaunchedEffect(state.folded) { folds.save(pc, state.folded) }
-        // A group the PC no longer lists is forgotten once it has said so.
-        LaunchedEffect(epoch, source.session().groups) { state = nav.forgetUnlisted(state) }
         BackHandler(enabled = state.screen is Screen.Workspace || state.screen is Screen.Settings || state.screen is Screen.Avisos) { state = nav.back(state) }
         when (val screen = state.screen) {
             is Screen.Workspace -> WorkspaceScreen(source, state, screen, nav) { state = it }
