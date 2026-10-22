@@ -13,7 +13,8 @@ use std::time::{Duration, Instant};
 
 use contract::{
     Attention, AttentionKind, Blocks, BlocksMode, Cmd, DiffScope, FileKind, FileListing,
-    FoundFiles, GitMark, Node, Pane, Program, Session, SplitDir, Workspace, WorkspaceKind,
+    FoundFiles, GitMark, Job, JobKind, JobState, Node, Pane, Program, Session, SplitDir, Workspace,
+    WorkspaceKind,
 };
 use crossterm::event::{
     self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
@@ -354,6 +355,13 @@ enum Mode {
     Avisos,
 }
 
+/// The tab of «avisos» that shows: what waits for the person, or what runs and ran (REQ-655).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum AvisosTab {
+    Alertas,
+    Trabajos,
+}
+
 /// Where the person is: the workspaces of the sidebar, the panels of the open workspace, or
 /// typing in a panel. What a key does is what the level is about (spec REQ-169 to REQ-176).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -392,6 +400,8 @@ pub enum Key {
     Project,
     /// Push the highlighted worktree's branch.
     Sync,
+    /// Forget every job that ended (`X`, in the tab of jobs).
+    DismissAll,
     /// A new panel beside the focused one, to its right (`|`) or below it (`-`).
     SplitRow,
     SplitCol,
@@ -601,6 +611,9 @@ pub enum After {
     CancelOp {
         workspace: String,
     },
+    /// Forget a job that ended, or all of those that did (REQ-655).
+    DismissJob(String),
+    DismissJobs,
 }
 
 pub struct View {
@@ -613,6 +626,14 @@ pub struct View {
     /// The highlighted workspace.
     selected: usize,
     avisos_selected: usize,
+    avisos_tab: AvisosTab,
+    /// The line chosen in the tab of jobs.
+    jobs_selected: usize,
+    /// The jobs that ended that this terminal has shown in the tab (REQ-656), and the state each
+    /// job had when the session was last read, to say when one ends (REQ-658); `None` until the
+    /// first read, which says nothing.
+    jobs_seen: HashSet<String>,
+    jobs_state: Option<HashMap<String, JobState>>,
     /// The workspace opened with Enter, and which of its panes has focus. The highlight alone
     /// only previews.
     opened: Option<String>,
@@ -739,6 +760,10 @@ impl View {
             mode: Mode::Workspaces,
             selected: 0,
             avisos_selected: 0,
+            avisos_tab: AvisosTab::Alertas,
+            jobs_selected: 0,
+            jobs_seen: HashSet::new(),
+            jobs_state: None,
             opened: None,
             focus: 0,
             status: status.to_owned(),
@@ -1215,6 +1240,7 @@ impl View {
                 self.session = None;
             }
         }
+        self.watch_jobs();
         self.note_painted();
         self.note_left_alt();
         self.update_changes();
@@ -1395,6 +1421,170 @@ impl View {
                     .map(|a| (w.id.clone(), self.label(&w.id), a))
             })
             .collect()
+    }
+
+    /// The jobs the tab shows: the ones that run, then the ones that ended, each newest first.
+    fn jobs_listed(&self) -> Vec<&Job> {
+        let all = || self.session.iter().flat_map(|s| s.jobs.iter());
+        all()
+            .filter(|j| j.state == JobState::Running)
+            .chain(all().filter(|j| j.state != JobState::Running))
+            .collect()
+    }
+
+    /// How many jobs run, and how many that ended this terminal has not shown: done, failed.
+    fn jobs_counts(&self) -> (usize, usize, usize) {
+        let jobs = self.session.iter().flat_map(|s| s.jobs.iter());
+        let (mut running, mut done, mut failed) = (0, 0, 0);
+        for j in jobs {
+            match j.state {
+                JobState::Running => running += 1,
+                JobState::Done if !self.jobs_seen.contains(&j.id) => done += 1,
+                JobState::Failed if !self.jobs_seen.contains(&j.id) => failed += 1,
+                _ => {}
+            }
+        }
+        (running, done, failed)
+    }
+
+    /// The mark of the jobs in the status bar, beside `avisos N` (REQ-656).
+    fn jobs_mark(&self) -> Option<(String, Rgb)> {
+        let (running, done, failed) = self.jobs_counts();
+        if running > 0 {
+            let s = if running == 1 { "" } else { "s" };
+            return Some((
+                format!("{} {running} trabajo{s}", shell::spin(self.now_ms)),
+                look::blue(),
+            ));
+        }
+        match (failed, done) {
+            (0, 0) => None,
+            (0, d) => Some((format!("✓ {d}"), look::green())),
+            (f, 0) => Some((format!("✗ {f}"), look::red())),
+            (f, d) => Some((format!("✗ {f} ✓ {d}"), look::red())),
+        }
+    }
+
+    /// Where the marks of the status bar go: `avisos N` against the right edge and the jobs' mark
+    /// to its left; `right` is where what is left of them has to stop.
+    fn bar_marks(&self, cols: usize) -> BarMarks {
+        let mut right = cols;
+        let waiting = self.avisos().len();
+        let avisos = (waiting > 0).then(|| {
+            let t = format!("avisos {waiting}");
+            right = cols.saturating_sub(t.chars().count() + 1);
+            (right, t)
+        });
+        let jobs = self.jobs_mark().map(|(t, colour)| {
+            right = right.saturating_sub(t.chars().count() + 2);
+            (right, t, colour)
+        });
+        BarMarks {
+            avisos,
+            jobs,
+            right,
+        }
+    }
+
+    /// A removal that failed, and that nobody dismissed: its row says so (REQ-657).
+    fn removal_failed(&self, workspace: &str) -> bool {
+        self.session.iter().flat_map(|s| s.jobs.iter()).any(|j| {
+            j.kind == JobKind::RemoveWorkspace
+                && j.state == JobState::Failed
+                && j.workspace == workspace
+        })
+    }
+
+    /// Whether the workspace the keys are about (the highlighted one in the sidebar, the open
+    /// one beyond it) has its worktree being removed.
+    fn target_is_removing(&self, level: Level) -> bool {
+        let Some(s) = &self.session else {
+            return false;
+        };
+        let target = match (level, &self.opened) {
+            (Level::Workspaces, _) | (_, None) => s.workspaces.get(self.selected),
+            (_, Some(id)) => s.workspaces.iter().find(|w| w.id == *id),
+        };
+        target.is_some_and(|w| w.removing)
+    }
+
+    /// The jobs were read: say when a removal that was running ended, forget the marks of jobs that
+    /// are gone, and count as seen what the tab is showing (REQ-656, REQ-658).
+    fn watch_jobs(&mut self) {
+        let Some(s) = &self.session else {
+            return;
+        };
+        let now: HashMap<String, JobState> =
+            s.jobs.iter().map(|j| (j.id.clone(), j.state)).collect();
+        let ended = |j: &&Job| {
+            j.kind == JobKind::RemoveWorkspace
+                && j.state != JobState::Running
+                && self
+                    .jobs_state
+                    .as_ref()
+                    .is_some_and(|before| before.get(&j.id) == Some(&JobState::Running))
+        };
+        let said = s.jobs.iter().find(|j| ended(j)).map(|j| match j.state {
+            JobState::Done => format!("quitado {} · {}", j.name, took(j.duration_ms.unwrap_or(0))),
+            _ => format!("✗ no se pudo quitar {}", j.name),
+        });
+        self.jobs_seen.retain(|id| now.contains_key(id));
+        self.jobs_selected = self.jobs_selected.min(now.len().saturating_sub(1));
+        self.jobs_state = Some(now);
+        if let Some(said) = said {
+            self.flash = said;
+        }
+        if self.mode == Mode::Avisos && self.avisos_tab == AvisosTab::Trabajos {
+            self.see_jobs();
+        }
+    }
+
+    /// The tab of jobs is open: what ended is seen (REQ-656).
+    fn see_jobs(&mut self) {
+        let ended: Vec<String> = self
+            .session
+            .iter()
+            .flat_map(|s| s.jobs.iter())
+            .filter(|j| j.state != JobState::Running)
+            .map(|j| j.id.clone())
+            .collect();
+        self.jobs_seen.extend(ended);
+    }
+
+    /// Open «avisos» on a tab.
+    fn open_avisos(&mut self, tab: AvisosTab) {
+        self.mode = Mode::Avisos;
+        self.avisos_tab = tab;
+        self.avisos_selected = 0;
+        self.jobs_selected = 0;
+        if tab == AvisosTab::Trabajos {
+            self.see_jobs();
+        }
+    }
+
+    /// How many lines the box lists, and how many it adds below them (the line of what the job
+    /// selected says).
+    fn avisos_rows(&self) -> (usize, usize) {
+        match self.avisos_tab {
+            AvisosTab::Alertas => (self.avisos().len(), 0),
+            AvisosTab::Trabajos => (self.jobs_listed().len().min(JOB_ROWS), 3),
+        }
+    }
+
+    /// The labels of the two tabs, with what each holds.
+    fn tab_labels(&self) -> (String, String) {
+        let waiting = self.avisos().len();
+        let (running, done, failed) = self.jobs_counts();
+        let alerts = match waiting {
+            0 => " alertas ".to_owned(),
+            n => format!(" alertas {n} "),
+        };
+        let jobs = match (running, done + failed) {
+            (0, 0) => " trabajos ".to_owned(),
+            (0, n) => format!(" trabajos {n} "),
+            (n, _) => format!(" trabajos {} {n} ", shell::spin(self.now_ms)),
+        };
+        (alerts, jobs)
     }
 
     /// `project/branch` for a worktree, the name for a folder.
@@ -2361,6 +2551,46 @@ impl View {
         self.flash = text.to_owned();
     }
 
+    /// What the daemon calls a workspace (it is also what its jobs call it).
+    fn workspace_name(&self, id: &str) -> String {
+        self.session
+            .iter()
+            .flat_map(|s| s.workspaces.iter())
+            .find(|w| w.id == id)
+            .map_or_else(|| id.to_owned(), |w| w.name.clone())
+    }
+
+    /// The daemon answered the removal of a worktree (it began a job) or the closing of a workspace.
+    fn removed(&mut self, name: &str, worktree: bool, reply: Reply) {
+        let failed = if worktree {
+            "No se pudo quitar el worktree"
+        } else {
+            "No se pudo cerrar el workspace"
+        };
+        match reply {
+            Ok(Ok(_)) if worktree => self.flash(&format!("quitando {name}…")),
+            Ok(Ok(_)) => self.flash("workspace cerrado · la carpeta se queda"),
+            Ok(Err(e)) => self.manage_failed(failed, &e.message),
+            Err(e) => self.manage_failed(failed, &e.to_string()),
+        }
+    }
+
+    /// The worker read the worktree for the question: say how many commits stay and watch the
+    /// node of its changes. A question that was closed meanwhile wants nothing of it.
+    fn checked(&mut self, checked: Checked) {
+        const FAILED: &str = "No se pudo mirar los cambios";
+        if let Some(n) = checked.ahead {
+            self.check_unpushed(n);
+        }
+        match checked.node {
+            Ok(node) => self.check_made(&node),
+            Err(why) if self.manage.as_ref().is_some_and(Manage::is_check) => {
+                self.manage_failed(FAILED, &why);
+            }
+            Err(_) => {}
+        }
+    }
+
     /// The question reads the changes as they arrive.
     fn advance_manage(&mut self) {
         let Some(Manage::Checking(target)) = &self.manage else {
@@ -2613,6 +2843,25 @@ impl View {
             }
         }
         let level = self.level();
+        // A worktree that is being removed is not acted on: say so (REQ-657).
+        if self.mode == Mode::Workspaces
+            && matches!(
+                key,
+                Key::Close
+                    | Key::Changes
+                    | Key::Sync
+                    | Key::NewPane
+                    | Key::NewProgram
+                    | Key::Repeat
+                    | Key::Enter
+                    | Key::SplitRow
+                    | Key::SplitCol
+            )
+            && self.target_is_removing(level)
+        {
+            self.flash("ya se está quitando");
+            return After::Continue;
+        }
         match (self.mode, key) {
             (_, Key::Quit) => return After::Quit,
             // `esc` goes up a level; at the first there is nowhere to go.
@@ -2625,8 +2874,14 @@ impl View {
             }
             (Mode::Avisos, Key::Back | Key::Avisos) => self.mode = Mode::Workspaces,
             (Mode::Workspaces, Key::Avisos) => {
-                self.mode = Mode::Avisos;
-                self.avisos_selected = 0;
+                // With nothing waiting, what the jobs mark says is what to look at.
+                let (running, done, failed) = self.jobs_counts();
+                let tab = if self.avisos().is_empty() && running + done + failed > 0 {
+                    AvisosTab::Trabajos
+                } else {
+                    AvisosTab::Alertas
+                };
+                self.open_avisos(tab);
             }
             (Mode::Workspaces, Key::Help) => self.help = true,
             (Mode::Workspaces, Key::Down) if level == Level::Workspaces => {
@@ -2741,12 +2996,81 @@ impl View {
             }
             (Mode::Workspaces, Key::Settings) => self.manage = Some(self.settings_question()),
             (Mode::Workspaces, Key::Phone) => self.open_phone(),
-            (Mode::Avisos, Key::Down) => {
-                let last = self.avisos().len().saturating_sub(1);
-                self.avisos_selected = (self.avisos_selected + 1).min(last);
+            (Mode::Avisos, Key::Next) => {
+                let tab = match self.avisos_tab {
+                    AvisosTab::Alertas => AvisosTab::Trabajos,
+                    AvisosTab::Trabajos => AvisosTab::Alertas,
+                };
+                self.open_avisos(tab);
             }
-            (Mode::Avisos, Key::Up) => {
-                self.avisos_selected = self.avisos_selected.saturating_sub(1)
+            (Mode::Avisos, Key::Down) => match self.avisos_tab {
+                AvisosTab::Alertas => {
+                    let last = self.avisos().len().saturating_sub(1);
+                    self.avisos_selected = (self.avisos_selected + 1).min(last);
+                }
+                AvisosTab::Trabajos => {
+                    let last = self.jobs_listed().len().saturating_sub(1);
+                    self.jobs_selected = (self.jobs_selected + 1).min(last);
+                }
+            },
+            (Mode::Avisos, Key::Up) => match self.avisos_tab {
+                AvisosTab::Alertas => self.avisos_selected = self.avisos_selected.saturating_sub(1),
+                AvisosTab::Trabajos => self.jobs_selected = self.jobs_selected.saturating_sub(1),
+            },
+            // `x` forgets the job that ended, `X` all of those; `c` stops the one that can be
+            // stopped (a push), as `esc` stops it in the box that waits for it (REQ-604).
+            (Mode::Avisos, Key::Close) if self.avisos_tab == AvisosTab::Trabajos => {
+                let job = self
+                    .jobs_listed()
+                    .get(self.jobs_selected)
+                    .map(|j| (*j).clone());
+                match job {
+                    Some(j) if j.state != JobState::Running => {
+                        return After::DismissJob(j.id.clone());
+                    }
+                    Some(_) => self.flash("un trabajo que corre no se descarta"),
+                    None => {}
+                }
+            }
+            (Mode::Avisos, Key::DismissAll) if self.avisos_tab == AvisosTab::Trabajos => {
+                return After::DismissJobs;
+            }
+            (Mode::Avisos, Key::CopyCmd) if self.avisos_tab == AvisosTab::Trabajos => {
+                let job = self
+                    .jobs_listed()
+                    .get(self.jobs_selected)
+                    .map(|j| (*j).clone());
+                match job {
+                    Some(j) if j.state == JobState::Running && j.cancellable => {
+                        return After::CancelOp {
+                            workspace: j.workspace.clone(),
+                        };
+                    }
+                    Some(j) if j.state == JobState::Running => {
+                        self.flash("este trabajo no se cancela");
+                    }
+                    _ => {}
+                }
+            }
+            (Mode::Avisos, Key::Enter) if self.avisos_tab == AvisosTab::Trabajos => {
+                let ws = self
+                    .jobs_listed()
+                    .get(self.jobs_selected)
+                    .map(|j| j.workspace.clone());
+                let at = ws.as_ref().and_then(|ws| {
+                    self.session
+                        .as_ref()
+                        .and_then(|s| s.workspaces.iter().position(|w| w.id == *ws))
+                });
+                match (ws, at) {
+                    (Some(ws), Some(at)) => {
+                        self.mode = Mode::Workspaces;
+                        self.selected = at;
+                        self.open(&ws, 0);
+                    }
+                    (Some(_), None) => self.flash("ese workspace ya no está"),
+                    _ => {}
+                }
             }
             (Mode::Avisos, Key::Enter) => {
                 if let Some((ws, _, a)) = self.avisos().get(self.avisos_selected).cloned() {
@@ -3224,25 +3548,51 @@ impl View {
             }
             self.close_changes();
         }
-        let waiting = self.avisos().len();
         if self.mode == Mode::Avisos {
-            let rect = avisos_rect(waiting, self.panes_space(cols, rows));
+            let (listed, extra) = self.avisos_rows();
+            let rect = avisos_rect(listed, extra, self.panes_space(cols, rows));
             if !inside(rect, x, y) {
                 self.mode = Mode::Workspaces;
-            } else if y >= rect.1 + 2
-                && y < rect.1 + 2 + waiting
+            } else if y == rect.1 + 1 {
+                // The tabs: the first begins two columns in.
+                let (alerts, _) = self.tab_labels();
+                let split = rect.0 + 2 + alerts.chars().count();
+                if x >= rect.0 + 2 && x < split {
+                    self.open_avisos(AvisosTab::Alertas);
+                } else if x > split {
+                    self.open_avisos(AvisosTab::Trabajos);
+                }
+            } else if y >= rect.1 + 3
+                && y < rect.1 + 3 + listed
                 && x > rect.0
                 && x + 1 < rect.0 + rect.2
             {
-                self.avisos_selected = y - rect.1 - 2;
+                match self.avisos_tab {
+                    AvisosTab::Alertas => self.avisos_selected = y - rect.1 - 3,
+                    AvisosTab::Trabajos => {
+                        self.jobs_selected = self.jobs_scroll() + y - rect.1 - 3;
+                    }
+                }
                 return self.press(Key::Enter);
             }
             return After::Continue;
         }
-        let label = format!("avisos {waiting}");
-        let start = cols.saturating_sub(label.chars().count() + 1);
-        if waiting > 0 && y + 1 == rows && x >= start && x < start + label.chars().count() {
+        let marks = self.bar_marks(cols);
+        let on = |at: &Option<(usize, String)>| {
+            at.as_ref()
+                .is_some_and(|(start, t)| x >= *start && x < start + t.chars().count())
+        };
+        if y + 1 == rows && on(&marks.avisos) {
             return self.press(Key::Avisos);
+        }
+        if y + 1 == rows
+            && marks
+                .jobs
+                .as_ref()
+                .is_some_and(|(start, t, _)| x >= *start && x < start + t.chars().count())
+        {
+            self.open_avisos(AvisosTab::Trabajos);
+            return After::Continue;
         }
         let row = self
             .session
@@ -4265,7 +4615,9 @@ impl View {
             };
             // A worktree is drawn four columns in, under its root (REQ-223).
             let (dot, text) = if worktree { (6, 8) } else { (2, 4) };
-            let name_style = if on {
+            let name_style = if w.removing {
+                dim
+            } else if on {
                 Style::fg(look::blue()).bold()
             } else if w.pane_count == 0 {
                 dim
@@ -4309,6 +4661,18 @@ impl View {
                 if un.len() > 1 {
                     g.put_over(SIDEBAR - 4, y, &un.len().to_string(), dim);
                 }
+            }
+            // Its worktree is being removed: a blue spinner and a dim name; when that failed, a red
+            // cross until the job is dismissed (REQ-657).
+            if w.removing {
+                g.put_over(
+                    SIDEBAR - 2,
+                    y,
+                    shell::spin(self.now_ms),
+                    Style::fg(look::blue()),
+                );
+            } else if self.removal_failed(&w.id) {
+                g.put_over(SIDEBAR - 2, y, "✗", Style::fg(look::red()).bold());
             }
             // Claude works in it: a spinner beside the marks (REQ-579).
             if w.working {
@@ -4462,7 +4826,16 @@ impl View {
             (Some(_), _) => (" PREGUNTA ", look::yellow(), self.manage_hint()),
             (None, Some((hint, _))) => (" DIFF ", look::cyan(), hint.as_str()),
             (None, None) => match (self.mode, level) {
-                (Mode::Avisos, _) => (" AVISOS ", look::yellow(), "j/k mover · ↵ ir · esc volver"),
+                (Mode::Avisos, _) => (
+                    " AVISOS ",
+                    look::yellow(),
+                    match self.avisos_tab {
+                        AvisosTab::Alertas => "Tab trabajos · j/k mover · ↵ ir · esc volver",
+                        AvisosTab::Trabajos => {
+                            "Tab alertas · j/k mover · ↵ ir · x descartar · X los terminados · c cancela · esc volver"
+                        }
+                    },
+                ),
                 (_, Level::Terminal) if let Some((accent, asking)) = conv_focus => {
                     if asking {
                         (
@@ -4516,28 +4889,40 @@ impl View {
                 ..Style::default()
             },
         );
+        let marks = self.bar_marks(cols);
+        // What failed starts with `✗` and is red; what was done is green.
         let (hint, hint_style) = match self.flash.as_str() {
             "" => (hint, dim.on(look::panel())),
+            flash if flash.starts_with('✗') => (flash, Style::fg(look::red()).on(look::panel())),
             flash => (flash, Style::fg(look::green()).on(look::panel())),
         };
         g.put(
             chip.chars().count() + 1,
             rows - 1,
-            &clip(hint, cols.saturating_sub(chip.chars().count() + 14)),
+            &clip(
+                hint,
+                cols.saturating_sub(chip.chars().count() + 14)
+                    .min(marks.right.saturating_sub(chip.chars().count() + 2)),
+            ),
             hint_style,
         );
-        let waiting = self.avisos().len();
-        let mut right = cols;
-        if waiting > 0 {
-            let t = format!("avisos {waiting}");
-            right = cols.saturating_sub(t.chars().count() + 1);
+        if let Some((at, t)) = &marks.avisos {
             g.put(
-                right,
+                *at,
                 rows - 1,
-                &t,
+                t,
                 Style::fg(look::yellow()).bold().on(look::panel()),
             );
         }
+        if let Some((at, t, colour)) = &marks.jobs {
+            g.put(
+                *at,
+                rows - 1,
+                t,
+                Style::fg(*colour).bold().on(look::panel()),
+            );
+        }
+        let right = marks.right;
         if let Some((_, Some((seen, total)))) = &diff_status {
             let t = format!("{seen}/{total} vistos");
             let tone = if seen == total {
@@ -4842,9 +5227,14 @@ impl View {
         field.draw(g, (ix, iy + lh, iw), &chips, running.is_some(), focused);
     }
 
-    fn avisos_box(&self, g: &mut Grid, (x, y, w, h): Rect) {
-        let items = self.avisos();
-        let (bx, by, bw, bh) = avisos_rect(items.len(), (x, y, w, h));
+    /// The first job the tab lists, so that the one selected is in view.
+    fn jobs_scroll(&self) -> usize {
+        (self.jobs_selected + 1).saturating_sub(JOB_ROWS)
+    }
+
+    fn avisos_box(&self, g: &mut Grid, area: Rect) {
+        let (listed, extra) = self.avisos_rows();
+        let (bx, by, bw, bh) = avisos_rect(listed, extra, area);
         g.clear_box((bx, by, bw, bh));
         g.boxed(
             (bx, by, bw, bh),
@@ -4853,17 +5243,47 @@ impl View {
             Style::fg(look::fg()).bold(),
             None,
         );
+        // The tabs, the one that shows as the status bar's chip, and a rule under them.
+        let (alerts, jobs) = self.tab_labels();
+        let chip = Style {
+            fg: Some(look::panel()),
+            bg: Some(look::yellow()),
+            bold: true,
+            ..Style::default()
+        };
+        let plain = Style::fg(look::dim()).on(look::panel());
+        let (first, second) = match self.avisos_tab {
+            AvisosTab::Alertas => (chip, plain),
+            AvisosTab::Trabajos => (plain, chip),
+        };
+        g.put(bx + 2, by + 1, &alerts, first);
+        g.put(bx + 3 + alerts.chars().count(), by + 1, &jobs, second);
+        let rule = "─".repeat(bw.saturating_sub(2));
+        g.put(
+            bx + 1,
+            by + 2,
+            &rule,
+            Style::fg(look::line()).on(look::panel()),
+        );
+        match self.avisos_tab {
+            AvisosTab::Alertas => self.alerts_list(g, (bx, by, bw)),
+            AvisosTab::Trabajos => self.jobs_list(g, (bx, by, bw), listed),
+        }
+    }
+
+    fn alerts_list(&self, g: &mut Grid, (bx, by, bw): (usize, usize, usize)) {
+        let items = self.avisos();
         // The box leaves the panel background under its border characters.
         if items.is_empty() {
             g.put(
                 bx + 3,
-                by + 2,
+                by + 4,
                 "Nada espera.",
                 Style::fg(look::dim()).on(look::panel()),
             );
         }
         for (i, (_, name, a)) in items.iter().enumerate() {
-            let row = by + 2 + i;
+            let row = by + 3 + i;
             let bg = if i == self.avisos_selected {
                 look::sel()
             } else {
@@ -4880,6 +5300,69 @@ impl View {
             );
             let t = what(a);
             g.put_over(bx + bw - 3 - t.chars().count(), row, &t, Style::fg(tone(a)));
+        }
+    }
+
+    /// The jobs that run, then the ones that ended, and under them what the one selected says
+    /// (REQ-655).
+    fn jobs_list(&self, g: &mut Grid, (bx, by, bw): (usize, usize, usize), listed: usize) {
+        let jobs = self.jobs_listed();
+        if jobs.is_empty() {
+            g.put(
+                bx + 3,
+                by + 4,
+                "Nada corre ni ha corrido: aquí aparecerán.",
+                Style::fg(look::dim()).on(look::panel()),
+            );
+        }
+        let first = self.jobs_scroll();
+        for (i, j) in jobs.iter().enumerate().skip(first).take(JOB_ROWS) {
+            let row = by + 3 + i - first;
+            let bg = if i == self.jobs_selected {
+                look::sel()
+            } else {
+                look::panel()
+            };
+            g.paint_bg(bx + 1, row, bw - 2, bg);
+            let (glyph, colour) = match j.state {
+                JobState::Running => (shell::spin(self.now_ms), look::blue()),
+                JobState::Done => ("✓", look::green()),
+                JobState::Failed => ("✗", look::red()),
+            };
+            g.put_over(bx + 3, row, glyph, Style::fg(colour).bold());
+            let t = job_time(j, self.now_ms);
+            g.put_over(
+                bx + 5,
+                row,
+                &clip(&job_title(j), bw.saturating_sub(10 + t.chars().count())),
+                Style::fg(look::fg()).bold(),
+            );
+            g.put_over(
+                bx + bw - 3 - t.chars().count(),
+                row,
+                &t,
+                Style::fg(look::dim()),
+            );
+        }
+        let rule_at = by + 3 + listed.max(1);
+        let rule = "─".repeat(bw.saturating_sub(2));
+        g.put(
+            bx + 1,
+            rule_at,
+            &rule,
+            Style::fg(look::line()).on(look::panel()),
+        );
+        if let Some(j) = jobs.get(self.jobs_selected) {
+            let (text, colour) = job_said(j);
+            let width = bw.saturating_sub(6);
+            for (n, line) in wrap_lines(&text, width).into_iter().take(2).enumerate() {
+                g.put(
+                    bx + 3,
+                    rule_at + 1 + n,
+                    &line,
+                    Style::fg(colour).on(look::panel()),
+                );
+            }
         }
     }
 
@@ -5071,10 +5554,92 @@ fn pane_rects(n: usize, (x, y, w, h): Rect) -> Vec<Rect> {
     }
 }
 
-/// Where the avisos box sits over the panes' area, for `items` rows.
-fn avisos_rect(items: usize, (x, y, w, _): Rect) -> Rect {
-    let bw = 56.min(w.saturating_sub(2));
-    (x + w.saturating_sub(bw) / 2, y + 3, bw, items.max(1) + 4)
+/// The most jobs the tab lists at once; the selection scrolls the rest into view.
+const JOB_ROWS: usize = 10;
+
+/// Where the marks of the status bar are: `avisos N`, the jobs' mark, and the column where
+/// everything to their left has to stop.
+struct BarMarks {
+    avisos: Option<(usize, String)>,
+    jobs: Option<(usize, String, Rgb)>,
+    right: usize,
+}
+
+/// How long something took, as the bar and the tab say it: `4,2 s`, `38 s`, `3 min`.
+fn took(ms: u64) -> String {
+    if ms < 10_000 {
+        format!("{:.1} s", ms as f64 / 1000.0).replace('.', ",")
+    } else if ms < 120_000 {
+        format!("{} s", (ms as f64 / 1000.0).round() as u64)
+    } else {
+        format!("{} min", ms / 60_000)
+    }
+}
+
+/// What a job is called in the tab.
+fn job_title(j: &Job) -> String {
+    match j.kind {
+        JobKind::RemoveWorkspace => format!("quitar {}", j.name),
+        JobKind::SyncWorkspace => format!("subir {}", j.name),
+    }
+}
+
+/// The time at the right of a job's line: how long it runs, or how long it took and how long ago.
+fn job_time(j: &Job, now_ms: u64) -> String {
+    match j.duration_ms {
+        None => took(now_ms.saturating_sub(j.started_at)),
+        Some(d) => format!(
+            "{} · hace {}",
+            took(d),
+            took(now_ms.saturating_sub(j.started_at + d))
+        ),
+    }
+}
+
+/// What the line under the list says of the job selected, and its colour: the result, the error,
+/// or what can be done with it.
+fn job_said(j: &Job) -> (String, Rgb) {
+    match (j.state, j.kind) {
+        (JobState::Running, _) if j.cancellable => ("c cancela este trabajo".into(), look::dim()),
+        (JobState::Running, _) => ("corriendo · no se cancela".into(), look::dim()),
+        (JobState::Done, JobKind::RemoveWorkspace) => {
+            ("quitado · la rama se queda".into(), look::dim())
+        }
+        (JobState::Done, JobKind::SyncWorkspace) => (format!("subido {}", j.name), look::dim()),
+        (JobState::Failed, _) => (
+            j.detail
+                .clone()
+                .unwrap_or_else(|| "falló sin decir por qué".into()),
+            look::red(),
+        ),
+    }
+}
+
+/// `text` broken into lines of at most `width` characters, at spaces where it can be.
+fn wrap_lines(text: &str, width: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for word in text.split_whitespace() {
+        match lines.last_mut() {
+            Some(l) if l.chars().count() + 1 + word.chars().count() <= width => {
+                l.push(' ');
+                l.push_str(word);
+            }
+            _ => lines.push(word.chars().take(width).collect()),
+        }
+    }
+    lines
+}
+
+/// Where the avisos box sits over the panes' area: `items` rows under its tabs, and `extra` rows
+/// below them.
+fn avisos_rect(items: usize, extra: usize, (x, y, w, _): Rect) -> Rect {
+    let bw = 62.min(w.saturating_sub(2));
+    (
+        x + w.saturating_sub(bw) / 2,
+        y + 3,
+        bw,
+        items.max(1) + 5 + extra,
+    )
 }
 
 /// What a workspace is called on the screen: a worktree that has the name it got when it was
@@ -5218,6 +5783,7 @@ fn key_of(code: KeyCode) -> Option<Key> {
         KeyCode::Char('N') => Key::NewProgram,
         KeyCode::Char('d') => Key::Changes,
         KeyCode::Char('x') => Key::Close,
+        KeyCode::Char('X') => Key::DismissAll,
         KeyCode::Char('f') => Key::Full,
         KeyCode::Char('?') => Key::Help,
         KeyCode::Char(',') => Key::Settings,
@@ -5459,44 +6025,103 @@ fn serve_asks(view: &mut View, client: &mut Client) {
     }
 }
 
+/// What a worker thread brings back to the loop: the client never waits for the daemon in the
+/// thread that draws (REQ-658).
+enum Worked {
+    /// The daemon answered the removal (or the closing) of the workspace called `name`.
+    Removed {
+        name: String,
+        worktree: bool,
+        reply: Reply,
+    },
+    /// What the question that asks to remove a worktree wanted to know of it.
+    Checked(Checked),
+}
+
+/// What reading a worktree for the question found: how many commits no remote has, when that was
+/// read, and the node of its uncommitted changes, or why it could not be read.
+struct Checked {
+    ahead: Option<u64>,
+    node: Result<String, String>,
+}
+
+/// Ask the daemon to close a workspace, or to remove its worktree (which it does as a job), in a
+/// thread of its own with a connection of its own.
+fn spawn_remove(
+    socket: std::path::PathBuf,
+    name: String,
+    workspace: String,
+    remove_worktree: bool,
+    force: bool,
+    tx: std::sync::mpsc::Sender<Worked>,
+) {
+    std::thread::spawn(move || {
+        let reply = Client::connect(&socket, &identity::peer("tui-remove")).and_then(|mut c| {
+            c.cmd_within(
+                Cmd::RemoveWorkspace {
+                    workspace,
+                    remove_worktree,
+                    force,
+                },
+                ASK_WAIT,
+            )
+        });
+        let _ = tx.send(Worked::Removed {
+            name,
+            worktree: remove_worktree,
+            reply,
+        });
+    });
+}
+
+/// Read a worktree in a thread of its own, for the question that asks to remove it.
+fn spawn_check(socket: std::path::PathBuf, workspace: String, tx: std::sync::mpsc::Sender<Worked>) {
+    std::thread::spawn(move || {
+        let checked = match Client::connect(&socket, &identity::peer("tui-check")) {
+            Ok(mut c) => check_changes(&mut c, workspace),
+            Err(e) => Checked {
+                ahead: None,
+                node: Err(e.to_string()),
+            },
+        };
+        let _ = tx.send(Worked::Checked(checked));
+    });
+}
+
 /// Read a worktree's uncommitted changes for the question that asks to remove it. A node the
 /// daemon still holds from an earlier look is returned as it was and is only read again while
-/// somebody watches it, so it is read now and the copy this client kept is dropped: the
-/// answer decides what is offered.
-fn check_changes(view: &mut View, client: &mut Client, workspace: String) {
-    const FAILED: &str = "No se pudo mirar los cambios";
+/// somebody watches it, so it is read now: the answer decides what is offered.
+fn check_changes(client: &mut Client, workspace: String) -> Checked {
     // What is not pushed is only said, never needed: without it the question just says less.
-    if let Ok(Ok(Some(r))) = client.cmd_within(
+    let ahead = match client.cmd_within(
         Cmd::CheckWorkspace {
             workspace: workspace.clone(),
         },
         ASK_WAIT,
     ) {
-        view.check_unpushed(r["ahead"].as_u64().unwrap_or(0));
-    }
+        Ok(Ok(Some(r))) => Some(r["ahead"].as_u64().unwrap_or(0)),
+        _ => None,
+    };
     let cmd = Cmd::OpenDiff {
         workspace,
         scope: DiffScope::Uncommitted,
         commit: None,
     };
-    let node = match client.cmd_within(cmd, ASK_WAIT) {
-        Ok(Ok(result)) => result
-            .as_ref()
-            .and_then(|r| r["node"].as_str().map(str::to_owned)),
-        Ok(Err(e)) => return view.manage_failed(FAILED, &e.message),
-        Err(e) => return view.manage_failed(FAILED, &e.to_string()),
+    let node = match reply_value(client.cmd_within(cmd, ASK_WAIT)) {
+        Ok(r) => r["node"]
+            .as_str()
+            .map(str::to_owned)
+            .ok_or_else(|| "el daemon no dio el nodo".to_owned()),
+        Err(why) => Err(why),
     };
-    let Some(node) = node else {
-        return view.manage_failed(FAILED, "el daemon no dio el nodo");
-    };
-    match client.cmd_within(Cmd::RefreshDiff { node: node.clone() }, ASK_WAIT) {
-        Ok(Ok(_)) => {
-            client.nodes.remove(&node);
-            view.check_made(&node);
+    let node = node.and_then(|node| {
+        match client.cmd_within(Cmd::RefreshDiff { node: node.clone() }, ASK_WAIT) {
+            Ok(Ok(_)) => Ok(node),
+            Ok(Err(e)) => Err(e.message),
+            Err(e) => Err(e.to_string()),
         }
-        Ok(Err(e)) => view.manage_failed(FAILED, &e.message),
-        Err(e) => view.manage_failed(FAILED, &e.to_string()),
-    }
+    });
+    Checked { ahead, node }
 }
 
 /// A workspace the daemon made for the client: give it a shell, and open it when it appears.
@@ -5670,6 +6295,7 @@ fn do_after(
     view: &mut View,
     client: &mut Client,
     sync_tx: &std::sync::mpsc::Sender<Reply>,
+    work_tx: &std::sync::mpsc::Sender<Worked>,
 ) -> bool {
     match after {
         After::Quit => return true,
@@ -5802,28 +6428,31 @@ fn do_after(
             remove_worktree,
             force,
         } => {
-            let reply = client.cmd(Cmd::RemoveWorkspace {
+            let name = view.workspace_name(&workspace);
+            spawn_remove(
+                identity::socket_path(),
+                name,
                 workspace,
                 remove_worktree,
                 force,
-            });
-            if remove_worktree {
-                told(
-                    view,
-                    "No se pudo quitar el worktree",
-                    "worktree quitado · la rama se queda",
-                    reply,
-                );
-            } else {
-                told(
-                    view,
-                    "No se pudo cerrar el workspace",
-                    "workspace cerrado · la carpeta se queda",
-                    reply,
-                );
+                work_tx.clone(),
+            );
+        }
+        After::Check(workspace) => {
+            spawn_check(identity::socket_path(), workspace, work_tx.clone());
+        }
+        After::DismissJob(job) => {
+            let reply = client.cmd(Cmd::DismissJob { job });
+            if let Ok(Err(e)) = reply {
+                view.flash(&e.message);
             }
         }
-        After::Check(workspace) => check_changes(view, client, workspace),
+        After::DismissJobs => {
+            let reply = client.cmd(Cmd::DismissJobs {});
+            if let Ok(Err(e)) = reply {
+                view.flash(&e.message);
+            }
+        }
         After::Conv(act) => conversation_cmd(view, client, act),
         After::ReadMarkdown { workspace, path } => {
             let cmd = Cmd::ReadMarkdown {
@@ -5873,6 +6502,7 @@ pub fn run() -> Result<(), String> {
     view.set_os_dark(settings::os_is_dark());
     let mut phone_worker: Option<phone::Worker> = None;
     let (sync_tx, sync_rx) = std::sync::mpsc::channel::<Reply>();
+    let (work_tx, work_rx) = std::sync::mpsc::channel::<Worked>();
     let (files_tx, files_rx) = std::sync::mpsc::channel::<FilesReply>();
     let (prs_tx, prs_rx) = std::sync::mpsc::channel::<PrsReply>();
     let (mut settings_read, mut appearance_read) = (Instant::now(), Instant::now());
@@ -5974,6 +6604,22 @@ pub fn run() -> Result<(), String> {
         while let Ok(reply) = sync_rx.try_recv() {
             view.sync_done(reply);
         }
+        while let Ok(worked) = work_rx.try_recv() {
+            match worked {
+                Worked::Removed {
+                    name,
+                    worktree,
+                    reply,
+                } => view.removed(&name, worktree, reply),
+                Worked::Checked(checked) => {
+                    // The node was read for this question: a copy this client kept is old.
+                    if let Ok(node) = &checked.node {
+                        client.nodes.remove(node);
+                    }
+                    view.checked(checked);
+                }
+            }
+        }
         while let Ok(reply) = files_rx.try_recv() {
             view.files_replied(reply);
         }
@@ -5988,7 +6634,7 @@ pub fn run() -> Result<(), String> {
             spawn_files(ask, files_tx.clone());
         }
         if let Some(after) = view.take_then()
-            && do_after(after, &mut view, &mut client, &sync_tx)
+            && do_after(after, &mut view, &mut client, &sync_tx, &work_tx)
         {
             return Ok(());
         }
@@ -6045,7 +6691,7 @@ pub fn run() -> Result<(), String> {
                 }
                 _ => After::Continue,
             };
-            if do_after(after, &mut view, &mut client, &sync_tx) {
+            if do_after(after, &mut view, &mut client, &sync_tx, &work_tx) {
                 return Ok(());
             }
         }
@@ -7594,11 +8240,487 @@ mod tests {
         let label = format!("avisos {waiting}");
         v.click(120 - label.len() - 1 + 2, 29, 120, 30);
         assert_eq!(v.mode, Mode::Avisos);
-        let rect = avisos_rect(waiting, panes_rect(120, 30));
-        v.click(rect.0 + 6, rect.1 + 2, 120, 30);
+        let rect = avisos_rect(waiting, 0, panes_rect(120, 30));
+        v.click(rect.0 + 6, rect.1 + 3, 120, 30);
         assert_eq!(v.mode, Mode::Workspaces);
         assert!(v.opened.is_some());
         assert!(v.avisos().len() < waiting, "going there cleared it");
+    }
+
+    fn job(id: &str, kind: JobKind, workspace: &str, name: &str, state: JobState) -> Job {
+        Job {
+            id: id.into(),
+            kind,
+            workspace: workspace.into(),
+            name: name.into(),
+            state,
+            started_at: 1_000_000,
+            duration_ms: (state != JobState::Running).then_some(4_200),
+            detail: None,
+            cancellable: kind == JobKind::SyncWorkspace,
+        }
+    }
+
+    /// The fixture's session with these jobs, read as the loop reads them.
+    fn with_jobs(v: &mut View, jobs: Vec<Job>) {
+        v.session.as_mut().unwrap().jobs = jobs;
+        v.watch_jobs();
+    }
+
+    fn bar(v: &View) -> String {
+        v.plain(120, 30).lines().last().unwrap().to_owned()
+    }
+
+    /// REQ-655, REQ-656: the jobs have a tab of their own in «avisos» and a mark beside
+    /// `avisos N`, and they are never counted as alerts.
+    #[test]
+    fn jobs_have_a_tab_and_a_mark_and_are_not_alerts() {
+        let mut v = fixture_view();
+        let alerts = v.avisos().len();
+        assert!(alerts > 0);
+        let ws = v.selected_id().unwrap();
+        let mut failed = job(
+            "j3",
+            JobKind::RemoveWorkspace,
+            &ws,
+            "app: old",
+            JobState::Failed,
+        );
+        failed.detail = Some("fatal: contains modified or untracked files".into());
+        with_jobs(
+            &mut v,
+            vec![
+                job(
+                    "j1",
+                    JobKind::RemoveWorkspace,
+                    &ws,
+                    "app: b1",
+                    JobState::Running,
+                ),
+                job("j2", JobKind::SyncWorkspace, &ws, "feat/x", JobState::Done),
+                failed,
+            ],
+        );
+        v.set_now(1_000_000 + 3_400);
+        assert_eq!(v.avisos().len(), alerts, "a job is no alert");
+        let bar_text = bar(&v);
+        assert!(bar_text.contains(" 1 trabajo"), "{bar_text}");
+        assert!(bar_text.contains(&format!("avisos {alerts}")), "{bar_text}");
+        assert!(
+            bar_text.find("trabajo").unwrap() < bar_text.find("avisos").unwrap(),
+            "the jobs' mark is to the left of avisos: {bar_text}"
+        );
+
+        // With alerts waiting, the box opens on them; Tab goes to the jobs.
+        v.press(Key::Avisos);
+        let t = v.plain(120, 30);
+        assert!(t.contains("alertas") && t.contains("trabajos"), "{t}");
+        assert!(t.contains("pide permiso"), "{t}");
+        v.press(Key::Next);
+        let t = v.plain(120, 30);
+        assert!(t.contains("quitar app: b1"), "{t}");
+        assert!(t.contains("3,4 s"), "the time it runs, live: {t}");
+        assert!(t.contains("subir feat/x") && t.contains("✓"), "{t}");
+        assert!(t.contains("quitar app: old") && t.contains("✗"), "{t}");
+        assert!(t.contains("corriendo · no se cancela"), "{t}");
+        v.press(Key::Down);
+        v.press(Key::Down);
+        let t = v.plain(120, 30);
+        assert!(t.contains("fatal: contains modified"), "the cause: {t}");
+        v.press(Key::Next);
+        assert_eq!(v.avisos_tab, AvisosTab::Alertas);
+    }
+
+    /// REQ-656: what ended is a mark until the tab is opened, and the failure is red and
+    /// counts apart from the alerts.
+    #[test]
+    fn what_ended_is_a_mark_until_the_tab_has_been_opened() {
+        let mut v = fixture_view();
+        let ws = v.selected_id().unwrap();
+        with_jobs(
+            &mut v,
+            vec![
+                job(
+                    "j1",
+                    JobKind::RemoveWorkspace,
+                    &ws,
+                    "app: a",
+                    JobState::Failed,
+                ),
+                job("j2", JobKind::SyncWorkspace, &ws, "b", JobState::Done),
+            ],
+        );
+        let alerts = v.avisos().len();
+        let b = bar(&v);
+        assert!(b.contains("✗ 1 ✓ 1"), "{b}");
+        assert_eq!(v.avisos().len(), alerts);
+        v.press(Key::Avisos);
+        v.press(Key::Next);
+        v.press(Key::Back);
+        let b = bar(&v);
+        assert!(!b.contains('✗') || !b.contains("✗ 1"), "seen: {b}");
+        assert_eq!(v.jobs_mark(), None);
+        // With no alert waiting, the mark is what the box opens on.
+        let mut quiet = fixture_view();
+        for w in &mut quiet.session.as_mut().unwrap().workspaces {
+            w.attention.clear();
+        }
+        with_jobs(
+            &mut quiet,
+            vec![job("j9", JobKind::SyncWorkspace, &ws, "c", JobState::Done)],
+        );
+        quiet.press(Key::Avisos);
+        assert_eq!(quiet.avisos_tab, AvisosTab::Trabajos);
+    }
+
+    /// REQ-658: a removal that ends is said in the bar, in green or red.
+    #[test]
+    fn a_removal_that_ends_is_said_in_the_bar() {
+        let mut v = fixture_view();
+        let ws = v.selected_id().unwrap();
+        with_jobs(
+            &mut v,
+            vec![job(
+                "j1",
+                JobKind::RemoveWorkspace,
+                &ws,
+                "app: b1",
+                JobState::Running,
+            )],
+        );
+        assert_eq!(v.flash, "", "a job that was already running says nothing");
+        with_jobs(
+            &mut v,
+            vec![job(
+                "j1",
+                JobKind::RemoveWorkspace,
+                &ws,
+                "app: b1",
+                JobState::Done,
+            )],
+        );
+        assert_eq!(v.flash, "quitado app: b1 · 4,2 s");
+        with_jobs(
+            &mut v,
+            vec![job(
+                "j2",
+                JobKind::RemoveWorkspace,
+                &ws,
+                "app: b2",
+                JobState::Running,
+            )],
+        );
+        with_jobs(
+            &mut v,
+            vec![job(
+                "j2",
+                JobKind::RemoveWorkspace,
+                &ws,
+                "app: b2",
+                JobState::Failed,
+            )],
+        );
+        assert_eq!(v.flash, "✗ no se pudo quitar app: b2");
+        assert!(bar(&v).contains("✗ no se pudo quitar app: b2"));
+    }
+
+    /// REQ-657: the row of a workspace being removed has a spinner and a dim name, nothing acts
+    /// on it, and when the removal failed it has a red cross until the job is dismissed.
+    #[test]
+    fn a_workspace_being_removed_is_not_acted_on_and_a_failure_marks_its_row() {
+        let mut v = fixture_view();
+        let ws = v.selected_id().unwrap();
+        let at = v.selected;
+        v.session.as_mut().unwrap().workspaces[at].working = false;
+        // The row of the workspace in the sidebar, below the title.
+        let row = |v: &View| {
+            v.plain(120, 30)
+                .lines()
+                .skip(2)
+                .find(|l| l.contains("feat/login"))
+                .unwrap()
+                .chars()
+                .take(SIDEBAR)
+                .collect::<String>()
+        };
+        assert!(
+            !row(&v).contains('⠋') && !row(&v).contains('✗'),
+            "{}",
+            row(&v)
+        );
+        v.session.as_mut().unwrap().workspaces[at].removing = true;
+        assert!(row(&v).contains('⠋'), "{}", row(&v));
+        for key in [
+            Key::Close,
+            Key::Sync,
+            Key::Changes,
+            Key::NewPane,
+            Key::Enter,
+        ] {
+            assert_eq!(v.press(key), After::Continue);
+            assert_eq!(v.flash, "ya se está quitando", "{key:?}");
+            assert!(v.manage.is_none());
+            v.flash.clear();
+        }
+
+        v.session.as_mut().unwrap().workspaces[at].removing = false;
+        assert!(!row(&v).contains('⠋'));
+        with_jobs(
+            &mut v,
+            vec![job(
+                "j1",
+                JobKind::RemoveWorkspace,
+                &ws,
+                "app: b1",
+                JobState::Failed,
+            )],
+        );
+        assert!(row(&v).contains('✗'), "{}", row(&v));
+        with_jobs(&mut v, vec![]);
+        assert!(!row(&v).contains('✗'));
+    }
+
+    /// REQ-655: `x` dismisses the job that ended, `X` all of them, and one that runs is not
+    /// dismissed; `c` stops a push and says that a removal cannot be stopped.
+    #[test]
+    fn the_tab_dismisses_what_ended_and_stops_only_what_can_be_stopped() {
+        let mut v = fixture_view();
+        let ws = v.selected_id().unwrap();
+        with_jobs(
+            &mut v,
+            vec![
+                job("j1", JobKind::RemoveWorkspace, &ws, "a", JobState::Running),
+                job("j2", JobKind::SyncWorkspace, &ws, "b", JobState::Running),
+                job("j3", JobKind::SyncWorkspace, &ws, "c", JobState::Done),
+            ],
+        );
+        v.press(Key::Avisos);
+        v.press(Key::Next);
+        assert_eq!(v.press(Key::Close), After::Continue, "a job that runs");
+        assert_eq!(v.flash, "un trabajo que corre no se descarta");
+        assert_eq!(v.press(Key::CopyCmd), After::Continue);
+        assert_eq!(v.flash, "este trabajo no se cancela");
+        v.press(Key::Down);
+        assert_eq!(
+            v.press(Key::CopyCmd),
+            After::CancelOp {
+                workspace: ws.clone()
+            }
+        );
+        v.press(Key::Down);
+        assert_eq!(v.press(Key::Close), After::DismissJob("j3".into()));
+        assert_eq!(v.press(Key::DismissAll), After::DismissJobs);
+        // On the tab of alerts none of these is a key.
+        v.press(Key::Next);
+        assert_eq!(v.press(Key::Close), After::Continue);
+        assert_eq!(v.press(Key::DismissAll), After::Continue);
+    }
+
+    /// `↵` on a job goes to its workspace, and says so when that is gone.
+    #[test]
+    fn enter_on_a_job_goes_to_its_workspace() {
+        let mut v = fixture_view();
+        let ws = v.selected_id().unwrap();
+        with_jobs(
+            &mut v,
+            vec![
+                job("j1", JobKind::SyncWorkspace, "nowhere", "a", JobState::Done),
+                job("j2", JobKind::SyncWorkspace, &ws, "b", JobState::Done),
+            ],
+        );
+        v.press(Key::Avisos);
+        v.press(Key::Next);
+        v.press(Key::Enter);
+        assert_eq!(v.mode, Mode::Avisos, "it stays");
+        assert_eq!(v.flash, "ese workspace ya no está");
+        v.press(Key::Down);
+        v.press(Key::Enter);
+        assert_eq!(v.mode, Mode::Workspaces);
+        assert_eq!(v.opened.as_deref(), Some(ws.as_str()));
+    }
+
+    /// REQ-658: what the worker read for the question is used while the question is open, and
+    /// one that was closed meanwhile makes no box.
+    #[test]
+    fn what_the_worker_read_serves_the_question_that_still_waits() {
+        let mut v = idle_view();
+        close_workspace(&mut v);
+        let ws = v.selected_id().unwrap();
+        assert_eq!(tap(&mut v, 'd'), After::Check(ws));
+        v.checked(Checked {
+            ahead: Some(2),
+            node: Err("git no contesta".into()),
+        });
+        let t = v.plain(120, 30);
+        assert!(t.contains("No se pudo mirar los cambios"), "{t}");
+        assert!(t.contains("git no contesta"), "{t}");
+
+        let mut v = idle_view();
+        close_workspace(&mut v);
+        tap(&mut v, 'd');
+        // `esc` goes back to the question and `esc` again closes it.
+        for _ in 0..2 {
+            v.press_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        }
+        assert!(v.manage.is_none());
+        v.checked(Checked {
+            ahead: Some(2),
+            node: Err("late".into()),
+        });
+        assert!(v.manage.is_none(), "nobody asks any more");
+    }
+
+    /// REQ-658 against a real daemon in a private directory (never the person's): what the worker
+    /// reads for the question, and the removal that answers with a job while git is at work.
+    #[test]
+    fn the_workers_ask_a_real_daemon_and_the_removal_answers_with_a_job() {
+        let dir = std::path::PathBuf::from(format!("/tmp/jwn-tui-t-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let git = |at: &Path, args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(at)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}");
+        };
+        let app = std::fs::canonicalize(&dir).unwrap().join("app");
+        std::fs::create_dir_all(&app).unwrap();
+        git(&app, &["init", "-q", "-b", "main"]);
+        std::fs::write(app.join("f"), "x").unwrap();
+        git(&app, &["add", "."]);
+        git(
+            &app,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-q",
+                "-m",
+                "i",
+            ],
+        );
+        let config = daemon::Config {
+            socket: dir.join("s.sock"),
+            state_dir: dir.join("state"),
+            shell: Some("/bin/sh".into()),
+            tcp: None,
+            env: Vec::new(),
+            blocks: true,
+            link: daemon::LinkConfig::off(),
+            hook_exe: None,
+            gh: None,
+            github_every: Duration::from_secs(60),
+            conversation: false,
+            projects: dir.join("projects"),
+            chrome: false,
+        };
+        let socket = config.socket.clone();
+        let daemon = daemon::Daemon::start(config).unwrap();
+        let mut c = Client::connect(&socket, "tui-test").unwrap();
+        let made = c
+            .cmd(Cmd::CreateWorktree {
+                repo: app.to_string_lossy().into_owned(),
+                branch: "b1".into(),
+                base: None,
+                folder: None,
+            })
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let ws = made["workspace"].as_str().unwrap().to_owned();
+        let wt = dir.join("app-wt/b1");
+        std::fs::write(wt.join("dirty"), "x").unwrap();
+
+        let checked = check_changes(&mut c, ws.clone());
+        assert_eq!(checked.ahead, Some(1), "the commit that no remote has");
+        assert!(checked.node.is_ok(), "{:?}", checked.node);
+
+        // The removal: the reply is the job, at once, whether git agrees or not.
+        let (tx, rx) = std::sync::mpsc::channel();
+        spawn_remove(
+            socket.clone(),
+            "app: b1".into(),
+            ws.clone(),
+            true,
+            false,
+            tx.clone(),
+        );
+        let Ok(Worked::Removed {
+            reply, worktree, ..
+        }) = rx.recv_timeout(Duration::from_secs(20))
+        else {
+            panic!("the worker did not answer");
+        };
+        assert!(worktree);
+        assert!(reply_value(reply).unwrap()["job"].is_string());
+        let root = c.root.clone();
+        c.open(&root).unwrap();
+        let ended = c
+            .wait_until(Duration::from_secs(20), |c| {
+                c.nodes.get(&root).is_some_and(|s| {
+                    s["jobs"][0]["state"] == "failed" && s["jobs"][0]["name"] == "app: b1"
+                })
+            })
+            .unwrap();
+        assert!(ended, "git refused the dirty worktree: a failed job");
+        assert!(wt.exists());
+        std::fs::remove_file(wt.join("dirty")).unwrap();
+        spawn_remove(socket.clone(), "app: b1".into(), ws, true, false, tx);
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(20)),
+            Ok(Worked::Removed {
+                reply: Ok(Ok(_)),
+                ..
+            })
+        ));
+        let gone = c
+            .wait_until(Duration::from_secs(20), |c| {
+                c.nodes[&root]["jobs"][0]["state"] == "done"
+            })
+            .unwrap();
+        assert!(gone && !wt.exists());
+        daemon.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The mark of the jobs in the bar opens the tab of jobs, and a click on a tab changes it.
+    #[test]
+    fn clicking_the_jobs_mark_opens_the_tab_and_a_tab_is_clicked() {
+        let mut v = fixture_view();
+        let ws = v.selected_id().unwrap();
+        with_jobs(
+            &mut v,
+            vec![job(
+                "j1",
+                JobKind::SyncWorkspace,
+                &ws,
+                "b",
+                JobState::Running,
+            )],
+        );
+        let at = v.bar_marks(120).jobs.unwrap().0;
+        v.click(at + 1, 29, 120, 30);
+        assert_eq!((v.mode, v.avisos_tab), (Mode::Avisos, AvisosTab::Trabajos));
+        let (listed, extra) = v.avisos_rows();
+        let rect = avisos_rect(listed, extra, panes_rect(120, 30));
+        v.click(rect.0 + 4, rect.1 + 1, 120, 30);
+        assert_eq!(v.avisos_tab, AvisosTab::Alertas);
+        v.click(rect.0 + 30, rect.1 + 1, 120, 30);
+        assert_eq!(v.avisos_tab, AvisosTab::Trabajos);
+    }
+
+    #[test]
+    fn a_time_is_said_in_seconds_and_minutes() {
+        assert_eq!(took(0), "0,0 s");
+        assert_eq!(took(4_200), "4,2 s");
+        assert_eq!(took(38_400), "38 s");
+        assert_eq!(took(119_000), "119 s");
+        assert_eq!(took(180_000), "3 min");
     }
 
     #[test]
