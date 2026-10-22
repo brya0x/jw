@@ -244,7 +244,7 @@ fn resolve_workspace<'a>(
 }
 
 /// The group `word` names: its id, else exactly its name without regard to case (names are
-/// unique so, REQ-664).
+/// unique so, REQ-686).
 fn resolve_group<'a>(word: &str, all: &'a [Group]) -> Result<&'a Group, String> {
     let lower = word.to_lowercase();
     let stage = |fits: &dyn Fn(&Group) -> bool| all.iter().filter(|g| fits(g)).collect();

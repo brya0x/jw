@@ -150,7 +150,7 @@ fn ls_and_pane_ls_say_what_there_is_in_text_and_in_json_and_bad_uses_exit_2() {
     let rows = w.ok(None, &["ls"]);
     assert_eq!(
         rows, "app\tfolder\t-\t1 panes\t-\t-\n",
-        "REQ-679: the group is the last column"
+        "REQ-701: the group is the last column"
     );
     let json = w.json(&["ls", "--json"]);
     assert_eq!(json[0]["name"], "app");

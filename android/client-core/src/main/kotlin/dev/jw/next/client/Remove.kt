@@ -21,7 +21,7 @@ data class MenuItem(val action: WsAction, val glyph: String, val label: String, 
 /** The sheet of a workspace is one for each kind: a repository's root, a folder that is not one, a worktree (REQ-227). Only a worktree is renamed: a folder is a directory on disk. */
 fun workspaceMenu(kind: HomeKind, repo: String?): List<MenuItem> = listOf(MOVE_TO_GROUP) + kindMenu(kind, repo)
 
-/** «mover a un grupo…», on every kind's sheet (REQ-676); its note says where the workspace is and what moving takes ([MoveTo.note]). */
+/** «mover a un grupo…», on every kind's sheet (REQ-698); its note says where the workspace is and what moving takes ([MoveTo.note]). */
 private val MOVE_TO_GROUP = MenuItem(WsAction.MoveToGroup, "⇄", "mover a un grupo…", null, false)
 
 private fun kindMenu(kind: HomeKind, repo: String?): List<MenuItem> = when (kind) {

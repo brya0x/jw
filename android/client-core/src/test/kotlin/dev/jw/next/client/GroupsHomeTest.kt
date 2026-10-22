@@ -13,7 +13,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * REQ-669 to REQ-678 on the phone: Home's list with groups, what a folded group says, the sheet
+ * REQ-691 to REQ-700 on the phone: Home's list with groups, what a folded group says, the sheet
  * of a move, the chips of Avisos and the groups that are folded. The cases are those of
  * `crates/jw/src/tui/side.rs`, on `snapshot-session-groups.json`: `salesassist` with `app` and its
  * worktree `feat/login`, `ideas` with nothing, and `notes` in none.

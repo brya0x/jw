@@ -71,7 +71,7 @@ interface NodeSource {
         reply(Result.failure(UnsupportedOperationException("sin conexión a un PC")))
     }
 
-    /** Make a group and put the repository of [workspace] in it: the id of the group is read from the first reply, not guessed (REQ-676). */
+    /** Make a group and put the repository of [workspace] in it: the id of the group is read from the first reply, not guessed (REQ-698). */
     fun createGroupWith(name: String, workspace: Id, reply: (Result<Unit>) -> Unit) {
         createGroup(name) { made ->
             made.fold({ group -> moveToGroup(workspace, group, reply) }, { reply(Result.failure(it)) })
@@ -283,9 +283,9 @@ data class ClientState(
     val draft: Draft? = null,
     /** The tab of Avisos that shows. */
     val avisosTab: AvisosTab = AvisosTab.Alertas,
-    /** The groups that are folded on this phone, for the PC it is connected to (REQ-678). */
+    /** The groups that are folded on this phone, for the PC it is connected to (REQ-700). */
     val folded: Set<Id> = emptySet(),
-    /** The chip of Avisos: null for every alert, [NO_GROUP], or a group's id (REQ-677). */
+    /** The chip of Avisos: null for every alert, [NO_GROUP], or a group's id (REQ-699). */
     val avisosFilter: Id? = null,
 )
 
@@ -305,7 +305,7 @@ class Navigator(private val source: NodeSource) {
         val target = pane ?: ws?.panes?.firstOrNull()?.id
         var seen = markNode(s.seen, id)
         if (target != null) seen = markNode(seen, target)
-        // The workspace's group opens, so that the list shows where it is on the way back (REQ-675).
+        // The workspace's group opens, so that the list shows where it is on the way back (REQ-697).
         val group = source.session().workspaces.firstOrNull { it.id == id }?.group
         return ClientState(
             Screen.Workspace(id, target), seen, id, listOf(id) + s.recent.filter { it != id }.take(RECENT - 1),
@@ -313,12 +313,12 @@ class Navigator(private val source: NodeSource) {
         )
     }
 
-    /** A tap on the row of a group folds it or opens it (REQ-675). */
+    /** A tap on the row of a group folds it or opens it (REQ-697). */
     fun toggleGroup(s: ClientState, group: Id): ClientState =
         s.copy(folded = if (group in s.folded) s.folded - group else s.folded + group)
 
     /**
-     * A group the PC no longer lists is forgotten (REQ-678), folded or chosen in Avisos, once the PC
+     * A group the PC no longer lists is forgotten (REQ-700), folded or chosen in Avisos, once the PC
      * has sent its session: until then, between its hello and the document, the session is an empty
      * stand-in (no id, no epoch) and what was folded is still the person's.
      */
@@ -331,7 +331,7 @@ class Navigator(private val source: NodeSource) {
         return if (folded == s.folded && filter == s.avisosFilter) s else s.copy(folded = folded, avisosFilter = filter)
     }
 
-    /** The chip of Avisos that is pressed (REQ-677). */
+    /** The chip of Avisos that is pressed (REQ-699). */
     fun filterAvisos(s: ClientState, by: Id?): ClientState = s.copy(avisosFilter = by)
 
     fun selectPane(s: ClientState, pane: Id): ClientState {

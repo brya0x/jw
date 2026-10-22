@@ -11,7 +11,7 @@ use contract::{OpenKind, ProjectInfo, WorktreeInfo};
 use crossterm::event::KeyCode;
 use daemon::browse::{home, is_git, subdirs};
 
-use super::{Grid, Rect, Style, clip, look};
+use super::{Grid, Rect, Style, clip, erase, look};
 
 /// What a row of the browser is.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -174,6 +174,18 @@ impl Picker {
             });
         }
         rows
+    }
+
+    /// Option-backspace: the word of the search before the cursor, or the folder above when
+    /// the search is empty, as backspace does.
+    pub fn erase_word(&mut self) {
+        if self.query.is_empty() {
+            self.up();
+        } else {
+            erase::pop_word(&mut self.query);
+            self.sel = 0;
+        }
+        self.refresh();
     }
 
     pub fn press(&mut self, code: KeyCode, ctrl: bool, is_open: &dyn Fn(&Path) -> bool) -> Pick {
@@ -684,6 +696,21 @@ impl Worktree {
             branch: branch.clone(),
             folder,
         }
+    }
+
+    /// Option-backspace in the name: the word before the cursor; a name that was picked from
+    /// the list goes whole, as with backspace.
+    pub fn erase_word(&mut self) {
+        if self.side != Side::New {
+            return;
+        }
+        if self.picked {
+            self.name.clear();
+        } else {
+            erase::pop_word(&mut self.name);
+        }
+        self.picked = false;
+        self.plan = self.check();
     }
 
     pub fn press(&mut self, code: KeyCode, ctrl: bool) -> Make {
@@ -1345,6 +1372,36 @@ mod tests {
         p.press(KeyCode::Right, false, &none);
         p.press(KeyCode::Left, false, &none);
         assert!(names(&p).contains(&"later/".to_owned()));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn option_backspace_takes_a_word_of_the_search_and_of_the_name() {
+        let root = tree("erase");
+        let mut p = Picker::new(root.clone());
+        for c in "ab cd".chars() {
+            p.press(KeyCode::Char(c), false, &none);
+        }
+        p.erase_word();
+        assert_eq!(p.query, "ab ");
+        p.erase_word();
+        assert_eq!(p.query, "");
+        p.erase_word();
+        assert_eq!(
+            p.dir,
+            root.parent().unwrap(),
+            "with nothing typed it goes up, as backspace"
+        );
+
+        let app = repo(&root);
+        let mut t = ready(&app, vec![], defaults(&root));
+        t.erase_word();
+        assert_eq!(t.name, "", "the suggestion goes whole");
+        for c in "feat login".chars() {
+            t.press(KeyCode::Char(c), false);
+        }
+        t.erase_word();
+        assert_eq!(t.name, "feat ");
         let _ = std::fs::remove_dir_all(root);
     }
 }

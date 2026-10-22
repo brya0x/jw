@@ -9,7 +9,7 @@ use contract::{Diff, FileStatus};
 use crossterm::event::KeyCode;
 
 use super::settings::{Mode, Settings};
-use super::{Grid, Rect, Rgb, Style, clip, look};
+use super::{Grid, Rect, Rgb, Style, clip, erase, look};
 
 /// The workspace a question is about, with what the question says of it.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -84,13 +84,13 @@ pub enum Manage {
     /// `,`: the mode and the themes of the kind in force; `cursor` is the one the keys are on
     /// and `shown` how many there are.
     Settings { cursor: usize, shown: usize },
-    /// `G`, `r` on a group, and `n` in `MoveTo`: the name of a group being typed (REQ-672).
+    /// `G`, `r` on a group, and `n` in `MoveTo`: the name of a group being typed (REQ-694).
     GroupName {
         target: Naming,
         title: String,
         text: String,
     },
-    /// `x` on a group: its workspaces stay and belong to none (REQ-665).
+    /// `x` on a group: its workspaces stay and belong to none (REQ-687).
     DeleteGroup {
         group: String,
         name: String,
@@ -108,7 +108,7 @@ pub enum Manage {
     },
 }
 
-/// The most characters the name of a group has (REQ-664): the box takes no more.
+/// The most characters the name of a group has (REQ-686): the box takes no more.
 pub const MAX_GROUP_NAME: usize = 40;
 
 /// What the name of a group typed in `GroupName` is for.
@@ -175,6 +175,17 @@ pub enum Act {
 }
 
 impl Manage {
+    /// Option-backspace: the word before the cursor in the name being typed (a rename, the
+    /// branch that confirms a removal); any other question is left as it is.
+    pub fn erase_word(mut self) -> Manage {
+        match &mut self {
+            Manage::Rename { text, .. } => erase::pop_word(text),
+            Manage::Dirty { typed, .. } => erase::pop_word(typed),
+            _ => {}
+        }
+        self
+    }
+
     /// The question after `code`, and what to send. `None` closes it.
     pub fn press(self, code: KeyCode) -> (Option<Manage>, Option<Act>) {
         let esc = code == KeyCode::Esc;
@@ -1063,5 +1074,21 @@ mod tests {
             (None, to(Dest::Group("g2".into())))
         );
         assert_eq!(move_to(None, 0).press(KeyCode::Esc), (None, None));
+    }
+
+    #[test]
+    fn option_backspace_takes_a_word_of_the_name_typed_and_changes_no_other_question() {
+        assert_eq!(dirty("feat login").erase_word(), dirty("feat "));
+        let rename = Manage::Rename {
+            target: Named::Pane("p".into()),
+            title: "t".into(),
+            text: "uno dos".into(),
+        };
+        let Manage::Rename { text, .. } = rename.erase_word() else {
+            panic!()
+        };
+        assert_eq!(text, "uno ");
+        let q = Manage::Workspace(target(true));
+        assert_eq!(q.clone().erase_word(), q);
     }
 }

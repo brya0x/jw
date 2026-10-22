@@ -1,4 +1,4 @@
-//! N161a: groups of workspaces (REQ-662 to REQ-668), against real git in a temp dir.
+//! N164a: groups of workspaces (REQ-684 to REQ-690), against real git in a temp dir.
 
 mod common;
 
@@ -104,7 +104,7 @@ fn a_session_with_no_group_says_none_and_a_group_is_made_renamed_ordered_and_del
     let (a, b) = (plain(&sb, "a"), plain(&sb, "b"));
     let (wa, wb) = (open(&mut c, &a), open(&mut c, &b));
     let s = session(&mut c);
-    assert!(s.get("groups").is_none(), "absent when empty (REQ-662)");
+    assert!(s.get("groups").is_none(), "absent when empty (REQ-684)");
     assert!(s["workspaces"][0].get("group").is_none());
 
     let sales = make_group(&mut c, "  salesassist ");
@@ -128,7 +128,7 @@ fn a_session_with_no_group_says_none_and_a_group_is_made_renamed_ordered_and_del
     })
     .unwrap()
     .unwrap();
-    // the groups come in their order, whatever order the workspaces were opened in (REQ-668)
+    // the groups come in their order, whatever order the workspaces were opened in (REQ-690)
     assert_eq!(
         shape(&mut c).1,
         [pair("a", "salesassist"), pair("b", "ideas")]
@@ -142,7 +142,7 @@ fn a_session_with_no_group_says_none_and_a_group_is_made_renamed_ordered_and_del
     let (names, ws) = shape(&mut c);
     assert_eq!(names, ["ideas", "salesassist"]);
     assert_eq!(ws, [pair("b", "ideas"), pair("a", "salesassist")]);
-    // at the ends nothing changes and it is ok (REQ-667)
+    // at the ends nothing changes and it is ok (REQ-689)
     for (group, delta) in [(&ideas, -1), (&sales, 1)] {
         c.cmd(Cmd::MoveGroup {
             group: group.clone(),
@@ -161,7 +161,7 @@ fn a_session_with_no_group_says_none_and_a_group_is_made_renamed_ordered_and_del
     .unwrap();
     assert_eq!(shape(&mut c).0, ["ideas", "Sales Assist"]);
 
-    // deleting releases the workspaces and closes nothing (REQ-665)
+    // deleting releases the workspaces and closes nothing (REQ-687)
     c.cmd(Cmd::DeleteGroup {
         group: sales.clone(),
     })
@@ -207,7 +207,7 @@ fn a_repositorys_workspaces_move_together_and_a_workspace_opened_again_and_a_res
         .unwrap()
         .to_owned();
     let g = make_group(&mut c, "product");
-    // moving the worktree moves the repository: its root goes too, the others stay (REQ-666)
+    // moving the worktree moves the repository: its root goes too, the others stay (REQ-688)
     c.cmd(Cmd::MoveToGroup {
         workspace: wt,
         group: Some(g.clone()),
@@ -223,7 +223,7 @@ fn a_repositorys_workspaces_move_together_and_a_workspace_opened_again_and_a_res
             pair("notes", "-"),
         ]
     );
-    // closing the root and opening it again: the group was kept under the repository (REQ-663)
+    // closing the root and opening it again: the group was kept under the repository (REQ-685)
     c.cmd(Cmd::RemoveWorkspace {
         workspace: root,
         remove_worktree: false,
@@ -410,7 +410,7 @@ fn move_repo(c: &mut wire::Client, workspace: &str, delta: i32) {
     .unwrap();
 }
 
-/// REQ-680: a repository's workspaces swap with the neighbouring repository's inside the group, a
+/// REQ-702: a repository's workspaces swap with the neighbouring repository's inside the group, a
 /// loose folder stays last, another group's order is not touched, and the ends change nothing.
 #[test]
 fn a_repository_swaps_with_its_neighbour_inside_its_group_and_nowhere_else() {

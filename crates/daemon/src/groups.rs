@@ -1,4 +1,4 @@
-//! Groups of workspaces (REQ-662 to REQ-667): a name that gathers the repositories, worktrees and
+//! Groups of workspaces (REQ-684 to REQ-689): a name that gathers the repositories, worktrees and
 //! folders of one product. A group is organization only: it closes, moves and changes nothing on
 //! disk. The group of a workspace is kept under `Workspace::group_key`, so a repository's root and
 //! its worktrees share it and a workspace that is opened again finds it.
@@ -123,7 +123,7 @@ pub fn move_group(shared: &Shared, group: &str, delta: i32) -> Done {
 }
 
 /// Swap the repository of a workspace with its neighbour among those of the same group, or of no
-/// group (REQ-680): the later repository's workspaces move, in their order, to just before the
+/// group (REQ-702): the later repository's workspaces move, in their order, to just before the
 /// earlier one's first, which is the order `grouping::group` reads and what `session.json` keeps.
 pub fn move_repo(shared: &Shared, workspace: &str, delta: i32) -> Done {
     if delta != -1 && delta != 1 {

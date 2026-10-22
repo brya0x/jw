@@ -5,7 +5,7 @@
 use contract::PrInfo;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use super::{Grid, Rect, Style, clip, look, shell};
+use super::{Grid, Rect, Style, clip, erase, look, shell};
 
 /// What the list holds: it is being read, it is read, or `gh` could not.
 pub enum Load {
@@ -124,7 +124,7 @@ impl Prs {
                 }
             }
             KeyCode::Backspace => {
-                self.query.pop();
+                erase::back(&mut self.query, ev);
                 self.sel = 0;
             }
             KeyCode::Char('m') if plain && self.query.is_empty() => {
@@ -450,5 +450,18 @@ mod tests {
         );
         p.stop_making();
         assert_eq!(p.press(&key(KeyCode::Esc)), Act::Close);
+    }
+
+    #[test]
+    fn option_backspace_takes_a_word_of_the_search() {
+        let mut p = ready();
+        for c in "ab cd".chars() {
+            p.press(&key(KeyCode::Char(c)));
+        }
+        p.press(&super::erase::canonical(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::ALT,
+        )));
+        assert_eq!(p.query, "ab ");
     }
 }

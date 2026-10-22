@@ -29,6 +29,29 @@ pub struct Look<'a> {
 /// the `!` of a shell line.
 pub type Mark = (usize, usize, Rgb);
 
+/// Where each row of `chars` begins when it is wrapped to `width` as `wrap` does; with the cursor
+/// at the end of a last row that is full, one more row, empty, is where it is.
+pub fn row_starts(chars: &[char], width: usize, cursor: usize) -> Vec<usize> {
+    let mut starts = vec![0];
+    let mut len = 0;
+    for (i, c) in chars.iter().enumerate() {
+        if *c == '\n' {
+            starts.push(i + 1);
+            len = 0;
+            continue;
+        }
+        if len >= width {
+            starts.push(i);
+            len = 0;
+        }
+        len += 1;
+    }
+    if cursor >= chars.len() && len >= width {
+        starts.push(chars.len());
+    }
+    starts
+}
+
 /// The text of the field wrapped to its rows, and where the cursor is in them.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Field {
@@ -387,5 +410,31 @@ mod tests {
             (f.rows.as_slice(), f.cursor, f.is_empty()),
             (&["❯ ls -la".to_owned()][..], (0, 8), false)
         );
+    }
+
+    /// The editor counts the rows of the line as the field draws them (REQ-680).
+    #[test]
+    fn the_rows_the_editor_counts_are_the_rows_that_are_drawn() {
+        for (text, width) in [
+            ("", 5),
+            ("abc", 5),
+            ("abcde", 5),
+            ("abcdef", 5),
+            ("abcde\nfg", 5),
+            ("abcde\n", 5),
+            ("\n\nab", 5),
+            ("año ñandú\nxy", 4),
+            ("abcdefghij", 5),
+        ] {
+            let chars: Vec<char> = text.chars().collect();
+            for cursor in 0..=chars.len() {
+                let drawn = wrap(text, cursor, width, None, &[]);
+                assert_eq!(
+                    row_starts(&chars, width, cursor),
+                    drawn.starts,
+                    "{text:?} at {width}, cursor {cursor}"
+                );
+            }
+        }
     }
 }

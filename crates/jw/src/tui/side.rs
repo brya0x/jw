@@ -1,7 +1,7 @@
 //! The rows of the sidebar (prototypes: `docs/prototypes/tui-levels.html`, and `groups.html` for
 //! the groups). The daemon sends the workspaces with each group's together, in each group each
 //! repository's root and worktrees together, and the folders that are not repositories last
-//! (REQ-219, REQ-668); the sidebar adds the headings and the rows of the groups.
+//! (REQ-219, REQ-690); the sidebar adds the headings and the rows of the groups.
 
 use std::collections::HashSet;
 
@@ -14,7 +14,7 @@ use super::base;
 #[derive(Debug, PartialEq, Eq)]
 pub enum Side {
     Head(String),
-    /// The heading of the workspaces that are in no group, WHERE a group exists (REQ-669).
+    /// The heading of the workspaces that are in no group, WHERE a group exists (REQ-691).
     Ungrouped,
     /// The row of the group at an index into the session's groups.
     Group(usize),
@@ -200,7 +200,7 @@ mod tests {
         w
     }
 
-    /// REQ-669: the rows of each group in order, `vacío` for one that holds nothing, `sin grupo`
+    /// REQ-691: the rows of each group in order, `vacío` for one that holds nothing, `sin grupo`
     /// over what is in none, no `carpetas` among groups, and a repository's heading as ever.
     #[test]
     fn groups_come_in_order_with_their_workspaces_vacio_and_sin_grupo_last() {

@@ -41,8 +41,8 @@ import dev.jw.next.contract.Node
 private val Gutter = 16.dp
 
 /**
- * The row of a group (REQ-675): `▾` or `▸`, its name and, at the right, how many workspaces it
- * holds when it is open or what they say when it is folded (REQ-670): a spinner and how many work,
+ * The row of a group (REQ-697): `▾` or `▸`, its name and, at the right, how many workspaces it
+ * holds when it is open or what they say when it is folded (REQ-692): a spinner and how many work,
  * then a mark for each kind of attention, three at most and `+n` for the rest. A tap folds or
  * opens it, a long press opens its sheet.
  */
@@ -80,7 +80,7 @@ internal fun EmptyGroup() {
     )
 }
 
-/** The last line of the list: it makes a group, the first one included (REQ-676). */
+/** The last line of the list: it makes a group, the first one included (REQ-698). */
 @Composable
 internal fun NewGroupLine(click: () -> Unit) {
     Row(
@@ -91,7 +91,7 @@ internal fun NewGroupLine(click: () -> Unit) {
     ) { Mono("＋ grupo nuevo", Palette.dim, 13) }
 }
 
-/** The chips over the alerts of Avisos (REQ-677): all, each group with its count, and «sin grupo». */
+/** The chips over the alerts of Avisos (REQ-699): all, each group with its count, and «sin grupo». */
 @Composable
 internal fun AvisoChips(chips: List<AvisoChip>, selected: Id?, pick: (Id?) -> Unit) {
     Row(
@@ -113,7 +113,7 @@ private fun NameInput(value: TextFieldValue, change: (TextFieldValue) -> Unit, f
 private const val MAX_NAME = dev.jw.next.client.MAX_GROUP_NAME
 
 /**
- * «mover a un grupo…» (REQ-676): the groups with a mark on the one the repository is in, «sin
+ * «mover a un grupo…» (REQ-698): the groups with a mark on the one the repository is in, «sin
  * grupo» and «grupo nuevo…» (a name and «crear y mover»). It says what moving takes, closes when the
  * PC has moved it, and opens the group it went to; what the PC refuses stays on the sheet.
  */
@@ -131,7 +131,7 @@ internal fun BoxScope.MoveSheet(source: NodeSource, move: MoveTo, unfold: (Id) -
         if (!busy) {
             busy = true
             error = null
-            // The group opens at the tap, so that the workspace is seen where it lands; a move that fails leaves it open (REQ-676).
+            // The group opens at the tap, so that the workspace is seen where it lands; a move that fails leaves it open (REQ-698).
             group?.let(unfold)
             source.moveToGroup(move.workspace, group, finish)
         }
@@ -167,7 +167,7 @@ internal fun BoxScope.MoveSheet(source: NodeSource, move: MoveTo, unfold: (Id) -
 }
 
 /**
- * The sheet of a group (REQ-676): its name to change, a move up and down (not offered at the ends),
+ * The sheet of a group (REQ-698): its name to change, a move up and down (not offered at the ends),
  * and its deletion, which says first that no workspace is closed.
  */
 @Composable
@@ -220,7 +220,7 @@ internal fun BoxScope.GroupSheet(source: NodeSource, session: Node.Session, grou
     }
 }
 
-/** «＋ grupo nuevo»: a name, and the group begins empty (REQ-676). */
+/** «＋ grupo nuevo»: a name, and the group begins empty (REQ-698). */
 @Composable
 internal fun BoxScope.NewGroupSheet(source: NodeSource, groups: List<Group>, dismiss: () -> Unit) {
     var text by remember { mutableStateOf(TextFieldValue("")) }

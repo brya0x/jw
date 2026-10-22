@@ -25,7 +25,7 @@ class RemoveTest {
             "a worktree knows its repository, so it offers the project's settings (REQ-526)",
         )
         assertEquals(listOf(WsAction.MoveToGroup, WsAction.Rename, WsAction.CloseWorkspace, WsAction.RemoveWorktree), workspaceMenu(HomeKind.Worktree, null).map { it.action })
-        assertEquals(listOf(WsAction.MoveToGroup, WsAction.RemoveWorkspace), workspaceMenu(HomeKind.Folder, null).map { it.action }, "REQ-676: every kind can be moved to a group")
+        assertEquals(listOf(WsAction.MoveToGroup, WsAction.RemoveWorkspace), workspaceMenu(HomeKind.Folder, null).map { it.action }, "REQ-698: every kind can be moved to a group")
         // Only a repository's root offers a worktree, and only when it knows the repository.
         assertEquals(
             listOf(WsAction.MoveToGroup, WsAction.NewWorktree, WsAction.ExistingWorktrees, WsAction.Project, WsAction.RemoveWorkspace),

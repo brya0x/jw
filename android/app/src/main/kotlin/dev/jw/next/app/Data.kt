@@ -119,7 +119,7 @@ class SeenStore(context: Context) {
 }
 
 /**
- * The groups that are folded on this phone, for each PC it is connected to (REQ-678): they are the
+ * The groups that are folded on this phone, for each PC it is connected to (REQ-700): they are the
  * phone's own, in private preferences, apart from the seen record, which is emptied when a daemon
  * starts again and these are not.
  */

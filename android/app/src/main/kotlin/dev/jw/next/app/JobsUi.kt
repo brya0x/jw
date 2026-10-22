@@ -107,7 +107,7 @@ internal fun AvisosBody(
         }
         when (state.avisosTab) {
             AvisosTab.Alertas -> Column(Modifier.fillMaxSize()) {
-                // The chips filter the alerts by group, WHERE the PC has groups; the bell counts all (REQ-677).
+                // The chips filter the alerts by group, WHERE the PC has groups; the bell counts all (REQ-699).
                 if (session.groups.isNotEmpty()) AvisoChips(avisoChips(session, alerts), state.avisosFilter) { set(nav.filterAvisos(state, it)) }
                 AlertsList(alerts.filtered(state.avisosFilter), nav, state, set)
             }

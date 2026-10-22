@@ -7,7 +7,7 @@
 use contract::{Id, WorkspaceKind, WorkspaceSummary};
 
 /// `list` with the workspaces of each group of `order` together, in that order, and those of no
-/// group last (REQ-668); inside each, as `by_repository` says. A workspace whose group is not in
+/// group last (REQ-690); inside each, as `by_repository` says. A workspace whose group is not in
 /// `order` is in none.
 pub fn group(list: Vec<WorkspaceSummary>, order: &[Id]) -> Vec<WorkspaceSummary> {
     let mut buckets: Vec<Vec<WorkspaceSummary>> = vec![Vec::new(); order.len() + 1];

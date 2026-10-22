@@ -4,11 +4,11 @@ import dev.jw.next.contract.Group
 import dev.jw.next.contract.Id
 import dev.jw.next.contract.Node
 
-/** One kind of attention a group's workspaces have, with how many (REQ-670). */
+/** One kind of attention a group's workspaces have, with how many (REQ-692). */
 data class GroupMark(val mark: Mark, val count: Int)
 
 /**
- * What the workspaces of a group say, as a folded row draws it (REQ-670): how many work (a
+ * What the workspaces of a group say, as a folded row draws it (REQ-692): how many work (a
  * conversation thinks, or a worktree is being removed) and each kind of unseen attention they have,
  * the most urgent first.
  */
@@ -22,10 +22,10 @@ fun groupSays(session: Node.Session, seen: Seen, group: Id): Pair<Int, List<Grou
     return running to marks.map { (mark, count) -> GroupMark(mark, count) }
 }
 
-/** The most characters a group's name has (REQ-664); the PC refuses more and an empty one. */
+/** The most characters a group's name has (REQ-686); the PC refuses more and an empty one. */
 const val MAX_GROUP_NAME = 40
 
-/** Why [name] is not a group's name, or null when it is (the PC decides it too, REQ-664). */
+/** Why [name] is not a group's name, or null when it is (the PC decides it too, REQ-686). */
 fun groupNameError(name: String, groups: List<Group>, except: Id? = null): String? {
     val clean = name.trim()
     return when {
@@ -36,13 +36,13 @@ fun groupNameError(name: String, groups: List<Group>, except: Id? = null): Strin
     }
 }
 
-/** What the sheet «mover a un grupo…» of a workspace needs (REQ-676). */
+/** What the sheet «mover a un grupo…» of a workspace needs (REQ-698). */
 data class MoveTo(
     val workspace: Id,
     val shown: String,
     /** The group its repository is in now, if any. */
     val current: Group?,
-    /** How many workspaces move with it: its whole repository (REQ-666). */
+    /** How many workspaces move with it: its whole repository (REQ-688). */
     val together: Int,
     val groups: List<Group>,
 ) {
@@ -60,7 +60,7 @@ fun Node.Session.moveTo(workspace: Id): MoveTo? {
     return MoveTo(w.id, w.shown(), groups.firstOrNull { it.id == w.group }, together.coerceAtLeast(1), groups)
 }
 
-/** A chip of the filter of Avisos (REQ-677): [filter] is null for all, [NO_GROUP] for those in none, or a group's id. */
+/** A chip of the filter of Avisos (REQ-699): [filter] is null for all, [NO_GROUP] for those in none, or a group's id. */
 data class AvisoChip(val filter: Id?, val label: String, val count: Int)
 
 /** The filter value of the alerts of workspaces that are in no group. */

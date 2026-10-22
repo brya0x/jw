@@ -242,7 +242,7 @@ fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, set: (Clie
     val jobsMark = jobsMark(session, state.seen)
     val now = rememberClock(session.jobs.any { it.state == JobState.Running })
     var jobOpen by remember { mutableStateOf<Id?>(null) }
-    // What the session says settles the state: the jobs that are seen, and what is folded or chosen in Avisos that the PC no longer lists is forgotten (REQ-678).
+    // What the session says settles the state: the jobs that are seen, and what is folded or chosen in Avisos that the PC no longer lists is forgotten (REQ-700).
     LaunchedEffect(version, state.screen, state.avisosTab, state.seen, state.folded, state.avisosFilter) {
         val next = nav.forgetUnlisted(nav.seeJobs(state))
         if (next != state) set(next)
@@ -255,7 +255,7 @@ fun HomeScreen(source: AppSource, state: ClientState, nav: Navigator, set: (Clie
     var menu by remember { mutableStateOf<WorkspaceTarget?>(null) }
     var naming by remember { mutableStateOf<Naming?>(null) }
     var removing by remember { mutableStateOf<RemoveSheet?>(null) }
-    // «mover a un grupo…», the sheet of a group (a long press on its row) and a new group (REQ-676).
+    // «mover a un grupo…», the sheet of a group (a long press on its row) and a new group (REQ-698).
     var moving by remember { mutableStateOf<MoveTo?>(null) }
     var groupOpen by remember { mutableStateOf<Id?>(null) }
     var newGroup by remember { mutableStateOf(false) }
@@ -334,7 +334,7 @@ private fun WorkspaceList(
     items: List<HomeItem>, nav: Navigator, state: ClientState, set: (ClientState) -> Unit, now: Long, removing: () -> Unit, create: () -> Unit,
     holdGroup: (Id) -> Unit, newGroup: () -> Unit, hold: (Id) -> Unit,
 ) {
-    // The number before a row is its place among the rows that are drawn (REQ-675): a folded group leaves no gap.
+    // The number before a row is its place among the rows that are drawn (REQ-697): a folded group leaves no gap.
     val numbers = remember(items) { items.filterIsInstance<HomeItem.Row>().mapIndexed { i, r -> r.row.id to i + 1 }.toMap() }
     LazyColumn(Modifier.fillMaxSize()) {
         item { Section("workspaces · ${items.count { it is HomeItem.Row }}", create) }
@@ -366,7 +366,7 @@ private fun WorkspaceList(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun WorkspaceRow(row: HomeRow, number: Int, grouped: Boolean, current: Boolean, now: Long, open: () -> Unit, hold: () -> Unit, go: (Attention) -> Unit) {
-    // A worktree is further in than its root, and what is under a group's row further in than the group (REQ-224, REQ-675).
+    // A worktree is further in than its root, and what is under a group's row further in than the group (REQ-224, REQ-697).
     val indent = (if (row.kind == HomeKind.Worktree) 20.dp else 0.dp) + (if (grouped) 14.dp else 0.dp)
     val bar = Palette.blue
     Column(Modifier.fillMaxWidth().background(if (current) Palette.sel else Color.Transparent).drawBehind { if (current) drawRect(bar, size = Size(3.dp.toPx(), size.height)) }) {
@@ -415,7 +415,7 @@ internal fun AvisosList(items: List<Aviso>, nav: Navigator, state: ClientState, 
             Row(Modifier.fillMaxWidth().clickable { set(nav.go(state, item.attention)) }.padding(start = Gutter - 4.dp, end = Gutter, top = 10.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 MarkColumn(item.attention, 1)
                 Column(Modifier.weight(1f).padding(start = 4.dp)) {
-                    // The group before the workspace, when it has one (REQ-677).
+                    // The group before the workspace, when it has one (REQ-699).
                     Row {
                         item.groupName?.let { Mono("$it › ", Palette.dim, 14) }
                         Mono(item.workspace, bold = true, size = 14)
@@ -688,7 +688,7 @@ internal fun BoxScope.WorkspaceMenuSheet(target: WorkspaceTarget, moveNote: Stri
         Mono(menuTitle(target), Palette.fg, 14, bold = true, lines = 2)
         workspaceMenu(target.kind, target.repo).forEach { item ->
             val color = if (item.danger) Palette.red else Palette.fg
-            // «mover a un grupo…» says where the workspace is and what moving takes (REQ-676).
+            // «mover a un grupo…» says where the workspace is and what moving takes (REQ-698).
             val note = if (item.action == WsAction.MoveToGroup) moveNote else item.note
             SheetAction(item.glyph, item.label + (note?.let { " · $it" } ?: ""), color) { pick(item.action) }
         }

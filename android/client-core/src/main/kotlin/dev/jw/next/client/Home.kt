@@ -80,7 +80,7 @@ data class HomeRow(
     val removalFailed: Boolean = false,
 )
 
-/** An item of Avisos: one unseen attention and the workspace it belongs to, and its group when it has one (REQ-677). */
+/** An item of Avisos: one unseen attention and the workspace it belongs to, and its group when it has one (REQ-699). */
 data class Aviso(
     val workspaceId: Id,
     val workspace: String,
@@ -138,7 +138,7 @@ sealed interface HomeItem {
     /** What keeps the line in place in a list. */
     val key: String
 
-    /** [grouped]: it is drawn under a group's row or under «sin grupo», two steps in (REQ-675). */
+    /** [grouped]: it is drawn under a group's row or under «sin grupo», two steps in (REQ-697). */
     data class Heading(val text: String, val grouped: Boolean = false) : HomeItem {
         override val key get() = "heading:$text"
     }
@@ -147,7 +147,7 @@ sealed interface HomeItem {
         override val key get() = row.id
     }
 
-    /** The row of a group (REQ-675): [count] workspaces and, folded, what they say ([running], [marks]). */
+    /** The row of a group (REQ-697): [count] workspaces and, folded, what they say ([running], [marks]). */
     data class Group(
         val id: Id,
         val name: String,
@@ -158,7 +158,7 @@ sealed interface HomeItem {
     ) : HomeItem {
         override val key get() = "group:$id"
 
-        /** The marks a folded row draws: three kinds (REQ-670)… */
+        /** The marks a folded row draws: three kinds (REQ-692)… */
         val shownMarks: List<GroupMark> get() = marks.take(SHOWN_MARKS)
 
         /** …and how many attentions the others hold. */
@@ -176,11 +176,11 @@ sealed interface HomeItem {
     }
 }
 
-/** How many kinds of attention a folded group draws before it says how many more (REQ-670). */
+/** How many kinds of attention a folded group draws before it says how many more (REQ-692). */
 private const val SHOWN_MARKS = 3
 
 /**
- * Home's list as it is drawn (REQ-219 to REQ-221, REQ-669, REQ-675): the daemon sends each group's
+ * Home's list as it is drawn (REQ-219 to REQ-221, REQ-691, REQ-697): the daemon sends each group's
  * workspaces together, in each group each repository's root and worktrees together, and the folders
  * that are not repositories last. A worktree whose root is not what comes before it gets the
  * repository's name above it, and, with no group at all, the first folder gets `carpetas` when

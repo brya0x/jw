@@ -20,6 +20,8 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal;
 use wire::Client;
 
+use crate::tui::erase;
+
 mod pick;
 
 pub fn run(args: &[&str]) -> ExitCode {
@@ -161,6 +163,7 @@ fn view(client: &mut Client, node: &str) -> ExitCode {
         if event::poll(Duration::from_millis(40)).unwrap_or(false)
             && let Ok(Event::Key(k)) = event::read()
             && k.kind != KeyEventKind::Release
+            && let k = erase::canonical(k)
             && let Step::Leave = handle_key(client, node, &mut screen, k.code, k.modifiers)
         {
             let _ = client.cmd(Cmd::ConversationClose {
@@ -285,6 +288,9 @@ fn handle_key(
                     });
                 }
             }
+        }
+        KeyCode::Backspace if mods.contains(KeyModifiers::ALT) => {
+            erase::pop_word(&mut screen.buffer);
         }
         KeyCode::Backspace => {
             screen.buffer.pop();

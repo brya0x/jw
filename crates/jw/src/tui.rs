@@ -30,9 +30,11 @@ mod changes;
 mod clip;
 mod conversation;
 mod diff_lines;
+pub(crate) mod erase;
 mod field;
 mod fileview;
 mod fold;
+mod last;
 mod look;
 mod manage;
 mod markdown;
@@ -315,7 +317,7 @@ pub(crate) const URGENCY: [AttentionKind; 8] = [
 ];
 
 /// The first row of the sidebar's list that is drawn, when `avail` rows fit and the cursor is at
-/// row `at`: the list moves just far enough to keep the cursor in view (REQ-671). It depends on
+/// row `at`: the list moves just far enough to keep the cursor in view (REQ-693). It depends on
 /// nothing but the cursor, so the drawing and a click find the same rows.
 fn side_top(at: Option<usize>, avail: usize) -> usize {
     at.map_or(0, |a| (a + 1).saturating_sub(avail.max(1)))
@@ -357,7 +359,7 @@ fn tone(a: &Attention) -> Rgb {
 }
 
 /// What the sidebar's cursor is on: the row of the group at an index into the session's groups,
-/// or the workspace at an index into its workspaces (REQ-671).
+/// or the workspace at an index into its workspaces (REQ-693).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Cursor {
     Group(usize),
@@ -434,11 +436,11 @@ pub enum Key {
     Tree,
     /// Swap the focused panel with the one on this side.
     Swap(split::Side),
-    /// `z`: fold every group, or unfold them when all are folded (REQ-672).
+    /// `z`: fold every group, or unfold them when all are folded (REQ-694).
     Fold,
-    /// `g`: the group of the highlighted workspace's repository (REQ-672).
+    /// `g`: the group of the highlighted workspace's repository (REQ-694).
     Group,
-    /// `G`: a new group (REQ-672).
+    /// `G`: a new group (REQ-694).
     NewGroup,
     /// Make the focused panel wider or taller (`true`), narrower or lower, by moving a split.
     Resize(SplitDir, bool),
@@ -640,7 +642,7 @@ pub enum After {
     CancelOp {
         workspace: String,
     },
-    /// Make a group, and put the workspace in it when one is named (REQ-672).
+    /// Make a group, and put the workspace in it when one is named (REQ-694).
     CreateGroup {
         name: String,
         with: Option<String>,
@@ -661,7 +663,7 @@ pub enum After {
         group: String,
         delta: i32,
     },
-    /// Swap the workspace's repository with its neighbour in its group (REQ-680).
+    /// Swap the workspace's repository with its neighbour in its group (REQ-702).
     MoveRepo {
         workspace: String,
         delta: i32,
@@ -680,10 +682,10 @@ pub struct View {
     mode: Mode,
     /// The highlighted workspace.
     selected: usize,
-    /// The cursor is on the row of this group, not on a workspace (REQ-671): nothing is
+    /// The cursor is on the row of this group, not on a workspace (REQ-693): nothing is
     /// highlighted among the workspaces then, so no key acts on one.
     on_group: Option<String>,
-    /// The groups that are folded: this terminal's own, never sent anywhere (REQ-674).
+    /// The groups that are folded: this terminal's own, never sent anywhere (REQ-696).
     folded: HashSet<String>,
     /// Where the cursor goes once the session lists what a command made, and until when.
     follow: Option<(Follow, u64)>,
@@ -798,6 +800,11 @@ pub struct View {
     /// A workspace made by the client's own request, to open when it shows up in the session
     /// (or at the time given, in `now_ms`, if it does not).
     goto: Option<(String, u64)>,
+    /// The workspace the person was in when the client last ran, to open when the session
+    /// shows it (REQ-663); it is dropped once the session has arrived, found or not.
+    restore: Option<last::Last>,
+    /// What `take_last` handed out last, so the file is written only when this changes.
+    recorded: Option<last::Last>,
     /// A panel this client asked for, to focus when it appears in its workspace, and when it was
     /// asked: one that never shows up is forgotten.
     new_pane: Option<(String, u64)>,
@@ -885,6 +892,8 @@ impl View {
             project_asks: Vec::new(),
             worktree_asks: Vec::new(),
             goto: None,
+            restore: None,
+            recorded: None,
             full: false,
             new_pane: None,
             help: false,
@@ -1267,7 +1276,7 @@ impl View {
             match node {
                 Node::Session(s) => {
                     // The list can change order under the highlight (a group moved, a workspace
-                    // made or closed elsewhere): it stays on the workspace it was on (REQ-671).
+                    // made or closed elsewhere): it stays on the workspace it was on (REQ-693).
                     let was = self.selected_id();
                     self.session = Some(s);
                     let at = was.and_then(|id| {
@@ -1330,6 +1339,7 @@ impl View {
         self.update_changes();
         self.sync_review_diff();
         self.advance_manage();
+        self.follow_restore();
         self.follow_goto();
         self.follow_cursor();
         self.clamp();
@@ -1361,7 +1371,7 @@ impl View {
         let workspaces = self.session.as_ref().map_or(0, |s| s.workspaces.len());
         self.selected = self.selected.min(workspaces.saturating_sub(1));
         // A group the daemon no longer lists is forgotten, and the cursor leaves its row; a
-        // highlighted workspace that a fold hides has the cursor on its group's row (REQ-671, REQ-674).
+        // highlighted workspace that a fold hides has the cursor on its group's row (REQ-693, REQ-696).
         if let Some(s) = &self.session {
             self.folded.retain(|g| s.groups.iter().any(|x| x.id == *g));
             if self
@@ -1533,7 +1543,7 @@ impl View {
         s.workspaces
             .iter()
             .flat_map(|w| {
-                // The group, WHERE the workspace has one, before its name (REQ-673).
+                // The group, WHERE the workspace has one, before its name (REQ-695).
                 let group = w
                     .group
                     .as_ref()
@@ -1790,7 +1800,7 @@ impl View {
     }
 
     /// What the sidebar's cursor can be on, in the order the rows are drawn: the row of a group
-    /// or a workspace the folds leave in view (REQ-671).
+    /// or a workspace the folds leave in view (REQ-693).
     fn cursor_rows(&self) -> Vec<Cursor> {
         let Some(s) = &self.session else {
             return Vec::new();
@@ -1848,7 +1858,7 @@ impl View {
         self.focus = 0;
     }
 
-    /// The highlight goes to the workspace at `i`, whose group opens if it was folded (REQ-671).
+    /// The highlight goes to the workspace at `i`, whose group opens if it was folded (REQ-693).
     fn go_to(&mut self, i: usize) {
         self.selected = i;
         self.on_group = None;
@@ -1862,7 +1872,7 @@ impl View {
         }
     }
 
-    /// Fold or unfold the group the cursor is on (REQ-672); the cursor stays on its row.
+    /// Fold or unfold the group the cursor is on (REQ-694); the cursor stays on its row.
     fn fold_group(&mut self, fold: bool) {
         let Some(id) = self.on_group.clone() else {
             return;
@@ -2353,7 +2363,13 @@ impl View {
         let Some(p) = self.project.as_mut() else {
             return After::Continue;
         };
-        match p.press(ev.code) {
+        let act = if erase::is_word(&ev) {
+            p.erase_word();
+            project::Act::Stay
+        } else {
+            p.press(ev.code)
+        };
+        match act {
             project::Act::Stay => After::Continue,
             project::Act::Close => {
                 self.project = None;
@@ -2371,7 +2387,13 @@ impl View {
             return After::Continue;
         };
         let ctrl = ev.modifiers.contains(KeyModifiers::CONTROL);
-        match picker.press(ev.code, ctrl, &is_open) {
+        let pick = if erase::is_word(&ev) {
+            picker.erase_word();
+            open::Pick::Stay
+        } else {
+            picker.press(ev.code, ctrl, &is_open)
+        };
+        match pick {
             open::Pick::Stay => After::Continue,
             open::Pick::Close => {
                 self.picker = None;
@@ -2402,7 +2424,12 @@ impl View {
         let Some(t) = self.worktree.as_mut() else {
             return After::Continue;
         };
-        let made = t.press(ev.code, ev.modifiers.contains(KeyModifiers::CONTROL));
+        let made = if erase::is_word(&ev) {
+            t.erase_word();
+            open::Make::Stay
+        } else {
+            t.press(ev.code, ev.modifiers.contains(KeyModifiers::CONTROL))
+        };
         if t.wants_list() {
             self.worktree_asks.push(t.repo.clone());
         }
@@ -2435,6 +2462,56 @@ impl View {
     /// Open this workspace as soon as the daemon shows it: the client asked for it to be made.
     pub fn goto(&mut self, workspace: &str) {
         self.goto = Some((workspace.to_owned(), self.now_ms + 8_000));
+    }
+
+    /// The workspace the person was in, to be opened once the session shows it.
+    pub fn restore(&mut self, last: Option<last::Last>) {
+        self.recorded.clone_from(&last);
+        self.restore = last;
+    }
+
+    /// The recorded workspace, once the session has arrived: found by its id or else by its
+    /// folder, it is selected and opened; else the client starts as it always did. Either way
+    /// it is not looked for again. A workspace the client asked for (`goto`) is opened after
+    /// this and wins.
+    fn follow_restore(&mut self) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        let Some(last) = self.restore.take() else {
+            return;
+        };
+        let at = session
+            .workspaces
+            .iter()
+            .position(|w| w.id == last.workspace)
+            .or_else(|| session.workspaces.iter().position(|w| w.path == last.path));
+        if let Some(i) = at {
+            let id = session.workspaces[i].id.clone();
+            self.selected = i;
+            self.open(&id, 0);
+        }
+    }
+
+    /// The opened workspace when it is not the one handed out last: the one to record
+    /// (REQ-662). Closing a workspace records nothing.
+    pub fn take_last(&mut self) -> Option<last::Last> {
+        let id = self.opened.as_deref()?;
+        let path = &self
+            .session
+            .as_ref()?
+            .workspaces
+            .iter()
+            .find(|w| w.id == id)?
+            .path;
+        let now = last::Last {
+            workspace: id.to_owned(),
+            path: path.clone(),
+        };
+        (self.recorded.as_ref() != Some(&now)).then(|| {
+            self.recorded = Some(now.clone());
+            now
+        })
     }
 
     /// The workspace the client asked for, once it is in the session: selected and opened.
@@ -2542,7 +2619,7 @@ impl View {
 
     /// `J` and `K` on a workspace's row: its repository swaps with the neighbour in its group, or
     /// among those in none. A folder that is not a repository has no place, and at either end it
-    /// is said here and nothing is sent (REQ-680).
+    /// is said here and nothing is sent (REQ-702).
     fn move_repo_key(&mut self, delta: i32) -> After {
         let (Some(s), Some(w)) = (&self.session, self.selected_summary()) else {
             return After::Continue;
@@ -2588,7 +2665,7 @@ impl View {
         }
     }
 
-    /// The group or the workspace the cursor goes to once the session lists it (REQ-672).
+    /// The group or the workspace the cursor goes to once the session lists it (REQ-694).
     fn follow_to(&mut self, to: Follow) {
         self.follow = Some((to, self.now_ms + 8_000));
     }
@@ -2624,7 +2701,7 @@ impl View {
     /// `r`: ask for a new name for the highlighted worktree (a folder is a directory on disk and
     /// is not renamed), or for the focused panel.
     fn ask_rename(&mut self, level: Level) {
-        // On a group's row `r` names the group (REQ-672).
+        // On a group's row `r` names the group (REQ-694).
         if level == Level::Workspaces
             && let Some(id) = self.on_group.clone()
         {
@@ -2705,7 +2782,7 @@ impl View {
 
     /// `x` at the workspace level: ask before the highlighted workspace is closed.
     fn ask_close_workspace(&mut self) {
-        // On a group's row `x` asks to delete the group, never to close a workspace (REQ-672).
+        // On a group's row `x` asks to delete the group, never to close a workspace (REQ-694).
         if self.on_group.is_some() {
             self.ask_delete_group();
             return;
@@ -2741,7 +2818,11 @@ impl View {
         let Some(question) = self.manage.take() else {
             return After::Continue;
         };
-        let (next, act) = question.press(ev.code);
+        let (next, act) = if erase::is_word(&ev) {
+            (Some(question.erase_word()), None)
+        } else {
+            question.press(ev.code)
+        };
         self.manage = next;
         if self.manage.is_none() {
             self.surface_ask();
@@ -2782,7 +2863,7 @@ impl View {
                     group: None,
                 },
                 Dest::Group(group) => {
-                    // The group opens, so that the workspace is seen where it lands (REQ-672).
+                    // The group opens, so that the workspace is seen where it lands (REQ-694).
                     self.folded.remove(&group);
                     After::MoveToGroup {
                         workspace,
@@ -3083,6 +3164,7 @@ impl View {
     /// A key at the keyboard: typed into the pane, or (after the leader, or when no pane is
     /// open) a command of the client.
     pub fn press_key(&mut self, ev: KeyEvent) -> After {
+        let ev = erase::canonical(ev);
         self.flash.clear();
         self.selection = None;
         self.unlight_conversations();
@@ -3379,7 +3461,7 @@ impl View {
             (Mode::Workspaces, Key::NewGroup) if level == Level::Workspaces => {
                 self.ask_group_name(Naming::New)
             }
-            // `J` and `K` move a workspace's repository inside its group (REQ-680)…
+            // `J` and `K` move a workspace's repository inside its group (REQ-702)…
             (Mode::Workspaces, Key::Swap(side))
                 if level == Level::Workspaces
                     && self.on_group.is_none()
@@ -4139,7 +4221,7 @@ impl View {
                 }
                 return After::Continue;
             }
-            // A click on a group's row folds or unfolds it, with the cursor on it (REQ-672).
+            // A click on a group's row folds or unfolds it, with the cursor on it (REQ-694).
             Some(side::Side::Group(g)) => {
                 self.set_cursor(Cursor::Group(g));
                 self.opened = None;
@@ -4530,7 +4612,7 @@ impl View {
                 KeyCode::Up => t.sel = t.sel.saturating_sub(1),
                 KeyCode::Backspace => {
                     let mut text = text;
-                    text.pop();
+                    erase::back(&mut text, &ev);
                     ask_find = Some(text.clone());
                     t.filter = Some(text);
                 }
@@ -5110,7 +5192,7 @@ impl View {
 
     /// What the workspaces of a group say: how many run (Claude works or a worktree is being
     /// removed) and each kind of attention that has not been seen, the most urgent first, with
-    /// the mark that kind has and how many (REQ-670).
+    /// the mark that kind has and how many (REQ-692).
     fn group_summary(&self, id: &str) -> (usize, Vec<(&'static str, Rgb, usize)>) {
         let Some(s) = &self.session else {
             return (0, Vec::new());
@@ -5188,7 +5270,7 @@ impl View {
     }
 
     /// The row of a group: `▾` or `▸`, its name and, at the right, the number of its workspaces
-    /// when it is open or what they say when it is folded (REQ-669, REQ-670).
+    /// when it is open or what they say when it is folded (REQ-691, REQ-692).
     fn draw_group_row(&self, g: &mut Grid, y: usize, group: &contract::Group) {
         let dim = Style::fg(look::dim());
         let open = !self.folded.contains(&group.id);
@@ -5332,7 +5414,7 @@ impl View {
             } else {
                 Style::fg(look::fg())
             };
-            // The numbers are the position among the workspaces that are drawn (REQ-671).
+            // The numbers are the position among the workspaces that are drawn (REQ-693).
             let label = if number <= 9 {
                 number.to_string()
             } else {
@@ -7296,6 +7378,8 @@ fn do_after(
 
 pub fn run() -> Result<(), String> {
     let mut view = View::new("conectando");
+    let last_file = last::path();
+    view.restore(last::read(&last_file));
     let mut client = connect(&mut view)?;
     // `JWN_TUI_DUMP`: also write each frame, without colours, to this file (for tests).
     let dump = std::env::var_os(identity::env_var("TUI_DUMP"));
@@ -7336,6 +7420,9 @@ pub fn run() -> Result<(), String> {
         let (cols, rows) = terminal::size().map_err(|e| e.to_string())?;
         view.set_size(cols as usize, rows as usize);
         view.sync(client.nodes.values());
+        if let Some(l) = view.take_last() {
+            last::write(&last_file, &l);
+        }
         view.drag_tick();
         for id in view.wants() {
             let _ = client.open(&id);
@@ -7575,7 +7662,7 @@ mod tests {
             .collect()
     }
 
-    /// REQ-669, REQ-671: a row for each group, its workspaces two columns further in, `vacío` for
+    /// REQ-691, REQ-693: a row for each group, its workspaces two columns further in, `vacío` for
     /// a group with none, `sin grupo` over what is in none, no `carpetas`, and the numbers
     /// following the workspaces that are drawn.
     #[test]
@@ -7612,7 +7699,7 @@ mod tests {
         assert!(t.lines().nth(3).unwrap().starts_with("  carpetas"), "{t}");
     }
 
-    /// REQ-671, REQ-672: the cursor goes over the rows that are drawn, `h` folds the group or
+    /// REQ-693, REQ-694: the cursor goes over the rows that are drawn, `h` folds the group or
     /// goes up to it, `l` opens it or goes in, `↵` toggles it, `z` folds all or opens all.
     #[test]
     fn the_cursor_goes_over_groups_and_workspaces_in_view_and_a_fold_keeps_it_on_the_group() {
@@ -7681,7 +7768,7 @@ mod tests {
         );
     }
 
-    /// REQ-670: a folded group says, at the right, what runs and each kind of attention, the most
+    /// REQ-692: a folded group says, at the right, what runs and each kind of attention, the most
     /// urgent first, with the number when it is over one, three kinds and `+n` for the rest.
     #[test]
     fn a_folded_group_says_what_runs_and_what_waits_in_it() {
@@ -7726,7 +7813,7 @@ mod tests {
         );
     }
 
-    /// REQ-671 (RISK-80): while the cursor is on a group's row, no key acts on a workspace: none
+    /// REQ-693 (RISK-80): while the cursor is on a group's row, no key acts on a workspace: none
     /// opens a question, a box, a pane or sends a command.
     #[test]
     fn no_key_acts_on_a_workspace_from_a_group_row() {
@@ -7782,7 +7869,7 @@ mod tests {
         v.press_key(plain(KeyCode::Enter))
     }
 
-    /// REQ-672: `r` and `x` on a group's row ask about the group, and never about a workspace.
+    /// REQ-694: `r` and `x` on a group's row ask about the group, and never about a workspace.
     #[test]
     fn r_and_x_on_a_group_row_ask_about_the_group_and_never_about_a_workspace() {
         let mut v = groups_view();
@@ -7834,7 +7921,7 @@ mod tests {
         );
     }
 
-    /// REQ-672: `G` asks for a name (no more than 40 letters, and not an empty one), creates the
+    /// REQ-694: `G` asks for a name (no more than 40 letters, and not an empty one), creates the
     /// group, and the cursor goes to it once the session lists it.
     #[test]
     fn g_makes_a_group_with_a_name_and_the_cursor_goes_to_it_when_the_session_lists_it() {
@@ -7900,7 +7987,7 @@ mod tests {
         assert!(v.follow.is_none());
     }
 
-    /// REQ-672: `g` lists the groups with the one the repository is in marked, and each way to answer
+    /// REQ-694: `g` lists the groups with the one the repository is in marked, and each way to answer
     /// sends the move; a group that is picked opens.
     #[test]
     fn g_lists_the_groups_and_each_answer_moves_the_repository() {
@@ -7978,8 +8065,8 @@ mod tests {
         );
     }
 
-    /// REQ-672: `J` and `K` on a group's row move the group, and say when it is at the end; on a
-    /// folder that is not a repository they say there is no place (the repositories: REQ-680).
+    /// REQ-694: `J` and `K` on a group's row move the group, and say when it is at the end; on a
+    /// folder that is not a repository they say there is no place (the repositories: REQ-702).
     #[test]
     fn j_and_k_on_a_group_row_move_the_group_and_say_when_it_is_at_an_end() {
         let mut v = groups_view();
@@ -8029,7 +8116,7 @@ mod tests {
         }
     }
 
-    /// REQ-680: `J` and `K` on a workspace's row move its repository inside its group, say when it is at an
+    /// REQ-702: `J` and `K` on a workspace's row move its repository inside its group, say when it is at an
     /// end or a folder and send nothing, and the cursor follows the workspace when the order changes.
     #[test]
     fn j_and_k_on_a_workspace_row_move_its_repository_and_the_cursor_follows_the_workspace() {
@@ -8098,7 +8185,7 @@ mod tests {
         assert!(v.plain(120, 30).contains("GRUPO"));
     }
 
-    /// REQ-671: a long list moves just far enough to keep the cursor in view, and a click finds the
+    /// REQ-693: a long list moves just far enough to keep the cursor in view, and a click finds the
     /// same rows the drawing shows.
     #[test]
     fn the_list_moves_to_keep_the_cursor_in_view_and_a_click_finds_the_row_drawn() {
@@ -8127,7 +8214,7 @@ mod tests {
         );
     }
 
-    /// REQ-672, REQ-674: a click on a group's row folds it, and a group the session no longer
+    /// REQ-694, REQ-696: a click on a group's row folds it, and a group the session no longer
     /// lists is forgotten, with the cursor that was on its row.
     #[test]
     fn a_click_folds_a_group_and_a_group_that_is_gone_is_forgotten() {
@@ -8158,7 +8245,7 @@ mod tests {
         assert!(v.folded.is_empty() && v.on_group.is_none());
     }
 
-    /// REQ-671: a list that changes order under the highlight (a group moved from the phone, a
+    /// REQ-693: a list that changes order under the highlight (a group moved from the phone, a
     /// workspace made elsewhere) leaves the highlight, the open workspace and the level where
     /// they were.
     #[test]
@@ -8194,7 +8281,7 @@ mod tests {
         assert!(v.folded.is_empty() && v.on_group.is_none());
     }
 
-    /// REQ-671, REQ-673: «avisos» says the group before the workspace, and going to a workspace of a
+    /// REQ-693, REQ-695: «avisos» says the group before the workspace, and going to a workspace of a
     /// folded group opens the group.
     #[test]
     fn avisos_says_the_group_and_going_to_a_workspace_opens_its_group() {
@@ -12276,6 +12363,112 @@ mod tests {
         assert!(v.goto.is_none());
     }
 
+    /// A view that starts with `last` recorded, before the session has arrived.
+    fn restored(last: Option<last::Last>) -> View {
+        let mut v = View::new("fixtures");
+        v.set_size(120, 30);
+        v.restore(last);
+        v
+    }
+
+    fn the_second(v: &View) -> last::Last {
+        let w = &v.session.as_ref().unwrap().workspaces[1];
+        last::Last {
+            workspace: w.id.clone(),
+            path: w.path.clone(),
+        }
+    }
+
+    #[test]
+    fn the_workspace_the_person_was_in_is_opened_when_the_session_arrives() {
+        let want = the_second(&fixture_view());
+        let mut v = restored(Some(want.clone()));
+        // No session yet: nothing is opened and the record waits.
+        v.sync(std::iter::empty());
+        assert_eq!((v.selected, v.opened.clone()), (0, None));
+        assert!(v.restore.is_some());
+        v.sync(fixture_docs().iter());
+        assert_eq!((v.selected, v.level()), (1, Level::Panels));
+        assert_eq!(v.opened.as_deref(), Some(want.workspace.as_str()));
+        assert!(v.restore.is_none());
+        // What was just opened is what the file says: nothing to write.
+        assert_eq!(v.take_last(), None);
+    }
+
+    #[test]
+    fn a_workspace_whose_id_is_gone_is_found_by_its_folder() {
+        let want = the_second(&fixture_view());
+        let mut v = restored(Some(last::Last {
+            workspace: "gone".into(),
+            path: want.path.clone(),
+        }));
+        v.sync(fixture_docs().iter());
+        assert_eq!(v.opened.as_deref(), Some(want.workspace.as_str()));
+        assert_eq!(v.selected, 1);
+        // The file is brought up to date with the id it found.
+        assert_eq!(v.take_last(), Some(want));
+    }
+
+    #[test]
+    fn a_workspace_that_is_no_longer_there_starts_as_before_and_is_not_looked_for_again() {
+        let mut v = restored(Some(last::Last {
+            workspace: "gone".into(),
+            path: "/nowhere".into(),
+        }));
+        v.sync(fixture_docs().iter());
+        assert_eq!((v.selected, v.opened.clone()), (0, None));
+        assert!(v.restore.is_none());
+        assert_eq!(v.take_last(), None, "nothing opened, nothing to record");
+        assert!(v.flash.is_empty(), "no message: {}", v.flash);
+        // Not a restore of a later session either.
+        v.sync(std::iter::empty());
+        v.sync(fixture_docs().iter());
+        assert_eq!(v.opened, None);
+    }
+
+    #[test]
+    fn a_view_with_nothing_recorded_starts_as_before() {
+        let mut v = restored(None);
+        v.sync(fixture_docs().iter());
+        assert_eq!((v.selected, v.opened.clone()), (0, None));
+    }
+
+    #[test]
+    fn a_workspace_the_client_asked_for_wins_over_the_recorded_one() {
+        let fresh = fixture_view();
+        let want = the_second(&fresh);
+        let other = {
+            let w = &fresh.session.as_ref().unwrap().workspaces[0];
+            last::Last {
+                workspace: w.id.clone(),
+                path: w.path.clone(),
+            }
+        };
+        let mut v = restored(Some(other));
+        v.set_now(1_000);
+        v.goto(&want.workspace);
+        v.sync(fixture_docs().iter());
+        assert_eq!(v.opened.as_deref(), Some(want.workspace.as_str()));
+        assert_eq!(v.selected, 1);
+    }
+
+    #[test]
+    fn the_opened_workspace_is_recorded_once_and_closing_records_nothing() {
+        let mut v = fixture_view();
+        assert_eq!(v.take_last(), None, "nothing opened");
+        v.press(Key::Enter);
+        let first = v.take_last().expect("opening records");
+        assert_eq!(first.workspace, v.opened.clone().unwrap());
+        assert_eq!(v.take_last(), None, "not written again each tick");
+        // A way of opening that does not go through `open`, as the `d` key does.
+        let want = the_second(&v);
+        v.opened = Some(want.workspace.clone());
+        assert_eq!(v.take_last(), Some(want));
+        // Esc, or moving the highlight, leaves the last workspace as the recorded one.
+        v.opened = None;
+        assert_eq!(v.take_last(), None);
+    }
+
     #[test]
     fn keys_and_clicks_stay_in_the_browser_and_the_box() {
         let root = disk("guard");
@@ -13535,5 +13728,29 @@ mod tests {
         let docs: Vec<_> = fixture_docs();
         v.sync(docs.iter());
         assert!(!v.convs.contains_key(CONV) && !v.conv_ui.contains_key(CONV));
+    }
+
+    /// What the shell of a pane gets for each encoding of option-backspace and ctrl-backspace
+    /// (REQ-672): `esc DEL`, which zsh, bash and fish take as «delete the word before».
+    #[test]
+    fn every_encoding_of_option_backspace_reaches_a_shell_as_esc_del() {
+        let (alt, ctrl) = (KeyModifiers::ALT, KeyModifiers::CONTROL);
+        for (code, mods) in [
+            (KeyCode::Backspace, alt),
+            (KeyCode::Backspace, ctrl),
+            (KeyCode::Backspace, alt | ctrl),
+            (KeyCode::Char('h'), alt | ctrl),
+            (KeyCode::Char('\x08'), alt),
+            (KeyCode::Char('\x08'), ctrl),
+        ] {
+            let ev = erase::canonical(key(code, mods));
+            assert_eq!(
+                bytes_of(&ev).as_deref(),
+                Some("\x1b\x7f"),
+                "{code:?} {mods:?}"
+            );
+        }
+        let plain = erase::canonical(key(KeyCode::Char('\x08'), KeyModifiers::NONE));
+        assert_eq!(bytes_of(&plain).as_deref(), Some("\x7f"));
     }
 }
