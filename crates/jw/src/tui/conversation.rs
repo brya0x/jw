@@ -433,28 +433,30 @@ impl Editor {
             .map_or(self.chars.len(), |i| at + i)
     }
 
-    /// One line up, keeping the column; false when this is the first line.
-    fn up(&mut self) -> bool {
-        self.anchor = None;
-        let start = self.line_start(self.cursor);
-        if start == 0 {
-            return false;
-        }
-        let col = self.cursor - start;
-        let (prev_end, prev_start) = (start - 1, self.line_start(start - 1));
-        self.cursor = prev_start + col.min(prev_end - prev_start);
-        true
-    }
-
-    fn down(&mut self) -> bool {
-        self.anchor = None;
-        let end = self.line_end(self.cursor);
-        if end == self.chars.len() {
-            return false;
-        }
-        let col = self.cursor - self.line_start(self.cursor);
-        let next = end + 1;
-        self.cursor = next + col.min(self.line_end(next) - next);
+    /// The cursor one visible row up or down, the rows being those the field draws
+    /// (`field::row_starts`). With `select` the selection grows to it, and past the first or the
+    /// last row it grows to the start or the end of the text, and the key is always taken;
+    /// without, false says there was no row to go to (and the selection is gone all the same).
+    fn vertical(&mut self, down: bool, select: bool, width: usize) -> bool {
+        let starts = field::row_starts(&self.chars, width, self.cursor);
+        let row = starts.partition_point(|s| *s <= self.cursor) - 1;
+        let to = if down {
+            Some(row + 1).filter(|r| *r < starts.len())
+        } else {
+            row.checked_sub(1)
+        };
+        let Some(to) = to else {
+            if select {
+                self.go(if down { self.chars.len() } else { 0 }, true);
+            } else {
+                self.anchor = None;
+            }
+            return select;
+        };
+        // A row ends at its last character, or at the one before the next row begins.
+        let end = starts.get(to + 1).map_or(self.chars.len(), |next| next - 1);
+        let col = self.cursor - starts[row];
+        self.go(starts[to] + col.min(end - starts[to]), select);
         true
     }
 
@@ -570,6 +572,8 @@ pub struct Ui {
     /// Lines the list is scrolled up from the newest; `most` is what the last frame could scroll.
     scroll: usize,
     most: Cell<usize>,
+    /// The characters a row of the field held in the last frame, for ↑ and ↓ (0 before the first).
+    text_width: Cell<usize>,
     /// What a drag of the mouse covers in the list, and the drag while the button is down
     /// (REQ-461).
     sel: Option<select::Selection>,
@@ -1510,7 +1514,17 @@ impl Ui {
         }
     }
 
+    /// The width the field wraps to, which ↑ and ↓ count rows by; a line is a row when no frame
+    /// has been drawn.
+    fn row_width(&self) -> usize {
+        match self.text_width.get() {
+            0 => usize::MAX,
+            w => w,
+        }
+    }
+
     fn field(&self, conv: &Conversation, iw: usize) -> Field {
+        self.text_width.set(field::text_width(iw));
         Field::selecting(
             &PaneInput {
                 text: self.editor.text(),
@@ -2273,15 +2287,16 @@ impl Ui {
                 self.scroll_by(false, PAGE);
                 None
             }
-            KeyCode::Up if !self.editor.up() => {
-                self.scroll_by(true, 1);
+            // A row at a time, as the field shows them; shift selects (REQ-680); at the first
+            // or last row the list scrolls instead (REQ-682).
+            KeyCode::Up | KeyCode::Down => {
+                let down = ev.code == KeyCode::Down;
+                let shift = ev.modifiers.contains(KeyModifiers::SHIFT);
+                if !self.editor.vertical(down, shift, self.row_width()) {
+                    self.scroll_by(!down, 1);
+                }
                 None
             }
-            KeyCode::Down if !self.editor.down() => {
-                self.scroll_by(false, 1);
-                None
-            }
-            KeyCode::Up | KeyCode::Down => None,
             _ => {
                 self.menu_at = 0;
                 self.editor.edit(ev);
@@ -4917,11 +4932,14 @@ mod tests {
         let mut e = Editor::default();
         e.insert("uno dos\ntres");
         assert_eq!(e.cursor(), 12);
-        assert!(e.up());
+        assert!(e.vertical(false, false, usize::MAX));
         assert_eq!(e.cursor(), 4, "the column is kept, as far as the line goes");
-        assert!(!e.up(), "the first line has nothing above");
-        assert!(e.down());
-        assert!(!e.down());
+        assert!(
+            !e.vertical(false, false, usize::MAX),
+            "the first line has nothing above"
+        );
+        assert!(e.vertical(true, false, usize::MAX));
+        assert!(!e.vertical(true, false, usize::MAX));
         e.edit(&KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
         e.insert(">");
         e.edit(&KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
@@ -6106,5 +6124,120 @@ mod tests {
         ui.key(&conv, &erase);
         ui.key(&conv, &erase);
         row_of(&frame(&ui, &conv).1, "1 de 40");
+    }
+
+    /// ↑ and ↓ move by the rows the field draws, and with shift they select (REQ-680..683).
+    #[test]
+    fn up_and_down_follow_the_visible_rows_and_with_shift_they_select() {
+        let (shift, none) = (KeyModifiers::SHIFT, KeyModifiers::NONE);
+        // "abcde" "fghij" "kl" at a width of 5, and then a line of its own.
+        let wrapped = || {
+            let mut e = Editor::default();
+            e.set("abcdefghijkl\nxyz");
+            e
+        };
+        let mut e = wrapped();
+        e.cursor = 7; // on "g"
+        assert!(e.vertical(false, false, 5));
+        assert_eq!(e.cursor(), 2, "the column is kept one row up");
+        assert!(e.vertical(true, false, 5));
+        assert!(e.vertical(true, false, 5));
+        assert_eq!(e.cursor(), 12, "a row is shorter: the end of \"kl\"");
+        assert!(e.vertical(true, false, 5));
+        assert_eq!(
+            e.cursor(),
+            15,
+            "the next line, at the column that was left (2)"
+        );
+        assert!(
+            !e.vertical(true, false, 5),
+            "the last row has nothing below"
+        );
+        assert!(e.vertical(false, false, 5) && e.vertical(false, false, 5));
+        assert_eq!(e.cursor(), 7, "up again from the column it was left at");
+        e.cursor = 5;
+        assert!(e.vertical(false, false, 5));
+        assert_eq!(
+            e.cursor(),
+            0,
+            "a wrapped row begins where the one before ends"
+        );
+
+        // With no width a row is a line.
+        let mut e = wrapped();
+        e.cursor = 7;
+        assert!(!e.vertical(false, false, usize::MAX), "one line only above");
+        assert!(e.vertical(true, false, usize::MAX));
+        assert_eq!(e.cursor(), 16, "the end of the shorter line");
+
+        // shift selects a row at a time, and at the edge goes to the start or the end.
+        let mut e = wrapped();
+        e.cursor = 7;
+        assert!(e.vertical(false, true, 5));
+        assert_eq!(e.selection(), Some((2, 7)));
+        assert!(e.vertical(false, true, 5));
+        assert_eq!(
+            e.selection(),
+            Some((0, 7)),
+            "the first row: to the start of the text"
+        );
+        assert!(
+            e.vertical(false, true, 5),
+            "taken at the edge, so the list does not scroll"
+        );
+        assert!(e.vertical(true, true, 5));
+        assert_eq!(
+            e.selection(),
+            Some((5, 7)),
+            "and taken back by the other arrow, from the start of the text"
+        );
+        let mut e = wrapped();
+        e.cursor = 13;
+        assert!(e.vertical(true, true, 5));
+        assert_eq!(e.selection(), Some((13, 16)), "the last row: to the end");
+
+        // an arrow with no shift clears the selection and moves from the cursor.
+        let mut e = wrapped();
+        e.cursor = 7;
+        e.vertical(false, true, 5);
+        assert!(e.vertical(true, false, 5));
+        assert_eq!((e.cursor(), e.selection()), (7, None));
+        e.vertical(true, true, 5);
+        assert!(e.selection().is_some());
+        assert!(e.vertical(false, false, 5));
+        assert_eq!(e.selection(), None);
+
+        // shift+home and shift+end select to the ends of the line.
+        let mut e = Editor::default();
+        e.set("uno dos\ntres cuatro");
+        e.cursor = 12;
+        e.edit(&key(KeyCode::Home, shift));
+        assert_eq!(e.selection(), Some((8, 12)));
+        e.edit(&key(KeyCode::End, shift));
+        assert_eq!(e.selection(), Some((12, 19)), "from where it began");
+        e.edit(&key(KeyCode::Home, none));
+        assert_eq!((e.cursor(), e.selection()), (8, None));
+    }
+
+    #[test]
+    fn shift_up_and_down_select_in_the_composer_and_do_not_scroll_the_list() {
+        let conv = idle();
+        let mut ui = Ui::default();
+        type_in(&mut ui, &conv, "abc");
+        ui.editor.insert("\n");
+        type_in(&mut ui, &conv, "def");
+        let shift = |code| KeyEvent::new(code, KeyModifiers::SHIFT);
+        let before = ui.scroll;
+        ui.key(&conv, &shift(KeyCode::Up));
+        assert_eq!(
+            ui.editor.selection(),
+            Some((3, 7)),
+            "up a line, to the column 3"
+        );
+        ui.key(&conv, &shift(KeyCode::Up));
+        assert_eq!(ui.editor.selection(), Some((0, 7)));
+        assert_eq!(ui.scroll, before, "the list stayed");
+        press(&mut ui, &conv, KeyCode::Down);
+        assert_eq!(ui.editor.selection(), None, "a plain arrow clears it");
     }
 }
